@@ -10,7 +10,7 @@ const envSchema = z
     CORS_ORIGIN: z.string().default("http://localhost:8080"),
     // Firebase
     FIREBASE_PROJECT_ID: z.string(),
-    FIREBASE_STORAGE_BUCKET: z.string(),
+    FIREBASE_STORAGE_BUCKET: z.string().optional(),
     // Firebase service account JSON (for cloud deployments)
     FIREBASE_SERVICE_ACCOUNT: z.string().optional(),
     // Storage Provider
