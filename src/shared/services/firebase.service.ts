@@ -1,14 +1,17 @@
-import admin from 'firebase-admin';
-import type { Auth } from 'firebase-admin/auth';
-import type { Storage } from 'firebase-admin/storage';
-import { config } from '@config/app.config.js';
+import admin from "firebase-admin";
+import type { Auth } from "firebase-admin/auth";
+import type { Storage } from "firebase-admin/storage";
+import { config } from "@config/app.config.js";
 
 // Initialize Firebase Admin SDK
 // Uses FIREBASE_SERVICE_ACCOUNT env var (Base64-encoded JSON) or falls back to GOOGLE_APPLICATION_CREDENTIALS
 function getCredential() {
   if (config.firebase.serviceAccount) {
     // Decode Base64 to JSON string, then parse
-    const jsonString = Buffer.from(config.firebase.serviceAccount, 'base64').toString('utf-8');
+    const jsonString = Buffer.from(
+      config.firebase.serviceAccount,
+      "base64",
+    ).toString("utf-8");
     const serviceAccount = JSON.parse(jsonString);
     return admin.credential.cert(serviceAccount);
   }
@@ -18,7 +21,9 @@ function getCredential() {
 
 const app = admin.initializeApp({
   credential: getCredential(),
-  storageBucket: config.firebase.storageBucket,
+  ...(config.firebase.storageBucket && {
+    storageBucket: config.firebase.storageBucket,
+  }),
 });
 
 // Explicit type annotations fix TypeScript inference error
@@ -48,7 +53,7 @@ export async function createFirebaseUser(email: string, password: string) {
  */
 export async function setCustomClaims(
   uid: string,
-  claims: Record<string, unknown>
+  claims: Record<string, unknown>,
 ): Promise<void> {
   await firebaseAuth.setCustomUserClaims(uid, claims);
 }
@@ -66,14 +71,14 @@ export async function deleteFirebaseUser(uid: string): Promise<void> {
 export async function uploadFile(
   buffer: Buffer,
   path: string,
-  contentType: string
+  contentType: string,
 ): Promise<string> {
   const bucket = firebaseStorage.bucket();
   const file = bucket.file(path);
 
   await file.save(buffer, {
     contentType,
-    metadata: { cacheControl: 'public, max-age=31536000' },
+    metadata: { cacheControl: "public, max-age=31536000" },
   });
 
   await file.makePublic();
