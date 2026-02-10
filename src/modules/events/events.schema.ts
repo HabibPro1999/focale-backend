@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from "zod";
 
 // ============================================================================
 // Request Schemas
@@ -12,21 +12,24 @@ export const CreateEventSchema = z
       .string()
       .min(1)
       .max(100)
-      .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'Slug must be lowercase alphanumeric with hyphens'),
+      .regex(
+        /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/,
+        "Slug must be lowercase alphanumeric with hyphens, dots, or underscores",
+      ),
     description: z.string().optional().nullable(),
     maxCapacity: z.number().int().positive().optional().nullable(),
     startDate: z.coerce.date(),
     endDate: z.coerce.date(),
     location: z.string().min(1).max(500).optional().nullable(),
-    status: z.enum(['CLOSED', 'OPEN', 'ARCHIVED']).default('CLOSED'),
+    status: z.enum(["CLOSED", "OPEN", "ARCHIVED"]).default("CLOSED"),
     // Pricing
     basePrice: z.number().int().min(0).default(0),
-    currency: z.string().length(3).default('TND'),
+    currency: z.string().length(3).default("TND"),
   })
   .strict()
   .refine((data) => data.endDate >= data.startDate, {
-    message: 'End date must be greater than or equal to start date',
-    path: ['endDate'],
+    message: "End date must be greater than or equal to start date",
+    path: ["endDate"],
   });
 
 export const UpdateEventSchema = z
@@ -36,14 +39,17 @@ export const UpdateEventSchema = z
       .string()
       .min(1)
       .max(100)
-      .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'Slug must be lowercase alphanumeric with hyphens')
+      .regex(
+        /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/,
+        "Slug must be lowercase alphanumeric with hyphens, dots, or underscores",
+      )
       .optional(),
     description: z.string().optional().nullable(),
     maxCapacity: z.number().int().positive().optional().nullable(),
     startDate: z.coerce.date().optional(),
     endDate: z.coerce.date().optional(),
     location: z.string().min(1).max(500).optional().nullable(),
-    status: z.enum(['CLOSED', 'OPEN', 'ARCHIVED']).optional(),
+    status: z.enum(["CLOSED", "OPEN", "ARCHIVED"]).optional(),
     // Pricing
     basePrice: z.number().int().min(0).optional(),
     currency: z.string().length(3).optional(),
@@ -57,9 +63,9 @@ export const UpdateEventSchema = z
       return true;
     },
     {
-      message: 'End date must be greater than or equal to start date',
-      path: ['endDate'],
-    }
+      message: "End date must be greater than or equal to start date",
+      path: ["endDate"],
+    },
   );
 
 export const ListEventsQuerySchema = z
@@ -67,7 +73,7 @@ export const ListEventsQuerySchema = z
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
     clientId: z.string().uuid().optional(),
-    status: z.enum(['CLOSED', 'OPEN', 'ARCHIVED']).optional(),
+    status: z.enum(["CLOSED", "OPEN", "ARCHIVED"]).optional(),
     search: z.string().optional(),
   })
   .strict();
