@@ -13,7 +13,10 @@
     "db:generate": "bun x prisma generate",
     "db:push": "bun x prisma db push",
     "db:migrate": "bun x prisma migrate dev",
+    "db:migrate:prod": "bun x prisma migrate deploy",
+    "db:status": "bun x prisma migrate status",
     "db:seed": "bun prisma/seed.ts",
+    "db:verify": "bun scripts/verify-data-integrity.ts",
     "test": "bun x vitest",
     "test:run": "bun x vitest run",
     "test:coverage": "bun x vitest run --coverage"
