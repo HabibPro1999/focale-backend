@@ -1,22 +1,22 @@
-import { z } from 'zod';
+import { z } from "zod";
 
 // ============================================================================
 // Field Schemas
 // ============================================================================
 
 export const FieldTypeSchema = z.enum([
-  'text',
-  'email',
-  'phone',
-  'number',
-  'textarea',
-  'dropdown',
-  'radio',
-  'checkbox',
-  'date',
-  'file',
-  'heading',
-  'paragraph',
+  "text",
+  "email",
+  "phone",
+  "number",
+  "textarea",
+  "dropdown",
+  "radio",
+  "checkbox",
+  "date",
+  "file",
+  "heading",
+  "paragraph",
 ]);
 
 export const FieldOptionSchema = z
@@ -28,14 +28,14 @@ export const FieldOptionSchema = z
   .strict();
 
 export const ConditionOperatorSchema = z.enum([
-  'equals',
-  'not_equals',
-  'contains',
-  'not_contains',
-  'greater_than',
-  'less_than',
-  'is_empty',
-  'is_not_empty',
+  "equals",
+  "not_equals",
+  "contains",
+  "not_contains",
+  "greater_than",
+  "less_than",
+  "is_empty",
+  "is_not_empty",
 ]);
 
 export const FieldConditionSchema = z
@@ -93,9 +93,12 @@ export const FormStepSchema = z
 // ============================================================================
 
 // Use permissive schema for JSONB - frontend defines the structure
-export const FormSchemaJsonSchema = z.object({
-  steps: z.array(z.any()),
-}).passthrough();
+// Registration forms use `steps`, sponsor forms use `sponsorSteps`
+export const FormSchemaJsonSchema = z
+  .object({
+    steps: z.array(z.any()).optional(),
+  })
+  .passthrough();
 
 // ============================================================================
 // Sponsor Form Schemas
@@ -120,12 +123,12 @@ export const SponsorSummarySettingsSchema = z
   .strict();
 
 // Sponsorship mode settings (only for SPONSOR forms)
-export const SponsorshipModeSchema = z.enum(['LINKED_ACCOUNT', 'CODE']);
-export const RegistrantSearchScopeSchema = z.enum(['ALL', 'UNPAID_ONLY']);
+export const SponsorshipModeSchema = z.enum(["LINKED_ACCOUNT", "CODE"]);
+export const RegistrantSearchScopeSchema = z.enum(["ALL", "UNPAID_ONLY"]);
 
 export const SponsorshipSettingsSchema = z
   .object({
-    sponsorshipMode: SponsorshipModeSchema.default('CODE'),
+    sponsorshipMode: SponsorshipModeSchema.default("CODE"),
     registrantSearchScope: RegistrantSearchScopeSchema.optional(),
     autoApproveSponsorship: z.boolean().optional(),
   })
@@ -134,7 +137,7 @@ export const SponsorshipSettingsSchema = z
 // Sponsor form schema structure
 export const SponsorFormSchemaJsonSchema = z
   .object({
-    formType: z.literal('SPONSOR'),
+    formType: z.literal("SPONSOR"),
     sponsorSteps: z.array(FormStepSchema),
     beneficiaryTemplate: BeneficiaryTemplateSchema,
     summarySettings: SponsorSummarySettingsSchema.optional(),
@@ -171,7 +174,7 @@ export const ListFormsQuerySchema = z
     limit: z.coerce.number().int().min(1).max(100).default(20),
     eventId: z.string().uuid().optional(),
     search: z.string().optional(),
-    type: z.enum(['REGISTRATION', 'SPONSOR']).optional(),
+    type: z.enum(["REGISTRATION", "SPONSOR"]).optional(),
   })
   .strict();
 
@@ -203,7 +206,9 @@ export type FormField = z.infer<typeof FormFieldSchema>;
 export type FormStep = z.infer<typeof FormStepSchema>;
 export type FormSchemaJson = z.infer<typeof FormSchemaJsonSchema>;
 export type BeneficiaryTemplate = z.infer<typeof BeneficiaryTemplateSchema>;
-export type SponsorSummarySettings = z.infer<typeof SponsorSummarySettingsSchema>;
+export type SponsorSummarySettings = z.infer<
+  typeof SponsorSummarySettingsSchema
+>;
 export type SponsorshipMode = z.infer<typeof SponsorshipModeSchema>;
 export type RegistrantSearchScope = z.infer<typeof RegistrantSearchScopeSchema>;
 export type SponsorshipSettings = z.infer<typeof SponsorshipSettingsSchema>;
@@ -211,4 +216,6 @@ export type SponsorFormSchemaJson = z.infer<typeof SponsorFormSchemaJsonSchema>;
 export type CreateFormInput = z.infer<typeof CreateFormSchema>;
 export type UpdateFormInput = z.infer<typeof UpdateFormSchema>;
 export type ListFormsQuery = z.infer<typeof ListFormsQuerySchema>;
-export type UpdateSponsorshipSettingsInput = z.infer<typeof UpdateSponsorshipSettingsSchema>;
+export type UpdateSponsorshipSettingsInput = z.infer<
+  typeof UpdateSponsorshipSettingsSchema
+>;
