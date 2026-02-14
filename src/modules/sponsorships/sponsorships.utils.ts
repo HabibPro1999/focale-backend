@@ -31,19 +31,21 @@ interface PrismaLike {
 // Code Generation
 // ============================================================================
 
+import { randomInt } from "crypto";
+
 // Characters for code generation (excluding O, I, L to avoid confusion)
-const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+const CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 const CODE_LENGTH = 4;
-const CODE_PREFIX = 'SP-';
+const CODE_PREFIX = "SP-";
 
 /**
  * Generate a sponsorship code in format SP-XXXX.
  * Uses characters: A-Z (except O, I, L) and 2-9.
  */
 export function generateSponsorshipCode(): string {
-  let code = '';
+  let code = "";
   for (let i = 0; i < CODE_LENGTH; i++) {
-    const randomIndex = Math.floor(Math.random() * CODE_CHARS.length);
+    const randomIndex = randomInt(CODE_CHARS.length);
     code += CODE_CHARS[randomIndex];
   }
   return `${CODE_PREFIX}${code}`;
@@ -55,7 +57,7 @@ export function generateSponsorshipCode(): string {
  */
 export async function generateUniqueCode(
   db: PrismaLike,
-  maxAttempts = 10
+  maxAttempts = 10,
 ): Promise<string> {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const code = generateSponsorshipCode();
@@ -69,7 +71,9 @@ export async function generateUniqueCode(
     }
   }
 
-  throw new Error('Failed to generate unique sponsorship code after maximum attempts');
+  throw new Error(
+    "Failed to generate unique sponsorship code after maximum attempts",
+  );
 }
 
 // ============================================================================
@@ -84,7 +88,7 @@ export async function calculateSponsorshipTotal(
   db: PrismaLike,
   eventId: string,
   coversBasePrice: boolean,
-  coveredAccessIds: string[]
+  coveredAccessIds: string[],
 ): Promise<number> {
   let total = 0;
 
@@ -148,24 +152,28 @@ export interface RegistrationForCalculation {
  */
 export function calculateApplicableAmount(
   sponsorship: SponsorshipForCalculation,
-  registration: RegistrationForCalculation
+  registration: RegistrationForCalculation,
 ): number {
   let applicableAmount = 0;
 
   // Apply base price if covered by sponsorship
   if (sponsorship.coversBasePrice) {
     applicableAmount +=
-      registration.priceBreakdown.calculatedBasePrice ?? registration.baseAmount;
+      registration.priceBreakdown.calculatedBasePrice ??
+      registration.baseAmount;
   }
 
   // Apply covered access items that are also in registration
-  if (sponsorship.coveredAccessIds.length > 0 && registration.priceBreakdown.accessItems) {
+  if (
+    sponsorship.coveredAccessIds.length > 0 &&
+    registration.priceBreakdown.accessItems
+  ) {
     const registrationAccessIds = new Set(registration.accessTypeIds);
 
     for (const coveredId of sponsorship.coveredAccessIds) {
       if (registrationAccessIds.has(coveredId)) {
         const accessItem = registration.priceBreakdown.accessItems.find(
-          (item) => item.accessId === coveredId
+          (item) => item.accessId === coveredId,
         );
         if (accessItem) {
           applicableAmount += accessItem.subtotal;
@@ -175,7 +183,11 @@ export function calculateApplicableAmount(
   }
 
   // Don't exceed the registration total or sponsorship total
-  return Math.min(applicableAmount, registration.totalAmount, sponsorship.totalAmount);
+  return Math.min(
+    applicableAmount,
+    registration.totalAmount,
+    sponsorship.totalAmount,
+  );
 }
 
 // ============================================================================
@@ -200,18 +212,18 @@ export interface ExistingUsage {
  */
 export function detectCoverageOverlap(
   existingUsages: ExistingUsage[],
-  newSponsorship: SponsorshipForCalculation
+  newSponsorship: SponsorshipForCalculation,
 ): string[] {
   const warnings: string[] = [];
 
   // Check for base price overlap
   if (newSponsorship.coversBasePrice) {
     const existingBaseCoverage = existingUsages.find(
-      (usage) => usage.sponsorship.coversBasePrice
+      (usage) => usage.sponsorship.coversBasePrice,
     );
     if (existingBaseCoverage) {
       warnings.push(
-        `Base price is already covered by sponsorship ${existingBaseCoverage.sponsorship.code}`
+        `Base price is already covered by sponsorship ${existingBaseCoverage.sponsorship.code}`,
       );
     }
   }
@@ -232,13 +244,33 @@ export function detectCoverageOverlap(
       if (existingCoveredAccessIds.has(accessId)) {
         const existingCode = accessCodeMap.get(accessId);
         warnings.push(
-          `Access item ${accessId} is already covered by sponsorship ${existingCode}`
+          `Access item ${accessId} is already covered by sponsorship ${existingCode}`,
         );
       }
     }
   }
 
   return warnings;
+}
+
+// ============================================================================
+// Amount Capping
+// ============================================================================
+
+/**
+ * Cap the applicable amount so total sponsorship does not exceed registration total.
+ * Returns the capped amount.
+ */
+export function capSponsorshipAmount(
+  applicableAmount: number,
+  existingSponsorshipAmount: number,
+  registrationTotalAmount: number,
+): number {
+  const remainingCapacity = Math.max(
+    0,
+    registrationTotalAmount - existingSponsorshipAmount,
+  );
+  return Math.min(applicableAmount, remainingCapacity);
 }
 
 // ============================================================================
@@ -249,7 +281,7 @@ export function detectCoverageOverlap(
  * Recalculate total sponsorship amount for a registration based on all linked usages.
  */
 export function calculateTotalSponsorshipAmount(
-  usages: Array<{ amountApplied: number }>
+  usages: Array<{ amountApplied: number }>,
 ): number {
   return usages.reduce((sum, usage) => sum + usage.amountApplied, 0);
 }
@@ -262,10 +294,10 @@ export function calculateTotalSponsorshipAmount(
  */
 export function determineSponsorshipStatus(
   sponsorship: { status: string },
-  usageCount: number
-): 'PENDING' | 'USED' | 'CANCELLED' {
-  if (sponsorship.status === 'CANCELLED') {
-    return 'CANCELLED';
+  usageCount: number,
+): "PENDING" | "USED" | "CANCELLED" {
+  if (sponsorship.status === "CANCELLED") {
+    return "CANCELLED";
   }
-  return usageCount > 0 ? 'USED' : 'PENDING';
+  return usageCount > 0 ? "USED" : "PENDING";
 }

@@ -1,10 +1,10 @@
-import { z } from 'zod';
+import { z } from "zod";
 
 // ============================================================================
 // Enums
 // ============================================================================
 
-export const SponsorshipStatusSchema = z.enum(['PENDING', 'USED', 'CANCELLED']);
+export const SponsorshipStatusSchema = z.enum(["PENDING", "USED", "CANCELLED"]);
 export type SponsorshipStatus = z.infer<typeof SponsorshipStatusSchema>;
 
 // ============================================================================
@@ -22,7 +22,7 @@ export const BeneficiaryInputSchema = z
   })
   .strict()
   .refine((data) => data.coversBasePrice || data.coveredAccessIds.length > 0, {
-    message: 'Must cover at least base price or one access item',
+    message: "Must cover at least base price or one access item",
   });
 
 export type BeneficiaryInput = z.infer<typeof BeneficiaryInputSchema>;
@@ -41,10 +41,12 @@ export const LinkedBeneficiaryInputSchema = z
   })
   .strict()
   .refine((data) => data.coversBasePrice || data.coveredAccessIds.length > 0, {
-    message: 'Must cover base price or at least one access item',
+    message: "Must cover base price or at least one access item",
   });
 
-export type LinkedBeneficiaryInput = z.infer<typeof LinkedBeneficiaryInputSchema>;
+export type LinkedBeneficiaryInput = z.infer<
+  typeof LinkedBeneficiaryInputSchema
+>;
 
 // ============================================================================
 // Sponsor Info Schema
@@ -70,15 +72,30 @@ export const CreateSponsorshipBatchSchema = z
     sponsor: SponsorInfoSchema,
     customFields: z.record(z.string(), z.unknown()).optional(),
     beneficiaries: z.array(BeneficiaryInputSchema).max(100).optional(), // CODE mode
-    linkedBeneficiaries: z.array(LinkedBeneficiaryInputSchema).max(100).optional(), // LINKED_ACCOUNT mode
+    linkedBeneficiaries: z
+      .array(LinkedBeneficiaryInputSchema)
+      .max(100)
+      .optional(), // LINKED_ACCOUNT mode
   })
   .strict()
   .refine(
-    (data) => (data.beneficiaries?.length ?? 0) > 0 || (data.linkedBeneficiaries?.length ?? 0) > 0,
-    { message: 'Must have at least one beneficiary or linked beneficiary' }
+    (data) =>
+      (data.beneficiaries?.length ?? 0) > 0 ||
+      (data.linkedBeneficiaries?.length ?? 0) > 0,
+    { message: "Must have at least one beneficiary or linked beneficiary" },
+  )
+  .refine(
+    (data) =>
+      !(
+        (data.beneficiaries?.length ?? 0) > 0 &&
+        (data.linkedBeneficiaries?.length ?? 0) > 0
+      ),
+    { message: "Cannot provide both beneficiaries and linkedBeneficiaries" },
   );
 
-export type CreateSponsorshipBatchInput = z.infer<typeof CreateSponsorshipBatchSchema>;
+export type CreateSponsorshipBatchInput = z.infer<
+  typeof CreateSponsorshipBatchSchema
+>;
 
 // ============================================================================
 // Update Sponsorship Schema (Admin)
@@ -92,18 +109,21 @@ export const UpdateSponsorshipSchema = z
     beneficiaryAddress: z.string().max(500).optional().nullable(),
     coversBasePrice: z.boolean().optional(),
     coveredAccessIds: z.array(z.string().uuid()).optional(),
-    status: z.literal('CANCELLED').optional(),
+    status: z.literal("CANCELLED").optional(),
   })
   .strict()
   .refine(
     (data) => {
       // If both coverage fields provided, at least one must be truthy
-      if (data.coversBasePrice !== undefined && data.coveredAccessIds !== undefined) {
+      if (
+        data.coversBasePrice !== undefined &&
+        data.coveredAccessIds !== undefined
+      ) {
         return data.coversBasePrice || data.coveredAccessIds.length > 0;
       }
       return true;
     },
-    { message: 'Must cover at least base price or one access item' }
+    { message: "Must cover at least base price or one access item" },
   );
 
 export type UpdateSponsorshipInput = z.infer<typeof UpdateSponsorshipSchema>;
@@ -118,8 +138,10 @@ export const ListSponsorshipsQuerySchema = z
     limit: z.coerce.number().int().positive().max(100).default(20),
     status: SponsorshipStatusSchema.optional(),
     search: z.string().max(100).optional(),
-    sortBy: z.enum(['createdAt', 'totalAmount', 'beneficiaryName']).default('createdAt'),
-    sortOrder: z.enum(['asc', 'desc']).default('desc'),
+    sortBy: z
+      .enum(["createdAt", "totalAmount", "beneficiaryName"])
+      .default("createdAt"),
+    sortOrder: z.enum(["asc", "desc"]).default("desc"),
   })
   .strict();
 
@@ -150,12 +172,19 @@ export const LinkSponsorshipByCodeSchema = z
       .transform((val) => {
         // Normalize: uppercase, add prefix if missing
         const upper = val.toUpperCase().trim();
-        return upper.startsWith('SP-') ? upper : `SP-${upper}`;
-      }),
+        return upper.startsWith("SP-") ? upper : `SP-${upper}`;
+      })
+      .pipe(
+        z
+          .string()
+          .regex(/^SP-[A-HJ-NP-Z2-9]{4}$/, "Invalid sponsorship code format"),
+      ),
   })
   .strict();
 
-export type LinkSponsorshipByCodeInput = z.infer<typeof LinkSponsorshipByCodeSchema>;
+export type LinkSponsorshipByCodeInput = z.infer<
+  typeof LinkSponsorshipByCodeSchema
+>;
 
 // ============================================================================
 // Parameter Schemas

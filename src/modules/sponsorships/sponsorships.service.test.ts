@@ -389,6 +389,7 @@ describe("Sponsorships Service", () => {
           },
           eventPricing: { findUnique: vi.fn().mockResolvedValue(mockPricing) },
           eventAccess: { findMany: vi.fn().mockResolvedValue([]) },
+          auditLog: { create: vi.fn().mockResolvedValue({}) },
         };
         return fn(txMock);
       });
@@ -486,6 +487,7 @@ describe("Sponsorships Service", () => {
           },
           eventPricing: { findUnique: vi.fn().mockResolvedValue(mockPricing) },
           eventAccess: { findMany: vi.fn().mockResolvedValue([]) },
+          auditLog: { create: vi.fn().mockResolvedValue({}) },
         };
         return fn(txMock);
       });
@@ -758,14 +760,25 @@ describe("Sponsorships Service", () => {
         );
       prismaMock.eventPricing.findUnique.mockResolvedValue(mockPricing);
       prismaMock.eventAccess.findMany.mockResolvedValue([mockAccess]);
-      prismaMock.sponsorship.update.mockResolvedValue({
+
+      const updateMock = vi.fn().mockResolvedValue({
         ...mockSponsorship,
         coveredAccessIds: [accessId],
       });
 
+      prismaMock.$transaction.mockImplementation(async (fn: TxCallback) => {
+        const txMock = {
+          sponsorship: {
+            update: updateMock,
+          },
+          auditLog: { create: vi.fn().mockResolvedValue({}) },
+        };
+        return fn(txMock);
+      });
+
       await updateSponsorship(sponsorshipId, { coveredAccessIds: [accessId] });
 
-      expect(prismaMock.sponsorship.update).toHaveBeenCalledWith(
+      expect(updateMock).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
             totalAmount: expect.any(Number),
@@ -807,6 +820,7 @@ describe("Sponsorships Service", () => {
           sponsorship: {
             update: vi.fn().mockResolvedValue(cancelledSponsorship),
           },
+          auditLog: { create: vi.fn().mockResolvedValue({}) },
         };
         return fn(txMock);
       });
@@ -845,6 +859,7 @@ describe("Sponsorships Service", () => {
               .fn()
               .mockResolvedValue({ ...mockSponsorship, status: "CANCELLED" }),
           },
+          auditLog: { create: vi.fn().mockResolvedValue({}) },
         };
         return fn(txMock);
       });
@@ -880,6 +895,7 @@ describe("Sponsorships Service", () => {
             id: faker.string.uuid(),
             sponsorshipId,
             registrationId,
+            amountApplied: 100,
           }),
           delete: vi.fn().mockResolvedValue({}),
           findMany: vi.fn().mockResolvedValue([]),
@@ -892,6 +908,7 @@ describe("Sponsorships Service", () => {
             .fn()
             .mockResolvedValue({ ...mockSponsorship, status: "CANCELLED" }),
         },
+        auditLog: { create: vi.fn().mockResolvedValue({}) },
       };
 
       prismaMock.$transaction.mockImplementation(async (fn: TxCallback) =>
@@ -924,6 +941,7 @@ describe("Sponsorships Service", () => {
       prismaMock.$transaction.mockImplementation(async (fn: TxCallback) => {
         const txMock = {
           sponsorship: { delete: vi.fn().mockResolvedValue({}) },
+          auditLog: { create: vi.fn().mockResolvedValue({}) },
         };
         return fn(txMock);
       });
@@ -947,6 +965,7 @@ describe("Sponsorships Service", () => {
             id: faker.string.uuid(),
             sponsorshipId,
             registrationId,
+            amountApplied: 100,
           }),
           delete: vi.fn().mockResolvedValue({}),
           findMany: vi.fn().mockResolvedValue([]),
@@ -958,6 +977,7 @@ describe("Sponsorships Service", () => {
           update: vi.fn().mockResolvedValue({}),
           delete: vi.fn().mockResolvedValue({}),
         },
+        auditLog: { create: vi.fn().mockResolvedValue({}) },
       };
 
       prismaMock.$transaction.mockImplementation(async (fn: TxCallback) =>
@@ -1027,6 +1047,7 @@ describe("Sponsorships Service", () => {
             updateMany: vi.fn().mockResolvedValue({ count: 1 }),
           },
           registration: { update: vi.fn().mockResolvedValue({}) },
+          auditLog: { create: vi.fn().mockResolvedValue({}) },
         };
         return fn(txMock);
       });
@@ -1295,6 +1316,7 @@ describe("Sponsorships Service", () => {
             updateMany: vi.fn().mockResolvedValue({ count: 1 }),
           },
           registration: { update: vi.fn().mockResolvedValue({}) },
+          auditLog: { create: vi.fn().mockResolvedValue({}) },
         };
         return fn(txMock);
       });
@@ -1377,6 +1399,7 @@ describe("Sponsorships Service", () => {
             updateMany: vi.fn().mockResolvedValue({ count: 1 }),
           },
           registration: { update: vi.fn().mockResolvedValue({}) },
+          auditLog: { create: vi.fn().mockResolvedValue({}) },
         };
         return fn(txMock);
       });

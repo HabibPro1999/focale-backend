@@ -6,6 +6,7 @@
 export {
   createSponsorshipBatch,
   listSponsorships,
+  getSponsorshipStats,
   getSponsorshipById,
   getSponsorshipByCode,
   updateSponsorship,
@@ -13,17 +14,19 @@ export {
   linkSponsorshipToRegistration,
   linkSponsorshipByCode,
   unlinkSponsorshipFromRegistration,
+  cleanupSponsorshipsForRegistration,
   getAvailableSponsorships,
   getSponsorshipClientId,
   getLinkedSponsorships,
-} from './sponsorships.service.js';
+} from "./sponsorships.service.js";
 
 // Service types
 export type {
   AvailableSponsorship,
   LinkSponsorshipResult,
   CreateBatchResult,
-} from './sponsorships.service.js';
+  SponsorshipStats,
+} from "./sponsorships.service.js";
 
 // Utility functions
 export {
@@ -33,14 +36,14 @@ export {
   detectCoverageOverlap,
   calculateTotalSponsorshipAmount,
   determineSponsorshipStatus,
-} from './sponsorships.utils.js';
+} from "./sponsorships.utils.js";
 
 // Utility types
 export type {
   SponsorshipForCalculation,
   RegistrationForCalculation,
   ExistingUsage,
-} from './sponsorships.utils.js';
+} from "./sponsorships.utils.js";
 
 // Schemas
 export {
@@ -53,7 +56,7 @@ export {
   EventIdParamSchema,
   RegistrationIdParamSchema,
   RegistrationSponsorshipParamSchema,
-} from './sponsorships.schema.js';
+} from "./sponsorships.schema.js";
 
 // Types
 export type {
@@ -62,16 +65,16 @@ export type {
   ListSponsorshipsQuery,
   LinkSponsorshipInput,
   LinkSponsorshipByCodeInput,
-} from './sponsorships.schema.js';
+} from "./sponsorships.schema.js";
 
 // Routes
 export {
   sponsorshipsRoutes,
   sponsorshipDetailRoutes,
   registrationSponsorshipsRoutes,
-} from './sponsorships.routes.js';
+} from "./sponsorships.routes.js";
 
 export {
   sponsorshipsPublicRoutes,
   sponsorshipsPublicBySlugRoutes,
-} from './sponsorships.public.routes.js';
+} from "./sponsorships.public.routes.js";
