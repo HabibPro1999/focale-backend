@@ -1,7 +1,7 @@
-import { PrismaClient } from '@/generated/prisma/client.js';
-import { PrismaPg } from '@prisma/adapter-pg';
-import pg from 'pg';
-import { config } from '@config/app.config.js';
+import { PrismaClient } from "@/generated/prisma/client.js";
+import { PrismaPg } from "@prisma/adapter-pg";
+import pg from "pg";
+import { config } from "@config/app.config.js";
 
 function createPrismaClient() {
   // Create pg Pool with proper configuration
@@ -16,9 +16,9 @@ function createPrismaClient() {
 
   return new PrismaClient({
     adapter,
-    log: config.isDevelopment ? ['query', 'error', 'warn'] : ['error', 'warn'],
+    log: config.isDevelopment ? ["query", "error", "warn"] : ["error", "warn"],
     transactionOptions: {
-      isolationLevel: 'ReadCommitted', // Changed from Serializable to reduce conflicts
+      isolationLevel: "ReadCommitted", // Changed from Serializable to reduce conflicts
       maxWait: 10000, // Increased from 5s
       timeout: 30000, // Increased from 10s
     },
@@ -27,15 +27,22 @@ function createPrismaClient() {
       user: {
         async $allOperations({ operation, args, query }) {
           // Skip omit for aggregate operations (they don't support it)
-          const aggregateOps = ['count', 'aggregate', 'groupBy'];
+          const aggregateOps = ["count", "aggregate", "groupBy"];
           if (aggregateOps.includes(operation)) {
             return query(args);
           }
 
-          if ('omit' in args) {
+          // select and omit are mutually exclusive in Prisma
+          if ("select" in args) {
+            return query(args);
+          }
+          if ("omit" in args) {
             args.omit = { createdAt: true, updatedAt: true, ...args.omit };
           } else {
-            (args as Record<string, unknown>).omit = { createdAt: true, updatedAt: true };
+            (args as Record<string, unknown>).omit = {
+              createdAt: true,
+              updatedAt: true,
+            };
           }
           return query(args);
         },
@@ -46,7 +53,9 @@ function createPrismaClient() {
 
 export type ExtendedPrismaClient = ReturnType<typeof createPrismaClient>;
 
-const globalForPrisma = globalThis as unknown as { prisma: ExtendedPrismaClient };
+const globalForPrisma = globalThis as unknown as {
+  prisma: ExtendedPrismaClient;
+};
 
 export const prisma = globalForPrisma.prisma ?? createPrismaClient();
 

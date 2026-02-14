@@ -400,7 +400,7 @@ model Registration {
 
   // Relations
   form              Form               @relation(fields: [formId], references: [id], onDelete: Restrict)
-  event             Event              @relation(fields: [eventId], references: [id])
+  event             Event              @relation(fields: [eventId], references: [id], onDelete: Restrict)
   emailLogs         EmailLog[]
   sponsorshipUsages SponsorshipUsage[]
 

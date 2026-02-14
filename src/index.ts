@@ -29,9 +29,17 @@ async function main() {
   await new Promise((resolve) => setTimeout(resolve, dbWarmupDelay));
 
   // Start email queue worker (processes every 15 seconds for faster email delivery)
-  // Store reference for graceful shutdown cleanup
+  // Track active processing to prevent overlaps and enable graceful shutdown
+  let activeProcessing: Promise<void> | null = null;
+
   const emailQueueInterval = setInterval(() => {
-    processEmailQueue(50)
+    // Don't start new processing if one is still running
+    if (activeProcessing) {
+      logger.debug("Email queue processing already in progress, skipping");
+      return;
+    }
+
+    activeProcessing = processEmailQueue(50)
       .then((result) => {
         if (result.processed > 0) {
           logger.info({ result }, "Email queue processed");
@@ -40,11 +48,14 @@ async function main() {
       .catch((err) => {
         // Non-fatal: log error but keep server running
         logger.error({ err }, "Email queue processing failed");
+      })
+      .finally(() => {
+        activeProcessing = null;
       });
   }, 15_000);
   logger.info("Email queue worker started (15s interval)");
 
-  gracefulShutdown(server, emailQueueInterval);
+  gracefulShutdown(server, emailQueueInterval, () => activeProcessing);
 }
 
 main().catch((err) => {

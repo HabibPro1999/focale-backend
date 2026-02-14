@@ -178,6 +178,41 @@ async function runChecks() {
     });
   }
 
+  // Check 7: registeredCount matches actual registration count
+  try {
+    const driftedEvents = await prisma.$queryRaw<
+      { event_id: string; registered_count: bigint; actual_count: bigint }[]
+    >`
+      SELECT e.id as event_id, e.registered_count, COUNT(r.id) as actual_count
+      FROM events e
+      LEFT JOIN registrations r ON r.event_id = e.id
+      GROUP BY e.id, e.registered_count
+      HAVING e.registered_count != COUNT(r.id)
+    `;
+    const count = driftedEvents.length;
+    const details = driftedEvents
+      .map(
+        (e) =>
+          `Event ${e.event_id}: expected ${e.registered_count}, actual ${e.actual_count} (drift: ${Number(e.registered_count) - Number(e.actual_count)})`,
+      )
+      .join("; ");
+    checks.push({
+      name: "registeredCount matches actual count",
+      passed: count === 0,
+      message:
+        count === 0
+          ? "All events have accurate registered counts"
+          : `Found ${count} events with drifted counts: ${details}`,
+      count,
+    });
+  } catch (error) {
+    checks.push({
+      name: "registeredCount matches actual count",
+      passed: false,
+      message: `Check failed: ${error}`,
+    });
+  }
+
   // Print results
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
