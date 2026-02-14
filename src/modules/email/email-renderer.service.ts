@@ -4,12 +4,34 @@
 // =============================================================================
 
 import mjml2html from "mjml";
+import { sanitizeUrl, sanitizeForHtml } from "./email-variable.service.js";
 import type {
   TiptapDocument,
   TiptapNode,
   TiptapMark,
   MjmlCompilationResult,
 } from "./email.types.js";
+
+// =============================================================================
+// CSS VALUE VALIDATORS (XSS Prevention)
+// =============================================================================
+
+const ALLOWED_COLORS =
+  /^#[0-9a-fA-F]{3,8}$|^rgb\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*\)$|^[a-zA-Z]{1,20}$/;
+const ALLOWED_FONT_SIZES = /^\d{1,3}(px|em|rem|pt|%)$/;
+const ALLOWED_FONT_FAMILIES = /^[a-zA-Z\s,'-]{1,200}$/;
+
+function isValidCssColor(value: string): boolean {
+  return ALLOWED_COLORS.test(value.trim());
+}
+
+function isValidFontSize(value: string): boolean {
+  return ALLOWED_FONT_SIZES.test(value.trim());
+}
+
+function isValidFontFamily(value: string): boolean {
+  return ALLOWED_FONT_FAMILIES.test(value.trim());
+}
 
 // =============================================================================
 // MAIN EXPORTS
@@ -387,25 +409,27 @@ export function applyMarks(text: string, marks: TiptapMark[]): string {
         result = `<code style="background-color: #f3f4f6; padding: 2px 4px; border-radius: 4px; font-family: monospace;">${result}</code>`;
         break;
       case "link": {
-        const href = escapeHtml(String(mark.attrs?.href || "#"));
+        const href = escapeHtml(sanitizeUrl(String(mark.attrs?.href || "#")));
         const target = (mark.attrs?.target as string) || "_blank";
         result = `<a href="${href}" target="${target}" style="color: #4F46E5;">${result}</a>`;
         break;
       }
       case "textStyle": {
         const styles: string[] = [];
-        if (mark.attrs?.color)
-          styles.push(`color: ${escapeHtml(String(mark.attrs.color))}`);
-        if (mark.attrs?.backgroundColor)
-          styles.push(
-            `background-color: ${escapeHtml(String(mark.attrs.backgroundColor))}`,
-          );
-        if (mark.attrs?.fontSize)
-          styles.push(`font-size: ${escapeHtml(String(mark.attrs.fontSize))}`);
-        if (mark.attrs?.fontFamily)
-          styles.push(
-            `font-family: ${escapeHtml(String(mark.attrs.fontFamily))}`,
-          );
+        const color = String(mark.attrs?.color || "");
+        const bgColor = String(mark.attrs?.backgroundColor || "");
+        const fontSize = String(mark.attrs?.fontSize || "");
+        const fontFamily = String(mark.attrs?.fontFamily || "");
+
+        if (color && isValidCssColor(color))
+          styles.push(`color: ${escapeHtml(color)}`);
+        if (bgColor && isValidCssColor(bgColor))
+          styles.push(`background-color: ${escapeHtml(bgColor)}`);
+        if (fontSize && isValidFontSize(fontSize))
+          styles.push(`font-size: ${fontSize}`);
+        if (fontFamily && isValidFontFamily(fontFamily))
+          styles.push(`font-family: ${escapeHtml(fontFamily)}`);
+
         if (styles.length > 0) {
           result = `<span style="${styles.join("; ")}">${result}</span>`;
         }
@@ -424,7 +448,7 @@ export function applyMarks(text: string, marks: TiptapMark[]): string {
 /**
  * Recursively extracts text from a Tiptap node
  */
-function extractTextFromNode(node: TiptapNode): string {
+function extractTextFromNode(node: TiptapNode, parentType?: string): string {
   // Direct text content
   if (node.text) {
     return node.text;
@@ -451,7 +475,9 @@ function extractTextFromNode(node: TiptapNode): string {
     return "";
   }
 
-  const childText = node.content.map(extractTextFromNode).join("");
+  const childText = node.content
+    .map((child) => extractTextFromNode(child, node.type))
+    .join("");
 
   // Add appropriate line breaks based on node type
   switch (node.type) {
@@ -463,7 +489,9 @@ function extractTextFromNode(node: TiptapNode): string {
     case "orderedList":
       return childText + "\n";
     case "listItem":
-      return "- " + childText.trim() + "\n";
+      return (
+        (parentType === "orderedList" ? "1. " : "- ") + childText.trim() + "\n"
+      );
     default:
       return childText;
   }
@@ -475,15 +503,8 @@ function extractTextFromNode(node: TiptapNode): string {
 
 /**
  * Escapes HTML special characters to prevent XSS
+ * Delegates to sanitizeForHtml from variable service to avoid duplication
  */
 export function escapeHtml(text: string): string {
-  const escapeMap: Record<string, string> = {
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#039;",
-  };
-
-  return text.replace(/[&<>"']/g, (char) => escapeMap[char]);
+  return sanitizeForHtml(text);
 }

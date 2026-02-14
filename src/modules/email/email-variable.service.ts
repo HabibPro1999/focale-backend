@@ -408,6 +408,9 @@ export function buildEmailContext(
     selectedDinners: "",
 
     // Links with event slug and secure edit token
+    // NOTE: registrationLink and editRegistrationLink intentionally resolve to the same URL.
+    // The pure-form app uses a single route for both viewing and editing a registration.
+    // The edit token in the URL grants edit permission. A separate "view-only" route does not exist.
     registrationLink: `${baseUrl}/${slug}/registration/${registration.id}/${token}`,
     editRegistrationLink: `${baseUrl}/${slug}/registration/${registration.id}/${token}`,
     paymentLink: `${baseUrl}/${slug}/payment/${registration.id}/${token}`,
@@ -581,18 +584,14 @@ export function sanitizeForHtml(value: unknown): string {
 }
 
 export function sanitizeUrl(url: string): string {
-  const trimmed = url.trim().toLowerCase();
+  const trimmed = url.trim();
 
-  // Block dangerous protocols
-  if (
-    trimmed.startsWith("javascript:") ||
-    trimmed.startsWith("data:") ||
-    trimmed.startsWith("vbscript:")
-  ) {
-    return "#blocked";
+  // Allow relative URLs, http, https, mailto
+  if (/^(https?:|mailto:|\/|#)/i.test(trimmed) || !trimmed.includes(":")) {
+    return url;
   }
 
-  return url;
+  return "#blocked";
 }
 
 // =============================================================================
@@ -674,6 +673,20 @@ export function getSampleEmailContext(): EmailContext {
     bankName: "Banque de Tunisie",
     bankAccountName: "Medical Events SARL",
     bankAccountNumber: "TN59 1234 5678 9012 3456 7890",
+
+    // Sponsorship fields (for test-send preview)
+    labName: "Roche Diagnostics Tunisia",
+    labContactName: "Jean Dupont",
+    labEmail: "contact@roche.tn",
+    sponsorshipCode: "SP-A3B9",
+    sponsorshipAmount: "450 TND",
+    beneficiaryName: "Dr. Ahmed Salah",
+    beneficiaryCount: "3",
+    totalBatchAmount: "1,350 TND",
+    beneficiaryList:
+      "- Dr. Ahmed: 450 TND\n- Dr. Sarah: 450 TND\n- Dr. Omar: 450 TND",
+    sponsoredItems: "- Base registration: 200 TND\n- Workshop A: 50 TND",
+    remainingAmount: "150 TND",
   };
 }
 

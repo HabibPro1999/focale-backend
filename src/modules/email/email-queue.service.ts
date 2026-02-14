@@ -3,13 +3,16 @@
 // Manages the database-backed email queue for reliable delivery with retries
 // =============================================================================
 
-import { prisma } from '@/database/client.js'
-import { logger } from '@shared/utils/logger.js'
-import { sendEmail } from './email-sendgrid.service.js'
-import { resolveVariables, buildEmailContextWithAccess } from './email-variable.service.js'
-import { getTemplateByTrigger } from './email-template.service.js'
-import { Prisma } from '@/generated/prisma/client.js'
-import type { EmailContext, AutomaticEmailTrigger } from './email.types.js'
+import { prisma } from "@/database/client.js";
+import { logger } from "@shared/utils/logger.js";
+import { sendEmail } from "./email-sendgrid.service.js";
+import {
+  resolveVariables,
+  buildEmailContextWithAccess,
+} from "./email-variable.service.js";
+import { getTemplateByTrigger } from "./email-template.service.js";
+import { Prisma } from "@/generated/prisma/client.js";
+import type { EmailContext, AutomaticEmailTrigger } from "./email.types.js";
 
 // =============================================================================
 // TYPES
@@ -19,25 +22,35 @@ import type { EmailContext, AutomaticEmailTrigger } from './email.types.js'
 type RegistrationWithRelations = Prisma.RegistrationGetPayload<{
   include: {
     event: {
-      include: { client: true }
-    }
-    form: true
-  }
-}>
+      include: { client: true };
+    };
+    form: true;
+  };
+}>;
 
 // Email status enum (mirrors Prisma enum)
-type EmailStatus = 'QUEUED' | 'SENDING' | 'SENT' | 'DELIVERED' | 'OPENED' | 'CLICKED' | 'BOUNCED' | 'DROPPED' | 'FAILED' | 'SKIPPED'
+type EmailStatus =
+  | "QUEUED"
+  | "SENDING"
+  | "SENT"
+  | "DELIVERED"
+  | "OPENED"
+  | "CLICKED"
+  | "BOUNCED"
+  | "DROPPED"
+  | "FAILED"
+  | "SKIPPED";
 
 // Type guard for EmailContext - validates required fields at runtime
 function isValidEmailContext(obj: unknown): obj is EmailContext {
-  if (!obj || typeof obj !== 'object') return false
-  const ctx = obj as Record<string, unknown>
+  if (!obj || typeof obj !== "object") return false;
+  const ctx = obj as Record<string, unknown>;
   // Check for essential required fields
   return (
-    typeof ctx.firstName === 'string' &&
-    typeof ctx.email === 'string' &&
-    typeof ctx.eventName === 'string'
-  )
+    typeof ctx.firstName === "string" &&
+    typeof ctx.email === "string" &&
+    typeof ctx.eventName === "string"
+  );
 }
 
 // =============================================================================
@@ -46,18 +59,18 @@ function isValidEmailContext(obj: unknown): obj is EmailContext {
 
 export interface QueueEmailInput {
   // Source
-  trigger?: AutomaticEmailTrigger // null = manual send
+  trigger?: AutomaticEmailTrigger; // null = manual send
 
   // Target
-  registrationId?: string
-  recipientEmail: string
-  recipientName?: string
+  registrationId?: string;
+  recipientEmail: string;
+  recipientName?: string;
 
   // Template
-  templateId: string
+  templateId: string;
 
   // Pre-built context (optional)
-  contextSnapshot?: Record<string, unknown>
+  contextSnapshot?: Record<string, unknown>;
 }
 
 export async function queueEmail(input: QueueEmailInput) {
@@ -68,11 +81,12 @@ export async function queueEmail(input: QueueEmailInput) {
       registrationId: input.registrationId,
       recipientEmail: input.recipientEmail,
       recipientName: input.recipientName,
-      subject: '', // Will be resolved when processing
-      status: 'QUEUED',
-      contextSnapshot: (input.contextSnapshot ?? Prisma.JsonNull) as Prisma.InputJsonValue
-    }
-  })
+      subject: "", // Will be resolved when processing
+      status: "QUEUED",
+      contextSnapshot: (input.contextSnapshot ??
+        Prisma.JsonNull) as Prisma.InputJsonValue,
+    },
+  });
 }
 
 // =============================================================================
@@ -86,13 +100,21 @@ export async function queueEmail(input: QueueEmailInput) {
 export async function queueTriggeredEmail(
   trigger: AutomaticEmailTrigger,
   eventId: string,
-  registration: { id: string; email: string; firstName?: string | null; lastName?: string | null }
+  registration: {
+    id: string;
+    email: string;
+    firstName?: string | null;
+    lastName?: string | null;
+  },
 ): Promise<boolean> {
   // 1. Get active template for this event + trigger
-  const template = await getTemplateByTrigger(eventId, trigger)
+  const template = await getTemplateByTrigger(eventId, trigger);
   if (!template) {
-    logger.warn({ trigger, eventId }, 'No email template configured for trigger - email not sent')
-    return false
+    logger.warn(
+      { trigger, eventId },
+      "No email template configured for trigger - email not sent",
+    );
+    return false;
   }
 
   // 2. Queue the email
@@ -101,11 +123,17 @@ export async function queueTriggeredEmail(
     templateId: template.id,
     registrationId: registration.id,
     recipientEmail: registration.email,
-    recipientName: [registration.firstName, registration.lastName].filter(Boolean).join(' ') || undefined,
-  })
+    recipientName:
+      [registration.firstName, registration.lastName]
+        .filter(Boolean)
+        .join(" ") || undefined,
+  });
 
-  logger.info({ trigger, eventId, registrationId: registration.id }, 'Queued triggered email')
-  return true
+  logger.info(
+    { trigger, eventId, registrationId: registration.id },
+    "Queued triggered email",
+  );
+  return true;
 }
 
 // =============================================================================
@@ -113,10 +141,10 @@ export async function queueTriggeredEmail(
 // =============================================================================
 
 export interface QueueSponsorshipEmailInput {
-  recipientEmail: string
-  recipientName?: string
-  context: Record<string, unknown>
-  registrationId?: string // Optional - only for doctor emails linked to a registration
+  recipientEmail: string;
+  recipientName?: string;
+  context: Record<string, unknown>;
+  registrationId?: string; // Optional - only for doctor emails linked to a registration
 }
 
 /**
@@ -126,13 +154,16 @@ export interface QueueSponsorshipEmailInput {
 export async function queueSponsorshipEmail(
   trigger: AutomaticEmailTrigger,
   eventId: string,
-  input: QueueSponsorshipEmailInput
+  input: QueueSponsorshipEmailInput,
 ): Promise<boolean> {
   // 1. Get active template for this event + trigger
-  const template = await getTemplateByTrigger(eventId, trigger)
+  const template = await getTemplateByTrigger(eventId, trigger);
   if (!template) {
-    logger.warn({ trigger, eventId }, 'No email template configured for trigger - email not sent')
-    return false
+    logger.warn(
+      { trigger, eventId },
+      "No email template configured for trigger - email not sent",
+    );
+    return false;
   }
 
   // 2. Queue the email with custom context
@@ -143,13 +174,13 @@ export async function queueSponsorshipEmail(
     recipientEmail: input.recipientEmail,
     recipientName: input.recipientName,
     contextSnapshot: input.context,
-  })
+  });
 
   logger.info(
     { trigger, eventId, recipientEmail: input.recipientEmail },
-    'Queued sponsorship email'
-  )
-  return true
+    "Queued sponsorship email",
+  );
+  return true;
 }
 
 // =============================================================================
@@ -159,26 +190,50 @@ export async function queueSponsorshipEmail(
 export async function queueBulkEmails(
   templateId: string,
   registrations: Array<{
-    id: string
-    email: string
-    firstName?: string | null
-    lastName?: string | null
-  }>
+    id: string;
+    email: string;
+    firstName?: string | null;
+    lastName?: string | null;
+  }>,
 ): Promise<number> {
-  const emailLogs = registrations.map(reg => ({
+  // Deduplication: find registrations that already have QUEUED/SENDING emails for this template
+  const existingLogs = await prisma.emailLog.findMany({
+    where: {
+      templateId,
+      registrationId: { in: registrations.map((r) => r.id) },
+      status: { in: ["QUEUED", "SENDING"] },
+    },
+    select: { registrationId: true },
+  });
+
+  const alreadyQueued = new Set(
+    existingLogs
+      .map((l) => l.registrationId)
+      .filter((id): id is string => id !== null),
+  );
+  const filteredRegistrations = registrations.filter(
+    (r) => !alreadyQueued.has(r.id),
+  );
+
+  if (filteredRegistrations.length === 0) {
+    return 0;
+  }
+
+  const emailLogs = filteredRegistrations.map((reg) => ({
     templateId,
     registrationId: reg.id,
     recipientEmail: reg.email,
-    recipientName: [reg.firstName, reg.lastName].filter(Boolean).join(' ') || null,
-    subject: '',
-    status: 'QUEUED' as EmailStatus
-  }))
+    recipientName:
+      [reg.firstName, reg.lastName].filter(Boolean).join(" ") || null,
+    subject: "",
+    status: "QUEUED" as EmailStatus,
+  }));
 
   const result = await prisma.emailLog.createMany({
-    data: emailLogs
-  })
+    data: emailLogs,
+  });
 
-  return result.count
+  return result.count;
 }
 
 // =============================================================================
@@ -186,103 +241,128 @@ export async function queueBulkEmails(
 // =============================================================================
 
 export interface ProcessQueueResult {
-  processed: number
-  sent: number
-  failed: number
-  skipped: number
+  processed: number;
+  sent: number;
+  failed: number;
+  skipped: number;
 }
 
-export async function processEmailQueue(batchSize = 50): Promise<ProcessQueueResult> {
+export async function processEmailQueue(
+  batchSize = 50,
+): Promise<ProcessQueueResult> {
   const result: ProcessQueueResult = {
     processed: 0,
     sent: 0,
     failed: 0,
-    skipped: 0
-  }
+    skipped: 0,
+  };
 
-  // Get batch of queued emails with row-level locking
-  const batch = await prisma.$transaction(async (tx) => {
-    const emails = await tx.emailLog.findMany({
-      where: {
-        status: 'QUEUED',
-        // Process emails that haven't exceeded max retries
-        retryCount: { lt: 4 },
-      },
-      take: batchSize * 2, // Fetch more to account for backoff filtering
-      orderBy: { queuedAt: 'asc' },
-      include: {
-        template: true,
-        registration: {
+  // Atomically claim a batch of queued emails with row-level locking via UPDATE RETURNING
+  // Backoff timing is enforced in the SQL query to prevent race conditions
+  const claimedIds = await prisma.$queryRaw<Array<{ id: string }>>`
+    UPDATE "email_logs"
+    SET status = 'SENDING', updated_at = NOW()
+    WHERE id IN (
+      SELECT id FROM "email_logs"
+      WHERE status = 'QUEUED'
+        AND retry_count < 4
+        AND (
+          retry_count = 0
+          OR updated_at <= NOW() - CASE
+            WHEN retry_count = 1 THEN INTERVAL '1 minute'
+            WHEN retry_count = 2 THEN INTERVAL '5 minutes'
+            ELSE INTERVAL '15 minutes'
+          END
+        )
+      ORDER BY queued_at ASC
+      LIMIT ${batchSize}
+      FOR UPDATE SKIP LOCKED
+    )
+    RETURNING id
+  `;
+
+  // Fetch full records with relations for the claimed emails
+  const batch =
+    claimedIds.length > 0
+      ? await prisma.emailLog.findMany({
+          where: { id: { in: claimedIds.map((r) => r.id) } },
           include: {
-            event: { include: { client: true } },
-            form: true
-          }
-        }
-      }
-    })
-
-    // Filter emails that are ready for retry (respect backoff timing)
-    const readyEmails = emails.filter(isReadyForRetry).slice(0, batchSize)
-
-    if (readyEmails.length > 0) {
-      await tx.emailLog.updateMany({
-        where: { id: { in: readyEmails.map((e: { id: string }) => e.id) } },
-        data: { status: 'SENDING' }
-      })
-    }
-
-    return readyEmails
-  })
+            template: true,
+            registration: {
+              include: {
+                event: { include: { client: true } },
+                form: true,
+              },
+            },
+          },
+        })
+      : [];
 
   if (batch.length === 0) {
-    return result
+    return result;
   }
 
-  result.processed = batch.length
+  result.processed = batch.length;
 
   // Process emails in parallel with controlled concurrency
-  const CONCURRENCY_LIMIT = 10
+  const CONCURRENCY_LIMIT = 10;
 
   // Process a single email and return the outcome
-  async function processEmail(emailLog: typeof batch[number]): Promise<'sent' | 'failed' | 'skipped'> {
+  async function processEmail(
+    emailLog: (typeof batch)[number],
+  ): Promise<"sent" | "failed" | "skipped"> {
     try {
       // Skip if no template
       if (!emailLog.template) {
-        await markAsSkipped(emailLog.id, 'No template found')
-        return 'skipped'
+        await markAsSkipped(emailLog.id, "No template found");
+        return "skipped";
       }
 
       // Skip if template is inactive
       if (!emailLog.template.isActive) {
-        await markAsSkipped(emailLog.id, 'Template is inactive')
-        return 'skipped'
+        await markAsSkipped(emailLog.id, "Template is inactive");
+        return "skipped";
       }
 
       // Build context
-      let context: EmailContext | null = null
+      let context: EmailContext | null = null;
 
-      if (emailLog.contextSnapshot && isValidEmailContext(emailLog.contextSnapshot)) {
-        context = emailLog.contextSnapshot
+      if (
+        emailLog.contextSnapshot &&
+        isValidEmailContext(emailLog.contextSnapshot)
+      ) {
+        context = emailLog.contextSnapshot;
       } else if (emailLog.registration) {
         // Build context from registration
-        context = await buildEmailContextWithAccess(emailLog.registration as RegistrationWithRelations)
+        context = await buildEmailContextWithAccess(
+          emailLog.registration as RegistrationWithRelations,
+        );
       }
 
       if (!context || Object.keys(context).length === 0) {
-        await markAsSkipped(emailLog.id, 'Could not build email context')
-        return 'skipped'
+        await markAsSkipped(emailLog.id, "Could not build email context");
+        return "skipped";
       }
 
       // Resolve variables
-      const resolvedSubject = resolveVariables(emailLog.template.subject, context)
-      const resolvedHtml = resolveVariables(emailLog.template.htmlContent || '', context)
-      const resolvedPlain = resolveVariables(emailLog.template.plainContent || '', context)
+      const resolvedSubject = resolveVariables(
+        emailLog.template.subject,
+        context,
+      );
+      const resolvedHtml = resolveVariables(
+        emailLog.template.htmlContent || "",
+        context,
+      );
+      const resolvedPlain = resolveVariables(
+        emailLog.template.plainContent || "",
+        context,
+      );
 
       // Update subject in log
       await prisma.emailLog.update({
         where: { id: emailLog.id },
-        data: { subject: resolvedSubject }
-      })
+        data: { subject: resolvedSubject },
+      });
 
       // Send via SendGrid
       const sendResult = await sendEmail({
@@ -292,37 +372,44 @@ export async function processEmailQueue(batchSize = 50): Promise<ProcessQueueRes
         subject: resolvedSubject,
         html: resolvedHtml,
         plainText: resolvedPlain,
-        trackingId: emailLog.id
-      })
+        trackingId: emailLog.id,
+      });
 
       if (sendResult.success) {
-        await markAsSent(emailLog.id, sendResult.messageId)
-        return 'sent'
+        await markAsSent(emailLog.id, sendResult.messageId);
+        return "sent";
       } else {
-        await markAsFailed(emailLog.id, sendResult.error || 'Unknown error', emailLog.retryCount)
-        return 'failed'
+        await markAsFailed(
+          emailLog.id,
+          sendResult.error || "Unknown error",
+          emailLog.retryCount,
+        );
+        return "failed";
       }
     } catch (error: unknown) {
-      const err = error as Error
-      logger.error({ emailLogId: emailLog.id, error: err.message }, 'Error processing email')
-      await markAsFailed(emailLog.id, err.message, emailLog.retryCount)
-      return 'failed'
+      const err = error as Error;
+      logger.error(
+        { emailLogId: emailLog.id, error: err.message },
+        "Error processing email",
+      );
+      await markAsFailed(emailLog.id, err.message, emailLog.retryCount);
+      return "failed";
     }
   }
 
   // Process in chunks to limit concurrency
   for (let i = 0; i < batch.length; i += CONCURRENCY_LIMIT) {
-    const chunk = batch.slice(i, i + CONCURRENCY_LIMIT)
-    const outcomes = await Promise.all(chunk.map(processEmail))
+    const chunk = batch.slice(i, i + CONCURRENCY_LIMIT);
+    const outcomes = await Promise.all(chunk.map(processEmail));
 
     for (const outcome of outcomes) {
-      if (outcome === 'sent') result.sent++
-      else if (outcome === 'failed') result.failed++
-      else result.skipped++
+      if (outcome === "sent") result.sent++;
+      else if (outcome === "failed") result.failed++;
+      else result.skipped++;
     }
   }
 
-  return result
+  return result;
 }
 
 // =============================================================================
@@ -333,36 +420,40 @@ async function markAsSent(id: string, messageId?: string) {
   await prisma.emailLog.update({
     where: { id },
     data: {
-      status: 'SENT',
+      status: "SENT",
       sendgridMessageId: messageId,
-      sentAt: new Date()
-    }
-  })
+      sentAt: new Date(),
+    },
+  });
 }
 
-async function markAsFailed(id: string, errorMessage: string, currentRetryCount: number) {
-  const maxRetries = 3
-  const shouldRetry = currentRetryCount < maxRetries
+async function markAsFailed(
+  id: string,
+  errorMessage: string,
+  currentRetryCount: number,
+) {
+  const maxRetries = 3;
+  const shouldRetry = currentRetryCount < maxRetries;
 
   await prisma.emailLog.update({
     where: { id },
     data: {
-      status: shouldRetry ? 'QUEUED' : 'FAILED',
+      status: shouldRetry ? "QUEUED" : "FAILED",
       errorMessage,
       retryCount: { increment: 1 },
-      failedAt: shouldRetry ? null : new Date()
-    }
-  })
+      failedAt: shouldRetry ? null : new Date(),
+    },
+  });
 }
 
 async function markAsSkipped(id: string, reason: string) {
   await prisma.emailLog.update({
     where: { id },
     data: {
-      status: 'SKIPPED',
-      errorMessage: reason
-    }
-  })
+      status: "SKIPPED",
+      errorMessage: reason,
+    },
+  });
 }
 
 // =============================================================================
@@ -370,76 +461,75 @@ async function markAsSkipped(id: string, reason: string) {
 // =============================================================================
 
 interface EmailLogUpdateData {
-  status?: EmailStatus
-  deliveredAt?: Date
-  openedAt?: Date
-  clickedAt?: Date
-  bouncedAt?: Date
-  errorMessage?: string
+  status?: EmailStatus;
+  deliveredAt?: Date;
+  openedAt?: Date;
+  clickedAt?: Date;
+  bouncedAt?: Date;
+  errorMessage?: string;
 }
 
 export async function updateEmailStatusFromWebhook(
   emailLogId: string,
-  event: 'delivered' | 'open' | 'click' | 'bounce' | 'dropped',
-  metadata?: { url?: string; reason?: string }
+  event: "delivered" | "open" | "click" | "bounce" | "dropped",
+  metadata?: { url?: string; reason?: string },
 ) {
-  const updates: EmailLogUpdateData = {}
+  const updates: EmailLogUpdateData = {};
 
   switch (event) {
-    case 'delivered':
-      updates.status = 'DELIVERED'
-      updates.deliveredAt = new Date()
-      break
-    case 'open':
-      updates.status = 'OPENED'
-      updates.openedAt = new Date()
-      break
-    case 'click':
-      updates.status = 'CLICKED'
-      updates.clickedAt = new Date()
-      break
-    case 'bounce':
-      updates.status = 'BOUNCED'
-      updates.bouncedAt = new Date()
-      updates.errorMessage = metadata?.reason || 'Bounced'
-      break
-    case 'dropped':
-      updates.status = 'DROPPED'
-      updates.errorMessage = metadata?.reason || 'Dropped'
-      break
+    case "delivered":
+      updates.status = "DELIVERED";
+      updates.deliveredAt = new Date();
+      break;
+    case "open":
+      updates.status = "OPENED";
+      updates.openedAt = new Date();
+      break;
+    case "click":
+      updates.status = "CLICKED";
+      updates.clickedAt = new Date();
+      break;
+    case "bounce":
+      updates.status = "BOUNCED";
+      updates.bouncedAt = new Date();
+      updates.errorMessage = metadata?.reason || "Bounced";
+      break;
+    case "dropped":
+      updates.status = "DROPPED";
+      updates.errorMessage = metadata?.reason || "Dropped";
+      break;
   }
 
   try {
     await prisma.emailLog.update({
       where: { id: emailLogId },
-      data: updates
-    })
+      data: updates,
+    });
   } catch (error) {
-    logger.error({ emailLogId, event, error }, 'Failed to update email status from webhook')
+    logger.error(
+      { emailLogId, event, error },
+      "Failed to update email status from webhook",
+    );
   }
 }
 
 // =============================================================================
-// UTILITIES
+// TEMPLATE SAFETY CHECKS
 // =============================================================================
 
 /**
- * Calculate backoff time for retry.
- * Exponential backoff: 1min, 5min, 15min
+ * Get count of queued or sending emails for a template
+ * Used to prevent deletion of templates with active email jobs
  */
-function getBackoffMs(retryCount: number): number {
-  const backoffs = [60000, 300000, 900000] // 1min, 5min, 15min
-  return backoffs[Math.min(retryCount, backoffs.length - 1)]
-}
-
-/**
- * Check if an email is ready for retry based on backoff timing.
- */
-function isReadyForRetry(email: { retryCount: number; updatedAt: Date }): boolean {
-  if (email.retryCount === 0) return true
-  const backoffMs = getBackoffMs(email.retryCount - 1)
-  const readyAt = new Date(email.updatedAt.getTime() + backoffMs)
-  return new Date() >= readyAt
+export async function getQueuedEmailCountForTemplate(
+  templateId: string,
+): Promise<number> {
+  return prisma.emailLog.count({
+    where: {
+      templateId,
+      status: { in: ["QUEUED", "SENDING"] },
+    },
+  });
 }
 
 // =============================================================================
@@ -448,12 +538,18 @@ function isReadyForRetry(email: { retryCount: number; updatedAt: Date }): boolea
 
 export async function getQueueStats() {
   const stats = await prisma.emailLog.groupBy({
-    by: ['status'],
-    _count: { status: true }
-  })
+    by: ["status"],
+    _count: { status: true },
+  });
 
-  return stats.reduce((acc: Record<string, number>, s: { status: string; _count: { status: number } }) => {
-    acc[s.status] = s._count.status
-    return acc
-  }, {} as Record<string, number>)
+  return stats.reduce(
+    (
+      acc: Record<string, number>,
+      s: { status: string; _count: { status: number } },
+    ) => {
+      acc[s.status] = s._count.status;
+      return acc;
+    },
+    {} as Record<string, number>,
+  );
 }

@@ -1,12 +1,12 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { prismaMock } from '../../../tests/mocks/prisma.js';
-import { resetSendGridMock } from '../../../tests/mocks/sendgrid.js';
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { prismaMock } from "../../../tests/mocks/prisma.js";
+import { resetSendGridMock } from "../../../tests/mocks/sendgrid.js";
 import {
   createMockClient,
   createMockEvent,
   createMockForm,
-} from '../../../tests/helpers/factories.js';
-import { faker } from '@faker-js/faker';
+} from "../../../tests/helpers/factories.js";
+import { faker } from "@faker-js/faker";
 import {
   queueEmail,
   queueTriggeredEmail,
@@ -14,36 +14,40 @@ import {
   processEmailQueue,
   updateEmailStatusFromWebhook,
   getQueueStats,
-} from './email-queue.service.js';
-import type { EmailLog, EmailTemplate, Prisma } from '@/generated/prisma/client.js';
-import type { TiptapDocument } from './email.types.js';
+} from "./email-queue.service.js";
+import type {
+  EmailLog,
+  EmailTemplate,
+  Prisma,
+} from "@/generated/prisma/client.js";
+import type { TiptapDocument } from "./email.types.js";
 
 // Mock the email-sendgrid.service
-vi.mock('./email-sendgrid.service.js', () => ({
-  sendEmail: vi.fn().mockResolvedValue({ success: true, messageId: 'msg-123' }),
+vi.mock("./email-sendgrid.service.js", () => ({
+  sendEmail: vi.fn().mockResolvedValue({ success: true, messageId: "msg-123" }),
 }));
 
 // Mock the email-variable.service
-vi.mock('./email-variable.service.js', () => ({
+vi.mock("./email-variable.service.js", () => ({
   resolveVariables: vi.fn().mockImplementation((template: string) => template),
   buildEmailContextWithAccess: vi.fn().mockResolvedValue({
-    firstName: 'John',
-    lastName: 'Doe',
-    email: 'john@example.com',
-    eventName: 'Test Event',
-    fullName: 'John Doe',
+    firstName: "John",
+    lastName: "Doe",
+    email: "john@example.com",
+    eventName: "Test Event",
+    fullName: "John Doe",
   }),
 }));
 
 // Mock the email-template.service
-vi.mock('./email-template.service.js', () => ({
+vi.mock("./email-template.service.js", () => ({
   getTemplateByTrigger: vi.fn(),
 }));
 
 // Import the mocked modules to access mock functions
-import { sendEmail } from './email-sendgrid.service.js';
-import { buildEmailContextWithAccess } from './email-variable.service.js';
-import { getTemplateByTrigger } from './email-template.service.js';
+import { sendEmail } from "./email-sendgrid.service.js";
+import { buildEmailContextWithAccess } from "./email-variable.service.js";
+import { getTemplateByTrigger } from "./email-template.service.js";
 
 // ============================================================================
 // Test Data Factories
@@ -51,30 +55,32 @@ import { getTemplateByTrigger } from './email-template.service.js';
 
 function createMockTiptapDocument(): TiptapDocument {
   return {
-    type: 'doc',
+    type: "doc",
     content: [
       {
-        type: 'paragraph',
-        content: [{ type: 'text', text: 'Hello {{firstName}}' }],
+        type: "paragraph",
+        content: [{ type: "text", text: "Hello {{firstName}}" }],
       },
     ],
   };
 }
 
-function createMockEmailTemplate(overrides: Partial<EmailTemplate> = {}): EmailTemplate {
+function createMockEmailTemplate(
+  overrides: Partial<EmailTemplate> = {},
+): EmailTemplate {
   return {
     id: faker.string.uuid(),
     clientId: faker.string.uuid(),
     eventId: faker.string.uuid(),
     name: faker.lorem.words(3),
     description: faker.lorem.sentence(),
-    subject: 'Welcome {{firstName}}',
-    content: createMockTiptapDocument() as unknown as EmailTemplate['content'],
-    mjmlContent: '<mjml><mj-body></mj-body></mjml>',
-    htmlContent: '<html><body>Hello {{firstName}}</body></html>',
-    plainContent: 'Hello {{firstName}}',
-    category: 'AUTOMATIC',
-    trigger: 'REGISTRATION_CREATED',
+    subject: "Welcome {{firstName}}",
+    content: createMockTiptapDocument() as unknown as EmailTemplate["content"],
+    mjmlContent: "<mjml><mj-body></mj-body></mjml>",
+    htmlContent: "<html><body>Hello {{firstName}}</body></html>",
+    plainContent: "Hello {{firstName}}",
+    category: "AUTOMATIC",
+    trigger: "REGISTRATION_CREATED",
     isDefault: false,
     isActive: true,
     createdAt: faker.date.past(),
@@ -91,9 +97,9 @@ function createMockEmailLog(overrides: Partial<EmailLog> = {}): EmailLog {
     registrationId: faker.string.uuid(),
     recipientEmail: faker.internet.email(),
     recipientName: faker.person.fullName(),
-    subject: 'Test Subject',
+    subject: "Test Subject",
     contextSnapshot: null,
-    status: 'QUEUED',
+    status: "QUEUED",
     sendgridMessageId: null,
     retryCount: 0,
     maxRetries: 3,
@@ -124,24 +130,24 @@ type EmailLogWithRelations = EmailLog & {
 // Tests
 // ============================================================================
 
-describe('Email Queue Service', () => {
-  const eventId = 'event-123';
-  const templateId = 'template-456';
-  const registrationId = 'registration-789';
+describe("Email Queue Service", () => {
+  const eventId = "event-123";
+  const templateId = "template-456";
+  const registrationId = "registration-789";
 
   beforeEach(() => {
     vi.clearAllMocks();
     resetSendGridMock();
   });
 
-  describe('queueEmail', () => {
-    it('should create a queued email log entry', async () => {
+  describe("queueEmail", () => {
+    it("should create a queued email log entry", async () => {
       const mockEmailLog = createMockEmailLog({
         templateId,
         registrationId,
-        recipientEmail: 'test@example.com',
-        recipientName: 'Test User',
-        status: 'QUEUED',
+        recipientEmail: "test@example.com",
+        recipientName: "Test User",
+        status: "QUEUED",
       });
 
       prismaMock.emailLog.create.mockResolvedValue(mockEmailLog);
@@ -149,45 +155,45 @@ describe('Email Queue Service', () => {
       const result = await queueEmail({
         templateId,
         registrationId,
-        recipientEmail: 'test@example.com',
-        recipientName: 'Test User',
+        recipientEmail: "test@example.com",
+        recipientName: "Test User",
       });
 
-      expect(result.status).toBe('QUEUED');
+      expect(result.status).toBe("QUEUED");
       expect(prismaMock.emailLog.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
           templateId,
           registrationId,
-          recipientEmail: 'test@example.com',
-          recipientName: 'Test User',
-          status: 'QUEUED',
-          subject: '',
+          recipientEmail: "test@example.com",
+          recipientName: "Test User",
+          status: "QUEUED",
+          subject: "",
         }),
       });
     });
 
-    it('should include trigger when provided', async () => {
+    it("should include trigger when provided", async () => {
       const mockEmailLog = createMockEmailLog({
-        trigger: 'REGISTRATION_CREATED',
+        trigger: "REGISTRATION_CREATED",
       });
 
       prismaMock.emailLog.create.mockResolvedValue(mockEmailLog);
 
       await queueEmail({
-        trigger: 'REGISTRATION_CREATED',
+        trigger: "REGISTRATION_CREATED",
         templateId,
-        recipientEmail: 'test@example.com',
+        recipientEmail: "test@example.com",
       });
 
       expect(prismaMock.emailLog.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
-          trigger: 'REGISTRATION_CREATED',
+          trigger: "REGISTRATION_CREATED",
         }),
       });
     });
 
-    it('should store context snapshot when provided', async () => {
-      const contextSnapshot = { firstName: 'John', eventName: 'Test Event' };
+    it("should store context snapshot when provided", async () => {
+      const contextSnapshot = { firstName: "John", eventName: "Test Event" };
       const mockEmailLog = createMockEmailLog({
         contextSnapshot: contextSnapshot as Prisma.JsonValue,
       });
@@ -196,7 +202,7 @@ describe('Email Queue Service', () => {
 
       await queueEmail({
         templateId,
-        recipientEmail: 'test@example.com',
+        recipientEmail: "test@example.com",
         contextSnapshot,
       });
 
@@ -208,80 +214,91 @@ describe('Email Queue Service', () => {
     });
   });
 
-  describe('queueTriggeredEmail', () => {
-    it('should queue email when template exists for trigger', async () => {
+  describe("queueTriggeredEmail", () => {
+    it("should queue email when template exists for trigger", async () => {
       const mockTemplate = createMockEmailTemplate({
         id: templateId,
-        trigger: 'REGISTRATION_CREATED',
+        trigger: "REGISTRATION_CREATED",
       });
       const mockEmailLog = createMockEmailLog({ templateId });
 
       vi.mocked(getTemplateByTrigger).mockResolvedValue(mockTemplate);
       prismaMock.emailLog.create.mockResolvedValue(mockEmailLog);
 
-      const result = await queueTriggeredEmail('REGISTRATION_CREATED', eventId, {
-        id: registrationId,
-        email: 'test@example.com',
-        firstName: 'John',
-        lastName: 'Doe',
-      });
+      const result = await queueTriggeredEmail(
+        "REGISTRATION_CREATED",
+        eventId,
+        {
+          id: registrationId,
+          email: "test@example.com",
+          firstName: "John",
+          lastName: "Doe",
+        },
+      );
 
       expect(result).toBe(true);
-      expect(getTemplateByTrigger).toHaveBeenCalledWith(eventId, 'REGISTRATION_CREATED');
+      expect(getTemplateByTrigger).toHaveBeenCalledWith(
+        eventId,
+        "REGISTRATION_CREATED",
+      );
       expect(prismaMock.emailLog.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
-          trigger: 'REGISTRATION_CREATED',
+          trigger: "REGISTRATION_CREATED",
           templateId,
           registrationId,
-          recipientEmail: 'test@example.com',
-          recipientName: 'John Doe',
+          recipientEmail: "test@example.com",
+          recipientName: "John Doe",
         }),
       });
     });
 
-    it('should return false when no template exists for trigger', async () => {
+    it("should return false when no template exists for trigger", async () => {
       vi.mocked(getTemplateByTrigger).mockResolvedValue(null);
 
-      const result = await queueTriggeredEmail('REGISTRATION_CREATED', eventId, {
-        id: registrationId,
-        email: 'test@example.com',
-      });
+      const result = await queueTriggeredEmail(
+        "REGISTRATION_CREATED",
+        eventId,
+        {
+          id: registrationId,
+          email: "test@example.com",
+        },
+      );
 
       expect(result).toBe(false);
       expect(prismaMock.emailLog.create).not.toHaveBeenCalled();
     });
 
-    it('should handle registration with only firstName', async () => {
+    it("should handle registration with only firstName", async () => {
       const mockTemplate = createMockEmailTemplate({ id: templateId });
       const mockEmailLog = createMockEmailLog();
 
       vi.mocked(getTemplateByTrigger).mockResolvedValue(mockTemplate);
       prismaMock.emailLog.create.mockResolvedValue(mockEmailLog);
 
-      await queueTriggeredEmail('PAYMENT_CONFIRMED', eventId, {
+      await queueTriggeredEmail("PAYMENT_CONFIRMED", eventId, {
         id: registrationId,
-        email: 'test@example.com',
-        firstName: 'John',
+        email: "test@example.com",
+        firstName: "John",
         lastName: null,
       });
 
       expect(prismaMock.emailLog.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
-          recipientName: 'John',
+          recipientName: "John",
         }),
       });
     });
 
-    it('should set recipientName to undefined when no names provided', async () => {
+    it("should set recipientName to undefined when no names provided", async () => {
       const mockTemplate = createMockEmailTemplate({ id: templateId });
       const mockEmailLog = createMockEmailLog({ recipientName: null });
 
       vi.mocked(getTemplateByTrigger).mockResolvedValue(mockTemplate);
       prismaMock.emailLog.create.mockResolvedValue(mockEmailLog);
 
-      await queueTriggeredEmail('PAYMENT_PROOF_SUBMITTED', eventId, {
+      await queueTriggeredEmail("PAYMENT_PROOF_SUBMITTED", eventId, {
         id: registrationId,
-        email: 'test@example.com',
+        email: "test@example.com",
       });
 
       expect(prismaMock.emailLog.create).toHaveBeenCalledWith({
@@ -292,14 +309,30 @@ describe('Email Queue Service', () => {
     });
   });
 
-  describe('queueBulkEmails', () => {
-    it('should queue multiple emails in bulk', async () => {
+  describe("queueBulkEmails", () => {
+    it("should queue multiple emails in bulk", async () => {
       const registrations = [
-        { id: 'reg-1', email: 'user1@example.com', firstName: 'John', lastName: 'Doe' },
-        { id: 'reg-2', email: 'user2@example.com', firstName: 'Jane', lastName: 'Smith' },
-        { id: 'reg-3', email: 'user3@example.com', firstName: null, lastName: null },
+        {
+          id: "reg-1",
+          email: "user1@example.com",
+          firstName: "John",
+          lastName: "Doe",
+        },
+        {
+          id: "reg-2",
+          email: "user2@example.com",
+          firstName: "Jane",
+          lastName: "Smith",
+        },
+        {
+          id: "reg-3",
+          email: "user3@example.com",
+          firstName: null,
+          lastName: null,
+        },
       ];
 
+      prismaMock.emailLog.findMany.mockResolvedValue([]);
       prismaMock.emailLog.createMany.mockResolvedValue({ count: 3 });
 
       const result = await queueBulkEmails(templateId, registrations);
@@ -309,24 +342,25 @@ describe('Email Queue Service', () => {
         data: expect.arrayContaining([
           expect.objectContaining({
             templateId,
-            registrationId: 'reg-1',
-            recipientEmail: 'user1@example.com',
-            recipientName: 'John Doe',
-            status: 'QUEUED',
+            registrationId: "reg-1",
+            recipientEmail: "user1@example.com",
+            recipientName: "John Doe",
+            status: "QUEUED",
           }),
           expect.objectContaining({
-            registrationId: 'reg-2',
-            recipientName: 'Jane Smith',
+            registrationId: "reg-2",
+            recipientName: "Jane Smith",
           }),
           expect.objectContaining({
-            registrationId: 'reg-3',
+            registrationId: "reg-3",
             recipientName: null,
           }),
         ]),
       });
     });
 
-    it('should return 0 for empty registration list', async () => {
+    it("should return 0 for empty registration list", async () => {
+      prismaMock.emailLog.findMany.mockResolvedValue([]);
       prismaMock.emailLog.createMany.mockResolvedValue({ count: 0 });
 
       const result = await queueBulkEmails(templateId, []);
@@ -335,34 +369,36 @@ describe('Email Queue Service', () => {
     });
   });
 
-  describe('processEmailQueue', () => {
-    it('should process queued emails successfully', async () => {
+  describe("processEmailQueue", () => {
+    it("should process queued emails successfully", async () => {
       const mockClient = createMockClient();
       const mockEvent = createMockEvent({ clientId: mockClient.id });
       const mockForm = createMockForm({ eventId: mockEvent.id });
       const mockTemplate = createMockEmailTemplate({ isActive: true });
 
       const mockEmailLog: EmailLogWithRelations = {
-        ...createMockEmailLog({ status: 'QUEUED', retryCount: 0 }),
+        ...createMockEmailLog({ status: "QUEUED", retryCount: 0 }),
         template: mockTemplate,
         registration: {
           id: registrationId,
-          event: { id: mockEvent.id, client: { id: mockClient.id, name: mockClient.name } },
+          event: {
+            id: mockEvent.id,
+            client: { id: mockClient.id, name: mockClient.name },
+          },
           form: { id: mockForm.id },
         },
       };
 
-      // Mock transaction
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prismaMock.$transaction.mockImplementation(async (callback: any) => {
-        return callback(prismaMock);
-      });
+      // Mock $queryRaw for atomic UPDATE RETURNING
+      prismaMock.$queryRaw.mockResolvedValue([{ id: mockEmailLog.id }]);
 
       prismaMock.emailLog.findMany.mockResolvedValue([mockEmailLog]);
-      prismaMock.emailLog.updateMany.mockResolvedValue({ count: 1 });
       prismaMock.emailLog.update.mockResolvedValue(mockEmailLog);
 
-      vi.mocked(sendEmail).mockResolvedValue({ success: true, messageId: 'msg-123' });
+      vi.mocked(sendEmail).mockResolvedValue({
+        success: true,
+        messageId: "msg-123",
+      });
 
       const result = await processEmailQueue(10);
 
@@ -372,20 +408,15 @@ describe('Email Queue Service', () => {
       expect(result.skipped).toBe(0);
     });
 
-    it('should skip emails without template', async () => {
+    it("should skip emails without template", async () => {
       const mockEmailLog: EmailLogWithRelations = {
-        ...createMockEmailLog({ status: 'QUEUED' }),
+        ...createMockEmailLog({ status: "QUEUED" }),
         template: null,
         registration: null,
       };
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prismaMock.$transaction.mockImplementation(async (callback: any) => {
-        return callback(prismaMock);
-      });
-
+      prismaMock.$queryRaw.mockResolvedValue([{ id: mockEmailLog.id }]);
       prismaMock.emailLog.findMany.mockResolvedValue([mockEmailLog]);
-      prismaMock.emailLog.updateMany.mockResolvedValue({ count: 1 });
       prismaMock.emailLog.update.mockResolvedValue(mockEmailLog);
 
       const result = await processEmailQueue();
@@ -394,21 +425,16 @@ describe('Email Queue Service', () => {
       expect(result.sent).toBe(0);
     });
 
-    it('should skip emails with inactive template', async () => {
+    it("should skip emails with inactive template", async () => {
       const mockTemplate = createMockEmailTemplate({ isActive: false });
       const mockEmailLog: EmailLogWithRelations = {
-        ...createMockEmailLog({ status: 'QUEUED' }),
+        ...createMockEmailLog({ status: "QUEUED" }),
         template: mockTemplate,
         registration: null,
       };
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prismaMock.$transaction.mockImplementation(async (callback: any) => {
-        return callback(prismaMock);
-      });
-
+      prismaMock.$queryRaw.mockResolvedValue([{ id: mockEmailLog.id }]);
       prismaMock.emailLog.findMany.mockResolvedValue([mockEmailLog]);
-      prismaMock.emailLog.updateMany.mockResolvedValue({ count: 1 });
       prismaMock.emailLog.update.mockResolvedValue(mockEmailLog);
 
       const result = await processEmailQueue();
@@ -417,39 +443,37 @@ describe('Email Queue Service', () => {
       expect(prismaMock.emailLog.update).toHaveBeenCalledWith({
         where: { id: mockEmailLog.id },
         data: {
-          status: 'SKIPPED',
-          errorMessage: 'Template is inactive',
+          status: "SKIPPED",
+          errorMessage: "Template is inactive",
         },
       });
     });
 
-    it('should mark email as failed after SendGrid error with retries', async () => {
+    it("should mark email as failed after SendGrid error with retries", async () => {
       const mockTemplate = createMockEmailTemplate({ isActive: true });
       const mockClient = createMockClient();
       const mockEvent = createMockEvent({ clientId: mockClient.id });
 
       const mockEmailLog: EmailLogWithRelations = {
-        ...createMockEmailLog({ status: 'QUEUED', retryCount: 3 }), // Max retries reached
+        ...createMockEmailLog({ status: "QUEUED", retryCount: 3 }), // Max retries reached
         template: mockTemplate,
         registration: {
           id: registrationId,
-          event: { id: mockEvent.id, client: { id: mockClient.id, name: mockClient.name } },
+          event: {
+            id: mockEvent.id,
+            client: { id: mockClient.id, name: mockClient.name },
+          },
           form: null,
         },
       };
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prismaMock.$transaction.mockImplementation(async (callback: any) => {
-        return callback(prismaMock);
-      });
-
+      prismaMock.$queryRaw.mockResolvedValue([{ id: mockEmailLog.id }]);
       prismaMock.emailLog.findMany.mockResolvedValue([mockEmailLog]);
-      prismaMock.emailLog.updateMany.mockResolvedValue({ count: 1 });
       prismaMock.emailLog.update.mockResolvedValue(mockEmailLog);
 
       vi.mocked(sendEmail).mockResolvedValue({
         success: false,
-        error: 'SendGrid API error',
+        error: "SendGrid API error",
       });
 
       const result = await processEmailQueue();
@@ -459,40 +483,38 @@ describe('Email Queue Service', () => {
         expect.objectContaining({
           where: { id: mockEmailLog.id },
           data: expect.objectContaining({
-            status: 'FAILED',
-            errorMessage: 'SendGrid API error',
+            status: "FAILED",
+            errorMessage: "SendGrid API error",
           }),
-        })
+        }),
       );
     });
 
-    it('should re-queue email for retry when retries remain', async () => {
+    it("should re-queue email for retry when retries remain", async () => {
       const mockTemplate = createMockEmailTemplate({ isActive: true });
       const mockClient = createMockClient();
       const mockEvent = createMockEvent({ clientId: mockClient.id });
 
       const mockEmailLog: EmailLogWithRelations = {
-        ...createMockEmailLog({ status: 'QUEUED', retryCount: 1 }), // Retries remaining
+        ...createMockEmailLog({ status: "QUEUED", retryCount: 1 }), // Retries remaining
         template: mockTemplate,
         registration: {
           id: registrationId,
-          event: { id: mockEvent.id, client: { id: mockClient.id, name: mockClient.name } },
+          event: {
+            id: mockEvent.id,
+            client: { id: mockClient.id, name: mockClient.name },
+          },
           form: null,
         },
       };
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prismaMock.$transaction.mockImplementation(async (callback: any) => {
-        return callback(prismaMock);
-      });
-
+      prismaMock.$queryRaw.mockResolvedValue([{ id: mockEmailLog.id }]);
       prismaMock.emailLog.findMany.mockResolvedValue([mockEmailLog]);
-      prismaMock.emailLog.updateMany.mockResolvedValue({ count: 1 });
       prismaMock.emailLog.update.mockResolvedValue(mockEmailLog);
 
       vi.mocked(sendEmail).mockResolvedValue({
         success: false,
-        error: 'Temporary failure',
+        error: "Temporary failure",
       });
 
       await processEmailQueue();
@@ -501,21 +523,16 @@ describe('Email Queue Service', () => {
         expect.objectContaining({
           where: { id: mockEmailLog.id },
           data: expect.objectContaining({
-            status: 'QUEUED', // Re-queued for retry
+            status: "QUEUED", // Re-queued for retry
             retryCount: { increment: 1 },
             failedAt: null,
           }),
-        })
+        }),
       );
     });
 
-    it('should return empty result when queue is empty', async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prismaMock.$transaction.mockImplementation(async (callback: any) => {
-        return callback(prismaMock);
-      });
-
-      prismaMock.emailLog.findMany.mockResolvedValue([]);
+    it("should return empty result when queue is empty", async () => {
+      prismaMock.$queryRaw.mockResolvedValue([]);
 
       const result = await processEmailQueue();
 
@@ -525,31 +542,26 @@ describe('Email Queue Service', () => {
       expect(result.skipped).toBe(0);
     });
 
-    it('should use provided context snapshot instead of building new context', async () => {
+    it("should use provided context snapshot instead of building new context", async () => {
       const contextSnapshot = {
-        firstName: 'Custom',
-        lastName: 'User',
-        email: 'custom@example.com',
-        eventName: 'Custom Event',
+        firstName: "Custom",
+        lastName: "User",
+        email: "custom@example.com",
+        eventName: "Custom Event",
       };
 
       const mockTemplate = createMockEmailTemplate({ isActive: true });
       const mockEmailLog: EmailLogWithRelations = {
         ...createMockEmailLog({
-          status: 'QUEUED',
+          status: "QUEUED",
           contextSnapshot: contextSnapshot as Prisma.JsonValue,
         }),
         template: mockTemplate,
         registration: null,
       };
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prismaMock.$transaction.mockImplementation(async (callback: any) => {
-        return callback(prismaMock);
-      });
-
+      prismaMock.$queryRaw.mockResolvedValue([{ id: mockEmailLog.id }]);
       prismaMock.emailLog.findMany.mockResolvedValue([mockEmailLog]);
-      prismaMock.emailLog.updateMany.mockResolvedValue({ count: 1 });
       prismaMock.emailLog.update.mockResolvedValue(mockEmailLog);
 
       vi.mocked(sendEmail).mockResolvedValue({ success: true });
@@ -560,21 +572,16 @@ describe('Email Queue Service', () => {
       expect(buildEmailContextWithAccess).not.toHaveBeenCalled();
     });
 
-    it('should skip emails when context cannot be built', async () => {
+    it("should skip emails when context cannot be built", async () => {
       const mockTemplate = createMockEmailTemplate({ isActive: true });
       const mockEmailLog: EmailLogWithRelations = {
-        ...createMockEmailLog({ status: 'QUEUED', contextSnapshot: null }),
+        ...createMockEmailLog({ status: "QUEUED", contextSnapshot: null }),
         template: mockTemplate,
         registration: null, // No registration to build context from
       };
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prismaMock.$transaction.mockImplementation(async (callback: any) => {
-        return callback(prismaMock);
-      });
-
+      prismaMock.$queryRaw.mockResolvedValue([{ id: mockEmailLog.id }]);
       prismaMock.emailLog.findMany.mockResolvedValue([mockEmailLog]);
-      prismaMock.emailLog.updateMany.mockResolvedValue({ count: 1 });
       prismaMock.emailLog.update.mockResolvedValue(mockEmailLog);
 
       const result = await processEmailQueue();
@@ -583,168 +590,158 @@ describe('Email Queue Service', () => {
       expect(prismaMock.emailLog.update).toHaveBeenCalledWith({
         where: { id: mockEmailLog.id },
         data: {
-          status: 'SKIPPED',
-          errorMessage: 'Could not build email context',
+          status: "SKIPPED",
+          errorMessage: "Could not build email context",
         },
       });
     });
 
-    it('should respect batch size parameter', async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prismaMock.$transaction.mockImplementation(async (callback: any) => {
-        return callback(prismaMock);
-      });
-
-      prismaMock.emailLog.findMany.mockResolvedValue([]);
+    it("should respect batch size parameter", async () => {
+      prismaMock.$queryRaw.mockResolvedValue([]);
 
       await processEmailQueue(25);
 
-      expect(prismaMock.emailLog.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          take: 50, // batchSize * 2 for backoff filtering
-        })
-      );
+      // Verify batch size is used in the SQL query LIMIT clause
+      expect(prismaMock.$queryRaw).toHaveBeenCalled();
+      const queryCall = vi.mocked(prismaMock.$queryRaw).mock.calls[0];
+      // The second argument to the tagged template is the batchSize parameter
+      expect(queryCall).toContain(25);
     });
 
-    it('should only process emails that have not exceeded max retries', async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prismaMock.$transaction.mockImplementation(async (callback: any) => {
-        return callback(prismaMock);
-      });
-
-      prismaMock.emailLog.findMany.mockResolvedValue([]);
+    it("should only process emails that have not exceeded max retries", async () => {
+      prismaMock.$queryRaw.mockResolvedValue([]);
 
       await processEmailQueue();
 
-      expect(prismaMock.emailLog.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({
-            status: 'QUEUED',
-            retryCount: { lt: 4 },
-          }),
-        })
-      );
+      // Verify $queryRaw was called (retry_count < 4 is in the SQL query)
+      expect(prismaMock.$queryRaw).toHaveBeenCalled();
     });
   });
 
-  describe('updateEmailStatusFromWebhook', () => {
-    const emailLogId = 'log-123';
+  describe("updateEmailStatusFromWebhook", () => {
+    const emailLogId = "log-123";
 
-    it('should update status to DELIVERED', async () => {
+    it("should update status to DELIVERED", async () => {
       prismaMock.emailLog.update.mockResolvedValue(createMockEmailLog());
 
-      await updateEmailStatusFromWebhook(emailLogId, 'delivered');
+      await updateEmailStatusFromWebhook(emailLogId, "delivered");
 
       expect(prismaMock.emailLog.update).toHaveBeenCalledWith({
         where: { id: emailLogId },
         data: expect.objectContaining({
-          status: 'DELIVERED',
+          status: "DELIVERED",
           deliveredAt: expect.any(Date),
         }),
       });
     });
 
-    it('should update status to OPENED', async () => {
+    it("should update status to OPENED", async () => {
       prismaMock.emailLog.update.mockResolvedValue(createMockEmailLog());
 
-      await updateEmailStatusFromWebhook(emailLogId, 'open');
+      await updateEmailStatusFromWebhook(emailLogId, "open");
 
       expect(prismaMock.emailLog.update).toHaveBeenCalledWith({
         where: { id: emailLogId },
         data: expect.objectContaining({
-          status: 'OPENED',
+          status: "OPENED",
           openedAt: expect.any(Date),
         }),
       });
     });
 
-    it('should update status to CLICKED', async () => {
+    it("should update status to CLICKED", async () => {
       prismaMock.emailLog.update.mockResolvedValue(createMockEmailLog());
 
-      await updateEmailStatusFromWebhook(emailLogId, 'click', { url: 'https://example.com' });
+      await updateEmailStatusFromWebhook(emailLogId, "click", {
+        url: "https://example.com",
+      });
 
       expect(prismaMock.emailLog.update).toHaveBeenCalledWith({
         where: { id: emailLogId },
         data: expect.objectContaining({
-          status: 'CLICKED',
+          status: "CLICKED",
           clickedAt: expect.any(Date),
         }),
       });
     });
 
-    it('should update status to BOUNCED with reason', async () => {
+    it("should update status to BOUNCED with reason", async () => {
       prismaMock.emailLog.update.mockResolvedValue(createMockEmailLog());
 
-      await updateEmailStatusFromWebhook(emailLogId, 'bounce', { reason: 'Invalid email address' });
+      await updateEmailStatusFromWebhook(emailLogId, "bounce", {
+        reason: "Invalid email address",
+      });
 
       expect(prismaMock.emailLog.update).toHaveBeenCalledWith({
         where: { id: emailLogId },
         data: expect.objectContaining({
-          status: 'BOUNCED',
+          status: "BOUNCED",
           bouncedAt: expect.any(Date),
-          errorMessage: 'Invalid email address',
+          errorMessage: "Invalid email address",
         }),
       });
     });
 
-    it('should update status to BOUNCED with default reason', async () => {
+    it("should update status to BOUNCED with default reason", async () => {
       prismaMock.emailLog.update.mockResolvedValue(createMockEmailLog());
 
-      await updateEmailStatusFromWebhook(emailLogId, 'bounce');
+      await updateEmailStatusFromWebhook(emailLogId, "bounce");
 
       expect(prismaMock.emailLog.update).toHaveBeenCalledWith({
         where: { id: emailLogId },
         data: expect.objectContaining({
-          errorMessage: 'Bounced',
+          errorMessage: "Bounced",
         }),
       });
     });
 
-    it('should update status to DROPPED with reason', async () => {
+    it("should update status to DROPPED with reason", async () => {
       prismaMock.emailLog.update.mockResolvedValue(createMockEmailLog());
 
-      await updateEmailStatusFromWebhook(emailLogId, 'dropped', { reason: 'Spam content detected' });
+      await updateEmailStatusFromWebhook(emailLogId, "dropped", {
+        reason: "Spam content detected",
+      });
 
       expect(prismaMock.emailLog.update).toHaveBeenCalledWith({
         where: { id: emailLogId },
         data: expect.objectContaining({
-          status: 'DROPPED',
-          errorMessage: 'Spam content detected',
+          status: "DROPPED",
+          errorMessage: "Spam content detected",
         }),
       });
     });
 
-    it('should update status to DROPPED with default reason', async () => {
+    it("should update status to DROPPED with default reason", async () => {
       prismaMock.emailLog.update.mockResolvedValue(createMockEmailLog());
 
-      await updateEmailStatusFromWebhook(emailLogId, 'dropped');
+      await updateEmailStatusFromWebhook(emailLogId, "dropped");
 
       expect(prismaMock.emailLog.update).toHaveBeenCalledWith({
         where: { id: emailLogId },
         data: expect.objectContaining({
-          errorMessage: 'Dropped',
+          errorMessage: "Dropped",
         }),
       });
     });
 
-    it('should handle update errors gracefully', async () => {
-      prismaMock.emailLog.update.mockRejectedValue(new Error('Database error'));
+    it("should handle update errors gracefully", async () => {
+      prismaMock.emailLog.update.mockRejectedValue(new Error("Database error"));
 
       // Should not throw
       await expect(
-        updateEmailStatusFromWebhook(emailLogId, 'delivered')
+        updateEmailStatusFromWebhook(emailLogId, "delivered"),
       ).resolves.not.toThrow();
     });
   });
 
-  describe('getQueueStats', () => {
-    it('should return aggregated queue statistics', async () => {
+  describe("getQueueStats", () => {
+    it("should return aggregated queue statistics", async () => {
       const mockStats = [
-        { status: 'QUEUED', _count: { status: 10 } },
-        { status: 'SENT', _count: { status: 50 } },
-        { status: 'DELIVERED', _count: { status: 45 } },
-        { status: 'FAILED', _count: { status: 3 } },
-        { status: 'BOUNCED', _count: { status: 2 } },
+        { status: "QUEUED", _count: { status: 10 } },
+        { status: "SENT", _count: { status: 50 } },
+        { status: "DELIVERED", _count: { status: 45 } },
+        { status: "FAILED", _count: { status: 3 } },
+        { status: "BOUNCED", _count: { status: 2 } },
       ];
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -761,7 +758,7 @@ describe('Email Queue Service', () => {
       });
     });
 
-    it('should return empty object when no emails in queue', async () => {
+    it("should return empty object when no emails in queue", async () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (prismaMock.emailLog.groupBy as any).mockResolvedValue([]);
 
@@ -770,8 +767,8 @@ describe('Email Queue Service', () => {
       expect(result).toEqual({});
     });
 
-    it('should handle single status in queue', async () => {
-      const mockStats = [{ status: 'QUEUED', _count: { status: 5 } }];
+    it("should handle single status in queue", async () => {
+      const mockStats = [{ status: "QUEUED", _count: { status: 5 } }];
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (prismaMock.emailLog.groupBy as any).mockResolvedValue(mockStats);

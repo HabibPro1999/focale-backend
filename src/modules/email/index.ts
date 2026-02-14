@@ -19,7 +19,7 @@ export {
   TestSendEmailSchema,
   EmailTemplateIdParamSchema,
   EventIdParamSchema,
-} from './email.schema.js';
+} from "./email.schema.js";
 
 // ============================================================================
 // Schema Types
@@ -36,7 +36,7 @@ export type {
   BulkSendEmailInput,
   BulkSendFilter,
   TestSendEmailInput,
-} from './email.schema.js';
+} from "./email.schema.js";
 
 // ============================================================================
 // Email Template Service
@@ -52,7 +52,7 @@ export {
   updateEmailTemplate,
   deleteEmailTemplate,
   duplicateEmailTemplate,
-} from './email-template.service.js';
+} from "./email-template.service.js";
 
 // ============================================================================
 // Email Variable Service
@@ -69,12 +69,12 @@ export {
   getSampleEmailContext,
   buildBatchEmailContext,
   buildLinkedSponsorshipContext,
-} from './email-variable.service.js';
+} from "./email-variable.service.js";
 
 export type {
   BatchEmailContextInput,
   LinkedSponsorshipContextInput,
-} from './email-variable.service.js';
+} from "./email-variable.service.js";
 
 // ============================================================================
 // Email Queue Service
@@ -88,13 +88,14 @@ export {
   processEmailQueue,
   updateEmailStatusFromWebhook,
   getQueueStats,
-} from './email-queue.service.js';
+  getQueuedEmailCountForTemplate,
+} from "./email-queue.service.js";
 
 export type {
   QueueEmailInput,
   QueueSponsorshipEmailInput,
   ProcessQueueResult,
-} from './email-queue.service.js';
+} from "./email-queue.service.js";
 
 // ============================================================================
 // Email SendGrid Service
@@ -111,7 +112,7 @@ export {
   isEngagementEvent,
   isSendGridConfigured,
   getSendGridStatus,
-} from './email-sendgrid.service.js';
+} from "./email-sendgrid.service.js";
 
 export type {
   SendEmailInput,
@@ -120,7 +121,7 @@ export type {
   BatchSendResult,
   SendGridEventType,
   SendGridWebhookEvent,
-} from './email-sendgrid.service.js';
+} from "./email-sendgrid.service.js";
 
 // ============================================================================
 // Email Renderer Service
@@ -135,7 +136,7 @@ export {
   renderInlineNode,
   applyMarks,
   escapeHtml,
-} from './email-renderer.service.js';
+} from "./email-renderer.service.js";
 
 // ============================================================================
 // Types (from email.types.ts)
@@ -149,10 +150,11 @@ export type {
   EmailContext,
   MjmlCompilationResult,
   VariableDefinition,
-} from './email.types.js';
+} from "./email.types.js";
 
 // ============================================================================
 // Routes
 // ============================================================================
 
-export { emailRoutes } from './email.routes.js';
+export { emailRoutes } from "./email.routes.js";
+export { emailWebhookRoutes } from "./email-webhook.routes.js";

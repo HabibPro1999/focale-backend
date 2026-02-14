@@ -12,6 +12,7 @@ import {
   compileMjmlToHtml,
   extractPlainText,
 } from "./email-renderer.service.js";
+import { getQueuedEmailCountForTemplate } from "./email-queue.service.js";
 import type { TiptapDocument } from "./email.types.js";
 import type {
   Prisma,
@@ -302,6 +303,17 @@ export async function deleteEmailTemplate(id: string): Promise<void> {
       404,
       true,
       ErrorCodes.NOT_FOUND,
+    );
+  }
+
+  const queuedCount = await getQueuedEmailCountForTemplate(id);
+  if (queuedCount > 0) {
+    throw new AppError(
+      `Cannot delete template: ${queuedCount} email(s) are queued or sending`,
+      409,
+      true,
+      ErrorCodes.TEMPLATE_HAS_QUEUED_EMAILS,
+      { queuedCount },
     );
   }
 
