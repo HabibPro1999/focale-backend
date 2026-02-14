@@ -17,6 +17,8 @@ export const FieldTypeSchema = z.enum([
   "file",
   "heading",
   "paragraph",
+  "governorate",
+  "country",
 ]);
 
 export const FieldOptionSchema = z
@@ -24,6 +26,9 @@ export const FieldOptionSchema = z
     id: z.string(),
     label: z.string(),
     priceModifier: z.number().optional(),
+    description: z.string().optional(),
+    maxCapacity: z.number().optional(),
+    currentCount: z.number().optional(),
   })
   .strict();
 
@@ -40,6 +45,7 @@ export const ConditionOperatorSchema = z.enum([
 
 export const FieldConditionSchema = z
   .object({
+    id: z.string().optional(),
     fieldId: z.string(),
     operator: ConditionOperatorSchema,
     value: z.union([z.string(), z.number(), z.boolean()]).optional(),
@@ -53,9 +59,31 @@ export const FieldValidationSchema = z
     maxLength: z.number().int().positive().optional(),
     min: z.number().optional(),
     max: z.number().optional(),
+    minValue: z.number().optional(),
+    maxValue: z.number().optional(),
     pattern: z.string().optional(),
     fileTypes: z.array(z.string()).optional(),
     maxFileSize: z.number().int().positive().optional(),
+    step: z.number().optional(),
+    minDate: z.string().optional(),
+    maxDate: z.string().optional(),
+    acceptedFileTypes: z.array(z.string()).optional(),
+    minSelections: z.number().int().min(0).optional(),
+    maxSelections: z.number().int().positive().optional(),
+    // Custom error messages
+    requiredError: z.string().optional(),
+    patternError: z.string().optional(),
+    minLengthError: z.string().optional(),
+    maxLengthError: z.string().optional(),
+    minValueError: z.string().optional(),
+    maxValueError: z.string().optional(),
+    minDateError: z.string().optional(),
+    maxDateError: z.string().optional(),
+    fileTypeError: z.string().optional(),
+    fileSizeError: z.string().optional(),
+    minSelectionsError: z.string().optional(),
+    maxSelectionsError: z.string().optional(),
+    errorMessages: z.record(z.string(), z.string()).optional(),
   })
   .strict();
 
@@ -66,12 +94,31 @@ export const FormFieldSchema = z
     label: z.string().optional(),
     placeholder: z.string().optional(),
     helpText: z.string().optional(),
+    helperText: z.string().optional(),
     required: z.boolean().optional(),
-    width: z.string().optional(),
+    width: z
+      .union([z.string(), z.literal("full"), z.literal("half")])
+      .optional(),
     options: z.array(FieldOptionSchema).optional(),
     validation: FieldValidationSchema.optional(),
     conditions: z.array(FieldConditionSchema).optional(),
+    conditionLogic: z.enum(["and", "or"]).optional(),
+    conditionAction: z.enum(["show", "disable"]).optional(),
+    clearOnHide: z.boolean().optional(),
+    defaultValue: z
+      .union([z.string(), z.number(), z.array(z.string())])
+      .optional(),
+    pricingEnabled: z.boolean().optional(),
     gridColumn: z.string().optional(),
+    // Type-specific properties
+    rows: z.number().int().positive().optional(),
+    layout: z.enum(["vertical", "horizontal", "cards"]).optional(),
+    searchable: z.boolean().optional(),
+    headingSize: z.enum(["h2", "h3", "h4"]).optional(),
+    content: z.string().optional(),
+    phoneFormat: z.string().optional(),
+    dateFormat: z.string().optional(),
+    fieldKey: z.string().optional(),
   })
   .strict();
 
@@ -92,13 +139,13 @@ export const FormStepSchema = z
 // Complete Form Schema (JSONB)
 // ============================================================================
 
-// Use permissive schema for JSONB - frontend defines the structure
+// Strict schema for JSONB - validates all step and field properties
 // Registration forms use `steps`, sponsor forms use `sponsorSteps`
 export const FormSchemaJsonSchema = z
   .object({
-    steps: z.array(z.any()).optional(),
+    steps: z.array(FormStepSchema),
   })
-  .passthrough();
+  .strict();
 
 // ============================================================================
 // Sponsor Form Schemas

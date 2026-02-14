@@ -2,7 +2,7 @@
 // Reports Module - Zod Schemas
 // ============================================================================
 
-import { z } from 'zod';
+import { z } from "zod";
 
 // ============================================================================
 // Query Schemas
@@ -19,7 +19,7 @@ export const ExportQuerySchema = z
   .object({
     startDate: z.string().datetime().optional(),
     endDate: z.string().datetime().optional(),
-    format: z.enum(['csv', 'json']).default('csv'),
+    format: z.enum(["csv", "json"]).default("csv"),
   })
   .strict();
 
@@ -33,6 +33,8 @@ export const CurrencySummarySchema = z.object({
   totalRevenue: z.number(),
   totalPending: z.number(),
   totalRefunded: z.number(),
+  totalWaived: z.number(),
+  waivedCount: z.number(),
   registrationCount: z.number(),
   breakdown: z.object({
     base: z.number(),
@@ -47,6 +49,8 @@ export const FinancialSummarySchema = z.object({
   totalRevenue: z.number(),
   totalPending: z.number(),
   totalRefunded: z.number(),
+  totalWaived: z.number(),
+  waivedCount: z.number(),
   averageRegistrationValue: z.number(),
   baseRevenue: z.number(),
   accessRevenue: z.number(),
@@ -103,8 +107,12 @@ export type ReportQuery = z.infer<typeof ReportQuerySchema>;
 export type ExportQuery = z.infer<typeof ExportQuerySchema>;
 export type CurrencySummary = z.infer<typeof CurrencySummarySchema>;
 export type FinancialSummary = z.infer<typeof FinancialSummarySchema>;
-export type PaymentStatusBreakdownItem = z.infer<typeof PaymentStatusBreakdownItemSchema>;
+export type PaymentStatusBreakdownItem = z.infer<
+  typeof PaymentStatusBreakdownItemSchema
+>;
 export type AccessBreakdownItem = z.infer<typeof AccessBreakdownItemSchema>;
 export type DailyTrendItem = z.infer<typeof DailyTrendItemSchema>;
-export type FinancialReportResponse = z.infer<typeof FinancialReportResponseSchema>;
+export type FinancialReportResponse = z.infer<
+  typeof FinancialReportResponseSchema
+>;
 export type ExportResponse = z.infer<typeof ExportResponseSchema>;

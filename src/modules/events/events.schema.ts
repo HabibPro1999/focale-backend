@@ -50,9 +50,6 @@ export const UpdateEventSchema = z
     endDate: z.coerce.date().optional(),
     location: z.string().min(1).max(500).optional().nullable(),
     status: z.enum(["CLOSED", "OPEN", "ARCHIVED"]).optional(),
-    // Pricing
-    basePrice: z.number().int().min(0).optional(),
-    currency: z.string().length(3).optional(),
   })
   .strict()
   .refine(

@@ -1,5 +1,6 @@
 import {
   requireAuth,
+  requireSuperAdmin,
   canAccessClient,
 } from "@shared/middleware/auth.middleware.js";
 import { getEventById } from "@events";
@@ -9,6 +10,7 @@ import {
   confirmPayment,
   deleteRegistration,
   listRegistrations,
+  listAllRegistrations,
   getRegistrationClientId,
   getRegistrationTableColumns,
   listRegistrationAuditLogs,
@@ -25,12 +27,14 @@ import {
   UpdateRegistrationSchema,
   UpdatePaymentSchema,
   ListRegistrationsQuerySchema,
+  ListAllRegistrationsQuerySchema,
   ListRegistrationAuditLogsQuerySchema,
   ListRegistrationEmailLogsQuerySchema,
   SearchRegistrantsQuerySchema,
   type UpdateRegistrationInput,
   type UpdatePaymentInput,
   type ListRegistrationsQuery,
+  type ListAllRegistrationsQuery,
   type ListRegistrationAuditLogsQuery,
   type ListRegistrationEmailLogsQuery,
   type SearchRegistrantsQuery,
@@ -43,6 +47,24 @@ import type { AppInstance } from "@shared/types/fastify.js";
 
 export async function registrationsRoutes(app: AppInstance): Promise<void> {
   app.addHook("onRequest", requireAuth);
+
+  // GET /api/registrations - List all registrations (super admin only)
+  app.get<{
+    Querystring: ListAllRegistrationsQuery;
+  }>(
+    "/registrations",
+    {
+      preHandler: [requireSuperAdmin],
+      schema: {
+        querystring: ListAllRegistrationsQuerySchema,
+      },
+    },
+    async (request, reply) => {
+      const query = request.query;
+      const registrations = await listAllRegistrations(query);
+      return reply.send(registrations);
+    },
+  );
 
   // GET /api/events/:eventId/registrations/columns - Get table column definitions
   app.get<{

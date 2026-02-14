@@ -34,13 +34,17 @@ vi.mock("@events", () => ({
   decrementRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("@access", () => ({
-  validateAccessSelections: vi
-    .fn()
-    .mockResolvedValue({ valid: true, errors: [] }),
-  reserveAccessSpot: vi.fn().mockResolvedValue(undefined),
-  releaseAccessSpot: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock("@access", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@access")>();
+  return {
+    AccessSelectionSchema: actual.AccessSelectionSchema,
+    validateAccessSelections: vi
+      .fn()
+      .mockResolvedValue({ valid: true, errors: [] }),
+    reserveAccessSpot: vi.fn().mockResolvedValue(undefined),
+    releaseAccessSpot: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
 vi.mock("@pricing", () => ({
   calculatePrice: vi.fn().mockResolvedValue({
@@ -55,6 +59,10 @@ vi.mock("@pricing", () => ({
     total: 300,
     currency: "TND",
   }),
+}));
+
+vi.mock("@sponsorships", () => ({
+  cleanupSponsorshipsForRegistration: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@email", () => ({
@@ -578,7 +586,13 @@ describe("Registrations Service", () => {
           paymentStatus: "REFUNDED",
         });
 
-        prismaMock.registration.findUnique.mockResolvedValue(registration);
+        // Mock $transaction to return the registration on findUnique calls inside the transaction
+        prismaMock.$transaction.mockImplementation(
+          async (callback: (tx: typeof prismaMock) => Promise<unknown>) => {
+            prismaMock.registration.findUnique.mockResolvedValue(registration);
+            return callback(prismaMock);
+          },
+        );
 
         await expect(
           confirmPayment(registration.id, { paymentStatus: "PAID" }),
@@ -598,7 +612,13 @@ describe("Registrations Service", () => {
           paymentStatus: "WAIVED",
         });
 
-        prismaMock.registration.findUnique.mockResolvedValue(registration);
+        // Mock $transaction to return the registration on findUnique calls inside the transaction
+        prismaMock.$transaction.mockImplementation(
+          async (callback: (tx: typeof prismaMock) => Promise<unknown>) => {
+            prismaMock.registration.findUnique.mockResolvedValue(registration);
+            return callback(prismaMock);
+          },
+        );
 
         // WAIVED -> PAID is not allowed
         await expect(
@@ -712,8 +732,13 @@ describe("Registrations Service", () => {
       await deleteRegistration(registration.id);
 
       // Verify releaseAccessSpot was called - through the mock module
+      // Note: releaseAccessSpot is called with (accessId, quantity, tx)
       const { releaseAccessSpot } = await import("@access");
-      expect(releaseAccessSpot).toHaveBeenCalledWith(accessId, 2);
+      expect(releaseAccessSpot).toHaveBeenCalledWith(
+        accessId,
+        2,
+        expect.anything(),
+      );
     });
   });
 

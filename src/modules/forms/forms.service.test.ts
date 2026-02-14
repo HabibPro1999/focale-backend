@@ -402,7 +402,9 @@ describe("Forms Service", () => {
           {
             id: "step-1",
             title: "Info",
-            fields: [{ id: "field-to-keep", type: "email", label: "Email" }],
+            fields: [
+              { id: "field-to-keep", type: "email" as const, label: "Email" },
+            ],
           },
         ],
       };
@@ -503,13 +505,17 @@ describe("Forms Service", () => {
   // ============================================================================
 
   describe("deleteForm", () => {
-    it("should delete form when found", async () => {
+    it("should delete form when found and has no registrations", async () => {
       const mockForm = createMockForm({ id: formId });
       prismaMock.form.findUnique.mockResolvedValue(mockForm);
+      prismaMock.registration.count.mockResolvedValue(0);
       prismaMock.form.delete.mockResolvedValue(mockForm);
 
       await deleteForm(formId);
 
+      expect(prismaMock.registration.count).toHaveBeenCalledWith({
+        where: { formId },
+      });
       expect(prismaMock.form.delete).toHaveBeenCalledWith({
         where: { id: formId },
       });
@@ -523,6 +529,20 @@ describe("Forms Service", () => {
         statusCode: 404,
         code: ErrorCodes.NOT_FOUND,
       });
+    });
+
+    it("should throw conflict when form has registrations", async () => {
+      const mockForm = createMockForm({ id: formId });
+      prismaMock.form.findUnique.mockResolvedValue(mockForm);
+      prismaMock.registration.count.mockResolvedValue(10);
+
+      await expect(deleteForm(formId)).rejects.toThrow(AppError);
+      await expect(deleteForm(formId)).rejects.toMatchObject({
+        statusCode: 409,
+        code: ErrorCodes.FORM_HAS_REGISTRATIONS,
+      });
+
+      expect(prismaMock.form.delete).not.toHaveBeenCalled();
     });
   });
 

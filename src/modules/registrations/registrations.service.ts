@@ -19,6 +19,7 @@ import {
 } from "@access";
 import { calculatePrice } from "@pricing";
 import { queueTriggeredEmail } from "@email";
+import { cleanupSponsorshipsForRegistration } from "@sponsorships";
 import {
   validateFormData,
   type FormSchema,
@@ -30,6 +31,7 @@ import type {
   UpdateRegistrationInput,
   UpdatePaymentInput,
   ListRegistrationsQuery,
+  ListAllRegistrationsQuery,
   PriceBreakdown,
   PublicEditRegistrationInput,
   ListRegistrationAuditLogsQuery,
@@ -384,6 +386,10 @@ export async function createRegistration(
     const editToken = generateEditToken();
     const editTokenExpiry = getEditTokenExpiry();
 
+    // Determine initial payment status (auto-waive zero-amount registrations)
+    const initialPaymentStatus =
+      priceBreakdown.total === 0 ? "WAIVED" : "PENDING";
+
     // Create registration
     const registration = await tx.registration.create({
       data: {
@@ -395,7 +401,8 @@ export async function createRegistration(
         firstName: firstName ?? null,
         lastName: lastName ?? null,
         phone: phone ?? null,
-        paymentStatus: "PENDING",
+        paymentStatus: initialPaymentStatus,
+        paidAt: initialPaymentStatus === "WAIVED" ? new Date() : null,
         totalAmount: priceBreakdown.total,
         currency: priceBreakdown.currency,
         priceBreakdown: priceBreakdown as unknown as Prisma.InputJsonValue,
@@ -420,7 +427,7 @@ export async function createRegistration(
     // Reserve access spots (capacity tracking)
     if (accessSelections && accessSelections.length > 0) {
       for (const selection of accessSelections) {
-        await reserveAccessSpot(selection.accessId, selection.quantity);
+        await reserveAccessSpot(selection.accessId, selection.quantity, tx);
       }
     }
 
@@ -557,6 +564,42 @@ export async function updateRegistration(
 
   // Build changes object for audit log
   const changes: Record<string, { old: unknown; new: unknown }> = {};
+  if (
+    input.paymentStatus !== undefined &&
+    input.paymentStatus !== registration.paymentStatus
+  ) {
+    changes.paymentStatus = {
+      old: registration.paymentStatus,
+      new: input.paymentStatus,
+    };
+  }
+  if (
+    input.paidAmount !== undefined &&
+    input.paidAmount !== registration.paidAmount
+  ) {
+    changes.paidAmount = {
+      old: registration.paidAmount,
+      new: input.paidAmount,
+    };
+  }
+  if (
+    input.paymentMethod !== undefined &&
+    input.paymentMethod !== registration.paymentMethod
+  ) {
+    changes.paymentMethod = {
+      old: registration.paymentMethod,
+      new: input.paymentMethod,
+    };
+  }
+  if (
+    input.paymentReference !== undefined &&
+    input.paymentReference !== registration.paymentReference
+  ) {
+    changes.paymentReference = {
+      old: registration.paymentReference,
+      new: input.paymentReference,
+    };
+  }
   if (input.note !== undefined && input.note !== registration.note) {
     changes.note = { old: registration.note, new: input.note };
   }
@@ -587,34 +630,37 @@ export async function confirmPayment(
   performedBy?: string,
   ipAddress?: string,
 ): Promise<RegistrationWithRelations> {
-  const oldRegistration = await prisma.registration.findUnique({
-    where: { id },
-    select: {
-      eventId: true,
-      email: true,
-      firstName: true,
-      lastName: true,
-      paymentStatus: true,
-      paidAmount: true,
-      paymentMethod: true,
-      totalAmount: true,
-    },
-  });
-
-  if (!oldRegistration) {
-    throw new AppError(
-      "Registration not found",
-      404,
-      true,
-      ErrorCodes.REGISTRATION_NOT_FOUND,
-    );
-  }
-
-  // Validate payment status transition
-  validatePaymentTransition(oldRegistration.paymentStatus, input.paymentStatus);
-
   // Update registration in a transaction with audit logging
-  await prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
+    const oldRegistration = await tx.registration.findUnique({
+      where: { id },
+      select: {
+        eventId: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        paymentStatus: true,
+        paidAmount: true,
+        paymentMethod: true,
+        totalAmount: true,
+      },
+    });
+
+    if (!oldRegistration) {
+      throw new AppError(
+        "Registration not found",
+        404,
+        true,
+        ErrorCodes.REGISTRATION_NOT_FOUND,
+      );
+    }
+
+    // Validate payment status transition
+    validatePaymentTransition(
+      oldRegistration.paymentStatus,
+      input.paymentStatus,
+    );
+
     // Update registration
     const updated = await tx.registration.update({
       where: { id },
@@ -624,7 +670,10 @@ export async function confirmPayment(
         paymentMethod: input.paymentMethod ?? null,
         paymentReference: input.paymentReference ?? null,
         paymentProofUrl: input.paymentProofUrl ?? null,
-        paidAt: new Date(),
+        paidAt:
+          input.paymentStatus === "PAID" || input.paymentStatus === "WAIVED"
+            ? new Date()
+            : undefined,
       },
     });
 
@@ -652,18 +701,17 @@ export async function confirmPayment(
         ipAddress: ipAddress ?? null,
       },
     });
+
+    return oldRegistration;
   });
 
   // Queue PAYMENT_CONFIRMED email if status changed to PAID
-  if (
-    input.paymentStatus === "PAID" &&
-    oldRegistration.paymentStatus !== "PAID"
-  ) {
-    queueTriggeredEmail("PAYMENT_CONFIRMED", oldRegistration.eventId, {
+  if (input.paymentStatus === "PAID" && result.paymentStatus !== "PAID") {
+    queueTriggeredEmail("PAYMENT_CONFIRMED", result.eventId, {
       id,
-      email: oldRegistration.email,
-      firstName: oldRegistration.firstName,
-      lastName: oldRegistration.lastName,
+      email: result.email,
+      firstName: result.firstName,
+      lastName: result.lastName,
     }).catch((err) => {
       logger.error(
         { err, registrationId: id },
@@ -705,9 +753,10 @@ export async function deleteRegistration(
   }
 
   // Only allow deletion of unpaid registrations
-  if (registration.paymentStatus === "PAID") {
+  const blockedStatuses = ["PAID", "WAIVED", "VERIFYING"];
+  if (blockedStatuses.includes(registration.paymentStatus)) {
     throw new AppError(
-      "Cannot delete a paid registration. Use refund instead.",
+      `Cannot delete a ${registration.paymentStatus.toLowerCase()} registration.`,
       400,
       true,
       ErrorCodes.REGISTRATION_DELETE_BLOCKED,
@@ -735,12 +784,15 @@ export async function deleteRegistration(
     const priceBreakdown = registration.priceBreakdown as PriceBreakdown;
     if (priceBreakdown.accessItems) {
       for (const item of priceBreakdown.accessItems) {
-        await releaseAccessSpot(item.accessId, item.quantity);
+        await releaseAccessSpot(item.accessId, item.quantity, tx);
       }
     }
 
     // Decrement event registered count (atomic SQL within transaction)
     await decrementRegisteredCountTx(tx, registration.eventId);
+
+    // Clean up sponsorship usages before deletion
+    await cleanupSponsorshipsForRegistration(tx, id);
 
     // Delete the registration
     await tx.registration.delete({ where: { id } });
@@ -755,6 +807,46 @@ export async function listRegistrations(
 
   const where: Prisma.RegistrationWhereInput = { eventId };
 
+  if (paymentStatus) where.paymentStatus = paymentStatus;
+  if (search) {
+    where.OR = [
+      { email: { contains: search, mode: "insensitive" } },
+      { firstName: { contains: search, mode: "insensitive" } },
+      { lastName: { contains: search, mode: "insensitive" } },
+      { phone: { contains: search, mode: "insensitive" } },
+    ];
+  }
+
+  const skip = getSkip({ page, limit });
+
+  const [data, total] = await Promise.all([
+    prisma.registration.findMany({
+      where,
+      skip,
+      take: limit,
+      include: {
+        form: { select: { id: true, name: true } },
+        event: { select: { id: true, name: true, slug: true, clientId: true } },
+      },
+      orderBy: { createdAt: "desc" },
+    }),
+    prisma.registration.count({ where }),
+  ]);
+
+  // Enrich with accessSelections derived from priceBreakdown
+  const enrichedData = await enrichManyWithAccessSelections(data);
+
+  return paginate(enrichedData, total, { page, limit });
+}
+
+export async function listAllRegistrations(
+  query: ListAllRegistrationsQuery,
+): Promise<PaginatedResult<RegistrationWithRelations>> {
+  const { page, limit, paymentStatus, search, eventId } = query;
+
+  const where: Prisma.RegistrationWhereInput = {};
+
+  if (eventId) where.eventId = eventId;
   if (paymentStatus) where.paymentStatus = paymentStatus;
   if (search) {
     where.OR = [
@@ -1405,13 +1497,13 @@ export async function editRegistrationPublic(
   await prisma.$transaction(async (tx) => {
     // Reserve new access spots
     for (const selection of accessToAdd) {
-      await reserveAccessSpot(selection.accessId, selection.quantity);
+      await reserveAccessSpot(selection.accessId, selection.quantity, tx);
     }
 
     // Release removed access spots (only if not paid)
     if (!isPaid) {
       for (const item of accessToRemove) {
-        await releaseAccessSpot(item.accessId, item.quantity);
+        await releaseAccessSpot(item.accessId, item.quantity, tx);
       }
     }
 
@@ -1564,6 +1656,9 @@ export async function uploadPaymentProof(
       ErrorCodes.REGISTRATION_NOT_FOUND,
     );
   }
+
+  // Only allow proof upload from PENDING or VERIFYING status
+  validatePaymentTransition(registration.paymentStatus, "VERIFYING");
 
   // Compress file (images → WebP, PDFs → passthrough)
   const compressed = await compressFile(file.buffer, file.mimetype);

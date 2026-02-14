@@ -1,10 +1,18 @@
-import { prisma } from '@/database/client.js';
-import { AppError } from '@shared/errors/app-error.js';
-import { ErrorCodes } from '@shared/errors/error-codes.js';
-import { clientExists } from '@clients';
-import { paginate, getSkip, type PaginatedResult } from '@shared/utils/pagination.js';
-import type { CreateEventInput, UpdateEventInput, ListEventsQuery } from './events.schema.js';
-import type { Event, EventPricing, Prisma } from '@/generated/prisma/client.js';
+import { prisma } from "@/database/client.js";
+import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { clientExists } from "@clients";
+import {
+  paginate,
+  getSkip,
+  type PaginatedResult,
+} from "@shared/utils/pagination.js";
+import type {
+  CreateEventInput,
+  UpdateEventInput,
+  ListEventsQuery,
+} from "./events.schema.js";
+import type { Event, EventPricing, Prisma } from "@/generated/prisma/client.js";
 
 // Transaction client type that works with Prisma extensions
 type TransactionClient = { $executeRaw: typeof prisma.$executeRaw };
@@ -16,7 +24,9 @@ type EventWithPricing = Event & { pricing: EventPricing | null };
  * Create a new event with pricing configuration.
  * Creates both Event and EventPricing atomically.
  */
-export async function createEvent(input: CreateEventInput): Promise<EventWithPricing> {
+export async function createEvent(
+  input: CreateEventInput,
+): Promise<EventWithPricing> {
   const {
     clientId,
     name,
@@ -34,24 +44,24 @@ export async function createEvent(input: CreateEventInput): Promise<EventWithPri
   // Validate that client exists
   const isValidClient = await clientExists(clientId);
   if (!isValidClient) {
-    throw new AppError('Client not found', 404, true, ErrorCodes.NOT_FOUND);
-  }
-
-  // Check if slug already exists globally
-  const existing = await prisma.event.findUnique({
-    where: { slug },
-  });
-  if (existing) {
-    throw new AppError(
-      'Event with this slug already exists',
-      409,
-      true,
-      ErrorCodes.CONFLICT
-    );
+    throw new AppError("Client not found", 404, true, ErrorCodes.NOT_FOUND);
   }
 
   // Create Event and EventPricing atomically
   return prisma.$transaction(async (tx) => {
+    // Check if slug already exists globally
+    const existing = await tx.event.findUnique({
+      where: { slug },
+    });
+    if (existing) {
+      throw new AppError(
+        "Event with this slug already exists",
+        409,
+        true,
+        ErrorCodes.CONFLICT,
+      );
+    }
+
     const event = await tx.event.create({
       data: {
         clientId,
@@ -62,7 +72,7 @@ export async function createEvent(input: CreateEventInput): Promise<EventWithPri
         startDate,
         endDate,
         location: location ?? null,
-        status: status ?? 'CLOSED',
+        status: status ?? "CLOSED",
       },
     });
 
@@ -70,7 +80,7 @@ export async function createEvent(input: CreateEventInput): Promise<EventWithPri
       data: {
         eventId: event.id,
         basePrice: basePrice ?? 0,
-        currency: currency ?? 'TND',
+        currency: currency ?? "TND",
       },
     });
 
@@ -81,7 +91,9 @@ export async function createEvent(input: CreateEventInput): Promise<EventWithPri
 /**
  * Get event by ID with pricing.
  */
-export async function getEventById(id: string): Promise<EventWithPricing | null> {
+export async function getEventById(
+  id: string,
+): Promise<EventWithPricing | null> {
   return prisma.event.findUnique({
     where: { id },
     include: { pricing: true },
@@ -91,7 +103,9 @@ export async function getEventById(id: string): Promise<EventWithPricing | null>
 /**
  * Get event by slug (for public access).
  */
-export async function getEventBySlug(slug: string): Promise<EventWithPricing | null> {
+export async function getEventBySlug(
+  slug: string,
+): Promise<EventWithPricing | null> {
   return prisma.event.findUnique({
     where: { slug },
     include: { pricing: true },
@@ -100,19 +114,22 @@ export async function getEventBySlug(slug: string): Promise<EventWithPricing | n
 
 // Valid event status transitions: CLOSED -> OPEN -> ARCHIVED (terminal)
 const VALID_STATUS_TRANSITIONS: Record<string, string[]> = {
-  CLOSED: ['OPEN'],
-  OPEN: ['CLOSED', 'ARCHIVED'],
+  CLOSED: ["OPEN"],
+  OPEN: ["CLOSED", "ARCHIVED"],
   ARCHIVED: [], // Terminal state - no transitions allowed
 };
 
 /**
  * Update event.
  */
-export async function updateEvent(id: string, input: UpdateEventInput): Promise<Event> {
+export async function updateEvent(
+  id: string,
+  input: UpdateEventInput,
+): Promise<Event> {
   // Check if event exists
   const event = await prisma.event.findUnique({ where: { id } });
   if (!event) {
-    throw new AppError('Event not found', 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
   }
 
   // Validate status transition if status is being changed
@@ -123,36 +140,40 @@ export async function updateEvent(id: string, input: UpdateEventInput): Promise<
         `Cannot transition event from ${event.status} to ${input.status}`,
         400,
         true,
-        ErrorCodes.INVALID_STATUS_TRANSITION
+        ErrorCodes.INVALID_STATUS_TRANSITION,
       );
     }
   }
 
-  // If slug is being updated, check global uniqueness
-  if (input.slug && input.slug !== event.slug) {
-    const existing = await prisma.event.findUnique({
-      where: { slug: input.slug },
+  return prisma.$transaction(async (tx) => {
+    // If slug is being updated, check global uniqueness inside transaction
+    if (input.slug && input.slug !== event.slug) {
+      const existing = await tx.event.findUnique({
+        where: { slug: input.slug },
+      });
+      if (existing) {
+        throw new AppError(
+          "Event with this slug already exists",
+          409,
+          true,
+          ErrorCodes.CONFLICT,
+        );
+      }
+    }
+
+    return tx.event.update({
+      where: { id },
+      data: input,
     });
-    if (existing) {
-      throw new AppError(
-        'Event with this slug already exists',
-        409,
-        true,
-        ErrorCodes.CONFLICT
-      );
-    }
-  }
-
-  return prisma.event.update({
-    where: { id },
-    data: input,
   });
 }
 
 /**
  * List events with pagination and filters.
  */
-export async function listEvents(query: ListEventsQuery): Promise<PaginatedResult<Event>> {
+export async function listEvents(
+  query: ListEventsQuery,
+): Promise<PaginatedResult<Event>> {
   const { page, limit, clientId, status, search } = query;
   const skip = getSkip({ page, limit });
 
@@ -162,15 +183,20 @@ export async function listEvents(query: ListEventsQuery): Promise<PaginatedResul
   if (status) where.status = status;
   if (search) {
     where.OR = [
-      { name: { contains: search, mode: 'insensitive' } },
-      { slug: { contains: search, mode: 'insensitive' } },
-      { description: { contains: search, mode: 'insensitive' } },
-      { location: { contains: search, mode: 'insensitive' } },
+      { name: { contains: search, mode: "insensitive" } },
+      { slug: { contains: search, mode: "insensitive" } },
+      { description: { contains: search, mode: "insensitive" } },
+      { location: { contains: search, mode: "insensitive" } },
     ];
   }
 
   const [data, total] = await Promise.all([
-    prisma.event.findMany({ where, skip, take: limit, orderBy: { createdAt: 'desc' } }),
+    prisma.event.findMany({
+      where,
+      skip,
+      take: limit,
+      orderBy: { createdAt: "desc" },
+    }),
     prisma.event.count({ where }),
   ]);
 
@@ -195,7 +221,7 @@ export async function deleteEvent(id: string): Promise<void> {
   });
 
   if (!event) {
-    throw new AppError('Event not found', 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
   }
 
   // Prevent deletion if event has registrations
@@ -204,7 +230,7 @@ export async function deleteEvent(id: string): Promise<void> {
       `Cannot delete event with ${event._count.registrations} registration(s). Archive the event instead.`,
       409,
       true,
-      ErrorCodes.EVENT_HAS_REGISTRATIONS
+      ErrorCodes.EVENT_HAS_REGISTRATIONS,
     );
   }
 
@@ -235,7 +261,7 @@ export async function incrementRegisteredCount(id: string): Promise<Event> {
  */
 export async function incrementRegisteredCountTx(
   tx: TransactionClient,
-  id: string
+  id: string,
 ): Promise<void> {
   const result = await tx.$executeRaw`
     UPDATE "events"
@@ -245,7 +271,12 @@ export async function incrementRegisteredCountTx(
   `;
 
   if (result === 0) {
-    throw new AppError('Event is at capacity', 409, true, ErrorCodes.EVENT_FULL);
+    throw new AppError(
+      "Event is at capacity",
+      409,
+      true,
+      ErrorCodes.EVENT_FULL,
+    );
   }
 }
 
@@ -264,7 +295,7 @@ export async function decrementRegisteredCount(id: string): Promise<Event> {
  */
 export async function decrementRegisteredCountTx(
   tx: TransactionClient,
-  id: string
+  id: string,
 ): Promise<void> {
   await tx.$executeRaw`
     UPDATE "events"

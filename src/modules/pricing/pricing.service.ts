@@ -1,8 +1,8 @@
-import { randomUUID } from 'crypto';
-import { prisma } from '@/database/client.js';
-import { AppError } from '@shared/errors/app-error.js';
-import { ErrorCodes } from '@shared/errors/error-codes.js';
-import { calculateApplicableAmount } from '@modules/sponsorships/sponsorships.utils.js';
+import { randomUUID } from "crypto";
+import { prisma } from "@/database/client.js";
+import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { calculateApplicableAmount } from "@modules/sponsorships/sponsorships.utils.js";
 import type {
   UpdateEventPricingInput,
   CreateEmbeddedRuleInput,
@@ -12,15 +12,15 @@ import type {
   PriceBreakdown,
   PricingCondition,
   SelectedExtra,
-} from './pricing.schema.js';
-import type { Prisma, EventPricing } from '@/generated/prisma/client.js';
+} from "./pricing.schema.js";
+import type { Prisma, EventPricing } from "@/generated/prisma/client.js";
 
 // ============================================================================
 // Types
 // ============================================================================
 
 // EventPricing with parsed rules array
-export type EventPricingWithRules = Omit<EventPricing, 'rules'> & {
+export type EventPricingWithRules = Omit<EventPricing, "rules"> & {
   rules: EmbeddedPricingRule[];
 };
 
@@ -32,7 +32,7 @@ export type EventPricingWithRules = Omit<EventPricing, 'rules'> & {
  * Get event pricing by event ID with parsed rules.
  */
 export async function getEventPricing(
-  eventId: string
+  eventId: string,
 ): Promise<EventPricingWithRules | null> {
   const pricing = await prisma.eventPricing.findUnique({ where: { eventId } });
   if (!pricing) return null;
@@ -48,15 +48,15 @@ export async function getEventPricing(
  */
 export async function updateEventPricing(
   eventId: string,
-  input: UpdateEventPricingInput
+  input: UpdateEventPricingInput,
 ): Promise<EventPricingWithRules> {
   const pricing = await prisma.eventPricing.findUnique({ where: { eventId } });
   if (!pricing) {
     throw new AppError(
-      'Event pricing not found',
+      "Event pricing not found",
       404,
       true,
-      ErrorCodes.PRICING_NOT_FOUND
+      ErrorCodes.PRICING_NOT_FOUND,
     );
   }
 
@@ -104,15 +104,15 @@ export async function updateEventPricing(
  */
 export async function addPricingRule(
   eventId: string,
-  rule: CreateEmbeddedRuleInput
+  rule: CreateEmbeddedRuleInput,
 ): Promise<EventPricingWithRules> {
   const pricing = await getEventPricing(eventId);
   if (!pricing) {
     throw new AppError(
-      'Event pricing not found',
+      "Event pricing not found",
       404,
       true,
-      ErrorCodes.PRICING_NOT_FOUND
+      ErrorCodes.PRICING_NOT_FOUND,
     );
   }
 
@@ -121,7 +121,7 @@ export async function addPricingRule(
     id: randomUUID(),
     description: rule.description ?? null,
     priority: rule.priority ?? 0,
-    conditionLogic: rule.conditionLogic ?? 'AND',
+    conditionLogic: rule.conditionLogic ?? "AND",
     active: rule.active ?? true,
   };
 
@@ -135,21 +135,26 @@ export async function addPricingRule(
 export async function updatePricingRule(
   eventId: string,
   ruleId: string,
-  updates: UpdateEmbeddedRuleInput
+  updates: UpdateEmbeddedRuleInput,
 ): Promise<EventPricingWithRules> {
   const pricing = await getEventPricing(eventId);
   if (!pricing) {
     throw new AppError(
-      'Event pricing not found',
+      "Event pricing not found",
       404,
       true,
-      ErrorCodes.PRICING_NOT_FOUND
+      ErrorCodes.PRICING_NOT_FOUND,
     );
   }
 
   const ruleIndex = pricing.rules.findIndex((r) => r.id === ruleId);
   if (ruleIndex === -1) {
-    throw new AppError('Pricing rule not found', 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError(
+      "Pricing rule not found",
+      404,
+      true,
+      ErrorCodes.NOT_FOUND,
+    );
   }
 
   const updatedRules = [...pricing.rules];
@@ -163,21 +168,26 @@ export async function updatePricingRule(
  */
 export async function deletePricingRule(
   eventId: string,
-  ruleId: string
+  ruleId: string,
 ): Promise<EventPricingWithRules> {
   const pricing = await getEventPricing(eventId);
   if (!pricing) {
     throw new AppError(
-      'Event pricing not found',
+      "Event pricing not found",
       404,
       true,
-      ErrorCodes.PRICING_NOT_FOUND
+      ErrorCodes.PRICING_NOT_FOUND,
     );
   }
 
   const ruleExists = pricing.rules.some((r) => r.id === ruleId);
   if (!ruleExists) {
-    throw new AppError('Pricing rule not found', 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError(
+      "Pricing rule not found",
+      404,
+      true,
+      ErrorCodes.NOT_FOUND,
+    );
   }
 
   const updatedRules = pricing.rules.filter((r) => r.id !== ruleId);
@@ -199,7 +209,7 @@ export async function deletePricingRule(
  */
 export async function calculatePrice(
   eventId: string,
-  input: CalculatePriceRequest
+  input: CalculatePriceRequest,
 ): Promise<PriceBreakdown> {
   const { formData, selectedExtras, sponsorshipCodes } = input;
 
@@ -207,10 +217,10 @@ export async function calculatePrice(
   const pricing = await getEventPricing(eventId);
   if (!pricing) {
     throw new AppError(
-      'Event pricing not found',
+      "Event pricing not found",
       404,
       true,
-      ErrorCodes.PRICING_NOT_FOUND
+      ErrorCodes.PRICING_NOT_FOUND,
     );
   }
 
@@ -223,7 +233,7 @@ export async function calculatePrice(
 
   // Find first matching rule (highest priority wins)
   // If a rule matches, its price overrides the base price
-  const appliedRules: PriceBreakdown['appliedRules'] = [];
+  const appliedRules: PriceBreakdown["appliedRules"] = [];
   let calculatedBasePrice = basePrice;
 
   for (const rule of activeRules) {
@@ -248,11 +258,15 @@ export async function calculatePrice(
 
   // Validate sponsorship codes with smart matching
   // Only applies the portion that matches what the registration actually selected
-  const sponsorships = await validateSponsorshipCodes(sponsorshipCodes, eventId, {
-    calculatedBasePrice,
-    extrasDetails,
-    subtotal,
-  });
+  const sponsorships = await validateSponsorshipCodes(
+    sponsorshipCodes,
+    eventId,
+    {
+      calculatedBasePrice,
+      extrasDetails,
+      subtotal,
+    },
+  );
   const sponsorshipTotal = sponsorships
     .filter((s) => s.valid)
     .reduce((sum, s) => sum + s.amount, 0);
@@ -283,38 +297,148 @@ export async function calculatePrice(
  */
 function evaluateConditions(
   conditions: PricingCondition[],
-  logic: 'AND' | 'OR',
-  formData: Record<string, unknown>
+  logic: "AND" | "OR",
+  formData: Record<string, unknown>,
 ): boolean {
   const results = conditions.map((c) => evaluateSingleCondition(c, formData));
-  return logic === 'AND' ? results.every(Boolean) : results.some(Boolean);
+  return logic === "AND" ? results.every(Boolean) : results.some(Boolean);
 }
 
 /**
  * Evaluate a single pricing condition.
+ * @see pure-form/src/lib/conditions.ts -- these implementations must stay in sync
  */
 function evaluateSingleCondition(
   condition: PricingCondition,
-  formData: Record<string, unknown>
+  formData: Record<string, unknown>,
 ): boolean {
-  const value = formData[condition.fieldId];
+  const fieldValue = formData[condition.fieldId];
+  const conditionValue = String(condition.value ?? "");
 
   switch (condition.operator) {
-    case 'equals':
-      return value === condition.value;
-    case 'not_equals':
-      return value !== condition.value;
+    case "equals":
+      return isEqual(fieldValue, conditionValue);
+    case "not_equals":
+      return !isEqual(fieldValue, conditionValue);
+    case "contains":
+      return containsValue(fieldValue, conditionValue);
+    case "not_contains":
+      return !containsValue(fieldValue, conditionValue);
+    case "greater_than":
+      return isGreaterThan(fieldValue, conditionValue);
+    case "less_than":
+      return isLessThan(fieldValue, conditionValue);
+    case "is_empty":
+      return isEmpty(fieldValue);
+    case "is_not_empty":
+      return !isEmpty(fieldValue);
     default:
       return false;
   }
+}
+
+// Helper functions matching pure-form/src/lib/conditions.ts
+
+function isEqual(fieldValue: unknown, conditionValue: string): boolean {
+  // Handle null/undefined
+  if (fieldValue === null || fieldValue === undefined) {
+    return (
+      conditionValue === "" ||
+      conditionValue === "null" ||
+      conditionValue === "undefined"
+    );
+  }
+
+  // Handle arrays (e.g., checkbox selections) - case-insensitive
+  if (Array.isArray(fieldValue)) {
+    const lowerCondition = conditionValue.toLowerCase();
+    return fieldValue.some((v) => String(v).toLowerCase() === lowerCondition);
+  }
+
+  // Handle boolean
+  if (typeof fieldValue === "boolean") {
+    return fieldValue === (conditionValue === "true");
+  }
+
+  // Handle numbers
+  if (typeof fieldValue === "number") {
+    return fieldValue === Number(conditionValue);
+  }
+
+  // Handle strings (case-insensitive comparison)
+  return String(fieldValue).toLowerCase() === conditionValue.toLowerCase();
+}
+
+function containsValue(fieldValue: unknown, conditionValue: string): boolean {
+  if (fieldValue === null || fieldValue === undefined) {
+    return false;
+  }
+
+  // Handle arrays
+  if (Array.isArray(fieldValue)) {
+    return fieldValue.some((v) =>
+      String(v).toLowerCase().includes(conditionValue.toLowerCase()),
+    );
+  }
+
+  // Handle strings
+  return String(fieldValue)
+    .toLowerCase()
+    .includes(conditionValue.toLowerCase());
+}
+
+function isEmpty(fieldValue: unknown): boolean {
+  if (fieldValue === null || fieldValue === undefined) {
+    return true;
+  }
+
+  if (typeof fieldValue === "string") {
+    return fieldValue.trim() === "";
+  }
+
+  if (Array.isArray(fieldValue)) {
+    return fieldValue.length === 0;
+  }
+
+  return false;
+}
+
+function isGreaterThan(fieldValue: unknown, conditionValue: string): boolean {
+  const numField = Number(fieldValue);
+  const numCondition = Number(conditionValue);
+
+  if (isNaN(numField) || isNaN(numCondition)) {
+    // Fall back to string comparison for dates
+    if (typeof fieldValue === "string") {
+      return fieldValue > conditionValue;
+    }
+    return false;
+  }
+
+  return numField > numCondition;
+}
+
+function isLessThan(fieldValue: unknown, conditionValue: string): boolean {
+  const numField = Number(fieldValue);
+  const numCondition = Number(conditionValue);
+
+  if (isNaN(numField) || isNaN(numCondition)) {
+    // Fall back to string comparison for dates
+    if (typeof fieldValue === "string") {
+      return fieldValue < conditionValue;
+    }
+    return false;
+  }
+
+  return numField < numCondition;
 }
 
 /**
  * Calculate extras/access total from selected items.
  */
 async function calculateExtrasTotal(
-  selectedExtras: SelectedExtra[]
-): Promise<PriceBreakdown['extras']> {
+  selectedExtras: SelectedExtra[],
+): Promise<PriceBreakdown["extras"]> {
   if (!selectedExtras.length) return [];
 
   const accessIds = selectedExtras.map((e) => e.extraId);
@@ -357,8 +481,8 @@ interface SponsorshipValidationContext {
 async function validateSponsorshipCodes(
   codes: string[],
   eventId: string,
-  context: SponsorshipValidationContext
-): Promise<PriceBreakdown['sponsorships']> {
+  context: SponsorshipValidationContext,
+): Promise<PriceBreakdown["sponsorships"]> {
   if (!codes.length) return [];
 
   return Promise.all(
@@ -368,7 +492,7 @@ async function validateSponsorshipCodes(
         where: {
           eventId,
           code: code.toUpperCase(),
-          status: 'PENDING', // Only unused codes are valid
+          status: "PENDING", // Only unused codes are valid
         },
         select: {
           id: true,
@@ -404,7 +528,7 @@ async function validateSponsorshipCodes(
               subtotal: e.subtotal,
             })),
           },
-        }
+        },
       );
 
       return {
@@ -412,6 +536,6 @@ async function validateSponsorshipCodes(
         amount: applicableAmount,
         valid: true,
       };
-    })
+    }),
   );
 }

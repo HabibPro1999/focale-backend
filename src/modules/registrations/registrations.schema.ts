@@ -82,6 +82,16 @@ export const ListRegistrationsQuerySchema = z
   })
   .strict();
 
+export const ListAllRegistrationsQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+    search: z.string().max(200).optional(),
+    eventId: z.string().uuid().optional(),
+    paymentStatus: PaymentStatusSchema.optional(),
+  })
+  .strict();
+
 export const RegistrationIdParamSchema = z
   .object({
     id: z.string().uuid(),
@@ -222,6 +232,9 @@ export type UpdateRegistrationInput = z.infer<typeof UpdateRegistrationSchema>;
 export type UpdatePaymentInput = z.infer<typeof UpdatePaymentSchema>;
 export type ListRegistrationsQuery = z.infer<
   typeof ListRegistrationsQuerySchema
+>;
+export type ListAllRegistrationsQuery = z.infer<
+  typeof ListAllRegistrationsQuerySchema
 >;
 export type PriceBreakdown = z.infer<typeof PriceBreakdownSchema>;
 export type PublicEditRegistrationInput = z.infer<

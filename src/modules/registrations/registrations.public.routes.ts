@@ -205,6 +205,9 @@ export async function registrationEditPublicRoutes(
   }>(
     "/:registrationId",
     {
+      config: {
+        rateLimit: publicRateLimits.editToken,
+      },
       schema: {
         params: RegistrationIdPublicParamSchema,
         querystring: EditTokenQuerySchema,

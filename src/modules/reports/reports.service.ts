@@ -2,10 +2,10 @@
 // Reports Module - Service
 // ============================================================================
 
-import { prisma } from '@/database/client.js';
-import { Prisma } from '@/generated/prisma/client.js';
-import { AppError } from '@shared/errors/app-error.js';
-import { ErrorCodes } from '@shared/errors/error-codes.js';
+import { prisma } from "@/database/client.js";
+import { Prisma } from "@/generated/prisma/client.js";
+import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
 import type {
   ReportQuery,
   FinancialReportResponse,
@@ -15,7 +15,7 @@ import type {
   AccessBreakdownItem,
   DailyTrendItem,
   ExportQuery,
-} from './reports.schema.js';
+} from "./reports.schema.js";
 
 // ============================================================================
 // Financial Report
@@ -35,7 +35,7 @@ function buildDateFilter(query: ReportQuery): DateRange {
 
 export async function getFinancialReport(
   eventId: string,
-  query: ReportQuery
+  query: ReportQuery,
 ): Promise<FinancialReportResponse> {
   // Verify event exists
   const event = await prisma.event.findUnique({
@@ -44,7 +44,7 @@ export async function getFinancialReport(
   });
 
   if (!event) {
-    throw new AppError('Event not found', 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
   }
 
   const dateRange = buildDateFilter(query);
@@ -53,7 +53,10 @@ export async function getFinancialReport(
   const dateWhere = {
     ...(dateRange.startDate && { submittedAt: { gte: dateRange.startDate } }),
     ...(dateRange.endDate && {
-      submittedAt: { ...(dateRange.startDate ? { gte: dateRange.startDate } : {}), lte: dateRange.endDate },
+      submittedAt: {
+        ...(dateRange.startDate ? { gte: dateRange.startDate } : {}),
+        lte: dateRange.endDate,
+      },
     }),
   };
 
@@ -63,12 +66,13 @@ export async function getFinancialReport(
   };
 
   // Run all aggregation queries in parallel
-  const [summary, byPaymentStatus, byAccessType, dailyTrend] = await Promise.all([
-    getFinancialSummary(eventId, baseWhere),
-    getPaymentStatusBreakdown(eventId, baseWhere),
-    getAccessBreakdown(eventId, dateRange),
-    getDailyTrend(eventId, dateRange),
-  ]);
+  const [summary, byPaymentStatus, byAccessType, dailyTrend] =
+    await Promise.all([
+      getFinancialSummary(eventId, baseWhere),
+      getPaymentStatusBreakdown(eventId, baseWhere),
+      getAccessBreakdown(eventId, dateRange),
+      getDailyTrend(eventId, dateRange),
+    ]);
 
   return {
     eventId,
@@ -90,11 +94,11 @@ export async function getFinancialReport(
 
 async function getFinancialSummary(
   _eventId: string,
-  where: Record<string, unknown>
+  where: Record<string, unknown>,
 ): Promise<FinancialSummary> {
   // Group by currency for accurate multi-currency reporting
   const byCurrency = await prisma.registration.groupBy({
-    by: ['currency'],
+    by: ["currency"],
     where,
     _sum: {
       totalAmount: true,
@@ -109,10 +113,10 @@ async function getFinancialSummary(
 
   // Get pending amounts by currency
   const pendingByCurrency = await prisma.registration.groupBy({
-    by: ['currency'],
+    by: ["currency"],
     where: {
       ...where,
-      paymentStatus: 'PENDING',
+      paymentStatus: "PENDING",
     },
     _sum: {
       totalAmount: true,
@@ -122,14 +126,27 @@ async function getFinancialSummary(
 
   // Get refunded amounts by currency
   const refundedByCurrency = await prisma.registration.groupBy({
-    by: ['currency'],
+    by: ["currency"],
     where: {
       ...where,
-      paymentStatus: 'REFUNDED',
+      paymentStatus: "REFUNDED",
     },
     _sum: {
       totalAmount: true,
     },
+  });
+
+  // Get waived amounts by currency
+  const waivedByCurrency = await prisma.registration.groupBy({
+    by: ["currency"],
+    where: {
+      ...where,
+      paymentStatus: "WAIVED",
+    },
+    _sum: {
+      totalAmount: true,
+    },
+    _count: true,
   });
 
   // Build currency summaries
@@ -137,10 +154,16 @@ async function getFinancialSummary(
     pendingByCurrency.map((p) => [
       p.currency,
       (p._sum.totalAmount ?? 0) - (p._sum.paidAmount ?? 0),
-    ])
+    ]),
   );
   const refundedMap = new Map(
-    refundedByCurrency.map((r) => [r.currency, r._sum.totalAmount ?? 0])
+    refundedByCurrency.map((r) => [r.currency, r._sum.totalAmount ?? 0]),
+  );
+  const waivedMap = new Map(
+    waivedByCurrency.map((w) => [
+      w.currency,
+      { amount: w._sum.totalAmount ?? 0, count: w._count },
+    ]),
   );
 
   const currencies: CurrencySummary[] = byCurrency.map((c) => ({
@@ -148,6 +171,8 @@ async function getFinancialSummary(
     totalRevenue: c._sum.paidAmount ?? 0,
     totalPending: pendingMap.get(c.currency) ?? 0,
     totalRefunded: refundedMap.get(c.currency) ?? 0,
+    totalWaived: waivedMap.get(c.currency)?.amount ?? 0,
+    waivedCount: waivedMap.get(c.currency)?.count ?? 0,
     registrationCount: c._count,
     breakdown: {
       base: c._sum.baseAmount ?? 0,
@@ -177,19 +202,23 @@ async function getFinancialSummary(
   // Calculate total pending across all currencies
   const totalPending = currencies.reduce((sum, c) => sum + c.totalPending, 0);
   const totalRefunded = currencies.reduce((sum, c) => sum + c.totalRefunded, 0);
+  const totalWaived = currencies.reduce((sum, c) => sum + c.totalWaived, 0);
+  const waivedCount = currencies.reduce((sum, c) => sum + c.waivedCount, 0);
 
   // Determine primary currency (most registrations or first one)
   const primaryCurrency =
     currencies.length > 0
       ? currencies.reduce((prev, curr) =>
-          curr.registrationCount > prev.registrationCount ? curr : prev
+          curr.registrationCount > prev.registrationCount ? curr : prev,
         ).currency
-      : 'TND';
+      : "TND";
 
   return {
     totalRevenue: aggregation._sum.paidAmount ?? 0,
     totalPending,
     totalRefunded,
+    totalWaived,
+    waivedCount,
     averageRegistrationValue: Math.round(aggregation._avg.totalAmount ?? 0),
     baseRevenue: aggregation._sum.baseAmount ?? 0,
     accessRevenue: aggregation._sum.accessAmount ?? 0,
@@ -207,10 +236,10 @@ async function getFinancialSummary(
 
 async function getPaymentStatusBreakdown(
   _eventId: string,
-  where: Record<string, unknown>
+  where: Record<string, unknown>,
 ): Promise<PaymentStatusBreakdownItem[]> {
   const groups = await prisma.registration.groupBy({
-    by: ['paymentStatus'],
+    by: ["paymentStatus"],
     where,
     _count: true,
     _sum: {
@@ -231,7 +260,7 @@ async function getPaymentStatusBreakdown(
 
 async function getAccessBreakdown(
   eventId: string,
-  dateRange: DateRange
+  dateRange: DateRange,
 ): Promise<AccessBreakdownItem[]> {
   // Build the query with optional date conditions
   const startDateCondition = dateRange.startDate
@@ -277,7 +306,7 @@ async function getAccessBreakdown(
   return accessData.map((g) => {
     const access = accessMap.get(g.access_id);
     return {
-      accessType: access?.name ?? access?.type ?? 'Unknown',
+      accessType: access?.name ?? access?.type ?? "Unknown",
       count: Number(g.count),
       totalAmount: Number(g.total_amount),
     };
@@ -290,11 +319,13 @@ async function getAccessBreakdown(
 
 async function getDailyTrend(
   eventId: string,
-  dateRange: DateRange
+  dateRange: DateRange,
 ): Promise<DailyTrendItem[]> {
   // Default to last 30 days if no range provided
   const endDate = dateRange.endDate ?? new Date();
-  const startDate = dateRange.startDate ?? new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const startDate =
+    dateRange.startDate ??
+    new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000);
 
   // Use raw query for date grouping (Prisma doesn't support DATE() grouping natively)
   const results = await prisma.$queryRaw<
@@ -313,7 +344,7 @@ async function getDailyTrend(
   `;
 
   return results.map((r) => ({
-    date: r.date.toISOString().split('T')[0],
+    date: r.date.toISOString().split("T")[0],
     count: Number(r.count),
     totalAmount: Number(r.total_amount),
   }));
@@ -323,28 +354,9 @@ async function getDailyTrend(
 // CSV Export
 // ============================================================================
 
-interface RegistrationExportRow {
-  id: string;
-  email: string;
-  firstName: string | null;
-  lastName: string | null;
-  phone: string | null;
-  paymentStatus: string;
-  paymentMethod: string | null;
-  totalAmount: number;
-  paidAmount: number;
-  baseAmount: number;
-  accessAmount: number;
-  discountAmount: number;
-  sponsorshipCode: string | null;
-  sponsorshipAmount: number;
-  submittedAt: Date;
-  paidAt: Date | null;
-}
-
 export async function exportRegistrations(
   eventId: string,
-  query: ExportQuery
+  query: ExportQuery,
 ): Promise<{ filename: string; contentType: string; data: string }> {
   // Verify event exists
   const event = await prisma.event.findUnique({
@@ -353,7 +365,7 @@ export async function exportRegistrations(
   });
 
   if (!event) {
-    throw new AppError('Event not found', 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
   }
 
   const dateRange = buildDateFilter(query);
@@ -370,7 +382,25 @@ export async function exportRegistrations(
     };
   }
 
-  // Fetch all registrations
+  // Fetch form schema to get field labels
+  const form = await prisma.form.findFirst({
+    where: { eventId, type: "REGISTRATION" },
+    select: { schema: true },
+  });
+
+  // Extract form field definitions
+  type FormSchemaSteps = {
+    steps: Array<{
+      fields: Array<{ id: string; label: string; type: string }>;
+    }>;
+  };
+  const formSchema = form?.schema as FormSchemaSteps | null;
+  const formFields =
+    formSchema?.steps
+      .flatMap((s) => s.fields)
+      .filter((f) => !["heading", "paragraph"].includes(f.type)) ?? [];
+
+  // Fetch all registrations with form data
   const registrations = await prisma.registration.findMany({
     where,
     select: {
@@ -390,82 +420,125 @@ export async function exportRegistrations(
       sponsorshipAmount: true,
       submittedAt: true,
       paidAt: true,
+      formData: true,
+      accessTypeIds: true,
+      priceBreakdown: true,
+      currency: true,
     },
-    orderBy: { submittedAt: 'desc' },
+    orderBy: { submittedAt: "desc" },
   });
 
-  const timestamp = new Date().toISOString().split('T')[0];
+  // Fetch EventAccess names for access ID resolution
+  const allAccessIds = Array.from(
+    new Set(registrations.flatMap((r) => r.accessTypeIds as string[])),
+  );
+  const accessItems = await prisma.eventAccess.findMany({
+    where: { id: { in: allAccessIds } },
+    select: { id: true, name: true },
+  });
+  const accessNameMap = new Map(accessItems.map((a) => [a.id, a.name]));
+
+  const timestamp = new Date().toISOString().split("T")[0];
   const filename = `${event.slug}-registrations-${timestamp}`;
 
-  if (query.format === 'json') {
+  if (query.format === "json") {
     return {
       filename: `${filename}.json`,
-      contentType: 'application/json',
+      contentType: "application/json",
       data: JSON.stringify(registrations, null, 2),
     };
   }
 
   // Generate CSV
-  const csv = generateCSV(registrations);
+  const csv = generateCSV(registrations, formFields, accessNameMap);
 
   return {
     filename: `${filename}.csv`,
-    contentType: 'text/csv',
+    contentType: "text/csv",
     data: csv,
   };
 }
 
-function generateCSV(registrations: RegistrationExportRow[]): string {
-  const headers = [
-    'ID',
-    'Email',
-    'First Name',
-    'Last Name',
-    'Phone',
-    'Payment Status',
-    'Payment Method',
-    'Total Amount',
-    'Paid Amount',
-    'Base Amount',
-    'Access Amount',
-    'Discount Amount',
-    'Sponsorship Code',
-    'Sponsorship Amount',
-    'Submitted At',
-    'Paid At',
+function generateCSV(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  registrations: any[],
+  formFields: Array<{ id: string; label: string; type: string }>,
+  accessNameMap: Map<string, string>,
+): string {
+  // Build headers: static + form fields + access types
+  const staticHeaders = [
+    "ID",
+    "Email",
+    "First Name",
+    "Last Name",
+    "Phone",
+    "Payment Status",
+    "Payment Method",
+    "Total Amount",
+    "Paid Amount",
+    "Base Amount",
+    "Access Amount",
+    "Discount Amount",
+    "Sponsorship Code",
+    "Sponsorship Amount",
+    "Submitted At",
+    "Paid At",
   ];
 
-  const rows = registrations.map((r) => [
-    r.id,
-    r.email,
-    r.firstName ?? '',
-    r.lastName ?? '',
-    r.phone ?? '',
-    r.paymentStatus,
-    r.paymentMethod ?? '',
-    r.totalAmount.toString(),
-    r.paidAmount.toString(),
-    r.baseAmount.toString(),
-    r.accessAmount.toString(),
-    r.discountAmount.toString(),
-    r.sponsorshipCode ?? '',
-    r.sponsorshipAmount.toString(),
-    r.submittedAt.toISOString(),
-    r.paidAt?.toISOString() ?? '',
-  ]);
+  const formFieldHeaders = formFields.map((f) => f.label);
+  const headers = [...staticHeaders, ...formFieldHeaders, "Access Types"];
+
+  const rows = registrations.map((r) => {
+    // Static columns
+    const staticValues = [
+      r.id,
+      r.email,
+      r.firstName ?? "",
+      r.lastName ?? "",
+      r.phone ?? "",
+      r.paymentStatus,
+      r.paymentMethod ?? "",
+      r.totalAmount.toString(),
+      r.paidAmount.toString(),
+      r.baseAmount.toString(),
+      r.accessAmount.toString(),
+      r.discountAmount.toString(),
+      r.sponsorshipCode ?? "",
+      r.sponsorshipAmount.toString(),
+      r.submittedAt.toISOString(),
+      r.paidAt?.toISOString() ?? "",
+    ];
+
+    // Form data values
+    const formData = (r.formData as Record<string, unknown>) ?? {};
+    const formValues = formFields.map((field) => {
+      const value = formData[field.id];
+      if (value === null || value === undefined) return "";
+      if (Array.isArray(value)) return value.join(", ");
+      return String(value);
+    });
+
+    // Access types
+    const accessIds = (r.accessTypeIds as string[]) ?? [];
+    const accessNames = accessIds
+      .map((id) => accessNameMap.get(id) ?? id)
+      .join(", ");
+
+    return [...staticValues, ...formValues, accessNames];
+  });
 
   // Escape CSV values
   const escapeCSV = (value: string): string => {
-    if (value.includes(',') || value.includes('"') || value.includes('\n')) {
+    if (value.includes(",") || value.includes('"') || value.includes("\n")) {
       return `"${value.replace(/"/g, '""')}"`;
     }
     return value;
   };
 
   const csvLines = [
-    headers.join(','),
-    ...rows.map((row) => row.map(escapeCSV).join(',')),
+    headers.join(","),
+    ...rows.map((row) => row.map(escapeCSV).join(",")),
   ];
 
-  return csvLines.join('\n');
+  return csvLines.join("\n");
 }
