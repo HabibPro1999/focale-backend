@@ -20,6 +20,7 @@ export const ExportQuerySchema = z
     startDate: z.string().datetime().optional(),
     endDate: z.string().datetime().optional(),
     format: z.enum(["csv", "json"]).default("csv"),
+    limit: z.coerce.number().int().min(1).max(10_000).default(5_000),
   })
   .strict();
 
@@ -97,6 +98,11 @@ export const ExportResponseSchema = z.object({
   filename: z.string(),
   contentType: z.string(),
   data: z.string(),
+  metadata: z.object({
+    total: z.number(),
+    exported: z.number(),
+    truncated: z.boolean(),
+  }),
 });
 
 // ============================================================================

@@ -7,6 +7,7 @@ import type {
   FieldValidation,
 } from "@forms";
 import { logger } from "@shared/utils/logger.js";
+import { evaluateSingleCondition as evaluateCondition } from "@shared/utils/condition-evaluator.js";
 
 // ============================================================================
 // Types
@@ -72,10 +73,10 @@ function isSafePattern(pattern: string): boolean {
 // ============================================================================
 
 /**
- * Evaluate a single field condition against form data.
- * @see pure-form/src/lib/conditions.ts -- these implementations must stay in sync
+ * Wrapper around the shared condition evaluator that handles field existence checking.
+ * Returns true if the field doesn't exist in the form (field not found = condition met).
  */
-function evaluateSingleCondition(
+function evaluateFieldCondition(
   condition: FieldCondition,
   formData: Record<string, unknown>,
   allFields: FormField[],
@@ -84,133 +85,10 @@ function evaluateSingleCondition(
   const targetField = allFields.find((f) => f.id === condition.fieldId);
   if (!targetField) return true; // Field not found, assume condition met
 
-  const fieldValue = formData[condition.fieldId];
-  const conditionValue = String(condition.value ?? "");
-
-  switch (condition.operator) {
-    case "equals":
-      return isEqual(fieldValue, conditionValue);
-
-    case "not_equals":
-      return !isEqual(fieldValue, conditionValue);
-
-    case "contains":
-      return containsValue(fieldValue, conditionValue);
-
-    case "not_contains":
-      return !containsValue(fieldValue, conditionValue);
-
-    case "greater_than":
-      return isGreaterThan(fieldValue, conditionValue);
-
-    case "less_than":
-      return isLessThan(fieldValue, conditionValue);
-
-    case "is_empty":
-      return isEmpty(fieldValue);
-
-    case "is_not_empty":
-      return !isEmpty(fieldValue);
-
-    default:
-      return true;
-  }
-}
-
-// Helper functions matching pure-form/src/lib/conditions.ts
-
-function isEqual(fieldValue: unknown, conditionValue: string): boolean {
-  // Handle null/undefined
-  if (fieldValue === null || fieldValue === undefined) {
-    return (
-      conditionValue === "" ||
-      conditionValue === "null" ||
-      conditionValue === "undefined"
-    );
-  }
-
-  // Handle arrays (e.g., checkbox selections) - case-insensitive
-  if (Array.isArray(fieldValue)) {
-    const lowerCondition = conditionValue.toLowerCase();
-    return fieldValue.some((v) => String(v).toLowerCase() === lowerCondition);
-  }
-
-  // Handle boolean
-  if (typeof fieldValue === "boolean") {
-    return fieldValue === (conditionValue === "true");
-  }
-
-  // Handle numbers
-  if (typeof fieldValue === "number") {
-    return fieldValue === Number(conditionValue);
-  }
-
-  // Handle strings (case-insensitive comparison)
-  return String(fieldValue).toLowerCase() === conditionValue.toLowerCase();
-}
-
-function containsValue(fieldValue: unknown, conditionValue: string): boolean {
-  if (fieldValue === null || fieldValue === undefined) {
-    return false;
-  }
-
-  // Handle arrays
-  if (Array.isArray(fieldValue)) {
-    return fieldValue.some((v) =>
-      String(v).toLowerCase().includes(conditionValue.toLowerCase()),
-    );
-  }
-
-  // Handle strings
-  return String(fieldValue)
-    .toLowerCase()
-    .includes(conditionValue.toLowerCase());
-}
-
-function isEmpty(fieldValue: unknown): boolean {
-  if (fieldValue === null || fieldValue === undefined) {
-    return true;
-  }
-
-  if (typeof fieldValue === "string") {
-    return fieldValue.trim() === "";
-  }
-
-  if (Array.isArray(fieldValue)) {
-    return fieldValue.length === 0;
-  }
-
-  return false;
-}
-
-function isGreaterThan(fieldValue: unknown, conditionValue: string): boolean {
-  const numField = Number(fieldValue);
-  const numCondition = Number(conditionValue);
-
-  if (isNaN(numField) || isNaN(numCondition)) {
-    // Fall back to string comparison for dates
-    if (typeof fieldValue === "string") {
-      return fieldValue > conditionValue;
-    }
-    return false;
-  }
-
-  return numField > numCondition;
-}
-
-function isLessThan(fieldValue: unknown, conditionValue: string): boolean {
-  const numField = Number(fieldValue);
-  const numCondition = Number(conditionValue);
-
-  if (isNaN(numField) || isNaN(numCondition)) {
-    // Fall back to string comparison for dates
-    if (typeof fieldValue === "string") {
-      return fieldValue < conditionValue;
-    }
-    return false;
-  }
-
-  return numField < numCondition;
+  // Delegate to shared evaluator with permissive unknown operator handling
+  return evaluateCondition(condition, formData, {
+    unknownOperatorDefault: true,
+  });
 }
 
 /**
@@ -233,11 +111,11 @@ export function shouldValidateField(
 
   if (conditionLogic === "or") {
     return field.conditions.some((c) =>
-      evaluateSingleCondition(c, formData, allFields),
+      evaluateFieldCondition(c, formData, allFields),
     );
   } else {
     return field.conditions.every((c) =>
-      evaluateSingleCondition(c, formData, allFields),
+      evaluateFieldCondition(c, formData, allFields),
     );
   }
 }

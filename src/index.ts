@@ -3,10 +3,16 @@ import { config } from "@config/app.config.js";
 import { logger } from "@shared/utils/logger.js";
 import { gracefulShutdown } from "@core/shutdown.js";
 import { processEmailQueue } from "@modules/email/index.js";
+import { sendAlert } from "@shared/utils/alerter.js";
 
 // Global error handlers
 process.on("unhandledRejection", (reason, promise) => {
   logger.error({ reason, promise }, "Unhandled Promise Rejection");
+  sendAlert({
+    title: "Unhandled Rejection",
+    message: String(reason),
+    severity: "critical",
+  });
   // Don't exit - let the application continue
 });
 
@@ -48,6 +54,11 @@ async function main() {
       .catch((err) => {
         // Non-fatal: log error but keep server running
         logger.error({ err }, "Email queue processing failed");
+        sendAlert({
+          title: "Email Queue Error",
+          message: err.message,
+          severity: "error",
+        });
       })
       .finally(() => {
         activeProcessing = null;

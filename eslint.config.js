@@ -62,6 +62,17 @@ export default tseslint.config(
               group: ["**/modules/email/**", "!**/modules/email/index.js"],
               message: "Import from @email barrel, not internal files",
             },
+            {
+              group: [
+                "**/modules/sponsorships/**",
+                "!**/modules/sponsorships/index.js",
+              ],
+              message: "Import from @sponsorships barrel, not internal files",
+            },
+            {
+              group: ["**/modules/pricing/**", "!**/modules/pricing/index.js"],
+              message: "Import from @pricing barrel, not internal files",
+            },
           ],
         },
       ],

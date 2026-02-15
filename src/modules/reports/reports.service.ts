@@ -357,7 +357,12 @@ async function getDailyTrend(
 export async function exportRegistrations(
   eventId: string,
   query: ExportQuery,
-): Promise<{ filename: string; contentType: string; data: string }> {
+): Promise<{
+  filename: string;
+  contentType: string;
+  data: string;
+  metadata: { total: number; exported: number; truncated: boolean };
+}> {
   // Verify event exists
   const event = await prisma.event.findUnique({
     where: { id: eventId },
@@ -400,33 +405,37 @@ export async function exportRegistrations(
       .flatMap((s) => s.fields)
       .filter((f) => !["heading", "paragraph"].includes(f.type)) ?? [];
 
-  // Fetch all registrations with form data
-  const registrations = await prisma.registration.findMany({
-    where,
-    select: {
-      id: true,
-      email: true,
-      firstName: true,
-      lastName: true,
-      phone: true,
-      paymentStatus: true,
-      paymentMethod: true,
-      totalAmount: true,
-      paidAmount: true,
-      baseAmount: true,
-      accessAmount: true,
-      discountAmount: true,
-      sponsorshipCode: true,
-      sponsorshipAmount: true,
-      submittedAt: true,
-      paidAt: true,
-      formData: true,
-      accessTypeIds: true,
-      priceBreakdown: true,
-      currency: true,
-    },
-    orderBy: { submittedAt: "desc" },
-  });
+  // Fetch registrations with form data (bounded by limit) and count total
+  const [registrations, total] = await Promise.all([
+    prisma.registration.findMany({
+      where,
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        phone: true,
+        paymentStatus: true,
+        paymentMethod: true,
+        totalAmount: true,
+        paidAmount: true,
+        baseAmount: true,
+        accessAmount: true,
+        discountAmount: true,
+        sponsorshipCode: true,
+        sponsorshipAmount: true,
+        submittedAt: true,
+        paidAt: true,
+        formData: true,
+        accessTypeIds: true,
+        priceBreakdown: true,
+        currency: true,
+      },
+      orderBy: { submittedAt: "desc" },
+      take: query.limit,
+    }),
+    prisma.registration.count({ where }),
+  ]);
 
   // Fetch EventAccess names for access ID resolution
   const allAccessIds = Array.from(
@@ -441,11 +450,18 @@ export async function exportRegistrations(
   const timestamp = new Date().toISOString().split("T")[0];
   const filename = `${event.slug}-registrations-${timestamp}`;
 
+  const metadata = {
+    total,
+    exported: registrations.length,
+    truncated: registrations.length < total,
+  };
+
   if (query.format === "json") {
     return {
       filename: `${filename}.json`,
       contentType: "application/json",
       data: JSON.stringify(registrations, null, 2),
+      metadata,
     };
   }
 
@@ -456,6 +472,7 @@ export async function exportRegistrations(
     filename: `${filename}.csv`,
     contentType: "text/csv",
     data: csv,
+    metadata,
   };
 }
 

@@ -7,8 +7,14 @@ import {
   vi,
   beforeEach,
 } from "vitest";
+import Fastify from "fastify";
+import {
+  serializerCompiler,
+  validatorCompiler,
+  type ZodTypeProvider,
+} from "fastify-type-provider-zod";
 import type { AppInstance } from "@shared/types/fastify.js";
-import { buildServer } from "@core/server.js";
+import { errorHandler } from "@shared/middleware/error.middleware.js";
 import { emailWebhookRoutes } from "./email-webhook.routes.js";
 
 // Mock the sendgrid service
@@ -27,24 +33,41 @@ vi.mock("./email-queue.service.js", () => ({
 }));
 
 import {
-  verifyWebhookSignature,
-  parseWebhookEvents,
+  verifyWebhookSignature as _verifyWebhookSignature,
+  parseWebhookEvents as _parseWebhookEvents,
   type SendGridWebhookEvent,
 } from "./email-sendgrid.service.js";
-import { updateEmailStatusFromWebhook } from "./email-queue.service.js";
+import { updateEmailStatusFromWebhook as _updateEmailStatusFromWebhook } from "./email-queue.service.js";
 
-describe.skip("Email Webhook Routes", () => {
-  // NOTE: These are integration tests that require proper Fastify app setup
-  // with custom content-type parsers. Skipping for now - should be reimplemented
-  // as proper integration tests with test-app helper or moved to e2e test suite.
-  // The route logic is covered by unit tests in email-queue.service.test.ts
+// Get properly typed mocks
+const verifyWebhookSignature = vi.mocked(_verifyWebhookSignature);
+const parseWebhookEvents = vi.mocked(_parseWebhookEvents);
+const updateEmailStatusFromWebhook = vi.mocked(_updateEmailStatusFromWebhook);
 
+// Helper to create a standalone Fastify instance for webhook tests
+async function createWebhookTestApp(): Promise<AppInstance> {
+  const app = Fastify({
+    logger: false,
+  }).withTypeProvider<ZodTypeProvider>();
+
+  app.setValidatorCompiler(validatorCompiler);
+  app.setSerializerCompiler(serializerCompiler);
+
+  // Register error handler
+  app.setErrorHandler(errorHandler);
+
+  // Register webhook routes
+  await app.register(emailWebhookRoutes, { prefix: "/api/webhooks/email" });
+
+  await app.ready();
+  return app;
+}
+
+describe("Email Webhook Routes", () => {
   let app: AppInstance;
 
   beforeAll(async () => {
-    app = await buildServer();
-    await app.register(emailWebhookRoutes, { prefix: "/api/webhooks/email" });
-    await app.ready();
+    app = await createWebhookTestApp();
   });
 
   afterAll(async () => {
@@ -75,7 +98,7 @@ describe.skip("Email Webhook Routes", () => {
 
       expect(response.statusCode).toBe(401);
       expect(JSON.parse(response.body)).toMatchObject({
-        code: "WEBHOOK_VERIFICATION_FAILED",
+        code: "EML_15002",
       });
     });
 
@@ -91,12 +114,12 @@ describe.skip("Email Webhook Routes", () => {
 
       expect(response.statusCode).toBe(401);
       expect(JSON.parse(response.body)).toMatchObject({
-        code: "WEBHOOK_VERIFICATION_FAILED",
+        code: "EML_15002",
       });
     });
 
     it("should return 401 when signature is invalid", async () => {
-      vi.mocked(verifyWebhookSignature).mockReturnValue(false);
+      verifyWebhookSignature.mockReturnValue(false);
 
       const response = await app.inject({
         method: "POST",
@@ -107,7 +130,7 @@ describe.skip("Email Webhook Routes", () => {
 
       expect(response.statusCode).toBe(401);
       expect(JSON.parse(response.body)).toMatchObject({
-        code: "WEBHOOK_VERIFICATION_FAILED",
+        code: "EML_15002",
       });
     });
 
@@ -123,11 +146,9 @@ describe.skip("Email Webhook Routes", () => {
         },
       ];
 
-      vi.mocked(verifyWebhookSignature).mockReturnValue(true);
-      vi.mocked(parseWebhookEvents).mockReturnValue(
-        mockEvents as SendGridWebhookEvent[],
-      );
-      vi.mocked(updateEmailStatusFromWebhook).mockResolvedValue();
+      verifyWebhookSignature.mockReturnValue(true);
+      parseWebhookEvents.mockReturnValue(mockEvents as SendGridWebhookEvent[]);
+      updateEmailStatusFromWebhook.mockResolvedValue(undefined);
 
       const response = await app.inject({
         method: "POST",
@@ -155,16 +176,14 @@ describe.skip("Email Webhook Routes", () => {
       );
     });
 
-    it.skip("should return 200 for invalid payload format (prevents retries)", async () => {
-      // Skip: This test requires custom content-type parser setup that's complex to mock
-      // The route handler correctly returns 200 for invalid payloads (see safeParse logic)
-      vi.mocked(verifyWebhookSignature).mockReturnValue(true);
+    it("should return 200 for invalid payload format (prevents retries)", async () => {
+      verifyWebhookSignature.mockReturnValue(true);
 
       const response = await app.inject({
         method: "POST",
         url: "/api/webhooks/email",
         headers: validHeaders,
-        payload: "invalid json structure",
+        payload: { invalid: "schema structure" }, // Valid JSON, invalid schema
       });
 
       expect(response.statusCode).toBe(200);
@@ -182,10 +201,8 @@ describe.skip("Email Webhook Routes", () => {
         },
       ];
 
-      vi.mocked(verifyWebhookSignature).mockReturnValue(true);
-      vi.mocked(parseWebhookEvents).mockReturnValue(
-        mockEvents as SendGridWebhookEvent[],
-      );
+      verifyWebhookSignature.mockReturnValue(true);
+      parseWebhookEvents.mockReturnValue(mockEvents as SendGridWebhookEvent[]);
 
       const response = await app.inject({
         method: "POST",
@@ -223,11 +240,9 @@ describe.skip("Email Webhook Routes", () => {
         },
       ];
 
-      vi.mocked(verifyWebhookSignature).mockReturnValue(true);
-      vi.mocked(parseWebhookEvents).mockReturnValue(
-        mockEvents as SendGridWebhookEvent[],
-      );
-      vi.mocked(updateEmailStatusFromWebhook).mockResolvedValue();
+      verifyWebhookSignature.mockReturnValue(true);
+      parseWebhookEvents.mockReturnValue(mockEvents as SendGridWebhookEvent[]);
+      updateEmailStatusFromWebhook.mockResolvedValue(undefined);
 
       const response = await app.inject({
         method: "POST",
@@ -305,11 +320,9 @@ describe.skip("Email Webhook Routes", () => {
         },
       ];
 
-      vi.mocked(verifyWebhookSignature).mockReturnValue(true);
-      vi.mocked(parseWebhookEvents).mockReturnValue(
-        mockEvents as SendGridWebhookEvent[],
-      );
-      vi.mocked(updateEmailStatusFromWebhook).mockResolvedValue();
+      verifyWebhookSignature.mockReturnValue(true);
+      parseWebhookEvents.mockReturnValue(mockEvents as SendGridWebhookEvent[]);
+      updateEmailStatusFromWebhook.mockResolvedValue(undefined);
 
       const response = await app.inject({
         method: "POST",
@@ -353,10 +366,8 @@ describe.skip("Email Webhook Routes", () => {
         },
       ];
 
-      vi.mocked(verifyWebhookSignature).mockReturnValue(true);
-      vi.mocked(parseWebhookEvents).mockReturnValue(
-        mockEvents as SendGridWebhookEvent[],
-      );
+      verifyWebhookSignature.mockReturnValue(true);
+      parseWebhookEvents.mockReturnValue(mockEvents as SendGridWebhookEvent[]);
 
       const response = await app.inject({
         method: "POST",
@@ -388,13 +399,11 @@ describe.skip("Email Webhook Routes", () => {
         },
       ];
 
-      vi.mocked(verifyWebhookSignature).mockReturnValue(true);
-      vi.mocked(parseWebhookEvents).mockReturnValue(
-        mockEvents as SendGridWebhookEvent[],
-      );
-      vi.mocked(updateEmailStatusFromWebhook)
+      verifyWebhookSignature.mockReturnValue(true);
+      parseWebhookEvents.mockReturnValue(mockEvents as SendGridWebhookEvent[]);
+      updateEmailStatusFromWebhook
         .mockRejectedValueOnce(new Error("Database error"))
-        .mockResolvedValueOnce();
+        .mockResolvedValueOnce(undefined);
 
       const response = await app.inject({
         method: "POST",
@@ -421,11 +430,9 @@ describe.skip("Email Webhook Routes", () => {
         },
       ];
 
-      vi.mocked(verifyWebhookSignature).mockReturnValue(true);
-      vi.mocked(parseWebhookEvents).mockReturnValue(
-        mockEvents as SendGridWebhookEvent[],
-      );
-      vi.mocked(updateEmailStatusFromWebhook).mockResolvedValue();
+      verifyWebhookSignature.mockReturnValue(true);
+      parseWebhookEvents.mockReturnValue(mockEvents as SendGridWebhookEvent[]);
+      updateEmailStatusFromWebhook.mockResolvedValue(undefined);
 
       const response = await app.inject({
         method: "POST",
@@ -466,11 +473,9 @@ describe.skip("Email Webhook Routes", () => {
         },
       ];
 
-      vi.mocked(verifyWebhookSignature).mockReturnValue(true);
-      vi.mocked(parseWebhookEvents).mockReturnValue(
-        mockEvents as SendGridWebhookEvent[],
-      );
-      vi.mocked(updateEmailStatusFromWebhook).mockResolvedValue();
+      verifyWebhookSignature.mockReturnValue(true);
+      parseWebhookEvents.mockReturnValue(mockEvents as SendGridWebhookEvent[]);
+      updateEmailStatusFromWebhook.mockResolvedValue(undefined);
 
       const response = await app.inject({
         method: "POST",

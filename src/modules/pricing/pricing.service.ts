@@ -2,7 +2,8 @@ import { randomUUID } from "crypto";
 import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
-import { calculateApplicableAmount } from "@modules/sponsorships/sponsorships.utils.js";
+import { calculateApplicableAmount } from "@sponsorships";
+import { evaluateConditions } from "@shared/utils/condition-evaluator.js";
 import type {
   UpdateEventPricingInput,
   CreateEmbeddedRuleInput,
@@ -10,7 +11,6 @@ import type {
   EmbeddedPricingRule,
   CalculatePriceRequest,
   PriceBreakdown,
-  PricingCondition,
   SelectedExtra,
 } from "./pricing.schema.js";
 import type { Prisma, EventPricing } from "@/generated/prisma/client.js";
@@ -237,7 +237,11 @@ export async function calculatePrice(
   let calculatedBasePrice = basePrice;
 
   for (const rule of activeRules) {
-    if (evaluateConditions(rule.conditions, rule.conditionLogic, formData)) {
+    if (
+      evaluateConditions(rule.conditions, rule.conditionLogic, formData, {
+        unknownOperatorDefault: false,
+      })
+    ) {
       calculatedBasePrice = rule.price;
       appliedRules.push({
         ruleId: rule.id,
@@ -291,147 +295,6 @@ export async function calculatePrice(
 // ============================================================================
 // Helper Functions
 // ============================================================================
-
-/**
- * Evaluate pricing conditions against form data.
- */
-function evaluateConditions(
-  conditions: PricingCondition[],
-  logic: "AND" | "OR",
-  formData: Record<string, unknown>,
-): boolean {
-  const results = conditions.map((c) => evaluateSingleCondition(c, formData));
-  return logic === "AND" ? results.every(Boolean) : results.some(Boolean);
-}
-
-/**
- * Evaluate a single pricing condition.
- * @see pure-form/src/lib/conditions.ts -- these implementations must stay in sync
- */
-function evaluateSingleCondition(
-  condition: PricingCondition,
-  formData: Record<string, unknown>,
-): boolean {
-  const fieldValue = formData[condition.fieldId];
-  const conditionValue = String(condition.value ?? "");
-
-  switch (condition.operator) {
-    case "equals":
-      return isEqual(fieldValue, conditionValue);
-    case "not_equals":
-      return !isEqual(fieldValue, conditionValue);
-    case "contains":
-      return containsValue(fieldValue, conditionValue);
-    case "not_contains":
-      return !containsValue(fieldValue, conditionValue);
-    case "greater_than":
-      return isGreaterThan(fieldValue, conditionValue);
-    case "less_than":
-      return isLessThan(fieldValue, conditionValue);
-    case "is_empty":
-      return isEmpty(fieldValue);
-    case "is_not_empty":
-      return !isEmpty(fieldValue);
-    default:
-      return false;
-  }
-}
-
-// Helper functions matching pure-form/src/lib/conditions.ts
-
-function isEqual(fieldValue: unknown, conditionValue: string): boolean {
-  // Handle null/undefined
-  if (fieldValue === null || fieldValue === undefined) {
-    return (
-      conditionValue === "" ||
-      conditionValue === "null" ||
-      conditionValue === "undefined"
-    );
-  }
-
-  // Handle arrays (e.g., checkbox selections) - case-insensitive
-  if (Array.isArray(fieldValue)) {
-    const lowerCondition = conditionValue.toLowerCase();
-    return fieldValue.some((v) => String(v).toLowerCase() === lowerCondition);
-  }
-
-  // Handle boolean
-  if (typeof fieldValue === "boolean") {
-    return fieldValue === (conditionValue === "true");
-  }
-
-  // Handle numbers
-  if (typeof fieldValue === "number") {
-    return fieldValue === Number(conditionValue);
-  }
-
-  // Handle strings (case-insensitive comparison)
-  return String(fieldValue).toLowerCase() === conditionValue.toLowerCase();
-}
-
-function containsValue(fieldValue: unknown, conditionValue: string): boolean {
-  if (fieldValue === null || fieldValue === undefined) {
-    return false;
-  }
-
-  // Handle arrays
-  if (Array.isArray(fieldValue)) {
-    return fieldValue.some((v) =>
-      String(v).toLowerCase().includes(conditionValue.toLowerCase()),
-    );
-  }
-
-  // Handle strings
-  return String(fieldValue)
-    .toLowerCase()
-    .includes(conditionValue.toLowerCase());
-}
-
-function isEmpty(fieldValue: unknown): boolean {
-  if (fieldValue === null || fieldValue === undefined) {
-    return true;
-  }
-
-  if (typeof fieldValue === "string") {
-    return fieldValue.trim() === "";
-  }
-
-  if (Array.isArray(fieldValue)) {
-    return fieldValue.length === 0;
-  }
-
-  return false;
-}
-
-function isGreaterThan(fieldValue: unknown, conditionValue: string): boolean {
-  const numField = Number(fieldValue);
-  const numCondition = Number(conditionValue);
-
-  if (isNaN(numField) || isNaN(numCondition)) {
-    // Fall back to string comparison for dates
-    if (typeof fieldValue === "string") {
-      return fieldValue > conditionValue;
-    }
-    return false;
-  }
-
-  return numField > numCondition;
-}
-
-function isLessThan(fieldValue: unknown, conditionValue: string): boolean {
-  const numField = Number(fieldValue);
-  const numCondition = Number(conditionValue);
-
-  if (isNaN(numField) || isNaN(numCondition)) {
-    // Fall back to string comparison for dates
-    if (typeof fieldValue === "string") {
-      return fieldValue < conditionValue;
-    }
-    return false;
-  }
-
-  return numField < numCondition;
-}
 
 /**
  * Calculate extras/access total from selected items.
