@@ -268,6 +268,17 @@ export interface AccessItemForOverlapCheck {
 }
 
 /**
+ * Get the type key for grouping access items.
+ * Items with type OTHER are grouped by groupLabel, others by type.
+ */
+export function getAccessTypeKey(
+  type: string,
+  groupLabel: string | null,
+): string {
+  return type === "OTHER" ? `OTHER:${groupLabel || ""}` : type;
+}
+
+/**
  * Validate that covered access items don't have time overlaps within the same type group.
  * Groups by type (using groupLabel for OTHER), then does pairwise overlap check.
  *
@@ -294,8 +305,7 @@ export function validateCoveredAccessTimeOverlap(
   // Group by typeKey (matches access.service.ts pattern)
   const byType = new Map<string, AccessItemForOverlapCheck[]>();
   for (const item of coveredItems) {
-    const typeKey =
-      item.type === "OTHER" ? `OTHER:${item.groupLabel || ""}` : item.type;
+    const typeKey = getAccessTypeKey(item.type, item.groupLabel);
 
     if (!byType.has(typeKey)) byType.set(typeKey, []);
     byType.get(typeKey)!.push(item);

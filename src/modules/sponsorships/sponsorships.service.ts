@@ -17,7 +17,6 @@ import {
   determineSponsorshipStatus,
   type RegistrationForCalculation,
   type ExistingUsage,
-  type AccessItemForOverlapCheck,
 } from "./sponsorships.utils.js";
 import type {
   CreateSponsorshipBatchInput,
@@ -227,17 +226,24 @@ export async function createSponsorshipBatch(
 
     // Validate time overlaps within each beneficiary's covered access items
     const overlapErrors: string[] = [];
-    for (const beneficiary of beneficiaryList) {
+    beneficiaryList.forEach((beneficiary, index) => {
       if (beneficiary.coveredAccessIds.length >= 2) {
         const errors = validateCoveredAccessTimeOverlap(
           beneficiary.coveredAccessIds,
-          accessItems as AccessItemForOverlapCheck[],
+          accessItems.map((item) => ({
+            id: item.id,
+            name: item.name,
+            type: item.type,
+            groupLabel: item.groupLabel,
+            startsAt: item.startsAt,
+            endsAt: item.endsAt,
+          })),
         );
         for (const error of errors) {
-          overlapErrors.push(`${beneficiary.name}: ${error}`);
+          overlapErrors.push(`Beneficiary #${index + 1}: ${error}`);
         }
       }
-    }
+    });
 
     if (overlapErrors.length > 0) {
       throw new AppError(
@@ -754,6 +760,51 @@ export async function updateSponsorship(
     updateData.coversBasePrice = input.coversBasePrice;
   if (input.coveredAccessIds !== undefined)
     updateData.coveredAccessIds = input.coveredAccessIds;
+
+  // Validate time overlaps if coveredAccessIds is being updated
+  if (input.coveredAccessIds !== undefined) {
+    const newCoveredAccessIds = input.coveredAccessIds;
+    if (newCoveredAccessIds.length >= 2) {
+      // Fetch access items with time data
+      const accessItems = await prisma.eventAccess.findMany({
+        where: {
+          id: { in: newCoveredAccessIds },
+          eventId: sponsorship.eventId,
+          active: true,
+        },
+        select: {
+          id: true,
+          name: true,
+          type: true,
+          groupLabel: true,
+          startsAt: true,
+          endsAt: true,
+        },
+      });
+
+      const timeErrors = validateCoveredAccessTimeOverlap(
+        newCoveredAccessIds,
+        accessItems.map((item) => ({
+          id: item.id,
+          name: item.name,
+          type: item.type,
+          groupLabel: item.groupLabel,
+          startsAt: item.startsAt,
+          endsAt: item.endsAt,
+        })),
+      );
+
+      if (timeErrors.length > 0) {
+        throw new AppError(
+          `Time conflicts in covered access items: ${timeErrors.join("; ")}`,
+          400,
+          true,
+          ErrorCodes.BAD_REQUEST,
+          { timeConflicts: timeErrors },
+        );
+      }
+    }
+  }
 
   // Recalculate total amount if coverage changed
   const coversBasePrice = input.coversBasePrice ?? sponsorship.coversBasePrice;

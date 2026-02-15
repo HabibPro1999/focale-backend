@@ -1,6 +1,6 @@
-import { prisma } from '@/database/client.js';
-import { AppError } from '@shared/errors/app-error.js';
-import { ErrorCodes } from '@shared/errors/error-codes.js';
+import { prisma } from "@/database/client.js";
+import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
 import type {
   CreateEventAccessInput,
   UpdateEventAccessInput,
@@ -9,9 +9,10 @@ import type {
   AccessCondition,
   TimeSlot,
   DateGroup,
-} from './access.schema.js';
-import { Prisma } from '@/generated/prisma/client.js';
-import type { EventAccess } from '@/generated/prisma/client.js';
+} from "./access.schema.js";
+import { Prisma } from "@/generated/prisma/client.js";
+import type { EventAccess } from "@/generated/prisma/client.js";
+import { getAccessTypeKey } from "@/modules/sponsorships/sponsorships.utils.js";
 
 // ============================================================================
 // Types
@@ -47,26 +48,51 @@ function validateAccessDatesAgainstEvent(
     availableFrom?: Date | null;
     availableTo?: Date | null;
   },
-  eventDates: { startDate: Date; endDate: Date }
+  eventDates: { startDate: Date; endDate: Date },
 ): DateValidationResult {
   const errors: string[] = [];
   const { startDate, endDate } = eventDates;
 
   const formatDate = (d: Date) =>
-    d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    d.toLocaleDateString("fr-FR", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    });
   const range = `${formatDate(startDate)} - ${formatDate(endDate)}`;
 
-  if (accessDates.startsAt && (accessDates.startsAt < startDate || accessDates.startsAt > endDate)) {
-    errors.push(`L'heure de début doit être dans la plage de l'événement (${range})`);
+  if (
+    accessDates.startsAt &&
+    (accessDates.startsAt < startDate || accessDates.startsAt > endDate)
+  ) {
+    errors.push(
+      `L'heure de début doit être dans la plage de l'événement (${range})`,
+    );
   }
-  if (accessDates.endsAt && (accessDates.endsAt < startDate || accessDates.endsAt > endDate)) {
-    errors.push(`L'heure de fin doit être dans la plage de l'événement (${range})`);
+  if (
+    accessDates.endsAt &&
+    (accessDates.endsAt < startDate || accessDates.endsAt > endDate)
+  ) {
+    errors.push(
+      `L'heure de fin doit être dans la plage de l'événement (${range})`,
+    );
   }
-  if (accessDates.availableFrom && (accessDates.availableFrom < startDate || accessDates.availableFrom > endDate)) {
-    errors.push(`La date de disponibilité doit être dans la plage de l'événement (${range})`);
+  if (
+    accessDates.availableFrom &&
+    (accessDates.availableFrom < startDate ||
+      accessDates.availableFrom > endDate)
+  ) {
+    errors.push(
+      `La date de disponibilité doit être dans la plage de l'événement (${range})`,
+    );
   }
-  if (accessDates.availableTo && (accessDates.availableTo < startDate || accessDates.availableTo > endDate)) {
-    errors.push(`La date limite doit être dans la plage de l'événement (${range})`);
+  if (
+    accessDates.availableTo &&
+    (accessDates.availableTo < startDate || accessDates.availableTo > endDate)
+  ) {
+    errors.push(
+      `La date limite doit être dans la plage de l'événement (${range})`,
+    );
   }
 
   return { valid: errors.length === 0, errors };
@@ -83,7 +109,7 @@ function validateAccessDatesAgainstEvent(
 async function detectCircularPrerequisites(
   eventId: string,
   accessId: string,
-  newRequiredIds: string[]
+  newRequiredIds: string[],
 ): Promise<boolean> {
   // Fetch all access items for the event with their prerequisites
   const allAccess = await prisma.eventAccess.findMany({
@@ -139,7 +165,7 @@ async function detectCircularPrerequisites(
 // ============================================================================
 
 export async function createEventAccess(
-  input: CreateEventAccessInput
+  input: CreateEventAccessInput,
 ): Promise<EventAccessWithPrerequisites> {
   const { eventId, requiredAccessIds, ...data } = input;
 
@@ -149,7 +175,7 @@ export async function createEventAccess(
     select: { id: true, startDate: true, endDate: true },
   });
   if (!event) {
-    throw new AppError('Event not found', 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
   }
 
   // Validate access dates against event boundaries
@@ -160,14 +186,14 @@ export async function createEventAccess(
       availableFrom: data.availableFrom,
       availableTo: data.availableTo,
     },
-    { startDate: event.startDate, endDate: event.endDate }
+    { startDate: event.startDate, endDate: event.endDate },
   );
   if (!dateValidation.valid) {
     throw new AppError(
-      dateValidation.errors.join('; '),
+      dateValidation.errors.join("; "),
       400,
       true,
-      ErrorCodes.ACCESS_DATE_OUT_OF_BOUNDS
+      ErrorCodes.ACCESS_DATE_OUT_OF_BOUNDS,
     );
   }
 
@@ -178,10 +204,10 @@ export async function createEventAccess(
     });
     if (prerequisites.length !== requiredAccessIds.length) {
       throw new AppError(
-        'One or more prerequisite access items not found or belong to different event',
+        "One or more prerequisite access items not found or belong to different event",
         400,
         true,
-        ErrorCodes.BAD_REQUEST
+        ErrorCodes.BAD_REQUEST,
       );
     }
   }
@@ -189,21 +215,21 @@ export async function createEventAccess(
   return prisma.eventAccess.create({
     data: {
       eventId,
-      type: data.type ?? 'OTHER',
+      type: data.type ?? "OTHER",
       name: data.name,
       description: data.description ?? null,
       location: data.location ?? null,
       startsAt: data.startsAt ?? null,
       endsAt: data.endsAt ?? null,
       price: data.price ?? 0,
-      currency: data.currency ?? 'TND',
+      currency: data.currency ?? "TND",
       maxCapacity: data.maxCapacity ?? null,
       availableFrom: data.availableFrom ?? null,
       availableTo: data.availableTo ?? null,
       conditions: data.conditions
         ? (data.conditions as Prisma.InputJsonValue)
         : Prisma.JsonNull,
-      conditionLogic: data.conditionLogic ?? 'AND',
+      conditionLogic: data.conditionLogic ?? "AND",
       sortOrder: data.sortOrder ?? 0,
       active: data.active ?? true,
       groupLabel: data.groupLabel ?? null,
@@ -217,14 +243,22 @@ export async function createEventAccess(
 
 export async function updateEventAccess(
   id: string,
-  input: UpdateEventAccessInput
+  input: UpdateEventAccessInput,
 ): Promise<EventAccessWithPrerequisites> {
   const access = await prisma.eventAccess.findUnique({
     where: { id },
-    include: { requiredAccess: true, event: { select: { startDate: true, endDate: true } } },
+    include: {
+      requiredAccess: true,
+      event: { select: { startDate: true, endDate: true } },
+    },
   });
   if (!access) {
-    throw new AppError('Access item not found', 404, true, ErrorCodes.ACCESS_NOT_FOUND);
+    throw new AppError(
+      "Access item not found",
+      404,
+      true,
+      ErrorCodes.ACCESS_NOT_FOUND,
+    );
   }
 
   const { requiredAccessIds, ...data } = input;
@@ -233,8 +267,12 @@ export async function updateEventAccess(
   const mergedDates = {
     startsAt: data.startsAt !== undefined ? data.startsAt : access.startsAt,
     endsAt: data.endsAt !== undefined ? data.endsAt : access.endsAt,
-    availableFrom: data.availableFrom !== undefined ? data.availableFrom : access.availableFrom,
-    availableTo: data.availableTo !== undefined ? data.availableTo : access.availableTo,
+    availableFrom:
+      data.availableFrom !== undefined
+        ? data.availableFrom
+        : access.availableFrom,
+    availableTo:
+      data.availableTo !== undefined ? data.availableTo : access.availableTo,
   };
 
   // Validate dates against event boundaries
@@ -244,10 +282,10 @@ export async function updateEventAccess(
   });
   if (!dateValidation.valid) {
     throw new AppError(
-      dateValidation.errors.join('; '),
+      dateValidation.errors.join("; "),
       400,
       true,
-      ErrorCodes.ACCESS_DATE_OUT_OF_BOUNDS
+      ErrorCodes.ACCESS_DATE_OUT_OF_BOUNDS,
     );
   }
 
@@ -263,13 +301,17 @@ export async function updateEventAccess(
   if (data.price !== undefined) updateData.price = data.price;
   if (data.currency !== undefined) updateData.currency = data.currency;
   if (data.maxCapacity !== undefined) updateData.maxCapacity = data.maxCapacity;
-  if (data.availableFrom !== undefined) updateData.availableFrom = data.availableFrom;
+  if (data.availableFrom !== undefined)
+    updateData.availableFrom = data.availableFrom;
   if (data.availableTo !== undefined) updateData.availableTo = data.availableTo;
   if (data.conditions !== undefined) {
     updateData.conditions =
-      data.conditions === null ? Prisma.JsonNull : (data.conditions as Prisma.InputJsonValue);
+      data.conditions === null
+        ? Prisma.JsonNull
+        : (data.conditions as Prisma.InputJsonValue);
   }
-  if (data.conditionLogic !== undefined) updateData.conditionLogic = data.conditionLogic;
+  if (data.conditionLogic !== undefined)
+    updateData.conditionLogic = data.conditionLogic;
   if (data.sortOrder !== undefined) updateData.sortOrder = data.sortOrder;
   if (data.active !== undefined) updateData.active = data.active;
   if (data.groupLabel !== undefined) updateData.groupLabel = data.groupLabel;
@@ -283,24 +325,24 @@ export async function updateEventAccess(
       });
       if (prerequisites.length !== requiredAccessIds.length) {
         throw new AppError(
-          'One or more prerequisite access items not found',
+          "One or more prerequisite access items not found",
           400,
           true,
-          ErrorCodes.BAD_REQUEST
+          ErrorCodes.BAD_REQUEST,
         );
       }
       // Prevent circular dependencies (transitive check)
       const hasCycle = await detectCircularPrerequisites(
         access.eventId,
         id,
-        requiredAccessIds
+        requiredAccessIds,
       );
       if (hasCycle) {
         throw new AppError(
-          'Circular prerequisite dependency detected',
+          "Circular prerequisite dependency detected",
           400,
           true,
-          ErrorCodes.ACCESS_CIRCULAR_DEPENDENCY
+          ErrorCodes.ACCESS_CIRCULAR_DEPENDENCY,
         );
       }
     }
@@ -320,7 +362,12 @@ export async function updateEventAccess(
 export async function deleteEventAccess(id: string): Promise<void> {
   const access = await prisma.eventAccess.findUnique({ where: { id } });
   if (!access) {
-    throw new AppError('Access item not found', 404, true, ErrorCodes.ACCESS_NOT_FOUND);
+    throw new AppError(
+      "Access item not found",
+      404,
+      true,
+      ErrorCodes.ACCESS_NOT_FOUND,
+    );
   }
 
   // Check if any registrations have selected this access
@@ -329,10 +376,10 @@ export async function deleteEventAccess(id: string): Promise<void> {
   });
   if (registrationCount > 0) {
     throw new AppError(
-      'Cannot delete access item with existing registrations',
+      "Cannot delete access item with existing registrations",
       409,
       true,
-      ErrorCodes.ACCESS_HAS_REGISTRATIONS
+      ErrorCodes.ACCESS_HAS_REGISTRATIONS,
     );
   }
 
@@ -341,20 +388,23 @@ export async function deleteEventAccess(id: string): Promise<void> {
 
 export async function listEventAccess(
   eventId: string,
-  options?: { active?: boolean; type?: string }
+  options?: { active?: boolean; type?: string },
 ): Promise<EventAccessWithPrerequisites[]> {
   const where: Prisma.EventAccessWhereInput = { eventId };
   if (options?.active !== undefined) where.active = options.active;
-  if (options?.type) where.type = options.type as Prisma.EnumAccessTypeFilter['equals'];
+  if (options?.type)
+    where.type = options.type as Prisma.EnumAccessTypeFilter["equals"];
 
   return prisma.eventAccess.findMany({
     where,
     include: { requiredAccess: { select: { id: true, name: true } } },
-    orderBy: [{ sortOrder: 'asc' }, { startsAt: 'asc' }, { createdAt: 'asc' }],
+    orderBy: [{ sortOrder: "asc" }, { startsAt: "asc" }, { createdAt: "asc" }],
   });
 }
 
-export async function getEventAccessById(id: string): Promise<EventAccessWithPrerequisites | null> {
+export async function getEventAccessById(
+  id: string,
+): Promise<EventAccessWithPrerequisites | null> {
   return prisma.eventAccess.findUnique({
     where: { id },
     include: { requiredAccess: { select: { id: true, name: true } } },
@@ -388,12 +438,12 @@ export async function getAccessClientId(id: string): Promise<string | null> {
 export async function getGroupedAccess(
   eventId: string,
   formData: Record<string, unknown>,
-  selectedAccessIds: string[] = []
+  selectedAccessIds: string[] = [],
 ): Promise<GroupedAccessResponse> {
   const allAccess = await prisma.eventAccess.findMany({
     where: { eventId, active: true },
     include: { requiredAccess: { select: { id: true } } },
-    orderBy: [{ type: 'asc' }, { sortOrder: 'asc' }, { startsAt: 'asc' }],
+    orderBy: [{ type: "asc" }, { sortOrder: "asc" }, { startsAt: "asc" }],
   });
 
   const now = new Date();
@@ -409,8 +459,8 @@ export async function getGroupedAccess(
       if (
         !evaluateConditions(
           access.conditions as AccessCondition[],
-          access.conditionLogic as 'AND' | 'OR',
-          formData
+          access.conditionLogic as "AND" | "OR",
+          formData,
         )
       ) {
         return false;
@@ -420,7 +470,7 @@ export async function getGroupedAccess(
     // Check access-based prerequisites
     if (access.requiredAccess && access.requiredAccess.length > 0) {
       const hasAllPrerequisites = access.requiredAccess.every((req) =>
-        selectedAccessIds.includes(req.id)
+        selectedAccessIds.includes(req.id),
       );
       if (!hasAllPrerequisites) return false;
     }
@@ -445,12 +495,12 @@ export async function getGroupedAccess(
 
   // Helper: Format date as French day name + date (e.g., "Jeudi 16 avril")
   const formatDateLabel = (dateStr: string): string => {
-    if (dateStr === 'no-date') return 'Sans date';
-    const date = new Date(dateStr + 'T00:00:00');
-    const formatted = date.toLocaleDateString('fr-FR', {
-      weekday: 'long',
-      day: 'numeric',
-      month: 'long',
+    if (dateStr === "no-date") return "Sans date";
+    const date = new Date(dateStr + "T00:00:00");
+    const formatted = date.toLocaleDateString("fr-FR", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
     });
     // Capitalize first letter
     return formatted.charAt(0).toUpperCase() + formatted.slice(1);
@@ -462,8 +512,8 @@ export async function getGroupedAccess(
   for (const access of enrichedAccess) {
     // Extract date part only (YYYY-MM-DD)
     const dateKey = access.startsAt
-      ? access.startsAt.toISOString().split('T')[0]
-      : 'no-date';
+      ? access.startsAt.toISOString().split("T")[0]
+      : "no-date";
 
     if (!dateMap.has(dateKey)) dateMap.set(dateKey, []);
     dateMap.get(dateKey)!.push(access);
@@ -475,7 +525,7 @@ export async function getGroupedAccess(
       // Sub-group by startsAt time (full ISO string)
       const slotMap = new Map<string, EnrichedAccess[]>();
       for (const item of items) {
-        const timeKey = item.startsAt?.toISOString() || 'no-time';
+        const timeKey = item.startsAt?.toISOString() || "no-time";
         if (!slotMap.has(timeKey)) slotMap.set(timeKey, []);
         slotMap.get(timeKey)!.push(item);
       }
@@ -486,9 +536,9 @@ export async function getGroupedAccess(
           startsAt: slotItems[0].startsAt,
           endsAt: slotItems[0].endsAt,
           // 2+ items at same time = single (radio), 1 item = multiple (checkbox)
-          selectionType: (slotItems.length > 1 ? 'single' : 'multiple') as
-            | 'single'
-            | 'multiple',
+          selectionType: (slotItems.length > 1 ? "single" : "multiple") as
+            | "single"
+            | "multiple",
           items: slotItems.sort((a, b) => {
             // Sort by time within the slot
             if (a.startsAt && b.startsAt) {
@@ -513,15 +563,15 @@ export async function getGroupedAccess(
         label: formatDateLabel(dateKey),
         slots,
       };
-    }
+    },
   );
 
   // Sort groups chronologically by date
   groups.sort((a, b) => {
     // "no-date" items go to the end
-    if (a.dateKey === 'no-date' && b.dateKey === 'no-date') return 0;
-    if (a.dateKey === 'no-date') return 1;
-    if (b.dateKey === 'no-date') return -1;
+    if (a.dateKey === "no-date" && b.dateKey === "no-date") return 0;
+    if (a.dateKey === "no-date") return 1;
+    if (b.dateKey === "no-date") return -1;
     // Sort by date chronologically
     return new Date(a.dateKey).getTime() - new Date(b.dateKey).getTime();
   });
@@ -540,7 +590,7 @@ export async function getGroupedAccess(
  */
 export async function reserveAccessSpot(
   accessId: string,
-  quantity: number = 1
+  quantity: number = 1,
 ): Promise<void> {
   // Use raw SQL for truly atomic capacity check and update
   // This ensures the check happens at the exact moment of update,
@@ -560,7 +610,12 @@ export async function reserveAccessSpot(
     });
 
     if (!access) {
-      throw new AppError('Access not found', 404, true, ErrorCodes.ACCESS_NOT_FOUND);
+      throw new AppError(
+        "Access not found",
+        404,
+        true,
+        ErrorCodes.ACCESS_NOT_FOUND,
+      );
     }
 
     const remaining = (access.maxCapacity ?? Infinity) - access.registeredCount;
@@ -568,7 +623,7 @@ export async function reserveAccessSpot(
       `${access.name} has insufficient capacity (${remaining} spots remaining, requested ${quantity})`,
       409,
       true,
-      ErrorCodes.ACCESS_CAPACITY_EXCEEDED
+      ErrorCodes.ACCESS_CAPACITY_EXCEEDED,
     );
   }
 }
@@ -578,7 +633,7 @@ export async function reserveAccessSpot(
  */
 export async function releaseAccessSpot(
   accessId: string,
-  quantity: number = 1
+  quantity: number = 1,
 ): Promise<void> {
   await prisma.eventAccess.updateMany({
     where: {
@@ -600,7 +655,7 @@ export async function releaseAccessSpot(
 export async function validateAccessSelections(
   eventId: string,
   selections: AccessSelection[],
-  formData: Record<string, unknown>
+  formData: Record<string, unknown>,
 ): Promise<{ valid: boolean; errors: string[] }> {
   const errors: string[] = [];
 
@@ -637,10 +692,7 @@ export async function validateAccessSelections(
   for (const selection of selections) {
     const access = accessMap.get(selection.accessId)!;
     // For OTHER type, use groupLabel as key to allow custom groups
-    const typeKey =
-      access.type === 'OTHER'
-        ? `OTHER:${access.groupLabel || ''}`
-        : access.type;
+    const typeKey = getAccessTypeKey(access.type, access.groupLabel);
 
     if (!selectionsByType.has(typeKey)) selectionsByType.set(typeKey, []);
     selectionsByType.get(typeKey)!.push({ access, selection });
@@ -678,7 +730,9 @@ export async function validateAccessSelections(
       for (const req of access.requiredAccess) {
         if (!accessIds.includes(req.id)) {
           const accessName = access.name;
-          errors.push(`${accessName} requires selecting its prerequisite first`);
+          errors.push(
+            `${accessName} requires selecting its prerequisite first`,
+          );
         }
       }
     }
@@ -702,12 +756,12 @@ export async function validateAccessSelections(
       if (
         !evaluateConditions(
           access.conditions as AccessCondition[],
-          access.conditionLogic as 'AND' | 'OR',
-          formData
+          access.conditionLogic as "AND" | "OR",
+          formData,
         )
       ) {
         errors.push(
-          `${access.name} is not available based on your form answers`
+          `${access.name} is not available based on your form answers`,
         );
       }
     }
@@ -733,23 +787,23 @@ export async function validateAccessSelections(
 
 function evaluateConditions(
   conditions: AccessCondition[],
-  logic: 'AND' | 'OR',
-  formData: Record<string, unknown>
+  logic: "AND" | "OR",
+  formData: Record<string, unknown>,
 ): boolean {
   const results = conditions.map((c) => evaluateSingleCondition(c, formData));
-  return logic === 'AND' ? results.every(Boolean) : results.some(Boolean);
+  return logic === "AND" ? results.every(Boolean) : results.some(Boolean);
 }
 
 function evaluateSingleCondition(
   condition: AccessCondition,
-  formData: Record<string, unknown>
+  formData: Record<string, unknown>,
 ): boolean {
   const value = formData[condition.fieldId];
 
   switch (condition.operator) {
-    case 'equals':
+    case "equals":
       return value === condition.value;
-    case 'not_equals':
+    case "not_equals":
       return value !== condition.value;
     default:
       return false;
