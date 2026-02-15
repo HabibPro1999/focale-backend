@@ -32,16 +32,16 @@ interface PrismaLike {
 // ============================================================================
 
 // Characters for code generation (excluding O, I, L to avoid confusion)
-const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+const CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 const CODE_LENGTH = 4;
-const CODE_PREFIX = 'SP-';
+const CODE_PREFIX = "SP-";
 
 /**
  * Generate a sponsorship code in format SP-XXXX.
  * Uses characters: A-Z (except O, I, L) and 2-9.
  */
 export function generateSponsorshipCode(): string {
-  let code = '';
+  let code = "";
   for (let i = 0; i < CODE_LENGTH; i++) {
     const randomIndex = Math.floor(Math.random() * CODE_CHARS.length);
     code += CODE_CHARS[randomIndex];
@@ -55,7 +55,7 @@ export function generateSponsorshipCode(): string {
  */
 export async function generateUniqueCode(
   db: PrismaLike,
-  maxAttempts = 10
+  maxAttempts = 10,
 ): Promise<string> {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const code = generateSponsorshipCode();
@@ -69,7 +69,9 @@ export async function generateUniqueCode(
     }
   }
 
-  throw new Error('Failed to generate unique sponsorship code after maximum attempts');
+  throw new Error(
+    "Failed to generate unique sponsorship code after maximum attempts",
+  );
 }
 
 // ============================================================================
@@ -84,7 +86,7 @@ export async function calculateSponsorshipTotal(
   db: PrismaLike,
   eventId: string,
   coversBasePrice: boolean,
-  coveredAccessIds: string[]
+  coveredAccessIds: string[],
 ): Promise<number> {
   let total = 0;
 
@@ -148,24 +150,28 @@ export interface RegistrationForCalculation {
  */
 export function calculateApplicableAmount(
   sponsorship: SponsorshipForCalculation,
-  registration: RegistrationForCalculation
+  registration: RegistrationForCalculation,
 ): number {
   let applicableAmount = 0;
 
   // Apply base price if covered by sponsorship
   if (sponsorship.coversBasePrice) {
     applicableAmount +=
-      registration.priceBreakdown.calculatedBasePrice ?? registration.baseAmount;
+      registration.priceBreakdown.calculatedBasePrice ??
+      registration.baseAmount;
   }
 
   // Apply covered access items that are also in registration
-  if (sponsorship.coveredAccessIds.length > 0 && registration.priceBreakdown.accessItems) {
+  if (
+    sponsorship.coveredAccessIds.length > 0 &&
+    registration.priceBreakdown.accessItems
+  ) {
     const registrationAccessIds = new Set(registration.accessTypeIds);
 
     for (const coveredId of sponsorship.coveredAccessIds) {
       if (registrationAccessIds.has(coveredId)) {
         const accessItem = registration.priceBreakdown.accessItems.find(
-          (item) => item.accessId === coveredId
+          (item) => item.accessId === coveredId,
         );
         if (accessItem) {
           applicableAmount += accessItem.subtotal;
@@ -175,7 +181,11 @@ export function calculateApplicableAmount(
   }
 
   // Don't exceed the registration total or sponsorship total
-  return Math.min(applicableAmount, registration.totalAmount, sponsorship.totalAmount);
+  return Math.min(
+    applicableAmount,
+    registration.totalAmount,
+    sponsorship.totalAmount,
+  );
 }
 
 // ============================================================================
@@ -200,18 +210,18 @@ export interface ExistingUsage {
  */
 export function detectCoverageOverlap(
   existingUsages: ExistingUsage[],
-  newSponsorship: SponsorshipForCalculation
+  newSponsorship: SponsorshipForCalculation,
 ): string[] {
   const warnings: string[] = [];
 
   // Check for base price overlap
   if (newSponsorship.coversBasePrice) {
     const existingBaseCoverage = existingUsages.find(
-      (usage) => usage.sponsorship.coversBasePrice
+      (usage) => usage.sponsorship.coversBasePrice,
     );
     if (existingBaseCoverage) {
       warnings.push(
-        `Base price is already covered by sponsorship ${existingBaseCoverage.sponsorship.code}`
+        `Base price is already covered by sponsorship ${existingBaseCoverage.sponsorship.code}`,
       );
     }
   }
@@ -232,13 +242,87 @@ export function detectCoverageOverlap(
       if (existingCoveredAccessIds.has(accessId)) {
         const existingCode = accessCodeMap.get(accessId);
         warnings.push(
-          `Access item ${accessId} is already covered by sponsorship ${existingCode}`
+          `Access item ${accessId} is already covered by sponsorship ${existingCode}`,
         );
       }
     }
   }
 
   return warnings;
+}
+
+// ============================================================================
+// Time Overlap Validation
+// ============================================================================
+
+/**
+ * Minimal access item shape for time-overlap checking.
+ */
+export interface AccessItemForOverlapCheck {
+  id: string;
+  name: string;
+  type: string;
+  groupLabel: string | null;
+  startsAt: Date | null;
+  endsAt: Date | null;
+}
+
+/**
+ * Validate that covered access items don't have time overlaps within the same type group.
+ * Groups by type (using groupLabel for OTHER), then does pairwise overlap check.
+ *
+ * @param coveredAccessIds - Access item IDs to check
+ * @param accessItems - Pre-fetched access items with time data
+ * @returns Array of error messages (empty if no conflicts)
+ */
+export function validateCoveredAccessTimeOverlap(
+  coveredAccessIds: string[],
+  accessItems: AccessItemForOverlapCheck[],
+): string[] {
+  if (coveredAccessIds.length < 2) return [];
+
+  const errors: string[] = [];
+  const accessMap = new Map(accessItems.map((a) => [a.id, a]));
+
+  // Get only covered items
+  const coveredItems = coveredAccessIds
+    .map((id) => accessMap.get(id))
+    .filter((item): item is AccessItemForOverlapCheck => item !== undefined);
+
+  if (coveredItems.length < 2) return [];
+
+  // Group by typeKey (matches access.service.ts pattern)
+  const byType = new Map<string, AccessItemForOverlapCheck[]>();
+  for (const item of coveredItems) {
+    const typeKey =
+      item.type === "OTHER" ? `OTHER:${item.groupLabel || ""}` : item.type;
+
+    if (!byType.has(typeKey)) byType.set(typeKey, []);
+    byType.get(typeKey)!.push(item);
+  }
+
+  // Pairwise overlap check within each group
+  for (const typeItems of byType.values()) {
+    for (let i = 0; i < typeItems.length; i++) {
+      for (let j = i + 1; j < typeItems.length; j++) {
+        const a = typeItems[i];
+        const b = typeItems[j];
+
+        if (a.startsAt && a.endsAt && b.startsAt && b.endsAt) {
+          const aStart = a.startsAt.getTime();
+          const aEnd = a.endsAt.getTime();
+          const bStart = b.startsAt.getTime();
+          const bEnd = b.endsAt.getTime();
+
+          if (!(aEnd <= bStart || bEnd <= aStart)) {
+            errors.push(`Time conflict: "${a.name}" and "${b.name}" overlap`);
+          }
+        }
+      }
+    }
+  }
+
+  return errors;
 }
 
 // ============================================================================
@@ -249,7 +333,7 @@ export function detectCoverageOverlap(
  * Recalculate total sponsorship amount for a registration based on all linked usages.
  */
 export function calculateTotalSponsorshipAmount(
-  usages: Array<{ amountApplied: number }>
+  usages: Array<{ amountApplied: number }>,
 ): number {
   return usages.reduce((sum, usage) => sum + usage.amountApplied, 0);
 }
@@ -262,10 +346,10 @@ export function calculateTotalSponsorshipAmount(
  */
 export function determineSponsorshipStatus(
   sponsorship: { status: string },
-  usageCount: number
-): 'PENDING' | 'USED' | 'CANCELLED' {
-  if (sponsorship.status === 'CANCELLED') {
-    return 'CANCELLED';
+  usageCount: number,
+): "PENDING" | "USED" | "CANCELLED" {
+  if (sponsorship.status === "CANCELLED") {
+    return "CANCELLED";
   }
-  return usageCount > 0 ? 'USED' : 'PENDING';
+  return usageCount > 0 ? "USED" : "PENDING";
 }
