@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from "zod";
 
 // ============================================================================
 // Module Configuration
@@ -9,15 +9,13 @@ import { z } from 'zod';
  * These control which features are visible in the event sidebar.
  */
 export const MODULE_IDS = [
-  'pricing',
-  'registrations',
-  'sponsorships',
-  'emails',
+  "pricing",
+  "registrations",
+  "sponsorships",
+  "emails",
 ] as const;
 
 export type ModuleId = (typeof MODULE_IDS)[number];
-
-export const ALL_MODULE_IDS: ModuleId[] = [...MODULE_IDS];
 
 const EnabledModulesSchema = z
   .array(z.enum(MODULE_IDS))
@@ -33,7 +31,7 @@ export const CreateClientSchema = z
     logo: z.string().url().optional().nullable(),
     primaryColor: z
       .string()
-      .regex(/^#[0-9A-Fa-f]{6}$/, 'Primary color must be a valid hex color')
+      .regex(/^#[0-9A-Fa-f]{6}$/, "Primary color must be a valid hex color")
       .optional()
       .nullable(),
     email: z.string().email().optional().nullable(),
@@ -48,7 +46,7 @@ export const UpdateClientSchema = z
     logo: z.string().url().optional().nullable(),
     primaryColor: z
       .string()
-      .regex(/^#[0-9A-Fa-f]{6}$/, 'Primary color must be a valid hex color')
+      .regex(/^#[0-9A-Fa-f]{6}$/, "Primary color must be a valid hex color")
       .optional()
       .nullable(),
     email: z.string().email().optional().nullable(),
@@ -63,10 +61,10 @@ export const ListClientsQuerySchema = z
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
     active: z
-      .enum(['true', 'false'])
-      .transform((v) => v === 'true')
+      .enum(["true", "false"])
+      .transform((v) => v === "true")
       .optional(),
-    search: z.string().optional(),
+    search: z.string().max(200).optional(),
   })
   .strict();
 
@@ -77,38 +75,9 @@ export const ClientIdParamSchema = z
   .strict();
 
 // ============================================================================
-// Response Schemas
-// ============================================================================
-
-export const ClientResponseSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  logo: z.string().nullable(),
-  primaryColor: z.string().nullable(),
-  email: z.string().nullable(),
-  phone: z.string().nullable(),
-  active: z.boolean(),
-  enabledModules: z.array(z.string()),
-  createdAt: z.date(),
-  updatedAt: z.date(),
-});
-
-export const ClientsListResponseSchema = z.object({
-  data: z.array(ClientResponseSchema),
-  meta: z.object({
-    page: z.number(),
-    limit: z.number(),
-    total: z.number(),
-    totalPages: z.number(),
-  }),
-});
-
-// ============================================================================
 // Types
 // ============================================================================
 
 export type CreateClientInput = z.infer<typeof CreateClientSchema>;
 export type UpdateClientInput = z.infer<typeof UpdateClientSchema>;
 export type ListClientsQuery = z.infer<typeof ListClientsQuerySchema>;
-export type ClientResponse = z.infer<typeof ClientResponseSchema>;
-export type ClientsListResponse = z.infer<typeof ClientsListResponseSchema>;

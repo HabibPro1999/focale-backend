@@ -12,7 +12,8 @@ import {
 } from "./email-variable.service.js";
 import { getTemplateByTrigger } from "./email-template.service.js";
 import { Prisma } from "@/generated/prisma/client.js";
-import type { EmailContext, AutomaticEmailTrigger } from "./email.types.js";
+import type { EmailContext } from "./email.types.js";
+import type { AutomaticEmailTrigger } from "./email.schema.js";
 
 // =============================================================================
 // TYPES
@@ -469,6 +470,27 @@ interface EmailLogUpdateData {
   errorMessage?: string;
 }
 
+// Status rank map — higher rank = more advanced in the delivery lifecycle.
+// Terminal failures (99) always override any non-terminal status.
+const STATUS_RANK: Record<string, number> = {
+  QUEUED: 0,
+  SENDING: 1,
+  SENT: 2,
+  DELIVERED: 3,
+  OPENED: 4,
+  CLICKED: 5,
+  BOUNCED: 99,
+  DROPPED: 99,
+  FAILED: 99,
+  SKIPPED: 99,
+};
+
+const TERMINAL_FAILURE_STATUSES = new Set<EmailStatus>([
+  "BOUNCED",
+  "DROPPED",
+  "FAILED",
+]);
+
 export async function updateEmailStatusFromWebhook(
   emailLogId: string,
   event: "delivered" | "open" | "click" | "bounce" | "dropped",
@@ -500,7 +522,39 @@ export async function updateEmailStatusFromWebhook(
       break;
   }
 
+  if (!updates.status) return;
+
+  const newStatus = updates.status;
+  const isTerminalFailure = TERMINAL_FAILURE_STATUSES.has(newStatus);
+
   try {
+    // Fetch current status to prevent regression (SendGrid does not guarantee event order)
+    const current = await prisma.emailLog.findUnique({
+      where: { id: emailLogId },
+      select: { status: true },
+    });
+
+    if (!current) {
+      logger.warn(
+        { emailLogId, event },
+        "Email log not found for webhook update",
+      );
+      return;
+    }
+
+    const currentRank = STATUS_RANK[current.status] ?? 0;
+    const newRank = STATUS_RANK[newStatus] ?? 0;
+
+    // Skip update if the current status is already higher-ranked,
+    // UNLESS the new status is a terminal failure (bounce/dropped/failed always win).
+    if (!isTerminalFailure && currentRank >= newRank) {
+      logger.debug(
+        { emailLogId, currentStatus: current.status, newStatus, event },
+        "Skipping webhook status update — current status is already higher or equal rank",
+      );
+      return;
+    }
+
     await prisma.emailLog.update({
       where: { id: emailLogId },
       data: updates,

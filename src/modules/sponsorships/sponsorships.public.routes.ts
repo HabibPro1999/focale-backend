@@ -1,6 +1,6 @@
 import { getEventById, getEventBySlug } from "@events";
 import { searchRegistrantsForSponsorship } from "@registrations";
-import { createSponsorshipBatch } from "./sponsorships.service.js";
+import { createSponsorshipBatch } from "./sponsorships-batch.service.js";
 import {
   CreateSponsorshipBatchSchema,
   EventIdParamSchema,
@@ -8,6 +8,7 @@ import {
 } from "./sponsorships.schema.js";
 import { z } from "zod";
 import type { AppInstance } from "@shared/types/fastify.js";
+import { prisma } from "@/database/client.js";
 
 // ============================================================================
 // Public Routes (No Auth - for sponsor form submission)
@@ -112,13 +113,27 @@ export async function sponsorshipsPublicBySlugRoutes(
       }
 
       // Check sponsorship mode (security check to prevent unauthorized searches)
-      const schema = form.schema as Record<string, unknown> | null;
-      const sponsorshipSettings = schema?.sponsorshipSettings as
-        | Record<string, unknown>
-        | undefined;
-      if (sponsorshipSettings?.sponsorshipMode !== "LINKED_ACCOUNT") {
+      const SponsorshipModeSchema = z
+        .object({
+          sponsorshipSettings: z
+            .object({
+              sponsorshipMode: z.enum(["CODE", "LINKED_ACCOUNT"]),
+              registrantSearchScope: z.enum(["ALL", "UNPAID_ONLY"]).optional(),
+            })
+            .optional(),
+        })
+        .optional();
+
+      const parseResult = SponsorshipModeSchema.safeParse(form.schema);
+      if (
+        !parseResult.success ||
+        parseResult.data?.sponsorshipSettings?.sponsorshipMode !==
+          "LINKED_ACCOUNT"
+      ) {
         throw app.httpErrors.forbidden("Search not available for this form");
       }
+
+      const sponsorshipSettings = parseResult.data.sponsorshipSettings;
 
       // Server-side enforcement: override unpaidOnly based on registrantSearchScope
       const registrantSearchScope = sponsorshipSettings?.registrantSearchScope;
@@ -186,8 +201,6 @@ export async function sponsorshipsPublicBySlugRoutes(
 // ============================================================================
 // Helper Functions
 // ============================================================================
-
-import { prisma } from "@/database/client.js";
 
 /**
  * Get the sponsor form for an event.

@@ -193,6 +193,7 @@ export async function getFormByEventSlug(
 /**
  * Extract field IDs from form schema.
  * Recursively walks through steps and fields.
+ * Handles both registration forms (steps) and sponsor forms (sponsorSteps).
  */
 function extractFieldIds(schema: unknown): string[] {
   const ids: string[] = [];
@@ -201,10 +202,25 @@ function extractFieldIds(schema: unknown): string[] {
 
   const schemaObj = schema as {
     steps?: Array<{ fields?: Array<{ id?: string }> }>;
+    sponsorSteps?: Array<{ fields?: Array<{ id?: string }> }>;
   };
 
+  // Handle registration forms (steps)
   if (Array.isArray(schemaObj.steps)) {
     for (const step of schemaObj.steps) {
+      if (Array.isArray(step.fields)) {
+        for (const field of step.fields) {
+          if (field.id) {
+            ids.push(field.id);
+          }
+        }
+      }
+    }
+  }
+
+  // Handle sponsor forms (sponsorSteps)
+  if (Array.isArray(schemaObj.sponsorSteps)) {
+    for (const step of schemaObj.sponsorSteps) {
       if (Array.isArray(step.fields)) {
         for (const field of step.fields) {
           if (field.id) {
@@ -364,14 +380,6 @@ export async function deleteForm(id: string): Promise<void> {
 }
 
 /**
- * Helper function to check if form exists (for validation in other modules).
- */
-export async function formExists(id: string): Promise<boolean> {
-  const count = await prisma.form.count({ where: { id } });
-  return count > 0;
-}
-
-/**
  * Check if sponsorship mode is locked for a form.
  * Mode is locked once any sponsorship batch has been submitted.
  */
@@ -443,12 +451,15 @@ export async function updateSponsorshipSettings(
 }
 
 /**
- * Helper function to get form's client ID via event (for ownership checks).
+ * Get form with its clientId in a single query.
+ * Returns both the full form and the clientId for auth checks.
  */
-export async function getFormClientId(id: string): Promise<string | null> {
+export async function getFormWithClientId(
+  id: string,
+): Promise<{ form: Form; clientId: string } | null> {
   const form = await prisma.form.findUnique({
     where: { id },
-    select: {
+    include: {
       event: {
         select: {
           clientId: true,
@@ -456,7 +467,15 @@ export async function getFormClientId(id: string): Promise<string | null> {
       },
     },
   });
-  return form?.event.clientId ?? null;
+
+  if (!form) {
+    return null;
+  }
+
+  return {
+    form,
+    clientId: form.event.clientId,
+  };
 }
 
 // ============================================================================

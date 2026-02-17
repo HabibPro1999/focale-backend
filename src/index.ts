@@ -66,7 +66,23 @@ async function main() {
   }, 15_000);
   logger.info("Email queue worker started (15s interval)");
 
-  gracefulShutdown(server, emailQueueInterval, () => activeProcessing);
+  gracefulShutdown(server, [
+    async () => {
+      // Stop email queue worker (no new iterations)
+      clearInterval(emailQueueInterval);
+      logger.info("Email queue worker stopped");
+
+      // Wait for in-flight email processing to complete
+      if (activeProcessing) {
+        logger.info("Waiting for in-flight email processing to complete...");
+        await Promise.race([
+          activeProcessing,
+          new Promise((resolve) => setTimeout(resolve, 10_000)), // 10s max wait
+        ]);
+        logger.info("In-flight email processing completed");
+      }
+    },
+  ]);
 }
 
 main().catch((err) => {

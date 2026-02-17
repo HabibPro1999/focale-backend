@@ -4,8 +4,6 @@
 
 import { prisma } from "@/database/client.js";
 import { Prisma } from "@/generated/prisma/client.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
 import type {
   ReportQuery,
   FinancialReportResponse,
@@ -37,16 +35,6 @@ export async function getFinancialReport(
   eventId: string,
   query: ReportQuery,
 ): Promise<FinancialReportResponse> {
-  // Verify event exists
-  const event = await prisma.event.findUnique({
-    where: { id: eventId },
-    select: { id: true },
-  });
-
-  if (!event) {
-    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
-  }
-
   const dateRange = buildDateFilter(query);
 
   // Build where clause for date filtering
@@ -68,8 +56,8 @@ export async function getFinancialReport(
   // Run all aggregation queries in parallel
   const [summary, byPaymentStatus, byAccessType, dailyTrend] =
     await Promise.all([
-      getFinancialSummary(eventId, baseWhere),
-      getPaymentStatusBreakdown(eventId, baseWhere),
+      getFinancialSummary(baseWhere),
+      getPaymentStatusBreakdown(baseWhere),
       getAccessBreakdown(eventId, dateRange),
       getDailyTrend(eventId, dateRange),
     ]);
@@ -93,61 +81,61 @@ export async function getFinancialReport(
 // ============================================================================
 
 async function getFinancialSummary(
-  _eventId: string,
   where: Record<string, unknown>,
 ): Promise<FinancialSummary> {
-  // Group by currency for accurate multi-currency reporting
-  const byCurrency = await prisma.registration.groupBy({
-    by: ["currency"],
-    where,
-    _sum: {
-      totalAmount: true,
-      paidAmount: true,
-      baseAmount: true,
-      accessAmount: true,
-      discountAmount: true,
-      sponsorshipAmount: true,
-    },
-    _count: true,
-  });
-
-  // Get pending amounts by currency
-  const pendingByCurrency = await prisma.registration.groupBy({
-    by: ["currency"],
-    where: {
-      ...where,
-      paymentStatus: "PENDING",
-    },
-    _sum: {
-      totalAmount: true,
-      paidAmount: true,
-    },
-  });
-
-  // Get refunded amounts by currency
-  const refundedByCurrency = await prisma.registration.groupBy({
-    by: ["currency"],
-    where: {
-      ...where,
-      paymentStatus: "REFUNDED",
-    },
-    _sum: {
-      totalAmount: true,
-    },
-  });
-
-  // Get waived amounts by currency
-  const waivedByCurrency = await prisma.registration.groupBy({
-    by: ["currency"],
-    where: {
-      ...where,
-      paymentStatus: "WAIVED",
-    },
-    _sum: {
-      totalAmount: true,
-    },
-    _count: true,
-  });
+  // Run all groupBy queries in parallel
+  const [byCurrency, pendingByCurrency, refundedByCurrency, waivedByCurrency] =
+    await Promise.all([
+      // Group by currency for accurate multi-currency reporting
+      prisma.registration.groupBy({
+        by: ["currency"],
+        where,
+        _sum: {
+          totalAmount: true,
+          paidAmount: true,
+          baseAmount: true,
+          accessAmount: true,
+          discountAmount: true,
+          sponsorshipAmount: true,
+        },
+        _count: true,
+      }),
+      // Get pending amounts by currency
+      prisma.registration.groupBy({
+        by: ["currency"],
+        where: {
+          ...where,
+          paymentStatus: "PENDING",
+        },
+        _sum: {
+          totalAmount: true,
+          paidAmount: true,
+        },
+      }),
+      // Get refunded amounts by currency
+      prisma.registration.groupBy({
+        by: ["currency"],
+        where: {
+          ...where,
+          paymentStatus: "REFUNDED",
+        },
+        _sum: {
+          totalAmount: true,
+        },
+      }),
+      // Get waived amounts by currency
+      prisma.registration.groupBy({
+        by: ["currency"],
+        where: {
+          ...where,
+          paymentStatus: "WAIVED",
+        },
+        _sum: {
+          totalAmount: true,
+        },
+        _count: true,
+      }),
+    ]);
 
   // Build currency summaries
   const pendingMap = new Map(
@@ -182,28 +170,36 @@ async function getFinancialSummary(
     },
   }));
 
-  // Also get overall aggregation for backward compatibility
-  const aggregation = await prisma.registration.aggregate({
-    where,
-    _sum: {
-      totalAmount: true,
-      paidAmount: true,
-      baseAmount: true,
-      accessAmount: true,
-      discountAmount: true,
-      sponsorshipAmount: true,
-    },
-    _avg: {
-      totalAmount: true,
-    },
-    _count: true,
-  });
-
-  // Calculate total pending across all currencies
+  // Derive aggregate totals from currency summaries
+  const totalRevenue = currencies.reduce((sum, c) => sum + c.totalRevenue, 0);
   const totalPending = currencies.reduce((sum, c) => sum + c.totalPending, 0);
   const totalRefunded = currencies.reduce((sum, c) => sum + c.totalRefunded, 0);
   const totalWaived = currencies.reduce((sum, c) => sum + c.totalWaived, 0);
   const waivedCount = currencies.reduce((sum, c) => sum + c.waivedCount, 0);
+  const registrationCount = currencies.reduce(
+    (sum, c) => sum + c.registrationCount,
+    0,
+  );
+  const totalBase = currencies.reduce((sum, c) => sum + c.breakdown.base, 0);
+  const totalAccess = currencies.reduce(
+    (sum, c) => sum + c.breakdown.access,
+    0,
+  );
+  const totalDiscount = currencies.reduce(
+    (sum, c) => sum + c.breakdown.discount,
+    0,
+  );
+  const totalSponsorship = currencies.reduce(
+    (sum, c) => sum + c.breakdown.sponsorship,
+    0,
+  );
+  const averageRegistrationValue =
+    registrationCount > 0
+      ? Math.round(
+          byCurrency.reduce((sum, c) => sum + (c._sum.totalAmount ?? 0), 0) /
+            registrationCount,
+        )
+      : 0;
 
   // Determine primary currency (most registrations or first one)
   const primaryCurrency =
@@ -214,17 +210,17 @@ async function getFinancialSummary(
       : "TND";
 
   return {
-    totalRevenue: aggregation._sum.paidAmount ?? 0,
+    totalRevenue,
     totalPending,
     totalRefunded,
     totalWaived,
     waivedCount,
-    averageRegistrationValue: Math.round(aggregation._avg.totalAmount ?? 0),
-    baseRevenue: aggregation._sum.baseAmount ?? 0,
-    accessRevenue: aggregation._sum.accessAmount ?? 0,
-    discountsGiven: aggregation._sum.discountAmount ?? 0,
-    sponsorshipsApplied: aggregation._sum.sponsorshipAmount ?? 0,
-    registrationCount: aggregation._count,
+    averageRegistrationValue,
+    baseRevenue: totalBase,
+    accessRevenue: totalAccess,
+    discountsGiven: totalDiscount,
+    sponsorshipsApplied: totalSponsorship,
+    registrationCount,
     primaryCurrency,
     currencies,
   };
@@ -235,7 +231,6 @@ async function getFinancialSummary(
 // ============================================================================
 
 async function getPaymentStatusBreakdown(
-  _eventId: string,
   where: Record<string, unknown>,
 ): Promise<PaymentStatusBreakdownItem[]> {
   const groups = await prisma.registration.groupBy({
@@ -356,6 +351,7 @@ async function getDailyTrend(
 
 export async function exportRegistrations(
   eventId: string,
+  eventSlug: string,
   query: ExportQuery,
 ): Promise<{
   filename: string;
@@ -363,16 +359,6 @@ export async function exportRegistrations(
   data: string;
   metadata: { total: number; exported: number; truncated: boolean };
 }> {
-  // Verify event exists
-  const event = await prisma.event.findUnique({
-    where: { id: eventId },
-    select: { id: true, name: true, slug: true },
-  });
-
-  if (!event) {
-    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
-  }
-
   const dateRange = buildDateFilter(query);
 
   // Build where clause
@@ -448,7 +434,7 @@ export async function exportRegistrations(
   const accessNameMap = new Map(accessItems.map((a) => [a.id, a.name]));
 
   const timestamp = new Date().toISOString().split("T")[0];
-  const filename = `${event.slug}-registrations-${timestamp}`;
+  const filename = `${eventSlug}-registrations-${timestamp}`;
 
   const metadata = {
     total,
@@ -544,12 +530,16 @@ function generateCSV(
     return [...staticValues, ...formValues, accessNames];
   });
 
-  // Escape CSV values
+  // Escape CSV values and neutralize formula injection
   const escapeCSV = (value: string): string => {
-    if (value.includes(",") || value.includes('"') || value.includes("\n")) {
-      return `"${value.replace(/"/g, '""')}"`;
+    let safe = value;
+    if (/^[=+\-@\t\r]/.test(safe)) {
+      safe = "'" + safe;
     }
-    return value;
+    if (safe.includes(",") || safe.includes('"') || safe.includes("\n")) {
+      return `"${safe.replace(/"/g, '""')}"`;
+    }
+    return safe;
   };
 
   const csvLines = [

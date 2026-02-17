@@ -1,27 +1,49 @@
-import { prisma } from '@/database/client.js';
-import { AppError } from '@shared/errors/app-error.js';
-import { ErrorCodes } from '@shared/errors/error-codes.js';
-import { paginate, getSkip, type PaginatedResult } from '@shared/utils/pagination.js';
-import type { CreateClientInput, UpdateClientInput, ListClientsQuery } from './clients.schema.js';
-import { ALL_MODULE_IDS } from './clients.schema.js';
-import type { Client, Prisma } from '@/generated/prisma/client.js';
+import { prisma } from "@/database/client.js";
+import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
+import {
+  paginate,
+  getSkip,
+  type PaginatedResult,
+} from "@shared/utils/pagination.js";
+import { auditLog, diffChanges } from "@shared/utils/audit.js";
+import { invalidateClientCache } from "@shared/middleware/module.middleware.js";
+import type {
+  CreateClientInput,
+  UpdateClientInput,
+  ListClientsQuery,
+} from "./clients.schema.js";
+import { MODULE_IDS } from "./clients.schema.js";
+import type { Client, Prisma } from "@/generated/prisma/client.js";
 
 /**
  * Create a new client.
  */
-export async function createClient(input: CreateClientInput): Promise<Client> {
+export async function createClient(
+  input: CreateClientInput,
+  performedBy: string,
+): Promise<Client> {
   const { name, logo, primaryColor, email, phone, enabledModules } = input;
 
-  return prisma.client.create({
+  const client = await prisma.client.create({
     data: {
       name,
       logo: logo ?? null,
       primaryColor: primaryColor ?? null,
       email: email ?? null,
       phone: phone ?? null,
-      enabledModules: enabledModules ?? ALL_MODULE_IDS,
+      enabledModules: enabledModules ?? [...MODULE_IDS],
     },
   });
+
+  await auditLog(prisma, {
+    entityType: "Client",
+    entityId: client.id,
+    action: "CREATE",
+    performedBy,
+  });
+
+  return client;
 }
 
 /**
@@ -37,38 +59,68 @@ export async function getClientById(id: string): Promise<Client | null> {
  */
 export async function updateClient(
   id: string,
-  input: UpdateClientInput
+  input: UpdateClientInput,
+  performedBy: string,
 ): Promise<Client> {
-  // Check if client exists
-  const client = await prisma.client.findUnique({ where: { id } });
-  if (!client) {
-    throw new AppError('Client not found', 404, true, ErrorCodes.NOT_FOUND);
-  }
+  const updatedClient = await prisma.$transaction(async (tx) => {
+    // Check if client exists
+    const oldClient = await tx.client.findUnique({ where: { id } });
+    if (!oldClient) {
+      throw new AppError("Client not found", 404, true, ErrorCodes.NOT_FOUND);
+    }
 
-  // One-way enable logic: merge new modules with existing (union, not replace)
-  let mergedModules: string[] | undefined;
-  if (input.enabledModules) {
-    const existingModules = new Set(client.enabledModules);
-    const newModules = input.enabledModules;
-    mergedModules = [...new Set([...existingModules, ...newModules])];
-  }
+    // One-way enable logic: merge new modules with existing (union, not replace)
+    let mergedModules: string[] | undefined;
+    if (input.enabledModules) {
+      const existingModules = new Set(oldClient.enabledModules);
+      const newModules = input.enabledModules;
+      mergedModules = [...new Set([...existingModules, ...newModules])];
+    }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { enabledModules: _removed, ...restInput } = input;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { enabledModules: _removed, ...restInput } = input;
 
-  return prisma.client.update({
-    where: { id },
-    data: {
-      ...restInput,
-      ...(mergedModules && { enabledModules: mergedModules }),
-    },
+    const updatedClient = await tx.client.update({
+      where: { id },
+      data: {
+        ...restInput,
+        ...(mergedModules && { enabledModules: mergedModules }),
+      },
+    });
+
+    const changes = diffChanges(oldClient, updatedClient, [
+      "name",
+      "logo",
+      "primaryColor",
+      "email",
+      "phone",
+      "active",
+      "enabledModules",
+    ]);
+
+    await auditLog(tx, {
+      entityType: "Client",
+      entityId: id,
+      action: "UPDATE",
+      changes,
+      performedBy,
+    });
+
+    return updatedClient;
   });
+
+  // Invalidate cache after successful update
+  invalidateClientCache(id);
+
+  return updatedClient;
 }
 
 /**
  * List clients with pagination and filters.
  */
-export async function listClients(query: ListClientsQuery): Promise<PaginatedResult<Client>> {
+export async function listClients(
+  query: ListClientsQuery,
+): Promise<PaginatedResult<Client>> {
   const { page, limit, active, search } = query;
   const skip = getSkip({ page, limit });
 
@@ -77,13 +129,18 @@ export async function listClients(query: ListClientsQuery): Promise<PaginatedRes
   if (active !== undefined) where.active = active;
   if (search) {
     where.OR = [
-      { name: { contains: search, mode: 'insensitive' } },
-      { email: { contains: search, mode: 'insensitive' } },
+      { name: { contains: search, mode: "insensitive" } },
+      { email: { contains: search, mode: "insensitive" } },
     ];
   }
 
   const [data, total] = await Promise.all([
-    prisma.client.findMany({ where, skip, take: limit, orderBy: { createdAt: 'desc' } }),
+    prisma.client.findMany({
+      where,
+      skip,
+      take: limit,
+      orderBy: { createdAt: "desc" },
+    }),
     prisma.client.count({ where }),
   ]);
 
@@ -94,7 +151,10 @@ export async function listClients(query: ListClientsQuery): Promise<PaginatedRes
  * Delete client.
  * Prevents deletion if client has associated users or events.
  */
-export async function deleteClient(id: string): Promise<void> {
+export async function deleteClient(
+  id: string,
+  performedBy: string,
+): Promise<void> {
   // Check if client exists and count related data
   const client = await prisma.client.findUnique({
     where: { id },
@@ -109,7 +169,7 @@ export async function deleteClient(id: string): Promise<void> {
   });
 
   if (!client) {
-    throw new AppError('Client not found', 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError("Client not found", 404, true, ErrorCodes.NOT_FOUND);
   }
 
   // Check for associated users or events
@@ -118,11 +178,21 @@ export async function deleteClient(id: string): Promise<void> {
       `Cannot delete client with ${client._count.users} user(s) and ${client._count.events} event(s). Remove associated data first.`,
       409,
       true,
-      ErrorCodes.CLIENT_HAS_DEPENDENCIES
+      ErrorCodes.CLIENT_HAS_DEPENDENCIES,
     );
   }
 
   await prisma.client.delete({ where: { id } });
+
+  await auditLog(prisma, {
+    entityType: "Client",
+    entityId: id,
+    action: "DELETE",
+    performedBy,
+  });
+
+  // Invalidate cache after successful deletion
+  invalidateClientCache(id);
 }
 
 /**

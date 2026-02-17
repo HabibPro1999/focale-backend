@@ -196,17 +196,10 @@ export const SponsorshipIdParamSchema = z
   })
   .strict();
 
-export const EventIdParamSchema = z
-  .object({
-    eventId: z.string().uuid(),
-  })
-  .strict();
-
-export const RegistrationIdParamSchema = z
-  .object({
-    registrationId: z.string().uuid(),
-  })
-  .strict();
+export {
+  EventIdParamSchema,
+  RegistrationIdParamSchema,
+} from "@shared/schemas/params.js";
 
 export const RegistrationSponsorshipParamSchema = z
   .object({

@@ -12,8 +12,6 @@ import {
   updateForm,
   listForms,
   deleteForm,
-  formExists,
-  getFormClientId,
   createDefaultSponsorSchema,
   getSponsorFormByEventSlug,
   getSponsorFormByEventId,
@@ -543,64 +541,6 @@ describe("Forms Service", () => {
       });
 
       expect(prismaMock.form.delete).not.toHaveBeenCalled();
-    });
-  });
-
-  // ============================================================================
-  // formExists
-  // ============================================================================
-
-  describe("formExists", () => {
-    it("should return true when form exists", async () => {
-      prismaMock.form.count.mockResolvedValue(1);
-
-      const result = await formExists(formId);
-
-      expect(result).toBe(true);
-      expect(prismaMock.form.count).toHaveBeenCalledWith({
-        where: { id: formId },
-      });
-    });
-
-    it("should return false when form does not exist", async () => {
-      prismaMock.form.count.mockResolvedValue(0);
-
-      const result = await formExists("non-existent");
-
-      expect(result).toBe(false);
-    });
-  });
-
-  // ============================================================================
-  // getFormClientId
-  // ============================================================================
-
-  describe("getFormClientId", () => {
-    it("should return clientId via event relation", async () => {
-      const clientId = faker.string.uuid();
-      prismaMock.form.findUnique.mockResolvedValue({
-        event: { clientId },
-      } as Form & { event: { clientId: string } });
-
-      const result = await getFormClientId(formId);
-
-      expect(result).toBe(clientId);
-      expect(prismaMock.form.findUnique).toHaveBeenCalledWith({
-        where: { id: formId },
-        select: {
-          event: {
-            select: { clientId: true },
-          },
-        },
-      });
-    });
-
-    it("should return null when form not found", async () => {
-      prismaMock.form.findUnique.mockResolvedValue(null);
-
-      const result = await getFormClientId("non-existent");
-
-      expect(result).toBeNull();
     });
   });
 

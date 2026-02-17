@@ -99,9 +99,11 @@ export async function requireAuth(
 
 /**
  * Factory function to create a middleware that checks for specific roles.
- * @param roles - Array of allowed role numbers (0 = super_admin, 1 = client_admin)
+ * @param roles - Array of allowed role values from UserRole enum
  */
-export function requireRole(...roles: number[]) {
+export function requireRole(
+  ...roles: Array<(typeof UserRole)[keyof typeof UserRole]>
+) {
   return async (
     request: FastifyRequest,
     _reply: FastifyReply,
@@ -115,7 +117,11 @@ export function requireRole(...roles: number[]) {
       );
     }
 
-    if (!roles.includes(request.user.role)) {
+    if (
+      !roles.includes(
+        request.user.role as (typeof UserRole)[keyof typeof UserRole],
+      )
+    ) {
       throw new AppError(
         "Insufficient permissions",
         403,

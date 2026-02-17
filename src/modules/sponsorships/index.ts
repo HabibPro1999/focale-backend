@@ -1,73 +1,19 @@
 // ============================================================================
 // Sponsorships Module - Barrel Export
+// Only exports what is consumed outside the module.
 // ============================================================================
 
-// Service functions
-export {
-  createSponsorshipBatch,
-  listSponsorships,
-  getSponsorshipStats,
-  getSponsorshipById,
-  getSponsorshipByCode,
-  updateSponsorship,
-  deleteSponsorship,
-  linkSponsorshipToRegistration,
-  linkSponsorshipByCode,
-  unlinkSponsorshipFromRegistration,
-  cleanupSponsorshipsForRegistration,
-  getAvailableSponsorships,
-  getSponsorshipClientId,
-  getLinkedSponsorships,
-} from "./sponsorships.service.js";
+// Service functions (external consumers: registrations, server)
+export { cleanupSponsorshipsForRegistration } from "./sponsorships-linking.service.js";
 
-// Service types
-export type {
-  AvailableSponsorship,
-  LinkSponsorshipResult,
-  CreateBatchResult,
-  SponsorshipStats,
-} from "./sponsorships.service.js";
+// Utility functions (external consumer: pricing)
+export { calculateApplicableAmount } from "./sponsorships.utils.js";
 
-// Utility functions
-export {
-  generateUniqueCode,
-  calculateSponsorshipTotal,
-  calculateApplicableAmount,
-  detectCoverageOverlap,
-  calculateTotalSponsorshipAmount,
-  determineSponsorshipStatus,
-} from "./sponsorships.utils.js";
+// Utility types (external consumer: pricing)
+export type { SponsorshipForCalculation } from "./sponsorships.utils.js";
+export type { RegistrationForCalculation } from "./sponsorships.utils.js";
 
-// Utility types
-export type {
-  SponsorshipForCalculation,
-  RegistrationForCalculation,
-  ExistingUsage,
-} from "./sponsorships.utils.js";
-
-// Schemas
-export {
-  CreateSponsorshipBatchSchema,
-  UpdateSponsorshipSchema,
-  ListSponsorshipsQuerySchema,
-  LinkSponsorshipSchema,
-  LinkSponsorshipByCodeSchema,
-  SponsorshipIdParamSchema,
-  EventIdParamSchema,
-  RegistrationIdParamSchema,
-  RegistrationSponsorshipParamSchema,
-} from "./sponsorships.schema.js";
-
-// Types
-export type {
-  CreateSponsorshipBatchInput,
-  UpdateSponsorshipInput,
-  ListSponsorshipsQuery,
-  LinkSponsorshipInput,
-  LinkSponsorshipByCodeInput,
-} from "./sponsorships.schema.js";
-
-// Routes
+// Routes (external consumer: server)
 export {
   sponsorshipsRoutes,
   sponsorshipDetailRoutes,

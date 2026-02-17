@@ -2,6 +2,12 @@ import { z } from "zod";
 import { ConditionOperatorSchema } from "@forms";
 
 // ============================================================================
+// Constants
+// ============================================================================
+
+export const MAX_PRICING_RULES = 10;
+
+// ============================================================================
 // Shared Types
 // ============================================================================
 
@@ -53,27 +59,11 @@ export const UpdateEmbeddedRuleSchema = z
 // Event Pricing Schemas (Unified: base price + embedded rules)
 // ============================================================================
 
-export const CreateEventPricingSchema = z
-  .object({
-    eventId: z.string().uuid(),
-    basePrice: z.number().int().min(0).default(0),
-    currency: z.string().length(3).default("TND"),
-    rules: z.array(EmbeddedPricingRuleSchema).max(10).default([]),
-    // Payment Methods
-    onlinePaymentEnabled: z.boolean().default(false),
-    onlinePaymentUrl: z.string().url().optional().nullable(),
-    // Bank Transfer Details
-    bankName: z.string().max(200).optional().nullable(),
-    bankAccountName: z.string().max(200).optional().nullable(),
-    bankAccountNumber: z.string().max(50).optional().nullable(),
-  })
-  .strict();
-
 export const UpdateEventPricingSchema = z
   .object({
     basePrice: z.number().int().min(0).optional(),
     currency: z.string().length(3).optional(),
-    rules: z.array(EmbeddedPricingRuleSchema).max(10).optional(),
+    rules: z.array(EmbeddedPricingRuleSchema).max(MAX_PRICING_RULES).optional(),
     // Payment Methods
     onlinePaymentEnabled: z.boolean().optional(),
     onlinePaymentUrl: z.string().url().optional().nullable(),
@@ -84,11 +74,7 @@ export const UpdateEventPricingSchema = z
   })
   .strict();
 
-export const EventIdParamSchema = z
-  .object({
-    eventId: z.string().uuid(),
-  })
-  .strict();
+export { EventIdParamSchema } from "@shared/schemas/params.js";
 
 export const RuleIdParamSchema = z
   .object({
@@ -101,7 +87,7 @@ export const RuleIdParamSchema = z
 // Price Calculation Schemas
 // ============================================================================
 
-export const SelectedExtraSchema = z
+const SelectedExtraSchema = z
   .object({
     extraId: z.string().uuid(),
     quantity: z.number().int().min(1).default(1),
@@ -110,55 +96,61 @@ export const SelectedExtraSchema = z
 
 export const CalculatePriceRequestSchema = z
   .object({
-    formData: z.record(z.string(), z.any()),
+    formData: z.record(z.string(), z.unknown()),
     selectedExtras: z.array(SelectedExtraSchema).optional().default([]),
     sponsorshipCodes: z.array(z.string()).optional().default([]),
   })
   .strict();
 
-export const AppliedRuleSchema = z.object({
-  ruleId: z.string(),
-  ruleName: z.string(),
-  effect: z.number(),
-  reason: z.string().optional(),
-});
+const AppliedRuleSchema = z
+  .object({
+    ruleId: z.string(),
+    ruleName: z.string(),
+    effect: z.number(),
+    reason: z.string().optional(),
+  })
+  .strict();
 
-export const ExtraLineItemSchema = z.object({
-  extraId: z.string(),
-  name: z.any(),
-  unitPrice: z.number(),
-  quantity: z.number(),
-  subtotal: z.number(),
-});
+const ExtraLineItemSchema = z
+  .object({
+    extraId: z.string(),
+    name: z.union([z.string(), z.record(z.string(), z.string())]),
+    unitPrice: z.number(),
+    quantity: z.number(),
+    subtotal: z.number(),
+  })
+  .strict();
 
-export const SponsorshipLineSchema = z.object({
-  code: z.string(),
-  amount: z.number(),
-  valid: z.boolean(),
-});
+const SponsorshipLineSchema = z
+  .object({
+    code: z.string(),
+    amount: z.number(),
+    valid: z.boolean(),
+  })
+  .strict();
 
-export const PriceBreakdownSchema = z.object({
-  basePrice: z.number(),
-  appliedRules: z.array(AppliedRuleSchema),
-  calculatedBasePrice: z.number(),
-  extras: z.array(ExtraLineItemSchema),
-  extrasTotal: z.number(),
-  subtotal: z.number(),
-  sponsorships: z.array(SponsorshipLineSchema),
-  sponsorshipTotal: z.number(),
-  total: z.number(),
-  currency: z.string(),
-});
+export const PriceBreakdownSchema = z
+  .object({
+    basePrice: z.number(),
+    appliedRules: z.array(AppliedRuleSchema),
+    calculatedBasePrice: z.number(),
+    extras: z.array(ExtraLineItemSchema),
+    extrasTotal: z.number(),
+    subtotal: z.number(),
+    sponsorships: z.array(SponsorshipLineSchema),
+    sponsorshipTotal: z.number(),
+    total: z.number(),
+    currency: z.string(),
+  })
+  .strict();
 
 // ============================================================================
 // Types
 // ============================================================================
 
-export type PricingCondition = z.infer<typeof PricingConditionSchema>;
 export type EmbeddedPricingRule = z.infer<typeof EmbeddedPricingRuleSchema>;
 export type CreateEmbeddedRuleInput = z.infer<typeof CreateEmbeddedRuleSchema>;
 export type UpdateEmbeddedRuleInput = z.infer<typeof UpdateEmbeddedRuleSchema>;
-export type CreateEventPricingInput = z.infer<typeof CreateEventPricingSchema>;
 export type UpdateEventPricingInput = z.infer<typeof UpdateEventPricingSchema>;
 export type CalculatePriceRequest = z.infer<typeof CalculatePriceRequestSchema>;
 export type PriceBreakdown = z.infer<typeof PriceBreakdownSchema>;

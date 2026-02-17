@@ -13,8 +13,6 @@ import {
   listEvents,
   deleteEvent,
   eventExists,
-  incrementRegisteredCount,
-  decrementRegisteredCount,
 } from "./events.service.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
@@ -24,11 +22,18 @@ vi.mock("@clients", () => ({
   clientExists: vi.fn(),
 }));
 
+// Mock the audit utils
+vi.mock("@shared/utils/audit.js", () => ({
+  auditLog: vi.fn().mockResolvedValue(undefined),
+  diffChanges: vi.fn().mockReturnValue(undefined),
+}));
+
 import { clientExists as clientExistsMock } from "@clients";
 
 describe("Events Service", () => {
   const clientId = "client-123";
   const eventId = "event-123";
+  const performedBy = "user-123";
 
   describe("createEvent", () => {
     const validInput = {
@@ -84,7 +89,7 @@ describe("Events Service", () => {
         },
       );
 
-      const result = await createEvent(validInput);
+      const result = await createEvent(validInput, performedBy);
 
       expect(result).toMatchObject({
         id: eventId,
@@ -101,8 +106,10 @@ describe("Events Service", () => {
     it("should throw when client does not exist", async () => {
       vi.mocked(clientExistsMock).mockResolvedValue(false);
 
-      await expect(createEvent(validInput)).rejects.toThrow(AppError);
-      await expect(createEvent(validInput)).rejects.toMatchObject({
+      await expect(createEvent(validInput, performedBy)).rejects.toThrow(
+        AppError,
+      );
+      await expect(createEvent(validInput, performedBy)).rejects.toMatchObject({
         statusCode: 404,
         code: ErrorCodes.NOT_FOUND,
       });
@@ -127,8 +134,10 @@ describe("Events Service", () => {
         },
       );
 
-      await expect(createEvent(validInput)).rejects.toThrow(AppError);
-      await expect(createEvent(validInput)).rejects.toMatchObject({
+      await expect(createEvent(validInput, performedBy)).rejects.toThrow(
+        AppError,
+      );
+      await expect(createEvent(validInput, performedBy)).rejects.toMatchObject({
         statusCode: 409,
         code: ErrorCodes.CONFLICT,
         message: "Event with this slug already exists",
@@ -162,12 +171,15 @@ describe("Events Service", () => {
         },
       );
 
-      const result = await createEvent({
-        ...inputWithoutStatus,
-        status: "CLOSED",
-        basePrice: 0,
-        currency: "TND",
-      });
+      const result = await createEvent(
+        {
+          ...inputWithoutStatus,
+          status: "CLOSED",
+          basePrice: 0,
+          currency: "TND",
+        },
+        performedBy,
+      );
 
       expect(result.status).toBe("CLOSED");
     });
@@ -206,12 +218,15 @@ describe("Events Service", () => {
         },
       );
 
-      const result = await createEvent({
-        ...inputWithoutPricing,
-        status: "CLOSED",
-        basePrice: 0,
-        currency: "TND",
-      });
+      const result = await createEvent(
+        {
+          ...inputWithoutPricing,
+          status: "CLOSED",
+          basePrice: 0,
+          currency: "TND",
+        },
+        performedBy,
+      );
 
       expect(result.pricing?.basePrice).toBe(0);
       expect(result.pricing?.currency).toBe("TND");
@@ -277,16 +292,23 @@ describe("Events Service", () => {
 
   describe("updateEvent", () => {
     it("should update event fields successfully", async () => {
-      const mockEvent = createMockEvent({
-        id: eventId,
-        name: "Old Name",
-        status: "CLOSED",
-      });
-      const updatedEvent = createMockEvent({
-        id: eventId,
-        name: "New Name",
-        status: "CLOSED",
-      });
+      const mockPricing = createMockEventPricing({ eventId });
+      const mockEvent = {
+        ...createMockEvent({
+          id: eventId,
+          name: "Old Name",
+          status: "CLOSED",
+        }),
+        pricing: mockPricing,
+      };
+      const updatedEvent = {
+        ...createMockEvent({
+          id: eventId,
+          name: "New Name",
+          status: "CLOSED",
+        }),
+        pricing: mockPricing,
+      };
 
       prismaMock.event.findUnique.mockResolvedValue(mockEvent);
 
@@ -297,12 +319,19 @@ describe("Events Service", () => {
             event: {
               update: vi.fn().mockResolvedValue(updatedEvent),
             },
+            auditLog: {
+              create: vi.fn().mockResolvedValue({}),
+            },
           };
           return callback(txMock);
         },
       );
 
-      const result = await updateEvent(eventId, { name: "New Name" });
+      const result = await updateEvent(
+        eventId,
+        { name: "New Name" },
+        performedBy,
+      );
 
       expect(result.name).toBe("New Name");
     });
@@ -310,11 +339,11 @@ describe("Events Service", () => {
     it("should throw when event not found", async () => {
       prismaMock.event.findUnique.mockResolvedValue(null);
 
-      await expect(updateEvent(eventId, { name: "New Name" })).rejects.toThrow(
-        AppError,
-      );
       await expect(
-        updateEvent(eventId, { name: "New Name" }),
+        updateEvent(eventId, { name: "New Name" }, performedBy),
+      ).rejects.toThrow(AppError);
+      await expect(
+        updateEvent(eventId, { name: "New Name" }, performedBy),
       ).rejects.toMatchObject({
         statusCode: 404,
         code: ErrorCodes.NOT_FOUND,
@@ -336,12 +365,19 @@ describe("Events Service", () => {
               event: {
                 update: vi.fn().mockResolvedValue(updatedEvent),
               },
+              auditLog: {
+                create: vi.fn().mockResolvedValue({}),
+              },
             };
             return callback(txMock);
           },
         );
 
-        const result = await updateEvent(eventId, { status: "OPEN" });
+        const result = await updateEvent(
+          eventId,
+          { status: "OPEN" },
+          performedBy,
+        );
 
         expect(result.status).toBe("OPEN");
       });
@@ -359,12 +395,19 @@ describe("Events Service", () => {
               event: {
                 update: vi.fn().mockResolvedValue(updatedEvent),
               },
+              auditLog: {
+                create: vi.fn().mockResolvedValue({}),
+              },
             };
             return callback(txMock);
           },
         );
 
-        const result = await updateEvent(eventId, { status: "CLOSED" });
+        const result = await updateEvent(
+          eventId,
+          { status: "CLOSED" },
+          performedBy,
+        );
 
         expect(result.status).toBe("CLOSED");
       });
@@ -385,12 +428,19 @@ describe("Events Service", () => {
               event: {
                 update: vi.fn().mockResolvedValue(updatedEvent),
               },
+              auditLog: {
+                create: vi.fn().mockResolvedValue({}),
+              },
             };
             return callback(txMock);
           },
         );
 
-        const result = await updateEvent(eventId, { status: "ARCHIVED" });
+        const result = await updateEvent(
+          eventId,
+          { status: "ARCHIVED" },
+          performedBy,
+        );
 
         expect(result.status).toBe("ARCHIVED");
       });
@@ -400,10 +450,10 @@ describe("Events Service", () => {
         prismaMock.event.findUnique.mockResolvedValue(mockEvent);
 
         await expect(
-          updateEvent(eventId, { status: "ARCHIVED" }),
+          updateEvent(eventId, { status: "ARCHIVED" }, performedBy),
         ).rejects.toThrow(AppError);
         await expect(
-          updateEvent(eventId, { status: "ARCHIVED" }),
+          updateEvent(eventId, { status: "ARCHIVED" }, performedBy),
         ).rejects.toMatchObject({
           statusCode: 400,
           code: ErrorCodes.INVALID_STATUS_TRANSITION,
@@ -415,11 +465,11 @@ describe("Events Service", () => {
         const mockEvent = createMockEvent({ id: eventId, status: "ARCHIVED" });
         prismaMock.event.findUnique.mockResolvedValue(mockEvent);
 
-        await expect(updateEvent(eventId, { status: "OPEN" })).rejects.toThrow(
-          AppError,
-        );
         await expect(
-          updateEvent(eventId, { status: "OPEN" }),
+          updateEvent(eventId, { status: "OPEN" }, performedBy),
+        ).rejects.toThrow(AppError);
+        await expect(
+          updateEvent(eventId, { status: "OPEN" }, performedBy),
         ).rejects.toMatchObject({
           statusCode: 400,
           code: ErrorCodes.INVALID_STATUS_TRANSITION,
@@ -432,10 +482,10 @@ describe("Events Service", () => {
         prismaMock.event.findUnique.mockResolvedValue(mockEvent);
 
         await expect(
-          updateEvent(eventId, { status: "CLOSED" }),
+          updateEvent(eventId, { status: "CLOSED" }, performedBy),
         ).rejects.toThrow(AppError);
         await expect(
-          updateEvent(eventId, { status: "CLOSED" }),
+          updateEvent(eventId, { status: "CLOSED" }, performedBy),
         ).rejects.toMatchObject({
           statusCode: 400,
           code: ErrorCodes.INVALID_STATUS_TRANSITION,
@@ -455,12 +505,19 @@ describe("Events Service", () => {
               event: {
                 update: vi.fn().mockResolvedValue(mockEvent),
               },
+              auditLog: {
+                create: vi.fn().mockResolvedValue({}),
+              },
             };
             return callback(txMock);
           },
         );
 
-        const result = await updateEvent(eventId, { status: "OPEN" });
+        const result = await updateEvent(
+          eventId,
+          { status: "OPEN" },
+          performedBy,
+        );
 
         expect(result.status).toBe("OPEN");
       });
@@ -484,12 +541,19 @@ describe("Events Service", () => {
                 findUnique: vi.fn().mockResolvedValue(null), // Slug check returns null (unique)
                 update: vi.fn().mockResolvedValue(updatedEvent),
               },
+              auditLog: {
+                create: vi.fn().mockResolvedValue({}),
+              },
             };
             return callback(txMock);
           },
         );
 
-        const result = await updateEvent(eventId, { slug: "new-unique-slug" });
+        const result = await updateEvent(
+          eventId,
+          { slug: "new-unique-slug" },
+          performedBy,
+        );
 
         expect(result.slug).toBe("new-unique-slug");
       });
@@ -511,13 +575,16 @@ describe("Events Service", () => {
                 findUnique: vi.fn().mockResolvedValue(conflictingEvent), // Slug check returns conflicting event
                 update: vi.fn(),
               },
+              auditLog: {
+                create: vi.fn().mockResolvedValue({}),
+              },
             };
             return callback(txMock);
           },
         );
 
         await expect(
-          updateEvent(eventId, { slug: "taken-slug" }),
+          updateEvent(eventId, { slug: "taken-slug" }, performedBy),
         ).rejects.toMatchObject({
           statusCode: 409,
           code: ErrorCodes.CONFLICT,
@@ -538,12 +605,19 @@ describe("Events Service", () => {
                 // No findUnique here - slug check is skipped when slug === event.slug
                 update: vi.fn().mockResolvedValue(mockEvent),
               },
+              auditLog: {
+                create: vi.fn().mockResolvedValue({}),
+              },
             };
             return callback(txMock);
           },
         );
 
-        const result = await updateEvent(eventId, { slug: "same-slug" });
+        const result = await updateEvent(
+          eventId,
+          { slug: "same-slug" },
+          performedBy,
+        );
 
         expect(result.slug).toBe("same-slug");
         // Only one findUnique call (for finding the event outside transaction)
@@ -664,7 +738,7 @@ describe("Events Service", () => {
       prismaMock.event.findUnique.mockResolvedValue(mockEvent);
       prismaMock.event.delete.mockResolvedValue(mockEvent);
 
-      await deleteEvent(eventId);
+      await deleteEvent(eventId, performedBy);
 
       expect(prismaMock.event.delete).toHaveBeenCalledWith({
         where: { id: eventId },
@@ -674,8 +748,8 @@ describe("Events Service", () => {
     it("should throw when event not found", async () => {
       prismaMock.event.findUnique.mockResolvedValue(null);
 
-      await expect(deleteEvent(eventId)).rejects.toThrow(AppError);
-      await expect(deleteEvent(eventId)).rejects.toMatchObject({
+      await expect(deleteEvent(eventId, performedBy)).rejects.toThrow(AppError);
+      await expect(deleteEvent(eventId, performedBy)).rejects.toMatchObject({
         statusCode: 404,
         code: ErrorCodes.NOT_FOUND,
         message: "Event not found",
@@ -690,8 +764,8 @@ describe("Events Service", () => {
 
       prismaMock.event.findUnique.mockResolvedValue(mockEvent);
 
-      await expect(deleteEvent(eventId)).rejects.toThrow(AppError);
-      await expect(deleteEvent(eventId)).rejects.toMatchObject({
+      await expect(deleteEvent(eventId, performedBy)).rejects.toThrow(AppError);
+      await expect(deleteEvent(eventId, performedBy)).rejects.toMatchObject({
         statusCode: 409,
         code: ErrorCodes.EVENT_HAS_REGISTRATIONS,
         message:
@@ -707,7 +781,7 @@ describe("Events Service", () => {
 
       prismaMock.event.findUnique.mockResolvedValue(mockEvent);
 
-      await expect(deleteEvent(eventId)).rejects.toMatchObject({
+      await expect(deleteEvent(eventId, performedBy)).rejects.toMatchObject({
         message:
           "Cannot delete event with 1 registration(s). Archive the event instead.",
       });
@@ -732,61 +806,6 @@ describe("Events Service", () => {
       const result = await eventExists("non-existent");
 
       expect(result).toBe(false);
-    });
-  });
-
-  describe("incrementRegisteredCount", () => {
-    it("should increment registered count by 1", async () => {
-      const updatedEvent = createMockEvent({
-        id: eventId,
-        registeredCount: 11,
-      });
-
-      prismaMock.event.update.mockResolvedValue(updatedEvent);
-
-      const result = await incrementRegisteredCount(eventId);
-
-      expect(result.registeredCount).toBe(11);
-      expect(prismaMock.event.update).toHaveBeenCalledWith({
-        where: { id: eventId },
-        data: { registeredCount: { increment: 1 } },
-      });
-    });
-
-    it("should work from zero", async () => {
-      const updatedEvent = createMockEvent({ id: eventId, registeredCount: 1 });
-
-      prismaMock.event.update.mockResolvedValue(updatedEvent);
-
-      const result = await incrementRegisteredCount(eventId);
-
-      expect(result.registeredCount).toBe(1);
-    });
-  });
-
-  describe("decrementRegisteredCount", () => {
-    it("should decrement registered count by 1", async () => {
-      const updatedEvent = createMockEvent({ id: eventId, registeredCount: 9 });
-
-      prismaMock.event.update.mockResolvedValue(updatedEvent);
-
-      const result = await decrementRegisteredCount(eventId);
-
-      expect(result.registeredCount).toBe(9);
-      expect(prismaMock.event.update).toHaveBeenCalledWith({
-        where: { id: eventId },
-        data: { registeredCount: { decrement: 1 } },
-      });
-    });
-
-    it("should work from one", async () => {
-      const updatedEvent = createMockEvent({ id: eventId, registeredCount: 0 });
-
-      prismaMock.event.update.mockResolvedValue(updatedEvent);
-
-      const result = await decrementRegisteredCount(eventId);
-
-      expect(result.registeredCount).toBe(0);
     });
   });
 });

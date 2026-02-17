@@ -187,12 +187,16 @@ describe("Users Service", () => {
       clientExistsMock.mockResolvedValue(true);
       firebaseAuthMock.createUser.mockResolvedValue({ uid: "firebase-uid" });
       firebaseAuthMock.setCustomUserClaims.mockResolvedValue(undefined);
+      firebaseAuthMock.deleteUser.mockResolvedValue(undefined);
       const dbError = new Error("Database error");
       prismaMock.user.create.mockRejectedValue(dbError);
 
       await expect(createUser(validClientAdminInput)).rejects.toThrow(
         "Database error",
       );
+
+      // Verify Firebase user was deleted during rollback
+      expect(firebaseAuthMock.deleteUser).toHaveBeenCalledWith("firebase-uid");
     });
 
     // Note: The service code has a bug where Firebase rollback doesn't work because
@@ -403,7 +407,7 @@ describe("Users Service", () => {
       firebaseAuthMock.deleteUser.mockResolvedValue(undefined);
       prismaMock.user.delete.mockResolvedValue(existingUser);
 
-      await deleteUser("user-123");
+      await deleteUser("user-123", "requesting-user-123");
 
       expect(invalidateUserCacheMock).toHaveBeenCalledWith("user-123");
     });
@@ -652,25 +656,29 @@ describe("Users Service", () => {
       const existingUser = createMockUser({ id: "user-123" });
 
       prismaMock.user.findUnique.mockResolvedValue(existingUser);
-      firebaseAuthMock.deleteUser.mockResolvedValue(undefined);
       prismaMock.user.delete.mockResolvedValue(existingUser);
+      firebaseAuthMock.deleteUser.mockResolvedValue(undefined);
 
-      await deleteUser("user-123");
+      await deleteUser("user-123", "requesting-user-456");
 
       expect(prismaMock.user.findUnique).toHaveBeenCalledWith({
         where: { id: "user-123" },
       });
-      expect(firebaseAuthMock.deleteUser).toHaveBeenCalledWith("user-123");
       expect(prismaMock.user.delete).toHaveBeenCalledWith({
         where: { id: "user-123" },
       });
+      expect(firebaseAuthMock.deleteUser).toHaveBeenCalledWith("user-123");
     });
 
     it("should throw NOT_FOUND when user does not exist", async () => {
       prismaMock.user.findUnique.mockResolvedValue(null);
 
-      await expect(deleteUser("non-existent")).rejects.toThrow(AppError);
-      await expect(deleteUser("non-existent")).rejects.toMatchObject({
+      await expect(
+        deleteUser("non-existent", "requesting-user-456"),
+      ).rejects.toThrow(AppError);
+      await expect(
+        deleteUser("non-existent", "requesting-user-456"),
+      ).rejects.toMatchObject({
         statusCode: 404,
         code: ErrorCodes.NOT_FOUND,
       });
@@ -679,19 +687,58 @@ describe("Users Service", () => {
       expect(prismaMock.user.delete).not.toHaveBeenCalled();
     });
 
-    it("should delete SUPER_ADMIN user", async () => {
+    it("should throw BAD_REQUEST when trying to delete own account", async () => {
+      const existingUser = createMockUser({ id: "user-123" });
+      prismaMock.user.findUnique.mockResolvedValue(existingUser);
+
+      await expect(deleteUser("user-123", "user-123")).rejects.toThrow(
+        AppError,
+      );
+      await expect(deleteUser("user-123", "user-123")).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.BAD_REQUEST,
+        message: "Cannot delete your own account",
+      });
+
+      expect(prismaMock.user.delete).not.toHaveBeenCalled();
+      expect(firebaseAuthMock.deleteUser).not.toHaveBeenCalled();
+    });
+
+    it("should throw BAD_REQUEST when deleting last super admin", async () => {
       const superAdmin = createMockSuperAdmin({ id: "admin-123" });
 
       prismaMock.user.findUnique.mockResolvedValue(superAdmin);
-      firebaseAuthMock.deleteUser.mockResolvedValue(undefined);
+      prismaMock.user.count.mockResolvedValue(1); // Only one super admin
+
+      await expect(
+        deleteUser("admin-123", "requesting-user-456"),
+      ).rejects.toThrow(AppError);
+      await expect(
+        deleteUser("admin-123", "requesting-user-456"),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.BAD_REQUEST,
+        message: "Cannot delete the last super admin",
+      });
+
+      expect(prismaMock.user.delete).not.toHaveBeenCalled();
+      expect(firebaseAuthMock.deleteUser).not.toHaveBeenCalled();
+    });
+
+    it("should delete super admin when there are multiple", async () => {
+      const superAdmin = createMockSuperAdmin({ id: "admin-123" });
+
+      prismaMock.user.findUnique.mockResolvedValue(superAdmin);
+      prismaMock.user.count.mockResolvedValue(2); // Multiple super admins
       prismaMock.user.delete.mockResolvedValue(superAdmin);
+      firebaseAuthMock.deleteUser.mockResolvedValue(undefined);
 
-      await deleteUser("admin-123");
+      await deleteUser("admin-123", "requesting-user-456");
 
-      expect(firebaseAuthMock.deleteUser).toHaveBeenCalledWith("admin-123");
       expect(prismaMock.user.delete).toHaveBeenCalledWith({
         where: { id: "admin-123" },
       });
+      expect(firebaseAuthMock.deleteUser).toHaveBeenCalledWith("admin-123");
     });
   });
 

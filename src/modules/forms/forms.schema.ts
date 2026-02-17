@@ -94,15 +94,12 @@ export const FormFieldSchema = z
     label: z.string().optional(),
     placeholder: z.string().optional(),
     helpText: z.string().optional(),
-    helperText: z.string().optional(),
     required: z.boolean().optional(),
-    width: z
-      .union([z.string(), z.literal("full"), z.literal("half")])
-      .optional(),
+    width: z.string().optional(),
     options: z.array(FieldOptionSchema).optional(),
     validation: FieldValidationSchema.optional(),
     conditions: z.array(FieldConditionSchema).optional(),
-    conditionLogic: z.enum(["and", "or"]).optional(),
+    conditionLogic: z.enum(["AND", "OR"]).optional(),
     conditionAction: z.enum(["show", "disable"]).optional(),
     clearOnHide: z.boolean().optional(),
     defaultValue: z
@@ -225,11 +222,7 @@ export const ListFormsQuerySchema = z
   })
   .strict();
 
-export const FormIdParamSchema = z
-  .object({
-    id: z.string().uuid(),
-  })
-  .strict();
+export { FormIdParamSchema } from "@shared/schemas/params.js";
 
 // Update sponsorship settings (for SPONSOR forms only)
 export const UpdateSponsorshipSettingsSchema = z
@@ -244,20 +237,11 @@ export const UpdateSponsorshipSettingsSchema = z
 // Types
 // ============================================================================
 
-export type FieldType = z.infer<typeof FieldTypeSchema>;
-export type FieldOption = z.infer<typeof FieldOptionSchema>;
-export type ConditionOperator = z.infer<typeof ConditionOperatorSchema>;
 export type FieldCondition = z.infer<typeof FieldConditionSchema>;
 export type FieldValidation = z.infer<typeof FieldValidationSchema>;
 export type FormField = z.infer<typeof FormFieldSchema>;
 export type FormStep = z.infer<typeof FormStepSchema>;
 export type FormSchemaJson = z.infer<typeof FormSchemaJsonSchema>;
-export type BeneficiaryTemplate = z.infer<typeof BeneficiaryTemplateSchema>;
-export type SponsorSummarySettings = z.infer<
-  typeof SponsorSummarySettingsSchema
->;
-export type SponsorshipMode = z.infer<typeof SponsorshipModeSchema>;
-export type RegistrantSearchScope = z.infer<typeof RegistrantSearchScopeSchema>;
 export type SponsorshipSettings = z.infer<typeof SponsorshipSettingsSchema>;
 export type SponsorFormSchemaJson = z.infer<typeof SponsorFormSchemaJsonSchema>;
 export type CreateFormInput = z.infer<typeof CreateFormSchema>;

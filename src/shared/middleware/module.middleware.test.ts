@@ -6,7 +6,7 @@ import {
   createMockClientAdmin,
   createMockClient,
 } from "../../../tests/helpers/factories.js";
-import { requireModule } from "./module.middleware.js";
+import { requireModule, clearClientCache } from "./module.middleware.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 
@@ -52,6 +52,7 @@ describe("requireModule", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    clearClientCache();
   });
 
   it("should throw 401 when user is not authenticated", async () => {

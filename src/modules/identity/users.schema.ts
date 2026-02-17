@@ -19,7 +19,12 @@ export const CreateUserSchema = z
         "Password must contain at least one special character",
       ),
     name: z.string().min(1).max(100),
-    role: z.number().int().min(0).max(1).default(UserRole.CLIENT_ADMIN),
+    role: z
+      .union([
+        z.literal(UserRole.SUPER_ADMIN),
+        z.literal(UserRole.CLIENT_ADMIN),
+      ])
+      .default(UserRole.CLIENT_ADMIN),
     clientId: z.string().uuid().optional().nullable(),
   })
   .strict();
@@ -27,7 +32,12 @@ export const CreateUserSchema = z
 export const UpdateUserSchema = z
   .object({
     name: z.string().min(1).max(100).optional(),
-    role: z.number().int().min(0).max(1).optional(),
+    role: z
+      .union([
+        z.literal(UserRole.SUPER_ADMIN),
+        z.literal(UserRole.CLIENT_ADMIN),
+      ])
+      .optional(),
     clientId: z.string().uuid().optional().nullable(),
     active: z.boolean().optional(),
   })
@@ -37,7 +47,14 @@ export const ListUsersQuerySchema = z
   .object({
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
-    role: z.coerce.number().int().min(0).max(1).optional(),
+    role: z.coerce
+      .number()
+      .int()
+      .refine(
+        (val) => val === UserRole.SUPER_ADMIN || val === UserRole.CLIENT_ADMIN,
+        "Invalid role value",
+      )
+      .optional(),
     clientId: z.string().uuid().optional(),
     active: z
       .enum(["true", "false"])
@@ -66,16 +83,6 @@ export const UserResponseSchema = z.object({
   active: z.boolean(),
 });
 
-export const UsersListResponseSchema = z.object({
-  data: z.array(UserResponseSchema),
-  meta: z.object({
-    page: z.number(),
-    limit: z.number(),
-    total: z.number(),
-    totalPages: z.number(),
-  }),
-});
-
 // ============================================================================
 // Types
 // ============================================================================
@@ -83,5 +90,3 @@ export const UsersListResponseSchema = z.object({
 export type CreateUserInput = z.infer<typeof CreateUserSchema>;
 export type UpdateUserInput = z.infer<typeof UpdateUserSchema>;
 export type ListUsersQuery = z.infer<typeof ListUsersQuerySchema>;
-export type UserResponse = z.infer<typeof UserResponseSchema>;
-export type UsersListResponse = z.infer<typeof UsersListResponseSchema>;

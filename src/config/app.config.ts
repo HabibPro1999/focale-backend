@@ -42,34 +42,37 @@ const envSchema = z
 
 const env = envSchema.parse(process.env);
 
-export const config = {
-  ...env,
+export const config = Object.freeze({
+  NODE_ENV: env.NODE_ENV,
+  PORT: env.PORT,
+  DATABASE_URL: env.DATABASE_URL,
+  CORS_ORIGIN: env.CORS_ORIGIN,
   isDevelopment: env.NODE_ENV === "development",
   isProduction: env.NODE_ENV === "production",
   isTest: env.NODE_ENV === "test",
   alertWebhookUrl: env.ALERT_WEBHOOK_URL,
-  database: {
+  database: Object.freeze({
     poolSize: env.NODE_ENV === "production" ? 20 : 5,
-  },
-  security: {
-    rateLimit: {
+  }),
+  security: Object.freeze({
+    rateLimit: Object.freeze({
       max: env.NODE_ENV === "production" ? 100 : 1000,
       timeWindow: "1 minute",
-    },
-  },
-  firebase: {
+    }),
+  }),
+  firebase: Object.freeze({
     projectId: env.FIREBASE_PROJECT_ID,
     storageBucket: env.FIREBASE_STORAGE_BUCKET,
     serviceAccount: env.FIREBASE_SERVICE_ACCOUNT,
-  },
-  storage: {
+  }),
+  storage: Object.freeze({
     provider: env.STORAGE_PROVIDER,
-  },
-  r2: {
+  }),
+  r2: Object.freeze({
     accountId: env.R2_ACCOUNT_ID,
     accessKeyId: env.R2_ACCESS_KEY_ID,
     secretAccessKey: env.R2_SECRET_ACCESS_KEY,
     bucket: env.R2_BUCKET,
     publicUrl: env.R2_PUBLIC_URL,
-  },
-};
+  }),
+});

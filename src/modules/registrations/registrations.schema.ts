@@ -22,7 +22,7 @@ export const PaymentMethodSchema = z.enum(["BANK_TRANSFER", "ONLINE", "CASH"]);
 export const CreateRegistrationSchema = z
   .object({
     formId: z.string().uuid(),
-    formData: z.record(z.string(), z.any()),
+    formData: z.record(z.string(), z.unknown()),
 
     // Registrant info (extracted from formData for quick access)
     email: z.string().email(),
@@ -98,11 +98,7 @@ export const RegistrationIdParamSchema = z
   })
   .strict();
 
-export const EventIdParamSchema = z
-  .object({
-    eventId: z.string().uuid(),
-  })
-  .strict();
+export { EventIdParamSchema } from "@shared/schemas/params.js";
 
 export const FormIdParamSchema = z
   .object({
@@ -117,7 +113,7 @@ export const FormIdParamSchema = z
 export const PublicEditRegistrationSchema = z
   .object({
     // Form data updates (partial - only changed fields)
-    formData: z.record(z.string(), z.any()).optional(),
+    formData: z.record(z.string(), z.unknown()).optional(),
 
     // Contact info updates
     firstName: z.string().max(100).optional(),
@@ -201,7 +197,7 @@ export const PriceBreakdownSchema = z.object({
   accessItems: z.array(
     z.object({
       accessId: z.string(),
-      name: z.any(),
+      name: z.union([z.string(), z.record(z.string(), z.string())]),
       unitPrice: z.number(),
       quantity: z.number(),
       subtotal: z.number(),

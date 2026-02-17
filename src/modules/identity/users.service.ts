@@ -114,7 +114,7 @@ export async function createUser(
     });
 
     // Create in database
-    return prisma.user.create({
+    return await prisma.user.create({
       data: {
         id: firebaseUser.uid,
         email,
@@ -186,23 +186,33 @@ export async function updateUser(
   // Validate clientId if being changed
   await validateClientId(input.clientId);
 
-  // Sync Firebase custom claims if role or clientId is being changed
-  if (input.role !== undefined || input.clientId !== undefined) {
-    const newRole = input.role ?? user.role;
-    const newClientId =
-      input.clientId !== undefined ? input.clientId : user.clientId;
-
-    await setCustomClaims(id, {
-      role: newRole,
-      clientId: newClientId,
-    });
-  }
-
+  // Update database first
   const updatedUser = await prisma.user.update({
     where: { id },
     data: input,
     include: { client: true },
   });
+
+  // Sync Firebase custom claims if role or clientId is being changed
+  if (input.role !== undefined || input.clientId !== undefined) {
+    try {
+      await setCustomClaims(id, {
+        role: effectiveRole,
+        clientId: effectiveClientId,
+      });
+    } catch (error) {
+      // Log warning since DB is already updated and claims will be re-synced on next update
+      logger.error(
+        {
+          err: error,
+          uid: id,
+          role: effectiveRole,
+          clientId: effectiveClientId,
+        },
+        "Failed to sync Firebase custom claims after DB update - claims may be stale",
+      );
+    }
+  }
 
   // Invalidate cache after successful update
   invalidateUserCache(id);
@@ -247,10 +257,54 @@ export async function listUsers(
 
 /**
  * Delete user from Firebase Auth + database.
+ * Validates that the user is not deleting themselves and not the last super admin.
  */
-export async function deleteUser(id: string): Promise<void> {
-  await assertUserExists(id);
-  await deleteFirebaseUser(id);
+export async function deleteUser(
+  id: string,
+  requestingUserId: string,
+): Promise<void> {
+  // Prevent self-deletion
+  if (id === requestingUserId) {
+    throw new AppError(
+      "Cannot delete your own account",
+      400,
+      true,
+      ErrorCodes.BAD_REQUEST,
+    );
+  }
+
+  const user = await assertUserExists(id);
+
+  // Prevent deleting the last super admin
+  if (user.role === UserRole.SUPER_ADMIN) {
+    const superAdminCount = await prisma.user.count({
+      where: { role: UserRole.SUPER_ADMIN, active: true },
+    });
+    if (superAdminCount <= 1) {
+      throw new AppError(
+        "Cannot delete the last super admin",
+        400,
+        true,
+        ErrorCodes.BAD_REQUEST,
+      );
+    }
+  }
+
+  // Delete from database first
   await prisma.user.delete({ where: { id } });
+
+  // Then delete from Firebase - if this fails, log warning (user is already gone from DB)
+  try {
+    await deleteFirebaseUser(id);
+  } catch (error) {
+    logger.error(
+      {
+        err: error,
+        uid: id,
+      },
+      "Failed to delete Firebase user after DB deletion - orphaned Firebase user may exist",
+    );
+  }
+
   invalidateUserCache(id);
 }

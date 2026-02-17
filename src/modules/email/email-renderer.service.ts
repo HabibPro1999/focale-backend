@@ -207,9 +207,15 @@ const LINK_BUTTON_LABELS: Record<string, string> = {
  * Renders a paragraph node
  * Detects standalone link-type mentions and renders them as buttons
  */
+const ALLOWED_TEXT_ALIGNS = new Set(["left", "center", "right", "justify"]);
+
 function renderParagraph(node: TiptapNode): string {
   const nodes = node.content || [];
-  const align = (node.attrs?.textAlign as string) || "left";
+
+  // Validate align against allowlist — default to "left"
+  const rawAlign = node.attrs?.textAlign as string | undefined;
+  const align =
+    rawAlign && ALLOWED_TEXT_ALIGNS.has(rawAlign) ? rawAlign : "left";
 
   // Check if this paragraph contains a single link-type mention (possibly with whitespace text)
   const nonEmptyNodes = nodes.filter(
@@ -225,11 +231,16 @@ function renderParagraph(node: TiptapNode): string {
 
   const content = renderInlineContent(nodes);
 
-  // Extract styles from node attributes
+  // Extract styles from node attributes — validate against known-safe patterns
   const attrs: string[] = [`align="${align}"`];
-  if (node.attrs?.fontSize) attrs.push(`font-size="${node.attrs.fontSize}"`);
-  if (node.attrs?.lineHeight)
-    attrs.push(`line-height="${node.attrs.lineHeight}"`);
+
+  const rawFontSize = node.attrs?.fontSize as string | undefined;
+  if (rawFontSize && isValidFontSize(rawFontSize))
+    attrs.push(`font-size="${rawFontSize}"`);
+
+  const rawLineHeight = node.attrs?.lineHeight as string | undefined;
+  if (rawLineHeight && isValidFontSize(rawLineHeight))
+    attrs.push(`line-height="${rawLineHeight}"`);
 
   // Empty paragraph becomes a spacer
   if (!content || content.trim() === "") {
@@ -245,7 +256,9 @@ function renderParagraph(node: TiptapNode): string {
 function renderHeading(node: TiptapNode): string {
   const level = (node.attrs?.level as number) || 1;
   const content = renderInlineContent(node.content || []);
-  const align = (node.attrs?.textAlign as string) || "left";
+  const rawAlign = node.attrs?.textAlign as string | undefined;
+  const align =
+    rawAlign && ALLOWED_TEXT_ALIGNS.has(rawAlign) ? rawAlign : "left";
 
   const sizes: Record<number, string> = {
     1: "28px",
@@ -325,9 +338,11 @@ function renderBlockquote(node: TiptapNode): string {
  * Renders an image node
  */
 function renderImage(node: TiptapNode): string {
-  const src = escapeHtml(String(node.attrs?.src || ""));
-  const alt = escapeHtml(String(node.attrs?.alt ?? ""));
-  const width = String(node.attrs?.width || "600");
+  const rawSrc = sanitizeUrl(String(node.attrs?.src || ""));
+  const src = sanitizeForHtml(rawSrc);
+  const alt = sanitizeForHtml(String(node.attrs?.alt ?? ""));
+  const rawWidth = String(node.attrs?.width || "600");
+  const width = /^\d{1,4}(px)?$/.test(rawWidth) ? rawWidth : "600";
 
   if (!src) return "";
 
@@ -350,7 +365,7 @@ export function renderInlineContent(nodes: TiptapNode[]): string {
  */
 export function renderInlineNode(node: TiptapNode): string {
   if (node.type === "text") {
-    let text = escapeHtml(node.text || "");
+    let text = sanitizeForHtml(node.text || "");
 
     // Apply marks (formatting)
     if (node.marks && node.marks.length > 0) {
@@ -409,8 +424,12 @@ export function applyMarks(text: string, marks: TiptapMark[]): string {
         result = `<code style="background-color: #f3f4f6; padding: 2px 4px; border-radius: 4px; font-family: monospace;">${result}</code>`;
         break;
       case "link": {
-        const href = escapeHtml(sanitizeUrl(String(mark.attrs?.href || "#")));
-        const target = (mark.attrs?.target as string) || "_blank";
+        const href = sanitizeForHtml(
+          sanitizeUrl(String(mark.attrs?.href || "#")),
+        );
+        const ALLOWED_TARGETS = new Set(["_blank", "_self", "_parent", "_top"]);
+        const rawTarget = String(mark.attrs?.target || "_blank");
+        const target = ALLOWED_TARGETS.has(rawTarget) ? rawTarget : "_blank";
         result = `<a href="${href}" target="${target}" style="color: #4F46E5;">${result}</a>`;
         break;
       }
@@ -422,13 +441,13 @@ export function applyMarks(text: string, marks: TiptapMark[]): string {
         const fontFamily = String(mark.attrs?.fontFamily || "");
 
         if (color && isValidCssColor(color))
-          styles.push(`color: ${escapeHtml(color)}`);
+          styles.push(`color: ${sanitizeForHtml(color)}`);
         if (bgColor && isValidCssColor(bgColor))
-          styles.push(`background-color: ${escapeHtml(bgColor)}`);
+          styles.push(`background-color: ${sanitizeForHtml(bgColor)}`);
         if (fontSize && isValidFontSize(fontSize))
           styles.push(`font-size: ${fontSize}`);
         if (fontFamily && isValidFontFamily(fontFamily))
-          styles.push(`font-family: ${escapeHtml(fontFamily)}`);
+          styles.push(`font-family: ${sanitizeForHtml(fontFamily)}`);
 
         if (styles.length > 0) {
           result = `<span style="${styles.join("; ")}">${result}</span>`;
@@ -495,16 +514,4 @@ function extractTextFromNode(node: TiptapNode, parentType?: string): string {
     default:
       return childText;
   }
-}
-
-// =============================================================================
-// UTILITIES
-// =============================================================================
-
-/**
- * Escapes HTML special characters to prevent XSS
- * Delegates to sanitizeForHtml from variable service to avoid duplication
- */
-export function escapeHtml(text: string): string {
-  return sanitizeForHtml(text);
 }

@@ -64,23 +64,3 @@ export async function setCustomClaims(
 export async function deleteFirebaseUser(uid: string): Promise<void> {
   await firebaseAuth.deleteUser(uid);
 }
-
-/**
- * Upload a file to Firebase Storage and return public URL.
- */
-export async function uploadFile(
-  buffer: Buffer,
-  path: string,
-  contentType: string,
-): Promise<string> {
-  const bucket = firebaseStorage.bucket();
-  const file = bucket.file(path);
-
-  await file.save(buffer, {
-    contentType,
-    metadata: { cacheControl: "public, max-age=31536000" },
-  });
-
-  await file.makePublic();
-  return file.publicUrl();
-}

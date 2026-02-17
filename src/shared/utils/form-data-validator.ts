@@ -96,7 +96,7 @@ function evaluateFieldCondition(
  * Hidden fields (conditions not met) should be skipped during validation.
  */
 export function shouldValidateField(
-  field: FormField & { conditionLogic?: "and" | "or" },
+  field: FormField & { conditionLogic?: "AND" | "OR" },
   formData: Record<string, unknown>,
   allFields: FormField[],
 ): boolean {
@@ -105,11 +105,11 @@ export function shouldValidateField(
   }
 
   // Use conditionLogic to determine how to combine conditions
-  // 'and' (default): all conditions must be met
-  // 'or': at least one condition must be met
-  const conditionLogic = field.conditionLogic ?? "and";
+  // 'AND' (default): all conditions must be met
+  // 'OR': at least one condition must be met
+  const conditionLogic = field.conditionLogic ?? "AND";
 
-  if (conditionLogic === "or") {
+  if (conditionLogic === "OR") {
     return field.conditions.some((c) =>
       evaluateFieldCondition(c, formData, allFields),
     );

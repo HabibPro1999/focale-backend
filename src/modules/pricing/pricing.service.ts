@@ -2,9 +2,11 @@ import { randomUUID } from "crypto";
 import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { findOrThrow } from "@shared/utils/db.js";
 import { calculateApplicableAmount } from "@sponsorships";
 import { evaluateConditions } from "@shared/utils/condition-evaluator.js";
-import type {
+import { logger } from "@shared/utils/logger.js";
+import {
   UpdateEventPricingInput,
   CreateEmbeddedRuleInput,
   UpdateEmbeddedRuleInput,
@@ -12,6 +14,7 @@ import type {
   CalculatePriceRequest,
   PriceBreakdown,
   SelectedExtra,
+  MAX_PRICING_RULES,
 } from "./pricing.schema.js";
 import type { Prisma, EventPricing } from "@/generated/prisma/client.js";
 
@@ -23,6 +26,14 @@ import type { Prisma, EventPricing } from "@/generated/prisma/client.js";
 export type EventPricingWithRules = Omit<EventPricing, "rules"> & {
   rules: EmbeddedPricingRule[];
 };
+
+/**
+ * Safely parse rules from JSONB column.
+ * DB data was written by validated code paths — array check is sufficient.
+ */
+function parseRulesFromDb(rules: unknown): EmbeddedPricingRule[] {
+  return Array.isArray(rules) ? (rules as EmbeddedPricingRule[]) : [];
+}
 
 // ============================================================================
 // Event Pricing CRUD (Unified with embedded rules)
@@ -37,9 +48,11 @@ export async function getEventPricing(
   const pricing = await prisma.eventPricing.findUnique({ where: { eventId } });
   if (!pricing) return null;
 
+  const rules = parseRulesFromDb(pricing.rules);
+
   return {
     ...pricing,
-    rules: (pricing.rules as unknown as EmbeddedPricingRule[]) ?? [],
+    rules,
   };
 }
 
@@ -50,15 +63,10 @@ export async function updateEventPricing(
   eventId: string,
   input: UpdateEventPricingInput,
 ): Promise<EventPricingWithRules> {
-  const pricing = await prisma.eventPricing.findUnique({ where: { eventId } });
-  if (!pricing) {
-    throw new AppError(
-      "Event pricing not found",
-      404,
-      true,
-      ErrorCodes.PRICING_NOT_FOUND,
-    );
-  }
+  await findOrThrow(
+    () => prisma.eventPricing.findUnique({ where: { eventId } }),
+    { message: "Event pricing not found", code: ErrorCodes.PRICING_NOT_FOUND },
+  );
 
   const updateData: Prisma.EventPricingUpdateInput = {};
 
@@ -91,7 +99,7 @@ export async function updateEventPricing(
 
   return {
     ...updated,
-    rules: (updated.rules as unknown as EmbeddedPricingRule[]) ?? [],
+    rules: parseRulesFromDb(updated.rules),
   };
 }
 
@@ -106,27 +114,51 @@ export async function addPricingRule(
   eventId: string,
   rule: CreateEmbeddedRuleInput,
 ): Promise<EventPricingWithRules> {
-  const pricing = await getEventPricing(eventId);
-  if (!pricing) {
-    throw new AppError(
-      "Event pricing not found",
-      404,
-      true,
-      ErrorCodes.PRICING_NOT_FOUND,
+  return prisma.$transaction(async (tx) => {
+    const pricing = await findOrThrow(
+      () => tx.eventPricing.findUnique({ where: { eventId } }),
+      {
+        message: "Event pricing not found",
+        code: ErrorCodes.PRICING_NOT_FOUND,
+      },
     );
-  }
 
-  const newRule: EmbeddedPricingRule = {
-    ...rule,
-    id: randomUUID(),
-    description: rule.description ?? null,
-    priority: rule.priority ?? 0,
-    conditionLogic: rule.conditionLogic ?? "AND",
-    active: rule.active ?? true,
-  };
+    const rules = parseRulesFromDb(pricing.rules);
 
-  const updatedRules = [...pricing.rules, newRule];
-  return updateEventPricing(eventId, { rules: updatedRules });
+    if (rules.length >= MAX_PRICING_RULES) {
+      throw new AppError(
+        "Maximum number of pricing rules reached",
+        400,
+        true,
+        ErrorCodes.VALIDATION_ERROR,
+      );
+    }
+
+    const newRule: EmbeddedPricingRule = {
+      ...rule,
+      id: randomUUID(),
+      description: rule.description ?? null,
+      priority: rule.priority ?? 0,
+      conditionLogic: rule.conditionLogic ?? "AND",
+      active: rule.active ?? true,
+    };
+
+    const updatedRules = [...rules, newRule];
+
+    const updateData: Prisma.EventPricingUpdateInput = {
+      rules: updatedRules as Prisma.InputJsonValue,
+    };
+
+    const updated = await tx.eventPricing.update({
+      where: { eventId },
+      data: updateData,
+    });
+
+    return {
+      ...updated,
+      rules: parseRulesFromDb(updated.rules),
+    };
+  });
 }
 
 /**
@@ -137,30 +169,44 @@ export async function updatePricingRule(
   ruleId: string,
   updates: UpdateEmbeddedRuleInput,
 ): Promise<EventPricingWithRules> {
-  const pricing = await getEventPricing(eventId);
-  if (!pricing) {
-    throw new AppError(
-      "Event pricing not found",
-      404,
-      true,
-      ErrorCodes.PRICING_NOT_FOUND,
+  return prisma.$transaction(async (tx) => {
+    const pricing = await findOrThrow(
+      () => tx.eventPricing.findUnique({ where: { eventId } }),
+      {
+        message: "Event pricing not found",
+        code: ErrorCodes.PRICING_NOT_FOUND,
+      },
     );
-  }
 
-  const ruleIndex = pricing.rules.findIndex((r) => r.id === ruleId);
-  if (ruleIndex === -1) {
-    throw new AppError(
-      "Pricing rule not found",
-      404,
-      true,
-      ErrorCodes.NOT_FOUND,
-    );
-  }
+    const rules = parseRulesFromDb(pricing.rules);
 
-  const updatedRules = [...pricing.rules];
-  updatedRules[ruleIndex] = { ...updatedRules[ruleIndex], ...updates };
+    const ruleIndex = rules.findIndex((r) => r.id === ruleId);
+    if (ruleIndex === -1) {
+      throw new AppError(
+        "Pricing rule not found",
+        404,
+        true,
+        ErrorCodes.NOT_FOUND,
+      );
+    }
 
-  return updateEventPricing(eventId, { rules: updatedRules });
+    const updatedRules = [...rules];
+    updatedRules[ruleIndex] = { ...updatedRules[ruleIndex], ...updates };
+
+    const updateData: Prisma.EventPricingUpdateInput = {
+      rules: updatedRules as Prisma.InputJsonValue,
+    };
+
+    const updated = await tx.eventPricing.update({
+      where: { eventId },
+      data: updateData,
+    });
+
+    return {
+      ...updated,
+      rules: parseRulesFromDb(updated.rules),
+    };
+  });
 }
 
 /**
@@ -170,28 +216,43 @@ export async function deletePricingRule(
   eventId: string,
   ruleId: string,
 ): Promise<EventPricingWithRules> {
-  const pricing = await getEventPricing(eventId);
-  if (!pricing) {
-    throw new AppError(
-      "Event pricing not found",
-      404,
-      true,
-      ErrorCodes.PRICING_NOT_FOUND,
+  return prisma.$transaction(async (tx) => {
+    const pricing = await findOrThrow(
+      () => tx.eventPricing.findUnique({ where: { eventId } }),
+      {
+        message: "Event pricing not found",
+        code: ErrorCodes.PRICING_NOT_FOUND,
+      },
     );
-  }
 
-  const ruleExists = pricing.rules.some((r) => r.id === ruleId);
-  if (!ruleExists) {
-    throw new AppError(
-      "Pricing rule not found",
-      404,
-      true,
-      ErrorCodes.NOT_FOUND,
-    );
-  }
+    const rules = parseRulesFromDb(pricing.rules);
 
-  const updatedRules = pricing.rules.filter((r) => r.id !== ruleId);
-  return updateEventPricing(eventId, { rules: updatedRules });
+    const ruleExists = rules.some((r) => r.id === ruleId);
+    if (!ruleExists) {
+      throw new AppError(
+        "Pricing rule not found",
+        404,
+        true,
+        ErrorCodes.NOT_FOUND,
+      );
+    }
+
+    const updatedRules = rules.filter((r) => r.id !== ruleId);
+
+    const updateData: Prisma.EventPricingUpdateInput = {
+      rules: updatedRules as Prisma.InputJsonValue,
+    };
+
+    const updated = await tx.eventPricing.update({
+      where: { eventId },
+      data: updateData,
+    });
+
+    return {
+      ...updated,
+      rules: parseRulesFromDb(updated.rules),
+    };
+  });
 }
 
 // ============================================================================
@@ -214,15 +275,10 @@ export async function calculatePrice(
   const { formData, selectedExtras, sponsorshipCodes } = input;
 
   // Get event pricing configuration with embedded rules
-  const pricing = await getEventPricing(eventId);
-  if (!pricing) {
-    throw new AppError(
-      "Event pricing not found",
-      404,
-      true,
-      ErrorCodes.PRICING_NOT_FOUND,
-    );
-  }
+  const pricing = await findOrThrow(() => getEventPricing(eventId), {
+    message: "Event pricing not found",
+    code: ErrorCodes.PRICING_NOT_FOUND,
+  });
 
   const { basePrice, currency, rules } = pricing;
 
@@ -249,6 +305,15 @@ export async function calculatePrice(
         effect: rule.price - basePrice,
         reason: `Base price set to ${rule.price}`,
       });
+      logger.info(
+        {
+          eventId,
+          ruleId: rule.id,
+          ruleName: rule.name,
+          adjustment: rule.price - basePrice,
+        },
+        "Pricing rule matched",
+      );
       break; // First match wins
     }
   }
@@ -277,6 +342,15 @@ export async function calculatePrice(
 
   // Calculate final total
   const total = Math.max(0, subtotal - sponsorshipTotal);
+
+  logger.info(
+    {
+      eventId,
+      finalTotal: total,
+      sponsorshipTotal,
+    },
+    "Price calculation completed",
+  );
 
   return {
     basePrice,
@@ -366,6 +440,14 @@ async function validateSponsorshipCodes(
       });
 
       if (!sponsorship) {
+        logger.warn(
+          {
+            eventId,
+            code,
+            reason: "Code not found or already used",
+          },
+          "Invalid sponsorship code",
+        );
         return {
           code,
           amount: 0,

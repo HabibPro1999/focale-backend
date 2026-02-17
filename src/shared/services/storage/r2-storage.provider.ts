@@ -12,13 +12,24 @@ export class R2StorageProvider implements StorageProvider {
   private client: S3Client;
 
   constructor() {
-    // Config .refine() guarantees R2 vars exist when STORAGE_PROVIDER=r2
+    // Runtime guard: verify R2 config is present
+    if (
+      !config.r2.accountId ||
+      !config.r2.accessKeyId ||
+      !config.r2.secretAccessKey ||
+      !config.r2.bucket
+    ) {
+      throw new Error(
+        "R2 configuration missing. Ensure R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, and R2_BUCKET are set.",
+      );
+    }
+
     this.client = new S3Client({
       region: "auto",
-      endpoint: `https://${config.r2.accountId!}.r2.cloudflarestorage.com`,
+      endpoint: `https://${config.r2.accountId}.r2.cloudflarestorage.com`,
       credentials: {
-        accessKeyId: config.r2.accessKeyId!,
-        secretAccessKey: config.r2.secretAccessKey!,
+        accessKeyId: config.r2.accessKeyId,
+        secretAccessKey: config.r2.secretAccessKey,
       },
     });
   }
@@ -29,7 +40,7 @@ export class R2StorageProvider implements StorageProvider {
     contentType: string,
   ): Promise<string> {
     const command = new PutObjectCommand({
-      Bucket: config.r2.bucket!,
+      Bucket: config.r2.bucket,
       Key: key,
       Body: buffer,
       ContentType: contentType,
@@ -44,7 +55,7 @@ export class R2StorageProvider implements StorageProvider {
 
   async getSignedUrl(key: string, expiresInSeconds = 3600): Promise<string> {
     const command = new GetObjectCommand({
-      Bucket: config.r2.bucket!,
+      Bucket: config.r2.bucket,
       Key: key,
     });
 
@@ -53,7 +64,7 @@ export class R2StorageProvider implements StorageProvider {
 
   async delete(key: string): Promise<void> {
     const command = new DeleteObjectCommand({
-      Bucket: config.r2.bucket!,
+      Bucket: config.r2.bucket,
       Key: key,
     });
 

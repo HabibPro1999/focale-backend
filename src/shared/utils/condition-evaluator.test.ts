@@ -303,12 +303,12 @@ describe("Condition Evaluator", () => {
         ).toBe(false);
       });
 
-      it("should handle lowercase 'and'", () => {
+      it("should handle uppercase 'AND'", () => {
         const conditions: EvaluableCondition[] = [
           { fieldId: "profession", operator: "equals", value: "doctor" },
           { fieldId: "age", operator: "greater_than", value: 25 },
         ];
-        expect(evaluateConditions(conditions, "and", formData)).toBe(true);
+        expect(evaluateConditions(conditions, "AND", formData)).toBe(true);
       });
     });
 
@@ -335,13 +335,13 @@ describe("Condition Evaluator", () => {
         ).toBe(false);
       });
 
-      it("should handle lowercase 'or'", () => {
+      it("should handle uppercase 'OR'", () => {
         const conditions: EvaluableCondition[] = [
           { fieldId: "profession", operator: "equals", value: "doctor" },
           { fieldId: "profession", operator: "equals", value: "nurse" },
         ];
         expect(
-          evaluateConditions(conditions, "or", { profession: "doctor" }),
+          evaluateConditions(conditions, "OR", { profession: "doctor" }),
         ).toBe(true);
       });
     });

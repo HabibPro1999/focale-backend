@@ -1,6 +1,12 @@
 import { z } from "zod";
 
 // ============================================================================
+// Enums
+// ============================================================================
+
+export const EventStatusEnum = z.enum(["CLOSED", "OPEN", "ARCHIVED"]);
+
+// ============================================================================
 // Request Schemas
 // ============================================================================
 
@@ -21,7 +27,7 @@ export const CreateEventSchema = z
     startDate: z.coerce.date(),
     endDate: z.coerce.date(),
     location: z.string().min(1).max(500).optional().nullable(),
-    status: z.enum(["CLOSED", "OPEN", "ARCHIVED"]).default("CLOSED"),
+    status: EventStatusEnum.default("CLOSED"),
     // Pricing
     basePrice: z.number().int().min(0).default(0),
     currency: z.string().length(3).default("TND"),
@@ -49,7 +55,7 @@ export const UpdateEventSchema = z
     startDate: z.coerce.date().optional(),
     endDate: z.coerce.date().optional(),
     location: z.string().min(1).max(500).optional().nullable(),
-    status: z.enum(["CLOSED", "OPEN", "ARCHIVED"]).optional(),
+    status: EventStatusEnum.optional(),
   })
   .strict()
   .refine(
@@ -70,7 +76,7 @@ export const ListEventsQuerySchema = z
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
     clientId: z.string().uuid().optional(),
-    status: z.enum(["CLOSED", "OPEN", "ARCHIVED"]).optional(),
+    status: EventStatusEnum.optional(),
     search: z.string().optional(),
   })
   .strict();

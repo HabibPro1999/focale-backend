@@ -1,10 +1,10 @@
-import { prisma } from '@/database/client.js';
-import type { Prisma } from '@/generated/prisma/client.js';
+import { prisma } from "@/database/client.js";
+import type { Prisma } from "@/generated/prisma/client.js";
 
 // Type for Prisma transaction client
 type TxClient = Omit<
   typeof prisma,
-  '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'
+  "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends"
 >;
 
 export interface AuditLogData {
@@ -23,7 +23,7 @@ export interface AuditLogData {
  */
 export async function auditLog(
   txOrPrisma: TxClient | typeof prisma,
-  data: AuditLogData
+  data: AuditLogData,
 ): Promise<void> {
   await txOrPrisma.auditLog.create({
     data: {
@@ -41,18 +41,20 @@ export async function auditLog(
 /**
  * Calculate changes between old and new objects for specified fields.
  * Returns undefined if no changes detected.
+ * Uses JSON.stringify for comparison to handle objects/arrays correctly.
  */
 export function diffChanges<T extends Record<string, unknown>>(
   old: T | null,
   updated: T,
-  fields: (keyof T)[]
+  fields: (keyof T)[],
 ): Record<string, { old: unknown; new: unknown }> | undefined {
   const changes: Record<string, { old: unknown; new: unknown }> = {};
 
   for (const field of fields) {
     const oldVal = old?.[field];
     const newVal = updated[field];
-    if (oldVal !== newVal) {
+    // Use JSON.stringify for deep comparison (handles JSONB/object fields)
+    if (JSON.stringify(oldVal) !== JSON.stringify(newVal)) {
       changes[field as string] = { old: oldVal, new: newVal };
     }
   }

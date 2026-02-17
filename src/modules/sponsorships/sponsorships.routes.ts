@@ -9,13 +9,15 @@ import {
   getSponsorshipById,
   updateSponsorship,
   deleteSponsorship,
+  getSponsorshipClientId,
+} from "./sponsorships.service.js";
+import {
   linkSponsorshipToRegistration,
   linkSponsorshipByCode,
   unlinkSponsorshipFromRegistration,
   getAvailableSponsorships,
-  getSponsorshipClientId,
   getLinkedSponsorships,
-} from "./sponsorships.service.js";
+} from "./sponsorships-linking.service.js";
 import { getRegistrationById } from "@registrations";
 import {
   EventIdParamSchema,

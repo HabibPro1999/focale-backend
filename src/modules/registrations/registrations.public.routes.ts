@@ -6,6 +6,7 @@ import {
   verifyEditToken,
   uploadPaymentProof,
   getRegistrationByIdempotencyKey,
+  toPersistablePriceBreakdown,
 } from "./registrations.service.js";
 import { calculatePrice } from "@pricing";
 import { getFormById } from "@forms";
@@ -119,27 +120,9 @@ export async function registrationsPublicRoutes(
         sponsorshipCodes: input.sponsorshipCode ? [input.sponsorshipCode] : [],
       });
 
-      // Transform price breakdown to match our schema
-      // Note: calculatePrice uses 'extras' terminology, we'll adapt it
-      const registrationPriceBreakdown = {
-        basePrice: priceBreakdown.basePrice,
-        appliedRules: priceBreakdown.appliedRules,
-        calculatedBasePrice: priceBreakdown.calculatedBasePrice,
-        accessItems: priceBreakdown.extras.map((extra) => ({
-          accessId: extra.extraId,
-          name: extra.name,
-          unitPrice: extra.unitPrice,
-          quantity: extra.quantity,
-          subtotal: extra.subtotal,
-          status: "confirmed" as const, // Will be updated by createRegistration
-        })),
-        accessTotal: priceBreakdown.extrasTotal,
-        subtotal: priceBreakdown.subtotal,
-        sponsorships: priceBreakdown.sponsorships,
-        sponsorshipTotal: priceBreakdown.sponsorshipTotal,
-        total: priceBreakdown.total,
-        currency: priceBreakdown.currency,
-      };
+      // Transform price breakdown using shared helper
+      const registrationPriceBreakdown =
+        toPersistablePriceBreakdown(priceBreakdown);
 
       // Create registration
       const registration = await createRegistration(

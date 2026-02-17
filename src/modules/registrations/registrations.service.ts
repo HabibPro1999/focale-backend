@@ -2,6 +2,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from "crypto";
 import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { findOrThrow } from "@shared/utils/db.js";
 import { logger } from "@shared/utils/logger.js";
 import {
   paginate,
@@ -17,7 +18,10 @@ import {
   reserveAccessSpot,
   releaseAccessSpot,
 } from "@access";
-import { calculatePrice } from "@pricing";
+import {
+  calculatePrice,
+  type PriceBreakdown as PricingPriceBreakdown,
+} from "@pricing";
 import { queueTriggeredEmail } from "@email";
 import { cleanupSponsorshipsForRegistration } from "@sponsorships";
 import {
@@ -41,7 +45,8 @@ import type {
   SearchRegistrantsQuery,
   RegistrantSearchResult,
 } from "./registrations.schema.js";
-import type { Registration, Prisma } from "@/generated/prisma/client.js";
+import type { Registration } from "@/generated/prisma/client.js";
+import { Prisma } from "@/generated/prisma/client.js";
 
 // ============================================================================
 // Edit Token Configuration
@@ -81,20 +86,6 @@ function validatePaymentTransition(
       ErrorCodes.INVALID_PAYMENT_TRANSITION,
     );
   }
-}
-
-/**
- * Generate a secure random edit token.
- */
-function generateEditToken(): string {
-  return randomBytes(EDIT_TOKEN_LENGTH).toString("hex");
-}
-
-/**
- * Calculate edit token expiry date.
- */
-function getEditTokenExpiry(): Date {
-  return new Date(Date.now() + EDIT_TOKEN_EXPIRY_HOURS * 60 * 60 * 1000);
 }
 
 /**
@@ -145,7 +136,7 @@ type RegistrationWithRelations = Registration & {
     subtotal: number;
     access: {
       id: string;
-      name: string;
+      name: string | Record<string, string>;
       type: string;
       startsAt: Date | null;
       endsAt: Date | null;
@@ -179,6 +170,34 @@ function calculateDiscountAmount(
       .filter((rule) => rule.effect < 0)
       .reduce((sum, rule) => sum + rule.effect, 0),
   );
+}
+
+/**
+ * Transform pricing module PriceBreakdown to registration storage format.
+ * Maps 'extras'/'extrasTotal' to 'accessItems'/'accessTotal' and ensures
+ * consistent JSONB shape across create and edit paths.
+ */
+export function toPersistablePriceBreakdown(
+  pricingResult: PricingPriceBreakdown,
+): PriceBreakdown {
+  return {
+    basePrice: pricingResult.basePrice,
+    appliedRules: pricingResult.appliedRules,
+    calculatedBasePrice: pricingResult.calculatedBasePrice,
+    accessItems: pricingResult.extras.map((extra) => ({
+      accessId: extra.extraId,
+      name: extra.name,
+      unitPrice: extra.unitPrice,
+      quantity: extra.quantity,
+      subtotal: extra.subtotal,
+    })),
+    accessTotal: pricingResult.extrasTotal,
+    subtotal: pricingResult.subtotal,
+    sponsorships: pricingResult.sponsorships,
+    sponsorshipTotal: pricingResult.sponsorshipTotal,
+    total: pricingResult.total,
+    currency: pricingResult.currency,
+  };
 }
 
 /**
@@ -310,13 +329,14 @@ export async function createRegistration(
   } = input;
 
   // Get form and event info (including schemaVersion)
-  const form = await prisma.form.findUnique({
-    where: { id: formId },
-    select: { id: true, eventId: true, schemaVersion: true },
-  });
-  if (!form) {
-    throw new AppError("Form not found", 404, true, ErrorCodes.NOT_FOUND);
-  }
+  const form = await findOrThrow(
+    () =>
+      prisma.form.findUnique({
+        where: { id: formId },
+        select: { id: true, eventId: true, schemaVersion: true },
+      }),
+    { message: "Form not found", code: ErrorCodes.NOT_FOUND },
+  );
 
   const eventId = form.eventId;
 
@@ -352,124 +372,144 @@ export async function createRegistration(
   }
 
   // Create registration with access selections in a transaction
-  const result = await prisma.$transaction(async (tx) => {
-    // Re-check event status inside transaction to prevent TOCTOU race condition
-    // Event might have been closed between initial check and transaction start
-    const event = await tx.event.findUnique({
-      where: { id: eventId },
-      select: { status: true, maxCapacity: true, registeredCount: true },
-    });
+  let result;
+  try {
+    result = await prisma.$transaction(async (tx) => {
+      // Re-check event status inside transaction to prevent TOCTOU race condition
+      // Event might have been closed between initial check and transaction start
+      const event = await tx.event.findUnique({
+        where: { id: eventId },
+        select: { status: true, maxCapacity: true, registeredCount: true },
+      });
 
-    if (!event || event.status !== "OPEN") {
-      throw new AppError(
-        "Event is not accepting registrations",
-        400,
-        true,
-        ErrorCodes.EVENT_NOT_OPEN,
+      if (!event || event.status !== "OPEN") {
+        throw new AppError(
+          "Event is not accepting registrations",
+          400,
+          true,
+          ErrorCodes.EVENT_NOT_OPEN,
+        );
+      }
+
+      // Check event capacity
+      if (
+        event.maxCapacity !== null &&
+        event.registeredCount >= event.maxCapacity
+      ) {
+        throw new AppError(
+          "Event is at capacity",
+          409,
+          true,
+          ErrorCodes.EVENT_FULL,
+        );
+      }
+
+      // Generate edit token for secure self-service editing
+      const editToken = randomBytes(EDIT_TOKEN_LENGTH).toString("hex");
+      const editTokenExpiry = new Date(
+        Date.now() + EDIT_TOKEN_EXPIRY_HOURS * 60 * 60 * 1000,
       );
-    }
 
-    // Check event capacity
+      // Determine initial payment status (auto-waive zero-amount registrations)
+      const initialPaymentStatus =
+        priceBreakdown.total === 0 ? "WAIVED" : "PENDING";
+
+      // Create registration
+      const registration = await tx.registration.create({
+        data: {
+          formId,
+          eventId,
+          formData: formData as Prisma.InputJsonValue,
+          formSchemaVersion: form.schemaVersion,
+          email,
+          firstName: firstName ?? null,
+          lastName: lastName ?? null,
+          phone: phone ?? null,
+          paymentStatus: initialPaymentStatus,
+          paidAt: initialPaymentStatus === "WAIVED" ? new Date() : null,
+          totalAmount: priceBreakdown.total,
+          currency: priceBreakdown.currency,
+          priceBreakdown: priceBreakdown as unknown as Prisma.InputJsonValue,
+          // Denormalized financial columns for reporting
+          baseAmount: priceBreakdown.calculatedBasePrice,
+          discountAmount: calculateDiscountAmount(priceBreakdown.appliedRules),
+          accessAmount: priceBreakdown.accessTotal,
+          sponsorshipCode: sponsorshipCode ?? null,
+          sponsorshipAmount: priceBreakdown.sponsorshipTotal,
+          // Access type IDs for querying
+          accessTypeIds: accessSelections?.map((s) => s.accessId) ?? [],
+          // Edit token for secure public access
+          editToken,
+          editTokenExpiry,
+          // Browser origin URL for email links
+          linkBaseUrl: linkBaseUrl ?? null,
+          // Idempotency key for safe retries
+          idempotencyKey: idempotencyKey ?? null,
+        },
+      });
+
+      // Reserve access spots (capacity tracking)
+      if (accessSelections && accessSelections.length > 0) {
+        for (const selection of accessSelections) {
+          await reserveAccessSpot(selection.accessId, selection.quantity, tx);
+        }
+      }
+
+      // Increment event registered count (atomic SQL within transaction)
+      await incrementRegisteredCountTx(tx, eventId);
+
+      // Return full registration with derived accessSelections
+      const createdReg = await tx.registration.findUnique({
+        where: { id: registration.id },
+        include: {
+          form: { select: { id: true, name: true } },
+          event: {
+            select: { id: true, name: true, slug: true, clientId: true },
+          },
+        },
+      });
+
+      if (!createdReg) {
+        throw new AppError(
+          "Registration creation failed",
+          500,
+          true,
+          ErrorCodes.INTERNAL_ERROR,
+        );
+      }
+
+      // Create audit log for registration creation
+      await tx.auditLog.create({
+        data: {
+          entityType: "Registration",
+          entityId: registration.id,
+          action: "CREATE",
+          changes: {
+            email: { old: null, new: email },
+            firstName: { old: null, new: firstName ?? null },
+            lastName: { old: null, new: lastName ?? null },
+            totalAmount: { old: null, new: priceBreakdown.total },
+          },
+          performedBy: "PUBLIC",
+        },
+      });
+
+      return enrichWithAccessSelections(createdReg);
+    });
+  } catch (err) {
     if (
-      event.maxCapacity !== null &&
-      event.registeredCount >= event.maxCapacity
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === "P2002"
     ) {
       throw new AppError(
-        "Event is at capacity",
+        "A registration with this email already exists for this form",
         409,
         true,
-        ErrorCodes.EVENT_FULL,
+        ErrorCodes.REGISTRATION_ALREADY_EXISTS,
       );
     }
-
-    // Generate edit token for secure self-service editing
-    const editToken = generateEditToken();
-    const editTokenExpiry = getEditTokenExpiry();
-
-    // Determine initial payment status (auto-waive zero-amount registrations)
-    const initialPaymentStatus =
-      priceBreakdown.total === 0 ? "WAIVED" : "PENDING";
-
-    // Create registration
-    const registration = await tx.registration.create({
-      data: {
-        formId,
-        eventId,
-        formData: formData as Prisma.InputJsonValue,
-        formSchemaVersion: form.schemaVersion,
-        email,
-        firstName: firstName ?? null,
-        lastName: lastName ?? null,
-        phone: phone ?? null,
-        paymentStatus: initialPaymentStatus,
-        paidAt: initialPaymentStatus === "WAIVED" ? new Date() : null,
-        totalAmount: priceBreakdown.total,
-        currency: priceBreakdown.currency,
-        priceBreakdown: priceBreakdown as unknown as Prisma.InputJsonValue,
-        // Denormalized financial columns for reporting
-        baseAmount: priceBreakdown.calculatedBasePrice,
-        discountAmount: calculateDiscountAmount(priceBreakdown.appliedRules),
-        accessAmount: priceBreakdown.accessTotal,
-        sponsorshipCode: sponsorshipCode ?? null,
-        sponsorshipAmount: priceBreakdown.sponsorshipTotal,
-        // Access type IDs for querying
-        accessTypeIds: accessSelections?.map((s) => s.accessId) ?? [],
-        // Edit token for secure public access
-        editToken,
-        editTokenExpiry,
-        // Browser origin URL for email links
-        linkBaseUrl: linkBaseUrl ?? null,
-        // Idempotency key for safe retries
-        idempotencyKey: idempotencyKey ?? null,
-      },
-    });
-
-    // Reserve access spots (capacity tracking)
-    if (accessSelections && accessSelections.length > 0) {
-      for (const selection of accessSelections) {
-        await reserveAccessSpot(selection.accessId, selection.quantity, tx);
-      }
-    }
-
-    // Increment event registered count (atomic SQL within transaction)
-    await incrementRegisteredCountTx(tx, eventId);
-
-    // Return full registration with derived accessSelections
-    const createdReg = await tx.registration.findUnique({
-      where: { id: registration.id },
-      include: {
-        form: { select: { id: true, name: true } },
-        event: { select: { id: true, name: true, slug: true, clientId: true } },
-      },
-    });
-
-    if (!createdReg) {
-      throw new AppError(
-        "Registration creation failed",
-        500,
-        true,
-        ErrorCodes.INTERNAL_ERROR,
-      );
-    }
-
-    // Create audit log for registration creation
-    await tx.auditLog.create({
-      data: {
-        entityType: "Registration",
-        entityId: registration.id,
-        action: "CREATE",
-        changes: {
-          email: { old: null, new: email },
-          firstName: { old: null, new: firstName ?? null },
-          lastName: { old: null, new: lastName ?? null },
-          totalAmount: { old: null, new: priceBreakdown.total },
-        },
-        performedBy: "PUBLIC",
-      },
-    });
-
-    return enrichWithAccessSelections(createdReg);
-  });
+    throw err;
+  }
 
   // Queue confirmation email (fire and forget - don't block registration response)
   queueTriggeredEmail("REGISTRATION_CREATED", eventId, {
@@ -528,15 +568,13 @@ export async function updateRegistration(
   input: UpdateRegistrationInput,
   performedBy?: string,
 ): Promise<RegistrationWithRelations> {
-  const registration = await prisma.registration.findUnique({ where: { id } });
-  if (!registration) {
-    throw new AppError(
-      "Registration not found",
-      404,
-      true,
-      ErrorCodes.REGISTRATION_NOT_FOUND,
-    );
-  }
+  const registration = await findOrThrow(
+    () => prisma.registration.findUnique({ where: { id } }),
+    {
+      message: "Registration not found",
+      code: ErrorCodes.REGISTRATION_NOT_FOUND,
+    },
+  );
 
   const updateData: Prisma.RegistrationUpdateInput = {};
 
@@ -621,7 +659,16 @@ export async function updateRegistration(
     }
   });
 
-  return getRegistrationById(id) as Promise<RegistrationWithRelations>;
+  const updated = await getRegistrationById(id);
+  if (!updated) {
+    throw new AppError(
+      "Registration not found after update",
+      500,
+      true,
+      ErrorCodes.INTERNAL_ERROR,
+    );
+  }
+  return updated;
 }
 
 export async function confirmPayment(
@@ -632,28 +679,26 @@ export async function confirmPayment(
 ): Promise<RegistrationWithRelations> {
   // Update registration in a transaction with audit logging
   const result = await prisma.$transaction(async (tx) => {
-    const oldRegistration = await tx.registration.findUnique({
-      where: { id },
-      select: {
-        eventId: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        paymentStatus: true,
-        paidAmount: true,
-        paymentMethod: true,
-        totalAmount: true,
+    const oldRegistration = await findOrThrow(
+      () =>
+        tx.registration.findUnique({
+          where: { id },
+          select: {
+            eventId: true,
+            email: true,
+            firstName: true,
+            lastName: true,
+            paymentStatus: true,
+            paidAmount: true,
+            paymentMethod: true,
+            totalAmount: true,
+          },
+        }),
+      {
+        message: "Registration not found",
+        code: ErrorCodes.REGISTRATION_NOT_FOUND,
       },
-    });
-
-    if (!oldRegistration) {
-      throw new AppError(
-        "Registration not found",
-        404,
-        true,
-        ErrorCodes.REGISTRATION_NOT_FOUND,
-      );
-    }
+    );
 
     // Validate payment status transition
     validatePaymentTransition(
@@ -720,7 +765,16 @@ export async function confirmPayment(
     });
   }
 
-  return getRegistrationById(id) as Promise<RegistrationWithRelations>;
+  const updated = await getRegistrationById(id);
+  if (!updated) {
+    throw new AppError(
+      "Registration not found after update",
+      500,
+      true,
+      ErrorCodes.INTERNAL_ERROR,
+    );
+  }
+  return updated;
 }
 
 /**
@@ -731,26 +785,25 @@ export async function deleteRegistration(
   id: string,
   performedBy?: string,
 ): Promise<void> {
-  const registration = await prisma.registration.findUnique({
-    where: { id },
-    select: {
-      id: true,
-      eventId: true,
-      email: true,
-      firstName: true,
-      lastName: true,
-      paymentStatus: true,
-      priceBreakdown: true,
+  const registration = await findOrThrow(
+    () =>
+      prisma.registration.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          eventId: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+          paymentStatus: true,
+          priceBreakdown: true,
+        },
+      }),
+    {
+      message: "Registration not found",
+      code: ErrorCodes.REGISTRATION_NOT_FOUND,
     },
-  });
-  if (!registration) {
-    throw new AppError(
-      "Registration not found",
-      404,
-      true,
-      ErrorCodes.REGISTRATION_NOT_FOUND,
-    );
-  }
+  );
 
   // Only allow deletion of unpaid registrations
   const blockedStatuses = ["PAID", "WAIVED", "VERIFYING"];
@@ -960,21 +1013,6 @@ function findSpecifyOtherChild(
 }
 
 /**
- * Get default fixed columns when no form exists.
- */
-function getDefaultFixedColumns() {
-  return [
-    { id: "email", label: "Email", type: "email" },
-    { id: "firstName", label: "First Name", type: "text" },
-    { id: "lastName", label: "Last Name", type: "text" },
-    { id: "phone", label: "Phone", type: "phone" },
-    { id: "paymentStatus", label: "Payment", type: "payment" },
-    { id: "totalAmount", label: "Amount", type: "currency" },
-    { id: "createdAt", label: "Registered", type: "datetime" },
-  ];
-}
-
-/**
  * Get table column definitions for a registration table.
  * Returns dynamic columns from form schema + fixed columns from registration model.
  * Fixed column labels are derived from the form's first step fields.
@@ -989,7 +1027,18 @@ export async function getRegistrationTableColumns(
   });
 
   if (!form?.schema) {
-    return { formColumns: [], fixedColumns: getDefaultFixedColumns() };
+    return {
+      formColumns: [],
+      fixedColumns: [
+        { id: "email", label: "Email", type: "email" },
+        { id: "firstName", label: "First Name", type: "text" },
+        { id: "lastName", label: "Last Name", type: "text" },
+        { id: "phone", label: "Phone", type: "phone" },
+        { id: "paymentStatus", label: "Payment", type: "payment" },
+        { id: "totalAmount", label: "Amount", type: "currency" },
+        { id: "createdAt", label: "Registered", type: "datetime" },
+      ],
+    };
   }
 
   const schema = form.schema as FormSchemaSteps;
@@ -1098,11 +1147,6 @@ export async function getRegistrationClientId(
   return registration?.event.clientId ?? null;
 }
 
-export async function registrationExists(id: string): Promise<boolean> {
-  const count = await prisma.registration.count({ where: { id } });
-  return count > 0;
-}
-
 // ============================================================================
 // Public Self-Service Editing
 // ============================================================================
@@ -1141,30 +1185,28 @@ export type GetRegistrationForEditResult = {
 export async function getRegistrationForEdit(
   registrationId: string,
 ): Promise<GetRegistrationForEditResult> {
-  const registration = await prisma.registration.findUnique({
-    where: { id: registrationId },
-    include: {
-      form: { select: { id: true, name: true, schema: true } },
-      event: {
-        select: {
-          id: true,
-          name: true,
-          slug: true,
-          clientId: true,
-          status: true,
+  const registration = await findOrThrow(
+    () =>
+      prisma.registration.findUnique({
+        where: { id: registrationId },
+        include: {
+          form: { select: { id: true, name: true, schema: true } },
+          event: {
+            select: {
+              id: true,
+              name: true,
+              slug: true,
+              clientId: true,
+              status: true,
+            },
+          },
         },
-      },
+      }),
+    {
+      message: "Registration not found",
+      code: ErrorCodes.REGISTRATION_NOT_FOUND,
     },
-  });
-
-  if (!registration) {
-    throw new AppError(
-      "Registration not found",
-      404,
-      true,
-      ErrorCodes.REGISTRATION_NOT_FOUND,
-    );
-  }
+  );
 
   // Enrich with accessSelections derived from priceBreakdown
   const priceBreakdown = registration.priceBreakdown as PriceBreakdown;
@@ -1308,22 +1350,20 @@ export async function editRegistrationPublic(
   input: PublicEditRegistrationInput,
 ): Promise<EditRegistrationPublicResult> {
   // 1. Get current registration
-  const registration = await prisma.registration.findUnique({
-    where: { id: registrationId },
-    include: {
-      form: { select: { id: true, eventId: true, schema: true } },
-      event: { select: { id: true, status: true } },
+  const registration = await findOrThrow(
+    () =>
+      prisma.registration.findUnique({
+        where: { id: registrationId },
+        include: {
+          form: { select: { id: true, eventId: true, schema: true } },
+          event: { select: { id: true, status: true } },
+        },
+      }),
+    {
+      message: "Registration not found",
+      code: ErrorCodes.REGISTRATION_NOT_FOUND,
     },
-  });
-
-  if (!registration) {
-    throw new AppError(
-      "Registration not found",
-      404,
-      true,
-      ErrorCodes.REGISTRATION_NOT_FOUND,
-    );
-  }
+  );
 
   // 2. Validate registration can be edited
   if (registration.paymentStatus === "REFUNDED") {
@@ -1473,25 +1513,8 @@ export async function editRegistrationPublic(
       : [],
   });
 
-  // Transform to registration format
-  const newPriceBreakdown: PriceBreakdown = {
-    basePrice: calculatedPrice.basePrice,
-    appliedRules: calculatedPrice.appliedRules,
-    calculatedBasePrice: calculatedPrice.calculatedBasePrice,
-    accessItems: calculatedPrice.extras.map((extra) => ({
-      accessId: extra.extraId,
-      name: extra.name,
-      unitPrice: extra.unitPrice,
-      quantity: extra.quantity,
-      subtotal: extra.subtotal,
-    })),
-    accessTotal: calculatedPrice.extrasTotal,
-    subtotal: calculatedPrice.subtotal,
-    sponsorships: calculatedPrice.sponsorships,
-    sponsorshipTotal: calculatedPrice.sponsorshipTotal,
-    total: calculatedPrice.total,
-    currency: calculatedPrice.currency,
-  };
+  // Transform to registration format using shared helper
+  const newPriceBreakdown = toPersistablePriceBreakdown(calculatedPrice);
 
   // 10. Execute transaction
   await prisma.$transaction(async (tx) => {
@@ -1636,26 +1659,24 @@ export async function uploadPaymentProof(
   }
 
   // Get registration with event info and current status
-  const registration = await prisma.registration.findUnique({
-    where: { id: registrationId },
-    select: {
-      eventId: true,
-      email: true,
-      firstName: true,
-      lastName: true,
-      paymentStatus: true,
-      paymentProofUrl: true,
+  const registration = await findOrThrow(
+    () =>
+      prisma.registration.findUnique({
+        where: { id: registrationId },
+        select: {
+          eventId: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+          paymentStatus: true,
+          paymentProofUrl: true,
+        },
+      }),
+    {
+      message: "Registration not found",
+      code: ErrorCodes.REGISTRATION_NOT_FOUND,
     },
-  });
-
-  if (!registration) {
-    throw new AppError(
-      "Registration not found",
-      404,
-      true,
-      ErrorCodes.REGISTRATION_NOT_FOUND,
-    );
-  }
+  );
 
   // Only allow proof upload from PENDING or VERIFYING status
   validatePaymentTransition(registration.paymentStatus, "VERIFYING");

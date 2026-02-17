@@ -622,6 +622,9 @@ describe("Email Queue Service", () => {
     const emailLogId = "log-123";
 
     it("should update status to DELIVERED", async () => {
+      prismaMock.emailLog.findUnique.mockResolvedValue(
+        createMockEmailLog({ status: "SENT" }),
+      );
       prismaMock.emailLog.update.mockResolvedValue(createMockEmailLog());
 
       await updateEmailStatusFromWebhook(emailLogId, "delivered");
@@ -636,6 +639,9 @@ describe("Email Queue Service", () => {
     });
 
     it("should update status to OPENED", async () => {
+      prismaMock.emailLog.findUnique.mockResolvedValue(
+        createMockEmailLog({ status: "DELIVERED" }),
+      );
       prismaMock.emailLog.update.mockResolvedValue(createMockEmailLog());
 
       await updateEmailStatusFromWebhook(emailLogId, "open");
@@ -650,6 +656,9 @@ describe("Email Queue Service", () => {
     });
 
     it("should update status to CLICKED", async () => {
+      prismaMock.emailLog.findUnique.mockResolvedValue(
+        createMockEmailLog({ status: "OPENED" }),
+      );
       prismaMock.emailLog.update.mockResolvedValue(createMockEmailLog());
 
       await updateEmailStatusFromWebhook(emailLogId, "click", {
@@ -666,6 +675,9 @@ describe("Email Queue Service", () => {
     });
 
     it("should update status to BOUNCED with reason", async () => {
+      prismaMock.emailLog.findUnique.mockResolvedValue(
+        createMockEmailLog({ status: "DELIVERED" }),
+      );
       prismaMock.emailLog.update.mockResolvedValue(createMockEmailLog());
 
       await updateEmailStatusFromWebhook(emailLogId, "bounce", {
@@ -683,6 +695,9 @@ describe("Email Queue Service", () => {
     });
 
     it("should update status to BOUNCED with default reason", async () => {
+      prismaMock.emailLog.findUnique.mockResolvedValue(
+        createMockEmailLog({ status: "SENT" }),
+      );
       prismaMock.emailLog.update.mockResolvedValue(createMockEmailLog());
 
       await updateEmailStatusFromWebhook(emailLogId, "bounce");
@@ -696,6 +711,9 @@ describe("Email Queue Service", () => {
     });
 
     it("should update status to DROPPED with reason", async () => {
+      prismaMock.emailLog.findUnique.mockResolvedValue(
+        createMockEmailLog({ status: "SENT" }),
+      );
       prismaMock.emailLog.update.mockResolvedValue(createMockEmailLog());
 
       await updateEmailStatusFromWebhook(emailLogId, "dropped", {
@@ -712,6 +730,9 @@ describe("Email Queue Service", () => {
     });
 
     it("should update status to DROPPED with default reason", async () => {
+      prismaMock.emailLog.findUnique.mockResolvedValue(
+        createMockEmailLog({ status: "SENT" }),
+      );
       prismaMock.emailLog.update.mockResolvedValue(createMockEmailLog());
 
       await updateEmailStatusFromWebhook(emailLogId, "dropped");
@@ -725,6 +746,9 @@ describe("Email Queue Service", () => {
     });
 
     it("should handle update errors gracefully", async () => {
+      prismaMock.emailLog.findUnique.mockResolvedValue(
+        createMockEmailLog({ status: "SENT" }),
+      );
       prismaMock.emailLog.update.mockRejectedValue(new Error("Database error"));
 
       // Should not throw

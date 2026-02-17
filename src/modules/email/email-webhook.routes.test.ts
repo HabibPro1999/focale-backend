@@ -98,7 +98,7 @@ describe("Email Webhook Routes", () => {
 
       expect(response.statusCode).toBe(401);
       expect(JSON.parse(response.body)).toMatchObject({
-        code: "EML_15002",
+        code: "EML_16002",
       });
     });
 
@@ -114,7 +114,7 @@ describe("Email Webhook Routes", () => {
 
       expect(response.statusCode).toBe(401);
       expect(JSON.parse(response.body)).toMatchObject({
-        code: "EML_15002",
+        code: "EML_16002",
       });
     });
 
@@ -130,7 +130,7 @@ describe("Email Webhook Routes", () => {
 
       expect(response.statusCode).toBe(401);
       expect(JSON.parse(response.body)).toMatchObject({
-        code: "EML_15002",
+        code: "EML_16002",
       });
     });
 

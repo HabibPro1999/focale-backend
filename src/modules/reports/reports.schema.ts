@@ -94,17 +94,6 @@ export const FinancialReportResponseSchema = z.object({
   dailyTrend: z.array(DailyTrendItemSchema),
 });
 
-export const ExportResponseSchema = z.object({
-  filename: z.string(),
-  contentType: z.string(),
-  data: z.string(),
-  metadata: z.object({
-    total: z.number(),
-    exported: z.number(),
-    truncated: z.boolean(),
-  }),
-});
-
 // ============================================================================
 // Type Exports
 // ============================================================================
@@ -121,4 +110,3 @@ export type DailyTrendItem = z.infer<typeof DailyTrendItemSchema>;
 export type FinancialReportResponse = z.infer<
   typeof FinancialReportResponseSchema
 >;
-export type ExportResponse = z.infer<typeof ExportResponseSchema>;

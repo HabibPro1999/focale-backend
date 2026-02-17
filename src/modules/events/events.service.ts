@@ -7,6 +7,7 @@ import {
   getSkip,
   type PaginatedResult,
 } from "@shared/utils/pagination.js";
+import { auditLog, diffChanges } from "@shared/utils/audit.js";
 import type {
   CreateEventInput,
   UpdateEventInput,
@@ -26,6 +27,7 @@ type EventWithPricing = Event & { pricing: EventPricing | null };
  */
 export async function createEvent(
   input: CreateEventInput,
+  performedBy: string,
 ): Promise<EventWithPricing> {
   const {
     clientId,
@@ -48,7 +50,7 @@ export async function createEvent(
   }
 
   // Create Event and EventPricing atomically
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     // Check if slug already exists globally
     const existing = await tx.event.findUnique({
       where: { slug },
@@ -86,6 +88,16 @@ export async function createEvent(
 
     return { ...event, pricing };
   });
+
+  // Log after transaction succeeds
+  await auditLog(prisma, {
+    entityType: "Event",
+    entityId: result.id,
+    action: "CREATE",
+    performedBy,
+  });
+
+  return result;
 }
 
 /**
@@ -125,9 +137,13 @@ const VALID_STATUS_TRANSITIONS: Record<string, string[]> = {
 export async function updateEvent(
   id: string,
   input: UpdateEventInput,
-): Promise<Event> {
+  performedBy: string,
+): Promise<EventWithPricing> {
   // Check if event exists
-  const event = await prisma.event.findUnique({ where: { id } });
+  const event = await prisma.event.findUnique({
+    where: { id },
+    include: { pricing: true },
+  });
   if (!event) {
     throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
   }
@@ -143,6 +159,19 @@ export async function updateEvent(
         ErrorCodes.INVALID_STATUS_TRANSITION,
       );
     }
+  }
+
+  // Validate dates when partially updated
+  const effectiveStartDate = input.startDate ?? event.startDate;
+  const effectiveEndDate = input.endDate ?? event.endDate;
+
+  if (effectiveEndDate < effectiveStartDate) {
+    throw new AppError(
+      "End date must be greater than or equal to start date",
+      400,
+      true,
+      ErrorCodes.VALIDATION_ERROR,
+    );
   }
 
   return prisma.$transaction(async (tx) => {
@@ -161,10 +190,34 @@ export async function updateEvent(
       }
     }
 
-    return tx.event.update({
+    const updatedEvent = await tx.event.update({
       where: { id },
       data: input,
+      include: { pricing: true },
     });
+
+    // Log update inside transaction
+    const relevantFields: (keyof typeof event)[] = [
+      "name",
+      "slug",
+      "description",
+      "maxCapacity",
+      "startDate",
+      "endDate",
+      "location",
+      "status",
+    ];
+    const changes = diffChanges(event, updatedEvent, relevantFields);
+
+    await auditLog(tx, {
+      entityType: "Event",
+      entityId: id,
+      action: "UPDATE",
+      changes,
+      performedBy,
+    });
+
+    return updatedEvent;
   });
 }
 
@@ -207,7 +260,10 @@ export async function listEvents(
  * Delete event.
  * Prevents deletion if event has registrations - use archive instead.
  */
-export async function deleteEvent(id: string): Promise<void> {
+export async function deleteEvent(
+  id: string,
+  performedBy: string,
+): Promise<void> {
   // Check if event exists and count related data
   const event = await prisma.event.findUnique({
     where: { id },
@@ -234,6 +290,14 @@ export async function deleteEvent(id: string): Promise<void> {
     );
   }
 
+  // Log deletion before deleting
+  await auditLog(prisma, {
+    entityType: "Event",
+    entityId: id,
+    action: "DELETE",
+    performedBy,
+  });
+
   await prisma.event.delete({ where: { id } });
 }
 
@@ -243,16 +307,6 @@ export async function deleteEvent(id: string): Promise<void> {
 export async function eventExists(id: string): Promise<boolean> {
   const count = await prisma.event.count({ where: { id } });
   return count > 0;
-}
-
-/**
- * Increment registered count for an event.
- */
-export async function incrementRegisteredCount(id: string): Promise<Event> {
-  return prisma.event.update({
-    where: { id },
-    data: { registeredCount: { increment: 1 } },
-  });
 }
 
 /**
@@ -278,16 +332,6 @@ export async function incrementRegisteredCountTx(
       ErrorCodes.EVENT_FULL,
     );
   }
-}
-
-/**
- * Decrement registered count for an event.
- */
-export async function decrementRegisteredCount(id: string): Promise<Event> {
-  return prisma.event.update({
-    where: { id },
-    data: { registeredCount: { decrement: 1 } },
-  });
 }
 
 /**

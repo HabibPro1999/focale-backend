@@ -39,20 +39,8 @@ const CODE_LENGTH = 4;
 const CODE_PREFIX = "SP-";
 
 /**
- * Generate a sponsorship code in format SP-XXXX.
+ * Generate a unique sponsorship code (SP-XXXX) by checking against existing codes.
  * Uses characters: A-Z (except O, I, L) and 2-9.
- */
-export function generateSponsorshipCode(): string {
-  let code = "";
-  for (let i = 0; i < CODE_LENGTH; i++) {
-    const randomIndex = randomInt(CODE_CHARS.length);
-    code += CODE_CHARS[randomIndex];
-  }
-  return `${CODE_PREFIX}${code}`;
-}
-
-/**
- * Generate a unique sponsorship code by checking against existing codes.
  * Retries up to maxAttempts times before throwing an error.
  */
 export async function generateUniqueCode(
@@ -60,7 +48,11 @@ export async function generateUniqueCode(
   maxAttempts = 10,
 ): Promise<string> {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const code = generateSponsorshipCode();
+    let code = "";
+    for (let i = 0; i < CODE_LENGTH; i++) {
+      code += CODE_CHARS[randomInt(CODE_CHARS.length)];
+    }
+    code = `${CODE_PREFIX}${code}`;
     const existing = await db.sponsorship.findUnique({
       where: { code },
       select: { id: true },

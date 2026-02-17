@@ -13,7 +13,11 @@ import { usersRoutes } from "@identity";
 import { clientsRoutes } from "@clients";
 import { eventsRoutes } from "@events";
 import { formsRoutes, formsPublicRoutes } from "@forms";
-import { pricingRulesRoutes, pricingPublicRoutes } from "@pricing";
+import {
+  pricingRulesRoutes,
+  pricingPublicRoutes,
+  pricingPaymentConfigPublicRoutes,
+} from "@pricing";
 import { accessRoutes, accessPublicRoutes } from "@access";
 import {
   registrationsRoutes,
@@ -57,6 +61,7 @@ export async function buildServer(): Promise<AppInstance> {
       {
         status: "healthy" | "unhealthy" | "degraded";
         latencyMs?: number;
+        heapUsedMB?: number;
         error?: string;
       }
     > = {};
@@ -84,7 +89,7 @@ export async function buildServer(): Promise<AppInstance> {
 
     checks.memory = {
       status: heapPercent > 90 ? "degraded" : "healthy",
-      latencyMs: heapUsedMB, // Using this field to report heap usage in MB
+      heapUsedMB,
     };
 
     // Determine overall status
@@ -142,6 +147,9 @@ export async function buildServer(): Promise<AppInstance> {
   // Pricing routes
   await app.register(pricingRulesRoutes, { prefix: "/api/events" });
   await app.register(pricingPublicRoutes, { prefix: "/api" });
+  await app.register(pricingPaymentConfigPublicRoutes, {
+    prefix: "/api/public/events",
+  });
 
   // Access routes (replaces eventExtrasRoutes)
   await app.register(accessRoutes, { prefix: "/api/events" });

@@ -9,6 +9,18 @@ import {
 import { updateEmailStatusFromWebhook } from "./email-queue.service.js";
 import { SendGridWebhookBodySchema } from "./email-webhook.schema.js";
 
+// Module-level constant — avoid recreating on every request
+const EVENT_TYPE_MAP: Record<
+  string,
+  "delivered" | "open" | "click" | "bounce" | "dropped"
+> = {
+  delivered: "delivered",
+  open: "open",
+  click: "click",
+  bounce: "bounce",
+  dropped: "dropped",
+};
+
 interface RequestWithRawBody {
   rawBody: string | Buffer;
 }
@@ -93,62 +105,52 @@ export async function emailWebhookRoutes(app: AppInstance): Promise<void> {
         return reply.status(200).send({ received: true });
       }
 
-      // Process events
-      for (const event of events) {
-        try {
-          // Skip events without emailLogId
-          if (!event.emailLogId) {
-            app.log.debug(
-              { event: event.event, email: event.email },
-              "Skipping event without emailLogId",
+      // Process events concurrently — one failure must not block others
+      await Promise.allSettled(
+        events.map(async (event) => {
+          try {
+            // Skip events without emailLogId
+            if (!event.emailLogId) {
+              app.log.debug(
+                { event: event.event, email: event.email },
+                "Skipping event without emailLogId",
+              );
+              return;
+            }
+
+            const mappedEventType = EVENT_TYPE_MAP[event.event];
+            if (!mappedEventType) {
+              // Ignore unsupported event types (processed, deferred, spam_report, etc.)
+              app.log.debug(
+                { event: event.event },
+                "Ignoring unsupported event type",
+              );
+              return;
+            }
+
+            // Update email log status
+            await updateEmailStatusFromWebhook(
+              event.emailLogId,
+              mappedEventType,
+              {
+                url: event.url,
+                reason: event.reason,
+              },
             );
-            continue;
-          }
 
-          // Map SendGrid event types to our status update function
-          const eventTypeMap: Record<
-            string,
-            "delivered" | "open" | "click" | "bounce" | "dropped"
-          > = {
-            delivered: "delivered",
-            open: "open",
-            click: "click",
-            bounce: "bounce",
-            dropped: "dropped",
-          };
-
-          const mappedEventType = eventTypeMap[event.event];
-          if (!mappedEventType) {
-            // Ignore unsupported event types (processed, deferred, spam_report, etc.)
-            app.log.debug(
-              { event: event.event },
-              "Ignoring unsupported event type",
+            app.log.info(
+              { emailLogId: event.emailLogId, event: event.event },
+              "Processed webhook event",
             );
-            continue;
+          } catch (err) {
+            // Log individual event processing errors but do not rethrow
+            app.log.error(
+              { err, event: event.event, emailLogId: event.emailLogId },
+              "Failed to process individual webhook event",
+            );
           }
-
-          // Update email log status
-          await updateEmailStatusFromWebhook(
-            event.emailLogId,
-            mappedEventType,
-            {
-              url: event.url,
-              reason: event.reason,
-            },
-          );
-
-          app.log.info(
-            { emailLogId: event.emailLogId, event: event.event },
-            "Processed webhook event",
-          );
-        } catch (err) {
-          // Log individual event processing errors but continue with others
-          app.log.error(
-            { err, event: event.event, emailLogId: event.emailLogId },
-            "Failed to process individual webhook event",
-          );
-        }
-      }
+        }),
+      );
 
       // Always return 200 to SendGrid to prevent retries
       return reply.status(200).send({ received: true });

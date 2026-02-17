@@ -4,6 +4,25 @@ import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { UserRole } from "@modules/identity/permissions.js";
 import { getClientById } from "@clients";
 import type { ModuleId } from "@clients";
+import { SimpleCache } from "@shared/utils/cache.js";
+import type { Client } from "@/generated/prisma/client.js";
+
+// Cache client lookups for 60 seconds to reduce DB hits
+const clientCache = new SimpleCache<Client>(60);
+
+/**
+ * Invalidate client cache entry (call when client is updated/deleted).
+ */
+export function invalidateClientCache(clientId: string): void {
+  clientCache.invalidate(clientId);
+}
+
+/**
+ * Clear all client cache entries (useful for testing).
+ */
+export function clearClientCache(): void {
+  clientCache.clear();
+}
 
 /**
  * Factory function to create middleware that checks if the user's client
@@ -41,8 +60,18 @@ export function requireModule(...modules: ModuleId[]) {
       );
     }
 
-    // Fetch client to check enabledModules
-    const client = await getClientById(request.user.clientId);
+    // Check cache first
+    let client = clientCache.get(request.user.clientId);
+
+    if (!client) {
+      // Fetch client to check enabledModules
+      const fetchedClient = await getClientById(request.user.clientId);
+      if (fetchedClient) {
+        client = fetchedClient;
+        clientCache.set(request.user.clientId, client);
+      }
+    }
+
     if (!client) {
       throw new AppError("Client not found", 403, true, ErrorCodes.FORBIDDEN);
     }

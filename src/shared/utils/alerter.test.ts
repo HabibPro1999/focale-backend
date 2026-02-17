@@ -1,12 +1,23 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { sendAlert, type AlertPayload } from "./alerter.js";
-import { config } from "@config/app.config.js";
+import { type AlertPayload } from "./alerter.js";
+
+// Mock config module to control alertWebhookUrl per test
+const mockConfig = {
+  alertWebhookUrl: undefined as string | undefined,
+};
+vi.mock("@config/app.config.js", () => ({
+  config: mockConfig,
+}));
+
+// Import after mock
+const { sendAlert } = await import("./alerter.js");
 
 describe("Alerter", () => {
   let fetchSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     fetchSpy = vi.spyOn(globalThis, "fetch");
+    mockConfig.alertWebhookUrl = undefined;
   });
 
   afterEach(() => {
@@ -15,11 +26,7 @@ describe("Alerter", () => {
 
   describe("sendAlert", () => {
     it("should be no-op when ALERT_WEBHOOK_URL is not configured", async () => {
-      // Save original value
-      const originalUrl = config.alertWebhookUrl;
-
-      // Temporarily set to undefined
-      (config as { alertWebhookUrl?: string }).alertWebhookUrl = undefined;
+      mockConfig.alertWebhookUrl = undefined;
 
       const payload: AlertPayload = {
         title: "Test Alert",
@@ -33,18 +40,10 @@ describe("Alerter", () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
 
       expect(fetchSpy).not.toHaveBeenCalled();
-
-      // Restore original value
-      (config as { alertWebhookUrl?: string }).alertWebhookUrl = originalUrl;
     });
 
     it("should send webhook request successfully", async () => {
-      // Save original value
-      const originalUrl = config.alertWebhookUrl;
-
-      // Set webhook URL
-      (config as { alertWebhookUrl?: string }).alertWebhookUrl =
-        "https://hooks.slack.com/test";
+      mockConfig.alertWebhookUrl = "https://hooks.slack.com/test";
 
       fetchSpy.mockResolvedValue(
         new Response(null, { status: 200, statusText: "OK" }),
@@ -71,18 +70,10 @@ describe("Alerter", () => {
           },
         }),
       );
-
-      // Restore original value
-      (config as { alertWebhookUrl?: string }).alertWebhookUrl = originalUrl;
     });
 
     it("should handle fetch failure gracefully", async () => {
-      // Save original value
-      const originalUrl = config.alertWebhookUrl;
-
-      // Set webhook URL
-      (config as { alertWebhookUrl?: string }).alertWebhookUrl =
-        "https://hooks.slack.com/test";
+      mockConfig.alertWebhookUrl = "https://hooks.slack.com/test";
 
       fetchSpy.mockRejectedValue(new Error("Network error"));
 
@@ -99,18 +90,10 @@ describe("Alerter", () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
 
       expect(fetchSpy).toHaveBeenCalled();
-
-      // Restore original value
-      (config as { alertWebhookUrl?: string }).alertWebhookUrl = originalUrl;
     });
 
     it("should format webhook body correctly for all severity levels", async () => {
-      // Save original value
-      const originalUrl = config.alertWebhookUrl;
-
-      // Set webhook URL
-      (config as { alertWebhookUrl?: string }).alertWebhookUrl =
-        "https://hooks.slack.com/test";
+      mockConfig.alertWebhookUrl = "https://hooks.slack.com/test";
 
       const severities: AlertPayload["severity"][] = [
         "info",
@@ -144,18 +127,10 @@ describe("Alerter", () => {
           }),
         );
       }
-
-      // Restore original value
-      (config as { alertWebhookUrl?: string }).alertWebhookUrl = originalUrl;
     });
 
     it("should include context in webhook body when provided", async () => {
-      // Save original value
-      const originalUrl = config.alertWebhookUrl;
-
-      // Set webhook URL
-      (config as { alertWebhookUrl?: string }).alertWebhookUrl =
-        "https://hooks.slack.com/test";
+      mockConfig.alertWebhookUrl = "https://hooks.slack.com/test";
 
       fetchSpy.mockResolvedValue(
         new Response(null, { status: 200, statusText: "OK" }),
@@ -179,18 +154,10 @@ describe("Alerter", () => {
       expect(requestBody.text).toContain("Context:");
       expect(requestBody.text).toContain("userId");
       expect(requestBody.text).toContain("123");
-
-      // Restore original value
-      (config as { alertWebhookUrl?: string }).alertWebhookUrl = originalUrl;
     });
 
     it("should handle non-200 response status", async () => {
-      // Save original value
-      const originalUrl = config.alertWebhookUrl;
-
-      // Set webhook URL
-      (config as { alertWebhookUrl?: string }).alertWebhookUrl =
-        "https://hooks.slack.com/test";
+      mockConfig.alertWebhookUrl = "https://hooks.slack.com/test";
 
       fetchSpy.mockResolvedValue(
         new Response(null, {
@@ -212,9 +179,6 @@ describe("Alerter", () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
 
       expect(fetchSpy).toHaveBeenCalled();
-
-      // Restore original value
-      (config as { alertWebhookUrl?: string }).alertWebhookUrl = originalUrl;
     });
   });
 });

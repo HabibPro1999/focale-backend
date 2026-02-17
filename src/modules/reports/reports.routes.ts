@@ -82,7 +82,11 @@ export async function reportsRoutes(app: AppInstance): Promise<void> {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
 
-      const result = await exportRegistrations(eventId, request.query);
+      const result = await exportRegistrations(
+        eventId,
+        event.slug,
+        request.query,
+      );
 
       return reply
         .header("Content-Type", result.contentType)

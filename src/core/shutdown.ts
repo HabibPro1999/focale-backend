@@ -6,8 +6,7 @@ const SHUTDOWN_TIMEOUT_MS = 30000; // 30 seconds max for graceful shutdown
 
 export function gracefulShutdown(
   server: FastifyInstance,
-  emailQueueInterval?: ReturnType<typeof setInterval> | null,
-  getActiveProcessing?: () => Promise<unknown> | null,
+  cleanupHooks: Array<() => Promise<void>> = [],
 ) {
   const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM"];
   let isShuttingDown = false;
@@ -28,23 +27,9 @@ export function gracefulShutdown(
 
       void (async () => {
         try {
-          // Stop email queue worker (no new iterations)
-          if (emailQueueInterval) {
-            clearInterval(emailQueueInterval);
-            logger.info("Email queue worker stopped");
-          }
-
-          // Wait for in-flight email processing to complete
-          const activePromise = getActiveProcessing?.();
-          if (activePromise) {
-            logger.info(
-              "Waiting for in-flight email processing to complete...",
-            );
-            await Promise.race([
-              activePromise,
-              new Promise((resolve) => setTimeout(resolve, 10_000)), // 10s max wait
-            ]);
-            logger.info("In-flight email processing completed");
+          // Run cleanup hooks
+          for (const hook of cleanupHooks) {
+            await hook();
           }
 
           // Stop accepting new connections

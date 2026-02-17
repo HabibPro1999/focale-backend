@@ -424,19 +424,16 @@ export async function listEventAccess(
 
 export async function getEventAccessById(
   id: string,
-): Promise<EventAccessWithPrerequisites | null> {
+): Promise<
+  (EventAccessWithPrerequisites & { event: { clientId: string } }) | null
+> {
   return prisma.eventAccess.findUnique({
     where: { id },
-    include: { requiredAccess: { select: { id: true, name: true } } },
+    include: {
+      requiredAccess: { select: { id: true, name: true } },
+      event: { select: { clientId: true } },
+    },
   });
-}
-
-export async function getAccessClientId(id: string): Promise<string | null> {
-  const access = await prisma.eventAccess.findUnique({
-    where: { id },
-    include: { event: { select: { clientId: true } } },
-  });
-  return access?.event.clientId ?? null;
 }
 
 // ============================================================================
@@ -559,16 +556,8 @@ export async function getGroupedAccess(
           selectionType: (slotItems.length > 1 ? "single" : "multiple") as
             | "single"
             | "multiple",
-          items: slotItems.sort((a, b) => {
-            // Sort by time within the slot
-            if (a.startsAt && b.startsAt) {
-              const timeA = a.startsAt.getTime();
-              const timeB = b.startsAt.getTime();
-              if (timeA !== timeB) return timeA - timeB;
-            }
-            // Then by sortOrder
-            return a.sortOrder - b.sortOrder;
-          }),
+          // Items in a slot all share the same startsAt, so sort by sortOrder only
+          items: slotItems.sort((a, b) => a.sortOrder - b.sortOrder),
         }))
         .sort((a, b) => {
           // Sort slots by time (null times at end)
@@ -627,7 +616,11 @@ export async function reserveAccessSpot(
   `;
 
   if (updateResult === 0) {
-    // Either access not found or capacity exceeded - determine which
+    // Either access not found or capacity exceeded - determine which.
+    // Note: TransactionClient only exposes $executeRaw; for this read-only
+    // diagnostic query we use the global prisma client. The data may be
+    // slightly stale within the transaction, but it is only used for error
+    // message generation, not for any decision logic.
     const access = await prisma.eventAccess.findUnique({
       where: { id: accessId },
       select: { name: true, maxCapacity: true, registeredCount: true },

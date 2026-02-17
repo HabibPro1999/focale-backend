@@ -1,5 +1,14 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { prismaMock } from "../../../tests/mocks/prisma.js";
+
+// Local type for items returned inside time slots (items field is z.unknown() in schema)
+type SlotItem = Record<string, unknown> & {
+  id?: string;
+  type?: string;
+  name?: string;
+  spotsRemaining?: number | null;
+  isFull?: boolean;
+};
 import {
   createMockEventAccess,
   createMockEvent,
@@ -10,7 +19,6 @@ import {
   deleteEventAccess,
   listEventAccess,
   getEventAccessById,
-  getAccessClientId,
   getGroupedAccess,
   reserveAccessSpot,
   releaseAccessSpot,
@@ -195,14 +203,6 @@ describe("Access Service", () => {
           }),
         }),
       );
-    });
-
-    it("should detect circular prerequisites (tested via update)", async () => {
-      // Circular dependency detection is primarily tested in updateEventAccess
-      // where we have existing access to work with. Creating with circular deps
-      // is rare since it requires the cycle to exist before creation.
-      // See updateEventAccess tests for comprehensive circular dep testing.
-      expect(true).toBe(true);
     });
 
     it("should allow valid prerequisites on create", async () => {
@@ -524,32 +524,6 @@ describe("Access Service", () => {
     });
   });
 
-  describe("getAccessClientId", () => {
-    it("should return client ID for access", async () => {
-      const accessId = "access-1";
-      const accessWithEvent = {
-        id: accessId,
-        event: { clientId },
-      };
-
-      prismaMock.eventAccess.findUnique.mockResolvedValue(
-        accessWithEvent as never,
-      );
-
-      const result = await getAccessClientId(accessId);
-
-      expect(result).toBe(clientId);
-    });
-
-    it("should return null when access not found", async () => {
-      prismaMock.eventAccess.findUnique.mockResolvedValue(null);
-
-      const result = await getAccessClientId("non-existent");
-
-      expect(result).toBeNull();
-    });
-  });
-
   // ============================================================================
   // Grouped Access (Hierarchical Type → Time Slots)
   // ============================================================================
@@ -595,7 +569,7 @@ describe("Access Service", () => {
       expect(result.groups.length).toBe(2);
       // Groups are organized by date, items within slots have type
       const allItems = result.groups.flatMap((g) =>
-        g.slots.flatMap((s) => s.items),
+        g.slots.flatMap((s) => s.items as SlotItem[]),
       );
       const workshopItems = allItems.filter((i) => i.type === "WORKSHOP");
       const dinnerItems = allItems.filter((i) => i.type === "DINNER");
@@ -726,7 +700,7 @@ describe("Access Service", () => {
 
       // Only the 'available' item should be visible (no date restrictions)
       const allItems = result.groups.flatMap((g) =>
-        g.slots.flatMap((s) => s.items),
+        g.slots.flatMap((s) => s.items as SlotItem[]),
       );
       expect(allItems).toHaveLength(1);
       expect(allItems[0].id).toBe("available");
@@ -761,7 +735,7 @@ describe("Access Service", () => {
         [],
       );
       const doctorItems = resultDoctor.groups.flatMap((g) =>
-        g.slots.flatMap((s) => s.items),
+        g.slots.flatMap((s) => s.items as SlotItem[]),
       );
       expect(doctorItems).toHaveLength(2);
 
@@ -772,7 +746,7 @@ describe("Access Service", () => {
         [],
       );
       const nonDoctorItems = resultNonDoctor.groups.flatMap((g) =>
-        g.slots.flatMap((s) => s.items),
+        g.slots.flatMap((s) => s.items as SlotItem[]),
       );
       expect(nonDoctorItems).toHaveLength(1);
     });
@@ -801,7 +775,7 @@ describe("Access Service", () => {
       // Without prerequisite selected - should only show SESSION (no prereq required)
       const resultWithoutPrereq = await getGroupedAccess(eventId, {}, []);
       const itemsNoPrereq = resultWithoutPrereq.groups.flatMap((g) =>
-        g.slots.flatMap((s) => s.items),
+        g.slots.flatMap((s) => s.items as SlotItem[]),
       );
       const workshopItemsNoPrereq = itemsNoPrereq.filter(
         (i) => i.type === "WORKSHOP",
@@ -813,7 +787,7 @@ describe("Access Service", () => {
         prerequisiteId,
       ]);
       const itemsWithPrereq = resultWithPrereq.groups.flatMap((g) =>
-        g.slots.flatMap((s) => s.items),
+        g.slots.flatMap((s) => s.items as SlotItem[]),
       );
       const workshopItemsWithPrereq = itemsWithPrereq.filter(
         (i) => i.type === "WORKSHOP",
@@ -854,7 +828,7 @@ describe("Access Service", () => {
       const result = await getGroupedAccess(eventId, {}, []);
 
       const items = result.groups.flatMap((g) =>
-        g.slots.flatMap((s) => s.items),
+        g.slots.flatMap((s) => s.items as SlotItem[]),
       );
 
       const fullItem = items.find((i) => i.id === "full-workshop");
@@ -891,7 +865,7 @@ describe("Access Service", () => {
       // Items are grouped by date, not by type
       expect(result.groups).toHaveLength(1);
       const items = result.groups.flatMap((g) =>
-        g.slots.flatMap((s) => s.items),
+        g.slots.flatMap((s) => s.items as SlotItem[]),
       );
       expect(items).toHaveLength(1);
       expect(items[0].type).toBe("OTHER");

@@ -16,7 +16,6 @@ import {
   listRegistrations,
   verifyEditToken,
   getRegistrationClientId,
-  registrationExists,
   getRegistrationForEdit,
   editRegistrationPublic,
   uploadPaymentProof,
@@ -902,24 +901,6 @@ describe("Registrations Service", () => {
       const result = await getRegistrationClientId("non-existent");
 
       expect(result).toBeNull();
-    });
-  });
-
-  describe("registrationExists", () => {
-    it("should return true when registration exists", async () => {
-      prismaMock.registration.count.mockResolvedValue(1);
-
-      const result = await registrationExists("reg-id");
-
-      expect(result).toBe(true);
-    });
-
-    it("should return false when registration does not exist", async () => {
-      prismaMock.registration.count.mockResolvedValue(0);
-
-      const result = await registrationExists("non-existent");
-
-      expect(result).toBe(false);
     });
   });
 
