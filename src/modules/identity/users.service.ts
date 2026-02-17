@@ -275,23 +275,26 @@ export async function deleteUser(
 
   const user = await assertUserExists(id);
 
-  // Prevent deleting the last super admin
-  if (user.role === UserRole.SUPER_ADMIN) {
-    const superAdminCount = await prisma.user.count({
-      where: { role: UserRole.SUPER_ADMIN, active: true },
-    });
-    if (superAdminCount <= 1) {
-      throw new AppError(
-        "Cannot delete the last super admin",
-        400,
-        true,
-        ErrorCodes.BAD_REQUEST,
-      );
+  // Atomically check super admin count and delete within a single transaction
+  // to prevent TOCTOU race: two concurrent deletes could both pass the count
+  // check independently and leave zero super admins.
+  await prisma.$transaction(async (tx) => {
+    if (user.role === UserRole.SUPER_ADMIN) {
+      const superAdminCount = await tx.user.count({
+        where: { role: UserRole.SUPER_ADMIN, active: true },
+      });
+      if (superAdminCount <= 1) {
+        throw new AppError(
+          "Cannot delete the last super admin",
+          400,
+          true,
+          ErrorCodes.BAD_REQUEST,
+        );
+      }
     }
-  }
 
-  // Delete from database first
-  await prisma.user.delete({ where: { id } });
+    await tx.user.delete({ where: { id } });
+  });
 
   // Then delete from Firebase - if this fails, log warning (user is already gone from DB)
   try {

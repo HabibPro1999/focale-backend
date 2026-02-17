@@ -740,6 +740,31 @@ describe("Users Service", () => {
       });
       expect(firebaseAuthMock.deleteUser).toHaveBeenCalledWith("admin-123");
     });
+
+    it("should reject deletion if count drops to 1 inside the transaction (TOCTOU guard)", async () => {
+      // Simulates: initial check sees 2 super admins, but by the time the
+      // transaction re-counts, a concurrent delete has reduced it to 1.
+      const superAdmin = createMockSuperAdmin({ id: "admin-123" });
+
+      prismaMock.user.findUnique.mockResolvedValue(superAdmin);
+      // The transaction re-count sees 1 — the concurrent delete has already run.
+      prismaMock.user.count.mockResolvedValue(1);
+
+      await expect(
+        deleteUser("admin-123", "requesting-user-456"),
+      ).rejects.toThrow(AppError);
+      await expect(
+        deleteUser("admin-123", "requesting-user-456"),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.BAD_REQUEST,
+        message: "Cannot delete the last super admin",
+      });
+
+      // The delete must not proceed when count is 1 inside the transaction
+      expect(prismaMock.user.delete).not.toHaveBeenCalled();
+      expect(firebaseAuthMock.deleteUser).not.toHaveBeenCalled();
+    });
   });
 
   // ============================================================================

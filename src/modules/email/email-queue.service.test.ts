@@ -621,16 +621,16 @@ describe("Email Queue Service", () => {
   describe("updateEmailStatusFromWebhook", () => {
     const emailLogId = "log-123";
 
-    it("should update status to DELIVERED", async () => {
-      prismaMock.emailLog.findUnique.mockResolvedValue(
-        createMockEmailLog({ status: "SENT" }),
-      );
-      prismaMock.emailLog.update.mockResolvedValue(createMockEmailLog());
+    it("should update status to DELIVERED via atomic updateMany", async () => {
+      prismaMock.emailLog.updateMany.mockResolvedValue({ count: 1 });
 
       await updateEmailStatusFromWebhook(emailLogId, "delivered");
 
-      expect(prismaMock.emailLog.update).toHaveBeenCalledWith({
-        where: { id: emailLogId },
+      expect(prismaMock.emailLog.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: emailLogId,
+          status: { in: ["QUEUED", "SENDING", "SENT"] },
+        },
         data: expect.objectContaining({
           status: "DELIVERED",
           deliveredAt: expect.any(Date),
@@ -638,16 +638,16 @@ describe("Email Queue Service", () => {
       });
     });
 
-    it("should update status to OPENED", async () => {
-      prismaMock.emailLog.findUnique.mockResolvedValue(
-        createMockEmailLog({ status: "DELIVERED" }),
-      );
-      prismaMock.emailLog.update.mockResolvedValue(createMockEmailLog());
+    it("should update status to OPENED via atomic updateMany", async () => {
+      prismaMock.emailLog.updateMany.mockResolvedValue({ count: 1 });
 
       await updateEmailStatusFromWebhook(emailLogId, "open");
 
-      expect(prismaMock.emailLog.update).toHaveBeenCalledWith({
-        where: { id: emailLogId },
+      expect(prismaMock.emailLog.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: emailLogId,
+          status: { in: ["QUEUED", "SENDING", "SENT", "DELIVERED"] },
+        },
         data: expect.objectContaining({
           status: "OPENED",
           openedAt: expect.any(Date),
@@ -655,18 +655,18 @@ describe("Email Queue Service", () => {
       });
     });
 
-    it("should update status to CLICKED", async () => {
-      prismaMock.emailLog.findUnique.mockResolvedValue(
-        createMockEmailLog({ status: "OPENED" }),
-      );
-      prismaMock.emailLog.update.mockResolvedValue(createMockEmailLog());
+    it("should update status to CLICKED via atomic updateMany", async () => {
+      prismaMock.emailLog.updateMany.mockResolvedValue({ count: 1 });
 
       await updateEmailStatusFromWebhook(emailLogId, "click", {
         url: "https://example.com",
       });
 
-      expect(prismaMock.emailLog.update).toHaveBeenCalledWith({
-        where: { id: emailLogId },
+      expect(prismaMock.emailLog.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: emailLogId,
+          status: { in: ["QUEUED", "SENDING", "SENT", "DELIVERED", "OPENED"] },
+        },
         data: expect.objectContaining({
           status: "CLICKED",
           clickedAt: expect.any(Date),
@@ -674,18 +674,20 @@ describe("Email Queue Service", () => {
       });
     });
 
-    it("should update status to BOUNCED with reason", async () => {
-      prismaMock.emailLog.findUnique.mockResolvedValue(
-        createMockEmailLog({ status: "DELIVERED" }),
-      );
-      prismaMock.emailLog.update.mockResolvedValue(createMockEmailLog());
+    it("should update status to BOUNCED with reason via atomic updateMany", async () => {
+      prismaMock.emailLog.updateMany.mockResolvedValue({ count: 1 });
 
       await updateEmailStatusFromWebhook(emailLogId, "bounce", {
         reason: "Invalid email address",
       });
 
-      expect(prismaMock.emailLog.update).toHaveBeenCalledWith({
-        where: { id: emailLogId },
+      expect(prismaMock.emailLog.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: emailLogId,
+          status: {
+            in: ["QUEUED", "SENDING", "SENT", "DELIVERED", "OPENED", "CLICKED"],
+          },
+        },
         data: expect.objectContaining({
           status: "BOUNCED",
           bouncedAt: expect.any(Date),
@@ -695,33 +697,32 @@ describe("Email Queue Service", () => {
     });
 
     it("should update status to BOUNCED with default reason", async () => {
-      prismaMock.emailLog.findUnique.mockResolvedValue(
-        createMockEmailLog({ status: "SENT" }),
-      );
-      prismaMock.emailLog.update.mockResolvedValue(createMockEmailLog());
+      prismaMock.emailLog.updateMany.mockResolvedValue({ count: 1 });
 
       await updateEmailStatusFromWebhook(emailLogId, "bounce");
 
-      expect(prismaMock.emailLog.update).toHaveBeenCalledWith({
-        where: { id: emailLogId },
+      expect(prismaMock.emailLog.updateMany).toHaveBeenCalledWith({
+        where: expect.objectContaining({ id: emailLogId }),
         data: expect.objectContaining({
           errorMessage: "Bounced",
         }),
       });
     });
 
-    it("should update status to DROPPED with reason", async () => {
-      prismaMock.emailLog.findUnique.mockResolvedValue(
-        createMockEmailLog({ status: "SENT" }),
-      );
-      prismaMock.emailLog.update.mockResolvedValue(createMockEmailLog());
+    it("should update status to DROPPED with reason via atomic updateMany", async () => {
+      prismaMock.emailLog.updateMany.mockResolvedValue({ count: 1 });
 
       await updateEmailStatusFromWebhook(emailLogId, "dropped", {
         reason: "Spam content detected",
       });
 
-      expect(prismaMock.emailLog.update).toHaveBeenCalledWith({
-        where: { id: emailLogId },
+      expect(prismaMock.emailLog.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: emailLogId,
+          status: {
+            in: ["QUEUED", "SENDING", "SENT", "DELIVERED", "OPENED", "CLICKED"],
+          },
+        },
         data: expect.objectContaining({
           status: "DROPPED",
           errorMessage: "Spam content detected",
@@ -730,26 +731,42 @@ describe("Email Queue Service", () => {
     });
 
     it("should update status to DROPPED with default reason", async () => {
-      prismaMock.emailLog.findUnique.mockResolvedValue(
-        createMockEmailLog({ status: "SENT" }),
-      );
-      prismaMock.emailLog.update.mockResolvedValue(createMockEmailLog());
+      prismaMock.emailLog.updateMany.mockResolvedValue({ count: 1 });
 
       await updateEmailStatusFromWebhook(emailLogId, "dropped");
 
-      expect(prismaMock.emailLog.update).toHaveBeenCalledWith({
-        where: { id: emailLogId },
+      expect(prismaMock.emailLog.updateMany).toHaveBeenCalledWith({
+        where: expect.objectContaining({ id: emailLogId }),
         data: expect.objectContaining({
           errorMessage: "Dropped",
         }),
       });
     });
 
+    it("should silently skip when current status is already higher rank (count === 0)", async () => {
+      // count: 0 means the WHERE predicate did not match (status already at higher rank)
+      prismaMock.emailLog.updateMany.mockResolvedValue({ count: 0 });
+
+      // Should not throw and should not attempt a second write
+      await expect(
+        updateEmailStatusFromWebhook(emailLogId, "delivered"),
+      ).resolves.not.toThrow();
+
+      expect(prismaMock.emailLog.updateMany).toHaveBeenCalledTimes(1);
+    });
+
+    it("should not call findUnique — update is fully atomic", async () => {
+      prismaMock.emailLog.updateMany.mockResolvedValue({ count: 1 });
+
+      await updateEmailStatusFromWebhook(emailLogId, "open");
+
+      expect(prismaMock.emailLog.findUnique).not.toHaveBeenCalled();
+    });
+
     it("should handle update errors gracefully", async () => {
-      prismaMock.emailLog.findUnique.mockResolvedValue(
-        createMockEmailLog({ status: "SENT" }),
+      prismaMock.emailLog.updateMany.mockRejectedValue(
+        new Error("Database error"),
       );
-      prismaMock.emailLog.update.mockRejectedValue(new Error("Database error"));
 
       // Should not throw
       await expect(

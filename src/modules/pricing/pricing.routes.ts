@@ -6,6 +6,7 @@ import { getEventById } from "@events";
 import { getFormById } from "@forms";
 import {
   getEventPricing,
+  getEventPaymentConfig,
   updateEventPricing,
   addPricingRule,
   updatePricingRule,
@@ -207,62 +208,13 @@ export async function pricingPaymentConfigPublicRoutes(
     async (request, reply) => {
       const { eventId } = request.params;
 
-      // Fetch event with pricing and client in one query
-      const event = await app.prisma.event.findUnique({
-        where: { id: eventId },
-        include: {
-          pricing: true,
-          client: {
-            select: {
-              id: true,
-              name: true,
-              logo: true,
-              primaryColor: true,
-            },
-          },
-        },
-      });
+      const config = await getEventPaymentConfig(eventId);
 
-      if (!event) {
+      if (!config) {
         throw app.httpErrors.notFound("Event not found");
       }
 
-      // Transform pricing for public consumption
-      const pricing = event.pricing;
-      const paymentMethods: string[] = ["BANK_TRANSFER"]; // Bank transfer always available
-      if (pricing?.onlinePaymentEnabled && pricing?.onlinePaymentUrl) {
-        paymentMethods.push("ONLINE");
-      }
-
-      return reply.send({
-        event: {
-          id: event.id,
-          name: event.name,
-          slug: event.slug,
-          status: event.status,
-          startDate: event.startDate,
-          endDate: event.endDate,
-          location: event.location,
-          client: event.client,
-        },
-        pricing: pricing
-          ? {
-              basePrice: pricing.basePrice,
-              currency: pricing.currency,
-              rules: pricing.rules ?? [],
-              paymentMethods,
-              bankDetails: pricing.bankName
-                ? {
-                    bankName: pricing.bankName,
-                    accountName: pricing.bankAccountName ?? "",
-                    iban: pricing.bankAccountNumber ?? "",
-                    bic: "",
-                  }
-                : null,
-              onlinePaymentUrl: pricing.onlinePaymentUrl ?? null,
-            }
-          : null,
-      });
+      return reply.send(config);
     },
   );
 }

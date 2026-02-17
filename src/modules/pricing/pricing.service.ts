@@ -36,6 +36,102 @@ function parseRulesFromDb(rules: unknown): EmbeddedPricingRule[] {
 }
 
 // ============================================================================
+// Public Payment Config
+// ============================================================================
+
+export type EventPaymentConfig = {
+  event: {
+    id: string;
+    name: string;
+    slug: string;
+    status: string;
+    startDate: Date;
+    endDate: Date;
+    location: string | null;
+    client: {
+      id: string;
+      name: string;
+      logo: string | null;
+      primaryColor: string | null;
+    };
+  };
+  pricing: {
+    basePrice: number;
+    currency: string;
+    rules: EmbeddedPricingRule[];
+    paymentMethods: string[];
+    bankDetails: {
+      bankName: string;
+      accountName: string;
+      iban: string;
+      bic: string;
+    } | null;
+    onlinePaymentUrl: string | null;
+  } | null;
+} | null;
+
+/**
+ * Get public payment configuration for an event.
+ * Returns event details, client branding, and payment method info.
+ */
+export async function getEventPaymentConfig(
+  eventId: string,
+): Promise<EventPaymentConfig> {
+  const event = await prisma.event.findUnique({
+    where: { id: eventId },
+    include: {
+      pricing: true,
+      client: {
+        select: {
+          id: true,
+          name: true,
+          logo: true,
+          primaryColor: true,
+        },
+      },
+    },
+  });
+
+  if (!event) return null;
+
+  const pricing = event.pricing;
+  const paymentMethods: string[] = ["BANK_TRANSFER"];
+  if (pricing?.onlinePaymentEnabled && pricing?.onlinePaymentUrl) {
+    paymentMethods.push("ONLINE");
+  }
+
+  return {
+    event: {
+      id: event.id,
+      name: event.name,
+      slug: event.slug,
+      status: event.status,
+      startDate: event.startDate,
+      endDate: event.endDate,
+      location: event.location,
+      client: event.client,
+    },
+    pricing: pricing
+      ? {
+          basePrice: pricing.basePrice,
+          currency: pricing.currency,
+          rules: parseRulesFromDb(pricing.rules),
+          paymentMethods,
+          bankDetails: pricing.bankName
+            ? {
+                bankName: pricing.bankName,
+                accountName: pricing.bankAccountName ?? "",
+                iban: pricing.bankAccountNumber ?? "",
+                bic: "",
+              }
+            : null,
+          onlinePaymentUrl: pricing.onlinePaymentUrl ?? null,
+        }
+      : null,
+  };
+}
+
+// ============================================================================
 // Event Pricing CRUD (Unified with embedded rules)
 // ============================================================================
 

@@ -470,26 +470,40 @@ interface EmailLogUpdateData {
   errorMessage?: string;
 }
 
-// Status rank map — higher rank = more advanced in the delivery lifecycle.
-// Terminal failures (99) always override any non-terminal status.
-const STATUS_RANK: Record<string, number> = {
-  QUEUED: 0,
-  SENDING: 1,
-  SENT: 2,
-  DELIVERED: 3,
-  OPENED: 4,
-  CLICKED: 5,
-  BOUNCED: 99,
-  DROPPED: 99,
-  FAILED: 99,
-  SKIPPED: 99,
-};
+// Non-terminal statuses in ascending rank order.
+// Terminal statuses (BOUNCED, DROPPED, FAILED, SKIPPED) are not listed here
+// because they are endpoint states and never upgraded by subsequent webhook events.
+const NON_TERMINAL_STATUSES: EmailStatus[] = [
+  "QUEUED",
+  "SENDING",
+  "SENT",
+  "DELIVERED",
+  "OPENED",
+  "CLICKED",
+];
 
-const TERMINAL_FAILURE_STATUSES = new Set<EmailStatus>([
-  "BOUNCED",
-  "DROPPED",
-  "FAILED",
-]);
+// For each incoming event, the set of current statuses that are allowed to be
+// overwritten by the new status. This encodes the monotonicity rule directly
+// as an IN-list used inside the WHERE clause of the UPDATE, making the entire
+// read-check-write atomic at the database level.
+//
+// Terminal failure events (bounce, dropped) may overwrite any non-terminal
+// status. Non-terminal events may only overwrite statuses with strictly lower
+// rank (i.e. statuses that appear earlier in NON_TERMINAL_STATUSES).
+const VALID_PREDECESSOR_STATUSES: Record<
+  "delivered" | "open" | "click" | "bounce" | "dropped",
+  EmailStatus[]
+> = {
+  // DELIVERED (rank 3): upgrades QUEUED(0), SENDING(1), SENT(2)
+  delivered: ["QUEUED", "SENDING", "SENT"],
+  // OPENED (rank 4): upgrades everything below it
+  open: ["QUEUED", "SENDING", "SENT", "DELIVERED"],
+  // CLICKED (rank 5): upgrades everything below it
+  click: ["QUEUED", "SENDING", "SENT", "DELIVERED", "OPENED"],
+  // Terminal — overwrites any non-terminal state
+  bounce: NON_TERMINAL_STATUSES,
+  dropped: NON_TERMINAL_STATUSES,
+};
 
 export async function updateEmailStatusFromWebhook(
   emailLogId: string,
@@ -524,41 +538,27 @@ export async function updateEmailStatusFromWebhook(
 
   if (!updates.status) return;
 
-  const newStatus = updates.status;
-  const isTerminalFailure = TERMINAL_FAILURE_STATUSES.has(newStatus);
+  const validPredecessors = VALID_PREDECESSOR_STATUSES[event];
 
   try {
-    // Fetch current status to prevent regression (SendGrid does not guarantee event order)
-    const current = await prisma.emailLog.findUnique({
-      where: { id: emailLogId },
-      select: { status: true },
-    });
-
-    if (!current) {
-      logger.warn(
-        { emailLogId, event },
-        "Email log not found for webhook update",
-      );
-      return;
-    }
-
-    const currentRank = STATUS_RANK[current.status] ?? 0;
-    const newRank = STATUS_RANK[newStatus] ?? 0;
-
-    // Skip update if the current status is already higher-ranked,
-    // UNLESS the new status is a terminal failure (bounce/dropped/failed always win).
-    if (!isTerminalFailure && currentRank >= newRank) {
-      logger.debug(
-        { emailLogId, currentStatus: current.status, newStatus, event },
-        "Skipping webhook status update — current status is already higher or equal rank",
-      );
-      return;
-    }
-
-    await prisma.emailLog.update({
-      where: { id: emailLogId },
+    // Atomic conditional update: the WHERE clause enforces monotonicity at the
+    // database level. No separate read is needed — if the current status is not
+    // in the valid predecessor list (i.e. it is already at a higher rank or is
+    // terminal), the UPDATE matches zero rows and is silently ignored.
+    const result = await prisma.emailLog.updateMany({
+      where: {
+        id: emailLogId,
+        status: { in: validPredecessors },
+      },
       data: updates,
     });
+
+    if (result.count === 0) {
+      logger.debug(
+        { emailLogId, event, newStatus: updates.status },
+        "Skipping webhook status update — current status is already equal or higher rank (atomic check)",
+      );
+    }
   } catch (error) {
     logger.error(
       { emailLogId, event, error },

@@ -25,25 +25,27 @@ export async function createClient(
 ): Promise<Client> {
   const { name, logo, primaryColor, email, phone, enabledModules } = input;
 
-  const client = await prisma.client.create({
-    data: {
-      name,
-      logo: logo ?? null,
-      primaryColor: primaryColor ?? null,
-      email: email ?? null,
-      phone: phone ?? null,
-      enabledModules: enabledModules ?? [...MODULE_IDS],
-    },
-  });
+  return prisma.$transaction(async (tx) => {
+    const client = await tx.client.create({
+      data: {
+        name,
+        logo: logo ?? null,
+        primaryColor: primaryColor ?? null,
+        email: email ?? null,
+        phone: phone ?? null,
+        enabledModules: enabledModules ?? [...MODULE_IDS],
+      },
+    });
 
-  await auditLog(prisma, {
-    entityType: "Client",
-    entityId: client.id,
-    action: "CREATE",
-    performedBy,
-  });
+    await auditLog(tx, {
+      entityType: "Client",
+      entityId: client.id,
+      action: "CREATE",
+      performedBy,
+    });
 
-  return client;
+    return client;
+  });
 }
 
 /**
@@ -182,13 +184,15 @@ export async function deleteClient(
     );
   }
 
-  await prisma.client.delete({ where: { id } });
+  await prisma.$transaction(async (tx) => {
+    await tx.client.delete({ where: { id } });
 
-  await auditLog(prisma, {
-    entityType: "Client",
-    entityId: id,
-    action: "DELETE",
-    performedBy,
+    await auditLog(tx, {
+      entityType: "Client",
+      entityId: id,
+      action: "DELETE",
+      performedBy,
+    });
   });
 
   // Invalidate cache after successful deletion

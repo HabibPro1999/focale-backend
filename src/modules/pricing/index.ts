@@ -1,5 +1,6 @@
 // Services
-export { calculatePrice } from "./pricing.service.js";
+export { calculatePrice, getEventPaymentConfig } from "./pricing.service.js";
+export type { EventPaymentConfig } from "./pricing.service.js";
 
 // Types
 export type { PriceBreakdown } from "./pricing.schema.js";
