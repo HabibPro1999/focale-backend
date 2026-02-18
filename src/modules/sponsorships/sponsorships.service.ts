@@ -6,7 +6,10 @@ import {
   getSkip,
   type PaginatedResult,
 } from "@shared/utils/pagination.js";
-import { calculateSponsorshipTotal } from "./sponsorships.utils.js";
+import {
+  calculateSponsorshipTotal,
+  validateCoveredAccessTimeOverlap,
+} from "./sponsorships.utils.js";
 import type {
   UpdateSponsorshipInput,
   ListSponsorshipsQuery,
@@ -251,6 +254,50 @@ export async function updateSponsorship(
     updateData.coversBasePrice = input.coversBasePrice;
   if (input.coveredAccessIds !== undefined)
     updateData.coveredAccessIds = input.coveredAccessIds;
+
+  // Validate time overlaps if coveredAccessIds is being updated
+  if (input.coveredAccessIds !== undefined) {
+    const newCoveredAccessIds = input.coveredAccessIds;
+    if (newCoveredAccessIds.length >= 2) {
+      const accessItems = await prisma.eventAccess.findMany({
+        where: {
+          id: { in: newCoveredAccessIds },
+          eventId: sponsorship.eventId,
+          active: true,
+        },
+        select: {
+          id: true,
+          name: true,
+          type: true,
+          groupLabel: true,
+          startsAt: true,
+          endsAt: true,
+        },
+      });
+
+      const timeErrors = validateCoveredAccessTimeOverlap(
+        newCoveredAccessIds,
+        accessItems.map((item) => ({
+          id: item.id,
+          name: item.name,
+          type: item.type,
+          groupLabel: item.groupLabel,
+          startsAt: item.startsAt,
+          endsAt: item.endsAt,
+        })),
+      );
+
+      if (timeErrors.length > 0) {
+        throw new AppError(
+          `Time conflicts in covered access items: ${timeErrors.join("; ")}`,
+          400,
+          true,
+          ErrorCodes.BAD_REQUEST,
+          { timeConflicts: timeErrors },
+        );
+      }
+    }
+  }
 
   // Recalculate total amount if coverage changed
   const coversBasePrice = input.coversBasePrice ?? sponsorship.coversBasePrice;

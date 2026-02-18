@@ -246,6 +246,84 @@ export function detectCoverageOverlap(
 }
 
 // ============================================================================
+// Time Overlap Validation
+// ============================================================================
+
+/**
+ * Minimal access item shape for time-overlap checking.
+ */
+export interface AccessItemForOverlapCheck {
+  id: string;
+  name: string;
+  type: string;
+  groupLabel: string | null;
+  startsAt: Date | null;
+  endsAt: Date | null;
+}
+
+/**
+ * Get the type key for grouping access items.
+ * Items with type OTHER are grouped by groupLabel, others by type.
+ */
+export function getAccessTypeKey(
+  type: string,
+  groupLabel: string | null,
+): string {
+  return type === "OTHER" ? `OTHER:${groupLabel || ""}` : type;
+}
+
+/**
+ * Validate that covered access items don't have time overlaps within the same type group.
+ * Groups by type (using groupLabel for OTHER), then does pairwise overlap check.
+ */
+export function validateCoveredAccessTimeOverlap(
+  coveredAccessIds: string[],
+  accessItems: AccessItemForOverlapCheck[],
+): string[] {
+  if (coveredAccessIds.length < 2) return [];
+
+  const errors: string[] = [];
+  const accessMap = new Map(accessItems.map((a) => [a.id, a]));
+
+  const coveredItems = coveredAccessIds
+    .map((id) => accessMap.get(id))
+    .filter((item): item is AccessItemForOverlapCheck => item !== undefined);
+
+  if (coveredItems.length < 2) return [];
+
+  // Group by typeKey
+  const byType = new Map<string, AccessItemForOverlapCheck[]>();
+  for (const item of coveredItems) {
+    const typeKey = getAccessTypeKey(item.type, item.groupLabel);
+    if (!byType.has(typeKey)) byType.set(typeKey, []);
+    byType.get(typeKey)!.push(item);
+  }
+
+  // Pairwise overlap check within each group
+  for (const typeItems of byType.values()) {
+    for (let i = 0; i < typeItems.length; i++) {
+      for (let j = i + 1; j < typeItems.length; j++) {
+        const a = typeItems[i];
+        const b = typeItems[j];
+
+        if (a.startsAt && a.endsAt && b.startsAt && b.endsAt) {
+          const aStart = a.startsAt.getTime();
+          const aEnd = a.endsAt.getTime();
+          const bStart = b.startsAt.getTime();
+          const bEnd = b.endsAt.getTime();
+
+          if (!(aEnd <= bStart || bEnd <= aStart)) {
+            errors.push(`Time conflict: "${a.name}" and "${b.name}" overlap`);
+          }
+        }
+      }
+    }
+  }
+
+  return errors;
+}
+
+// ============================================================================
 // Amount Capping
 // ============================================================================
 

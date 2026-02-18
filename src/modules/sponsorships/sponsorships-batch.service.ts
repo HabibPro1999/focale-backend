@@ -8,6 +8,7 @@ import {
   calculateApplicableAmount,
   capSponsorshipAmount,
   detectCoverageOverlap,
+  validateCoveredAccessTimeOverlap,
   type RegistrationForCalculation,
 } from "./sponsorships.utils.js";
 import type { CreateSponsorshipBatchInput } from "./sponsorships.schema.js";
@@ -129,7 +130,15 @@ export async function createSponsorshipBatch(
   }
 
   // Get access items for validation and email context
-  let accessItems: Array<{ id: string; name: string; price: number }> = [];
+  let accessItems: Array<{
+    id: string;
+    name: string;
+    price: number;
+    type: string;
+    groupLabel: string | null;
+    startsAt: Date | null;
+    endsAt: Date | null;
+  }> = [];
   if (allAccessIds.size > 0) {
     accessItems = await prisma.eventAccess.findMany({
       where: {
@@ -137,7 +146,15 @@ export async function createSponsorshipBatch(
         eventId,
         active: true,
       },
-      select: { id: true, name: true, price: true },
+      select: {
+        id: true,
+        name: true,
+        price: true,
+        type: true,
+        groupLabel: true,
+        startsAt: true,
+        endsAt: true,
+      },
     });
 
     const validAccessIds = new Set(accessItems.map((a) => a.id));
@@ -152,6 +169,37 @@ export async function createSponsorshipBatch(
         true,
         ErrorCodes.BAD_REQUEST,
         { invalidAccessIds: invalidIds },
+      );
+    }
+
+    // Validate time overlaps within each beneficiary's covered access items
+    const overlapErrors: string[] = [];
+    beneficiaryList.forEach((beneficiary, index) => {
+      if (beneficiary.coveredAccessIds.length >= 2) {
+        const errors = validateCoveredAccessTimeOverlap(
+          beneficiary.coveredAccessIds,
+          accessItems.map((item) => ({
+            id: item.id,
+            name: item.name,
+            type: item.type,
+            groupLabel: item.groupLabel,
+            startsAt: item.startsAt,
+            endsAt: item.endsAt,
+          })),
+        );
+        for (const error of errors) {
+          overlapErrors.push(`Beneficiary #${index + 1}: ${error}`);
+        }
+      }
+    });
+
+    if (overlapErrors.length > 0) {
+      throw new AppError(
+        `Time conflicts in covered access items: ${overlapErrors.join("; ")}`,
+        400,
+        true,
+        ErrorCodes.BAD_REQUEST,
+        { timeConflicts: overlapErrors },
       );
     }
   }

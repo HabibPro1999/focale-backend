@@ -13,6 +13,7 @@ import type {
 } from "./access.schema.js";
 import { Prisma } from "@/generated/prisma/client.js";
 import type { EventAccess } from "@/generated/prisma/client.js";
+import { getAccessTypeKey } from "@/modules/sponsorships/sponsorships.utils.js";
 
 // ============================================================================
 // Types
@@ -54,7 +55,11 @@ function validateAccessDatesAgainstEvent(
   eventDates: { startDate: Date; endDate: Date },
 ): DateValidationResult {
   const errors: string[] = [];
-  const { startDate, endDate } = eventDates;
+  const { startDate } = eventDates;
+
+  // Extend endDate to 23:59:59.999 UTC so that any time on the last event day is valid
+  const endDate = new Date(eventDates.endDate);
+  endDate.setUTCHours(23, 59, 59, 999);
 
   const formatDate = (d: Date) =>
     d.toLocaleDateString("fr-FR", {
@@ -724,10 +729,7 @@ export async function validateAccessSelections(
   for (const selection of selections) {
     const access = accessMap.get(selection.accessId)!;
     // For OTHER type, use groupLabel as key to allow custom groups
-    const typeKey =
-      access.type === "OTHER"
-        ? `OTHER:${access.groupLabel || ""}`
-        : access.type;
+    const typeKey = getAccessTypeKey(access.type, access.groupLabel);
 
     if (!selectionsByType.has(typeKey)) selectionsByType.set(typeKey, []);
     selectionsByType.get(typeKey)!.push({ access, selection });
