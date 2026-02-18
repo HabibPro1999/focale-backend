@@ -51,7 +51,11 @@ function validateAccessDatesAgainstEvent(
   eventDates: { startDate: Date; endDate: Date },
 ): DateValidationResult {
   const errors: string[] = [];
-  const { startDate, endDate } = eventDates;
+  const { startDate } = eventDates;
+
+  // Extend endDate to 23:59:59.999 UTC so that any time on the last event day is valid
+  const endDate = new Date(eventDates.endDate);
+  endDate.setUTCHours(23, 59, 59, 999);
 
   const formatDate = (d: Date) =>
     d.toLocaleDateString("fr-FR", {
