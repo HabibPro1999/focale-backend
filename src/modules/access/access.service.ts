@@ -13,7 +13,7 @@ import type {
 } from "./access.schema.js";
 import { Prisma } from "@/generated/prisma/client.js";
 import type { EventAccess } from "@/generated/prisma/client.js";
-import { getAccessTypeKey } from "@/modules/sponsorships/sponsorships.utils.js";
+import { getAccessTypeKey } from "@sponsorships";
 
 // ============================================================================
 // Types
