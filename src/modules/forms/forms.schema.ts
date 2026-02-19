@@ -87,6 +87,28 @@ export const FieldValidationSchema = z
   })
   .strict();
 
+export const ConfirmationStepSchema = z
+  .object({
+    title: z.string().optional(),
+    description: z.string().optional(),
+    showPriceSummary: z.boolean().optional(),
+    showTerms: z.boolean().optional(),
+    termsText: z.string().optional(),
+  })
+  .strict();
+
+export const FormSettingsSchema = z
+  .object({
+    isFree: z.boolean().optional(),
+    successMessage: z.string().optional(),
+    closedMessage: z.string().optional(),
+    sendConfirmationEmail: z.boolean().optional(),
+    status: z.enum(["draft", "active", "closed"]).optional(),
+    showConfirmationStep: z.boolean().optional(),
+    confirmationStep: ConfirmationStepSchema.optional(),
+  })
+  .strict();
+
 export const FormFieldSchema = z
   .object({
     id: z.string(),
@@ -141,6 +163,7 @@ export const FormStepSchema = z
 export const FormSchemaJsonSchema = z
   .object({
     steps: z.array(FormStepSchema),
+    settings: FormSettingsSchema.optional(),
   })
   .strict();
 
@@ -186,6 +209,7 @@ export const SponsorFormSchemaJsonSchema = z
     beneficiaryTemplate: BeneficiaryTemplateSchema,
     summarySettings: SponsorSummarySettingsSchema.optional(),
     sponsorshipSettings: SponsorshipSettingsSchema.optional(),
+    settings: FormSettingsSchema.optional(),
   })
   .strict();
 
