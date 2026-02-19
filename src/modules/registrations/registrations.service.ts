@@ -1832,6 +1832,8 @@ export async function searchRegistrantsForSponsorship(
       paymentStatus: true,
       totalAmount: true,
       accessTypeIds: true,
+      phone: true,
+      formData: true,
     },
   });
 
@@ -1843,5 +1845,7 @@ export async function searchRegistrantsForSponsorship(
     paymentStatus: r.paymentStatus as RegistrantSearchResult["paymentStatus"],
     totalAmount: r.totalAmount,
     accessTypeIds: r.accessTypeIds,
+    phone: r.phone,
+    formData: r.formData as Record<string, unknown> | null,
   }));
 }
