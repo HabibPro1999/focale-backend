@@ -352,6 +352,8 @@ export const RegistrantSearchResultSchema = z.object({
   paymentStatus: PaymentStatusSchema,
   totalAmount: z.number(),
   accessTypeIds: z.array(z.string()),
+  phone: z.string().nullable(),
+  formData: z.record(z.string(), z.unknown()).nullable(),
 });
 
 export type SearchRegistrantsQuery = z.infer<
