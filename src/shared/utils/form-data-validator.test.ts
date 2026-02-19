@@ -5,14 +5,14 @@ import type { FormField } from "@forms";
 // Helper to create minimal FormField for testing
 function createField(
   overrides: Partial<FormField> = {},
-): FormField & { conditionLogic?: "AND" | "OR" } {
+): FormField & { conditionLogic?: "and" | "or" } {
   return {
     id: "test-field",
     type: "text",
     label: "Test Field",
     required: false,
     ...overrides,
-  } as FormField & { conditionLogic?: "AND" | "OR" };
+  } as FormField & { conditionLogic?: "and" | "or" };
 }
 
 describe("Form Data Validator - shouldValidateField Integration", () => {
@@ -53,7 +53,7 @@ describe("Form Data Validator - shouldValidateField Integration", () => {
     it("should require all conditions to be met", () => {
       const field = createField({
         id: "conditional-field",
-        conditionLogic: "AND",
+        conditionLogic: "and",
         conditions: [
           { fieldId: "profession", operator: "equals", value: "doctor" },
           { fieldId: "age", operator: "greater_than", value: "25" },
@@ -94,7 +94,7 @@ describe("Form Data Validator - shouldValidateField Integration", () => {
     it("should require at least one condition to be met", () => {
       const field = createField({
         id: "conditional-field",
-        conditionLogic: "OR",
+        conditionLogic: "or",
         conditions: [
           { fieldId: "profession", operator: "equals", value: "doctor" },
           { fieldId: "profession", operator: "equals", value: "nurse" },
