@@ -99,7 +99,7 @@ export const FormFieldSchema = z
     options: z.array(FieldOptionSchema).optional(),
     validation: FieldValidationSchema.optional(),
     conditions: z.array(FieldConditionSchema).optional(),
-    conditionLogic: z.enum(["AND", "OR"]).optional(),
+    conditionLogic: z.enum(["and", "or"]).optional(),
     conditionAction: z.enum(["show", "disable"]).optional(),
     clearOnHide: z.boolean().optional(),
     defaultValue: z
