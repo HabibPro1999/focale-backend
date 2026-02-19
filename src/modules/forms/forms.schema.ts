@@ -99,11 +99,7 @@ export const ConfirmationStepSchema = z
 
 export const FormSettingsSchema = z
   .object({
-    isFree: z.boolean().optional(),
     successMessage: z.string().optional(),
-    closedMessage: z.string().optional(),
-    sendConfirmationEmail: z.boolean().optional(),
-    status: z.enum(["draft", "active", "closed"]).optional(),
     showConfirmationStep: z.boolean().optional(),
     confirmationStep: ConfirmationStepSchema.optional(),
   })
