@@ -361,7 +361,12 @@ function buildFileSchema(
     );
 
   if (validation?.required) {
-    return fileMetadataSchema;
+    return z
+      .any()
+      .refine((val) => val !== null && val !== undefined, {
+        message: `${label} is required`,
+      })
+      .pipe(fileMetadataSchema);
   }
   return fileMetadataSchema.optional().nullable();
 }
