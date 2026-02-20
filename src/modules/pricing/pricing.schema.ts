@@ -76,6 +76,12 @@ export const UpdateEventPricingSchema = z
 
 export { EventIdParamSchema } from "@shared/schemas/params.js";
 
+export const FormIdParamSchema = z
+  .object({
+    formId: z.string().uuid(),
+  })
+  .strict();
+
 export const RuleIdParamSchema = z
   .object({
     eventId: z.string().uuid(),

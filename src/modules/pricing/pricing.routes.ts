@@ -15,6 +15,7 @@ import {
 } from "./pricing.service.js";
 import {
   EventIdParamSchema,
+  FormIdParamSchema,
   RuleIdParamSchema,
   UpdateEventPricingSchema,
   CreateEmbeddedRuleSchema,
@@ -25,14 +26,7 @@ import {
   type UpdateEmbeddedRuleInput,
   type CalculatePriceRequest,
 } from "./pricing.schema.js";
-import { z } from "zod";
 import type { AppInstance } from "@shared/types/fastify.js";
-
-const FormIdParamSchema = z
-  .object({
-    formId: z.string().uuid(),
-  })
-  .strict();
 
 // ============================================================================
 // Event Pricing Routes (Protected)

@@ -1,4 +1,4 @@
-import { vi } from 'vitest';
+import { vi } from "vitest";
 
 /**
  * Mock SendGrid mail service.
@@ -10,16 +10,16 @@ export const sendGridMock = {
     {
       statusCode: 202,
       headers: {
-        'x-message-id': 'mock-message-id-123',
+        "x-message-id": "mock-message-id-123",
       },
-      body: '',
+      body: "",
     },
     {},
   ]),
 };
 
 // Mock the @sendgrid/mail module
-vi.mock('@sendgrid/mail', () => ({
+vi.mock("@sendgrid/mail", () => ({
   default: sendGridMock,
   setApiKey: sendGridMock.setApiKey,
   send: sendGridMock.send,
@@ -35,17 +35,10 @@ export function resetSendGridMock(): void {
     {
       statusCode: 202,
       headers: {
-        'x-message-id': 'mock-message-id-123',
+        "x-message-id": "mock-message-id-123",
       },
-      body: '',
+      body: "",
     },
     {},
   ]);
-}
-
-/**
- * Helper to simulate SendGrid failure.
- */
-export function mockSendGridFailure(error: Error = new Error('SendGrid API error')): void {
-  sendGridMock.send.mockRejectedValue(error);
 }
