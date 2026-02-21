@@ -34,6 +34,7 @@ export interface AvailableSponsorship {
 }
 
 export interface LinkSponsorshipResult {
+  skipped: false;
   usage: {
     id: string;
     sponsorshipId: string;
@@ -47,6 +48,11 @@ export interface LinkSponsorshipResult {
   warnings: string[];
 }
 
+export interface LinkSponsorshipSkippedResult {
+  skipped: true;
+  reason: string;
+}
+
 // ============================================================================
 // Link Sponsorship to Registration (Admin)
 // ============================================================================
@@ -58,7 +64,7 @@ export async function linkSponsorshipToRegistration(
   sponsorshipId: string,
   registrationId: string,
   adminUserId: string,
-): Promise<LinkSponsorshipResult> {
+): Promise<LinkSponsorshipResult | LinkSponsorshipSkippedResult> {
   const sponsorship = await findOrThrow(
     () =>
       prisma.sponsorship.findUnique({
@@ -189,14 +195,22 @@ export async function linkSponsorshipToRegistration(
     registration.totalAmount,
   );
 
-  // Validate coverage applies - reject if $0 would be applied but sponsorship has value
-  if (cappedAmount === 0 && sponsorship.totalAmount > 0) {
-    throw new AppError(
-      "Sponsorship coverage does not apply to this registration (no overlap between sponsored items and registration selections, or registration is fully sponsored)",
-      400,
-      true,
-      ErrorCodes.SPONSORSHIP_NOT_APPLICABLE,
+  // Non-fatal skip when $0 would be applied (registration fully sponsored or no coverage overlap)
+  if (cappedAmount === 0) {
+    logger.warn(
+      {
+        sponsorshipId,
+        registrationId,
+        applicableAmount,
+        currentSponsorshipAmount: registration.sponsorshipAmount,
+      },
+      "Skipping sponsorship link - registration is fully sponsored or coverage does not apply",
     );
+    return {
+      skipped: true,
+      reason:
+        "Sponsorship coverage does not apply to this registration (no overlap between sponsored items and registration selections, or registration is fully sponsored)",
+    };
   }
 
   // Create usage and update records in transaction
@@ -258,6 +272,7 @@ export async function linkSponsorshipToRegistration(
     });
 
     return {
+      skipped: false as const,
       usage: {
         id: usage.id,
         sponsorshipId: usage.sponsorshipId,
@@ -292,7 +307,7 @@ export async function linkSponsorshipByCode(
   registrationId: string,
   code: string,
   adminUserId: string,
-): Promise<LinkSponsorshipResult> {
+): Promise<LinkSponsorshipResult | LinkSponsorshipSkippedResult> {
   const registration = await findOrThrow(
     () =>
       prisma.registration.findUnique({
@@ -670,40 +685,25 @@ export async function recalculateUsageAmounts(
       },
     );
 
-    // Fetch registration's current sponsorshipAmount excluding this usage's old amountApplied
-    const registration = await tx.registration.findUnique({
-      where: { id: usage.registration.id },
-      select: { sponsorshipAmount: true },
-    });
-
-    const otherSponsorshipAmount = registration
-      ? registration.sponsorshipAmount - usage.amountApplied
-      : 0;
-
-    // Cap the new amount against remaining capacity
-    const cappedAmount = capSponsorshipAmount(
-      newAmount,
-      otherSponsorshipAmount,
-      usage.registration.totalAmount,
-    );
+    // Calculate delta between new and old amount applied.
+    // Using delta + atomic SQL avoids the TOCTOU race condition that would occur
+    // if we read sponsorshipAmount, subtract the old value, then write back.
+    const oldAmount = usage.amountApplied;
+    const delta = newAmount - oldAmount;
 
     await tx.sponsorshipUsage.update({
       where: { id: usage.id },
-      data: { amountApplied: cappedAmount },
+      data: { amountApplied: newAmount },
     });
 
-    // Recalculate registration total sponsorship
-    const allUsages = await tx.sponsorshipUsage.findMany({
-      where: { registrationId: usage.registration.id },
-      select: { amountApplied: true },
-    });
-
-    const totalSponsorshipAmount = calculateTotalSponsorshipAmount(allUsages);
-
-    await tx.registration.update({
-      where: { id: usage.registration.id },
-      data: { sponsorshipAmount: totalSponsorshipAmount },
-    });
+    // Atomically adjust the registration's sponsorshipAmount by the delta,
+    // clamped to [0, total_amount]. This eliminates the read-modify-write race.
+    const registrationId = usage.registration.id;
+    await tx.$executeRaw`
+      UPDATE "registrations"
+      SET sponsorship_amount = GREATEST(0, LEAST(total_amount, sponsorship_amount + ${delta}))
+      WHERE id = ${registrationId}
+    `;
   }
 }
 

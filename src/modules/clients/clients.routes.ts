@@ -20,6 +20,8 @@ import {
   type ListClientsQuery,
 } from "./clients.schema.js";
 import type { AppInstance } from "@shared/types/fastify.js";
+import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
 
 export async function clientsRoutes(app: AppInstance): Promise<void> {
   // All routes require authentication
@@ -31,12 +33,17 @@ export async function clientsRoutes(app: AppInstance): Promise<void> {
     const { clientId } = request.user!;
 
     if (!clientId) {
-      throw app.httpErrors.notFound("User is not associated with any client");
+      throw new AppError(
+        "User is not associated with any client",
+        404,
+        true,
+        ErrorCodes.NOT_FOUND,
+      );
     }
 
     const client = await getClientById(clientId);
     if (!client) {
-      throw app.httpErrors.notFound("Client not found");
+      throw new AppError("Client not found", 404, true, ErrorCodes.NOT_FOUND);
     }
 
     return reply.send(client);
@@ -77,14 +84,17 @@ export async function clientsRoutes(app: AppInstance): Promise<void> {
     async (request, reply) => {
       // Check if user is super_admin or requesting their own client
       if (!canAccessClient(request.user!, request.params.id)) {
-        throw app.httpErrors.forbidden(
+        throw new AppError(
           "Insufficient permissions to access this client",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
         );
       }
 
       const client = await getClientById(request.params.id);
       if (!client) {
-        throw app.httpErrors.notFound("Client not found");
+        throw new AppError("Client not found", 404, true, ErrorCodes.NOT_FOUND);
       }
 
       return reply.send(client);

@@ -3,21 +3,25 @@ import {
   requireSuperAdmin,
   canAccessClient,
 } from "@shared/middleware/auth.middleware.js";
-import { getEventById } from "@events";
+import { requireEventAccess } from "@shared/middleware/access-control.js";
 import {
   getRegistrationById,
   updateRegistration,
-  confirmPayment,
   deleteRegistration,
   listRegistrations,
   listAllRegistrations,
   getRegistrationClientId,
+} from "./registration-crud.service.js";
+import {
+  confirmPayment,
+  extractKeyFromUrl,
+} from "./registration-payment.service.js";
+import {
   getRegistrationTableColumns,
   listRegistrationAuditLogs,
   listRegistrationEmailLogs,
   searchRegistrantsForSponsorship,
-  extractKeyFromUrl,
-} from "./registrations.service.js";
+} from "./registration-query.service.js";
 import { getStorageProvider } from "@shared/services/storage/index.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
@@ -77,14 +81,7 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
     async (request, reply) => {
       const { eventId } = request.params;
 
-      const event = await getEventById(eventId);
-      if (!event) {
-        throw app.httpErrors.notFound("Event not found");
-      }
-
-      if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
-      }
+      await requireEventAccess(request.user!, eventId);
 
       const columns = await getRegistrationTableColumns(eventId);
       return reply.send(columns);
@@ -107,14 +104,7 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
       const { eventId } = request.params;
       const query = request.query;
 
-      const event = await getEventById(eventId);
-      if (!event) {
-        throw app.httpErrors.notFound("Event not found");
-      }
-
-      if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
-      }
+      await requireEventAccess(request.user!, eventId);
 
       const results = await searchRegistrantsForSponsorship(eventId, query);
       return reply.send(results);
@@ -137,14 +127,7 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
       const { eventId } = request.params;
       const query = request.query;
 
-      const event = await getEventById(eventId);
-      if (!event) {
-        throw app.httpErrors.notFound("Event not found");
-      }
-
-      if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
-      }
+      await requireEventAccess(request.user!, eventId);
 
       const registrations = await listRegistrations(eventId, query);
       return reply.send(registrations);
@@ -162,11 +145,21 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
 
       const registration = await getRegistrationById(id);
       if (!registration) {
-        throw app.httpErrors.notFound("Registration not found");
+        throw new AppError(
+          "Registration not found",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       if (!canAccessClient(request.user!, registration.event.clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
+        throw new AppError(
+          "Insufficient permissions",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
+        );
       }
 
       return reply.send(registration);
@@ -188,11 +181,21 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
 
       const clientId = await getRegistrationClientId(id);
       if (!clientId) {
-        throw app.httpErrors.notFound("Registration not found");
+        throw new AppError(
+          "Registration not found",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       if (!canAccessClient(request.user!, clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
+        throw new AppError(
+          "Insufficient permissions",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
+        );
       }
 
       const registration = await updateRegistration(
@@ -219,11 +222,21 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
 
       const clientId = await getRegistrationClientId(id);
       if (!clientId) {
-        throw app.httpErrors.notFound("Registration not found");
+        throw new AppError(
+          "Registration not found",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       if (!canAccessClient(request.user!, clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
+        throw new AppError(
+          "Insufficient permissions",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
+        );
       }
 
       // Pass user ID and IP for audit logging
@@ -248,11 +261,21 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
 
       const clientId = await getRegistrationClientId(id);
       if (!clientId) {
-        throw app.httpErrors.notFound("Registration not found");
+        throw new AppError(
+          "Registration not found",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       if (!canAccessClient(request.user!, clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
+        throw new AppError(
+          "Insufficient permissions",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
+        );
       }
 
       await deleteRegistration(id, request.user!.id);
@@ -278,11 +301,21 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
 
       const clientId = await getRegistrationClientId(id);
       if (!clientId) {
-        throw app.httpErrors.notFound("Registration not found");
+        throw new AppError(
+          "Registration not found",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       if (!canAccessClient(request.user!, clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
+        throw new AppError(
+          "Insufficient permissions",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
+        );
       }
 
       const logs = await listRegistrationAuditLogs(id, query);
@@ -308,11 +341,21 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
 
       const clientId = await getRegistrationClientId(id);
       if (!clientId) {
-        throw app.httpErrors.notFound("Registration not found");
+        throw new AppError(
+          "Registration not found",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       if (!canAccessClient(request.user!, clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
+        throw new AppError(
+          "Insufficient permissions",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
+        );
       }
 
       const logs = await listRegistrationEmailLogs(id, query);
@@ -331,11 +374,21 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
 
       const registration = await getRegistrationById(id);
       if (!registration) {
-        throw app.httpErrors.notFound("Registration not found");
+        throw new AppError(
+          "Registration not found",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       if (!canAccessClient(request.user!, registration.event.clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
+        throw new AppError(
+          "Insufficient permissions",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
+        );
       }
 
       if (!registration.paymentProofUrl) {

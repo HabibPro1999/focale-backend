@@ -222,8 +222,9 @@ describe("createSponsorshipBatch — LINKED_ACCOUNT mode", () => {
       makeLinkedInput([regId]),
     );
 
-    // Sponsorship skipped → count is 0, no sponsorship created, no usage created
+    // Sponsorship skipped → count is 0, skippedCount is 1, no sponsorship created, no usage created
     expect(result.count).toBe(0);
+    expect(result.skippedCount).toBe(1);
     expect(txMock.sponsorship.create).not.toHaveBeenCalled();
     expect(txMock.sponsorshipUsage.create).not.toHaveBeenCalled();
     expect(txMock.registration.update).not.toHaveBeenCalled();

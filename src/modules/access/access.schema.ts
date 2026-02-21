@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CurrencySchema, PriceSchema } from "@shared/schemas/common.js";
 
 // ============================================================================
 // Shared Types
@@ -43,8 +44,8 @@ export const CreateEventAccessSchema = z
     endsAt: z.coerce.date().optional().nullable(),
 
     // Pricing
-    price: z.number().int().min(0).default(0),
-    currency: z.string().length(3).default("TND"),
+    price: PriceSchema,
+    currency: CurrencySchema,
 
     // Capacity
     maxCapacity: z.number().int().positive().optional().nullable(),
@@ -55,7 +56,7 @@ export const CreateEventAccessSchema = z
 
     // Conditions (form-based prerequisites)
     conditions: z.array(AccessConditionSchema).optional().nullable(),
-    conditionLogic: z.enum(["AND", "OR"]).default("AND"),
+    conditionLogic: z.enum(["and", "or"]).default("and"),
 
     // Access-based prerequisites (array of access IDs)
     requiredAccessIds: z.array(z.string().uuid()).optional().default([]),
@@ -95,7 +96,7 @@ export const UpdateEventAccessSchema = z
     availableFrom: z.coerce.date().optional().nullable(),
     availableTo: z.coerce.date().optional().nullable(),
     conditions: z.array(AccessConditionSchema).optional().nullable(),
-    conditionLogic: z.enum(["AND", "OR"]).optional(),
+    conditionLogic: z.enum(["and", "or"]).optional(),
     requiredAccessIds: z.array(z.string().uuid()).optional(),
     sortOrder: z.number().int().optional(),
     active: z.boolean().optional(),

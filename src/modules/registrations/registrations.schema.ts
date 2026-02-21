@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { AccessSelectionSchema } from "@access";
+import { PaginationSchema } from "@shared/schemas/common.js";
 
 // ============================================================================
 // Enums
@@ -75,8 +76,7 @@ export const UpdateRegistrationSchema = z
 
 export const ListRegistrationsQuerySchema = z
   .object({
-    page: z.coerce.number().int().min(1).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(20),
+    ...PaginationSchema.shape,
     paymentStatus: PaymentStatusSchema.optional(),
     search: z.string().max(200).optional(),
   })
@@ -84,8 +84,7 @@ export const ListRegistrationsQuerySchema = z
 
 export const ListAllRegistrationsQuerySchema = z
   .object({
-    page: z.coerce.number().int().min(1).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(20),
+    ...PaginationSchema.shape,
     search: z.string().max(200).optional(),
     eventId: z.string().uuid().optional(),
     paymentStatus: PaymentStatusSchema.optional(),

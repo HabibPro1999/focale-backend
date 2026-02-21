@@ -13,7 +13,8 @@ import type {
 } from "./access.schema.js";
 import { Prisma } from "@/generated/prisma/client.js";
 import type { EventAccess } from "@/generated/prisma/client.js";
-import { getAccessTypeKey } from "@sponsorships";
+import { getAccessTypeKey } from "@shared/utils/access-helpers.js";
+import { evaluateConditions as sharedEvaluateConditions } from "@shared/utils/condition-evaluator.js";
 
 // ============================================================================
 // Types
@@ -254,7 +255,7 @@ export async function createEventAccess(
       conditions: data.conditions
         ? (data.conditions as Prisma.InputJsonValue)
         : Prisma.JsonNull,
-      conditionLogic: data.conditionLogic ?? "AND",
+      conditionLogic: data.conditionLogic ?? "and",
       sortOrder: data.sortOrder ?? 0,
       active: data.active ?? true,
       groupLabel: data.groupLabel ?? null,
@@ -445,12 +446,137 @@ export async function getEventAccessById(
 // Hierarchical Grouping (Type → Time Slots)
 // ============================================================================
 
+type RawAccessItem = EventAccess & { requiredAccess: { id: string }[] };
+
 /**
- * Get access items grouped hierarchically: TYPE → TIME SLOTS
+ * Filter access items by date availability window.
+ * Removes items whose availableFrom is in the future or availableTo is in the past.
+ */
+function filterAccessByAvailability(
+  items: RawAccessItem[],
+  now: Date,
+): RawAccessItem[] {
+  return items.filter((access) => {
+    if (access.availableFrom && access.availableFrom > now) return false;
+    if (access.availableTo && access.availableTo < now) return false;
+    return true;
+  });
+}
+
+/**
+ * Filter access items by form-based conditions.
+ * Removes items whose conditions evaluate to false for the given formData.
+ */
+function filterAccessByConditions(
+  items: RawAccessItem[],
+  formData: Record<string, unknown>,
+): RawAccessItem[] {
+  return items.filter((access) => {
+    if (!access.conditions) return true;
+    return sharedEvaluateConditions(
+      access.conditions as AccessCondition[],
+      access.conditionLogic as "and" | "or",
+      formData,
+    );
+  });
+}
+
+/**
+ * Filter access items by prerequisite satisfaction.
+ * Removes items whose required access IDs are not all present in selectedAccessIds.
+ */
+function filterByPrerequisites(
+  items: RawAccessItem[],
+  selectedAccessIds: string[],
+): RawAccessItem[] {
+  return items.filter((access) => {
+    if (!access.requiredAccess || access.requiredAccess.length === 0)
+      return true;
+    return access.requiredAccess.every((req) =>
+      selectedAccessIds.includes(req.id),
+    );
+  });
+}
+
+/**
+ * Group enriched access items into date buckets, each containing time slots.
+ *
+ * Structure: date → time slots → items
+ * - If 2+ items share the same startsAt → selectionType: 'single' (radio)
+ * - If 1 item in a time slot → selectionType: 'multiple' (checkbox)
+ */
+function groupAccessByDate(items: EnrichedAccess[]): DateGroup[] {
+  // Format date as French day name + date (e.g., "Jeudi 16 avril")
+  const formatDateLabel = (dateStr: string): string => {
+    if (dateStr === "no-date") return "Sans date";
+    const date = new Date(dateStr + "T00:00:00");
+    const formatted = date.toLocaleDateString("fr-FR", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+    });
+    // Capitalize first letter
+    return formatted.charAt(0).toUpperCase() + formatted.slice(1);
+  };
+
+  // Step 1: Group by DATE (day only, no time)
+  const dateMap = new Map<string, EnrichedAccess[]>();
+  for (const access of items) {
+    const dateKey = access.startsAt
+      ? access.startsAt.toISOString().split("T")[0]
+      : "no-date";
+    if (!dateMap.has(dateKey)) dateMap.set(dateKey, []);
+    dateMap.get(dateKey)!.push(access);
+  }
+
+  // Step 2: For each date, sub-group by TIME SLOT
+  const groups: DateGroup[] = Array.from(dateMap.entries()).map(
+    ([dateKey, dateItems]) => {
+      const slotMap = new Map<string, EnrichedAccess[]>();
+      for (const item of dateItems) {
+        const timeKey = item.startsAt?.toISOString() || "no-time";
+        if (!slotMap.has(timeKey)) slotMap.set(timeKey, []);
+        slotMap.get(timeKey)!.push(item);
+      }
+
+      const slots: TimeSlot[] = Array.from(slotMap.entries())
+        .map(([_timeKey, slotItems]) => ({
+          startsAt: slotItems[0].startsAt,
+          endsAt: slotItems[0].endsAt,
+          // 2+ items at same time = single (radio), 1 item = multiple (checkbox)
+          selectionType: (slotItems.length > 1 ? "single" : "multiple") as
+            | "single"
+            | "multiple",
+          items: slotItems.sort((a, b) => a.sortOrder - b.sortOrder),
+        }))
+        .sort((a, b) => {
+          if (!a.startsAt && !b.startsAt) return 0;
+          if (!a.startsAt) return 1;
+          if (!b.startsAt) return -1;
+          return a.startsAt.getTime() - b.startsAt.getTime();
+        });
+
+      return { dateKey, label: formatDateLabel(dateKey), slots };
+    },
+  );
+
+  // Sort groups chronologically; "no-date" items go to the end
+  groups.sort((a, b) => {
+    if (a.dateKey === "no-date" && b.dateKey === "no-date") return 0;
+    if (a.dateKey === "no-date") return 1;
+    if (b.dateKey === "no-date") return -1;
+    return new Date(a.dateKey).getTime() - new Date(b.dateKey).getTime();
+  });
+
+  return groups;
+}
+
+/**
+ * Get access items grouped hierarchically: DATE → TIME SLOTS
  *
  * Structure:
- * - Groups are organized by type (WORKSHOP, DINNER, etc.)
- * - Within each type, items are sub-grouped by time slot (startsAt)
+ * - Groups are organized by date day
+ * - Within each date, items are sub-grouped by time slot (startsAt)
  * - If 2+ items share the same time slot → selectionType: 'single' (radio)
  * - If 1 item in a time slot → selectionType: 'multiple' (checkbox)
  *
@@ -471,41 +597,19 @@ export async function getGroupedAccess(
   const now = new Date();
 
   // Filter by availability, conditions, and prerequisites
-  const availableAccess = allAccess.filter((access) => {
-    // Check date availability
-    if (access.availableFrom && access.availableFrom > now) return false;
-    if (access.availableTo && access.availableTo < now) return false;
+  const availableAccess = filterByPrerequisites(
+    filterAccessByConditions(
+      filterAccessByAvailability(allAccess, now),
+      formData,
+    ),
+    selectedAccessIds,
+  );
 
-    // Check form-based conditions
-    if (access.conditions) {
-      if (
-        !evaluateConditions(
-          access.conditions as AccessCondition[],
-          access.conditionLogic as "AND" | "OR",
-          formData,
-        )
-      ) {
-        return false;
-      }
-    }
-
-    // Check access-based prerequisites
-    if (access.requiredAccess && access.requiredAccess.length > 0) {
-      const hasAllPrerequisites = access.requiredAccess.every((req) =>
-        selectedAccessIds.includes(req.id),
-      );
-      if (!hasAllPrerequisites) return false;
-    }
-
-    return true;
-  });
-
-  // Enrich with availability info
+  // Enrich with capacity info
   const enrichedAccess: EnrichedAccess[] = availableAccess.map((access) => {
     const spotsRemaining = access.maxCapacity
       ? access.maxCapacity - access.registeredCount
       : null;
-
     return {
       ...access,
       spotsRemaining,
@@ -513,84 +617,7 @@ export async function getGroupedAccess(
     };
   });
 
-  // === Hierarchical grouping by DATE ===
-
-  // Helper: Format date as French day name + date (e.g., "Jeudi 16 avril")
-  const formatDateLabel = (dateStr: string): string => {
-    if (dateStr === "no-date") return "Sans date";
-    const date = new Date(dateStr + "T00:00:00");
-    const formatted = date.toLocaleDateString("fr-FR", {
-      weekday: "long",
-      day: "numeric",
-      month: "long",
-    });
-    // Capitalize first letter
-    return formatted.charAt(0).toUpperCase() + formatted.slice(1);
-  };
-
-  // Step 1: Group by DATE (day only, no time)
-  const dateMap = new Map<string, EnrichedAccess[]>();
-
-  for (const access of enrichedAccess) {
-    // Extract date part only (YYYY-MM-DD)
-    const dateKey = access.startsAt
-      ? access.startsAt.toISOString().split("T")[0]
-      : "no-date";
-
-    if (!dateMap.has(dateKey)) dateMap.set(dateKey, []);
-    dateMap.get(dateKey)!.push(access);
-  }
-
-  // Step 2: For each date, sub-group by TIME SLOT
-  const groups: DateGroup[] = Array.from(dateMap.entries()).map(
-    ([dateKey, items]) => {
-      // Sub-group by startsAt time (full ISO string)
-      const slotMap = new Map<string, EnrichedAccess[]>();
-      for (const item of items) {
-        const timeKey = item.startsAt?.toISOString() || "no-time";
-        if (!slotMap.has(timeKey)) slotMap.set(timeKey, []);
-        slotMap.get(timeKey)!.push(item);
-      }
-
-      // Convert to slots array
-      const slots: TimeSlot[] = Array.from(slotMap.entries())
-        .map(([_timeKey, slotItems]) => ({
-          startsAt: slotItems[0].startsAt,
-          endsAt: slotItems[0].endsAt,
-          // 2+ items at same time = single (radio), 1 item = multiple (checkbox)
-          selectionType: (slotItems.length > 1 ? "single" : "multiple") as
-            | "single"
-            | "multiple",
-          // Items in a slot all share the same startsAt, so sort by sortOrder only
-          items: slotItems.sort((a, b) => a.sortOrder - b.sortOrder),
-        }))
-        .sort((a, b) => {
-          // Sort slots by time (null times at end)
-          if (!a.startsAt && !b.startsAt) return 0;
-          if (!a.startsAt) return 1;
-          if (!b.startsAt) return -1;
-          return a.startsAt.getTime() - b.startsAt.getTime();
-        });
-
-      return {
-        dateKey,
-        label: formatDateLabel(dateKey),
-        slots,
-      };
-    },
-  );
-
-  // Sort groups chronologically by date
-  groups.sort((a, b) => {
-    // "no-date" items go to the end
-    if (a.dateKey === "no-date" && b.dateKey === "no-date") return 0;
-    if (a.dateKey === "no-date") return 1;
-    if (b.dateKey === "no-date") return -1;
-    // Sort by date chronologically
-    return new Date(a.dateKey).getTime() - new Date(b.dateKey).getTime();
-  });
-
-  return { groups };
+  return { groups: groupAccessByDate(enrichedAccess) };
 }
 
 // ============================================================================
@@ -791,9 +818,9 @@ export async function validateAccessSelections(
     // Form conditions
     if (access.conditions) {
       if (
-        !evaluateConditions(
+        !sharedEvaluateConditions(
           access.conditions as AccessCondition[],
-          access.conditionLogic as "AND" | "OR",
+          access.conditionLogic as "and" | "or",
           formData,
         )
       ) {
@@ -816,33 +843,4 @@ export async function validateAccessSelections(
   }
 
   return { valid: errors.length === 0, errors };
-}
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-function evaluateConditions(
-  conditions: AccessCondition[],
-  logic: "AND" | "OR",
-  formData: Record<string, unknown>,
-): boolean {
-  const results = conditions.map((c) => evaluateSingleCondition(c, formData));
-  return logic === "AND" ? results.every(Boolean) : results.some(Boolean);
-}
-
-function evaluateSingleCondition(
-  condition: AccessCondition,
-  formData: Record<string, unknown>,
-): boolean {
-  const value = formData[condition.fieldId];
-
-  switch (condition.operator) {
-    case "equals":
-      return value === condition.value;
-    case "not_equals":
-      return value !== condition.value;
-    default:
-      return false;
-  }
 }

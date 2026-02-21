@@ -25,30 +25,30 @@ export function gracefulShutdown(
         process.exit(1);
       }, SHUTDOWN_TIMEOUT_MS);
 
-      void (async () => {
-        try {
-          // Run cleanup hooks
-          for (const hook of cleanupHooks) {
-            await hook();
-          }
-
-          // Stop accepting new connections
-          await server.close();
-          logger.info("HTTP server closed");
-
-          // Disconnect database
-          await prisma.$disconnect();
-          logger.info("Database disconnected");
-
-          clearTimeout(forceExitTimer);
-          logger.info("Graceful shutdown complete");
-          process.exit(0);
-        } catch (error) {
-          logger.error({ error }, "Error during graceful shutdown");
-          clearTimeout(forceExitTimer);
-          process.exit(1);
+      async function performShutdown() {
+        // Run cleanup hooks
+        for (const hook of cleanupHooks) {
+          await hook();
         }
-      })();
+
+        // Stop accepting new connections
+        await server.close();
+        logger.info("HTTP server closed");
+
+        // Disconnect database
+        await prisma.$disconnect();
+        logger.info("Database disconnected");
+
+        clearTimeout(forceExitTimer);
+        logger.info("Graceful shutdown complete");
+        process.exit(0);
+      }
+
+      performShutdown().catch((err) => {
+        logger.error({ err }, "Shutdown failed");
+        clearTimeout(forceExitTimer);
+        process.exit(1);
+      });
     });
   });
 }

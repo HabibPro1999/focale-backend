@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { TiptapNode } from "./email.types.js";
+import { PaginationSchema } from "@shared/schemas/common.js";
 
 // ============================================================================
 // Enums
@@ -108,8 +109,7 @@ export const UpdateEmailTemplateSchema = z
 
 export const ListEmailTemplatesQuerySchema = z
   .object({
-    page: z.coerce.number().int().min(1).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(20),
+    ...PaginationSchema.shape,
     category: EmailTemplateCategorySchema.optional(),
     search: z.string().max(200).optional(),
   })

@@ -2,7 +2,7 @@ import {
   requireAuth,
   canAccessClient,
 } from "@shared/middleware/auth.middleware.js";
-import { getEventById } from "@events";
+import { requireEventAccess } from "@shared/middleware/access-control.js";
 import {
   createEmailTemplate,
   getEmailTemplateById,
@@ -36,6 +36,8 @@ import {
   type BulkSendEmailInput,
 } from "./email.schema.js";
 import type { AppInstance } from "@shared/types/fastify.js";
+import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
 
 // ============================================================================
 // Protected Routes (Admin)
@@ -64,14 +66,7 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
       const { eventId } = request.params;
       const query = request.query;
 
-      const event = await getEventById(eventId);
-      if (!event) {
-        throw app.httpErrors.notFound("Event not found");
-      }
-
-      if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
-      }
+      await requireEventAccess(request.user!, eventId);
 
       const templates = await listEmailTemplates(eventId, query);
       return reply.send(templates);
@@ -89,14 +84,7 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
     async (request, reply) => {
       const { eventId } = request.params;
 
-      const event = await getEventById(eventId);
-      if (!event) {
-        throw app.httpErrors.notFound("Event not found");
-      }
-
-      if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
-      }
+      await requireEventAccess(request.user!, eventId);
 
       const variables = await getAvailableVariables(eventId);
       return reply.send(variables);
@@ -119,14 +107,7 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
       const { eventId } = request.params;
       const input = request.body;
 
-      const event = await getEventById(eventId);
-      if (!event) {
-        throw app.httpErrors.notFound("Event not found");
-      }
-
-      if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
-      }
+      await requireEventAccess(request.user!, eventId);
 
       const template = await createEmailTemplate({ ...input, eventId });
       return reply.status(201).send(template);
@@ -144,11 +125,21 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
 
       const template = await getEmailTemplateById(templateId);
       if (!template) {
-        throw app.httpErrors.notFound("Email template not found");
+        throw new AppError(
+          "Email template not found",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       if (!canAccessClient(request.user!, template.clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
+        throw new AppError(
+          "Insufficient permissions",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
+        );
       }
 
       return reply.send(template);
@@ -170,11 +161,21 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
 
       const clientId = await getEmailTemplateClientId(templateId);
       if (!clientId) {
-        throw app.httpErrors.notFound("Email template not found");
+        throw new AppError(
+          "Email template not found",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       if (!canAccessClient(request.user!, clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
+        throw new AppError(
+          "Insufficient permissions",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
+        );
       }
 
       const template = await updateEmailTemplate(templateId, input);
@@ -193,11 +194,21 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
 
       const clientId = await getEmailTemplateClientId(templateId);
       if (!clientId) {
-        throw app.httpErrors.notFound("Email template not found");
+        throw new AppError(
+          "Email template not found",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       if (!canAccessClient(request.user!, clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
+        throw new AppError(
+          "Insufficient permissions",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
+        );
       }
 
       await deleteEmailTemplate(templateId);
@@ -217,11 +228,21 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
 
       const clientId = await getEmailTemplateClientId(templateId);
       if (!clientId) {
-        throw app.httpErrors.notFound("Email template not found");
+        throw new AppError(
+          "Email template not found",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       if (!canAccessClient(request.user!, clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
+        throw new AppError(
+          "Insufficient permissions",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
+        );
       }
 
       const template = await duplicateEmailTemplate(templateId, name);
@@ -247,11 +268,21 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
 
       const template = await getEmailTemplateById(templateId);
       if (!template) {
-        throw app.httpErrors.notFound("Email template not found");
+        throw new AppError(
+          "Email template not found",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       if (!canAccessClient(request.user!, template.clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
+        throw new AppError(
+          "Insufficient permissions",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
+        );
       }
 
       // Get sample context for variable resolution
@@ -279,8 +310,11 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
       });
 
       if (!result.success) {
-        throw app.httpErrors.badGateway(
+        throw new AppError(
           result.error || "Failed to send test email",
+          502,
+          true,
+          ErrorCodes.INTERNAL_ERROR,
         );
       }
 
@@ -315,24 +349,25 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
       const { registrationIds, filters } = request.body;
 
       // Verify event access
-      const event = await getEventById(eventId);
-      if (!event) {
-        throw app.httpErrors.notFound("Event not found");
-      }
-
-      if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
-      }
+      const event = await requireEventAccess(request.user!, eventId);
 
       // Verify template exists and belongs to this event/client
       const template = await getEmailTemplateById(templateId);
       if (!template) {
-        throw app.httpErrors.notFound("Email template not found");
+        throw new AppError(
+          "Email template not found",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       if (template.clientId !== event.clientId) {
-        throw app.httpErrors.forbidden(
+        throw new AppError(
           "Template does not belong to this client",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
         );
       }
 

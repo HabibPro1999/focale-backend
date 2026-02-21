@@ -1,37 +1,20 @@
 // ============================================================================
-// Types for Prisma Client (works with both PrismaClient and transactions)
-// ============================================================================
-
-/**
- * Minimal interface for Prisma operations needed by sponsorship utilities.
- * This works with both the main PrismaClient and transaction clients.
- */
-interface PrismaLike {
-  sponsorship: {
-    findUnique: (args: {
-      where: { code: string };
-      select: { id: true };
-    }) => Promise<{ id: string } | null>;
-  };
-  eventPricing: {
-    findUnique: (args: {
-      where: { eventId: string };
-      select: { basePrice: true };
-    }) => Promise<{ basePrice: number } | null>;
-  };
-  eventAccess: {
-    findMany: (args: {
-      where: { id: { in: string[] }; eventId: string; active: boolean };
-      select: { price: true };
-    }) => Promise<Array<{ price: number }>>;
-  };
-}
-
-// ============================================================================
 // Code Generation
 // ============================================================================
 
 import { randomInt } from "crypto";
+import type { ExtendedPrismaClient } from "@/database/client.js";
+import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
+export { getAccessTypeKey } from "@shared/utils/access-helpers.js";
+import { getAccessTypeKey } from "@shared/utils/access-helpers.js";
+
+// Transaction client type derived from the extended Prisma client.
+// Used as the parameter type for utility functions that are called in both
+// transaction and non-transaction contexts.
+type SponsorshipDb = Parameters<
+  Parameters<ExtendedPrismaClient["$transaction"]>[0]
+>[0];
 
 // Characters for code generation (excluding O, I, L to avoid confusion)
 const CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
@@ -44,7 +27,7 @@ const CODE_PREFIX = "SP-";
  * Retries up to maxAttempts times before throwing an error.
  */
 export async function generateUniqueCode(
-  db: PrismaLike,
+  db: SponsorshipDb,
   maxAttempts = 10,
 ): Promise<string> {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -63,8 +46,11 @@ export async function generateUniqueCode(
     }
   }
 
-  throw new Error(
+  throw new AppError(
     "Failed to generate unique sponsorship code after maximum attempts",
+    500,
+    true,
+    ErrorCodes.INTERNAL_ERROR,
   );
 }
 
@@ -77,7 +63,7 @@ export async function generateUniqueCode(
  * Sums base price (if covered) and prices of covered access items.
  */
 export async function calculateSponsorshipTotal(
-  db: PrismaLike,
+  db: SponsorshipDb,
   eventId: string,
   coversBasePrice: boolean,
   coveredAccessIds: string[],
@@ -259,17 +245,6 @@ export interface AccessItemForOverlapCheck {
   groupLabel: string | null;
   startsAt: Date | null;
   endsAt: Date | null;
-}
-
-/**
- * Get the type key for grouping access items.
- * Items with type OTHER are grouped by groupLabel, others by type.
- */
-export function getAccessTypeKey(
-  type: string,
-  groupLabel: string | null,
-): string {
-  return type === "OTHER" ? `OTHER:${groupLabel || ""}` : type;
 }
 
 /**

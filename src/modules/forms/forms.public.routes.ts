@@ -1,36 +1,51 @@
-import { getFormByEventSlug, getSponsorFormByEventSlug } from './forms.service.js';
-import { EventSlugParamSchema } from '@events';
-import type { AppInstance } from '@shared/types/fastify.js';
+import {
+  getFormByEventSlug,
+  getSponsorFormByEventSlug,
+} from "./forms.service.js";
+import { EventSlugParamSchema } from "@events";
+import type { AppInstance } from "@shared/types/fastify.js";
+import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
 
 export async function formsPublicRoutes(app: AppInstance): Promise<void> {
   // NO auth hook - these routes are public
 
   // GET /api/forms/public/:slug - Get published form by event slug with event and client info
   app.get<{ Params: { slug: string } }>(
-    '/:slug',
+    "/:slug",
     {
       schema: { params: EventSlugParamSchema },
     },
     async (request, reply) => {
       const form = await getFormByEventSlug(request.params.slug);
       if (!form) {
-        throw app.httpErrors.notFound('Form not found or not published');
+        throw new AppError(
+          "Form not found or not published",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       return reply.send(form);
-    }
+    },
   );
 
   // GET /api/forms/public/:slug/sponsor - Get sponsor form by event slug
   app.get<{ Params: { slug: string } }>(
-    '/:slug/sponsor',
+    "/:slug/sponsor",
     {
       schema: { params: EventSlugParamSchema },
     },
     async (request, reply) => {
       const form = await getSponsorFormByEventSlug(request.params.slug);
       if (!form) {
-        throw app.httpErrors.notFound('Sponsor form not found or event not open');
+        throw new AppError(
+          "Sponsor form not found or event not open",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       // Transform response for public consumption
@@ -50,6 +65,6 @@ export async function formsPublicRoutes(app: AppInstance): Promise<void> {
         pricing: form.event.pricing,
         accessItems: form.event.access,
       });
-    }
+    },
   );
 }

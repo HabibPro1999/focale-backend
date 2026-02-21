@@ -23,6 +23,20 @@ function createPrismaClient() {
       timeout: 30000, // Increased from 10s
     },
   }).$extends({
+    /**
+     * Automatic field omission for the User model.
+     *
+     * Every User query automatically omits `createdAt` and `updatedAt` unless
+     * the caller explicitly uses a `select` clause (which takes precedence and
+     * makes `omit` invalid in Prisma). Aggregate operations (`count`,
+     * `aggregate`, `groupBy`) are also excluded because they do not support
+     * the `omit` option.
+     *
+     * Why: User rows are fetched frequently and these timestamps are internal
+     * metadata that should not leak to API consumers or clutter downstream
+     * type inference. Centralising the omission here avoids repeating
+     * `omit: { createdAt: true, updatedAt: true }` on every call site.
+     */
     query: {
       user: {
         async $allOperations({ operation, args, query }) {

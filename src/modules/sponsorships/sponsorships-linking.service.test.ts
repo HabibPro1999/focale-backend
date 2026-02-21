@@ -23,6 +23,8 @@ import {
   unlinkSponsorshipFromRegistration,
   getAvailableSponsorships,
   getLinkedSponsorships,
+  recalculateUsageAmounts,
+  type LinkSponsorshipResult,
 } from "./sponsorships-linking.service.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 
@@ -97,9 +99,11 @@ describe("Sponsorships Linking Service", () => {
         adminUserId,
       );
 
-      expect(result.usage.amountApplied).toBe(200);
-      expect(result.registration.sponsorshipAmount).toBe(200);
-      expect(result.warnings).toHaveLength(0);
+      expect(result.skipped).toBe(false);
+      const linked = result as LinkSponsorshipResult;
+      expect(linked.usage.amountApplied).toBe(200);
+      expect(linked.registration.sponsorshipAmount).toBe(200);
+      expect(linked.warnings).toHaveLength(0);
     });
 
     it("should throw when sponsorship not found", async () => {
@@ -250,7 +254,7 @@ describe("Sponsorships Linking Service", () => {
       });
     });
 
-    it("should throw when sponsorship coverage does not apply", async () => {
+    it("should return skipped result when sponsorship coverage does not apply", async () => {
       const mockSponsorship = {
         ...createMockSponsorship({
           id: sponsorshipId,
@@ -282,15 +286,56 @@ describe("Sponsorships Linking Service", () => {
       );
       prismaMock.sponsorshipUsage.findUnique.mockResolvedValue(null);
 
-      await expect(
-        linkSponsorshipToRegistration(
-          sponsorshipId,
-          registrationId,
-          adminUserId,
-        ),
-      ).rejects.toMatchObject({
-        statusCode: 400,
-        code: ErrorCodes.SPONSORSHIP_NOT_APPLICABLE,
+      const result = await linkSponsorshipToRegistration(
+        sponsorshipId,
+        registrationId,
+        adminUserId,
+      );
+
+      expect(result).toMatchObject({
+        skipped: true,
+        reason: expect.stringContaining("does not apply"),
+      });
+    });
+
+    it("should return skipped result when registration is fully sponsored", async () => {
+      const mockSponsorship = {
+        ...createMockSponsorship({
+          id: sponsorshipId,
+          eventId,
+          status: "PENDING",
+          coversBasePrice: true,
+          coveredAccessIds: [],
+          totalAmount: 200,
+        }),
+        usages: [],
+      };
+      const mockRegistration = {
+        id: registrationId,
+        eventId,
+        totalAmount: 300,
+        baseAmount: 200,
+        accessTypeIds: [],
+        priceBreakdown: { calculatedBasePrice: 200, accessItems: [] },
+        sponsorshipAmount: 300, // fully sponsored
+        sponsorshipUsages: [],
+      };
+
+      prismaMock.sponsorship.findUnique.mockResolvedValue(mockSponsorship);
+      prismaMock.registration.findUnique.mockResolvedValue(
+        asMock(mockRegistration),
+      );
+      prismaMock.sponsorshipUsage.findUnique.mockResolvedValue(null);
+
+      const result = await linkSponsorshipToRegistration(
+        sponsorshipId,
+        registrationId,
+        adminUserId,
+      );
+
+      expect(result).toMatchObject({
+        skipped: true,
+        reason: expect.stringContaining("fully sponsored"),
       });
     });
 
@@ -366,8 +411,10 @@ describe("Sponsorships Linking Service", () => {
         adminUserId,
       );
 
-      expect(result.warnings).toHaveLength(1);
-      expect(result.warnings[0]).toContain("Base price is already covered");
+      expect(result.skipped).toBe(false);
+      const linked = result as LinkSponsorshipResult;
+      expect(linked.warnings).toHaveLength(1);
+      expect(linked.warnings[0]).toContain("Base price is already covered");
     });
   });
 
@@ -449,7 +496,9 @@ describe("Sponsorships Linking Service", () => {
         adminUserId,
       );
 
-      expect(result.usage.sponsorshipId).toBe(sponsorshipId);
+      expect(result.skipped).toBe(false);
+      const linked = result as LinkSponsorshipResult;
+      expect(linked.usage.sponsorshipId).toBe(sponsorshipId);
     });
 
     it("should throw when registration not found", async () => {
@@ -725,6 +774,245 @@ describe("Sponsorships Linking Service", () => {
       const result = await getLinkedSponsorships(registrationId);
 
       expect(result).toHaveLength(0);
+    });
+  });
+
+  describe("recalculateUsageAmounts", () => {
+    it("should do nothing when sponsorship not found", async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const txMock: any = {
+        sponsorship: { findUnique: vi.fn().mockResolvedValue(null) },
+        sponsorshipUsage: { update: vi.fn() },
+        $executeRaw: vi.fn(),
+      };
+
+      await recalculateUsageAmounts(txMock, faker.string.uuid());
+
+      expect(txMock.sponsorshipUsage.update).not.toHaveBeenCalled();
+      expect(txMock.$executeRaw).not.toHaveBeenCalled();
+    });
+
+    it("should skip usages where registration was deleted", async () => {
+      const sponsorshipId = faker.string.uuid();
+      const mockSponsorship = {
+        id: sponsorshipId,
+        coversBasePrice: true,
+        coveredAccessIds: [],
+        totalAmount: 200,
+        usages: [
+          {
+            id: faker.string.uuid(),
+            amountApplied: 100,
+            registration: null, // deleted
+          },
+        ],
+      };
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const txMock: any = {
+        sponsorship: {
+          findUnique: vi.fn().mockResolvedValue(mockSponsorship),
+        },
+        sponsorshipUsage: { update: vi.fn() },
+        $executeRaw: vi.fn(),
+      };
+
+      await recalculateUsageAmounts(txMock, sponsorshipId);
+
+      expect(txMock.sponsorshipUsage.update).not.toHaveBeenCalled();
+      expect(txMock.$executeRaw).not.toHaveBeenCalled();
+    });
+
+    it("should update usage amount and atomically adjust registration sponsorshipAmount by delta", async () => {
+      const sponsorshipId = faker.string.uuid();
+      const usageId = faker.string.uuid();
+      const registrationId = faker.string.uuid();
+
+      // Sponsorship covers base price, totalAmount = 200
+      // Registration totalAmount = 300, baseAmount = 200
+      // Old usage amountApplied = 150
+      // New applicable amount = 200 (calculateApplicableAmount returns min(totalAmount, baseAmount) = 200)
+      // Delta = 200 - 150 = 50
+      const mockSponsorship = {
+        id: sponsorshipId,
+        coversBasePrice: true,
+        coveredAccessIds: [],
+        totalAmount: 200,
+        usages: [
+          {
+            id: usageId,
+            amountApplied: 150,
+            registration: {
+              id: registrationId,
+              totalAmount: 300,
+              baseAmount: 200,
+              accessTypeIds: [],
+              priceBreakdown: { calculatedBasePrice: 200, accessItems: [] },
+            },
+          },
+        ],
+      };
+
+      const executeRawMock = vi.fn().mockResolvedValue(1);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const txMock: any = {
+        sponsorship: {
+          findUnique: vi.fn().mockResolvedValue(mockSponsorship),
+        },
+        sponsorshipUsage: {
+          update: vi.fn().mockResolvedValue({}),
+        },
+        $executeRaw: executeRawMock,
+      };
+
+      await recalculateUsageAmounts(txMock, sponsorshipId);
+
+      // Usage should be updated to the new calculated amount (200)
+      expect(txMock.sponsorshipUsage.update).toHaveBeenCalledWith({
+        where: { id: usageId },
+        data: { amountApplied: 200 },
+      });
+
+      // $executeRaw should be called once (atomic increment for the registration)
+      expect(executeRawMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("should apply negative delta when new amount is less than old amount", async () => {
+      const sponsorshipId = faker.string.uuid();
+      const usageId = faker.string.uuid();
+      const registrationId = faker.string.uuid();
+
+      // Old amount = 200, new applicable = 100 (coverage reduced)
+      // Delta = 100 - 200 = -100
+      const mockSponsorship = {
+        id: sponsorshipId,
+        coversBasePrice: false,
+        coveredAccessIds: ["access-1"],
+        totalAmount: 100,
+        usages: [
+          {
+            id: usageId,
+            amountApplied: 200,
+            registration: {
+              id: registrationId,
+              totalAmount: 300,
+              baseAmount: 200,
+              accessTypeIds: ["access-1"],
+              priceBreakdown: {
+                calculatedBasePrice: 200,
+                accessItems: [{ accessId: "access-1", subtotal: 100 }],
+              },
+            },
+          },
+        ],
+      };
+
+      const executeRawMock = vi.fn().mockResolvedValue(1);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const txMock: any = {
+        sponsorship: {
+          findUnique: vi.fn().mockResolvedValue(mockSponsorship),
+        },
+        sponsorshipUsage: {
+          update: vi.fn().mockResolvedValue({}),
+        },
+        $executeRaw: executeRawMock,
+      };
+
+      await recalculateUsageAmounts(txMock, sponsorshipId);
+
+      // Usage updated to 100 (new applicable amount)
+      expect(txMock.sponsorshipUsage.update).toHaveBeenCalledWith({
+        where: { id: usageId },
+        data: { amountApplied: 100 },
+      });
+
+      // $executeRaw called once for the atomic decrement
+      expect(executeRawMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("should handle multiple usages across different registrations atomically", async () => {
+      const sponsorshipId = faker.string.uuid();
+      const usageId1 = faker.string.uuid();
+      const usageId2 = faker.string.uuid();
+      const registrationId1 = faker.string.uuid();
+      const registrationId2 = faker.string.uuid();
+
+      const mockSponsorship = {
+        id: sponsorshipId,
+        coversBasePrice: true,
+        coveredAccessIds: [],
+        totalAmount: 200,
+        usages: [
+          {
+            id: usageId1,
+            amountApplied: 100,
+            registration: {
+              id: registrationId1,
+              totalAmount: 300,
+              baseAmount: 200,
+              accessTypeIds: [],
+              priceBreakdown: { calculatedBasePrice: 200, accessItems: [] },
+            },
+          },
+          {
+            id: usageId2,
+            amountApplied: 150,
+            registration: {
+              id: registrationId2,
+              totalAmount: 400,
+              baseAmount: 300,
+              accessTypeIds: [],
+              priceBreakdown: { calculatedBasePrice: 300, accessItems: [] },
+            },
+          },
+        ],
+      };
+
+      const executeRawMock = vi.fn().mockResolvedValue(1);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const txMock: any = {
+        sponsorship: {
+          findUnique: vi.fn().mockResolvedValue(mockSponsorship),
+        },
+        sponsorshipUsage: {
+          update: vi.fn().mockResolvedValue({}),
+        },
+        $executeRaw: executeRawMock,
+      };
+
+      await recalculateUsageAmounts(txMock, sponsorshipId);
+
+      // Both usages updated
+      expect(txMock.sponsorshipUsage.update).toHaveBeenCalledTimes(2);
+      // $executeRaw called once per registration (2 registrations)
+      expect(executeRawMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("should not call $executeRaw when sponsorship has no usages", async () => {
+      const sponsorshipId = faker.string.uuid();
+      const mockSponsorship = {
+        id: sponsorshipId,
+        coversBasePrice: true,
+        coveredAccessIds: [],
+        totalAmount: 200,
+        usages: [],
+      };
+
+      const executeRawMock = vi.fn().mockResolvedValue(1);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const txMock: any = {
+        sponsorship: {
+          findUnique: vi.fn().mockResolvedValue(mockSponsorship),
+        },
+        sponsorshipUsage: { update: vi.fn() },
+        $executeRaw: executeRawMock,
+      };
+
+      await recalculateUsageAmounts(txMock, sponsorshipId);
+
+      expect(txMock.sponsorshipUsage.update).not.toHaveBeenCalled();
+      expect(executeRawMock).not.toHaveBeenCalled();
     });
   });
 });

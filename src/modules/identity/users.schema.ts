@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { UserRole } from "./permissions.js";
+import { PaginationSchema } from "@shared/schemas/common.js";
 
 // ============================================================================
 // Request Schemas
@@ -45,8 +46,7 @@ export const UpdateUserSchema = z
 
 export const ListUsersQuerySchema = z
   .object({
-    page: z.coerce.number().int().min(1).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(20),
+    ...PaginationSchema.shape,
     role: z.coerce
       .number()
       .int()

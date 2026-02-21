@@ -12,7 +12,7 @@ import {
   updateForm,
   listForms,
   deleteForm,
-  createDefaultSponsorSchema,
+  createDefaultSponsorSchemaFr,
   getSponsorFormByEventSlug,
   getSponsorFormByEventId,
   createSponsorForm,
@@ -373,7 +373,50 @@ describe("Forms Service", () => {
       });
     });
 
-    it("should log warning when removing fields with existing registrations", async () => {
+    it("should throw when removing fields with existing registrations and no force flag", async () => {
+      const mockForm = createMockForm({
+        id: formId,
+        schema: {
+          steps: [
+            {
+              id: "step-1",
+              title: "Info",
+              fields: [
+                { id: "field-to-remove", type: "text", label: "Name" },
+                { id: "field-to-keep", type: "email", label: "Email" },
+              ],
+            },
+          ],
+        },
+      });
+
+      prismaMock.form.findUnique.mockResolvedValue(mockForm);
+      prismaMock.registration.count.mockResolvedValue(5); // Has registrations
+
+      const newSchema = {
+        steps: [
+          {
+            id: "step-1",
+            title: "Info",
+            fields: [
+              { id: "field-to-keep", type: "email" as const, label: "Email" },
+            ],
+          },
+        ],
+      };
+
+      await expect(
+        updateForm(formId, { schema: newSchema }),
+      ).rejects.toMatchObject({
+        statusCode: 409,
+        code: ErrorCodes.FORM_FIELD_REMOVAL_BLOCKED,
+      });
+
+      // The update should not have been called
+      expect(prismaMock.form.update).not.toHaveBeenCalled();
+    });
+
+    it("should proceed when removing fields with existing registrations and force: true", async () => {
       const mockForm = createMockForm({
         id: formId,
         schema: {
@@ -407,11 +450,18 @@ describe("Forms Service", () => {
         ],
       };
 
-      await updateForm(formId, { schema: newSchema });
+      const result = await updateForm(formId, {
+        schema: newSchema,
+        force: true,
+      });
 
-      // Check that registration count was queried
-      expect(prismaMock.registration.count).toHaveBeenCalledWith({
-        where: { formId },
+      expect(result).toEqual(updatedForm);
+      expect(prismaMock.form.update).toHaveBeenCalledWith({
+        where: { id: formId },
+        data: expect.objectContaining({
+          schema: newSchema,
+          schemaVersion: { increment: 1 },
+        }),
       });
     });
   });
@@ -548,9 +598,9 @@ describe("Forms Service", () => {
   // Sponsor Form Functions
   // ============================================================================
 
-  describe("createDefaultSponsorSchema", () => {
+  describe("createDefaultSponsorSchemaFr", () => {
     it("should create valid sponsor form schema", () => {
-      const schema = createDefaultSponsorSchema();
+      const schema = createDefaultSponsorSchemaFr();
 
       expect(schema.formType).toBe("SPONSOR");
       expect(schema.sponsorSteps).toHaveLength(1);
@@ -561,7 +611,7 @@ describe("Forms Service", () => {
     });
 
     it("should include required sponsor step fields", () => {
-      const schema = createDefaultSponsorSchema();
+      const schema = createDefaultSponsorSchemaFr();
       const fields = schema.sponsorSteps[0].fields;
       const fieldIds = fields.map((f) => f.id);
 
@@ -572,7 +622,7 @@ describe("Forms Service", () => {
     });
 
     it("should include beneficiary template fields", () => {
-      const schema = createDefaultSponsorSchema();
+      const schema = createDefaultSponsorSchemaFr();
       const fields = schema.beneficiaryTemplate.fields;
       const fieldIds = fields.map((f) => f.id);
 

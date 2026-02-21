@@ -30,6 +30,32 @@ type UserWithClient = Prisma.UserGetPayload<{ include: { client: true } }>;
 // ============================================================================
 
 /**
+ * Validate that role and clientId are consistent.
+ * CLIENT_ADMIN must have a clientId; SUPER_ADMIN must not.
+ */
+function validateRoleClientConsistency(
+  role: number,
+  clientId: string | null | undefined,
+): void {
+  if (role === UserRole.CLIENT_ADMIN && !clientId) {
+    throw new AppError(
+      "CLIENT_ADMIN users must be assigned to a client",
+      400,
+      true,
+      ErrorCodes.VALIDATION_ERROR,
+    );
+  }
+  if (role === UserRole.SUPER_ADMIN && clientId) {
+    throw new AppError(
+      "SUPER_ADMIN users cannot be assigned to a client",
+      400,
+      true,
+      ErrorCodes.VALIDATION_ERROR,
+    );
+  }
+}
+
+/**
  * Validate that a client ID exists if provided.
  */
 async function validateClientId(
@@ -83,22 +109,7 @@ export async function createUser(
   }
 
   // Validate role-clientId consistency
-  if (role === UserRole.CLIENT_ADMIN && !clientId) {
-    throw new AppError(
-      "CLIENT_ADMIN users must be assigned to a client",
-      400,
-      true,
-      ErrorCodes.VALIDATION_ERROR,
-    );
-  }
-  if (role === UserRole.SUPER_ADMIN && clientId) {
-    throw new AppError(
-      "SUPER_ADMIN users cannot be assigned to a client",
-      400,
-      true,
-      ErrorCodes.VALIDATION_ERROR,
-    );
-  }
+  validateRoleClientConsistency(role, clientId);
 
   // Validate clientId if provided
   await validateClientId(clientId);
@@ -165,23 +176,8 @@ export async function updateUser(
   const effectiveClientId =
     input.clientId !== undefined ? input.clientId : user.clientId;
 
-  // Validate role-clientId consistency (mirrors createUser logic)
-  if (effectiveRole === UserRole.CLIENT_ADMIN && !effectiveClientId) {
-    throw new AppError(
-      "CLIENT_ADMIN users must be assigned to a client",
-      400,
-      true,
-      ErrorCodes.VALIDATION_ERROR,
-    );
-  }
-  if (effectiveRole === UserRole.SUPER_ADMIN && effectiveClientId) {
-    throw new AppError(
-      "SUPER_ADMIN users cannot be assigned to a client",
-      400,
-      true,
-      ErrorCodes.VALIDATION_ERROR,
-    );
-  }
+  // Validate role-clientId consistency
+  validateRoleClientConsistency(effectiveRole, effectiveClientId);
 
   // Validate clientId if being changed
   await validateClientId(input.clientId);

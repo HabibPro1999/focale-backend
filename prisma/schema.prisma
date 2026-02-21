@@ -204,7 +204,7 @@ model EventAccess {
 
   // Conditions (form-based prerequisites)
   conditions     Json? // Array of {fieldId, operator, value}
-  conditionLogic String @default("AND") @map("condition_logic")
+  conditionLogic String @default("and") @map("condition_logic")
 
   // Display
   sortOrder Int     @default(0) @map("sort_order")

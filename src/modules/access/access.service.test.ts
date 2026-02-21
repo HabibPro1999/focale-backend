@@ -1245,7 +1245,7 @@ describe("Access Service", () => {
           eventId,
           name: "Exclusive Workshop",
           active: true,
-          conditionLogic: "AND",
+          conditionLogic: "and",
           conditions: [
             { fieldId: "profession", operator: "equals", value: "doctor" },
             { fieldId: "specialty", operator: "equals", value: "cardiology" },
@@ -1281,7 +1281,7 @@ describe("Access Service", () => {
           eventId,
           name: "Flexible Workshop",
           active: true,
-          conditionLogic: "OR",
+          conditionLogic: "or",
           conditions: [
             { fieldId: "profession", operator: "equals", value: "doctor" },
             { fieldId: "profession", operator: "equals", value: "nurse" },

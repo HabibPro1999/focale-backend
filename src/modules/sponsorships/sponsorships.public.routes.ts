@@ -9,6 +9,8 @@ import {
 import { z } from "zod";
 import type { AppInstance } from "@shared/types/fastify.js";
 import { prisma } from "@/database/client.js";
+import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
 
 // ============================================================================
 // Public Routes (No Auth - for sponsor form submission)
@@ -36,19 +38,27 @@ export async function sponsorshipsPublicRoutes(
       // Verify event exists and is open
       const event = await getEventById(eventId);
       if (!event) {
-        throw app.httpErrors.notFound("Event not found");
+        throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
       }
 
       if (event.status !== "OPEN") {
-        throw app.httpErrors.badRequest(
+        throw new AppError(
           "Event is not accepting sponsorship submissions",
+          400,
+          true,
+          ErrorCodes.VALIDATION_ERROR,
         );
       }
 
       // Get the sponsor form for this event
       const form = await getSponsorFormForEvent(eventId);
       if (!form) {
-        throw app.httpErrors.notFound("Sponsor form not found for this event");
+        throw new AppError(
+          "Sponsor form not found for this event",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       // Create the sponsorship batch
@@ -103,13 +113,18 @@ export async function sponsorshipsPublicBySlugRoutes(
       // Get event by slug
       const event = await getEventBySlug(slug);
       if (!event) {
-        throw app.httpErrors.notFound("Event not found");
+        throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
       }
 
       // Verify sponsor form exists and uses LINKED_ACCOUNT mode
       const form = await getSponsorFormForEvent(event.id);
       if (!form) {
-        throw app.httpErrors.notFound("Sponsor form not found");
+        throw new AppError(
+          "Sponsor form not found",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       // Check sponsorship mode (security check to prevent unauthorized searches)
@@ -130,7 +145,12 @@ export async function sponsorshipsPublicBySlugRoutes(
         parseResult.data?.sponsorshipSettings?.sponsorshipMode !==
           "LINKED_ACCOUNT"
       ) {
-        throw app.httpErrors.forbidden("Search not available for this form");
+        throw new AppError(
+          "Search not available for this form",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
+        );
       }
 
       const sponsorshipSettings = parseResult.data.sponsorshipSettings;
@@ -170,19 +190,27 @@ export async function sponsorshipsPublicBySlugRoutes(
       // Get event by slug
       const event = await getEventBySlug(slug);
       if (!event) {
-        throw app.httpErrors.notFound("Event not found");
+        throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
       }
 
       if (event.status !== "OPEN") {
-        throw app.httpErrors.badRequest(
+        throw new AppError(
           "Event is not accepting sponsorship submissions",
+          400,
+          true,
+          ErrorCodes.VALIDATION_ERROR,
         );
       }
 
       // Get the sponsor form for this event
       const form = await getSponsorFormForEvent(event.id);
       if (!form) {
-        throw app.httpErrors.notFound("Sponsor form not found for this event");
+        throw new AppError(
+          "Sponsor form not found for this event",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       // Create the sponsorship batch

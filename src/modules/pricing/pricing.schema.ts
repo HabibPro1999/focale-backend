@@ -31,7 +31,7 @@ export const EmbeddedPricingRuleSchema = z
     description: z.string().max(1000).optional().nullable(),
     priority: z.number().int().min(0).default(0),
     conditions: z.array(PricingConditionSchema).min(1),
-    conditionLogic: z.enum(["AND", "OR"]).default("AND"),
+    conditionLogic: z.enum(["and", "or"]).default("and"),
     price: z.number().int().min(0), // Fixed price when conditions match
     active: z.boolean().default(true),
   })
@@ -49,7 +49,7 @@ export const UpdateEmbeddedRuleSchema = z
     description: z.string().max(1000).optional().nullable(),
     priority: z.number().int().min(0).optional(),
     conditions: z.array(PricingConditionSchema).min(1).optional(),
-    conditionLogic: z.enum(["AND", "OR"]).optional(),
+    conditionLogic: z.enum(["and", "or"]).optional(),
     price: z.number().int().min(0).optional(),
     active: z.boolean().optional(),
   })

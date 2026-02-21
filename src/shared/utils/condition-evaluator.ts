@@ -184,12 +184,12 @@ export function evaluateSingleCondition(
  */
 export function evaluateConditions(
   conditions: EvaluableCondition[],
-  logic: "AND" | "OR",
+  logic: "and" | "or",
   formData: Record<string, unknown>,
   options?: EvaluateConditionsOptions,
 ): boolean {
   const results = conditions.map((c) =>
     evaluateSingleCondition(c, formData, options),
   );
-  return logic === "AND" ? results.every(Boolean) : results.some(Boolean);
+  return logic === "and" ? results.every(Boolean) : results.some(Boolean);
 }

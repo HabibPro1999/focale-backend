@@ -5,6 +5,8 @@
 
 import mjml2html from "mjml";
 import { sanitizeUrl, sanitizeForHtml } from "./email-variable.service.js";
+import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
 import type {
   TiptapDocument,
   TiptapNode,
@@ -129,7 +131,12 @@ export function compileMjmlToHtml(mjml: string): MjmlCompilationResult {
     const errorMessages = errors
       .map((e) => e.message || e.formattedMessage)
       .join("; ");
-    throw new Error(`MJML compilation failed: ${errorMessages}`);
+    throw new AppError(
+      `MJML compilation failed: ${errorMessages}`,
+      500,
+      true,
+      ErrorCodes.INTERNAL_ERROR,
+    );
   }
 
   return {

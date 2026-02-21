@@ -464,5 +464,166 @@ describe("Reports Service", () => {
         expect(dataRow[fieldIdx]).toBe("");
       });
     });
+
+    // ─── Edge cases ─────────────────────────────────────────────────────────
+    describe("edge cases", () => {
+      it("returns empty CSV with only headers when there are no registrations", async () => {
+        prismaMock.form.findFirst.mockResolvedValue(null);
+        prismaMock.registration.findMany.mockResolvedValue([]);
+        prismaMock.registration.count.mockResolvedValue(0);
+        prismaMock.eventAccess.findMany.mockResolvedValue([]);
+
+        const result = await exportRegistrations(eventId, eventSlug, {
+          format: "csv",
+          limit: 1000,
+        });
+
+        expect(result.data).toContain("ID,Email,First Name,Last Name");
+        // Only the header row — no data rows
+        const lines = result.data.split("\n").filter((l) => l.trim() !== "");
+        expect(lines).toHaveLength(1);
+        expect(result.metadata).toMatchObject({
+          total: 0,
+          exported: 0,
+          truncated: false,
+        });
+      });
+
+      it("returns empty JSON array when there are no registrations", async () => {
+        prismaMock.form.findFirst.mockResolvedValue(null);
+        prismaMock.registration.findMany.mockResolvedValue([]);
+        prismaMock.registration.count.mockResolvedValue(0);
+        prismaMock.eventAccess.findMany.mockResolvedValue([]);
+
+        const result = await exportRegistrations(eventId, eventSlug, {
+          format: "json",
+          limit: 1000,
+        });
+
+        const parsed = JSON.parse(result.data);
+        expect(Array.isArray(parsed)).toBe(true);
+        expect(parsed).toHaveLength(0);
+        expect(result.metadata.total).toBe(0);
+      });
+
+      it("applies startDate filter to WHERE clause", async () => {
+        prismaMock.form.findFirst.mockResolvedValue(null);
+        prismaMock.registration.findMany.mockResolvedValue([]);
+        prismaMock.registration.count.mockResolvedValue(0);
+        prismaMock.eventAccess.findMany.mockResolvedValue([]);
+
+        await exportRegistrations(eventId, eventSlug, {
+          format: "csv",
+          limit: 1000,
+          startDate: "2024-01-01",
+        });
+
+        expect(prismaMock.registration.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.objectContaining({
+              eventId,
+              submittedAt: expect.objectContaining({
+                gte: new Date("2024-01-01"),
+              }),
+            }),
+          }),
+        );
+      });
+
+      it("applies endDate filter to WHERE clause", async () => {
+        prismaMock.form.findFirst.mockResolvedValue(null);
+        prismaMock.registration.findMany.mockResolvedValue([]);
+        prismaMock.registration.count.mockResolvedValue(0);
+        prismaMock.eventAccess.findMany.mockResolvedValue([]);
+
+        await exportRegistrations(eventId, eventSlug, {
+          format: "csv",
+          limit: 1000,
+          endDate: "2024-12-31",
+        });
+
+        expect(prismaMock.registration.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.objectContaining({
+              eventId,
+              submittedAt: expect.objectContaining({
+                lte: new Date("2024-12-31"),
+              }),
+            }),
+          }),
+        );
+      });
+
+      it("applies both startDate and endDate filters together", async () => {
+        prismaMock.form.findFirst.mockResolvedValue(null);
+        prismaMock.registration.findMany.mockResolvedValue([]);
+        prismaMock.registration.count.mockResolvedValue(0);
+        prismaMock.eventAccess.findMany.mockResolvedValue([]);
+
+        await exportRegistrations(eventId, eventSlug, {
+          format: "csv",
+          limit: 1000,
+          startDate: "2024-03-01",
+          endDate: "2024-03-31",
+        });
+
+        expect(prismaMock.registration.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.objectContaining({
+              submittedAt: expect.objectContaining({
+                gte: new Date("2024-03-01"),
+                lte: new Date("2024-03-31"),
+              }),
+            }),
+          }),
+        );
+      });
+
+      it("marks truncated=false when exported equals total", async () => {
+        prismaMock.form.findFirst.mockResolvedValue(null);
+        prismaMock.registration.findMany.mockResolvedValue([
+          makeRegistration() as never,
+          makeRegistration() as never,
+        ]);
+        prismaMock.registration.count.mockResolvedValue(2);
+        prismaMock.eventAccess.findMany.mockResolvedValue([]);
+
+        const result = await exportRegistrations(eventId, eventSlug, {
+          format: "csv",
+          limit: 1000,
+        });
+
+        expect(result.metadata).toMatchObject({
+          total: 2,
+          exported: 2,
+          truncated: false,
+        });
+      });
+
+      it("respects limit and reports truncation when more registrations exist than limit", async () => {
+        // limit=2 but total=100 in the database
+        prismaMock.form.findFirst.mockResolvedValue(null);
+        prismaMock.registration.findMany.mockResolvedValue([
+          makeRegistration() as never,
+          makeRegistration() as never,
+        ]);
+        prismaMock.registration.count.mockResolvedValue(100);
+        prismaMock.eventAccess.findMany.mockResolvedValue([]);
+
+        const result = await exportRegistrations(eventId, eventSlug, {
+          format: "csv",
+          limit: 2,
+        });
+
+        expect(result.metadata).toMatchObject({
+          total: 100,
+          exported: 2,
+          truncated: true,
+        });
+        // CSV should have header + 2 data rows
+        const lines = result.data.split("\n").filter((l) => l.trim() !== "");
+        expect(lines).toHaveLength(3); // 1 header + 2 data rows
+      });
+    });
   });
 });

@@ -38,7 +38,7 @@ type FormWithRelations = Form & {
 /**
  * Generate default form schema with standard registration fields.
  */
-function createDefaultSchema(): FormSchemaJson {
+function createDefaultSchemaFr(): FormSchemaJson {
   return {
     steps: [
       {
@@ -125,7 +125,7 @@ export async function createForm(input: CreateFormInput): Promise<Form> {
   }
 
   // Use provided schema or generate default
-  const formSchema = schema?.steps?.length ? schema : createDefaultSchema();
+  const formSchema = schema?.steps?.length ? schema : createDefaultSchemaFr();
 
   return prisma.form.create({
     data: {
@@ -205,22 +205,10 @@ function extractFieldIds(schema: unknown): string[] {
     sponsorSteps?: Array<{ fields?: Array<{ id?: string }> }>;
   };
 
-  // Handle registration forms (steps)
-  if (Array.isArray(schemaObj.steps)) {
-    for (const step of schemaObj.steps) {
-      if (Array.isArray(step.fields)) {
-        for (const field of step.fields) {
-          if (field.id) {
-            ids.push(field.id);
-          }
-        }
-      }
-    }
-  }
-
-  // Handle sponsor forms (sponsorSteps)
-  if (Array.isArray(schemaObj.sponsorSteps)) {
-    for (const step of schemaObj.sponsorSteps) {
+  // Walk both step arrays (registration forms use 'steps', sponsor forms use 'sponsorSteps')
+  for (const stepArray of [schemaObj.steps, schemaObj.sponsorSteps]) {
+    if (!Array.isArray(stepArray)) continue;
+    for (const step of stepArray) {
       if (Array.isArray(step.fields)) {
         for (const field of step.fields) {
           if (field.id) {
@@ -276,18 +264,7 @@ export async function updateForm(
         const newMode =
           newSchema.sponsorshipSettings?.sponsorshipMode ?? "CODE";
 
-        // If mode is changing, check if it's locked
-        if (currentMode !== newMode) {
-          const isLocked = await isSponsorshipModeLocked(id);
-          if (isLocked) {
-            throw new AppError(
-              "Cannot change sponsorship mode after sponsorship batches have been submitted",
-              409,
-              true,
-              ErrorCodes.CONFLICT,
-            );
-          }
-        }
+        await assertSponsorshipModeChangeable(id, currentMode, newMode);
       }
 
       // Check for removed fields that may have registration data
@@ -302,6 +279,15 @@ export async function updateForm(
         });
 
         if (regCount > 0) {
+          if (!input.force) {
+            throw new AppError(
+              `Removing ${removedFields.length} field(s) would orphan data from ${regCount} existing registration(s). Pass force: true to proceed anyway.`,
+              409,
+              true,
+              ErrorCodes.FORM_FIELD_REMOVAL_BLOCKED,
+            );
+          }
+
           logger.warn(
             {
               formId: id,
@@ -393,6 +379,28 @@ export async function isSponsorshipModeLocked(
 }
 
 /**
+ * Assert that the sponsorship mode can be changed.
+ * Throws CONFLICT if mode is changing and batches already exist.
+ */
+async function assertSponsorshipModeChangeable(
+  formId: string,
+  currentMode: string,
+  newMode: string,
+): Promise<void> {
+  if (currentMode !== newMode) {
+    const isLocked = await isSponsorshipModeLocked(formId);
+    if (isLocked) {
+      throw new AppError(
+        "Cannot change sponsorship mode after sponsorship batches have been submitted",
+        409,
+        true,
+        ErrorCodes.CONFLICT,
+      );
+    }
+  }
+}
+
+/**
  * Update sponsorship settings for a SPONSOR form.
  * Only updates the sponsorshipSettings portion of the schema.
  */
@@ -420,18 +428,11 @@ export async function updateSponsorshipSettings(
   const currentMode =
     currentSchema.sponsorshipSettings?.sponsorshipMode ?? "CODE";
 
-  // If mode is changing, check if it's locked
-  if (settings.sponsorshipMode !== currentMode) {
-    const isLocked = await isSponsorshipModeLocked(formId);
-    if (isLocked) {
-      throw new AppError(
-        "Cannot change sponsorship mode after sponsorship batches have been submitted",
-        409,
-        true,
-        ErrorCodes.CONFLICT,
-      );
-    }
-  }
+  await assertSponsorshipModeChangeable(
+    formId,
+    currentMode,
+    settings.sponsorshipMode,
+  );
 
   // Merge new settings into schema
   const updatedSchema: SponsorFormSchemaJson = {
@@ -485,7 +486,7 @@ export async function getFormWithClientId(
 /**
  * Create default sponsor form schema with standard lab and beneficiary fields.
  */
-export function createDefaultSponsorSchema(): SponsorFormSchemaJson {
+export function createDefaultSponsorSchemaFr(): SponsorFormSchemaJson {
   return {
     formType: "SPONSOR",
     sponsorSteps: [
@@ -642,7 +643,7 @@ export async function createSponsorForm(
     );
   }
 
-  const schema = createDefaultSponsorSchema();
+  const schema = createDefaultSponsorSchemaFr();
 
   return prisma.form.create({
     data: {

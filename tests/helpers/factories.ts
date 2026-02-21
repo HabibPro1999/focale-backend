@@ -146,7 +146,7 @@ export function createMockEventAccess(
     availableFrom: null,
     availableTo: null,
     conditions: [],
-    conditionLogic: "AND",
+    conditionLogic: "and",
     sortOrder: 0,
     groupLabel: null,
     allowCompanion: false,

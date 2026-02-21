@@ -198,13 +198,6 @@ describe("Users Service", () => {
       // Verify Firebase user was deleted during rollback
       expect(firebaseAuthMock.deleteUser).toHaveBeenCalledWith("firebase-uid");
     });
-
-    // Note: The service code has a bug where Firebase rollback doesn't work because
-    // `prisma.user.create` is returned directly without await, so the rejection
-    // happens outside the try-catch block. This should be fixed by changing:
-    //   return prisma.user.create({...})
-    // to:
-    //   return await prisma.user.create({...})
   });
 
   // ============================================================================

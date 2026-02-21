@@ -26,6 +26,7 @@ import {
 export interface CreateBatchResult {
   batchId: string;
   count: number;
+  skippedCount: number;
 }
 
 // ============================================================================
@@ -288,6 +289,9 @@ export async function createSponsorshipBatch(
       Sponsorship & { linkedRegistrationId?: string }
     > = [];
 
+    // Track how many beneficiaries were skipped due to zero cap
+    let skippedCount = 0;
+
     // Track cumulative sponsorship amounts per registration (for capping within batch)
     const registrationSponsorshipAmounts = new Map<string, number>();
 
@@ -388,6 +392,7 @@ export async function createSponsorshipBatch(
             },
             "Skipping sponsorship link - registration is fully sponsored",
           );
+          skippedCount++;
           continue;
         }
 
@@ -491,6 +496,7 @@ export async function createSponsorshipBatch(
     return {
       batchId: batch.id,
       count: createdSponsorships.length,
+      skippedCount,
       batch: {
         labName: sponsor.labName,
         contactName: sponsor.contactName,
@@ -613,5 +619,6 @@ export async function createSponsorshipBatch(
   return {
     batchId: result.batchId,
     count: result.count,
+    skippedCount: result.skippedCount,
   };
 }

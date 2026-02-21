@@ -2,6 +2,7 @@ import {
   requireAuth,
   canAccessClient,
 } from "@shared/middleware/auth.middleware.js";
+import { requireEventAccess } from "@shared/middleware/access-control.js";
 import { getEventById, EventIdParamSchema } from "@events";
 import {
   createForm,
@@ -27,6 +28,8 @@ import {
 } from "./forms.schema.js";
 import type { AppInstance } from "@shared/types/fastify.js";
 import { UserRole } from "@identity";
+import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
 
 export async function formsRoutes(app: AppInstance): Promise<void> {
   // All routes require authentication
@@ -39,18 +42,7 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
       schema: { body: CreateFormSchema },
     },
     async (request, reply) => {
-      // Get event to check ownership
-      const event = await getEventById(request.body.eventId);
-      if (!event) {
-        throw app.httpErrors.notFound("Event not found");
-      }
-
-      // Check if user is super_admin or creating form for their own client's event
-      if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden(
-          "Insufficient permissions to create form for this event",
-        );
-      }
+      await requireEventAccess(request.user!, request.body.eventId);
 
       const form = await createForm(request.body);
       return reply.status(201).send(form);
@@ -69,8 +61,11 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
       // For client_admin users, filter by their client's events
       if (request.user!.role === UserRole.CLIENT_ADMIN) {
         if (!request.user!.clientId) {
-          throw app.httpErrors.badRequest(
+          throw new AppError(
             "User is not associated with any client",
+            400,
+            true,
+            ErrorCodes.VALIDATION_ERROR,
           );
         }
 
@@ -78,15 +73,21 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
         if (query.eventId) {
           const event = await getEventById(query.eventId);
           if (!event || event.clientId !== request.user!.clientId) {
-            throw app.httpErrors.forbidden(
+            throw new AppError(
               "Insufficient permissions to access this event",
+              403,
+              true,
+              ErrorCodes.FORBIDDEN,
             );
           }
         }
         // If no eventId provided, we require it for client_admin users
         else {
-          throw app.httpErrors.badRequest(
+          throw new AppError(
             "Event ID is required for client admin users",
+            400,
+            true,
+            ErrorCodes.VALIDATION_ERROR,
           );
         }
       }
@@ -105,7 +106,7 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
     async (request, reply) => {
       const result = await getFormWithClientId(request.params.id);
       if (!result) {
-        throw app.httpErrors.notFound("Form not found");
+        throw new AppError("Form not found", 404, true, ErrorCodes.NOT_FOUND);
       }
 
       // Check if user is super_admin or accessing their own client's form
@@ -113,8 +114,11 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
         !result.clientId ||
         !canAccessClient(request.user!, result.clientId)
       ) {
-        throw app.httpErrors.forbidden(
+        throw new AppError(
           "Insufficient permissions to access this form",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
         );
       }
 
@@ -131,7 +135,7 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
     async (request, reply) => {
       const result = await getFormWithClientId(request.params.id);
       if (!result) {
-        throw app.httpErrors.notFound("Form not found");
+        throw new AppError("Form not found", 404, true, ErrorCodes.NOT_FOUND);
       }
 
       // Check if user is super_admin or accessing their own client's form
@@ -139,8 +143,11 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
         !result.clientId ||
         !canAccessClient(request.user!, result.clientId)
       ) {
-        throw app.httpErrors.forbidden(
+        throw new AppError(
           "Insufficient permissions to access this form",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
         );
       }
 
@@ -167,7 +174,7 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
       // Get form to check ownership
       const result = await getFormWithClientId(request.params.id);
       if (!result) {
-        throw app.httpErrors.notFound("Form not found");
+        throw new AppError("Form not found", 404, true, ErrorCodes.NOT_FOUND);
       }
 
       // Check if user is super_admin or updating their own client's form
@@ -175,8 +182,11 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
         !result.clientId ||
         !canAccessClient(request.user!, result.clientId)
       ) {
-        throw app.httpErrors.forbidden(
+        throw new AppError(
           "Insufficient permissions to update this form",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
         );
       }
 
@@ -198,7 +208,7 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
       // Get form to check ownership
       const result = await getFormWithClientId(request.params.id);
       if (!result) {
-        throw app.httpErrors.notFound("Form not found");
+        throw new AppError("Form not found", 404, true, ErrorCodes.NOT_FOUND);
       }
 
       // Check if user is super_admin or updating their own client's form
@@ -206,8 +216,11 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
         !result.clientId ||
         !canAccessClient(request.user!, result.clientId)
       ) {
-        throw app.httpErrors.forbidden(
+        throw new AppError(
           "Insufficient permissions to update this form",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
         );
       }
 
@@ -226,7 +239,7 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
       // Get form to check ownership
       const result = await getFormWithClientId(request.params.id);
       if (!result) {
-        throw app.httpErrors.notFound("Form not found");
+        throw new AppError("Form not found", 404, true, ErrorCodes.NOT_FOUND);
       }
 
       // Check if user is super_admin or deleting their own client's form
@@ -234,8 +247,11 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
         !result.clientId ||
         !canAccessClient(request.user!, result.clientId)
       ) {
-        throw app.httpErrors.forbidden(
+        throw new AppError(
           "Insufficient permissions to delete this form",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
         );
       }
 
@@ -255,22 +271,16 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
       schema: { params: EventIdParamSchema },
     },
     async (request, reply) => {
-      // Get event to check ownership
-      const event = await getEventById(request.params.id);
-      if (!event) {
-        throw app.httpErrors.notFound("Event not found");
-      }
-
-      // Check if user is super_admin or accessing their own client's event
-      if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden(
-          "Insufficient permissions to access this event",
-        );
-      }
+      await requireEventAccess(request.user!, request.params.id);
 
       const form = await getSponsorFormByEventId(request.params.id);
       if (!form) {
-        throw app.httpErrors.notFound("Sponsor form not found for this event");
+        throw new AppError(
+          "Sponsor form not found for this event",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       return reply.send(form);
@@ -284,18 +294,7 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
       schema: { params: EventIdParamSchema },
     },
     async (request, reply) => {
-      // Get event to check ownership
-      const event = await getEventById(request.params.id);
-      if (!event) {
-        throw app.httpErrors.notFound("Event not found");
-      }
-
-      // Check if user is super_admin or creating form for their own client's event
-      if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden(
-          "Insufficient permissions to create form for this event",
-        );
-      }
+      await requireEventAccess(request.user!, request.params.id);
 
       const form = await createSponsorForm(
         request.params.id,

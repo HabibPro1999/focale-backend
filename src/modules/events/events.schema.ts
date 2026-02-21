@@ -1,4 +1,10 @@
 import { z } from "zod";
+import {
+  PaginationSchema,
+  CurrencySchema,
+  PriceSchema,
+  SlugSchema,
+} from "@shared/schemas/common.js";
 
 // ============================================================================
 // Enums
@@ -14,14 +20,7 @@ export const CreateEventSchema = z
   .object({
     clientId: z.string().uuid(),
     name: z.string().min(1).max(200),
-    slug: z
-      .string()
-      .min(1)
-      .max(100)
-      .regex(
-        /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/,
-        "Slug must be lowercase alphanumeric with hyphens, dots, or underscores",
-      ),
+    slug: SlugSchema,
     description: z.string().optional().nullable(),
     maxCapacity: z.number().int().positive().optional().nullable(),
     startDate: z.coerce.date(),
@@ -29,8 +28,8 @@ export const CreateEventSchema = z
     location: z.string().min(1).max(500).optional().nullable(),
     status: EventStatusEnum.default("CLOSED"),
     // Pricing
-    basePrice: z.number().int().min(0).default(0),
-    currency: z.string().length(3).default("TND"),
+    basePrice: PriceSchema,
+    currency: CurrencySchema,
   })
   .strict()
   .refine((data) => data.endDate >= data.startDate, {
@@ -41,15 +40,7 @@ export const CreateEventSchema = z
 export const UpdateEventSchema = z
   .object({
     name: z.string().min(1).max(200).optional(),
-    slug: z
-      .string()
-      .min(1)
-      .max(100)
-      .regex(
-        /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/,
-        "Slug must be lowercase alphanumeric with hyphens, dots, or underscores",
-      )
-      .optional(),
+    slug: SlugSchema.optional(),
     description: z.string().optional().nullable(),
     maxCapacity: z.number().int().positive().optional().nullable(),
     startDate: z.coerce.date().optional(),
@@ -73,8 +64,7 @@ export const UpdateEventSchema = z
 
 export const ListEventsQuerySchema = z
   .object({
-    page: z.coerce.number().int().min(1).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(20),
+    ...PaginationSchema.shape,
     clientId: z.string().uuid().optional(),
     status: EventStatusEnum.optional(),
     search: z.string().optional(),

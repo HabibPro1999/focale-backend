@@ -1,8 +1,5 @@
-import {
-  requireAuth,
-  canAccessClient,
-} from "@shared/middleware/auth.middleware.js";
-import { getEventById } from "@events";
+import { requireAuth } from "@shared/middleware/auth.middleware.js";
+import { requireEventAccess } from "@shared/middleware/access-control.js";
 import { getFormById } from "@forms";
 import {
   getEventPricing,
@@ -27,6 +24,8 @@ import {
   type CalculatePriceRequest,
 } from "./pricing.schema.js";
 import type { AppInstance } from "@shared/types/fastify.js";
+import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
 
 // ============================================================================
 // Event Pricing Routes (Protected)
@@ -45,22 +44,16 @@ export async function pricingRulesRoutes(app: AppInstance): Promise<void> {
     async (request, reply) => {
       const { eventId } = request.params;
 
-      // Get event to check ownership
-      const event = await getEventById(eventId);
-      if (!event) {
-        throw app.httpErrors.notFound("Event not found");
-      }
-
-      // Check if user is super_admin or accessing their own client's event
-      if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden(
-          "Insufficient permissions to access this event",
-        );
-      }
+      await requireEventAccess(request.user!, eventId);
 
       const pricing = await getEventPricing(eventId);
       if (!pricing) {
-        throw app.httpErrors.notFound("Event pricing not found");
+        throw new AppError(
+          "Event pricing not found",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       return reply.send(pricing);
@@ -76,18 +69,7 @@ export async function pricingRulesRoutes(app: AppInstance): Promise<void> {
     async (request, reply) => {
       const { eventId } = request.params;
 
-      // Get event to check ownership
-      const event = await getEventById(eventId);
-      if (!event) {
-        throw app.httpErrors.notFound("Event not found");
-      }
-
-      // Check if user is super_admin or updating their own client's event
-      if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden(
-          "Insufficient permissions to update this event",
-        );
-      }
+      await requireEventAccess(request.user!, eventId);
 
       const pricing = await updateEventPricing(eventId, request.body);
       return reply.send(pricing);
@@ -107,18 +89,7 @@ export async function pricingRulesRoutes(app: AppInstance): Promise<void> {
     async (request, reply) => {
       const { eventId } = request.params;
 
-      // Get event to check ownership
-      const event = await getEventById(eventId);
-      if (!event) {
-        throw app.httpErrors.notFound("Event not found");
-      }
-
-      // Check if user is super_admin or creating for their own client
-      if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden(
-          "Insufficient permissions to create pricing rules for this event",
-        );
-      }
+      await requireEventAccess(request.user!, eventId);
 
       const pricing = await addPricingRule(eventId, request.body);
       return reply.status(201).send(pricing);
@@ -137,18 +108,7 @@ export async function pricingRulesRoutes(app: AppInstance): Promise<void> {
     async (request, reply) => {
       const { eventId, ruleId } = request.params;
 
-      // Get event to check ownership
-      const event = await getEventById(eventId);
-      if (!event) {
-        throw app.httpErrors.notFound("Event not found");
-      }
-
-      // Check if user is super_admin or updating their own client's event
-      if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden(
-          "Insufficient permissions to update this pricing rule",
-        );
-      }
+      await requireEventAccess(request.user!, eventId);
 
       const pricing = await updatePricingRule(eventId, ruleId, request.body);
       return reply.send(pricing);
@@ -164,18 +124,7 @@ export async function pricingRulesRoutes(app: AppInstance): Promise<void> {
     async (request, reply) => {
       const { eventId, ruleId } = request.params;
 
-      // Get event to check ownership
-      const event = await getEventById(eventId);
-      if (!event) {
-        throw app.httpErrors.notFound("Event not found");
-      }
-
-      // Check if user is super_admin or deleting their own client's event
-      if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden(
-          "Insufficient permissions to delete this pricing rule",
-        );
-      }
+      await requireEventAccess(request.user!, eventId);
 
       await deletePricingRule(eventId, ruleId);
       return reply.status(204).send();
@@ -205,7 +154,7 @@ export async function pricingPaymentConfigPublicRoutes(
       const config = await getEventPaymentConfig(eventId);
 
       if (!config) {
-        throw app.httpErrors.notFound("Event not found");
+        throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
       }
 
       return reply.send(config);
@@ -232,7 +181,7 @@ export async function pricingPublicRoutes(app: AppInstance): Promise<void> {
       const form = await getFormById(formId);
 
       if (!form) {
-        throw app.httpErrors.notFound("Form not found");
+        throw new AppError("Form not found", 404, true, ErrorCodes.NOT_FOUND);
       }
 
       const breakdown = await calculatePrice(form.eventId, input);

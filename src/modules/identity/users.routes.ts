@@ -20,6 +20,8 @@ import {
   type ListUsersQuery,
 } from "./users.schema.js";
 import type { AppInstance } from "@shared/types/fastify.js";
+import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
 
 export async function usersRoutes(app: AppInstance): Promise<void> {
   // All routes require authentication
@@ -72,7 +74,7 @@ export async function usersRoutes(app: AppInstance): Promise<void> {
     async (request, reply) => {
       const user = await getUserById(request.params.id);
       if (!user) {
-        throw app.httpErrors.notFound("User not found");
+        throw new AppError("User not found", 404, true, ErrorCodes.NOT_FOUND);
       }
       const safeUser = UserResponseSchema.parse(user);
       return reply.send(safeUser);

@@ -7,6 +7,15 @@ interface CacheEntry<T> {
   expiresAt: number;
 }
 
+/**
+ * In-memory TTL cache with lazy expiry.
+ *
+ * Expiry semantics:
+ * - Expired entries are removed only on access (`get`), not on a background schedule.
+ * - `size` counts all entries including expired ones that have not been accessed yet.
+ * - Memory grows unbounded if keys are written but never read again; call `clear()`
+ *   periodically or bound the number of distinct keys if unbounded growth is a concern.
+ */
 export class SimpleCache<T> {
   private cache = new Map<string, CacheEntry<T>>();
   private readonly ttlMs: number;

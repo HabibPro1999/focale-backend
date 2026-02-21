@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PaginationSchema } from "@shared/schemas/common.js";
 
 // ============================================================================
 // Field Schemas
@@ -25,10 +26,7 @@ export const FieldOptionSchema = z
   .object({
     id: z.string(),
     label: z.string(),
-    priceModifier: z.number().optional(),
     description: z.string().optional(),
-    maxCapacity: z.number().optional(),
-    currentCount: z.number().optional(),
   })
   .strict();
 
@@ -70,7 +68,7 @@ export const FieldValidationSchema = z
     acceptedFileTypes: z.array(z.string()).optional(),
     minSelections: z.number().int().min(0).optional(),
     maxSelections: z.number().int().positive().optional(),
-    // Custom error messages
+    // Custom error messages (named fields, used by form-data-validator)
     requiredError: z.string().optional(),
     patternError: z.string().optional(),
     minLengthError: z.string().optional(),
@@ -83,17 +81,11 @@ export const FieldValidationSchema = z
     fileSizeError: z.string().optional(),
     minSelectionsError: z.string().optional(),
     maxSelectionsError: z.string().optional(),
+    // Generic catch-all map for frontend-defined custom messages (keyed by
+    // validation rule name, e.g. "required", "pattern"). The frontend renderer
+    // may use this for i18n overrides. The backend form-data-validator does NOT
+    // read this field — it uses the individual named fields above.
     errorMessages: z.record(z.string(), z.string()).optional(),
-  })
-  .strict();
-
-export const ConfirmationStepSchema = z
-  .object({
-    title: z.string().optional(),
-    description: z.string().optional(),
-    showPriceSummary: z.boolean().optional(),
-    showTerms: z.boolean().optional(),
-    termsText: z.string().optional(),
   })
   .strict();
 
@@ -101,7 +93,6 @@ export const FormSettingsSchema = z
   .object({
     successMessage: z.string().optional(),
     showConfirmationStep: z.boolean().optional(),
-    confirmationStep: ConfirmationStepSchema.optional(),
   })
   .strict();
 
@@ -229,13 +220,13 @@ export const UpdateFormSchema = z
     schema: FormSchemaJsonSchema.optional(),
     successTitle: z.string().optional().nullable(),
     successMessage: z.string().optional().nullable(),
+    force: z.boolean().optional(),
   })
   .strict();
 
 export const ListFormsQuerySchema = z
   .object({
-    page: z.coerce.number().int().min(1).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(20),
+    ...PaginationSchema.shape,
     eventId: z.string().uuid().optional(),
     search: z.string().optional(),
     type: z.enum(["REGISTRATION", "SPONSOR"]).optional(),

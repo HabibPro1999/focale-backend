@@ -74,15 +74,15 @@ export async function createEvent(
         startDate,
         endDate,
         location: location ?? null,
-        status: status ?? "CLOSED",
+        status,
       },
     });
 
     const pricing = await tx.eventPricing.create({
       data: {
         eventId: event.id,
-        basePrice: basePrice ?? 0,
-        currency: currency ?? "TND",
+        basePrice,
+        currency,
       },
     });
 
@@ -133,17 +133,24 @@ const VALID_STATUS_TRANSITIONS: Record<string, string[]> = {
 
 /**
  * Update event.
+ *
+ * @param prefetchedEvent - Optional event already fetched by the caller (e.g.
+ *   from requireEventAccess). When provided the initial DB read is skipped.
+ *   The event must have been fetched with `include: { pricing: true }`.
  */
 export async function updateEvent(
   id: string,
   input: UpdateEventInput,
   performedBy: string,
+  prefetchedEvent?: EventWithPricing,
 ): Promise<EventWithPricing> {
-  // Check if event exists
-  const event = await prisma.event.findUnique({
-    where: { id },
-    include: { pricing: true },
-  });
+  // Use the pre-fetched event when available to avoid a redundant DB read
+  const event =
+    prefetchedEvent ??
+    (await prisma.event.findUnique({
+      where: { id },
+      include: { pricing: true },
+    }));
   if (!event) {
     throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
   }

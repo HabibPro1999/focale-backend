@@ -2,7 +2,7 @@ import {
   requireAuth,
   canAccessClient,
 } from "@shared/middleware/auth.middleware.js";
-import { getEventById } from "@events";
+import { requireEventAccess } from "@shared/middleware/access-control.js";
 import {
   listSponsorships,
   getSponsorshipStats,
@@ -17,6 +17,7 @@ import {
   unlinkSponsorshipFromRegistration,
   getAvailableSponsorships,
   getLinkedSponsorships,
+  type LinkSponsorshipSkippedResult,
 } from "./sponsorships-linking.service.js";
 import { getRegistrationById } from "@registrations";
 import {
@@ -34,6 +35,8 @@ import {
   type LinkSponsorshipByCodeInput,
 } from "./sponsorships.schema.js";
 import type { AppInstance } from "@shared/types/fastify.js";
+import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
 
 // ============================================================================
 // Event-scoped Sponsorship Routes (mounted at /api/events)
@@ -58,14 +61,7 @@ export async function sponsorshipsRoutes(app: AppInstance): Promise<void> {
       const { eventId } = request.params;
       const query = request.query;
 
-      const event = await getEventById(eventId);
-      if (!event) {
-        throw app.httpErrors.notFound("Event not found");
-      }
-
-      if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
-      }
+      await requireEventAccess(request.user!, eventId);
 
       const sponsorships = await listSponsorships(eventId, query);
       return reply.send(sponsorships);
@@ -83,14 +79,7 @@ export async function sponsorshipsRoutes(app: AppInstance): Promise<void> {
     async (request, reply) => {
       const { eventId } = request.params;
 
-      const event = await getEventById(eventId);
-      if (!event) {
-        throw app.httpErrors.notFound("Event not found");
-      }
-
-      if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
-      }
+      await requireEventAccess(request.user!, eventId);
 
       const stats = await getSponsorshipStats(eventId);
       return reply.send(stats);
@@ -116,12 +105,22 @@ export async function sponsorshipDetailRoutes(app: AppInstance): Promise<void> {
 
       const sponsorship = await getSponsorshipById(id);
       if (!sponsorship) {
-        throw app.httpErrors.notFound("Sponsorship not found");
+        throw new AppError(
+          "Sponsorship not found",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       const clientId = await getSponsorshipClientId(id);
       if (clientId && !canAccessClient(request.user!, clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
+        throw new AppError(
+          "Insufficient permissions",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
+        );
       }
 
       return reply.send(sponsorship);
@@ -143,11 +142,21 @@ export async function sponsorshipDetailRoutes(app: AppInstance): Promise<void> {
 
       const clientId = await getSponsorshipClientId(id);
       if (!clientId) {
-        throw app.httpErrors.notFound("Sponsorship not found");
+        throw new AppError(
+          "Sponsorship not found",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       if (!canAccessClient(request.user!, clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
+        throw new AppError(
+          "Insufficient permissions",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
+        );
       }
 
       const sponsorship = await updateSponsorship(id, input, request.user!.id);
@@ -166,11 +175,21 @@ export async function sponsorshipDetailRoutes(app: AppInstance): Promise<void> {
 
       const clientId = await getSponsorshipClientId(id);
       if (!clientId) {
-        throw app.httpErrors.notFound("Sponsorship not found");
+        throw new AppError(
+          "Sponsorship not found",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       if (!canAccessClient(request.user!, clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
+        throw new AppError(
+          "Insufficient permissions",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
+        );
       }
 
       await deleteSponsorship(id, request.user!.id);
@@ -199,11 +218,21 @@ export async function registrationSponsorshipsRoutes(
 
       const registration = await getRegistrationById(registrationId);
       if (!registration) {
-        throw app.httpErrors.notFound("Registration not found");
+        throw new AppError(
+          "Registration not found",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       if (!canAccessClient(request.user!, registration.event.clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
+        throw new AppError(
+          "Insufficient permissions",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
+        );
       }
 
       const sponsorships = await getAvailableSponsorships(
@@ -225,11 +254,21 @@ export async function registrationSponsorshipsRoutes(
 
       const registration = await getRegistrationById(registrationId);
       if (!registration) {
-        throw app.httpErrors.notFound("Registration not found");
+        throw new AppError(
+          "Registration not found",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       if (!canAccessClient(request.user!, registration.event.clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
+        throw new AppError(
+          "Insufficient permissions",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
+        );
       }
 
       const linkedSponsorships = await getLinkedSponsorships(registrationId);
@@ -252,11 +291,21 @@ export async function registrationSponsorshipsRoutes(
 
       const registration = await getRegistrationById(registrationId);
       if (!registration) {
-        throw app.httpErrors.notFound("Registration not found");
+        throw new AppError(
+          "Registration not found",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       if (!canAccessClient(request.user!, registration.event.clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
+        throw new AppError(
+          "Insufficient permissions",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
+        );
       }
 
       const result = await linkSponsorshipToRegistration(
@@ -264,6 +313,10 @@ export async function registrationSponsorshipsRoutes(
         registrationId,
         request.user!.id,
       );
+
+      if ((result as LinkSponsorshipSkippedResult).skipped) {
+        return reply.status(200).send({ success: false, ...result });
+      }
 
       return reply.status(201).send({ success: true, ...result });
     },
@@ -287,11 +340,21 @@ export async function registrationSponsorshipsRoutes(
 
       const registration = await getRegistrationById(registrationId);
       if (!registration) {
-        throw app.httpErrors.notFound("Registration not found");
+        throw new AppError(
+          "Registration not found",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       if (!canAccessClient(request.user!, registration.event.clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
+        throw new AppError(
+          "Insufficient permissions",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
+        );
       }
 
       const result = await linkSponsorshipByCode(
@@ -299,6 +362,10 @@ export async function registrationSponsorshipsRoutes(
         code,
         request.user!.id,
       );
+
+      if ((result as LinkSponsorshipSkippedResult).skipped) {
+        return reply.status(200).send({ success: false, ...result });
+      }
 
       return reply.status(201).send({ success: true, ...result });
     },
@@ -315,11 +382,21 @@ export async function registrationSponsorshipsRoutes(
 
       const registration = await getRegistrationById(registrationId);
       if (!registration) {
-        throw app.httpErrors.notFound("Registration not found");
+        throw new AppError(
+          "Registration not found",
+          404,
+          true,
+          ErrorCodes.NOT_FOUND,
+        );
       }
 
       if (!canAccessClient(request.user!, registration.event.clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
+        throw new AppError(
+          "Insufficient permissions",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
+        );
       }
 
       await unlinkSponsorshipFromRegistration(sponsorshipId, registrationId);

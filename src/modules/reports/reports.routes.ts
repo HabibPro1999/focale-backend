@@ -3,11 +3,8 @@
 // ============================================================================
 
 import type { AppInstance } from "@shared/types/fastify.js";
-import {
-  requireAuth,
-  canAccessClient,
-} from "@shared/middleware/auth.middleware.js";
-import { getEventById } from "@events";
+import { requireAuth } from "@shared/middleware/auth.middleware.js";
+import { requireEventAccess } from "@shared/middleware/access-control.js";
 import {
   ReportQuerySchema,
   ExportQuerySchema,
@@ -43,13 +40,7 @@ export async function reportsRoutes(app: AppInstance): Promise<void> {
       const { eventId } = request.params;
 
       // Authorization: verify client access
-      const event = await getEventById(eventId);
-      if (!event) {
-        throw app.httpErrors.notFound("Event not found");
-      }
-      if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
-      }
+      await requireEventAccess(request.user!, eventId);
 
       const report = await getFinancialReport(eventId, request.query);
       return reply.send(report);
@@ -74,13 +65,7 @@ export async function reportsRoutes(app: AppInstance): Promise<void> {
       const { eventId } = request.params;
 
       // Authorization: verify client access
-      const event = await getEventById(eventId);
-      if (!event) {
-        throw app.httpErrors.notFound("Event not found");
-      }
-      if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
-      }
+      const event = await requireEventAccess(request.user!, eventId);
 
       const result = await exportRegistrations(
         eventId,

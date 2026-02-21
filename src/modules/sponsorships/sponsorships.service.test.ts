@@ -46,7 +46,7 @@ describe("Sponsorship Utils", () => {
   describe("generateUniqueCode", () => {
     it("should generate code with SP- prefix and valid characters", async () => {
       prismaMock.sponsorship.findUnique.mockResolvedValue(null);
-      const code = await generateUniqueCode(prismaMock);
+      const code = await generateUniqueCode(prismaMock as never);
       expect(code).toMatch(/^SP-[A-HJ-NP-Z2-9]{4}$/);
     });
 
@@ -54,7 +54,7 @@ describe("Sponsorship Utils", () => {
       prismaMock.sponsorship.findUnique
         .mockResolvedValueOnce({ id: "existing" } as never)
         .mockResolvedValueOnce(null);
-      const code = await generateUniqueCode(prismaMock);
+      const code = await generateUniqueCode(prismaMock as never);
       expect(code).toMatch(/^SP-[A-HJ-NP-Z2-9]{4}$/);
       expect(prismaMock.sponsorship.findUnique).toHaveBeenCalledTimes(2);
     });
@@ -63,7 +63,7 @@ describe("Sponsorship Utils", () => {
       prismaMock.sponsorship.findUnique.mockResolvedValue({
         id: "existing",
       } as never);
-      await expect(generateUniqueCode(prismaMock, 3)).rejects.toThrow(
+      await expect(generateUniqueCode(prismaMock as never, 3)).rejects.toThrow(
         "Failed to generate unique sponsorship code",
       );
       expect(prismaMock.sponsorship.findUnique).toHaveBeenCalledTimes(3);

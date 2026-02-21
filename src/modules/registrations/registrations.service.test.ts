@@ -11,15 +11,19 @@ import {
   getRegistrationById,
   getRegistrationByIdempotencyKey,
   updateRegistration,
-  confirmPayment,
   deleteRegistration,
   listRegistrations,
-  verifyEditToken,
   getRegistrationClientId,
+} from "./registration-crud.service.js";
+import {
+  confirmPayment,
+  uploadPaymentProof,
+} from "./registration-payment.service.js";
+import {
+  verifyEditToken,
   getRegistrationForEdit,
   editRegistrationPublic,
-  uploadPaymentProof,
-} from "./registrations.service.js";
+} from "./registration-edit.service.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import type { PriceBreakdown } from "./registrations.schema.js";

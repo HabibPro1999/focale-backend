@@ -1,13 +1,15 @@
 import { z } from "zod";
 import {
   createRegistration,
+  getRegistrationByIdempotencyKey,
+  toPersistablePriceBreakdown,
+} from "./registration-crud.service.js";
+import { uploadPaymentProof } from "./registration-payment.service.js";
+import {
   getRegistrationForEdit,
   editRegistrationPublic,
   verifyEditToken,
-  uploadPaymentProof,
-  getRegistrationByIdempotencyKey,
-  toPersistablePriceBreakdown,
-} from "./registrations.service.js";
+} from "./registration-edit.service.js";
 import { calculatePrice } from "@pricing";
 import { getFormById } from "@forms";
 import { getEventById } from "@events";
@@ -82,13 +84,18 @@ export async function registrationsPublicRoutes(
       // Verify form exists
       const form = await getFormById(formId);
       if (!form) {
-        throw app.httpErrors.notFound("Form not found");
+        throw new AppError("Form not found", 404, true, ErrorCodes.NOT_FOUND);
       }
 
       // Verify event is OPEN for registrations
       const event = await getEventById(form.eventId);
       if (!event || event.status !== "OPEN") {
-        throw app.httpErrors.badRequest("Event is not accepting registrations");
+        throw new AppError(
+          "Event is not accepting registrations",
+          400,
+          true,
+          ErrorCodes.VALIDATION_ERROR,
+        );
       }
 
       // Validate formData against form schema
@@ -171,7 +178,12 @@ export async function registrationEditPublicRoutes(
       // Verify edit token before returning any data
       const isValid = await verifyEditToken(registrationId, token);
       if (!isValid) {
-        throw app.httpErrors.forbidden("Invalid or expired edit token");
+        throw new AppError(
+          "Invalid or expired edit token",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
+        );
       }
 
       const result = await getRegistrationForEdit(registrationId);
@@ -205,7 +217,12 @@ export async function registrationEditPublicRoutes(
       // Verify edit token before allowing edit
       const isValid = await verifyEditToken(registrationId, token);
       if (!isValid) {
-        throw app.httpErrors.forbidden("Invalid or expired edit token");
+        throw new AppError(
+          "Invalid or expired edit token",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
+        );
       }
 
       const result = await editRegistrationPublic(registrationId, input);
@@ -236,13 +253,23 @@ export async function registrationEditPublicRoutes(
       // Verify edit token before allowing upload
       const isValid = await verifyEditToken(registrationId, token);
       if (!isValid) {
-        throw app.httpErrors.forbidden("Invalid or expired edit token");
+        throw new AppError(
+          "Invalid or expired edit token",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
+        );
       }
 
       // Get file from multipart request
       const data = await request.file();
       if (!data) {
-        throw app.httpErrors.badRequest("No file uploaded");
+        throw new AppError(
+          "No file uploaded",
+          400,
+          true,
+          ErrorCodes.VALIDATION_ERROR,
+        );
       }
 
       const buffer = await data.toBuffer();

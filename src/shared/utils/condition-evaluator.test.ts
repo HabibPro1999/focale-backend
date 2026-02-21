@@ -276,11 +276,11 @@ describe("Condition Evaluator", () => {
         ];
 
         // Both conditions met
-        expect(evaluateConditions(conditions, "AND", formData)).toBe(true);
+        expect(evaluateConditions(conditions, "and", formData)).toBe(true);
 
         // Only first condition met
         expect(
-          evaluateConditions(conditions, "AND", {
+          evaluateConditions(conditions, "and", {
             profession: "doctor",
             age: 20,
           }),
@@ -288,7 +288,7 @@ describe("Condition Evaluator", () => {
 
         // Only second condition met
         expect(
-          evaluateConditions(conditions, "AND", {
+          evaluateConditions(conditions, "and", {
             profession: "nurse",
             age: 30,
           }),
@@ -296,19 +296,19 @@ describe("Condition Evaluator", () => {
 
         // Neither condition met
         expect(
-          evaluateConditions(conditions, "AND", {
+          evaluateConditions(conditions, "and", {
             profession: "nurse",
             age: 20,
           }),
         ).toBe(false);
       });
 
-      it("should handle uppercase 'AND'", () => {
+      it("should handle lowercase 'and'", () => {
         const conditions: EvaluableCondition[] = [
           { fieldId: "profession", operator: "equals", value: "doctor" },
           { fieldId: "age", operator: "greater_than", value: 25 },
         ];
-        expect(evaluateConditions(conditions, "AND", formData)).toBe(true);
+        expect(evaluateConditions(conditions, "and", formData)).toBe(true);
       });
     });
 
@@ -321,27 +321,27 @@ describe("Condition Evaluator", () => {
 
         // First condition met
         expect(
-          evaluateConditions(conditions, "OR", { profession: "doctor" }),
+          evaluateConditions(conditions, "or", { profession: "doctor" }),
         ).toBe(true);
 
         // Second condition met
         expect(
-          evaluateConditions(conditions, "OR", { profession: "nurse" }),
+          evaluateConditions(conditions, "or", { profession: "nurse" }),
         ).toBe(true);
 
         // Neither condition met
         expect(
-          evaluateConditions(conditions, "OR", { profession: "pharmacist" }),
+          evaluateConditions(conditions, "or", { profession: "pharmacist" }),
         ).toBe(false);
       });
 
-      it("should handle uppercase 'OR'", () => {
+      it("should handle lowercase 'or'", () => {
         const conditions: EvaluableCondition[] = [
           { fieldId: "profession", operator: "equals", value: "doctor" },
           { fieldId: "profession", operator: "equals", value: "nurse" },
         ];
         expect(
-          evaluateConditions(conditions, "OR", { profession: "doctor" }),
+          evaluateConditions(conditions, "or", { profession: "doctor" }),
         ).toBe(true);
       });
     });
@@ -357,18 +357,18 @@ describe("Condition Evaluator", () => {
         ];
 
         // Default (false)
-        expect(evaluateConditions(conditions, "AND", formData)).toBe(false);
+        expect(evaluateConditions(conditions, "and", formData)).toBe(false);
 
         // Explicit false
         expect(
-          evaluateConditions(conditions, "AND", formData, {
+          evaluateConditions(conditions, "and", formData, {
             unknownOperatorDefault: false,
           }),
         ).toBe(false);
 
         // Explicit true
         expect(
-          evaluateConditions(conditions, "AND", formData, {
+          evaluateConditions(conditions, "and", formData, {
             unknownOperatorDefault: true,
           }),
         ).toBe(true);

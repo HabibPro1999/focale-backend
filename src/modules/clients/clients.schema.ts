@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PaginationSchema, HexColorSchema } from "@shared/schemas/common.js";
 
 // ============================================================================
 // Module Configuration
@@ -29,11 +30,7 @@ export const CreateClientSchema = z
   .object({
     name: z.string().min(1).max(100),
     logo: z.string().url().optional().nullable(),
-    primaryColor: z
-      .string()
-      .regex(/^#[0-9A-Fa-f]{6}$/, "Primary color must be a valid hex color")
-      .optional()
-      .nullable(),
+    primaryColor: HexColorSchema.optional().nullable(),
     email: z.string().email().optional().nullable(),
     phone: z.string().min(1).max(20).optional().nullable(),
     enabledModules: EnabledModulesSchema.optional(),
@@ -44,11 +41,7 @@ export const UpdateClientSchema = z
   .object({
     name: z.string().min(1).max(100).optional(),
     logo: z.string().url().optional().nullable(),
-    primaryColor: z
-      .string()
-      .regex(/^#[0-9A-Fa-f]{6}$/, "Primary color must be a valid hex color")
-      .optional()
-      .nullable(),
+    primaryColor: HexColorSchema.optional().nullable(),
     email: z.string().email().optional().nullable(),
     phone: z.string().min(1).max(20).optional().nullable(),
     active: z.boolean().optional(),
@@ -58,8 +51,7 @@ export const UpdateClientSchema = z
 
 export const ListClientsQuerySchema = z
   .object({
-    page: z.coerce.number().int().min(1).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(20),
+    ...PaginationSchema.shape,
     active: z
       .enum(["true", "false"])
       .transform((v) => v === "true")

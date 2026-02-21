@@ -2,9 +2,9 @@ import {
   requireAuth,
   canAccessClient,
 } from "@shared/middleware/auth.middleware.js";
+import { requireEventAccess } from "@shared/middleware/access-control.js";
 import {
   createEvent,
-  getEventById,
   listEvents,
   updateEvent,
   deleteEvent,
@@ -20,6 +20,8 @@ import {
 } from "./events.schema.js";
 import type { AppInstance } from "@shared/types/fastify.js";
 import { UserRole } from "@identity";
+import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
 
 export async function eventsRoutes(app: AppInstance): Promise<void> {
   // All routes require authentication
@@ -34,8 +36,11 @@ export async function eventsRoutes(app: AppInstance): Promise<void> {
     async (request, reply) => {
       // Check if user is super_admin or creating event for their own client
       if (!canAccessClient(request.user!, request.body.clientId)) {
-        throw app.httpErrors.forbidden(
+        throw new AppError(
           "Insufficient permissions to create event for this client",
+          403,
+          true,
+          ErrorCodes.FORBIDDEN,
         );
       }
 
@@ -56,8 +61,11 @@ export async function eventsRoutes(app: AppInstance): Promise<void> {
       // Force clientId filter for client_admin users
       if (request.user!.role === UserRole.CLIENT_ADMIN) {
         if (!request.user!.clientId) {
-          throw app.httpErrors.badRequest(
+          throw new AppError(
             "User is not associated with any client",
+            400,
+            true,
+            ErrorCodes.VALIDATION_ERROR,
           );
         }
         query.clientId = request.user!.clientId;
@@ -75,17 +83,7 @@ export async function eventsRoutes(app: AppInstance): Promise<void> {
       schema: { params: EventIdParamSchema },
     },
     async (request, reply) => {
-      const event = await getEventById(request.params.id);
-      if (!event) {
-        throw app.httpErrors.notFound("Event not found");
-      }
-
-      // Check if user is super_admin or accessing their own client's event
-      if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden(
-          "Insufficient permissions to access this event",
-        );
-      }
+      const event = await requireEventAccess(request.user!, request.params.id);
 
       return reply.send(event);
     },
@@ -98,23 +96,15 @@ export async function eventsRoutes(app: AppInstance): Promise<void> {
       schema: { params: EventIdParamSchema, body: UpdateEventSchema },
     },
     async (request, reply) => {
-      // Get event to check ownership
-      const event = await getEventById(request.params.id);
-      if (!event) {
-        throw app.httpErrors.notFound("Event not found");
-      }
-
-      // Check if user is super_admin or updating their own client's event
-      if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden(
-          "Insufficient permissions to update this event",
-        );
-      }
+      // requireEventAccess fetches the event (with pricing) for ownership check.
+      // Pass it to updateEvent to avoid a redundant DB read.
+      const event = await requireEventAccess(request.user!, request.params.id);
 
       const updatedEvent = await updateEvent(
         request.params.id,
         request.body,
         request.user!.id,
+        event,
       );
       return reply.send(updatedEvent);
     },
@@ -127,18 +117,7 @@ export async function eventsRoutes(app: AppInstance): Promise<void> {
       schema: { params: EventIdParamSchema },
     },
     async (request, reply) => {
-      // Get event to check ownership
-      const event = await getEventById(request.params.id);
-      if (!event) {
-        throw app.httpErrors.notFound("Event not found");
-      }
-
-      // Check if user is super_admin or deleting their own client's event
-      if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden(
-          "Insufficient permissions to delete this event",
-        );
-      }
+      await requireEventAccess(request.user!, request.params.id);
 
       await deleteEvent(request.params.id, request.user!.id);
       return reply.status(204).send();
