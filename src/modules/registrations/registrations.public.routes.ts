@@ -21,14 +21,16 @@ import {
   type CreateRegistrationInput,
   type PublicEditRegistrationInput,
 } from "./registrations.schema.js";
-import {
-  validateFormData,
-  type FormSchema,
-} from "@shared/utils/form-data-validator.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
-import { publicRateLimits } from "@core/plugins.js";
-import type { AppInstance } from "@shared/types/fastify.js";
+import { validateFormData, type FormSchema } from "./form-data-validator.js";
+import { AppError } from "@shared/errors.js";
+import { ErrorCodes } from "@shared/errors.js";
+import type { AppInstance } from "@shared/fastify.js";
+
+const publicRateLimits = {
+  registration: { max: 5, timeWindow: "1 minute" },
+  paymentProof: { max: 10, timeWindow: "1 minute" },
+  editToken: { max: 3, timeWindow: "1 minute" },
+} as const;
 
 // Schema for edit token query parameter
 const EditTokenQuerySchema = z
@@ -70,13 +72,15 @@ export async function registrationsPublicRoutes(
         );
         if (existingRegistration) {
           // Return existing registration (idempotent response with 200)
-          const priceBreakdown = existingRegistration.priceBreakdown as unknown;
           return reply.status(200).send({
             registration: {
-              ...existingRegistration,
-              token: existingRegistration.editToken, // Map editToken to token for frontend compatibility
+              id: existingRegistration.id,
+              email: existingRegistration.email,
+              totalAmount: existingRegistration.totalAmount,
+              currency: existingRegistration.currency,
+              paymentStatus: existingRegistration.paymentStatus,
+              token: existingRegistration.editToken,
             },
-            priceBreakdown,
           });
         }
       }
@@ -139,10 +143,13 @@ export async function registrationsPublicRoutes(
 
       return reply.status(201).send({
         registration: {
-          ...registration,
-          token: registration.editToken, // Map editToken to token for frontend compatibility
+          id: registration.id,
+          email: registration.email,
+          totalAmount: registration.totalAmount,
+          currency: registration.currency,
+          paymentStatus: registration.paymentStatus,
+          token: registration.editToken,
         },
-        priceBreakdown: registrationPriceBreakdown,
       });
     },
   );
