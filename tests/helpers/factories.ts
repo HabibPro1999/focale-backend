@@ -1,4 +1,4 @@
-import { faker } from '@faker-js/faker';
+import { faker } from "@faker-js/faker";
 import type {
   Client,
   User,
@@ -9,7 +9,7 @@ import type {
   Registration,
   Sponsorship,
   SponsorshipBatch,
-} from '@/generated/prisma/client.js';
+} from "@/generated/prisma/client.js";
 
 // ============================================================================
 // Client Factory
@@ -25,7 +25,7 @@ export function createMockClient(overrides: Partial<Client> = {}): Client {
     email: faker.internet.email(),
     phone: faker.phone.number(),
     active: true,
-    enabledModules: ['pricing', 'registrations', 'sponsorships', 'emails'],
+    enabledModules: ["pricing", "registrations", "sponsorships", "emails"],
     createdAt: faker.date.past(),
     updatedAt: faker.date.recent(),
     ...overrides,
@@ -65,7 +65,7 @@ export function createMockSuperAdmin(overrides: Partial<User> = {}): User {
 
 export function createMockClientAdmin(
   clientId: string,
-  overrides: Partial<User> = {}
+  overrides: Partial<User> = {},
 ): User {
   return createMockUser({
     role: UserRole.CLIENT_ADMIN,
@@ -92,11 +92,15 @@ export function createMockEvent(overrides: Partial<Event> = {}): Event {
     location: faker.location.city(),
     maxCapacity: faker.number.int({ min: 50, max: 500 }),
     registeredCount: 0,
-    status: 'CLOSED',
+    status: "CLOSED",
+    contactPhone: null,
+    bannerUrl: null,
+    accessSectionTitle: null,
+    accessSectionSubtitle: null,
     createdAt: faker.date.past(),
     updatedAt: faker.date.recent(),
     ...overrides,
-  };
+  } as Event;
 }
 
 // ============================================================================
@@ -104,18 +108,18 @@ export function createMockEvent(overrides: Partial<Event> = {}): Event {
 // ============================================================================
 
 export function createMockEventPricing(
-  overrides: Partial<EventPricing> = {}
+  overrides: Partial<EventPricing> = {},
 ): EventPricing {
   return {
     id: faker.string.uuid(),
     eventId: faker.string.uuid(),
     basePrice: faker.number.int({ min: 100, max: 1000 }),
-    currency: 'TND',
+    currency: "TND",
     rules: [],
     onlinePaymentEnabled: false,
     onlinePaymentUrl: null,
-    bankName: 'Test Bank',
-    bankAccountName: 'Test Account',
+    bankName: "Test Bank",
+    bankAccountName: "Test Account",
     bankAccountNumber: faker.finance.accountNumber(),
     createdAt: faker.date.past(),
     updatedAt: faker.date.recent(),
@@ -128,7 +132,7 @@ export function createMockEventPricing(
 // ============================================================================
 
 export function createMockEventAccess(
-  overrides: Partial<EventAccess> = {}
+  overrides: Partial<EventAccess> = {},
 ): EventAccess {
   return {
     id: faker.string.uuid(),
@@ -136,9 +140,9 @@ export function createMockEventAccess(
     name: faker.lorem.words(2),
     description: faker.lorem.sentence(),
     location: null,
-    type: 'WORKSHOP',
+    type: "WORKSHOP",
     price: faker.number.int({ min: 50, max: 200 }),
-    currency: 'TND',
+    currency: "TND",
     maxCapacity: faker.number.int({ min: 20, max: 100 }),
     registeredCount: 0,
     startsAt: null,
@@ -146,7 +150,7 @@ export function createMockEventAccess(
     availableFrom: null,
     availableTo: null,
     conditions: [],
-    conditionLogic: 'AND',
+    conditionLogic: "AND",
     sortOrder: 0,
     groupLabel: null,
     allowCompanion: false,
@@ -165,17 +169,27 @@ export function createMockForm(overrides: Partial<Form> = {}): Form {
   return {
     id: faker.string.uuid(),
     eventId: faker.string.uuid(),
-    type: 'REGISTRATION',
-    name: 'Registration Form',
+    type: "REGISTRATION",
+    name: "Registration Form",
     schema: {
       steps: [
         {
-          id: 'step-1',
-          title: 'Personal Information',
+          id: "step-1",
+          title: "Personal Information",
           fields: [
-            { id: 'firstName', type: 'text', label: 'First Name', required: true },
-            { id: 'lastName', type: 'text', label: 'Last Name', required: true },
-            { id: 'email', type: 'email', label: 'Email', required: true },
+            {
+              id: "firstName",
+              type: "text",
+              label: "First Name",
+              required: true,
+            },
+            {
+              id: "lastName",
+              type: "text",
+              label: "Last Name",
+              required: true,
+            },
+            { id: "email", type: "email", label: "Email", required: true },
           ],
         },
       ],
@@ -195,7 +209,7 @@ export function createMockForm(overrides: Partial<Form> = {}): Form {
 // ============================================================================
 
 export function createMockRegistration(
-  overrides: Partial<Registration> = {}
+  overrides: Partial<Registration> = {},
 ): Registration {
   return {
     id: faker.string.uuid(),
@@ -211,12 +225,12 @@ export function createMockRegistration(
     firstName: faker.person.firstName(),
     lastName: faker.person.lastName(),
     phone: faker.phone.number(),
-    paymentStatus: 'PENDING',
+    paymentStatus: "PENDING",
     paymentMethod: null,
     paymentReference: null,
     totalAmount: faker.number.int({ min: 100, max: 1000 }),
     paidAmount: 0,
-    currency: 'TND',
+    currency: "TND",
     priceBreakdown: {
       basePrice: 300,
       appliedRules: [],
@@ -227,7 +241,7 @@ export function createMockRegistration(
       sponsorships: [],
       sponsorshipTotal: 0,
       total: 300,
-      currency: 'TND',
+      currency: "TND",
     },
     baseAmount: 300,
     discountAmount: 0,
@@ -255,7 +269,7 @@ export function createMockRegistration(
 // ============================================================================
 
 export function createMockSponsorshipBatch(
-  overrides: Partial<SponsorshipBatch> = {}
+  overrides: Partial<SponsorshipBatch> = {},
 ): SponsorshipBatch {
   return {
     id: faker.string.uuid(),
@@ -276,14 +290,14 @@ export function createMockSponsorshipBatch(
 // ============================================================================
 
 export function createMockSponsorship(
-  overrides: Partial<Sponsorship> = {}
+  overrides: Partial<Sponsorship> = {},
 ): Sponsorship {
   return {
     id: faker.string.uuid(),
     eventId: faker.string.uuid(),
     batchId: faker.string.uuid(),
     code: faker.string.alphanumeric(8).toUpperCase(),
-    status: 'PENDING',
+    status: "PENDING",
     beneficiaryName: faker.person.fullName(),
     beneficiaryEmail: faker.internet.email(),
     beneficiaryPhone: faker.phone.number(),

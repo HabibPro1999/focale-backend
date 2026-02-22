@@ -22,6 +22,7 @@ export const CreateEventSchema = z
     endDate: z.coerce.date(),
     location: z.string().min(1).max(500).optional().nullable(),
     status: z.enum(["CLOSED", "OPEN", "ARCHIVED"]).default("CLOSED"),
+    contactPhone: z.string().min(1).max(20).optional().nullable(),
     // Pricing
     basePrice: z.number().int().min(0).default(0),
     currency: z.string().length(3).default("TND"),
@@ -50,6 +51,9 @@ export const UpdateEventSchema = z
     endDate: z.coerce.date().optional(),
     location: z.string().min(1).max(500).optional().nullable(),
     status: z.enum(["CLOSED", "OPEN", "ARCHIVED"]).optional(),
+    contactPhone: z.string().min(1).max(20).optional().nullable(),
+    accessSectionTitle: z.string().max(200).optional().nullable(),
+    accessSectionSubtitle: z.string().max(500).optional().nullable(),
     // Pricing
     basePrice: z.number().int().min(0).optional(),
     currency: z.string().length(3).optional(),

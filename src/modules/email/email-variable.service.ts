@@ -674,6 +674,11 @@ export function getSampleEmailContext(): EmailContext {
     bankName: "Banque de Tunisie",
     bankAccountName: "Medical Events SARL",
     bankAccountNumber: "TN59 1234 5678 9012 3456 7890",
+
+    sponsorshipCode: "SAMPLE-CODE",
+    sponsorshipAmount: "150 TND",
+    labName: "Laboratoire Exemple",
+    sponsoredItems: "Atelier A - 01/06/2025 (150 TND)",
   };
 }
 

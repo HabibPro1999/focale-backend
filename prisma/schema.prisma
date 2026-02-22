@@ -67,6 +67,10 @@ model Event {
   endDate         DateTime    @map("end_date")
   location        String?
   status          EventStatus @default(CLOSED)
+  contactPhone          String?  @map("contact_phone")
+  bannerUrl             String?  @map("banner_url")
+  accessSectionTitle    String?  @map("access_section_title")
+  accessSectionSubtitle String?  @map("access_section_subtitle")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
