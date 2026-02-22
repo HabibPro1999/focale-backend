@@ -3,17 +3,10 @@ import { config } from "@config/app.config.js";
 import { logger } from "@shared/utils/logger.js";
 import { gracefulShutdown } from "@core/shutdown.js";
 import { processEmailQueue } from "@modules/email/index.js";
-import { sendAlert } from "@shared/utils/alerter.js";
 
 // Global error handlers
 process.on("unhandledRejection", (reason, promise) => {
   logger.error({ reason, promise }, "Unhandled Promise Rejection");
-  sendAlert({
-    title: "Unhandled Rejection",
-    message: String(reason),
-    severity: "critical",
-  });
-  // Don't exit - let the application continue
 });
 
 process.on("uncaughtException", (error) => {
@@ -23,6 +16,8 @@ process.on("uncaughtException", (error) => {
 
 async function main() {
   const server = await buildServer();
+
+  let activeProcessing: Promise<void> | null = null;
 
   // CRITICAL: Bind to port first, before any background tasks
   // This ensures Render detects the service as healthy
@@ -35,9 +30,6 @@ async function main() {
   await new Promise((resolve) => setTimeout(resolve, dbWarmupDelay));
 
   // Start email queue worker (processes every 15 seconds for faster email delivery)
-  // Track active processing to prevent overlaps and enable graceful shutdown
-  let activeProcessing: Promise<void> | null = null;
-
   const emailQueueInterval = setInterval(() => {
     // Don't start new processing if one is still running
     if (activeProcessing) {
@@ -52,13 +44,7 @@ async function main() {
         }
       })
       .catch((err) => {
-        // Non-fatal: log error but keep server running
         logger.error({ err }, "Email queue processing failed");
-        sendAlert({
-          title: "Email Queue Error",
-          message: err.message,
-          severity: "error",
-        });
       })
       .finally(() => {
         activeProcessing = null;
@@ -66,23 +52,21 @@ async function main() {
   }, 15_000);
   logger.info("Email queue worker started (15s interval)");
 
-  gracefulShutdown(server, [
-    async () => {
-      // Stop email queue worker (no new iterations)
-      clearInterval(emailQueueInterval);
-      logger.info("Email queue worker stopped");
+  // Stop email queue before in-flight requests drain
+  server.addHook("preClose", async () => {
+    clearInterval(emailQueueInterval);
+    logger.info("Email queue worker stopped");
+    if (activeProcessing) {
+      logger.info("Waiting for in-flight email processing to complete...");
+      await Promise.race([
+        activeProcessing,
+        new Promise<void>((resolve) => setTimeout(resolve, 10_000)),
+      ]);
+      logger.info("In-flight email processing completed");
+    }
+  });
 
-      // Wait for in-flight email processing to complete
-      if (activeProcessing) {
-        logger.info("Waiting for in-flight email processing to complete...");
-        await Promise.race([
-          activeProcessing,
-          new Promise((resolve) => setTimeout(resolve, 10_000)), // 10s max wait
-        ]);
-        logger.info("In-flight email processing completed");
-      }
-    },
-  ]);
+  gracefulShutdown(server);
 }
 
 main().catch((err) => {

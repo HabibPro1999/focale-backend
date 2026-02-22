@@ -1,7 +1,8 @@
 import { randomUUID } from "crypto";
+import { z } from "zod";
 import { prisma } from "@/database/client.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { AppError } from "@shared/errors.js";
+import { ErrorCodes } from "@shared/errors.js";
 import { eventExists } from "@events";
 import {
   paginate,
@@ -9,15 +10,12 @@ import {
   type PaginatedResult,
 } from "@shared/utils/pagination.js";
 import { logger } from "@shared/utils/logger.js";
-import type {
-  CreateFormInput,
-  UpdateFormInput,
-  ListFormsQuery,
-  FormSchemaJson,
-  SponsorFormSchemaJson,
-  SponsorshipSettings,
-  UpdateSponsorshipSettingsInput,
+import {
+  FormSchemaJsonSchema,
+  SponsorFormSchemaJsonSchema,
+  SponsorshipSettingsSchema,
 } from "./forms.schema.js";
+import type { FormSchemaJson, SponsorFormSchemaJson } from "./forms.schema.js";
 import type {
   Form,
   Prisma,
@@ -27,9 +25,43 @@ import type {
   EventPricing,
 } from "@/generated/prisma/client.js";
 
+type SponsorshipSettings = z.infer<typeof SponsorshipSettingsSchema>;
+
+type CreateFormInput = {
+  eventId: string;
+  name: string;
+  schema?: z.infer<typeof FormSchemaJsonSchema>;
+  successTitle?: string | null;
+  successMessage?: string | null;
+};
+
+type UpdateFormInput = {
+  name?: string;
+  schema?:
+    | z.infer<typeof FormSchemaJsonSchema>
+    | z.infer<typeof SponsorFormSchemaJsonSchema>;
+  successTitle?: string | null;
+  successMessage?: string | null;
+  force?: boolean;
+};
+
+type ListFormsQuery = {
+  page: number;
+  limit: number;
+  eventId?: string;
+  search?: string;
+  type?: "REGISTRATION" | "SPONSOR";
+};
+
+type UpdateSponsorshipSettingsInput = {
+  sponsorshipMode: "LINKED_ACCOUNT" | "CODE";
+  registrantSearchScope?: "ALL" | "UNPAID_ONLY";
+  autoApproveSponsorship?: boolean;
+};
+
 type FormWithRelations = Form & {
   event: Event & {
-    client: Pick<Client, "id" | "name" | "logo" | "primaryColor">;
+    client: Pick<Client, "id" | "name">;
     pricing: EventPricing | null; // Includes embedded rules in pricing.rules
     access: EventAccess[];
   };
@@ -169,8 +201,6 @@ export async function getFormByEventSlug(
             select: {
               id: true,
               name: true,
-              logo: true,
-              primaryColor: true,
             },
           },
           pricing: true, // Includes embedded rules in pricing.rules
@@ -585,8 +615,6 @@ export async function getSponsorFormByEventSlug(
             select: {
               id: true,
               name: true,
-              logo: true,
-              primaryColor: true,
             },
           },
           pricing: true,

@@ -1,8 +1,7 @@
 import { randomBytes } from "crypto";
 import { prisma } from "@/database/client.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
-import { findOrThrow } from "@shared/utils/db.js";
+import { AppError } from "@shared/errors.js";
+import { ErrorCodes } from "@shared/errors.js";
 import { logger } from "@shared/utils/logger.js";
 import {
   paginate,
@@ -244,14 +243,12 @@ export async function createRegistration(
   } = input;
 
   // Get form and event info (including schemaVersion)
-  const form = await findOrThrow(
-    () =>
-      prisma.form.findUnique({
-        where: { id: formId },
-        select: { id: true, eventId: true, schemaVersion: true },
-      }),
-    { message: "Form not found", code: ErrorCodes.NOT_FOUND },
-  );
+  const form = await prisma.form.findUnique({
+    where: { id: formId },
+    select: { id: true, eventId: true, schemaVersion: true },
+  });
+  if (!form)
+    throw new AppError("Form not found", 404, true, ErrorCodes.NOT_FOUND);
 
   const eventId = form.eventId;
 
@@ -483,13 +480,14 @@ export async function updateRegistration(
   input: UpdateRegistrationInput,
   performedBy?: string,
 ): Promise<RegistrationWithRelations> {
-  const registration = await findOrThrow(
-    () => prisma.registration.findUnique({ where: { id } }),
-    {
-      message: "Registration not found",
-      code: ErrorCodes.REGISTRATION_NOT_FOUND,
-    },
-  );
+  const registration = await prisma.registration.findUnique({ where: { id } });
+  if (!registration)
+    throw new AppError(
+      "Registration not found",
+      404,
+      true,
+      ErrorCodes.REGISTRATION_NOT_FOUND,
+    );
 
   const updateData: Prisma.RegistrationUpdateInput = {};
 
@@ -597,25 +595,25 @@ export async function deleteRegistration(
   id: string,
   performedBy?: string,
 ): Promise<void> {
-  const registration = await findOrThrow(
-    () =>
-      prisma.registration.findUnique({
-        where: { id },
-        select: {
-          id: true,
-          eventId: true,
-          email: true,
-          firstName: true,
-          lastName: true,
-          paymentStatus: true,
-          priceBreakdown: true,
-        },
-      }),
-    {
-      message: "Registration not found",
-      code: ErrorCodes.REGISTRATION_NOT_FOUND,
+  const registration = await prisma.registration.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      eventId: true,
+      email: true,
+      firstName: true,
+      lastName: true,
+      paymentStatus: true,
+      priceBreakdown: true,
     },
-  );
+  });
+  if (!registration)
+    throw new AppError(
+      "Registration not found",
+      404,
+      true,
+      ErrorCodes.REGISTRATION_NOT_FOUND,
+    );
 
   // Only allow deletion of unpaid registrations
   const blockedStatuses = ["PAID", "WAIVED", "VERIFYING"];

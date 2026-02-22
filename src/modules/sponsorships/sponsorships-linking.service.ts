@@ -1,7 +1,6 @@
 import { prisma } from "@/database/client.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
-import { findOrThrow } from "@shared/utils/db.js";
+import { AppError } from "@shared/errors.js";
+import { ErrorCodes } from "@shared/errors.js";
 import { logger } from "@shared/utils/logger.js";
 import {
   calculateApplicableAmount,
@@ -65,26 +64,29 @@ export async function linkSponsorshipToRegistration(
   registrationId: string,
   adminUserId: string,
 ): Promise<LinkSponsorshipResult | LinkSponsorshipSkippedResult> {
-  const sponsorship = await findOrThrow(
-    () =>
-      prisma.sponsorship.findUnique({
-        where: { id: sponsorshipId },
+  const sponsorship = await prisma.sponsorship.findUnique({
+    where: { id: sponsorshipId },
+    include: {
+      usages: {
         include: {
-          usages: {
-            include: {
-              sponsorship: {
-                select: {
-                  code: true,
-                  coversBasePrice: true,
-                  coveredAccessIds: true,
-                },
-              },
+          sponsorship: {
+            select: {
+              code: true,
+              coversBasePrice: true,
+              coveredAccessIds: true,
             },
           },
         },
-      }),
-    { message: "Sponsorship not found", code: ErrorCodes.NOT_FOUND },
-  );
+      },
+    },
+  });
+  if (!sponsorship)
+    throw new AppError(
+      "Sponsorship not found",
+      404,
+      true,
+      ErrorCodes.NOT_FOUND,
+    );
 
   if (sponsorship.status === "CANCELLED") {
     throw new AppError(
@@ -96,36 +98,36 @@ export async function linkSponsorshipToRegistration(
     );
   }
 
-  const registration = await findOrThrow(
-    () =>
-      prisma.registration.findUnique({
-        where: { id: registrationId },
-        select: {
-          id: true,
-          eventId: true,
-          totalAmount: true,
-          baseAmount: true,
-          accessTypeIds: true,
-          priceBreakdown: true,
-          sponsorshipAmount: true,
-          sponsorshipUsages: {
-            include: {
-              sponsorship: {
-                select: {
-                  code: true,
-                  coversBasePrice: true,
-                  coveredAccessIds: true,
-                },
-              },
+  const registration = await prisma.registration.findUnique({
+    where: { id: registrationId },
+    select: {
+      id: true,
+      eventId: true,
+      totalAmount: true,
+      baseAmount: true,
+      accessTypeIds: true,
+      priceBreakdown: true,
+      sponsorshipAmount: true,
+      sponsorshipUsages: {
+        include: {
+          sponsorship: {
+            select: {
+              code: true,
+              coversBasePrice: true,
+              coveredAccessIds: true,
             },
           },
         },
-      }),
-    {
-      message: "Registration not found",
-      code: ErrorCodes.REGISTRATION_NOT_FOUND,
+      },
     },
-  );
+  });
+  if (!registration)
+    throw new AppError(
+      "Registration not found",
+      404,
+      true,
+      ErrorCodes.REGISTRATION_NOT_FOUND,
+    );
 
   // Verify same event
   if (sponsorship.eventId !== registration.eventId) {
@@ -308,17 +310,17 @@ export async function linkSponsorshipByCode(
   code: string,
   adminUserId: string,
 ): Promise<LinkSponsorshipResult | LinkSponsorshipSkippedResult> {
-  const registration = await findOrThrow(
-    () =>
-      prisma.registration.findUnique({
-        where: { id: registrationId },
-        select: { eventId: true },
-      }),
-    {
-      message: "Registration not found",
-      code: ErrorCodes.REGISTRATION_NOT_FOUND,
-    },
-  );
+  const registration = await prisma.registration.findUnique({
+    where: { id: registrationId },
+    select: { eventId: true },
+  });
+  if (!registration)
+    throw new AppError(
+      "Registration not found",
+      404,
+      true,
+      ErrorCodes.REGISTRATION_NOT_FOUND,
+    );
 
   const sponsorship = await prisma.sponsorship.findFirst({
     where: { eventId: registration.eventId, code },
@@ -378,18 +380,18 @@ export async function unlinkSponsorshipFromRegistrationInternal(
   sponsorshipId: string,
   registrationId: string,
 ): Promise<void> {
-  const usage = await findOrThrow(
-    () =>
-      tx.sponsorshipUsage.findUnique({
-        where: {
-          sponsorshipId_registrationId: { sponsorshipId, registrationId },
-        },
-      }),
-    {
-      message: "Sponsorship is not linked to this registration",
-      code: ErrorCodes.NOT_FOUND,
+  const usage = await tx.sponsorshipUsage.findUnique({
+    where: {
+      sponsorshipId_registrationId: { sponsorshipId, registrationId },
     },
-  );
+  });
+  if (!usage)
+    throw new AppError(
+      "Sponsorship is not linked to this registration",
+      404,
+      true,
+      ErrorCodes.NOT_FOUND,
+    );
 
   // Audit log for unlink (before actual delete)
   await tx.auditLog.create({
@@ -485,35 +487,35 @@ export async function getAvailableSponsorships(
   eventId: string,
   registrationId: string,
 ): Promise<AvailableSponsorship[]> {
-  const registration = await findOrThrow(
-    () =>
-      prisma.registration.findUnique({
-        where: { id: registrationId },
-        select: {
-          id: true,
-          eventId: true,
-          totalAmount: true,
-          baseAmount: true,
-          accessTypeIds: true,
-          priceBreakdown: true,
-          sponsorshipUsages: {
-            include: {
-              sponsorship: {
-                select: {
-                  code: true,
-                  coversBasePrice: true,
-                  coveredAccessIds: true,
-                },
-              },
+  const registration = await prisma.registration.findUnique({
+    where: { id: registrationId },
+    select: {
+      id: true,
+      eventId: true,
+      totalAmount: true,
+      baseAmount: true,
+      accessTypeIds: true,
+      priceBreakdown: true,
+      sponsorshipUsages: {
+        include: {
+          sponsorship: {
+            select: {
+              code: true,
+              coversBasePrice: true,
+              coveredAccessIds: true,
             },
           },
         },
-      }),
-    {
-      message: "Registration not found",
-      code: ErrorCodes.REGISTRATION_NOT_FOUND,
+      },
     },
-  );
+  });
+  if (!registration)
+    throw new AppError(
+      "Registration not found",
+      404,
+      true,
+      ErrorCodes.REGISTRATION_NOT_FOUND,
+    );
 
   if (registration.eventId !== eventId) {
     throw new AppError(

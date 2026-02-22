@@ -4,10 +4,14 @@
 
 import { randomInt } from "crypto";
 import type { ExtendedPrismaClient } from "@/database/client.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
-export { getAccessTypeKey } from "@shared/utils/access-helpers.js";
-import { getAccessTypeKey } from "@shared/utils/access-helpers.js";
+import { AppError } from "@shared/errors.js";
+import { ErrorCodes } from "@shared/errors.js";
+export function getAccessTypeKey(
+  type: string,
+  groupLabel: string | null,
+): string {
+  return type === "OTHER" ? `OTHER:${groupLabel || ""}` : type;
+}
 
 // Transaction client type derived from the extended Prisma client.
 // Used as the parameter type for utility functions that are called in both

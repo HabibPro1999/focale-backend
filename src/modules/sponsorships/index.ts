@@ -6,11 +6,8 @@
 // Service functions (external consumers: registrations, server)
 export { cleanupSponsorshipsForRegistration } from "./sponsorships-linking.service.js";
 
-// Utility functions (external consumers: pricing, access)
-export {
-  calculateApplicableAmount,
-  getAccessTypeKey,
-} from "./sponsorships.utils.js";
+// Utility functions (external consumer: pricing)
+export { calculateApplicableAmount } from "./sponsorships.utils.js";
 
 // Utility types (external consumer: pricing)
 export type { SponsorshipForCalculation } from "./sponsorships.utils.js";

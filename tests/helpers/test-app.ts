@@ -1,5 +1,5 @@
 import { buildServer } from "../../src/core/server.js";
-import type { AppInstance } from "../../src/shared/types/fastify.js";
+import type { AppInstance } from "../../src/shared/fastify.js";
 import type { User } from "../../src/generated/prisma/client.js";
 
 // ============================================================================

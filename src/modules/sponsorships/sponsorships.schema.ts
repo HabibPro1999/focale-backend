@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { PaginationSchema } from "@shared/schemas/common.js";
+import { listQuery } from "@shared/schemas/common.js";
 
 // ============================================================================
 // Enums
@@ -133,17 +133,13 @@ export type UpdateSponsorshipInput = z.infer<typeof UpdateSponsorshipSchema>;
 // List Sponsorships Query Schema (Admin)
 // ============================================================================
 
-export const ListSponsorshipsQuerySchema = z
-  .object({
-    ...PaginationSchema.shape,
-    status: SponsorshipStatusSchema.optional(),
-    search: z.string().max(100).optional(),
-    sortBy: z
-      .enum(["createdAt", "totalAmount", "beneficiaryName"])
-      .default("createdAt"),
-    sortOrder: z.enum(["asc", "desc"]).default("desc"),
-  })
-  .strict();
+export const ListSponsorshipsQuerySchema = listQuery({
+  status: SponsorshipStatusSchema.optional(),
+  sortBy: z
+    .enum(["createdAt", "totalAmount", "beneficiaryName"])
+    .default("createdAt"),
+  sortOrder: z.enum(["asc", "desc"]).default("desc"),
+});
 
 export type ListSponsorshipsQuery = z.infer<typeof ListSponsorshipsQuerySchema>;
 

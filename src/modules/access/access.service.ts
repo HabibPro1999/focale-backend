@@ -1,20 +1,94 @@
 import { randomUUID } from "crypto";
+import { z } from "zod";
 import { prisma } from "@/database/client.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
-import type {
-  CreateEventAccessInput,
-  UpdateEventAccessInput,
-  AccessSelection,
-  GroupedAccessResponse,
-  AccessCondition,
-  TimeSlot,
-  DateGroup,
-} from "./access.schema.js";
+import { AppError } from "@shared/errors.js";
+import { ErrorCodes } from "@shared/errors.js";
+import { AccessTypeSchema, AccessConditionSchema } from "./access.schema.js";
+import type { AccessCondition, AccessSelection } from "./access.schema.js";
 import { Prisma } from "@/generated/prisma/client.js";
 import type { EventAccess } from "@/generated/prisma/client.js";
-import { getAccessTypeKey } from "@shared/utils/access-helpers.js";
 import { evaluateConditions as sharedEvaluateConditions } from "@shared/utils/condition-evaluator.js";
+
+// ============================================================================
+// Local Input Schemas
+// ============================================================================
+
+export const CreateEventAccessSchema = z
+  .object({
+    eventId: z.string().uuid(),
+    type: AccessTypeSchema.default("OTHER"),
+    name: z.string().min(1).max(200),
+    description: z.string().max(1000).optional().nullable(),
+    location: z.string().max(500).optional().nullable(),
+
+    // Scheduling
+    startsAt: z.coerce.date().optional().nullable(),
+    endsAt: z.coerce.date().optional().nullable(),
+
+    // Pricing
+    price: z.number().int().min(0).default(0),
+    currency: z.string().length(3).default("TND"),
+
+    // Capacity
+    maxCapacity: z.number().int().positive().optional().nullable(),
+
+    // Availability
+    availableFrom: z.coerce.date().optional().nullable(),
+    availableTo: z.coerce.date().optional().nullable(),
+
+    // Conditions (form-based prerequisites)
+    conditions: z.array(AccessConditionSchema).optional().nullable(),
+    conditionLogic: z.enum(["and", "or"]).default("and"),
+
+    // Access-based prerequisites (array of access IDs)
+    requiredAccessIds: z.array(z.string().uuid()).optional().default([]),
+
+    // Display
+    sortOrder: z.number().int().default(0),
+    active: z.boolean().default(true),
+
+    // Custom grouping (for OTHER type - allows custom group labels)
+    groupLabel: z.string().max(100).optional().nullable(),
+
+    // Companion option (show +1 question in registration form)
+    allowCompanion: z.boolean().default(false),
+  })
+  .strict()
+  .refine(
+    (data) => {
+      if (data.startsAt && data.endsAt) {
+        return data.endsAt >= data.startsAt;
+      }
+      return true;
+    },
+    { message: "End time must be after start time", path: ["endsAt"] },
+  );
+
+export const UpdateEventAccessSchema = z
+  .object({
+    type: AccessTypeSchema.optional(),
+    name: z.string().min(1).max(200).optional(),
+    description: z.string().max(1000).optional().nullable(),
+    location: z.string().max(500).optional().nullable(),
+    startsAt: z.coerce.date().optional().nullable(),
+    endsAt: z.coerce.date().optional().nullable(),
+    price: z.number().int().min(0).optional(),
+    currency: z.string().length(3).optional(),
+    maxCapacity: z.number().int().positive().optional().nullable(),
+    availableFrom: z.coerce.date().optional().nullable(),
+    availableTo: z.coerce.date().optional().nullable(),
+    conditions: z.array(AccessConditionSchema).optional().nullable(),
+    conditionLogic: z.enum(["and", "or"]).optional(),
+    requiredAccessIds: z.array(z.string().uuid()).optional(),
+    sortOrder: z.number().int().optional(),
+    active: z.boolean().optional(),
+    groupLabel: z.string().max(100).optional().nullable(),
+    allowCompanion: z.boolean().optional(),
+  })
+  .strict();
+
+export type CreateEventAccessInput = z.infer<typeof CreateEventAccessSchema>;
+export type UpdateEventAccessInput = z.infer<typeof UpdateEventAccessSchema>;
 
 // ============================================================================
 // Types
@@ -31,6 +105,23 @@ type EnrichedAccess = EventAccess & {
   requiredAccess: { id: string }[];
   spotsRemaining: number | null;
   isFull: boolean;
+};
+
+type TimeSlot = {
+  startsAt: Date | null;
+  endsAt: Date | null;
+  selectionType: "single" | "multiple";
+  items: unknown[];
+};
+
+type DateGroup = {
+  dateKey: string;
+  label: string;
+  slots: TimeSlot[];
+};
+
+type GroupedAccessResponse = {
+  groups: DateGroup[];
 };
 
 // ============================================================================
@@ -756,7 +847,10 @@ export async function validateAccessSelections(
   for (const selection of selections) {
     const access = accessMap.get(selection.accessId)!;
     // For OTHER type, use groupLabel as key to allow custom groups
-    const typeKey = getAccessTypeKey(access.type, access.groupLabel);
+    const typeKey =
+      access.type === "OTHER"
+        ? `OTHER:${access.groupLabel || ""}`
+        : access.type;
 
     if (!selectionsByType.has(typeKey)) selectionsByType.set(typeKey, []);
     selectionsByType.get(typeKey)!.push({ access, selection });

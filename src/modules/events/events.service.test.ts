@@ -14,8 +14,8 @@ import {
   deleteEvent,
   eventExists,
 } from "./events.service.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { AppError } from "@shared/errors.js";
+import { ErrorCodes } from "@shared/errors.js";
 
 // Mock the clients module for clientExists
 vi.mock("@clients", () => ({
@@ -46,8 +46,6 @@ describe("Events Service", () => {
       endDate: new Date("2025-06-03"),
       location: "Tunis, Tunisia",
       status: "CLOSED" as const,
-      basePrice: 500,
-      currency: "TND",
     };
 
     beforeEach(() => {
@@ -69,8 +67,8 @@ describe("Events Service", () => {
       });
       const mockPricing = createMockEventPricing({
         eventId,
-        basePrice: validInput.basePrice,
-        currency: validInput.currency,
+        basePrice: 0,
+        currency: "TND",
       });
 
       prismaMock.$transaction.mockImplementation(
@@ -96,8 +94,8 @@ describe("Events Service", () => {
         name: validInput.name,
         slug: validInput.slug,
         pricing: expect.objectContaining({
-          basePrice: validInput.basePrice,
-          currency: validInput.currency,
+          basePrice: 0,
+          currency: "TND",
         }),
       });
       expect(clientExistsMock).toHaveBeenCalledWith(clientId);
@@ -175,8 +173,6 @@ describe("Events Service", () => {
         {
           ...inputWithoutStatus,
           status: "CLOSED",
-          basePrice: 0,
-          currency: "TND",
         },
         performedBy,
       );
@@ -184,23 +180,15 @@ describe("Events Service", () => {
       expect(result.status).toBe("CLOSED");
     });
 
-    it("should use default basePrice 0 and currency TND when not provided", async () => {
-      const {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        basePrice: _basePrice,
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        currency: _currency,
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        status: _status,
-        ...inputWithoutPricing
-      } = validInput;
-
+    it("should always create pricing with basePrice 0 and currency TND", async () => {
       const mockEvent = createMockEvent({ id: eventId, clientId });
       const mockPricing = createMockEventPricing({
         eventId,
         basePrice: 0,
         currency: "TND",
       });
+
+      const pricingCreateMock = vi.fn().mockResolvedValue(mockPricing);
 
       prismaMock.$transaction.mockImplementation(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -211,23 +199,22 @@ describe("Events Service", () => {
               create: vi.fn().mockResolvedValue(mockEvent),
             },
             eventPricing: {
-              create: vi.fn().mockResolvedValue(mockPricing),
+              create: pricingCreateMock,
             },
           };
           return callback(txMock);
         },
       );
 
-      const result = await createEvent(
-        {
-          ...inputWithoutPricing,
-          status: "CLOSED",
+      const result = await createEvent(validInput, performedBy);
+
+      expect(pricingCreateMock).toHaveBeenCalledWith({
+        data: {
+          eventId,
           basePrice: 0,
           currency: "TND",
         },
-        performedBy,
-      );
-
+      });
       expect(result.pricing?.basePrice).toBe(0);
       expect(result.pricing?.currency).toBe("TND");
     });

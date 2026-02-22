@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { createTestApp } from "../helpers/test-app.js";
-import type { AppInstance } from "../../src/shared/types/fastify.js";
+import type { AppInstance } from "../../src/shared/fastify.js";
 import { prismaMock } from "../mocks/prisma.js";
 import { createMockEvent, createMockForm } from "../helpers/factories.js";
 import { faker } from "@faker-js/faker";

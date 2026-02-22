@@ -1,8 +1,8 @@
 import {
   requireAuth,
   canAccessClient,
+  requireEventAccess,
 } from "@shared/middleware/auth.middleware.js";
-import { requireEventAccess } from "@shared/middleware/access-control.js";
 import {
   listSponsorships,
   getSponsorshipStats,
@@ -34,9 +34,9 @@ import {
   type LinkSponsorshipInput,
   type LinkSponsorshipByCodeInput,
 } from "./sponsorships.schema.js";
-import type { AppInstance } from "@shared/types/fastify.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
+import type { AppInstance } from "@shared/fastify.js";
+import { AppError } from "@shared/errors.js";
+import { ErrorCodes } from "@shared/errors.js";
 
 // ============================================================================
 // Event-scoped Sponsorship Routes (mounted at /api/events)

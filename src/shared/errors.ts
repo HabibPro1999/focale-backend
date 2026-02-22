@@ -1,3 +1,5 @@
+import { ZodError } from "zod";
+
 export const ErrorCodes = {
   // Auth (1xxx)
   UNAUTHORIZED: "AUTH_1001",
@@ -79,3 +81,32 @@ export const ErrorCodes = {
 } as const;
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
+
+export class AppError extends Error {
+  constructor(
+    message: string,
+    public statusCode: number = 500,
+    public isOperational: boolean = true,
+    public code?: string,
+    public details?: Record<string, unknown>,
+  ) {
+    super(message);
+    this.name = "AppError";
+    Error.captureStackTrace(this, this.constructor);
+  }
+}
+
+export function formatZodError(error: ZodError): AppError {
+  const issues = error.issues.map((issue) => ({
+    field: issue.path.join("."),
+    message: issue.message,
+  }));
+
+  return new AppError(
+    "Validation failed",
+    400,
+    true,
+    ErrorCodes.VALIDATION_ERROR,
+    { issues },
+  );
+}

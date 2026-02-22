@@ -2,9 +2,11 @@
 // Reports Module - Routes (Protected)
 // ============================================================================
 
-import type { AppInstance } from "@shared/types/fastify.js";
-import { requireAuth } from "@shared/middleware/auth.middleware.js";
-import { requireEventAccess } from "@shared/middleware/access-control.js";
+import type { AppInstance } from "@shared/fastify.js";
+import {
+  requireAuth,
+  requireEventAccess,
+} from "@shared/middleware/auth.middleware.js";
 import {
   ReportQuerySchema,
   ExportQuerySchema,

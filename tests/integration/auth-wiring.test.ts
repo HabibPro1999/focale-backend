@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { createTestApp } from "../helpers/test-app.js";
 import {
   mockAuthenticatedUser,
@@ -6,9 +6,8 @@ import {
   mockInactiveUser,
   mockUserNotFound,
 } from "../helpers/auth-helpers.js";
-import { clearUserCache } from "../../src/shared/middleware/auth.middleware.js";
 import { UserRole } from "../helpers/factories.js";
-import type { AppInstance } from "../../src/shared/types/fastify.js";
+import type { AppInstance } from "../../src/shared/fastify.js";
 
 describe("Auth Middleware Wiring", () => {
   let app: AppInstance;
@@ -19,11 +18,6 @@ describe("Auth Middleware Wiring", () => {
 
   afterAll(async () => {
     await app.close();
-  });
-
-  beforeEach(() => {
-    // Clear the 60-second user cache to prevent cross-test interference
-    clearUserCache();
   });
 
   it("missing Authorization header returns 401", async () => {
@@ -124,10 +118,10 @@ describe("Auth Middleware Wiring", () => {
       name: "Client Admin",
     });
 
-    // GET /api/users is restricted to super_admin via requireSuperAdmin preHandler
+    // GET /api/clients is restricted to super_admin via requireSuperAdmin preHandler
     const response = await app.inject({
       method: "GET",
-      url: "/api/users",
+      url: "/api/clients",
       headers,
     });
 

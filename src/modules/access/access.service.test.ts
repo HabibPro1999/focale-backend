@@ -24,9 +24,9 @@ import {
   releaseAccessSpot,
   validateAccessSelections,
 } from "./access.service.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
-import type { CreateEventAccessInput } from "./access.schema.js";
+import { AppError } from "@shared/errors.js";
+import { ErrorCodes } from "@shared/errors.js";
+import type { CreateEventAccessInput } from "./access.service.js";
 
 // Helper to create EventAccess with all required fields including relations
 function createEventAccessWithRelations(

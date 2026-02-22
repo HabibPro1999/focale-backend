@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { z } from "zod";
-import type { AppInstance } from "@shared/types/fastify.js";
+import type { AppInstance } from "@shared/fastify.js";
 
 // Validate request ID format: UUID or alphanumeric string (max 64 chars)
 const RequestIdSchema = z.string().uuid().or(z.string().max(64).regex(/^[a-zA-Z0-9-_]+$/));

@@ -1,8 +1,7 @@
 import { randomUUID } from "crypto";
 import { prisma } from "@/database/client.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
-import { findOrThrow } from "@shared/utils/db.js";
+import { AppError } from "@shared/errors.js";
+import { ErrorCodes } from "@shared/errors.js";
 import { logger } from "@shared/utils/logger.js";
 import { queueTriggeredEmail } from "@email";
 import { getStorageProvider } from "@shared/services/storage/index.js";
@@ -39,26 +38,27 @@ export async function confirmPayment(
 ): Promise<RegistrationWithRelations> {
   // Update registration in a transaction with audit logging
   const result = await prisma.$transaction(async (tx) => {
-    const oldRegistration = await findOrThrow(
-      () =>
-        tx.registration.findUnique({
-          where: { id },
-          select: {
-            eventId: true,
-            email: true,
-            firstName: true,
-            lastName: true,
-            paymentStatus: true,
-            paidAmount: true,
-            paymentMethod: true,
-            totalAmount: true,
-          },
-        }),
-      {
-        message: "Registration not found",
-        code: ErrorCodes.REGISTRATION_NOT_FOUND,
+    const oldRegistration = await tx.registration.findUnique({
+      where: { id },
+      select: {
+        eventId: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        paymentStatus: true,
+        paidAmount: true,
+        paymentMethod: true,
+        totalAmount: true,
       },
-    );
+    });
+    if (!oldRegistration) {
+      throw new AppError(
+        "Registration not found",
+        404,
+        true,
+        ErrorCodes.REGISTRATION_NOT_FOUND,
+      );
+    }
 
     // Validate payment status transition
     validatePaymentTransitionInternal(
@@ -167,24 +167,25 @@ export async function uploadPaymentProof(
   }
 
   // Get registration with event info and current status
-  const registration = await findOrThrow(
-    () =>
-      prisma.registration.findUnique({
-        where: { id: registrationId },
-        select: {
-          eventId: true,
-          email: true,
-          firstName: true,
-          lastName: true,
-          paymentStatus: true,
-          paymentProofUrl: true,
-        },
-      }),
-    {
-      message: "Registration not found",
-      code: ErrorCodes.REGISTRATION_NOT_FOUND,
+  const registration = await prisma.registration.findUnique({
+    where: { id: registrationId },
+    select: {
+      eventId: true,
+      email: true,
+      firstName: true,
+      lastName: true,
+      paymentStatus: true,
+      paymentProofUrl: true,
     },
-  );
+  });
+  if (!registration) {
+    throw new AppError(
+      "Registration not found",
+      404,
+      true,
+      ErrorCodes.REGISTRATION_NOT_FOUND,
+    );
+  }
 
   // Only allow proof upload from PENDING or VERIFYING status
   validatePaymentTransitionInternal(registration.paymentStatus, "VERIFYING");

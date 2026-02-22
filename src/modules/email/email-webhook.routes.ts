@@ -1,13 +1,29 @@
-import type { AppInstance } from "@shared/types/fastify.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { z } from "zod";
+import type { AppInstance } from "@shared/fastify.js";
+import { AppError } from "@shared/errors.js";
+import { ErrorCodes } from "@shared/errors.js";
 import {
   verifyWebhookSignature,
   parseWebhookEvents,
   WebhookHeaders,
 } from "./email-sendgrid.service.js";
 import { updateEmailStatusFromWebhook } from "./email-queue.service.js";
-import { SendGridWebhookBodySchema } from "./email-webhook.schema.js";
+
+const SendGridWebhookBodySchema = z.array(
+  z
+    .object({
+      email: z.string(),
+      event: z.string(),
+      sg_message_id: z.string().optional(),
+      timestamp: z.number(),
+      emailLogId: z.string().optional(),
+      url: z.string().optional(),
+      reason: z.string().optional(),
+      type: z.string().optional(),
+      status: z.string().optional(),
+    })
+    .passthrough(), // Allow additional SendGrid fields
+);
 
 // Module-level constant — avoid recreating on every request
 const EVENT_TYPE_MAP: Record<

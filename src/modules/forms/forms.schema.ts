@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { PaginationSchema } from "@shared/schemas/common.js";
 
 // ============================================================================
 // Field Schemas
@@ -201,50 +200,6 @@ export const SponsorFormSchemaJsonSchema = z
   .strict();
 
 // ============================================================================
-// Request Schemas
-// ============================================================================
-
-export const CreateFormSchema = z
-  .object({
-    eventId: z.string().uuid(),
-    name: z.string().min(1).max(200),
-    schema: FormSchemaJsonSchema.optional(), // Optional - backend provides defaults
-    successTitle: z.string().optional().nullable(),
-    successMessage: z.string().optional().nullable(),
-  })
-  .strict();
-
-export const UpdateFormSchema = z
-  .object({
-    name: z.string().min(1).max(200).optional(),
-    schema: FormSchemaJsonSchema.optional(),
-    successTitle: z.string().optional().nullable(),
-    successMessage: z.string().optional().nullable(),
-    force: z.boolean().optional(),
-  })
-  .strict();
-
-export const ListFormsQuerySchema = z
-  .object({
-    ...PaginationSchema.shape,
-    eventId: z.string().uuid().optional(),
-    search: z.string().optional(),
-    type: z.enum(["REGISTRATION", "SPONSOR"]).optional(),
-  })
-  .strict();
-
-export { FormIdParamSchema } from "@shared/schemas/params.js";
-
-// Update sponsorship settings (for SPONSOR forms only)
-export const UpdateSponsorshipSettingsSchema = z
-  .object({
-    sponsorshipMode: SponsorshipModeSchema,
-    registrantSearchScope: RegistrantSearchScopeSchema.optional(),
-    autoApproveSponsorship: z.boolean().optional(),
-  })
-  .strict();
-
-// ============================================================================
 // Types
 // ============================================================================
 
@@ -255,9 +210,3 @@ export type FormStep = z.infer<typeof FormStepSchema>;
 export type FormSchemaJson = z.infer<typeof FormSchemaJsonSchema>;
 export type SponsorshipSettings = z.infer<typeof SponsorshipSettingsSchema>;
 export type SponsorFormSchemaJson = z.infer<typeof SponsorFormSchemaJsonSchema>;
-export type CreateFormInput = z.infer<typeof CreateFormSchema>;
-export type UpdateFormInput = z.infer<typeof UpdateFormSchema>;
-export type ListFormsQuery = z.infer<typeof ListFormsQuerySchema>;
-export type UpdateSponsorshipSettingsInput = z.infer<
-  typeof UpdateSponsorshipSettingsSchema
->;

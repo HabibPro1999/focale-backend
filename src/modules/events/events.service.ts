@@ -1,6 +1,6 @@
 import { prisma } from "@/database/client.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { AppError } from "@shared/errors.js";
+import { ErrorCodes } from "@shared/errors.js";
 import { clientExists } from "@clients";
 import {
   paginate,
@@ -8,18 +8,34 @@ import {
   type PaginatedResult,
 } from "@shared/utils/pagination.js";
 import { auditLog, diffChanges } from "@shared/utils/audit.js";
+import { z } from "zod";
+import { Event } from "./events.schema.js";
 import type {
-  CreateEventInput,
-  UpdateEventInput,
-  ListEventsQuery,
-} from "./events.schema.js";
-import type { Event, EventPricing, Prisma } from "@/generated/prisma/client.js";
+  Event as PrismaEvent,
+  EventPricing,
+  EventStatus,
+  Prisma,
+} from "@/generated/prisma/client.js";
+
+type CreateEventInput = z.infer<typeof Event> & {
+  clientId: string;
+};
+
+type UpdateEventInput = Partial<z.infer<typeof Event>>;
+
+type ListEventsQuery = {
+  page: number;
+  limit: number;
+  search?: string;
+  clientId?: string;
+  status?: EventStatus;
+};
 
 // Transaction client type that works with Prisma extensions
 type TransactionClient = { $executeRaw: typeof prisma.$executeRaw };
 
 // Type for Event with pricing included
-type EventWithPricing = Event & { pricing: EventPricing | null };
+type EventWithPricing = PrismaEvent & { pricing: EventPricing | null };
 
 /**
  * Create a new event with pricing configuration.
@@ -39,8 +55,6 @@ export async function createEvent(
     endDate,
     location,
     status,
-    basePrice,
-    currency,
   } = input;
 
   // Validate that client exists
@@ -81,8 +95,8 @@ export async function createEvent(
     const pricing = await tx.eventPricing.create({
       data: {
         eventId: event.id,
-        basePrice,
-        currency,
+        basePrice: 0,
+        currency: "TND",
       },
     });
 
@@ -233,7 +247,7 @@ export async function updateEvent(
  */
 export async function listEvents(
   query: ListEventsQuery,
-): Promise<PaginatedResult<Event>> {
+): Promise<PaginatedResult<PrismaEvent>> {
   const { page, limit, clientId, status, search } = query;
   const skip = getSkip({ page, limit });
 

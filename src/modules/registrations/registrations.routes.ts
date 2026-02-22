@@ -2,8 +2,8 @@ import {
   requireAuth,
   requireSuperAdmin,
   canAccessClient,
+  requireEventAccess,
 } from "@shared/middleware/auth.middleware.js";
-import { requireEventAccess } from "@shared/middleware/access-control.js";
 import {
   getRegistrationById,
   updateRegistration,
@@ -23,8 +23,8 @@ import {
   searchRegistrantsForSponsorship,
 } from "./registration-query.service.js";
 import { getStorageProvider } from "@shared/services/storage/index.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { AppError } from "@shared/errors.js";
+import { ErrorCodes } from "@shared/errors.js";
 import {
   RegistrationIdParamSchema,
   EventIdParamSchema,
@@ -43,7 +43,7 @@ import {
   type ListRegistrationEmailLogsQuery,
   type SearchRegistrantsQuery,
 } from "./registrations.schema.js";
-import type { AppInstance } from "@shared/types/fastify.js";
+import type { AppInstance } from "@shared/fastify.js";
 
 // ============================================================================
 // Protected Routes (Admin)

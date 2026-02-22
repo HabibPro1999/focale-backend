@@ -25,13 +25,6 @@ export default tseslint.config(
         {
           patterns: [
             {
-              group: [
-                "**/modules/identity/**",
-                "!**/modules/identity/index.js",
-              ],
-              message: "Import from @identity barrel, not internal files",
-            },
-            {
               group: ["**/modules/clients/**", "!**/modules/clients/index.js"],
               message: "Import from @clients barrel, not internal files",
             },
@@ -72,6 +65,10 @@ export default tseslint.config(
             {
               group: ["**/modules/pricing/**", "!**/modules/pricing/index.js"],
               message: "Import from @pricing barrel, not internal files",
+            },
+            {
+              group: ["**/modules/users/**", "!**/modules/users/index.js"],
+              message: "Import from @users barrel, not internal files",
             },
           ],
         },

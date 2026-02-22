@@ -1,8 +1,9 @@
+import { z } from "zod";
 import {
   requireAuth,
   canAccessClient,
+  requireEventAccess,
 } from "@shared/middleware/auth.middleware.js";
-import { requireEventAccess } from "@shared/middleware/access-control.js";
 import { getEventById, EventIdParamSchema } from "@events";
 import {
   createForm,
@@ -16,30 +17,64 @@ import {
   updateSponsorshipSettings,
 } from "./forms.service.js";
 import {
-  CreateFormSchema,
-  UpdateFormSchema,
-  ListFormsQuerySchema,
-  FormIdParamSchema,
-  UpdateSponsorshipSettingsSchema,
-  type CreateFormInput,
-  type UpdateFormInput,
-  type ListFormsQuery,
-  type UpdateSponsorshipSettingsInput,
+  FormSchemaJsonSchema,
+  SponsorFormSchemaJsonSchema,
+  SponsorshipModeSchema,
+  RegistrantSearchScopeSchema,
 } from "./forms.schema.js";
-import type { AppInstance } from "@shared/types/fastify.js";
-import { UserRole } from "@identity";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { IdParamSchema } from "@shared/schemas/params.js";
+import { listQuery } from "@shared/schemas/common.js";
+import type { AppInstance } from "@shared/fastify.js";
+import { UserRole } from "@shared/constants.js";
+import { AppError } from "@shared/errors.js";
+import { ErrorCodes } from "@shared/errors.js";
 
 export async function formsRoutes(app: AppInstance): Promise<void> {
+  // ============================================================================
+  // Inline request schemas
+  // ============================================================================
+
+  const createBody = z
+    .object({
+      eventId: z.string().uuid(),
+      name: z.string().min(1).max(200),
+      schema: FormSchemaJsonSchema.optional(),
+      successTitle: z.string().optional().nullable(),
+      successMessage: z.string().optional().nullable(),
+    })
+    .strict();
+
+  const updateBody = z
+    .object({
+      name: z.string().min(1).max(200).optional(),
+      schema: FormSchemaJsonSchema.or(SponsorFormSchemaJsonSchema).optional(),
+      successTitle: z.string().optional().nullable(),
+      successMessage: z.string().optional().nullable(),
+      force: z.boolean().optional(),
+    })
+    .strict();
+
+  const listParams = listQuery({
+    eventId: z.string().uuid().optional(),
+    type: z.enum(["REGISTRATION", "SPONSOR"]).optional(),
+  });
+
+  const updateSponsorshipSettingsBody = z
+    .object({
+      sponsorshipMode: SponsorshipModeSchema,
+      registrantSearchScope: RegistrantSearchScopeSchema.optional(),
+      autoApproveSponsorship: z.boolean().optional(),
+    })
+    .strict();
+
   // All routes require authentication
   app.addHook("onRequest", requireAuth);
 
   // POST /api/forms - Create form
-  app.post<{ Body: CreateFormInput }>(
+  app.post<{ Body: z.infer<typeof createBody> }>(
     "/",
     {
-      schema: { body: CreateFormSchema },
+      schema: { body: createBody },
     },
     async (request, reply) => {
       await requireEventAccess(request.user!, request.body.eventId);
@@ -50,10 +85,10 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
   );
 
   // GET /api/forms - List forms
-  app.get<{ Querystring: ListFormsQuery }>(
+  app.get<{ Querystring: z.infer<typeof listParams> }>(
     "/",
     {
-      schema: { querystring: ListFormsQuerySchema },
+      schema: { querystring: listParams },
     },
     async (request, reply) => {
       const query = { ...request.query };
@@ -101,7 +136,7 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
   app.get<{ Params: { id: string } }>(
     "/:id",
     {
-      schema: { params: FormIdParamSchema },
+      schema: { params: IdParamSchema },
     },
     async (request, reply) => {
       const result = await getFormWithClientId(request.params.id);
@@ -130,7 +165,7 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
   app.get<{ Params: { id: string } }>(
     "/:id/sponsorship-mode-locked",
     {
-      schema: { params: FormIdParamSchema },
+      schema: { params: IdParamSchema },
     },
     async (request, reply) => {
       const result = await getFormWithClientId(request.params.id);
@@ -162,12 +197,15 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
   );
 
   // PATCH /api/forms/:id/sponsorship-settings - Update sponsorship settings
-  app.patch<{ Params: { id: string }; Body: UpdateSponsorshipSettingsInput }>(
+  app.patch<{
+    Params: { id: string };
+    Body: z.infer<typeof updateSponsorshipSettingsBody>;
+  }>(
     "/:id/sponsorship-settings",
     {
       schema: {
-        params: FormIdParamSchema,
-        body: UpdateSponsorshipSettingsSchema,
+        params: IdParamSchema,
+        body: updateSponsorshipSettingsBody,
       },
     },
     async (request, reply) => {
@@ -199,10 +237,10 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
   );
 
   // PATCH /api/forms/:id - Update form
-  app.patch<{ Params: { id: string }; Body: UpdateFormInput }>(
+  app.patch<{ Params: { id: string }; Body: z.infer<typeof updateBody> }>(
     "/:id",
     {
-      schema: { params: FormIdParamSchema, body: UpdateFormSchema },
+      schema: { params: IdParamSchema, body: updateBody },
     },
     async (request, reply) => {
       // Get form to check ownership
@@ -233,7 +271,7 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
   app.delete<{ Params: { id: string } }>(
     "/:id",
     {
-      schema: { params: FormIdParamSchema },
+      schema: { params: IdParamSchema },
     },
     async (request, reply) => {
       // Get form to check ownership

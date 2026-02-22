@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { AccessSelectionSchema } from "@access";
-import { PaginationSchema } from "@shared/schemas/common.js";
+import { listQuery } from "@shared/schemas/common.js";
 
 // ============================================================================
 // Enums
@@ -74,22 +74,14 @@ export const UpdateRegistrationSchema = z
 // Query Schemas
 // ============================================================================
 
-export const ListRegistrationsQuerySchema = z
-  .object({
-    ...PaginationSchema.shape,
-    paymentStatus: PaymentStatusSchema.optional(),
-    search: z.string().max(200).optional(),
-  })
-  .strict();
+export const ListRegistrationsQuerySchema = listQuery({
+  paymentStatus: PaymentStatusSchema.optional(),
+});
 
-export const ListAllRegistrationsQuerySchema = z
-  .object({
-    ...PaginationSchema.shape,
-    search: z.string().max(200).optional(),
-    eventId: z.string().uuid().optional(),
-    paymentStatus: PaymentStatusSchema.optional(),
-  })
-  .strict();
+export const ListAllRegistrationsQuerySchema = listQuery({
+  eventId: z.string().uuid().optional(),
+  paymentStatus: PaymentStatusSchema.optional(),
+});
 
 export const RegistrationIdParamSchema = z
   .object({

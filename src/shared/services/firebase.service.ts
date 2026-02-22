@@ -4,10 +4,9 @@ import type { Storage } from "firebase-admin/storage";
 import { config } from "@config/app.config.js";
 
 // Initialize Firebase Admin SDK
-// Uses FIREBASE_SERVICE_ACCOUNT env var (Base64-encoded JSON) or falls back to GOOGLE_APPLICATION_CREDENTIALS
+// Credential precedence: FIREBASE_SERVICE_ACCOUNT (Base64 JSON) > GOOGLE_APPLICATION_CREDENTIALS (file path)
 function getCredential() {
   if (config.firebase.serviceAccount) {
-    // Decode Base64 to JSON string, then parse
     const jsonString = Buffer.from(
       config.firebase.serviceAccount,
       "base64",
@@ -34,7 +33,7 @@ export const firebaseStorage: Storage = app.storage();
  * Verify Firebase ID token and return decoded token.
  */
 export async function verifyToken(idToken: string) {
-  return firebaseAuth.verifyIdToken(idToken);
+  return firebaseAuth.verifyIdToken(idToken, true);
 }
 
 /**

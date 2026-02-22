@@ -5,8 +5,8 @@
 
 import mjml2html from "mjml";
 import { sanitizeUrl, sanitizeForHtml } from "./email-variable.service.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { AppError } from "@shared/errors.js";
+import { ErrorCodes } from "@shared/errors.js";
 import type {
   TiptapDocument,
   TiptapNode,

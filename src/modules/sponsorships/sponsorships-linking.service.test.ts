@@ -26,7 +26,7 @@ import {
   recalculateUsageAmounts,
   type LinkSponsorshipResult,
 } from "./sponsorships-linking.service.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { ErrorCodes } from "@shared/errors.js";
 
 // Suppress unused import warnings for factory helpers used implicitly
 void createMockEvent;

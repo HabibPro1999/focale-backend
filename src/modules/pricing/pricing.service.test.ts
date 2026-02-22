@@ -16,7 +16,7 @@ import {
   calculatePrice,
   getEventPaymentConfig,
 } from "./pricing.service.js";
-import { AppError } from "@shared/errors/app-error.js";
+import { AppError } from "@shared/errors.js";
 
 describe("Pricing Service", () => {
   const eventId = "event-123";
@@ -500,8 +500,6 @@ describe("Pricing Service", () => {
       const mockClient = createMockClient({
         id: "client-1",
         name: "Acme Corp",
-        logo: "https://example.com/logo.png",
-        primaryColor: "#ff0000",
       });
       const mockEvent = createMockEvent({
         id: eventId,
@@ -528,8 +526,6 @@ describe("Pricing Service", () => {
         client: {
           id: mockClient.id,
           name: mockClient.name,
-          logo: mockClient.logo,
-          primaryColor: mockClient.primaryColor,
         },
       } as never);
 
@@ -568,8 +564,6 @@ describe("Pricing Service", () => {
         client: {
           id: "client-1",
           name: "Test Client",
-          logo: null,
-          primaryColor: null,
         },
       } as never);
 
@@ -591,8 +585,6 @@ describe("Pricing Service", () => {
         client: {
           id: "client-1",
           name: "Test Client",
-          logo: null,
-          primaryColor: null,
         },
       } as never);
 
@@ -626,8 +618,6 @@ describe("Pricing Service", () => {
         client: {
           id: "client-1",
           name: "Test Client",
-          logo: null,
-          primaryColor: null,
         },
       } as never);
 
@@ -650,8 +640,6 @@ describe("Pricing Service", () => {
         client: {
           id: "client-1",
           name: "Test Client",
-          logo: null,
-          primaryColor: null,
         },
       } as never);
 

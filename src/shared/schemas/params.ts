@@ -12,3 +12,5 @@ export const RegistrationIdParamSchema = z
   .strict();
 
 export const FormIdParamSchema = z.object({ id: z.string().uuid() }).strict();
+
+export const IdParamSchema = z.object({ id: z.string().uuid() }).strict();

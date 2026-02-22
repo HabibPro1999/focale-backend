@@ -20,8 +20,6 @@ export function createMockClient(overrides: Partial<Client> = {}): Client {
   return {
     id: faker.string.uuid(),
     name,
-    logo: faker.image.url(),
-    primaryColor: faker.color.rgb(),
     email: faker.internet.email(),
     phone: faker.phone.number(),
     active: true,

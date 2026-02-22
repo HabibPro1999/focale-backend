@@ -1,11 +1,10 @@
 import type { FastifyError, FastifyReply, FastifyRequest } from "fastify";
 import { ZodError } from "zod";
 import { Prisma } from "@/generated/prisma/client.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { formatZodError } from "@shared/errors/zod-error-formatter.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { AppError } from "@shared/errors.js";
+import { formatZodError } from "@shared/errors.js";
+import { ErrorCodes } from "@shared/errors.js";
 import { logger } from "@shared/utils/logger.js";
-import { sendAlert } from "@shared/utils/alerter.js";
 
 export function errorHandler(
   error: FastifyError | Error,
@@ -56,12 +55,6 @@ export function errorHandler(
         });
 
       default:
-        sendAlert({
-          title: "Database Error",
-          message: `Prisma error: ${error.code}`,
-          severity: "error",
-          context: { errorCode: error.code, requestId },
-        });
         return reply.status(500).send({
           error: "Database error",
           code: ErrorCodes.DATABASE_ERROR,
@@ -123,12 +116,6 @@ export function errorHandler(
 
   // Unknown error
   logger.error({ err: error, requestId }, "Unhandled error");
-  sendAlert({
-    title: "Internal Server Error",
-    message: error.message || "Unknown error",
-    severity: "error",
-    context: { requestId },
-  });
   return reply.status(500).send({
     error: "Internal server error",
     code: ErrorCodes.INTERNAL_ERROR,

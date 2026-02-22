@@ -1,27 +1,37 @@
+import { z } from "zod";
 import {
   requireAuth,
   canAccessClient,
+  requireEventAccess,
 } from "@shared/middleware/auth.middleware.js";
-import { requireEventAccess } from "@shared/middleware/access-control.js";
 import {
   createEventAccess,
   updateEventAccess,
   deleteEventAccess,
   listEventAccess,
   getEventAccessById,
-} from "./access.service.js";
-import {
   CreateEventAccessSchema,
   UpdateEventAccessSchema,
-  ListEventAccessQuerySchema,
-  EventAccessIdParamSchema,
-  EventIdParamSchema,
-  type CreateEventAccessInput,
-  type UpdateEventAccessInput,
-} from "./access.schema.js";
-import type { AppInstance } from "@shared/types/fastify.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
+} from "./access.service.js";
+import { AccessTypeSchema } from "./access.schema.js";
+import { EventIdParamSchema, IdParamSchema } from "@shared/schemas/params.js";
+import type { AppInstance } from "@shared/fastify.js";
+import { AppError } from "@shared/errors.js";
+import { ErrorCodes } from "@shared/errors.js";
+
+// ============================================================================
+// Inline Request Schemas
+// ============================================================================
+
+const listAccessQuery = z
+  .object({
+    active: z.preprocess(
+      (v) => (v === "true" ? true : v === "false" ? false : undefined),
+      z.boolean().optional(),
+    ),
+    type: AccessTypeSchema.optional(),
+  })
+  .strict();
 
 // ============================================================================
 // Protected Routes (Admin)
@@ -32,8 +42,8 @@ export async function accessRoutes(app: AppInstance): Promise<void> {
 
   // POST /api/events/:eventId/access - Create access item
   app.post<{
-    Params: { eventId: string };
-    Body: Omit<CreateEventAccessInput, "eventId">;
+    Params: z.infer<typeof EventIdParamSchema>;
+    Body: Omit<z.infer<typeof CreateEventAccessSchema>, "eventId">;
   }>(
     "/:eventId/access",
     {
@@ -44,7 +54,10 @@ export async function accessRoutes(app: AppInstance): Promise<void> {
     },
     async (request, reply) => {
       const { eventId } = request.params;
-      const input: CreateEventAccessInput = { ...request.body, eventId };
+      const input: z.infer<typeof CreateEventAccessSchema> = {
+        ...request.body,
+        eventId,
+      };
 
       await requireEventAccess(request.user!, eventId);
 
@@ -55,14 +68,14 @@ export async function accessRoutes(app: AppInstance): Promise<void> {
 
   // GET /api/events/:eventId/access - List access items
   app.get<{
-    Params: { eventId: string };
-    Querystring: { active?: boolean; type?: string };
+    Params: z.infer<typeof EventIdParamSchema>;
+    Querystring: z.infer<typeof listAccessQuery>;
   }>(
     "/:eventId/access",
     {
       schema: {
         params: EventIdParamSchema,
-        querystring: ListEventAccessQuerySchema,
+        querystring: listAccessQuery,
       },
     },
     async (request, reply) => {
@@ -80,10 +93,10 @@ export async function accessRoutes(app: AppInstance): Promise<void> {
   );
 
   // GET /api/access/:id - Get single access item
-  app.get<{ Params: { id: string } }>(
+  app.get<{ Params: z.infer<typeof IdParamSchema> }>(
     "/access/:id",
     {
-      schema: { params: EventAccessIdParamSchema },
+      schema: { params: IdParamSchema },
     },
     async (request, reply) => {
       const { id } = request.params;
@@ -112,11 +125,14 @@ export async function accessRoutes(app: AppInstance): Promise<void> {
   );
 
   // PATCH /api/access/:id - Update access item
-  app.patch<{ Params: { id: string }; Body: UpdateEventAccessInput }>(
+  app.patch<{
+    Params: z.infer<typeof IdParamSchema>;
+    Body: z.infer<typeof UpdateEventAccessSchema>;
+  }>(
     "/access/:id",
     {
       schema: {
-        params: EventAccessIdParamSchema,
+        params: IdParamSchema,
         body: UpdateEventAccessSchema,
       },
     },
@@ -142,10 +158,10 @@ export async function accessRoutes(app: AppInstance): Promise<void> {
   );
 
   // DELETE /api/access/:id - Delete access item
-  app.delete<{ Params: { id: string } }>(
+  app.delete<{ Params: z.infer<typeof IdParamSchema> }>(
     "/access/:id",
     {
-      schema: { params: EventAccessIdParamSchema },
+      schema: { params: IdParamSchema },
     },
     async (request, reply) => {
       const { id } = request.params;

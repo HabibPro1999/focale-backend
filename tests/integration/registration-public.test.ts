@@ -6,7 +6,7 @@ import {
   createMockEvent,
   createMockRegistration,
 } from "../helpers/factories.js";
-import type { AppInstance } from "../../src/shared/types/fastify.js";
+import type { AppInstance } from "../../src/shared/fastify.js";
 import { faker } from "@faker-js/faker";
 
 // ============================================================================

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { createTestApp } from "../helpers/test-app.js";
-import type { AppInstance } from "../../src/shared/types/fastify.js";
+import type { AppInstance } from "../../src/shared/fastify.js";
 
 describe("Health Check", () => {
   let app: AppInstance;

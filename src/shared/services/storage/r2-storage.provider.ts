@@ -12,24 +12,13 @@ export class R2StorageProvider implements StorageProvider {
   private client: S3Client;
 
   constructor() {
-    // Runtime guard: verify R2 config is present
-    if (
-      !config.r2.accountId ||
-      !config.r2.accessKeyId ||
-      !config.r2.secretAccessKey ||
-      !config.r2.bucket
-    ) {
-      throw new Error(
-        "R2 configuration missing. Ensure R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, and R2_BUCKET are set.",
-      );
-    }
-
+    // Config validated at startup via envSchema.refine() in app.config.ts
     this.client = new S3Client({
       region: "auto",
       endpoint: `https://${config.r2.accountId}.r2.cloudflarestorage.com`,
       credentials: {
-        accessKeyId: config.r2.accessKeyId,
-        secretAccessKey: config.r2.secretAccessKey,
+        accessKeyId: config.r2.accessKeyId!,
+        secretAccessKey: config.r2.secretAccessKey!,
       },
     });
   }

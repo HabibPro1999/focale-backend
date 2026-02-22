@@ -17,8 +17,8 @@ import {
   getSponsorFormByEventId,
   createSponsorForm,
 } from "./forms.service.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { AppError } from "@shared/errors.js";
+import { ErrorCodes } from "@shared/errors.js";
 import { faker } from "@faker-js/faker";
 import type { Form } from "@/generated/prisma/client.js";
 
@@ -211,8 +211,6 @@ describe("Forms Service", () => {
           client: {
             id: mockClient.id,
             name: mockClient.name,
-            logo: mockClient.logo,
-            primaryColor: mockClient.primaryColor,
           },
           pricing: null,
           access: [],
@@ -652,8 +650,6 @@ describe("Forms Service", () => {
           client: {
             id: mockClient.id,
             name: mockClient.name,
-            logo: mockClient.logo,
-            primaryColor: mockClient.primaryColor,
           },
           pricing: null,
           access: [],

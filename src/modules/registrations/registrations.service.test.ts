@@ -24,8 +24,8 @@ import {
   getRegistrationForEdit,
   editRegistrationPublic,
 } from "./registration-edit.service.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { AppError } from "@shared/errors.js";
+import { ErrorCodes } from "@shared/errors.js";
 import type { PriceBreakdown } from "./registrations.schema.js";
 import { faker } from "@faker-js/faker";
 
@@ -72,7 +72,7 @@ vi.mock("@email", () => ({
   queueTriggeredEmail: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("@shared/utils/form-data-validator.js", () => ({
+vi.mock("./form-data-validator.js", () => ({
   validateFormData: vi.fn().mockReturnValue({ valid: true, errors: [] }),
 }));
 

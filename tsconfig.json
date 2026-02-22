@@ -22,7 +22,6 @@
       "@core/*": ["./src/core/*"],
       "@shared/*": ["./src/shared/*"],
       "@modules/*": ["./src/modules/*"],
-      "@identity": ["./src/modules/identity/index.ts"],
       "@clients": ["./src/modules/clients/index.ts"],
       "@events": ["./src/modules/events/index.ts"],
       "@forms": ["./src/modules/forms/index.ts"],
@@ -31,7 +30,8 @@
       "@registrations": ["./src/modules/registrations/index.ts"],
       "@sponsorships": ["./src/modules/sponsorships/index.ts"],
       "@reports": ["./src/modules/reports/index.ts"],
-      "@email": ["./src/modules/email/index.ts"]
+      "@email": ["./src/modules/email/index.ts"],
+      "@users": ["./src/modules/users/index.ts"]
     }
   },
   "include": ["src/**/*"],

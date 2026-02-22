@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { TiptapNode } from "./email.types.js";
-import { PaginationSchema } from "@shared/schemas/common.js";
+import { listQuery } from "@shared/schemas/common.js";
 
 // ============================================================================
 // Enums
@@ -107,13 +107,9 @@ export const UpdateEmailTemplateSchema = z
   })
   .strict();
 
-export const ListEmailTemplatesQuerySchema = z
-  .object({
-    ...PaginationSchema.shape,
-    category: EmailTemplateCategorySchema.optional(),
-    search: z.string().max(200).optional(),
-  })
-  .strict();
+export const ListEmailTemplatesQuerySchema = listQuery({
+  category: EmailTemplateCategorySchema.optional(),
+});
 
 // ============================================================================
 // Bulk Send Schema (Simple recipient filtering)

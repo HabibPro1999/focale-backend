@@ -1,22 +1,46 @@
 import { randomUUID } from "crypto";
 import { prisma } from "@/database/client.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
-import { findOrThrow } from "@shared/utils/db.js";
+import { AppError } from "@shared/errors.js";
+import { ErrorCodes } from "@shared/errors.js";
 import { calculateApplicableAmount } from "@sponsorships";
 import { evaluateConditions } from "@shared/utils/condition-evaluator.js";
 import { logger } from "@shared/utils/logger.js";
 import {
-  UpdateEventPricingInput,
-  CreateEmbeddedRuleInput,
-  UpdateEmbeddedRuleInput,
-  EmbeddedPricingRule,
-  CalculatePriceRequest,
-  PriceBreakdown,
-  SelectedExtra,
+  type EmbeddedPricingRule,
+  type PriceBreakdown,
   MAX_PRICING_RULES,
 } from "./pricing.schema.js";
 import type { Prisma, EventPricing } from "@/generated/prisma/client.js";
+
+// ============================================================================
+// Local Request Types (validated by routes, not here)
+// ============================================================================
+
+type UpdateEventPricingInput = {
+  basePrice?: number;
+  currency?: string;
+  rules?: EmbeddedPricingRule[];
+  onlinePaymentEnabled?: boolean;
+  onlinePaymentUrl?: string | null;
+  bankName?: string | null;
+  bankAccountName?: string | null;
+  bankAccountNumber?: string | null;
+};
+
+type CreateEmbeddedRuleInput = Omit<EmbeddedPricingRule, "id">;
+
+type UpdateEmbeddedRuleInput = Partial<Omit<EmbeddedPricingRule, "id">>;
+
+type SelectedExtra = {
+  extraId: string;
+  quantity: number;
+};
+
+type CalculatePriceRequest = {
+  formData: Record<string, unknown>;
+  selectedExtras: SelectedExtra[];
+  sponsorshipCodes: string[];
+};
 
 // ============================================================================
 // Types
@@ -51,8 +75,6 @@ export type EventPaymentConfig = {
     client: {
       id: string;
       name: string;
-      logo: string | null;
-      primaryColor: string | null;
     };
   };
   pricing: {
@@ -84,8 +106,6 @@ export async function getEventPaymentConfig(
         select: {
           id: true,
           name: true,
-          logo: true,
-          primaryColor: true,
         },
       },
     },
@@ -157,10 +177,16 @@ export async function updateEventPricing(
   eventId: string,
   input: UpdateEventPricingInput,
 ): Promise<EventPricingWithRules> {
-  await findOrThrow(
-    () => prisma.eventPricing.findUnique({ where: { eventId } }),
-    { message: "Event pricing not found", code: ErrorCodes.PRICING_NOT_FOUND },
-  );
+  const existingPricing = await prisma.eventPricing.findUnique({
+    where: { eventId },
+  });
+  if (!existingPricing)
+    throw new AppError(
+      "Event pricing not found",
+      404,
+      true,
+      ErrorCodes.PRICING_NOT_FOUND,
+    );
 
   const updateData: Prisma.EventPricingUpdateInput = {};
 
@@ -214,13 +240,14 @@ async function withPricingRules(
   fn: (rules: EmbeddedPricingRule[]) => Promise<EmbeddedPricingRule[]>,
 ): Promise<EventPricingWithRules> {
   return prisma.$transaction(async (tx) => {
-    const pricing = await findOrThrow(
-      () => tx.eventPricing.findUnique({ where: { eventId } }),
-      {
-        message: "Event pricing not found",
-        code: ErrorCodes.PRICING_NOT_FOUND,
-      },
-    );
+    const pricing = await tx.eventPricing.findUnique({ where: { eventId } });
+    if (!pricing)
+      throw new AppError(
+        "Event pricing not found",
+        404,
+        true,
+        ErrorCodes.PRICING_NOT_FOUND,
+      );
 
     const rules = parseRulesFromDb(pricing.rules);
     const updatedRules = await fn(rules);
@@ -334,10 +361,14 @@ export async function calculatePrice(
   const { formData, selectedExtras, sponsorshipCodes } = input;
 
   // Get event pricing configuration with embedded rules
-  const pricing = await findOrThrow(() => getEventPricing(eventId), {
-    message: "Event pricing not found",
-    code: ErrorCodes.PRICING_NOT_FOUND,
-  });
+  const pricing = await getEventPricing(eventId);
+  if (!pricing)
+    throw new AppError(
+      "Event pricing not found",
+      404,
+      true,
+      ErrorCodes.PRICING_NOT_FOUND,
+    );
 
   const { basePrice, currency, rules } = pricing;
 

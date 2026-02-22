@@ -7,10 +7,10 @@ import {
   type CreateSponsorshipBatchInput,
 } from "./sponsorships.schema.js";
 import { z } from "zod";
-import type { AppInstance } from "@shared/types/fastify.js";
+import type { AppInstance } from "@shared/fastify.js";
 import { prisma } from "@/database/client.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { AppError } from "@shared/errors.js";
+import { ErrorCodes } from "@shared/errors.js";
 
 // ============================================================================
 // Public Routes (No Auth - for sponsor form submission)

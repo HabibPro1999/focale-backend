@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import type { FastifyRequest, FastifyReply } from "fastify";
 import { prismaMock } from "../../../tests/mocks/prisma.js";
 import {
@@ -16,11 +16,10 @@ import {
   requireSuperAdmin,
   requireAdmin,
   canAccessClient,
-  clearUserCache,
 } from "./auth.middleware.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
-import { UserRole } from "@modules/identity/permissions.js";
+import { AppError } from "@shared/errors.js";
+import { ErrorCodes } from "@shared/errors.js";
+import { UserRole } from "@shared/constants.js";
 
 // ============================================================================
 // Test Helpers
@@ -52,10 +51,6 @@ function createMockReply(): FastifyReply {
 
 describe("requireAuth", () => {
   const mockReply = createMockReply();
-
-  beforeEach(() => {
-    clearUserCache();
-  });
 
   describe("Authorization Header Validation", () => {
     it("should throw 401 when authorization header is missing", async () => {
@@ -565,10 +560,6 @@ describe("canAccessClient", () => {
 
 describe("Auth Middleware Integration", () => {
   const mockReply = createMockReply();
-
-  beforeEach(() => {
-    clearUserCache();
-  });
 
   it("should work with requireAuth followed by requireSuperAdmin", async () => {
     const request = createMockRequest({

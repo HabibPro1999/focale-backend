@@ -1,32 +1,20 @@
 import type { FastifyRequest, FastifyReply } from "fastify";
 import { verifyToken } from "@shared/services/firebase.service.js";
 import { prisma } from "@/database/client.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
-import { UserRole } from "@modules/identity/permissions.js";
-import { SimpleCache } from "@shared/utils/cache.js";
+import { AppError } from "@shared/errors.js";
+import { ErrorCodes } from "@shared/errors.js";
+import { UserRole } from "@shared/constants.js";
+import { getEventById } from "@modules/events/events.service.js";
+import { getClientById } from "@clients";
+import type { ModuleId } from "@clients";
 import type { User } from "@/generated/prisma/client.js";
 
-// Cache user lookups for 60 seconds to reduce DB hits
-const userCache = new SimpleCache<User>(60);
+// ============================================================================
+// Authentication
+// ============================================================================
 
 /**
- * Invalidate user cache entry (call when user is updated/deleted).
- */
-export function invalidateUserCache(userId: string): void {
-  userCache.invalidate(userId);
-}
-
-/**
- * Clear all user cache entries (useful for testing).
- */
-export function clearUserCache(): void {
-  userCache.clear();
-}
-
-/**
- * Middleware to require authentication.
- * Verifies Firebase ID token and attaches user to request.
+ * Verify Firebase ID token and attach user to request.
  */
 export async function requireAuth(
   request: FastifyRequest,
@@ -48,21 +36,9 @@ export async function requireAuth(
   try {
     const decoded = await verifyToken(token);
 
-    // Check cache first
-    let user = userCache.get(decoded.uid);
-
-    if (!user) {
-      // Get user from database
-      user =
-        (await prisma.user.findUnique({
-          where: { id: decoded.uid },
-        })) ?? undefined;
-
-      // Cache the user if found
-      if (user) {
-        userCache.set(decoded.uid, user);
-      }
-    }
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.uid },
+    });
 
     if (!user) {
       throw new AppError(
@@ -97,9 +73,12 @@ export async function requireAuth(
   }
 }
 
+// ============================================================================
+// Role Authorization
+// ============================================================================
+
 /**
- * Factory function to create a middleware that checks for specific roles.
- * @param roles - Array of allowed role values from UserRole enum
+ * Factory: middleware that checks for specific roles.
  */
 export function requireRole(
   ...roles: Array<(typeof UserRole)[keyof typeof UserRole]>
@@ -132,18 +111,16 @@ export function requireRole(
   };
 }
 
-/**
- * Middleware that requires super admin role (role = 0).
- */
 export const requireSuperAdmin = requireRole(UserRole.SUPER_ADMIN);
 
-/**
- * Middleware that allows both super admin and client admin.
- */
 export const requireAdmin = requireRole(
   UserRole.SUPER_ADMIN,
   UserRole.CLIENT_ADMIN,
 );
+
+// ============================================================================
+// Resource Authorization
+// ============================================================================
 
 /**
  * Check if user can access a client's resources.
@@ -155,4 +132,81 @@ export function canAccessClient(
   clientId: string,
 ): boolean {
   return user.role === UserRole.SUPER_ADMIN || user.clientId === clientId;
+}
+
+/**
+ * Factory: middleware that checks if the user's client has a module enabled.
+ * Super admins bypass. Must run AFTER requireAuth.
+ */
+export function requireModule(...modules: ModuleId[]) {
+  return async (
+    request: FastifyRequest,
+    _reply: FastifyReply,
+  ): Promise<void> => {
+    if (!request.user) {
+      throw new AppError(
+        "Authentication required",
+        401,
+        true,
+        ErrorCodes.UNAUTHORIZED,
+      );
+    }
+
+    // Super admins bypass module checks
+    if (request.user.role === UserRole.SUPER_ADMIN) {
+      return;
+    }
+
+    if (!request.user.clientId) {
+      throw new AppError(
+        "Module access denied",
+        403,
+        true,
+        ErrorCodes.MODULE_NOT_ENABLED,
+      );
+    }
+
+    const client = await getClientById(request.user.clientId);
+
+    if (!client) {
+      throw new AppError("Client not found", 403, true, ErrorCodes.FORBIDDEN);
+    }
+
+    const hasAccess = modules.some((m) => client.enabledModules.includes(m));
+    if (!hasAccess) {
+      throw new AppError(
+        "This feature is not enabled for your organization",
+        403,
+        true,
+        ErrorCodes.MODULE_NOT_ENABLED,
+      );
+    }
+  };
+}
+
+type EventWithPricing = NonNullable<Awaited<ReturnType<typeof getEventById>>>;
+
+/**
+ * Verify user has access to an event. Fetches the event, throws 404/403,
+ * and returns it so callers avoid a second round-trip.
+ */
+export async function requireEventAccess(
+  user: User,
+  eventId: string,
+): Promise<EventWithPricing> {
+  const event = await getEventById(eventId);
+  if (!event) {
+    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
+  }
+
+  if (!canAccessClient(user, event.clientId)) {
+    throw new AppError(
+      "Insufficient permissions",
+      403,
+      true,
+      ErrorCodes.FORBIDDEN,
+    );
+  }
+
+  return event;
 }

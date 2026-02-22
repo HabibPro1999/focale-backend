@@ -13,7 +13,7 @@ import {
   validatorCompiler,
   type ZodTypeProvider,
 } from "fastify-type-provider-zod";
-import type { AppInstance } from "@shared/types/fastify.js";
+import type { AppInstance } from "@shared/fastify.js";
 import { errorHandler } from "@shared/middleware/error.middleware.js";
 import { emailWebhookRoutes } from "./email-webhook.routes.js";
 

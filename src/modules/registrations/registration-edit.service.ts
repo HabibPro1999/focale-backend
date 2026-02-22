@@ -1,18 +1,14 @@
 import { timingSafeEqual } from "crypto";
 import { prisma } from "@/database/client.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
-import { findOrThrow } from "@shared/utils/db.js";
+import { AppError } from "@shared/errors.js";
+import { ErrorCodes } from "@shared/errors.js";
 import {
   validateAccessSelections,
   reserveAccessSpot,
   releaseAccessSpot,
 } from "@access";
 import { calculatePrice } from "@pricing";
-import {
-  validateFormData,
-  type FormSchema,
-} from "@shared/utils/form-data-validator.js";
+import { validateFormData, type FormSchema } from "./form-data-validator.js";
 import type {
   PriceBreakdown,
   PublicEditRegistrationInput,
@@ -222,28 +218,28 @@ export async function verifyEditToken(
 export async function getRegistrationForEdit(
   registrationId: string,
 ): Promise<GetRegistrationForEditResult> {
-  const registration = await findOrThrow(
-    () =>
-      prisma.registration.findUnique({
-        where: { id: registrationId },
-        include: {
-          form: { select: { id: true, name: true, schema: true } },
-          event: {
-            select: {
-              id: true,
-              name: true,
-              slug: true,
-              clientId: true,
-              status: true,
-            },
-          },
+  const registration = await prisma.registration.findUnique({
+    where: { id: registrationId },
+    include: {
+      form: { select: { id: true, name: true, schema: true } },
+      event: {
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          clientId: true,
+          status: true,
         },
-      }),
-    {
-      message: "Registration not found",
-      code: ErrorCodes.REGISTRATION_NOT_FOUND,
+      },
     },
-  );
+  });
+  if (!registration)
+    throw new AppError(
+      "Registration not found",
+      404,
+      true,
+      ErrorCodes.REGISTRATION_NOT_FOUND,
+    );
 
   // Enrich with accessSelections derived from priceBreakdown
   const priceBreakdown = registration.priceBreakdown as PriceBreakdown;
@@ -310,20 +306,20 @@ export async function editRegistrationPublic(
   input: PublicEditRegistrationInput,
 ): Promise<EditRegistrationPublicResult> {
   // 1. Get current registration
-  const registration = await findOrThrow(
-    () =>
-      prisma.registration.findUnique({
-        where: { id: registrationId },
-        include: {
-          form: { select: { id: true, eventId: true, schema: true } },
-          event: { select: { id: true, status: true } },
-        },
-      }),
-    {
-      message: "Registration not found",
-      code: ErrorCodes.REGISTRATION_NOT_FOUND,
+  const registration = await prisma.registration.findUnique({
+    where: { id: registrationId },
+    include: {
+      form: { select: { id: true, eventId: true, schema: true } },
+      event: { select: { id: true, status: true } },
     },
-  );
+  });
+  if (!registration)
+    throw new AppError(
+      "Registration not found",
+      404,
+      true,
+      ErrorCodes.REGISTRATION_NOT_FOUND,
+    );
 
   // 2. Validate registration can be edited
   if (registration.paymentStatus === "REFUNDED") {

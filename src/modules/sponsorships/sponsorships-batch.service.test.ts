@@ -9,8 +9,8 @@ import {
   createMockEventPricing,
 } from "../../../tests/helpers/factories.js";
 import { createSponsorshipBatch } from "./sponsorships-batch.service.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { AppError } from "@shared/errors.js";
+import { ErrorCodes } from "@shared/errors.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type TxCallback = (tx: any) => Promise<unknown>;

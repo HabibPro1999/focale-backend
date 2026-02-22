@@ -3,9 +3,9 @@ import {
   getSponsorFormByEventSlug,
 } from "./forms.service.js";
 import { EventSlugParamSchema } from "@events";
-import type { AppInstance } from "@shared/types/fastify.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
+import type { AppInstance } from "@shared/fastify.js";
+import { AppError } from "@shared/errors.js";
+import { ErrorCodes } from "@shared/errors.js";
 
 export async function formsPublicRoutes(app: AppInstance): Promise<void> {
   // NO auth hook - these routes are public

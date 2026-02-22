@@ -8,8 +8,6 @@ const envSchema = z
     PORT: z.coerce.number().default(3000),
     DATABASE_URL: z.string().url(),
     CORS_ORIGIN: z.string().default("http://localhost:8080"),
-    // Alerting
-    ALERT_WEBHOOK_URL: z.string().url().optional(),
     // Firebase
     FIREBASE_PROJECT_ID: z.string(),
     FIREBASE_STORAGE_BUCKET: z.string().optional(),
@@ -50,7 +48,6 @@ export const config = Object.freeze({
   isDevelopment: env.NODE_ENV === "development",
   isProduction: env.NODE_ENV === "production",
   isTest: env.NODE_ENV === "test",
-  alertWebhookUrl: env.ALERT_WEBHOOK_URL,
   database: Object.freeze({
     poolSize: env.NODE_ENV === "production" ? 20 : 5,
   }),

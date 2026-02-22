@@ -4,7 +4,6 @@ import {
   getSkip,
   type PaginatedResult,
 } from "@shared/utils/pagination.js";
-import { findSpecifyOtherChild } from "@shared/utils/form-helpers.js";
 import type {
   ListRegistrationAuditLogsQuery,
   RegistrationAuditLog,
@@ -13,8 +12,56 @@ import type {
   SearchRegistrantsQuery,
   RegistrantSearchResult,
 } from "./registrations.schema.js";
-import type { FormSchemaSteps } from "@shared/utils/form-helpers.js";
 import { Prisma } from "@/generated/prisma/client.js";
+
+// ============================================================================
+// Form Schema Types (lightweight types for raw JSONB form data)
+// ============================================================================
+
+type FieldCondition = {
+  fieldId: string;
+  operator: string;
+  value?: string | number | boolean;
+};
+
+type FormField = {
+  id: string;
+  type: string;
+  label?: string;
+  options?: Array<{ id: string; label: string; value?: string }>;
+  conditions?: FieldCondition[];
+};
+
+type FormSchemaSteps = {
+  steps: Array<{ fields: FormField[] }>;
+};
+
+const SPECIFY_OTHER_TRIGGER_VALUES = ["other", "autre", "other_diet"];
+
+function findSpecifyOtherChild(
+  parentField: FormField,
+  allFields: FormField[],
+): FormField | null {
+  if (!["dropdown", "radio"].includes(parentField.type)) return null;
+
+  const hasOtherOption = parentField.options?.some((opt) =>
+    SPECIFY_OTHER_TRIGGER_VALUES.includes(opt.id.toLowerCase()),
+  );
+  if (!hasOtherOption) return null;
+
+  return (
+    allFields.find((child) =>
+      child.conditions?.some(
+        (cond) =>
+          cond.fieldId === parentField.id &&
+          cond.operator === "equals" &&
+          SPECIFY_OTHER_TRIGGER_VALUES.includes(
+            String(cond.value ?? "").toLowerCase(),
+          ),
+      ),
+    ) ?? null
+  );
+}
 
 // ============================================================================
 // Table Columns (for dynamic table rendering)

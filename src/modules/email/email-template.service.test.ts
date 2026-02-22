@@ -13,8 +13,8 @@ import {
   deleteEmailTemplate,
   duplicateEmailTemplate,
 } from "./email-template.service.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { AppError } from "@shared/errors.js";
+import { ErrorCodes } from "@shared/errors.js";
 import type { TiptapDocument } from "./email.types.js";
 import type { EmailTemplate } from "@/generated/prisma/client.js";
 
