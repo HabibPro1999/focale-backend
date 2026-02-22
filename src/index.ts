@@ -18,6 +18,25 @@ async function main() {
   const server = await buildServer();
 
   let activeProcessing: Promise<void> | null = null;
+  let emailQueueInterval: ReturnType<typeof setInterval> | null = null;
+
+  // Register preClose hook BEFORE listen (Fastify requires this)
+  server.addHook("preClose", async () => {
+    if (emailQueueInterval) {
+      clearInterval(emailQueueInterval);
+      logger.info("Email queue worker stopped");
+    }
+    if (activeProcessing) {
+      logger.info("Waiting for in-flight email processing to complete...");
+      await Promise.race([
+        activeProcessing,
+        new Promise<void>((resolve) => setTimeout(resolve, 10_000)),
+      ]);
+      logger.info("In-flight email processing completed");
+    }
+  });
+
+  gracefulShutdown(server);
 
   // CRITICAL: Bind to port first, before any background tasks
   // This ensures Render detects the service as healthy
@@ -30,8 +49,7 @@ async function main() {
   await new Promise((resolve) => setTimeout(resolve, dbWarmupDelay));
 
   // Start email queue worker (processes every 15 seconds for faster email delivery)
-  const emailQueueInterval = setInterval(() => {
-    // Don't start new processing if one is still running
+  emailQueueInterval = setInterval(() => {
     if (activeProcessing) {
       logger.debug("Email queue processing already in progress, skipping");
       return;
@@ -51,22 +69,6 @@ async function main() {
       });
   }, 15_000);
   logger.info("Email queue worker started (15s interval)");
-
-  // Stop email queue before in-flight requests drain
-  server.addHook("preClose", async () => {
-    clearInterval(emailQueueInterval);
-    logger.info("Email queue worker stopped");
-    if (activeProcessing) {
-      logger.info("Waiting for in-flight email processing to complete...");
-      await Promise.race([
-        activeProcessing,
-        new Promise<void>((resolve) => setTimeout(resolve, 10_000)),
-      ]);
-      logger.info("In-flight email processing completed");
-    }
-  });
-
-  gracefulShutdown(server);
 }
 
 main().catch((err) => {
