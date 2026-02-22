@@ -39,7 +39,6 @@ export async function createEvent(
     endDate,
     location,
     status,
-    contactPhone,
     basePrice,
     currency,
   } = input;
@@ -76,7 +75,6 @@ export async function createEvent(
         endDate,
         location: location ?? null,
         status: status ?? "CLOSED",
-        contactPhone: contactPhone ?? null,
       },
     });
 
