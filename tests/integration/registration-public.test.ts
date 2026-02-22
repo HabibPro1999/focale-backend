@@ -235,13 +235,15 @@ describe("POST /api/public/forms/:formId/register", () => {
     expect(response.statusCode).toBe(201);
     const responseBody = response.json();
     expect(responseBody).toHaveProperty("registration");
-    expect(responseBody).toHaveProperty("priceBreakdown");
     expect(responseBody.registration.id).toBe(createdReg.id);
     expect(responseBody.registration.email).toBe(createdReg.email);
+    expect(responseBody.registration.totalAmount).toBe(createdReg.totalAmount);
+    expect(responseBody.registration.currency).toBe(createdReg.currency);
+    expect(responseBody.registration.paymentStatus).toBe(
+      createdReg.paymentStatus,
+    );
     // Route maps editToken → token for frontend compatibility
     expect(responseBody.registration.token).toBe(createdReg.editToken);
-    expect(responseBody.priceBreakdown.total).toBe(300);
-    expect(responseBody.priceBreakdown.currency).toBe("TND");
   });
 
   // --------------------------------------------------------------------------
@@ -400,7 +402,6 @@ describe("POST /api/public/forms/:formId/register", () => {
     expect(response.statusCode).toBe(200);
     const responseBody = response.json();
     expect(responseBody).toHaveProperty("registration");
-    expect(responseBody).toHaveProperty("priceBreakdown");
     expect(responseBody.registration.id).toBe(existingReg.id);
     // Route maps editToken → token
     expect(responseBody.registration.token).toBe(existingReg.editToken);
