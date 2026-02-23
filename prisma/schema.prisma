@@ -278,9 +278,12 @@ model Sponsorship {
   beneficiaryAddress String?           @map("beneficiary_address")
 
   // Coverage
-  coversBasePrice    Boolean           @default(true) @map("covers_base_price")
-  coveredAccessIds   String[]          @default([]) @map("covered_access_ids") // Array of EventAccess IDs
-  totalAmount        Int               @map("total_amount") // Calculated: base (if covered) + sum(access prices)
+  coversBasePrice        Boolean           @default(true) @map("covers_base_price")
+  coveredAccessIds       String[]          @default([]) @map("covered_access_ids") // Array of EventAccess IDs
+  totalAmount            Int               @map("total_amount") // Calculated: base (if covered) + sum(access prices)
+
+  // Pending linked account: registration waiting for admin approval
+  targetRegistrationId   String?           @map("target_registration_id")
 
   createdAt          DateTime          @default(now()) @map("created_at")
   updatedAt          DateTime          @updatedAt @map("updated_at")
@@ -295,6 +298,7 @@ model Sponsorship {
   @@index([code])
   @@index([status])
   @@index([beneficiaryEmail])
+  @@index([targetRegistrationId])
   @@map("sponsorships")
 }
 

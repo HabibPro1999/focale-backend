@@ -387,6 +387,7 @@ describe("Sponsorships Service", () => {
             create: vi.fn().mockResolvedValue(mockSponsorship),
             findUnique: vi.fn().mockResolvedValue(null), // For unique code check
           },
+          form: { findUnique: vi.fn().mockResolvedValue(null) }, // No autoApprove settings
           eventPricing: { findUnique: vi.fn().mockResolvedValue(mockPricing) },
           eventAccess: { findMany: vi.fn().mockResolvedValue([]) },
         };
@@ -484,6 +485,7 @@ describe("Sponsorships Service", () => {
             }),
             findUnique: vi.fn().mockResolvedValue(null),
           },
+          form: { findUnique: vi.fn().mockResolvedValue(null) }, // No autoApprove settings
           eventPricing: { findUnique: vi.fn().mockResolvedValue(mockPricing) },
           eventAccess: { findMany: vi.fn().mockResolvedValue([]) },
         };
