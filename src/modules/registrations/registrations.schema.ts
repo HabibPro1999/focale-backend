@@ -351,7 +351,10 @@ export const RegistrantSearchResultSchema = z.object({
   lastName: z.string().nullable(),
   paymentStatus: PaymentStatusSchema,
   totalAmount: z.number(),
+  sponsorshipAmount: z.number(),
   accessTypeIds: z.array(z.string()),
+  coveredAccessIds: z.array(z.string()),
+  isBasePriceCovered: z.boolean(),
   phone: z.string().nullable(),
   formData: z.record(z.string(), z.unknown()).nullable(),
 });
