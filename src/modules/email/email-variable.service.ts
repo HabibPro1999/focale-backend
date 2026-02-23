@@ -730,6 +730,7 @@ export interface LinkedSponsorshipContextInput {
     lastName: string | null;
     phone: string | null;
     totalAmount: number;
+    baseAmount: number;
     sponsorshipAmount: number;
     linkBaseUrl: string | null;
     editToken: string | null;
@@ -820,9 +821,10 @@ export function buildLinkedSponsorshipContext(
 
   // Build sponsored items list
   const sponsoredItems: string[] = [];
-  if (sponsorship.coversBasePrice && pricing) {
+  if (sponsorship.coversBasePrice) {
+    const basePrice = registration.baseAmount ?? pricing?.basePrice ?? 0;
     sponsoredItems.push(
-      `- Base registration: ${formatCurrency(pricing.basePrice, currency)}`,
+      `- Base registration: ${formatCurrency(basePrice, currency)}`,
     );
   }
   for (const accessId of sponsorship.coveredAccessIds) {
