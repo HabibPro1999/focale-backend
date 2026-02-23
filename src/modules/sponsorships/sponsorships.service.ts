@@ -361,13 +361,25 @@ export async function createSponsorshipBatch(
         // Generate unique code
         const code = await generateUniqueCode(tx);
 
-        // Calculate total amount
-        const totalAmount = await calculateSponsorshipTotal(
-          tx,
-          eventId,
-          linked.coversBasePrice,
-          linked.coveredAccessIds,
-        );
+        // Use registrant's actual base price (after conditional pricing rules)
+        let totalAmount = 0;
+        if (linked.coversBasePrice) {
+          totalAmount += registration.baseAmount;
+        }
+        if (linked.coveredAccessIds.length > 0) {
+          const coveredItems = await tx.eventAccess.findMany({
+            where: {
+              id: { in: linked.coveredAccessIds },
+              eventId,
+              active: true,
+            },
+            select: { price: true },
+          });
+          totalAmount += coveredItems.reduce(
+            (sum: number, item: { price: number }) => sum + item.price,
+            0,
+          );
+        }
 
         if (autoApprove) {
           // Auto-approve: create USED sponsorship and immediately link to registration
