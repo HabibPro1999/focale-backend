@@ -1271,6 +1271,7 @@ export async function linkSponsorshipToRegistration(
           lastName: true,
           phone: true,
           totalAmount: true,
+          baseAmount: true,
           sponsorshipAmount: true,
           linkBaseUrl: true,
           editToken: true,
