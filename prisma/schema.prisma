@@ -67,6 +67,7 @@ model Event {
   endDate         DateTime    @map("end_date")
   location        String?
   status          EventStatus @default(CLOSED)
+  bannerUrl             String?  @map("banner_url")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
