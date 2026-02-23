@@ -436,6 +436,7 @@ enum AutomaticEmailTrigger {
   SPONSORSHIP_BATCH_SUBMITTED // When lab submits sponsorship batch (sent to lab)
   SPONSORSHIP_LINKED // When sponsorship auto-linked to registration (LINKED_ACCOUNT mode, sent to doctor)
   SPONSORSHIP_APPLIED // When admin manually applies sponsorship code (CODE mode, sent to doctor)
+  SPONSORSHIP_PARTIAL     // Partial sponsorship notification to doctor
 }
 
 enum EmailStatus {

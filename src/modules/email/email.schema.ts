@@ -1,32 +1,33 @@
-import { z } from 'zod';
-import type { TiptapNode } from './email.types.js';
+import { z } from "zod";
+import type { TiptapNode } from "./email.types.js";
 
 // ============================================================================
 // Enums
 // ============================================================================
 
-export const EmailTemplateCategorySchema = z.enum(['AUTOMATIC', 'MANUAL']);
+export const EmailTemplateCategorySchema = z.enum(["AUTOMATIC", "MANUAL"]);
 
 export const AutomaticEmailTriggerSchema = z.enum([
-  'REGISTRATION_CREATED',
-  'PAYMENT_PROOF_SUBMITTED',
-  'PAYMENT_CONFIRMED',
-  'SPONSORSHIP_BATCH_SUBMITTED',
-  'SPONSORSHIP_LINKED',
-  'SPONSORSHIP_APPLIED',
+  "REGISTRATION_CREATED",
+  "PAYMENT_PROOF_SUBMITTED",
+  "PAYMENT_CONFIRMED",
+  "SPONSORSHIP_BATCH_SUBMITTED",
+  "SPONSORSHIP_LINKED",
+  "SPONSORSHIP_APPLIED",
+  "SPONSORSHIP_PARTIAL",
 ]);
 
 export const EmailStatusSchema = z.enum([
-  'QUEUED',
-  'SENDING',
-  'SENT',
-  'DELIVERED',
-  'OPENED',
-  'CLICKED',
-  'BOUNCED',
-  'DROPPED',
-  'FAILED',
-  'SKIPPED',
+  "QUEUED",
+  "SENDING",
+  "SENT",
+  "DELIVERED",
+  "OPENED",
+  "CLICKED",
+  "BOUNCED",
+  "DROPPED",
+  "FAILED",
+  "SKIPPED",
 ]);
 
 // ============================================================================
@@ -49,12 +50,12 @@ export const TiptapNodeSchema: z.ZodType<TiptapNode> = z.lazy(() =>
       content: z.array(TiptapNodeSchema).optional(),
       text: z.string().optional(),
     })
-    .strict()
+    .strict(),
 );
 
 export const TiptapDocumentSchema = z
   .object({
-    type: z.literal('doc'),
+    type: z.literal("doc"),
     content: z.array(TiptapNodeSchema),
   })
   .strict();
@@ -78,20 +79,20 @@ export const CreateEmailTemplateSchema = z
   .refine(
     (data) => {
       // Automatic templates must have a trigger
-      if (data.category === 'AUTOMATIC' && !data.trigger) {
+      if (data.category === "AUTOMATIC" && !data.trigger) {
         return false;
       }
       // Manual templates should not have a trigger
-      if (data.category === 'MANUAL' && data.trigger) {
+      if (data.category === "MANUAL" && data.trigger) {
         return false;
       }
       return true;
     },
     {
       message:
-        'Automatic templates require a trigger; manual templates should not have a trigger',
-      path: ['trigger'],
-    }
+        "Automatic templates require a trigger; manual templates should not have a trigger",
+      path: ["trigger"],
+    },
   );
 
 export const UpdateEmailTemplateSchema = z
@@ -121,7 +122,9 @@ export const ListEmailTemplatesQuerySchema = z
 
 export const BulkSendFilterSchema = z
   .object({
-    paymentStatus: z.array(z.enum(['PENDING', 'PAID', 'REFUNDED', 'WAIVED'])).optional(),
+    paymentStatus: z
+      .array(z.enum(["PENDING", "PAID", "REFUNDED", "WAIVED"]))
+      .optional(),
     accessTypeIds: z.array(z.string().uuid()).optional(),
   })
   .strict();
@@ -203,9 +206,15 @@ export type EmailStatus = z.infer<typeof EmailStatusSchema>;
 export type TiptapMark = z.infer<typeof TiptapMarkSchema>;
 export type TiptapDocument = z.infer<typeof TiptapDocumentSchema>;
 
-export type CreateEmailTemplateInput = z.infer<typeof CreateEmailTemplateSchema>;
-export type UpdateEmailTemplateInput = z.infer<typeof UpdateEmailTemplateSchema>;
-export type ListEmailTemplatesQuery = z.infer<typeof ListEmailTemplatesQuerySchema>;
+export type CreateEmailTemplateInput = z.infer<
+  typeof CreateEmailTemplateSchema
+>;
+export type UpdateEmailTemplateInput = z.infer<
+  typeof UpdateEmailTemplateSchema
+>;
+export type ListEmailTemplatesQuery = z.infer<
+  typeof ListEmailTemplatesQuerySchema
+>;
 
 export type BulkSendFilter = z.infer<typeof BulkSendFilterSchema>;
 export type BulkSendEmailInput = z.infer<typeof BulkSendEmailSchema>;
@@ -213,4 +222,6 @@ export type BulkSendEmailInput = z.infer<typeof BulkSendEmailSchema>;
 export type TestSendEmailInput = z.infer<typeof TestSendEmailSchema>;
 
 export type EmailTemplateResponse = z.infer<typeof EmailTemplateResponseSchema>;
-export type EmailTemplatesListResponse = z.infer<typeof EmailTemplatesListResponseSchema>;
+export type EmailTemplatesListResponse = z.infer<
+  typeof EmailTemplatesListResponseSchema
+>;
