@@ -509,11 +509,11 @@ export async function buildEmailContextWithAccess(
       context.labEmail = sponsorship.batch.email;
       context.beneficiaryName = sponsorship.beneficiaryName;
 
-      // Build sponsored items list
+      // Build sponsored items list (HTML — variable is in HTML_SAFE_VARIABLES)
       const sponsoredItems: string[] = [];
       if (sponsorship.coversBasePrice && pricing) {
         sponsoredItems.push(
-          `- Base registration: ${formatCurrency(pricing.basePrice, registration.currency)}`,
+          `<b>Inscription de base :</b> ${sanitizeForHtml(formatCurrency(pricing.basePrice, registration.currency))}`,
         );
       }
 
@@ -527,12 +527,14 @@ export async function buildEmailContextWithAccess(
         });
         for (const access of coveredAccess) {
           sponsoredItems.push(
-            `- ${access.name}: ${formatCurrency(access.price, registration.currency)}`,
+            `<b>${sanitizeForHtml(access.name)} :</b> ${sanitizeForHtml(formatCurrency(access.price, registration.currency))}`,
           );
         }
       }
 
-      context.sponsoredItems = sponsoredItems.join("\n");
+      context.sponsoredItems = sponsoredItems
+        .map((item) => `<div style="padding: 4px 0;">• ${item}</div>`)
+        .join("");
       context.remainingAmount = formatCurrency(
         registration.totalAmount - sponsorship.totalAmount,
         registration.currency,
@@ -547,6 +549,9 @@ export async function buildEmailContextWithAccess(
 // RESOLVE VARIABLES IN TEMPLATE
 // =============================================================================
 
+// Variables that contain server-generated HTML (not user input) and skip sanitization
+const HTML_SAFE_VARIABLES = new Set(["sponsoredItems", "beneficiaryList"]);
+
 export function resolveVariables(
   template: string,
   context: EmailContext,
@@ -555,6 +560,10 @@ export function resolveVariables(
     const value = context[varId as keyof EmailContext];
 
     if (value !== undefined && value !== null && value !== "") {
+      // Server-generated HTML variables skip sanitization
+      if (HTML_SAFE_VARIABLES.has(varId)) {
+        return String(value);
+      }
       return sanitizeForHtml(String(value));
     }
 
@@ -776,9 +785,9 @@ export function buildBatchEmailContext(
     beneficiaryList: sponsorships
       .map(
         (s) =>
-          `- ${s.beneficiaryName} (${s.beneficiaryEmail}): ${formatCurrency(s.totalAmount, currency)}`,
+          `<div style="padding: 4px 0;">• <b>${sanitizeForHtml(s.beneficiaryName)}</b> (${sanitizeForHtml(s.beneficiaryEmail)}) : ${sanitizeForHtml(formatCurrency(s.totalAmount, currency))}</div>`,
       )
-      .join("\n"),
+      .join(""),
 
     // Default placeholders for required fields
     firstName: batch.contactName.split(" ")[0] || batch.contactName,
@@ -819,19 +828,19 @@ export function buildLinkedSponsorshipContext(
   const { sponsorship, registration, event, pricing, accessItems, currency } =
     input;
 
-  // Build sponsored items list
+  // Build sponsored items list (HTML — variable is in HTML_SAFE_VARIABLES)
   const sponsoredItems: string[] = [];
   if (sponsorship.coversBasePrice) {
     const basePrice = registration.baseAmount ?? pricing?.basePrice ?? 0;
     sponsoredItems.push(
-      `- Base registration: ${formatCurrency(basePrice, currency)}`,
+      `<b>Inscription de base :</b> ${sanitizeForHtml(formatCurrency(basePrice, currency))}`,
     );
   }
   for (const accessId of sponsorship.coveredAccessIds) {
     const access = accessItems.find((a) => a.id === accessId);
     if (access) {
       sponsoredItems.push(
-        `- ${access.name}: ${formatCurrency(access.price, currency)}`,
+        `<b>${sanitizeForHtml(access.name)} :</b> ${sanitizeForHtml(formatCurrency(access.price, currency))}`,
       );
     }
   }
@@ -905,7 +914,9 @@ export function buildLinkedSponsorshipContext(
     labContactName: sponsorship.batch.contactName,
     labEmail: sponsorship.batch.email,
     beneficiaryName: sponsorship.beneficiaryName,
-    sponsoredItems: sponsoredItems.join("\n"),
+    sponsoredItems: sponsoredItems
+      .map((item) => `<div style="padding: 4px 0;">• ${item}</div>`)
+      .join(""),
     remainingAmount: formatCurrency(remainingAmount, currency),
   };
 }
