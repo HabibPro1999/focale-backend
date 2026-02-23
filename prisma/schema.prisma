@@ -281,6 +281,7 @@ model Sponsorship {
   coversBasePrice        Boolean           @default(true) @map("covers_base_price")
   coveredAccessIds       String[]          @default([]) @map("covered_access_ids") // Array of EventAccess IDs
   totalAmount            Int               @map("total_amount") // Calculated: base (if covered) + sum(access prices)
+  nominalAmount          Int?              @map("nominal_amount") // Static base price calc (what lab intended)
 
   // Pending linked account: registration waiting for admin approval
   targetRegistrationId   String?           @map("target_registration_id")

@@ -361,6 +361,14 @@ export async function createSponsorshipBatch(
         // Generate unique code
         const code = await generateUniqueCode(tx);
 
+        // Nominal amount: what the lab intended based on static pricing
+        const nominalAmount = await calculateSponsorshipTotal(
+          tx,
+          eventId,
+          linked.coversBasePrice,
+          linked.coveredAccessIds,
+        );
+
         // Use registrant's actual base price (after conditional pricing rules)
         let totalAmount = 0;
         if (linked.coversBasePrice) {
@@ -396,6 +404,7 @@ export async function createSponsorshipBatch(
               coversBasePrice: linked.coversBasePrice,
               coveredAccessIds: linked.coveredAccessIds,
               totalAmount,
+              nominalAmount,
             },
           });
 
@@ -454,6 +463,7 @@ export async function createSponsorshipBatch(
               coversBasePrice: linked.coversBasePrice,
               coveredAccessIds: linked.coveredAccessIds,
               totalAmount,
+              nominalAmount,
               targetRegistrationId: linked.registrationId,
             },
           });
@@ -492,6 +502,7 @@ export async function createSponsorshipBatch(
             coversBasePrice: beneficiary.coversBasePrice,
             coveredAccessIds: beneficiary.coveredAccessIds,
             totalAmount,
+            nominalAmount: totalAmount,
           },
         });
 
