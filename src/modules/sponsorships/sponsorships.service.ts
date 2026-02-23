@@ -31,6 +31,7 @@ import type {
 } from "@/generated/prisma/client.js";
 import {
   queueSponsorshipEmail,
+  queueTriggeredEmail,
   buildBatchEmailContext,
   buildLinkedSponsorshipContext,
 } from "@email";
@@ -545,7 +546,13 @@ export async function createSponsorshipBatch(
         // Update sponsorshipAmount with the new total (after increment)
         const updatedReg = await prisma.registration.findUnique({
           where: { id: registration.id },
-          select: { sponsorshipAmount: true },
+          select: {
+            sponsorshipAmount: true,
+            totalAmount: true,
+            email: true,
+            firstName: true,
+            lastName: true,
+          },
         });
 
         const context = buildLinkedSponsorshipContext({
@@ -599,6 +606,50 @@ export async function createSponsorshipBatch(
             },
             "No email template configured - doctor will not receive sponsorship notification",
           );
+        }
+
+        // Check sponsorship coverage and queue PAYMENT_CONFIRMED or SPONSORSHIP_PARTIAL
+        const currentSponsorshipAmount =
+          updatedReg?.sponsorshipAmount ?? registration.sponsorshipAmount;
+        const currentTotalAmount =
+          updatedReg?.totalAmount ?? registration.totalAmount;
+
+        if (currentSponsorshipAmount >= currentTotalAmount) {
+          // Fully sponsored: mark as PAID and queue PAYMENT_CONFIRMED
+          await prisma.registration.update({
+            where: { id: registration.id },
+            data: { paymentStatus: "PAID", paidAt: new Date() },
+          });
+
+          await queueTriggeredEmail("PAYMENT_CONFIRMED", eventId, {
+            id: registration.id,
+            email: updatedReg?.email ?? registration.email,
+            firstName: updatedReg?.firstName ?? registration.firstName,
+            lastName: updatedReg?.lastName ?? registration.lastName,
+          });
+        } else if (currentSponsorshipAmount > 0) {
+          // Partially sponsored: queue SPONSORSHIP_PARTIAL
+          const partialQueued = await queueSponsorshipEmail(
+            "SPONSORSHIP_PARTIAL",
+            eventId,
+            {
+              recipientEmail: registration.email,
+              recipientName:
+                registration.firstName || sponsorship.beneficiaryName,
+              context,
+              registrationId: registration.id,
+            },
+          );
+          if (!partialQueued) {
+            logger.warn(
+              {
+                trigger: "SPONSORSHIP_PARTIAL",
+                eventId,
+                registrationId: registration.id,
+              },
+              "No email template configured - doctor will not receive partial sponsorship notification",
+            );
+          }
         }
       }
     }

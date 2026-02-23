@@ -845,6 +845,9 @@ export function buildLinkedSponsorshipContext(
     "https://events.example.com";
   const token = registration.editToken || "";
 
+  const isFullySponsored =
+    registration.sponsorshipAmount >= registration.totalAmount;
+
   return {
     // Registration info
     firstName: registration.firstName || "",
@@ -871,9 +874,11 @@ export function buildLinkedSponsorshipContext(
 
     // Payment info
     totalAmount: formatCurrency(registration.totalAmount, currency),
-    paidAmount: "0 " + currency,
+    paidAmount: isFullySponsored
+      ? formatCurrency(registration.totalAmount, currency)
+      : "0 " + currency,
     amountDue: formatCurrency(remainingAmount, currency),
-    paymentStatus: "Pending",
+    paymentStatus: isFullySponsored ? "Paid" : "Pending",
     paymentMethod: "",
 
     // Access
