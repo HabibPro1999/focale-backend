@@ -8,12 +8,19 @@ import { logger } from "@shared/utils/logger.js";
 import { sendEmail } from "./email-sendgrid.service.js";
 import {
   resolveVariables,
+  resolveVariablesHtml,
   buildEmailContextWithAccess,
 } from "./email-variable.service.js";
 import { getTemplateByTrigger } from "./email-template.service.js";
 import { Prisma } from "@/generated/prisma/client.js";
 import type { EmailContext } from "./email.types.js";
 import type { AutomaticEmailTrigger } from "./email.schema.js";
+
+// =============================================================================
+// CONSTANTS
+// =============================================================================
+
+const MAX_RETRIES = 3;
 
 // =============================================================================
 // TYPES
@@ -258,6 +265,15 @@ export async function processEmailQueue(
     skipped: 0,
   };
 
+  // Recover stale SENDING emails (stuck for > 10 minutes) back to QUEUED
+  const recovered = await prisma.$executeRaw`
+    UPDATE email_logs SET status = 'QUEUED', updated_at = NOW()
+    WHERE status = 'SENDING' AND updated_at < NOW() - INTERVAL '10 minutes' AND retry_count < ${MAX_RETRIES + 1}
+  `;
+  if (recovered > 0) {
+    logger.warn({ recovered }, "Recovered stale SENDING emails back to QUEUED");
+  }
+
   // Atomically claim a batch of queued emails with row-level locking via UPDATE RETURNING
   // Backoff timing is enforced in the SQL query to prevent race conditions
   const claimedIds = await prisma.$queryRaw<Array<{ id: string }>>`
@@ -266,7 +282,7 @@ export async function processEmailQueue(
     WHERE id IN (
       SELECT id FROM "email_logs"
       WHERE status = 'QUEUED'
-        AND retry_count < 4
+        AND retry_count < ${MAX_RETRIES + 1}
         AND (
           retry_count = 0
           OR updated_at <= NOW() - CASE
@@ -350,7 +366,7 @@ export async function processEmailQueue(
         emailLog.template.subject,
         context,
       );
-      const resolvedHtml = resolveVariables(
+      const resolvedHtml = resolveVariablesHtml(
         emailLog.template.htmlContent || "",
         context,
       );
@@ -384,6 +400,10 @@ export async function processEmailQueue(
           emailLog.id,
           sendResult.error || "Unknown error",
           emailLog.retryCount,
+          {
+            templateId: emailLog.templateId,
+            registrationId: emailLog.registrationId,
+          },
         );
         return "failed";
       }
@@ -393,7 +413,10 @@ export async function processEmailQueue(
         { emailLogId: emailLog.id, error: err.message },
         "Error processing email",
       );
-      await markAsFailed(emailLog.id, err.message, emailLog.retryCount);
+      await markAsFailed(emailLog.id, err.message, emailLog.retryCount, {
+        templateId: emailLog.templateId,
+        registrationId: emailLog.registrationId,
+      });
       return "failed";
     }
   }
@@ -432,9 +455,21 @@ async function markAsFailed(
   id: string,
   errorMessage: string,
   currentRetryCount: number,
+  meta?: { templateId?: string | null; registrationId?: string | null },
 ) {
-  const maxRetries = 3;
-  const shouldRetry = currentRetryCount < maxRetries;
+  const shouldRetry = currentRetryCount < MAX_RETRIES;
+
+  if (!shouldRetry) {
+    logger.warn(
+      {
+        templateId: meta?.templateId,
+        registrationId: meta?.registrationId,
+        error: errorMessage,
+        retryCount: currentRetryCount + 1,
+      },
+      "email.permanent_failure",
+    );
+  }
 
   await prisma.emailLog.update({
     where: { id },

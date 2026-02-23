@@ -4,10 +4,11 @@ import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors.js";
 import { ErrorCodes } from "@shared/errors.js";
 import { AccessTypeSchema, AccessConditionSchema } from "./access.schema.js";
-import type { AccessCondition, AccessSelection } from "./access.schema.js";
+import type { AccessSelection } from "./access.schema.js";
 import { Prisma } from "@/generated/prisma/client.js";
 import type { EventAccess } from "@/generated/prisma/client.js";
 import { evaluateConditions as sharedEvaluateConditions } from "@shared/utils/condition-evaluator.js";
+import { logger } from "@shared/utils/logger.js";
 
 // ============================================================================
 // Local Input Schemas
@@ -85,7 +86,16 @@ export const UpdateEventAccessSchema = z
     groupLabel: z.string().max(100).optional().nullable(),
     allowCompanion: z.boolean().optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (data) => {
+      if (data.startsAt && data.endsAt) {
+        return data.endsAt >= data.startsAt;
+      }
+      return true;
+    },
+    { message: "End time must be after start time", path: ["endsAt"] },
+  );
 
 export type CreateEventAccessInput = z.infer<typeof CreateEventAccessSchema>;
 export type UpdateEventAccessInput = z.infer<typeof UpdateEventAccessSchema>;
@@ -94,8 +104,12 @@ export type UpdateEventAccessInput = z.infer<typeof UpdateEventAccessSchema>;
 // Types
 // ============================================================================
 
-// Transaction client type that works with Prisma extensions
-type TransactionClient = { $executeRaw: typeof prisma.$executeRaw };
+// Full Prisma interactive transaction client type.
+// Using the full type allows service functions to use any Prisma model method
+// (e.g., eventAccess.findUnique) in addition to raw query methods.
+type TransactionClient = Parameters<
+  Parameters<typeof prisma.$transaction>[0]
+>[0];
 
 type EventAccessWithPrerequisites = EventAccess & {
   requiredAccess: { id: string; name: string }[];
@@ -477,30 +491,45 @@ export async function updateEventAccess(
 }
 
 export async function deleteEventAccess(id: string): Promise<void> {
-  const access = await prisma.eventAccess.findUnique({ where: { id } });
-  if (!access) {
-    throw new AppError(
-      "Access item not found",
-      404,
-      true,
-      ErrorCodes.ACCESS_NOT_FOUND,
-    );
-  }
+  await prisma.$transaction(async (tx) => {
+    const access = await tx.eventAccess.findUnique({ where: { id } });
+    if (!access) {
+      throw new AppError(
+        "Access item not found",
+        404,
+        true,
+        ErrorCodes.ACCESS_NOT_FOUND,
+      );
+    }
 
-  // Check if any registrations have selected this access
-  const registrationCount = await prisma.registration.count({
-    where: { accessTypeIds: { has: id } },
+    // Check if any registrations have selected this access
+    const registrationCount = await tx.registration.count({
+      where: { accessTypeIds: { has: id } },
+    });
+    if (registrationCount > 0) {
+      throw new AppError(
+        "Cannot delete access item with existing registrations",
+        409,
+        true,
+        ErrorCodes.ACCESS_HAS_REGISTRATIONS,
+      );
+    }
+
+    // Check if any other access items depend on this item as a prerequisite
+    const dependentCount = await tx.eventAccess.count({
+      where: { requiredAccess: { some: { id } } },
+    });
+    if (dependentCount > 0) {
+      throw new AppError(
+        "Cannot delete: other access items depend on this item as a prerequisite",
+        409,
+        true,
+        ErrorCodes.ACCESS_HAS_PREREQUISITES,
+      );
+    }
+
+    await tx.eventAccess.delete({ where: { id } });
   });
-  if (registrationCount > 0) {
-    throw new AppError(
-      "Cannot delete access item with existing registrations",
-      409,
-      true,
-      ErrorCodes.ACCESS_HAS_REGISTRATIONS,
-    );
-  }
-
-  await prisma.eventAccess.delete({ where: { id } });
 }
 
 export async function listEventAccess(
@@ -564,8 +593,18 @@ function filterAccessByConditions(
 ): RawAccessItem[] {
   return items.filter((access) => {
     if (!access.conditions) return true;
+    const conditionsResult = AccessConditionSchema.array().safeParse(
+      access.conditions,
+    );
+    if (!conditionsResult.success) {
+      logger.warn(
+        { accessId: access.id, error: conditionsResult.error.message },
+        "Invalid conditions JSONB for access item, skipping (filterAccessByConditions)",
+      );
+      return true;
+    }
     return sharedEvaluateConditions(
-      access.conditions as AccessCondition[],
+      conditionsResult.data,
       access.conditionLogic as "and" | "or",
       formData,
     );
@@ -740,11 +779,10 @@ export async function reserveAccessSpot(
 
   if (updateResult === 0) {
     // Either access not found or capacity exceeded - determine which.
-    // Note: TransactionClient only exposes $executeRaw; for this read-only
-    // diagnostic query we use the global prisma client. The data may be
-    // slightly stale within the transaction, but it is only used for error
-    // message generation, not for any decision logic.
-    const access = await prisma.eventAccess.findUnique({
+    // Use the transaction client (or global prisma when no tx is active) so
+    // the read is consistent with the failed update within the same transaction.
+    const client = tx ?? prisma;
+    const access = await client.eventAccess.findUnique({
       where: { id: accessId },
       select: { name: true, maxCapacity: true, registeredCount: true },
     });
@@ -779,11 +817,17 @@ export async function releaseAccessSpot(
   quantity: number = 1,
   tx?: TransactionClient,
 ): Promise<void> {
-  await (tx ?? prisma).$executeRaw`
+  const result = await (tx ?? prisma).$executeRaw`
     UPDATE event_access
     SET registered_count = GREATEST(0, registered_count - ${quantity})
     WHERE id = ${accessId}
   `;
+  if (result === 0) {
+    logger.warn(
+      { accessId, quantity },
+      "releaseAccessSpot: no rows updated (access item not found)",
+    );
+  }
 }
 
 // ============================================================================
@@ -849,7 +893,7 @@ export async function validateAccessSelections(
     // For OTHER type, use groupLabel as key to allow custom groups
     const typeKey =
       access.type === "OTHER"
-        ? `OTHER:${access.groupLabel || ""}`
+        ? `OTHER:${access.groupLabel || access.id}`
         : access.type;
 
     if (!selectionsByType.has(typeKey)) selectionsByType.set(typeKey, []);
@@ -911,9 +955,22 @@ export async function validateAccessSelections(
 
     // Form conditions
     if (access.conditions) {
+      const conditionsParseResult = AccessConditionSchema.array().safeParse(
+        access.conditions,
+      );
+      const conditions = conditionsParseResult.success
+        ? conditionsParseResult.data
+        : [];
+      if (!conditionsParseResult.success) {
+        logger.warn(
+          { accessId: access.id, error: conditionsParseResult.error.message },
+          "Invalid conditions JSONB for access item, skipping condition check",
+        );
+      }
       if (
+        conditions.length > 0 &&
         !sharedEvaluateConditions(
-          access.conditions as AccessCondition[],
+          conditions,
           access.conditionLogic as "and" | "or",
           formData,
         )

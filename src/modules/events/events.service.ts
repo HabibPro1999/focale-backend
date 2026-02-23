@@ -1,6 +1,5 @@
 import { prisma } from "@/database/client.js";
-import { AppError } from "@shared/errors.js";
-import { ErrorCodes } from "@shared/errors.js";
+import { AppError, ErrorCodes } from "@shared/errors.js";
 import { clientExists } from "@clients";
 import {
   paginate,
@@ -10,11 +9,11 @@ import {
 import { auditLog, diffChanges } from "@shared/utils/audit.js";
 import { z } from "zod";
 import { Event } from "./events.schema.js";
-import type {
-  Event as PrismaEvent,
-  EventPricing,
-  EventStatus,
+import {
   Prisma,
+  type Event as PrismaEvent,
+  type EventPricing,
+  type EventStatus,
 } from "@/generated/prisma/client.js";
 
 type CreateEventInput = z.infer<typeof Event> & {
@@ -57,19 +56,58 @@ export async function createEvent(
     status,
   } = input;
 
-  // Validate that client exists
-  const isValidClient = await clientExists(clientId);
-  if (!isValidClient) {
-    throw new AppError("Client not found", 404, true, ErrorCodes.NOT_FOUND);
-  }
-
   // Create Event and EventPricing atomically
-  const result = await prisma.$transaction(async (tx) => {
-    // Check if slug already exists globally
-    const existing = await tx.event.findUnique({
-      where: { slug },
+  let result: EventWithPricing;
+  try {
+    result = await prisma.$transaction(async (tx) => {
+      // Validate that client exists inside transaction to prevent TOCTOU race
+      const clientRecord = await clientExists(clientId);
+      if (!clientRecord) {
+        throw new AppError("Client not found", 404, true, ErrorCodes.NOT_FOUND);
+      }
+
+      // Check if slug already exists globally
+      const existing = await tx.event.findUnique({
+        where: { slug },
+      });
+      if (existing) {
+        throw new AppError(
+          "Event with this slug already exists",
+          409,
+          true,
+          ErrorCodes.CONFLICT,
+        );
+      }
+
+      const event = await tx.event.create({
+        data: {
+          clientId,
+          name,
+          slug,
+          description: description ?? null,
+          maxCapacity: maxCapacity ?? null,
+          startDate,
+          endDate,
+          location: location ?? null,
+          status,
+        },
+      });
+
+      const pricing = await tx.eventPricing.create({
+        data: {
+          eventId: event.id,
+          basePrice: 0,
+          currency: "TND",
+        },
+      });
+
+      return { ...event, pricing };
     });
-    if (existing) {
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
       throw new AppError(
         "Event with this slug already exists",
         409,
@@ -77,31 +115,8 @@ export async function createEvent(
         ErrorCodes.CONFLICT,
       );
     }
-
-    const event = await tx.event.create({
-      data: {
-        clientId,
-        name,
-        slug,
-        description: description ?? null,
-        maxCapacity: maxCapacity ?? null,
-        startDate,
-        endDate,
-        location: location ?? null,
-        status,
-      },
-    });
-
-    const pricing = await tx.eventPricing.create({
-      data: {
-        eventId: event.id,
-        basePrice: 0,
-        currency: "TND",
-      },
-    });
-
-    return { ...event, pricing };
-  });
+    throw error;
+  }
 
   // Log after transaction succeeds
   await auditLog(prisma, {
@@ -139,7 +154,7 @@ export async function getEventBySlug(
 }
 
 // Valid event status transitions: CLOSED -> OPEN -> ARCHIVED (terminal)
-const VALID_STATUS_TRANSITIONS: Record<string, string[]> = {
+const VALID_STATUS_TRANSITIONS: Record<EventStatus, EventStatus[]> = {
   CLOSED: ["OPEN"],
   OPEN: ["CLOSED", "ARCHIVED"],
   ARCHIVED: [], // Terminal state - no transitions allowed
@@ -169,6 +184,18 @@ export async function updateEvent(
     throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
   }
 
+  // Guard: ARCHIVED events only allow status transitions — field edits are rejected.
+  // ARCHIVED is a terminal state; its data must remain immutable for audit purposes.
+  const nonStatusKeys = Object.keys(input).filter((k) => k !== "status");
+  if (event.status === "ARCHIVED" && nonStatusKeys.length > 0) {
+    throw new AppError(
+      "Archived events cannot be edited. Only status transitions are allowed.",
+      409,
+      true,
+      ErrorCodes.INVALID_STATUS_TRANSITION,
+    );
+  }
+
   // Validate status transition if status is being changed
   if (input.status && input.status !== event.status) {
     const allowed = VALID_STATUS_TRANSITIONS[event.status] ?? [];
@@ -182,7 +209,10 @@ export async function updateEvent(
     }
   }
 
-  // Validate dates when partially updated
+  // Validate dates when partially updated.
+  // Intentional duplication: route-level refine catches full-object invalid pairs early
+  // (better error path); service-level catches cross-field partial updates where only
+  // one date is provided and must be reconciled against the stored value.
   const effectiveStartDate = input.startDate ?? event.startDate;
   const effectiveEndDate = input.endDate ?? event.endDate;
 
@@ -195,55 +225,72 @@ export async function updateEvent(
     );
   }
 
-  return prisma.$transaction(async (tx) => {
-    // If slug is being updated, check global uniqueness inside transaction
-    if (input.slug && input.slug !== event.slug) {
-      const existing = await tx.event.findUnique({
-        where: { slug: input.slug },
-      });
-      if (existing) {
-        throw new AppError(
-          "Event with this slug already exists",
-          409,
-          true,
-          ErrorCodes.CONFLICT,
-        );
+  try {
+    return await prisma.$transaction(async (tx) => {
+      // If slug is being updated, check global uniqueness inside transaction
+      if (input.slug && input.slug !== event.slug) {
+        const existing = await tx.event.findUnique({
+          where: { slug: input.slug },
+        });
+        if (existing) {
+          throw new AppError(
+            "Event with this slug already exists",
+            409,
+            true,
+            ErrorCodes.CONFLICT,
+          );
+        }
       }
+
+      const updatedEvent = await tx.event.update({
+        where: { id },
+        data: input,
+        include: { pricing: true },
+      });
+
+      // Log update inside transaction
+      const relevantFields: (keyof typeof event)[] = [
+        "name",
+        "slug",
+        "description",
+        "maxCapacity",
+        "startDate",
+        "endDate",
+        "location",
+        "status",
+      ];
+      const changes = diffChanges(event, updatedEvent, relevantFields);
+
+      await auditLog(tx, {
+        entityType: "Event",
+        entityId: id,
+        action: "UPDATE",
+        changes,
+        performedBy,
+      });
+
+      return updatedEvent;
+    });
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
+      throw new AppError(
+        "Event with this slug already exists",
+        409,
+        true,
+        ErrorCodes.CONFLICT,
+      );
     }
-
-    const updatedEvent = await tx.event.update({
-      where: { id },
-      data: input,
-      include: { pricing: true },
-    });
-
-    // Log update inside transaction
-    const relevantFields: (keyof typeof event)[] = [
-      "name",
-      "slug",
-      "description",
-      "maxCapacity",
-      "startDate",
-      "endDate",
-      "location",
-      "status",
-    ];
-    const changes = diffChanges(event, updatedEvent, relevantFields);
-
-    await auditLog(tx, {
-      entityType: "Event",
-      entityId: id,
-      action: "UPDATE",
-      changes,
-      performedBy,
-    });
-
-    return updatedEvent;
-  });
+    throw error;
+  }
 }
 
 /**
  * List events with pagination and filters.
+ * Returns events WITHOUT pricing or form includes — callers needing pricing
+ * should use getEventById instead.
  */
 export async function listEvents(
   query: ListEventsQuery,
@@ -285,49 +332,52 @@ export async function deleteEvent(
   id: string,
   performedBy: string,
 ): Promise<void> {
-  // Check if event exists and count related data
-  const event = await prisma.event.findUnique({
-    where: { id },
-    include: {
-      _count: {
-        select: {
-          registrations: true,
+  await prisma.$transaction(async (tx) => {
+    const event = await tx.event.findUnique({
+      where: { id },
+      include: {
+        _count: {
+          select: {
+            registrations: true,
+          },
         },
       },
-    },
+    });
+
+    if (!event) {
+      throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
+    }
+
+    // Prevent deletion if event has registrations
+    if (event._count.registrations > 0) {
+      throw new AppError(
+        `Cannot delete event with ${event._count.registrations} registration(s). Archive the event instead.`,
+        409,
+        true,
+        ErrorCodes.EVENT_HAS_REGISTRATIONS,
+      );
+    }
+
+    await auditLog(tx, {
+      entityType: "Event",
+      entityId: id,
+      action: "DELETE",
+      performedBy,
+    });
+
+    await tx.event.delete({ where: { id } });
   });
-
-  if (!event) {
-    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
-  }
-
-  // Prevent deletion if event has registrations
-  if (event._count.registrations > 0) {
-    throw new AppError(
-      `Cannot delete event with ${event._count.registrations} registration(s). Archive the event instead.`,
-      409,
-      true,
-      ErrorCodes.EVENT_HAS_REGISTRATIONS,
-    );
-  }
-
-  // Log deletion before deleting
-  await auditLog(prisma, {
-    entityType: "Event",
-    entityId: id,
-    action: "DELETE",
-    performedBy,
-  });
-
-  await prisma.event.delete({ where: { id } });
 }
 
 /**
  * Helper function to check if event exists (for validation in other modules).
  */
 export async function eventExists(id: string): Promise<boolean> {
-  const count = await prisma.event.count({ where: { id } });
-  return count > 0;
+  const result = await prisma.event.findUnique({
+    where: { id },
+    select: { id: true },
+  });
+  return !!result;
 }
 
 /**
@@ -362,9 +412,13 @@ export async function decrementRegisteredCountTx(
   tx: TransactionClient,
   id: string,
 ): Promise<void> {
-  await tx.$executeRaw`
+  const result = await tx.$executeRaw`
     UPDATE "events"
     SET registered_count = GREATEST(0, registered_count - 1)
     WHERE id = ${id}
   `;
+
+  if (result === 0) {
+    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
+  }
 }

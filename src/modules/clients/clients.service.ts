@@ -1,6 +1,5 @@
 import { prisma } from "@/database/client.js";
-import { AppError } from "@shared/errors.js";
-import { ErrorCodes } from "@shared/errors.js";
+import { AppError, ErrorCodes } from "@shared/errors.js";
 import { logger } from "@shared/utils/logger.js";
 import {
   createFirebaseUser,
@@ -16,9 +15,9 @@ import { auditLog, diffChanges } from "@shared/utils/audit.js";
 import { UserRole } from "@shared/constants.js";
 import { z } from "zod";
 import { Client, MODULE_IDS, type User } from "./clients.schema.js";
-import type {
-  Client as PrismaClient,
+import {
   Prisma,
+  type Client as PrismaClient,
 } from "@/generated/prisma/client.js";
 
 type CreateClientInput = z.infer<typeof Client> & {
@@ -67,24 +66,12 @@ export async function createClient(
     adminPassword,
   } = input;
 
-  // Check if user with adminEmail already exists in DB
-  const existingUser = await prisma.user.findUnique({
-    where: { email: adminEmail },
-  });
-  if (existingUser) {
-    throw new AppError(
-      "A user with this email already exists",
-      409,
-      true,
-      ErrorCodes.CONFLICT,
-    );
-  }
-
-  // Create Firebase Auth user
+  // Create Firebase Auth user first (before DB transaction)
   const firebaseUser = await createFirebaseUser(adminEmail, adminPassword);
 
   try {
-    // Atomically create Client + User in DB
+    // Atomically create Client + User in DB.
+    // The DB unique constraint on User.email catches concurrent duplicate requests.
     const { client, user } = await prisma.$transaction(async (tx) => {
       const client = await tx.client.create({
         data: {
@@ -122,11 +109,19 @@ export async function createClient(
       return { client, user };
     });
 
-    // Set custom claims after successful DB commit
-    await setCustomClaims(firebaseUser.uid, {
-      role: UserRole.CLIENT_ADMIN,
-      clientId: client.id,
-    });
+    // Set custom claims after successful DB commit.
+    // DB is the source of truth — log failure but don't fail the request.
+    try {
+      await setCustomClaims(firebaseUser.uid, {
+        role: UserRole.CLIENT_ADMIN,
+        clientId: client.id,
+      });
+    } catch (claimsErr) {
+      logger.error(
+        { err: claimsErr, uid: firebaseUser.uid, clientId: client.id },
+        "Failed to set Firebase custom claims after client creation — claims may be stale",
+      );
+    }
 
     return {
       ...client,
@@ -138,7 +133,26 @@ export async function createClient(
       },
     };
   } catch (error) {
-    // Rollback: delete from Firebase if anything failed
+    // P2002: unique constraint violation on User.email — concurrent duplicate request
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
+      await deleteFirebaseUser(firebaseUser.uid).catch((cleanupErr) => {
+        logger.error(
+          { err: cleanupErr, uid: firebaseUser.uid, email: adminEmail },
+          "Failed to cleanup Firebase user after P2002 conflict",
+        );
+      });
+      throw new AppError(
+        "A user with this email already exists",
+        409,
+        true,
+        ErrorCodes.CONFLICT,
+      );
+    }
+
+    // Rollback: delete from Firebase if anything else failed
     await deleteFirebaseUser(firebaseUser.uid).catch((cleanupErr) => {
       logger.error(
         {
@@ -156,16 +170,17 @@ export async function createClient(
 
 /**
  * Get client by ID.
- * Optionally includes the admin user record.
  */
-export async function getClientById(
-  id: string,
-  options?: { includeAdmin?: boolean },
-): Promise<ClientWithAdmin | PrismaClient | null> {
-  if (!options?.includeAdmin) {
-    return prisma.client.findUnique({ where: { id } });
-  }
+export async function getClientById(id: string): Promise<PrismaClient | null> {
+  return prisma.client.findUnique({ where: { id } });
+}
 
+/**
+ * Get client by ID with the admin user record included.
+ */
+export async function getClientByIdWithAdmin(
+  id: string,
+): Promise<ClientWithAdmin | null> {
   const data = await prisma.client.findUnique({
     where: { id },
     include: {
@@ -345,21 +360,27 @@ export async function deleteClient(
     });
   });
 
-  // Best-effort: delete each user from Firebase Auth
-  for (const uid of userIds) {
-    await deleteFirebaseUser(uid).catch((err) => {
+  // Best-effort: delete all Firebase users in parallel
+  const results = await Promise.allSettled(
+    userIds.map((uid) => deleteFirebaseUser(uid)),
+  );
+  results.forEach((result, i) => {
+    if (result.status === "rejected") {
       logger.error(
-        { err, uid },
+        { err: result.reason, uid: userIds[i] },
         "Failed to delete Firebase user during client deletion - orphaned Firebase user may exist",
       );
-    });
-  }
+    }
+  });
 }
 
 /**
  * Helper function to check if client exists (for validation in other modules).
  */
 export async function clientExists(id: string): Promise<boolean> {
-  const count = await prisma.client.count({ where: { id } });
-  return count > 0;
+  const result = await prisma.client.findUnique({
+    where: { id },
+    select: { id: true },
+  });
+  return !!result;
 }

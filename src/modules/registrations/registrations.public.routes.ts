@@ -13,24 +13,37 @@ import {
 import { calculatePrice } from "@pricing";
 import { getFormById } from "@forms";
 import { getEventById } from "@events";
+import { RegistrationIdParamSchema } from "@shared/schemas/params.js";
 import {
-  CreateRegistrationSchema,
   FormIdParamSchema,
-  RegistrationIdPublicParamSchema,
   PublicEditRegistrationSchema,
   type CreateRegistrationInput,
   type PublicEditRegistrationInput,
 } from "./registrations.schema.js";
+import { AccessSelectionSchema } from "@access";
 import { validateFormData, type FormSchema } from "./form-data-validator.js";
 import { AppError } from "@shared/errors.js";
 import { ErrorCodes } from "@shared/errors.js";
 import type { AppInstance } from "@shared/fastify.js";
 
-const publicRateLimits = {
-  registration: { max: 5, timeWindow: "1 minute" },
-  paymentProof: { max: 10, timeWindow: "1 minute" },
-  editToken: { max: 3, timeWindow: "1 minute" },
-} as const;
+// ============================================================================
+// Inline request schemas
+// ============================================================================
+
+// formId comes from URL param — body omits it
+const CreateRegistrationBodySchema = z
+  .object({
+    formData: z.record(z.string(), z.unknown()),
+    email: z.string().email(),
+    firstName: z.string().max(100).optional(),
+    lastName: z.string().max(100).optional(),
+    phone: z.string().max(50).optional(),
+    accessSelections: z.array(AccessSelectionSchema).optional().default([]),
+    sponsorshipCode: z.string().max(50).optional(),
+    idempotencyKey: z.string().uuid().optional(),
+    linkBaseUrl: z.string().url().optional(),
+  })
+  .strict();
 
 // Schema for edit token query parameter
 const EditTokenQuerySchema = z
@@ -38,6 +51,12 @@ const EditTokenQuerySchema = z
     token: z.string().length(64, "Invalid edit token"),
   })
   .strict();
+
+const publicRateLimits = {
+  registration: { max: 5, timeWindow: "1 minute" },
+  paymentProof: { max: 10, timeWindow: "1 minute" },
+  editToken: { max: 3, timeWindow: "1 minute" },
+} as const;
 
 // ============================================================================
 // Public Routes (No Auth - for form submission)
@@ -58,7 +77,7 @@ export async function registrationsPublicRoutes(
       },
       schema: {
         params: FormIdParamSchema,
-        body: CreateRegistrationSchema.omit({ formId: true }),
+        body: CreateRegistrationBodySchema,
       },
     },
     async (request, reply) => {
@@ -98,7 +117,7 @@ export async function registrationsPublicRoutes(
           "Event is not accepting registrations",
           400,
           true,
-          ErrorCodes.VALIDATION_ERROR,
+          ErrorCodes.EVENT_NOT_OPEN,
         );
       }
 
@@ -174,7 +193,7 @@ export async function registrationEditPublicRoutes(
         rateLimit: publicRateLimits.editToken,
       },
       schema: {
-        params: RegistrationIdPublicParamSchema,
+        params: RegistrationIdParamSchema,
         querystring: EditTokenQuerySchema,
       },
     },
@@ -211,7 +230,7 @@ export async function registrationEditPublicRoutes(
         rateLimit: publicRateLimits.editToken,
       },
       schema: {
-        params: RegistrationIdPublicParamSchema,
+        params: RegistrationIdParamSchema,
         querystring: EditTokenQuerySchema,
         body: PublicEditRegistrationSchema,
       },
@@ -249,7 +268,7 @@ export async function registrationEditPublicRoutes(
         rateLimit: publicRateLimits.paymentProof,
       },
       schema: {
-        params: RegistrationIdPublicParamSchema,
+        params: RegistrationIdParamSchema,
         querystring: EditTokenQuerySchema,
       },
     },

@@ -1,4 +1,5 @@
 import { randomBytes } from "crypto";
+import { z } from "zod";
 import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors.js";
 import { ErrorCodes } from "@shared/errors.js";
@@ -31,11 +32,114 @@ import { Prisma } from "@/generated/prisma/client.js";
 import type { PriceBreakdown as PricingPriceBreakdown } from "@pricing";
 
 // ============================================================================
+// Stored PriceBreakdown Zod schema (registration storage format)
+// Note: stored format uses accessItems/accessTotal, not extras/extrasTotal
+// ============================================================================
+
+const StoredPriceBreakdownSchema = z.object({
+  basePrice: z.number(),
+  appliedRules: z.array(
+    z.object({
+      ruleId: z.string(),
+      ruleName: z.string(),
+      effect: z.number(),
+      reason: z.string().optional(),
+    }),
+  ),
+  calculatedBasePrice: z.number(),
+  accessItems: z.array(
+    z.object({
+      accessId: z.string(),
+      name: z.string(),
+      unitPrice: z.number(),
+      quantity: z.number(),
+      subtotal: z.number(),
+    }),
+  ),
+  accessTotal: z.number(),
+  subtotal: z.number(),
+  sponsorships: z.array(
+    z.object({
+      code: z.string(),
+      amount: z.number(),
+      valid: z.boolean(),
+    }),
+  ),
+  sponsorshipTotal: z.number(),
+  total: z.number(),
+  currency: z.string(),
+});
+
+const ZERO_PRICE_BREAKDOWN: PriceBreakdown = {
+  basePrice: 0,
+  appliedRules: [],
+  calculatedBasePrice: 0,
+  accessItems: [],
+  accessTotal: 0,
+  subtotal: 0,
+  sponsorships: [],
+  sponsorshipTotal: 0,
+  total: 0,
+  currency: "TND",
+};
+
+/**
+ * Parse and validate a raw JSONB value as a stored PriceBreakdown.
+ * On parse failure, logs a warning and returns a zero-value breakdown.
+ */
+export function parsePriceBreakdown(json: unknown): PriceBreakdown {
+  const result = StoredPriceBreakdownSchema.safeParse(json);
+  if (!result.success) {
+    logger.warn(
+      { error: result.error.issues },
+      "PriceBreakdown failed runtime validation — using zero-value fallback",
+    );
+    return ZERO_PRICE_BREAKDOWN;
+  }
+  return result.data;
+}
+
+/**
+ * Map a parsed PriceBreakdown's accessItems to the accessSelections shape,
+ * using a pre-built access detail map for name/type/date lookups.
+ * Shared by single-registration and batch enrichment paths.
+ */
+export function reconstructAccessSelections(
+  parsedBreakdown: PriceBreakdown,
+  accessDetailsMap: Map<
+    string,
+    {
+      id: string;
+      name: string | Record<string, string>;
+      type: string;
+      startsAt: Date | null;
+      endsAt: Date | null;
+    }
+  >,
+  registrationId: string,
+): RegistrationWithRelations["accessSelections"] {
+  return parsedBreakdown.accessItems.map((item) => ({
+    id: `${registrationId}-${item.accessId}`,
+    accessId: item.accessId,
+    unitPrice: item.unitPrice,
+    quantity: item.quantity,
+    subtotal: item.subtotal,
+    access: accessDetailsMap.get(item.accessId) ?? {
+      id: item.accessId,
+      name: item.name,
+      type: "OTHER",
+      startsAt: null,
+      endsAt: null,
+    },
+  }));
+}
+
+// ============================================================================
 // Edit Token Configuration
 // ============================================================================
 
 const EDIT_TOKEN_LENGTH = 32; // 64 hex characters
-const EDIT_TOKEN_EXPIRY_HOURS = 24;
+const EDIT_TOKEN_EXPIRY_HOURS = 168;
 
 // ============================================================================
 // Types
@@ -124,8 +228,9 @@ export async function enrichWithAccessSelections(
     form: { id: string; name: string };
     event: { id: string; name: string; slug: string; clientId: string };
   },
+  client: { eventAccess: (typeof prisma)["eventAccess"] } = prisma,
 ): Promise<RegistrationWithRelations> {
-  const priceBreakdown = registration.priceBreakdown as PriceBreakdown;
+  const priceBreakdown = parsePriceBreakdown(registration.priceBreakdown);
 
   // If no access items, return empty array
   if (!priceBreakdown.accessItems || priceBreakdown.accessItems.length === 0) {
@@ -134,28 +239,18 @@ export async function enrichWithAccessSelections(
 
   // Fetch access details for display
   const accessIds = priceBreakdown.accessItems.map((item) => item.accessId);
-  const accessDetails = await prisma.eventAccess.findMany({
+  const accessDetails = await client.eventAccess.findMany({
     where: { id: { in: accessIds } },
     select: { id: true, name: true, type: true, startsAt: true, endsAt: true },
   });
 
   const accessMap = new Map(accessDetails.map((a) => [a.id, a]));
 
-  // Reconstruct accessSelections from priceBreakdown
-  const accessSelections = priceBreakdown.accessItems.map((item) => ({
-    id: `${registration.id}-${item.accessId}`,
-    accessId: item.accessId,
-    unitPrice: item.unitPrice,
-    quantity: item.quantity,
-    subtotal: item.subtotal,
-    access: accessMap.get(item.accessId) ?? {
-      id: item.accessId,
-      name: item.name,
-      type: "OTHER",
-      startsAt: null,
-      endsAt: null,
-    },
-  }));
+  const accessSelections = reconstructAccessSelections(
+    priceBreakdown,
+    accessMap,
+    registration.id,
+  );
 
   return { ...registration, accessSelections };
 }
@@ -175,7 +270,7 @@ export async function enrichManyWithAccessSelections(
   // Collect all unique access IDs across all registrations
   const allAccessIds = new Set<string>();
   for (const reg of registrations) {
-    const priceBreakdown = reg.priceBreakdown as PriceBreakdown;
+    const priceBreakdown = parsePriceBreakdown(reg.priceBreakdown);
     if (priceBreakdown.accessItems) {
       for (const item of priceBreakdown.accessItems) {
         allAccessIds.add(item.accessId);
@@ -193,7 +288,7 @@ export async function enrichManyWithAccessSelections(
 
   // Enrich each registration
   return registrations.map((registration) => {
-    const priceBreakdown = registration.priceBreakdown as PriceBreakdown;
+    const priceBreakdown = parsePriceBreakdown(registration.priceBreakdown);
 
     if (
       !priceBreakdown.accessItems ||
@@ -202,20 +297,11 @@ export async function enrichManyWithAccessSelections(
       return { ...registration, accessSelections: [] };
     }
 
-    const accessSelections = priceBreakdown.accessItems.map((item) => ({
-      id: `${registration.id}-${item.accessId}`,
-      accessId: item.accessId,
-      unitPrice: item.unitPrice,
-      quantity: item.quantity,
-      subtotal: item.subtotal,
-      access: accessMap.get(item.accessId) ?? {
-        id: item.accessId,
-        name: item.name,
-        type: "OTHER",
-        startsAt: null,
-        endsAt: null,
-      },
-    }));
+    const accessSelections = reconstructAccessSelections(
+      priceBreakdown,
+      accessMap,
+      registration.id,
+    );
 
     return { ...registration, accessSelections };
   });
@@ -370,6 +456,40 @@ export async function createRegistration(
       // Increment event registered count (atomic SQL within transaction)
       await incrementRegisteredCountTx(tx, eventId);
 
+      // Consume sponsorship code atomically if one was provided
+      if (sponsorshipCode) {
+        const sponsorshipUpdate = await tx.sponsorship.updateMany({
+          where: { code: sponsorshipCode, status: "PENDING" },
+          data: { status: "USED" },
+        });
+
+        if (sponsorshipUpdate.count === 0) {
+          throw new AppError(
+            "Sponsorship code has already been used",
+            409,
+            true,
+            ErrorCodes.SPONSORSHIP_STATUS_CONFLICT,
+          );
+        }
+
+        // Link sponsorship to this registration
+        const consumedSponsorship = await tx.sponsorship.findFirst({
+          where: { code: sponsorshipCode },
+          select: { id: true },
+        });
+
+        if (consumedSponsorship) {
+          await tx.sponsorshipUsage.create({
+            data: {
+              sponsorshipId: consumedSponsorship.id,
+              registrationId: registration.id,
+              amountApplied: priceBreakdown.sponsorshipTotal,
+              appliedBy: "SYSTEM",
+            },
+          });
+        }
+      }
+
       // Return full registration with derived accessSelections
       const createdReg = await tx.registration.findUnique({
         where: { id: registration.id },
@@ -406,7 +526,7 @@ export async function createRegistration(
         },
       });
 
-      return enrichWithAccessSelections(createdReg);
+      return enrichWithAccessSelections(createdReg, tx);
     });
   } catch (err) {
     if (
@@ -644,7 +764,7 @@ export async function deleteRegistration(
     });
 
     // Release access spots (get from priceBreakdown)
-    const priceBreakdown = registration.priceBreakdown as PriceBreakdown;
+    const priceBreakdown = parsePriceBreakdown(registration.priceBreakdown);
     if (priceBreakdown.accessItems) {
       for (const item of priceBreakdown.accessItems) {
         await releaseAccessSpot(item.accessId, item.quantity, tx);

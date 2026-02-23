@@ -13,14 +13,14 @@ import type { AppInstance } from "@shared/fastify.js";
 
 const getGroupedAccessBody = z
   .object({
-    formData: z.record(z.string(), z.any()).optional().default({}),
+    formData: z.record(z.string(), z.unknown()).optional().default({}),
     selectedAccessIds: z.array(z.string().uuid()).optional().default([]),
   })
   .strict();
 
 const validateAccessSelectionsBody = z
   .object({
-    formData: z.record(z.string(), z.any()),
+    formData: z.record(z.string(), z.unknown()),
     selections: z.array(AccessSelectionSchema),
   })
   .strict();

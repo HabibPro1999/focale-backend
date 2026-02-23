@@ -10,10 +10,27 @@ import {
   calculateSponsorshipTotal,
   validateCoveredAccessTimeOverlap,
 } from "./sponsorships.utils.js";
-import type {
-  UpdateSponsorshipInput,
-  ListSponsorshipsQuery,
-} from "./sponsorships.schema.js";
+import type { SponsorshipStatus } from "./sponsorships.schema.js";
+
+// Local types derived from inlined route schemas (not imported from schema file)
+type ListSponsorshipsQuery = {
+  page: number;
+  limit: number;
+  search?: string;
+  status?: SponsorshipStatus;
+  sortBy: "createdAt" | "totalAmount" | "beneficiaryName";
+  sortOrder: "asc" | "desc";
+};
+
+type UpdateSponsorshipInput = {
+  beneficiaryName?: string;
+  beneficiaryEmail?: string;
+  beneficiaryPhone?: string | null;
+  beneficiaryAddress?: string | null;
+  coversBasePrice?: boolean;
+  coveredAccessIds?: string[];
+  status?: "CANCELLED";
+};
 import type {
   Prisma,
   Sponsorship,

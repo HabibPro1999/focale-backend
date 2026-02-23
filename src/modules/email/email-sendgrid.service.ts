@@ -171,6 +171,12 @@ export function verifyWebhookSignature(
     return false;
   }
 
+  const now = Math.floor(Date.now() / 1000);
+  if (Math.abs(now - Number(timestamp)) > 300) {
+    logger.warn("Stale webhook timestamp, rejecting");
+    return false;
+  }
+
   try {
     const eventWebhook = new EventWebhook();
     const ecPublicKey = eventWebhook.convertPublicKeyToECDSA(

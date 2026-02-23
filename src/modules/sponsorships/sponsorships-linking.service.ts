@@ -8,10 +8,10 @@ import {
   detectCoverageOverlap,
   calculateTotalSponsorshipAmount,
   determineSponsorshipStatus,
-  type RegistrationForCalculation,
   type ExistingUsage,
 } from "./sponsorships.utils.js";
 import { queueSponsorshipEmail, buildLinkedSponsorshipContext } from "@email";
+import { parsePriceBreakdown } from "@registrations";
 
 // ============================================================================
 // Types
@@ -174,8 +174,7 @@ export async function linkSponsorshipToRegistration(
   });
 
   // Calculate applicable amount
-  const priceBreakdown =
-    registration.priceBreakdown as RegistrationForCalculation["priceBreakdown"];
+  const priceBreakdown = parsePriceBreakdown(registration.priceBreakdown);
   const applicableAmount = calculateApplicableAmount(
     {
       coversBasePrice: sponsorship.coversBasePrice,
@@ -418,7 +417,16 @@ export async function unlinkSponsorshipFromRegistrationInternal(
     select: { amountApplied: true },
   });
 
-  const newSponsorshipAmount = calculateTotalSponsorshipAmount(remainingUsages);
+  const regForCap = await tx.registration.findUnique({
+    where: { id: registrationId },
+    select: { totalAmount: true },
+  });
+
+  const rawSponsorshipAmount = calculateTotalSponsorshipAmount(remainingUsages);
+  const newSponsorshipAmount = Math.min(
+    rawSponsorshipAmount,
+    regForCap?.totalAmount ?? rawSponsorshipAmount,
+  );
 
   await tx.registration.update({
     where: { id: registrationId },
@@ -549,8 +557,7 @@ export async function getAvailableSponsorships(
   );
 
   // Calculate applicable amount and conflicts for each
-  const priceBreakdown =
-    registration.priceBreakdown as RegistrationForCalculation["priceBreakdown"];
+  const priceBreakdown = parsePriceBreakdown(registration.priceBreakdown);
 
   return sponsorships.map((sponsorship) => {
     const applicableAmount = calculateApplicableAmount(
@@ -670,8 +677,9 @@ export async function recalculateUsageAmounts(
     // Skip if registration was deleted
     if (!usage.registration) continue;
 
-    const priceBreakdown = usage.registration
-      .priceBreakdown as RegistrationForCalculation["priceBreakdown"];
+    const priceBreakdown = parsePriceBreakdown(
+      usage.registration.priceBreakdown,
+    );
 
     const newAmount = calculateApplicableAmount(
       {
@@ -718,61 +726,54 @@ async function queueSponsorshipAppliedEmail(
   eventId: string,
 ): Promise<void> {
   try {
-    const [
-      sponsorshipWithBatch,
-      registrationDetails,
-      event,
-      pricing,
-      accessItems,
-    ] = await Promise.all([
-      prisma.sponsorship.findUnique({
-        where: { id: sponsorshipId },
-        include: {
-          batch: { select: { labName: true, contactName: true, email: true } },
-        },
-      }),
-      prisma.registration.findUnique({
-        where: { id: registrationId },
-        select: {
-          id: true,
-          email: true,
-          firstName: true,
-          lastName: true,
-          phone: true,
-          totalAmount: true,
-          sponsorshipAmount: true,
-          linkBaseUrl: true,
-          editToken: true,
-        },
-      }),
-      prisma.event.findUnique({
-        where: { id: eventId },
-        select: {
-          name: true,
-          slug: true,
-          startDate: true,
-          location: true,
-          client: { select: { name: true } },
-        },
-      }),
-      prisma.eventPricing.findUnique({
-        where: { eventId },
-        select: { basePrice: true, currency: true },
-      }),
-      (async () => {
-        const sponsorship = await prisma.sponsorship.findUnique({
+    const [sponsorshipWithBatch, registrationDetails, event, pricing] =
+      await Promise.all([
+        prisma.sponsorship.findUnique({
           where: { id: sponsorshipId },
-          select: { coveredAccessIds: true },
-        });
-        if (!sponsorship || sponsorship.coveredAccessIds.length === 0) {
-          return [];
-        }
-        return prisma.eventAccess.findMany({
-          where: { id: { in: sponsorship.coveredAccessIds } },
-          select: { id: true, name: true, price: true },
-        });
-      })(),
-    ]);
+          include: {
+            batch: {
+              select: { labName: true, contactName: true, email: true },
+            },
+          },
+        }),
+        prisma.registration.findUnique({
+          where: { id: registrationId },
+          select: {
+            id: true,
+            email: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+            totalAmount: true,
+            sponsorshipAmount: true,
+            linkBaseUrl: true,
+            editToken: true,
+          },
+        }),
+        prisma.event.findUnique({
+          where: { id: eventId },
+          select: {
+            name: true,
+            slug: true,
+            startDate: true,
+            location: true,
+            client: { select: { name: true } },
+          },
+        }),
+        prisma.eventPricing.findUnique({
+          where: { eventId },
+          select: { basePrice: true, currency: true },
+        }),
+      ]);
+
+    // Use coveredAccessIds from the first fetch — no duplicate sponsorship query
+    const accessItems =
+      sponsorshipWithBatch && sponsorshipWithBatch.coveredAccessIds.length > 0
+        ? await prisma.eventAccess.findMany({
+            where: { id: { in: sponsorshipWithBatch.coveredAccessIds } },
+            select: { id: true, name: true, price: true },
+          })
+        : [];
 
     if (sponsorshipWithBatch && registrationDetails && event) {
       const currency = pricing?.currency ?? "TND";

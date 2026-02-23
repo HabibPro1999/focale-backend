@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { User as PrismaUser } from "@/generated/prisma/client.js";
 
 export const MODULE_IDS = [
   "pricing",
@@ -19,10 +20,5 @@ export const Client = z
   })
   .strict();
 
-/** Admin user attached to a client (mirrors relevant user table fields). */
-export type User = {
-  id: string;
-  email: string;
-  name: string;
-  active: boolean;
-};
+/** Admin user attached to a client — derived from Prisma model to stay in sync. */
+export type User = Pick<PrismaUser, "id" | "email" | "name" | "active">;

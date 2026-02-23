@@ -2,15 +2,72 @@ import { getEventById, getEventBySlug } from "@events";
 import { searchRegistrantsForSponsorship } from "@registrations";
 import { createSponsorshipBatch } from "./sponsorships-batch.service.js";
 import {
-  CreateSponsorshipBatchSchema,
-  EventIdParamSchema,
-  type CreateSponsorshipBatchInput,
+  SponsorInfoSchema,
+  BeneficiaryInputSchema,
+  LinkedBeneficiaryInputSchema,
 } from "./sponsorships.schema.js";
+import { EventIdParamSchema } from "@shared/schemas/params.js";
 import { z } from "zod";
 import type { AppInstance } from "@shared/fastify.js";
 import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors.js";
 import { ErrorCodes } from "@shared/errors.js";
+
+// ============================================================================
+// Route-local request schemas
+// ============================================================================
+
+const CreateSponsorshipBatchSchema = z
+  .object({
+    sponsor: SponsorInfoSchema,
+    customFields: z.record(z.string(), z.unknown()).optional(),
+    beneficiaries: z.array(BeneficiaryInputSchema).max(100).optional(),
+    linkedBeneficiaries: z
+      .array(LinkedBeneficiaryInputSchema)
+      .max(100)
+      .optional(),
+  })
+  .strict()
+  .refine(
+    (data) =>
+      (data.beneficiaries?.length ?? 0) > 0 ||
+      (data.linkedBeneficiaries?.length ?? 0) > 0,
+    { message: "Must have at least one beneficiary or linked beneficiary" },
+  )
+  .refine(
+    (data) =>
+      !(
+        (data.beneficiaries?.length ?? 0) > 0 &&
+        (data.linkedBeneficiaries?.length ?? 0) > 0
+      ),
+    { message: "Cannot provide both beneficiaries and linkedBeneficiaries" },
+  );
+
+type CreateSponsorshipBatchInput = z.infer<typeof CreateSponsorshipBatchSchema>;
+
+const EventSlugParamSchema = z
+  .object({
+    slug: z.string().min(1).max(100),
+  })
+  .strict();
+
+const RegistrantSearchQuerySchema = z
+  .object({
+    query: z.string().min(1).max(200),
+    unpaidOnly: z.string().optional(),
+  })
+  .strict();
+
+const FormSponsorshipModeSchema = z
+  .object({
+    sponsorshipSettings: z
+      .object({
+        sponsorshipMode: z.enum(["CODE", "LINKED_ACCOUNT"]),
+        registrantSearchScope: z.enum(["ALL", "UNPAID_ONLY"]).optional(),
+      })
+      .optional(),
+  })
+  .optional();
 
 // ============================================================================
 // Public Routes (No Auth - for sponsor form submission)
@@ -46,7 +103,7 @@ export async function sponsorshipsPublicRoutes(
           "Event is not accepting sponsorship submissions",
           400,
           true,
-          ErrorCodes.VALIDATION_ERROR,
+          ErrorCodes.EVENT_NOT_OPEN,
         );
       }
 
@@ -60,6 +117,9 @@ export async function sponsorshipsPublicRoutes(
           ErrorCodes.NOT_FOUND,
         );
       }
+
+      // Validate that payload shape matches the form's configured sponsorship mode
+      validatePayloadMatchesMode(form.schema, input);
 
       // Create the sponsorship batch
       const result = await createSponsorshipBatch(eventId, form.id, input);
@@ -77,19 +137,6 @@ export async function sponsorshipsPublicRoutes(
 // ============================================================================
 // Public Routes by Slug (for pure-form frontend)
 // ============================================================================
-
-const EventSlugParamSchema = z
-  .object({
-    slug: z.string().min(1).max(100),
-  })
-  .strict();
-
-const RegistrantSearchQuerySchema = z
-  .object({
-    query: z.string().min(1).max(200),
-    unpaidOnly: z.string().optional(),
-  })
-  .strict();
 
 export async function sponsorshipsPublicBySlugRoutes(
   app: AppInstance,
@@ -128,18 +175,7 @@ export async function sponsorshipsPublicBySlugRoutes(
       }
 
       // Check sponsorship mode (security check to prevent unauthorized searches)
-      const SponsorshipModeSchema = z
-        .object({
-          sponsorshipSettings: z
-            .object({
-              sponsorshipMode: z.enum(["CODE", "LINKED_ACCOUNT"]),
-              registrantSearchScope: z.enum(["ALL", "UNPAID_ONLY"]).optional(),
-            })
-            .optional(),
-        })
-        .optional();
-
-      const parseResult = SponsorshipModeSchema.safeParse(form.schema);
+      const parseResult = FormSponsorshipModeSchema.safeParse(form.schema);
       if (
         !parseResult.success ||
         parseResult.data?.sponsorshipSettings?.sponsorshipMode !==
@@ -167,7 +203,15 @@ export async function sponsorshipsPublicBySlugRoutes(
         limit: 10,
       });
 
-      return reply.send(results);
+      return reply.send(
+        results.map(({ id, email, firstName, lastName, accessTypeIds }) => ({
+          id,
+          email,
+          firstName,
+          lastName,
+          accessTypeIds,
+        })),
+      );
     },
   );
 
@@ -198,7 +242,7 @@ export async function sponsorshipsPublicBySlugRoutes(
           "Event is not accepting sponsorship submissions",
           400,
           true,
-          ErrorCodes.VALIDATION_ERROR,
+          ErrorCodes.EVENT_NOT_OPEN,
         );
       }
 
@@ -212,6 +256,9 @@ export async function sponsorshipsPublicBySlugRoutes(
           ErrorCodes.NOT_FOUND,
         );
       }
+
+      // Validate that payload shape matches the form's configured sponsorship mode
+      validatePayloadMatchesMode(form.schema, input);
 
       // Create the sponsorship batch
       const result = await createSponsorshipBatch(event.id, form.id, input);
@@ -229,6 +276,34 @@ export async function sponsorshipsPublicBySlugRoutes(
 // ============================================================================
 // Helper Functions
 // ============================================================================
+
+/**
+ * Validate that the batch input shape matches the form's configured sponsorship mode.
+ * Throws if CODE mode receives linkedBeneficiaries or LINKED_ACCOUNT mode receives beneficiaries.
+ */
+function validatePayloadMatchesMode(
+  formSchema: unknown,
+  input: CreateSponsorshipBatchInput,
+): void {
+  const parsed = FormSponsorshipModeSchema.safeParse(formSchema);
+  const mode = parsed.data?.sponsorshipSettings?.sponsorshipMode;
+  if (mode === "CODE" && (input.linkedBeneficiaries?.length ?? 0) > 0) {
+    throw new AppError(
+      "This form uses CODE mode: provide beneficiaries, not linkedBeneficiaries",
+      400,
+      true,
+      ErrorCodes.VALIDATION_ERROR,
+    );
+  }
+  if (mode === "LINKED_ACCOUNT" && (input.beneficiaries?.length ?? 0) > 0) {
+    throw new AppError(
+      "This form uses LINKED_ACCOUNT mode: provide linkedBeneficiaries, not beneficiaries",
+      400,
+      true,
+      ErrorCodes.VALIDATION_ERROR,
+    );
+  }
+}
 
 /**
  * Get the sponsor form for an event.

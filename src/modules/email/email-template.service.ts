@@ -13,7 +13,7 @@ import {
   extractPlainText,
 } from "./email-renderer.service.js";
 import { getQueuedEmailCountForTemplate } from "./email-queue.service.js";
-import type { TiptapDocument } from "./email.types.js";
+import type { TiptapDocument } from "./email.schema.js";
 import type {
   Prisma,
   EmailTemplate,
@@ -109,7 +109,7 @@ export async function getEmailTemplateById(
 export async function getEmailTemplateWithEvent(
   id: string,
 ): Promise<EmailTemplateWithRelations | null> {
-  return prisma.emailTemplate.findFirst({
+  return prisma.emailTemplate.findUnique({
     where: { id },
     include: { event: true },
   });

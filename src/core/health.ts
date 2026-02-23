@@ -82,7 +82,8 @@ export async function healthRoutes(app: AppInstance): Promise<void> {
     try {
       await prisma.$queryRaw`SELECT 1`;
       return reply.send({ status: "ready" });
-    } catch {
+    } catch (err) {
+      app.log.warn({ err }, "Health check: database unreachable");
       return reply.status(503).send({ status: "not ready" });
     }
   });

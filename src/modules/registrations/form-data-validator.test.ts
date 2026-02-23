@@ -55,8 +55,13 @@ describe("Form Data Validator - shouldValidateField Integration", () => {
         id: "conditional-field",
         conditionLogic: "and",
         conditions: [
-          { fieldId: "profession", operator: "equals", value: "doctor" },
-          { fieldId: "age", operator: "greater_than", value: "25" },
+          {
+            id: "c1",
+            fieldId: "profession",
+            operator: "equals",
+            value: "doctor",
+          },
+          { id: "c2", fieldId: "age", operator: "greater_than", value: "25" },
         ],
       });
 
@@ -96,8 +101,18 @@ describe("Form Data Validator - shouldValidateField Integration", () => {
         id: "conditional-field",
         conditionLogic: "or",
         conditions: [
-          { fieldId: "profession", operator: "equals", value: "doctor" },
-          { fieldId: "profession", operator: "equals", value: "nurse" },
+          {
+            id: "c1",
+            fieldId: "profession",
+            operator: "equals",
+            value: "doctor",
+          },
+          {
+            id: "c2",
+            fieldId: "profession",
+            operator: "equals",
+            value: "nurse",
+          },
         ],
       });
 
@@ -146,7 +161,12 @@ describe("Form Data Validator - shouldValidateField Integration", () => {
       const field = createField({
         id: "conditional-field",
         conditions: [
-          { fieldId: "nonexistent-field", operator: "equals", value: "test" },
+          {
+            id: "c1",
+            fieldId: "nonexistent-field",
+            operator: "equals",
+            value: "test",
+          },
         ],
       });
 

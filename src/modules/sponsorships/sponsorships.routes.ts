@@ -22,21 +22,93 @@ import {
 import { getRegistrationById } from "@registrations";
 import {
   EventIdParamSchema,
-  SponsorshipIdParamSchema,
+  IdParamSchema,
   RegistrationIdParamSchema,
-  RegistrationSponsorshipParamSchema,
-  ListSponsorshipsQuerySchema,
-  UpdateSponsorshipSchema,
-  LinkSponsorshipSchema,
-  LinkSponsorshipByCodeSchema,
-  type ListSponsorshipsQuery,
-  type UpdateSponsorshipInput,
-  type LinkSponsorshipInput,
-  type LinkSponsorshipByCodeInput,
-} from "./sponsorships.schema.js";
+} from "@shared/schemas/params.js";
+import { listQuery } from "@shared/schemas/common.js";
+import { SponsorshipStatusSchema } from "./sponsorships.schema.js";
+import { z } from "zod";
 import type { AppInstance } from "@shared/fastify.js";
 import { AppError } from "@shared/errors.js";
 import { ErrorCodes } from "@shared/errors.js";
+
+// ============================================================================
+// Route-local request schemas
+// ============================================================================
+
+const ListSponsorshipsQuerySchema = listQuery({
+  status: SponsorshipStatusSchema.optional(),
+  sortBy: z
+    .enum(["createdAt", "totalAmount", "beneficiaryName"])
+    .default("createdAt"),
+  sortOrder: z.enum(["asc", "desc"]).default("desc"),
+});
+
+type ListSponsorshipsQuery = z.infer<typeof ListSponsorshipsQuerySchema>;
+
+const UpdateSponsorshipSchema = z
+  .object({
+    beneficiaryName: z.string().min(2).max(200).optional(),
+    beneficiaryEmail: z.string().email().optional(),
+    beneficiaryPhone: z.string().max(50).optional().nullable(),
+    beneficiaryAddress: z.string().max(500).optional().nullable(),
+    coversBasePrice: z.boolean().optional(),
+    coveredAccessIds: z.array(z.string().uuid()).optional(),
+    status: z.literal("CANCELLED").optional(),
+  })
+  .strict()
+  .refine(
+    (data) => {
+      if (
+        data.coversBasePrice !== undefined &&
+        data.coveredAccessIds !== undefined
+      ) {
+        return data.coversBasePrice || data.coveredAccessIds.length > 0;
+      }
+      return true;
+    },
+    { message: "Must cover at least base price or one access item" },
+  );
+
+type UpdateSponsorshipInput = z.infer<typeof UpdateSponsorshipSchema>;
+
+const LinkSponsorshipSchema = z
+  .object({
+    sponsorshipId: z.string().uuid(),
+  })
+  .strict();
+
+type LinkSponsorshipInput = z.infer<typeof LinkSponsorshipSchema>;
+
+const LinkSponsorshipByCodeSchema = z
+  .object({
+    code: z
+      .string()
+      .min(4)
+      .max(10)
+      .transform((val) => {
+        const upper = val.toUpperCase().trim();
+        return upper.startsWith("SP-") ? upper : `SP-${upper}`;
+      })
+      .pipe(
+        z
+          .string()
+          .regex(
+            /^SP-[A-HJ-KM-NP-Z2-9]{4}$/,
+            "Invalid sponsorship code format",
+          ),
+      ),
+  })
+  .strict();
+
+type LinkSponsorshipByCodeInput = z.infer<typeof LinkSponsorshipByCodeSchema>;
+
+const RegistrationSponsorshipParamSchema = z
+  .object({
+    registrationId: z.string().uuid(),
+    sponsorshipId: z.string().uuid(),
+  })
+  .strict();
 
 // ============================================================================
 // Event-scoped Sponsorship Routes (mounted at /api/events)
@@ -98,7 +170,7 @@ export async function sponsorshipDetailRoutes(app: AppInstance): Promise<void> {
   app.get<{ Params: { id: string } }>(
     "/:id",
     {
-      schema: { params: SponsorshipIdParamSchema },
+      schema: { params: IdParamSchema },
     },
     async (request, reply) => {
       const { id } = request.params;
@@ -132,7 +204,7 @@ export async function sponsorshipDetailRoutes(app: AppInstance): Promise<void> {
     "/:id",
     {
       schema: {
-        params: SponsorshipIdParamSchema,
+        params: IdParamSchema,
         body: UpdateSponsorshipSchema,
       },
     },
@@ -168,7 +240,7 @@ export async function sponsorshipDetailRoutes(app: AppInstance): Promise<void> {
   app.delete<{ Params: { id: string } }>(
     "/:id",
     {
-      schema: { params: SponsorshipIdParamSchema },
+      schema: { params: IdParamSchema },
     },
     async (request, reply) => {
       const { id } = request.params;

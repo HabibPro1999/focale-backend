@@ -560,7 +560,6 @@ export function createDefaultSponsorSchemaFr(): SponsorFormSchemaJson {
           type: "text",
           label: "Nom complet",
           gridColumn: "full",
-          fieldKey: "name",
         },
         {
           id: "email",

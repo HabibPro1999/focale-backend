@@ -1401,6 +1401,11 @@ describe("Registrations Service", () => {
           prismaMock.event.findUnique.mockResolvedValue(mockEvent);
           prismaMock.registration.create.mockResolvedValue(createdRegistration);
           prismaMock.auditLog.create.mockResolvedValue({} as never);
+          prismaMock.sponsorship.updateMany.mockResolvedValue({ count: 1 });
+          prismaMock.sponsorship.findFirst.mockResolvedValue({
+            id: faker.string.uuid(),
+          } as never);
+          prismaMock.sponsorshipUsage.create.mockResolvedValue({} as never);
           return callback(prismaMock);
         },
       );
@@ -1459,6 +1464,11 @@ describe("Registrations Service", () => {
           prismaMock.event.findUnique.mockResolvedValue(mockEvent);
           prismaMock.registration.create.mockResolvedValue(createdRegistration);
           prismaMock.auditLog.create.mockResolvedValue({} as never);
+          prismaMock.sponsorship.updateMany.mockResolvedValue({ count: 1 });
+          prismaMock.sponsorship.findFirst.mockResolvedValue({
+            id: faker.string.uuid(),
+          } as never);
+          prismaMock.sponsorshipUsage.create.mockResolvedValue({} as never);
           return callback(prismaMock);
         },
       );

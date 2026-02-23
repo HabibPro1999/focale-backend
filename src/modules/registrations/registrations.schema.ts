@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { AccessSelectionSchema } from "@access";
-import { listQuery } from "@shared/schemas/common.js";
 
 // ============================================================================
 // Enums
@@ -16,81 +15,13 @@ export const PaymentStatusSchema = z.enum([
 
 export const PaymentMethodSchema = z.enum(["BANK_TRANSFER", "ONLINE", "CASH"]);
 
-// ============================================================================
-// Create Registration Schema (Public - for form submission)
-// ============================================================================
-
-export const CreateRegistrationSchema = z
-  .object({
-    formId: z.string().uuid(),
-    formData: z.record(z.string(), z.unknown()),
-
-    // Registrant info (extracted from formData for quick access)
-    email: z.string().email(),
-    firstName: z.string().max(100).optional(),
-    lastName: z.string().max(100).optional(),
-    phone: z.string().max(50).optional(),
-
-    // Access selections
-    accessSelections: z.array(AccessSelectionSchema).optional().default([]),
-
-    // Sponsorship
-    sponsorshipCode: z.string().max(50).optional(),
-
-    // Idempotency key for safe retries (prevents duplicate registrations)
-    idempotencyKey: z.string().uuid().optional(),
-
-    // Browser origin URL for email links (e.g., "https://summit.events.domain.com")
-    linkBaseUrl: z.string().url().optional(),
-  })
-  .strict();
-
-// ============================================================================
-// Update Registration Schema (Admin)
-// ============================================================================
-
-export const UpdatePaymentSchema = z
-  .object({
-    paymentStatus: PaymentStatusSchema,
-    paidAmount: z.number().int().min(0).optional(),
-    paymentMethod: PaymentMethodSchema.optional(),
-    paymentReference: z.string().max(200).optional(),
-    paymentProofUrl: z.string().url().optional(),
-  })
-  .strict();
-
-export const UpdateRegistrationSchema = z
-  .object({
-    paymentStatus: PaymentStatusSchema.optional(),
-    paidAmount: z.number().int().min(0).optional(),
-    paymentMethod: PaymentMethodSchema.optional(),
-    paymentReference: z.string().max(200).optional(),
-    paymentProofUrl: z.string().url().optional(),
-    note: z.string().max(2000).nullable().optional(),
-  })
-  .strict();
-
-// ============================================================================
-// Query Schemas
-// ============================================================================
-
-export const ListRegistrationsQuerySchema = listQuery({
-  paymentStatus: PaymentStatusSchema.optional(),
-});
-
-export const ListAllRegistrationsQuerySchema = listQuery({
-  eventId: z.string().uuid().optional(),
-  paymentStatus: PaymentStatusSchema.optional(),
-});
-
-export const RegistrationIdParamSchema = z
-  .object({
-    id: z.string().uuid(),
-  })
-  .strict();
-
 export { EventIdParamSchema } from "@shared/schemas/params.js";
 
+// ============================================================================
+// Public Route Param Schemas
+// ============================================================================
+
+// Used by public routes — "formId" param name differs from shared FormIdParamSchema
 export const FormIdParamSchema = z
   .object({
     formId: z.string().uuid(),
@@ -125,12 +56,6 @@ export const PublicEditRegistrationSchema = z
       data.accessSelections !== undefined,
     { message: "At least one field must be provided for update" },
   );
-
-export const RegistrationIdPublicParamSchema = z
-  .object({
-    registrationId: z.string().uuid(),
-  })
-  .strict();
 
 // ============================================================================
 // Table Column Schemas (for dynamic table rendering)
@@ -171,59 +96,85 @@ export const RegistrationColumnsResponseSchema = z.object({
 });
 
 // ============================================================================
-// Price Calculation Integration
-// ============================================================================
-
-export const PriceBreakdownSchema = z.object({
-  basePrice: z.number(),
-  appliedRules: z.array(
-    z.object({
-      ruleId: z.string(),
-      ruleName: z.string(),
-      effect: z.number(),
-      reason: z.string().optional(),
-    }),
-  ),
-  calculatedBasePrice: z.number(),
-  accessItems: z.array(
-    z.object({
-      accessId: z.string(),
-      name: z.union([z.string(), z.record(z.string(), z.string())]),
-      unitPrice: z.number(),
-      quantity: z.number(),
-      subtotal: z.number(),
-    }),
-  ),
-  accessTotal: z.number(),
-  subtotal: z.number(),
-  sponsorships: z.array(
-    z.object({
-      code: z.string(),
-      amount: z.number(),
-      valid: z.boolean(),
-    }),
-  ),
-  sponsorshipTotal: z.number(),
-  total: z.number(),
-  currency: z.string(),
-});
-
-// ============================================================================
 // Types
 // ============================================================================
 
 export type PaymentStatus = z.infer<typeof PaymentStatusSchema>;
 export type PaymentMethod = z.infer<typeof PaymentMethodSchema>;
-export type CreateRegistrationInput = z.infer<typeof CreateRegistrationSchema>;
-export type UpdateRegistrationInput = z.infer<typeof UpdateRegistrationSchema>;
-export type UpdatePaymentInput = z.infer<typeof UpdatePaymentSchema>;
-export type ListRegistrationsQuery = z.infer<
-  typeof ListRegistrationsQuerySchema
->;
-export type ListAllRegistrationsQuery = z.infer<
-  typeof ListAllRegistrationsQuerySchema
->;
-export type PriceBreakdown = z.infer<typeof PriceBreakdownSchema>;
+
+// Plain TS types used by services (schemas are inlined in routes)
+export type CreateRegistrationInput = {
+  formId: string;
+  formData: Record<string, unknown>;
+  email: string;
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  accessSelections: Array<z.infer<typeof AccessSelectionSchema>>;
+  sponsorshipCode?: string;
+  idempotencyKey?: string;
+  linkBaseUrl?: string;
+};
+
+export type UpdateRegistrationInput = {
+  paymentStatus?: PaymentStatus;
+  paidAmount?: number;
+  paymentMethod?: PaymentMethod;
+  paymentReference?: string;
+  paymentProofUrl?: string;
+  note?: string | null;
+};
+
+export type UpdatePaymentInput = {
+  paymentStatus: PaymentStatus;
+  paidAmount?: number;
+  paymentMethod?: PaymentMethod;
+  paymentReference?: string;
+  paymentProofUrl?: string;
+};
+
+export type ListRegistrationsQuery = {
+  page: number;
+  limit: number;
+  search?: string;
+  paymentStatus?: PaymentStatus;
+};
+
+export type ListAllRegistrationsQuery = {
+  page: number;
+  limit: number;
+  search?: string;
+  eventId?: string;
+  paymentStatus?: PaymentStatus;
+};
+
+export type PriceBreakdown = {
+  basePrice: number;
+  appliedRules: Array<{
+    ruleId: string;
+    ruleName: string;
+    effect: number;
+    reason?: string;
+  }>;
+  calculatedBasePrice: number;
+  accessItems: Array<{
+    accessId: string;
+    name: string;
+    unitPrice: number;
+    quantity: number;
+    subtotal: number;
+  }>;
+  accessTotal: number;
+  subtotal: number;
+  sponsorships: Array<{
+    code: string;
+    amount: number;
+    valid: boolean;
+  }>;
+  sponsorshipTotal: number;
+  total: number;
+  currency: string;
+};
 export type PublicEditRegistrationInput = z.infer<
   typeof PublicEditRegistrationSchema
 >;
@@ -237,13 +188,6 @@ export type RegistrationColumnsResponse = z.infer<
 // ============================================================================
 // Audit Log Schemas
 // ============================================================================
-
-export const ListRegistrationAuditLogsQuerySchema = z
-  .object({
-    page: z.coerce.number().int().min(1).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(50),
-  })
-  .strict();
 
 export const AuditActionSchema = z.enum([
   "CREATE",
@@ -271,22 +215,16 @@ export const RegistrationAuditLogSchema = z.object({
   ipAddress: z.string().nullable(),
 });
 
-export type ListRegistrationAuditLogsQuery = z.infer<
-  typeof ListRegistrationAuditLogsQuerySchema
->;
+export type ListRegistrationAuditLogsQuery = {
+  page: number;
+  limit: number;
+};
 export type AuditAction = z.infer<typeof AuditActionSchema>;
 export type RegistrationAuditLog = z.infer<typeof RegistrationAuditLogSchema>;
 
 // ============================================================================
 // Email Log Schemas
 // ============================================================================
-
-export const ListRegistrationEmailLogsQuerySchema = z
-  .object({
-    page: z.coerce.number().int().min(1).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(50),
-  })
-  .strict();
 
 export const EmailStatusSchema = z.enum([
   "QUEUED",
@@ -325,9 +263,10 @@ export const RegistrationEmailLogSchema = z.object({
   failedAt: z.string().nullable(),
 });
 
-export type ListRegistrationEmailLogsQuery = z.infer<
-  typeof ListRegistrationEmailLogsQuerySchema
->;
+export type ListRegistrationEmailLogsQuery = {
+  page: number;
+  limit: number;
+};
 export type EmailStatus = z.infer<typeof EmailStatusSchema>;
 export type AutomaticEmailTrigger = z.infer<typeof AutomaticEmailTriggerSchema>;
 export type RegistrationEmailLog = z.infer<typeof RegistrationEmailLogSchema>;
@@ -335,14 +274,6 @@ export type RegistrationEmailLog = z.infer<typeof RegistrationEmailLogSchema>;
 // ============================================================================
 // Registrant Search Schemas (for Linked Account Sponsorship)
 // ============================================================================
-
-export const SearchRegistrantsQuerySchema = z
-  .object({
-    query: z.string().min(1).max(200),
-    unpaidOnly: z.coerce.boolean().optional().default(false),
-    limit: z.coerce.number().int().min(1).max(50).default(10),
-  })
-  .strict();
 
 export const RegistrantSearchResultSchema = z.object({
   id: z.string().uuid(),
@@ -354,9 +285,11 @@ export const RegistrantSearchResultSchema = z.object({
   accessTypeIds: z.array(z.string()),
 });
 
-export type SearchRegistrantsQuery = z.infer<
-  typeof SearchRegistrantsQuerySchema
->;
+export type SearchRegistrantsQuery = {
+  query: string;
+  unpaidOnly: boolean;
+  limit: number;
+};
 export type RegistrantSearchResult = z.infer<
   typeof RegistrantSearchResultSchema
 >;

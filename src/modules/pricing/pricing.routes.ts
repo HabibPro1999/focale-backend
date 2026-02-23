@@ -5,6 +5,7 @@ import {
 } from "@shared/middleware/auth.middleware.js";
 import { EventIdParamSchema } from "@shared/schemas/params.js";
 import { getFormById } from "@forms";
+import { getEventById } from "@events";
 import {
   getEventPricing,
   getEventPaymentConfig,
@@ -196,6 +197,10 @@ export async function pricingPaymentConfigPublicRoutes(
         throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
       }
 
+      if (config.event.status === "ARCHIVED") {
+        throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
+      }
+
       return reply.send(config);
     },
   );
@@ -244,6 +249,12 @@ export async function pricingPublicRoutes(app: AppInstance): Promise<void> {
 
       if (!form) {
         throw new AppError("Form not found", 404, true, ErrorCodes.NOT_FOUND);
+      }
+
+      const event = await getEventById(form.eventId);
+
+      if (!event || event.status === "ARCHIVED") {
+        throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
       }
 
       const breakdown = await calculatePrice(form.eventId, input);

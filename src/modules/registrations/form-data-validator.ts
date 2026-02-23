@@ -378,9 +378,19 @@ function buildFileSchema(
 /**
  * Build the appropriate Zod schema for a single field based on its type.
  * Returns null for display-only fields (heading, paragraph).
+ *
+ * Required enforcement: admin sets `field.required` (top-level). Each
+ * build*Schema function also checks `validation?.required` for legacy
+ * compatibility. We pass `field.required` merged into validation so both
+ * paths work.
  */
 function buildFieldSchema(field: FormField): ZodTypeAny | null {
-  const validation = field.validation;
+  // Merge field.required into validation so all build*Schema functions see it.
+  // This preserves the existing per-function logic while ensuring that
+  // field.required (set by admin) is honoured server-side.
+  const validation: FieldValidation | undefined = field.required
+    ? { ...field.validation, required: true }
+    : field.validation;
 
   switch (field.type) {
     case "text":

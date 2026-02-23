@@ -1,3 +1,4 @@
+import { z } from "zod";
 import {
   requireAuth,
   canAccessClient,
@@ -16,28 +17,94 @@ import {
   getAvailableVariables,
   getSampleEmailContext,
   resolveVariables,
+  resolveVariablesHtml,
 } from "./email-variable.service.js";
 import { sendEmail } from "./email-sendgrid.service.js";
 import { queueBulkEmails } from "./email-queue.service.js";
 import { prisma } from "@/database/client.js";
 import { Prisma } from "@/generated/prisma/client.js";
 import {
-  EventIdParamSchema,
-  EmailTemplateIdParamSchema,
-  CreateEmailTemplateSchema,
-  UpdateEmailTemplateSchema,
-  ListEmailTemplatesQuerySchema,
-  TestSendEmailSchema,
-  BulkSendEmailSchema,
-  type CreateEmailTemplateInput,
-  type UpdateEmailTemplateInput,
-  type ListEmailTemplatesQuery,
-  type TestSendEmailInput,
-  type BulkSendEmailInput,
+  EmailTemplateCategorySchema,
+  AutomaticEmailTriggerSchema,
+  TiptapDocumentSchema,
 } from "./email.schema.js";
+import { EventIdParamSchema } from "@shared/schemas/params.js";
+import { listQuery } from "@shared/schemas/common.js";
 import type { AppInstance } from "@shared/fastify.js";
 import { AppError } from "@shared/errors.js";
 import { ErrorCodes } from "@shared/errors.js";
+
+// ============================================================================
+// Local request schemas (inlined — not exported)
+// ============================================================================
+
+const TemplateIdParamSchema = z
+  .object({ templateId: z.string().uuid() })
+  .strict();
+
+const ListEmailTemplatesQuerySchema = listQuery({
+  category: EmailTemplateCategorySchema.optional(),
+});
+
+const CreateEmailTemplateSchema = z
+  .object({
+    eventId: z.string().uuid(),
+    name: z.string().min(1).max(255),
+    description: z.string().max(1000).optional(),
+    subject: z.string().min(1).max(500),
+    content: TiptapDocumentSchema,
+    category: EmailTemplateCategorySchema,
+    trigger: AutomaticEmailTriggerSchema.optional().nullable(),
+    isActive: z.boolean().default(true),
+  })
+  .strict()
+  .refine(
+    (data) => {
+      if (data.category === "AUTOMATIC" && !data.trigger) return false;
+      if (data.category === "MANUAL" && data.trigger) return false;
+      return true;
+    },
+    {
+      message:
+        "Automatic templates require a trigger; manual templates should not have a trigger",
+      path: ["trigger"],
+    },
+  );
+
+const UpdateEmailTemplateSchema = z
+  .object({
+    name: z.string().min(1).max(255).optional(),
+    description: z.string().max(1000).optional().nullable(),
+    subject: z.string().min(1).max(500).optional(),
+    content: TiptapDocumentSchema.optional(),
+    category: EmailTemplateCategorySchema.optional(),
+    trigger: AutomaticEmailTriggerSchema.optional().nullable(),
+    isActive: z.boolean().optional(),
+  })
+  .strict();
+
+const BulkSendFilterSchema = z
+  .object({
+    paymentStatus: z
+      .array(z.enum(["PENDING", "PAID", "REFUNDED", "WAIVED", "VERIFYING"]))
+      .optional(),
+    accessTypeIds: z.array(z.string().uuid()).optional(),
+  })
+  .strict();
+
+const BulkSendEmailSchema = z
+  .object({
+    registrationIds: z.array(z.string().uuid()).optional(),
+    filters: BulkSendFilterSchema.optional(),
+  })
+  .strict();
+
+const TestSendEmailSchema = z
+  .object({
+    recipientEmail: z.string().email(),
+    recipientName: z.string().max(200).optional(),
+  })
+  .strict();
 
 // ============================================================================
 // Protected Routes (Admin)
@@ -53,7 +120,7 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
   // GET /api/events/:eventId/email-templates - List templates for event
   app.get<{
     Params: { eventId: string };
-    Querystring: ListEmailTemplatesQuery;
+    Querystring: z.infer<typeof ListEmailTemplatesQuerySchema>;
   }>(
     "/:eventId/email-templates",
     {
@@ -94,7 +161,7 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
   // POST /api/events/:eventId/email-templates - Create template
   app.post<{
     Params: { eventId: string };
-    Body: Omit<CreateEmailTemplateInput, "eventId">;
+    Body: Omit<z.infer<typeof CreateEmailTemplateSchema>, "eventId">;
   }>(
     "/:eventId/email-templates",
     {
@@ -118,7 +185,7 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
   app.get<{ Params: { templateId: string } }>(
     "/email-templates/:templateId",
     {
-      schema: { params: EmailTemplateIdParamSchema },
+      schema: { params: TemplateIdParamSchema },
     },
     async (request, reply) => {
       const { templateId } = request.params;
@@ -147,11 +214,14 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
   );
 
   // PATCH /api/events/email-templates/:templateId - Update template
-  app.patch<{ Params: { templateId: string }; Body: UpdateEmailTemplateInput }>(
+  app.patch<{
+    Params: { templateId: string };
+    Body: z.infer<typeof UpdateEmailTemplateSchema>;
+  }>(
     "/email-templates/:templateId",
     {
       schema: {
-        params: EmailTemplateIdParamSchema,
+        params: TemplateIdParamSchema,
         body: UpdateEmailTemplateSchema,
       },
     },
@@ -187,7 +257,7 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
   app.delete<{ Params: { templateId: string } }>(
     "/email-templates/:templateId",
     {
-      schema: { params: EmailTemplateIdParamSchema },
+      schema: { params: TemplateIdParamSchema },
     },
     async (request, reply) => {
       const { templateId } = request.params;
@@ -220,7 +290,7 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
   app.post<{ Params: { templateId: string }; Body: { name?: string } }>(
     "/email-templates/:templateId/duplicate",
     {
-      schema: { params: EmailTemplateIdParamSchema },
+      schema: { params: TemplateIdParamSchema },
     },
     async (request, reply) => {
       const { templateId } = request.params;
@@ -251,14 +321,17 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
   );
 
   // POST /api/events/email-templates/:templateId/test-send - Send test email
-  app.post<{ Params: { templateId: string }; Body: TestSendEmailInput }>(
+  app.post<{
+    Params: { templateId: string };
+    Body: z.infer<typeof TestSendEmailSchema>;
+  }>(
     "/email-templates/:templateId/test-send",
     {
       config: {
         rateLimit: { max: 5, timeWindow: "1 minute" },
       },
       schema: {
-        params: EmailTemplateIdParamSchema,
+        params: TemplateIdParamSchema,
         body: TestSendEmailSchema,
       },
     },
@@ -290,7 +363,7 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
 
       // Resolve variables in subject and HTML content
       const resolvedSubject = resolveVariables(template.subject, sampleContext);
-      const resolvedHtml = resolveVariables(
+      const resolvedHtml = resolveVariablesHtml(
         template.htmlContent || "",
         sampleContext,
       );
@@ -333,13 +406,13 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
   // POST /api/events/:eventId/email-templates/:templateId/send - Send to recipients
   app.post<{
     Params: { eventId: string; templateId: string };
-    Body: BulkSendEmailInput;
+    Body: z.infer<typeof BulkSendEmailSchema>;
   }>(
     "/:eventId/email-templates/:templateId/send",
     {
       schema: {
         params: EventIdParamSchema.extend({
-          templateId: EmailTemplateIdParamSchema.shape.templateId,
+          templateId: TemplateIdParamSchema.shape.templateId,
         }),
         body: BulkSendEmailSchema,
       },
@@ -368,6 +441,15 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
           403,
           true,
           ErrorCodes.FORBIDDEN,
+        );
+      }
+
+      if (!template.isActive) {
+        throw new AppError(
+          "Cannot send with an inactive template",
+          400,
+          true,
+          ErrorCodes.BAD_REQUEST,
         );
       }
 

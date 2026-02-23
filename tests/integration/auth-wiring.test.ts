@@ -7,7 +7,7 @@ import {
   mockUserNotFound,
 } from "../helpers/auth-helpers.js";
 import { UserRole } from "../helpers/factories.js";
-import type { AppInstance } from "../../src/shared/fastify.js";
+import type { AppInstance } from "../../src/shared/types/fastify.js";
 
 describe("Auth Middleware Wiring", () => {
   let app: AppInstance;

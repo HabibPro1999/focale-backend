@@ -906,7 +906,10 @@ describe("Sponsorships Service", () => {
           findMany: vi.fn().mockResolvedValue([]),
           count: vi.fn().mockResolvedValue(0),
         },
-        registration: { update: vi.fn().mockResolvedValue({}) },
+        registration: {
+          update: vi.fn().mockResolvedValue({}),
+          findUnique: vi.fn().mockResolvedValue({ totalAmount: 500 }),
+        },
         sponsorship: {
           findUnique: vi.fn().mockResolvedValue({ status: "USED" }),
           update: vi
@@ -976,7 +979,10 @@ describe("Sponsorships Service", () => {
           findMany: vi.fn().mockResolvedValue([]),
           count: vi.fn().mockResolvedValue(0),
         },
-        registration: { update: vi.fn().mockResolvedValue({}) },
+        registration: {
+          update: vi.fn().mockResolvedValue({}),
+          findUnique: vi.fn().mockResolvedValue({ totalAmount: 500 }),
+        },
         sponsorship: {
           findUnique: vi.fn().mockResolvedValue({ status: "USED" }),
           update: vi.fn().mockResolvedValue({}),

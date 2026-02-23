@@ -15,13 +15,15 @@ import { IdParamSchema } from "@shared/schemas/params.js";
 import { listQuery } from "@shared/schemas/common.js";
 import type { AppInstance } from "@shared/fastify.js";
 import { UserRole } from "@shared/constants.js";
-import { AppError } from "@shared/errors.js";
-import { ErrorCodes } from "@shared/errors.js";
+import { AppError, ErrorCodes } from "@shared/errors.js";
 
 export async function eventsRoutes(app: AppInstance): Promise<void> {
   // All routes require authentication
   app.addHook("onRequest", requireAuth);
 
+  // Date refine is intentionally duplicated in the service layer.
+  // Route-level catches full-object invalid pairs for early rejection;
+  // service-level handles partial updates where only one date is provided.
   const createBody = Event.extend({
     clientId: z.string().uuid(),
   })

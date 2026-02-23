@@ -25,6 +25,8 @@ model Client {
   events         Event[]
   emailTemplates EmailTemplate[]
 
+  @@index([name])
+  @@index([email])
   @@map("clients")
 }
 
@@ -36,7 +38,8 @@ model User {
   id        String   @id // Firebase UID
   email     String   @unique
   name      String
-  role      Int      @default(1) // 0 = super_admin, 1 = client_admin
+  /// 0 = super_admin, 1 = client_admin
+  role      Int      @default(1)
   clientId  String?  @map("client_id")
   active    Boolean  @default(true)
   createdAt DateTime @default(now()) @map("created_at")

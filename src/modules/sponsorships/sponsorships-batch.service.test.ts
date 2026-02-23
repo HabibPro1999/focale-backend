@@ -65,6 +65,25 @@ function makeLinkedInput(
   };
 }
 
+/**
+ * Build a minimal valid stored PriceBreakdown for test fixtures.
+ * parsePriceBreakdown validates the full Zod schema; partial objects return zeros.
+ */
+function makeBreakdown(calculatedBasePrice = 0) {
+  return {
+    basePrice: calculatedBasePrice,
+    appliedRules: [],
+    calculatedBasePrice,
+    accessItems: [],
+    accessTotal: 0,
+    subtotal: calculatedBasePrice,
+    sponsorships: [],
+    sponsorshipTotal: 0,
+    total: calculatedBasePrice,
+    currency: "TND",
+  };
+}
+
 function makeRegistration(overrides: Record<string, unknown> = {}) {
   return {
     id: faker.string.uuid(),
@@ -76,7 +95,7 @@ function makeRegistration(overrides: Record<string, unknown> = {}) {
     sponsorshipAmount: 0,
     baseAmount: 400,
     accessTypeIds: [],
-    priceBreakdown: {},
+    priceBreakdown: makeBreakdown(400),
     linkBaseUrl: null,
     editToken: null,
     ...overrides,

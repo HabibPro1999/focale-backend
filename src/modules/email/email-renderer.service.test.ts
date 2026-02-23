@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import type { TiptapDocument, TiptapNode, TiptapMark } from "./email.types.js";
+import type { TiptapNode, TiptapMark } from "./email.types.js";
+import type { TiptapDocument } from "./email.schema.js";
 import {
   renderTemplateToMjml,
   compileMjmlToHtml,

@@ -17,6 +17,8 @@ import type { RegistrationWithRelations } from "./registration-crud.service.js";
 import {
   calculateDiscountAmount,
   getRegistrationById,
+  parsePriceBreakdown,
+  reconstructAccessSelections,
   toPersistablePriceBreakdown,
 } from "./registration-crud.service.js";
 import { Prisma } from "@/generated/prisma/client.js";
@@ -242,7 +244,7 @@ export async function getRegistrationForEdit(
     );
 
   // Enrich with accessSelections derived from priceBreakdown
-  const priceBreakdown = registration.priceBreakdown as PriceBreakdown;
+  const priceBreakdown = parsePriceBreakdown(registration.priceBreakdown);
   const accessIds =
     priceBreakdown.accessItems?.map((item) => item.accessId) ?? [];
   const accessDetails =
@@ -261,20 +263,10 @@ export async function getRegistrationForEdit(
 
   const accessMap = new Map(accessDetails.map((a) => [a.id, a]));
 
-  const accessSelections = (priceBreakdown.accessItems ?? []).map((item) => ({
-    id: `${registration.id}-${item.accessId}`,
-    accessId: item.accessId,
-    unitPrice: item.unitPrice,
-    quantity: item.quantity,
-    subtotal: item.subtotal,
-    access: accessMap.get(item.accessId) ?? {
-      id: item.accessId,
-      name: item.name,
-      type: "OTHER",
-      startsAt: null,
-      endsAt: null,
-    },
-  }));
+  const accessSelections =
+    priceBreakdown.accessItems.length > 0
+      ? reconstructAccessSelections(priceBreakdown, accessMap, registration.id)
+      : [];
 
   const enrichedRegistration = { ...registration, accessSelections };
 
@@ -402,7 +394,9 @@ export async function editRegistrationPublic(
   }
 
   // 6. Process access selection changes (derive current from priceBreakdown)
-  const currentPriceBreakdown = registration.priceBreakdown as PriceBreakdown;
+  const currentPriceBreakdown = parsePriceBreakdown(
+    registration.priceBreakdown,
+  );
   const currentAccessItems = currentPriceBreakdown.accessItems ?? [];
   const currentAccessIds = new Set(
     currentAccessItems.map((item) => item.accessId),
@@ -423,6 +417,20 @@ export async function editRegistrationPublic(
     (item) => !newAccessIds.has(item.accessId),
   );
 
+  // Compute quantity deltas for items present in both old and new sets
+  const quantityDeltas: Array<{ accessId: string; delta: number }> = [];
+  for (const newSel of newAccessSelections) {
+    if (currentAccessIds.has(newSel.accessId)) {
+      const currentItem = currentAccessItems.find(
+        (item) => item.accessId === newSel.accessId,
+      );
+      const delta = newSel.quantity - (currentItem?.quantity ?? 1);
+      if (delta !== 0) {
+        quantityDeltas.push({ accessId: newSel.accessId, delta });
+      }
+    }
+  }
+
   // 7. Enforce paid registration rules
   if (isPaid && accessToRemove.length > 0) {
     throw new AppError(
@@ -437,11 +445,13 @@ export async function editRegistrationPublic(
     );
   }
 
-  // 8. Validate new access selections if there are additions
-  if (accessToAdd.length > 0) {
+  // 8. Validate new access selections if any access selection changed.
+  // Only validate items being added for the first time — items the user already
+  // holds are exempt from capacity checks to avoid false conflicts on re-submit.
+  if (input.accessSelections && accessToAdd.length > 0) {
     const validation = await validateAccessSelections(
       registration.eventId,
-      newAccessSelections,
+      accessToAdd,
       newFormData,
     );
     if (!validation.valid) {
@@ -486,6 +496,15 @@ export async function editRegistrationPublic(
       }
     }
 
+    // Apply quantity deltas for items present in both old and new sets
+    for (const { accessId, delta } of quantityDeltas) {
+      if (delta > 0) {
+        await reserveAccessSpot(accessId, delta, tx);
+      } else {
+        await releaseAccessSpot(accessId, Math.abs(delta), tx);
+      }
+    }
+
     // Calculate new total. For paid registrations, never decrease below
     // the original total — pricing rule changes via form data edits
     // should not reduce what was already owed.
@@ -515,7 +534,17 @@ export async function editRegistrationPublic(
     // Build changes for audit log
     const auditChanges: Record<string, { old: unknown; new: unknown }> = {};
     if (input.formData) {
-      auditChanges.formData = { old: currentFormData, new: newFormData };
+      const oldFields: Record<string, unknown> = {};
+      const newFields: Record<string, unknown> = {};
+      for (const key of Object.keys(newFormData)) {
+        if (newFormData[key] !== currentFormData[key]) {
+          oldFields[key] = currentFormData[key];
+          newFields[key] = newFormData[key];
+        }
+      }
+      if (Object.keys(newFields).length > 0) {
+        auditChanges.formData = { old: oldFields, new: newFields };
+      }
     }
     if (input.firstName && input.firstName !== registration.firstName) {
       auditChanges.firstName = {

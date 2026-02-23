@@ -49,7 +49,7 @@ const AppliedRuleSchema = z
 const ExtraLineItemSchema = z
   .object({
     extraId: z.string(),
-    name: z.union([z.string(), z.record(z.string(), z.string())]),
+    name: z.string(),
     unitPrice: z.number(),
     quantity: z.number(),
     subtotal: z.number(),

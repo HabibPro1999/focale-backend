@@ -4,7 +4,8 @@ import {
   canAccessClient,
   requireEventAccess,
 } from "@shared/middleware/auth.middleware.js";
-import { getEventById, EventIdParamSchema } from "@events";
+import { getEventById } from "@events";
+import { EventIdParamSchema, IdParamSchema } from "@shared/schemas/params.js";
 import {
   createForm,
   listForms,
@@ -22,7 +23,6 @@ import {
   SponsorshipModeSchema,
   RegistrantSearchScopeSchema,
 } from "./forms.schema.js";
-import { IdParamSchema } from "@shared/schemas/params.js";
 import { listQuery } from "@shared/schemas/common.js";
 import type { AppInstance } from "@shared/fastify.js";
 import { UserRole } from "@shared/constants.js";
@@ -302,16 +302,16 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
   // Sponsor Form Routes
   // ============================================================================
 
-  // GET /api/forms/events/:id/sponsor - Get sponsor form for event
-  app.get<{ Params: { id: string } }>(
-    "/events/:id/sponsor",
+  // GET /api/forms/events/:eventId/sponsor - Get sponsor form for event
+  app.get<{ Params: { eventId: string } }>(
+    "/events/:eventId/sponsor",
     {
       schema: { params: EventIdParamSchema },
     },
     async (request, reply) => {
-      await requireEventAccess(request.user!, request.params.id);
+      await requireEventAccess(request.user!, request.params.eventId);
 
-      const form = await getSponsorFormByEventId(request.params.id);
+      const form = await getSponsorFormByEventId(request.params.eventId);
       if (!form) {
         throw new AppError(
           "Sponsor form not found for this event",
@@ -325,17 +325,17 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
     },
   );
 
-  // POST /api/forms/events/:id/sponsor - Create sponsor form for event
-  app.post<{ Params: { id: string }; Body: { name?: string } }>(
-    "/events/:id/sponsor",
+  // POST /api/forms/events/:eventId/sponsor - Create sponsor form for event
+  app.post<{ Params: { eventId: string }; Body: { name?: string } }>(
+    "/events/:eventId/sponsor",
     {
       schema: { params: EventIdParamSchema },
     },
     async (request, reply) => {
-      await requireEventAccess(request.user!, request.params.id);
+      await requireEventAccess(request.user!, request.params.eventId);
 
       const form = await createSponsorForm(
-        request.params.id,
+        request.params.eventId,
         request.body?.name,
       );
       return reply.status(201).send(form);

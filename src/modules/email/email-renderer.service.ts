@@ -8,11 +8,11 @@ import { sanitizeUrl, sanitizeForHtml } from "./email-variable.service.js";
 import { AppError } from "@shared/errors.js";
 import { ErrorCodes } from "@shared/errors.js";
 import type {
-  TiptapDocument,
   TiptapNode,
   TiptapMark,
   MjmlCompilationResult,
 } from "./email.types.js";
+import type { TiptapDocument } from "./email.schema.js";
 
 // =============================================================================
 // CSS VALUE VALIDATORS (XSS Prevention)

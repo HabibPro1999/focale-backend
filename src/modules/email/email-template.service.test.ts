@@ -15,7 +15,7 @@ import {
 } from "./email-template.service.js";
 import { AppError } from "@shared/errors.js";
 import { ErrorCodes } from "@shared/errors.js";
-import type { TiptapDocument } from "./email.types.js";
+import type { TiptapDocument } from "./email.schema.js";
 import type { EmailTemplate } from "@/generated/prisma/client.js";
 
 // Mock the email renderer service
@@ -295,20 +295,20 @@ describe("Email Template Service", () => {
       (mockTemplate as unknown as { event: typeof mockEvent }).event =
         mockEvent;
 
-      prismaMock.emailTemplate.findFirst.mockResolvedValue(mockTemplate);
+      prismaMock.emailTemplate.findUnique.mockResolvedValue(mockTemplate);
 
       const result = await getEmailTemplateWithEvent(templateId);
 
       expect(result).not.toBeNull();
       expect(result?.event).toBeDefined();
-      expect(prismaMock.emailTemplate.findFirst).toHaveBeenCalledWith({
+      expect(prismaMock.emailTemplate.findUnique).toHaveBeenCalledWith({
         where: { id: templateId },
         include: { event: true },
       });
     });
 
     it("should return null when template not found", async () => {
-      prismaMock.emailTemplate.findFirst.mockResolvedValue(null);
+      prismaMock.emailTemplate.findUnique.mockResolvedValue(null);
 
       const result = await getEmailTemplateWithEvent("non-existent");
 

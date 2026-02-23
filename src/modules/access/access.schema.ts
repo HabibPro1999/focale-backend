@@ -30,12 +30,10 @@ export const AccessConditionSchema = z
 // Selection Schema (used cross-module via barrel)
 // ============================================================================
 
-export const AccessSelectionSchema = z
-  .object({
-    accessId: z.string().uuid(),
-    quantity: z.number().int().min(1).default(1),
-  })
-  .strict();
+export const AccessSelectionSchema = z.object({
+  accessId: z.string().uuid(),
+  quantity: z.number().int().min(1).default(1),
+});
 
 // ============================================================================
 // Types

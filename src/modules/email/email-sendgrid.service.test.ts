@@ -229,14 +229,15 @@ describe("Email SendGrid Service", () => {
       it("returns true when signature is valid", () => {
         mockConvertPublicKeyFn.mockReturnValue("ec-key");
         mockVerifySignatureFn.mockReturnValue(true);
-        const result = verifyFn("payload-body", "valid-sig", "1234567890");
+        const ts = String(Math.floor(Date.now() / 1000));
+        const result = verifyFn("payload-body", "valid-sig", ts);
         expect(result).toBe(true);
         expect(mockConvertPublicKeyFn).toHaveBeenCalledWith("test-public-key");
         expect(mockVerifySignatureFn).toHaveBeenCalledWith(
           "ec-key",
           "payload-body",
           "valid-sig",
-          "1234567890",
+          ts,
         );
       });
 
@@ -259,13 +260,14 @@ describe("Email SendGrid Service", () => {
         mockConvertPublicKeyFn.mockReturnValue("ec-key");
         mockVerifySignatureFn.mockReturnValue(true);
         const buf = Buffer.from("raw payload");
-        const result = verifyFn(buf, "valid-sig", "1234567890");
+        const ts = String(Math.floor(Date.now() / 1000));
+        const result = verifyFn(buf, "valid-sig", ts);
         expect(result).toBe(true);
         expect(mockVerifySignatureFn).toHaveBeenCalledWith(
           "ec-key",
           buf,
           "valid-sig",
-          "1234567890",
+          ts,
         );
       });
     });

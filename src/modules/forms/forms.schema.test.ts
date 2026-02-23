@@ -347,6 +347,7 @@ describe("Forms Schema Validation", () => {
                 required: false,
                 conditions: [
                   {
+                    id: "condition-1",
                     fieldId: "profession",
                     operator: "equals",
                     value: "doctor",

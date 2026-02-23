@@ -550,18 +550,34 @@ export async function buildEmailContextWithAccess(
 // RESOLVE VARIABLES IN TEMPLATE
 // =============================================================================
 
+// Pure replacement, no HTML escaping — use for subject and plain text
 export function resolveVariables(
   template: string,
   context: EmailContext,
 ): string {
-  return template.replace(/\{\{(\w+)\}\}/g, (_match, varId) => {
+  return template.replace(/\{\{([\w-]+)\}\}/g, (_match, varId) => {
+    const value = context[varId as keyof EmailContext];
+
+    if (value !== undefined && value !== null && value !== "") {
+      return String(value);
+    }
+
+    return "";
+  });
+}
+
+// Replacement with per-value HTML escaping — use for HTML content
+export function resolveVariablesHtml(
+  template: string,
+  context: EmailContext,
+): string {
+  return template.replace(/\{\{([\w-]+)\}\}/g, (_match, varId) => {
     const value = context[varId as keyof EmailContext];
 
     if (value !== undefined && value !== null && value !== "") {
       return sanitizeForHtml(String(value));
     }
 
-    // Return empty string for undefined variables
     return "";
   });
 }
@@ -586,9 +602,12 @@ export function sanitizeForHtml(value: unknown): string {
 export function sanitizeUrl(url: string): string {
   const trimmed = url.trim();
 
+  // Block protocol-relative URLs (e.g., //evil.com)
+  if (trimmed.startsWith("//")) return "#blocked";
+
   // Allow relative URLs, http, https, mailto
   if (/^(https?:|mailto:|\/|#)/i.test(trimmed) || !trimmed.includes(":")) {
-    return url;
+    return trimmed;
   }
 
   return "#blocked";
@@ -691,6 +710,48 @@ export function getSampleEmailContext(): EmailContext {
 }
 
 // =============================================================================
+// EMPTY CONTEXT BASELINE
+// =============================================================================
+
+/**
+ * An EmailContext with every field set to the empty string.
+ * Sponsorship context builders spread from this so each builder only needs
+ * to set the fields it actually populates.
+ */
+export const EMPTY_EMAIL_CONTEXT: EmailContext = {
+  firstName: "",
+  lastName: "",
+  fullName: "",
+  email: "",
+  phone: "",
+  registrationDate: "",
+  registrationId: "",
+  registrationNumber: "",
+  eventName: "",
+  eventDate: "",
+  eventEndDate: "",
+  eventLocation: "",
+  eventDescription: "",
+  totalAmount: "",
+  paidAmount: "",
+  amountDue: "",
+  paymentStatus: "",
+  paymentMethod: "",
+  selectedAccess: "",
+  selectedWorkshops: "",
+  selectedDinners: "",
+  registrationLink: "",
+  editRegistrationLink: "",
+  paymentLink: "",
+  organizerName: "",
+  organizerEmail: "",
+  organizerPhone: "",
+  bankName: "",
+  bankAccountName: "",
+  bankAccountNumber: "",
+};
+
+// =============================================================================
 // SPONSORSHIP EMAIL CONTEXT BUILDERS
 // =============================================================================
 
@@ -764,11 +825,27 @@ export function buildBatchEmailContext(
   const totalAmount = sponsorships.reduce((sum, s) => sum + s.totalAmount, 0);
 
   return {
+    ...EMPTY_EMAIL_CONTEXT,
+
+    // Sender identity (lab contact as pseudo-registrant)
+    firstName: batch.contactName.split(" ")[0] || batch.contactName,
+    lastName: batch.contactName.split(" ").slice(1).join(" ") || "",
+    fullName: batch.contactName,
+    email: batch.email,
+    phone: batch.phone || "",
+    registrationDate: formatDate(new Date()),
+
     // Event info
     eventName: event.name,
     eventDate: formatDate(event.startDate),
     eventLocation: event.location || "",
     organizerName: event.client.name,
+
+    // Payment summary
+    totalAmount: formatCurrency(totalAmount, currency),
+    paidAmount: "0 " + currency,
+    amountDue: formatCurrency(totalAmount, currency),
+    paymentStatus: "N/A",
 
     // Lab info
     labName: batch.labName,
@@ -778,42 +855,12 @@ export function buildBatchEmailContext(
     // Batch summary
     beneficiaryCount: String(sponsorships.length),
     totalBatchAmount: formatCurrency(totalAmount, currency),
-
-    // Beneficiary list (for lab email)
     beneficiaryList: sponsorships
       .map(
         (s) =>
           `- ${s.beneficiaryName} (${s.beneficiaryEmail}): ${formatCurrency(s.totalAmount, currency)}`,
       )
       .join("\n"),
-
-    // Default placeholders for required fields
-    firstName: batch.contactName.split(" ")[0] || batch.contactName,
-    lastName: batch.contactName.split(" ").slice(1).join(" ") || "",
-    fullName: batch.contactName,
-    email: batch.email,
-    phone: batch.phone || "",
-    registrationDate: formatDate(new Date()),
-    registrationId: "",
-    registrationNumber: "",
-    eventEndDate: "",
-    eventDescription: "",
-    totalAmount: formatCurrency(totalAmount, currency),
-    paidAmount: "0 " + currency,
-    amountDue: formatCurrency(totalAmount, currency),
-    paymentStatus: "N/A",
-    paymentMethod: "",
-    selectedAccess: "",
-    selectedWorkshops: "",
-    selectedDinners: "",
-    registrationLink: "",
-    editRegistrationLink: "",
-    paymentLink: "",
-    organizerEmail: "",
-    organizerPhone: "",
-    bankName: "",
-    bankAccountName: "",
-    bankAccountNumber: "",
   };
 }
 
@@ -854,6 +901,8 @@ export function buildLinkedSponsorshipContext(
   const token = registration.editToken || "";
 
   return {
+    ...EMPTY_EMAIL_CONTEXT,
+
     // Registration info
     firstName: registration.firstName || "",
     lastName: registration.lastName || "",
@@ -870,34 +919,19 @@ export function buildLinkedSponsorshipContext(
     // Event info
     eventName: event.name,
     eventDate: formatDate(event.startDate),
-    eventEndDate: "",
     eventLocation: event.location || "",
-    eventDescription: "",
     organizerName: event.client.name,
-    organizerEmail: "",
-    organizerPhone: "",
 
     // Payment info
     totalAmount: formatCurrency(registration.totalAmount, currency),
     paidAmount: "0 " + currency,
     amountDue: formatCurrency(remainingAmount, currency),
     paymentStatus: "Pending",
-    paymentMethod: "",
-
-    // Access
-    selectedAccess: "",
-    selectedWorkshops: "",
-    selectedDinners: "",
 
     // Links
     registrationLink: `${baseUrl}/${event.slug}/registration/${registration.id}/${token}`,
     editRegistrationLink: `${baseUrl}/${event.slug}/registration/${registration.id}/${token}`,
     paymentLink: `${baseUrl}/${event.slug}/payment/${registration.id}/${token}`,
-
-    // Bank details (empty - can be filled in if needed)
-    bankName: "",
-    bankAccountName: "",
-    bankAccountNumber: "",
 
     // Sponsorship info
     sponsorshipCode: sponsorship.code,

@@ -2,11 +2,6 @@
 // TIPTAP DOCUMENT STRUCTURE
 // =============================================================================
 
-export interface TiptapDocument {
-  type: "doc";
-  content: TiptapNode[];
-}
-
 export interface TiptapNode {
   type: string; // 'paragraph', 'heading', 'text', 'mention', etc.
   attrs?: Record<string, unknown>;

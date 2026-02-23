@@ -123,6 +123,8 @@ export interface RegistrationForCalculation {
     calculatedBasePrice?: number;
     accessItems?: Array<{
       accessId: string;
+      unitPrice?: number;
+      quantity?: number;
       subtotal: number;
     }>;
   };
@@ -158,7 +160,10 @@ export function calculateApplicableAmount(
           (item) => item.accessId === coveredId,
         );
         if (accessItem) {
-          applicableAmount += accessItem.subtotal;
+          const unitPrice =
+            accessItem.unitPrice ??
+            accessItem.subtotal / (accessItem.quantity || 1);
+          applicableAmount += unitPrice;
         }
       }
     }

@@ -48,23 +48,7 @@ export async function formsPublicRoutes(app: AppInstance): Promise<void> {
         );
       }
 
-      // Transform response for public consumption
-      return reply.send({
-        formId: form.id,
-        schema: form.schema,
-        event: {
-          id: form.event.id,
-          name: form.event.name,
-          slug: form.event.slug,
-          status: form.event.status,
-          startsAt: form.event.startDate?.toISOString() ?? null,
-          endsAt: form.event.endDate?.toISOString() ?? null,
-          location: form.event.location,
-          client: form.event.client,
-        },
-        pricing: form.event.pricing,
-        accessItems: form.event.access,
-      });
+      return reply.send(form);
     },
   );
 }

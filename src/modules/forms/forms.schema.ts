@@ -26,6 +26,7 @@ export const FieldOptionSchema = z
     id: z.string(),
     label: z.string(),
     description: z.string().optional(),
+    maxCapacity: z.number().int().optional(),
   })
   .strict();
 
@@ -42,10 +43,11 @@ export const ConditionOperatorSchema = z.enum([
 
 export const FieldConditionSchema = z
   .object({
-    id: z.string().optional(),
+    id: z.string(),
     fieldId: z.string(),
     operator: ConditionOperatorSchema,
-    value: z.union([z.string(), z.number(), z.boolean()]).optional(),
+    // Boolean excluded: frontends use string/number values only
+    value: z.union([z.string(), z.number()]).optional(),
   })
   .strict();
 
@@ -54,6 +56,7 @@ export const FieldValidationSchema = z
     required: z.boolean().optional(),
     minLength: z.number().int().positive().optional(),
     maxLength: z.number().int().positive().optional(),
+    /// Legacy: min/max are duplicates of minValue/maxValue — kept for backward compat
     min: z.number().optional(),
     max: z.number().optional(),
     minValue: z.number().optional(),
@@ -64,6 +67,7 @@ export const FieldValidationSchema = z
     step: z.number().optional(),
     minDate: z.string().optional(),
     maxDate: z.string().optional(),
+    /// Legacy: acceptedFileTypes duplicates fileTypes — kept for backward compat
     acceptedFileTypes: z.array(z.string()).optional(),
     minSelections: z.number().int().min(0).optional(),
     maxSelections: z.number().int().positive().optional(),
@@ -92,6 +96,16 @@ export const FormSettingsSchema = z
   .object({
     successMessage: z.string().optional(),
     showConfirmationStep: z.boolean().optional(),
+    confirmationStep: z
+      .object({
+        title: z.string().optional(),
+        description: z.string().optional(),
+        showPriceSummary: z.boolean().optional(),
+        showTerms: z.boolean().optional(),
+        termsText: z.string().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -103,12 +117,11 @@ export const FormFieldSchema = z
     placeholder: z.string().optional(),
     helpText: z.string().optional(),
     required: z.boolean().optional(),
-    width: z.string().optional(),
+    width: z.enum(["full", "half"]).optional(),
     options: z.array(FieldOptionSchema).optional(),
     validation: FieldValidationSchema.optional(),
     conditions: z.array(FieldConditionSchema).optional(),
     conditionLogic: z.enum(["and", "or"]).optional(),
-    conditionAction: z.enum(["show", "disable"]).optional(),
     clearOnHide: z.boolean().optional(),
     defaultValue: z
       .union([z.string(), z.number(), z.array(z.string())])
@@ -123,7 +136,7 @@ export const FormFieldSchema = z
     content: z.string().optional(),
     phoneFormat: z.string().optional(),
     dateFormat: z.string().optional(),
-    fieldKey: z.string().optional(),
+    fieldKey: z.enum(["email", "firstName", "lastName", "phone"]).optional(),
   })
   .strict();
 
@@ -163,6 +176,7 @@ export const BeneficiaryTemplateSchema = z
     fields: z.array(FormFieldSchema),
     minCount: z.number().int().min(1).default(1),
     maxCount: z.number().int().max(500).default(100),
+    defaultCoveredAccessIds: z.array(z.string()).optional(),
   })
   .strict();
 

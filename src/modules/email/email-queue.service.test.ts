@@ -20,7 +20,7 @@ import type {
   EmailTemplate,
   Prisma,
 } from "@/generated/prisma/client.js";
-import type { TiptapDocument } from "./email.types.js";
+import type { TiptapDocument } from "./email.schema.js";
 
 // Mock the email-sendgrid.service
 vi.mock("./email-sendgrid.service.js", () => ({
@@ -30,6 +30,9 @@ vi.mock("./email-sendgrid.service.js", () => ({
 // Mock the email-variable.service
 vi.mock("./email-variable.service.js", () => ({
   resolveVariables: vi.fn().mockImplementation((template: string) => template),
+  resolveVariablesHtml: vi
+    .fn()
+    .mockImplementation((template: string) => template),
   buildEmailContextWithAccess: vi.fn().mockResolvedValue({
     firstName: "John",
     lastName: "Doe",

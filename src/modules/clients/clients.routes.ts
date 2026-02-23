@@ -7,6 +7,7 @@ import {
 import {
   createClient,
   getClientById,
+  getClientByIdWithAdmin,
   listClients,
   updateClient,
   deleteClient,
@@ -15,8 +16,7 @@ import { Client, MODULE_IDS } from "./clients.schema.js";
 import { IdParamSchema } from "@shared/schemas/params.js";
 import { listQuery } from "@shared/schemas/common.js";
 import type { AppInstance } from "@shared/fastify.js";
-import { AppError } from "@shared/errors.js";
-import { ErrorCodes } from "@shared/errors.js";
+import { AppError, ErrorCodes } from "@shared/errors.js";
 
 export async function clientsRoutes(app: AppInstance): Promise<void> {
   // All routes require authentication
@@ -46,6 +46,7 @@ export async function clientsRoutes(app: AppInstance): Promise<void> {
     .strict();
 
   const listParams = listQuery({
+    // Query params are always strings; transform to boolean for type safety
     active: z
       .enum(["true", "false"])
       .transform((v) => v === "true")
@@ -117,9 +118,7 @@ export async function clientsRoutes(app: AppInstance): Promise<void> {
         );
       }
 
-      const client = await getClientById(request.params.id, {
-        includeAdmin: true,
-      });
+      const client = await getClientByIdWithAdmin(request.params.id);
       if (!client) {
         throw new AppError("Client not found", 404, true, ErrorCodes.NOT_FOUND);
       }

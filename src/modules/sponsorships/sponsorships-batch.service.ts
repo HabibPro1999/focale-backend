@@ -9,9 +9,21 @@ import {
   capSponsorshipAmount,
   detectCoverageOverlap,
   validateCoveredAccessTimeOverlap,
-  type RegistrationForCalculation,
 } from "./sponsorships.utils.js";
-import type { CreateSponsorshipBatchInput } from "./sponsorships.schema.js";
+import { parsePriceBreakdown } from "@registrations";
+import type {
+  BeneficiaryInput,
+  LinkedBeneficiaryInput,
+  SponsorInfo,
+} from "./sponsorships.schema.js";
+
+// Local type matching the inlined CreateSponsorshipBatchSchema in public routes
+type CreateSponsorshipBatchInput = {
+  sponsor: SponsorInfo;
+  customFields?: Record<string, unknown>;
+  beneficiaries?: BeneficiaryInput[];
+  linkedBeneficiaries?: LinkedBeneficiaryInput[];
+};
 import type { Prisma, Sponsorship } from "@/generated/prisma/client.js";
 import {
   queueSponsorshipEmail,
@@ -355,8 +367,7 @@ export async function createSponsorshipBatch(
         );
 
         // Calculate applicable amount
-        const priceBreakdown =
-          registration.priceBreakdown as RegistrationForCalculation["priceBreakdown"];
+        const priceBreakdown = parsePriceBreakdown(registration.priceBreakdown);
         const applicableAmount = calculateApplicableAmount(
           {
             coversBasePrice: linked.coversBasePrice,

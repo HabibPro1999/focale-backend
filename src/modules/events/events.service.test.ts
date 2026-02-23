@@ -13,9 +13,11 @@ import {
   listEvents,
   deleteEvent,
   eventExists,
+  incrementRegisteredCountTx,
+  decrementRegisteredCountTx,
 } from "./events.service.js";
-import { AppError } from "@shared/errors.js";
 import { ErrorCodes } from "@shared/errors.js";
+import type { PrismaMock } from "../../../tests/mocks/prisma.js";
 
 // Mock the clients module for clientExists
 vi.mock("@clients", () => ({
@@ -72,8 +74,7 @@ describe("Events Service", () => {
       });
 
       prismaMock.$transaction.mockImplementation(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        async (callback: (tx: any) => Promise<any>) => {
+        async (callback: (tx: PrismaMock) => Promise<unknown>) => {
           const txMock = {
             event: {
               findUnique: vi.fn().mockResolvedValue(null), // No existing slug
@@ -83,7 +84,7 @@ describe("Events Service", () => {
               create: vi.fn().mockResolvedValue(mockPricing),
             },
           };
-          return callback(txMock);
+          return callback(txMock as unknown as PrismaMock);
         },
       );
 
@@ -104,9 +105,6 @@ describe("Events Service", () => {
     it("should throw when client does not exist", async () => {
       vi.mocked(clientExistsMock).mockResolvedValue(false);
 
-      await expect(createEvent(validInput, performedBy)).rejects.toThrow(
-        AppError,
-      );
       await expect(createEvent(validInput, performedBy)).rejects.toMatchObject({
         statusCode: 404,
         code: ErrorCodes.NOT_FOUND,
@@ -117,8 +115,7 @@ describe("Events Service", () => {
       const existingEvent = createMockEvent({ slug: validInput.slug });
 
       prismaMock.$transaction.mockImplementation(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        async (callback: (tx: any) => Promise<any>) => {
+        async (callback: (tx: PrismaMock) => Promise<unknown>) => {
           const txMock = {
             event: {
               findUnique: vi.fn().mockResolvedValue(existingEvent),
@@ -128,13 +125,10 @@ describe("Events Service", () => {
               create: vi.fn(),
             },
           };
-          return callback(txMock);
+          return callback(txMock as unknown as PrismaMock);
         },
       );
 
-      await expect(createEvent(validInput, performedBy)).rejects.toThrow(
-        AppError,
-      );
       await expect(createEvent(validInput, performedBy)).rejects.toMatchObject({
         statusCode: 409,
         code: ErrorCodes.CONFLICT,
@@ -154,8 +148,7 @@ describe("Events Service", () => {
       const mockPricing = createMockEventPricing({ eventId });
 
       prismaMock.$transaction.mockImplementation(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        async (callback: (tx: any) => Promise<any>) => {
+        async (callback: (tx: PrismaMock) => Promise<unknown>) => {
           const txMock = {
             event: {
               findUnique: vi.fn().mockResolvedValue(null),
@@ -165,7 +158,7 @@ describe("Events Service", () => {
               create: vi.fn().mockResolvedValue(mockPricing),
             },
           };
-          return callback(txMock);
+          return callback(txMock as unknown as PrismaMock);
         },
       );
 
@@ -191,8 +184,7 @@ describe("Events Service", () => {
       const pricingCreateMock = vi.fn().mockResolvedValue(mockPricing);
 
       prismaMock.$transaction.mockImplementation(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        async (callback: (tx: any) => Promise<any>) => {
+        async (callback: (tx: PrismaMock) => Promise<unknown>) => {
           const txMock = {
             event: {
               findUnique: vi.fn().mockResolvedValue(null),
@@ -202,7 +194,7 @@ describe("Events Service", () => {
               create: pricingCreateMock,
             },
           };
-          return callback(txMock);
+          return callback(txMock as unknown as PrismaMock);
         },
       );
 
@@ -300,17 +292,13 @@ describe("Events Service", () => {
       prismaMock.event.findUnique.mockResolvedValue(mockEvent);
 
       prismaMock.$transaction.mockImplementation(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        async (callback: (tx: any) => Promise<any>) => {
+        async (callback: (tx: PrismaMock) => Promise<unknown>) => {
           const txMock = {
             event: {
               update: vi.fn().mockResolvedValue(updatedEvent),
             },
-            auditLog: {
-              create: vi.fn().mockResolvedValue({}),
-            },
           };
-          return callback(txMock);
+          return callback(txMock as unknown as PrismaMock);
         },
       );
 
@@ -328,9 +316,6 @@ describe("Events Service", () => {
 
       await expect(
         updateEvent(eventId, { name: "New Name" }, performedBy),
-      ).rejects.toThrow(AppError);
-      await expect(
-        updateEvent(eventId, { name: "New Name" }, performedBy),
       ).rejects.toMatchObject({
         statusCode: 404,
         code: ErrorCodes.NOT_FOUND,
@@ -346,17 +331,13 @@ describe("Events Service", () => {
         prismaMock.event.findUnique.mockResolvedValue(mockEvent);
 
         prismaMock.$transaction.mockImplementation(
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          async (callback: (tx: any) => Promise<any>) => {
+          async (callback: (tx: PrismaMock) => Promise<unknown>) => {
             const txMock = {
               event: {
                 update: vi.fn().mockResolvedValue(updatedEvent),
               },
-              auditLog: {
-                create: vi.fn().mockResolvedValue({}),
-              },
             };
-            return callback(txMock);
+            return callback(txMock as unknown as PrismaMock);
           },
         );
 
@@ -376,17 +357,13 @@ describe("Events Service", () => {
         prismaMock.event.findUnique.mockResolvedValue(mockEvent);
 
         prismaMock.$transaction.mockImplementation(
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          async (callback: (tx: any) => Promise<any>) => {
+          async (callback: (tx: PrismaMock) => Promise<unknown>) => {
             const txMock = {
               event: {
                 update: vi.fn().mockResolvedValue(updatedEvent),
               },
-              auditLog: {
-                create: vi.fn().mockResolvedValue({}),
-              },
             };
-            return callback(txMock);
+            return callback(txMock as unknown as PrismaMock);
           },
         );
 
@@ -409,17 +386,13 @@ describe("Events Service", () => {
         prismaMock.event.findUnique.mockResolvedValue(mockEvent);
 
         prismaMock.$transaction.mockImplementation(
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          async (callback: (tx: any) => Promise<any>) => {
+          async (callback: (tx: PrismaMock) => Promise<unknown>) => {
             const txMock = {
               event: {
                 update: vi.fn().mockResolvedValue(updatedEvent),
               },
-              auditLog: {
-                create: vi.fn().mockResolvedValue({}),
-              },
             };
-            return callback(txMock);
+            return callback(txMock as unknown as PrismaMock);
           },
         );
 
@@ -438,9 +411,6 @@ describe("Events Service", () => {
 
         await expect(
           updateEvent(eventId, { status: "ARCHIVED" }, performedBy),
-        ).rejects.toThrow(AppError);
-        await expect(
-          updateEvent(eventId, { status: "ARCHIVED" }, performedBy),
         ).rejects.toMatchObject({
           statusCode: 400,
           code: ErrorCodes.INVALID_STATUS_TRANSITION,
@@ -452,9 +422,6 @@ describe("Events Service", () => {
         const mockEvent = createMockEvent({ id: eventId, status: "ARCHIVED" });
         prismaMock.event.findUnique.mockResolvedValue(mockEvent);
 
-        await expect(
-          updateEvent(eventId, { status: "OPEN" }, performedBy),
-        ).rejects.toThrow(AppError);
         await expect(
           updateEvent(eventId, { status: "OPEN" }, performedBy),
         ).rejects.toMatchObject({
@@ -470,9 +437,6 @@ describe("Events Service", () => {
 
         await expect(
           updateEvent(eventId, { status: "CLOSED" }, performedBy),
-        ).rejects.toThrow(AppError);
-        await expect(
-          updateEvent(eventId, { status: "CLOSED" }, performedBy),
         ).rejects.toMatchObject({
           statusCode: 400,
           code: ErrorCodes.INVALID_STATUS_TRANSITION,
@@ -486,17 +450,13 @@ describe("Events Service", () => {
         prismaMock.event.findUnique.mockResolvedValue(mockEvent);
 
         prismaMock.$transaction.mockImplementation(
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          async (callback: (tx: any) => Promise<any>) => {
+          async (callback: (tx: PrismaMock) => Promise<unknown>) => {
             const txMock = {
               event: {
                 update: vi.fn().mockResolvedValue(mockEvent),
               },
-              auditLog: {
-                create: vi.fn().mockResolvedValue({}),
-              },
             };
-            return callback(txMock);
+            return callback(txMock as unknown as PrismaMock);
           },
         );
 
@@ -521,18 +481,14 @@ describe("Events Service", () => {
         prismaMock.event.findUnique.mockResolvedValueOnce(mockEvent); // Find event by id (outside tx)
 
         prismaMock.$transaction.mockImplementation(
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          async (callback: (tx: any) => Promise<any>) => {
+          async (callback: (tx: PrismaMock) => Promise<unknown>) => {
             const txMock = {
               event: {
                 findUnique: vi.fn().mockResolvedValue(null), // Slug check returns null (unique)
                 update: vi.fn().mockResolvedValue(updatedEvent),
               },
-              auditLog: {
-                create: vi.fn().mockResolvedValue({}),
-              },
             };
-            return callback(txMock);
+            return callback(txMock as unknown as PrismaMock);
           },
         );
 
@@ -555,18 +511,14 @@ describe("Events Service", () => {
         prismaMock.event.findUnique.mockResolvedValueOnce(mockEvent); // Find event by id (outside tx)
 
         prismaMock.$transaction.mockImplementation(
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          async (callback: (tx: any) => Promise<any>) => {
+          async (callback: (tx: PrismaMock) => Promise<unknown>) => {
             const txMock = {
               event: {
                 findUnique: vi.fn().mockResolvedValue(conflictingEvent), // Slug check returns conflicting event
                 update: vi.fn(),
               },
-              auditLog: {
-                create: vi.fn().mockResolvedValue({}),
-              },
             };
-            return callback(txMock);
+            return callback(txMock as unknown as PrismaMock);
           },
         );
 
@@ -585,18 +537,14 @@ describe("Events Service", () => {
         prismaMock.event.findUnique.mockResolvedValueOnce(mockEvent);
 
         prismaMock.$transaction.mockImplementation(
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          async (callback: (tx: any) => Promise<any>) => {
+          async (callback: (tx: PrismaMock) => Promise<unknown>) => {
             const txMock = {
               event: {
                 // No findUnique here - slug check is skipped when slug === event.slug
                 update: vi.fn().mockResolvedValue(mockEvent),
               },
-              auditLog: {
-                create: vi.fn().mockResolvedValue({}),
-              },
             };
-            return callback(txMock);
+            return callback(txMock as unknown as PrismaMock);
           },
         );
 
@@ -735,7 +683,6 @@ describe("Events Service", () => {
     it("should throw when event not found", async () => {
       prismaMock.event.findUnique.mockResolvedValue(null);
 
-      await expect(deleteEvent(eventId, performedBy)).rejects.toThrow(AppError);
       await expect(deleteEvent(eventId, performedBy)).rejects.toMatchObject({
         statusCode: 404,
         code: ErrorCodes.NOT_FOUND,
@@ -751,7 +698,6 @@ describe("Events Service", () => {
 
       prismaMock.event.findUnique.mockResolvedValue(mockEvent);
 
-      await expect(deleteEvent(eventId, performedBy)).rejects.toThrow(AppError);
       await expect(deleteEvent(eventId, performedBy)).rejects.toMatchObject({
         statusCode: 409,
         code: ErrorCodes.EVENT_HAS_REGISTRATIONS,
@@ -777,22 +723,70 @@ describe("Events Service", () => {
 
   describe("eventExists", () => {
     it("should return true when event exists", async () => {
-      prismaMock.event.count.mockResolvedValue(1);
+      const mockEvent = createMockEvent({ id: eventId });
+      prismaMock.event.findUnique.mockResolvedValue(mockEvent);
 
       const result = await eventExists(eventId);
 
       expect(result).toBe(true);
-      expect(prismaMock.event.count).toHaveBeenCalledWith({
+      expect(prismaMock.event.findUnique).toHaveBeenCalledWith({
         where: { id: eventId },
+        select: { id: true },
       });
     });
 
     it("should return false when event does not exist", async () => {
-      prismaMock.event.count.mockResolvedValue(0);
+      prismaMock.event.findUnique.mockResolvedValue(null);
 
       const result = await eventExists("non-existent");
 
       expect(result).toBe(false);
+    });
+  });
+
+  describe("incrementRegisteredCountTx", () => {
+    it("should increment count successfully when capacity allows", async () => {
+      prismaMock.$executeRaw.mockResolvedValue(1);
+
+      await expect(
+        incrementRegisteredCountTx(prismaMock, eventId),
+      ).resolves.toBeUndefined();
+
+      expect(prismaMock.$executeRaw).toHaveBeenCalledTimes(1);
+    });
+
+    it("should throw EVENT_FULL when event is at capacity or not found", async () => {
+      prismaMock.$executeRaw.mockResolvedValue(0);
+
+      await expect(
+        incrementRegisteredCountTx(prismaMock, eventId),
+      ).rejects.toMatchObject({
+        statusCode: 409,
+        code: ErrorCodes.EVENT_FULL,
+      });
+    });
+  });
+
+  describe("decrementRegisteredCountTx", () => {
+    it("should decrement count successfully", async () => {
+      prismaMock.$executeRaw.mockResolvedValue(1);
+
+      await expect(
+        decrementRegisteredCountTx(prismaMock, eventId),
+      ).resolves.toBeUndefined();
+
+      expect(prismaMock.$executeRaw).toHaveBeenCalledTimes(1);
+    });
+
+    it("should throw NOT_FOUND when event does not exist (0 rows affected)", async () => {
+      prismaMock.$executeRaw.mockResolvedValue(0);
+
+      await expect(
+        decrementRegisteredCountTx(prismaMock, "non-existent"),
+      ).rejects.toMatchObject({
+        statusCode: 404,
+        code: ErrorCodes.NOT_FOUND,
+      });
     });
   });
 });

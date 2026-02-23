@@ -1,6 +1,5 @@
 import { z } from "zod";
 import type { TiptapNode } from "./email.types.js";
-import { listQuery } from "@shared/schemas/common.js";
 
 // ============================================================================
 // Enums
@@ -61,106 +60,6 @@ export const TiptapDocumentSchema = z
   .strict();
 
 // ============================================================================
-// Email Template Schemas
-// ============================================================================
-
-export const CreateEmailTemplateSchema = z
-  .object({
-    eventId: z.string().uuid(),
-    name: z.string().min(1).max(255),
-    description: z.string().max(1000).optional(),
-    subject: z.string().min(1).max(500),
-    content: TiptapDocumentSchema,
-    category: EmailTemplateCategorySchema,
-    trigger: AutomaticEmailTriggerSchema.optional().nullable(),
-    isActive: z.boolean().default(true),
-  })
-  .strict()
-  .refine(
-    (data) => {
-      // Automatic templates must have a trigger
-      if (data.category === "AUTOMATIC" && !data.trigger) {
-        return false;
-      }
-      // Manual templates should not have a trigger
-      if (data.category === "MANUAL" && data.trigger) {
-        return false;
-      }
-      return true;
-    },
-    {
-      message:
-        "Automatic templates require a trigger; manual templates should not have a trigger",
-      path: ["trigger"],
-    },
-  );
-
-export const UpdateEmailTemplateSchema = z
-  .object({
-    name: z.string().min(1).max(255).optional(),
-    description: z.string().max(1000).optional().nullable(),
-    subject: z.string().min(1).max(500).optional(),
-    content: TiptapDocumentSchema.optional(),
-    category: EmailTemplateCategorySchema.optional(),
-    trigger: AutomaticEmailTriggerSchema.optional().nullable(),
-    isActive: z.boolean().optional(),
-  })
-  .strict();
-
-export const ListEmailTemplatesQuerySchema = listQuery({
-  category: EmailTemplateCategorySchema.optional(),
-});
-
-// ============================================================================
-// Bulk Send Schema (Simple recipient filtering)
-// ============================================================================
-
-export const BulkSendFilterSchema = z
-  .object({
-    paymentStatus: z
-      .array(z.enum(["PENDING", "PAID", "REFUNDED", "WAIVED"]))
-      .optional(),
-    accessTypeIds: z.array(z.string().uuid()).optional(),
-  })
-  .strict();
-
-export const BulkSendEmailSchema = z
-  .object({
-    // Option 1: Send to specific registrations
-    registrationIds: z.array(z.string().uuid()).optional(),
-    // Option 2: Send based on filters
-    filters: BulkSendFilterSchema.optional(),
-  })
-  .strict();
-
-// ============================================================================
-// Test Send Schema
-// ============================================================================
-
-export const TestSendEmailSchema = z
-  .object({
-    recipientEmail: z.string().email(),
-    recipientName: z.string().max(200).optional(),
-  })
-  .strict();
-
-// ============================================================================
-// ID Param Schemas
-// ============================================================================
-
-export const EmailTemplateIdParamSchema = z
-  .object({
-    templateId: z.string().uuid(),
-  })
-  .strict();
-
-export { EventIdParamSchema } from "@shared/schemas/params.js";
-
-// ============================================================================
-// Response Schemas
-// ============================================================================
-
-// ============================================================================
 // Types
 // ============================================================================
 
@@ -170,18 +69,3 @@ export type EmailStatus = z.infer<typeof EmailStatusSchema>;
 
 export type TiptapMark = z.infer<typeof TiptapMarkSchema>;
 export type TiptapDocument = z.infer<typeof TiptapDocumentSchema>;
-
-export type CreateEmailTemplateInput = z.infer<
-  typeof CreateEmailTemplateSchema
->;
-export type UpdateEmailTemplateInput = z.infer<
-  typeof UpdateEmailTemplateSchema
->;
-export type ListEmailTemplatesQuery = z.infer<
-  typeof ListEmailTemplatesQuerySchema
->;
-
-export type BulkSendFilter = z.infer<typeof BulkSendFilterSchema>;
-export type BulkSendEmailInput = z.infer<typeof BulkSendEmailSchema>;
-
-export type TestSendEmailInput = z.infer<typeof TestSendEmailSchema>;

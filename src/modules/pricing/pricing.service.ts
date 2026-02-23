@@ -27,10 +27,6 @@ type UpdateEventPricingInput = {
   bankAccountNumber?: string | null;
 };
 
-type CreateEmbeddedRuleInput = Omit<EmbeddedPricingRule, "id">;
-
-type UpdateEmbeddedRuleInput = Partial<Omit<EmbeddedPricingRule, "id">>;
-
 type SelectedExtra = {
   extraId: string;
   quantity: number;
@@ -269,7 +265,7 @@ async function withPricingRules(
  */
 export async function addPricingRule(
   eventId: string,
-  rule: CreateEmbeddedRuleInput,
+  rule: Omit<EmbeddedPricingRule, "id">,
 ): Promise<EventPricingWithRules> {
   return withPricingRules(eventId, async (rules) => {
     if (rules.length >= MAX_PRICING_RULES) {
@@ -300,7 +296,7 @@ export async function addPricingRule(
 export async function updatePricingRule(
   eventId: string,
   ruleId: string,
-  updates: UpdateEmbeddedRuleInput,
+  updates: Partial<Omit<EmbeddedPricingRule, "id">>,
 ): Promise<EventPricingWithRules> {
   return withPricingRules(eventId, async (rules) => {
     const ruleIndex = rules.findIndex((r) => r.id === ruleId);

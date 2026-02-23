@@ -1,16 +1,18 @@
+import { z } from "zod";
 import {
   requireAuth,
   requireSuperAdmin,
   canAccessClient,
   requireEventAccess,
 } from "@shared/middleware/auth.middleware.js";
+import { IdParamSchema, EventIdParamSchema } from "@shared/schemas/params.js";
+import { listQuery } from "@shared/schemas/common.js";
 import {
   getRegistrationById,
   updateRegistration,
   deleteRegistration,
   listRegistrations,
   listAllRegistrations,
-  getRegistrationClientId,
 } from "./registration-crud.service.js";
 import {
   confirmPayment,
@@ -26,24 +28,95 @@ import { getStorageProvider } from "@shared/services/storage/index.js";
 import { AppError } from "@shared/errors.js";
 import { ErrorCodes } from "@shared/errors.js";
 import {
-  RegistrationIdParamSchema,
-  EventIdParamSchema,
-  UpdateRegistrationSchema,
-  UpdatePaymentSchema,
-  ListRegistrationsQuerySchema,
-  ListAllRegistrationsQuerySchema,
-  ListRegistrationAuditLogsQuerySchema,
-  ListRegistrationEmailLogsQuerySchema,
-  SearchRegistrantsQuerySchema,
-  type UpdateRegistrationInput,
-  type UpdatePaymentInput,
-  type ListRegistrationsQuery,
-  type ListAllRegistrationsQuery,
-  type ListRegistrationAuditLogsQuery,
-  type ListRegistrationEmailLogsQuery,
-  type SearchRegistrantsQuery,
+  PaymentStatusSchema,
+  PaymentMethodSchema,
+} from "./registrations.schema.js";
+import type {
+  UpdateRegistrationInput,
+  UpdatePaymentInput,
+  ListRegistrationsQuery,
+  ListAllRegistrationsQuery,
+  ListRegistrationAuditLogsQuery,
+  ListRegistrationEmailLogsQuery,
+  SearchRegistrantsQuery,
 } from "./registrations.schema.js";
 import type { AppInstance } from "@shared/fastify.js";
+import type { RegistrationWithRelations } from "./registration-crud.service.js";
+
+// ============================================================================
+// Helper: strip sensitive fields from admin responses
+// ============================================================================
+
+type SafeRegistration = Omit<
+  RegistrationWithRelations,
+  "editToken" | "editTokenExpiry" | "idempotencyKey"
+>;
+
+function stripSensitiveFields(
+  reg: RegistrationWithRelations,
+): SafeRegistration {
+  const copy = { ...reg } as Partial<RegistrationWithRelations>;
+  delete copy.editToken;
+  delete copy.editTokenExpiry;
+  delete copy.idempotencyKey;
+  return copy as SafeRegistration;
+}
+
+// ============================================================================
+// Inline request schemas
+// ============================================================================
+
+const UpdateRegistrationSchema = z
+  .object({
+    paymentStatus: PaymentStatusSchema.optional(),
+    paidAmount: z.number().int().min(0).optional(),
+    paymentMethod: PaymentMethodSchema.optional(),
+    paymentReference: z.string().max(200).optional(),
+    paymentProofUrl: z.string().url().optional(),
+    note: z.string().max(2000).nullable().optional(),
+  })
+  .strict();
+
+const UpdatePaymentSchema = z
+  .object({
+    paymentStatus: PaymentStatusSchema,
+    paidAmount: z.number().int().min(0).optional(),
+    paymentMethod: PaymentMethodSchema.optional(),
+    paymentReference: z.string().max(200).optional(),
+    paymentProofUrl: z.string().url().optional(),
+  })
+  .strict();
+
+const ListRegistrationsQuerySchema = listQuery({
+  paymentStatus: PaymentStatusSchema.optional(),
+});
+
+const ListAllRegistrationsQuerySchema = listQuery({
+  eventId: z.string().uuid().optional(),
+  paymentStatus: PaymentStatusSchema.optional(),
+});
+
+const ListRegistrationAuditLogsQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+  })
+  .strict();
+
+const ListRegistrationEmailLogsQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+  })
+  .strict();
+
+const SearchRegistrantsQuerySchema = z
+  .object({
+    query: z.string().min(1).max(200),
+    unpaidOnly: z.coerce.boolean().optional().default(false),
+    limit: z.coerce.number().int().min(1).max(50).default(10),
+  })
+  .strict();
 
 // ============================================================================
 // Protected Routes (Admin)
@@ -65,8 +138,16 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
     },
     async (request, reply) => {
       const query = request.query;
-      const registrations = await listAllRegistrations(query);
-      return reply.send(registrations);
+      const result = await listAllRegistrations(query);
+      const safeData = result.data.map(
+        ({
+          editToken: _et,
+          editTokenExpiry: _ete,
+          idempotencyKey: _ik,
+          ...reg
+        }) => reg,
+      );
+      return reply.send({ ...result, data: safeData });
     },
   );
 
@@ -129,8 +210,16 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
 
       await requireEventAccess(request.user!, eventId);
 
-      const registrations = await listRegistrations(eventId, query);
-      return reply.send(registrations);
+      const result = await listRegistrations(eventId, query);
+      const safeData = result.data.map(
+        ({
+          editToken: _et,
+          editTokenExpiry: _ete,
+          idempotencyKey: _ik,
+          ...reg
+        }) => reg,
+      );
+      return reply.send({ ...result, data: safeData });
     },
   );
 
@@ -138,7 +227,7 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
   app.get<{ Params: { id: string } }>(
     "/registrations/:id",
     {
-      schema: { params: RegistrationIdParamSchema },
+      schema: { params: IdParamSchema },
     },
     async (request, reply) => {
       const { id } = request.params;
@@ -162,7 +251,8 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
         );
       }
 
-      return reply.send(registration);
+      const safeRegistration = stripSensitiveFields(registration);
+      return reply.send(safeRegistration);
     },
   );
 
@@ -171,7 +261,7 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
     "/registrations/:id",
     {
       schema: {
-        params: RegistrationIdParamSchema,
+        params: IdParamSchema,
         body: UpdateRegistrationSchema,
       },
     },
@@ -179,8 +269,8 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
       const { id } = request.params;
       const input = request.body;
 
-      const clientId = await getRegistrationClientId(id);
-      if (!clientId) {
+      const existing = await getRegistrationById(id);
+      if (!existing) {
         throw new AppError(
           "Registration not found",
           404,
@@ -189,7 +279,7 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
         );
       }
 
-      if (!canAccessClient(request.user!, clientId)) {
+      if (!canAccessClient(request.user!, existing.event.clientId)) {
         throw new AppError(
           "Insufficient permissions",
           403,
@@ -212,7 +302,7 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
     "/registrations/:id/confirm",
     {
       schema: {
-        params: RegistrationIdParamSchema,
+        params: IdParamSchema,
         body: UpdatePaymentSchema,
       },
     },
@@ -220,8 +310,8 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
       const { id } = request.params;
       const input = request.body;
 
-      const clientId = await getRegistrationClientId(id);
-      if (!clientId) {
+      const existing = await getRegistrationById(id);
+      if (!existing) {
         throw new AppError(
           "Registration not found",
           404,
@@ -230,7 +320,7 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
         );
       }
 
-      if (!canAccessClient(request.user!, clientId)) {
+      if (!canAccessClient(request.user!, existing.event.clientId)) {
         throw new AppError(
           "Insufficient permissions",
           403,
@@ -254,13 +344,13 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
   app.delete<{ Params: { id: string } }>(
     "/registrations/:id",
     {
-      schema: { params: RegistrationIdParamSchema },
+      schema: { params: IdParamSchema },
     },
     async (request, reply) => {
       const { id } = request.params;
 
-      const clientId = await getRegistrationClientId(id);
-      if (!clientId) {
+      const existing = await getRegistrationById(id);
+      if (!existing) {
         throw new AppError(
           "Registration not found",
           404,
@@ -269,7 +359,7 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
         );
       }
 
-      if (!canAccessClient(request.user!, clientId)) {
+      if (!canAccessClient(request.user!, existing.event.clientId)) {
         throw new AppError(
           "Insufficient permissions",
           403,
@@ -291,7 +381,7 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
     "/registrations/:id/audit-logs",
     {
       schema: {
-        params: RegistrationIdParamSchema,
+        params: IdParamSchema,
         querystring: ListRegistrationAuditLogsQuerySchema,
       },
     },
@@ -299,8 +389,8 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
       const { id } = request.params;
       const query = request.query;
 
-      const clientId = await getRegistrationClientId(id);
-      if (!clientId) {
+      const existing = await getRegistrationById(id);
+      if (!existing) {
         throw new AppError(
           "Registration not found",
           404,
@@ -309,7 +399,7 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
         );
       }
 
-      if (!canAccessClient(request.user!, clientId)) {
+      if (!canAccessClient(request.user!, existing.event.clientId)) {
         throw new AppError(
           "Insufficient permissions",
           403,
@@ -331,7 +421,7 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
     "/registrations/:id/email-logs",
     {
       schema: {
-        params: RegistrationIdParamSchema,
+        params: IdParamSchema,
         querystring: ListRegistrationEmailLogsQuerySchema,
       },
     },
@@ -339,8 +429,8 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
       const { id } = request.params;
       const query = request.query;
 
-      const clientId = await getRegistrationClientId(id);
-      if (!clientId) {
+      const existing = await getRegistrationById(id);
+      if (!existing) {
         throw new AppError(
           "Registration not found",
           404,
@@ -349,7 +439,7 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
         );
       }
 
-      if (!canAccessClient(request.user!, clientId)) {
+      if (!canAccessClient(request.user!, existing.event.clientId)) {
         throw new AppError(
           "Insufficient permissions",
           403,
@@ -367,7 +457,7 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
   app.get<{ Params: { id: string } }>(
     "/registrations/:id/payment-proof",
     {
-      schema: { params: RegistrationIdParamSchema },
+      schema: { params: IdParamSchema },
     },
     async (request, reply) => {
       const { id } = request.params;

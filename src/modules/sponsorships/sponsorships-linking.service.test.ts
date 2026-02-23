@@ -1,12 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { faker } from "@faker-js/faker";
 import { prismaMock } from "../../../tests/mocks/prisma.js";
-import {
-  createMockEvent,
-  createMockEventPricing,
-  createMockEventAccess,
-  createMockSponsorship,
-} from "../../../tests/helpers/factories.js";
+import { createMockSponsorship } from "../../../tests/helpers/factories.js";
 
 // Type for transaction callback - eslint-disable to allow any for mock flexibility
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -16,6 +11,41 @@ type TxCallback = (tx: any) => Promise<unknown>;
 // since we only mock the fields the function actually uses
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const asMock = <T>(value: T): any => value;
+
+/**
+ * Build a valid stored PriceBreakdown fixture for tests.
+ * parsePriceBreakdown validates the full schema; partial objects return zero.
+ */
+function makeBreakdown(
+  calculatedBasePrice = 0,
+  accessItems: Array<{
+    accessId: string;
+    name?: string;
+    unitPrice?: number;
+    quantity?: number;
+    subtotal: number;
+  }> = [],
+) {
+  const accessTotal = accessItems.reduce((s, i) => s + i.subtotal, 0);
+  return {
+    basePrice: calculatedBasePrice,
+    appliedRules: [],
+    calculatedBasePrice,
+    accessItems: accessItems.map((i) => ({
+      accessId: i.accessId,
+      name: i.name ?? i.accessId,
+      unitPrice: i.unitPrice ?? i.subtotal,
+      quantity: i.quantity ?? 1,
+      subtotal: i.subtotal,
+    })),
+    accessTotal,
+    subtotal: calculatedBasePrice + accessTotal,
+    sponsorships: [],
+    sponsorshipTotal: 0,
+    total: calculatedBasePrice + accessTotal,
+    currency: "TND",
+  };
+}
 
 import {
   linkSponsorshipToRegistration,
@@ -27,11 +57,6 @@ import {
   type LinkSponsorshipResult,
 } from "./sponsorships-linking.service.js";
 import { ErrorCodes } from "@shared/errors.js";
-
-// Suppress unused import warnings for factory helpers used implicitly
-void createMockEvent;
-void createMockEventPricing;
-void createMockEventAccess;
 
 describe("Sponsorships Linking Service", () => {
   const eventId = faker.string.uuid();
@@ -60,7 +85,7 @@ describe("Sponsorships Linking Service", () => {
         totalAmount: 300,
         baseAmount: 200,
         accessTypeIds: [],
-        priceBreakdown: { calculatedBasePrice: 200, accessItems: [] },
+        priceBreakdown: makeBreakdown(200),
         sponsorshipAmount: 0,
         sponsorshipUsages: [],
       };
@@ -186,7 +211,7 @@ describe("Sponsorships Linking Service", () => {
         totalAmount: 300,
         baseAmount: 200,
         accessTypeIds: [],
-        priceBreakdown: {},
+        priceBreakdown: makeBreakdown(),
         sponsorshipAmount: 0,
         sponsorshipUsages: [],
       };
@@ -223,7 +248,7 @@ describe("Sponsorships Linking Service", () => {
         totalAmount: 300,
         baseAmount: 200,
         accessTypeIds: [],
-        priceBreakdown: {},
+        priceBreakdown: makeBreakdown(),
         sponsorshipAmount: 0,
         sponsorshipUsages: [],
       };
@@ -272,10 +297,9 @@ describe("Sponsorships Linking Service", () => {
         totalAmount: 300,
         baseAmount: 200,
         accessTypeIds: ["access-abc"], // Different from sponsorship coverage
-        priceBreakdown: {
-          calculatedBasePrice: 200,
-          accessItems: [{ accessId: "access-abc", subtotal: 100 }],
-        },
+        priceBreakdown: makeBreakdown(200, [
+          { accessId: "access-abc", subtotal: 100 },
+        ]),
         sponsorshipAmount: 0,
         sponsorshipUsages: [],
       };
@@ -316,7 +340,7 @@ describe("Sponsorships Linking Service", () => {
         totalAmount: 300,
         baseAmount: 200,
         accessTypeIds: [],
-        priceBreakdown: { calculatedBasePrice: 200, accessItems: [] },
+        priceBreakdown: makeBreakdown(200),
         sponsorshipAmount: 300, // fully sponsored
         sponsorshipUsages: [],
       };
@@ -358,7 +382,7 @@ describe("Sponsorships Linking Service", () => {
         totalAmount: 300,
         baseAmount: 200,
         accessTypeIds: [],
-        priceBreakdown: { calculatedBasePrice: 200, accessItems: [] },
+        priceBreakdown: makeBreakdown(200),
         sponsorshipAmount: 200,
         sponsorshipUsages: [
           {
@@ -452,7 +476,7 @@ describe("Sponsorships Linking Service", () => {
         totalAmount: 300,
         baseAmount: 200,
         accessTypeIds: [],
-        priceBreakdown: { calculatedBasePrice: 200, accessItems: [] },
+        priceBreakdown: makeBreakdown(200),
         sponsorshipAmount: 0,
         sponsorshipUsages: [],
       };
@@ -606,7 +630,7 @@ describe("Sponsorships Linking Service", () => {
         totalAmount: 300,
         baseAmount: 200,
         accessTypeIds: [],
-        priceBreakdown: { calculatedBasePrice: 200, accessItems: [] },
+        priceBreakdown: makeBreakdown(200),
         sponsorshipUsages: [],
       };
       const mockSponsorships = [
@@ -662,7 +686,7 @@ describe("Sponsorships Linking Service", () => {
         totalAmount: 300,
         baseAmount: 200,
         accessTypeIds: [],
-        priceBreakdown: {},
+        priceBreakdown: makeBreakdown(),
         sponsorshipUsages: [],
       };
 
@@ -686,7 +710,7 @@ describe("Sponsorships Linking Service", () => {
         totalAmount: 300,
         baseAmount: 200,
         accessTypeIds: [],
-        priceBreakdown: { calculatedBasePrice: 200, accessItems: [] },
+        priceBreakdown: makeBreakdown(200),
         sponsorshipUsages: [
           {
             sponsorshipId: existingSponsorshipId,
@@ -847,7 +871,7 @@ describe("Sponsorships Linking Service", () => {
               totalAmount: 300,
               baseAmount: 200,
               accessTypeIds: [],
-              priceBreakdown: { calculatedBasePrice: 200, accessItems: [] },
+              priceBreakdown: makeBreakdown(200),
             },
           },
         ],
@@ -898,10 +922,9 @@ describe("Sponsorships Linking Service", () => {
               totalAmount: 300,
               baseAmount: 200,
               accessTypeIds: ["access-1"],
-              priceBreakdown: {
-                calculatedBasePrice: 200,
-                accessItems: [{ accessId: "access-1", subtotal: 100 }],
-              },
+              priceBreakdown: makeBreakdown(200, [
+                { accessId: "access-1", subtotal: 100 },
+              ]),
             },
           },
         ],
@@ -952,7 +975,7 @@ describe("Sponsorships Linking Service", () => {
               totalAmount: 300,
               baseAmount: 200,
               accessTypeIds: [],
-              priceBreakdown: { calculatedBasePrice: 200, accessItems: [] },
+              priceBreakdown: makeBreakdown(200),
             },
           },
           {
@@ -963,7 +986,7 @@ describe("Sponsorships Linking Service", () => {
               totalAmount: 400,
               baseAmount: 300,
               accessTypeIds: [],
-              priceBreakdown: { calculatedBasePrice: 300, accessItems: [] },
+              priceBreakdown: makeBreakdown(300),
             },
           },
         ],

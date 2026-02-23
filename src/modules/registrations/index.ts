@@ -3,7 +3,10 @@
 // ============================================================================
 
 // Service functions (external consumers exist)
-export { getRegistrationById } from "./registration-crud.service.js";
+export {
+  getRegistrationById,
+  parsePriceBreakdown,
+} from "./registration-crud.service.js";
 export { searchRegistrantsForSponsorship } from "./registration-query.service.js";
 
 // Routes
