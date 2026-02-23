@@ -335,9 +335,21 @@ export async function createSponsorshipBatch(
       },
     });
 
+    // Read form settings for autoApproveSponsorship
+    const formWithSettings = await tx.form.findUnique({
+      where: { id: formId },
+      select: { schema: true },
+    });
+    const sponsorshipSettings = (
+      formWithSettings?.schema as Record<string, unknown> | null
+    )?.sponsorshipSettings as Record<string, unknown> | undefined;
+    const autoApprove =
+      (sponsorshipSettings?.autoApproveSponsorship as boolean | undefined) ??
+      false;
+
     // Create sponsorships
     const createdSponsorships: Array<
-      Sponsorship & { linkedRegistrationId?: string }
+      Sponsorship & { linkedRegistrationId?: string; autoApproved?: boolean }
     > = [];
 
     if (isLinkedMode) {
@@ -356,62 +368,89 @@ export async function createSponsorshipBatch(
           linked.coveredAccessIds,
         );
 
-        // Create sponsorship with USED status
-        const sponsorship = await tx.sponsorship.create({
-          data: {
-            batchId: batch.id,
-            eventId,
-            code,
-            status: "USED", // Auto-linked, so starts as USED
-            beneficiaryName: linked.name,
-            beneficiaryEmail: linked.email,
-            beneficiaryPhone: null,
-            beneficiaryAddress: null,
-            coversBasePrice: linked.coversBasePrice,
-            coveredAccessIds: linked.coveredAccessIds,
-            totalAmount,
-          },
-        });
+        if (autoApprove) {
+          // Auto-approve: create USED sponsorship and immediately link to registration
+          const sponsorship = await tx.sponsorship.create({
+            data: {
+              batchId: batch.id,
+              eventId,
+              code,
+              status: "USED",
+              beneficiaryName: linked.name,
+              beneficiaryEmail: linked.email,
+              beneficiaryPhone: null,
+              beneficiaryAddress: null,
+              coversBasePrice: linked.coversBasePrice,
+              coveredAccessIds: linked.coveredAccessIds,
+              totalAmount,
+            },
+          });
 
-        // Calculate applicable amount
-        const priceBreakdown =
-          registration.priceBreakdown as RegistrationForCalculation["priceBreakdown"];
-        const applicableAmount = calculateApplicableAmount(
-          {
-            coversBasePrice: linked.coversBasePrice,
-            coveredAccessIds: linked.coveredAccessIds,
-            totalAmount,
-          },
-          {
-            totalAmount: registration.totalAmount,
-            baseAmount: registration.baseAmount,
-            accessTypeIds: registration.accessTypeIds,
-            priceBreakdown,
-          },
-        );
+          // Calculate applicable amount
+          const priceBreakdown =
+            registration.priceBreakdown as RegistrationForCalculation["priceBreakdown"];
+          const applicableAmount = calculateApplicableAmount(
+            {
+              coversBasePrice: linked.coversBasePrice,
+              coveredAccessIds: linked.coveredAccessIds,
+              totalAmount,
+            },
+            {
+              totalAmount: registration.totalAmount,
+              baseAmount: registration.baseAmount,
+              accessTypeIds: registration.accessTypeIds,
+              priceBreakdown,
+            },
+          );
 
-        // Create SponsorshipUsage (the link)
-        await tx.sponsorshipUsage.create({
-          data: {
-            sponsorshipId: sponsorship.id,
-            registrationId: linked.registrationId,
-            amountApplied: applicableAmount,
-            appliedBy: "SYSTEM", // System auto-linked
-          },
-        });
+          // Create SponsorshipUsage (the link)
+          await tx.sponsorshipUsage.create({
+            data: {
+              sponsorshipId: sponsorship.id,
+              registrationId: linked.registrationId,
+              amountApplied: applicableAmount,
+              appliedBy: "SYSTEM",
+            },
+          });
 
-        // Update registration's sponsorshipAmount
-        await tx.registration.update({
-          where: { id: linked.registrationId },
-          data: {
-            sponsorshipAmount: { increment: applicableAmount },
-          },
-        });
+          // Update registration's sponsorshipAmount
+          await tx.registration.update({
+            where: { id: linked.registrationId },
+            data: {
+              sponsorshipAmount: { increment: applicableAmount },
+            },
+          });
 
-        createdSponsorships.push({
-          ...sponsorship,
-          linkedRegistrationId: linked.registrationId,
-        });
+          createdSponsorships.push({
+            ...sponsorship,
+            linkedRegistrationId: linked.registrationId,
+            autoApproved: true,
+          });
+        } else {
+          // Pending approval: create PENDING sponsorship with targetRegistrationId
+          const sponsorship = await tx.sponsorship.create({
+            data: {
+              batchId: batch.id,
+              eventId,
+              code,
+              status: "PENDING",
+              beneficiaryName: linked.name,
+              beneficiaryEmail: linked.email,
+              beneficiaryPhone: null,
+              beneficiaryAddress: null,
+              coversBasePrice: linked.coversBasePrice,
+              coveredAccessIds: linked.coveredAccessIds,
+              totalAmount,
+              targetRegistrationId: linked.registrationId,
+            },
+          });
+
+          createdSponsorships.push({
+            ...sponsorship,
+            linkedRegistrationId: linked.registrationId,
+            autoApproved: false,
+          });
+        }
       }
     } else {
       // CODE mode (existing behavior)
@@ -450,6 +489,7 @@ export async function createSponsorshipBatch(
     return {
       batchId: batch.id,
       count: createdSponsorships.length,
+      autoApprove,
       batch: {
         labName: sponsor.labName,
         contactName: sponsor.contactName,
@@ -495,8 +535,8 @@ export async function createSponsorshipBatch(
       );
     }
 
-    // 2. For LINKED_ACCOUNT mode: Send notification to each doctor
-    if (isLinkedMode) {
+    // 2. For LINKED_ACCOUNT mode with auto-approve: Send notification to each doctor
+    if (isLinkedMode && result.autoApprove) {
       for (const sponsorship of result.sponsorships) {
         const registration = registrations.get(
           sponsorship.linkedRegistrationId!,
