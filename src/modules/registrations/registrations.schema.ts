@@ -351,6 +351,7 @@ export const RegistrantSearchResultSchema = z.object({
   lastName: z.string().nullable(),
   paymentStatus: PaymentStatusSchema,
   totalAmount: z.number(),
+  originalAmount: z.number(),
   sponsorshipAmount: z.number(),
   accessTypeIds: z.array(z.string()),
   coveredAccessIds: z.array(z.string()),
