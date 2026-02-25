@@ -346,7 +346,7 @@ export async function createSponsorshipBatch(
     )?.sponsorshipSettings as Record<string, unknown> | undefined;
     const autoApprove =
       (sponsorshipSettings?.autoApproveSponsorship as boolean | undefined) ??
-      false;
+      true;
 
     // Create sponsorships
     const createdSponsorships: Array<
