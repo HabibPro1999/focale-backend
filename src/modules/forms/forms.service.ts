@@ -614,6 +614,7 @@ export async function getSponsorFormByEventSlug(
             select: {
               id: true,
               name: true,
+              phone: true,
             },
           },
           pricing: true,

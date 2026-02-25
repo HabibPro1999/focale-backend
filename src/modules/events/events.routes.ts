@@ -9,6 +9,7 @@ import {
   listEvents,
   updateEvent,
   deleteEvent,
+  uploadEventBanner,
 } from "./events.service.js";
 import { Event, EventStatusEnum } from "./events.schema.js";
 import { IdParamSchema } from "@shared/schemas/params.js";
@@ -145,6 +146,31 @@ export async function eventsRoutes(app: AppInstance): Promise<void> {
 
       await deleteEvent(request.params.id, request.user!.id);
       return reply.status(204).send();
+    },
+  );
+
+  // POST /api/events/:id/banner - Upload event banner image
+  app.post<{ Params: { id: string } }>(
+    "/:id/banner",
+    {
+      schema: { params: IdParamSchema },
+    },
+    async (request, reply) => {
+      await requireEventAccess(request.user!, request.params.id);
+
+      const data = await request.file();
+      if (!data) {
+        throw app.httpErrors.badRequest("No file uploaded");
+      }
+
+      const buffer = await data.toBuffer();
+      const result = await uploadEventBanner(
+        request.params.id,
+        { buffer, filename: data.filename, mimetype: data.mimetype },
+        request.user!.id,
+      );
+
+      return reply.send(result);
     },
   );
 }

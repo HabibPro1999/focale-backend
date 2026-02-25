@@ -357,17 +357,48 @@ export async function searchRegistrantsForSponsorship(
       lastName: true,
       paymentStatus: true,
       totalAmount: true,
+      sponsorshipAmount: true,
       accessTypeIds: true,
+      phone: true,
+      formData: true,
+      sponsorshipUsages: {
+        select: {
+          sponsorship: {
+            select: {
+              status: true,
+              coversBasePrice: true,
+              coveredAccessIds: true,
+            },
+          },
+        },
+      },
     },
   });
 
-  return registrations.map((r) => ({
-    id: r.id,
-    email: r.email,
-    firstName: r.firstName,
-    lastName: r.lastName,
-    paymentStatus: r.paymentStatus as RegistrantSearchResult["paymentStatus"],
-    totalAmount: r.totalAmount,
-    accessTypeIds: r.accessTypeIds,
-  }));
+  return registrations.map((r) => {
+    // Aggregate coverage from USED sponsorships only
+    const usedSponsorships = r.sponsorshipUsages
+      .map((u) => u.sponsorship)
+      .filter((s) => s.status === "USED");
+
+    const isBasePriceCovered = usedSponsorships.some((s) => s.coversBasePrice);
+    const coveredAccessIds = [
+      ...new Set(usedSponsorships.flatMap((s) => s.coveredAccessIds)),
+    ];
+
+    return {
+      id: r.id,
+      email: r.email,
+      firstName: r.firstName,
+      lastName: r.lastName,
+      paymentStatus: r.paymentStatus as RegistrantSearchResult["paymentStatus"],
+      totalAmount: r.totalAmount,
+      sponsorshipAmount: r.sponsorshipAmount,
+      accessTypeIds: r.accessTypeIds,
+      coveredAccessIds,
+      isBasePriceCovered,
+      phone: r.phone,
+      formData: r.formData as Record<string, unknown> | null,
+    };
+  });
 }

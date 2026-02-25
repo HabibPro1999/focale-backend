@@ -115,7 +115,7 @@ export async function createSponsorshipBatch(
   // Verify form exists and belongs to event
   const form = await prisma.form.findFirst({
     where: { id: formId, eventId, type: "SPONSOR" },
-    select: { id: true },
+    select: { id: true, schema: true },
   });
 
   if (!form) {
@@ -126,6 +126,14 @@ export async function createSponsorshipBatch(
       ErrorCodes.NOT_FOUND,
     );
   }
+
+  // Read auto-approve setting from form schema (default true for backward compat)
+  type FormSchemaWithSettings = {
+    sponsorshipSettings?: { autoApproveSponsorship?: boolean };
+  };
+  const autoApprove =
+    (form.schema as FormSchemaWithSettings)?.sponsorshipSettings
+      ?.autoApproveSponsorship ?? true;
 
   // Get pricing for currency and base price
   const pricing = await prisma.eventPricing.findUnique({
@@ -312,6 +320,42 @@ export async function createSponsorshipBatch(
       for (const linked of linkedBeneficiaries!) {
         const registration = registrations.get(linked.registrationId)!;
 
+        // Calculate total amount (shared by both pending and auto-approve paths)
+        const totalAmount = await calculateSponsorshipTotal(
+          tx,
+          eventId,
+          linked.coversBasePrice,
+          linked.coveredAccessIds,
+        );
+
+        // Generate unique code (shared by both paths)
+        const code = await generateUniqueCode(tx);
+
+        // Pending admin approval: create PENDING sponsorship, skip linking
+        if (!autoApprove) {
+          const sponsorship = await tx.sponsorship.create({
+            data: {
+              batchId: batch.id,
+              eventId,
+              code,
+              status: "PENDING",
+              beneficiaryName: linked.name,
+              beneficiaryEmail: linked.email,
+              beneficiaryPhone: null,
+              beneficiaryAddress: null,
+              coversBasePrice: linked.coversBasePrice,
+              coveredAccessIds: linked.coveredAccessIds,
+              totalAmount,
+              targetRegistrationId: linked.registrationId,
+            },
+          });
+          createdSponsorships.push({
+            ...sponsorship,
+            linkedRegistrationId: linked.registrationId,
+          });
+          continue;
+        }
+
         // Get or initialize cumulative sponsorship amount for this registration
         if (!registrationSponsorshipAmounts.has(linked.registrationId)) {
           registrationSponsorshipAmounts.set(
@@ -358,14 +402,6 @@ export async function createSponsorshipBatch(
           );
         }
 
-        // Calculate total amount
-        const totalAmount = await calculateSponsorshipTotal(
-          tx,
-          eventId,
-          linked.coversBasePrice,
-          linked.coveredAccessIds,
-        );
-
         // Calculate applicable amount
         const priceBreakdown = parsePriceBreakdown(registration.priceBreakdown);
         const applicableAmount = calculateApplicableAmount(
@@ -406,9 +442,6 @@ export async function createSponsorshipBatch(
           skippedCount++;
           continue;
         }
-
-        // Generate unique code
-        const code = await generateUniqueCode(tx);
 
         // Create sponsorship with USED status
         const sponsorship = await tx.sponsorship.create({
@@ -508,6 +541,7 @@ export async function createSponsorshipBatch(
       batchId: batch.id,
       count: createdSponsorships.length,
       skippedCount,
+      autoApprove,
       batch: {
         labName: sponsor.labName,
         contactName: sponsor.contactName,
@@ -554,8 +588,8 @@ export async function createSponsorshipBatch(
       );
     }
 
-    // 2. For LINKED_ACCOUNT mode: Send notification to each doctor
-    if (isLinkedMode) {
+    // 2. For LINKED_ACCOUNT mode with auto-approve: Send notification to each doctor
+    if (isLinkedMode && result.autoApprove) {
       for (const sponsorship of result.sponsorships) {
         const registration = registrations.get(
           sponsorship.linkedRegistrationId!,

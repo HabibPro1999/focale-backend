@@ -205,9 +205,9 @@ const LINK_VARIABLE_IDS = new Set([
  * Button labels for link-type variables
  */
 const LINK_BUTTON_LABELS: Record<string, string> = {
-  registrationLink: "View Registration",
-  editRegistrationLink: "Edit Registration",
-  paymentLink: "Upload Payment Receipt",
+  registrationLink: "Voir l'inscription",
+  editRegistrationLink: "Modifier l'inscription",
+  paymentLink: "Envoyer le justificatif de paiement",
 };
 
 /**

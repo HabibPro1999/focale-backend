@@ -431,7 +431,11 @@ describe("searchRegistrantsForSponsorship", () => {
       lastName: "Doe",
       paymentStatus: "PENDING",
       totalAmount: 300,
+      sponsorshipAmount: 0,
       accessTypeIds: [],
+      phone: null,
+      formData: null,
+      sponsorshipUsages: [],
     };
 
     prismaMock.registration.findMany.mockResolvedValue([
@@ -516,7 +520,11 @@ describe("searchRegistrantsForSponsorship", () => {
       lastName: "Smith",
       paymentStatus: "PENDING",
       totalAmount: 400,
+      sponsorshipAmount: 0,
       accessTypeIds: [accessId],
+      phone: null,
+      formData: null,
+      sponsorshipUsages: [],
     };
 
     prismaMock.registration.findMany.mockResolvedValue([

@@ -1,5 +1,7 @@
 import { prisma } from "@/database/client.js";
 import { AppError, ErrorCodes } from "@shared/errors.js";
+import { compressImage } from "@shared/services/storage/compress.js";
+import { getStorageProvider } from "@shared/services/storage/index.js";
 import { clientExists } from "@clients";
 import {
   paginate,
@@ -421,4 +423,90 @@ export async function decrementRegisteredCountTx(
   if (result === 0) {
     throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
   }
+}
+
+/**
+ * Upload event banner image.
+ * Compresses to WebP and stores via configured storage provider.
+ */
+export async function uploadEventBanner(
+  eventId: string,
+  file: { buffer: Buffer; filename: string; mimetype: string },
+  performedBy: string,
+): Promise<{ bannerUrl: string }> {
+  const ALLOWED_MIME_TYPES = ["image/png", "image/jpeg", "image/webp"];
+
+  if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
+    throw new AppError(
+      "Invalid file type. Allowed: PNG, JPG, WebP",
+      400,
+      true,
+      ErrorCodes.INVALID_FILE_TYPE,
+    );
+  }
+
+  const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+  if (file.buffer.length > MAX_FILE_SIZE) {
+    throw new AppError(
+      "File too large. Maximum: 5MB",
+      400,
+      true,
+      ErrorCodes.FILE_TOO_LARGE,
+    );
+  }
+
+  const event = await prisma.event.findUnique({
+    where: { id: eventId },
+    select: { id: true, bannerUrl: true },
+  });
+
+  if (!event) {
+    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
+  }
+
+  const compressed = await compressImage(file.buffer);
+  const key = `events/${eventId}/banner.${compressed.ext}`;
+  const storage = getStorageProvider();
+
+  // Delete old banner if exists
+  if (event.bannerUrl) {
+    try {
+      const parsed = new URL(event.bannerUrl);
+      // Firebase: /bucket-name/path → strip bucket; R2/custom: /path → use as-is
+      const oldKey =
+        parsed.hostname === "storage.googleapis.com"
+          ? parsed.pathname.split("/").filter(Boolean).slice(1).join("/")
+          : parsed.pathname.slice(1);
+      if (oldKey) await storage.delete(oldKey);
+    } catch {
+      // Ignore delete errors for old banner
+    }
+  }
+
+  const bannerUrl = await storage.upload(
+    compressed.buffer,
+    key,
+    compressed.contentType,
+  );
+
+  await prisma.$transaction(async (tx) => {
+    await tx.event.update({
+      where: { id: eventId },
+      data: { bannerUrl },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        entityType: "Event",
+        entityId: eventId,
+        action: "UPDATE",
+        changes: {
+          bannerUrl: { old: event.bannerUrl, new: bannerUrl },
+        },
+        performedBy,
+      },
+    });
+  });
+
+  return { bannerUrl };
 }

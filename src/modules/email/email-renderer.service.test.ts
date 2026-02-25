@@ -198,7 +198,7 @@ describe("renderTemplateToMjml", () => {
       const result = renderTemplateToMjml(doc(node));
       expect(result).toContain("<mj-button");
       expect(result).toContain('href="{{registrationLink}}"');
-      expect(result).toContain("View Registration");
+      expect(result).toContain("Voir l'inscription");
     });
 
     it("renders standalone paymentLink mention as mj-button", () => {

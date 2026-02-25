@@ -68,6 +68,7 @@ model Event {
   endDate         DateTime    @map("end_date")
   location        String?
   status          EventStatus @default(CLOSED)
+  bannerUrl             String?  @map("banner_url")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -282,6 +283,9 @@ model Sponsorship {
   coveredAccessIds   String[]          @default([]) @map("covered_access_ids") // Array of EventAccess IDs
   totalAmount        Int               @map("total_amount") // Calculated: base (if covered) + sum(access prices)
 
+  // Pending linked account: registration waiting for admin approval
+  targetRegistrationId   String?           @map("target_registration_id")
+
   createdAt          DateTime          @default(now()) @map("created_at")
   updatedAt          DateTime          @updatedAt @map("updated_at")
 
@@ -295,6 +299,7 @@ model Sponsorship {
   @@index([code])
   @@index([status])
   @@index([beneficiaryEmail])
+  @@index([targetRegistrationId])
   @@map("sponsorships")
 }
 
