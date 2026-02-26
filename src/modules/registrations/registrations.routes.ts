@@ -243,9 +243,9 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
 
-      if (force && request.user!.role !== UserRole.SUPER_ADMIN) {
+      if (force && request.user!.role !== UserRole.CLIENT_ADMIN) {
         throw app.httpErrors.forbidden(
-          "Only super admins can force-delete registrations",
+          "Only client admins can force-delete registrations",
         );
       }
 
