@@ -82,6 +82,15 @@ export const ListRegistrationsQuerySchema = z
   })
   .strict();
 
+export const DeleteRegistrationQuerySchema = z
+  .object({
+    force: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((v) => v === "true"),
+  })
+  .strict();
+
 export const RegistrationIdParamSchema = z
   .object({
     id: z.string().uuid(),
@@ -222,6 +231,9 @@ export type UpdateRegistrationInput = z.infer<typeof UpdateRegistrationSchema>;
 export type UpdatePaymentInput = z.infer<typeof UpdatePaymentSchema>;
 export type ListRegistrationsQuery = z.infer<
   typeof ListRegistrationsQuerySchema
+>;
+export type DeleteRegistrationQuery = z.infer<
+  typeof DeleteRegistrationQuerySchema
 >;
 export type PriceBreakdown = z.infer<typeof PriceBreakdownSchema>;
 export type PublicEditRegistrationInput = z.infer<
