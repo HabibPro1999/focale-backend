@@ -369,25 +369,8 @@ export async function createSponsorshipBatch(
           linked.coveredAccessIds,
         );
 
-        // Use registrant's actual base price (after conditional pricing rules)
-        let totalAmount = 0;
-        if (linked.coversBasePrice) {
-          totalAmount += registration.baseAmount;
-        }
-        if (linked.coveredAccessIds.length > 0) {
-          const coveredItems = await tx.eventAccess.findMany({
-            where: {
-              id: { in: linked.coveredAccessIds },
-              eventId,
-              active: true,
-            },
-            select: { price: true },
-          });
-          totalAmount += coveredItems.reduce(
-            (sum: number, item: { price: number }) => sum + item.price,
-            0,
-          );
-        }
+        // Sponsor pays full event pricing, not the registrant's conditional price
+        const totalAmount = nominalAmount;
 
         if (autoApprove) {
           // Auto-approve: create USED sponsorship and immediately link to registration
