@@ -676,12 +676,13 @@ export async function confirmPayment(
 }
 
 /**
- * Delete a registration (only allowed for unpaid registrations).
- * For paid registrations, use refund flow instead.
+ * Delete a registration. Blocks deletion of PAID registrations unless force=true.
+ * Force-delete is logged in the audit trail with forceDelete flag.
  */
 export async function deleteRegistration(
   id: string,
   performedBy?: string,
+  force?: boolean,
 ): Promise<void> {
   const registration = await prisma.registration.findUnique({
     where: { id },
@@ -704,8 +705,8 @@ export async function deleteRegistration(
     );
   }
 
-  // Only allow deletion of unpaid registrations
-  if (registration.paymentStatus === "PAID") {
+  // Only allow deletion of unpaid registrations (unless force=true)
+  if (registration.paymentStatus === "PAID" && !force) {
     throw new AppError(
       "Cannot delete a paid registration. Use refund instead.",
       400,
@@ -726,6 +727,7 @@ export async function deleteRegistration(
           firstName: { old: registration.firstName, new: null },
           lastName: { old: registration.lastName, new: null },
           paymentStatus: { old: registration.paymentStatus, new: null },
+          ...(force ? { forceDelete: { old: null, new: true } } : {}),
         },
         performedBy: performedBy ?? null,
       },

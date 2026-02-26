@@ -28,14 +28,17 @@ import {
   ListRegistrationAuditLogsQuerySchema,
   ListRegistrationEmailLogsQuerySchema,
   SearchRegistrantsQuerySchema,
+  DeleteRegistrationQuerySchema,
   type UpdateRegistrationInput,
   type UpdatePaymentInput,
   type ListRegistrationsQuery,
   type ListRegistrationAuditLogsQuery,
   type ListRegistrationEmailLogsQuery,
   type SearchRegistrantsQuery,
+  type DeleteRegistrationQuery,
 } from "./registrations.schema.js";
 import type { AppInstance } from "@shared/types/fastify.js";
+import { UserRole } from "@identity";
 
 // ============================================================================
 // Protected Routes (Admin)
@@ -215,14 +218,21 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
     },
   );
 
-  // DELETE /api/registrations/:id - Delete registration (unpaid only)
-  app.delete<{ Params: { id: string } }>(
+  // DELETE /api/registrations/:id - Delete registration (force=true bypasses PAID guard)
+  app.delete<{
+    Params: { id: string };
+    Querystring: DeleteRegistrationQuery;
+  }>(
     "/registrations/:id",
     {
-      schema: { params: RegistrationIdParamSchema },
+      schema: {
+        params: RegistrationIdParamSchema,
+        querystring: DeleteRegistrationQuerySchema,
+      },
     },
     async (request, reply) => {
       const { id } = request.params;
+      const { force } = request.query;
 
       const clientId = await getRegistrationClientId(id);
       if (!clientId) {
@@ -233,7 +243,13 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
 
-      await deleteRegistration(id, request.user!.id);
+      if (force && request.user!.role !== UserRole.SUPER_ADMIN) {
+        throw app.httpErrors.forbidden(
+          "Only super admins can force-delete registrations",
+        );
+      }
+
+      await deleteRegistration(id, request.user!.id, force);
       return reply.status(204).send();
     },
   );
