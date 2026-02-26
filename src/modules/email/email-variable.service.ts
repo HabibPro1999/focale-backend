@@ -909,7 +909,7 @@ export function buildLinkedSponsorshipContext(
 
     // Sponsorship info
     sponsorshipCode: sponsorship.code,
-    sponsorshipAmount: formatCurrency(sponsorship.totalAmount, currency),
+    sponsorshipAmount: formatCurrency(registration.sponsorshipAmount, currency),
     labName: sponsorship.batch.labName,
     labContactName: sponsorship.batch.contactName,
     labEmail: sponsorship.batch.email,
