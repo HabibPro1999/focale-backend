@@ -14,6 +14,7 @@ export const AutomaticEmailTriggerSchema = z.enum([
   "SPONSORSHIP_BATCH_SUBMITTED",
   "SPONSORSHIP_LINKED",
   "SPONSORSHIP_APPLIED",
+  "SPONSORSHIP_PARTIAL",
 ]);
 
 export const EmailStatusSchema = z.enum([

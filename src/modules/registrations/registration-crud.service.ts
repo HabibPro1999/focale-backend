@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors.js";
 import { ErrorCodes } from "@shared/errors.js";
+import { UserRole } from "@shared/constants.js";
 import { logger } from "@shared/utils/logger.js";
 import {
   paginate,
@@ -708,12 +709,14 @@ export async function updateRegistration(
 }
 
 /**
- * Delete a registration (only allowed for unpaid registrations).
- * For paid registrations, use refund flow instead.
+ * Delete a registration.
+ * Unpaid registrations can be deleted by any authorized user.
+ * Paid/waived/verifying registrations require force=true (CLIENT_ADMIN only).
  */
 export async function deleteRegistration(
   id: string,
   performedBy?: string,
+  options?: { force?: boolean; callerRole?: number },
 ): Promise<void> {
   const registration = await prisma.registration.findUnique({
     where: { id },
@@ -735,14 +738,28 @@ export async function deleteRegistration(
       ErrorCodes.REGISTRATION_NOT_FOUND,
     );
 
-  // Only allow deletion of unpaid registrations
   const blockedStatuses = ["PAID", "WAIVED", "VERIFYING"];
-  if (blockedStatuses.includes(registration.paymentStatus)) {
+  const isBlocked = blockedStatuses.includes(registration.paymentStatus);
+
+  if (isBlocked && !options?.force) {
     throw new AppError(
-      `Cannot delete a ${registration.paymentStatus.toLowerCase()} registration.`,
+      `Cannot delete a ${registration.paymentStatus.toLowerCase()} registration. Use force=true with client_admin role.`,
       400,
       true,
       ErrorCodes.REGISTRATION_DELETE_BLOCKED,
+    );
+  }
+
+  if (
+    isBlocked &&
+    options?.force &&
+    options.callerRole !== UserRole.CLIENT_ADMIN
+  ) {
+    throw new AppError(
+      "Only client admins can force-delete registrations",
+      403,
+      true,
+      ErrorCodes.FORBIDDEN,
     );
   }
 
@@ -758,6 +775,7 @@ export async function deleteRegistration(
           firstName: { old: registration.firstName, new: null },
           lastName: { old: registration.lastName, new: null },
           paymentStatus: { old: registration.paymentStatus, new: null },
+          ...(options?.force ? { forceDelete: { old: null, new: true } } : {}),
         },
         performedBy: performedBy ?? null,
       },

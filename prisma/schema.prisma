@@ -282,6 +282,7 @@ model Sponsorship {
   coversBasePrice    Boolean           @default(true) @map("covers_base_price")
   coveredAccessIds   String[]          @default([]) @map("covered_access_ids") // Array of EventAccess IDs
   totalAmount        Int               @map("total_amount") // Calculated: base (if covered) + sum(access prices)
+  nominalAmount      Int?              @map("nominal_amount") // Static base price calc (what lab intended)
 
   // Pending linked account: registration waiting for admin approval
   targetRegistrationId   String?           @map("target_registration_id")
@@ -437,6 +438,7 @@ enum AutomaticEmailTrigger {
   SPONSORSHIP_BATCH_SUBMITTED // When lab submits sponsorship batch (sent to lab)
   SPONSORSHIP_LINKED // When sponsorship auto-linked to registration (LINKED_ACCOUNT mode, sent to doctor)
   SPONSORSHIP_APPLIED // When admin manually applies sponsorship code (CODE mode, sent to doctor)
+  SPONSORSHIP_PARTIAL // Partial sponsorship notification to doctor
 }
 
 enum EmailStatus {

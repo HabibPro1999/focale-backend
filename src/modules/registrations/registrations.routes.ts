@@ -30,6 +30,7 @@ import { ErrorCodes } from "@shared/errors.js";
 import {
   PaymentStatusSchema,
   PaymentMethodSchema,
+  DeleteRegistrationQuerySchema,
 } from "./registrations.schema.js";
 import type {
   UpdateRegistrationInput,
@@ -39,6 +40,7 @@ import type {
   ListRegistrationAuditLogsQuery,
   ListRegistrationEmailLogsQuery,
   SearchRegistrantsQuery,
+  DeleteRegistrationQuery,
 } from "./registrations.schema.js";
 import type { AppInstance } from "@shared/fastify.js";
 import type { RegistrationWithRelations } from "./registration-crud.service.js";
@@ -340,14 +342,21 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
     },
   );
 
-  // DELETE /api/registrations/:id - Delete registration (unpaid only)
-  app.delete<{ Params: { id: string } }>(
+  // DELETE /api/registrations/:id - Delete registration (force=true bypasses PAID guard)
+  app.delete<{
+    Params: { id: string };
+    Querystring: DeleteRegistrationQuery;
+  }>(
     "/registrations/:id",
     {
-      schema: { params: IdParamSchema },
+      schema: {
+        params: IdParamSchema,
+        querystring: DeleteRegistrationQuerySchema,
+      },
     },
     async (request, reply) => {
       const { id } = request.params;
+      const { force } = request.query;
 
       const existing = await getRegistrationById(id);
       if (!existing) {
@@ -368,7 +377,10 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
         );
       }
 
-      await deleteRegistration(id, request.user!.id);
+      await deleteRegistration(id, request.user!.id, {
+        force,
+        callerRole: request.user!.role,
+      });
       return reply.status(204).send();
     },
   );

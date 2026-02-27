@@ -96,6 +96,23 @@ export const RegistrationColumnsResponseSchema = z.object({
 });
 
 // ============================================================================
+// Delete Registration Query Schema
+// ============================================================================
+
+export const DeleteRegistrationQuerySchema = z
+  .object({
+    force: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((v) => v === "true"),
+  })
+  .strict();
+
+export type DeleteRegistrationQuery = z.infer<
+  typeof DeleteRegistrationQuerySchema
+>;
+
+// ============================================================================
 // Types
 // ============================================================================
 

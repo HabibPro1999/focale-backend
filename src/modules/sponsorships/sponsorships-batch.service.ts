@@ -27,6 +27,7 @@ type CreateSponsorshipBatchInput = {
 import type { Prisma, Sponsorship } from "@/generated/prisma/client.js";
 import {
   queueSponsorshipEmail,
+  queueTriggeredEmail,
   buildBatchEmailContext,
   buildLinkedSponsorshipContext,
 } from "@email";
@@ -346,6 +347,7 @@ export async function createSponsorshipBatch(
               coversBasePrice: linked.coversBasePrice,
               coveredAccessIds: linked.coveredAccessIds,
               totalAmount,
+              nominalAmount: totalAmount,
               targetRegistrationId: linked.registrationId,
             },
           });
@@ -457,6 +459,7 @@ export async function createSponsorshipBatch(
             coversBasePrice: linked.coversBasePrice,
             coveredAccessIds: linked.coveredAccessIds,
             totalAmount,
+            nominalAmount: totalAmount,
           },
         });
 
@@ -516,6 +519,7 @@ export async function createSponsorshipBatch(
             coversBasePrice: beneficiary.coversBasePrice,
             coveredAccessIds: beneficiary.coveredAccessIds,
             totalAmount,
+            nominalAmount: totalAmount,
           },
         });
 
@@ -553,7 +557,48 @@ export async function createSponsorshipBatch(
     };
   });
 
-  // Queue emails (outside transaction for reliability)
+  // Resolve payment status for fully-sponsored registrations (must not fail silently)
+  type SponsorshipCoverage = {
+    registration: typeof registrations extends Map<string, infer V> ? V : never;
+    sponsorship: (typeof result.sponsorships)[number];
+    updatedAmount: number;
+    status: "full" | "partial";
+  };
+  const coverageResults: SponsorshipCoverage[] = [];
+
+  if (isLinkedMode && result.autoApprove) {
+    for (const sponsorship of result.sponsorships) {
+      const registration = registrations.get(
+        sponsorship.linkedRegistrationId!,
+      )!;
+
+      const updatedAmount =
+        result.registrationSponsorshipAmounts.get(registration.id) ??
+        registration.sponsorshipAmount;
+
+      if (updatedAmount >= registration.totalAmount) {
+        await prisma.registration.update({
+          where: { id: registration.id },
+          data: { paymentStatus: "PAID", paidAt: new Date() },
+        });
+        coverageResults.push({
+          registration,
+          sponsorship,
+          updatedAmount,
+          status: "full",
+        });
+      } else if (updatedAmount > 0) {
+        coverageResults.push({
+          registration,
+          sponsorship,
+          updatedAmount,
+          status: "partial",
+        });
+      }
+    }
+  }
+
+  // Queue emails (fire-and-forget — failures logged, never block response)
   try {
     // 1. Always send batch confirmation to lab
     const batchContext = buildBatchEmailContext({
@@ -588,14 +633,13 @@ export async function createSponsorshipBatch(
       );
     }
 
-    // 2. For LINKED_ACCOUNT mode with auto-approve: Send notification to each doctor
+    // 2. For LINKED_ACCOUNT mode with auto-approve: notify each doctor
     if (isLinkedMode && result.autoApprove) {
       for (const sponsorship of result.sponsorships) {
         const registration = registrations.get(
           sponsorship.linkedRegistrationId!,
         )!;
 
-        // Get updated sponsorshipAmount from transaction result
         const updatedSponsorshipAmount =
           result.registrationSponsorshipAmounts.get(registration.id) ??
           registration.sponsorshipAmount;
@@ -650,6 +694,29 @@ export async function createSponsorshipBatch(
             },
             "No email template configured - doctor will not receive sponsorship notification",
           );
+        }
+
+        // Coverage-dependent emails
+        const coverage = coverageResults.find(
+          (c) =>
+            c.registration.id === registration.id &&
+            c.sponsorship.id === sponsorship.id,
+        );
+        if (coverage?.status === "full") {
+          await queueTriggeredEmail("PAYMENT_CONFIRMED", eventId, {
+            id: registration.id,
+            email: registration.email,
+            firstName: registration.firstName,
+            lastName: registration.lastName,
+          });
+        } else if (coverage?.status === "partial") {
+          await queueSponsorshipEmail("SPONSORSHIP_PARTIAL", eventId, {
+            recipientEmail: registration.email,
+            recipientName:
+              registration.firstName || sponsorship.beneficiaryName,
+            context,
+            registrationId: registration.id,
+          });
         }
       }
     }
