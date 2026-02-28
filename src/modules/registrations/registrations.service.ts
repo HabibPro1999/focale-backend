@@ -1871,7 +1871,7 @@ export async function searchRegistrantsForSponsorship(
       lastName: r.lastName,
       paymentStatus: r.paymentStatus as RegistrantSearchResult["paymentStatus"],
       totalAmount: r.totalAmount,
-      originalAmount: r.baseAmount + r.accessAmount,
+      baseAmount: r.baseAmount,
       sponsorshipAmount: r.sponsorshipAmount,
       accessTypeIds: r.accessTypeIds,
       coveredAccessIds,

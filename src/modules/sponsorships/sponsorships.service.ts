@@ -9,7 +9,6 @@ import {
 import { logger } from "@shared/utils/logger.js";
 import {
   generateUniqueCode,
-  calculateSponsorshipTotal,
   calculateApplicableAmount,
   detectCoverageOverlap,
   validateCoveredAccessTimeOverlap,
@@ -361,14 +360,6 @@ export async function createSponsorshipBatch(
         // Generate unique code
         const code = await generateUniqueCode(tx);
 
-        // Nominal amount: what the lab intended based on static pricing
-        const nominalAmount = await calculateSponsorshipTotal(
-          tx,
-          eventId,
-          linked.coversBasePrice,
-          linked.coveredAccessIds,
-        );
-
         // Use registrant's actual base price (after conditional pricing rules)
         let totalAmount = 0;
         if (linked.coversBasePrice) {
@@ -404,7 +395,6 @@ export async function createSponsorshipBatch(
               coversBasePrice: linked.coversBasePrice,
               coveredAccessIds: linked.coveredAccessIds,
               totalAmount,
-              nominalAmount,
             },
           });
 
@@ -463,7 +453,6 @@ export async function createSponsorshipBatch(
               coversBasePrice: linked.coversBasePrice,
               coveredAccessIds: linked.coveredAccessIds,
               totalAmount,
-              nominalAmount,
               targetRegistrationId: linked.registrationId,
             },
           });
@@ -482,12 +471,28 @@ export async function createSponsorshipBatch(
         const code = await generateUniqueCode(tx);
 
         // Calculate total amount
-        const totalAmount = await calculateSponsorshipTotal(
-          tx,
-          eventId,
-          beneficiary.coversBasePrice,
-          beneficiary.coveredAccessIds,
-        );
+        let totalAmount = 0;
+        if (beneficiary.coversBasePrice) {
+          const pricing = await tx.eventPricing.findUnique({
+            where: { eventId },
+            select: { basePrice: true },
+          });
+          totalAmount += pricing?.basePrice ?? 0;
+        }
+        if (beneficiary.coveredAccessIds.length > 0) {
+          const accessItems = await tx.eventAccess.findMany({
+            where: {
+              id: { in: beneficiary.coveredAccessIds },
+              eventId,
+              active: true,
+            },
+            select: { price: true },
+          });
+          totalAmount += accessItems.reduce(
+            (sum: number, item: { price: number }) => sum + item.price,
+            0,
+          );
+        }
 
         const sponsorship = await tx.sponsorship.create({
           data: {
@@ -502,7 +507,6 @@ export async function createSponsorshipBatch(
             coversBasePrice: beneficiary.coversBasePrice,
             coveredAccessIds: beneficiary.coveredAccessIds,
             totalAmount,
-            nominalAmount: totalAmount,
           },
         });
 
@@ -929,12 +933,28 @@ export async function updateSponsorship(
     input.coversBasePrice !== undefined ||
     input.coveredAccessIds !== undefined
   ) {
-    const totalAmount = await calculateSponsorshipTotal(
-      prisma,
-      sponsorship.eventId,
-      coversBasePrice,
-      coveredAccessIds,
-    );
+    let totalAmount = 0;
+    if (coversBasePrice) {
+      const pricing = await prisma.eventPricing.findUnique({
+        where: { eventId: sponsorship.eventId },
+        select: { basePrice: true },
+      });
+      totalAmount += pricing?.basePrice ?? 0;
+    }
+    if (coveredAccessIds.length > 0) {
+      const accessItems = await prisma.eventAccess.findMany({
+        where: {
+          id: { in: coveredAccessIds },
+          eventId: sponsorship.eventId,
+          active: true,
+        },
+        select: { price: true },
+      });
+      totalAmount += accessItems.reduce(
+        (sum: number, item: { price: number }) => sum + item.price,
+        0,
+      );
+    }
     updateData.totalAmount = totalAmount;
   }
 

@@ -13,18 +13,6 @@ interface PrismaLike {
       select: { id: true };
     }) => Promise<{ id: string } | null>;
   };
-  eventPricing: {
-    findUnique: (args: {
-      where: { eventId: string };
-      select: { basePrice: true };
-    }) => Promise<{ basePrice: number } | null>;
-  };
-  eventAccess: {
-    findMany: (args: {
-      where: { id: { in: string[] }; eventId: string; active: boolean };
-      select: { price: true };
-    }) => Promise<Array<{ price: number }>>;
-  };
 }
 
 // ============================================================================
@@ -72,47 +60,6 @@ export async function generateUniqueCode(
   throw new Error(
     "Failed to generate unique sponsorship code after maximum attempts",
   );
-}
-
-// ============================================================================
-// Price Calculation
-// ============================================================================
-
-/**
- * Calculate the total sponsorship amount based on coverage.
- * Sums base price (if covered) and prices of covered access items.
- */
-export async function calculateSponsorshipTotal(
-  db: PrismaLike,
-  eventId: string,
-  coversBasePrice: boolean,
-  coveredAccessIds: string[],
-): Promise<number> {
-  let total = 0;
-
-  // Get base price if covered
-  if (coversBasePrice) {
-    const pricing = await db.eventPricing.findUnique({
-      where: { eventId },
-      select: { basePrice: true },
-    });
-    total += pricing?.basePrice ?? 0;
-  }
-
-  // Get access prices
-  if (coveredAccessIds.length > 0) {
-    const accessItems = await db.eventAccess.findMany({
-      where: {
-        id: { in: coveredAccessIds },
-        eventId,
-        active: true,
-      },
-      select: { price: true },
-    });
-    total += accessItems.reduce((sum, item) => sum + item.price, 0);
-  }
-
-  return total;
 }
 
 // ============================================================================
