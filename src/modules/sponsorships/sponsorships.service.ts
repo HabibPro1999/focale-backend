@@ -349,7 +349,11 @@ export async function createSponsorshipBatch(
 
     // Create sponsorships
     const createdSponsorships: Array<
-      Sponsorship & { linkedRegistrationId?: string; autoApproved?: boolean }
+      Sponsorship & {
+        linkedRegistrationId?: string;
+        autoApproved?: boolean;
+        applicableAmount?: number;
+      }
     > = [];
 
     if (isLinkedMode) {
@@ -437,6 +441,7 @@ export async function createSponsorshipBatch(
             ...sponsorship,
             linkedRegistrationId: linked.registrationId,
             autoApproved: true,
+            applicableAmount,
           });
         } else {
           // Pending approval: create PENDING sponsorship with targetRegistrationId
@@ -583,6 +588,7 @@ export async function createSponsorshipBatch(
         });
 
         const context = buildLinkedSponsorshipContext({
+          amountApplied: sponsorship.applicableAmount!,
           sponsorship: {
             code: sponsorship.code,
             beneficiaryName: sponsorship.beneficiaryName,
@@ -1322,6 +1328,7 @@ export async function linkSponsorshipToRegistration(
     if (sponsorshipWithBatch && registrationDetails && event) {
       const currency = pricing?.currency ?? "TND";
       const context = buildLinkedSponsorshipContext({
+        amountApplied: result.usage.amountApplied,
         sponsorship: {
           code: sponsorshipWithBatch.code,
           beneficiaryName: sponsorshipWithBatch.beneficiaryName,

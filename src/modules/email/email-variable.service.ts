@@ -720,6 +720,7 @@ export interface BatchEmailContextInput {
 }
 
 export interface LinkedSponsorshipContextInput {
+  amountApplied: number;
   sponsorship: {
     code: string;
     beneficiaryName: string;
@@ -909,7 +910,7 @@ export function buildLinkedSponsorshipContext(
 
     // Sponsorship info
     sponsorshipCode: sponsorship.code,
-    sponsorshipAmount: formatCurrency(registration.sponsorshipAmount, currency),
+    sponsorshipAmount: formatCurrency(input.amountApplied, currency),
     labName: sponsorship.batch.labName,
     labContactName: sponsorship.batch.contactName,
     labEmail: sponsorship.batch.email,
