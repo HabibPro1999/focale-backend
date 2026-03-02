@@ -1,12 +1,12 @@
-import { z, type ZodTypeAny } from 'zod';
-import safeRegex from 'safe-regex';
+import { z, type ZodTypeAny } from "zod";
+import safeRegex from "safe-regex";
 import type {
   FormField,
   FormStep,
   FieldCondition,
   FieldValidation,
-} from '@forms';
-import { logger } from '@shared/utils/logger.js';
+} from "@forms";
+import { logger } from "@shared/utils/logger.js";
 
 // ============================================================================
 // Types
@@ -78,7 +78,7 @@ function isSafePattern(pattern: string): boolean {
 function evaluateSingleCondition(
   condition: FieldCondition,
   formData: Record<string, unknown>,
-  allFields: FormField[]
+  allFields: FormField[],
 ): boolean {
   // Find target field by ID
   const targetField = allFields.find((f) => f.id === condition.fieldId);
@@ -87,29 +87,39 @@ function evaluateSingleCondition(
   const value = formData[condition.fieldId];
 
   switch (condition.operator) {
-    case 'equals':
+    case "equals":
       return value === condition.value;
 
-    case 'not_equals':
+    case "not_equals":
       return value !== condition.value;
 
-    case 'contains':
-      return typeof value === 'string' && value.includes(String(condition.value ?? ''));
+    case "contains":
+      return (
+        typeof value === "string" &&
+        value.includes(String(condition.value ?? ""))
+      );
 
-    case 'not_contains':
-      return typeof value === 'string' && !value.includes(String(condition.value ?? ''));
+    case "not_contains":
+      return (
+        typeof value === "string" &&
+        !value.includes(String(condition.value ?? ""))
+      );
 
-    case 'greater_than':
-      return typeof value === 'number' && value > Number(condition.value);
+    case "greater_than":
+      return typeof value === "number" && value > Number(condition.value);
 
-    case 'less_than':
-      return typeof value === 'number' && value < Number(condition.value);
+    case "less_than":
+      return typeof value === "number" && value < Number(condition.value);
 
-    case 'is_empty':
-      return !value || value === '' || (Array.isArray(value) && value.length === 0);
+    case "is_empty":
+      return (
+        !value || value === "" || (Array.isArray(value) && value.length === 0)
+      );
 
-    case 'is_not_empty':
-      return !!value && value !== '' && !(Array.isArray(value) && value.length === 0);
+    case "is_not_empty":
+      return (
+        !!value && value !== "" && !(Array.isArray(value) && value.length === 0)
+      );
 
     default:
       return true;
@@ -123,7 +133,7 @@ function evaluateSingleCondition(
 export function shouldValidateField(
   field: FormField,
   formData: Record<string, unknown>,
-  allFields: FormField[]
+  allFields: FormField[],
 ): boolean {
   if (!field.conditions || field.conditions.length === 0) {
     return true; // No conditions, always validate
@@ -131,7 +141,7 @@ export function shouldValidateField(
 
   // Default logic is AND - all conditions must be met for field to be visible
   const conditionsMet = field.conditions.every((c) =>
-    evaluateSingleCondition(c, formData, allFields)
+    evaluateSingleCondition(c, formData, allFields),
   );
 
   return conditionsMet;
@@ -141,20 +151,23 @@ export function shouldValidateField(
 // Field Schema Builders
 // ============================================================================
 
-function buildTextSchema(field: FormField, validation?: FieldValidation): ZodTypeAny {
+function buildTextSchema(
+  field: FormField,
+  validation?: FieldValidation,
+): ZodTypeAny {
   let schema = z.string();
   const label = getFieldLabel(field);
 
   if (validation?.minLength) {
     schema = schema.min(
       validation.minLength,
-      `${label} must be at least ${validation.minLength} characters`
+      `${label} must be at least ${validation.minLength} characters`,
     );
   }
   if (validation?.maxLength) {
     schema = schema.max(
       validation.maxLength,
-      `${label} must be at most ${validation.maxLength} characters`
+      `${label} must be at most ${validation.maxLength} characters`,
     );
   }
   if (validation?.pattern) {
@@ -164,7 +177,7 @@ function buildTextSchema(field: FormField, validation?: FieldValidation): ZodTyp
     } else {
       logger.warn(
         { fieldId: field.id, pattern: validation.pattern },
-        'Skipping unsafe or invalid regex pattern (ReDoS protection)'
+        "Skipping unsafe or invalid regex pattern (ReDoS protection)",
       );
     }
   }
@@ -172,10 +185,13 @@ function buildTextSchema(field: FormField, validation?: FieldValidation): ZodTyp
   if (validation?.required) {
     return schema.min(1, `${label} is required`);
   }
-  return schema.optional().or(z.literal(''));
+  return schema.optional().or(z.literal(""));
 }
 
-function buildEmailSchema(field: FormField, validation?: FieldValidation): ZodTypeAny {
+function buildEmailSchema(
+  field: FormField,
+  validation?: FieldValidation,
+): ZodTypeAny {
   const label = getFieldLabel(field);
   let schema = z.string().email(`${label} must be a valid email address`);
 
@@ -189,10 +205,13 @@ function buildEmailSchema(field: FormField, validation?: FieldValidation): ZodTy
   if (validation?.required) {
     return schema;
   }
-  return schema.optional().or(z.literal(''));
+  return schema.optional().or(z.literal(""));
 }
 
-function buildPhoneSchema(field: FormField, validation?: FieldValidation): ZodTypeAny {
+function buildPhoneSchema(
+  field: FormField,
+  validation?: FieldValidation,
+): ZodTypeAny {
   let schema = z.string();
   const label = getFieldLabel(field);
 
@@ -210,7 +229,7 @@ function buildPhoneSchema(field: FormField, validation?: FieldValidation): ZodTy
     } else {
       logger.warn(
         { fieldId: field.id, pattern: validation.pattern },
-        'Skipping unsafe or invalid regex pattern (ReDoS protection)'
+        "Skipping unsafe or invalid regex pattern (ReDoS protection)",
       );
     }
   }
@@ -218,18 +237,27 @@ function buildPhoneSchema(field: FormField, validation?: FieldValidation): ZodTy
   if (validation?.required) {
     return schema;
   }
-  return schema.optional().or(z.literal(''));
+  return schema.optional().or(z.literal(""));
 }
 
-function buildNumberSchema(field: FormField, validation?: FieldValidation): ZodTypeAny {
+function buildNumberSchema(
+  field: FormField,
+  validation?: FieldValidation,
+): ZodTypeAny {
   let schema = z.coerce.number();
   const label = getFieldLabel(field);
 
   if (validation?.min !== undefined) {
-    schema = schema.min(validation.min, `${label} must be at least ${validation.min}`);
+    schema = schema.min(
+      validation.min,
+      `${label} must be at least ${validation.min}`,
+    );
   }
   if (validation?.max !== undefined) {
-    schema = schema.max(validation.max, `${label} must be at most ${validation.max}`);
+    schema = schema.max(
+      validation.max,
+      `${label} must be at most ${validation.max}`,
+    );
   }
 
   if (validation?.required) {
@@ -238,17 +266,23 @@ function buildNumberSchema(field: FormField, validation?: FieldValidation): ZodT
   return schema.optional().nullable();
 }
 
-function buildDateSchema(field: FormField, validation?: FieldValidation): ZodTypeAny {
+function buildDateSchema(
+  field: FormField,
+  validation?: FieldValidation,
+): ZodTypeAny {
   const schema = z.string();
   const label = getFieldLabel(field);
 
   if (validation?.required) {
     return schema.min(1, `${label} is required`);
   }
-  return schema.optional().or(z.literal(''));
+  return schema.optional().or(z.literal(""));
 }
 
-function buildDropdownSchema(field: FormField, validation?: FieldValidation): ZodTypeAny {
+function buildDropdownSchema(
+  field: FormField,
+  validation?: FieldValidation,
+): ZodTypeAny {
   const label = getFieldLabel(field);
   const validValues = field.options?.map((o) => o.id) ?? [];
 
@@ -259,7 +293,7 @@ function buildDropdownSchema(field: FormField, validation?: FieldValidation): Zo
     if (validation?.required) {
       return schema;
     }
-    return schema.optional().or(z.literal(''));
+    return schema.optional().or(z.literal(""));
   }
 
   // No options defined, accept any string
@@ -267,15 +301,21 @@ function buildDropdownSchema(field: FormField, validation?: FieldValidation): Zo
   if (validation?.required) {
     return schema.min(1, `${label} is required`);
   }
-  return schema.optional().or(z.literal(''));
+  return schema.optional().or(z.literal(""));
 }
 
-function buildRadioSchema(field: FormField, validation?: FieldValidation): ZodTypeAny {
+function buildRadioSchema(
+  field: FormField,
+  validation?: FieldValidation,
+): ZodTypeAny {
   // Radio behaves like dropdown - single selection
   return buildDropdownSchema(field, validation);
 }
 
-function buildCheckboxSchema(field: FormField, validation?: FieldValidation): ZodTypeAny {
+function buildCheckboxSchema(
+  field: FormField,
+  validation?: FieldValidation,
+): ZodTypeAny {
   const label = getFieldLabel(field);
   const validValues = field.options?.map((o) => o.id) ?? [];
 
@@ -285,7 +325,7 @@ function buildCheckboxSchema(field: FormField, validation?: FieldValidation): Zo
     schema = z.array(
       z.enum(validValues as [string, ...string[]], {
         message: `Invalid option selected for ${label}`,
-      })
+      }),
     );
   } else {
     schema = z.array(z.string());
@@ -294,13 +334,16 @@ function buildCheckboxSchema(field: FormField, validation?: FieldValidation): Zo
   if (validation?.required) {
     return (schema as ReturnType<typeof z.array>).min(
       1,
-      `${label} requires at least one selection`
+      `${label} requires at least one selection`,
     );
   }
   return schema.optional().default([]);
 }
 
-function buildFileSchema(field: FormField, validation?: FieldValidation): ZodTypeAny {
+function buildFileSchema(
+  field: FormField,
+  validation?: FieldValidation,
+): ZodTypeAny {
   const label = getFieldLabel(field);
 
   // File metadata schema: { name, size, type, url? }
@@ -322,25 +365,28 @@ function buildFileSchema(field: FormField, validation?: FieldValidation): ZodTyp
         message: validation?.maxFileSize
           ? `${label} exceeds maximum size of ${formatFileSize(validation.maxFileSize)}`
           : `${label} exceeds maximum file size`,
-      }
+      },
     )
     .refine(
       (file) => {
         if (validation?.fileTypes && validation.fileTypes.length > 0) {
-          const fileExtension = file.name.split('.').pop()?.toLowerCase();
+          const fileExtension = file.name.split(".").pop()?.toLowerCase();
           const mimeType = file.type.toLowerCase();
           return validation.fileTypes.some((allowed) => {
-            const normalizedAllowed = allowed.toLowerCase().replace('.', '');
-            return mimeType.includes(normalizedAllowed) || fileExtension === normalizedAllowed;
+            const normalizedAllowed = allowed.toLowerCase().replace(".", "");
+            return (
+              mimeType.includes(normalizedAllowed) ||
+              fileExtension === normalizedAllowed
+            );
           });
         }
         return true;
       },
       {
         message: validation?.fileTypes
-          ? `${label} must be one of: ${validation.fileTypes.join(', ')}`
+          ? `${label} must be one of: ${validation.fileTypes.join(", ")}`
           : `${label} has invalid file type`,
-      }
+      },
     );
 
   if (validation?.required) {
@@ -361,36 +407,36 @@ function buildFieldSchema(field: FormField): ZodTypeAny | null {
   const validation = field.validation;
 
   switch (field.type) {
-    case 'text':
-    case 'textarea':
+    case "text":
+    case "textarea":
       return buildTextSchema(field, validation);
 
-    case 'email':
+    case "email":
       return buildEmailSchema(field, validation);
 
-    case 'phone':
+    case "phone":
       return buildPhoneSchema(field, validation);
 
-    case 'number':
+    case "number":
       return buildNumberSchema(field, validation);
 
-    case 'date':
+    case "date":
       return buildDateSchema(field, validation);
 
-    case 'dropdown':
+    case "dropdown":
       return buildDropdownSchema(field, validation);
 
-    case 'radio':
+    case "radio":
       return buildRadioSchema(field, validation);
 
-    case 'checkbox':
+    case "checkbox":
       return buildCheckboxSchema(field, validation);
 
-    case 'file':
+    case "file":
       return buildFileSchema(field, validation);
 
-    case 'heading':
-    case 'paragraph':
+    case "heading":
+    case "paragraph":
       // Display-only fields, no validation needed
       return null;
 
@@ -405,10 +451,12 @@ function buildFieldSchema(field: FormField): ZodTypeAny | null {
  * The validator respects conditional field visibility.
  */
 export function buildFormDataValidator(
-  formSchema: FormSchema
+  formSchema: FormSchema,
 ): (formData: Record<string, unknown>) => FormDataValidationResult {
   // Flatten all fields from all steps
-  const allFields: FormField[] = formSchema.steps.flatMap((step) => step.fields);
+  const allFields: FormField[] = formSchema.steps.flatMap(
+    (step) => step.fields,
+  );
 
   return (formData: Record<string, unknown>): FormDataValidationResult => {
     const errors: FormDataFieldError[] = [];
@@ -416,7 +464,7 @@ export function buildFormDataValidator(
 
     for (const field of allFields) {
       // Skip display-only fields
-      if (field.type === 'heading' || field.type === 'paragraph') {
+      if (field.type === "heading" || field.type === "paragraph") {
         continue;
       }
 
@@ -460,8 +508,32 @@ export function buildFormDataValidator(
  */
 export function validateFormData(
   formSchema: FormSchema,
-  formData: Record<string, unknown>
+  formData: Record<string, unknown>,
 ): FormDataValidationResult {
   const validator = buildFormDataValidator(formSchema);
   return validator(formData);
+}
+
+/**
+ * Filter formData to only keep keys that are known field IDs in the form schema.
+ * Preserves hidden/conditional field values (unlike validationResult.data which strips them).
+ * Removes any injected/unknown keys.
+ */
+export function sanitizeFormData(
+  formSchema: FormSchema,
+  formData: Record<string, unknown>,
+): Record<string, unknown> {
+  const knownIds = new Set<string>();
+  for (const step of formSchema.steps) {
+    for (const field of step.fields ?? []) {
+      knownIds.add(field.id);
+    }
+  }
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(formData)) {
+    if (knownIds.has(key)) {
+      sanitized[key] = value;
+    }
+  }
+  return sanitized;
 }

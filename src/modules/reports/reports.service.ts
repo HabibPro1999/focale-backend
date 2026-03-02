@@ -2,10 +2,10 @@
 // Reports Module - Service
 // ============================================================================
 
-import { prisma } from '@/database/client.js';
-import { Prisma } from '@/generated/prisma/client.js';
-import { AppError } from '@shared/errors/app-error.js';
-import { ErrorCodes } from '@shared/errors/error-codes.js';
+import { prisma } from "@/database/client.js";
+import { Prisma } from "@/generated/prisma/client.js";
+import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
 import type {
   ReportQuery,
   FinancialReportResponse,
@@ -15,7 +15,7 @@ import type {
   AccessBreakdownItem,
   DailyTrendItem,
   ExportQuery,
-} from './reports.schema.js';
+} from "./reports.schema.js";
 
 // ============================================================================
 // Financial Report
@@ -35,7 +35,7 @@ function buildDateFilter(query: ReportQuery): DateRange {
 
 export async function getFinancialReport(
   eventId: string,
-  query: ReportQuery
+  query: ReportQuery,
 ): Promise<FinancialReportResponse> {
   // Verify event exists
   const event = await prisma.event.findUnique({
@@ -44,7 +44,7 @@ export async function getFinancialReport(
   });
 
   if (!event) {
-    throw new AppError('Event not found', 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
   }
 
   const dateRange = buildDateFilter(query);
@@ -53,7 +53,10 @@ export async function getFinancialReport(
   const dateWhere = {
     ...(dateRange.startDate && { submittedAt: { gte: dateRange.startDate } }),
     ...(dateRange.endDate && {
-      submittedAt: { ...(dateRange.startDate ? { gte: dateRange.startDate } : {}), lte: dateRange.endDate },
+      submittedAt: {
+        ...(dateRange.startDate ? { gte: dateRange.startDate } : {}),
+        lte: dateRange.endDate,
+      },
     }),
   };
 
@@ -63,12 +66,13 @@ export async function getFinancialReport(
   };
 
   // Run all aggregation queries in parallel
-  const [summary, byPaymentStatus, byAccessType, dailyTrend] = await Promise.all([
-    getFinancialSummary(eventId, baseWhere),
-    getPaymentStatusBreakdown(eventId, baseWhere),
-    getAccessBreakdown(eventId, dateRange),
-    getDailyTrend(eventId, dateRange),
-  ]);
+  const [summary, byPaymentStatus, byAccessType, dailyTrend] =
+    await Promise.all([
+      getFinancialSummary(eventId, baseWhere),
+      getPaymentStatusBreakdown(eventId, baseWhere),
+      getAccessBreakdown(eventId, dateRange),
+      getDailyTrend(eventId, dateRange),
+    ]);
 
   return {
     eventId,
@@ -90,11 +94,11 @@ export async function getFinancialReport(
 
 async function getFinancialSummary(
   _eventId: string,
-  where: Record<string, unknown>
+  where: Record<string, unknown>,
 ): Promise<FinancialSummary> {
   // Group by currency for accurate multi-currency reporting
   const byCurrency = await prisma.registration.groupBy({
-    by: ['currency'],
+    by: ["currency"],
     where,
     _sum: {
       totalAmount: true,
@@ -109,10 +113,10 @@ async function getFinancialSummary(
 
   // Get pending amounts by currency
   const pendingByCurrency = await prisma.registration.groupBy({
-    by: ['currency'],
+    by: ["currency"],
     where: {
       ...where,
-      paymentStatus: 'PENDING',
+      paymentStatus: "PENDING",
     },
     _sum: {
       totalAmount: true,
@@ -122,10 +126,10 @@ async function getFinancialSummary(
 
   // Get refunded amounts by currency
   const refundedByCurrency = await prisma.registration.groupBy({
-    by: ['currency'],
+    by: ["currency"],
     where: {
       ...where,
-      paymentStatus: 'REFUNDED',
+      paymentStatus: "REFUNDED",
     },
     _sum: {
       totalAmount: true,
@@ -137,10 +141,10 @@ async function getFinancialSummary(
     pendingByCurrency.map((p) => [
       p.currency,
       (p._sum.totalAmount ?? 0) - (p._sum.paidAmount ?? 0),
-    ])
+    ]),
   );
   const refundedMap = new Map(
-    refundedByCurrency.map((r) => [r.currency, r._sum.totalAmount ?? 0])
+    refundedByCurrency.map((r) => [r.currency, r._sum.totalAmount ?? 0]),
   );
 
   const currencies: CurrencySummary[] = byCurrency.map((c) => ({
@@ -182,9 +186,9 @@ async function getFinancialSummary(
   const primaryCurrency =
     currencies.length > 0
       ? currencies.reduce((prev, curr) =>
-          curr.registrationCount > prev.registrationCount ? curr : prev
+          curr.registrationCount > prev.registrationCount ? curr : prev,
         ).currency
-      : 'TND';
+      : "TND";
 
   return {
     totalRevenue: aggregation._sum.paidAmount ?? 0,
@@ -207,10 +211,10 @@ async function getFinancialSummary(
 
 async function getPaymentStatusBreakdown(
   _eventId: string,
-  where: Record<string, unknown>
+  where: Record<string, unknown>,
 ): Promise<PaymentStatusBreakdownItem[]> {
   const groups = await prisma.registration.groupBy({
-    by: ['paymentStatus'],
+    by: ["paymentStatus"],
     where,
     _count: true,
     _sum: {
@@ -231,7 +235,7 @@ async function getPaymentStatusBreakdown(
 
 async function getAccessBreakdown(
   eventId: string,
-  dateRange: DateRange
+  dateRange: DateRange,
 ): Promise<AccessBreakdownItem[]> {
   // Build the query with optional date conditions
   const startDateCondition = dateRange.startDate
@@ -277,7 +281,7 @@ async function getAccessBreakdown(
   return accessData.map((g) => {
     const access = accessMap.get(g.access_id);
     return {
-      accessType: access?.name ?? access?.type ?? 'Unknown',
+      accessType: access?.name ?? access?.type ?? "Unknown",
       count: Number(g.count),
       totalAmount: Number(g.total_amount),
     };
@@ -290,11 +294,13 @@ async function getAccessBreakdown(
 
 async function getDailyTrend(
   eventId: string,
-  dateRange: DateRange
+  dateRange: DateRange,
 ): Promise<DailyTrendItem[]> {
   // Default to last 30 days if no range provided
   const endDate = dateRange.endDate ?? new Date();
-  const startDate = dateRange.startDate ?? new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const startDate =
+    dateRange.startDate ??
+    new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000);
 
   // Use raw query for date grouping (Prisma doesn't support DATE() grouping natively)
   const results = await prisma.$queryRaw<
@@ -313,7 +319,7 @@ async function getDailyTrend(
   `;
 
   return results.map((r) => ({
-    date: r.date.toISOString().split('T')[0],
+    date: r.date.toISOString().split("T")[0],
     count: Number(r.count),
     totalAmount: Number(r.total_amount),
   }));
@@ -344,7 +350,7 @@ interface RegistrationExportRow {
 
 export async function exportRegistrations(
   eventId: string,
-  query: ExportQuery
+  query: ExportQuery,
 ): Promise<{ filename: string; contentType: string; data: string }> {
   // Verify event exists
   const event = await prisma.event.findUnique({
@@ -353,7 +359,7 @@ export async function exportRegistrations(
   });
 
   if (!event) {
-    throw new AppError('Event not found', 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
   }
 
   const dateRange = buildDateFilter(query);
@@ -391,16 +397,16 @@ export async function exportRegistrations(
       submittedAt: true,
       paidAt: true,
     },
-    orderBy: { submittedAt: 'desc' },
+    orderBy: { submittedAt: "desc" },
   });
 
-  const timestamp = new Date().toISOString().split('T')[0];
+  const timestamp = new Date().toISOString().split("T")[0];
   const filename = `${event.slug}-registrations-${timestamp}`;
 
-  if (query.format === 'json') {
+  if (query.format === "json") {
     return {
       filename: `${filename}.json`,
-      contentType: 'application/json',
+      contentType: "application/json",
       data: JSON.stringify(registrations, null, 2),
     };
   }
@@ -410,62 +416,66 @@ export async function exportRegistrations(
 
   return {
     filename: `${filename}.csv`,
-    contentType: 'text/csv',
+    contentType: "text/csv",
     data: csv,
   };
 }
 
 function generateCSV(registrations: RegistrationExportRow[]): string {
   const headers = [
-    'ID',
-    'Email',
-    'First Name',
-    'Last Name',
-    'Phone',
-    'Payment Status',
-    'Payment Method',
-    'Total Amount',
-    'Paid Amount',
-    'Base Amount',
-    'Access Amount',
-    'Discount Amount',
-    'Sponsorship Code',
-    'Sponsorship Amount',
-    'Submitted At',
-    'Paid At',
+    "ID",
+    "Email",
+    "First Name",
+    "Last Name",
+    "Phone",
+    "Payment Status",
+    "Payment Method",
+    "Total Amount",
+    "Paid Amount",
+    "Base Amount",
+    "Access Amount",
+    "Discount Amount",
+    "Sponsorship Code",
+    "Sponsorship Amount",
+    "Submitted At",
+    "Paid At",
   ];
 
   const rows = registrations.map((r) => [
     r.id,
     r.email,
-    r.firstName ?? '',
-    r.lastName ?? '',
-    r.phone ?? '',
+    r.firstName ?? "",
+    r.lastName ?? "",
+    r.phone ?? "",
     r.paymentStatus,
-    r.paymentMethod ?? '',
+    r.paymentMethod ?? "",
     r.totalAmount.toString(),
     r.paidAmount.toString(),
     r.baseAmount.toString(),
     r.accessAmount.toString(),
     r.discountAmount.toString(),
-    r.sponsorshipCode ?? '',
+    r.sponsorshipCode ?? "",
     r.sponsorshipAmount.toString(),
     r.submittedAt.toISOString(),
-    r.paidAt?.toISOString() ?? '',
+    r.paidAt?.toISOString() ?? "",
   ]);
 
   // Escape CSV values
   const escapeCSV = (value: string): string => {
-    if (value.includes(',') || value.includes('"') || value.includes('\n')) {
+    // Guard against CSV formula injection
+    if (value.length > 0 && ["=", "+", "-", "@"].includes(value[0])) {
+      return `"'${value.replace(/"/g, '""')}"`;
+    }
+    if (value.includes(",") || value.includes('"') || value.includes("\n")) {
       return `"${value.replace(/"/g, '""')}"`;
     }
     return value;
   };
 
   const csvLines = [
-    headers.join(','),
-    ...rows.map((row) => row.map(escapeCSV).join(',')),
+    headers.join(","),
+    ...rows.map((row) => row.map(escapeCSV).join(",")),
   ];
 
-  return csvLines.join('\n');
+  return csvLines.join("\n");
 }

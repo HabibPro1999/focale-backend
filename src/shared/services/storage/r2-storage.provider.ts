@@ -6,7 +6,7 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { config } from "@config/app.config.js";
-import type { StorageProvider } from "./storage.provider.js";
+import type { StorageProvider, UploadOptions } from "./storage.provider.js";
 
 export class R2StorageProvider implements StorageProvider {
   private client: S3Client;
@@ -27,6 +27,7 @@ export class R2StorageProvider implements StorageProvider {
     buffer: Buffer,
     key: string,
     contentType: string,
+    options?: UploadOptions,
   ): Promise<string> {
     const command = new PutObjectCommand({
       Bucket: config.r2.bucket!,
@@ -34,6 +35,9 @@ export class R2StorageProvider implements StorageProvider {
       Body: buffer,
       ContentType: contentType,
       CacheControl: "public, max-age=31536000",
+      ...(options?.contentDisposition && {
+        ContentDisposition: options.contentDisposition,
+      }),
     });
 
     await this.client.send(command);

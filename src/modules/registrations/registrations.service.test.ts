@@ -63,6 +63,11 @@ vi.mock("@email", () => ({
 
 vi.mock("@shared/utils/form-data-validator.js", () => ({
   validateFormData: vi.fn().mockReturnValue({ valid: true, errors: [] }),
+  sanitizeFormData: vi
+    .fn()
+    .mockImplementation(
+      (_schema: unknown, formData: Record<string, unknown>) => formData,
+    ),
 }));
 
 vi.mock("@shared/services/storage/index.js", () => ({
@@ -81,6 +86,12 @@ vi.mock("@shared/services/storage/compress.js", () => ({
     contentType: "image/webp",
     ext: "webp",
   }),
+}));
+
+vi.mock("file-type", () => ({
+  fileTypeFromBuffer: vi
+    .fn()
+    .mockResolvedValue({ ext: "pdf", mime: "application/pdf" }),
 }));
 
 describe("Registrations Service", () => {
