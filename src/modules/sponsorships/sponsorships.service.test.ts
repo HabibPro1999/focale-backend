@@ -51,7 +51,7 @@ describe("Sponsorship Utils", () => {
   describe("generateSponsorshipCode", () => {
     it("should generate code with SP- prefix", () => {
       const code = generateSponsorshipCode();
-      expect(code).toMatch(/^SP-[A-HJ-NP-Z2-9]{4}$/);
+      expect(code).toMatch(/^SP-[A-HJ-NP-Z2-9]{8}$/);
     });
 
     it("should generate codes without confusing characters (O, I, L, 0, 1)", () => {

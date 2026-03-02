@@ -13,6 +13,11 @@ const envSchema = z
     FIREBASE_STORAGE_BUCKET: z.string().optional(),
     // Firebase service account JSON (for cloud deployments)
     FIREBASE_SERVICE_ACCOUNT: z.string().optional(),
+    // SendGrid
+    SENDGRID_API_KEY: z.string().optional(),
+    SENDGRID_WEBHOOK_PUBLIC_KEY: z.string().optional(),
+    SENDGRID_FROM_EMAIL: z.string().email().optional(),
+    SENDGRID_FROM_NAME: z.string().optional(),
     // Storage Provider
     STORAGE_PROVIDER: z.enum(["firebase", "r2"]).default("firebase"),
     // Cloudflare R2
@@ -68,5 +73,11 @@ export const config = {
     secretAccessKey: env.R2_SECRET_ACCESS_KEY,
     bucket: env.R2_BUCKET,
     publicUrl: env.R2_PUBLIC_URL,
+  },
+  sendgrid: {
+    apiKey: env.SENDGRID_API_KEY,
+    webhookPublicKey: env.SENDGRID_WEBHOOK_PUBLIC_KEY,
+    fromEmail: env.SENDGRID_FROM_EMAIL ?? "noreply@example.com",
+    fromName: env.SENDGRID_FROM_NAME ?? "Event Platform",
   },
 };

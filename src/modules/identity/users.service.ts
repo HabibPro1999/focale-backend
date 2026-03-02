@@ -1,17 +1,26 @@
-import { prisma } from '@/database/client.js';
-import { AppError } from '@shared/errors/app-error.js';
-import { ErrorCodes } from '@shared/errors/error-codes.js';
-import { logger } from '@shared/utils/logger.js';
+import { prisma } from "@/database/client.js";
+import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { logger } from "@shared/utils/logger.js";
 import {
   createFirebaseUser,
   setCustomClaims,
   deleteFirebaseUser,
-} from '@shared/services/firebase.service.js';
-import { clientExists } from '@clients';
-import { paginate, getSkip, type PaginatedResult } from '@shared/utils/pagination.js';
-import type { CreateUserInput, UpdateUserInput, ListUsersQuery } from './users.schema.js';
-import type { User, Prisma } from '@/generated/prisma/client.js';
-import { UserRole } from './permissions.js';
+} from "@shared/services/firebase.service.js";
+import { clientExists } from "@clients";
+import { invalidateUserCache } from "@shared/middleware/auth.middleware.js";
+import {
+  paginate,
+  getSkip,
+  type PaginatedResult,
+} from "@shared/utils/pagination.js";
+import type {
+  CreateUserInput,
+  UpdateUserInput,
+  ListUsersQuery,
+} from "./users.schema.js";
+import type { User, Prisma } from "@/generated/prisma/client.js";
+import { UserRole } from "./permissions.js";
 
 // Define type for user queries with include
 type UserWithClient = Prisma.UserGetPayload<{ include: { client: true } }>;
@@ -23,11 +32,18 @@ type UserWithClient = Prisma.UserGetPayload<{ include: { client: true } }>;
 /**
  * Validate that a client ID exists if provided.
  */
-async function validateClientId(clientId: string | null | undefined): Promise<void> {
+async function validateClientId(
+  clientId: string | null | undefined,
+): Promise<void> {
   if (clientId) {
     const isValid = await clientExists(clientId);
     if (!isValid) {
-      throw new AppError('Invalid client ID', 400, true, ErrorCodes.BAD_REQUEST);
+      throw new AppError(
+        "Invalid client ID",
+        400,
+        true,
+        ErrorCodes.BAD_REQUEST,
+      );
     }
   }
 }
@@ -38,7 +54,7 @@ async function validateClientId(clientId: string | null | undefined): Promise<vo
 async function assertUserExists(id: string): Promise<User> {
   const user = await prisma.user.findUnique({ where: { id } });
   if (!user) {
-    throw new AppError('User not found', 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError("User not found", 404, true, ErrorCodes.NOT_FOUND);
   }
   return user;
 }
@@ -51,7 +67,7 @@ async function assertUserExists(id: string): Promise<User> {
  * Create a new user in Firebase Auth + set custom claims + create in DB.
  */
 export async function createUser(
-  input: CreateUserInput & { password: string }
+  input: CreateUserInput & { password: string },
 ): Promise<User> {
   const { email, password, name, role, clientId } = input;
 
@@ -59,28 +75,28 @@ export async function createUser(
   const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) {
     throw new AppError(
-      'User with this email already exists',
+      "User with this email already exists",
       409,
       true,
-      ErrorCodes.CONFLICT
+      ErrorCodes.CONFLICT,
     );
   }
 
   // Validate role-clientId consistency
   if (role === UserRole.CLIENT_ADMIN && !clientId) {
     throw new AppError(
-      'CLIENT_ADMIN users must be assigned to a client',
+      "CLIENT_ADMIN users must be assigned to a client",
       400,
       true,
-      ErrorCodes.VALIDATION_ERROR
+      ErrorCodes.VALIDATION_ERROR,
     );
   }
   if (role === UserRole.SUPER_ADMIN && clientId) {
     throw new AppError(
-      'SUPER_ADMIN users cannot be assigned to a client',
+      "SUPER_ADMIN users cannot be assigned to a client",
       400,
       true,
-      ErrorCodes.VALIDATION_ERROR
+      ErrorCodes.VALIDATION_ERROR,
     );
   }
 
@@ -118,7 +134,7 @@ export async function createUser(
           email,
           originalError: error,
         },
-        'Failed to cleanup Firebase user after DB creation failure - orphaned user may exist'
+        "Failed to cleanup Firebase user after DB creation failure - orphaned user may exist",
       );
     });
     throw error;
@@ -140,7 +156,7 @@ export async function getUserById(id: string): Promise<UserWithClient | null> {
  */
 export async function updateUser(
   id: string,
-  input: UpdateUserInput
+  input: UpdateUserInput,
 ): Promise<UserWithClient> {
   const user = await assertUserExists(id);
 
@@ -150,7 +166,8 @@ export async function updateUser(
   // Sync Firebase custom claims if role or clientId is being changed
   if (input.role !== undefined || input.clientId !== undefined) {
     const newRole = input.role ?? user.role;
-    const newClientId = input.clientId !== undefined ? input.clientId : user.clientId;
+    const newClientId =
+      input.clientId !== undefined ? input.clientId : user.clientId;
 
     await setCustomClaims(id, {
       role: newRole,
@@ -158,17 +175,23 @@ export async function updateUser(
     });
   }
 
-  return prisma.user.update({
+  const updated = await prisma.user.update({
     where: { id },
     data: input,
     include: { client: true },
   });
+
+  invalidateUserCache(id);
+
+  return updated;
 }
 
 /**
  * List users with pagination and filters (DB only).
  */
-export async function listUsers(query: ListUsersQuery): Promise<PaginatedResult<UserWithClient>> {
+export async function listUsers(
+  query: ListUsersQuery,
+): Promise<PaginatedResult<UserWithClient>> {
   const { page, limit, role, clientId, active, search } = query;
   const skip = getSkip({ page, limit });
 
@@ -179,8 +202,8 @@ export async function listUsers(query: ListUsersQuery): Promise<PaginatedResult<
   if (active !== undefined) where.active = active;
   if (search) {
     where.OR = [
-      { name: { contains: search, mode: 'insensitive' } },
-      { email: { contains: search, mode: 'insensitive' } },
+      { name: { contains: search, mode: "insensitive" } },
+      { email: { contains: search, mode: "insensitive" } },
     ];
   }
 
@@ -189,7 +212,7 @@ export async function listUsers(query: ListUsersQuery): Promise<PaginatedResult<
       where,
       skip,
       take: limit,
-      orderBy: { createdAt: 'desc' },
+      orderBy: { createdAt: "desc" },
       include: { client: true },
     }),
     prisma.user.count({ where }),
@@ -205,4 +228,5 @@ export async function deleteUser(id: string): Promise<void> {
   await assertUserExists(id);
   await deleteFirebaseUser(id);
   await prisma.user.delete({ where: { id } });
+  invalidateUserCache(id);
 }

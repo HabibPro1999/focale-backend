@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from "zod";
 
 // ============================================================================
 // Shared Types
@@ -7,7 +7,7 @@ import { z } from 'zod';
 export const AccessConditionSchema = z
   .object({
     fieldId: z.string().min(1),
-    operator: z.enum(['equals', 'not_equals']),
+    operator: z.enum(["equals", "not_equals"]),
     value: z.union([z.string(), z.number()]),
   })
   .strict();
@@ -17,13 +17,13 @@ export const AccessConditionSchema = z
 // ============================================================================
 
 export const AccessTypeSchema = z.enum([
-  'WORKSHOP',
-  'DINNER',
-  'SESSION',
-  'NETWORKING',
-  'ACCOMMODATION',
-  'TRANSPORT',
-  'OTHER',
+  "WORKSHOP",
+  "DINNER",
+  "SESSION",
+  "NETWORKING",
+  "ACCOMMODATION",
+  "TRANSPORT",
+  "OTHER",
 ]);
 
 // ============================================================================
@@ -31,13 +31,13 @@ export const AccessTypeSchema = z.enum([
 // ============================================================================
 
 export const ACCESS_TYPE_LABELS: Record<string, string> = {
-  WORKSHOP: 'Ateliers',
-  DINNER: 'Dîners',
-  SESSION: 'Sessions',
-  NETWORKING: 'Networking',
-  ACCOMMODATION: 'Hébergement',
-  TRANSPORT: 'Transport',
-  OTHER: 'Autres',
+  WORKSHOP: "Ateliers",
+  DINNER: "Dîners",
+  SESSION: "Sessions",
+  NETWORKING: "Networking",
+  ACCOMMODATION: "Hébergement",
+  TRANSPORT: "Transport",
+  OTHER: "Autres",
 };
 
 // ============================================================================
@@ -47,7 +47,7 @@ export const ACCESS_TYPE_LABELS: Record<string, string> = {
 export const CreateEventAccessSchema = z
   .object({
     eventId: z.string().uuid(),
-    type: AccessTypeSchema.default('OTHER'),
+    type: AccessTypeSchema.default("OTHER"),
     name: z.string().min(1).max(200),
     description: z.string().max(1000).optional().nullable(),
     location: z.string().max(500).optional().nullable(),
@@ -58,7 +58,7 @@ export const CreateEventAccessSchema = z
 
     // Pricing
     price: z.number().int().min(0).default(0),
-    currency: z.string().length(3).default('TND'),
+    currency: z.string().length(3).default("TND"),
 
     // Capacity
     maxCapacity: z.number().int().positive().optional().nullable(),
@@ -69,7 +69,7 @@ export const CreateEventAccessSchema = z
 
     // Conditions (form-based prerequisites)
     conditions: z.array(AccessConditionSchema).optional().nullable(),
-    conditionLogic: z.enum(['AND', 'OR']).default('AND'),
+    conditionLogic: z.enum(["AND", "OR"]).default("AND"),
 
     // Access-based prerequisites (array of access IDs)
     requiredAccessIds: z.array(z.string().uuid()).optional().default([]),
@@ -92,7 +92,7 @@ export const CreateEventAccessSchema = z
       }
       return true;
     },
-    { message: 'End time must be after start time', path: ['endsAt'] }
+    { message: "End time must be after start time", path: ["endsAt"] },
   );
 
 export const UpdateEventAccessSchema = z
@@ -109,7 +109,7 @@ export const UpdateEventAccessSchema = z
     availableFrom: z.coerce.date().optional().nullable(),
     availableTo: z.coerce.date().optional().nullable(),
     conditions: z.array(AccessConditionSchema).optional().nullable(),
-    conditionLogic: z.enum(['AND', 'OR']).optional(),
+    conditionLogic: z.enum(["AND", "OR"]).optional(),
     requiredAccessIds: z.array(z.string().uuid()).optional(),
     sortOrder: z.number().int().optional(),
     active: z.boolean().optional(),
@@ -125,8 +125,8 @@ export const UpdateEventAccessSchema = z
 export const ListEventAccessQuerySchema = z
   .object({
     active: z.preprocess(
-      (v) => (v === 'true' ? true : v === 'false' ? false : undefined),
-      z.boolean().optional()
+      (v) => (v === "true" ? true : v === "false" ? false : undefined),
+      z.boolean().optional(),
     ),
     type: AccessTypeSchema.optional(),
   })
@@ -151,7 +151,7 @@ export const EventIdParamSchema = z
 export const TimeSlotSchema = z.object({
   startsAt: z.date().nullable(),
   endsAt: z.date().nullable(),
-  selectionType: z.enum(['single', 'multiple']),
+  selectionType: z.enum(["single", "multiple"]),
   items: z.array(z.any()),
 });
 
@@ -186,14 +186,20 @@ export const AccessSelectionSchema = z
 
 export const GetGroupedAccessBodySchema = z
   .object({
-    formData: z.record(z.string(), z.any()).optional().default({}),
+    formData: z
+      .record(z.string(), z.any())
+      .refine((obj) => Object.keys(obj).length <= 100, "Too many fields")
+      .optional()
+      .default({}),
     selectedAccessIds: z.array(z.string().uuid()).optional().default([]),
   })
   .strict();
 
 export const ValidateAccessSelectionsBodySchema = z
   .object({
-    formData: z.record(z.string(), z.any()),
+    formData: z
+      .record(z.string(), z.any())
+      .refine((obj) => Object.keys(obj).length <= 100, "Too many fields"),
     selections: z.array(AccessSelectionSchema),
   })
   .strict();
@@ -212,4 +218,6 @@ export type DateGroup = z.infer<typeof DateGroupSchema>;
 export type TypeGroup = DateGroup; // Backward compatibility alias
 export type GroupedAccessResponse = z.infer<typeof GroupedAccessResponseSchema>;
 export type GetGroupedAccessBody = z.infer<typeof GetGroupedAccessBodySchema>;
-export type ValidateAccessSelectionsBody = z.infer<typeof ValidateAccessSelectionsBodySchema>;
+export type ValidateAccessSelectionsBody = z.infer<
+  typeof ValidateAccessSelectionsBodySchema
+>;

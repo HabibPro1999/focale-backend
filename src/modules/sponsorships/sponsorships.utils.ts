@@ -1,3 +1,5 @@
+import { randomInt } from "node:crypto";
+
 // ============================================================================
 // Types for Prisma Client (works with both PrismaClient and transactions)
 // ============================================================================
@@ -21,7 +23,7 @@ interface PrismaLike {
 
 // Characters for code generation (excluding O, I, L to avoid confusion)
 const CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
-const CODE_LENGTH = 4;
+const CODE_LENGTH = 8;
 const CODE_PREFIX = "SP-";
 
 /**
@@ -31,7 +33,7 @@ const CODE_PREFIX = "SP-";
 export function generateSponsorshipCode(): string {
   let code = "";
   for (let i = 0; i < CODE_LENGTH; i++) {
-    const randomIndex = Math.floor(Math.random() * CODE_CHARS.length);
+    const randomIndex = randomInt(CODE_CHARS.length);
     code += CODE_CHARS[randomIndex];
   }
   return `${CODE_PREFIX}${code}`;

@@ -21,10 +21,12 @@ import { calculatePrice } from "@pricing";
 import { queueTriggeredEmail } from "@email";
 import {
   validateFormData,
+  sanitizeFormData,
   type FormSchema,
 } from "@shared/utils/form-data-validator.js";
 import { getStorageProvider } from "@shared/services/storage/index.js";
 import { compressFile } from "@shared/services/storage/compress.js";
+import { fileTypeFromBuffer } from "file-type";
 import type {
   CreateRegistrationInput,
   UpdateRegistrationInput,
@@ -1294,16 +1296,14 @@ export async function editRegistrationPublic(
 
   // 4. Prepare form data changes
   const currentFormData = registration.formData as Record<string, unknown>;
-  const newFormData = input.formData
+  let newFormData = input.formData
     ? { ...currentFormData, ...input.formData }
     : currentFormData;
 
   // 5. Validate new form data against form schema
   if (input.formData) {
-    const validationResult = validateFormData(
-      registration.form.schema as unknown as FormSchema,
-      newFormData,
-    );
+    const formSchema = registration.form.schema as unknown as FormSchema;
+    const validationResult = validateFormData(formSchema, newFormData);
     if (!validationResult.valid) {
       throw new AppError(
         "Form validation failed",
@@ -1313,6 +1313,8 @@ export async function editRegistrationPublic(
         { fieldErrors: validationResult.errors },
       );
     }
+    // Strip unknown keys — keep only field IDs from the form schema
+    newFormData = sanitizeFormData(formSchema, newFormData);
   }
 
   // 6. Process access selection changes (derive current from priceBreakdown)
@@ -1525,10 +1527,31 @@ export async function uploadPaymentProof(
   registrationId: string,
   file: { buffer: Buffer; filename: string; mimetype: string },
 ): Promise<PaymentProofResponse> {
-  // Validate file type
+  // Validate file type (fast first-pass: header string)
   if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
     throw new AppError(
       "Invalid file type. Allowed: PNG, JPG, PDF",
+      400,
+      true,
+      ErrorCodes.INVALID_FILE_TYPE,
+    );
+  }
+
+  // Validate actual file content (magic bytes) — don't trust mimetype header
+  const detectedType = await fileTypeFromBuffer(file.buffer);
+
+  if (!detectedType) {
+    throw new AppError(
+      "Unable to determine file type. Please upload a valid PNG, JPG, or PDF.",
+      400,
+      true,
+      ErrorCodes.INVALID_FILE_TYPE,
+    );
+  }
+
+  if (!ALLOWED_MIME_TYPES.includes(detectedType.mime)) {
+    throw new AppError(
+      "File content does not match allowed types. Allowed: PNG, JPG, PDF",
       400,
       true,
       ErrorCodes.INVALID_FILE_TYPE,
@@ -1568,7 +1591,8 @@ export async function uploadPaymentProof(
   }
 
   // Compress file (images → WebP, PDFs → passthrough)
-  const compressed = await compressFile(file.buffer, file.mimetype);
+  // Use the magic-byte-detected type, not the user-supplied header
+  const compressed = await compressFile(file.buffer, detectedType.mime);
 
   // Generate storage key
   const key = `${registration.eventId}/${registrationId}/proof.${compressed.ext}`;
@@ -1597,6 +1621,7 @@ export async function uploadPaymentProof(
       compressed.buffer,
       key,
       compressed.contentType,
+      { contentDisposition: "attachment" },
     );
   } catch (error) {
     logger.error(

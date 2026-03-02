@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from "zod";
 
 // ============================================================================
 // Shared Types
@@ -7,7 +7,7 @@ import { z } from 'zod';
 export const PricingConditionSchema = z
   .object({
     fieldId: z.string().min(1),
-    operator: z.enum(['equals', 'not_equals']),
+    operator: z.enum(["equals", "not_equals"]),
     value: z.union([z.string(), z.number()]),
   })
   .strict();
@@ -24,14 +24,16 @@ export const EmbeddedPricingRuleSchema = z
     description: z.string().max(1000).optional().nullable(),
     priority: z.number().int().min(0).default(0),
     conditions: z.array(PricingConditionSchema).min(1),
-    conditionLogic: z.enum(['AND', 'OR']).default('AND'),
+    conditionLogic: z.enum(["AND", "OR"]).default("AND"),
     price: z.number().int().min(0), // Fixed price when conditions match
     active: z.boolean().default(true),
   })
   .strict();
 
 // For creating rules (id is optional, will be generated)
-export const CreateEmbeddedRuleSchema = EmbeddedPricingRuleSchema.omit({ id: true });
+export const CreateEmbeddedRuleSchema = EmbeddedPricingRuleSchema.omit({
+  id: true,
+});
 
 // For updating a single rule
 export const UpdateEmbeddedRuleSchema = z
@@ -40,7 +42,7 @@ export const UpdateEmbeddedRuleSchema = z
     description: z.string().max(1000).optional().nullable(),
     priority: z.number().int().min(0).optional(),
     conditions: z.array(PricingConditionSchema).min(1).optional(),
-    conditionLogic: z.enum(['AND', 'OR']).optional(),
+    conditionLogic: z.enum(["AND", "OR"]).optional(),
     price: z.number().int().min(0).optional(),
     active: z.boolean().optional(),
   })
@@ -54,7 +56,7 @@ export const CreateEventPricingSchema = z
   .object({
     eventId: z.string().uuid(),
     basePrice: z.number().int().min(0).default(0),
-    currency: z.string().length(3).default('TND'),
+    currency: z.string().length(3).default("TND"),
     rules: z.array(EmbeddedPricingRuleSchema).max(10).default([]),
     // Payment Methods
     onlinePaymentEnabled: z.boolean().default(false),
@@ -107,7 +109,9 @@ export const SelectedExtraSchema = z
 
 export const CalculatePriceRequestSchema = z
   .object({
-    formData: z.record(z.string(), z.any()),
+    formData: z
+      .record(z.string(), z.any())
+      .refine((obj) => Object.keys(obj).length <= 100, "Too many fields"),
     selectedExtras: z.array(SelectedExtraSchema).optional().default([]),
     sponsorshipCodes: z.array(z.string()).optional().default([]),
   })

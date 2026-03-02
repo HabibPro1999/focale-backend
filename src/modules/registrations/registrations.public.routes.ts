@@ -20,19 +20,37 @@ import {
 } from "./registrations.schema.js";
 import {
   validateFormData,
+  sanitizeFormData,
   type FormSchema,
 } from "@shared/utils/form-data-validator.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { publicRateLimits } from "@core/plugins.js";
 import type { AppInstance } from "@shared/types/fastify.js";
+import type { FastifyRequest } from "fastify";
 
-// Schema for edit token query parameter
+// Schema for edit token query parameter (optional — also accepted via X-Edit-Token header)
 const EditTokenQuerySchema = z
   .object({
-    token: z.string().length(64, "Invalid edit token"),
+    token: z.string().length(64).optional(),
   })
   .strict();
+
+/** Extract edit token from X-Edit-Token header or ?token= query string. Header preferred. */
+function extractEditToken(request: FastifyRequest): string {
+  const headerToken = request.headers["x-edit-token"] as string | undefined;
+  const queryToken = (request.query as { token?: string }).token;
+  const token = headerToken || queryToken;
+  if (!token || token.length !== 64) {
+    throw new AppError(
+      "Edit token required",
+      401,
+      true,
+      ErrorCodes.INVALID_TOKEN,
+    );
+  }
+  return token;
+}
 
 // ============================================================================
 // Public Routes (No Auth - for form submission)
@@ -105,6 +123,12 @@ export async function registrationsPublicRoutes(
         );
       }
 
+      // Strip unknown keys — keep only field IDs from the form schema
+      input.formData = sanitizeFormData(
+        form.schema as unknown as FormSchema,
+        input.formData,
+      );
+
       // Calculate price breakdown using the event ID from the form
       // Convert access selections to the format expected by calculatePrice
       const selectedExtras =
@@ -169,7 +193,7 @@ export async function registrationEditPublicRoutes(
   // Requires valid edit token in query string
   app.get<{
     Params: { registrationId: string };
-    Querystring: { token: string };
+    Querystring: { token?: string };
   }>(
     "/:registrationId",
     {
@@ -183,7 +207,7 @@ export async function registrationEditPublicRoutes(
     },
     async (request, reply) => {
       const { registrationId } = request.params;
-      const { token } = request.query;
+      const token = extractEditToken(request);
 
       // Verify edit token before returning any data
       const isValid = await verifyEditToken(registrationId, token);
@@ -197,14 +221,17 @@ export async function registrationEditPublicRoutes(
   );
 
   // PATCH /api/public/registrations/:registrationId - Edit registration
-  // Requires valid edit token in query string
+  // Requires valid edit token via header or query string
   app.patch<{
     Params: { registrationId: string };
-    Querystring: { token: string };
+    Querystring: { token?: string };
     Body: PublicEditRegistrationInput;
   }>(
     "/:registrationId",
     {
+      config: {
+        rateLimit: publicRateLimits.editToken,
+      },
       schema: {
         params: RegistrationIdPublicParamSchema,
         querystring: EditTokenQuerySchema,
@@ -213,7 +240,7 @@ export async function registrationEditPublicRoutes(
     },
     async (request, reply) => {
       const { registrationId } = request.params;
-      const { token } = request.query;
+      const token = extractEditToken(request);
       const input = request.body;
 
       // Verify edit token before allowing edit
@@ -228,10 +255,10 @@ export async function registrationEditPublicRoutes(
   );
 
   // POST /api/public/registrations/:registrationId/payment-proof - Upload payment proof
-  // Requires valid edit token in query string
+  // Requires valid edit token via header or query string
   app.post<{
     Params: { registrationId: string };
-    Querystring: { token: string };
+    Querystring: { token?: string };
   }>(
     "/:registrationId/payment-proof",
     {
@@ -245,7 +272,7 @@ export async function registrationEditPublicRoutes(
     },
     async (request, reply) => {
       const { registrationId } = request.params;
-      const { token } = request.query;
+      const token = extractEditToken(request);
 
       // Verify edit token before allowing upload
       const isValid = await verifyEditToken(registrationId, token);

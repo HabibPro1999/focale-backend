@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
@@ -316,7 +317,7 @@ export async function uploadEventBanner(
   }
 
   const compressed = await compressImage(file.buffer);
-  const key = `${id}/banner/${file.filename}`;
+  const key = `${id}/banner/${crypto.randomUUID()}.webp`;
   const bannerUrl = await getStorageProvider().upload(
     compressed.buffer,
     key,
