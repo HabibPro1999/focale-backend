@@ -45,13 +45,6 @@ const CreateRegistrationBodySchema = z
   })
   .strict();
 
-// Schema for edit token query parameter
-const EditTokenQuerySchema = z
-  .object({
-    token: z.string().length(64, "Invalid edit token"),
-  })
-  .strict();
-
 const publicRateLimits = {
   registration: { max: 5, timeWindow: "1 minute" },
   paymentProof: { max: 10, timeWindow: "1 minute" },
@@ -182,10 +175,9 @@ export async function registrationEditPublicRoutes(
   app: AppInstance,
 ): Promise<void> {
   // GET /api/public/registrations/:registrationId - Get registration for editing
-  // Requires valid edit token in query string
+  // Requires valid edit token in X-Edit-Token header
   app.get<{
     Params: { registrationId: string };
-    Querystring: { token: string };
   }>(
     "/:registrationId",
     {
@@ -194,12 +186,19 @@ export async function registrationEditPublicRoutes(
       },
       schema: {
         params: RegistrationIdParamSchema,
-        querystring: EditTokenQuerySchema,
       },
     },
     async (request, reply) => {
       const { registrationId } = request.params;
-      const { token } = request.query;
+      const token = request.headers["x-edit-token"] as string | undefined;
+      if (!token || token.length !== 64) {
+        throw new AppError(
+          "Edit token required",
+          401,
+          true,
+          ErrorCodes.UNAUTHORIZED,
+        );
+      }
 
       // Verify edit token before returning any data
       const isValid = await verifyEditToken(registrationId, token);
@@ -218,10 +217,9 @@ export async function registrationEditPublicRoutes(
   );
 
   // PATCH /api/public/registrations/:registrationId - Edit registration
-  // Requires valid edit token in query string
+  // Requires valid edit token in X-Edit-Token header
   app.patch<{
     Params: { registrationId: string };
-    Querystring: { token: string };
     Body: PublicEditRegistrationInput;
   }>(
     "/:registrationId",
@@ -231,13 +229,20 @@ export async function registrationEditPublicRoutes(
       },
       schema: {
         params: RegistrationIdParamSchema,
-        querystring: EditTokenQuerySchema,
         body: PublicEditRegistrationSchema,
       },
     },
     async (request, reply) => {
       const { registrationId } = request.params;
-      const { token } = request.query;
+      const token = request.headers["x-edit-token"] as string | undefined;
+      if (!token || token.length !== 64) {
+        throw new AppError(
+          "Edit token required",
+          401,
+          true,
+          ErrorCodes.UNAUTHORIZED,
+        );
+      }
       const input = request.body;
 
       // Verify edit token before allowing edit
@@ -257,10 +262,9 @@ export async function registrationEditPublicRoutes(
   );
 
   // POST /api/public/registrations/:registrationId/payment-proof - Upload payment proof
-  // Requires valid edit token in query string
+  // Requires valid edit token in X-Edit-Token header
   app.post<{
     Params: { registrationId: string };
-    Querystring: { token: string };
   }>(
     "/:registrationId/payment-proof",
     {
@@ -269,12 +273,19 @@ export async function registrationEditPublicRoutes(
       },
       schema: {
         params: RegistrationIdParamSchema,
-        querystring: EditTokenQuerySchema,
       },
     },
     async (request, reply) => {
       const { registrationId } = request.params;
-      const { token } = request.query;
+      const token = request.headers["x-edit-token"] as string | undefined;
+      if (!token || token.length !== 64) {
+        throw new AppError(
+          "Edit token required",
+          401,
+          true,
+          ErrorCodes.UNAUTHORIZED,
+        );
+      }
 
       // Verify edit token before allowing upload
       const isValid = await verifyEditToken(registrationId, token);

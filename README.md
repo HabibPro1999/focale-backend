@@ -1,18 +1,18 @@
-# DUO Backend
+# Focale OS — Backend
 
 Event registration platform API built as a modular monolith with Fastify.
 
 ## Tech Stack
 
-| Layer | Technology |
-|-------|------------|
-| Runtime | Bun 1.x |
-| Framework | Fastify 5.x |
-| Type System | TypeScript 5.7+ |
-| Validation | Zod 4.x |
-| Database | Prisma 7.x (CockroachDB) |
-| Auth | Firebase Admin |
-| Logging | Pino 10.x |
+| Layer       | Technology               |
+| ----------- | ------------------------ |
+| Runtime     | Bun 1.x                  |
+| Framework   | Fastify 5.x              |
+| Type System | TypeScript 5.7+          |
+| Validation  | Zod 4.x                  |
+| Database    | Prisma 7.x (CockroachDB) |
+| Auth        | Firebase Admin           |
+| Logging     | Pino 10.x                |
 
 ## Getting Started
 
@@ -35,18 +35,18 @@ bun run dev
 
 ## Scripts
 
-| Script | Description |
-|--------|-------------|
-| `bun run dev` | Start dev server with hot reload |
-| `bun run start` | Run production build |
-| `bun run type-check` | TypeScript type checking |
-| `bun run lint` | Run ESLint |
-| `bun run test` | Run tests in watch mode |
-| `bun run test:run` | Run tests once |
-| `bun run test:coverage` | Run tests with coverage |
-| `bun run db:generate` | Generate Prisma client |
-| `bun run db:push` | Push schema to database |
-| `bun run db:migrate` | Run migrations |
+| Script                  | Description                      |
+| ----------------------- | -------------------------------- |
+| `bun run dev`           | Start dev server with hot reload |
+| `bun run start`         | Run production build             |
+| `bun run type-check`    | TypeScript type checking         |
+| `bun run lint`          | Run ESLint                       |
+| `bun run test`          | Run tests in watch mode          |
+| `bun run test:run`      | Run tests once                   |
+| `bun run test:coverage` | Run tests with coverage          |
+| `bun run db:generate`   | Generate Prisma client           |
+| `bun run db:push`       | Push schema to database          |
+| `bun run db:migrate`    | Run migrations                   |
 
 ## Architecture
 
@@ -77,18 +77,18 @@ bun run dev
 
 ### Module Responsibilities
 
-| Module | Purpose | Exports |
-|--------|---------|---------|
-| **identity** | Users, roles, auth | `UserRole`, `usersRoutes` |
-| **clients** | Tenant organizations, module access | `clientExists`, `MODULE_IDS`, `clientsRoutes` |
-| **events** | Event CRUD, capacity | `getEventById`, `eventExists`, `eventsRoutes` |
-| **forms** | Dynamic form schemas | `getFormById`, `formsRoutes` |
-| **registrations** | Submissions, payments | `getRegistrationById`, `registrationsRoutes` |
-| **sponsorships** | Lab sponsorship codes | `sponsorshipsRoutes` |
-| **access** | Event sessions/extras | `validateAccessSelections`, `accessRoutes` |
-| **pricing** | Pricing rules engine | `calculatePrice`, `pricingRoutes` |
-| **email** | Templates, queue, delivery | `queueTriggeredEmail`, `emailRoutes` |
-| **reports** | Financial reports, exports | `reportsRoutes` |
+| Module            | Purpose                             | Exports                                       |
+| ----------------- | ----------------------------------- | --------------------------------------------- |
+| **identity**      | Users, roles, auth                  | `UserRole`, `usersRoutes`                     |
+| **clients**       | Tenant organizations, module access | `clientExists`, `MODULE_IDS`, `clientsRoutes` |
+| **events**        | Event CRUD, capacity                | `getEventById`, `eventExists`, `eventsRoutes` |
+| **forms**         | Dynamic form schemas                | `getFormById`, `formsRoutes`                  |
+| **registrations** | Submissions, payments               | `getRegistrationById`, `registrationsRoutes`  |
+| **sponsorships**  | Lab sponsorship codes               | `sponsorshipsRoutes`                          |
+| **access**        | Event sessions/extras               | `validateAccessSelections`, `accessRoutes`    |
+| **pricing**       | Pricing rules engine                | `calculatePrice`, `pricingRoutes`             |
+| **email**         | Templates, queue, delivery          | `queueTriggeredEmail`, `emailRoutes`          |
+| **reports**       | Financial reports, exports          | `reportsRoutes`                               |
 
 ### Database Schema
 
@@ -131,11 +131,11 @@ Each client has `enabledModules` controlling which event features they can acces
 MODULE_IDS = ['pricing', 'registrations', 'sponsorships', 'emails']
 ```
 
-| Behavior | Description |
-|----------|-------------|
-| **Forms derived** | Forms page visible if `registrations` OR `sponsorships` enabled |
-| **One-way enable** | Modules can be added but never removed |
-| **Default** | New clients get all 4 modules |
+| Behavior           | Description                                                     |
+| ------------------ | --------------------------------------------------------------- |
+| **Forms derived**  | Forms page visible if `registrations` OR `sponsorships` enabled |
+| **One-way enable** | Modules can be added but never removed                          |
+| **Default**        | New clients get all 4 modules                                   |
 
 ## Project Structure
 
@@ -172,12 +172,12 @@ src/
 
 ## Module Rules
 
-| Rule | Reason |
-|------|--------|
-| Use `.js` in imports | ES modules requirement |
-| Cross-module via barrel only | Enforced by ESLint |
-| Routes orchestrate services | Clear responsibility |
-| One table per service | Clean boundaries |
+| Rule                         | Reason                 |
+| ---------------------------- | ---------------------- |
+| Use `.js` in imports         | ES modules requirement |
+| Cross-module via barrel only | Enforced by ESLint     |
+| Routes orchestrate services  | Clear responsibility   |
+| One table per service        | Clean boundaries       |
 
 ## Adding a Module
 
@@ -199,11 +199,11 @@ The project uses **Vitest** with comprehensive unit test coverage for all module
 
 ### Test Infrastructure
 
-| Component | Purpose |
-|-----------|---------|
+| Component              | Purpose                        |
+| ---------------------- | ------------------------------ |
 | `vitest-mock-extended` | Deep mocking for Prisma client |
-| `@faker-js/faker` | Test data factories |
-| `@vitest/coverage-v8` | Code coverage reporting |
+| `@faker-js/faker`      | Test data factories            |
+| `@vitest/coverage-v8`  | Code coverage reporting        |
 
 ### Test Files
 
@@ -227,19 +227,19 @@ src/modules/*/
 
 ### Coverage Summary
 
-| Module | Tests |
-|--------|-------|
-| Identity | 34 |
-| Clients | 34 |
-| Events | 37 |
-| Forms | 38 |
-| Pricing | 19 |
-| Access | 51 |
-| Registrations | 53 |
-| Sponsorships | 64 |
-| Email (3 services) | 113 |
-| Auth Middleware | 36 |
-| **Total** | **481** |
+| Module             | Tests   |
+| ------------------ | ------- |
+| Identity           | 34      |
+| Clients            | 34      |
+| Events             | 37      |
+| Forms              | 38      |
+| Pricing            | 19      |
+| Access             | 51      |
+| Registrations      | 53      |
+| Sponsorships       | 64      |
+| Email (3 services) | 113     |
+| Auth Middleware    | 36      |
+| **Total**          | **481** |
 
 ### Running Tests
 
@@ -257,12 +257,12 @@ bun run test:coverage
 ### Writing Tests
 
 ```typescript
-import { prismaMock } from '../../../tests/mocks/prisma.js';
-import { mockAuthenticatedUser } from '../../../tests/helpers/auth-helpers.js';
-import { createMockClient } from '../../../tests/helpers/factories.js';
+import { prismaMock } from "../../../tests/mocks/prisma.js";
+import { mockAuthenticatedUser } from "../../../tests/helpers/auth-helpers.js";
+import { createMockClient } from "../../../tests/helpers/factories.js";
 
-describe('MyService', () => {
-  it('should do something', async () => {
+describe("MyService", () => {
+  it("should do something", async () => {
     const mockClient = createMockClient();
     prismaMock.client.findUnique.mockResolvedValue(mockClient);
 
