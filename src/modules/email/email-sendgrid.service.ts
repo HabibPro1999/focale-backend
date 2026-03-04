@@ -30,6 +30,8 @@ export interface SendEmailInput {
   to: string;
   toName?: string;
   fromName?: string; // Event name to use as sender name
+  replyTo?: string; // Reply-to email (e.g., client email)
+  replyToName?: string;
   subject: string;
   html: string;
   plainText?: string;
@@ -47,6 +49,8 @@ export interface BatchEmailInput {
   to: string;
   toName?: string;
   fromName?: string; // Event name to use as sender name
+  replyTo?: string; // Reply-to email (e.g., client email)
+  replyToName?: string;
   subject: string;
   html: string;
   plainText?: string;
@@ -116,6 +120,9 @@ export async function sendEmail(
     const msg: sgMail.MailDataRequired = {
       to: input.toName ? { email: input.to, name: input.toName } : input.to,
       from: { email: FROM_EMAIL, name: input.fromName || FROM_NAME },
+      ...(input.replyTo && {
+        replyTo: { email: input.replyTo, name: input.replyToName || input.replyTo },
+      }),
       subject: input.subject,
       text: input.plainText || stripHtml(input.html),
       html: input.html,
@@ -221,6 +228,9 @@ export async function sendBatchEmails(
     const messages: sgMail.MailDataRequired[] = batch.map((email) => ({
       to: email.toName ? { email: email.to, name: email.toName } : email.to,
       from: { email: FROM_EMAIL, name: email.fromName || FROM_NAME },
+      ...(email.replyTo && {
+        replyTo: { email: email.replyTo, name: email.replyToName || email.replyTo },
+      }),
       subject: email.subject,
       text: email.plainText || stripHtml(email.html),
       html: email.html,

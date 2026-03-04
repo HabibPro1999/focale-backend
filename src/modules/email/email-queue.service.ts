@@ -289,6 +289,8 @@ export async function processEmailQueue(batchSize = 50): Promise<ProcessQueueRes
         to: emailLog.recipientEmail,
         toName: emailLog.recipientName || undefined,
         fromName: context.eventName,
+        replyTo: context.organizerEmail || undefined,
+        replyToName: context.organizerName || undefined,
         subject: resolvedSubject,
         html: resolvedHtml,
         plainText: resolvedPlain,
