@@ -75,7 +75,7 @@ export function renderTemplateToMjml(document: TiptapDocument): string {
     <mj-section background-color="#f4f4f5" padding="20px">
       <mj-column>
         <mj-text align="center" font-size="12px" color="#6b7280">
-          Powered by Focale agency
+          Powered by Focale Agency
         </mj-text>
       </mj-column>
     </mj-section>
