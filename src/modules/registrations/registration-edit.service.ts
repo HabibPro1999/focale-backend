@@ -27,6 +27,10 @@ import { Prisma } from "@/generated/prisma/client.js";
 // Types
 // ============================================================================
 
+type TransactionClient = Parameters<
+  Parameters<typeof prisma.$transaction>[0]
+>[0];
+
 type RegistrationForEdit = RegistrationWithRelations & {
   form: {
     id: string;
@@ -77,12 +81,12 @@ export type EditRegistrationPublicResult = {
  * Compute all edit permission flags for a registration in a single pass.
  *
  * Rules (applied in priority order):
- * - REFUNDED → block everything
- * - Event not OPEN → block everything
- * - VERIFYING → block access edits (personal info stays editable)
- * - PAID or paidAmount > 0 → cannot remove access (can still add)
- * - WAIVED → block all access edits
- * - Fully sponsored → block all access edits
+ * - REFUNDED -> block everything
+ * - Event not OPEN -> block everything
+ * - VERIFYING -> block access edits (personal info stays editable)
+ * - PAID or paidAmount > 0 -> cannot remove access (can still add)
+ * - WAIVED -> block all access edits
+ * - Fully sponsored -> block all access edits
  */
 function computeEditPermissions(registration: {
   paymentStatus: string;
@@ -99,7 +103,6 @@ function computeEditPermissions(registration: {
   let isFullySponsored = false;
   const editRestrictions: string[] = [];
 
-  // REFUNDED → block everything
   if (registration.paymentStatus === "REFUNDED") {
     canEdit = false;
     canEditPersonalInfo = false;
@@ -109,7 +112,6 @@ function computeEditPermissions(registration: {
     editRestrictions.push("Registration has been refunded");
   }
 
-  // Event not OPEN → block everything
   if (registration.event.status !== "OPEN") {
     canEdit = false;
     canEditPersonalInfo = false;
@@ -119,7 +121,6 @@ function computeEditPermissions(registration: {
     editRestrictions.push("Event is not accepting changes");
   }
 
-  // VERIFYING → block access edits only (personal info stays editable)
   if (registration.paymentStatus === "VERIFYING") {
     canEditAccess = false;
     canAddAccess = false;
@@ -127,7 +128,6 @@ function computeEditPermissions(registration: {
     editRestrictions.push("Payment proof is under review");
   }
 
-  // PAID or paidAmount > 0 → cannot remove access (can still add)
   const isPaid =
     registration.paymentStatus === "PAID" || registration.paidAmount > 0;
   if (isPaid) {
@@ -135,7 +135,6 @@ function computeEditPermissions(registration: {
     editRestrictions.push("Cannot remove access items (payment received)");
   }
 
-  // WAIVED → block all access edits
   if (registration.paymentStatus === "WAIVED") {
     canEditAccess = false;
     canAddAccess = false;
@@ -145,7 +144,6 @@ function computeEditPermissions(registration: {
     );
   }
 
-  // Fully sponsored → block all access edits
   if (
     registration.sponsorshipAmount >= registration.totalAmount &&
     registration.totalAmount > 0
@@ -191,12 +189,10 @@ export async function verifyEditToken(
     return false;
   }
 
-  // Check expiry first
   if (registration.editTokenExpiry < new Date()) {
     return false;
   }
 
-  // Timing-safe comparison
   try {
     const isValid = timingSafeEqual(
       Buffer.from(registration.editToken, "utf8"),
@@ -204,7 +200,6 @@ export async function verifyEditToken(
     );
     return isValid;
   } catch {
-    // Buffer length mismatch or other error
     return false;
   }
 }
@@ -243,7 +238,6 @@ export async function getRegistrationForEdit(
       ErrorCodes.REGISTRATION_NOT_FOUND,
     );
 
-  // Enrich with accessSelections derived from priceBreakdown
   const priceBreakdown = parsePriceBreakdown(registration.priceBreakdown);
   const accessIds =
     priceBreakdown.accessItems?.map((item) => item.accessId) ?? [];
@@ -269,9 +263,7 @@ export async function getRegistrationForEdit(
       : [];
 
   const enrichedRegistration = { ...registration, accessSelections };
-
   const permissions = computeEditPermissions(registration);
-
   const amountDue = Math.max(
     0,
     registration.totalAmount - registration.paidAmount,
@@ -283,6 +275,381 @@ export async function getRegistrationForEdit(
     amountDue,
   };
 }
+
+// ============================================================================
+// Private Helpers for editRegistrationPublic
+// ============================================================================
+
+type AccessItem = { accessId: string; quantity: number };
+type AccessSelection = { accessId: string; quantity: number };
+type AccessDiffResult = {
+  accessToAdd: AccessSelection[];
+  accessToRemove: AccessItem[];
+  quantityDeltas: Array<{ accessId: string; delta: number }>;
+};
+
+function validateEditPermissions(
+  registration: {
+    paymentStatus: string;
+    sponsorshipAmount: number;
+    totalAmount: number;
+    event: { status: string };
+  },
+  newAccessSelections: AccessSelection[] | undefined,
+): void {
+  if (registration.paymentStatus === "REFUNDED") {
+    throw new AppError(
+      "Refunded registrations cannot be edited",
+      400,
+      true,
+      ErrorCodes.REGISTRATION_REFUNDED,
+    );
+  }
+  if (registration.event.status !== "OPEN") {
+    throw new AppError(
+      "Event is not accepting changes",
+      400,
+      true,
+      ErrorCodes.REGISTRATION_EDIT_FORBIDDEN,
+    );
+  }
+  if (registration.paymentStatus === "VERIFYING" && newAccessSelections) {
+    throw new AppError(
+      "Cannot modify access while payment is under review",
+      400,
+      true,
+      ErrorCodes.REGISTRATION_VERIFYING_BLOCKED,
+    );
+  }
+  if (registration.paymentStatus === "WAIVED" && newAccessSelections) {
+    throw new AppError(
+      "Waived registrations cannot modify access selections",
+      400,
+      true,
+      ErrorCodes.REGISTRATION_WAIVED_ACCESS_BLOCKED,
+    );
+  }
+  if (
+    registration.sponsorshipAmount >= registration.totalAmount &&
+    registration.totalAmount > 0 &&
+    newAccessSelections
+  ) {
+    throw new AppError(
+      "Fully sponsored registrations cannot modify access selections",
+      400,
+      true,
+      ErrorCodes.REGISTRATION_FULLY_SPONSORED_BLOCKED,
+    );
+  }
+}
+
+function validateFormDataChanges(
+  schema: unknown,
+  newFormData: Record<string, unknown>,
+  inputFormData: Record<string, unknown> | undefined,
+): void {
+  if (!inputFormData) return;
+  const validationResult = validateFormData(
+    schema as unknown as FormSchema,
+    newFormData,
+  );
+  if (!validationResult.valid) {
+    throw new AppError(
+      "Form validation failed",
+      400,
+      true,
+      ErrorCodes.FORM_VALIDATION_ERROR,
+      { fieldErrors: validationResult.errors },
+    );
+  }
+}
+
+function computeAccessDiff(
+  currentAccessItems: AccessItem[],
+  newAccessSelections: AccessSelection[],
+): AccessDiffResult {
+  const currentAccessIds = new Set(
+    currentAccessItems.map((item) => item.accessId),
+  );
+  const newAccessIds = new Set(newAccessSelections.map((s) => s.accessId));
+
+  const accessToAdd = newAccessSelections.filter(
+    (s) => !currentAccessIds.has(s.accessId),
+  );
+  const accessToRemove = currentAccessItems.filter(
+    (item) => !newAccessIds.has(item.accessId),
+  );
+
+  const quantityDeltas: Array<{ accessId: string; delta: number }> = [];
+  for (const newSel of newAccessSelections) {
+    if (currentAccessIds.has(newSel.accessId)) {
+      const currentItem = currentAccessItems.find(
+        (item) => item.accessId === newSel.accessId,
+      );
+      const delta = newSel.quantity - (currentItem?.quantity ?? 1);
+      if (delta !== 0) {
+        quantityDeltas.push({ accessId: newSel.accessId, delta });
+      }
+    }
+  }
+
+  return { accessToAdd, accessToRemove, quantityDeltas };
+}
+
+function enforceAccessRemovalRule(
+  isPaid: boolean,
+  accessToRemove: AccessItem[],
+): void {
+  if (isPaid && accessToRemove.length > 0) {
+    throw new AppError(
+      "Cannot remove access items from a paid registration",
+      400,
+      true,
+      ErrorCodes.REGISTRATION_ACCESS_REMOVAL_BLOCKED,
+      {
+        message: "Paid registrations can only add new access items",
+        attemptedRemovals: accessToRemove.map((item) => item.accessId),
+      },
+    );
+  }
+}
+
+function deriveNewAccessSelections(
+  inputAccessSelections: AccessSelection[] | undefined,
+  currentAccessItems: AccessItem[],
+): AccessSelection[] {
+  return (
+    inputAccessSelections ??
+    currentAccessItems.map((item) => ({
+      accessId: item.accessId,
+      quantity: item.quantity,
+    }))
+  );
+}
+
+async function validateNewAccessSelections(
+  eventId: string,
+  accessToAdd: AccessSelection[],
+  newFormData: Record<string, unknown>,
+  inputAccessSelections: AccessSelection[] | undefined,
+): Promise<void> {
+  if (!inputAccessSelections || accessToAdd.length === 0) return;
+  const validation = await validateAccessSelections(
+    eventId,
+    accessToAdd,
+    newFormData,
+  );
+  if (!validation.valid) {
+    throw new AppError(
+      `Invalid access selections: ${validation.errors.join(", ")}`,
+      400,
+      true,
+      ErrorCodes.BAD_REQUEST,
+      { errors: validation.errors },
+    );
+  }
+}
+
+async function calculateNewPricing(
+  eventId: string,
+  newAccessSelections: AccessSelection[],
+  newFormData: Record<string, unknown>,
+  sponsorshipCode: string | null,
+): Promise<PriceBreakdown> {
+  const selectedExtras = newAccessSelections.map((s) => ({
+    extraId: s.accessId,
+    quantity: s.quantity,
+  }));
+  const calculatedPrice = await calculatePrice(eventId, {
+    formData: newFormData,
+    selectedExtras,
+    sponsorshipCodes: sponsorshipCode ? [sponsorshipCode] : [],
+  });
+  return toPersistablePriceBreakdown(calculatedPrice);
+}
+
+async function executeEditTransaction(
+  tx: TransactionClient,
+  registrationId: string,
+  registration: {
+    firstName: string | null;
+    lastName: string | null;
+    phone: string | null;
+    totalAmount: number;
+  },
+  newFormData: Record<string, unknown>,
+  personalInfo: { firstName?: string; lastName?: string; phone?: string },
+  newPriceBreakdown: PriceBreakdown,
+  isPaid: boolean,
+  newAccessSelections: AccessSelection[],
+  accessToAdd: AccessSelection[],
+  accessToRemove: AccessItem[],
+  quantityDeltas: Array<{ accessId: string; delta: number }>,
+  currentFormData: Record<string, unknown>,
+  inputFormData: Record<string, unknown> | undefined,
+): Promise<void> {
+  await manageAccessSpots(tx, accessToAdd, accessToRemove, quantityDeltas, isPaid);
+
+  await tx.registration.update({
+    where: { id: registrationId },
+    data: buildRegistrationUpdate(
+      registration,
+      newFormData,
+      personalInfo,
+      newPriceBreakdown,
+      isPaid,
+      newAccessSelections,
+    ),
+  });
+
+  const auditChanges = buildAuditChanges(
+    registration,
+    newFormData,
+    personalInfo,
+    accessToAdd,
+    accessToRemove,
+    currentFormData,
+    inputFormData,
+  );
+  if (auditChanges) {
+    await tx.auditLog.create({
+      data: {
+        entityType: "Registration",
+        entityId: registrationId,
+        action: "UPDATE",
+        changes: auditChanges as Prisma.InputJsonValue,
+        performedBy: "PUBLIC",
+      },
+    });
+  }
+}
+
+async function manageAccessSpots(
+  tx: TransactionClient,
+  accessToAdd: AccessSelection[],
+  accessToRemove: AccessItem[],
+  quantityDeltas: Array<{ accessId: string; delta: number }>,
+  isPaid: boolean,
+): Promise<void> {
+  for (const selection of accessToAdd) {
+    await reserveAccessSpot(selection.accessId, selection.quantity, tx);
+  }
+  if (!isPaid) {
+    for (const item of accessToRemove) {
+      await releaseAccessSpot(item.accessId, item.quantity, tx);
+    }
+  }
+  for (const { accessId, delta } of quantityDeltas) {
+    if (delta > 0) {
+      await reserveAccessSpot(accessId, delta, tx);
+    } else {
+      await releaseAccessSpot(accessId, Math.abs(delta), tx);
+    }
+  }
+}
+
+function buildRegistrationUpdate(
+  registration: {
+    firstName: string | null;
+    lastName: string | null;
+    phone: string | null;
+    totalAmount: number;
+  },
+  newFormData: Record<string, unknown>,
+  personalInfo: { firstName?: string; lastName?: string; phone?: string },
+  newPriceBreakdown: PriceBreakdown,
+  isPaid: boolean,
+  newAccessSelections: AccessSelection[],
+): Prisma.RegistrationUpdateInput {
+  const newTotalAmount = isPaid
+    ? Math.max(registration.totalAmount, newPriceBreakdown.total)
+    : newPriceBreakdown.total;
+
+  return {
+    formData: newFormData as Prisma.InputJsonValue,
+    firstName: personalInfo.firstName ?? registration.firstName,
+    lastName: personalInfo.lastName ?? registration.lastName,
+    phone: personalInfo.phone ?? registration.phone,
+    totalAmount: newTotalAmount,
+    priceBreakdown: newPriceBreakdown as unknown as Prisma.InputJsonValue,
+    baseAmount: newPriceBreakdown.calculatedBasePrice,
+    accessAmount: newPriceBreakdown.accessTotal,
+    discountAmount: calculateDiscountAmount(newPriceBreakdown.appliedRules),
+    sponsorshipAmount: newPriceBreakdown.sponsorshipTotal,
+    accessTypeIds: newAccessSelections.map((s) => s.accessId),
+    lastEditedAt: new Date(),
+  };
+}
+
+function buildAuditChanges(
+  oldRegistration: {
+    firstName: string | null;
+    lastName: string | null;
+    phone: string | null;
+  },
+  newFormData: Record<string, unknown>,
+  personalInfo: { firstName?: string; lastName?: string; phone?: string },
+  accessToAdd: AccessSelection[],
+  accessToRemove: AccessItem[],
+  currentFormData: Record<string, unknown>,
+  inputFormData: Record<string, unknown> | undefined,
+): Record<string, { old: unknown; new: unknown }> | null {
+  const auditChanges: Record<string, { old: unknown; new: unknown }> = {};
+
+  if (inputFormData) {
+    const oldFields: Record<string, unknown> = {};
+    const newFields: Record<string, unknown> = {};
+    for (const key of Object.keys(newFormData)) {
+      if (newFormData[key] !== currentFormData[key]) {
+        oldFields[key] = currentFormData[key];
+        newFields[key] = newFormData[key];
+      }
+    }
+    if (Object.keys(newFields).length > 0) {
+      auditChanges.formData = { old: oldFields, new: newFields };
+    }
+  }
+
+  if (
+    personalInfo.firstName &&
+    personalInfo.firstName !== oldRegistration.firstName
+  ) {
+    auditChanges.firstName = {
+      old: oldRegistration.firstName,
+      new: personalInfo.firstName,
+    };
+  }
+  if (
+    personalInfo.lastName &&
+    personalInfo.lastName !== oldRegistration.lastName
+  ) {
+    auditChanges.lastName = {
+      old: oldRegistration.lastName,
+      new: personalInfo.lastName,
+    };
+  }
+  if (personalInfo.phone && personalInfo.phone !== oldRegistration.phone) {
+    auditChanges.phone = { old: oldRegistration.phone, new: personalInfo.phone };
+  }
+  if (accessToAdd.length > 0) {
+    auditChanges.accessAdded = {
+      old: null,
+      new: accessToAdd.map((a) => a.accessId),
+    };
+  }
+  if (accessToRemove.length > 0) {
+    auditChanges.accessRemoved = {
+      old: accessToRemove.map((a) => a.accessId),
+      new: null,
+    };
+  }
+
+  return Object.keys(auditChanges).length > 0 ? auditChanges : null;
+}
+
+// ============================================================================
+// Public Edit Orchestrator
+// ============================================================================
 
 /**
  * Edit registration (self-service, public endpoint).
@@ -297,7 +664,6 @@ export async function editRegistrationPublic(
   registrationId: string,
   input: PublicEditRegistrationInput,
 ): Promise<EditRegistrationPublicResult> {
-  // 1. Get current registration
   const registration = await prisma.registration.findUnique({
     where: { id: registrationId },
     include: {
@@ -305,292 +671,67 @@ export async function editRegistrationPublic(
       event: { select: { id: true, status: true } },
     },
   });
-  if (!registration)
-    throw new AppError(
-      "Registration not found",
-      404,
-      true,
-      ErrorCodes.REGISTRATION_NOT_FOUND,
-    );
+  if (!registration) throw new AppError("Registration not found", 404, true, ErrorCodes.REGISTRATION_NOT_FOUND);
 
-  // 2. Validate registration can be edited
-  if (registration.paymentStatus === "REFUNDED") {
-    throw new AppError(
-      "Refunded registrations cannot be edited",
-      400,
-      true,
-      ErrorCodes.REGISTRATION_REFUNDED,
-    );
-  }
+  validateEditPermissions(registration, input.accessSelections);
 
-  if (registration.event.status !== "OPEN") {
-    throw new AppError(
-      "Event is not accepting changes",
-      400,
-      true,
-      ErrorCodes.REGISTRATION_EDIT_FORBIDDEN,
-    );
-  }
-
-  // 2b. Block access edits for VERIFYING registrations
-  if (registration.paymentStatus === "VERIFYING" && input.accessSelections) {
-    throw new AppError(
-      "Cannot modify access while payment is under review",
-      400,
-      true,
-      ErrorCodes.REGISTRATION_VERIFYING_BLOCKED,
-    );
-  }
-
-  // 2c. Block access edits for WAIVED registrations
-  if (registration.paymentStatus === "WAIVED" && input.accessSelections) {
-    throw new AppError(
-      "Waived registrations cannot modify access selections",
-      400,
-      true,
-      ErrorCodes.REGISTRATION_WAIVED_ACCESS_BLOCKED,
-    );
-  }
-
-  // 2d. Block access edits for fully sponsored registrations
-  if (
-    registration.sponsorshipAmount >= registration.totalAmount &&
-    registration.totalAmount > 0 &&
-    input.accessSelections
-  ) {
-    throw new AppError(
-      "Fully sponsored registrations cannot modify access selections",
-      400,
-      true,
-      ErrorCodes.REGISTRATION_FULLY_SPONSORED_BLOCKED,
-    );
-  }
-
-  // 3. Determine if paid (affects what can be changed)
-  const isPaid =
-    registration.paymentStatus === "PAID" || registration.paidAmount > 0;
-
-  // 4. Prepare form data changes
+  const isPaid = registration.paymentStatus === "PAID" || registration.paidAmount > 0;
   const currentFormData = registration.formData as Record<string, unknown>;
   const newFormData = input.formData
     ? { ...currentFormData, ...input.formData }
     : currentFormData;
 
-  // 5. Validate new form data against form schema
-  if (input.formData) {
-    const validationResult = validateFormData(
-      registration.form.schema as unknown as FormSchema,
+  validateFormDataChanges(registration.form.schema, newFormData, input.formData);
+
+  const currentAccessItems =
+    parsePriceBreakdown(registration.priceBreakdown).accessItems ?? [];
+  const newAccessSelections = deriveNewAccessSelections(
+    input.accessSelections,
+    currentAccessItems,
+  );
+
+  const { accessToAdd, accessToRemove, quantityDeltas } = computeAccessDiff(
+    currentAccessItems,
+    newAccessSelections,
+  );
+
+  enforceAccessRemovalRule(isPaid, accessToRemove);
+
+  await validateNewAccessSelections(
+    registration.eventId,
+    accessToAdd,
+    newFormData,
+    input.accessSelections,
+  );
+
+  const newPriceBreakdown = await calculateNewPricing(
+    registration.eventId,
+    newAccessSelections,
+    newFormData,
+    registration.sponsorshipCode,
+  );
+
+  const personalInfo = { firstName: input.firstName, lastName: input.lastName, phone: input.phone };
+
+  await prisma.$transaction((tx) =>
+    executeEditTransaction(
+      tx,
+      registrationId,
+      registration,
       newFormData,
-    );
-    if (!validationResult.valid) {
-      throw new AppError(
-        "Form validation failed",
-        400,
-        true,
-        ErrorCodes.FORM_VALIDATION_ERROR,
-        { fieldErrors: validationResult.errors },
-      );
-    }
-  }
-
-  // 6. Process access selection changes (derive current from priceBreakdown)
-  const currentPriceBreakdown = parsePriceBreakdown(
-    registration.priceBreakdown,
-  );
-  const currentAccessItems = currentPriceBreakdown.accessItems ?? [];
-  const currentAccessIds = new Set(
-    currentAccessItems.map((item) => item.accessId),
-  );
-
-  const newAccessSelections =
-    input.accessSelections ??
-    currentAccessItems.map((item) => ({
-      accessId: item.accessId,
-      quantity: item.quantity,
-    }));
-  const newAccessIds = new Set(newAccessSelections.map((s) => s.accessId));
-
-  const accessToAdd = newAccessSelections.filter(
-    (s) => !currentAccessIds.has(s.accessId),
-  );
-  const accessToRemove = currentAccessItems.filter(
-    (item) => !newAccessIds.has(item.accessId),
-  );
-
-  // Compute quantity deltas for items present in both old and new sets
-  const quantityDeltas: Array<{ accessId: string; delta: number }> = [];
-  for (const newSel of newAccessSelections) {
-    if (currentAccessIds.has(newSel.accessId)) {
-      const currentItem = currentAccessItems.find(
-        (item) => item.accessId === newSel.accessId,
-      );
-      const delta = newSel.quantity - (currentItem?.quantity ?? 1);
-      if (delta !== 0) {
-        quantityDeltas.push({ accessId: newSel.accessId, delta });
-      }
-    }
-  }
-
-  // 7. Enforce paid registration rules
-  if (isPaid && accessToRemove.length > 0) {
-    throw new AppError(
-      "Cannot remove access items from a paid registration",
-      400,
-      true,
-      ErrorCodes.REGISTRATION_ACCESS_REMOVAL_BLOCKED,
-      {
-        message: "Paid registrations can only add new access items",
-        attemptedRemovals: accessToRemove.map((item) => item.accessId),
-      },
-    );
-  }
-
-  // 8. Validate new access selections if any access selection changed.
-  // Only validate items being added for the first time — items the user already
-  // holds are exempt from capacity checks to avoid false conflicts on re-submit.
-  if (input.accessSelections && accessToAdd.length > 0) {
-    const validation = await validateAccessSelections(
-      registration.eventId,
+      personalInfo,
+      newPriceBreakdown,
+      isPaid,
+      newAccessSelections,
       accessToAdd,
-      newFormData,
-    );
-    if (!validation.valid) {
-      throw new AppError(
-        `Invalid access selections: ${validation.errors.join(", ")}`,
-        400,
-        true,
-        ErrorCodes.BAD_REQUEST,
-        { errors: validation.errors },
-      );
-    }
-  }
+      accessToRemove,
+      quantityDeltas,
+      currentFormData,
+      input.formData,
+    ),
+  );
 
-  // 9. Calculate new price breakdown
-  const selectedExtras = newAccessSelections.map((s) => ({
-    extraId: s.accessId,
-    quantity: s.quantity,
-  }));
-
-  const calculatedPrice = await calculatePrice(registration.eventId, {
-    formData: newFormData,
-    selectedExtras,
-    sponsorshipCodes: registration.sponsorshipCode
-      ? [registration.sponsorshipCode]
-      : [],
-  });
-
-  // Transform to registration format using shared helper
-  const newPriceBreakdown = toPersistablePriceBreakdown(calculatedPrice);
-
-  // 10. Execute transaction
-  await prisma.$transaction(async (tx) => {
-    // Reserve new access spots
-    for (const selection of accessToAdd) {
-      await reserveAccessSpot(selection.accessId, selection.quantity, tx);
-    }
-
-    // Release removed access spots (only if not paid)
-    if (!isPaid) {
-      for (const item of accessToRemove) {
-        await releaseAccessSpot(item.accessId, item.quantity, tx);
-      }
-    }
-
-    // Apply quantity deltas for items present in both old and new sets
-    for (const { accessId, delta } of quantityDeltas) {
-      if (delta > 0) {
-        await reserveAccessSpot(accessId, delta, tx);
-      } else {
-        await releaseAccessSpot(accessId, Math.abs(delta), tx);
-      }
-    }
-
-    // Calculate new total. For paid registrations, never decrease below
-    // the original total — pricing rule changes via form data edits
-    // should not reduce what was already owed.
-    const newTotalAmount = isPaid
-      ? Math.max(registration.totalAmount, newPriceBreakdown.total)
-      : newPriceBreakdown.total;
-
-    // Update registration
-    await tx.registration.update({
-      where: { id: registrationId },
-      data: {
-        formData: newFormData as Prisma.InputJsonValue,
-        firstName: input.firstName ?? registration.firstName,
-        lastName: input.lastName ?? registration.lastName,
-        phone: input.phone ?? registration.phone,
-        totalAmount: newTotalAmount,
-        priceBreakdown: newPriceBreakdown as unknown as Prisma.InputJsonValue,
-        baseAmount: newPriceBreakdown.calculatedBasePrice,
-        accessAmount: newPriceBreakdown.accessTotal,
-        discountAmount: calculateDiscountAmount(newPriceBreakdown.appliedRules),
-        sponsorshipAmount: newPriceBreakdown.sponsorshipTotal,
-        accessTypeIds: newAccessSelections.map((s) => s.accessId),
-        lastEditedAt: new Date(),
-      },
-    });
-
-    // Build changes for audit log
-    const auditChanges: Record<string, { old: unknown; new: unknown }> = {};
-    if (input.formData) {
-      const oldFields: Record<string, unknown> = {};
-      const newFields: Record<string, unknown> = {};
-      for (const key of Object.keys(newFormData)) {
-        if (newFormData[key] !== currentFormData[key]) {
-          oldFields[key] = currentFormData[key];
-          newFields[key] = newFormData[key];
-        }
-      }
-      if (Object.keys(newFields).length > 0) {
-        auditChanges.formData = { old: oldFields, new: newFields };
-      }
-    }
-    if (input.firstName && input.firstName !== registration.firstName) {
-      auditChanges.firstName = {
-        old: registration.firstName,
-        new: input.firstName,
-      };
-    }
-    if (input.lastName && input.lastName !== registration.lastName) {
-      auditChanges.lastName = {
-        old: registration.lastName,
-        new: input.lastName,
-      };
-    }
-    if (input.phone && input.phone !== registration.phone) {
-      auditChanges.phone = { old: registration.phone, new: input.phone };
-    }
-    if (accessToAdd.length > 0) {
-      auditChanges.accessAdded = {
-        old: null,
-        new: accessToAdd.map((a) => a.accessId),
-      };
-    }
-    if (accessToRemove.length > 0) {
-      auditChanges.accessRemoved = {
-        old: accessToRemove.map((a) => a.accessId),
-        new: null,
-      };
-    }
-
-    // Create audit log for public edit
-    if (Object.keys(auditChanges).length > 0) {
-      await tx.auditLog.create({
-        data: {
-          entityType: "Registration",
-          entityId: registrationId,
-          action: "UPDATE",
-          changes: auditChanges as Prisma.InputJsonValue,
-          performedBy: "PUBLIC",
-        },
-      });
-    }
-  });
-
-  // Fetch and return updated registration
   const updatedRegistration = await getRegistrationById(registrationId);
-
   return {
     registration: updatedRegistration!,
     priceBreakdown: newPriceBreakdown,

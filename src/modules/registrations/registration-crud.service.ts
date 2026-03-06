@@ -312,24 +312,17 @@ export async function enrichManyWithAccessSelections(
 // CRUD Operations
 // ============================================================================
 
-export async function createRegistration(
-  input: CreateRegistrationInput,
-  priceBreakdown: PriceBreakdown,
-): Promise<RegistrationWithRelations> {
-  const {
-    formId,
-    formData,
-    email,
-    firstName,
-    lastName,
-    phone,
-    accessSelections,
-    sponsorshipCode,
-    idempotencyKey,
-    linkBaseUrl,
-  } = input;
+type TxClient = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
 
-  // Get form and event info (including schemaVersion)
+async function validateRegistrationInput(
+  formId: string,
+  email: string,
+  accessSelections: CreateRegistrationInput["accessSelections"],
+  formData: Record<string, unknown>,
+): Promise<{
+  form: { id: string; eventId: string; schemaVersion: number };
+  eventId: string;
+}> {
   const form = await prisma.form.findUnique({
     where: { id: formId },
     select: { id: true, eventId: true, schemaVersion: true },
@@ -339,7 +332,6 @@ export async function createRegistration(
 
   const eventId = form.eventId;
 
-  // Check for duplicate registration (unique per email + form)
   const existingRegistration = await prisma.registration.findUnique({
     where: { email_formId: { email, formId } },
   });
@@ -352,7 +344,6 @@ export async function createRegistration(
     );
   }
 
-  // Validate access selections
   if (accessSelections && accessSelections.length > 0) {
     const validation = await validateAccessSelections(
       eventId,
@@ -370,165 +361,238 @@ export async function createRegistration(
     }
   }
 
-  // Create registration with access selections in a transaction
-  let result;
-  try {
-    result = await prisma.$transaction(async (tx) => {
-      // Re-check event status inside transaction to prevent TOCTOU race condition
-      // Event might have been closed between initial check and transaction start
-      const event = await tx.event.findUnique({
-        where: { id: eventId },
-        select: { status: true, maxCapacity: true, registeredCount: true },
-      });
+  return { form, eventId };
+}
 
-      if (!event || event.status !== "OPEN") {
-        throw new AppError(
-          "Event is not accepting registrations",
-          400,
-          true,
-          ErrorCodes.EVENT_NOT_OPEN,
-        );
-      }
+async function consumeSponsorshipCode(
+  tx: TxClient,
+  sponsorshipCode: string,
+  registrationId: string,
+  sponsorshipTotal: number,
+): Promise<void> {
+  const sponsorshipUpdate = await tx.sponsorship.updateMany({
+    where: { code: sponsorshipCode, status: "PENDING" },
+    data: { status: "USED" },
+  });
 
-      // Check event capacity
-      if (
-        event.maxCapacity !== null &&
-        event.registeredCount >= event.maxCapacity
-      ) {
-        throw new AppError(
-          "Event is at capacity",
-          409,
-          true,
-          ErrorCodes.EVENT_FULL,
-        );
-      }
+  if (sponsorshipUpdate.count === 0) {
+    throw new AppError(
+      "Sponsorship code has already been used",
+      409,
+      true,
+      ErrorCodes.SPONSORSHIP_STATUS_CONFLICT,
+    );
+  }
 
-      // Generate edit token for secure self-service editing
-      const editToken = randomBytes(EDIT_TOKEN_LENGTH).toString("hex");
-      const editTokenExpiry = new Date(
-        Date.now() + EDIT_TOKEN_EXPIRY_HOURS * 60 * 60 * 1000,
-      );
+  const consumedSponsorship = await tx.sponsorship.findFirst({
+    where: { code: sponsorshipCode },
+    select: { id: true },
+  });
 
-      // Determine initial payment status (auto-waive zero-amount registrations)
-      const initialPaymentStatus =
-        priceBreakdown.total === 0 ? "WAIVED" : "PENDING";
-
-      // Create registration
-      const registration = await tx.registration.create({
-        data: {
-          formId,
-          eventId,
-          formData: formData as Prisma.InputJsonValue,
-          formSchemaVersion: form.schemaVersion,
-          email,
-          firstName: firstName ?? null,
-          lastName: lastName ?? null,
-          phone: phone ?? null,
-          paymentStatus: initialPaymentStatus,
-          paidAt: initialPaymentStatus === "WAIVED" ? new Date() : null,
-          totalAmount: priceBreakdown.total,
-          currency: priceBreakdown.currency,
-          priceBreakdown: priceBreakdown as unknown as Prisma.InputJsonValue,
-          // Denormalized financial columns for reporting
-          baseAmount: priceBreakdown.calculatedBasePrice,
-          discountAmount: calculateDiscountAmount(priceBreakdown.appliedRules),
-          accessAmount: priceBreakdown.accessTotal,
-          sponsorshipCode: sponsorshipCode ?? null,
-          sponsorshipAmount: priceBreakdown.sponsorshipTotal,
-          // Access type IDs for querying
-          accessTypeIds: accessSelections?.map((s) => s.accessId) ?? [],
-          // Edit token for secure public access
-          editToken,
-          editTokenExpiry,
-          // Browser origin URL for email links
-          linkBaseUrl: linkBaseUrl ?? null,
-          // Idempotency key for safe retries
-          idempotencyKey: idempotencyKey ?? null,
-        },
-      });
-
-      // Reserve access spots (capacity tracking)
-      if (accessSelections && accessSelections.length > 0) {
-        for (const selection of accessSelections) {
-          await reserveAccessSpot(selection.accessId, selection.quantity, tx);
-        }
-      }
-
-      // Increment event registered count (atomic SQL within transaction)
-      await incrementRegisteredCountTx(tx, eventId);
-
-      // Consume sponsorship code atomically if one was provided
-      if (sponsorshipCode) {
-        const sponsorshipUpdate = await tx.sponsorship.updateMany({
-          where: { code: sponsorshipCode, status: "PENDING" },
-          data: { status: "USED" },
-        });
-
-        if (sponsorshipUpdate.count === 0) {
-          throw new AppError(
-            "Sponsorship code has already been used",
-            409,
-            true,
-            ErrorCodes.SPONSORSHIP_STATUS_CONFLICT,
-          );
-        }
-
-        // Link sponsorship to this registration
-        const consumedSponsorship = await tx.sponsorship.findFirst({
-          where: { code: sponsorshipCode },
-          select: { id: true },
-        });
-
-        if (consumedSponsorship) {
-          await tx.sponsorshipUsage.create({
-            data: {
-              sponsorshipId: consumedSponsorship.id,
-              registrationId: registration.id,
-              amountApplied: priceBreakdown.sponsorshipTotal,
-              appliedBy: "SYSTEM",
-            },
-          });
-        }
-      }
-
-      // Return full registration with derived accessSelections
-      const createdReg = await tx.registration.findUnique({
-        where: { id: registration.id },
-        include: {
-          form: { select: { id: true, name: true } },
-          event: {
-            select: { id: true, name: true, slug: true, clientId: true },
-          },
-        },
-      });
-
-      if (!createdReg) {
-        throw new AppError(
-          "Registration creation failed",
-          500,
-          true,
-          ErrorCodes.INTERNAL_ERROR,
-        );
-      }
-
-      // Create audit log for registration creation
-      await tx.auditLog.create({
-        data: {
-          entityType: "Registration",
-          entityId: registration.id,
-          action: "CREATE",
-          changes: {
-            email: { old: null, new: email },
-            firstName: { old: null, new: firstName ?? null },
-            lastName: { old: null, new: lastName ?? null },
-            totalAmount: { old: null, new: priceBreakdown.total },
-          },
-          performedBy: "PUBLIC",
-        },
-      });
-
-      return enrichWithAccessSelections(createdReg, tx);
+  if (consumedSponsorship) {
+    await tx.sponsorshipUsage.create({
+      data: {
+        sponsorshipId: consumedSponsorship.id,
+        registrationId,
+        amountApplied: sponsorshipTotal,
+        appliedBy: "SYSTEM",
+      },
     });
+  }
+}
+
+async function enrichCreatedRegistration(
+  tx: TxClient,
+  registrationId: string,
+  email: string,
+  firstName: string | undefined,
+  lastName: string | undefined,
+  priceBreakdown: PriceBreakdown,
+): Promise<RegistrationWithRelations> {
+  const createdReg = await tx.registration.findUnique({
+    where: { id: registrationId },
+    include: {
+      form: { select: { id: true, name: true } },
+      event: { select: { id: true, name: true, slug: true, clientId: true } },
+    },
+  });
+
+  if (!createdReg) {
+    throw new AppError(
+      "Registration creation failed",
+      500,
+      true,
+      ErrorCodes.INTERNAL_ERROR,
+    );
+  }
+
+  await tx.auditLog.create({
+    data: {
+      entityType: "Registration",
+      entityId: registrationId,
+      action: "CREATE",
+      changes: {
+        email: { old: null, new: email },
+        firstName: { old: null, new: firstName ?? null },
+        lastName: { old: null, new: lastName ?? null },
+        totalAmount: { old: null, new: priceBreakdown.total },
+      },
+      performedBy: "PUBLIC",
+    },
+  });
+
+  return enrichWithAccessSelections(createdReg, tx);
+}
+
+function buildRegistrationData(
+  input: CreateRegistrationInput,
+  form: { id: string; eventId: string; schemaVersion: number },
+  eventId: string,
+  priceBreakdown: PriceBreakdown,
+  editToken: string,
+  editTokenExpiry: Date,
+  initialPaymentStatus: "WAIVED" | "PENDING",
+): Prisma.RegistrationCreateInput {
+  const {
+    formId,
+    formData,
+    email,
+    firstName,
+    lastName,
+    phone,
+    accessSelections,
+    sponsorshipCode,
+    idempotencyKey,
+    linkBaseUrl,
+  } = input;
+
+  return {
+    form: { connect: { id: formId } },
+    event: { connect: { id: eventId } },
+    formData: formData as Prisma.InputJsonValue,
+    formSchemaVersion: form.schemaVersion,
+    email,
+    firstName: firstName ?? null,
+    lastName: lastName ?? null,
+    phone: phone ?? null,
+    paymentStatus: initialPaymentStatus,
+    paidAt: initialPaymentStatus === "WAIVED" ? new Date() : null,
+    totalAmount: priceBreakdown.total,
+    currency: priceBreakdown.currency,
+    priceBreakdown: priceBreakdown as unknown as Prisma.InputJsonValue,
+    baseAmount: priceBreakdown.calculatedBasePrice,
+    discountAmount: calculateDiscountAmount(priceBreakdown.appliedRules),
+    accessAmount: priceBreakdown.accessTotal,
+    sponsorshipCode: sponsorshipCode ?? null,
+    sponsorshipAmount: priceBreakdown.sponsorshipTotal,
+    accessTypeIds: accessSelections?.map((s) => s.accessId) ?? [],
+    editToken,
+    editTokenExpiry,
+    linkBaseUrl: linkBaseUrl ?? null,
+    idempotencyKey: idempotencyKey ?? null,
+  };
+}
+
+async function executeRegistrationTransaction(
+  tx: TxClient,
+  input: CreateRegistrationInput,
+  form: { id: string; eventId: string; schemaVersion: number },
+  eventId: string,
+  priceBreakdown: PriceBreakdown,
+): Promise<RegistrationWithRelations> {
+  const { email, firstName, lastName, accessSelections, sponsorshipCode } =
+    input;
+
+  // Re-check event status inside transaction to prevent TOCTOU race condition
+  const event = await tx.event.findUnique({
+    where: { id: eventId },
+    select: { status: true, maxCapacity: true, registeredCount: true },
+  });
+
+  if (!event || event.status !== "OPEN") {
+    throw new AppError(
+      "Event is not accepting registrations",
+      400,
+      true,
+      ErrorCodes.EVENT_NOT_OPEN,
+    );
+  }
+
+  if (
+    event.maxCapacity !== null &&
+    event.registeredCount >= event.maxCapacity
+  ) {
+    throw new AppError(
+      "Event is at capacity",
+      409,
+      true,
+      ErrorCodes.EVENT_FULL,
+    );
+  }
+
+  const editToken = randomBytes(EDIT_TOKEN_LENGTH).toString("hex");
+  const msPerHour = 60 * 60 * 1000;
+  const editTokenExpiry = new Date(Date.now() + EDIT_TOKEN_EXPIRY_HOURS * msPerHour);
+  const initialPaymentStatus = priceBreakdown.total === 0 ? "WAIVED" : "PENDING";
+
+  const registration = await tx.registration.create({
+    data: buildRegistrationData(
+      input,
+      form,
+      eventId,
+      priceBreakdown,
+      editToken,
+      editTokenExpiry,
+      initialPaymentStatus,
+    ),
+  });
+
+  if (accessSelections && accessSelections.length > 0) {
+    for (const selection of accessSelections) {
+      await reserveAccessSpot(selection.accessId, selection.quantity, tx);
+    }
+  }
+
+  await incrementRegisteredCountTx(tx, eventId);
+
+  if (sponsorshipCode) {
+    await consumeSponsorshipCode(
+      tx,
+      sponsorshipCode,
+      registration.id,
+      priceBreakdown.sponsorshipTotal,
+    );
+  }
+
+  return enrichCreatedRegistration(
+    tx,
+    registration.id,
+    email,
+    firstName,
+    lastName,
+    priceBreakdown,
+  );
+}
+
+export async function createRegistration(
+  input: CreateRegistrationInput,
+  priceBreakdown: PriceBreakdown,
+): Promise<RegistrationWithRelations> {
+  const { formId, email, firstName, lastName, accessSelections, formData } =
+    input;
+
+  const { form, eventId } = await validateRegistrationInput(
+    formId,
+    email,
+    accessSelections,
+    formData,
+  );
+
+  let result: RegistrationWithRelations;
+  try {
+    result = await prisma.$transaction((tx) =>
+      executeRegistrationTransaction(tx, input, form, eventId, priceBreakdown),
+    );
   } catch (err) {
     if (
       err instanceof Prisma.PrismaClientKnownRequestError &&

@@ -19,12 +19,12 @@ export {
 export {
   buildBatchEmailContext,
   buildLinkedSponsorshipContext,
-} from "./email-variable.service.js";
+} from "./email-context.service.js";
 
 export type {
   BatchEmailContextInput,
   LinkedSponsorshipContextInput,
-} from "./email-variable.service.js";
+} from "./email-context.service.js";
 
 // ============================================================================
 // Routes (external: server.ts)

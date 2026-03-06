@@ -137,16 +137,10 @@ export async function confirmPayment(
   return updated;
 }
 
-/**
- * Upload payment proof for a registration.
- * Compresses images to WebP, uploads to storage provider,
- * updates registration, and queues notification email.
- */
-export async function uploadPaymentProof(
-  registrationId: string,
-  file: { buffer: Buffer; filename: string; mimetype: string },
-): Promise<PaymentProofResponse> {
-  // Validate file type
+function validatePaymentFile(file: {
+  buffer: Buffer;
+  mimetype: string;
+}): void {
   if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
     throw new AppError(
       "Invalid file type. Allowed: PNG, JPG, PDF",
@@ -156,7 +150,6 @@ export async function uploadPaymentProof(
     );
   }
 
-  // Validate file size
   if (file.buffer.length > MAX_FILE_SIZE) {
     throw new AppError(
       "File too large. Maximum: 10MB",
@@ -165,8 +158,96 @@ export async function uploadPaymentProof(
       ErrorCodes.FILE_TOO_LARGE,
     );
   }
+}
 
-  // Get registration with event info and current status
+async function handleProofStorage(
+  file: { buffer: Buffer; mimetype: string },
+  registration: { eventId: string; paymentProofUrl: string | null },
+  registrationId: string,
+): Promise<{
+  fileUrl: string;
+  compressed: { ext: string; contentType: string; buffer: Buffer };
+}> {
+  const compressed = await compressFile(file.buffer, file.mimetype);
+  const key = `${registration.eventId}/${registrationId}/proof.${compressed.ext}`;
+  const storage = getStorageProvider();
+
+  if (registration.paymentProofUrl) {
+    try {
+      const oldKey = extractKeyFromUrl(registration.paymentProofUrl);
+      if (oldKey) {
+        await storage.delete(oldKey);
+      }
+    } catch (err) {
+      logger.warn({ err, registrationId }, "Failed to delete old payment proof");
+    }
+  }
+
+  let fileUrl: string;
+  try {
+    fileUrl = await storage.upload(
+      compressed.buffer,
+      key,
+      compressed.contentType,
+    );
+  } catch (error) {
+    logger.error(
+      { err: error, registrationId, key },
+      "Failed to upload payment proof",
+    );
+    throw new AppError(
+      "Failed to upload file. Please try again.",
+      500,
+      true,
+      ErrorCodes.INTERNAL_ERROR,
+    );
+  }
+
+  return { fileUrl, compressed };
+}
+
+async function saveProofAndAudit(
+  registrationId: string,
+  fileUrl: string,
+  oldStatus: string,
+  oldProofUrl: string | null,
+): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    await tx.registration.update({
+      where: { id: registrationId },
+      data: {
+        paymentProofUrl: fileUrl,
+        paymentStatus: "VERIFYING",
+        paymentMethod: "BANK_TRANSFER",
+      },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        entityType: "Registration",
+        entityId: registrationId,
+        action: "PAYMENT_PROOF_UPLOADED",
+        changes: {
+          paymentStatus: { old: oldStatus, new: "VERIFYING" },
+          paymentProofUrl: { old: oldProofUrl, new: fileUrl },
+        },
+        performedBy: "PUBLIC",
+      },
+    });
+  });
+}
+
+/**
+ * Upload payment proof for a registration.
+ * Compresses images to WebP, uploads to storage provider,
+ * updates registration, and queues notification email.
+ */
+export async function uploadPaymentProof(
+  registrationId: string,
+  file: { buffer: Buffer; filename: string; mimetype: string },
+): Promise<PaymentProofResponse> {
+  validatePaymentFile(file);
+
   const registration = await prisma.registration.findUnique({
     where: { id: registrationId },
     select: {
@@ -190,75 +271,18 @@ export async function uploadPaymentProof(
   // Only allow proof upload from PENDING or VERIFYING status
   validatePaymentTransitionInternal(registration.paymentStatus, "VERIFYING");
 
-  // Compress file (images → WebP, PDFs → passthrough)
-  const compressed = await compressFile(file.buffer, file.mimetype);
+  const { fileUrl, compressed } = await handleProofStorage(
+    file,
+    registration,
+    registrationId,
+  );
 
-  // Generate storage key
-  const key = `${registration.eventId}/${registrationId}/proof.${compressed.ext}`;
-
-  const storage = getStorageProvider();
-
-  // Delete old proof if exists
-  if (registration.paymentProofUrl) {
-    try {
-      const oldKey = extractKeyFromUrl(registration.paymentProofUrl);
-      if (oldKey) {
-        await storage.delete(oldKey);
-      }
-    } catch (err) {
-      logger.warn(
-        { err, registrationId },
-        "Failed to delete old payment proof",
-      );
-    }
-  }
-
-  // Upload compressed file
-  let fileUrl: string;
-  try {
-    fileUrl = await storage.upload(
-      compressed.buffer,
-      key,
-      compressed.contentType,
-    );
-  } catch (error) {
-    logger.error(
-      { err: error, registrationId, key },
-      "Failed to upload payment proof",
-    );
-    throw new AppError(
-      "Failed to upload file. Please try again.",
-      500,
-      true,
-      ErrorCodes.INTERNAL_ERROR,
-    );
-  }
-
-  // Update registration with payment proof URL, set status to VERIFYING, and create audit log
-  await prisma.$transaction(async (tx) => {
-    await tx.registration.update({
-      where: { id: registrationId },
-      data: {
-        paymentProofUrl: fileUrl,
-        paymentStatus: "VERIFYING",
-        paymentMethod: "BANK_TRANSFER",
-      },
-    });
-
-    // Create audit log for payment proof upload
-    await tx.auditLog.create({
-      data: {
-        entityType: "Registration",
-        entityId: registrationId,
-        action: "PAYMENT_PROOF_UPLOADED",
-        changes: {
-          paymentStatus: { old: registration.paymentStatus, new: "VERIFYING" },
-          paymentProofUrl: { old: registration.paymentProofUrl, new: fileUrl },
-        },
-        performedBy: "PUBLIC",
-      },
-    });
-  });
+  await saveProofAndAudit(
+    registrationId,
+    fileUrl,
+    registration.paymentStatus,
+    registration.paymentProofUrl,
+  );
 
   // Queue email notification to admin
   await queueTriggeredEmail("PAYMENT_PROOF_SUBMITTED", registration.eventId, {

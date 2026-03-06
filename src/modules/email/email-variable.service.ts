@@ -1,21 +1,28 @@
 // =============================================================================
 // EMAIL VARIABLE SERVICE
-// Builds context from Registration data and resolves variables in templates
+// Variable definitions, template resolution, and XSS sanitization
 // =============================================================================
 
 import { prisma } from "@/database/client.js";
-import type { Prisma } from "@/generated/prisma/client.js";
 import type { EmailContext, VariableDefinition } from "./email.types.js";
 
-// Type for registration with all needed relations
-type RegistrationWithRelations = Prisma.RegistrationGetPayload<{
-  include: {
-    event: {
-      include: { client: true };
-    };
-    form: true;
-  };
-}>;
+// =============================================================================
+// RE-EXPORTS FROM EMAIL CONTEXT SERVICE
+// (kept here so existing direct importers don't break)
+// =============================================================================
+
+export {
+  buildEmailContext,
+  buildEmailContextWithAccess,
+  buildBatchEmailContext,
+  buildLinkedSponsorshipContext,
+  EMPTY_EMAIL_CONTEXT,
+} from "./email-context.service.js";
+
+export type {
+  BatchEmailContextInput,
+  LinkedSponsorshipContextInput,
+} from "./email-context.service.js";
 
 // =============================================================================
 // VARIABLE DEFINITIONS (For editor variable picker)
@@ -345,212 +352,10 @@ function getExampleForFieldType(type: string): string {
 }
 
 // =============================================================================
-// BUILD EMAIL CONTEXT FROM REGISTRATION
-// =============================================================================
-
-export function buildEmailContext(
-  registration: RegistrationWithRelations,
-): EmailContext {
-  const formData = (registration.formData as Record<string, unknown>) || {};
-
-  // Use dynamic linkBaseUrl (captured from browser at registration) or fallback to env
-  const baseUrl =
-    registration.linkBaseUrl ||
-    process.env.PUBLIC_FORMS_URL ||
-    "https://events.example.com";
-
-  // Get event slug for URL paths
-  const slug = registration.event.slug || "";
-
-  // Use actual edit token for secure links
-  const token = registration.editToken || "";
-
-  // Build base context
-  const context: EmailContext = {
-    // Registration
-    firstName: registration.firstName || String(formData.firstName || ""),
-    lastName: registration.lastName || String(formData.lastName || ""),
-    fullName:
-      [registration.firstName, registration.lastName]
-        .filter(Boolean)
-        .join(" ") || "Registrant",
-    email: registration.email,
-    phone: registration.phone || String(formData.phone || ""),
-    registrationDate: formatDate(registration.submittedAt),
-    registrationId: registration.id,
-    registrationNumber: registration.id.slice(0, 8).toUpperCase(),
-
-    // Event
-    eventName: registration.event.name,
-    eventDate: formatDate(registration.event.startDate),
-    eventEndDate: formatDate(registration.event.endDate),
-    eventLocation: registration.event.location || "",
-    eventDescription: registration.event.description || "",
-
-    // Payment
-    totalAmount: formatCurrency(
-      registration.totalAmount,
-      registration.currency,
-    ),
-    paidAmount: formatCurrency(registration.paidAmount, registration.currency),
-    amountDue: formatCurrency(
-      registration.totalAmount -
-        (registration.sponsorshipAmount || 0) -
-        registration.paidAmount,
-      registration.currency,
-    ),
-    paymentStatus: formatPaymentStatus(registration.paymentStatus),
-    paymentMethod: registration.paymentMethod || "",
-
-    // Access (will be enriched below)
-    selectedAccess: "",
-    selectedWorkshops: "",
-    selectedDinners: "",
-
-    // Links with event slug and secure edit token
-    // NOTE: registrationLink and editRegistrationLink intentionally resolve to the same URL.
-    // The pure-form app uses a single route for both viewing and editing a registration.
-    // The edit token in the URL grants edit permission. A separate "view-only" route does not exist.
-    registrationLink: `${baseUrl}/${slug}/registration/${registration.id}/${token}`,
-    editRegistrationLink: `${baseUrl}/${slug}/registration/${registration.id}/${token}`,
-    paymentLink: `${baseUrl}/${slug}/payment/${registration.id}/${token}`,
-
-    // Organization
-    organizerName: registration.event.client.name,
-    organizerEmail: registration.event.client.email || "",
-    organizerPhone: registration.event.client.phone || "",
-
-    // Bank Details (populated in buildEmailContextWithAccess)
-    bankName: "",
-    bankAccountName: "",
-    bankAccountNumber: "",
-  };
-
-  // Add dynamic form fields
-  for (const [key, value] of Object.entries(formData)) {
-    context[`form_${key}` as keyof EmailContext] = formatFieldValue(value);
-  }
-
-  return context;
-}
-
-// Build context with access type names resolved
-export async function buildEmailContextWithAccess(
-  registration: RegistrationWithRelations,
-): Promise<EmailContext> {
-  const context = buildEmailContext(registration);
-
-  // Fetch pricing for bank details and base price (used for sponsorship items)
-  const pricing = await prisma.eventPricing.findUnique({
-    where: { eventId: registration.eventId },
-    select: {
-      bankName: true,
-      bankAccountName: true,
-      bankAccountNumber: true,
-      basePrice: true,
-    },
-  });
-
-  if (pricing) {
-    context.bankName = pricing.bankName || "";
-    context.bankAccountName = pricing.bankAccountName || "";
-    context.bankAccountNumber = pricing.bankAccountNumber || "";
-  }
-
-  // Resolve access type IDs to names
-  if (registration.accessTypeIds && registration.accessTypeIds.length > 0) {
-    const accessTypes = await prisma.eventAccess.findMany({
-      where: { id: { in: registration.accessTypeIds } },
-      select: { id: true, name: true, type: true },
-    });
-
-    const accessMap = new Map(accessTypes.map((a) => [a.id, a]));
-    const selectedNames = registration.accessTypeIds
-      .map((id) => accessMap.get(id)?.name)
-      .filter(Boolean) as string[];
-
-    context.selectedAccess = selectedNames.join(", ");
-
-    // Filter by type
-    context.selectedWorkshops = accessTypes
-      .filter((a) => a.type === "WORKSHOP")
-      .map((a) => a.name)
-      .join(", ");
-
-    context.selectedDinners = accessTypes
-      .filter((a) => a.type === "DINNER")
-      .map((a) => a.name)
-      .join(", ");
-  }
-
-  // Resolve sponsorship data if this registration is linked to a sponsorship
-  if (registration.sponsorshipCode) {
-    const sponsorship = await prisma.sponsorship.findFirst({
-      where: {
-        code: registration.sponsorshipCode,
-        eventId: registration.eventId,
-      },
-      include: {
-        batch: {
-          select: {
-            labName: true,
-            contactName: true,
-            email: true,
-          },
-        },
-      },
-    });
-
-    if (sponsorship) {
-      context.sponsorshipCode = sponsorship.code;
-      context.sponsorshipAmount = formatCurrency(
-        sponsorship.totalAmount,
-        registration.currency,
-      );
-      context.labName = sponsorship.batch.labName;
-      context.labContactName = sponsorship.batch.contactName;
-      context.labEmail = sponsorship.batch.email;
-      context.beneficiaryName = sponsorship.beneficiaryName;
-
-      // Build sponsored items list
-      const sponsoredItems: string[] = [];
-      if (sponsorship.coversBasePrice && pricing) {
-        sponsoredItems.push(
-          `- Base registration: ${formatCurrency(pricing.basePrice, registration.currency)}`,
-        );
-      }
-
-      if (
-        sponsorship.coveredAccessIds &&
-        sponsorship.coveredAccessIds.length > 0
-      ) {
-        const coveredAccess = await prisma.eventAccess.findMany({
-          where: { id: { in: sponsorship.coveredAccessIds } },
-          select: { name: true, price: true },
-        });
-        for (const access of coveredAccess) {
-          sponsoredItems.push(
-            `- ${access.name}: ${formatCurrency(access.price, registration.currency)}`,
-          );
-        }
-      }
-
-      context.sponsoredItems = sponsoredItems.join("\n");
-      context.remainingAmount = formatCurrency(
-        registration.totalAmount - sponsorship.totalAmount,
-        registration.currency,
-      );
-    }
-  }
-
-  return context;
-}
-
-// =============================================================================
 // RESOLVE VARIABLES IN TEMPLATE
 // =============================================================================
 
-// Pure replacement, no HTML escaping — use for subject and plain text
+// Pure replacement, no HTML escaping -- use for subject and plain text
 export function resolveVariables(
   template: string,
   context: EmailContext,
@@ -566,7 +371,7 @@ export function resolveVariables(
   });
 }
 
-// Replacement with per-value HTML escaping — use for HTML content
+// Replacement with per-value HTML escaping -- use for HTML content
 export function resolveVariablesHtml(
   template: string,
   context: EmailContext,
@@ -611,42 +416,6 @@ export function sanitizeUrl(url: string): string {
   }
 
   return "#blocked";
-}
-
-// =============================================================================
-// FORMATTING HELPERS
-// =============================================================================
-
-function formatDate(date: Date | string | null | undefined): string {
-  if (!date) return "";
-  const d = new Date(date);
-  return d.toLocaleDateString("en-US", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
-}
-
-function formatCurrency(amount: number, currency = "TND"): string {
-  return `${amount.toLocaleString()} ${currency}`;
-}
-
-function formatPaymentStatus(status: string): string {
-  const statusMap: Record<string, string> = {
-    PENDING: "Pending",
-    PAID: "Confirmed",
-    REFUNDED: "Refunded",
-    WAIVED: "Waived",
-  };
-  return statusMap[status] || status;
-}
-
-function formatFieldValue(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  if (typeof value === "boolean") return value ? "Yes" : "No";
-  if (Array.isArray(value)) return value.join(", ");
-  if (value instanceof Date) return formatDate(value);
-  return String(value);
 }
 
 // =============================================================================
@@ -706,241 +475,5 @@ export function getSampleEmailContext(): EmailContext {
       "- Dr. Ahmed: 450 TND\n- Dr. Sarah: 450 TND\n- Dr. Omar: 450 TND",
     sponsoredItems: "- Base registration: 200 TND\n- Workshop A: 50 TND",
     remainingAmount: "150 TND",
-  };
-}
-
-// =============================================================================
-// EMPTY CONTEXT BASELINE
-// =============================================================================
-
-/**
- * An EmailContext with every field set to the empty string.
- * Sponsorship context builders spread from this so each builder only needs
- * to set the fields it actually populates.
- */
-export const EMPTY_EMAIL_CONTEXT: EmailContext = {
-  firstName: "",
-  lastName: "",
-  fullName: "",
-  email: "",
-  phone: "",
-  registrationDate: "",
-  registrationId: "",
-  registrationNumber: "",
-  eventName: "",
-  eventDate: "",
-  eventEndDate: "",
-  eventLocation: "",
-  eventDescription: "",
-  totalAmount: "",
-  paidAmount: "",
-  amountDue: "",
-  paymentStatus: "",
-  paymentMethod: "",
-  selectedAccess: "",
-  selectedWorkshops: "",
-  selectedDinners: "",
-  registrationLink: "",
-  editRegistrationLink: "",
-  paymentLink: "",
-  organizerName: "",
-  organizerEmail: "",
-  organizerPhone: "",
-  bankName: "",
-  bankAccountName: "",
-  bankAccountNumber: "",
-};
-
-// =============================================================================
-// SPONSORSHIP EMAIL CONTEXT BUILDERS
-// =============================================================================
-
-/**
- * Input types for sponsorship context builders
- */
-export interface BatchEmailContextInput {
-  batch: {
-    labName: string;
-    contactName: string;
-    email: string;
-    phone: string | null;
-  };
-  sponsorships: Array<{
-    beneficiaryName: string;
-    beneficiaryEmail: string;
-    totalAmount: number;
-  }>;
-  event: {
-    name: string;
-    startDate: Date;
-    location: string | null;
-    client: { name: string };
-  };
-  currency: string;
-}
-
-export interface LinkedSponsorshipContextInput {
-  sponsorship: {
-    code: string;
-    beneficiaryName: string;
-    coversBasePrice: boolean;
-    coveredAccessIds: string[];
-    totalAmount: number;
-    batch: {
-      labName: string;
-      contactName: string;
-      email: string;
-    };
-  };
-  registration: {
-    id: string;
-    email: string;
-    firstName: string | null;
-    lastName: string | null;
-    phone: string | null;
-    totalAmount: number;
-    sponsorshipAmount: number;
-    linkBaseUrl: string | null;
-    editToken: string | null;
-  };
-  event: {
-    name: string;
-    slug: string;
-    startDate: Date;
-    location: string | null;
-    client: { name: string };
-  };
-  pricing: { basePrice: number } | null;
-  accessItems: Array<{ id: string; name: string; price: number }>;
-  currency: string;
-}
-
-/**
- * Build email context for lab confirmation email (SPONSORSHIP_BATCH_SUBMITTED)
- */
-export function buildBatchEmailContext(
-  input: BatchEmailContextInput,
-): Partial<EmailContext> {
-  const { batch, sponsorships, event, currency } = input;
-  const totalAmount = sponsorships.reduce((sum, s) => sum + s.totalAmount, 0);
-
-  return {
-    ...EMPTY_EMAIL_CONTEXT,
-
-    // Sender identity (lab contact as pseudo-registrant)
-    firstName: batch.contactName.split(" ")[0] || batch.contactName,
-    lastName: batch.contactName.split(" ").slice(1).join(" ") || "",
-    fullName: batch.contactName,
-    email: batch.email,
-    phone: batch.phone || "",
-    registrationDate: formatDate(new Date()),
-
-    // Event info
-    eventName: event.name,
-    eventDate: formatDate(event.startDate),
-    eventLocation: event.location || "",
-    organizerName: event.client.name,
-
-    // Payment summary
-    totalAmount: formatCurrency(totalAmount, currency),
-    paidAmount: "0 " + currency,
-    amountDue: formatCurrency(totalAmount, currency),
-    paymentStatus: "N/A",
-
-    // Lab info
-    labName: batch.labName,
-    labContactName: batch.contactName,
-    labEmail: batch.email,
-
-    // Batch summary
-    beneficiaryCount: String(sponsorships.length),
-    totalBatchAmount: formatCurrency(totalAmount, currency),
-    beneficiaryList: sponsorships
-      .map(
-        (s) =>
-          `- ${s.beneficiaryName} (${s.beneficiaryEmail}): ${formatCurrency(s.totalAmount, currency)}`,
-      )
-      .join("\n"),
-  };
-}
-
-/**
- * Build email context for doctor notification (SPONSORSHIP_LINKED or SPONSORSHIP_APPLIED)
- */
-export function buildLinkedSponsorshipContext(
-  input: LinkedSponsorshipContextInput,
-): Partial<EmailContext> {
-  const { sponsorship, registration, event, pricing, accessItems, currency } =
-    input;
-
-  // Build sponsored items list
-  const sponsoredItems: string[] = [];
-  if (sponsorship.coversBasePrice && pricing) {
-    sponsoredItems.push(
-      `- Base registration: ${formatCurrency(pricing.basePrice, currency)}`,
-    );
-  }
-  for (const accessId of sponsorship.coveredAccessIds) {
-    const access = accessItems.find((a) => a.id === accessId);
-    if (access) {
-      sponsoredItems.push(
-        `- ${access.name}: ${formatCurrency(access.price, currency)}`,
-      );
-    }
-  }
-
-  // Calculate remaining
-  const remainingAmount =
-    registration.totalAmount - registration.sponsorshipAmount;
-
-  // Build links
-  const baseUrl =
-    registration.linkBaseUrl ||
-    process.env.PUBLIC_FORMS_URL ||
-    "https://events.example.com";
-  const token = registration.editToken || "";
-
-  return {
-    ...EMPTY_EMAIL_CONTEXT,
-
-    // Registration info
-    firstName: registration.firstName || "",
-    lastName: registration.lastName || "",
-    fullName:
-      [registration.firstName, registration.lastName]
-        .filter(Boolean)
-        .join(" ") || sponsorship.beneficiaryName,
-    email: registration.email,
-    phone: registration.phone || "",
-    registrationDate: formatDate(new Date()),
-    registrationId: registration.id,
-    registrationNumber: registration.id.slice(0, 8).toUpperCase(),
-
-    // Event info
-    eventName: event.name,
-    eventDate: formatDate(event.startDate),
-    eventLocation: event.location || "",
-    organizerName: event.client.name,
-
-    // Payment info
-    totalAmount: formatCurrency(registration.totalAmount, currency),
-    paidAmount: "0 " + currency,
-    amountDue: formatCurrency(remainingAmount, currency),
-    paymentStatus: "Pending",
-
-    // Links
-    registrationLink: `${baseUrl}/${event.slug}/registration/${registration.id}/${token}`,
-    editRegistrationLink: `${baseUrl}/${event.slug}/registration/${registration.id}/${token}`,
-    paymentLink: `${baseUrl}/${event.slug}/payment/${registration.id}/${token}`,
-
-    // Sponsorship info
-    sponsorshipCode: sponsorship.code,
-    sponsorshipAmount: formatCurrency(sponsorship.totalAmount, currency),
-    labName: sponsorship.batch.labName,
-    labContactName: sponsorship.batch.contactName,
-    labEmail: sponsorship.batch.email,
-    beneficiaryName: sponsorship.beneficiaryName,
-    sponsoredItems: sponsoredItems.join("\n"),
-    remainingAmount: formatCurrency(remainingAmount, currency),
   };
 }

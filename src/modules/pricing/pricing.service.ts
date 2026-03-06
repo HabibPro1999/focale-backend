@@ -341,40 +341,16 @@ export async function deletePricingRule(
 // Price Calculation
 // ============================================================================
 
-/**
- * Calculate price breakdown for a registration.
- *
- * Formula:
- *   Base Price = EventPricing.basePrice (or first matching rule's price)
- *   + Selected Access Items
- *   - Sponsorship Discounts
- *   = Total
- */
-export async function calculatePrice(
+function applyPricingRules(
+  rules: EmbeddedPricingRule[],
+  formData: Record<string, unknown>,
+  basePrice: number,
   eventId: string,
-  input: CalculatePriceRequest,
-): Promise<PriceBreakdown> {
-  const { formData, selectedExtras, sponsorshipCodes } = input;
-
-  // Get event pricing configuration with embedded rules
-  const pricing = await getEventPricing(eventId);
-  if (!pricing)
-    throw new AppError(
-      "Event pricing not found",
-      404,
-      true,
-      ErrorCodes.PRICING_NOT_FOUND,
-    );
-
-  const { basePrice, currency, rules } = pricing;
-
-  // Get active rules sorted by priority (highest first)
+): { calculatedBasePrice: number; appliedRules: PriceBreakdown["appliedRules"] } {
   const activeRules = rules
     .filter((r) => r.active)
     .sort((a, b) => b.priority - a.priority);
 
-  // Find first matching rule (highest priority wins)
-  // If a rule matches, its price overrides the base price
   const appliedRules: PriceBreakdown["appliedRules"] = [];
   let calculatedBasePrice = basePrice;
 
@@ -392,57 +368,38 @@ export async function calculatePrice(
         reason: `Base price set to ${rule.price}`,
       });
       logger.info(
-        {
-          eventId,
-          ruleId: rule.id,
-          ruleName: rule.name,
-          adjustment: rule.price - basePrice,
-        },
+        { eventId, ruleId: rule.id, ruleName: rule.name, adjustment: rule.price - basePrice },
         "Pricing rule matched",
       );
-      break; // First match wins
+      break;
     }
   }
 
-  // Calculate access/extras total
-  const extrasDetails = await calculateExtrasTotal(selectedExtras);
-  const extrasTotal = extrasDetails.reduce((sum, e) => sum + e.subtotal, 0);
+  return { calculatedBasePrice, appliedRules };
+}
 
-  // Calculate subtotal first (needed for sponsorship validation)
+function assemblePriceBreakdown(
+  basePrice: number,
+  extras: PriceBreakdown["extras"],
+  sponsorships: PriceBreakdown["sponsorships"],
+  total: number,
+  appliedRules: PriceBreakdown["appliedRules"],
+  currency: string,
+): PriceBreakdown {
+  const calculatedBasePrice = appliedRules.length > 0
+    ? (basePrice + appliedRules[0].effect)
+    : basePrice;
+  const extrasTotal = extras.reduce((sum, e) => sum + e.subtotal, 0);
   const subtotal = calculatedBasePrice + extrasTotal;
-
-  // Validate sponsorship codes with smart matching
-  // Only applies the portion that matches what the registration actually selected
-  const sponsorships = await validateSponsorshipCodes(
-    sponsorshipCodes,
-    eventId,
-    {
-      calculatedBasePrice,
-      extrasDetails,
-      subtotal,
-    },
-  );
   const sponsorshipTotal = sponsorships
     .filter((s) => s.valid)
     .reduce((sum, s) => sum + s.amount, 0);
-
-  // Calculate final total
-  const total = Math.max(0, subtotal - sponsorshipTotal);
-
-  logger.info(
-    {
-      eventId,
-      finalTotal: total,
-      sponsorshipTotal,
-    },
-    "Price calculation completed",
-  );
 
   return {
     basePrice,
     appliedRules,
     calculatedBasePrice,
-    extras: extrasDetails,
+    extras,
     extrasTotal,
     subtotal,
     sponsorships,
@@ -450,6 +407,52 @@ export async function calculatePrice(
     total,
     currency,
   };
+}
+
+/**
+ * Calculate price breakdown for a registration.
+ *
+ * Formula:
+ *   Base Price = EventPricing.basePrice (or first matching rule's price)
+ *   + Selected Access Items
+ *   - Sponsorship Discounts
+ *   = Total
+ */
+export async function calculatePrice(
+  eventId: string,
+  input: CalculatePriceRequest,
+): Promise<PriceBreakdown> {
+  const { formData, selectedExtras, sponsorshipCodes } = input;
+
+  const pricing = await getEventPricing(eventId);
+  if (!pricing)
+    throw new AppError(
+      "Event pricing not found",
+      404,
+      true,
+      ErrorCodes.PRICING_NOT_FOUND,
+    );
+
+  const { basePrice, currency, rules } = pricing;
+  const { calculatedBasePrice, appliedRules } = applyPricingRules(rules, formData, basePrice, eventId);
+
+  const extrasDetails = await calculateExtrasTotal(selectedExtras);
+  const extrasTotal = extrasDetails.reduce((sum, e) => sum + e.subtotal, 0);
+  const subtotal = calculatedBasePrice + extrasTotal;
+
+  const sponsorships = await validateSponsorshipCodes(
+    sponsorshipCodes,
+    eventId,
+    { calculatedBasePrice, extrasDetails, subtotal },
+  );
+  const sponsorshipTotal = sponsorships
+    .filter((s) => s.valid)
+    .reduce((sum, s) => sum + s.amount, 0);
+  const total = Math.max(0, subtotal - sponsorshipTotal);
+
+  logger.info({ eventId, finalTotal: total, sponsorshipTotal }, "Price calculation completed");
+
+  return assemblePriceBreakdown(basePrice, extrasDetails, sponsorships, total, appliedRules, currency);
 }
 
 // ============================================================================
