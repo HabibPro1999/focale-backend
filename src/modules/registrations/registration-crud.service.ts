@@ -69,7 +69,7 @@ const StoredPriceBreakdownSchema = z.object({
   sponsorshipTotal: z.number(),
   total: z.number(),
   currency: z.string(),
-});
+}).strict();
 
 const ZERO_PRICE_BREAKDOWN: PriceBreakdown = {
   basePrice: 0,
