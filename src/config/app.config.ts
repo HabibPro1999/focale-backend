@@ -42,6 +42,9 @@ const env = envSchema.parse(process.env);
 
 const isProduction = env.NODE_ENV === "production";
 
+// Deep freeze: nested objects need individual freeze() calls — a single top-level
+// freeze leaves inner objects mutable. `as const satisfies` cannot be used here
+// because values are derived from process.env (runtime, not compile-time literals).
 export const config = Object.freeze({
   NODE_ENV: env.NODE_ENV,
   PORT: env.PORT,

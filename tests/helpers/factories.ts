@@ -300,7 +300,7 @@ export function createMockSponsorship(
     coversBasePrice: true,
     coveredAccessIds: [],
     totalAmount: faker.number.int({ min: 100, max: 500 }),
-    nominalAmount: null,
+    nominalAmount: 0,
     targetRegistrationId: null,
     createdAt: faker.date.past(),
     updatedAt: faker.date.recent(),

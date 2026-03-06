@@ -26,16 +26,17 @@ function createPrismaClient() {
     /**
      * Automatic field omission for the User model.
      *
-     * Every User query automatically omits `createdAt` and `updatedAt` unless
-     * the caller explicitly uses a `select` clause (which takes precedence and
-     * makes `omit` invalid in Prisma). Aggregate operations (`count`,
-     * `aggregate`, `groupBy`) are also excluded because they do not support
-     * the `omit` option.
+     * Prisma 7 supports global `omit` in the client constructor, but that approach
+     * changes the inferred return types of User queries — breaking call sites that
+     * pass `prisma` to functions typed against the base PrismaClient (e.g. tx
+     * parameters). The query extension avoids this type incompatibility while
+     * achieving the same runtime behaviour: createdAt and updatedAt are stripped
+     * from every User query response without affecting the static types seen by
+     * the rest of the codebase.
      *
-     * Why: User rows are fetched frequently and these timestamps are internal
-     * metadata that should not leak to API consumers or clutter downstream
-     * type inference. Centralising the omission here avoids repeating
-     * `omit: { createdAt: true, updatedAt: true }` on every call site.
+     * Why omit at all: User rows are fetched frequently and these timestamps are
+     * internal metadata that should not leak to API consumers or clutter
+     * downstream type inference.
      */
     query: {
       user: {

@@ -341,6 +341,7 @@ async function fetchFormFieldDefinitions(eventId: string): Promise<FormField[]> 
   type FormSchemaSteps = {
     steps: Array<{ fields: Array<FormField> }>;
   };
+  // Prisma Json fields require cast — data shape is controlled by our write path
   const formSchema = form?.schema as FormSchemaSteps | null;
   return (
     formSchema?.steps

@@ -36,7 +36,7 @@ export function errorHandler(
         return reply.status(409).send({
           error: "Resource already exists",
           code: ErrorCodes.CONFLICT,
-          field: (error.meta?.target as string[])?.join(", "),
+          field: Array.isArray(error.meta?.target) ? error.meta.target.join(", ") : String(error.meta?.target ?? "unknown"),
           requestId,
         });
 

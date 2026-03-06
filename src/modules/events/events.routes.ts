@@ -160,7 +160,7 @@ export async function eventsRoutes(app: AppInstance): Promise<void> {
 
       const data = await request.file();
       if (!data) {
-        throw app.httpErrors.badRequest("No file uploaded");
+        throw new AppError("No file uploaded", 400, true, ErrorCodes.BAD_REQUEST);
       }
 
       const buffer = await data.toBuffer();

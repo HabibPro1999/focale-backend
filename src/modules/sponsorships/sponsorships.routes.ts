@@ -17,7 +17,6 @@ import {
   unlinkSponsorshipFromRegistration,
   getAvailableSponsorships,
   getLinkedSponsorships,
-  type LinkSponsorshipSkippedResult,
 } from "./sponsorships-linking.service.js";
 import { getRegistrationById } from "@registrations";
 import {
@@ -316,7 +315,7 @@ export async function registrationSponsorshipsRoutes(
         request.user!.id,
       );
 
-      if ((result as LinkSponsorshipSkippedResult).skipped) {
+      if (result.skipped) {
         return reply.status(200).send({ success: false, ...result });
       }
 
@@ -365,7 +364,7 @@ export async function registrationSponsorshipsRoutes(
         request.user!.id,
       );
 
-      if ((result as LinkSponsorshipSkippedResult).skipped) {
+      if (result.skipped) {
         return reply.status(200).send({ success: false, ...result });
       }
 

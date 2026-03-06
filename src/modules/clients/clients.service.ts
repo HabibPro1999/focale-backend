@@ -238,8 +238,8 @@ export async function updateClient(
       mergedModules = [...new Set([...existingModules, ...newModules])];
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { enabledModules: _removed, ...restInput } = input;
+    const { enabledModules: _, ...restInput } = input;
+    void _;
 
     const updatedClient = await tx.client.update({
       where: { id },

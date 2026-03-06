@@ -254,6 +254,7 @@ export async function listRegistrationAuditLogs(
 
   const enrichedLogs: RegistrationAuditLog[] = logs.map((log) => ({
     id: log.id,
+    // Safe cast: action values are only written by our code via AuditActionType enum
     action: log.action as RegistrationAuditLog["action"],
     changes: log.changes as Record<
       string,

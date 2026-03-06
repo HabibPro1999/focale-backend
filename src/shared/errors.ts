@@ -1,5 +1,6 @@
 import { ZodError } from "zod";
 
+// Error codes are grouped by module. Gaps are intentional — codes are stable identifiers and must never be renumbered. New codes are added at the end of each group.
 export const ErrorCodes = {
   // Auth (1xxx)
   UNAUTHORIZED: "AUTH_1001",
@@ -87,7 +88,7 @@ export class AppError extends Error {
     message: string,
     public statusCode: number = 500,
     public isOperational: boolean = true,
-    public code?: string,
+    public code?: ErrorCode,
     public details?: Record<string, unknown>,
   ) {
     super(message);

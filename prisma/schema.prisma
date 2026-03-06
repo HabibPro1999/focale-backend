@@ -142,6 +142,7 @@ model EventPricing {
   id        String @id @default(uuid())
   eventId   String @unique @map("event_id")
   basePrice Int    @default(0) @map("base_price")
+  /// Currency code (ISO 4217). Currently TND-only; string type allows future multi-currency support.
   currency  String @default("TND")
   rules     Json   @default("[]") // Embedded pricing rules array
 
@@ -176,6 +177,11 @@ enum AccessType {
   OTHER
 }
 
+enum ConditionLogic {
+  AND @map("and")
+  OR  @map("or")
+}
+
 model EventAccess {
   id      String @id @default(uuid())
   eventId String @map("event_id")
@@ -194,6 +200,7 @@ model EventAccess {
 
   // Pricing
   price    Int    @default(0)
+  /// Currency code (ISO 4217). Currently TND-only; string type allows future multi-currency support.
   currency String @default("TND")
 
   // Capacity
@@ -206,7 +213,7 @@ model EventAccess {
 
   // Conditions (form-based prerequisites)
   conditions     Json? // Array of {fieldId, operator, value}
-  conditionLogic String @default("and") @map("condition_logic")
+  conditionLogic ConditionLogic @default(AND) @map("condition_logic")
 
   // Display
   sortOrder Int     @default(0) @map("sort_order")
@@ -282,7 +289,7 @@ model Sponsorship {
   coversBasePrice    Boolean           @default(true) @map("covers_base_price")
   coveredAccessIds   String[]          @default([]) @map("covered_access_ids") // Array of EventAccess IDs
   totalAmount        Int               @map("total_amount") // Calculated: base (if covered) + sum(access prices)
-  nominalAmount      Int?              @map("nominal_amount") // Static base price calc (what lab intended)
+  nominalAmount      Int               @default(0) @map("nominal_amount") // Static base price calc (what lab intended)
 
   // Pending linked account: registration waiting for admin approval
   targetRegistrationId   String?           @map("target_registration_id")
@@ -295,11 +302,17 @@ model Sponsorship {
   event  Event              @relation(fields: [eventId], references: [id], onDelete: Cascade)
   usages SponsorshipUsage[]
 
+  // Used by: getSponsorshipsByEvent, listSponsorships filtered by event
   @@index([eventId])
+  // Used by: getSponsorshipsByBatch, batch detail view
   @@index([batchId])
+  // Used by: validateSponsorshipCode, code lookup at registration time
   @@index([code])
+  // Used by: listSponsorships filtered by status, queue processing
   @@index([status])
+  // Used by: lookupSponsorshipByBeneficiary, duplicate detection
   @@index([beneficiaryEmail])
+  // Used by: resolveTargetRegistration, pending linked-account approval
   @@index([targetRegistrationId])
   @@map("sponsorships")
 }
@@ -364,6 +377,7 @@ model Registration {
   // Payment
   totalAmount      Int            @map("total_amount")
   paidAmount       Int            @default(0) @map("paid_amount")
+  /// Currency code (ISO 4217). Currently TND-only; string type allows future multi-currency support.
   currency         String         @default("TND")
   paymentMethod    PaymentMethod? @map("payment_method")
   paymentReference String?        @map("payment_reference")

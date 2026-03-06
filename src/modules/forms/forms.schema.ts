@@ -56,8 +56,9 @@ export const FieldValidationSchema = z
     required: z.boolean().optional(),
     minLength: z.number().int().positive().optional(),
     maxLength: z.number().int().positive().optional(),
-    /// Legacy: min/max are duplicates of minValue/maxValue — kept for backward compat
+    // @deprecated — use minValue/maxValue instead. Will be removed in next major version.
     min: z.number().optional(),
+    // @deprecated — use minValue/maxValue instead. Will be removed in next major version.
     max: z.number().optional(),
     minValue: z.number().optional(),
     maxValue: z.number().optional(),
@@ -67,7 +68,7 @@ export const FieldValidationSchema = z
     step: z.number().optional(),
     minDate: z.string().optional(),
     maxDate: z.string().optional(),
-    /// Legacy: acceptedFileTypes duplicates fileTypes — kept for backward compat
+    // @deprecated — use fileTypes instead. Will be removed in next major version.
     acceptedFileTypes: z.array(z.string()).optional(),
     minSelections: z.number().int().min(0).optional(),
     maxSelections: z.number().int().positive().optional(),

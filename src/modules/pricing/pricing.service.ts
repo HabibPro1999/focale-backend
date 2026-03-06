@@ -43,7 +43,7 @@ type CalculatePriceRequest = {
 // ============================================================================
 
 // EventPricing with parsed rules array
-export type EventPricingWithRules = Omit<EventPricing, "rules"> & {
+type EventPricingWithRules = Omit<EventPricing, "rules"> & {
   rules: EmbeddedPricingRule[];
 };
 
@@ -223,6 +223,7 @@ export async function updateEventPricing(
 // Embedded Rule Management Helpers
 // ============================================================================
 
+// Shared transaction wrapper for pricing rule mutations — ensures atomic read-modify-write with event pricing
 /**
  * Fetch event pricing, parse rules, apply a transformation, and write back.
  * Wraps the common read-modify-write pattern in a transaction.
