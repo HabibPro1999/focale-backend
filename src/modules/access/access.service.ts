@@ -278,12 +278,49 @@ async function detectCircularPrerequisites(
 // CRUD Operations
 // ============================================================================
 
+/**
+ * Validates that prerequisite access IDs exist in the same event and have no
+ * circular dependency with the given access item.
+ * @param eventId - The event context
+ * @param accessId - The access item being created/updated (use a temp UUID for new items)
+ * @param requiredAccessIds - The proposed prerequisite IDs
+ * @param notFoundMessage - Error message when prerequisites are missing
+ */
+async function validatePrerequisites(
+  eventId: string,
+  accessId: string,
+  requiredAccessIds: string[],
+  notFoundMessage: string,
+): Promise<void> {
+  if (requiredAccessIds.length === 0) return;
+
+  const prerequisites = await prisma.eventAccess.findMany({
+    where: { id: { in: requiredAccessIds }, eventId },
+  });
+  if (prerequisites.length !== requiredAccessIds.length) {
+    throw new AppError(notFoundMessage, 400, true, ErrorCodes.BAD_REQUEST);
+  }
+
+  const hasCycle = await detectCircularPrerequisites(
+    eventId,
+    accessId,
+    requiredAccessIds,
+  );
+  if (hasCycle) {
+    throw new AppError(
+      "Circular prerequisite dependency detected",
+      400,
+      true,
+      ErrorCodes.ACCESS_CIRCULAR_DEPENDENCY,
+    );
+  }
+}
+
 export async function createEventAccess(
   input: CreateEventAccessInput,
 ): Promise<EventAccessWithPrerequisites> {
   const { eventId, requiredAccessIds, ...data } = input;
 
-  // Fetch event for existence check and date validation
   const event = await prisma.event.findUnique({
     where: { id: eventId },
     select: { id: true, startDate: true, endDate: true },
@@ -292,7 +329,6 @@ export async function createEventAccess(
     throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
   }
 
-  // Validate access dates against event boundaries
   const dateValidation = validateAccessDatesAgainstEvent(
     {
       startsAt: data.startsAt,
@@ -311,36 +347,14 @@ export async function createEventAccess(
     );
   }
 
-  // Validate prerequisite access items exist and belong to same event
+  // For new items, use a temp UUID for the circular dependency graph check
   if (requiredAccessIds && requiredAccessIds.length > 0) {
-    const prerequisites = await prisma.eventAccess.findMany({
-      where: { id: { in: requiredAccessIds }, eventId },
-    });
-    if (prerequisites.length !== requiredAccessIds.length) {
-      throw new AppError(
-        "One or more prerequisite access items not found or belong to different event",
-        400,
-        true,
-        ErrorCodes.BAD_REQUEST,
-      );
-    }
-
-    // Check for circular dependencies
-    // For new items, generate a temporary ID for the graph check
-    const tempId = randomUUID();
-    const hasCycle = await detectCircularPrerequisites(
+    await validatePrerequisites(
       eventId,
-      tempId,
+      randomUUID(),
       requiredAccessIds,
+      "One or more prerequisite access items not found or belong to different event",
     );
-    if (hasCycle) {
-      throw new AppError(
-        "Circular prerequisite dependency detected",
-        400,
-        true,
-        ErrorCodes.ACCESS_CIRCULAR_DEPENDENCY,
-      );
-    }
   }
 
   return prisma.eventAccess.create({
@@ -372,55 +386,13 @@ export async function createEventAccess(
   });
 }
 
-export async function updateEventAccess(
-  id: string,
-  input: UpdateEventAccessInput,
-): Promise<EventAccessWithPrerequisites> {
-  const access = await prisma.eventAccess.findUnique({
-    where: { id },
-    include: {
-      requiredAccess: true,
-      event: { select: { startDate: true, endDate: true } },
-    },
-  });
-  if (!access) {
-    throw new AppError(
-      "Access item not found",
-      404,
-      true,
-      ErrorCodes.ACCESS_NOT_FOUND,
-    );
-  }
-
-  const { requiredAccessIds, ...data } = input;
-
-  // Merge existing dates with updates for validation
-  const mergedDates = {
-    startsAt: data.startsAt !== undefined ? data.startsAt : access.startsAt,
-    endsAt: data.endsAt !== undefined ? data.endsAt : access.endsAt,
-    availableFrom:
-      data.availableFrom !== undefined
-        ? data.availableFrom
-        : access.availableFrom,
-    availableTo:
-      data.availableTo !== undefined ? data.availableTo : access.availableTo,
-  };
-
-  // Validate dates against event boundaries
-  const dateValidation = validateAccessDatesAgainstEvent(mergedDates, {
-    startDate: access.event.startDate,
-    endDate: access.event.endDate,
-  });
-  if (!dateValidation.valid) {
-    throw new AppError(
-      dateValidation.errors.join("; "),
-      400,
-      true,
-      ErrorCodes.ACCESS_DATE_OUT_OF_BOUNDS,
-    );
-  }
-
-  // Build update data
+/**
+ * Build the Prisma update payload from a partial UpdateEventAccessInput.
+ * Does not include requiredAccess — that is handled separately.
+ */
+function buildAccessUpdateData(
+  data: Omit<UpdateEventAccessInput, "requiredAccessIds">,
+): Prisma.EventAccessUpdateInput {
   const updateData: Prisma.EventAccessUpdateInput = {};
 
   if (data.type !== undefined) updateData.type = data.type;
@@ -447,37 +419,64 @@ export async function updateEventAccess(
   if (data.active !== undefined) updateData.active = data.active;
   if (data.groupLabel !== undefined) updateData.groupLabel = data.groupLabel;
 
-  // Handle prerequisites update
-  if (requiredAccessIds !== undefined) {
-    // Validate new prerequisites
-    if (requiredAccessIds.length > 0) {
-      const prerequisites = await prisma.eventAccess.findMany({
-        where: { id: { in: requiredAccessIds }, eventId: access.eventId },
-      });
-      if (prerequisites.length !== requiredAccessIds.length) {
-        throw new AppError(
-          "One or more prerequisite access items not found",
-          400,
-          true,
-          ErrorCodes.BAD_REQUEST,
-        );
-      }
-      // Prevent circular dependencies (transitive check)
-      const hasCycle = await detectCircularPrerequisites(
-        access.eventId,
-        id,
-        requiredAccessIds,
-      );
-      if (hasCycle) {
-        throw new AppError(
-          "Circular prerequisite dependency detected",
-          400,
-          true,
-          ErrorCodes.ACCESS_CIRCULAR_DEPENDENCY,
-        );
-      }
-    }
+  return updateData;
+}
 
+export async function updateEventAccess(
+  id: string,
+  input: UpdateEventAccessInput,
+): Promise<EventAccessWithPrerequisites> {
+  const access = await prisma.eventAccess.findUnique({
+    where: { id },
+    include: {
+      requiredAccess: true,
+      event: { select: { startDate: true, endDate: true } },
+    },
+  });
+  if (!access) {
+    throw new AppError(
+      "Access item not found",
+      404,
+      true,
+      ErrorCodes.ACCESS_NOT_FOUND,
+    );
+  }
+
+  const { requiredAccessIds, ...data } = input;
+
+  const mergedDates = {
+    startsAt: data.startsAt !== undefined ? data.startsAt : access.startsAt,
+    endsAt: data.endsAt !== undefined ? data.endsAt : access.endsAt,
+    availableFrom:
+      data.availableFrom !== undefined
+        ? data.availableFrom
+        : access.availableFrom,
+    availableTo:
+      data.availableTo !== undefined ? data.availableTo : access.availableTo,
+  };
+
+  const dateValidation = validateAccessDatesAgainstEvent(mergedDates, {
+    startDate: access.event.startDate,
+    endDate: access.event.endDate,
+  });
+  if (!dateValidation.valid) {
+    throw new AppError(
+      dateValidation.errors.join("; "),
+      400,
+      true,
+      ErrorCodes.ACCESS_DATE_OUT_OF_BOUNDS,
+    );
+  }
+
+  const updateData = buildAccessUpdateData(data);
+
+  if (requiredAccessIds !== undefined) {
+    await validatePrerequisites(
+      access.eventId,
+      id,
+      requiredAccessIds,
+      "One or more prerequisite access items not found",
+    );
     updateData.requiredAccess = {
       set: requiredAccessIds.map((reqId) => ({ id: reqId })),
     };

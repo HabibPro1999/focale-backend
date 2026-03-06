@@ -660,31 +660,28 @@ export async function getRegistrationByIdempotencyKey(
   return enrichWithAccessSelections(registration);
 }
 
-export async function updateRegistration(
-  id: string,
-  input: UpdateRegistrationInput,
-  performedBy?: string,
-): Promise<RegistrationWithRelations> {
-  const registration = await prisma.registration.findUnique({ where: { id } });
-  if (!registration)
-    throw new AppError(
-      "Registration not found",
-      404,
-      true,
-      ErrorCodes.REGISTRATION_NOT_FOUND,
-    );
+type RegistrationSnapshot = {
+  paymentStatus: string;
+  paidAt: Date | null;
+  paidAmount: number;
+  paymentMethod: string | null;
+  paymentReference: string | null;
+  paymentProofUrl: string | null;
+  note: string | null;
+};
 
+function buildUpdateData(
+  registration: RegistrationSnapshot,
+  input: UpdateRegistrationInput,
+): Prisma.RegistrationUpdateInput {
   const updateData: Prisma.RegistrationUpdateInput = {};
 
   if (input.paymentStatus !== undefined) {
-    // Validate payment status transition
     validatePaymentTransitionInternal(
       registration.paymentStatus,
       input.paymentStatus,
     );
-
     updateData.paymentStatus = input.paymentStatus;
-    // Set paidAt when payment is confirmed
     if (
       (input.paymentStatus === "PAID" || input.paymentStatus === "WAIVED") &&
       !registration.paidAt
@@ -701,8 +698,15 @@ export async function updateRegistration(
     updateData.paymentProofUrl = input.paymentProofUrl;
   if (input.note !== undefined) updateData.note = input.note;
 
-  // Build changes object for audit log
+  return updateData;
+}
+
+function buildUpdateChanges(
+  registration: RegistrationSnapshot,
+  input: UpdateRegistrationInput,
+): Record<string, { old: unknown; new: unknown }> {
   const changes: Record<string, { old: unknown; new: unknown }> = {};
+
   if (
     input.paymentStatus !== undefined &&
     input.paymentStatus !== registration.paymentStatus
@@ -716,10 +720,7 @@ export async function updateRegistration(
     input.paidAmount !== undefined &&
     input.paidAmount !== registration.paidAmount
   ) {
-    changes.paidAmount = {
-      old: registration.paidAmount,
-      new: input.paidAmount,
-    };
+    changes.paidAmount = { old: registration.paidAmount, new: input.paidAmount };
   }
   if (
     input.paymentMethod !== undefined &&
@@ -743,10 +744,29 @@ export async function updateRegistration(
     changes.note = { old: registration.note, new: input.note };
   }
 
+  return changes;
+}
+
+export async function updateRegistration(
+  id: string,
+  input: UpdateRegistrationInput,
+  performedBy?: string,
+): Promise<RegistrationWithRelations> {
+  const registration = await prisma.registration.findUnique({ where: { id } });
+  if (!registration)
+    throw new AppError(
+      "Registration not found",
+      404,
+      true,
+      ErrorCodes.REGISTRATION_NOT_FOUND,
+    );
+
+  const updateData = buildUpdateData(registration, input);
+  const changes = buildUpdateChanges(registration, input);
+
   await prisma.$transaction(async (tx) => {
     await tx.registration.update({ where: { id }, data: updateData });
 
-    // Create audit log if there are changes
     if (Object.keys(changes).length > 0) {
       await tx.auditLog.create({
         data: {
@@ -827,41 +847,51 @@ export async function deleteRegistration(
     );
   }
 
-  await prisma.$transaction(async (tx) => {
-    // Create audit log before deletion
-    await tx.auditLog.create({
-      data: {
-        entityType: "Registration",
-        entityId: id,
-        action: "DELETE",
-        changes: {
-          email: { old: registration.email, new: null },
-          firstName: { old: registration.firstName, new: null },
-          lastName: { old: registration.lastName, new: null },
-          paymentStatus: { old: registration.paymentStatus, new: null },
-          ...(options?.force ? { forceDelete: { old: null, new: true } } : {}),
-        },
-        performedBy: performedBy ?? null,
+  await prisma.$transaction((tx) =>
+    executeDeleteTransaction(tx, id, registration, performedBy, options?.force),
+  );
+}
+
+async function executeDeleteTransaction(
+  tx: TxClient,
+  id: string,
+  registration: {
+    eventId: string;
+    email: string;
+    firstName: string | null;
+    lastName: string | null;
+    paymentStatus: string;
+    priceBreakdown: unknown;
+  },
+  performedBy: string | undefined,
+  force: boolean | undefined,
+): Promise<void> {
+  await tx.auditLog.create({
+    data: {
+      entityType: "Registration",
+      entityId: id,
+      action: "DELETE",
+      changes: {
+        email: { old: registration.email, new: null },
+        firstName: { old: registration.firstName, new: null },
+        lastName: { old: registration.lastName, new: null },
+        paymentStatus: { old: registration.paymentStatus, new: null },
+        ...(force ? { forceDelete: { old: null, new: true } } : {}),
       },
-    });
-
-    // Release access spots (get from priceBreakdown)
-    const priceBreakdown = parsePriceBreakdown(registration.priceBreakdown);
-    if (priceBreakdown.accessItems) {
-      for (const item of priceBreakdown.accessItems) {
-        await releaseAccessSpot(item.accessId, item.quantity, tx);
-      }
-    }
-
-    // Decrement event registered count (atomic SQL within transaction)
-    await decrementRegisteredCountTx(tx, registration.eventId);
-
-    // Clean up sponsorship usages before deletion
-    await cleanupSponsorshipsForRegistration(tx, id);
-
-    // Delete the registration
-    await tx.registration.delete({ where: { id } });
+      performedBy: performedBy ?? null,
+    },
   });
+
+  const priceBreakdown = parsePriceBreakdown(registration.priceBreakdown);
+  if (priceBreakdown.accessItems) {
+    for (const item of priceBreakdown.accessItems) {
+      await releaseAccessSpot(item.accessId, item.quantity, tx);
+    }
+  }
+
+  await decrementRegisteredCountTx(tx, registration.eventId);
+  await cleanupSponsorshipsForRegistration(tx, id);
+  await tx.registration.delete({ where: { id } });
 }
 
 export async function listRegistrations(

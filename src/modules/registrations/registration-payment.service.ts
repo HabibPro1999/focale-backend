@@ -30,15 +30,25 @@ export interface PaymentProofResponse {
   uploadedAt: string;
 }
 
-export async function confirmPayment(
+type OldRegistrationSnapshot = {
+  eventId: string;
+  email: string;
+  firstName: string | null;
+  lastName: string | null;
+  paymentStatus: string;
+  paidAmount: number;
+  paymentMethod: string | null;
+  totalAmount: number;
+};
+
+async function executeConfirmPaymentTransaction(
   id: string,
   input: UpdatePaymentInput,
-  performedBy?: string,
-  ipAddress?: string,
-): Promise<RegistrationWithRelations> {
-  // Update registration in a transaction with audit logging
-  const result = await prisma.$transaction(async (tx) => {
-    const oldRegistration = await tx.registration.findUnique({
+  performedBy: string | undefined,
+  ipAddress: string | undefined,
+): Promise<OldRegistrationSnapshot> {
+  return prisma.$transaction(async (tx) => {
+    const old = await tx.registration.findUnique({
       where: { id },
       select: {
         eventId: true,
@@ -51,7 +61,7 @@ export async function confirmPayment(
         totalAmount: true,
       },
     });
-    if (!oldRegistration) {
+    if (!old) {
       throw new AppError(
         "Registration not found",
         404,
@@ -60,18 +70,13 @@ export async function confirmPayment(
       );
     }
 
-    // Validate payment status transition
-    validatePaymentTransitionInternal(
-      oldRegistration.paymentStatus,
-      input.paymentStatus,
-    );
+    validatePaymentTransitionInternal(old.paymentStatus, input.paymentStatus);
 
-    // Update registration
     const updated = await tx.registration.update({
       where: { id },
       data: {
         paymentStatus: input.paymentStatus,
-        paidAmount: input.paidAmount ?? oldRegistration.totalAmount,
+        paidAmount: input.paidAmount ?? old.totalAmount,
         paymentMethod: input.paymentMethod ?? null,
         paymentReference: input.paymentReference ?? null,
         paymentProofUrl: input.paymentProofUrl ?? null,
@@ -82,41 +87,44 @@ export async function confirmPayment(
       },
     });
 
-    // Create audit log for payment confirmation
     await tx.auditLog.create({
       data: {
         entityType: "Registration",
         entityId: id,
         action: "PAYMENT_CONFIRMED",
         changes: {
-          paymentStatus: {
-            old: oldRegistration.paymentStatus,
-            new: updated.paymentStatus,
-          },
-          paidAmount: {
-            old: oldRegistration.paidAmount,
-            new: updated.paidAmount,
-          },
-          paymentMethod: {
-            old: oldRegistration.paymentMethod,
-            new: updated.paymentMethod,
-          },
+          paymentStatus: { old: old.paymentStatus, new: updated.paymentStatus },
+          paidAmount: { old: old.paidAmount, new: updated.paidAmount },
+          paymentMethod: { old: old.paymentMethod, new: updated.paymentMethod },
         },
         performedBy: performedBy ?? null,
         ipAddress: ipAddress ?? null,
       },
     });
 
-    return oldRegistration;
+    return old;
   });
+}
 
-  // Queue PAYMENT_CONFIRMED email if status changed to PAID
-  if (input.paymentStatus === "PAID" && result.paymentStatus !== "PAID") {
-    queueTriggeredEmail("PAYMENT_CONFIRMED", result.eventId, {
+export async function confirmPayment(
+  id: string,
+  input: UpdatePaymentInput,
+  performedBy?: string,
+  ipAddress?: string,
+): Promise<RegistrationWithRelations> {
+  const old = await executeConfirmPaymentTransaction(
+    id,
+    input,
+    performedBy,
+    ipAddress,
+  );
+
+  if (input.paymentStatus === "PAID" && old.paymentStatus !== "PAID") {
+    queueTriggeredEmail("PAYMENT_CONFIRMED", old.eventId, {
       id,
-      email: result.email,
-      firstName: result.firstName,
-      lastName: result.lastName,
+      email: old.email,
+      firstName: old.firstName,
+      lastName: old.lastName,
     }).catch((err) => {
       logger.error(
         { err, registrationId: id },

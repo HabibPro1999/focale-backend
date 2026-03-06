@@ -38,6 +38,50 @@ type TransactionClient = { $executeRaw: typeof prisma.$executeRaw };
 // Type for Event with pricing included
 type EventWithPricing = PrismaEvent & { pricing: EventPricing | null };
 
+type TxClient = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
+
+async function createEventInTransaction(
+  tx: TxClient,
+  input: CreateEventInput,
+): Promise<EventWithPricing> {
+  const { clientId, name, slug, description, maxCapacity, startDate, endDate, location, status } = input;
+
+  const clientRecord = await clientExists(clientId);
+  if (!clientRecord) {
+    throw new AppError("Client not found", 404, true, ErrorCodes.NOT_FOUND);
+  }
+
+  const existing = await tx.event.findUnique({ where: { slug } });
+  if (existing) {
+    throw new AppError(
+      "Event with this slug already exists",
+      409,
+      true,
+      ErrorCodes.CONFLICT,
+    );
+  }
+
+  const event = await tx.event.create({
+    data: {
+      clientId,
+      name,
+      slug,
+      description: description ?? null,
+      maxCapacity: maxCapacity ?? null,
+      startDate,
+      endDate,
+      location: location ?? null,
+      status,
+    },
+  });
+
+  const pricing = await tx.eventPricing.create({
+    data: { eventId: event.id, basePrice: 0, currency: "TND" },
+  });
+
+  return { ...event, pricing };
+}
+
 /**
  * Create a new event with pricing configuration.
  * Creates both Event and EventPricing atomically.
@@ -46,65 +90,9 @@ export async function createEvent(
   input: CreateEventInput,
   performedBy: string,
 ): Promise<EventWithPricing> {
-  const {
-    clientId,
-    name,
-    slug,
-    description,
-    maxCapacity,
-    startDate,
-    endDate,
-    location,
-    status,
-  } = input;
-
-  // Create Event and EventPricing atomically
   let result: EventWithPricing;
   try {
-    result = await prisma.$transaction(async (tx) => {
-      // Validate that client exists inside transaction to prevent TOCTOU race
-      const clientRecord = await clientExists(clientId);
-      if (!clientRecord) {
-        throw new AppError("Client not found", 404, true, ErrorCodes.NOT_FOUND);
-      }
-
-      // Check if slug already exists globally
-      const existing = await tx.event.findUnique({
-        where: { slug },
-      });
-      if (existing) {
-        throw new AppError(
-          "Event with this slug already exists",
-          409,
-          true,
-          ErrorCodes.CONFLICT,
-        );
-      }
-
-      const event = await tx.event.create({
-        data: {
-          clientId,
-          name,
-          slug,
-          description: description ?? null,
-          maxCapacity: maxCapacity ?? null,
-          startDate,
-          endDate,
-          location: location ?? null,
-          status,
-        },
-      });
-
-      const pricing = await tx.eventPricing.create({
-        data: {
-          eventId: event.id,
-          basePrice: 0,
-          currency: "TND",
-        },
-      });
-
-      return { ...event, pricing };
-    });
+    result = await prisma.$transaction((tx) => createEventInTransaction(tx, input));
   } catch (error) {
     if (
       error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -120,7 +108,6 @@ export async function createEvent(
     throw error;
   }
 
-  // Log after transaction succeeds
   await auditLog(prisma, {
     entityType: "Event",
     entityId: result.id,
@@ -162,30 +149,10 @@ const VALID_STATUS_TRANSITIONS: Record<EventStatus, EventStatus[]> = {
   ARCHIVED: [], // Terminal state - no transitions allowed
 };
 
-/**
- * Update event.
- *
- * @param prefetchedEvent - Optional event already fetched by the caller (e.g.
- *   from requireEventAccess). When provided the initial DB read is skipped.
- *   The event must have been fetched with `include: { pricing: true }`.
- */
-export async function updateEvent(
-  id: string,
+function validateEventUpdateInput(
+  event: EventWithPricing,
   input: UpdateEventInput,
-  performedBy: string,
-  prefetchedEvent?: EventWithPricing,
-): Promise<EventWithPricing> {
-  // Use the pre-fetched event when available to avoid a redundant DB read
-  const event =
-    prefetchedEvent ??
-    (await prisma.event.findUnique({
-      where: { id },
-      include: { pricing: true },
-    }));
-  if (!event) {
-    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
-  }
-
+): void {
   // Guard: ARCHIVED events only allow status transitions — field edits are rejected.
   // ARCHIVED is a terminal state; its data must remain immutable for audit purposes.
   const nonStatusKeys = Object.keys(input).filter((k) => k !== "status");
@@ -217,7 +184,6 @@ export async function updateEvent(
   // one date is provided and must be reconciled against the stored value.
   const effectiveStartDate = input.startDate ?? event.startDate;
   const effectiveEndDate = input.endDate ?? event.endDate;
-
   if (effectiveEndDate < effectiveStartDate) {
     throw new AppError(
       "End date must be greater than or equal to start date",
@@ -226,53 +192,76 @@ export async function updateEvent(
       ErrorCodes.VALIDATION_ERROR,
     );
   }
+}
+
+async function performEventUpdate(
+  tx: TxClient,
+  id: string,
+  event: EventWithPricing,
+  input: UpdateEventInput,
+  performedBy: string,
+): Promise<EventWithPricing> {
+  if (input.slug && input.slug !== event.slug) {
+    const existing = await tx.event.findUnique({ where: { slug: input.slug } });
+    if (existing) {
+      throw new AppError(
+        "Event with this slug already exists",
+        409,
+        true,
+        ErrorCodes.CONFLICT,
+      );
+    }
+  }
+
+  const updatedEvent = await tx.event.update({
+    where: { id },
+    data: input,
+    include: { pricing: true },
+  });
+
+  const relevantFields: (keyof typeof event)[] = [
+    "name", "slug", "description", "maxCapacity",
+    "startDate", "endDate", "location", "status",
+  ];
+  const changes = diffChanges(event, updatedEvent, relevantFields);
+
+  await auditLog(tx, {
+    entityType: "Event",
+    entityId: id,
+    action: "UPDATE",
+    changes,
+    performedBy,
+  });
+
+  return updatedEvent;
+}
+
+/**
+ * Update event.
+ *
+ * @param prefetchedEvent - Optional event already fetched by the caller (e.g.
+ *   from requireEventAccess). When provided the initial DB read is skipped.
+ *   The event must have been fetched with `include: { pricing: true }`.
+ */
+export async function updateEvent(
+  id: string,
+  input: UpdateEventInput,
+  performedBy: string,
+  prefetchedEvent?: EventWithPricing,
+): Promise<EventWithPricing> {
+  const event =
+    prefetchedEvent ??
+    (await prisma.event.findUnique({ where: { id }, include: { pricing: true } }));
+  if (!event) {
+    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
+  }
+
+  validateEventUpdateInput(event, input);
 
   try {
-    return await prisma.$transaction(async (tx) => {
-      // If slug is being updated, check global uniqueness inside transaction
-      if (input.slug && input.slug !== event.slug) {
-        const existing = await tx.event.findUnique({
-          where: { slug: input.slug },
-        });
-        if (existing) {
-          throw new AppError(
-            "Event with this slug already exists",
-            409,
-            true,
-            ErrorCodes.CONFLICT,
-          );
-        }
-      }
-
-      const updatedEvent = await tx.event.update({
-        where: { id },
-        data: input,
-        include: { pricing: true },
-      });
-
-      // Log update inside transaction
-      const relevantFields: (keyof typeof event)[] = [
-        "name",
-        "slug",
-        "description",
-        "maxCapacity",
-        "startDate",
-        "endDate",
-        "location",
-        "status",
-      ];
-      const changes = diffChanges(event, updatedEvent, relevantFields);
-
-      await auditLog(tx, {
-        entityType: "Event",
-        entityId: id,
-        action: "UPDATE",
-        changes,
-        performedBy,
-      });
-
-      return updatedEvent;
-    });
+    return await prisma.$transaction((tx) =>
+      performEventUpdate(tx, id, event, input, performedBy),
+    );
   } catch (error) {
     if (
       error instanceof Prisma.PrismaClientKnownRequestError &&

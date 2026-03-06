@@ -440,85 +440,72 @@ export async function exportRegistrations(
   return { filename: `${filename}.csv`, contentType: "text/csv", data: csv, metadata };
 }
 
+// Escape a CSV value and neutralize formula injection
+function escapeCSV(value: string): string {
+  let safe = value;
+  if (/^[=+\-@\t\r]/.test(safe)) {
+    safe = "'" + safe;
+  }
+  if (safe.includes(",") || safe.includes('"') || safe.includes("\n")) {
+    return `"${safe.replace(/"/g, '""')}"`;
+  }
+  return safe;
+}
+
+function buildCSVRow(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  r: any,
+  formFields: Array<{ id: string; label: string; type: string }>,
+  accessNameMap: Map<string, string>,
+): string[] {
+  const staticValues = [
+    r.id,
+    r.email,
+    r.firstName ?? "",
+    r.lastName ?? "",
+    r.phone ?? "",
+    r.paymentStatus,
+    r.paymentMethod ?? "",
+    r.totalAmount.toString(),
+    r.paidAmount.toString(),
+    r.baseAmount.toString(),
+    r.accessAmount.toString(),
+    r.discountAmount.toString(),
+    r.sponsorshipCode ?? "",
+    r.sponsorshipAmount.toString(),
+    r.submittedAt.toISOString(),
+    r.paidAt?.toISOString() ?? "",
+  ];
+
+  const formData = (r.formData as Record<string, unknown>) ?? {};
+  const formValues = formFields.map((field) => {
+    const value = formData[field.id];
+    if (value === null || value === undefined) return "";
+    if (Array.isArray(value)) return value.join(", ");
+    return String(value);
+  });
+
+  const accessIds = (r.accessTypeIds as string[]) ?? [];
+  const accessNames = accessIds.map((id) => accessNameMap.get(id) ?? id).join(", ");
+
+  return [...staticValues, ...formValues, accessNames];
+}
+
 function generateCSV(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   registrations: any[],
   formFields: Array<{ id: string; label: string; type: string }>,
   accessNameMap: Map<string, string>,
 ): string {
-  // Build headers: static + form fields + access types
   const staticHeaders = [
-    "ID",
-    "Email",
-    "First Name",
-    "Last Name",
-    "Phone",
-    "Payment Status",
-    "Payment Method",
-    "Total Amount",
-    "Paid Amount",
-    "Base Amount",
-    "Access Amount",
-    "Discount Amount",
-    "Sponsorship Code",
-    "Sponsorship Amount",
-    "Submitted At",
-    "Paid At",
+    "ID", "Email", "First Name", "Last Name", "Phone",
+    "Payment Status", "Payment Method", "Total Amount", "Paid Amount",
+    "Base Amount", "Access Amount", "Discount Amount",
+    "Sponsorship Code", "Sponsorship Amount", "Submitted At", "Paid At",
   ];
 
-  const formFieldHeaders = formFields.map((f) => f.label);
-  const headers = [...staticHeaders, ...formFieldHeaders, "Access Types"];
-
-  const rows = registrations.map((r) => {
-    // Static columns
-    const staticValues = [
-      r.id,
-      r.email,
-      r.firstName ?? "",
-      r.lastName ?? "",
-      r.phone ?? "",
-      r.paymentStatus,
-      r.paymentMethod ?? "",
-      r.totalAmount.toString(),
-      r.paidAmount.toString(),
-      r.baseAmount.toString(),
-      r.accessAmount.toString(),
-      r.discountAmount.toString(),
-      r.sponsorshipCode ?? "",
-      r.sponsorshipAmount.toString(),
-      r.submittedAt.toISOString(),
-      r.paidAt?.toISOString() ?? "",
-    ];
-
-    // Form data values
-    const formData = (r.formData as Record<string, unknown>) ?? {};
-    const formValues = formFields.map((field) => {
-      const value = formData[field.id];
-      if (value === null || value === undefined) return "";
-      if (Array.isArray(value)) return value.join(", ");
-      return String(value);
-    });
-
-    // Access types
-    const accessIds = (r.accessTypeIds as string[]) ?? [];
-    const accessNames = accessIds
-      .map((id) => accessNameMap.get(id) ?? id)
-      .join(", ");
-
-    return [...staticValues, ...formValues, accessNames];
-  });
-
-  // Escape CSV values and neutralize formula injection
-  const escapeCSV = (value: string): string => {
-    let safe = value;
-    if (/^[=+\-@\t\r]/.test(safe)) {
-      safe = "'" + safe;
-    }
-    if (safe.includes(",") || safe.includes('"') || safe.includes("\n")) {
-      return `"${safe.replace(/"/g, '""')}"`;
-    }
-    return safe;
-  };
+  const headers = [...staticHeaders, ...formFields.map((f) => f.label), "Access Types"];
+  const rows = registrations.map((r) => buildCSVRow(r, formFields, accessNameMap));
 
   const csvLines = [
     headers.join(","),
