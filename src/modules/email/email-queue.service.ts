@@ -255,17 +255,14 @@ export interface ProcessQueueResult {
   skipped: number;
 }
 
-export async function processEmailQueue(
-  batchSize = 50,
-): Promise<ProcessQueueResult> {
-  const result: ProcessQueueResult = {
-    processed: 0,
-    sent: 0,
-    failed: 0,
-    skipped: 0,
-  };
+// Type alias for the email log records returned by claimAndFetchEmailBatch
+type EmailLogWithRelations = Awaited<
+  ReturnType<typeof claimAndFetchEmailBatch>
+>[number];
 
-  // Recover stale SENDING emails (stuck for > 10 minutes) back to QUEUED
+// Recover stale SENDING emails (stuck for > 10 minutes) back to QUEUED.
+// Returns the count of recovered emails.
+async function recoverStaleEmails(): Promise<number> {
   const recovered = await prisma.$executeRaw`
     UPDATE email_logs SET status = 'QUEUED', updated_at = NOW()
     WHERE status = 'SENDING' AND updated_at < NOW() - INTERVAL '10 minutes' AND retry_count < ${MAX_RETRIES + 1}
@@ -273,9 +270,12 @@ export async function processEmailQueue(
   if (recovered > 0) {
     logger.warn({ recovered }, "Recovered stale SENDING emails back to QUEUED");
   }
+  return recovered;
+}
 
-  // Atomically claim a batch of queued emails with row-level locking via UPDATE RETURNING
-  // Backoff timing is enforced in the SQL query to prevent race conditions
+// Atomically claim a batch of queued emails with row-level locking (exponential
+// backoff enforced in SQL), then fetch full records with relations.
+async function claimAndFetchEmailBatch(batchSize: number) {
   const claimedIds = await prisma.$queryRaw<Array<{ id: string }>>`
     UPDATE "email_logs"
     SET status = 'SENDING', updated_at = NOW()
@@ -298,134 +298,138 @@ export async function processEmailQueue(
     RETURNING id
   `;
 
-  // Fetch full records with relations for the claimed emails
-  const batch =
-    claimedIds.length > 0
-      ? await prisma.emailLog.findMany({
-          where: { id: { in: claimedIds.map((r) => r.id) } },
-          include: {
-            template: true,
-            registration: {
-              include: {
-                event: { include: { client: true } },
-                form: true,
-              },
-            },
-          },
-        })
-      : [];
+  if (claimedIds.length === 0) return [];
 
-  if (batch.length === 0) {
-    return result;
+  return prisma.emailLog.findMany({
+    where: { id: { in: claimedIds.map((r) => r.id) } },
+    include: {
+      template: true,
+      registration: {
+        include: {
+          event: { include: { client: true } },
+          form: true,
+        },
+      },
+    },
+  });
+}
+
+// Validate template presence and active status. Returns a skip reason string
+// if the email should be skipped, or null if it can proceed.
+async function validateAndSkipEmail(
+  emailLog: EmailLogWithRelations,
+): Promise<string | null> {
+  if (!emailLog.template) {
+    await markAsSkipped(emailLog.id, "No template found");
+    return "No template found";
   }
+  if (!emailLog.template.isActive) {
+    await markAsSkipped(emailLog.id, "Template is inactive");
+    return "Template is inactive";
+  }
+  return null;
+}
+
+// Build context, resolve variables, and send the email via the provider.
+// Returns "sent", "failed", or "skipped" (when context cannot be built).
+async function buildAndSendEmail(
+  emailLog: EmailLogWithRelations,
+): Promise<"sent" | "failed" | "skipped"> {
+  // Build context from snapshot or registration
+  let context: EmailContext | null = null;
+  if (emailLog.contextSnapshot && isValidEmailContext(emailLog.contextSnapshot)) {
+    context = emailLog.contextSnapshot;
+  } else if (emailLog.registration) {
+    context = await buildEmailContextWithAccess(
+      emailLog.registration as RegistrationWithRelations,
+    );
+  }
+
+  if (!context || Object.keys(context).length === 0) {
+    await markAsSkipped(emailLog.id, "Could not build email context");
+    return "skipped";
+  }
+
+  // template is guaranteed non-null here (validated before this call)
+  const template = emailLog.template!;
+  const resolvedSubject = resolveVariables(template.subject, context);
+  const resolvedHtml = resolveVariablesHtml(template.htmlContent || "", context);
+  const resolvedPlain = resolveVariables(template.plainContent || "", context);
+
+  await prisma.emailLog.update({
+    where: { id: emailLog.id },
+    data: { subject: resolvedSubject },
+  });
+
+  const sendResult = await sendEmail({
+    to: emailLog.recipientEmail,
+    toName: emailLog.recipientName || undefined,
+    fromName: context.eventName,
+    subject: resolvedSubject,
+    html: resolvedHtml,
+    plainText: resolvedPlain,
+    trackingId: emailLog.id,
+  });
+
+  if (sendResult.success) {
+    await markAsSent(emailLog.id, sendResult.messageId);
+    return "sent";
+  }
+
+  await markAsFailed(
+    emailLog.id,
+    sendResult.error || "Unknown error",
+    emailLog.retryCount,
+    { templateId: emailLog.templateId, registrationId: emailLog.registrationId },
+  );
+  return "failed";
+}
+
+// Process a single email log record: validate, build context, send.
+// Returns the outcome: "sent", "failed", or "skipped".
+async function processSingleEmail(
+  emailLog: EmailLogWithRelations,
+): Promise<"sent" | "failed" | "skipped"> {
+  try {
+    const skipReason = await validateAndSkipEmail(emailLog);
+    if (skipReason !== null) return "skipped";
+
+    return await buildAndSendEmail(emailLog);
+  } catch (error: unknown) {
+    const err = error as Error;
+    logger.error(
+      { emailLogId: emailLog.id, error: err.message },
+      "Error processing email",
+    );
+    await markAsFailed(emailLog.id, err.message, emailLog.retryCount, {
+      templateId: emailLog.templateId,
+      registrationId: emailLog.registrationId,
+    });
+    return "failed";
+  }
+}
+
+export async function processEmailQueue(
+  batchSize = 50,
+): Promise<ProcessQueueResult> {
+  const result: ProcessQueueResult = {
+    processed: 0,
+    sent: 0,
+    failed: 0,
+    skipped: 0,
+  };
+
+  await recoverStaleEmails();
+
+  const batch = await claimAndFetchEmailBatch(batchSize);
+  if (batch.length === 0) return result;
 
   result.processed = batch.length;
 
-  // Process emails in parallel with controlled concurrency
   const CONCURRENCY_LIMIT = 10;
-
-  // Process a single email and return the outcome
-  async function processEmail(
-    emailLog: (typeof batch)[number],
-  ): Promise<"sent" | "failed" | "skipped"> {
-    try {
-      // Skip if no template
-      if (!emailLog.template) {
-        await markAsSkipped(emailLog.id, "No template found");
-        return "skipped";
-      }
-
-      // Skip if template is inactive
-      if (!emailLog.template.isActive) {
-        await markAsSkipped(emailLog.id, "Template is inactive");
-        return "skipped";
-      }
-
-      // Build context
-      let context: EmailContext | null = null;
-
-      if (
-        emailLog.contextSnapshot &&
-        isValidEmailContext(emailLog.contextSnapshot)
-      ) {
-        context = emailLog.contextSnapshot;
-      } else if (emailLog.registration) {
-        // Build context from registration
-        context = await buildEmailContextWithAccess(
-          emailLog.registration as RegistrationWithRelations,
-        );
-      }
-
-      if (!context || Object.keys(context).length === 0) {
-        await markAsSkipped(emailLog.id, "Could not build email context");
-        return "skipped";
-      }
-
-      // Resolve variables
-      const resolvedSubject = resolveVariables(
-        emailLog.template.subject,
-        context,
-      );
-      const resolvedHtml = resolveVariablesHtml(
-        emailLog.template.htmlContent || "",
-        context,
-      );
-      const resolvedPlain = resolveVariables(
-        emailLog.template.plainContent || "",
-        context,
-      );
-
-      // Update subject in log
-      await prisma.emailLog.update({
-        where: { id: emailLog.id },
-        data: { subject: resolvedSubject },
-      });
-
-      // Send via SendGrid
-      const sendResult = await sendEmail({
-        to: emailLog.recipientEmail,
-        toName: emailLog.recipientName || undefined,
-        fromName: context.eventName,
-        subject: resolvedSubject,
-        html: resolvedHtml,
-        plainText: resolvedPlain,
-        trackingId: emailLog.id,
-      });
-
-      if (sendResult.success) {
-        await markAsSent(emailLog.id, sendResult.messageId);
-        return "sent";
-      } else {
-        await markAsFailed(
-          emailLog.id,
-          sendResult.error || "Unknown error",
-          emailLog.retryCount,
-          {
-            templateId: emailLog.templateId,
-            registrationId: emailLog.registrationId,
-          },
-        );
-        return "failed";
-      }
-    } catch (error: unknown) {
-      const err = error as Error;
-      logger.error(
-        { emailLogId: emailLog.id, error: err.message },
-        "Error processing email",
-      );
-      await markAsFailed(emailLog.id, err.message, emailLog.retryCount, {
-        templateId: emailLog.templateId,
-        registrationId: emailLog.registrationId,
-      });
-      return "failed";
-    }
-  }
-
-  // Process in chunks to limit concurrency
   for (let i = 0; i < batch.length; i += CONCURRENCY_LIMIT) {
     const chunk = batch.slice(i, i + CONCURRENCY_LIMIT);
-    const outcomes = await Promise.all(chunk.map(processEmail));
-
+    const outcomes = await Promise.all(chunk.map(processSingleEmail));
     for (const outcome of outcomes) {
       if (outcome === "sent") result.sent++;
       else if (outcome === "failed") result.failed++;

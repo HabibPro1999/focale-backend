@@ -44,6 +44,89 @@ type ListClientsQuery = {
 export type ClientWithAdmin = PrismaClient & { admin: User | null };
 
 // ============================================================================
+// Private Helpers
+// ============================================================================
+
+async function createClientTransaction(
+  tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
+  input: {
+    name: string;
+    email?: string | null;
+    phone?: string | null;
+    enabledModules?: string[] | null;
+    adminName: string;
+    adminEmail: string;
+  },
+  firebaseUid: string,
+  performedBy: string,
+): Promise<{ client: PrismaClient; user: { id: string; email: string; name: string; active: boolean } }> {
+  const client = await tx.client.create({
+    data: {
+      name: input.name,
+      email: input.email ?? null,
+      phone: input.phone ?? null,
+      enabledModules: input.enabledModules ?? [...MODULE_IDS],
+    },
+  });
+
+  const user = await tx.user.create({
+    data: {
+      id: firebaseUid,
+      email: input.adminEmail,
+      name: input.adminName,
+      role: UserRole.CLIENT_ADMIN,
+      clientId: client.id,
+    },
+  });
+
+  await auditLog(tx, {
+    entityType: "Client",
+    entityId: client.id,
+    action: "CREATE",
+    performedBy,
+  });
+
+  await auditLog(tx, {
+    entityType: "User",
+    entityId: user.id,
+    action: "CREATE",
+    performedBy,
+  });
+
+  return { client, user };
+}
+
+async function setFirebaseClaims(
+  firebaseUid: string,
+  clientId: string,
+): Promise<void> {
+  try {
+    await setCustomClaims(firebaseUid, {
+      role: UserRole.CLIENT_ADMIN,
+      clientId,
+    });
+  } catch (claimsErr) {
+    logger.error(
+      { err: claimsErr, uid: firebaseUid, clientId },
+      "Failed to set Firebase custom claims after client creation — claims may be stale",
+    );
+  }
+}
+
+async function cleanupFirebaseUser(
+  firebaseUid: string,
+  email: string,
+  context?: unknown,
+): Promise<void> {
+  await deleteFirebaseUser(firebaseUid).catch((cleanupErr) => {
+    logger.error(
+      { err: cleanupErr, uid: firebaseUid, email, originalError: context },
+      "Failed to cleanup Firebase user after client creation failure - orphaned user may exist",
+    );
+  });
+}
+
+// ============================================================================
 // Service Functions
 // ============================================================================
 
@@ -56,72 +139,16 @@ export async function createClient(
   input: CreateClientInput,
   performedBy: string,
 ): Promise<ClientWithAdmin> {
-  const {
-    name,
-    email,
-    phone,
-    enabledModules,
-    adminName,
-    adminEmail,
-    adminPassword,
-  } = input;
+  const { adminEmail, adminPassword } = input;
 
-  // Create Firebase Auth user first (before DB transaction)
   const firebaseUser = await createFirebaseUser(adminEmail, adminPassword);
 
   try {
-    // Atomically create Client + User in DB.
-    // The DB unique constraint on User.email catches concurrent duplicate requests.
-    const { client, user } = await prisma.$transaction(async (tx) => {
-      const client = await tx.client.create({
-        data: {
-          name,
-          email: email ?? null,
-          phone: phone ?? null,
-          enabledModules: enabledModules ?? [...MODULE_IDS],
-        },
-      });
+    const { client, user } = await prisma.$transaction((tx) =>
+      createClientTransaction(tx, input, firebaseUser.uid, performedBy),
+    );
 
-      const user = await tx.user.create({
-        data: {
-          id: firebaseUser.uid,
-          email: adminEmail,
-          name: adminName,
-          role: UserRole.CLIENT_ADMIN,
-          clientId: client.id,
-        },
-      });
-
-      await auditLog(tx, {
-        entityType: "Client",
-        entityId: client.id,
-        action: "CREATE",
-        performedBy,
-      });
-
-      await auditLog(tx, {
-        entityType: "User",
-        entityId: user.id,
-        action: "CREATE",
-        performedBy,
-      });
-
-      return { client, user };
-    });
-
-    // Set custom claims after successful DB commit.
-    // DB is the source of truth — log failure but don't fail the request.
-    try {
-      await setCustomClaims(firebaseUser.uid, {
-        role: UserRole.CLIENT_ADMIN,
-        clientId: client.id,
-      });
-    } catch (claimsErr) {
-      logger.error(
-        { err: claimsErr, uid: firebaseUser.uid, clientId: client.id },
-        "Failed to set Firebase custom claims after client creation — claims may be stale",
-      );
-    }
+    await setFirebaseClaims(firebaseUser.uid, client.id);
 
     return {
       ...client,
@@ -133,7 +160,6 @@ export async function createClient(
       },
     };
   } catch (error) {
-    // P2002: unique constraint violation on User.email — concurrent duplicate request
     if (
       error instanceof Prisma.PrismaClientKnownRequestError &&
       error.code === "P2002"
@@ -152,18 +178,7 @@ export async function createClient(
       );
     }
 
-    // Rollback: delete from Firebase if anything else failed
-    await deleteFirebaseUser(firebaseUser.uid).catch((cleanupErr) => {
-      logger.error(
-        {
-          err: cleanupErr,
-          uid: firebaseUser.uid,
-          email: adminEmail,
-          originalError: error,
-        },
-        "Failed to cleanup Firebase user after client creation failure - orphaned user may exist",
-      );
-    });
+    await cleanupFirebaseUser(firebaseUser.uid, adminEmail, error);
     throw error;
   }
 }

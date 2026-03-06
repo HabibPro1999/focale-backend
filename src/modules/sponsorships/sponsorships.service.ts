@@ -230,6 +230,75 @@ export async function getSponsorshipByCode(
 // Update Sponsorship (Admin)
 // ============================================================================
 
+function buildSponsorshipUpdateData(
+  input: UpdateSponsorshipInput,
+): Prisma.SponsorshipUpdateInput {
+  const updateData: Prisma.SponsorshipUpdateInput = {};
+  if (input.beneficiaryName !== undefined)
+    updateData.beneficiaryName = input.beneficiaryName;
+  if (input.beneficiaryEmail !== undefined)
+    updateData.beneficiaryEmail = input.beneficiaryEmail;
+  if (input.beneficiaryPhone !== undefined)
+    updateData.beneficiaryPhone = input.beneficiaryPhone;
+  if (input.beneficiaryAddress !== undefined)
+    updateData.beneficiaryAddress = input.beneficiaryAddress;
+  if (input.coversBasePrice !== undefined)
+    updateData.coversBasePrice = input.coversBasePrice;
+  if (input.coveredAccessIds !== undefined)
+    updateData.coveredAccessIds = input.coveredAccessIds;
+  return updateData;
+}
+
+async function validateAndRecalculateCoverage(
+  input: UpdateSponsorshipInput,
+  sponsorship: { eventId: string; coversBasePrice: boolean; coveredAccessIds: string[] },
+): Promise<Prisma.SponsorshipUpdateInput> {
+  const extra: Prisma.SponsorshipUpdateInput = {};
+
+  if (input.coveredAccessIds !== undefined) {
+    const newCoveredAccessIds = input.coveredAccessIds;
+    if (newCoveredAccessIds.length >= 2) {
+      const accessItems = await prisma.eventAccess.findMany({
+        where: { id: { in: newCoveredAccessIds }, eventId: sponsorship.eventId, active: true },
+        select: { id: true, name: true, type: true, groupLabel: true, startsAt: true, endsAt: true },
+      });
+      const timeErrors = validateCoveredAccessTimeOverlap(
+        newCoveredAccessIds,
+        accessItems.map((item) => ({
+          id: item.id,
+          name: item.name,
+          type: item.type,
+          groupLabel: item.groupLabel,
+          startsAt: item.startsAt,
+          endsAt: item.endsAt,
+        })),
+      );
+      if (timeErrors.length > 0) {
+        throw new AppError(
+          `Time conflicts in covered access items: ${timeErrors.join("; ")}`,
+          400,
+          true,
+          ErrorCodes.BAD_REQUEST,
+          { timeConflicts: timeErrors },
+        );
+      }
+    }
+  }
+
+  if (input.coversBasePrice !== undefined || input.coveredAccessIds !== undefined) {
+    const coversBasePrice = input.coversBasePrice ?? sponsorship.coversBasePrice;
+    const coveredAccessIds = input.coveredAccessIds ?? sponsorship.coveredAccessIds;
+    extra.totalAmount = await calculateSponsorshipTotal(
+      prisma,
+      sponsorship.eventId,
+      coversBasePrice,
+      coveredAccessIds,
+    );
+  }
+
+  return extra;
+}
+
 /**
  * Update sponsorship coverage, beneficiary info, or cancel it.
  */
@@ -244,109 +313,24 @@ export async function updateSponsorship(
   });
 
   if (!sponsorship) {
-    throw new AppError(
-      "Sponsorship not found",
-      404,
-      true,
-      ErrorCodes.NOT_FOUND,
-    );
+    throw new AppError("Sponsorship not found", 404, true, ErrorCodes.NOT_FOUND);
   }
 
-  // If cancelling, handle unlinking first
   if (input.status === "CANCELLED") {
     return cancelSponsorship(id, performedBy);
   }
 
-  const updateData: Prisma.SponsorshipUpdateInput = {};
+  const baseUpdateData = buildSponsorshipUpdateData(input);
+  const coverageUpdateData = await validateAndRecalculateCoverage(input, sponsorship);
+  const updateData = { ...baseUpdateData, ...coverageUpdateData };
 
-  if (input.beneficiaryName !== undefined)
-    updateData.beneficiaryName = input.beneficiaryName;
-  if (input.beneficiaryEmail !== undefined)
-    updateData.beneficiaryEmail = input.beneficiaryEmail;
-  if (input.beneficiaryPhone !== undefined)
-    updateData.beneficiaryPhone = input.beneficiaryPhone;
-  if (input.beneficiaryAddress !== undefined)
-    updateData.beneficiaryAddress = input.beneficiaryAddress;
-  if (input.coversBasePrice !== undefined)
-    updateData.coversBasePrice = input.coversBasePrice;
-  if (input.coveredAccessIds !== undefined)
-    updateData.coveredAccessIds = input.coveredAccessIds;
-
-  // Validate time overlaps if coveredAccessIds is being updated
-  if (input.coveredAccessIds !== undefined) {
-    const newCoveredAccessIds = input.coveredAccessIds;
-    if (newCoveredAccessIds.length >= 2) {
-      const accessItems = await prisma.eventAccess.findMany({
-        where: {
-          id: { in: newCoveredAccessIds },
-          eventId: sponsorship.eventId,
-          active: true,
-        },
-        select: {
-          id: true,
-          name: true,
-          type: true,
-          groupLabel: true,
-          startsAt: true,
-          endsAt: true,
-        },
-      });
-
-      const timeErrors = validateCoveredAccessTimeOverlap(
-        newCoveredAccessIds,
-        accessItems.map((item) => ({
-          id: item.id,
-          name: item.name,
-          type: item.type,
-          groupLabel: item.groupLabel,
-          startsAt: item.startsAt,
-          endsAt: item.endsAt,
-        })),
-      );
-
-      if (timeErrors.length > 0) {
-        throw new AppError(
-          `Time conflicts in covered access items: ${timeErrors.join("; ")}`,
-          400,
-          true,
-          ErrorCodes.BAD_REQUEST,
-          { timeConflicts: timeErrors },
-        );
-      }
-    }
-  }
-
-  // Recalculate total amount if coverage changed
-  const coversBasePrice = input.coversBasePrice ?? sponsorship.coversBasePrice;
-  const coveredAccessIds =
-    input.coveredAccessIds ?? sponsorship.coveredAccessIds;
-
-  if (
-    input.coversBasePrice !== undefined ||
-    input.coveredAccessIds !== undefined
-  ) {
-    const totalAmount = await calculateSponsorshipTotal(
-      prisma,
-      sponsorship.eventId,
-      coversBasePrice,
-      coveredAccessIds,
-    );
-    updateData.totalAmount = totalAmount;
-  }
-
-  // Update sponsorship and recalculate in transaction
   await prisma.$transaction(async (tx) => {
-    await tx.sponsorship.update({
-      where: { id },
-      data: updateData,
-    });
+    await tx.sponsorship.update({ where: { id }, data: updateData });
 
-    // If linked to registrations, recalculate applicable amounts
     if (sponsorship.usages.length > 0) {
       await recalculateUsageAmounts(tx, id);
     }
 
-    // Audit log
     await tx.auditLog.create({
       data: {
         entityType: "Sponsorship",

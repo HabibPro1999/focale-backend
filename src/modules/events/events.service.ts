@@ -425,6 +425,47 @@ export async function decrementRegisteredCountTx(
   }
 }
 
+function validateUploadFile(
+  file: { buffer: Buffer; mimetype: string },
+  allowedTypes: string[],
+  maxSize: number,
+): void {
+  if (!allowedTypes.includes(file.mimetype)) {
+    throw new AppError(
+      "Invalid file type. Allowed: PNG, JPG, WebP",
+      400,
+      true,
+      ErrorCodes.INVALID_FILE_TYPE,
+    );
+  }
+
+  if (file.buffer.length > maxSize) {
+    throw new AppError(
+      "File too large. Maximum: 5MB",
+      400,
+      true,
+      ErrorCodes.FILE_TOO_LARGE,
+    );
+  }
+}
+
+async function deleteOldFile(
+  storage: ReturnType<typeof getStorageProvider>,
+  url: string,
+): Promise<void> {
+  try {
+    const parsed = new URL(url);
+    // Firebase: /bucket-name/path → strip bucket; R2/custom: /path → use as-is
+    const oldKey =
+      parsed.hostname === "storage.googleapis.com"
+        ? parsed.pathname.split("/").filter(Boolean).slice(1).join("/")
+        : parsed.pathname.slice(1);
+    if (oldKey) await storage.delete(oldKey);
+  } catch {
+    // Ignore delete errors for old banner
+  }
+}
+
 /**
  * Upload event banner image.
  * Compresses to WebP and stores via configured storage provider.
@@ -435,25 +476,9 @@ export async function uploadEventBanner(
   performedBy: string,
 ): Promise<{ bannerUrl: string }> {
   const ALLOWED_MIME_TYPES = ["image/png", "image/jpeg", "image/webp"];
-
-  if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
-    throw new AppError(
-      "Invalid file type. Allowed: PNG, JPG, WebP",
-      400,
-      true,
-      ErrorCodes.INVALID_FILE_TYPE,
-    );
-  }
-
   const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
-  if (file.buffer.length > MAX_FILE_SIZE) {
-    throw new AppError(
-      "File too large. Maximum: 5MB",
-      400,
-      true,
-      ErrorCodes.FILE_TOO_LARGE,
-    );
-  }
+
+  validateUploadFile(file, ALLOWED_MIME_TYPES, MAX_FILE_SIZE);
 
   const event = await prisma.event.findUnique({
     where: { id: eventId },
@@ -468,19 +493,8 @@ export async function uploadEventBanner(
   const key = `events/${eventId}/banner.${compressed.ext}`;
   const storage = getStorageProvider();
 
-  // Delete old banner if exists
   if (event.bannerUrl) {
-    try {
-      const parsed = new URL(event.bannerUrl);
-      // Firebase: /bucket-name/path → strip bucket; R2/custom: /path → use as-is
-      const oldKey =
-        parsed.hostname === "storage.googleapis.com"
-          ? parsed.pathname.split("/").filter(Boolean).slice(1).join("/")
-          : parsed.pathname.slice(1);
-      if (oldKey) await storage.delete(oldKey);
-    } catch {
-      // Ignore delete errors for old banner
-    }
+    await deleteOldFile(storage, event.bannerUrl);
   }
 
   const bannerUrl = await storage.upload(

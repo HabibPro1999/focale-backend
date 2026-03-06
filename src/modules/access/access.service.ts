@@ -834,55 +834,13 @@ export async function releaseAccessSpot(
 // Validation
 // ============================================================================
 
-/**
- * Validate access selections for a registration.
- * Checks: time conflicts, prerequisites, capacity.
- */
-export async function validateAccessSelections(
-  eventId: string,
+type AccessMapItem = EventAccess & { requiredAccess: { id: string }[] };
+
+function checkTimeConflicts(
   selections: AccessSelection[],
-  formData: Record<string, unknown>,
-): Promise<{ valid: boolean; errors: string[] }> {
+  accessMap: Map<string, AccessMapItem>,
+): string[] {
   const errors: string[] = [];
-
-  if (selections.length === 0) {
-    return { valid: true, errors: [] };
-  }
-
-  const accessIds = selections.map((s) => s.accessId);
-  const accessItems = await prisma.eventAccess.findMany({
-    where: { id: { in: accessIds }, eventId, active: true },
-    include: { requiredAccess: { select: { id: true } } },
-  });
-
-  const accessMap = new Map(accessItems.map((a) => [a.id, a]));
-
-  // Check all selected items exist
-  for (const selection of selections) {
-    if (!accessMap.has(selection.accessId)) {
-      errors.push(`Access item ${selection.accessId} not found or inactive`);
-    }
-  }
-
-  if (errors.length > 0) {
-    return { valid: false, errors };
-  }
-
-  // Validate companion quantity
-  for (const selection of selections) {
-    const access = accessMap.get(selection.accessId)!;
-    if (selection.quantity > 1 && !access.allowCompanion) {
-      errors.push(
-        `${access.name} does not allow companion (quantity must be 1)`,
-      );
-    }
-    if (selection.quantity > 2 && access.allowCompanion) {
-      errors.push(`${access.name} allows maximum quantity of 2 with companion`);
-    }
-  }
-
-  // Check time conflicts WITHIN EACH TYPE (items with same startsAt in same type)
-  // Group selections by type first, then check time slots within each type
   const selectionsByType = new Map<
     string,
     { access: EventAccess; selection: AccessSelection }[]
@@ -890,7 +848,6 @@ export async function validateAccessSelections(
 
   for (const selection of selections) {
     const access = accessMap.get(selection.accessId)!;
-    // For OTHER type, use groupLabel as key to allow custom groups
     const typeKey =
       access.type === "OTHER"
         ? `OTHER:${access.groupLabel || access.id}`
@@ -900,23 +857,18 @@ export async function validateAccessSelections(
     selectionsByType.get(typeKey)!.push({ access, selection });
   }
 
-  // For each type group, check for actual time OVERLAP (not just same startsAt)
   for (const typeItems of selectionsByType.values()) {
-    // Compare each pair for actual time overlap
     for (let i = 0; i < typeItems.length; i++) {
       for (let j = i + 1; j < typeItems.length; j++) {
         const a = typeItems[i].access;
         const b = typeItems[j].access;
 
-        // Only check overlap if both items have start and end times
         if (a.startsAt && a.endsAt && b.startsAt && b.endsAt) {
           const aStart = a.startsAt.getTime();
           const aEnd = a.endsAt.getTime();
           const bStart = b.startsAt.getTime();
           const bEnd = b.endsAt.getTime();
 
-          // True overlap: !(aEnd <= bStart || bEnd <= aStart)
-          // i.e., they overlap if a doesn't end before b starts AND b doesn't end before a starts
           if (!(aEnd <= bStart || bEnd <= aStart)) {
             errors.push(`Time conflict: "${a.name}" and "${b.name}" overlap`);
           }
@@ -925,27 +877,43 @@ export async function validateAccessSelections(
     }
   }
 
-  // Check prerequisites
+  return errors;
+}
+
+function validateAccessPrerequisites(
+  selections: AccessSelection[],
+  accessMap: Map<string, AccessMapItem>,
+): string[] {
+  const errors: string[] = [];
+  const accessIds = selections.map((s) => s.accessId);
+
   for (const selection of selections) {
     const access = accessMap.get(selection.accessId)!;
     if (access.requiredAccess && access.requiredAccess.length > 0) {
       for (const req of access.requiredAccess) {
         if (!accessIds.includes(req.id)) {
-          const accessName = access.name;
           errors.push(
-            `${accessName} requires selecting its prerequisite first`,
+            `${access.name} requires selecting its prerequisite first`,
           );
         }
       }
     }
   }
 
-  // Check form-based conditions
+  return errors;
+}
+
+function validateFormConditions(
+  selections: AccessSelection[],
+  accessMap: Map<string, AccessMapItem>,
+  formData: Record<string, unknown>,
+): string[] {
+  const errors: string[] = [];
   const now = new Date();
+
   for (const selection of selections) {
     const access = accessMap.get(selection.accessId)!;
 
-    // Date availability
     if (access.availableFrom && access.availableFrom > now) {
       errors.push(`${access.name} is not yet available`);
     }
@@ -953,7 +921,6 @@ export async function validateAccessSelections(
       errors.push(`${access.name} is no longer available`);
     }
 
-    // Form conditions
     if (access.conditions) {
       const conditionsParseResult = AccessConditionSchema.array().safeParse(
         access.conditions,
@@ -982,16 +949,80 @@ export async function validateAccessSelections(
     }
   }
 
+  return errors;
+}
+
+/**
+ * Validate access selections for a registration.
+ * Checks: time conflicts, prerequisites, capacity.
+ */
+export async function validateAccessSelections(
+  eventId: string,
+  selections: AccessSelection[],
+  formData: Record<string, unknown>,
+): Promise<{ valid: boolean; errors: string[] }> {
+  if (selections.length === 0) {
+    return { valid: true, errors: [] };
+  }
+
+  const accessIds = selections.map((s) => s.accessId);
+  const accessItems = await prisma.eventAccess.findMany({
+    where: { id: { in: accessIds }, eventId, active: true },
+    include: { requiredAccess: { select: { id: true } } },
+  });
+
+  const accessMap = new Map(accessItems.map((a) => [a.id, a]));
+
+  // Check all selected items exist
+  const existenceErrors: string[] = [];
+  for (const selection of selections) {
+    if (!accessMap.has(selection.accessId)) {
+      existenceErrors.push(
+        `Access item ${selection.accessId} not found or inactive`,
+      );
+    }
+  }
+  if (existenceErrors.length > 0) return { valid: false, errors: existenceErrors };
+
+  // Validate companion quantity
+  const companionErrors: string[] = [];
+  for (const selection of selections) {
+    const access = accessMap.get(selection.accessId)!;
+    if (selection.quantity > 1 && !access.allowCompanion) {
+      companionErrors.push(
+        `${access.name} does not allow companion (quantity must be 1)`,
+      );
+    }
+    if (selection.quantity > 2 && access.allowCompanion) {
+      companionErrors.push(
+        `${access.name} allows maximum quantity of 2 with companion`,
+      );
+    }
+  }
+
+  const timeErrors = checkTimeConflicts(selections, accessMap);
+  const prereqErrors = validateAccessPrerequisites(selections, accessMap);
+  const conditionErrors = validateFormConditions(selections, accessMap, formData);
+
   // Check capacity (without reserving)
+  const capacityErrors: string[] = [];
   for (const selection of selections) {
     const access = accessMap.get(selection.accessId)!;
     if (access.maxCapacity !== null) {
       const spotsRemaining = access.maxCapacity - access.registeredCount;
       if (spotsRemaining < selection.quantity) {
-        errors.push(`${access.name} is full`);
+        capacityErrors.push(`${access.name} is full`);
       }
     }
   }
+
+  const errors = [
+    ...companionErrors,
+    ...timeErrors,
+    ...prereqErrors,
+    ...conditionErrors,
+    ...capacityErrors,
+  ];
 
   return { valid: errors.length === 0, errors };
 }
