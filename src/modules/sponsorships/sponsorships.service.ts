@@ -37,10 +37,8 @@ import type {
   SponsorshipBatch,
   SponsorshipUsage,
 } from "@/generated/prisma/client.js";
-import {
-  recalculateUsageAmounts,
-  unlinkSponsorshipFromRegistrationInternal,
-} from "./sponsorships-linking.service.js";
+import { unlinkSponsorshipFromRegistrationInternal } from "./sponsorships-linking.service.js";
+import { recalculateUsageAmounts } from "./sponsorships-query.service.js";
 
 // ============================================================================
 // Types

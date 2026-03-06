@@ -51,11 +51,13 @@ import {
   linkSponsorshipToRegistration,
   linkSponsorshipByCode,
   unlinkSponsorshipFromRegistration,
+  type LinkSponsorshipResult,
+} from "./sponsorships-linking.service.js";
+import {
   getAvailableSponsorships,
   getLinkedSponsorships,
   recalculateUsageAmounts,
-  type LinkSponsorshipResult,
-} from "./sponsorships-linking.service.js";
+} from "./sponsorships-query.service.js";
 import { ErrorCodes } from "@shared/errors.js";
 
 describe("Sponsorships Linking Service", () => {
