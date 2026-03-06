@@ -2,9 +2,10 @@ import { getEventById, getEventBySlug } from "@events";
 import { searchRegistrantsForSponsorship } from "@registrations";
 import { createSponsorshipBatch } from "./sponsorships-batch.service.js";
 import {
-  SponsorInfoSchema,
-  BeneficiaryInputSchema,
-  LinkedBeneficiaryInputSchema,
+  CreateSponsorshipBatchSchema,
+  type CreateSponsorshipBatchInput,
+  RegistrantSearchQuerySchema,
+  FormSponsorshipModeSchema,
 } from "./sponsorships.schema.js";
 import { EventIdParamSchema } from "@shared/schemas/params.js";
 import { z } from "zod";
@@ -17,57 +18,11 @@ import { ErrorCodes } from "@shared/errors.js";
 // Route-local request schemas
 // ============================================================================
 
-const CreateSponsorshipBatchSchema = z
-  .object({
-    sponsor: SponsorInfoSchema,
-    customFields: z.record(z.string(), z.unknown()).optional(),
-    beneficiaries: z.array(BeneficiaryInputSchema).max(100).optional(),
-    linkedBeneficiaries: z
-      .array(LinkedBeneficiaryInputSchema)
-      .max(100)
-      .optional(),
-  })
-  .strict()
-  .refine(
-    (data) =>
-      (data.beneficiaries?.length ?? 0) > 0 ||
-      (data.linkedBeneficiaries?.length ?? 0) > 0,
-    { message: "Must have at least one beneficiary or linked beneficiary" },
-  )
-  .refine(
-    (data) =>
-      !(
-        (data.beneficiaries?.length ?? 0) > 0 &&
-        (data.linkedBeneficiaries?.length ?? 0) > 0
-      ),
-    { message: "Cannot provide both beneficiaries and linkedBeneficiaries" },
-  );
-
-type CreateSponsorshipBatchInput = z.infer<typeof CreateSponsorshipBatchSchema>;
-
 const EventSlugParamSchema = z
   .object({
     slug: z.string().min(1).max(100),
   })
   .strict();
-
-const RegistrantSearchQuerySchema = z
-  .object({
-    query: z.string().min(1).max(200),
-    unpaidOnly: z.string().optional(),
-  })
-  .strict();
-
-const FormSponsorshipModeSchema = z
-  .object({
-    sponsorshipSettings: z
-      .object({
-        sponsorshipMode: z.enum(["CODE", "LINKED_ACCOUNT"]),
-        registrantSearchScope: z.enum(["ALL", "UNPAID_ONLY"]).optional(),
-      })
-      .optional(),
-  })
-  .optional();
 
 // ============================================================================
 // Public Routes (No Auth - for sponsor form submission)

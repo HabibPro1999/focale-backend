@@ -9,7 +9,7 @@ import type { AppInstance } from "@shared/fastify.js";
 export async function registerPlugins(app: AppInstance) {
   // Multipart file uploads (10MB limit)
   await app.register(multipart, {
-    limits: { fileSize: 10 * 1024 * 1024 },
+    limits: { fileSize: config.upload.maxFileSizeBytes },
   });
   // Sensible defaults and HTTP error utilities
   await app.register(sensible, {

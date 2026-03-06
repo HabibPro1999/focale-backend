@@ -25,90 +25,20 @@ import {
   IdParamSchema,
   RegistrationIdParamSchema,
 } from "@shared/schemas/params.js";
-import { listQuery } from "@shared/schemas/common.js";
-import { SponsorshipStatusSchema } from "./sponsorships.schema.js";
-import { z } from "zod";
+import {
+  ListSponsorshipsQuerySchema,
+  type ListSponsorshipsQuery,
+  UpdateSponsorshipSchema,
+  type UpdateSponsorshipInput,
+  LinkSponsorshipSchema,
+  type LinkSponsorshipInput,
+  LinkSponsorshipByCodeSchema,
+  type LinkSponsorshipByCodeInput,
+  RegistrationSponsorshipParamSchema,
+} from "./sponsorships.schema.js";
 import type { AppInstance } from "@shared/fastify.js";
 import { AppError } from "@shared/errors.js";
 import { ErrorCodes } from "@shared/errors.js";
-
-// ============================================================================
-// Route-local request schemas
-// ============================================================================
-
-const ListSponsorshipsQuerySchema = listQuery({
-  status: SponsorshipStatusSchema.optional(),
-  sortBy: z
-    .enum(["createdAt", "totalAmount", "beneficiaryName"])
-    .default("createdAt"),
-  sortOrder: z.enum(["asc", "desc"]).default("desc"),
-});
-
-type ListSponsorshipsQuery = z.infer<typeof ListSponsorshipsQuerySchema>;
-
-const UpdateSponsorshipSchema = z
-  .object({
-    beneficiaryName: z.string().min(2).max(200).optional(),
-    beneficiaryEmail: z.string().email().optional(),
-    beneficiaryPhone: z.string().max(50).optional().nullable(),
-    beneficiaryAddress: z.string().max(500).optional().nullable(),
-    coversBasePrice: z.boolean().optional(),
-    coveredAccessIds: z.array(z.string().uuid()).optional(),
-    status: z.literal("CANCELLED").optional(),
-  })
-  .strict()
-  .refine(
-    (data) => {
-      if (
-        data.coversBasePrice !== undefined &&
-        data.coveredAccessIds !== undefined
-      ) {
-        return data.coversBasePrice || data.coveredAccessIds.length > 0;
-      }
-      return true;
-    },
-    { message: "Must cover at least base price or one access item" },
-  );
-
-type UpdateSponsorshipInput = z.infer<typeof UpdateSponsorshipSchema>;
-
-const LinkSponsorshipSchema = z
-  .object({
-    sponsorshipId: z.string().uuid(),
-  })
-  .strict();
-
-type LinkSponsorshipInput = z.infer<typeof LinkSponsorshipSchema>;
-
-const LinkSponsorshipByCodeSchema = z
-  .object({
-    code: z
-      .string()
-      .min(4)
-      .max(10)
-      .transform((val) => {
-        const upper = val.toUpperCase().trim();
-        return upper.startsWith("SP-") ? upper : `SP-${upper}`;
-      })
-      .pipe(
-        z
-          .string()
-          .regex(
-            /^SP-[A-HJ-KM-NP-Z2-9]{4}$/,
-            "Invalid sponsorship code format",
-          ),
-      ),
-  })
-  .strict();
-
-type LinkSponsorshipByCodeInput = z.infer<typeof LinkSponsorshipByCodeSchema>;
-
-const RegistrationSponsorshipParamSchema = z
-  .object({
-    registrationId: z.string().uuid(),
-    sponsorshipId: z.string().uuid(),
-  })
-  .strict();
 
 // ============================================================================
 // Event-scoped Sponsorship Routes (mounted at /api/events)

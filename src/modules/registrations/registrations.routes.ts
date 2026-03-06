@@ -141,14 +141,7 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
     async (request, reply) => {
       const query = request.query;
       const result = await listAllRegistrations(query);
-      const safeData = result.data.map(
-        ({
-          editToken: _et,
-          editTokenExpiry: _ete,
-          idempotencyKey: _ik,
-          ...reg
-        }) => reg,
-      );
+      const safeData = result.data.map(stripSensitiveFields);
       return reply.send({ ...result, data: safeData });
     },
   );
@@ -213,14 +206,7 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
       await requireEventAccess(request.user!, eventId);
 
       const result = await listRegistrations(eventId, query);
-      const safeData = result.data.map(
-        ({
-          editToken: _et,
-          editTokenExpiry: _ete,
-          idempotencyKey: _ik,
-          ...reg
-        }) => reg,
-      );
+      const safeData = result.data.map(stripSensitiveFields);
       return reply.send({ ...result, data: safeData });
     },
   );

@@ -40,20 +40,22 @@ const envSchema = z
 
 const env = envSchema.parse(process.env);
 
+const isProduction = env.NODE_ENV === "production";
+
 export const config = Object.freeze({
   NODE_ENV: env.NODE_ENV,
   PORT: env.PORT,
   DATABASE_URL: env.DATABASE_URL,
   CORS_ORIGIN: env.CORS_ORIGIN,
   isDevelopment: env.NODE_ENV === "development",
-  isProduction: env.NODE_ENV === "production",
+  isProduction,
   isTest: env.NODE_ENV === "test",
   database: Object.freeze({
-    poolSize: env.NODE_ENV === "production" ? 20 : 5,
+    poolSize: isProduction ? 20 : 5,
   }),
   security: Object.freeze({
     rateLimit: Object.freeze({
-      max: env.NODE_ENV === "production" ? 100 : 1000,
+      max: isProduction ? 100 : 1000,
       timeWindow: "1 minute",
     }),
   }),
@@ -71,5 +73,22 @@ export const config = Object.freeze({
     secretAccessKey: env.R2_SECRET_ACCESS_KEY,
     bucket: env.R2_BUCKET,
     publicUrl: env.R2_PUBLIC_URL,
+  }),
+  emailQueue: Object.freeze({
+    batchSize: 50,
+    intervalMs: 15_000,
+    drainTimeoutMs: 10_000,
+  }),
+  health: Object.freeze({
+    memoryThresholdPercent: 90,
+  }),
+  upload: Object.freeze({
+    maxFileSizeBytes: 10 * 1024 * 1024,
+  }),
+  shutdown: Object.freeze({
+    timeoutMs: 30_000,
+  }),
+  server: Object.freeze({
+    dbWarmupMs: isProduction ? 5000 : 1000,
   }),
 });

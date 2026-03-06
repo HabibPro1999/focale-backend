@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { listQuery } from "@shared/schemas/common.js";
 
 // ============================================================================
 // Enums
@@ -62,3 +63,135 @@ export const SponsorInfoSchema = z
   .strict();
 
 export type SponsorInfo = z.infer<typeof SponsorInfoSchema>;
+
+// ============================================================================
+// Route Request Schemas (from sponsorships.routes.ts)
+// ============================================================================
+
+export const ListSponsorshipsQuerySchema = listQuery({
+  status: SponsorshipStatusSchema.optional(),
+  sortBy: z
+    .enum(["createdAt", "totalAmount", "beneficiaryName"])
+    .default("createdAt"),
+  sortOrder: z.enum(["asc", "desc"]).default("desc"),
+});
+
+export type ListSponsorshipsQuery = z.infer<typeof ListSponsorshipsQuerySchema>;
+
+export const UpdateSponsorshipSchema = z
+  .object({
+    beneficiaryName: z.string().min(2).max(200).optional(),
+    beneficiaryEmail: z.string().email().optional(),
+    beneficiaryPhone: z.string().max(50).optional().nullable(),
+    beneficiaryAddress: z.string().max(500).optional().nullable(),
+    coversBasePrice: z.boolean().optional(),
+    coveredAccessIds: z.array(z.string().uuid()).optional(),
+    status: z.literal("CANCELLED").optional(),
+  })
+  .strict()
+  .refine(
+    (data) => {
+      if (
+        data.coversBasePrice !== undefined &&
+        data.coveredAccessIds !== undefined
+      ) {
+        return data.coversBasePrice || data.coveredAccessIds.length > 0;
+      }
+      return true;
+    },
+    { message: "Must cover at least base price or one access item" },
+  );
+
+export type UpdateSponsorshipInput = z.infer<typeof UpdateSponsorshipSchema>;
+
+export const LinkSponsorshipSchema = z
+  .object({
+    sponsorshipId: z.string().uuid(),
+  })
+  .strict();
+
+export type LinkSponsorshipInput = z.infer<typeof LinkSponsorshipSchema>;
+
+export const LinkSponsorshipByCodeSchema = z
+  .object({
+    code: z
+      .string()
+      .min(4)
+      .max(10)
+      .transform((val) => {
+        const upper = val.toUpperCase().trim();
+        return upper.startsWith("SP-") ? upper : `SP-${upper}`;
+      })
+      .pipe(
+        z
+          .string()
+          .regex(
+            /^SP-[A-HJ-KM-NP-Z2-9]{4}$/,
+            "Invalid sponsorship code format",
+          ),
+      ),
+  })
+  .strict();
+
+export type LinkSponsorshipByCodeInput = z.infer<
+  typeof LinkSponsorshipByCodeSchema
+>;
+
+export const RegistrationSponsorshipParamSchema = z
+  .object({
+    registrationId: z.string().uuid(),
+    sponsorshipId: z.string().uuid(),
+  })
+  .strict();
+
+// ============================================================================
+// Route Request Schemas (from sponsorships.public.routes.ts)
+// ============================================================================
+
+export const CreateSponsorshipBatchSchema = z
+  .object({
+    sponsor: SponsorInfoSchema,
+    customFields: z.record(z.string(), z.unknown()).optional(),
+    beneficiaries: z.array(BeneficiaryInputSchema).max(100).optional(),
+    linkedBeneficiaries: z
+      .array(LinkedBeneficiaryInputSchema)
+      .max(100)
+      .optional(),
+  })
+  .strict()
+  .refine(
+    (data) =>
+      (data.beneficiaries?.length ?? 0) > 0 ||
+      (data.linkedBeneficiaries?.length ?? 0) > 0,
+    { message: "Must have at least one beneficiary or linked beneficiary" },
+  )
+  .refine(
+    (data) =>
+      !(
+        (data.beneficiaries?.length ?? 0) > 0 &&
+        (data.linkedBeneficiaries?.length ?? 0) > 0
+      ),
+    { message: "Cannot provide both beneficiaries and linkedBeneficiaries" },
+  );
+
+export type CreateSponsorshipBatchInput = z.infer<
+  typeof CreateSponsorshipBatchSchema
+>;
+
+export const RegistrantSearchQuerySchema = z
+  .object({
+    query: z.string().min(1).max(200),
+    unpaidOnly: z.string().optional(),
+  })
+  .strict();
+
+export const FormSponsorshipModeSchema = z
+  .object({
+    sponsorshipSettings: z
+      .object({
+        sponsorshipMode: z.enum(["CODE", "LINKED_ACCOUNT"]),
+        registrantSearchScope: z.enum(["ALL", "UNPAID_ONLY"]).optional(),
+      })
+      .optional(),
+  })
+  .optional();

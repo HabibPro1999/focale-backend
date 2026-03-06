@@ -1,7 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { logger } from "@shared/utils/logger.js";
-
-const SHUTDOWN_TIMEOUT_MS = 30000;
+import { config } from "@config/app.config.js";
 
 export function gracefulShutdown(server: FastifyInstance): void {
   const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM"];
@@ -17,7 +16,7 @@ export function gracefulShutdown(server: FastifyInstance): void {
       const forceExitTimer = setTimeout(() => {
         logger.error("Graceful shutdown timed out, forcing exit");
         process.exit(1);
-      }, SHUTDOWN_TIMEOUT_MS);
+      }, config.shutdown.timeoutMs);
 
       server
         .close()

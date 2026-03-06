@@ -24,12 +24,13 @@ import { queueBulkEmails } from "./email-queue.service.js";
 import { prisma } from "@/database/client.js";
 import { Prisma } from "@/generated/prisma/client.js";
 import {
-  EmailTemplateCategorySchema,
-  AutomaticEmailTriggerSchema,
-  TiptapDocumentSchema,
+  ListEmailTemplatesQuerySchema,
+  CreateEmailTemplateSchema,
+  UpdateEmailTemplateSchema,
+  BulkSendEmailSchema,
+  TestSendEmailSchema,
 } from "./email.schema.js";
 import { EventIdParamSchema } from "@shared/schemas/params.js";
-import { listQuery } from "@shared/schemas/common.js";
 import type { AppInstance } from "@shared/fastify.js";
 import { AppError } from "@shared/errors.js";
 import { ErrorCodes } from "@shared/errors.js";
@@ -40,70 +41,6 @@ import { ErrorCodes } from "@shared/errors.js";
 
 const TemplateIdParamSchema = z
   .object({ templateId: z.string().uuid() })
-  .strict();
-
-const ListEmailTemplatesQuerySchema = listQuery({
-  category: EmailTemplateCategorySchema.optional(),
-});
-
-const CreateEmailTemplateSchema = z
-  .object({
-    eventId: z.string().uuid(),
-    name: z.string().min(1).max(255),
-    description: z.string().max(1000).optional(),
-    subject: z.string().min(1).max(500),
-    content: TiptapDocumentSchema,
-    category: EmailTemplateCategorySchema,
-    trigger: AutomaticEmailTriggerSchema.optional().nullable(),
-    isActive: z.boolean().default(true),
-  })
-  .strict()
-  .refine(
-    (data) => {
-      if (data.category === "AUTOMATIC" && !data.trigger) return false;
-      if (data.category === "MANUAL" && data.trigger) return false;
-      return true;
-    },
-    {
-      message:
-        "Automatic templates require a trigger; manual templates should not have a trigger",
-      path: ["trigger"],
-    },
-  );
-
-const UpdateEmailTemplateSchema = z
-  .object({
-    name: z.string().min(1).max(255).optional(),
-    description: z.string().max(1000).optional().nullable(),
-    subject: z.string().min(1).max(500).optional(),
-    content: TiptapDocumentSchema.optional(),
-    category: EmailTemplateCategorySchema.optional(),
-    trigger: AutomaticEmailTriggerSchema.optional().nullable(),
-    isActive: z.boolean().optional(),
-  })
-  .strict();
-
-const BulkSendFilterSchema = z
-  .object({
-    paymentStatus: z
-      .array(z.enum(["PENDING", "PAID", "REFUNDED", "WAIVED", "VERIFYING"]))
-      .optional(),
-    accessTypeIds: z.array(z.string().uuid()).optional(),
-  })
-  .strict();
-
-const BulkSendEmailSchema = z
-  .object({
-    registrationIds: z.array(z.string().uuid()).optional(),
-    filters: BulkSendFilterSchema.optional(),
-  })
-  .strict();
-
-const TestSendEmailSchema = z
-  .object({
-    recipientEmail: z.string().email(),
-    recipientName: z.string().max(200).optional(),
-  })
   .strict();
 
 // ============================================================================

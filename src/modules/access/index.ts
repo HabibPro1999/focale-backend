@@ -2,9 +2,10 @@
 // Access Module - Barrel Export
 // ============================================================================
 
-// Service functions (external: registrations)
+// Service functions (external: registrations, forms)
 export {
   validateAccessSelections,
+  validateAccessDatesAgainstEvent,
   reserveAccessSpot,
   releaseAccessSpot,
 } from "./access.service.js";

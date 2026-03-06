@@ -474,7 +474,10 @@ async function calculateExtrasTotal(
   return selectedExtras
     .map((selected) => {
       const access = accessMap.get(selected.extraId);
-      if (!access) return null;
+      if (!access) {
+        logger.warn({ extraId: selected.extraId }, "Access item not found during extras calculation");
+        return null;
+      }
 
       return {
         extraId: access.id,

@@ -1,5 +1,6 @@
 import { prisma } from "@/database/client.js";
 import type { AppInstance } from "@shared/fastify.js";
+import { config } from "@config/app.config.js";
 
 export async function healthRoutes(app: AppInstance): Promise<void> {
   // GET /health — detailed diagnostics
@@ -38,7 +39,7 @@ export async function healthRoutes(app: AppInstance): Promise<void> {
     const heapPercent = (memUsage.heapUsed / memUsage.heapTotal) * 100;
 
     checks.memory = {
-      status: heapPercent > 90 ? "degraded" : "healthy",
+      status: heapPercent > config.health.memoryThresholdPercent ? "degraded" : "healthy",
       heapUsedMB,
     };
 

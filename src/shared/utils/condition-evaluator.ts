@@ -2,6 +2,8 @@
 // Condition Evaluation Utility
 // ============================================================================
 
+import { logger } from "@shared/utils/logger.js";
+
 /**
  * Shared condition evaluation logic for pricing rules and form field validation.
  * @see pure-form/src/lib/conditions.ts -- these implementations must stay in sync
@@ -175,6 +177,7 @@ export function evaluateSingleCondition(
     case "is_not_empty":
       return !isEmpty(fieldValue);
     default:
+      logger.warn({ operator: condition.operator, fieldId: condition.fieldId }, "Unknown condition operator");
       return unknownDefault;
   }
 }

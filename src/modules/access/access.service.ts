@@ -151,7 +151,7 @@ interface DateValidationResult {
  * Validates that access item dates fall within the event's date boundaries.
  * Checks startsAt, endsAt, availableFrom, and availableTo against event dates.
  */
-function validateAccessDatesAgainstEvent(
+export function validateAccessDatesAgainstEvent(
   accessDates: {
     startsAt?: Date | null;
     endsAt?: Date | null;
@@ -601,7 +601,7 @@ function filterAccessByConditions(
         { accessId: access.id, error: conditionsResult.error.message },
         "Invalid conditions JSONB for access item, skipping (filterAccessByConditions)",
       );
-      return true;
+      return false;
     }
     return sharedEvaluateConditions(
       conditionsResult.data,
@@ -958,15 +958,15 @@ export async function validateAccessSelections(
       const conditionsParseResult = AccessConditionSchema.array().safeParse(
         access.conditions,
       );
-      const conditions = conditionsParseResult.success
-        ? conditionsParseResult.data
-        : [];
       if (!conditionsParseResult.success) {
         logger.warn(
           { accessId: access.id, error: conditionsParseResult.error.message },
           "Invalid conditions JSONB for access item, skipping condition check",
         );
+        errors.push(`${access.name} has invalid configuration`);
+        continue;
       }
+      const conditions = conditionsParseResult.data;
       if (
         conditions.length > 0 &&
         !sharedEvaluateConditions(
