@@ -2,7 +2,7 @@ import { z } from "zod";
 import {
   getGroupedAccess,
   validateAccessSelections,
-} from "./access.service.js";
+} from "./access-public.service.js";
 import { AccessSelectionSchema } from "./access.schema.js";
 import { EventIdParamSchema } from "@shared/schemas/params.js";
 import type { AppInstance } from "@shared/fastify.js";

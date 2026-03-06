@@ -4,11 +4,13 @@
 
 // Service functions (external: registrations, forms)
 export {
-  validateAccessSelections,
   validateAccessDatesAgainstEvent,
   reserveAccessSpot,
   releaseAccessSpot,
 } from "./access.service.js";
+
+// Public-facing functions (external: registrations)
+export { validateAccessSelections } from "./access-public.service.js";
 
 // Schemas (external: registrations)
 export { AccessSelectionSchema } from "./access.schema.js";

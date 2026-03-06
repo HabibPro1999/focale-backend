@@ -7,7 +7,7 @@ import { queueTriggeredEmail } from "@email";
 import { getStorageProvider } from "@shared/services/storage/index.js";
 import { compressFile } from "@shared/services/storage/compress.js";
 import type { UpdatePaymentInput } from "./registrations.schema.js";
-import type { RegistrationWithRelations } from "./registration-crud.service.js";
+import type { RegistrationWithRelations } from "./registration-enrichment.service.js";
 import {
   getRegistrationById,
   validatePaymentTransitionInternal,

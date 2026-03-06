@@ -43,7 +43,7 @@ import type {
   DeleteRegistrationQuery,
 } from "./registrations.schema.js";
 import type { AppInstance } from "@shared/fastify.js";
-import type { RegistrationWithRelations } from "./registration-crud.service.js";
+import type { RegistrationWithRelations } from "./registration-enrichment.service.js";
 
 // ============================================================================
 // Helper: strip sensitive fields from admin responses

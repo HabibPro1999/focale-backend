@@ -13,14 +13,14 @@ import type {
   PriceBreakdown,
   PublicEditRegistrationInput,
 } from "./registrations.schema.js";
-import type { RegistrationWithRelations } from "./registration-crud.service.js";
+import type { RegistrationWithRelations } from "./registration-enrichment.service.js";
 import {
   calculateDiscountAmount,
-  getRegistrationById,
   parsePriceBreakdown,
   reconstructAccessSelections,
   toPersistablePriceBreakdown,
-} from "./registration-crud.service.js";
+} from "./registration-enrichment.service.js";
+import { getRegistrationById } from "./registration-crud.service.js";
 import { Prisma } from "@/generated/prisma/client.js";
 
 // ============================================================================

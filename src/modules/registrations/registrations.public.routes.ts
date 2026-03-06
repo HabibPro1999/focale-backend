@@ -2,8 +2,8 @@ import { z } from "zod";
 import {
   createRegistration,
   getRegistrationByIdempotencyKey,
-  toPersistablePriceBreakdown,
 } from "./registration-crud.service.js";
+import { toPersistablePriceBreakdown } from "./registration-enrichment.service.js";
 import { uploadPaymentProof } from "./registration-payment.service.js";
 import {
   getRegistrationForEdit,

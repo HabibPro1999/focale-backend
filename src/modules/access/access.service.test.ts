@@ -19,11 +19,13 @@ import {
   deleteEventAccess,
   listEventAccess,
   getEventAccessById,
-  getGroupedAccess,
   reserveAccessSpot,
   releaseAccessSpot,
-  validateAccessSelections,
 } from "./access.service.js";
+import {
+  getGroupedAccess,
+  validateAccessSelections,
+} from "./access-public.service.js";
 import { AppError } from "@shared/errors.js";
 import { ErrorCodes } from "@shared/errors.js";
 import type { CreateEventAccessInput } from "./access.service.js";
