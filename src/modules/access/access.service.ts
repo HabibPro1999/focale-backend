@@ -237,6 +237,9 @@ export async function createEventAccess(
       sortOrder: data.sortOrder ?? 0,
       active: data.active ?? true,
       groupLabel: data.groupLabel ?? null,
+      allowCompanion: data.allowCompanion ?? false,
+      includedInBase: data.includedInBase ?? false,
+      companionPrice: data.companionPrice ?? 0,
       requiredAccess: requiredAccessIds?.length
         ? { connect: requiredAccessIds.map((id) => ({ id })) }
         : undefined,
@@ -319,6 +322,9 @@ export async function updateEventAccess(
   if (data.sortOrder !== undefined) updateData.sortOrder = data.sortOrder;
   if (data.active !== undefined) updateData.active = data.active;
   if (data.groupLabel !== undefined) updateData.groupLabel = data.groupLabel;
+  if (data.allowCompanion !== undefined) updateData.allowCompanion = data.allowCompanion;
+  if (data.includedInBase !== undefined) updateData.includedInBase = data.includedInBase;
+  if (data.companionPrice !== undefined) updateData.companionPrice = data.companionPrice;
 
   // Handle prerequisites update
   if (requiredAccessIds !== undefined) {
@@ -768,6 +774,25 @@ export async function validateAccessSelections(
           `${access.name} is not available based on your form answers`,
         );
       }
+    }
+  }
+
+  // Validate included accesses are present
+  const includedAccesses = await prisma.eventAccess.findMany({
+    where: { eventId, active: true, includedInBase: true },
+    select: { id: true, name: true, conditions: true, conditionLogic: true },
+  });
+  for (const included of includedAccesses) {
+    // Skip if conditions don't match (exempt from mandatory)
+    if (included.conditions) {
+      if (!evaluateConditions(
+        included.conditions as AccessCondition[],
+        included.conditionLogic as "AND" | "OR",
+        formData,
+      )) continue;
+    }
+    if (!accessIds.includes(included.id)) {
+      errors.push(`"${included.name}" est inclus et doit être sélectionné`);
     }
   }
 
