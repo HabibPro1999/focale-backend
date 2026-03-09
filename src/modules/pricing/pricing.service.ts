@@ -329,6 +329,18 @@ async function calculateExtrasTotal(
       const access = accessMap.get(selected.extraId);
       if (!access) return null;
 
+      if (access.includedInBase) {
+        // Included: free for registrant, companion pays companionPrice
+        const companionCount = selected.quantity > 1 ? selected.quantity - 1 : 0;
+        return {
+          extraId: access.id,
+          name: access.name,
+          unitPrice: access.companionPrice,
+          quantity: selected.quantity,
+          subtotal: access.companionPrice * companionCount,
+        };
+      }
+
       return {
         extraId: access.id,
         name: access.name,

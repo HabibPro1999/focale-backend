@@ -83,6 +83,8 @@ export const CreateEventAccessSchema = z
 
     // Companion option (show +1 question in registration form)
     allowCompanion: z.boolean().default(false),
+    includedInBase: z.boolean().default(false),
+    companionPrice: z.number().int().min(0).default(0),
   })
   .strict()
   .refine(
@@ -115,6 +117,8 @@ export const UpdateEventAccessSchema = z
     active: z.boolean().optional(),
     groupLabel: z.string().max(100).optional().nullable(),
     allowCompanion: z.boolean().optional(),
+    includedInBase: z.boolean().optional(),
+    companionPrice: z.number().int().min(0).optional(),
   })
   .strict();
 
