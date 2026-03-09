@@ -669,15 +669,40 @@ export async function validateAccessSelections(
 ): Promise<{ valid: boolean; errors: string[] }> {
   const errors: string[] = [];
 
-  if (selections.length === 0) {
-    return { valid: true, errors: [] };
+  const accessIds = selections.map((s) => s.accessId);
+
+  // Fetch selected items and included items in parallel
+  const [accessItems, includedAccesses] = await Promise.all([
+    selections.length > 0
+      ? prisma.eventAccess.findMany({
+          where: { id: { in: accessIds }, eventId, active: true },
+          include: { requiredAccess: { select: { id: true } } },
+        })
+      : Promise.resolve([]),
+    prisma.eventAccess.findMany({
+      where: { eventId, active: true, includedInBase: true },
+      select: { id: true, name: true, conditions: true, conditionLogic: true },
+    }),
+  ]);
+
+  // Validate included accesses are present (before selection-specific checks)
+  for (const included of includedAccesses) {
+    // Skip if conditions don't match (exempt from mandatory)
+    if (included.conditions) {
+      if (!evaluateConditions(
+        included.conditions as AccessCondition[],
+        included.conditionLogic as "AND" | "OR",
+        formData,
+      )) continue;
+    }
+    if (!accessIds.includes(included.id)) {
+      errors.push(`"${included.name}" est inclus et doit être sélectionné`);
+    }
   }
 
-  const accessIds = selections.map((s) => s.accessId);
-  const accessItems = await prisma.eventAccess.findMany({
-    where: { id: { in: accessIds }, eventId, active: true },
-    include: { requiredAccess: { select: { id: true } } },
-  });
+  if (selections.length === 0) {
+    return { valid: errors.length === 0, errors };
+  }
 
   const accessMap = new Map(accessItems.map((a) => [a.id, a]));
 
@@ -774,25 +799,6 @@ export async function validateAccessSelections(
           `${access.name} is not available based on your form answers`,
         );
       }
-    }
-  }
-
-  // Validate included accesses are present
-  const includedAccesses = await prisma.eventAccess.findMany({
-    where: { eventId, active: true, includedInBase: true },
-    select: { id: true, name: true, conditions: true, conditionLogic: true },
-  });
-  for (const included of includedAccesses) {
-    // Skip if conditions don't match (exempt from mandatory)
-    if (included.conditions) {
-      if (!evaluateConditions(
-        included.conditions as AccessCondition[],
-        included.conditionLogic as "AND" | "OR",
-        formData,
-      )) continue;
-    }
-    if (!accessIds.includes(included.id)) {
-      errors.push(`"${included.name}" est inclus et doit être sélectionné`);
     }
   }
 
