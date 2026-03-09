@@ -151,6 +151,8 @@ export function createMockEventAccess(
     sortOrder: 0,
     groupLabel: null,
     allowCompanion: false,
+    includedInBase: false,
+    companionPrice: 0,
     active: true,
     createdAt: faker.date.past(),
     updatedAt: faker.date.recent(),

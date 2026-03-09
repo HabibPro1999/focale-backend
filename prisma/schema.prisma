@@ -215,7 +215,9 @@ model EventAccess {
   groupLabel String? @map("group_label")
 
   // Companion option (show +1 question in registration form)
-  allowCompanion Boolean @default(false) @map("allow_companion")
+  allowCompanion   Boolean @default(false) @map("allow_companion")
+  includedInBase   Boolean @default(false) @map("included_in_base")
+  companionPrice   Int     @default(0)     @map("companion_price")
 
   // Timestamps
   createdAt DateTime @default(now()) @map("created_at")
