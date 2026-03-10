@@ -341,12 +341,15 @@ async function calculateExtrasTotal(
         };
       }
 
+      // Non-included: registrant pays price, companion pays companionPrice (or price if unset)
+      const companionCount = selected.quantity > 1 ? selected.quantity - 1 : 0;
+      const companionUnitPrice = access.companionPrice > 0 ? access.companionPrice : access.price;
       return {
         extraId: access.id,
         name: access.name,
         unitPrice: access.price,
         quantity: selected.quantity,
-        subtotal: access.price * selected.quantity,
+        subtotal: access.price + companionUnitPrice * companionCount,
       };
     })
     .filter((e): e is NonNullable<typeof e> => e !== null);
