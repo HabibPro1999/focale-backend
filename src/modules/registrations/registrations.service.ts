@@ -203,7 +203,7 @@ async function enrichWithAccessSelections(
   const accessIds = priceBreakdown.accessItems.map((item) => item.accessId);
   const accessDetails = await prisma.eventAccess.findMany({
     where: { id: { in: accessIds } },
-    select: { id: true, name: true, type: true, startsAt: true, endsAt: true },
+    select: { id: true, name: true, type: true, startsAt: true, endsAt: true, price: true, companionPrice: true, allowCompanion: true },
   });
 
   const accessMap = new Map(accessDetails.map((a) => [a.id, a]));
@@ -221,6 +221,9 @@ async function enrichWithAccessSelections(
       type: "OTHER",
       startsAt: null,
       endsAt: null,
+      price: 0,
+      companionPrice: 0,
+      allowCompanion: false,
     },
   }));
 
@@ -253,7 +256,7 @@ async function enrichManyWithAccessSelections(
   // Fetch all access details in one query
   const accessDetails = await prisma.eventAccess.findMany({
     where: { id: { in: Array.from(allAccessIds) } },
-    select: { id: true, name: true, type: true, startsAt: true, endsAt: true },
+    select: { id: true, name: true, type: true, startsAt: true, endsAt: true, price: true, companionPrice: true, allowCompanion: true },
   });
 
   const accessMap = new Map(accessDetails.map((a) => [a.id, a]));
@@ -281,6 +284,9 @@ async function enrichManyWithAccessSelections(
         type: "OTHER",
         startsAt: null,
         endsAt: null,
+        price: 0,
+        companionPrice: 0,
+        allowCompanion: false,
       },
     }));
 
