@@ -27,6 +27,17 @@ export const AccessTypeSchema = z.enum([
 ]);
 
 // ============================================================================
+// Free Position Types (rendered outside date groups)
+// ============================================================================
+
+export const FREE_POSITION_TYPES: AccessType[] = ["DINNER", "OTHER"];
+
+/** Check if an access type is a free-position type (not grouped by date/time) */
+export function isFreePositionType(type: string): boolean {
+  return FREE_POSITION_TYPES.includes(type as AccessType);
+}
+
+// ============================================================================
 // Type Labels (French)
 // ============================================================================
 
@@ -171,6 +182,7 @@ export const TypeGroupSchema = DateGroupSchema;
 
 export const GroupedAccessResponseSchema = z.object({
   groups: z.array(DateGroupSchema),
+  freeItems: z.array(z.any()),
 });
 
 // ============================================================================
@@ -225,3 +237,15 @@ export type GetGroupedAccessBody = z.infer<typeof GetGroupedAccessBodySchema>;
 export type ValidateAccessSelectionsBody = z.infer<
   typeof ValidateAccessSelectionsBodySchema
 >;
+
+// ============================================================================
+// Reorder Schema
+// ============================================================================
+
+export const ReorderAccessItemsSchema = z
+  .object({
+    ids: z.array(z.string().uuid()).min(1),
+  })
+  .strict();
+
+export type ReorderAccessItemsInput = z.infer<typeof ReorderAccessItemsSchema>;

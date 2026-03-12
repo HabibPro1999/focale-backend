@@ -10,6 +10,7 @@ import type {
   TimeSlot,
   DateGroup,
 } from "./access.schema.js";
+import { isFreePositionType } from "./access.schema.js";
 import { Prisma } from "@/generated/prisma/client.js";
 import type { EventAccess } from "@/generated/prisma/client.js";
 import { getAccessTypeKey } from "@/modules/sponsorships/sponsorships.utils.js";
@@ -430,6 +431,52 @@ export async function getAccessClientId(id: string): Promise<string | null> {
 }
 
 // ============================================================================
+// Reorder
+// ============================================================================
+
+export async function reorderAccessItems(
+  eventId: string,
+  ids: string[],
+): Promise<EventAccessWithPrerequisites[]> {
+  const found = await prisma.eventAccess.findMany({
+    where: { id: { in: ids }, eventId },
+  });
+
+  if (found.length !== ids.length) {
+    throw new AppError(
+      "One or more access item IDs not found or do not belong to this event",
+      400,
+      true,
+      ErrorCodes.BAD_REQUEST,
+    );
+  }
+
+  const nonFree = found.filter((item) => !isFreePositionType(item.type));
+  if (nonFree.length > 0) {
+    throw new AppError(
+      "Only free-position access items (DINNER, OTHER) can be reordered",
+      400,
+      true,
+      ErrorCodes.BAD_REQUEST,
+    );
+  }
+
+  await prisma.$transaction(
+    ids.map((id, index) =>
+      prisma.eventAccess.update({
+        where: { id },
+        data: { sortOrder: index },
+      }),
+    ),
+  );
+
+  return prisma.eventAccess.findMany({
+    where: { id: { in: ids } },
+    include: { requiredAccess: { select: { id: true, name: true } } },
+  });
+}
+
+// ============================================================================
 // Hierarchical Grouping (Type → Time Slots)
 // ============================================================================
 
@@ -501,6 +548,16 @@ export async function getGroupedAccess(
     };
   });
 
+  // === Partition: free position items vs. grouped items ===
+
+  const freeItems = enrichedAccess.filter((item) => isFreePositionType(item.type));
+  const groupedItems = enrichedAccess.filter((item) => !isFreePositionType(item.type));
+
+  freeItems.sort((a, b) => {
+    if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+    return a.createdAt.getTime() - b.createdAt.getTime();
+  });
+
   // === Hierarchical grouping by DATE ===
 
   // Helper: Format date as French day name + date (e.g., "Jeudi 16 avril")
@@ -519,7 +576,7 @@ export async function getGroupedAccess(
   // Step 1: Group by DATE (day only, no time)
   const dateMap = new Map<string, EnrichedAccess[]>();
 
-  for (const access of enrichedAccess) {
+  for (const access of groupedItems) {
     // Extract date part only (YYYY-MM-DD)
     const dateKey = access.startsAt
       ? access.startsAt.toISOString().split("T")[0]
@@ -586,7 +643,7 @@ export async function getGroupedAccess(
     return new Date(a.dateKey).getTime() - new Date(b.dateKey).getTime();
   });
 
-  return { groups };
+  return { groups, freeItems };
 }
 
 // ============================================================================
@@ -718,13 +775,19 @@ export async function validateAccessSelections(
   }
 
   // Check time conflicts WITHIN EACH TYPE (items with same startsAt in same type)
+  // Skip free-position types from time conflict checking
+  const timedSelections = selections.filter((s) => {
+    const access = accessMap.get(s.accessId);
+    return access && !isFreePositionType(access.type);
+  });
+
   // Group selections by type first, then check time slots within each type
   const selectionsByType = new Map<
     string,
     { access: EventAccess; selection: AccessSelection }[]
   >();
 
-  for (const selection of selections) {
+  for (const selection of timedSelections) {
     const access = accessMap.get(selection.accessId)!;
     // For OTHER type, use groupLabel as key to allow custom groups
     const typeKey = getAccessTypeKey(access.type, access.groupLabel);

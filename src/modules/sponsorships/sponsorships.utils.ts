@@ -1,4 +1,5 @@
 import { randomInt } from "node:crypto";
+import { isFreePositionType } from "@modules/access/access.schema.js";
 
 // ============================================================================
 // Types for Prisma Client (works with both PrismaClient and transactions)
@@ -251,9 +252,16 @@ export function validateCoveredAccessTimeOverlap(
 
   if (coveredItems.length < 2) return [];
 
+  // Skip free-position types from time conflict checking
+  const timedItems = coveredItems.filter(
+    (item) => !isFreePositionType(item.type),
+  );
+
+  if (timedItems.length < 2) return [];
+
   // Group by typeKey (matches access.service.ts pattern)
   const byType = new Map<string, AccessItemForOverlapCheck[]>();
-  for (const item of coveredItems) {
+  for (const item of timedItems) {
     const typeKey = getAccessTypeKey(item.type, item.groupLabel);
 
     if (!byType.has(typeKey)) byType.set(typeKey, []);

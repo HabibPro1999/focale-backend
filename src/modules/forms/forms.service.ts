@@ -298,6 +298,16 @@ export async function updateForm(
         }
       }
 
+      // Clamp accessStepIndex to [0, steps.length]
+      const accessStepIndex = (input.schema as Record<string, unknown> & { settings?: Record<string, unknown> })?.settings?.accessStepIndex;
+      if (typeof accessStepIndex === "number") {
+        const stepsLength = Array.isArray(input.schema.steps)
+          ? input.schema.steps.length
+          : 0;
+        const clamped = Math.max(0, Math.min(accessStepIndex, stepsLength));
+        (input.schema as Record<string, unknown> & { settings: Record<string, unknown> }).settings.accessStepIndex = clamped;
+      }
+
       updateData.schema = input.schema as Prisma.InputJsonValue;
       // Auto-increment schema version when schema changes
       updateData.schemaVersion = { increment: 1 };

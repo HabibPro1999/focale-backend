@@ -7,6 +7,7 @@ import {
   listEventAccess,
   getEventAccessById,
   getAccessClientId,
+  reorderAccessItems,
 } from './access.service.js';
 import {
   CreateEventAccessSchema,
@@ -14,8 +15,10 @@ import {
   ListEventAccessQuerySchema,
   EventAccessIdParamSchema,
   EventIdParamSchema,
+  ReorderAccessItemsSchema,
   type CreateEventAccessInput,
   type UpdateEventAccessInput,
+  type ReorderAccessItemsInput,
 } from './access.schema.js';
 import type { AppInstance } from '@shared/types/fastify.js';
 
@@ -169,6 +172,21 @@ export async function accessRoutes(app: AppInstance): Promise<void> {
 
       await deleteEventAccess(id);
       return reply.status(204).send();
+    }
+  );
+
+  // PATCH /api/events/:eventId/access/reorder - Bulk reorder free-position items
+  app.patch<{ Params: { eventId: string }; Body: ReorderAccessItemsInput }>(
+    '/:eventId/access/reorder',
+    {
+      schema: {
+        params: EventIdParamSchema,
+        body: ReorderAccessItemsSchema,
+      },
+    },
+    async (request, reply) => {
+      const result = await reorderAccessItems(request.params.eventId, request.body.ids);
+      return reply.status(200).send({ data: result });
     }
   );
 }
