@@ -19,8 +19,6 @@ export {
   getRegistrationTableColumns,
   // Sponsorship search
   searchRegistrantsForSponsorship,
-  // Payment method selection (self-service)
-  selectPaymentMethod,
 } from './registrations.service.js';
 
 // Service types
@@ -45,7 +43,6 @@ export {
   // Self-service editing schemas
   PublicEditRegistrationSchema,
   RegistrationIdPublicParamSchema,
-  SelectPaymentMethodSchema,
   // Table column schemas
   TableColumnTypeSchema,
   TableColumnOptionSchema,
@@ -67,7 +64,6 @@ export type {
   PriceBreakdown,
   // Self-service editing types
   PublicEditRegistrationInput,
-  SelectPaymentMethodInput,
   // Table column types
   TableColumnType,
   TableColumnOption,

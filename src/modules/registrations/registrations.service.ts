@@ -27,7 +27,6 @@ import {
 import { getStorageProvider } from "@shared/services/storage/index.js";
 import { compressFile } from "@shared/services/storage/compress.js";
 import { fileTypeFromBuffer } from "file-type";
-import { auditLog } from "@shared/utils/audit.js";
 import type {
   CreateRegistrationInput,
   UpdateRegistrationInput,
@@ -606,7 +605,6 @@ export async function confirmPayment(
       paymentStatus: true,
       paidAmount: true,
       paymentMethod: true,
-      labName: true,
       totalAmount: true,
     },
   });
@@ -1913,85 +1911,4 @@ export async function searchRegistrantsForSponsorship(
       formData: r.formData as Record<string, unknown> | null,
     };
   });
-}
-
-// ============================================================================
-// Select Payment Method (Public Self-Service)
-// ============================================================================
-
-export async function selectPaymentMethod(
-  registrationId: string,
-  paymentMethod: string,
-  labName?: string | null,
-): Promise<{ paymentMethod: string | null; labName: string | null }> {
-  const registration = await prisma.registration.findUnique({
-    where: { id: registrationId },
-    select: { id: true, eventId: true, paymentStatus: true },
-  });
-
-  if (!registration) {
-    throw new AppError(
-      "Registration not found",
-      404,
-      true,
-      ErrorCodes.NOT_FOUND,
-    );
-  }
-
-  if (registration.paymentStatus !== "PENDING") {
-    throw new AppError(
-      "Cannot change payment method — payment already in progress",
-      409,
-      true,
-      ErrorCodes.INVALID_PAYMENT_TRANSITION,
-    );
-  }
-
-  const pricing = await prisma.eventPricing.findUnique({
-    where: { eventId: registration.eventId },
-  });
-
-  const enabledMethods: string[] = ["BANK_TRANSFER"];
-  if (pricing?.onlinePaymentEnabled && pricing?.onlinePaymentUrl) {
-    enabledMethods.push("ONLINE");
-  }
-  if (pricing?.cashPaymentEnabled) {
-    enabledMethods.push("CASH");
-  }
-  if (pricing?.labSponsorshipEnabled) {
-    enabledMethods.push("LAB_SPONSORSHIP");
-  }
-
-  if (!enabledMethods.includes(paymentMethod)) {
-    throw new AppError(
-      "Payment method not available for this event",
-      422,
-      true,
-      ErrorCodes.VALIDATION_ERROR,
-    );
-  }
-
-  const updated = await prisma.registration.update({
-    where: { id: registrationId },
-    data: {
-      paymentMethod: paymentMethod as any,
-      labName: paymentMethod === "LAB_SPONSORSHIP" ? labName : null,
-    },
-    select: { paymentMethod: true, labName: true },
-  });
-
-  await auditLog(prisma, {
-    entityType: "registration",
-    entityId: registrationId,
-    action: "PAYMENT_METHOD_SELECTED",
-    changes: {
-      paymentMethod: { old: null, new: paymentMethod },
-      labName: {
-        old: null,
-        new: paymentMethod === "LAB_SPONSORSHIP" ? labName : null,
-      },
-    },
-  });
-
-  return { paymentMethod: updated.paymentMethod, labName: updated.labName };
 }

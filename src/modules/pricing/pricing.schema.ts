@@ -65,8 +65,6 @@ export const CreateEventPricingSchema = z
     bankName: z.string().max(200).optional().nullable(),
     bankAccountName: z.string().max(200).optional().nullable(),
     bankAccountNumber: z.string().max(50).optional().nullable(),
-    cashPaymentEnabled: z.boolean().default(false),
-    labSponsorshipEnabled: z.boolean().default(false),
   })
   .strict();
 
@@ -82,8 +80,6 @@ export const UpdateEventPricingSchema = z
     bankName: z.string().max(200).optional().nullable(),
     bankAccountName: z.string().max(200).optional().nullable(),
     bankAccountNumber: z.string().max(50).optional().nullable(),
-    cashPaymentEnabled: z.boolean().optional(),
-    labSponsorshipEnabled: z.boolean().optional(),
   })
   .strict();
 

@@ -13,7 +13,7 @@ export const PaymentStatusSchema = z.enum([
   "WAIVED",
 ]);
 
-export const PaymentMethodSchema = z.enum(["BANK_TRANSFER", "ONLINE", "CASH", "LAB_SPONSORSHIP"]);
+export const PaymentMethodSchema = z.enum(["BANK_TRANSFER", "ONLINE", "CASH"]);
 
 // ============================================================================
 // Create Registration Schema (Public - for form submission)
@@ -55,7 +55,6 @@ export const UpdatePaymentSchema = z
     paymentMethod: PaymentMethodSchema.optional(),
     paymentReference: z.string().max(200).optional(),
     paymentProofUrl: z.string().url().optional(),
-    labName: z.string().max(200).nullable().optional(),
   })
   .strict();
 
@@ -67,26 +66,8 @@ export const UpdateRegistrationSchema = z
     paymentReference: z.string().max(200).optional(),
     paymentProofUrl: z.string().url().optional(),
     note: z.string().max(2000).nullable().optional(),
-    labName: z.string().max(200).nullable().optional(),
   })
   .strict();
-
-export const SelectPaymentMethodSchema = z
-  .object({
-    paymentMethod: PaymentMethodSchema,
-    labName: z.string().min(1).max(200).optional(),
-  })
-  .strict()
-  .refine((d) => d.paymentMethod !== "LAB_SPONSORSHIP" || !!d.labName, {
-    message: "Lab name is required for lab sponsorship",
-    path: ["labName"],
-  })
-  .refine((d) => d.paymentMethod === "LAB_SPONSORSHIP" || !d.labName, {
-    message: "Lab name is only allowed for lab sponsorship",
-    path: ["labName"],
-  });
-
-export type SelectPaymentMethodInput = z.infer<typeof SelectPaymentMethodSchema>;
 
 // ============================================================================
 // Query Schemas
