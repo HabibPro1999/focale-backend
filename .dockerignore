@@ -1,0 +1,15 @@
+node_modules
+dist
+.git
+.env*
+*.md
+.eslintrc*
+.prettierrc*
+eslint.config.*
+coverage
+.vscode
+scripts
+tests
+**/*.test.ts
+**/*.spec.ts
+firebase/*.json

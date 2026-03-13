@@ -1,31 +1,38 @@
-# syntax=docker/dockerfile:1
-
-# Base image
 FROM oven/bun:1-alpine AS base
 WORKDIR /app
 
-# Install dependencies (cached layer)
+# --- Dependencies (cached until package.json/bun.lock change) ---
 FROM base AS deps
 COPY package.json bun.lock ./
-COPY prisma ./prisma/
-RUN bun install --frozen-lockfile --production && \
-    bun x prisma generate
+# Install prod deps into a temp dir so we get a clean copy later
+RUN mkdir -p /temp/prod && \
+    cp package.json bun.lock /temp/prod/ && \
+    cd /temp/prod && \
+    bun install --frozen-lockfile --production
 
-# Production image
+# --- Prisma generate (cached until prisma schema changes) ---
+FROM deps AS generate
+# prisma CLI is a devDependency — install it separately, then generate
+COPY prisma ./prisma/
+RUN bun add --dev prisma && \
+    bun x prisma generate && \
+    bun remove prisma && \
+    rm -rf /app/node_modules/.cache
+
+# --- Production image ---
 FROM base AS release
 
-# Copy dependencies
-COPY --from=deps /app/node_modules ./node_modules
-COPY --from=deps /app/prisma ./prisma
+# Prod node_modules (no devDeps)
+COPY --from=deps /temp/prod/node_modules ./node_modules
 
-# Copy source
-COPY src ./src
+# Generated Prisma client
+COPY --from=generate /app/src/generated ./src/generated
+
+# Source + config
 COPY tsconfig.json ./
+COPY src ./src
 
-# Copy generated Prisma client from deps stage (after src to avoid overwrite)
-COPY --from=deps /app/src/generated ./src/generated
-
-# Use existing bun user from base image
+# Non-root
 USER bun
 
 ENV NODE_ENV=production
