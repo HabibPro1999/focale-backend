@@ -25,8 +25,10 @@ FROM base AS release
 # Prod node_modules (no devDeps)
 COPY --from=deps /temp/prod/node_modules ./node_modules
 
-# Generated Prisma client
+# Generated Prisma client + runtime (prisma generate writes CockroachDB
+# query-compiler into @prisma/client/runtime/, which the deps stage lacks)
 COPY --from=generate /app/src/generated ./src/generated
+COPY --from=generate /app/node_modules/@prisma/client ./node_modules/@prisma/client
 
 # Source + config
 COPY tsconfig.json ./
