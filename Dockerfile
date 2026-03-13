@@ -1,40 +1,34 @@
 FROM oven/bun:1-alpine AS base
 WORKDIR /app
 
-# --- Dependencies (cached until package.json/bun.lock change) ---
-FROM base AS deps
+# --- Build: all deps + prisma generate ---
+FROM base AS build
 COPY package.json bun.lock ./
-# Install prod deps into a temp dir so we get a clean copy later
-RUN mkdir -p /temp/prod && \
-    cp package.json bun.lock /temp/prod/ && \
-    cd /temp/prod && \
-    bun install --frozen-lockfile --production
-
-# --- Prisma generate (cached until prisma schema changes) ---
-FROM deps AS generate
-# prisma CLI is a devDependency — install it separately, then generate
 COPY prisma ./prisma/
-RUN bun add --dev prisma && \
-    bun x prisma generate && \
-    bun remove prisma && \
-    rm -rf /app/node_modules/.cache
+RUN bun install --frozen-lockfile && \
+    bun x prisma generate
+
+# --- Prod deps only (no devDependencies) ---
+FROM base AS prod-deps
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile --production
 
 # --- Production image ---
 FROM base AS release
 
-# Prod node_modules (no devDeps)
-COPY --from=deps /temp/prod/node_modules ./node_modules
+# Prod node_modules (lean, no devDeps)
+COPY --from=prod-deps /app/node_modules ./node_modules
 
-# Generated Prisma client + runtime (prisma generate writes CockroachDB
-# query-compiler into @prisma/client/runtime/, which the deps stage lacks)
-COPY --from=generate /app/src/generated ./src/generated
-COPY --from=generate /app/node_modules/@prisma/client ./node_modules/@prisma/client
+# Overlay @prisma/client from build stage (has query_compiler_fast_bg.cockroachdb.mjs)
+COPY --from=build /app/node_modules/@prisma/client ./node_modules/@prisma/client
+
+# Generated Prisma client
+COPY --from=build /app/src/generated ./src/generated
 
 # Source + config
 COPY tsconfig.json ./
 COPY src ./src
 
-# Non-root
 USER bun
 
 ENV NODE_ENV=production
