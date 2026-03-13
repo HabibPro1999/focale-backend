@@ -19,13 +19,15 @@ FROM base AS release
 # Prod node_modules (lean, no devDeps)
 COPY --from=prod-deps /app/node_modules ./node_modules
 
-# Overlay @prisma/client from build stage (has query_compiler_fast_bg.cockroachdb.mjs)
+# Prisma runtime: @prisma/client/runtime/ has the WASM query compiler,
+# .prisma/client/ has the generated wrappers and loaders
+COPY --from=build /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=build /app/node_modules/@prisma/client ./node_modules/@prisma/client
 
-# Generated Prisma client
+# Generated Prisma TypeScript client (custom output path)
 COPY --from=build /app/src/generated ./src/generated
 
-# Source + config
+# Source + config (ordered by change frequency — least to most)
 COPY tsconfig.json ./
 COPY src ./src
 
