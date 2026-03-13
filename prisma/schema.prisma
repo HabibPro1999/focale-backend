@@ -145,8 +145,10 @@ model EventPricing {
   rules     Json   @default("[]") // Embedded pricing rules array
 
   // Payment Methods
-  onlinePaymentEnabled Boolean @default(false) @map("online_payment_enabled")
-  onlinePaymentUrl     String? @map("online_payment_url")
+  onlinePaymentEnabled  Boolean @default(false) @map("online_payment_enabled")
+  onlinePaymentUrl      String? @map("online_payment_url")
+  cashPaymentEnabled    Boolean @default(false) @map("cash_payment_enabled")
+  labSponsorshipEnabled Boolean @default(false) @map("lab_sponsorship_enabled")
 
   // Bank Transfer Details (bank transfer is always enabled)
   bankName          String? @map("bank_name")
@@ -338,6 +340,7 @@ enum PaymentMethod {
   BANK_TRANSFER
   ONLINE
   CASH
+  LAB_SPONSORSHIP
 }
 
 model Registration {
@@ -366,6 +369,7 @@ model Registration {
   paidAmount       Int            @default(0) @map("paid_amount")
   currency         String         @default("TND")
   paymentMethod    PaymentMethod? @map("payment_method")
+  labName          String?        @map("lab_name")
   paymentReference String?        @map("payment_reference")
   paymentProofUrl  String?        @map("payment_proof_url")
 

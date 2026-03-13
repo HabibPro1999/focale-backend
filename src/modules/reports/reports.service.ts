@@ -337,6 +337,7 @@ interface RegistrationExportRow {
   phone: string | null;
   paymentStatus: string;
   paymentMethod: string | null;
+  labName: string | null;
   totalAmount: number;
   paidAmount: number;
   baseAmount: number;
@@ -387,6 +388,7 @@ export async function exportRegistrations(
       phone: true,
       paymentStatus: true,
       paymentMethod: true,
+      labName: true,
       totalAmount: true,
       paidAmount: true,
       baseAmount: true,
@@ -430,6 +432,7 @@ function generateCSV(registrations: RegistrationExportRow[]): string {
     "Phone",
     "Payment Status",
     "Payment Method",
+    "Lab Name",
     "Total Amount",
     "Paid Amount",
     "Base Amount",
@@ -449,6 +452,7 @@ function generateCSV(registrations: RegistrationExportRow[]): string {
     r.phone ?? "",
     r.paymentStatus,
     r.paymentMethod ?? "",
+    r.labName ?? "",
     r.totalAmount.toString(),
     r.paidAmount.toString(),
     r.baseAmount.toString(),

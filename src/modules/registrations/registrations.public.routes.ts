@@ -6,6 +6,7 @@ import {
   verifyEditToken,
   uploadPaymentProof,
   getRegistrationByIdempotencyKey,
+  selectPaymentMethod,
 } from "./registrations.service.js";
 import { calculatePrice } from "@pricing";
 import { getFormById } from "@forms";
@@ -15,8 +16,10 @@ import {
   FormIdParamSchema,
   RegistrationIdPublicParamSchema,
   PublicEditRegistrationSchema,
+  SelectPaymentMethodSchema,
   type CreateRegistrationInput,
   type PublicEditRegistrationInput,
+  type SelectPaymentMethodInput,
 } from "./registrations.schema.js";
 import {
   validateFormData,
@@ -250,6 +253,42 @@ export async function registrationEditPublicRoutes(
       }
 
       const result = await editRegistrationPublic(registrationId, input);
+      return reply.send(result);
+    },
+  );
+
+  // PATCH /api/public/registrations/:registrationId/payment-method - Select payment method
+  app.patch<{
+    Params: { registrationId: string };
+    Querystring: { token?: string };
+    Body: SelectPaymentMethodInput;
+  }>(
+    "/:registrationId/payment-method",
+    {
+      config: {
+        rateLimit: publicRateLimits.paymentProof,
+      },
+      schema: {
+        params: RegistrationIdPublicParamSchema,
+        querystring: EditTokenQuerySchema,
+        body: SelectPaymentMethodSchema,
+      },
+    },
+    async (request, reply) => {
+      const { registrationId } = request.params;
+      const token = extractEditToken(request);
+
+      // Verify edit token
+      const isValid = await verifyEditToken(registrationId, token);
+      if (!isValid) {
+        throw app.httpErrors.forbidden("Invalid or expired edit token");
+      }
+
+      const result = await selectPaymentMethod(
+        registrationId,
+        request.body.paymentMethod,
+        request.body.labName,
+      );
       return reply.send(result);
     },
   );

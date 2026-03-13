@@ -91,6 +91,12 @@ export async function accessPublicRoutes(app: AppInstance): Promise<void> {
       if (pricing?.onlinePaymentEnabled && pricing?.onlinePaymentUrl) {
         paymentMethods.push('ONLINE');
       }
+      if (pricing?.cashPaymentEnabled) {
+        paymentMethods.push('CASH');
+      }
+      if (pricing?.labSponsorshipEnabled) {
+        paymentMethods.push('LAB_SPONSORSHIP');
+      }
 
       return reply.send({
         event: {
