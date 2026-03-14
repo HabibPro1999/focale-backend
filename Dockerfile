@@ -19,9 +19,7 @@ FROM base AS release
 # Prod node_modules (lean, no devDeps)
 COPY --from=prod-deps /app/node_modules ./node_modules
 
-# Prisma runtime: @prisma/client/runtime/ has the WASM query compiler,
-# .prisma/client/ has the generated wrappers and loaders
-COPY --from=build /app/node_modules/.prisma ./node_modules/.prisma
+# Prisma runtime: @prisma/client/runtime/ has the WASM query compiler
 COPY --from=build /app/node_modules/@prisma/client ./node_modules/@prisma/client
 
 # Generated Prisma TypeScript client (custom output path)
