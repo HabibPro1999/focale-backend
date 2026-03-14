@@ -243,10 +243,10 @@ export async function registrationEditPublicRoutes(
       const token = extractEditToken(request);
       const input = request.body;
 
-      // Verify edit token before allowing edit
-      const isValid = await verifyEditToken(registrationId, token);
+      // Verify token value only — no expiry enforcement
+      const isValid = await verifyEditToken(registrationId, token, { checkExpiry: false });
       if (!isValid) {
-        throw app.httpErrors.forbidden("Invalid or expired edit token");
+        throw app.httpErrors.forbidden("Invalid edit token");
       }
 
       const result = await editRegistrationPublic(registrationId, input);
