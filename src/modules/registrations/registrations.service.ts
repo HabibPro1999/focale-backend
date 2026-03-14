@@ -100,10 +100,14 @@ function getEditTokenExpiry(): Date {
 /**
  * Verify an edit token for a registration.
  * Uses timing-safe comparison to prevent timing attacks.
+ *
+ * @param checkExpiry - If true, rejects expired tokens (for edit operations).
+ *                      If false, only validates the token value (for read/payment access).
  */
 export async function verifyEditToken(
   registrationId: string,
   token: string,
+  { checkExpiry = true }: { checkExpiry?: boolean } = {},
 ): Promise<boolean> {
   const registration = await prisma.registration.findUnique({
     where: { id: registrationId },
@@ -114,8 +118,8 @@ export async function verifyEditToken(
     return false;
   }
 
-  // Check expiry first
-  if (registration.editTokenExpiry < new Date()) {
+  // Check expiry only for edit operations — payment/read links stay valid
+  if (checkExpiry && registration.editTokenExpiry < new Date()) {
     return false;
   }
 

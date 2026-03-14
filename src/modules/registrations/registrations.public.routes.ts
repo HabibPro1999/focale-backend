@@ -209,10 +209,10 @@ export async function registrationEditPublicRoutes(
       const { registrationId } = request.params;
       const token = extractEditToken(request);
 
-      // Verify edit token before returning any data
-      const isValid = await verifyEditToken(registrationId, token);
+      // Verify token value only — read access doesn't expire (payment links stay valid)
+      const isValid = await verifyEditToken(registrationId, token, { checkExpiry: false });
       if (!isValid) {
-        throw app.httpErrors.forbidden("Invalid or expired edit token");
+        throw app.httpErrors.forbidden("Invalid edit token");
       }
 
       const result = await getRegistrationForEdit(registrationId);
@@ -274,10 +274,10 @@ export async function registrationEditPublicRoutes(
       const { registrationId } = request.params;
       const token = extractEditToken(request);
 
-      // Verify edit token before allowing upload
-      const isValid = await verifyEditToken(registrationId, token);
+      // Verify token value only — payment proof upload doesn't expire
+      const isValid = await verifyEditToken(registrationId, token, { checkExpiry: false });
       if (!isValid) {
-        throw app.httpErrors.forbidden("Invalid or expired edit token");
+        throw app.httpErrors.forbidden("Invalid edit token");
       }
 
       // Get file from multipart request
