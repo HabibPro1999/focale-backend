@@ -156,3 +156,4 @@ export type {
 // ============================================================================
 
 export { emailRoutes } from './email.routes.js';
+export { emailWebhookRoutes } from './email.webhook.routes.js';

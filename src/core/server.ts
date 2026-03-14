@@ -21,7 +21,7 @@ import {
   registrationEditPublicRoutes,
 } from "@registrations";
 import { reportsRoutes } from "@reports";
-import { emailRoutes } from "@email";
+import { emailRoutes, emailWebhookRoutes } from "@email";
 import {
   sponsorshipsRoutes,
   sponsorshipDetailRoutes,
@@ -113,6 +113,9 @@ export async function buildServer(): Promise<AppInstance> {
 
   // Email routes (templates and campaigns)
   await app.register(emailRoutes, { prefix: "/api/events" });
+
+  // SendGrid webhook (public, no auth — secured by ECDSA signature verification)
+  await app.register(emailWebhookRoutes, { prefix: "/webhooks/sendgrid" });
 
   // Sponsorship routes
   await app.register(sponsorshipsRoutes, { prefix: "/api/events" });

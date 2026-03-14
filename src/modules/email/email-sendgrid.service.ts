@@ -73,6 +73,7 @@ export interface BatchSendResult {
 export type SendGridEventType =
   | "processed"
   | "dropped"
+  | "blocked"
   | "delivered"
   | "deferred"
   | "bounce"

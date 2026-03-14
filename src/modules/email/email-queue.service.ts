@@ -382,7 +382,7 @@ interface EmailLogUpdateData {
 
 export async function updateEmailStatusFromWebhook(
   emailLogId: string,
-  event: 'delivered' | 'open' | 'click' | 'bounce' | 'dropped',
+  event: 'delivered' | 'open' | 'click' | 'bounce' | 'dropped' | 'blocked',
   metadata?: { url?: string; reason?: string }
 ) {
   const updates: EmailLogUpdateData = {}
@@ -408,6 +408,10 @@ export async function updateEmailStatusFromWebhook(
     case 'dropped':
       updates.status = 'DROPPED'
       updates.errorMessage = metadata?.reason || 'Dropped'
+      break
+    case 'blocked':
+      updates.status = 'DROPPED'
+      updates.errorMessage = metadata?.reason || 'Blocked by SendGrid'
       break
   }
 
