@@ -78,6 +78,8 @@ export async function updateEventPricing(
     updateData.onlinePaymentEnabled = input.onlinePaymentEnabled;
   if (input.onlinePaymentUrl !== undefined)
     updateData.onlinePaymentUrl = input.onlinePaymentUrl;
+  if (input.cashPaymentEnabled !== undefined)
+    updateData.cashPaymentEnabled = input.cashPaymentEnabled;
   if (input.bankName !== undefined) updateData.bankName = input.bankName;
   if (input.bankAccountName !== undefined)
     updateData.bankAccountName = input.bankAccountName;
