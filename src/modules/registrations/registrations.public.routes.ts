@@ -5,6 +5,7 @@ import {
   editRegistrationPublic,
   verifyEditToken,
   uploadPaymentProof,
+  selectPaymentMethod,
   getRegistrationByIdempotencyKey,
 } from "./registrations.service.js";
 import { calculatePrice } from "@pricing";
@@ -12,10 +13,12 @@ import { getFormById } from "@forms";
 import { getEventById } from "@events";
 import {
   CreateRegistrationSchema,
+  SelectPaymentMethodSchema,
   FormIdParamSchema,
   RegistrationIdPublicParamSchema,
   PublicEditRegistrationSchema,
   type CreateRegistrationInput,
+  type SelectPaymentMethodInput,
   type PublicEditRegistrationInput,
 } from "./registrations.schema.js";
 import {
@@ -251,6 +254,37 @@ export async function registrationEditPublicRoutes(
 
       const result = await editRegistrationPublic(registrationId, input);
       return reply.send(result);
+    },
+  );
+
+  // PATCH /api/public/registrations/:registrationId/payment-method - Select payment method
+  // For CASH and LAB_SPONSORSHIP (not BANK_TRANSFER, which is set via proof upload)
+  app.patch<{
+    Params: { registrationId: string };
+    Querystring: { token?: string };
+    Body: SelectPaymentMethodInput;
+  }>(
+    "/:registrationId/payment-method",
+    {
+      schema: {
+        params: RegistrationIdPublicParamSchema,
+        querystring: EditTokenQuerySchema,
+        body: SelectPaymentMethodSchema,
+      },
+    },
+    async (request, reply) => {
+      const { registrationId } = request.params;
+      const token = extractEditToken(request);
+
+      const isValid = await verifyEditToken(registrationId, token, {
+        checkExpiry: false,
+      });
+      if (!isValid) {
+        throw app.httpErrors.forbidden("Invalid edit token");
+      }
+
+      await selectPaymentMethod(registrationId, request.body);
+      return reply.status(200).send({ success: true });
     },
   );
 

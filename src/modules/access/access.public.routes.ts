@@ -76,6 +76,7 @@ export async function accessPublicRoutes(app: AppInstance): Promise<void> {
               name: true,
               logo: true,
               primaryColor: true,
+              enabledModules: true,
             },
           },
         },
@@ -91,6 +92,18 @@ export async function accessPublicRoutes(app: AppInstance): Promise<void> {
       if (pricing?.onlinePaymentEnabled && pricing?.onlinePaymentUrl) {
         paymentMethods.push('ONLINE');
       }
+      if (pricing?.cashPaymentEnabled) {
+        paymentMethods.push('CASH');
+      }
+
+      // Check if sponsorships module is enabled for the client
+      const enabledModules = event.client.enabledModules as string[];
+      const sponsorshipsEnabled = enabledModules.includes('sponsorships');
+
+      // Lab sponsorship option available when sponsorships module is disabled
+      if (!sponsorshipsEnabled) {
+        paymentMethods.push('LAB_SPONSORSHIP');
+      }
 
       return reply.send({
         event: {
@@ -103,6 +116,7 @@ export async function accessPublicRoutes(app: AppInstance): Promise<void> {
           location: event.location,
           client: event.client,
         },
+        sponsorshipsEnabled,
         pricing: pricing
           ? {
               basePrice: pricing.basePrice,

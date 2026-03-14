@@ -61,6 +61,7 @@ export const CreateEventPricingSchema = z
     // Payment Methods
     onlinePaymentEnabled: z.boolean().default(false),
     onlinePaymentUrl: z.string().url().optional().nullable(),
+    cashPaymentEnabled: z.boolean().default(false),
     // Bank Transfer Details
     bankName: z.string().max(200).optional().nullable(),
     bankAccountName: z.string().max(200).optional().nullable(),
@@ -76,6 +77,7 @@ export const UpdateEventPricingSchema = z
     // Payment Methods
     onlinePaymentEnabled: z.boolean().optional(),
     onlinePaymentUrl: z.string().url().optional().nullable(),
+    cashPaymentEnabled: z.boolean().optional(),
     // Bank Transfer Details
     bankName: z.string().max(200).optional().nullable(),
     bankAccountName: z.string().max(200).optional().nullable(),

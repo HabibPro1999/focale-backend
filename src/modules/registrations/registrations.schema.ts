@@ -13,7 +13,24 @@ export const PaymentStatusSchema = z.enum([
   "WAIVED",
 ]);
 
-export const PaymentMethodSchema = z.enum(["BANK_TRANSFER", "ONLINE", "CASH"]);
+export const PaymentMethodSchema = z.enum([
+  "BANK_TRANSFER",
+  "ONLINE",
+  "CASH",
+  "LAB_SPONSORSHIP",
+]);
+
+// ============================================================================
+// Shared Validation
+// ============================================================================
+
+const requireLabName = (data: { paymentMethod?: string; labName?: string }) =>
+  data.paymentMethod !== "LAB_SPONSORSHIP" || Boolean(data.labName);
+
+const labNameRefinement = {
+  message: "Lab name is required when payment method is LAB_SPONSORSHIP",
+  path: ["labName"],
+};
 
 // ============================================================================
 // Create Registration Schema (Public - for form submission)
@@ -36,13 +53,36 @@ export const CreateRegistrationSchema = z
     // Sponsorship
     sponsorshipCode: z.string().max(50).optional(),
 
+    // Payment method selection
+    paymentMethod: PaymentMethodSchema.optional(),
+
+    // Lab sponsorship (when sponsorship module is disabled)
+    labName: z.string().max(200).optional(),
+
     // Idempotency key for safe retries (prevents duplicate registrations)
     idempotencyKey: z.string().uuid().optional(),
 
     // Browser origin URL for email links (e.g., "https://summit.events.domain.com")
     linkBaseUrl: z.string().url().optional(),
   })
-  .strict();
+  .strict()
+  .refine(requireLabName, labNameRefinement);
+
+// ============================================================================
+// Select Payment Method Schema (Public - from payment page)
+// ============================================================================
+
+export const SelectPaymentMethodSchema = z
+  .object({
+    paymentMethod: z.enum(["CASH", "LAB_SPONSORSHIP"]),
+    labName: z.string().max(200).optional(),
+  })
+  .strict()
+  .refine(requireLabName, labNameRefinement);
+
+export type SelectPaymentMethodInput = z.infer<
+  typeof SelectPaymentMethodSchema
+>;
 
 // ============================================================================
 // Update Registration Schema (Admin)

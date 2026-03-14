@@ -315,6 +315,8 @@ export async function createRegistration(
     phone,
     accessSelections,
     sponsorshipCode,
+    paymentMethod,
+    labName,
     idempotencyKey,
     linkBaseUrl,
   } = input;
@@ -407,7 +409,10 @@ export async function createRegistration(
         firstName: firstName ?? null,
         lastName: lastName ?? null,
         phone: phone ?? null,
-        paymentStatus: "PENDING",
+        paymentStatus:
+          paymentMethod === "LAB_SPONSORSHIP" ? "WAIVED" : "PENDING",
+        paymentMethod: paymentMethod ?? null,
+        labName: paymentMethod === "LAB_SPONSORSHIP" ? (labName ?? null) : null,
         totalAmount: priceBreakdown.total,
         currency: priceBreakdown.currency,
         priceBreakdown: priceBreakdown as unknown as Prisma.InputJsonValue,
@@ -1715,6 +1720,47 @@ export function extractKeyFromUrl(url: string): string | null {
   } catch {
     return null;
   }
+}
+
+// ============================================================================
+// Select Payment Method (Public - from payment page)
+// ============================================================================
+
+export async function selectPaymentMethod(
+  registrationId: string,
+  input: { paymentMethod: "CASH" | "LAB_SPONSORSHIP"; labName?: string },
+): Promise<void> {
+  const registration = await prisma.registration.findUnique({
+    where: { id: registrationId },
+  });
+
+  if (!registration) {
+    throw new AppError("Registration not found", 404, true, ErrorCodes.NOT_FOUND);
+  }
+
+  if (registration.paymentStatus !== "PENDING") {
+    throw new AppError(
+      "Payment method can only be selected for pending registrations",
+      400,
+      true,
+      ErrorCodes.REGISTRATION_INVALID_STATUS,
+    );
+  }
+
+  const updateData: Record<string, unknown> = {
+    paymentMethod: input.paymentMethod,
+  };
+
+  if (input.paymentMethod === "LAB_SPONSORSHIP") {
+    updateData.paymentStatus = "WAIVED";
+    updateData.labName = input.labName ?? null;
+    updateData.paidAt = new Date();
+  }
+
+  await prisma.registration.update({
+    where: { id: registrationId },
+    data: updateData,
+  });
 }
 
 // ============================================================================

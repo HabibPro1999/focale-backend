@@ -147,6 +147,7 @@ model EventPricing {
   // Payment Methods
   onlinePaymentEnabled Boolean @default(false) @map("online_payment_enabled")
   onlinePaymentUrl     String? @map("online_payment_url")
+  cashPaymentEnabled   Boolean @default(false) @map("cash_payment_enabled")
 
   // Bank Transfer Details (bank transfer is always enabled)
   bankName          String? @map("bank_name")
@@ -173,6 +174,7 @@ enum AccessType {
   ACCOMMODATION
   TRANSPORT
   OTHER
+  ADDON
 }
 
 model EventAccess {
@@ -338,6 +340,7 @@ enum PaymentMethod {
   BANK_TRANSFER
   ONLINE
   CASH
+  LAB_SPONSORSHIP
 }
 
 model Registration {
@@ -380,6 +383,9 @@ model Registration {
   // Sponsorship
   sponsorshipCode   String? @map("sponsorship_code")
   sponsorshipAmount Int     @default(0) @map("sponsorship_amount")
+
+  // Lab sponsorship (simplified sponsorship when module disabled)
+  labName String? @map("lab_name")
 
   // Timestamps
   paidAt    DateTime? @map("paid_at")

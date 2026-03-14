@@ -501,7 +501,11 @@ export async function getGroupedAccess(
     };
   });
 
-  // === Hierarchical grouping by DATE ===
+  // === Partition ADDON vs scheduled items ===
+  const addonItems = enrichedAccess.filter((a) => a.type === "ADDON");
+  const scheduledItems = enrichedAccess.filter((a) => a.type !== "ADDON");
+
+  // === Hierarchical grouping by DATE (scheduled items only) ===
 
   // Helper: Format date as French day name + date (e.g., "Jeudi 16 avril")
   const formatDateLabel = (dateStr: string): string => {
@@ -519,7 +523,7 @@ export async function getGroupedAccess(
   // Step 1: Group by DATE (day only, no time)
   const dateMap = new Map<string, EnrichedAccess[]>();
 
-  for (const access of enrichedAccess) {
+  for (const access of scheduledItems) {
     // Extract date part only (YYYY-MM-DD)
     const dateKey = access.startsAt
       ? access.startsAt.toISOString().split("T")[0]
@@ -586,7 +590,13 @@ export async function getGroupedAccess(
     return new Date(a.dateKey).getTime() - new Date(b.dateKey).getTime();
   });
 
-  return { groups };
+  return {
+    groups,
+    addonGroup:
+      addonItems.length > 0
+        ? { items: addonItems.sort((a, b) => a.sortOrder - b.sortOrder) }
+        : null,
+  };
 }
 
 // ============================================================================

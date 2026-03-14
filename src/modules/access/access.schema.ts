@@ -24,6 +24,7 @@ export const AccessTypeSchema = z.enum([
   "ACCOMMODATION",
   "TRANSPORT",
   "OTHER",
+  "ADDON",
 ]);
 
 // ============================================================================
@@ -38,6 +39,7 @@ export const ACCESS_TYPE_LABELS: Record<string, string> = {
   ACCOMMODATION: "Hébergement",
   TRANSPORT: "Transport",
   OTHER: "Autres",
+  ADDON: "Options",
 };
 
 // ============================================================================
@@ -171,6 +173,11 @@ export const TypeGroupSchema = DateGroupSchema;
 
 export const GroupedAccessResponseSchema = z.object({
   groups: z.array(DateGroupSchema),
+  addonGroup: z
+    .object({
+      items: z.array(z.any()),
+    })
+    .nullable(),
 });
 
 // ============================================================================
