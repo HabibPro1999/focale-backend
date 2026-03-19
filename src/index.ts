@@ -48,6 +48,16 @@ async function waitForDatabase(
 async function main() {
   const server = await buildServer();
 
+  let emailQueueInterval: ReturnType<typeof setInterval> | undefined;
+
+  // Register hooks and shutdown BEFORE listen (Fastify disallows addHook after listen)
+  server.addHook("onClose", async () => {
+    if (emailQueueInterval) clearInterval(emailQueueInterval);
+    logger.info("Email queue worker stopped");
+  });
+
+  gracefulShutdown(server);
+
   // CRITICAL: Bind to port first, before any background tasks
   // This ensures Render detects the service as healthy
   await server.listen({ port: config.PORT, host: "0.0.0.0" });
@@ -57,7 +67,7 @@ async function main() {
   await waitForDatabase();
 
   // Start email queue worker (processes every 15 seconds for faster email delivery)
-  const emailQueueInterval = setInterval(() => {
+  emailQueueInterval = setInterval(() => {
     processEmailQueue(50)
       .then((result) => {
         if (result.processed > 0) {
@@ -65,19 +75,10 @@ async function main() {
         }
       })
       .catch((err) => {
-        // Non-fatal: log error but keep server running
         logger.error({ err }, "Email queue processing failed");
       });
   }, 15_000);
   logger.info("Email queue worker started (15s interval)");
-
-  // Register email queue cleanup — fires during server.close() in gracefulShutdown
-  server.addHook("onClose", async () => {
-    clearInterval(emailQueueInterval);
-    logger.info("Email queue worker stopped");
-  });
-
-  gracefulShutdown(server);
 }
 
 main().catch((err) => {
