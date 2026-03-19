@@ -429,11 +429,12 @@ export async function createSponsorshipBatch(
             },
           });
 
-          // Update registration's sponsorshipAmount
+          // Update registration's sponsorshipAmount and paymentMethod
           await tx.registration.update({
             where: { id: linked.registrationId },
             data: {
               sponsorshipAmount: { increment: applicableAmount },
+              paymentMethod: "LAB_SPONSORSHIP",
             },
           });
 
@@ -651,7 +652,11 @@ export async function createSponsorshipBatch(
           // Fully sponsored: mark as PAID and queue PAYMENT_CONFIRMED
           await prisma.registration.update({
             where: { id: registration.id },
-            data: { paymentStatus: "PAID", paidAt: new Date() },
+            data: {
+              paymentStatus: "PAID",
+              paidAt: new Date(),
+              paymentMethod: "LAB_SPONSORSHIP",
+            },
           });
 
           await queueTriggeredEmail("PAYMENT_CONFIRMED", eventId, {
@@ -1251,10 +1256,13 @@ export async function linkSponsorshipToRegistration(
 
     const newSponsorshipAmount = calculateTotalSponsorshipAmount(allUsages);
 
-    // Update registration sponsorship amount
+    // Update registration sponsorship amount and paymentMethod
     await tx.registration.update({
       where: { id: registrationId },
-      data: { sponsorshipAmount: newSponsorshipAmount },
+      data: {
+        sponsorshipAmount: newSponsorshipAmount,
+        paymentMethod: "LAB_SPONSORSHIP",
+      },
     });
 
     return {
@@ -1271,6 +1279,16 @@ export async function linkSponsorshipToRegistration(
       warnings,
     };
   });
+
+  // If fully sponsored, auto-mark registration as PAID
+  if (
+    result.registration.sponsorshipAmount >= result.registration.totalAmount
+  ) {
+    await prisma.registration.update({
+      where: { id: registrationId },
+      data: { paymentStatus: "PAID", paidAt: new Date() },
+    });
+  }
 
   // Queue SPONSORSHIP_APPLIED email to the doctor
   try {
@@ -1484,7 +1502,10 @@ async function unlinkSponsorshipFromRegistrationInternal(
 
   await tx.registration.update({
     where: { id: registrationId },
-    data: { sponsorshipAmount: newSponsorshipAmount },
+    data: {
+      sponsorshipAmount: newSponsorshipAmount,
+      ...(newSponsorshipAmount === 0 && { paymentMethod: null }),
+    },
   });
 
   // Check if sponsorship has any remaining usages

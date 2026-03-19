@@ -1019,6 +1019,76 @@ describe("Sponsorships Service", () => {
         amountApplied: 200,
       };
 
+      const registrationUpdateMock = vi.fn().mockResolvedValue({});
+      prismaMock.$transaction.mockImplementation(async (fn: TxCallback) => {
+        const txMock = {
+          sponsorshipUsage: {
+            create: vi.fn().mockResolvedValue(mockUsage),
+            findMany: vi.fn().mockResolvedValue([mockUsage]),
+          },
+          sponsorship: {
+            updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+          },
+          registration: { update: registrationUpdateMock },
+        };
+        return fn(txMock);
+      });
+
+      const result = await linkSponsorshipToRegistration(
+        sponsorshipId,
+        registrationId,
+        adminUserId,
+      );
+
+      expect(result.usage.amountApplied).toBe(200);
+      expect(result.registration.sponsorshipAmount).toBe(200);
+      expect(result.warnings).toHaveLength(0);
+      expect(registrationUpdateMock).toHaveBeenCalledWith({
+        where: { id: registrationId },
+        data: {
+          sponsorshipAmount: 200,
+          paymentMethod: "LAB_SPONSORSHIP",
+        },
+      });
+    });
+
+    it("should auto-mark registration as PAID when fully covered", async () => {
+      const mockSponsorship = {
+        ...createMockSponsorship({
+          id: sponsorshipId,
+          eventId,
+          status: "PENDING",
+          coversBasePrice: true,
+          coveredAccessIds: [],
+          totalAmount: 200,
+        }),
+        usages: [],
+      };
+      const mockRegistration = {
+        id: registrationId,
+        eventId,
+        totalAmount: 200,
+        baseAmount: 200,
+        accessTypeIds: [],
+        priceBreakdown: { calculatedBasePrice: 200, accessItems: [] },
+        sponsorshipAmount: 0,
+        sponsorshipUsages: [],
+      };
+
+      prismaMock.sponsorship.findUnique.mockResolvedValue(mockSponsorship);
+      prismaMock.registration.findUnique.mockResolvedValue(
+        asMock(mockRegistration),
+      );
+      prismaMock.sponsorshipUsage.findUnique.mockResolvedValue(null);
+      prismaMock.registration.update.mockResolvedValue(asMock({}));
+
+      const mockUsage = {
+        id: faker.string.uuid(),
+        sponsorshipId,
+        registrationId,
+        amountApplied: 200,
+      };
+
       prismaMock.$transaction.mockImplementation(async (fn: TxCallback) => {
         const txMock = {
           sponsorshipUsage: {
@@ -1033,15 +1103,20 @@ describe("Sponsorships Service", () => {
         return fn(txMock);
       });
 
-      const result = await linkSponsorshipToRegistration(
+      await linkSponsorshipToRegistration(
         sponsorshipId,
         registrationId,
         adminUserId,
       );
 
-      expect(result.usage.amountApplied).toBe(200);
-      expect(result.registration.sponsorshipAmount).toBe(200);
-      expect(result.warnings).toHaveLength(0);
+      expect(prismaMock.registration.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: registrationId },
+          data: expect.objectContaining({
+            paymentStatus: "PAID",
+          }),
+        }),
+      );
     });
 
     it("should throw when sponsorship not found", async () => {
@@ -1420,7 +1495,7 @@ describe("Sponsorships Service", () => {
     const sponsorshipId = faker.string.uuid();
     const registrationId = faker.string.uuid();
 
-    it("should unlink sponsorship successfully", async () => {
+    it("should unlink sponsorship successfully and clear paymentMethod when no sponsorships remain", async () => {
       const usageId = faker.string.uuid();
 
       prismaMock.sponsorshipUsage.findUnique.mockResolvedValue(
@@ -1443,6 +1518,45 @@ describe("Sponsorships Service", () => {
       await expect(
         unlinkSponsorshipFromRegistration(sponsorshipId, registrationId),
       ).resolves.toBeUndefined();
+
+      expect(prismaMock.registration.update).toHaveBeenCalledWith({
+        where: { id: registrationId },
+        data: {
+          sponsorshipAmount: 0,
+          paymentMethod: null,
+        },
+      });
+    });
+
+    it("should keep paymentMethod when other sponsorships remain after unlink", async () => {
+      const usageId = faker.string.uuid();
+
+      prismaMock.sponsorshipUsage.findUnique.mockResolvedValue(
+        asMock({
+          id: usageId,
+          sponsorshipId,
+          registrationId,
+          amountApplied: 200,
+        }),
+      );
+      prismaMock.sponsorshipUsage.delete.mockResolvedValue(asMock({}));
+      prismaMock.sponsorshipUsage.findMany.mockResolvedValue(
+        asMock([{ amountApplied: 150 }]),
+      );
+      prismaMock.sponsorshipUsage.count.mockResolvedValue(1);
+      prismaMock.registration.update.mockResolvedValue(asMock({}));
+      prismaMock.sponsorship.findUnique.mockResolvedValue(
+        asMock({ status: "USED" }),
+      );
+
+      await unlinkSponsorshipFromRegistration(sponsorshipId, registrationId);
+
+      expect(prismaMock.registration.update).toHaveBeenCalledWith({
+        where: { id: registrationId },
+        data: {
+          sponsorshipAmount: 150,
+        },
+      });
     });
 
     it("should throw when link not found", async () => {
