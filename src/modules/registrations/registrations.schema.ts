@@ -20,6 +20,13 @@ export const PaymentMethodSchema = z.enum([
   "LAB_SPONSORSHIP",
 ]);
 
+export const RegistrationRoleSchema = z.enum([
+  "PARTICIPANT",
+  "SPEAKER",
+  "MODERATOR",
+  "ORGANIZER",
+]);
+
 // ============================================================================
 // Shared Validation
 // ============================================================================
@@ -106,8 +113,39 @@ export const UpdateRegistrationSchema = z
     paymentReference: z.string().max(200).optional(),
     paymentProofUrl: z.string().url().optional(),
     note: z.string().max(2000).nullable().optional(),
+    role: RegistrationRoleSchema.optional(),
   })
   .strict();
+
+// ============================================================================
+// Admin Create Registration Schema
+// ============================================================================
+
+export const AdminCreateRegistrationSchema = z
+  .object({
+    // Identity — email + name required for admin-created registrations
+    email: z.string().email(),
+    firstName: z.string().min(1).max(100),
+    lastName: z.string().min(1).max(100),
+    phone: z.string().max(50).optional(),
+
+    // Dynamic form fields — not validated against the form schema
+    // Admin can omit required fields (speaker/organizer may not have filled the form)
+    formData: z.record(z.string(), z.any()).optional().default({}),
+
+    // Role — defaults to PARTICIPANT
+    role: RegistrationRoleSchema.default("PARTICIPANT"),
+
+    // Access selections
+    accessSelections: z.array(AccessSelectionSchema).optional().default([]),
+
+    // Payment — admin can set status directly (e.g. WAIVED for speakers)
+    paymentMethod: PaymentMethodSchema.optional(),
+    paymentStatus: PaymentStatusSchema.optional(),
+    labName: z.string().max(200).optional(),
+  })
+  .strict()
+  .refine(requireLabName, labNameRefinement);
 
 // ============================================================================
 // Query Schemas
@@ -417,4 +455,9 @@ export type SearchRegistrantsQuery = z.infer<
 >;
 export type RegistrantSearchResult = z.infer<
   typeof RegistrantSearchResultSchema
+>;
+
+export type RegistrationRole = z.infer<typeof RegistrationRoleSchema>;
+export type AdminCreateRegistrationInput = z.infer<
+  typeof AdminCreateRegistrationSchema
 >;

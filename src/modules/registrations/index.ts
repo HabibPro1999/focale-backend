@@ -5,6 +5,7 @@
 // Service functions
 export {
   createRegistration,
+  createAdminRegistration,
   getRegistrationById,
   updateRegistration,
   confirmPayment,
@@ -19,20 +20,22 @@ export {
   getRegistrationTableColumns,
   // Sponsorship search
   searchRegistrantsForSponsorship,
-} from './registrations.service.js';
+} from "./registrations.service.js";
 
 // Service types
 export type {
   GetRegistrationForEditResult,
   EditRegistrationPublicResult,
   RegistrationTableColumns,
-} from './registrations.service.js';
+} from "./registrations.service.js";
 
 // Schemas
 export {
   PaymentStatusSchema,
   PaymentMethodSchema,
+  RegistrationRoleSchema,
   CreateRegistrationSchema,
+  AdminCreateRegistrationSchema,
   UpdatePaymentSchema,
   UpdateRegistrationSchema,
   ListRegistrationsQuerySchema,
@@ -51,13 +54,15 @@ export {
   // Sponsorship search schemas
   SearchRegistrantsQuerySchema,
   RegistrantSearchResultSchema,
-} from './registrations.schema.js';
+} from "./registrations.schema.js";
 
 // Types
 export type {
   PaymentStatus,
   PaymentMethod,
+  RegistrationRole,
   CreateRegistrationInput,
+  AdminCreateRegistrationInput,
   UpdateRegistrationInput,
   UpdatePaymentInput,
   ListRegistrationsQuery,
@@ -72,11 +77,11 @@ export type {
   // Sponsorship search types
   SearchRegistrantsQuery,
   RegistrantSearchResult,
-} from './registrations.schema.js';
+} from "./registrations.schema.js";
 
 // Routes
-export { registrationsRoutes } from './registrations.routes.js';
+export { registrationsRoutes } from "./registrations.routes.js";
 export {
   registrationsPublicRoutes,
   registrationEditPublicRoutes,
-} from './registrations.public.routes.js';
+} from "./registrations.public.routes.js";

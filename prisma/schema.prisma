@@ -72,14 +72,15 @@ model Event {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  client             Client             @relation(fields: [clientId], references: [id])
-  forms              Form[] // Multiple forms per event (REGISTRATION, SPONSOR)
-  pricing            EventPricing? // One-to-one: pricing configuration (includes embedded rules)
-  access             EventAccess[]
-  registrations      Registration[]
-  emailTemplates     EmailTemplate[]
-  sponsorshipBatches SponsorshipBatch[]
-  sponsorships       Sponsorship[]
+  client                Client                @relation(fields: [clientId], references: [id])
+  forms                 Form[] // Multiple forms per event (REGISTRATION, SPONSOR)
+  pricing               EventPricing? // One-to-one: pricing configuration (includes embedded rules)
+  access                EventAccess[]
+  registrations         Registration[]
+  emailTemplates        EmailTemplate[]
+  sponsorshipBatches    SponsorshipBatch[]
+  sponsorships          Sponsorship[]
+  certificateTemplates  CertificateTemplate[]
 
   @@index([clientId, status])
   @@map("events")
@@ -226,14 +227,51 @@ model EventAccess {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   // Relations
-  event           Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  requiredAccess  EventAccess[] @relation("AccessPrerequisites")
-  prerequisiteFor EventAccess[] @relation("AccessPrerequisites")
+  event                Event                 @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  requiredAccess       EventAccess[]         @relation("AccessPrerequisites")
+  prerequisiteFor      EventAccess[]         @relation("AccessPrerequisites")
+  certificateTemplates CertificateTemplate[]
 
   @@index([eventId, startsAt])
   @@index([eventId, type])
   @@index([eventId, active])
   @@map("event_access")
+}
+
+// ============================================================================
+// CERTIFICATE MODULE
+// ============================================================================
+
+model CertificateTemplate {
+  id      String @id @default(uuid())
+  eventId String @map("event_id")
+
+  name String // "Presence Certificate", "Speaker Certificate", etc.
+
+  // Template image (stored at full resolution for print quality)
+  templateUrl    String @map("template_url")
+  templateWidth  Int    @map("template_width") // original image px dimensions
+  templateHeight Int    @map("template_height")
+
+  // Zone configuration — array of positioned text zones with variable bindings
+  zones Json @default("[]") // CertificateZone[]
+
+  // Applicability — which roles can receive this certificate (empty = all roles)
+  applicableRoles RegistrationRole[] @default([]) @map("applicable_roles")
+
+  // If linked to a specific access item (e.g. "Workshop A Certificate")
+  accessId String? @map("access_id")
+
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  event  Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  access EventAccess? @relation(fields: [accessId], references: [id], onDelete: SetNull)
+
+  @@index([eventId])
+  @@map("certificate_templates")
 }
 
 // ============================================================================
@@ -344,6 +382,13 @@ enum PaymentMethod {
   LAB_SPONSORSHIP
 }
 
+enum RegistrationRole {
+  PARTICIPANT
+  SPEAKER
+  MODERATOR
+  ORGANIZER
+}
+
 model Registration {
   id      String @id @default(uuid())
   formId  String @map("form_id")
@@ -408,6 +453,9 @@ model Registration {
 
   // Admin note (single text field)
   note String?
+
+  // Registrant role (set by admin; public form registrations default to PARTICIPANT)
+  role RegistrationRole @default(PARTICIPANT) @map("registration_role")
 
   // Access type IDs (simple array for querying)
   accessTypeIds String[] @default([]) @map("access_type_ids")

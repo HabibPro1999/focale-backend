@@ -15,6 +15,7 @@ import {
   listRegistrationEmailLogs,
   searchRegistrantsForSponsorship,
   extractKeyFromUrl,
+  createAdminRegistration,
 } from "./registrations.service.js";
 import { getStorageProvider } from "@shared/services/storage/index.js";
 import { AppError } from "@shared/errors/app-error.js";
@@ -29,6 +30,7 @@ import {
   ListRegistrationEmailLogsQuerySchema,
   SearchRegistrantsQuerySchema,
   DeleteRegistrationQuerySchema,
+  AdminCreateRegistrationSchema,
   type UpdateRegistrationInput,
   type UpdatePaymentInput,
   type ListRegistrationsQuery,
@@ -36,6 +38,7 @@ import {
   type ListRegistrationEmailLogsQuery,
   type SearchRegistrantsQuery,
   type DeleteRegistrationQuery,
+  type AdminCreateRegistrationInput,
 } from "./registrations.schema.js";
 import type { AppInstance } from "@shared/types/fastify.js";
 import { UserRole } from "@identity";
@@ -99,6 +102,40 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
 
       const results = await searchRegistrantsForSponsorship(eventId, query);
       return reply.send(results);
+    },
+  );
+
+  // POST /api/events/:eventId/admin/registrations - Admin creates a registration
+  app.post<{
+    Params: { eventId: string };
+    Body: AdminCreateRegistrationInput;
+  }>(
+    "/:eventId/admin/registrations",
+    {
+      schema: {
+        params: EventIdParamSchema,
+        body: AdminCreateRegistrationSchema,
+      },
+    },
+    async (request, reply) => {
+      const { eventId } = request.params;
+
+      const event = await getEventById(eventId);
+      if (!event) {
+        throw app.httpErrors.notFound("Event not found");
+      }
+
+      if (!canAccessClient(request.user!, event.clientId)) {
+        throw app.httpErrors.forbidden("Insufficient permissions");
+      }
+
+      const registration = await createAdminRegistration(
+        eventId,
+        request.body,
+        request.user!.id,
+      );
+
+      return reply.status(201).send(registration);
     },
   );
 

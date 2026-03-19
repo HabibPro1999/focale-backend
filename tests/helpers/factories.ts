@@ -258,6 +258,7 @@ export function createMockRegistration(
     idempotencyKey: null,
     linkBaseUrl: null,
     note: null,
+    role: "PARTICIPANT",
     accessTypeIds: [],
     createdAt: faker.date.past(),
     updatedAt: faker.date.recent(),

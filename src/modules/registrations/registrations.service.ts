@@ -29,6 +29,7 @@ import { compressFile } from "@shared/services/storage/compress.js";
 import { fileTypeFromBuffer } from "file-type";
 import type {
   CreateRegistrationInput,
+  AdminCreateRegistrationInput,
   UpdateRegistrationInput,
   UpdatePaymentInput,
   ListRegistrationsQuery,
@@ -516,6 +517,228 @@ export async function createRegistration(
   return result;
 }
 
+// ============================================================================
+// Admin Create Registration
+// ============================================================================
+
+export async function createAdminRegistration(
+  eventId: string,
+  input: AdminCreateRegistrationInput,
+  adminUserId: string,
+): Promise<RegistrationWithRelations> {
+  const {
+    email,
+    firstName,
+    lastName,
+    phone,
+    formData,
+    role,
+    accessSelections,
+    paymentMethod,
+    paymentStatus,
+    labName,
+  } = input;
+
+  // Find the registration form for this event
+  const form = await prisma.form.findFirst({
+    where: { eventId, type: "REGISTRATION" },
+    select: { id: true, schemaVersion: true },
+  });
+  if (!form) {
+    throw new AppError(
+      "No registration form found for this event",
+      404,
+      true,
+      ErrorCodes.NOT_FOUND,
+    );
+  }
+
+  // Check for duplicate registration (same unique constraint as public form)
+  const existing = await prisma.registration.findUnique({
+    where: { email_formId: { email, formId: form.id } },
+  });
+  if (existing) {
+    throw new AppError(
+      "A registration with this email already exists for this form",
+      409,
+      true,
+      ErrorCodes.REGISTRATION_ALREADY_EXISTS,
+    );
+  }
+
+  // Validate access selections if any
+  if (accessSelections && accessSelections.length > 0) {
+    const validation = await validateAccessSelections(
+      eventId,
+      accessSelections,
+      formData,
+    );
+    if (!validation.valid) {
+      throw new AppError(
+        `Invalid access selections: ${validation.errors.join(", ")}`,
+        400,
+        true,
+        ErrorCodes.BAD_REQUEST,
+        { errors: validation.errors },
+      );
+    }
+  }
+
+  // Calculate price from access selections (no sponsorship for admin-created)
+  const selectedExtras = (accessSelections ?? []).map((s) => ({
+    extraId: s.accessId,
+    quantity: s.quantity,
+  }));
+
+  const calculatedPrice = await calculatePrice(eventId, {
+    formData,
+    selectedExtras,
+    sponsorshipCodes: [],
+  });
+
+  // Transform to registration PriceBreakdown format
+  const priceBreakdown: PriceBreakdown = {
+    basePrice: calculatedPrice.basePrice,
+    appliedRules: calculatedPrice.appliedRules,
+    calculatedBasePrice: calculatedPrice.calculatedBasePrice,
+    accessItems: calculatedPrice.extras.map((extra) => ({
+      accessId: extra.extraId,
+      name: extra.name,
+      unitPrice: extra.unitPrice,
+      quantity: extra.quantity,
+      subtotal: extra.subtotal,
+    })),
+    accessTotal: calculatedPrice.extrasTotal,
+    subtotal: calculatedPrice.subtotal,
+    sponsorships: calculatedPrice.sponsorships,
+    sponsorshipTotal: calculatedPrice.sponsorshipTotal,
+    total: calculatedPrice.total,
+    currency: calculatedPrice.currency,
+  };
+
+  const result = await prisma.$transaction(async (tx) => {
+    // Re-check event status and capacity inside the transaction to prevent TOCTOU races.
+    // Admin-created registrations still respect capacity limits.
+    const event = await tx.event.findUnique({
+      where: { id: eventId },
+      select: { status: true, maxCapacity: true, registeredCount: true },
+    });
+
+    // Admins can create registrations for OPEN or CLOSED events.
+    // ARCHIVED events are historical and no longer accept any registrations.
+    if (!event || event.status === "ARCHIVED") {
+      throw new AppError(
+        "Cannot add registrations to an archived event",
+        400,
+        true,
+        ErrorCodes.EVENT_NOT_OPEN,
+      );
+    }
+
+    if (
+      event.maxCapacity !== null &&
+      event.registeredCount >= event.maxCapacity
+    ) {
+      throw new AppError(
+        "Event is at capacity",
+        409,
+        true,
+        ErrorCodes.EVENT_FULL,
+      );
+    }
+
+    // Determine payment status: explicit override > method-derived > PENDING
+    const resolvedPaymentStatus =
+      paymentStatus ??
+      (paymentMethod === "LAB_SPONSORSHIP" ? "WAIVED" : "PENDING");
+
+    const registration = await tx.registration.create({
+      data: {
+        formId: form.id,
+        eventId,
+        formData: formData as Prisma.InputJsonValue,
+        formSchemaVersion: form.schemaVersion,
+        email,
+        firstName,
+        lastName,
+        phone: phone ?? null,
+        role,
+        paymentStatus: resolvedPaymentStatus,
+        paymentMethod: paymentMethod ?? null,
+        labName: paymentMethod === "LAB_SPONSORSHIP" ? (labName ?? null) : null,
+        totalAmount: priceBreakdown.total,
+        currency: priceBreakdown.currency,
+        priceBreakdown: priceBreakdown as unknown as Prisma.InputJsonValue,
+        baseAmount: priceBreakdown.calculatedBasePrice,
+        discountAmount: calculateDiscountAmount(priceBreakdown.appliedRules),
+        accessAmount: calculatedPrice.extrasTotal,
+        sponsorshipAmount: 0,
+        accessTypeIds: accessSelections?.map((s) => s.accessId) ?? [],
+        // Admin-created: no edit token, no idempotency key, no link base URL
+        editToken: null,
+        editTokenExpiry: null,
+        linkBaseUrl: null,
+        idempotencyKey: null,
+      },
+    });
+
+    // Reserve access spots
+    if (accessSelections && accessSelections.length > 0) {
+      for (const selection of accessSelections) {
+        await reserveAccessSpot(selection.accessId, selection.quantity, tx);
+      }
+    }
+
+    await incrementRegisteredCountTx(tx, eventId);
+
+    const createdReg = await tx.registration.findUnique({
+      where: { id: registration.id },
+      include: {
+        form: { select: { id: true, name: true } },
+        event: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            clientId: true,
+            startDate: true,
+            location: true,
+          },
+        },
+      },
+    });
+
+    if (!createdReg) {
+      throw new AppError(
+        "Registration creation failed",
+        500,
+        true,
+        ErrorCodes.INTERNAL_ERROR,
+      );
+    }
+
+    await tx.auditLog.create({
+      data: {
+        entityType: "Registration",
+        entityId: registration.id,
+        action: "CREATE",
+        changes: {
+          email: { old: null, new: email },
+          firstName: { old: null, new: firstName },
+          lastName: { old: null, new: lastName },
+          role: { old: null, new: role },
+          totalAmount: { old: null, new: priceBreakdown.total },
+        },
+        performedBy: adminUserId,
+      },
+    });
+
+    return enrichWithAccessSelections(createdReg);
+  });
+
+  return result;
+}
+
 export async function getRegistrationById(
   id: string,
 ): Promise<RegistrationWithRelations | null> {
@@ -590,11 +813,42 @@ export async function updateRegistration(
   if (input.paymentProofUrl !== undefined)
     updateData.paymentProofUrl = input.paymentProofUrl;
   if (input.note !== undefined) updateData.note = input.note;
+  if (input.role !== undefined) updateData.role = input.role;
 
   // Build changes object for audit log
   const changes: Record<string, { old: unknown; new: unknown }> = {};
   if (input.note !== undefined && input.note !== registration.note) {
     changes.note = { old: registration.note, new: input.note };
+  }
+  if (
+    input.paymentStatus !== undefined &&
+    input.paymentStatus !== registration.paymentStatus
+  ) {
+    changes.paymentStatus = {
+      old: registration.paymentStatus,
+      new: input.paymentStatus,
+    };
+  }
+  if (
+    input.paidAmount !== undefined &&
+    input.paidAmount !== registration.paidAmount
+  ) {
+    changes.paidAmount = {
+      old: registration.paidAmount,
+      new: input.paidAmount,
+    };
+  }
+  if (
+    input.paymentMethod !== undefined &&
+    input.paymentMethod !== registration.paymentMethod
+  ) {
+    changes.paymentMethod = {
+      old: registration.paymentMethod,
+      new: input.paymentMethod,
+    };
+  }
+  if (input.role !== undefined && input.role !== registration.role) {
+    changes.role = { old: registration.role, new: input.role };
   }
 
   await prisma.$transaction(async (tx) => {
@@ -813,7 +1067,16 @@ export async function listRegistrations(
       take: limit,
       include: {
         form: { select: { id: true, name: true } },
-        event: { select: { id: true, name: true, slug: true, clientId: true } },
+        event: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            clientId: true,
+            startDate: true,
+            location: true,
+          },
+        },
       },
       orderBy: { createdAt: "desc" },
     }),
