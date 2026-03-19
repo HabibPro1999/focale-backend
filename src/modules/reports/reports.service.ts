@@ -16,6 +16,7 @@ import type {
   DailyTrendItem,
   ExportQuery,
 } from "./reports.schema.js";
+import type { EventAnalyticsResponse } from "./analytics.schemas.js";
 
 // ============================================================================
 // Financial Report
@@ -323,6 +324,127 @@ async function getDailyTrend(
     count: Number(r.count),
     totalAmount: Number(r.total_amount),
   }));
+}
+
+// ============================================================================
+// Analytics
+// ============================================================================
+
+export async function getEventAnalytics(
+  eventId: string,
+): Promise<EventAnalyticsResponse> {
+  // Verify event exists
+  const event = await prisma.event.findUnique({
+    where: { id: eventId },
+    select: { id: true },
+  });
+
+  if (!event) {
+    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
+  }
+
+  // Run all aggregation queries in parallel
+  // Note: Registration has no separate status field — paymentStatus is the sole lifecycle status.
+  const [
+    paymentsByStatus,
+    paymentsByMethod,
+    accessItems,
+    sponsorshipsByStatus,
+  ] = await Promise.all([
+    // Registration counts by payment status
+    prisma.registration.groupBy({
+      by: ["paymentStatus"],
+      where: { eventId },
+      _count: true,
+    }),
+
+    // Registration counts by payment method (includes null = not yet set)
+    prisma.registration.groupBy({
+      by: ["paymentMethod"],
+      where: { eventId },
+      _count: true,
+    }),
+
+    // Access items with capacity info (ordered by start time if available)
+    prisma.eventAccess.findMany({
+      where: { eventId },
+      select: {
+        id: true,
+        name: true,
+        type: true,
+        registeredCount: true,
+        maxCapacity: true,
+      },
+      orderBy: { startsAt: "asc" },
+    }),
+
+    // Sponsorship counts by status
+    prisma.sponsorship.groupBy({
+      by: ["status"],
+      where: { eventId },
+      _count: true,
+    }),
+  ]);
+
+  // Build lookup from payment status groups
+  const paymentMap = new Map(
+    paymentsByStatus.map((g) => [g.paymentStatus, g._count]),
+  );
+
+  // Build lookup from payment method groups (paymentMethod is nullable)
+  const methodMap = new Map(
+    paymentsByMethod.map((g) => [g.paymentMethod ?? "UNSET", g._count]),
+  );
+
+  const registrationTotal = paymentsByStatus.reduce(
+    (sum, g) => sum + g._count,
+    0,
+  );
+
+  const sponsorshipTotal = sponsorshipsByStatus.reduce(
+    (sum, g) => sum + g._count,
+    0,
+  );
+
+  return {
+    eventId,
+    generatedAt: new Date().toISOString(),
+    registrations: {
+      total: registrationTotal,
+    },
+    payments: {
+      paid: paymentMap.get("PAID") ?? 0,
+      verifying: paymentMap.get("VERIFYING") ?? 0,
+      pending: paymentMap.get("PENDING") ?? 0,
+      waived: paymentMap.get("WAIVED") ?? 0,
+      refunded: paymentMap.get("REFUNDED") ?? 0,
+    },
+    paymentMethods: {
+      bankTransfer: methodMap.get("BANK_TRANSFER") ?? 0,
+      online: methodMap.get("ONLINE") ?? 0,
+      cash: methodMap.get("CASH") ?? 0,
+      labSponsorship: methodMap.get("LAB_SPONSORSHIP") ?? 0,
+      unset: methodMap.get("UNSET") ?? 0,
+    },
+    accessItems: accessItems.map((item) => ({
+      id: item.id,
+      name: item.name,
+      type: item.type,
+      registeredCount: item.registeredCount,
+      maxCapacity: item.maxCapacity,
+      fillPercentage:
+        item.maxCapacity && item.maxCapacity > 0
+          ? Math.round((item.registeredCount / item.maxCapacity) * 100)
+          : null,
+    })),
+    sponsorships: {
+      total: sponsorshipTotal,
+      byStatus: sponsorshipsByStatus.map((g) => ({
+        status: g.status,
+        count: g._count,
+      })),
+    },
+  };
 }
 
 // ============================================================================

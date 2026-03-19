@@ -3,7 +3,11 @@
 // ============================================================================
 
 // Services
-export { getFinancialReport, exportRegistrations } from './reports.service.js';
+export {
+  getFinancialReport,
+  exportRegistrations,
+  getEventAnalytics,
+} from "./reports.service.js";
 
 // Schemas & Types
 export {
@@ -13,7 +17,14 @@ export {
   type ReportQuery,
   type ExportQuery,
   type FinancialReportResponse,
-} from './reports.schema.js';
+} from "./reports.schema.js";
+
+export {
+  EventAnalyticsResponseSchema,
+  type EventAnalyticsResponse,
+  type AnalyticsStatusItem,
+  type AnalyticsAccessItem,
+} from "./analytics.schemas.js";
 
 // Routes
-export { reportsRoutes } from './reports.routes.js';
+export { reportsRoutes } from "./reports.routes.js";
