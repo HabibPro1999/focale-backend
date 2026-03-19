@@ -3,6 +3,7 @@ import { config } from "@config/app.config.js";
 import { logger } from "@shared/utils/logger.js";
 import { gracefulShutdown } from "@core/shutdown.js";
 import { processEmailQueue } from "@modules/email/index.js";
+import { prisma } from "@/database/client.js";
 
 // Global error handlers
 process.on("unhandledRejection", (reason, promise) => {
@@ -15,6 +16,35 @@ process.on("uncaughtException", (error) => {
   process.exit(1);
 });
 
+// Retry until the database responds or we exhaust attempts.
+// A fixed sleep is a guess; this actually verifies the connection.
+// Linear backoff: 1s, 2s, 3s... up to maxRetries attempts (default max wait ~55s).
+async function waitForDatabase(
+  maxRetries = 10,
+  baseDelayMs = 1000,
+): Promise<void> {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+      logger.info(`Database ready (attempt ${attempt})`);
+      return;
+    } catch (error) {
+      if (attempt === maxRetries) {
+        logger.fatal(
+          { error },
+          `Database unreachable after ${maxRetries} attempts`,
+        );
+        throw error;
+      }
+      const delay = baseDelayMs * attempt;
+      logger.warn(
+        `Database not ready (attempt ${attempt}/${maxRetries}), retrying in ${delay}ms...`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
+
 async function main() {
   const server = await buildServer();
 
@@ -23,13 +53,10 @@ async function main() {
   await server.listen({ port: config.PORT, host: "0.0.0.0" });
   logger.info(`Server running on port ${config.PORT}`);
 
-  // Wait for database to wake up (common on Render with hibernating databases)
-  const dbWarmupDelay = config.isProduction ? 5000 : 1000;
-  logger.info(`Waiting ${dbWarmupDelay}ms for database warmup...`);
-  await new Promise((resolve) => setTimeout(resolve, dbWarmupDelay));
+  // Verify the database is reachable before starting background workers
+  await waitForDatabase();
 
   // Start email queue worker (processes every 15 seconds for faster email delivery)
-  // Store reference for graceful shutdown cleanup
   const emailQueueInterval = setInterval(() => {
     processEmailQueue(50)
       .then((result) => {
@@ -44,7 +71,13 @@ async function main() {
   }, 15_000);
   logger.info("Email queue worker started (15s interval)");
 
-  gracefulShutdown(server, emailQueueInterval);
+  // Register email queue cleanup — fires during server.close() in gracefulShutdown
+  server.addHook("onClose", async () => {
+    clearInterval(emailQueueInterval);
+    logger.info("Email queue worker stopped");
+  });
+
+  gracefulShutdown(server);
 }
 
 main().catch((err) => {

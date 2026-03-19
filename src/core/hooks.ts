@@ -3,7 +3,15 @@ import { z } from "zod";
 import type { AppInstance } from "@shared/types/fastify.js";
 
 // Validate request ID format: UUID or alphanumeric string (max 64 chars)
-const RequestIdSchema = z.string().uuid().or(z.string().max(64).regex(/^[a-zA-Z0-9-_]+$/));
+const RequestIdSchema = z
+  .string()
+  .uuid()
+  .or(
+    z
+      .string()
+      .max(64)
+      .regex(/^[a-zA-Z0-9-_]+$/),
+  );
 
 export function registerHooks(app: AppInstance) {
   // Add request ID with validation
@@ -19,7 +27,10 @@ export function registerHooks(app: AppInstance) {
   });
 
   // Add response headers
-  app.addHook("onSend", async (request, reply) => {
+  // payload must be accepted and returned — onSend hooks that return undefined
+  // rely on implicit Fastify behavior that may change across versions.
+  app.addHook("onSend", async (request, reply, payload) => {
     reply.header("x-request-id", request.id);
+    return payload;
   });
 }

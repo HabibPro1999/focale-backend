@@ -42,11 +42,23 @@ export async function buildServer(): Promise<AppInstance> {
   // Decorate with prisma
   app.decorate("prisma", prisma);
 
+  // Disconnect prisma on server close — registered early so it fires last (child hooks
+  // run before parent hooks in Fastify's onClose ordering), ensuring all plugin-level
+  // onClose hooks that might use Prisma complete before the connection is dropped.
+  app.addHook("onClose", async () => {
+    await prisma.$disconnect();
+    logger.info("Database disconnected");
+  });
+
   // Register plugins (CORS, Helmet, Rate Limit)
   await registerPlugins(app);
 
   // Register lifecycle hooks
   registerHooks(app);
+
+  // Set error handler before route registrations so it applies to all
+  // encapsulated scopes, including any future scoped plugins.
+  app.setErrorHandler(errorHandler);
 
   // Health check — minimal public surface to avoid information disclosure
   app.get("/health", async (_request, reply) => {
@@ -129,9 +141,6 @@ export async function buildServer(): Promise<AppInstance> {
   await app.register(sponsorshipsPublicBySlugRoutes, {
     prefix: "/api/public/events",
   });
-
-  // Global error handler
-  app.setErrorHandler(errorHandler);
 
   return app;
 }
