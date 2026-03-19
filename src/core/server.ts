@@ -29,6 +29,7 @@ import {
   sponsorshipsPublicRoutes,
   sponsorshipsPublicBySlugRoutes,
 } from "@sponsorships";
+import { certificatesRoutes } from "@certificates";
 import type { AppInstance } from "@shared/types/fastify.js";
 
 export async function buildServer(): Promise<AppInstance> {
@@ -128,6 +129,9 @@ export async function buildServer(): Promise<AppInstance> {
 
   // SendGrid webhook (public, no auth — secured by ECDSA signature verification)
   await app.register(emailWebhookRoutes, { prefix: "/webhooks/sendgrid" });
+
+  // Certificate routes (template management)
+  await app.register(certificatesRoutes, { prefix: "/api/events" });
 
   // Sponsorship routes
   await app.register(sponsorshipsRoutes, { prefix: "/api/events" });

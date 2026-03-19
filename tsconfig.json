@@ -31,7 +31,8 @@
       "@registrations": ["./src/modules/registrations/index.ts"],
       "@sponsorships": ["./src/modules/sponsorships/index.ts"],
       "@reports": ["./src/modules/reports/index.ts"],
-      "@email": ["./src/modules/email/index.ts"]
+      "@email": ["./src/modules/email/index.ts"],
+      "@certificates": ["./src/modules/certificates/index.ts"]
     }
   },
   "include": ["src/**/*"],
