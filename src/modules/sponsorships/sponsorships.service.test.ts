@@ -760,14 +760,22 @@ describe("Sponsorships Service", () => {
         );
       prismaMock.eventPricing.findUnique.mockResolvedValue(mockPricing);
       prismaMock.eventAccess.findMany.mockResolvedValue([mockAccess]);
-      prismaMock.sponsorship.update.mockResolvedValue({
+
+      // updateSponsorship now wraps sponsorship.update + recalculateUsageAmounts in a
+      // transaction. Mock $transaction to call through with a txMock so we can assert
+      // on the update call that happens inside it.
+      const txUpdate = vi.fn().mockResolvedValue({
         ...mockSponsorship,
         coveredAccessIds: [accessId],
+      });
+      prismaMock.$transaction.mockImplementation(async (fn: TxCallback) => {
+        const txMock = { sponsorship: { update: txUpdate } };
+        return fn(txMock as never);
       });
 
       await updateSponsorship(sponsorshipId, { coveredAccessIds: [accessId] });
 
-      expect(prismaMock.sponsorship.update).toHaveBeenCalledWith(
+      expect(txUpdate).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
             totalAmount: expect.any(Number),
@@ -1089,6 +1097,10 @@ describe("Sponsorships Service", () => {
         amountApplied: 200,
       };
 
+      // Hoist txMock.registration.update so we can assert on it after the call.
+      // Auto-pay now happens inside the transaction (on tx.registration.update),
+      // not via a separate prisma.registration.update call after the transaction.
+      const txRegistrationUpdate = vi.fn().mockResolvedValue({});
       prismaMock.$transaction.mockImplementation(async (fn: TxCallback) => {
         const txMock = {
           sponsorshipUsage: {
@@ -1098,7 +1110,7 @@ describe("Sponsorships Service", () => {
           sponsorship: {
             updateMany: vi.fn().mockResolvedValue({ count: 1 }),
           },
-          registration: { update: vi.fn().mockResolvedValue({}) },
+          registration: { update: txRegistrationUpdate },
         };
         return fn(txMock);
       });
@@ -1109,7 +1121,7 @@ describe("Sponsorships Service", () => {
         adminUserId,
       );
 
-      expect(prismaMock.registration.update).toHaveBeenCalledWith(
+      expect(txRegistrationUpdate).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { id: registrationId },
           data: expect.objectContaining({

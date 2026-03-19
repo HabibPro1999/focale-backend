@@ -969,16 +969,19 @@ export async function updateSponsorship(
     updateData.totalAmount = totalAmount;
   }
 
-  // Update sponsorship
-  await prisma.sponsorship.update({
-    where: { id },
-    data: updateData,
-  });
+  // Update sponsorship and recalculate usage amounts atomically.
+  // Wrapping both in a transaction prevents partial state where the sponsorship
+  // is updated but linked registration amounts reflect old coverage values.
+  await prisma.$transaction(async (tx) => {
+    await tx.sponsorship.update({
+      where: { id },
+      data: updateData,
+    });
 
-  // If linked to registrations, recalculate applicable amounts
-  if (sponsorship.usages.length > 0) {
-    await recalculateUsageAmounts(id);
-  }
+    if (sponsorship.usages.length > 0) {
+      await recalculateUsageAmounts(id, tx);
+    }
+  });
 
   return getSponsorshipById(id) as Promise<SponsorshipWithUsages>;
 }
@@ -1257,11 +1260,17 @@ export async function linkSponsorshipToRegistration(
     const newSponsorshipAmount = calculateTotalSponsorshipAmount(allUsages);
 
     // Update registration sponsorship amount and paymentMethod
+    const isFullySponsored = newSponsorshipAmount >= registration.totalAmount;
     await tx.registration.update({
       where: { id: registrationId },
       data: {
         sponsorshipAmount: newSponsorshipAmount,
         paymentMethod: "LAB_SPONSORSHIP",
+        // Auto-mark as PAID inside the transaction to prevent race conditions
+        // where concurrent links could both read "not yet paid" and double-process
+        ...(isFullySponsored
+          ? { paymentStatus: "PAID", paidAt: new Date() }
+          : {}),
       },
     });
 
@@ -1279,16 +1288,6 @@ export async function linkSponsorshipToRegistration(
       warnings,
     };
   });
-
-  // If fully sponsored, auto-mark registration as PAID
-  if (
-    result.registration.sponsorshipAmount >= result.registration.totalAmount
-  ) {
-    await prisma.registration.update({
-      where: { id: registrationId },
-      data: { paymentStatus: "PAID", paidAt: new Date() },
-    });
-  }
 
   // Queue SPONSORSHIP_APPLIED email to the doctor
   try {
@@ -1666,12 +1665,26 @@ export async function getSponsorshipClientId(
   return sponsorship?.event.clientId ?? null;
 }
 
+// Structural type for the db client used in recalculateUsageAmounts.
+// Accepts either the global prisma instance or a transaction client (tx).
+type RecalcDbClient = {
+  sponsorship: Pick<typeof prisma.sponsorship, "findUnique">;
+  sponsorshipUsage: Pick<typeof prisma.sponsorshipUsage, "update" | "findMany">;
+  registration: Pick<typeof prisma.registration, "update">;
+};
+
 /**
  * Recalculate usage amounts for all usages of a sponsorship.
  * Called after sponsorship coverage is updated.
+ *
+ * Pass `db` (a transaction client `tx`) to run all updates atomically.
+ * A failure mid-loop will roll back all partial changes.
  */
-async function recalculateUsageAmounts(sponsorshipId: string): Promise<void> {
-  const sponsorship = await prisma.sponsorship.findUnique({
+async function recalculateUsageAmounts(
+  sponsorshipId: string,
+  db: RecalcDbClient = prisma,
+): Promise<void> {
+  const sponsorship = await db.sponsorship.findUnique({
     where: { id: sponsorshipId },
     include: {
       usages: {
@@ -1713,20 +1726,20 @@ async function recalculateUsageAmounts(sponsorshipId: string): Promise<void> {
       },
     );
 
-    await prisma.sponsorshipUsage.update({
+    await db.sponsorshipUsage.update({
       where: { id: usage.id },
       data: { amountApplied: newAmount },
     });
 
     // Recalculate registration total sponsorship
-    const allUsages = await prisma.sponsorshipUsage.findMany({
+    const allUsages = await db.sponsorshipUsage.findMany({
       where: { registrationId: usage.registration.id },
       select: { amountApplied: true },
     });
 
     const totalSponsorshipAmount = calculateTotalSponsorshipAmount(allUsages);
 
-    await prisma.registration.update({
+    await db.registration.update({
       where: { id: usage.registration.id },
       data: { sponsorshipAmount: totalSponsorshipAmount },
     });

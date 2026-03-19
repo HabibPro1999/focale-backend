@@ -299,10 +299,11 @@ model Sponsorship {
 
   @@index([eventId])
   @@index([batchId])
-  @@index([code])
+  // @@index([code]) -- removed: redundant with @unique on code which already creates an index
+  @@index([eventId, status]) // compound index for common query: { eventId, status: 'PENDING' }
   @@index([status])
-  @@index([beneficiaryEmail])
-  @@index([targetRegistrationId])
+  // @@index([beneficiaryEmail]) -- removed: beneficiaryEmail is never used in a where clause
+  // @@index([targetRegistrationId]) -- removed: targetRegistrationId is never used in a where clause
   @@map("sponsorships")
 }
 
@@ -420,7 +421,7 @@ model Registration {
   @@unique([email, formId])
   @@index([eventId, paymentStatus])
   @@index([eventId, submittedAt])
-  @@index([eventId, paidAt])
+  // @@index([eventId, paidAt]) -- removed: paidAt is never used in a where/orderBy clause
   @@index([formId])
   @@index([email])
   @@index([sponsorshipCode])

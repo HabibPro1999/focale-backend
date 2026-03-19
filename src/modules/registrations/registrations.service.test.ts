@@ -722,9 +722,9 @@ describe("Registrations Service", () => {
 
       await deleteRegistration(registration.id);
 
-      // Verify releaseAccessSpot was called - through the mock module
+      // Verify releaseAccessSpot was called with tx client so it participates in the transaction
       const { releaseAccessSpot } = await import("@access");
-      expect(releaseAccessSpot).toHaveBeenCalledWith(accessId, 2);
+      expect(releaseAccessSpot).toHaveBeenCalledWith(accessId, 2, prismaMock);
     });
   });
 
