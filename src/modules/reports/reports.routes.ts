@@ -20,6 +20,7 @@ import {
   getFinancialReport,
   exportRegistrations,
   getEventAnalytics,
+  generateEventSummary,
 } from "./reports.service.js";
 
 // ============================================================================
@@ -94,13 +95,13 @@ export async function reportsRoutes(app: AppInstance): Promise<void> {
   );
 
   // ----------------------------------------------------------------
-  // GET /:eventId/reports/export - Export registrations
+  // GET /:eventId/reports/registrations - Export registrations (CSV/JSON)
   // ----------------------------------------------------------------
   app.get<{
     Params: { eventId: string };
     Querystring: ExportQuery;
   }>(
-    "/:eventId/reports/export",
+    "/:eventId/reports/registrations",
     {
       schema: {
         querystring: ExportQuerySchema,
@@ -123,6 +124,42 @@ export async function reportsRoutes(app: AppInstance): Promise<void> {
 
       return reply
         .header("Content-Type", result.contentType)
+        .header(
+          "Content-Disposition",
+          `attachment; filename="${result.filename}"`,
+        )
+        .send(result.data);
+    },
+  );
+
+  // ----------------------------------------------------------------
+  // GET /:eventId/reports/summary - Download event summary report (Excel)
+  // ----------------------------------------------------------------
+  app.get<{
+    Params: { eventId: string };
+  }>(
+    "/:eventId/reports/summary",
+    {
+      preHandler: [requireAuth],
+    },
+    async (request, reply) => {
+      const { eventId } = request.params;
+
+      const event = await getEventById(eventId);
+      if (!event) {
+        throw app.httpErrors.notFound("Event not found");
+      }
+      if (!canAccessClient(request.user!, event.clientId)) {
+        throw app.httpErrors.forbidden("Insufficient permissions");
+      }
+
+      const result = await generateEventSummary(eventId);
+
+      return reply
+        .header(
+          "Content-Type",
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
         .header(
           "Content-Disposition",
           `attachment; filename="${result.filename}"`,

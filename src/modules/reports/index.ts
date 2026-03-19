@@ -6,6 +6,7 @@
 export {
   getFinancialReport,
   exportRegistrations,
+  generateEventSummary,
   getEventAnalytics,
 } from "./reports.service.js";
 
