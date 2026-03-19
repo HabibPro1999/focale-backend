@@ -207,7 +207,16 @@ async function enrichWithAccessSelections(
   const accessIds = priceBreakdown.accessItems.map((item) => item.accessId);
   const accessDetails = await prisma.eventAccess.findMany({
     where: { id: { in: accessIds } },
-    select: { id: true, name: true, type: true, startsAt: true, endsAt: true, price: true, companionPrice: true, allowCompanion: true },
+    select: {
+      id: true,
+      name: true,
+      type: true,
+      startsAt: true,
+      endsAt: true,
+      price: true,
+      companionPrice: true,
+      allowCompanion: true,
+    },
   });
 
   const accessMap = new Map(accessDetails.map((a) => [a.id, a]));
@@ -260,7 +269,16 @@ async function enrichManyWithAccessSelections(
   // Fetch all access details in one query
   const accessDetails = await prisma.eventAccess.findMany({
     where: { id: { in: Array.from(allAccessIds) } },
-    select: { id: true, name: true, type: true, startsAt: true, endsAt: true, price: true, companionPrice: true, allowCompanion: true },
+    select: {
+      id: true,
+      name: true,
+      type: true,
+      startsAt: true,
+      endsAt: true,
+      price: true,
+      companionPrice: true,
+      allowCompanion: true,
+    },
   });
 
   const accessMap = new Map(accessDetails.map((a) => [a.id, a]));
@@ -435,9 +453,10 @@ export async function createRegistration(
     });
 
     // Reserve access spots (capacity tracking)
+    // Pass tx so reservation is rolled back if the transaction fails
     if (accessSelections && accessSelections.length > 0) {
       for (const selection of accessSelections) {
-        await reserveAccessSpot(selection.accessId, selection.quantity);
+        await reserveAccessSpot(selection.accessId, selection.quantity, tx);
       }
     }
 
@@ -751,10 +770,11 @@ export async function deleteRegistration(
     });
 
     // Release access spots (get from priceBreakdown)
+    // Pass tx so release is rolled back if the transaction fails
     const priceBreakdown = registration.priceBreakdown as PriceBreakdown;
     if (priceBreakdown.accessItems) {
       for (const item of priceBreakdown.accessItems) {
-        await releaseAccessSpot(item.accessId, item.quantity);
+        await releaseAccessSpot(item.accessId, item.quantity, tx);
       }
     }
 
@@ -1423,14 +1443,16 @@ export async function editRegistrationPublic(
   // 10. Execute transaction
   await prisma.$transaction(async (tx) => {
     // Reserve new access spots
+    // Pass tx so reservation is rolled back if the transaction fails
     for (const selection of accessToAdd) {
-      await reserveAccessSpot(selection.accessId, selection.quantity);
+      await reserveAccessSpot(selection.accessId, selection.quantity, tx);
     }
 
     // Release removed access spots (only if not paid)
+    // Pass tx so release is rolled back if the transaction fails
     if (!isPaid) {
       for (const item of accessToRemove) {
-        await releaseAccessSpot(item.accessId, item.quantity);
+        await releaseAccessSpot(item.accessId, item.quantity, tx);
       }
     }
 
@@ -1735,7 +1757,12 @@ export async function selectPaymentMethod(
   });
 
   if (!registration) {
-    throw new AppError("Registration not found", 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError(
+      "Registration not found",
+      404,
+      true,
+      ErrorCodes.NOT_FOUND,
+    );
   }
 
   if (registration.paymentStatus !== "PENDING") {

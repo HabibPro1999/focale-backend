@@ -322,9 +322,12 @@ export async function updateEventAccess(
   if (data.sortOrder !== undefined) updateData.sortOrder = data.sortOrder;
   if (data.active !== undefined) updateData.active = data.active;
   if (data.groupLabel !== undefined) updateData.groupLabel = data.groupLabel;
-  if (data.allowCompanion !== undefined) updateData.allowCompanion = data.allowCompanion;
-  if (data.includedInBase !== undefined) updateData.includedInBase = data.includedInBase;
-  if (data.companionPrice !== undefined) updateData.companionPrice = data.companionPrice;
+  if (data.allowCompanion !== undefined)
+    updateData.allowCompanion = data.allowCompanion;
+  if (data.includedInBase !== undefined)
+    updateData.includedInBase = data.includedInBase;
+  if (data.companionPrice !== undefined)
+    updateData.companionPrice = data.companionPrice;
 
   // Handle prerequisites update
   if (requiredAccessIds !== undefined) {
@@ -390,6 +393,24 @@ export async function deleteEventAccess(id: string): Promise<void> {
       409,
       true,
       ErrorCodes.ACCESS_HAS_REGISTRATIONS,
+    );
+  }
+
+  // Check if any active sponsorships cover this access item.
+  // Deleting without this check would leave dangling IDs in coveredAccessIds,
+  // silently breaking sponsorship coverage calculations.
+  const sponsorshipCount = await prisma.sponsorship.count({
+    where: {
+      coveredAccessIds: { has: id },
+      status: { not: "CANCELLED" },
+    },
+  });
+  if (sponsorshipCount > 0) {
+    throw new AppError(
+      "Cannot delete access item referenced by active sponsorships",
+      409,
+      true,
+      ErrorCodes.ACCESS_HAS_SPONSORSHIPS,
     );
   }
 
@@ -603,19 +624,30 @@ export async function getGroupedAccess(
 // Capacity Management
 // ============================================================================
 
+// Structural type for a db client that can be either the global prisma instance
+// or a transaction client (tx). Matches the subset of operations used here.
+type CapacityDbClient = {
+  $executeRaw: typeof prisma.$executeRaw;
+  eventAccess: Pick<typeof prisma.eventAccess, "findUnique" | "updateMany">;
+};
+
 /**
  * Reserve access spot with atomic capacity check.
  * Uses raw SQL with atomic WHERE clause to prevent race conditions.
  * The capacity check is performed at the time of update, not using stale values.
+ *
+ * Pass `db` (the transaction client `tx`) when calling inside a $transaction
+ * so the update participates in the transaction's rollback scope.
  */
 export async function reserveAccessSpot(
   accessId: string,
   quantity: number = 1,
+  db: CapacityDbClient = prisma,
 ): Promise<void> {
   // Use raw SQL for truly atomic capacity check and update
   // This ensures the check happens at the exact moment of update,
   // preventing TOCTOU race conditions
-  const updateResult = await prisma.$executeRaw`
+  const updateResult = await db.$executeRaw`
     UPDATE event_access
     SET registered_count = registered_count + ${quantity}
     WHERE id = ${accessId}
@@ -624,7 +656,7 @@ export async function reserveAccessSpot(
 
   if (updateResult === 0) {
     // Either access not found or capacity exceeded - determine which
-    const access = await prisma.eventAccess.findUnique({
+    const access = await db.eventAccess.findUnique({
       where: { id: accessId },
       select: { name: true, maxCapacity: true, registeredCount: true },
     });
@@ -650,12 +682,16 @@ export async function reserveAccessSpot(
 
 /**
  * Release access spot with floor constraint to prevent negative counts.
+ *
+ * Pass `db` (the transaction client `tx`) when calling inside a $transaction
+ * so the update participates in the transaction's rollback scope.
  */
 export async function releaseAccessSpot(
   accessId: string,
   quantity: number = 1,
+  db: CapacityDbClient = prisma,
 ): Promise<void> {
-  await prisma.eventAccess.updateMany({
+  await db.eventAccess.updateMany({
     where: {
       id: accessId,
       registeredCount: { gte: quantity },
@@ -699,11 +735,14 @@ export async function validateAccessSelections(
   for (const included of includedAccesses) {
     // Skip if conditions don't match (exempt from mandatory)
     if (included.conditions) {
-      if (!evaluateConditions(
-        included.conditions as AccessCondition[],
-        included.conditionLogic as "AND" | "OR",
-        formData,
-      )) continue;
+      if (
+        !evaluateConditions(
+          included.conditions as AccessCondition[],
+          included.conditionLogic as "AND" | "OR",
+          formData,
+        )
+      )
+        continue;
     }
     if (!accessIds.includes(included.id)) {
       errors.push(`"${included.name}" est inclus et doit être sélectionné`);

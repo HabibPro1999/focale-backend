@@ -38,3 +38,6 @@ src/generated/
 CLAUDE.md
 docs/
 load-env.fish
+
+# Database backups
+backups/

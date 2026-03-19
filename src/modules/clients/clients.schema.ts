@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from "zod";
 
 // ============================================================================
 // Module Configuration
@@ -9,10 +9,10 @@ import { z } from 'zod';
  * These control which features are visible in the event sidebar.
  */
 export const MODULE_IDS = [
-  'pricing',
-  'registrations',
-  'sponsorships',
-  'emails',
+  "pricing",
+  "registrations",
+  "sponsorships",
+  "emails",
 ] as const;
 
 export type ModuleId = (typeof MODULE_IDS)[number];
@@ -33,7 +33,7 @@ export const CreateClientSchema = z
     logo: z.string().url().optional().nullable(),
     primaryColor: z
       .string()
-      .regex(/^#[0-9A-Fa-f]{6}$/, 'Primary color must be a valid hex color')
+      .regex(/^#[0-9A-Fa-f]{6}$/, "Primary color must be a valid hex color")
       .optional()
       .nullable(),
     email: z.string().email().optional().nullable(),
@@ -48,7 +48,7 @@ export const UpdateClientSchema = z
     logo: z.string().url().optional().nullable(),
     primaryColor: z
       .string()
-      .regex(/^#[0-9A-Fa-f]{6}$/, 'Primary color must be a valid hex color')
+      .regex(/^#[0-9A-Fa-f]{6}$/, "Primary color must be a valid hex color")
       .optional()
       .nullable(),
     email: z.string().email().optional().nullable(),
@@ -63,8 +63,8 @@ export const ListClientsQuerySchema = z
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
     active: z
-      .enum(['true', 'false'])
-      .transform((v) => v === 'true')
+      .enum(["true", "false"])
+      .transform((v) => v === "true")
       .optional(),
     search: z.string().optional(),
   })
@@ -88,7 +88,7 @@ export const ClientResponseSchema = z.object({
   email: z.string().nullable(),
   phone: z.string().nullable(),
   active: z.boolean(),
-  enabledModules: z.array(z.string()),
+  enabledModules: z.array(z.enum(MODULE_IDS)),
   createdAt: z.date(),
   updatedAt: z.date(),
 });
