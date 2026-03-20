@@ -10,7 +10,6 @@ import {
   updateTemplate,
   deleteTemplate,
   uploadTemplateImage,
-  getTemplateClientId,
 } from "./certificates.service.js";
 import {
   EventIdParamSchema,
@@ -94,16 +93,12 @@ export async function certificatesRoutes(app: AppInstance): Promise<void> {
     async (request, reply) => {
       const { id } = request.params;
 
-      const clientId = await getTemplateClientId(id);
-      if (!clientId) {
-        throw app.httpErrors.notFound("Certificate template not found");
-      }
+      const template = await getTemplate(id);
 
-      if (!canAccessClient(request.user!, clientId)) {
+      if (!canAccessClient(request.user!, template.event.clientId)) {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
 
-      const template = await getTemplate(id);
       return reply.send(template);
     },
   );
@@ -123,12 +118,9 @@ export async function certificatesRoutes(app: AppInstance): Promise<void> {
     async (request, reply) => {
       const { id } = request.params;
 
-      const clientId = await getTemplateClientId(id);
-      if (!clientId) {
-        throw app.httpErrors.notFound("Certificate template not found");
-      }
+      const existing = await getTemplate(id);
 
-      if (!canAccessClient(request.user!, clientId)) {
+      if (!canAccessClient(request.user!, existing.event.clientId)) {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
 
@@ -148,12 +140,9 @@ export async function certificatesRoutes(app: AppInstance): Promise<void> {
     async (request, reply) => {
       const { id } = request.params;
 
-      const clientId = await getTemplateClientId(id);
-      if (!clientId) {
-        throw app.httpErrors.notFound("Certificate template not found");
-      }
+      const existing = await getTemplate(id);
 
-      if (!canAccessClient(request.user!, clientId)) {
+      if (!canAccessClient(request.user!, existing.event.clientId)) {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
 
@@ -173,12 +162,9 @@ export async function certificatesRoutes(app: AppInstance): Promise<void> {
     async (request, reply) => {
       const { id } = request.params;
 
-      const clientId = await getTemplateClientId(id);
-      if (!clientId) {
-        throw app.httpErrors.notFound("Certificate template not found");
-      }
+      const existing = await getTemplate(id);
 
-      if (!canAccessClient(request.user!, clientId)) {
+      if (!canAccessClient(request.user!, existing.event.clientId)) {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
 

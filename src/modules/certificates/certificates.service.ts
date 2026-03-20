@@ -60,7 +60,10 @@ export async function listTemplates(eventId: string) {
 export async function getTemplate(id: string) {
   const template = await prisma.certificateTemplate.findUnique({
     where: { id },
-    include: { access: accessSelect },
+    include: {
+      access: accessSelect,
+      event: { select: { clientId: true } },
+    },
   });
 
   if (!template) {
@@ -106,6 +109,28 @@ export async function updateTemplate(
 ) {
   const data: Prisma.CertificateTemplateUpdateInput = {};
 
+  // Fetch current state once when we need it for validation or relation logic
+  const needsCurrent =
+    input.active === true ||
+    (input.accessId !== undefined && input.accessId === null);
+
+  let current: { templateUrl: string; accessId: string | null } | null = null;
+  if (needsCurrent) {
+    current = await prisma.certificateTemplate.findUnique({
+      where: { id },
+      select: { templateUrl: true, accessId: true },
+    });
+  }
+
+  // Guard: cannot activate a template that has no uploaded image
+  if (input.active === true && !current?.templateUrl) {
+    throw new AppError(
+      "Cannot activate a certificate template without an uploaded image",
+      400,
+      ErrorCodes.VALIDATION_ERROR,
+    );
+  }
+
   if (input.name !== undefined) data.name = input.name;
   if (input.zones !== undefined)
     data.zones = input.zones as Prisma.InputJsonValue;
@@ -117,10 +142,6 @@ export async function updateTemplate(
   // Only disconnect if a relation currently exists (Prisma throws otherwise).
   if (input.accessId !== undefined) {
     if (input.accessId === null) {
-      const current = await prisma.certificateTemplate.findUnique({
-        where: { id },
-        select: { accessId: true },
-      });
       if (current?.accessId) {
         data.access = { disconnect: true };
       }
