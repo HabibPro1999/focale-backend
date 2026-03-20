@@ -408,7 +408,9 @@ describe("Forms Service", () => {
           {
             id: "step-1",
             title: "Info",
-            fields: [{ id: "field-to-keep", type: "email", label: "Email" }],
+            fields: [
+              { id: "field-to-keep", type: "email" as const, label: "Email" },
+            ],
           },
         ],
       };

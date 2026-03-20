@@ -2,7 +2,6 @@ import { prisma } from "@/database/client.js";
 import { evaluateConditions } from "@shared/utils/conditions.js";
 import type { AccessSelection, AccessCondition } from "./access.schema.js";
 import type { EventAccess } from "@/generated/prisma/client.js";
-import { getAccessTypeKey } from "@/modules/sponsorships/sponsorships.utils.js";
 
 /**
  * Validate access selections for a registration.
@@ -75,7 +74,10 @@ export async function validateAccessSelections(
 
   for (const selection of selections) {
     const access = accessMap.get(selection.accessId)!;
-    const typeKey = getAccessTypeKey(access.type, access.groupLabel);
+    const typeKey =
+      access.type === "OTHER"
+        ? `OTHER:${access.groupLabel || ""}`
+        : access.type;
 
     if (!selectionsByType.has(typeKey)) selectionsByType.set(typeKey, []);
     selectionsByType.get(typeKey)!.push({ access, selection });

@@ -11,7 +11,7 @@ import { prisma } from "@/database/client.js";
 import { logger } from "@shared/utils/logger.js";
 import { usersRoutes } from "@identity";
 import { clientsRoutes } from "@clients";
-import { eventsRoutes } from "@events";
+import { eventsRoutes, eventsPublicRoutes } from "@events";
 import { formsRoutes, formsPublicRoutes } from "@forms";
 import { pricingRulesRoutes, pricingPublicRoutes } from "@pricing";
 import { accessRoutes, accessPublicRoutes } from "@access";
@@ -108,6 +108,9 @@ export async function buildServer(): Promise<AppInstance> {
   // Access routes (replaces eventExtrasRoutes)
   await app.register(accessRoutes, { prefix: "/api/events" });
   await app.register(accessPublicRoutes, { prefix: "/api/public/events" });
+
+  // Events public routes (payment-config, etc.)
+  await app.register(eventsPublicRoutes, { prefix: "/api/public/events" });
 
   // Registration routes
   await app.register(registrationsRoutes, { prefix: "/api/events" });

@@ -182,7 +182,9 @@ export async function certificatesRoutes(app: AppInstance): Promise<void> {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
 
-      const data = await request.file();
+      const data = await request.file({
+        limits: { fileSize: 10 * 1024 * 1024 },
+      }); // 10 MB
       if (!data) {
         throw app.httpErrors.badRequest("No file uploaded");
       }
