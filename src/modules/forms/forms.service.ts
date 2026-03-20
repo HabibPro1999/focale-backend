@@ -108,9 +108,7 @@ export async function createForm(input: CreateFormInput): Promise<Form> {
   // Validate that event exists
   const isValidEvent = await eventExists(eventId);
   if (!isValidEvent) {
-    throw new AppError(
-      "Event not found",
-      404, ErrorCodes.NOT_FOUND);
+    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   // Check if event already has a registration form (enforced by unique constraint, but provide better error)
@@ -140,10 +138,15 @@ export async function createForm(input: CreateFormInput): Promise<Form> {
 }
 
 /**
- * Get form by ID.
+ * Get form by ID, including the event's clientId for ownership checks.
  */
-export async function getFormById(id: string): Promise<Form | null> {
-  return prisma.form.findUnique({ where: { id } });
+export async function getFormById(
+  id: string,
+): Promise<(Form & { event: { clientId: string } }) | null> {
+  return prisma.form.findUnique({
+    where: { id },
+    include: { event: { select: { clientId: true } } },
+  });
 }
 
 /**
@@ -194,7 +197,7 @@ export async function getFormByEventSlug(
 
 /**
  * Extract field IDs from form schema.
- * Recursively walks through steps and fields.
+ * Walks through steps and fields.
  */
 function extractFieldIds(schema: unknown): string[] {
   const ids: string[] = [];
@@ -232,9 +235,7 @@ export async function updateForm(
   // Check if form exists
   const form = await prisma.form.findUnique({ where: { id } });
   if (!form) {
-    throw new AppError(
-      "Form not found",
-      404, ErrorCodes.NOT_FOUND);
+    throw new AppError("Form not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   // Prepare update data
@@ -269,8 +270,8 @@ export async function updateForm(
           const isLocked = await isSponsorshipModeLocked(id);
           if (isLocked) {
             throw new AppError(
-      "Cannot change sponsorship mode after sponsorship batches have been submitted",
-      409,
+              "Cannot change sponsorship mode after sponsorship batches have been submitted",
+              409,
               ErrorCodes.CONFLICT,
             );
           }
@@ -349,9 +350,7 @@ export async function deleteForm(id: string): Promise<void> {
   // Check if form exists
   const form = await prisma.form.findUnique({ where: { id } });
   if (!form) {
-    throw new AppError(
-      "Form not found",
-      404, ErrorCodes.NOT_FOUND);
+    throw new AppError("Form not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   await prisma.form.delete({ where: { id } });
@@ -389,9 +388,7 @@ export async function updateSponsorshipSettings(
   // Fetch form and verify it's a SPONSOR form
   const form = await prisma.form.findUnique({ where: { id: formId } });
   if (!form) {
-    throw new AppError(
-      "Form not found",
-      404, ErrorCodes.NOT_FOUND);
+    throw new AppError("Form not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   if (form.type !== "SPONSOR") {
@@ -412,8 +409,8 @@ export async function updateSponsorshipSettings(
     const isLocked = await isSponsorshipModeLocked(formId);
     if (isLocked) {
       throw new AppError(
-      "Cannot change sponsorship mode after sponsorship batches have been submitted",
-      409,
+        "Cannot change sponsorship mode after sponsorship batches have been submitted",
+        409,
         ErrorCodes.CONFLICT,
       );
     }
@@ -434,23 +431,6 @@ export async function updateSponsorshipSettings(
       schema: updatedSchema as unknown as Prisma.InputJsonValue,
     },
   });
-}
-
-/**
- * Helper function to get form's client ID via event (for ownership checks).
- */
-export async function getFormClientId(id: string): Promise<string | null> {
-  const form = await prisma.form.findUnique({
-    where: { id },
-    select: {
-      event: {
-        select: {
-          clientId: true,
-        },
-      },
-    },
-  });
-  return form?.event.clientId ?? null;
 }
 
 // ============================================================================
@@ -597,9 +577,7 @@ export async function createSponsorForm(
   // Validate that event exists
   const isValidEvent = await eventExists(eventId);
   if (!isValidEvent) {
-    throw new AppError(
-      "Event not found",
-      404, ErrorCodes.NOT_FOUND);
+    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   // Check if event already has a sponsor form

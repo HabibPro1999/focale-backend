@@ -568,7 +568,7 @@ export async function createAdminRegistration(
 
   // Calculate price from access selections (no sponsorship for admin-created)
   const selectedExtras = (accessSelections ?? []).map((s) => ({
-    extraId: s.accessId,
+    accessId: s.accessId,
     quantity: s.quantity,
   }));
 
@@ -583,14 +583,14 @@ export async function createAdminRegistration(
     basePrice: calculatedPrice.basePrice,
     appliedRules: calculatedPrice.appliedRules,
     calculatedBasePrice: calculatedPrice.calculatedBasePrice,
-    accessItems: calculatedPrice.extras.map((extra) => ({
-      accessId: extra.extraId,
-      name: extra.name,
-      unitPrice: extra.unitPrice,
-      quantity: extra.quantity,
-      subtotal: extra.subtotal,
+    accessItems: calculatedPrice.accessItems.map((item) => ({
+      accessId: item.accessId,
+      name: item.name,
+      unitPrice: item.unitPrice,
+      quantity: item.quantity,
+      subtotal: item.subtotal,
     })),
-    accessTotal: calculatedPrice.extrasTotal,
+    accessTotal: calculatedPrice.accessTotal,
     subtotal: calculatedPrice.subtotal,
     sponsorships: calculatedPrice.sponsorships,
     sponsorshipTotal: calculatedPrice.sponsorshipTotal,
@@ -647,7 +647,7 @@ export async function createAdminRegistration(
         priceBreakdown: priceBreakdown as unknown as Prisma.InputJsonValue,
         baseAmount: priceBreakdown.calculatedBasePrice,
         discountAmount: calculateDiscountAmount(priceBreakdown.appliedRules),
-        accessAmount: calculatedPrice.extrasTotal,
+        accessAmount: calculatedPrice.accessTotal,
         sponsorshipAmount: 0,
         accessTypeIds: accessSelections?.map((s) => s.accessId) ?? [],
         // Admin-created: no edit token, no idempotency key, no link base URL
@@ -1624,7 +1624,7 @@ export async function editRegistrationPublic(
 
   // 9. Calculate new price breakdown
   const selectedExtras = newAccessSelections.map((s) => ({
-    extraId: s.accessId,
+    accessId: s.accessId,
     quantity: s.quantity,
   }));
 
@@ -1641,14 +1641,14 @@ export async function editRegistrationPublic(
     basePrice: calculatedPrice.basePrice,
     appliedRules: calculatedPrice.appliedRules,
     calculatedBasePrice: calculatedPrice.calculatedBasePrice,
-    accessItems: calculatedPrice.extras.map((extra) => ({
-      accessId: extra.extraId,
-      name: extra.name,
-      unitPrice: extra.unitPrice,
-      quantity: extra.quantity,
-      subtotal: extra.subtotal,
+    accessItems: calculatedPrice.accessItems.map((item) => ({
+      accessId: item.accessId,
+      name: item.name,
+      unitPrice: item.unitPrice,
+      quantity: item.quantity,
+      subtotal: item.subtotal,
     })),
-    accessTotal: calculatedPrice.extrasTotal,
+    accessTotal: calculatedPrice.accessTotal,
     subtotal: calculatedPrice.subtotal,
     sponsorships: calculatedPrice.sponsorships,
     sponsorshipTotal: calculatedPrice.sponsorshipTotal,

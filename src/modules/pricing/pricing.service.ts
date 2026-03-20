@@ -1,8 +1,9 @@
-import { randomUUID } from 'crypto';
-import { prisma } from '@/database/client.js';
-import { AppError } from '@shared/errors/app-error.js';
-import { ErrorCodes } from '@shared/errors/error-codes.js';
-import { calculateApplicableAmount } from '@modules/sponsorships/sponsorships.utils.js';
+import { randomUUID } from "crypto";
+import { prisma } from "@/database/client.js";
+import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { calculateApplicableAmount } from "@modules/sponsorships/sponsorships.utils.js";
+import { evaluateConditions } from "@shared/utils/conditions.js";
 import type {
   UpdateEventPricingInput,
   CreateEmbeddedRuleInput,
@@ -10,17 +11,16 @@ import type {
   EmbeddedPricingRule,
   CalculatePriceRequest,
   PriceBreakdown,
-  PricingCondition,
   SelectedExtra,
-} from './pricing.schema.js';
-import type { Prisma, EventPricing } from '@/generated/prisma/client.js';
+} from "./pricing.schema.js";
+import type { Prisma, EventPricing } from "@/generated/prisma/client.js";
 
 // ============================================================================
 // Types
 // ============================================================================
 
 // EventPricing with parsed rules array
-export type EventPricingWithRules = Omit<EventPricing, 'rules'> & {
+export type EventPricingWithRules = Omit<EventPricing, "rules"> & {
   rules: EmbeddedPricingRule[];
 };
 
@@ -32,7 +32,7 @@ export type EventPricingWithRules = Omit<EventPricing, 'rules'> & {
  * Get event pricing by event ID with parsed rules.
  */
 export async function getEventPricing(
-  eventId: string
+  eventId: string,
 ): Promise<EventPricingWithRules | null> {
   const pricing = await prisma.eventPricing.findUnique({ where: { eventId } });
   if (!pricing) return null;
@@ -48,14 +48,14 @@ export async function getEventPricing(
  */
 export async function updateEventPricing(
   eventId: string,
-  input: UpdateEventPricingInput
+  input: UpdateEventPricingInput,
 ): Promise<EventPricingWithRules> {
   const pricing = await prisma.eventPricing.findUnique({ where: { eventId } });
   if (!pricing) {
     throw new AppError(
-      'Event pricing not found',
+      "Event pricing not found",
       404,
-      ErrorCodes.PRICING_NOT_FOUND
+      ErrorCodes.PRICING_NOT_FOUND,
     );
   }
 
@@ -105,14 +105,14 @@ export async function updateEventPricing(
  */
 export async function addPricingRule(
   eventId: string,
-  rule: CreateEmbeddedRuleInput
+  rule: CreateEmbeddedRuleInput,
 ): Promise<EventPricingWithRules> {
   const pricing = await getEventPricing(eventId);
   if (!pricing) {
     throw new AppError(
-      'Event pricing not found',
+      "Event pricing not found",
       404,
-      ErrorCodes.PRICING_NOT_FOUND
+      ErrorCodes.PRICING_NOT_FOUND,
     );
   }
 
@@ -121,7 +121,7 @@ export async function addPricingRule(
     id: randomUUID(),
     description: rule.description ?? null,
     priority: rule.priority ?? 0,
-    conditionLogic: rule.conditionLogic ?? 'AND',
+    conditionLogic: rule.conditionLogic ?? "AND",
     active: rule.active ?? true,
   };
 
@@ -135,22 +135,20 @@ export async function addPricingRule(
 export async function updatePricingRule(
   eventId: string,
   ruleId: string,
-  updates: UpdateEmbeddedRuleInput
+  updates: UpdateEmbeddedRuleInput,
 ): Promise<EventPricingWithRules> {
   const pricing = await getEventPricing(eventId);
   if (!pricing) {
     throw new AppError(
-      'Event pricing not found',
+      "Event pricing not found",
       404,
-      ErrorCodes.PRICING_NOT_FOUND
+      ErrorCodes.PRICING_NOT_FOUND,
     );
   }
 
   const ruleIndex = pricing.rules.findIndex((r) => r.id === ruleId);
   if (ruleIndex === -1) {
-    throw new AppError(
-      'Pricing rule not found',
-      404, ErrorCodes.NOT_FOUND);
+    throw new AppError("Pricing rule not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   const updatedRules = [...pricing.rules];
@@ -164,22 +162,20 @@ export async function updatePricingRule(
  */
 export async function deletePricingRule(
   eventId: string,
-  ruleId: string
+  ruleId: string,
 ): Promise<EventPricingWithRules> {
   const pricing = await getEventPricing(eventId);
   if (!pricing) {
     throw new AppError(
-      'Event pricing not found',
+      "Event pricing not found",
       404,
-      ErrorCodes.PRICING_NOT_FOUND
+      ErrorCodes.PRICING_NOT_FOUND,
     );
   }
 
   const ruleExists = pricing.rules.some((r) => r.id === ruleId);
   if (!ruleExists) {
-    throw new AppError(
-      'Pricing rule not found',
-      404, ErrorCodes.NOT_FOUND);
+    throw new AppError("Pricing rule not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   const updatedRules = pricing.rules.filter((r) => r.id !== ruleId);
@@ -201,7 +197,7 @@ export async function deletePricingRule(
  */
 export async function calculatePrice(
   eventId: string,
-  input: CalculatePriceRequest
+  input: CalculatePriceRequest,
 ): Promise<PriceBreakdown> {
   const { formData, selectedExtras, sponsorshipCodes } = input;
 
@@ -209,9 +205,9 @@ export async function calculatePrice(
   const pricing = await getEventPricing(eventId);
   if (!pricing) {
     throw new AppError(
-      'Event pricing not found',
+      "Event pricing not found",
       404,
-      ErrorCodes.PRICING_NOT_FOUND
+      ErrorCodes.PRICING_NOT_FOUND,
     );
   }
 
@@ -224,7 +220,7 @@ export async function calculatePrice(
 
   // Find first matching rule (highest priority wins)
   // If a rule matches, its price overrides the base price
-  const appliedRules: PriceBreakdown['appliedRules'] = [];
+  const appliedRules: PriceBreakdown["appliedRules"] = [];
   let calculatedBasePrice = basePrice;
 
   for (const rule of activeRules) {
@@ -240,20 +236,27 @@ export async function calculatePrice(
     }
   }
 
-  // Calculate access/extras total
-  const extrasDetails = await calculateExtrasTotal(selectedExtras);
-  const extrasTotal = extrasDetails.reduce((sum, e) => sum + e.subtotal, 0);
+  // Calculate access items total
+  const accessItemsDetails = await calculateAccessItemsTotal(selectedExtras);
+  const accessTotal = accessItemsDetails.reduce(
+    (sum, e) => sum + e.subtotal,
+    0,
+  );
 
   // Calculate subtotal first (needed for sponsorship validation)
-  const subtotal = calculatedBasePrice + extrasTotal;
+  const subtotal = calculatedBasePrice + accessTotal;
 
   // Validate sponsorship codes with smart matching
   // Only applies the portion that matches what the registration actually selected
-  const sponsorships = await validateSponsorshipCodes(sponsorshipCodes, eventId, {
-    calculatedBasePrice,
-    extrasDetails,
-    subtotal,
-  });
+  const sponsorships = await validateSponsorshipCodes(
+    sponsorshipCodes,
+    eventId,
+    {
+      calculatedBasePrice,
+      accessItemsDetails,
+      subtotal,
+    },
+  );
   const sponsorshipTotal = sponsorships
     .filter((s) => s.valid)
     .reduce((sum, s) => sum + s.amount, 0);
@@ -265,8 +268,8 @@ export async function calculatePrice(
     basePrice,
     appliedRules,
     calculatedBasePrice,
-    extras: extrasDetails,
-    extrasTotal,
+    accessItems: accessItemsDetails,
+    accessTotal,
     subtotal,
     sponsorships,
     sponsorshipTotal,
@@ -280,45 +283,14 @@ export async function calculatePrice(
 // ============================================================================
 
 /**
- * Evaluate pricing conditions against form data.
+ * Calculate access items total from selected items.
  */
-function evaluateConditions(
-  conditions: PricingCondition[],
-  logic: 'AND' | 'OR',
-  formData: Record<string, unknown>
-): boolean {
-  const results = conditions.map((c) => evaluateSingleCondition(c, formData));
-  return logic === 'AND' ? results.every(Boolean) : results.some(Boolean);
-}
-
-/**
- * Evaluate a single pricing condition.
- */
-function evaluateSingleCondition(
-  condition: PricingCondition,
-  formData: Record<string, unknown>
-): boolean {
-  const value = formData[condition.fieldId];
-
-  switch (condition.operator) {
-    case 'equals':
-      return value === condition.value;
-    case 'not_equals':
-      return value !== condition.value;
-    default:
-      return false;
-  }
-}
-
-/**
- * Calculate extras/access total from selected items.
- */
-async function calculateExtrasTotal(
-  selectedExtras: SelectedExtra[]
-): Promise<PriceBreakdown['extras']> {
+async function calculateAccessItemsTotal(
+  selectedExtras: SelectedExtra[],
+): Promise<PriceBreakdown["accessItems"]> {
   if (!selectedExtras.length) return [];
 
-  const accessIds = selectedExtras.map((e) => e.extraId);
+  const accessIds = selectedExtras.map((e) => e.accessId);
   const accessItems = await prisma.eventAccess.findMany({
     where: { id: { in: accessIds }, active: true },
   });
@@ -327,14 +299,15 @@ async function calculateExtrasTotal(
 
   return selectedExtras
     .map((selected) => {
-      const access = accessMap.get(selected.extraId);
+      const access = accessMap.get(selected.accessId);
       if (!access) return null;
 
       if (access.includedInBase) {
         // Included: free for registrant, companion pays companionPrice
-        const companionCount = selected.quantity > 1 ? selected.quantity - 1 : 0;
+        const companionCount =
+          selected.quantity > 1 ? selected.quantity - 1 : 0;
         return {
-          extraId: access.id,
+          accessId: access.id,
           name: access.name,
           unitPrice: access.companionPrice,
           quantity: selected.quantity,
@@ -344,9 +317,10 @@ async function calculateExtrasTotal(
 
       // Non-included: registrant pays price, companion pays companionPrice (or price if unset)
       const companionCount = selected.quantity > 1 ? selected.quantity - 1 : 0;
-      const companionUnitPrice = access.companionPrice > 0 ? access.companionPrice : access.price;
+      const companionUnitPrice =
+        access.companionPrice > 0 ? access.companionPrice : access.price;
       return {
-        extraId: access.id,
+        accessId: access.id,
         name: access.name,
         unitPrice: access.price,
         quantity: selected.quantity,
@@ -361,7 +335,7 @@ async function calculateExtrasTotal(
  */
 interface SponsorshipValidationContext {
   calculatedBasePrice: number;
-  extrasDetails: Array<{ extraId: string; subtotal: number }>;
+  accessItemsDetails: Array<{ accessId: string; subtotal: number }>;
   subtotal: number;
 }
 
@@ -369,65 +343,62 @@ interface SponsorshipValidationContext {
  * Validate sponsorship codes against the database and calculate applicable amounts.
  * Uses smart matching: only applies amount for items the registration actually selected.
  * Only PENDING sponsorships are valid for use.
+ *
+ * Single batched query instead of N+1 individual lookups.
  */
 async function validateSponsorshipCodes(
   codes: string[],
   eventId: string,
-  context: SponsorshipValidationContext
-): Promise<PriceBreakdown['sponsorships']> {
+  context: SponsorshipValidationContext,
+): Promise<PriceBreakdown["sponsorships"]> {
   if (!codes.length) return [];
 
-  return Promise.all(
-    codes.map(async (code) => {
-      // Look up sponsorship in database with coverage details
-      const sponsorship = await prisma.sponsorship.findFirst({
-        where: {
-          eventId,
-          code: code.toUpperCase(),
-          status: 'PENDING', // Only unused codes are valid
-        },
-        select: {
-          id: true,
-          totalAmount: true,
-          coversBasePrice: true,
-          coveredAccessIds: true,
-        },
-      });
+  const upperCodes = codes.map((c) => c.toUpperCase());
 
-      if (!sponsorship) {
-        return {
-          code,
-          amount: 0,
-          valid: false,
-        };
-      }
+  // Batch lookup: single query instead of one per code
+  const sponsorships = await prisma.sponsorship.findMany({
+    where: {
+      eventId,
+      code: { in: upperCodes },
+      status: "PENDING", // Only unused codes are valid
+    },
+    select: {
+      code: true,
+      totalAmount: true,
+      coversBasePrice: true,
+      coveredAccessIds: true,
+    },
+  });
 
-      // Calculate applicable amount using smart matching
-      const applicableAmount = calculateApplicableAmount(
-        {
-          totalAmount: sponsorship.totalAmount,
-          coversBasePrice: sponsorship.coversBasePrice,
-          coveredAccessIds: sponsorship.coveredAccessIds,
+  const sponsorshipMap = new Map(sponsorships.map((s) => [s.code, s]));
+
+  return codes.map((code) => {
+    const sponsorship = sponsorshipMap.get(code.toUpperCase());
+
+    if (!sponsorship) {
+      return { code, amount: 0, valid: false };
+    }
+
+    const applicableAmount = calculateApplicableAmount(
+      {
+        totalAmount: sponsorship.totalAmount,
+        coversBasePrice: sponsorship.coversBasePrice,
+        coveredAccessIds: sponsorship.coveredAccessIds,
+      },
+      {
+        baseAmount: context.calculatedBasePrice,
+        totalAmount: context.subtotal,
+        accessTypeIds: context.accessItemsDetails.map((e) => e.accessId),
+        priceBreakdown: {
+          calculatedBasePrice: context.calculatedBasePrice,
+          accessItems: context.accessItemsDetails.map((e) => ({
+            accessId: e.accessId,
+            subtotal: e.subtotal,
+          })),
         },
-        {
-          baseAmount: context.calculatedBasePrice,
-          totalAmount: context.subtotal,
-          accessTypeIds: context.extrasDetails.map((e) => e.extraId),
-          priceBreakdown: {
-            calculatedBasePrice: context.calculatedBasePrice,
-            accessItems: context.extrasDetails.map((e) => ({
-              accessId: e.extraId,
-              subtotal: e.subtotal,
-            })),
-          },
-        }
-      );
+      },
+    );
 
-      return {
-        code,
-        amount: applicableAmount,
-        valid: true,
-      };
-    })
-  );
+    return { code, amount: applicableAmount, valid: true };
+  });
 }

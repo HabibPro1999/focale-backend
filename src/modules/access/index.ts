@@ -1,55 +1,13 @@
-// ============================================================================
-// Access Module - Barrel Export
-// ============================================================================
+// Only export what external modules actually consume.
+// Internal consumers (routes, service) import directly from ./access.service.js etc.
 
-// Service functions
 export {
-  createEventAccess,
-  updateEventAccess,
-  deleteEventAccess,
-  listEventAccess,
-  getEventAccessById,
-  getAccessClientId,
-  getGroupedAccess,
   validateAccessSelections,
   reserveAccessSpot,
   releaseAccessSpot,
-} from './access.service.js';
+} from "./access.service.js";
 
-// Schemas
-export {
-  AccessConditionSchema,
-  AccessTypeSchema,
-  ACCESS_TYPE_LABELS,
-  CreateEventAccessSchema,
-  UpdateEventAccessSchema,
-  ListEventAccessQuerySchema,
-  EventAccessIdParamSchema,
-  EventIdParamSchema,
-  TimeSlotSchema,
-  DateGroupSchema,
-  TypeGroupSchema, // Backward compatibility alias for DateGroupSchema
-  GroupedAccessResponseSchema,
-  AccessSelectionSchema,
-  GetGroupedAccessBodySchema,
-  ValidateAccessSelectionsBodySchema,
-} from './access.schema.js';
+export { AccessSelectionSchema } from "./access.schema.js";
 
-// Types
-export type {
-  AccessType,
-  AccessCondition,
-  CreateEventAccessInput,
-  UpdateEventAccessInput,
-  AccessSelection,
-  TimeSlot,
-  DateGroup,
-  TypeGroup, // Backward compatibility alias for DateGroup
-  GroupedAccessResponse,
-  GetGroupedAccessBody,
-  ValidateAccessSelectionsBody,
-} from './access.schema.js';
-
-// Routes
-export { accessRoutes } from './access.routes.js';
-export { accessPublicRoutes } from './access.public.routes.js';
+export { accessRoutes } from "./access.routes.js";
+export { accessPublicRoutes } from "./access.public.routes.js";

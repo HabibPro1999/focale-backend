@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { AccessSelectionSchema } from "@access";
+export { PriceBreakdownSchema, type PriceBreakdown } from "@pricing";
 
 // ============================================================================
 // Enums
@@ -44,7 +45,7 @@ const labNameRefinement = {
 // ============================================================================
 
 export const CreateRegistrationSchema = z
-  .object({
+  .strictObject({
     formId: z.string().uuid(),
     formData: z.record(z.string(), z.any()),
 
@@ -72,7 +73,6 @@ export const CreateRegistrationSchema = z
     // Browser origin URL for email links (e.g., "https://summit.events.domain.com")
     linkBaseUrl: z.string().url().optional(),
   })
-  .strict()
   .refine(requireLabName, labNameRefinement);
 
 // ============================================================================
@@ -80,11 +80,10 @@ export const CreateRegistrationSchema = z
 // ============================================================================
 
 export const SelectPaymentMethodSchema = z
-  .object({
+  .strictObject({
     paymentMethod: z.enum(["CASH", "LAB_SPONSORSHIP"]),
     labName: z.string().max(200).optional(),
   })
-  .strict()
   .refine(requireLabName, labNameRefinement);
 
 export type SelectPaymentMethodInput = z.infer<
@@ -96,17 +95,16 @@ export type SelectPaymentMethodInput = z.infer<
 // ============================================================================
 
 export const UpdatePaymentSchema = z
-  .object({
+  .strictObject({
     paymentStatus: PaymentStatusSchema,
     paidAmount: z.number().int().min(0).optional(),
     paymentMethod: PaymentMethodSchema.optional(),
     paymentReference: z.string().max(200).optional(),
     paymentProofUrl: z.string().url().optional(),
-  })
-  .strict();
+  });
 
 export const UpdateRegistrationSchema = z
-  .object({
+  .strictObject({
     paymentStatus: PaymentStatusSchema.optional(),
     paidAmount: z.number().int().min(0).optional(),
     paymentMethod: PaymentMethodSchema.optional(),
@@ -114,15 +112,14 @@ export const UpdateRegistrationSchema = z
     paymentProofUrl: z.string().url().optional(),
     note: z.string().max(2000).nullable().optional(),
     role: RegistrationRoleSchema.optional(),
-  })
-  .strict();
+  });
 
 // ============================================================================
 // Admin Create Registration Schema
 // ============================================================================
 
 export const AdminCreateRegistrationSchema = z
-  .object({
+  .strictObject({
     // Identity — email + name required for admin-created registrations
     email: z.string().email(),
     firstName: z.string().min(1).max(100),
@@ -144,7 +141,6 @@ export const AdminCreateRegistrationSchema = z
     paymentStatus: PaymentStatusSchema.optional(),
     labName: z.string().max(200).optional(),
   })
-  .strict()
   .refine(requireLabName, labNameRefinement);
 
 // ============================================================================
@@ -152,47 +148,42 @@ export const AdminCreateRegistrationSchema = z
 // ============================================================================
 
 export const ListRegistrationsQuerySchema = z
-  .object({
+  .strictObject({
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
     paymentStatus: PaymentStatusSchema.optional(),
     search: z.string().max(200).optional(),
-  })
-  .strict();
+  });
 
 export const DeleteRegistrationQuerySchema = z
-  .object({
+  .strictObject({
     force: z
       .enum(["true", "false"])
       .default("false")
       .transform((v) => v === "true"),
-  })
-  .strict();
+  });
 
 export const RegistrationIdParamSchema = z
-  .object({
+  .strictObject({
     id: z.string().uuid(),
-  })
-  .strict();
+  });
 
 export const EventIdParamSchema = z
-  .object({
+  .strictObject({
     eventId: z.string().uuid(),
-  })
-  .strict();
+  });
 
 export const FormIdParamSchema = z
-  .object({
+  .strictObject({
     formId: z.string().uuid(),
-  })
-  .strict();
+  });
 
 // ============================================================================
 // Public Edit Registration Schema (Self-Service)
 // ============================================================================
 
 export const PublicEditRegistrationSchema = z
-  .object({
+  .strictObject({
     // Form data updates (partial - only changed fields)
     formData: z.record(z.string(), z.any()).optional(),
 
@@ -205,7 +196,6 @@ export const PublicEditRegistrationSchema = z
     // Access selections (full replacement of current selections)
     accessSelections: z.array(AccessSelectionSchema).optional(),
   })
-  .strict()
   .refine(
     (data) =>
       data.formData !== undefined ||
@@ -217,10 +207,9 @@ export const PublicEditRegistrationSchema = z
   );
 
 export const RegistrationIdPublicParamSchema = z
-  .object({
+  .strictObject({
     registrationId: z.string().uuid(),
-  })
-  .strict();
+  });
 
 // ============================================================================
 // Table Column Schemas (for dynamic table rendering)
@@ -261,44 +250,6 @@ export const RegistrationColumnsResponseSchema = z.object({
 });
 
 // ============================================================================
-// Price Calculation Integration
-// ============================================================================
-
-export const PriceBreakdownSchema = z.object({
-  basePrice: z.number(),
-  appliedRules: z.array(
-    z.object({
-      ruleId: z.string(),
-      ruleName: z.string(),
-      effect: z.number(),
-      reason: z.string().optional(),
-    }),
-  ),
-  calculatedBasePrice: z.number(),
-  accessItems: z.array(
-    z.object({
-      accessId: z.string(),
-      name: z.any(),
-      unitPrice: z.number(),
-      quantity: z.number(),
-      subtotal: z.number(),
-    }),
-  ),
-  accessTotal: z.number(),
-  subtotal: z.number(),
-  sponsorships: z.array(
-    z.object({
-      code: z.string(),
-      amount: z.number(),
-      valid: z.boolean(),
-    }),
-  ),
-  sponsorshipTotal: z.number(),
-  total: z.number(),
-  currency: z.string(),
-});
-
-// ============================================================================
 // Types
 // ============================================================================
 
@@ -313,7 +264,6 @@ export type ListRegistrationsQuery = z.infer<
 export type DeleteRegistrationQuery = z.infer<
   typeof DeleteRegistrationQuerySchema
 >;
-export type PriceBreakdown = z.infer<typeof PriceBreakdownSchema>;
 export type PublicEditRegistrationInput = z.infer<
   typeof PublicEditRegistrationSchema
 >;
@@ -329,11 +279,10 @@ export type RegistrationColumnsResponse = z.infer<
 // ============================================================================
 
 export const ListRegistrationAuditLogsQuerySchema = z
-  .object({
+  .strictObject({
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(50),
-  })
-  .strict();
+  });
 
 export const AuditActionSchema = z.enum([
   "CREATE",
@@ -372,11 +321,10 @@ export type RegistrationAuditLog = z.infer<typeof RegistrationAuditLogSchema>;
 // ============================================================================
 
 export const ListRegistrationEmailLogsQuerySchema = z
-  .object({
+  .strictObject({
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(50),
-  })
-  .strict();
+  });
 
 export const EmailStatusSchema = z.enum([
   "QUEUED",
@@ -427,12 +375,11 @@ export type RegistrationEmailLog = z.infer<typeof RegistrationEmailLogSchema>;
 // ============================================================================
 
 export const SearchRegistrantsQuerySchema = z
-  .object({
+  .strictObject({
     query: z.string().min(1).max(200),
     unpaidOnly: z.coerce.boolean().optional().default(false),
     limit: z.coerce.number().int().min(1).max(50).default(10),
-  })
-  .strict();
+  });
 
 export const RegistrantSearchResultSchema = z.object({
   id: z.string().uuid(),

@@ -28,7 +28,7 @@ const EnabledModulesSchema = z
 // ============================================================================
 
 export const CreateClientSchema = z
-  .object({
+  .strictObject({
     name: z.string().min(1).max(100),
     logo: z.string().url().optional().nullable(),
     primaryColor: z
@@ -39,11 +39,10 @@ export const CreateClientSchema = z
     email: z.string().email().optional().nullable(),
     phone: z.string().min(1).max(20).optional().nullable(),
     enabledModules: EnabledModulesSchema.optional(),
-  })
-  .strict();
+  });
 
 export const UpdateClientSchema = z
-  .object({
+  .strictObject({
     name: z.string().min(1).max(100).optional(),
     logo: z.string().url().optional().nullable(),
     primaryColor: z
@@ -55,11 +54,10 @@ export const UpdateClientSchema = z
     phone: z.string().min(1).max(20).optional().nullable(),
     active: z.boolean().optional(),
     enabledModules: z.array(z.enum(MODULE_IDS)).optional(),
-  })
-  .strict();
+  });
 
 export const ListClientsQuerySchema = z
-  .object({
+  .strictObject({
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
     active: z
@@ -67,41 +65,12 @@ export const ListClientsQuerySchema = z
       .transform((v) => v === "true")
       .optional(),
     search: z.string().optional(),
-  })
-  .strict();
+  });
 
 export const ClientIdParamSchema = z
-  .object({
+  .strictObject({
     id: z.string().uuid(),
-  })
-  .strict();
-
-// ============================================================================
-// Response Schemas
-// ============================================================================
-
-export const ClientResponseSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  logo: z.string().nullable(),
-  primaryColor: z.string().nullable(),
-  email: z.string().nullable(),
-  phone: z.string().nullable(),
-  active: z.boolean(),
-  enabledModules: z.array(z.enum(MODULE_IDS)),
-  createdAt: z.date(),
-  updatedAt: z.date(),
-});
-
-export const ClientsListResponseSchema = z.object({
-  data: z.array(ClientResponseSchema),
-  meta: z.object({
-    page: z.number(),
-    limit: z.number(),
-    total: z.number(),
-    totalPages: z.number(),
-  }),
-});
+  });
 
 // ============================================================================
 // Types
@@ -110,5 +79,3 @@ export const ClientsListResponseSchema = z.object({
 export type CreateClientInput = z.infer<typeof CreateClientSchema>;
 export type UpdateClientInput = z.infer<typeof UpdateClientSchema>;
 export type ListClientsQuery = z.infer<typeof ListClientsQuerySchema>;
-export type ClientResponse = z.infer<typeof ClientResponseSchema>;
-export type ClientsListResponse = z.infer<typeof ClientsListResponseSchema>;

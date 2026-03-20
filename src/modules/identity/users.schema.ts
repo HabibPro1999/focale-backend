@@ -6,7 +6,7 @@ import { UserRole } from "./permissions.js";
 // ============================================================================
 
 export const CreateUserSchema = z
-  .object({
+  .strictObject({
     email: z.string().email(),
     password: z
       .string()
@@ -17,20 +17,18 @@ export const CreateUserSchema = z
     name: z.string().min(1).max(100),
     role: z.number().int().min(0).max(1).default(UserRole.CLIENT_ADMIN),
     clientId: z.string().uuid().optional().nullable(),
-  })
-  .strict();
+  });
 
 export const UpdateUserSchema = z
-  .object({
+  .strictObject({
     name: z.string().min(1).max(100).optional(),
     role: z.number().int().min(0).max(1).optional(),
     clientId: z.string().uuid().optional().nullable(),
     active: z.boolean().optional(),
-  })
-  .strict();
+  });
 
 export const ListUsersQuerySchema = z
-  .object({
+  .strictObject({
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
     role: z.coerce.number().int().min(0).max(1).optional(),
@@ -40,14 +38,12 @@ export const ListUsersQuerySchema = z
       .transform((v) => v === "true")
       .optional(),
     search: z.string().optional(),
-  })
-  .strict();
+  });
 
 export const UserIdParamSchema = z
-  .object({
+  .strictObject({
     id: z.string().min(1),
-  })
-  .strict();
+  });
 
 // ============================================================================
 // Types

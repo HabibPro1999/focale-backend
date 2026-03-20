@@ -9,19 +9,17 @@ import { z } from 'zod';
 // ============================================================================
 
 export const ReportQuerySchema = z
-  .object({
+  .strictObject({
     startDate: z.string().datetime().optional(),
     endDate: z.string().datetime().optional(),
-  })
-  .strict();
+  });
 
 export const ExportQuerySchema = z
-  .object({
+  .strictObject({
     startDate: z.string().datetime().optional(),
     endDate: z.string().datetime().optional(),
     format: z.enum(['csv', 'json']).default('csv'),
-  })
-  .strict();
+  });
 
 // ============================================================================
 // Response Schemas

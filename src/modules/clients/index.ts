@@ -6,7 +6,7 @@ export {
   listClients,
   deleteClient,
   clientExists,
-} from './clients.service.js';
+} from "./clients.service.js";
 
 // Schemas & Types
 export {
@@ -14,17 +14,13 @@ export {
   UpdateClientSchema,
   ListClientsQuerySchema,
   ClientIdParamSchema,
-  ClientResponseSchema,
-  ClientsListResponseSchema,
   MODULE_IDS,
   ALL_MODULE_IDS,
   type CreateClientInput,
   type UpdateClientInput,
   type ListClientsQuery,
-  type ClientResponse,
-  type ClientsListResponse,
   type ModuleId,
-} from './clients.schema.js';
+} from "./clients.schema.js";
 
 // Routes
-export { clientsRoutes } from './clients.routes.js';
+export { clientsRoutes } from "./clients.routes.js";

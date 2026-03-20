@@ -123,10 +123,9 @@ export async function registrationsPublicRoutes(
       );
 
       // Calculate price breakdown using the event ID from the form
-      // Convert access selections to the format expected by calculatePrice
       const selectedExtras =
         input.accessSelections?.map((selection) => ({
-          extraId: selection.accessId,
+          accessId: selection.accessId,
           quantity: selection.quantity,
         })) ?? [];
 
@@ -137,20 +136,19 @@ export async function registrationsPublicRoutes(
       });
 
       // Transform price breakdown to match our schema
-      // Note: calculatePrice uses 'extras' terminology, we'll adapt it
       const registrationPriceBreakdown = {
         basePrice: priceBreakdown.basePrice,
         appliedRules: priceBreakdown.appliedRules,
         calculatedBasePrice: priceBreakdown.calculatedBasePrice,
-        accessItems: priceBreakdown.extras.map((extra) => ({
-          accessId: extra.extraId,
-          name: extra.name,
-          unitPrice: extra.unitPrice,
-          quantity: extra.quantity,
-          subtotal: extra.subtotal,
+        accessItems: priceBreakdown.accessItems.map((item) => ({
+          accessId: item.accessId,
+          name: item.name,
+          unitPrice: item.unitPrice,
+          quantity: item.quantity,
+          subtotal: item.subtotal,
           status: "confirmed" as const, // Will be updated by createRegistration
         })),
-        accessTotal: priceBreakdown.extrasTotal,
+        accessTotal: priceBreakdown.accessTotal,
         subtotal: priceBreakdown.subtotal,
         sponsorships: priceBreakdown.sponsorships,
         sponsorshipTotal: priceBreakdown.sponsorshipTotal,

@@ -20,12 +20,11 @@ export const FieldTypeSchema = z.enum([
 ]);
 
 export const FieldOptionSchema = z
-  .object({
+  .strictObject({
     id: z.string(),
     label: z.string(),
     priceModifier: z.number().optional(),
-  })
-  .strict();
+  });
 
 export const ConditionOperatorSchema = z.enum([
   "equals",
@@ -39,15 +38,14 @@ export const ConditionOperatorSchema = z.enum([
 ]);
 
 export const FieldConditionSchema = z
-  .object({
+  .strictObject({
     fieldId: z.string(),
     operator: ConditionOperatorSchema,
     value: z.union([z.string(), z.number(), z.boolean()]).optional(),
-  })
-  .strict();
+  });
 
 export const FieldValidationSchema = z
-  .object({
+  .strictObject({
     required: z.boolean().optional(),
     minLength: z.number().int().positive().optional(),
     maxLength: z.number().int().positive().optional(),
@@ -56,11 +54,10 @@ export const FieldValidationSchema = z
     pattern: z.string().optional(),
     fileTypes: z.array(z.string()).optional(),
     maxFileSize: z.number().int().positive().optional(),
-  })
-  .strict();
+  });
 
 export const FormFieldSchema = z
-  .object({
+  .strictObject({
     id: z.string(),
     type: FieldTypeSchema,
     label: z.string().optional(),
@@ -72,21 +69,19 @@ export const FormFieldSchema = z
     validation: FieldValidationSchema.optional(),
     conditions: z.array(FieldConditionSchema).optional(),
     gridColumn: z.string().optional(),
-  })
-  .strict();
+  });
 
 // ============================================================================
 // Form Step Schema
 // ============================================================================
 
 export const FormStepSchema = z
-  .object({
+  .strictObject({
     id: z.string(),
     title: z.string(),
     description: z.string().optional(),
     fields: z.array(FormFieldSchema),
-  })
-  .strict();
+  });
 
 // ============================================================================
 // Complete Form Schema (JSONB)
@@ -95,10 +90,9 @@ export const FormStepSchema = z
 // Use permissive schema for JSONB - frontend defines the structure
 // Registration forms use `steps`, sponsor forms use `sponsorSteps`
 export const FormSchemaJsonSchema = z
-  .object({
+  .looseObject({
     steps: z.array(z.any()).optional(),
-  })
-  .passthrough();
+  });
 
 // ============================================================================
 // Sponsor Form Schemas
@@ -106,92 +100,83 @@ export const FormSchemaJsonSchema = z
 
 // Beneficiary template for sponsor forms
 export const BeneficiaryTemplateSchema = z
-  .object({
+  .strictObject({
     fields: z.array(FormFieldSchema),
     minCount: z.number().int().min(1).default(1),
     maxCount: z.number().int().max(500).default(100),
-  })
-  .strict();
+  });
 
 // Summary settings for sponsor forms
 export const SponsorSummarySettingsSchema = z
-  .object({
+  .strictObject({
     title: z.string().optional(),
     showPriceBreakdown: z.boolean().default(true),
     termsText: z.string().optional(),
-  })
-  .strict();
+  });
 
 // Sponsorship mode settings (only for SPONSOR forms)
 export const SponsorshipModeSchema = z.enum(["LINKED_ACCOUNT", "CODE"]);
 export const RegistrantSearchScopeSchema = z.enum(["ALL", "UNPAID_ONLY"]);
 
 export const SponsorshipSettingsSchema = z
-  .object({
+  .strictObject({
     sponsorshipMode: SponsorshipModeSchema.default("CODE"),
     registrantSearchScope: RegistrantSearchScopeSchema.optional(),
     autoApproveSponsorship: z.boolean().optional(),
-  })
-  .strict();
+  });
 
 // Sponsor form schema structure
 export const SponsorFormSchemaJsonSchema = z
-  .object({
+  .strictObject({
     formType: z.literal("SPONSOR"),
     sponsorSteps: z.array(FormStepSchema),
     beneficiaryTemplate: BeneficiaryTemplateSchema,
     summarySettings: SponsorSummarySettingsSchema.optional(),
     sponsorshipSettings: SponsorshipSettingsSchema.optional(),
-  })
-  .strict();
+  });
 
 // ============================================================================
 // Request Schemas
 // ============================================================================
 
 export const CreateFormSchema = z
-  .object({
+  .strictObject({
     eventId: z.string().uuid(),
     name: z.string().min(1).max(200),
     schema: FormSchemaJsonSchema.optional(), // Optional - backend provides defaults
     successTitle: z.string().optional().nullable(),
     successMessage: z.string().optional().nullable(),
-  })
-  .strict();
+  });
 
 export const UpdateFormSchema = z
-  .object({
+  .strictObject({
     name: z.string().min(1).max(200).optional(),
     schema: FormSchemaJsonSchema.optional(),
     successTitle: z.string().optional().nullable(),
     successMessage: z.string().optional().nullable(),
-  })
-  .strict();
+  });
 
 export const ListFormsQuerySchema = z
-  .object({
+  .strictObject({
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
     eventId: z.string().uuid().optional(),
     search: z.string().optional(),
     type: z.enum(["REGISTRATION", "SPONSOR"]).optional(),
-  })
-  .strict();
+  });
 
 export const FormIdParamSchema = z
-  .object({
+  .strictObject({
     id: z.string().uuid(),
-  })
-  .strict();
+  });
 
 // Update sponsorship settings (for SPONSOR forms only)
 export const UpdateSponsorshipSettingsSchema = z
-  .object({
+  .strictObject({
     sponsorshipMode: SponsorshipModeSchema,
     registrantSearchScope: RegistrantSearchScopeSchema.optional(),
     autoApproveSponsorship: z.boolean().optional(),
-  })
-  .strict();
+  });
 
 // ============================================================================
 // Types

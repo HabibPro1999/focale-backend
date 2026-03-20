@@ -47,9 +47,7 @@ export async function createEvent(
   // Validate that client exists
   const isValidClient = await clientExists(clientId);
   if (!isValidClient) {
-    throw new AppError(
-      "Client not found",
-      404, ErrorCodes.NOT_FOUND);
+    throw new AppError("Client not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   // Check if slug already exists globally
@@ -129,13 +127,11 @@ const VALID_STATUS_TRANSITIONS: Record<string, string[]> = {
 export async function updateEvent(
   id: string,
   input: UpdateEventInput,
-): Promise<Event> {
+): Promise<EventWithPricing> {
   // Check if event exists
   const event = await prisma.event.findUnique({ where: { id } });
   if (!event) {
-    throw new AppError(
-      "Event not found",
-      404, ErrorCodes.NOT_FOUND);
+    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   // Validate status transition if status is being changed
@@ -143,11 +139,22 @@ export async function updateEvent(
     const allowed = VALID_STATUS_TRANSITIONS[event.status] ?? [];
     if (!allowed.includes(input.status)) {
       throw new AppError(
-      `Cannot transition event from ${event.status} to ${input.status}`,
-      400,
+        `Cannot transition event from ${event.status} to ${input.status}`,
+        400,
         ErrorCodes.INVALID_STATUS_TRANSITION,
       );
     }
+  }
+
+  // Validate resulting date range (schema only checks when both are provided)
+  const resultingStart = input.startDate ?? event.startDate;
+  const resultingEnd = input.endDate ?? event.endDate;
+  if (resultingEnd < resultingStart) {
+    throw new AppError(
+      "End date must be greater than or equal to start date",
+      400,
+      ErrorCodes.VALIDATION_ERROR,
+    );
   }
 
   // If slug is being updated, check global uniqueness
@@ -157,8 +164,8 @@ export async function updateEvent(
     });
     if (existing) {
       throw new AppError(
-      "Event with this slug already exists",
-      409,
+        "Event with this slug already exists",
+        409,
         ErrorCodes.CONFLICT,
       );
     }
@@ -167,6 +174,7 @@ export async function updateEvent(
   return prisma.event.update({
     where: { id },
     data: input,
+    include: { pricing: true },
   });
 }
 
@@ -223,9 +231,7 @@ export async function deleteEvent(id: string): Promise<void> {
   });
 
   if (!event) {
-    throw new AppError(
-      "Event not found",
-      404, ErrorCodes.NOT_FOUND);
+    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   // Prevent deletion if event has registrations
@@ -249,16 +255,6 @@ export async function eventExists(id: string): Promise<boolean> {
 }
 
 /**
- * Increment registered count for an event.
- */
-export async function incrementRegisteredCount(id: string): Promise<Event> {
-  return prisma.event.update({
-    where: { id },
-    data: { registeredCount: { increment: 1 } },
-  });
-}
-
-/**
  * Atomic increment of registered count within a transaction.
  * Uses raw SQL to prevent race conditions under concurrent load.
  */
@@ -274,22 +270,8 @@ export async function incrementRegisteredCountTx(
   `;
 
   if (result === 0) {
-    throw new AppError(
-      "Event is at capacity",
-      409,
-      ErrorCodes.EVENT_FULL,
-    );
+    throw new AppError("Event is at capacity", 409, ErrorCodes.EVENT_FULL);
   }
-}
-
-/**
- * Decrement registered count for an event.
- */
-export async function decrementRegisteredCount(id: string): Promise<Event> {
-  return prisma.event.update({
-    where: { id },
-    data: { registeredCount: { decrement: 1 } },
-  });
 }
 
 /**
@@ -313,9 +295,7 @@ export async function uploadEventBanner(
     select: { id: true, clientId: true },
   });
   if (!event) {
-    throw new AppError(
-      "Event not found",
-      404, ErrorCodes.NOT_FOUND);
+    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   const compressed = await compressImage(file.buffer);

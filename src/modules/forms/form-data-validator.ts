@@ -7,6 +7,7 @@ import type {
   FieldValidation,
 } from "./forms.schema.js";
 import { logger } from "@shared/utils/logger.js";
+import { evaluateSingleCondition as evaluateSharedCondition } from "@shared/utils/conditions.js";
 
 // ============================================================================
 // Types
@@ -73,57 +74,19 @@ function isSafePattern(pattern: string): boolean {
 
 /**
  * Evaluate a single field condition against form data.
- * Uses direct comparison - condition.value should match option.id.
+ * Delegates to the shared condition evaluator, with an additional field-existence
+ * guard: if the target field doesn't exist in the form schema, the condition is
+ * considered met (field is visible by default).
  */
 function evaluateSingleCondition(
   condition: FieldCondition,
   formData: Record<string, unknown>,
   allFields: FormField[],
 ): boolean {
-  // Find target field by ID
   const targetField = allFields.find((f) => f.id === condition.fieldId);
-  if (!targetField) return true; // Field not found, assume condition met
+  if (!targetField) return true; // Field not found — assume condition met
 
-  const value = formData[condition.fieldId];
-
-  switch (condition.operator) {
-    case "equals":
-      return value === condition.value;
-
-    case "not_equals":
-      return value !== condition.value;
-
-    case "contains":
-      return (
-        typeof value === "string" &&
-        value.includes(String(condition.value ?? ""))
-      );
-
-    case "not_contains":
-      return (
-        typeof value === "string" &&
-        !value.includes(String(condition.value ?? ""))
-      );
-
-    case "greater_than":
-      return typeof value === "number" && value > Number(condition.value);
-
-    case "less_than":
-      return typeof value === "number" && value < Number(condition.value);
-
-    case "is_empty":
-      return (
-        !value || value === "" || (Array.isArray(value) && value.length === 0)
-      );
-
-    case "is_not_empty":
-      return (
-        !!value && value !== "" && !(Array.isArray(value) && value.length === 0)
-      );
-
-    default:
-      return true;
-  }
+  return evaluateSharedCondition(condition, formData);
 }
 
 /**
@@ -402,9 +365,19 @@ function buildFileSchema(
 /**
  * Build the appropriate Zod schema for a single field based on its type.
  * Returns null for display-only fields (heading, paragraph).
+ *
+ * Note: merges field.required into validation.required so build functions
+ * only need to check validation?.required (single source of truth inside builders).
  */
 function buildFieldSchema(field: FormField): ZodTypeAny | null {
-  const validation = field.validation;
+  // field.required is the top-level required flag; validation.required is nested.
+  // Either source should make the field required.
+  const isRequired = field.validation?.required ?? field.required ?? false;
+  const validation: FieldValidation | undefined = field.validation
+    ? { ...field.validation, required: isRequired }
+    : isRequired
+      ? { required: true }
+      : undefined;
 
   switch (field.type) {
     case "text":

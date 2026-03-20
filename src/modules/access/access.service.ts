@@ -1,6 +1,8 @@
 import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { evaluateConditions } from "@shared/utils/conditions.js";
+import { logger } from "@shared/utils/logger.js";
 import type {
   CreateEventAccessInput,
   UpdateEventAccessInput,
@@ -179,9 +181,7 @@ export async function createEventAccess(
     select: { id: true, startDate: true, endDate: true },
   });
   if (!event) {
-    throw new AppError(
-      "Event not found",
-      404, ErrorCodes.NOT_FOUND);
+    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   // Validate access dates against event boundaries
@@ -209,8 +209,8 @@ export async function createEventAccess(
     });
     if (prerequisites.length !== requiredAccessIds.length) {
       throw new AppError(
-      "One or more prerequisite access items not found or belong to different event",
-      400,
+        "One or more prerequisite access items not found or belong to different event",
+        400,
         ErrorCodes.BAD_REQUEST,
       );
     }
@@ -336,8 +336,8 @@ export async function updateEventAccess(
       });
       if (prerequisites.length !== requiredAccessIds.length) {
         throw new AppError(
-      "One or more prerequisite access items not found",
-      400,
+          "One or more prerequisite access items not found",
+          400,
           ErrorCodes.BAD_REQUEST,
         );
       }
@@ -349,8 +349,8 @@ export async function updateEventAccess(
       );
       if (hasCycle) {
         throw new AppError(
-      "Circular prerequisite dependency detected",
-      400,
+          "Circular prerequisite dependency detected",
+          400,
           ErrorCodes.ACCESS_CIRCULAR_DEPENDENCY,
         );
       }
@@ -655,11 +655,7 @@ export async function reserveAccessSpot(
     });
 
     if (!access) {
-      throw new AppError(
-      "Access not found",
-      404,
-        ErrorCodes.ACCESS_NOT_FOUND,
-      );
+      throw new AppError("Access not found", 404, ErrorCodes.ACCESS_NOT_FOUND);
     }
 
     const remaining = (access.maxCapacity ?? Infinity) - access.registeredCount;
@@ -682,13 +678,20 @@ export async function releaseAccessSpot(
   quantity: number = 1,
   db: CapacityDbClient = prisma,
 ): Promise<void> {
-  await db.eventAccess.updateMany({
+  const result = await db.eventAccess.updateMany({
     where: {
       id: accessId,
       registeredCount: { gte: quantity },
     },
     data: { registeredCount: { decrement: quantity } },
   });
+
+  if (result.count === 0) {
+    logger.warn(
+      { accessId, quantity },
+      "releaseAccessSpot: no rows updated — access item not found or registeredCount already below quantity",
+    );
+  }
 }
 
 // ============================================================================
@@ -859,28 +862,3 @@ export async function validateAccessSelections(
 // ============================================================================
 // Helpers
 // ============================================================================
-
-function evaluateConditions(
-  conditions: AccessCondition[],
-  logic: "AND" | "OR",
-  formData: Record<string, unknown>,
-): boolean {
-  const results = conditions.map((c) => evaluateSingleCondition(c, formData));
-  return logic === "AND" ? results.every(Boolean) : results.some(Boolean);
-}
-
-function evaluateSingleCondition(
-  condition: AccessCondition,
-  formData: Record<string, unknown>,
-): boolean {
-  const value = formData[condition.fieldId];
-
-  switch (condition.operator) {
-    case "equals":
-      return value === condition.value;
-    case "not_equals":
-      return value !== condition.value;
-    default:
-      return false;
-  }
-}

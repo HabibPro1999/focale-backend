@@ -935,6 +935,15 @@ describe("Access Service", () => {
         data: { registeredCount: { decrement: 3 } },
       });
     });
+
+    it("should not throw when no rows updated (logs warning instead)", async () => {
+      prismaMock.eventAccess.updateMany.mockResolvedValue({ count: 0 });
+
+      // Should resolve without throwing even when count === 0
+      await expect(
+        releaseAccessSpot("non-existent", 1),
+      ).resolves.toBeUndefined();
+    });
   });
 
   // ============================================================================
@@ -948,6 +957,9 @@ describe("Access Service", () => {
     });
 
     it("should return valid for empty selections", async () => {
+      // Empty selections: only 1 findMany call (for includedAccesses)
+      prismaMock.eventAccess.findMany.mockResolvedValueOnce([] as never);
+
       const result = await validateAccessSelections(eventId, [], {});
 
       expect(result.valid).toBe(true);
@@ -961,9 +973,10 @@ describe("Access Service", () => {
         active: true,
       });
 
-      prismaMock.eventAccess.findMany.mockResolvedValue([
-        existingAccess,
-      ] as never);
+      // Two findMany calls: selected items, then includedAccesses (no mandatory items)
+      prismaMock.eventAccess.findMany
+        .mockResolvedValueOnce([existingAccess] as never)
+        .mockResolvedValueOnce([] as never);
 
       const result = await validateAccessSelections(
         eventId,
@@ -1003,7 +1016,10 @@ describe("Access Service", () => {
         }),
       ];
 
-      prismaMock.eventAccess.findMany.mockResolvedValue(accessItems as never);
+      // Two findMany calls: selected items, then includedAccesses (no mandatory items)
+      prismaMock.eventAccess.findMany
+        .mockResolvedValueOnce(accessItems as never)
+        .mockResolvedValueOnce([] as never);
 
       const result = await validateAccessSelections(
         eventId,
@@ -1040,7 +1056,10 @@ describe("Access Service", () => {
         }),
       ];
 
-      prismaMock.eventAccess.findMany.mockResolvedValue(accessItems as never);
+      // Two findMany calls: selected items, then includedAccesses (no mandatory items)
+      prismaMock.eventAccess.findMany
+        .mockResolvedValueOnce(accessItems as never)
+        .mockResolvedValueOnce([] as never);
 
       const result = await validateAccessSelections(
         eventId,
@@ -1071,7 +1090,10 @@ describe("Access Service", () => {
         }),
       ];
 
-      prismaMock.eventAccess.findMany.mockResolvedValue(accessItems as never);
+      // Two findMany calls: selected items, then includedAccesses (no mandatory items)
+      prismaMock.eventAccess.findMany
+        .mockResolvedValueOnce(accessItems as never)
+        .mockResolvedValueOnce([] as never);
 
       // Selecting advanced without basic prerequisite
       const result = await validateAccessSelections(
@@ -1101,7 +1123,10 @@ describe("Access Service", () => {
         }),
       ];
 
-      prismaMock.eventAccess.findMany.mockResolvedValue(accessItems as never);
+      // Two findMany calls: selected items, then includedAccesses (no mandatory items)
+      prismaMock.eventAccess.findMany
+        .mockResolvedValueOnce(accessItems as never)
+        .mockResolvedValueOnce([] as never);
 
       // Selecting both basic and advanced
       const result = await validateAccessSelections(
@@ -1134,7 +1159,13 @@ describe("Access Service", () => {
         }),
       ];
 
-      prismaMock.eventAccess.findMany.mockResolvedValue(accessItems as never);
+      // Each validateAccessSelections call fires two findMany calls.
+      // Chain all 4 mocks upfront (2 calls × 2 findMany each).
+      prismaMock.eventAccess.findMany
+        .mockResolvedValueOnce(accessItems as never) // call 1: selected items
+        .mockResolvedValueOnce([] as never) // call 1: includedAccesses
+        .mockResolvedValueOnce(accessItems as never) // call 2: selected items
+        .mockResolvedValueOnce([] as never); // call 2: includedAccesses
 
       const resultNotYet = await validateAccessSelections(
         eventId,
@@ -1172,7 +1203,10 @@ describe("Access Service", () => {
         }),
       ];
 
-      prismaMock.eventAccess.findMany.mockResolvedValue(accessItems as never);
+      // Two findMany calls: selected items, then includedAccesses (no mandatory items)
+      prismaMock.eventAccess.findMany
+        .mockResolvedValueOnce(accessItems as never)
+        .mockResolvedValueOnce([] as never);
 
       // Non-doctor trying to select
       const result = await validateAccessSelections(
@@ -1197,7 +1231,10 @@ describe("Access Service", () => {
         }),
       ];
 
-      prismaMock.eventAccess.findMany.mockResolvedValue(accessItems as never);
+      // Two findMany calls: selected items, then includedAccesses (no mandatory items)
+      prismaMock.eventAccess.findMany
+        .mockResolvedValueOnce(accessItems as never)
+        .mockResolvedValueOnce([] as never);
 
       const result = await validateAccessSelections(
         eventId,
@@ -1221,7 +1258,10 @@ describe("Access Service", () => {
         }),
       ];
 
-      prismaMock.eventAccess.findMany.mockResolvedValue(accessItems as never);
+      // Two findMany calls: selected items, then includedAccesses (no mandatory items)
+      prismaMock.eventAccess.findMany
+        .mockResolvedValueOnce(accessItems as never)
+        .mockResolvedValueOnce([] as never);
 
       const result = await validateAccessSelections(
         eventId,
@@ -1248,7 +1288,12 @@ describe("Access Service", () => {
         }),
       ];
 
-      prismaMock.eventAccess.findMany.mockResolvedValue(accessItems as never);
+      // Two validateAccessSelections calls × 2 findMany each = 4 mocks
+      prismaMock.eventAccess.findMany
+        .mockResolvedValueOnce(accessItems as never) // call 1: selected items
+        .mockResolvedValueOnce([] as never) // call 1: includedAccesses
+        .mockResolvedValueOnce(accessItems as never) // call 2: selected items
+        .mockResolvedValueOnce([] as never); // call 2: includedAccesses
 
       // Only meets one condition
       const resultPartial = await validateAccessSelections(
@@ -1284,7 +1329,10 @@ describe("Access Service", () => {
         }),
       ];
 
-      prismaMock.eventAccess.findMany.mockResolvedValue(accessItems as never);
+      // Two findMany calls: selected items, then includedAccesses (no mandatory items)
+      prismaMock.eventAccess.findMany
+        .mockResolvedValueOnce(accessItems as never)
+        .mockResolvedValueOnce([] as never);
 
       // Meets one condition (OR should pass)
       const result = await validateAccessSelections(

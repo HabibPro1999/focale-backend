@@ -28,8 +28,6 @@ import { faker } from "@faker-js/faker";
 
 // Mock external module dependencies
 vi.mock("@events", () => ({
-  incrementRegisteredCount: vi.fn().mockResolvedValue(undefined),
-  decrementRegisteredCount: vi.fn().mockResolvedValue(undefined),
   incrementRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
   decrementRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
 }));
@@ -47,8 +45,8 @@ vi.mock("@pricing", () => ({
     basePrice: 300,
     appliedRules: [],
     calculatedBasePrice: 300,
-    extras: [],
-    extrasTotal: 0,
+    accessItems: [],
+    accessTotal: 0,
     subtotal: 300,
     sponsorships: [],
     sponsorshipTotal: 0,
