@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { AccessSelectionSchema } from "@access";
-export { PriceBreakdownSchema, type PriceBreakdown } from "@pricing";
 
 // ============================================================================
 // Enums
@@ -94,25 +93,23 @@ export type SelectPaymentMethodInput = z.infer<
 // Update Registration Schema (Admin)
 // ============================================================================
 
-export const UpdatePaymentSchema = z
-  .strictObject({
-    paymentStatus: PaymentStatusSchema,
-    paidAmount: z.number().int().min(0).optional(),
-    paymentMethod: PaymentMethodSchema.optional(),
-    paymentReference: z.string().max(200).optional(),
-    paymentProofUrl: z.string().url().optional(),
-  });
+export const UpdatePaymentSchema = z.strictObject({
+  paymentStatus: PaymentStatusSchema,
+  paidAmount: z.number().int().min(0).optional(),
+  paymentMethod: PaymentMethodSchema.optional(),
+  paymentReference: z.string().max(200).optional(),
+  paymentProofUrl: z.string().url().optional(),
+});
 
-export const UpdateRegistrationSchema = z
-  .strictObject({
-    paymentStatus: PaymentStatusSchema.optional(),
-    paidAmount: z.number().int().min(0).optional(),
-    paymentMethod: PaymentMethodSchema.optional(),
-    paymentReference: z.string().max(200).optional(),
-    paymentProofUrl: z.string().url().optional(),
-    note: z.string().max(2000).nullable().optional(),
-    role: RegistrationRoleSchema.optional(),
-  });
+export const UpdateRegistrationSchema = z.strictObject({
+  paymentStatus: PaymentStatusSchema.optional(),
+  paidAmount: z.number().int().min(0).optional(),
+  paymentMethod: PaymentMethodSchema.optional(),
+  paymentReference: z.string().max(200).optional(),
+  paymentProofUrl: z.string().url().optional(),
+  note: z.string().max(2000).nullable().optional(),
+  role: RegistrationRoleSchema.optional(),
+});
 
 // ============================================================================
 // Admin Create Registration Schema
@@ -147,36 +144,31 @@ export const AdminCreateRegistrationSchema = z
 // Query Schemas
 // ============================================================================
 
-export const ListRegistrationsQuerySchema = z
-  .strictObject({
-    page: z.coerce.number().int().min(1).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(20),
-    paymentStatus: PaymentStatusSchema.optional(),
-    search: z.string().max(200).optional(),
-  });
+export const ListRegistrationsQuerySchema = z.strictObject({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  paymentStatus: PaymentStatusSchema.optional(),
+  search: z.string().max(200).optional(),
+});
 
-export const DeleteRegistrationQuerySchema = z
-  .strictObject({
-    force: z
-      .enum(["true", "false"])
-      .default("false")
-      .transform((v) => v === "true"),
-  });
+export const DeleteRegistrationQuerySchema = z.strictObject({
+  force: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+});
 
-export const RegistrationIdParamSchema = z
-  .strictObject({
-    id: z.string().uuid(),
-  });
+export const RegistrationIdParamSchema = z.strictObject({
+  id: z.string().uuid(),
+});
 
-export const EventIdParamSchema = z
-  .strictObject({
-    eventId: z.string().uuid(),
-  });
+export const EventIdParamSchema = z.strictObject({
+  eventId: z.string().uuid(),
+});
 
-export const FormIdParamSchema = z
-  .strictObject({
-    formId: z.string().uuid(),
-  });
+export const FormIdParamSchema = z.strictObject({
+  formId: z.string().uuid(),
+});
 
 // ============================================================================
 // Public Edit Registration Schema (Self-Service)
@@ -206,10 +198,9 @@ export const PublicEditRegistrationSchema = z
     { message: "At least one field must be provided for update" },
   );
 
-export const RegistrationIdPublicParamSchema = z
-  .strictObject({
-    registrationId: z.string().uuid(),
-  });
+export const RegistrationIdPublicParamSchema = z.strictObject({
+  registrationId: z.string().uuid(),
+});
 
 // ============================================================================
 // Table Column Schemas (for dynamic table rendering)
@@ -278,11 +269,10 @@ export type RegistrationColumnsResponse = z.infer<
 // Audit Log Schemas
 // ============================================================================
 
-export const ListRegistrationAuditLogsQuerySchema = z
-  .strictObject({
-    page: z.coerce.number().int().min(1).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(50),
-  });
+export const ListRegistrationAuditLogsQuerySchema = z.strictObject({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
 
 export const AuditActionSchema = z.enum([
   "CREATE",
@@ -290,6 +280,7 @@ export const AuditActionSchema = z.enum([
   "DELETE",
   "PAYMENT_CONFIRMED",
   "PAYMENT_PROOF_UPLOADED",
+  "PAYMENT_METHOD_SELECTED",
 ]);
 
 export const RegistrationAuditLogSchema = z.object({
@@ -320,11 +311,10 @@ export type RegistrationAuditLog = z.infer<typeof RegistrationAuditLogSchema>;
 // Email Log Schemas
 // ============================================================================
 
-export const ListRegistrationEmailLogsQuerySchema = z
-  .strictObject({
-    page: z.coerce.number().int().min(1).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(50),
-  });
+export const ListRegistrationEmailLogsQuerySchema = z.strictObject({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
 
 export const EmailStatusSchema = z.enum([
   "QUEUED",
@@ -374,12 +364,11 @@ export type RegistrationEmailLog = z.infer<typeof RegistrationEmailLogSchema>;
 // Registrant Search Schemas (for Linked Account Sponsorship)
 // ============================================================================
 
-export const SearchRegistrantsQuerySchema = z
-  .strictObject({
-    query: z.string().min(1).max(200),
-    unpaidOnly: z.coerce.boolean().optional().default(false),
-    limit: z.coerce.number().int().min(1).max(50).default(10),
-  });
+export const SearchRegistrantsQuerySchema = z.strictObject({
+  query: z.string().min(1).max(200),
+  unpaidOnly: z.coerce.boolean().optional().default(false),
+  limit: z.coerce.number().int().min(1).max(50).default(10),
+});
 
 export const RegistrantSearchResultSchema = z.object({
   id: z.string().uuid(),

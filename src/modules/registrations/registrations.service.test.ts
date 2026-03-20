@@ -23,7 +23,7 @@ import {
 } from "./registrations.service.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
-import type { PriceBreakdown } from "./registrations.schema.js";
+import type { PriceBreakdown } from "@pricing";
 import { faker } from "@faker-js/faker";
 
 // Mock external module dependencies
@@ -473,7 +473,12 @@ describe("Registrations Service", () => {
     });
 
     it("should throw error when registration not found", async () => {
-      prismaMock.registration.findUnique.mockResolvedValue(null);
+      prismaMock.$transaction.mockImplementation(
+        async (callback: (tx: typeof prismaMock) => Promise<unknown>) => {
+          prismaMock.registration.findUnique.mockResolvedValue(null);
+          return callback(prismaMock);
+        },
+      );
 
       await expect(
         updateRegistration("non-existent", { note: "test" }),
@@ -591,7 +596,12 @@ describe("Registrations Service", () => {
           paymentStatus: "REFUNDED",
         });
 
-        prismaMock.registration.findUnique.mockResolvedValue(registration);
+        prismaMock.$transaction.mockImplementation(
+          async (callback: (tx: typeof prismaMock) => Promise<unknown>) => {
+            prismaMock.registration.findUnique.mockResolvedValue(registration);
+            return callback(prismaMock);
+          },
+        );
 
         await expect(
           confirmPayment(registration.id, { paymentStatus: "PAID" }),
@@ -611,7 +621,12 @@ describe("Registrations Service", () => {
           paymentStatus: "WAIVED",
         });
 
-        prismaMock.registration.findUnique.mockResolvedValue(registration);
+        prismaMock.$transaction.mockImplementation(
+          async (callback: (tx: typeof prismaMock) => Promise<unknown>) => {
+            prismaMock.registration.findUnique.mockResolvedValue(registration);
+            return callback(prismaMock);
+          },
+        );
 
         // WAIVED -> PAID is not allowed
         await expect(
@@ -671,7 +686,12 @@ describe("Registrations Service", () => {
     it("should throw error when trying to delete paid registration", async () => {
       const registration = createMockRegistration({ paymentStatus: "PAID" });
 
-      prismaMock.registration.findUnique.mockResolvedValue(registration);
+      prismaMock.$transaction.mockImplementation(
+        async (callback: (tx: typeof prismaMock) => Promise<unknown>) => {
+          prismaMock.registration.findUnique.mockResolvedValue(registration);
+          return callback(prismaMock);
+        },
+      );
 
       await expect(deleteRegistration(registration.id)).rejects.toThrow(
         AppError,
@@ -683,7 +703,12 @@ describe("Registrations Service", () => {
     });
 
     it("should throw error when registration not found", async () => {
-      prismaMock.registration.findUnique.mockResolvedValue(null);
+      prismaMock.$transaction.mockImplementation(
+        async (callback: (tx: typeof prismaMock) => Promise<unknown>) => {
+          prismaMock.registration.findUnique.mockResolvedValue(null);
+          return callback(prismaMock);
+        },
+      );
 
       await expect(deleteRegistration("non-existent")).rejects.toThrow(
         AppError,

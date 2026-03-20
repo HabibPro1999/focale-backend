@@ -9,5 +9,7 @@ export {
   type FormSchema,
 } from "./form-data-validator.js";
 
+export { type FormField } from "./forms.schema.js";
+
 export { formsRoutes } from "./forms.routes.js";
 export { formsPublicRoutes } from "./forms.public.routes.js";

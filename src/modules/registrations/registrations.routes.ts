@@ -41,7 +41,6 @@ import {
   type AdminCreateRegistrationInput,
 } from "./registrations.schema.js";
 import type { AppInstance } from "@shared/types/fastify.js";
-import { UserRole } from "@identity";
 
 // ============================================================================
 // Protected Routes (Admin)
@@ -280,13 +279,7 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
 
-      if (force && request.user!.role !== UserRole.CLIENT_ADMIN) {
-        throw app.httpErrors.forbidden(
-          "Only client admins can force-delete registrations",
-        );
-      }
-
-      await deleteRegistration(id, request.user!.id, force);
+      await deleteRegistration(id, request.user!.id, force, request.user!.role);
       return reply.status(204).send();
     },
   );
@@ -371,8 +364,8 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
 
       if (!registration.paymentProofUrl) {
         throw new AppError(
-      "No payment proof uploaded",
-      404,
+          "No payment proof uploaded",
+          404,
           ErrorCodes.NOT_FOUND,
         );
       }
