@@ -29,11 +29,9 @@ import type { AppInstance } from "@shared/types/fastify.js";
 import type { FastifyRequest } from "fastify";
 
 // Schema for edit token query parameter (optional — also accepted via X-Edit-Token header)
-const EditTokenQuerySchema = z
-  .object({
-    token: z.string().length(64).optional(),
-  })
-  .strict();
+const EditTokenQuerySchema = z.strictObject({
+  token: z.string().length(64).optional(),
+});
 
 /** Extract edit token from X-Edit-Token header or ?token= query string. Header preferred. */
 function extractEditToken(request: FastifyRequest): string {

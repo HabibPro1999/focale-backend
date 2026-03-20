@@ -808,5 +808,30 @@ describe("Forms Service", () => {
       });
       expect(result.valid).toBe(true);
     });
+
+    it("should treat field.required=true as required even when validation.required=false", () => {
+      const conflictingSchema = {
+        steps: [
+          {
+            id: "step-1",
+            title: "Step 1",
+            fields: [
+              {
+                id: "nickname",
+                type: "text" as const,
+                label: "Nickname",
+                required: true,
+                validation: { required: false },
+              },
+            ],
+          },
+        ],
+      };
+
+      const result = validateFormData(conflictingSchema, { nickname: "" });
+
+      expect(result.valid).toBe(false);
+      expect(result.errors.some((e) => e.fieldId === "nickname")).toBe(true);
+    });
   });
 });

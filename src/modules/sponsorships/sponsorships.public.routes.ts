@@ -71,18 +71,14 @@ export async function sponsorshipsPublicRoutes(
 // Public Routes by Slug (for pure-form frontend)
 // ============================================================================
 
-const EventSlugParamSchema = z
-  .object({
-    slug: z.string().min(1).max(100),
-  })
-  .strict();
+const EventSlugParamSchema = z.strictObject({
+  slug: z.string().min(1).max(100),
+});
 
-const RegistrantSearchQuerySchema = z
-  .object({
-    query: z.string().min(3).max(200),
-    unpaidOnly: z.string().optional(),
-  })
-  .strict();
+const RegistrantSearchQuerySchema = z.strictObject({
+  query: z.string().min(3).max(200),
+  unpaidOnly: z.string().optional(),
+});
 
 export async function sponsorshipsPublicBySlugRoutes(
   app: AppInstance,

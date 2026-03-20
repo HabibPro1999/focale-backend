@@ -28,11 +28,9 @@ import { prisma } from "@/database/client.js";
 import type { AppInstance } from "@shared/types/fastify.js";
 import { publicRateLimits } from "@core/plugins.js";
 
-const FormIdParamSchema = z
-  .object({
-    formId: z.string().uuid(),
-  })
-  .strict();
+const FormIdParamSchema = z.strictObject({
+  formId: z.string().uuid(),
+});
 
 // ============================================================================
 // Event Pricing Routes (Protected)

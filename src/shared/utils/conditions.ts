@@ -35,7 +35,7 @@ export function evaluateSingleCondition(
       );
     case "not_contains":
       return (
-        typeof value === "string" &&
+        typeof value !== "string" ||
         !value.includes(String(condition.value ?? ""))
       );
     case "greater_than":

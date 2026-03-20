@@ -7,6 +7,7 @@ import {
   type PaginatedResult,
 } from "@shared/utils/pagination.js";
 import { logger } from "@shared/utils/logger.js";
+import { auditLog } from "@shared/utils/audit.js";
 import {
   generateUniqueCode,
   calculateApplicableAmount,
@@ -21,6 +22,8 @@ import type {
   CreateSponsorshipBatchInput,
   UpdateSponsorshipInput,
   ListSponsorshipsQuery,
+  BeneficiaryInput,
+  LinkedBeneficiaryInput,
 } from "./sponsorships.schema.js";
 import type {
   Prisma,
@@ -110,30 +113,139 @@ export interface CreateBatchResult {
   count: number;
 }
 
-// ============================================================================
-// Create Sponsorship Batch (Public form submission)
-// ============================================================================
+type EventForBatch = {
+  id: string;
+  name: string;
+  slug: string;
+  status: string;
+  startDate: Date;
+  location: string | null;
+  client: { name: string };
+};
 
-/**
- * Create a sponsorship batch with N sponsorships.
- * Supports two modes:
- * - CODE mode: beneficiaries array, creates PENDING sponsorships with codes
- * - LINKED_ACCOUNT mode: linkedBeneficiaries array, creates USED sponsorships auto-linked to registrations
- */
-export async function createSponsorshipBatch(
+type PricingForBatch = {
+  basePrice: number;
+  currency: string;
+};
+
+type AccessItemForBatch = {
+  id: string;
+  name: string;
+  price: number;
+  type: string;
+  groupLabel: string | null;
+  startsAt: Date | null;
+  endsAt: Date | null;
+};
+
+type LinkedRegistrationForBatch = {
+  id: string;
+  email: string;
+  firstName: string | null;
+  lastName: string | null;
+  phone: string | null;
+  totalAmount: number;
+  sponsorshipAmount: number;
+  baseAmount: number;
+  accessTypeIds: string[];
+  priceBreakdown: unknown;
+  linkBaseUrl: string | null;
+  editToken: string | null;
+};
+
+type BatchValidationContext = {
+  event: EventForBatch;
+  formId: string;
+  pricing: PricingForBatch | null;
+  currency: string;
+  accessItems: AccessItemForBatch[];
+  accessPriceMap: Map<string, number>;
+  isLinkedMode: boolean;
+  beneficiaries: BeneficiaryInput[];
+  linkedBeneficiaries: LinkedBeneficiaryInput[];
+  registrations: Map<string, LinkedRegistrationForBatch>;
+};
+
+type CreatedBatchSponsorship = Sponsorship & {
+  linkedRegistrationId?: string;
+  autoApproved?: boolean;
+  applicableAmount?: number;
+};
+
+type LinkedEmailEntry = {
+  amountApplied: number;
+  isFullySponsored: boolean;
+  sponsorship: {
+    code: string;
+    beneficiaryName: string;
+    coversBasePrice: boolean;
+    coveredAccessIds: string[];
+    totalAmount: number;
+  };
+  registration: LinkedRegistrationForBatch;
+};
+
+type BatchTransactionResult = {
+  batchId: string;
+  count: number;
+  autoApprove: boolean;
+  batch: {
+    labName: string;
+    contactName: string;
+    email: string;
+    phone: string | null;
+  };
+  sponsorships: CreatedBatchSponsorship[];
+  linkedEmailEntries: LinkedEmailEntry[];
+};
+
+type TxClient = Omit<
+  typeof prisma,
+  "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends"
+>;
+
+type UnlinkUsageRef = {
+  registrationId: string | null;
+};
+
+function calculateCoveredAccessTotal(
+  coveredAccessIds: string[],
+  accessPriceMap: Map<string, number>,
+): number {
+  return coveredAccessIds.reduce(
+    (sum, accessId) => sum + (accessPriceMap.get(accessId) ?? 0),
+    0,
+  );
+}
+
+async function unlinkSponsorshipFromAllRegistrations(
+  tx: TxClient,
+  sponsorshipId: string,
+  usages: UnlinkUsageRef[],
+  performedBy?: string,
+): Promise<void> {
+  for (const usage of usages) {
+    if (!usage.registrationId) {
+      continue;
+    }
+
+    await unlinkSponsorshipFromRegistrationInternal(
+      tx,
+      sponsorshipId,
+      usage.registrationId,
+      performedBy,
+    );
+  }
+}
+
+async function validateBatchInput(
   eventId: string,
   formId: string,
   input: CreateSponsorshipBatchInput,
-): Promise<CreateBatchResult> {
-  const { sponsor, customFields, beneficiaries, linkedBeneficiaries } = input;
+): Promise<BatchValidationContext> {
+  const { beneficiaries = [], linkedBeneficiaries = [] } = input;
+  const isLinkedMode = linkedBeneficiaries.length > 0;
 
-  // Determine mode
-  const isLinkedMode = (linkedBeneficiaries?.length ?? 0) > 0;
-  const beneficiaryList = isLinkedMode
-    ? linkedBeneficiaries!
-    : (beneficiaries ?? []);
-
-  // Verify event exists and get details for email context
   const event = await prisma.event.findUnique({
     where: { id: eventId },
     select: {
@@ -148,12 +260,9 @@ export async function createSponsorshipBatch(
   });
 
   if (!event) {
-    throw new AppError(
-      "Event not found",
-      404, ErrorCodes.NOT_FOUND);
+    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
   }
 
-  // Verify form exists and belongs to event
   const form = await prisma.form.findFirst({
     where: { id: formId, eventId, type: "SPONSOR" },
     select: { id: true },
@@ -167,14 +276,12 @@ export async function createSponsorshipBatch(
     );
   }
 
-  // Get pricing for currency and base price
   const pricing = await prisma.eventPricing.findUnique({
     where: { eventId },
     select: { basePrice: true, currency: true },
   });
-  const currency = pricing?.currency ?? "TND";
 
-  // Validate all covered access IDs exist and belong to event
+  const beneficiaryList = isLinkedMode ? linkedBeneficiaries : beneficiaries;
   const allAccessIds = new Set<string>();
   for (const beneficiary of beneficiaryList) {
     for (const accessId of beneficiary.coveredAccessIds) {
@@ -182,16 +289,7 @@ export async function createSponsorshipBatch(
     }
   }
 
-  // Get access items for validation and email context
-  let accessItems: Array<{
-    id: string;
-    name: string;
-    price: number;
-    type: string;
-    groupLabel: string | null;
-    startsAt: Date | null;
-    endsAt: Date | null;
-  }> = [];
+  let accessItems: AccessItemForBatch[] = [];
   if (allAccessIds.size > 0) {
     accessItems = await prisma.eventAccess.findMany({
       where: {
@@ -217,65 +315,49 @@ export async function createSponsorshipBatch(
 
     if (invalidIds.length > 0) {
       throw new AppError(
-      `Invalid access items: ${invalidIds.join(", ")}`,
-      400,
+        `Invalid access items: ${invalidIds.join(", ")}`,
+        400,
         ErrorCodes.BAD_REQUEST,
         { invalidAccessIds: invalidIds },
       );
     }
 
-    // Validate time overlaps within each beneficiary's covered access items
     const overlapErrors: string[] = [];
     beneficiaryList.forEach((beneficiary, index) => {
-      if (beneficiary.coveredAccessIds.length >= 2) {
-        const errors = validateCoveredAccessTimeOverlap(
-          beneficiary.coveredAccessIds,
-          accessItems.map((item) => ({
-            id: item.id,
-            name: item.name,
-            type: item.type,
-            groupLabel: item.groupLabel,
-            startsAt: item.startsAt,
-            endsAt: item.endsAt,
-          })),
-        );
-        for (const error of errors) {
-          overlapErrors.push(`Beneficiary #${index + 1}: ${error}`);
-        }
+      if (beneficiary.coveredAccessIds.length < 2) {
+        return;
+      }
+
+      const errors = validateCoveredAccessTimeOverlap(
+        beneficiary.coveredAccessIds,
+        accessItems.map((item) => ({
+          id: item.id,
+          name: item.name,
+          type: item.type,
+          groupLabel: item.groupLabel,
+          startsAt: item.startsAt,
+          endsAt: item.endsAt,
+        })),
+      );
+
+      for (const error of errors) {
+        overlapErrors.push(`Beneficiary #${index + 1}: ${error}`);
       }
     });
 
     if (overlapErrors.length > 0) {
       throw new AppError(
-      `Time conflicts in covered access items: ${overlapErrors.join("; ")}`,
-      400,
+        `Time conflicts in covered access items: ${overlapErrors.join("; ")}`,
+        400,
         ErrorCodes.BAD_REQUEST,
         { timeConflicts: overlapErrors },
       );
     }
   }
 
-  // For LINKED_ACCOUNT mode: validate registrations
-  const registrations: Map<
-    string,
-    {
-      id: string;
-      email: string;
-      firstName: string | null;
-      lastName: string | null;
-      phone: string | null;
-      totalAmount: number;
-      sponsorshipAmount: number;
-      baseAmount: number;
-      accessTypeIds: string[];
-      priceBreakdown: unknown;
-      linkBaseUrl: string | null;
-      editToken: string | null;
-    }
-  > = new Map();
-
+  const registrations = new Map<string, LinkedRegistrationForBatch>();
   if (isLinkedMode) {
-    const registrationIds = linkedBeneficiaries!.map((b) => b.registrationId);
+    const registrationIds = linkedBeneficiaries.map((b) => b.registrationId);
     const foundRegistrations = await prisma.registration.findMany({
       where: {
         id: { in: registrationIds },
@@ -297,244 +379,235 @@ export async function createSponsorshipBatch(
       },
     });
 
-    // Check all registrations were found
     const foundIds = new Set(foundRegistrations.map((r) => r.id));
     const missingIds = registrationIds.filter((id) => !foundIds.has(id));
     if (missingIds.length > 0) {
       throw new AppError(
-      `Registrations not found: ${missingIds.join(", ")}`,
-      404,
+        `Registrations not found: ${missingIds.join(", ")}`,
+        404,
         ErrorCodes.NOT_FOUND,
         { missingRegistrationIds: missingIds },
       );
     }
 
-    // Build map for quick lookup
-    for (const reg of foundRegistrations) {
-      registrations.set(reg.id, reg);
+    for (const registration of foundRegistrations) {
+      registrations.set(registration.id, registration);
     }
   }
 
-  // Create batch and sponsorships in a transaction
-  const result = await prisma.$transaction(async (tx) => {
-    // Create the batch
-    const batch = await tx.sponsorshipBatch.create({
+  return {
+    event,
+    formId: form.id,
+    pricing,
+    currency: pricing?.currency ?? "TND",
+    accessItems,
+    accessPriceMap: new Map(accessItems.map((item) => [item.id, item.price])),
+    isLinkedMode,
+    beneficiaries,
+    linkedBeneficiaries,
+    registrations,
+  };
+}
+
+async function createCodeModeSponsorships(
+  tx: TxClient,
+  eventId: string,
+  batchId: string,
+  beneficiaries: BeneficiaryInput[],
+  basePrice: number,
+  accessPriceMap: Map<string, number>,
+): Promise<CreatedBatchSponsorship[]> {
+  const created: CreatedBatchSponsorship[] = [];
+
+  for (const beneficiary of beneficiaries) {
+    const code = await generateUniqueCode(tx);
+    const totalAmount =
+      (beneficiary.coversBasePrice ? basePrice : 0) +
+      calculateCoveredAccessTotal(beneficiary.coveredAccessIds, accessPriceMap);
+
+    const sponsorship = await tx.sponsorship.create({
       data: {
+        batchId,
         eventId,
-        formId,
-        labName: sponsor.labName,
-        contactName: sponsor.contactName,
-        email: sponsor.email,
-        phone: sponsor.phone ?? null,
-        formData: {
-          sponsor,
-          customFields: customFields ?? {},
-        } as Prisma.InputJsonValue,
+        code,
+        status: "PENDING",
+        beneficiaryName: beneficiary.name,
+        beneficiaryEmail: beneficiary.email,
+        beneficiaryPhone: beneficiary.phone ?? null,
+        beneficiaryAddress: beneficiary.address ?? null,
+        coversBasePrice: beneficiary.coversBasePrice,
+        coveredAccessIds: beneficiary.coveredAccessIds,
+        totalAmount,
       },
     });
 
-    // Read form settings for autoApproveSponsorship
-    const formWithSettings = await tx.form.findUnique({
-      where: { id: formId },
-      select: { schema: true },
-    });
-    const sponsorshipSettings = (
-      formWithSettings?.schema as Record<string, unknown> | null
-    )?.sponsorshipSettings as Record<string, unknown> | undefined;
-    const autoApprove =
-      (sponsorshipSettings?.autoApproveSponsorship as boolean | undefined) ??
-      true;
+    created.push(sponsorship);
+  }
 
-    // Create sponsorships
-    const createdSponsorships: Array<
-      Sponsorship & {
-        linkedRegistrationId?: string;
-        autoApproved?: boolean;
-        applicableAmount?: number;
-      }
-    > = [];
+  return created;
+}
 
-    if (isLinkedMode) {
-      // LINKED_ACCOUNT mode
-      for (const linked of linkedBeneficiaries!) {
-        const registration = registrations.get(linked.registrationId)!;
+async function createLinkedModeSponsorships(
+  tx: TxClient,
+  eventId: string,
+  batchId: string,
+  linkedBeneficiaries: LinkedBeneficiaryInput[],
+  registrations: Map<string, LinkedRegistrationForBatch>,
+  autoApprove: boolean,
+  accessPriceMap: Map<string, number>,
+): Promise<{
+  created: CreatedBatchSponsorship[];
+  linkedEmailEntries: LinkedEmailEntry[];
+}> {
+  const created: CreatedBatchSponsorship[] = [];
+  const linkedEmailEntries: LinkedEmailEntry[] = [];
 
-        // Generate unique code
-        const code = await generateUniqueCode(tx);
-
-        // Use registrant's actual base price (after conditional pricing rules)
-        let totalAmount = 0;
-        if (linked.coversBasePrice) {
-          totalAmount += registration.baseAmount;
-        }
-        if (linked.coveredAccessIds.length > 0) {
-          const coveredItems = await tx.eventAccess.findMany({
-            where: {
-              id: { in: linked.coveredAccessIds },
-              eventId,
-              active: true,
-            },
-            select: { price: true },
-          });
-          totalAmount += coveredItems.reduce(
-            (sum: number, item: { price: number }) => sum + item.price,
-            0,
-          );
-        }
-
-        if (autoApprove) {
-          // Auto-approve: create USED sponsorship and immediately link to registration
-          const sponsorship = await tx.sponsorship.create({
-            data: {
-              batchId: batch.id,
-              eventId,
-              code,
-              status: "USED",
-              beneficiaryName: linked.name,
-              beneficiaryEmail: linked.email,
-              beneficiaryPhone: null,
-              beneficiaryAddress: null,
-              coversBasePrice: linked.coversBasePrice,
-              coveredAccessIds: linked.coveredAccessIds,
-              totalAmount,
-            },
-          });
-
-          // Calculate applicable amount
-          const priceBreakdown =
-            registration.priceBreakdown as RegistrationForCalculation["priceBreakdown"];
-          const applicableAmount = calculateApplicableAmount(
-            {
-              coversBasePrice: linked.coversBasePrice,
-              coveredAccessIds: linked.coveredAccessIds,
-              totalAmount,
-            },
-            {
-              totalAmount: registration.totalAmount,
-              baseAmount: registration.baseAmount,
-              accessTypeIds: registration.accessTypeIds,
-              priceBreakdown,
-            },
-          );
-
-          // Create SponsorshipUsage (the link)
-          await tx.sponsorshipUsage.create({
-            data: {
-              sponsorshipId: sponsorship.id,
-              registrationId: linked.registrationId,
-              amountApplied: applicableAmount,
-              appliedBy: "SYSTEM",
-            },
-          });
-
-          // Update registration's sponsorshipAmount and paymentMethod
-          await tx.registration.update({
-            where: { id: linked.registrationId },
-            data: {
-              sponsorshipAmount: { increment: applicableAmount },
-              paymentMethod: "LAB_SPONSORSHIP",
-            },
-          });
-
-          createdSponsorships.push({
-            ...sponsorship,
-            linkedRegistrationId: linked.registrationId,
-            autoApproved: true,
-            applicableAmount,
-          });
-        } else {
-          // Pending approval: create PENDING sponsorship with targetRegistrationId
-          const sponsorship = await tx.sponsorship.create({
-            data: {
-              batchId: batch.id,
-              eventId,
-              code,
-              status: "PENDING",
-              beneficiaryName: linked.name,
-              beneficiaryEmail: linked.email,
-              beneficiaryPhone: null,
-              beneficiaryAddress: null,
-              coversBasePrice: linked.coversBasePrice,
-              coveredAccessIds: linked.coveredAccessIds,
-              totalAmount,
-              targetRegistrationId: linked.registrationId,
-            },
-          });
-
-          createdSponsorships.push({
-            ...sponsorship,
-            linkedRegistrationId: linked.registrationId,
-            autoApproved: false,
-          });
-        }
-      }
-    } else {
-      // CODE mode (existing behavior)
-      for (const beneficiary of beneficiaries!) {
-        // Generate unique code
-        const code = await generateUniqueCode(tx);
-
-        // Calculate total amount
-        let totalAmount = 0;
-        if (beneficiary.coversBasePrice) {
-          const pricing = await tx.eventPricing.findUnique({
-            where: { eventId },
-            select: { basePrice: true },
-          });
-          totalAmount += pricing?.basePrice ?? 0;
-        }
-        if (beneficiary.coveredAccessIds.length > 0) {
-          const accessItems = await tx.eventAccess.findMany({
-            where: {
-              id: { in: beneficiary.coveredAccessIds },
-              eventId,
-              active: true,
-            },
-            select: { price: true },
-          });
-          totalAmount += accessItems.reduce(
-            (sum: number, item: { price: number }) => sum + item.price,
-            0,
-          );
-        }
-
-        const sponsorship = await tx.sponsorship.create({
-          data: {
-            batchId: batch.id,
-            eventId,
-            code,
-            status: "PENDING",
-            beneficiaryName: beneficiary.name,
-            beneficiaryEmail: beneficiary.email,
-            beneficiaryPhone: beneficiary.phone ?? null,
-            beneficiaryAddress: beneficiary.address ?? null,
-            coversBasePrice: beneficiary.coversBasePrice,
-            coveredAccessIds: beneficiary.coveredAccessIds,
-            totalAmount,
-          },
-        });
-
-        createdSponsorships.push(sponsorship);
-      }
+  for (const linked of linkedBeneficiaries) {
+    const registration = registrations.get(linked.registrationId);
+    if (!registration) {
+      throw new AppError(
+        "Registration not found",
+        404,
+        ErrorCodes.REGISTRATION_NOT_FOUND,
+      );
     }
 
-    return {
-      batchId: batch.id,
-      count: createdSponsorships.length,
-      autoApprove,
-      batch: {
-        labName: sponsor.labName,
-        contactName: sponsor.contactName,
-        email: sponsor.email,
-        phone: sponsor.phone ?? null,
-      },
-      sponsorships: createdSponsorships,
-    };
-  });
+    const code = await generateUniqueCode(tx);
+    const totalAmount =
+      (linked.coversBasePrice ? registration.baseAmount : 0) +
+      calculateCoveredAccessTotal(linked.coveredAccessIds, accessPriceMap);
 
-  // Queue emails (outside transaction for reliability)
+    if (!autoApprove) {
+      const sponsorship = await tx.sponsorship.create({
+        data: {
+          batchId,
+          eventId,
+          code,
+          status: "PENDING",
+          beneficiaryName: linked.name,
+          beneficiaryEmail: linked.email,
+          beneficiaryPhone: null,
+          beneficiaryAddress: null,
+          coversBasePrice: linked.coversBasePrice,
+          coveredAccessIds: linked.coveredAccessIds,
+          totalAmount,
+          targetRegistrationId: linked.registrationId,
+        },
+      });
+
+      created.push({
+        ...sponsorship,
+        linkedRegistrationId: linked.registrationId,
+        autoApproved: false,
+      });
+      continue;
+    }
+
+    const sponsorship = await tx.sponsorship.create({
+      data: {
+        batchId,
+        eventId,
+        code,
+        status: "USED",
+        beneficiaryName: linked.name,
+        beneficiaryEmail: linked.email,
+        beneficiaryPhone: null,
+        beneficiaryAddress: null,
+        coversBasePrice: linked.coversBasePrice,
+        coveredAccessIds: linked.coveredAccessIds,
+        totalAmount,
+      },
+    });
+
+    const priceBreakdown =
+      registration.priceBreakdown as RegistrationForCalculation["priceBreakdown"];
+    const applicableAmount = calculateApplicableAmount(
+      {
+        coversBasePrice: linked.coversBasePrice,
+        coveredAccessIds: linked.coveredAccessIds,
+        totalAmount,
+      },
+      {
+        totalAmount: registration.totalAmount,
+        baseAmount: registration.baseAmount,
+        accessTypeIds: registration.accessTypeIds,
+        priceBreakdown,
+      },
+    );
+
+    await tx.sponsorshipUsage.create({
+      data: {
+        sponsorshipId: sponsorship.id,
+        registrationId: linked.registrationId,
+        amountApplied: applicableAmount,
+        appliedBy: "SYSTEM",
+      },
+    });
+
+    const updatedSponsorshipAmount =
+      registration.sponsorshipAmount + applicableAmount;
+    const isFullySponsored =
+      updatedSponsorshipAmount >= registration.totalAmount;
+
+    await tx.registration.update({
+      where: { id: linked.registrationId },
+      data: {
+        sponsorshipAmount: updatedSponsorshipAmount,
+        paymentMethod: "LAB_SPONSORSHIP",
+        ...(isFullySponsored
+          ? { paymentStatus: "PAID", paidAt: new Date() }
+          : {}),
+      },
+    });
+
+    registration.sponsorshipAmount = updatedSponsorshipAmount;
+
+    created.push({
+      ...sponsorship,
+      linkedRegistrationId: linked.registrationId,
+      autoApproved: true,
+      applicableAmount,
+    });
+
+    linkedEmailEntries.push({
+      amountApplied: applicableAmount,
+      isFullySponsored,
+      sponsorship: {
+        code: sponsorship.code,
+        beneficiaryName: sponsorship.beneficiaryName,
+        coversBasePrice: sponsorship.coversBasePrice,
+        coveredAccessIds: sponsorship.coveredAccessIds,
+        totalAmount: sponsorship.totalAmount,
+      },
+      registration: {
+        ...registration,
+      },
+    });
+  }
+
+  return { created, linkedEmailEntries };
+}
+
+async function queueBatchEmails(input: {
+  eventId: string;
+  event: EventForBatch;
+  pricing: PricingForBatch | null;
+  currency: string;
+  accessItems: AccessItemForBatch[];
+  isLinkedMode: boolean;
+  result: BatchTransactionResult;
+}): Promise<void> {
+  const {
+    eventId,
+    event,
+    pricing,
+    currency,
+    accessItems,
+    isLinkedMode,
+    result,
+  } = input;
+
   try {
-    // 1. Always send batch confirmation to lab
     const batchContext = buildBatchEmailContext({
       batch: result.batch,
       sponsorships: result.sponsorships.map((s) => ({
@@ -567,135 +640,198 @@ export async function createSponsorshipBatch(
       );
     }
 
-    // 2. For LINKED_ACCOUNT mode with auto-approve: Send notification to each doctor
-    if (isLinkedMode && result.autoApprove) {
-      for (const sponsorship of result.sponsorships) {
-        const registration = registrations.get(
-          sponsorship.linkedRegistrationId!,
-        )!;
+    if (!isLinkedMode || !result.autoApprove) {
+      return;
+    }
 
-        // Update sponsorshipAmount with the new total (after increment)
-        const updatedReg = await prisma.registration.findUnique({
-          where: { id: registration.id },
-          select: {
-            sponsorshipAmount: true,
-            totalAmount: true,
-            email: true,
-            firstName: true,
-            lastName: true,
+    for (const entry of result.linkedEmailEntries) {
+      const context = buildLinkedSponsorshipContext({
+        amountApplied: entry.amountApplied,
+        sponsorship: {
+          code: entry.sponsorship.code,
+          beneficiaryName: entry.sponsorship.beneficiaryName,
+          coversBasePrice: entry.sponsorship.coversBasePrice,
+          coveredAccessIds: entry.sponsorship.coveredAccessIds,
+          totalAmount: entry.sponsorship.totalAmount,
+          batch: {
+            labName: result.batch.labName,
+            contactName: result.batch.contactName,
+            email: result.batch.email,
           },
+        },
+        registration: {
+          ...entry.registration,
+          phone: entry.registration.phone ?? null,
+        },
+        event: {
+          name: event.name,
+          slug: event.slug,
+          startDate: event.startDate,
+          location: event.location,
+          client: event.client,
+        },
+        pricing: pricing ? { basePrice: pricing.basePrice } : null,
+        accessItems,
+        currency,
+      });
+
+      const linkedEmailQueued = await queueSponsorshipEmail(
+        "SPONSORSHIP_LINKED",
+        eventId,
+        {
+          recipientEmail: entry.registration.email,
+          recipientName:
+            entry.registration.firstName || entry.sponsorship.beneficiaryName,
+          context,
+          registrationId: entry.registration.id,
+        },
+      );
+      if (!linkedEmailQueued) {
+        logger.warn(
+          {
+            trigger: "SPONSORSHIP_LINKED",
+            eventId,
+            registrationId: entry.registration.id,
+          },
+          "No email template configured - doctor will not receive sponsorship notification",
+        );
+      }
+
+      if (entry.isFullySponsored) {
+        await queueTriggeredEmail("PAYMENT_CONFIRMED", eventId, {
+          id: entry.registration.id,
+          email: entry.registration.email,
+          firstName: entry.registration.firstName,
+          lastName: entry.registration.lastName,
         });
-
-        const context = buildLinkedSponsorshipContext({
-          amountApplied: sponsorship.applicableAmount!,
-          sponsorship: {
-            code: sponsorship.code,
-            beneficiaryName: sponsorship.beneficiaryName,
-            coversBasePrice: sponsorship.coversBasePrice,
-            coveredAccessIds: sponsorship.coveredAccessIds,
-            totalAmount: sponsorship.totalAmount,
-            batch: {
-              labName: result.batch.labName,
-              contactName: result.batch.contactName,
-              email: result.batch.email,
-            },
-          },
-          registration: {
-            ...registration,
-            phone: registration.phone ?? null,
-            sponsorshipAmount:
-              updatedReg?.sponsorshipAmount ?? registration.sponsorshipAmount,
-          },
-          event: {
-            name: event.name,
-            slug: event.slug,
-            startDate: event.startDate,
-            location: event.location,
-            client: event.client,
-          },
-          pricing: pricing ? { basePrice: pricing.basePrice } : null,
-          accessItems,
-          currency,
-        });
-
-        const linkedEmailQueued = await queueSponsorshipEmail(
-          "SPONSORSHIP_LINKED",
+      } else if (entry.registration.sponsorshipAmount > 0) {
+        const partialQueued = await queueSponsorshipEmail(
+          "SPONSORSHIP_PARTIAL",
           eventId,
           {
-            recipientEmail: registration.email,
+            recipientEmail: entry.registration.email,
             recipientName:
-              registration.firstName || sponsorship.beneficiaryName,
+              entry.registration.firstName || entry.sponsorship.beneficiaryName,
             context,
-            registrationId: registration.id,
+            registrationId: entry.registration.id,
           },
         );
-        if (!linkedEmailQueued) {
+        if (!partialQueued) {
           logger.warn(
             {
-              trigger: "SPONSORSHIP_LINKED",
+              trigger: "SPONSORSHIP_PARTIAL",
               eventId,
-              registrationId: registration.id,
+              registrationId: entry.registration.id,
             },
-            "No email template configured - doctor will not receive sponsorship notification",
+            "No email template configured - doctor will not receive partial sponsorship notification",
           );
-        }
-
-        // Check sponsorship coverage and queue PAYMENT_CONFIRMED or SPONSORSHIP_PARTIAL
-        const currentSponsorshipAmount =
-          updatedReg?.sponsorshipAmount ?? registration.sponsorshipAmount;
-        const currentTotalAmount =
-          updatedReg?.totalAmount ?? registration.totalAmount;
-
-        if (currentSponsorshipAmount >= currentTotalAmount) {
-          // Fully sponsored: mark as PAID and queue PAYMENT_CONFIRMED
-          await prisma.registration.update({
-            where: { id: registration.id },
-            data: {
-              paymentStatus: "PAID",
-              paidAt: new Date(),
-              paymentMethod: "LAB_SPONSORSHIP",
-            },
-          });
-
-          await queueTriggeredEmail("PAYMENT_CONFIRMED", eventId, {
-            id: registration.id,
-            email: updatedReg?.email ?? registration.email,
-            firstName: updatedReg?.firstName ?? registration.firstName,
-            lastName: updatedReg?.lastName ?? registration.lastName,
-          });
-        } else if (currentSponsorshipAmount > 0) {
-          // Partially sponsored: queue SPONSORSHIP_PARTIAL
-          const partialQueued = await queueSponsorshipEmail(
-            "SPONSORSHIP_PARTIAL",
-            eventId,
-            {
-              recipientEmail: registration.email,
-              recipientName:
-                registration.firstName || sponsorship.beneficiaryName,
-              context,
-              registrationId: registration.id,
-            },
-          );
-          if (!partialQueued) {
-            logger.warn(
-              {
-                trigger: "SPONSORSHIP_PARTIAL",
-                eventId,
-                registrationId: registration.id,
-              },
-              "No email template configured - doctor will not receive partial sponsorship notification",
-            );
-          }
         }
       }
     }
   } catch (emailError) {
-    // Log error but don't fail the batch creation
     logger.error(
       { error: emailError, batchId: result.batchId },
       "Failed to queue sponsorship emails",
     );
   }
+}
+
+// ============================================================================
+// Create Sponsorship Batch (Public form submission)
+// ============================================================================
+
+/**
+ * Create a sponsorship batch with N sponsorships.
+ * Supports two modes:
+ * - CODE mode: beneficiaries array, creates PENDING sponsorships with codes
+ * - LINKED_ACCOUNT mode: linkedBeneficiaries array, creates USED sponsorships auto-linked to registrations
+ */
+export async function createSponsorshipBatch(
+  eventId: string,
+  formId: string,
+  input: CreateSponsorshipBatchInput,
+): Promise<CreateBatchResult> {
+  const { sponsor, customFields } = input;
+
+  const context = await validateBatchInput(eventId, formId, input);
+
+  const result = await prisma.$transaction(async (tx) => {
+    const batch = await tx.sponsorshipBatch.create({
+      data: {
+        eventId,
+        formId: context.formId,
+        labName: sponsor.labName,
+        contactName: sponsor.contactName,
+        email: sponsor.email,
+        phone: sponsor.phone ?? null,
+        formData: {
+          sponsor,
+          customFields: customFields ?? {},
+        } as Prisma.InputJsonValue,
+      },
+    });
+
+    const formWithSettings = await tx.form.findUnique({
+      where: { id: context.formId },
+      select: { schema: true },
+    });
+    const sponsorshipSettings = (
+      formWithSettings?.schema as Record<string, unknown> | null
+    )?.sponsorshipSettings as Record<string, unknown> | undefined;
+    const autoApprove =
+      (sponsorshipSettings?.autoApproveSponsorship as boolean | undefined) ??
+      true;
+
+    let createdSponsorships: CreatedBatchSponsorship[] = [];
+    let linkedEmailEntries: LinkedEmailEntry[] = [];
+
+    if (context.isLinkedMode) {
+      const linkedResult = await createLinkedModeSponsorships(
+        tx,
+        eventId,
+        batch.id,
+        context.linkedBeneficiaries,
+        context.registrations,
+        autoApprove,
+        context.accessPriceMap,
+      );
+      createdSponsorships = linkedResult.created;
+      linkedEmailEntries = linkedResult.linkedEmailEntries;
+    } else {
+      createdSponsorships = await createCodeModeSponsorships(
+        tx,
+        eventId,
+        batch.id,
+        context.beneficiaries,
+        context.pricing?.basePrice ?? 0,
+        context.accessPriceMap,
+      );
+    }
+
+    return {
+      batchId: batch.id,
+      count: createdSponsorships.length,
+      autoApprove,
+      batch: {
+        labName: sponsor.labName,
+        contactName: sponsor.contactName,
+        email: sponsor.email,
+        phone: sponsor.phone ?? null,
+      },
+      sponsorships: createdSponsorships,
+      linkedEmailEntries,
+    } satisfies BatchTransactionResult;
+  });
+
+  await queueBatchEmails({
+    eventId,
+    event: context.event,
+    pricing: context.pricing,
+    currency: context.currency,
+    accessItems: context.accessItems,
+    isLinkedMode: context.isLinkedMode,
+    result,
+  });
 
   return {
     batchId: result.batchId,
@@ -783,6 +919,9 @@ export async function getSponsorshipById(id: string) {
   const sponsorship = await prisma.sponsorship.findUnique({
     where: { id },
     include: {
+      event: {
+        select: { clientId: true },
+      },
       batch: true,
       usages: {
         include: {
@@ -853,48 +992,38 @@ export async function getSponsorshipByCode(
 export async function updateSponsorship(
   id: string,
   input: UpdateSponsorshipInput,
+  performedBy?: string,
 ): Promise<SponsorshipWithUsages> {
-  const sponsorship = await prisma.sponsorship.findUnique({
-    where: { id },
-    include: { usages: true },
-  });
-
-  if (!sponsorship) {
-    throw new AppError(
-      "Sponsorship not found",
-      404,
-      ErrorCodes.NOT_FOUND,
-    );
-  }
-
-  // If cancelling, handle unlinking first
   if (input.status === "CANCELLED") {
-    return cancelSponsorship(id);
+    return cancelSponsorship(id, performedBy);
   }
 
-  const updateData: Prisma.SponsorshipUpdateInput = {};
+  await prisma.$transaction(async (tx) => {
+    const sponsorship = await tx.sponsorship.findUnique({
+      where: { id },
+      include: { usages: true },
+    });
 
-  if (input.beneficiaryName !== undefined)
-    updateData.beneficiaryName = input.beneficiaryName;
-  if (input.beneficiaryEmail !== undefined)
-    updateData.beneficiaryEmail = input.beneficiaryEmail;
-  if (input.beneficiaryPhone !== undefined)
-    updateData.beneficiaryPhone = input.beneficiaryPhone;
-  if (input.beneficiaryAddress !== undefined)
-    updateData.beneficiaryAddress = input.beneficiaryAddress;
-  if (input.coversBasePrice !== undefined)
-    updateData.coversBasePrice = input.coversBasePrice;
-  if (input.coveredAccessIds !== undefined)
-    updateData.coveredAccessIds = input.coveredAccessIds;
+    if (!sponsorship) {
+      throw new AppError("Sponsorship not found", 404, ErrorCodes.NOT_FOUND);
+    }
 
-  // Validate time overlaps if coveredAccessIds is being updated
-  if (input.coveredAccessIds !== undefined) {
-    const newCoveredAccessIds = input.coveredAccessIds;
-    if (newCoveredAccessIds.length >= 2) {
-      // Fetch access items with time data
-      const accessItems = await prisma.eventAccess.findMany({
+    const coverageChanged =
+      input.coversBasePrice !== undefined ||
+      input.coveredAccessIds !== undefined;
+
+    const nextCoversBasePrice =
+      input.coversBasePrice ?? sponsorship.coversBasePrice;
+    const nextCoveredAccessIds =
+      input.coveredAccessIds ?? sponsorship.coveredAccessIds;
+
+    if (
+      input.coveredAccessIds !== undefined &&
+      nextCoveredAccessIds.length >= 2
+    ) {
+      const accessItems = await tx.eventAccess.findMany({
         where: {
-          id: { in: newCoveredAccessIds },
+          id: { in: nextCoveredAccessIds },
           eventId: sponsorship.eventId,
           active: true,
         },
@@ -909,7 +1038,7 @@ export async function updateSponsorship(
       });
 
       const timeErrors = validateCoveredAccessTimeOverlap(
-        newCoveredAccessIds,
+        nextCoveredAccessIds,
         accessItems.map((item) => ({
           id: item.id,
           name: item.name,
@@ -922,60 +1051,140 @@ export async function updateSponsorship(
 
       if (timeErrors.length > 0) {
         throw new AppError(
-      `Time conflicts in covered access items: ${timeErrors.join("; ")}`,
-      400,
+          `Time conflicts in covered access items: ${timeErrors.join("; ")}`,
+          400,
           ErrorCodes.BAD_REQUEST,
           { timeConflicts: timeErrors },
         );
       }
     }
-  }
 
-  // Recalculate total amount if coverage changed
-  const coversBasePrice = input.coversBasePrice ?? sponsorship.coversBasePrice;
-  const coveredAccessIds =
-    input.coveredAccessIds ?? sponsorship.coveredAccessIds;
+    let nextTotalAmount = sponsorship.totalAmount;
+    if (coverageChanged) {
+      nextTotalAmount = 0;
+      if (nextCoversBasePrice) {
+        const pricing = await tx.eventPricing.findUnique({
+          where: { eventId: sponsorship.eventId },
+          select: { basePrice: true },
+        });
+        nextTotalAmount += pricing?.basePrice ?? 0;
+      }
 
-  if (
-    input.coversBasePrice !== undefined ||
-    input.coveredAccessIds !== undefined
-  ) {
-    let totalAmount = 0;
-    if (coversBasePrice) {
-      const pricing = await prisma.eventPricing.findUnique({
-        where: { eventId: sponsorship.eventId },
-        select: { basePrice: true },
-      });
-      totalAmount += pricing?.basePrice ?? 0;
+      if (nextCoveredAccessIds.length > 0) {
+        const accessItems = await tx.eventAccess.findMany({
+          where: {
+            id: { in: nextCoveredAccessIds },
+            eventId: sponsorship.eventId,
+            active: true,
+          },
+          select: { price: true },
+        });
+        nextTotalAmount += accessItems.reduce(
+          (sum, item) => sum + item.price,
+          0,
+        );
+      }
     }
-    if (coveredAccessIds.length > 0) {
-      const accessItems = await prisma.eventAccess.findMany({
-        where: {
-          id: { in: coveredAccessIds },
-          eventId: sponsorship.eventId,
-          active: true,
-        },
-        select: { price: true },
-      });
-      totalAmount += accessItems.reduce(
-        (sum: number, item: { price: number }) => sum + item.price,
-        0,
-      );
+
+    const updateData: Prisma.SponsorshipUpdateInput = {};
+    if (input.beneficiaryName !== undefined) {
+      updateData.beneficiaryName = input.beneficiaryName;
     }
-    updateData.totalAmount = totalAmount;
-  }
+    if (input.beneficiaryEmail !== undefined) {
+      updateData.beneficiaryEmail = input.beneficiaryEmail;
+    }
+    if (input.beneficiaryPhone !== undefined) {
+      updateData.beneficiaryPhone = input.beneficiaryPhone;
+    }
+    if (input.beneficiaryAddress !== undefined) {
+      updateData.beneficiaryAddress = input.beneficiaryAddress;
+    }
+    if (coverageChanged) {
+      updateData.coversBasePrice = nextCoversBasePrice;
+      updateData.coveredAccessIds = nextCoveredAccessIds;
+      updateData.totalAmount = nextTotalAmount;
+    }
 
-  // Update sponsorship and recalculate usage amounts atomically.
-  // Wrapping both in a transaction prevents partial state where the sponsorship
-  // is updated but linked registration amounts reflect old coverage values.
-  await prisma.$transaction(async (tx) => {
-    await tx.sponsorship.update({
-      where: { id },
-      data: updateData,
-    });
+    const changes: Record<string, { old: unknown; new: unknown }> = {};
+    if (
+      input.beneficiaryName !== undefined &&
+      input.beneficiaryName !== sponsorship.beneficiaryName
+    ) {
+      changes.beneficiaryName = {
+        old: sponsorship.beneficiaryName,
+        new: input.beneficiaryName,
+      };
+    }
+    if (
+      input.beneficiaryEmail !== undefined &&
+      input.beneficiaryEmail !== sponsorship.beneficiaryEmail
+    ) {
+      changes.beneficiaryEmail = {
+        old: sponsorship.beneficiaryEmail,
+        new: input.beneficiaryEmail,
+      };
+    }
+    if (
+      input.beneficiaryPhone !== undefined &&
+      input.beneficiaryPhone !== sponsorship.beneficiaryPhone
+    ) {
+      changes.beneficiaryPhone = {
+        old: sponsorship.beneficiaryPhone,
+        new: input.beneficiaryPhone,
+      };
+    }
+    if (
+      input.beneficiaryAddress !== undefined &&
+      input.beneficiaryAddress !== sponsorship.beneficiaryAddress
+    ) {
+      changes.beneficiaryAddress = {
+        old: sponsorship.beneficiaryAddress,
+        new: input.beneficiaryAddress,
+      };
+    }
+    if (coverageChanged) {
+      if (nextCoversBasePrice !== sponsorship.coversBasePrice) {
+        changes.coversBasePrice = {
+          old: sponsorship.coversBasePrice,
+          new: nextCoversBasePrice,
+        };
+      }
+      if (
+        JSON.stringify(nextCoveredAccessIds) !==
+        JSON.stringify(sponsorship.coveredAccessIds)
+      ) {
+        changes.coveredAccessIds = {
+          old: sponsorship.coveredAccessIds,
+          new: nextCoveredAccessIds,
+        };
+      }
+      if (nextTotalAmount !== sponsorship.totalAmount) {
+        changes.totalAmount = {
+          old: sponsorship.totalAmount,
+          new: nextTotalAmount,
+        };
+      }
+    }
 
-    if (sponsorship.usages.length > 0) {
+    if (Object.keys(updateData).length > 0) {
+      await tx.sponsorship.update({
+        where: { id },
+        data: updateData,
+      });
+    }
+
+    if (coverageChanged && sponsorship.usages.length > 0) {
       await recalculateUsageAmounts(id, tx);
+    }
+
+    if (Object.keys(changes).length > 0) {
+      await auditLog(tx, {
+        entityType: "Sponsorship",
+        entityId: id,
+        action: "UPDATE",
+        changes,
+        performedBy,
+      });
     }
   });
 
@@ -991,37 +1200,41 @@ export async function updateSponsorship(
  */
 export async function cancelSponsorship(
   id: string,
+  performedBy?: string,
 ): Promise<SponsorshipWithUsages> {
-  const sponsorship = await prisma.sponsorship.findUnique({
-    where: { id },
-    include: { usages: { select: { registrationId: true } } },
-  });
-
-  if (!sponsorship) {
-    throw new AppError(
-      "Sponsorship not found",
-      404,
-      ErrorCodes.NOT_FOUND,
-    );
-  }
-
   await prisma.$transaction(async (tx) => {
-    // Unlink from all registrations
-    for (const usage of sponsorship.usages) {
-      if (usage.registrationId) {
-        await unlinkSponsorshipFromRegistrationInternal(
-          tx,
-          id,
-          usage.registrationId,
-        );
-      }
+    const sponsorship = await tx.sponsorship.findUnique({
+      where: { id },
+      include: { usages: { select: { registrationId: true } } },
+    });
+
+    if (!sponsorship) {
+      throw new AppError("Sponsorship not found", 404, ErrorCodes.NOT_FOUND);
     }
 
-    // Set status to CANCELLED
-    await tx.sponsorship.update({
-      where: { id },
-      data: { status: "CANCELLED" },
-    });
+    await unlinkSponsorshipFromAllRegistrations(
+      tx,
+      id,
+      sponsorship.usages,
+      performedBy,
+    );
+
+    if (sponsorship.status !== "CANCELLED") {
+      await tx.sponsorship.update({
+        where: { id },
+        data: { status: "CANCELLED" },
+      });
+
+      await auditLog(tx, {
+        entityType: "Sponsorship",
+        entityId: id,
+        action: "CANCEL",
+        changes: {
+          status: { old: sponsorship.status, new: "CANCELLED" },
+        },
+        performedBy,
+      });
+    }
   });
 
   return getSponsorshipById(id) as Promise<SponsorshipWithUsages>;
@@ -1035,33 +1248,41 @@ export async function cancelSponsorship(
  * Delete a sponsorship permanently.
  * Unlinks from registrations first if needed.
  */
-export async function deleteSponsorship(id: string): Promise<void> {
-  const sponsorship = await prisma.sponsorship.findUnique({
-    where: { id },
-    include: { usages: { select: { registrationId: true } } },
-  });
-
-  if (!sponsorship) {
-    throw new AppError(
-      "Sponsorship not found",
-      404,
-      ErrorCodes.NOT_FOUND,
-    );
-  }
-
+export async function deleteSponsorship(
+  id: string,
+  performedBy?: string,
+): Promise<void> {
   await prisma.$transaction(async (tx) => {
-    // Unlink from all registrations first
-    for (const usage of sponsorship.usages) {
-      if (usage.registrationId) {
-        await unlinkSponsorshipFromRegistrationInternal(
-          tx,
-          id,
-          usage.registrationId,
-        );
-      }
+    const sponsorship = await tx.sponsorship.findUnique({
+      where: { id },
+      include: { usages: { select: { registrationId: true } } },
+    });
+
+    if (!sponsorship) {
+      throw new AppError("Sponsorship not found", 404, ErrorCodes.NOT_FOUND);
     }
 
-    // Delete sponsorship (cascade will delete usages)
+    await unlinkSponsorshipFromAllRegistrations(
+      tx,
+      id,
+      sponsorship.usages,
+      performedBy,
+    );
+
+    await auditLog(tx, {
+      entityType: "Sponsorship",
+      entityId: id,
+      action: "DELETE",
+      changes: {
+        code: { old: sponsorship.code, new: null },
+        status: { old: sponsorship.status, new: null },
+        beneficiaryName: { old: sponsorship.beneficiaryName, new: null },
+        beneficiaryEmail: { old: sponsorship.beneficiaryEmail, new: null },
+        totalAmount: { old: sponsorship.totalAmount, new: null },
+      },
+      performedBy,
+    });
+
     await tx.sponsorship.delete({ where: { id } });
   });
 }
@@ -1096,11 +1317,7 @@ export async function linkSponsorshipToRegistration(
   });
 
   if (!sponsorship) {
-    throw new AppError(
-      "Sponsorship not found",
-      404,
-      ErrorCodes.NOT_FOUND,
-    );
+    throw new AppError("Sponsorship not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   if (sponsorship.status === "CANCELLED") {
@@ -1232,8 +1449,8 @@ export async function linkSponsorshipToRegistration(
 
     if (statusUpdate.count === 0) {
       throw new AppError(
-      "Sponsorship cannot be linked (may be cancelled or already processing)",
-      409,
+        "Sponsorship cannot be linked (may be cancelled or already processing)",
+        409,
         ErrorCodes.SPONSORSHIP_STATUS_CONFLICT,
       );
     }
@@ -1259,6 +1476,26 @@ export async function linkSponsorshipToRegistration(
           ? { paymentStatus: "PAID", paidAt: new Date() }
           : {}),
       },
+    });
+
+    const changes: Record<string, { old: unknown; new: unknown }> = {
+      registrationId: { old: null, new: registrationId },
+      amountApplied: { old: 0, new: applicableAmount },
+      sponsorshipAmount: {
+        old: registration.sponsorshipAmount,
+        new: newSponsorshipAmount,
+      },
+    };
+    if (sponsorship.status !== "USED") {
+      changes.status = { old: sponsorship.status, new: "USED" };
+    }
+
+    await auditLog(tx, {
+      entityType: "Sponsorship",
+      entityId: sponsorshipId,
+      action: "LINK_TO_REGISTRATION",
+      changes,
+      performedBy: adminUserId,
     });
 
     return {
@@ -1439,11 +1676,13 @@ export async function linkSponsorshipByCode(
 export async function unlinkSponsorshipFromRegistration(
   sponsorshipId: string,
   registrationId: string,
+  performedBy?: string,
 ): Promise<void> {
   await unlinkSponsorshipFromRegistrationInternal(
     prisma,
     sponsorshipId,
     registrationId,
+    performedBy,
   );
 }
 
@@ -1451,10 +1690,10 @@ export async function unlinkSponsorshipFromRegistration(
  * Internal unlink function that works with transaction client.
  */
 async function unlinkSponsorshipFromRegistrationInternal(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  tx: any,
+  tx: TxClient,
   sponsorshipId: string,
   registrationId: string,
+  performedBy?: string,
 ): Promise<void> {
   const usage = await tx.sponsorshipUsage.findUnique({
     where: {
@@ -1469,6 +1708,19 @@ async function unlinkSponsorshipFromRegistrationInternal(
       ErrorCodes.NOT_FOUND,
     );
   }
+
+  const registrationBefore = await tx.registration.findUnique({
+    where: { id: registrationId },
+    select: {
+      sponsorshipAmount: true,
+      paymentMethod: true,
+    },
+  });
+
+  const sponsorshipBefore = await tx.sponsorship.findUnique({
+    where: { id: sponsorshipId },
+    select: { status: true },
+  });
 
   // Delete the usage
   await tx.sponsorshipUsage.delete({
@@ -1491,30 +1743,68 @@ async function unlinkSponsorshipFromRegistrationInternal(
     },
   });
 
-  // Check if sponsorship has any remaining usages
   const sponsorshipUsageCount = await tx.sponsorshipUsage.count({
     where: { sponsorshipId },
   });
 
-  // Update sponsorship status if needed
-  const sponsorship = await tx.sponsorship.findUnique({
-    where: { id: sponsorshipId },
-    select: { status: true },
-  });
-
-  if (sponsorship) {
+  let nextSponsorshipStatus = sponsorshipBefore?.status ?? null;
+  if (sponsorshipBefore) {
     const newStatus = determineSponsorshipStatus(
-      { status: sponsorship.status },
+      { status: sponsorshipBefore.status },
       sponsorshipUsageCount,
     );
 
-    if (newStatus !== sponsorship.status) {
+    if (newStatus !== sponsorshipBefore.status) {
       await tx.sponsorship.update({
         where: { id: sponsorshipId },
         data: { status: newStatus },
       });
+      nextSponsorshipStatus = newStatus;
     }
   }
+
+  const changes: Record<string, { old: unknown; new: unknown }> = {
+    registrationId: { old: registrationId, new: null },
+    amountApplied: { old: usage.amountApplied, new: 0 },
+    sponsorshipAmount: {
+      old: registrationBefore?.sponsorshipAmount ?? null,
+      new: newSponsorshipAmount,
+    },
+  };
+
+  if (
+    (registrationBefore?.paymentMethod ?? null) !==
+    (newSponsorshipAmount === 0
+      ? null
+      : (registrationBefore?.paymentMethod ?? null))
+  ) {
+    changes.paymentMethod = {
+      old: registrationBefore?.paymentMethod ?? null,
+      new:
+        newSponsorshipAmount === 0
+          ? null
+          : (registrationBefore?.paymentMethod ?? null),
+    };
+  }
+
+  if (
+    sponsorshipBefore &&
+    nextSponsorshipStatus &&
+    nextSponsorshipStatus !== sponsorshipBefore.status
+  ) {
+    changes.status = {
+      old: sponsorshipBefore.status,
+      new: nextSponsorshipStatus,
+    };
+  }
+
+  await auditLog(tx, {
+    entityType: "Sponsorship",
+    entityId: sponsorshipId,
+    action: "UNLINK_FROM_REGISTRATION",
+    changes,
+    performedBy,
+  });
 }
 
 // ============================================================================

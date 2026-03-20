@@ -1974,19 +1974,54 @@ export async function selectPaymentMethod(
     );
   }
 
-  const updateData: Record<string, unknown> = {
-    paymentMethod: input.paymentMethod,
+  const nextPaymentStatus =
+    input.paymentMethod === "LAB_SPONSORSHIP" ? "WAIVED" : "PENDING";
+
+  validatePaymentTransition(registration.paymentStatus, nextPaymentStatus);
+
+  const changes: Record<string, { old: unknown; new: unknown }> = {
+    paymentMethod: {
+      old: registration.paymentMethod,
+      new: input.paymentMethod,
+    },
   };
 
-  if (input.paymentMethod === "LAB_SPONSORSHIP") {
-    updateData.paymentStatus = "WAIVED";
-    updateData.labName = input.labName ?? null;
-    updateData.paidAt = new Date();
+  if (nextPaymentStatus !== registration.paymentStatus) {
+    changes.paymentStatus = {
+      old: registration.paymentStatus,
+      new: nextPaymentStatus,
+    };
   }
 
-  await prisma.registration.update({
-    where: { id: registrationId },
-    data: updateData,
+  const nextLabName =
+    input.paymentMethod === "LAB_SPONSORSHIP" ? (input.labName ?? null) : null;
+  if (nextLabName !== registration.labName) {
+    changes.labName = {
+      old: registration.labName,
+      new: nextLabName,
+    };
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.registration.update({
+      where: { id: registrationId },
+      data: {
+        paymentMethod: input.paymentMethod,
+        paymentStatus: nextPaymentStatus,
+        labName: nextLabName,
+        ...(nextPaymentStatus === "WAIVED" && !registration.paidAt
+          ? { paidAt: new Date() }
+          : {}),
+      },
+    });
+
+    await auditLog(tx, {
+      entityType: "Registration",
+      entityId: registrationId,
+      action: "PAYMENT_METHOD_SELECTED",
+      changes,
+      performedBy: "PUBLIC",
+    });
   });
 }
 

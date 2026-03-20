@@ -372,7 +372,7 @@ function buildFileSchema(
 function buildFieldSchema(field: FormField): ZodTypeAny | null {
   // field.required is the top-level required flag; validation.required is nested.
   // Either source should make the field required.
-  const isRequired = field.validation?.required ?? field.required ?? false;
+  const isRequired = field.validation?.required || field.required || false;
   const validation: FieldValidation | undefined = field.validation
     ? { ...field.validation, required: isRequired }
     : isRequired

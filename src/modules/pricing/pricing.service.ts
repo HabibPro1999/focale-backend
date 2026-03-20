@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
-import { calculateApplicableAmount } from "@modules/sponsorships/sponsorships.utils.js";
+import { calculateApplicableAmount } from "@sponsorships";
 import { evaluateConditions } from "@shared/utils/conditions.js";
 import type {
   UpdateEventPricingInput,
