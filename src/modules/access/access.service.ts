@@ -1,20 +1,13 @@
 import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
-import { evaluateConditions } from "@shared/utils/conditions.js";
 import { logger } from "@shared/utils/logger.js";
 import type {
   CreateEventAccessInput,
   UpdateEventAccessInput,
-  AccessSelection,
-  GroupedAccessResponse,
-  AccessCondition,
-  TimeSlot,
-  DateGroup,
 } from "./access.schema.js";
 import { Prisma } from "@/generated/prisma/client.js";
 import type { EventAccess } from "@/generated/prisma/client.js";
-import { getAccessTypeKey } from "@/modules/sponsorships/sponsorships.utils.js";
 
 // ============================================================================
 // Types
@@ -22,12 +15,6 @@ import { getAccessTypeKey } from "@/modules/sponsorships/sponsorships.utils.js";
 
 type EventAccessWithPrerequisites = EventAccess & {
   requiredAccess: { id: string; name: string }[];
-};
-
-type EnrichedAccess = EventAccess & {
-  requiredAccess: { id: string }[];
-  spotsRemaining: number | null;
-  isFull: boolean;
 };
 
 // ============================================================================
@@ -444,174 +431,10 @@ export async function getAccessClientId(id: string): Promise<string | null> {
 }
 
 // ============================================================================
-// Hierarchical Grouping (Type → Time Slots)
+// Hierarchical Grouping (Type → Time Slots) — extracted to access-grouping.ts
 // ============================================================================
 
-/**
- * Get access items grouped hierarchically: TYPE → TIME SLOTS
- *
- * Structure:
- * - Groups are organized by type (WORKSHOP, DINNER, etc.)
- * - Within each type, items are sub-grouped by time slot (startsAt)
- * - If 2+ items share the same time slot → selectionType: 'single' (radio)
- * - If 1 item in a time slot → selectionType: 'multiple' (checkbox)
- *
- * This allows users to select one item from each parallel time slot
- * (e.g., pick one of 3 workshops at 12:00, AND one of 2 workshops at 14:00)
- */
-export async function getGroupedAccess(
-  eventId: string,
-  formData: Record<string, unknown>,
-  selectedAccessIds: string[] = [],
-): Promise<GroupedAccessResponse> {
-  const allAccess = await prisma.eventAccess.findMany({
-    where: { eventId, active: true },
-    include: { requiredAccess: { select: { id: true } } },
-    orderBy: [{ type: "asc" }, { sortOrder: "asc" }, { startsAt: "asc" }],
-  });
-
-  const now = new Date();
-
-  // Filter by availability, conditions, and prerequisites
-  const availableAccess = allAccess.filter((access) => {
-    // Check date availability
-    if (access.availableFrom && access.availableFrom > now) return false;
-    if (access.availableTo && access.availableTo < now) return false;
-
-    // Check form-based conditions
-    if (access.conditions) {
-      if (
-        !evaluateConditions(
-          access.conditions as AccessCondition[],
-          access.conditionLogic as "AND" | "OR",
-          formData,
-        )
-      ) {
-        return false;
-      }
-    }
-
-    // Check access-based prerequisites
-    if (access.requiredAccess && access.requiredAccess.length > 0) {
-      const hasAllPrerequisites = access.requiredAccess.every((req) =>
-        selectedAccessIds.includes(req.id),
-      );
-      if (!hasAllPrerequisites) return false;
-    }
-
-    return true;
-  });
-
-  // Enrich with availability info
-  const enrichedAccess: EnrichedAccess[] = availableAccess.map((access) => {
-    const spotsRemaining = access.maxCapacity
-      ? access.maxCapacity - access.registeredCount
-      : null;
-
-    return {
-      ...access,
-      spotsRemaining,
-      isFull: spotsRemaining !== null && spotsRemaining <= 0,
-    };
-  });
-
-  // === Partition ADDON vs scheduled items ===
-  const addonItems = enrichedAccess.filter((a) => a.type === "ADDON");
-  const scheduledItems = enrichedAccess.filter((a) => a.type !== "ADDON");
-
-  // === Hierarchical grouping by DATE (scheduled items only) ===
-
-  // Helper: Format date as French day name + date (e.g., "Jeudi 16 avril")
-  const formatDateLabel = (dateStr: string): string => {
-    if (dateStr === "no-date") return "Sans date";
-    const date = new Date(dateStr + "T00:00:00");
-    const formatted = date.toLocaleDateString("fr-FR", {
-      weekday: "long",
-      day: "numeric",
-      month: "long",
-    });
-    // Capitalize first letter
-    return formatted.charAt(0).toUpperCase() + formatted.slice(1);
-  };
-
-  // Step 1: Group by DATE (day only, no time)
-  const dateMap = new Map<string, EnrichedAccess[]>();
-
-  for (const access of scheduledItems) {
-    // Extract date part only (YYYY-MM-DD)
-    const dateKey = access.startsAt
-      ? access.startsAt.toISOString().split("T")[0]
-      : "no-date";
-
-    if (!dateMap.has(dateKey)) dateMap.set(dateKey, []);
-    dateMap.get(dateKey)!.push(access);
-  }
-
-  // Step 2: For each date, sub-group by TIME SLOT
-  const groups: DateGroup[] = Array.from(dateMap.entries()).map(
-    ([dateKey, items]) => {
-      // Sub-group by startsAt time (full ISO string)
-      const slotMap = new Map<string, EnrichedAccess[]>();
-      for (const item of items) {
-        const timeKey = item.startsAt?.toISOString() || "no-time";
-        if (!slotMap.has(timeKey)) slotMap.set(timeKey, []);
-        slotMap.get(timeKey)!.push(item);
-      }
-
-      // Convert to slots array
-      const slots: TimeSlot[] = Array.from(slotMap.entries())
-        .map(([_timeKey, slotItems]) => ({
-          startsAt: slotItems[0].startsAt,
-          endsAt: slotItems[0].endsAt,
-          // 2+ items at same time = single (radio), 1 item = multiple (checkbox)
-          selectionType: (slotItems.length > 1 ? "single" : "multiple") as
-            | "single"
-            | "multiple",
-          items: slotItems.sort((a, b) => {
-            // Sort by time within the slot
-            if (a.startsAt && b.startsAt) {
-              const timeA = a.startsAt.getTime();
-              const timeB = b.startsAt.getTime();
-              if (timeA !== timeB) return timeA - timeB;
-            }
-            // Then by sortOrder
-            return a.sortOrder - b.sortOrder;
-          }),
-        }))
-        .sort((a, b) => {
-          // Sort slots by time (null times at end)
-          if (!a.startsAt && !b.startsAt) return 0;
-          if (!a.startsAt) return 1;
-          if (!b.startsAt) return -1;
-          return a.startsAt.getTime() - b.startsAt.getTime();
-        });
-
-      return {
-        dateKey,
-        label: formatDateLabel(dateKey),
-        slots,
-      };
-    },
-  );
-
-  // Sort groups chronologically by date
-  groups.sort((a, b) => {
-    // "no-date" items go to the end
-    if (a.dateKey === "no-date" && b.dateKey === "no-date") return 0;
-    if (a.dateKey === "no-date") return 1;
-    if (b.dateKey === "no-date") return -1;
-    // Sort by date chronologically
-    return new Date(a.dateKey).getTime() - new Date(b.dateKey).getTime();
-  });
-
-  return {
-    groups,
-    addonGroup:
-      addonItems.length > 0
-        ? { items: addonItems.sort((a, b) => a.sortOrder - b.sortOrder) }
-        : null,
-  };
-}
+export { getGroupedAccess } from "./access-grouping.js";
 
 // ============================================================================
 // Capacity Management
@@ -695,169 +518,10 @@ export async function releaseAccessSpot(
 }
 
 // ============================================================================
-// Validation
+// Validation — extracted to access-validation.ts
 // ============================================================================
 
-/**
- * Validate access selections for a registration.
- * Checks: time conflicts, prerequisites, capacity.
- */
-export async function validateAccessSelections(
-  eventId: string,
-  selections: AccessSelection[],
-  formData: Record<string, unknown>,
-): Promise<{ valid: boolean; errors: string[] }> {
-  const errors: string[] = [];
-
-  const accessIds = selections.map((s) => s.accessId);
-
-  // Fetch selected items and included items in parallel
-  const [accessItems, includedAccesses] = await Promise.all([
-    selections.length > 0
-      ? prisma.eventAccess.findMany({
-          where: { id: { in: accessIds }, eventId, active: true },
-          include: { requiredAccess: { select: { id: true } } },
-        })
-      : Promise.resolve([]),
-    prisma.eventAccess.findMany({
-      where: { eventId, active: true, includedInBase: true },
-      select: { id: true, name: true, conditions: true, conditionLogic: true },
-    }),
-  ]);
-
-  // Validate included accesses are present (before selection-specific checks)
-  for (const included of includedAccesses) {
-    // Skip if conditions don't match (exempt from mandatory)
-    if (included.conditions) {
-      if (
-        !evaluateConditions(
-          included.conditions as AccessCondition[],
-          included.conditionLogic as "AND" | "OR",
-          formData,
-        )
-      )
-        continue;
-    }
-    if (!accessIds.includes(included.id)) {
-      errors.push(`"${included.name}" est inclus et doit être sélectionné`);
-    }
-  }
-
-  if (selections.length === 0) {
-    return { valid: errors.length === 0, errors };
-  }
-
-  const accessMap = new Map(accessItems.map((a) => [a.id, a]));
-
-  // Check all selected items exist
-  for (const selection of selections) {
-    if (!accessMap.has(selection.accessId)) {
-      errors.push(`Access item ${selection.accessId} not found or inactive`);
-    }
-  }
-
-  if (errors.length > 0) {
-    return { valid: false, errors };
-  }
-
-  // Check time conflicts WITHIN EACH TYPE (items with same startsAt in same type)
-  // Group selections by type first, then check time slots within each type
-  const selectionsByType = new Map<
-    string,
-    { access: EventAccess; selection: AccessSelection }[]
-  >();
-
-  for (const selection of selections) {
-    const access = accessMap.get(selection.accessId)!;
-    // For OTHER type, use groupLabel as key to allow custom groups
-    const typeKey = getAccessTypeKey(access.type, access.groupLabel);
-
-    if (!selectionsByType.has(typeKey)) selectionsByType.set(typeKey, []);
-    selectionsByType.get(typeKey)!.push({ access, selection });
-  }
-
-  // For each type group, check for actual time OVERLAP (not just same startsAt)
-  for (const typeItems of selectionsByType.values()) {
-    // Compare each pair for actual time overlap
-    for (let i = 0; i < typeItems.length; i++) {
-      for (let j = i + 1; j < typeItems.length; j++) {
-        const a = typeItems[i].access;
-        const b = typeItems[j].access;
-
-        // Only check overlap if both items have start and end times
-        if (a.startsAt && a.endsAt && b.startsAt && b.endsAt) {
-          const aStart = a.startsAt.getTime();
-          const aEnd = a.endsAt.getTime();
-          const bStart = b.startsAt.getTime();
-          const bEnd = b.endsAt.getTime();
-
-          // True overlap: !(aEnd <= bStart || bEnd <= aStart)
-          // i.e., they overlap if a doesn't end before b starts AND b doesn't end before a starts
-          if (!(aEnd <= bStart || bEnd <= aStart)) {
-            errors.push(`Time conflict: "${a.name}" and "${b.name}" overlap`);
-          }
-        }
-      }
-    }
-  }
-
-  // Check prerequisites
-  for (const selection of selections) {
-    const access = accessMap.get(selection.accessId)!;
-    if (access.requiredAccess && access.requiredAccess.length > 0) {
-      for (const req of access.requiredAccess) {
-        if (!accessIds.includes(req.id)) {
-          const accessName = access.name;
-          errors.push(
-            `${accessName} requires selecting its prerequisite first`,
-          );
-        }
-      }
-    }
-  }
-
-  // Check form-based conditions
-  const now = new Date();
-  for (const selection of selections) {
-    const access = accessMap.get(selection.accessId)!;
-
-    // Date availability
-    if (access.availableFrom && access.availableFrom > now) {
-      errors.push(`${access.name} is not yet available`);
-    }
-    if (access.availableTo && access.availableTo < now) {
-      errors.push(`${access.name} is no longer available`);
-    }
-
-    // Form conditions
-    if (access.conditions) {
-      if (
-        !evaluateConditions(
-          access.conditions as AccessCondition[],
-          access.conditionLogic as "AND" | "OR",
-          formData,
-        )
-      ) {
-        errors.push(
-          `${access.name} is not available based on your form answers`,
-        );
-      }
-    }
-  }
-
-  // Check capacity (without reserving)
-  for (const selection of selections) {
-    const access = accessMap.get(selection.accessId)!;
-    if (access.maxCapacity !== null) {
-      const spotsRemaining = access.maxCapacity - access.registeredCount;
-      if (spotsRemaining < selection.quantity) {
-        errors.push(`${access.name} is full`);
-      }
-    }
-  }
-
-  return { valid: errors.length === 0, errors };
-}
+export { validateAccessSelections } from "./access-validation.js";
 
 // ============================================================================
 // Helpers
