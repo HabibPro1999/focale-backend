@@ -108,47 +108,6 @@ export interface MjmlCompilationResult {
 }
 
 // =============================================================================
-// RECIPIENT FILTERING
-// =============================================================================
-
-export interface RecipientFilter {
-  // Note: eventId is passed separately to filter functions, not stored in the filter object
-
-  // Payment status filter
-  paymentStatus?: string[]; // ['PENDING', 'PAID', etc.]
-
-  // Date range filters
-  registeredAfter?: Date;
-  registeredBefore?: Date;
-
-  // Access/workshop filters
-  hasAccessTypes?: string[]; // Must have ALL of these
-  hasAnyAccessTypes?: string[]; // Must have ANY of these
-  excludeAccessTypes?: string[]; // Must NOT have any of these
-
-  // Form field filters (dynamic based on form schema)
-  formFieldFilters?: FormFieldFilter[];
-
-  // Manual selection
-  includeRegistrationIds?: string[]; // Include specific registrations
-  excludeRegistrationIds?: string[]; // Exclude specific registrations
-}
-
-export interface FormFieldFilter {
-  fieldId: string;
-  operator:
-    | "equals"
-    | "not_equals"
-    | "contains"
-    | "not_contains"
-    | "in"
-    | "not_in"
-    | "is_empty"
-    | "is_not_empty";
-  value?: string | number | boolean | string[];
-}
-
-// =============================================================================
 // EMAIL TEMPLATE TYPES
 // =============================================================================
 
@@ -162,26 +121,6 @@ export type AutomaticEmailTrigger =
   | "SPONSORSHIP_LINKED"
   | "SPONSORSHIP_APPLIED"
   | "SPONSORSHIP_PARTIAL";
-
-export interface CreateEmailTemplateInput {
-  clientId: string;
-  eventId?: string;
-  name: string;
-  description?: string;
-  subject: string;
-  content: TiptapDocument;
-  category: EmailTemplateCategory;
-  trigger?: AutomaticEmailTrigger;
-  isActive?: boolean;
-}
-
-export interface UpdateEmailTemplateInput {
-  name?: string;
-  description?: string;
-  subject?: string;
-  content?: TiptapDocument;
-  isActive?: boolean;
-}
 
 export interface EmailTemplate {
   id: string;
