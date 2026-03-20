@@ -1,12 +1,16 @@
-import { getGroupedAccess, validateAccessSelections } from './access.service.js';
+import {
+  getGroupedAccess,
+  validateAccessSelections,
+} from "./access.service.js";
 import {
   EventIdParamSchema,
   GetGroupedAccessBodySchema,
   ValidateAccessSelectionsBodySchema,
   type GetGroupedAccessBody,
   type ValidateAccessSelectionsBody,
-} from './access.schema.js';
-import type { AppInstance } from '@shared/types/fastify.js';
+} from "./access.schema.js";
+import { prisma } from "@/database/client.js";
+import type { AppInstance } from "@shared/types/fastify.js";
 
 // ============================================================================
 // Public Routes (No Auth)
@@ -19,7 +23,7 @@ export async function accessPublicRoutes(app: AppInstance): Promise<void> {
     Params: { eventId: string };
     Body: GetGroupedAccessBody;
   }>(
-    '/:eventId/access/grouped',
+    "/:eventId/access/grouped",
     {
       schema: {
         params: EventIdParamSchema,
@@ -30,9 +34,13 @@ export async function accessPublicRoutes(app: AppInstance): Promise<void> {
       const { eventId } = request.params;
       const { formData, selectedAccessIds } = request.body;
 
-      const grouped = await getGroupedAccess(eventId, formData, selectedAccessIds);
+      const grouped = await getGroupedAccess(
+        eventId,
+        formData,
+        selectedAccessIds,
+      );
       return reply.send(grouped);
-    }
+    },
   );
 
   // POST /api/public/events/:eventId/access/validate - Validate selections
@@ -40,7 +48,7 @@ export async function accessPublicRoutes(app: AppInstance): Promise<void> {
     Params: { eventId: string };
     Body: ValidateAccessSelectionsBody;
   }>(
-    '/:eventId/access/validate',
+    "/:eventId/access/validate",
     {
       schema: {
         params: EventIdParamSchema,
@@ -51,14 +59,18 @@ export async function accessPublicRoutes(app: AppInstance): Promise<void> {
       const { eventId } = request.params;
       const { formData, selections } = request.body;
 
-      const result = await validateAccessSelections(eventId, selections, formData);
+      const result = await validateAccessSelections(
+        eventId,
+        selections,
+        formData,
+      );
       return reply.send(result);
-    }
+    },
   );
 
   // GET /api/public/events/:eventId/payment-config - Get event payment configuration
   app.get<{ Params: { eventId: string } }>(
-    '/:eventId/payment-config',
+    "/:eventId/payment-config",
     {
       schema: { params: EventIdParamSchema },
     },
@@ -66,7 +78,7 @@ export async function accessPublicRoutes(app: AppInstance): Promise<void> {
       const { eventId } = request.params;
 
       // Fetch event with pricing and client in one query
-      const event = await app.prisma.event.findUnique({
+      const event = await prisma.event.findUnique({
         where: { id: eventId },
         include: {
           pricing: true,
@@ -83,26 +95,26 @@ export async function accessPublicRoutes(app: AppInstance): Promise<void> {
       });
 
       if (!event) {
-        throw app.httpErrors.notFound('Event not found');
+        throw app.httpErrors.notFound("Event not found");
       }
 
       // Transform pricing for public consumption
       const pricing = event.pricing;
-      const paymentMethods: string[] = ['BANK_TRANSFER']; // Bank transfer always available
+      const paymentMethods: string[] = ["BANK_TRANSFER"]; // Bank transfer always available
       if (pricing?.onlinePaymentEnabled && pricing?.onlinePaymentUrl) {
-        paymentMethods.push('ONLINE');
+        paymentMethods.push("ONLINE");
       }
       if (pricing?.cashPaymentEnabled) {
-        paymentMethods.push('CASH');
+        paymentMethods.push("CASH");
       }
 
       // Check if sponsorships module is enabled for the client
       const enabledModules = event.client.enabledModules as string[];
-      const sponsorshipsEnabled = enabledModules.includes('sponsorships');
+      const sponsorshipsEnabled = enabledModules.includes("sponsorships");
 
       // Lab sponsorship option available when sponsorships module is disabled
       if (!sponsorshipsEnabled) {
-        paymentMethods.push('LAB_SPONSORSHIP');
+        paymentMethods.push("LAB_SPONSORSHIP");
       }
 
       return reply.send({
@@ -126,15 +138,15 @@ export async function accessPublicRoutes(app: AppInstance): Promise<void> {
               bankDetails: pricing.bankName
                 ? {
                     bankName: pricing.bankName,
-                    accountName: pricing.bankAccountName ?? '',
-                    iban: pricing.bankAccountNumber ?? '',
-                    bic: '',
+                    accountName: pricing.bankAccountName ?? "",
+                    iban: pricing.bankAccountNumber ?? "",
+                    bic: "",
                   }
                 : null,
               onlinePaymentUrl: pricing.onlinePaymentUrl ?? null,
             }
           : null,
       });
-    }
+    },
   );
 }

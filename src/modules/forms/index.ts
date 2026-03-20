@@ -13,7 +13,7 @@ export {
   getSponsorFormByEventSlug,
   getSponsorFormByEventId,
   createSponsorForm,
-} from './forms.service.js';
+} from "./forms.service.js";
 
 // Schemas & Types
 export {
@@ -48,8 +48,19 @@ export {
   type CreateFormInput,
   type UpdateFormInput,
   type ListFormsQuery,
-} from './forms.schema.js';
+} from "./forms.schema.js";
+
+// Form data validation (used by registrations module)
+export {
+  validateFormData,
+  sanitizeFormData,
+  buildFormDataValidator,
+  shouldValidateField,
+  type FormSchema,
+  type FormDataValidationResult,
+  type FormDataFieldError,
+} from "./form-data-validator.js";
 
 // Routes
-export { formsRoutes } from './forms.routes.js';
-export { formsPublicRoutes } from './forms.public.routes.js';
+export { formsRoutes } from "./forms.routes.js";
+export { formsPublicRoutes } from "./forms.public.routes.js";

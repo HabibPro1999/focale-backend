@@ -28,6 +28,9 @@ import {
 // ============================================================================
 
 export async function reportsRoutes(app: AppInstance): Promise<void> {
+  // All routes require authentication
+  app.addHook("onRequest", requireAuth);
+
   // ----------------------------------------------------------------
   // GET /:eventId/analytics - Get event analytics dashboard data
   // ----------------------------------------------------------------
@@ -41,7 +44,6 @@ export async function reportsRoutes(app: AppInstance): Promise<void> {
           200: EventAnalyticsResponseSchema,
         },
       },
-      preHandler: [requireAuth],
     },
     async (request, reply) => {
       const { eventId } = request.params;
@@ -75,7 +77,6 @@ export async function reportsRoutes(app: AppInstance): Promise<void> {
           200: FinancialReportResponseSchema,
         },
       },
-      preHandler: [requireAuth],
     },
     async (request, reply) => {
       const { eventId } = request.params;
@@ -106,7 +107,6 @@ export async function reportsRoutes(app: AppInstance): Promise<void> {
       schema: {
         querystring: ExportQuerySchema,
       },
-      preHandler: [requireAuth],
     },
     async (request, reply) => {
       const { eventId } = request.params;
@@ -137,34 +137,28 @@ export async function reportsRoutes(app: AppInstance): Promise<void> {
   // ----------------------------------------------------------------
   app.get<{
     Params: { eventId: string };
-  }>(
-    "/:eventId/reports/summary",
-    {
-      preHandler: [requireAuth],
-    },
-    async (request, reply) => {
-      const { eventId } = request.params;
+  }>("/:eventId/reports/summary", {}, async (request, reply) => {
+    const { eventId } = request.params;
 
-      const event = await getEventById(eventId);
-      if (!event) {
-        throw app.httpErrors.notFound("Event not found");
-      }
-      if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
-      }
+    const event = await getEventById(eventId);
+    if (!event) {
+      throw app.httpErrors.notFound("Event not found");
+    }
+    if (!canAccessClient(request.user!, event.clientId)) {
+      throw app.httpErrors.forbidden("Insufficient permissions");
+    }
 
-      const result = await generateEventSummary(eventId);
+    const result = await generateEventSummary(eventId);
 
-      return reply
-        .header(
-          "Content-Type",
-          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-        .header(
-          "Content-Disposition",
-          `attachment; filename="${result.filename}"`,
-        )
-        .send(result.data);
-    },
-  );
+    return reply
+      .header(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      )
+      .header(
+        "Content-Disposition",
+        `attachment; filename="${result.filename}"`,
+      )
+      .send(result.data);
+  });
 }

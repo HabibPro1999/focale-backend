@@ -61,14 +61,18 @@ vi.mock("@email", () => ({
   queueTriggeredEmail: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("@shared/utils/form-data-validator.js", () => ({
-  validateFormData: vi.fn().mockReturnValue({ valid: true, errors: [] }),
-  sanitizeFormData: vi
-    .fn()
-    .mockImplementation(
-      (_schema: unknown, formData: Record<string, unknown>) => formData,
-    ),
-}));
+vi.mock("@forms", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@forms")>();
+  return {
+    ...actual,
+    validateFormData: vi.fn().mockReturnValue({ valid: true, errors: [] }),
+    sanitizeFormData: vi
+      .fn()
+      .mockImplementation(
+        (_schema: unknown, formData: Record<string, unknown>) => formData,
+      ),
+  };
+});
 
 vi.mock("@shared/services/storage/index.js", () => ({
   getStorageProvider: vi.fn(() => ({

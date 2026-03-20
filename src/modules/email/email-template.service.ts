@@ -48,7 +48,9 @@ export async function createEmailTemplate(input: {
   });
 
   if (!event) {
-    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError(
+      "Event not found",
+      404, ErrorCodes.NOT_FOUND);
   }
 
   // For automatic templates, check uniqueness per event+trigger
@@ -62,9 +64,8 @@ export async function createEmailTemplate(input: {
     });
     if (existing) {
       throw new AppError(
-        `An active template for trigger "${input.trigger}" already exists for this event`,
-        409,
-        true,
+      `An active template for trigger "${input.trigger}" already exists for this event`,
+      409,
         ErrorCodes.CONFLICT,
       );
     }
@@ -202,7 +203,6 @@ export async function updateEmailTemplate(
     throw new AppError(
       "Email template not found",
       404,
-      true,
       ErrorCodes.NOT_FOUND,
     );
   }
@@ -217,7 +217,6 @@ export async function updateEmailTemplate(
     throw new AppError(
       "Automatic templates require a trigger",
       400,
-      true,
       ErrorCodes.BAD_REQUEST,
     );
   }
@@ -225,7 +224,6 @@ export async function updateEmailTemplate(
     throw new AppError(
       "Manual templates should not have a trigger",
       400,
-      true,
       ErrorCodes.BAD_REQUEST,
     );
   }
@@ -246,9 +244,8 @@ export async function updateEmailTemplate(
     });
     if (duplicate) {
       throw new AppError(
-        `An active template for trigger "${finalTrigger}" already exists for this event`,
-        409,
-        true,
+      `An active template for trigger "${finalTrigger}" already exists for this event`,
+      409,
         ErrorCodes.CONFLICT,
       );
     }
@@ -300,7 +297,6 @@ export async function deleteEmailTemplate(id: string): Promise<void> {
     throw new AppError(
       "Email template not found",
       404,
-      true,
       ErrorCodes.NOT_FOUND,
     );
   }
@@ -322,7 +318,6 @@ export async function duplicateEmailTemplate(
     throw new AppError(
       "Email template not found",
       404,
-      true,
       ErrorCodes.NOT_FOUND,
     );
   }

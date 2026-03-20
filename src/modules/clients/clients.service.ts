@@ -42,7 +42,9 @@ export async function updateClient(
   // Check if client exists
   const client = await prisma.client.findUnique({ where: { id } });
   if (!client) {
-    throw new AppError('Client not found', 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError(
+      'Client not found',
+      404, ErrorCodes.NOT_FOUND);
   }
 
   // One-way enable logic: merge new modules with existing (union, not replace)
@@ -109,7 +111,9 @@ export async function deleteClient(id: string): Promise<void> {
   });
 
   if (!client) {
-    throw new AppError('Client not found', 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError(
+      'Client not found',
+      404, ErrorCodes.NOT_FOUND);
   }
 
   // Check for associated users or events
@@ -117,7 +121,6 @@ export async function deleteClient(id: string): Promise<void> {
     throw new AppError(
       `Cannot delete client with ${client._count.users} user(s) and ${client._count.events} event(s). Remove associated data first.`,
       409,
-      true,
       ErrorCodes.CLIENT_HAS_DEPENDENCIES
     );
   }

@@ -3,6 +3,7 @@ import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { logger } from "@shared/utils/logger.js";
+import { auditLog } from "@shared/utils/audit.js";
 import {
   paginate,
   getSkip,
@@ -19,11 +20,7 @@ import {
 } from "@access";
 import { calculatePrice } from "@pricing";
 import { queueTriggeredEmail } from "@email";
-import {
-  validateFormData,
-  sanitizeFormData,
-  type FormSchema,
-} from "@shared/utils/form-data-validator.js";
+import { validateFormData, sanitizeFormData, type FormSchema } from "@forms";
 import { getStorageProvider } from "@shared/services/storage/index.js";
 import { compressFile } from "@shared/services/storage/compress.js";
 import { fileTypeFromBuffer } from "file-type";
@@ -78,7 +75,6 @@ function validatePaymentTransition(
     throw new AppError(
       `Cannot transition payment from ${currentStatus} to ${newStatus}`,
       400,
-      true,
       ErrorCodes.INVALID_PAYMENT_TRANSITION,
     );
   }
@@ -346,7 +342,7 @@ export async function createRegistration(
     select: { id: true, eventId: true, schemaVersion: true },
   });
   if (!form) {
-    throw new AppError("Form not found", 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError("Form not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   const eventId = form.eventId;
@@ -359,7 +355,6 @@ export async function createRegistration(
     throw new AppError(
       "A registration with this email already exists for this form",
       409,
-      true,
       ErrorCodes.REGISTRATION_ALREADY_EXISTS,
     );
   }
@@ -375,7 +370,6 @@ export async function createRegistration(
       throw new AppError(
         `Invalid access selections: ${validation.errors.join(", ")}`,
         400,
-        true,
         ErrorCodes.BAD_REQUEST,
         { errors: validation.errors },
       );
@@ -395,7 +389,6 @@ export async function createRegistration(
       throw new AppError(
         "Event is not accepting registrations",
         400,
-        true,
         ErrorCodes.EVENT_NOT_OPEN,
       );
     }
@@ -405,12 +398,7 @@ export async function createRegistration(
       event.maxCapacity !== null &&
       event.registeredCount >= event.maxCapacity
     ) {
-      throw new AppError(
-        "Event is at capacity",
-        409,
-        true,
-        ErrorCodes.EVENT_FULL,
-      );
+      throw new AppError("Event is at capacity", 409, ErrorCodes.EVENT_FULL);
     }
 
     // Generate edit token for secure self-service editing
@@ -477,25 +465,22 @@ export async function createRegistration(
       throw new AppError(
         "Registration creation failed",
         500,
-        true,
         ErrorCodes.INTERNAL_ERROR,
       );
     }
 
     // Create audit log for registration creation
-    await tx.auditLog.create({
-      data: {
-        entityType: "Registration",
-        entityId: registration.id,
-        action: "CREATE",
-        changes: {
-          email: { old: null, new: email },
-          firstName: { old: null, new: firstName ?? null },
-          lastName: { old: null, new: lastName ?? null },
-          totalAmount: { old: null, new: priceBreakdown.total },
-        },
-        performedBy: "PUBLIC",
+    await auditLog(tx, {
+      entityType: "Registration",
+      entityId: registration.id,
+      action: "CREATE",
+      changes: {
+        email: { old: null, new: email },
+        firstName: { old: null, new: firstName ?? null },
+        lastName: { old: null, new: lastName ?? null },
+        totalAmount: { old: null, new: priceBreakdown.total },
       },
+      performedBy: "PUBLIC",
     });
 
     return enrichWithAccessSelections(createdReg);
@@ -548,7 +533,6 @@ export async function createAdminRegistration(
     throw new AppError(
       "No registration form found for this event",
       404,
-      true,
       ErrorCodes.NOT_FOUND,
     );
   }
@@ -561,7 +545,6 @@ export async function createAdminRegistration(
     throw new AppError(
       "A registration with this email already exists for this form",
       409,
-      true,
       ErrorCodes.REGISTRATION_ALREADY_EXISTS,
     );
   }
@@ -577,7 +560,6 @@ export async function createAdminRegistration(
       throw new AppError(
         `Invalid access selections: ${validation.errors.join(", ")}`,
         400,
-        true,
         ErrorCodes.BAD_REQUEST,
         { errors: validation.errors },
       );
@@ -630,7 +612,6 @@ export async function createAdminRegistration(
       throw new AppError(
         "Cannot add registrations to an archived event",
         400,
-        true,
         ErrorCodes.EVENT_NOT_OPEN,
       );
     }
@@ -639,12 +620,7 @@ export async function createAdminRegistration(
       event.maxCapacity !== null &&
       event.registeredCount >= event.maxCapacity
     ) {
-      throw new AppError(
-        "Event is at capacity",
-        409,
-        true,
-        ErrorCodes.EVENT_FULL,
-      );
+      throw new AppError("Event is at capacity", 409, ErrorCodes.EVENT_FULL);
     }
 
     // Determine payment status: explicit override > method-derived > PENDING
@@ -712,25 +688,22 @@ export async function createAdminRegistration(
       throw new AppError(
         "Registration creation failed",
         500,
-        true,
         ErrorCodes.INTERNAL_ERROR,
       );
     }
 
-    await tx.auditLog.create({
-      data: {
-        entityType: "Registration",
-        entityId: registration.id,
-        action: "CREATE",
-        changes: {
-          email: { old: null, new: email },
-          firstName: { old: null, new: firstName },
-          lastName: { old: null, new: lastName },
-          role: { old: null, new: role },
-          totalAmount: { old: null, new: priceBreakdown.total },
-        },
-        performedBy: adminUserId,
+    await auditLog(tx, {
+      entityType: "Registration",
+      entityId: registration.id,
+      action: "CREATE",
+      changes: {
+        email: { old: null, new: email },
+        firstName: { old: null, new: firstName },
+        lastName: { old: null, new: lastName },
+        role: { old: null, new: role },
+        totalAmount: { old: null, new: priceBreakdown.total },
       },
+      performedBy: adminUserId,
     });
 
     return enrichWithAccessSelections(createdReg);
@@ -785,7 +758,6 @@ export async function updateRegistration(
     throw new AppError(
       "Registration not found",
       404,
-      true,
       ErrorCodes.REGISTRATION_NOT_FOUND,
     );
   }
@@ -856,14 +828,12 @@ export async function updateRegistration(
 
     // Create audit log if there are changes
     if (Object.keys(changes).length > 0) {
-      await tx.auditLog.create({
-        data: {
-          entityType: "Registration",
-          entityId: id,
-          action: "UPDATE",
-          changes: changes as Prisma.InputJsonValue,
-          performedBy: performedBy ?? null,
-        },
+      await auditLog(tx, {
+        entityType: "Registration",
+        entityId: id,
+        action: "UPDATE",
+        changes,
+        performedBy: performedBy ?? undefined,
       });
     }
   });
@@ -895,7 +865,6 @@ export async function confirmPayment(
     throw new AppError(
       "Registration not found",
       404,
-      true,
       ErrorCodes.REGISTRATION_NOT_FOUND,
     );
   }
@@ -919,28 +888,26 @@ export async function confirmPayment(
     });
 
     // Create audit log for payment confirmation
-    await tx.auditLog.create({
-      data: {
-        entityType: "Registration",
-        entityId: id,
-        action: "PAYMENT_CONFIRMED",
-        changes: {
-          paymentStatus: {
-            old: oldRegistration.paymentStatus,
-            new: updated.paymentStatus,
-          },
-          paidAmount: {
-            old: oldRegistration.paidAmount,
-            new: updated.paidAmount,
-          },
-          paymentMethod: {
-            old: oldRegistration.paymentMethod,
-            new: updated.paymentMethod,
-          },
+    await auditLog(tx, {
+      entityType: "Registration",
+      entityId: id,
+      action: "PAYMENT_CONFIRMED",
+      changes: {
+        paymentStatus: {
+          old: oldRegistration.paymentStatus,
+          new: updated.paymentStatus,
         },
-        performedBy: performedBy ?? null,
-        ipAddress: ipAddress ?? null,
+        paidAmount: {
+          old: oldRegistration.paidAmount,
+          new: updated.paidAmount,
+        },
+        paymentMethod: {
+          old: oldRegistration.paymentMethod,
+          new: updated.paymentMethod,
+        },
       },
+      performedBy: performedBy ?? undefined,
+      ipAddress: ipAddress ?? undefined,
     });
   });
 
@@ -990,7 +957,6 @@ export async function deleteRegistration(
     throw new AppError(
       "Registration not found",
       404,
-      true,
       ErrorCodes.REGISTRATION_NOT_FOUND,
     );
   }
@@ -1000,27 +966,24 @@ export async function deleteRegistration(
     throw new AppError(
       "Cannot delete a paid registration. Use refund instead.",
       400,
-      true,
       ErrorCodes.REGISTRATION_DELETE_BLOCKED,
     );
   }
 
   await prisma.$transaction(async (tx) => {
     // Create audit log before deletion
-    await tx.auditLog.create({
-      data: {
-        entityType: "Registration",
-        entityId: id,
-        action: "DELETE",
-        changes: {
-          email: { old: registration.email, new: null },
-          firstName: { old: registration.firstName, new: null },
-          lastName: { old: registration.lastName, new: null },
-          paymentStatus: { old: registration.paymentStatus, new: null },
-          ...(force ? { forceDelete: { old: null, new: true } } : {}),
-        },
-        performedBy: performedBy ?? null,
+    await auditLog(tx, {
+      entityType: "Registration",
+      entityId: id,
+      action: "DELETE",
+      changes: {
+        email: { old: registration.email, new: null },
+        firstName: { old: registration.firstName, new: null },
+        lastName: { old: registration.lastName, new: null },
+        paymentStatus: { old: registration.paymentStatus, new: null },
+        ...(force ? { forceDelete: { old: null, new: true } } : {}),
       },
+      performedBy: performedBy ?? undefined,
     });
 
     // Release access spots (get from priceBreakdown)
@@ -1371,7 +1334,6 @@ export async function getRegistrationForEdit(
     throw new AppError(
       "Registration not found",
       404,
-      true,
       ErrorCodes.REGISTRATION_NOT_FOUND,
     );
   }
@@ -1530,7 +1492,6 @@ export async function editRegistrationPublic(
     throw new AppError(
       "Registration not found",
       404,
-      true,
       ErrorCodes.REGISTRATION_NOT_FOUND,
     );
   }
@@ -1540,7 +1501,6 @@ export async function editRegistrationPublic(
     throw new AppError(
       "Refunded registrations cannot be edited",
       400,
-      true,
       ErrorCodes.REGISTRATION_REFUNDED,
     );
   }
@@ -1549,7 +1509,6 @@ export async function editRegistrationPublic(
     throw new AppError(
       "Event is not accepting changes",
       400,
-      true,
       ErrorCodes.REGISTRATION_EDIT_FORBIDDEN,
     );
   }
@@ -1559,7 +1518,6 @@ export async function editRegistrationPublic(
     throw new AppError(
       "Cannot modify access while payment is under review",
       400,
-      true,
       ErrorCodes.REGISTRATION_VERIFYING_BLOCKED,
     );
   }
@@ -1569,7 +1527,6 @@ export async function editRegistrationPublic(
     throw new AppError(
       "Waived registrations cannot modify access selections",
       400,
-      true,
       ErrorCodes.REGISTRATION_WAIVED_ACCESS_BLOCKED,
     );
   }
@@ -1583,7 +1540,6 @@ export async function editRegistrationPublic(
     throw new AppError(
       "Fully sponsored registrations cannot modify access selections",
       400,
-      true,
       ErrorCodes.REGISTRATION_FULLY_SPONSORED_BLOCKED,
     );
   }
@@ -1606,7 +1562,6 @@ export async function editRegistrationPublic(
       throw new AppError(
         "Form validation failed",
         400,
-        true,
         ErrorCodes.FORM_VALIDATION_ERROR,
         { fieldErrors: validationResult.errors },
       );
@@ -1642,7 +1597,6 @@ export async function editRegistrationPublic(
     throw new AppError(
       "Cannot remove access items from a paid registration",
       400,
-      true,
       ErrorCodes.REGISTRATION_ACCESS_REMOVAL_BLOCKED,
       {
         message: "Paid registrations can only add new access items",
@@ -1662,7 +1616,6 @@ export async function editRegistrationPublic(
       throw new AppError(
         `Invalid access selections: ${validation.errors.join(", ")}`,
         400,
-        true,
         ErrorCodes.BAD_REQUEST,
         { errors: validation.errors },
       );
@@ -1780,14 +1733,12 @@ export async function editRegistrationPublic(
 
     // Create audit log for public edit
     if (Object.keys(auditChanges).length > 0) {
-      await tx.auditLog.create({
-        data: {
-          entityType: "Registration",
-          entityId: registrationId,
-          action: "UPDATE",
-          changes: auditChanges as Prisma.InputJsonValue,
-          performedBy: "PUBLIC",
-        },
+      await auditLog(tx, {
+        entityType: "Registration",
+        entityId: registrationId,
+        action: "UPDATE",
+        changes: auditChanges,
+        performedBy: "PUBLIC",
       });
     }
   });
@@ -1832,7 +1783,6 @@ export async function uploadPaymentProof(
     throw new AppError(
       "Invalid file type. Allowed: PNG, JPG, PDF",
       400,
-      true,
       ErrorCodes.INVALID_FILE_TYPE,
     );
   }
@@ -1844,7 +1794,6 @@ export async function uploadPaymentProof(
     throw new AppError(
       "Unable to determine file type. Please upload a valid PNG, JPG, or PDF.",
       400,
-      true,
       ErrorCodes.INVALID_FILE_TYPE,
     );
   }
@@ -1853,7 +1802,6 @@ export async function uploadPaymentProof(
     throw new AppError(
       "File content does not match allowed types. Allowed: PNG, JPG, PDF",
       400,
-      true,
       ErrorCodes.INVALID_FILE_TYPE,
     );
   }
@@ -1863,7 +1811,6 @@ export async function uploadPaymentProof(
     throw new AppError(
       "File too large. Maximum: 10MB",
       400,
-      true,
       ErrorCodes.FILE_TOO_LARGE,
     );
   }
@@ -1885,7 +1832,6 @@ export async function uploadPaymentProof(
     throw new AppError(
       "Registration not found",
       404,
-      true,
       ErrorCodes.REGISTRATION_NOT_FOUND,
     );
   }
@@ -1931,7 +1877,6 @@ export async function uploadPaymentProof(
     throw new AppError(
       "Failed to upload file. Please try again.",
       500,
-      true,
       ErrorCodes.INTERNAL_ERROR,
     );
   }
@@ -1948,17 +1893,15 @@ export async function uploadPaymentProof(
     });
 
     // Create audit log for payment proof upload
-    await tx.auditLog.create({
-      data: {
-        entityType: "Registration",
-        entityId: registrationId,
-        action: "PAYMENT_PROOF_UPLOADED",
-        changes: {
-          paymentStatus: { old: registration.paymentStatus, new: "VERIFYING" },
-          paymentProofUrl: { old: registration.paymentProofUrl, new: fileUrl },
-        },
-        performedBy: "PUBLIC",
+    await auditLog(tx, {
+      entityType: "Registration",
+      entityId: registrationId,
+      action: "PAYMENT_PROOF_UPLOADED",
+      changes: {
+        paymentStatus: { old: registration.paymentStatus, new: "VERIFYING" },
+        paymentProofUrl: { old: registration.paymentProofUrl, new: fileUrl },
       },
+      performedBy: "PUBLIC",
     });
   });
 
@@ -2020,19 +1963,13 @@ export async function selectPaymentMethod(
   });
 
   if (!registration) {
-    throw new AppError(
-      "Registration not found",
-      404,
-      true,
-      ErrorCodes.NOT_FOUND,
-    );
+    throw new AppError("Registration not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   if (registration.paymentStatus !== "PENDING") {
     throw new AppError(
       "Payment method can only be selected for pending registrations",
       400,
-      true,
       ErrorCodes.REGISTRATION_INVALID_STATUS,
     );
   }

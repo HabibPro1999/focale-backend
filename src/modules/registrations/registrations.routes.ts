@@ -371,9 +371,8 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
 
       if (!registration.paymentProofUrl) {
         throw new AppError(
-          "No payment proof uploaded",
-          404,
-          true,
+      "No payment proof uploaded",
+      404,
           ErrorCodes.NOT_FOUND,
         );
       }

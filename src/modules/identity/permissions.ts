@@ -1,4 +1,3 @@
-export const UserRole = {
-  SUPER_ADMIN: 0,
-  CLIENT_ADMIN: 1,
-} as const;
+// Re-exported from shared constants so other shared modules can import UserRole
+// without creating a shared → modules dependency cycle.
+export { UserRole, type UserRoleValue } from "@shared/constants/roles.js";

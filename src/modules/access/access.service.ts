@@ -179,7 +179,9 @@ export async function createEventAccess(
     select: { id: true, startDate: true, endDate: true },
   });
   if (!event) {
-    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError(
+      "Event not found",
+      404, ErrorCodes.NOT_FOUND);
   }
 
   // Validate access dates against event boundaries
@@ -196,7 +198,6 @@ export async function createEventAccess(
     throw new AppError(
       dateValidation.errors.join("; "),
       400,
-      true,
       ErrorCodes.ACCESS_DATE_OUT_OF_BOUNDS,
     );
   }
@@ -208,9 +209,8 @@ export async function createEventAccess(
     });
     if (prerequisites.length !== requiredAccessIds.length) {
       throw new AppError(
-        "One or more prerequisite access items not found or belong to different event",
-        400,
-        true,
+      "One or more prerequisite access items not found or belong to different event",
+      400,
         ErrorCodes.BAD_REQUEST,
       );
     }
@@ -263,7 +263,6 @@ export async function updateEventAccess(
     throw new AppError(
       "Access item not found",
       404,
-      true,
       ErrorCodes.ACCESS_NOT_FOUND,
     );
   }
@@ -291,7 +290,6 @@ export async function updateEventAccess(
     throw new AppError(
       dateValidation.errors.join("; "),
       400,
-      true,
       ErrorCodes.ACCESS_DATE_OUT_OF_BOUNDS,
     );
   }
@@ -338,9 +336,8 @@ export async function updateEventAccess(
       });
       if (prerequisites.length !== requiredAccessIds.length) {
         throw new AppError(
-          "One or more prerequisite access items not found",
-          400,
-          true,
+      "One or more prerequisite access items not found",
+      400,
           ErrorCodes.BAD_REQUEST,
         );
       }
@@ -352,9 +349,8 @@ export async function updateEventAccess(
       );
       if (hasCycle) {
         throw new AppError(
-          "Circular prerequisite dependency detected",
-          400,
-          true,
+      "Circular prerequisite dependency detected",
+      400,
           ErrorCodes.ACCESS_CIRCULAR_DEPENDENCY,
         );
       }
@@ -378,7 +374,6 @@ export async function deleteEventAccess(id: string): Promise<void> {
     throw new AppError(
       "Access item not found",
       404,
-      true,
       ErrorCodes.ACCESS_NOT_FOUND,
     );
   }
@@ -391,7 +386,6 @@ export async function deleteEventAccess(id: string): Promise<void> {
     throw new AppError(
       "Cannot delete access item with existing registrations",
       409,
-      true,
       ErrorCodes.ACCESS_HAS_REGISTRATIONS,
     );
   }
@@ -409,7 +403,6 @@ export async function deleteEventAccess(id: string): Promise<void> {
     throw new AppError(
       "Cannot delete access item referenced by active sponsorships",
       409,
-      true,
       ErrorCodes.ACCESS_HAS_SPONSORSHIPS,
     );
   }
@@ -663,9 +656,8 @@ export async function reserveAccessSpot(
 
     if (!access) {
       throw new AppError(
-        "Access not found",
-        404,
-        true,
+      "Access not found",
+      404,
         ErrorCodes.ACCESS_NOT_FOUND,
       );
     }
@@ -674,7 +666,6 @@ export async function reserveAccessSpot(
     throw new AppError(
       `${access.name} has insufficient capacity (${remaining} spots remaining, requested ${quantity})`,
       409,
-      true,
       ErrorCodes.ACCESS_CAPACITY_EXCEEDED,
     );
   }

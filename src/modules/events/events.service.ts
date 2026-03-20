@@ -47,7 +47,9 @@ export async function createEvent(
   // Validate that client exists
   const isValidClient = await clientExists(clientId);
   if (!isValidClient) {
-    throw new AppError("Client not found", 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError(
+      "Client not found",
+      404, ErrorCodes.NOT_FOUND);
   }
 
   // Check if slug already exists globally
@@ -58,7 +60,6 @@ export async function createEvent(
     throw new AppError(
       "Event with this slug already exists",
       409,
-      true,
       ErrorCodes.CONFLICT,
     );
   }
@@ -132,7 +133,9 @@ export async function updateEvent(
   // Check if event exists
   const event = await prisma.event.findUnique({ where: { id } });
   if (!event) {
-    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError(
+      "Event not found",
+      404, ErrorCodes.NOT_FOUND);
   }
 
   // Validate status transition if status is being changed
@@ -140,9 +143,8 @@ export async function updateEvent(
     const allowed = VALID_STATUS_TRANSITIONS[event.status] ?? [];
     if (!allowed.includes(input.status)) {
       throw new AppError(
-        `Cannot transition event from ${event.status} to ${input.status}`,
-        400,
-        true,
+      `Cannot transition event from ${event.status} to ${input.status}`,
+      400,
         ErrorCodes.INVALID_STATUS_TRANSITION,
       );
     }
@@ -155,9 +157,8 @@ export async function updateEvent(
     });
     if (existing) {
       throw new AppError(
-        "Event with this slug already exists",
-        409,
-        true,
+      "Event with this slug already exists",
+      409,
         ErrorCodes.CONFLICT,
       );
     }
@@ -222,7 +223,9 @@ export async function deleteEvent(id: string): Promise<void> {
   });
 
   if (!event) {
-    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError(
+      "Event not found",
+      404, ErrorCodes.NOT_FOUND);
   }
 
   // Prevent deletion if event has registrations
@@ -230,7 +233,6 @@ export async function deleteEvent(id: string): Promise<void> {
     throw new AppError(
       `Cannot delete event with ${event._count.registrations} registration(s). Archive the event instead.`,
       409,
-      true,
       ErrorCodes.EVENT_HAS_REGISTRATIONS,
     );
   }
@@ -275,7 +277,6 @@ export async function incrementRegisteredCountTx(
     throw new AppError(
       "Event is at capacity",
       409,
-      true,
       ErrorCodes.EVENT_FULL,
     );
   }
@@ -303,7 +304,6 @@ export async function uploadEventBanner(
     throw new AppError(
       "Invalid file type. Only images are allowed.",
       400,
-      true,
       ErrorCodes.INVALID_FILE_TYPE,
     );
   }
@@ -313,7 +313,9 @@ export async function uploadEventBanner(
     select: { id: true, clientId: true },
   });
   if (!event) {
-    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError(
+      "Event not found",
+      404, ErrorCodes.NOT_FOUND);
   }
 
   const compressed = await compressImage(file.buffer);

@@ -85,20 +85,22 @@ export function errorHandler(
   }
 
   // Fastify schema validation error (thrown before route handler)
-  if ("code" in error && error.code === "FST_ERR_VALIDATION") {
-    const validation = (
-      error as FastifyError & {
-        validation?: { instancePath?: string; message?: string }[];
-      }
-    ).validation;
-    const issues =
-      validation?.map((v) => ({
-        field: v.instancePath?.replace(/^\//, "") || "unknown",
-        message: v.message || "Invalid value",
-      })) ?? [];
+  if ("validation" in error && error.validation) {
+    const fastifyError = error as FastifyError & {
+      validation: { instancePath?: string; message?: string }[];
+      validationContext?: string;
+    };
+    const issues = fastifyError.validation.map((v) => ({
+      field: v.instancePath?.replace(/^\//, "") || "unknown",
+      message: v.message || "Invalid value",
+    }));
+    const context = fastifyError.validationContext ?? "body";
 
     return reply.status(400).send({
-      error: issues.length === 1 ? issues[0].message : "Validation failed",
+      error:
+        issues.length === 1
+          ? issues[0].message
+          : `Validation failed in ${context}`,
       code: ErrorCodes.VALIDATION_ERROR,
       details: { issues },
       requestId,

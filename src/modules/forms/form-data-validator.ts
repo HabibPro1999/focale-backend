@@ -5,7 +5,7 @@ import type {
   FormStep,
   FieldCondition,
   FieldValidation,
-} from "@forms";
+} from "./forms.schema.js";
 import { logger } from "@shared/utils/logger.js";
 
 // ============================================================================

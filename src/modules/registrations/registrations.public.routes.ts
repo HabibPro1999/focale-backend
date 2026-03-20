@@ -21,11 +21,7 @@ import {
   type SelectPaymentMethodInput,
   type PublicEditRegistrationInput,
 } from "./registrations.schema.js";
-import {
-  validateFormData,
-  sanitizeFormData,
-  type FormSchema,
-} from "@shared/utils/form-data-validator.js";
+import { validateFormData, sanitizeFormData, type FormSchema } from "@forms";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { publicRateLimits } from "@core/plugins.js";
@@ -45,12 +41,7 @@ function extractEditToken(request: FastifyRequest): string {
   const queryToken = (request.query as { token?: string }).token;
   const token = headerToken || queryToken;
   if (!token || token.length !== 64) {
-    throw new AppError(
-      "Edit token required",
-      401,
-      true,
-      ErrorCodes.INVALID_TOKEN,
-    );
+    throw new AppError("Edit token required", 401, ErrorCodes.INVALID_TOKEN);
   }
   return token;
 }
@@ -120,7 +111,6 @@ export async function registrationsPublicRoutes(
         throw new AppError(
           "Form validation failed",
           400,
-          true,
           ErrorCodes.FORM_VALIDATION_ERROR,
           { fieldErrors: validationResult.errors },
         );
@@ -213,7 +203,9 @@ export async function registrationEditPublicRoutes(
       const token = extractEditToken(request);
 
       // Verify token value only — read access doesn't expire (payment links stay valid)
-      const isValid = await verifyEditToken(registrationId, token, { checkExpiry: false });
+      const isValid = await verifyEditToken(registrationId, token, {
+        checkExpiry: false,
+      });
       if (!isValid) {
         throw app.httpErrors.forbidden("Invalid edit token");
       }
@@ -247,7 +239,9 @@ export async function registrationEditPublicRoutes(
       const input = request.body;
 
       // Verify token value only — no expiry enforcement
-      const isValid = await verifyEditToken(registrationId, token, { checkExpiry: false });
+      const isValid = await verifyEditToken(registrationId, token, {
+        checkExpiry: false,
+      });
       if (!isValid) {
         throw app.httpErrors.forbidden("Invalid edit token");
       }
@@ -309,7 +303,9 @@ export async function registrationEditPublicRoutes(
       const token = extractEditToken(request);
 
       // Verify token value only — payment proof upload doesn't expire
-      const isValid = await verifyEditToken(registrationId, token, { checkExpiry: false });
+      const isValid = await verifyEditToken(registrationId, token, {
+        checkExpiry: false,
+      });
       if (!isValid) {
         throw app.httpErrors.forbidden("Invalid edit token");
       }

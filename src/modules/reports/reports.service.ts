@@ -2,6 +2,7 @@
 // Reports Module - Service
 // ============================================================================
 
+import ExcelJS from "exceljs";
 import { prisma } from "@/database/client.js";
 import { Prisma } from "@/generated/prisma/client.js";
 import { AppError } from "@shared/errors/app-error.js";
@@ -45,7 +46,7 @@ export async function getFinancialReport(
   });
 
   if (!event) {
-    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   const dateRange = buildDateFilter(query);
@@ -340,7 +341,7 @@ export async function getEventAnalytics(
   });
 
   if (!event) {
-    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   // Run all aggregation queries in parallel
@@ -451,8 +452,6 @@ export async function getEventAnalytics(
 // Event Summary Report (Excel)
 // ============================================================================
 
-import ExcelJS from "exceljs";
-
 export async function generateEventSummary(
   eventId: string,
 ): Promise<{ filename: string; data: Buffer }> {
@@ -462,7 +461,7 @@ export async function generateEventSummary(
     select: { id: true, name: true, slug: true },
   });
   if (!event) {
-    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   // Fetch access types, registrations, and sponsored IDs in parallel
@@ -509,17 +508,27 @@ export async function generateEventSummary(
   }
 
   // Paid/sponsored breakdown
+  // WAIVED is treated as a confirmed terminal state (e.g. speakers, VIPs)
   const paidOnly = registrations.filter(
     (r) => r.paymentStatus === "PAID" && !sponsoredRegIds.has(r.id),
   );
   const sponsoredOnly = registrations.filter(
-    (r) => r.paymentStatus !== "PAID" && sponsoredRegIds.has(r.id),
+    (r) =>
+      r.paymentStatus !== "PAID" &&
+      r.paymentStatus !== "WAIVED" &&
+      sponsoredRegIds.has(r.id),
   );
   const paidAndSponsored = registrations.filter(
     (r) => r.paymentStatus === "PAID" && sponsoredRegIds.has(r.id),
   );
+  const waivedOnly = registrations.filter(
+    (r) => r.paymentStatus === "WAIVED" && !sponsoredRegIds.has(r.id),
+  );
   const confirmed = registrations.filter(
-    (r) => r.paymentStatus === "PAID" || sponsoredRegIds.has(r.id),
+    (r) =>
+      r.paymentStatus === "PAID" ||
+      r.paymentStatus === "WAIVED" ||
+      sponsoredRegIds.has(r.id),
   );
 
   // Confirmed per access type
@@ -644,9 +653,9 @@ export async function generateEventSummary(
   }
   row++;
 
-  // ── Section 3: Total Paid or Sponsored ──
-  addSectionHeader("3. Total Paid or Sponsored");
-  addKVRow("Total Confirmed (Paid or Sponsored)", confirmed.length, {
+  // ── Section 3: Total Confirmed ──
+  addSectionHeader("3. Total Confirmed (Paid, Waived, or Sponsored)");
+  addKVRow("Total Confirmed", confirmed.length, {
     bold: true,
   });
   addKVRow("Paid only (PAID, no sponsorship)", paidOnly.length, {
@@ -656,10 +665,13 @@ export async function generateEventSummary(
   addKVRow("Sponsored only (not yet PAID)", sponsoredOnly.length, {
     indent: true,
   });
+  addKVRow("Waived (speakers / VIPs)", waivedOnly.length, { indent: true });
   row++;
 
   // ── Section 4: Confirmed Seats per Access Type ──
-  addSectionHeader("4. Confirmed Seats per Access Type (Paid or Sponsored)");
+  addSectionHeader(
+    "4. Confirmed Seats per Access Type (Paid, Waived, or Sponsored)",
+  );
   addTableHeader(["Access Type", "Category", "Confirmed"]);
   for (const at of accessTypes) {
     addAccessRow(at.name, at.type, confirmedPerAccess[at.id]);
@@ -713,7 +725,7 @@ export async function exportRegistrations(
   });
 
   if (!event) {
-    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   const dateRange = buildDateFilter(query);

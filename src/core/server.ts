@@ -40,9 +40,6 @@ export async function buildServer(): Promise<AppInstance> {
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
 
-  // Decorate with prisma
-  app.decorate("prisma", prisma);
-
   // Disconnect prisma on server close — registered early so it fires last (child hooks
   // run before parent hooks in Fastify's onClose ordering), ensuring all plugin-level
   // onClose hooks that might use Prisma complete before the connection is dropped.

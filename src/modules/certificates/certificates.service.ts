@@ -67,7 +67,6 @@ export async function getTemplate(id: string) {
     throw new AppError(
       "Certificate template not found",
       404,
-      true,
       ErrorCodes.NOT_FOUND,
     );
   }
@@ -151,7 +150,6 @@ export async function deleteTemplate(id: string) {
     throw new AppError(
       "Certificate template not found",
       404,
-      true,
       ErrorCodes.NOT_FOUND,
     );
   }
@@ -188,7 +186,6 @@ export async function uploadTemplateImage(
     throw new AppError(
       "Only PNG and JPEG images are allowed",
       400,
-      true,
       ErrorCodes.VALIDATION_ERROR,
     );
   }
@@ -202,7 +199,6 @@ export async function uploadTemplateImage(
     throw new AppError(
       "Certificate template not found",
       404,
-      true,
       ErrorCodes.NOT_FOUND,
     );
   }

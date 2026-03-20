@@ -24,6 +24,7 @@ import {
   type CalculatePriceRequest,
 } from "./pricing.schema.js";
 import { z } from "zod";
+import { prisma } from "@/database/client.js";
 import type { AppInstance } from "@shared/types/fastify.js";
 import { publicRateLimits } from "@core/plugins.js";
 
@@ -205,7 +206,7 @@ export async function pricingPublicRoutes(app: AppInstance): Promise<void> {
       const input = request.body;
 
       // Get form to find event
-      const form = await app.prisma.form.findUnique({
+      const form = await prisma.form.findUnique({
         where: { id: formId },
         select: { eventId: true },
       });

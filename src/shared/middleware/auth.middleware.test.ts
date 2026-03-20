@@ -543,7 +543,8 @@ describe("canAccessClient", () => {
     it("should deny access for unknown role values", () => {
       const unknownRole = { role: 99, clientId: "client-123" };
 
-      expect(canAccessClient(unknownRole, "client-123")).toBe(true); // Matches by clientId
+      // Fails closed: unknown roles are always denied regardless of clientId match
+      expect(canAccessClient(unknownRole, "client-123")).toBe(false);
       expect(canAccessClient(unknownRole, "client-456")).toBe(false);
     });
 

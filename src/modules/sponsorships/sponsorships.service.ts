@@ -148,7 +148,9 @@ export async function createSponsorshipBatch(
   });
 
   if (!event) {
-    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError(
+      "Event not found",
+      404, ErrorCodes.NOT_FOUND);
   }
 
   // Verify form exists and belongs to event
@@ -161,7 +163,6 @@ export async function createSponsorshipBatch(
     throw new AppError(
       "Sponsor form not found for this event",
       404,
-      true,
       ErrorCodes.NOT_FOUND,
     );
   }
@@ -216,9 +217,8 @@ export async function createSponsorshipBatch(
 
     if (invalidIds.length > 0) {
       throw new AppError(
-        `Invalid access items: ${invalidIds.join(", ")}`,
-        400,
-        true,
+      `Invalid access items: ${invalidIds.join(", ")}`,
+      400,
         ErrorCodes.BAD_REQUEST,
         { invalidAccessIds: invalidIds },
       );
@@ -247,9 +247,8 @@ export async function createSponsorshipBatch(
 
     if (overlapErrors.length > 0) {
       throw new AppError(
-        `Time conflicts in covered access items: ${overlapErrors.join("; ")}`,
-        400,
-        true,
+      `Time conflicts in covered access items: ${overlapErrors.join("; ")}`,
+      400,
         ErrorCodes.BAD_REQUEST,
         { timeConflicts: overlapErrors },
       );
@@ -303,9 +302,8 @@ export async function createSponsorshipBatch(
     const missingIds = registrationIds.filter((id) => !foundIds.has(id));
     if (missingIds.length > 0) {
       throw new AppError(
-        `Registrations not found: ${missingIds.join(", ")}`,
-        404,
-        true,
+      `Registrations not found: ${missingIds.join(", ")}`,
+      404,
         ErrorCodes.NOT_FOUND,
         { missingRegistrationIds: missingIds },
       );
@@ -865,7 +863,6 @@ export async function updateSponsorship(
     throw new AppError(
       "Sponsorship not found",
       404,
-      true,
       ErrorCodes.NOT_FOUND,
     );
   }
@@ -925,9 +922,8 @@ export async function updateSponsorship(
 
       if (timeErrors.length > 0) {
         throw new AppError(
-          `Time conflicts in covered access items: ${timeErrors.join("; ")}`,
-          400,
-          true,
+      `Time conflicts in covered access items: ${timeErrors.join("; ")}`,
+      400,
           ErrorCodes.BAD_REQUEST,
           { timeConflicts: timeErrors },
         );
@@ -1005,7 +1001,6 @@ export async function cancelSponsorship(
     throw new AppError(
       "Sponsorship not found",
       404,
-      true,
       ErrorCodes.NOT_FOUND,
     );
   }
@@ -1050,7 +1045,6 @@ export async function deleteSponsorship(id: string): Promise<void> {
     throw new AppError(
       "Sponsorship not found",
       404,
-      true,
       ErrorCodes.NOT_FOUND,
     );
   }
@@ -1105,7 +1099,6 @@ export async function linkSponsorshipToRegistration(
     throw new AppError(
       "Sponsorship not found",
       404,
-      true,
       ErrorCodes.NOT_FOUND,
     );
   }
@@ -1114,7 +1107,6 @@ export async function linkSponsorshipToRegistration(
     throw new AppError(
       "Cannot link a cancelled sponsorship",
       400,
-      true,
       ErrorCodes.BAD_REQUEST,
       { code: "SPONSORSHIP_CANCELLED" },
     );
@@ -1148,7 +1140,6 @@ export async function linkSponsorshipToRegistration(
     throw new AppError(
       "Registration not found",
       404,
-      true,
       ErrorCodes.REGISTRATION_NOT_FOUND,
     );
   }
@@ -1158,7 +1149,6 @@ export async function linkSponsorshipToRegistration(
     throw new AppError(
       "Sponsorship and registration must be for the same event",
       400,
-      true,
       ErrorCodes.BAD_REQUEST,
     );
   }
@@ -1174,7 +1164,6 @@ export async function linkSponsorshipToRegistration(
     throw new AppError(
       "Sponsorship is already linked to this registration",
       409,
-      true,
       ErrorCodes.CONFLICT,
       { code: "SPONSORSHIP_ALREADY_LINKED" },
     );
@@ -1216,7 +1205,6 @@ export async function linkSponsorshipToRegistration(
     throw new AppError(
       "Sponsorship coverage does not apply to this registration (no overlap between sponsored items and registration selections)",
       400,
-      true,
       ErrorCodes.SPONSORSHIP_NOT_APPLICABLE,
     );
   }
@@ -1244,9 +1232,8 @@ export async function linkSponsorshipToRegistration(
 
     if (statusUpdate.count === 0) {
       throw new AppError(
-        "Sponsorship cannot be linked (may be cancelled or already processing)",
-        409,
-        true,
+      "Sponsorship cannot be linked (may be cancelled or already processing)",
+      409,
         ErrorCodes.SPONSORSHIP_STATUS_CONFLICT,
       );
     }
@@ -1420,7 +1407,6 @@ export async function linkSponsorshipByCode(
     throw new AppError(
       "Registration not found",
       404,
-      true,
       ErrorCodes.REGISTRATION_NOT_FOUND,
     );
   }
@@ -1431,7 +1417,6 @@ export async function linkSponsorshipByCode(
     throw new AppError(
       `Code ${code} not found for this event`,
       404,
-      true,
       ErrorCodes.NOT_FOUND,
       { code: "SPONSORSHIP_NOT_FOUND" },
     );
@@ -1481,7 +1466,6 @@ async function unlinkSponsorshipFromRegistrationInternal(
     throw new AppError(
       "Sponsorship is not linked to this registration",
       404,
-      true,
       ErrorCodes.NOT_FOUND,
     );
   }
@@ -1572,7 +1556,6 @@ export async function getAvailableSponsorships(
     throw new AppError(
       "Registration not found",
       404,
-      true,
       ErrorCodes.REGISTRATION_NOT_FOUND,
     );
   }
@@ -1581,7 +1564,6 @@ export async function getAvailableSponsorships(
     throw new AppError(
       "Registration does not belong to this event",
       400,
-      true,
       ErrorCodes.BAD_REQUEST,
     );
   }

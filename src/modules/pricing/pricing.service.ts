@@ -55,7 +55,6 @@ export async function updateEventPricing(
     throw new AppError(
       'Event pricing not found',
       404,
-      true,
       ErrorCodes.PRICING_NOT_FOUND
     );
   }
@@ -113,7 +112,6 @@ export async function addPricingRule(
     throw new AppError(
       'Event pricing not found',
       404,
-      true,
       ErrorCodes.PRICING_NOT_FOUND
     );
   }
@@ -144,14 +142,15 @@ export async function updatePricingRule(
     throw new AppError(
       'Event pricing not found',
       404,
-      true,
       ErrorCodes.PRICING_NOT_FOUND
     );
   }
 
   const ruleIndex = pricing.rules.findIndex((r) => r.id === ruleId);
   if (ruleIndex === -1) {
-    throw new AppError('Pricing rule not found', 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError(
+      'Pricing rule not found',
+      404, ErrorCodes.NOT_FOUND);
   }
 
   const updatedRules = [...pricing.rules];
@@ -172,14 +171,15 @@ export async function deletePricingRule(
     throw new AppError(
       'Event pricing not found',
       404,
-      true,
       ErrorCodes.PRICING_NOT_FOUND
     );
   }
 
   const ruleExists = pricing.rules.some((r) => r.id === ruleId);
   if (!ruleExists) {
-    throw new AppError('Pricing rule not found', 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError(
+      'Pricing rule not found',
+      404, ErrorCodes.NOT_FOUND);
   }
 
   const updatedRules = pricing.rules.filter((r) => r.id !== ruleId);
@@ -211,7 +211,6 @@ export async function calculatePrice(
     throw new AppError(
       'Event pricing not found',
       404,
-      true,
       ErrorCodes.PRICING_NOT_FOUND
     );
   }

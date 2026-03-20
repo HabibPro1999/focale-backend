@@ -39,9 +39,8 @@ async function validateClientId(
     const isValid = await clientExists(clientId);
     if (!isValid) {
       throw new AppError(
-        "Invalid client ID",
-        400,
-        true,
+      "Invalid client ID",
+      400,
         ErrorCodes.BAD_REQUEST,
       );
     }
@@ -54,7 +53,9 @@ async function validateClientId(
 async function assertUserExists(id: string): Promise<User> {
   const user = await prisma.user.findUnique({ where: { id } });
   if (!user) {
-    throw new AppError("User not found", 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError(
+      "User not found",
+      404, ErrorCodes.NOT_FOUND);
   }
   return user;
 }
@@ -77,7 +78,6 @@ export async function createUser(
     throw new AppError(
       "User with this email already exists",
       409,
-      true,
       ErrorCodes.CONFLICT,
     );
   }
@@ -87,7 +87,6 @@ export async function createUser(
     throw new AppError(
       "CLIENT_ADMIN users must be assigned to a client",
       400,
-      true,
       ErrorCodes.VALIDATION_ERROR,
     );
   }
@@ -95,7 +94,6 @@ export async function createUser(
     throw new AppError(
       "SUPER_ADMIN users cannot be assigned to a client",
       400,
-      true,
       ErrorCodes.VALIDATION_ERROR,
     );
   }
