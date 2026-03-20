@@ -1,5 +1,5 @@
-import { z } from 'zod';
-import { UserRole } from './permissions.js';
+import { z } from "zod";
+import { UserRole } from "./permissions.js";
 
 // ============================================================================
 // Request Schemas
@@ -10,10 +10,10 @@ export const CreateUserSchema = z
     email: z.string().email(),
     password: z
       .string()
-      .min(12, 'Password must be at least 12 characters')
-      .regex(/[A-Z]/, 'Password must contain at least one uppercase letter')
-      .regex(/[a-z]/, 'Password must contain at least one lowercase letter')
-      .regex(/[0-9]/, 'Password must contain at least one number'),
+      .min(12, "Password must be at least 12 characters")
+      .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
+      .regex(/[a-z]/, "Password must contain at least one lowercase letter")
+      .regex(/[0-9]/, "Password must contain at least one number"),
     name: z.string().min(1).max(100),
     role: z.number().int().min(0).max(1).default(UserRole.CLIENT_ADMIN),
     clientId: z.string().uuid().optional().nullable(),
@@ -36,8 +36,8 @@ export const ListUsersQuerySchema = z
     role: z.coerce.number().int().min(0).max(1).optional(),
     clientId: z.string().uuid().optional(),
     active: z
-      .enum(['true', 'false'])
-      .transform((v) => v === 'true')
+      .enum(["true", "false"])
+      .transform((v) => v === "true")
       .optional(),
     search: z.string().optional(),
   })
@@ -50,36 +50,9 @@ export const UserIdParamSchema = z
   .strict();
 
 // ============================================================================
-// Response Schemas
-// ============================================================================
-
-export const UserResponseSchema = z.object({
-  id: z.string(),
-  email: z.string().email(),
-  name: z.string(),
-  role: z.number(),
-  clientId: z.string().nullable(),
-  active: z.boolean(),
-  createdAt: z.date(),
-  updatedAt: z.date(),
-});
-
-export const UsersListResponseSchema = z.object({
-  data: z.array(UserResponseSchema),
-  meta: z.object({
-    page: z.number(),
-    limit: z.number(),
-    total: z.number(),
-    totalPages: z.number(),
-  }),
-});
-
-// ============================================================================
 // Types
 // ============================================================================
 
 export type CreateUserInput = z.infer<typeof CreateUserSchema>;
 export type UpdateUserInput = z.infer<typeof UpdateUserSchema>;
 export type ListUsersQuery = z.infer<typeof ListUsersQuerySchema>;
-export type UserResponse = z.infer<typeof UserResponseSchema>;
-export type UsersListResponse = z.infer<typeof UsersListResponseSchema>;

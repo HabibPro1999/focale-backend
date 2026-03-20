@@ -20,7 +20,7 @@ import {
 } from "./auth.middleware.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
-import { UserRole } from "@modules/identity/permissions.js";
+import { UserRole } from "@shared/constants/roles.js";
 
 // ============================================================================
 // Test Helpers

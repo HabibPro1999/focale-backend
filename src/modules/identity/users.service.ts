@@ -38,51 +38,20 @@ async function validateClientId(
   if (clientId) {
     const isValid = await clientExists(clientId);
     if (!isValid) {
-      throw new AppError(
-      "Invalid client ID",
-      400,
-        ErrorCodes.BAD_REQUEST,
-      );
+      throw new AppError("Invalid client ID", 400, ErrorCodes.BAD_REQUEST);
     }
   }
 }
 
 /**
- * Assert that a user exists, throwing if not found.
+ * Enforce role-clientId consistency invariant:
+ * - CLIENT_ADMIN must have a clientId
+ * - SUPER_ADMIN must not have a clientId
  */
-async function assertUserExists(id: string): Promise<User> {
-  const user = await prisma.user.findUnique({ where: { id } });
-  if (!user) {
-    throw new AppError(
-      "User not found",
-      404, ErrorCodes.NOT_FOUND);
-  }
-  return user;
-}
-
-// ============================================================================
-// Service Functions
-// ============================================================================
-
-/**
- * Create a new user in Firebase Auth + set custom claims + create in DB.
- */
-export async function createUser(
-  input: CreateUserInput & { password: string },
-): Promise<User> {
-  const { email, password, name, role, clientId } = input;
-
-  // Check if user already exists in DB
-  const existing = await prisma.user.findUnique({ where: { email } });
-  if (existing) {
-    throw new AppError(
-      "User with this email already exists",
-      409,
-      ErrorCodes.CONFLICT,
-    );
-  }
-
-  // Validate role-clientId consistency
+function validateRoleClientConsistency(
+  role: number,
+  clientId: string | null | undefined,
+): void {
   if (role === UserRole.CLIENT_ADMIN && !clientId) {
     throw new AppError(
       "CLIENT_ADMIN users must be assigned to a client",
@@ -97,6 +66,41 @@ export async function createUser(
       ErrorCodes.VALIDATION_ERROR,
     );
   }
+}
+
+/**
+ * Assert that a user exists, throwing if not found.
+ */
+async function assertUserExists(id: string): Promise<User> {
+  const user = await prisma.user.findUnique({ where: { id } });
+  if (!user) {
+    throw new AppError("User not found", 404, ErrorCodes.NOT_FOUND);
+  }
+  return user;
+}
+
+// ============================================================================
+// Service Functions
+// ============================================================================
+
+/**
+ * Create a new user in Firebase Auth + set custom claims + create in DB.
+ */
+export async function createUser(input: CreateUserInput): Promise<User> {
+  const { email, password, name, role, clientId } = input;
+
+  // Check if user already exists in DB
+  const existing = await prisma.user.findUnique({ where: { email } });
+  if (existing) {
+    throw new AppError(
+      "User with this email already exists",
+      409,
+      ErrorCodes.CONFLICT,
+    );
+  }
+
+  // Validate role-clientId consistency
+  validateRoleClientConsistency(role, clientId);
 
   // Validate clientId if provided
   await validateClientId(clientId);
@@ -112,7 +116,7 @@ export async function createUser(
     });
 
     // Create in database
-    return prisma.user.create({
+    return await prisma.user.create({
       data: {
         id: firebaseUser.uid,
         email,
@@ -167,10 +171,40 @@ export async function updateUser(
     const newClientId =
       input.clientId !== undefined ? input.clientId : user.clientId;
 
+    // Validate the resulting role-clientId combination
+    validateRoleClientConsistency(newRole, newClientId);
+
+    // Set Firebase claims (source of truth for auth) before DB update
     await setCustomClaims(id, {
       role: newRole,
       clientId: newClientId,
     });
+
+    try {
+      const updated = await prisma.user.update({
+        where: { id },
+        data: input,
+        include: { client: true },
+      });
+      invalidateUserCache(id);
+      return updated;
+    } catch (error) {
+      // Rollback: restore old Firebase claims if DB update fails
+      await setCustomClaims(id, {
+        role: user.role,
+        clientId: user.clientId,
+      }).catch((rollbackErr) => {
+        logger.error(
+          {
+            err: rollbackErr,
+            uid: id,
+            originalError: error,
+          },
+          "Failed to rollback Firebase claims after DB update failure - claims may be stale",
+        );
+      });
+      throw error;
+    }
   }
 
   const updated = await prisma.user.update({
@@ -221,9 +255,35 @@ export async function listUsers(
 
 /**
  * Delete user from Firebase Auth + database.
+ * Enforces domain invariants: cannot delete own account or the last super admin.
  */
-export async function deleteUser(id: string): Promise<void> {
-  await assertUserExists(id);
+export async function deleteUser(
+  id: string,
+  requestingUserId: string,
+): Promise<void> {
+  if (id === requestingUserId) {
+    throw new AppError(
+      "Cannot delete your own account",
+      400,
+      ErrorCodes.BAD_REQUEST,
+    );
+  }
+
+  const userToDelete = await assertUserExists(id);
+
+  if (userToDelete.role === UserRole.SUPER_ADMIN) {
+    const superAdminCount = await prisma.user.count({
+      where: { role: UserRole.SUPER_ADMIN, active: true },
+    });
+    if (superAdminCount <= 1) {
+      throw new AppError(
+        "Cannot delete the last super admin",
+        400,
+        ErrorCodes.BAD_REQUEST,
+      );
+    }
+  }
+
   await deleteFirebaseUser(id);
   await prisma.user.delete({ where: { id } });
   invalidateUserCache(id);
