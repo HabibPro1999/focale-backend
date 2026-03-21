@@ -14,6 +14,7 @@ import type {
   LinkedBeneficiaryInput,
 } from "./sponsorships.schema.js";
 import type { Prisma, Sponsorship } from "@/generated/prisma/client.js";
+import type { TxClient } from "@shared/types/prisma.js";
 import {
   queueSponsorshipEmail,
   queueTriggeredEmail,
@@ -110,11 +111,6 @@ type BatchTransactionResult = {
   sponsorships: CreatedBatchSponsorship[];
   linkedEmailEntries: LinkedEmailEntry[];
 };
-
-type TxClient = Omit<
-  typeof prisma,
-  "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends"
->;
 
 export interface CreateBatchResult {
   batchId: string;

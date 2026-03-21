@@ -1,5 +1,7 @@
 import { z, type ZodTypeAny } from "zod";
 import safeRegex from "safe-regex";
+
+const MIN_PHONE_LENGTH = 8;
 import type {
   FormField,
   FormStep,
@@ -93,7 +95,7 @@ function evaluateSingleCondition(
  * Determine if a field should be validated based on its conditions.
  * Hidden fields (conditions not met) should be skipped during validation.
  */
-export function shouldValidateField(
+function shouldValidateField(
   field: FormField,
   formData: Record<string, unknown>,
   allFields: FormField[],
@@ -179,7 +181,7 @@ function buildPhoneSchema(
   const label = getFieldLabel(field);
 
   // Default minimum for phone numbers
-  const minLen = validation?.minLength ?? 8;
+  const minLen = validation?.minLength ?? MIN_PHONE_LENGTH;
   schema = schema.min(minLen, `${label} must be at least ${minLen} characters`);
 
   if (validation?.maxLength) {
@@ -413,9 +415,10 @@ function buildFieldSchema(field: FormField): ZodTypeAny | null {
       // Display-only fields, no validation needed
       return null;
 
-    default:
-      // Unknown field type, accept any value
-      return z.any().optional();
+    default: {
+      const _exhaustive: never = field.type;
+      throw new Error(`Unsupported field type: ${String(_exhaustive)}`);
+    }
   }
 }
 

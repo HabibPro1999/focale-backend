@@ -1,9 +1,9 @@
-import { describe, it, expect } from 'vitest';
-import { prismaMock } from '../../../tests/mocks/prisma.js';
+import { describe, it, expect } from "vitest";
+import { prismaMock } from "../../../tests/mocks/prisma.js";
 import {
   createMockClient,
   createManyMockClients,
-} from '../../../tests/helpers/factories.js';
+} from "../../../tests/helpers/factories.js";
 import {
   createClient,
   getClientById,
@@ -11,19 +11,20 @@ import {
   listClients,
   deleteClient,
   clientExists,
-} from './clients.service.js';
-import { AppError } from '@shared/errors/app-error.js';
-import { ErrorCodes } from '@shared/errors/error-codes.js';
-import { ALL_MODULE_IDS } from './clients.schema.js';
+} from "./clients.service.js";
+import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { MODULE_IDS } from "./clients.schema.js";
+const ALL_MODULE_IDS = [...MODULE_IDS];
 
-describe('Clients Service', () => {
-  const clientId = 'client-123';
+describe("Clients Service", () => {
+  const clientId = "client-123";
 
-  describe('createClient', () => {
-    it('should create a client with required fields only', async () => {
+  describe("createClient", () => {
+    it("should create a client with required fields only", async () => {
       const mockClient = createMockClient({
         id: clientId,
-        name: 'Test Company',
+        name: "Test Company",
         logo: null,
         primaryColor: null,
         email: null,
@@ -33,14 +34,14 @@ describe('Clients Service', () => {
 
       prismaMock.client.create.mockResolvedValue(mockClient);
 
-      const result = await createClient({ name: 'Test Company' });
+      const result = await createClient({ name: "Test Company" });
 
       expect(result.id).toBe(clientId);
-      expect(result.name).toBe('Test Company');
+      expect(result.name).toBe("Test Company");
       expect(result.enabledModules).toEqual(ALL_MODULE_IDS);
       expect(prismaMock.client.create).toHaveBeenCalledWith({
         data: {
-          name: 'Test Company',
+          name: "Test Company",
           logo: null,
           primaryColor: null,
           email: null,
@@ -50,45 +51,45 @@ describe('Clients Service', () => {
       });
     });
 
-    it('should create a client with all optional fields', async () => {
+    it("should create a client with all optional fields", async () => {
       const mockClient = createMockClient({
         id: clientId,
-        name: 'Full Client',
-        logo: 'https://example.com/logo.png',
-        primaryColor: '#FF5733',
-        email: 'contact@example.com',
-        phone: '+216 12 345 678',
-        enabledModules: ['pricing', 'registrations'],
+        name: "Full Client",
+        logo: "https://example.com/logo.png",
+        primaryColor: "#FF5733",
+        email: "contact@example.com",
+        phone: "+216 12 345 678",
+        enabledModules: ["pricing", "registrations"],
       });
 
       prismaMock.client.create.mockResolvedValue(mockClient);
 
       const result = await createClient({
-        name: 'Full Client',
-        logo: 'https://example.com/logo.png',
-        primaryColor: '#FF5733',
-        email: 'contact@example.com',
-        phone: '+216 12 345 678',
-        enabledModules: ['pricing', 'registrations'],
+        name: "Full Client",
+        logo: "https://example.com/logo.png",
+        primaryColor: "#FF5733",
+        email: "contact@example.com",
+        phone: "+216 12 345 678",
+        enabledModules: ["pricing", "registrations"],
       });
 
-      expect(result.name).toBe('Full Client');
-      expect(result.logo).toBe('https://example.com/logo.png');
-      expect(result.primaryColor).toBe('#FF5733');
-      expect(result.email).toBe('contact@example.com');
-      expect(result.phone).toBe('+216 12 345 678');
-      expect(result.enabledModules).toEqual(['pricing', 'registrations']);
+      expect(result.name).toBe("Full Client");
+      expect(result.logo).toBe("https://example.com/logo.png");
+      expect(result.primaryColor).toBe("#FF5733");
+      expect(result.email).toBe("contact@example.com");
+      expect(result.phone).toBe("+216 12 345 678");
+      expect(result.enabledModules).toEqual(["pricing", "registrations"]);
     });
 
-    it('should default to all modules when enabledModules not provided', async () => {
+    it("should default to all modules when enabledModules not provided", async () => {
       const mockClient = createMockClient({
-        name: 'Default Modules Client',
+        name: "Default Modules Client",
         enabledModules: ALL_MODULE_IDS,
       });
 
       prismaMock.client.create.mockResolvedValue(mockClient);
 
-      await createClient({ name: 'Default Modules Client' });
+      await createClient({ name: "Default Modules Client" });
 
       expect(prismaMock.client.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
@@ -97,9 +98,9 @@ describe('Clients Service', () => {
       });
     });
 
-    it('should handle nullable fields correctly', async () => {
+    it("should handle nullable fields correctly", async () => {
       const mockClient = createMockClient({
-        name: 'Nullable Test',
+        name: "Nullable Test",
         logo: null,
         primaryColor: null,
         email: null,
@@ -109,7 +110,7 @@ describe('Clients Service', () => {
       prismaMock.client.create.mockResolvedValue(mockClient);
 
       const result = await createClient({
-        name: 'Nullable Test',
+        name: "Nullable Test",
         logo: null,
         primaryColor: null,
         email: null,
@@ -123,11 +124,11 @@ describe('Clients Service', () => {
     });
   });
 
-  describe('getClientById', () => {
-    it('should return client when found', async () => {
+  describe("getClientById", () => {
+    it("should return client when found", async () => {
       const mockClient = createMockClient({
         id: clientId,
-        name: 'Found Client',
+        name: "Found Client",
       });
 
       prismaMock.client.findUnique.mockResolvedValue(mockClient);
@@ -136,107 +137,107 @@ describe('Clients Service', () => {
 
       expect(result).not.toBeNull();
       expect(result?.id).toBe(clientId);
-      expect(result?.name).toBe('Found Client');
+      expect(result?.name).toBe("Found Client");
       expect(prismaMock.client.findUnique).toHaveBeenCalledWith({
         where: { id: clientId },
       });
     });
 
-    it('should return null when client not found', async () => {
+    it("should return null when client not found", async () => {
       prismaMock.client.findUnique.mockResolvedValue(null);
 
-      const result = await getClientById('non-existent-id');
+      const result = await getClientById("non-existent-id");
 
       expect(result).toBeNull();
     });
   });
 
-  describe('updateClient', () => {
-    it('should update client name', async () => {
+  describe("updateClient", () => {
+    it("should update client name", async () => {
       const existingClient = createMockClient({
         id: clientId,
-        name: 'Old Name',
-        enabledModules: ['pricing', 'registrations'],
+        name: "Old Name",
+        enabledModules: ["pricing", "registrations"],
       });
       const updatedClient = createMockClient({
         id: clientId,
-        name: 'New Name',
-        enabledModules: ['pricing', 'registrations'],
+        name: "New Name",
+        enabledModules: ["pricing", "registrations"],
       });
 
       prismaMock.client.findUnique.mockResolvedValue(existingClient);
       prismaMock.client.update.mockResolvedValue(updatedClient);
 
-      const result = await updateClient(clientId, { name: 'New Name' });
+      const result = await updateClient(clientId, { name: "New Name" });
 
-      expect(result.name).toBe('New Name');
+      expect(result.name).toBe("New Name");
       expect(prismaMock.client.update).toHaveBeenCalledWith({
         where: { id: clientId },
-        data: { name: 'New Name' },
+        data: { name: "New Name" },
       });
     });
 
-    it('should update multiple fields at once', async () => {
+    it("should update multiple fields at once", async () => {
       const existingClient = createMockClient({
         id: clientId,
-        enabledModules: ['pricing'],
+        enabledModules: ["pricing"],
       });
       const updatedClient = createMockClient({
         id: clientId,
-        name: 'Updated Company',
-        email: 'new@example.com',
-        phone: '+216 98 765 432',
+        name: "Updated Company",
+        email: "new@example.com",
+        phone: "+216 98 765 432",
         active: false,
-        enabledModules: ['pricing'],
+        enabledModules: ["pricing"],
       });
 
       prismaMock.client.findUnique.mockResolvedValue(existingClient);
       prismaMock.client.update.mockResolvedValue(updatedClient);
 
       const result = await updateClient(clientId, {
-        name: 'Updated Company',
-        email: 'new@example.com',
-        phone: '+216 98 765 432',
+        name: "Updated Company",
+        email: "new@example.com",
+        phone: "+216 98 765 432",
         active: false,
       });
 
-      expect(result.name).toBe('Updated Company');
-      expect(result.email).toBe('new@example.com');
-      expect(result.phone).toBe('+216 98 765 432');
+      expect(result.name).toBe("Updated Company");
+      expect(result.email).toBe("new@example.com");
+      expect(result.phone).toBe("+216 98 765 432");
       expect(result.active).toBe(false);
     });
 
-    it('should throw AppError when client not found', async () => {
+    it("should throw AppError when client not found", async () => {
       prismaMock.client.findUnique.mockResolvedValue(null);
 
       await expect(
-        updateClient('non-existent-id', { name: 'New Name' })
+        updateClient("non-existent-id", { name: "New Name" }),
       ).rejects.toThrow(AppError);
 
       await expect(
-        updateClient('non-existent-id', { name: 'New Name' })
+        updateClient("non-existent-id", { name: "New Name" }),
       ).rejects.toMatchObject({
         statusCode: 404,
         code: ErrorCodes.NOT_FOUND,
       });
     });
 
-    describe('enabledModules one-way enable logic', () => {
-      it('should merge new modules with existing modules (union)', async () => {
+    describe("enabledModules one-way enable logic", () => {
+      it("should merge new modules with existing modules (union)", async () => {
         const existingClient = createMockClient({
           id: clientId,
-          enabledModules: ['pricing', 'registrations'],
+          enabledModules: ["pricing", "registrations"],
         });
         const updatedClient = createMockClient({
           id: clientId,
-          enabledModules: ['pricing', 'registrations', 'sponsorships'],
+          enabledModules: ["pricing", "registrations", "sponsorships"],
         });
 
         prismaMock.client.findUnique.mockResolvedValue(existingClient);
         prismaMock.client.update.mockResolvedValue(updatedClient);
 
         const result = await updateClient(clientId, {
-          enabledModules: ['sponsorships'],
+          enabledModules: ["sponsorships"],
         });
 
         // Should contain both existing and new modules
@@ -244,30 +245,40 @@ describe('Clients Service', () => {
           where: { id: clientId },
           data: {
             enabledModules: expect.arrayContaining([
-              'pricing',
-              'registrations',
-              'sponsorships',
+              "pricing",
+              "registrations",
+              "sponsorships",
             ]),
           },
         });
-        expect(result.enabledModules).toContain('sponsorships');
+        expect(result.enabledModules).toContain("sponsorships");
       });
 
-      it('should not remove existing modules when updating', async () => {
+      it("should not remove existing modules when updating", async () => {
         const existingClient = createMockClient({
           id: clientId,
-          enabledModules: ['pricing', 'registrations', 'sponsorships', 'emails'],
+          enabledModules: [
+            "pricing",
+            "registrations",
+            "sponsorships",
+            "emails",
+          ],
         });
         const updatedClient = createMockClient({
           id: clientId,
-          enabledModules: ['pricing', 'registrations', 'sponsorships', 'emails'],
+          enabledModules: [
+            "pricing",
+            "registrations",
+            "sponsorships",
+            "emails",
+          ],
         });
 
         prismaMock.client.findUnique.mockResolvedValue(existingClient);
         prismaMock.client.update.mockResolvedValue(updatedClient);
 
         await updateClient(clientId, {
-          enabledModules: ['pricing'], // Trying to set only pricing
+          enabledModules: ["pricing"], // Trying to set only pricing
         });
 
         // Should still contain all modules (one-way enable)
@@ -275,30 +286,30 @@ describe('Clients Service', () => {
           where: { id: clientId },
           data: {
             enabledModules: expect.arrayContaining([
-              'pricing',
-              'registrations',
-              'sponsorships',
-              'emails',
+              "pricing",
+              "registrations",
+              "sponsorships",
+              "emails",
             ]),
           },
         });
       });
 
-      it('should handle duplicate modules in update input', async () => {
+      it("should handle duplicate modules in update input", async () => {
         const existingClient = createMockClient({
           id: clientId,
-          enabledModules: ['pricing'],
+          enabledModules: ["pricing"],
         });
         const updatedClient = createMockClient({
           id: clientId,
-          enabledModules: ['pricing', 'emails'],
+          enabledModules: ["pricing", "emails"],
         });
 
         prismaMock.client.findUnique.mockResolvedValue(existingClient);
         prismaMock.client.update.mockResolvedValue(updatedClient);
 
         await updateClient(clientId, {
-          enabledModules: ['pricing', 'emails', 'pricing'], // Duplicate pricing
+          enabledModules: ["pricing", "emails", "pricing"], // Duplicate pricing
         });
 
         // Should deduplicate modules
@@ -308,33 +319,33 @@ describe('Clients Service', () => {
         expect(modules.length).toBe(uniqueModules.length);
       });
 
-      it('should not include enabledModules in update if not provided', async () => {
+      it("should not include enabledModules in update if not provided", async () => {
         const existingClient = createMockClient({
           id: clientId,
-          enabledModules: ['pricing'],
+          enabledModules: ["pricing"],
         });
         const updatedClient = createMockClient({
           id: clientId,
-          name: 'Just Name Update',
-          enabledModules: ['pricing'],
+          name: "Just Name Update",
+          enabledModules: ["pricing"],
         });
 
         prismaMock.client.findUnique.mockResolvedValue(existingClient);
         prismaMock.client.update.mockResolvedValue(updatedClient);
 
-        await updateClient(clientId, { name: 'Just Name Update' });
+        await updateClient(clientId, { name: "Just Name Update" });
 
         // enabledModules should not be in the update data
         expect(prismaMock.client.update).toHaveBeenCalledWith({
           where: { id: clientId },
-          data: { name: 'Just Name Update' },
+          data: { name: "Just Name Update" },
         });
       });
     });
   });
 
-  describe('listClients', () => {
-    it('should return paginated clients', async () => {
+  describe("listClients", () => {
+    it("should return paginated clients", async () => {
       const mockClients = createManyMockClients(3);
 
       prismaMock.client.findMany.mockResolvedValue(mockClients);
@@ -349,7 +360,7 @@ describe('Clients Service', () => {
       expect(result.meta.totalPages).toBe(1);
     });
 
-    it('should calculate correct pagination for multiple pages', async () => {
+    it("should calculate correct pagination for multiple pages", async () => {
       const mockClients = createManyMockClients(10);
 
       prismaMock.client.findMany.mockResolvedValue(mockClients);
@@ -364,11 +375,11 @@ describe('Clients Service', () => {
         where: {},
         skip: 10, // (page 2 - 1) * limit 10
         take: 10,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: "desc" },
       });
     });
 
-    it('should filter by active status', async () => {
+    it("should filter by active status", async () => {
       const activeClients = createManyMockClients(2).map((c) => ({
         ...c,
         active: true,
@@ -383,11 +394,11 @@ describe('Clients Service', () => {
         where: { active: true },
         skip: 0,
         take: 10,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: "desc" },
       });
     });
 
-    it('should filter inactive clients', async () => {
+    it("should filter inactive clients", async () => {
       const inactiveClients = createManyMockClients(1).map((c) => ({
         ...c,
         active: false,
@@ -402,89 +413,93 @@ describe('Clients Service', () => {
         where: { active: false },
         skip: 0,
         take: 10,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: "desc" },
       });
     });
 
-    it('should search by name (case-insensitive)', async () => {
-      const mockClient = createMockClient({ name: 'Acme Corporation' });
+    it("should search by name (case-insensitive)", async () => {
+      const mockClient = createMockClient({ name: "Acme Corporation" });
 
       prismaMock.client.findMany.mockResolvedValue([mockClient]);
       prismaMock.client.count.mockResolvedValue(1);
 
-      await listClients({ page: 1, limit: 10, search: 'acme' });
+      await listClients({ page: 1, limit: 10, search: "acme" });
 
       expect(prismaMock.client.findMany).toHaveBeenCalledWith({
         where: {
           OR: [
-            { name: { contains: 'acme', mode: 'insensitive' } },
-            { email: { contains: 'acme', mode: 'insensitive' } },
+            { name: { contains: "acme", mode: "insensitive" } },
+            { email: { contains: "acme", mode: "insensitive" } },
           ],
         },
         skip: 0,
         take: 10,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: "desc" },
       });
     });
 
-    it('should search by email (case-insensitive)', async () => {
-      const mockClient = createMockClient({ email: 'contact@acme.com' });
+    it("should search by email (case-insensitive)", async () => {
+      const mockClient = createMockClient({ email: "contact@acme.com" });
 
       prismaMock.client.findMany.mockResolvedValue([mockClient]);
       prismaMock.client.count.mockResolvedValue(1);
 
-      await listClients({ page: 1, limit: 10, search: 'acme.com' });
+      await listClients({ page: 1, limit: 10, search: "acme.com" });
 
       expect(prismaMock.client.findMany).toHaveBeenCalledWith({
         where: {
           OR: [
-            { name: { contains: 'acme.com', mode: 'insensitive' } },
-            { email: { contains: 'acme.com', mode: 'insensitive' } },
+            { name: { contains: "acme.com", mode: "insensitive" } },
+            { email: { contains: "acme.com", mode: "insensitive" } },
           ],
         },
         skip: 0,
         take: 10,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: "desc" },
       });
     });
 
-    it('should combine active filter and search', async () => {
+    it("should combine active filter and search", async () => {
       const mockClient = createMockClient({
-        name: 'Active Acme',
+        name: "Active Acme",
         active: true,
       });
 
       prismaMock.client.findMany.mockResolvedValue([mockClient]);
       prismaMock.client.count.mockResolvedValue(1);
 
-      await listClients({ page: 1, limit: 10, active: true, search: 'acme' });
+      await listClients({ page: 1, limit: 10, active: true, search: "acme" });
 
       expect(prismaMock.client.findMany).toHaveBeenCalledWith({
         where: {
           active: true,
           OR: [
-            { name: { contains: 'acme', mode: 'insensitive' } },
-            { email: { contains: 'acme', mode: 'insensitive' } },
+            { name: { contains: "acme", mode: "insensitive" } },
+            { email: { contains: "acme", mode: "insensitive" } },
           ],
         },
         skip: 0,
         take: 10,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: "desc" },
       });
     });
 
-    it('should return empty results when no clients match', async () => {
+    it("should return empty results when no clients match", async () => {
       prismaMock.client.findMany.mockResolvedValue([]);
       prismaMock.client.count.mockResolvedValue(0);
 
-      const result = await listClients({ page: 1, limit: 10, search: 'nonexistent' });
+      const result = await listClients({
+        page: 1,
+        limit: 10,
+        search: "nonexistent",
+      });
 
       expect(result.data).toHaveLength(0);
       expect(result.meta.total).toBe(0);
       expect(result.meta.totalPages).toBe(0);
     });
 
-    it('should order by createdAt descending', async () => {
+    it("should order by createdAt descending", async () => {
       const mockClients = createManyMockClients(3);
 
       prismaMock.client.findMany.mockResolvedValue(mockClients);
@@ -494,14 +509,14 @@ describe('Clients Service', () => {
 
       expect(prismaMock.client.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          orderBy: { createdAt: 'desc' },
-        })
+          orderBy: { createdAt: "desc" },
+        }),
       );
     });
   });
 
-  describe('deleteClient', () => {
-    it('should delete client with no dependencies', async () => {
+  describe("deleteClient", () => {
+    it("should delete client with no dependencies", async () => {
       const mockClient = {
         ...createMockClient({ id: clientId }),
         _count: { users: 0, events: 0 },
@@ -517,24 +532,26 @@ describe('Clients Service', () => {
       });
     });
 
-    it('should throw AppError when client not found', async () => {
+    it("should throw AppError when client not found", async () => {
       prismaMock.client.findUnique.mockResolvedValue(null);
 
-      await expect(deleteClient('non-existent-id')).rejects.toThrow(AppError);
+      await expect(deleteClient("non-existent-id")).rejects.toThrow(AppError);
 
-      await expect(deleteClient('non-existent-id')).rejects.toMatchObject({
+      await expect(deleteClient("non-existent-id")).rejects.toMatchObject({
         statusCode: 404,
         code: ErrorCodes.NOT_FOUND,
       });
     });
 
-    it('should throw when client has associated users', async () => {
+    it("should throw when client has associated users", async () => {
       const mockClientWithUsers = {
         ...createMockClient({ id: clientId }),
         _count: { users: 3, events: 0 },
       };
 
-      prismaMock.client.findUnique.mockResolvedValue(mockClientWithUsers as never);
+      prismaMock.client.findUnique.mockResolvedValue(
+        mockClientWithUsers as never,
+      );
 
       await expect(deleteClient(clientId)).rejects.toThrow(AppError);
 
@@ -546,13 +563,15 @@ describe('Clients Service', () => {
       expect(prismaMock.client.delete).not.toHaveBeenCalled();
     });
 
-    it('should throw when client has associated events', async () => {
+    it("should throw when client has associated events", async () => {
       const mockClientWithEvents = {
         ...createMockClient({ id: clientId }),
         _count: { users: 0, events: 5 },
       };
 
-      prismaMock.client.findUnique.mockResolvedValue(mockClientWithEvents as never);
+      prismaMock.client.findUnique.mockResolvedValue(
+        mockClientWithEvents as never,
+      );
 
       await expect(deleteClient(clientId)).rejects.toThrow(AppError);
 
@@ -564,20 +583,22 @@ describe('Clients Service', () => {
       expect(prismaMock.client.delete).not.toHaveBeenCalled();
     });
 
-    it('should throw when client has both users and events', async () => {
+    it("should throw when client has both users and events", async () => {
       const mockClientWithDependencies = {
         ...createMockClient({ id: clientId }),
         _count: { users: 2, events: 3 },
       };
 
-      prismaMock.client.findUnique.mockResolvedValue(mockClientWithDependencies as never);
+      prismaMock.client.findUnique.mockResolvedValue(
+        mockClientWithDependencies as never,
+      );
 
       await expect(deleteClient(clientId)).rejects.toThrow(
-        /Cannot delete client with 2 user\(s\) and 3 event\(s\)/
+        /Cannot delete client with 2 user\(s\) and 3 event\(s\)/,
       );
     });
 
-    it('should include _count in findUnique query', async () => {
+    it("should include _count in findUnique query", async () => {
       const mockClient = {
         ...createMockClient({ id: clientId }),
         _count: { users: 0, events: 0 },
@@ -602,8 +623,8 @@ describe('Clients Service', () => {
     });
   });
 
-  describe('clientExists', () => {
-    it('should return true when client exists', async () => {
+  describe("clientExists", () => {
+    it("should return true when client exists", async () => {
       prismaMock.client.count.mockResolvedValue(1);
 
       const result = await clientExists(clientId);
@@ -614,51 +635,51 @@ describe('Clients Service', () => {
       });
     });
 
-    it('should return false when client does not exist', async () => {
+    it("should return false when client does not exist", async () => {
       prismaMock.client.count.mockResolvedValue(0);
 
-      const result = await clientExists('non-existent-id');
+      const result = await clientExists("non-existent-id");
 
       expect(result).toBe(false);
     });
   });
 
-  describe('edge cases', () => {
-    it('should handle empty string search gracefully', async () => {
+  describe("edge cases", () => {
+    it("should handle empty string search gracefully", async () => {
       prismaMock.client.findMany.mockResolvedValue([]);
       prismaMock.client.count.mockResolvedValue(0);
 
       // Empty string is falsy, so OR clause should not be added
-      await listClients({ page: 1, limit: 10, search: '' });
+      await listClients({ page: 1, limit: 10, search: "" });
 
       expect(prismaMock.client.findMany).toHaveBeenCalledWith({
         where: {},
         skip: 0,
         take: 10,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: "desc" },
       });
     });
 
-    it('should handle special characters in search', async () => {
+    it("should handle special characters in search", async () => {
       prismaMock.client.findMany.mockResolvedValue([]);
       prismaMock.client.count.mockResolvedValue(0);
 
-      await listClients({ page: 1, limit: 10, search: 'test@company.com' });
+      await listClients({ page: 1, limit: 10, search: "test@company.com" });
 
       expect(prismaMock.client.findMany).toHaveBeenCalledWith({
         where: {
           OR: [
-            { name: { contains: 'test@company.com', mode: 'insensitive' } },
-            { email: { contains: 'test@company.com', mode: 'insensitive' } },
+            { name: { contains: "test@company.com", mode: "insensitive" } },
+            { email: { contains: "test@company.com", mode: "insensitive" } },
           ],
         },
         skip: 0,
         take: 10,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: "desc" },
       });
     });
 
-    it('should handle very large page numbers', async () => {
+    it("should handle very large page numbers", async () => {
       prismaMock.client.findMany.mockResolvedValue([]);
       prismaMock.client.count.mockResolvedValue(5);
 
@@ -669,11 +690,11 @@ describe('Clients Service', () => {
         where: {},
         skip: 9990, // (1000 - 1) * 10
         take: 10,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: "desc" },
       });
     });
 
-    it('should handle updating client with empty input object', async () => {
+    it("should handle updating client with empty input object", async () => {
       const existingClient = createMockClient({ id: clientId });
       const updatedClient = createMockClient({ id: clientId });
 

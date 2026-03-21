@@ -12,7 +12,6 @@ import {
   updateForm,
   listForms,
   deleteForm,
-  formExists,
   createDefaultSponsorSchema,
   getSponsorFormByEventSlug,
   getSponsorFormByEventId,
@@ -531,31 +530,6 @@ describe("Forms Service", () => {
         statusCode: 404,
         code: ErrorCodes.NOT_FOUND,
       });
-    });
-  });
-
-  // ============================================================================
-  // formExists
-  // ============================================================================
-
-  describe("formExists", () => {
-    it("should return true when form exists", async () => {
-      prismaMock.form.count.mockResolvedValue(1);
-
-      const result = await formExists(formId);
-
-      expect(result).toBe(true);
-      expect(prismaMock.form.count).toHaveBeenCalledWith({
-        where: { id: formId },
-      });
-    });
-
-    it("should return false when form does not exist", async () => {
-      prismaMock.form.count.mockResolvedValue(0);
-
-      const result = await formExists("non-existent");
-
-      expect(result).toBe(false);
     });
   });
 

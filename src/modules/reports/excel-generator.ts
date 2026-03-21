@@ -1,7 +1,5 @@
 import ExcelJS from "exceljs";
 import { prisma } from "@/database/client.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
 
 /**
  * Build a styled Excel workbook summarising total registrations,
@@ -10,15 +8,11 @@ import { ErrorCodes } from "@shared/errors/error-codes.js";
 export async function generateEventSummary(
   eventId: string,
 ): Promise<{ filename: string; data: Buffer }> {
-  const event = await prisma.event.findUnique({
-    where: { id: eventId },
-    select: { id: true, name: true, slug: true },
-  });
-  if (!event) {
-    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
-  }
-
-  const [accessTypes, registrations, sponsoredRows] = await Promise.all([
+  const [event, accessTypes, registrations, sponsoredRows] = await Promise.all([
+    prisma.event.findUnique({
+      where: { id: eventId },
+      select: { name: true, slug: true },
+    }),
     prisma.eventAccess.findMany({
       where: { eventId },
       select: { id: true, name: true, type: true },
@@ -125,7 +119,7 @@ export async function generateEventSummary(
 
   sheet.mergeCells(`A${row}:C${row}`);
   const titleCell = sheet.getCell(`A${row}`);
-  titleCell.value = event.name;
+  titleCell.value = event!.name;
   titleCell.font = { bold: true, size: 16, color: { argb: "FF1F4E79" } };
   titleCell.alignment = { horizontal: "center" };
   row++;
@@ -224,7 +218,7 @@ export async function generateEventSummary(
   const timestamp = new Date().toISOString().split("T")[0];
 
   return {
-    filename: `${event.slug}-summary-${timestamp}.xlsx`,
+    filename: `${event!.slug}-summary-${timestamp}.xlsx`,
     data: buffer,
   };
 }

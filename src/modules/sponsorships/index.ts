@@ -9,4 +9,4 @@ export {
   sponsorshipsPublicBySlugRoutes,
 } from "./sponsorships.public.routes.js";
 
-export { calculateApplicableAmount } from "./sponsorships.utils.js";
+export { calculateApplicableAmount } from "@shared/utils/sponsorship-math.js";

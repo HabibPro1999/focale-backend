@@ -66,24 +66,21 @@ export const UpdateEventSchema = z
     },
   );
 
-export const ListEventsQuerySchema = z
-  .strictObject({
-    page: z.coerce.number().int().min(1).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(20),
-    clientId: z.string().uuid().optional(),
-    status: z.enum(["CLOSED", "OPEN", "ARCHIVED"]).optional(),
-    search: z.string().optional(),
-  });
+export const ListEventsQuerySchema = z.strictObject({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  clientId: z.string().uuid().optional(),
+  status: z.enum(["CLOSED", "OPEN", "ARCHIVED"]).optional(),
+  search: z.string().optional(),
+});
 
-export const EventIdParamSchema = z
-  .strictObject({
-    id: z.string().uuid(),
-  });
+export const EventIdParamSchema = z.strictObject({
+  id: z.string().uuid(),
+});
 
-export const EventSlugParamSchema = z
-  .strictObject({
-    slug: z.string(),
-  });
+export const EventSlugParamSchema = z.strictObject({
+  slug: z.string().min(1).max(100),
+});
 
 // ============================================================================
 // Types

@@ -170,19 +170,11 @@ export const UpdateSponsorshipSettingsSchema = z.strictObject({
 // ============================================================================
 
 export type FieldType = z.infer<typeof FieldTypeSchema>;
-export type FieldOption = z.infer<typeof FieldOptionSchema>;
-export type ConditionOperator = z.infer<typeof ConditionOperatorSchema>;
 export type FieldCondition = z.infer<typeof FieldConditionSchema>;
 export type FieldValidation = z.infer<typeof FieldValidationSchema>;
 export type FormField = z.infer<typeof FormFieldSchema>;
 export type FormStep = z.infer<typeof FormStepSchema>;
 export type FormSchemaJson = z.infer<typeof FormSchemaJsonSchema>;
-export type BeneficiaryTemplate = z.infer<typeof BeneficiaryTemplateSchema>;
-export type SponsorSummarySettings = z.infer<
-  typeof SponsorSummarySettingsSchema
->;
-export type SponsorshipMode = z.infer<typeof SponsorshipModeSchema>;
-export type RegistrantSearchScope = z.infer<typeof RegistrantSearchScopeSchema>;
 export type SponsorshipSettings = z.infer<typeof SponsorshipSettingsSchema>;
 export type SponsorFormSchemaJson = z.infer<typeof SponsorFormSchemaJsonSchema>;
 export type CreateFormInput = z.infer<typeof CreateFormSchema>;

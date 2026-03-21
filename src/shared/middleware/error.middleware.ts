@@ -1,5 +1,6 @@
 import type { FastifyError, FastifyReply, FastifyRequest } from "fastify";
 import { ZodError } from "zod";
+import createHttpError from "http-errors";
 import { Prisma } from "@/generated/prisma/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { formatZodError } from "@shared/errors/zod-error-formatter.js";
@@ -80,6 +81,29 @@ export function errorHandler(
       error: error.message,
       code: error.code,
       details: error.details,
+      requestId,
+    });
+  }
+
+  // http-errors (e.g. app.httpErrors.notFound(), .forbidden(), etc.)
+  if (error instanceof createHttpError.HttpError) {
+    const statusCode = error.statusCode;
+    let code: string;
+    if (statusCode === 400) code = ErrorCodes.VALIDATION_ERROR;
+    else if (statusCode === 401) code = ErrorCodes.INVALID_TOKEN;
+    else if (statusCode === 403) code = ErrorCodes.FORBIDDEN;
+    else if (statusCode === 404) code = ErrorCodes.NOT_FOUND;
+    else if (statusCode === 409) code = ErrorCodes.CONFLICT;
+    else if (statusCode === 429) code = ErrorCodes.RATE_LIMITED;
+    else code = ErrorCodes.INTERNAL_ERROR;
+
+    if (statusCode >= 500) {
+      logger.error({ err: error, requestId }, error.message);
+    }
+
+    return reply.status(statusCode).send({
+      error: error.message,
+      code,
       requestId,
     });
   }

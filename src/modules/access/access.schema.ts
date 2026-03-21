@@ -1,15 +1,11 @@
 import { z } from "zod";
+import {
+  ConditionSchema as AccessConditionSchema,
+  type Condition as AccessCondition,
+} from "@shared/schemas/condition.schema.js";
 
-// ============================================================================
-// Shared Types
-// ============================================================================
-
-export const AccessConditionSchema = z
-  .strictObject({
-    fieldId: z.string().min(1),
-    operator: z.enum(["equals", "not_equals"]),
-    value: z.union([z.string(), z.number()]),
-  });
+export { AccessConditionSchema };
+export type { AccessCondition };
 
 // ============================================================================
 // Enums
@@ -82,52 +78,48 @@ export const CreateEventAccessSchema = z
     { message: "End time must be after start time", path: ["endsAt"] },
   );
 
-export const UpdateEventAccessSchema = z
-  .strictObject({
-    type: AccessTypeSchema.optional(),
-    name: z.string().min(1).max(200).optional(),
-    description: z.string().max(1000).optional().nullable(),
-    location: z.string().max(500).optional().nullable(),
-    startsAt: z.coerce.date().optional().nullable(),
-    endsAt: z.coerce.date().optional().nullable(),
-    price: z.number().int().min(0).optional(),
-    currency: z.string().length(3).optional(),
-    maxCapacity: z.number().int().positive().optional().nullable(),
-    availableFrom: z.coerce.date().optional().nullable(),
-    availableTo: z.coerce.date().optional().nullable(),
-    conditions: z.array(AccessConditionSchema).optional().nullable(),
-    conditionLogic: z.enum(["AND", "OR"]).optional(),
-    requiredAccessIds: z.array(z.string().uuid()).optional(),
-    sortOrder: z.number().int().optional(),
-    active: z.boolean().optional(),
-    groupLabel: z.string().max(100).optional().nullable(),
-    allowCompanion: z.boolean().optional(),
-    includedInBase: z.boolean().optional(),
-    companionPrice: z.number().int().min(0).optional(),
-  });
+export const UpdateEventAccessSchema = z.strictObject({
+  type: AccessTypeSchema.optional(),
+  name: z.string().min(1).max(200).optional(),
+  description: z.string().max(1000).optional().nullable(),
+  location: z.string().max(500).optional().nullable(),
+  startsAt: z.coerce.date().optional().nullable(),
+  endsAt: z.coerce.date().optional().nullable(),
+  price: z.number().int().min(0).optional(),
+  currency: z.string().length(3).optional(),
+  maxCapacity: z.number().int().positive().optional().nullable(),
+  availableFrom: z.coerce.date().optional().nullable(),
+  availableTo: z.coerce.date().optional().nullable(),
+  conditions: z.array(AccessConditionSchema).optional().nullable(),
+  conditionLogic: z.enum(["AND", "OR"]).optional(),
+  requiredAccessIds: z.array(z.string().uuid()).optional(),
+  sortOrder: z.number().int().optional(),
+  active: z.boolean().optional(),
+  groupLabel: z.string().max(100).optional().nullable(),
+  allowCompanion: z.boolean().optional(),
+  includedInBase: z.boolean().optional(),
+  companionPrice: z.number().int().min(0).optional(),
+});
 
 // ============================================================================
 // Query Schemas
 // ============================================================================
 
-export const ListEventAccessQuerySchema = z
-  .strictObject({
-    active: z.preprocess(
-      (v) => (v === "true" ? true : v === "false" ? false : undefined),
-      z.boolean().optional(),
-    ),
-    type: AccessTypeSchema.optional(),
-  });
+export const ListEventAccessQuerySchema = z.strictObject({
+  active: z.preprocess(
+    (v) => (v === "true" ? true : v === "false" ? false : undefined),
+    z.boolean().optional(),
+  ),
+  type: AccessTypeSchema.optional(),
+});
 
-export const EventAccessIdParamSchema = z
-  .strictObject({
-    id: z.string().uuid(),
-  });
+export const EventAccessIdParamSchema = z.strictObject({
+  id: z.string().uuid(),
+});
 
-export const EventIdParamSchema = z
-  .strictObject({
-    eventId: z.string().uuid(),
-  });
+export const EventIdParamSchema = z.strictObject({
+  eventId: z.string().uuid(),
+});
 
 // ============================================================================
 // Grouped Access Response (Hierarchical: Date → Time Slots)
@@ -137,7 +129,7 @@ export const TimeSlotSchema = z.object({
   startsAt: z.date().nullable(),
   endsAt: z.date().nullable(),
   selectionType: z.enum(["single", "multiple"]),
-  items: z.array(z.any()),
+  items: z.array(z.unknown()),
 });
 
 // Groups access items by date (day)
@@ -151,7 +143,7 @@ export const GroupedAccessResponseSchema = z.object({
   groups: z.array(DateGroupSchema),
   addonGroup: z
     .object({
-      items: z.array(z.any()),
+      items: z.array(z.unknown()),
     })
     .nullable(),
 });
@@ -160,40 +152,36 @@ export const GroupedAccessResponseSchema = z.object({
 // Selection Schema (for registration)
 // ============================================================================
 
-export const AccessSelectionSchema = z
-  .strictObject({
-    accessId: z.string().uuid(),
-    quantity: z.number().int().min(1).default(1),
-  });
+export const AccessSelectionSchema = z.strictObject({
+  accessId: z.string().uuid(),
+  quantity: z.number().int().min(1).default(1),
+});
 
 // ============================================================================
 // Public API Schemas
 // ============================================================================
 
-export const GetGroupedAccessBodySchema = z
-  .strictObject({
-    formData: z
-      .record(z.string(), z.any())
-      .refine((obj) => Object.keys(obj).length <= 100, "Too many fields")
-      .optional()
-      .default({}),
-    selectedAccessIds: z.array(z.string().uuid()).optional().default([]),
-  });
+export const GetGroupedAccessBodySchema = z.strictObject({
+  formData: z
+    .record(z.string(), z.unknown())
+    .refine((obj) => Object.keys(obj).length <= 100, "Too many fields")
+    .optional()
+    .default({}),
+  selectedAccessIds: z.array(z.string().uuid()).optional().default([]),
+});
 
-export const ValidateAccessSelectionsBodySchema = z
-  .strictObject({
-    formData: z
-      .record(z.string(), z.any())
-      .refine((obj) => Object.keys(obj).length <= 100, "Too many fields"),
-    selections: z.array(AccessSelectionSchema),
-  });
+export const ValidateAccessSelectionsBodySchema = z.strictObject({
+  formData: z
+    .record(z.string(), z.unknown())
+    .refine((obj) => Object.keys(obj).length <= 100, "Too many fields"),
+  selections: z.array(AccessSelectionSchema),
+});
 
 // ============================================================================
 // Types
 // ============================================================================
 
 export type AccessType = z.infer<typeof AccessTypeSchema>;
-export type AccessCondition = z.infer<typeof AccessConditionSchema>;
 export type CreateEventAccessInput = z.infer<typeof CreateEventAccessSchema>;
 export type UpdateEventAccessInput = z.infer<typeof UpdateEventAccessSchema>;
 export type AccessSelection = z.infer<typeof AccessSelectionSchema>;

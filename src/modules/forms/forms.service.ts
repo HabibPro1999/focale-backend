@@ -357,14 +357,6 @@ export async function deleteForm(id: string): Promise<void> {
 }
 
 /**
- * Helper function to check if form exists (for validation in other modules).
- */
-export async function formExists(id: string): Promise<boolean> {
-  const count = await prisma.form.count({ where: { id } });
-  return count > 0;
-}
-
-/**
  * Check if sponsorship mode is locked for a form.
  * Mode is locked once any sponsorship batch has been submitted.
  */

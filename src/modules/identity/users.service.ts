@@ -284,25 +284,17 @@ export async function deleteUser(
     }
   }
 
-  await deleteFirebaseUser(id);
-
-  try {
-    await prisma.user.delete({ where: { id } });
-  } catch (error) {
-    // Firebase user is already deleted — the DB record is now orphaned.
-    // The orphaned Firebase user cannot authenticate (middleware checks DB),
-    // but it must be manually cleaned up in the Firebase console.
-    logger.error(
-      {
-        err: error,
-        uid: id,
-        email: userToDelete.email,
-        role: userToDelete.role,
-      },
-      "CRITICAL: Firebase user deleted but DB delete failed — orphaned Firebase UID requires manual cleanup",
-    );
-    throw error;
-  }
+  await prisma.user.delete({ where: { id } });
 
   invalidateUserCache(id);
+
+  try {
+    await deleteFirebaseUser(id);
+  } catch (error) {
+    logger.error(
+      { err: error, uid: id, email: userToDelete.email },
+      "DB user deleted but Firebase delete failed — orphaned Firebase UID requires manual cleanup",
+    );
+    // Do NOT re-throw: the logical delete succeeded
+  }
 }

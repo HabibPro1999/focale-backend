@@ -2,24 +2,22 @@
 // Reports Module - Zod Schemas
 // ============================================================================
 
-import { z } from 'zod';
+import { z } from "zod";
 
 // ============================================================================
 // Query Schemas
 // ============================================================================
 
-export const ReportQuerySchema = z
-  .strictObject({
-    startDate: z.string().datetime().optional(),
-    endDate: z.string().datetime().optional(),
-  });
+export const ReportQuerySchema = z.strictObject({
+  startDate: z.string().datetime().optional(),
+  endDate: z.string().datetime().optional(),
+});
 
-export const ExportQuerySchema = z
-  .strictObject({
-    startDate: z.string().datetime().optional(),
-    endDate: z.string().datetime().optional(),
-    format: z.enum(['csv', 'json']).default('csv'),
-  });
+export const ExportQuerySchema = z.strictObject({
+  startDate: z.string().datetime().optional(),
+  endDate: z.string().datetime().optional(),
+  format: z.enum(["csv", "json"]).default("csv"),
+});
 
 // ============================================================================
 // Response Schemas
@@ -87,12 +85,6 @@ export const FinancialReportResponseSchema = z.object({
   dailyTrend: z.array(DailyTrendItemSchema),
 });
 
-export const ExportResponseSchema = z.object({
-  filename: z.string(),
-  contentType: z.string(),
-  data: z.string(),
-});
-
 // ============================================================================
 // Type Exports
 // ============================================================================
@@ -101,8 +93,11 @@ export type ReportQuery = z.infer<typeof ReportQuerySchema>;
 export type ExportQuery = z.infer<typeof ExportQuerySchema>;
 export type CurrencySummary = z.infer<typeof CurrencySummarySchema>;
 export type FinancialSummary = z.infer<typeof FinancialSummarySchema>;
-export type PaymentStatusBreakdownItem = z.infer<typeof PaymentStatusBreakdownItemSchema>;
+export type PaymentStatusBreakdownItem = z.infer<
+  typeof PaymentStatusBreakdownItemSchema
+>;
 export type AccessBreakdownItem = z.infer<typeof AccessBreakdownItemSchema>;
 export type DailyTrendItem = z.infer<typeof DailyTrendItemSchema>;
-export type FinancialReportResponse = z.infer<typeof FinancialReportResponseSchema>;
-export type ExportResponse = z.infer<typeof ExportResponseSchema>;
+export type FinancialReportResponse = z.infer<
+  typeof FinancialReportResponseSchema
+>;

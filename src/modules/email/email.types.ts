@@ -1,4 +1,19 @@
 // =============================================================================
+// PRISMA PAYLOAD TYPES
+// =============================================================================
+
+import type { Prisma } from "@/generated/prisma/client.js";
+
+export type RegistrationWithRelations = Prisma.RegistrationGetPayload<{
+  include: {
+    event: {
+      include: { client: true };
+    };
+    form: true;
+  };
+}>;
+
+// =============================================================================
 // TIPTAP DOCUMENT STRUCTURE
 // =============================================================================
 
@@ -18,15 +33,6 @@ export interface TiptapNode {
 export interface TiptapMark {
   type: string; // 'bold', 'italic', 'textStyle', 'link', etc.
   attrs?: Record<string, unknown>;
-}
-
-// Variable mention node
-export interface VariableMentionNode extends TiptapNode {
-  type: "mention";
-  attrs: {
-    id: string; // Variable ID: 'firstName', 'eventName', etc.
-    label: string; // Display label: 'First Name', 'Event Name'
-  };
 }
 
 // =============================================================================
@@ -105,40 +111,6 @@ export interface EmailContext {
 export interface MjmlCompilationResult {
   html: string;
   errors: Array<{ message: string; line: number }>;
-}
-
-// =============================================================================
-// EMAIL TEMPLATE TYPES
-// =============================================================================
-
-export type EmailTemplateCategory = "AUTOMATIC" | "MANUAL";
-
-export type AutomaticEmailTrigger =
-  | "REGISTRATION_CREATED"
-  | "PAYMENT_PROOF_SUBMITTED"
-  | "PAYMENT_CONFIRMED"
-  | "SPONSORSHIP_BATCH_SUBMITTED"
-  | "SPONSORSHIP_LINKED"
-  | "SPONSORSHIP_APPLIED"
-  | "SPONSORSHIP_PARTIAL";
-
-export interface EmailTemplate {
-  id: string;
-  clientId: string;
-  eventId: string | null;
-  name: string;
-  description: string | null;
-  subject: string;
-  content: unknown; // JSON
-  mjmlContent: string | null;
-  htmlContent: string | null;
-  plainContent: string | null;
-  category: EmailTemplateCategory;
-  trigger: AutomaticEmailTrigger | null;
-  isDefault: boolean;
-  isActive: boolean;
-  createdAt: Date;
-  updatedAt: Date;
 }
 
 // =============================================================================

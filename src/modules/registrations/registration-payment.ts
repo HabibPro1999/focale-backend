@@ -91,15 +91,18 @@ export async function confirmPayment(
     );
 
     // Update registration
+    const newStatus = input.paymentStatus;
     const updated = await tx.registration.update({
       where: { id },
       data: {
-        paymentStatus: input.paymentStatus,
+        paymentStatus: newStatus,
         paidAmount: input.paidAmount ?? oldRegistration.totalAmount,
         paymentMethod: input.paymentMethod ?? null,
         paymentReference: input.paymentReference ?? null,
         paymentProofUrl: input.paymentProofUrl ?? null,
-        paidAt: new Date(),
+        ...(newStatus === "PAID" || newStatus === "WAIVED"
+          ? { paidAt: new Date() }
+          : {}),
       },
     });
 
@@ -301,6 +304,14 @@ export async function uploadPaymentProof(
 
   // Update registration with payment proof URL, set status to VERIFYING, and create audit log
   await prisma.$transaction(async (tx) => {
+    const currentReg = await tx.registration.findUnique({
+      where: { id: registrationId },
+      select: { paymentStatus: true },
+    });
+    if (!currentReg)
+      throw new AppError("Registration not found", 404, ErrorCodes.NOT_FOUND);
+    validatePaymentTransition(currentReg.paymentStatus, "VERIFYING");
+
     await tx.registration.update({
       where: { id: registrationId },
       data: {

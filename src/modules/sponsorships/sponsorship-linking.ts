@@ -13,6 +13,7 @@ import {
 } from "./sponsorships.utils.js";
 import { getSponsorshipByCode } from "./sponsorship-queries.js";
 import { queueSponsorshipEmail, buildLinkedSponsorshipContext } from "@email";
+import type { TxClient } from "@shared/types/prisma.js";
 
 // ============================================================================
 // Types
@@ -31,11 +32,6 @@ export interface LinkSponsorshipResult {
   };
   warnings: string[];
 }
-
-type TxClient = Omit<
-  typeof prisma,
-  "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends"
->;
 
 type UnlinkUsageRef = {
   registrationId: string | null;
@@ -181,7 +177,7 @@ async function unlinkSponsorshipFromRegistrationInternal(
  */
 async function recalculateUsageAmounts(
   sponsorshipId: string,
-  db: RecalcDbClient = prisma,
+  db: RecalcDbClient,
 ): Promise<void> {
   const sponsorship = await db.sponsorship.findUnique({
     where: { id: sponsorshipId },
@@ -284,135 +280,135 @@ export async function linkSponsorshipToRegistration(
   registrationId: string,
   adminUserId: string,
 ): Promise<LinkSponsorshipResult> {
-  const sponsorship = await prisma.sponsorship.findUnique({
-    where: { id: sponsorshipId },
-    include: {
-      usages: {
-        include: {
-          sponsorship: {
-            select: {
-              code: true,
-              coversBasePrice: true,
-              coveredAccessIds: true,
+  // All reads and writes happen inside the transaction to prevent stale-data races
+  const result = await prisma.$transaction(async (tx) => {
+    const sponsorship = await tx.sponsorship.findUnique({
+      where: { id: sponsorshipId },
+      include: {
+        usages: {
+          include: {
+            sponsorship: {
+              select: {
+                code: true,
+                coversBasePrice: true,
+                coveredAccessIds: true,
+              },
             },
           },
         },
       },
-    },
-  });
+    });
 
-  if (!sponsorship) {
-    throw new AppError("Sponsorship not found", 404, ErrorCodes.NOT_FOUND);
-  }
+    if (!sponsorship) {
+      throw new AppError("Sponsorship not found", 404, ErrorCodes.NOT_FOUND);
+    }
 
-  if (sponsorship.status === "CANCELLED") {
-    throw new AppError(
-      "Cannot link a cancelled sponsorship",
-      400,
-      ErrorCodes.BAD_REQUEST,
-      { code: "SPONSORSHIP_CANCELLED" },
-    );
-  }
+    if (sponsorship.status === "CANCELLED") {
+      throw new AppError(
+        "Cannot link a cancelled sponsorship",
+        400,
+        ErrorCodes.BAD_REQUEST,
+        { code: "SPONSORSHIP_CANCELLED" },
+      );
+    }
 
-  const registration = await prisma.registration.findUnique({
-    where: { id: registrationId },
-    select: {
-      id: true,
-      eventId: true,
-      totalAmount: true,
-      baseAmount: true,
-      accessTypeIds: true,
-      priceBreakdown: true,
-      sponsorshipAmount: true,
-      sponsorshipUsages: {
-        include: {
-          sponsorship: {
-            select: {
-              code: true,
-              coversBasePrice: true,
-              coveredAccessIds: true,
+    const registration = await tx.registration.findUnique({
+      where: { id: registrationId },
+      select: {
+        id: true,
+        eventId: true,
+        totalAmount: true,
+        baseAmount: true,
+        accessTypeIds: true,
+        priceBreakdown: true,
+        sponsorshipAmount: true,
+        sponsorshipUsages: {
+          include: {
+            sponsorship: {
+              select: {
+                code: true,
+                coversBasePrice: true,
+                coveredAccessIds: true,
+              },
             },
           },
         },
       },
-    },
-  });
+    });
 
-  if (!registration) {
-    throw new AppError(
-      "Registration not found",
-      404,
-      ErrorCodes.REGISTRATION_NOT_FOUND,
+    if (!registration) {
+      throw new AppError(
+        "Registration not found",
+        404,
+        ErrorCodes.REGISTRATION_NOT_FOUND,
+      );
+    }
+
+    // Verify same event
+    if (sponsorship.eventId !== registration.eventId) {
+      throw new AppError(
+        "Sponsorship and registration must be for the same event",
+        400,
+        ErrorCodes.BAD_REQUEST,
+      );
+    }
+
+    // Check if already linked
+    const existingLink = await tx.sponsorshipUsage.findUnique({
+      where: {
+        sponsorshipId_registrationId: { sponsorshipId, registrationId },
+      },
+    });
+
+    if (existingLink) {
+      throw new AppError(
+        "Sponsorship is already linked to this registration",
+        409,
+        ErrorCodes.CONFLICT,
+        { code: "SPONSORSHIP_ALREADY_LINKED" },
+      );
+    }
+
+    // Detect coverage overlap with existing sponsorships
+    const existingUsages: ExistingUsage[] = registration.sponsorshipUsages.map(
+      (u) => ({
+        sponsorshipId: u.sponsorshipId,
+        sponsorship: u.sponsorship,
+      }),
     );
-  }
 
-  // Verify same event
-  if (sponsorship.eventId !== registration.eventId) {
-    throw new AppError(
-      "Sponsorship and registration must be for the same event",
-      400,
-      ErrorCodes.BAD_REQUEST,
-    );
-  }
-
-  // Check if already linked
-  const existingLink = await prisma.sponsorshipUsage.findUnique({
-    where: {
-      sponsorshipId_registrationId: { sponsorshipId, registrationId },
-    },
-  });
-
-  if (existingLink) {
-    throw new AppError(
-      "Sponsorship is already linked to this registration",
-      409,
-      ErrorCodes.CONFLICT,
-      { code: "SPONSORSHIP_ALREADY_LINKED" },
-    );
-  }
-
-  // Detect coverage overlap with existing sponsorships
-  const existingUsages: ExistingUsage[] = registration.sponsorshipUsages.map(
-    (u) => ({
-      sponsorshipId: u.sponsorshipId,
-      sponsorship: u.sponsorship,
-    }),
-  );
-
-  const warnings = detectCoverageOverlap(existingUsages, {
-    coversBasePrice: sponsorship.coversBasePrice,
-    coveredAccessIds: sponsorship.coveredAccessIds,
-    totalAmount: sponsorship.totalAmount,
-  });
-
-  // Calculate applicable amount
-  const priceBreakdown =
-    registration.priceBreakdown as RegistrationForCalculation["priceBreakdown"];
-  const applicableAmount = calculateApplicableAmount(
-    {
+    const warnings = detectCoverageOverlap(existingUsages, {
       coversBasePrice: sponsorship.coversBasePrice,
       coveredAccessIds: sponsorship.coveredAccessIds,
       totalAmount: sponsorship.totalAmount,
-    },
-    {
-      totalAmount: registration.totalAmount,
-      baseAmount: registration.baseAmount,
-      accessTypeIds: registration.accessTypeIds,
-      priceBreakdown,
-    },
-  );
+    });
 
-  // Validate coverage applies - reject if $0 would be applied but sponsorship has value
-  if (applicableAmount === 0 && sponsorship.totalAmount > 0) {
-    throw new AppError(
-      "Sponsorship coverage does not apply to this registration (no overlap between sponsored items and registration selections)",
-      400,
-      ErrorCodes.SPONSORSHIP_NOT_APPLICABLE,
+    // Calculate applicable amount
+    const priceBreakdown =
+      registration.priceBreakdown as RegistrationForCalculation["priceBreakdown"];
+    const applicableAmount = calculateApplicableAmount(
+      {
+        coversBasePrice: sponsorship.coversBasePrice,
+        coveredAccessIds: sponsorship.coveredAccessIds,
+        totalAmount: sponsorship.totalAmount,
+      },
+      {
+        totalAmount: registration.totalAmount,
+        baseAmount: registration.baseAmount,
+        accessTypeIds: registration.accessTypeIds,
+        priceBreakdown,
+      },
     );
-  }
 
-  // Create usage and update records in transaction
-  const result = await prisma.$transaction(async (tx) => {
+    // Validate coverage applies - reject if $0 would be applied but sponsorship has value
+    if (applicableAmount === 0 && sponsorship.totalAmount > 0) {
+      throw new AppError(
+        "Sponsorship coverage does not apply to this registration (no overlap between sponsored items and registration selections)",
+        400,
+        ErrorCodes.SPONSORSHIP_NOT_APPLICABLE,
+      );
+    }
+
     // Create sponsorship usage
     const usage = await tx.sponsorshipUsage.create({
       data: {
@@ -484,6 +480,8 @@ export async function linkSponsorshipToRegistration(
     });
 
     return {
+      sponsorshipEventId: sponsorship.eventId,
+      sponsorshipCoveredAccessIds: sponsorship.coveredAccessIds,
       usage: {
         id: usage.id,
         sponsorshipId: usage.sponsorshipId,
@@ -530,7 +528,7 @@ export async function linkSponsorshipToRegistration(
         },
       }),
       prisma.event.findUnique({
-        where: { id: sponsorship.eventId },
+        where: { id: result.sponsorshipEventId },
         select: {
           name: true,
           slug: true,
@@ -540,12 +538,12 @@ export async function linkSponsorshipToRegistration(
         },
       }),
       prisma.eventPricing.findUnique({
-        where: { eventId: sponsorship.eventId },
+        where: { eventId: result.sponsorshipEventId },
         select: { basePrice: true, currency: true },
       }),
-      sponsorship.coveredAccessIds.length > 0
+      result.sponsorshipCoveredAccessIds.length > 0
         ? prisma.eventAccess.findMany({
-            where: { id: { in: sponsorship.coveredAccessIds } },
+            where: { id: { in: result.sponsorshipCoveredAccessIds } },
             select: { id: true, name: true, price: true },
           })
         : Promise.resolve([]),
@@ -576,7 +574,7 @@ export async function linkSponsorshipToRegistration(
 
       const appliedEmailQueued = await queueSponsorshipEmail(
         "SPONSORSHIP_APPLIED",
-        sponsorship.eventId,
+        result.sponsorshipEventId,
         {
           recipientEmail: registrationDetails.email,
           recipientName:
@@ -590,7 +588,7 @@ export async function linkSponsorshipToRegistration(
         logger.warn(
           {
             trigger: "SPONSORSHIP_APPLIED",
-            eventId: sponsorship.eventId,
+            eventId: result.sponsorshipEventId,
             registrationId,
           },
           "No email template configured - doctor will not receive sponsorship notification",
@@ -605,7 +603,11 @@ export async function linkSponsorshipToRegistration(
     );
   }
 
-  return result;
+  return {
+    usage: result.usage,
+    registration: result.registration,
+    warnings: result.warnings,
+  };
 }
 
 // ============================================================================
@@ -663,10 +665,12 @@ export async function unlinkSponsorshipFromRegistration(
   registrationId: string,
   performedBy?: string,
 ): Promise<void> {
-  await unlinkSponsorshipFromRegistrationInternal(
-    prisma,
-    sponsorshipId,
-    registrationId,
-    performedBy,
-  );
+  await prisma.$transaction(async (tx) => {
+    await unlinkSponsorshipFromRegistrationInternal(
+      tx,
+      sponsorshipId,
+      registrationId,
+      performedBy,
+    );
+  });
 }

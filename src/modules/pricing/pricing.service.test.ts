@@ -269,7 +269,7 @@ describe("Pricing Service", () => {
 
       const result = await calculatePrice(eventId, {
         formData: {},
-        selectedExtras: [],
+        selectedAccessItems: [],
         sponsorshipCodes: [],
       });
 
@@ -304,7 +304,7 @@ describe("Pricing Service", () => {
 
       const result = await calculatePrice(eventId, {
         formData: { status: "student" },
-        selectedExtras: [],
+        selectedAccessItems: [],
         sponsorshipCodes: [],
       });
 
@@ -324,6 +324,7 @@ describe("Pricing Service", () => {
         id: "workshop-1",
         name: "Advanced Workshop",
         price: 50,
+        companionPrice: 50,
       });
 
       prismaMock.eventPricing.findUnique.mockResolvedValue(mockPricing);
@@ -331,11 +332,11 @@ describe("Pricing Service", () => {
 
       const result = await calculatePrice(eventId, {
         formData: {},
-        selectedExtras: [{ accessId: "workshop-1", quantity: 2 }],
+        selectedAccessItems: [{ accessId: "workshop-1", quantity: 2 }],
         sponsorshipCodes: [],
       });
 
-      expect(result.accessTotal).toBe(100); // 50 * 2
+      expect(result.accessTotal).toBe(100); // 50 + 50 (companion)
       expect(result.accessItems).toHaveLength(1);
       expect(result.accessItems[0].subtotal).toBe(100);
       expect(result.total).toBe(300); // 200 + 100
@@ -360,7 +361,7 @@ describe("Pricing Service", () => {
 
       const result = await calculatePrice(eventId, {
         formData: {},
-        selectedExtras: [],
+        selectedAccessItems: [],
         sponsorshipCodes: ["SPONSOR123"],
       });
 
@@ -388,7 +389,7 @@ describe("Pricing Service", () => {
 
       const result = await calculatePrice(eventId, {
         formData: {},
-        selectedExtras: [],
+        selectedAccessItems: [],
         sponsorshipCodes: ["BIGCODE"],
       });
 
@@ -401,7 +402,7 @@ describe("Pricing Service", () => {
       await expect(
         calculatePrice(eventId, {
           formData: {},
-          selectedExtras: [],
+          selectedAccessItems: [],
           sponsorshipCodes: [],
         }),
       ).rejects.toThrow(AppError);
@@ -444,7 +445,7 @@ describe("Pricing Service", () => {
 
       const result = await calculatePrice(eventId, {
         formData: { type: "member" },
-        selectedExtras: [],
+        selectedAccessItems: [],
         sponsorshipCodes: [],
       });
 
@@ -477,7 +478,7 @@ describe("Pricing Service", () => {
 
       const result = await calculatePrice(eventId, {
         formData: { status: "student" },
-        selectedExtras: [],
+        selectedAccessItems: [],
         sponsorshipCodes: [],
       });
 

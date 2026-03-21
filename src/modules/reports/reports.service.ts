@@ -4,8 +4,6 @@
 
 import { prisma } from "@/database/client.js";
 import { Prisma } from "@/generated/prisma/client.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
 import type {
   ReportQuery,
   FinancialReportResponse,
@@ -38,16 +36,6 @@ export async function getFinancialReport(
   eventId: string,
   query: ReportQuery,
 ): Promise<FinancialReportResponse> {
-  // Verify event exists
-  const event = await prisma.event.findUnique({
-    where: { id: eventId },
-    select: { id: true },
-  });
-
-  if (!event) {
-    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
-  }
-
   const dateRange = buildDateFilter(query);
 
   // Build where clause for date filtering
@@ -69,8 +57,8 @@ export async function getFinancialReport(
   // Run all aggregation queries in parallel
   const [summary, byPaymentStatus, byAccessType, dailyTrend] =
     await Promise.all([
-      getFinancialSummary(eventId, baseWhere),
-      getPaymentStatusBreakdown(eventId, baseWhere),
+      getFinancialSummary(baseWhere),
+      getPaymentStatusBreakdown(baseWhere),
       getAccessBreakdown(eventId, dateRange),
       getDailyTrend(eventId, dateRange),
     ]);
@@ -94,7 +82,6 @@ export async function getFinancialReport(
 // ============================================================================
 
 async function getFinancialSummary(
-  _eventId: string,
   where: Record<string, unknown>,
 ): Promise<FinancialSummary> {
   // Group by currency for accurate multi-currency reporting
@@ -211,7 +198,6 @@ async function getFinancialSummary(
 // ============================================================================
 
 async function getPaymentStatusBreakdown(
-  _eventId: string,
   where: Record<string, unknown>,
 ): Promise<PaymentStatusBreakdownItem[]> {
   const groups = await prisma.registration.groupBy({
@@ -333,16 +319,6 @@ async function getDailyTrend(
 export async function getEventAnalytics(
   eventId: string,
 ): Promise<EventAnalyticsResponse> {
-  // Verify event exists
-  const event = await prisma.event.findUnique({
-    where: { id: eventId },
-    select: { id: true },
-  });
-
-  if (!event) {
-    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
-  }
-
   // Run all aggregation queries in parallel
   // Note: Registration has no separate status field — paymentStatus is the sole lifecycle status.
   const [
@@ -480,15 +456,10 @@ export async function exportRegistrations(
   eventId: string,
   query: ExportQuery,
 ): Promise<{ filename: string; contentType: string; data: string }> {
-  // Verify event exists
   const event = await prisma.event.findUnique({
     where: { id: eventId },
-    select: { id: true, name: true, slug: true },
+    select: { slug: true },
   });
-
-  if (!event) {
-    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
-  }
 
   const dateRange = buildDateFilter(query);
 
@@ -529,7 +500,8 @@ export async function exportRegistrations(
   });
 
   const timestamp = new Date().toISOString().split("T")[0];
-  const filename = `${event.slug}-registrations-${timestamp}`;
+  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+  const filename = `${event!.slug}-registrations-${timestamp}`;
 
   if (query.format === "json") {
     return {
@@ -591,7 +563,10 @@ function generateCSV(registrations: RegistrationExportRow[]): string {
   // Escape CSV values
   const escapeCSV = (value: string): string => {
     // Guard against CSV formula injection
-    if (value.length > 0 && ["=", "+", "-", "@"].includes(value[0])) {
+    if (
+      value.length > 0 &&
+      ["\t", "\r", "\n", "=", "+", "-", "@"].includes(value[0])
+    ) {
       return `"'${value.replace(/"/g, '""')}"`;
     }
     if (value.includes(",") || value.includes('"') || value.includes("\n")) {

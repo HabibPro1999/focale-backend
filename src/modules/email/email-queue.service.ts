@@ -12,22 +12,12 @@ import {
 } from "./email-variable.service.js";
 import { getTemplateByTrigger } from "./email-template.service.js";
 import { Prisma } from "@/generated/prisma/client.js";
-import type { EmailContext } from "./email.types.js";
+import type { EmailContext, RegistrationWithRelations } from "./email.types.js";
 import type { AutomaticEmailTrigger } from "./email.schema.js";
 
 // =============================================================================
 // TYPES
 // =============================================================================
-
-// Type for registration with all needed relations for email context building
-type RegistrationWithRelations = Prisma.RegistrationGetPayload<{
-  include: {
-    event: {
-      include: { client: true };
-    };
-    form: true;
-  };
-}>;
 
 // Email status enum (mirrors Prisma enum)
 type EmailStatus =
@@ -53,6 +43,8 @@ function isValidEmailContext(obj: unknown): obj is EmailContext {
     typeof ctx.eventName === "string"
   );
 }
+
+const MAX_RETRIES = 3;
 
 // =============================================================================
 // QUEUE EMAIL
@@ -241,7 +233,7 @@ export async function processEmailQueue(
       where: {
         status: "QUEUED",
         // Process emails that haven't exceeded max retries
-        retryCount: { lt: 4 },
+        retryCount: { lt: MAX_RETRIES + 1 },
       },
       take: batchSize * 2, // Fetch more to account for backoff filtering
       orderBy: { queuedAt: "asc" },
@@ -405,8 +397,7 @@ async function markAsFailed(
   errorMessage: string,
   currentRetryCount: number,
 ) {
-  const maxRetries = 3;
-  const shouldRetry = currentRetryCount < maxRetries;
+  const shouldRetry = currentRetryCount < MAX_RETRIES;
 
   await prisma.emailLog.update({
     where: { id },

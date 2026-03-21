@@ -1,11 +1,6 @@
 import { prisma } from "@/database/client.js";
 import type { Prisma } from "@/generated/prisma/client.js";
-
-// Prisma transaction client type — subset of the full client available inside $transaction callbacks
-type TxClient = Omit<
-  typeof prisma,
-  "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends"
->;
+import type { TxClient } from "@shared/types/prisma.js";
 
 export interface AuditLogData {
   entityType: string;

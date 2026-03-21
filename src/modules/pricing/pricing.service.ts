@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
-import { calculateApplicableAmount } from "@sponsorships";
+import { calculateApplicableAmount } from "@shared/utils/sponsorship-math.js";
 import { evaluateConditions } from "@shared/utils/conditions.js";
 import type {
   UpdateEventPricingInput,
@@ -11,7 +11,7 @@ import type {
   EmbeddedPricingRule,
   CalculatePriceRequest,
   PriceBreakdown,
-  SelectedExtra,
+  SelectedAccessItem,
 } from "./pricing.schema.js";
 import type { Prisma, EventPricing } from "@/generated/prisma/client.js";
 
@@ -199,7 +199,7 @@ export async function calculatePrice(
   eventId: string,
   input: CalculatePriceRequest,
 ): Promise<PriceBreakdown> {
-  const { formData, selectedExtras, sponsorshipCodes } = input;
+  const { formData, selectedAccessItems, sponsorshipCodes } = input;
 
   // Get event pricing configuration with embedded rules
   const pricing = await getEventPricing(eventId);
@@ -237,7 +237,8 @@ export async function calculatePrice(
   }
 
   // Calculate access items total
-  const accessItemsDetails = await calculateAccessItemsTotal(selectedExtras);
+  const accessItemsDetails =
+    await calculateAccessItemsTotal(selectedAccessItems);
   const accessTotal = accessItemsDetails.reduce(
     (sum, e) => sum + e.subtotal,
     0,
@@ -286,18 +287,18 @@ export async function calculatePrice(
  * Calculate access items total from selected items.
  */
 async function calculateAccessItemsTotal(
-  selectedExtras: SelectedExtra[],
+  selectedAccessItems: SelectedAccessItem[],
 ): Promise<PriceBreakdown["accessItems"]> {
-  if (!selectedExtras.length) return [];
+  if (!selectedAccessItems.length) return [];
 
-  const accessIds = selectedExtras.map((e) => e.accessId);
+  const accessIds = selectedAccessItems.map((e) => e.accessId);
   const accessItems = await prisma.eventAccess.findMany({
     where: { id: { in: accessIds }, active: true },
   });
 
   const accessMap = new Map(accessItems.map((a) => [a.id, a]));
 
-  return selectedExtras
+  return selectedAccessItems
     .map((selected) => {
       const access = accessMap.get(selected.accessId);
       if (!access) return null;
@@ -315,10 +316,10 @@ async function calculateAccessItemsTotal(
         };
       }
 
-      // Non-included: registrant pays price, companion pays companionPrice (or price if unset)
+      // Non-included: registrant pays price, companion pays companionPrice
+      // companionPrice = 0 means explicitly free companions (not "unset")
       const companionCount = selected.quantity > 1 ? selected.quantity - 1 : 0;
-      const companionUnitPrice =
-        access.companionPrice > 0 ? access.companionPrice : access.price;
+      const companionUnitPrice = access.companionPrice;
       return {
         accessId: access.id,
         name: access.name,

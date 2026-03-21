@@ -171,9 +171,38 @@ export async function updateEvent(
     }
   }
 
+  const { basePrice, currency, ...eventData } = input;
+
+  if (basePrice !== undefined || currency !== undefined) {
+    return prisma.$transaction(async (tx) => {
+      const updatedEvent = await tx.event.update({
+        where: { id },
+        data: eventData,
+        include: { pricing: true },
+      });
+
+      if (updatedEvent.pricing) {
+        const pricingData: Record<string, unknown> = {};
+        if (basePrice !== undefined) pricingData.basePrice = basePrice;
+        if (currency !== undefined) pricingData.currency = currency;
+
+        await tx.eventPricing.update({
+          where: { eventId: id },
+          data: pricingData,
+        });
+      }
+
+      // Re-fetch with updated pricing
+      return tx.event.findUniqueOrThrow({
+        where: { id },
+        include: { pricing: true },
+      });
+    });
+  }
+
   return prisma.event.update({
     where: { id },
-    data: input,
+    data: eventData,
     include: { pricing: true },
   });
 }

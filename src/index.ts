@@ -67,7 +67,10 @@ async function main() {
   await waitForDatabase();
 
   // Start email queue worker (processes every 15 seconds for faster email delivery)
+  let isProcessingEmails = false;
   emailQueueInterval = setInterval(() => {
+    if (isProcessingEmails) return;
+    isProcessingEmails = true;
     processEmailQueue(50)
       .then((result) => {
         if (result.processed > 0) {
@@ -76,6 +79,9 @@ async function main() {
       })
       .catch((err) => {
         logger.error({ err }, "Email queue processing failed");
+      })
+      .finally(() => {
+        isProcessingEmails = false;
       });
   }, 15_000);
   logger.info("Email queue worker started (15s interval)");

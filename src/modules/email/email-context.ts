@@ -4,18 +4,8 @@
 // =============================================================================
 
 import { prisma } from "@/database/client.js";
-import type { Prisma } from "@/generated/prisma/client.js";
-import type { EmailContext } from "./email.types.js";
-
-// Type for registration with all needed relations
-type RegistrationWithRelations = Prisma.RegistrationGetPayload<{
-  include: {
-    event: {
-      include: { client: true };
-    };
-    form: true;
-  };
-}>;
+import type { EmailContext, RegistrationWithRelations } from "./email.types.js";
+import { escapeHtml } from "./email-renderer.service.js";
 
 // =============================================================================
 // BUILD EMAIL CONTEXT FROM REGISTRATION
@@ -250,16 +240,7 @@ export function resolveVariables(
 // =============================================================================
 
 export function sanitizeForHtml(value: unknown): string {
-  if (value === null || value === undefined) return "";
-
-  const str = String(value);
-
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+  return escapeHtml(String(value ?? ""));
 }
 
 export function sanitizeUrl(url: string): string {

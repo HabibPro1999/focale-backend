@@ -26,7 +26,7 @@ import {
   type UpdateSponsorshipSettingsInput,
 } from "./forms.schema.js";
 import type { AppInstance } from "@shared/types/fastify.js";
-import { UserRole } from "@identity";
+import { UserRole } from "@shared/constants/roles.js";
 
 export async function formsRoutes(app: AppInstance): Promise<void> {
   // All routes require authentication

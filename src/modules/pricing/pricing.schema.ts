@@ -1,14 +1,11 @@
 import { z } from "zod";
+import {
+  ConditionSchema as PricingConditionSchema,
+  type Condition as PricingCondition,
+} from "@shared/schemas/condition.schema.js";
 
-// ============================================================================
-// Shared Types
-// ============================================================================
-
-export const PricingConditionSchema = z.strictObject({
-  fieldId: z.string().min(1),
-  operator: z.enum(["equals", "not_equals"]),
-  value: z.union([z.string(), z.number()]),
-});
+export { PricingConditionSchema };
+export type { PricingCondition };
 
 // ============================================================================
 // Embedded Pricing Rule Schema
@@ -73,16 +70,16 @@ export const RuleIdParamSchema = z.strictObject({
 // Price Calculation Schemas
 // ============================================================================
 
-export const SelectedExtraSchema = z.strictObject({
+export const SelectedAccessItemSchema = z.strictObject({
   accessId: z.string().uuid(),
   quantity: z.number().int().min(1).default(1),
 });
 
 export const CalculatePriceRequestSchema = z.strictObject({
   formData: z
-    .record(z.string(), z.any())
+    .record(z.string(), z.unknown())
     .refine((obj) => Object.keys(obj).length <= 100, "Too many fields"),
-  selectedExtras: z.array(SelectedExtraSchema).optional().default([]),
+  selectedAccessItems: z.array(SelectedAccessItemSchema).optional().default([]),
   sponsorshipCodes: z.array(z.string()).max(10).optional().default([]),
 });
 
@@ -124,7 +121,6 @@ export const PriceBreakdownSchema = z.object({
 // Types
 // ============================================================================
 
-export type PricingCondition = z.infer<typeof PricingConditionSchema>;
 export type EmbeddedPricingRule = z.infer<typeof EmbeddedPricingRuleSchema>;
 export type CreateEmbeddedRuleInput = z.infer<typeof CreateEmbeddedRuleSchema>;
 export type UpdateEmbeddedRuleInput = z.infer<typeof UpdateEmbeddedRuleSchema>;
@@ -132,4 +128,4 @@ export type UpdateEmbeddedRuleInput = z.infer<typeof UpdateEmbeddedRuleSchema>;
 export type UpdateEventPricingInput = z.infer<typeof UpdateEventPricingSchema>;
 export type CalculatePriceRequest = z.infer<typeof CalculatePriceRequestSchema>;
 export type PriceBreakdown = z.infer<typeof PriceBreakdownSchema>;
-export type SelectedExtra = z.infer<typeof SelectedExtraSchema>;
+export type SelectedAccessItem = z.infer<typeof SelectedAccessItemSchema>;

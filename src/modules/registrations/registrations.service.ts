@@ -31,7 +31,7 @@ import type {
 import type { Prisma } from "@/generated/prisma/client.js";
 
 // Imports from extracted sub-modules
-import { generateEditToken, getEditTokenExpiry } from "./edit-token.js";
+import { generateEditToken } from "./edit-token.js";
 import {
   enrichWithAccessSelections,
   enrichManyWithAccessSelections,
@@ -108,6 +108,7 @@ export async function createRegistration(
     );
   }
 
+  // Advisory check only — reserveAccessSpot inside the tx is the authoritative capacity gate
   // Validate access selections
   if (accessSelections && accessSelections.length > 0) {
     const validation = await validateAccessSelections(
@@ -152,7 +153,6 @@ export async function createRegistration(
 
     // Generate edit token for secure self-service editing
     const editToken = generateEditToken();
-    const editTokenExpiry = getEditTokenExpiry();
 
     // Create registration with relations in a single query
     const createdReg = await tx.registration.create({
@@ -182,7 +182,6 @@ export async function createRegistration(
         accessTypeIds: accessSelections?.map((s) => s.accessId) ?? [],
         // Edit token for secure public access
         editToken,
-        editTokenExpiry,
         // Browser origin URL for email links
         linkBaseUrl: linkBaseUrl ?? null,
         // Idempotency key for safe retries
@@ -303,14 +302,14 @@ export async function createAdminRegistration(
   }
 
   // Calculate price from access selections (no sponsorship for admin-created)
-  const selectedExtras = (accessSelections ?? []).map((s) => ({
+  const selectedAccessItems = (accessSelections ?? []).map((s) => ({
     accessId: s.accessId,
     quantity: s.quantity,
   }));
 
   const calculatedPrice = await calculatePrice(eventId, {
     formData,
-    selectedExtras,
+    selectedAccessItems,
     sponsorshipCodes: [],
   });
 
@@ -388,7 +387,6 @@ export async function createAdminRegistration(
         accessTypeIds: accessSelections?.map((s) => s.accessId) ?? [],
         // Admin-created: no edit token, no idempotency key, no link base URL
         editToken: null,
-        editTokenExpiry: null,
         linkBaseUrl: null,
         idempotencyKey: null,
       },
@@ -453,7 +451,10 @@ export async function getRegistrationById(
 
   if (!registration) return null;
 
-  return enrichWithAccessSelections(registration);
+  const enriched = await enrichWithAccessSelections(registration);
+  // M23: strip editToken from admin responses
+  const { editToken: _omitted, ...safeResult } = enriched;
+  return safeResult as RegistrationWithRelations;
 }
 
 /**
@@ -727,11 +728,6 @@ export async function getRegistrationClientId(
     include: { event: { select: { clientId: true } } },
   });
   return registration?.event.clientId ?? null;
-}
-
-export async function registrationExists(id: string): Promise<boolean> {
-  const count = await prisma.registration.count({ where: { id } });
-  return count > 0;
 }
 
 // ============================================================================
@@ -1080,15 +1076,16 @@ export async function editRegistrationPublic(
     }
   }
 
+  // Price calculated before tx — stale pricing rules could affect this but the difference is bounded
   // 9. Calculate new price breakdown
-  const selectedExtras = newAccessSelections.map((s) => ({
+  const selectedAccessItems = newAccessSelections.map((s) => ({
     accessId: s.accessId,
     quantity: s.quantity,
   }));
 
   const calculatedPrice = await calculatePrice(registration.eventId, {
     formData: newFormData,
-    selectedExtras,
+    selectedAccessItems,
     sponsorshipCodes: registration.sponsorshipCode
       ? [registration.sponsorshipCode]
       : [],

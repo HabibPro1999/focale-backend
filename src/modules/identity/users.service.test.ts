@@ -202,6 +202,26 @@ describe("Users Service", () => {
       );
       expect(firebaseAuthMock.deleteUser).toHaveBeenCalledWith("firebase-uid");
     });
+
+    // ------------------------------------------------------------------
+    // M15: setCustomClaims failure rollback test
+    // ------------------------------------------------------------------
+
+    it("should delete Firebase user if setCustomClaims fails", async () => {
+      const claimsError = new Error("setCustomClaims failed");
+
+      prismaMock.user.findUnique.mockResolvedValue(null);
+      clientExistsMock.mockResolvedValue(true);
+      firebaseAuthMock.createUser.mockResolvedValue({ uid: "firebase-uid" });
+      firebaseAuthMock.setCustomUserClaims.mockRejectedValue(claimsError);
+      firebaseAuthMock.deleteUser.mockResolvedValue(undefined);
+
+      await expect(createUser(validClientAdminInput)).rejects.toThrow(
+        "setCustomClaims failed",
+      );
+
+      expect(firebaseAuthMock.deleteUser).toHaveBeenCalledWith("firebase-uid");
+    });
   });
 
   // ============================================================================
@@ -377,6 +397,40 @@ describe("Users Service", () => {
         statusCode: 400,
         code: ErrorCodes.BAD_REQUEST,
       });
+    });
+
+    // ------------------------------------------------------------------
+    // M16: updateUser claims rollback test
+    // ------------------------------------------------------------------
+
+    it("should restore original Firebase claims if DB update fails", async () => {
+      const existingUser = createMockClientAdmin("client-123", {
+        id: "user-123",
+      });
+      const dbError = new Error("DB update failed");
+
+      prismaMock.user.findUnique.mockResolvedValue(existingUser);
+      firebaseAuthMock.setCustomUserClaims.mockResolvedValue(undefined);
+      prismaMock.user.update.mockRejectedValue(dbError);
+
+      await expect(
+        updateUser("user-123", {
+          role: UserRole.SUPER_ADMIN,
+          clientId: null,
+        }),
+      ).rejects.toThrow("DB update failed");
+
+      // First call: set the new claims (SUPER_ADMIN, no clientId)
+      // Second call: restore original claims (CLIENT_ADMIN, client-123)
+      expect(firebaseAuthMock.setCustomUserClaims).toHaveBeenCalledTimes(2);
+      expect(firebaseAuthMock.setCustomUserClaims).toHaveBeenNthCalledWith(
+        2,
+        "user-123",
+        {
+          role: existingUser.role,
+          clientId: existingUser.clientId,
+        },
+      );
     });
   });
 
@@ -665,6 +719,32 @@ describe("Users Service", () => {
       expect(prismaMock.user.delete).toHaveBeenCalledWith({
         where: { id: "admin-123" },
       });
+    });
+
+    // ------------------------------------------------------------------
+    // M17: deleteUser Firebase failure test
+    // ------------------------------------------------------------------
+
+    it("should log error but not re-throw when Firebase delete fails after DB delete", async () => {
+      const existingUser = createMockUser({ id: "user-123" });
+
+      prismaMock.user.findUnique.mockResolvedValue(existingUser);
+      prismaMock.user.delete.mockResolvedValue(existingUser);
+      firebaseAuthMock.deleteUser.mockRejectedValue(
+        new Error("Firebase delete failed"),
+      );
+
+      // Function should resolve, not reject — Firebase failure is swallowed
+      await expect(
+        deleteUser("user-123", "requester-id"),
+      ).resolves.toBeUndefined();
+
+      // DB delete must have been called
+      expect(prismaMock.user.delete).toHaveBeenCalledWith({
+        where: { id: "user-123" },
+      });
+      // Firebase delete was attempted
+      expect(firebaseAuthMock.deleteUser).toHaveBeenCalledWith("user-123");
     });
   });
 

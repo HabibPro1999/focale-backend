@@ -4,35 +4,15 @@ import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { auditLog } from "@shared/utils/audit.js";
 import { validateCoveredAccessTimeOverlap } from "./sponsorships.utils.js";
 import type { UpdateSponsorshipInput } from "./sponsorships.schema.js";
-import type {
-  Prisma,
-  Sponsorship,
-  SponsorshipBatch,
-  SponsorshipUsage,
-} from "@/generated/prisma/client.js";
+import type { Prisma } from "@/generated/prisma/client.js";
 import {
   unlinkSponsorshipFromAllRegistrations,
   recalculateUsageAmounts,
 } from "./sponsorship-linking.js";
-import { getSponsorshipById } from "./sponsorship-queries.js";
-
-// ============================================================================
-// Types (kept for return signatures)
-// ============================================================================
-
-type SponsorshipWithUsages = Sponsorship & {
-  batch: SponsorshipBatch;
-  usages: Array<
-    SponsorshipUsage & {
-      registration: {
-        id: string;
-        email: string;
-        firstName: string | null;
-        lastName: string | null;
-      };
-    }
-  >;
-};
+import {
+  getSponsorshipById,
+  type SponsorshipWithUsages,
+} from "./sponsorship-queries.js";
 
 // ============================================================================
 // Update Sponsorship (Admin)

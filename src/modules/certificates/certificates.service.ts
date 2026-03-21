@@ -260,16 +260,3 @@ export async function uploadTemplateImage(
     include: { access: accessSelect },
   });
 }
-
-// ============================================================================
-// Authorization Helper
-// ============================================================================
-
-export async function getTemplateClientId(id: string): Promise<string | null> {
-  const template = await prisma.certificateTemplate.findUnique({
-    where: { id },
-    select: { event: { select: { clientId: true } } },
-  });
-
-  return template?.event.clientId ?? null;
-}

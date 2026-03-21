@@ -8,13 +8,13 @@ import type { AppInstance } from "@shared/types/fastify.js";
 
 export async function eventsPublicRoutes(app: AppInstance): Promise<void> {
   // GET /api/public/events/:eventId/payment-config - Get event payment configuration
-  app.get<{ Params: { eventId: string } }>(
-    "/:eventId/payment-config",
+  app.get<{ Params: { id: string } }>(
+    "/:id/payment-config",
     {
       schema: { params: EventIdParamSchema },
     },
     async (request, reply) => {
-      const { eventId } = request.params;
+      const { id: eventId } = request.params;
 
       // Fetch event with pricing and client in one query
       const event = await prisma.event.findUnique({
