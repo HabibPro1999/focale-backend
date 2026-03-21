@@ -4,6 +4,7 @@
 // =============================================================================
 
 import { prisma } from "@/database/client.js";
+import { config } from "@config/app.config.js";
 import type { EmailContext, RegistrationWithRelations } from "./email.types.js";
 import { escapeHtml } from "./email-renderer.service.js";
 
@@ -19,7 +20,7 @@ export function buildEmailContext(
   // Use dynamic linkBaseUrl (captured from browser at registration) or fallback to env
   const baseUrl =
     registration.linkBaseUrl ||
-    process.env.PUBLIC_FORMS_URL ||
+    config.publicFormsUrl ||
     "https://events.example.com";
 
   // Get event slug for URL paths
@@ -243,21 +244,6 @@ export function sanitizeForHtml(value: unknown): string {
   return escapeHtml(String(value ?? ""));
 }
 
-export function sanitizeUrl(url: string): string {
-  const trimmed = url.trim().toLowerCase();
-
-  // Block dangerous protocols
-  if (
-    trimmed.startsWith("javascript:") ||
-    trimmed.startsWith("data:") ||
-    trimmed.startsWith("vbscript:")
-  ) {
-    return "#blocked";
-  }
-
-  return url;
-}
-
 // =============================================================================
 // FORMATTING HELPERS
 // =============================================================================
@@ -279,6 +265,7 @@ function formatCurrency(amount: number, currency = "TND"): string {
 function formatPaymentStatus(status: string): string {
   const statusMap: Record<string, string> = {
     PENDING: "Pending",
+    VERIFYING: "Verifying payment",
     PAID: "Confirmed",
     REFUNDED: "Refunded",
     WAIVED: "Waived",
@@ -504,7 +491,7 @@ export function buildLinkedSponsorshipContext(
   // Build links
   const baseUrl =
     registration.linkBaseUrl ||
-    process.env.PUBLIC_FORMS_URL ||
+    config.publicFormsUrl ||
     "https://events.example.com";
   const token = registration.editToken || "";
 

@@ -2,6 +2,7 @@ import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { logger } from "@shared/utils/logger.js";
+import type { TxClient } from "@shared/types/prisma.js";
 import type {
   CreateEventAccessInput,
   UpdateEventAccessInput,
@@ -442,10 +443,7 @@ export { getGroupedAccess } from "./access-grouping.js";
 
 // Structural type for a db client that can be either the global prisma instance
 // or a transaction client (tx). Matches the subset of operations used here.
-type CapacityDbClient = {
-  $executeRaw: typeof prisma.$executeRaw;
-  eventAccess: Pick<typeof prisma.eventAccess, "findUnique" | "updateMany">;
-};
+type CapacityDbClient = Pick<TxClient, "$executeRaw" | "eventAccess">;
 
 /**
  * Reserve access spot with atomic capacity check.

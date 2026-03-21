@@ -4,6 +4,8 @@
 
 import { prisma } from "@/database/client.js";
 import { Prisma } from "@/generated/prisma/client.js";
+import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
 import type {
   ReportQuery,
   FinancialReportResponse,
@@ -499,9 +501,12 @@ export async function exportRegistrations(
     orderBy: { submittedAt: "desc" },
   });
 
+  if (!event) {
+    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
+  }
+
   const timestamp = new Date().toISOString().split("T")[0];
-  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-  const filename = `${event!.slug}-registrations-${timestamp}`;
+  const filename = `${event.slug}-registrations-${timestamp}`;
 
   if (query.format === "json") {
     return {

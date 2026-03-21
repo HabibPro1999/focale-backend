@@ -79,9 +79,6 @@ export async function enrichWithAccessSelections(
       type: true,
       startsAt: true,
       endsAt: true,
-      price: true,
-      companionPrice: true,
-      allowCompanion: true,
     },
   });
 
@@ -100,9 +97,6 @@ export async function enrichWithAccessSelections(
       type: "OTHER",
       startsAt: null,
       endsAt: null,
-      price: 0,
-      companionPrice: 0,
-      allowCompanion: false,
     },
   }));
 
@@ -141,9 +135,6 @@ export async function enrichManyWithAccessSelections(
       type: true,
       startsAt: true,
       endsAt: true,
-      price: true,
-      companionPrice: true,
-      allowCompanion: true,
     },
   });
 
@@ -172,9 +163,6 @@ export async function enrichManyWithAccessSelections(
         type: "OTHER",
         startsAt: null,
         endsAt: null,
-        price: 0,
-        companionPrice: 0,
-        allowCompanion: false,
       },
     }));
 

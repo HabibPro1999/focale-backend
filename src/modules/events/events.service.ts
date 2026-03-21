@@ -16,9 +16,10 @@ import type {
   ListEventsQuery,
 } from "./events.schema.js";
 import type { Event, EventPricing, Prisma } from "@/generated/prisma/client.js";
+import type { TxClient } from "@shared/types/prisma.js";
 
-// Transaction client type that works with Prisma extensions
-type TransactionClient = { $executeRaw: typeof prisma.$executeRaw };
+// Transaction client type — minimal subset needed for raw capacity queries
+type TransactionClient = Pick<TxClient, "$executeRaw">;
 
 // Type for Event with pricing included
 type EventWithPricing = Event & { pricing: EventPricing | null };

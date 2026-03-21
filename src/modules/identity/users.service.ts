@@ -20,7 +20,7 @@ import type {
   ListUsersQuery,
 } from "./users.schema.js";
 import type { User, Prisma } from "@/generated/prisma/client.js";
-import { UserRole } from "./permissions.js";
+import { UserRole } from "@shared/constants/roles.js";
 
 // Define type for user queries with include
 type UserWithClient = Prisma.UserGetPayload<{ include: { client: true } }>;

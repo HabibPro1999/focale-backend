@@ -16,7 +16,6 @@ export {
   buildEmailContextWithAccess,
   resolveVariables,
   sanitizeForHtml,
-  sanitizeUrl,
   getSampleEmailContext,
   buildBatchEmailContext,
   buildLinkedSponsorshipContext,

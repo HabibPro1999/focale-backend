@@ -20,6 +20,8 @@ const envSchema = z
     SENDGRID_FROM_NAME: z.string().optional(),
     // Storage Provider
     STORAGE_PROVIDER: z.enum(["firebase", "r2"]).default("firebase"),
+    // Public URL for forms (used in email links)
+    PUBLIC_FORMS_URL: z.string().url().optional(),
     // Cloudflare R2
     R2_ACCOUNT_ID: z.string().optional(),
     R2_ACCESS_KEY_ID: z.string().optional(),
@@ -80,4 +82,5 @@ export const config = {
     fromEmail: env.SENDGRID_FROM_EMAIL ?? "noreply@example.com",
     fromName: env.SENDGRID_FROM_NAME ?? "Event Platform",
   },
+  publicFormsUrl: env.PUBLIC_FORMS_URL,
 };

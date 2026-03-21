@@ -442,8 +442,7 @@ model Registration {
   lastEditedAt DateTime? @map("last_edited_at")
 
   // Self-service edit token (for secure public edit access)
-  editToken       String?   @unique @map("edit_token")
-  editTokenExpiry DateTime? @map("edit_token_expiry")
+  editToken String? @unique @map("edit_token")
 
   // Browser origin URL for email links (captured at registration time)
   linkBaseUrl String? @map("link_base_url")

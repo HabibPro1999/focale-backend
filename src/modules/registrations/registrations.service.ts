@@ -313,25 +313,8 @@ export async function createAdminRegistration(
     sponsorshipCodes: [],
   });
 
-  // Transform to registration PriceBreakdown format
-  const priceBreakdown: PriceBreakdown = {
-    basePrice: calculatedPrice.basePrice,
-    appliedRules: calculatedPrice.appliedRules,
-    calculatedBasePrice: calculatedPrice.calculatedBasePrice,
-    accessItems: calculatedPrice.accessItems.map((item) => ({
-      accessId: item.accessId,
-      name: item.name,
-      unitPrice: item.unitPrice,
-      quantity: item.quantity,
-      subtotal: item.subtotal,
-    })),
-    accessTotal: calculatedPrice.accessTotal,
-    subtotal: calculatedPrice.subtotal,
-    sponsorships: calculatedPrice.sponsorships,
-    sponsorshipTotal: calculatedPrice.sponsorshipTotal,
-    total: calculatedPrice.total,
-    currency: calculatedPrice.currency,
-  };
+  // calculatePrice already returns PriceBreakdown with the exact stored shape
+  const priceBreakdown: PriceBreakdown = calculatedPrice;
 
   const result = await prisma.$transaction(async (tx) => {
     // Re-check event status and capacity inside the transaction to prevent TOCTOU races.
@@ -575,7 +558,15 @@ export async function updateRegistration(
     }
   });
 
-  return getRegistrationById(id) as Promise<RegistrationWithRelations>;
+  const updated = await getRegistrationById(id);
+  if (!updated) {
+    throw new AppError(
+      "Registration not found after update",
+      404,
+      ErrorCodes.REGISTRATION_NOT_FOUND,
+    );
+  }
+  return updated;
 }
 
 // ============================================================================
@@ -1091,25 +1082,8 @@ export async function editRegistrationPublic(
       : [],
   });
 
-  // Transform to registration format
-  const newPriceBreakdown: PriceBreakdown = {
-    basePrice: calculatedPrice.basePrice,
-    appliedRules: calculatedPrice.appliedRules,
-    calculatedBasePrice: calculatedPrice.calculatedBasePrice,
-    accessItems: calculatedPrice.accessItems.map((item) => ({
-      accessId: item.accessId,
-      name: item.name,
-      unitPrice: item.unitPrice,
-      quantity: item.quantity,
-      subtotal: item.subtotal,
-    })),
-    accessTotal: calculatedPrice.accessTotal,
-    subtotal: calculatedPrice.subtotal,
-    sponsorships: calculatedPrice.sponsorships,
-    sponsorshipTotal: calculatedPrice.sponsorshipTotal,
-    total: calculatedPrice.total,
-    currency: calculatedPrice.currency,
-  };
+  // calculatePrice already returns PriceBreakdown with the exact stored shape
+  const newPriceBreakdown: PriceBreakdown = calculatedPrice;
 
   // 10. Execute transaction — registration re-read inside tx to prevent TOCTOU
   await prisma.$transaction(async (tx) => {

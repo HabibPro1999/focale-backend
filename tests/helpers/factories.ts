@@ -254,7 +254,6 @@ export function createMockRegistration(
     submittedAt: faker.date.past(),
     lastEditedAt: null,
     editToken: null,
-    editTokenExpiry: null,
     idempotencyKey: null,
     linkBaseUrl: null,
     note: null,

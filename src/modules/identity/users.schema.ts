@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { UserRole } from "./permissions.js";
+import { UserRole } from "@shared/constants/roles.js";
 
 // ============================================================================
 // Request Schemas
