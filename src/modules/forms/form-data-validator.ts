@@ -410,6 +410,10 @@ function buildFieldSchema(field: FormField): ZodTypeAny | null {
     case "file":
       return buildFileSchema(field, validation);
 
+    case "governorate":
+    case "country":
+      return buildDropdownSchema(field, validation);
+
     case "heading":
     case "paragraph":
       // Display-only fields, no validation needed

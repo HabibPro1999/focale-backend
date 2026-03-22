@@ -1,3 +1,4 @@
+import { z } from "zod";
 import {
   requireAuth,
   canAccessClient,
@@ -261,7 +262,10 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
   app.post<{ Params: { id: string }; Body: { name?: string } }>(
     "/events/:id/sponsor",
     {
-      schema: { params: EventIdParamSchema },
+      schema: {
+        params: EventIdParamSchema,
+        body: z.looseObject({ name: z.string().min(1).max(200).optional() }),
+      },
     },
     async (request, reply) => {
       // Get event to check ownership

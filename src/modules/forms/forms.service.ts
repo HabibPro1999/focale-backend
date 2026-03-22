@@ -9,14 +9,15 @@ import {
   type PaginatedResult,
 } from "@shared/utils/pagination.js";
 import { logger } from "@shared/utils/logger.js";
-import type {
-  CreateFormInput,
-  UpdateFormInput,
-  ListFormsQuery,
-  FormSchemaJson,
-  SponsorFormSchemaJson,
-  SponsorshipSettings,
-  UpdateSponsorshipSettingsInput,
+import {
+  SponsorFormSchemaJsonSchema,
+  type CreateFormInput,
+  type UpdateFormInput,
+  type ListFormsQuery,
+  type FormSchemaJson,
+  type SponsorFormSchemaJson,
+  type SponsorshipSettings,
+  type UpdateSponsorshipSettingsInput,
 } from "./forms.schema.js";
 import type {
   Form,
@@ -236,6 +237,20 @@ export async function updateForm(
   const form = await prisma.form.findUnique({ where: { id } });
   if (!form) {
     throw new AppError("Form not found", 404, ErrorCodes.NOT_FOUND);
+  }
+
+  // Validate sponsor form schema shape when updating a SPONSOR form
+  if (form.type === "SPONSOR" && input.schema !== undefined) {
+    const schemaValidation = SponsorFormSchemaJsonSchema.safeParse(
+      input.schema,
+    );
+    if (!schemaValidation.success) {
+      throw new AppError(
+        "Invalid sponsor form schema structure",
+        400,
+        ErrorCodes.VALIDATION_ERROR,
+      );
+    }
   }
 
   // Prepare update data

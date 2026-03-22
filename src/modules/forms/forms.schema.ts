@@ -17,9 +17,11 @@ export const FieldTypeSchema = z.enum([
   "file",
   "heading",
   "paragraph",
+  "governorate",
+  "country",
 ]);
 
-export const FieldOptionSchema = z.strictObject({
+export const FieldOptionSchema = z.looseObject({
   id: z.string(),
   label: z.string(),
   priceModifier: z.number().optional(),
@@ -36,13 +38,13 @@ export const ConditionOperatorSchema = z.enum([
   "is_not_empty",
 ]);
 
-export const FieldConditionSchema = z.strictObject({
+export const FieldConditionSchema = z.looseObject({
   fieldId: z.string(),
   operator: ConditionOperatorSchema,
   value: z.union([z.string(), z.number(), z.boolean()]).optional(),
 });
 
-export const FieldValidationSchema = z.strictObject({
+export const FieldValidationSchema = z.looseObject({
   required: z.boolean().optional(),
   minLength: z.number().int().positive().optional(),
   maxLength: z.number().int().positive().optional(),
@@ -53,7 +55,7 @@ export const FieldValidationSchema = z.strictObject({
   maxFileSize: z.number().int().positive().optional(),
 });
 
-export const FormFieldSchema = z.strictObject({
+export const FormFieldSchema = z.looseObject({
   id: z.string(),
   type: FieldTypeSchema,
   label: z.string().optional(),
@@ -73,7 +75,7 @@ export const FormFieldSchema = z.strictObject({
 // Form Step Schema
 // ============================================================================
 
-export const FormStepSchema = z.strictObject({
+export const FormStepSchema = z.looseObject({
   id: z.string(),
   title: z.string(),
   description: z.string().optional(),
@@ -95,14 +97,14 @@ export const FormSchemaJsonSchema = z.looseObject({
 // ============================================================================
 
 // Beneficiary template for sponsor forms
-export const BeneficiaryTemplateSchema = z.strictObject({
+export const BeneficiaryTemplateSchema = z.looseObject({
   fields: z.array(FormFieldSchema),
   minCount: z.number().int().min(1).default(1),
   maxCount: z.number().int().max(500).default(100),
 });
 
 // Summary settings for sponsor forms
-export const SponsorSummarySettingsSchema = z.strictObject({
+export const SponsorSummarySettingsSchema = z.looseObject({
   title: z.string().optional(),
   showPriceBreakdown: z.boolean().default(true),
   termsText: z.string().optional(),
@@ -119,7 +121,7 @@ export const SponsorshipSettingsSchema = z.strictObject({
 });
 
 // Sponsor form schema structure
-export const SponsorFormSchemaJsonSchema = z.strictObject({
+export const SponsorFormSchemaJsonSchema = z.looseObject({
   formType: z.literal("SPONSOR"),
   sponsorSteps: z.array(FormStepSchema),
   beneficiaryTemplate: BeneficiaryTemplateSchema,
