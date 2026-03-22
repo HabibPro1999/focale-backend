@@ -712,6 +712,53 @@ export async function createSponsorshipBatch(
 /**
  * List sponsorships for an event with pagination and filtering.
  */
+// ============================================================================
+// Sponsorship Stats (Aggregate)
+// ============================================================================
+
+export interface SponsorshipStats {
+  total: number;
+  pending: { count: number; amount: number };
+  used: { count: number; amount: number };
+  cancelled: { count: number; amount: number };
+  totalAmount: number;
+}
+
+export async function getSponsorshipStats(
+  eventId: string,
+): Promise<SponsorshipStats> {
+  const rows = await prisma.sponsorship.groupBy({
+    by: ["status"],
+    where: { eventId },
+    _count: { _all: true },
+    _sum: { totalAmount: true },
+  });
+
+  const stats: SponsorshipStats = {
+    total: 0,
+    pending: { count: 0, amount: 0 },
+    used: { count: 0, amount: 0 },
+    cancelled: { count: 0, amount: 0 },
+    totalAmount: 0,
+  };
+
+  for (const row of rows) {
+    const count = row._count._all;
+    const amount = row._sum.totalAmount ?? 0;
+    stats.total += count;
+    stats.totalAmount += amount;
+    if (row.status === "PENDING") {
+      stats.pending = { count, amount };
+    } else if (row.status === "USED") {
+      stats.used = { count, amount };
+    } else if (row.status === "CANCELLED") {
+      stats.cancelled = { count, amount };
+    }
+  }
+
+  return stats;
+}
+
 export async function listSponsorships(
   eventId: string,
   query: ListSponsorshipsQuery,

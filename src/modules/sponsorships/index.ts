@@ -6,6 +6,7 @@
 export {
   createSponsorshipBatch,
   listSponsorships,
+  getSponsorshipStats,
   getSponsorshipById,
   getSponsorshipByCode,
   updateSponsorship,
@@ -23,6 +24,7 @@ export type {
   AvailableSponsorship,
   LinkSponsorshipResult,
   CreateBatchResult,
+  SponsorshipStats,
 } from "./sponsorships.service.js";
 
 // Utility functions
