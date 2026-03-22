@@ -77,6 +77,10 @@ vi.mock("@shared/services/storage/index.js", () => ({
       .fn()
       .mockResolvedValue("https://storage.example.com/test/proof.webp"),
     getSignedUrl: vi.fn().mockResolvedValue("https://signed-url.example.com"),
+    download: vi.fn().mockResolvedValue({
+      buffer: Buffer.from("downloaded-content"),
+      contentType: "image/jpeg",
+    }),
     delete: vi.fn().mockResolvedValue(undefined),
   })),
 }));

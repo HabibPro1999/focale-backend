@@ -6,6 +6,7 @@ import { getEventById } from "@events";
 import {
   listTemplates,
   getTemplate,
+  downloadTemplateImage,
   createTemplate,
   updateTemplate,
   deleteTemplate,
@@ -183,6 +184,35 @@ export async function certificatesRoutes(app: AppInstance): Promise<void> {
       });
 
       return reply.send(template);
+    },
+  );
+
+  // GET /api/events/certificates/:id/image — download template image via API origin
+  app.get<{
+    Params: { id: string };
+  }>(
+    "/certificates/:id/image",
+    {
+      schema: { params: TemplateIdParamSchema },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+
+      const existing = await getTemplate(id);
+
+      if (!canAccessClient(request.user!, existing.event.clientId)) {
+        throw app.httpErrors.forbidden("Insufficient permissions");
+      }
+
+      if (!existing.templateUrl) {
+        throw app.httpErrors.notFound("Certificate template image not found");
+      }
+
+      const file = await downloadTemplateImage(existing.templateUrl);
+
+      reply.header("Cache-Control", "private, max-age=300");
+      reply.type(file.contentType ?? "application/octet-stream");
+      return reply.send(file.buffer);
     },
   );
 }

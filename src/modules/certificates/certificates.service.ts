@@ -77,6 +77,20 @@ export async function getTemplate(id: string) {
   return template;
 }
 
+export async function downloadTemplateImage(templateUrl: string) {
+  const key = extractKeyFromStorage(templateUrl);
+
+  if (!key) {
+    throw new AppError(
+      "Certificate template image is not stored in a supported location",
+      400,
+      ErrorCodes.VALIDATION_ERROR,
+    );
+  }
+
+  return getStorageProvider().download(key);
+}
+
 // ============================================================================
 // Create Template
 // ============================================================================
