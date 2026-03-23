@@ -19,7 +19,7 @@ model Client {
   email          String?
   phone          String?
   active         Boolean  @default(true)
-  enabledModules String[] @default(["pricing", "registrations", "sponsorships", "emails"]) @map("enabled_modules")
+  enabledModules String[] @default(["pricing", "registrations", "sponsorships", "emails", "certificates"]) @map("enabled_modules")
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
