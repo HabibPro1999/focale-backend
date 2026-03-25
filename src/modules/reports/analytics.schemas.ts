@@ -58,3 +58,36 @@ export type AnalyticsAccessItem = z.infer<typeof AnalyticsAccessItemSchema>;
 export type EventAnalyticsResponse = z.infer<
   typeof EventAnalyticsResponseSchema
 >;
+
+// ============================================================================
+// Access Registrants Schemas
+// ============================================================================
+
+export const AccessRegistrantSchema = z.object({
+  id: z.string().uuid(),
+  firstName: z.string().nullable(),
+  lastName: z.string().nullable(),
+  email: z.string(),
+  phone: z.string().nullable(),
+  paymentStatus: z.enum(["PENDING", "VERIFYING", "PAID", "REFUNDED", "WAIVED"]),
+  paidAmount: z.number().int(),
+  totalAmount: z.number().int(),
+  currency: z.string(),
+  submittedAt: z.string().datetime(),
+});
+
+export const AccessRegistrantsResponseSchema = z.object({
+  accessId: z.string().uuid(),
+  accessName: z.string(),
+  accessType: z.string(),
+  total: z.number().int(),
+  settled: z.number().int(), // count of PAID + WAIVED
+  notSettled: z.number().int(), // count of all others
+  settledList: z.array(AccessRegistrantSchema),
+  notSettledList: z.array(AccessRegistrantSchema),
+});
+
+export type AccessRegistrant = z.infer<typeof AccessRegistrantSchema>;
+export type AccessRegistrantsResponse = z.infer<
+  typeof AccessRegistrantsResponseSchema
+>;

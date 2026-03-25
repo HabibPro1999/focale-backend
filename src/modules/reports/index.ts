@@ -8,6 +8,7 @@ export {
   exportRegistrations,
   getEventAnalytics,
   generateEventSummary,
+  getAccessRegistrants,
 } from "./reports.service.js";
 
 // Schemas & Types
@@ -21,9 +22,12 @@ export {
 } from "./reports.schema.js";
 export {
   EventAnalyticsResponseSchema,
+  AccessRegistrantsResponseSchema,
   type EventAnalyticsResponse,
   type AnalyticsStatusItem,
   type AnalyticsAccessItem,
+  type AccessRegistrant,
+  type AccessRegistrantsResponse,
 } from "./analytics.schemas.js";
 
 // Routes
