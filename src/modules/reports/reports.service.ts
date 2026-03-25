@@ -16,6 +16,7 @@ import type {
   DailyTrendItem,
   ExportQuery,
 } from "./reports.schema.js";
+import type { EventAnalyticsResponse } from "./analytics.schemas.js";
 
 // ============================================================================
 // Financial Report
@@ -324,6 +325,104 @@ async function getDailyTrend(
     totalAmount: Number(r.total_amount),
   }));
 }
+
+// ============================================================================
+// Analytics
+// ============================================================================
+
+export async function getEventAnalytics(
+  eventId: string,
+): Promise<EventAnalyticsResponse> {
+  const [
+    paymentsByStatus,
+    paymentsByMethod,
+    accessItems,
+    sponsorshipsByStatus,
+  ] = await Promise.all([
+    prisma.registration.groupBy({
+      by: ["paymentStatus"],
+      where: { eventId },
+      _count: true,
+    }),
+    prisma.registration.groupBy({
+      by: ["paymentMethod"],
+      where: { eventId },
+      _count: true,
+    }),
+    prisma.eventAccess.findMany({
+      where: { eventId },
+      select: {
+        id: true,
+        name: true,
+        type: true,
+        registeredCount: true,
+        maxCapacity: true,
+      },
+      orderBy: { startsAt: "asc" },
+    }),
+    prisma.sponsorship.groupBy({
+      by: ["status"],
+      where: { eventId },
+      _count: true,
+    }),
+  ]);
+
+  const paymentStatusCounts = new Map(
+    paymentsByStatus.map((group) => [group.paymentStatus, group._count]),
+  );
+  const paymentMethodCounts = new Map(
+    paymentsByMethod.map((group) => [
+      group.paymentMethod ?? "UNSET",
+      group._count,
+    ]),
+  );
+
+  return {
+    eventId,
+    generatedAt: new Date().toISOString(),
+    registrations: {
+      total: paymentsByStatus.reduce((sum, group) => sum + group._count, 0),
+    },
+    payments: {
+      paid: paymentStatusCounts.get("PAID") ?? 0,
+      verifying: paymentStatusCounts.get("VERIFYING") ?? 0,
+      pending: paymentStatusCounts.get("PENDING") ?? 0,
+      waived: paymentStatusCounts.get("WAIVED") ?? 0,
+      refunded: paymentStatusCounts.get("REFUNDED") ?? 0,
+    },
+    paymentMethods: {
+      bankTransfer: paymentMethodCounts.get("BANK_TRANSFER") ?? 0,
+      online: paymentMethodCounts.get("ONLINE") ?? 0,
+      cash: paymentMethodCounts.get("CASH") ?? 0,
+      labSponsorship: paymentMethodCounts.get("LAB_SPONSORSHIP") ?? 0,
+      unset: paymentMethodCounts.get("UNSET") ?? 0,
+    },
+    accessItems: accessItems.map((item) => ({
+      id: item.id,
+      name: item.name,
+      type: item.type,
+      registeredCount: item.registeredCount,
+      maxCapacity: item.maxCapacity,
+      fillPercentage:
+        item.maxCapacity && item.maxCapacity > 0
+          ? Math.round((item.registeredCount / item.maxCapacity) * 100)
+          : null,
+    })),
+    sponsorships: {
+      total: sponsorshipsByStatus.reduce((sum, group) => sum + group._count, 0),
+      byStatus: sponsorshipsByStatus.map((group) => ({
+        status: group.status,
+        count: group._count,
+      })),
+    },
+  };
+}
+
+// ============================================================================
+// Event Summary Report (Excel)
+// ============================================================================
+
+export { generateEventSummary } from "./excel-generator.js";
 
 // ============================================================================
 // CSV Export

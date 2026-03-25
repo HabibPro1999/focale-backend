@@ -48,11 +48,15 @@ async function waitForDatabase(
 async function main() {
   const server = await buildServer();
 
-  let emailQueueInterval: ReturnType<typeof setInterval> | undefined;
+  const emailQueueWorker: {
+    interval: ReturnType<typeof setInterval> | undefined;
+  } = {
+    interval: undefined,
+  };
 
   // Register hooks and shutdown BEFORE listen (Fastify disallows addHook after listen)
   server.addHook("onClose", async () => {
-    if (emailQueueInterval) clearInterval(emailQueueInterval);
+    if (emailQueueWorker.interval) clearInterval(emailQueueWorker.interval);
     logger.info("Email queue worker stopped");
   });
 
@@ -67,7 +71,7 @@ async function main() {
   await waitForDatabase();
 
   // Start email queue worker (processes every 15 seconds for faster email delivery)
-  emailQueueInterval = setInterval(() => {
+  emailQueueWorker.interval = setInterval(() => {
     processEmailQueue(50)
       .then((result) => {
         if (result.processed > 0) {
