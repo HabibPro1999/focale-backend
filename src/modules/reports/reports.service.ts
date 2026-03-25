@@ -16,7 +16,11 @@ import type {
   DailyTrendItem,
   ExportQuery,
 } from "./reports.schema.js";
-import type { EventAnalyticsResponse } from "./analytics.schemas.js";
+import type {
+  EventAnalyticsResponse,
+  AccessRegistrant,
+  AccessRegistrantsResponse,
+} from "./analytics.schemas.js";
 
 // ============================================================================
 // Financial Report
@@ -517,6 +521,82 @@ export async function exportRegistrations(
     filename: `${filename}.csv`,
     contentType: "text/csv",
     data: csv,
+  };
+}
+
+// ============================================================================
+// Access Registrants
+// ============================================================================
+
+export async function getAccessRegistrants(
+  eventId: string,
+  accessId: string,
+): Promise<AccessRegistrantsResponse> {
+  // Verify the access item exists and belongs to this event
+  const access = await prisma.eventAccess.findUnique({
+    where: { id: accessId },
+    select: { id: true, name: true, type: true, eventId: true },
+  });
+
+  if (!access || access.eventId !== eventId) {
+    throw new AppError(
+      "Access item not found",
+      404,
+      true,
+      ErrorCodes.NOT_FOUND,
+    );
+  }
+
+  // Fetch all registrations subscribed to this access item
+  const registrations = await prisma.registration.findMany({
+    where: {
+      eventId,
+      accessTypeIds: { has: accessId },
+    },
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      email: true,
+      phone: true,
+      paymentStatus: true,
+      paidAmount: true,
+      totalAmount: true,
+      currency: true,
+      submittedAt: true,
+    },
+    orderBy: { submittedAt: "desc" },
+  });
+
+  const settled = registrations.filter(
+    (r) => r.paymentStatus === "PAID" || r.paymentStatus === "WAIVED",
+  );
+  const notSettled = registrations.filter(
+    (r) => r.paymentStatus !== "PAID" && r.paymentStatus !== "WAIVED",
+  );
+
+  const toRegistrant = (r: (typeof registrations)[0]): AccessRegistrant => ({
+    id: r.id,
+    firstName: r.firstName,
+    lastName: r.lastName,
+    email: r.email,
+    phone: r.phone,
+    paymentStatus: r.paymentStatus as AccessRegistrant["paymentStatus"],
+    paidAmount: r.paidAmount,
+    totalAmount: r.totalAmount,
+    currency: r.currency,
+    submittedAt: r.submittedAt.toISOString(),
+  });
+
+  return {
+    accessId: access.id,
+    accessName: access.name,
+    accessType: access.type,
+    total: registrations.length,
+    settled: settled.length,
+    notSettled: notSettled.length,
+    settledList: settled.map(toRegistrant),
+    notSettledList: notSettled.map(toRegistrant),
   };
 }
 
