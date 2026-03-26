@@ -522,9 +522,12 @@ export async function getGroupedAccess(
     };
   });
 
+  // Filter out items that have reached max capacity
+  const availableEnrichedAccess = enrichedAccess.filter((a) => !a.isFull);
+
   // === Partition ADDON vs scheduled items ===
-  const addonItems = enrichedAccess.filter((a) => a.type === "ADDON");
-  const scheduledItems = enrichedAccess.filter((a) => a.type !== "ADDON");
+  const addonItems = availableEnrichedAccess.filter((a) => a.type === "ADDON");
+  const scheduledItems = availableEnrichedAccess.filter((a) => a.type !== "ADDON");
 
   // === Hierarchical grouping by DATE (scheduled items only) ===
 

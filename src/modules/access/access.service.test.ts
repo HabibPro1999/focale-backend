@@ -778,7 +778,7 @@ describe("Access Service", () => {
       expect(workshopItemsWithPrereq).toHaveLength(1);
     });
 
-    it("should calculate spotsRemaining and isFull correctly", async () => {
+    it("should calculate spotsRemaining and isFull correctly and exclude full items", async () => {
       const accessItems = [
         createEventAccessWithRelations({
           id: "full-workshop",
@@ -814,18 +814,65 @@ describe("Access Service", () => {
         g.slots.flatMap((s) => s.items),
       );
 
+      // Full item should be excluded from results
       const fullItem = items.find((i) => i.id === "full-workshop");
+      expect(fullItem).toBeUndefined();
+
       const availableItem = items.find((i) => i.id === "available-workshop");
-      const unlimitedItem = items.find((i) => i.id === "unlimited-workshop");
-
-      expect(fullItem?.spotsRemaining).toBe(0);
-      expect(fullItem?.isFull).toBe(true);
-
       expect(availableItem?.spotsRemaining).toBe(15);
       expect(availableItem?.isFull).toBe(false);
 
+      const unlimitedItem = items.find((i) => i.id === "unlimited-workshop");
       expect(unlimitedItem?.spotsRemaining).toBeNull();
       expect(unlimitedItem?.isFull).toBe(false);
+    });
+
+    it("should exclude all full-capacity items from results", async () => {
+      const accessItems = [
+        createEventAccessWithRelations({
+          id: "full-1",
+          eventId,
+          type: "WORKSHOP",
+          name: "Full Workshop",
+          maxCapacity: 5,
+          registeredCount: 5,
+          startsAt: new Date("2025-06-01T09:00:00"),
+          active: true,
+        }),
+        createEventAccessWithRelations({
+          id: "full-2",
+          eventId,
+          type: "ADDON",
+          name: "Full Addon",
+          maxCapacity: 1,
+          registeredCount: 1,
+          active: true,
+        }),
+        createEventAccessWithRelations({
+          id: "available-1",
+          eventId,
+          type: "WORKSHOP",
+          name: "Available Workshop",
+          maxCapacity: 10,
+          registeredCount: 3,
+          startsAt: new Date("2025-06-01T09:00:00"),
+          active: true,
+        }),
+      ];
+
+      prismaMock.eventAccess.findMany.mockResolvedValue(accessItems as never);
+
+      const result = await getGroupedAccess(eventId, {}, []);
+
+      const scheduledItems = result.groups.flatMap((g) =>
+        g.slots.flatMap((s) => s.items),
+      );
+      // Full items should not appear
+      expect(scheduledItems.find((i) => i.id === "full-1")).toBeUndefined();
+      expect(result.addonGroup).toBeNull();
+
+      // Available item should still appear
+      expect(scheduledItems.find((i) => i.id === "available-1")).toBeDefined();
     });
 
     it("should include items with OTHER type in date groups", async () => {
