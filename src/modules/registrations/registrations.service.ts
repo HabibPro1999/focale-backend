@@ -63,6 +63,16 @@ export {
 } from "./registration-queries.js";
 
 // ============================================================================
+// Helpers
+// ============================================================================
+
+function generateReferenceNumber(): string {
+  const timestamp = Date.now().toString(36).toUpperCase();
+  const random = Math.random().toString(36).substring(2, 6).toUpperCase();
+  return `REG-${timestamp}-${random}`;
+}
+
+// ============================================================================
 // Create Registration (Public)
 // ============================================================================
 
@@ -165,6 +175,7 @@ export async function createRegistration(
         firstName: firstName ?? null,
         lastName: lastName ?? null,
         phone: phone ?? null,
+        referenceNumber: generateReferenceNumber(),
         paymentStatus:
           paymentMethod === "LAB_SPONSORSHIP" ? "WAIVED" : "PENDING",
         paymentMethod: paymentMethod ?? null,
@@ -356,6 +367,7 @@ export async function createAdminRegistration(
         firstName,
         lastName,
         phone: phone ?? null,
+        referenceNumber: generateReferenceNumber(),
         role,
         paymentStatus: resolvedPaymentStatus,
         paymentMethod: paymentMethod ?? null,
@@ -583,10 +595,14 @@ export async function deleteRegistration(
   force?: boolean,
   requestingUserRole?: number,
 ): Promise<void> {
-  // Force-delete requires CLIENT_ADMIN role (fast check before DB access)
-  if (force && requestingUserRole !== UserRole.CLIENT_ADMIN) {
+  // Force-delete requires admin role (fast check before DB access)
+  if (
+    force &&
+    requestingUserRole !== UserRole.CLIENT_ADMIN &&
+    requestingUserRole !== UserRole.SUPER_ADMIN
+  ) {
     throw new AppError(
-      "Only client admins can force-delete registrations",
+      "Only admins can force-delete registrations",
       403,
       ErrorCodes.FORBIDDEN,
     );
@@ -636,6 +652,31 @@ export async function deleteRegistration(
       },
       performedBy: performedBy ?? undefined,
     });
+
+    // Clean up sponsorship usages linked to this registration
+    const usages = await tx.sponsorshipUsage.findMany({
+      where: { registrationId: id },
+      select: { id: true, sponsorshipId: true },
+    });
+
+    if (usages.length > 0) {
+      // Delete all usages for this registration
+      await tx.sponsorshipUsage.deleteMany({
+        where: { registrationId: id },
+      });
+
+      // Recalculate status for each affected sponsorship
+      const sponsorshipIds = [...new Set(usages.map((u) => u.sponsorshipId))];
+      for (const sponsorshipId of sponsorshipIds) {
+        const remainingCount = await tx.sponsorshipUsage.count({
+          where: { sponsorshipId },
+        });
+        await tx.sponsorship.update({
+          where: { id: sponsorshipId },
+          data: { status: remainingCount > 0 ? "USED" : "PENDING" },
+        });
+      }
+    }
 
     // Release access spots (get from priceBreakdown)
     // Pass tx so release is rolled back if the transaction fails

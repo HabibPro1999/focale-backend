@@ -225,6 +225,7 @@ export function createMockRegistration(
     firstName: faker.person.firstName(),
     lastName: faker.person.lastName(),
     phone: faker.phone.number(),
+    referenceNumber: `REG-${faker.string.alphanumeric(8).toUpperCase()}`,
     paymentStatus: "PENDING",
     paymentMethod: null,
     paymentReference: null,

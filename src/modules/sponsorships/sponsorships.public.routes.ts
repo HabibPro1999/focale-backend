@@ -123,14 +123,33 @@ export async function sponsorshipsPublicBySlugRoutes(
         throw app.httpErrors.forbidden("Search not available for this form");
       }
 
-      // Use existing search function
+      // Enforce registrantSearchScope from form settings (server-side)
+      const registrantSearchScope =
+        (sponsorshipSettings?.registrantSearchScope as string | undefined) ??
+        "ALL";
+      const effectiveUnpaidOnly =
+        registrantSearchScope === "UNPAID_ONLY"
+          ? true
+          : unpaidOnly === "true";
+
       const results = await searchRegistrantsForSponsorship(event.id, {
         query,
-        unpaidOnly: unpaidOnly === "true",
+        unpaidOnly: effectiveUnpaidOnly,
         limit: 10,
       });
 
-      return reply.send(results);
+      // Strip sensitive PII from public response
+      const sanitizedResults = results.map(
+        ({ phone, formData, email, ...safe }: Record<string, unknown>) => ({
+          ...safe,
+          email:
+            typeof email === "string" && email.includes("@")
+              ? `${email.substring(0, 2)}***@${email.split("@")[1]}`
+              : null,
+        }),
+      );
+
+      return reply.send(sanitizedResults);
     },
   );
 

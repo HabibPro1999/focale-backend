@@ -14,7 +14,12 @@ const HANDLED_EVENTS = new Set([
   'bounce',
   'dropped',
   'blocked',
+  'spam_report',
+  'unsubscribe',
 ]);
+
+/** Events we acknowledge and log but do not trigger a status update */
+const LOG_ONLY_EVENTS = new Set(['deferred']);
 
 export async function emailWebhookRoutes(app: AppInstance): Promise<void> {
   // Use buffer parsing so we can verify the ECDSA signature against the raw body
@@ -43,11 +48,22 @@ export async function emailWebhookRoutes(app: AppInstance): Promise<void> {
     const events = parseWebhookEvents(parsed);
 
     for (const event of events) {
-      if (!event.emailLogId || !HANDLED_EVENTS.has(event.event)) continue;
+      if (!event.emailLogId) continue;
+
+      // Log-only events (e.g. deferred) — acknowledge but don't update status
+      if (LOG_ONLY_EVENTS.has(event.event)) {
+        logger.info(
+          { emailLogId: event.emailLogId, event: event.event, reason: event.reason },
+          'Webhook log-only event received',
+        );
+        continue;
+      }
+
+      if (!HANDLED_EVENTS.has(event.event)) continue;
 
       await updateEmailStatusFromWebhook(
         event.emailLogId,
-        event.event as 'delivered' | 'open' | 'click' | 'bounce' | 'dropped' | 'blocked',
+        event.event as 'delivered' | 'open' | 'click' | 'bounce' | 'dropped' | 'blocked' | 'spam_report' | 'unsubscribe',
         { reason: event.reason, url: event.url },
       ).catch((err) => {
         logger.error({ emailLogId: event.emailLogId, event: event.event, err }, 'Webhook event processing failed');

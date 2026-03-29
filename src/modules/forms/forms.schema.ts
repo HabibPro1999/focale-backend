@@ -21,9 +21,12 @@ export const FieldTypeSchema = z.enum([
   "country",
 ]);
 
-export const FieldOptionSchema = z.looseObject({
+export const FieldOptionSchema = z.strictObject({
   id: z.string(),
   label: z.string(),
+  description: z.string().optional(),
+  maxCapacity: z.number().optional(),
+  currentCount: z.number().optional(),
   priceModifier: z.number().optional(),
 });
 
@@ -38,13 +41,24 @@ export const ConditionOperatorSchema = z.enum([
   "is_not_empty",
 ]);
 
-export const FieldConditionSchema = z.looseObject({
+export const FieldConditionSchema = z.strictObject({
+  id: z.string().optional(),
   fieldId: z.string(),
   operator: ConditionOperatorSchema,
   value: z.union([z.string(), z.number(), z.boolean()]).optional(),
 });
 
-export const FieldValidationSchema = z.looseObject({
+export const FieldValidationErrorMessagesSchema = z.strictObject({
+  required: z.string().optional(),
+  minLength: z.string().optional(),
+  maxLength: z.string().optional(),
+  pattern: z.string().optional(),
+  email: z.string().optional(),
+  min: z.string().optional(),
+  max: z.string().optional(),
+});
+
+export const FieldValidationSchema = z.strictObject({
   required: z.boolean().optional(),
   minLength: z.number().int().positive().optional(),
   maxLength: z.number().int().positive().optional(),
@@ -53,29 +67,52 @@ export const FieldValidationSchema = z.looseObject({
   pattern: z.string().optional(),
   fileTypes: z.array(z.string()).optional(),
   maxFileSize: z.number().int().positive().optional(),
+  minValue: z.number().optional(),
+  maxValue: z.number().optional(),
+  step: z.number().optional(),
+  minDate: z.string().optional(),
+  maxDate: z.string().optional(),
+  acceptedFileTypes: z.array(z.string()).optional(),
+  minSelections: z.number().int().optional(),
+  maxSelections: z.number().int().optional(),
+  errorMessages: FieldValidationErrorMessagesSchema.optional(),
 });
 
-export const FormFieldSchema = z.looseObject({
+export const FormFieldSchema = z.strictObject({
   id: z.string(),
   type: FieldTypeSchema,
   label: z.string().optional(),
   placeholder: z.string().optional(),
   helpText: z.string().optional(),
+  helperText: z.string().optional(),
   required: z.boolean().optional(),
   width: z.string().optional(),
   options: z.array(FieldOptionSchema).optional(),
   validation: FieldValidationSchema.optional(),
   conditions: z.array(FieldConditionSchema).optional(),
+  conditionLogic: z.enum(["AND", "OR", "and", "or"]).optional(),
+  conditionAction: z.enum(["show", "disable"]).optional(),
+  clearOnHide: z.boolean().optional(),
+  defaultValue: z
+    .union([z.string(), z.number(), z.array(z.string())])
+    .optional(),
+  pricingEnabled: z.boolean().optional(),
   gridColumn: z.string().optional(),
   fieldKey: z.string().optional(),
   phoneFormat: z.string().optional(),
+  dateFormat: z.string().optional(),
+  rows: z.number().int().optional(),
+  layout: z.enum(["vertical", "horizontal", "cards"]).optional(),
+  searchable: z.boolean().optional(),
+  headingSize: z.enum(["h2", "h3", "h4"]).optional(),
+  content: z.string().optional(),
 });
 
 // ============================================================================
 // Form Step Schema
 // ============================================================================
 
-export const FormStepSchema = z.looseObject({
+export const FormStepSchema = z.strictObject({
   id: z.string(),
   title: z.string(),
   description: z.string().optional(),

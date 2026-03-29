@@ -368,6 +368,18 @@ export async function deleteForm(id: string): Promise<void> {
     throw new AppError("Form not found", 404, ErrorCodes.NOT_FOUND);
   }
 
+  // Guard: prevent deletion when registrations exist
+  const registrationCount = await prisma.registration.count({
+    where: { formId: id },
+  });
+  if (registrationCount > 0) {
+    throw new AppError(
+      `Cannot delete form with ${registrationCount} existing registration(s). Delete or move registrations first.`,
+      409,
+      ErrorCodes.CONFLICT,
+    );
+  }
+
   await prisma.form.delete({ where: { id } });
 }
 

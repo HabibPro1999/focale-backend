@@ -121,12 +121,13 @@ export async function reportsRoutes(app: AppInstance): Promise<void> {
       }
 
       const result = await exportRegistrations(eventId, request.query);
+      const safeFilename = result.filename.replace(/[^a-zA-Z0-9._-]/g, '_');
 
       return reply
         .header("Content-Type", result.contentType)
         .header(
           "Content-Disposition",
-          `attachment; filename="${result.filename}"`,
+          `attachment; filename="${safeFilename}"`,
         )
         .send(result.data);
     },
@@ -149,6 +150,7 @@ export async function reportsRoutes(app: AppInstance): Promise<void> {
     }
 
     const result = await generateEventSummary(eventId);
+    const safeFilename = result.filename.replace(/[^a-zA-Z0-9._-]/g, '_');
 
     return reply
       .header(
@@ -157,7 +159,7 @@ export async function reportsRoutes(app: AppInstance): Promise<void> {
       )
       .header(
         "Content-Disposition",
-        `attachment; filename="${result.filename}"`,
+        `attachment; filename="${safeFilename}"`,
       )
       .send(result.data);
   });

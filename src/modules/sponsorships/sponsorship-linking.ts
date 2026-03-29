@@ -75,6 +75,8 @@ async function unlinkSponsorshipFromRegistrationInternal(
     select: {
       sponsorshipAmount: true,
       paymentMethod: true,
+      paymentStatus: true,
+      totalAmount: true,
     },
   });
 
@@ -96,11 +98,23 @@ async function unlinkSponsorshipFromRegistrationInternal(
 
   const newSponsorshipAmount = calculateTotalSponsorshipAmount(remainingUsages);
 
+  // Determine if paymentStatus should revert (was fully sponsored, now isn't)
+  const wasFullySponsored =
+    (registrationBefore?.sponsorshipAmount ?? 0) >=
+    (registrationBefore?.totalAmount ?? 0);
+  const isNoLongerFullySponsored =
+    newSponsorshipAmount < (registrationBefore?.totalAmount ?? 0);
+  const shouldRevertPayment =
+    wasFullySponsored &&
+    isNoLongerFullySponsored &&
+    registrationBefore?.paymentStatus === "PAID";
+
   await tx.registration.update({
     where: { id: registrationId },
     data: {
       sponsorshipAmount: newSponsorshipAmount,
       ...(newSponsorshipAmount === 0 && { paymentMethod: null }),
+      ...(shouldRevertPayment && { paymentStatus: "PENDING", paidAt: null }),
     },
   });
 

@@ -72,6 +72,8 @@ export async function confirmPayment(
         paymentStatus: true,
         paidAmount: true,
         paymentMethod: true,
+        paymentReference: true,
+        paymentProofUrl: true,
         totalAmount: true,
       },
     });
@@ -90,6 +92,15 @@ export async function confirmPayment(
       input.paymentStatus,
     );
 
+    // Warn if paid amount differs from total amount
+    const effectivePaidAmount = input.paidAmount ?? oldRegistration.totalAmount;
+    if (effectivePaidAmount !== oldRegistration.totalAmount) {
+      logger.warn(
+        { registrationId: id, paidAmount: effectivePaidAmount, totalAmount: oldRegistration.totalAmount },
+        "Payment confirmation amount differs from total amount",
+      );
+    }
+
     // Update registration
     const newStatus = input.paymentStatus;
     const updated = await tx.registration.update({
@@ -97,9 +108,11 @@ export async function confirmPayment(
       data: {
         paymentStatus: newStatus,
         paidAmount: input.paidAmount ?? oldRegistration.totalAmount,
-        paymentMethod: input.paymentMethod ?? null,
-        paymentReference: input.paymentReference ?? null,
-        paymentProofUrl: input.paymentProofUrl ?? null,
+        paymentMethod: input.paymentMethod ?? oldRegistration.paymentMethod,
+        paymentReference:
+          input.paymentReference ?? oldRegistration.paymentReference,
+        paymentProofUrl:
+          input.paymentProofUrl ?? oldRegistration.paymentProofUrl,
         ...(newStatus === "PAID" || newStatus === "WAIVED"
           ? { paidAt: new Date() }
           : {}),
@@ -174,7 +187,7 @@ export async function confirmPayment(
 // Payment Proof Upload
 // ============================================================================
 
-const ALLOWED_MIME_TYPES = ["image/png", "image/jpeg", "application/pdf"];
+const ALLOWED_MIME_TYPES = ["image/png", "image/jpeg", "image/webp", "application/pdf"];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
 export interface PaymentProofResponse {
@@ -199,7 +212,7 @@ export async function uploadPaymentProof(
   // Validate file type (fast first-pass: header string)
   if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
     throw new AppError(
-      "Invalid file type. Allowed: PNG, JPG, PDF",
+      "Invalid file type. Allowed: PNG, JPG, WebP, PDF",
       400,
       ErrorCodes.INVALID_FILE_TYPE,
     );
@@ -218,7 +231,7 @@ export async function uploadPaymentProof(
 
   if (!ALLOWED_MIME_TYPES.includes(detectedType.mime)) {
     throw new AppError(
-      "File content does not match allowed types. Allowed: PNG, JPG, PDF",
+      "File content does not match allowed types. Allowed: PNG, JPG, WebP, PDF",
       400,
       ErrorCodes.INVALID_FILE_TYPE,
     );

@@ -407,6 +407,9 @@ model Registration {
   lastName  String? @map("last_name")
   phone     String?
 
+  // Unique human-readable reference (generated server-side)
+  referenceNumber String? @unique @map("reference_number")
+
   // Status (PaymentStatus is the single source of truth)
   paymentStatus PaymentStatus @default(PENDING) @map("payment_status")
 

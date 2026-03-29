@@ -9,6 +9,7 @@ export {
   queueTriggeredEmail,
   queueSponsorshipEmail,
   processEmailQueue,
+  getEmailQueueHealth,
 } from "./email-queue.service.js";
 
 // Context builders (consumed by sponsorship module)

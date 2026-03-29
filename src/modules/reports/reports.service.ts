@@ -101,12 +101,12 @@ async function getFinancialSummary(
     _count: true,
   });
 
-  // Get pending amounts by currency
+  // Get pending amounts by currency (includes VERIFYING — money not yet confirmed)
   const pendingByCurrency = await prisma.registration.groupBy({
     by: ["currency"],
     where: {
       ...where,
-      paymentStatus: "PENDING",
+      paymentStatus: { in: ["PENDING", "VERIFYING"] },
     },
     _sum: {
       totalAmount: true,
@@ -452,16 +452,22 @@ interface RegistrationExportRow {
   sponsorshipAmount: number;
   submittedAt: Date;
   paidAt: Date | null;
+  formData: unknown;
 }
 
 export async function exportRegistrations(
   eventId: string,
   query: ExportQuery,
 ): Promise<{ filename: string; contentType: string; data: string }> {
+  // Fail fast — verify event exists before querying registrations
   const event = await prisma.event.findUnique({
     where: { id: eventId },
     select: { slug: true },
   });
+
+  if (!event) {
+    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
+  }
 
   const dateRange = buildDateFilter(query);
 
@@ -477,7 +483,7 @@ export async function exportRegistrations(
     };
   }
 
-  // Fetch all registrations
+  // Fetch all registrations (including formData for export)
   const registrations = await prisma.registration.findMany({
     where,
     select: {
@@ -497,13 +503,10 @@ export async function exportRegistrations(
       sponsorshipAmount: true,
       submittedAt: true,
       paidAt: true,
+      formData: true,
     },
     orderBy: { submittedAt: "desc" },
   });
-
-  if (!event) {
-    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
-  }
 
   const timestamp = new Date().toISOString().split("T")[0];
   const filename = `${event.slug}-registrations-${timestamp}`;
@@ -527,7 +530,7 @@ export async function exportRegistrations(
 }
 
 function generateCSV(registrations: RegistrationExportRow[]): string {
-  const headers = [
+  const standardHeaders = [
     "ID",
     "Email",
     "First Name",
@@ -546,24 +549,52 @@ function generateCSV(registrations: RegistrationExportRow[]): string {
     "Paid At",
   ];
 
-  const rows = registrations.map((r) => [
-    r.id,
-    r.email,
-    r.firstName ?? "",
-    r.lastName ?? "",
-    r.phone ?? "",
-    r.paymentStatus,
-    r.paymentMethod ?? "",
-    r.totalAmount.toString(),
-    r.paidAmount.toString(),
-    r.baseAmount.toString(),
-    r.accessAmount.toString(),
-    r.discountAmount.toString(),
-    r.sponsorshipCode ?? "",
-    r.sponsorshipAmount.toString(),
-    r.submittedAt.toISOString(),
-    r.paidAt?.toISOString() ?? "",
-  ]);
+  // Dynamically extract all unique keys from formData across all registrations
+  const formDataKeysSet = new Set<string>();
+  for (const r of registrations) {
+    if (r.formData && typeof r.formData === "object" && !Array.isArray(r.formData)) {
+      for (const key of Object.keys(r.formData as Record<string, unknown>)) {
+        formDataKeysSet.add(key);
+      }
+    }
+  }
+  const formDataKeys = Array.from(formDataKeysSet).sort();
+
+  const headers = [...standardHeaders, ...formDataKeys];
+
+  const rows = registrations.map((r) => {
+    const standardValues = [
+      r.id,
+      r.email,
+      r.firstName ?? "",
+      r.lastName ?? "",
+      r.phone ?? "",
+      r.paymentStatus,
+      r.paymentMethod ?? "",
+      r.totalAmount.toString(),
+      r.paidAmount.toString(),
+      r.baseAmount.toString(),
+      r.accessAmount.toString(),
+      r.discountAmount.toString(),
+      r.sponsorshipCode ?? "",
+      r.sponsorshipAmount.toString(),
+      r.submittedAt.toISOString(),
+      r.paidAt?.toISOString() ?? "",
+    ];
+
+    // Extract formData values for each dynamic key
+    const fd = (r.formData && typeof r.formData === "object" && !Array.isArray(r.formData))
+      ? (r.formData as Record<string, unknown>)
+      : {};
+    const formDataValues = formDataKeys.map((key) => {
+      const value = fd[key];
+      if (value == null) return "";
+      if (typeof value === "object") return JSON.stringify(value);
+      return String(value);
+    });
+
+    return [...standardValues, ...formDataValues];
+  });
 
   // Escape CSV values
   const escapeCSV = (value: string): string => {

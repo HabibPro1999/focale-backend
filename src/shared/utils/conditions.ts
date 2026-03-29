@@ -62,12 +62,13 @@ export function evaluateSingleCondition(
  */
 export function evaluateConditions(
   conditions: Condition[],
-  logic: "AND" | "OR",
+  logic: "AND" | "OR" | "and" | "or",
   formData: Record<string, unknown>,
 ): boolean {
+  const normalizedLogic = logic.toUpperCase() as "AND" | "OR";
   if (conditions.length === 0) {
-    return logic === "AND"; // AND: true (no constraints); OR: false (nothing satisfied)
+    return normalizedLogic === "AND"; // AND: true (no constraints); OR: false (nothing satisfied)
   }
   const results = conditions.map((c) => evaluateSingleCondition(c, formData));
-  return logic === "AND" ? results.every(Boolean) : results.some(Boolean);
+  return normalizedLogic === "AND" ? results.every(Boolean) : results.some(Boolean);
 }

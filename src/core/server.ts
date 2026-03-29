@@ -21,7 +21,7 @@ import {
   registrationEditPublicRoutes,
 } from "@registrations";
 import { reportsRoutes } from "@reports";
-import { emailRoutes, emailWebhookRoutes } from "@email";
+import { emailRoutes, emailWebhookRoutes, getEmailQueueHealth } from "@email";
 import {
   sponsorshipsRoutes,
   sponsorshipDetailRoutes,
@@ -94,6 +94,12 @@ export async function buildServer(): Promise<AppInstance> {
     }
   });
 
+  // Email queue health check
+  app.get("/health/email-queue", async (_request, reply) => {
+    const health = await getEmailQueueHealth();
+    return reply.status(health.isHealthy ? 200 : 503).send(health);
+  });
+
   // Register module routes
   await app.register(usersRoutes, { prefix: "/api/users" });
   await app.register(clientsRoutes, { prefix: "/api/clients" });
@@ -103,7 +109,7 @@ export async function buildServer(): Promise<AppInstance> {
 
   // Pricing routes
   await app.register(pricingRulesRoutes, { prefix: "/api/events" });
-  await app.register(pricingPublicRoutes, { prefix: "/api" });
+  await app.register(pricingPublicRoutes, { prefix: "/api/public/forms" });
 
   // Access routes (replaces eventExtrasRoutes)
   await app.register(accessRoutes, { prefix: "/api/events" });

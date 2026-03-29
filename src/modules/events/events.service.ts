@@ -174,6 +174,26 @@ export async function updateEvent(
 
   const { basePrice, currency, ...eventData } = input;
 
+  // Block currency change if registrations exist
+  if (currency !== undefined) {
+    const existingPricing = await prisma.eventPricing.findUnique({
+      where: { eventId: id },
+      select: { currency: true },
+    });
+    if (existingPricing && currency !== existingPricing.currency) {
+      const registrationCount = await prisma.registration.count({
+        where: { eventId: id },
+      });
+      if (registrationCount > 0) {
+        throw new AppError(
+          "Cannot change currency after registrations exist",
+          400,
+          ErrorCodes.VALIDATION_ERROR,
+        );
+      }
+    }
+  }
+
   if (basePrice !== undefined || currency !== undefined) {
     return prisma.$transaction(async (tx) => {
       const updatedEvent = await tx.event.update({

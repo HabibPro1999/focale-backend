@@ -139,6 +139,31 @@ async function validateBatchInput(
   const { beneficiaries = [], linkedBeneficiaries = [] } = input;
   const isLinkedMode = linkedBeneficiaries.length > 0;
 
+  // Check for duplicate beneficiaries
+  if (!isLinkedMode && beneficiaries.length > 0) {
+    const emails = beneficiaries.map((b) => b.email.toLowerCase());
+    const duplicateEmails = emails.filter((e, i) => emails.indexOf(e) !== i);
+    if (duplicateEmails.length > 0) {
+      throw new AppError(
+        `Duplicate beneficiary emails: ${[...new Set(duplicateEmails)].join(", ")}`,
+        400,
+        ErrorCodes.VALIDATION_ERROR,
+      );
+    }
+  }
+
+  if (isLinkedMode && linkedBeneficiaries.length > 0) {
+    const regIds = linkedBeneficiaries.map((b) => b.registrationId);
+    const duplicateRegIds = regIds.filter((r, i) => regIds.indexOf(r) !== i);
+    if (duplicateRegIds.length > 0) {
+      throw new AppError(
+        "Duplicate registration IDs in linked beneficiaries",
+        400,
+        ErrorCodes.VALIDATION_ERROR,
+      );
+    }
+  }
+
   const event = await prisma.event.findUnique({
     where: { id: eventId },
     select: {
@@ -673,7 +698,7 @@ export async function createSponsorshipBatch(
     )?.sponsorshipSettings as Record<string, unknown> | undefined;
     const autoApprove =
       (sponsorshipSettings?.autoApproveSponsorship as boolean | undefined) ??
-      true;
+      false;
 
     let createdSponsorships: CreatedBatchSponsorship[] = [];
     let linkedEmailEntries: LinkedEmailEntry[] = [];

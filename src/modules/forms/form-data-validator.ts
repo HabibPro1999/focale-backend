@@ -5,11 +5,10 @@ const MIN_PHONE_LENGTH = 8;
 import type {
   FormField,
   FormStep,
-  FieldCondition,
   FieldValidation,
 } from "./forms.schema.js";
 import { logger } from "@shared/utils/logger.js";
-import { evaluateSingleCondition as evaluateSharedCondition } from "@shared/utils/conditions.js";
+import { evaluateConditions } from "@shared/utils/conditions.js";
 
 // ============================================================================
 // Types
@@ -71,25 +70,8 @@ function isSafePattern(pattern: string): boolean {
 }
 
 // ============================================================================
-// Condition Evaluation (matches frontend logic)
+// Condition Evaluation (delegates to shared evaluator)
 // ============================================================================
-
-/**
- * Evaluate a single field condition against form data.
- * Delegates to the shared condition evaluator, with an additional field-existence
- * guard: if the target field doesn't exist in the form schema, the condition is
- * considered met (field is visible by default).
- */
-function evaluateSingleCondition(
-  condition: FieldCondition,
-  formData: Record<string, unknown>,
-  allFields: FormField[],
-): boolean {
-  const targetField = allFields.find((f) => f.id === condition.fieldId);
-  if (!targetField) return true; // Field not found — assume condition met
-
-  return evaluateSharedCondition(condition, formData);
-}
 
 /**
  * Determine if a field should be validated based on its conditions.
@@ -104,12 +86,18 @@ function shouldValidateField(
     return true; // No conditions, always validate
   }
 
-  // Default logic is AND - all conditions must be met for field to be visible
-  const conditionsMet = field.conditions.every((c) =>
-    evaluateSingleCondition(c, formData, allFields),
+  // Filter conditions to only those referencing fields that exist in the schema.
+  // Missing-field conditions are treated as met (field visible by default).
+  const applicableConditions = field.conditions.filter((c) =>
+    allFields.some((f) => f.id === c.fieldId),
   );
 
-  return conditionsMet;
+  if (applicableConditions.length === 0) {
+    return true; // All referenced fields missing — treat as visible
+  }
+
+  const logic = field.conditionLogic ?? "AND";
+  return evaluateConditions(applicableConditions, logic, formData);
 }
 
 // ============================================================================

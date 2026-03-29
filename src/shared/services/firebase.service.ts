@@ -41,7 +41,7 @@ export const firebaseStorage: Storage = app.storage();
  * Verify Firebase ID token and return decoded token.
  */
 export async function verifyToken(idToken: string) {
-  return firebaseAuth.verifyIdToken(idToken);
+  return firebaseAuth.verifyIdToken(idToken, true);
 }
 
 /**

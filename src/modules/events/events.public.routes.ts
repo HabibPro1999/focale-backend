@@ -74,15 +74,19 @@ export async function eventsPublicRoutes(app: AppInstance): Promise<void> {
               currency: pricing.currency,
               rules: pricing.rules ?? [],
               paymentMethods,
-              bankDetails: pricing.bankName
-                ? {
-                    bankName: pricing.bankName,
-                    accountName: pricing.bankAccountName ?? "",
-                    iban: pricing.bankAccountNumber ?? "",
-                    bic: "",
-                  }
-                : null,
-              onlinePaymentUrl: pricing.onlinePaymentUrl ?? null,
+              bankDetails:
+                event.status === "OPEN" && pricing.bankName
+                  ? {
+                      bankName: pricing.bankName,
+                      accountName: pricing.bankAccountName ?? "",
+                      iban: pricing.bankAccountNumber ?? "",
+                      bic: "",
+                    }
+                  : null,
+              onlinePaymentUrl:
+                event.status === "OPEN"
+                  ? (pricing.onlinePaymentUrl ?? null)
+                  : null,
             }
           : null,
       });

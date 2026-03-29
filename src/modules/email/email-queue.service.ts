@@ -46,6 +46,19 @@ function isValidEmailContext(obj: unknown): obj is EmailContext {
 
 const MAX_RETRIES = 3;
 
+/** Status ordering for webhook state machine — only forward transitions allowed */
+const STATUS_RANK: Record<string, number> = {
+  QUEUED: 0,
+  SENDING: 1,
+  SENT: 2,
+  DELIVERED: 3,
+  OPENED: 4,
+  CLICKED: 5,
+};
+
+/** Terminal statuses that cannot be overwritten */
+const TERMINAL_STATUSES = new Set(["BOUNCED", "DROPPED", "FAILED", "COMPLAINED"]);
+
 // =============================================================================
 // QUEUE EMAIL
 // =============================================================================
@@ -110,7 +123,24 @@ export async function queueTriggeredEmail(
     return false;
   }
 
-  // 2. Queue the email
+  // 2. Check for duplicate: skip if an email with the same registration + trigger
+  //    is already queued, sending, sent, or delivered
+  const existing = await prisma.emailLog.findFirst({
+    where: {
+      registrationId: registration.id,
+      trigger: trigger,
+      status: { in: ["QUEUED", "SENDING", "SENT", "DELIVERED"] },
+    },
+  });
+  if (existing) {
+    logger.info(
+      { registrationId: registration.id, trigger },
+      "Triggered email already queued, skipping duplicate",
+    );
+    return false;
+  }
+
+  // 3. Queue the email
   await queueEmail({
     trigger,
     templateId: template.id,
@@ -227,39 +257,46 @@ export async function processEmailQueue(
     skipped: 0,
   };
 
-  // Get batch of queued emails with row-level locking
-  const batch = await prisma.$transaction(async (tx) => {
-    const emails = await tx.emailLog.findMany({
-      where: {
-        status: "QUEUED",
-        // Process emails that haven't exceeded max retries
-        retryCount: { lt: MAX_RETRIES + 1 },
-      },
-      take: batchSize * 2, // Fetch more to account for backoff filtering
-      orderBy: { queuedAt: "asc" },
-      include: {
-        template: true,
-        registration: {
-          include: {
-            event: { include: { client: true } },
-            form: true,
-          },
-        },
-      },
-    });
+  // Atomically claim a batch of queued emails using FOR UPDATE SKIP LOCKED.
+  // This prevents multiple server instances from grabbing the same rows,
+  // eliminating the race condition that could cause duplicate sends.
+  const claimedRows = await prisma.$queryRawUnsafe<Array<{ id: string }>>(
+    `UPDATE "email_logs"
+     SET "status" = 'SENDING', "updated_at" = NOW()
+     WHERE "id" IN (
+       SELECT "id" FROM "email_logs"
+       WHERE "status" = 'QUEUED'
+         AND "retry_count" < $1
+       ORDER BY "queued_at" ASC
+       LIMIT $2
+       FOR UPDATE SKIP LOCKED
+     )
+     RETURNING "id"`,
+    MAX_RETRIES + 1,
+    batchSize,
+  );
 
-    // Filter emails that are ready for retry (respect backoff timing)
-    const readyEmails = emails.filter(isReadyForRetry).slice(0, batchSize);
+  const claimedIds = claimedRows.map((row) => row.id);
 
-    if (readyEmails.length > 0) {
-      await tx.emailLog.updateMany({
-        where: { id: { in: readyEmails.map((e: { id: string }) => e.id) } },
-        data: { status: "SENDING" },
-      });
-    }
-
-    return readyEmails;
-  });
+  // Fetch full email log records with relations for processing
+  const batch =
+    claimedIds.length > 0
+      ? (
+          await prisma.emailLog.findMany({
+            where: { id: { in: claimedIds } },
+            orderBy: { queuedAt: "asc" },
+            include: {
+              template: true,
+              registration: {
+                include: {
+                  event: { include: { client: true } },
+                  form: true,
+                },
+              },
+            },
+          })
+        ).filter(isReadyForRetry)
+      : [];
 
   if (batch.length === 0) {
     return result;
@@ -435,7 +472,15 @@ interface EmailLogUpdateData {
 
 export async function updateEmailStatusFromWebhook(
   emailLogId: string,
-  event: "delivered" | "open" | "click" | "bounce" | "dropped" | "blocked",
+  event:
+    | "delivered"
+    | "open"
+    | "click"
+    | "bounce"
+    | "dropped"
+    | "blocked"
+    | "spam_report"
+    | "unsubscribe",
   metadata?: { url?: string; reason?: string },
 ) {
   const updates: EmailLogUpdateData = {};
@@ -466,9 +511,61 @@ export async function updateEmailStatusFromWebhook(
       updates.status = "DROPPED";
       updates.errorMessage = metadata?.reason || "Blocked by SendGrid";
       break;
+    case "spam_report":
+      updates.status = "BOUNCED";
+      updates.bouncedAt = new Date();
+      updates.errorMessage =
+        metadata?.reason || "Recipient reported email as spam";
+      break;
+    case "unsubscribe":
+      updates.status = "BOUNCED";
+      updates.bouncedAt = new Date();
+      updates.errorMessage =
+        metadata?.reason || "Recipient unsubscribed";
+      break;
   }
 
   try {
+    // --- State machine guard: prevent backward / duplicate transitions ---
+    const currentLog = await prisma.emailLog.findUnique({
+      where: { id: emailLogId },
+      select: { status: true },
+    });
+
+    if (!currentLog) {
+      logger.warn(
+        { emailLogId, event },
+        "Webhook received for unknown email log — skipping",
+      );
+      return;
+    }
+
+    const currentStatus = currentLog.status;
+
+    // Never overwrite a terminal status
+    if (TERMINAL_STATUSES.has(currentStatus)) {
+      logger.info(
+        { emailLogId, event, currentStatus },
+        "Webhook skipped — email already in terminal status",
+      );
+      return;
+    }
+
+    // For non-terminal new statuses, only allow forward transitions
+    const newStatus = updates.status;
+    if (newStatus && !TERMINAL_STATUSES.has(newStatus)) {
+      const currentRank = STATUS_RANK[currentStatus] ?? -1;
+      const newRank = STATUS_RANK[newStatus] ?? -1;
+
+      if (newRank <= currentRank) {
+        logger.info(
+          { emailLogId, event, currentStatus, newStatus },
+          "Webhook skipped — would be a backward status transition",
+        );
+        return;
+      }
+    }
+
     await prisma.emailLog.update({
       where: { id: emailLogId },
       data: updates,
@@ -505,6 +602,40 @@ function isReadyForRetry(email: {
   const backoffMs = getBackoffMs(email.retryCount - 1);
   const readyAt = new Date(email.updatedAt.getTime() + backoffMs);
   return new Date() >= readyAt;
+}
+
+// =============================================================================
+// QUEUE HEALTH
+// =============================================================================
+
+export async function getEmailQueueHealth() {
+  const [queueSize, oldestQueued, recentFailures] = await Promise.all([
+    prisma.emailLog.count({ where: { status: "QUEUED" } }),
+    prisma.emailLog.findFirst({
+      where: { status: "QUEUED" },
+      orderBy: { queuedAt: "asc" },
+      select: { queuedAt: true },
+    }),
+    prisma.emailLog.count({
+      where: {
+        status: "FAILED",
+        updatedAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+      },
+    }),
+  ]);
+
+  const oldestAgeMs = oldestQueued?.queuedAt
+    ? Date.now() - oldestQueued.queuedAt.getTime()
+    : 0;
+
+  const isHealthy = queueSize < 1000 && oldestAgeMs < 30 * 60 * 1000;
+
+  return {
+    queueSize,
+    oldestQueuedAgeMs: oldestAgeMs,
+    recentFailures24h: recentFailures,
+    isHealthy,
+  };
 }
 
 // =============================================================================

@@ -395,6 +395,25 @@ export async function deleteEventAccess(id: string): Promise<void> {
     );
   }
 
+  // Remove this item from any other access items' prerequisite lists
+  const dependents = await prisma.eventAccess.findMany({
+    where: {
+      requiredAccess: { some: { id } },
+    },
+    select: { id: true },
+  });
+
+  if (dependents.length > 0) {
+    for (const dependent of dependents) {
+      await prisma.eventAccess.update({
+        where: { id: dependent.id },
+        data: {
+          requiredAccess: { disconnect: { id } },
+        },
+      });
+    }
+  }
+
   await prisma.eventAccess.delete({ where: { id } });
 }
 

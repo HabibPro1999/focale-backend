@@ -64,4 +64,7 @@ export const publicRateLimits = {
   paymentProof: { max: 10, timeWindow: "1 minute" },
   editToken: { max: 3, timeWindow: "1 minute" },
   calculatePrice: { max: 10, timeWindow: "1 minute" },
+  accessPublic: { max: 20, timeWindow: "1 minute" },
+  emailTestSend: { max: 10, timeWindow: "1 minute" },
+  emailBulkSend: { max: 5, timeWindow: "1 minute" },
 };

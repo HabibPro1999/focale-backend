@@ -1,4 +1,5 @@
 import { requireAuth, canAccessClient } from '@shared/middleware/auth.middleware.js';
+import { publicRateLimits } from '@core/plugins.js';
 import { getEventById } from '@events';
 import {
   createEmailTemplate,
@@ -229,6 +230,7 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
   app.post<{ Params: { templateId: string }; Body: TestSendEmailInput }>(
     '/email-templates/:templateId/test-send',
     {
+      config: { rateLimit: publicRateLimits.emailTestSend },
       schema: {
         params: EmailTemplateIdParamSchema,
         body: TestSendEmailSchema,
@@ -288,6 +290,7 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
   }>(
     '/:eventId/email-templates/:templateId/send',
     {
+      config: { rateLimit: publicRateLimits.emailBulkSend },
       schema: {
         params: EventIdParamSchema.extend({
           templateId: EmailTemplateIdParamSchema.shape.templateId,
