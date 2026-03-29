@@ -12,6 +12,8 @@ import type {
 } from "./access.schema.js";
 import { Prisma } from "@/generated/prisma/client.js";
 import type { EventAccess } from "@/generated/prisma/client.js";
+import type { PriceBreakdown } from "@modules/registrations/registrations.schema.js";
+import { logger } from "@shared/utils/logger.js";
 import { getAccessTypeKey } from "@/modules/sponsorships/sponsorships.utils.js";
 
 // ============================================================================
@@ -365,6 +367,25 @@ export async function updateEventAccess(
     };
   }
 
+  // Check if maxCapacity is being set/lowered — may trigger capacity-reached handling
+  const isCapacityChanging =
+    data.maxCapacity !== undefined && data.maxCapacity !== access.maxCapacity;
+
+  if (isCapacityChanging && data.maxCapacity !== null) {
+    return prisma.$transaction(async (tx) => {
+      const updated = await tx.eventAccess.update({
+        where: { id },
+        data: updateData,
+        include: { requiredAccess: { select: { id: true, name: true } } },
+      });
+      // If paidCount already meets/exceeds new capacity, drop unpaid registrations
+      if (updated.paidCount >= data.maxCapacity!) {
+        await handleCapacityReached(access.eventId, [id], tx);
+      }
+      return updated;
+    });
+  }
+
   return prisma.eventAccess.update({
     where: { id },
     data: updateData,
@@ -512,7 +533,7 @@ export async function getGroupedAccess(
   // Enrich with availability info
   const enrichedAccess: EnrichedAccess[] = availableAccess.map((access) => {
     const spotsRemaining = access.maxCapacity
-      ? access.maxCapacity - access.registeredCount
+      ? access.maxCapacity - access.paidCount
       : null;
 
     return {
@@ -703,6 +724,173 @@ export async function releaseAccessSpot(
   });
 }
 
+/**
+ * Increment paid count for an access item. Called when a registration
+ * transitions to PAID or WAIVED status.
+ */
+export async function incrementPaidCount(
+  accessId: string,
+  quantity: number = 1,
+  db: CapacityDbClient = prisma,
+): Promise<void> {
+  await db.$executeRaw`
+    UPDATE event_access
+    SET paid_count = paid_count + ${quantity}
+    WHERE id = ${accessId}
+  `;
+}
+
+/**
+ * Decrement paid count for an access item. Called when a PAID/WAIVED
+ * registration is refunded or deleted.
+ */
+export async function decrementPaidCount(
+  accessId: string,
+  quantity: number = 1,
+  db: CapacityDbClient = prisma,
+): Promise<void> {
+  await db.eventAccess.updateMany({
+    where: {
+      id: accessId,
+      paidCount: { gte: quantity },
+    },
+    data: { paidCount: { decrement: quantity } },
+  });
+}
+
+/**
+ * Handle access items that have reached paid capacity.
+ * For each full access: find unpaid registrations that selected it,
+ * drop the access from their records, recalculate their price,
+ * and create audit logs.
+ *
+ * Returns the total number of affected registrations.
+ */
+export async function handleCapacityReached(
+  eventId: string,
+  accessIds: string[],
+  db: CapacityDbClient & {
+    registration: Pick<typeof prisma.registration, "findMany" | "update">;
+    auditLog: Pick<typeof prisma.auditLog, "create">;
+  } = prisma,
+): Promise<number> {
+  let totalAffected = 0;
+
+  for (const accessId of accessIds) {
+    // Check if this access is actually at capacity
+    const access = await db.eventAccess.findUnique({
+      where: { id: accessId },
+      select: { id: true, name: true, maxCapacity: true, paidCount: true },
+    });
+    if (!access || access.maxCapacity === null || access.paidCount < access.maxCapacity) {
+      continue;
+    }
+
+    // Find unpaid registrations that have this access selected
+    const registrations = await db.registration.findMany({
+      where: {
+        eventId,
+        paymentStatus: { notIn: ["PAID", "WAIVED", "REFUNDED"] },
+        accessTypeIds: { has: accessId },
+      },
+      select: {
+        id: true,
+        accessTypeIds: true,
+        droppedAccessIds: true,
+        totalAmount: true,
+        accessAmount: true,
+        priceBreakdown: true,
+      },
+    });
+
+    for (const reg of registrations) {
+      const breakdown = reg.priceBreakdown as PriceBreakdown;
+      const droppedItem = breakdown.accessItems.find(
+        (a) => a.accessId === accessId,
+      );
+      if (!droppedItem) continue;
+
+      // Build new breakdown: move item from accessItems to droppedAccessItems
+      const newAccessItems = breakdown.accessItems.filter(
+        (a) => a.accessId !== accessId,
+      );
+      const newDroppedAccessItems = [
+        ...(breakdown.droppedAccessItems ?? []),
+        { ...droppedItem, reason: "capacity_reached" as const },
+      ];
+      const newAccessTotal = newAccessItems.reduce(
+        (sum, a) => sum + a.subtotal,
+        0,
+      );
+      const newSubtotal = breakdown.calculatedBasePrice + newAccessTotal;
+      // Cap sponsorship to not exceed new subtotal
+      const newSponsorshipTotal = Math.min(
+        breakdown.sponsorshipTotal,
+        newSubtotal,
+      );
+      const newTotal = Math.max(0, newSubtotal - newSponsorshipTotal);
+
+      const newBreakdown: PriceBreakdown = {
+        ...breakdown,
+        accessItems: newAccessItems,
+        droppedAccessItems: newDroppedAccessItems,
+        accessTotal: newAccessTotal,
+        subtotal: newSubtotal,
+        sponsorshipTotal: newSponsorshipTotal,
+        total: newTotal,
+      };
+
+      const newAccessTypeIds = reg.accessTypeIds.filter(
+        (id) => id !== accessId,
+      );
+      const newDroppedAccessIds = [
+        ...(reg.droppedAccessIds ?? []),
+        accessId,
+      ];
+
+      await db.registration.update({
+        where: { id: reg.id },
+        data: {
+          accessTypeIds: newAccessTypeIds,
+          droppedAccessIds: newDroppedAccessIds,
+          totalAmount: newTotal,
+          accessAmount: newAccessTotal,
+          priceBreakdown: newBreakdown as unknown as Prisma.InputJsonValue,
+        },
+      });
+
+      // Release the registeredCount spot since access is removed
+      await releaseAccessSpot(accessId, droppedItem.quantity, db);
+
+      // Audit log
+      await db.auditLog.create({
+        data: {
+          entityType: "Registration",
+          entityId: reg.id,
+          action: "ACCESS_CAPACITY_REACHED",
+          changes: {
+            accessId,
+            accessName: access.name,
+            priceDeducted: droppedItem.subtotal,
+            oldTotal: reg.totalAmount,
+            newTotal,
+          },
+          performedBy: "SYSTEM",
+        },
+      });
+
+      totalAffected++;
+    }
+
+    logger.info(
+      { accessId, accessName: access.name, eventId, affectedCount: registrations.length },
+      "Access capacity reached — dropped from unpaid registrations",
+    );
+  }
+
+  return totalAffected;
+}
+
 // ============================================================================
 // Validation
 // ============================================================================
@@ -858,7 +1046,7 @@ export async function validateAccessSelections(
   for (const selection of selections) {
     const access = accessMap.get(selection.accessId)!;
     if (access.maxCapacity !== null) {
-      const spotsRemaining = access.maxCapacity - access.registeredCount;
+      const spotsRemaining = access.maxCapacity - access.paidCount;
       if (spotsRemaining < selection.quantity) {
         errors.push(`${access.name} is full`);
       }

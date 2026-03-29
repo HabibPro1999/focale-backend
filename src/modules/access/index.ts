@@ -14,6 +14,9 @@ export {
   validateAccessSelections,
   reserveAccessSpot,
   releaseAccessSpot,
+  incrementPaidCount,
+  decrementPaidCount,
+  handleCapacityReached,
 } from './access.service.js';
 
 // Schemas

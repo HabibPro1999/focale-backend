@@ -200,6 +200,7 @@ model EventAccess {
   // Capacity
   maxCapacity     Int? @map("max_capacity")
   registeredCount Int  @default(0) @map("registered_count")
+  paidCount       Int  @default(0) @map("paid_count")
 
   // Availability window (when can people select this)
   availableFrom DateTime? @map("available_from")
@@ -410,7 +411,8 @@ model Registration {
   note String?
 
   // Access type IDs (simple array for querying)
-  accessTypeIds String[] @default([]) @map("access_type_ids")
+  accessTypeIds    String[] @default([]) @map("access_type_ids")
+  droppedAccessIds String[] @default([]) @map("dropped_access_ids")
 
   // Relations
   form              Form               @relation(fields: [formId], references: [id], onDelete: Restrict)

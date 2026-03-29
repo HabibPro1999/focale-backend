@@ -258,6 +258,19 @@ export const PriceBreakdownSchema = z.object({
   sponsorshipTotal: z.number(),
   total: z.number(),
   currency: z.string(),
+  droppedAccessItems: z
+    .array(
+      z.object({
+        accessId: z.string(),
+        name: z.any(),
+        unitPrice: z.number(),
+        quantity: z.number(),
+        subtotal: z.number(),
+        reason: z.literal("capacity_reached"),
+      }),
+    )
+    .optional()
+    .default([]),
 });
 
 // ============================================================================
