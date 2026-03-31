@@ -1916,20 +1916,25 @@ export async function selectPaymentMethod(
     );
   }
 
-  const updateData: Record<string, unknown> = {
-    paymentMethod: input.paymentMethod,
-  };
-
   if (input.paymentMethod === "LAB_SPONSORSHIP") {
-    updateData.paymentStatus = "WAIVED";
-    updateData.labName = input.labName ?? null;
-    updateData.paidAt = new Date();
+    await prisma.$transaction(async (tx) => {
+      await tx.registration.update({
+        where: { id: registrationId },
+        data: {
+          paymentMethod: input.paymentMethod,
+          paymentStatus: "WAIVED",
+          labName: input.labName ?? null,
+          paidAt: new Date(),
+        },
+      });
+      await syncPaidCount(tx, registration, "PENDING", "WAIVED");
+    });
+  } else {
+    await prisma.registration.update({
+      where: { id: registrationId },
+      data: { paymentMethod: input.paymentMethod },
+    });
   }
-
-  await prisma.registration.update({
-    where: { id: registrationId },
-    data: updateData,
-  });
 }
 
 // ============================================================================

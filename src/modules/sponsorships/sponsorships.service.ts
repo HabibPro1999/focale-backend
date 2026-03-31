@@ -586,6 +586,7 @@ export async function createSponsorshipBatch(
             email: true,
             firstName: true,
             lastName: true,
+            priceBreakdown: true,
           },
         });
 
@@ -650,14 +651,32 @@ export async function createSponsorshipBatch(
           updatedReg?.totalAmount ?? registration.totalAmount;
 
         if (currentSponsorshipAmount >= currentTotalAmount) {
-          // Fully sponsored: mark as PAID and queue PAYMENT_CONFIRMED
-          await prisma.registration.update({
-            where: { id: registration.id },
-            data: {
-              paymentStatus: "PAID",
-              paidAt: new Date(),
-              paymentMethod: "LAB_SPONSORSHIP",
-            },
+          // Fully sponsored: mark as PAID, sync paid count, and queue PAYMENT_CONFIRMED
+          await prisma.$transaction(async (tx) => {
+            await tx.registration.update({
+              where: { id: registration.id },
+              data: {
+                paymentStatus: "PAID",
+                paidAt: new Date(),
+                paymentMethod: "LAB_SPONSORSHIP",
+              },
+            });
+            // Sync paid count for access capacity tracking
+            const regForSync = updatedReg ?? registration;
+            const breakdown = regForSync.priceBreakdown as {
+              accessItems?: Array<{ accessId: string; quantity: number }>;
+            };
+            const accessItems = breakdown?.accessItems ?? [];
+            for (const item of accessItems) {
+              await incrementPaidCount(item.accessId, item.quantity, tx);
+            }
+            if (accessItems.length > 0) {
+              await handleCapacityReached(
+                eventId,
+                accessItems.map((a) => a.accessId),
+                tx,
+              );
+            }
           });
 
           await queueTriggeredEmail("PAYMENT_CONFIRMED", eventId, {
@@ -1177,6 +1196,7 @@ export async function linkSponsorshipToRegistration(
       baseAmount: true,
       accessTypeIds: true,
       priceBreakdown: true,
+      paymentStatus: true,
       sponsorshipAmount: true,
       sponsorshipUsages: {
         include: {
@@ -1323,7 +1343,9 @@ export async function linkSponsorshipToRegistration(
     });
 
     // Sync paid count when sponsorship fully covers the registration
-    if (isFullySponsored) {
+    // Guard: only increment if the registration wasn't already PAID/WAIVED
+    const wasAlreadyPaid = registration.paymentStatus === "PAID" || registration.paymentStatus === "WAIVED";
+    if (isFullySponsored && !wasAlreadyPaid) {
       const fullBreakdown = registration.priceBreakdown as {
         accessItems?: Array<{ accessId: string; quantity: number }>;
       };
