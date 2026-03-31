@@ -166,7 +166,6 @@ export async function registrationsPublicRoutes(
         sponsorshipTotal: priceBreakdown.sponsorshipTotal,
         total: priceBreakdown.total,
         currency: priceBreakdown.currency,
-        droppedAccessItems: [],
       };
 
       // Create registration

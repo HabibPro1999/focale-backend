@@ -16,9 +16,6 @@ import {
   validateAccessSelections,
   reserveAccessSpot,
   releaseAccessSpot,
-  incrementPaidCount,
-  decrementPaidCount,
-  handleCapacityReached,
 } from "@access";
 import { calculatePrice } from "@pricing";
 import { queueTriggeredEmail } from "@email";
@@ -83,46 +80,6 @@ function validatePaymentTransition(
       true,
       ErrorCodes.INVALID_PAYMENT_TRANSITION,
     );
-  }
-}
-
-const PAID_STATUSES = ["PAID", "WAIVED"];
-
-/**
- * Sync paidCount on access items when a registration's payment status changes.
- * Increments when becoming paid (PAID/WAIVED), decrements on refund.
- * Triggers capacity-reached handling when access items fill up.
- */
-async function syncPaidCount(
-  tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
-  registration: {
-    eventId: string;
-    accessTypeIds: string[];
-    priceBreakdown: unknown;
-  },
-  oldStatus: string,
-  newStatus: string,
-): Promise<void> {
-  const wasPaid = PAID_STATUSES.includes(oldStatus);
-  const isPaid = PAID_STATUSES.includes(newStatus);
-  if (wasPaid === isPaid) return; // No change in paid state
-
-  const breakdown = registration.priceBreakdown as PriceBreakdown;
-  const accessItems = breakdown.accessItems ?? [];
-  if (accessItems.length === 0) return;
-
-  if (!wasPaid && isPaid) {
-    // Becoming paid: increment paidCount and check capacity
-    for (const item of accessItems) {
-      await incrementPaidCount(item.accessId, item.quantity, tx);
-    }
-    const accessIds = accessItems.map((a) => a.accessId);
-    await handleCapacityReached(registration.eventId, accessIds, tx);
-  } else {
-    // Becoming unpaid (refund): decrement paidCount
-    for (const item of accessItems) {
-      await decrementPaidCount(item.accessId, item.quantity, tx);
-    }
   }
 }
 
@@ -198,21 +155,6 @@ type RegistrationWithRelations = Registration & {
       endsAt: Date | null;
     };
   }>;
-  droppedAccessSelections?: Array<{
-    id: string;
-    accessId: string;
-    unitPrice: number;
-    quantity: number;
-    subtotal: number;
-    reason: string;
-    access: {
-      id: string;
-      name: string;
-      type: string;
-      startsAt: Date | null;
-      endsAt: Date | null;
-    };
-  }>;
   form: {
     id: string;
     name: string;
@@ -256,22 +198,15 @@ async function enrichWithAccessSelections(
 ): Promise<RegistrationWithRelations> {
   const priceBreakdown = registration.priceBreakdown as PriceBreakdown;
 
-  const droppedItems = priceBreakdown.droppedAccessItems ?? [];
-  const hasActive = priceBreakdown.accessItems && priceBreakdown.accessItems.length > 0;
-  const hasDropped = droppedItems.length > 0;
-
-  // If no access items at all, return empty arrays
-  if (!hasActive && !hasDropped) {
-    return { ...registration, accessSelections: [], droppedAccessSelections: [] };
+  // If no access items, return empty array
+  if (!priceBreakdown.accessItems || priceBreakdown.accessItems.length === 0) {
+    return { ...registration, accessSelections: [] };
   }
 
-  // Fetch access details for both active and dropped items
-  const allAccessIds = [
-    ...(priceBreakdown.accessItems?.map((item) => item.accessId) ?? []),
-    ...droppedItems.map((item) => item.accessId),
-  ];
+  // Fetch access details for display
+  const accessIds = priceBreakdown.accessItems.map((item) => item.accessId);
   const accessDetails = await prisma.eventAccess.findMany({
-    where: { id: { in: allAccessIds } },
+    where: { id: { in: accessIds } },
     select: {
       id: true,
       name: true,
@@ -286,39 +221,26 @@ async function enrichWithAccessSelections(
 
   const accessMap = new Map(accessDetails.map((a) => [a.id, a]));
 
-  const fallbackAccess = (item: { accessId: string; name: string }) => ({
-    id: item.accessId,
-    name: item.name,
-    type: "OTHER" as const,
-    startsAt: null,
-    endsAt: null,
-    price: 0,
-    companionPrice: 0,
-    allowCompanion: false,
-  });
-
   // Reconstruct accessSelections from priceBreakdown
-  const accessSelections = (priceBreakdown.accessItems ?? []).map((item) => ({
+  const accessSelections = priceBreakdown.accessItems.map((item) => ({
     id: `${registration.id}-${item.accessId}`,
     accessId: item.accessId,
     unitPrice: item.unitPrice,
     quantity: item.quantity,
     subtotal: item.subtotal,
-    access: accessMap.get(item.accessId) ?? fallbackAccess(item),
+    access: accessMap.get(item.accessId) ?? {
+      id: item.accessId,
+      name: item.name,
+      type: "OTHER",
+      startsAt: null,
+      endsAt: null,
+      price: 0,
+      companionPrice: 0,
+      allowCompanion: false,
+    },
   }));
 
-  // Reconstruct droppedAccessSelections
-  const droppedAccessSelections = droppedItems.map((item) => ({
-    id: `${registration.id}-dropped-${item.accessId}`,
-    accessId: item.accessId,
-    unitPrice: item.unitPrice,
-    quantity: item.quantity,
-    subtotal: item.subtotal,
-    reason: item.reason,
-    access: accessMap.get(item.accessId) ?? fallbackAccess(item),
-  }));
-
-  return { ...registration, accessSelections, droppedAccessSelections };
+  return { ...registration, accessSelections };
 }
 
 /**
@@ -333,17 +255,12 @@ async function enrichManyWithAccessSelections(
     }
   >,
 ): Promise<RegistrationWithRelations[]> {
-  // Collect all unique access IDs across all registrations (active + dropped)
+  // Collect all unique access IDs across all registrations
   const allAccessIds = new Set<string>();
   for (const reg of registrations) {
     const priceBreakdown = reg.priceBreakdown as PriceBreakdown;
     if (priceBreakdown.accessItems) {
       for (const item of priceBreakdown.accessItems) {
-        allAccessIds.add(item.accessId);
-      }
-    }
-    if (priceBreakdown.droppedAccessItems) {
-      for (const item of priceBreakdown.droppedAccessItems) {
         allAccessIds.add(item.accessId);
       }
     }
@@ -366,48 +283,36 @@ async function enrichManyWithAccessSelections(
 
   const accessMap = new Map(accessDetails.map((a) => [a.id, a]));
 
-  const fallbackAccess = (item: { accessId: string; name: string }) => ({
-    id: item.accessId,
-    name: item.name,
-    type: "OTHER" as const,
-    startsAt: null,
-    endsAt: null,
-    price: 0,
-    companionPrice: 0,
-    allowCompanion: false,
-  });
-
   // Enrich each registration
   return registrations.map((registration) => {
     const priceBreakdown = registration.priceBreakdown as PriceBreakdown;
-    const droppedItems = priceBreakdown.droppedAccessItems ?? [];
-    const hasActive = priceBreakdown.accessItems && priceBreakdown.accessItems.length > 0;
-    const hasDropped = droppedItems.length > 0;
 
-    if (!hasActive && !hasDropped) {
-      return { ...registration, accessSelections: [], droppedAccessSelections: [] };
+    if (
+      !priceBreakdown.accessItems ||
+      priceBreakdown.accessItems.length === 0
+    ) {
+      return { ...registration, accessSelections: [] };
     }
 
-    const accessSelections = (priceBreakdown.accessItems ?? []).map((item) => ({
+    const accessSelections = priceBreakdown.accessItems.map((item) => ({
       id: `${registration.id}-${item.accessId}`,
       accessId: item.accessId,
       unitPrice: item.unitPrice,
       quantity: item.quantity,
       subtotal: item.subtotal,
-      access: accessMap.get(item.accessId) ?? fallbackAccess(item),
+      access: accessMap.get(item.accessId) ?? {
+        id: item.accessId,
+        name: item.name,
+        type: "OTHER",
+        startsAt: null,
+        endsAt: null,
+        price: 0,
+        companionPrice: 0,
+        allowCompanion: false,
+      },
     }));
 
-    const droppedAccessSelections = droppedItems.map((item) => ({
-      id: `${registration.id}-dropped-${item.accessId}`,
-      accessId: item.accessId,
-      unitPrice: item.unitPrice,
-      quantity: item.quantity,
-      subtotal: item.subtotal,
-      reason: item.reason,
-      access: accessMap.get(item.accessId) ?? fallbackAccess(item),
-    }));
-
-    return { ...registration, accessSelections, droppedAccessSelections };
+    return { ...registration, accessSelections };
   });
 }
 
@@ -558,16 +463,6 @@ export async function createRegistration(
     // Increment event registered count (atomic SQL within transaction)
     await incrementRegisteredCountTx(tx, eventId);
 
-    // If auto-WAIVED (LAB_SPONSORSHIP), sync paid count immediately
-    if (paymentMethod === "LAB_SPONSORSHIP" && accessSelections && accessSelections.length > 0) {
-      await syncPaidCount(
-        tx,
-        { eventId, accessTypeIds: accessSelections.map((s) => s.accessId), priceBreakdown },
-        "PENDING",
-        "WAIVED",
-      );
-    }
-
     // Return full registration with derived accessSelections
     const createdReg = await tx.registration.findUnique({
       where: { id: registration.id },
@@ -705,16 +600,6 @@ export async function updateRegistration(
   await prisma.$transaction(async (tx) => {
     await tx.registration.update({ where: { id }, data: updateData });
 
-    // Sync paid count if payment status changed
-    if (input.paymentStatus !== undefined && input.paymentStatus !== registration.paymentStatus) {
-      await syncPaidCount(
-        tx,
-        registration,
-        registration.paymentStatus,
-        input.paymentStatus,
-      );
-    }
-
     // Create audit log if there are changes
     if (Object.keys(changes).length > 0) {
       await tx.auditLog.create({
@@ -749,8 +634,6 @@ export async function confirmPayment(
       paidAmount: true,
       paymentMethod: true,
       totalAmount: true,
-      accessTypeIds: true,
-      priceBreakdown: true,
     },
   });
 
@@ -780,14 +663,6 @@ export async function confirmPayment(
         paidAt: new Date(),
       },
     });
-
-    // Sync paid count on access items (increment/decrement based on status change)
-    await syncPaidCount(
-      tx,
-      oldRegistration,
-      oldRegistration.paymentStatus,
-      input.paymentStatus,
-    );
 
     // Create audit log for payment confirmation
     await tx.auditLog.create({
@@ -900,13 +775,6 @@ export async function deleteRegistration(
     if (priceBreakdown.accessItems) {
       for (const item of priceBreakdown.accessItems) {
         await releaseAccessSpot(item.accessId, item.quantity, tx);
-      }
-    }
-
-    // Decrement paid count if registration was PAID or WAIVED
-    if (PAID_STATUSES.includes(registration.paymentStatus) && priceBreakdown.accessItems) {
-      for (const item of priceBreakdown.accessItems) {
-        await decrementPaidCount(item.accessId, item.quantity, tx);
       }
     }
 
@@ -1570,16 +1438,7 @@ export async function editRegistrationPublic(
     sponsorshipTotal: calculatedPrice.sponsorshipTotal,
     total: calculatedPrice.total,
     currency: calculatedPrice.currency,
-    // Remove re-added items from droppedAccessItems
-    droppedAccessItems: (currentPriceBreakdown.droppedAccessItems ?? []).filter(
-      (d) => !newAccessSelections.some((s) => s.accessId === d.accessId),
-    ),
   };
-
-  // Compute updated droppedAccessIds (remove any that were re-added)
-  const newDroppedAccessIds = (registration.droppedAccessIds ?? []).filter(
-    (id) => !newAccessSelections.some((s) => s.accessId === id),
-  );
 
   // 10. Execute transaction
   await prisma.$transaction(async (tx) => {
@@ -1619,7 +1478,6 @@ export async function editRegistrationPublic(
         discountAmount: calculateDiscountAmount(newPriceBreakdown.appliedRules),
         sponsorshipAmount: newPriceBreakdown.sponsorshipTotal,
         accessTypeIds: newAccessSelections.map((s) => s.accessId),
-        droppedAccessIds: newDroppedAccessIds,
         lastEditedAt: new Date(),
       },
     });

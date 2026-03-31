@@ -786,7 +786,6 @@ describe("Access Service", () => {
           type: "WORKSHOP",
           maxCapacity: 10,
           registeredCount: 10,
-          paidCount: 10,
           active: true,
         }),
         createEventAccessWithRelations({
@@ -795,7 +794,6 @@ describe("Access Service", () => {
           type: "WORKSHOP",
           maxCapacity: 20,
           registeredCount: 5,
-          paidCount: 5,
           active: true,
         }),
         createEventAccessWithRelations({
@@ -804,7 +802,6 @@ describe("Access Service", () => {
           type: "WORKSHOP",
           maxCapacity: null,
           registeredCount: 100,
-          paidCount: 100,
           active: true,
         }),
       ];
@@ -1243,7 +1240,6 @@ describe("Access Service", () => {
           name: "Limited Workshop",
           maxCapacity: 10,
           registeredCount: 9,
-          paidCount: 9,
           active: true,
         }),
       ];
