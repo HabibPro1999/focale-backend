@@ -7,7 +7,6 @@ import {
   type PaginatedResult,
 } from "@shared/utils/pagination.js";
 import { logger } from "@shared/utils/logger.js";
-import { incrementPaidCount, handleCapacityReached } from "@access";
 import {
   generateUniqueCode,
   calculateApplicableAmount,
@@ -1321,24 +1320,6 @@ export async function linkSponsorshipToRegistration(
           : {}),
       },
     });
-
-    // Sync paid count when sponsorship fully covers the registration
-    if (isFullySponsored) {
-      const fullBreakdown = registration.priceBreakdown as {
-        accessItems?: Array<{ accessId: string; quantity: number }>;
-      };
-      const accessItems = fullBreakdown?.accessItems ?? [];
-      for (const item of accessItems) {
-        await incrementPaidCount(item.accessId, item.quantity, tx);
-      }
-      if (accessItems.length > 0) {
-        await handleCapacityReached(
-          registration.eventId,
-          accessItems.map((a) => a.accessId),
-          tx,
-        );
-      }
-    }
 
     return {
       usage: {
