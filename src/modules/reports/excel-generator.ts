@@ -10,7 +10,7 @@ import { ErrorCodes } from "@shared/errors/error-codes.js";
 export async function generateEventSummary(
   eventId: string,
 ): Promise<{ filename: string; data: Buffer }> {
-  const [event, accessTypes, registrations, sponsoredRows] = await Promise.all([
+  const [event, accessTypes, registrations] = await Promise.all([
     prisma.event.findUnique({
       where: { id: eventId },
       select: { name: true, slug: true },
@@ -26,15 +26,9 @@ export async function generateEventSummary(
         id: true,
         paymentStatus: true,
         accessTypeIds: true,
+        totalAmount: true,
+        sponsorshipAmount: true,
       },
-    }),
-    prisma.sponsorshipUsage.findMany({
-      where: {
-        sponsorship: { eventId },
-        registrationId: { not: null },
-      },
-      select: { registrationId: true },
-      distinct: ["registrationId"],
     }),
   ]);
 
@@ -42,21 +36,13 @@ export async function generateEventSummary(
     throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
   }
 
-  const sponsoredRegistrationIds = new Set(
-    sponsoredRows
-      .map((row) => row.registrationId)
-      .filter(
-        (registrationId): registrationId is string => registrationId !== null,
-      ),
-  );
-
   const totalRegistrants = registrations.length;
 
+  // --- Registrations per access type (all) ---
   const accessCounts: Record<string, number> = {};
   for (const accessType of accessTypes) {
     accessCounts[accessType.id] = 0;
   }
-
   for (const registration of registrations) {
     for (const accessTypeId of registration.accessTypeIds) {
       if (accessCounts[accessTypeId] !== undefined) {
@@ -65,46 +51,59 @@ export async function generateEventSummary(
     }
   }
 
-  const paidOnly = registrations.filter(
-    (registration) =>
-      registration.paymentStatus === "PAID" &&
-      !sponsoredRegistrationIds.has(registration.id),
-  );
-  const sponsoredOnly = registrations.filter(
-    (registration) =>
-      registration.paymentStatus !== "PAID" &&
-      registration.paymentStatus !== "WAIVED" &&
-      sponsoredRegistrationIds.has(registration.id),
-  );
-  const paidAndSponsored = registrations.filter(
-    (registration) =>
-      registration.paymentStatus === "PAID" &&
-      sponsoredRegistrationIds.has(registration.id),
-  );
-  const waivedOnly = registrations.filter(
-    (registration) =>
-      registration.paymentStatus === "WAIVED" &&
-      !sponsoredRegistrationIds.has(registration.id),
-  );
-  const confirmed = registrations.filter(
-    (registration) =>
-      registration.paymentStatus === "PAID" ||
-      registration.paymentStatus === "WAIVED" ||
-      sponsoredRegistrationIds.has(registration.id),
+  // --- Settled = PAID + WAIVED ---
+  const settled = registrations.filter(
+    (r) => r.paymentStatus === "PAID" || r.paymentStatus === "WAIVED",
   );
 
-  const confirmedPerAccess: Record<string, number> = {};
+  // Settled breakdown
+  const selfPaid = settled.filter(
+    (r) =>
+      r.paymentStatus === "PAID" && r.sponsorshipAmount === 0,
+  );
+  const settledFullySponsored = settled.filter(
+    (r) =>
+      r.paymentStatus === "PAID" &&
+      r.sponsorshipAmount >= r.totalAmount &&
+      r.sponsorshipAmount > 0,
+  );
+  const settledPartiallySponsored = settled.filter(
+    (r) =>
+      r.paymentStatus === "PAID" &&
+      r.sponsorshipAmount > 0 &&
+      r.sponsorshipAmount < r.totalAmount,
+  );
+  const waivedOnly = settled.filter(
+    (r) => r.paymentStatus === "WAIVED",
+  );
+
+  // --- Sponsorship coverage (all registrations) ---
+  const fullySponsored = registrations.filter(
+    (r) => r.sponsorshipAmount >= r.totalAmount && r.sponsorshipAmount > 0,
+  );
+  const partiallySponsored = registrations.filter(
+    (r) => r.sponsorshipAmount > 0 && r.sponsorshipAmount < r.totalAmount,
+  );
+  const notSponsored = registrations.filter(
+    (r) => r.sponsorshipAmount === 0,
+  );
+
+  // --- Settled per access type ---
+  const settledPerAccess: Record<string, number> = {};
   for (const accessType of accessTypes) {
-    confirmedPerAccess[accessType.id] = 0;
+    settledPerAccess[accessType.id] = 0;
   }
-
-  for (const registration of confirmed) {
+  for (const registration of settled) {
     for (const accessTypeId of registration.accessTypeIds) {
-      if (confirmedPerAccess[accessTypeId] !== undefined) {
-        confirmedPerAccess[accessTypeId] += 1;
+      if (settledPerAccess[accessTypeId] !== undefined) {
+        settledPerAccess[accessTypeId] += 1;
       }
     }
   }
+
+  // ============================================================================
+  // Build workbook
+  // ============================================================================
 
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Focale OS";
@@ -205,10 +204,12 @@ export async function generateEventSummary(
     row += 1;
   };
 
+  // Section 1: Total Registrants
   addSectionHeader("1. Total Registrants");
   addKeyValueRow("Total Registrations", totalRegistrants, { bold: true });
   row += 1;
 
+  // Section 2: Registrations per Access Type
   addSectionHeader("2. Registrations per Access Type");
   addTableHeader(["Access Type", "Category", "Count"]);
   for (const accessType of accessTypes) {
@@ -216,31 +217,44 @@ export async function generateEventSummary(
   }
   row += 1;
 
-  addSectionHeader("3. Total Confirmed (Paid, Waived, or Sponsored)");
-  addKeyValueRow("Total Confirmed", confirmed.length, { bold: true });
-  addKeyValueRow("Paid only (PAID, no sponsorship)", paidOnly.length, {
+  // Section 3: Settled Registrations (Paid + Waived)
+  addSectionHeader("3. Settled Registrations (Paid + Waived)");
+  addKeyValueRow("Total Settled", settled.length, { bold: true });
+  addKeyValueRow("Self-paid (no sponsorship)", selfPaid.length, {
     indent: true,
   });
-  addKeyValueRow("Paid + Sponsored", paidAndSponsored.length, {
+  addKeyValueRow("Fully Sponsored", settledFullySponsored.length, {
     indent: true,
   });
-  addKeyValueRow("Sponsored only (not yet PAID)", sponsoredOnly.length, {
-    indent: true,
-  });
+  addKeyValueRow(
+    "Partially Sponsored (remainder paid)",
+    settledPartiallySponsored.length,
+    { indent: true },
+  );
   addKeyValueRow("Waived (speakers / VIPs)", waivedOnly.length, {
     indent: true,
   });
   row += 1;
 
-  addSectionHeader(
-    "4. Confirmed Seats per Access Type (Paid, Waived, or Sponsored)",
+  // Section 4: Sponsorship Coverage (All Registrations)
+  addSectionHeader("4. Sponsorship Coverage (All Registrations)");
+  addKeyValueRow("Fully Sponsored", fullySponsored.length, { indent: true });
+  addKeyValueRow(
+    "Partially Sponsored (remaining unpaid)",
+    partiallySponsored.length,
+    { indent: true },
   );
-  addTableHeader(["Access Type", "Category", "Confirmed"]);
+  addKeyValueRow("Not Sponsored", notSponsored.length, { indent: true });
+  row += 1;
+
+  // Section 5: Settled Seats per Access Type
+  addSectionHeader("5. Settled Seats per Access Type (Paid + Waived)");
+  addTableHeader(["Access Type", "Category", "Settled"]);
   for (const accessType of accessTypes) {
     addAccessRow(
       accessType.name,
       accessType.type,
-      confirmedPerAccess[accessType.id],
+      settledPerAccess[accessType.id],
     );
   }
 

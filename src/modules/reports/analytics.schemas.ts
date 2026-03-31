@@ -47,6 +47,11 @@ export const EventAnalyticsResponseSchema = z.object({
     total: z.number(),
     byStatus: z.array(AnalyticsStatusItemSchema),
   }),
+  sponsorshipCoverage: z.object({
+    fullySponsored: z.number(),
+    partiallySponsored: z.number(),
+    notSponsored: z.number(),
+  }),
 });
 
 // ============================================================================

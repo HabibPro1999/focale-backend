@@ -342,6 +342,7 @@ export async function getEventAnalytics(
     paymentsByMethod,
     accessItems,
     sponsorshipsByStatus,
+    registrationAmounts,
   ] = await Promise.all([
     prisma.registration.groupBy({
       by: ["paymentStatus"],
@@ -369,6 +370,10 @@ export async function getEventAnalytics(
       where: { eventId },
       _count: true,
     }),
+    prisma.registration.findMany({
+      where: { eventId },
+      select: { totalAmount: true, sponsorshipAmount: true },
+    }),
   ]);
 
   const paymentStatusCounts = new Map(
@@ -380,6 +385,19 @@ export async function getEventAnalytics(
       group._count,
     ]),
   );
+
+  let fullySponsored = 0;
+  let partiallySponsored = 0;
+  let notSponsored = 0;
+  for (const reg of registrationAmounts) {
+    if (reg.sponsorshipAmount >= reg.totalAmount && reg.sponsorshipAmount > 0) {
+      fullySponsored++;
+    } else if (reg.sponsorshipAmount > 0) {
+      partiallySponsored++;
+    } else {
+      notSponsored++;
+    }
+  }
 
   return {
     eventId,
@@ -418,6 +436,11 @@ export async function getEventAnalytics(
         status: group.status,
         count: group._count,
       })),
+    },
+    sponsorshipCoverage: {
+      fullySponsored,
+      partiallySponsored,
+      notSponsored,
     },
   };
 }
