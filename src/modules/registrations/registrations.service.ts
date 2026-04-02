@@ -268,6 +268,7 @@ export async function createAdminRegistration(
     paymentMethod,
     paymentStatus,
     labName,
+    sendEmail,
   } = input;
 
   // Find the registration form for this event
@@ -426,6 +427,20 @@ export async function createAdminRegistration(
     return enrichWithAccessSelections(createdReg);
   });
 
+  if (sendEmail) {
+    queueTriggeredEmail("REGISTRATION_CREATED", eventId, {
+      id: result.id,
+      email,
+      firstName,
+      lastName,
+    }).catch((err) => {
+      logger.error(
+        { err, registrationId: result.id },
+        "Failed to queue admin registration confirmation email",
+      );
+    });
+  }
+
   return result;
 }
 
@@ -448,7 +463,8 @@ export async function getRegistrationById(
 
   const enriched = await enrichWithAccessSelections(registration);
   // M23: strip editToken from admin responses
-  const { editToken: _omitted, ...safeResult } = enriched;
+  const safeResult = { ...enriched };
+  delete safeResult.editToken;
   return safeResult as RegistrationWithRelations;
 }
 

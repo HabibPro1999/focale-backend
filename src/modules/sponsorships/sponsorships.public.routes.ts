@@ -76,7 +76,7 @@ const EventSlugParamSchema = z.strictObject({
 });
 
 const RegistrantSearchQuerySchema = z.strictObject({
-  query: z.string().min(3).max(200),
+  query: z.string().trim().min(2).max(200),
   unpaidOnly: z.string().optional(),
 });
 
@@ -128,9 +128,7 @@ export async function sponsorshipsPublicBySlugRoutes(
         (sponsorshipSettings?.registrantSearchScope as string | undefined) ??
         "ALL";
       const effectiveUnpaidOnly =
-        registrantSearchScope === "UNPAID_ONLY"
-          ? true
-          : unpaidOnly === "true";
+        registrantSearchScope === "UNPAID_ONLY" ? true : unpaidOnly === "true";
 
       const results = await searchRegistrantsForSponsorship(event.id, {
         query,
@@ -138,15 +136,12 @@ export async function sponsorshipsPublicBySlugRoutes(
         limit: 10,
       });
 
-      // Strip sensitive PII from public response
       const sanitizedResults = results.map(
-        ({ phone, formData, email, ...safe }: Record<string, unknown>) => ({
-          ...safe,
-          email:
-            typeof email === "string" && email.includes("@")
-              ? `${email.substring(0, 2)}***@${email.split("@")[1]}`
-              : null,
-        }),
+        ({
+          phone: _phone,
+          formData: _formData,
+          ...safe
+        }: Record<string, unknown>) => safe,
       );
 
       return reply.send(sanitizedResults);

@@ -33,8 +33,6 @@ export type BeneficiaryInput = z.infer<typeof BeneficiaryInputSchema>;
 export const LinkedBeneficiaryInputSchema = z
   .strictObject({
     registrationId: z.string().uuid(),
-    email: z.string().email(),
-    name: z.string().min(2).max(200),
     coversBasePrice: z.boolean(),
     coveredAccessIds: z.array(z.string().uuid()).default([]),
   })
@@ -73,12 +71,26 @@ export const CreateSponsorshipBatchSchema = z
       .max(100)
       .optional(), // LINKED_ACCOUNT mode
   })
-  .refine(
-    (data) =>
-      (data.beneficiaries?.length ?? 0) > 0 ||
-      (data.linkedBeneficiaries?.length ?? 0) > 0,
-    { message: "Must have at least one beneficiary or linked beneficiary" },
-  );
+  .superRefine((data, ctx) => {
+    const hasBeneficiaries = (data.beneficiaries?.length ?? 0) > 0;
+    const hasLinkedBeneficiaries = (data.linkedBeneficiaries?.length ?? 0) > 0;
+
+    if (!hasBeneficiaries && !hasLinkedBeneficiaries) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Must have at least one beneficiary or linked beneficiary",
+      });
+      return;
+    }
+
+    if (hasBeneficiaries && hasLinkedBeneficiaries) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "Provide either beneficiaries or linked beneficiaries, not both",
+      });
+    }
+  });
 
 export type CreateSponsorshipBatchInput = z.infer<
   typeof CreateSponsorshipBatchSchema

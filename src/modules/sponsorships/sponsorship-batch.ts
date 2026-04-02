@@ -183,7 +183,7 @@ async function validateBatchInput(
 
   const form = await prisma.form.findFirst({
     where: { id: formId, eventId, type: "SPONSOR" },
-    select: { id: true },
+    select: { id: true, schema: true },
   });
 
   if (!form) {
@@ -191,6 +191,29 @@ async function validateBatchInput(
       "Sponsor form not found for this event",
       404,
       ErrorCodes.NOT_FOUND,
+    );
+  }
+
+  const sponsorshipMode =
+    (
+      (form.schema as Record<string, unknown> | null)?.sponsorshipSettings as
+        | Record<string, unknown>
+        | undefined
+    )?.sponsorshipMode ?? "CODE";
+
+  if (isLinkedMode && sponsorshipMode !== "LINKED_ACCOUNT") {
+    throw new AppError(
+      "This sponsor form does not accept linked-account sponsorships",
+      400,
+      ErrorCodes.VALIDATION_ERROR,
+    );
+  }
+
+  if (!isLinkedMode && sponsorshipMode === "LINKED_ACCOUNT") {
+    throw new AppError(
+      "This sponsor form requires linked-account sponsorships",
+      400,
+      ErrorCodes.VALIDATION_ERROR,
     );
   }
 
@@ -391,6 +414,10 @@ async function createLinkedModeSponsorships(
     }
 
     const code = await generateUniqueCode(tx);
+    const beneficiaryName =
+      [registration.firstName, registration.lastName]
+        .filter(Boolean)
+        .join(" ") || registration.email;
     const totalAmount =
       (linked.coversBasePrice ? registration.baseAmount : 0) +
       calculateCoveredAccessTotal(linked.coveredAccessIds, accessPriceMap);
@@ -402,9 +429,9 @@ async function createLinkedModeSponsorships(
           eventId,
           code,
           status: "PENDING",
-          beneficiaryName: linked.name,
-          beneficiaryEmail: linked.email,
-          beneficiaryPhone: null,
+          beneficiaryName: beneficiaryName,
+          beneficiaryEmail: registration.email,
+          beneficiaryPhone: registration.phone ?? null,
           beneficiaryAddress: null,
           coversBasePrice: linked.coversBasePrice,
           coveredAccessIds: linked.coveredAccessIds,
@@ -427,9 +454,9 @@ async function createLinkedModeSponsorships(
         eventId,
         code,
         status: "USED",
-        beneficiaryName: linked.name,
-        beneficiaryEmail: linked.email,
-        beneficiaryPhone: null,
+        beneficiaryName: beneficiaryName,
+        beneficiaryEmail: registration.email,
+        beneficiaryPhone: registration.phone ?? null,
         beneficiaryAddress: null,
         coversBasePrice: linked.coversBasePrice,
         coveredAccessIds: linked.coveredAccessIds,

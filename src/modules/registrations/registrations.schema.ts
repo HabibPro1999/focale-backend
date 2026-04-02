@@ -137,6 +137,7 @@ export const AdminCreateRegistrationSchema = z
     paymentMethod: PaymentMethodSchema.optional(),
     paymentStatus: PaymentStatusSchema.optional(),
     labName: z.string().max(200).optional(),
+    sendEmail: z.boolean().optional().default(false),
   })
   .refine(requireLabName, labNameRefinement);
 
