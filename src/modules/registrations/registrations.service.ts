@@ -24,6 +24,7 @@ import { validateFormData, sanitizeFormData, type FormSchema } from "@forms";
 import type {
   CreateRegistrationInput,
   AdminCreateRegistrationInput,
+  AdminEditRegistrationInput,
   UpdateRegistrationInput,
   ListRegistrationsQuery,
   PublicEditRegistrationInput,
@@ -582,6 +583,220 @@ export async function updateRegistration(
         action: "UPDATE",
         changes,
         performedBy: performedBy ?? undefined,
+      });
+    }
+  });
+
+  const updated = await getRegistrationById(id);
+  if (!updated) {
+    throw new AppError(
+      "Registration not found after update",
+      404,
+      ErrorCodes.REGISTRATION_NOT_FOUND,
+    );
+  }
+  return updated;
+}
+
+// ============================================================================
+// Admin Edit Registration (Full override — no restrictions)
+// ============================================================================
+
+export async function adminEditRegistration(
+  eventId: string,
+  id: string,
+  input: AdminEditRegistrationInput,
+  adminUserId: string,
+): Promise<RegistrationWithRelations> {
+  await prisma.$transaction(async (tx) => {
+    const registration = await tx.registration.findUnique({ where: { id } });
+    if (!registration) {
+      throw new AppError(
+        "Registration not found",
+        404,
+        ErrorCodes.REGISTRATION_NOT_FOUND,
+      );
+    }
+
+    const updateData: Prisma.RegistrationUpdateInput = {};
+    const changes: Record<string, { old: unknown; new: unknown }> = {};
+
+    // ── Personal info ──────────────────────────────────────────
+    if (input.email !== undefined && input.email !== registration.email) {
+      updateData.email = input.email;
+      changes.email = { old: registration.email, new: input.email };
+    }
+    if (
+      input.firstName !== undefined &&
+      input.firstName !== registration.firstName
+    ) {
+      updateData.firstName = input.firstName;
+      changes.firstName = { old: registration.firstName, new: input.firstName };
+    }
+    if (
+      input.lastName !== undefined &&
+      input.lastName !== registration.lastName
+    ) {
+      updateData.lastName = input.lastName;
+      changes.lastName = { old: registration.lastName, new: input.lastName };
+    }
+    if (input.phone !== undefined && input.phone !== registration.phone) {
+      updateData.phone = input.phone;
+      changes.phone = { old: registration.phone, new: input.phone };
+    }
+
+    // ── Form data ──────────────────────────────────────────────
+    if (input.formData !== undefined) {
+      updateData.formData = input.formData as Prisma.InputJsonValue;
+      changes.formData = { old: "(previous)", new: "(updated)" };
+    }
+
+    // ── Role ───────────────────────────────────────────────────
+    if (input.role !== undefined && input.role !== registration.role) {
+      updateData.role = input.role;
+      changes.role = { old: registration.role, new: input.role };
+    }
+
+    // ── Note ───────────────────────────────────────────────────
+    if (input.note !== undefined && input.note !== registration.note) {
+      updateData.note = input.note;
+      changes.note = { old: registration.note, new: input.note };
+    }
+
+    // ── Payment fields ─────────────────────────────────────────
+    if (
+      input.paymentStatus !== undefined &&
+      input.paymentStatus !== registration.paymentStatus
+    ) {
+      // No transition validation — admin override
+      updateData.paymentStatus = input.paymentStatus;
+      changes.paymentStatus = {
+        old: registration.paymentStatus,
+        new: input.paymentStatus,
+      };
+      if (
+        (input.paymentStatus === "PAID" || input.paymentStatus === "WAIVED") &&
+        !registration.paidAt
+      ) {
+        updateData.paidAt = new Date();
+      }
+    }
+    if (
+      input.paidAmount !== undefined &&
+      input.paidAmount !== registration.paidAmount
+    ) {
+      updateData.paidAmount = input.paidAmount;
+      changes.paidAmount = {
+        old: registration.paidAmount,
+        new: input.paidAmount,
+      };
+    }
+    if (
+      input.paymentMethod !== undefined &&
+      input.paymentMethod !== registration.paymentMethod
+    ) {
+      updateData.paymentMethod = input.paymentMethod;
+      changes.paymentMethod = {
+        old: registration.paymentMethod,
+        new: input.paymentMethod,
+      };
+    }
+    if (input.paymentReference !== undefined) {
+      updateData.paymentReference = input.paymentReference;
+    }
+    if (input.paymentProofUrl !== undefined) {
+      updateData.paymentProofUrl = input.paymentProofUrl;
+    }
+    if (input.labName !== undefined) {
+      updateData.labName = input.labName;
+    }
+
+    // ── Access selections (full recalculation) ─────────────────
+    if (input.accessSelections !== undefined) {
+      const effectiveFormData = input.formData ?? (registration.formData as Record<string, unknown>) ?? {};
+      const selectedAccessItems = input.accessSelections.map((s) => ({
+        accessId: s.accessId,
+        quantity: s.quantity,
+      }));
+
+      // Validate new selections
+      if (input.accessSelections.length > 0) {
+        const validation = await validateAccessSelections(
+          eventId,
+          input.accessSelections,
+          effectiveFormData,
+        );
+        if (!validation.valid) {
+          throw new AppError(
+            `Invalid access selections: ${validation.errors.join(", ")}`,
+            400,
+            ErrorCodes.BAD_REQUEST,
+            { errors: validation.errors },
+          );
+        }
+      }
+
+      // Recalculate pricing
+      const existingSponsorshipCodes: string[] = registration.sponsorshipCode
+        ? [registration.sponsorshipCode]
+        : [];
+      const priceBreakdown = await calculatePrice(eventId, {
+        formData: effectiveFormData,
+        selectedAccessItems,
+        sponsorshipCodes: existingSponsorshipCodes,
+      });
+
+      // Release old access spots
+      const oldAccessTypeIds = (registration.accessTypeIds as string[]) ?? [];
+      const oldBreakdown = registration.priceBreakdown as Record<string, unknown> | null;
+      const oldAccessItems = (oldBreakdown?.accessItems ?? []) as Array<{
+        accessId: string;
+        quantity: number;
+      }>;
+      for (const old of oldAccessItems) {
+        await releaseAccessSpot(old.accessId, old.quantity, tx);
+      }
+
+      // Reserve new access spots
+      for (const sel of input.accessSelections) {
+        if (sel.quantity > 0) {
+          await reserveAccessSpot(sel.accessId, sel.quantity, tx);
+        }
+      }
+
+      // Update denormalized price fields
+      updateData.totalAmount = priceBreakdown.total;
+      updateData.baseAmount = priceBreakdown.calculatedBasePrice;
+      updateData.accessAmount = priceBreakdown.accessTotal;
+      updateData.discountAmount = calculateDiscountAmount(
+        priceBreakdown.appliedRules,
+      );
+      updateData.sponsorshipAmount = priceBreakdown.sponsorshipTotal ?? 0;
+      updateData.accessTypeIds = input.accessSelections.map((s) => s.accessId);
+      updateData.priceBreakdown =
+        priceBreakdown as unknown as Prisma.InputJsonValue;
+
+      changes.accessSelections = {
+        old: oldAccessTypeIds,
+        new: input.accessSelections.map((s) => s.accessId),
+      };
+      changes.totalAmount = {
+        old: registration.totalAmount,
+        new: priceBreakdown.total,
+      };
+    }
+
+    updateData.lastEditedAt = new Date();
+
+    await tx.registration.update({ where: { id }, data: updateData });
+
+    if (Object.keys(changes).length > 0) {
+      await auditLog(tx, {
+        entityType: "Registration",
+        entityId: id,
+        action: "UPDATE",
+        changes,
+        performedBy: adminUserId,
       });
     }
   });

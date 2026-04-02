@@ -35,7 +35,7 @@ function extractKeyFromStorage(url: string): string | null {
       const parts = parsed.pathname.split("/").filter(Boolean);
       return parts.slice(1).join("/");
     }
-    return parsed.pathname.slice(1);
+    return decodeURIComponent(parsed.pathname.slice(1));
   } catch {
     return null;
   }
@@ -88,7 +88,19 @@ export async function downloadTemplateImage(templateUrl: string) {
     );
   }
 
-  return getStorageProvider().download(key);
+  try {
+    return await getStorageProvider().download(key);
+  } catch (err: unknown) {
+    const code = (err as { code?: number }).code;
+    if (code === 404) {
+      throw new AppError(
+        "Certificate template image not found in storage",
+        404,
+        ErrorCodes.NOT_FOUND,
+      );
+    }
+    throw err;
+  }
 }
 
 // ============================================================================

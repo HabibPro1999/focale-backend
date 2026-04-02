@@ -142,6 +142,33 @@ export const AdminCreateRegistrationSchema = z
   .refine(requireLabName, labNameRefinement);
 
 // ============================================================================
+// Admin Edit Registration Schema (Full override — no restrictions)
+// ============================================================================
+
+export const AdminEditRegistrationSchema = z
+  .strictObject({
+    email: z.string().email().optional(),
+    firstName: z.string().max(100).optional(),
+    lastName: z.string().max(100).optional(),
+    phone: z.string().max(50).nullable().optional(),
+    formData: z.record(z.string(), z.any()).optional(),
+    role: RegistrationRoleSchema.optional(),
+    accessSelections: z.array(AccessSelectionSchema).optional(),
+    paymentStatus: PaymentStatusSchema.optional(),
+    paidAmount: z.number().int().min(0).optional(),
+    paymentMethod: PaymentMethodSchema.nullable().optional(),
+    paymentReference: z.string().max(200).nullable().optional(),
+    paymentProofUrl: z.string().url().nullable().optional(),
+    note: z.string().max(2000).nullable().optional(),
+    labName: z.string().max(200).nullable().optional(),
+  })
+  .refine(
+    (data) =>
+      Object.values(data).some((v) => v !== undefined),
+    { message: "At least one field must be provided for update" },
+  );
+
+// ============================================================================
 // Query Schemas
 // ============================================================================
 
@@ -397,4 +424,7 @@ export type RegistrantSearchResult = z.infer<
 export type RegistrationRole = z.infer<typeof RegistrationRoleSchema>;
 export type AdminCreateRegistrationInput = z.infer<
   typeof AdminCreateRegistrationSchema
+>;
+export type AdminEditRegistrationInput = z.infer<
+  typeof AdminEditRegistrationSchema
 >;

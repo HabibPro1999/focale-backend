@@ -6,6 +6,7 @@ import { getEventById } from "@events";
 import {
   getRegistrationById,
   updateRegistration,
+  adminEditRegistration,
   confirmPayment,
   deleteRegistration,
   listRegistrations,
@@ -31,6 +32,7 @@ import {
   SearchRegistrantsQuerySchema,
   DeleteRegistrationQuerySchema,
   AdminCreateRegistrationSchema,
+  AdminEditRegistrationSchema,
   type UpdateRegistrationInput,
   type UpdatePaymentInput,
   type ListRegistrationsQuery,
@@ -39,6 +41,7 @@ import {
   type SearchRegistrantsQuery,
   type DeleteRegistrationQuery,
   type AdminCreateRegistrationInput,
+  type AdminEditRegistrationInput,
 } from "./registrations.schema.js";
 import type { AppInstance } from "@shared/types/fastify.js";
 
@@ -135,6 +138,41 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
       );
 
       return reply.status(201).send(registration);
+    },
+  );
+
+  // PUT /api/events/:eventId/registrations/:id/admin-edit - Admin full edit
+  app.put<{
+    Params: { eventId: string; id: string };
+    Body: AdminEditRegistrationInput;
+  }>(
+    "/:eventId/registrations/:id/admin-edit",
+    {
+      schema: {
+        params: EventIdParamSchema.extend(RegistrationIdParamSchema.shape),
+        body: AdminEditRegistrationSchema,
+      },
+    },
+    async (request, reply) => {
+      const { eventId, id } = request.params;
+
+      const event = await getEventById(eventId);
+      if (!event) {
+        throw app.httpErrors.notFound("Event not found");
+      }
+
+      if (!canAccessClient(request.user!, event.clientId)) {
+        throw app.httpErrors.forbidden("Insufficient permissions");
+      }
+
+      const registration = await adminEditRegistration(
+        eventId,
+        id,
+        request.body,
+        request.user!.id,
+      );
+
+      return reply.send(registration);
     },
   );
 
