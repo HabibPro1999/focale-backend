@@ -33,7 +33,7 @@ function extractKeyFromStorage(url: string): string | null {
     const parsed = new URL(url);
     if (parsed.hostname === "storage.googleapis.com") {
       const parts = parsed.pathname.split("/").filter(Boolean);
-      return parts.slice(1).join("/");
+      return decodeURIComponent(parts.slice(1).join("/"));
     }
     return decodeURIComponent(parsed.pathname.slice(1));
   } catch {

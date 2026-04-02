@@ -1,5 +1,6 @@
 import {
   requireAuth,
+  requireAdmin,
   canAccessClient,
 } from "@shared/middleware/auth.middleware.js";
 import { getEventById } from "@events";
@@ -148,6 +149,7 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
   }>(
     "/:eventId/registrations/:id/admin-edit",
     {
+      onRequest: [requireAdmin],
       schema: {
         params: EventIdParamSchema.extend(RegistrationIdParamSchema.shape),
         body: AdminEditRegistrationSchema,

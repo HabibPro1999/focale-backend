@@ -382,11 +382,11 @@ export function extractKeyFromUrl(url: string): string | null {
     if (parsed.hostname === "storage.googleapis.com") {
       // Path is /bucket-name/path/to/file — strip the bucket name
       const parts = parsed.pathname.split("/").filter(Boolean);
-      return parts.slice(1).join("/");
+      return decodeURIComponent(parts.slice(1).join("/"));
     }
     // R2 public URL or custom domain: https://cdn.example.com/path/to/file
     // Just return everything after the first /
-    return parsed.pathname.slice(1);
+    return decodeURIComponent(parsed.pathname.slice(1));
   } catch {
     return null;
   }
