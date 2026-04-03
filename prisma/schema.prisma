@@ -232,11 +232,31 @@ model EventAccess {
   requiredAccess       EventAccess[]         @relation("AccessPrerequisites")
   prerequisiteFor      EventAccess[]         @relation("AccessPrerequisites")
   certificateTemplates CertificateTemplate[]
+  accessCheckIns       AccessCheckIn[]
 
   @@index([eventId, startsAt])
   @@index([eventId, type])
   @@index([eventId, active])
   @@map("event_access")
+}
+
+// ============================================================================
+// CHECK-IN MODULE
+// ============================================================================
+
+model AccessCheckIn {
+  id             String   @id @default(uuid())
+  registrationId String   @map("registration_id")
+  accessId       String   @map("access_id")
+  checkedInAt    DateTime @default(now()) @map("checked_in_at")
+  checkedInBy    String   @map("checked_in_by")
+
+  registration Registration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+  access       EventAccess  @relation(fields: [accessId], references: [id], onDelete: Cascade)
+
+  @@unique([registrationId, accessId])
+  @@index([accessId])
+  @@map("access_check_ins")
 }
 
 // ============================================================================
@@ -466,12 +486,17 @@ model Registration {
   accessTypeIds    String[] @default([]) @map("access_type_ids")
   droppedAccessIds String[] @default([]) @map("dropped_access_ids")
 
+  // Check-in (event-level attendance)
+  checkedInAt DateTime? @map("checked_in_at")
+  checkedInBy String?   @map("checked_in_by")
+
   // Relations
   form              Form                 @relation(fields: [formId], references: [id], onDelete: Restrict)
   event             Event                @relation(fields: [eventId], references: [id])
   emailLogs         EmailLog[]
   sponsorshipUsages SponsorshipUsage[]
   transactions      PaymentTransaction[]
+  accessCheckIns    AccessCheckIn[]
 
   @@unique([email, formId])
   @@index([eventId, paymentStatus])
