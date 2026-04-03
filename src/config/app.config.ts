@@ -45,7 +45,15 @@ const envSchema = z
     { message: "R2 credentials required when STORAGE_PROVIDER=r2" },
   );
 
-const env = envSchema.parse(process.env);
+const result = envSchema.safeParse(process.env);
+if (!result.success) {
+  const missing = result.error.issues
+    .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
+    .join("\n");
+  console.error(`\nEnvironment validation failed:\n${missing}\n`);
+  process.exit(1);
+}
+const env = result.data;
 
 export const config = {
   ...env,
