@@ -115,10 +115,27 @@ async function syncPaidCount(
 // Helpers
 // ============================================================================
 
-function generateReferenceNumber(): string {
-  const timestamp = Date.now().toString(36).toUpperCase();
-  const random = Math.random().toString(36).substring(2, 6).toUpperCase();
-  return `REG-${timestamp}-${random}`;
+/**
+ * Generate a human-readable sequential reference number.
+ * Format: {YY}-{SLUG}-{SEQ} (e.g. 26-AMGLS-001)
+ * Must be called inside a transaction to avoid race conditions.
+ */
+async function generateReferenceNumber(
+  eventId: string,
+  tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
+): Promise<string> {
+  const event = await tx.event.findUnique({
+    where: { id: eventId },
+    select: { slug: true, startDate: true },
+  });
+  if (!event) return `REG-${Date.now().toString(36).toUpperCase()}`;
+
+  const year = event.startDate.getFullYear().toString().slice(-2);
+  const slug = event.slug.toUpperCase().slice(0, 10);
+  const count = await tx.registration.count({ where: { eventId } });
+  const seq = String(count + 1).padStart(3, "0");
+
+  return `${year}-${slug}-${seq}`;
 }
 
 // ============================================================================
@@ -224,7 +241,7 @@ export async function createRegistration(
         firstName: firstName ?? null,
         lastName: lastName ?? null,
         phone: phone ?? null,
-        referenceNumber: generateReferenceNumber(),
+        referenceNumber: await generateReferenceNumber(eventId, tx),
         paymentStatus: "PENDING",
         paymentMethod: paymentMethod ?? null,
         labName: paymentMethod === "LAB_SPONSORSHIP" ? (labName ?? null) : null,
@@ -415,7 +432,7 @@ export async function createAdminRegistration(
         firstName,
         lastName,
         phone: phone ?? null,
-        referenceNumber: generateReferenceNumber(),
+        referenceNumber: await generateReferenceNumber(eventId, tx),
         role,
         paymentStatus: resolvedPaymentStatus,
         paymentMethod: paymentMethod ?? null,
@@ -1026,6 +1043,7 @@ export async function listRegistrations(
       { firstName: { contains: search, mode: "insensitive" } },
       { lastName: { contains: search, mode: "insensitive" } },
       { phone: { contains: search, mode: "insensitive" } },
+      { referenceNumber: { contains: search, mode: "insensitive" } },
     ];
   }
 
