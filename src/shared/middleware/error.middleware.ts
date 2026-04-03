@@ -33,13 +33,39 @@ export function errorHandler(
     );
 
     switch (error.code) {
-      case "P2002": // Unique constraint violation
+      case "P2002": {
+        // Extract constraint fields — handle both standard Prisma and CockroachDB driver adapter formats
+        const target = error.meta?.target as string[] | undefined;
+        const adapterFields = (
+          error.meta?.driverAdapterError as
+            | { cause?: { constraint?: { fields?: string[] } } }
+            | undefined
+        )?.cause?.constraint?.fields;
+        const fields = target ?? adapterFields ?? [];
+        const fieldStr = fields.join(", ");
+
+        // Registration email+form uniqueness → domain-specific code
+        const isEmailFormConstraint =
+          fields.some((f) => f === "email") &&
+          fields.some((f) => f === "formId" || f === "form_id");
+
+        if (isEmailFormConstraint) {
+          return reply.status(409).send({
+            error:
+              "A registration with this email already exists for this form",
+            code: ErrorCodes.REGISTRATION_ALREADY_EXISTS,
+            field: fieldStr,
+            requestId,
+          });
+        }
+
         return reply.status(409).send({
           error: "Resource already exists",
           code: ErrorCodes.CONFLICT,
-          field: (error.meta?.target as string[])?.join(", "),
+          field: fieldStr,
           requestId,
         });
+      }
 
       case "P2003": // Foreign key constraint violation
         return reply.status(400).send({
