@@ -496,28 +496,28 @@ export async function reserveAccessSpot(
   quantity: number = 1,
   db: CapacityDbClient = prisma,
 ): Promise<void> {
-  // Use raw SQL for truly atomic capacity check and update
-  // This ensures the check happens at the exact moment of update,
-  // preventing TOCTOU race conditions
+  // Use raw SQL for truly atomic capacity check and update.
+  // Capacity is enforced against paid_count (settled registrations),
+  // while registered_count tracks total registrations regardless of payment.
   const updateResult = await db.$executeRaw`
     UPDATE event_access
     SET registered_count = registered_count + ${quantity}
     WHERE id = ${accessId}
-    AND (max_capacity IS NULL OR max_capacity - registered_count >= ${quantity})
+    AND (max_capacity IS NULL OR max_capacity - paid_count >= ${quantity})
   `;
 
   if (updateResult === 0) {
     // Either access not found or capacity exceeded - determine which
     const access = await db.eventAccess.findUnique({
       where: { id: accessId },
-      select: { name: true, maxCapacity: true, registeredCount: true },
+      select: { name: true, maxCapacity: true, paidCount: true },
     });
 
     if (!access) {
       throw new AppError("Access not found", 404, ErrorCodes.ACCESS_NOT_FOUND);
     }
 
-    const remaining = (access.maxCapacity ?? Infinity) - access.registeredCount;
+    const remaining = (access.maxCapacity ?? Infinity) - access.paidCount;
     throw new AppError(
       `${access.name} has insufficient capacity (${remaining} spots remaining, requested ${quantity})`,
       409,
