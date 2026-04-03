@@ -30,6 +30,7 @@ import {
   sponsorshipsPublicBySlugRoutes,
 } from "@sponsorships";
 import { certificatesRoutes } from "@certificates";
+import { checkinRoutes } from "@checkin";
 import type { AppInstance } from "@shared/types/fastify.js";
 
 export async function buildServer(): Promise<AppInstance> {
@@ -151,6 +152,9 @@ export async function buildServer(): Promise<AppInstance> {
   await app.register(sponsorshipsPublicBySlugRoutes, {
     prefix: "/api/public/events",
   });
+
+  // Check-in routes
+  await app.register(checkinRoutes, { prefix: "/api/events" });
 
   return app;
 }

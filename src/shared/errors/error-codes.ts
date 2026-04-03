@@ -89,6 +89,12 @@ export const ErrorCodes = {
 
   // Concurrency (16xxx)
   CONCURRENT_MODIFICATION: "CON_16001",
+
+  // Check-in (17xxx)
+  CHECKIN_ALREADY_DONE: "CHK_17001",
+  CHECKIN_REGISTRATION_NOT_FOUND: "CHK_17002",
+  CHECKIN_ACCESS_NOT_ON_REGISTRATION: "CHK_17003",
+  CHECKIN_EVENT_MISMATCH: "CHK_17004",
 } as const;
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];

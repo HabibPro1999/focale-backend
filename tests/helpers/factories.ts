@@ -262,6 +262,8 @@ export function createMockRegistration(
     role: "PARTICIPANT",
     accessTypeIds: [],
     droppedAccessIds: [],
+    checkedInAt: null,
+    checkedInBy: null,
     createdAt: faker.date.past(),
     updatedAt: faker.date.recent(),
     ...overrides,
