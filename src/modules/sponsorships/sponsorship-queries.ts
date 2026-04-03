@@ -13,6 +13,14 @@ import {
   type ExistingUsage,
 } from "./sponsorships.utils.js";
 import type { ListSponsorshipsQuery } from "./sponsorships.schema.js";
+
+interface SponsorshipStats {
+  total: number;
+  totalAmount: number;
+  pending: { count: number; amount: number };
+  used: { count: number; amount: number };
+  cancelled: { count: number; amount: number };
+}
 import type {
   Prisma,
   Sponsorship,
@@ -86,7 +94,7 @@ export interface AvailableSponsorship {
 export async function listSponsorships(
   eventId: string,
   query: ListSponsorshipsQuery,
-): Promise<PaginatedResult<SponsorshipListItem>> {
+): Promise<PaginatedResult<SponsorshipListItem> & { stats: SponsorshipStats }> {
   const { page, limit, status, search, sortBy, sortOrder } = query;
 
   const where: Prisma.SponsorshipWhereInput = { eventId };
@@ -116,7 +124,7 @@ export async function listSponsorships(
 
   const skip = getSkip({ page, limit });
 
-  const [data, total] = await Promise.all([
+  const [data, total, statsRaw] = await Promise.all([
     prisma.sponsorship.findMany({
       where,
       skip,
@@ -140,9 +148,33 @@ export async function listSponsorships(
       },
     }),
     prisma.sponsorship.count({ where }),
+    // Aggregate stats across ALL sponsorships for this event (not filtered/paginated)
+    prisma.sponsorship.groupBy({
+      by: ["status"],
+      where: { eventId },
+      _count: true,
+      _sum: { totalAmount: true },
+    }),
   ]);
 
-  return paginate(data, total, { page, limit });
+  const stats = {
+    total: 0,
+    totalAmount: 0,
+    pending: { count: 0, amount: 0 },
+    used: { count: 0, amount: 0 },
+    cancelled: { count: 0, amount: 0 },
+  };
+  for (const row of statsRaw) {
+    const count = row._count;
+    const amount = row._sum.totalAmount ?? 0;
+    stats.total += count;
+    stats.totalAmount += amount;
+    if (row.status === "PENDING") { stats.pending = { count, amount }; }
+    else if (row.status === "USED") { stats.used = { count, amount }; }
+    else if (row.status === "CANCELLED") { stats.cancelled = { count, amount }; }
+  }
+
+  return { ...paginate(data, total, { page, limit }), stats };
 }
 
 // ============================================================================
