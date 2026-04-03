@@ -5,11 +5,6 @@ import { UserRole } from "@shared/constants/roles.js";
 import { logger } from "@shared/utils/logger.js";
 import { auditLog } from "@shared/utils/audit.js";
 import {
-  paginate,
-  getSkip,
-  type PaginatedResult,
-} from "@shared/utils/pagination.js";
-import {
   incrementRegisteredCountTx,
   decrementRegisteredCountTx,
 } from "@events";
@@ -29,7 +24,6 @@ import type {
   AdminCreateRegistrationInput,
   AdminEditRegistrationInput,
   UpdateRegistrationInput,
-  ListRegistrationsQuery,
   PublicEditRegistrationInput,
 } from "./registrations.schema.js";
 import type { Prisma } from "@/generated/prisma/client.js";
@@ -38,11 +32,11 @@ import type { Prisma } from "@/generated/prisma/client.js";
 import { generateEditToken } from "./edit-token.js";
 import {
   enrichWithAccessSelections,
-  enrichManyWithAccessSelections,
   calculateDiscountAmount,
   type RegistrationWithRelations,
 } from "./registration-enrichment.js";
 import { validatePaymentTransition } from "./registration-payment.js";
+import { getRegistrationById } from "./registration-reads.js";
 import { calculateSettlement } from "@shared/utils/settlement.js";
 
 // ============================================================================
@@ -66,6 +60,12 @@ export {
   listRegistrationEmailLogs,
   searchRegistrantsForSponsorship,
 } from "./registration-queries.js";
+export {
+  getRegistrationById,
+  getRegistrationByIdempotencyKey,
+  listRegistrations,
+  getRegistrationClientId,
+} from "./registration-reads.js";
 
 // ============================================================================
 // Capacity — Paid Count Sync
@@ -541,51 +541,6 @@ export async function createAdminRegistration(
   }
 
   return result;
-}
-
-// ============================================================================
-// Read Operations
-// ============================================================================
-
-export async function getRegistrationById(
-  id: string,
-): Promise<RegistrationWithRelations | null> {
-  const registration = await prisma.registration.findUnique({
-    where: { id },
-    include: {
-      form: { select: { id: true, name: true } },
-      event: { select: { id: true, name: true, slug: true, clientId: true } },
-      accessCheckIns: { select: { accessId: true, checkedInAt: true } },
-    },
-  });
-
-  if (!registration) return null;
-
-  const { accessCheckIns, ...rest } = registration;
-  const enriched = await enrichWithAccessSelections(rest);
-  // M23: strip editToken from admin responses
-  const { editToken: _, ...safeResult } = enriched;
-  return { ...safeResult, accessCheckIns } as RegistrationWithRelations;
-}
-
-/**
- * Get registration by idempotency key.
- * Used for idempotent registration creation.
- */
-export async function getRegistrationByIdempotencyKey(
-  idempotencyKey: string,
-): Promise<RegistrationWithRelations | null> {
-  const registration = await prisma.registration.findUnique({
-    where: { idempotencyKey },
-    include: {
-      form: { select: { id: true, name: true } },
-      event: { select: { id: true, name: true, slug: true, clientId: true } },
-    },
-  });
-
-  if (!registration) return null;
-
-  return enrichWithAccessSelections(registration);
 }
 
 // ============================================================================
@@ -1077,75 +1032,6 @@ export async function deleteRegistration(
     // Delete the registration
     await tx.registration.delete({ where: { id } });
   });
-}
-
-// ============================================================================
-// List Registrations
-// ============================================================================
-
-export async function listRegistrations(
-  eventId: string,
-  query: ListRegistrationsQuery,
-): Promise<PaginatedResult<RegistrationWithRelations>> {
-  const { page, limit, paymentStatus, paymentMethod, search } = query;
-
-  const where: Prisma.RegistrationWhereInput = { eventId };
-
-  if (paymentStatus) where.paymentStatus = paymentStatus;
-  if (paymentMethod) where.paymentMethod = paymentMethod;
-  if (search) {
-    where.OR = [
-      { email: { contains: search, mode: "insensitive" } },
-      { firstName: { contains: search, mode: "insensitive" } },
-      { lastName: { contains: search, mode: "insensitive" } },
-      { phone: { contains: search, mode: "insensitive" } },
-      { referenceNumber: { contains: search, mode: "insensitive" } },
-    ];
-  }
-
-  const skip = getSkip({ page, limit });
-
-  const [data, total] = await Promise.all([
-    prisma.registration.findMany({
-      where,
-      skip,
-      take: limit,
-      include: {
-        form: { select: { id: true, name: true } },
-        event: {
-          select: {
-            id: true,
-            name: true,
-            slug: true,
-            clientId: true,
-            startDate: true,
-            location: true,
-          },
-        },
-      },
-      orderBy: { createdAt: "desc" },
-    }),
-    prisma.registration.count({ where }),
-  ]);
-
-  // Enrich with accessSelections derived from priceBreakdown
-  const enrichedData = await enrichManyWithAccessSelections(data);
-
-  return paginate(enrichedData, total, { page, limit });
-}
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-export async function getRegistrationClientId(
-  id: string,
-): Promise<string | null> {
-  const registration = await prisma.registration.findUnique({
-    where: { id },
-    include: { event: { select: { clientId: true } } },
-  });
-  return registration?.event.clientId ?? null;
 }
 
 // ============================================================================
