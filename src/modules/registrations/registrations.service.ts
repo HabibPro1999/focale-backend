@@ -135,11 +135,11 @@ async function generateReferenceNumber(
   const code = event.slug.replace(/[._]/g, "-").toUpperCase().slice(0, 12);
   const prefix = `${year}-${code}-`;
 
-  // Use MAX on existing reference numbers to find the next sequence.
-  // SELECT FOR UPDATE locks the rows to prevent two concurrent transactions
-  // from reading the same max and generating the same reference number.
+  // Lock matching rows first, then compute MAX in a subquery.
+  // CockroachDB disallows FOR UPDATE with aggregate functions,
+  // so we split it: lock rows, then aggregate.
   const result = await tx.$queryRawUnsafe<[{ max_ref: string | null }]>(
-    `SELECT MAX("reference_number") as max_ref FROM "registrations" WHERE "event_id" = $1 AND "reference_number" LIKE $2 FOR UPDATE`,
+    `SELECT MAX("reference_number") as max_ref FROM (SELECT "reference_number" FROM "registrations" WHERE "event_id" = $1 AND "reference_number" LIKE $2 FOR UPDATE) locked`,
     eventId,
     `${prefix}%`,
   );
