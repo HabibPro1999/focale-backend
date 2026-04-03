@@ -1033,11 +1033,12 @@ export async function listRegistrations(
   eventId: string,
   query: ListRegistrationsQuery,
 ): Promise<PaginatedResult<RegistrationWithRelations>> {
-  const { page, limit, paymentStatus, search } = query;
+  const { page, limit, paymentStatus, paymentMethod, search } = query;
 
   const where: Prisma.RegistrationWhereInput = { eventId };
 
   if (paymentStatus) where.paymentStatus = paymentStatus;
+  if (paymentMethod) where.paymentMethod = paymentMethod;
   if (search) {
     where.OR = [
       { email: { contains: search, mode: "insensitive" } },
