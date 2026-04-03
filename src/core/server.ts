@@ -7,8 +7,9 @@ import {
 import { registerPlugins } from "./plugins.js";
 import { registerHooks } from "./hooks.js";
 import { errorHandler } from "@shared/middleware/error.middleware.js";
-import { prisma } from "@/database/client.js";
+import { prisma, getPool } from "@/database/client.js";
 import { logger } from "@shared/utils/logger.js";
+import { clearUserCache } from "@shared/middleware/auth.middleware.js";
 import { usersRoutes } from "@identity";
 import { clientsRoutes } from "@clients";
 import { eventsRoutes, eventsPublicRoutes } from "@events";
@@ -45,7 +46,20 @@ export async function buildServer(): Promise<AppInstance> {
   // run before parent hooks in Fastify's onClose ordering), ensuring all plugin-level
   // onClose hooks that might use Prisma complete before the connection is dropped.
   app.addHook("onClose", async () => {
-    await prisma.$disconnect();
+    clearUserCache();
+    try {
+      await prisma.$disconnect();
+    } catch (err) {
+      logger.error({ err }, "Error disconnecting Prisma");
+    }
+    const pool = getPool();
+    if (pool) {
+      try {
+        await pool.end();
+      } catch (err) {
+        logger.error({ err }, "Error draining connection pool");
+      }
+    }
     logger.info("Database disconnected");
   });
 
