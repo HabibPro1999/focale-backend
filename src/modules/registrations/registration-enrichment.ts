@@ -6,21 +6,28 @@ import type { Registration } from "@/generated/prisma/client.js";
 // Types
 // ============================================================================
 
-export type RegistrationWithRelations = Registration & {
-  accessSelections: Array<{
+type AccessSelectionItem = {
+  id: string;
+  accessId: string;
+  unitPrice: number;
+  quantity: number;
+  subtotal: number;
+  access: {
     id: string;
-    accessId: string;
-    unitPrice: number;
-    quantity: number;
-    subtotal: number;
-    access: {
-      id: string;
-      name: string;
-      type: string;
-      startsAt: Date | null;
-      endsAt: Date | null;
-    };
-  }>;
+    name: string;
+    type: string;
+    startsAt: Date | null;
+    endsAt: Date | null;
+  };
+};
+
+type DroppedAccessSelectionItem = AccessSelectionItem & {
+  reason: string;
+};
+
+export type RegistrationWithRelations = Registration & {
+  accessSelections: AccessSelectionItem[];
+  droppedAccessSelections: DroppedAccessSelectionItem[];
   form: {
     id: string;
     name: string;
@@ -64,15 +71,21 @@ export async function enrichWithAccessSelections(
 ): Promise<RegistrationWithRelations> {
   const priceBreakdown = registration.priceBreakdown as PriceBreakdown;
 
-  // If no access items, return empty array
-  if (!priceBreakdown.accessItems || priceBreakdown.accessItems.length === 0) {
-    return { ...registration, accessSelections: [] };
+  const droppedItems = priceBreakdown.droppedAccessItems ?? [];
+  const hasItems = priceBreakdown.accessItems?.length > 0;
+  const hasDropped = droppedItems.length > 0;
+
+  if (!hasItems && !hasDropped) {
+    return { ...registration, accessSelections: [], droppedAccessSelections: [] };
   }
 
-  // Fetch access details for display
-  const accessIds = priceBreakdown.accessItems.map((item) => item.accessId);
+  // Fetch access details for both active and dropped items
+  const allAccessIds = [
+    ...(priceBreakdown.accessItems ?? []).map((item) => item.accessId),
+    ...droppedItems.map((item) => item.accessId),
+  ];
   const accessDetails = await prisma.eventAccess.findMany({
-    where: { id: { in: accessIds } },
+    where: { id: { in: allAccessIds } },
     select: {
       id: true,
       name: true,
@@ -83,24 +96,36 @@ export async function enrichWithAccessSelections(
   });
 
   const accessMap = new Map(accessDetails.map((a) => [a.id, a]));
+  const fallbackAccess = (item: { accessId: string; name: unknown }) => ({
+    id: item.accessId,
+    name: String(item.name ?? item.accessId),
+    type: "OTHER",
+    startsAt: null as Date | null,
+    endsAt: null as Date | null,
+  });
 
   // Reconstruct accessSelections from priceBreakdown
-  const accessSelections = priceBreakdown.accessItems.map((item) => ({
+  const accessSelections = (priceBreakdown.accessItems ?? []).map((item) => ({
     id: `${registration.id}-${item.accessId}`,
     accessId: item.accessId,
     unitPrice: item.unitPrice,
     quantity: item.quantity,
     subtotal: item.subtotal,
-    access: accessMap.get(item.accessId) ?? {
-      id: item.accessId,
-      name: item.name,
-      type: "OTHER",
-      startsAt: null,
-      endsAt: null,
-    },
+    access: accessMap.get(item.accessId) ?? fallbackAccess(item),
   }));
 
-  return { ...registration, accessSelections };
+  // Reconstruct droppedAccessSelections
+  const droppedAccessSelections = droppedItems.map((item) => ({
+    id: `${registration.id}-dropped-${item.accessId}`,
+    accessId: item.accessId,
+    unitPrice: item.unitPrice,
+    quantity: item.quantity,
+    subtotal: item.subtotal,
+    reason: item.reason,
+    access: accessMap.get(item.accessId) ?? fallbackAccess(item),
+  }));
+
+  return { ...registration, accessSelections, droppedAccessSelections };
 }
 
 /**
@@ -115,12 +140,17 @@ export async function enrichManyWithAccessSelections(
     }
   >,
 ): Promise<RegistrationWithRelations[]> {
-  // Collect all unique access IDs across all registrations
+  // Collect all unique access IDs across all registrations (active + dropped)
   const allAccessIds = new Set<string>();
   for (const reg of registrations) {
     const priceBreakdown = reg.priceBreakdown as PriceBreakdown;
     if (priceBreakdown.accessItems) {
       for (const item of priceBreakdown.accessItems) {
+        allAccessIds.add(item.accessId);
+      }
+    }
+    if (priceBreakdown.droppedAccessItems) {
+      for (const item of priceBreakdown.droppedAccessItems) {
         allAccessIds.add(item.accessId);
       }
     }
@@ -139,33 +169,37 @@ export async function enrichManyWithAccessSelections(
   });
 
   const accessMap = new Map(accessDetails.map((a) => [a.id, a]));
+  const fallbackAccess = (item: { accessId: string; name: unknown }) => ({
+    id: item.accessId,
+    name: String(item.name ?? item.accessId),
+    type: "OTHER",
+    startsAt: null as Date | null,
+    endsAt: null as Date | null,
+  });
 
   // Enrich each registration
   return registrations.map((registration) => {
     const priceBreakdown = registration.priceBreakdown as PriceBreakdown;
 
-    if (
-      !priceBreakdown.accessItems ||
-      priceBreakdown.accessItems.length === 0
-    ) {
-      return { ...registration, accessSelections: [] };
-    }
-
-    const accessSelections = priceBreakdown.accessItems.map((item) => ({
+    const accessSelections = (priceBreakdown.accessItems ?? []).map((item) => ({
       id: `${registration.id}-${item.accessId}`,
       accessId: item.accessId,
       unitPrice: item.unitPrice,
       quantity: item.quantity,
       subtotal: item.subtotal,
-      access: accessMap.get(item.accessId) ?? {
-        id: item.accessId,
-        name: item.name,
-        type: "OTHER",
-        startsAt: null,
-        endsAt: null,
-      },
+      access: accessMap.get(item.accessId) ?? fallbackAccess(item),
     }));
 
-    return { ...registration, accessSelections };
+    const droppedAccessSelections = (priceBreakdown.droppedAccessItems ?? []).map((item) => ({
+      id: `${registration.id}-dropped-${item.accessId}`,
+      accessId: item.accessId,
+      unitPrice: item.unitPrice,
+      quantity: item.quantity,
+      subtotal: item.subtotal,
+      reason: item.reason,
+      access: accessMap.get(item.accessId) ?? fallbackAccess(item),
+    }));
+
+    return { ...registration, accessSelections, droppedAccessSelections };
   });
 }

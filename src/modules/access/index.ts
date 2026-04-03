@@ -5,6 +5,9 @@ export {
   validateAccessSelections,
   reserveAccessSpot,
   releaseAccessSpot,
+  incrementPaidCount,
+  decrementPaidCount,
+  handleCapacityReached,
 } from "./access.service.js";
 
 export { AccessSelectionSchema } from "./access.schema.js";

@@ -7,8 +7,9 @@ import type {
   CreateEventAccessInput,
   UpdateEventAccessInput,
 } from "./access.schema.js";
-import { Prisma } from "@/generated/prisma/client.js";
+import { Prisma, PaymentStatus } from "@/generated/prisma/client.js";
 import type { EventAccess } from "@/generated/prisma/client.js";
+import type { PriceBreakdown } from "@pricing";
 
 // ============================================================================
 // Types
@@ -349,6 +350,24 @@ export async function updateEventAccess(
     };
   }
 
+  // If capacity is being lowered, check if we need to drop unpaid registrations
+  const isCapacityChanging =
+    data.maxCapacity !== undefined && data.maxCapacity !== access.maxCapacity;
+
+  if (isCapacityChanging && data.maxCapacity !== null) {
+    return prisma.$transaction(async (tx) => {
+      const updated = await tx.eventAccess.update({
+        where: { id },
+        data: updateData,
+        include: { requiredAccess: { select: { id: true, name: true } } },
+      });
+      if (updated.paidCount >= data.maxCapacity!) {
+        await handleCapacityReached(access.eventId, [id], tx);
+      }
+      return updated;
+    });
+  }
+
   return prisma.eventAccess.update({
     where: { id },
     data: updateData,
@@ -532,6 +551,161 @@ export async function releaseAccessSpot(
       "releaseAccessSpot: no rows updated — access item not found or registeredCount already below quantity",
     );
   }
+}
+
+// ============================================================================
+// Paid Count (Capacity based on settled registrations)
+// ============================================================================
+
+const FULLY_SETTLED_STATUSES = ["PAID", "SPONSORED", "WAIVED"];
+
+/**
+ * Increment paid count when registration becomes settled.
+ */
+export async function incrementPaidCount(
+  accessId: string,
+  quantity: number = 1,
+  db: CapacityDbClient = prisma,
+): Promise<void> {
+  await db.$executeRaw`
+    UPDATE event_access
+    SET paid_count = paid_count + ${quantity}
+    WHERE id = ${accessId}
+  `;
+}
+
+/**
+ * Decrement paid count (with floor constraint).
+ */
+export async function decrementPaidCount(
+  accessId: string,
+  quantity: number = 1,
+  db: CapacityDbClient = prisma,
+): Promise<void> {
+  await db.$executeRaw`
+    UPDATE event_access
+    SET paid_count = GREATEST(0, paid_count - ${quantity})
+    WHERE id = ${accessId}
+  `;
+}
+
+type CapacityReachedDbClient = CapacityDbClient & {
+  registration: Pick<typeof prisma.registration, "findMany" | "update">;
+  sponsorshipUsage: Pick<typeof prisma.sponsorshipUsage, "findMany">;
+  auditLog: Pick<typeof prisma.auditLog, "create">;
+};
+
+/**
+ * When paid count hits max capacity, drop access from unprotected registrations.
+ *
+ * "Unprotected" = NOT fully settled AND the access is NOT covered by a linked sponsorship.
+ * PARTIAL registrations keep access items that are covered by their sponsorship's coveredAccessIds.
+ */
+export async function handleCapacityReached(
+  eventId: string,
+  accessIds: string[],
+  db: CapacityReachedDbClient = prisma,
+): Promise<number> {
+  let totalAffected = 0;
+
+  for (const accessId of accessIds) {
+    const access = await db.eventAccess.findUnique({
+      where: { id: accessId },
+      select: { id: true, name: true, maxCapacity: true, paidCount: true },
+    });
+    if (!access || access.maxCapacity === null || access.paidCount < access.maxCapacity) {
+      continue;
+    }
+
+    // Find registrations that have this access but are NOT fully settled
+    const registrations = await db.registration.findMany({
+      where: {
+        eventId,
+        paymentStatus: { notIn: [...FULLY_SETTLED_STATUSES, "REFUNDED"] as PaymentStatus[] },
+        accessTypeIds: { has: accessId },
+      },
+      select: {
+        id: true,
+        accessTypeIds: true,
+        droppedAccessIds: true,
+        totalAmount: true,
+        accessAmount: true,
+        sponsorshipAmount: true,
+        priceBreakdown: true,
+      },
+    });
+
+    for (const reg of registrations) {
+      // Check if this access is protected by a linked sponsorship (PARTIAL case)
+      const usages = await db.sponsorshipUsage.findMany({
+        where: { registrationId: reg.id },
+        select: { sponsorship: { select: { coveredAccessIds: true } } },
+      });
+      const allCoveredAccessIds = usages.flatMap((u) => u.sponsorship.coveredAccessIds);
+      if (allCoveredAccessIds.includes(accessId)) {
+        continue; // This access is covered by sponsorship — don't drop it
+      }
+
+      // Drop this access from the registration
+      const breakdown = reg.priceBreakdown as PriceBreakdown;
+      const droppedItem = breakdown.accessItems.find((a) => a.accessId === accessId);
+      if (!droppedItem) continue;
+
+      const newAccessItems = breakdown.accessItems.filter((a) => a.accessId !== accessId);
+      const newAccessTotal = newAccessItems.reduce((sum, a) => sum + a.subtotal, 0);
+      const newSubtotal = breakdown.calculatedBasePrice + newAccessTotal;
+      const newSponsorshipTotal = Math.min(breakdown.sponsorshipTotal, newSubtotal);
+      const newTotal = Math.max(0, newSubtotal - newSponsorshipTotal);
+
+      const updatedBreakdown = {
+        ...breakdown,
+        accessItems: newAccessItems,
+        accessTotal: newAccessTotal,
+        subtotal: newSubtotal,
+        sponsorshipTotal: newSponsorshipTotal,
+        total: newTotal,
+        droppedAccessItems: [
+          ...(breakdown.droppedAccessItems ?? []),
+          { ...droppedItem, reason: "capacity_reached" as const },
+        ],
+      };
+
+      await db.registration.update({
+        where: { id: reg.id },
+        data: {
+          accessTypeIds: reg.accessTypeIds.filter((id) => id !== accessId),
+          droppedAccessIds: [...(reg.droppedAccessIds ?? []), accessId],
+          priceBreakdown: updatedBreakdown as unknown as Prisma.InputJsonValue,
+          totalAmount: newTotal,
+          accessAmount: newAccessTotal,
+          sponsorshipAmount: newSponsorshipTotal,
+        },
+      });
+
+      // Release the registered_count spot
+      await releaseAccessSpot(accessId, droppedItem.quantity, db);
+
+      await db.auditLog.create({
+        data: {
+          entityType: "Registration",
+          entityId: reg.id,
+          action: "ACCESS_CAPACITY_REACHED",
+          changes: {
+            accessId,
+            accessName: access.name,
+            priceDeducted: droppedItem.subtotal,
+            oldTotal: reg.totalAmount,
+            newTotal,
+          } as unknown as Prisma.InputJsonValue,
+          performedBy: "SYSTEM",
+        },
+      });
+
+      totalAffected++;
+    }
+  }
+
+  return totalAffected;
 }
 
 // ============================================================================

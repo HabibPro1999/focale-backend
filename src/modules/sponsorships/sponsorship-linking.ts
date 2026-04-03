@@ -13,6 +13,10 @@ import {
   type ExistingUsage,
 } from "./sponsorships.utils.js";
 import { getSponsorshipByCode } from "./sponsorship-queries.js";
+import {
+  incrementPaidCount,
+  handleCapacityReached,
+} from "@access";
 import { queueSponsorshipEmail, buildLinkedSponsorshipContext } from "@email";
 import type { TxClient } from "@shared/types/prisma.js";
 
@@ -346,6 +350,7 @@ export async function linkSponsorshipToRegistration(
         baseAmount: true,
         accessTypeIds: true,
         priceBreakdown: true,
+        paymentStatus: true,
         sponsorshipAmount: true,
         sponsorshipUsages: {
           include: {
@@ -473,6 +478,7 @@ export async function linkSponsorshipToRegistration(
 
     // Update registration sponsorship amount and paymentMethod
     const isFullySponsored = newSponsorshipAmount >= registration.totalAmount;
+    const wasAlreadySettled = ["PAID", "SPONSORED", "WAIVED"].includes(registration.paymentStatus);
     await tx.registration.update({
       where: { id: registrationId },
       data: {
@@ -486,6 +492,42 @@ export async function linkSponsorshipToRegistration(
             : {}),
       },
     });
+
+    // Sync paid count for capacity tracking
+    if (!wasAlreadySettled) {
+      if (isFullySponsored) {
+        // Fully sponsored: increment paidCount for ALL access items
+        const breakdown = registration.priceBreakdown as Record<string, unknown>;
+        const accessItems = (breakdown?.accessItems ?? []) as Array<{ accessId: string; quantity: number }>;
+        for (const item of accessItems) {
+          await incrementPaidCount(item.accessId, item.quantity, tx);
+        }
+        if (accessItems.length > 0) {
+          await handleCapacityReached(
+            registration.eventId,
+            accessItems.map((a) => a.accessId),
+            tx,
+          );
+        }
+      } else if (newSponsorshipAmount > 0 && sponsorship.coveredAccessIds.length > 0) {
+        // Partial sponsorship: increment paidCount only for covered access items
+        const breakdown = registration.priceBreakdown as Record<string, unknown>;
+        const accessItems = (breakdown?.accessItems ?? []) as Array<{ accessId: string; quantity: number }>;
+        const coveredItems = accessItems.filter((a) =>
+          sponsorship.coveredAccessIds.includes(a.accessId),
+        );
+        for (const item of coveredItems) {
+          await incrementPaidCount(item.accessId, item.quantity, tx);
+        }
+        if (coveredItems.length > 0) {
+          await handleCapacityReached(
+            registration.eventId,
+            coveredItems.map((a) => a.accessId),
+            tx,
+          );
+        }
+      }
+    }
 
     const changes: Record<string, { old: unknown; new: unknown }> = {
       registrationId: { old: null, new: registrationId },

@@ -144,11 +144,11 @@ export async function validateAccessSelections(
     }
   }
 
-  // Check capacity (without reserving)
+  // Check capacity based on paid count (not total registrations)
   for (const selection of selections) {
     const access = accessMap.get(selection.accessId)!;
     if (access.maxCapacity !== null) {
-      const spotsRemaining = access.maxCapacity - access.registeredCount;
+      const spotsRemaining = access.maxCapacity - access.paidCount;
       if (spotsRemaining < selection.quantity) {
         errors.push(`${access.name} is full`);
       }

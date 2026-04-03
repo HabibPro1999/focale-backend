@@ -17,6 +17,9 @@ import {
   validateAccessSelections,
   reserveAccessSpot,
   releaseAccessSpot,
+  incrementPaidCount,
+  decrementPaidCount,
+  handleCapacityReached,
 } from "@access";
 import { calculatePrice, type PriceBreakdown } from "@pricing";
 import { queueTriggeredEmail } from "@email";
@@ -63,6 +66,50 @@ export {
   listRegistrationEmailLogs,
   searchRegistrantsForSponsorship,
 } from "./registration-queries.js";
+
+// ============================================================================
+// Capacity — Paid Count Sync
+// ============================================================================
+
+const FULLY_SETTLED_STATUSES = ["PAID", "SPONSORED", "WAIVED"];
+
+/**
+ * Sync paidCount on access items when a registration's payment status changes.
+ * Only handles transitions to/from FULLY settled states (PAID/SPONSORED/WAIVED).
+ * PARTIAL is handled separately in sponsorship linking (per covered access item).
+ */
+async function syncPaidCount(
+  tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
+  registration: {
+    eventId: string;
+    accessTypeIds: string[];
+    priceBreakdown: unknown;
+  },
+  oldStatus: string,
+  newStatus: string,
+): Promise<void> {
+  const wasSettled = FULLY_SETTLED_STATUSES.includes(oldStatus);
+  const isSettled = FULLY_SETTLED_STATUSES.includes(newStatus);
+  if (wasSettled === isSettled) return; // No change in settled state
+
+  const breakdown = registration.priceBreakdown as PriceBreakdown;
+  const accessItems = breakdown.accessItems ?? [];
+  if (accessItems.length === 0) return;
+
+  if (!wasSettled && isSettled) {
+    // Becoming fully settled: increment paidCount for all access items
+    for (const item of accessItems) {
+      await incrementPaidCount(item.accessId, item.quantity, tx);
+    }
+    const accessIds = accessItems.map((a) => a.accessId);
+    await handleCapacityReached(registration.eventId, accessIds, tx);
+  } else {
+    // Losing settled status (e.g. refund): decrement paidCount
+    for (const item of accessItems) {
+      await decrementPaidCount(item.accessId, item.quantity, tx);
+    }
+  }
+}
 
 // ============================================================================
 // Helpers
@@ -574,6 +621,19 @@ export async function updateRegistration(
 
     await tx.registration.update({ where: { id }, data: updateData });
 
+    // Sync paid count if payment status changed
+    if (
+      input.paymentStatus !== undefined &&
+      input.paymentStatus !== registration.paymentStatus
+    ) {
+      await syncPaidCount(
+        tx,
+        registration,
+        registration.paymentStatus,
+        input.paymentStatus,
+      );
+    }
+
     // Create audit log if there are changes
     if (Object.keys(changes).length > 0) {
       await auditLog(tx, {
@@ -789,6 +849,19 @@ export async function adminEditRegistration(
 
     await tx.registration.update({ where: { id }, data: updateData });
 
+    // Sync paid count if payment status changed (admin override)
+    if (
+      input.paymentStatus !== undefined &&
+      input.paymentStatus !== registration.paymentStatus
+    ) {
+      await syncPaidCount(
+        tx,
+        { eventId, accessTypeIds: registration.accessTypeIds, priceBreakdown: registration.priceBreakdown },
+        registration.paymentStatus,
+        input.paymentStatus,
+      );
+    }
+
     if (Object.keys(changes).length > 0) {
       await auditLog(tx, {
         entityType: "Registration",
@@ -914,6 +987,15 @@ export async function deleteRegistration(
     if (priceBreakdown.accessItems) {
       for (const item of priceBreakdown.accessItems) {
         await releaseAccessSpot(item.accessId, item.quantity, tx);
+      }
+    }
+
+    // Decrement paid count if registration was settled
+    if (FULLY_SETTLED_STATUSES.includes(registration.paymentStatus)) {
+      if (priceBreakdown.accessItems) {
+        for (const item of priceBreakdown.accessItems) {
+          await decrementPaidCount(item.accessId, item.quantity, tx);
+        }
       }
     }
 

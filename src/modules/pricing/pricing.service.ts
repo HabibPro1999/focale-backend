@@ -276,6 +276,7 @@ export async function calculatePrice(
     sponsorshipTotal,
     total,
     currency,
+    droppedAccessItems: [],
   };
 }
 

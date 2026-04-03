@@ -11,6 +11,12 @@ import { fileTypeFromBuffer } from "file-type";
 import { enrichWithAccessSelections } from "./registration-enrichment.js";
 import type { RegistrationWithRelations } from "./registration-enrichment.js";
 import type { UpdatePaymentInput } from "./registrations.schema.js";
+import {
+  incrementPaidCount,
+  decrementPaidCount,
+  handleCapacityReached,
+} from "@access";
+import type { PriceBreakdown } from "@pricing";
 
 // ============================================================================
 // Payment Status State Machine
@@ -107,6 +113,8 @@ export async function confirmPayment(
         paymentReference: true,
         paymentProofUrl: true,
         totalAmount: true,
+        accessTypeIds: true,
+        priceBreakdown: true,
       },
     });
 
@@ -173,6 +181,31 @@ export async function confirmPayment(
       performedBy: performedBy ?? undefined,
       ipAddress: ipAddress ?? undefined,
     });
+
+    // Sync paid count on access items
+    const FULLY_SETTLED = ["PAID", "SPONSORED", "WAIVED"];
+    const wasSettled = FULLY_SETTLED.includes(oldRegistration.paymentStatus);
+    const isSettled = FULLY_SETTLED.includes(input.paymentStatus);
+    if (wasSettled !== isSettled) {
+      const breakdown = oldRegistration.priceBreakdown as PriceBreakdown;
+      const accessItems = breakdown.accessItems ?? [];
+      if (accessItems.length > 0) {
+        if (!wasSettled && isSettled) {
+          for (const item of accessItems) {
+            await incrementPaidCount(item.accessId, item.quantity, tx);
+          }
+          await handleCapacityReached(
+            oldRegistration.eventId,
+            accessItems.map((a) => a.accessId),
+            tx,
+          );
+        } else {
+          for (const item of accessItems) {
+            await decrementPaidCount(item.accessId, item.quantity, tx);
+          }
+        }
+      }
+    }
 
     // Capture values for post-tx email
     prevStatus = oldRegistration.paymentStatus;

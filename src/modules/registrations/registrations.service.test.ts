@@ -119,6 +119,7 @@ describe("Registrations Service", () => {
       sponsorshipTotal: 0,
       total: 300,
       currency: "TND",
+      droppedAccessItems: [],
       ...overrides,
     };
   }

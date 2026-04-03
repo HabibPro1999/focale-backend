@@ -104,6 +104,15 @@ export const SponsorshipLineSchema = z.object({
   valid: z.boolean(),
 });
 
+export const DroppedAccessItemSchema = z.object({
+  accessId: z.string(),
+  name: z.any(),
+  unitPrice: z.number(),
+  quantity: z.number(),
+  subtotal: z.number(),
+  reason: z.literal("capacity_reached"),
+});
+
 export const PriceBreakdownSchema = z.object({
   basePrice: z.number(),
   appliedRules: z.array(AppliedRuleSchema),
@@ -115,6 +124,7 @@ export const PriceBreakdownSchema = z.object({
   sponsorshipTotal: z.number(),
   total: z.number(),
   currency: z.string(),
+  droppedAccessItems: z.array(DroppedAccessItemSchema).optional().default([]),
 });
 
 // ============================================================================
