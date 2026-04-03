@@ -3,6 +3,12 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import pg from "pg";
 import { config } from "@config/app.config.js";
 
+let _pool: pg.Pool | undefined;
+
+export function getPool(): pg.Pool | undefined {
+  return _pool;
+}
+
 function createPrismaClient() {
   // Create pg Pool with proper configuration
   const pool = new pg.Pool({
@@ -11,6 +17,8 @@ function createPrismaClient() {
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 5000,
   });
+
+  _pool = pool;
 
   const adapter = new PrismaPg(pool);
 
