@@ -40,6 +40,11 @@ function createPrismaClient() {
             return query(args);
           }
 
+          // Skip omit when select is used — Prisma doesn't allow both
+          if ("select" in args) {
+            return query(args);
+          }
+
           if ("omit" in args) {
             args.omit = { createdAt: true, updatedAt: true, ...args.omit };
           } else {
