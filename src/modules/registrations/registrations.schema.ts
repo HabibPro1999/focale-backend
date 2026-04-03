@@ -318,6 +318,7 @@ export const AuditActionSchema = z.enum([
   "PAYMENT_CONFIRMED",
   "PAYMENT_PROOF_UPLOADED",
   "PAYMENT_METHOD_SELECTED",
+  "ACCESS_CAPACITY_REACHED",
 ]);
 
 export const RegistrationAuditLogSchema = z.object({
