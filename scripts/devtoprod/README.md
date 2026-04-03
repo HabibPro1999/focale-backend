@@ -17,6 +17,7 @@ This migration brings the production database in sync with the dev schema and mi
 | `registrations.registration_role` column: new | Additive | Defaults to `PARTICIPANT` |
 | `registrations.reference_number` column: new | Additive | Nullable |
 | `registrations.dropped_access_ids` column: new | Additive | Defaults to `{}` |
+| `event_access.paid_count` column: new | Additive | Defaults to 0, backfilled in Step 5 |
 | `registrations.edit_token_expiry` column: dropped | Destructive | Contains 7 non-null values (not used by any code) |
 
 ### Data migration (handled by `migration.sql`)
@@ -28,6 +29,7 @@ This migration brings the production database in sync with the dev schema and mi
 | Unconfirmed lab claims (AMOMS) | 35 | WAIVED → PENDING | These doctors selected "Lab Sponsorship" as payment method but no actual sponsorship was linked. WAIVED was premature — admin needs to confirm with the lab first. |
 | Sami Hmid anomaly | 1 | PAID → WAIVED | Manually marked PAID by admin with no payment or sponsorship. Treating as admin waiver. |
 | PaymentTransaction backfill | 14 | (new rows) | Creates immutable ledger entries for all existing confirmed bank transfers. |
+| paidCount backfill | ~15 access items | paid_count: 0 → correct | Sets paid_count based on settled registrations. PAID/SPONSORED/WAIVED count all access; PARTIAL counts only coveredAccessIds from sponsorship. |
 | Client modules | 3 | Add `certificates` | Enables the certificates module for all clients. |
 
 ## Production state before migration
@@ -82,6 +84,7 @@ psql "$PROD_URL" -f scripts/devtoprod/migration.sql
 psql "$PROD_URL" -c "SELECT payment_status, COUNT(*) FROM registrations GROUP BY payment_status ORDER BY count DESC;"
 psql "$PROD_URL" -c "SELECT COUNT(*) FROM payment_transaction;"
 psql "$PROD_URL" -c "SELECT COUNT(*) FROM registrations;"  # Must be 581
+psql "$PROD_URL" -c "SELECT ea.name, ea.registered_count, ea.paid_count FROM event_access ea WHERE ea.registered_count > 0 ORDER BY ea.registered_count DESC LIMIT 10;"
 
 # 5. Restore dev env
 cp .env.dev .env
@@ -133,6 +136,9 @@ WHERE id = '62823c18-eb0f-43e2-8860-c653ece49c34';
 
 -- Drop backfilled transactions
 DELETE FROM payment_transaction WHERE note = 'Backfilled from legacy paidAmount';
+
+-- Reset paidCount to 0
+UPDATE event_access SET paid_count = 0;
 ```
 
-Note: The new enum values (PARTIAL, SPONSORED) and tables (payment_transaction, certificate_templates) cannot be easily rolled back via SQL. They are additive and harmless if unused.
+Note: The new enum values (PARTIAL, SPONSORED) and tables (payment_transaction, certificate_templates) cannot be easily rolled back via SQL. They are additive and harmless if unused. The `paid_count` column defaults to 0 and is harmless if not backfilled.

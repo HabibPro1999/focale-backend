@@ -86,7 +86,54 @@ SET enabled_modules = array_append(enabled_modules, 'certificates')
 WHERE NOT ('certificates' = ANY(enabled_modules));
 
 -- ============================================================================
--- STEP 5: Post-migration verification
+-- STEP 5: Backfill paidCount on access items
+-- ============================================================================
+-- paidCount tracks how many settled registrations hold each access item.
+-- Used for capacity enforcement: only settled registrations consume capacity.
+--
+-- Rules:
+--   PAID / SPONSORED / WAIVED → ALL access items count
+--   PARTIAL → only access items in the sponsorship's coveredAccessIds count
+--   PENDING / VERIFYING / REFUNDED → nothing counts
+
+-- 5a. PAID + SPONSORED + WAIVED → all their access items
+WITH settled_access AS (
+  SELECT unnest(r.access_type_ids) AS access_id, 1 AS cnt
+  FROM registrations r
+  WHERE r.payment_status IN ('PAID', 'SPONSORED', 'WAIVED')
+    AND array_length(r.access_type_ids, 1) > 0
+),
+settled_counts AS (
+  SELECT access_id, SUM(cnt) AS total
+  FROM settled_access
+  GROUP BY access_id
+)
+UPDATE event_access ea
+SET paid_count = sc.total
+FROM settled_counts sc
+WHERE ea.id = sc.access_id;
+
+-- 5b. PARTIAL → only coveredAccessIds from linked sponsorships
+WITH partial_covered AS (
+  SELECT unnest(s.covered_access_ids) AS access_id, 1 AS cnt
+  FROM sponsorship_usages su
+  JOIN sponsorships s ON su.sponsorship_id = s.id
+  JOIN registrations r ON su.registration_id = r.id
+  WHERE r.payment_status = 'PARTIAL'
+    AND array_length(s.covered_access_ids, 1) > 0
+),
+partial_counts AS (
+  SELECT access_id, SUM(cnt) AS total
+  FROM partial_covered
+  GROUP BY access_id
+)
+UPDATE event_access ea
+SET paid_count = ea.paid_count + pc.total
+FROM partial_counts pc
+WHERE ea.id = pc.access_id;
+
+-- ============================================================================
+-- STEP 6: Post-migration verification
 -- ============================================================================
 
 -- Run these queries to verify:
@@ -107,6 +154,13 @@ WHERE NOT ('certificates' = ANY(enabled_modules));
 -- PaymentTransaction backfill:
 --   SELECT COUNT(*) FROM payment_transaction;
 --   Expected: 14 (one per confirmed bank payment)
+--
+-- paidCount spot check (top AMGLS workshops):
+--   SELECT ea.name, ea.registered_count, ea.paid_count
+--   FROM event_access ea JOIN events e ON ea.event_id = e.id
+--   WHERE ea.registered_count > 0 ORDER BY ea.registered_count DESC LIMIT 10;
+--   Vertiges:  registered=195, paid_count≈115
+--   HTA:       registered=174, paid_count≈107
 --
 -- Zero amount_due for settled registrations:
 --   SELECT COUNT(*) FROM registrations
