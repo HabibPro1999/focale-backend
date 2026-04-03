@@ -3,6 +3,7 @@ import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { logger } from "@shared/utils/logger.js";
 import { auditLog } from "@shared/utils/audit.js";
+import { calculateSettlement } from "@shared/utils/settlement.js";
 import {
   calculateApplicableAmount,
   detectCoverageOverlap,
@@ -74,6 +75,7 @@ async function unlinkSponsorshipFromRegistrationInternal(
     where: { id: registrationId },
     select: {
       sponsorshipAmount: true,
+      paidAmount: true,
       paymentMethod: true,
       paymentStatus: true,
       totalAmount: true,
@@ -98,23 +100,31 @@ async function unlinkSponsorshipFromRegistrationInternal(
 
   const newSponsorshipAmount = calculateTotalSponsorshipAmount(remainingUsages);
 
-  // Determine if paymentStatus should revert (was fully sponsored, now isn't)
-  const wasFullySponsored =
-    (registrationBefore?.sponsorshipAmount ?? 0) >=
-    (registrationBefore?.totalAmount ?? 0);
-  const isNoLongerFullySponsored =
-    newSponsorshipAmount < (registrationBefore?.totalAmount ?? 0);
-  const shouldRevertPayment =
-    wasFullySponsored &&
-    isNoLongerFullySponsored &&
-    registrationBefore?.paymentStatus === "PAID";
+  // Determine new payment status after unlink
+  const paidAmount = registrationBefore?.paidAmount ?? 0;
+  const totalAmount = registrationBefore?.totalAmount ?? 0;
+  const currentStatus = registrationBefore?.paymentStatus ?? "PENDING";
+
+  let nextStatus: string | undefined;
+  // Only auto-transition from SPONSORED (fully covered by sponsorship)
+  if (currentStatus === "SPONSORED" && newSponsorshipAmount < totalAmount) {
+    if (paidAmount > 0 || newSponsorshipAmount > 0) {
+      nextStatus = "PARTIAL";
+    } else {
+      nextStatus = "PENDING";
+    }
+  }
 
   await tx.registration.update({
     where: { id: registrationId },
     data: {
       sponsorshipAmount: newSponsorshipAmount,
       ...(newSponsorshipAmount === 0 && { paymentMethod: null }),
-      ...(shouldRevertPayment && { paymentStatus: "PENDING", paidAt: null }),
+      ...(nextStatus !== undefined && {
+        paymentStatus: nextStatus as "PARTIAL" | "PENDING",
+        // Only clear paidAt if no payment has been made
+        ...(paidAmount === 0 && { paidAt: null }),
+      }),
     },
   });
 
@@ -332,6 +342,7 @@ export async function linkSponsorshipToRegistration(
         id: true,
         eventId: true,
         totalAmount: true,
+        paidAmount: true,
         baseAmount: true,
         accessTypeIds: true,
         priceBreakdown: true,
@@ -456,7 +467,9 @@ export async function linkSponsorshipToRegistration(
       select: { amountApplied: true },
     });
 
-    const newSponsorshipAmount = calculateTotalSponsorshipAmount(allUsages);
+    // Cap sponsorship amount at totalAmount to prevent over-sponsoring
+    const rawSponsorshipAmount = calculateTotalSponsorshipAmount(allUsages);
+    const newSponsorshipAmount = Math.min(rawSponsorshipAmount, registration.totalAmount);
 
     // Update registration sponsorship amount and paymentMethod
     const isFullySponsored = newSponsorshipAmount >= registration.totalAmount;
@@ -465,11 +478,12 @@ export async function linkSponsorshipToRegistration(
       data: {
         sponsorshipAmount: newSponsorshipAmount,
         paymentMethod: "LAB_SPONSORSHIP",
-        // Auto-mark as PAID inside the transaction to prevent race conditions
-        // where concurrent links could both read "not yet paid" and double-process
+        // Fully sponsored → SPONSORED; partially → PARTIAL
         ...(isFullySponsored
-          ? { paymentStatus: "PAID", paidAt: new Date() }
-          : {}),
+          ? { paymentStatus: "SPONSORED", paidAt: new Date() }
+          : newSponsorshipAmount > 0
+            ? { paymentStatus: "PARTIAL" }
+            : {}),
       },
     });
 
@@ -504,7 +518,11 @@ export async function linkSponsorshipToRegistration(
       registration: {
         totalAmount: registration.totalAmount,
         sponsorshipAmount: newSponsorshipAmount,
-        amountDue: Math.max(0, registration.totalAmount - newSponsorshipAmount),
+        amountDue: calculateSettlement({
+          totalAmount: registration.totalAmount,
+          paidAmount: registration.paidAmount,
+          sponsorshipAmount: newSponsorshipAmount,
+        }).amountDue,
       },
       warnings,
     };

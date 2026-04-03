@@ -117,7 +117,7 @@ export const ListEmailTemplatesQuerySchema = z
 export const BulkSendFilterSchema = z
   .strictObject({
     paymentStatus: z
-      .array(z.enum(["PENDING", "PAID", "REFUNDED", "WAIVED"]))
+      .array(z.enum(["PENDING", "VERIFYING", "PARTIAL", "PAID", "SPONSORED", "WAIVED", "REFUNDED"]))
       .optional(),
     accessTypeIds: z.array(z.string().uuid()).optional(),
   });

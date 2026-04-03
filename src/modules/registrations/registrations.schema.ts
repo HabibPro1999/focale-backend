@@ -8,9 +8,18 @@ import { AccessSelectionSchema } from "@access";
 export const PaymentStatusSchema = z.enum([
   "PENDING",
   "VERIFYING",
+  "PARTIAL",
   "PAID",
-  "REFUNDED",
+  "SPONSORED",
   "WAIVED",
+  "REFUNDED",
+]);
+
+export const TransactionTypeSchema = z.enum([
+  "PAYMENT",
+  "REFUND",
+  "WAIVER",
+  "ADJUSTMENT",
 ]);
 
 export const PaymentMethodSchema = z.enum([

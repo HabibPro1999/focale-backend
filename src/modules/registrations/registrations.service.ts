@@ -40,6 +40,7 @@ import {
   type RegistrationWithRelations,
 } from "./registration-enrichment.js";
 import { validatePaymentTransition } from "./registration-payment.js";
+import { calculateSettlement } from "@shared/utils/settlement.js";
 
 // ============================================================================
 // Re-exports — routes and barrel consume these from this file
@@ -177,8 +178,7 @@ export async function createRegistration(
         lastName: lastName ?? null,
         phone: phone ?? null,
         referenceNumber: generateReferenceNumber(),
-        paymentStatus:
-          paymentMethod === "LAB_SPONSORSHIP" ? "WAIVED" : "PENDING",
+        paymentStatus: "PENDING",
         paymentMethod: paymentMethod ?? null,
         labName: paymentMethod === "LAB_SPONSORSHIP" ? (labName ?? null) : null,
         totalAmount: priceBreakdown.total,
@@ -354,10 +354,9 @@ export async function createAdminRegistration(
       throw new AppError("Event is at capacity", 409, ErrorCodes.EVENT_FULL);
     }
 
-    // Determine payment status: explicit override > method-derived > PENDING
-    const resolvedPaymentStatus =
-      paymentStatus ??
-      (paymentMethod === "LAB_SPONSORSHIP" ? "WAIVED" : "PENDING");
+    // Determine payment status: explicit override > PENDING
+    // LAB_SPONSORSHIP no longer auto-sets WAIVED; admin can explicitly set WAIVED for true waivers
+    const resolvedPaymentStatus = paymentStatus ?? "PENDING";
 
     const createdReg = await tx.registration.create({
       data: {
@@ -520,7 +519,7 @@ export async function updateRegistration(
       updateData.paymentStatus = input.paymentStatus;
       // Set paidAt when payment is confirmed
       if (
-        (input.paymentStatus === "PAID" || input.paymentStatus === "WAIVED") &&
+        (input.paymentStatus === "PAID" || input.paymentStatus === "SPONSORED" || input.paymentStatus === "WAIVED") &&
         !registration.paidAt
       ) {
         updateData.paidAt = new Date();
@@ -675,7 +674,7 @@ export async function adminEditRegistration(
         new: input.paymentStatus,
       };
       if (
-        (input.paymentStatus === "PAID" || input.paymentStatus === "WAIVED") &&
+        (input.paymentStatus === "PAID" || input.paymentStatus === "SPONSORED" || input.paymentStatus === "WAIVED") &&
         !registration.paidAt
       ) {
         updateData.paidAt = new Date();
@@ -1129,9 +1128,11 @@ export async function getRegistrationForEdit(
     restrictions.push("Payment proof is under review");
   }
 
-  // PAID or paidAmount > 0 → cannot remove access (can still add)
+  // PAID/SPONSORED or paidAmount > 0 → cannot remove access (can still add)
   const isPaid =
-    registration.paymentStatus === "PAID" || registration.paidAmount > 0;
+    registration.paymentStatus === "PAID" ||
+    registration.paymentStatus === "SPONSORED" ||
+    registration.paidAmount > 0;
   if (isPaid) {
     canRemoveAccess = false;
     restrictions.push("Cannot remove access items (payment received)");
@@ -1159,11 +1160,12 @@ export async function getRegistrationForEdit(
     );
   }
 
-  // Compute amount due
-  const amountDue = Math.max(
-    0,
-    registration.totalAmount - registration.paidAmount,
-  );
+  // Compute amount due (includes both paidAmount and sponsorshipAmount)
+  const { amountDue } = calculateSettlement({
+    totalAmount: registration.totalAmount,
+    paidAmount: registration.paidAmount,
+    sponsorshipAmount: registration.sponsorshipAmount,
+  });
 
   return {
     registration: enrichedRegistration as RegistrationForEdit,

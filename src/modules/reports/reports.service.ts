@@ -106,7 +106,7 @@ async function getFinancialSummary(
     by: ["currency"],
     where: {
       ...where,
-      paymentStatus: { in: ["PENDING", "VERIFYING"] },
+      paymentStatus: { in: ["PENDING", "VERIFYING", "PARTIAL"] },
     },
     _sum: {
       totalAmount: true,
@@ -394,6 +394,8 @@ export async function getEventAnalytics(
       paid: paymentMap.get("PAID") ?? 0,
       verifying: paymentMap.get("VERIFYING") ?? 0,
       pending: paymentMap.get("PENDING") ?? 0,
+      partial: paymentMap.get("PARTIAL") ?? 0,
+      sponsored: paymentMap.get("SPONSORED") ?? 0,
       waived: paymentMap.get("WAIVED") ?? 0,
       refunded: paymentMap.get("REFUNDED") ?? 0,
     },

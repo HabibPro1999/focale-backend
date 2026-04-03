@@ -53,25 +53,27 @@ export async function generateEventSummary(
     }
   }
 
-  // WAIVED is treated as a confirmed terminal state (e.g. speakers, VIPs)
+  // Confirmed = PAID, SPONSORED, or WAIVED (admin waiver for speakers/VIPs)
   const paidOnly = registrations.filter(
     (r) => r.paymentStatus === "PAID" && !sponsoredRegIds.has(r.id),
   );
   const sponsoredOnly = registrations.filter(
     (r) =>
-      r.paymentStatus !== "PAID" &&
-      r.paymentStatus !== "WAIVED" &&
-      sponsoredRegIds.has(r.id),
+      r.paymentStatus === "SPONSORED" ||
+      (r.paymentStatus !== "PAID" &&
+        r.paymentStatus !== "WAIVED" &&
+        sponsoredRegIds.has(r.id)),
   );
   const paidAndSponsored = registrations.filter(
     (r) => r.paymentStatus === "PAID" && sponsoredRegIds.has(r.id),
   );
   const waivedOnly = registrations.filter(
-    (r) => r.paymentStatus === "WAIVED" && !sponsoredRegIds.has(r.id),
+    (r) => r.paymentStatus === "WAIVED",
   );
   const confirmed = registrations.filter(
     (r) =>
       r.paymentStatus === "PAID" ||
+      r.paymentStatus === "SPONSORED" ||
       r.paymentStatus === "WAIVED" ||
       sponsoredRegIds.has(r.id),
   );

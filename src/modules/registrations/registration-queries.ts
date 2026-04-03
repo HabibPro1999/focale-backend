@@ -151,7 +151,7 @@ export async function searchRegistrantsForSponsorship(
 
   // Filter to unpaid only if requested
   if (unpaidOnly) {
-    where.paymentStatus = { in: ["PENDING", "VERIFYING"] };
+    where.paymentStatus = { in: ["PENDING", "VERIFYING", "PARTIAL"] };
   }
 
   const registrations = await prisma.registration.findMany({

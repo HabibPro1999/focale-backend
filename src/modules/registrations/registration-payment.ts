@@ -17,10 +17,12 @@ import type { UpdatePaymentInput } from "./registrations.schema.js";
 // ============================================================================
 
 const PAYMENT_STATUS_TRANSITIONS: Record<string, string[]> = {
-  PENDING: ["VERIFYING", "PAID", "WAIVED", "REFUNDED"],
-  VERIFYING: ["PAID", "PENDING", "REFUNDED"], // Can confirm, reject (back to PENDING), or refund
+  PENDING: ["VERIFYING", "PARTIAL", "PAID", "SPONSORED", "WAIVED", "REFUNDED"],
+  VERIFYING: ["PAID", "PENDING", "REFUNDED"],
+  PARTIAL: ["PAID", "SPONSORED", "REFUNDED"],
   PAID: ["REFUNDED"],
-  WAIVED: ["REFUNDED"],
+  SPONSORED: ["PARTIAL", "REFUNDED"],
+  WAIVED: ["PENDING", "REFUNDED"],
   REFUNDED: [], // Terminal state
 };
 
@@ -113,7 +115,7 @@ export async function confirmPayment(
           input.paymentReference ?? oldRegistration.paymentReference,
         paymentProofUrl:
           input.paymentProofUrl ?? oldRegistration.paymentProofUrl,
-        ...(newStatus === "PAID" || newStatus === "WAIVED"
+        ...(newStatus === "PAID" || newStatus === "SPONSORED" || newStatus === "WAIVED"
           ? { paidAt: new Date() }
           : {}),
       },
@@ -417,10 +419,9 @@ export async function selectPaymentMethod(
       );
     }
 
-    const nextPaymentStatus =
-      input.paymentMethod === "LAB_SPONSORSHIP" ? "WAIVED" : "PENDING";
-
-    validatePaymentTransition(registration.paymentStatus, nextPaymentStatus);
+    // LAB_SPONSORSHIP stays PENDING (sponsorship linking happens separately)
+    // CASH also stays PENDING (payment confirmation happens separately)
+    const nextPaymentStatus = "PENDING";
 
     const changes: Record<string, { old: unknown; new: unknown }> = {
       paymentMethod: {
@@ -428,13 +429,6 @@ export async function selectPaymentMethod(
         new: input.paymentMethod,
       },
     };
-
-    if (nextPaymentStatus !== registration.paymentStatus) {
-      changes.paymentStatus = {
-        old: registration.paymentStatus,
-        new: nextPaymentStatus,
-      };
-    }
 
     const nextLabName =
       input.paymentMethod === "LAB_SPONSORSHIP"
@@ -453,9 +447,6 @@ export async function selectPaymentMethod(
         paymentMethod: input.paymentMethod,
         paymentStatus: nextPaymentStatus,
         labName: nextLabName,
-        ...(nextPaymentStatus === "WAIVED" && !registration.paidAt
-          ? { paidAt: new Date() }
-          : {}),
       },
     });
 

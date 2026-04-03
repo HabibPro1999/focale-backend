@@ -5,6 +5,7 @@
 
 import { prisma } from "@/database/client.js";
 import { config } from "@config/app.config.js";
+import { calculateSettlement } from "@shared/utils/settlement.js";
 import type { EmailContext, RegistrationWithRelations } from "./email.types.js";
 import { escapeHtml } from "./email-renderer.service.js";
 
@@ -58,9 +59,11 @@ export function buildEmailContext(
     ),
     paidAmount: formatCurrency(registration.paidAmount, registration.currency),
     amountDue: formatCurrency(
-      registration.totalAmount -
-        (registration.sponsorshipAmount || 0) -
-        registration.paidAmount,
+      calculateSettlement({
+        totalAmount: registration.totalAmount,
+        paidAmount: registration.paidAmount,
+        sponsorshipAmount: registration.sponsorshipAmount ?? 0,
+      }).amountDue,
       registration.currency,
     ),
     paymentStatus: formatPaymentStatus(registration.paymentStatus),
@@ -266,9 +269,11 @@ function formatPaymentStatus(status: string): string {
   const statusMap: Record<string, string> = {
     PENDING: "Pending",
     VERIFYING: "Verifying payment",
+    PARTIAL: "Partially paid",
     PAID: "Confirmed",
-    REFUNDED: "Refunded",
+    SPONSORED: "Sponsored",
     WAIVED: "Waived",
+    REFUNDED: "Refunded",
   };
   return statusMap[status] || status;
 }
@@ -484,9 +489,12 @@ export function buildLinkedSponsorshipContext(
     }
   }
 
-  // Calculate remaining
-  const remainingAmount =
-    registration.totalAmount - registration.sponsorshipAmount;
+  // Calculate remaining using consistent settlement logic
+  const { amountDue: remainingAmount } = calculateSettlement({
+    totalAmount: registration.totalAmount,
+    paidAmount: 0, // linked sponsorship context doesn't track paidAmount
+    sponsorshipAmount: registration.sponsorshipAmount,
+  });
 
   // Build links
   const baseUrl =

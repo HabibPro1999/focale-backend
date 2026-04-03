@@ -368,11 +368,13 @@ model SponsorshipUsage {
 // ============================================================================
 
 enum PaymentStatus {
-  PENDING
-  VERIFYING // Payment proof submitted, awaiting admin review
-  PAID
-  REFUNDED
-  WAIVED
+  PENDING    // Owes money, no action taken
+  VERIFYING  // Payment proof submitted, awaiting admin review
+  PARTIAL    // Some coverage (cash and/or sponsorship), still owes remainder
+  PAID       // Fully settled via payment (cash, bank, online)
+  SPONSORED  // Fully settled via sponsorship code(s)
+  WAIVED     // Admin waiver (speakers, VIPs, free pass)
+  REFUNDED   // Terminal — money returned
 }
 
 enum PaymentMethod {
@@ -463,10 +465,11 @@ model Registration {
   accessTypeIds String[] @default([]) @map("access_type_ids")
 
   // Relations
-  form              Form               @relation(fields: [formId], references: [id], onDelete: Restrict)
-  event             Event              @relation(fields: [eventId], references: [id])
+  form              Form                 @relation(fields: [formId], references: [id], onDelete: Restrict)
+  event             Event                @relation(fields: [eventId], references: [id])
   emailLogs         EmailLog[]
   sponsorshipUsages SponsorshipUsage[]
+  transactions      PaymentTransaction[]
 
   @@unique([email, formId])
   @@index([eventId, paymentStatus])
@@ -477,6 +480,34 @@ model Registration {
   @@index([sponsorshipCode])
   @@index([paymentStatus, updatedAt]) // For queue/batch processing
   @@map("registrations")
+}
+
+// ============================================================================
+// PAYMENT TRANSACTIONS
+// ============================================================================
+
+model PaymentTransaction {
+  id              String          @id @default(uuid())
+  registrationId  String          @map("registration_id")
+  type            TransactionType
+  amount          Int
+  method          PaymentMethod?
+  reference       String?
+  note            String?
+  performedBy     String?         @map("performed_by")
+  createdAt       DateTime        @default(now()) @map("created_at")
+
+  registration    Registration    @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+
+  @@index([registrationId])
+  @@map("payment_transaction")
+}
+
+enum TransactionType {
+  PAYMENT
+  REFUND
+  WAIVER
+  ADJUSTMENT
 }
 
 // ============================================================================

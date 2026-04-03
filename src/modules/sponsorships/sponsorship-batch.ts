@@ -489,8 +489,10 @@ async function createLinkedModeSponsorships(
       },
     });
 
-    const updatedSponsorshipAmount =
-      registration.sponsorshipAmount + applicableAmount;
+    const updatedSponsorshipAmount = Math.min(
+      registration.sponsorshipAmount + applicableAmount,
+      registration.totalAmount,
+    );
     const isFullySponsored =
       updatedSponsorshipAmount >= registration.totalAmount;
 
@@ -499,9 +501,12 @@ async function createLinkedModeSponsorships(
       data: {
         sponsorshipAmount: updatedSponsorshipAmount,
         paymentMethod: "LAB_SPONSORSHIP",
+        // Fully sponsored → SPONSORED; partially → PARTIAL
         ...(isFullySponsored
-          ? { paymentStatus: "PAID", paidAt: new Date() }
-          : {}),
+          ? { paymentStatus: "SPONSORED", paidAt: new Date() }
+          : updatedSponsorshipAmount > 0
+            ? { paymentStatus: "PARTIAL" }
+            : {}),
       },
     });
 

@@ -32,6 +32,8 @@ export const EventAnalyticsResponseSchema = z.object({
     paid: z.number(),
     verifying: z.number(),
     pending: z.number(),
+    partial: z.number(),
+    sponsored: z.number(),
     waived: z.number(),
     refunded: z.number(),
   }),
