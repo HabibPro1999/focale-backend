@@ -11,10 +11,25 @@
 BEGIN;
 
 -- ============================================================================
+-- STEP 0: Idempotency guard — abort if already migrated
+-- ============================================================================
+
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM registrations WHERE payment_status = 'SPONSORED' LIMIT 1) THEN
+    RAISE EXCEPTION 'Migration already applied — aborting to prevent double-run';
+  END IF;
+  IF EXISTS (SELECT 1 FROM registrations WHERE payment_status = 'PARTIAL' LIMIT 1) THEN
+    RAISE EXCEPTION 'Migration already applied — aborting to prevent double-run';
+  END IF;
+  IF EXISTS (SELECT 1 FROM payment_transaction LIMIT 1) THEN
+    RAISE EXCEPTION 'PaymentTransaction table already has data — aborting to prevent duplicate backfill';
+  END IF;
+END $$;
+
+-- ============================================================================
 -- STEP 1: Verify pre-migration state
 -- ============================================================================
 
--- Expected: 581 total registrations
 -- SELECT COUNT(*) FROM registrations;
 -- SELECT payment_status, COUNT(*) FROM registrations GROUP BY payment_status;
 
