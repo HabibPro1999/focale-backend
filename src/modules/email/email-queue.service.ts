@@ -56,8 +56,8 @@ const STATUS_RANK: Record<string, number> = {
   CLICKED: 5,
 };
 
-/** Terminal statuses that cannot be overwritten */
-const TERMINAL_STATUSES = new Set(["BOUNCED", "DROPPED", "FAILED", "COMPLAINED"]);
+/** Terminal statuses that cannot be overwritten — must match EmailStatus enum in schema.prisma */
+const TERMINAL_STATUSES = new Set(["BOUNCED", "DROPPED", "FAILED"]);
 
 // =============================================================================
 // QUEUE EMAIL
