@@ -889,7 +889,7 @@ describe("Access Service", () => {
       const result = await getGroupedAccess(eventId, {}, []);
 
       const scheduledItems = result.groups.flatMap((g) =>
-        g.slots.flatMap((s) => s.items),
+        g.slots.flatMap((s) => s.items as { id: string }[]),
       );
       // Full items should not appear
       expect(scheduledItems.find((i) => i.id === "full-1")).toBeUndefined();
