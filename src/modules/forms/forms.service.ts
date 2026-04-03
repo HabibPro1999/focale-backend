@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { isDeepStrictEqual } from "node:util";
 import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
@@ -259,10 +260,7 @@ export async function updateForm(
 
   // Check if schema is being updated and has actually changed
   if (input.schema !== undefined) {
-    const currentSchemaStr = JSON.stringify(form.schema);
-    const newSchemaStr = JSON.stringify(input.schema);
-
-    if (currentSchemaStr !== newSchemaStr) {
+    if (!isDeepStrictEqual(form.schema, input.schema)) {
       // For SPONSOR forms, validate sponsorship mode changes
       if (form.type === "SPONSOR") {
         const currentSchema = form.schema as unknown as {
