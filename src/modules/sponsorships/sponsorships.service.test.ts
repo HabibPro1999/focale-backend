@@ -367,6 +367,253 @@ describe("Sponsorships Service", () => {
       ],
     };
 
+    // ------------------------------------------------------------------
+    // M11: Linked-mode batch creation tests
+    // ------------------------------------------------------------------
+
+    describe("createSponsorshipBatch - linked mode", () => {
+      const linkedInput = {
+        sponsor: {
+          labName: "Linked Lab",
+          contactName: "Jane Sponsor",
+          email: "sponsor@lab.com",
+          phone: "+1111111111",
+        },
+        customFields: {},
+        linkedBeneficiaries: [] as {
+          registrationId: string;
+          name: string;
+          email: string;
+          coversBasePrice: boolean;
+          coveredAccessIds: string[];
+        }[],
+      };
+
+      it("should create PENDING sponsorships with linked beneficiaries (no auto-approve)", async () => {
+        const registrationId = faker.string.uuid();
+        const mockEvent = createMockEvent({ id: eventId });
+        const mockForm = createMockForm({
+          id: formId,
+          eventId,
+          type: "SPONSOR",
+        });
+        const mockBatch = createMockSponsorshipBatch({
+          id: batchId,
+          eventId,
+          formId,
+        });
+        const mockSponsorship = createMockSponsorship({
+          eventId,
+          batchId,
+          status: "PENDING",
+          targetRegistrationId: registrationId,
+        });
+
+        const input = {
+          ...linkedInput,
+          linkedBeneficiaries: [
+            {
+              registrationId,
+              name: "Dr. Beneficiary",
+              email: "beneficiary@hospital.com",
+              coversBasePrice: true,
+              coveredAccessIds: [],
+            },
+          ],
+        };
+
+        prismaMock.event.findUnique.mockResolvedValue(mockEvent);
+        prismaMock.form.findFirst.mockResolvedValue(mockForm);
+        prismaMock.registration.findMany.mockResolvedValue(
+          asMock([
+            {
+              id: registrationId,
+              email: "beneficiary@hospital.com",
+              firstName: "Dr.",
+              lastName: "Beneficiary",
+              phone: null,
+              totalAmount: 300,
+              sponsorshipAmount: 0,
+              baseAmount: 300,
+              accessTypeIds: [],
+              priceBreakdown: { calculatedBasePrice: 300, accessItems: [] },
+              linkBaseUrl: null,
+              editToken: null,
+            },
+          ]),
+        );
+
+        prismaMock.$transaction.mockImplementation(async (fn: TxCallback) => {
+          const txMock = {
+            sponsorshipBatch: { create: vi.fn().mockResolvedValue(mockBatch) },
+            sponsorship: {
+              create: vi.fn().mockResolvedValue(mockSponsorship),
+              findUnique: vi.fn().mockResolvedValue(null),
+            },
+            form: {
+              findUnique: vi.fn().mockResolvedValue({
+                schema: {
+                  sponsorshipSettings: { autoApproveSponsorship: false },
+                },
+              }),
+            },
+            eventPricing: {
+              findUnique: vi
+                .fn()
+                .mockResolvedValue({ basePrice: 300, currency: "TND" }),
+            },
+            eventAccess: { findMany: vi.fn().mockResolvedValue([]) },
+          };
+          return fn(txMock);
+        });
+
+        const result = await createSponsorshipBatch(eventId, formId, input);
+
+        expect(result.batchId).toBe(batchId);
+        expect(result.count).toBe(1);
+      });
+
+      it("should auto-create USED sponsorships and link when autoApproveSponsorship is true", async () => {
+        const registrationId = faker.string.uuid();
+        const mockEvent = createMockEvent({ id: eventId });
+        const mockForm = createMockForm({
+          id: formId,
+          eventId,
+          type: "SPONSOR",
+        });
+        const mockBatch = createMockSponsorshipBatch({
+          id: batchId,
+          eventId,
+          formId,
+        });
+        const mockSponsorship = createMockSponsorship({
+          eventId,
+          batchId,
+          status: "USED",
+        });
+
+        const input = {
+          ...linkedInput,
+          linkedBeneficiaries: [
+            {
+              registrationId,
+              name: "Dr. AutoApproved",
+              email: "auto@hospital.com",
+              coversBasePrice: true,
+              coveredAccessIds: [],
+            },
+          ],
+        };
+
+        prismaMock.event.findUnique.mockResolvedValue(mockEvent);
+        prismaMock.form.findFirst.mockResolvedValue(mockForm);
+        prismaMock.registration.findMany.mockResolvedValue(
+          asMock([
+            {
+              id: registrationId,
+              email: "auto@hospital.com",
+              firstName: "Dr.",
+              lastName: "AutoApproved",
+              phone: null,
+              totalAmount: 300,
+              sponsorshipAmount: 0,
+              baseAmount: 300,
+              accessTypeIds: [],
+              priceBreakdown: { calculatedBasePrice: 300, accessItems: [] },
+              linkBaseUrl: null,
+              editToken: null,
+            },
+          ]),
+        );
+
+        const txSponsorshipCreate = vi.fn().mockResolvedValue(mockSponsorship);
+        const txUsageCreate = vi
+          .fn()
+          .mockResolvedValue({ id: faker.string.uuid() });
+        const txRegistrationUpdate = vi.fn().mockResolvedValue({});
+
+        prismaMock.$transaction.mockImplementation(async (fn: TxCallback) => {
+          const txMock = {
+            sponsorshipBatch: { create: vi.fn().mockResolvedValue(mockBatch) },
+            sponsorship: {
+              create: txSponsorshipCreate,
+              findUnique: vi.fn().mockResolvedValue(null),
+            },
+            sponsorshipUsage: {
+              create: txUsageCreate,
+            },
+            registration: {
+              update: txRegistrationUpdate,
+            },
+            form: {
+              findUnique: vi.fn().mockResolvedValue({
+                schema: {
+                  sponsorshipSettings: { autoApproveSponsorship: true },
+                },
+              }),
+            },
+            eventPricing: {
+              findUnique: vi
+                .fn()
+                .mockResolvedValue({ basePrice: 300, currency: "TND" }),
+            },
+            eventAccess: { findMany: vi.fn().mockResolvedValue([]) },
+          };
+          return fn(txMock);
+        });
+
+        const result = await createSponsorshipBatch(eventId, formId, input);
+
+        expect(result.count).toBe(1);
+        expect(txSponsorshipCreate).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({ status: "USED" }),
+          }),
+        );
+        expect(txUsageCreate).toHaveBeenCalled();
+        expect(txRegistrationUpdate).toHaveBeenCalled();
+      });
+
+      it("should throw NOT_FOUND when a linked registration does not exist", async () => {
+        const missingRegistrationId = faker.string.uuid();
+        const mockEvent = createMockEvent({ id: eventId });
+        const mockForm = createMockForm({
+          id: formId,
+          eventId,
+          type: "SPONSOR",
+        });
+
+        const input = {
+          ...linkedInput,
+          linkedBeneficiaries: [
+            {
+              registrationId: missingRegistrationId,
+              name: "Dr. Missing",
+              email: "missing@hospital.com",
+              coversBasePrice: true,
+              coveredAccessIds: [],
+            },
+          ],
+        };
+
+        prismaMock.event.findUnique.mockResolvedValue(mockEvent);
+        prismaMock.form.findFirst.mockResolvedValue(mockForm);
+        // Returns empty — registration not found
+        prismaMock.registration.findMany.mockResolvedValue([]);
+
+        await expect(
+          createSponsorshipBatch(eventId, formId, input),
+        ).rejects.toThrow(AppError);
+
+        await expect(
+          createSponsorshipBatch(eventId, formId, input),
+        ).rejects.toMatchObject({
+          statusCode: 404,
+          code: ErrorCodes.NOT_FOUND,
+        });
+      });
+    });
+
     it("should create batch with sponsorships successfully", async () => {
       const mockEvent = createMockEvent({ id: eventId });
       const mockForm = createMockForm({ id: formId, eventId, type: "SPONSOR" });
@@ -719,13 +966,21 @@ describe("Sponsorships Service", () => {
         usages: [],
       };
 
-      // First call: initial findUnique for update check
-      // Second call: getSponsorshipById at the end
-      prismaMock.sponsorship.findUnique
-        .mockResolvedValueOnce(mockSponsorship)
-        .mockResolvedValueOnce(updatedSponsorship);
-      prismaMock.sponsorship.update.mockResolvedValue(updatedSponsorship);
+      // getSponsorshipById call at the end
+      prismaMock.sponsorship.findUnique.mockResolvedValueOnce(
+        updatedSponsorship,
+      );
       prismaMock.eventAccess.findMany.mockResolvedValue([]);
+      prismaMock.$transaction.mockImplementation(async (fn: TxCallback) => {
+        const txMock = {
+          sponsorship: {
+            findUnique: vi.fn().mockResolvedValue(mockSponsorship),
+            update: vi.fn().mockResolvedValue(updatedSponsorship),
+          },
+          auditLog: { create: vi.fn().mockResolvedValue({}) },
+        };
+        return fn(txMock);
+      });
 
       const result = await updateSponsorship(sponsorshipId, {
         beneficiaryName: "New Name",
@@ -748,28 +1003,29 @@ describe("Sponsorships Service", () => {
       const mockPricing = createMockEventPricing({ eventId, basePrice: 200 });
       const mockAccess = createMockEventAccess({ id: accessId, price: 50 });
 
-      prismaMock.sponsorship.findUnique
-        .mockResolvedValueOnce(asMock(mockSponsorship))
-        .mockResolvedValueOnce(
-          asMock({
-            ...mockSponsorship,
-            coveredAccessIds: [accessId],
-            batch: createMockSponsorshipBatch({ eventId }),
-            usages: [],
-          }),
-        );
-      prismaMock.eventPricing.findUnique.mockResolvedValue(mockPricing);
-      prismaMock.eventAccess.findMany.mockResolvedValue([mockAccess]);
+      prismaMock.sponsorship.findUnique.mockResolvedValueOnce(
+        asMock({
+          ...mockSponsorship,
+          coveredAccessIds: [accessId],
+          batch: createMockSponsorshipBatch({ eventId }),
+          usages: [],
+        }),
+      );
 
-      // updateSponsorship now wraps sponsorship.update + recalculateUsageAmounts in a
-      // transaction. Mock $transaction to call through with a txMock so we can assert
-      // on the update call that happens inside it.
       const txUpdate = vi.fn().mockResolvedValue({
         ...mockSponsorship,
         coveredAccessIds: [accessId],
       });
       prismaMock.$transaction.mockImplementation(async (fn: TxCallback) => {
-        const txMock = { sponsorship: { update: txUpdate } };
+        const txMock = {
+          sponsorship: {
+            findUnique: vi.fn().mockResolvedValue(mockSponsorship),
+            update: txUpdate,
+          },
+          eventPricing: { findUnique: vi.fn().mockResolvedValue(mockPricing) },
+          eventAccess: { findMany: vi.fn().mockResolvedValue([mockAccess]) },
+          auditLog: { create: vi.fn().mockResolvedValue({}) },
+        };
         return fn(txMock as never);
       });
 
@@ -785,11 +1041,133 @@ describe("Sponsorships Service", () => {
     });
 
     it("should throw when sponsorship not found", async () => {
-      prismaMock.sponsorship.findUnique.mockResolvedValue(null);
+      prismaMock.$transaction.mockImplementation(async (fn: TxCallback) => {
+        const txMock = {
+          sponsorship: { findUnique: vi.fn().mockResolvedValue(null) },
+        };
+        return fn(txMock as never);
+      });
 
       await expect(
         updateSponsorship("non-existent", { beneficiaryName: "Test" }),
       ).rejects.toThrow(AppError);
+    });
+
+    // ------------------------------------------------------------------
+    // M12: recalculateUsageAmounts coverage
+    // ------------------------------------------------------------------
+
+    it("should recalculate usage amounts when coverage fields change", async () => {
+      const sponsorshipId = faker.string.uuid();
+      const registrationId1 = faker.string.uuid();
+      const registrationId2 = faker.string.uuid();
+      const usageId1 = faker.string.uuid();
+      const usageId2 = faker.string.uuid();
+
+      const mockSponsorship = {
+        ...createMockSponsorship({
+          id: sponsorshipId,
+          eventId,
+          coversBasePrice: false,
+          coveredAccessIds: [],
+          totalAmount: 100,
+        }),
+        usages: [
+          { registrationId: registrationId1 },
+          { registrationId: registrationId2 },
+        ],
+      };
+
+      const mockSponsorshipWithUsages = {
+        ...mockSponsorship,
+        coversBasePrice: true, // updated value
+        coveredAccessIds: [],
+        totalAmount: 200,
+        usages: [
+          {
+            id: usageId1,
+            sponsorshipId,
+            registrationId: registrationId1,
+            amountApplied: 0,
+            registration: {
+              id: registrationId1,
+              totalAmount: 300,
+              baseAmount: 200,
+              accessTypeIds: [],
+              priceBreakdown: { calculatedBasePrice: 200, accessItems: [] },
+            },
+          },
+          {
+            id: usageId2,
+            sponsorshipId,
+            registrationId: registrationId2,
+            amountApplied: 0,
+            registration: {
+              id: registrationId2,
+              totalAmount: 300,
+              baseAmount: 200,
+              accessTypeIds: [],
+              priceBreakdown: { calculatedBasePrice: 200, accessItems: [] },
+            },
+          },
+        ],
+      };
+
+      // getSponsorshipById call at the end
+      prismaMock.sponsorship.findUnique.mockResolvedValueOnce(
+        asMock({
+          ...mockSponsorship,
+          batch: createMockSponsorshipBatch({ eventId }),
+          usages: [],
+        }),
+      );
+      prismaMock.eventAccess.findMany.mockResolvedValue([]);
+
+      const txSponsorshipUpdate = vi.fn().mockResolvedValue({
+        ...mockSponsorship,
+        coversBasePrice: true,
+        totalAmount: 200,
+      });
+      const txSponsorshipFindUnique = vi
+        .fn()
+        .mockResolvedValueOnce(mockSponsorship) // initial fetch in updateSponsorship
+        .mockResolvedValueOnce(mockSponsorshipWithUsages); // recalculateUsageAmounts fetch
+      const txUsageUpdate = vi.fn().mockResolvedValue({});
+      const txUsageFindMany = vi
+        .fn()
+        .mockResolvedValue([{ amountApplied: 200 }]);
+      const txRegistrationUpdate = vi.fn().mockResolvedValue({});
+
+      prismaMock.$transaction.mockImplementation(async (fn: TxCallback) => {
+        const txMock = {
+          sponsorship: {
+            findUnique: txSponsorshipFindUnique,
+            update: txSponsorshipUpdate,
+          },
+          sponsorshipUsage: {
+            update: txUsageUpdate,
+            findMany: txUsageFindMany,
+          },
+          registration: {
+            update: txRegistrationUpdate,
+          },
+          eventPricing: {
+            findUnique: vi
+              .fn()
+              .mockResolvedValue({ basePrice: 200, currency: "TND" }),
+          },
+          eventAccess: { findMany: vi.fn().mockResolvedValue([]) },
+          auditLog: { create: vi.fn().mockResolvedValue({}) },
+        };
+        return fn(txMock as never);
+      });
+
+      await updateSponsorship(sponsorshipId, { coversBasePrice: true });
+
+      // The usage update should have been called for each of the 2 usages
+      expect(txUsageUpdate).toHaveBeenCalled();
+      // Registration sponsorshipAmount should be updated for linked registrations
+      expect(txRegistrationUpdate).toHaveBeenCalled();
     });
 
     it("should delegate to cancelSponsorship when status is CANCELLED", async () => {
@@ -805,18 +1183,16 @@ describe("Sponsorships Service", () => {
         usages: [],
       };
 
-      // First call: initial findUnique for update check
-      // Second call: cancelSponsorship internal check
-      // Third call: getSponsorshipById at the end of cancelSponsorship
-      prismaMock.sponsorship.findUnique
-        .mockResolvedValueOnce(asMock(mockSponsorship))
-        .mockResolvedValueOnce(asMock(mockSponsorship))
-        .mockResolvedValueOnce(asMock(cancelledSponsorship));
+      prismaMock.sponsorship.findUnique.mockResolvedValueOnce(
+        asMock(cancelledSponsorship),
+      );
       prismaMock.$transaction.mockImplementation(async (fn: TxCallback) => {
         const txMock = {
           sponsorship: {
+            findUnique: vi.fn().mockResolvedValue(mockSponsorship),
             update: vi.fn().mockResolvedValue(cancelledSponsorship),
           },
+          auditLog: { create: vi.fn().mockResolvedValue({}) },
         };
         return fn(txMock);
       });
@@ -838,23 +1214,23 @@ describe("Sponsorships Service", () => {
         usages: [],
       };
 
-      prismaMock.sponsorship.findUnique
-        .mockResolvedValueOnce(asMock(mockSponsorship))
-        .mockResolvedValueOnce(
-          asMock({
-            ...mockSponsorship,
-            status: "CANCELLED",
-            batch: createMockSponsorshipBatch({ eventId }),
-            usages: [],
-          }),
-        );
+      prismaMock.sponsorship.findUnique.mockResolvedValueOnce(
+        asMock({
+          ...mockSponsorship,
+          status: "CANCELLED",
+          batch: createMockSponsorshipBatch({ eventId }),
+          usages: [],
+        }),
+      );
       prismaMock.$transaction.mockImplementation(async (fn: TxCallback) => {
         const txMock = {
           sponsorship: {
+            findUnique: vi.fn().mockResolvedValue(mockSponsorship),
             update: vi
               .fn()
               .mockResolvedValue({ ...mockSponsorship, status: "CANCELLED" }),
           },
+          auditLog: { create: vi.fn().mockResolvedValue({}) },
         };
         return fn(txMock);
       });
@@ -873,16 +1249,14 @@ describe("Sponsorships Service", () => {
         usages: [{ registrationId }],
       };
 
-      prismaMock.sponsorship.findUnique
-        .mockResolvedValueOnce(asMock(mockSponsorship))
-        .mockResolvedValueOnce(
-          asMock({
-            ...mockSponsorship,
-            status: "CANCELLED",
-            batch: createMockSponsorshipBatch({ eventId }),
-            usages: [],
-          }),
-        );
+      prismaMock.sponsorship.findUnique.mockResolvedValueOnce(
+        asMock({
+          ...mockSponsorship,
+          status: "CANCELLED",
+          batch: createMockSponsorshipBatch({ eventId }),
+          usages: [],
+        }),
+      );
 
       const mockTxFns = {
         sponsorshipUsage: {
@@ -895,13 +1269,23 @@ describe("Sponsorships Service", () => {
           findMany: vi.fn().mockResolvedValue([]),
           count: vi.fn().mockResolvedValue(0),
         },
-        registration: { update: vi.fn().mockResolvedValue({}) },
+        registration: {
+          findUnique: vi.fn().mockResolvedValue({
+            sponsorshipAmount: 200,
+            paymentMethod: "CASH",
+          }),
+          update: vi.fn().mockResolvedValue({}),
+        },
         sponsorship: {
-          findUnique: vi.fn().mockResolvedValue({ status: "USED" }),
+          findUnique: vi
+            .fn()
+            .mockResolvedValueOnce(mockSponsorship)
+            .mockResolvedValueOnce({ status: "USED" }),
           update: vi
             .fn()
             .mockResolvedValue({ ...mockSponsorship, status: "CANCELLED" }),
         },
+        auditLog: { create: vi.fn().mockResolvedValue({}) },
       };
 
       prismaMock.$transaction.mockImplementation(async (fn: TxCallback) =>
@@ -916,7 +1300,12 @@ describe("Sponsorships Service", () => {
     });
 
     it("should throw when sponsorship not found", async () => {
-      prismaMock.sponsorship.findUnique.mockResolvedValue(null);
+      prismaMock.$transaction.mockImplementation(async (fn: TxCallback) => {
+        const txMock = {
+          sponsorship: { findUnique: vi.fn().mockResolvedValue(null) },
+        };
+        return fn(txMock as never);
+      });
 
       await expect(cancelSponsorship("non-existent")).rejects.toThrow(AppError);
     });
@@ -930,10 +1319,13 @@ describe("Sponsorships Service", () => {
         usages: [],
       };
 
-      prismaMock.sponsorship.findUnique.mockResolvedValue(mockSponsorship);
       prismaMock.$transaction.mockImplementation(async (fn: TxCallback) => {
         const txMock = {
-          sponsorship: { delete: vi.fn().mockResolvedValue({}) },
+          sponsorship: {
+            findUnique: vi.fn().mockResolvedValue(mockSponsorship),
+            delete: vi.fn().mockResolvedValue({}),
+          },
+          auditLog: { create: vi.fn().mockResolvedValue({}) },
         };
         return fn(txMock);
       });
@@ -949,8 +1341,6 @@ describe("Sponsorships Service", () => {
         usages: [{ registrationId }],
       };
 
-      prismaMock.sponsorship.findUnique.mockResolvedValue(mockSponsorship);
-
       const mockTxFns = {
         sponsorshipUsage: {
           findUnique: vi.fn().mockResolvedValue({
@@ -962,12 +1352,22 @@ describe("Sponsorships Service", () => {
           findMany: vi.fn().mockResolvedValue([]),
           count: vi.fn().mockResolvedValue(0),
         },
-        registration: { update: vi.fn().mockResolvedValue({}) },
+        registration: {
+          findUnique: vi.fn().mockResolvedValue({
+            sponsorshipAmount: 200,
+            paymentMethod: "CASH",
+          }),
+          update: vi.fn().mockResolvedValue({}),
+        },
         sponsorship: {
-          findUnique: vi.fn().mockResolvedValue({ status: "USED" }),
+          findUnique: vi
+            .fn()
+            .mockResolvedValueOnce(mockSponsorship)
+            .mockResolvedValueOnce({ status: "USED" }),
           update: vi.fn().mockResolvedValue({}),
           delete: vi.fn().mockResolvedValue({}),
         },
+        auditLog: { create: vi.fn().mockResolvedValue({}) },
       };
 
       prismaMock.$transaction.mockImplementation(async (fn: TxCallback) =>
@@ -981,7 +1381,12 @@ describe("Sponsorships Service", () => {
     });
 
     it("should throw when sponsorship not found", async () => {
-      prismaMock.sponsorship.findUnique.mockResolvedValue(null);
+      prismaMock.$transaction.mockImplementation(async (fn: TxCallback) => {
+        const txMock = {
+          sponsorship: { findUnique: vi.fn().mockResolvedValue(null) },
+        };
+        return fn(txMock as never);
+      });
 
       await expect(deleteSponsorship("non-existent")).rejects.toThrow(AppError);
     });
@@ -1033,11 +1438,17 @@ describe("Sponsorships Service", () => {
           sponsorshipUsage: {
             create: vi.fn().mockResolvedValue(mockUsage),
             findMany: vi.fn().mockResolvedValue([mockUsage]),
+            findUnique: vi.fn().mockResolvedValue(null),
           },
           sponsorship: {
             updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+            findUnique: vi.fn().mockResolvedValue(mockSponsorship),
           },
-          registration: { update: registrationUpdateMock },
+          registration: {
+            update: registrationUpdateMock,
+            findUnique: vi.fn().mockResolvedValue(asMock(mockRegistration)),
+          },
+          auditLog: { create: vi.fn().mockResolvedValue({}) },
         };
         return fn(txMock);
       });
@@ -1106,11 +1517,17 @@ describe("Sponsorships Service", () => {
           sponsorshipUsage: {
             create: vi.fn().mockResolvedValue(mockUsage),
             findMany: vi.fn().mockResolvedValue([mockUsage]),
+            findUnique: vi.fn().mockResolvedValue(null),
           },
           sponsorship: {
             updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+            findUnique: vi.fn().mockResolvedValue(mockSponsorship),
           },
-          registration: { update: txRegistrationUpdate },
+          registration: {
+            update: txRegistrationUpdate,
+            findUnique: vi.fn().mockResolvedValue(asMock(mockRegistration)),
+          },
+          auditLog: { create: vi.fn().mockResolvedValue({}) },
         };
         return fn(txMock);
       });
@@ -1133,6 +1550,9 @@ describe("Sponsorships Service", () => {
 
     it("should throw when sponsorship not found", async () => {
       prismaMock.sponsorship.findUnique.mockResolvedValue(null);
+      prismaMock.$transaction.mockImplementation(async (fn: TxCallback) =>
+        fn(prismaMock as any),
+      );
 
       await expect(
         linkSponsorshipToRegistration(
@@ -1157,6 +1577,9 @@ describe("Sponsorships Service", () => {
       };
 
       prismaMock.sponsorship.findUnique.mockResolvedValue(mockSponsorship);
+      prismaMock.$transaction.mockImplementation(async (fn: TxCallback) =>
+        fn(prismaMock as any),
+      );
 
       await expect(
         linkSponsorshipToRegistration(
@@ -1182,6 +1605,9 @@ describe("Sponsorships Service", () => {
 
       prismaMock.sponsorship.findUnique.mockResolvedValue(mockSponsorship);
       prismaMock.registration.findUnique.mockResolvedValue(null);
+      prismaMock.$transaction.mockImplementation(async (fn: TxCallback) =>
+        fn(prismaMock as any),
+      );
 
       await expect(
         linkSponsorshipToRegistration(
@@ -1219,6 +1645,9 @@ describe("Sponsorships Service", () => {
       prismaMock.sponsorship.findUnique.mockResolvedValue(mockSponsorship);
       prismaMock.registration.findUnique.mockResolvedValue(
         asMock(mockRegistration),
+      );
+      prismaMock.$transaction.mockImplementation(async (fn: TxCallback) =>
+        fn(prismaMock as any),
       );
 
       await expect(
@@ -1266,6 +1695,9 @@ describe("Sponsorships Service", () => {
           registrationId,
         }),
       );
+      prismaMock.$transaction.mockImplementation(async (fn: TxCallback) =>
+        fn(prismaMock as any),
+      );
 
       await expect(
         linkSponsorshipToRegistration(
@@ -1310,6 +1742,9 @@ describe("Sponsorships Service", () => {
         asMock(mockRegistration),
       );
       prismaMock.sponsorshipUsage.findUnique.mockResolvedValue(null);
+      prismaMock.$transaction.mockImplementation(async (fn: TxCallback) =>
+        fn(prismaMock as any),
+      );
 
       await expect(
         linkSponsorshipToRegistration(
@@ -1379,11 +1814,17 @@ describe("Sponsorships Service", () => {
                 { amountApplied: 200 },
                 { amountApplied: 200 },
               ]),
+            findUnique: vi.fn().mockResolvedValue(null),
           },
           sponsorship: {
             updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+            findUnique: vi.fn().mockResolvedValue(mockSponsorship),
           },
-          registration: { update: vi.fn().mockResolvedValue({}) },
+          registration: {
+            update: vi.fn().mockResolvedValue({}),
+            findUnique: vi.fn().mockResolvedValue(asMock(mockRegistration)),
+          },
+          auditLog: { create: vi.fn().mockResolvedValue({}) },
         };
         return fn(txMock);
       });
@@ -1461,11 +1902,17 @@ describe("Sponsorships Service", () => {
           sponsorshipUsage: {
             create: vi.fn().mockResolvedValue(mockUsage),
             findMany: vi.fn().mockResolvedValue([mockUsage]),
+            findUnique: vi.fn().mockResolvedValue(null),
           },
           sponsorship: {
             updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+            findUnique: vi.fn().mockResolvedValue(asMock(mockSponsorship)),
           },
-          registration: { update: vi.fn().mockResolvedValue({}) },
+          registration: {
+            update: vi.fn().mockResolvedValue({}),
+            findUnique: vi.fn().mockResolvedValue(asMock(mockRegistration)),
+          },
+          auditLog: { create: vi.fn().mockResolvedValue({}) },
         };
         return fn(txMock);
       });
@@ -1526,6 +1973,9 @@ describe("Sponsorships Service", () => {
         asMock({ status: "USED" }),
       );
       prismaMock.sponsorship.update.mockResolvedValue(asMock({}));
+      prismaMock.$transaction.mockImplementation(async (fn: TxCallback) =>
+        fn(prismaMock as any),
+      );
 
       await expect(
         unlinkSponsorshipFromRegistration(sponsorshipId, registrationId),
@@ -1560,6 +2010,9 @@ describe("Sponsorships Service", () => {
       prismaMock.sponsorship.findUnique.mockResolvedValue(
         asMock({ status: "USED" }),
       );
+      prismaMock.$transaction.mockImplementation(async (fn: TxCallback) =>
+        fn(prismaMock as any),
+      );
 
       await unlinkSponsorshipFromRegistration(sponsorshipId, registrationId);
 
@@ -1573,6 +2026,9 @@ describe("Sponsorships Service", () => {
 
     it("should throw when link not found", async () => {
       prismaMock.sponsorshipUsage.findUnique.mockResolvedValue(null);
+      prismaMock.$transaction.mockImplementation(async (fn: TxCallback) =>
+        fn(prismaMock as any),
+      );
 
       await expect(
         unlinkSponsorshipFromRegistration(sponsorshipId, registrationId),
@@ -1601,6 +2057,9 @@ describe("Sponsorships Service", () => {
         asMock({ status: "USED" }),
       );
       prismaMock.sponsorship.update.mockResolvedValue(asMock({}));
+      prismaMock.$transaction.mockImplementation(async (fn: TxCallback) =>
+        fn(prismaMock as any),
+      );
 
       await unlinkSponsorshipFromRegistration(sponsorshipId, registrationId);
 

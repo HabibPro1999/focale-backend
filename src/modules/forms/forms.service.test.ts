@@ -12,13 +12,13 @@ import {
   updateForm,
   listForms,
   deleteForm,
-  formExists,
-  getFormClientId,
   createDefaultSponsorSchema,
   getSponsorFormByEventSlug,
   getSponsorFormByEventId,
   createSponsorForm,
 } from "./forms.service.js";
+import { validateFormData } from "./form-data-validator.js";
+
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { faker } from "@faker-js/faker";
@@ -171,15 +171,20 @@ describe("Forms Service", () => {
   // ============================================================================
 
   describe("getFormById", () => {
-    it("should return form when found", async () => {
-      const mockForm = createMockForm({ id: formId });
-      prismaMock.form.findUnique.mockResolvedValue(mockForm);
+    it("should return form with event.clientId when found", async () => {
+      const mockForm = {
+        ...createMockForm({ id: formId }),
+        event: { clientId: "client-123" },
+      };
+      prismaMock.form.findUnique.mockResolvedValue(mockForm as never);
 
       const result = await getFormById(formId);
 
-      expect(result).toEqual(mockForm);
+      expect(result?.id).toBe(formId);
+      expect(result?.event.clientId).toBe("client-123");
       expect(prismaMock.form.findUnique).toHaveBeenCalledWith({
         where: { id: formId },
+        include: { event: { select: { clientId: true } } },
       });
     });
 
@@ -402,7 +407,9 @@ describe("Forms Service", () => {
           {
             id: "step-1",
             title: "Info",
-            fields: [{ id: "field-to-keep", type: "email", label: "Email" }],
+            fields: [
+              { id: "field-to-keep", type: "email" as const, label: "Email" },
+            ],
           },
         ],
       };
@@ -527,62 +534,8 @@ describe("Forms Service", () => {
   });
 
   // ============================================================================
-  // formExists
-  // ============================================================================
-
-  describe("formExists", () => {
-    it("should return true when form exists", async () => {
-      prismaMock.form.count.mockResolvedValue(1);
-
-      const result = await formExists(formId);
-
-      expect(result).toBe(true);
-      expect(prismaMock.form.count).toHaveBeenCalledWith({
-        where: { id: formId },
-      });
-    });
-
-    it("should return false when form does not exist", async () => {
-      prismaMock.form.count.mockResolvedValue(0);
-
-      const result = await formExists("non-existent");
-
-      expect(result).toBe(false);
-    });
-  });
-
-  // ============================================================================
   // getFormClientId
   // ============================================================================
-
-  describe("getFormClientId", () => {
-    it("should return clientId via event relation", async () => {
-      const clientId = faker.string.uuid();
-      prismaMock.form.findUnique.mockResolvedValue({
-        event: { clientId },
-      } as Form & { event: { clientId: string } });
-
-      const result = await getFormClientId(formId);
-
-      expect(result).toBe(clientId);
-      expect(prismaMock.form.findUnique).toHaveBeenCalledWith({
-        where: { id: formId },
-        select: {
-          event: {
-            select: { clientId: true },
-          },
-        },
-      });
-    });
-
-    it("should return null when form not found", async () => {
-      prismaMock.form.findUnique.mockResolvedValue(null);
-
-      const result = await getFormClientId("non-existent");
-
-      expect(result).toBeNull();
-    });
-  });
 
   // ============================================================================
   // Sponsor Form Functions
@@ -764,6 +717,97 @@ describe("Forms Service", () => {
         statusCode: 409,
         code: ErrorCodes.CONFLICT,
       });
+    });
+  });
+
+  // ============================================================================
+  // Form Data Validator — field.required bug regression
+  // ============================================================================
+
+  describe("validateFormData — field.required", () => {
+    const schema = {
+      steps: [
+        {
+          id: "step-1",
+          title: "Step 1",
+          fields: [
+            {
+              // required at top level (field.required), no validation object
+              id: "firstName",
+              type: "text" as const,
+              label: "First Name",
+              required: true,
+            },
+            {
+              // required via nested validation.required
+              id: "email",
+              type: "email" as const,
+              label: "Email",
+              required: false,
+              validation: { required: true },
+            },
+            {
+              // not required either way
+              id: "phone",
+              type: "text" as const,
+              label: "Phone",
+              required: false,
+            },
+          ],
+        },
+      ],
+    };
+
+    it("should reject empty value for field with field.required = true", () => {
+      const result = validateFormData(schema, {
+        firstName: "",
+        email: "a@b.com",
+      });
+      expect(result.valid).toBe(false);
+      expect(result.errors.some((e) => e.fieldId === "firstName")).toBe(true);
+    });
+
+    it("should reject empty value for field with validation.required = true", () => {
+      const result = validateFormData(schema, {
+        firstName: "Alice",
+        email: "",
+      });
+      expect(result.valid).toBe(false);
+      expect(result.errors.some((e) => e.fieldId === "email")).toBe(true);
+    });
+
+    it("should accept empty value for optional field", () => {
+      const result = validateFormData(schema, {
+        firstName: "Alice",
+        email: "a@b.com",
+        phone: "",
+      });
+      expect(result.valid).toBe(true);
+    });
+
+    it("should treat field.required=true as required even when validation.required=false", () => {
+      const conflictingSchema = {
+        steps: [
+          {
+            id: "step-1",
+            title: "Step 1",
+            fields: [
+              {
+                id: "nickname",
+                type: "text" as const,
+                label: "Nickname",
+                required: true,
+                validation: { required: false },
+              },
+            ],
+          },
+        ],
+      };
+
+      const result = validateFormData(conflictingSchema, { nickname: "" });
+
+      expect(result.valid).toBe(false);
+      expect(result.errors.some((e) => e.fieldId === "nickname")).toBe(true);
     });
   });
 });

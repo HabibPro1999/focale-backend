@@ -5,7 +5,7 @@ import { z } from "zod";
 // ============================================================================
 
 export const CreateEventSchema = z
-  .object({
+  .strictObject({
     clientId: z.string().uuid(),
     name: z.string().min(1).max(200),
     slug: z
@@ -26,14 +26,13 @@ export const CreateEventSchema = z
     basePrice: z.number().int().min(0).default(0),
     currency: z.string().length(3).default("TND"),
   })
-  .strict()
   .refine((data) => data.endDate >= data.startDate, {
     message: "End date must be greater than or equal to start date",
     path: ["endDate"],
   });
 
 export const UpdateEventSchema = z
-  .object({
+  .strictObject({
     name: z.string().min(1).max(200).optional(),
     slug: z
       .string()
@@ -54,7 +53,6 @@ export const UpdateEventSchema = z
     basePrice: z.number().int().min(0).optional(),
     currency: z.string().length(3).optional(),
   })
-  .strict()
   .refine(
     (data) => {
       if (data.startDate && data.endDate) {
@@ -68,27 +66,21 @@ export const UpdateEventSchema = z
     },
   );
 
-export const ListEventsQuerySchema = z
-  .object({
-    page: z.coerce.number().int().min(1).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(20),
-    clientId: z.string().uuid().optional(),
-    status: z.enum(["CLOSED", "OPEN", "ARCHIVED"]).optional(),
-    search: z.string().optional(),
-  })
-  .strict();
+export const ListEventsQuerySchema = z.strictObject({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  clientId: z.string().uuid().optional(),
+  status: z.enum(["CLOSED", "OPEN", "ARCHIVED"]).optional(),
+  search: z.string().optional(),
+});
 
-export const EventIdParamSchema = z
-  .object({
-    id: z.string().uuid(),
-  })
-  .strict();
+export const EventIdParamSchema = z.strictObject({
+  id: z.string().uuid(),
+});
 
-export const EventSlugParamSchema = z
-  .object({
-    slug: z.string(),
-  })
-  .strict();
+export const EventSlugParamSchema = z.strictObject({
+  slug: z.string().min(1).max(100),
+});
 
 // ============================================================================
 // Types

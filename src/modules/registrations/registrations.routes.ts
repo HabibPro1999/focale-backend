@@ -1,11 +1,13 @@
 import {
   requireAuth,
+  requireAdmin,
   canAccessClient,
 } from "@shared/middleware/auth.middleware.js";
 import { getEventById } from "@events";
 import {
   getRegistrationById,
   updateRegistration,
+  adminEditRegistration,
   confirmPayment,
   deleteRegistration,
   listRegistrations,
@@ -15,6 +17,7 @@ import {
   listRegistrationEmailLogs,
   searchRegistrantsForSponsorship,
   extractKeyFromUrl,
+  createAdminRegistration,
 } from "./registrations.service.js";
 import { getStorageProvider } from "@shared/services/storage/index.js";
 import { AppError } from "@shared/errors/app-error.js";
@@ -29,6 +32,8 @@ import {
   ListRegistrationEmailLogsQuerySchema,
   SearchRegistrantsQuerySchema,
   DeleteRegistrationQuerySchema,
+  AdminCreateRegistrationSchema,
+  AdminEditRegistrationSchema,
   type UpdateRegistrationInput,
   type UpdatePaymentInput,
   type ListRegistrationsQuery,
@@ -36,9 +41,10 @@ import {
   type ListRegistrationEmailLogsQuery,
   type SearchRegistrantsQuery,
   type DeleteRegistrationQuery,
+  type AdminCreateRegistrationInput,
+  type AdminEditRegistrationInput,
 } from "./registrations.schema.js";
 import type { AppInstance } from "@shared/types/fastify.js";
-import { UserRole } from "@identity";
 
 // ============================================================================
 // Protected Routes (Admin)
@@ -99,6 +105,76 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
 
       const results = await searchRegistrantsForSponsorship(eventId, query);
       return reply.send(results);
+    },
+  );
+
+  // POST /api/events/:eventId/admin/registrations - Admin creates a registration
+  app.post<{
+    Params: { eventId: string };
+    Body: AdminCreateRegistrationInput;
+  }>(
+    "/:eventId/admin/registrations",
+    {
+      schema: {
+        params: EventIdParamSchema,
+        body: AdminCreateRegistrationSchema,
+      },
+    },
+    async (request, reply) => {
+      const { eventId } = request.params;
+
+      const event = await getEventById(eventId);
+      if (!event) {
+        throw app.httpErrors.notFound("Event not found");
+      }
+
+      if (!canAccessClient(request.user!, event.clientId)) {
+        throw app.httpErrors.forbidden("Insufficient permissions");
+      }
+
+      const registration = await createAdminRegistration(
+        eventId,
+        request.body,
+        request.user!.id,
+      );
+
+      return reply.status(201).send(registration);
+    },
+  );
+
+  // PUT /api/events/:eventId/registrations/:id/admin-edit - Admin full edit
+  app.put<{
+    Params: { eventId: string; id: string };
+    Body: AdminEditRegistrationInput;
+  }>(
+    "/:eventId/registrations/:id/admin-edit",
+    {
+      onRequest: [requireAdmin],
+      schema: {
+        params: EventIdParamSchema.extend(RegistrationIdParamSchema.shape),
+        body: AdminEditRegistrationSchema,
+      },
+    },
+    async (request, reply) => {
+      const { eventId, id } = request.params;
+
+      const event = await getEventById(eventId);
+      if (!event) {
+        throw app.httpErrors.notFound("Event not found");
+      }
+
+      if (!canAccessClient(request.user!, event.clientId)) {
+        throw app.httpErrors.forbidden("Insufficient permissions");
+      }
+
+      const registration = await adminEditRegistration(
+        eventId,
+        id,
+        request.body,
+        request.user!.id,
+      );
+
+      return reply.send(registration);
     },
   );
 
@@ -243,13 +319,7 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
 
-      if (force && request.user!.role !== UserRole.CLIENT_ADMIN) {
-        throw app.httpErrors.forbidden(
-          "Only client admins can force-delete registrations",
-        );
-      }
-
-      await deleteRegistration(id, request.user!.id, force);
+      await deleteRegistration(id, request.user!.id, force, request.user!.role);
       return reply.status(204).send();
     },
   );
@@ -336,7 +406,6 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
         throw new AppError(
           "No payment proof uploaded",
           404,
-          true,
           ErrorCodes.NOT_FOUND,
         );
       }

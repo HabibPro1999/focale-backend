@@ -11,7 +11,7 @@ import { prisma } from "@/database/client.js";
 import { logger } from "@shared/utils/logger.js";
 import { usersRoutes } from "@identity";
 import { clientsRoutes } from "@clients";
-import { eventsRoutes } from "@events";
+import { eventsRoutes, eventsPublicRoutes } from "@events";
 import { formsRoutes, formsPublicRoutes } from "@forms";
 import { pricingRulesRoutes, pricingPublicRoutes } from "@pricing";
 import { accessRoutes, accessPublicRoutes } from "@access";
@@ -21,7 +21,7 @@ import {
   registrationEditPublicRoutes,
 } from "@registrations";
 import { reportsRoutes } from "@reports";
-import { emailRoutes, emailWebhookRoutes } from "@email";
+import { emailRoutes, emailWebhookRoutes, getEmailQueueHealth } from "@email";
 import {
   sponsorshipsRoutes,
   sponsorshipDetailRoutes,
@@ -29,6 +29,7 @@ import {
   sponsorshipsPublicRoutes,
   sponsorshipsPublicBySlugRoutes,
 } from "@sponsorships";
+import { certificatesRoutes } from "@certificates";
 import type { AppInstance } from "@shared/types/fastify.js";
 
 export async function buildServer(): Promise<AppInstance> {
@@ -38,9 +39,6 @@ export async function buildServer(): Promise<AppInstance> {
 
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
-
-  // Decorate with prisma
-  app.decorate("prisma", prisma);
 
   // Disconnect prisma on server close — registered early so it fires last (child hooks
   // run before parent hooks in Fastify's onClose ordering), ensuring all plugin-level
@@ -96,6 +94,12 @@ export async function buildServer(): Promise<AppInstance> {
     }
   });
 
+  // Email queue health check
+  app.get("/health/email-queue", async (_request, reply) => {
+    const health = await getEmailQueueHealth();
+    return reply.status(health.isHealthy ? 200 : 503).send(health);
+  });
+
   // Register module routes
   await app.register(usersRoutes, { prefix: "/api/users" });
   await app.register(clientsRoutes, { prefix: "/api/clients" });
@@ -105,11 +109,14 @@ export async function buildServer(): Promise<AppInstance> {
 
   // Pricing routes
   await app.register(pricingRulesRoutes, { prefix: "/api/events" });
-  await app.register(pricingPublicRoutes, { prefix: "/api" });
+  await app.register(pricingPublicRoutes, { prefix: "/api/public/forms" });
 
   // Access routes (replaces eventExtrasRoutes)
   await app.register(accessRoutes, { prefix: "/api/events" });
   await app.register(accessPublicRoutes, { prefix: "/api/public/events" });
+
+  // Events public routes (payment-config, etc.)
+  await app.register(eventsPublicRoutes, { prefix: "/api/public/events" });
 
   // Registration routes
   await app.register(registrationsRoutes, { prefix: "/api/events" });
@@ -128,6 +135,9 @@ export async function buildServer(): Promise<AppInstance> {
 
   // SendGrid webhook (public, no auth — secured by ECDSA signature verification)
   await app.register(emailWebhookRoutes, { prefix: "/webhooks/sendgrid" });
+
+  // Certificate routes (template management)
+  await app.register(certificatesRoutes, { prefix: "/api/events" });
 
   // Sponsorship routes
   await app.register(sponsorshipsRoutes, { prefix: "/api/events" });

@@ -2,7 +2,6 @@ export const ErrorCodes = {
   // Auth (1xxx)
   UNAUTHORIZED: "AUTH_1001",
   INVALID_TOKEN: "AUTH_1002",
-  TOKEN_EXPIRED: "AUTH_1003",
   FORBIDDEN: "AUTH_1004",
 
   // Validation (2xxx)
@@ -43,7 +42,7 @@ export const ErrorCodes = {
   EVENT_NOT_OPEN: "EVT_8001",
   EVENT_FULL: "EVT_8002",
 
-  // Registration (8xxx)
+  // Registration (8xxx — shared numeric range with Events, use string prefix to disambiguate)
   REGISTRATION_NOT_FOUND: "REG_8001",
   REGISTRATION_ALREADY_EXISTS: "REG_8002",
   REGISTRATION_REFUNDED: "REG_8003",

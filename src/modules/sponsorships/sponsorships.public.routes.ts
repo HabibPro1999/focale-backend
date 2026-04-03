@@ -71,18 +71,14 @@ export async function sponsorshipsPublicRoutes(
 // Public Routes by Slug (for pure-form frontend)
 // ============================================================================
 
-const EventSlugParamSchema = z
-  .object({
-    slug: z.string().min(1).max(100),
-  })
-  .strict();
+const EventSlugParamSchema = z.strictObject({
+  slug: z.string().min(1).max(100),
+});
 
-const RegistrantSearchQuerySchema = z
-  .object({
-    query: z.string().min(3).max(200),
-    unpaidOnly: z.string().optional(),
-  })
-  .strict();
+const RegistrantSearchQuerySchema = z.strictObject({
+  query: z.string().trim().min(2).max(200),
+  unpaidOnly: z.string().optional(),
+});
 
 export async function sponsorshipsPublicBySlugRoutes(
   app: AppInstance,
@@ -127,14 +123,28 @@ export async function sponsorshipsPublicBySlugRoutes(
         throw app.httpErrors.forbidden("Search not available for this form");
       }
 
-      // Use existing search function
+      // Enforce registrantSearchScope from form settings (server-side)
+      const registrantSearchScope =
+        (sponsorshipSettings?.registrantSearchScope as string | undefined) ??
+        "ALL";
+      const effectiveUnpaidOnly =
+        registrantSearchScope === "UNPAID_ONLY" ? true : unpaidOnly === "true";
+
       const results = await searchRegistrantsForSponsorship(event.id, {
         query,
-        unpaidOnly: unpaidOnly === "true",
+        unpaidOnly: effectiveUnpaidOnly,
         limit: 10,
       });
 
-      return reply.send(results);
+      const sanitizedResults = results.map(
+        ({
+          phone: _phone,
+          formData: _formData,
+          ...safe
+        }: Record<string, unknown>) => safe,
+      );
+
+      return reply.send(sanitizedResults);
     },
   );
 

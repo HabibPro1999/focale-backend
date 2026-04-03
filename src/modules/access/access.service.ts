@@ -1,18 +1,15 @@
 import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { logger } from "@shared/utils/logger.js";
+import type { TxClient } from "@shared/types/prisma.js";
 import type {
   CreateEventAccessInput,
   UpdateEventAccessInput,
-  AccessSelection,
-  GroupedAccessResponse,
-  AccessCondition,
-  TimeSlot,
-  DateGroup,
 } from "./access.schema.js";
-import { Prisma } from "@/generated/prisma/client.js";
+import { Prisma, PaymentStatus } from "@/generated/prisma/client.js";
 import type { EventAccess } from "@/generated/prisma/client.js";
-import { getAccessTypeKey } from "@/modules/sponsorships/sponsorships.utils.js";
+import type { PriceBreakdown } from "@pricing";
 
 // ============================================================================
 // Types
@@ -20,12 +17,6 @@ import { getAccessTypeKey } from "@/modules/sponsorships/sponsorships.utils.js";
 
 type EventAccessWithPrerequisites = EventAccess & {
   requiredAccess: { id: string; name: string }[];
-};
-
-type EnrichedAccess = EventAccess & {
-  requiredAccess: { id: string }[];
-  spotsRemaining: number | null;
-  isFull: boolean;
 };
 
 // ============================================================================
@@ -179,7 +170,7 @@ export async function createEventAccess(
     select: { id: true, startDate: true, endDate: true },
   });
   if (!event) {
-    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   // Validate access dates against event boundaries
@@ -196,7 +187,6 @@ export async function createEventAccess(
     throw new AppError(
       dateValidation.errors.join("; "),
       400,
-      true,
       ErrorCodes.ACCESS_DATE_OUT_OF_BOUNDS,
     );
   }
@@ -210,7 +200,6 @@ export async function createEventAccess(
       throw new AppError(
         "One or more prerequisite access items not found or belong to different event",
         400,
-        true,
         ErrorCodes.BAD_REQUEST,
       );
     }
@@ -263,7 +252,6 @@ export async function updateEventAccess(
     throw new AppError(
       "Access item not found",
       404,
-      true,
       ErrorCodes.ACCESS_NOT_FOUND,
     );
   }
@@ -291,7 +279,6 @@ export async function updateEventAccess(
     throw new AppError(
       dateValidation.errors.join("; "),
       400,
-      true,
       ErrorCodes.ACCESS_DATE_OUT_OF_BOUNDS,
     );
   }
@@ -340,7 +327,6 @@ export async function updateEventAccess(
         throw new AppError(
           "One or more prerequisite access items not found",
           400,
-          true,
           ErrorCodes.BAD_REQUEST,
         );
       }
@@ -354,7 +340,6 @@ export async function updateEventAccess(
         throw new AppError(
           "Circular prerequisite dependency detected",
           400,
-          true,
           ErrorCodes.ACCESS_CIRCULAR_DEPENDENCY,
         );
       }
@@ -363,6 +348,24 @@ export async function updateEventAccess(
     updateData.requiredAccess = {
       set: requiredAccessIds.map((reqId) => ({ id: reqId })),
     };
+  }
+
+  // If capacity is being lowered, check if we need to drop unpaid registrations
+  const isCapacityChanging =
+    data.maxCapacity !== undefined && data.maxCapacity !== access.maxCapacity;
+
+  if (isCapacityChanging && data.maxCapacity !== null) {
+    return prisma.$transaction(async (tx) => {
+      const updated = await tx.eventAccess.update({
+        where: { id },
+        data: updateData,
+        include: { requiredAccess: { select: { id: true, name: true } } },
+      });
+      if (updated.paidCount >= data.maxCapacity!) {
+        await handleCapacityReached(access.eventId, [id], tx);
+      }
+      return updated;
+    });
   }
 
   return prisma.eventAccess.update({
@@ -378,7 +381,6 @@ export async function deleteEventAccess(id: string): Promise<void> {
     throw new AppError(
       "Access item not found",
       404,
-      true,
       ErrorCodes.ACCESS_NOT_FOUND,
     );
   }
@@ -391,7 +393,6 @@ export async function deleteEventAccess(id: string): Promise<void> {
     throw new AppError(
       "Cannot delete access item with existing registrations",
       409,
-      true,
       ErrorCodes.ACCESS_HAS_REGISTRATIONS,
     );
   }
@@ -409,9 +410,27 @@ export async function deleteEventAccess(id: string): Promise<void> {
     throw new AppError(
       "Cannot delete access item referenced by active sponsorships",
       409,
-      true,
       ErrorCodes.ACCESS_HAS_SPONSORSHIPS,
     );
+  }
+
+  // Remove this item from any other access items' prerequisite lists
+  const dependents = await prisma.eventAccess.findMany({
+    where: {
+      requiredAccess: { some: { id } },
+    },
+    select: { id: true },
+  });
+
+  if (dependents.length > 0) {
+    for (const dependent of dependents) {
+      await prisma.eventAccess.update({
+        where: { id: dependent.id },
+        data: {
+          requiredAccess: { disconnect: { id } },
+        },
+      });
+    }
   }
 
   await prisma.eventAccess.delete({ where: { id } });
@@ -451,177 +470,10 @@ export async function getAccessClientId(id: string): Promise<string | null> {
 }
 
 // ============================================================================
-// Hierarchical Grouping (Type → Time Slots)
+// Hierarchical Grouping (Type → Time Slots) — extracted to access-grouping.ts
 // ============================================================================
 
-/**
- * Get access items grouped hierarchically: TYPE → TIME SLOTS
- *
- * Structure:
- * - Groups are organized by type (WORKSHOP, DINNER, etc.)
- * - Within each type, items are sub-grouped by time slot (startsAt)
- * - If 2+ items share the same time slot → selectionType: 'single' (radio)
- * - If 1 item in a time slot → selectionType: 'multiple' (checkbox)
- *
- * This allows users to select one item from each parallel time slot
- * (e.g., pick one of 3 workshops at 12:00, AND one of 2 workshops at 14:00)
- */
-export async function getGroupedAccess(
-  eventId: string,
-  formData: Record<string, unknown>,
-  selectedAccessIds: string[] = [],
-): Promise<GroupedAccessResponse> {
-  const allAccess = await prisma.eventAccess.findMany({
-    where: { eventId, active: true },
-    include: { requiredAccess: { select: { id: true } } },
-    orderBy: [{ type: "asc" }, { sortOrder: "asc" }, { startsAt: "asc" }],
-  });
-
-  const now = new Date();
-
-  // Filter by availability, conditions, and prerequisites
-  const availableAccess = allAccess.filter((access) => {
-    // Check date availability
-    if (access.availableFrom && access.availableFrom > now) return false;
-    if (access.availableTo && access.availableTo < now) return false;
-
-    // Check form-based conditions
-    if (access.conditions) {
-      if (
-        !evaluateConditions(
-          access.conditions as AccessCondition[],
-          access.conditionLogic as "AND" | "OR",
-          formData,
-        )
-      ) {
-        return false;
-      }
-    }
-
-    // Check access-based prerequisites
-    if (access.requiredAccess && access.requiredAccess.length > 0) {
-      const hasAllPrerequisites = access.requiredAccess.every((req) =>
-        selectedAccessIds.includes(req.id),
-      );
-      if (!hasAllPrerequisites) return false;
-    }
-
-    return true;
-  });
-
-  // Enrich with availability info
-  const enrichedAccess: EnrichedAccess[] = availableAccess.map((access) => {
-    const spotsRemaining = access.maxCapacity
-      ? access.maxCapacity - access.registeredCount
-      : null;
-
-    return {
-      ...access,
-      spotsRemaining,
-      isFull: spotsRemaining !== null && spotsRemaining <= 0,
-    };
-  });
-
-  // Filter out items that have reached max capacity
-  const availableEnrichedAccess = enrichedAccess.filter((a) => !a.isFull);
-
-  // === Partition ADDON vs scheduled items ===
-  const addonItems = availableEnrichedAccess.filter((a) => a.type === "ADDON");
-  const scheduledItems = availableEnrichedAccess.filter((a) => a.type !== "ADDON");
-
-  // === Hierarchical grouping by DATE (scheduled items only) ===
-
-  // Helper: Format date as French day name + date (e.g., "Jeudi 16 avril")
-  const formatDateLabel = (dateStr: string): string => {
-    if (dateStr === "no-date") return "Sans date";
-    const date = new Date(dateStr + "T00:00:00");
-    const formatted = date.toLocaleDateString("fr-FR", {
-      weekday: "long",
-      day: "numeric",
-      month: "long",
-    });
-    // Capitalize first letter
-    return formatted.charAt(0).toUpperCase() + formatted.slice(1);
-  };
-
-  // Step 1: Group by DATE (day only, no time)
-  const dateMap = new Map<string, EnrichedAccess[]>();
-
-  for (const access of scheduledItems) {
-    // Extract date part only (YYYY-MM-DD)
-    const dateKey = access.startsAt
-      ? access.startsAt.toISOString().split("T")[0]
-      : "no-date";
-
-    if (!dateMap.has(dateKey)) dateMap.set(dateKey, []);
-    dateMap.get(dateKey)!.push(access);
-  }
-
-  // Step 2: For each date, sub-group by TIME SLOT
-  const groups: DateGroup[] = Array.from(dateMap.entries()).map(
-    ([dateKey, items]) => {
-      // Sub-group by startsAt time (full ISO string)
-      const slotMap = new Map<string, EnrichedAccess[]>();
-      for (const item of items) {
-        const timeKey = item.startsAt?.toISOString() || "no-time";
-        if (!slotMap.has(timeKey)) slotMap.set(timeKey, []);
-        slotMap.get(timeKey)!.push(item);
-      }
-
-      // Convert to slots array
-      const slots: TimeSlot[] = Array.from(slotMap.entries())
-        .map(([_timeKey, slotItems]) => ({
-          startsAt: slotItems[0].startsAt,
-          endsAt: slotItems[0].endsAt,
-          // 2+ items at same time = single (radio), 1 item = multiple (checkbox)
-          selectionType: (slotItems.length > 1 ? "single" : "multiple") as
-            | "single"
-            | "multiple",
-          items: slotItems.sort((a, b) => {
-            // Sort by time within the slot
-            if (a.startsAt && b.startsAt) {
-              const timeA = a.startsAt.getTime();
-              const timeB = b.startsAt.getTime();
-              if (timeA !== timeB) return timeA - timeB;
-            }
-            // Then by sortOrder
-            return a.sortOrder - b.sortOrder;
-          }),
-        }))
-        .sort((a, b) => {
-          // Sort slots by time (null times at end)
-          if (!a.startsAt && !b.startsAt) return 0;
-          if (!a.startsAt) return 1;
-          if (!b.startsAt) return -1;
-          return a.startsAt.getTime() - b.startsAt.getTime();
-        });
-
-      return {
-        dateKey,
-        label: formatDateLabel(dateKey),
-        slots,
-      };
-    },
-  );
-
-  // Sort groups chronologically by date
-  groups.sort((a, b) => {
-    // "no-date" items go to the end
-    if (a.dateKey === "no-date" && b.dateKey === "no-date") return 0;
-    if (a.dateKey === "no-date") return 1;
-    if (b.dateKey === "no-date") return -1;
-    // Sort by date chronologically
-    return new Date(a.dateKey).getTime() - new Date(b.dateKey).getTime();
-  });
-
-  return {
-    groups,
-    addonGroup:
-      addonItems.length > 0
-        ? { items: addonItems.sort((a, b) => a.sortOrder - b.sortOrder) }
-        : null,
-  };
-}
+export { getGroupedAccess } from "./access-grouping.js";
 
 // ============================================================================
 // Capacity Management
@@ -629,10 +481,7 @@ export async function getGroupedAccess(
 
 // Structural type for a db client that can be either the global prisma instance
 // or a transaction client (tx). Matches the subset of operations used here.
-type CapacityDbClient = {
-  $executeRaw: typeof prisma.$executeRaw;
-  eventAccess: Pick<typeof prisma.eventAccess, "findUnique" | "updateMany">;
-};
+type CapacityDbClient = Pick<TxClient, "$executeRaw" | "eventAccess">;
 
 /**
  * Reserve access spot with atomic capacity check.
@@ -647,37 +496,31 @@ export async function reserveAccessSpot(
   quantity: number = 1,
   db: CapacityDbClient = prisma,
 ): Promise<void> {
-  // Use raw SQL for truly atomic capacity check and update
-  // This ensures the check happens at the exact moment of update,
-  // preventing TOCTOU race conditions
+  // Use raw SQL for truly atomic capacity check and update.
+  // Capacity is enforced against paid_count (settled registrations),
+  // while registered_count tracks total registrations regardless of payment.
   const updateResult = await db.$executeRaw`
     UPDATE event_access
     SET registered_count = registered_count + ${quantity}
     WHERE id = ${accessId}
-    AND (max_capacity IS NULL OR max_capacity - registered_count >= ${quantity})
+    AND (max_capacity IS NULL OR max_capacity - paid_count >= ${quantity})
   `;
 
   if (updateResult === 0) {
     // Either access not found or capacity exceeded - determine which
     const access = await db.eventAccess.findUnique({
       where: { id: accessId },
-      select: { name: true, maxCapacity: true, registeredCount: true },
+      select: { name: true, maxCapacity: true, paidCount: true },
     });
 
     if (!access) {
-      throw new AppError(
-        "Access not found",
-        404,
-        true,
-        ErrorCodes.ACCESS_NOT_FOUND,
-      );
+      throw new AppError("Access not found", 404, ErrorCodes.ACCESS_NOT_FOUND);
     }
 
-    const remaining = (access.maxCapacity ?? Infinity) - access.registeredCount;
+    const remaining = (access.maxCapacity ?? Infinity) - access.paidCount;
     throw new AppError(
       `${access.name} has insufficient capacity (${remaining} spots remaining, requested ${quantity})`,
       409,
-      true,
       ErrorCodes.ACCESS_CAPACITY_EXCEEDED,
     );
   }
@@ -694,205 +537,183 @@ export async function releaseAccessSpot(
   quantity: number = 1,
   db: CapacityDbClient = prisma,
 ): Promise<void> {
-  await db.eventAccess.updateMany({
+  const result = await db.eventAccess.updateMany({
     where: {
       id: accessId,
       registeredCount: { gte: quantity },
     },
     data: { registeredCount: { decrement: quantity } },
   });
+
+  if (result.count === 0) {
+    logger.warn(
+      { accessId, quantity },
+      "releaseAccessSpot: no rows updated — access item not found or registeredCount already below quantity",
+    );
+  }
 }
 
 // ============================================================================
-// Validation
+// Paid Count (Capacity based on settled registrations)
 // ============================================================================
+
+const FULLY_SETTLED_STATUSES = ["PAID", "SPONSORED", "WAIVED"];
 
 /**
- * Validate access selections for a registration.
- * Checks: time conflicts, prerequisites, capacity.
+ * Increment paid count when registration becomes settled.
  */
-export async function validateAccessSelections(
-  eventId: string,
-  selections: AccessSelection[],
-  formData: Record<string, unknown>,
-): Promise<{ valid: boolean; errors: string[] }> {
-  const errors: string[] = [];
-
-  const accessIds = selections.map((s) => s.accessId);
-
-  // Fetch selected items and included items in parallel
-  const [accessItems, includedAccesses] = await Promise.all([
-    selections.length > 0
-      ? prisma.eventAccess.findMany({
-          where: { id: { in: accessIds }, eventId, active: true },
-          include: { requiredAccess: { select: { id: true } } },
-        })
-      : Promise.resolve([]),
-    prisma.eventAccess.findMany({
-      where: { eventId, active: true, includedInBase: true },
-      select: { id: true, name: true, conditions: true, conditionLogic: true },
-    }),
-  ]);
-
-  // Validate included accesses are present (before selection-specific checks)
-  for (const included of includedAccesses) {
-    // Skip if conditions don't match (exempt from mandatory)
-    if (included.conditions) {
-      if (
-        !evaluateConditions(
-          included.conditions as AccessCondition[],
-          included.conditionLogic as "AND" | "OR",
-          formData,
-        )
-      )
-        continue;
-    }
-    if (!accessIds.includes(included.id)) {
-      errors.push(`"${included.name}" est inclus et doit être sélectionné`);
-    }
-  }
-
-  if (selections.length === 0) {
-    return { valid: errors.length === 0, errors };
-  }
-
-  const accessMap = new Map(accessItems.map((a) => [a.id, a]));
-
-  // Check all selected items exist
-  for (const selection of selections) {
-    if (!accessMap.has(selection.accessId)) {
-      errors.push(`Access item ${selection.accessId} not found or inactive`);
-    }
-  }
-
-  if (errors.length > 0) {
-    return { valid: false, errors };
-  }
-
-  // Check time conflicts WITHIN EACH TYPE (items with same startsAt in same type)
-  // Group selections by type first, then check time slots within each type
-  const selectionsByType = new Map<
-    string,
-    { access: EventAccess; selection: AccessSelection }[]
-  >();
-
-  for (const selection of selections) {
-    const access = accessMap.get(selection.accessId)!;
-    // For OTHER type, use groupLabel as key to allow custom groups
-    const typeKey = getAccessTypeKey(access.type, access.groupLabel);
-
-    if (!selectionsByType.has(typeKey)) selectionsByType.set(typeKey, []);
-    selectionsByType.get(typeKey)!.push({ access, selection });
-  }
-
-  // For each type group, check for actual time OVERLAP (not just same startsAt)
-  for (const typeItems of selectionsByType.values()) {
-    // Compare each pair for actual time overlap
-    for (let i = 0; i < typeItems.length; i++) {
-      for (let j = i + 1; j < typeItems.length; j++) {
-        const a = typeItems[i].access;
-        const b = typeItems[j].access;
-
-        // Only check overlap if both items have start and end times
-        if (a.startsAt && a.endsAt && b.startsAt && b.endsAt) {
-          const aStart = a.startsAt.getTime();
-          const aEnd = a.endsAt.getTime();
-          const bStart = b.startsAt.getTime();
-          const bEnd = b.endsAt.getTime();
-
-          // True overlap: !(aEnd <= bStart || bEnd <= aStart)
-          // i.e., they overlap if a doesn't end before b starts AND b doesn't end before a starts
-          if (!(aEnd <= bStart || bEnd <= aStart)) {
-            errors.push(`Time conflict: "${a.name}" and "${b.name}" overlap`);
-          }
-        }
-      }
-    }
-  }
-
-  // Check prerequisites
-  for (const selection of selections) {
-    const access = accessMap.get(selection.accessId)!;
-    if (access.requiredAccess && access.requiredAccess.length > 0) {
-      for (const req of access.requiredAccess) {
-        if (!accessIds.includes(req.id)) {
-          const accessName = access.name;
-          errors.push(
-            `${accessName} requires selecting its prerequisite first`,
-          );
-        }
-      }
-    }
-  }
-
-  // Check form-based conditions
-  const now = new Date();
-  for (const selection of selections) {
-    const access = accessMap.get(selection.accessId)!;
-
-    // Date availability
-    if (access.availableFrom && access.availableFrom > now) {
-      errors.push(`${access.name} is not yet available`);
-    }
-    if (access.availableTo && access.availableTo < now) {
-      errors.push(`${access.name} is no longer available`);
-    }
-
-    // Form conditions
-    if (access.conditions) {
-      if (
-        !evaluateConditions(
-          access.conditions as AccessCondition[],
-          access.conditionLogic as "AND" | "OR",
-          formData,
-        )
-      ) {
-        errors.push(
-          `${access.name} is not available based on your form answers`,
-        );
-      }
-    }
-  }
-
-  // Check capacity (without reserving)
-  for (const selection of selections) {
-    const access = accessMap.get(selection.accessId)!;
-    if (access.maxCapacity !== null) {
-      const spotsRemaining = access.maxCapacity - access.registeredCount;
-      if (spotsRemaining < selection.quantity) {
-        errors.push(`${access.name} is full`);
-      }
-    }
-  }
-
-  return { valid: errors.length === 0, errors };
+export async function incrementPaidCount(
+  accessId: string,
+  quantity: number = 1,
+  db: CapacityDbClient = prisma,
+): Promise<void> {
+  await db.$executeRaw`
+    UPDATE event_access
+    SET paid_count = paid_count + ${quantity}
+    WHERE id = ${accessId}
+  `;
 }
+
+/**
+ * Decrement paid count (with floor constraint).
+ */
+export async function decrementPaidCount(
+  accessId: string,
+  quantity: number = 1,
+  db: CapacityDbClient = prisma,
+): Promise<void> {
+  await db.$executeRaw`
+    UPDATE event_access
+    SET paid_count = GREATEST(0, paid_count - ${quantity})
+    WHERE id = ${accessId}
+  `;
+}
+
+type CapacityReachedDbClient = CapacityDbClient & {
+  registration: Pick<typeof prisma.registration, "findMany" | "update">;
+  sponsorshipUsage: Pick<typeof prisma.sponsorshipUsage, "findMany">;
+  auditLog: Pick<typeof prisma.auditLog, "create">;
+};
+
+/**
+ * When paid count hits max capacity, drop access from unprotected registrations.
+ *
+ * "Unprotected" = NOT fully settled AND the access is NOT covered by a linked sponsorship.
+ * PARTIAL registrations keep access items that are covered by their sponsorship's coveredAccessIds.
+ */
+export async function handleCapacityReached(
+  eventId: string,
+  accessIds: string[],
+  db: CapacityReachedDbClient = prisma,
+): Promise<number> {
+  let totalAffected = 0;
+
+  for (const accessId of accessIds) {
+    const access = await db.eventAccess.findUnique({
+      where: { id: accessId },
+      select: { id: true, name: true, maxCapacity: true, paidCount: true },
+    });
+    if (!access || access.maxCapacity === null || access.paidCount < access.maxCapacity) {
+      continue;
+    }
+
+    // Find registrations that have this access but are NOT fully settled
+    const registrations = await db.registration.findMany({
+      where: {
+        eventId,
+        paymentStatus: { notIn: [...FULLY_SETTLED_STATUSES, "REFUNDED"] as PaymentStatus[] },
+        accessTypeIds: { has: accessId },
+      },
+      select: {
+        id: true,
+        accessTypeIds: true,
+        droppedAccessIds: true,
+        totalAmount: true,
+        accessAmount: true,
+        sponsorshipAmount: true,
+        priceBreakdown: true,
+      },
+    });
+
+    for (const reg of registrations) {
+      // Check if this access is protected by a linked sponsorship (PARTIAL case)
+      const usages = await db.sponsorshipUsage.findMany({
+        where: { registrationId: reg.id },
+        select: { sponsorship: { select: { coveredAccessIds: true } } },
+      });
+      const allCoveredAccessIds = usages.flatMap((u) => u.sponsorship.coveredAccessIds);
+      if (allCoveredAccessIds.includes(accessId)) {
+        continue; // This access is covered by sponsorship — don't drop it
+      }
+
+      // Drop this access from the registration
+      const breakdown = reg.priceBreakdown as PriceBreakdown;
+      const droppedItem = breakdown.accessItems.find((a) => a.accessId === accessId);
+      if (!droppedItem) continue;
+
+      const newAccessItems = breakdown.accessItems.filter((a) => a.accessId !== accessId);
+      const newAccessTotal = newAccessItems.reduce((sum, a) => sum + a.subtotal, 0);
+      const newSubtotal = breakdown.calculatedBasePrice + newAccessTotal;
+      const newSponsorshipTotal = Math.min(breakdown.sponsorshipTotal, newSubtotal);
+      const newTotal = Math.max(0, newSubtotal - newSponsorshipTotal);
+
+      const updatedBreakdown = {
+        ...breakdown,
+        accessItems: newAccessItems,
+        accessTotal: newAccessTotal,
+        subtotal: newSubtotal,
+        sponsorshipTotal: newSponsorshipTotal,
+        total: newTotal,
+        droppedAccessItems: [
+          ...(breakdown.droppedAccessItems ?? []),
+          { ...droppedItem, reason: "capacity_reached" as const },
+        ],
+      };
+
+      await db.registration.update({
+        where: { id: reg.id },
+        data: {
+          accessTypeIds: reg.accessTypeIds.filter((id) => id !== accessId),
+          droppedAccessIds: [...(reg.droppedAccessIds ?? []), accessId],
+          priceBreakdown: updatedBreakdown as unknown as Prisma.InputJsonValue,
+          totalAmount: newTotal,
+          accessAmount: newAccessTotal,
+          sponsorshipAmount: newSponsorshipTotal,
+        },
+      });
+
+      // Release the registered_count spot
+      await releaseAccessSpot(accessId, droppedItem.quantity, db);
+
+      await db.auditLog.create({
+        data: {
+          entityType: "Registration",
+          entityId: reg.id,
+          action: "ACCESS_CAPACITY_REACHED",
+          changes: {
+            accessId,
+            accessName: access.name,
+            priceDeducted: droppedItem.subtotal,
+            oldTotal: reg.totalAmount,
+            newTotal,
+          } as unknown as Prisma.InputJsonValue,
+          performedBy: "SYSTEM",
+        },
+      });
+
+      totalAffected++;
+    }
+  }
+
+  return totalAffected;
+}
+
+// ============================================================================
+// Validation — extracted to access-validation.ts
+// ============================================================================
+
+export { validateAccessSelections } from "./access-validation.js";
 
 // ============================================================================
 // Helpers
 // ============================================================================
-
-function evaluateConditions(
-  conditions: AccessCondition[],
-  logic: "AND" | "OR",
-  formData: Record<string, unknown>,
-): boolean {
-  const results = conditions.map((c) => evaluateSingleCondition(c, formData));
-  return logic === "AND" ? results.every(Boolean) : results.some(Boolean);
-}
-
-function evaluateSingleCondition(
-  condition: AccessCondition,
-  formData: Record<string, unknown>,
-): boolean {
-  const value = formData[condition.fieldId];
-
-  switch (condition.operator) {
-    case "equals":
-      return value === condition.value;
-    case "not_equals":
-      return value !== condition.value;
-    default:
-      return false;
-  }
-}

@@ -16,20 +16,17 @@ import {
   listRegistrations,
   verifyEditToken,
   getRegistrationClientId,
-  registrationExists,
   getRegistrationForEdit,
   editRegistrationPublic,
   uploadPaymentProof,
 } from "./registrations.service.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
-import type { PriceBreakdown } from "./registrations.schema.js";
+import type { PriceBreakdown } from "@pricing";
 import { faker } from "@faker-js/faker";
 
 // Mock external module dependencies
 vi.mock("@events", () => ({
-  incrementRegisteredCount: vi.fn().mockResolvedValue(undefined),
-  decrementRegisteredCount: vi.fn().mockResolvedValue(undefined),
   incrementRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
   decrementRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
 }));
@@ -47,8 +44,8 @@ vi.mock("@pricing", () => ({
     basePrice: 300,
     appliedRules: [],
     calculatedBasePrice: 300,
-    extras: [],
-    extrasTotal: 0,
+    accessItems: [],
+    accessTotal: 0,
     subtotal: 300,
     sponsorships: [],
     sponsorshipTotal: 0,
@@ -61,14 +58,18 @@ vi.mock("@email", () => ({
   queueTriggeredEmail: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("@shared/utils/form-data-validator.js", () => ({
-  validateFormData: vi.fn().mockReturnValue({ valid: true, errors: [] }),
-  sanitizeFormData: vi
-    .fn()
-    .mockImplementation(
-      (_schema: unknown, formData: Record<string, unknown>) => formData,
-    ),
-}));
+vi.mock("@forms", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@forms")>();
+  return {
+    ...actual,
+    validateFormData: vi.fn().mockReturnValue({ valid: true, errors: [] }),
+    sanitizeFormData: vi
+      .fn()
+      .mockImplementation(
+        (_schema: unknown, formData: Record<string, unknown>) => formData,
+      ),
+  };
+});
 
 vi.mock("@shared/services/storage/index.js", () => ({
   getStorageProvider: vi.fn(() => ({
@@ -76,6 +77,10 @@ vi.mock("@shared/services/storage/index.js", () => ({
       .fn()
       .mockResolvedValue("https://storage.example.com/test/proof.webp"),
     getSignedUrl: vi.fn().mockResolvedValue("https://signed-url.example.com"),
+    download: vi.fn().mockResolvedValue({
+      buffer: Buffer.from("downloaded-content"),
+      contentType: "image/jpeg",
+    }),
     delete: vi.fn().mockResolvedValue(undefined),
   })),
 }));
@@ -114,6 +119,7 @@ describe("Registrations Service", () => {
       sponsorshipTotal: 0,
       total: 300,
       currency: "TND",
+      droppedAccessItems: [],
       ...overrides,
     };
   }
@@ -471,7 +477,12 @@ describe("Registrations Service", () => {
     });
 
     it("should throw error when registration not found", async () => {
-      prismaMock.registration.findUnique.mockResolvedValue(null);
+      prismaMock.$transaction.mockImplementation(
+        async (callback: (tx: typeof prismaMock) => Promise<unknown>) => {
+          prismaMock.registration.findUnique.mockResolvedValue(null);
+          return callback(prismaMock);
+        },
+      );
 
       await expect(
         updateRegistration("non-existent", { note: "test" }),
@@ -589,7 +600,12 @@ describe("Registrations Service", () => {
           paymentStatus: "REFUNDED",
         });
 
-        prismaMock.registration.findUnique.mockResolvedValue(registration);
+        prismaMock.$transaction.mockImplementation(
+          async (callback: (tx: typeof prismaMock) => Promise<unknown>) => {
+            prismaMock.registration.findUnique.mockResolvedValue(registration);
+            return callback(prismaMock);
+          },
+        );
 
         await expect(
           confirmPayment(registration.id, { paymentStatus: "PAID" }),
@@ -609,7 +625,12 @@ describe("Registrations Service", () => {
           paymentStatus: "WAIVED",
         });
 
-        prismaMock.registration.findUnique.mockResolvedValue(registration);
+        prismaMock.$transaction.mockImplementation(
+          async (callback: (tx: typeof prismaMock) => Promise<unknown>) => {
+            prismaMock.registration.findUnique.mockResolvedValue(registration);
+            return callback(prismaMock);
+          },
+        );
 
         // WAIVED -> PAID is not allowed
         await expect(
@@ -669,7 +690,12 @@ describe("Registrations Service", () => {
     it("should throw error when trying to delete paid registration", async () => {
       const registration = createMockRegistration({ paymentStatus: "PAID" });
 
-      prismaMock.registration.findUnique.mockResolvedValue(registration);
+      prismaMock.$transaction.mockImplementation(
+        async (callback: (tx: typeof prismaMock) => Promise<unknown>) => {
+          prismaMock.registration.findUnique.mockResolvedValue(registration);
+          return callback(prismaMock);
+        },
+      );
 
       await expect(deleteRegistration(registration.id)).rejects.toThrow(
         AppError,
@@ -681,7 +707,12 @@ describe("Registrations Service", () => {
     });
 
     it("should throw error when registration not found", async () => {
-      prismaMock.registration.findUnique.mockResolvedValue(null);
+      prismaMock.$transaction.mockImplementation(
+        async (callback: (tx: typeof prismaMock) => Promise<unknown>) => {
+          prismaMock.registration.findUnique.mockResolvedValue(null);
+          return callback(prismaMock);
+        },
+      );
 
       await expect(deleteRegistration("non-existent")).rejects.toThrow(
         AppError,
@@ -689,6 +720,49 @@ describe("Registrations Service", () => {
       await expect(deleteRegistration("non-existent")).rejects.toMatchObject({
         statusCode: 404,
         code: ErrorCodes.REGISTRATION_NOT_FOUND,
+      });
+    });
+
+    // ------------------------------------------------------------------
+    // M13: Force-delete tests
+    // ------------------------------------------------------------------
+
+    it("should successfully force-delete a PAID registration when user is CLIENT_ADMIN", async () => {
+      const registration = createMockRegistration({ paymentStatus: "PAID" });
+      const userId = faker.string.uuid();
+
+      prismaMock.registration.findUnique.mockResolvedValue(registration);
+      prismaMock.$transaction.mockImplementation(
+        async (callback: (tx: typeof prismaMock) => Promise<unknown>) => {
+          prismaMock.auditLog.create.mockResolvedValue({} as never);
+          prismaMock.registration.delete.mockResolvedValue(registration);
+          return callback(prismaMock);
+        },
+      );
+
+      await expect(
+        deleteRegistration(registration.id, userId, true, 1 /* CLIENT_ADMIN */),
+      ).resolves.toBeUndefined();
+    });
+
+    it("should throw FORBIDDEN when force-deleting without CLIENT_ADMIN role", async () => {
+      const registration = createMockRegistration({ paymentStatus: "PAID" });
+      const userId = faker.string.uuid();
+
+      await expect(
+        deleteRegistration(
+          registration.id,
+          userId,
+          true,
+          0 /* SUPER_ADMIN, not CLIENT_ADMIN */,
+        ),
+      ).rejects.toThrow(AppError);
+
+      await expect(
+        deleteRegistration(registration.id, userId, true, 0 /* SUPER_ADMIN */),
+      ).rejects.toMatchObject({
+        statusCode: 403,
+        code: ErrorCodes.FORBIDDEN,
       });
     });
 
@@ -814,20 +888,6 @@ describe("Registrations Service", () => {
       expect(result).toBe(true);
     });
 
-    it("should return false for expired token", async () => {
-      const token = "a".repeat(64);
-      const pastExpiry = new Date(Date.now() - 1000); // 1 second ago
-
-      prismaMock.registration.findUnique.mockResolvedValue({
-        editToken: token,
-        editTokenExpiry: pastExpiry,
-      } as never);
-
-      const result = await verifyEditToken("reg-id", token);
-
-      expect(result).toBe(false);
-    });
-
     it("should return false for invalid token", async () => {
       const storedToken = "a".repeat(64);
       const providedToken = "b".repeat(64);
@@ -888,24 +948,6 @@ describe("Registrations Service", () => {
       const result = await getRegistrationClientId("non-existent");
 
       expect(result).toBeNull();
-    });
-  });
-
-  describe("registrationExists", () => {
-    it("should return true when registration exists", async () => {
-      prismaMock.registration.count.mockResolvedValue(1);
-
-      const result = await registrationExists("reg-id");
-
-      expect(result).toBe(true);
-    });
-
-    it("should return false when registration does not exist", async () => {
-      prismaMock.registration.count.mockResolvedValue(0);
-
-      const result = await registrationExists("non-existent");
-
-      expect(result).toBe(false);
     });
   });
 
@@ -1285,6 +1327,66 @@ describe("Registrations Service", () => {
       ).rejects.toMatchObject({
         statusCode: 404,
         code: ErrorCodes.REGISTRATION_NOT_FOUND,
+      });
+    });
+
+    // ------------------------------------------------------------------
+    // M14: Payment proof state rejection tests
+    // ------------------------------------------------------------------
+
+    it("should reject upload when payment status is PAID", async () => {
+      const registration = createMockRegistration({
+        eventId,
+        paymentStatus: "PAID",
+      });
+
+      prismaMock.registration.findUnique.mockResolvedValue(registration);
+
+      await expect(
+        uploadPaymentProof(registration.id, {
+          buffer: Buffer.from("test"),
+          filename: "proof.pdf",
+          mimetype: "application/pdf",
+        }),
+      ).rejects.toThrow(AppError);
+
+      await expect(
+        uploadPaymentProof(registration.id, {
+          buffer: Buffer.from("test"),
+          filename: "proof.pdf",
+          mimetype: "application/pdf",
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.INVALID_PAYMENT_TRANSITION,
+      });
+    });
+
+    it("should reject upload when payment status is REFUNDED", async () => {
+      const registration = createMockRegistration({
+        eventId,
+        paymentStatus: "REFUNDED",
+      });
+
+      prismaMock.registration.findUnique.mockResolvedValue(registration);
+
+      await expect(
+        uploadPaymentProof(registration.id, {
+          buffer: Buffer.from("test"),
+          filename: "proof.pdf",
+          mimetype: "application/pdf",
+        }),
+      ).rejects.toThrow(AppError);
+
+      await expect(
+        uploadPaymentProof(registration.id, {
+          buffer: Buffer.from("test"),
+          filename: "proof.pdf",
+          mimetype: "application/pdf",
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.INVALID_PAYMENT_TRANSITION,
       });
     });
 

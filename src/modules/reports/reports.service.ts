@@ -16,11 +16,7 @@ import type {
   DailyTrendItem,
   ExportQuery,
 } from "./reports.schema.js";
-import type {
-  EventAnalyticsResponse,
-  AccessRegistrant,
-  AccessRegistrantsResponse,
-} from "./analytics.schemas.js";
+import type { EventAnalyticsResponse } from "./analytics.schemas.js";
 
 // ============================================================================
 // Financial Report
@@ -42,16 +38,6 @@ export async function getFinancialReport(
   eventId: string,
   query: ReportQuery,
 ): Promise<FinancialReportResponse> {
-  // Verify event exists
-  const event = await prisma.event.findUnique({
-    where: { id: eventId },
-    select: { id: true },
-  });
-
-  if (!event) {
-    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
-  }
-
   const dateRange = buildDateFilter(query);
 
   // Build where clause for date filtering
@@ -73,8 +59,8 @@ export async function getFinancialReport(
   // Run all aggregation queries in parallel
   const [summary, byPaymentStatus, byAccessType, dailyTrend] =
     await Promise.all([
-      getFinancialSummary(eventId, baseWhere),
-      getPaymentStatusBreakdown(eventId, baseWhere),
+      getFinancialSummary(baseWhere),
+      getPaymentStatusBreakdown(baseWhere),
       getAccessBreakdown(eventId, dateRange),
       getDailyTrend(eventId, dateRange),
     ]);
@@ -98,7 +84,6 @@ export async function getFinancialReport(
 // ============================================================================
 
 async function getFinancialSummary(
-  _eventId: string,
   where: Record<string, unknown>,
 ): Promise<FinancialSummary> {
   // Group by currency for accurate multi-currency reporting
@@ -116,12 +101,12 @@ async function getFinancialSummary(
     _count: true,
   });
 
-  // Get pending amounts by currency
+  // Get pending amounts by currency (includes VERIFYING — money not yet confirmed)
   const pendingByCurrency = await prisma.registration.groupBy({
     by: ["currency"],
     where: {
       ...where,
-      paymentStatus: "PENDING",
+      paymentStatus: { in: ["PENDING", "VERIFYING", "PARTIAL"] },
     },
     _sum: {
       totalAmount: true,
@@ -215,7 +200,6 @@ async function getFinancialSummary(
 // ============================================================================
 
 async function getPaymentStatusBreakdown(
-  _eventId: string,
   where: Record<string, unknown>,
 ): Promise<PaymentStatusBreakdownItem[]> {
   const groups = await prisma.registration.groupBy({
@@ -337,23 +321,29 @@ async function getDailyTrend(
 export async function getEventAnalytics(
   eventId: string,
 ): Promise<EventAnalyticsResponse> {
+  // Run all aggregation queries in parallel
+  // Note: Registration has no separate status field — paymentStatus is the sole lifecycle status.
   const [
     paymentsByStatus,
     paymentsByMethod,
     accessItems,
     sponsorshipsByStatus,
-    registrationAmounts,
   ] = await Promise.all([
+    // Registration counts by payment status
     prisma.registration.groupBy({
       by: ["paymentStatus"],
       where: { eventId },
       _count: true,
     }),
+
+    // Registration counts by payment method (includes null = not yet set)
     prisma.registration.groupBy({
       by: ["paymentMethod"],
       where: { eventId },
       _count: true,
     }),
+
+    // Access items with capacity info (ordered by start time if available)
     prisma.eventAccess.findMany({
       where: { eventId },
       select: {
@@ -365,59 +355,56 @@ export async function getEventAnalytics(
       },
       orderBy: { startsAt: "asc" },
     }),
+
+    // Sponsorship counts by status
     prisma.sponsorship.groupBy({
       by: ["status"],
       where: { eventId },
       _count: true,
     }),
-    prisma.registration.findMany({
-      where: { eventId },
-      select: { totalAmount: true, sponsorshipAmount: true },
-    }),
   ]);
 
-  const paymentStatusCounts = new Map(
-    paymentsByStatus.map((group) => [group.paymentStatus, group._count]),
-  );
-  const paymentMethodCounts = new Map(
-    paymentsByMethod.map((group) => [
-      group.paymentMethod ?? "UNSET",
-      group._count,
-    ]),
+  // Build lookup from payment status groups
+  const paymentMap = new Map(
+    paymentsByStatus.map((g) => [g.paymentStatus, g._count]),
   );
 
-  let fullySponsored = 0;
-  let partiallySponsored = 0;
-  let notSponsored = 0;
-  for (const reg of registrationAmounts) {
-    if (reg.sponsorshipAmount >= reg.totalAmount && reg.sponsorshipAmount > 0) {
-      fullySponsored++;
-    } else if (reg.sponsorshipAmount > 0) {
-      partiallySponsored++;
-    } else {
-      notSponsored++;
-    }
-  }
+  // Build lookup from payment method groups (paymentMethod is nullable)
+  const methodMap = new Map(
+    paymentsByMethod.map((g) => [g.paymentMethod ?? "UNSET", g._count]),
+  );
+
+  const registrationTotal = paymentsByStatus.reduce(
+    (sum, g) => sum + g._count,
+    0,
+  );
+
+  const sponsorshipTotal = sponsorshipsByStatus.reduce(
+    (sum, g) => sum + g._count,
+    0,
+  );
 
   return {
     eventId,
     generatedAt: new Date().toISOString(),
     registrations: {
-      total: paymentsByStatus.reduce((sum, group) => sum + group._count, 0),
+      total: registrationTotal,
     },
     payments: {
-      paid: paymentStatusCounts.get("PAID") ?? 0,
-      verifying: paymentStatusCounts.get("VERIFYING") ?? 0,
-      pending: paymentStatusCounts.get("PENDING") ?? 0,
-      waived: paymentStatusCounts.get("WAIVED") ?? 0,
-      refunded: paymentStatusCounts.get("REFUNDED") ?? 0,
+      paid: paymentMap.get("PAID") ?? 0,
+      verifying: paymentMap.get("VERIFYING") ?? 0,
+      pending: paymentMap.get("PENDING") ?? 0,
+      partial: paymentMap.get("PARTIAL") ?? 0,
+      sponsored: paymentMap.get("SPONSORED") ?? 0,
+      waived: paymentMap.get("WAIVED") ?? 0,
+      refunded: paymentMap.get("REFUNDED") ?? 0,
     },
     paymentMethods: {
-      bankTransfer: paymentMethodCounts.get("BANK_TRANSFER") ?? 0,
-      online: paymentMethodCounts.get("ONLINE") ?? 0,
-      cash: paymentMethodCounts.get("CASH") ?? 0,
-      labSponsorship: paymentMethodCounts.get("LAB_SPONSORSHIP") ?? 0,
-      unset: paymentMethodCounts.get("UNSET") ?? 0,
+      bankTransfer: methodMap.get("BANK_TRANSFER") ?? 0,
+      online: methodMap.get("ONLINE") ?? 0,
+      cash: methodMap.get("CASH") ?? 0,
+      labSponsorship: methodMap.get("LAB_SPONSORSHIP") ?? 0,
+      unset: methodMap.get("UNSET") ?? 0,
     },
     accessItems: accessItems.map((item) => ({
       id: item.id,
@@ -431,22 +418,17 @@ export async function getEventAnalytics(
           : null,
     })),
     sponsorships: {
-      total: sponsorshipsByStatus.reduce((sum, group) => sum + group._count, 0),
-      byStatus: sponsorshipsByStatus.map((group) => ({
-        status: group.status,
-        count: group._count,
+      total: sponsorshipTotal,
+      byStatus: sponsorshipsByStatus.map((g) => ({
+        status: g.status,
+        count: g._count,
       })),
-    },
-    sponsorshipCoverage: {
-      fullySponsored,
-      partiallySponsored,
-      notSponsored,
     },
   };
 }
 
 // ============================================================================
-// Event Summary Report (Excel)
+// Event Summary Report (Excel) — extracted to excel-generator.ts
 // ============================================================================
 
 export { generateEventSummary } from "./excel-generator.js";
@@ -472,20 +454,21 @@ interface RegistrationExportRow {
   sponsorshipAmount: number;
   submittedAt: Date;
   paidAt: Date | null;
+  formData: unknown;
 }
 
 export async function exportRegistrations(
   eventId: string,
   query: ExportQuery,
 ): Promise<{ filename: string; contentType: string; data: string }> {
-  // Verify event exists
+  // Fail fast — verify event exists before querying registrations
   const event = await prisma.event.findUnique({
     where: { id: eventId },
-    select: { id: true, name: true, slug: true },
+    select: { slug: true },
   });
 
   if (!event) {
-    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   const dateRange = buildDateFilter(query);
@@ -502,7 +485,7 @@ export async function exportRegistrations(
     };
   }
 
-  // Fetch all registrations
+  // Fetch all registrations (including formData for export)
   const registrations = await prisma.registration.findMany({
     where,
     select: {
@@ -522,6 +505,7 @@ export async function exportRegistrations(
       sponsorshipAmount: true,
       submittedAt: true,
       paidAt: true,
+      formData: true,
     },
     orderBy: { submittedAt: "desc" },
   });
@@ -547,84 +531,8 @@ export async function exportRegistrations(
   };
 }
 
-// ============================================================================
-// Access Registrants
-// ============================================================================
-
-export async function getAccessRegistrants(
-  eventId: string,
-  accessId: string,
-): Promise<AccessRegistrantsResponse> {
-  // Verify the access item exists and belongs to this event
-  const access = await prisma.eventAccess.findUnique({
-    where: { id: accessId },
-    select: { id: true, name: true, type: true, eventId: true },
-  });
-
-  if (!access || access.eventId !== eventId) {
-    throw new AppError(
-      "Access item not found",
-      404,
-      true,
-      ErrorCodes.NOT_FOUND,
-    );
-  }
-
-  // Fetch all registrations subscribed to this access item
-  const registrations = await prisma.registration.findMany({
-    where: {
-      eventId,
-      accessTypeIds: { has: accessId },
-    },
-    select: {
-      id: true,
-      firstName: true,
-      lastName: true,
-      email: true,
-      phone: true,
-      paymentStatus: true,
-      paidAmount: true,
-      totalAmount: true,
-      currency: true,
-      submittedAt: true,
-    },
-    orderBy: { submittedAt: "desc" },
-  });
-
-  const settled = registrations.filter(
-    (r) => r.paymentStatus === "PAID" || r.paymentStatus === "WAIVED",
-  );
-  const notSettled = registrations.filter(
-    (r) => r.paymentStatus !== "PAID" && r.paymentStatus !== "WAIVED",
-  );
-
-  const toRegistrant = (r: (typeof registrations)[0]): AccessRegistrant => ({
-    id: r.id,
-    firstName: r.firstName,
-    lastName: r.lastName,
-    email: r.email,
-    phone: r.phone,
-    paymentStatus: r.paymentStatus as AccessRegistrant["paymentStatus"],
-    paidAmount: r.paidAmount,
-    totalAmount: r.totalAmount,
-    currency: r.currency,
-    submittedAt: r.submittedAt.toISOString(),
-  });
-
-  return {
-    accessId: access.id,
-    accessName: access.name,
-    accessType: access.type,
-    total: registrations.length,
-    settled: settled.length,
-    notSettled: notSettled.length,
-    settledList: settled.map(toRegistrant),
-    notSettledList: notSettled.map(toRegistrant),
-  };
-}
-
 function generateCSV(registrations: RegistrationExportRow[]): string {
-  const headers = [
+  const standardHeaders = [
     "ID",
     "Email",
     "First Name",
@@ -643,29 +551,60 @@ function generateCSV(registrations: RegistrationExportRow[]): string {
     "Paid At",
   ];
 
-  const rows = registrations.map((r) => [
-    r.id,
-    r.email,
-    r.firstName ?? "",
-    r.lastName ?? "",
-    r.phone ?? "",
-    r.paymentStatus,
-    r.paymentMethod ?? "",
-    r.totalAmount.toString(),
-    r.paidAmount.toString(),
-    r.baseAmount.toString(),
-    r.accessAmount.toString(),
-    r.discountAmount.toString(),
-    r.sponsorshipCode ?? "",
-    r.sponsorshipAmount.toString(),
-    r.submittedAt.toISOString(),
-    r.paidAt?.toISOString() ?? "",
-  ]);
+  // Dynamically extract all unique keys from formData across all registrations
+  const formDataKeysSet = new Set<string>();
+  for (const r of registrations) {
+    if (r.formData && typeof r.formData === "object" && !Array.isArray(r.formData)) {
+      for (const key of Object.keys(r.formData as Record<string, unknown>)) {
+        formDataKeysSet.add(key);
+      }
+    }
+  }
+  const formDataKeys = Array.from(formDataKeysSet).sort();
+
+  const headers = [...standardHeaders, ...formDataKeys];
+
+  const rows = registrations.map((r) => {
+    const standardValues = [
+      r.id,
+      r.email,
+      r.firstName ?? "",
+      r.lastName ?? "",
+      r.phone ?? "",
+      r.paymentStatus,
+      r.paymentMethod ?? "",
+      r.totalAmount.toString(),
+      r.paidAmount.toString(),
+      r.baseAmount.toString(),
+      r.accessAmount.toString(),
+      r.discountAmount.toString(),
+      r.sponsorshipCode ?? "",
+      r.sponsorshipAmount.toString(),
+      r.submittedAt.toISOString(),
+      r.paidAt?.toISOString() ?? "",
+    ];
+
+    // Extract formData values for each dynamic key
+    const fd = (r.formData && typeof r.formData === "object" && !Array.isArray(r.formData))
+      ? (r.formData as Record<string, unknown>)
+      : {};
+    const formDataValues = formDataKeys.map((key) => {
+      const value = fd[key];
+      if (value == null) return "";
+      if (typeof value === "object") return JSON.stringify(value);
+      return String(value);
+    });
+
+    return [...standardValues, ...formDataValues];
+  });
 
   // Escape CSV values
   const escapeCSV = (value: string): string => {
     // Guard against CSV formula injection
-    if (value.length > 0 && ["=", "+", "-", "@"].includes(value[0])) {
+    if (
+      value.length > 0 &&
+      ["\t", "\r", "\n", "=", "+", "-", "@"].includes(value[0])
+    ) {
       return `"'${value.replace(/"/g, '""')}"`;
     }
     if (value.includes(",") || value.includes('"') || value.includes("\n")) {

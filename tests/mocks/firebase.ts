@@ -1,5 +1,5 @@
-import { vi } from 'vitest';
-import type { DecodedIdToken } from 'firebase-admin/auth';
+import { vi } from "vitest";
+import type { DecodedIdToken } from "firebase-admin/auth";
 
 /**
  * Mock Firebase Auth service.
@@ -23,16 +23,20 @@ export const firebaseStorageMock = {
     file: vi.fn(() => ({
       save: vi.fn().mockResolvedValue(undefined),
       delete: vi.fn().mockResolvedValue(undefined),
-      getSignedUrl: vi.fn().mockResolvedValue(['https://storage.example.com/signed-url']),
+      getSignedUrl: vi
+        .fn()
+        .mockResolvedValue(["https://storage.example.com/signed-url"]),
       exists: vi.fn().mockResolvedValue([true]),
       makePublic: vi.fn().mockResolvedValue(undefined),
-      publicUrl: vi.fn().mockReturnValue('https://storage.example.com/public-url'),
+      publicUrl: vi
+        .fn()
+        .mockReturnValue("https://storage.example.com/public-url"),
     })),
   })),
 };
 
 // Mock Firebase Admin SDK modules
-vi.mock('firebase-admin', () => ({
+vi.mock("firebase-admin", () => ({
   default: {
     initializeApp: vi.fn(() => ({
       auth: () => firebaseAuthMock,
@@ -46,35 +50,34 @@ vi.mock('firebase-admin', () => ({
 }));
 
 // Mock the firebase service module
-vi.mock('@shared/services/firebase.service.js', () => ({
+vi.mock("@shared/services/firebase.service.js", () => ({
   firebaseAuth: firebaseAuthMock,
   firebaseStorage: firebaseStorageMock,
   verifyToken: firebaseAuthMock.verifyIdToken,
   createFirebaseUser: firebaseAuthMock.createUser,
   setCustomClaims: firebaseAuthMock.setCustomUserClaims,
   deleteFirebaseUser: firebaseAuthMock.deleteUser,
-  uploadFile: vi.fn().mockResolvedValue('https://storage.example.com/uploaded-file'),
 }));
 
 /**
  * Helper to create a mock decoded token for testing.
  */
 export function createMockDecodedToken(
-  overrides: Partial<DecodedIdToken> = {}
+  overrides: Partial<DecodedIdToken> = {},
 ): DecodedIdToken {
   return {
-    uid: 'firebase-uid-123',
-    email: 'test@example.com',
+    uid: "firebase-uid-123",
+    email: "test@example.com",
     email_verified: true,
-    aud: 'demo-project',
+    aud: "demo-project",
     auth_time: Math.floor(Date.now() / 1000) - 3600,
     exp: Math.floor(Date.now() / 1000) + 3600,
     iat: Math.floor(Date.now() / 1000),
-    iss: 'https://securetoken.google.com/demo-project',
-    sub: 'firebase-uid-123',
+    iss: "https://securetoken.google.com/demo-project",
+    sub: "firebase-uid-123",
     firebase: {
       identities: {},
-      sign_in_provider: 'password',
+      sign_in_provider: "password",
     },
     ...overrides,
   };

@@ -1,12 +1,14 @@
 import { z, type ZodTypeAny } from "zod";
 import safeRegex from "safe-regex";
+
+const MIN_PHONE_LENGTH = 8;
 import type {
   FormField,
   FormStep,
-  FieldCondition,
   FieldValidation,
-} from "@forms";
+} from "./forms.schema.js";
 import { logger } from "@shared/utils/logger.js";
+import { evaluateConditions } from "@shared/utils/conditions.js";
 
 // ============================================================================
 // Types
@@ -68,69 +70,14 @@ function isSafePattern(pattern: string): boolean {
 }
 
 // ============================================================================
-// Condition Evaluation (matches frontend logic)
+// Condition Evaluation (delegates to shared evaluator)
 // ============================================================================
-
-/**
- * Evaluate a single field condition against form data.
- * Uses direct comparison - condition.value should match option.id.
- */
-function evaluateSingleCondition(
-  condition: FieldCondition,
-  formData: Record<string, unknown>,
-  allFields: FormField[],
-): boolean {
-  // Find target field by ID
-  const targetField = allFields.find((f) => f.id === condition.fieldId);
-  if (!targetField) return true; // Field not found, assume condition met
-
-  const value = formData[condition.fieldId];
-
-  switch (condition.operator) {
-    case "equals":
-      return value === condition.value;
-
-    case "not_equals":
-      return value !== condition.value;
-
-    case "contains":
-      return (
-        typeof value === "string" &&
-        value.includes(String(condition.value ?? ""))
-      );
-
-    case "not_contains":
-      return (
-        typeof value === "string" &&
-        !value.includes(String(condition.value ?? ""))
-      );
-
-    case "greater_than":
-      return typeof value === "number" && value > Number(condition.value);
-
-    case "less_than":
-      return typeof value === "number" && value < Number(condition.value);
-
-    case "is_empty":
-      return (
-        !value || value === "" || (Array.isArray(value) && value.length === 0)
-      );
-
-    case "is_not_empty":
-      return (
-        !!value && value !== "" && !(Array.isArray(value) && value.length === 0)
-      );
-
-    default:
-      return true;
-  }
-}
 
 /**
  * Determine if a field should be validated based on its conditions.
  * Hidden fields (conditions not met) should be skipped during validation.
  */
-export function shouldValidateField(
+function shouldValidateField(
   field: FormField,
   formData: Record<string, unknown>,
   allFields: FormField[],
@@ -139,12 +86,18 @@ export function shouldValidateField(
     return true; // No conditions, always validate
   }
 
-  // Default logic is AND - all conditions must be met for field to be visible
-  const conditionsMet = field.conditions.every((c) =>
-    evaluateSingleCondition(c, formData, allFields),
+  // Filter conditions to only those referencing fields that exist in the schema.
+  // Missing-field conditions are treated as met (field visible by default).
+  const applicableConditions = field.conditions.filter((c) =>
+    allFields.some((f) => f.id === c.fieldId),
   );
 
-  return conditionsMet;
+  if (applicableConditions.length === 0) {
+    return true; // All referenced fields missing — treat as visible
+  }
+
+  const logic = field.conditionLogic ?? "AND";
+  return evaluateConditions(applicableConditions, logic, formData);
 }
 
 // ============================================================================
@@ -216,7 +169,7 @@ function buildPhoneSchema(
   const label = getFieldLabel(field);
 
   // Default minimum for phone numbers
-  const minLen = validation?.minLength ?? 8;
+  const minLen = validation?.minLength ?? MIN_PHONE_LENGTH;
   schema = schema.min(minLen, `${label} must be at least ${minLen} characters`);
 
   if (validation?.maxLength) {
@@ -402,9 +355,19 @@ function buildFileSchema(
 /**
  * Build the appropriate Zod schema for a single field based on its type.
  * Returns null for display-only fields (heading, paragraph).
+ *
+ * Note: merges field.required into validation.required so build functions
+ * only need to check validation?.required (single source of truth inside builders).
  */
 function buildFieldSchema(field: FormField): ZodTypeAny | null {
-  const validation = field.validation;
+  // field.required is the top-level required flag; validation.required is nested.
+  // Either source should make the field required.
+  const isRequired = field.validation?.required || field.required || false;
+  const validation: FieldValidation | undefined = field.validation
+    ? { ...field.validation, required: isRequired }
+    : isRequired
+      ? { required: true }
+      : undefined;
 
   switch (field.type) {
     case "text":
@@ -435,14 +398,19 @@ function buildFieldSchema(field: FormField): ZodTypeAny | null {
     case "file":
       return buildFileSchema(field, validation);
 
+    case "governorate":
+    case "country":
+      return buildDropdownSchema(field, validation);
+
     case "heading":
     case "paragraph":
       // Display-only fields, no validation needed
       return null;
 
-    default:
-      // Unknown field type, accept any value
-      return z.any().optional();
+    default: {
+      const _exhaustive: never = field.type;
+      throw new Error(`Unsupported field type: ${String(_exhaustive)}`);
+    }
   }
 }
 

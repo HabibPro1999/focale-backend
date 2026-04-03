@@ -1,11 +1,6 @@
-import { prisma } from '@/database/client.js';
-import type { Prisma } from '@/generated/prisma/client.js';
-
-// Type for Prisma transaction client
-type TxClient = Omit<
-  typeof prisma,
-  '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'
->;
+import { prisma } from "@/database/client.js";
+import type { Prisma } from "@/generated/prisma/client.js";
+import type { TxClient } from "@shared/types/prisma.js";
 
 export interface AuditLogData {
   entityType: string;
@@ -18,14 +13,16 @@ export interface AuditLogData {
 }
 
 /**
- * Create an audit log entry.
- * Can be used with or without a transaction.
+ * Create an audit log entry inside or outside a transaction.
+ *
+ * @param client - Prisma transaction client (tx) or the bare prisma singleton
+ * @param data   - Audit log payload
  */
 export async function auditLog(
-  txOrPrisma: TxClient | typeof prisma,
-  data: AuditLogData
+  client: TxClient | typeof prisma,
+  data: AuditLogData,
 ): Promise<void> {
-  await txOrPrisma.auditLog.create({
+  await client.auditLog.create({
     data: {
       entityType: data.entityType,
       entityId: data.entityId,
@@ -39,20 +36,21 @@ export async function auditLog(
 }
 
 /**
- * Calculate changes between old and new objects for specified fields.
- * Returns undefined if no changes detected.
+ * Calculate changes between old and new objects for the given fields.
+ * Uses JSON serialization for deep equality so objects and arrays compare correctly.
+ * Returns undefined when no changes are detected.
  */
 export function diffChanges<T extends Record<string, unknown>>(
   old: T | null,
   updated: T,
-  fields: (keyof T)[]
+  fields: (keyof T)[],
 ): Record<string, { old: unknown; new: unknown }> | undefined {
   const changes: Record<string, { old: unknown; new: unknown }> = {};
 
   for (const field of fields) {
     const oldVal = old?.[field];
     const newVal = updated[field];
-    if (oldVal !== newVal) {
+    if (JSON.stringify(oldVal) !== JSON.stringify(newVal)) {
       changes[field as string] = { old: oldVal, new: newVal };
     }
   }

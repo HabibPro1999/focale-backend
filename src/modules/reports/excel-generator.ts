@@ -1,16 +1,14 @@
-// ============================================================================
-// Reports Module - Excel Generator
-// ============================================================================
-
 import ExcelJS from "exceljs";
 import { prisma } from "@/database/client.js";
-import { AppError } from "@shared/errors/app-error.js";
-import { ErrorCodes } from "@shared/errors/error-codes.js";
 
+/**
+ * Build a styled Excel workbook summarising total registrations,
+ * per-access-type counts, and confirmed-seat breakdowns for an event.
+ */
 export async function generateEventSummary(
   eventId: string,
 ): Promise<{ filename: string; data: Buffer }> {
-  const [event, accessTypes, registrations] = await Promise.all([
+  const [event, accessTypes, registrations, sponsoredRows] = await Promise.all([
     prisma.event.findUnique({
       where: { id: eventId },
       select: { name: true, slug: true },
@@ -25,85 +23,70 @@ export async function generateEventSummary(
       select: {
         id: true,
         paymentStatus: true,
+        paymentMethod: true,
         accessTypeIds: true,
-        totalAmount: true,
         sponsorshipAmount: true,
+        totalAmount: true,
       },
+    }),
+    prisma.sponsorshipUsage.findMany({
+      where: {
+        sponsorship: { eventId },
+        registrationId: { not: null },
+      },
+      select: { registrationId: true },
+      distinct: ["registrationId"],
     }),
   ]);
 
-  if (!event) {
-    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
-  }
+  const sponsoredRegIds = new Set(sponsoredRows.map((r) => r.registrationId));
+
+  // ── Compute stats ──
 
   const totalRegistrants = registrations.length;
 
-  // --- Registrations per access type (all) ---
   const accessCounts: Record<string, number> = {};
-  for (const accessType of accessTypes) {
-    accessCounts[accessType.id] = 0;
-  }
-  for (const registration of registrations) {
-    for (const accessTypeId of registration.accessTypeIds) {
-      if (accessCounts[accessTypeId] !== undefined) {
-        accessCounts[accessTypeId] += 1;
-      }
+  for (const at of accessTypes) accessCounts[at.id] = 0;
+  for (const r of registrations) {
+    for (const atId of r.accessTypeIds) {
+      if (accessCounts[atId] !== undefined) accessCounts[atId]++;
     }
   }
 
-  // --- Settled = PAID + WAIVED ---
-  const settled = registrations.filter(
-    (r) => r.paymentStatus === "PAID" || r.paymentStatus === "WAIVED",
+  // Confirmed = PAID, SPONSORED, or WAIVED (admin waiver for speakers/VIPs)
+  const paidOnly = registrations.filter(
+    (r) => r.paymentStatus === "PAID" && !sponsoredRegIds.has(r.id),
   );
-
-  // Settled breakdown
-  const selfPaid = settled.filter(
+  const sponsoredOnly = registrations.filter(
     (r) =>
-      r.paymentStatus === "PAID" && r.sponsorshipAmount === 0,
+      r.paymentStatus === "SPONSORED" ||
+      (r.paymentStatus !== "PAID" &&
+        r.paymentStatus !== "WAIVED" &&
+        sponsoredRegIds.has(r.id)),
   );
-  const settledFullySponsored = settled.filter(
-    (r) =>
-      r.paymentStatus === "PAID" &&
-      r.sponsorshipAmount >= r.totalAmount &&
-      r.sponsorshipAmount > 0,
+  const paidAndSponsored = registrations.filter(
+    (r) => r.paymentStatus === "PAID" && sponsoredRegIds.has(r.id),
   );
-  const settledPartiallySponsored = settled.filter(
-    (r) =>
-      r.paymentStatus === "PAID" &&
-      r.sponsorshipAmount > 0 &&
-      r.sponsorshipAmount < r.totalAmount,
-  );
-  const waivedOnly = settled.filter(
+  const waivedOnly = registrations.filter(
     (r) => r.paymentStatus === "WAIVED",
   );
-
-  // --- Sponsorship coverage (all registrations) ---
-  const fullySponsored = registrations.filter(
-    (r) => r.sponsorshipAmount >= r.totalAmount && r.sponsorshipAmount > 0,
-  );
-  const partiallySponsored = registrations.filter(
-    (r) => r.sponsorshipAmount > 0 && r.sponsorshipAmount < r.totalAmount,
-  );
-  const notSponsored = registrations.filter(
-    (r) => r.sponsorshipAmount === 0,
+  const confirmed = registrations.filter(
+    (r) =>
+      r.paymentStatus === "PAID" ||
+      r.paymentStatus === "SPONSORED" ||
+      r.paymentStatus === "WAIVED" ||
+      sponsoredRegIds.has(r.id),
   );
 
-  // --- Settled per access type ---
-  const settledPerAccess: Record<string, number> = {};
-  for (const accessType of accessTypes) {
-    settledPerAccess[accessType.id] = 0;
-  }
-  for (const registration of settled) {
-    for (const accessTypeId of registration.accessTypeIds) {
-      if (settledPerAccess[accessTypeId] !== undefined) {
-        settledPerAccess[accessTypeId] += 1;
-      }
+  const confirmedPerAccess: Record<string, number> = {};
+  for (const at of accessTypes) confirmedPerAccess[at.id] = 0;
+  for (const r of confirmed) {
+    for (const atId of r.accessTypeIds) {
+      if (confirmedPerAccess[atId] !== undefined) confirmedPerAccess[atId]++;
     }
   }
 
-  // ============================================================================
-  // Build workbook
-  // ============================================================================
+  // ── Build Excel ──
 
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Focale OS";
@@ -138,10 +121,10 @@ export async function generateEventSummary(
 
   sheet.mergeCells(`A${row}:C${row}`);
   const titleCell = sheet.getCell(`A${row}`);
-  titleCell.value = event.name;
+  titleCell.value = event!.name;
   titleCell.font = { bold: true, size: 16, color: { argb: "FF1F4E79" } };
   titleCell.alignment = { horizontal: "center" };
-  row += 1;
+  row++;
 
   sheet.mergeCells(`A${row}:C${row}`);
   const dateCell = sheet.getCell(`A${row}`);
@@ -157,40 +140,34 @@ export async function generateEventSummary(
     cell.fill = headerFill;
     cell.font = headerFont;
     cell.border = border;
-    row += 1;
+    row++;
   };
 
-  const addKeyValueRow = (
+  const addKVRow = (
     label: string,
     value: number | string,
-    options?: { bold?: boolean; indent?: boolean },
+    opts?: { bold?: boolean; indent?: boolean },
   ) => {
     const labelCell = sheet.getCell(`A${row}`);
-    labelCell.value = options?.indent ? `  - ${label}` : label;
-    if (options?.bold) {
-      labelCell.font = { bold: true, size: 11 };
-    }
+    labelCell.value = opts?.indent ? `  - ${label}` : label;
+    if (opts?.bold) labelCell.font = { bold: true, size: 11 };
     labelCell.border = border;
-
-    const valueCell = sheet.getCell(`B${row}`);
-    valueCell.value = value;
-    if (options?.bold) {
-      valueCell.font = { bold: true, size: 14 };
-    }
-    valueCell.border = border;
-
-    row += 1;
+    const valCell = sheet.getCell(`B${row}`);
+    valCell.value = value;
+    if (opts?.bold) valCell.font = { bold: true, size: 14 };
+    valCell.border = border;
+    row++;
   };
 
-  const addTableHeader = (columns: string[]) => {
-    columns.forEach((column, index) => {
-      const cell = sheet.getRow(row).getCell(index + 1);
-      cell.value = column;
+  const addTableHeader = (cols: string[]) => {
+    cols.forEach((col, i) => {
+      const cell = sheet.getRow(row).getCell(i + 1);
+      cell.value = col;
       cell.fill = subHeaderFill;
       cell.font = subHeaderFont;
       cell.border = border;
     });
-    row += 1;
+    row++;
   };
 
   const addAccessRow = (name: string, type: string, count: number) => {
@@ -201,61 +178,38 @@ export async function generateEventSummary(
     sheet.getCell(`C${row}`).value = count;
     sheet.getCell(`C${row}`).border = border;
     sheet.getCell(`C${row}`).alignment = { horizontal: "center" };
-    row += 1;
+    row++;
   };
 
-  // Section 1: Total Registrants
   addSectionHeader("1. Total Registrants");
-  addKeyValueRow("Total Registrations", totalRegistrants, { bold: true });
-  row += 1;
+  addKVRow("Total Registrations", totalRegistrants, { bold: true });
+  row++;
 
-  // Section 2: Registrations per Access Type
   addSectionHeader("2. Registrations per Access Type");
   addTableHeader(["Access Type", "Category", "Count"]);
-  for (const accessType of accessTypes) {
-    addAccessRow(accessType.name, accessType.type, accessCounts[accessType.id]);
+  for (const at of accessTypes) {
+    addAccessRow(at.name, at.type, accessCounts[at.id]);
   }
-  row += 1;
+  row++;
 
-  // Section 3: Settled Registrations (Paid + Waived)
-  addSectionHeader("3. Settled Registrations (Paid + Waived)");
-  addKeyValueRow("Total Settled", settled.length, { bold: true });
-  addKeyValueRow("Self-paid (no sponsorship)", selfPaid.length, {
+  addSectionHeader("3. Total Confirmed (Paid, Waived, or Sponsored)");
+  addKVRow("Total Confirmed", confirmed.length, { bold: true });
+  addKVRow("Paid only (PAID, no sponsorship)", paidOnly.length, {
     indent: true,
   });
-  addKeyValueRow("Fully Sponsored", settledFullySponsored.length, {
+  addKVRow("Paid + Sponsored", paidAndSponsored.length, { indent: true });
+  addKVRow("Sponsored only (not yet PAID)", sponsoredOnly.length, {
     indent: true,
   });
-  addKeyValueRow(
-    "Partially Sponsored (remainder paid)",
-    settledPartiallySponsored.length,
-    { indent: true },
+  addKVRow("Waived (speakers / VIPs)", waivedOnly.length, { indent: true });
+  row++;
+
+  addSectionHeader(
+    "4. Confirmed Seats per Access Type (Paid, Waived, or Sponsored)",
   );
-  addKeyValueRow("Waived (speakers / VIPs)", waivedOnly.length, {
-    indent: true,
-  });
-  row += 1;
-
-  // Section 4: Sponsorship Coverage (All Registrations)
-  addSectionHeader("4. Sponsorship Coverage (All Registrations)");
-  addKeyValueRow("Fully Sponsored", fullySponsored.length, { indent: true });
-  addKeyValueRow(
-    "Partially Sponsored (remaining unpaid)",
-    partiallySponsored.length,
-    { indent: true },
-  );
-  addKeyValueRow("Not Sponsored", notSponsored.length, { indent: true });
-  row += 1;
-
-  // Section 5: Settled Seats per Access Type
-  addSectionHeader("5. Settled Seats per Access Type (Paid + Waived)");
-  addTableHeader(["Access Type", "Category", "Settled"]);
-  for (const accessType of accessTypes) {
-    addAccessRow(
-      accessType.name,
-      accessType.type,
-      settledPerAccess[accessType.id],
-    );
+  addTableHeader(["Access Type", "Category", "Confirmed"]);
+  for (const at of accessTypes) {
+    addAccessRow(at.name, at.type, confirmedPerAccess[at.id]);
   }
 
   sheet.getColumn(1).width = 50;
@@ -266,7 +220,7 @@ export async function generateEventSummary(
   const timestamp = new Date().toISOString().split("T")[0];
 
   return {
-    filename: `${event.slug}-summary-${timestamp}.xlsx`,
+    filename: `${event!.slug}-summary-${timestamp}.xlsx`,
     data: buffer,
   };
 }

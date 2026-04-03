@@ -15,16 +15,12 @@ import {
   type ReportQuery,
   type ExportQuery,
 } from "./reports.schema.js";
-import {
-  EventAnalyticsResponseSchema,
-  AccessRegistrantsResponseSchema,
-} from "./analytics.schemas.js";
+import { EventAnalyticsResponseSchema } from "./analytics.schemas.js";
 import {
   getFinancialReport,
   exportRegistrations,
   getEventAnalytics,
   generateEventSummary,
-  getAccessRegistrants,
 } from "./reports.service.js";
 
 // ============================================================================
@@ -32,6 +28,9 @@ import {
 // ============================================================================
 
 export async function reportsRoutes(app: AppInstance): Promise<void> {
+  // All routes require authentication
+  app.addHook("onRequest", requireAuth);
+
   // ----------------------------------------------------------------
   // GET /:eventId/analytics - Get event analytics dashboard data
   // ----------------------------------------------------------------
@@ -45,11 +44,11 @@ export async function reportsRoutes(app: AppInstance): Promise<void> {
           200: EventAnalyticsResponseSchema,
         },
       },
-      preHandler: [requireAuth],
     },
     async (request, reply) => {
       const { eventId } = request.params;
 
+      // Authorization: verify client access
       const event = await getEventById(eventId);
       if (!event) {
         throw app.httpErrors.notFound("Event not found");
@@ -78,7 +77,6 @@ export async function reportsRoutes(app: AppInstance): Promise<void> {
           200: FinancialReportResponseSchema,
         },
       },
-      preHandler: [requireAuth],
     },
     async (request, reply) => {
       const { eventId } = request.params;
@@ -98,18 +96,17 @@ export async function reportsRoutes(app: AppInstance): Promise<void> {
   );
 
   // ----------------------------------------------------------------
-  // GET /:eventId/reports/export - Export registrations
+  // GET /:eventId/reports/registrations - Export registrations (CSV/JSON)
   // ----------------------------------------------------------------
   app.get<{
     Params: { eventId: string };
     Querystring: ExportQuery;
   }>(
-    "/:eventId/reports/export",
+    "/:eventId/reports/registrations",
     {
       schema: {
         querystring: ExportQuerySchema,
       },
-      preHandler: [requireAuth],
     },
     async (request, reply) => {
       const { eventId } = request.params;
@@ -124,80 +121,46 @@ export async function reportsRoutes(app: AppInstance): Promise<void> {
       }
 
       const result = await exportRegistrations(eventId, request.query);
+      const safeFilename = result.filename.replace(/[^a-zA-Z0-9._-]/g, '_');
 
       return reply
         .header("Content-Type", result.contentType)
         .header(
           "Content-Disposition",
-          `attachment; filename="${result.filename}"`,
+          `attachment; filename="${safeFilename}"`,
         )
         .send(result.data);
     },
   );
 
   // ----------------------------------------------------------------
-  // GET /:eventId/reports/summary - Download event summary report
+  // GET /:eventId/reports/summary - Download event summary report (Excel)
   // ----------------------------------------------------------------
   app.get<{
     Params: { eventId: string };
-  }>(
-    "/:eventId/reports/summary",
-    {
-      preHandler: [requireAuth],
-    },
-    async (request, reply) => {
-      const { eventId } = request.params;
+  }>("/:eventId/reports/summary", {}, async (request, reply) => {
+    const { eventId } = request.params;
 
-      const event = await getEventById(eventId);
-      if (!event) {
-        throw app.httpErrors.notFound("Event not found");
-      }
-      if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
-      }
+    const event = await getEventById(eventId);
+    if (!event) {
+      throw app.httpErrors.notFound("Event not found");
+    }
+    if (!canAccessClient(request.user!, event.clientId)) {
+      throw app.httpErrors.forbidden("Insufficient permissions");
+    }
 
-      const result = await generateEventSummary(eventId);
+    const result = await generateEventSummary(eventId);
+    const safeFilename = result.filename.replace(/[^a-zA-Z0-9._-]/g, '_');
 
-      return reply
-        .header(
-          "Content-Type",
-          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-        .header(
-          "Content-Disposition",
-          `attachment; filename="${result.filename}"`,
-        )
-        .send(result.data);
-    },
-  );
-
-  // ----------------------------------------------------------------
-  // GET /:eventId/analytics/access-items/:accessId/registrations
-  // ----------------------------------------------------------------
-  app.get<{
-    Params: { eventId: string; accessId: string };
-  }>(
-    "/:eventId/analytics/access-items/:accessId/registrations",
-    {
-      schema: {
-        response: {
-          200: AccessRegistrantsResponseSchema,
-        },
-      },
-      preHandler: [requireAuth],
-    },
-    async (request, reply) => {
-      const { eventId, accessId } = request.params;
-      const event = await getEventById(eventId);
-      if (!event) {
-        throw app.httpErrors.notFound("Event not found");
-      }
-      if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
-      }
-
-      const result = await getAccessRegistrants(eventId, accessId);
-      return reply.send(result);
-    },
-  );
+    return reply
+      .header(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      )
+      .header(
+        "Content-Disposition",
+        `attachment; filename="${safeFilename}"`,
+      )
+      .send(result.data);
+  });
 }

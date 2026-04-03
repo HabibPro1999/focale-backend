@@ -1,5 +1,9 @@
 import { firebaseStorage } from "../firebase.service.js";
-import type { StorageProvider, UploadOptions } from "./storage.provider.js";
+import type {
+  DownloadedFile,
+  StorageProvider,
+  UploadOptions,
+} from "./storage.provider.js";
 
 export class FirebaseStorageProvider implements StorageProvider {
   async upload(
@@ -35,6 +39,19 @@ export class FirebaseStorageProvider implements StorageProvider {
     });
 
     return url;
+  }
+
+  async download(key: string): Promise<DownloadedFile> {
+    const bucket = firebaseStorage.bucket();
+    const file = bucket.file(key);
+
+    const [buffer] = await file.download();
+    const [metadata] = await file.getMetadata();
+
+    return {
+      buffer,
+      contentType: metadata.contentType ?? null,
+    };
   }
 
   async delete(key: string): Promise<void> {

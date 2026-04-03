@@ -1,33 +1,33 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { prismaMock } from '../../../tests/mocks/prisma.js';
-import { firebaseAuthMock } from '../../../tests/mocks/firebase.js';
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { prismaMock } from "../../../tests/mocks/prisma.js";
+import { firebaseAuthMock } from "../../../tests/mocks/firebase.js";
 import {
   createMockUser,
   createMockSuperAdmin,
   createMockClientAdmin,
   createMockClient,
   UserRole,
-} from '../../../tests/helpers/factories.js';
+} from "../../../tests/helpers/factories.js";
 import {
   createUser,
   getUserById,
   updateUser,
   listUsers,
   deleteUser,
-} from './users.service.js';
-import { AppError } from '@shared/errors/app-error.js';
-import { ErrorCodes } from '@shared/errors/error-codes.js';
+} from "./users.service.js";
+import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
 
 // Mock the clients module
-vi.mock('@clients', () => ({
+vi.mock("@clients", () => ({
   clientExists: vi.fn(),
 }));
 
 // Import the mocked function
-import { clientExists } from '@clients';
+import { clientExists } from "@clients";
 const clientExistsMock = vi.mocked(clientExists);
 
-describe('Users Service', () => {
+describe("Users Service", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -35,33 +35,33 @@ describe('Users Service', () => {
   // ============================================================================
   // createUser
   // ============================================================================
-  describe('createUser', () => {
+  describe("createUser", () => {
     const validClientAdminInput = {
-      email: 'test@example.com',
-      password: 'password123',
-      name: 'Test User',
+      email: "test@example.com",
+      password: "password123",
+      name: "Test User",
       role: UserRole.CLIENT_ADMIN,
-      clientId: 'client-123',
+      clientId: "client-123",
     };
 
     const validSuperAdminInput = {
-      email: 'admin@example.com',
-      password: 'password123',
-      name: 'Super Admin',
+      email: "admin@example.com",
+      password: "password123",
+      name: "Super Admin",
       role: UserRole.SUPER_ADMIN,
       clientId: null,
     };
 
-    it('should create a CLIENT_ADMIN user with valid client', async () => {
-      const expectedUser = createMockClientAdmin('client-123', {
-        id: 'firebase-uid',
+    it("should create a CLIENT_ADMIN user with valid client", async () => {
+      const expectedUser = createMockClientAdmin("client-123", {
+        id: "firebase-uid",
         email: validClientAdminInput.email,
         name: validClientAdminInput.name,
       });
 
       prismaMock.user.findUnique.mockResolvedValue(null); // No existing user
       clientExistsMock.mockResolvedValue(true);
-      firebaseAuthMock.createUser.mockResolvedValue({ uid: 'firebase-uid' });
+      firebaseAuthMock.createUser.mockResolvedValue({ uid: "firebase-uid" });
       firebaseAuthMock.setCustomUserClaims.mockResolvedValue(undefined);
       prismaMock.user.create.mockResolvedValue(expectedUser);
 
@@ -71,35 +71,38 @@ describe('Users Service', () => {
       expect(prismaMock.user.findUnique).toHaveBeenCalledWith({
         where: { email: validClientAdminInput.email },
       });
-      expect(clientExistsMock).toHaveBeenCalledWith('client-123');
+      expect(clientExistsMock).toHaveBeenCalledWith("client-123");
       expect(firebaseAuthMock.createUser).toHaveBeenCalledWith(
         validClientAdminInput.email,
-        validClientAdminInput.password
+        validClientAdminInput.password,
       );
-      expect(firebaseAuthMock.setCustomUserClaims).toHaveBeenCalledWith('firebase-uid', {
-        role: UserRole.CLIENT_ADMIN,
-        clientId: 'client-123',
-      });
+      expect(firebaseAuthMock.setCustomUserClaims).toHaveBeenCalledWith(
+        "firebase-uid",
+        {
+          role: UserRole.CLIENT_ADMIN,
+          clientId: "client-123",
+        },
+      );
       expect(prismaMock.user.create).toHaveBeenCalledWith({
         data: {
-          id: 'firebase-uid',
+          id: "firebase-uid",
           email: validClientAdminInput.email,
           name: validClientAdminInput.name,
           role: UserRole.CLIENT_ADMIN,
-          clientId: 'client-123',
+          clientId: "client-123",
         },
       });
     });
 
-    it('should create a SUPER_ADMIN user without client', async () => {
+    it("should create a SUPER_ADMIN user without client", async () => {
       const expectedUser = createMockSuperAdmin({
-        id: 'firebase-uid',
+        id: "firebase-uid",
         email: validSuperAdminInput.email,
         name: validSuperAdminInput.name,
       });
 
       prismaMock.user.findUnique.mockResolvedValue(null);
-      firebaseAuthMock.createUser.mockResolvedValue({ uid: 'firebase-uid' });
+      firebaseAuthMock.createUser.mockResolvedValue({ uid: "firebase-uid" });
       firebaseAuthMock.setCustomUserClaims.mockResolvedValue(undefined);
       prismaMock.user.create.mockResolvedValue(expectedUser);
 
@@ -107,14 +110,19 @@ describe('Users Service', () => {
 
       expect(result).toEqual(expectedUser);
       expect(clientExistsMock).not.toHaveBeenCalled(); // No client validation for super admin
-      expect(firebaseAuthMock.setCustomUserClaims).toHaveBeenCalledWith('firebase-uid', {
-        role: UserRole.SUPER_ADMIN,
-        clientId: null,
-      });
+      expect(firebaseAuthMock.setCustomUserClaims).toHaveBeenCalledWith(
+        "firebase-uid",
+        {
+          role: UserRole.SUPER_ADMIN,
+          clientId: null,
+        },
+      );
     });
 
-    it('should throw CONFLICT error if email already exists', async () => {
-      const existingUser = createMockUser({ email: validClientAdminInput.email });
+    it("should throw CONFLICT error if email already exists", async () => {
+      const existingUser = createMockUser({
+        email: validClientAdminInput.email,
+      });
       prismaMock.user.findUnique.mockResolvedValue(existingUser);
 
       await expect(createUser(validClientAdminInput)).rejects.toThrow(AppError);
@@ -126,7 +134,7 @@ describe('Users Service', () => {
       expect(firebaseAuthMock.createUser).not.toHaveBeenCalled();
     });
 
-    it('should throw VALIDATION_ERROR if CLIENT_ADMIN without clientId', async () => {
+    it("should throw VALIDATION_ERROR if CLIENT_ADMIN without clientId", async () => {
       prismaMock.user.findUnique.mockResolvedValue(null);
 
       const invalidInput = {
@@ -141,12 +149,12 @@ describe('Users Service', () => {
       });
     });
 
-    it('should throw VALIDATION_ERROR if SUPER_ADMIN with clientId', async () => {
+    it("should throw VALIDATION_ERROR if SUPER_ADMIN with clientId", async () => {
       prismaMock.user.findUnique.mockResolvedValue(null);
 
       const invalidInput = {
         ...validSuperAdminInput,
-        clientId: 'client-123',
+        clientId: "client-123",
       };
 
       await expect(createUser(invalidInput)).rejects.toThrow(AppError);
@@ -156,7 +164,7 @@ describe('Users Service', () => {
       });
     });
 
-    it('should throw BAD_REQUEST if clientId does not exist', async () => {
+    it("should throw BAD_REQUEST if clientId does not exist", async () => {
       prismaMock.user.findUnique.mockResolvedValue(null);
       clientExistsMock.mockResolvedValue(false);
 
@@ -167,61 +175,91 @@ describe('Users Service', () => {
       });
     });
 
-    it('should propagate database errors during user creation', async () => {
+    it("should propagate database errors during user creation", async () => {
       prismaMock.user.findUnique.mockResolvedValue(null);
       clientExistsMock.mockResolvedValue(true);
-      firebaseAuthMock.createUser.mockResolvedValue({ uid: 'firebase-uid' });
+      firebaseAuthMock.createUser.mockResolvedValue({ uid: "firebase-uid" });
       firebaseAuthMock.setCustomUserClaims.mockResolvedValue(undefined);
-      const dbError = new Error('Database error');
+      firebaseAuthMock.deleteUser.mockResolvedValue(undefined); // rollback path
+      const dbError = new Error("Database error");
       prismaMock.user.create.mockRejectedValue(dbError);
 
-      await expect(createUser(validClientAdminInput)).rejects.toThrow('Database error');
+      await expect(createUser(validClientAdminInput)).rejects.toThrow(
+        "Database error",
+      );
     });
 
-    // Note: The service code has a bug where Firebase rollback doesn't work because
-    // `prisma.user.create` is returned directly without await, so the rejection
-    // happens outside the try-catch block. This should be fixed by changing:
-    //   return prisma.user.create({...})
-    // to:
-    //   return await prisma.user.create({...})
+    it("should rollback Firebase user if DB creation fails", async () => {
+      prismaMock.user.findUnique.mockResolvedValue(null);
+      clientExistsMock.mockResolvedValue(true);
+      firebaseAuthMock.createUser.mockResolvedValue({ uid: "firebase-uid" });
+      firebaseAuthMock.setCustomUserClaims.mockResolvedValue(undefined);
+      prismaMock.user.create.mockRejectedValue(new Error("DB error"));
+      firebaseAuthMock.deleteUser.mockResolvedValue(undefined);
+
+      await expect(createUser(validClientAdminInput)).rejects.toThrow(
+        "DB error",
+      );
+      expect(firebaseAuthMock.deleteUser).toHaveBeenCalledWith("firebase-uid");
+    });
+
+    // ------------------------------------------------------------------
+    // M15: setCustomClaims failure rollback test
+    // ------------------------------------------------------------------
+
+    it("should delete Firebase user if setCustomClaims fails", async () => {
+      const claimsError = new Error("setCustomClaims failed");
+
+      prismaMock.user.findUnique.mockResolvedValue(null);
+      clientExistsMock.mockResolvedValue(true);
+      firebaseAuthMock.createUser.mockResolvedValue({ uid: "firebase-uid" });
+      firebaseAuthMock.setCustomUserClaims.mockRejectedValue(claimsError);
+      firebaseAuthMock.deleteUser.mockResolvedValue(undefined);
+
+      await expect(createUser(validClientAdminInput)).rejects.toThrow(
+        "setCustomClaims failed",
+      );
+
+      expect(firebaseAuthMock.deleteUser).toHaveBeenCalledWith("firebase-uid");
+    });
   });
 
   // ============================================================================
   // getUserById
   // ============================================================================
-  describe('getUserById', () => {
-    it('should return user with client when found', async () => {
-      const mockClient = createMockClient({ id: 'client-123' });
-      const mockUser = createMockClientAdmin('client-123', { id: 'user-123' });
+  describe("getUserById", () => {
+    it("should return user with client when found", async () => {
+      const mockClient = createMockClient({ id: "client-123" });
+      const mockUser = createMockClientAdmin("client-123", { id: "user-123" });
       const userWithClient = { ...mockUser, client: mockClient };
 
       prismaMock.user.findUnique.mockResolvedValue(userWithClient);
 
-      const result = await getUserById('user-123');
+      const result = await getUserById("user-123");
 
       expect(result).toEqual(userWithClient);
       expect(prismaMock.user.findUnique).toHaveBeenCalledWith({
-        where: { id: 'user-123' },
+        where: { id: "user-123" },
         include: { client: true },
       });
     });
 
-    it('should return user with null client for SUPER_ADMIN', async () => {
-      const mockUser = createMockSuperAdmin({ id: 'admin-123' });
+    it("should return user with null client for SUPER_ADMIN", async () => {
+      const mockUser = createMockSuperAdmin({ id: "admin-123" });
       const userWithClient = { ...mockUser, client: null };
 
       prismaMock.user.findUnique.mockResolvedValue(userWithClient);
 
-      const result = await getUserById('admin-123');
+      const result = await getUserById("admin-123");
 
       expect(result).toEqual(userWithClient);
       expect(result?.client).toBeNull();
     });
 
-    it('should return null when user not found', async () => {
+    it("should return null when user not found", async () => {
       prismaMock.user.findUnique.mockResolvedValue(null);
 
-      const result = await getUserById('non-existent-id');
+      const result = await getUserById("non-existent-id");
 
       expect(result).toBeNull();
     });
@@ -230,27 +268,33 @@ describe('Users Service', () => {
   // ============================================================================
   // updateUser
   // ============================================================================
-  describe('updateUser', () => {
-    it('should update user name', async () => {
-      const existingUser = createMockUser({ id: 'user-123', name: 'Old Name' });
+  describe("updateUser", () => {
+    it("should update user name", async () => {
+      const existingUser = createMockUser({ id: "user-123", name: "Old Name" });
       const mockClient = createMockClient({ id: existingUser.clientId! });
-      const updatedUser = { ...existingUser, name: 'New Name', client: mockClient };
+      const updatedUser = {
+        ...existingUser,
+        name: "New Name",
+        client: mockClient,
+      };
 
       prismaMock.user.findUnique.mockResolvedValue(existingUser);
       prismaMock.user.update.mockResolvedValue(updatedUser);
 
-      const result = await updateUser('user-123', { name: 'New Name' });
+      const result = await updateUser("user-123", { name: "New Name" });
 
-      expect(result.name).toBe('New Name');
+      expect(result.name).toBe("New Name");
       expect(prismaMock.user.update).toHaveBeenCalledWith({
-        where: { id: 'user-123' },
-        data: { name: 'New Name' },
+        where: { id: "user-123" },
+        data: { name: "New Name" },
         include: { client: true },
       });
     });
 
-    it('should update user role and sync Firebase claims', async () => {
-      const existingUser = createMockClientAdmin('client-123', { id: 'user-123' });
+    it("should update user role and sync Firebase claims", async () => {
+      const existingUser = createMockClientAdmin("client-123", {
+        id: "user-123",
+      });
       const updatedUser = {
         ...existingUser,
         role: UserRole.SUPER_ADMIN,
@@ -262,84 +306,142 @@ describe('Users Service', () => {
       firebaseAuthMock.setCustomUserClaims.mockResolvedValue(undefined);
       prismaMock.user.update.mockResolvedValue(updatedUser);
 
-      const result = await updateUser('user-123', {
+      const result = await updateUser("user-123", {
         role: UserRole.SUPER_ADMIN,
         clientId: null,
       });
 
       expect(result.role).toBe(UserRole.SUPER_ADMIN);
-      expect(firebaseAuthMock.setCustomUserClaims).toHaveBeenCalledWith('user-123', {
-        role: UserRole.SUPER_ADMIN,
-        clientId: null,
-      });
+      expect(firebaseAuthMock.setCustomUserClaims).toHaveBeenCalledWith(
+        "user-123",
+        {
+          role: UserRole.SUPER_ADMIN,
+          clientId: null,
+        },
+      );
     });
 
-    it('should update clientId and sync Firebase claims', async () => {
-      const existingUser = createMockClientAdmin('client-123', { id: 'user-123' });
-      const newClient = createMockClient({ id: 'client-456' });
-      const updatedUser = { ...existingUser, clientId: 'client-456', client: newClient };
+    it("should update clientId and sync Firebase claims", async () => {
+      const existingUser = createMockClientAdmin("client-123", {
+        id: "user-123",
+      });
+      const newClient = createMockClient({ id: "client-456" });
+      const updatedUser = {
+        ...existingUser,
+        clientId: "client-456",
+        client: newClient,
+      };
 
       prismaMock.user.findUnique.mockResolvedValue(existingUser);
       clientExistsMock.mockResolvedValue(true);
       firebaseAuthMock.setCustomUserClaims.mockResolvedValue(undefined);
       prismaMock.user.update.mockResolvedValue(updatedUser);
 
-      const result = await updateUser('user-123', { clientId: 'client-456' });
+      const result = await updateUser("user-123", { clientId: "client-456" });
 
-      expect(result.clientId).toBe('client-456');
-      expect(clientExistsMock).toHaveBeenCalledWith('client-456');
-      expect(firebaseAuthMock.setCustomUserClaims).toHaveBeenCalledWith('user-123', {
-        role: UserRole.CLIENT_ADMIN,
-        clientId: 'client-456',
-      });
+      expect(result.clientId).toBe("client-456");
+      expect(clientExistsMock).toHaveBeenCalledWith("client-456");
+      expect(firebaseAuthMock.setCustomUserClaims).toHaveBeenCalledWith(
+        "user-123",
+        {
+          role: UserRole.CLIENT_ADMIN,
+          clientId: "client-456",
+        },
+      );
     });
 
-    it('should update active status without syncing Firebase claims', async () => {
-      const existingUser = createMockUser({ id: 'user-123', active: true });
+    it("should update active status without syncing Firebase claims", async () => {
+      const existingUser = createMockUser({ id: "user-123", active: true });
       const mockClient = createMockClient({ id: existingUser.clientId! });
-      const updatedUser = { ...existingUser, active: false, client: mockClient };
+      const updatedUser = {
+        ...existingUser,
+        active: false,
+        client: mockClient,
+      };
 
       prismaMock.user.findUnique.mockResolvedValue(existingUser);
       prismaMock.user.update.mockResolvedValue(updatedUser);
 
-      const result = await updateUser('user-123', { active: false });
+      const result = await updateUser("user-123", { active: false });
 
       expect(result.active).toBe(false);
       // Should NOT sync Firebase claims when only active status changes
       expect(firebaseAuthMock.setCustomUserClaims).not.toHaveBeenCalled();
     });
 
-    it('should throw NOT_FOUND when user does not exist', async () => {
+    it("should throw NOT_FOUND when user does not exist", async () => {
       prismaMock.user.findUnique.mockResolvedValue(null);
 
-      await expect(updateUser('non-existent', { name: 'New Name' })).rejects.toThrow(AppError);
-      await expect(updateUser('non-existent', { name: 'New Name' })).rejects.toMatchObject({
+      await expect(
+        updateUser("non-existent", { name: "New Name" }),
+      ).rejects.toThrow(AppError);
+      await expect(
+        updateUser("non-existent", { name: "New Name" }),
+      ).rejects.toMatchObject({
         statusCode: 404,
         code: ErrorCodes.NOT_FOUND,
       });
     });
 
-    it('should throw BAD_REQUEST when clientId does not exist', async () => {
-      const existingUser = createMockUser({ id: 'user-123' });
+    it("should throw BAD_REQUEST when clientId does not exist", async () => {
+      const existingUser = createMockUser({ id: "user-123" });
       prismaMock.user.findUnique.mockResolvedValue(existingUser);
       clientExistsMock.mockResolvedValue(false);
 
-      await expect(updateUser('user-123', { clientId: 'invalid-client' })).rejects.toThrow(AppError);
-      await expect(updateUser('user-123', { clientId: 'invalid-client' })).rejects.toMatchObject({
+      await expect(
+        updateUser("user-123", { clientId: "invalid-client" }),
+      ).rejects.toThrow(AppError);
+      await expect(
+        updateUser("user-123", { clientId: "invalid-client" }),
+      ).rejects.toMatchObject({
         statusCode: 400,
         code: ErrorCodes.BAD_REQUEST,
       });
+    });
+
+    // ------------------------------------------------------------------
+    // M16: updateUser claims rollback test
+    // ------------------------------------------------------------------
+
+    it("should restore original Firebase claims if DB update fails", async () => {
+      const existingUser = createMockClientAdmin("client-123", {
+        id: "user-123",
+      });
+      const dbError = new Error("DB update failed");
+
+      prismaMock.user.findUnique.mockResolvedValue(existingUser);
+      firebaseAuthMock.setCustomUserClaims.mockResolvedValue(undefined);
+      prismaMock.user.update.mockRejectedValue(dbError);
+
+      await expect(
+        updateUser("user-123", {
+          role: UserRole.SUPER_ADMIN,
+          clientId: null,
+        }),
+      ).rejects.toThrow("DB update failed");
+
+      // First call: set the new claims (SUPER_ADMIN, no clientId)
+      // Second call: restore original claims (CLIENT_ADMIN, client-123)
+      expect(firebaseAuthMock.setCustomUserClaims).toHaveBeenCalledTimes(2);
+      expect(firebaseAuthMock.setCustomUserClaims).toHaveBeenNthCalledWith(
+        2,
+        "user-123",
+        {
+          role: existingUser.role,
+          clientId: existingUser.clientId,
+        },
+      );
     });
   });
 
   // ============================================================================
   // listUsers
   // ============================================================================
-  describe('listUsers', () => {
-    it('should return paginated users with default pagination', async () => {
+  describe("listUsers", () => {
+    it("should return paginated users with default pagination", async () => {
       const mockUsers = [
-        { ...createMockUser({ id: 'user-1' }), client: createMockClient() },
-        { ...createMockUser({ id: 'user-2' }), client: createMockClient() },
+        { ...createMockUser({ id: "user-1" }), client: createMockClient() },
+        { ...createMockUser({ id: "user-2" }), client: createMockClient() },
       ];
 
       prismaMock.user.findMany.mockResolvedValue(mockUsers);
@@ -360,51 +462,65 @@ describe('Users Service', () => {
         where: {},
         skip: 0,
         take: 20,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: "desc" },
         include: { client: true },
       });
     });
 
-    it('should filter by role', async () => {
+    it("should filter by role", async () => {
       const superAdmins = [
-        { ...createMockSuperAdmin({ id: 'admin-1' }), client: null },
-        { ...createMockSuperAdmin({ id: 'admin-2' }), client: null },
+        { ...createMockSuperAdmin({ id: "admin-1" }), client: null },
+        { ...createMockSuperAdmin({ id: "admin-2" }), client: null },
       ];
 
       prismaMock.user.findMany.mockResolvedValue(superAdmins);
       prismaMock.user.count.mockResolvedValue(2);
 
-      const result = await listUsers({ page: 1, limit: 20, role: UserRole.SUPER_ADMIN });
+      const result = await listUsers({
+        page: 1,
+        limit: 20,
+        role: UserRole.SUPER_ADMIN,
+      });
 
       expect(result.data).toHaveLength(2);
       expect(prismaMock.user.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { role: UserRole.SUPER_ADMIN },
-        })
+        }),
       );
     });
 
-    it('should filter by clientId', async () => {
+    it("should filter by clientId", async () => {
       const clientUsers = [
-        { ...createMockClientAdmin('client-123', { id: 'user-1' }), client: createMockClient({ id: 'client-123' }) },
+        {
+          ...createMockClientAdmin("client-123", { id: "user-1" }),
+          client: createMockClient({ id: "client-123" }),
+        },
       ];
 
       prismaMock.user.findMany.mockResolvedValue(clientUsers);
       prismaMock.user.count.mockResolvedValue(1);
 
-      const result = await listUsers({ page: 1, limit: 20, clientId: 'client-123' });
+      const result = await listUsers({
+        page: 1,
+        limit: 20,
+        clientId: "client-123",
+      });
 
       expect(result.data).toHaveLength(1);
       expect(prismaMock.user.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { clientId: 'client-123' },
-        })
+          where: { clientId: "client-123" },
+        }),
       );
     });
 
-    it('should filter by active status', async () => {
+    it("should filter by active status", async () => {
       const activeUsers = [
-        { ...createMockUser({ id: 'user-1', active: true }), client: createMockClient() },
+        {
+          ...createMockUser({ id: "user-1", active: true }),
+          client: createMockClient(),
+        },
       ];
 
       prismaMock.user.findMany.mockResolvedValue(activeUsers);
@@ -416,34 +532,41 @@ describe('Users Service', () => {
       expect(prismaMock.user.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { active: true },
-        })
+        }),
       );
     });
 
-    it('should search by name or email', async () => {
+    it("should search by name or email", async () => {
       const searchResults = [
-        { ...createMockUser({ id: 'user-1', name: 'John Doe', email: 'john@example.com' }), client: createMockClient() },
+        {
+          ...createMockUser({
+            id: "user-1",
+            name: "John Doe",
+            email: "john@example.com",
+          }),
+          client: createMockClient(),
+        },
       ];
 
       prismaMock.user.findMany.mockResolvedValue(searchResults);
       prismaMock.user.count.mockResolvedValue(1);
 
-      const result = await listUsers({ page: 1, limit: 20, search: 'john' });
+      const result = await listUsers({ page: 1, limit: 20, search: "john" });
 
       expect(result.data).toHaveLength(1);
       expect(prismaMock.user.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: {
             OR: [
-              { name: { contains: 'john', mode: 'insensitive' } },
-              { email: { contains: 'john', mode: 'insensitive' } },
+              { name: { contains: "john", mode: "insensitive" } },
+              { email: { contains: "john", mode: "insensitive" } },
             ],
           },
-        })
+        }),
       );
     });
 
-    it('should handle pagination correctly', async () => {
+    it("should handle pagination correctly", async () => {
       const mockUsers = Array.from({ length: 5 }, (_, i) => ({
         ...createMockUser({ id: `user-${i + 1}` }),
         client: createMockClient(),
@@ -467,11 +590,11 @@ describe('Users Service', () => {
         expect.objectContaining({
           skip: 5, // (page 2 - 1) * limit 5
           take: 5,
-        })
+        }),
       );
     });
 
-    it('should return empty result when no users match', async () => {
+    it("should return empty result when no users match", async () => {
       prismaMock.user.findMany.mockResolvedValue([]);
       prismaMock.user.count.mockResolvedValue(0);
 
@@ -482,7 +605,7 @@ describe('Users Service', () => {
       expect(result.meta.totalPages).toBe(0);
     });
 
-    it('should combine multiple filters', async () => {
+    it("should combine multiple filters", async () => {
       prismaMock.user.findMany.mockResolvedValue([]);
       prismaMock.user.count.mockResolvedValue(0);
 
@@ -490,23 +613,23 @@ describe('Users Service', () => {
         page: 1,
         limit: 20,
         role: UserRole.CLIENT_ADMIN,
-        clientId: 'client-123',
+        clientId: "client-123",
         active: true,
-        search: 'test',
+        search: "test",
       });
 
       expect(prismaMock.user.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: {
             role: UserRole.CLIENT_ADMIN,
-            clientId: 'client-123',
+            clientId: "client-123",
             active: true,
             OR: [
-              { name: { contains: 'test', mode: 'insensitive' } },
-              { email: { contains: 'test', mode: 'insensitive' } },
+              { name: { contains: "test", mode: "insensitive" } },
+              { email: { contains: "test", mode: "insensitive" } },
             ],
           },
-        })
+        }),
       );
     });
   });
@@ -514,30 +637,47 @@ describe('Users Service', () => {
   // ============================================================================
   // deleteUser
   // ============================================================================
-  describe('deleteUser', () => {
-    it('should delete user from Firebase and database', async () => {
-      const existingUser = createMockUser({ id: 'user-123' });
+  describe("deleteUser", () => {
+    it("should delete user from Firebase and database", async () => {
+      const existingUser = createMockUser({ id: "user-123" });
 
       prismaMock.user.findUnique.mockResolvedValue(existingUser);
       firebaseAuthMock.deleteUser.mockResolvedValue(undefined);
       prismaMock.user.delete.mockResolvedValue(existingUser);
 
-      await deleteUser('user-123');
+      await deleteUser("user-123", "requester-id");
 
       expect(prismaMock.user.findUnique).toHaveBeenCalledWith({
-        where: { id: 'user-123' },
+        where: { id: "user-123" },
       });
-      expect(firebaseAuthMock.deleteUser).toHaveBeenCalledWith('user-123');
+      expect(firebaseAuthMock.deleteUser).toHaveBeenCalledWith("user-123");
       expect(prismaMock.user.delete).toHaveBeenCalledWith({
-        where: { id: 'user-123' },
+        where: { id: "user-123" },
       });
     });
 
-    it('should throw NOT_FOUND when user does not exist', async () => {
+    it("should throw BAD_REQUEST when deleting own account", async () => {
+      await expect(deleteUser("user-123", "user-123")).rejects.toThrow(
+        AppError,
+      );
+      await expect(deleteUser("user-123", "user-123")).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.BAD_REQUEST,
+      });
+
+      expect(prismaMock.user.findUnique).not.toHaveBeenCalled();
+      expect(firebaseAuthMock.deleteUser).not.toHaveBeenCalled();
+    });
+
+    it("should throw NOT_FOUND when user does not exist", async () => {
       prismaMock.user.findUnique.mockResolvedValue(null);
 
-      await expect(deleteUser('non-existent')).rejects.toThrow(AppError);
-      await expect(deleteUser('non-existent')).rejects.toMatchObject({
+      await expect(deleteUser("non-existent", "requester-id")).rejects.toThrow(
+        AppError,
+      );
+      await expect(
+        deleteUser("non-existent", "requester-id"),
+      ).rejects.toMatchObject({
         statusCode: 404,
         code: ErrorCodes.NOT_FOUND,
       });
@@ -546,28 +686,76 @@ describe('Users Service', () => {
       expect(prismaMock.user.delete).not.toHaveBeenCalled();
     });
 
-    it('should delete SUPER_ADMIN user', async () => {
-      const superAdmin = createMockSuperAdmin({ id: 'admin-123' });
+    it("should throw BAD_REQUEST when deleting the last super admin", async () => {
+      const superAdmin = createMockSuperAdmin({ id: "admin-123" });
 
       prismaMock.user.findUnique.mockResolvedValue(superAdmin);
+      prismaMock.user.count.mockResolvedValue(1);
+
+      await expect(deleteUser("admin-123", "requester-id")).rejects.toThrow(
+        AppError,
+      );
+      await expect(
+        deleteUser("admin-123", "requester-id"),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.BAD_REQUEST,
+      });
+
+      expect(firebaseAuthMock.deleteUser).not.toHaveBeenCalled();
+    });
+
+    it("should delete SUPER_ADMIN when other super admins exist", async () => {
+      const superAdmin = createMockSuperAdmin({ id: "admin-123" });
+
+      prismaMock.user.findUnique.mockResolvedValue(superAdmin);
+      prismaMock.user.count.mockResolvedValue(2);
       firebaseAuthMock.deleteUser.mockResolvedValue(undefined);
       prismaMock.user.delete.mockResolvedValue(superAdmin);
 
-      await deleteUser('admin-123');
+      await deleteUser("admin-123", "requester-id");
 
-      expect(firebaseAuthMock.deleteUser).toHaveBeenCalledWith('admin-123');
+      expect(firebaseAuthMock.deleteUser).toHaveBeenCalledWith("admin-123");
       expect(prismaMock.user.delete).toHaveBeenCalledWith({
-        where: { id: 'admin-123' },
+        where: { id: "admin-123" },
       });
+    });
+
+    // ------------------------------------------------------------------
+    // M17: deleteUser Firebase failure test
+    // ------------------------------------------------------------------
+
+    it("should log error but not re-throw when Firebase delete fails after DB delete", async () => {
+      const existingUser = createMockUser({ id: "user-123" });
+
+      prismaMock.user.findUnique.mockResolvedValue(existingUser);
+      prismaMock.user.delete.mockResolvedValue(existingUser);
+      firebaseAuthMock.deleteUser.mockRejectedValue(
+        new Error("Firebase delete failed"),
+      );
+
+      // Function should resolve, not reject — Firebase failure is swallowed
+      await expect(
+        deleteUser("user-123", "requester-id"),
+      ).resolves.toBeUndefined();
+
+      // DB delete must have been called
+      expect(prismaMock.user.delete).toHaveBeenCalledWith({
+        where: { id: "user-123" },
+      });
+      // Firebase delete was attempted
+      expect(firebaseAuthMock.deleteUser).toHaveBeenCalledWith("user-123");
     });
   });
 
   // ============================================================================
   // Role-Based Access Control Edge Cases
   // ============================================================================
-  describe('Role-Based Access Control', () => {
-    it('should handle transition from CLIENT_ADMIN to SUPER_ADMIN', async () => {
-      const existingUser = createMockClientAdmin('client-123', { id: 'user-123' });
+  describe("Role-Based Access Control", () => {
+    it("should handle transition from CLIENT_ADMIN to SUPER_ADMIN", async () => {
+      const existingUser = createMockClientAdmin("client-123", {
+        id: "user-123",
+      });
       const updatedUser = {
         ...existingUser,
         role: UserRole.SUPER_ADMIN,
@@ -579,26 +767,29 @@ describe('Users Service', () => {
       firebaseAuthMock.setCustomUserClaims.mockResolvedValue(undefined);
       prismaMock.user.update.mockResolvedValue(updatedUser);
 
-      const result = await updateUser('user-123', {
+      const result = await updateUser("user-123", {
         role: UserRole.SUPER_ADMIN,
         clientId: null,
       });
 
       expect(result.role).toBe(UserRole.SUPER_ADMIN);
       expect(result.clientId).toBeNull();
-      expect(firebaseAuthMock.setCustomUserClaims).toHaveBeenCalledWith('user-123', {
-        role: UserRole.SUPER_ADMIN,
-        clientId: null,
-      });
+      expect(firebaseAuthMock.setCustomUserClaims).toHaveBeenCalledWith(
+        "user-123",
+        {
+          role: UserRole.SUPER_ADMIN,
+          clientId: null,
+        },
+      );
     });
 
-    it('should handle transition from SUPER_ADMIN to CLIENT_ADMIN', async () => {
-      const existingUser = createMockSuperAdmin({ id: 'admin-123' });
-      const newClient = createMockClient({ id: 'client-456' });
+    it("should handle transition from SUPER_ADMIN to CLIENT_ADMIN", async () => {
+      const existingUser = createMockSuperAdmin({ id: "admin-123" });
+      const newClient = createMockClient({ id: "client-456" });
       const updatedUser = {
         ...existingUser,
         role: UserRole.CLIENT_ADMIN,
-        clientId: 'client-456',
+        clientId: "client-456",
         client: newClient,
       };
 
@@ -607,80 +798,106 @@ describe('Users Service', () => {
       firebaseAuthMock.setCustomUserClaims.mockResolvedValue(undefined);
       prismaMock.user.update.mockResolvedValue(updatedUser);
 
-      const result = await updateUser('admin-123', {
+      const result = await updateUser("admin-123", {
         role: UserRole.CLIENT_ADMIN,
-        clientId: 'client-456',
+        clientId: "client-456",
       });
 
       expect(result.role).toBe(UserRole.CLIENT_ADMIN);
-      expect(result.clientId).toBe('client-456');
-      expect(firebaseAuthMock.setCustomUserClaims).toHaveBeenCalledWith('admin-123', {
-        role: UserRole.CLIENT_ADMIN,
-        clientId: 'client-456',
-      });
+      expect(result.clientId).toBe("client-456");
+      expect(firebaseAuthMock.setCustomUserClaims).toHaveBeenCalledWith(
+        "admin-123",
+        {
+          role: UserRole.CLIENT_ADMIN,
+          clientId: "client-456",
+        },
+      );
     });
 
-    it('should preserve existing role when only updating clientId', async () => {
-      const existingUser = createMockClientAdmin('client-123', { id: 'user-123' });
-      const newClient = createMockClient({ id: 'client-456' });
-      const updatedUser = { ...existingUser, clientId: 'client-456', client: newClient };
+    it("should preserve existing role when only updating clientId", async () => {
+      const existingUser = createMockClientAdmin("client-123", {
+        id: "user-123",
+      });
+      const newClient = createMockClient({ id: "client-456" });
+      const updatedUser = {
+        ...existingUser,
+        clientId: "client-456",
+        client: newClient,
+      };
 
       prismaMock.user.findUnique.mockResolvedValue(existingUser);
       clientExistsMock.mockResolvedValue(true);
       firebaseAuthMock.setCustomUserClaims.mockResolvedValue(undefined);
       prismaMock.user.update.mockResolvedValue(updatedUser);
 
-      await updateUser('user-123', { clientId: 'client-456' });
+      await updateUser("user-123", { clientId: "client-456" });
 
-      expect(firebaseAuthMock.setCustomUserClaims).toHaveBeenCalledWith('user-123', {
-        role: UserRole.CLIENT_ADMIN, // Preserves existing role
-        clientId: 'client-456',
-      });
+      expect(firebaseAuthMock.setCustomUserClaims).toHaveBeenCalledWith(
+        "user-123",
+        {
+          role: UserRole.CLIENT_ADMIN, // Preserves existing role
+          clientId: "client-456",
+        },
+      );
     });
 
-    it('should preserve existing clientId when only updating role', async () => {
-      const existingUser = createMockClientAdmin('client-123', { id: 'user-123' });
-      // Note: In reality, updating only role without clientId for CLIENT_ADMIN->SUPER_ADMIN
-      // might need additional validation, but this tests the service behavior
-      const updatedUser = {
-        ...existingUser,
-        role: UserRole.SUPER_ADMIN,
-        client: null,
-      };
+    it("should throw VALIDATION_ERROR when updating to SUPER_ADMIN while keeping clientId", async () => {
+      // CLIENT_ADMIN has clientId: 'client-123'. Updating role alone would produce
+      // SUPER_ADMIN + clientId — an invalid combination.
+      const existingUser = createMockClientAdmin("client-123", {
+        id: "user-123",
+      });
 
       prismaMock.user.findUnique.mockResolvedValue(existingUser);
-      firebaseAuthMock.setCustomUserClaims.mockResolvedValue(undefined);
-      prismaMock.user.update.mockResolvedValue(updatedUser);
 
-      await updateUser('user-123', { role: UserRole.SUPER_ADMIN });
-
-      expect(firebaseAuthMock.setCustomUserClaims).toHaveBeenCalledWith('user-123', {
-        role: UserRole.SUPER_ADMIN,
-        clientId: 'client-123', // Preserves existing clientId from user record
+      await expect(
+        updateUser("user-123", { role: UserRole.SUPER_ADMIN }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.VALIDATION_ERROR,
       });
+
+      expect(firebaseAuthMock.setCustomUserClaims).not.toHaveBeenCalled();
+    });
+
+    it("should throw VALIDATION_ERROR when updating to CLIENT_ADMIN without providing clientId", async () => {
+      // SUPER_ADMIN has clientId: null. Updating role alone would produce
+      // CLIENT_ADMIN + null clientId — an invalid combination.
+      const existingUser = createMockSuperAdmin({ id: "admin-123" });
+
+      prismaMock.user.findUnique.mockResolvedValue(existingUser);
+
+      await expect(
+        updateUser("admin-123", { role: UserRole.CLIENT_ADMIN }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.VALIDATION_ERROR,
+      });
+
+      expect(firebaseAuthMock.setCustomUserClaims).not.toHaveBeenCalled();
     });
   });
 
   // ============================================================================
   // Client Association Edge Cases
   // ============================================================================
-  describe('Client Association', () => {
-    it('should allow creating CLIENT_ADMIN with valid client', async () => {
+  describe("Client Association", () => {
+    it("should allow creating CLIENT_ADMIN with valid client", async () => {
       const input = {
-        email: 'client-user@example.com',
-        password: 'password123',
-        name: 'Client User',
+        email: "client-user@example.com",
+        password: "password123",
+        name: "Client User",
         role: UserRole.CLIENT_ADMIN,
-        clientId: 'valid-client-id',
+        clientId: "valid-client-id",
       };
 
       prismaMock.user.findUnique.mockResolvedValue(null);
       clientExistsMock.mockResolvedValue(true);
-      firebaseAuthMock.createUser.mockResolvedValue({ uid: 'new-uid' });
+      firebaseAuthMock.createUser.mockResolvedValue({ uid: "new-uid" });
       firebaseAuthMock.setCustomUserClaims.mockResolvedValue(undefined);
 
-      const expectedUser = createMockClientAdmin('valid-client-id', {
-        id: 'new-uid',
+      const expectedUser = createMockClientAdmin("valid-client-id", {
+        id: "new-uid",
         email: input.email,
         name: input.name,
       });
@@ -688,16 +905,16 @@ describe('Users Service', () => {
 
       const result = await createUser(input);
 
-      expect(result.clientId).toBe('valid-client-id');
-      expect(clientExistsMock).toHaveBeenCalledWith('valid-client-id');
+      expect(result.clientId).toBe("valid-client-id");
+      expect(clientExistsMock).toHaveBeenCalledWith("valid-client-id");
     });
 
-    it('should allow null clientId for new CLIENT_ADMIN when validated later', async () => {
+    it("should allow null clientId for new CLIENT_ADMIN when validated later", async () => {
       // This test verifies the service correctly validates that CLIENT_ADMIN must have clientId
       const input = {
-        email: 'test@example.com',
-        password: 'password123',
-        name: 'Test User',
+        email: "test@example.com",
+        password: "password123",
+        name: "Test User",
         role: UserRole.CLIENT_ADMIN,
         clientId: null as unknown as string, // Explicitly null
       };
@@ -711,13 +928,13 @@ describe('Users Service', () => {
       });
     });
 
-    it('should reject SUPER_ADMIN with non-null clientId', async () => {
+    it("should reject SUPER_ADMIN with non-null clientId", async () => {
       const input = {
-        email: 'admin@example.com',
-        password: 'password123',
-        name: 'Super Admin',
+        email: "admin@example.com",
+        password: "password123",
+        name: "Super Admin",
         role: UserRole.SUPER_ADMIN,
-        clientId: 'some-client-id',
+        clientId: "some-client-id",
       };
 
       prismaMock.user.findUnique.mockResolvedValue(null);

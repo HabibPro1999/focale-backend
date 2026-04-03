@@ -51,9 +51,8 @@ export async function compressFile(
   }
 
   throw new AppError(
-    `Unsupported file type: ${mimetype}`,
-    400,
-    true,
+      `Unsupported file type: ${mimetype}`,
+      400,
     ErrorCodes.INVALID_FILE_TYPE,
   );
 }

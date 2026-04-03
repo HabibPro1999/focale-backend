@@ -1,5 +1,6 @@
 import type { FastifyError, FastifyReply, FastifyRequest } from "fastify";
 import { ZodError } from "zod";
+import createHttpError from "http-errors";
 import { Prisma } from "@/generated/prisma/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { formatZodError } from "@shared/errors/zod-error-formatter.js";
@@ -84,21 +85,46 @@ export function errorHandler(
     });
   }
 
+  // http-errors (e.g. app.httpErrors.notFound(), .forbidden(), etc.)
+  if (error instanceof createHttpError.HttpError) {
+    const statusCode = error.statusCode;
+    let code: string;
+    if (statusCode === 400) code = ErrorCodes.VALIDATION_ERROR;
+    else if (statusCode === 401) code = ErrorCodes.INVALID_TOKEN;
+    else if (statusCode === 403) code = ErrorCodes.FORBIDDEN;
+    else if (statusCode === 404) code = ErrorCodes.NOT_FOUND;
+    else if (statusCode === 409) code = ErrorCodes.CONFLICT;
+    else if (statusCode === 429) code = ErrorCodes.RATE_LIMITED;
+    else code = ErrorCodes.INTERNAL_ERROR;
+
+    if (statusCode >= 500) {
+      logger.error({ err: error, requestId }, error.message);
+    }
+
+    return reply.status(statusCode).send({
+      error: error.message,
+      code,
+      requestId,
+    });
+  }
+
   // Fastify schema validation error (thrown before route handler)
-  if ("code" in error && error.code === "FST_ERR_VALIDATION") {
-    const validation = (
-      error as FastifyError & {
-        validation?: { instancePath?: string; message?: string }[];
-      }
-    ).validation;
-    const issues =
-      validation?.map((v) => ({
-        field: v.instancePath?.replace(/^\//, "") || "unknown",
-        message: v.message || "Invalid value",
-      })) ?? [];
+  if ("validation" in error && error.validation) {
+    const fastifyError = error as FastifyError & {
+      validation: { instancePath?: string; message?: string }[];
+      validationContext?: string;
+    };
+    const issues = fastifyError.validation.map((v) => ({
+      field: v.instancePath?.replace(/^\//, "") || "unknown",
+      message: v.message || "Invalid value",
+    }));
+    const context = fastifyError.validationContext ?? "body";
 
     return reply.status(400).send({
-      error: issues.length === 1 ? issues[0].message : "Validation failed",
+      error:
+        issues.length === 1
+          ? issues[0].message
+          : `Validation failed in ${context}`,
       code: ErrorCodes.VALIDATION_ERROR,
       details: { issues },
       requestId,

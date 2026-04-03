@@ -9,9 +9,8 @@ export function formatZodError(error: ZodError): AppError {
   }));
 
   return new AppError(
-    'Validation failed',
-    400,
-    true,
+      'Validation failed',
+      400,
     ErrorCodes.VALIDATION_ERROR,
     { issues }
   );

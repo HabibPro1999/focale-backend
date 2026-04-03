@@ -1,12 +1,19 @@
-import { getGroupedAccess, validateAccessSelections } from './access.service.js';
+import { z } from "zod";
+import {
+  getGroupedAccess,
+  getEventAccessById,
+  listEventAccess,
+  validateAccessSelections,
+} from "./access.service.js";
 import {
   EventIdParamSchema,
   GetGroupedAccessBodySchema,
   ValidateAccessSelectionsBodySchema,
   type GetGroupedAccessBody,
   type ValidateAccessSelectionsBody,
-} from './access.schema.js';
-import type { AppInstance } from '@shared/types/fastify.js';
+} from "./access.schema.js";
+import type { AppInstance } from "@shared/types/fastify.js";
+import { publicRateLimits } from "@core/plugins.js";
 
 // ============================================================================
 // Public Routes (No Auth)
@@ -19,8 +26,9 @@ export async function accessPublicRoutes(app: AppInstance): Promise<void> {
     Params: { eventId: string };
     Body: GetGroupedAccessBody;
   }>(
-    '/:eventId/access/grouped',
+    "/:eventId/access/grouped",
     {
+      config: { rateLimit: publicRateLimits.accessPublic },
       schema: {
         params: EventIdParamSchema,
         body: GetGroupedAccessBodySchema,
@@ -30,9 +38,13 @@ export async function accessPublicRoutes(app: AppInstance): Promise<void> {
       const { eventId } = request.params;
       const { formData, selectedAccessIds } = request.body;
 
-      const grouped = await getGroupedAccess(eventId, formData, selectedAccessIds);
+      const grouped = await getGroupedAccess(
+        eventId,
+        formData,
+        selectedAccessIds,
+      );
       return reply.send(grouped);
-    }
+    },
   );
 
   // POST /api/public/events/:eventId/access/validate - Validate selections
@@ -40,8 +52,9 @@ export async function accessPublicRoutes(app: AppInstance): Promise<void> {
     Params: { eventId: string };
     Body: ValidateAccessSelectionsBody;
   }>(
-    '/:eventId/access/validate',
+    "/:eventId/access/validate",
     {
+      config: { rateLimit: publicRateLimits.accessPublic },
       schema: {
         params: EventIdParamSchema,
         body: ValidateAccessSelectionsBodySchema,
@@ -51,90 +64,46 @@ export async function accessPublicRoutes(app: AppInstance): Promise<void> {
       const { eventId } = request.params;
       const { formData, selections } = request.body;
 
-      const result = await validateAccessSelections(eventId, selections, formData);
+      const result = await validateAccessSelections(
+        eventId,
+        selections,
+        formData,
+      );
       return reply.send(result);
-    }
+    },
   );
 
-  // GET /api/public/events/:eventId/payment-config - Get event payment configuration
+  // GET /:eventId/access - List active access items (flat, for registration edit flow)
   app.get<{ Params: { eventId: string } }>(
-    '/:eventId/payment-config',
+    "/:eventId/access",
     {
       schema: { params: EventIdParamSchema },
     },
     async (request, reply) => {
       const { eventId } = request.params;
+      const items = await listEventAccess(eventId, { active: true });
+      return reply.send(items);
+    },
+  );
 
-      // Fetch event with pricing and client in one query
-      const event = await app.prisma.event.findUnique({
-        where: { id: eventId },
-        include: {
-          pricing: true,
-          client: {
-            select: {
-              id: true,
-              name: true,
-              logo: true,
-              primaryColor: true,
-              enabledModules: true,
-            },
-          },
-        },
-      });
-
-      if (!event) {
-        throw app.httpErrors.notFound('Event not found');
+  // GET /:eventId/access/:accessId - Get single access item
+  app.get<{ Params: { eventId: string; accessId: string } }>(
+    "/:eventId/access/:accessId",
+    {
+      schema: {
+        params: z.strictObject({
+          eventId: z.string().uuid(),
+          accessId: z.string().uuid(),
+        }),
+      },
+    },
+    async (request, reply) => {
+      const { eventId, accessId } = request.params;
+      const item = await getEventAccessById(accessId);
+      if (!item || item.eventId !== eventId) {
+        throw app.httpErrors.notFound("Access item not found");
       }
-
-      // Transform pricing for public consumption
-      const pricing = event.pricing;
-      const paymentMethods: string[] = ['BANK_TRANSFER']; // Bank transfer always available
-      if (pricing?.onlinePaymentEnabled && pricing?.onlinePaymentUrl) {
-        paymentMethods.push('ONLINE');
-      }
-      if (pricing?.cashPaymentEnabled) {
-        paymentMethods.push('CASH');
-      }
-
-      // Check if sponsorships module is enabled for the client
-      const enabledModules = event.client.enabledModules as string[];
-      const sponsorshipsEnabled = enabledModules.includes('sponsorships');
-
-      // Lab sponsorship option available when sponsorships module is disabled
-      if (!sponsorshipsEnabled) {
-        paymentMethods.push('LAB_SPONSORSHIP');
-      }
-
-      return reply.send({
-        event: {
-          id: event.id,
-          name: event.name,
-          slug: event.slug,
-          status: event.status,
-          startDate: event.startDate,
-          endDate: event.endDate,
-          location: event.location,
-          client: event.client,
-        },
-        sponsorshipsEnabled,
-        pricing: pricing
-          ? {
-              basePrice: pricing.basePrice,
-              currency: pricing.currency,
-              rules: pricing.rules ?? [],
-              paymentMethods,
-              bankDetails: pricing.bankName
-                ? {
-                    bankName: pricing.bankName,
-                    accountName: pricing.bankAccountName ?? '',
-                    iban: pricing.bankAccountNumber ?? '',
-                    bic: '',
-                  }
-                : null,
-              onlinePaymentUrl: pricing.onlinePaymentUrl ?? null,
-            }
-          : null,
-      });
-    }
+      return reply.send(item);
+    },
   );
 }

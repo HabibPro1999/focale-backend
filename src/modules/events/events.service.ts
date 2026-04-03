@@ -16,9 +16,10 @@ import type {
   ListEventsQuery,
 } from "./events.schema.js";
 import type { Event, EventPricing, Prisma } from "@/generated/prisma/client.js";
+import type { TxClient } from "@shared/types/prisma.js";
 
-// Transaction client type that works with Prisma extensions
-type TransactionClient = { $executeRaw: typeof prisma.$executeRaw };
+// Transaction client type — minimal subset needed for raw capacity queries
+type TransactionClient = Pick<TxClient, "$executeRaw">;
 
 // Type for Event with pricing included
 type EventWithPricing = Event & { pricing: EventPricing | null };
@@ -47,7 +48,7 @@ export async function createEvent(
   // Validate that client exists
   const isValidClient = await clientExists(clientId);
   if (!isValidClient) {
-    throw new AppError("Client not found", 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError("Client not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   // Check if slug already exists globally
@@ -58,7 +59,6 @@ export async function createEvent(
     throw new AppError(
       "Event with this slug already exists",
       409,
-      true,
       ErrorCodes.CONFLICT,
     );
   }
@@ -128,11 +128,11 @@ const VALID_STATUS_TRANSITIONS: Record<string, string[]> = {
 export async function updateEvent(
   id: string,
   input: UpdateEventInput,
-): Promise<Event> {
+): Promise<EventWithPricing> {
   // Check if event exists
   const event = await prisma.event.findUnique({ where: { id } });
   if (!event) {
-    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   // Validate status transition if status is being changed
@@ -142,10 +142,20 @@ export async function updateEvent(
       throw new AppError(
         `Cannot transition event from ${event.status} to ${input.status}`,
         400,
-        true,
         ErrorCodes.INVALID_STATUS_TRANSITION,
       );
     }
+  }
+
+  // Validate resulting date range (schema only checks when both are provided)
+  const resultingStart = input.startDate ?? event.startDate;
+  const resultingEnd = input.endDate ?? event.endDate;
+  if (resultingEnd < resultingStart) {
+    throw new AppError(
+      "End date must be greater than or equal to start date",
+      400,
+      ErrorCodes.VALIDATION_ERROR,
+    );
   }
 
   // If slug is being updated, check global uniqueness
@@ -157,15 +167,64 @@ export async function updateEvent(
       throw new AppError(
         "Event with this slug already exists",
         409,
-        true,
         ErrorCodes.CONFLICT,
       );
     }
   }
 
+  const { basePrice, currency, ...eventData } = input;
+
+  // Block currency change if registrations exist
+  if (currency !== undefined) {
+    const existingPricing = await prisma.eventPricing.findUnique({
+      where: { eventId: id },
+      select: { currency: true },
+    });
+    if (existingPricing && currency !== existingPricing.currency) {
+      const registrationCount = await prisma.registration.count({
+        where: { eventId: id },
+      });
+      if (registrationCount > 0) {
+        throw new AppError(
+          "Cannot change currency after registrations exist",
+          400,
+          ErrorCodes.VALIDATION_ERROR,
+        );
+      }
+    }
+  }
+
+  if (basePrice !== undefined || currency !== undefined) {
+    return prisma.$transaction(async (tx) => {
+      const updatedEvent = await tx.event.update({
+        where: { id },
+        data: eventData,
+        include: { pricing: true },
+      });
+
+      if (updatedEvent.pricing) {
+        const pricingData: Record<string, unknown> = {};
+        if (basePrice !== undefined) pricingData.basePrice = basePrice;
+        if (currency !== undefined) pricingData.currency = currency;
+
+        await tx.eventPricing.update({
+          where: { eventId: id },
+          data: pricingData,
+        });
+      }
+
+      // Re-fetch with updated pricing
+      return tx.event.findUniqueOrThrow({
+        where: { id },
+        include: { pricing: true },
+      });
+    });
+  }
+
   return prisma.event.update({
     where: { id },
-    data: input,
+    data: eventData,
+    include: { pricing: true },
   });
 }
 
@@ -222,7 +281,7 @@ export async function deleteEvent(id: string): Promise<void> {
   });
 
   if (!event) {
-    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   // Prevent deletion if event has registrations
@@ -230,7 +289,6 @@ export async function deleteEvent(id: string): Promise<void> {
     throw new AppError(
       `Cannot delete event with ${event._count.registrations} registration(s). Archive the event instead.`,
       409,
-      true,
       ErrorCodes.EVENT_HAS_REGISTRATIONS,
     );
   }
@@ -244,16 +302,6 @@ export async function deleteEvent(id: string): Promise<void> {
 export async function eventExists(id: string): Promise<boolean> {
   const count = await prisma.event.count({ where: { id } });
   return count > 0;
-}
-
-/**
- * Increment registered count for an event.
- */
-export async function incrementRegisteredCount(id: string): Promise<Event> {
-  return prisma.event.update({
-    where: { id },
-    data: { registeredCount: { increment: 1 } },
-  });
 }
 
 /**
@@ -272,23 +320,8 @@ export async function incrementRegisteredCountTx(
   `;
 
   if (result === 0) {
-    throw new AppError(
-      "Event is at capacity",
-      409,
-      true,
-      ErrorCodes.EVENT_FULL,
-    );
+    throw new AppError("Event is at capacity", 409, ErrorCodes.EVENT_FULL);
   }
-}
-
-/**
- * Decrement registered count for an event.
- */
-export async function decrementRegisteredCount(id: string): Promise<Event> {
-  return prisma.event.update({
-    where: { id },
-    data: { registeredCount: { decrement: 1 } },
-  });
 }
 
 /**
@@ -303,7 +336,6 @@ export async function uploadEventBanner(
     throw new AppError(
       "Invalid file type. Only images are allowed.",
       400,
-      true,
       ErrorCodes.INVALID_FILE_TYPE,
     );
   }
@@ -313,7 +345,7 @@ export async function uploadEventBanner(
     select: { id: true, clientId: true },
   });
   if (!event) {
-    throw new AppError("Event not found", 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   const compressed = await compressImage(file.buffer);

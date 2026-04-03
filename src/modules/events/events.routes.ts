@@ -20,7 +20,7 @@ import {
   type ListEventsQuery,
 } from "./events.schema.js";
 import type { AppInstance } from "@shared/types/fastify.js";
-import { UserRole } from "@identity";
+import { UserRole } from "@shared/constants/roles.js";
 
 export async function eventsRoutes(app: AppInstance): Promise<void> {
   // All routes require authentication

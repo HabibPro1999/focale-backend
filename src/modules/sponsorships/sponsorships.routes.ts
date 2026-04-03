@@ -5,7 +5,6 @@ import {
 import { getEventById } from "@events";
 import {
   listSponsorships,
-  getSponsorshipStats,
   getSponsorshipById,
   updateSponsorship,
   deleteSponsorship,
@@ -39,27 +38,6 @@ import type { AppInstance } from "@shared/types/fastify.js";
 
 export async function sponsorshipsRoutes(app: AppInstance): Promise<void> {
   app.addHook("onRequest", requireAuth);
-
-  // GET /api/events/:eventId/sponsorships/stats - Aggregate stats (count + amount by status)
-  app.get<{ Params: { eventId: string } }>(
-    "/:eventId/sponsorships/stats",
-    { schema: { params: EventIdParamSchema } },
-    async (request, reply) => {
-      const { eventId } = request.params;
-
-      const event = await getEventById(eventId);
-      if (!event) {
-        throw app.httpErrors.notFound("Event not found");
-      }
-
-      if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
-      }
-
-      const stats = await getSponsorshipStats(eventId);
-      return reply.send(stats);
-    },
-  );
 
   // GET /api/events/:eventId/sponsorships - List sponsorships for an event
   app.get<{
@@ -113,8 +91,7 @@ export async function sponsorshipDetailRoutes(app: AppInstance): Promise<void> {
         throw app.httpErrors.notFound("Sponsorship not found");
       }
 
-      const clientId = await getSponsorshipClientId(id);
-      if (clientId && !canAccessClient(request.user!, clientId)) {
+      if (!canAccessClient(request.user!, sponsorship.event.clientId)) {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
 
@@ -144,7 +121,7 @@ export async function sponsorshipDetailRoutes(app: AppInstance): Promise<void> {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
 
-      const sponsorship = await updateSponsorship(id, input);
+      const sponsorship = await updateSponsorship(id, input, request.user!.id);
       return reply.send(sponsorship);
     },
   );
@@ -167,7 +144,7 @@ export async function sponsorshipDetailRoutes(app: AppInstance): Promise<void> {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
 
-      await deleteSponsorship(id);
+      await deleteSponsorship(id, request.user!.id);
       return reply.send({ success: true });
     },
   );
@@ -316,7 +293,11 @@ export async function registrationSponsorshipsRoutes(
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
 
-      await unlinkSponsorshipFromRegistration(sponsorshipId, registrationId);
+      await unlinkSponsorshipFromRegistration(
+        sponsorshipId,
+        registrationId,
+        request.user!.id,
+      );
       return reply.send({ success: true });
     },
   );

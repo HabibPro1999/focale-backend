@@ -19,7 +19,7 @@ model Client {
   email          String?
   phone          String?
   active         Boolean  @default(true)
-  enabledModules String[] @default(["pricing", "registrations", "sponsorships", "emails"]) @map("enabled_modules")
+  enabledModules String[] @default(["pricing", "registrations", "sponsorships", "emails", "certificates"]) @map("enabled_modules")
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
@@ -72,14 +72,15 @@ model Event {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  client             Client             @relation(fields: [clientId], references: [id])
-  forms              Form[] // Multiple forms per event (REGISTRATION, SPONSOR)
-  pricing            EventPricing? // One-to-one: pricing configuration (includes embedded rules)
-  access             EventAccess[]
-  registrations      Registration[]
-  emailTemplates     EmailTemplate[]
-  sponsorshipBatches SponsorshipBatch[]
-  sponsorships       Sponsorship[]
+  client                Client                @relation(fields: [clientId], references: [id])
+  forms                 Form[] // Multiple forms per event (REGISTRATION, SPONSOR)
+  pricing               EventPricing? // One-to-one: pricing configuration (includes embedded rules)
+  access                EventAccess[]
+  registrations         Registration[]
+  emailTemplates        EmailTemplate[]
+  sponsorshipBatches    SponsorshipBatch[]
+  sponsorships          Sponsorship[]
+  certificateTemplates  CertificateTemplate[]
 
   @@index([clientId, status])
   @@map("events")
@@ -200,6 +201,7 @@ model EventAccess {
   // Capacity
   maxCapacity     Int? @map("max_capacity")
   registeredCount Int  @default(0) @map("registered_count")
+  paidCount       Int  @default(0) @map("paid_count")
 
   // Availability window (when can people select this)
   availableFrom DateTime? @map("available_from")
@@ -226,14 +228,51 @@ model EventAccess {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   // Relations
-  event           Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  requiredAccess  EventAccess[] @relation("AccessPrerequisites")
-  prerequisiteFor EventAccess[] @relation("AccessPrerequisites")
+  event                Event                 @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  requiredAccess       EventAccess[]         @relation("AccessPrerequisites")
+  prerequisiteFor      EventAccess[]         @relation("AccessPrerequisites")
+  certificateTemplates CertificateTemplate[]
 
   @@index([eventId, startsAt])
   @@index([eventId, type])
   @@index([eventId, active])
   @@map("event_access")
+}
+
+// ============================================================================
+// CERTIFICATE MODULE
+// ============================================================================
+
+model CertificateTemplate {
+  id      String @id @default(uuid())
+  eventId String @map("event_id")
+
+  name String // "Presence Certificate", "Speaker Certificate", etc.
+
+  // Template image (stored at full resolution for print quality)
+  templateUrl    String @map("template_url")
+  templateWidth  Int    @map("template_width") // original image px dimensions
+  templateHeight Int    @map("template_height")
+
+  // Zone configuration — array of positioned text zones with variable bindings
+  zones Json @default("[]") // CertificateZone[]
+
+  // Applicability — which roles can receive this certificate (empty = all roles)
+  applicableRoles RegistrationRole[] @default([]) @map("applicable_roles")
+
+  // If linked to a specific access item (e.g. "Workshop A Certificate")
+  accessId String? @map("access_id")
+
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  event  Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  access EventAccess? @relation(fields: [accessId], references: [id], onDelete: SetNull)
+
+  @@index([eventId])
+  @@map("certificate_templates")
 }
 
 // ============================================================================
@@ -330,11 +369,13 @@ model SponsorshipUsage {
 // ============================================================================
 
 enum PaymentStatus {
-  PENDING
-  VERIFYING // Payment proof submitted, awaiting admin review
-  PAID
-  REFUNDED
-  WAIVED
+  PENDING    // Owes money, no action taken
+  VERIFYING  // Payment proof submitted, awaiting admin review
+  PARTIAL    // Some coverage (cash and/or sponsorship), still owes remainder
+  PAID       // Fully settled via payment (cash, bank, online)
+  SPONSORED  // Fully settled via sponsorship code(s)
+  WAIVED     // Admin waiver (speakers, VIPs, free pass)
+  REFUNDED   // Terminal — money returned
 }
 
 enum PaymentMethod {
@@ -342,6 +383,13 @@ enum PaymentMethod {
   ONLINE
   CASH
   LAB_SPONSORSHIP
+}
+
+enum RegistrationRole {
+  PARTICIPANT
+  SPEAKER
+  MODERATOR
+  ORGANIZER
 }
 
 model Registration {
@@ -361,6 +409,9 @@ model Registration {
   firstName String? @map("first_name")
   lastName  String? @map("last_name")
   phone     String?
+
+  // Unique human-readable reference (generated server-side)
+  referenceNumber String? @unique @map("reference_number")
 
   // Status (PaymentStatus is the single source of truth)
   paymentStatus PaymentStatus @default(PENDING) @map("payment_status")
@@ -397,8 +448,7 @@ model Registration {
   lastEditedAt DateTime? @map("last_edited_at")
 
   // Self-service edit token (for secure public edit access)
-  editToken       String?   @unique @map("edit_token")
-  editTokenExpiry DateTime? @map("edit_token_expiry")
+  editToken String? @unique @map("edit_token")
 
   // Browser origin URL for email links (captured at registration time)
   linkBaseUrl String? @map("link_base_url")
@@ -409,14 +459,19 @@ model Registration {
   // Admin note (single text field)
   note String?
 
+  // Registrant role (set by admin; public form registrations default to PARTICIPANT)
+  role RegistrationRole @default(PARTICIPANT) @map("registration_role")
+
   // Access type IDs (simple array for querying)
-  accessTypeIds String[] @default([]) @map("access_type_ids")
+  accessTypeIds    String[] @default([]) @map("access_type_ids")
+  droppedAccessIds String[] @default([]) @map("dropped_access_ids")
 
   // Relations
-  form              Form               @relation(fields: [formId], references: [id], onDelete: Restrict)
-  event             Event              @relation(fields: [eventId], references: [id])
+  form              Form                 @relation(fields: [formId], references: [id], onDelete: Restrict)
+  event             Event                @relation(fields: [eventId], references: [id])
   emailLogs         EmailLog[]
   sponsorshipUsages SponsorshipUsage[]
+  transactions      PaymentTransaction[]
 
   @@unique([email, formId])
   @@index([eventId, paymentStatus])
@@ -427,6 +482,34 @@ model Registration {
   @@index([sponsorshipCode])
   @@index([paymentStatus, updatedAt]) // For queue/batch processing
   @@map("registrations")
+}
+
+// ============================================================================
+// PAYMENT TRANSACTIONS
+// ============================================================================
+
+model PaymentTransaction {
+  id              String          @id @default(uuid())
+  registrationId  String          @map("registration_id")
+  type            TransactionType
+  amount          Int
+  method          PaymentMethod?
+  reference       String?
+  note            String?
+  performedBy     String?         @map("performed_by")
+  createdAt       DateTime        @default(now()) @map("created_at")
+
+  registration    Registration    @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+
+  @@index([registrationId])
+  @@map("payment_transaction")
+}
+
+enum TransactionType {
+  PAYMENT
+  REFUND
+  WAIVER
+  ADJUSTMENT
 }
 
 // ============================================================================

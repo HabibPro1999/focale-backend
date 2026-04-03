@@ -3,7 +3,7 @@ import { verifyToken } from "@shared/services/firebase.service.js";
 import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
-import { UserRole } from "@modules/identity/permissions.js";
+import { UserRole } from "@shared/constants/roles.js";
 import { SimpleCache } from "@shared/utils/cache.js";
 import type { User } from "@/generated/prisma/client.js";
 
@@ -38,7 +38,6 @@ export async function requireAuth(
     throw new AppError(
       "Missing or invalid authorization header",
       401,
-      true,
       ErrorCodes.UNAUTHORIZED,
     );
   }
@@ -68,7 +67,6 @@ export async function requireAuth(
       throw new AppError(
         "User not found in database",
         401,
-        true,
         ErrorCodes.UNAUTHORIZED,
       );
     }
@@ -77,7 +75,6 @@ export async function requireAuth(
       throw new AppError(
         "User account is disabled",
         401,
-        true,
         ErrorCodes.UNAUTHORIZED,
       );
     }
@@ -91,7 +88,6 @@ export async function requireAuth(
     throw new AppError(
       "Invalid or expired token",
       401,
-      true,
       ErrorCodes.INVALID_TOKEN,
     );
   }
@@ -110,18 +106,12 @@ export function requireRole(...roles: number[]) {
       throw new AppError(
         "Authentication required",
         401,
-        true,
         ErrorCodes.UNAUTHORIZED,
       );
     }
 
     if (!roles.includes(request.user.role)) {
-      throw new AppError(
-        "Insufficient permissions",
-        403,
-        true,
-        ErrorCodes.FORBIDDEN,
-      );
+      throw new AppError("Insufficient permissions", 403, ErrorCodes.FORBIDDEN);
     }
   };
 }
@@ -143,10 +133,13 @@ export const requireAdmin = requireRole(
  * Check if user can access a client's resources.
  * Super admins can access all clients.
  * Client admins can only access their own client.
+ * Any other role is denied — fails closed on unknown roles.
  */
 export function canAccessClient(
   user: { role: number; clientId: string | null },
   clientId: string,
 ): boolean {
-  return user.role === UserRole.SUPER_ADMIN || user.clientId === clientId;
+  if (user.role === UserRole.SUPER_ADMIN) return true;
+  if (user.role === UserRole.CLIENT_ADMIN) return user.clientId === clientId;
+  return false;
 }

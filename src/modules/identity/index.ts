@@ -1,5 +1,5 @@
 // Types & Permissions
-export { UserRole } from './permissions.js';
+export { UserRole } from "@shared/constants/roles.js";
 
 // Routes
-export { usersRoutes } from './users.routes.js';
+export { usersRoutes } from "./users.routes.js";

@@ -35,37 +35,34 @@ export const EmailStatusSchema = z.enum([
 // ============================================================================
 
 export const TiptapMarkSchema = z
-  .object({
+  .strictObject({
     type: z.string(),
     attrs: z.record(z.string(), z.unknown()).optional(),
-  })
-  .strict();
+  });
 
 export const TiptapNodeSchema: z.ZodType<TiptapNode> = z.lazy(() =>
   z
-    .object({
+    .strictObject({
       type: z.string(),
       attrs: z.record(z.string(), z.unknown()).optional(),
       marks: z.array(TiptapMarkSchema).optional(),
       content: z.array(TiptapNodeSchema).optional(),
       text: z.string().optional(),
-    })
-    .strict(),
+    }),
 );
 
 export const TiptapDocumentSchema = z
-  .object({
+  .strictObject({
     type: z.literal("doc"),
     content: z.array(TiptapNodeSchema),
-  })
-  .strict();
+  });
 
 // ============================================================================
 // Email Template Schemas
 // ============================================================================
 
 export const CreateEmailTemplateSchema = z
-  .object({
+  .strictObject({
     eventId: z.string().uuid(),
     name: z.string().min(1).max(255),
     description: z.string().max(1000).optional(),
@@ -75,7 +72,6 @@ export const CreateEmailTemplateSchema = z
     trigger: AutomaticEmailTriggerSchema.optional().nullable(),
     isActive: z.boolean().default(true),
   })
-  .strict()
   .refine(
     (data) => {
       // Automatic templates must have a trigger
@@ -96,7 +92,7 @@ export const CreateEmailTemplateSchema = z
   );
 
 export const UpdateEmailTemplateSchema = z
-  .object({
+  .strictObject({
     name: z.string().min(1).max(255).optional(),
     description: z.string().max(1000).optional().nullable(),
     subject: z.string().min(1).max(500).optional(),
@@ -104,66 +100,59 @@ export const UpdateEmailTemplateSchema = z
     category: EmailTemplateCategorySchema.optional(),
     trigger: AutomaticEmailTriggerSchema.optional().nullable(),
     isActive: z.boolean().optional(),
-  })
-  .strict();
+  });
 
 export const ListEmailTemplatesQuerySchema = z
-  .object({
+  .strictObject({
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
     category: EmailTemplateCategorySchema.optional(),
     search: z.string().max(200).optional(),
-  })
-  .strict();
+  });
 
 // ============================================================================
 // Bulk Send Schema (Simple recipient filtering)
 // ============================================================================
 
 export const BulkSendFilterSchema = z
-  .object({
+  .strictObject({
     paymentStatus: z
-      .array(z.enum(["PENDING", "PAID", "REFUNDED", "WAIVED"]))
+      .array(z.enum(["PENDING", "VERIFYING", "PARTIAL", "PAID", "SPONSORED", "WAIVED", "REFUNDED"]))
       .optional(),
     accessTypeIds: z.array(z.string().uuid()).optional(),
-  })
-  .strict();
+  });
 
 export const BulkSendEmailSchema = z
-  .object({
+  .strictObject({
     // Option 1: Send to specific registrations
     registrationIds: z.array(z.string().uuid()).optional(),
     // Option 2: Send based on filters
     filters: BulkSendFilterSchema.optional(),
-  })
-  .strict();
+  });
 
 // ============================================================================
 // Test Send Schema
 // ============================================================================
 
 export const TestSendEmailSchema = z
-  .object({
+  .strictObject({
     recipientEmail: z.string().email(),
     recipientName: z.string().max(200).optional(),
-  })
-  .strict();
+  });
 
 // ============================================================================
 // ID Param Schemas
 // ============================================================================
 
 export const EmailTemplateIdParamSchema = z
-  .object({
+  .strictObject({
     templateId: z.string().uuid(),
-  })
-  .strict();
+  });
 
 export const EventIdParamSchema = z
-  .object({
+  .strictObject({
     eventId: z.string().uuid(),
-  })
-  .strict();
+  });
 
 // ============================================================================
 // Response Schemas

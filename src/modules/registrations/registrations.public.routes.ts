@@ -21,11 +21,7 @@ import {
   type SelectPaymentMethodInput,
   type PublicEditRegistrationInput,
 } from "./registrations.schema.js";
-import {
-  validateFormData,
-  sanitizeFormData,
-  type FormSchema,
-} from "@shared/utils/form-data-validator.js";
+import { validateFormData, sanitizeFormData, type FormSchema } from "@forms";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { publicRateLimits } from "@core/plugins.js";
@@ -33,11 +29,9 @@ import type { AppInstance } from "@shared/types/fastify.js";
 import type { FastifyRequest } from "fastify";
 
 // Schema for edit token query parameter (optional — also accepted via X-Edit-Token header)
-const EditTokenQuerySchema = z
-  .object({
-    token: z.string().length(64).optional(),
-  })
-  .strict();
+const EditTokenQuerySchema = z.strictObject({
+  token: z.string().length(64).optional(),
+});
 
 /** Extract edit token from X-Edit-Token header or ?token= query string. Header preferred. */
 function extractEditToken(request: FastifyRequest): string {
@@ -45,12 +39,7 @@ function extractEditToken(request: FastifyRequest): string {
   const queryToken = (request.query as { token?: string }).token;
   const token = headerToken || queryToken;
   if (!token || token.length !== 64) {
-    throw new AppError(
-      "Edit token required",
-      401,
-      true,
-      ErrorCodes.INVALID_TOKEN,
-    );
+    throw new AppError("Edit token required", 401, ErrorCodes.INVALID_TOKEN);
   }
   return token;
 }
@@ -120,7 +109,6 @@ export async function registrationsPublicRoutes(
         throw new AppError(
           "Form validation failed",
           400,
-          true,
           ErrorCodes.FORM_VALIDATION_ERROR,
           { fieldErrors: validationResult.errors },
         );
@@ -133,39 +121,38 @@ export async function registrationsPublicRoutes(
       );
 
       // Calculate price breakdown using the event ID from the form
-      // Convert access selections to the format expected by calculatePrice
-      const selectedExtras =
+      const selectedAccessItems =
         input.accessSelections?.map((selection) => ({
-          extraId: selection.accessId,
+          accessId: selection.accessId,
           quantity: selection.quantity,
         })) ?? [];
 
       const priceBreakdown = await calculatePrice(form.eventId, {
         formData: input.formData,
-        selectedExtras,
+        selectedAccessItems,
         sponsorshipCodes: input.sponsorshipCode ? [input.sponsorshipCode] : [],
       });
 
       // Transform price breakdown to match our schema
-      // Note: calculatePrice uses 'extras' terminology, we'll adapt it
       const registrationPriceBreakdown = {
         basePrice: priceBreakdown.basePrice,
         appliedRules: priceBreakdown.appliedRules,
         calculatedBasePrice: priceBreakdown.calculatedBasePrice,
-        accessItems: priceBreakdown.extras.map((extra) => ({
-          accessId: extra.extraId,
-          name: extra.name,
-          unitPrice: extra.unitPrice,
-          quantity: extra.quantity,
-          subtotal: extra.subtotal,
+        accessItems: priceBreakdown.accessItems.map((item) => ({
+          accessId: item.accessId,
+          name: item.name,
+          unitPrice: item.unitPrice,
+          quantity: item.quantity,
+          subtotal: item.subtotal,
           status: "confirmed" as const, // Will be updated by createRegistration
         })),
-        accessTotal: priceBreakdown.extrasTotal,
+        accessTotal: priceBreakdown.accessTotal,
         subtotal: priceBreakdown.subtotal,
         sponsorships: priceBreakdown.sponsorships,
         sponsorshipTotal: priceBreakdown.sponsorshipTotal,
         total: priceBreakdown.total,
         currency: priceBreakdown.currency,
+        droppedAccessItems: [],
       };
 
       // Create registration
@@ -213,7 +200,7 @@ export async function registrationEditPublicRoutes(
       const token = extractEditToken(request);
 
       // Verify token value only — read access doesn't expire (payment links stay valid)
-      const isValid = await verifyEditToken(registrationId, token, { checkExpiry: false });
+      const isValid = await verifyEditToken(registrationId, token);
       if (!isValid) {
         throw app.httpErrors.forbidden("Invalid edit token");
       }
@@ -247,7 +234,7 @@ export async function registrationEditPublicRoutes(
       const input = request.body;
 
       // Verify token value only — no expiry enforcement
-      const isValid = await verifyEditToken(registrationId, token, { checkExpiry: false });
+      const isValid = await verifyEditToken(registrationId, token);
       if (!isValid) {
         throw app.httpErrors.forbidden("Invalid edit token");
       }
@@ -266,6 +253,7 @@ export async function registrationEditPublicRoutes(
   }>(
     "/:registrationId/payment-method",
     {
+      config: { rateLimit: publicRateLimits.editToken },
       schema: {
         params: RegistrationIdPublicParamSchema,
         querystring: EditTokenQuerySchema,
@@ -276,9 +264,7 @@ export async function registrationEditPublicRoutes(
       const { registrationId } = request.params;
       const token = extractEditToken(request);
 
-      const isValid = await verifyEditToken(registrationId, token, {
-        checkExpiry: false,
-      });
+      const isValid = await verifyEditToken(registrationId, token);
       if (!isValid) {
         throw app.httpErrors.forbidden("Invalid edit token");
       }
@@ -309,7 +295,7 @@ export async function registrationEditPublicRoutes(
       const token = extractEditToken(request);
 
       // Verify token value only — payment proof upload doesn't expire
-      const isValid = await verifyEditToken(registrationId, token, { checkExpiry: false });
+      const isValid = await verifyEditToken(registrationId, token);
       if (!isValid) {
         throw app.httpErrors.forbidden("Invalid edit token");
       }

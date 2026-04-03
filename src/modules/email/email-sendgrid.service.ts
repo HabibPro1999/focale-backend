@@ -45,31 +45,6 @@ export interface SendEmailResult {
   error?: string;
 }
 
-export interface BatchEmailInput {
-  to: string;
-  toName?: string;
-  fromName?: string; // Event name to use as sender name
-  replyTo?: string; // Reply-to email (e.g., client email)
-  replyToName?: string;
-  subject: string;
-  html: string;
-  plainText?: string;
-  trackingId: string;
-  categories?: string[];
-}
-
-export interface BatchSendResult {
-  total: number;
-  sent: number;
-  failed: number;
-  results: Array<{
-    trackingId: string;
-    success: boolean;
-    messageId?: string;
-    error?: string;
-  }>;
-}
-
 export type SendGridEventType =
   | "processed"
   | "dropped"
@@ -122,7 +97,10 @@ export async function sendEmail(
       to: input.toName ? { email: input.to, name: input.toName } : input.to,
       from: { email: FROM_EMAIL, name: input.fromName || FROM_NAME },
       ...(input.replyTo && {
-        replyTo: { email: input.replyTo, name: input.replyToName || input.replyTo },
+        replyTo: {
+          email: input.replyTo,
+          name: input.replyToName || input.replyTo,
+        },
       }),
       subject: input.subject,
       text: input.plainText || stripHtml(input.html),
@@ -179,132 +157,6 @@ export async function sendEmail(
 }
 
 // =============================================================================
-// SEND BATCH EMAILS (for campaigns)
-// =============================================================================
-
-/**
- * Send multiple emails in batches via SendGrid
- * Processes emails in configurable batch sizes to respect API limits
- *
- * @param emails - Array of email inputs to send
- * @param batchSize - Number of emails per batch (default: 100, max: 1000)
- * @returns Aggregated results for all emails
- */
-export async function sendBatchEmails(
-  emails: BatchEmailInput[],
-  batchSize = 100,
-): Promise<BatchSendResult> {
-  const result: BatchSendResult = {
-    total: emails.length,
-    sent: 0,
-    failed: 0,
-    results: [],
-  };
-
-  if (!SENDGRID_API_KEY) {
-    logger.warn("SendGrid API key not configured, skipping batch send");
-    return {
-      ...result,
-      failed: emails.length,
-      results: emails.map((e) => ({
-        trackingId: e.trackingId,
-        success: false,
-        error: "SendGrid not configured",
-      })),
-    };
-  }
-
-  if (emails.length === 0) {
-    return result;
-  }
-
-  // Ensure batch size is within limits
-  const safeBatchSize = Math.min(Math.max(batchSize, 1), 1000);
-
-  // Process in batches
-  for (let i = 0; i < emails.length; i += safeBatchSize) {
-    const batch = emails.slice(i, i + safeBatchSize);
-    const batchIndex = Math.floor(i / safeBatchSize);
-
-    const messages: sgMail.MailDataRequired[] = batch.map((email) => ({
-      to: email.toName ? { email: email.to, name: email.toName } : email.to,
-      from: { email: FROM_EMAIL, name: email.fromName || FROM_NAME },
-      ...(email.replyTo && {
-        replyTo: { email: email.replyTo, name: email.replyToName || email.replyTo },
-      }),
-      subject: email.subject,
-      text: email.plainText || stripHtml(email.html),
-      html: email.html,
-      trackingSettings: {
-        clickTracking: { enable: true, enableText: false },
-        openTracking: { enable: true },
-      },
-      customArgs: { emailLogId: email.trackingId },
-      ...(email.categories && { categories: email.categories }),
-    }));
-
-    try {
-      // sendMultiple handles array of messages
-      await sgMail.send(messages);
-
-      // sendMultiple doesn't return individual results
-      // If no error, assume all succeeded
-      for (const email of batch) {
-        result.results.push({
-          trackingId: email.trackingId,
-          success: true,
-        });
-        result.sent++;
-      }
-
-      logger.info(
-        {
-          batchIndex,
-          batchSize: batch.length,
-          totalBatches: Math.ceil(emails.length / safeBatchSize),
-        },
-        "Batch sent successfully via SendGrid",
-      );
-    } catch (error: unknown) {
-      const err = error as Error & {
-        response?: { body?: { errors?: Array<{ message: string }> } };
-      };
-      const errorMessage =
-        err.response?.body?.errors?.[0]?.message ||
-        err.message ||
-        "Unknown error";
-
-      // If batch fails, mark all emails in batch as failed
-      for (const email of batch) {
-        result.results.push({
-          trackingId: email.trackingId,
-          success: false,
-          error: errorMessage,
-        });
-        result.failed++;
-      }
-
-      logger.error(
-        { batchIndex, error: errorMessage, batchSize: batch.length },
-        "Batch send failed via SendGrid",
-      );
-    }
-
-    // Add small delay between batches to avoid rate limiting
-    if (i + safeBatchSize < emails.length) {
-      await delay(100);
-    }
-  }
-
-  logger.info(
-    { total: result.total, sent: result.sent, failed: result.failed },
-    "Batch email send completed",
-  );
-
-  return result;
-}
-
-// =============================================================================
 // WEBHOOK SIGNATURE VERIFICATION
 // =============================================================================
 
@@ -323,10 +175,10 @@ export function verifyWebhookSignature(
   timestamp: string,
 ): boolean {
   if (!SENDGRID_WEBHOOK_PUBLIC_KEY) {
-    logger.warn(
-      "SendGrid webhook public key not configured, skipping verification",
+    logger.error(
+      "SendGrid webhook public key not configured — rejecting webhook request",
     );
-    return !config.isProduction;
+    return false;
   }
 
   try {
@@ -401,27 +253,6 @@ export function parseWebhookEvents(body: unknown): SendGridWebhookEvent[] {
   }));
 }
 
-/**
- * Check if an event represents a delivery failure
- */
-export function isFailureEvent(event: SendGridWebhookEvent): boolean {
-  return ["bounce", "dropped", "spam_report"].includes(event.event);
-}
-
-/**
- * Check if an event represents successful delivery
- */
-export function isDeliveryEvent(event: SendGridWebhookEvent): boolean {
-  return event.event === "delivered";
-}
-
-/**
- * Check if an event represents engagement (open/click)
- */
-export function isEngagementEvent(event: SendGridWebhookEvent): boolean {
-  return ["open", "click"].includes(event.event);
-}
-
 // =============================================================================
 // UTILITIES
 // =============================================================================
@@ -448,31 +279,4 @@ function stripHtml(html: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .replace(/[ \t]+/g, " ")
     .trim();
-}
-
-/**
- * Check if SendGrid is configured and ready to send emails
- */
-export function isSendGridConfigured(): boolean {
-  return !!SENDGRID_API_KEY;
-}
-
-/**
- * Get SendGrid configuration status for health checks
- */
-export function getSendGridStatus(): {
-  configured: boolean;
-  webhookVerificationEnabled: boolean;
-} {
-  return {
-    configured: !!SENDGRID_API_KEY,
-    webhookVerificationEnabled: !!SENDGRID_WEBHOOK_PUBLIC_KEY,
-  };
-}
-
-/**
- * Simple delay utility for rate limiting
- */
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

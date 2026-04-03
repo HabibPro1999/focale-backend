@@ -1,55 +1,15 @@
-// Services
-export {
-  createForm,
-  getFormById,
-  getFormByEventSlug,
-  updateForm,
-  listForms,
-  deleteForm,
-  formExists,
-  getFormClientId,
-  // Sponsor form functions
-  createDefaultSponsorSchema,
-  getSponsorFormByEventSlug,
-  getSponsorFormByEventId,
-  createSponsorForm,
-} from './forms.service.js';
+// Only export what external modules actually consume.
+// Internal consumers (routes, service) import directly from ./forms.service.js etc.
 
-// Schemas & Types
-export {
-  FieldTypeSchema,
-  FieldOptionSchema,
-  ConditionOperatorSchema,
-  FieldConditionSchema,
-  FieldValidationSchema,
-  FormFieldSchema,
-  FormStepSchema,
-  FormSchemaJsonSchema,
-  // Sponsor form schemas
-  BeneficiaryTemplateSchema,
-  SponsorSummarySettingsSchema,
-  SponsorFormSchemaJsonSchema,
-  CreateFormSchema,
-  UpdateFormSchema,
-  ListFormsQuerySchema,
-  FormIdParamSchema,
-  type FieldType,
-  type FieldOption,
-  type ConditionOperator,
-  type FieldCondition,
-  type FieldValidation,
-  type FormField,
-  type FormStep,
-  type FormSchemaJson,
-  // Sponsor form types
-  type BeneficiaryTemplate,
-  type SponsorSummarySettings,
-  type SponsorFormSchemaJson,
-  type CreateFormInput,
-  type UpdateFormInput,
-  type ListFormsQuery,
-} from './forms.schema.js';
+export { getFormById } from "./forms.service.js";
 
-// Routes
-export { formsRoutes } from './forms.routes.js';
-export { formsPublicRoutes } from './forms.public.routes.js';
+export {
+  validateFormData,
+  sanitizeFormData,
+  type FormSchema,
+} from "./form-data-validator.js";
+
+export { type FormField } from "./forms.schema.js";
+
+export { formsRoutes } from "./forms.routes.js";
+export { formsPublicRoutes } from "./forms.public.routes.js";

@@ -1,4 +1,19 @@
 // =============================================================================
+// PRISMA PAYLOAD TYPES
+// =============================================================================
+
+import type { Prisma } from "@/generated/prisma/client.js";
+
+export type RegistrationWithRelations = Prisma.RegistrationGetPayload<{
+  include: {
+    event: {
+      include: { client: true };
+    };
+    form: true;
+  };
+}>;
+
+// =============================================================================
 // TIPTAP DOCUMENT STRUCTURE
 // =============================================================================
 
@@ -18,15 +33,6 @@ export interface TiptapNode {
 export interface TiptapMark {
   type: string; // 'bold', 'italic', 'textStyle', 'link', etc.
   attrs?: Record<string, unknown>;
-}
-
-// Variable mention node
-export interface VariableMentionNode extends TiptapNode {
-  type: "mention";
-  attrs: {
-    id: string; // Variable ID: 'firstName', 'eventName', etc.
-    label: string; // Display label: 'First Name', 'Event Name'
-  };
 }
 
 // =============================================================================
@@ -105,101 +111,6 @@ export interface EmailContext {
 export interface MjmlCompilationResult {
   html: string;
   errors: Array<{ message: string; line: number }>;
-}
-
-// =============================================================================
-// RECIPIENT FILTERING
-// =============================================================================
-
-export interface RecipientFilter {
-  // Note: eventId is passed separately to filter functions, not stored in the filter object
-
-  // Payment status filter
-  paymentStatus?: string[]; // ['PENDING', 'PAID', etc.]
-
-  // Date range filters
-  registeredAfter?: Date;
-  registeredBefore?: Date;
-
-  // Access/workshop filters
-  hasAccessTypes?: string[]; // Must have ALL of these
-  hasAnyAccessTypes?: string[]; // Must have ANY of these
-  excludeAccessTypes?: string[]; // Must NOT have any of these
-
-  // Form field filters (dynamic based on form schema)
-  formFieldFilters?: FormFieldFilter[];
-
-  // Manual selection
-  includeRegistrationIds?: string[]; // Include specific registrations
-  excludeRegistrationIds?: string[]; // Exclude specific registrations
-}
-
-export interface FormFieldFilter {
-  fieldId: string;
-  operator:
-    | "equals"
-    | "not_equals"
-    | "contains"
-    | "not_contains"
-    | "in"
-    | "not_in"
-    | "is_empty"
-    | "is_not_empty";
-  value?: string | number | boolean | string[];
-}
-
-// =============================================================================
-// EMAIL TEMPLATE TYPES
-// =============================================================================
-
-export type EmailTemplateCategory = "AUTOMATIC" | "MANUAL";
-
-export type AutomaticEmailTrigger =
-  | "REGISTRATION_CREATED"
-  | "PAYMENT_PROOF_SUBMITTED"
-  | "PAYMENT_CONFIRMED"
-  | "SPONSORSHIP_BATCH_SUBMITTED"
-  | "SPONSORSHIP_LINKED"
-  | "SPONSORSHIP_APPLIED"
-  | "SPONSORSHIP_PARTIAL";
-
-export interface CreateEmailTemplateInput {
-  clientId: string;
-  eventId?: string;
-  name: string;
-  description?: string;
-  subject: string;
-  content: TiptapDocument;
-  category: EmailTemplateCategory;
-  trigger?: AutomaticEmailTrigger;
-  isActive?: boolean;
-}
-
-export interface UpdateEmailTemplateInput {
-  name?: string;
-  description?: string;
-  subject?: string;
-  content?: TiptapDocument;
-  isActive?: boolean;
-}
-
-export interface EmailTemplate {
-  id: string;
-  clientId: string;
-  eventId: string | null;
-  name: string;
-  description: string | null;
-  subject: string;
-  content: unknown; // JSON
-  mjmlContent: string | null;
-  htmlContent: string | null;
-  plainContent: string | null;
-  category: EmailTemplateCategory;
-  trigger: AutomaticEmailTrigger | null;
-  isDefault: boolean;
-  isActive: boolean;
-  createdAt: Date;
-  updatedAt: Date;
 }
 
 // =============================================================================

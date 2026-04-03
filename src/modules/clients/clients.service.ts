@@ -1,10 +1,18 @@
-import { prisma } from '@/database/client.js';
-import { AppError } from '@shared/errors/app-error.js';
-import { ErrorCodes } from '@shared/errors/error-codes.js';
-import { paginate, getSkip, type PaginatedResult } from '@shared/utils/pagination.js';
-import type { CreateClientInput, UpdateClientInput, ListClientsQuery } from './clients.schema.js';
-import { ALL_MODULE_IDS } from './clients.schema.js';
-import type { Client, Prisma } from '@/generated/prisma/client.js';
+import { prisma } from "@/database/client.js";
+import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
+import {
+  paginate,
+  getSkip,
+  type PaginatedResult,
+} from "@shared/utils/pagination.js";
+import type {
+  CreateClientInput,
+  UpdateClientInput,
+  ListClientsQuery,
+} from "./clients.schema.js";
+import { MODULE_IDS } from "./clients.schema.js";
+import type { Client, Prisma } from "@/generated/prisma/client.js";
 
 /**
  * Create a new client.
@@ -19,7 +27,7 @@ export async function createClient(input: CreateClientInput): Promise<Client> {
       primaryColor: primaryColor ?? null,
       email: email ?? null,
       phone: phone ?? null,
-      enabledModules: enabledModules ?? ALL_MODULE_IDS,
+      enabledModules: enabledModules ?? [...MODULE_IDS],
     },
   });
 }
@@ -37,12 +45,12 @@ export async function getClientById(id: string): Promise<Client | null> {
  */
 export async function updateClient(
   id: string,
-  input: UpdateClientInput
+  input: UpdateClientInput,
 ): Promise<Client> {
   // Check if client exists
   const client = await prisma.client.findUnique({ where: { id } });
   if (!client) {
-    throw new AppError('Client not found', 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError("Client not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   // One-way enable logic: merge new modules with existing (union, not replace)
@@ -53,7 +61,6 @@ export async function updateClient(
     mergedModules = [...new Set([...existingModules, ...newModules])];
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { enabledModules: _removed, ...restInput } = input;
 
   return prisma.client.update({
@@ -68,7 +75,9 @@ export async function updateClient(
 /**
  * List clients with pagination and filters.
  */
-export async function listClients(query: ListClientsQuery): Promise<PaginatedResult<Client>> {
+export async function listClients(
+  query: ListClientsQuery,
+): Promise<PaginatedResult<Client>> {
   const { page, limit, active, search } = query;
   const skip = getSkip({ page, limit });
 
@@ -77,13 +86,18 @@ export async function listClients(query: ListClientsQuery): Promise<PaginatedRes
   if (active !== undefined) where.active = active;
   if (search) {
     where.OR = [
-      { name: { contains: search, mode: 'insensitive' } },
-      { email: { contains: search, mode: 'insensitive' } },
+      { name: { contains: search, mode: "insensitive" } },
+      { email: { contains: search, mode: "insensitive" } },
     ];
   }
 
   const [data, total] = await Promise.all([
-    prisma.client.findMany({ where, skip, take: limit, orderBy: { createdAt: 'desc' } }),
+    prisma.client.findMany({
+      where,
+      skip,
+      take: limit,
+      orderBy: { createdAt: "desc" },
+    }),
     prisma.client.count({ where }),
   ]);
 
@@ -109,7 +123,7 @@ export async function deleteClient(id: string): Promise<void> {
   });
 
   if (!client) {
-    throw new AppError('Client not found', 404, true, ErrorCodes.NOT_FOUND);
+    throw new AppError("Client not found", 404, ErrorCodes.NOT_FOUND);
   }
 
   // Check for associated users or events
@@ -117,8 +131,7 @@ export async function deleteClient(id: string): Promise<void> {
     throw new AppError(
       `Cannot delete client with ${client._count.users} user(s) and ${client._count.events} event(s). Remove associated data first.`,
       409,
-      true,
-      ErrorCodes.CLIENT_HAS_DEPENDENCIES
+      ErrorCodes.CLIENT_HAS_DEPENDENCIES,
     );
   }
 
