@@ -44,10 +44,11 @@ model User {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  client Client? @relation(fields: [clientId], references: [id])
+  client Client? @relation(fields: [clientId], references: [id], onDelete: SetNull)
 
   @@index([clientId])
   @@index([active, role])
+  @@index([clientId, role])
   @@map("users")
 }
 
@@ -237,6 +238,7 @@ model EventAccess {
   @@index([eventId, startsAt])
   @@index([eventId, type])
   @@index([eventId, active])
+  @@index([eventId, type, active])
   @@map("event_access")
 }
 
@@ -361,6 +363,7 @@ model Sponsorship {
   // @@index([code]) -- removed: redundant with @unique on code which already creates an index
   @@index([eventId, status]) // compound index for common query: { eventId, status: 'PENDING' }
   @@index([status])
+  @@index([batchId, status])
   // @@index([beneficiaryEmail]) -- removed: beneficiaryEmail is never used in a where clause
   // @@index([targetRegistrationId]) -- removed: targetRegistrationId is never used in a where clause
   @@map("sponsorships")
