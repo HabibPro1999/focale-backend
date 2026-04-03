@@ -6,6 +6,8 @@ import { z } from "zod";
 
 export const FieldTypeSchema = z.enum([
   "text",
+  "firstName",
+  "lastName",
   "email",
   "phone",
   "number",

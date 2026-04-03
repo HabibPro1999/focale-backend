@@ -48,22 +48,20 @@ function createDefaultSchema(): FormSchemaJson {
         description: "Tous les champs marqués * sont obligatoires",
         fields: [
           {
-            id: `text_${randomUUID()}`,
-            type: "text",
+            id: `firstName_${randomUUID()}`,
+            type: "firstName",
             label: "Prénom",
             placeholder: "Votre prénom",
             required: true,
             width: "half",
-            fieldKey: "firstName",
           },
           {
-            id: `text_${randomUUID()}`,
-            type: "text",
+            id: `lastName_${randomUUID()}`,
+            type: "lastName",
             label: "Nom",
             placeholder: "Votre nom",
             required: true,
             width: "half",
-            fieldKey: "lastName",
           },
           {
             id: `email_${randomUUID()}`,
@@ -72,7 +70,6 @@ function createDefaultSchema(): FormSchemaJson {
             placeholder: "votre.email@exemple.com",
             required: true,
             width: "full",
-            fieldKey: "email",
           },
           {
             id: `phone_${randomUUID()}`,
@@ -82,7 +79,6 @@ function createDefaultSchema(): FormSchemaJson {
             required: true,
             width: "full",
             phoneFormat: "TN",
-            fieldKey: "phone",
           },
           {
             id: `text_${randomUUID()}`,

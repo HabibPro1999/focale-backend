@@ -98,10 +98,10 @@ describe("Forms Service", () => {
               expect.objectContaining({
                 title: "Informations personnelles",
                 fields: expect.arrayContaining([
-                  expect.objectContaining({ fieldKey: "firstName" }),
-                  expect.objectContaining({ fieldKey: "lastName" }),
-                  expect.objectContaining({ fieldKey: "email" }),
-                  expect.objectContaining({ fieldKey: "phone" }),
+                  expect.objectContaining({ type: "firstName" }),
+                  expect.objectContaining({ type: "lastName" }),
+                  expect.objectContaining({ type: "email" }),
+                  expect.objectContaining({ type: "phone" }),
                 ]),
               }),
             ]),
