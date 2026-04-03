@@ -133,10 +133,25 @@ async function generateReferenceNumber(
   const year = event.startDate.getFullYear().toString().slice(-2);
   // Use slug directly — replace dots/underscores with dashes, uppercase, truncate
   const code = event.slug.replace(/[._]/g, "-").toUpperCase().slice(0, 12);
-  const count = await tx.registration.count({ where: { eventId } });
-  const seq = String(count + 1).padStart(3, "0");
+  const prefix = `${year}-${code}-`;
 
-  return `${year}-${code}-${seq}`;
+  // Use MAX on existing reference numbers to find the next sequence.
+  // SELECT FOR UPDATE locks the rows to prevent two concurrent transactions
+  // from reading the same max and generating the same reference number.
+  const result = await tx.$queryRawUnsafe<[{ max_ref: string | null }]>(
+    `SELECT MAX("reference_number") as max_ref FROM "registrations" WHERE "event_id" = $1 AND "reference_number" LIKE $2 FOR UPDATE`,
+    eventId,
+    `${prefix}%`,
+  );
+
+  let nextSeq = 1;
+  const maxRef = result[0]?.max_ref;
+  if (maxRef) {
+    const lastSeq = parseInt(maxRef.slice(prefix.length), 10);
+    if (!isNaN(lastSeq)) nextSeq = lastSeq + 1;
+  }
+
+  return `${prefix}${String(nextSeq).padStart(3, "0")}`;
 }
 
 // ============================================================================
