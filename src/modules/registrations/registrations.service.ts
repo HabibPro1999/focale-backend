@@ -273,9 +273,9 @@ export async function createRegistration(
     // Reserve access spots (capacity tracking)
     // Pass tx so reservation is rolled back if the transaction fails
     if (accessSelections && accessSelections.length > 0) {
-      for (const selection of accessSelections) {
-        await reserveAccessSpot(selection.accessId, selection.quantity, tx);
-      }
+      await Promise.all(
+        accessSelections.map((s) => reserveAccessSpot(s.accessId, s.quantity, tx)),
+      );
     }
 
     // Increment event registered count (atomic SQL within transaction)
@@ -468,9 +468,9 @@ export async function createAdminRegistration(
 
     // Reserve access spots
     if (accessSelections && accessSelections.length > 0) {
-      for (const selection of accessSelections) {
-        await reserveAccessSpot(selection.accessId, selection.quantity, tx);
-      }
+      await Promise.all(
+        accessSelections.map((s) => reserveAccessSpot(s.accessId, s.quantity, tx)),
+      );
     }
 
     await incrementRegisteredCountTx(tx, eventId);
@@ -830,16 +830,16 @@ export async function adminEditRegistration(
         accessId: string;
         quantity: number;
       }>;
-      for (const old of oldAccessItems) {
-        await releaseAccessSpot(old.accessId, old.quantity, tx);
-      }
+      await Promise.all(
+        oldAccessItems.map((old) => releaseAccessSpot(old.accessId, old.quantity, tx)),
+      );
 
       // Reserve new access spots
-      for (const sel of input.accessSelections) {
-        if (sel.quantity > 0) {
-          await reserveAccessSpot(sel.accessId, sel.quantity, tx);
-        }
-      }
+      await Promise.all(
+        input.accessSelections
+          .filter((sel) => sel.quantity > 0)
+          .map((sel) => reserveAccessSpot(sel.accessId, sel.quantity, tx)),
+      );
 
       // Update denormalized price fields
       updateData.totalAmount = priceBreakdown.total;
@@ -1003,9 +1003,11 @@ export async function deleteRegistration(
     // Pass tx so release is rolled back if the transaction fails
     const priceBreakdown = registration.priceBreakdown as PriceBreakdown;
     if (priceBreakdown.accessItems) {
-      for (const item of priceBreakdown.accessItems) {
-        await releaseAccessSpot(item.accessId, item.quantity, tx);
-      }
+      await Promise.all(
+        priceBreakdown.accessItems.map((item) =>
+          releaseAccessSpot(item.accessId, item.quantity, tx),
+        ),
+      );
     }
 
     // Decrement paid count if registration was settled
@@ -1506,16 +1508,16 @@ export async function editRegistrationPublic(
 
     // Reserve new access spots
     // Pass tx so reservation is rolled back if the transaction fails
-    for (const selection of accessToAdd) {
-      await reserveAccessSpot(selection.accessId, selection.quantity, tx);
-    }
+    await Promise.all(
+      accessToAdd.map((s) => reserveAccessSpot(s.accessId, s.quantity, tx)),
+    );
 
     // Release removed access spots (only if not paid)
     // Pass tx so release is rolled back if the transaction fails
     if (!currentIsPaid) {
-      for (const item of accessToRemove) {
-        await releaseAccessSpot(item.accessId, item.quantity, tx);
-      }
+      await Promise.all(
+        accessToRemove.map((item) => releaseAccessSpot(item.accessId, item.quantity, tx)),
+      );
     }
 
     // Calculate new total. For paid registrations, never decrease below
