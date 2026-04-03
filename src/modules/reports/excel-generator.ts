@@ -8,7 +8,7 @@ import { prisma } from "@/database/client.js";
 export async function generateEventSummary(
   eventId: string,
 ): Promise<{ filename: string; data: Buffer }> {
-  const [event, accessTypes, registrations, sponsoredRows] = await Promise.all([
+  const [event, accessTypes, registrations] = await Promise.all([
     prisma.event.findUnique({
       where: { id: eventId },
       select: { name: true, slug: true },
@@ -29,17 +29,7 @@ export async function generateEventSummary(
         totalAmount: true,
       },
     }),
-    prisma.sponsorshipUsage.findMany({
-      where: {
-        sponsorship: { eventId },
-        registrationId: { not: null },
-      },
-      select: { registrationId: true },
-      distinct: ["registrationId"],
-    }),
   ]);
-
-  const sponsoredRegIds = new Set(sponsoredRows.map((r) => r.registrationId));
 
   // ── Compute stats ──
 
@@ -53,29 +43,24 @@ export async function generateEventSummary(
     }
   }
 
-  // Confirmed = PAID, SPONSORED, or WAIVED (admin waiver for speakers/VIPs)
-  const paidOnly = registrations.filter(
-    (r) => r.paymentStatus === "PAID" && !sponsoredRegIds.has(r.id),
-  );
-  const sponsoredOnly = registrations.filter(
-    (r) =>
-      r.paymentStatus === "SPONSORED" ||
-      (r.paymentStatus !== "PAID" &&
-        r.paymentStatus !== "WAIVED" &&
-        sponsoredRegIds.has(r.id)),
-  );
-  const paidAndSponsored = registrations.filter(
-    (r) => r.paymentStatus === "PAID" && sponsoredRegIds.has(r.id),
-  );
-  const waivedOnly = registrations.filter(
-    (r) => r.paymentStatus === "WAIVED",
-  );
+  // Status breakdown — paymentStatus is the single source of truth
+  const byStatus = (status: string) =>
+    registrations.filter((r) => r.paymentStatus === status);
+
+  const paid = byStatus("PAID");
+  const sponsored = byStatus("SPONSORED");
+  const waived = byStatus("WAIVED");
+  const partial = byStatus("PARTIAL");
+  const verifying = byStatus("VERIFYING");
+  const pending = byStatus("PENDING");
+  const refunded = byStatus("REFUNDED");
+
+  // Confirmed = fully settled (PAID + SPONSORED + WAIVED)
   const confirmed = registrations.filter(
     (r) =>
       r.paymentStatus === "PAID" ||
       r.paymentStatus === "SPONSORED" ||
-      r.paymentStatus === "WAIVED" ||
-      sponsoredRegIds.has(r.id),
+      r.paymentStatus === "WAIVED",
   );
 
   const confirmedPerAccess: Record<string, number> = {};
@@ -192,16 +177,18 @@ export async function generateEventSummary(
   }
   row++;
 
-  addSectionHeader("3. Total Confirmed (Paid, Waived, or Sponsored)");
-  addKVRow("Total Confirmed", confirmed.length, { bold: true });
-  addKVRow("Paid only (PAID, no sponsorship)", paidOnly.length, {
-    indent: true,
+  addSectionHeader("3. Payment Status Breakdown");
+  addKVRow("Total Confirmed (Paid + Sponsored + Waived)", confirmed.length, {
+    bold: true,
   });
-  addKVRow("Paid + Sponsored", paidAndSponsored.length, { indent: true });
-  addKVRow("Sponsored only (not yet PAID)", sponsoredOnly.length, {
-    indent: true,
-  });
-  addKVRow("Waived (speakers / VIPs)", waivedOnly.length, { indent: true });
+  addKVRow("Paid", paid.length, { indent: true });
+  addKVRow("Sponsored", sponsored.length, { indent: true });
+  addKVRow("Waived (speakers / VIPs)", waived.length, { indent: true });
+  row++;
+  addKVRow("Verifying", verifying.length);
+  addKVRow("Partial", partial.length);
+  addKVRow("Pending", pending.length);
+  addKVRow("Refunded", refunded.length);
   row++;
 
   addSectionHeader(

@@ -16,7 +16,10 @@ import type {
   DailyTrendItem,
   ExportQuery,
 } from "./reports.schema.js";
-import type { EventAnalyticsResponse } from "./analytics.schemas.js";
+import type {
+  EventAnalyticsResponse,
+  AccessRegistrantsResponse,
+} from "./analytics.schemas.js";
 
 // ============================================================================
 // Financial Report
@@ -619,4 +622,76 @@ function generateCSV(registrations: RegistrationExportRow[]): string {
   ];
 
   return csvLines.join("\n");
+}
+
+// ============================================================================
+// Access Registrants Drill-Down
+// ============================================================================
+
+const SETTLED_STATUSES = ["PAID", "SPONSORED", "WAIVED"];
+
+export async function getAccessRegistrants(
+  eventId: string,
+  accessId: string,
+): Promise<AccessRegistrantsResponse> {
+  const [access, registrations] = await Promise.all([
+    prisma.eventAccess.findUnique({
+      where: { id: accessId },
+      select: { name: true, type: true },
+    }),
+    prisma.registration.findMany({
+      where: {
+        eventId,
+        accessTypeIds: { has: accessId },
+      },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        phone: true,
+        paymentStatus: true,
+        paidAmount: true,
+        totalAmount: true,
+        currency: true,
+        submittedAt: true,
+      },
+      orderBy: { submittedAt: "desc" },
+    }),
+  ]);
+
+  if (!access) {
+    throw new AppError("Access item not found", 404, ErrorCodes.NOT_FOUND);
+  }
+
+  const mapRegistrant = (r: (typeof registrations)[number]) => ({
+    id: r.id,
+    firstName: r.firstName,
+    lastName: r.lastName,
+    email: r.email,
+    phone: r.phone,
+    paymentStatus: r.paymentStatus,
+    paidAmount: r.paidAmount,
+    totalAmount: r.totalAmount,
+    currency: r.currency,
+    submittedAt: r.submittedAt.toISOString(),
+  });
+
+  const settledList = registrations
+    .filter((r) => SETTLED_STATUSES.includes(r.paymentStatus))
+    .map(mapRegistrant);
+  const notSettledList = registrations
+    .filter((r) => !SETTLED_STATUSES.includes(r.paymentStatus))
+    .map(mapRegistrant);
+
+  return {
+    accessId,
+    accessName: access.name,
+    accessType: access.type,
+    total: registrations.length,
+    settled: settledList.length,
+    notSettled: notSettledList.length,
+    settledList,
+    notSettledList,
+  };
 }

@@ -15,11 +15,15 @@ import {
   type ReportQuery,
   type ExportQuery,
 } from "./reports.schema.js";
-import { EventAnalyticsResponseSchema } from "./analytics.schemas.js";
+import {
+  EventAnalyticsResponseSchema,
+  AccessRegistrantsResponseSchema,
+} from "./analytics.schemas.js";
 import {
   getFinancialReport,
   exportRegistrations,
   getEventAnalytics,
+  getAccessRegistrants,
   generateEventSummary,
 } from "./reports.service.js";
 
@@ -59,6 +63,36 @@ export async function reportsRoutes(app: AppInstance): Promise<void> {
 
       const analytics = await getEventAnalytics(eventId);
       return reply.send(analytics);
+    },
+  );
+
+  // ----------------------------------------------------------------
+  // GET /:eventId/analytics/access-items/:accessId/registrations
+  // ----------------------------------------------------------------
+  app.get<{
+    Params: { eventId: string; accessId: string };
+  }>(
+    "/:eventId/analytics/access-items/:accessId/registrations",
+    {
+      schema: {
+        response: {
+          200: AccessRegistrantsResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { eventId, accessId } = request.params;
+
+      const event = await getEventById(eventId);
+      if (!event) {
+        throw app.httpErrors.notFound("Event not found");
+      }
+      if (!canAccessClient(request.user!, event.clientId)) {
+        throw app.httpErrors.forbidden("Insufficient permissions");
+      }
+
+      const data = await getAccessRegistrants(eventId, accessId);
+      return reply.send(data);
     },
   );
 
