@@ -451,6 +451,7 @@ export async function createAdminRegistration(
         referenceNumber: await generateReferenceNumber(eventId, tx),
         role,
         paymentStatus: resolvedPaymentStatus,
+        paidAt: FULLY_SETTLED_STATUSES.includes(resolvedPaymentStatus) ? new Date() : null,
         paymentMethod: paymentMethod ?? null,
         labName: paymentMethod === "LAB_SPONSORSHIP" ? (labName ?? null) : null,
         totalAmount: priceBreakdown.total,
@@ -486,6 +487,20 @@ export async function createAdminRegistration(
       for (const selection of accessSelections) {
         await reserveAccessSpot(selection.accessId, selection.quantity, tx);
       }
+    }
+
+    // Sync paid count if admin created with a settled payment status
+    if (FULLY_SETTLED_STATUSES.includes(resolvedPaymentStatus)) {
+      await syncPaidCount(
+        tx,
+        {
+          eventId,
+          accessTypeIds: accessSelections?.map((s) => s.accessId) ?? [],
+          priceBreakdown: priceBreakdown as unknown,
+        },
+        "PENDING",
+        resolvedPaymentStatus,
+      );
     }
 
     await incrementRegisteredCountTx(tx, eventId);
@@ -715,6 +730,17 @@ export async function adminEditRegistration(
 
     // ── Personal info ──────────────────────────────────────────
     if (input.email !== undefined && input.email !== registration.email) {
+      const duplicate = await tx.registration.findUnique({
+        where: { email_formId: { email: input.email, formId: registration.formId } },
+        select: { id: true },
+      });
+      if (duplicate) {
+        throw new AppError(
+          "A registration with this email already exists for this form",
+          409,
+          ErrorCodes.REGISTRATION_ALREADY_EXISTS,
+        );
+      }
       updateData.email = input.email;
       changes.email = { old: registration.email, new: input.email };
     }
@@ -883,13 +909,19 @@ export async function adminEditRegistration(
     await tx.registration.update({ where: { id }, data: updateData });
 
     // Sync paid count if payment status changed (admin override)
+    // Use updated values if access selections were changed in this edit
     if (
       input.paymentStatus !== undefined &&
       input.paymentStatus !== registration.paymentStatus
     ) {
+      const effectiveAccessTypeIds =
+        (updateData.accessTypeIds as string[] | undefined) ?? registration.accessTypeIds;
+      const effectivePriceBreakdown =
+        (updateData.priceBreakdown as unknown) ?? registration.priceBreakdown;
+
       await syncPaidCount(
         tx,
-        { eventId, accessTypeIds: registration.accessTypeIds, priceBreakdown: registration.priceBreakdown },
+        { eventId, accessTypeIds: effectiveAccessTypeIds, priceBreakdown: effectivePriceBreakdown },
         registration.paymentStatus,
         input.paymentStatus,
       );
