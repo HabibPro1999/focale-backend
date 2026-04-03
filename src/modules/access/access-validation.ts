@@ -12,6 +12,7 @@ export async function validateAccessSelections(
   eventId: string,
   selections: AccessSelection[],
   formData: Record<string, unknown>,
+  existingAccessIds?: Set<string>,
 ): Promise<{ valid: boolean; errors: string[] }> {
   const errors: string[] = [];
 
@@ -21,7 +22,7 @@ export async function validateAccessSelections(
   const [accessItems, includedAccesses] = await Promise.all([
     selections.length > 0
       ? prisma.eventAccess.findMany({
-          where: { id: { in: accessIds }, eventId, active: true },
+          where: { id: { in: accessIds }, eventId },
           include: { requiredAccess: { select: { id: true } } },
         })
       : Promise.resolve([]),
@@ -55,10 +56,16 @@ export async function validateAccessSelections(
 
   const accessMap = new Map(accessItems.map((a) => [a.id, a]));
 
-  // Check all selected items exist
+  // Check all selected items exist and are active (existing items are grandfathered)
   for (const selection of selections) {
-    if (!accessMap.has(selection.accessId)) {
-      errors.push(`Access item ${selection.accessId} not found or inactive`);
+    const access = accessMap.get(selection.accessId);
+    if (!access) {
+      errors.push(`Access item ${selection.accessId} not found`);
+    } else if (
+      !access.active &&
+      !existingAccessIds?.has(selection.accessId)
+    ) {
+      errors.push(`Access item ${selection.accessId} is inactive`);
     }
   }
 
@@ -117,16 +124,19 @@ export async function validateAccessSelections(
     }
   }
 
-  // Check date availability and form conditions
+  // Check date availability and form conditions (skip for existing/grandfathered items)
   const now = new Date();
   for (const selection of selections) {
     const access = accessMap.get(selection.accessId)!;
+    const isExisting = existingAccessIds?.has(selection.accessId);
 
-    if (access.availableFrom && access.availableFrom > now) {
-      errors.push(`${access.name} is not yet available`);
-    }
-    if (access.availableTo && access.availableTo < now) {
-      errors.push(`${access.name} is no longer available`);
+    if (!isExisting) {
+      if (access.availableFrom && access.availableFrom > now) {
+        errors.push(`${access.name} is not yet available`);
+      }
+      if (access.availableTo && access.availableTo < now) {
+        errors.push(`${access.name} is no longer available`);
+      }
     }
 
     if (access.conditions) {
@@ -144,10 +154,11 @@ export async function validateAccessSelections(
     }
   }
 
-  // Check capacity based on paid count (not total registrations)
+  // Check capacity based on paid count (skip for existing items — they already hold spots)
   for (const selection of selections) {
     const access = accessMap.get(selection.accessId)!;
-    if (access.maxCapacity !== null) {
+    const isExisting = existingAccessIds?.has(selection.accessId);
+    if (!isExisting && access.maxCapacity !== null) {
       const spotsRemaining = access.maxCapacity - access.paidCount;
       if (spotsRemaining < selection.quantity) {
         errors.push(`${access.name} is full`);

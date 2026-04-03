@@ -1431,6 +1431,7 @@ export async function editRegistrationPublic(
       registration.eventId,
       newAccessSelections,
       newFormData,
+      currentAccessIds,
     );
     if (!validation.valid) {
       throw new AppError(

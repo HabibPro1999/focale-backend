@@ -294,7 +294,7 @@ async function calculateAccessItemsTotal(
 
   const accessIds = selectedAccessItems.map((e) => e.accessId);
   const accessItems = await prisma.eventAccess.findMany({
-    where: { id: { in: accessIds }, active: true },
+    where: { id: { in: accessIds } },
   });
 
   const accessMap = new Map(accessItems.map((a) => [a.id, a]));
