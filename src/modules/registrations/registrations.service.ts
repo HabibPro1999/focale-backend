@@ -131,11 +131,12 @@ async function generateReferenceNumber(
   if (!event) return `REG-${Date.now().toString(36).toUpperCase()}`;
 
   const year = event.startDate.getFullYear().toString().slice(-2);
-  const slug = event.slug.toUpperCase().slice(0, 10);
+  // Use slug directly — replace dots/underscores with dashes, uppercase, truncate
+  const code = event.slug.replace(/[._]/g, "-").toUpperCase().slice(0, 12);
   const count = await tx.registration.count({ where: { eventId } });
   const seq = String(count + 1).padStart(3, "0");
 
-  return `${year}-${slug}-${seq}`;
+  return `${year}-${code}-${seq}`;
 }
 
 // ============================================================================
