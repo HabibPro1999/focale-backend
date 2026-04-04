@@ -28,6 +28,7 @@ type DroppedAccessSelectionItem = AccessSelectionItem & {
 export type RegistrationWithRelations = Registration & {
   accessSelections: AccessSelectionItem[];
   droppedAccessSelections: DroppedAccessSelectionItem[];
+  accessCheckIns?: { accessId: string; checkedInAt: Date }[];
   form: {
     id: string;
     name: string;

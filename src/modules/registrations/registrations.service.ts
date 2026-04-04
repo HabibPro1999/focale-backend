@@ -551,16 +551,18 @@ export async function getRegistrationById(
     include: {
       form: { select: { id: true, name: true } },
       event: { select: { id: true, name: true, slug: true, clientId: true } },
+      accessCheckIns: { select: { accessId: true, checkedInAt: true } },
     },
   });
 
   if (!registration) return null;
 
-  const enriched = await enrichWithAccessSelections(registration);
+  const { accessCheckIns, ...rest } = registration;
+  const enriched = await enrichWithAccessSelections(rest);
   // M23: strip editToken from admin responses
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { editToken: _, ...safeResult } = enriched;
-  return safeResult as RegistrationWithRelations;
+  return { ...safeResult, accessCheckIns } as RegistrationWithRelations;
 }
 
 /**
