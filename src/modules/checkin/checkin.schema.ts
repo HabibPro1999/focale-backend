@@ -23,6 +23,10 @@ export const BatchSyncBodySchema = z.strictObject({
 // Param Schemas
 // ============================================================================
 
+export const CheckInEventParamSchema = z.strictObject({
+  eventId: z.string().uuid(),
+});
+
 export const CheckInLookupParamSchema = z.strictObject({
   eventId: z.string().uuid(),
   registrationId: z.string().uuid(),

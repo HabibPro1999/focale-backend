@@ -2,9 +2,9 @@ import {
   requireAuth,
   canAccessClient,
 } from "@shared/middleware/auth.middleware.js";
-import { EventIdParamSchema } from "@events";
 import {
   CheckInBodySchema,
+  CheckInEventParamSchema,
   BatchSyncBodySchema,
   CheckInLookupParamSchema,
   type CheckInBody,
@@ -29,7 +29,7 @@ export async function checkinRoutes(app: AppInstance): Promise<void> {
     "/:eventId/checkin",
     {
       schema: {
-        params: EventIdParamSchema,
+        params: CheckInEventParamSchema,
         body: CheckInBodySchema,
       },
     },
@@ -55,7 +55,7 @@ export async function checkinRoutes(app: AppInstance): Promise<void> {
   app.get<{ Params: { eventId: string } }>(
     "/:eventId/checkin/registrations",
     {
-      schema: { params: EventIdParamSchema },
+      schema: { params: CheckInEventParamSchema },
     },
     async (request, reply) => {
       const { eventId } = request.params;
@@ -74,7 +74,7 @@ export async function checkinRoutes(app: AppInstance): Promise<void> {
   app.get<{ Params: { eventId: string } }>(
     "/:eventId/checkin/stats",
     {
-      schema: { params: EventIdParamSchema },
+      schema: { params: CheckInEventParamSchema },
     },
     async (request, reply) => {
       const { eventId } = request.params;
@@ -94,7 +94,7 @@ export async function checkinRoutes(app: AppInstance): Promise<void> {
     "/:eventId/checkin/sync",
     {
       schema: {
-        params: EventIdParamSchema,
+        params: CheckInEventParamSchema,
         body: BatchSyncBodySchema,
       },
     },
