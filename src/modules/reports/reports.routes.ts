@@ -25,6 +25,7 @@ import {
   getEventAnalytics,
   getAccessRegistrants,
   generateEventSummary,
+  generateAccessRegistrantsReport,
 } from "./reports.service.js";
 
 // ============================================================================
@@ -166,6 +167,37 @@ export async function reportsRoutes(app: AppInstance): Promise<void> {
         .send(result.data);
     },
   );
+
+  // ----------------------------------------------------------------
+  // GET /:eventId/reports/access-registrants - Excel: one sheet per access item
+  // ----------------------------------------------------------------
+  app.get<{
+    Params: { eventId: string };
+  }>("/:eventId/reports/access-registrants", {}, async (request, reply) => {
+    const { eventId } = request.params;
+
+    const event = await getEventById(eventId);
+    if (!event) {
+      throw app.httpErrors.notFound("Event not found");
+    }
+    if (!canAccessClient(request.user!, event.clientId)) {
+      throw app.httpErrors.forbidden("Insufficient permissions");
+    }
+
+    const result = await generateAccessRegistrantsReport(eventId);
+    const safeFilename = result.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+
+    return reply
+      .header(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      )
+      .header(
+        "Content-Disposition",
+        `attachment; filename="${safeFilename}"`,
+      )
+      .send(result.data);
+  });
 
   // ----------------------------------------------------------------
   // GET /:eventId/reports/summary - Download event summary report (Excel)

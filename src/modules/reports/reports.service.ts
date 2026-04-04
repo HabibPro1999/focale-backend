@@ -434,7 +434,10 @@ export async function getEventAnalytics(
 // Event Summary Report (Excel) — extracted to excel-generator.ts
 // ============================================================================
 
-export { generateEventSummary } from "./excel-generator.js";
+export {
+  generateEventSummary,
+  generateAccessRegistrantsReport,
+} from "./excel-generator.js";
 
 // ============================================================================
 // CSV Export

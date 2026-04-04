@@ -211,3 +211,134 @@ export async function generateEventSummary(
     data: buffer,
   };
 }
+
+// ============================================================================
+// Access Registrants Report (one sheet per access item)
+// ============================================================================
+
+const PAYMENT_STATUS_FR: Record<string, string> = {
+  PAID: "Payé",
+  SPONSORED: "Sponsorisé",
+  WAIVED: "Exonéré",
+  PARTIAL: "Partiel",
+  VERIFYING: "En vérification",
+  PENDING: "En attente",
+  REFUNDED: "Remboursé",
+};
+
+export async function generateAccessRegistrantsReport(
+  eventId: string,
+): Promise<{ filename: string; data: Buffer }> {
+  const [event, accessItems] = await Promise.all([
+    prisma.event.findUnique({
+      where: { id: eventId },
+      select: { name: true, slug: true },
+    }),
+    prisma.eventAccess.findMany({
+      where: { eventId },
+      select: { id: true, name: true, type: true },
+      orderBy: { sortOrder: "asc" },
+    }),
+  ]);
+
+  const registrations = await prisma.registration.findMany({
+    where: { eventId },
+    select: {
+      firstName: true,
+      lastName: true,
+      email: true,
+      phone: true,
+      paymentStatus: true,
+      totalAmount: true,
+      currency: true,
+      submittedAt: true,
+      accessTypeIds: true,
+    },
+    orderBy: { submittedAt: "desc" },
+  });
+
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Focale OS";
+  workbook.created = new Date();
+
+  const headerFill: ExcelJS.Fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FF1F4E79" },
+  };
+  const headerFont: Partial<ExcelJS.Font> = {
+    bold: true,
+    color: { argb: "FFFFFFFF" },
+    size: 11,
+  };
+  const border: Partial<ExcelJS.Borders> = {
+    top: { style: "thin" },
+    left: { style: "thin" },
+    bottom: { style: "thin" },
+    right: { style: "thin" },
+  };
+
+  const columns = [
+    "Nom",
+    "Prénom",
+    "Email",
+    "Téléphone",
+    "Statut de paiement",
+    "Montant",
+    "Date d'inscription",
+  ];
+
+  for (const access of accessItems) {
+    // Excel sheet names max 31 chars, no special chars
+    const sheetName = access.name
+      .replace(/[\\/*?[\]:]/g, "")
+      .slice(0, 31);
+
+    const sheet = workbook.addWorksheet(sheetName);
+
+    // Header row
+    const headerRow = sheet.addRow(columns);
+    headerRow.eachCell((cell) => {
+      cell.fill = headerFill;
+      cell.font = headerFont;
+      cell.border = border;
+    });
+
+    // Data rows
+    const accessRegs = registrations.filter((r) =>
+      r.accessTypeIds.includes(access.id),
+    );
+
+    for (const reg of accessRegs) {
+      const row = sheet.addRow([
+        reg.lastName ?? "",
+        reg.firstName ?? "",
+        reg.email,
+        reg.phone ?? "",
+        PAYMENT_STATUS_FR[reg.paymentStatus] ?? reg.paymentStatus,
+        reg.totalAmount,
+        reg.submittedAt.toLocaleDateString("fr-FR"),
+      ]);
+      row.eachCell((cell) => {
+        cell.border = border;
+      });
+    }
+
+    // Column widths
+    sheet.getColumn(1).width = 20;
+    sheet.getColumn(2).width = 20;
+    sheet.getColumn(3).width = 35;
+    sheet.getColumn(4).width = 18;
+    sheet.getColumn(5).width = 20;
+    sheet.getColumn(6).width = 12;
+    sheet.getColumn(7).width = 18;
+  }
+
+  const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+  const timestamp = new Date().toISOString().split("T")[0];
+
+  return {
+    filename: `${event!.slug}-acces-inscrits-${timestamp}.xlsx`,
+    data: buffer,
+  };
+}
