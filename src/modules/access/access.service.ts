@@ -354,14 +354,19 @@ export async function updateEventAccess(
   const isCapacityChanging =
     data.maxCapacity !== undefined && data.maxCapacity !== access.maxCapacity;
 
-  if (isCapacityChanging && data.maxCapacity !== null) {
+  // If being deactivated, strip from all unsettled registrations (same as capacity-reached)
+  const isBeingDeactivated = data.active === false && access.active === true;
+
+  if (isCapacityChanging || isBeingDeactivated) {
     return prisma.$transaction(async (tx) => {
       const updated = await tx.eventAccess.update({
         where: { id },
         data: updateData,
         include: { requiredAccess: { select: { id: true, name: true } } },
       });
-      if (updated.paidCount >= data.maxCapacity!) {
+      if (isBeingDeactivated) {
+        await dropAccessFromUnsettledRegistrations(access.eventId, id, access.name, tx);
+      } else if (data.maxCapacity !== null && updated.paidCount >= data.maxCapacity!) {
         await handleCapacityReached(access.eventId, [id], tx);
       }
       return updated;
@@ -594,6 +599,101 @@ type CapacityReachedDbClient = CapacityDbClient & {
   sponsorshipUsage: Pick<typeof prisma.sponsorshipUsage, "findMany">;
   auditLog: Pick<typeof prisma.auditLog, "create">;
 };
+
+/**
+ * Strip an access item from all unsettled registrations.
+ * Used when an access is deactivated — same cleanup as capacity-reached but
+ * without the capacity check, and with reason "deactivated".
+ */
+async function dropAccessFromUnsettledRegistrations(
+  eventId: string,
+  accessId: string,
+  accessName: string,
+  db: CapacityReachedDbClient,
+): Promise<number> {
+  const registrations = await db.registration.findMany({
+    where: {
+      eventId,
+      paymentStatus: { notIn: [...FULLY_SETTLED_STATUSES, "REFUNDED"] as PaymentStatus[] },
+      accessTypeIds: { has: accessId },
+    },
+    select: {
+      id: true,
+      accessTypeIds: true,
+      droppedAccessIds: true,
+      totalAmount: true,
+      accessAmount: true,
+      sponsorshipAmount: true,
+      priceBreakdown: true,
+    },
+  });
+
+  let affected = 0;
+  for (const reg of registrations) {
+    // Check if protected by sponsorship
+    const usages = await db.sponsorshipUsage.findMany({
+      where: { registrationId: reg.id },
+      select: { sponsorship: { select: { coveredAccessIds: true } } },
+    });
+    const allCoveredIds = usages.flatMap((u) => u.sponsorship.coveredAccessIds);
+    if (allCoveredIds.includes(accessId)) continue;
+
+    const breakdown = reg.priceBreakdown as PriceBreakdown;
+    const droppedItem = breakdown.accessItems.find((a) => a.accessId === accessId);
+    if (!droppedItem) continue;
+
+    const newAccessItems = breakdown.accessItems.filter((a) => a.accessId !== accessId);
+    const newAccessTotal = newAccessItems.reduce((sum, a) => sum + a.subtotal, 0);
+    const newSubtotal = breakdown.calculatedBasePrice + newAccessTotal;
+    const newSponsorshipTotal = Math.min(breakdown.sponsorshipTotal, newSubtotal);
+    const newTotal = Math.max(0, newSubtotal - newSponsorshipTotal);
+
+    const updatedBreakdown = {
+      ...breakdown,
+      accessItems: newAccessItems,
+      accessTotal: newAccessTotal,
+      subtotal: newSubtotal,
+      sponsorshipTotal: newSponsorshipTotal,
+      total: newTotal,
+      droppedAccessItems: [
+        ...(breakdown.droppedAccessItems ?? []),
+        { ...droppedItem, reason: "deactivated" as const },
+      ],
+    };
+
+    await db.registration.update({
+      where: { id: reg.id },
+      data: {
+        accessTypeIds: reg.accessTypeIds.filter((id) => id !== accessId),
+        droppedAccessIds: [...(reg.droppedAccessIds ?? []), accessId],
+        priceBreakdown: updatedBreakdown as unknown as Prisma.InputJsonValue,
+        totalAmount: newTotal,
+        accessAmount: newAccessTotal,
+        sponsorshipAmount: newSponsorshipTotal,
+      },
+    });
+
+    await releaseAccessSpot(accessId, droppedItem.quantity, db);
+
+    await db.auditLog.create({
+      data: {
+        entityType: "Registration",
+        entityId: reg.id,
+        action: "ACCESS_DEACTIVATED",
+        changes: {
+          accessDropped: { old: accessName, new: "deactivated" },
+          totalAmount: { old: reg.totalAmount, new: newTotal },
+          priceDeducted: { old: 0, new: droppedItem.subtotal },
+        } as unknown as Prisma.InputJsonValue,
+        performedBy: "SYSTEM",
+      },
+    });
+
+    affected++;
+  }
+
+  return affected;
+}
 
 /**
  * When paid count hits max capacity, drop access from unprotected registrations.
