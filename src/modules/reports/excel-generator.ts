@@ -290,9 +290,7 @@ export async function generateAccessRegistrantsReport(
 
   for (const access of accessItems) {
     // Excel sheet names max 31 chars, no special chars
-    const sheetName = access.name
-      .replace(/[\\/*?[\]:]/g, "")
-      .slice(0, 31);
+    const sheetName = access.name.replace(/[\\/*?[\]:]/g, "").slice(0, 31);
 
     const sheet = workbook.addWorksheet(sheetName);
 
@@ -339,6 +337,232 @@ export async function generateAccessRegistrantsReport(
 
   return {
     filename: `${event!.slug}-acces-inscrits-${timestamp}.xlsx`,
+    data: buffer,
+  };
+}
+
+// ============================================================================
+// Sponsorships Report (flat sheet)
+// ============================================================================
+
+function formatDateTime(date: Date): string {
+  return date.toLocaleString("fr-FR");
+}
+
+function formatRegistrationLabel(
+  registration: {
+    firstName: string | null;
+    lastName: string | null;
+    email: string;
+  } | null,
+): string {
+  if (!registration) return "Registration deleted";
+
+  const name = [registration.firstName, registration.lastName]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+
+  return name ? `${name} <${registration.email}>` : registration.email;
+}
+
+export async function generateSponsorshipsReport(
+  eventId: string,
+): Promise<{ filename: string; data: Buffer }> {
+  const [event, pricing, accessItems, sponsorships] = await Promise.all([
+    prisma.event.findUnique({
+      where: { id: eventId },
+      select: { name: true, slug: true },
+    }),
+    prisma.eventPricing.findUnique({
+      where: { eventId },
+      select: { currency: true },
+    }),
+    prisma.eventAccess.findMany({
+      where: { eventId },
+      select: { id: true, name: true },
+      orderBy: { sortOrder: "asc" },
+    }),
+    prisma.sponsorship.findMany({
+      where: { eventId },
+      include: {
+        batch: {
+          select: {
+            labName: true,
+            contactName: true,
+            email: true,
+            phone: true,
+          },
+        },
+        usages: {
+          include: {
+            registration: {
+              select: {
+                firstName: true,
+                lastName: true,
+                email: true,
+              },
+            },
+          },
+          orderBy: { appliedAt: "asc" },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    }),
+  ]);
+
+  const currency = pricing?.currency ?? "TND";
+  const accessNameById = new Map(
+    accessItems.map((item) => [item.id, item.name]),
+  );
+
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Focale OS";
+  workbook.created = new Date();
+
+  const sheet = workbook.addWorksheet("Sponsorships");
+
+  const titleRow = sheet.addRow([event?.name ?? "Sponsorships"]);
+  sheet.mergeCells(`A${titleRow.number}:Q${titleRow.number}`);
+  titleRow.getCell(1).font = {
+    bold: true,
+    size: 16,
+    color: { argb: "FF1F4E79" },
+  };
+  titleRow.getCell(1).alignment = { horizontal: "center" };
+
+  const generatedRow = sheet.addRow([
+    `Report generated: ${new Date().toLocaleDateString("fr-FR")}`,
+  ]);
+  sheet.mergeCells(`A${generatedRow.number}:Q${generatedRow.number}`);
+  generatedRow.getCell(1).font = {
+    italic: true,
+    size: 10,
+    color: { argb: "FF666666" },
+  };
+  generatedRow.getCell(1).alignment = { horizontal: "center" };
+
+  sheet.addRow([]);
+
+  const headerFill: ExcelJS.Fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FF1F4E79" },
+  };
+  const headerFont: Partial<ExcelJS.Font> = {
+    bold: true,
+    color: { argb: "FFFFFFFF" },
+    size: 11,
+  };
+  const border: Partial<ExcelJS.Borders> = {
+    top: { style: "thin" },
+    left: { style: "thin" },
+    bottom: { style: "thin" },
+    right: { style: "thin" },
+  };
+
+  const columns = [
+    "Code",
+    "Laboratory",
+    "Contact",
+    "Lab Email",
+    "Lab Phone",
+    "Beneficiary",
+    "Beneficiary Email",
+    "Beneficiary Phone",
+    "Beneficiary Address",
+    "Amount",
+    "Currency",
+    "Status",
+    "Created At",
+    "Coverage",
+    "Linked Registrations",
+    "Amount Applied",
+    "Applied At",
+  ];
+
+  const headerRow = sheet.addRow(columns);
+  headerRow.eachCell((cell) => {
+    cell.fill = headerFill;
+    cell.font = headerFont;
+    cell.border = border;
+  });
+
+  const sortedSponsorships = [...sponsorships].sort((a, b) => {
+    const byLab = a.batch.labName.localeCompare(b.batch.labName, "fr", {
+      sensitivity: "base",
+    });
+    if (byLab !== 0) return byLab;
+    return b.createdAt.getTime() - a.createdAt.getTime();
+  });
+
+  for (const sponsorship of sortedSponsorships) {
+    const coveredAccessNames = sponsorship.coveredAccessIds
+      .map((accessId) => accessNameById.get(accessId))
+      .filter((name): name is string => Boolean(name));
+
+    const coverageParts = [
+      sponsorship.coversBasePrice ? "Base registration" : null,
+      ...coveredAccessNames,
+    ].filter((value): value is string => Boolean(value));
+
+    const linkedRegistrations = sponsorship.usages
+      .map((usage) => formatRegistrationLabel(usage.registration))
+      .join(" | ");
+    const amountApplied = sponsorship.usages.reduce(
+      (sum, usage) => sum + usage.amountApplied,
+      0,
+    );
+    const appliedDates = sponsorship.usages
+      .map((usage) => formatDateTime(usage.appliedAt))
+      .join(" | ");
+
+    const row = sheet.addRow([
+      sponsorship.code,
+      sponsorship.batch.labName,
+      sponsorship.batch.contactName,
+      sponsorship.batch.email,
+      sponsorship.batch.phone ?? "",
+      sponsorship.beneficiaryName,
+      sponsorship.beneficiaryEmail,
+      sponsorship.beneficiaryPhone ?? "",
+      sponsorship.beneficiaryAddress ?? "",
+      sponsorship.totalAmount,
+      currency,
+      sponsorship.status,
+      formatDateTime(sponsorship.createdAt),
+      coverageParts.join("; "),
+      linkedRegistrations,
+      amountApplied,
+      appliedDates,
+    ]);
+
+    row.eachCell((cell) => {
+      cell.border = border;
+      cell.alignment = { vertical: "top", wrapText: true };
+    });
+    row.getCell(10).numFmt = "#,##0";
+    row.getCell(16).numFmt = "#,##0";
+  }
+
+  sheet.autoFilter = {
+    from: { row: headerRow.number, column: 1 },
+    to: { row: headerRow.number, column: columns.length },
+  };
+  sheet.views = [{ state: "frozen", ySplit: headerRow.number }];
+
+  const widths = [
+    16, 28, 24, 28, 18, 28, 28, 18, 30, 14, 12, 14, 22, 40, 40, 16, 24,
+  ];
+  widths.forEach((width, index) => {
+    sheet.getColumn(index + 1).width = width;
+  });
+
+  const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+  const timestamp = new Date().toISOString().split("T")[0];
+
+  return {
+    filename: `${event?.slug ?? "event"}-sponsorships-${timestamp}.xlsx`,
     data: buffer,
   };
 }

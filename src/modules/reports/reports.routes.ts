@@ -26,6 +26,7 @@ import {
   getAccessRegistrants,
   generateEventSummary,
   generateAccessRegistrantsReport,
+  generateSponsorshipsReport,
 } from "./reports.service.js";
 
 // ============================================================================
@@ -156,14 +157,11 @@ export async function reportsRoutes(app: AppInstance): Promise<void> {
       }
 
       const result = await exportRegistrations(eventId, request.query);
-      const safeFilename = result.filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const safeFilename = result.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
 
       return reply
         .header("Content-Type", result.contentType)
-        .header(
-          "Content-Disposition",
-          `attachment; filename="${safeFilename}"`,
-        )
+        .header("Content-Disposition", `attachment; filename="${safeFilename}"`)
         .send(result.data);
     },
   );
@@ -192,10 +190,35 @@ export async function reportsRoutes(app: AppInstance): Promise<void> {
         "Content-Type",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       )
+      .header("Content-Disposition", `attachment; filename="${safeFilename}"`)
+      .send(result.data);
+  });
+
+  // ----------------------------------------------------------------
+  // GET /:eventId/reports/sponsorships - Excel: flat sponsorship export
+  // ----------------------------------------------------------------
+  app.get<{
+    Params: { eventId: string };
+  }>("/:eventId/reports/sponsorships", {}, async (request, reply) => {
+    const { eventId } = request.params;
+
+    const event = await getEventById(eventId);
+    if (!event) {
+      throw app.httpErrors.notFound("Event not found");
+    }
+    if (!canAccessClient(request.user!, event.clientId)) {
+      throw app.httpErrors.forbidden("Insufficient permissions");
+    }
+
+    const result = await generateSponsorshipsReport(eventId);
+    const safeFilename = result.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+
+    return reply
       .header(
-        "Content-Disposition",
-        `attachment; filename="${safeFilename}"`,
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       )
+      .header("Content-Disposition", `attachment; filename="${safeFilename}"`)
       .send(result.data);
   });
 
@@ -216,17 +239,14 @@ export async function reportsRoutes(app: AppInstance): Promise<void> {
     }
 
     const result = await generateEventSummary(eventId);
-    const safeFilename = result.filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const safeFilename = result.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
 
     return reply
       .header(
         "Content-Type",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       )
-      .header(
-        "Content-Disposition",
-        `attachment; filename="${safeFilename}"`,
-      )
+      .header("Content-Disposition", `attachment; filename="${safeFilename}"`)
       .send(result.data);
   });
 }

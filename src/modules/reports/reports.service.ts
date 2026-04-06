@@ -437,6 +437,7 @@ export async function getEventAnalytics(
 export {
   generateEventSummary,
   generateAccessRegistrantsReport,
+  generateSponsorshipsReport,
 } from "./excel-generator.js";
 
 // ============================================================================
@@ -560,7 +561,11 @@ function generateCSV(registrations: RegistrationExportRow[]): string {
   // Dynamically extract all unique keys from formData across all registrations
   const formDataKeysSet = new Set<string>();
   for (const r of registrations) {
-    if (r.formData && typeof r.formData === "object" && !Array.isArray(r.formData)) {
+    if (
+      r.formData &&
+      typeof r.formData === "object" &&
+      !Array.isArray(r.formData)
+    ) {
       for (const key of Object.keys(r.formData as Record<string, unknown>)) {
         formDataKeysSet.add(key);
       }
@@ -591,9 +596,10 @@ function generateCSV(registrations: RegistrationExportRow[]): string {
     ];
 
     // Extract formData values for each dynamic key
-    const fd = (r.formData && typeof r.formData === "object" && !Array.isArray(r.formData))
-      ? (r.formData as Record<string, unknown>)
-      : {};
+    const fd =
+      r.formData && typeof r.formData === "object" && !Array.isArray(r.formData)
+        ? (r.formData as Record<string, unknown>)
+        : {};
     const formDataValues = formDataKeys.map((key) => {
       const value = fd[key];
       if (value == null) return "";
