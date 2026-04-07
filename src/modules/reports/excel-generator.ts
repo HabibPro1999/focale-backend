@@ -349,6 +349,10 @@ function formatDateTime(date: Date): string {
   return date.toLocaleString("fr-FR");
 }
 
+function getLabTotalKey(labName: string): string {
+  return labName.trim().toLowerCase();
+}
+
 function formatRegistrationLabel(
   registration: {
     firstName: string | null;
@@ -423,7 +427,7 @@ export async function generateSponsorshipsReport(
   const sheet = workbook.addWorksheet("Sponsorships");
 
   const titleRow = sheet.addRow([event?.name ?? "Sponsorships"]);
-  sheet.mergeCells(`A${titleRow.number}:Q${titleRow.number}`);
+  sheet.mergeCells(`A${titleRow.number}:R${titleRow.number}`);
   titleRow.getCell(1).font = {
     bold: true,
     size: 16,
@@ -434,7 +438,7 @@ export async function generateSponsorshipsReport(
   const generatedRow = sheet.addRow([
     `Report generated: ${new Date().toLocaleDateString("fr-FR")}`,
   ]);
-  sheet.mergeCells(`A${generatedRow.number}:Q${generatedRow.number}`);
+  sheet.mergeCells(`A${generatedRow.number}:R${generatedRow.number}`);
   generatedRow.getCell(1).font = {
     italic: true,
     size: 10,
@@ -467,6 +471,7 @@ export async function generateSponsorshipsReport(
     "Contact",
     "Lab Email",
     "Lab Phone",
+    "Lab Total Amount",
     "Beneficiary",
     "Beneficiary Email",
     "Beneficiary Phone",
@@ -495,6 +500,11 @@ export async function generateSponsorshipsReport(
     if (byLab !== 0) return byLab;
     return b.createdAt.getTime() - a.createdAt.getTime();
   });
+  const labTotals = sponsorships.reduce((totals, sponsorship) => {
+    const key = getLabTotalKey(sponsorship.batch.labName);
+    totals.set(key, (totals.get(key) ?? 0) + sponsorship.totalAmount);
+    return totals;
+  }, new Map<string, number>());
 
   for (const sponsorship of sortedSponsorships) {
     const coveredAccessNames = sponsorship.coveredAccessIds
@@ -523,6 +533,8 @@ export async function generateSponsorshipsReport(
       sponsorship.batch.contactName,
       sponsorship.batch.email,
       sponsorship.batch.phone ?? "",
+      labTotals.get(getLabTotalKey(sponsorship.batch.labName)) ??
+        sponsorship.totalAmount,
       sponsorship.beneficiaryName,
       sponsorship.beneficiaryEmail,
       sponsorship.beneficiaryPhone ?? "",
@@ -541,8 +553,9 @@ export async function generateSponsorshipsReport(
       cell.border = border;
       cell.alignment = { vertical: "top", wrapText: true };
     });
-    row.getCell(10).numFmt = "#,##0";
-    row.getCell(16).numFmt = "#,##0";
+    row.getCell(6).numFmt = "#,##0";
+    row.getCell(11).numFmt = "#,##0";
+    row.getCell(17).numFmt = "#,##0";
   }
 
   sheet.autoFilter = {
@@ -552,7 +565,7 @@ export async function generateSponsorshipsReport(
   sheet.views = [{ state: "frozen", ySplit: headerRow.number }];
 
   const widths = [
-    16, 28, 24, 28, 18, 28, 28, 18, 30, 14, 12, 14, 22, 40, 40, 16, 24,
+    16, 28, 24, 28, 18, 18, 28, 28, 18, 30, 14, 12, 14, 22, 40, 40, 16, 24,
   ];
   widths.forEach((width, index) => {
     sheet.getColumn(index + 1).width = width;
