@@ -16,7 +16,7 @@ export const ReportQuerySchema = z.strictObject({
 export const ExportQuerySchema = z.strictObject({
   startDate: z.string().datetime().optional(),
   endDate: z.string().datetime().optional(),
-  format: z.enum(["csv", "json"]).default("csv"),
+  format: z.enum(["csv", "json", "xlsx"]).default("csv"),
 });
 
 // ============================================================================
