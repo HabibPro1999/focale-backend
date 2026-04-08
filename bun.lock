@@ -22,6 +22,7 @@
         "file-type": "21.3.0",
         "firebase-admin": "^13.6.0",
         "http-errors": "2.0.1",
+        "jszip": "3.10.1",
         "mjml": "4.18.0",
         "pg": "^8.16.3",
         "pino": "^10.0.0",
@@ -32,6 +33,7 @@
       "devDependencies": {
         "@eslint/js": "^9.17.0",
         "@faker-js/faker": "10.2.0",
+        "@types/jszip": "3.4.1",
         "@types/mjml": "4.7.4",
         "@types/pg": "8.16.0",
         "@vitest/coverage-v8": "4.0.16",
@@ -611,6 +613,8 @@
     "@types/json-schema": ["@types/json-schema@7.0.15", "", {}, "sha512-5+fP8P8MFNC+AyZCDxrB2pkZFPGzqQWUzpSeuuVLvm8VMcorNYavBqoFcxK8bQz4Qsbn4oUEEem4wDLfcysGHA=="],
 
     "@types/jsonwebtoken": ["@types/jsonwebtoken@9.0.10", "", { "dependencies": { "@types/ms": "*", "@types/node": "*" } }, "sha512-asx5hIG9Qmf/1oStypjanR7iKTv0gXQ1Ov/jfrX6kS/EO0OFni8orbmGCn0672NHR3kXHwpAwR+B368ZGN/2rA=="],
+
+    "@types/jszip": ["@types/jszip@3.4.1", "", { "dependencies": { "jszip": "*" } }, "sha512-TezXjmf3lj+zQ651r6hPqvSScqBLvyPI9FxdXBqpEwBijNGQ2NXpaFW/7joGzveYkKQUil7iiDHLo6LV71Pc0A=="],
 
     "@types/long": ["@types/long@4.0.2", "", {}, "sha512-MqTGEo5bj5t157U6fA/BiDynNkn0YknVdh48CMPkTSpFTVmvao5UQmm7uEF6xBEo7qIMAlY/JSleYaE6VOdpaA=="],
 

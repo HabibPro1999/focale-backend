@@ -27,6 +27,7 @@ import {
   generateEventSummary,
   generateAccessRegistrantsReport,
   generateSponsorshipsReport,
+  generateCheckInReport,
 } from "./reports.service.js";
 
 // ============================================================================
@@ -218,6 +219,31 @@ export async function reportsRoutes(app: AppInstance): Promise<void> {
         "Content-Type",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       )
+      .header("Content-Disposition", `attachment; filename="${safeFilename}"`)
+      .send(result.data);
+  });
+
+  // ----------------------------------------------------------------
+  // GET /:eventId/reports/checkin-export - Download check-in ZIP
+  // ----------------------------------------------------------------
+  app.get<{
+    Params: { eventId: string };
+  }>("/:eventId/reports/checkin-export", {}, async (request, reply) => {
+    const { eventId } = request.params;
+
+    const event = await getEventById(eventId);
+    if (!event) {
+      throw app.httpErrors.notFound("Event not found");
+    }
+    if (!canAccessClient(request.user!, event.clientId)) {
+      throw app.httpErrors.forbidden("Insufficient permissions");
+    }
+
+    const result = await generateCheckInReport(eventId);
+    const safeFilename = result.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+
+    return reply
+      .header("Content-Type", "application/zip")
       .header("Content-Disposition", `attachment; filename="${safeFilename}"`)
       .send(result.data);
   });
