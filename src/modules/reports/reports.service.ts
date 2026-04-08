@@ -439,6 +439,7 @@ export {
   generateEventSummary,
   generateAccessRegistrantsReport,
   generateSponsorshipsReport,
+  generateCheckInReport,
 } from "./excel-generator.js";
 
 // ============================================================================

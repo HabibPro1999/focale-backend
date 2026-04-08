@@ -49,10 +49,15 @@ async function main() {
   const server = await buildServer();
 
   let emailQueueInterval: ReturnType<typeof setInterval> | undefined;
+  let currentProcessing: Promise<void> | null = null;
 
   // Register hooks and shutdown BEFORE listen (Fastify disallows addHook after listen)
   server.addHook("onClose", async () => {
     if (emailQueueInterval) clearInterval(emailQueueInterval);
+    if (currentProcessing) {
+      logger.info("Waiting for in-flight email batch to complete...");
+      await currentProcessing;
+    }
     logger.info("Email queue worker stopped");
   });
 
@@ -71,7 +76,7 @@ async function main() {
   emailQueueInterval = setInterval(() => {
     if (isProcessingEmails) return;
     isProcessingEmails = true;
-    processEmailQueue(50)
+    currentProcessing = processEmailQueue(50)
       .then((result) => {
         if (result.processed > 0) {
           logger.info({ result }, "Email queue processed");
@@ -82,6 +87,7 @@ async function main() {
       })
       .finally(() => {
         isProcessingEmails = false;
+        currentProcessing = null;
       });
   }, 15_000);
   logger.info("Email queue worker started (15s interval)");

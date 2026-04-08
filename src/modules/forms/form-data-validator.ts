@@ -371,6 +371,8 @@ function buildFieldSchema(field: FormField): ZodTypeAny | null {
 
   switch (field.type) {
     case "text":
+    case "firstName":
+    case "lastName":
     case "textarea":
       return buildTextSchema(field, validation);
 

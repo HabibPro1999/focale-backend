@@ -706,16 +706,22 @@ export async function handleCapacityReached(
   accessIds: string[],
   db: CapacityReachedDbClient = prisma,
 ): Promise<number> {
+  if (accessIds.length === 0) return 0;
+
+  // Batch-fetch all access items in one query instead of N sequential reads
+  const allAccesses = await db.eventAccess.findMany({
+    where: { id: { in: accessIds } },
+    select: { id: true, name: true, maxCapacity: true, paidCount: true },
+  });
+
+  const atCapacity = allAccesses.filter(
+    (a) => a.maxCapacity !== null && a.paidCount >= a.maxCapacity,
+  );
+
   let totalAffected = 0;
 
-  for (const accessId of accessIds) {
-    const access = await db.eventAccess.findUnique({
-      where: { id: accessId },
-      select: { id: true, name: true, maxCapacity: true, paidCount: true },
-    });
-    if (!access || access.maxCapacity === null || access.paidCount < access.maxCapacity) {
-      continue;
-    }
+  for (const access of atCapacity) {
+    const accessId = access.id;
 
     // Find registrations that have this access but are NOT fully settled
     const registrations = await db.registration.findMany({

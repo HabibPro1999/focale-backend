@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { isDeepStrictEqual } from "node:util";
 import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
@@ -48,22 +49,20 @@ function createDefaultSchema(): FormSchemaJson {
         description: "Tous les champs marqués * sont obligatoires",
         fields: [
           {
-            id: `text_${randomUUID()}`,
-            type: "text",
+            id: `firstName_${randomUUID()}`,
+            type: "firstName",
             label: "Prénom",
             placeholder: "Votre prénom",
             required: true,
             width: "half",
-            fieldKey: "firstName",
           },
           {
-            id: `text_${randomUUID()}`,
-            type: "text",
+            id: `lastName_${randomUUID()}`,
+            type: "lastName",
             label: "Nom",
             placeholder: "Votre nom",
             required: true,
             width: "half",
-            fieldKey: "lastName",
           },
           {
             id: `email_${randomUUID()}`,
@@ -72,7 +71,6 @@ function createDefaultSchema(): FormSchemaJson {
             placeholder: "votre.email@exemple.com",
             required: true,
             width: "full",
-            fieldKey: "email",
           },
           {
             id: `phone_${randomUUID()}`,
@@ -82,7 +80,6 @@ function createDefaultSchema(): FormSchemaJson {
             required: true,
             width: "full",
             phoneFormat: "TN",
-            fieldKey: "phone",
           },
           {
             id: `text_${randomUUID()}`,
@@ -263,10 +260,7 @@ export async function updateForm(
 
   // Check if schema is being updated and has actually changed
   if (input.schema !== undefined) {
-    const currentSchemaStr = JSON.stringify(form.schema);
-    const newSchemaStr = JSON.stringify(input.schema);
-
-    if (currentSchemaStr !== newSchemaStr) {
+    if (!isDeepStrictEqual(form.schema, input.schema)) {
       // For SPONSOR forms, validate sponsorship mode changes
       if (form.type === "SPONSOR") {
         const currentSchema = form.schema as unknown as {

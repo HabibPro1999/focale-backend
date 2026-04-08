@@ -107,20 +107,23 @@ export async function getRegistrationTableColumns(
 
   // Extract contact field labels from first step by type
   const emailField = firstStepFields.find((f) => f.type === "email");
-  const textFields = firstStepFields.filter((f) => f.type === "text");
   const phoneField = firstStepFields.find((f) => f.type === "phone");
+  // Support new firstName/lastName types with fallback to positional text fields for legacy forms
+  const textFields = firstStepFields.filter((f) => f.type === "text");
+  const firstNameField = firstStepFields.find((f) => f.type === "firstName") ?? textFields[0];
+  const lastNameField = firstStepFields.find((f) => f.type === "lastName") ?? textFields[1];
 
   const emailLabel = emailField?.label ?? "Email";
-  const firstNameLabel = textFields[0]?.label ?? "First Name";
-  const lastNameLabel = textFields[1]?.label ?? "Last Name";
+  const firstNameLabel = firstNameField?.label ?? "First Name";
+  const lastNameLabel = lastNameField?.label ?? "Last Name";
   const phoneLabel = phoneField?.label ?? "Phone";
 
   // Track contact field IDs to exclude from formColumns (avoid duplicates)
   const contactFieldIds = new Set<string>(
     [
       emailField?.id,
-      textFields[0]?.id,
-      textFields[1]?.id,
+      firstNameField?.id,
+      lastNameField?.id,
       phoneField?.id,
     ].filter((id): id is string => Boolean(id)),
   );

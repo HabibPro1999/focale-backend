@@ -5,11 +5,6 @@ import { UserRole } from "@shared/constants/roles.js";
 import { logger } from "@shared/utils/logger.js";
 import { auditLog } from "@shared/utils/audit.js";
 import {
-  paginate,
-  getSkip,
-  type PaginatedResult,
-} from "@shared/utils/pagination.js";
-import {
   incrementRegisteredCountTx,
   decrementRegisteredCountTx,
 } from "@events";
@@ -29,7 +24,6 @@ import type {
   AdminCreateRegistrationInput,
   AdminEditRegistrationInput,
   UpdateRegistrationInput,
-  ListRegistrationsQuery,
   PublicEditRegistrationInput,
 } from "./registrations.schema.js";
 import type { Prisma } from "@/generated/prisma/client.js";
@@ -38,11 +32,11 @@ import type { Prisma } from "@/generated/prisma/client.js";
 import { generateEditToken } from "./edit-token.js";
 import {
   enrichWithAccessSelections,
-  enrichManyWithAccessSelections,
   calculateDiscountAmount,
   type RegistrationWithRelations,
 } from "./registration-enrichment.js";
 import { validatePaymentTransition } from "./registration-payment.js";
+import { getRegistrationById } from "./registration-reads.js";
 import { calculateSettlement } from "@shared/utils/settlement.js";
 
 // ============================================================================
@@ -66,6 +60,12 @@ export {
   listRegistrationEmailLogs,
   searchRegistrantsForSponsorship,
 } from "./registration-queries.js";
+export {
+  getRegistrationById,
+  getRegistrationByIdempotencyKey,
+  listRegistrations,
+  getRegistrationClientId,
+} from "./registration-reads.js";
 
 // ============================================================================
 // Capacity — Paid Count Sync
@@ -98,16 +98,20 @@ async function syncPaidCount(
 
   if (!wasSettled && isSettled) {
     // Becoming fully settled: increment paidCount for all access items
-    for (const item of accessItems) {
-      await incrementPaidCount(item.accessId, item.quantity, tx);
-    }
+    await Promise.all(
+      accessItems.map(({ accessId, quantity }) =>
+        incrementPaidCount(accessId, quantity, tx)
+      )
+    );
     const accessIds = accessItems.map((a) => a.accessId);
     await handleCapacityReached(registration.eventId, accessIds, tx);
   } else {
     // Losing settled status (e.g. refund): decrement paidCount
-    for (const item of accessItems) {
-      await decrementPaidCount(item.accessId, item.quantity, tx);
-    }
+    await Promise.all(
+      accessItems.map(({ accessId, quantity }) =>
+        decrementPaidCount(accessId, quantity, tx)
+      )
+    );
   }
 }
 
@@ -288,9 +292,9 @@ export async function createRegistration(
     // Reserve access spots (capacity tracking)
     // Pass tx so reservation is rolled back if the transaction fails
     if (accessSelections && accessSelections.length > 0) {
-      for (const selection of accessSelections) {
-        await reserveAccessSpot(selection.accessId, selection.quantity, tx);
-      }
+      await Promise.all(
+        accessSelections.map((s) => reserveAccessSpot(s.accessId, s.quantity, tx)),
+      );
     }
 
     // Increment event registered count (atomic SQL within transaction)
@@ -484,9 +488,9 @@ export async function createAdminRegistration(
 
     // Reserve access spots
     if (accessSelections && accessSelections.length > 0) {
-      for (const selection of accessSelections) {
-        await reserveAccessSpot(selection.accessId, selection.quantity, tx);
-      }
+      await Promise.all(
+        accessSelections.map((s) => reserveAccessSpot(s.accessId, s.quantity, tx)),
+      );
     }
 
     // Sync paid count if admin created with a settled payment status
@@ -537,52 +541,6 @@ export async function createAdminRegistration(
   }
 
   return result;
-}
-
-// ============================================================================
-// Read Operations
-// ============================================================================
-
-export async function getRegistrationById(
-  id: string,
-): Promise<RegistrationWithRelations | null> {
-  const registration = await prisma.registration.findUnique({
-    where: { id },
-    include: {
-      form: { select: { id: true, name: true } },
-      event: { select: { id: true, name: true, slug: true, clientId: true } },
-      accessCheckIns: { select: { accessId: true, checkedInAt: true } },
-    },
-  });
-
-  if (!registration) return null;
-
-  const { accessCheckIns, ...rest } = registration;
-  const enriched = await enrichWithAccessSelections(rest);
-  // M23: strip editToken from admin responses
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { editToken: _, ...safeResult } = enriched;
-  return { ...safeResult, accessCheckIns } as RegistrationWithRelations;
-}
-
-/**
- * Get registration by idempotency key.
- * Used for idempotent registration creation.
- */
-export async function getRegistrationByIdempotencyKey(
-  idempotencyKey: string,
-): Promise<RegistrationWithRelations | null> {
-  const registration = await prisma.registration.findUnique({
-    where: { idempotencyKey },
-    include: {
-      form: { select: { id: true, name: true } },
-      event: { select: { id: true, name: true, slug: true, clientId: true } },
-    },
-  });
-
-  if (!registration) return null;
-
-  return enrichWithAccessSelections(registration);
 }
 
 // ============================================================================
@@ -873,16 +831,16 @@ export async function adminEditRegistration(
         accessId: string;
         quantity: number;
       }>;
-      for (const old of oldAccessItems) {
-        await releaseAccessSpot(old.accessId, old.quantity, tx);
-      }
+      await Promise.all(
+        oldAccessItems.map((old) => releaseAccessSpot(old.accessId, old.quantity, tx)),
+      );
 
       // Reserve new access spots
-      for (const sel of input.accessSelections) {
-        if (sel.quantity > 0) {
-          await reserveAccessSpot(sel.accessId, sel.quantity, tx);
-        }
-      }
+      await Promise.all(
+        input.accessSelections
+          .filter((sel) => sel.quantity > 0)
+          .map((sel) => reserveAccessSpot(sel.accessId, sel.quantity, tx)),
+      );
 
       // Update denormalized price fields
       updateData.totalAmount = priceBreakdown.total;
@@ -1052,9 +1010,11 @@ export async function deleteRegistration(
     // Pass tx so release is rolled back if the transaction fails
     const priceBreakdown = registration.priceBreakdown as PriceBreakdown;
     if (priceBreakdown.accessItems) {
-      for (const item of priceBreakdown.accessItems) {
-        await releaseAccessSpot(item.accessId, item.quantity, tx);
-      }
+      await Promise.all(
+        priceBreakdown.accessItems.map((item) =>
+          releaseAccessSpot(item.accessId, item.quantity, tx),
+        ),
+      );
     }
 
     // Decrement paid count if registration was settled
@@ -1072,75 +1032,6 @@ export async function deleteRegistration(
     // Delete the registration
     await tx.registration.delete({ where: { id } });
   });
-}
-
-// ============================================================================
-// List Registrations
-// ============================================================================
-
-export async function listRegistrations(
-  eventId: string,
-  query: ListRegistrationsQuery,
-): Promise<PaginatedResult<RegistrationWithRelations>> {
-  const { page, limit, paymentStatus, paymentMethod, search } = query;
-
-  const where: Prisma.RegistrationWhereInput = { eventId };
-
-  if (paymentStatus) where.paymentStatus = paymentStatus;
-  if (paymentMethod) where.paymentMethod = paymentMethod;
-  if (search) {
-    where.OR = [
-      { email: { contains: search, mode: "insensitive" } },
-      { firstName: { contains: search, mode: "insensitive" } },
-      { lastName: { contains: search, mode: "insensitive" } },
-      { phone: { contains: search, mode: "insensitive" } },
-      { referenceNumber: { contains: search, mode: "insensitive" } },
-    ];
-  }
-
-  const skip = getSkip({ page, limit });
-
-  const [data, total] = await Promise.all([
-    prisma.registration.findMany({
-      where,
-      skip,
-      take: limit,
-      include: {
-        form: { select: { id: true, name: true } },
-        event: {
-          select: {
-            id: true,
-            name: true,
-            slug: true,
-            clientId: true,
-            startDate: true,
-            location: true,
-          },
-        },
-      },
-      orderBy: { createdAt: "desc" },
-    }),
-    prisma.registration.count({ where }),
-  ]);
-
-  // Enrich with accessSelections derived from priceBreakdown
-  const enrichedData = await enrichManyWithAccessSelections(data);
-
-  return paginate(enrichedData, total, { page, limit });
-}
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-export async function getRegistrationClientId(
-  id: string,
-): Promise<string | null> {
-  const registration = await prisma.registration.findUnique({
-    where: { id },
-    include: { event: { select: { clientId: true } } },
-  });
-  return registration?.event.clientId ?? null;
 }
 
 // ============================================================================
@@ -1555,16 +1446,16 @@ export async function editRegistrationPublic(
 
     // Reserve new access spots
     // Pass tx so reservation is rolled back if the transaction fails
-    for (const selection of accessToAdd) {
-      await reserveAccessSpot(selection.accessId, selection.quantity, tx);
-    }
+    await Promise.all(
+      accessToAdd.map((s) => reserveAccessSpot(s.accessId, s.quantity, tx)),
+    );
 
     // Release removed access spots (only if not paid)
     // Pass tx so release is rolled back if the transaction fails
     if (!currentIsPaid) {
-      for (const item of accessToRemove) {
-        await releaseAccessSpot(item.accessId, item.quantity, tx);
-      }
+      await Promise.all(
+        accessToRemove.map((item) => releaseAccessSpot(item.accessId, item.quantity, tx)),
+      );
     }
 
     // Calculate new total. For paid registrations, never decrease below
