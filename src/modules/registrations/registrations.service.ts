@@ -65,6 +65,7 @@ export {
   getRegistrationByIdempotencyKey,
   listRegistrations,
   getRegistrationClientId,
+  buildRegistrationWhere,
 } from "./registration-reads.js";
 
 // ============================================================================

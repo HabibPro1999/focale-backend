@@ -287,6 +287,18 @@ export type PaymentMethod = z.infer<typeof PaymentMethodSchema>;
 export type CreateRegistrationInput = z.infer<typeof CreateRegistrationSchema>;
 export type UpdateRegistrationInput = z.infer<typeof UpdateRegistrationSchema>;
 export type UpdatePaymentInput = z.infer<typeof UpdatePaymentSchema>;
+// ============================================================================
+// Registration Stats (returned alongside list)
+// ============================================================================
+
+export interface RegistrationStats {
+  total: number;
+  totalAmount: number;
+  paid: { count: number; amount: number };
+  pending: { count: number; amount: number };
+  sponsored: { count: number; amount: number };
+}
+
 export type ListRegistrationsQuery = z.infer<
   typeof ListRegistrationsQuerySchema
 >;
