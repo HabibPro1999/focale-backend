@@ -5,7 +5,7 @@ import {
   type PaginatedResult,
 } from "@shared/utils/pagination.js";
 import type { Prisma } from "@/generated/prisma/client.js";
-import type { ListRegistrationsQuery } from "./registrations.schema.js";
+import type { ListRegistrationsQuery, RegistrationStats } from "./registrations.schema.js";
 import {
   enrichWithAccessSelections,
   enrichManyWithAccessSelections,
@@ -57,32 +57,47 @@ export async function getRegistrationByIdempotencyKey(
 }
 
 // ============================================================================
+// Shared Where-Clause Builder
+// ============================================================================
+
+export function buildRegistrationWhere(
+  eventId: string,
+  filters?: { paymentStatus?: string; paymentMethod?: string; search?: string },
+): Prisma.RegistrationWhereInput {
+  const where: Prisma.RegistrationWhereInput = { eventId };
+  if (filters?.paymentStatus) {
+    where.paymentStatus = filters.paymentStatus as Prisma.RegistrationWhereInput["paymentStatus"];
+  }
+  if (filters?.paymentMethod) {
+    where.paymentMethod = filters.paymentMethod as Prisma.RegistrationWhereInput["paymentMethod"];
+  }
+  if (filters?.search) {
+    where.OR = [
+      { email: { contains: filters.search, mode: "insensitive" } },
+      { firstName: { contains: filters.search, mode: "insensitive" } },
+      { lastName: { contains: filters.search, mode: "insensitive" } },
+      { phone: { contains: filters.search, mode: "insensitive" } },
+      { referenceNumber: { contains: filters.search, mode: "insensitive" } },
+    ];
+  }
+  return where;
+}
+
+// ============================================================================
 // List Registrations
 // ============================================================================
 
 export async function listRegistrations(
   eventId: string,
   query: ListRegistrationsQuery,
-): Promise<PaginatedResult<RegistrationWithRelations>> {
+): Promise<PaginatedResult<RegistrationWithRelations> & { stats: RegistrationStats }> {
   const { page, limit, paymentStatus, paymentMethod, search } = query;
 
-  const where: Prisma.RegistrationWhereInput = { eventId };
-
-  if (paymentStatus) where.paymentStatus = paymentStatus;
-  if (paymentMethod) where.paymentMethod = paymentMethod;
-  if (search) {
-    where.OR = [
-      { email: { contains: search, mode: "insensitive" } },
-      { firstName: { contains: search, mode: "insensitive" } },
-      { lastName: { contains: search, mode: "insensitive" } },
-      { phone: { contains: search, mode: "insensitive" } },
-      { referenceNumber: { contains: search, mode: "insensitive" } },
-    ];
-  }
+  const where = buildRegistrationWhere(eventId, { paymentStatus, paymentMethod, search });
 
   const skip = getSkip({ page, limit });
 
-  const [data, total] = await Promise.all([
+  const [data, total, statsRaw] = await Promise.all([
     prisma.registration.findMany({
       where,
       skip,
@@ -103,12 +118,41 @@ export async function listRegistrations(
       orderBy: { createdAt: "desc" },
     }),
     prisma.registration.count({ where }),
+    prisma.registration.groupBy({
+      by: ["paymentStatus"],
+      where,
+      _count: true,
+      _sum: { totalAmount: true, paidAmount: true },
+    }),
   ]);
+
+  const stats: RegistrationStats = {
+    total: 0,
+    totalAmount: 0,
+    paid: { count: 0, amount: 0 },
+    pending: { count: 0, amount: 0 },
+    sponsored: { count: 0, amount: 0 },
+  };
+  for (const row of statsRaw) {
+    const count = row._count;
+    const amount = row._sum.totalAmount ?? 0;
+    stats.total += count;
+    stats.totalAmount += amount;
+    if (row.paymentStatus === "PAID") {
+      stats.paid = { count, amount: row._sum.paidAmount ?? 0 };
+    } else if (row.paymentStatus === "PENDING" || row.paymentStatus === "VERIFYING" || row.paymentStatus === "PARTIAL") {
+      stats.pending.count += count;
+      stats.pending.amount += amount;
+    } else if (row.paymentStatus === "SPONSORED" || row.paymentStatus === "WAIVED") {
+      stats.sponsored.count += count;
+      stats.sponsored.amount += amount;
+    }
+  }
 
   // Enrich with accessSelections derived from priceBreakdown
   const enrichedData = await enrichManyWithAccessSelections(data);
 
-  return paginate(enrichedData, total, { page, limit });
+  return { ...paginate(enrichedData, total, { page, limit }), stats };
 }
 
 // ============================================================================

@@ -7,6 +7,7 @@ import { Prisma } from "@/generated/prisma/client.js";
 import ExcelJS from "exceljs";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { buildRegistrationWhere } from "@registrations";
 import type {
   ReportQuery,
   FinancialReportResponse,
@@ -15,7 +16,7 @@ import type {
   PaymentStatusBreakdownItem,
   AccessBreakdownItem,
   DailyTrendItem,
-  ExportQuery,
+  ExportRegistrationsQuery,
 } from "./reports.schema.js";
 import type {
   EventAnalyticsResponse,
@@ -468,7 +469,7 @@ interface RegistrationExportRow {
 
 export async function exportRegistrations(
   eventId: string,
-  query: ExportQuery,
+  query: ExportRegistrationsQuery,
 ): Promise<{ filename: string; contentType: string; data: string | Buffer }> {
   // Fail fast — verify event exists before querying registrations
   const event = await prisma.event.findUnique({
@@ -482,8 +483,12 @@ export async function exportRegistrations(
 
   const dateRange = buildDateFilter(query);
 
-  // Build where clause
-  const where: Record<string, unknown> = { eventId };
+  // Build where clause using shared helper + date range
+  const where = buildRegistrationWhere(eventId, {
+    paymentStatus: query.paymentStatus,
+    paymentMethod: query.paymentMethod,
+    search: query.search,
+  });
   if (dateRange.startDate) {
     where.submittedAt = { gte: dateRange.startDate };
   }

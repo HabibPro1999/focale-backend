@@ -10,10 +10,12 @@ import {
 import { getEventById } from "@events";
 import {
   ReportQuerySchema,
-  ExportQuerySchema,
+  ExportRegistrationsQuerySchema,
+  ExportSponsorshipsQuerySchema,
   FinancialReportResponseSchema,
   type ReportQuery,
-  type ExportQuery,
+  type ExportRegistrationsQuery,
+  type ExportSponsorshipsQuery,
 } from "./reports.schema.js";
 import {
   EventAnalyticsResponseSchema,
@@ -137,12 +139,12 @@ export async function reportsRoutes(app: AppInstance): Promise<void> {
   // ----------------------------------------------------------------
   app.get<{
     Params: { eventId: string };
-    Querystring: ExportQuery;
+    Querystring: ExportRegistrationsQuery;
   }>(
     "/:eventId/reports/registrations",
     {
       schema: {
-        querystring: ExportQuerySchema,
+        querystring: ExportRegistrationsQuerySchema,
       },
     },
     async (request, reply) => {
@@ -200,7 +202,15 @@ export async function reportsRoutes(app: AppInstance): Promise<void> {
   // ----------------------------------------------------------------
   app.get<{
     Params: { eventId: string };
-  }>("/:eventId/reports/sponsorships", {}, async (request, reply) => {
+    Querystring: ExportSponsorshipsQuery;
+  }>(
+    "/:eventId/reports/sponsorships",
+    {
+      schema: {
+        querystring: ExportSponsorshipsQuerySchema,
+      },
+    },
+    async (request, reply) => {
     const { eventId } = request.params;
 
     const event = await getEventById(eventId);
@@ -211,7 +221,7 @@ export async function reportsRoutes(app: AppInstance): Promise<void> {
       throw app.httpErrors.forbidden("Insufficient permissions");
     }
 
-    const result = await generateSponsorshipsReport(eventId);
+    const result = await generateSponsorshipsReport(eventId, request.query);
     const safeFilename = result.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
 
     return reply

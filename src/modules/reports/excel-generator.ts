@@ -1,6 +1,7 @@
 import ExcelJS from "exceljs";
 import JSZip from "jszip";
 import { prisma } from "@/database/client.js";
+import { buildSponsorshipWhere } from "@sponsorships";
 
 /**
  * Build a styled Excel workbook summarising total registrations,
@@ -373,7 +374,10 @@ function formatRegistrationLabel(
 
 export async function generateSponsorshipsReport(
   eventId: string,
+  filters?: { status?: string; search?: string },
 ): Promise<{ filename: string; data: Buffer }> {
+  const sponsorshipWhere = buildSponsorshipWhere(eventId, filters);
+
   const [event, pricing, accessItems, sponsorships] = await Promise.all([
     prisma.event.findUnique({
       where: { id: eventId },
@@ -389,7 +393,7 @@ export async function generateSponsorshipsReport(
       orderBy: { sortOrder: "asc" },
     }),
     prisma.sponsorship.findMany({
-      where: { eventId },
+      where: sponsorshipWhere,
       include: {
         batch: {
           select: {

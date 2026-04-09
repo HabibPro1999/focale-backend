@@ -19,6 +19,20 @@ export const ExportQuerySchema = z.strictObject({
   format: z.enum(["csv", "json", "xlsx"]).default("csv"),
 });
 
+export const ExportRegistrationsQuerySchema = z.strictObject({
+  startDate: z.string().datetime().optional(),
+  endDate: z.string().datetime().optional(),
+  format: z.enum(["csv", "json", "xlsx"]).default("csv"),
+  paymentStatus: z.enum(["PENDING", "VERIFYING", "PARTIAL", "PAID", "SPONSORED", "WAIVED", "REFUNDED"]).optional(),
+  paymentMethod: z.enum(["BANK_TRANSFER", "ONLINE", "CASH", "LAB_SPONSORSHIP"]).optional(),
+  search: z.string().max(200).optional(),
+});
+
+export const ExportSponsorshipsQuerySchema = z.strictObject({
+  status: z.enum(["PENDING", "USED", "CANCELLED"]).optional(),
+  search: z.string().max(100).optional(),
+});
+
 // ============================================================================
 // Response Schemas
 // ============================================================================
@@ -91,6 +105,8 @@ export const FinancialReportResponseSchema = z.object({
 
 export type ReportQuery = z.infer<typeof ReportQuerySchema>;
 export type ExportQuery = z.infer<typeof ExportQuerySchema>;
+export type ExportRegistrationsQuery = z.infer<typeof ExportRegistrationsQuerySchema>;
+export type ExportSponsorshipsQuery = z.infer<typeof ExportSponsorshipsQuerySchema>;
 export type CurrencySummary = z.infer<typeof CurrencySummarySchema>;
 export type FinancialSummary = z.infer<typeof FinancialSummarySchema>;
 export type PaymentStatusBreakdownItem = z.infer<

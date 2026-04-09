@@ -29,6 +29,29 @@ import type {
 } from "@/generated/prisma/client.js";
 
 // ============================================================================
+// Shared Where-Clause Builder
+// ============================================================================
+
+export function buildSponsorshipWhere(
+  eventId: string,
+  filters?: { status?: string; search?: string },
+): Prisma.SponsorshipWhereInput {
+  const where: Prisma.SponsorshipWhereInput = { eventId };
+  if (filters?.status) {
+    where.status = filters.status as Prisma.SponsorshipWhereInput["status"];
+  }
+  if (filters?.search) {
+    where.OR = [
+      { code: { contains: filters.search, mode: "insensitive" } },
+      { beneficiaryName: { contains: filters.search, mode: "insensitive" } },
+      { batch: { labName: { contains: filters.search, mode: "insensitive" } } },
+      { batch: { contactName: { contains: filters.search, mode: "insensitive" } } },
+    ];
+  }
+  return where;
+}
+
+// ============================================================================
 // Types
 // ============================================================================
 
@@ -97,20 +120,7 @@ export async function listSponsorships(
 ): Promise<PaginatedResult<SponsorshipListItem> & { stats: SponsorshipStats }> {
   const { page, limit, status, search, sortBy, sortOrder } = query;
 
-  const where: Prisma.SponsorshipWhereInput = { eventId };
-
-  if (status) {
-    where.status = status;
-  }
-
-  if (search) {
-    where.OR = [
-      { code: { contains: search, mode: "insensitive" } },
-      { beneficiaryName: { contains: search, mode: "insensitive" } },
-      { batch: { labName: { contains: search, mode: "insensitive" } } },
-      { batch: { contactName: { contains: search, mode: "insensitive" } } },
-    ];
-  }
+  const where = buildSponsorshipWhere(eventId, { status, search });
 
   // Build orderBy
   const orderBy: Prisma.SponsorshipOrderByWithRelationInput = {};
@@ -148,10 +158,10 @@ export async function listSponsorships(
       },
     }),
     prisma.sponsorship.count({ where }),
-    // Aggregate stats across ALL sponsorships for this event (not filtered/paginated)
+    // Aggregate stats for filtered sponsorships (respects search/status filters)
     prisma.sponsorship.groupBy({
       by: ["status"],
-      where: { eventId },
+      where,
       _count: true,
       _sum: { totalAmount: true },
     }),

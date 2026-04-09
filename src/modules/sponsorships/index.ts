@@ -10,3 +10,5 @@ export {
 } from "./sponsorships.public.routes.js";
 
 export { calculateApplicableAmount } from "@shared/utils/sponsorship-math.js";
+
+export { buildSponsorshipWhere } from "./sponsorship-queries.js";
