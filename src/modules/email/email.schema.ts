@@ -112,6 +112,22 @@ export const ListEmailTemplatesQuerySchema = z
   });
 
 // ============================================================================
+// Event Email Logs Query Schema
+// ============================================================================
+
+export const ListEventEmailLogsQuerySchema = z
+  .strictObject({
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+    status: EmailStatusSchema.optional(),
+    trigger: AutomaticEmailTriggerSchema.optional(),
+  });
+
+export type ListEventEmailLogsQuery = z.infer<
+  typeof ListEventEmailLogsQuerySchema
+>;
+
+// ============================================================================
 // Bulk Send Schema (Simple recipient filtering)
 // ============================================================================
 

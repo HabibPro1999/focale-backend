@@ -8,6 +8,7 @@ export {
   incrementPaidCount,
   decrementPaidCount,
   handleCapacityReached,
+  getAlreadyCoveredAccessIds,
 } from "./access.service.js";
 
 export { AccessSelectionSchema } from "./access.schema.js";
