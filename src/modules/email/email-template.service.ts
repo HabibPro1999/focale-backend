@@ -17,7 +17,9 @@ import type {
   Prisma,
   EmailTemplate,
   AutomaticEmailTrigger,
+  EmailStatus,
 } from "@/generated/prisma/client.js";
+import type { ListEventEmailLogsQuery } from "./email.schema.js";
 
 // =============================================================================
 // Types
@@ -338,4 +340,77 @@ export async function duplicateEmailTemplate(
       isActive: false, // Start as inactive
     },
   });
+}
+
+// =============================================================================
+// LIST EVENT EMAIL LOGS
+// =============================================================================
+
+export interface EventEmailLog {
+  id: string;
+  subject: string;
+  status: string;
+  trigger: string | null;
+  templateName: string | null;
+  recipientEmail: string;
+  recipientName: string | null;
+  errorMessage: string | null;
+  queuedAt: string;
+  sentAt: string | null;
+  deliveredAt: string | null;
+  openedAt: string | null;
+  clickedAt: string | null;
+  bouncedAt: string | null;
+  failedAt: string | null;
+}
+
+export async function listEventEmailLogs(
+  eventId: string,
+  query: ListEventEmailLogsQuery,
+) {
+  const { page, limit, status, trigger } = query;
+  const skip = getSkip({ page, limit });
+
+  // EmailLog has no direct eventId. Query via registration.eventId OR template.eventId.
+  const where: Prisma.EmailLogWhereInput = {
+    OR: [
+      { registration: { eventId } },
+      { template: { eventId } },
+    ],
+    ...(status && { status: status as EmailStatus }),
+    ...(trigger && { trigger: trigger as AutomaticEmailTrigger }),
+  };
+
+  const [logs, total] = await Promise.all([
+    prisma.emailLog.findMany({
+      where,
+      skip,
+      take: limit,
+      include: {
+        template: { select: { name: true } },
+      },
+      orderBy: { queuedAt: "desc" },
+    }),
+    prisma.emailLog.count({ where }),
+  ]);
+
+  const data: EventEmailLog[] = logs.map((log) => ({
+    id: log.id,
+    subject: log.subject,
+    status: log.status,
+    trigger: log.trigger,
+    templateName: log.template?.name ?? null,
+    recipientEmail: log.recipientEmail,
+    recipientName: log.recipientName,
+    errorMessage: log.errorMessage,
+    queuedAt: log.queuedAt.toISOString(),
+    sentAt: log.sentAt?.toISOString() ?? null,
+    deliveredAt: log.deliveredAt?.toISOString() ?? null,
+    openedAt: log.openedAt?.toISOString() ?? null,
+    clickedAt: log.clickedAt?.toISOString() ?? null,
+    bouncedAt: log.bouncedAt?.toISOString() ?? null,
+    failedAt: log.failedAt?.toISOString() ?? null,
+  }));
+
+  return paginate(data, total, { page, limit });
 }

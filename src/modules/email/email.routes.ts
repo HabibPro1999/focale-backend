@@ -9,6 +9,7 @@ import {
   updateEmailTemplate,
   deleteEmailTemplate,
   duplicateEmailTemplate,
+  listEventEmailLogs,
 } from './email-template.service.js';
 import {
   getAvailableVariables,
@@ -25,9 +26,11 @@ import {
   CreateEmailTemplateSchema,
   UpdateEmailTemplateSchema,
   ListEmailTemplatesQuerySchema,
+  ListEventEmailLogsQuerySchema,
   TestSendEmailSchema,
   BulkSendEmailSchema,
   type CreateEmailTemplateInput,
+  type ListEventEmailLogsQuery,
   type UpdateEmailTemplateInput,
   type ListEmailTemplatesQuery,
   type TestSendEmailInput,
@@ -277,6 +280,40 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
         message: `Test email sent to ${recipientEmail}`,
         messageId: result.messageId,
       });
+    }
+  );
+
+  // ==========================================================================
+  // EVENT EMAIL LOGS
+  // ==========================================================================
+
+  // GET /api/events/:eventId/email-logs - List all email logs for event
+  app.get<{
+    Params: { eventId: string };
+    Querystring: ListEventEmailLogsQuery;
+  }>(
+    '/:eventId/email-logs',
+    {
+      schema: {
+        params: EventIdParamSchema,
+        querystring: ListEventEmailLogsQuerySchema,
+      },
+    },
+    async (request, reply) => {
+      const { eventId } = request.params;
+      const query = request.query;
+
+      const event = await getEventById(eventId);
+      if (!event) {
+        throw app.httpErrors.notFound('Event not found');
+      }
+
+      if (!canAccessClient(request.user!, event.clientId)) {
+        throw app.httpErrors.forbidden('Insufficient permissions');
+      }
+
+      const result = await listEventEmailLogs(eventId, query);
+      return reply.send(result);
     }
   );
 
