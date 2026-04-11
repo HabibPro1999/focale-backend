@@ -16,7 +16,8 @@ import {
   resolveVariables,
 } from './email-variable.service.js';
 import { sendEmail } from './email-sendgrid.service.js';
-import { queueBulkEmails } from './email-queue.service.js';
+import { queueBulkEmails, queueBulkSponsorEmails } from './email-queue.service.js';
+import { buildBatchEmailContext } from './email-context.js';
 import { prisma } from '@/database/client.js';
 import {
   EventIdParamSchema,
@@ -300,7 +301,7 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
     },
     async (request, reply) => {
       const { eventId, templateId } = request.params;
-      const { registrationIds, filters } = request.body;
+      const { audience, registrationIds, filters } = request.body;
 
       // Verify event access
       const event = await getEventById(eventId);
@@ -322,7 +323,58 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
         throw app.httpErrors.forbidden('Template does not belong to this client');
       }
 
-      // Get registrations based on IDs or filters
+      // ── Sponsor audience ──────────────────────────────────────────────
+      if (audience === 'sponsors') {
+        const [batches, client] = await Promise.all([
+          prisma.sponsorshipBatch.findMany({
+            where: { eventId },
+            orderBy: { createdAt: 'desc' },
+            select: {
+              labName: true,
+              contactName: true,
+              email: true,
+              phone: true,
+              sponsorships: {
+                select: { beneficiaryName: true, beneficiaryEmail: true, totalAmount: true },
+              },
+            },
+          }),
+          prisma.client.findUnique({
+            where: { id: event.clientId },
+            select: { name: true },
+          }),
+        ]);
+
+        // Deduplicate by email — keep first (most recent due to orderBy)
+        const seen = new Map<string, typeof batches[number]>();
+        for (const batch of batches) {
+          const key = batch.email.toLowerCase();
+          if (!seen.has(key)) seen.set(key, batch);
+        }
+
+        const sponsors = [...seen.values()].map((batch) => {
+          const context = buildBatchEmailContext({
+            batch,
+            sponsorships: batch.sponsorships,
+            event: { name: event.name, startDate: event.startDate, location: event.location, client: { name: client?.name || '' } },
+            currency: event.pricing?.currency ?? 'TND',
+          });
+          return {
+            email: batch.email,
+            recipientName: batch.contactName,
+            contextSnapshot: context as Record<string, unknown>,
+          };
+        });
+
+        if (sponsors.length === 0) {
+          return reply.send({ success: true, queued: 0, message: 'No sponsors found for this event' });
+        }
+
+        const queued = await queueBulkSponsorEmails(templateId, sponsors);
+        return reply.send({ success: true, queued, message: `${queued} emails queued for sending` });
+      }
+
+      // ── Registrant audience ───────────────────────────────────────────
       let registrations: Array<{
         id: string;
         email: string;
@@ -344,14 +396,17 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
             lastName: true,
           },
         });
-      } else if (filters) {
-        // Send based on filters
+      } else {
+        // Send based on filters (empty filters = all registrants)
         registrations = await prisma.registration.findMany({
           where: {
             eventId,
-            ...(filters.paymentStatus && { paymentStatus: { in: filters.paymentStatus } }),
-            ...(filters.accessTypeIds && filters.accessTypeIds.length > 0 && {
+            ...(filters?.paymentStatus && { paymentStatus: { in: filters.paymentStatus } }),
+            ...(filters?.accessTypeIds && filters.accessTypeIds.length > 0 && {
               accessTypeIds: { hasSome: filters.accessTypeIds },
+            }),
+            ...(filters?.role && filters.role.length > 0 && {
+              role: { in: filters.role },
             }),
           },
           select: {
@@ -361,8 +416,6 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
             lastName: true,
           },
         });
-      } else {
-        throw app.httpErrors.badRequest('Either registrationIds or filters must be provided');
       }
 
       if (registrations.length === 0) {
