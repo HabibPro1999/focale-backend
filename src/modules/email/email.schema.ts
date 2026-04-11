@@ -15,6 +15,7 @@ export const AutomaticEmailTriggerSchema = z.enum([
   "SPONSORSHIP_LINKED",
   "SPONSORSHIP_APPLIED",
   "SPONSORSHIP_PARTIAL",
+  "CERTIFICATE_SENT",
 ]);
 
 export const EmailStatusSchema = z.enum([
@@ -109,6 +110,22 @@ export const ListEmailTemplatesQuerySchema = z
     category: EmailTemplateCategorySchema.optional(),
     search: z.string().max(200).optional(),
   });
+
+// ============================================================================
+// Event Email Logs Query Schema
+// ============================================================================
+
+export const ListEventEmailLogsQuerySchema = z
+  .strictObject({
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+    status: EmailStatusSchema.optional(),
+    trigger: AutomaticEmailTriggerSchema.optional(),
+  });
+
+export type ListEventEmailLogsQuery = z.infer<
+  typeof ListEventEmailLogsQuerySchema
+>;
 
 // ============================================================================
 // Bulk Send Schema (Simple recipient filtering)

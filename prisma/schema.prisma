@@ -557,6 +557,7 @@ enum AutomaticEmailTrigger {
   SPONSORSHIP_LINKED // When sponsorship auto-linked to registration (LINKED_ACCOUNT mode, sent to doctor)
   SPONSORSHIP_APPLIED // When admin manually applies sponsorship code (CODE mode, sent to doctor)
   SPONSORSHIP_PARTIAL     // Partial sponsorship notification to doctor
+  CERTIFICATE_SENT        // When admin sends certificates via email
 }
 
 enum EmailStatus {

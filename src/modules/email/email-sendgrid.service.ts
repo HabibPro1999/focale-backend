@@ -26,6 +26,13 @@ if (SENDGRID_API_KEY) {
 // TYPES
 // =============================================================================
 
+export interface EmailAttachment {
+  content: string; // base64 encoded
+  filename: string;
+  type: string;
+  disposition: "attachment" | "inline";
+}
+
 export interface SendEmailInput {
   to: string;
   toName?: string;
@@ -37,6 +44,7 @@ export interface SendEmailInput {
   plainText?: string;
   trackingId?: string; // Used in customArgs for webhook correlation
   categories?: string[];
+  attachments?: EmailAttachment[];
 }
 
 export interface SendEmailResult {
@@ -113,6 +121,7 @@ export async function sendEmail(
         customArgs: { emailLogId: input.trackingId },
       }),
       ...(input.categories && { categories: input.categories }),
+      ...(input.attachments?.length && { attachments: input.attachments }),
     };
 
     const [response] = await sgMail.send(msg);

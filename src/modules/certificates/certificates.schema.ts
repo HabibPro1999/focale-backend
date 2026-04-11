@@ -52,6 +52,14 @@ export const TemplateIdParamSchema = z.strictObject({
 });
 
 // ============================================================================
+// Send Certificates Schema
+// ============================================================================
+
+export const SendCertificatesBodySchema = z.strictObject({
+  registrationIds: z.array(z.string().uuid()).optional(),
+});
+
+// ============================================================================
 // Type Exports
 // ============================================================================
 

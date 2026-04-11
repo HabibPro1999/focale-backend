@@ -21,6 +21,11 @@ import {
   buildBatchEmailContext,
   buildLinkedSponsorshipContext,
 } from "@email";
+import {
+  incrementPaidCount,
+  handleCapacityReached,
+  getAlreadyCoveredAccessIds,
+} from "@access";
 
 // ============================================================================
 // Types
@@ -62,6 +67,7 @@ type LinkedRegistrationForBatch = {
   baseAmount: number;
   accessTypeIds: string[];
   priceBreakdown: unknown;
+  paymentStatus: string;
   linkBaseUrl: string | null;
   editToken: string | null;
 };
@@ -317,6 +323,7 @@ async function validateBatchInput(
         priceBreakdown: true,
         linkBaseUrl: true,
         editToken: true,
+        paymentStatus: true,
       },
     });
 
@@ -509,6 +516,37 @@ async function createLinkedModeSponsorships(
             : {}),
       },
     });
+
+    // Sync paid count for capacity tracking (mirrors sponsorship-linking.ts)
+    const FULLY_SETTLED = ["PAID", "SPONSORED", "WAIVED"];
+    const wasAlreadySettled = FULLY_SETTLED.includes(registration.paymentStatus);
+    if (!wasAlreadySettled) {
+      const breakdown = registration.priceBreakdown as Record<string, unknown>;
+      const accessItems = (breakdown?.accessItems ?? []) as Array<{ accessId: string; quantity: number }>;
+      if (isFullySponsored) {
+        // Exclude current sponsorship (just inserted) to get only previously-covered IDs.
+        const alreadyCovered = registration.paymentStatus === "PARTIAL"
+          ? await getAlreadyCoveredAccessIds(linked.registrationId, tx, sponsorship.id)
+          : new Set<string>();
+        const itemsToIncrement = accessItems.filter(
+          (item) => !alreadyCovered.has(item.accessId),
+        );
+        for (const item of itemsToIncrement) {
+          await incrementPaidCount(item.accessId, item.quantity, tx);
+        }
+        if (itemsToIncrement.length > 0) {
+          await handleCapacityReached(eventId, itemsToIncrement.map((a) => a.accessId), tx);
+        }
+      } else if (updatedSponsorshipAmount > 0 && linked.coveredAccessIds.length > 0) {
+        const coveredItems = accessItems.filter((a) => linked.coveredAccessIds.includes(a.accessId));
+        for (const item of coveredItems) {
+          await incrementPaidCount(item.accessId, item.quantity, tx);
+        }
+        if (coveredItems.length > 0) {
+          await handleCapacityReached(eventId, coveredItems.map((a) => a.accessId), tx);
+        }
+      }
+    }
 
     registration.sponsorshipAmount = updatedSponsorshipAmount;
 

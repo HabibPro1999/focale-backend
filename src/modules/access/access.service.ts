@@ -600,6 +600,31 @@ type CapacityReachedDbClient = CapacityDbClient & {
   auditLog: Pick<typeof prisma.auditLog, "create">;
 };
 
+type CoveredAccessDbClient = {
+  sponsorshipUsage: Pick<typeof prisma.sponsorshipUsage, "findMany">;
+};
+
+/**
+ * Returns the set of accessIds already covered by linked sponsorships for a registration.
+ * Pass `excludeSponsorshipId` to exclude a specific sponsorship (e.g. the one just created).
+ */
+export async function getAlreadyCoveredAccessIds(
+  registrationId: string,
+  db: CoveredAccessDbClient = prisma,
+  excludeSponsorshipId?: string,
+): Promise<Set<string>> {
+  const usages = await db.sponsorshipUsage.findMany({
+    where: {
+      registrationId,
+      ...(excludeSponsorshipId
+        ? { sponsorshipId: { not: excludeSponsorshipId } }
+        : {}),
+    },
+    select: { sponsorship: { select: { coveredAccessIds: true } } },
+  });
+  return new Set(usages.flatMap((u) => u.sponsorship.coveredAccessIds));
+}
+
 /**
  * Strip an access item from all unsettled registrations.
  * Used when an access is deactivated — same cleanup as capacity-reached but

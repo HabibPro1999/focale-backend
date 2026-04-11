@@ -6,6 +6,7 @@
 import { prisma } from "@/database/client.js";
 import { logger } from "@shared/utils/logger.js";
 import { sendEmail } from "./email-sendgrid.service.js";
+import type { EmailAttachment } from "./email-sendgrid.service.js";
 import {
   resolveVariables,
   buildEmailContextWithAccess,
@@ -14,6 +15,8 @@ import { getTemplateByTrigger } from "./email-template.service.js";
 import { Prisma } from "@/generated/prisma/client.js";
 import type { EmailContext, RegistrationWithRelations } from "./email.types.js";
 import type { AutomaticEmailTrigger } from "./email.schema.js";
+import type { ImageCache } from "@modules/certificates/certificate-pdf.service.js";
+import type { CertificateZone } from "@modules/certificates/certificates.schema.js";
 
 // =============================================================================
 // TYPES
@@ -268,6 +271,116 @@ export async function queueBulkSponsorEmails(
 }
 
 // =============================================================================
+// QUEUE CERTIFICATE EMAILS (With Attachments)
+// =============================================================================
+
+export interface QueueCertificateEmailInput {
+  registrationId: string;
+  recipientEmail: string;
+  recipientName?: string;
+  certificateTemplateIds: string[];
+  certificateNames: string[];
+  contextSnapshot: Record<string, unknown>;
+}
+
+/**
+ * Queue a certificate email for a single registrant.
+ * Stores certificate template IDs in contextSnapshot for PDF generation at processing time.
+ * Returns the email log ID, or null if duplicate (already sent).
+ */
+export async function queueCertificateEmail(
+  emailTemplateId: string,
+  input: QueueCertificateEmailInput,
+): Promise<string | null> {
+  // Dedup: skip if CERTIFICATE_SENT already queued/sent for this registration.
+  // Note: FAILED emails are NOT excluded — allows resending after failures.
+  const existing = await prisma.emailLog.findFirst({
+    where: {
+      registrationId: input.registrationId,
+      trigger: "CERTIFICATE_SENT",
+      status: { in: ["QUEUED", "SENDING", "SENT", "DELIVERED"] },
+    },
+  });
+  if (existing) return null;
+
+  const context = {
+    ...input.contextSnapshot,
+    certificateCount: String(input.certificateTemplateIds.length),
+    certificateList: input.certificateNames.join(", "),
+    _certificateTemplateIds: input.certificateTemplateIds,
+  };
+
+  const log = await prisma.emailLog.create({
+    data: {
+      trigger: "CERTIFICATE_SENT",
+      templateId: emailTemplateId,
+      registrationId: input.registrationId,
+      recipientEmail: input.recipientEmail,
+      recipientName: input.recipientName ?? null,
+      subject: "",
+      status: "QUEUED",
+      contextSnapshot: context as Prisma.InputJsonValue,
+    },
+  });
+
+  return log.id;
+}
+
+/**
+ * Queue certificate emails for multiple registrants.
+ * Each registrant gets one email with all eligible certificates attached.
+ * Batch dedup: single query to find already-sent registrations, then bulk insert.
+ */
+export async function queueBulkCertificateEmails(
+  emailTemplateId: string,
+  inputs: QueueCertificateEmailInput[],
+): Promise<{ queued: number; skipped: number }> {
+  if (inputs.length === 0) return { queued: 0, skipped: 0 };
+
+  // Batch dedup: find all registrations that already have an active CERTIFICATE_SENT email
+  const regIds = inputs.map((i) => i.registrationId);
+  const existing = await prisma.emailLog.findMany({
+    where: {
+      registrationId: { in: regIds },
+      trigger: "CERTIFICATE_SENT",
+      status: { in: ["QUEUED", "SENDING", "SENT", "DELIVERED"] },
+    },
+    select: { registrationId: true },
+  });
+  const alreadySent = new Set(existing.map((e) => e.registrationId));
+
+  const toQueue = inputs.filter((i) => !alreadySent.has(i.registrationId));
+  const skipped = inputs.length - toQueue.length;
+
+  if (toQueue.length === 0) return { queued: 0, skipped };
+
+  // Bulk insert all eligible emails
+  const data = toQueue.map((input) => {
+    const context = {
+      ...input.contextSnapshot,
+      certificateCount: String(input.certificateTemplateIds.length),
+      certificateList: input.certificateNames.join(", "),
+      _certificateTemplateIds: input.certificateTemplateIds,
+    };
+
+    return {
+      trigger: "CERTIFICATE_SENT" as const,
+      templateId: emailTemplateId,
+      registrationId: input.registrationId,
+      recipientEmail: input.recipientEmail,
+      recipientName: input.recipientName ?? null,
+      subject: "",
+      status: "QUEUED" as const,
+      contextSnapshot: context as Prisma.InputJsonValue,
+    };
+  });
+
+  const result = await prisma.emailLog.createMany({ data });
+
+  return { queued: result.count, skipped };
+}
+
+// =============================================================================
 // PROCESS QUEUE (Background Worker)
 // =============================================================================
 
@@ -338,6 +451,10 @@ export async function processEmailQueue(
   // Process emails in parallel with controlled concurrency
   const CONCURRENCY_LIMIT = 10;
 
+  // Image cache shared across the batch for certificate PDF generation.
+  // Avoids re-downloading the same template image for each registrant.
+  const imageCache: ImageCache = new Map();
+
   // Process a single email and return the outcome
   async function processEmail(
     emailLog: (typeof batch)[number],
@@ -395,6 +512,66 @@ export async function processEmailQueue(
         data: { subject: resolvedSubject },
       });
 
+      // Generate certificate attachments if this is a CERTIFICATE_SENT email
+      let attachments: EmailAttachment[] | undefined;
+
+      const ctxAny = context as unknown as Record<string, unknown>;
+      if (
+        emailLog.trigger === "CERTIFICATE_SENT" &&
+        Array.isArray(ctxAny._certificateTemplateIds) &&
+        ctxAny._certificateTemplateIds.length > 0 &&
+        emailLog.registrationId
+      ) {
+        const { generateCertificateAttachments } = await import(
+          "@modules/certificates/certificate-pdf.service.js"
+        );
+
+        // Fetch registration with check-in data for eligibility + variable resolution
+        const registration = await prisma.registration.findUnique({
+          where: { id: emailLog.registrationId },
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            role: true,
+            checkedInAt: true,
+            accessCheckIns: { select: { accessId: true } },
+            event: { select: { name: true, startDate: true, location: true } },
+          },
+        });
+
+        // Fetch the certificate templates
+        const certTemplates = await prisma.certificateTemplate.findMany({
+          where: { id: { in: ctxAny._certificateTemplateIds as string[] } },
+          include: { access: { select: { id: true, name: true } } },
+        });
+
+        if (registration && certTemplates.length > 0) {
+          attachments = await generateCertificateAttachments(
+            registration,
+            certTemplates.map((t) => ({
+              ...t,
+              zones: t.zones as CertificateZone[],
+              applicableRoles: t.applicableRoles as string[],
+              access: t.access,
+            })),
+            imageCache,
+          );
+        }
+
+        const expectedCount = (ctxAny._certificateTemplateIds as string[]).length;
+        if (!attachments || attachments.length === 0) {
+          await markAsSkipped(emailLog.id, "No eligible certificates to attach");
+          return "skipped";
+        }
+        if (attachments.length < expectedCount) {
+          logger.warn(
+            { emailLogId: emailLog.id, expected: expectedCount, actual: attachments.length },
+            "Fewer certificates generated than queued — some templates may have been deactivated or check-in revoked",
+          );
+        }
+      }
+
       // Send via SendGrid
       const sendResult = await sendEmail({
         to: emailLog.recipientEmail,
@@ -406,6 +583,7 @@ export async function processEmailQueue(
         html: resolvedHtml,
         plainText: resolvedPlain,
         trackingId: emailLog.id,
+        attachments,
       });
 
       if (sendResult.success) {

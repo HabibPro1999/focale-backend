@@ -13,13 +13,24 @@ import {
   uploadTemplateImage,
 } from "./certificates.service.js";
 import {
+  isEligibleForCertificate,
+  type CertificateTemplateData,
+} from "./certificate-pdf.service.js";
+import {
   EventIdParamSchema,
   TemplateIdParamSchema,
   CreateCertificateTemplateSchema,
   UpdateCertificateTemplateSchema,
+  SendCertificatesBodySchema,
   type CreateCertificateTemplateInput,
   type UpdateCertificateTemplateInput,
+  type CertificateZone,
 } from "./certificates.schema.js";
+import { getTemplateByTrigger } from "@modules/email/email-template.service.js";
+import { queueBulkCertificateEmails } from "@modules/email/email-queue.service.js";
+import { buildEmailContextWithAccess } from "@modules/email/email-context.js";
+import { logger } from "@shared/utils/logger.js";
+import { prisma } from "@/database/client.js";
 import type { AppInstance } from "@shared/types/fastify.js";
 
 // ============================================================================
@@ -213,6 +224,161 @@ export async function certificatesRoutes(app: AppInstance): Promise<void> {
       reply.header("Cache-Control", "private, max-age=300");
       reply.type(file.contentType ?? "application/octet-stream");
       return reply.send(file.buffer);
+    },
+  );
+
+  // POST /api/events/:eventId/certificates/send — send certificates via email
+  app.post<{
+    Params: { eventId: string };
+    Body: { registrationIds?: string[] };
+  }>(
+    "/:eventId/certificates/send",
+    {
+      schema: {
+        params: EventIdParamSchema,
+        body: SendCertificatesBodySchema,
+      },
+    },
+    async (request, reply) => {
+      const { eventId } = request.params;
+      const { registrationIds } = request.body;
+
+      // 1. Auth + access check
+      const event = await getEventById(eventId);
+      if (!event) {
+        throw app.httpErrors.notFound("Event not found");
+      }
+      if (!canAccessClient(request.user!, event.clientId)) {
+        throw app.httpErrors.forbidden("Insufficient permissions");
+      }
+
+      // 2. Get the CERTIFICATE_SENT email template
+      const emailTemplate = await getTemplateByTrigger(eventId, "CERTIFICATE_SENT");
+      if (!emailTemplate) {
+        throw app.httpErrors.badRequest(
+          "No CERTIFICATE_SENT email template configured for this event. Create one in the Email Templates section first.",
+        );
+      }
+
+      // 3. Get all active certificate templates for the event
+      const certTemplates = await prisma.certificateTemplate.findMany({
+        where: { eventId, active: true },
+        include: { access: { select: { id: true, name: true } } },
+      });
+
+      if (certTemplates.length === 0) {
+        throw app.httpErrors.badRequest(
+          "No active certificate templates found for this event.",
+        );
+      }
+
+      // 4. Fetch registrations with check-in data
+      const registrations = await prisma.registration.findMany({
+        where: {
+          eventId,
+          ...(registrationIds ? { id: { in: registrationIds } } : {}),
+        },
+        include: {
+          accessCheckIns: { select: { accessId: true } },
+          event: { include: { client: true } },
+          form: true,
+        },
+      });
+
+      // 5. For each registration, determine eligible certificates and queue email
+      const inputs: Array<{
+        registrationId: string;
+        recipientEmail: string;
+        recipientName?: string;
+        certificateTemplateIds: string[];
+        certificateNames: string[];
+        contextSnapshot: Record<string, unknown>;
+      }> = [];
+
+      const breakdown: Record<string, number> = {};
+
+      // Build template data once — same for all registrants
+      const templateData: CertificateTemplateData[] = certTemplates.map((t) => ({
+        id: t.id,
+        name: t.name,
+        templateUrl: t.templateUrl,
+        templateWidth: t.templateWidth,
+        templateHeight: t.templateHeight,
+        zones: t.zones as CertificateZone[],
+        applicableRoles: t.applicableRoles as string[],
+        accessId: t.accessId,
+        access: t.access,
+      }));
+
+      // Filter eligible registrations first (pure, no DB calls)
+      const eligibleRegs = registrations
+        .map((reg) => {
+          const eligible = templateData.filter((t) =>
+            isEligibleForCertificate(
+              {
+                id: reg.id,
+                firstName: reg.firstName,
+                lastName: reg.lastName,
+                role: reg.role,
+                checkedInAt: reg.checkedInAt,
+                accessCheckIns: reg.accessCheckIns,
+                event: { name: reg.event.name, startDate: reg.event.startDate, location: reg.event.location },
+              },
+              t,
+            ),
+          );
+          return { reg, eligible };
+        })
+        .filter(({ eligible }) => eligible.length > 0);
+
+      // Build email contexts in parallel (10 concurrent to limit DB pressure)
+      const CONTEXT_CONCURRENCY = 10;
+      for (let i = 0; i < eligibleRegs.length; i += CONTEXT_CONCURRENCY) {
+        const chunk = eligibleRegs.slice(i, i + CONTEXT_CONCURRENCY);
+        const contexts = await Promise.all(
+          chunk.map(({ reg }) =>
+            buildEmailContextWithAccess(reg as Parameters<typeof buildEmailContextWithAccess>[0]),
+          ),
+        );
+
+        for (let j = 0; j < chunk.length; j++) {
+          const { reg, eligible } = chunk[j];
+          const context = contexts[j];
+
+          for (const t of eligible) {
+            breakdown[t.name] = (breakdown[t.name] || 0) + 1;
+          }
+
+          inputs.push({
+            registrationId: reg.id,
+            recipientEmail: reg.email,
+            recipientName:
+              [reg.firstName, reg.lastName].filter(Boolean).join(" ") || undefined,
+            certificateTemplateIds: eligible.map((t) => t.id),
+            certificateNames: eligible.map((t) => t.name),
+            contextSnapshot: context as unknown as Record<string, unknown>,
+          });
+        }
+      }
+
+      // 6. Queue all emails
+      const { queued, skipped } = await queueBulkCertificateEmails(
+        emailTemplate.id,
+        inputs,
+      );
+
+      logger.info(
+        { eventId, queued, skipped, total: registrations.length, breakdown },
+        "Certificate emails queued",
+      );
+
+      return reply.send({
+        success: true,
+        queued,
+        skipped,
+        total: registrations.length,
+        breakdown,
+      });
     },
   );
 }

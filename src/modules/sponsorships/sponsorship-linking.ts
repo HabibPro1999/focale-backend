@@ -15,7 +15,9 @@ import {
 import { getSponsorshipByCode } from "./sponsorship-queries.js";
 import {
   incrementPaidCount,
+  decrementPaidCount,
   handleCapacityReached,
+  getAlreadyCoveredAccessIds,
 } from "@access";
 import { queueSponsorshipEmail, buildLinkedSponsorshipContext } from "@email";
 import type { TxClient } from "@shared/types/prisma.js";
@@ -83,12 +85,13 @@ async function unlinkSponsorshipFromRegistrationInternal(
       paymentMethod: true,
       paymentStatus: true,
       totalAmount: true,
+      priceBreakdown: true,
     },
   });
 
   const sponsorshipBefore = await tx.sponsorship.findUnique({
     where: { id: sponsorshipId },
-    select: { status: true },
+    select: { status: true, coveredAccessIds: true },
   });
 
   // Delete the usage
@@ -108,6 +111,23 @@ async function unlinkSponsorshipFromRegistrationInternal(
   const paidAmount = registrationBefore?.paidAmount ?? 0;
   const totalAmount = registrationBefore?.totalAmount ?? 0;
   const currentStatus = registrationBefore?.paymentStatus ?? "PENDING";
+
+  // Decrement paidCount for access items that were covered by this sponsorship.
+  // Applies when the registration was settled or partial — meaning paidCount was
+  // incremented for these items when the sponsorship was originally linked.
+  const coveredAccessIds = sponsorshipBefore?.coveredAccessIds ?? [];
+  if (["PAID", "SPONSORED", "WAIVED", "PARTIAL"].includes(currentStatus) && coveredAccessIds.length > 0) {
+    const breakdown = registrationBefore?.priceBreakdown as
+      | { accessItems?: Array<{ accessId: string; quantity: number }> }
+      | null;
+    const accessItems = breakdown?.accessItems ?? [];
+    const itemsToDecrement = accessItems.filter((item) =>
+      coveredAccessIds.includes(item.accessId),
+    );
+    for (const item of itemsToDecrement) {
+      await decrementPaidCount(item.accessId, item.quantity, tx);
+    }
+  }
 
   let nextStatus: string | undefined;
   // Only auto-transition from SPONSORED (fully covered by sponsorship)
@@ -496,16 +516,23 @@ export async function linkSponsorshipToRegistration(
     // Sync paid count for capacity tracking
     if (!wasAlreadySettled) {
       if (isFullySponsored) {
-        // Fully sponsored: increment paidCount for ALL access items
+        // Fully sponsored: increment paidCount for items not already covered by prior sponsorships.
+        // Exclude current sponsorship (its usage was just inserted) to get only previously-covered IDs.
         const breakdown = registration.priceBreakdown as Record<string, unknown>;
         const accessItems = (breakdown?.accessItems ?? []) as Array<{ accessId: string; quantity: number }>;
-        for (const item of accessItems) {
+        const alreadyCovered = registration.paymentStatus === "PARTIAL"
+          ? await getAlreadyCoveredAccessIds(registrationId, tx, sponsorshipId)
+          : new Set<string>();
+        const itemsToIncrement = accessItems.filter(
+          (item) => !alreadyCovered.has(item.accessId),
+        );
+        for (const item of itemsToIncrement) {
           await incrementPaidCount(item.accessId, item.quantity, tx);
         }
-        if (accessItems.length > 0) {
+        if (itemsToIncrement.length > 0) {
           await handleCapacityReached(
             registration.eventId,
-            accessItems.map((a) => a.accessId),
+            itemsToIncrement.map((a) => a.accessId),
             tx,
           );
         }

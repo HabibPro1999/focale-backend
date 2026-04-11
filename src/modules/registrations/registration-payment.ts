@@ -15,6 +15,7 @@ import {
   incrementPaidCount,
   decrementPaidCount,
   handleCapacityReached,
+  getAlreadyCoveredAccessIds,
 } from "@access";
 import type { PriceBreakdown } from "@pricing";
 
@@ -191,14 +192,24 @@ export async function confirmPayment(
       const accessItems = breakdown.accessItems ?? [];
       if (accessItems.length > 0) {
         if (!wasSettled && isSettled) {
-          for (const item of accessItems) {
+          // When coming from PARTIAL, some items are already covered by a sponsorship
+          // and had paidCount incremented at that time — skip them to avoid double-counting.
+          const alreadyCovered = oldRegistration.paymentStatus === "PARTIAL"
+            ? await getAlreadyCoveredAccessIds(id, tx)
+            : new Set<string>();
+          const itemsToIncrement = accessItems.filter(
+            (item) => !alreadyCovered.has(item.accessId),
+          );
+          for (const item of itemsToIncrement) {
             await incrementPaidCount(item.accessId, item.quantity, tx);
           }
-          await handleCapacityReached(
-            oldRegistration.eventId,
-            accessItems.map((a) => a.accessId),
-            tx,
-          );
+          if (itemsToIncrement.length > 0) {
+            await handleCapacityReached(
+              oldRegistration.eventId,
+              itemsToIncrement.map((a) => a.accessId),
+              tx,
+            );
+          }
         } else {
           for (const item of accessItems) {
             await decrementPaidCount(item.accessId, item.quantity, tx);
