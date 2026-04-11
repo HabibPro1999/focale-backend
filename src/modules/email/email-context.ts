@@ -217,7 +217,7 @@ export async function buildEmailContextWithAccess(
 // =============================================================================
 
 // Variables that contain server-generated HTML (not user input) and skip sanitization
-const HTML_SAFE_VARIABLES = new Set(["sponsoredItems", "beneficiaryList"]);
+const HTML_SAFE_VARIABLES = new Set(["sponsoredItems", "beneficiaryList", "certificateList"]);
 
 export function resolveVariables(
   template: string,
@@ -334,6 +334,9 @@ export function getSampleEmailContext(): EmailContext {
     sponsorshipAmount: "150 TND",
     labName: "Laboratoire Exemple",
     sponsoredItems: "Atelier A - 01/06/2025 (150 TND)",
+
+    certificateCount: "2",
+    certificateList: "Attendance Certificate, Speaker Certificate",
   };
 }
 

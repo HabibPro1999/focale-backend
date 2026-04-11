@@ -8,6 +8,7 @@ export { emailWebhookRoutes } from "./email.webhook.routes.js";
 export {
   queueTriggeredEmail,
   queueSponsorshipEmail,
+  queueBulkCertificateEmails,
   processEmailQueue,
   getEmailQueueHealth,
 } from "./email-queue.service.js";

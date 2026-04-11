@@ -90,6 +90,10 @@ export interface EmailContext {
   bankAccountName: string;
   bankAccountNumber: string;
 
+  // Certificate fields (optional - only present in CERTIFICATE_SENT emails)
+  certificateCount?: string;
+  certificateList?: string;
+
   // Sponsorship fields (optional - only present in sponsorship-related emails)
   labName?: string;
   labContactName?: string;
@@ -128,7 +132,8 @@ export interface VariableDefinition {
     | "form"
     | "links"
     | "bank"
-    | "sponsorship";
+    | "sponsorship"
+    | "certificate";
   description?: string;
   example?: string;
 }

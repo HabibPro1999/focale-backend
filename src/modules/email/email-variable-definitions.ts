@@ -189,6 +189,22 @@ export const BASE_VARIABLES: VariableDefinition[] = [
     example: "TN59 1234 5678 9012 3456 7890",
   },
 
+  // Certificate
+  {
+    id: "certificateCount",
+    label: "Certificate Count",
+    category: "certificate",
+    description: "Number of certificates attached to the email",
+    example: "2",
+  },
+  {
+    id: "certificateList",
+    label: "Certificate List",
+    category: "certificate",
+    description: "Comma-separated list of certificate names",
+    example: "Attendance Certificate, Workshop A Certificate",
+  },
+
   // Sponsorship
   {
     id: "labName",
