@@ -120,10 +120,14 @@ export const BulkSendFilterSchema = z
       .array(z.enum(["PENDING", "VERIFYING", "PARTIAL", "PAID", "SPONSORED", "WAIVED", "REFUNDED"]))
       .optional(),
     accessTypeIds: z.array(z.string().uuid()).optional(),
+    role: z
+      .array(z.enum(["PARTICIPANT", "SPEAKER", "MODERATOR", "ORGANIZER"]))
+      .optional(),
   });
 
 export const BulkSendEmailSchema = z
   .strictObject({
+    audience: z.enum(["registrants", "sponsors"]).default("registrants"),
     // Option 1: Send to specific registrations
     registrationIds: z.array(z.string().uuid()).optional(),
     // Option 2: Send based on filters

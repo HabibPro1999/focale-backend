@@ -237,6 +237,37 @@ export async function queueBulkEmails(
 }
 
 // =============================================================================
+// QUEUE BULK SPONSOR EMAILS (For Manual Sends to Lab Contacts)
+// =============================================================================
+
+export async function queueBulkSponsorEmails(
+  templateId: string,
+  sponsors: Array<{
+    email: string;
+    recipientName: string;
+    contextSnapshot: Record<string, unknown>;
+  }>,
+): Promise<number> {
+  const valid = sponsors.filter((s) => s.email.trim().length > 0);
+  if (valid.length === 0) return 0;
+
+  const emailLogs = valid.map((s) => ({
+    templateId,
+    recipientEmail: s.email,
+    recipientName: s.recipientName || null,
+    subject: "",
+    status: "QUEUED" as EmailStatus,
+    contextSnapshot: s.contextSnapshot as Prisma.InputJsonValue,
+  }));
+
+  const result = await prisma.emailLog.createMany({
+    data: emailLogs,
+  });
+
+  return result.count;
+}
+
+// =============================================================================
 // PROCESS QUEUE (Background Worker)
 // =============================================================================
 
