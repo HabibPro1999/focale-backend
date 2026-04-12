@@ -397,19 +397,21 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
           }
         }
 
-        const sponsors = [...grouped.values()].map(({ batch, sponsorships }) => {
-          const context = buildBatchEmailContext({
-            batch,
-            sponsorships,
-            event: { name: event.name, startDate: event.startDate, location: event.location, client: { name: client?.name ?? '' } },
-            currency: event.pricing?.currency ?? 'TND',
+        const sponsors = [...grouped.values()]
+          .filter(({ sponsorships }) => sponsorships.length > 0)
+          .map(({ batch, sponsorships }) => {
+            const context = buildBatchEmailContext({
+              batch,
+              sponsorships,
+              event: { name: event.name, startDate: event.startDate, location: event.location, client: { name: client?.name ?? '' } },
+              currency: event.pricing?.currency ?? 'TND',
+            });
+            return {
+              email: batch.email,
+              recipientName: batch.contactName,
+              contextSnapshot: context as Record<string, unknown>,
+            };
           });
-          return {
-            email: batch.email,
-            recipientName: batch.contactName,
-            contextSnapshot: context as Record<string, unknown>,
-          };
-        });
 
         if (sponsors.length === 0) {
           return reply.send({ success: true, queued: 0, message: 'No sponsors found for this event' });
