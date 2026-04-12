@@ -382,18 +382,26 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
           }),
         ]);
 
-        // Deduplicate by email — keep first (most recent due to orderBy)
-        const seen = new Map<string, typeof batches[number]>();
+        // Group by email and merge sponsorships from all batches for the same lab
+        type BatchRecord = typeof batches[number];
+        type MergedEntry = { batch: BatchRecord; sponsorships: BatchRecord['sponsorships'] };
+
+        const grouped = new Map<string, MergedEntry>();
         for (const batch of batches) {
           const key = batch.email.toLowerCase();
-          if (!seen.has(key)) seen.set(key, batch);
+          if (!grouped.has(key)) {
+            grouped.set(key, { batch, sponsorships: [...batch.sponsorships] });
+          } else {
+            // Merge sponsorships from older batches into the newest entry
+            grouped.get(key)!.sponsorships.push(...batch.sponsorships);
+          }
         }
 
-        const sponsors = [...seen.values()].map((batch) => {
+        const sponsors = [...grouped.values()].map(({ batch, sponsorships }) => {
           const context = buildBatchEmailContext({
             batch,
-            sponsorships: batch.sponsorships,
-            event: { name: event.name, startDate: event.startDate, location: event.location, client: { name: client?.name || '' } },
+            sponsorships,
+            event: { name: event.name, startDate: event.startDate, location: event.location, client: { name: client?.name ?? '' } },
             currency: event.pricing?.currency ?? 'TND',
           });
           return {
