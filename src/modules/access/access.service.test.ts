@@ -367,6 +367,8 @@ describe("Access Service", () => {
         existingAccess as never,
       );
       prismaMock.registration.count.mockResolvedValue(0);
+      prismaMock.sponsorship.count.mockResolvedValue(0);
+      prismaMock.eventAccess.findMany.mockResolvedValue([]);
       prismaMock.eventAccess.delete.mockResolvedValue(existingAccess as never);
 
       await deleteEventAccess(accessId);
@@ -838,9 +840,10 @@ describe("Access Service", () => {
         g.slots.flatMap((s) => s.items as any[]),
       );
 
-      // Full item should be excluded from results
+      // Full item should be present but marked as full
       const fullItem = items.find((i) => i.id === "full-workshop");
-      expect(fullItem).toBeUndefined();
+      expect(fullItem?.isFull).toBe(true);
+      expect(fullItem?.spotsRemaining).toBe(0);
 
       const availableItem = items.find((i) => i.id === "available-workshop");
       expect(availableItem?.spotsRemaining).toBe(15);
@@ -891,9 +894,12 @@ describe("Access Service", () => {
       const scheduledItems = result.groups.flatMap((g) =>
         g.slots.flatMap((s) => s.items as { id: string }[]),
       );
-      // Full items should not appear
-      expect(scheduledItems.find((i) => i.id === "full-1")).toBeUndefined();
-      expect(result.addonGroup).toBeNull();
+      // Full items should be present but marked as full
+      const fullItem = scheduledItems.find((i) => i.id === "full-1");
+      expect(fullItem).toBeDefined();
+
+      // Full addon should appear in addonGroup
+      expect(result.addonGroup).not.toBeNull();
 
       // Available item should still appear
       expect(scheduledItems.find((i) => i.id === "available-1")).toBeDefined();
@@ -1297,7 +1303,7 @@ describe("Access Service", () => {
           eventId,
           name: "Limited Workshop",
           maxCapacity: 10,
-          registeredCount: 9,
+          paidCount: 9,
           active: true,
         }),
       ];

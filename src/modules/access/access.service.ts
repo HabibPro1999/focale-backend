@@ -10,6 +10,7 @@ import type {
 import { Prisma, PaymentStatus } from "@/generated/prisma/client.js";
 import type { EventAccess } from "@/generated/prisma/client.js";
 import type { PriceBreakdown } from "@pricing";
+import { queueTriggeredEmail } from "@email";
 
 // ============================================================================
 // Types
@@ -644,6 +645,9 @@ async function dropAccessFromUnsettledRegistrations(
     },
     select: {
       id: true,
+      email: true,
+      firstName: true,
+      lastName: true,
       accessTypeIds: true,
       droppedAccessIds: true,
       totalAmount: true,
@@ -670,8 +674,9 @@ async function dropAccessFromUnsettledRegistrations(
     const newAccessItems = breakdown.accessItems.filter((a) => a.accessId !== accessId);
     const newAccessTotal = newAccessItems.reduce((sum, a) => sum + a.subtotal, 0);
     const newSubtotal = breakdown.calculatedBasePrice + newAccessTotal;
-    const newSponsorshipTotal = Math.min(breakdown.sponsorshipTotal, newSubtotal);
+    const newSponsorshipTotal = Math.min(reg.sponsorshipAmount, newSubtotal);
     const newTotal = Math.max(0, newSubtotal - newSponsorshipTotal);
+    const isNowFullyCovered = newSponsorshipTotal >= newSubtotal && newSubtotal > 0;
 
     const updatedBreakdown = {
       ...breakdown,
@@ -695,6 +700,9 @@ async function dropAccessFromUnsettledRegistrations(
         totalAmount: newTotal,
         accessAmount: newAccessTotal,
         sponsorshipAmount: newSponsorshipTotal,
+        ...(isNowFullyCovered
+          ? { paymentStatus: "SPONSORED" as PaymentStatus, paidAt: new Date() }
+          : {}),
       },
     });
 
@@ -713,6 +721,15 @@ async function dropAccessFromUnsettledRegistrations(
         performedBy: "SYSTEM",
       },
     });
+
+    if (isNowFullyCovered) {
+      queueTriggeredEmail("PAYMENT_CONFIRMED", eventId, {
+        id: reg.id,
+        email: reg.email,
+        firstName: reg.firstName,
+        lastName: reg.lastName,
+      }).catch((err) => logger.error({ err, registrationId: reg.id }, "Failed to queue confirmation email after access drop"));
+    }
 
     affected++;
   }
@@ -757,6 +774,9 @@ export async function handleCapacityReached(
       },
       select: {
         id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
         accessTypeIds: true,
         droppedAccessIds: true,
         totalAmount: true,
@@ -785,8 +805,9 @@ export async function handleCapacityReached(
       const newAccessItems = breakdown.accessItems.filter((a) => a.accessId !== accessId);
       const newAccessTotal = newAccessItems.reduce((sum, a) => sum + a.subtotal, 0);
       const newSubtotal = breakdown.calculatedBasePrice + newAccessTotal;
-      const newSponsorshipTotal = Math.min(breakdown.sponsorshipTotal, newSubtotal);
+      const newSponsorshipTotal = Math.min(reg.sponsorshipAmount, newSubtotal);
       const newTotal = Math.max(0, newSubtotal - newSponsorshipTotal);
+      const isNowFullyCovered = newSponsorshipTotal >= newSubtotal && newSubtotal > 0;
 
       const updatedBreakdown = {
         ...breakdown,
@@ -810,6 +831,9 @@ export async function handleCapacityReached(
           totalAmount: newTotal,
           accessAmount: newAccessTotal,
           sponsorshipAmount: newSponsorshipTotal,
+          ...(isNowFullyCovered
+            ? { paymentStatus: "SPONSORED" as PaymentStatus, paidAt: new Date() }
+            : {}),
         },
       });
 
@@ -829,6 +853,15 @@ export async function handleCapacityReached(
           performedBy: "SYSTEM",
         },
       });
+
+      if (isNowFullyCovered) {
+        queueTriggeredEmail("PAYMENT_CONFIRMED", eventId, {
+          id: reg.id,
+          email: reg.email,
+          firstName: reg.firstName,
+          lastName: reg.lastName,
+        }).catch((err) => logger.error({ err, registrationId: reg.id }, "Failed to queue confirmation email after capacity drop"));
+      }
 
       totalAffected++;
     }
