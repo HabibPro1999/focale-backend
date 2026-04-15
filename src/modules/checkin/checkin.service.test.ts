@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import { prismaMock } from "../../../tests/mocks/prisma.js";
 import {
   checkIn,
-  getRegistrationForCheckIn,
   getCheckInRegistrations,
   batchSync,
   getCheckInStats,
@@ -152,79 +151,49 @@ describe("Checkin Service", () => {
     });
   });
 
-  describe("getRegistrationForCheckIn", () => {
-    it("should return registration with access items", async () => {
-      prismaMock.registration.findUnique.mockResolvedValue({
-        ...baseRegistration,
-        accessCheckIns: [],
-      } as never);
-      prismaMock.eventAccess.findMany.mockResolvedValue([
-        { id: accessId, name: "VIP Pass", type: "pass" },
-      ] as never);
-
-      const result = await getRegistrationForCheckIn(eventId, registrationId);
-
-      expect(result.id).toBe(registrationId);
-      expect(result.accessItems).toHaveLength(1);
-      expect(result.accessItems[0].name).toBe("VIP Pass");
-    });
-
-    it("should throw when registration not found", async () => {
-      prismaMock.registration.findUnique.mockResolvedValue(null);
-
-      await expect(
-        getRegistrationForCheckIn(eventId, registrationId),
-      ).rejects.toMatchObject({
-        statusCode: 404,
-        code: ErrorCodes.CHECKIN_REGISTRATION_NOT_FOUND,
-      });
-    });
-
-    it("should throw when event does not match", async () => {
-      prismaMock.registration.findUnique.mockResolvedValue({
-        ...baseRegistration,
-        eventId: "wrong-event",
-        accessCheckIns: [],
-      } as never);
-
-      await expect(
-        getRegistrationForCheckIn(eventId, registrationId),
-      ).rejects.toMatchObject({
-        statusCode: 400,
-        code: ErrorCodes.CHECKIN_EVENT_MISMATCH,
-      });
-    });
-
-    it("should return empty accessItems when no accessTypeIds", async () => {
-      prismaMock.registration.findUnique.mockResolvedValue({
-        ...baseRegistration,
-        accessTypeIds: [],
-        accessCheckIns: [],
-      } as never);
-
-      const result = await getRegistrationForCheckIn(eventId, registrationId);
-
-      expect(result.accessItems).toEqual([]);
-      expect(prismaMock.eventAccess.findMany).not.toHaveBeenCalled();
-    });
-  });
-
   describe("getCheckInRegistrations", () => {
-    it("should return all registrations for the event", async () => {
-      const registrations = [
-        { id: "reg-1", firstName: "A", accessCheckIns: [] },
-        { id: "reg-2", firstName: "B", accessCheckIns: [] },
-      ];
-      prismaMock.registration.findMany.mockResolvedValue(
-        registrations as never,
-      );
+    it("should return only IDs for eligible registrations", async () => {
+      prismaMock.registration.findMany.mockResolvedValue([
+        { id: "reg-1" },
+        { id: "reg-2" },
+      ] as never);
 
       const result = await getCheckInRegistrations(eventId);
 
-      expect(result).toHaveLength(2);
-      expect(prismaMock.registration.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { eventId } }),
-      );
+      expect(result).toEqual(["reg-1", "reg-2"]);
+      expect(prismaMock.registration.findMany).toHaveBeenCalledWith({
+        where: {
+          eventId,
+          paymentStatus: { in: ["PAID", "SPONSORED", "WAIVED"] },
+        },
+        select: { id: true },
+      });
+    });
+
+    it("should filter by accessId when provided", async () => {
+      prismaMock.registration.findMany.mockResolvedValue([
+        { id: "reg-1" },
+      ] as never);
+
+      const result = await getCheckInRegistrations(eventId, accessId);
+
+      expect(result).toEqual(["reg-1"]);
+      expect(prismaMock.registration.findMany).toHaveBeenCalledWith({
+        where: {
+          eventId,
+          paymentStatus: { in: ["PAID", "SPONSORED", "WAIVED"] },
+          accessTypeIds: { has: accessId },
+        },
+        select: { id: true },
+      });
+    });
+
+    it("should return empty array when no matching registrations", async () => {
+      prismaMock.registration.findMany.mockResolvedValue([] as never);
+
+      const result = await getCheckInRegistrations(eventId);
+
+      expect(result).toEqual([]);
     });
   });
 

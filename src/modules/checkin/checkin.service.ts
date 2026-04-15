@@ -155,89 +155,30 @@ export async function checkIn(
 }
 
 // ============================================================================
-// Lookup
+// Eligible Registration IDs (for scanner preload)
 // ============================================================================
 
-export async function getRegistrationForCheckIn(
+const CHECKIN_ELIGIBLE_STATUSES = ["PAID", "SPONSORED", "WAIVED"];
+
+export async function getCheckInRegistrations(
   eventId: string,
-  registrationId: string,
-) {
-  const registration = await prisma.registration.findUnique({
-    where: { id: registrationId },
-    select: {
-      id: true,
-      eventId: true,
-      firstName: true,
-      lastName: true,
-      email: true,
-      referenceNumber: true,
-      paymentStatus: true,
-      checkedInAt: true,
-      checkedInBy: true,
-      accessTypeIds: true,
-      accessCheckIns: {
-        select: {
-          accessId: true,
-          checkedInAt: true,
-        },
-      },
-    },
-  });
-
-  if (!registration) {
-    throw new AppError(
-      "Registration not found",
-      404,
-      ErrorCodes.CHECKIN_REGISTRATION_NOT_FOUND,
-    );
-  }
-
-  if (registration.eventId !== eventId) {
-    throw new AppError(
-      "Registration does not belong to this event",
-      400,
-      ErrorCodes.CHECKIN_EVENT_MISMATCH,
-    );
-  }
-
-  // Fetch access item names for the registration's selected accesses
-  const accessItems = registration.accessTypeIds.length > 0
-    ? await prisma.eventAccess.findMany({
-        where: { id: { in: registration.accessTypeIds } },
-        select: { id: true, name: true, type: true },
-      })
-    : [];
-
-  return {
-    ...registration,
-    accessItems,
+  accessId?: string,
+): Promise<string[]> {
+  const where: Record<string, unknown> = {
+    eventId,
+    paymentStatus: { in: CHECKIN_ELIGIBLE_STATUSES },
   };
-}
 
-// ============================================================================
-// Bulk Preload (for offline)
-// ============================================================================
+  if (accessId) {
+    where.accessTypeIds = { has: accessId };
+  }
 
-export async function getCheckInRegistrations(eventId: string) {
-  return prisma.registration.findMany({
-    where: { eventId },
-    select: {
-      id: true,
-      firstName: true,
-      lastName: true,
-      email: true,
-      referenceNumber: true,
-      paymentStatus: true,
-      accessTypeIds: true,
-      checkedInAt: true,
-      accessCheckIns: {
-        select: {
-          accessId: true,
-          checkedInAt: true,
-        },
-      },
-    },
+  const registrations = await prisma.registration.findMany({
+    where,
+    select: { id: true },
   });
+
+  return registrations.map((r) => r.id);
 }
 
 // ============================================================================

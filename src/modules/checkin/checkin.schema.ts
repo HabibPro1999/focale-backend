@@ -27,9 +27,12 @@ export const CheckInEventParamSchema = z.strictObject({
   eventId: z.string().uuid(),
 });
 
-export const CheckInLookupParamSchema = z.strictObject({
-  eventId: z.string().uuid(),
-  registrationId: z.string().uuid(),
+// ============================================================================
+// Query Schemas
+// ============================================================================
+
+export const CheckInRegistrationsQuerySchema = z.strictObject({
+  accessId: z.string().uuid().optional(),
 });
 
 // ============================================================================
@@ -38,4 +41,4 @@ export const CheckInLookupParamSchema = z.strictObject({
 
 export type CheckInBody = z.infer<typeof CheckInBodySchema>;
 export type BatchSyncBody = z.infer<typeof BatchSyncBodySchema>;
-export type CheckInLookupParam = z.infer<typeof CheckInLookupParamSchema>;
+export type CheckInRegistrationsQuery = z.infer<typeof CheckInRegistrationsQuerySchema>;

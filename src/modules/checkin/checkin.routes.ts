@@ -6,14 +6,13 @@ import {
   CheckInBodySchema,
   CheckInEventParamSchema,
   BatchSyncBodySchema,
-  CheckInLookupParamSchema,
+  CheckInRegistrationsQuerySchema,
   type CheckInBody,
   type BatchSyncBody,
-  type CheckInLookupParam,
+  type CheckInRegistrationsQuery,
 } from "./checkin.schema.js";
 import {
   checkIn,
-  getRegistrationForCheckIn,
   getCheckInRegistrations,
   batchSync,
   getCheckInStats,
@@ -51,22 +50,26 @@ export async function checkinRoutes(app: AppInstance): Promise<void> {
     },
   );
 
-  // GET /:eventId/checkin/registrations - Bulk preload for offline
-  app.get<{ Params: { eventId: string } }>(
+  // GET /:eventId/checkin/registrations - Eligible registration IDs for scanner preload
+  app.get<{ Params: { eventId: string }; Querystring: CheckInRegistrationsQuery }>(
     "/:eventId/checkin/registrations",
     {
-      schema: { params: CheckInEventParamSchema },
+      schema: {
+        params: CheckInEventParamSchema,
+        querystring: CheckInRegistrationsQuerySchema,
+      },
     },
     async (request, reply) => {
       const { eventId } = request.params;
+      const { accessId } = request.query;
       const event = await getEventById(eventId);
       if (!event) throw app.httpErrors.notFound("Event not found");
       if (!canAccessClient(request.user!, event.clientId)) {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
 
-      const registrations = await getCheckInRegistrations(eventId);
-      return reply.send(registrations);
+      const ids = await getCheckInRegistrations(eventId, accessId);
+      return reply.send(ids);
     },
   );
 
@@ -113,24 +116,4 @@ export async function checkinRoutes(app: AppInstance): Promise<void> {
       );
       return reply.send(result);
     },
-  );
-
-  // GET /:eventId/checkin/lookup/:registrationId - Single registration check-in status
-  app.get<{ Params: CheckInLookupParam }>(
-    "/:eventId/checkin/lookup/:registrationId",
-    {
-      schema: { params: CheckInLookupParamSchema },
-    },
-    async (request, reply) => {
-      const { eventId, registrationId } = request.params;
-      const event = await getEventById(eventId);
-      if (!event) throw app.httpErrors.notFound("Event not found");
-      if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden("Insufficient permissions");
-      }
-
-      const result = await getRegistrationForCheckIn(eventId, registrationId);
-      return reply.send(result);
-    },
-  );
-}
+  );}
