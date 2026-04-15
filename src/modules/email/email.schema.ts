@@ -162,6 +162,21 @@ export const TestSendEmailSchema = z
   });
 
 // ============================================================================
+// Send Custom Email (one-off, templateless) to a specific registration
+// ============================================================================
+
+export const SendCustomEmailSchema = z
+  .strictObject({
+    subject: z.string().min(1).max(500),
+    content: TiptapDocumentSchema,
+  });
+
+export const RegistrationIdParamSchema = z
+  .strictObject({
+    registrationId: z.string().uuid(),
+  });
+
+// ============================================================================
 // ID Param Schemas
 // ============================================================================
 
@@ -230,6 +245,8 @@ export type BulkSendFilter = z.infer<typeof BulkSendFilterSchema>;
 export type BulkSendEmailInput = z.infer<typeof BulkSendEmailSchema>;
 
 export type TestSendEmailInput = z.infer<typeof TestSendEmailSchema>;
+
+export type SendCustomEmailInput = z.infer<typeof SendCustomEmailSchema>;
 
 export type EmailTemplateResponse = z.infer<typeof EmailTemplateResponseSchema>;
 export type EmailTemplatesListResponse = z.infer<
