@@ -18,23 +18,33 @@ import {
 } from './email-variable.service.js';
 import { sendEmail } from './email-sendgrid.service.js';
 import { queueBulkEmails, queueBulkSponsorEmails } from './email-queue.service.js';
-import { buildBatchEmailContext } from './email-context.js';
+import { buildBatchEmailContext, buildEmailContextWithAccess } from './email-context.js';
+import {
+  renderTemplateToMjml,
+  compileMjmlToHtml,
+  extractPlainText,
+} from './email-renderer.service.js';
 import { prisma } from '@/database/client.js';
+import { Prisma } from '@/generated/prisma/client.js';
+import type { RegistrationWithRelations } from './email.types.js';
 import {
   EventIdParamSchema,
   EmailTemplateIdParamSchema,
+  RegistrationIdParamSchema,
   CreateEmailTemplateSchema,
   UpdateEmailTemplateSchema,
   ListEmailTemplatesQuerySchema,
   ListEventEmailLogsQuerySchema,
   TestSendEmailSchema,
   BulkSendEmailSchema,
+  SendCustomEmailSchema,
   type CreateEmailTemplateInput,
   type ListEventEmailLogsQuery,
   type UpdateEmailTemplateInput,
   type ListEmailTemplatesQuery,
   type TestSendEmailInput,
   type BulkSendEmailInput,
+  type SendCustomEmailInput,
 } from './email.schema.js';
 import type { AppInstance } from '@shared/types/fastify.js';
 
@@ -482,5 +492,129 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
         message: `${queued} emails queued for sending`,
       });
     }
+  );
+
+  // ==========================================================================
+  // SEND CUSTOM ONE-OFF EMAIL (no saved template) to a specific registration
+  // ==========================================================================
+
+  // POST /api/events/:eventId/registrations/:registrationId/send-custom-email
+  app.post<{
+    Params: { eventId: string; registrationId: string };
+    Body: SendCustomEmailInput;
+  }>(
+    '/:eventId/registrations/:registrationId/send-custom-email',
+    {
+      config: { rateLimit: publicRateLimits.emailBulkSend },
+      schema: {
+        params: EventIdParamSchema.extend({
+          registrationId: RegistrationIdParamSchema.shape.registrationId,
+        }),
+        body: SendCustomEmailSchema,
+      },
+    },
+    async (request, reply) => {
+      const { eventId, registrationId } = request.params;
+      const { subject, content } = request.body;
+
+      // Verify event access
+      const event = await getEventById(eventId);
+      if (!event) {
+        throw app.httpErrors.notFound('Event not found');
+      }
+
+      if (!canAccessClient(request.user!, event.clientId)) {
+        throw app.httpErrors.forbidden('Insufficient permissions');
+      }
+
+      // Fetch registration with relations needed for context building
+      const registration = await prisma.registration.findUnique({
+        where: { id: registrationId },
+        include: {
+          event: { include: { client: true } },
+          form: true,
+        },
+      });
+
+      if (!registration || registration.eventId !== eventId) {
+        throw app.httpErrors.notFound('Registration not found for this event');
+      }
+
+      // Build full context (with access, bank, sponsorship enrichment)
+      const context = await buildEmailContextWithAccess(
+        registration as RegistrationWithRelations,
+      );
+
+      // Render Tiptap → MJML → HTML and extract plain text
+      const mjml = renderTemplateToMjml(content);
+      const { html: rawHtml } = compileMjmlToHtml(mjml);
+      const rawPlain = extractPlainText(content);
+
+      // Resolve {{variable}} placeholders in subject + html + plain
+      const resolvedSubject = resolveVariables(subject, context);
+      const resolvedHtml = resolveVariables(rawHtml, context);
+      const resolvedPlain = resolveVariables(rawPlain, context);
+
+      const recipientName =
+        [registration.firstName, registration.lastName]
+          .filter(Boolean)
+          .join(' ') || undefined;
+
+      // Create a QUEUED EmailLog first so we have an ID for trackingId + webhook correlation
+      const emailLog = await prisma.emailLog.create({
+        data: {
+          templateId: null,
+          registrationId: registration.id,
+          recipientEmail: registration.email,
+          recipientName: recipientName ?? null,
+          subject: resolvedSubject,
+          status: 'SENDING',
+          contextSnapshot: context as unknown as Prisma.InputJsonValue,
+        },
+      });
+
+      // Send synchronously via SendGrid
+      const result = await sendEmail({
+        to: registration.email,
+        toName: recipientName,
+        fromName: context.eventName,
+        replyTo: context.organizerEmail || undefined,
+        replyToName: context.organizerName || undefined,
+        subject: resolvedSubject,
+        html: resolvedHtml,
+        plainText: resolvedPlain,
+        trackingId: emailLog.id,
+        categories: ['custom-one-off'],
+      });
+
+      if (result.success) {
+        await prisma.emailLog.update({
+          where: { id: emailLog.id },
+          data: {
+            status: 'SENT',
+            sendgridMessageId: result.messageId,
+            sentAt: new Date(),
+          },
+        });
+        return reply.send({
+          success: true,
+          emailLogId: emailLog.id,
+          messageId: result.messageId,
+        });
+      }
+
+      await prisma.emailLog.update({
+        where: { id: emailLog.id },
+        data: {
+          status: 'FAILED',
+          errorMessage: result.error || 'Unknown error',
+          failedAt: new Date(),
+        },
+      });
+
+      throw app.httpErrors.badGateway(
+        result.error || 'Failed to send custom email',
+      );
+    },
   );
 }
