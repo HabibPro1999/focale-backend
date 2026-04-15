@@ -413,6 +413,7 @@ enum RegistrationRole {
   SPEAKER
   MODERATOR
   ORGANIZER
+  INVITED
 }
 
 model Registration {
