@@ -292,22 +292,29 @@ export async function queueCertificateEmail(
   emailTemplateId: string,
   input: QueueCertificateEmailInput,
 ): Promise<string | null> {
-  // Dedup: skip if CERTIFICATE_SENT already queued/sent for this registration.
-  // Note: FAILED emails are NOT excluded — allows resending after failures.
-  const existing = await prisma.emailLog.findFirst({
-    where: {
-      registrationId: input.registrationId,
-      trigger: "CERTIFICATE_SENT",
-      status: { in: ["QUEUED", "SENDING", "SENT", "DELIVERED"] },
-    },
-  });
-  if (existing) return null;
+  // Dedup at the certificate-template level: only skip a certificate the
+  // registrant has already received. If new templates have become eligible
+  // (e.g. after a belated access check-in or a fix to the template's accessId),
+  // we still queue a new email for the remaining ones.
+  const alreadySentIds = await getAlreadySentCertTemplateIds([
+    input.registrationId,
+  ]);
+  const sentSet = alreadySentIds.get(input.registrationId) ?? new Set<string>();
+
+  const remaining = input.certificateTemplateIds
+    .map((id, idx) => ({ id, name: input.certificateNames[idx] }))
+    .filter((x) => !sentSet.has(x.id));
+
+  if (remaining.length === 0) return null;
+
+  const remainingIds = remaining.map((x) => x.id);
+  const remainingNames = remaining.map((x) => x.name);
 
   const context = {
     ...input.contextSnapshot,
-    certificateCount: String(input.certificateTemplateIds.length),
-    certificateList: input.certificateNames.join(", "),
-    _certificateTemplateIds: input.certificateTemplateIds,
+    certificateCount: String(remainingIds.length),
+    certificateList: remainingNames.join(", "),
+    _certificateTemplateIds: remainingIds,
   };
 
   const log = await prisma.emailLog.create({
@@ -327,6 +334,45 @@ export async function queueCertificateEmail(
 }
 
 /**
+ * Collect the set of certificate template IDs that have already been
+ * queued/sent/delivered for each registration. Reads _certificateTemplateIds
+ * from the stored contextSnapshot of prior CERTIFICATE_SENT email logs.
+ */
+async function getAlreadySentCertTemplateIds(
+  registrationIds: string[],
+): Promise<Map<string, Set<string>>> {
+  const result = new Map<string, Set<string>>();
+  if (registrationIds.length === 0) return result;
+
+  const logs = await prisma.emailLog.findMany({
+    where: {
+      registrationId: { in: registrationIds },
+      trigger: "CERTIFICATE_SENT",
+      status: { in: ["QUEUED", "SENDING", "SENT", "DELIVERED"] },
+    },
+    select: { registrationId: true, contextSnapshot: true },
+  });
+
+  for (const log of logs) {
+    if (!log.registrationId) continue;
+    const ctx = log.contextSnapshot as Record<string, unknown> | null;
+    const ids = ctx?._certificateTemplateIds;
+    if (!Array.isArray(ids)) continue;
+
+    let set = result.get(log.registrationId);
+    if (!set) {
+      set = new Set<string>();
+      result.set(log.registrationId, set);
+    }
+    for (const id of ids) {
+      if (typeof id === "string") set.add(id);
+    }
+  }
+
+  return result;
+}
+
+/**
  * Queue certificate emails for multiple registrants.
  * Each registrant gets one email with all eligible certificates attached.
  * Batch dedup: single query to find already-sent registrations, then bulk insert.
@@ -337,30 +383,44 @@ export async function queueBulkCertificateEmails(
 ): Promise<{ queued: number; skipped: number }> {
   if (inputs.length === 0) return { queued: 0, skipped: 0 };
 
-  // Batch dedup: find all registrations that already have an active CERTIFICATE_SENT email
+  // Per-template dedup: a registrant gets skipped only if ALL their eligible
+  // certificate templates have already been queued/sent. If some are new
+  // (e.g. the admin added a template, checked them into a new access, or
+  // fixed a template.accessId mapping), queue those remaining ones.
   const regIds = inputs.map((i) => i.registrationId);
-  const existing = await prisma.emailLog.findMany({
-    where: {
-      registrationId: { in: regIds },
-      trigger: "CERTIFICATE_SENT",
-      status: { in: ["QUEUED", "SENDING", "SENT", "DELIVERED"] },
-    },
-    select: { registrationId: true },
-  });
-  const alreadySent = new Set(existing.map((e) => e.registrationId));
+  const alreadySentIds = await getAlreadySentCertTemplateIds(regIds);
 
-  const toQueue = inputs.filter((i) => !alreadySent.has(i.registrationId));
-  const skipped = inputs.length - toQueue.length;
+  type PreparedInput = {
+    input: QueueCertificateEmailInput;
+    remainingIds: string[];
+    remainingNames: string[];
+  };
+
+  const prepared: PreparedInput[] = inputs.map((input) => {
+    const sentSet = alreadySentIds.get(input.registrationId) ?? new Set<string>();
+    const pairs = input.certificateTemplateIds
+      .map((id, idx) => ({ id, name: input.certificateNames[idx] }))
+      .filter((x) => !sentSet.has(x.id));
+
+    return {
+      input,
+      remainingIds: pairs.map((p) => p.id),
+      remainingNames: pairs.map((p) => p.name),
+    };
+  });
+
+  const toQueue = prepared.filter((p) => p.remainingIds.length > 0);
+  const skipped = prepared.length - toQueue.length;
 
   if (toQueue.length === 0) return { queued: 0, skipped };
 
-  // Bulk insert all eligible emails
-  const data = toQueue.map((input) => {
+  // Bulk insert remaining templates only
+  const data = toQueue.map(({ input, remainingIds, remainingNames }) => {
     const context = {
       ...input.contextSnapshot,
-      certificateCount: String(input.certificateTemplateIds.length),
-      certificateList: input.certificateNames.join(", "),
-      _certificateTemplateIds: input.certificateTemplateIds,
+      certificateCount: String(remainingIds.length),
+      certificateList: remainingNames.join(", "),
+      _certificateTemplateIds: remainingIds,
     };
 
     return {
