@@ -24,6 +24,7 @@ export async function getRegistrationById(
     include: {
       form: { select: { id: true, name: true } },
       event: { select: { id: true, name: true, slug: true, clientId: true } },
+      accessCheckIns: { select: { accessId: true, checkedInAt: true } },
     },
   });
 
