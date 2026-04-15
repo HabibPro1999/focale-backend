@@ -187,6 +187,7 @@ export const ListRegistrationsQuerySchema = z.strictObject({
   limit: z.coerce.number().int().min(1).max(100).default(20),
   paymentStatus: PaymentStatusSchema.optional(),
   paymentMethod: PaymentMethodSchema.optional(),
+  role: RegistrationRoleSchema.optional(),
   search: z.string().max(200).optional(),
 });
 
