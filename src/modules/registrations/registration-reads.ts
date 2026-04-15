@@ -62,7 +62,7 @@ export async function getRegistrationByIdempotencyKey(
 
 export function buildRegistrationWhere(
   eventId: string,
-  filters?: { paymentStatus?: string; paymentMethod?: string; search?: string },
+  filters?: { paymentStatus?: string; paymentMethod?: string; role?: string; search?: string },
 ): Prisma.RegistrationWhereInput {
   const where: Prisma.RegistrationWhereInput = { eventId };
   if (filters?.paymentStatus) {
@@ -70,6 +70,9 @@ export function buildRegistrationWhere(
   }
   if (filters?.paymentMethod) {
     where.paymentMethod = filters.paymentMethod as Prisma.RegistrationWhereInput["paymentMethod"];
+  }
+  if (filters?.role) {
+    where.role = filters.role as Prisma.RegistrationWhereInput["role"];
   }
   if (filters?.search) {
     where.OR = [
@@ -91,9 +94,9 @@ export async function listRegistrations(
   eventId: string,
   query: ListRegistrationsQuery,
 ): Promise<PaginatedResult<RegistrationWithRelations> & { stats: RegistrationStats }> {
-  const { page, limit, paymentStatus, paymentMethod, search } = query;
+  const { page, limit, paymentStatus, paymentMethod, role, search } = query;
 
-  const where = buildRegistrationWhere(eventId, { paymentStatus, paymentMethod, search });
+  const where = buildRegistrationWhere(eventId, { paymentStatus, paymentMethod, role, search });
 
   const skip = getSkip({ page, limit });
 
