@@ -62,7 +62,7 @@ export async function getGroupedAccess(
 
   const enrichedAccess: EnrichedAccess[] = availableAccess.map((access) => {
     const spotsRemaining = access.maxCapacity
-      ? access.maxCapacity - access.registeredCount
+      ? access.maxCapacity - access.paidCount
       : null;
 
     return {
