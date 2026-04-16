@@ -798,12 +798,18 @@ export async function adminEditRegistration(
         quantity: s.quantity,
       }));
 
-      // Validate new selections
+      // Grandfather already-attached accesses past capacity / active / date-window
+      // checks — admin edits keep paid items even if they're now full or disabled
+      const existingAccessIds = new Set(
+        (registration.accessTypeIds as string[]) ?? [],
+      );
+
       if (input.accessSelections.length > 0) {
         const validation = await validateAccessSelections(
           eventId,
           input.accessSelections,
           effectiveFormData,
+          existingAccessIds,
         );
         if (!validation.valid) {
           throw new AppError(
