@@ -5,6 +5,7 @@ import { config } from "@config/app.config.js";
 import { eventBus, type AppEventHandler } from "@core/events/bus.js";
 import type { AppEvent } from "@core/events/types.js";
 import type { AppInstance } from "@shared/types/fastify.js";
+import { logger } from "@shared/utils/logger.js";
 
 const QuerySchema = z.object({
   eventId: z.string().optional(),
@@ -73,8 +74,23 @@ export async function realtimeRoutes(app: AppInstance): Promise<void> {
       reply.sse.keepAlive();
 
       const handler: AppEventHandler = (ev: AppEvent) => {
-        if (ev.clientId !== scopedClientId) return;
-        if (eventId && ev.eventId && ev.eventId !== eventId) return;
+        const scopeMatch = ev.clientId === scopedClientId;
+        const eventMatch = !eventId || !ev.eventId || ev.eventId === eventId;
+        logger.info(
+          {
+            type: ev.type,
+            evClientId: ev.clientId,
+            evEventId: ev.eventId,
+            scopedClientId,
+            filterEventId: eventId ?? null,
+            scopeMatch,
+            eventMatch,
+            connected: reply.sse.isConnected,
+          },
+          "[realtime] handler received",
+        );
+        if (!scopeMatch) return;
+        if (!eventMatch) return;
         if (!reply.sse.isConnected) return;
         // Fire-and-forget; plugin serializes writes internally
         reply.sse.send({ data: ev }).catch(() => {
