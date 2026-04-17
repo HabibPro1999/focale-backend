@@ -98,15 +98,24 @@ export async function realtimeRoutes(app: AppInstance): Promise<void> {
           );
           return;
         }
-        // Fire-and-forget; plugin serializes writes internally
+        // Fire-and-forget; plugin serializes writes internally.
+        // Cloudflare/Render can buffer small writes — force-flush after by
+        // writing a padding comment, and explicitly flush the raw socket.
         reply.sse
           .send({ data: ev })
-          .then(() =>
+          .then(() => {
+            try {
+              // 2KB-ish padding comment forces intermediate proxies to flush
+              reply.raw.write(": padding " + "x".repeat(2048) + "\n\n");
+              (reply.raw as unknown as { flush?: () => void }).flush?.();
+            } catch {
+              /* ignore — connection may be half-closed */
+            }
             logger.info(
               { type: ev.type, scopedClientId },
               "[realtime] sent to client",
-            ),
-          )
+            );
+          })
           .catch((err) =>
             logger.warn(
               { err: String(err), type: ev.type, scopedClientId },
