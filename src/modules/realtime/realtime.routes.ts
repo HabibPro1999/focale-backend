@@ -91,11 +91,28 @@ export async function realtimeRoutes(app: AppInstance): Promise<void> {
         );
         if (!scopeMatch) return;
         if (!eventMatch) return;
-        if (!reply.sse.isConnected) return;
+        if (!reply.sse.isConnected) {
+          logger.warn(
+            { scopedClientId, type: ev.type },
+            "[realtime] skipped — connection not connected",
+          );
+          return;
+        }
         // Fire-and-forget; plugin serializes writes internally
-        reply.sse.send({ data: ev }).catch(() => {
-          /* client disconnected mid-write */
-        });
+        reply.sse
+          .send({ data: ev })
+          .then(() =>
+            logger.info(
+              { type: ev.type, scopedClientId },
+              "[realtime] sent to client",
+            ),
+          )
+          .catch((err) =>
+            logger.warn(
+              { err: String(err), type: ev.type, scopedClientId },
+              "[realtime] send failed",
+            ),
+          );
       };
 
       const close = () => {
