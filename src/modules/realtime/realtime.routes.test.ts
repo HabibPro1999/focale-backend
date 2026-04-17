@@ -60,6 +60,7 @@ async function buildTestApp(): Promise<AppInstance> {
 interface SseMessage {
   event?: string;
   data?: string;
+  id?: string;
 }
 
 function parseBuffer(buf: string): {
@@ -74,6 +75,7 @@ function parseBuffer(buf: string): {
     const m: SseMessage = {};
     for (const line of chunk.split("\n")) {
       if (line.startsWith("event: ")) m.event = line.slice(7);
+      else if (line.startsWith("id: ")) m.id = line.slice(4);
       else if (line.startsWith("data: ")) {
         m.data = (m.data ?? "") + line.slice(6);
       }
@@ -87,7 +89,10 @@ function parseBuffer(buf: string): {
  * Opens an SSE stream and returns a helper that waits for a predicate
  * over the accumulated messages.
  */
-async function openStream(url: string): Promise<{
+async function openStream(
+  url: string,
+  headers: Record<string, string> = {},
+): Promise<{
   waitFor: (
     predicate: (msgs: SseMessage[]) => boolean,
     timeoutMs?: number,
@@ -97,7 +102,7 @@ async function openStream(url: string): Promise<{
 }> {
   const ctrl = new AbortController();
   const response = await fetch(url, {
-    headers: { Accept: "text/event-stream" },
+    headers: { Accept: "text/event-stream", ...headers },
     signal: ctrl.signal,
   });
   const reader = response.body!.getReader();
@@ -297,6 +302,100 @@ describe("GET /api/stream", () => {
     app = await buildTestApp();
     const res = await app.inject({ method: "GET", url: "/api/stream" });
     expect(res.statusCode).toBe(403);
+  });
+
+  it("emits an id on every data frame for Last-Event-ID replay", async () => {
+    h.currentUser = mockUsers.clientAdmin;
+    app = await buildTestApp();
+    const addr = await app.listen({ port: 0, host: "127.0.0.1" });
+
+    const conn = await openStream(addr + "/api/stream");
+    openConn = conn;
+    await conn.waitFor((m) => m.some((x) => x.event === "ready"));
+
+    eventBus.emit({
+      type: "registration.updated",
+      clientId: "client-A",
+      eventId: "ev-1",
+      payload: { id: "r-1" },
+      ts: 1,
+    });
+
+    const all = await conn.waitFor(
+      (m) => m.filter((x) => x.data && !x.event).length >= 1,
+    );
+    const dataFrames = all.filter((x) => x.data && !x.event);
+    expect(dataFrames[0].id).toBeDefined();
+    expect(Number(dataFrames[0].id)).toBeGreaterThan(0);
+  });
+
+  it("replays buffered events after Last-Event-ID on reconnect", async () => {
+    h.currentUser = mockUsers.clientAdmin;
+    app = await buildTestApp();
+    const addr = await app.listen({ port: 0, host: "127.0.0.1" });
+
+    // Emit events before any client connects — they land in the buffer
+    const id1 = eventBus.emit({
+      type: "registration.updated",
+      clientId: "client-A",
+      eventId: "ev-1",
+      payload: { id: "early" },
+      ts: 1,
+    });
+    eventBus.emit({
+      type: "registration.updated",
+      clientId: "client-A",
+      eventId: "ev-1",
+      payload: { id: "mid" },
+      ts: 2,
+    });
+    eventBus.emit({
+      type: "registration.updated",
+      clientId: "client-A",
+      eventId: "ev-1",
+      payload: { id: "late" },
+      ts: 3,
+    });
+
+    // Simulate reconnect with Last-Event-ID pointing at `early`
+    const conn = await openStream(addr + "/api/stream", {
+      "Last-Event-ID": id1,
+    });
+    openConn = conn;
+
+    const all = await conn.waitFor(
+      (m) => m.filter((x) => x.data && !x.event).length >= 2,
+    );
+    const dataFrames = all.filter((x) => x.data && !x.event);
+    const ids = dataFrames.map((x) => JSON.parse(x.data!).payload.id);
+    expect(ids).toEqual(["mid", "late"]);
+  });
+
+  it("ignores Last-Event-ID for events outside client scope", async () => {
+    h.currentUser = mockUsers.clientAdmin;
+    app = await buildTestApp();
+    const addr = await app.listen({ port: 0, host: "127.0.0.1" });
+
+    const id = eventBus.emit({
+      type: "registration.updated",
+      clientId: "client-OTHER",
+      eventId: "ev-1",
+      payload: { id: "not-mine" },
+      ts: 1,
+    });
+
+    const conn = await openStream(addr + "/api/stream", {
+      "Last-Event-ID": String(Number(id) - 1),
+    });
+    openConn = conn;
+    await conn.waitFor((m) => m.some((x) => x.event === "ready"));
+
+    // Wait a tick — there should be no data frames
+    await new Promise((r) => setTimeout(r, 50));
+    const readyOnly = (m: SseMessage[]) =>
+      m.filter((x) => x.data && !x.event).length === 0;
+    const res = await conn.waitFor((m) => readyOnly(m), 100).catch(() => null);
+    expect(res).not.toBeNull();
   });
 
   it("disconnect removes the bus listener", async () => {

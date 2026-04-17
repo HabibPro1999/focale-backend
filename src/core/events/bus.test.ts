@@ -68,4 +68,39 @@ describe("eventBus", () => {
     eventBus.off(throwing);
     eventBus.off(other);
   });
+
+  it("emit returns a monotonically increasing id and delivers it to handlers", () => {
+    const received: Array<{ ev: AppEvent; id: string }> = [];
+    const handler = (ev: AppEvent, id: string) => received.push({ ev, id });
+    eventBus.on(handler);
+
+    const id1 = eventBus.emit(makeEvent({ payload: { id: "x" } }));
+    const id2 = eventBus.emit(makeEvent({ payload: { id: "y" } }));
+
+    expect(Number(id2)).toBeGreaterThan(Number(id1));
+    expect(received.map((r) => r.id)).toEqual([id1, id2]);
+    eventBus.off(handler);
+  });
+
+  it("getSince replays events emitted strictly after the given id", () => {
+    const a = eventBus.emit(makeEvent({ payload: { id: "a" } }));
+    eventBus.emit(makeEvent({ payload: { id: "b" } }));
+    eventBus.emit(makeEvent({ payload: { id: "c" } }));
+
+    const since = eventBus.getSince(a);
+    expect(since.map((x) => x.ev.payload.id)).toEqual(["b", "c"]);
+  });
+
+  it("getSince returns empty for null, empty, or non-numeric ids", () => {
+    eventBus.emit(makeEvent());
+    expect(eventBus.getSince(null)).toEqual([]);
+    expect(eventBus.getSince(undefined)).toEqual([]);
+    expect(eventBus.getSince("")).toEqual([]);
+    expect(eventBus.getSince("not-a-number")).toEqual([]);
+  });
+
+  it("getSince returns empty when id is larger than any buffered event", () => {
+    eventBus.emit(makeEvent());
+    expect(eventBus.getSince("999999999")).toEqual([]);
+  });
 });

@@ -35,8 +35,10 @@ export async function realtimeRoutes(app: AppInstance): Promise<void> {
       schema: { querystring: QuerySchema },
       sse: true,
       config: {
-        // Per-route rate limit override: SSE is one long connection, not a flood
-        rateLimit: { max: 10, timeWindow: "1 minute" },
+        // SSE holds one long connection, not rapid requests — give headroom
+        // for reconnect storms on flaky networks without blocking legitimate
+        // retries.
+        rateLimit: { max: 60, timeWindow: "1 minute" },
       },
     },
     async (request, reply) => {
@@ -72,27 +74,22 @@ export async function realtimeRoutes(app: AppInstance): Promise<void> {
 
       reply.sse.keepAlive();
 
-      const handler: AppEventHandler = (ev: AppEvent) => {
-        if (ev.clientId !== scopedClientId) return;
-        if (eventId && ev.eventId && ev.eventId !== eventId) return;
+      const matches = (ev: AppEvent): boolean => {
+        if (ev.clientId !== scopedClientId) return false;
+        if (eventId && ev.eventId && ev.eventId !== eventId) return false;
+        return true;
+      };
+
+      const sendFrame = (id: string, ev: AppEvent) => {
         if (!reply.sse.isConnected) return;
-        // Fire-and-forget; plugin serializes writes internally.
-        // Cloudflare/Render proxy can buffer small writes — appending a
-        // ~2KB padding comment after each data frame forces intermediate
-        // proxies to flush so events reach the client in real time.
-        reply.sse
-          .send({ data: ev })
-          .then(() => {
-            try {
-              reply.raw.write(": padding " + "x".repeat(2048) + "\n\n");
-              (reply.raw as unknown as { flush?: () => void }).flush?.();
-            } catch {
-              /* connection may be half-closed */
-            }
-          })
-          .catch(() => {
-            /* client disconnected mid-write */
-          });
+        reply.sse.send({ id, data: ev }).catch(() => {
+          /* client disconnected mid-write */
+        });
+      };
+
+      const handler: AppEventHandler = (ev, id) => {
+        if (!matches(ev)) return;
+        sendFrame(id, ev);
       };
 
       const close = () => {
@@ -104,6 +101,8 @@ export async function realtimeRoutes(app: AppInstance): Promise<void> {
         }
       };
 
+      // Subscribe before replaying so live events that land during replay
+      // still reach the client (id stays monotonic — order is preserved).
       eventBus.on(handler);
       activeConnections.add(close);
 
@@ -112,7 +111,18 @@ export async function realtimeRoutes(app: AppInstance): Promise<void> {
         activeConnections.delete(close);
       });
 
-      // Send initial hello + retry hint after subscription is in place
+      // Replay events after Last-Event-ID. fetch-event-source sets this
+      // header automatically on reconnect when the previous stream emitted
+      // `id:` frames. Closes the gap window caused by proxy drops, deploys,
+      // tab-switches, or network blips.
+      const lastEventId = request.headers["last-event-id"];
+      if (typeof lastEventId === "string" && lastEventId.length > 0) {
+        const buffered = eventBus.getSince(lastEventId);
+        for (const { id, ev } of buffered) {
+          if (matches(ev)) sendFrame(id, ev);
+        }
+      }
+
       await reply.sse.send({
         event: "ready",
         retry: config.realtime.clientRetryMs,
