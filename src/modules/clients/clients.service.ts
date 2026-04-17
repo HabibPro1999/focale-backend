@@ -56,9 +56,17 @@ export async function updateClient(
   // One-way enable logic: merge new modules with existing (union, not replace)
   let mergedModules: string[] | undefined;
   if (input.enabledModules) {
-    const existingModules = new Set(client.enabledModules);
-    const newModules = input.enabledModules;
-    mergedModules = [...new Set([...existingModules, ...newModules])];
+    const existing = new Set(client.enabledModules);
+    const requested = new Set<string>(input.enabledModules);
+    const removed = [...existing].filter((m) => !requested.has(m));
+    if (removed.length > 0) {
+      throw new AppError(
+        `Cannot disable modules via PATCH: ${removed.join(", ")}. Use the dedicated disable endpoint.`,
+        400,
+        ErrorCodes.BAD_REQUEST,
+      );
+    }
+    mergedModules = [...new Set([...existing, ...requested])];
   }
 
   const { enabledModules: _removed, ...restInput } = input;
@@ -117,6 +125,7 @@ export async function deleteClient(id: string): Promise<void> {
         select: {
           users: true,
           events: true,
+          emailTemplates: true,
         },
       },
     },
@@ -126,10 +135,11 @@ export async function deleteClient(id: string): Promise<void> {
     throw new AppError("Client not found", 404, ErrorCodes.NOT_FOUND);
   }
 
-  // Check for associated users or events
-  if (client._count.users > 0 || client._count.events > 0) {
+  const deps = Object.entries(client._count).filter(([, n]) => n > 0);
+  if (deps.length > 0) {
+    const detail = deps.map(([k, n]) => `${k}=${n}`).join(", ");
     throw new AppError(
-      `Cannot delete client with ${client._count.users} user(s) and ${client._count.events} event(s). Remove associated data first.`,
+      `Cannot delete client with dependencies: ${detail}`,
       409,
       ErrorCodes.CLIENT_HAS_DEPENDENCIES,
     );

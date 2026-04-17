@@ -67,4 +67,5 @@ export const publicRateLimits = {
   accessPublic: { max: 20, timeWindow: "1 minute" },
   emailTestSend: { max: 10, timeWindow: "1 minute" },
   emailBulkSend: { max: 5, timeWindow: "1 minute" },
+  emailWebhook: { max: 100, timeWindow: "1 minute" },
 };

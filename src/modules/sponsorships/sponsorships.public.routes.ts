@@ -54,6 +54,21 @@ export async function sponsorshipsPublicRoutes(
         throw app.httpErrors.notFound("Sponsor form not found for this event");
       }
 
+      // Check idempotency key - return existing batch if found
+      if (input.idempotencyKey) {
+        const existing = await getSponsorshipBatchByIdempotencyKey(
+          input.idempotencyKey,
+        );
+        if (existing) {
+          return reply.status(200).send({
+            success: true,
+            message: `${existing._count.sponsorships} sponsoring(s) created successfully`,
+            batchId: existing.id,
+            count: existing._count.sponsorships,
+          });
+        }
+      }
+
       // Create the sponsorship batch
       const result = await createSponsorshipBatch(eventId, form.id, input);
 
@@ -185,6 +200,21 @@ export async function sponsorshipsPublicBySlugRoutes(
         throw app.httpErrors.notFound("Sponsor form not found for this event");
       }
 
+      // Check idempotency key - return existing batch if found
+      if (input.idempotencyKey) {
+        const existing = await getSponsorshipBatchByIdempotencyKey(
+          input.idempotencyKey,
+        );
+        if (existing) {
+          return reply.status(200).send({
+            success: true,
+            message: `${existing._count.sponsorships} sponsoring(s) created successfully`,
+            batchId: existing.id,
+            count: existing._count.sponsorships,
+          });
+        }
+      }
+
       // Create the sponsorship batch
       const result = await createSponsorshipBatch(event.id, form.id, input);
 
@@ -220,6 +250,22 @@ async function getSponsorFormForEvent(
       id: true,
       eventId: true,
       schema: true,
+    },
+  });
+}
+
+/**
+ * Look up a sponsorship batch by idempotency key.
+ * Returns the batch with its sponsorship count, or null if not found.
+ */
+async function getSponsorshipBatchByIdempotencyKey(
+  idempotencyKey: string,
+): Promise<{ id: string; _count: { sponsorships: number } } | null> {
+  return prisma.sponsorshipBatch.findUnique({
+    where: { idempotencyKey },
+    select: {
+      id: true,
+      _count: { select: { sponsorships: true } },
     },
   });
 }

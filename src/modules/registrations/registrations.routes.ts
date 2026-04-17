@@ -85,6 +85,9 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
   }>(
     "/:eventId/registrants/search",
     {
+      config: {
+        rateLimit: { max: 10, timeWindow: "1 minute" },
+      },
       schema: {
         params: EventIdParamSchema,
         querystring: SearchRegistrantsQuerySchema,

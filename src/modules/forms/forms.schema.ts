@@ -126,8 +126,8 @@ export const FormStepSchema = z.strictObject({
 // ============================================================================
 
 // Registration form schema structure
-// Uses looseObject to allow top-level extensions while enforcing steps/fields structure
-export const FormSchemaJsonSchema = z.looseObject({
+// Uses strictObject to reject unknown top-level keys that would silently persist to JSONB
+export const FormSchemaJsonSchema = z.strictObject({
   steps: z.array(FormStepSchema).optional(),
 });
 

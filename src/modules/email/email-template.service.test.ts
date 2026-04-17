@@ -55,7 +55,7 @@ function createMockEmailTemplate(overrides: Partial<EmailTemplate> = {}): EmailT
     name: faker.lorem.words(3),
     description: faker.lorem.sentence(),
     subject: faker.lorem.sentence(),
-    content: createMockTiptapDocument() as unknown as EmailTemplate['content'],
+    content: createMockTiptapDocument() as never,
     mjmlContent: '<mjml><mj-body></mj-body></mjml>',
     htmlContent: '<html><body>Test</body></html>',
     plainContent: 'Plain text content',
@@ -282,11 +282,10 @@ describe('Email Template Service', () => {
   describe('getEmailTemplateWithEvent', () => {
     it('should return template with event relation', async () => {
       const mockEvent = createMockEvent({ id: eventId });
-      const mockTemplate = createMockEmailTemplate({
-        id: templateId,
-        eventId,
-      }) as EmailTemplate & { event: typeof mockEvent };
-      (mockTemplate as unknown as { event: typeof mockEvent }).event = mockEvent;
+      const mockTemplate = {
+        ...createMockEmailTemplate({ id: templateId, eventId }),
+        event: mockEvent,
+      };
 
       prismaMock.emailTemplate.findFirst.mockResolvedValue(mockTemplate);
 
@@ -489,7 +488,7 @@ describe('Email Template Service', () => {
       const newContent = createMockTiptapDocument();
       const updatedTemplate = createMockEmailTemplate({
         id: templateId,
-        content: newContent as unknown as EmailTemplate['content'],
+        content: newContent as never,
       });
 
       prismaMock.emailTemplate.findUnique.mockResolvedValue(existingTemplate);
@@ -643,7 +642,7 @@ describe('Email Template Service', () => {
         id: templateId,
         clientId,
         eventId,
-        content: createMockTiptapDocument() as unknown as EmailTemplate['content'],
+        content: createMockTiptapDocument() as never,
         mjmlContent: '<mjml>original</mjml>',
         htmlContent: '<html>original</html>',
         plainContent: 'original plain',

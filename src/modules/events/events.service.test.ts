@@ -13,9 +13,11 @@ import {
   listEvents,
   deleteEvent,
   eventExists,
+  uploadEventBanner,
 } from "./events.service.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { Prisma } from "@/generated/prisma/client.js";
 
 // Mock the clients module for clientExists
 vi.mock("@clients", () => ({
@@ -66,19 +68,18 @@ describe("Events Service", () => {
         currency: validInput.currency,
       });
 
-      prismaMock.event.findUnique.mockResolvedValue(null); // No existing slug
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       prismaMock.$transaction.mockImplementation(
-        async (callback: (tx: any) => Promise<any>) => {
+        async (callback) => {
           const txMock = {
             event: {
+              findUnique: vi.fn().mockResolvedValue(null), // No existing slug
               create: vi.fn().mockResolvedValue(mockEvent),
             },
             eventPricing: {
               create: vi.fn().mockResolvedValue(mockPricing),
             },
           };
-          return callback(txMock);
+          return callback(txMock as never);
         },
       );
 
@@ -108,7 +109,19 @@ describe("Events Service", () => {
 
     it("should throw when slug already exists", async () => {
       const existingEvent = createMockEvent({ slug: validInput.slug });
-      prismaMock.event.findUnique.mockResolvedValue(existingEvent);
+      // Slug uniqueness check is now inside the transaction
+      prismaMock.$transaction.mockImplementation(
+        async (callback) => {
+          const txMock = {
+            event: {
+              findUnique: vi.fn().mockResolvedValue(existingEvent),
+              create: vi.fn(),
+            },
+            eventPricing: { create: vi.fn() },
+          };
+          return callback(txMock as never);
+        },
+      );
 
       await expect(createEvent(validInput)).rejects.toThrow(AppError);
       await expect(createEvent(validInput)).rejects.toMatchObject({
@@ -119,7 +132,6 @@ describe("Events Service", () => {
     });
 
     it("should use default status CLOSED when not provided", async () => {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { status: _omit, ...inputWithoutStatus } = validInput;
 
       const mockEvent = createMockEvent({
@@ -129,19 +141,18 @@ describe("Events Service", () => {
       });
       const mockPricing = createMockEventPricing({ eventId });
 
-      prismaMock.event.findUnique.mockResolvedValue(null);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       prismaMock.$transaction.mockImplementation(
-        async (callback: (tx: any) => Promise<any>) => {
+        async (callback) => {
           const txMock = {
             event: {
+              findUnique: vi.fn().mockResolvedValue(null),
               create: vi.fn().mockResolvedValue(mockEvent),
             },
             eventPricing: {
               create: vi.fn().mockResolvedValue(mockPricing),
             },
           };
-          return callback(txMock);
+          return callback(txMock as never);
         },
       );
 
@@ -156,7 +167,6 @@ describe("Events Service", () => {
     });
 
     it("should use default basePrice 0 and currency TND when not provided", async () => {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const {
         basePrice: _omit1,
         currency: _omit2,
@@ -171,19 +181,18 @@ describe("Events Service", () => {
         currency: "TND",
       });
 
-      prismaMock.event.findUnique.mockResolvedValue(null);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       prismaMock.$transaction.mockImplementation(
-        async (callback: (tx: any) => Promise<any>) => {
+        async (callback) => {
           const txMock = {
             event: {
+              findUnique: vi.fn().mockResolvedValue(null),
               create: vi.fn().mockResolvedValue(mockEvent),
             },
             eventPricing: {
               create: vi.fn().mockResolvedValue(mockPricing),
             },
           };
-          return callback(txMock);
+          return callback(txMock as never);
         },
       );
 
@@ -196,6 +205,21 @@ describe("Events Service", () => {
 
       expect(result.pricing?.basePrice).toBe(0);
       expect(result.pricing?.currency).toBe("TND");
+    });
+
+    it("should return 409 when concurrent create hits P2002 (slug race)", async () => {
+      const p2002 = new Prisma.PrismaClientKnownRequestError(
+        "Unique constraint failed",
+        { code: "P2002", clientVersion: "5.0.0", meta: { target: ["slug"] } },
+      );
+
+      prismaMock.$transaction.mockRejectedValue(p2002);
+
+      await expect(createEvent(validInput)).rejects.toMatchObject({
+        statusCode: 409,
+        code: ErrorCodes.CONFLICT,
+        message: "Event with this slug already exists",
+      });
     });
   });
 
@@ -508,6 +532,69 @@ describe("Events Service", () => {
     });
   });
 
+  describe("capacity validation", () => {
+    it("should reject maxCapacity decrease below registered count", async () => {
+      const mockEvent = createMockEvent({
+        id: eventId,
+        maxCapacity: 100,
+        status: "OPEN",
+      });
+
+      prismaMock.event.findUnique.mockResolvedValue(mockEvent);
+      prismaMock.registration.count.mockResolvedValue(50); // 50 active registrations
+
+      await expect(
+        updateEvent(eventId, { maxCapacity: 30 }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.CAPACITY_BELOW_REGISTERED,
+      });
+    });
+
+    it("should allow maxCapacity decrease to exactly the registered count", async () => {
+      const mockEvent = createMockEvent({
+        id: eventId,
+        maxCapacity: 100,
+        status: "OPEN",
+        startDate: new Date("2025-06-01"),
+        endDate: new Date("2025-06-03"),
+      });
+      const updatedEvent = {
+        ...createMockEvent({ id: eventId, maxCapacity: 50 }),
+        pricing: createMockEventPricing({ eventId }),
+      };
+
+      prismaMock.event.findUnique.mockResolvedValue(mockEvent);
+      prismaMock.registration.count.mockResolvedValue(50); // exactly 50
+      prismaMock.event.update.mockResolvedValue(updatedEvent);
+
+      const result = await updateEvent(eventId, { maxCapacity: 50 });
+      expect(result.maxCapacity).toBe(50);
+    });
+
+    it("should allow removing capacity limit (null)", async () => {
+      const mockEvent = createMockEvent({
+        id: eventId,
+        maxCapacity: 100,
+        status: "OPEN",
+        startDate: new Date("2025-06-01"),
+        endDate: new Date("2025-06-03"),
+      });
+      const updatedEvent = {
+        ...createMockEvent({ id: eventId, maxCapacity: null }),
+        pricing: createMockEventPricing({ eventId }),
+      };
+
+      prismaMock.event.findUnique.mockResolvedValue(mockEvent);
+      prismaMock.event.update.mockResolvedValue(updatedEvent);
+
+      const result = await updateEvent(eventId, { maxCapacity: null });
+      expect(result.maxCapacity).toBeNull();
+      // registration.count should NOT be called when maxCapacity is null
+      expect(prismaMock.registration.count).not.toHaveBeenCalled();
+    });
+  });
+
   describe("listEvents", () => {
     it("should return paginated events", async () => {
       const mockEvents = createManyMockEvents(5);
@@ -688,6 +775,52 @@ describe("Events Service", () => {
       const result = await eventExists("non-existent");
 
       expect(result).toBe(false);
+    });
+  });
+
+  describe("uploadEventBanner", () => {
+    const mockFile = {
+      filename: "banner.jpg",
+      mimetype: "image/jpeg",
+      buffer: Buffer.alloc(1024), // 1 KB — well within limit
+    };
+
+    it("should reject non-image MIME types", async () => {
+      const file = { ...mockFile, mimetype: "application/pdf" };
+
+      await expect(uploadEventBanner(eventId, file)).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.INVALID_FILE_TYPE,
+      });
+    });
+
+    it("should reject files larger than 10 MB", async () => {
+      const oversizedBuffer = Buffer.alloc(11 * 1024 * 1024); // 11 MB
+      const file = { ...mockFile, buffer: oversizedBuffer };
+
+      await expect(uploadEventBanner(eventId, file)).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.FILE_TOO_LARGE,
+      });
+    });
+
+    it("should reject files exactly at the boundary (10 MB + 1 byte)", async () => {
+      const boundaryBuffer = Buffer.alloc(10 * 1024 * 1024 + 1);
+      const file = { ...mockFile, buffer: boundaryBuffer };
+
+      await expect(uploadEventBanner(eventId, file)).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.FILE_TOO_LARGE,
+      });
+    });
+
+    it("should reject when event not found after size check", async () => {
+      prismaMock.event.findUnique.mockResolvedValue(null);
+
+      await expect(uploadEventBanner(eventId, mockFile)).rejects.toMatchObject({
+        statusCode: 404,
+        code: ErrorCodes.NOT_FOUND,
+      });
     });
   });
 });

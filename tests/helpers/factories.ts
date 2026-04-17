@@ -255,7 +255,7 @@ export function createMockRegistration(
     paidAt: null,
     submittedAt: faker.date.past(),
     lastEditedAt: null,
-    editToken: null,
+    editTokenHash: null,
     idempotencyKey: null,
     linkBaseUrl: null,
     note: null,
@@ -286,6 +286,7 @@ export function createMockSponsorshipBatch(
     email: faker.internet.email(),
     phone: faker.phone.number(),
     formData: {},
+    idempotencyKey: null,
     createdAt: faker.date.past(),
     ...overrides,
   };

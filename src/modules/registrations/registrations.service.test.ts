@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { prismaMock } from "../../../tests/mocks/prisma.js";
+import { prismaMock, mockGroupBy } from "../../../tests/mocks/prisma.js";
 import {
   createMockRegistration,
   createMockForm,
@@ -193,8 +193,8 @@ describe("Registrations Service", () => {
 
       const result = await createRegistration(input, priceBreakdown);
 
-      expect(result.email).toBe("john@example.com");
-      expect(result.totalAmount).toBe(300);
+      expect(result.registration.email).toBe("john@example.com");
+      expect(result.registration.totalAmount).toBe(300);
       expect(prismaMock.form.findUnique).toHaveBeenCalledWith({
         where: { id: formId },
         select: { id: true, eventId: true, schemaVersion: true },
@@ -366,8 +366,8 @@ describe("Registrations Service", () => {
 
       const result = await createRegistration(input, priceWithAccess);
 
-      expect(result.totalAmount).toBe(350);
-      expect(result.accessSelections).toHaveLength(1);
+      expect(result.registration.totalAmount).toBe(350);
+      expect(result.registration.accessSelections).toHaveLength(1);
     });
 
     it("should handle idempotent creation with existing idempotency key", async () => {
@@ -678,6 +678,7 @@ describe("Registrations Service", () => {
         async (callback: (tx: typeof prismaMock) => Promise<unknown>) => {
           prismaMock.auditLog.create.mockResolvedValue({} as never);
           prismaMock.registration.delete.mockResolvedValue(registration);
+          prismaMock.sponsorshipUsage.findMany.mockResolvedValue([]);
           return callback(prismaMock);
         },
       );
@@ -736,6 +737,7 @@ describe("Registrations Service", () => {
         async (callback: (tx: typeof prismaMock) => Promise<unknown>) => {
           prismaMock.auditLog.create.mockResolvedValue({} as never);
           prismaMock.registration.delete.mockResolvedValue(registration);
+          prismaMock.sponsorshipUsage.findMany.mockResolvedValue([]);
           return callback(prismaMock);
         },
       );
@@ -748,6 +750,8 @@ describe("Registrations Service", () => {
     it("should throw FORBIDDEN when force-deleting without CLIENT_ADMIN role", async () => {
       const registration = createMockRegistration({ paymentStatus: "PAID" });
       const userId = faker.string.uuid();
+
+      prismaMock.registration.findUnique.mockResolvedValue(registration);
 
       await expect(
         deleteRegistration(
@@ -790,6 +794,7 @@ describe("Registrations Service", () => {
         async (callback: (tx: typeof prismaMock) => Promise<unknown>) => {
           prismaMock.auditLog.create.mockResolvedValue({} as never);
           prismaMock.registration.delete.mockResolvedValue(registration);
+          prismaMock.sponsorshipUsage.findMany.mockResolvedValue([]);
           return callback(prismaMock);
         },
       );
@@ -806,6 +811,8 @@ describe("Registrations Service", () => {
     beforeEach(() => {
       // Set up default mock for eventAccess.findMany before each test
       prismaMock.eventAccess.findMany.mockResolvedValue([]);
+      // groupBy is used to compute stats; default to empty array for paginated list tests
+      mockGroupBy(prismaMock.registration.groupBy, []);
     });
 
     it("should return paginated registrations", async () => {
@@ -874,57 +881,73 @@ describe("Registrations Service", () => {
   });
 
   describe("verifyEditToken", () => {
-    it("should return true for valid token", async () => {
-      const token = "a".repeat(64); // 64 hex characters from 32 bytes
-      const futureExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours from now
+    it("should return true for valid token (event not yet started)", async () => {
+      const { createHash } = await import("crypto");
+      const token = "a".repeat(64); // 64 hex chars (plaintext)
+      const hash = createHash("sha256").update(token).digest("hex");
+      const futureStart = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h from now
 
       prismaMock.registration.findUnique.mockResolvedValue({
-        editToken: token,
-        editTokenExpiry: futureExpiry,
+        editTokenHash: hash,
+        event: { startDate: futureStart },
       } as never);
+      prismaMock.auditLog.create.mockResolvedValue({} as never);
 
       const result = await verifyEditToken("reg-id", token);
 
       expect(result).toBe(true);
     });
 
-    it("should return false for invalid token", async () => {
+    it("should return false for hash mismatch", async () => {
+      const { createHash } = await import("crypto");
       const storedToken = "a".repeat(64);
-      const providedToken = "b".repeat(64);
-      const futureExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      const wrongToken = "b".repeat(64);
+      const hash = createHash("sha256").update(storedToken).digest("hex");
+      const futureStart = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
       prismaMock.registration.findUnique.mockResolvedValue({
-        editToken: storedToken,
-        editTokenExpiry: futureExpiry,
+        editTokenHash: hash,
+        event: { startDate: futureStart },
       } as never);
+      prismaMock.auditLog.create.mockResolvedValue({} as never);
 
-      const result = await verifyEditToken("reg-id", providedToken);
+      const result = await verifyEditToken("reg-id", wrongToken);
 
       expect(result).toBe(false);
     });
 
+    it("should throw EDIT_TOKEN_EXPIRED when event has started", async () => {
+      const { createHash } = await import("crypto");
+      const token = "a".repeat(64);
+      const hash = createHash("sha256").update(token).digest("hex");
+      const pastStart = new Date(Date.now() - 1000); // 1 second ago
+
+      prismaMock.registration.findUnique.mockResolvedValue({
+        editTokenHash: hash,
+        event: { startDate: pastStart },
+      } as never);
+      prismaMock.auditLog.create.mockResolvedValue({} as never);
+
+      await expect(verifyEditToken("reg-id", token)).rejects.toThrow(AppError);
+    });
+
     it("should return false when no token stored", async () => {
       prismaMock.registration.findUnique.mockResolvedValue({
-        editToken: null,
-        editTokenExpiry: null,
+        editTokenHash: null,
+        event: { startDate: new Date(Date.now() + 24 * 60 * 60 * 1000) },
       } as never);
+      prismaMock.auditLog.create.mockResolvedValue({} as never);
 
       const result = await verifyEditToken("reg-id", "any-token");
 
       expect(result).toBe(false);
     });
 
-    it("should return false for mismatched token lengths", async () => {
-      const storedToken = "a".repeat(64);
-      const shortToken = "a".repeat(32);
-      const futureExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    it("should return false when registration not found", async () => {
+      prismaMock.registration.findUnique.mockResolvedValue(null);
+      prismaMock.auditLog.create.mockResolvedValue({} as never);
 
-      prismaMock.registration.findUnique.mockResolvedValue({
-        editToken: storedToken,
-        editTokenExpiry: futureExpiry,
-      } as never);
-
-      const result = await verifyEditToken("reg-id", shortToken);
+      const result = await verifyEditToken("reg-id", "any-token");
 
       expect(result).toBe(false);
     });
@@ -1517,11 +1540,11 @@ describe("Registrations Service", () => {
 
       const result = await createRegistration(input, priceBreakdown);
 
-      expect(result.totalAmount).toBe(250);
-      expect(result.baseAmount).toBe(250);
-      expect(result.discountAmount).toBe(50);
-      expect(result.accessAmount).toBe(100);
-      expect(result.sponsorshipAmount).toBe(100);
+      expect(result.registration.totalAmount).toBe(250);
+      expect(result.registration.baseAmount).toBe(250);
+      expect(result.registration.discountAmount).toBe(50);
+      expect(result.registration.accessAmount).toBe(100);
+      expect(result.registration.sponsorshipAmount).toBe(100);
     });
   });
 
@@ -1569,8 +1592,8 @@ describe("Registrations Service", () => {
 
       const result = await createRegistration(input, priceBreakdown);
 
-      expect(result.sponsorshipCode).toBe(sponsorshipCode);
-      expect(result.sponsorshipAmount).toBe(100);
+      expect(result.registration.sponsorshipCode).toBe(sponsorshipCode);
+      expect(result.registration.sponsorshipAmount).toBe(100);
     });
   });
 });

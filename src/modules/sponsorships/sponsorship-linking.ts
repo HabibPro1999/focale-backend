@@ -3,6 +3,7 @@ import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { logger } from "@shared/utils/logger.js";
 import { auditLog } from "@shared/utils/audit.js";
+import { recomputeSponsorshipAmount } from "@registrations";
 import { calculateSettlement } from "@shared/utils/settlement.js";
 import {
   calculateApplicableAmount,
@@ -151,6 +152,9 @@ async function unlinkSponsorshipFromRegistrationInternal(
       }),
     },
   });
+
+  // Recompute sponsorshipAmount + priceBreakdown totals from SponsorshipUsage rows
+  await recomputeSponsorshipAmount(tx, registrationId);
 
   const sponsorshipUsageCount = await tx.sponsorshipUsage.count({
     where: { sponsorshipId },
@@ -513,6 +517,9 @@ export async function linkSponsorshipToRegistration(
       },
     });
 
+    // Recompute sponsorshipAmount + priceBreakdown totals from SponsorshipUsage rows
+    await recomputeSponsorshipAmount(tx, registrationId);
+
     // Sync paid count for capacity tracking
     if (!wasAlreadySettled) {
       if (isFullySponsored) {
@@ -625,7 +632,7 @@ export async function linkSponsorshipToRegistration(
           baseAmount: true,
           sponsorshipAmount: true,
           linkBaseUrl: true,
-          editToken: true,
+          // editToken not selected — plaintext no longer stored (hashed). Email link uses linkBaseUrl only.
         },
       }),
       prisma.event.findUnique({
@@ -655,7 +662,6 @@ export async function linkSponsorshipToRegistration(
       const context = buildLinkedSponsorshipContext({
         amountApplied: result.usage.amountApplied,
         sponsorship: {
-          code: sponsorshipWithBatch.code,
           beneficiaryName: sponsorshipWithBatch.beneficiaryName,
           coversBasePrice: sponsorshipWithBatch.coversBasePrice,
           coveredAccessIds: sponsorshipWithBatch.coveredAccessIds,

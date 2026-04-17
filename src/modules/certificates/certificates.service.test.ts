@@ -54,7 +54,7 @@ vi.mock("sharp", () => ({
 
 const templateId = "tpl-001";
 const eventId = "evt-001";
-const mockFileType = fileTypeFromBuffer as unknown as ReturnType<typeof vi.fn>;
+const mockFileType = vi.mocked(fileTypeFromBuffer);
 
 function baseMockTemplate(overrides: Record<string, unknown> = {}) {
   return {
@@ -380,7 +380,7 @@ describe("Certificates Service", () => {
     });
 
     it("should reject when file-type detection returns null", async () => {
-      mockFileType.mockResolvedValue(null);
+      mockFileType.mockResolvedValue(undefined);
 
       await expect(
         uploadTemplateImage(templateId, file),

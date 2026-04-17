@@ -3,8 +3,10 @@
 // Manages the database-backed email queue for reliable delivery with retries
 // =============================================================================
 
+import { z } from "zod";
 import { prisma } from "@/database/client.js";
 import { logger } from "@shared/utils/logger.js";
+import { toInputJson, fromInputJson } from "@shared/utils/json.js";
 import { sendEmail } from "./email-sendgrid.service.js";
 import type { EmailAttachment } from "./email-sendgrid.service.js";
 import {
@@ -49,6 +51,58 @@ function isValidEmailContext(obj: unknown): obj is EmailContext {
 
 const MAX_RETRIES = 3;
 
+// =============================================================================
+// PDF CONCURRENCY SEMAPHORE (Fix 4)
+// Limits simultaneous certificate PDF generations to avoid memory spikes.
+// Each PDF embeds a full-res image; uncapped bursts can OOM under bulk sends.
+// =============================================================================
+
+const PDF_CONCURRENCY_MAX = 3;
+let _pdfInflight = 0;
+const _pdfQueue: Array<() => void> = [];
+
+/**
+ * Acquire the PDF semaphore. Resolves immediately if a slot is free,
+ * otherwise waits until a prior generation releases.
+ */
+function acquirePdfSlot(): Promise<void> {
+  if (_pdfInflight < PDF_CONCURRENCY_MAX) {
+    _pdfInflight++;
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => {
+    _pdfQueue.push(resolve);
+  });
+}
+
+/**
+ * Release one PDF semaphore slot, waking the next waiter if any.
+ */
+function releasePdfSlot(): void {
+  const next = _pdfQueue.shift();
+  if (next) {
+    // Slot passes directly to the next waiter — count stays the same
+    next();
+  } else {
+    _pdfInflight--;
+  }
+}
+
+/** Exposed for tests — current inflight count */
+export function getPdfInflight(): number {
+  return _pdfInflight;
+}
+
+/** Exposed for tests — acquire a slot and run fn, then release */
+export async function withPdfSlot<T>(fn: () => Promise<T>): Promise<T> {
+  await acquirePdfSlot();
+  try {
+    return await fn();
+  } finally {
+    releasePdfSlot();
+  }
+}
+
 /** Status ordering for webhook state machine — only forward transitions allowed */
 const STATUS_RANK: Record<string, number> = {
   QUEUED: 0,
@@ -80,6 +134,9 @@ export interface QueueEmailInput {
 
   // Pre-built context (optional)
   contextSnapshot?: Record<string, unknown>;
+
+  // Dedup key — only set for triggered emails; null = no dedup (Fix 1)
+  idempotencyKey?: string;
 }
 
 export async function queueEmail(input: QueueEmailInput) {
@@ -92,8 +149,10 @@ export async function queueEmail(input: QueueEmailInput) {
       recipientName: input.recipientName,
       subject: "", // Will be resolved when processing
       status: "QUEUED",
-      contextSnapshot: (input.contextSnapshot ??
-        Prisma.JsonNull) as Prisma.InputJsonValue,
+      contextSnapshot: input.contextSnapshot
+        ? toInputJson(input.contextSnapshot)
+        : Prisma.JsonNull,
+      idempotencyKey: input.idempotencyKey ?? null,
     },
   });
 }
@@ -126,34 +185,35 @@ export async function queueTriggeredEmail(
     return false;
   }
 
-  // 2. Check for duplicate: skip if an email with the same registration + trigger
-  //    is already queued, sending, sent, or delivered
-  const existing = await prisma.emailLog.findFirst({
-    where: {
-      registrationId: registration.id,
-      trigger: trigger,
-      status: { in: ["QUEUED", "SENDING", "SENT", "DELIVERED"] },
-    },
-  });
-  if (existing) {
-    logger.info(
-      { registrationId: registration.id, trigger },
-      "Triggered email already queued, skipping duplicate",
-    );
-    return false;
-  }
+  // 2. Queue with idempotencyKey — the unique constraint is the authoritative dedup
+  //    gate, eliminating the TOCTOU race of the old findFirst+insert pattern (Fix 1).
+  const idempotencyKey = `${registration.id}:${trigger}`;
 
-  // 3. Queue the email
-  await queueEmail({
-    trigger,
-    templateId: template.id,
-    registrationId: registration.id,
-    recipientEmail: registration.email,
-    recipientName:
-      [registration.firstName, registration.lastName]
-        .filter(Boolean)
-        .join(" ") || undefined,
-  });
+  try {
+    await queueEmail({
+      trigger,
+      templateId: template.id,
+      registrationId: registration.id,
+      recipientEmail: registration.email,
+      recipientName:
+        [registration.firstName, registration.lastName]
+          .filter(Boolean)
+          .join(" ") || undefined,
+      idempotencyKey,
+    });
+  } catch (err) {
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === "P2002"
+    ) {
+      logger.info(
+        { registrationId: registration.id, trigger },
+        "Triggered email already queued (idempotency key conflict), skipping duplicate",
+      );
+      return false;
+    }
+    throw err;
+  }
 
   logger.info(
     { trigger, eventId, registrationId: registration.id },
@@ -243,6 +303,8 @@ export async function queueBulkEmails(
 // QUEUE BULK SPONSOR EMAILS (For Manual Sends to Lab Contacts)
 // =============================================================================
 
+const emailSchema = z.string().email();
+
 export async function queueBulkSponsorEmails(
   templateId: string,
   sponsors: Array<{
@@ -250,8 +312,24 @@ export async function queueBulkSponsorEmails(
     recipientName: string;
     contextSnapshot: Record<string, unknown>;
   }>,
+  adminUserId?: string,
 ): Promise<number> {
-  const valid = sponsors.filter((s) => s.email.trim().length > 0);
+  // Validate email format — skip-and-warn on invalid (Fix 7)
+  const valid: typeof sponsors = [];
+  const invalid: string[] = [];
+  for (const s of sponsors) {
+    if (emailSchema.safeParse(s.email).success) {
+      valid.push(s);
+    } else {
+      invalid.push(s.email);
+    }
+  }
+  if (invalid.length > 0) {
+    logger.warn(
+      { adminUserId, invalidCount: invalid.length, firstInvalid: invalid[0] },
+      "queueBulkSponsorEmails: skipping invalid email addresses",
+    );
+  }
   if (valid.length === 0) return 0;
 
   const emailLogs = valid.map((s) => ({
@@ -260,7 +338,7 @@ export async function queueBulkSponsorEmails(
     recipientName: s.recipientName || null,
     subject: "",
     status: "QUEUED" as EmailStatus,
-    contextSnapshot: s.contextSnapshot as Prisma.InputJsonValue,
+    contextSnapshot: toInputJson(s.contextSnapshot),
   }));
 
   const result = await prisma.emailLog.createMany({
@@ -326,7 +404,7 @@ export async function queueCertificateEmail(
       recipientName: input.recipientName ?? null,
       subject: "",
       status: "QUEUED",
-      contextSnapshot: context as Prisma.InputJsonValue,
+      contextSnapshot: toInputJson(context),
     },
   });
 
@@ -431,7 +509,7 @@ export async function queueBulkCertificateEmails(
       recipientName: input.recipientName ?? null,
       subject: "",
       status: "QUEUED" as const,
-      contextSnapshot: context as Prisma.InputJsonValue,
+      contextSnapshot: toInputJson(context),
     };
   });
 
@@ -553,10 +631,9 @@ export async function processEmailQueue(
       }
 
       // Resolve variables
-      const resolvedSubject = resolveVariables(
-        emailLog.template.subject,
-        context,
-      );
+      const rawSubject = resolveVariables(emailLog.template.subject, context);
+      // Strip CRLF/null from subject to prevent SMTP header injection (Fix 2)
+      const resolvedSubject = rawSubject.replace(/[\r\n\0]/g, " ").trim().slice(0, 998);
       const resolvedHtml = resolveVariables(
         emailLog.template.htmlContent || "",
         context,
@@ -575,7 +652,7 @@ export async function processEmailQueue(
       // Generate certificate attachments if this is a CERTIFICATE_SENT email
       let attachments: EmailAttachment[] | undefined;
 
-      const ctxAny = context as unknown as Record<string, unknown>;
+      const ctxAny = fromInputJson<Record<string, unknown>>(context);
       if (
         emailLog.trigger === "CERTIFICATE_SENT" &&
         Array.isArray(ctxAny._certificateTemplateIds) &&
@@ -607,16 +684,22 @@ export async function processEmailQueue(
         });
 
         if (registration && certTemplates.length > 0) {
-          attachments = await generateCertificateAttachments(
-            registration,
-            certTemplates.map((t) => ({
-              ...t,
-              zones: t.zones as CertificateZone[],
-              applicableRoles: t.applicableRoles as string[],
-              access: t.access,
-            })),
-            imageCache,
-          );
+          // Semaphore: cap concurrent PDF generations at PDF_CONCURRENCY_MAX (Fix 4)
+          await acquirePdfSlot();
+          try {
+            attachments = await generateCertificateAttachments(
+              registration,
+              certTemplates.map((t) => ({
+                ...t,
+                zones: t.zones as CertificateZone[],
+                applicableRoles: t.applicableRoles as string[],
+                access: t.access,
+              })),
+              imageCache,
+            );
+          } finally {
+            releasePdfSlot();
+          }
         }
 
         const expectedCount = (ctxAny._certificateTemplateIds as string[]).length;
@@ -927,4 +1010,27 @@ export async function getQueueStats() {
     },
     {} as Record<string, number>,
   );
+}
+
+// =============================================================================
+// STARTUP REPAIR
+// =============================================================================
+
+/**
+ * Reset rows that are stuck in SENDING status (Fix 5).
+ * Called once at boot — rows that have been SENDING for > 5 minutes were never
+ * marked sent/failed because the process was killed between the status update
+ * and the SendGrid response. Resetting them to QUEUED allows normal retry logic
+ * to pick them up on the next poll cycle.
+ */
+export async function repairStaleSendingRows(): Promise<void> {
+  const result = await prisma.$executeRaw`
+    UPDATE "email_logs"
+    SET "status" = 'QUEUED', "updated_at" = NOW()
+    WHERE "status" = 'SENDING'
+      AND "updated_at" < NOW() - INTERVAL '5 minutes'
+  `;
+  if (result > 0) {
+    logger.info({ repairedCount: result }, "Repaired stale SENDING email_logs rows at startup");
+  }
 }

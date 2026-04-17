@@ -527,15 +527,15 @@ describe("canAccessClient", () => {
       expect(canAccessClient(clientAdmin, "client-123")).toBe(false);
     });
 
-    it("should handle case-sensitive client ID comparison", () => {
+    it("should handle case-insensitive client ID comparison", () => {
       const clientAdmin = {
         role: UserRole.CLIENT_ADMIN,
         clientId: "Client-123",
       };
 
-      // Case-sensitive comparison
+      // Case-insensitive comparison — uppercase URL param matches lowercase stored id
       expect(canAccessClient(clientAdmin, "Client-123")).toBe(true);
-      expect(canAccessClient(clientAdmin, "client-123")).toBe(false);
+      expect(canAccessClient(clientAdmin, "client-123")).toBe(true);
     });
   });
 

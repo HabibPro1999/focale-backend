@@ -140,6 +140,7 @@ export function canAccessClient(
   clientId: string,
 ): boolean {
   if (user.role === UserRole.SUPER_ADMIN) return true;
-  if (user.role === UserRole.CLIENT_ADMIN) return user.clientId === clientId;
+  if (user.role === UserRole.CLIENT_ADMIN)
+    return user.clientId?.toLowerCase() === clientId?.toLowerCase();
   return false;
 }

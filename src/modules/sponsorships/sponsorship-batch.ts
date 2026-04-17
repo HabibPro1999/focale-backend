@@ -2,8 +2,10 @@ import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { logger } from "@shared/utils/logger.js";
+import { toInputJson } from "@shared/utils/json.js";
+import { recomputeSponsorshipAmount } from "@registrations";
 import {
-  generateUniqueCode,
+  generateSponsorshipCode,
   calculateApplicableAmount,
   validateCoveredAccessTimeOverlap,
   type RegistrationForCalculation,
@@ -13,7 +15,7 @@ import type {
   BeneficiaryInput,
   LinkedBeneficiaryInput,
 } from "./sponsorships.schema.js";
-import type { Prisma, Sponsorship } from "@/generated/prisma/client.js";
+import type { Sponsorship } from "@/generated/prisma/client.js";
 import type { TxClient } from "@shared/types/prisma.js";
 import {
   queueSponsorshipEmail,
@@ -69,7 +71,7 @@ type LinkedRegistrationForBatch = {
   priceBreakdown: unknown;
   paymentStatus: string;
   linkBaseUrl: string | null;
-  editToken: string | null;
+  // editToken removed — plaintext no longer stored post-harden_edit_token migration
 };
 
 type BatchValidationContext = {
@@ -322,7 +324,6 @@ async function validateBatchInput(
         accessTypeIds: true,
         priceBreakdown: true,
         linkBaseUrl: true,
-        editToken: true,
         paymentStatus: true,
       },
     });
@@ -368,7 +369,7 @@ async function createCodeModeSponsorships(
   const created: CreatedBatchSponsorship[] = [];
 
   for (const beneficiary of beneficiaries) {
-    const code = await generateUniqueCode(tx);
+    const code = generateSponsorshipCode();
     const totalAmount =
       (beneficiary.coversBasePrice ? basePrice : 0) +
       calculateCoveredAccessTotal(beneficiary.coveredAccessIds, accessPriceMap);
@@ -420,7 +421,7 @@ async function createLinkedModeSponsorships(
       );
     }
 
-    const code = await generateUniqueCode(tx);
+    const code = generateSponsorshipCode();
     const beneficiaryName =
       [registration.firstName, registration.lastName]
         .filter(Boolean)
@@ -550,6 +551,9 @@ async function createLinkedModeSponsorships(
 
     registration.sponsorshipAmount = updatedSponsorshipAmount;
 
+    // Recompute sponsorshipAmount + priceBreakdown totals from SponsorshipUsage rows
+    await recomputeSponsorshipAmount(tx, linked.registrationId);
+
     created.push({
       ...sponsorship,
       linkedRegistrationId: linked.registrationId,
@@ -636,7 +640,6 @@ async function queueBatchEmails(input: {
       const context = buildLinkedSponsorshipContext({
         amountApplied: entry.amountApplied,
         sponsorship: {
-          code: entry.sponsorship.code,
           beneficiaryName: entry.sponsorship.beneficiaryName,
           coversBasePrice: entry.sponsorship.coversBasePrice,
           coveredAccessIds: entry.sponsorship.coveredAccessIds,
@@ -752,10 +755,13 @@ export async function createSponsorshipBatch(
         contactName: sponsor.contactName,
         email: sponsor.email,
         phone: sponsor.phone ?? null,
-        formData: {
+        formData: toInputJson({
           sponsor,
           customFields: customFields ?? {},
-        } as Prisma.InputJsonValue,
+        }),
+        ...(input.idempotencyKey
+          ? { idempotencyKey: input.idempotencyKey }
+          : {}),
       },
     });
 

@@ -4,6 +4,7 @@ import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { calculateApplicableAmount } from "@shared/utils/sponsorship-math.js";
 import { evaluateConditions } from "@shared/utils/conditions.js";
+import { toInputJson, fromInputJson } from "@shared/utils/json.js";
 import type {
   UpdateEventPricingInput,
   CreateEmbeddedRuleInput,
@@ -39,7 +40,7 @@ export async function getEventPricing(
 
   return {
     ...pricing,
-    rules: (pricing.rules as unknown as EmbeddedPricingRule[]) ?? [],
+    rules: fromInputJson<EmbeddedPricingRule[]>(pricing.rules) ?? [],
   };
 }
 
@@ -69,7 +70,7 @@ export async function updateEventPricing(
       ...rule,
       id: rule.id ?? randomUUID(),
     }));
-    updateData.rules = rulesWithIds as Prisma.InputJsonValue;
+    updateData.rules = toInputJson(rulesWithIds);
   }
 
   // Payment Methods
@@ -92,7 +93,7 @@ export async function updateEventPricing(
 
   return {
     ...updated,
-    rules: (updated.rules as unknown as EmbeddedPricingRule[]) ?? [],
+    rules: fromInputJson<EmbeddedPricingRule[]>(updated.rules) ?? [],
   };
 }
 

@@ -20,6 +20,17 @@ import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import type { CreateEventAccessInput } from "./access.schema.js";
 
+// Subset of grouped-access item shape used by these assertions.
+// Source items are typed as `unknown` in TimeSlotSchema; tests inspect a few
+// known fields via this view type to avoid `any`.
+type AccessItemView = {
+  id: string;
+  type: string;
+  name: string;
+  isFull?: boolean;
+  spotsRemaining?: number | null;
+};
+
 // Helper to create EventAccess with all required fields including relations
 function createEventAccessWithRelations(
   overrides: Partial<ReturnType<typeof createMockEventAccess>> & {
@@ -578,7 +589,7 @@ describe("Access Service", () => {
       expect(result.groups.length).toBe(2);
       // Groups are organized by date, items within slots have type
       const allItems = result.groups.flatMap((g) =>
-        g.slots.flatMap((s) => s.items as any[]),
+        g.slots.flatMap((s) => s.items as AccessItemView[]),
       );
       const workshopItems = allItems.filter((i) => i.type === "WORKSHOP");
       const dinnerItems = allItems.filter((i) => i.type === "DINNER");
@@ -709,7 +720,7 @@ describe("Access Service", () => {
 
       // Only the 'available' item should be visible (no date restrictions)
       const allItems = result.groups.flatMap((g) =>
-        g.slots.flatMap((s) => s.items as any[]),
+        g.slots.flatMap((s) => s.items as AccessItemView[]),
       );
       expect(allItems).toHaveLength(1);
       expect(allItems[0].id).toBe("available");
@@ -744,7 +755,7 @@ describe("Access Service", () => {
         [],
       );
       const doctorItems = resultDoctor.groups.flatMap((g) =>
-        g.slots.flatMap((s) => s.items as any[]),
+        g.slots.flatMap((s) => s.items as AccessItemView[]),
       );
       expect(doctorItems).toHaveLength(2);
 
@@ -755,7 +766,7 @@ describe("Access Service", () => {
         [],
       );
       const nonDoctorItems = resultNonDoctor.groups.flatMap((g) =>
-        g.slots.flatMap((s) => s.items as any[]),
+        g.slots.flatMap((s) => s.items as AccessItemView[]),
       );
       expect(nonDoctorItems).toHaveLength(1);
     });
@@ -784,7 +795,7 @@ describe("Access Service", () => {
       // Without prerequisite selected - should only show SESSION (no prereq required)
       const resultWithoutPrereq = await getGroupedAccess(eventId, {}, []);
       const itemsNoPrereq = resultWithoutPrereq.groups.flatMap((g) =>
-        g.slots.flatMap((s) => s.items as any[]),
+        g.slots.flatMap((s) => s.items as AccessItemView[]),
       );
       const workshopItemsNoPrereq = itemsNoPrereq.filter(
         (i) => i.type === "WORKSHOP",
@@ -796,7 +807,7 @@ describe("Access Service", () => {
         prerequisiteId,
       ]);
       const itemsWithPrereq = resultWithPrereq.groups.flatMap((g) =>
-        g.slots.flatMap((s) => s.items as any[]),
+        g.slots.flatMap((s) => s.items as AccessItemView[]),
       );
       const workshopItemsWithPrereq = itemsWithPrereq.filter(
         (i) => i.type === "WORKSHOP",
@@ -805,6 +816,7 @@ describe("Access Service", () => {
     });
 
     it("should calculate spotsRemaining and isFull correctly and exclude full items", async () => {
+      // Capacity availability uses paidCount (settled seats), not registeredCount.
       const accessItems = [
         createEventAccessWithRelations({
           id: "full-workshop",
@@ -812,6 +824,7 @@ describe("Access Service", () => {
           type: "WORKSHOP",
           maxCapacity: 10,
           registeredCount: 10,
+          paidCount: 10,
           active: true,
         }),
         createEventAccessWithRelations({
@@ -820,6 +833,7 @@ describe("Access Service", () => {
           type: "WORKSHOP",
           maxCapacity: 20,
           registeredCount: 5,
+          paidCount: 5,
           active: true,
         }),
         createEventAccessWithRelations({
@@ -828,6 +842,7 @@ describe("Access Service", () => {
           type: "WORKSHOP",
           maxCapacity: null,
           registeredCount: 100,
+          paidCount: 100,
           active: true,
         }),
       ];
@@ -837,7 +852,7 @@ describe("Access Service", () => {
       const result = await getGroupedAccess(eventId, {}, []);
 
       const items = result.groups.flatMap((g) =>
-        g.slots.flatMap((s) => s.items as any[]),
+        g.slots.flatMap((s) => s.items as AccessItemView[]),
       );
 
       // Full item should be present but marked as full
@@ -925,7 +940,7 @@ describe("Access Service", () => {
       // Items are grouped by date, not by type
       expect(result.groups).toHaveLength(1);
       const items = result.groups.flatMap((g) =>
-        g.slots.flatMap((s) => s.items as any[]),
+        g.slots.flatMap((s) => s.items as AccessItemView[]),
       );
       expect(items).toHaveLength(1);
       expect(items[0].type).toBe("OTHER");
@@ -1492,6 +1507,166 @@ describe("Access Service", () => {
       expect(result.groups[0].dateKey).toBe("2025-06-01");
       expect(result.groups[1].dateKey).toBe("2025-06-02");
       expect(result.groups[2].dateKey).toBe("2025-06-03");
+    });
+  });
+
+  // ============================================================================
+  // Fix 3 — Audit entry contains sponsorshipAmount delta when access is dropped
+  // ============================================================================
+
+  describe("audit log — sponsorshipAmount delta on access drop", () => {
+    it("should include sponsorshipAmount before/after in ACCESS_DEACTIVATED audit entry", async () => {
+      const accessIdToDrop = "access-drop-1";
+      const regId = "reg-audit-1";
+
+      const existingAccess = createEventAccessWithRelations({
+        id: accessIdToDrop,
+        eventId,
+        name: "Sponsored Workshop",
+        active: true,
+        paidCount: 0,
+        event: { startDate: eventStartDate, endDate: eventEndDate },
+      });
+
+      const updatedAccess = { ...existingAccess, active: false };
+
+      // Registration with sponsorshipAmount = 100, access subtotal = 50
+      const priceBreakdown = {
+        basePrice: 200,
+        appliedRules: [],
+        calculatedBasePrice: 200,
+        accessItems: [
+          { accessId: accessIdToDrop, quantity: 1, name: "Sponsored Workshop", subtotal: 50 },
+        ],
+        accessTotal: 50,
+        subtotal: 250,
+        sponsorships: [],
+        sponsorshipTotal: 100,
+        total: 150,
+        currency: "TND",
+        droppedAccessItems: [],
+      };
+
+      const pendingReg = {
+        id: regId,
+        email: "test@example.com",
+        firstName: "Test",
+        lastName: "User",
+        accessTypeIds: [accessIdToDrop],
+        droppedAccessIds: [],
+        totalAmount: 150,
+        accessAmount: 50,
+        // sponsorshipAmount exceeds new subtotal (200) — will be trimmed to 200
+        sponsorshipAmount: 100,
+        priceBreakdown,
+      };
+
+      prismaMock.eventAccess.findUnique.mockResolvedValue(existingAccess as never);
+
+      prismaMock.$transaction.mockImplementation(
+        (fn: (tx: typeof prismaMock) => Promise<unknown>) => fn(prismaMock),
+      );
+
+      prismaMock.eventAccess.update.mockResolvedValue(updatedAccess as never);
+      prismaMock.registration.findMany.mockResolvedValue([pendingReg] as never);
+      // No sponsorship coverage — access will be dropped
+      prismaMock.sponsorshipUsage.findMany.mockResolvedValue([]);
+      prismaMock.registration.update.mockResolvedValue({} as never);
+      prismaMock.eventAccess.updateMany.mockResolvedValue({ count: 1 });
+      prismaMock.auditLog.create.mockResolvedValue({} as never);
+
+      await updateEventAccess(accessIdToDrop, { active: false });
+
+      expect(prismaMock.auditLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            action: "ACCESS_DEACTIVATED",
+            changes: expect.objectContaining({
+              sponsorshipAmount: {
+                old: 100,
+                // newSubtotal = 200, sponsorshipAmount was 100 → Math.min(100, 200) = 100 (unchanged)
+                new: 100,
+              },
+            }),
+          }),
+        }),
+      );
+    });
+
+    it("should record trimmed sponsorshipAmount when drop reduces subtotal below current sponsorship", async () => {
+      const accessIdToDrop = "access-drop-2";
+      const regId = "reg-audit-2";
+
+      const existingAccess = createEventAccessWithRelations({
+        id: accessIdToDrop,
+        eventId,
+        name: "Expensive Workshop",
+        active: true,
+        paidCount: 0,
+        event: { startDate: eventStartDate, endDate: eventEndDate },
+      });
+
+      const updatedAccess = { ...existingAccess, active: false };
+
+      // Registration: basePrice=100, accessSubtotal=200, sponsorshipAmount=250
+      // After drop: newSubtotal = 100. Math.min(250, 100) = 100 → trimmed
+      const priceBreakdown = {
+        basePrice: 100,
+        appliedRules: [],
+        calculatedBasePrice: 100,
+        accessItems: [
+          { accessId: accessIdToDrop, quantity: 1, name: "Expensive Workshop", subtotal: 200 },
+        ],
+        accessTotal: 200,
+        subtotal: 300,
+        sponsorships: [],
+        sponsorshipTotal: 250,
+        total: 50,
+        currency: "TND",
+        droppedAccessItems: [],
+      };
+
+      const pendingReg = {
+        id: regId,
+        email: "test2@example.com",
+        firstName: "Alice",
+        lastName: "Smith",
+        accessTypeIds: [accessIdToDrop],
+        droppedAccessIds: [],
+        totalAmount: 50,
+        accessAmount: 200,
+        sponsorshipAmount: 250,
+        priceBreakdown,
+      };
+
+      prismaMock.eventAccess.findUnique.mockResolvedValue(existingAccess as never);
+
+      prismaMock.$transaction.mockImplementation(
+        (fn: (tx: typeof prismaMock) => Promise<unknown>) => fn(prismaMock),
+      );
+
+      prismaMock.eventAccess.update.mockResolvedValue(updatedAccess as never);
+      prismaMock.registration.findMany.mockResolvedValue([pendingReg] as never);
+      prismaMock.sponsorshipUsage.findMany.mockResolvedValue([]);
+      prismaMock.registration.update.mockResolvedValue({} as never);
+      prismaMock.eventAccess.updateMany.mockResolvedValue({ count: 1 });
+      prismaMock.auditLog.create.mockResolvedValue({} as never);
+
+      await updateEventAccess(accessIdToDrop, { active: false });
+
+      expect(prismaMock.auditLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            action: "ACCESS_DEACTIVATED",
+            changes: expect.objectContaining({
+              sponsorshipAmount: {
+                old: 250,
+                new: 100, // trimmed to newSubtotal (100)
+              },
+            }),
+          }),
+        }),
+      );
     });
   });
 });

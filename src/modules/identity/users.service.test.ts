@@ -643,7 +643,12 @@ describe("Users Service", () => {
 
       prismaMock.user.findUnique.mockResolvedValue(existingUser);
       firebaseAuthMock.deleteUser.mockResolvedValue(undefined);
-      prismaMock.user.delete.mockResolvedValue(existingUser);
+
+      const txUserDelete = vi.fn().mockResolvedValue(existingUser);
+      
+      prismaMock.$transaction.mockImplementation(async (fn) => {
+        return fn({ ...prismaMock, user: { ...prismaMock.user, delete: txUserDelete } } as never);
+      });
 
       await deleteUser("user-123", "requester-id");
 
@@ -651,9 +656,7 @@ describe("Users Service", () => {
         where: { id: "user-123" },
       });
       expect(firebaseAuthMock.deleteUser).toHaveBeenCalledWith("user-123");
-      expect(prismaMock.user.delete).toHaveBeenCalledWith({
-        where: { id: "user-123" },
-      });
+      expect(txUserDelete).toHaveBeenCalledWith({ where: { id: "user-123" } });
     });
 
     it("should throw BAD_REQUEST when deleting own account", async () => {
@@ -690,7 +693,12 @@ describe("Users Service", () => {
       const superAdmin = createMockSuperAdmin({ id: "admin-123" });
 
       prismaMock.user.findUnique.mockResolvedValue(superAdmin);
-      prismaMock.user.count.mockResolvedValue(1);
+
+      
+      prismaMock.$transaction.mockImplementation(async (fn) => {
+        const txCount = vi.fn().mockResolvedValue(1);
+        return fn({ ...prismaMock, user: { ...prismaMock.user, count: txCount } } as never);
+      });
 
       await expect(deleteUser("admin-123", "requester-id")).rejects.toThrow(
         AppError,
@@ -709,16 +717,19 @@ describe("Users Service", () => {
       const superAdmin = createMockSuperAdmin({ id: "admin-123" });
 
       prismaMock.user.findUnique.mockResolvedValue(superAdmin);
-      prismaMock.user.count.mockResolvedValue(2);
       firebaseAuthMock.deleteUser.mockResolvedValue(undefined);
-      prismaMock.user.delete.mockResolvedValue(superAdmin);
+
+      const txCount = vi.fn().mockResolvedValue(2);
+      const txUserDelete = vi.fn().mockResolvedValue(superAdmin);
+      
+      prismaMock.$transaction.mockImplementation(async (fn) => {
+        return fn({ ...prismaMock, user: { ...prismaMock.user, count: txCount, delete: txUserDelete } } as never);
+      });
 
       await deleteUser("admin-123", "requester-id");
 
       expect(firebaseAuthMock.deleteUser).toHaveBeenCalledWith("admin-123");
-      expect(prismaMock.user.delete).toHaveBeenCalledWith({
-        where: { id: "admin-123" },
-      });
+      expect(txUserDelete).toHaveBeenCalledWith({ where: { id: "admin-123" } });
     });
 
     // ------------------------------------------------------------------
@@ -729,20 +740,23 @@ describe("Users Service", () => {
       const existingUser = createMockUser({ id: "user-123" });
 
       prismaMock.user.findUnique.mockResolvedValue(existingUser);
-      prismaMock.user.delete.mockResolvedValue(existingUser);
       firebaseAuthMock.deleteUser.mockRejectedValue(
         new Error("Firebase delete failed"),
       );
+
+      const txUserDelete = vi.fn().mockResolvedValue(existingUser);
+      
+      prismaMock.$transaction.mockImplementation(async (fn) => {
+        return fn({ ...prismaMock, user: { ...prismaMock.user, delete: txUserDelete } } as never);
+      });
 
       // Function should resolve, not reject — Firebase failure is swallowed
       await expect(
         deleteUser("user-123", "requester-id"),
       ).resolves.toBeUndefined();
 
-      // DB delete must have been called
-      expect(prismaMock.user.delete).toHaveBeenCalledWith({
-        where: { id: "user-123" },
-      });
+      // DB delete must have been called (inside tx)
+      expect(txUserDelete).toHaveBeenCalledWith({ where: { id: "user-123" } });
       // Firebase delete was attempted
       expect(firebaseAuthMock.deleteUser).toHaveBeenCalledWith("user-123");
     });
@@ -911,12 +925,14 @@ describe("Users Service", () => {
 
     it("should allow null clientId for new CLIENT_ADMIN when validated later", async () => {
       // This test verifies the service correctly validates that CLIENT_ADMIN must have clientId
+      // Cast to never to feed an explicitly null clientId where the type
+      // expects a string — exercises the runtime validation path.
       const input = {
         email: "test@example.com",
         password: "password123",
         name: "Test User",
         role: UserRole.CLIENT_ADMIN,
-        clientId: null as unknown as string, // Explicitly null
+        clientId: null as never,
       };
 
       prismaMock.user.findUnique.mockResolvedValue(null);

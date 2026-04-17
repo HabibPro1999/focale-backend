@@ -3,10 +3,13 @@ import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 
 /**
- * Extended Fastify instance type with Zod type provider.
- * Uses generic parameters to be compatible with any logger type.
+ * Fastify instance bound to the Zod type provider. The four leading generics
+ * (server / req / reply / logger) are deliberately `any` — Fastify's official
+ * typing for "use whatever the runtime provides" matches the concrete pino
+ * logger we configure in core/server.ts; pinning explicit types here drifts
+ * from the actual logger shape and breaks consumers.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- see comment above
 export type AppInstance = FastifyInstance<any, any, any, any, ZodTypeProvider>;
 
 declare module "fastify" {

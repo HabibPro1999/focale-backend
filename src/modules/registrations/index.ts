@@ -7,6 +7,7 @@
 export { getRegistrationById } from "./registrations.service.js";
 export { searchRegistrantsForSponsorship } from "./registrations.service.js";
 export { buildRegistrationWhere } from "./registrations.service.js";
+export { recomputeSponsorshipAmount } from "./registrations.service.js";
 
 // Schema consumed externally (certificates module)
 export { RegistrationRoleSchema } from "./registrations.schema.js";

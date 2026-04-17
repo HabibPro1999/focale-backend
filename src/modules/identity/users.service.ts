@@ -271,20 +271,24 @@ export async function deleteUser(
 
   const userToDelete = await assertUserExists(id);
 
-  if (userToDelete.role === UserRole.SUPER_ADMIN) {
-    const superAdminCount = await prisma.user.count({
-      where: { role: UserRole.SUPER_ADMIN, active: true },
-    });
-    if (superAdminCount <= 1) {
-      throw new AppError(
-        "Cannot delete the last super admin",
-        400,
-        ErrorCodes.BAD_REQUEST,
-      );
-    }
-  }
-
-  await prisma.user.delete({ where: { id } });
+  await prisma.$transaction(
+    async (tx) => {
+      if (userToDelete.role === UserRole.SUPER_ADMIN) {
+        const count = await tx.user.count({
+          where: { role: UserRole.SUPER_ADMIN, active: true },
+        });
+        if (count <= 1) {
+          throw new AppError(
+            "Cannot delete the last super admin",
+            400,
+            ErrorCodes.BAD_REQUEST,
+          );
+        }
+      }
+      await tx.user.delete({ where: { id } });
+    },
+    { isolationLevel: "Serializable" },
+  );
 
   invalidateUserCache(id);
 

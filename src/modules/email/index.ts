@@ -11,6 +11,7 @@ export {
   queueBulkCertificateEmails,
   processEmailQueue,
   getEmailQueueHealth,
+  repairStaleSendingRows,
 } from "./email-queue.service.js";
 
 // Context builders (consumed by sponsorship module)

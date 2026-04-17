@@ -302,20 +302,23 @@ model CertificateTemplate {
 // ============================================================================
 
 model SponsorshipBatch {
-  id          String   @id @default(uuid())
-  eventId     String   @map("event_id")
-  formId      String   @map("form_id")
+  id             String   @id @default(uuid())
+  eventId        String   @map("event_id")
+  formId         String   @map("form_id")
 
   // Sponsor (Lab) Information
-  labName     String   @map("lab_name")
-  contactName String   @map("contact_name")
-  email       String
-  phone       String?
+  labName        String   @map("lab_name")
+  contactName    String   @map("contact_name")
+  email          String
+  phone          String?
 
   // Full form submission (includes custom fields)
-  formData    Json     @map("form_data")
+  formData       Json     @map("form_data")
 
-  createdAt   DateTime @default(now()) @map("created_at")
+  // Client-supplied idempotency key for safe retries
+  idempotencyKey String?  @unique @map("idempotency_key")
+
+  createdAt      DateTime @default(now()) @map("created_at")
 
   // Relations
   event        Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
@@ -471,8 +474,10 @@ model Registration {
   // Self-service editing timestamp
   lastEditedAt DateTime? @map("last_edited_at")
 
-  // Self-service edit token (for secure public edit access)
-  editToken String? @unique @map("edit_token")
+  // Self-service edit token hash (SHA-256 hex of the 64-char random token sent to the registrant).
+  // Expiry is derived at verify-time: token valid while now < event.startDate (dynamic, no stored column).
+  // Option A rollout: editToken column dropped; existing tokens invalidated on deploy.
+  editTokenHash String? @unique @map("edit_token_hash")
 
   // Browser origin URL for email links (captured at registration time)
   linkBaseUrl String? @map("link_base_url")
@@ -651,6 +656,9 @@ model EmailLog {
 
   // Variable context (snapshot for debugging/retry)
   contextSnapshot Json? @map("context_snapshot")
+
+  // Dedup key for triggered emails — null for manual/bulk/sponsor sends (Fix 1)
+  idempotencyKey String? @unique @map("idempotency_key")
 
   // Timestamps
   queuedAt    DateTime  @default(now()) @map("queued_at")

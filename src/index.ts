@@ -2,7 +2,7 @@ import { buildServer } from "@core/server.js";
 import { config } from "@config/app.config.js";
 import { logger } from "@shared/utils/logger.js";
 import { gracefulShutdown } from "@core/shutdown.js";
-import { processEmailQueue } from "@modules/email/index.js";
+import { processEmailQueue, repairStaleSendingRows } from "@modules/email/index.js";
 import { prisma } from "@/database/client.js";
 
 // Global error handlers
@@ -48,6 +48,9 @@ async function waitForDatabase(
 async function main() {
   const server = await buildServer();
 
+  // Assigned after server.listen but referenced by the onClose hook registered
+  // before listen — closure capture forces `let`.
+  // eslint-disable-next-line prefer-const
   let emailQueueInterval: ReturnType<typeof setInterval> | undefined;
   let currentProcessing: Promise<void> | null = null;
 
@@ -70,6 +73,9 @@ async function main() {
 
   // Verify the database is reachable before starting background workers
   await waitForDatabase();
+
+  // Repair rows stuck in SENDING status from a prior crash (Fix 5)
+  await repairStaleSendingRows();
 
   // Start email queue worker (processes every 15 seconds for faster email delivery)
   let isProcessingEmails = false;

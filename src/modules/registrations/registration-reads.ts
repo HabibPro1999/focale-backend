@@ -31,9 +31,8 @@ export async function getRegistrationById(
   if (!registration) return null;
 
   const enriched = await enrichWithAccessSelections(registration);
-  // M23: strip editToken from admin responses
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { editToken: _, ...safeResult } = enriched;
+  // Strip editTokenHash from admin responses — never expose the stored hash
+  const { editTokenHash: _, ...safeResult } = enriched;
   return safeResult as RegistrationWithRelations;
 }
 

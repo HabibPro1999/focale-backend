@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { prismaMock } from '../../../tests/mocks/prisma.js';
+import { prismaMock, mockGroupBy } from '../../../tests/mocks/prisma.js';
 import { resetSendGridMock } from '../../../tests/mocks/sendgrid.js';
 import {
   createMockClient,
@@ -15,7 +15,8 @@ import {
   updateEmailStatusFromWebhook,
   getQueueStats,
 } from './email-queue.service.js';
-import type { EmailLog, EmailTemplate, Prisma } from '@/generated/prisma/client.js';
+import { Prisma } from '@/generated/prisma/client.js';
+import type { EmailLog, EmailTemplate } from '@/generated/prisma/client.js';
 import type { TiptapDocument } from './email.types.js';
 
 // Mock the email-sendgrid.service
@@ -69,7 +70,7 @@ function createMockEmailTemplate(overrides: Partial<EmailTemplate> = {}): EmailT
     name: faker.lorem.words(3),
     description: faker.lorem.sentence(),
     subject: 'Welcome {{firstName}}',
-    content: createMockTiptapDocument() as unknown as EmailTemplate['content'],
+    content: createMockTiptapDocument() as never,
     mjmlContent: '<mjml><mj-body></mj-body></mjml>',
     htmlContent: '<html><body>Hello {{firstName}}</body></html>',
     plainContent: 'Hello {{firstName}}',
@@ -98,6 +99,7 @@ function createMockEmailLog(overrides: Partial<EmailLog> = {}): EmailLog {
     retryCount: 0,
     maxRetries: 3,
     errorMessage: null,
+    idempotencyKey: null,
     queuedAt: faker.date.recent(),
     updatedAt: faker.date.recent(),
     sentAt: null,
@@ -235,6 +237,7 @@ describe('Email Queue Service', () => {
           registrationId,
           recipientEmail: 'test@example.com',
           recipientName: 'John Doe',
+          idempotencyKey: `${registrationId}:REGISTRATION_CREATED`,
         }),
       });
     });
@@ -249,6 +252,33 @@ describe('Email Queue Service', () => {
 
       expect(result).toBe(false);
       expect(prismaMock.emailLog.create).not.toHaveBeenCalled();
+    });
+
+    it('should return false and not throw when idempotencyKey conflicts (P2002)', async () => {
+      const mockTemplate = createMockEmailTemplate({
+        id: templateId,
+        trigger: 'REGISTRATION_CREATED',
+      });
+
+      vi.mocked(getTemplateByTrigger).mockResolvedValue(mockTemplate);
+
+      // Simulate a unique constraint violation on idempotency_key
+      const p2002Error = new Prisma.PrismaClientKnownRequestError(
+        'Unique constraint failed on the fields: (`idempotency_key`)',
+        { code: 'P2002', clientVersion: '5.0.0' },
+      );
+      prismaMock.emailLog.create.mockRejectedValue(p2002Error);
+
+      const result = await queueTriggeredEmail('REGISTRATION_CREATED', eventId, {
+        id: registrationId,
+        email: 'test@example.com',
+        firstName: 'John',
+        lastName: 'Doe',
+      });
+
+      expect(result).toBe(false);
+      // Exactly one insert attempt was made (no findFirst guard)
+      expect(prismaMock.emailLog.create).toHaveBeenCalledTimes(1);
     });
 
     it('should handle registration with only firstName', async () => {
@@ -353,11 +383,11 @@ describe('Email Queue Service', () => {
       };
 
       // Mock transaction
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prismaMock.$transaction.mockImplementation(async (callback: any) => {
-        return callback(prismaMock);
+      prismaMock.$transaction.mockImplementation(async (callback) => {
+        return callback(prismaMock as never);
       });
 
+      prismaMock.$queryRawUnsafe.mockResolvedValue([{ id: mockEmailLog.id }]);
       prismaMock.emailLog.findMany.mockResolvedValue([mockEmailLog]);
       prismaMock.emailLog.updateMany.mockResolvedValue({ count: 1 });
       prismaMock.emailLog.update.mockResolvedValue(mockEmailLog);
@@ -379,11 +409,11 @@ describe('Email Queue Service', () => {
         registration: null,
       };
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prismaMock.$transaction.mockImplementation(async (callback: any) => {
-        return callback(prismaMock);
+      prismaMock.$transaction.mockImplementation(async (callback) => {
+        return callback(prismaMock as never);
       });
 
+      prismaMock.$queryRawUnsafe.mockResolvedValue([{ id: mockEmailLog.id }]);
       prismaMock.emailLog.findMany.mockResolvedValue([mockEmailLog]);
       prismaMock.emailLog.updateMany.mockResolvedValue({ count: 1 });
       prismaMock.emailLog.update.mockResolvedValue(mockEmailLog);
@@ -402,11 +432,11 @@ describe('Email Queue Service', () => {
         registration: null,
       };
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prismaMock.$transaction.mockImplementation(async (callback: any) => {
-        return callback(prismaMock);
+      prismaMock.$transaction.mockImplementation(async (callback) => {
+        return callback(prismaMock as never);
       });
 
+      prismaMock.$queryRawUnsafe.mockResolvedValue([{ id: mockEmailLog.id }]);
       prismaMock.emailLog.findMany.mockResolvedValue([mockEmailLog]);
       prismaMock.emailLog.updateMany.mockResolvedValue({ count: 1 });
       prismaMock.emailLog.update.mockResolvedValue(mockEmailLog);
@@ -438,11 +468,11 @@ describe('Email Queue Service', () => {
         },
       };
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prismaMock.$transaction.mockImplementation(async (callback: any) => {
-        return callback(prismaMock);
+      prismaMock.$transaction.mockImplementation(async (callback) => {
+        return callback(prismaMock as never);
       });
 
+      prismaMock.$queryRawUnsafe.mockResolvedValue([{ id: mockEmailLog.id }]);
       prismaMock.emailLog.findMany.mockResolvedValue([mockEmailLog]);
       prismaMock.emailLog.updateMany.mockResolvedValue({ count: 1 });
       prismaMock.emailLog.update.mockResolvedValue(mockEmailLog);
@@ -481,11 +511,11 @@ describe('Email Queue Service', () => {
         },
       };
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prismaMock.$transaction.mockImplementation(async (callback: any) => {
-        return callback(prismaMock);
+      prismaMock.$transaction.mockImplementation(async (callback) => {
+        return callback(prismaMock as never);
       });
 
+      prismaMock.$queryRawUnsafe.mockResolvedValue([{ id: mockEmailLog.id }]);
       prismaMock.emailLog.findMany.mockResolvedValue([mockEmailLog]);
       prismaMock.emailLog.updateMany.mockResolvedValue({ count: 1 });
       prismaMock.emailLog.update.mockResolvedValue(mockEmailLog);
@@ -510,9 +540,8 @@ describe('Email Queue Service', () => {
     });
 
     it('should return empty result when queue is empty', async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prismaMock.$transaction.mockImplementation(async (callback: any) => {
-        return callback(prismaMock);
+      prismaMock.$transaction.mockImplementation(async (callback) => {
+        return callback(prismaMock as never);
       });
 
       prismaMock.emailLog.findMany.mockResolvedValue([]);
@@ -543,11 +572,11 @@ describe('Email Queue Service', () => {
         registration: null,
       };
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prismaMock.$transaction.mockImplementation(async (callback: any) => {
-        return callback(prismaMock);
+      prismaMock.$transaction.mockImplementation(async (callback) => {
+        return callback(prismaMock as never);
       });
 
+      prismaMock.$queryRawUnsafe.mockResolvedValue([{ id: mockEmailLog.id }]);
       prismaMock.emailLog.findMany.mockResolvedValue([mockEmailLog]);
       prismaMock.emailLog.updateMany.mockResolvedValue({ count: 1 });
       prismaMock.emailLog.update.mockResolvedValue(mockEmailLog);
@@ -568,11 +597,11 @@ describe('Email Queue Service', () => {
         registration: null, // No registration to build context from
       };
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prismaMock.$transaction.mockImplementation(async (callback: any) => {
-        return callback(prismaMock);
+      prismaMock.$transaction.mockImplementation(async (callback) => {
+        return callback(prismaMock as never);
       });
 
+      prismaMock.$queryRawUnsafe.mockResolvedValue([{ id: mockEmailLog.id }]);
       prismaMock.emailLog.findMany.mockResolvedValue([mockEmailLog]);
       prismaMock.emailLog.updateMany.mockResolvedValue({ count: 1 });
       prismaMock.emailLog.update.mockResolvedValue(mockEmailLog);
@@ -590,45 +619,53 @@ describe('Email Queue Service', () => {
     });
 
     it('should respect batch size parameter', async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prismaMock.$transaction.mockImplementation(async (callback: any) => {
-        return callback(prismaMock);
+      prismaMock.$transaction.mockImplementation(async (callback) => {
+        return callback(prismaMock as never);
       });
 
+      prismaMock.$queryRawUnsafe.mockResolvedValue([]);
       prismaMock.emailLog.findMany.mockResolvedValue([]);
 
       await processEmailQueue(25);
 
-      expect(prismaMock.emailLog.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          take: 50, // batchSize * 2 for backoff filtering
-        })
+      // Rows are now claimed via raw SQL UPDATE ... LIMIT N RETURNING.
+      // Assert the SQL was called with retry-threshold ($1) and batchSize ($2).
+      expect(prismaMock.$queryRawUnsafe).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(Number), // max retry threshold ($1)
+        25, // batchSize ($2)
       );
     });
 
     it('should only process emails that have not exceeded max retries', async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prismaMock.$transaction.mockImplementation(async (callback: any) => {
-        return callback(prismaMock);
+      prismaMock.$transaction.mockImplementation(async (callback) => {
+        return callback(prismaMock as never);
       });
 
+      prismaMock.$queryRawUnsafe.mockResolvedValue([]);
       prismaMock.emailLog.findMany.mockResolvedValue([]);
 
       await processEmailQueue();
 
-      expect(prismaMock.emailLog.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({
-            status: 'QUEUED',
-            retryCount: { lt: 4 },
-          }),
-        })
+      // The raw SQL hardcodes retry_count < $1. Verify the claim query is called.
+      expect(prismaMock.$queryRawUnsafe).toHaveBeenCalledWith(
+        expect.stringContaining('retry_count'),
+        expect.any(Number),
+        expect.any(Number),
       );
     });
   });
 
   describe('updateEmailStatusFromWebhook', () => {
     const emailLogId = 'log-123';
+
+    beforeEach(() => {
+      // Default current status to SENT — lets forward transitions (DELIVERED, OPENED,
+      // CLICKED, BOUNCED, DROPPED) proceed. Tests asserting terminal-skip can override.
+      prismaMock.emailLog.findUnique.mockResolvedValue({
+        status: 'SENT',
+      } as never);
+    });
 
     it('should update status to DELIVERED', async () => {
       prismaMock.emailLog.update.mockResolvedValue(createMockEmailLog());
@@ -747,8 +784,7 @@ describe('Email Queue Service', () => {
         { status: 'BOUNCED', _count: { status: 2 } },
       ];
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (prismaMock.emailLog.groupBy as any).mockResolvedValue(mockStats);
+      mockGroupBy(prismaMock.emailLog.groupBy, mockStats);
 
       const result = await getQueueStats();
 
@@ -762,8 +798,7 @@ describe('Email Queue Service', () => {
     });
 
     it('should return empty object when no emails in queue', async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (prismaMock.emailLog.groupBy as any).mockResolvedValue([]);
+      mockGroupBy(prismaMock.emailLog.groupBy, []);
 
       const result = await getQueueStats();
 
@@ -773,8 +808,7 @@ describe('Email Queue Service', () => {
     it('should handle single status in queue', async () => {
       const mockStats = [{ status: 'QUEUED', _count: { status: 5 } }];
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (prismaMock.emailLog.groupBy as any).mockResolvedValue(mockStats);
+      mockGroupBy(prismaMock.emailLog.groupBy, mockStats);
 
       const result = await getQueueStats();
 

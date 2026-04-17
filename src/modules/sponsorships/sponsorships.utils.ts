@@ -1,68 +1,39 @@
-import { randomInt } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import type { SponsorshipForCalculation } from "@shared/utils/sponsorship-math.js";
-
-// ============================================================================
-// Types for Prisma Client (works with both PrismaClient and transactions)
-// ============================================================================
-
-/**
- * Minimal interface for Prisma operations needed by sponsorship utilities.
- * This works with both the main PrismaClient and transaction clients.
- */
-interface PrismaLike {
-  sponsorship: {
-    findUnique: (args: {
-      where: { code: string };
-      select: { id: true };
-    }) => Promise<{ id: string } | null>;
-  };
-}
 
 // ============================================================================
 // Code Generation
 // ============================================================================
 
-// Characters for code generation (excluding O, I, L to avoid confusion)
-const CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
-const CODE_LENGTH = 8;
 const CODE_PREFIX = "SP-";
 
+// Crockford base32 alphabet: uppercase, excludes I/L/O/U to avoid confusion
+// when codes are hand-typed by doctors.
+const CROCKFORD_CHARS = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
 /**
- * Generate a sponsorship code in format SP-XXXX.
- * Uses characters: A-Z (except O, I, L) and 2-9.
+ * Generate a sponsorship code with ~128 bits of entropy.
+ * Format: SP-<26 Crockford-base32 chars>
+ *
+ * 16 random bytes → 128 bits; each base32 char encodes 5 bits → ceil(128/5) = 26 chars.
+ * DB unique constraint (@unique on Sponsorship.code) backstops any theoretical
+ * collision — Prisma P2002 will surface as a 500 on the (effectively impossible)
+ * collision path.
  */
 export function generateSponsorshipCode(): string {
+  const bytes = randomBytes(16); // 128 bits
+  let bits = 0n;
+  for (const byte of bytes) {
+    bits = (bits << 8n) | BigInt(byte);
+  }
+
   let code = "";
-  for (let i = 0; i < CODE_LENGTH; i++) {
-    const randomIndex = randomInt(CODE_CHARS.length);
-    code += CODE_CHARS[randomIndex];
+  for (let i = 0; i < 26; i++) {
+    code = CROCKFORD_CHARS[Number(bits & 0x1fn)] + code;
+    bits >>= 5n;
   }
+
   return `${CODE_PREFIX}${code}`;
-}
-
-/**
- * Generate a unique sponsorship code by checking against existing codes.
- * Retries up to maxAttempts times before throwing an error.
- */
-export async function generateUniqueCode(
-  db: PrismaLike,
-  maxAttempts = 10,
-): Promise<string> {
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const code = generateSponsorshipCode();
-    const existing = await db.sponsorship.findUnique({
-      where: { code },
-      select: { id: true },
-    });
-
-    if (!existing) {
-      return code;
-    }
-  }
-
-  throw new Error(
-    "Failed to generate unique sponsorship code after maximum attempts",
-  );
 }
 
 // ============================================================================

@@ -2,6 +2,8 @@ import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { logger } from "@shared/utils/logger.js";
+import { auditLog } from "@shared/utils/audit.js";
+import { toInputJson } from "@shared/utils/json.js";
 import type { TxClient } from "@shared/types/prisma.js";
 import type {
   CreateEventAccessInput,
@@ -221,7 +223,7 @@ export async function createEventAccess(
       availableFrom: data.availableFrom ?? null,
       availableTo: data.availableTo ?? null,
       conditions: data.conditions
-        ? (data.conditions as Prisma.InputJsonValue)
+        ? toInputJson(data.conditions)
         : Prisma.JsonNull,
       conditionLogic: data.conditionLogic ?? "AND",
       sortOrder: data.sortOrder ?? 0,
@@ -303,7 +305,7 @@ export async function updateEventAccess(
     updateData.conditions =
       data.conditions === null
         ? Prisma.JsonNull
-        : (data.conditions as Prisma.InputJsonValue);
+        : toInputJson(data.conditions);
   }
   if (data.conditionLogic !== undefined)
     updateData.conditionLogic = data.conditionLogic;
@@ -349,6 +351,20 @@ export async function updateEventAccess(
     updateData.requiredAccess = {
       set: requiredAccessIds.map((reqId) => ({ id: reqId })),
     };
+  }
+
+  // Reject numeric capacity decrease below current paidCount (settled registrations).
+  // Setting maxCapacity: null (unlimited) is always allowed regardless of paidCount.
+  if (
+    data.maxCapacity !== undefined &&
+    data.maxCapacity !== null &&
+    data.maxCapacity < access.paidCount
+  ) {
+    throw new AppError(
+      `Cannot set maxCapacity to ${data.maxCapacity}: ${access.paidCount} registrations are already settled`,
+      400,
+      ErrorCodes.CAPACITY_BELOW_REGISTERED,
+    );
   }
 
   // If capacity is being lowered, check if we need to drop unpaid registrations
@@ -627,6 +643,33 @@ export async function getAlreadyCoveredAccessIds(
 }
 
 /**
+ * Batch-fetch the set of access IDs covered by sponsorships for a list of registrations.
+ * Returns a Map keyed by registrationId → array of covered accessIds.
+ * Single query regardless of how many registrations are passed.
+ */
+async function fetchCoveredAccessIdsByRegistration(
+  db: Pick<CapacityReachedDbClient, "sponsorshipUsage">,
+  regIds: string[],
+): Promise<Map<string, string[]>> {
+  if (regIds.length === 0) return new Map();
+  const usages = await db.sponsorshipUsage.findMany({
+    where: { registrationId: { in: regIds } },
+    select: {
+      registrationId: true,
+      sponsorship: { select: { coveredAccessIds: true } },
+    },
+  });
+  const map = new Map<string, string[]>();
+  for (const usage of usages) {
+    if (!usage.registrationId) continue;
+    const existing = map.get(usage.registrationId) ?? [];
+    existing.push(...usage.sponsorship.coveredAccessIds);
+    map.set(usage.registrationId, existing);
+  }
+  return map;
+}
+
+/**
  * Strip an access item from all unsettled registrations.
  * Used when an access is deactivated — same cleanup as capacity-reached but
  * without the capacity check, and with reason "deactivated".
@@ -657,14 +700,16 @@ async function dropAccessFromUnsettledRegistrations(
     },
   });
 
+  // Batch-fetch sponsorship coverage for all affected registrations in one query
+  const coveredByReg = await fetchCoveredAccessIdsByRegistration(
+    db,
+    registrations.map((r) => r.id),
+  );
+
   let affected = 0;
   for (const reg of registrations) {
-    // Check if protected by sponsorship
-    const usages = await db.sponsorshipUsage.findMany({
-      where: { registrationId: reg.id },
-      select: { sponsorship: { select: { coveredAccessIds: true } } },
-    });
-    const allCoveredIds = usages.flatMap((u) => u.sponsorship.coveredAccessIds);
+    // Check if protected by sponsorship (use pre-fetched map — O(1) lookup)
+    const allCoveredIds = coveredByReg.get(reg.id) ?? [];
     if (allCoveredIds.includes(accessId)) continue;
 
     const breakdown = reg.priceBreakdown as PriceBreakdown;
@@ -696,7 +741,7 @@ async function dropAccessFromUnsettledRegistrations(
       data: {
         accessTypeIds: reg.accessTypeIds.filter((id) => id !== accessId),
         droppedAccessIds: [...(reg.droppedAccessIds ?? []), accessId],
-        priceBreakdown: updatedBreakdown as unknown as Prisma.InputJsonValue,
+        priceBreakdown: toInputJson(updatedBreakdown),
         totalAmount: newTotal,
         accessAmount: newAccessTotal,
         sponsorshipAmount: newSponsorshipTotal,
@@ -708,18 +753,17 @@ async function dropAccessFromUnsettledRegistrations(
 
     await releaseAccessSpot(accessId, droppedItem.quantity, db);
 
-    await db.auditLog.create({
-      data: {
-        entityType: "Registration",
-        entityId: reg.id,
-        action: "ACCESS_DEACTIVATED",
-        changes: {
-          accessDropped: { old: accessName, new: "deactivated" },
-          totalAmount: { old: reg.totalAmount, new: newTotal },
-          priceDeducted: { old: 0, new: droppedItem.subtotal },
-        } as unknown as Prisma.InputJsonValue,
-        performedBy: "SYSTEM",
+    await auditLog(db, {
+      entityType: "Registration",
+      entityId: reg.id,
+      action: "ACCESS_DEACTIVATED",
+      changes: {
+        accessDropped: { old: accessName, new: "deactivated" },
+        totalAmount: { old: reg.totalAmount, new: newTotal },
+        priceDeducted: { old: 0, new: droppedItem.subtotal },
+        sponsorshipAmount: { old: reg.sponsorshipAmount, new: newSponsorshipTotal },
       },
+      performedBy: "SYSTEM",
     });
 
     if (isNowFullyCovered) {
@@ -786,13 +830,15 @@ export async function handleCapacityReached(
       },
     });
 
+    // Batch-fetch sponsorship coverage for all affected registrations in one query
+    const coveredByReg = await fetchCoveredAccessIdsByRegistration(
+      db,
+      registrations.map((r) => r.id),
+    );
+
     for (const reg of registrations) {
-      // Check if this access is protected by a linked sponsorship (PARTIAL case)
-      const usages = await db.sponsorshipUsage.findMany({
-        where: { registrationId: reg.id },
-        select: { sponsorship: { select: { coveredAccessIds: true } } },
-      });
-      const allCoveredAccessIds = usages.flatMap((u) => u.sponsorship.coveredAccessIds);
+      // Check if this access is protected by a linked sponsorship (use pre-fetched map)
+      const allCoveredAccessIds = coveredByReg.get(reg.id) ?? [];
       if (allCoveredAccessIds.includes(accessId)) {
         continue; // This access is covered by sponsorship — don't drop it
       }
@@ -827,7 +873,7 @@ export async function handleCapacityReached(
         data: {
           accessTypeIds: reg.accessTypeIds.filter((id) => id !== accessId),
           droppedAccessIds: [...(reg.droppedAccessIds ?? []), accessId],
-          priceBreakdown: updatedBreakdown as unknown as Prisma.InputJsonValue,
+          priceBreakdown: toInputJson(updatedBreakdown),
           totalAmount: newTotal,
           accessAmount: newAccessTotal,
           sponsorshipAmount: newSponsorshipTotal,
@@ -840,18 +886,17 @@ export async function handleCapacityReached(
       // Release the registered_count spot
       await releaseAccessSpot(accessId, droppedItem.quantity, db);
 
-      await db.auditLog.create({
-        data: {
-          entityType: "Registration",
-          entityId: reg.id,
-          action: "ACCESS_CAPACITY_REACHED",
-          changes: {
-            accessDropped: { old: access.name, new: "capacity_reached" },
-            totalAmount: { old: reg.totalAmount, new: newTotal },
-            priceDeducted: { old: 0, new: droppedItem.subtotal },
-          } as unknown as Prisma.InputJsonValue,
-          performedBy: "SYSTEM",
+      await auditLog(db, {
+        entityType: "Registration",
+        entityId: reg.id,
+        action: "ACCESS_CAPACITY_REACHED",
+        changes: {
+          accessDropped: { old: access.name, new: "capacity_reached" },
+          totalAmount: { old: reg.totalAmount, new: newTotal },
+          priceDeducted: { old: 0, new: droppedItem.subtotal },
+          sponsorshipAmount: { old: reg.sponsorshipAmount, new: newSponsorshipTotal },
         },
+        performedBy: "SYSTEM",
       });
 
       if (isNowFullyCovered) {

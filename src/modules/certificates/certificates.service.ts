@@ -3,6 +3,7 @@ import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { getStorageProvider } from "@shared/services/storage/index.js";
 import { logger } from "@shared/utils/logger.js";
+import { toInputJson } from "@shared/utils/json.js";
 import { fileTypeFromBuffer } from "file-type";
 import sharp from "sharp";
 import type { Prisma } from "@/generated/prisma/client.js";
@@ -159,7 +160,7 @@ export async function updateTemplate(
 
   if (input.name !== undefined) data.name = input.name;
   if (input.zones !== undefined)
-    data.zones = input.zones as Prisma.InputJsonValue;
+    data.zones = toInputJson(input.zones);
   if (input.applicableRoles !== undefined)
     data.applicableRoles = input.applicableRoles;
   if (input.active !== undefined) data.active = input.active;

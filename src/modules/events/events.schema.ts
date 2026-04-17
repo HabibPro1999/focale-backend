@@ -12,9 +12,14 @@ export const CreateEventSchema = z
       .string()
       .min(1)
       .max(100)
-      .regex(
-        /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/,
-        "Slug must be lowercase alphanumeric with hyphens, dots, or underscores",
+      .transform((s) => s.toLowerCase().trim())
+      .pipe(
+        z
+          .string()
+          .regex(
+            /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/,
+            "Slug must be lowercase alphanumeric with hyphens, dots, or underscores",
+          ),
       ),
     description: z.string().optional().nullable(),
     maxCapacity: z.number().int().positive().optional().nullable(),
@@ -38,9 +43,14 @@ export const UpdateEventSchema = z
       .string()
       .min(1)
       .max(100)
-      .regex(
-        /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/,
-        "Slug must be lowercase alphanumeric with hyphens, dots, or underscores",
+      .transform((s) => s.toLowerCase().trim())
+      .pipe(
+        z
+          .string()
+          .regex(
+            /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/,
+            "Slug must be lowercase alphanumeric with hyphens, dots, or underscores",
+          ),
       )
       .optional(),
     description: z.string().optional().nullable(),

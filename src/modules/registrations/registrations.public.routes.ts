@@ -24,6 +24,7 @@ import {
 import { validateFormData, sanitizeFormData, type FormSchema } from "@forms";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { fromInputJson } from "@shared/utils/json.js";
 import { publicRateLimits } from "@core/plugins.js";
 import type { AppInstance } from "@shared/types/fastify.js";
 import type { FastifyRequest } from "fastify";
@@ -76,14 +77,11 @@ export async function registrationsPublicRoutes(
           input.idempotencyKey,
         );
         if (existingRegistration) {
-          // Return existing registration (idempotent response with 200)
-          const priceBreakdown = existingRegistration.priceBreakdown as unknown;
+          // Return existing registration (idempotent response with 200).
+          // Token is not re-transmitted — registrant should use the original email link.
           return reply.status(200).send({
-            registration: {
-              ...existingRegistration,
-              token: existingRegistration.editToken, // Map editToken to token for frontend compatibility
-            },
-            priceBreakdown,
+            registration: existingRegistration,
+            priceBreakdown: existingRegistration.priceBreakdown,
           });
         }
       }
@@ -102,7 +100,7 @@ export async function registrationsPublicRoutes(
 
       // Validate formData against form schema
       const validationResult = validateFormData(
-        form.schema as unknown as FormSchema,
+        fromInputJson<FormSchema>(form.schema),
         input.formData,
       );
       if (!validationResult.valid) {
@@ -116,7 +114,7 @@ export async function registrationsPublicRoutes(
 
       // Strip unknown keys — keep only field IDs from the form schema
       input.formData = sanitizeFormData(
-        form.schema as unknown as FormSchema,
+        fromInputJson<FormSchema>(form.schema),
         input.formData,
       );
 
@@ -155,8 +153,8 @@ export async function registrationsPublicRoutes(
         droppedAccessItems: [],
       };
 
-      // Create registration
-      const registration = await createRegistration(
+      // Create registration — returns { registration, editToken } (plaintext token for email link)
+      const { registration, editToken } = await createRegistration(
         input,
         registrationPriceBreakdown,
       );
@@ -164,7 +162,7 @@ export async function registrationsPublicRoutes(
       return reply.status(201).send({
         registration: {
           ...registration,
-          token: registration.editToken, // Map editToken to token for frontend compatibility
+          token: editToken, // Plaintext token for frontend to include in edit-link URL
         },
         priceBreakdown: registrationPriceBreakdown,
       });

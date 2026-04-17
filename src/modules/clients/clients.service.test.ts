@@ -236,8 +236,9 @@ describe("Clients Service", () => {
         prismaMock.client.findUnique.mockResolvedValue(existingClient);
         prismaMock.client.update.mockResolvedValue(updatedClient);
 
+        // Must include all existing modules plus the new one (no removal attempt)
         const result = await updateClient(clientId, {
-          enabledModules: ["sponsorships"],
+          enabledModules: ["pricing", "registrations", "sponsorships"],
         });
 
         // Should contain both existing and new modules
@@ -254,17 +255,8 @@ describe("Clients Service", () => {
         expect(result.enabledModules).toContain("sponsorships");
       });
 
-      it("should not remove existing modules when updating", async () => {
+      it("should throw BAD_REQUEST when attempting to remove existing modules", async () => {
         const existingClient = createMockClient({
-          id: clientId,
-          enabledModules: [
-            "pricing",
-            "registrations",
-            "sponsorships",
-            "emails",
-          ],
-        });
-        const updatedClient = createMockClient({
           id: clientId,
           enabledModules: [
             "pricing",
@@ -275,24 +267,18 @@ describe("Clients Service", () => {
         });
 
         prismaMock.client.findUnique.mockResolvedValue(existingClient);
-        prismaMock.client.update.mockResolvedValue(updatedClient);
 
-        await updateClient(clientId, {
-          enabledModules: ["pricing"], // Trying to set only pricing
+        await expect(
+          updateClient(clientId, {
+            enabledModules: ["pricing"], // Trying to set only pricing — removal attempt
+          }),
+        ).rejects.toMatchObject({
+          statusCode: 400,
+          code: ErrorCodes.BAD_REQUEST,
+          message: expect.stringContaining("Cannot disable modules via PATCH"),
         });
 
-        // Should still contain all modules (one-way enable)
-        expect(prismaMock.client.update).toHaveBeenCalledWith({
-          where: { id: clientId },
-          data: {
-            enabledModules: expect.arrayContaining([
-              "pricing",
-              "registrations",
-              "sponsorships",
-              "emails",
-            ]),
-          },
-        });
+        expect(prismaMock.client.update).not.toHaveBeenCalled();
       });
 
       it("should handle duplicate modules in update input", async () => {
@@ -586,22 +572,24 @@ describe("Clients Service", () => {
     it("should throw when client has both users and events", async () => {
       const mockClientWithDependencies = {
         ...createMockClient({ id: clientId }),
-        _count: { users: 2, events: 3 },
+        _count: { users: 2, events: 3, emailTemplates: 0 },
       };
 
       prismaMock.client.findUnique.mockResolvedValue(
         mockClientWithDependencies as never,
       );
 
-      await expect(deleteClient(clientId)).rejects.toThrow(
-        /Cannot delete client with 2 user\(s\) and 3 event\(s\)/,
-      );
+      await expect(deleteClient(clientId)).rejects.toMatchObject({
+        statusCode: 409,
+        code: ErrorCodes.CLIENT_HAS_DEPENDENCIES,
+        message: expect.stringContaining("users=2"),
+      });
     });
 
     it("should include _count in findUnique query", async () => {
       const mockClient = {
         ...createMockClient({ id: clientId }),
-        _count: { users: 0, events: 0 },
+        _count: { users: 0, events: 0, emailTemplates: 0 },
       };
 
       prismaMock.client.findUnique.mockResolvedValue(mockClient as never);
@@ -616,6 +604,7 @@ describe("Clients Service", () => {
             select: {
               users: true,
               events: true,
+              emailTemplates: true,
             },
           },
         },

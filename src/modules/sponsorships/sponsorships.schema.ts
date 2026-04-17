@@ -18,7 +18,7 @@ export const BeneficiaryInputSchema = z
     phone: z.string().max(50).optional(),
     address: z.string().max(500).optional(),
     coversBasePrice: z.boolean(),
-    coveredAccessIds: z.array(z.string().uuid()).default([]),
+    coveredAccessIds: z.array(z.string().uuid()).max(50).default([]),
   })
   .refine((data) => data.coversBasePrice || data.coveredAccessIds.length > 0, {
     message: "Must cover at least base price or one access item",
@@ -34,7 +34,7 @@ export const LinkedBeneficiaryInputSchema = z
   .strictObject({
     registrationId: z.string().uuid(),
     coversBasePrice: z.boolean(),
-    coveredAccessIds: z.array(z.string().uuid()).default([]),
+    coveredAccessIds: z.array(z.string().uuid()).max(50).default([]),
   })
   .refine((data) => data.coversBasePrice || data.coveredAccessIds.length > 0, {
     message: "Must cover base price or at least one access item",
@@ -65,6 +65,7 @@ export const CreateSponsorshipBatchSchema = z
   .strictObject({
     sponsor: SponsorInfoSchema,
     customFields: z.record(z.string(), z.unknown()).optional(),
+    idempotencyKey: z.string().min(8).max(100).optional(),
     beneficiaries: z.array(BeneficiaryInputSchema).max(100).optional(), // CODE mode
     linkedBeneficiaries: z
       .array(LinkedBeneficiaryInputSchema)
@@ -161,7 +162,7 @@ export const LinkSponsorshipByCodeSchema = z.strictObject({
   code: z
     .string()
     .min(4)
-    .max(10)
+    .max(32)
     .transform((val) => {
       // Normalize: uppercase, add prefix if missing
       const upper = val.toUpperCase().trim();

@@ -7,6 +7,7 @@ import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { paginate, getSkip } from "@shared/utils/pagination.js";
+import { toInputJson } from "@shared/utils/json.js";
 import {
   renderTemplateToMjml,
   compileMjmlToHtml,
@@ -85,7 +86,7 @@ export async function createEmailTemplate(input: {
       name: input.name,
       description: input.description ?? null,
       subject: input.subject,
-      content: input.content as unknown as Prisma.InputJsonValue,
+      content: toInputJson(input.content),
       mjmlContent,
       htmlContent,
       plainContent,
@@ -276,7 +277,7 @@ export async function updateEmailTemplate(
       }),
       ...(input.subject !== undefined && { subject: input.subject }),
       ...(input.content && {
-        content: input.content as unknown as Prisma.InputJsonValue,
+        content: toInputJson(input.content),
       }),
       ...compiledContent,
       ...(input.category !== undefined && { category: input.category }),
@@ -331,7 +332,7 @@ export async function duplicateEmailTemplate(
       name: newName || `${existing.name} (Copy)`,
       description: existing.description,
       subject: existing.subject,
-      content: existing.content as Prisma.InputJsonValue,
+      content: toInputJson(existing.content),
       mjmlContent: existing.mjmlContent,
       htmlContent: existing.htmlContent,
       plainContent: existing.plainContent,

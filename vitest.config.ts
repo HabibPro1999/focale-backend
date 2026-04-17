@@ -76,6 +76,7 @@ export default defineConfig({
         __dirname,
         "./src/modules/certificates/index.ts",
       ),
+      "@checkin": path.resolve(__dirname, "./src/modules/checkin/index.ts"),
     },
   },
 });

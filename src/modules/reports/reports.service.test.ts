@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, type Mock } from "vitest";
-import { prismaMock } from "../../../tests/mocks/prisma.js";
+import { describe, it, expect, beforeEach } from "vitest";
+import { prismaMock, asGroupByMock } from "../../../tests/mocks/prisma.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import {
@@ -8,10 +8,11 @@ import {
   exportRegistrations,
 } from "./reports.service.js";
 
-// Prisma's groupBy has complex generic overloads that vitest-mock-extended
-// cannot expose .mockResolvedValue on directly. Cast once here.
-const registrationGroupBy = prismaMock.registration.groupBy as unknown as Mock;
-const sponsorshipGroupBy = prismaMock.sponsorship.groupBy as unknown as Mock;
+// Prisma's `groupBy` overload signature blocks vitest-mock-extended from
+// exposing the standard Mock surface. asGroupByMock centralizes the necessary
+// type assertion in `tests/mocks/prisma.ts`.
+const registrationGroupBy = asGroupByMock(prismaMock.registration.groupBy);
+const sponsorshipGroupBy = asGroupByMock(prismaMock.sponsorship.groupBy);
 
 // ============================================================================
 // getFinancialReport
@@ -337,7 +338,7 @@ describe("exportRegistrations", () => {
 
     expect(result.filename).toMatch(/^my-event-registrations-.*\.json$/);
     expect(result.contentType).toBe("application/json");
-    expect(JSON.parse(result.data)).toEqual([]);
+    expect(JSON.parse(result.data as string)).toEqual([]);
   });
 
   it("should export CSV with correct headers and data", async () => {
@@ -373,7 +374,7 @@ describe("exportRegistrations", () => {
     expect(result.filename).toMatch(/^test-event-registrations-.*\.csv$/);
     expect(result.contentType).toBe("text/csv");
 
-    const lines = result.data.split("\n");
+    const lines = (result.data as string).split("\n");
     expect(lines[0]).toContain("ID");
     expect(lines[0]).toContain("Email");
     expect(lines[0]).toContain("company");
@@ -428,7 +429,7 @@ describe("exportRegistrations", () => {
     ] as never);
 
     const result = await exportRegistrations(eventId, { format: "csv" });
-    const header = result.data.split("\n")[0];
+    const header = (result.data as string).split("\n")[0];
 
     // Both dynamic keys should appear in the header (sorted alphabetically)
     expect(header).toContain("city");

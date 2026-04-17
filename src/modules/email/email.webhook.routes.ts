@@ -5,6 +5,7 @@ import {
   parseWebhookEvents,
 } from './email-sendgrid.service.js';
 import { updateEmailStatusFromWebhook } from './email-queue.service.js';
+import { publicRateLimits } from '@core/plugins.js';
 import type { AppInstance } from '@shared/types/fastify.js';
 
 const HANDLED_EVENTS = new Set([
@@ -29,7 +30,7 @@ export async function emailWebhookRoutes(app: AppInstance): Promise<void> {
     (_req, body, done) => done(null, body),
   );
 
-  app.post('/', async (request, reply) => {
+  app.post('/', { config: { rateLimit: publicRateLimits.emailWebhook } }, async (request, reply) => {
     const body = request.body as Buffer;
     const signature = request.headers[WebhookHeaders.SIGNATURE.toLowerCase()] as string;
     const timestamp = request.headers[WebhookHeaders.TIMESTAMP.toLowerCase()] as string;

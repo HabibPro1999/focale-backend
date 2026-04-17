@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { prismaMock } from "../../../tests/mocks/prisma.js";
+import { prismaMock, mockGroupBy } from "../../../tests/mocks/prisma.js";
 import {
   checkIn,
   getCheckInRegistrations,
@@ -7,6 +7,7 @@ import {
   getCheckInStats,
 } from "./checkin.service.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { Prisma } from "@/generated/prisma/client.js";
 
 const eventId = "event-001";
 const registrationId = "reg-001";
@@ -32,7 +33,7 @@ describe("Checkin Service", () => {
       prismaMock.registration.findUnique.mockResolvedValue(
         baseRegistration as never,
       );
-      prismaMock.registration.update.mockResolvedValue({} as never);
+      prismaMock.registration.updateMany.mockResolvedValue({ count: 1 } as never);
       prismaMock.auditLog.create.mockResolvedValue({} as never);
 
       const result = await checkIn(eventId, registrationId, undefined, userId);
@@ -41,9 +42,9 @@ describe("Checkin Service", () => {
       expect(result.alreadyCheckedIn).toBe(false);
       expect(result.checkedInAt).toBeInstanceOf(Date);
       expect(result.registration.id).toBe(registrationId);
-      expect(prismaMock.registration.update).toHaveBeenCalledWith(
+      expect(prismaMock.registration.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: registrationId },
+          where: { id: registrationId, checkedInAt: null },
           data: expect.objectContaining({ checkedInBy: userId }),
         }),
       );
@@ -51,25 +52,28 @@ describe("Checkin Service", () => {
 
     it("should return alreadyCheckedIn for event-level re-check-in", async () => {
       const checkedInAt = new Date("2026-04-03T10:00:00Z");
-      prismaMock.registration.findUnique.mockResolvedValue({
-        ...baseRegistration,
-        checkedInAt,
-        checkedInBy: userId,
-      } as never);
+      prismaMock.registration.findUnique
+        .mockResolvedValueOnce({
+          ...baseRegistration,
+          checkedInAt,
+          checkedInBy: userId,
+        } as never)
+        .mockResolvedValueOnce({ checkedInAt } as never);
+      // updateMany returns count: 0 because checkedInAt is already set
+      prismaMock.registration.updateMany.mockResolvedValue({ count: 0 } as never);
 
       const result = await checkIn(eventId, registrationId, undefined, userId);
 
       expect(result.success).toBe(true);
       expect(result.alreadyCheckedIn).toBe(true);
       expect(result.checkedInAt).toEqual(checkedInAt);
-      expect(prismaMock.registration.update).not.toHaveBeenCalled();
+      expect(prismaMock.auditLog.create).not.toHaveBeenCalled();
     });
 
     it("should perform access-level check-in", async () => {
       prismaMock.registration.findUnique.mockResolvedValue(
         baseRegistration as never,
       );
-      prismaMock.accessCheckIn.findUnique.mockResolvedValue(null);
       const createdAt = new Date("2026-04-03T11:00:00Z");
       prismaMock.accessCheckIn.create.mockResolvedValue({
         id: "aci-001",
@@ -95,6 +99,13 @@ describe("Checkin Service", () => {
         baseRegistration as never,
       );
       const existingAt = new Date("2026-04-03T09:00:00Z");
+      // Simulate concurrent insert: create throws P2002, then findUnique returns the existing row
+      prismaMock.accessCheckIn.create.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError("unique constraint", {
+          code: "P2002",
+          clientVersion: "test",
+        }),
+      );
       prismaMock.accessCheckIn.findUnique.mockResolvedValue({
         id: "aci-001",
         registrationId,
@@ -108,7 +119,7 @@ describe("Checkin Service", () => {
       expect(result.success).toBe(true);
       expect(result.alreadyCheckedIn).toBe(true);
       expect(result.checkedInAt).toEqual(existingAt);
-      expect(prismaMock.accessCheckIn.create).not.toHaveBeenCalled();
+      expect(prismaMock.auditLog.create).not.toHaveBeenCalled();
     });
 
     it("should throw when registration not found", async () => {
@@ -199,16 +210,21 @@ describe("Checkin Service", () => {
 
   describe("batchSync", () => {
     it("should count synced, already checked in, and errors", async () => {
+      const reg2CheckedInAt = new Date();
       prismaMock.registration.findUnique
         .mockResolvedValueOnce(baseRegistration as never)
         .mockResolvedValueOnce({
           ...baseRegistration,
           id: "reg-002",
-          checkedInAt: new Date(),
+          checkedInAt: reg2CheckedInAt,
         } as never)
+        .mockResolvedValueOnce({ checkedInAt: reg2CheckedInAt } as never)
         .mockResolvedValueOnce(null);
 
-      prismaMock.registration.update.mockResolvedValue({} as never);
+      // First check-in succeeds (count=1), second already checked in (count=0)
+      prismaMock.registration.updateMany
+        .mockResolvedValueOnce({ count: 1 } as never)
+        .mockResolvedValueOnce({ count: 0 } as never);
       prismaMock.auditLog.create.mockResolvedValue({} as never);
 
       const result = await batchSync(
@@ -233,10 +249,10 @@ describe("Checkin Service", () => {
       prismaMock.registration.count
         .mockResolvedValueOnce(100 as never)
         .mockResolvedValueOnce(42 as never);
-      prismaMock.accessCheckIn.groupBy.mockResolvedValue([
+      mockGroupBy(prismaMock.accessCheckIn.groupBy, [
         { accessId: "a1", _count: { id: 20 } },
         { accessId: "a2", _count: { id: 10 } },
-      ] as never);
+      ]);
       prismaMock.eventAccess.findMany.mockResolvedValue([
         { id: "a1", name: "Workshop", type: "workshop", registeredCount: 50 },
         { id: "a2", name: "Gala", type: "gala", registeredCount: 30 },
@@ -260,7 +276,7 @@ describe("Checkin Service", () => {
       prismaMock.registration.count
         .mockResolvedValueOnce(10 as never)
         .mockResolvedValueOnce(0 as never);
-      prismaMock.accessCheckIn.groupBy.mockResolvedValue([] as never);
+      mockGroupBy(prismaMock.accessCheckIn.groupBy, []);
       prismaMock.eventAccess.findMany.mockResolvedValue([
         { id: "a1", name: "Session", type: "session", registeredCount: 10 },
       ] as never);

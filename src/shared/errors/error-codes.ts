@@ -41,6 +41,7 @@ export const ErrorCodes = {
   EVENT_HAS_REGISTRATIONS: "EVT_8000",
   EVENT_NOT_OPEN: "EVT_8001",
   EVENT_FULL: "EVT_8002",
+  CAPACITY_BELOW_REGISTERED: "EVT_8003",
 
   // Registration (8xxx — shared numeric range with Events, use string prefix to disambiguate)
   REGISTRATION_NOT_FOUND: "REG_8001",
@@ -57,6 +58,7 @@ export const ErrorCodes = {
   REGISTRATION_WAIVED_ACCESS_BLOCKED: "REG_8012",
 
   // Form Validation (9xxx)
+  INVALID_FORM_SCHEMA: "FRM_9000",
   FORM_VALIDATION_ERROR: "FRM_9001",
   FORM_FIELD_REQUIRED: "FRM_9002",
   FORM_FIELD_INVALID_FORMAT: "FRM_9003",
@@ -76,6 +78,7 @@ export const ErrorCodes = {
   // State Transitions (12xxx)
   INVALID_STATUS_TRANSITION: "STT_12001",
   INVALID_PAYMENT_TRANSITION: "STT_12002",
+  EDIT_TOKEN_EXPIRED: "STT_12003",
 
   // Dependencies (13xxx)
   CLIENT_HAS_DEPENDENCIES: "DEP_13001",

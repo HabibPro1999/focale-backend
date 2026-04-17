@@ -27,8 +27,9 @@ export function buildEmailContext(
   // Get event slug for URL paths
   const slug = registration.event.slug || "";
 
-  // Use actual edit token for secure links
-  const token = registration.editToken || "";
+  // editToken is no longer stored in the DB (plaintext replaced by hash post-
+  // harden_edit_token migration). For email renders here the link is omitted.
+  const token = "";
 
   // Build base context
   const context: EmailContext = {
@@ -368,7 +369,6 @@ export interface BatchEmailContextInput {
 export interface LinkedSponsorshipContextInput {
   amountApplied: number;
   sponsorship: {
-    code: string;
     beneficiaryName: string;
     coversBasePrice: boolean;
     coveredAccessIds: string[];
@@ -389,7 +389,7 @@ export interface LinkedSponsorshipContextInput {
     baseAmount: number;
     sponsorshipAmount: number;
     linkBaseUrl: string | null;
-    editToken: string | null;
+    editToken?: string | null; // optional — plaintext no longer stored post-harden_edit_token migration
   };
   event: {
     name: string;
@@ -557,8 +557,7 @@ export function buildLinkedSponsorshipContext(
     bankAccountName: "",
     bankAccountNumber: "",
 
-    // Sponsorship info
-    sponsorshipCode: sponsorship.code,
+    // Sponsorship info (code intentionally excluded — admin-internal only)
     sponsorshipAmount: formatCurrency(input.amountApplied, currency),
     labName: sponsorship.batch.labName,
     labContactName: sponsorship.batch.contactName,

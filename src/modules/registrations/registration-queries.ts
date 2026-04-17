@@ -169,8 +169,6 @@ export async function searchRegistrantsForSponsorship(
       accessAmount: true,
       sponsorshipAmount: true,
       accessTypeIds: true,
-      phone: true,
-      formData: true,
       sponsorshipUsages: {
         select: {
           sponsorship: {
@@ -208,8 +206,6 @@ export async function searchRegistrantsForSponsorship(
       accessTypeIds: r.accessTypeIds,
       coveredAccessIds,
       isBasePriceCovered,
-      phone: r.phone,
-      formData: r.formData as Record<string, unknown> | null,
     };
   });
 }

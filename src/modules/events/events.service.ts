@@ -15,11 +15,16 @@ import type {
   UpdateEventInput,
   ListEventsQuery,
 } from "./events.schema.js";
-import type { Event, EventPricing, Prisma } from "@/generated/prisma/client.js";
+import { Prisma } from "@/generated/prisma/client.js";
+import type { Event, EventPricing } from "@/generated/prisma/client.js";
 import type { TxClient } from "@shared/types/prisma.js";
 
 // Transaction client type — minimal subset needed for raw capacity queries
 type TransactionClient = Pick<TxClient, "$executeRaw">;
+
+// Belt-and-suspenders size cap on banner uploads (10 MB).
+// @fastify/multipart may enforce its own limit; this guards compressImage from large payloads.
+const MAX_BANNER_SIZE_BYTES = 10 * 1024 * 1024;
 
 // Type for Event with pricing included
 type EventWithPricing = Event & { pricing: EventPricing | null };
@@ -51,44 +56,58 @@ export async function createEvent(
     throw new AppError("Client not found", 404, ErrorCodes.NOT_FOUND);
   }
 
-  // Check if slug already exists globally
-  const existing = await prisma.event.findUnique({
-    where: { slug },
-  });
-  if (existing) {
-    throw new AppError(
-      "Event with this slug already exists",
-      409,
-      ErrorCodes.CONFLICT,
-    );
+  // Create Event and EventPricing atomically.
+  // Slug uniqueness check is inside the transaction to prevent race conditions:
+  // two concurrent requests both seeing slug as free → one P2002 → caught → 409.
+  try {
+    return await prisma.$transaction(async (tx) => {
+      // Re-check slug inside transaction to close the TOCTOU window
+      const existing = await tx.event.findUnique({ where: { slug } });
+      if (existing) {
+        throw new AppError(
+          "Event with this slug already exists",
+          409,
+          ErrorCodes.CONFLICT,
+        );
+      }
+
+      const event = await tx.event.create({
+        data: {
+          clientId,
+          name,
+          slug,
+          description: description ?? null,
+          maxCapacity: maxCapacity ?? null,
+          startDate,
+          endDate,
+          location: location ?? null,
+          status: status ?? "CLOSED",
+        },
+      });
+
+      const pricing = await tx.eventPricing.create({
+        data: {
+          eventId: event.id,
+          basePrice: basePrice ?? 0,
+          currency: currency ?? "TND",
+        },
+      });
+
+      return { ...event, pricing };
+    });
+  } catch (err) {
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === "P2002"
+    ) {
+      throw new AppError(
+        "Event with this slug already exists",
+        409,
+        ErrorCodes.CONFLICT,
+      );
+    }
+    throw err;
   }
-
-  // Create Event and EventPricing atomically
-  return prisma.$transaction(async (tx) => {
-    const event = await tx.event.create({
-      data: {
-        clientId,
-        name,
-        slug,
-        description: description ?? null,
-        maxCapacity: maxCapacity ?? null,
-        startDate,
-        endDate,
-        location: location ?? null,
-        status: status ?? "CLOSED",
-      },
-    });
-
-    const pricing = await tx.eventPricing.create({
-      data: {
-        eventId: event.id,
-        basePrice: basePrice ?? 0,
-        currency: currency ?? "TND",
-      },
-    });
-
-    return { ...event, pricing };
-  });
 }
 
 /**
@@ -156,6 +175,20 @@ export async function updateEvent(
       400,
       ErrorCodes.VALIDATION_ERROR,
     );
+  }
+
+  // Guard against capacity decrease below current registered count
+  if (input.maxCapacity !== undefined && input.maxCapacity !== null) {
+    const registeredCount = await prisma.registration.count({
+      where: { eventId: id },
+    });
+    if (input.maxCapacity < registeredCount) {
+      throw new AppError(
+        `Cannot set capacity to ${input.maxCapacity}: ${registeredCount} registrations already exist`,
+        400,
+        ErrorCodes.CAPACITY_BELOW_REGISTERED,
+      );
+    }
   }
 
   // If slug is being updated, check global uniqueness
@@ -337,6 +370,14 @@ export async function uploadEventBanner(
       "Invalid file type. Only images are allowed.",
       400,
       ErrorCodes.INVALID_FILE_TYPE,
+    );
+  }
+
+  if (file.buffer.length > MAX_BANNER_SIZE_BYTES) {
+    throw new AppError(
+      `Banner image must be smaller than ${MAX_BANNER_SIZE_BYTES / (1024 * 1024)} MB`,
+      400,
+      ErrorCodes.FILE_TOO_LARGE,
     );
   }
 

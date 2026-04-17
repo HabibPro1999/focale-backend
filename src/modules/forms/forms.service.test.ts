@@ -16,6 +16,7 @@ import {
   getSponsorFormByEventSlug,
   getSponsorFormByEventId,
   createSponsorForm,
+  updateSponsorshipSettings,
 } from "./forms.service.js";
 import { validateFormData } from "./form-data-validator.js";
 
@@ -44,6 +45,20 @@ describe("Forms Service", () => {
   // ============================================================================
 
   describe("createForm", () => {
+    // Helper to set up $transaction mock for createForm (findFirst returns null → create returns form)
+    function mockCreateFormTx(mockForm: ReturnType<typeof createMockForm>) {
+      
+      prismaMock.$transaction.mockImplementation(async (callback) => {
+        const txMock = {
+          form: {
+            findFirst: vi.fn().mockResolvedValue(null),
+            create: vi.fn().mockResolvedValue(mockForm),
+          },
+        };
+        return callback(txMock as never);
+      });
+    }
+
     it("should create a form with provided schema", async () => {
       const mockForm = createMockForm({ eventId });
       const input = {
@@ -61,19 +76,11 @@ describe("Forms Service", () => {
       };
 
       vi.mocked(mockEventExists).mockResolvedValue(true);
-      prismaMock.form.findFirst.mockResolvedValue(null);
-      prismaMock.form.create.mockResolvedValue(mockForm);
+      mockCreateFormTx(mockForm);
 
       const result = await createForm(input);
 
       expect(result).toEqual(mockForm);
-      expect(prismaMock.form.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          eventId,
-          name: "Registration Form",
-          schema: input.schema,
-        }),
-      });
     });
 
     it("should create a form with default schema when none provided", async () => {
@@ -84,30 +91,41 @@ describe("Forms Service", () => {
       };
 
       vi.mocked(mockEventExists).mockResolvedValue(true);
-      prismaMock.form.findFirst.mockResolvedValue(null);
-      prismaMock.form.create.mockResolvedValue(mockForm);
+      
+      prismaMock.$transaction.mockImplementation(async (callback) => {
+        let capturedData: unknown;
+        const txMock = {
+          form: {
+            findFirst: vi.fn().mockResolvedValue(null),
+            create: vi.fn().mockImplementation(({ data }: { data: unknown }) => {
+              capturedData = data;
+              return Promise.resolve(mockForm);
+            }),
+          },
+        };
+        const result = await callback(txMock as never);
+        // Verify the default schema was used
+        expect(capturedData).toEqual(
+          expect.objectContaining({
+            schema: expect.objectContaining({
+              steps: expect.arrayContaining([
+                expect.objectContaining({
+                  title: "Informations personnelles",
+                  fields: expect.arrayContaining([
+                    expect.objectContaining({ type: "firstName" }),
+                    expect.objectContaining({ type: "lastName" }),
+                    expect.objectContaining({ type: "email" }),
+                    expect.objectContaining({ type: "phone" }),
+                  ]),
+                }),
+              ]),
+            }),
+          }),
+        );
+        return result;
+      });
 
       await createForm(input);
-
-      expect(prismaMock.form.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          eventId,
-          name: "Default Form",
-          schema: expect.objectContaining({
-            steps: expect.arrayContaining([
-              expect.objectContaining({
-                title: "Informations personnelles",
-                fields: expect.arrayContaining([
-                  expect.objectContaining({ type: "firstName" }),
-                  expect.objectContaining({ type: "lastName" }),
-                  expect.objectContaining({ type: "email" }),
-                  expect.objectContaining({ type: "phone" }),
-                ]),
-              }),
-            ]),
-          }),
-        }),
-      });
     });
 
     it("should create a form with successTitle and successMessage", async () => {
@@ -120,17 +138,29 @@ describe("Forms Service", () => {
       };
 
       vi.mocked(mockEventExists).mockResolvedValue(true);
-      prismaMock.form.findFirst.mockResolvedValue(null);
-      prismaMock.form.create.mockResolvedValue(mockForm);
+      
+      prismaMock.$transaction.mockImplementation(async (callback) => {
+        let capturedData: unknown;
+        const txMock = {
+          form: {
+            findFirst: vi.fn().mockResolvedValue(null),
+            create: vi.fn().mockImplementation(({ data }: { data: unknown }) => {
+              capturedData = data;
+              return Promise.resolve(mockForm);
+            }),
+          },
+        };
+        const result = await callback(txMock as never);
+        expect(capturedData).toEqual(
+          expect.objectContaining({
+            successTitle: "Thank you!",
+            successMessage: "Your registration is confirmed.",
+          }),
+        );
+        return result;
+      });
 
       await createForm(input);
-
-      expect(prismaMock.form.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          successTitle: "Thank you!",
-          successMessage: "Your registration is confirmed.",
-        }),
-      });
     });
 
     it("should throw when event does not exist", async () => {
@@ -156,13 +186,98 @@ describe("Forms Service", () => {
       };
 
       vi.mocked(mockEventExists).mockResolvedValue(true);
-      prismaMock.form.findFirst.mockResolvedValue(existingForm);
+      
+      prismaMock.$transaction.mockImplementation(async (callback) => {
+        const txMock = {
+          form: {
+            findFirst: vi.fn().mockResolvedValue(existingForm),
+            create: vi.fn(),
+          },
+        };
+        return callback(txMock as never);
+      });
 
       await expect(createForm(input)).rejects.toThrow(AppError);
       await expect(createForm(input)).rejects.toMatchObject({
         statusCode: 409,
         code: ErrorCodes.CONFLICT,
       });
+    });
+
+    it("should reject a provided schema with extra top-level keys (Fix 10 + Fix 1)", async () => {
+      vi.mocked(mockEventExists).mockResolvedValue(true);
+
+      const input = {
+        eventId,
+        name: "Bad Schema Form",
+        schema: {
+          steps: [],
+          extraKey: "should be rejected by strictObject",
+        } as never,
+      };
+
+      await expect(createForm(input)).rejects.toThrow(AppError);
+      await expect(createForm(input)).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.INVALID_FORM_SCHEMA,
+      });
+    });
+
+    it("should reject a provided schema with a field using an unknown type", async () => {
+      vi.mocked(mockEventExists).mockResolvedValue(true);
+
+      const input = {
+        eventId,
+        name: "Bad Field Type Form",
+        schema: {
+          steps: [
+            {
+              id: "step-1",
+              title: "Info",
+              fields: [{ id: "f1", type: "invalidType", label: "Name" }],
+            },
+          ],
+        } as never,
+      };
+
+      await expect(createForm(input)).rejects.toThrow(AppError);
+      await expect(createForm(input)).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.INVALID_FORM_SCHEMA,
+      });
+    });
+
+    it("should accept a valid provided schema and proceed to create", async () => {
+      const mockForm = createMockForm({ eventId });
+      vi.mocked(mockEventExists).mockResolvedValue(true);
+      // Transaction mock: findFirst returns null (no existing), create returns mockForm
+      
+      prismaMock.$transaction.mockImplementation(async (callback) => {
+        const txMock = {
+          form: {
+            findFirst: vi.fn().mockResolvedValue(null),
+            create: vi.fn().mockResolvedValue(mockForm),
+          },
+        };
+        return callback(txMock as never);
+      });
+
+      const input = {
+        eventId,
+        name: "Valid Schema Form",
+        schema: {
+          steps: [
+            {
+              id: "step-1",
+              title: "Info",
+              fields: [{ id: "f1", type: "text" as const, label: "Name" }],
+            },
+          ],
+        },
+      };
+
+      const result = await createForm(input);
+      expect(result).toEqual(mockForm);
     });
   });
 
@@ -655,45 +770,84 @@ describe("Forms Service", () => {
   });
 
   describe("createSponsorForm", () => {
+    // Helper to set up $transaction mock for createSponsorForm
+    function mockCreateSponsorFormTx(
+      mockForm: ReturnType<typeof createMockForm>,
+      existingForm: ReturnType<typeof createMockForm> | null = null,
+    ) {
+      
+      prismaMock.$transaction.mockImplementation(async (callback) => {
+        const txMock = {
+          form: {
+            findFirst: vi.fn().mockResolvedValue(existingForm),
+            create: vi.fn().mockResolvedValue(mockForm),
+          },
+        };
+        return callback(txMock as never);
+      });
+    }
+
     it("should create sponsor form with default schema", async () => {
       const mockForm = createMockForm({ eventId, type: "SPONSOR" });
 
       vi.mocked(mockEventExists).mockResolvedValue(true);
-      prismaMock.form.findFirst.mockResolvedValue(null);
-      prismaMock.form.create.mockResolvedValue(mockForm);
+      
+      prismaMock.$transaction.mockImplementation(async (callback) => {
+        let capturedData: unknown;
+        const txMock = {
+          form: {
+            findFirst: vi.fn().mockResolvedValue(null),
+            create: vi.fn().mockImplementation(({ data }: { data: unknown }) => {
+              capturedData = data;
+              return Promise.resolve(mockForm);
+            }),
+          },
+        };
+        const result = await callback(txMock as never);
+        expect(capturedData).toEqual(
+          expect.objectContaining({
+            eventId,
+            type: "SPONSOR",
+            name: "Formulaire Sponsor",
+            active: true,
+            schema: expect.objectContaining({
+              formType: "SPONSOR",
+              sponsorSteps: expect.any(Array),
+              beneficiaryTemplate: expect.any(Object),
+            }),
+          }),
+        );
+        return result;
+      });
 
       const result = await createSponsorForm(eventId);
-
       expect(result).toEqual(mockForm);
-      expect(prismaMock.form.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          eventId,
-          type: "SPONSOR",
-          name: "Formulaire Sponsor",
-          active: true,
-          schema: expect.objectContaining({
-            formType: "SPONSOR",
-            sponsorSteps: expect.any(Array),
-            beneficiaryTemplate: expect.any(Object),
-          }),
-        }),
-      });
     });
 
     it("should create sponsor form with custom name", async () => {
       const mockForm = createMockForm({ eventId, type: "SPONSOR" });
 
       vi.mocked(mockEventExists).mockResolvedValue(true);
-      prismaMock.form.findFirst.mockResolvedValue(null);
-      prismaMock.form.create.mockResolvedValue(mockForm);
+      
+      prismaMock.$transaction.mockImplementation(async (callback) => {
+        let capturedData: unknown;
+        const txMock = {
+          form: {
+            findFirst: vi.fn().mockResolvedValue(null),
+            create: vi.fn().mockImplementation(({ data }: { data: unknown }) => {
+              capturedData = data;
+              return Promise.resolve(mockForm);
+            }),
+          },
+        };
+        const result = await callback(txMock as never);
+        expect(capturedData).toEqual(
+          expect.objectContaining({ name: "Custom Sponsor Form" }),
+        );
+        return result;
+      });
 
       await createSponsorForm(eventId, "Custom Sponsor Form");
-
-      expect(prismaMock.form.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          name: "Custom Sponsor Form",
-        }),
-      });
     });
 
     it("should throw when event does not exist", async () => {
@@ -710,10 +864,105 @@ describe("Forms Service", () => {
       const existingForm = createMockForm({ eventId, type: "SPONSOR" });
 
       vi.mocked(mockEventExists).mockResolvedValue(true);
-      prismaMock.form.findFirst.mockResolvedValue(existingForm);
+      mockCreateSponsorFormTx(existingForm, existingForm);
 
       await expect(createSponsorForm(eventId)).rejects.toThrow(AppError);
       await expect(createSponsorForm(eventId)).rejects.toMatchObject({
+        statusCode: 409,
+        code: ErrorCodes.CONFLICT,
+      });
+    });
+  });
+
+  // ============================================================================
+  // updateSponsorshipSettings
+  // ============================================================================
+
+  describe("updateSponsorshipSettings", () => {
+    it("should throw when form not found", async () => {
+      prismaMock.form.findUnique.mockResolvedValue(null);
+
+      await expect(
+        updateSponsorshipSettings(formId, { sponsorshipMode: "CODE" }),
+      ).rejects.toMatchObject({
+        statusCode: 404,
+        code: ErrorCodes.NOT_FOUND,
+      });
+    });
+
+    it("should throw when form is not a SPONSOR form", async () => {
+      const mockForm = createMockForm({ id: formId, type: "REGISTRATION" });
+      prismaMock.form.findUnique.mockResolvedValue(mockForm);
+
+      await expect(
+        updateSponsorshipSettings(formId, { sponsorshipMode: "CODE" }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.BAD_REQUEST,
+      });
+    });
+
+    it("should update sponsorship settings successfully", async () => {
+      const defaultSchema = createDefaultSponsorSchema();
+      const mockForm = createMockForm({
+        id: formId,
+        type: "SPONSOR",
+        
+        schema: defaultSchema as never,
+      });
+      const updatedForm = createMockForm({ id: formId, type: "SPONSOR" });
+
+      prismaMock.form.findUnique.mockResolvedValue(mockForm);
+      prismaMock.sponsorshipBatch.count.mockResolvedValue(0);
+      prismaMock.form.update.mockResolvedValue(updatedForm);
+
+      const result = await updateSponsorshipSettings(formId, {
+        sponsorshipMode: "CODE",
+        autoApproveSponsorship: true,
+      });
+
+      expect(result).toEqual(updatedForm);
+    });
+
+    it("should reject settings merge that produces invalid schema (Fix 7)", async () => {
+      // Craft a schema that is valid as SponsorFormSchemaJson except sponsorshipSettings
+      // will be invalid after merge because we force an invalid sponsorshipMode
+      const defaultSchema = createDefaultSponsorSchema();
+      const mockForm = createMockForm({
+        id: formId,
+        type: "SPONSOR",
+        
+        schema: defaultSchema as never,
+      });
+
+      prismaMock.form.findUnique.mockResolvedValue(mockForm);
+      prismaMock.sponsorshipBatch.count.mockResolvedValue(0);
+
+      // Pass an invalid sponsorshipMode value to force safeParse failure after merge
+      await expect(
+        updateSponsorshipSettings(formId, {
+          sponsorshipMode: "INVALID_MODE" as "CODE",
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+      });
+    });
+
+    it("should throw when trying to change locked sponsorship mode", async () => {
+      const defaultSchema = createDefaultSponsorSchema();
+      const mockForm = createMockForm({
+        id: formId,
+        type: "SPONSOR",
+        
+        schema: defaultSchema as never,
+      });
+
+      prismaMock.form.findUnique.mockResolvedValue(mockForm);
+      prismaMock.sponsorshipBatch.count.mockResolvedValue(1); // Mode is locked
+
+      await expect(
+        updateSponsorshipSettings(formId, { sponsorshipMode: "LINKED_ACCOUNT" }),
+      ).rejects.toMatchObject({
         statusCode: 409,
         code: ErrorCodes.CONFLICT,
       });

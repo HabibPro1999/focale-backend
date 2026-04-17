@@ -171,11 +171,22 @@ export const AdminEditRegistrationSchema = z
     paymentProofUrl: z.string().url().nullable().optional(),
     note: z.string().max(2000).nullable().optional(),
     labName: z.string().max(200).nullable().optional(),
+    // State-machine override: admin can force an otherwise-invalid payment transition
+    // but must supply a reason (min 10 chars) for the audit trail.
+    force: z.boolean().optional(),
+    transitionReason: z.string().min(10).max(500).optional(),
   })
   .refine(
     (data) =>
       Object.values(data).some((v) => v !== undefined),
     { message: "At least one field must be provided for update" },
+  )
+  .refine(
+    (data) => !data.force || Boolean(data.transitionReason),
+    {
+      message: "transitionReason (min 10 chars) is required when force=true",
+      path: ["transitionReason"],
+    },
   );
 
 // ============================================================================
@@ -435,8 +446,6 @@ export const RegistrantSearchResultSchema = z.object({
   accessTypeIds: z.array(z.string()),
   coveredAccessIds: z.array(z.string()),
   isBasePriceCovered: z.boolean(),
-  phone: z.string().nullable(),
-  formData: z.record(z.string(), z.unknown()).nullable(),
 });
 
 export type SearchRegistrantsQuery = z.infer<

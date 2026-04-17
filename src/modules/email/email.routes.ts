@@ -17,6 +17,7 @@ import {
   resolveVariables,
 } from './email-variable.service.js';
 import { sendEmail } from './email-sendgrid.service.js';
+import { toInputJson } from '@shared/utils/json.js';
 import { queueBulkEmails, queueBulkSponsorEmails } from './email-queue.service.js';
 import { buildBatchEmailContext, buildEmailContextWithAccess } from './email-context.js';
 import {
@@ -25,7 +26,6 @@ import {
   extractPlainText,
 } from './email-renderer.service.js';
 import { prisma } from '@/database/client.js';
-import { Prisma } from '@/generated/prisma/client.js';
 import type { RegistrationWithRelations } from './email.types.js';
 import {
   EventIdParamSchema,
@@ -569,7 +569,7 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
           recipientName: recipientName ?? null,
           subject: resolvedSubject,
           status: 'SENDING',
-          contextSnapshot: context as unknown as Prisma.InputJsonValue,
+          contextSnapshot: toInputJson(context),
         },
       });
 

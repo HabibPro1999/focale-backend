@@ -10,7 +10,9 @@ import {
   type PaginatedResult,
 } from "@shared/utils/pagination.js";
 import { logger } from "@shared/utils/logger.js";
+import { toInputJson, fromInputJson } from "@shared/utils/json.js";
 import {
+  FormSchemaJsonSchema,
   SponsorFormSchemaJsonSchema,
   type CreateFormInput,
   type UpdateFormInput,
@@ -20,9 +22,9 @@ import {
   type SponsorshipSettings,
   type UpdateSponsorshipSettingsInput,
 } from "./forms.schema.js";
+import { Prisma } from "@/generated/prisma/client.js";
 import type {
   Form,
-  Prisma,
   Event,
   Client,
   EventAccess,
@@ -109,30 +111,59 @@ export async function createForm(input: CreateFormInput): Promise<Form> {
     throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
   }
 
-  // Check if event already has a registration form (enforced by unique constraint, but provide better error)
-  const existingForm = await prisma.form.findFirst({
-    where: { eventId, type: "REGISTRATION" },
-  });
-  if (existingForm) {
-    throw new AppError(
-      "Event already has a form. Update the existing form instead.",
-      409,
-      ErrorCodes.CONFLICT,
-    );
+  // Validate schema shape if provided (before entering transaction)
+  if (schema !== undefined) {
+    const schemaValidation = FormSchemaJsonSchema.safeParse(schema);
+    if (!schemaValidation.success) {
+      throw new AppError(
+        "Invalid form schema structure",
+        400,
+        ErrorCodes.INVALID_FORM_SCHEMA,
+      );
+    }
   }
 
   // Use provided schema or generate default
   const formSchema = schema ?? createDefaultSchema();
 
-  return prisma.form.create({
-    data: {
-      eventId,
-      name,
-      schema: formSchema as Prisma.InputJsonValue,
-      successTitle: successTitle ?? null,
-      successMessage: successMessage ?? null,
-    },
-  });
+  // Existence check + create in a single transaction to close the concurrent-insert race.
+  // DB unique constraint on (eventId, type) catches any slip through; P2002 → 409.
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const existingForm = await tx.form.findFirst({
+        where: { eventId, type: "REGISTRATION" },
+      });
+      if (existingForm) {
+        throw new AppError(
+          "Event already has a form. Update the existing form instead.",
+          409,
+          ErrorCodes.CONFLICT,
+        );
+      }
+
+      return tx.form.create({
+        data: {
+          eventId,
+          name,
+          schema: toInputJson(formSchema),
+          successTitle: successTitle ?? null,
+          successMessage: successMessage ?? null,
+        },
+      });
+    });
+  } catch (err) {
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === "P2002"
+    ) {
+      throw new AppError(
+        "Event already has a form. Update the existing form instead.",
+        409,
+        ErrorCodes.CONFLICT,
+      );
+    }
+    throw err;
+  }
 }
 
 /**
@@ -263,12 +294,12 @@ export async function updateForm(
     if (!isDeepStrictEqual(form.schema, input.schema)) {
       // For SPONSOR forms, validate sponsorship mode changes
       if (form.type === "SPONSOR") {
-        const currentSchema = form.schema as unknown as {
+        const currentSchema = fromInputJson<{
           sponsorshipSettings?: SponsorshipSettings;
-        };
-        const newSchema = input.schema as unknown as {
+        }>(form.schema);
+        const newSchema = fromInputJson<{
           sponsorshipSettings?: SponsorshipSettings;
-        };
+        }>(input.schema);
         const currentMode =
           currentSchema.sponsorshipSettings?.sponsorshipMode ?? "CODE";
         const newMode =
@@ -310,7 +341,7 @@ export async function updateForm(
         }
       }
 
-      updateData.schema = input.schema as Prisma.InputJsonValue;
+      updateData.schema = toInputJson(input.schema);
       // Auto-increment schema version when schema changes
       updateData.schemaVersion = { increment: 1 };
     }
@@ -413,7 +444,7 @@ export async function updateSponsorshipSettings(
   }
 
   // Get current schema and settings
-  const currentSchema = form.schema as unknown as SponsorFormSchemaJson;
+  const currentSchema = fromInputJson<SponsorFormSchemaJson>(form.schema);
   const currentMode =
     currentSchema.sponsorshipSettings?.sponsorshipMode ?? "CODE";
 
@@ -438,10 +469,20 @@ export async function updateSponsorshipSettings(
     },
   };
 
+  // Validate merged schema before persisting
+  const mergedValidation = SponsorFormSchemaJsonSchema.safeParse(updatedSchema);
+  if (!mergedValidation.success) {
+    throw new AppError(
+      "Invalid sponsor form schema after settings merge",
+      400,
+      ErrorCodes.INVALID_FORM_SCHEMA,
+    );
+  }
+
   return prisma.form.update({
     where: { id: formId },
     data: {
-      schema: updatedSchema as unknown as Prisma.InputJsonValue,
+      schema: toInputJson(updatedSchema),
     },
   });
 }
@@ -593,27 +634,44 @@ export async function createSponsorForm(
     throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
   }
 
-  // Check if event already has a sponsor form
-  const existingForm = await prisma.form.findFirst({
-    where: { eventId, type: "SPONSOR" },
-  });
-  if (existingForm) {
-    throw new AppError(
-      "Event already has a sponsor form. Update the existing form instead.",
-      409,
-      ErrorCodes.CONFLICT,
-    );
-  }
-
   const schema = createDefaultSponsorSchema();
 
-  return prisma.form.create({
-    data: {
-      eventId,
-      type: "SPONSOR",
-      name: name || "Formulaire Sponsor",
-      schema: schema as unknown as Prisma.JsonObject,
-      active: true,
-    },
-  });
+  // Existence check + create in a single transaction to close the concurrent-insert race.
+  // DB unique constraint on (eventId, type) catches any slip through; P2002 → 409.
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const existingForm = await tx.form.findFirst({
+        where: { eventId, type: "SPONSOR" },
+      });
+      if (existingForm) {
+        throw new AppError(
+          "Event already has a sponsor form. Update the existing form instead.",
+          409,
+          ErrorCodes.CONFLICT,
+        );
+      }
+
+      return tx.form.create({
+        data: {
+          eventId,
+          type: "SPONSOR",
+          name: name || "Formulaire Sponsor",
+          schema: toInputJson(schema),
+          active: true,
+        },
+      });
+    });
+  } catch (err) {
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === "P2002"
+    ) {
+      throw new AppError(
+        "Event already has a sponsor form. Update the existing form instead.",
+        409,
+        ErrorCodes.CONFLICT,
+      );
+    }
+    throw err;
+  }
 }

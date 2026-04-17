@@ -29,9 +29,17 @@ import {
 import { getTemplateByTrigger } from "@modules/email/email-template.service.js";
 import { queueBulkCertificateEmails } from "@modules/email/email-queue.service.js";
 import { buildEmailContextWithAccess } from "@modules/email/email-context.js";
+import sharp from "sharp";
+import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { logger } from "@shared/utils/logger.js";
+import { fromInputJson } from "@shared/utils/json.js";
 import { prisma } from "@/database/client.js";
 import type { AppInstance } from "@shared/types/fastify.js";
+
+// Maximum pixel dimensions for certificate template images
+const MAX_IMAGE_WIDTH = 4000;
+const MAX_IMAGE_HEIGHT = 3000;
 
 // ============================================================================
 // Protected Routes (Admin)
@@ -188,6 +196,17 @@ export async function certificatesRoutes(app: AppInstance): Promise<void> {
       }
 
       const buffer = await data.toBuffer();
+
+      // Enforce pixel dimension limit to prevent decompression bombs (Fix 6)
+      const meta = await sharp(buffer).metadata();
+      if ((meta.width ?? 0) > MAX_IMAGE_WIDTH || (meta.height ?? 0) > MAX_IMAGE_HEIGHT) {
+        throw new AppError(
+          `Image dimensions must not exceed ${MAX_IMAGE_WIDTH}×${MAX_IMAGE_HEIGHT} pixels`,
+          400,
+          ErrorCodes.FILE_TOO_LARGE,
+        );
+      }
+
       const template = await uploadTemplateImage(id, {
         buffer,
         filename: data.filename,
@@ -356,7 +375,7 @@ export async function certificatesRoutes(app: AppInstance): Promise<void> {
               [reg.firstName, reg.lastName].filter(Boolean).join(" ") || undefined,
             certificateTemplateIds: eligible.map((t) => t.id),
             certificateNames: eligible.map((t) => t.name),
-            contextSnapshot: context as unknown as Record<string, unknown>,
+            contextSnapshot: fromInputJson<Record<string, unknown>>(context),
           });
         }
       }

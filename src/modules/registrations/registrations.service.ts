@@ -4,6 +4,7 @@ import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { UserRole } from "@shared/constants/roles.js";
 import { logger } from "@shared/utils/logger.js";
 import { auditLog } from "@shared/utils/audit.js";
+import { toInputJson, fromInputJson } from "@shared/utils/json.js";
 import {
   incrementRegisteredCountTx,
   decrementRegisteredCountTx,
@@ -29,7 +30,7 @@ import type {
 import type { Prisma } from "@/generated/prisma/client.js";
 
 // Imports from extracted sub-modules
-import { generateEditToken } from "./edit-token.js";
+import { generateEditToken, hashEditToken } from "./edit-token.js";
 import {
   enrichWithAccessSelections,
   calculateDiscountAmount,
@@ -67,6 +68,58 @@ export {
   getRegistrationClientId,
   buildRegistrationWhere,
 } from "./registration-reads.js";
+
+// ============================================================================
+// Sponsorship Amount Recompute
+// ============================================================================
+
+/**
+ * Recompute sponsorshipAmount for a registration from SponsorshipUsage rows.
+ * Treats sponsorshipAmount as a derived invariant: SUM(SponsorshipUsage.amountApplied).
+ * Also updates priceBreakdown.sponsorshipTotal and priceBreakdown.total to match.
+ *
+ * Must be called inside a transaction after any mutation of SponsorshipUsage rows.
+ */
+export async function recomputeSponsorshipAmount(
+  tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
+  registrationId: string,
+): Promise<void> {
+  const usages = await tx.sponsorshipUsage.findMany({
+    where: { registrationId },
+    select: { amountApplied: true },
+  });
+  const newSponsorshipAmount = usages.reduce(
+    (sum, u) => sum + u.amountApplied,
+    0,
+  );
+
+  const registration = await tx.registration.findUnique({
+    where: { id: registrationId },
+    select: { priceBreakdown: true, baseAmount: true, accessAmount: true, discountAmount: true },
+  });
+  if (!registration) return;
+
+  const breakdown = (registration.priceBreakdown ?? {}) as Record<string, unknown>;
+  const updatedBreakdown = {
+    ...breakdown,
+    sponsorshipTotal: newSponsorshipAmount,
+    total: Math.max(
+      0,
+      (registration.baseAmount ?? 0) +
+        (registration.accessAmount ?? 0) -
+        (registration.discountAmount ?? 0) -
+        newSponsorshipAmount,
+    ),
+  };
+
+  await tx.registration.update({
+    where: { id: registrationId },
+    data: {
+      sponsorshipAmount: newSponsorshipAmount,
+      priceBreakdown: toInputJson(updatedBreakdown),
+    },
+  });
+}
 
 // ============================================================================
 // Capacity — Paid Count Sync
@@ -166,7 +219,7 @@ async function generateReferenceNumber(
 export async function createRegistration(
   input: CreateRegistrationInput,
   priceBreakdown: PriceBreakdown,
-): Promise<RegistrationWithRelations> {
+): Promise<{ registration: RegistrationWithRelations; editToken: string }> {
   const {
     formId,
     formData,
@@ -248,15 +301,17 @@ export async function createRegistration(
       throw new AppError("Event is at capacity", 409, ErrorCodes.EVENT_FULL);
     }
 
-    // Generate edit token for secure self-service editing
+    // Generate edit token for secure self-service editing.
+    // Store SHA-256 hash only; return plaintext to caller for inclusion in email link.
     const editToken = generateEditToken();
+    const editTokenHash = hashEditToken(editToken);
 
     // Create registration with relations in a single query
     const createdReg = await tx.registration.create({
       data: {
         formId,
         eventId,
-        formData: formData as Prisma.InputJsonValue,
+        formData: toInputJson(formData),
         formSchemaVersion: form.schemaVersion,
         email,
         firstName: firstName ?? null,
@@ -268,7 +323,7 @@ export async function createRegistration(
         labName: paymentMethod === "LAB_SPONSORSHIP" ? (labName ?? null) : null,
         totalAmount: priceBreakdown.total,
         currency: priceBreakdown.currency,
-        priceBreakdown: priceBreakdown as unknown as Prisma.InputJsonValue,
+        priceBreakdown: toInputJson(priceBreakdown),
         // Denormalized financial columns for reporting
         baseAmount: priceBreakdown.calculatedBasePrice,
         discountAmount: calculateDiscountAmount(priceBreakdown.appliedRules),
@@ -277,8 +332,8 @@ export async function createRegistration(
         sponsorshipAmount: priceBreakdown.sponsorshipTotal,
         // Access type IDs for querying
         accessTypeIds: accessSelections?.map((s) => s.accessId) ?? [],
-        // Edit token for secure public access
-        editToken,
+        // Store hash only — never the plaintext token
+        editTokenHash,
         // Browser origin URL for email links
         linkBaseUrl: linkBaseUrl ?? null,
         // Idempotency key for safe retries
@@ -315,23 +370,34 @@ export async function createRegistration(
       performedBy: "PUBLIC",
     });
 
-    return enrichWithAccessSelections(createdReg);
+    // Audit edit token generation (first 8 chars of the hash — never the plaintext token)
+    await auditLog(tx, {
+      entityType: "Registration",
+      entityId: createdReg.id,
+      action: "EDIT_TOKEN_GENERATED",
+      changes: {
+        editTokenHashPrefix: { old: null, new: editTokenHash.slice(0, 8) },
+      },
+      performedBy: "SYSTEM",
+    });
+
+    return { reg: await enrichWithAccessSelections(createdReg), editToken };
   });
 
   // Queue confirmation email (fire and forget - don't block registration response)
   queueTriggeredEmail("REGISTRATION_CREATED", eventId, {
-    id: result.id,
+    id: result.reg.id,
     email,
     firstName,
     lastName,
   }).catch((err) => {
     logger.error(
-      { err, registrationId: result.id },
+      { err, registrationId: result.reg.id },
       "Failed to queue confirmation email",
     );
   });
 
-  return result;
+  return { registration: result.reg, editToken: result.editToken };
 }
 
 // ============================================================================
@@ -447,7 +513,7 @@ export async function createAdminRegistration(
       data: {
         formId: form.id,
         eventId,
-        formData: formData as Prisma.InputJsonValue,
+        formData: toInputJson(formData),
         formSchemaVersion: form.schemaVersion,
         email,
         firstName,
@@ -461,14 +527,14 @@ export async function createAdminRegistration(
         labName: paymentMethod === "LAB_SPONSORSHIP" ? (labName ?? null) : null,
         totalAmount: priceBreakdown.total,
         currency: priceBreakdown.currency,
-        priceBreakdown: priceBreakdown as unknown as Prisma.InputJsonValue,
+        priceBreakdown: toInputJson(priceBreakdown),
         baseAmount: priceBreakdown.calculatedBasePrice,
         discountAmount: calculateDiscountAmount(priceBreakdown.appliedRules),
         accessAmount: calculatedPrice.accessTotal,
         sponsorshipAmount: 0,
         accessTypeIds: accessSelections?.map((s) => s.accessId) ?? [],
-        // Admin-created: no edit token, no idempotency key, no link base URL
-        editToken: null,
+        // Admin-created: no edit token hash (admin-created regs don't have self-service edit links)
+        editTokenHash: null,
         linkBaseUrl: null,
         idempotencyKey: null,
       },
@@ -501,7 +567,7 @@ export async function createAdminRegistration(
         {
           eventId,
           accessTypeIds: accessSelections?.map((s) => s.accessId) ?? [],
-          priceBreakdown: priceBreakdown as unknown,
+          priceBreakdown,
         },
         "PENDING",
         resolvedPaymentStatus,
@@ -726,7 +792,7 @@ export async function adminEditRegistration(
 
     // ── Form data ──────────────────────────────────────────────
     if (input.formData !== undefined) {
-      updateData.formData = input.formData as Prisma.InputJsonValue;
+      updateData.formData = toInputJson(input.formData);
       changes.formData = { old: "(previous)", new: "(updated)" };
     }
 
@@ -747,12 +813,20 @@ export async function adminEditRegistration(
       input.paymentStatus !== undefined &&
       input.paymentStatus !== registration.paymentStatus
     ) {
-      // No transition validation — admin override
+      // Validate payment status transition via state machine.
+      // If force=true and transitionReason is provided, skip validation but record override in audit.
+      if (!input.force) {
+        validatePaymentTransition(registration.paymentStatus, input.paymentStatus);
+      }
       updateData.paymentStatus = input.paymentStatus;
       changes.paymentStatus = {
         old: registration.paymentStatus,
         new: input.paymentStatus,
       };
+      if (input.force && input.transitionReason) {
+        changes.transitionReason = { old: null, new: input.transitionReason };
+        changes.forcedTransition = { old: null, new: true };
+      }
       if (
         (input.paymentStatus === "PAID" || input.paymentStatus === "SPONSORED" || input.paymentStatus === "WAIVED") &&
         !registration.paidAt
@@ -850,16 +924,17 @@ export async function adminEditRegistration(
       );
 
       // Update denormalized price fields
+      // Note: sponsorshipAmount is NOT set here — recomputeSponsorshipAmount
+      // will derive it from SponsorshipUsage rows after the update.
       updateData.totalAmount = priceBreakdown.total;
       updateData.baseAmount = priceBreakdown.calculatedBasePrice;
       updateData.accessAmount = priceBreakdown.accessTotal;
       updateData.discountAmount = calculateDiscountAmount(
         priceBreakdown.appliedRules,
       );
-      updateData.sponsorshipAmount = priceBreakdown.sponsorshipTotal ?? 0;
       updateData.accessTypeIds = input.accessSelections.map((s) => s.accessId);
       updateData.priceBreakdown =
-        priceBreakdown as unknown as Prisma.InputJsonValue;
+        toInputJson(priceBreakdown);
 
       changes.accessSelections = {
         old: oldAccessTypeIds,
@@ -875,6 +950,10 @@ export async function adminEditRegistration(
 
     await tx.registration.update({ where: { id }, data: updateData });
 
+    // Recompute sponsorshipAmount from SponsorshipUsage rows to keep it as a derived invariant.
+    // Called unconditionally so any drift from prior saves is also corrected.
+    await recomputeSponsorshipAmount(tx, id);
+
     // Sync paid count if payment status changed (admin override)
     // Use updated values if access selections were changed in this edit
     if (
@@ -884,7 +963,7 @@ export async function adminEditRegistration(
       const effectiveAccessTypeIds =
         (updateData.accessTypeIds as string[] | undefined) ?? registration.accessTypeIds;
       const effectivePriceBreakdown =
-        (updateData.priceBreakdown as unknown) ?? registration.priceBreakdown;
+        updateData.priceBreakdown ?? registration.priceBreakdown;
 
       await syncPaidCount(
         tx,
@@ -930,14 +1009,11 @@ export async function deleteRegistration(
   force?: boolean,
   requestingUserRole?: number,
 ): Promise<void> {
-  // Force-delete requires admin role (fast check before DB access)
-  if (
-    force &&
-    requestingUserRole !== UserRole.CLIENT_ADMIN &&
-    requestingUserRole !== UserRole.SUPER_ADMIN
-  ) {
+  // Force-delete requires CLIENT_ADMIN role (tenant-scoped). SUPER_ADMIN is
+  // platform-level and deliberately excluded from destructive client-data ops.
+  if (force && requestingUserRole !== UserRole.CLIENT_ADMIN) {
     throw new AppError(
-      "Only admins can force-delete registrations",
+      "Only client admins can force-delete registrations",
       403,
       ErrorCodes.FORBIDDEN,
     );
@@ -1324,7 +1400,7 @@ export async function editRegistrationPublic(
 
   // 5. Validate new form data against form schema
   if (input.formData) {
-    const formSchema = registration.form.schema as unknown as FormSchema;
+    const formSchema = fromInputJson<FormSchema>(registration.form.schema);
     const validationResult = validateFormData(formSchema, newFormData);
     if (!validationResult.valid) {
       throw new AppError(
@@ -1391,25 +1467,12 @@ export async function editRegistrationPublic(
     }
   }
 
-  // Price calculated before tx — stale pricing rules could affect this but the difference is bounded
-  // 9. Calculate new price breakdown
-  const selectedAccessItems = newAccessSelections.map((s) => ({
-    accessId: s.accessId,
-    quantity: s.quantity,
-  }));
+  // 9. Execute transaction — price calculation and registration re-read inside tx to prevent TOCTOU.
+  // NOTE: calculatePrice uses global prisma internally (no tx param), so sponsorship-code lookups
+  // within calculatePrice still use a separate connection. This is minimum-viable; a deeper refactor
+  // to thread a tx client into calculatePrice is deferred (see plan Fix 4 caveat).
+  let newPriceBreakdown!: PriceBreakdown;
 
-  const calculatedPrice = await calculatePrice(registration.eventId, {
-    formData: newFormData,
-    selectedAccessItems,
-    sponsorshipCodes: registration.sponsorshipCode
-      ? [registration.sponsorshipCode]
-      : [],
-  });
-
-  // calculatePrice already returns PriceBreakdown with the exact stored shape
-  const newPriceBreakdown: PriceBreakdown = calculatedPrice;
-
-  // 10. Execute transaction — registration re-read inside tx to prevent TOCTOU
   await prisma.$transaction(async (tx) => {
     // Re-read the registration inside the transaction to get consistent state
     const currentRegistration = await tx.registration.findUnique({
@@ -1419,6 +1482,7 @@ export async function editRegistrationPublic(
         paidAmount: true,
         totalAmount: true,
         sponsorshipAmount: true,
+        sponsorshipCode: true,
         firstName: true,
         lastName: true,
         phone: true,
@@ -1451,6 +1515,20 @@ export async function editRegistrationPublic(
       );
     }
 
+    // Calculate price inside tx using fresh sponsorship code from re-read registration
+    const selectedAccessItems = newAccessSelections.map((s) => ({
+      accessId: s.accessId,
+      quantity: s.quantity,
+    }));
+    const calculatedPrice = await calculatePrice(registration.eventId, {
+      formData: newFormData,
+      selectedAccessItems,
+      sponsorshipCodes: currentRegistration.sponsorshipCode
+        ? [currentRegistration.sponsorshipCode]
+        : [],
+    });
+    newPriceBreakdown = calculatedPrice;
+
     // Reserve new access spots
     // Pass tx so reservation is rolled back if the transaction fails
     await Promise.all(
@@ -1476,12 +1554,12 @@ export async function editRegistrationPublic(
     await tx.registration.update({
       where: { id: registrationId },
       data: {
-        formData: newFormData as Prisma.InputJsonValue,
+        formData: toInputJson(newFormData),
         firstName: input.firstName ?? currentRegistration.firstName,
         lastName: input.lastName ?? currentRegistration.lastName,
         phone: input.phone ?? currentRegistration.phone,
         totalAmount: newTotalAmount,
-        priceBreakdown: newPriceBreakdown as unknown as Prisma.InputJsonValue,
+        priceBreakdown: toInputJson(newPriceBreakdown),
         baseAmount: newPriceBreakdown.calculatedBasePrice,
         accessAmount: newPriceBreakdown.accessTotal,
         discountAmount: calculateDiscountAmount(newPriceBreakdown.appliedRules),

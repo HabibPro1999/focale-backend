@@ -1,4 +1,5 @@
 import { prisma } from "@/database/client.js";
+import { Prisma } from "@/generated/prisma/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { auditLog } from "@shared/utils/audit.js";
@@ -45,6 +46,15 @@ export async function checkIn(
     );
   }
 
+  const registrationView = {
+    id: registration.id,
+    firstName: registration.firstName,
+    lastName: registration.lastName,
+    email: registration.email,
+    referenceNumber: registration.referenceNumber,
+    paymentStatus: registration.paymentStatus,
+  };
+
   // Access-level check-in
   if (accessId) {
     if (!registration.accessTypeIds.includes(accessId)) {
@@ -55,81 +65,67 @@ export async function checkIn(
       );
     }
 
-    const existing = await prisma.accessCheckIn.findUnique({
-      where: {
-        registrationId_accessId: { registrationId, accessId },
-      },
-    });
+    // Atomic insert: rely on @@unique([registrationId, accessId]) to detect races.
+    // On P2002, another concurrent request already checked in — return the existing row.
+    try {
+      const checkInRecord = await prisma.accessCheckIn.create({
+        data: { registrationId, accessId, checkedInBy: userId },
+      });
 
-    if (existing) {
+      await auditLog(prisma, {
+        entityType: "AccessCheckIn",
+        entityId: checkInRecord.id,
+        action: "CHECK_IN",
+        changes: { accessId: { old: null, new: accessId } },
+        performedBy: userId,
+      });
+
       return {
         success: true,
-        alreadyCheckedIn: true,
-        checkedInAt: existing.checkedInAt,
-        registration: {
-          id: registration.id,
-          firstName: registration.firstName,
-          lastName: registration.lastName,
-          email: registration.email,
-          referenceNumber: registration.referenceNumber,
-          paymentStatus: registration.paymentStatus,
-        },
+        alreadyCheckedIn: false,
+        checkedInAt: checkInRecord.checkedInAt,
+        registration: registrationView,
       };
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === "P2002"
+      ) {
+        const existing = await prisma.accessCheckIn.findUnique({
+          where: { registrationId_accessId: { registrationId, accessId } },
+        });
+        return {
+          success: true,
+          alreadyCheckedIn: true,
+          checkedInAt: existing?.checkedInAt ?? new Date(),
+          registration: registrationView,
+        };
+      }
+      throw err;
     }
-
-    const checkInRecord = await prisma.accessCheckIn.create({
-      data: {
-        registrationId,
-        accessId,
-        checkedInBy: userId,
-      },
-    });
-
-    await auditLog(prisma, {
-      entityType: "AccessCheckIn",
-      entityId: checkInRecord.id,
-      action: "CHECK_IN",
-      changes: { accessId: { old: null, new: accessId } },
-      performedBy: userId,
-    });
-
-    return {
-      success: true,
-      alreadyCheckedIn: false,
-      checkedInAt: checkInRecord.checkedInAt,
-      registration: {
-        id: registration.id,
-        firstName: registration.firstName,
-        lastName: registration.lastName,
-        email: registration.email,
-        referenceNumber: registration.referenceNumber,
-        paymentStatus: registration.paymentStatus,
-      },
-    };
   }
 
-  // Event-level check-in
-  if (registration.checkedInAt) {
+  // Event-level check-in — atomic guard via updateMany with where.checkedInAt = null.
+  // If count === 0, another concurrent request already checked in.
+  const now = new Date();
+  const result = await prisma.registration.updateMany({
+    where: { id: registrationId, checkedInAt: null },
+    data: { checkedInAt: now, checkedInBy: userId },
+  });
+
+  if (result.count === 0) {
+    // Already checked in (either pre-existing or by a concurrent request)
+    const current = await prisma.registration.findUnique({
+      where: { id: registrationId },
+      select: { checkedInAt: true },
+    });
     return {
       success: true,
       alreadyCheckedIn: true,
-      checkedInAt: registration.checkedInAt,
-      registration: {
-        id: registration.id,
-        firstName: registration.firstName,
-        lastName: registration.lastName,
-        email: registration.email,
-        referenceNumber: registration.referenceNumber,
-        paymentStatus: registration.paymentStatus,
-      },
+      checkedInAt: current?.checkedInAt ?? now,
+      registration: registrationView,
     };
   }
-
-  const now = new Date();
-  await prisma.registration.update({
-    where: { id: registrationId },
-    data: { checkedInAt: now, checkedInBy: userId },
-  });
 
   await auditLog(prisma, {
     entityType: "Registration",
@@ -143,14 +139,7 @@ export async function checkIn(
     success: true,
     alreadyCheckedIn: false,
     checkedInAt: now,
-    registration: {
-      id: registration.id,
-      firstName: registration.firstName,
-      lastName: registration.lastName,
-      email: registration.email,
-      referenceNumber: registration.referenceNumber,
-      paymentStatus: registration.paymentStatus,
-    },
+    registration: registrationView,
   };
 }
 

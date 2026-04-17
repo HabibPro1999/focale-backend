@@ -1,6 +1,9 @@
 import { prisma } from "@/database/client.js";
-import type { Prisma } from "@/generated/prisma/client.js";
-import type { TxClient } from "@shared/types/prisma.js";
+import { toInputJson } from "./json.js";
+
+type AuditLogClient = {
+  auditLog: Pick<typeof prisma.auditLog, "create">;
+};
 
 export interface AuditLogData {
   entityType: string;
@@ -13,13 +16,12 @@ export interface AuditLogData {
 }
 
 /**
- * Create an audit log entry inside or outside a transaction.
- *
- * @param client - Prisma transaction client (tx) or the bare prisma singleton
- * @param data   - Audit log payload
+ * Create an audit log entry. Accepts the bare prisma singleton, a transaction
+ * client, or any narrowed client that exposes `auditLog.create` (e.g. the
+ * scoped DB clients in access.service.ts).
  */
 export async function auditLog(
-  client: TxClient | typeof prisma,
+  client: AuditLogClient,
   data: AuditLogData,
 ): Promise<void> {
   await client.auditLog.create({
@@ -27,7 +29,7 @@ export async function auditLog(
       entityType: data.entityType,
       entityId: data.entityId,
       action: data.action,
-      changes: data.changes as Prisma.InputJsonValue | undefined,
+      changes: data.changes ? toInputJson(data.changes) : undefined,
       performedBy: data.performedBy ?? null,
       ipAddress: data.ipAddress ?? null,
       userAgent: data.userAgent ?? null,
