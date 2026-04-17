@@ -18,6 +18,8 @@ import {
   getAlreadyCoveredAccessIds,
 } from "@access";
 import type { PriceBreakdown } from "@pricing";
+import { eventBus } from "@core/events/bus.js";
+import type { AppEvent } from "@core/events/types.js";
 
 // ============================================================================
 // Payment Status State Machine
@@ -100,6 +102,7 @@ export async function confirmPayment(
   let firstName: string | null = null;
   let lastName: string | null = null;
 
+  const pending: AppEvent[] = [];
   await prisma.$transaction(async (tx) => {
     const oldRegistration = await tx.registration.findUnique({
       where: { id },
@@ -116,6 +119,7 @@ export async function confirmPayment(
         totalAmount: true,
         accessTypeIds: true,
         priceBreakdown: true,
+        event: { select: { clientId: true } },
       },
     });
 
@@ -224,7 +228,35 @@ export async function confirmPayment(
     email = oldRegistration.email;
     firstName = oldRegistration.firstName;
     lastName = oldRegistration.lastName;
+
+    // Accumulate realtime events (reuses wasSettled/isSettled from above)
+    const clientId = oldRegistration.event?.clientId;
+    if (clientId) {
+      pending.push({
+        type:
+          !wasSettled && isSettled
+            ? "registration.paymentConfirmed"
+            : "registration.updated",
+        clientId,
+        eventId: oldRegistration.eventId,
+        payload: { id, paymentStatus: input.paymentStatus },
+        ts: Date.now(),
+      });
+      if (wasSettled !== isSettled) {
+        const breakdown = oldRegistration.priceBreakdown as PriceBreakdown;
+        const accessIds =
+          breakdown.accessItems?.map((a) => a.accessId) ?? [];
+        pending.push({
+          type: "eventAccess.countsChanged",
+          clientId,
+          eventId: oldRegistration.eventId,
+          payload: { id: oldRegistration.eventId, accessIds },
+          ts: Date.now(),
+        });
+      }
+    }
   });
+  for (const ev of pending) eventBus.emit(ev);
 
   // Queue PAYMENT_CONFIRMED email if status changed to PAID
   if (input.paymentStatus === "PAID" && prevStatus !== "PAID" && eventId) {

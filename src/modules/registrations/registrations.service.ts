@@ -38,6 +38,8 @@ import {
 import { validatePaymentTransition } from "./registration-payment.js";
 import { getRegistrationById } from "./registration-reads.js";
 import { calculateSettlement } from "@shared/utils/settlement.js";
+import { eventBus } from "@core/events/bus.js";
+import type { AppEvent } from "@core/events/types.js";
 
 // ============================================================================
 // Re-exports — routes and barrel consume these from this file
@@ -224,6 +226,7 @@ export async function createRegistration(
   }
 
   // Create registration with access selections in a transaction
+  const pending: AppEvent[] = [];
   const result = await prisma.$transaction(async (tx) => {
     // Re-check event status inside transaction to prevent TOCTOU race condition
     // Event might have been closed between initial check and transaction start
@@ -315,8 +318,36 @@ export async function createRegistration(
       performedBy: "PUBLIC",
     });
 
+    const clientId = createdReg.event?.clientId;
+    if (clientId) {
+      pending.push({
+        type: "registration.created",
+        clientId,
+        eventId,
+        payload: {
+          id: createdReg.id,
+          email: createdReg.email,
+          paymentStatus: createdReg.paymentStatus,
+        },
+        ts: Date.now(),
+      });
+      if (accessSelections && accessSelections.length > 0) {
+        pending.push({
+          type: "eventAccess.countsChanged",
+          clientId,
+          eventId,
+          payload: {
+            id: eventId,
+            accessIds: accessSelections.map((s) => s.accessId),
+          },
+          ts: Date.now(),
+        });
+      }
+    }
+
     return enrichWithAccessSelections(createdReg);
   });
+  for (const ev of pending) eventBus.emit(ev);
 
   // Queue confirmation email (fire and forget - don't block registration response)
   queueTriggeredEmail("REGISTRATION_CREATED", eventId, {
@@ -553,8 +584,12 @@ export async function updateRegistration(
   input: UpdateRegistrationInput,
   performedBy?: string,
 ): Promise<RegistrationWithRelations> {
+  const pending: AppEvent[] = [];
   await prisma.$transaction(async (tx) => {
-    const registration = await tx.registration.findUnique({ where: { id } });
+    const registration = await tx.registration.findUnique({
+      where: { id },
+      include: { event: { select: { clientId: true } } },
+    });
     if (!registration) {
       throw new AppError(
         "Registration not found",
@@ -653,7 +688,44 @@ export async function updateRegistration(
         performedBy: performedBy ?? undefined,
       });
     }
+
+    // Accumulate realtime events (emitted post-commit)
+    const clientId = registration.event?.clientId;
+    const eventId = registration.eventId;
+    const statusChanged =
+      input.paymentStatus !== undefined &&
+      input.paymentStatus !== registration.paymentStatus;
+    const becameSettled =
+      statusChanged &&
+      (input.paymentStatus === "PAID" ||
+        input.paymentStatus === "SPONSORED" ||
+        input.paymentStatus === "WAIVED") &&
+      !FULLY_SETTLED_STATUSES.includes(registration.paymentStatus);
+    if (clientId) {
+      pending.push({
+        type: becameSettled
+          ? "registration.paymentConfirmed"
+          : "registration.updated",
+        clientId,
+        eventId,
+        payload: {
+          id,
+          paymentStatus: input.paymentStatus ?? registration.paymentStatus,
+        },
+        ts: Date.now(),
+      });
+      if (statusChanged) {
+        pending.push({
+          type: "eventAccess.countsChanged",
+          clientId,
+          eventId,
+          payload: { id: eventId, accessIds: [] },
+          ts: Date.now(),
+        });
+      }
+    }
   });
+  for (const ev of pending) eventBus.emit(ev);
 
   const updated = await getRegistrationById(id);
   if (!updated) {
@@ -676,8 +748,12 @@ export async function adminEditRegistration(
   input: AdminEditRegistrationInput,
   adminUserId: string,
 ): Promise<RegistrationWithRelations> {
+  const pending: AppEvent[] = [];
   await prisma.$transaction(async (tx) => {
-    const registration = await tx.registration.findUnique({ where: { id } });
+    const registration = await tx.registration.findUnique({
+      where: { id },
+      include: { event: { select: { clientId: true } } },
+    });
     if (!registration) {
       throw new AppError(
         "Registration not found",
@@ -903,7 +979,46 @@ export async function adminEditRegistration(
         performedBy: adminUserId,
       });
     }
+
+    // Accumulate realtime events
+    const clientId = registration.event?.clientId;
+    const statusChanged =
+      input.paymentStatus !== undefined &&
+      input.paymentStatus !== registration.paymentStatus;
+    const becameSettled =
+      statusChanged &&
+      (input.paymentStatus === "PAID" ||
+        input.paymentStatus === "SPONSORED" ||
+        input.paymentStatus === "WAIVED") &&
+      !FULLY_SETTLED_STATUSES.includes(registration.paymentStatus);
+    if (clientId) {
+      pending.push({
+        type: becameSettled
+          ? "registration.paymentConfirmed"
+          : "registration.updated",
+        clientId,
+        eventId,
+        payload: {
+          id,
+          paymentStatus: input.paymentStatus ?? registration.paymentStatus,
+        },
+        ts: Date.now(),
+      });
+      if (
+        statusChanged ||
+        (input.accessSelections && input.accessSelections.length > 0)
+      ) {
+        pending.push({
+          type: "eventAccess.countsChanged",
+          clientId,
+          eventId,
+          payload: { id: eventId, accessIds: [] },
+          ts: Date.now(),
+        });
+      }
+    }
   });
+  for (const ev of pending) eventBus.emit(ev);
 
   const updated = await getRegistrationById(id);
   if (!updated) {
@@ -943,6 +1058,7 @@ export async function deleteRegistration(
     );
   }
 
+  const pending: AppEvent[] = [];
   await prisma.$transaction(async (tx) => {
     const registration = await tx.registration.findUnique({
       where: { id },
@@ -954,6 +1070,7 @@ export async function deleteRegistration(
         lastName: true,
         paymentStatus: true,
         priceBreakdown: true,
+        event: { select: { clientId: true } },
       },
     });
     if (!registration) {
@@ -1038,7 +1155,27 @@ export async function deleteRegistration(
 
     // Delete the registration
     await tx.registration.delete({ where: { id } });
+
+    const clientId = registration.event?.clientId;
+    const accessIds = priceBreakdown.accessItems?.map((a) => a.accessId) ?? [];
+    if (clientId) {
+      pending.push({
+        type: "registration.deleted",
+        clientId,
+        eventId: registration.eventId,
+        payload: { id: registration.id, email: registration.email },
+        ts: Date.now(),
+      });
+      pending.push({
+        type: "eventAccess.countsChanged",
+        clientId,
+        eventId: registration.eventId,
+        payload: { id: registration.eventId, accessIds },
+        ts: Date.now(),
+      });
+    }
   });
+  for (const ev of pending) eventBus.emit(ev);
 }
 
 // ============================================================================

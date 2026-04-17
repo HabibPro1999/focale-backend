@@ -17,6 +17,51 @@ import type { EmailContext, RegistrationWithRelations } from "./email.types.js";
 import type { AutomaticEmailTrigger } from "./email.schema.js";
 import type { ImageCache } from "@modules/certificates/certificate-pdf.service.js";
 import type { CertificateZone } from "@modules/certificates/certificates.schema.js";
+import { eventBus } from "@core/events/bus.js";
+
+/**
+ * Emit a realtime emailLog.statusChanged event.
+ * Fetches the client/event scope via join. Fails silently if the log or
+ * registration relation is missing — realtime is best-effort.
+ */
+async function emitEmailLogChanged(
+  emailLogId: string,
+  status: string,
+): Promise<void> {
+  try {
+    const log = await prisma.emailLog.findUnique({
+      where: { id: emailLogId },
+      select: {
+        registrationId: true,
+        registration: {
+          select: {
+            eventId: true,
+            event: { select: { clientId: true } },
+          },
+        },
+      },
+    });
+    const clientId = log?.registration?.event?.clientId;
+    const eventId = log?.registration?.eventId;
+    if (!clientId || !eventId) return;
+    eventBus.emit({
+      type: "emailLog.statusChanged",
+      clientId,
+      eventId,
+      payload: {
+        id: emailLogId,
+        status,
+        registrationId: log.registrationId ?? undefined,
+      },
+      ts: Date.now(),
+    });
+  } catch (err) {
+    logger.warn(
+      { err, emailLogId },
+      "Failed to emit emailLog.statusChanged",
+    );
+  }
+}
 
 // =============================================================================
 // TYPES
@@ -83,7 +128,7 @@ export interface QueueEmailInput {
 }
 
 export async function queueEmail(input: QueueEmailInput) {
-  return prisma.emailLog.create({
+  const created = await prisma.emailLog.create({
     data: {
       trigger: input.trigger,
       templateId: input.templateId,
@@ -96,6 +141,8 @@ export async function queueEmail(input: QueueEmailInput) {
         Prisma.JsonNull) as Prisma.InputJsonValue,
     },
   });
+  void emitEmailLogChanged(created.id, "QUEUED");
+  return created;
 }
 
 // =============================================================================
@@ -696,6 +743,7 @@ async function markAsSent(id: string, messageId?: string) {
       sentAt: new Date(),
     },
   });
+  void emitEmailLogChanged(id, "SENT");
 }
 
 async function markAsFailed(
@@ -714,6 +762,7 @@ async function markAsFailed(
       failedAt: shouldRetry ? null : new Date(),
     },
   });
+  void emitEmailLogChanged(id, shouldRetry ? "QUEUED" : "FAILED");
 }
 
 async function markAsSkipped(id: string, reason: string) {
@@ -724,6 +773,7 @@ async function markAsSkipped(id: string, reason: string) {
       errorMessage: reason,
     },
   });
+  void emitEmailLogChanged(id, "SKIPPED");
 }
 
 // =============================================================================
@@ -839,6 +889,9 @@ export async function updateEmailStatusFromWebhook(
       where: { id: emailLogId },
       data: updates,
     });
+    if (updates.status) {
+      void emitEmailLogChanged(emailLogId, updates.status);
+    }
   } catch (error) {
     logger.error(
       { emailLogId, event, error },

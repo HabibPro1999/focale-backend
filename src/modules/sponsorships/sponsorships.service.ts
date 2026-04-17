@@ -13,6 +13,8 @@ import {
   getSponsorshipById,
   type SponsorshipWithUsages,
 } from "./sponsorship-queries.js";
+import { eventBus } from "@core/events/bus.js";
+import type { AppEvent } from "@core/events/types.js";
 
 // ============================================================================
 // Update Sponsorship (Admin)
@@ -30,10 +32,14 @@ export async function updateSponsorship(
     return cancelSponsorship(id, performedBy);
   }
 
+  const pending: AppEvent[] = [];
   await prisma.$transaction(async (tx) => {
     const sponsorship = await tx.sponsorship.findUnique({
       where: { id },
-      include: { usages: true },
+      include: {
+        usages: true,
+        event: { select: { clientId: true } },
+      },
     });
 
     if (!sponsorship) {
@@ -218,7 +224,19 @@ export async function updateSponsorship(
         performedBy,
       });
     }
+
+    const clientId = sponsorship.event?.clientId;
+    if (clientId) {
+      pending.push({
+        type: "sponsorship.updated",
+        clientId,
+        eventId: sponsorship.eventId,
+        payload: { id },
+        ts: Date.now(),
+      });
+    }
   });
+  for (const ev of pending) eventBus.emit(ev);
 
   return getSponsorshipById(id) as Promise<SponsorshipWithUsages>;
 }
@@ -234,10 +252,14 @@ export async function cancelSponsorship(
   id: string,
   performedBy?: string,
 ): Promise<SponsorshipWithUsages> {
+  const pending: AppEvent[] = [];
   await prisma.$transaction(async (tx) => {
     const sponsorship = await tx.sponsorship.findUnique({
       where: { id },
-      include: { usages: { select: { registrationId: true } } },
+      include: {
+        usages: { select: { registrationId: true } },
+        event: { select: { clientId: true } },
+      },
     });
 
     if (!sponsorship) {
@@ -267,7 +289,28 @@ export async function cancelSponsorship(
         performedBy,
       });
     }
+
+    const clientId = sponsorship.event?.clientId;
+    if (clientId) {
+      pending.push({
+        type: "sponsorship.cancelled",
+        clientId,
+        eventId: sponsorship.eventId,
+        payload: { id },
+        ts: Date.now(),
+      });
+      if (sponsorship.usages.length > 0) {
+        pending.push({
+          type: "eventAccess.countsChanged",
+          clientId,
+          eventId: sponsorship.eventId,
+          payload: { id: sponsorship.eventId, accessIds: [] },
+          ts: Date.now(),
+        });
+      }
+    }
   });
+  for (const ev of pending) eventBus.emit(ev);
 
   return getSponsorshipById(id) as Promise<SponsorshipWithUsages>;
 }
@@ -284,10 +327,14 @@ export async function deleteSponsorship(
   id: string,
   performedBy?: string,
 ): Promise<void> {
+  const pending: AppEvent[] = [];
   await prisma.$transaction(async (tx) => {
     const sponsorship = await tx.sponsorship.findUnique({
       where: { id },
-      include: { usages: { select: { registrationId: true } } },
+      include: {
+        usages: { select: { registrationId: true } },
+        event: { select: { clientId: true } },
+      },
     });
 
     if (!sponsorship) {
@@ -316,7 +363,19 @@ export async function deleteSponsorship(
     });
 
     await tx.sponsorship.delete({ where: { id } });
+
+    const clientId = sponsorship.event?.clientId;
+    if (clientId) {
+      pending.push({
+        type: "sponsorship.deleted",
+        clientId,
+        eventId: sponsorship.eventId,
+        payload: { id },
+        ts: Date.now(),
+      });
+    }
   });
+  for (const ev of pending) eventBus.emit(ev);
 }
 
 // ============================================================================

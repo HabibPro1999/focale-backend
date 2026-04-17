@@ -32,6 +32,7 @@ import {
 } from "@sponsorships";
 import { certificatesRoutes } from "@certificates";
 import { checkinRoutes } from "@checkin";
+import { realtimeRoutes, drainRealtimeConnections } from "@realtime";
 import type { AppInstance } from "@shared/types/fastify.js";
 
 export async function buildServer(): Promise<AppInstance> {
@@ -169,6 +170,13 @@ export async function buildServer(): Promise<AppInstance> {
 
   // Check-in routes
   await app.register(checkinRoutes, { prefix: "/api/events" });
+
+  // Realtime (SSE) stream for admin dashboards
+  await app.register(realtimeRoutes, { prefix: "/api" });
+
+  app.addHook("onClose", async () => {
+    drainRealtimeConnections();
+  });
 
   return app;
 }

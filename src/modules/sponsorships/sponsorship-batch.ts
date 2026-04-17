@@ -26,6 +26,7 @@ import {
   handleCapacityReached,
   getAlreadyCoveredAccessIds,
 } from "@access";
+import { eventBus } from "@core/events/bus.js";
 
 // ============================================================================
 // Types
@@ -38,6 +39,7 @@ type EventForBatch = {
   status: string;
   startDate: Date;
   location: string | null;
+  clientId: string;
   client: { name: string };
 };
 
@@ -179,6 +181,7 @@ async function validateBatchInput(
       status: true,
       startDate: true,
       location: true,
+      clientId: true,
       client: { select: { name: true } },
     },
   });
@@ -820,6 +823,31 @@ export async function createSponsorshipBatch(
     isLinkedMode: context.isLinkedMode,
     result,
   });
+
+  const clientId = context.event?.clientId;
+  if (clientId) {
+    eventBus.emit({
+      type: "sponsorship.batchCreated",
+      clientId,
+      eventId,
+      payload: {
+        id: result.batchId,
+        batchId: result.batchId,
+        count: result.count,
+      },
+      ts: Date.now(),
+    });
+    // Linked-mode batch can move registrations to PAID/PARTIAL and touch paid counts
+    if (context.isLinkedMode && result.autoApprove) {
+      eventBus.emit({
+        type: "eventAccess.countsChanged",
+        clientId,
+        eventId,
+        payload: { id: eventId, accessIds: [] },
+        ts: Date.now(),
+      });
+    }
+  }
 
   return {
     batchId: result.batchId,

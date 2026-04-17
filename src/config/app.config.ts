@@ -28,6 +28,13 @@ const envSchema = z
     R2_SECRET_ACCESS_KEY: z.string().optional(),
     R2_BUCKET: z.string().optional(),
     R2_PUBLIC_URL: z.string().optional(),
+    // Realtime (SSE)
+    REALTIME_DISABLED: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((v) => v === "true"),
+    SSE_HEARTBEAT_MS: z.coerce.number().int().positive().default(25000),
+    SSE_CLIENT_RETRY_MS: z.coerce.number().int().positive().default(15000),
   })
   .refine(
     (data) => {
@@ -91,4 +98,9 @@ export const config = {
     fromName: env.SENDGRID_FROM_NAME ?? "Event Platform",
   },
   publicFormsUrl: env.PUBLIC_FORMS_URL,
+  realtime: {
+    disabled: env.REALTIME_DISABLED,
+    heartbeatMs: env.SSE_HEARTBEAT_MS,
+    clientRetryMs: env.SSE_CLIENT_RETRY_MS,
+  },
 };

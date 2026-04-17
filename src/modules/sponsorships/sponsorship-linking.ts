@@ -21,6 +21,8 @@ import {
 } from "@access";
 import { queueSponsorshipEmail, buildLinkedSponsorshipContext } from "@email";
 import type { TxClient } from "@shared/types/prisma.js";
+import { eventBus } from "@core/events/bus.js";
+import type { AppEvent } from "@core/events/types.js";
 
 // ============================================================================
 // Types
@@ -328,6 +330,7 @@ export async function linkSponsorshipToRegistration(
   registrationId: string,
   adminUserId: string,
 ): Promise<LinkSponsorshipResult> {
+  const pending: AppEvent[] = [];
   // All reads and writes happen inside the transaction to prevent stale-data races
   const result = await prisma.$transaction(async (tx) => {
     const sponsorship = await tx.sponsorship.findUnique({
@@ -344,6 +347,7 @@ export async function linkSponsorshipToRegistration(
             },
           },
         },
+        event: { select: { clientId: true } },
       },
     });
 
@@ -576,6 +580,33 @@ export async function linkSponsorshipToRegistration(
       performedBy: adminUserId,
     });
 
+    const clientId = sponsorship.event?.clientId;
+    if (clientId) {
+      pending.push({
+        type: "sponsorship.linked",
+        clientId,
+        eventId: sponsorship.eventId,
+        payload: { id: sponsorshipId, registrationId },
+        ts: Date.now(),
+      });
+      pending.push({
+        type: "registration.updated",
+        clientId,
+        eventId: sponsorship.eventId,
+        payload: { id: registrationId },
+        ts: Date.now(),
+      });
+      if (!wasAlreadySettled) {
+        pending.push({
+          type: "eventAccess.countsChanged",
+          clientId,
+          eventId: sponsorship.eventId,
+          payload: { id: sponsorship.eventId, accessIds: [] },
+          ts: Date.now(),
+        });
+      }
+    }
+
     return {
       sponsorshipEventId: sponsorship.eventId,
       sponsorshipCoveredAccessIds: sponsorship.coveredAccessIds,
@@ -704,6 +735,8 @@ export async function linkSponsorshipToRegistration(
     );
   }
 
+  for (const ev of pending) eventBus.emit(ev);
+
   return {
     usage: result.usage,
     registration: result.registration,
@@ -766,7 +799,19 @@ export async function unlinkSponsorshipFromRegistration(
   registrationId: string,
   performedBy?: string,
 ): Promise<void> {
+  let sponsorshipEventId: string | null = null;
+  let clientId: string | null = null;
   await prisma.$transaction(async (tx) => {
+    const sponsorship = await tx.sponsorship.findUnique({
+      where: { id: sponsorshipId },
+      select: {
+        eventId: true,
+        event: { select: { clientId: true } },
+      },
+    });
+    sponsorshipEventId = sponsorship?.eventId ?? null;
+    clientId = sponsorship?.event?.clientId ?? null;
+
     await unlinkSponsorshipFromRegistrationInternal(
       tx,
       sponsorshipId,
@@ -774,4 +819,28 @@ export async function unlinkSponsorshipFromRegistration(
       performedBy,
     );
   });
+
+  if (clientId && sponsorshipEventId) {
+    eventBus.emit({
+      type: "sponsorship.unlinked",
+      clientId,
+      eventId: sponsorshipEventId,
+      payload: { id: sponsorshipId, registrationId },
+      ts: Date.now(),
+    });
+    eventBus.emit({
+      type: "registration.updated",
+      clientId,
+      eventId: sponsorshipEventId,
+      payload: { id: registrationId },
+      ts: Date.now(),
+    });
+    eventBus.emit({
+      type: "eventAccess.countsChanged",
+      clientId,
+      eventId: sponsorshipEventId,
+      payload: { id: sponsorshipEventId, accessIds: [] },
+      ts: Date.now(),
+    });
+  }
 }

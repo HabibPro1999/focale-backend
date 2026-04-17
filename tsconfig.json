@@ -33,7 +33,8 @@
       "@reports": ["./src/modules/reports/index.ts"],
       "@email": ["./src/modules/email/index.ts"],
       "@certificates": ["./src/modules/certificates/index.ts"],
-      "@checkin": ["./src/modules/checkin/index.ts"]
+      "@checkin": ["./src/modules/checkin/index.ts"],
+      "@realtime": ["./src/modules/realtime/index.ts"]
     }
   },
   "include": ["src/**/*"],

@@ -3,6 +3,7 @@ import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import sensible from "@fastify/sensible";
 import multipart from "@fastify/multipart";
+import fastifySSE from "@fastify/sse";
 import { config } from "@config/app.config.js";
 import type { AppInstance } from "@shared/types/fastify.js";
 
@@ -55,6 +56,11 @@ export async function registerPlugins(app: AppInstance) {
   await app.register(rateLimit, {
     max: config.security.rateLimit.max,
     timeWindow: config.security.rateLimit.timeWindow,
+  });
+
+  // Server-Sent Events — powers realtime admin stream
+  await app.register(fastifySSE, {
+    heartbeatInterval: config.realtime.heartbeatMs,
   });
 }
 

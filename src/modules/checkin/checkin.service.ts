@@ -2,6 +2,7 @@ import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { auditLog } from "@shared/utils/audit.js";
+import { eventBus } from "@core/events/bus.js";
 
 // ============================================================================
 // Check In
@@ -26,6 +27,7 @@ export async function checkIn(
       checkedInAt: true,
       checkedInBy: true,
       accessTypeIds: true,
+      event: { select: { clientId: true } },
     },
   });
 
@@ -93,6 +95,16 @@ export async function checkIn(
       performedBy: userId,
     });
 
+    if (registration.event?.clientId) {
+      eventBus.emit({
+        type: "registration.checkedIn",
+        clientId: registration.event.clientId,
+        eventId: registration.eventId,
+        payload: { id: registration.id, accessId },
+        ts: Date.now(),
+      });
+    }
+
     return {
       success: true,
       alreadyCheckedIn: false,
@@ -138,6 +150,16 @@ export async function checkIn(
     changes: { checkedInAt: { old: null, new: now.toISOString() } },
     performedBy: userId,
   });
+
+  if (registration.event?.clientId) {
+    eventBus.emit({
+      type: "registration.checkedIn",
+      clientId: registration.event.clientId,
+      eventId: registration.eventId,
+      payload: { id: registration.id },
+      ts: Date.now(),
+    });
+  }
 
   return {
     success: true,
