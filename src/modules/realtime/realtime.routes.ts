@@ -5,7 +5,6 @@ import { config } from "@config/app.config.js";
 import { eventBus, type AppEventHandler } from "@core/events/bus.js";
 import type { AppEvent } from "@core/events/types.js";
 import type { AppInstance } from "@shared/types/fastify.js";
-import { logger } from "@shared/utils/logger.js";
 
 const QuerySchema = z.object({
   eventId: z.string().optional(),
@@ -74,54 +73,26 @@ export async function realtimeRoutes(app: AppInstance): Promise<void> {
       reply.sse.keepAlive();
 
       const handler: AppEventHandler = (ev: AppEvent) => {
-        const scopeMatch = ev.clientId === scopedClientId;
-        const eventMatch = !eventId || !ev.eventId || ev.eventId === eventId;
-        logger.info(
-          {
-            type: ev.type,
-            evClientId: ev.clientId,
-            evEventId: ev.eventId,
-            scopedClientId,
-            filterEventId: eventId ?? null,
-            scopeMatch,
-            eventMatch,
-            connected: reply.sse.isConnected,
-          },
-          "[realtime] handler received",
-        );
-        if (!scopeMatch) return;
-        if (!eventMatch) return;
-        if (!reply.sse.isConnected) {
-          logger.warn(
-            { scopedClientId, type: ev.type },
-            "[realtime] skipped — connection not connected",
-          );
-          return;
-        }
+        if (ev.clientId !== scopedClientId) return;
+        if (eventId && ev.eventId && ev.eventId !== eventId) return;
+        if (!reply.sse.isConnected) return;
         // Fire-and-forget; plugin serializes writes internally.
-        // Cloudflare/Render can buffer small writes — force-flush after by
-        // writing a padding comment, and explicitly flush the raw socket.
+        // Cloudflare/Render proxy can buffer small writes — appending a
+        // ~2KB padding comment after each data frame forces intermediate
+        // proxies to flush so events reach the client in real time.
         reply.sse
           .send({ data: ev })
           .then(() => {
             try {
-              // 2KB-ish padding comment forces intermediate proxies to flush
               reply.raw.write(": padding " + "x".repeat(2048) + "\n\n");
               (reply.raw as unknown as { flush?: () => void }).flush?.();
             } catch {
-              /* ignore — connection may be half-closed */
+              /* connection may be half-closed */
             }
-            logger.info(
-              { type: ev.type, scopedClientId },
-              "[realtime] sent to client",
-            );
           })
-          .catch((err) =>
-            logger.warn(
-              { err: String(err), type: ev.type, scopedClientId },
-              "[realtime] send failed",
-            ),
-          );
+          .catch(() => {
+            /* client disconnected mid-write */
+          });
       };
 
       const close = () => {

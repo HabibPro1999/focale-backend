@@ -15,15 +15,6 @@ class EventBus {
   }
 
   emit(ev: AppEvent): void {
-    logger.info(
-      {
-        type: ev.type,
-        clientId: ev.clientId,
-        eventId: ev.eventId,
-        listeners: this.emitter.listenerCount(CHANNEL),
-      },
-      "[realtime] bus emit",
-    );
     this.emitter.emit(CHANNEL, ev);
   }
 
