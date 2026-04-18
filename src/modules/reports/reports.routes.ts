@@ -11,10 +11,12 @@ import { getEventById } from "@events";
 import {
   ReportQuerySchema,
   ExportRegistrationsQuerySchema,
+  ExportRegistrationsBodySchema,
   ExportSponsorshipsQuerySchema,
   FinancialReportResponseSchema,
   type ReportQuery,
   type ExportRegistrationsQuery,
+  type ExportRegistrationsBody,
   type ExportSponsorshipsQuery,
 } from "./reports.schema.js";
 import {
@@ -30,6 +32,7 @@ import {
   generateAccessRegistrantsReport,
   generateSponsorshipsReport,
   generateCheckInReport,
+  buildRegistrationsWorkbook,
 } from "./reports.service.js";
 
 // ============================================================================
@@ -164,6 +167,46 @@ export async function reportsRoutes(app: AppInstance): Promise<void> {
 
       return reply
         .header("Content-Type", result.contentType)
+        .header("Content-Disposition", `attachment; filename="${safeFilename}"`)
+        .send(result.data);
+    },
+  );
+
+  // ----------------------------------------------------------------
+  // POST /:eventId/reports/registrations/export - Modular xlsx export
+  // Body picks columns (identity/submission/payment/sponsorship/access/
+  // check-ins/transactions/form questions) and filters. Always returns a
+  // single-sheet xlsx with grouped header rows.
+  // ----------------------------------------------------------------
+  app.post<{
+    Params: { eventId: string };
+    Body: ExportRegistrationsBody;
+  }>(
+    "/:eventId/reports/registrations/export",
+    {
+      schema: {
+        body: ExportRegistrationsBodySchema,
+      },
+    },
+    async (request, reply) => {
+      const { eventId } = request.params;
+
+      const event = await getEventById(eventId);
+      if (!event) {
+        throw app.httpErrors.notFound("Event not found");
+      }
+      if (!canAccessClient(request.user!, event.clientId)) {
+        throw app.httpErrors.forbidden("Insufficient permissions");
+      }
+
+      const result = await buildRegistrationsWorkbook(eventId, request.body);
+      const safeFilename = result.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+
+      return reply
+        .header(
+          "Content-Type",
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
         .header("Content-Disposition", `attachment; filename="${safeFilename}"`)
         .send(result.data);
     },
