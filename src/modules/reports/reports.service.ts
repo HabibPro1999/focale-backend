@@ -443,6 +443,8 @@ export {
   generateCheckInReport,
 } from "./excel-generator.js";
 
+export { buildRegistrationsWorkbook } from "./registrations-export-builder.js";
+
 // ============================================================================
 // CSV Export
 // ============================================================================

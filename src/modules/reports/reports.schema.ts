@@ -34,6 +34,92 @@ export const ExportSponsorshipsQuerySchema = z.strictObject({
 });
 
 // ============================================================================
+// Modular Registrations Export — POST body
+// ============================================================================
+
+export const IdentityFieldSchema = z.enum([
+  "id",
+  "referenceNumber",
+  "email",
+  "firstName",
+  "lastName",
+  "phone",
+  "role",
+  "note",
+]);
+
+export const SubmissionFieldSchema = z.enum([
+  "submittedAt",
+  "createdAt",
+  "updatedAt",
+  "lastEditedAt",
+  "formSchemaVersion",
+]);
+
+export const PaymentFieldSchema = z.enum([
+  "paymentStatus",
+  "paymentMethod",
+  "currency",
+  "totalAmount",
+  "paidAmount",
+  "baseAmount",
+  "accessAmount",
+  "discountAmount",
+  "sponsorshipAmount",
+  "paymentReference",
+  "paymentProofUrl",
+  "paidAt",
+]);
+
+export const SponsorshipFieldSchema = z.enum([
+  "sponsorshipCode",
+  "labName",
+  "labContactName",
+  "labEmail",
+  "labPhone",
+  "beneficiaryAddress",
+]);
+
+export const ExportLanguageSchema = z.enum(["fr", "en", "ar"]);
+
+export const ExportRegistrationsBodySchema = z.strictObject({
+  filters: z
+    .strictObject({
+      search: z.string().max(200).optional(),
+      paymentStatus: z
+        .enum([
+          "PENDING",
+          "VERIFYING",
+          "PARTIAL",
+          "PAID",
+          "SPONSORED",
+          "WAIVED",
+          "REFUNDED",
+        ])
+        .optional(),
+      paymentMethod: z
+        .enum(["BANK_TRANSFER", "ONLINE", "CASH", "LAB_SPONSORSHIP"])
+        .optional(),
+      startDate: z.string().datetime().optional(),
+      endDate: z.string().datetime().optional(),
+    })
+    .default({}),
+  columns: z.strictObject({
+    identity: z.array(IdentityFieldSchema).default([]),
+    submission: z.array(SubmissionFieldSchema).default([]),
+    payment: z.array(PaymentFieldSchema).default([]),
+    sponsorship: z.array(SponsorshipFieldSchema).default([]),
+    accessItemIds: z.array(z.string().uuid()).default([]),
+    checkinAccessIds: z.array(z.string().uuid()).default([]),
+    includeGlobalCheckin: z.boolean().default(false),
+    includeTransactions: z.boolean().default(false),
+    includeDroppedAccess: z.boolean().default(false),
+    formFieldIds: z.array(z.string()).default([]),
+  }),
+  language: ExportLanguageSchema.default("fr"),
+});
+
+// ============================================================================
 // Response Schemas
 // ============================================================================
 
@@ -107,6 +193,12 @@ export type ReportQuery = z.infer<typeof ReportQuerySchema>;
 export type ExportQuery = z.infer<typeof ExportQuerySchema>;
 export type ExportRegistrationsQuery = z.infer<typeof ExportRegistrationsQuerySchema>;
 export type ExportSponsorshipsQuery = z.infer<typeof ExportSponsorshipsQuerySchema>;
+export type ExportRegistrationsBody = z.infer<typeof ExportRegistrationsBodySchema>;
+export type IdentityField = z.infer<typeof IdentityFieldSchema>;
+export type SubmissionField = z.infer<typeof SubmissionFieldSchema>;
+export type PaymentField = z.infer<typeof PaymentFieldSchema>;
+export type SponsorshipField = z.infer<typeof SponsorshipFieldSchema>;
+export type ExportLanguage = z.infer<typeof ExportLanguageSchema>;
 export type CurrencySummary = z.infer<typeof CurrencySummarySchema>;
 export type FinancialSummary = z.infer<typeof FinancialSummarySchema>;
 export type PaymentStatusBreakdownItem = z.infer<
