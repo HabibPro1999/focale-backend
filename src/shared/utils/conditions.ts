@@ -4,7 +4,7 @@
  * Design decisions:
  * - `equals`/`not_equals` coerce both sides to string before comparing, so
  *   a form data value of "42" matches a condition value of 42 (and vice versa).
- * - Unknown operators return `false` (fail closed).
+ * - Unknown operators and logic values return `false` (fail closed).
  * - Empty condition arrays with AND logic return `true`; with OR logic return `false`.
  */
 
@@ -62,13 +62,19 @@ export function evaluateSingleCondition(
  */
 export function evaluateConditions(
   conditions: Condition[],
-  logic: "AND" | "OR" | "and" | "or",
+  logic: string,
   formData: Record<string, unknown>,
 ): boolean {
-  const normalizedLogic = logic.toUpperCase() as "AND" | "OR";
+  const normalizedLogic = logic.toUpperCase();
+  if (normalizedLogic !== "AND" && normalizedLogic !== "OR") {
+    return false;
+  }
+
   if (conditions.length === 0) {
     return normalizedLogic === "AND"; // AND: true (no constraints); OR: false (nothing satisfied)
   }
   const results = conditions.map((c) => evaluateSingleCondition(c, formData));
-  return normalizedLogic === "AND" ? results.every(Boolean) : results.some(Boolean);
+  return normalizedLogic === "AND"
+    ? results.every(Boolean)
+    : results.some(Boolean);
 }

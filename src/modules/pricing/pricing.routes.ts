@@ -2,7 +2,8 @@ import {
   requireAuth,
   canAccessClient,
 } from "@shared/middleware/auth.middleware.js";
-import { getEventById } from "@events";
+import { assertEventWritable, getEventById } from "@events";
+import { assertClientModuleEnabled } from "@clients";
 import {
   getEventPricing,
   updateEventPricing,
@@ -61,6 +62,7 @@ export async function pricingRulesRoutes(app: AppInstance): Promise<void> {
           "Insufficient permissions to access this event",
         );
       }
+      await assertClientModuleEnabled(event.clientId, "pricing");
 
       const pricing = await getEventPricing(eventId);
       if (!pricing) {
@@ -92,6 +94,8 @@ export async function pricingRulesRoutes(app: AppInstance): Promise<void> {
           "Insufficient permissions to update this event",
         );
       }
+      assertEventWritable(event);
+      await assertClientModuleEnabled(event.clientId, "pricing");
 
       const pricing = await updateEventPricing(eventId, request.body);
       return reply.send(pricing);
@@ -123,6 +127,8 @@ export async function pricingRulesRoutes(app: AppInstance): Promise<void> {
           "Insufficient permissions to create pricing rules for this event",
         );
       }
+      assertEventWritable(event);
+      await assertClientModuleEnabled(event.clientId, "pricing");
 
       const pricing = await addPricingRule(eventId, request.body);
       return reply.status(201).send(pricing);
@@ -153,6 +159,8 @@ export async function pricingRulesRoutes(app: AppInstance): Promise<void> {
           "Insufficient permissions to update this pricing rule",
         );
       }
+      assertEventWritable(event);
+      await assertClientModuleEnabled(event.clientId, "pricing");
 
       const pricing = await updatePricingRule(eventId, ruleId, request.body);
       return reply.send(pricing);
@@ -180,6 +188,8 @@ export async function pricingRulesRoutes(app: AppInstance): Promise<void> {
           "Insufficient permissions to delete this pricing rule",
         );
       }
+      assertEventWritable(event);
+      await assertClientModuleEnabled(event.clientId, "pricing");
 
       await deletePricingRule(eventId, ruleId);
       return reply.status(204).send();
@@ -206,11 +216,25 @@ export async function pricingPublicRoutes(app: AppInstance): Promise<void> {
       // Get form to find event
       const form = await prisma.form.findUnique({
         where: { id: formId },
-        select: { eventId: true },
+        select: {
+          eventId: true,
+          event: {
+            select: {
+              status: true,
+              client: { select: { enabledModules: true } },
+            },
+          },
+        },
       });
 
       if (!form) {
         throw app.httpErrors.notFound("Form not found");
+      }
+      if (form.event.status !== "OPEN") {
+        throw app.httpErrors.badRequest("Event is not accepting registrations");
+      }
+      if (!form.event.client.enabledModules.includes("pricing")) {
+        throw app.httpErrors.forbidden("Pricing module is disabled");
       }
 
       const breakdown = await calculatePrice(form.eventId, input);

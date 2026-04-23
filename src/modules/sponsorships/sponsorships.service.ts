@@ -2,6 +2,8 @@ import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { auditLog } from "@shared/utils/audit.js";
+import { assertModuleEnabledForClient } from "@clients";
+import { assertEventWritable } from "@events";
 import { validateCoveredAccessTimeOverlap } from "./sponsorships.utils.js";
 import type { UpdateSponsorshipInput } from "./sponsorships.schema.js";
 import type { Prisma } from "@/generated/prisma/client.js";
@@ -38,13 +40,21 @@ export async function updateSponsorship(
       where: { id },
       include: {
         usages: true,
-        event: { select: { clientId: true } },
+        event: {
+          select: {
+            clientId: true,
+            status: true,
+            client: { select: { enabledModules: true } },
+          },
+        },
       },
     });
 
     if (!sponsorship) {
       throw new AppError("Sponsorship not found", 404, ErrorCodes.NOT_FOUND);
     }
+    assertEventWritable(sponsorship.event);
+    assertModuleEnabledForClient(sponsorship.event.client, "sponsorships");
 
     const coverageChanged =
       input.coversBasePrice !== undefined ||
@@ -258,13 +268,21 @@ export async function cancelSponsorship(
       where: { id },
       include: {
         usages: { select: { registrationId: true } },
-        event: { select: { clientId: true } },
+        event: {
+          select: {
+            clientId: true,
+            status: true,
+            client: { select: { enabledModules: true } },
+          },
+        },
       },
     });
 
     if (!sponsorship) {
       throw new AppError("Sponsorship not found", 404, ErrorCodes.NOT_FOUND);
     }
+    assertEventWritable(sponsorship.event);
+    assertModuleEnabledForClient(sponsorship.event.client, "sponsorships");
 
     await unlinkSponsorshipFromAllRegistrations(
       tx,
@@ -333,13 +351,21 @@ export async function deleteSponsorship(
       where: { id },
       include: {
         usages: { select: { registrationId: true } },
-        event: { select: { clientId: true } },
+        event: {
+          select: {
+            clientId: true,
+            status: true,
+            client: { select: { enabledModules: true } },
+          },
+        },
       },
     });
 
     if (!sponsorship) {
       throw new AppError("Sponsorship not found", 404, ErrorCodes.NOT_FOUND);
     }
+    assertEventWritable(sponsorship.event);
+    assertModuleEnabledForClient(sponsorship.event.client, "sponsorships");
 
     await unlinkSponsorshipFromAllRegistrations(
       tx,

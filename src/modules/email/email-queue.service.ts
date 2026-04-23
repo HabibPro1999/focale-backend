@@ -56,10 +56,7 @@ async function emitEmailLogChanged(
       ts: Date.now(),
     });
   } catch (err) {
-    logger.warn(
-      { err, emailLogId },
-      "Failed to emit emailLog.statusChanged",
-    );
+    logger.warn({ err, emailLogId }, "Failed to emit emailLog.statusChanged");
   }
 }
 
@@ -444,7 +441,8 @@ export async function queueBulkCertificateEmails(
   };
 
   const prepared: PreparedInput[] = inputs.map((input) => {
-    const sentSet = alreadySentIds.get(input.registrationId) ?? new Set<string>();
+    const sentSet =
+      alreadySentIds.get(input.registrationId) ?? new Set<string>();
     const pairs = input.certificateTemplateIds
       .map((id, idx) => ({ id, name: input.certificateNames[idx] }))
       .filter((x) => !sentSet.has(x.id));
@@ -516,11 +514,17 @@ export async function processEmailQueue(
      SET "status" = 'SENDING', "updated_at" = NOW()
      WHERE "id" IN (
        SELECT "id" FROM "email_logs"
-       WHERE "status" = 'QUEUED'
-         AND "retry_count" < $1
-       ORDER BY "queued_at" ASC
-       LIMIT $2
-       FOR UPDATE SKIP LOCKED
+        WHERE "status" = 'QUEUED'
+          AND "retry_count" < $1
+          AND (
+            "retry_count" = 0
+            OR ("retry_count" = 1 AND "updated_at" <= NOW() - INTERVAL '1 minute')
+            OR ("retry_count" = 2 AND "updated_at" <= NOW() - INTERVAL '5 minutes')
+            OR ("retry_count" >= 3 AND "updated_at" <= NOW() - INTERVAL '15 minutes')
+          )
+        ORDER BY "queued_at" ASC
+        LIMIT $2
+        FOR UPDATE SKIP LOCKED
      )
      RETURNING "id"`,
     MAX_RETRIES + 1,
@@ -532,21 +536,19 @@ export async function processEmailQueue(
   // Fetch full email log records with relations for processing
   const batch =
     claimedIds.length > 0
-      ? (
-          await prisma.emailLog.findMany({
-            where: { id: { in: claimedIds } },
-            orderBy: { queuedAt: "asc" },
-            include: {
-              template: true,
-              registration: {
-                include: {
-                  event: { include: { client: true } },
-                  form: true,
-                },
+      ? await prisma.emailLog.findMany({
+          where: { id: { in: claimedIds } },
+          orderBy: { queuedAt: "asc" },
+          include: {
+            template: true,
+            registration: {
+              include: {
+                event: { include: { client: true } },
+                form: true,
               },
             },
-          })
-        ).filter(isReadyForRetry)
+          },
+        })
       : [];
 
   if (batch.length === 0) {
@@ -629,9 +631,8 @@ export async function processEmailQueue(
         ctxAny._certificateTemplateIds.length > 0 &&
         emailLog.registrationId
       ) {
-        const { generateCertificateAttachments } = await import(
-          "@modules/certificates/certificate-pdf.service.js"
-        );
+        const { generateCertificateAttachments } =
+          await import("@modules/certificates/certificate-pdf.service.js");
 
         // Fetch registration with check-in data for eligibility + variable resolution
         const registration = await prisma.registration.findUnique({
@@ -666,14 +667,22 @@ export async function processEmailQueue(
           );
         }
 
-        const expectedCount = (ctxAny._certificateTemplateIds as string[]).length;
+        const expectedCount = (ctxAny._certificateTemplateIds as string[])
+          .length;
         if (!attachments || attachments.length === 0) {
-          await markAsSkipped(emailLog.id, "No eligible certificates to attach");
+          await markAsSkipped(
+            emailLog.id,
+            "No eligible certificates to attach",
+          );
           return "skipped";
         }
         if (attachments.length < expectedCount) {
           logger.warn(
-            { emailLogId: emailLog.id, expected: expectedCount, actual: attachments.length },
+            {
+              emailLogId: emailLog.id,
+              expected: expectedCount,
+              actual: attachments.length,
+            },
             "Fewer certificates generated than queued — some templates may have been deactivated or check-in revoked",
           );
         }
@@ -839,8 +848,7 @@ export async function updateEmailStatusFromWebhook(
     case "unsubscribe":
       updates.status = "BOUNCED";
       updates.bouncedAt = new Date();
-      updates.errorMessage =
-        metadata?.reason || "Recipient unsubscribed";
+      updates.errorMessage = metadata?.reason || "Recipient unsubscribed";
       break;
   }
 
@@ -903,28 +911,6 @@ export async function updateEmailStatusFromWebhook(
 // =============================================================================
 // UTILITIES
 // =============================================================================
-
-/**
- * Calculate backoff time for retry.
- * Exponential backoff: 1min, 5min, 15min
- */
-function getBackoffMs(retryCount: number): number {
-  const backoffs = [60000, 300000, 900000]; // 1min, 5min, 15min
-  return backoffs[Math.min(retryCount, backoffs.length - 1)];
-}
-
-/**
- * Check if an email is ready for retry based on backoff timing.
- */
-function isReadyForRetry(email: {
-  retryCount: number;
-  updatedAt: Date;
-}): boolean {
-  if (email.retryCount === 0) return true;
-  const backoffMs = getBackoffMs(email.retryCount - 1);
-  const readyAt = new Date(email.updatedAt.getTime() + backoffMs);
-  return new Date() >= readyAt;
-}
 
 // =============================================================================
 // QUEUE HEALTH

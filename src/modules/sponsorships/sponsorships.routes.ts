@@ -2,7 +2,8 @@ import {
   requireAuth,
   canAccessClient,
 } from "@shared/middleware/auth.middleware.js";
-import { getEventById } from "@events";
+import { assertEventWritable, getEventById } from "@events";
+import { assertClientModuleEnabled } from "@clients";
 import {
   listSponsorships,
   getSponsorshipById,
@@ -120,6 +121,7 @@ export async function sponsorshipDetailRoutes(app: AppInstance): Promise<void> {
       if (!canAccessClient(request.user!, clientId)) {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
+      await assertClientModuleEnabled(clientId, "sponsorships");
 
       const sponsorship = await updateSponsorship(id, input, request.user!.id);
       return reply.send(sponsorship);
@@ -143,6 +145,7 @@ export async function sponsorshipDetailRoutes(app: AppInstance): Promise<void> {
       if (!canAccessClient(request.user!, clientId)) {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
+      await assertClientModuleEnabled(clientId, "sponsorships");
 
       await deleteSponsorship(id, request.user!.id);
       return reply.send({ success: true });
@@ -229,6 +232,12 @@ export async function registrationSponsorshipsRoutes(
       if (!canAccessClient(request.user!, registration.event.clientId)) {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
+      const event = await getEventById(registration.event.id);
+      if (!event) {
+        throw app.httpErrors.notFound("Event not found");
+      }
+      assertEventWritable(event);
+      await assertClientModuleEnabled(event.clientId, "sponsorships");
 
       const result = await linkSponsorshipToRegistration(
         sponsorshipId,
@@ -264,6 +273,12 @@ export async function registrationSponsorshipsRoutes(
       if (!canAccessClient(request.user!, registration.event.clientId)) {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
+      const event = await getEventById(registration.event.id);
+      if (!event) {
+        throw app.httpErrors.notFound("Event not found");
+      }
+      assertEventWritable(event);
+      await assertClientModuleEnabled(event.clientId, "sponsorships");
 
       const result = await linkSponsorshipByCode(
         registrationId,
@@ -292,6 +307,12 @@ export async function registrationSponsorshipsRoutes(
       if (!canAccessClient(request.user!, registration.event.clientId)) {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
+      const event = await getEventById(registration.event.id);
+      if (!event) {
+        throw app.httpErrors.notFound("Event not found");
+      }
+      assertEventWritable(event);
+      await assertClientModuleEnabled(event.clientId, "sponsorships");
 
       await unlinkSponsorshipFromRegistration(
         sponsorshipId,

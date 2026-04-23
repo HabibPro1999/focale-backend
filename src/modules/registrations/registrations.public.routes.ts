@@ -11,6 +11,7 @@ import {
 import { calculatePrice } from "@pricing";
 import { getFormById } from "@forms";
 import { getEventById } from "@events";
+import { assertClientModuleEnabled } from "@clients";
 import {
   CreateRegistrationSchema,
   SelectPaymentMethodSchema,
@@ -99,6 +100,8 @@ export async function registrationsPublicRoutes(
       if (!event || event.status !== "OPEN") {
         throw app.httpErrors.badRequest("Event is not accepting registrations");
       }
+      await assertClientModuleEnabled(event.clientId, "registrations");
+      await assertClientModuleEnabled(event.clientId, "pricing");
 
       // Validate formData against form schema
       const validationResult = validateFormData(

@@ -18,7 +18,12 @@ export const MODULE_IDS = [
 
 export type ModuleId = (typeof MODULE_IDS)[number];
 
-const EnabledModulesSchema = z.array(z.enum(MODULE_IDS));
+const EnabledModulesSchema = z
+  .array(z.enum(MODULE_IDS))
+  .transform((modules) => [...new Set(modules)]);
+
+const hasUpdateField = (data: Record<string, unknown>) =>
+  Object.values(data).some((value) => value !== undefined);
 
 // ============================================================================
 // Request Schemas
@@ -37,19 +42,23 @@ export const CreateClientSchema = z.strictObject({
   enabledModules: EnabledModulesSchema.optional(),
 });
 
-export const UpdateClientSchema = z.strictObject({
-  name: z.string().min(1).max(100).optional(),
-  logo: z.string().url().optional().nullable(),
-  primaryColor: z
-    .string()
-    .regex(/^#[0-9A-Fa-f]{6}$/, "Primary color must be a valid hex color")
-    .optional()
-    .nullable(),
-  email: z.string().email().optional().nullable(),
-  phone: z.string().min(1).max(20).optional().nullable(),
-  active: z.boolean().optional(),
-  enabledModules: z.array(z.enum(MODULE_IDS)).optional(),
-});
+export const UpdateClientSchema = z
+  .strictObject({
+    name: z.string().min(1).max(100).optional(),
+    logo: z.string().url().optional().nullable(),
+    primaryColor: z
+      .string()
+      .regex(/^#[0-9A-Fa-f]{6}$/, "Primary color must be a valid hex color")
+      .optional()
+      .nullable(),
+    email: z.string().email().optional().nullable(),
+    phone: z.string().min(1).max(20).optional().nullable(),
+    active: z.boolean().optional(),
+    enabledModules: EnabledModulesSchema.optional(),
+  })
+  .refine(hasUpdateField, {
+    message: "At least one field must be provided for update",
+  });
 
 export const ListClientsQuerySchema = z.strictObject({
   page: z.coerce.number().int().min(1).default(1),

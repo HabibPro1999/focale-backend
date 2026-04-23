@@ -48,6 +48,7 @@ async function waitForDatabase(
 async function main() {
   const server = await buildServer();
 
+  // eslint-disable-next-line prefer-const -- assigned after listen, read by onClose registered before listen
   let emailQueueInterval: ReturnType<typeof setInterval> | undefined;
   let currentProcessing: Promise<void> | null = null;
 

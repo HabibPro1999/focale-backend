@@ -7,6 +7,29 @@ import { formatZodError } from "@shared/errors/zod-error-formatter.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { logger } from "@shared/utils/logger.js";
 
+function getPrismaConstraintFields(
+  error: Prisma.PrismaClientKnownRequestError,
+) {
+  const target = error.meta?.target;
+  if (Array.isArray(target)) {
+    return target.filter((field): field is string => typeof field === "string");
+  }
+
+  const adapterFields = (
+    error.meta?.driverAdapterError as
+      | { cause?: { constraint?: { fields?: unknown } } }
+      | undefined
+  )?.cause?.constraint?.fields;
+
+  if (Array.isArray(adapterFields)) {
+    return adapterFields.filter(
+      (field): field is string => typeof field === "string",
+    );
+  }
+
+  return [];
+}
+
 export function errorHandler(
   error: FastifyError | Error,
   request: FastifyRequest,
@@ -34,14 +57,7 @@ export function errorHandler(
 
     switch (error.code) {
       case "P2002": {
-        // Extract constraint fields — handle both standard Prisma and CockroachDB driver adapter formats
-        const target = error.meta?.target as string[] | undefined;
-        const adapterFields = (
-          error.meta?.driverAdapterError as
-            | { cause?: { constraint?: { fields?: string[] } } }
-            | undefined
-        )?.cause?.constraint?.fields;
-        const fields = target ?? adapterFields ?? [];
+        const fields = getPrismaConstraintFields(error);
         const fieldStr = fields.join(", ");
 
         // Registration email+form uniqueness → domain-specific code

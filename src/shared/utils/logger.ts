@@ -1,7 +1,6 @@
 import pino, { type LoggerOptions } from "pino";
 
-// Reads process.env directly — logger must initialize before config (which uses logger for errors)
-const isDevelopment = process.env.NODE_ENV !== "production";
+const isDevelopment = process.env.NODE_ENV === "development";
 
 const options: LoggerOptions = {
   level: isDevelopment ? "debug" : "info",

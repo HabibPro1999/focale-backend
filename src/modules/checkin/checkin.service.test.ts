@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, type Mock } from "vitest";
 import { prismaMock } from "../../../tests/mocks/prisma.js";
 import {
   checkIn,
@@ -233,7 +233,7 @@ describe("Checkin Service", () => {
       prismaMock.registration.count
         .mockResolvedValueOnce(100 as never)
         .mockResolvedValueOnce(42 as never);
-      prismaMock.accessCheckIn.groupBy.mockResolvedValue([
+      (prismaMock.accessCheckIn.groupBy as unknown as Mock).mockResolvedValue([
         { accessId: "a1", _count: { id: 20 } },
         { accessId: "a2", _count: { id: 10 } },
       ] as never);
@@ -260,7 +260,9 @@ describe("Checkin Service", () => {
       prismaMock.registration.count
         .mockResolvedValueOnce(10 as never)
         .mockResolvedValueOnce(0 as never);
-      prismaMock.accessCheckIn.groupBy.mockResolvedValue([] as never);
+      (prismaMock.accessCheckIn.groupBy as unknown as Mock).mockResolvedValue(
+        [] as never,
+      );
       prismaMock.eventAccess.findMany.mockResolvedValue([
         { id: "a1", name: "Session", type: "session", registeredCount: 10 },
       ] as never);

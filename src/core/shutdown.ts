@@ -1,12 +1,12 @@
-import type { FastifyInstance } from "fastify";
 import { logger } from "@shared/utils/logger.js";
+import type { AppInstance } from "@shared/types/fastify.js";
 
 const SHUTDOWN_TIMEOUT_MS = 30000; // 30 seconds max for graceful shutdown
 
 // Cleanup responsibilities are registered via server.addHook('onClose') by their
 // respective owners (prisma in server.ts, email queue in index.ts). This function
 // only owns the signal handling and shutdown sequencing.
-export function gracefulShutdown(server: FastifyInstance) {
+export function gracefulShutdown(server: AppInstance) {
   const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM"];
   let isShuttingDown = false;
 

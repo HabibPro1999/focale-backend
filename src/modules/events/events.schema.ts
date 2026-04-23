@@ -4,6 +4,10 @@ import { z } from "zod";
 // Request Schemas
 // ============================================================================
 
+const BasePriceSchema = z.number().int().min(0).nullable();
+const hasUpdateField = (data: Record<string, unknown>) =>
+  Object.values(data).some((value) => value !== undefined);
+
 export const CreateEventSchema = z
   .strictObject({
     clientId: z.string().uuid(),
@@ -21,9 +25,9 @@ export const CreateEventSchema = z
     startDate: z.coerce.date(),
     endDate: z.coerce.date(),
     location: z.string().min(1).max(500).optional().nullable(),
-    status: z.enum(["CLOSED", "OPEN", "ARCHIVED"]).default("CLOSED"),
+    status: z.literal("CLOSED").optional().default("CLOSED"),
     // Pricing
-    basePrice: z.number().int().min(0).default(0),
+    basePrice: BasePriceSchema.optional().default(0),
     currency: z.string().length(3).default("TND"),
   })
   .refine((data) => data.endDate >= data.startDate, {
@@ -50,7 +54,7 @@ export const UpdateEventSchema = z
     location: z.string().min(1).max(500).optional().nullable(),
     status: z.enum(["CLOSED", "OPEN", "ARCHIVED"]).optional(),
     // Pricing
-    basePrice: z.number().int().min(0).optional(),
+    basePrice: BasePriceSchema.optional(),
     currency: z.string().length(3).optional(),
   })
   .refine(
@@ -64,7 +68,10 @@ export const UpdateEventSchema = z
       message: "End date must be greater than or equal to start date",
       path: ["endDate"],
     },
-  );
+  )
+  .refine(hasUpdateField, {
+    message: "At least one field must be provided for update",
+  });
 
 export const ListEventsQuerySchema = z.strictObject({
   page: z.coerce.number().int().min(1).default(1),

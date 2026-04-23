@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
 import { prismaMock } from "../../../tests/mocks/prisma.js";
 import {
   createMockRegistration,
@@ -26,10 +26,14 @@ import type { PriceBreakdown } from "@pricing";
 import { faker } from "@faker-js/faker";
 
 // Mock external module dependencies
-vi.mock("@events", () => ({
-  incrementRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
-  decrementRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock("@events", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@events")>();
+  return {
+    ...actual,
+    incrementRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
+    decrementRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
 vi.mock("@access", () => ({
   validateAccessSelections: vi
@@ -73,9 +77,10 @@ vi.mock("@forms", async (importOriginal) => {
 
 vi.mock("@shared/services/storage/index.js", () => ({
   getStorageProvider: vi.fn(() => ({
-    upload: vi
+    uploadPublic: vi
       .fn()
-      .mockResolvedValue("https://storage.example.com/test/proof.webp"),
+      .mockResolvedValue("https://storage.example.com/test/public.webp"),
+    uploadPrivate: vi.fn().mockResolvedValue("test/proof.webp"),
     getSignedUrl: vi.fn().mockResolvedValue("https://signed-url.example.com"),
     download: vi.fn().mockResolvedValue({
       buffer: Buffer.from("downloaded-content"),
@@ -103,6 +108,41 @@ describe("Registrations Service", () => {
   const eventId = faker.string.uuid();
   const formId = faker.string.uuid();
   const clientId = faker.string.uuid();
+  const enabledModules = [
+    "pricing",
+    "registrations",
+    "sponsorships",
+    "emails",
+    "certificates",
+  ];
+
+  function createPolicyEvent(overrides: Record<string, unknown> = {}) {
+    return {
+      id: eventId,
+      name: "Test Event",
+      slug: "test-event",
+      clientId,
+      status: "OPEN",
+      client: { enabledModules },
+      ...overrides,
+    };
+  }
+
+  function createRegistrationForPolicy(
+    overrides: Parameters<typeof createMockRegistration>[0] = {},
+    eventOverrides: Record<string, unknown> = {},
+  ) {
+    return {
+      ...createMockRegistration({ eventId, ...overrides }),
+      event: createPolicyEvent(eventOverrides),
+    };
+  }
+
+  beforeEach(() => {
+    prismaMock.$queryRawUnsafe.mockResolvedValue([{ max_ref: null }] as never);
+    (prismaMock.registration.groupBy as unknown as Mock).mockResolvedValue([]);
+    prismaMock.sponsorshipUsage.findMany.mockResolvedValue([] as never);
+  });
 
   // Helper function to create a mock price breakdown
   function createMockPriceBreakdown(
@@ -138,18 +178,21 @@ describe("Registrations Service", () => {
     return {
       ...registration,
       form: { id: formId, name: "Test Form" },
-      event: { id: eventId, name: "Test Event", slug: "test-event", clientId },
+      event: createPolicyEvent(),
     };
   }
 
   describe("createRegistration", () => {
     const mockForm = createMockForm({ id: formId, eventId, schemaVersion: 1 });
-    const mockEvent = createMockEvent({
-      id: eventId,
-      status: "OPEN",
-      maxCapacity: 100,
-      registeredCount: 0,
-    });
+    const mockEvent = {
+      ...createMockEvent({
+        id: eventId,
+        status: "OPEN",
+        maxCapacity: 100,
+        registeredCount: 0,
+      }),
+      client: { enabledModules },
+    };
     const priceBreakdown = createMockPriceBreakdown();
 
     beforeEach(() => {
@@ -199,6 +242,34 @@ describe("Registrations Service", () => {
         where: { id: formId },
         select: { id: true, eventId: true, schemaVersion: true },
       });
+    });
+
+    it("should reject lab sponsorship payment method when sponsorships are enabled", async () => {
+      const input = {
+        formId,
+        formData: {},
+        email: "lab@example.com",
+        accessSelections: [],
+        paymentMethod: "LAB_SPONSORSHIP" as const,
+        labName: "Research Lab",
+      };
+
+      prismaMock.form.findUnique.mockResolvedValue(mockForm);
+      prismaMock.registration.findUnique.mockResolvedValueOnce(null);
+      prismaMock.$transaction.mockImplementation(
+        async (callback: (tx: typeof prismaMock) => Promise<unknown>) => {
+          prismaMock.event.findUnique.mockResolvedValue(mockEvent);
+          return callback(prismaMock);
+        },
+      );
+
+      await expect(
+        createRegistration(input, priceBreakdown),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.BAD_REQUEST,
+      });
+      expect(prismaMock.registration.create).not.toHaveBeenCalled();
     });
 
     it("should throw error when form not found", async () => {
@@ -451,7 +522,7 @@ describe("Registrations Service", () => {
 
   describe("updateRegistration", () => {
     it("should update registration note", async () => {
-      const registration = createMockRegistration({ note: null });
+      const registration = createRegistrationForPolicy({ note: null });
       const updatedRegistration = createMockRegistrationWithRelations({
         ...registration,
         note: "Updated note",
@@ -499,7 +570,7 @@ describe("Registrations Service", () => {
   describe("Payment Status Transitions", () => {
     describe("confirmPayment", () => {
       it("should transition from PENDING to PAID", async () => {
-        const registration = createMockRegistration({
+        const registration = createRegistrationForPolicy({
           paymentStatus: "PENDING",
           totalAmount: 300,
         });
@@ -533,7 +604,7 @@ describe("Registrations Service", () => {
       });
 
       it("should transition from PENDING to WAIVED", async () => {
-        const registration = createMockRegistration({
+        const registration = createRegistrationForPolicy({
           paymentStatus: "PENDING",
         });
         const waivedRegistration = createMockRegistrationWithRelations({
@@ -565,7 +636,7 @@ describe("Registrations Service", () => {
       });
 
       it("should transition from PAID to REFUNDED", async () => {
-        const registration = createMockRegistration({
+        const registration = createRegistrationForPolicy({
           paymentStatus: "PAID",
           paidAmount: 300,
         });
@@ -596,7 +667,7 @@ describe("Registrations Service", () => {
       });
 
       it("should reject invalid transition from REFUNDED", async () => {
-        const registration = createMockRegistration({
+        const registration = createRegistrationForPolicy({
           paymentStatus: "REFUNDED",
         });
 
@@ -621,7 +692,7 @@ describe("Registrations Service", () => {
       it("should reject transition from PENDING to REFUNDED directly", async () => {
         // Note: This is allowed in the state machine, PENDING -> REFUNDED is valid
         // Let's test an invalid transition instead
-        const registration = createMockRegistration({
+        const registration = createRegistrationForPolicy({
           paymentStatus: "WAIVED",
         });
 
@@ -641,7 +712,7 @@ describe("Registrations Service", () => {
 
     describe("updateRegistration payment status", () => {
       it("should allow same status update (no-op)", async () => {
-        const registration = createMockRegistration({
+        const registration = createRegistrationForPolicy({
           paymentStatus: "PENDING",
         });
         const updatedRegistration =
@@ -671,7 +742,9 @@ describe("Registrations Service", () => {
 
   describe("deleteRegistration", () => {
     it("should delete unpaid registration", async () => {
-      const registration = createMockRegistration({ paymentStatus: "PENDING" });
+      const registration = createRegistrationForPolicy({
+        paymentStatus: "PENDING",
+      });
 
       prismaMock.registration.findUnique.mockResolvedValue(registration);
       prismaMock.$transaction.mockImplementation(
@@ -688,7 +761,9 @@ describe("Registrations Service", () => {
     });
 
     it("should throw error when trying to delete paid registration", async () => {
-      const registration = createMockRegistration({ paymentStatus: "PAID" });
+      const registration = createRegistrationForPolicy({
+        paymentStatus: "PAID",
+      });
 
       prismaMock.$transaction.mockImplementation(
         async (callback: (tx: typeof prismaMock) => Promise<unknown>) => {
@@ -728,7 +803,9 @@ describe("Registrations Service", () => {
     // ------------------------------------------------------------------
 
     it("should successfully force-delete a PAID registration when user is CLIENT_ADMIN", async () => {
-      const registration = createMockRegistration({ paymentStatus: "PAID" });
+      const registration = createRegistrationForPolicy({
+        paymentStatus: "PAID",
+      });
       const userId = faker.string.uuid();
 
       prismaMock.registration.findUnique.mockResolvedValue(registration);
@@ -745,21 +822,18 @@ describe("Registrations Service", () => {
       ).resolves.toBeUndefined();
     });
 
-    it("should throw FORBIDDEN when force-deleting without CLIENT_ADMIN role", async () => {
-      const registration = createMockRegistration({ paymentStatus: "PAID" });
+    it("should throw FORBIDDEN when force-deleting without admin role", async () => {
+      const registration = createRegistrationForPolicy({
+        paymentStatus: "PAID",
+      });
       const userId = faker.string.uuid();
 
       await expect(
-        deleteRegistration(
-          registration.id,
-          userId,
-          true,
-          0 /* SUPER_ADMIN, not CLIENT_ADMIN */,
-        ),
+        deleteRegistration(registration.id, userId, true, 99 /* non-admin */),
       ).rejects.toThrow(AppError);
 
       await expect(
-        deleteRegistration(registration.id, userId, true, 0 /* SUPER_ADMIN */),
+        deleteRegistration(registration.id, userId, true, 99 /* non-admin */),
       ).rejects.toMatchObject({
         statusCode: 403,
         code: ErrorCodes.FORBIDDEN,
@@ -780,7 +854,7 @@ describe("Registrations Service", () => {
         ],
       });
 
-      const registration = createMockRegistration({
+      const registration = createRegistrationForPolicy({
         paymentStatus: "PENDING",
         priceBreakdown: priceWithAccess,
       });
@@ -957,11 +1031,7 @@ describe("Registrations Service", () => {
         ...createMockRegistration({ paymentStatus: "PENDING", paidAmount: 0 }),
         form: { id: formId, name: "Test Form", schema: {} },
         event: {
-          id: eventId,
-          name: "Test Event",
-          slug: "test-event",
-          clientId,
-          status: "OPEN",
+          ...createPolicyEvent({ status: "OPEN" }),
         },
       };
 
@@ -980,11 +1050,7 @@ describe("Registrations Service", () => {
         ...createMockRegistration({ paymentStatus: "REFUNDED", paidAmount: 0 }),
         form: { id: formId, name: "Test Form", schema: {} },
         event: {
-          id: eventId,
-          name: "Test Event",
-          slug: "test-event",
-          clientId,
-          status: "OPEN",
+          ...createPolicyEvent({ status: "OPEN" }),
         },
       };
 
@@ -1004,11 +1070,7 @@ describe("Registrations Service", () => {
         ...createMockRegistration({ paymentStatus: "PENDING", paidAmount: 0 }),
         form: { id: formId, name: "Test Form", schema: {} },
         event: {
-          id: eventId,
-          name: "Test Event",
-          slug: "test-event",
-          clientId,
-          status: "CLOSED",
+          ...createPolicyEvent({ status: "CLOSED" }),
         },
       };
 
@@ -1028,11 +1090,7 @@ describe("Registrations Service", () => {
         ...createMockRegistration({ paymentStatus: "PAID", paidAmount: 300 }),
         form: { id: formId, name: "Test Form", schema: {} },
         event: {
-          id: eventId,
-          name: "Test Event",
-          slug: "test-event",
-          clientId,
-          status: "OPEN",
+          ...createPolicyEvent({ status: "OPEN" }),
         },
       };
 
@@ -1072,7 +1130,7 @@ describe("Registrations Service", () => {
           sponsorshipCode: null,
         }),
         form: { id: formId, eventId, schema: {} },
-        event: { id: eventId, status: "OPEN" },
+        event: createPolicyEvent({ status: "OPEN" }),
       };
 
       const updatedRegistration = createMockRegistrationWithRelations({
@@ -1103,7 +1161,7 @@ describe("Registrations Service", () => {
       const registration = {
         ...createMockRegistration({ paymentStatus: "REFUNDED" }),
         form: { id: formId, eventId, schema: {} },
-        event: { id: eventId, status: "OPEN" },
+        event: createPolicyEvent({ status: "OPEN" }),
       };
 
       prismaMock.registration.findUnique.mockResolvedValue(registration);
@@ -1123,7 +1181,7 @@ describe("Registrations Service", () => {
       const registration = {
         ...createMockRegistration({ paymentStatus: "PENDING" }),
         form: { id: formId, eventId, schema: {} },
-        event: { id: eventId, status: "CLOSED" },
+        event: createPolicyEvent({ status: "CLOSED" }),
       };
 
       prismaMock.registration.findUnique.mockResolvedValue(registration);
@@ -1160,7 +1218,7 @@ describe("Registrations Service", () => {
           priceBreakdown: priceWithAccess,
         }),
         form: { id: formId, eventId, schema: {} },
-        event: { id: eventId, status: "OPEN" },
+        event: createPolicyEvent({ status: "OPEN" }),
       };
 
       prismaMock.registration.findUnique.mockResolvedValue(registration);
@@ -1200,7 +1258,7 @@ describe("Registrations Service", () => {
           sponsorshipCode: null,
         }),
         form: { id: formId, eventId, schema: {} },
-        event: { id: eventId, status: "OPEN" },
+        event: createPolicyEvent({ status: "OPEN" }),
       };
 
       const updatedRegistration = createMockRegistrationWithRelations({
@@ -1236,12 +1294,12 @@ describe("Registrations Service", () => {
 
   describe("uploadPaymentProof", () => {
     it("should upload payment proof successfully (PDF)", async () => {
-      const registration = createMockRegistration({ eventId });
+      const registration = createRegistrationForPolicy({ eventId });
 
       prismaMock.registration.findUnique.mockResolvedValue(registration);
       prismaMock.registration.update.mockResolvedValue({
         ...registration,
-        paymentProofUrl: "https://storage.example.com/test/proof.webp",
+        paymentProofUrl: "test/proof.webp",
       });
 
       const result = await uploadPaymentProof(registration.id, {
@@ -1250,9 +1308,7 @@ describe("Registrations Service", () => {
         mimetype: "application/pdf",
       });
 
-      expect(result.fileUrl).toBe(
-        "https://storage.example.com/test/proof.webp",
-      );
+      expect(result.fileUrl).toBe("test/proof.webp");
       expect(result.fileName).toBe("proof.webp"); // After compression
       expect(result.mimeType).toBe("image/webp"); // After compression
       expect(result.fileSize).toBe(Buffer.from("compressed-content").length);
@@ -1335,7 +1391,7 @@ describe("Registrations Service", () => {
     // ------------------------------------------------------------------
 
     it("should reject upload when payment status is PAID", async () => {
-      const registration = createMockRegistration({
+      const registration = createRegistrationForPolicy({
         eventId,
         paymentStatus: "PAID",
       });
@@ -1363,7 +1419,7 @@ describe("Registrations Service", () => {
     });
 
     it("should reject upload when payment status is REFUNDED", async () => {
-      const registration = createMockRegistration({
+      const registration = createRegistrationForPolicy({
         eventId,
         paymentStatus: "REFUNDED",
       });
@@ -1391,12 +1447,12 @@ describe("Registrations Service", () => {
     });
 
     it("should accept PNG images (compressed to WebP)", async () => {
-      const registration = createMockRegistration({ eventId });
+      const registration = createRegistrationForPolicy({ eventId });
 
       prismaMock.registration.findUnique.mockResolvedValue(registration);
       prismaMock.registration.update.mockResolvedValue({
         ...registration,
-        paymentProofUrl: "https://storage.example.com/test/proof.webp",
+        paymentProofUrl: "test/proof.webp",
       });
 
       const result = await uploadPaymentProof(registration.id, {
@@ -1405,20 +1461,18 @@ describe("Registrations Service", () => {
         mimetype: "image/png",
       });
 
-      expect(result.fileUrl).toBe(
-        "https://storage.example.com/test/proof.webp",
-      );
+      expect(result.fileUrl).toBe("test/proof.webp");
       expect(result.fileName).toBe("proof.webp"); // Compressed to WebP
       expect(result.mimeType).toBe("image/webp"); // Compressed to WebP
     });
 
     it("should accept JPEG images (compressed to WebP)", async () => {
-      const registration = createMockRegistration({ eventId });
+      const registration = createRegistrationForPolicy({ eventId });
 
       prismaMock.registration.findUnique.mockResolvedValue(registration);
       prismaMock.registration.update.mockResolvedValue({
         ...registration,
-        paymentProofUrl: "https://storage.example.com/test/proof.webp",
+        paymentProofUrl: "test/proof.webp",
       });
 
       const result = await uploadPaymentProof(registration.id, {
@@ -1427,9 +1481,7 @@ describe("Registrations Service", () => {
         mimetype: "image/jpeg",
       });
 
-      expect(result.fileUrl).toBe(
-        "https://storage.example.com/test/proof.webp",
-      );
+      expect(result.fileUrl).toBe("test/proof.webp");
       expect(result.fileName).toBe("proof.webp"); // Compressed to WebP
       expect(result.mimeType).toBe("image/webp"); // Compressed to WebP
     });
@@ -1477,12 +1529,15 @@ describe("Registrations Service", () => {
         eventId,
         schemaVersion: 1,
       });
-      const mockEvent = createMockEvent({
-        id: eventId,
-        status: "OPEN",
-        maxCapacity: 100,
-        registeredCount: 0,
-      });
+      const mockEvent = {
+        ...createMockEvent({
+          id: eventId,
+          status: "OPEN",
+          maxCapacity: 100,
+          registeredCount: 0,
+        }),
+        client: { enabledModules },
+      };
 
       const createdRegistration = createMockRegistrationWithRelations({
         ...input,
@@ -1543,7 +1598,10 @@ describe("Registrations Service", () => {
       };
 
       const mockForm = createMockForm({ id: formId, eventId });
-      const mockEvent = createMockEvent({ id: eventId, status: "OPEN" });
+      const mockEvent = {
+        ...createMockEvent({ id: eventId, status: "OPEN" }),
+        client: { enabledModules },
+      };
 
       const createdRegistration = createMockRegistrationWithRelations({
         ...input,

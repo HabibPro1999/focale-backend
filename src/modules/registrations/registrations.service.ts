@@ -5,9 +5,12 @@ import { UserRole } from "@shared/constants/roles.js";
 import { logger } from "@shared/utils/logger.js";
 import { auditLog } from "@shared/utils/audit.js";
 import {
+  assertEventOpen,
+  assertEventWritable,
   incrementRegisteredCountTx,
   decrementRegisteredCountTx,
 } from "@events";
+import { assertModuleEnabledForClient } from "@clients";
 import {
   validateAccessSelections,
   reserveAccessSpot,
@@ -76,6 +79,22 @@ export {
 
 const FULLY_SETTLED_STATUSES = ["PAID", "SPONSORED", "WAIVED"];
 
+function assertLabSponsorshipAllowed(
+  client: { enabledModules: string[] },
+  paymentMethod: string | null | undefined,
+): void {
+  if (
+    paymentMethod === "LAB_SPONSORSHIP" &&
+    client.enabledModules.includes("sponsorships")
+  ) {
+    throw new AppError(
+      "Lab sponsorship payment method is only available when sponsorships are disabled",
+      400,
+      ErrorCodes.BAD_REQUEST,
+    );
+  }
+}
+
 /**
  * Sync paidCount on access items when a registration's payment status changes.
  * Only handles transitions to/from FULLY settled states (PAID/SPONSORED/WAIVED).
@@ -103,8 +122,8 @@ async function syncPaidCount(
     // Becoming fully settled: increment paidCount for all access items
     await Promise.all(
       accessItems.map(({ accessId, quantity }) =>
-        incrementPaidCount(accessId, quantity, tx)
-      )
+        incrementPaidCount(accessId, quantity, tx),
+      ),
     );
     const accessIds = accessItems.map((a) => a.accessId);
     await handleCapacityReached(registration.eventId, accessIds, tx);
@@ -112,8 +131,8 @@ async function syncPaidCount(
     // Losing settled status (e.g. refund): decrement paidCount
     await Promise.all(
       accessItems.map(({ accessId, quantity }) =>
-        decrementPaidCount(accessId, quantity, tx)
-      )
+        decrementPaidCount(accessId, quantity, tx),
+      ),
     );
   }
 }
@@ -232,16 +251,24 @@ export async function createRegistration(
     // Event might have been closed between initial check and transaction start
     const event = await tx.event.findUnique({
       where: { id: eventId },
-      select: { status: true, maxCapacity: true, registeredCount: true },
+      select: {
+        status: true,
+        maxCapacity: true,
+        registeredCount: true,
+        client: { select: { enabledModules: true } },
+      },
     });
 
-    if (!event || event.status !== "OPEN") {
+    if (!event) {
       throw new AppError(
         "Event is not accepting registrations",
         400,
         ErrorCodes.EVENT_NOT_OPEN,
       );
     }
+    assertEventOpen(event);
+    assertModuleEnabledForClient(event.client, "registrations");
+    assertLabSponsorshipAllowed(event.client, paymentMethod);
 
     // Check event capacity
     if (
@@ -297,7 +324,9 @@ export async function createRegistration(
     // Pass tx so reservation is rolled back if the transaction fails
     if (accessSelections && accessSelections.length > 0) {
       await Promise.all(
-        accessSelections.map((s) => reserveAccessSpot(s.accessId, s.quantity, tx)),
+        accessSelections.map((s) =>
+          reserveAccessSpot(s.accessId, s.quantity, tx),
+        ),
       );
     }
 
@@ -436,6 +465,15 @@ export async function createAdminRegistration(
     quantity: s.quantity,
   }));
 
+  const eventForPricing = await prisma.event.findUnique({
+    where: { id: eventId },
+    select: { client: { select: { enabledModules: true } } },
+  });
+  if (!eventForPricing) {
+    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
+  }
+  assertModuleEnabledForClient(eventForPricing.client, "pricing");
+
   const calculatedPrice = await calculatePrice(eventId, {
     formData,
     selectedAccessItems,
@@ -450,18 +488,22 @@ export async function createAdminRegistration(
     // Admin-created registrations still respect capacity limits.
     const event = await tx.event.findUnique({
       where: { id: eventId },
-      select: { status: true, maxCapacity: true, registeredCount: true },
+      select: {
+        status: true,
+        maxCapacity: true,
+        registeredCount: true,
+        client: { select: { enabledModules: true } },
+      },
     });
 
-    // Admins can create registrations for OPEN or CLOSED events.
-    // ARCHIVED events are historical and no longer accept any registrations.
-    if (!event || event.status === "ARCHIVED") {
-      throw new AppError(
-        "Cannot add registrations to an archived event",
-        400,
-        ErrorCodes.EVENT_NOT_OPEN,
-      );
+    if (!event) {
+      throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
     }
+    // Admin-created registrations are allowed during setup/testing, but never
+    // after the event is archived or when the registrations module is disabled.
+    assertEventWritable(event);
+    assertModuleEnabledForClient(event.client, "registrations");
+    assertLabSponsorshipAllowed(event.client, paymentMethod);
 
     if (
       event.maxCapacity !== null &&
@@ -487,7 +529,9 @@ export async function createAdminRegistration(
         referenceNumber: await generateReferenceNumber(eventId, tx),
         role,
         paymentStatus: resolvedPaymentStatus,
-        paidAt: FULLY_SETTLED_STATUSES.includes(resolvedPaymentStatus) ? new Date() : null,
+        paidAt: FULLY_SETTLED_STATUSES.includes(resolvedPaymentStatus)
+          ? new Date()
+          : null,
         paymentMethod: paymentMethod ?? null,
         labName: paymentMethod === "LAB_SPONSORSHIP" ? (labName ?? null) : null,
         totalAmount: priceBreakdown.total,
@@ -521,7 +565,9 @@ export async function createAdminRegistration(
     // Reserve access spots
     if (accessSelections && accessSelections.length > 0) {
       await Promise.all(
-        accessSelections.map((s) => reserveAccessSpot(s.accessId, s.quantity, tx)),
+        accessSelections.map((s) =>
+          reserveAccessSpot(s.accessId, s.quantity, tx),
+        ),
       );
     }
 
@@ -588,7 +634,15 @@ export async function updateRegistration(
   await prisma.$transaction(async (tx) => {
     const registration = await tx.registration.findUnique({
       where: { id },
-      include: { event: { select: { clientId: true } } },
+      include: {
+        event: {
+          select: {
+            clientId: true,
+            status: true,
+            client: { select: { enabledModules: true } },
+          },
+        },
+      },
     });
     if (!registration) {
       throw new AppError(
@@ -597,6 +651,8 @@ export async function updateRegistration(
         ErrorCodes.REGISTRATION_NOT_FOUND,
       );
     }
+    assertEventWritable(registration.event);
+    assertModuleEnabledForClient(registration.event.client, "registrations");
 
     const updateData: Prisma.RegistrationUpdateInput = {};
 
@@ -610,7 +666,9 @@ export async function updateRegistration(
       updateData.paymentStatus = input.paymentStatus;
       // Set paidAt when payment is confirmed
       if (
-        (input.paymentStatus === "PAID" || input.paymentStatus === "SPONSORED" || input.paymentStatus === "WAIVED") &&
+        (input.paymentStatus === "PAID" ||
+          input.paymentStatus === "SPONSORED" ||
+          input.paymentStatus === "WAIVED") &&
         !registration.paidAt
       ) {
         updateData.paidAt = new Date();
@@ -752,7 +810,15 @@ export async function adminEditRegistration(
   await prisma.$transaction(async (tx) => {
     const registration = await tx.registration.findUnique({
       where: { id },
-      include: { event: { select: { clientId: true } } },
+      include: {
+        event: {
+          select: {
+            clientId: true,
+            status: true,
+            client: { select: { enabledModules: true } },
+          },
+        },
+      },
     });
     if (!registration) {
       throw new AppError(
@@ -761,6 +827,15 @@ export async function adminEditRegistration(
         ErrorCodes.REGISTRATION_NOT_FOUND,
       );
     }
+    if (registration.eventId !== eventId) {
+      throw new AppError(
+        "Registration does not belong to this event",
+        400,
+        ErrorCodes.BAD_REQUEST,
+      );
+    }
+    assertEventWritable(registration.event);
+    assertModuleEnabledForClient(registration.event.client, "registrations");
 
     const updateData: Prisma.RegistrationUpdateInput = {};
     const changes: Record<string, { old: unknown; new: unknown }> = {};
@@ -768,7 +843,9 @@ export async function adminEditRegistration(
     // ── Personal info ──────────────────────────────────────────
     if (input.email !== undefined && input.email !== registration.email) {
       const duplicate = await tx.registration.findUnique({
-        where: { email_formId: { email: input.email, formId: registration.formId } },
+        where: {
+          email_formId: { email: input.email, formId: registration.formId },
+        },
         select: { id: true },
       });
       if (duplicate) {
@@ -830,7 +907,9 @@ export async function adminEditRegistration(
         new: input.paymentStatus,
       };
       if (
-        (input.paymentStatus === "PAID" || input.paymentStatus === "SPONSORED" || input.paymentStatus === "WAIVED") &&
+        (input.paymentStatus === "PAID" ||
+          input.paymentStatus === "SPONSORED" ||
+          input.paymentStatus === "WAIVED") &&
         !registration.paidAt
       ) {
         updateData.paidAt = new Date();
@@ -868,7 +947,11 @@ export async function adminEditRegistration(
 
     // ── Access selections (full recalculation) ─────────────────
     if (input.accessSelections !== undefined) {
-      const effectiveFormData = input.formData ?? (registration.formData as Record<string, unknown>) ?? {};
+      assertModuleEnabledForClient(registration.event.client, "pricing");
+      const effectiveFormData =
+        input.formData ??
+        (registration.formData as Record<string, unknown>) ??
+        {};
       const selectedAccessItems = input.accessSelections.map((s) => ({
         accessId: s.accessId,
         quantity: s.quantity,
@@ -909,13 +992,18 @@ export async function adminEditRegistration(
 
       // Release old access spots
       const oldAccessTypeIds = (registration.accessTypeIds as string[]) ?? [];
-      const oldBreakdown = registration.priceBreakdown as Record<string, unknown> | null;
+      const oldBreakdown = registration.priceBreakdown as Record<
+        string,
+        unknown
+      > | null;
       const oldAccessItems = (oldBreakdown?.accessItems ?? []) as Array<{
         accessId: string;
         quantity: number;
       }>;
       await Promise.all(
-        oldAccessItems.map((old) => releaseAccessSpot(old.accessId, old.quantity, tx)),
+        oldAccessItems.map((old) =>
+          releaseAccessSpot(old.accessId, old.quantity, tx),
+        ),
       );
 
       // Reserve new access spots
@@ -958,13 +1046,18 @@ export async function adminEditRegistration(
       input.paymentStatus !== registration.paymentStatus
     ) {
       const effectiveAccessTypeIds =
-        (updateData.accessTypeIds as string[] | undefined) ?? registration.accessTypeIds;
+        (updateData.accessTypeIds as string[] | undefined) ??
+        registration.accessTypeIds;
       const effectivePriceBreakdown =
         (updateData.priceBreakdown as unknown) ?? registration.priceBreakdown;
 
       await syncPaidCount(
         tx,
-        { eventId, accessTypeIds: effectiveAccessTypeIds, priceBreakdown: effectivePriceBreakdown },
+        {
+          eventId,
+          accessTypeIds: effectiveAccessTypeIds,
+          priceBreakdown: effectivePriceBreakdown,
+        },
         registration.paymentStatus,
         input.paymentStatus,
       );
@@ -1070,7 +1163,13 @@ export async function deleteRegistration(
         lastName: true,
         paymentStatus: true,
         priceBreakdown: true,
-        event: { select: { clientId: true } },
+        event: {
+          select: {
+            clientId: true,
+            status: true,
+            client: { select: { enabledModules: true } },
+          },
+        },
       },
     });
     if (!registration) {
@@ -1080,6 +1179,8 @@ export async function deleteRegistration(
         ErrorCodes.REGISTRATION_NOT_FOUND,
       );
     }
+    assertEventWritable(registration.event);
+    assertModuleEnabledForClient(registration.event.client, "registrations");
 
     // Only allow deletion of unpaid registrations (unless force=true)
     if (registration.paymentStatus === "PAID" && !force) {
@@ -1227,6 +1328,7 @@ export async function getRegistrationForEdit(
           slug: true,
           clientId: true,
           status: true,
+          client: { select: { enabledModules: true } },
         },
       },
     },
@@ -1275,8 +1377,6 @@ export async function getRegistrationForEdit(
     },
   }));
 
-  const enrichedRegistration = { ...registration, accessSelections };
-
   // Start with all permissions enabled
   const restrictions: string[] = [];
   let canEdit = true;
@@ -1304,6 +1404,24 @@ export async function getRegistrationForEdit(
     canAddAccess = false;
     canRemoveAccess = false;
     restrictions.push("Event is not accepting changes");
+  }
+
+  if (!registration.event.client.enabledModules.includes("registrations")) {
+    canEdit = false;
+    canEditPersonalInfo = false;
+    canEditAccess = false;
+    canAddAccess = false;
+    canRemoveAccess = false;
+    restrictions.push("Registrations are disabled for this event");
+  }
+
+  if (!registration.event.client.enabledModules.includes("pricing")) {
+    canEdit = false;
+    canEditPersonalInfo = false;
+    canEditAccess = false;
+    canAddAccess = false;
+    canRemoveAccess = false;
+    restrictions.push("Pricing is disabled for this event");
   }
 
   // VERIFYING → block access edits only (personal info stays editable)
@@ -1352,6 +1470,18 @@ export async function getRegistrationForEdit(
     paidAmount: registration.paidAmount,
     sponsorshipAmount: registration.sponsorshipAmount,
   });
+  const publicEvent = {
+    id: registration.event.id,
+    name: registration.event.name,
+    slug: registration.event.slug,
+    clientId: registration.event.clientId,
+    status: registration.event.status,
+  };
+  const enrichedRegistration = {
+    ...registration,
+    event: publicEvent,
+    accessSelections,
+  };
 
   return {
     registration: enrichedRegistration as RegistrationForEdit,
@@ -1389,7 +1519,13 @@ export async function editRegistrationPublic(
     where: { id: registrationId },
     include: {
       form: { select: { id: true, eventId: true, schema: true } },
-      event: { select: { id: true, status: true } },
+      event: {
+        select: {
+          id: true,
+          status: true,
+          client: { select: { enabledModules: true } },
+        },
+      },
     },
   });
 
@@ -1417,6 +1553,8 @@ export async function editRegistrationPublic(
       ErrorCodes.REGISTRATION_EDIT_FORBIDDEN,
     );
   }
+  assertModuleEnabledForClient(registration.event.client, "registrations");
+  assertModuleEnabledForClient(registration.event.client, "pricing");
 
   // 2b. Block access edits for VERIFYING registrations
   if (registration.paymentStatus === "VERIFYING" && input.accessSelections) {
@@ -1559,6 +1697,12 @@ export async function editRegistrationPublic(
         firstName: true,
         lastName: true,
         phone: true,
+        event: {
+          select: {
+            status: true,
+            client: { select: { enabledModules: true } },
+          },
+        },
       },
     });
     if (!currentRegistration) {
@@ -1577,6 +1721,11 @@ export async function editRegistrationPublic(
         ErrorCodes.REGISTRATION_REFUNDED,
       );
     }
+    assertEventOpen(currentRegistration.event);
+    assertModuleEnabledForClient(
+      currentRegistration.event.client,
+      "registrations",
+    );
     const currentIsPaid =
       currentRegistration.paymentStatus === "PAID" ||
       currentRegistration.paidAmount > 0;
@@ -1598,7 +1747,9 @@ export async function editRegistrationPublic(
     // Pass tx so release is rolled back if the transaction fails
     if (!currentIsPaid) {
       await Promise.all(
-        accessToRemove.map((item) => releaseAccessSpot(item.accessId, item.quantity, tx)),
+        accessToRemove.map((item) =>
+          releaseAccessSpot(item.accessId, item.quantity, tx),
+        ),
       );
     }
 

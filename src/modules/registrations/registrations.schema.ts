@@ -49,6 +49,8 @@ const labNameRefinement = {
   path: ["labName"],
 };
 
+const PaymentProofLocationSchema = z.string().min(1).max(2048);
+
 // ============================================================================
 // Create Registration Schema (Public - for form submission)
 // ============================================================================
@@ -108,7 +110,7 @@ export const UpdatePaymentSchema = z.strictObject({
   paidAmount: z.number().int().min(0).optional(),
   paymentMethod: PaymentMethodSchema.optional(),
   paymentReference: z.string().max(200).optional(),
-  paymentProofUrl: z.string().url().optional(),
+  paymentProofUrl: PaymentProofLocationSchema.optional(),
 });
 
 export const UpdateRegistrationSchema = z.strictObject({
@@ -116,7 +118,7 @@ export const UpdateRegistrationSchema = z.strictObject({
   paidAmount: z.number().int().min(0).optional(),
   paymentMethod: PaymentMethodSchema.optional(),
   paymentReference: z.string().max(200).optional(),
-  paymentProofUrl: z.string().url().optional(),
+  paymentProofUrl: PaymentProofLocationSchema.optional(),
   note: z.string().max(2000).nullable().optional(),
   role: RegistrationRoleSchema.optional(),
 });
@@ -168,15 +170,13 @@ export const AdminEditRegistrationSchema = z
     paidAmount: z.number().int().min(0).optional(),
     paymentMethod: PaymentMethodSchema.nullable().optional(),
     paymentReference: z.string().max(200).nullable().optional(),
-    paymentProofUrl: z.string().url().nullable().optional(),
+    paymentProofUrl: PaymentProofLocationSchema.nullable().optional(),
     note: z.string().max(2000).nullable().optional(),
     labName: z.string().max(200).nullable().optional(),
   })
-  .refine(
-    (data) =>
-      Object.values(data).some((v) => v !== undefined),
-    { message: "At least one field must be provided for update" },
-  );
+  .refine((data) => Object.values(data).some((v) => v !== undefined), {
+    message: "At least one field must be provided for update",
+  });
 
 // ============================================================================
 // Query Schemas

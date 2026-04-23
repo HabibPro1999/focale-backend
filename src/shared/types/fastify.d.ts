@@ -1,13 +1,20 @@
 import type { User } from "@/generated/prisma/client.js";
-import type { FastifyInstance } from "fastify";
+import type {
+  FastifyInstance,
+  RawReplyDefaultExpression,
+  RawRequestDefaultExpression,
+  RawServerDefault,
+} from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
+import type { Logger } from "pino";
 
-/**
- * Extended Fastify instance type with Zod type provider.
- * Uses generic parameters to be compatible with any logger type.
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type AppInstance = FastifyInstance<any, any, any, any, ZodTypeProvider>;
+export type AppInstance = FastifyInstance<
+  RawServerDefault,
+  RawRequestDefaultExpression<RawServerDefault>,
+  RawReplyDefaultExpression<RawServerDefault>,
+  Logger,
+  ZodTypeProvider
+>;
 
 declare module "fastify" {
   interface FastifyRequest {

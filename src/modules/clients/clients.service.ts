@@ -41,33 +41,37 @@ export async function getClientById(id: string): Promise<Client | null> {
 
 /**
  * Update client.
- * Note: enabledModules uses one-way enable logic - modules can be added but never removed.
+ * enabledModules is replacement semantics: omitted means unchanged, [] disables all feature modules.
  */
 export async function updateClient(
   id: string,
   input: UpdateClientInput,
 ): Promise<Client> {
+  if (Object.values(input).every((value) => value === undefined)) {
+    throw new AppError(
+      "At least one field must be provided for update",
+      400,
+      ErrorCodes.VALIDATION_ERROR,
+    );
+  }
+
   // Check if client exists
   const client = await prisma.client.findUnique({ where: { id } });
   if (!client) {
     throw new AppError("Client not found", 404, ErrorCodes.NOT_FOUND);
   }
 
-  // One-way enable logic: merge new modules with existing (union, not replace)
-  let mergedModules: string[] | undefined;
-  if (input.enabledModules) {
-    const existingModules = new Set(client.enabledModules);
-    const newModules = input.enabledModules;
-    mergedModules = [...new Set([...existingModules, ...newModules])];
-  }
-
-  const { enabledModules: _removed, ...restInput } = input;
+  const { enabledModules, ...restInput } = input;
+  const nextEnabledModules =
+    enabledModules === undefined ? undefined : [...new Set(enabledModules)];
 
   return prisma.client.update({
     where: { id },
     data: {
       ...restInput,
-      ...(mergedModules && { enabledModules: mergedModules }),
+      ...(nextEnabledModules !== undefined && {
+        enabledModules: nextEnabledModules,
+      }),
     },
   });
 }

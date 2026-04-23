@@ -25,7 +25,13 @@ export function createMockClient(overrides: Partial<Client> = {}): Client {
     email: faker.internet.email(),
     phone: faker.phone.number(),
     active: true,
-    enabledModules: ["pricing", "registrations", "sponsorships", "emails"],
+    enabledModules: [
+      "pricing",
+      "registrations",
+      "sponsorships",
+      "emails",
+      "certificates",
+    ],
     createdAt: faker.date.past(),
     updatedAt: faker.date.recent(),
     ...overrides,
@@ -298,9 +304,10 @@ export function createMockSponsorshipBatch(
 export function createMockSponsorship(
   overrides: Partial<Sponsorship> = {},
 ): Sponsorship {
+  const eventId = overrides.eventId ?? faker.string.uuid();
   return {
     id: faker.string.uuid(),
-    eventId: faker.string.uuid(),
+    eventId,
     batchId: faker.string.uuid(),
     code: faker.string.alphanumeric(8).toUpperCase(),
     status: "PENDING",
@@ -315,7 +322,19 @@ export function createMockSponsorship(
     createdAt: faker.date.past(),
     updatedAt: faker.date.recent(),
     ...overrides,
-  };
+    event: {
+      status: "OPEN",
+      client: {
+        enabledModules: [
+          "pricing",
+          "registrations",
+          "sponsorships",
+          "emails",
+          "certificates",
+        ],
+      },
+    },
+  } as unknown as Sponsorship;
 }
 
 // ============================================================================

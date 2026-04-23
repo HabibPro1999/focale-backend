@@ -28,7 +28,8 @@ const mockStorageDownload = vi.fn().mockResolvedValue({
 
 vi.mock("@shared/services/storage/index.js", () => ({
   getStorageProvider: vi.fn(() => ({
-    upload: mockStorageUpload,
+    uploadPublic: mockStorageUpload,
+    uploadPrivate: vi.fn().mockResolvedValue("private-key"),
     delete: mockStorageDelete,
     download: mockStorageDownload,
   })),
@@ -42,9 +43,7 @@ vi.mock("file-type", () => ({
 
 vi.mock("sharp", () => ({
   default: vi.fn(() => ({
-    metadata: vi
-      .fn()
-      .mockResolvedValue({ width: 1920, height: 1080 }),
+    metadata: vi.fn().mockResolvedValue({ width: 1920, height: 1080 }),
   })),
 }));
 
@@ -61,7 +60,8 @@ function baseMockTemplate(overrides: Record<string, unknown> = {}) {
     id: templateId,
     eventId,
     name: "Attendance Certificate",
-    templateUrl: "https://storage.googleapis.com/bucket/ev1/certificates/tpl1.png",
+    templateUrl:
+      "https://storage.googleapis.com/bucket/ev1/certificates/tpl1.png",
     templateWidth: 1920,
     templateHeight: 1080,
     zones: [],
@@ -86,8 +86,13 @@ describe("Certificates Service", () => {
 
   describe("listTemplates", () => {
     it("should return templates for a given eventId", async () => {
-      const templates = [baseMockTemplate(), baseMockTemplate({ id: "tpl-002", name: "Speaker Certificate" })];
-      prismaMock.certificateTemplate.findMany.mockResolvedValue(templates as never);
+      const templates = [
+        baseMockTemplate(),
+        baseMockTemplate({ id: "tpl-002", name: "Speaker Certificate" }),
+      ];
+      prismaMock.certificateTemplate.findMany.mockResolvedValue(
+        templates as never,
+      );
 
       const result = await listTemplates(eventId);
 
@@ -114,8 +119,13 @@ describe("Certificates Service", () => {
 
   describe("getTemplate", () => {
     it("should return the template when found", async () => {
-      const template = { ...baseMockTemplate(), event: { clientId: "c1" } };
-      prismaMock.certificateTemplate.findUnique.mockResolvedValue(template as never);
+      const template = {
+        ...baseMockTemplate(),
+        event: { clientId: "c1", status: "CLOSED" },
+      };
+      prismaMock.certificateTemplate.findUnique.mockResolvedValue(
+        template as never,
+      );
 
       const result = await getTemplate(templateId);
 
@@ -124,7 +134,7 @@ describe("Certificates Service", () => {
         where: { id: templateId },
         include: {
           access: { select: { id: true, name: true, type: true } },
-          event: { select: { clientId: true } },
+          event: { select: { clientId: true, status: true } },
         },
       });
     });
@@ -149,7 +159,10 @@ describe("Certificates Service", () => {
       const created = baseMockTemplate();
       prismaMock.certificateTemplate.create.mockResolvedValue(created as never);
 
-      const result = await createTemplate(eventId, { name: "Attendance Certificate", applicableRoles: [] });
+      const result = await createTemplate(eventId, {
+        name: "Attendance Certificate",
+        applicableRoles: [],
+      });
 
       expect(result.name).toBe("Attendance Certificate");
       expect(prismaMock.certificateTemplate.create).toHaveBeenCalledWith({
@@ -286,9 +299,12 @@ describe("Certificates Service", () => {
     it("should delete a template and its stored image", async () => {
       prismaMock.certificateTemplate.findUnique.mockResolvedValue({
         id: templateId,
-        templateUrl: "https://storage.googleapis.com/bucket/ev1/certificates/tpl1.png",
+        templateUrl:
+          "https://storage.googleapis.com/bucket/ev1/certificates/tpl1.png",
       } as never);
-      prismaMock.certificateTemplate.delete.mockResolvedValue(undefined as never);
+      prismaMock.certificateTemplate.delete.mockResolvedValue(
+        undefined as never,
+      );
 
       await deleteTemplate(templateId);
 
@@ -303,7 +319,9 @@ describe("Certificates Service", () => {
         id: templateId,
         templateUrl: "",
       } as never);
-      prismaMock.certificateTemplate.delete.mockResolvedValue(undefined as never);
+      prismaMock.certificateTemplate.delete.mockResolvedValue(
+        undefined as never,
+      );
 
       await deleteTemplate(templateId);
 
@@ -382,12 +400,12 @@ describe("Certificates Service", () => {
     it("should reject when file-type detection returns null", async () => {
       mockFileType.mockResolvedValue(null);
 
-      await expect(
-        uploadTemplateImage(templateId, file),
-      ).rejects.toMatchObject({
-        statusCode: 400,
-        code: ErrorCodes.VALIDATION_ERROR,
-      });
+      await expect(uploadTemplateImage(templateId, file)).rejects.toMatchObject(
+        {
+          statusCode: 400,
+          code: ErrorCodes.VALIDATION_ERROR,
+        },
+      );
     });
 
     it("should throw 404 when template does not exist", async () => {
@@ -395,12 +413,12 @@ describe("Certificates Service", () => {
 
       prismaMock.certificateTemplate.findUnique.mockResolvedValue(null);
 
-      await expect(
-        uploadTemplateImage(templateId, file),
-      ).rejects.toMatchObject({
-        statusCode: 404,
-        code: ErrorCodes.NOT_FOUND,
-      });
+      await expect(uploadTemplateImage(templateId, file)).rejects.toMatchObject(
+        {
+          statusCode: 404,
+          code: ErrorCodes.NOT_FOUND,
+        },
+      );
     });
 
     it("should delete the old image before uploading a new one", async () => {
@@ -409,7 +427,8 @@ describe("Certificates Service", () => {
       prismaMock.certificateTemplate.findUnique.mockResolvedValue({
         id: templateId,
         eventId,
-        templateUrl: "https://storage.googleapis.com/bucket/ev1/certificates/old.png",
+        templateUrl:
+          "https://storage.googleapis.com/bucket/ev1/certificates/old.png",
       } as never);
       prismaMock.certificateTemplate.update.mockResolvedValue(
         baseMockTemplate() as never,
@@ -437,9 +456,7 @@ describe("Certificates Service", () => {
     });
 
     it("should throw 400 for an invalid URL", async () => {
-      await expect(
-        downloadTemplateImage("not-a-url"),
-      ).rejects.toMatchObject({
+      await expect(downloadTemplateImage("not-a-url")).rejects.toMatchObject({
         statusCode: 400,
         code: ErrorCodes.VALIDATION_ERROR,
       });

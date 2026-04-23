@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { assertClientModuleEnabled } from "@clients";
+import { assertEventOpen, getEventById } from "@events";
 import {
   getGroupedAccess,
   getEventAccessById,
@@ -20,6 +22,15 @@ import { publicRateLimits } from "@core/plugins.js";
 // ============================================================================
 
 export async function accessPublicRoutes(app: AppInstance): Promise<void> {
+  async function assertPublicAccessEnabled(eventId: string): Promise<void> {
+    const event = await getEventById(eventId);
+    if (!event) {
+      throw app.httpErrors.notFound("Event not found");
+    }
+    assertEventOpen(event);
+    await assertClientModuleEnabled(event.clientId, "registrations");
+  }
+
   // POST /api/public/events/:eventId/access/grouped - Get grouped access items
   // Using POST because we need to send formData and selectedAccessIds in the body
   app.post<{
@@ -38,6 +49,7 @@ export async function accessPublicRoutes(app: AppInstance): Promise<void> {
       const { eventId } = request.params;
       const { formData, selectedAccessIds } = request.body;
 
+      await assertPublicAccessEnabled(eventId);
       const grouped = await getGroupedAccess(
         eventId,
         formData,
@@ -64,6 +76,7 @@ export async function accessPublicRoutes(app: AppInstance): Promise<void> {
       const { eventId } = request.params;
       const { formData, selections } = request.body;
 
+      await assertPublicAccessEnabled(eventId);
       const result = await validateAccessSelections(
         eventId,
         selections,
@@ -81,6 +94,7 @@ export async function accessPublicRoutes(app: AppInstance): Promise<void> {
     },
     async (request, reply) => {
       const { eventId } = request.params;
+      await assertPublicAccessEnabled(eventId);
       const items = await listEventAccess(eventId, { active: true });
       return reply.send(items);
     },
@@ -99,6 +113,7 @@ export async function accessPublicRoutes(app: AppInstance): Promise<void> {
     },
     async (request, reply) => {
       const { eventId, accessId } = request.params;
+      await assertPublicAccessEnabled(eventId);
       const item = await getEventAccessById(accessId);
       if (!item || item.eventId !== eventId) {
         throw app.httpErrors.notFound("Access item not found");

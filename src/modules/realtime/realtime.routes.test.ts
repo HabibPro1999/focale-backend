@@ -54,7 +54,7 @@ async function buildTestApp(): Promise<AppInstance> {
   await app.register(fastifySSE, { heartbeatInterval: 60000 });
   await app.register(realtimeRoutes, { prefix: "/api" });
   await app.ready();
-  return app;
+  return app as unknown as AppInstance;
 }
 
 interface SseMessage {

@@ -140,10 +140,12 @@ export async function createForm(input: CreateFormInput): Promise<Form> {
  */
 export async function getFormById(
   id: string,
-): Promise<(Form & { event: { clientId: string } }) | null> {
+): Promise<
+  (Form & { event: { clientId: string; status: Event["status"] } }) | null
+> {
   return prisma.form.findUnique({
     where: { id },
-    include: { event: { select: { clientId: true } } },
+    include: { event: { select: { clientId: true, status: true } } },
   });
 }
 
@@ -161,6 +163,7 @@ export async function getFormByEventSlug(
       event: {
         slug: eventSlug,
         status: "OPEN",
+        client: { enabledModules: { has: "registrations" } },
       },
       active: true,
     },
@@ -537,6 +540,7 @@ export async function getSponsorFormByEventSlug(
       event: {
         slug,
         status: "OPEN",
+        client: { enabledModules: { has: "sponsorships" } },
       },
       active: true,
     },

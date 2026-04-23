@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { beforeEach, describe, it, expect } from "vitest";
 import { prismaMock } from "../../../tests/mocks/prisma.js";
 import {
   createMockEventPricing,
@@ -17,6 +17,14 @@ import { AppError } from "@shared/errors/app-error.js";
 
 describe("Pricing Service", () => {
   const eventId = "event-123";
+  const pricingEnabledEvent = {
+    status: "CLOSED" as const,
+    client: { enabledModules: ["pricing"] },
+  };
+
+  beforeEach(() => {
+    prismaMock.event.findUnique.mockResolvedValue(pricingEnabledEvent as never);
+  });
 
   describe("getEventPricing", () => {
     it("should return pricing with parsed rules", async () => {
@@ -59,30 +67,25 @@ describe("Pricing Service", () => {
 
   describe("updateEventPricing", () => {
     it("should update base price", async () => {
-      const existingPricing = createMockEventPricing({
-        eventId,
-        basePrice: 200,
-      });
       const updatedPricing = createMockEventPricing({
         eventId,
         basePrice: 300,
         rules: [],
       });
 
-      prismaMock.eventPricing.findUnique.mockResolvedValue(existingPricing);
-      prismaMock.eventPricing.update.mockResolvedValue(updatedPricing);
+      prismaMock.eventPricing.upsert.mockResolvedValue(updatedPricing);
 
       const result = await updateEventPricing(eventId, { basePrice: 300 });
 
       expect(result.basePrice).toBe(300);
-      expect(prismaMock.eventPricing.update).toHaveBeenCalledWith({
+      expect(prismaMock.eventPricing.upsert).toHaveBeenCalledWith({
         where: { eventId },
-        data: expect.objectContaining({ basePrice: 300 }),
+        create: expect.objectContaining({ basePrice: 300 }),
+        update: expect.objectContaining({ basePrice: 300 }),
       });
     });
 
     it("should update payment methods", async () => {
-      const existingPricing = createMockEventPricing({ eventId });
       const updatedPricing = createMockEventPricing({
         eventId,
         onlinePaymentEnabled: true,
@@ -90,8 +93,7 @@ describe("Pricing Service", () => {
         rules: [],
       });
 
-      prismaMock.eventPricing.findUnique.mockResolvedValue(existingPricing);
-      prismaMock.eventPricing.update.mockResolvedValue(updatedPricing);
+      prismaMock.eventPricing.upsert.mockResolvedValue(updatedPricing);
 
       const result = await updateEventPricing(eventId, {
         onlinePaymentEnabled: true,
@@ -101,8 +103,8 @@ describe("Pricing Service", () => {
       expect(result.onlinePaymentEnabled).toBe(true);
     });
 
-    it("should throw when pricing not found", async () => {
-      prismaMock.eventPricing.findUnique.mockResolvedValue(null);
+    it("should throw when event not found", async () => {
+      prismaMock.event.findUnique.mockResolvedValue(null);
 
       await expect(
         updateEventPricing(eventId, { basePrice: 300 }),
@@ -128,10 +130,8 @@ describe("Pricing Service", () => {
         ],
       });
 
-      prismaMock.eventPricing.findUnique
-        .mockResolvedValueOnce(existingPricing)
-        .mockResolvedValueOnce(existingPricing);
-      prismaMock.eventPricing.update.mockResolvedValue(updatedPricing);
+      prismaMock.eventPricing.findUnique.mockResolvedValueOnce(existingPricing);
+      prismaMock.eventPricing.upsert.mockResolvedValue(updatedPricing);
 
       const result = await addPricingRule(eventId, {
         name: "New Rule",
@@ -193,10 +193,8 @@ describe("Pricing Service", () => {
         ],
       });
 
-      prismaMock.eventPricing.findUnique
-        .mockResolvedValueOnce(existingPricing)
-        .mockResolvedValueOnce(existingPricing);
-      prismaMock.eventPricing.update.mockResolvedValue(updatedPricing);
+      prismaMock.eventPricing.findUnique.mockResolvedValueOnce(existingPricing);
+      prismaMock.eventPricing.upsert.mockResolvedValue(updatedPricing);
 
       const result = await updatePricingRule(eventId, "rule-1", {
         name: "New Name",
@@ -235,10 +233,8 @@ describe("Pricing Service", () => {
       });
       const updatedPricing = createMockEventPricing({ eventId, rules: [] });
 
-      prismaMock.eventPricing.findUnique
-        .mockResolvedValueOnce(existingPricing)
-        .mockResolvedValueOnce(existingPricing);
-      prismaMock.eventPricing.update.mockResolvedValue(updatedPricing);
+      prismaMock.eventPricing.findUnique.mockResolvedValueOnce(existingPricing);
+      prismaMock.eventPricing.upsert.mockResolvedValue(updatedPricing);
 
       const result = await deletePricingRule(eventId, "rule-1");
 
@@ -396,16 +392,25 @@ describe("Pricing Service", () => {
       expect(result.total).toBe(0); // Should not be negative
     });
 
-    it("should throw when pricing not found", async () => {
+    it("should repair missing pricing as a free event", async () => {
       prismaMock.eventPricing.findUnique.mockResolvedValue(null);
-
-      await expect(
-        calculatePrice(eventId, {
-          formData: {},
-          selectedAccessItems: [],
-          sponsorshipCodes: [],
+      prismaMock.eventPricing.upsert.mockResolvedValue(
+        createMockEventPricing({
+          eventId,
+          basePrice: 0,
+          currency: "TND",
+          rules: [],
         }),
-      ).rejects.toThrow(AppError);
+      );
+
+      const result = await calculatePrice(eventId, {
+        formData: {},
+        selectedAccessItems: [],
+        sponsorshipCodes: [],
+      });
+
+      expect(result.total).toBe(0);
+      expect(result.currency).toBe("TND");
     });
 
     it("should apply highest priority rule first", async () => {

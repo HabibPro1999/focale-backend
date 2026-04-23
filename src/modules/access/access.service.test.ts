@@ -36,6 +36,19 @@ function createEventAccessWithRelations(
   };
 }
 
+type GroupedAccessItem = ReturnType<typeof createEventAccessWithRelations> & {
+  spotsRemaining: number | null;
+  isFull: boolean;
+};
+
+function getScheduledItems(
+  result: Awaited<ReturnType<typeof getGroupedAccess>>,
+): GroupedAccessItem[] {
+  return result.groups.flatMap((group) =>
+    group.slots.flatMap((slot) => slot.items as GroupedAccessItem[]),
+  );
+}
+
 describe("Access Service", () => {
   const eventId = "event-123";
   const clientId = "client-123";
@@ -577,9 +590,7 @@ describe("Access Service", () => {
 
       expect(result.groups.length).toBe(2);
       // Groups are organized by date, items within slots have type
-      const allItems = result.groups.flatMap((g) =>
-        g.slots.flatMap((s) => s.items as any[]),
-      );
+      const allItems = getScheduledItems(result);
       const workshopItems = allItems.filter((i) => i.type === "WORKSHOP");
       const dinnerItems = allItems.filter((i) => i.type === "DINNER");
       expect(workshopItems).toHaveLength(1);
@@ -708,9 +719,7 @@ describe("Access Service", () => {
       const result = await getGroupedAccess(eventId, {}, []);
 
       // Only the 'available' item should be visible (no date restrictions)
-      const allItems = result.groups.flatMap((g) =>
-        g.slots.flatMap((s) => s.items as any[]),
-      );
+      const allItems = getScheduledItems(result);
       expect(allItems).toHaveLength(1);
       expect(allItems[0].id).toBe("available");
     });
@@ -743,9 +752,7 @@ describe("Access Service", () => {
         { profession: "doctor" },
         [],
       );
-      const doctorItems = resultDoctor.groups.flatMap((g) =>
-        g.slots.flatMap((s) => s.items as any[]),
-      );
+      const doctorItems = getScheduledItems(resultDoctor);
       expect(doctorItems).toHaveLength(2);
 
       // Non-doctors only see the second one
@@ -754,9 +761,7 @@ describe("Access Service", () => {
         { profession: "nurse" },
         [],
       );
-      const nonDoctorItems = resultNonDoctor.groups.flatMap((g) =>
-        g.slots.flatMap((s) => s.items as any[]),
-      );
+      const nonDoctorItems = getScheduledItems(resultNonDoctor);
       expect(nonDoctorItems).toHaveLength(1);
     });
 
@@ -783,9 +788,7 @@ describe("Access Service", () => {
 
       // Without prerequisite selected - should only show SESSION (no prereq required)
       const resultWithoutPrereq = await getGroupedAccess(eventId, {}, []);
-      const itemsNoPrereq = resultWithoutPrereq.groups.flatMap((g) =>
-        g.slots.flatMap((s) => s.items as any[]),
-      );
+      const itemsNoPrereq = getScheduledItems(resultWithoutPrereq);
       const workshopItemsNoPrereq = itemsNoPrereq.filter(
         (i) => i.type === "WORKSHOP",
       );
@@ -795,9 +798,7 @@ describe("Access Service", () => {
       const resultWithPrereq = await getGroupedAccess(eventId, {}, [
         prerequisiteId,
       ]);
-      const itemsWithPrereq = resultWithPrereq.groups.flatMap((g) =>
-        g.slots.flatMap((s) => s.items as any[]),
-      );
+      const itemsWithPrereq = getScheduledItems(resultWithPrereq);
       const workshopItemsWithPrereq = itemsWithPrereq.filter(
         (i) => i.type === "WORKSHOP",
       );
@@ -812,6 +813,7 @@ describe("Access Service", () => {
           type: "WORKSHOP",
           maxCapacity: 10,
           registeredCount: 10,
+          paidCount: 10,
           active: true,
         }),
         createEventAccessWithRelations({
@@ -820,6 +822,7 @@ describe("Access Service", () => {
           type: "WORKSHOP",
           maxCapacity: 20,
           registeredCount: 5,
+          paidCount: 5,
           active: true,
         }),
         createEventAccessWithRelations({
@@ -836,9 +839,7 @@ describe("Access Service", () => {
 
       const result = await getGroupedAccess(eventId, {}, []);
 
-      const items = result.groups.flatMap((g) =>
-        g.slots.flatMap((s) => s.items as any[]),
-      );
+      const items = getScheduledItems(result);
 
       // Full item should be present but marked as full
       const fullItem = items.find((i) => i.id === "full-workshop");
@@ -863,6 +864,7 @@ describe("Access Service", () => {
           name: "Full Workshop",
           maxCapacity: 5,
           registeredCount: 5,
+          paidCount: 5,
           startsAt: new Date("2025-06-01T09:00:00"),
           active: true,
         }),
@@ -873,6 +875,7 @@ describe("Access Service", () => {
           name: "Full Addon",
           maxCapacity: 1,
           registeredCount: 1,
+          paidCount: 1,
           active: true,
         }),
         createEventAccessWithRelations({
@@ -882,6 +885,7 @@ describe("Access Service", () => {
           name: "Available Workshop",
           maxCapacity: 10,
           registeredCount: 3,
+          paidCount: 3,
           startsAt: new Date("2025-06-01T09:00:00"),
           active: true,
         }),
@@ -924,9 +928,7 @@ describe("Access Service", () => {
 
       // Items are grouped by date, not by type
       expect(result.groups).toHaveLength(1);
-      const items = result.groups.flatMap((g) =>
-        g.slots.flatMap((s) => s.items as any[]),
-      );
+      const items = getScheduledItems(result);
       expect(items).toHaveLength(1);
       expect(items[0].type).toBe("OTHER");
       expect(items[0].name).toBe("City Tour");

@@ -222,15 +222,15 @@ describe("Clients Service", () => {
       });
     });
 
-    describe("enabledModules one-way enable logic", () => {
-      it("should merge new modules with existing modules (union)", async () => {
+    describe("enabledModules replacement logic", () => {
+      it("should replace existing modules with the provided list", async () => {
         const existingClient = createMockClient({
           id: clientId,
           enabledModules: ["pricing", "registrations"],
         });
         const updatedClient = createMockClient({
           id: clientId,
-          enabledModules: ["pricing", "registrations", "sponsorships"],
+          enabledModules: ["sponsorships"],
         });
 
         prismaMock.client.findUnique.mockResolvedValue(existingClient);
@@ -240,21 +240,14 @@ describe("Clients Service", () => {
           enabledModules: ["sponsorships"],
         });
 
-        // Should contain both existing and new modules
         expect(prismaMock.client.update).toHaveBeenCalledWith({
           where: { id: clientId },
-          data: {
-            enabledModules: expect.arrayContaining([
-              "pricing",
-              "registrations",
-              "sponsorships",
-            ]),
-          },
+          data: { enabledModules: ["sponsorships"] },
         });
-        expect(result.enabledModules).toContain("sponsorships");
+        expect(result.enabledModules).toEqual(["sponsorships"]);
       });
 
-      it("should not remove existing modules when updating", async () => {
+      it("should allow disabling all modules with an empty list", async () => {
         const existingClient = createMockClient({
           id: clientId,
           enabledModules: [
@@ -266,32 +259,19 @@ describe("Clients Service", () => {
         });
         const updatedClient = createMockClient({
           id: clientId,
-          enabledModules: [
-            "pricing",
-            "registrations",
-            "sponsorships",
-            "emails",
-          ],
+          enabledModules: [],
         });
 
         prismaMock.client.findUnique.mockResolvedValue(existingClient);
         prismaMock.client.update.mockResolvedValue(updatedClient);
 
         await updateClient(clientId, {
-          enabledModules: ["pricing"], // Trying to set only pricing
+          enabledModules: [],
         });
 
-        // Should still contain all modules (one-way enable)
         expect(prismaMock.client.update).toHaveBeenCalledWith({
           where: { id: clientId },
-          data: {
-            enabledModules: expect.arrayContaining([
-              "pricing",
-              "registrations",
-              "sponsorships",
-              "emails",
-            ]),
-          },
+          data: { enabledModules: [] },
         });
       });
 
@@ -340,6 +320,15 @@ describe("Clients Service", () => {
           where: { id: clientId },
           data: { name: "Just Name Update" },
         });
+      });
+
+      it("should reject empty update payloads", async () => {
+        await expect(updateClient(clientId, {})).rejects.toMatchObject({
+          statusCode: 400,
+          code: ErrorCodes.VALIDATION_ERROR,
+        });
+        expect(prismaMock.client.findUnique).not.toHaveBeenCalled();
+        expect(prismaMock.client.update).not.toHaveBeenCalled();
       });
     });
   });
@@ -694,19 +683,12 @@ describe("Clients Service", () => {
       });
     });
 
-    it("should handle updating client with empty input object", async () => {
-      const existingClient = createMockClient({ id: clientId });
-      const updatedClient = createMockClient({ id: clientId });
-
-      prismaMock.client.findUnique.mockResolvedValue(existingClient);
-      prismaMock.client.update.mockResolvedValue(updatedClient);
-
-      await updateClient(clientId, {});
-
-      expect(prismaMock.client.update).toHaveBeenCalledWith({
-        where: { id: clientId },
-        data: {},
+    it("should reject updating client with empty input object", async () => {
+      await expect(updateClient(clientId, {})).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.VALIDATION_ERROR,
       });
+      expect(prismaMock.client.update).not.toHaveBeenCalled();
     });
   });
 });

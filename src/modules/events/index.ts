@@ -2,6 +2,8 @@
 export {
   getEventById,
   getEventBySlug,
+  assertEventOpen,
+  assertEventWritable,
   eventExists,
   incrementRegisteredCountTx,
   decrementRegisteredCountTx,

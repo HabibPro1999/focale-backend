@@ -4,6 +4,8 @@ import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { logger } from "@shared/utils/logger.js";
 import { auditLog } from "@shared/utils/audit.js";
 import { calculateSettlement } from "@shared/utils/settlement.js";
+import { assertModuleEnabledForClient } from "@clients";
+import { assertEventWritable } from "@events";
 import {
   calculateApplicableAmount,
   detectCoverageOverlap,
@@ -93,8 +95,24 @@ async function unlinkSponsorshipFromRegistrationInternal(
 
   const sponsorshipBefore = await tx.sponsorship.findUnique({
     where: { id: sponsorshipId },
-    select: { status: true, coveredAccessIds: true },
+    select: {
+      status: true,
+      coveredAccessIds: true,
+      event: {
+        select: {
+          status: true,
+          client: { select: { enabledModules: true } },
+        },
+      },
+    },
   });
+  if (sponsorshipBefore) {
+    assertEventWritable(sponsorshipBefore.event);
+    assertModuleEnabledForClient(
+      sponsorshipBefore.event.client,
+      "sponsorships",
+    );
+  }
 
   // Delete the usage
   await tx.sponsorshipUsage.delete({
@@ -118,10 +136,13 @@ async function unlinkSponsorshipFromRegistrationInternal(
   // Applies when the registration was settled or partial — meaning paidCount was
   // incremented for these items when the sponsorship was originally linked.
   const coveredAccessIds = sponsorshipBefore?.coveredAccessIds ?? [];
-  if (["PAID", "SPONSORED", "WAIVED", "PARTIAL"].includes(currentStatus) && coveredAccessIds.length > 0) {
-    const breakdown = registrationBefore?.priceBreakdown as
-      | { accessItems?: Array<{ accessId: string; quantity: number }> }
-      | null;
+  if (
+    ["PAID", "SPONSORED", "WAIVED", "PARTIAL"].includes(currentStatus) &&
+    coveredAccessIds.length > 0
+  ) {
+    const breakdown = registrationBefore?.priceBreakdown as {
+      accessItems?: Array<{ accessId: string; quantity: number }>;
+    } | null;
     const accessItems = breakdown?.accessItems ?? [];
     const itemsToDecrement = accessItems.filter((item) =>
       coveredAccessIds.includes(item.accessId),
@@ -336,6 +357,13 @@ export async function linkSponsorshipToRegistration(
     const sponsorship = await tx.sponsorship.findUnique({
       where: { id: sponsorshipId },
       include: {
+        event: {
+          select: {
+            clientId: true,
+            status: true,
+            client: { select: { enabledModules: true } },
+          },
+        },
         usages: {
           include: {
             sponsorship: {
@@ -347,13 +375,14 @@ export async function linkSponsorshipToRegistration(
             },
           },
         },
-        event: { select: { clientId: true } },
       },
     });
 
     if (!sponsorship) {
       throw new AppError("Sponsorship not found", 404, ErrorCodes.NOT_FOUND);
     }
+    assertEventWritable(sponsorship.event);
+    assertModuleEnabledForClient(sponsorship.event.client, "sponsorships");
 
     if (sponsorship.status === "CANCELLED") {
       throw new AppError(
@@ -498,11 +527,16 @@ export async function linkSponsorshipToRegistration(
 
     // Cap sponsorship amount at totalAmount to prevent over-sponsoring
     const rawSponsorshipAmount = calculateTotalSponsorshipAmount(allUsages);
-    const newSponsorshipAmount = Math.min(rawSponsorshipAmount, registration.totalAmount);
+    const newSponsorshipAmount = Math.min(
+      rawSponsorshipAmount,
+      registration.totalAmount,
+    );
 
     // Update registration sponsorship amount and paymentMethod
     const isFullySponsored = newSponsorshipAmount >= registration.totalAmount;
-    const wasAlreadySettled = ["PAID", "SPONSORED", "WAIVED"].includes(registration.paymentStatus);
+    const wasAlreadySettled = ["PAID", "SPONSORED", "WAIVED"].includes(
+      registration.paymentStatus,
+    );
     await tx.registration.update({
       where: { id: registrationId },
       data: {
@@ -522,11 +556,22 @@ export async function linkSponsorshipToRegistration(
       if (isFullySponsored) {
         // Fully sponsored: increment paidCount for items not already covered by prior sponsorships.
         // Exclude current sponsorship (its usage was just inserted) to get only previously-covered IDs.
-        const breakdown = registration.priceBreakdown as Record<string, unknown>;
-        const accessItems = (breakdown?.accessItems ?? []) as Array<{ accessId: string; quantity: number }>;
-        const alreadyCovered = registration.paymentStatus === "PARTIAL"
-          ? await getAlreadyCoveredAccessIds(registrationId, tx, sponsorshipId)
-          : new Set<string>();
+        const breakdown = registration.priceBreakdown as Record<
+          string,
+          unknown
+        >;
+        const accessItems = (breakdown?.accessItems ?? []) as Array<{
+          accessId: string;
+          quantity: number;
+        }>;
+        const alreadyCovered =
+          registration.paymentStatus === "PARTIAL"
+            ? await getAlreadyCoveredAccessIds(
+                registrationId,
+                tx,
+                sponsorshipId,
+              )
+            : new Set<string>();
         const itemsToIncrement = accessItems.filter(
           (item) => !alreadyCovered.has(item.accessId),
         );
@@ -540,10 +585,19 @@ export async function linkSponsorshipToRegistration(
             tx,
           );
         }
-      } else if (newSponsorshipAmount > 0 && sponsorship.coveredAccessIds.length > 0) {
+      } else if (
+        newSponsorshipAmount > 0 &&
+        sponsorship.coveredAccessIds.length > 0
+      ) {
         // Partial sponsorship: increment paidCount only for covered access items
-        const breakdown = registration.priceBreakdown as Record<string, unknown>;
-        const accessItems = (breakdown?.accessItems ?? []) as Array<{ accessId: string; quantity: number }>;
+        const breakdown = registration.priceBreakdown as Record<
+          string,
+          unknown
+        >;
+        const accessItems = (breakdown?.accessItems ?? []) as Array<{
+          accessId: string;
+          quantity: number;
+        }>;
         const coveredItems = accessItems.filter((a) =>
           sponsorship.coveredAccessIds.includes(a.accessId),
         );

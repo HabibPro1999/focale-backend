@@ -184,7 +184,7 @@ describe("Forms Service", () => {
       expect(result?.event.clientId).toBe("client-123");
       expect(prismaMock.form.findUnique).toHaveBeenCalledWith({
         where: { id: formId },
-        include: { event: { select: { clientId: true } } },
+        include: { event: { select: { clientId: true, status: true } } },
       });
     });
 
@@ -239,6 +239,11 @@ describe("Forms Service", () => {
           event: {
             slug: mockEvent.slug,
             status: "OPEN",
+            client: {
+              enabledModules: {
+                has: "registrations",
+              },
+            },
           },
           active: true,
         },
@@ -616,6 +621,11 @@ describe("Forms Service", () => {
           event: {
             slug: mockEvent.slug,
             status: "OPEN",
+            client: {
+              enabledModules: {
+                has: "sponsorships",
+              },
+            },
           },
           active: true,
         },

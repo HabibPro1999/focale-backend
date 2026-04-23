@@ -16,9 +16,6 @@
     "db:migrate:prod": "bun x prisma migrate deploy",
     "db:status": "bun x prisma migrate status",
     "db:seed": "bun prisma/seed.ts",
-    "db:verify": "bun scripts/verify-data-integrity.ts",
-    "db:backup": "./scripts/db-backup.sh",
-    "db:restore": "./scripts/db-restore.sh",
     "test": "bun x vitest",
     "test:run": "bun x vitest run",
     "test:coverage": "bun x vitest run --coverage"

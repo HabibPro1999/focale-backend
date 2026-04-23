@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+const hasUpdateField = (data: Record<string, unknown>) =>
+  Object.values(data).some((value) => value !== undefined);
+
 // ============================================================================
 // Field Schemas
 // ============================================================================
@@ -180,12 +183,16 @@ export const CreateFormSchema = z.strictObject({
   successMessage: z.string().optional().nullable(),
 });
 
-export const UpdateFormSchema = z.strictObject({
-  name: z.string().min(1).max(200).optional(),
-  schema: FormSchemaJsonSchema.optional(),
-  successTitle: z.string().optional().nullable(),
-  successMessage: z.string().optional().nullable(),
-});
+export const UpdateFormSchema = z
+  .strictObject({
+    name: z.string().min(1).max(200).optional(),
+    schema: FormSchemaJsonSchema.optional(),
+    successTitle: z.string().optional().nullable(),
+    successMessage: z.string().optional().nullable(),
+  })
+  .refine(hasUpdateField, {
+    message: "At least one field must be provided for update",
+  });
 
 export const ListFormsQuerySchema = z.strictObject({
   page: z.coerce.number().int().min(1).default(1),

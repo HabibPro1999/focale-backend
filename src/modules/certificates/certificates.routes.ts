@@ -2,7 +2,8 @@ import {
   requireAuth,
   canAccessClient,
 } from "@shared/middleware/auth.middleware.js";
-import { getEventById } from "@events";
+import { assertEventWritable, getEventById } from "@events";
+import { assertClientModuleEnabled } from "@clients";
 import {
   listTemplates,
   getTemplate,
@@ -59,6 +60,7 @@ export async function certificatesRoutes(app: AppInstance): Promise<void> {
       if (!canAccessClient(request.user!, event.clientId)) {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
+      await assertClientModuleEnabled(event.clientId, "certificates");
 
       const templates = await listTemplates(eventId);
       return reply.send(templates);
@@ -88,6 +90,8 @@ export async function certificatesRoutes(app: AppInstance): Promise<void> {
       if (!canAccessClient(request.user!, event.clientId)) {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
+      assertEventWritable(event);
+      await assertClientModuleEnabled(event.clientId, "certificates");
 
       const template = await createTemplate(eventId, request.body);
       return reply.status(201).send(template);
@@ -110,6 +114,7 @@ export async function certificatesRoutes(app: AppInstance): Promise<void> {
       if (!canAccessClient(request.user!, template.event.clientId)) {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
+      await assertClientModuleEnabled(template.event.clientId, "certificates");
 
       return reply.send(template);
     },
@@ -135,6 +140,8 @@ export async function certificatesRoutes(app: AppInstance): Promise<void> {
       if (!canAccessClient(request.user!, existing.event.clientId)) {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
+      assertEventWritable(existing.event);
+      await assertClientModuleEnabled(existing.event.clientId, "certificates");
 
       const template = await updateTemplate(id, request.body);
       return reply.send(template);
@@ -157,6 +164,8 @@ export async function certificatesRoutes(app: AppInstance): Promise<void> {
       if (!canAccessClient(request.user!, existing.event.clientId)) {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
+      assertEventWritable(existing.event);
+      await assertClientModuleEnabled(existing.event.clientId, "certificates");
 
       await deleteTemplate(id);
       return reply.status(204).send();
@@ -179,6 +188,8 @@ export async function certificatesRoutes(app: AppInstance): Promise<void> {
       if (!canAccessClient(request.user!, existing.event.clientId)) {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
+      assertEventWritable(existing.event);
+      await assertClientModuleEnabled(existing.event.clientId, "certificates");
 
       const data = await request.file({
         limits: { fileSize: 10 * 1024 * 1024 },
@@ -214,6 +225,7 @@ export async function certificatesRoutes(app: AppInstance): Promise<void> {
       if (!canAccessClient(request.user!, existing.event.clientId)) {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
+      await assertClientModuleEnabled(existing.event.clientId, "certificates");
 
       if (!existing.templateUrl) {
         throw app.httpErrors.notFound("Certificate template image not found");
@@ -251,9 +263,15 @@ export async function certificatesRoutes(app: AppInstance): Promise<void> {
       if (!canAccessClient(request.user!, event.clientId)) {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
+      assertEventWritable(event);
+      await assertClientModuleEnabled(event.clientId, "certificates");
+      await assertClientModuleEnabled(event.clientId, "emails");
 
       // 2. Get the CERTIFICATE_SENT email template
-      const emailTemplate = await getTemplateByTrigger(eventId, "CERTIFICATE_SENT");
+      const emailTemplate = await getTemplateByTrigger(
+        eventId,
+        "CERTIFICATE_SENT",
+      );
       if (!emailTemplate) {
         throw app.httpErrors.badRequest(
           "No CERTIFICATE_SENT email template configured for this event. Create one in the Email Templates section first.",
@@ -298,17 +316,19 @@ export async function certificatesRoutes(app: AppInstance): Promise<void> {
       const breakdown: Record<string, number> = {};
 
       // Build template data once — same for all registrants
-      const templateData: CertificateTemplateData[] = certTemplates.map((t) => ({
-        id: t.id,
-        name: t.name,
-        templateUrl: t.templateUrl,
-        templateWidth: t.templateWidth,
-        templateHeight: t.templateHeight,
-        zones: t.zones as CertificateZone[],
-        applicableRoles: t.applicableRoles as string[],
-        accessId: t.accessId,
-        access: t.access,
-      }));
+      const templateData: CertificateTemplateData[] = certTemplates.map(
+        (t) => ({
+          id: t.id,
+          name: t.name,
+          templateUrl: t.templateUrl,
+          templateWidth: t.templateWidth,
+          templateHeight: t.templateHeight,
+          zones: t.zones as CertificateZone[],
+          applicableRoles: t.applicableRoles as string[],
+          accessId: t.accessId,
+          access: t.access,
+        }),
+      );
 
       // Filter eligible registrations first (pure, no DB calls)
       const eligibleRegs = registrations
@@ -322,7 +342,11 @@ export async function certificatesRoutes(app: AppInstance): Promise<void> {
                 role: reg.role,
                 checkedInAt: reg.checkedInAt,
                 accessCheckIns: reg.accessCheckIns,
-                event: { name: reg.event.name, startDate: reg.event.startDate, location: reg.event.location },
+                event: {
+                  name: reg.event.name,
+                  startDate: reg.event.startDate,
+                  location: reg.event.location,
+                },
               },
               t,
             ),
@@ -337,7 +361,9 @@ export async function certificatesRoutes(app: AppInstance): Promise<void> {
         const chunk = eligibleRegs.slice(i, i + CONTEXT_CONCURRENCY);
         const contexts = await Promise.all(
           chunk.map(({ reg }) =>
-            buildEmailContextWithAccess(reg as Parameters<typeof buildEmailContextWithAccess>[0]),
+            buildEmailContextWithAccess(
+              reg as Parameters<typeof buildEmailContextWithAccess>[0],
+            ),
           ),
         );
 
@@ -353,7 +379,8 @@ export async function certificatesRoutes(app: AppInstance): Promise<void> {
             registrationId: reg.id,
             recipientEmail: reg.email,
             recipientName:
-              [reg.firstName, reg.lastName].filter(Boolean).join(" ") || undefined,
+              [reg.firstName, reg.lastName].filter(Boolean).join(" ") ||
+              undefined,
             certificateTemplateIds: eligible.map((t) => t.id),
             certificateNames: eligible.map((t) => t.name),
             contextSnapshot: context as unknown as Record<string, unknown>,

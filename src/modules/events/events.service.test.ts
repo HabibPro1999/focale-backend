@@ -24,6 +24,29 @@ vi.mock("@clients", () => ({
 
 import { clientExists as clientExistsMock } from "@clients";
 
+type CreateEventTxMock = {
+  event: { create: ReturnType<typeof vi.fn> };
+  eventPricing: { create: ReturnType<typeof vi.fn> };
+};
+
+function mockCreateEventTransaction(
+  mockEvent: unknown,
+  mockPricing: unknown,
+): void {
+  prismaMock.$transaction.mockImplementation(async (callback: unknown) => {
+    const txMock: CreateEventTxMock = {
+      event: {
+        create: vi.fn().mockResolvedValue(mockEvent),
+      },
+      eventPricing: {
+        create: vi.fn().mockResolvedValue(mockPricing),
+      },
+    };
+
+    return (callback as (tx: CreateEventTxMock) => Promise<unknown>)(txMock);
+  });
+}
+
 describe("Events Service", () => {
   const clientId = "client-123";
   const eventId = "event-123";
@@ -67,20 +90,7 @@ describe("Events Service", () => {
       });
 
       prismaMock.event.findUnique.mockResolvedValue(null); // No existing slug
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prismaMock.$transaction.mockImplementation(
-        async (callback: (tx: any) => Promise<any>) => {
-          const txMock = {
-            event: {
-              create: vi.fn().mockResolvedValue(mockEvent),
-            },
-            eventPricing: {
-              create: vi.fn().mockResolvedValue(mockPricing),
-            },
-          };
-          return callback(txMock);
-        },
-      );
+      mockCreateEventTransaction(mockEvent, mockPricing);
 
       const result = await createEvent(validInput);
 
@@ -130,20 +140,7 @@ describe("Events Service", () => {
       const mockPricing = createMockEventPricing({ eventId });
 
       prismaMock.event.findUnique.mockResolvedValue(null);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prismaMock.$transaction.mockImplementation(
-        async (callback: (tx: any) => Promise<any>) => {
-          const txMock = {
-            event: {
-              create: vi.fn().mockResolvedValue(mockEvent),
-            },
-            eventPricing: {
-              create: vi.fn().mockResolvedValue(mockPricing),
-            },
-          };
-          return callback(txMock);
-        },
-      );
+      mockCreateEventTransaction(mockEvent, mockPricing);
 
       const result = await createEvent({
         ...inputWithoutStatus,
@@ -156,13 +153,16 @@ describe("Events Service", () => {
     });
 
     it("should use default basePrice 0 and currency TND when not provided", async () => {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const {
-        basePrice: _omit1,
-        currency: _omit2,
-        status: _omit3,
-        ...inputWithoutPricing
-      } = validInput;
+      const inputWithoutPricing = {
+        clientId: validInput.clientId,
+        name: validInput.name,
+        slug: validInput.slug,
+        description: validInput.description,
+        maxCapacity: validInput.maxCapacity,
+        startDate: validInput.startDate,
+        endDate: validInput.endDate,
+        location: validInput.location,
+      };
 
       const mockEvent = createMockEvent({ id: eventId, clientId });
       const mockPricing = createMockEventPricing({
@@ -172,20 +172,7 @@ describe("Events Service", () => {
       });
 
       prismaMock.event.findUnique.mockResolvedValue(null);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      prismaMock.$transaction.mockImplementation(
-        async (callback: (tx: any) => Promise<any>) => {
-          const txMock = {
-            event: {
-              create: vi.fn().mockResolvedValue(mockEvent),
-            },
-            eventPricing: {
-              create: vi.fn().mockResolvedValue(mockPricing),
-            },
-          };
-          return callback(txMock);
-        },
-      );
+      mockCreateEventTransaction(mockEvent, mockPricing);
 
       const result = await createEvent({
         ...inputWithoutPricing,
@@ -618,10 +605,16 @@ describe("Events Service", () => {
       };
 
       prismaMock.event.findUnique.mockResolvedValue(mockEvent);
+      prismaMock.$transaction.mockImplementation(async (callback) =>
+        callback(prismaMock),
+      );
       prismaMock.event.delete.mockResolvedValue(mockEvent);
 
       await deleteEvent(eventId);
 
+      expect(prismaMock.emailTemplate.deleteMany).toHaveBeenCalledWith({
+        where: { eventId },
+      });
       expect(prismaMock.event.delete).toHaveBeenCalledWith({
         where: { id: eventId },
       });

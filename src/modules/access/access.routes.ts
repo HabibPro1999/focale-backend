@@ -1,13 +1,16 @@
-import { requireAuth, canAccessClient } from '@shared/middleware/auth.middleware.js';
-import { getEventById } from '@events';
+import {
+  requireAuth,
+  canAccessClient,
+} from "@shared/middleware/auth.middleware.js";
+import { assertEventWritable, getEventById } from "@events";
+import { assertClientModuleEnabled } from "@clients";
 import {
   createEventAccess,
   updateEventAccess,
   deleteEventAccess,
   listEventAccess,
   getEventAccessById,
-  getAccessClientId,
-} from './access.service.js';
+} from "./access.service.js";
 import {
   CreateEventAccessSchema,
   UpdateEventAccessSchema,
@@ -16,22 +19,22 @@ import {
   EventIdParamSchema,
   type CreateEventAccessInput,
   type UpdateEventAccessInput,
-} from './access.schema.js';
-import type { AppInstance } from '@shared/types/fastify.js';
+} from "./access.schema.js";
+import type { AppInstance } from "@shared/types/fastify.js";
 
 // ============================================================================
 // Protected Routes (Admin)
 // ============================================================================
 
 export async function accessRoutes(app: AppInstance): Promise<void> {
-  app.addHook('onRequest', requireAuth);
+  app.addHook("onRequest", requireAuth);
 
   // POST /api/events/:eventId/access - Create access item
   app.post<{
     Params: { eventId: string };
-    Body: Omit<CreateEventAccessInput, 'eventId'>;
+    Body: Omit<CreateEventAccessInput, "eventId">;
   }>(
-    '/:eventId/access',
+    "/:eventId/access",
     {
       schema: {
         params: EventIdParamSchema,
@@ -44,16 +47,18 @@ export async function accessRoutes(app: AppInstance): Promise<void> {
 
       const event = await getEventById(eventId);
       if (!event) {
-        throw app.httpErrors.notFound('Event not found');
+        throw app.httpErrors.notFound("Event not found");
       }
 
       if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden('Insufficient permissions');
+        throw app.httpErrors.forbidden("Insufficient permissions");
       }
+      assertEventWritable(event);
+      await assertClientModuleEnabled(event.clientId, "registrations");
 
       const access = await createEventAccess(input);
       return reply.status(201).send(access);
-    }
+    },
   );
 
   // GET /api/events/:eventId/access - List access items
@@ -61,7 +66,7 @@ export async function accessRoutes(app: AppInstance): Promise<void> {
     Params: { eventId: string };
     Querystring: { active?: boolean; type?: string };
   }>(
-    '/:eventId/access',
+    "/:eventId/access",
     {
       schema: {
         params: EventIdParamSchema,
@@ -74,24 +79,25 @@ export async function accessRoutes(app: AppInstance): Promise<void> {
 
       const event = await getEventById(eventId);
       if (!event) {
-        throw app.httpErrors.notFound('Event not found');
+        throw app.httpErrors.notFound("Event not found");
       }
 
       if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden('Insufficient permissions');
+        throw app.httpErrors.forbidden("Insufficient permissions");
       }
+      await assertClientModuleEnabled(event.clientId, "registrations");
 
       const access = await listEventAccess(eventId, {
         active: query.active,
         type: query.type,
       });
       return reply.send(access);
-    }
+    },
   );
 
   // GET /api/access/:id - Get single access item
   app.get<{ Params: { id: string } }>(
-    '/access/:id',
+    "/access/:id",
     {
       schema: { params: EventAccessIdParamSchema },
     },
@@ -100,21 +106,26 @@ export async function accessRoutes(app: AppInstance): Promise<void> {
 
       const access = await getEventAccessById(id);
       if (!access) {
-        throw app.httpErrors.notFound('Access item not found');
+        throw app.httpErrors.notFound("Access item not found");
       }
 
-      const clientId = await getAccessClientId(id);
-      if (clientId && !canAccessClient(request.user!, clientId)) {
-        throw app.httpErrors.forbidden('Insufficient permissions');
+      const event = await getEventById(access.eventId);
+      if (!event) {
+        throw app.httpErrors.notFound("Event not found");
       }
+
+      if (!canAccessClient(request.user!, event.clientId)) {
+        throw app.httpErrors.forbidden("Insufficient permissions");
+      }
+      await assertClientModuleEnabled(event.clientId, "registrations");
 
       return reply.send(access);
-    }
+    },
   );
 
   // PATCH /api/access/:id - Update access item
   app.patch<{ Params: { id: string }; Body: UpdateEventAccessInput }>(
-    '/access/:id',
+    "/access/:id",
     {
       schema: {
         params: EventAccessIdParamSchema,
@@ -127,26 +138,28 @@ export async function accessRoutes(app: AppInstance): Promise<void> {
 
       const access = await getEventAccessById(id);
       if (!access) {
-        throw app.httpErrors.notFound('Access item not found');
+        throw app.httpErrors.notFound("Access item not found");
       }
 
       const event = await getEventById(access.eventId);
       if (!event) {
-        throw app.httpErrors.notFound('Event not found');
+        throw app.httpErrors.notFound("Event not found");
       }
 
       if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden('Insufficient permissions');
+        throw app.httpErrors.forbidden("Insufficient permissions");
       }
+      assertEventWritable(event);
+      await assertClientModuleEnabled(event.clientId, "registrations");
 
       const updatedAccess = await updateEventAccess(id, input);
       return reply.send(updatedAccess);
-    }
+    },
   );
 
   // DELETE /api/access/:id - Delete access item
   app.delete<{ Params: { id: string } }>(
-    '/access/:id',
+    "/access/:id",
     {
       schema: { params: EventAccessIdParamSchema },
     },
@@ -155,20 +168,22 @@ export async function accessRoutes(app: AppInstance): Promise<void> {
 
       const access = await getEventAccessById(id);
       if (!access) {
-        throw app.httpErrors.notFound('Access item not found');
+        throw app.httpErrors.notFound("Access item not found");
       }
 
       const event = await getEventById(access.eventId);
       if (!event) {
-        throw app.httpErrors.notFound('Event not found');
+        throw app.httpErrors.notFound("Event not found");
       }
 
       if (!canAccessClient(request.user!, event.clientId)) {
-        throw app.httpErrors.forbidden('Insufficient permissions');
+        throw app.httpErrors.forbidden("Insufficient permissions");
       }
+      assertEventWritable(event);
+      await assertClientModuleEnabled(event.clientId, "registrations");
 
       await deleteEventAccess(id);
       return reply.status(204).send();
-    }
+    },
   );
 }

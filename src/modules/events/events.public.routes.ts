@@ -39,20 +39,28 @@ export async function eventsPublicRoutes(app: AppInstance): Promise<void> {
 
       // Transform pricing for public consumption
       const pricing = event.pricing;
-      const paymentMethods: string[] = ["BANK_TRANSFER"]; // Bank transfer always available
-      if (pricing?.onlinePaymentEnabled && pricing?.onlinePaymentUrl) {
-        paymentMethods.push("ONLINE");
-      }
-      if (pricing?.cashPaymentEnabled) {
-        paymentMethods.push("CASH");
+      const registrationsEnabled =
+        event.client.enabledModules.includes("registrations");
+      const pricingEnabled = event.client.enabledModules.includes("pricing");
+      const paymentMethods: string[] = [];
+      const exposePaymentConfig =
+        event.status === "OPEN" && registrationsEnabled && pricingEnabled;
+      if (exposePaymentConfig) {
+        paymentMethods.push("BANK_TRANSFER");
+        if (pricing?.onlinePaymentEnabled && pricing.onlinePaymentUrl) {
+          paymentMethods.push("ONLINE");
+        }
+        if (pricing?.cashPaymentEnabled) {
+          paymentMethods.push("CASH");
+        }
       }
 
       // Check if sponsorships module is enabled for the client
-      const enabledModules = event.client.enabledModules as string[];
-      const sponsorshipsEnabled = enabledModules.includes("sponsorships");
+      const sponsorshipsEnabled =
+        event.client.enabledModules.includes("sponsorships");
 
       // Lab sponsorship option available when sponsorships module is disabled
-      if (!sponsorshipsEnabled) {
+      if (exposePaymentConfig && !sponsorshipsEnabled) {
         paymentMethods.push("LAB_SPONSORSHIP");
       }
 
@@ -61,34 +69,41 @@ export async function eventsPublicRoutes(app: AppInstance): Promise<void> {
           id: event.id,
           name: event.name,
           slug: event.slug,
+          description: event.description,
           status: event.status,
           startDate: event.startDate,
           endDate: event.endDate,
           location: event.location,
-          client: event.client,
+          bannerUrl: event.bannerUrl,
+          client: {
+            id: event.client.id,
+            name: event.client.name,
+            logo: event.client.logo,
+            primaryColor: event.client.primaryColor,
+          },
         },
         sponsorshipsEnabled,
-        pricing: pricing
-          ? {
-              basePrice: pricing.basePrice,
-              currency: pricing.currency,
-              rules: pricing.rules ?? [],
-              paymentMethods,
-              bankDetails:
-                event.status === "OPEN" && pricing.bankName
-                  ? {
-                      bankName: pricing.bankName,
-                      accountName: pricing.bankAccountName ?? "",
-                      iban: pricing.bankAccountNumber ?? "",
-                      bic: "",
-                    }
-                  : null,
-              onlinePaymentUrl:
-                event.status === "OPEN"
+        pricing:
+          pricing && pricingEnabled && registrationsEnabled
+            ? {
+                basePrice: pricing.basePrice,
+                currency: pricing.currency,
+                rules: pricing.rules ?? [],
+                paymentMethods,
+                bankDetails:
+                  exposePaymentConfig && pricing.bankName
+                    ? {
+                        bankName: pricing.bankName,
+                        accountName: pricing.bankAccountName ?? "",
+                        iban: pricing.bankAccountNumber ?? "",
+                        bic: "",
+                      }
+                    : null,
+                onlinePaymentUrl: exposePaymentConfig
                   ? (pricing.onlinePaymentUrl ?? null)
                   : null,
-            }
-          : null,
+              }
+            : null,
       });
     },
   );

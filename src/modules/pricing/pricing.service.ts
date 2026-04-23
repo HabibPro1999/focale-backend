@@ -4,6 +4,8 @@ import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { calculateApplicableAmount } from "@shared/utils/sponsorship-math.js";
 import { evaluateConditions } from "@shared/utils/conditions.js";
+import { assertModuleEnabledForClient } from "@clients";
+import { assertEventWritable } from "@events";
 import type {
   UpdateEventPricingInput,
   CreateEmbeddedRuleInput,
@@ -50,19 +52,32 @@ export async function updateEventPricing(
   eventId: string,
   input: UpdateEventPricingInput,
 ): Promise<EventPricingWithRules> {
-  const pricing = await prisma.eventPricing.findUnique({ where: { eventId } });
-  if (!pricing) {
-    throw new AppError(
-      "Event pricing not found",
-      404,
-      ErrorCodes.PRICING_NOT_FOUND,
-    );
+  const event = await prisma.event.findUnique({
+    where: { id: eventId },
+    select: {
+      status: true,
+      client: { select: { enabledModules: true } },
+    },
+  });
+  if (!event) {
+    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
   }
+  assertEventWritable(event);
+  assertModuleEnabledForClient(event.client, "pricing");
 
   const updateData: Prisma.EventPricingUpdateInput = {};
+  const createData: Prisma.EventPricingCreateInput = {
+    event: { connect: { id: eventId } },
+    basePrice: input.basePrice ?? 0,
+    currency: input.currency ?? "TND",
+  };
 
-  if (input.basePrice !== undefined) updateData.basePrice = input.basePrice;
-  if (input.currency !== undefined) updateData.currency = input.currency;
+  if (input.basePrice !== undefined) {
+    updateData.basePrice = input.basePrice ?? 0;
+  }
+  if (input.currency !== undefined) {
+    updateData.currency = input.currency;
+  }
   if (input.rules !== undefined) {
     // Ensure all rules have IDs (in case new ones are added)
     const rulesWithIds = input.rules.map((rule) => ({
@@ -70,24 +85,39 @@ export async function updateEventPricing(
       id: rule.id ?? randomUUID(),
     }));
     updateData.rules = rulesWithIds as Prisma.InputJsonValue;
+    createData.rules = rulesWithIds as Prisma.InputJsonValue;
   }
 
   // Payment Methods
-  if (input.onlinePaymentEnabled !== undefined)
+  if (input.onlinePaymentEnabled !== undefined) {
     updateData.onlinePaymentEnabled = input.onlinePaymentEnabled;
-  if (input.onlinePaymentUrl !== undefined)
+    createData.onlinePaymentEnabled = input.onlinePaymentEnabled;
+  }
+  if (input.onlinePaymentUrl !== undefined) {
     updateData.onlinePaymentUrl = input.onlinePaymentUrl;
-  if (input.cashPaymentEnabled !== undefined)
+    createData.onlinePaymentUrl = input.onlinePaymentUrl;
+  }
+  if (input.cashPaymentEnabled !== undefined) {
     updateData.cashPaymentEnabled = input.cashPaymentEnabled;
-  if (input.bankName !== undefined) updateData.bankName = input.bankName;
-  if (input.bankAccountName !== undefined)
+    createData.cashPaymentEnabled = input.cashPaymentEnabled;
+  }
+  if (input.bankName !== undefined) {
+    updateData.bankName = input.bankName;
+    createData.bankName = input.bankName;
+  }
+  if (input.bankAccountName !== undefined) {
     updateData.bankAccountName = input.bankAccountName;
-  if (input.bankAccountNumber !== undefined)
+    createData.bankAccountName = input.bankAccountName;
+  }
+  if (input.bankAccountNumber !== undefined) {
     updateData.bankAccountNumber = input.bankAccountNumber;
+    createData.bankAccountNumber = input.bankAccountNumber;
+  }
 
-  const updated = await prisma.eventPricing.update({
+  const updated = await prisma.eventPricing.upsert({
     where: { eventId },
-    data: updateData,
+    create: createData,
+    update: updateData,
   });
 
   return {
@@ -201,15 +231,21 @@ export async function calculatePrice(
 ): Promise<PriceBreakdown> {
   const { formData, selectedAccessItems, sponsorshipCodes } = input;
 
-  // Get event pricing configuration with embedded rules
-  const pricing = await getEventPricing(eventId);
-  if (!pricing) {
-    throw new AppError(
-      "Event pricing not found",
-      404,
-      ErrorCodes.PRICING_NOT_FOUND,
-    );
+  const event = await prisma.event.findUnique({
+    where: { id: eventId },
+    select: {
+      client: { select: { enabledModules: true } },
+    },
+  });
+  if (!event) {
+    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
   }
+  assertModuleEnabledForClient(event.client, "pricing");
+
+  // Get event pricing configuration with embedded rules
+  const pricing =
+    (await getEventPricing(eventId)) ??
+    (await updateEventPricing(eventId, { basePrice: 0, currency: "TND" }));
 
   const { basePrice, currency, rules } = pricing;
 
