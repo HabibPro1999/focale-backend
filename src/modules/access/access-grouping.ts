@@ -33,6 +33,7 @@ export async function getGroupedAccess(
   });
 
   const now = new Date();
+  const selectedAccessIdSet = new Set(selectedAccessIds);
 
   const availableAccess = allAccess.filter((access) => {
     if (access.availableFrom && access.availableFrom > now) return false;
@@ -52,7 +53,7 @@ export async function getGroupedAccess(
 
     if (access.requiredAccess && access.requiredAccess.length > 0) {
       const hasAllPrerequisites = access.requiredAccess.every((req) =>
-        selectedAccessIds.includes(req.id),
+        selectedAccessIdSet.has(req.id),
       );
       if (!hasAllPrerequisites) return false;
     }

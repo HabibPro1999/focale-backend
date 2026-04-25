@@ -17,6 +17,7 @@ export async function validateAccessSelections(
   const errors: string[] = [];
 
   const accessIds = selections.map((s) => s.accessId);
+  const accessIdSet = new Set(accessIds);
 
   // Fetch selected items and included items in parallel
   const [accessItems, includedAccesses] = await Promise.all([
@@ -45,7 +46,7 @@ export async function validateAccessSelections(
       )
         continue;
     }
-    if (!accessIds.includes(included.id)) {
+    if (!accessIdSet.has(included.id)) {
       errors.push(`"${included.name}" est inclus et doit être sélectionné`);
     }
   }
@@ -61,10 +62,7 @@ export async function validateAccessSelections(
     const access = accessMap.get(selection.accessId);
     if (!access) {
       errors.push(`Access item ${selection.accessId} not found`);
-    } else if (
-      !access.active &&
-      !existingAccessIds?.has(selection.accessId)
-    ) {
+    } else if (!access.active && !existingAccessIds?.has(selection.accessId)) {
       errors.push(`Access item ${selection.accessId} is inactive`);
     }
   }
@@ -115,7 +113,7 @@ export async function validateAccessSelections(
     const access = accessMap.get(selection.accessId)!;
     if (access.requiredAccess && access.requiredAccess.length > 0) {
       for (const req of access.requiredAccess) {
-        if (!accessIds.includes(req.id)) {
+        if (!accessIdSet.has(req.id)) {
           errors.push(
             `${access.name} requires selecting its prerequisite first`,
           );

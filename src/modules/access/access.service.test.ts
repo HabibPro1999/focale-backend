@@ -12,8 +12,10 @@ import {
   getEventAccessById,
   getAccessClientId,
   getGroupedAccess,
-  reserveAccessSpot,
-  releaseAccessSpot,
+  incrementAccessRegisteredCountTx,
+  decrementAccessRegisteredCountTx,
+  incrementPaidCount,
+  decrementPaidCount,
   validateAccessSelections,
 } from "./access.service.js";
 import { AppError } from "@shared/errors/app-error.js";
@@ -277,6 +279,95 @@ describe("Access Service", () => {
           startsAt: new Date("2025-07-01"), // Outside event dates
         }),
       ).rejects.toThrow(AppError);
+    });
+
+    it("should throw when merged start time is after end time", async () => {
+      const accessId = "access-1";
+      const existingAccess = createEventAccessWithRelations({
+        id: accessId,
+        eventId,
+        startsAt: new Date("2025-06-01T09:00:00"),
+        endsAt: new Date("2025-06-01T11:00:00"),
+        requiredAccess: [],
+        event: { startDate: eventStartDate, endDate: eventEndDate },
+      });
+
+      prismaMock.eventAccess.findUnique.mockResolvedValue(
+        existingAccess as never,
+      );
+
+      await expect(
+        updateEventAccess(accessId, {
+          startsAt: new Date("2025-06-01T12:00:00"),
+        }),
+      ).rejects.toMatchObject({
+        code: ErrorCodes.VALIDATION_ERROR,
+      });
+    });
+
+    it("should reject max capacity below settled paid count", async () => {
+      const accessId = "access-1";
+      const existingAccess = createEventAccessWithRelations({
+        id: accessId,
+        eventId,
+        maxCapacity: 20,
+        registeredCount: 15,
+        paidCount: 8,
+        requiredAccess: [],
+        event: { startDate: eventStartDate, endDate: eventEndDate },
+      });
+
+      prismaMock.eventAccess.findUnique.mockResolvedValue(
+        existingAccess as never,
+      );
+
+      await expect(
+        updateEventAccess(accessId, { maxCapacity: 7 }),
+      ).rejects.toMatchObject({
+        code: ErrorCodes.ACCESS_CAPACITY_EXCEEDED,
+        details: { paidCount: 8, requestedMaxCapacity: 7 },
+      });
+      expect(prismaMock.eventAccess.update).not.toHaveBeenCalled();
+    });
+
+    it("should allow max capacity below registered count when paid count fits", async () => {
+      const accessId = "access-1";
+      const existingAccess = createEventAccessWithRelations({
+        id: accessId,
+        eventId,
+        maxCapacity: 20,
+        registeredCount: 12,
+        paidCount: 5,
+        requiredAccess: [],
+        event: { startDate: eventStartDate, endDate: eventEndDate },
+      });
+      const updatedAccess = createEventAccessWithRelations({
+        ...existingAccess,
+        maxCapacity: 5,
+      });
+      const runTransaction = async (
+        callback: (tx: typeof prismaMock) => Promise<unknown>,
+      ) => callback(prismaMock);
+
+      prismaMock.eventAccess.findUnique.mockResolvedValue(
+        existingAccess as never,
+      );
+      prismaMock.$transaction.mockImplementation(runTransaction as never);
+      prismaMock.eventAccess.update.mockResolvedValue(updatedAccess as never);
+      prismaMock.eventAccess.findMany.mockResolvedValue([updatedAccess] as never);
+      prismaMock.registration.findMany.mockResolvedValue([] as never);
+
+      const result = await updateEventAccess(accessId, { maxCapacity: 5 });
+
+      expect(result.maxCapacity).toBe(5);
+      expect(prismaMock.registration.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            eventId,
+            accessTypeIds: { has: accessId },
+          }),
+        }),
+      );
     });
 
     it("should detect circular prerequisites", async () => {
@@ -939,19 +1030,23 @@ describe("Access Service", () => {
   // Capacity Management
   // ============================================================================
 
-  describe("reserveAccessSpot", () => {
-    it("should reserve a spot with atomic update", async () => {
+  describe("incrementAccessRegisteredCountTx", () => {
+    it("should record a selected access item", async () => {
       prismaMock.$executeRaw.mockResolvedValue(1);
 
-      await reserveAccessSpot("access-1", 1);
+      await incrementAccessRegisteredCountTx("access-1", 1);
 
-      expect(prismaMock.$executeRaw).toHaveBeenCalled();
+      const [sql] = prismaMock.$executeRaw.mock.calls[0];
+      expect((sql as TemplateStringsArray).join(" ")).toContain(
+        "paid_count < max_capacity",
+      );
+
     });
 
-    it("should reserve multiple spots", async () => {
+    it("should record multiple selected access items", async () => {
       prismaMock.$executeRaw.mockResolvedValue(1);
 
-      await reserveAccessSpot("access-1", 3);
+      await incrementAccessRegisteredCountTx("access-1", 3);
 
       expect(prismaMock.$executeRaw).toHaveBeenCalled();
     });
@@ -960,37 +1055,39 @@ describe("Access Service", () => {
       prismaMock.$executeRaw.mockResolvedValue(0);
       prismaMock.eventAccess.findUnique.mockResolvedValue(null);
 
-      await expect(reserveAccessSpot("non-existent", 1)).rejects.toThrow(
-        AppError,
-      );
-      await expect(reserveAccessSpot("non-existent", 1)).rejects.toMatchObject({
+      await expect(
+        incrementAccessRegisteredCountTx("non-existent", 1),
+      ).rejects.toMatchObject({
         code: ErrorCodes.ACCESS_NOT_FOUND,
       });
     });
 
-    it("should throw when capacity exceeded", async () => {
+    it("should throw only when paid count has filled capacity", async () => {
       const access = createEventAccessWithRelations({
         id: "access-1",
         name: "Workshop",
         maxCapacity: 10,
         registeredCount: 8,
+        paidCount: 10,
       });
 
       prismaMock.$executeRaw.mockResolvedValue(0);
       prismaMock.eventAccess.findUnique.mockResolvedValue(access as never);
 
-      await expect(reserveAccessSpot("access-1", 5)).rejects.toThrow(AppError);
-      await expect(reserveAccessSpot("access-1", 5)).rejects.toMatchObject({
+      await expect(
+        incrementAccessRegisteredCountTx("access-1", 1),
+      ).rejects.toMatchObject({
         code: ErrorCodes.ACCESS_CAPACITY_EXCEEDED,
+        details: { remaining: 0, requested: 1 },
       });
     });
   });
 
-  describe("releaseAccessSpot", () => {
-    it("should release a spot with floor constraint", async () => {
+  describe("decrementAccessRegisteredCountTx", () => {
+    it("should remove selected access item count with floor constraint", async () => {
       prismaMock.eventAccess.updateMany.mockResolvedValue({ count: 1 });
 
-      await releaseAccessSpot("access-1", 1);
+      await decrementAccessRegisteredCountTx("access-1", 1);
 
       expect(prismaMock.eventAccess.updateMany).toHaveBeenCalledWith({
         where: {
@@ -1001,27 +1098,112 @@ describe("Access Service", () => {
       });
     });
 
-    it("should release multiple spots", async () => {
+    it("should throw when access is missing", async () => {
+      prismaMock.eventAccess.updateMany.mockResolvedValue({ count: 0 });
+      prismaMock.eventAccess.findUnique.mockResolvedValue(null);
+
+      await expect(
+        decrementAccessRegisteredCountTx("non-existent", 1),
+      ).rejects.toMatchObject({
+        code: ErrorCodes.ACCESS_NOT_FOUND,
+      });
+    });
+
+    it("should throw on registered count underflow", async () => {
+      prismaMock.eventAccess.updateMany.mockResolvedValue({ count: 0 });
+      prismaMock.eventAccess.findUnique.mockResolvedValue({
+        registeredCount: 1,
+      } as never);
+
+      await expect(
+        decrementAccessRegisteredCountTx("access-1", 2),
+      ).rejects.toMatchObject({
+        code: ErrorCodes.VALIDATION_ERROR,
+        details: { registeredCount: 1, requested: 2 },
+      });
+    });
+  });
+
+  describe("incrementPaidCount", () => {
+    it("should increment paid count through an atomic capacity gate", async () => {
+      prismaMock.$queryRaw.mockResolvedValue([{ id: "access-1" }]);
+
+      await incrementPaidCount("access-1", 1);
+
+      const [sql] = prismaMock.$queryRaw.mock.calls[0];
+      const statement = (sql as TemplateStringsArray).join(" ");
+      expect(statement).toContain("paid_count +");
+      expect(statement).toContain("RETURNING id");
+
+    });
+
+    it("should allow unlimited capacity", async () => {
+      prismaMock.$queryRaw.mockResolvedValue([{ id: "access-1" }]);
+
+      await incrementPaidCount("access-1", 25);
+
+      expect(prismaMock.eventAccess.findUnique).not.toHaveBeenCalled();
+    });
+
+    it("should throw when access not found", async () => {
+      prismaMock.$queryRaw.mockResolvedValue([]);
+      prismaMock.eventAccess.findUnique.mockResolvedValue(null);
+
+      await expect(incrementPaidCount("missing", 1)).rejects.toMatchObject({
+        code: ErrorCodes.ACCESS_NOT_FOUND,
+      });
+    });
+
+    it("should fail atomically when quantity exceeds remaining capacity", async () => {
+      const access = createEventAccessWithRelations({
+        id: "access-1",
+        name: "Workshop",
+        maxCapacity: 10,
+        paidCount: 8,
+      });
+
+      prismaMock.$queryRaw.mockResolvedValue([]);
+      prismaMock.eventAccess.findUnique.mockResolvedValue(access as never);
+
+      await expect(incrementPaidCount("access-1", 3)).rejects.toMatchObject({
+        code: ErrorCodes.ACCESS_CAPACITY_EXCEEDED,
+        details: { remaining: 2, requested: 3 },
+      });
+    });
+  });
+
+  describe("decrementPaidCount", () => {
+    it("should decrement paid count with floor constraint", async () => {
       prismaMock.eventAccess.updateMany.mockResolvedValue({ count: 1 });
 
-      await releaseAccessSpot("access-1", 3);
+      await decrementPaidCount("access-1", 1);
 
       expect(prismaMock.eventAccess.updateMany).toHaveBeenCalledWith({
         where: {
           id: "access-1",
-          registeredCount: { gte: 3 },
+          paidCount: { gte: 1 },
         },
-        data: { registeredCount: { decrement: 3 } },
+        data: { paidCount: { decrement: 1 } },
       });
     });
 
-    it("should not throw when no rows updated (logs warning instead)", async () => {
+    it("should throw when access is missing", async () => {
       prismaMock.eventAccess.updateMany.mockResolvedValue({ count: 0 });
+      prismaMock.eventAccess.findUnique.mockResolvedValue(null);
 
-      // Should resolve without throwing even when count === 0
-      await expect(
-        releaseAccessSpot("non-existent", 1),
-      ).resolves.toBeUndefined();
+      await expect(decrementPaidCount("missing", 1)).rejects.toMatchObject({
+        code: ErrorCodes.ACCESS_NOT_FOUND,
+      });
+    });
+
+    it("should throw on paid count underflow", async () => {
+      prismaMock.eventAccess.updateMany.mockResolvedValue({ count: 0 });
+      prismaMock.eventAccess.findUnique.mockResolvedValue({ paidCount: 1 } as never);
+
+      await expect(decrementPaidCount("access-1", 2)).rejects.toMatchObject({
+        code: ErrorCodes.VALIDATION_ERROR,
+        details: { paidCount: 1, requested: 2 },
+      });
     });
   });
 

@@ -1,5 +1,6 @@
 import {
   requireAuth,
+  requireAdmin,
   canAccessClient,
 } from "@shared/middleware/auth.middleware.js";
 import {
@@ -9,6 +10,7 @@ import {
   updateEvent,
   deleteEvent,
   uploadEventBanner,
+  assertEventWritable,
 } from "./events.service.js";
 import {
   CreateEventSchema,
@@ -25,6 +27,7 @@ import { UserRole } from "@shared/constants/roles.js";
 export async function eventsRoutes(app: AppInstance): Promise<void> {
   // All routes require authentication
   app.addHook("onRequest", requireAuth);
+  app.addHook("onRequest", requireAdmin);
 
   // POST /api/events - Create event
   app.post<{ Body: CreateEventInput }>(
@@ -54,7 +57,6 @@ export async function eventsRoutes(app: AppInstance): Promise<void> {
     async (request, reply) => {
       const query = { ...request.query };
 
-      // Force clientId filter for client_admin users
       if (request.user!.role === UserRole.CLIENT_ADMIN) {
         if (!request.user!.clientId) {
           throw app.httpErrors.badRequest(
@@ -62,6 +64,8 @@ export async function eventsRoutes(app: AppInstance): Promise<void> {
           );
         }
         query.clientId = request.user!.clientId;
+      } else if (request.user!.role !== UserRole.SUPER_ADMIN) {
+        throw app.httpErrors.forbidden("Insufficient permissions");
       }
 
       const result = await listEvents(query);
@@ -159,6 +163,8 @@ export async function eventsRoutes(app: AppInstance): Promise<void> {
           "Insufficient permissions to update this event",
         );
       }
+
+      assertEventWritable(event);
 
       const data = await request.file();
       if (!data) {

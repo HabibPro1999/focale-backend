@@ -1,7 +1,7 @@
 // Only export what external modules actually consume.
 // Internal consumers (routes, service) import directly from ./forms.service.js etc.
 
-export { getFormById } from "./forms.service.js";
+export { getFormById, getActiveRegistrationFormById } from "./forms.service.js";
 
 export {
   validateFormData,

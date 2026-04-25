@@ -14,7 +14,13 @@ import {
   calculatePrice,
 } from "./pricing.service.js";
 import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
 
+function mockPassthroughTransaction(): void {
+  prismaMock.$transaction.mockImplementation(async (callback: unknown) =>
+    (callback as (tx: typeof prismaMock) => Promise<unknown>)(prismaMock),
+  );
+}
 describe("Pricing Service", () => {
   const eventId = "event-123";
   const pricingEnabledEvent = {
@@ -23,6 +29,7 @@ describe("Pricing Service", () => {
   };
 
   beforeEach(() => {
+    mockPassthroughTransaction();
     prismaMock.event.findUnique.mockResolvedValue(pricingEnabledEvent as never);
   });
 
@@ -101,6 +108,80 @@ describe("Pricing Service", () => {
       });
 
       expect(result.onlinePaymentEnabled).toBe(true);
+    });
+
+    it("should reject currency changes when registrations exist", async () => {
+      prismaMock.event.findUnique.mockResolvedValue({
+        ...pricingEnabledEvent,
+        pricing: { currency: "TND" },
+      } as never);
+      prismaMock.registration.count.mockResolvedValue(2);
+
+      await expect(
+        updateEventPricing(eventId, { currency: "EUR" }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.VALIDATION_ERROR,
+        message: "Cannot change currency after registrations exist",
+      });
+
+      expect(prismaMock.eventPricing.upsert).not.toHaveBeenCalled();
+    });
+
+    it("should use TND as the current currency when pricing does not exist", async () => {
+      prismaMock.event.findUnique.mockResolvedValue({
+        ...pricingEnabledEvent,
+        pricing: null,
+      } as never);
+      prismaMock.registration.count.mockResolvedValue(1);
+
+      await expect(
+        updateEventPricing(eventId, { currency: "EUR" }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.VALIDATION_ERROR,
+        message: "Cannot change currency after registrations exist",
+      });
+
+      expect(prismaMock.registration.count).toHaveBeenCalledWith({
+        where: { eventId },
+      });
+      expect(prismaMock.eventPricing.upsert).not.toHaveBeenCalled();
+    });
+
+    it("should not count registrations when currency is unchanged", async () => {
+      const updatedPricing = createMockEventPricing({
+        eventId,
+        currency: "EUR",
+        onlinePaymentEnabled: true,
+        rules: [],
+      });
+
+      prismaMock.event.findUnique.mockResolvedValue({
+        ...pricingEnabledEvent,
+        pricing: { currency: "EUR" },
+      } as never);
+      prismaMock.eventPricing.upsert.mockResolvedValue(updatedPricing);
+
+      const result = await updateEventPricing(eventId, {
+        currency: "EUR",
+        onlinePaymentEnabled: true,
+      });
+
+      expect(result.currency).toBe("EUR");
+      expect(result.onlinePaymentEnabled).toBe(true);
+      expect(prismaMock.registration.count).not.toHaveBeenCalled();
+      expect(prismaMock.eventPricing.upsert).toHaveBeenCalledWith({
+        where: { eventId },
+        create: expect.objectContaining({
+          currency: "EUR",
+          onlinePaymentEnabled: true,
+        }),
+        update: expect.objectContaining({
+          currency: "EUR",
+          onlinePaymentEnabled: true,
+        }),
+      });
     });
 
     it("should throw when event not found", async () => {
@@ -336,6 +417,30 @@ describe("Pricing Service", () => {
       expect(result.accessItems).toHaveLength(1);
       expect(result.accessItems[0].subtotal).toBe(100);
       expect(result.total).toBe(300); // 200 + 100
+    });
+
+    it("should ignore selected access items from another event", async () => {
+      const mockPricing = createMockEventPricing({
+        eventId,
+        basePrice: 200,
+        rules: [],
+      });
+
+      prismaMock.eventPricing.findUnique.mockResolvedValue(mockPricing);
+      prismaMock.eventAccess.findMany.mockResolvedValue([]);
+
+      const result = await calculatePrice(eventId, {
+        formData: {},
+        selectedAccessItems: [{ accessId: "foreign-access", quantity: 1 }],
+        sponsorshipCodes: [],
+      });
+
+      expect(prismaMock.eventAccess.findMany).toHaveBeenCalledWith({
+        where: { id: { in: ["foreign-access"] }, eventId },
+      });
+      expect(result.accessItems).toHaveLength(0);
+      expect(result.accessTotal).toBe(0);
+      expect(result.total).toBe(200);
     });
 
     it("should apply sponsorship discount", async () => {

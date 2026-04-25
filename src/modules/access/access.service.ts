@@ -284,6 +284,18 @@ export async function updateEventAccess(
     );
   }
 
+  if (
+    mergedDates.startsAt &&
+    mergedDates.endsAt &&
+    mergedDates.startsAt > mergedDates.endsAt
+  ) {
+    throw new AppError(
+      "Access start time must be before end time",
+      400,
+      ErrorCodes.VALIDATION_ERROR,
+    );
+  }
+
   // Build update data
   const updateData: Prisma.EventAccessUpdateInput = {};
 
@@ -351,6 +363,19 @@ export async function updateEventAccess(
     };
   }
 
+  if (
+    data.maxCapacity !== undefined &&
+    data.maxCapacity !== null &&
+    data.maxCapacity < access.paidCount
+  ) {
+    throw new AppError(
+      "Max capacity cannot be lower than settled paid access count",
+      409,
+      ErrorCodes.ACCESS_CAPACITY_EXCEEDED,
+      { paidCount: access.paidCount, requestedMaxCapacity: data.maxCapacity },
+    );
+  }
+
   // If capacity is being lowered, check if we need to drop unpaid registrations
   const isCapacityChanging =
     data.maxCapacity !== undefined && data.maxCapacity !== access.maxCapacity;
@@ -367,7 +392,7 @@ export async function updateEventAccess(
       });
       if (isBeingDeactivated) {
         await dropAccessFromUnsettledRegistrations(access.eventId, id, access.name, tx);
-      } else if (data.maxCapacity !== null && updated.paidCount >= data.maxCapacity!) {
+      } else if (data.maxCapacity !== null && updated.paidCount === data.maxCapacity) {
         await handleCapacityReached(access.eventId, [id], tx);
       }
       return updated;
@@ -487,33 +512,29 @@ export { getGroupedAccess } from "./access-grouping.js";
 
 // Structural type for a db client that can be either the global prisma instance
 // or a transaction client (tx). Matches the subset of operations used here.
-type CapacityDbClient = Pick<TxClient, "$executeRaw" | "eventAccess">;
+type CapacityDbClient = Pick<TxClient, "$executeRaw" | "$queryRaw" | "eventAccess">;
 
 /**
- * Reserve access spot with atomic capacity check.
- * Uses raw SQL with atomic WHERE clause to prevent race conditions.
- * The capacity check is performed at the time of update, not using stale values.
+ * Record selected access items for reporting and later edit cleanup.
+ * This is not a reservation: unsettled registrations do not consume capacity.
+ * It only rejects when settled paid registrations have already filled capacity.
  *
  * Pass `db` (the transaction client `tx`) when calling inside a $transaction
  * so the update participates in the transaction's rollback scope.
  */
-export async function reserveAccessSpot(
+export async function incrementAccessRegisteredCountTx(
   accessId: string,
   quantity: number = 1,
   db: CapacityDbClient = prisma,
 ): Promise<void> {
-  // Use raw SQL for truly atomic capacity check and update.
-  // Capacity is enforced against paid_count (settled registrations),
-  // while registered_count tracks total registrations regardless of payment.
   const updateResult = await db.$executeRaw`
     UPDATE event_access
     SET registered_count = registered_count + ${quantity}
     WHERE id = ${accessId}
-    AND (max_capacity IS NULL OR max_capacity - paid_count >= ${quantity})
+    AND (max_capacity IS NULL OR paid_count < max_capacity)
   `;
 
   if (updateResult === 0) {
-    // Either access not found or capacity exceeded - determine which
     const access = await db.eventAccess.findUnique({
       where: { id: accessId },
       select: { name: true, maxCapacity: true, paidCount: true },
@@ -523,22 +544,27 @@ export async function reserveAccessSpot(
       throw new AppError("Access not found", 404, ErrorCodes.ACCESS_NOT_FOUND);
     }
 
-    const remaining = (access.maxCapacity ?? Infinity) - access.paidCount;
+    const remaining =
+      access.maxCapacity === null
+        ? null
+        : Math.max(0, access.maxCapacity - access.paidCount);
     throw new AppError(
-      `${access.name} has insufficient capacity (${remaining} spots remaining, requested ${quantity})`,
+      `${access.name} has insufficient capacity (${remaining ?? "unlimited"} spots remaining, requested ${quantity})`,
       409,
       ErrorCodes.ACCESS_CAPACITY_EXCEEDED,
+      { remaining, requested: quantity },
     );
   }
 }
 
 /**
- * Release access spot with floor constraint to prevent negative counts.
+ * Remove selected access items from reporting/edit cleanup count.
+ * Throws if the access item is missing or the counter would go negative.
  *
  * Pass `db` (the transaction client `tx`) when calling inside a $transaction
  * so the update participates in the transaction's rollback scope.
  */
-export async function releaseAccessSpot(
+export async function decrementAccessRegisteredCountTx(
   accessId: string,
   quantity: number = 1,
   db: CapacityDbClient = prisma,
@@ -551,12 +577,23 @@ export async function releaseAccessSpot(
     data: { registeredCount: { decrement: quantity } },
   });
 
-  if (result.count === 0) {
-    logger.warn(
-      { accessId, quantity },
-      "releaseAccessSpot: no rows updated — access item not found or registeredCount already below quantity",
-    );
+  if (result.count > 0) return;
+
+  const access = await db.eventAccess.findUnique({
+    where: { id: accessId },
+    select: { registeredCount: true },
+  });
+
+  if (!access) {
+    throw new AppError("Access not found", 404, ErrorCodes.ACCESS_NOT_FOUND);
   }
+
+  throw new AppError(
+    "Registered access count cannot be decremented below zero",
+    409,
+    ErrorCodes.VALIDATION_ERROR,
+    { registeredCount: access.registeredCount, requested: quantity },
+  );
 }
 
 // ============================================================================
@@ -567,17 +604,42 @@ const FULLY_SETTLED_STATUSES = ["PAID", "SPONSORED", "WAIVED"];
 
 /**
  * Increment paid count when registration becomes settled.
+ * This is the authoritative capacity gate for access occupancy.
  */
 export async function incrementPaidCount(
   accessId: string,
   quantity: number = 1,
   db: CapacityDbClient = prisma,
 ): Promise<void> {
-  await db.$executeRaw`
+  const updated = await db.$queryRaw<{ id: string }[]>`
     UPDATE event_access
     SET paid_count = paid_count + ${quantity}
     WHERE id = ${accessId}
+    AND (max_capacity IS NULL OR paid_count + ${quantity} <= max_capacity)
+    RETURNING id
   `;
+
+  if (updated.length > 0) return;
+
+  const access = await db.eventAccess.findUnique({
+    where: { id: accessId },
+    select: { name: true, maxCapacity: true, paidCount: true },
+  });
+
+  if (!access) {
+    throw new AppError("Access not found", 404, ErrorCodes.ACCESS_NOT_FOUND);
+  }
+
+  const remaining =
+    access.maxCapacity === null
+      ? null
+      : Math.max(0, access.maxCapacity - access.paidCount);
+  throw new AppError(
+    `${access.name} has insufficient capacity (${remaining ?? "unlimited"} spots remaining, requested ${quantity})`,
+    409,
+    ErrorCodes.ACCESS_CAPACITY_EXCEEDED,
+    { remaining, requested: quantity },
+  );
 }
 
 /**
@@ -588,11 +650,31 @@ export async function decrementPaidCount(
   quantity: number = 1,
   db: CapacityDbClient = prisma,
 ): Promise<void> {
-  await db.$executeRaw`
-    UPDATE event_access
-    SET paid_count = GREATEST(0, paid_count - ${quantity})
-    WHERE id = ${accessId}
-  `;
+  const result = await db.eventAccess.updateMany({
+    where: {
+      id: accessId,
+      paidCount: { gte: quantity },
+    },
+    data: { paidCount: { decrement: quantity } },
+  });
+
+  if (result.count > 0) return;
+
+  const access = await db.eventAccess.findUnique({
+    where: { id: accessId },
+    select: { paidCount: true },
+  });
+
+  if (!access) {
+    throw new AppError("Access not found", 404, ErrorCodes.ACCESS_NOT_FOUND);
+  }
+
+  throw new AppError(
+    "Paid access count cannot be decremented below zero",
+    409,
+    ErrorCodes.VALIDATION_ERROR,
+    { paidCount: access.paidCount, requested: quantity },
+  );
 }
 
 type CapacityReachedDbClient = CapacityDbClient & {
@@ -706,7 +788,7 @@ async function dropAccessFromUnsettledRegistrations(
       },
     });
 
-    await releaseAccessSpot(accessId, droppedItem.quantity, db);
+    await decrementAccessRegisteredCountTx(accessId, droppedItem.quantity, db);
 
     await db.auditLog.create({
       data: {
@@ -837,8 +919,8 @@ export async function handleCapacityReached(
         },
       });
 
-      // Release the registered_count spot
-      await releaseAccessSpot(accessId, droppedItem.quantity, db);
+      // Remove this selection from registered_count reporting
+      await decrementAccessRegisteredCountTx(accessId, droppedItem.quantity, db);
 
       await db.auditLog.create({
         data: {

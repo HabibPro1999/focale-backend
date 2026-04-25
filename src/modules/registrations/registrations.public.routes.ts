@@ -9,8 +9,7 @@ import {
   getRegistrationByIdempotencyKey,
 } from "./registrations.service.js";
 import { calculatePrice } from "@pricing";
-import { getFormById } from "@forms";
-import { getEventById } from "@events";
+import { getActiveRegistrationFormById } from "@forms";
 import { assertClientModuleEnabled } from "@clients";
 import {
   CreateRegistrationSchema,
@@ -89,17 +88,13 @@ export async function registrationsPublicRoutes(
         }
       }
 
-      // Verify form exists
-      const form = await getFormById(formId);
+      // Verify form exists, is an active REGISTRATION form, and event is OPEN.
+      // Returns null for sponsor forms, inactive forms, missing forms, or non-OPEN events.
+      const form = await getActiveRegistrationFormById(formId);
       if (!form) {
         throw app.httpErrors.notFound("Form not found");
       }
-
-      // Verify event is OPEN for registrations
-      const event = await getEventById(form.eventId);
-      if (!event || event.status !== "OPEN") {
-        throw app.httpErrors.badRequest("Event is not accepting registrations");
-      }
+      const event = form.event;
       await assertClientModuleEnabled(event.clientId, "registrations");
       await assertClientModuleEnabled(event.clientId, "pricing");
 

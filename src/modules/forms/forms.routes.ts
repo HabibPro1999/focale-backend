@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   requireAuth,
+  requireAdmin,
   canAccessClient,
 } from "@shared/middleware/auth.middleware.js";
 import { assertEventWritable, getEventById, EventIdParamSchema } from "@events";
@@ -33,6 +34,7 @@ import { UserRole } from "@shared/constants/roles.js";
 export async function formsRoutes(app: AppInstance): Promise<void> {
   // All routes require authentication
   app.addHook("onRequest", requireAuth);
+  app.addHook("onRequest", requireAdmin);
 
   // POST /api/forms - Create form
   app.post<{ Body: CreateFormInput }>(
@@ -70,20 +72,20 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
     async (request, reply) => {
       const query = { ...request.query };
 
-      // For client_admin users, filter by their client's events
       if (request.user!.role === UserRole.CLIENT_ADMIN) {
         if (!request.user!.clientId) {
           throw app.httpErrors.badRequest(
             "User is not associated with any client",
           );
         }
-
-        // If no eventId provided, we require it for client_admin users
+        // Client admins must scope by event
         if (!query.eventId) {
           throw app.httpErrors.badRequest(
             "Event ID is required for client admin users",
           );
         }
+      } else if (request.user!.role !== UserRole.SUPER_ADMIN) {
+        throw app.httpErrors.forbidden("Insufficient permissions");
       }
 
       if (query.eventId) {

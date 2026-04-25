@@ -13,8 +13,8 @@ import {
 import { assertModuleEnabledForClient } from "@clients";
 import {
   validateAccessSelections,
-  reserveAccessSpot,
-  releaseAccessSpot,
+  incrementAccessRegisteredCountTx,
+  decrementAccessRegisteredCountTx,
   incrementPaidCount,
   decrementPaidCount,
   handleCapacityReached,
@@ -226,7 +226,7 @@ export async function createRegistration(
     );
   }
 
-  // Advisory check only — reserveAccessSpot inside the tx is the authoritative capacity gate
+  // Advisory check only — settlement-time incrementPaidCount inside the tx is the authoritative capacity gate
   // Validate access selections
   if (accessSelections && accessSelections.length > 0) {
     const validation = await validateAccessSelections(
@@ -325,7 +325,7 @@ export async function createRegistration(
     if (accessSelections && accessSelections.length > 0) {
       await Promise.all(
         accessSelections.map((s) =>
-          reserveAccessSpot(s.accessId, s.quantity, tx),
+          incrementAccessRegisteredCountTx(s.accessId, s.quantity, tx),
         ),
       );
     }
@@ -566,7 +566,7 @@ export async function createAdminRegistration(
     if (accessSelections && accessSelections.length > 0) {
       await Promise.all(
         accessSelections.map((s) =>
-          reserveAccessSpot(s.accessId, s.quantity, tx),
+          incrementAccessRegisteredCountTx(s.accessId, s.quantity, tx),
         ),
       );
     }
@@ -1002,7 +1002,7 @@ export async function adminEditRegistration(
       }>;
       await Promise.all(
         oldAccessItems.map((old) =>
-          releaseAccessSpot(old.accessId, old.quantity, tx),
+          decrementAccessRegisteredCountTx(old.accessId, old.quantity, tx),
         ),
       );
 
@@ -1010,7 +1010,7 @@ export async function adminEditRegistration(
       await Promise.all(
         input.accessSelections
           .filter((sel) => sel.quantity > 0)
-          .map((sel) => reserveAccessSpot(sel.accessId, sel.quantity, tx)),
+          .map((sel) => incrementAccessRegisteredCountTx(sel.accessId, sel.quantity, tx)),
       );
 
       // Update denormalized price fields
@@ -1237,7 +1237,7 @@ export async function deleteRegistration(
     if (priceBreakdown.accessItems) {
       await Promise.all(
         priceBreakdown.accessItems.map((item) =>
-          releaseAccessSpot(item.accessId, item.quantity, tx),
+          decrementAccessRegisteredCountTx(item.accessId, item.quantity, tx),
         ),
       );
     }
@@ -1740,7 +1740,7 @@ export async function editRegistrationPublic(
     // Reserve new access spots
     // Pass tx so reservation is rolled back if the transaction fails
     await Promise.all(
-      accessToAdd.map((s) => reserveAccessSpot(s.accessId, s.quantity, tx)),
+      accessToAdd.map((s) => incrementAccessRegisteredCountTx(s.accessId, s.quantity, tx)),
     );
 
     // Release removed access spots (only if not paid)
@@ -1748,7 +1748,7 @@ export async function editRegistrationPublic(
     if (!currentIsPaid) {
       await Promise.all(
         accessToRemove.map((item) =>
-          releaseAccessSpot(item.accessId, item.quantity, tx),
+          decrementAccessRegisteredCountTx(item.accessId, item.quantity, tx),
         ),
       );
     }

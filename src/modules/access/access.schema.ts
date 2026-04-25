@@ -10,6 +10,11 @@ export type { AccessCondition };
 const hasUpdateField = (data: Record<string, unknown>) =>
   Object.values(data).some((value) => value !== undefined);
 
+const hasUniqueValues = (values: string[]) =>
+  new Set(values).size === values.length;
+
+const hasUniqueAccessSelections = (selections: { accessId: string }[]) =>
+  hasUniqueValues(selections.map((selection) => selection.accessId));
 // ============================================================================
 // Enums
 // ============================================================================
@@ -106,7 +111,16 @@ export const UpdateEventAccessSchema = z
   })
   .refine(hasUpdateField, {
     message: "At least one field must be provided for update",
-  });
+  })
+  .refine(
+    (data) => {
+      if (data.startsAt && data.endsAt) {
+        return data.endsAt >= data.startsAt;
+      }
+      return true;
+    },
+    { message: "End time must be after start time", path: ["endsAt"] },
+  );
 
 // ============================================================================
 // Query Schemas
@@ -174,14 +188,25 @@ export const GetGroupedAccessBodySchema = z.strictObject({
     .refine((obj) => Object.keys(obj).length <= 100, "Too many fields")
     .optional()
     .default({}),
-  selectedAccessIds: z.array(z.string().uuid()).optional().default([]),
+  selectedAccessIds: z
+    .array(z.string().uuid())
+    .max(100)
+    .refine(hasUniqueValues, "Duplicate access IDs are not allowed")
+    .optional()
+    .default([]),
 });
 
 export const ValidateAccessSelectionsBodySchema = z.strictObject({
   formData: z
     .record(z.string(), z.unknown())
     .refine((obj) => Object.keys(obj).length <= 100, "Too many fields"),
-  selections: z.array(AccessSelectionSchema),
+  selections: z
+    .array(AccessSelectionSchema)
+    .max(100)
+    .refine(
+      hasUniqueAccessSelections,
+      "Duplicate access selections are not allowed",
+    ),
 });
 
 // ============================================================================

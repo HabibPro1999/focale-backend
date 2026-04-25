@@ -1,4 +1,5 @@
 import { prisma } from "@/database/client.js";
+import { publicRateLimits } from "@core/plugins.js";
 import { EventIdParamSchema } from "./events.schema.js";
 import type { AppInstance } from "@shared/types/fastify.js";
 
@@ -7,11 +8,12 @@ import type { AppInstance } from "@shared/types/fastify.js";
 // ============================================================================
 
 export async function eventsPublicRoutes(app: AppInstance): Promise<void> {
-  // GET /api/public/events/:eventId/payment-config - Get event payment configuration
+  // GET /api/public/events/:id/payment-config - Get event payment configuration
   app.get<{ Params: { id: string } }>(
     "/:id/payment-config",
     {
       schema: { params: EventIdParamSchema },
+      config: { rateLimit: publicRateLimits.accessPublic },
     },
     async (request, reply) => {
       const { id: eventId } = request.params;

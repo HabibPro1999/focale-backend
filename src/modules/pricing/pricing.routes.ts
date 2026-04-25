@@ -4,6 +4,7 @@ import {
 } from "@shared/middleware/auth.middleware.js";
 import { assertEventWritable, getEventById } from "@events";
 import { assertClientModuleEnabled } from "@clients";
+import { validateFormData, sanitizeFormData, type FormSchema } from "@forms";
 import {
   getEventPricing,
   updateEventPricing,
@@ -28,6 +29,8 @@ import { z } from "zod";
 import { prisma } from "@/database/client.js";
 import type { AppInstance } from "@shared/types/fastify.js";
 import { publicRateLimits } from "@core/plugins.js";
+import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
 
 const FormIdParamSchema = z.strictObject({
   formId: z.string().uuid(),
@@ -213,11 +216,14 @@ export async function pricingPublicRoutes(app: AppInstance): Promise<void> {
       const { formId } = request.params;
       const input = request.body;
 
-      // Get form to find event
+      // Get the active registration form and event gates used for public quotes.
       const form = await prisma.form.findUnique({
         where: { id: formId },
         select: {
           eventId: true,
+          schema: true,
+          type: true,
+          active: true,
           event: {
             select: {
               status: true,
@@ -227,17 +233,40 @@ export async function pricingPublicRoutes(app: AppInstance): Promise<void> {
         },
       });
 
-      if (!form) {
+      if (!form || form.type !== "REGISTRATION" || !form.active) {
         throw app.httpErrors.notFound("Form not found");
       }
       if (form.event.status !== "OPEN") {
-        throw app.httpErrors.badRequest("Event is not accepting registrations");
+        throw new AppError(
+          "Event is not accepting registrations",
+          400,
+          ErrorCodes.EVENT_NOT_OPEN,
+        );
       }
       if (!form.event.client.enabledModules.includes("pricing")) {
-        throw app.httpErrors.forbidden("Pricing module is disabled");
+        throw new AppError(
+          "Pricing module is disabled",
+          403,
+          ErrorCodes.FORBIDDEN,
+        );
       }
 
-      const breakdown = await calculatePrice(form.eventId, input);
+      const formSchema = form.schema as unknown as FormSchema;
+      const validationResult = validateFormData(formSchema, input.formData);
+      if (!validationResult.valid) {
+        throw new AppError(
+          "Form validation failed",
+          400,
+          ErrorCodes.FORM_VALIDATION_ERROR,
+          { fieldErrors: validationResult.errors },
+        );
+      }
+
+      const sanitizedFormData = sanitizeFormData(formSchema, input.formData);
+      const breakdown = await calculatePrice(form.eventId, {
+        ...input,
+        formData: sanitizedFormData,
+      });
       return reply.send(breakdown);
     },
   );

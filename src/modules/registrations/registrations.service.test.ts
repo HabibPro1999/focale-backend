@@ -39,8 +39,8 @@ vi.mock("@access", () => ({
   validateAccessSelections: vi
     .fn()
     .mockResolvedValue({ valid: true, errors: [] }),
-  reserveAccessSpot: vi.fn().mockResolvedValue(undefined),
-  releaseAccessSpot: vi.fn().mockResolvedValue(undefined),
+  incrementAccessRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
+  decrementAccessRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@pricing", () => ({
@@ -870,9 +870,9 @@ describe("Registrations Service", () => {
 
       await deleteRegistration(registration.id);
 
-      // Verify releaseAccessSpot was called with tx client so it participates in the transaction
-      const { releaseAccessSpot } = await import("@access");
-      expect(releaseAccessSpot).toHaveBeenCalledWith(accessId, 2, prismaMock);
+      // Verify decrementAccessRegisteredCountTx was called with tx client so it participates in the transaction
+      const { decrementAccessRegisteredCountTx } = await import("@access");
+      expect(decrementAccessRegisteredCountTx).toHaveBeenCalledWith(accessId, 2, prismaMock);
     });
   });
 

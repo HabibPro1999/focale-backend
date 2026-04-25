@@ -11,6 +11,7 @@ import {
 } from "@shared/utils/pagination.js";
 import { logger } from "@shared/utils/logger.js";
 import {
+  FormSchemaJsonSchema,
   SponsorFormSchemaJsonSchema,
   type CreateFormInput,
   type UpdateFormInput,
@@ -20,13 +21,13 @@ import {
   type SponsorshipSettings,
   type UpdateSponsorshipSettingsInput,
 } from "./forms.schema.js";
-import type {
-  Form,
+import {
   Prisma,
-  Event,
-  Client,
-  EventAccess,
-  EventPricing,
+  type Form,
+  type Event,
+  type Client,
+  type EventAccess,
+  type EventPricing,
 } from "@/generated/prisma/client.js";
 
 type FormWithRelations = Form & {
@@ -35,6 +36,10 @@ type FormWithRelations = Form & {
     pricing: EventPricing | null; // Includes embedded rules in pricing.rules
     access: EventAccess[];
   };
+};
+
+type RegistrationFormWithEvent = Form & {
+  event: { clientId: string; status: Event["status"] };
 };
 
 /**
@@ -95,6 +100,38 @@ function createDefaultSchema(): FormSchemaJson {
   };
 }
 
+function assertRegistrationFormSchema(schema: unknown): FormSchemaJson {
+  const result = FormSchemaJsonSchema.safeParse(schema);
+  if (!result.success) {
+    throw new AppError(
+      "Invalid registration form schema structure",
+      400,
+      ErrorCodes.VALIDATION_ERROR,
+    );
+  }
+  return result.data;
+}
+
+function getSponsorshipMode(schema: unknown): SponsorshipSettings["sponsorshipMode"] {
+  const settings = (schema as { sponsorshipSettings?: SponsorshipSettings } | null)
+    ?.sponsorshipSettings;
+  return settings?.sponsorshipMode ?? "CODE";
+}
+
+async function assertSponsorshipModeChangeUnlocked(
+  formId: string,
+  db: Pick<typeof prisma, "sponsorshipBatch">,
+): Promise<void> {
+  const isLocked = await isSponsorshipModeLocked(formId, db);
+  if (isLocked) {
+    throw new AppError(
+      "Cannot change sponsorship mode after sponsorship batches have been submitted",
+      409,
+      ErrorCodes.CONFLICT,
+    );
+  }
+}
+
 /**
  * Create a new form.
  * Each event can only have one form (enforced by unique constraint on eventId).
@@ -122,7 +159,8 @@ export async function createForm(input: CreateFormInput): Promise<Form> {
   }
 
   // Use provided schema or generate default
-  const formSchema = schema ?? createDefaultSchema();
+  const formSchema =
+    schema !== undefined ? assertRegistrationFormSchema(schema) : createDefaultSchema();
 
   return prisma.form.create({
     data: {
@@ -140,11 +178,26 @@ export async function createForm(input: CreateFormInput): Promise<Form> {
  */
 export async function getFormById(
   id: string,
-): Promise<
-  (Form & { event: { clientId: string; status: Event["status"] } }) | null
-> {
+): Promise<RegistrationFormWithEvent | null> {
   return prisma.form.findUnique({
     where: { id },
+    include: { event: { select: { clientId: true, status: true } } },
+  });
+}
+
+/**
+ * Get active registration form by ID for public registration flows.
+ */
+export async function getActiveRegistrationFormById(
+  id: string,
+): Promise<RegistrationFormWithEvent | null> {
+  return prisma.form.findFirst({
+    where: {
+      id,
+      type: "REGISTRATION",
+      active: true,
+      event: { status: "OPEN" },
+    },
     include: { event: { select: { clientId: true, status: true } } },
   });
 }
@@ -239,21 +292,6 @@ export async function updateForm(
     throw new AppError("Form not found", 404, ErrorCodes.NOT_FOUND);
   }
 
-  // Validate sponsor form schema shape when updating a SPONSOR form
-  if (form.type === "SPONSOR" && input.schema !== undefined) {
-    const schemaValidation = SponsorFormSchemaJsonSchema.safeParse(
-      input.schema,
-    );
-    if (!schemaValidation.success) {
-      throw new AppError(
-        "Invalid sponsor form schema structure",
-        400,
-        ErrorCodes.VALIDATION_ERROR,
-      );
-    }
-  }
-
-  // Prepare update data
   const updateData: Prisma.FormUpdateInput = {};
   if (input.name !== undefined) updateData.name = input.name;
   if (input.successTitle !== undefined)
@@ -261,62 +299,108 @@ export async function updateForm(
   if (input.successMessage !== undefined)
     updateData.successMessage = input.successMessage;
 
-  // Check if schema is being updated and has actually changed
+  let nextSchema: FormSchemaJson | SponsorFormSchemaJson | undefined;
   if (input.schema !== undefined) {
-    if (!isDeepStrictEqual(form.schema, input.schema)) {
-      // For SPONSOR forms, validate sponsorship mode changes
-      if (form.type === "SPONSOR") {
-        const currentSchema = form.schema as unknown as {
-          sponsorshipSettings?: SponsorshipSettings;
-        };
-        const newSchema = input.schema as unknown as {
-          sponsorshipSettings?: SponsorshipSettings;
-        };
-        const currentMode =
-          currentSchema.sponsorshipSettings?.sponsorshipMode ?? "CODE";
-        const newMode =
-          newSchema.sponsorshipSettings?.sponsorshipMode ?? "CODE";
-
-        // If mode is changing, check if it's locked
-        if (currentMode !== newMode) {
-          const isLocked = await isSponsorshipModeLocked(id);
-          if (isLocked) {
-            throw new AppError(
-              "Cannot change sponsorship mode after sponsorship batches have been submitted",
-              409,
-              ErrorCodes.CONFLICT,
-            );
-          }
-        }
+    if (form.type === "SPONSOR") {
+      const schemaValidation = SponsorFormSchemaJsonSchema.safeParse(input.schema);
+      if (!schemaValidation.success) {
+        throw new AppError(
+          "Invalid sponsor form schema structure",
+          400,
+          ErrorCodes.VALIDATION_ERROR,
+        );
       }
-
-      // Check for removed fields that may have registration data
-      const oldFieldIds = extractFieldIds(form.schema);
-      const newFieldIds = extractFieldIds(input.schema);
-      const removedFields = oldFieldIds.filter((f) => !newFieldIds.includes(f));
-
-      if (removedFields.length > 0) {
-        // Check if any registrations exist for this form
-        const regCount = await prisma.registration.count({
-          where: { formId: id },
-        });
-
-        if (regCount > 0) {
-          logger.warn(
-            {
-              formId: id,
-              removedFields,
-              affectedRegistrations: regCount,
-            },
-            "Form fields removed with existing registration data - data may be orphaned",
-          );
-        }
-      }
-
-      updateData.schema = input.schema as Prisma.InputJsonValue;
-      // Auto-increment schema version when schema changes
-      updateData.schemaVersion = { increment: 1 };
+      nextSchema = schemaValidation.data;
+    } else {
+      nextSchema = assertRegistrationFormSchema(input.schema);
     }
+  }
+
+  if (nextSchema !== undefined && !isDeepStrictEqual(form.schema, nextSchema)) {
+    const schemaForUpdate = nextSchema;
+    if (form.type === "SPONSOR") {
+      const newMode = getSponsorshipMode(schemaForUpdate);
+      const currentMode = getSponsorshipMode(form.schema);
+
+      if (currentMode !== newMode) {
+        return prisma.$transaction(
+          async (tx) => {
+            const currentForm = await tx.form.findUnique({ where: { id } });
+            if (!currentForm) {
+              throw new AppError("Form not found", 404, ErrorCodes.NOT_FOUND);
+            }
+            if (currentForm.type !== "SPONSOR") {
+              throw new AppError(
+                "Invalid sponsor form schema structure",
+                400,
+                ErrorCodes.VALIDATION_ERROR,
+              );
+            }
+
+            if (getSponsorshipMode(currentForm.schema) !== newMode) {
+              await assertSponsorshipModeChangeUnlocked(id, tx);
+            }
+
+            const oldFieldIds = extractFieldIds(currentForm.schema);
+            const newFieldIds = extractFieldIds(schemaForUpdate);
+            const removedFields = oldFieldIds.filter(
+              (fieldId) => !newFieldIds.includes(fieldId),
+            );
+
+            if (removedFields.length > 0) {
+              const regCount = await tx.registration.count({
+                where: { formId: id },
+              });
+              if (regCount > 0) {
+                logger.warn(
+                  {
+                    formId: id,
+                    removedFields,
+                    affectedRegistrations: regCount,
+                  },
+                  "Form fields removed with existing registration data - data may be orphaned",
+                );
+              }
+            }
+
+            return tx.form.update({
+              where: { id },
+              data: {
+                ...updateData,
+                schema: schemaForUpdate as Prisma.InputJsonValue,
+                schemaVersion: { increment: 1 },
+              },
+            });
+          },
+          { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        );
+      }
+    }
+
+    const oldFieldIds = extractFieldIds(form.schema);
+    const newFieldIds = extractFieldIds(schemaForUpdate);
+    const removedFields = oldFieldIds.filter((f) => !newFieldIds.includes(f));
+
+    if (removedFields.length > 0) {
+      // Check if any registrations exist for this form
+      const regCount = await prisma.registration.count({
+        where: { formId: id },
+      });
+
+      if (regCount > 0) {
+        logger.warn(
+          {
+            formId: id,
+            removedFields,
+            affectedRegistrations: regCount,
+          },
+          "Form fields removed with existing registration data - data may be orphaned",
+        );
+      }
+    }
+
+    updateData.schema = schemaForUpdate as Prisma.InputJsonValue;
+    updateData.schemaVersion = { increment: 1 };
   }
 
   return prisma.form.update({
@@ -386,8 +470,9 @@ export async function deleteForm(id: string): Promise<void> {
  */
 export async function isSponsorshipModeLocked(
   formId: string,
+  db: Pick<typeof prisma, "sponsorshipBatch"> = prisma,
 ): Promise<boolean> {
-  const count = await prisma.sponsorshipBatch.count({
+  const count = await db.sponsorshipBatch.count({
     where: { formId },
   });
   return count > 0;
@@ -417,22 +502,48 @@ export async function updateSponsorshipSettings(
 
   // Get current schema and settings
   const currentSchema = form.schema as unknown as SponsorFormSchemaJson;
-  const currentMode =
-    currentSchema.sponsorshipSettings?.sponsorshipMode ?? "CODE";
+  const currentMode = getSponsorshipMode(currentSchema);
 
-  // If mode is changing, check if it's locked
   if (settings.sponsorshipMode !== currentMode) {
-    const isLocked = await isSponsorshipModeLocked(formId);
-    if (isLocked) {
-      throw new AppError(
-        "Cannot change sponsorship mode after sponsorship batches have been submitted",
-        409,
-        ErrorCodes.CONFLICT,
-      );
-    }
+    return prisma.$transaction(
+      async (tx) => {
+        const currentForm = await tx.form.findUnique({ where: { id: formId } });
+        if (!currentForm) {
+          throw new AppError("Form not found", 404, ErrorCodes.NOT_FOUND);
+        }
+        if (currentForm.type !== "SPONSOR") {
+          throw new AppError(
+            "Sponsorship settings can only be updated for sponsor forms",
+            400,
+            ErrorCodes.BAD_REQUEST,
+          );
+        }
+
+        const schema = currentForm.schema as unknown as SponsorFormSchemaJson;
+        const mode = getSponsorshipMode(schema);
+        if (settings.sponsorshipMode !== mode) {
+          await assertSponsorshipModeChangeUnlocked(formId, tx);
+        }
+
+        const updatedSchema: SponsorFormSchemaJson = {
+          ...schema,
+          sponsorshipSettings: {
+            ...schema.sponsorshipSettings,
+            ...settings,
+          },
+        };
+
+        return tx.form.update({
+          where: { id: formId },
+          data: {
+            schema: updatedSchema as unknown as Prisma.InputJsonValue,
+          },
+        });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
   }
 
-  // Merge new settings into schema
   const updatedSchema: SponsorFormSchemaJson = {
     ...currentSchema,
     sponsorshipSettings: {

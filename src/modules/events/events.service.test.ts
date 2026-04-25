@@ -9,10 +9,15 @@ import {
   createEvent,
   getEventById,
   getEventBySlug,
+  assertEventOpen,
+  assertEventWritable,
   updateEvent,
   listEvents,
   deleteEvent,
   eventExists,
+  incrementRegisteredCountTx,
+  decrementRegisteredCountTx,
+  uploadEventBanner,
 } from "./events.service.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
@@ -45,6 +50,27 @@ function mockCreateEventTransaction(
 
     return (callback as (tx: CreateEventTxMock) => Promise<unknown>)(txMock);
   });
+}
+
+function mockPassthroughTransaction(): void {
+  prismaMock.$transaction.mockImplementation(async (callback: unknown) =>
+    (callback as (tx: typeof prismaMock) => Promise<unknown>)(prismaMock),
+  );
+}
+
+type CounterTxMock = {
+  $queryRaw: ReturnType<typeof vi.fn>;
+  event: { findUnique: ReturnType<typeof vi.fn> };
+};
+
+function createCounterTxMock(
+  rows: Array<{ id: string }>,
+  event: unknown = null,
+): CounterTxMock {
+  return {
+    $queryRaw: vi.fn().mockResolvedValue(rows),
+    event: { findUnique: vi.fn().mockResolvedValue(event) },
+  };
 }
 
 describe("Events Service", () => {
@@ -243,7 +269,55 @@ describe("Events Service", () => {
     });
   });
 
+  describe("assertEventOpen", () => {
+    it("should allow OPEN events", () => {
+      expect(() => assertEventOpen({ status: "OPEN" })).not.toThrow();
+    });
+
+    it.each(["CLOSED", "ARCHIVED"] as const)(
+      "should reject %s events",
+      (status) => {
+        expect(() => assertEventOpen({ status })).toThrow(AppError);
+        expect(() => assertEventOpen({ status })).toThrow(
+          "Event is not accepting public actions",
+        );
+        try {
+          assertEventOpen({ status });
+        } catch (err) {
+          expect(err).toMatchObject({
+            statusCode: 400,
+            code: ErrorCodes.EVENT_NOT_OPEN,
+          });
+        }
+      },
+    );
+  });
+
+  describe("assertEventWritable", () => {
+    it.each(["OPEN", "CLOSED"] as const)("should allow %s events", (status) => {
+      expect(() => assertEventWritable({ status })).not.toThrow();
+    });
+
+    it("should reject archived events", () => {
+      expect(() => assertEventWritable({ status: "ARCHIVED" })).toThrow(
+        AppError,
+      );
+      try {
+        assertEventWritable({ status: "ARCHIVED" });
+      } catch (err) {
+        expect(err).toMatchObject({
+          statusCode: 400,
+          code: ErrorCodes.INVALID_STATUS_TRANSITION,
+        });
+      }
+    });
+  });
+
   describe("updateEvent", () => {
+    beforeEach(() => {
+      mockPassthroughTransaction();
+    });
+
     it("should update event fields successfully", async () => {
       const mockEvent = createMockEvent({
         id: eventId,
@@ -265,6 +339,134 @@ describe("Events Service", () => {
         where: { id: eventId },
         data: { name: "New Name" },
         include: { pricing: true },
+      });
+    });
+
+    it("should reject maxCapacity below registeredCount", async () => {
+      const mockEvent = createMockEvent({
+        id: eventId,
+        registeredCount: 10,
+        maxCapacity: 20,
+      });
+
+      prismaMock.event.findUnique.mockResolvedValue(mockEvent);
+
+      await expect(updateEvent(eventId, { maxCapacity: 9 })).rejects.toMatchObject(
+        {
+          statusCode: 400,
+          code: ErrorCodes.VALIDATION_ERROR,
+          message: "Max capacity cannot be below current registered count",
+        },
+      );
+      expect(prismaMock.event.update).not.toHaveBeenCalled();
+    });
+
+    it("should allow maxCapacity equal to registeredCount", async () => {
+      const mockEvent = createMockEvent({
+        id: eventId,
+        registeredCount: 10,
+        maxCapacity: 20,
+      });
+      const updatedEvent = {
+        ...mockEvent,
+        maxCapacity: 10,
+        pricing: createMockEventPricing({ eventId }),
+      };
+
+      prismaMock.event.findUnique.mockResolvedValue(mockEvent);
+      prismaMock.event.update.mockResolvedValue(updatedEvent);
+
+      const result = await updateEvent(eventId, { maxCapacity: 10 });
+
+      expect(result.maxCapacity).toBe(10);
+    });
+
+    it("should allow null maxCapacity", async () => {
+      const mockEvent = createMockEvent({
+        id: eventId,
+        registeredCount: 10,
+        maxCapacity: 20,
+      });
+      const updatedEvent = {
+        ...mockEvent,
+        maxCapacity: null,
+        pricing: createMockEventPricing({ eventId }),
+      };
+
+      prismaMock.event.findUnique.mockResolvedValue(mockEvent);
+      prismaMock.event.update.mockResolvedValue(updatedEvent);
+
+      const result = await updateEvent(eventId, { maxCapacity: null });
+
+      expect(result.maxCapacity).toBeNull();
+    });
+
+    it("should check registrations inside the transaction when currency changes", async () => {
+      const eventWithPricing = {
+        ...createMockEvent({ id: eventId }),
+        pricing: createMockEventPricing({ eventId, currency: "TND" }),
+      };
+      const updatedEvent = {
+        ...eventWithPricing,
+        pricing: createMockEventPricing({ eventId, currency: "EUR" }),
+      };
+
+      prismaMock.event.findUnique.mockResolvedValue(eventWithPricing);
+      prismaMock.registration.count.mockResolvedValue(0);
+      prismaMock.event.findUniqueOrThrow.mockResolvedValue(updatedEvent);
+
+      const result = await updateEvent(eventId, { currency: "EUR" });
+
+      expect(result.pricing?.currency).toBe("EUR");
+      expect(prismaMock.registration.count).toHaveBeenCalledWith({
+        where: { eventId },
+      });
+      expect(prismaMock.eventPricing.upsert).toHaveBeenCalledWith({
+        where: { eventId },
+        update: { currency: "EUR" },
+        create: { eventId, basePrice: 0, currency: "EUR" },
+      });
+      expect(prismaMock.$transaction).toHaveBeenCalledWith(
+        expect.any(Function),
+        expect.objectContaining({ isolationLevel: "Serializable" }),
+      );
+    });
+
+    it("should reject currency changes when registrations exist", async () => {
+      const eventWithPricing = {
+        ...createMockEvent({ id: eventId }),
+        pricing: createMockEventPricing({ eventId, currency: "TND" }),
+      };
+
+      prismaMock.event.findUnique.mockResolvedValue(eventWithPricing);
+      prismaMock.registration.count.mockResolvedValue(1);
+
+      await expect(updateEvent(eventId, { currency: "EUR" })).rejects.toMatchObject(
+        {
+          statusCode: 400,
+          code: ErrorCodes.VALIDATION_ERROR,
+          message: "Cannot change currency after registrations exist",
+        },
+      );
+      expect(prismaMock.eventPricing.upsert).not.toHaveBeenCalled();
+    });
+
+    it("should not count registrations when currency is unchanged", async () => {
+      const eventWithPricing = {
+        ...createMockEvent({ id: eventId }),
+        pricing: createMockEventPricing({ eventId, currency: "TND" }),
+      };
+
+      prismaMock.event.findUnique.mockResolvedValue(eventWithPricing);
+      prismaMock.event.findUniqueOrThrow.mockResolvedValue(eventWithPricing);
+
+      await updateEvent(eventId, { currency: "TND" });
+
+      expect(prismaMock.registration.count).not.toHaveBeenCalled();
+      expect(prismaMock.eventPricing.upsert).toHaveBeenCalledWith({
+        where: { eventId },
+        update: { currency: "TND" },
+        create: { eventId, basePrice: 0, currency: "TND" },
       });
     });
 
@@ -598,6 +800,10 @@ describe("Events Service", () => {
   });
 
   describe("deleteEvent", () => {
+    beforeEach(() => {
+      mockPassthroughTransaction();
+    });
+
     it("should delete event without registrations", async () => {
       const mockEvent = {
         ...createMockEvent({ id: eventId }),
@@ -659,6 +865,153 @@ describe("Events Service", () => {
       await expect(deleteEvent(eventId)).rejects.toMatchObject({
         message:
           "Cannot delete event with 1 registration(s). Archive the event instead.",
+      });
+    });
+  });
+
+  describe("incrementRegisteredCountTx", () => {
+    it("should succeed when the atomic update returns a row", async () => {
+      const tx = createCounterTxMock([{ id: eventId }]);
+
+      await incrementRegisteredCountTx(
+        tx as unknown as Parameters<typeof incrementRegisteredCountTx>[0],
+        eventId,
+      );
+
+      expect(tx.event.findUnique).not.toHaveBeenCalled();
+    });
+
+    it("should include OPEN status and capacity predicates in the raw update", async () => {
+      const tx = createCounterTxMock([{ id: eventId }]);
+
+      await incrementRegisteredCountTx(
+        tx as unknown as Parameters<typeof incrementRegisteredCountTx>[0],
+        eventId,
+      );
+
+      const sql = (tx.$queryRaw.mock.calls[0]?.[0] as TemplateStringsArray).join(
+        " ",
+      );
+      expect(sql).toContain("status = 'OPEN'");
+      expect(sql).toContain(
+        "max_capacity IS NULL OR registered_count < max_capacity",
+      );
+    });
+
+    it("should map missing events to NOT_FOUND", async () => {
+      const tx = createCounterTxMock([], null);
+
+      await expect(
+        incrementRegisteredCountTx(
+          tx as unknown as Parameters<typeof incrementRegisteredCountTx>[0],
+          eventId,
+        ),
+      ).rejects.toMatchObject({
+        statusCode: 404,
+        code: ErrorCodes.NOT_FOUND,
+      });
+    });
+
+    it("should map non-open events to EVENT_NOT_OPEN", async () => {
+      const tx = createCounterTxMock(
+        [],
+        createMockEvent({ id: eventId, status: "CLOSED" }),
+      );
+
+      await expect(
+        incrementRegisteredCountTx(
+          tx as unknown as Parameters<typeof incrementRegisteredCountTx>[0],
+          eventId,
+        ),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.EVENT_NOT_OPEN,
+      });
+    });
+
+    it("should map open capacity misses to EVENT_FULL", async () => {
+      const tx = createCounterTxMock(
+        [],
+        createMockEvent({
+          id: eventId,
+          status: "OPEN",
+          maxCapacity: 10,
+          registeredCount: 10,
+        }),
+      );
+
+      await expect(
+        incrementRegisteredCountTx(
+          tx as unknown as Parameters<typeof incrementRegisteredCountTx>[0],
+          eventId,
+        ),
+      ).rejects.toMatchObject({
+        statusCode: 409,
+        code: ErrorCodes.EVENT_FULL,
+      });
+    });
+  });
+
+  describe("decrementRegisteredCountTx", () => {
+    it("should succeed when the atomic update returns a row", async () => {
+      const tx = createCounterTxMock([{ id: eventId }]);
+
+      await decrementRegisteredCountTx(
+        tx as unknown as Parameters<typeof decrementRegisteredCountTx>[0],
+        eventId,
+      );
+
+      expect(tx.event.findUnique).not.toHaveBeenCalled();
+    });
+
+    it("should map missing events to NOT_FOUND", async () => {
+      const tx = createCounterTxMock([], null);
+
+      await expect(
+        decrementRegisteredCountTx(
+          tx as unknown as Parameters<typeof decrementRegisteredCountTx>[0],
+          eventId,
+        ),
+      ).rejects.toMatchObject({
+        statusCode: 404,
+        code: ErrorCodes.NOT_FOUND,
+      });
+    });
+
+    it("should surface zero registered count as a validation error", async () => {
+      const tx = createCounterTxMock(
+        [],
+        createMockEvent({ id: eventId, registeredCount: 0 }),
+      );
+
+      await expect(
+        decrementRegisteredCountTx(
+          tx as unknown as Parameters<typeof decrementRegisteredCountTx>[0],
+          eventId,
+        ),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.VALIDATION_ERROR,
+        message: "Event registered count is already zero",
+      });
+    });
+  });
+
+  describe("uploadEventBanner", () => {
+    it("should reject archived events before inspecting or uploading the file", async () => {
+      prismaMock.event.findUnique.mockResolvedValue(
+        createMockEvent({ id: eventId, status: "ARCHIVED" }),
+      );
+
+      await expect(
+        uploadEventBanner(eventId, {
+          buffer: Buffer.from("not an image"),
+          filename: "banner.png",
+          mimetype: "image/png",
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.INVALID_STATUS_TRANSITION,
       });
     });
   });
