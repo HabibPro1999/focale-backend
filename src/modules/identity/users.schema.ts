@@ -19,7 +19,11 @@ export const CreateUserSchema = z.strictObject({
     ),
   name: z.string().min(1).max(100),
   role: z
-    .union([z.literal(UserRole.SUPER_ADMIN), z.literal(UserRole.CLIENT_ADMIN)])
+    .union([
+      z.literal(UserRole.SUPER_ADMIN),
+      z.literal(UserRole.CLIENT_ADMIN),
+      z.literal(UserRole.SCIENTIFIC_COMMITTEE),
+    ])
     .default(UserRole.CLIENT_ADMIN),
   clientId: z.string().uuid().optional().nullable(),
 });
@@ -27,7 +31,11 @@ export const CreateUserSchema = z.strictObject({
 export const UpdateUserSchema = z.strictObject({
   name: z.string().min(1).max(100).optional(),
   role: z
-    .union([z.literal(UserRole.SUPER_ADMIN), z.literal(UserRole.CLIENT_ADMIN)])
+    .union([
+      z.literal(UserRole.SUPER_ADMIN),
+      z.literal(UserRole.CLIENT_ADMIN),
+      z.literal(UserRole.SCIENTIFIC_COMMITTEE),
+    ])
     .optional(),
   clientId: z.string().uuid().optional().nullable(),
   active: z.boolean().optional(),
@@ -36,7 +44,7 @@ export const UpdateUserSchema = z.strictObject({
 export const ListUsersQuerySchema = z.strictObject({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
-  role: z.coerce.number().int().min(0).max(1).optional(),
+  role: z.coerce.number().int().min(0).max(2).optional(),
   clientId: z.string().uuid().optional(),
   active: z
     .enum(["true", "false"])

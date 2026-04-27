@@ -38,13 +38,17 @@ model User {
   id        String   @id // Firebase UID
   email     String   @unique
   name      String
-  role      Int      @default(1) // 0 = super_admin, 1 = client_admin
+  role      Int      @default(1) // 0 = super_admin, 1 = client_admin, 2 = scientific_committee
   clientId  String?  @map("client_id")
   active    Boolean  @default(true)
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   client Client? @relation(fields: [clientId], references: [id], onDelete: SetNull)
+
+  abstractCommitteeMemberships AbstractCommitteeMembership[] @relation("AbstractCommitteeMember")
+  abstractReviews              AbstractReview[]              @relation("AbstractReviewerReviews")
+  abstractReviewerThemes       AbstractReviewerTheme[]       @relation("AbstractReviewerThemes")
 
   @@index([clientId])
   @@index([active, role])
@@ -68,20 +72,27 @@ model Event {
   endDate         DateTime    @map("end_date")
   location        String?
   status          EventStatus @default(CLOSED)
-  bannerUrl             String?  @map("banner_url")
+  bannerUrl       String?     @map("banner_url")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  client                Client                @relation(fields: [clientId], references: [id])
-  forms                 Form[] // Multiple forms per event (REGISTRATION, SPONSOR)
-  pricing               EventPricing? // One-to-one: pricing configuration (includes embedded rules)
-  access                EventAccess[]
-  registrations         Registration[]
-  emailTemplates        EmailTemplate[]
-  sponsorshipBatches    SponsorshipBatch[]
-  sponsorships          Sponsorship[]
-  certificateTemplates  CertificateTemplate[]
+  client                       Client                        @relation(fields: [clientId], references: [id])
+  forms                        Form[] // Multiple forms per event (REGISTRATION, SPONSOR)
+  pricing                      EventPricing? // One-to-one: pricing configuration (includes embedded rules)
+  access                       EventAccess[]
+  registrations                Registration[]
+  emailTemplates               EmailTemplate[]
+  sponsorshipBatches           SponsorshipBatch[]
+  sponsorships                 Sponsorship[]
+  certificateTemplates         CertificateTemplate[]
+  abstractConfig               AbstractConfig?
+  abstracts                    Abstract[]
+  abstractCodeCounter         AbstractCodeCounter?
+  abstractBookJobs            AbstractBookJob[]
+  abstractCommitteeMemberships AbstractCommitteeMembership[]
+  abstractReviews              AbstractReview[]
+  abstractReviewerThemes       AbstractReviewerTheme[]
 
   @@index([clientId, status])
   @@map("events")
@@ -220,9 +231,9 @@ model EventAccess {
   groupLabel String? @map("group_label")
 
   // Companion option (show +1 question in registration form)
-  allowCompanion   Boolean @default(false) @map("allow_companion")
-  includedInBase   Boolean @default(false) @map("included_in_base")
-  companionPrice   Int     @default(0)     @map("companion_price")
+  allowCompanion Boolean @default(false) @map("allow_companion")
+  includedInBase Boolean @default(false) @map("included_in_base")
+  companionPrice Int     @default(0) @map("companion_price")
 
   // Timestamps
   createdAt DateTime @default(now()) @map("created_at")
@@ -302,20 +313,20 @@ model CertificateTemplate {
 // ============================================================================
 
 model SponsorshipBatch {
-  id          String   @id @default(uuid())
-  eventId     String   @map("event_id")
-  formId      String   @map("form_id")
+  id      String @id @default(uuid())
+  eventId String @map("event_id")
+  formId  String @map("form_id")
 
   // Sponsor (Lab) Information
-  labName     String   @map("lab_name")
-  contactName String   @map("contact_name")
+  labName     String  @map("lab_name")
+  contactName String  @map("contact_name")
   email       String
   phone       String?
 
   // Full form submission (includes custom fields)
-  formData    Json     @map("form_data")
+  formData Json @map("form_data")
 
-  createdAt   DateTime @default(now()) @map("created_at")
+  createdAt DateTime @default(now()) @map("created_at")
 
   // Relations
   event        Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
@@ -328,30 +339,30 @@ model SponsorshipBatch {
 }
 
 model Sponsorship {
-  id                 String            @id @default(uuid())
-  batchId            String            @map("batch_id")
-  eventId            String            @map("event_id")
+  id      String @id @default(uuid())
+  batchId String @map("batch_id")
+  eventId String @map("event_id")
 
   // Unique code (admin-only visible)
-  code               String            @unique
-  status             SponsorshipStatus @default(PENDING)
+  code   String            @unique
+  status SponsorshipStatus @default(PENDING)
 
   // Beneficiary Information
-  beneficiaryName    String            @map("beneficiary_name")
-  beneficiaryEmail   String            @map("beneficiary_email")
-  beneficiaryPhone   String?           @map("beneficiary_phone")
-  beneficiaryAddress String?           @map("beneficiary_address")
+  beneficiaryName    String  @map("beneficiary_name")
+  beneficiaryEmail   String  @map("beneficiary_email")
+  beneficiaryPhone   String? @map("beneficiary_phone")
+  beneficiaryAddress String? @map("beneficiary_address")
 
   // Coverage
-  coversBasePrice        Boolean           @default(true) @map("covers_base_price")
-  coveredAccessIds       String[]          @default([]) @map("covered_access_ids") // Array of EventAccess IDs
-  totalAmount            Int               @map("total_amount") // Calculated: base (if covered) + sum(access prices)
+  coversBasePrice  Boolean  @default(true) @map("covers_base_price")
+  coveredAccessIds String[] @default([]) @map("covered_access_ids") // Array of EventAccess IDs
+  totalAmount      Int      @map("total_amount") // Calculated: base (if covered) + sum(access prices)
 
   // Pending linked account: registration waiting for admin approval
-  targetRegistrationId   String?           @map("target_registration_id")
+  targetRegistrationId String? @map("target_registration_id")
 
-  createdAt          DateTime          @default(now()) @map("created_at")
-  updatedAt          DateTime          @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   // Relations
   batch  SponsorshipBatch   @relation(fields: [batchId], references: [id], onDelete: Cascade)
@@ -374,9 +385,9 @@ model SponsorshipUsage {
   sponsorshipId  String  @map("sponsorship_id")
   registrationId String? @map("registration_id")
 
-  amountApplied  Int      @map("amount_applied") // How much from this sponsorship was applied
-  appliedAt      DateTime @default(now()) @map("applied_at")
-  appliedBy      String   @map("applied_by") // User ID who linked it
+  amountApplied Int      @map("amount_applied") // How much from this sponsorship was applied
+  appliedAt     DateTime @default(now()) @map("applied_at")
+  appliedBy     String   @map("applied_by") // User ID who linked it
 
   // Relations
   sponsorship  Sponsorship   @relation(fields: [sponsorshipId], references: [id], onDelete: Cascade)
@@ -392,13 +403,13 @@ model SponsorshipUsage {
 // ============================================================================
 
 enum PaymentStatus {
-  PENDING    // Owes money, no action taken
-  VERIFYING  // Payment proof submitted, awaiting admin review
-  PARTIAL    // Some coverage (cash and/or sponsorship), still owes remainder
-  PAID       // Fully settled via payment (cash, bank, online)
-  SPONSORED  // Fully settled via sponsorship code(s)
-  WAIVED     // Admin waiver (speakers, VIPs, free pass)
-  REFUNDED   // Terminal — money returned
+  PENDING // Owes money, no action taken
+  VERIFYING // Payment proof submitted, awaiting admin review
+  PARTIAL // Some coverage (cash and/or sponsorship), still owes remainder
+  PAID // Fully settled via payment (cash, bank, online)
+  SPONSORED // Fully settled via sponsorship code(s)
+  WAIVED // Admin waiver (speakers, VIPs, free pass)
+  REFUNDED // Terminal — money returned
 }
 
 enum PaymentMethod {
@@ -501,6 +512,7 @@ model Registration {
   sponsorshipUsages SponsorshipUsage[]
   transactions      PaymentTransaction[]
   accessCheckIns    AccessCheckIn[]
+  abstracts         Abstract[]
 
   @@unique([email, formId])
   @@index([eventId, paymentStatus])
@@ -518,17 +530,17 @@ model Registration {
 // ============================================================================
 
 model PaymentTransaction {
-  id              String          @id @default(uuid())
-  registrationId  String          @map("registration_id")
-  type            TransactionType
-  amount          Int
-  method          PaymentMethod?
-  reference       String?
-  note            String?
-  performedBy     String?         @map("performed_by")
-  createdAt       DateTime        @default(now()) @map("created_at")
+  id             String          @id @default(uuid())
+  registrationId String          @map("registration_id")
+  type           TransactionType
+  amount         Int
+  method         PaymentMethod?
+  reference      String?
+  note           String?
+  performedBy    String?         @map("performed_by")
+  createdAt      DateTime        @default(now()) @map("created_at")
 
-  registration    Registration    @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+  registration Registration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
 
   @@index([registrationId])
   @@map("payment_transaction")
@@ -557,8 +569,8 @@ enum AutomaticEmailTrigger {
   SPONSORSHIP_BATCH_SUBMITTED // When lab submits sponsorship batch (sent to lab)
   SPONSORSHIP_LINKED // When sponsorship auto-linked to registration (LINKED_ACCOUNT mode, sent to doctor)
   SPONSORSHIP_APPLIED // When admin manually applies sponsorship code (CODE mode, sent to doctor)
-  SPONSORSHIP_PARTIAL     // Partial sponsorship notification to doctor
-  CERTIFICATE_SENT        // When admin sends certificates via email
+  SPONSORSHIP_PARTIAL // Partial sponsorship notification to doctor
+  CERTIFICATE_SENT // When admin sends certificates via email
 }
 
 enum EmailStatus {
@@ -575,16 +587,16 @@ enum EmailStatus {
 }
 
 model EmailTemplate {
-  id          String   @id @default(uuid())
-  clientId    String   @map("client_id")
+  id       String @id @default(uuid())
+  clientId String @map("client_id")
 
   // Template identification
   name        String // "Welcome Email", "Payment Confirmation"
   description String? // Admin notes about this template
 
   // Content
-  subject     String // Email subject (can contain {{variables}})
-  content     Json // Tiptap editor JSON document
+  subject String // Email subject (can contain {{variables}})
+  content Json // Tiptap editor JSON document
 
   // Pre-compiled content (cached on save for performance)
   mjmlContent  String? @map("mjml_content") // Generated MJML markup
@@ -595,7 +607,8 @@ model EmailTemplate {
   category EmailTemplateCategory // AUTOMATIC or MANUAL
 
   // For AUTOMATIC templates: which system event triggers this
-  trigger AutomaticEmailTrigger? // REGISTRATION_CREATED, etc.
+  trigger         AutomaticEmailTrigger? // REGISTRATION_CREATED, etc.
+  abstractTrigger AbstractEmailTrigger?  @map("abstract_trigger") // ABSTRACT_SUBMISSION_ACK, etc.
 
   // Scope: event-specific or client-wide
   eventId String? @map("event_id") // NULL = available for all client's events
@@ -632,8 +645,12 @@ model EmailLog {
 
   // Target
   registrationId String? @map("registration_id")
+  abstractId     String? @map("abstract_id")
   recipientEmail String  @map("recipient_email")
   recipientName  String? @map("recipient_name")
+
+  // Abstract email audit/debounce linkage
+  abstractTrigger AbstractEmailTrigger? @map("abstract_trigger")
 
   // Content snapshot (for audit/debugging)
   subject String
@@ -665,9 +682,12 @@ model EmailLog {
   // Relations
   template     EmailTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
   registration Registration?  @relation(fields: [registrationId], references: [id], onDelete: SetNull)
+  abstract     Abstract?      @relation(fields: [abstractId], references: [id], onDelete: SetNull)
 
   // Indexes
   @@index([registrationId])
+  @@index([abstractId])
+  @@index([abstractId, abstractTrigger, queuedAt])
   @@index([status, queuedAt]) // For queue processing
   @@index([status, retryCount]) // For retry processing
   @@index([recipientEmail])
@@ -695,4 +715,304 @@ model AuditLog {
   @@index([performedBy])
   @@index([performedAt])
   @@map("audit_logs")
+}
+
+// ============================================================================
+// ABSTRACTS MODULE
+// ============================================================================
+
+enum AbstractSubmissionMode {
+  FREE_TEXT
+  STRUCTURED
+}
+
+enum AbstractBookOrder {
+  BY_CODE
+  BY_THEME
+  BY_SUBMISSION_ORDER
+}
+
+model AbstractConfig {
+  id                     String                 @id @default(uuid())
+  eventId                String                 @unique @map("event_id")
+  submissionMode         AbstractSubmissionMode @default(FREE_TEXT) @map("submission_mode")
+  globalWordLimit        Int?                   @default(500) @map("global_word_limit")
+  sectionWordLimits      Json?                  @map("section_word_limits")
+  submissionDeadline     DateTime?              @map("submission_deadline")
+  editingDeadline        DateTime?              @map("editing_deadline")
+  scoringDeadline        DateTime?              @map("scoring_deadline")
+  finalFileDeadline      DateTime?              @map("final_file_deadline")
+  editingEnabled         Boolean                @default(false) @map("editing_enabled")
+  commentsEnabled        Boolean                @default(false) @map("comments_enabled")
+  commentsSentToAuthor   Boolean                @default(false) @map("comments_sent_to_author")
+  finalFileUploadEnabled Boolean                @default(false) @map("final_file_upload_enabled")
+  reviewersPerAbstract   Int                    @default(2) @map("reviewers_per_abstract")
+  divergenceThreshold    Int                    @default(6) @map("divergence_threshold")
+  distributeByTheme      Boolean                @default(false) @map("distribute_by_theme")
+  modeLocked             Boolean                @default(false) @map("mode_locked")
+  bookFontFamily         String                 @default("Arial") @map("book_font_family")
+  bookFontSize           Int                    @default(11) @map("book_font_size")
+  bookLineSpacing        Float                  @default(1.5) @map("book_line_spacing")
+  bookOrder              AbstractBookOrder      @default(BY_CODE) @map("book_order")
+  bookIncludeAuthorNames Boolean                @default(true) @map("book_include_author_names")
+  additionalFieldsSchema Json                   @default("[]") @map("additional_fields_schema")
+  createdAt              DateTime               @default(now()) @map("created_at")
+  updatedAt              DateTime               @updatedAt @map("updated_at")
+
+  event  Event           @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  themes AbstractTheme[]
+
+  @@map("abstract_config")
+}
+
+model AbstractTheme {
+  id        String   @id @default(uuid())
+  configId  String   @map("config_id")
+  label     String
+  sortOrder Int      @default(0) @map("sort_order")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  config         AbstractConfig            @relation(fields: [configId], references: [id], onDelete: Cascade)
+  abstracts      AbstractThemeOnAbstract[]
+  reviewerThemes AbstractReviewerTheme[]
+
+  @@index([configId, active])
+  @@map("abstract_themes")
+}
+
+// ============================================================================
+// ABSTRACTS SUBMISSION MODULE (Phase II)
+// ============================================================================
+
+enum AbstractRequestedType {
+  ORAL_COMMUNICATION
+  POSTER
+}
+
+enum AbstractFinalType {
+  ORAL_COMMUNICATION
+  POSTER
+}
+
+enum AbstractStatus {
+  SUBMITTED
+  UNDER_REVIEW
+  REVIEW_COMPLETE
+  ACCEPTED
+  REJECTED
+  PENDING
+}
+
+enum AbstractFileKind {
+  PDF
+  PPT
+  PPTX
+}
+
+enum AbstractEmailTrigger {
+  ABSTRACT_SUBMISSION_ACK
+  ABSTRACT_EDIT_ACK
+  ABSTRACT_DECISION
+  ABSTRACT_COMMITTEE_INVITE
+  ABSTRACT_COMMITTEE_COMMENTS
+  ABSTRACT_SCORE_DIVERGENCE
+  ABSTRACT_FINAL_FILE_REQUEST
+}
+
+enum AbstractBookJobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model AbstractCodeCounter {
+  id        String   @id @default(uuid())
+  eventId   String   @unique @map("event_id")
+  lastValue Int      @default(0) @map("last_value")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@map("abstract_code_counters")
+}
+
+model AbstractBookJob {
+  id            String                @id @default(uuid())
+  eventId       String                @map("event_id")
+  requestedBy   String                @map("requested_by")
+  status        AbstractBookJobStatus @default(PENDING)
+  storageKey    String?               @map("storage_key")
+  errorMessage  String?               @map("error_message")
+  includedCount Int                   @default(0) @map("included_count")
+  createdAt     DateTime              @default(now()) @map("created_at")
+  startedAt     DateTime?             @map("started_at")
+  completedAt   DateTime?             @map("completed_at")
+  updatedAt     DateTime              @updatedAt @map("updated_at")
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId, createdAt(sort: Desc)])
+  @@index([status, createdAt])
+  @@map("abstract_book_jobs")
+}
+
+model Abstract {
+  id      String @id @default(uuid())
+  eventId String @map("event_id")
+
+  // Author info
+  authorFirstName String @map("author_first_name")
+  authorLastName  String @map("author_last_name")
+  authorEmail     String @map("author_email")
+  authorPhone     String @map("author_phone")
+
+  // Submission content
+  requestedType AbstractRequestedType @map("requested_type")
+  content       Json // { mode, title, body } or { mode, title, introduction, … }
+  coAuthors     Json                  @default("[]") @map("co_authors") // Array of { firstName, lastName, affiliation? }
+
+  // Additional fields from config
+  additionalFieldsData Json @default("{}") @map("additional_fields_data")
+
+  // Abstract code (Phase IV)
+  code       String? // e.g. "AB-001"
+  codeNumber Int?    @map("code_number")
+
+  // Status
+  status         AbstractStatus @default(SUBMITTED)
+  contentVersion Int            @default(1) @map("content_version")
+
+  // Review (Phase III/IV — columns included now, populated later)
+  finalType    AbstractFinalType? @map("final_type")
+  averageScore Float?             @map("average_score")
+  reviewCount  Int                @default(0) @map("review_count")
+
+  // Final file (Phase V — columns included now)
+  finalFileKey        String?           @map("final_file_key")
+  finalFileKind       AbstractFileKind? @map("final_file_kind")
+  finalFileSize       Int?              @map("final_file_size")
+  finalFileUploadedAt DateTime?         @map("final_file_uploaded_at")
+
+  // Self-service editing
+  editToken    String    @unique @map("edit_token")
+  lastEditedAt DateTime? @map("last_edited_at")
+
+  // Browser origin for email links
+  linkBaseUrl String? @map("link_base_url")
+
+  // Optional registration link
+  registrationId String? @map("registration_id")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  event        Event                     @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  registration Registration?             @relation(fields: [registrationId], references: [id], onDelete: SetNull)
+  revisions    AbstractRevision[]
+  themes       AbstractThemeOnAbstract[]
+  emailLogs    EmailLog[]
+  reviews      AbstractReview[]
+
+  @@unique([eventId, code])
+  @@index([eventId, status])
+  @@index([eventId, createdAt(sort: Desc)])
+  @@index([authorEmail])
+  @@index([registrationId])
+  @@map("abstracts")
+}
+
+model AbstractCommitteeMembership {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  eventId   String   @map("event_id")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user  User  @relation("AbstractCommitteeMember", fields: [userId], references: [id], onDelete: Cascade)
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, eventId])
+  @@index([eventId, active])
+  @@index([userId, active])
+  @@map("abstract_committee_memberships")
+}
+
+model AbstractReview {
+  id         String    @id @default(uuid())
+  abstractId String    @map("abstract_id")
+  eventId    String    @map("event_id")
+  reviewerId String    @map("reviewer_id")
+  score      Float?
+  comment    String?
+  scoredAt   DateTime? @map("scored_at")
+  active     Boolean   @default(true)
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  abstract Abstract @relation(fields: [abstractId], references: [id], onDelete: Cascade)
+  event    Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  reviewer User     @relation("AbstractReviewerReviews", fields: [reviewerId], references: [id], onDelete: Restrict)
+
+  @@unique([abstractId, reviewerId])
+  @@index([reviewerId, eventId, active, scoredAt])
+  @@index([eventId, active, scoredAt])
+  @@index([abstractId, active])
+  @@map("abstract_reviews")
+}
+
+model AbstractReviewerTheme {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  eventId   String   @map("event_id")
+  themeId   String   @map("theme_id")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  reviewer User          @relation("AbstractReviewerThemes", fields: [userId], references: [id], onDelete: Cascade)
+  event    Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  theme    AbstractTheme @relation(fields: [themeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, eventId, themeId])
+  @@index([eventId, themeId])
+  @@index([userId, eventId, active])
+  @@map("abstract_reviewer_themes")
+}
+
+model AbstractRevision {
+  id                   String   @id @default(uuid())
+  abstractId           String   @map("abstract_id")
+  revisionNo           Int      @map("revision_no")
+  snapshot             Json     @map("snapshot")
+  editedBy             String   @map("edited_by")
+  editedIpAddress      String?  @map("edited_ip_address")
+  content              Json // Full content snapshot retained for compatibility
+  coAuthors            Json     @default("[]") @map("co_authors")
+  additionalFieldsData Json     @default("{}") @map("additional_fields_data")
+  createdAt            DateTime @default(now()) @map("created_at")
+
+  abstract Abstract @relation(fields: [abstractId], references: [id], onDelete: Cascade)
+
+  @@unique([abstractId, revisionNo])
+  @@map("abstract_revisions")
+}
+
+model AbstractThemeOnAbstract {
+  id         String @id @default(uuid())
+  abstractId String @map("abstract_id")
+  themeId    String @map("theme_id")
+
+  abstract Abstract      @relation(fields: [abstractId], references: [id], onDelete: Cascade)
+  theme    AbstractTheme @relation(fields: [themeId], references: [id], onDelete: Cascade)
+
+  @@unique([abstractId, themeId])
+  @@index([themeId])
+  @@map("abstract_theme_links")
 }

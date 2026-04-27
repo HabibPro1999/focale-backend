@@ -34,7 +34,9 @@
       "@email": ["./src/modules/email/index.ts"],
       "@certificates": ["./src/modules/certificates/index.ts"],
       "@checkin": ["./src/modules/checkin/index.ts"],
-      "@realtime": ["./src/modules/realtime/index.ts"]
+      "@realtime": ["./src/modules/realtime/index.ts"],
+      "@abstracts": ["./src/modules/abstracts/index.ts"],
+      "@abstracts/*": ["./src/modules/abstracts/*"]
     }
   },
   "include": ["src/**/*"],

@@ -35,6 +35,11 @@ const envSchema = z
       .transform((v) => v === "true"),
     SSE_HEARTBEAT_MS: z.coerce.number().int().positive().default(25000),
     SSE_CLIENT_RETRY_MS: z.coerce.number().int().positive().default(15000),
+    // Abstract public endpoint rate limits (tunable for congress NAT/shared-Wi-Fi bursts)
+    ABSTRACTS_SUBMIT_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(60),
+    ABSTRACTS_EDIT_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
+    ABSTRACTS_READ_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(120),
+    ABSTRACTS_RATE_LIMIT_WINDOW: z.string().default("1 minute"),
   })
   .refine(
     (data) => {
@@ -114,6 +119,12 @@ export function parseConfig(source: NodeJS.ProcessEnv) {
       rateLimit: {
         max: env.NODE_ENV === "production" ? 100 : 1000,
         timeWindow: "1 minute",
+      },
+      publicAbstracts: {
+        submitMax: env.ABSTRACTS_SUBMIT_RATE_LIMIT_MAX,
+        editMax: env.ABSTRACTS_EDIT_RATE_LIMIT_MAX,
+        readMax: env.ABSTRACTS_READ_RATE_LIMIT_MAX,
+        timeWindow: env.ABSTRACTS_RATE_LIMIT_WINDOW,
       },
     },
     firebase: {

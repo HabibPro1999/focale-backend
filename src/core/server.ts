@@ -32,6 +32,12 @@ import {
 } from "@sponsorships";
 import { certificatesRoutes } from "@certificates";
 import { checkinRoutes } from "@checkin";
+import {
+  abstractsCommitteeAdminRoutes,
+  abstractsCommitteeRoutes,
+  abstractsPublicRoutes,
+  abstractsRoutes,
+} from "@abstracts";
 import { realtimeRoutes, drainRealtimeConnections } from "@realtime";
 import type { AppInstance } from "@shared/types/fastify.js";
 
@@ -175,6 +181,12 @@ export async function buildServer(): Promise<AppInstance> {
 
   // Realtime (SSE) stream for admin dashboards
   await app.register(realtimeRoutes, { prefix: "/api" });
+
+  // Abstracts routes (config, themes, committee, public submitter)
+  await app.register(abstractsRoutes, { prefix: "/api" });
+  await app.register(abstractsCommitteeAdminRoutes, { prefix: "/api" });
+  await app.register(abstractsCommitteeRoutes, { prefix: "/api" });
+  await app.register(abstractsPublicRoutes, { prefix: "/api/public" });
 
   app.addHook("onClose", async () => {
     drainRealtimeConnections();

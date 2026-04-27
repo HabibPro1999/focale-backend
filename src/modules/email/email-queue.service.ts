@@ -13,6 +13,7 @@ import {
 } from "./email-variable.service.js";
 import { getTemplateByTrigger } from "./email-template.service.js";
 import { Prisma } from "@/generated/prisma/client.js";
+import type { AbstractEmailTrigger } from "@/generated/prisma/client.js";
 import type { EmailContext, RegistrationWithRelations } from "./email.types.js";
 import type { AutomaticEmailTrigger } from "./email.schema.js";
 import type { ImageCache } from "@modules/certificates/certificate-pdf.service.js";
@@ -116,6 +117,8 @@ export interface QueueEmailInput {
   registrationId?: string;
   recipientEmail: string;
   recipientName?: string;
+  abstractId?: string;
+  abstractTrigger?: AbstractEmailTrigger;
 
   // Template
   templateId: string;
@@ -130,6 +133,8 @@ export async function queueEmail(input: QueueEmailInput) {
       trigger: input.trigger,
       templateId: input.templateId,
       registrationId: input.registrationId,
+      abstractId: input.abstractId,
+      abstractTrigger: input.abstractTrigger,
       recipientEmail: input.recipientEmail,
       recipientName: input.recipientName,
       subject: "", // Will be resolved when processing

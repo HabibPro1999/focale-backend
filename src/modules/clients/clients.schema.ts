@@ -14,6 +14,7 @@ export const MODULE_IDS = [
   "sponsorships",
   "emails",
   "certificates",
+  "abstracts",
 ] as const;
 
 export type ModuleId = (typeof MODULE_IDS)[number];

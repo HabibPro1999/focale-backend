@@ -45,26 +45,48 @@ async function validateClientId(
 
 /**
  * Enforce role-clientId consistency invariant:
- * - CLIENT_ADMIN must have a clientId
  * - SUPER_ADMIN must not have a clientId
+ * - CLIENT_ADMIN must have a clientId
+ * - SCIENTIFIC_COMMITTEE must not have a clientId
  */
 function validateRoleClientConsistency(
   role: number,
   clientId: string | null | undefined,
 ): void {
-  if (role === UserRole.CLIENT_ADMIN && !clientId) {
-    throw new AppError(
-      "CLIENT_ADMIN users must be assigned to a client",
-      400,
-      ErrorCodes.VALIDATION_ERROR,
-    );
-  }
-  if (role === UserRole.SUPER_ADMIN && clientId) {
-    throw new AppError(
-      "SUPER_ADMIN users cannot be assigned to a client",
-      400,
-      ErrorCodes.VALIDATION_ERROR,
-    );
+  switch (role) {
+    case UserRole.SUPER_ADMIN:
+      if (clientId) {
+        throw new AppError(
+          "SUPER_ADMIN users cannot be assigned to a client",
+          400,
+          ErrorCodes.VALIDATION_ERROR,
+        );
+      }
+      return;
+    case UserRole.CLIENT_ADMIN:
+      if (!clientId) {
+        throw new AppError(
+          "CLIENT_ADMIN users must be assigned to a client",
+          400,
+          ErrorCodes.VALIDATION_ERROR,
+        );
+      }
+      return;
+    case UserRole.SCIENTIFIC_COMMITTEE:
+      if (clientId) {
+        throw new AppError(
+          "SCIENTIFIC_COMMITTEE users cannot be assigned to a client",
+          400,
+          ErrorCodes.VALIDATION_ERROR,
+        );
+      }
+      return;
+    default:
+      throw new AppError(
+        "Invalid user role",
+        400,
+        ErrorCodes.VALIDATION_ERROR,
+      );
   }
 }
 

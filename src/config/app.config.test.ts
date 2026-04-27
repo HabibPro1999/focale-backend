@@ -23,6 +23,24 @@ describe("parseConfig", () => {
     expect(config.sendgrid.fromEmail).toBe("noreply@example.com");
   });
 
+  it("parses configurable abstract public rate limits", () => {
+    const config = parseConfig(
+      baseEnv({
+        ABSTRACTS_SUBMIT_RATE_LIMIT_MAX: "250",
+        ABSTRACTS_EDIT_RATE_LIMIT_MAX: "40",
+        ABSTRACTS_READ_RATE_LIMIT_MAX: "500",
+        ABSTRACTS_RATE_LIMIT_WINDOW: "2 minutes",
+      }),
+    );
+
+    expect(config.security.publicAbstracts).toEqual({
+      submitMax: 250,
+      editMax: 40,
+      readMax: 500,
+      timeWindow: "2 minutes",
+    });
+  });
+
   it("requires a firebase bucket when firebase storage is selected", () => {
     const env = baseEnv({ FIREBASE_STORAGE_BUCKET: undefined });
 

@@ -133,7 +133,8 @@ export interface VariableDefinition {
     | "links"
     | "bank"
     | "sponsorship"
-    | "certificate";
+    | "certificate"
+    | "abstract";
   description?: string;
   example?: string;
 }

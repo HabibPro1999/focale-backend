@@ -73,4 +73,16 @@ export const publicRateLimits = {
   accessPublic: { max: 20, timeWindow: "1 minute" },
   emailTestSend: { max: 10, timeWindow: "1 minute" },
   emailBulkSend: { max: 5, timeWindow: "1 minute" },
+  abstractsSubmit: {
+    max: config.security.publicAbstracts.submitMax,
+    timeWindow: config.security.publicAbstracts.timeWindow,
+  },
+  abstractsEdit: {
+    max: config.security.publicAbstracts.editMax,
+    timeWindow: config.security.publicAbstracts.timeWindow,
+  },
+  abstractsRead: {
+    max: config.security.publicAbstracts.readMax,
+    timeWindow: config.security.publicAbstracts.timeWindow,
+  },
 };

@@ -130,6 +130,13 @@ export const requireAdmin = requireRole(
 );
 
 /**
+ * Middleware that requires scientific committee role (role = 2).
+ */
+export const requireScientificCommittee = requireRole(
+  UserRole.SCIENTIFIC_COMMITTEE,
+);
+
+/**
  * Check if user can access a client's resources.
  * Super admins can access all clients.
  * Client admins can only access their own client.

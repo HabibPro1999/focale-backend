@@ -14,6 +14,7 @@ const MODULE_NAMES: Record<ModuleId, string> = {
   sponsorships: "Sponsorships",
   emails: "Emails",
   certificates: "Certificates",
+  abstracts: "Abstracts",
 };
 
 export function assertModuleEnabledForClient(

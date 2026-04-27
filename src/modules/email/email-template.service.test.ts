@@ -63,6 +63,7 @@ function createMockEmailTemplate(overrides: Partial<EmailTemplate> = {}): EmailT
     trigger: null,
     isDefault: false,
     isActive: true,
+    abstractTrigger: null,
     createdAt: faker.date.past(),
     updatedAt: faker.date.recent(),
     ...overrides,

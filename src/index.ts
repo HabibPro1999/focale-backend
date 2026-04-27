@@ -3,6 +3,7 @@ import { config } from "@config/app.config.js";
 import { logger } from "@shared/utils/logger.js";
 import { gracefulShutdown } from "@core/shutdown.js";
 import { processEmailQueue } from "@modules/email/index.js";
+import { processAbstractBookJobs } from "@abstracts";
 import { prisma } from "@/database/client.js";
 
 // Global error handlers
@@ -51,15 +52,24 @@ async function main() {
   // eslint-disable-next-line prefer-const -- assigned after listen, read by onClose registered before listen
   let emailQueueInterval: ReturnType<typeof setInterval> | undefined;
   let currentProcessing: Promise<void> | null = null;
+  // eslint-disable-next-line prefer-const -- assigned after listen, read by onClose registered before listen
+  let bookJobInterval: ReturnType<typeof setInterval> | undefined;
+  let currentBookProcessing: Promise<void> | null = null;
 
   // Register hooks and shutdown BEFORE listen (Fastify disallows addHook after listen)
   server.addHook("onClose", async () => {
     if (emailQueueInterval) clearInterval(emailQueueInterval);
+    if (bookJobInterval) clearInterval(bookJobInterval);
     if (currentProcessing) {
       logger.info("Waiting for in-flight email batch to complete...");
       await currentProcessing;
     }
     logger.info("Email queue worker stopped");
+    if (currentBookProcessing) {
+      logger.info("Waiting for in-flight Abstract Book job to complete...");
+      await currentBookProcessing;
+    }
+    logger.info("Abstract Book worker stopped");
   });
 
   gracefulShutdown(server);
@@ -92,6 +102,27 @@ async function main() {
       });
   }, 15_000);
   logger.info("Email queue worker started (15s interval)");
+
+  // Start Abstract Book worker (processes one generation job every 30 seconds)
+  let isProcessingBookJobs = false;
+  bookJobInterval = setInterval(() => {
+    if (isProcessingBookJobs) return;
+    isProcessingBookJobs = true;
+    currentBookProcessing = processAbstractBookJobs(1)
+      .then((result) => {
+        if (result.processed > 0) {
+          logger.info({ result }, "Abstract Book jobs processed");
+        }
+      })
+      .catch((err) => {
+        logger.error({ err }, "Abstract Book job processing failed");
+      })
+      .finally(() => {
+        isProcessingBookJobs = false;
+        currentBookProcessing = null;
+      });
+  }, 30_000);
+  logger.info("Abstract Book worker started (30s interval)");
 }
 
 main().catch((err) => {

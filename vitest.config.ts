@@ -78,6 +78,7 @@ export default defineConfig({
       ),
       "@checkin": path.resolve(__dirname, "./src/modules/checkin/index.ts"),
       "@realtime": path.resolve(__dirname, "./src/modules/realtime/index.ts"),
+      "@abstracts": path.resolve(__dirname, "./src/modules/abstracts/index.ts"),
     },
   },
 });

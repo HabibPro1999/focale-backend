@@ -24,11 +24,18 @@ export type EventAccessEventType = "eventAccess.countsChanged";
 
 export type EmailLogEventType = "emailLog.statusChanged";
 
+export type AbstractEventType =
+  | "abstract.reviewCompleted"
+  | "abstract.scoreDiverged"
+  | "abstract.finalized"
+  | "abstract.reopened";
+
 export type AppEventType =
   | RegistrationEventType
   | SponsorshipEventType
   | EventAccessEventType
-  | EmailLogEventType;
+  | EmailLogEventType
+  | AbstractEventType;
 
 interface BaseEvent<T extends AppEventType, P> {
   type: T;
@@ -58,11 +65,17 @@ export type EmailLogEvent = BaseEvent<
   { id: string; status: string; registrationId?: string; [k: string]: unknown }
 >;
 
+export type AbstractEvent = BaseEvent<
+  AbstractEventType,
+  { id: string; status?: string; averageScore?: number | null; reviewCount?: number; code?: string | null; [k: string]: unknown }
+>;
+
 export type AppEvent =
   | RegistrationEvent
   | SponsorshipEvent
   | EventAccessEvent
-  | EmailLogEvent;
+  | EmailLogEvent
+  | AbstractEvent;
 
 export const BYPASS_DEBOUNCE_TYPES = new Set<AppEventType>([
   "registration.checkedIn",
