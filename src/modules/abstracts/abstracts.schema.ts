@@ -29,11 +29,11 @@ export const AbstractBookJobParamSchema = z.strictObject({
 // ============================================================================
 
 const SectionWordLimitsSchema = z.strictObject({
-  introduction: z.number().int().min(0).optional(),
-  objective: z.number().int().min(0).optional(),
-  methods: z.number().int().min(0).optional(),
-  results: z.number().int().min(0).optional(),
-  conclusion: z.number().int().min(0).optional(),
+  introduction: z.union([z.number().int().min(0), z.null()]).optional(),
+  objective: z.union([z.number().int().min(0), z.null()]).optional(),
+  methods: z.union([z.number().int().min(0), z.null()]).optional(),
+  results: z.union([z.number().int().min(0), z.null()]).optional(),
+  conclusion: z.union([z.number().int().min(0), z.null()]).optional(),
 });
 
 const NullableDateTime = z
