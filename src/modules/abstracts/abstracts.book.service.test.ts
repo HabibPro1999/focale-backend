@@ -15,7 +15,9 @@ import {
   enqueueAbstractBookJob,
   generateAbstractBookPdf,
   getAbstractBookJob,
+  getAbstractBookQueueHealth,
   processAbstractBookJobs,
+  recoverStaleAbstractBookJobs,
 } from "./abstracts.book.service.js";
 
 const eventId = "event-1";
@@ -30,6 +32,13 @@ function makeJob(overrides: Record<string, unknown> = {}) {
     storageKey: null,
     errorMessage: null,
     includedCount: 0,
+    attemptCount: 0,
+    maxAttempts: 3,
+    lastAttemptAt: null,
+    nextAttemptAt: null,
+    lockedAt: null,
+    lockedUntil: null,
+    lockedBy: null,
     createdAt: new Date("2026-01-01T00:00:00.000Z"),
     startedAt: null,
     completedAt: null,
@@ -89,6 +98,7 @@ function makeAcceptedAbstract(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   uploadPrivate.mockReset();
   getSignedUrl.mockReset();
+  prismaMock.$executeRawUnsafe.mockResolvedValue(0 as any);
 });
 
 describe("abstracts book service", () => {
@@ -127,37 +137,139 @@ describe("abstracts book service", () => {
   });
 
   it("processes pending jobs and stores generated PDFs privately", async () => {
-    prismaMock.abstractBookJob.findMany.mockResolvedValue([makeJob()] as any);
+    prismaMock.$queryRawUnsafe.mockResolvedValue([
+      makeJob({
+        status: AbstractBookJobStatus.RUNNING,
+        attemptCount: 1,
+        lockedBy: "worker-a",
+      }),
+    ] as any);
     prismaMock.abstractBookJob.updateMany.mockResolvedValue({ count: 1 } as any);
     prismaMock.event.findUnique.mockResolvedValue(makeEvent() as any);
     prismaMock.abstract.findMany.mockResolvedValue([makeAcceptedAbstract()] as any);
     uploadPrivate.mockResolvedValue(`${eventId}/abstracts/book/${jobId}.pdf`);
 
-    const result = await processAbstractBookJobs(1);
+    const result = await processAbstractBookJobs(1, { workerId: "worker-a", heartbeatMs: 60_000 });
 
+    expect(prismaMock.$queryRawUnsafe).toHaveBeenCalledWith(
+      expect.stringContaining("FOR UPDATE SKIP LOCKED"),
+      expect.any(Date),
+      expect.any(Date),
+      "worker-a",
+      1,
+    );
     expect(uploadPrivate).toHaveBeenCalledWith(
       expect.any(Buffer),
       `${eventId}/abstracts/book/${jobId}.pdf`,
       "application/pdf",
       { contentDisposition: `attachment; filename="abstract-book-${eventId}.pdf"` },
     );
-    expect(prismaMock.abstractBookJob.update).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: jobId },
+    expect(prismaMock.abstractBookJob.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: jobId, status: AbstractBookJobStatus.RUNNING, lockedBy: "worker-a" },
       data: expect.objectContaining({
         status: "COMPLETED",
         storageKey: `${eventId}/abstracts/book/${jobId}.pdf`,
         includedCount: 1,
         completedAt: expect.any(Date),
+        lockedAt: null,
+        lockedUntil: null,
+        lockedBy: null,
       }),
     }));
     expect(result.processed).toBe(1);
   });
 
-  it("returns a signed URL for completed jobs", async () => {
+  it("requeues failed jobs when attempts remain", async () => {
+    prismaMock.$queryRawUnsafe.mockResolvedValue([
+      makeJob({ status: AbstractBookJobStatus.RUNNING, attemptCount: 1, maxAttempts: 3, lockedBy: "worker-a" }),
+    ] as any);
+    prismaMock.event.findUnique.mockRejectedValue(new Error("PDF failed"));
+    prismaMock.abstractBookJob.updateMany.mockResolvedValue({ count: 1 } as any);
+
+    const result = await processAbstractBookJobs(1, { workerId: "worker-a" });
+
+    expect(result.processed).toBe(1);
+    expect(prismaMock.abstractBookJob.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: jobId, status: AbstractBookJobStatus.RUNNING, lockedBy: "worker-a" },
+      data: expect.objectContaining({
+        status: AbstractBookJobStatus.PENDING,
+        errorMessage: "PDF failed",
+        completedAt: null,
+        nextAttemptAt: expect.any(Date),
+      }),
+    }));
+  });
+
+  it("dead-letters failed jobs when max attempts are exhausted", async () => {
+    prismaMock.$queryRawUnsafe.mockResolvedValue([
+      makeJob({ status: AbstractBookJobStatus.RUNNING, attemptCount: 3, maxAttempts: 3, lockedBy: "worker-a" }),
+    ] as any);
+    prismaMock.event.findUnique.mockRejectedValue(new Error("PDF failed"));
+    prismaMock.abstractBookJob.updateMany.mockResolvedValue({ count: 1 } as any);
+
+    await processAbstractBookJobs(1, { workerId: "worker-a" });
+
+    expect(prismaMock.abstractBookJob.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        status: AbstractBookJobStatus.FAILED,
+        completedAt: expect.any(Date),
+        nextAttemptAt: null,
+      }),
+    }));
+  });
+
+  it("recovers stale running jobs", async () => {
+    prismaMock.$executeRawUnsafe
+      .mockResolvedValueOnce(1 as any)
+      .mockResolvedValueOnce(2 as any);
+
+    const result = await recoverStaleAbstractBookJobs(new Date("2026-01-01T00:00:00.000Z"));
+
+    expect(result).toEqual({ requeued: 1, deadLettered: 2 });
+    expect(prismaMock.$executeRawUnsafe).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining('"status" = \'PENDING\''),
+      expect.any(Date),
+      expect.any(Date),
+      expect.any(Date),
+      expect.any(Date),
+    );
+    expect(prismaMock.$executeRawUnsafe).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('"status" = \'FAILED\''),
+      expect.any(Date),
+    );
+  });
+
+  it("reports abstract book queue health", async () => {
+    prismaMock.abstractBookJob.count
+      .mockResolvedValueOnce(2 as any)
+      .mockResolvedValueOnce(1 as any)
+      .mockResolvedValueOnce(1 as any)
+      .mockResolvedValueOnce(0 as any)
+      .mockResolvedValueOnce(3 as any);
+    prismaMock.abstractBookJob.findFirst.mockResolvedValue({ createdAt: new Date(Date.now() - 1000) } as any);
+
+    const health = await getAbstractBookQueueHealth();
+
+    expect(health).toMatchObject({
+      pendingCount: 2,
+      duePendingCount: 1,
+      runningCount: 1,
+      staleRunningCount: 0,
+      failedCount: 3,
+      isHealthy: true,
+    });
+  });
+
+  it("returns a signed URL and retry metadata for completed jobs", async () => {
     prismaMock.abstractBookJob.findUnique.mockResolvedValue(makeJob({
       status: AbstractBookJobStatus.COMPLETED,
       storageKey: `${eventId}/abstracts/book/${jobId}.pdf`,
       includedCount: 1,
+      attemptCount: 2,
+      maxAttempts: 3,
+      lastAttemptAt: new Date("2026-01-01T00:00:30.000Z"),
       completedAt: new Date("2026-01-01T00:01:00.000Z"),
     }) as any);
     getSignedUrl.mockResolvedValue("https://signed.example.com/book.pdf");
@@ -165,6 +277,11 @@ describe("abstracts book service", () => {
     const result = await getAbstractBookJob(eventId, jobId);
 
     expect(getSignedUrl).toHaveBeenCalledWith(`${eventId}/abstracts/book/${jobId}.pdf`, 3600);
-    expect(result.downloadUrl).toBe("https://signed.example.com/book.pdf");
+    expect(result).toMatchObject({
+      downloadUrl: "https://signed.example.com/book.pdf",
+      attemptCount: 2,
+      maxAttempts: 3,
+      lastAttemptAt: "2026-01-01T00:00:30.000Z",
+    });
   });
 });

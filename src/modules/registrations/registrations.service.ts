@@ -5,7 +5,7 @@ import { UserRole } from "@shared/constants/roles.js";
 import { logger } from "@shared/utils/logger.js";
 import { auditLog } from "@shared/utils/audit.js";
 import {
-  assertEventOpen,
+  assertEventAcceptsPublicActions,
   assertEventWritable,
   incrementRegisteredCountTx,
   decrementRegisteredCountTx,
@@ -43,6 +43,7 @@ import { getRegistrationById } from "./registration-reads.js";
 import { calculateSettlement } from "@shared/utils/settlement.js";
 import { eventBus } from "@core/events/bus.js";
 import type { AppEvent } from "@core/events/types.js";
+import { calculateApplicableAmount } from "@shared/utils/sponsorship-math.js";
 
 // ============================================================================
 // Re-exports — routes and barrel consume these from this file
@@ -78,6 +79,10 @@ export {
 // ============================================================================
 
 const FULLY_SETTLED_STATUSES = ["PAID", "SPONSORED", "WAIVED"];
+
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
 
 function assertLabSponsorshipAllowed(
   client: { enabledModules: string[] },
@@ -137,6 +142,180 @@ async function syncPaidCount(
   }
 }
 
+function paidAccessQuantities(
+  status: string,
+  priceBreakdown: unknown,
+  coveredAccessIds = new Set<string>(),
+): Map<string, number> {
+  const quantities = new Map<string, number>();
+  if (!FULLY_SETTLED_STATUSES.includes(status) && status !== "PARTIAL") {
+    return quantities;
+  }
+
+  const breakdown = priceBreakdown as PriceBreakdown;
+  for (const item of breakdown.accessItems ?? []) {
+    if (
+      FULLY_SETTLED_STATUSES.includes(status) ||
+      coveredAccessIds.has(item.accessId)
+    ) {
+      quantities.set(
+        item.accessId,
+        (quantities.get(item.accessId) ?? 0) + item.quantity,
+      );
+    }
+  }
+  return quantities;
+}
+
+async function syncPaidCountForAccessEdit(
+  tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
+  eventId: string,
+  oldStatus: string,
+  oldBreakdown: unknown,
+  newStatus: string,
+  newBreakdown: unknown,
+  coveredAccessIds: Set<string>,
+): Promise<void> {
+  const oldPaid = paidAccessQuantities(
+    oldStatus,
+    oldBreakdown,
+    coveredAccessIds,
+  );
+  const newPaid = paidAccessQuantities(
+    newStatus,
+    newBreakdown,
+    coveredAccessIds,
+  );
+  const accessIds = new Set([...oldPaid.keys(), ...newPaid.keys()]);
+  const incremented: string[] = [];
+
+  for (const accessId of accessIds) {
+    const delta = (newPaid.get(accessId) ?? 0) - (oldPaid.get(accessId) ?? 0);
+    if (delta > 0) {
+      await incrementPaidCount(accessId, delta, tx);
+      incremented.push(accessId);
+    } else if (delta < 0) {
+      await decrementPaidCount(accessId, Math.abs(delta), tx);
+    }
+  }
+
+  if (incremented.length > 0) {
+    await handleCapacityReached(eventId, incremented, tx);
+  }
+}
+
+async function recalculateLinkedSponsorshipSettlement(
+  tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
+  registration: {
+    id: string;
+    paymentStatus: string;
+    paidAt: Date | null;
+  },
+  priceBreakdown: PriceBreakdown,
+): Promise<{
+  priceBreakdown: PriceBreakdown;
+  sponsorshipAmount: number;
+  paymentStatus?: "PENDING" | "PARTIAL" | "SPONSORED";
+  paidAt?: Date | null;
+  coveredAccessIds: Set<string>;
+}> {
+  const usages = await tx.sponsorshipUsage.findMany({
+    where: { registrationId: registration.id },
+    select: {
+      id: true,
+      amountApplied: true,
+      sponsorship: {
+        select: {
+          coversBasePrice: true,
+          coveredAccessIds: true,
+          totalAmount: true,
+        },
+      },
+    },
+  });
+
+  const accessTypeIds = priceBreakdown.accessItems.map((item) => item.accessId);
+  const coveredAccessIds = new Set<string>();
+  let sponsorshipAmount = 0;
+
+  if (usages.length === 0) {
+    sponsorshipAmount = priceBreakdown.sponsorshipTotal;
+    return {
+      priceBreakdown,
+      sponsorshipAmount,
+      coveredAccessIds,
+    };
+  }
+
+  for (const usage of usages) {
+    for (const accessId of usage.sponsorship.coveredAccessIds) {
+      coveredAccessIds.add(accessId);
+    }
+    const amountApplied = calculateApplicableAmount(
+      usage.sponsorship,
+      {
+        totalAmount: priceBreakdown.subtotal,
+        baseAmount: priceBreakdown.calculatedBasePrice,
+        accessTypeIds,
+        priceBreakdown,
+      },
+    );
+    sponsorshipAmount += amountApplied;
+    if (amountApplied !== usage.amountApplied) {
+      await tx.sponsorshipUsage.update({
+        where: { id: usage.id },
+        data: { amountApplied },
+      });
+    }
+  }
+
+  sponsorshipAmount = Math.min(sponsorshipAmount, priceBreakdown.subtotal);
+  const updatedBreakdown = {
+    ...priceBreakdown,
+    sponsorshipTotal: sponsorshipAmount,
+    total: Math.max(0, priceBreakdown.subtotal - sponsorshipAmount),
+  };
+
+  const result: {
+    priceBreakdown: PriceBreakdown;
+    sponsorshipAmount: number;
+    paymentStatus?: "PENDING" | "PARTIAL" | "SPONSORED";
+    paidAt?: Date | null;
+    coveredAccessIds: Set<string>;
+  } = {
+    priceBreakdown: updatedBreakdown,
+    sponsorshipAmount,
+    coveredAccessIds,
+  };
+
+  if (
+    registration.paymentStatus === "PAID" ||
+    registration.paymentStatus === "WAIVED" ||
+    registration.paymentStatus === "REFUNDED"
+  ) {
+    return result;
+  }
+
+  if (
+    sponsorshipAmount >= priceBreakdown.subtotal &&
+    priceBreakdown.subtotal > 0
+  ) {
+    result.paymentStatus = "SPONSORED";
+    result.paidAt = registration.paidAt ?? new Date();
+  } else if (sponsorshipAmount > 0) {
+    result.paymentStatus = "PARTIAL";
+    result.paidAt = null;
+  } else if (
+    registration.paymentStatus === "SPONSORED" ||
+    registration.paymentStatus === "PARTIAL"
+  ) {
+    result.paymentStatus = "PENDING";
+    result.paidAt = null;
+  }
+
+  return result;
+}
+
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -191,7 +370,7 @@ export async function createRegistration(
   const {
     formId,
     formData,
-    email,
+    email: rawEmail,
     firstName,
     lastName,
     phone,
@@ -202,6 +381,7 @@ export async function createRegistration(
     idempotencyKey,
     linkBaseUrl,
   } = input;
+  const email = normalizeEmail(rawEmail);
 
   // Get form and event info (including schemaVersion)
   const form = await prisma.form.findUnique({
@@ -215,8 +395,8 @@ export async function createRegistration(
   const eventId = form.eventId;
 
   // Check for duplicate registration (unique per email + form)
-  const existingRegistration = await prisma.registration.findUnique({
-    where: { email_formId: { email, formId } },
+  const existingRegistration = await prisma.registration.findFirst({
+    where: { email: { equals: email, mode: "insensitive" }, formId },
   });
   if (existingRegistration) {
     throw new AppError(
@@ -253,6 +433,7 @@ export async function createRegistration(
       where: { id: eventId },
       select: {
         status: true,
+        endDate: true,
         maxCapacity: true,
         registeredCount: true,
         client: { select: { enabledModules: true } },
@@ -266,7 +447,7 @@ export async function createRegistration(
         ErrorCodes.EVENT_NOT_OPEN,
       );
     }
-    assertEventOpen(event);
+    assertEventAcceptsPublicActions(event);
     assertModuleEnabledForClient(event.client, "registrations");
     assertLabSponsorshipAllowed(event.client, paymentMethod);
 
@@ -404,7 +585,7 @@ export async function createAdminRegistration(
   adminUserId: string,
 ): Promise<RegistrationWithRelations> {
   const {
-    email,
+    email: rawEmail,
     firstName,
     lastName,
     phone,
@@ -416,6 +597,7 @@ export async function createAdminRegistration(
     labName,
     sendEmail,
   } = input;
+  const email = normalizeEmail(rawEmail);
 
   // Find the registration form for this event
   const form = await prisma.form.findFirst({
@@ -431,8 +613,8 @@ export async function createAdminRegistration(
   }
 
   // Check for duplicate registration (same unique constraint as public form)
-  const existing = await prisma.registration.findUnique({
-    where: { email_formId: { email, formId: form.id } },
+  const existing = await prisma.registration.findFirst({
+    where: { email: { equals: email, mode: "insensitive" }, formId: form.id },
   });
   if (existing) {
     throw new AppError(
@@ -674,8 +856,16 @@ export async function updateRegistration(
         updateData.paidAt = new Date();
       }
     }
-    if (input.paidAmount !== undefined)
+    if (input.paidAmount !== undefined) {
+      if (input.paidAmount > registration.totalAmount) {
+        throw new AppError(
+          "Paid amount cannot exceed registration total",
+          400,
+          ErrorCodes.BAD_REQUEST,
+        );
+      }
       updateData.paidAmount = input.paidAmount;
+    }
     if (input.paymentMethod !== undefined)
       updateData.paymentMethod = input.paymentMethod;
     if (input.paymentReference !== undefined)
@@ -841,10 +1031,14 @@ export async function adminEditRegistration(
     const changes: Record<string, { old: unknown; new: unknown }> = {};
 
     // ── Personal info ──────────────────────────────────────────
-    if (input.email !== undefined && input.email !== registration.email) {
-      const duplicate = await tx.registration.findUnique({
+    const inputEmail =
+      input.email !== undefined ? normalizeEmail(input.email) : undefined;
+    if (inputEmail !== undefined && inputEmail !== registration.email) {
+      const duplicate = await tx.registration.findFirst({
         where: {
-          email_formId: { email: input.email, formId: registration.formId },
+          email: { equals: inputEmail, mode: "insensitive" },
+          formId: registration.formId,
+          id: { not: id },
         },
         select: { id: true },
       });
@@ -855,8 +1049,8 @@ export async function adminEditRegistration(
           ErrorCodes.REGISTRATION_ALREADY_EXISTS,
         );
       }
-      updateData.email = input.email;
-      changes.email = { old: registration.email, new: input.email };
+      updateData.email = inputEmail;
+      changes.email = { old: registration.email, new: inputEmail };
     }
     if (
       input.firstName !== undefined &&
@@ -919,6 +1113,13 @@ export async function adminEditRegistration(
       input.paidAmount !== undefined &&
       input.paidAmount !== registration.paidAmount
     ) {
+      if (input.paidAmount > registration.totalAmount) {
+        throw new AppError(
+          "Paid amount cannot exceed registration total",
+          400,
+          ErrorCodes.BAD_REQUEST,
+        );
+      }
       updateData.paidAmount = input.paidAmount;
       changes.paidAmount = {
         old: registration.paidAmount,
@@ -945,14 +1146,28 @@ export async function adminEditRegistration(
       updateData.labName = input.labName;
     }
 
-    // ── Access selections (full recalculation) ─────────────────
-    if (input.accessSelections !== undefined) {
+    // ── Price-affecting edits (form data and/or access selections) ────────
+    if (input.accessSelections !== undefined || input.formData !== undefined) {
       assertModuleEnabledForClient(registration.event.client, "pricing");
       const effectiveFormData =
         input.formData ??
         (registration.formData as Record<string, unknown>) ??
         {};
-      const selectedAccessItems = input.accessSelections.map((s) => ({
+      const oldBreakdown = registration.priceBreakdown as Record<
+        string,
+        unknown
+      > | null;
+      const oldAccessItems = (oldBreakdown?.accessItems ?? []) as Array<{
+        accessId: string;
+        quantity: number;
+      }>;
+      const effectiveAccessSelections =
+        input.accessSelections ??
+        oldAccessItems.map((item) => ({
+          accessId: item.accessId,
+          quantity: item.quantity,
+        }));
+      const selectedAccessItems = effectiveAccessSelections.map((s) => ({
         accessId: s.accessId,
         quantity: s.quantity,
       }));
@@ -963,10 +1178,13 @@ export async function adminEditRegistration(
         (registration.accessTypeIds as string[]) ?? [],
       );
 
-      if (input.accessSelections.length > 0) {
+      if (
+        input.accessSelections !== undefined &&
+        effectiveAccessSelections.length > 0
+      ) {
         const validation = await validateAccessSelections(
           eventId,
-          input.accessSelections,
+          effectiveAccessSelections,
           effectiveFormData,
           existingAccessIds,
         );
@@ -984,7 +1202,7 @@ export async function adminEditRegistration(
       const existingSponsorshipCodes: string[] = registration.sponsorshipCode
         ? [registration.sponsorshipCode]
         : [];
-      const priceBreakdown = await calculatePrice(eventId, {
+      let priceBreakdown = await calculatePrice(eventId, {
         formData: effectiveFormData,
         selectedAccessItems,
         sponsorshipCodes: existingSponsorshipCodes,
@@ -992,26 +1210,40 @@ export async function adminEditRegistration(
 
       // Release old access spots
       const oldAccessTypeIds = (registration.accessTypeIds as string[]) ?? [];
-      const oldBreakdown = registration.priceBreakdown as Record<
-        string,
-        unknown
-      > | null;
-      const oldAccessItems = (oldBreakdown?.accessItems ?? []) as Array<{
-        accessId: string;
-        quantity: number;
-      }>;
-      await Promise.all(
-        oldAccessItems.map((old) =>
-          decrementAccessRegisteredCountTx(old.accessId, old.quantity, tx),
-        ),
-      );
+      if (input.accessSelections !== undefined) {
+        await Promise.all(
+          oldAccessItems.map((old) =>
+            decrementAccessRegisteredCountTx(old.accessId, old.quantity, tx),
+          ),
+        );
 
-      // Reserve new access spots
-      await Promise.all(
-        input.accessSelections
-          .filter((sel) => sel.quantity > 0)
-          .map((sel) => incrementAccessRegisteredCountTx(sel.accessId, sel.quantity, tx)),
+        // Reserve new access spots
+        await Promise.all(
+          effectiveAccessSelections
+            .filter((sel) => sel.quantity > 0)
+            .map((sel) =>
+              incrementAccessRegisteredCountTx(sel.accessId, sel.quantity, tx),
+            ),
+        );
+      }
+
+      const settlement = await recalculateLinkedSponsorshipSettlement(
+        tx,
+        registration,
+        priceBreakdown,
       );
+      priceBreakdown = settlement.priceBreakdown;
+
+      const nextPaymentStatus =
+        input.paymentStatus ?? settlement.paymentStatus ?? registration.paymentStatus;
+      const nextPaidAmount = input.paidAmount ?? registration.paidAmount;
+      if (nextPaidAmount > priceBreakdown.total) {
+        throw new AppError(
+          "Paid amount cannot exceed registration total",
+          400,
+          ErrorCodes.BAD_REQUEST,
+        );
+      }
 
       // Update denormalized price fields
       updateData.totalAmount = priceBreakdown.total;
@@ -1020,19 +1252,52 @@ export async function adminEditRegistration(
       updateData.discountAmount = calculateDiscountAmount(
         priceBreakdown.appliedRules,
       );
-      updateData.sponsorshipAmount = priceBreakdown.sponsorshipTotal ?? 0;
-      updateData.accessTypeIds = input.accessSelections.map((s) => s.accessId);
+      updateData.sponsorshipAmount = settlement.sponsorshipAmount;
+      updateData.accessTypeIds = effectiveAccessSelections.map(
+        (s) => s.accessId,
+      );
       updateData.priceBreakdown =
         priceBreakdown as unknown as Prisma.InputJsonValue;
+      if (
+        input.paymentStatus === undefined &&
+        settlement.paymentStatus !== undefined &&
+        settlement.paymentStatus !== registration.paymentStatus
+      ) {
+        updateData.paymentStatus = settlement.paymentStatus;
+        changes.paymentStatus = {
+          old: registration.paymentStatus,
+          new: settlement.paymentStatus,
+        };
+      }
+      if (input.paymentStatus === undefined && settlement.paidAt !== undefined) {
+        updateData.paidAt = settlement.paidAt;
+      }
 
-      changes.accessSelections = {
-        old: oldAccessTypeIds,
-        new: input.accessSelections.map((s) => s.accessId),
-      };
+      if (input.accessSelections !== undefined) {
+        changes.accessSelections = {
+          old: oldAccessTypeIds,
+          new: effectiveAccessSelections.map((s) => s.accessId),
+        };
+      }
       changes.totalAmount = {
         old: registration.totalAmount,
         new: priceBreakdown.total,
       };
+
+      if (
+        input.accessSelections !== undefined ||
+        nextPaymentStatus !== registration.paymentStatus
+      ) {
+        await syncPaidCountForAccessEdit(
+          tx,
+          eventId,
+          registration.paymentStatus,
+          registration.priceBreakdown,
+          nextPaymentStatus,
+          priceBreakdown,
+          settlement.coveredAccessIds,
+        );
+      }
     }
 
     updateData.lastEditedAt = new Date();
@@ -1043,7 +1308,9 @@ export async function adminEditRegistration(
     // Use updated values if access selections were changed in this edit
     if (
       input.paymentStatus !== undefined &&
-      input.paymentStatus !== registration.paymentStatus
+      input.paymentStatus !== registration.paymentStatus &&
+      input.accessSelections === undefined &&
+      input.formData === undefined
     ) {
       const effectiveAccessTypeIds =
         (updateData.accessTypeIds as string[] | undefined) ??
@@ -1295,11 +1562,13 @@ type RegistrationForEdit = RegistrationWithRelations & {
     slug: string;
     clientId: string;
     status: string;
+    endDate: Date;
   };
 };
 
 export type GetRegistrationForEditResult = {
   registration: RegistrationForEdit;
+  expectedUpdatedAt: string;
   canEdit: boolean;
   canEditPersonalInfo: boolean;
   canEditAccess: boolean;
@@ -1328,6 +1597,7 @@ export async function getRegistrationForEdit(
           slug: true,
           clientId: true,
           status: true,
+          endDate: true,
           client: { select: { enabledModules: true } },
         },
       },
@@ -1397,7 +1667,10 @@ export async function getRegistrationForEdit(
   }
 
   // Event not OPEN → block everything
-  if (registration.event.status !== "OPEN") {
+  if (
+    registration.event.status !== "OPEN" ||
+    registration.event.endDate < new Date()
+  ) {
     canEdit = false;
     canEditPersonalInfo = false;
     canEditAccess = false;
@@ -1476,6 +1749,7 @@ export async function getRegistrationForEdit(
     slug: registration.event.slug,
     clientId: registration.event.clientId,
     status: registration.event.status,
+    endDate: registration.event.endDate,
   };
   const enrichedRegistration = {
     ...registration,
@@ -1485,6 +1759,7 @@ export async function getRegistrationForEdit(
 
   return {
     registration: enrichedRegistration as RegistrationForEdit,
+    expectedUpdatedAt: registration.updatedAt.toISOString(),
     canEdit,
     canEditPersonalInfo,
     canEditAccess,
@@ -1514,197 +1789,47 @@ export async function editRegistrationPublic(
   registrationId: string,
   input: PublicEditRegistrationInput,
 ): Promise<EditRegistrationPublicResult> {
-  // 1. Get current registration
-  const registration = await prisma.registration.findUnique({
-    where: { id: registrationId },
-    include: {
-      form: { select: { id: true, eventId: true, schema: true } },
-      event: {
-        select: {
-          id: true,
-          status: true,
-          client: { select: { enabledModules: true } },
-        },
-      },
-    },
-  });
-
-  if (!registration) {
+  const expectedUpdatedAt = new Date(input.expectedUpdatedAt);
+  if (Number.isNaN(expectedUpdatedAt.getTime())) {
     throw new AppError(
-      "Registration not found",
-      404,
-      ErrorCodes.REGISTRATION_NOT_FOUND,
-    );
-  }
-
-  // 2. Validate registration can be edited
-  if (registration.paymentStatus === "REFUNDED") {
-    throw new AppError(
-      "Refunded registrations cannot be edited",
+      "Invalid expectedUpdatedAt precondition",
       400,
-      ErrorCodes.REGISTRATION_REFUNDED,
+      ErrorCodes.VALIDATION_ERROR,
     );
   }
 
-  if (registration.event.status !== "OPEN") {
-    throw new AppError(
-      "Event is not accepting changes",
-      400,
-      ErrorCodes.REGISTRATION_EDIT_FORBIDDEN,
-    );
-  }
-  assertModuleEnabledForClient(registration.event.client, "registrations");
-  assertModuleEnabledForClient(registration.event.client, "pricing");
+  let newPriceBreakdown!: PriceBreakdown;
 
-  // 2b. Block access edits for VERIFYING registrations
-  if (registration.paymentStatus === "VERIFYING" && input.accessSelections) {
-    throw new AppError(
-      "Cannot modify access while payment is under review",
-      400,
-      ErrorCodes.REGISTRATION_VERIFYING_BLOCKED,
-    );
-  }
-
-  // 2c. Block access edits for WAIVED registrations
-  if (registration.paymentStatus === "WAIVED" && input.accessSelections) {
-    throw new AppError(
-      "Waived registrations cannot modify access selections",
-      400,
-      ErrorCodes.REGISTRATION_WAIVED_ACCESS_BLOCKED,
-    );
-  }
-
-  // 2d. Block access edits for fully sponsored registrations
-  if (
-    registration.sponsorshipAmount >= registration.totalAmount &&
-    registration.totalAmount > 0 &&
-    input.accessSelections
-  ) {
-    throw new AppError(
-      "Fully sponsored registrations cannot modify access selections",
-      400,
-      ErrorCodes.REGISTRATION_FULLY_SPONSORED_BLOCKED,
-    );
-  }
-
-  // 3. Determine if paid (affects what can be changed)
-  const isPaid =
-    registration.paymentStatus === "PAID" || registration.paidAmount > 0;
-
-  // 4. Prepare form data changes
-  const currentFormData = registration.formData as Record<string, unknown>;
-  let newFormData = input.formData
-    ? { ...currentFormData, ...input.formData }
-    : currentFormData;
-
-  // 5. Validate new form data against form schema
-  if (input.formData) {
-    const formSchema = registration.form.schema as unknown as FormSchema;
-    const validationResult = validateFormData(formSchema, newFormData);
-    if (!validationResult.valid) {
-      throw new AppError(
-        "Form validation failed",
-        400,
-        ErrorCodes.FORM_VALIDATION_ERROR,
-        { fieldErrors: validationResult.errors },
-      );
-    }
-    // Strip unknown keys — keep only field IDs from the form schema
-    newFormData = sanitizeFormData(formSchema, newFormData);
-  }
-
-  // 6. Process access selection changes (derive current from priceBreakdown)
-  const currentPriceBreakdown = registration.priceBreakdown as PriceBreakdown;
-  const currentAccessItems = currentPriceBreakdown.accessItems ?? [];
-  const currentAccessIds = new Set(
-    currentAccessItems.map((item) => item.accessId),
-  );
-
-  const newAccessSelections =
-    input.accessSelections ??
-    currentAccessItems.map((item) => ({
-      accessId: item.accessId,
-      quantity: item.quantity,
-    }));
-  const newAccessIds = new Set(newAccessSelections.map((s) => s.accessId));
-
-  const accessToAdd = newAccessSelections.filter(
-    (s) => !currentAccessIds.has(s.accessId),
-  );
-  const accessToRemove = currentAccessItems.filter(
-    (item) => !newAccessIds.has(item.accessId),
-  );
-
-  // 7. Enforce paid registration rules
-  if (isPaid && accessToRemove.length > 0) {
-    throw new AppError(
-      "Cannot remove access items from a paid registration",
-      400,
-      ErrorCodes.REGISTRATION_ACCESS_REMOVAL_BLOCKED,
-      {
-        message: "Paid registrations can only add new access items",
-        attemptedRemovals: accessToRemove.map((item) => item.accessId),
-      },
-    );
-  }
-
-  // 8. Validate new access selections if there are additions
-  if (accessToAdd.length > 0) {
-    const validation = await validateAccessSelections(
-      registration.eventId,
-      newAccessSelections,
-      newFormData,
-      currentAccessIds,
-    );
-    if (!validation.valid) {
-      throw new AppError(
-        `Invalid access selections: ${validation.errors.join(", ")}`,
-        400,
-        ErrorCodes.BAD_REQUEST,
-        { errors: validation.errors },
-      );
-    }
-  }
-
-  // Price calculated before tx — stale pricing rules could affect this but the difference is bounded
-  // 9. Calculate new price breakdown
-  const selectedAccessItems = newAccessSelections.map((s) => ({
-    accessId: s.accessId,
-    quantity: s.quantity,
-  }));
-
-  const calculatedPrice = await calculatePrice(registration.eventId, {
-    formData: newFormData,
-    selectedAccessItems,
-    sponsorshipCodes: registration.sponsorshipCode
-      ? [registration.sponsorshipCode]
-      : [],
-  });
-
-  // calculatePrice already returns PriceBreakdown with the exact stored shape
-  const newPriceBreakdown: PriceBreakdown = calculatedPrice;
-
-  // 10. Execute transaction — registration re-read inside tx to prevent TOCTOU
   await prisma.$transaction(async (tx) => {
-    // Re-read the registration inside the transaction to get consistent state
     const currentRegistration = await tx.registration.findUnique({
       where: { id: registrationId },
       select: {
+        id: true,
+        eventId: true,
+        formData: true,
+        priceBreakdown: true,
+        accessTypeIds: true,
         paymentStatus: true,
         paidAmount: true,
         totalAmount: true,
         sponsorshipAmount: true,
+        sponsorshipCode: true,
         firstName: true,
         lastName: true,
         phone: true,
+        updatedAt: true,
+        form: { select: { id: true, eventId: true, schema: true } },
         event: {
           select: {
+            id: true,
             status: true,
+            endDate: true,
             client: { select: { enabledModules: true } },
           },
         },
       },
     });
+
     if (!currentRegistration) {
       throw new AppError(
         "Registration not found",
@@ -1713,7 +1838,6 @@ export async function editRegistrationPublic(
       );
     }
 
-    // Re-validate guards on current state (prevents TOCTOU on concurrent edits)
     if (currentRegistration.paymentStatus === "REFUNDED") {
       throw new AppError(
         "Refunded registrations cannot be edited",
@@ -1721,48 +1845,196 @@ export async function editRegistrationPublic(
         ErrorCodes.REGISTRATION_REFUNDED,
       );
     }
-    assertEventOpen(currentRegistration.event);
+
+    try {
+      assertEventAcceptsPublicActions(currentRegistration.event);
+    } catch {
+      throw new AppError(
+        "Event is not accepting changes",
+        400,
+        ErrorCodes.REGISTRATION_EDIT_FORBIDDEN,
+      );
+    }
+
     assertModuleEnabledForClient(
       currentRegistration.event.client,
       "registrations",
     );
+    assertModuleEnabledForClient(currentRegistration.event.client, "pricing");
+
+    const isAccessEdit = input.accessSelections !== undefined;
+
+    if (currentRegistration.paymentStatus === "VERIFYING" && isAccessEdit) {
+      throw new AppError(
+        "Cannot modify access while payment is under review",
+        400,
+        ErrorCodes.REGISTRATION_VERIFYING_BLOCKED,
+      );
+    }
+
+    if (currentRegistration.paymentStatus === "WAIVED" && isAccessEdit) {
+      throw new AppError(
+        "Waived registrations cannot modify access selections",
+        400,
+        ErrorCodes.REGISTRATION_WAIVED_ACCESS_BLOCKED,
+      );
+    }
+
+    if (
+      currentRegistration.sponsorshipAmount >=
+        currentRegistration.totalAmount &&
+      currentRegistration.totalAmount > 0 &&
+      isAccessEdit
+    ) {
+      throw new AppError(
+        "Fully sponsored registrations cannot modify access selections",
+        400,
+        ErrorCodes.REGISTRATION_FULLY_SPONSORED_BLOCKED,
+      );
+    }
+
+    const currentFormData =
+      (currentRegistration.formData as Record<string, unknown> | null) ?? {};
+    let newFormData = input.formData
+      ? { ...currentFormData, ...input.formData }
+      : currentFormData;
+
+    if (input.formData) {
+      const formSchema = currentRegistration.form
+        .schema as unknown as FormSchema;
+      const validationResult = validateFormData(formSchema, newFormData);
+      if (!validationResult.valid) {
+        throw new AppError(
+          "Form validation failed",
+          400,
+          ErrorCodes.FORM_VALIDATION_ERROR,
+          { fieldErrors: validationResult.errors },
+        );
+      }
+      newFormData = sanitizeFormData(formSchema, newFormData);
+    }
+
+    const currentPriceBreakdown =
+      (currentRegistration.priceBreakdown as PriceBreakdown | null) ??
+      ({ accessItems: [] } as unknown as PriceBreakdown);
+    const currentAccessItems = currentPriceBreakdown.accessItems ?? [];
+    const currentAccessIds = new Set(
+      currentAccessItems.map((item) => item.accessId),
+    );
+
+    const newAccessSelections =
+      input.accessSelections ??
+      currentAccessItems.map((item) => ({
+        accessId: item.accessId,
+        quantity: item.quantity,
+      }));
+
+    const toQuantityMap = (
+      items: Array<{ accessId: string; quantity: number }>,
+    ) => {
+      const quantities = new Map<string, number>();
+      for (const item of items) {
+        quantities.set(
+          item.accessId,
+          (quantities.get(item.accessId) ?? 0) + item.quantity,
+        );
+      }
+      return quantities;
+    };
+
+    const oldQuantities = toQuantityMap(currentAccessItems);
+    const newQuantities = toQuantityMap(newAccessSelections);
+    const accessDeltas = Array.from(
+      new Set([...oldQuantities.keys(), ...newQuantities.keys()]),
+    )
+      .map((accessId) => ({
+        accessId,
+        oldQuantity: oldQuantities.get(accessId) ?? 0,
+        newQuantity: newQuantities.get(accessId) ?? 0,
+        delta:
+          (newQuantities.get(accessId) ?? 0) -
+          (oldQuantities.get(accessId) ?? 0),
+      }))
+      .filter((change) => change.delta !== 0);
+
     const currentIsPaid =
       currentRegistration.paymentStatus === "PAID" ||
+      currentRegistration.paymentStatus === "SPONSORED" ||
       currentRegistration.paidAmount > 0;
-    if (currentIsPaid && accessToRemove.length > 0) {
+    const negativeDeltas = accessDeltas.filter((change) => change.delta < 0);
+    if (currentIsPaid && negativeDeltas.length > 0) {
       throw new AppError(
         "Cannot remove access items from a paid registration",
         400,
         ErrorCodes.REGISTRATION_ACCESS_REMOVAL_BLOCKED,
+        {
+          message: "Paid registrations can only add new access items",
+          attemptedRemovals: negativeDeltas.map((change) => change.accessId),
+        },
       );
     }
 
-    // Reserve new access spots
-    // Pass tx so reservation is rolled back if the transaction fails
-    await Promise.all(
-      accessToAdd.map((s) => incrementAccessRegisteredCountTx(s.accessId, s.quantity, tx)),
+    if (isAccessEdit && accessDeltas.some((change) => change.delta > 0)) {
+      const validation = await validateAccessSelections(
+        currentRegistration.eventId,
+        newAccessSelections,
+        newFormData,
+        currentAccessIds,
+        tx,
+      );
+      if (!validation.valid) {
+        throw new AppError(
+          `Invalid access selections: ${validation.errors.join(", ")}`,
+          400,
+          ErrorCodes.BAD_REQUEST,
+          { errors: validation.errors },
+        );
+      }
+    }
+
+    newPriceBreakdown = await calculatePrice(
+      currentRegistration.eventId,
+      {
+        formData: newFormData,
+        selectedAccessItems: newAccessSelections.map((selection) => ({
+          accessId: selection.accessId,
+          quantity: selection.quantity,
+        })),
+        sponsorshipCodes: currentRegistration.sponsorshipCode
+          ? [currentRegistration.sponsorshipCode]
+          : [],
+      },
+      tx,
     );
 
-    // Release removed access spots (only if not paid)
-    // Pass tx so release is rolled back if the transaction fails
+    await Promise.all(
+      accessDeltas
+        .filter((change) => change.delta > 0)
+        .map((change) =>
+          incrementAccessRegisteredCountTx(change.accessId, change.delta, tx),
+        ),
+    );
+
     if (!currentIsPaid) {
       await Promise.all(
-        accessToRemove.map((item) =>
-          decrementAccessRegisteredCountTx(item.accessId, item.quantity, tx),
-        ),
+        accessDeltas
+          .filter((change) => change.delta < 0)
+          .map((change) =>
+            decrementAccessRegisteredCountTx(
+              change.accessId,
+              Math.abs(change.delta),
+              tx,
+            ),
+          ),
       );
     }
 
-    // Calculate new total. For paid registrations, never decrease below
-    // the original total — pricing rule changes via form data edits
-    // should not reduce what was already owed.
     const newTotalAmount = currentIsPaid
       ? Math.max(currentRegistration.totalAmount, newPriceBreakdown.total)
       : newPriceBreakdown.total;
 
-    // Update registration
-    await tx.registration.update({
-      where: { id: registrationId },
+    const updateResult = await tx.registration.updateMany({
+      where: { id: registrationId, updatedAt: expectedUpdatedAt },
       data: {
         formData: newFormData as Prisma.InputJsonValue,
         firstName: input.firstName ?? currentRegistration.firstName,
@@ -1774,12 +2046,21 @@ export async function editRegistrationPublic(
         accessAmount: newPriceBreakdown.accessTotal,
         discountAmount: calculateDiscountAmount(newPriceBreakdown.appliedRules),
         sponsorshipAmount: newPriceBreakdown.sponsorshipTotal,
-        accessTypeIds: newAccessSelections.map((s) => s.accessId),
+        accessTypeIds: newAccessSelections.map(
+          (selection) => selection.accessId,
+        ),
         lastEditedAt: new Date(),
       },
     });
 
-    // Build changes for audit log
+    if (updateResult.count === 0) {
+      throw new AppError(
+        "Registration changed. Refresh and try again.",
+        409,
+        ErrorCodes.CONCURRENT_MODIFICATION,
+      );
+    }
+
     const auditChanges: Record<string, { old: unknown; new: unknown }> = {};
     if (input.formData) {
       auditChanges.formData = { old: currentFormData, new: newFormData };
@@ -1808,20 +2089,19 @@ export async function editRegistrationPublic(
     ) {
       auditChanges.phone = { old: currentRegistration.phone, new: input.phone };
     }
-    if (accessToAdd.length > 0) {
-      auditChanges.accessAdded = {
-        old: null,
-        new: accessToAdd.map((a) => a.accessId),
-      };
-    }
-    if (accessToRemove.length > 0) {
-      auditChanges.accessRemoved = {
-        old: accessToRemove.map((a) => a.accessId),
-        new: null,
+    if (isAccessEdit && accessDeltas.length > 0) {
+      auditChanges.accessSelections = {
+        old: currentAccessItems.map((item) => ({
+          accessId: item.accessId,
+          quantity: item.quantity,
+        })),
+        new: newAccessSelections.map((selection) => ({
+          accessId: selection.accessId,
+          quantity: selection.quantity,
+        })),
       };
     }
 
-    // Create audit log for public edit
     if (Object.keys(auditChanges).length > 0) {
       await auditLog(tx, {
         entityType: "Registration",
@@ -1833,7 +2113,6 @@ export async function editRegistrationPublic(
     }
   });
 
-  // Fetch and return updated registration
   const updatedRegistration = await getRegistrationById(registrationId);
 
   return {

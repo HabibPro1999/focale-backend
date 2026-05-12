@@ -1,4 +1,8 @@
-import { getEventById, getEventBySlug } from "@events";
+import {
+  assertEventAcceptsPublicActions,
+  getEventById,
+  getEventBySlug,
+} from "@events";
 import { assertClientModuleEnabled } from "@clients";
 import { searchRegistrantsForSponsorship } from "@registrations";
 import { createSponsorshipBatch } from "./sponsorships.service.js";
@@ -43,11 +47,7 @@ export async function sponsorshipsPublicRoutes(
         throw app.httpErrors.notFound("Event not found");
       }
 
-      if (event.status !== "OPEN") {
-        throw app.httpErrors.badRequest(
-          "Event is not accepting sponsorship submissions",
-        );
-      }
+      assertEventAcceptsPublicActions(event);
       await assertClientModuleEnabled(event.clientId, "sponsorships");
 
       // Get the sponsor form for this event
@@ -109,9 +109,7 @@ export async function sponsorshipsPublicBySlugRoutes(
       if (!event) {
         throw app.httpErrors.notFound("Event not found");
       }
-      if (event.status !== "OPEN") {
-        throw app.httpErrors.badRequest("Event is not accepting sponsorships");
-      }
+      assertEventAcceptsPublicActions(event);
       await assertClientModuleEnabled(event.clientId, "sponsorships");
 
       // Verify sponsor form exists and uses LINKED_ACCOUNT mode
@@ -179,11 +177,7 @@ export async function sponsorshipsPublicBySlugRoutes(
         throw app.httpErrors.notFound("Event not found");
       }
 
-      if (event.status !== "OPEN") {
-        throw app.httpErrors.badRequest(
-          "Event is not accepting sponsorship submissions",
-        );
-      }
+      assertEventAcceptsPublicActions(event);
       await assertClientModuleEnabled(event.clientId, "sponsorships");
 
       // Get the sponsor form for this event

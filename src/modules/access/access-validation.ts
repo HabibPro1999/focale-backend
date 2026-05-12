@@ -2,6 +2,9 @@ import { prisma } from "@/database/client.js";
 import { evaluateConditions } from "@shared/utils/conditions.js";
 import type { AccessSelection, AccessCondition } from "./access.schema.js";
 import type { EventAccess } from "@/generated/prisma/client.js";
+import type { TxClient } from "@shared/types/prisma.js";
+
+type AccessValidationDbClient = Pick<TxClient, "eventAccess">;
 
 /**
  * Validate access selections for a registration.
@@ -13,6 +16,7 @@ export async function validateAccessSelections(
   selections: AccessSelection[],
   formData: Record<string, unknown>,
   existingAccessIds?: Set<string>,
+  db: AccessValidationDbClient = prisma,
 ): Promise<{ valid: boolean; errors: string[] }> {
   const errors: string[] = [];
 
@@ -22,12 +26,12 @@ export async function validateAccessSelections(
   // Fetch selected items and included items in parallel
   const [accessItems, includedAccesses] = await Promise.all([
     selections.length > 0
-      ? prisma.eventAccess.findMany({
+      ? db.eventAccess.findMany({
           where: { id: { in: accessIds }, eventId },
           include: { requiredAccess: { select: { id: true } } },
         })
       : Promise.resolve([]),
-    prisma.eventAccess.findMany({
+    db.eventAccess.findMany({
       where: { eventId, active: true, includedInBase: true },
       select: { id: true, name: true, conditions: true, conditionLogic: true },
     }),

@@ -4,6 +4,8 @@ import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { auditLog } from "@shared/utils/audit.js";
 import { eventBus } from "@core/events/bus.js";
 
+const CHECKIN_ELIGIBLE_STATUSES = ["PAID", "SPONSORED", "WAIVED"];
+
 // ============================================================================
 // Check In
 // ============================================================================
@@ -44,6 +46,14 @@ export async function checkIn(
       "Registration does not belong to this event",
       400,
       ErrorCodes.CHECKIN_EVENT_MISMATCH,
+    );
+  }
+
+  if (!CHECKIN_ELIGIBLE_STATUSES.includes(registration.paymentStatus)) {
+    throw new AppError(
+      "Registration payment is not settled",
+      400,
+      ErrorCodes.CHECKIN_PAYMENT_REQUIRED,
     );
   }
 
@@ -179,8 +189,6 @@ export async function checkIn(
 // ============================================================================
 // Eligible Registration IDs (for scanner preload)
 // ============================================================================
-
-const CHECKIN_ELIGIBLE_STATUSES = ["PAID", "SPONSORED", "WAIVED"];
 
 export async function getCheckInRegistrations(
   eventId: string,

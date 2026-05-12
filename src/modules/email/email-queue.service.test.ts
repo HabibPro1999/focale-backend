@@ -12,7 +12,9 @@ import {
   queueTriggeredEmail,
   queueBulkEmails,
   processEmailQueue,
+  recoverStaleEmailLeases,
   updateEmailStatusFromWebhook,
+  getEmailQueueHealth,
   getQueueStats,
 } from "./email-queue.service.js";
 import type {
@@ -106,6 +108,12 @@ function createMockEmailLog(overrides: Partial<EmailLog> = {}): EmailLog {
     sendgridMessageId: null,
     retryCount: 0,
     maxRetries: 3,
+    attemptCount: 0,
+    lastAttemptAt: null,
+    nextAttemptAt: null,
+    lockedAt: null,
+    lockedUntil: null,
+    lockedBy: null,
     errorMessage: null,
     queuedAt: faker.date.recent(),
     updatedAt: faker.date.recent(),
@@ -130,13 +138,16 @@ type EmailLogWithRelations = EmailLog & {
 };
 
 function mockClaimedEmails(logs: EmailLogWithRelations[]) {
+  prismaMock.$executeRawUnsafe.mockResolvedValue(0 as never);
   prismaMock.$queryRawUnsafe.mockResolvedValue(
     logs.map((log) => ({ id: log.id })) as never,
   );
   prismaMock.emailLog.findMany.mockResolvedValue(logs as never);
+  prismaMock.emailLog.updateMany.mockResolvedValue({ count: 1 } as never);
 }
 
 function mockEmptyEmailQueue() {
+  prismaMock.$executeRawUnsafe.mockResolvedValue(0 as never);
   prismaMock.$queryRawUnsafe.mockResolvedValue([] as never);
 }
 
@@ -156,6 +167,7 @@ describe("Email Queue Service", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetSendGridMock();
+    prismaMock.$executeRawUnsafe.mockResolvedValue(0 as never);
   });
 
   describe("queueEmail", () => {
@@ -451,12 +463,19 @@ describe("Email Queue Service", () => {
       const result = await processEmailQueue();
 
       expect(result.skipped).toBe(1);
-      expect(prismaMock.emailLog.update).toHaveBeenCalledWith({
-        where: { id: mockEmailLog.id },
-        data: {
+      expect(prismaMock.emailLog.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: mockEmailLog.id,
+          status: "SENDING",
+          lockedBy: expect.any(String),
+        },
+        data: expect.objectContaining({
           status: "SKIPPED",
           errorMessage: "Template is inactive",
-        },
+          lockedAt: null,
+          lockedUntil: null,
+          lockedBy: null,
+        }),
       });
     });
 
@@ -466,7 +485,7 @@ describe("Email Queue Service", () => {
       const mockEvent = createMockEvent({ clientId: mockClient.id });
 
       const mockEmailLog: EmailLogWithRelations = {
-        ...createMockEmailLog({ status: "QUEUED", retryCount: 3 }), // Max retries reached
+        ...createMockEmailLog({ status: "QUEUED", retryCount: 3, attemptCount: 4 }), // Max retries reached
         template: mockTemplate,
         registration: {
           id: registrationId,
@@ -489,12 +508,15 @@ describe("Email Queue Service", () => {
       const result = await processEmailQueue();
 
       expect(result.failed).toBe(1);
-      expect(prismaMock.emailLog.update).toHaveBeenCalledWith(
+      expect(prismaMock.emailLog.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: mockEmailLog.id },
+          where: expect.objectContaining({ id: mockEmailLog.id, lockedBy: expect.any(String) }),
           data: expect.objectContaining({
             status: "FAILED",
             errorMessage: "SendGrid API error",
+            lockedAt: null,
+            lockedUntil: null,
+            lockedBy: null,
           }),
         }),
       );
@@ -506,7 +528,7 @@ describe("Email Queue Service", () => {
       const mockEvent = createMockEvent({ clientId: mockClient.id });
 
       const mockEmailLog: EmailLogWithRelations = {
-        ...createMockEmailLog({ status: "QUEUED", retryCount: 1 }), // Retries remaining
+        ...createMockEmailLog({ status: "QUEUED", retryCount: 1, attemptCount: 2 }), // Retries remaining
         template: mockTemplate,
         registration: {
           id: registrationId,
@@ -528,13 +550,17 @@ describe("Email Queue Service", () => {
 
       await processEmailQueue();
 
-      expect(prismaMock.emailLog.update).toHaveBeenCalledWith(
+      expect(prismaMock.emailLog.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: mockEmailLog.id },
+          where: expect.objectContaining({ id: mockEmailLog.id, lockedBy: expect.any(String) }),
           data: expect.objectContaining({
             status: "QUEUED", // Re-queued for retry
             retryCount: { increment: 1 },
             failedAt: null,
+            nextAttemptAt: expect.any(Date),
+            lockedAt: null,
+            lockedUntil: null,
+            lockedBy: null,
           }),
         }),
       );
@@ -594,12 +620,19 @@ describe("Email Queue Service", () => {
       const result = await processEmailQueue();
 
       expect(result.skipped).toBe(1);
-      expect(prismaMock.emailLog.update).toHaveBeenCalledWith({
-        where: { id: mockEmailLog.id },
-        data: {
+      expect(prismaMock.emailLog.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: mockEmailLog.id,
+          status: "SENDING",
+          lockedBy: expect.any(String),
+        },
+        data: expect.objectContaining({
           status: "SKIPPED",
           errorMessage: "Could not build email context",
-        },
+          lockedAt: null,
+          lockedUntil: null,
+          lockedBy: null,
+        }),
       });
     });
 
@@ -610,7 +643,9 @@ describe("Email Queue Service", () => {
 
       expect(prismaMock.$queryRawUnsafe).toHaveBeenCalledWith(
         expect.stringContaining("FOR UPDATE SKIP LOCKED"),
-        4,
+        expect.any(Date),
+        expect.any(Date),
+        expect.any(String),
         25,
       );
     });
@@ -621,10 +656,166 @@ describe("Email Queue Service", () => {
       await processEmailQueue();
 
       expect(prismaMock.$queryRawUnsafe).toHaveBeenCalledWith(
-        expect.stringContaining('"retry_count" < $1'),
-        4,
+        expect.stringContaining('"attempt_count" <= "max_retries"'),
+        expect.any(Date),
+        expect.any(Date),
+        expect.any(String),
         50,
       );
+    });
+
+    it("should not call SendGrid when the worker lease is lost before the provider call", async () => {
+      const contextSnapshot = {
+        firstName: "Lease",
+        email: "lease@example.com",
+        eventName: "Lease Event",
+      };
+      const mockTemplate = createMockEmailTemplate({ isActive: true });
+      const mockEmailLog: EmailLogWithRelations = {
+        ...createMockEmailLog({
+          status: "QUEUED",
+          contextSnapshot: contextSnapshot as Prisma.JsonValue,
+        }),
+        template: mockTemplate,
+        registration: null,
+      };
+      mockClaimedEmails([mockEmailLog]);
+      prismaMock.emailLog.updateMany
+        .mockResolvedValue({ count: 1 } as never)
+        .mockResolvedValueOnce({ count: 1 } as never)
+        .mockResolvedValueOnce({ count: 0 } as never);
+
+      const result = await processEmailQueue(1, { workerId: "worker-a" });
+
+      expect(result.processed).toBe(1);
+      expect(result.sent).toBe(0);
+      expect(result.failed).toBe(0);
+      expect(result.skipped).toBe(0);
+      expect(sendEmail).not.toHaveBeenCalled();
+      expect(prismaMock.emailLog.updateMany).toHaveBeenCalledTimes(2);
+      expect(prismaMock.emailLog.updateMany).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          where: expect.objectContaining({
+            id: mockEmailLog.id,
+            status: "SENDING",
+            lockedBy: "worker-a",
+            lockedUntil: { gt: expect.any(Date) },
+          }),
+          data: expect.objectContaining({
+            lockedAt: expect.any(Date),
+            lockedUntil: expect.any(Date),
+          }),
+        }),
+      );
+    });
+
+    it("should not count a result when the worker lease was lost before final update", async () => {
+      const mockEmailLog: EmailLogWithRelations = {
+        ...createMockEmailLog({ status: "QUEUED" }),
+        template: null,
+        registration: null,
+      };
+      mockClaimedEmails([mockEmailLog]);
+      prismaMock.emailLog.updateMany.mockResolvedValue({ count: 0 } as never);
+
+      const result = await processEmailQueue(1, { workerId: "worker-a" });
+
+      expect(result.processed).toBe(1);
+      expect(result.skipped).toBe(0);
+      expect(prismaMock.emailLog.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: mockEmailLog.id, status: "SENDING", lockedBy: "worker-a" },
+        }),
+      );
+    });
+  });
+
+  describe("recoverStaleEmailLeases", () => {
+    it("should requeue stale sending rows and dead-letter exhausted stale rows", async () => {
+      prismaMock.$executeRawUnsafe
+        .mockResolvedValueOnce(2 as never)
+        .mockResolvedValueOnce(1 as never);
+
+      const now = new Date("2026-01-01T00:00:00.000Z");
+      const leaseMs = 10 * 60 * 1000;
+      const result = await recoverStaleEmailLeases(now, leaseMs);
+
+      expect(result).toEqual({ requeued: 2, deadLettered: 1 });
+      expect(prismaMock.$executeRawUnsafe).toHaveBeenNthCalledWith(
+        1,
+        expect.stringContaining('"status" = \'QUEUED\''),
+        now,
+        new Date("2025-12-31T23:50:00.000Z"),
+        new Date("2026-01-01T00:01:00.000Z"),
+        new Date("2026-01-01T00:05:00.000Z"),
+        new Date("2026-01-01T00:15:00.000Z"),
+      );
+      expect(prismaMock.$executeRawUnsafe).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('"status" = \'FAILED\''),
+        now,
+        new Date("2025-12-31T23:50:00.000Z"),
+      );
+    });
+
+    it("should only recover SENDING rows without lockedUntil after the lease cutoff", async () => {
+      prismaMock.$executeRawUnsafe.mockResolvedValue(0 as never);
+
+      const now = new Date("2026-01-01T12:00:00.000Z");
+      await recoverStaleEmailLeases(now, 5 * 60 * 1000);
+
+      const requeueSql = prismaMock.$executeRawUnsafe.mock.calls[0][0];
+      const deadLetterSql = prismaMock.$executeRawUnsafe.mock.calls[1][0];
+
+      expect(requeueSql).toContain('"locked_until" < $1');
+      expect(requeueSql).toContain(
+        'COALESCE("locked_at", "last_attempt_at", "updated_at") < $2',
+      );
+      expect(requeueSql).toContain('"retry_count" = "retry_count" + 1');
+      expect(requeueSql).toContain('"retry_count" < "max_retries"');
+      expect(deadLetterSql).toContain('"locked_until" < $1');
+      expect(deadLetterSql).toContain(
+        'COALESCE("locked_at", "last_attempt_at", "updated_at") < $2',
+      );
+      expect(deadLetterSql).toContain('"retry_count" = "retry_count" + 1');
+      expect(deadLetterSql).toContain('"retry_count" >= "max_retries"');
+      expect(prismaMock.$executeRawUnsafe.mock.calls[0][2]).toEqual(
+        new Date("2026-01-01T11:55:00.000Z"),
+      );
+      expect(prismaMock.$executeRawUnsafe.mock.calls[1][2]).toEqual(
+        new Date("2026-01-01T11:55:00.000Z"),
+      );
+    });
+  });
+
+  describe("getEmailQueueHealth", () => {
+    it("should include lease-aware health metadata", async () => {
+      prismaMock.emailLog.count
+        .mockResolvedValueOnce(5 as never)
+        .mockResolvedValueOnce(3 as never)
+        .mockResolvedValueOnce(2 as never)
+        .mockResolvedValueOnce(1 as never)
+        .mockResolvedValueOnce(4 as never)
+        .mockResolvedValueOnce(2 as never);
+      prismaMock.emailLog.findFirst
+        .mockResolvedValueOnce({ queuedAt: new Date(Date.now() - 1000) } as never)
+        .mockResolvedValueOnce({ lockedAt: new Date(Date.now() - 2000), updatedAt: new Date() } as never);
+
+      const health = await getEmailQueueHealth();
+
+      expect(health).toMatchObject({
+        queueSize: 5,
+        dueQueuedCount: 3,
+        sendingCount: 2,
+        staleSendingCount: 1,
+        failedCount: 4,
+        deadLetterCount: 4,
+        recentFailures24h: 2,
+        isHealthy: false,
+      });
+      expect(health.oldestQueuedAgeMs).toBeGreaterThanOrEqual(0);
+      expect(health.oldestInFlightAgeMs).toBeGreaterThanOrEqual(0);
     });
   });
 

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { assertClientModuleEnabled } from "@clients";
-import { assertEventOpen, getEventById } from "@events";
+import { assertEventAcceptsPublicActions, getEventById } from "@events";
 import {
   getGroupedAccess,
   getEventAccessById,
@@ -50,7 +50,7 @@ export async function accessPublicRoutes(app: AppInstance): Promise<void> {
     if (!event) {
       throw app.httpErrors.notFound("Event not found");
     }
-    assertEventOpen(event);
+    assertEventAcceptsPublicActions(event);
     await assertClientModuleEnabled(event.clientId, "registrations");
   }
 

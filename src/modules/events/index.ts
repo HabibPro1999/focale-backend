@@ -2,6 +2,7 @@
 export {
   getEventById,
   getEventBySlug,
+  assertEventAcceptsPublicActions,
   assertEventOpen,
   assertEventWritable,
   eventExists,

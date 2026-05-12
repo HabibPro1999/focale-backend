@@ -6,7 +6,10 @@ import { logger } from "@shared/utils/logger.js";
 import { auditLog } from "@shared/utils/audit.js";
 import { queueTriggeredEmail } from "@email";
 import { assertModuleEnabledForClient } from "@clients";
-import { assertEventOpen, assertEventWritable } from "@events";
+import {
+  assertEventAcceptsPublicActions,
+  assertEventWritable,
+} from "@events";
 import { getStorageProvider } from "@shared/services/storage/index.js";
 import { compressFile } from "@shared/services/storage/compress.js";
 import { fileTypeFromBuffer } from "file-type";
@@ -149,6 +152,13 @@ export async function confirmPayment(
 
     // Warn if paid amount differs from total amount
     const effectivePaidAmount = input.paidAmount ?? oldRegistration.totalAmount;
+    if (effectivePaidAmount > oldRegistration.totalAmount) {
+      throw new AppError(
+        "Paid amount cannot exceed registration total",
+        400,
+        ErrorCodes.BAD_REQUEST,
+      );
+    }
     if (effectivePaidAmount !== oldRegistration.totalAmount) {
       logger.warn(
         {
@@ -388,6 +398,7 @@ export async function uploadPaymentProof(
       event: {
         select: {
           status: true,
+          endDate: true,
           client: { select: { enabledModules: true } },
         },
       },
@@ -401,7 +412,7 @@ export async function uploadPaymentProof(
       ErrorCodes.REGISTRATION_NOT_FOUND,
     );
   }
-  assertEventOpen(registration.event);
+  assertEventAcceptsPublicActions(registration.event);
   assertModuleEnabledForClient(registration.event.client, "registrations");
 
   // Validate that transitioning to VERIFYING is allowed from current status
@@ -461,6 +472,7 @@ export async function uploadPaymentProof(
         event: {
           select: {
             status: true,
+            endDate: true,
             client: { select: { enabledModules: true } },
           },
         },
@@ -468,7 +480,7 @@ export async function uploadPaymentProof(
     });
     if (!currentReg)
       throw new AppError("Registration not found", 404, ErrorCodes.NOT_FOUND);
-    assertEventOpen(currentReg.event);
+    assertEventAcceptsPublicActions(currentReg.event);
     assertModuleEnabledForClient(currentReg.event.client, "registrations");
     validatePaymentTransition(currentReg.paymentStatus, "VERIFYING");
 
@@ -558,6 +570,7 @@ export async function selectPaymentMethod(
         event: {
           select: {
             status: true,
+            endDate: true,
             client: { select: { enabledModules: true } },
           },
         },
@@ -567,7 +580,7 @@ export async function selectPaymentMethod(
     if (!registration) {
       throw new AppError("Registration not found", 404, ErrorCodes.NOT_FOUND);
     }
-    assertEventOpen(registration.event);
+    assertEventAcceptsPublicActions(registration.event);
     assertModuleEnabledForClient(registration.event.client, "registrations");
 
     if (

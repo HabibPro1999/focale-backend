@@ -216,6 +216,9 @@ export const FormIdParamSchema = z.strictObject({
 
 export const PublicEditRegistrationSchema = z
   .strictObject({
+    // Optimistic edit precondition from GET-for-edit registration.updatedAt
+    expectedUpdatedAt: z.string().datetime(),
+
     // Form data updates (partial - only changed fields)
     formData: z.record(z.string(), z.any()).optional(),
 

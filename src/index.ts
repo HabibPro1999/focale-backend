@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import { buildServer } from "@core/server.js";
 import { config } from "@config/app.config.js";
 import { logger } from "@shared/utils/logger.js";
@@ -48,6 +50,7 @@ async function waitForDatabase(
 
 async function main() {
   const server = await buildServer();
+  const workerId = `${hostname()}:${process.pid}:${randomUUID()}`;
 
   // eslint-disable-next-line prefer-const -- assigned after listen, read by onClose registered before listen
   let emailQueueInterval: ReturnType<typeof setInterval> | undefined;
@@ -87,7 +90,7 @@ async function main() {
   emailQueueInterval = setInterval(() => {
     if (isProcessingEmails) return;
     isProcessingEmails = true;
-    currentProcessing = processEmailQueue(50)
+    currentProcessing = processEmailQueue(50, { workerId })
       .then((result) => {
         if (result.processed > 0) {
           logger.info({ result }, "Email queue processed");
@@ -101,14 +104,14 @@ async function main() {
         currentProcessing = null;
       });
   }, 15_000);
-  logger.info("Email queue worker started (15s interval)");
+  logger.info({ workerId }, "Email queue worker started (15s interval)");
 
   // Start Abstract Book worker (processes one generation job every 30 seconds)
   let isProcessingBookJobs = false;
   bookJobInterval = setInterval(() => {
     if (isProcessingBookJobs) return;
     isProcessingBookJobs = true;
-    currentBookProcessing = processAbstractBookJobs(1)
+    currentBookProcessing = processAbstractBookJobs(1, { workerId })
       .then((result) => {
         if (result.processed > 0) {
           logger.info({ result }, "Abstract Book jobs processed");
@@ -122,7 +125,7 @@ async function main() {
         currentBookProcessing = null;
       });
   }, 30_000);
-  logger.info("Abstract Book worker started (30s interval)");
+  logger.info({ workerId }, "Abstract Book worker started (30s interval)");
 }
 
 main().catch((err) => {

@@ -16,9 +16,15 @@
     "db:migrate:prod": "bun x prisma migrate deploy",
     "db:status": "bun x prisma migrate status",
     "db:seed": "bun prisma/seed.ts",
-    "test": "bun x vitest",
-    "test:run": "bun x vitest run",
-    "test:coverage": "bun x vitest run --coverage"
+    "test": "bun x vitest --config vitest.config.ts",
+    "test:run": "bun x vitest run --config vitest.config.ts",
+    "test:unit": "bun x vitest run --config vitest.config.ts",
+    "test:db": "bun x vitest run --config vitest.db.config.ts",
+    "test:concurrency": "bun x vitest run --config vitest.concurrency.config.ts",
+    "test:migration": "bun x vitest run --config vitest.migration.config.ts",
+    "test:ci": "bun run type-check && bun run test:unit",
+    "test:ci:db": "bun run type-check && bun run test:unit && bun run test:db && bun run test:concurrency && bun run test:migration",
+    "test:coverage": "bun x vitest run --coverage --config vitest.config.ts"
   },
   "engines": {
     "bun": ">=1.0.0"

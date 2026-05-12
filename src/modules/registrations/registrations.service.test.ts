@@ -22,7 +22,12 @@ import {
 } from "./registrations.service.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
-import type { PriceBreakdown } from "@pricing";
+import { calculatePrice, type PriceBreakdown } from "@pricing";
+import {
+  decrementAccessRegisteredCountTx,
+  incrementAccessRegisteredCountTx,
+  validateAccessSelections,
+} from "@access";
 import { faker } from "@faker-js/faker";
 
 // Mock external module dependencies
@@ -300,7 +305,7 @@ describe("Registrations Service", () => {
       });
 
       prismaMock.form.findUnique.mockResolvedValue(mockForm);
-      prismaMock.registration.findUnique.mockResolvedValue(
+      prismaMock.registration.findFirst.mockResolvedValue(
         existingRegistration,
       );
 
@@ -872,7 +877,11 @@ describe("Registrations Service", () => {
 
       // Verify decrementAccessRegisteredCountTx was called with tx client so it participates in the transaction
       const { decrementAccessRegisteredCountTx } = await import("@access");
-      expect(decrementAccessRegisteredCountTx).toHaveBeenCalledWith(accessId, 2, prismaMock);
+      expect(decrementAccessRegisteredCountTx).toHaveBeenCalledWith(
+        accessId,
+        2,
+        prismaMock,
+      );
     });
   });
 
@@ -1040,6 +1049,9 @@ describe("Registrations Service", () => {
 
       const result = await getRegistrationForEdit(registration.id);
 
+      expect(result.expectedUpdatedAt).toBe(
+        registration.updatedAt.toISOString(),
+      );
       expect(result.canEdit).toBe(true);
       expect(result.canRemoveAccess).toBe(true);
       expect(result.editRestrictions).toHaveLength(0);
@@ -1121,6 +1133,17 @@ describe("Registrations Service", () => {
   });
 
   describe("editRegistrationPublic", () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+      prismaMock.$transaction.mockImplementation(
+        async (callback: (tx: typeof prismaMock) => Promise<unknown>) =>
+          callback(prismaMock),
+      );
+      prismaMock.registration.updateMany.mockResolvedValue({
+        count: 1,
+      } as never);
+    });
+
     it("should update form data successfully", async () => {
       const registration = {
         ...createMockRegistration({
@@ -1143,7 +1166,9 @@ describe("Registrations Service", () => {
         .mockResolvedValueOnce(updatedRegistration);
       prismaMock.$transaction.mockImplementation(
         async (callback: (tx: typeof prismaMock) => Promise<unknown>) => {
-          prismaMock.registration.update.mockResolvedValue(updatedRegistration);
+          prismaMock.registration.updateMany.mockResolvedValue({
+            count: 1,
+          } as never);
           prismaMock.auditLog.create.mockResolvedValue({} as never);
           return callback(prismaMock);
         },
@@ -1151,6 +1176,7 @@ describe("Registrations Service", () => {
       prismaMock.eventAccess.findMany.mockResolvedValue([]);
 
       const result = await editRegistrationPublic(registration.id, {
+        expectedUpdatedAt: registration.updatedAt.toISOString(),
         formData: { firstName: "Jane" },
       });
 
@@ -1167,10 +1193,16 @@ describe("Registrations Service", () => {
       prismaMock.registration.findUnique.mockResolvedValue(registration);
 
       await expect(
-        editRegistrationPublic(registration.id, { firstName: "Jane" }),
+        editRegistrationPublic(registration.id, {
+          expectedUpdatedAt: registration.updatedAt.toISOString(),
+          firstName: "Jane",
+        }),
       ).rejects.toThrow(AppError);
       await expect(
-        editRegistrationPublic(registration.id, { firstName: "Jane" }),
+        editRegistrationPublic(registration.id, {
+          expectedUpdatedAt: registration.updatedAt.toISOString(),
+          firstName: "Jane",
+        }),
       ).rejects.toMatchObject({
         statusCode: 400,
         code: ErrorCodes.REGISTRATION_REFUNDED,
@@ -1187,10 +1219,16 @@ describe("Registrations Service", () => {
       prismaMock.registration.findUnique.mockResolvedValue(registration);
 
       await expect(
-        editRegistrationPublic(registration.id, { firstName: "Jane" }),
+        editRegistrationPublic(registration.id, {
+          expectedUpdatedAt: registration.updatedAt.toISOString(),
+          firstName: "Jane",
+        }),
       ).rejects.toThrow(AppError);
       await expect(
-        editRegistrationPublic(registration.id, { firstName: "Jane" }),
+        editRegistrationPublic(registration.id, {
+          expectedUpdatedAt: registration.updatedAt.toISOString(),
+          firstName: "Jane",
+        }),
       ).rejects.toMatchObject({
         statusCode: 400,
         code: ErrorCodes.REGISTRATION_EDIT_FORBIDDEN,
@@ -1225,10 +1263,16 @@ describe("Registrations Service", () => {
 
       // Trying to remove all access selections from a paid registration
       await expect(
-        editRegistrationPublic(registration.id, { accessSelections: [] }),
+        editRegistrationPublic(registration.id, {
+          expectedUpdatedAt: registration.updatedAt.toISOString(),
+          accessSelections: [],
+        }),
       ).rejects.toThrow(AppError);
       await expect(
-        editRegistrationPublic(registration.id, { accessSelections: [] }),
+        editRegistrationPublic(registration.id, {
+          expectedUpdatedAt: registration.updatedAt.toISOString(),
+          accessSelections: [],
+        }),
       ).rejects.toMatchObject({
         statusCode: 400,
         code: ErrorCodes.REGISTRATION_ACCESS_REMOVAL_BLOCKED,
@@ -1271,7 +1315,9 @@ describe("Registrations Service", () => {
         .mockResolvedValueOnce(updatedRegistration);
       prismaMock.$transaction.mockImplementation(
         async (callback: (tx: typeof prismaMock) => Promise<unknown>) => {
-          prismaMock.registration.update.mockResolvedValue(updatedRegistration);
+          prismaMock.registration.updateMany.mockResolvedValue({
+            count: 1,
+          } as never);
           prismaMock.auditLog.create.mockResolvedValue({} as never);
           return callback(prismaMock);
         },
@@ -1282,6 +1328,7 @@ describe("Registrations Service", () => {
       ]);
 
       const result = await editRegistrationPublic(registration.id, {
+        expectedUpdatedAt: registration.updatedAt.toISOString(),
         accessSelections: [
           { accessId: existingAccessId, quantity: 1 },
           { accessId: newAccessId, quantity: 1 },
@@ -1289,6 +1336,152 @@ describe("Registrations Service", () => {
       });
 
       expect(result.registration).toBeDefined();
+    });
+
+    it("should use in-transaction state for access validation, pricing, and update precondition", async () => {
+      const existingAccessId = faker.string.uuid();
+      const newAccessId = faker.string.uuid();
+      const priceWithAccess = createMockPriceBreakdown({
+        accessItems: [
+          {
+            accessId: existingAccessId,
+            name: "Workshop 1",
+            unitPrice: 50,
+            quantity: 1,
+            subtotal: 50,
+          },
+        ],
+      });
+      const registration = {
+        ...createMockRegistration({
+          paymentStatus: "PENDING",
+          paidAmount: 0,
+          priceBreakdown: priceWithAccess,
+          sponsorshipCode: null,
+        }),
+        form: { id: formId, eventId, schema: {} },
+        event: createPolicyEvent({ status: "OPEN" }),
+      };
+      const updatedRegistration = createMockRegistrationWithRelations({
+        ...registration,
+        accessTypeIds: [existingAccessId, newAccessId],
+      });
+
+      prismaMock.registration.findUnique
+        .mockResolvedValueOnce(registration)
+        .mockResolvedValueOnce(updatedRegistration);
+      prismaMock.eventAccess.findMany.mockResolvedValue([
+        createMockEventAccess({ id: existingAccessId }),
+        createMockEventAccess({ id: newAccessId }),
+      ]);
+
+      await editRegistrationPublic(registration.id, {
+        expectedUpdatedAt: registration.updatedAt.toISOString(),
+        accessSelections: [
+          { accessId: existingAccessId, quantity: 1 },
+          { accessId: newAccessId, quantity: 1 },
+        ],
+      });
+
+      expect(validateAccessSelections).toHaveBeenCalledWith(
+        registration.eventId,
+        expect.any(Array),
+        expect.any(Object),
+        expect.any(Set),
+        prismaMock,
+      );
+      expect(calculatePrice).toHaveBeenCalledWith(
+        registration.eventId,
+        expect.objectContaining({
+          selectedAccessItems: [
+            { accessId: existingAccessId, quantity: 1 },
+            { accessId: newAccessId, quantity: 1 },
+          ],
+        }),
+        prismaMock,
+      );
+      expect(prismaMock.registration.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            id: registration.id,
+            updatedAt: registration.updatedAt,
+          },
+        }),
+      );
+    });
+
+    it("should throw concurrent modification when expectedUpdatedAt is stale", async () => {
+      const registration = {
+        ...createMockRegistration({
+          paymentStatus: "PENDING",
+          paidAmount: 0,
+          sponsorshipCode: null,
+        }),
+        form: { id: formId, eventId, schema: {} },
+        event: createPolicyEvent({ status: "OPEN" }),
+      };
+
+      prismaMock.registration.findUnique.mockResolvedValue(registration);
+      prismaMock.registration.updateMany.mockResolvedValue({
+        count: 0,
+      } as never);
+
+      await expect(
+        editRegistrationPublic(registration.id, {
+          expectedUpdatedAt: registration.updatedAt.toISOString(),
+          firstName: "Jane",
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 409,
+        code: ErrorCodes.CONCURRENT_MODIFICATION,
+      });
+    });
+
+    it("should apply access counter changes by quantity delta", async () => {
+      const accessId = faker.string.uuid();
+      const priceWithAccess = createMockPriceBreakdown({
+        accessItems: [
+          {
+            accessId,
+            name: "Workshop",
+            unitPrice: 50,
+            quantity: 1,
+            subtotal: 50,
+          },
+        ],
+      });
+      const registration = {
+        ...createMockRegistration({
+          paymentStatus: "PENDING",
+          paidAmount: 0,
+          priceBreakdown: priceWithAccess,
+          sponsorshipCode: null,
+        }),
+        form: { id: formId, eventId, schema: {} },
+        event: createPolicyEvent({ status: "OPEN" }),
+      };
+      const updatedRegistration = createMockRegistrationWithRelations({
+        ...registration,
+      });
+
+      prismaMock.registration.findUnique
+        .mockResolvedValueOnce(registration)
+        .mockResolvedValueOnce(updatedRegistration);
+      prismaMock.eventAccess.findMany.mockResolvedValue([
+        createMockEventAccess({ id: accessId }),
+      ]);
+
+      await editRegistrationPublic(registration.id, {
+        expectedUpdatedAt: registration.updatedAt.toISOString(),
+        accessSelections: [{ accessId, quantity: 3 }],
+      });
+
+      expect(incrementAccessRegisteredCountTx).toHaveBeenCalledWith(
+        accessId,
+        2,
+        prismaMock,
+      );
+      expect(decrementAccessRegisteredCountTx).not.toHaveBeenCalled();
     });
   });
 

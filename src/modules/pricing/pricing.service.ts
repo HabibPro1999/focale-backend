@@ -29,7 +29,7 @@ export type EventPricingWithRules = Omit<EventPricing, "rules"> & {
 
 type PricingTxClient = Pick<
   TxClient,
-  "event" | "eventPricing" | "registration"
+  "event" | "eventPricing" | "registration" | "eventAccess" | "sponsorship"
 >;
 
 function parseEventPricing(pricing: EventPricing): EventPricingWithRules {
@@ -259,10 +259,11 @@ async function mutatePricingRules(
 export async function calculatePrice(
   eventId: string,
   input: CalculatePriceRequest,
+  db: PricingTxClient = prisma,
 ): Promise<PriceBreakdown> {
   const { formData, selectedAccessItems, sponsorshipCodes } = input;
 
-  const event = await prisma.event.findUnique({
+  const event = await db.event.findUnique({
     where: { id: eventId },
     select: {
       client: { select: { enabledModules: true } },
@@ -275,8 +276,11 @@ export async function calculatePrice(
 
   // Get event pricing configuration with embedded rules
   const pricing =
-    (await getEventPricing(eventId)) ??
-    (await updateEventPricing(eventId, { basePrice: 0, currency: "TND" }));
+    (await getEventPricing(eventId, db)) ??
+    (await updateEventPricingTx(db, eventId, {
+      basePrice: 0,
+      currency: "TND",
+    }));
 
   const { basePrice, currency, rules } = pricing;
 
@@ -307,6 +311,7 @@ export async function calculatePrice(
   const accessItemsDetails = await calculateAccessItemsTotal(
     eventId,
     selectedAccessItems,
+    db,
   );
   const accessTotal = accessItemsDetails.reduce(
     (sum, e) => sum + e.subtotal,
@@ -326,6 +331,7 @@ export async function calculatePrice(
       accessItemsDetails,
       subtotal,
     },
+    db,
   );
   const sponsorshipTotal = sponsorships
     .filter((s) => s.valid)
@@ -359,11 +365,12 @@ export async function calculatePrice(
 async function calculateAccessItemsTotal(
   eventId: string,
   selectedAccessItems: SelectedAccessItem[],
+  db: Pick<TxClient, "eventAccess"> = prisma,
 ): Promise<PriceBreakdown["accessItems"]> {
   if (!selectedAccessItems.length) return [];
 
   const accessIds = selectedAccessItems.map((e) => e.accessId);
-  const accessItems = await prisma.eventAccess.findMany({
+  const accessItems = await db.eventAccess.findMany({
     where: { id: { in: accessIds }, eventId },
   });
 
@@ -422,13 +429,14 @@ async function validateSponsorshipCodes(
   codes: string[],
   eventId: string,
   context: SponsorshipValidationContext,
+  db: Pick<TxClient, "sponsorship"> = prisma,
 ): Promise<PriceBreakdown["sponsorships"]> {
   if (!codes.length) return [];
 
   const upperCodes = codes.map((c) => c.toUpperCase());
 
   // Batch lookup: single query instead of one per code
-  const sponsorships = await prisma.sponsorship.findMany({
+  const sponsorships = await db.sponsorship.findMany({
     where: {
       eventId,
       code: { in: upperCodes },

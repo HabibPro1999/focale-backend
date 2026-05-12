@@ -37,6 +37,7 @@ import {
   abstractsCommitteeRoutes,
   abstractsPublicRoutes,
   abstractsRoutes,
+  getAbstractBookQueueHealth,
 } from "@abstracts";
 import { realtimeRoutes, drainRealtimeConnections } from "@realtime";
 import type { AppInstance } from "@shared/types/fastify.js";
@@ -121,6 +122,12 @@ export async function buildServer(): Promise<AppInstance> {
   // Email queue health check
   app.get("/health/email-queue", async (_request, reply) => {
     const health = await getEmailQueueHealth();
+    return reply.status(health.isHealthy ? 200 : 503).send(health);
+  });
+
+  // Abstract Book worker health check
+  app.get("/health/abstract-book-jobs", async (_request, reply) => {
+    const health = await getAbstractBookQueueHealth();
     return reply.status(health.isHealthy ? 200 : 503).send(health);
   });
 

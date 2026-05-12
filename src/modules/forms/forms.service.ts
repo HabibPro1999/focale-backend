@@ -39,7 +39,7 @@ type FormWithRelations = Form & {
 };
 
 type RegistrationFormWithEvent = Form & {
-  event: { clientId: string; status: Event["status"] };
+  event: { clientId: string; status: Event["status"]; endDate: Date };
 };
 
 /**
@@ -181,7 +181,7 @@ export async function getFormById(
 ): Promise<RegistrationFormWithEvent | null> {
   return prisma.form.findUnique({
     where: { id },
-    include: { event: { select: { clientId: true, status: true } } },
+    include: { event: { select: { clientId: true, status: true, endDate: true } } },
   });
 }
 
@@ -196,9 +196,9 @@ export async function getActiveRegistrationFormById(
       id,
       type: "REGISTRATION",
       active: true,
-      event: { status: "OPEN" },
+      event: { status: "OPEN", endDate: { gte: new Date() } },
     },
-    include: { event: { select: { clientId: true, status: true } } },
+    include: { event: { select: { clientId: true, status: true, endDate: true } } },
   });
 }
 
@@ -216,6 +216,7 @@ export async function getFormByEventSlug(
       event: {
         slug: eventSlug,
         status: "OPEN",
+        endDate: { gte: new Date() },
         client: { enabledModules: { has: "registrations" } },
       },
       active: true,
@@ -651,6 +652,7 @@ export async function getSponsorFormByEventSlug(
       event: {
         slug,
         status: "OPEN",
+        endDate: { gte: new Date() },
         client: { enabledModules: { has: "sponsorships" } },
       },
       active: true,

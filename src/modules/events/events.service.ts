@@ -50,6 +50,20 @@ export function assertEventOpen(event: Pick<Event, "status">): void {
   }
 }
 
+export function assertEventAcceptsPublicActions(
+  event: Pick<Event, "status" | "endDate">,
+  now = new Date(),
+): void {
+  assertEventOpen(event);
+  if (event.endDate < now) {
+    throw new AppError(
+      "Event is not accepting public actions",
+      400,
+      ErrorCodes.EVENT_NOT_OPEN,
+    );
+  }
+}
+
 function extractKeyFromStorage(value: string): string | null {
   if (!value.includes("://")) {
     return value || null;

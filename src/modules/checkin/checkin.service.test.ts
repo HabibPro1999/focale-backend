@@ -12,6 +12,8 @@ const eventId = "event-001";
 const registrationId = "reg-001";
 const accessId = "access-001";
 const userId = "user-001";
+const blockedPaymentStatuses = ["PENDING", "VERIFYING", "PARTIAL", "REFUNDED"];
+const nonPaidAllowedPaymentStatuses = ["SPONSORED", "WAIVED"];
 
 const baseRegistration = {
   id: registrationId,
@@ -20,7 +22,7 @@ const baseRegistration = {
   lastName: "Doe",
   email: "jane@example.com",
   referenceNumber: "REF-001",
-  paymentStatus: "paid",
+  paymentStatus: "PAID",
   checkedInAt: null as Date | null,
   checkedInBy: null as string | null,
   accessTypeIds: [accessId],
@@ -110,6 +112,97 @@ describe("Checkin Service", () => {
       expect(result.checkedInAt).toEqual(existingAt);
       expect(prismaMock.accessCheckIn.create).not.toHaveBeenCalled();
     });
+
+    it.each(nonPaidAllowedPaymentStatuses)(
+      "should allow event-level check-in for %s registrations",
+      async (paymentStatus) => {
+        prismaMock.registration.findUnique.mockResolvedValue({
+          ...baseRegistration,
+          paymentStatus,
+        } as never);
+        prismaMock.registration.update.mockResolvedValue({} as never);
+        prismaMock.auditLog.create.mockResolvedValue({} as never);
+
+        const result = await checkIn(eventId, registrationId, undefined, userId);
+
+        expect(result.success).toBe(true);
+        expect(result.alreadyCheckedIn).toBe(false);
+        expect(prismaMock.registration.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { id: registrationId },
+            data: expect.objectContaining({ checkedInBy: userId }),
+          }),
+        );
+      },
+    );
+
+    it.each(nonPaidAllowedPaymentStatuses)(
+      "should allow access-level check-in for %s registrations",
+      async (paymentStatus) => {
+        prismaMock.registration.findUnique.mockResolvedValue({
+          ...baseRegistration,
+          paymentStatus,
+        } as never);
+        prismaMock.accessCheckIn.findUnique.mockResolvedValue(null);
+        prismaMock.accessCheckIn.create.mockResolvedValue({
+          id: "aci-001",
+          registrationId,
+          accessId,
+          checkedInBy: userId,
+          checkedInAt: new Date("2026-04-03T11:00:00Z"),
+        } as never);
+        prismaMock.auditLog.create.mockResolvedValue({} as never);
+
+        const result = await checkIn(eventId, registrationId, accessId, userId);
+
+        expect(result.success).toBe(true);
+        expect(result.alreadyCheckedIn).toBe(false);
+        expect(prismaMock.accessCheckIn.create).toHaveBeenCalledWith({
+          data: { registrationId, accessId, checkedInBy: userId },
+        });
+      },
+    );
+
+    it.each(blockedPaymentStatuses)(
+      "should reject event-level check-in for %s registrations before writing",
+      async (paymentStatus) => {
+        prismaMock.registration.findUnique.mockResolvedValue({
+          ...baseRegistration,
+          paymentStatus,
+        } as never);
+
+        await expect(
+          checkIn(eventId, registrationId, undefined, userId),
+        ).rejects.toMatchObject({
+          statusCode: 400,
+          code: ErrorCodes.CHECKIN_PAYMENT_REQUIRED,
+        });
+
+        expect(prismaMock.registration.update).not.toHaveBeenCalled();
+        expect(prismaMock.accessCheckIn.create).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(blockedPaymentStatuses)(
+      "should reject access-level check-in for %s registrations before writing",
+      async (paymentStatus) => {
+        prismaMock.registration.findUnique.mockResolvedValue({
+          ...baseRegistration,
+          paymentStatus,
+        } as never);
+
+        await expect(
+          checkIn(eventId, registrationId, accessId, userId),
+        ).rejects.toMatchObject({
+          statusCode: 400,
+          code: ErrorCodes.CHECKIN_PAYMENT_REQUIRED,
+        });
+
+        expect(prismaMock.accessCheckIn.findUnique).not.toHaveBeenCalled();
+        expect(prismaMock.accessCheckIn.create).not.toHaveBeenCalled();
+        expect(prismaMock.registration.update).not.toHaveBeenCalled();
+      },
+    );
 
     it("should throw when registration not found", async () => {
       prismaMock.registration.findUnique.mockResolvedValue(null);

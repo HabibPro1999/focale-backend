@@ -2,7 +2,11 @@ import {
   requireAuth,
   canAccessClient,
 } from "@shared/middleware/auth.middleware.js";
-import { assertEventWritable, getEventById } from "@events";
+import {
+  assertEventAcceptsPublicActions,
+  assertEventWritable,
+  getEventById,
+} from "@events";
 import { assertClientModuleEnabled } from "@clients";
 import { validateFormData, sanitizeFormData, type FormSchema } from "@forms";
 import {
@@ -227,6 +231,7 @@ export async function pricingPublicRoutes(app: AppInstance): Promise<void> {
           event: {
             select: {
               status: true,
+              endDate: true,
               client: { select: { enabledModules: true } },
             },
           },
@@ -236,13 +241,7 @@ export async function pricingPublicRoutes(app: AppInstance): Promise<void> {
       if (!form || form.type !== "REGISTRATION" || !form.active) {
         throw app.httpErrors.notFound("Form not found");
       }
-      if (form.event.status !== "OPEN") {
-        throw new AppError(
-          "Event is not accepting registrations",
-          400,
-          ErrorCodes.EVENT_NOT_OPEN,
-        );
-      }
+      assertEventAcceptsPublicActions(form.event);
       if (!form.event.client.enabledModules.includes("pricing")) {
         throw new AppError(
           "Pricing module is disabled",
