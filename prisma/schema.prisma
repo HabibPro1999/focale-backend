@@ -662,9 +662,17 @@ model EmailLog {
   sendgridMessageId String? @map("sendgrid_message_id") // For tracking via webhooks
 
   // Error handling
-  errorMessage String? @map("error_message")
-  retryCount   Int     @default(0) @map("retry_count")
-  maxRetries   Int     @default(3) @map("max_retries")
+  errorMessage  String?   @map("error_message")
+  retryCount    Int       @default(0) @map("retry_count")
+  maxRetries    Int       @default(3) @map("max_retries")
+  attemptCount  Int       @default(0) @map("attempt_count")
+  lastAttemptAt DateTime? @map("last_attempt_at")
+  nextAttemptAt DateTime? @map("next_attempt_at")
+
+  // Worker lease metadata
+  lockedAt    DateTime? @map("locked_at")
+  lockedUntil DateTime? @map("locked_until")
+  lockedBy    String?   @map("locked_by")
 
   // Variable context (snapshot for debugging/retry)
   contextSnapshot Json? @map("context_snapshot")
@@ -690,6 +698,9 @@ model EmailLog {
   @@index([abstractId, abstractTrigger, queuedAt])
   @@index([status, queuedAt]) // For queue processing
   @@index([status, retryCount]) // For retry processing
+  @@index([status, nextAttemptAt, queuedAt])
+  @@index([status, lockedUntil])
+  @@index([lockedBy])
   @@index([recipientEmail])
   @@index([sendgridMessageId]) // For webhook lookups
   @@index([trigger, queuedAt])
@@ -848,6 +859,13 @@ model AbstractBookJob {
   storageKey    String?               @map("storage_key")
   errorMessage  String?               @map("error_message")
   includedCount Int                   @default(0) @map("included_count")
+  attemptCount  Int                   @default(0) @map("attempt_count")
+  maxAttempts   Int                   @default(3) @map("max_attempts")
+  lastAttemptAt DateTime?             @map("last_attempt_at")
+  nextAttemptAt DateTime?             @map("next_attempt_at")
+  lockedAt      DateTime?             @map("locked_at")
+  lockedUntil   DateTime?             @map("locked_until")
+  lockedBy      String?               @map("locked_by")
   createdAt     DateTime              @default(now()) @map("created_at")
   startedAt     DateTime?             @map("started_at")
   completedAt   DateTime?             @map("completed_at")
@@ -857,6 +875,9 @@ model AbstractBookJob {
 
   @@index([eventId, createdAt(sort: Desc)])
   @@index([status, createdAt])
+  @@index([status, nextAttemptAt, createdAt])
+  @@index([status, lockedUntil])
+  @@index([lockedBy])
   @@map("abstract_book_jobs")
 }
 
@@ -879,7 +900,7 @@ model Abstract {
   additionalFieldsData Json @default("{}") @map("additional_fields_data")
 
   // Abstract code (Phase IV)
-  code       String? // e.g. "AB-001"
+  code       String? // e.g. "001-OC"
   codeNumber Int?    @map("code_number")
 
   // Status
@@ -920,6 +941,7 @@ model Abstract {
   reviews      AbstractReview[]
 
   @@unique([eventId, code])
+  @@unique([eventId, codeNumber])
   @@index([eventId, status])
   @@index([eventId, createdAt(sort: Desc)])
   @@index([authorEmail])

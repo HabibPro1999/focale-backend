@@ -15,17 +15,7 @@ import type {
   FinalizeAbstractInput,
   ListAbstractsQuery,
 } from "./abstracts.schema.js";
-
-const FINAL_STATUSES: AbstractStatus[] = [
-  AbstractStatus.ACCEPTED,
-  AbstractStatus.REJECTED,
-  AbstractStatus.PENDING,
-];
-
-const CODE_SUFFIX: Record<AbstractFinalType, string> = {
-  [AbstractFinalType.ORAL_COMMUNICATION]: "OC",
-  [AbstractFinalType.POSTER]: "PO",
-};
+import { FINAL_STATUSES, CODE_SUFFIX } from "./abstracts.constants.js";
 
 type AbstractContent = { title?: unknown } & Record<string, unknown>;
 type Tx = TxClient;
@@ -269,7 +259,13 @@ export async function finalizeAbstract(
 
     let allocatedCode: { code: string; codeNumber: number } | null = null;
     if (input.decision === AbstractStatus.ACCEPTED) {
-      allocatedCode = await allocateAbstractCode(tx, eventId, input.finalType!);
+      if (existing.codeNumber != null) {
+        // Reuse the reserved number; recalculate suffix in case finalType changed
+        const code = `${String(existing.codeNumber).padStart(3, "0")}-${CODE_SUFFIX[input.finalType!]}`;
+        allocatedCode = { code, codeNumber: existing.codeNumber };
+      } else {
+        allocatedCode = await allocateAbstractCode(tx, eventId, input.finalType!);
+      }
       nextData.code = allocatedCode.code;
       nextData.codeNumber = allocatedCode.codeNumber;
     } else {
@@ -278,7 +274,7 @@ export async function finalizeAbstract(
     }
 
     const updated = await tx.abstract.update({
-      where: { id: abstractId },
+      where: { id: abstractId, status: { notIn: FINAL_STATUSES } },
       data: nextData,
       select: {
         id: true,
@@ -290,6 +286,15 @@ export async function finalizeAbstract(
         averageScore: true,
         reviewCount: true,
       },
+    }).catch((e: unknown) => {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2025") {
+        throw new AppError(
+          "Abstract is already finalized; reopen before changing the decision",
+          409,
+          ErrorCodes.INVALID_STATUS_TRANSITION,
+        );
+      }
+      throw e;
     });
 
     await auditLog(tx, {

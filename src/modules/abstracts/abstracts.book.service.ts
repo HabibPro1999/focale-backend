@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 import { prisma } from "@/database/client.js";
 import {
@@ -12,17 +14,41 @@ import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { auditLog } from "@shared/utils/audit.js";
 import { logger } from "@shared/utils/logger.js";
-
-const FINAL_STATUSES = [
-  AbstractStatus.ACCEPTED,
-  AbstractStatus.REJECTED,
-  AbstractStatus.PENDING,
-];
+import { FINAL_STATUSES } from "./abstracts.constants.js";
 
 const A4: [number, number] = [595.28, 841.89];
 const MARGIN = 54;
 const CONTENT_WIDTH = A4[0] - MARGIN * 2;
 const SIGNED_URL_TTL_SECONDS = 60 * 60;
+const ABSTRACT_BOOK_LEASE_MS = 60 * 60 * 1000;
+const ABSTRACT_BOOK_HEARTBEAT_MS = 60 * 1000;
+const ABSTRACT_BOOK_PENDING_UNHEALTHY_AGE_MS = 60 * 60 * 1000;
+const ABSTRACT_BOOK_PENDING_UNHEALTHY_SIZE = 100;
+const DEFAULT_WORKER_ID = `abstract-book:${hostname()}:${process.pid}:${randomUUID()}`;
+
+export interface ProcessAbstractBookJobsOptions {
+  workerId?: string;
+  leaseMs?: number;
+  heartbeatMs?: number;
+}
+
+function abstractBookRetryDelayMs(failedAttemptCount: number): number {
+  if (failedAttemptCount <= 1) return 60 * 1000;
+  if (failedAttemptCount === 2) return 5 * 60 * 1000;
+  return 15 * 60 * 1000;
+}
+
+function nextAbstractBookAttemptAt(failedAttemptCount: number, from = new Date()): Date {
+  return new Date(from.getTime() + abstractBookRetryDelayMs(failedAttemptCount));
+}
+
+function clearAbstractBookLeaseFields() {
+  return {
+    lockedAt: null,
+    lockedUntil: null,
+    lockedBy: null,
+  };
+}
 
 type BookAbstract = Prisma.AbstractGetPayload<{
   include: {
@@ -48,6 +74,10 @@ function formatJob(job: AbstractBookJob, downloadUrl?: string | null) {
     downloadUrl: downloadUrl ?? null,
     errorMessage: job.errorMessage,
     includedCount: job.includedCount,
+    attemptCount: job.attemptCount,
+    maxAttempts: job.maxAttempts,
+    lastAttemptAt: job.lastAttemptAt?.toISOString() ?? null,
+    nextAttemptAt: job.nextAttemptAt?.toISOString() ?? null,
     createdAt: job.createdAt.toISOString(),
     startedAt: job.startedAt?.toISOString() ?? null,
     completedAt: job.completedAt?.toISOString() ?? null,
@@ -356,21 +386,150 @@ export async function getAbstractBookJob(eventId: string, jobId: string) {
   return formatJob(job, await jobDownloadUrl(job));
 }
 
-export async function processAbstractBookJobs(limit = 1) {
-  const jobs = await prisma.abstractBookJob.findMany({
-    where: { status: AbstractBookJobStatus.PENDING },
-    orderBy: { createdAt: "asc" },
-    take: limit,
-  });
+export async function recoverStaleAbstractBookJobs(now = new Date()) {
+  const retry1At = nextAbstractBookAttemptAt(1, now);
+  const retry2At = nextAbstractBookAttemptAt(2, now);
+  const retryLaterAt = nextAbstractBookAttemptAt(3, now);
+
+  const requeued = await prisma.$executeRawUnsafe(
+    `UPDATE "abstract_book_jobs"
+     SET
+       "status" = 'PENDING',
+       "updated_at" = $1,
+       "locked_at" = NULL,
+       "locked_until" = NULL,
+       "locked_by" = NULL,
+       "next_attempt_at" = CASE
+         WHEN "attempt_count" <= 1 THEN $2
+         WHEN "attempt_count" = 2 THEN $3
+         ELSE $4
+       END,
+       "error_message" = COALESCE("error_message", 'Abstract Book job lease expired; requeued for retry')
+     WHERE "status" = 'RUNNING'
+       AND ("locked_until" IS NULL OR "locked_until" < $1)
+       AND "attempt_count" < "max_attempts"`,
+    now,
+    retry1At,
+    retry2At,
+    retryLaterAt,
+  );
+
+  const deadLettered = await prisma.$executeRawUnsafe(
+    `UPDATE "abstract_book_jobs"
+     SET
+       "status" = 'FAILED',
+       "updated_at" = $1,
+       "completed_at" = $1,
+       "locked_at" = NULL,
+       "locked_until" = NULL,
+       "locked_by" = NULL,
+       "next_attempt_at" = NULL,
+       "error_message" = COALESCE("error_message", 'Abstract Book job lease expired and retry limit was exhausted')
+     WHERE "status" = 'RUNNING'
+       AND ("locked_until" IS NULL OR "locked_until" < $1)
+       AND "attempt_count" >= "max_attempts"`,
+    now,
+  );
+
+  if (requeued > 0 || deadLettered > 0) {
+    logger.warn({ requeued, deadLettered }, "Recovered stale Abstract Book job leases");
+  }
+
+  return { requeued, deadLettered };
+}
+
+type ClaimedAbstractBookJob = AbstractBookJob;
+
+async function claimAbstractBookJobs(
+  limit: number,
+  workerId: string,
+  leaseMs: number,
+  now = new Date(),
+): Promise<ClaimedAbstractBookJob[]> {
+  const lockedUntil = new Date(now.getTime() + leaseMs);
+  return prisma.$queryRawUnsafe<ClaimedAbstractBookJob[]>(
+    `UPDATE "abstract_book_jobs"
+     SET
+       "status" = 'RUNNING',
+       "updated_at" = $1,
+       "started_at" = COALESCE("started_at", $1),
+       "locked_at" = $1,
+       "locked_until" = $2,
+       "locked_by" = $3,
+       "last_attempt_at" = $1,
+       "attempt_count" = "attempt_count" + 1,
+       "error_message" = NULL
+     WHERE "id" IN (
+       SELECT "id" FROM "abstract_book_jobs"
+       WHERE "status" = 'PENDING'
+         AND ("next_attempt_at" IS NULL OR "next_attempt_at" <= $1)
+         AND "attempt_count" < "max_attempts"
+       ORDER BY "created_at" ASC
+       LIMIT $4
+       FOR UPDATE SKIP LOCKED
+     )
+     RETURNING
+       "id",
+       "event_id" AS "eventId",
+       "requested_by" AS "requestedBy",
+       "status",
+       "storage_key" AS "storageKey",
+       "error_message" AS "errorMessage",
+       "included_count" AS "includedCount",
+       "attempt_count" AS "attemptCount",
+       "max_attempts" AS "maxAttempts",
+       "last_attempt_at" AS "lastAttemptAt",
+       "next_attempt_at" AS "nextAttemptAt",
+       "locked_at" AS "lockedAt",
+       "locked_until" AS "lockedUntil",
+       "locked_by" AS "lockedBy",
+       "created_at" AS "createdAt",
+       "started_at" AS "startedAt",
+       "completed_at" AS "completedAt",
+       "updated_at" AS "updatedAt"`,
+    now,
+    lockedUntil,
+    workerId,
+    limit,
+  );
+}
+
+function startAbstractBookHeartbeat(
+  jobId: string,
+  workerId: string,
+  leaseMs: number,
+  heartbeatMs: number,
+): ReturnType<typeof setInterval> {
+  const timer = setInterval(() => {
+    const now = new Date();
+    void prisma.abstractBookJob
+      .updateMany({
+        where: { id: jobId, status: AbstractBookJobStatus.RUNNING, lockedBy: workerId },
+        data: { lockedUntil: new Date(now.getTime() + leaseMs) },
+      })
+      .catch((err) => {
+        logger.warn({ err, jobId, workerId }, "Failed to extend Abstract Book job lease");
+      });
+  }, heartbeatMs);
+
+  if (typeof timer.unref === "function") timer.unref();
+  return timer;
+}
+
+export async function processAbstractBookJobs(
+  limit = 1,
+  options: ProcessAbstractBookJobsOptions = {},
+) {
+  const workerId = options.workerId ?? DEFAULT_WORKER_ID;
+  const leaseMs = options.leaseMs ?? ABSTRACT_BOOK_LEASE_MS;
+  const heartbeatMs = options.heartbeatMs ?? Math.min(ABSTRACT_BOOK_HEARTBEAT_MS, Math.max(1000, Math.floor(leaseMs / 2)));
+
+  await recoverStaleAbstractBookJobs();
+  const jobs = await claimAbstractBookJobs(limit, workerId, leaseMs);
 
   let processed = 0;
   for (const job of jobs) {
-    const claimed = await prisma.abstractBookJob.updateMany({
-      where: { id: job.id, status: AbstractBookJobStatus.PENDING },
-      data: { status: AbstractBookJobStatus.RUNNING, startedAt: new Date(), errorMessage: null },
-    });
-    if (claimed.count === 0) continue;
-
+    const heartbeat = startAbstractBookHeartbeat(job.id, workerId, leaseMs, heartbeatMs);
     try {
       const { buffer, includedCount } = await generateAbstractBookPdf(job.eventId);
       const key = `${job.eventId}/abstracts/book/${job.id}.pdf`;
@@ -378,29 +537,88 @@ export async function processAbstractBookJobs(limit = 1) {
         contentDisposition: `attachment; filename="abstract-book-${job.eventId}.pdf"`,
       });
 
-      await prisma.abstractBookJob.update({
-        where: { id: job.id },
+      const completed = await prisma.abstractBookJob.updateMany({
+        where: { id: job.id, status: AbstractBookJobStatus.RUNNING, lockedBy: workerId },
         data: {
           status: AbstractBookJobStatus.COMPLETED,
           storageKey,
           includedCount,
           completedAt: new Date(),
+          errorMessage: null,
+          nextAttemptAt: null,
+          ...clearAbstractBookLeaseFields(),
         },
       });
+      if (completed.count === 0) {
+        logger.warn({ jobId: job.id, workerId }, "Abstract Book completion skipped because lease was lost");
+      }
       processed += 1;
     } catch (err) {
       logger.error({ err, jobId: job.id, eventId: job.eventId }, "Abstract Book generation failed");
-      await prisma.abstractBookJob.update({
-        where: { id: job.id },
+      const message = err instanceof Error ? err.message : "Unknown error";
+      const shouldRetry = job.attemptCount < job.maxAttempts;
+      const failed = await prisma.abstractBookJob.updateMany({
+        where: { id: job.id, status: AbstractBookJobStatus.RUNNING, lockedBy: workerId },
         data: {
-          status: AbstractBookJobStatus.FAILED,
-          errorMessage: err instanceof Error ? err.message : "Unknown error",
-          completedAt: new Date(),
+          status: shouldRetry ? AbstractBookJobStatus.PENDING : AbstractBookJobStatus.FAILED,
+          errorMessage: message,
+          completedAt: shouldRetry ? null : new Date(),
+          nextAttemptAt: shouldRetry ? nextAbstractBookAttemptAt(job.attemptCount) : null,
+          ...clearAbstractBookLeaseFields(),
         },
       });
+      if (failed.count === 0) {
+        logger.warn({ jobId: job.id, workerId }, "Abstract Book failure update skipped because lease was lost");
+      }
       processed += 1;
+    } finally {
+      clearInterval(heartbeat);
     }
   }
 
   return { processed };
+}
+
+export async function getAbstractBookQueueHealth() {
+  const now = new Date();
+  const [pendingCount, duePendingCount, runningCount, staleRunningCount, failedCount, oldestPending] = await Promise.all([
+    prisma.abstractBookJob.count({ where: { status: AbstractBookJobStatus.PENDING } }),
+    prisma.abstractBookJob.count({
+      where: {
+        status: AbstractBookJobStatus.PENDING,
+        OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
+      },
+    }),
+    prisma.abstractBookJob.count({ where: { status: AbstractBookJobStatus.RUNNING } }),
+    prisma.abstractBookJob.count({
+      where: {
+        status: AbstractBookJobStatus.RUNNING,
+        OR: [{ lockedUntil: null }, { lockedUntil: { lt: now } }],
+      },
+    }),
+    prisma.abstractBookJob.count({ where: { status: AbstractBookJobStatus.FAILED } }),
+    prisma.abstractBookJob.findFirst({
+      where: { status: AbstractBookJobStatus.PENDING },
+      orderBy: { createdAt: "asc" },
+      select: { createdAt: true },
+    }),
+  ]);
+
+  const oldestPendingAgeMs = oldestPending?.createdAt
+    ? now.getTime() - oldestPending.createdAt.getTime()
+    : 0;
+  const isHealthy =
+    staleRunningCount === 0 &&
+    pendingCount < ABSTRACT_BOOK_PENDING_UNHEALTHY_SIZE &&
+    oldestPendingAgeMs < ABSTRACT_BOOK_PENDING_UNHEALTHY_AGE_MS;
+
+  return {
+    pendingCount,
+    duePendingCount,
+    runningCount,
+    staleRunningCount,
+    failedCount,
+    oldestPendingAgeMs,
+    isHealthy,
+  };
 }

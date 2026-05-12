@@ -19,12 +19,7 @@ import type {
   ReviewAbstractInput,
   SetReviewerThemesInput,
 } from "./abstracts.schema.js";
-
-const FINAL_STATUSES: AbstractStatus[] = [
-  AbstractStatus.ACCEPTED,
-  AbstractStatus.REJECTED,
-  AbstractStatus.PENDING,
-];
+import { FINAL_STATUSES } from "./abstracts.constants.js";
 
 type AbstractContent = Record<string, unknown>;
 const ONE_HOUR_MS = 60 * 60 * 1000;
