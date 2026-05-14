@@ -28,7 +28,8 @@ export type AbstractEventType =
   | "abstract.reviewCompleted"
   | "abstract.scoreDiverged"
   | "abstract.finalized"
-  | "abstract.reopened";
+  | "abstract.reopened"
+  | "abstract.presentationChanged";
 
 export type AppEventType =
   | RegistrationEventType

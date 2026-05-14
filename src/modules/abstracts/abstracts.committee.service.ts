@@ -129,7 +129,7 @@ async function notifyScoreDivergence(input: {
   threshold: number;
 }) {
   const { diverged, min, max } = getScoreDivergence(input.scores);
-  if (!diverged || min === null || max === null || max - min <= input.threshold) return;
+  if (!diverged || min === null || max === null || max - min < input.threshold) return;
 
   const since = new Date(Date.now() - ONE_HOUR_MS);
   const existing = await prisma.emailLog.findFirst({
@@ -371,8 +371,41 @@ export async function assignReviewers(
 ) {
   const abstract = await assertAbstractForEvent(abstractId, eventId);
   const reviewerIds = [...new Set(body.reviewerIds)];
+  const config = await prisma.abstractConfig.findUnique({
+    where: { eventId },
+    select: { reviewersPerAbstract: true, divergenceThreshold: true },
+  });
+  const requiredReviewers = config?.reviewersPerAbstract ?? 2;
 
   if (reviewerIds.length > 0) {
+    if (reviewerIds.length < requiredReviewers) {
+      throw new AppError(
+        `Exactly ${requiredReviewers} reviewers are required for initial assignment`,
+        400,
+        ErrorCodes.VALIDATION_ERROR,
+      );
+    }
+
+    if (reviewerIds.length > requiredReviewers) {
+      const scoredReviews = await prisma.abstractReview.findMany({
+        where: { abstractId, active: true, score: { not: null } },
+        select: { score: true },
+      });
+      const scores = scoredReviews
+        .map((review) => review.score)
+        .filter((score): score is number => score !== null);
+      const min = scores.length >= 2 ? Math.min(...scores) : null;
+      const max = scores.length >= 2 ? Math.max(...scores) : null;
+      const spread = min !== null && max !== null ? max - min : 0;
+      if (spread < (config?.divergenceThreshold ?? 6)) {
+        throw new AppError(
+          "Extra reviewers can only be assigned after a score divergence alert",
+          400,
+          ErrorCodes.VALIDATION_ERROR,
+        );
+      }
+    }
+
     const memberships = await prisma.abstractCommitteeMembership.findMany({
       where: { eventId, userId: { in: reviewerIds }, active: true },
       select: { userId: true },
@@ -501,7 +534,14 @@ export async function reviewAssignedAbstract(
       event: {
         select: {
           clientId: true,
-          abstractConfig: { select: { scoringDeadline: true, divergenceThreshold: true } },
+          abstractConfig: {
+            select: {
+              scoringStartAt: true,
+              scoringDeadline: true,
+              divergenceThreshold: true,
+              commentsEnabled: true,
+            },
+          },
         },
       },
       reviews: { where: { active: true } },
@@ -513,8 +553,15 @@ export async function reviewAssignedAbstract(
     throw new AppError("Abstract is not open for scoring", 409, ErrorCodes.INVALID_STATUS_TRANSITION);
   }
   const deadline = abstract.event.abstractConfig?.scoringDeadline;
+  const startAt = abstract.event.abstractConfig?.scoringStartAt;
+  if (startAt && startAt.getTime() > Date.now()) {
+    throw new AppError("Scoring has not started yet", 403, ErrorCodes.FORBIDDEN);
+  }
   if (deadline && deadline.getTime() < Date.now()) {
     throw new AppError("Scoring deadline has passed", 403, ErrorCodes.FORBIDDEN);
+  }
+  if (abstract.event.abstractConfig?.commentsEnabled === false && body.comment?.trim()) {
+    throw new AppError("Reviewer comments are disabled for this event", 400, ErrorCodes.VALIDATION_ERROR);
   }
   if (!abstract.reviews.some((review) => review.reviewerId === reviewerId && review.active)) {
     throw new AppError("Abstract assignment not found", 404, ErrorCodes.NOT_FOUND);
@@ -527,7 +574,7 @@ export async function reviewAssignedAbstract(
         eventId: abstract.eventId,
         active: true,
         score: body.score,
-        comment: body.comment ?? null,
+        comment: abstract.event.abstractConfig?.commentsEnabled === false ? null : body.comment ?? null,
         scoredAt: new Date(),
       },
     });

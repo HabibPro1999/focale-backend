@@ -88,8 +88,8 @@ model Event {
   certificateTemplates         CertificateTemplate[]
   abstractConfig               AbstractConfig?
   abstracts                    Abstract[]
-  abstractCodeCounter         AbstractCodeCounter?
-  abstractBookJobs            AbstractBookJob[]
+  abstractCodeCounters         AbstractCodeCounter[]
+  abstractBookJobs             AbstractBookJob[]
   abstractCommitteeMemberships AbstractCommitteeMembership[]
   abstractReviews              AbstractReview[]
   abstractReviewerThemes       AbstractReviewerTheme[]
@@ -749,8 +749,10 @@ model AbstractConfig {
   submissionMode         AbstractSubmissionMode @default(FREE_TEXT) @map("submission_mode")
   globalWordLimit        Int?                   @default(500) @map("global_word_limit")
   sectionWordLimits      Json?                  @map("section_word_limits")
+  submissionStartAt      DateTime?              @map("submission_start_at")
   submissionDeadline     DateTime?              @map("submission_deadline")
   editingDeadline        DateTime?              @map("editing_deadline")
+  scoringStartAt         DateTime?              @map("scoring_start_at")
   scoringDeadline        DateTime?              @map("scoring_deadline")
   finalFileDeadline      DateTime?              @map("final_file_deadline")
   editingEnabled         Boolean                @default(false) @map("editing_enabled")
@@ -759,6 +761,7 @@ model AbstractConfig {
   finalFileUploadEnabled Boolean                @default(false) @map("final_file_upload_enabled")
   reviewersPerAbstract   Int                    @default(2) @map("reviewers_per_abstract")
   divergenceThreshold    Int                    @default(6) @map("divergence_threshold")
+  maxThemesPerAbstract   Int?                   @map("max_themes_per_abstract")
   distributeByTheme      Boolean                @default(false) @map("distribute_by_theme")
   modeLocked             Boolean                @default(false) @map("mode_locked")
   bookFontFamily         String                 @default("Arial") @map("book_font_family")
@@ -788,6 +791,7 @@ model AbstractTheme {
   config         AbstractConfig            @relation(fields: [configId], references: [id], onDelete: Cascade)
   abstracts      AbstractThemeOnAbstract[]
   reviewerThemes AbstractReviewerTheme[]
+  codeCounters   AbstractCodeCounter[]
 
   @@index([configId, active])
   @@map("abstract_themes")
@@ -803,6 +807,7 @@ enum AbstractRequestedType {
 }
 
 enum AbstractFinalType {
+  CONFERENCE
   ORAL_COMMUNICATION
   POSTER
 }
@@ -840,14 +845,19 @@ enum AbstractBookJobStatus {
 }
 
 model AbstractCodeCounter {
-  id        String   @id @default(uuid())
-  eventId   String   @unique @map("event_id")
-  lastValue Int      @default(0) @map("last_value")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id        String            @id @default(uuid())
+  eventId   String            @map("event_id")
+  themeId   String            @map("theme_id")
+  finalType AbstractFinalType @map("final_type")
+  lastValue Int               @default(0) @map("last_value")
+  createdAt DateTime          @default(now()) @map("created_at")
+  updatedAt DateTime          @updatedAt @map("updated_at")
 
-  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  event Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  theme AbstractTheme @relation(fields: [themeId], references: [id], onDelete: Cascade)
 
+  @@unique([eventId, themeId, finalType])
+  @@index([themeId])
   @@map("abstract_code_counters")
 }
 
@@ -886,10 +896,11 @@ model Abstract {
   eventId String @map("event_id")
 
   // Author info
-  authorFirstName String @map("author_first_name")
-  authorLastName  String @map("author_last_name")
-  authorEmail     String @map("author_email")
-  authorPhone     String @map("author_phone")
+  authorFirstName       String  @map("author_first_name")
+  authorLastName        String  @map("author_last_name")
+  authorEmail           String  @map("author_email")
+  authorEmailNormalized String? @map("author_email_normalized")
+  authorPhone           String  @map("author_phone")
 
   // Submission content
   requestedType AbstractRequestedType @map("requested_type")
@@ -911,6 +922,10 @@ model Abstract {
   finalType    AbstractFinalType? @map("final_type")
   averageScore Float?             @map("average_score")
   reviewCount  Int                @default(0) @map("review_count")
+
+  // Presentation attendance for abstract certificate eligibility
+  presentedAt DateTime? @map("presented_at")
+  presentedBy String?   @map("presented_by")
 
   // Final file (Phase V — columns included now)
   finalFileKey        String?           @map("final_file_key")
@@ -941,10 +956,10 @@ model Abstract {
   reviews      AbstractReview[]
 
   @@unique([eventId, code])
-  @@unique([eventId, codeNumber])
   @@index([eventId, status])
   @@index([eventId, createdAt(sort: Desc)])
   @@index([authorEmail])
+  @@index([eventId, authorEmailNormalized])
   @@index([registrationId])
   @@map("abstracts")
 }

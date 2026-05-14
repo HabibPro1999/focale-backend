@@ -43,6 +43,18 @@ function toReviewDto(review: AbstractReview & {
   };
 }
 
+function reviewScoreSpread(
+  reviews: Array<{ score: number | null }>,
+): { min: number | null; max: number | null; spread: number | null } {
+  const scores = reviews
+    .map((review) => review.score)
+    .filter((score): score is number => score !== null);
+  if (scores.length < 2) return { min: null, max: null, spread: null };
+  const min = Math.min(...scores);
+  const max = Math.max(...scores);
+  return { min, max, spread: max - min };
+}
+
 function formatAdminAbstract(abstract: Prisma.AbstractGetPayload<{
   include: {
     themes: { include: { theme: { select: { id: true; label: true } } } };
@@ -58,6 +70,8 @@ function formatAdminAbstract(abstract: Prisma.AbstractGetPayload<{
     title: getTitle(abstract.content),
     requestedType: abstract.requestedType,
     finalType: abstract.finalType,
+    presentedAt: abstract.presentedAt?.toISOString() ?? null,
+    presentedBy: abstract.presentedBy,
     authorFirstName: abstract.authorFirstName,
     authorLastName: abstract.authorLastName,
     authorEmail: abstract.authorEmail,
@@ -67,6 +81,7 @@ function formatAdminAbstract(abstract: Prisma.AbstractGetPayload<{
     themeLabels: abstract.themes.map((link) => link.theme.label),
     themeIds: abstract.themes.map((link) => link.theme.id),
     reviews: abstract.reviews.map(toReviewDto),
+    scoreSpread: reviewScoreSpread(abstract.reviews),
     createdAt: abstract.createdAt.toISOString(),
     updatedAt: abstract.updatedAt.toISOString(),
     lastEditedAt: abstract.lastEditedAt?.toISOString() ?? null,
@@ -77,17 +92,26 @@ async function allocateAbstractCode(
   tx: Tx,
   eventId: string,
   finalType: AbstractFinalType,
+  theme: { id: string; sortOrder: number },
 ): Promise<{ code: string; codeNumber: number }> {
-  // PRD-aligned choice: one numeric sequence per congress, with final-type suffix.
-  // This avoids duplicate numeric portions such as 001-OC and 001-PO.
+  const seeded = await tx.abstract.aggregate({
+    where: {
+      eventId,
+      finalType,
+      codeNumber: { not: null },
+      themes: { some: { themeId: theme.id } },
+    },
+    _max: { codeNumber: true },
+  });
+  const seedValue = seeded._max.codeNumber ?? 0;
   const counter = await tx.abstractCodeCounter.upsert({
-    where: { eventId },
+    where: { eventId_themeId_finalType: { eventId, themeId: theme.id, finalType } },
     update: { lastValue: { increment: 1 } },
-    create: { eventId, lastValue: 1 },
+    create: { eventId, themeId: theme.id, finalType, lastValue: seedValue + 1 },
     select: { lastValue: true },
   });
   const codeNumber = counter.lastValue;
-  const code = `${String(codeNumber).padStart(3, "0")}-${CODE_SUFFIX[finalType]}`;
+  const code = `${CODE_SUFFIX[finalType]}${theme.sortOrder}-${String(codeNumber).padStart(2, "0")}`;
   return { code, codeNumber };
 }
 
@@ -231,6 +255,12 @@ export async function finalizeAbstract(
           include: { reviewer: { select: { name: true } } },
           orderBy: { createdAt: "asc" },
         },
+        themes: {
+          include: {
+            theme: { select: { id: true, sortOrder: true } },
+          },
+          orderBy: { theme: { sortOrder: "asc" } },
+        },
       },
     });
 
@@ -259,12 +289,19 @@ export async function finalizeAbstract(
 
     let allocatedCode: { code: string; codeNumber: number } | null = null;
     if (input.decision === AbstractStatus.ACCEPTED) {
+      const codeTheme = existing.themes[0]?.theme;
+      if (!codeTheme) {
+        throw new AppError(
+          "Accepted abstracts must have a theme before a code can be allocated",
+          400,
+          ErrorCodes.ABSTRACT_INVALID_THEMES,
+        );
+      }
       if (existing.codeNumber != null) {
-        // Reuse the reserved number; recalculate suffix in case finalType changed
-        const code = `${String(existing.codeNumber).padStart(3, "0")}-${CODE_SUFFIX[input.finalType!]}`;
+        const code = `${CODE_SUFFIX[input.finalType!]}${codeTheme.sortOrder}-${String(existing.codeNumber).padStart(2, "0")}`;
         allocatedCode = { code, codeNumber: existing.codeNumber };
       } else {
-        allocatedCode = await allocateAbstractCode(tx, eventId, input.finalType!);
+        allocatedCode = await allocateAbstractCode(tx, eventId, input.finalType!, codeTheme);
       }
       nextData.code = allocatedCode.code;
       nextData.codeNumber = allocatedCode.codeNumber;
@@ -425,6 +462,62 @@ export async function reopenAbstract(
       averageScore: reopened.updated.averageScore,
       reviewCount: reopened.updated.reviewCount,
     },
+    ts: Date.now(),
+  });
+
+  return getAdminAbstract(eventId, abstractId);
+}
+
+export async function markAbstractPresented(
+  eventId: string,
+  abstractId: string,
+  presented: boolean,
+  performedBy: string,
+) {
+  const existing = await prisma.abstract.findUnique({
+    where: { id: abstractId },
+    select: {
+      id: true,
+      eventId: true,
+      status: true,
+      presentedAt: true,
+      event: { select: { clientId: true } },
+    },
+  });
+
+  if (!existing || existing.eventId !== eventId) {
+    throw new AppError("Abstract not found", 404, ErrorCodes.NOT_FOUND);
+  }
+  if (existing.status !== AbstractStatus.ACCEPTED) {
+    throw new AppError(
+      "Only accepted abstracts can be marked as presented",
+      409,
+      ErrorCodes.INVALID_STATUS_TRANSITION,
+    );
+  }
+
+  await prisma.abstract.update({
+    where: { id: abstractId },
+    data: presented
+      ? { presentedAt: new Date(), presentedBy: performedBy }
+      : { presentedAt: null, presentedBy: null },
+  });
+
+  await auditLog(prisma, {
+    entityType: "Abstract",
+    entityId: abstractId,
+    action: presented ? "mark_presented" : "unmark_presented",
+    changes: {
+      presentedAt: { old: existing.presentedAt, new: presented ? "now" : null },
+    },
+    performedBy,
+  });
+
+  eventBus.emit({
+    type: "abstract.presentationChanged",
+    clientId: existing.event.clientId,
+    eventId,
+    payload: { id: abstractId, presented },
     ts: Date.now(),
   });
 

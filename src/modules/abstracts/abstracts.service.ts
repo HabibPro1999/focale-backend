@@ -25,6 +25,10 @@ export function countWords(s: string): number {
     .filter((w) => w.length > 0).length;
 }
 
+function normalizeAuthorEmail(email: string): string {
+  return email.trim().toLocaleLowerCase();
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -135,6 +139,7 @@ function validateWordLimits(
 async function validateThemes(
   themeIds: string[],
   configId: string,
+  maxThemesPerAbstract?: number | null,
 ): Promise<void> {
   if (themeIds.length === 0) {
     throw new AppError(
@@ -144,18 +149,36 @@ async function validateThemes(
     );
   }
 
+  const uniqueThemeIds = [...new Set(themeIds)];
+  if (uniqueThemeIds.length !== themeIds.length) {
+    throw new AppError(
+      "Duplicate theme IDs are not allowed",
+      422,
+      ErrorCodes.ABSTRACT_INVALID_THEMES,
+    );
+  }
+
+  if (maxThemesPerAbstract && themeIds.length > maxThemesPerAbstract) {
+    throw new AppError(
+      `Too many themes selected: maximum ${maxThemesPerAbstract}`,
+      422,
+      ErrorCodes.ABSTRACT_TOO_MANY_THEMES,
+      { maxThemesPerAbstract },
+    );
+  }
+
   const themes = await prisma.abstractTheme.findMany({
     where: {
-      id: { in: themeIds },
+      id: { in: uniqueThemeIds },
       configId,
       active: true,
     },
     select: { id: true },
   });
 
-  if (themes.length !== themeIds.length) {
+  if (themes.length !== uniqueThemeIds.length) {
     const foundIds = new Set(themes.map((t) => t.id));
-    const invalid = themeIds.filter((id) => !foundIds.has(id));
+    const invalid = uniqueThemeIds.filter((id) => !foundIds.has(id));
     throw new AppError(
       `Invalid or inactive theme IDs: ${invalid.join(", ")}`,
       422,
@@ -228,7 +251,9 @@ export async function getPublicConfig(slug: string) {
   }
 
   const now = new Date();
-  const submissionOpen = !config.submissionDeadline || now <= config.submissionDeadline;
+  const submissionOpen =
+    (!config.submissionStartAt || now >= config.submissionStartAt) &&
+    (!config.submissionDeadline || now <= config.submissionDeadline);
 
   const sectionLimits = (config.sectionWordLimits ?? {}) as Record<string, number | null>;
 
@@ -240,6 +265,7 @@ export async function getPublicConfig(slug: string) {
     congressName: event.name,
     submissionMode: config.submissionMode,
     globalWordLimit: config.globalWordLimit,
+    maxThemesPerAbstract: config.maxThemesPerAbstract,
     sectionWordLimits: {
       introduction: sectionLimits.introduction ?? null,
       objective: sectionLimits.objective ?? null,
@@ -254,8 +280,10 @@ export async function getPublicConfig(slug: string) {
         : [],
     },
     deadlines: {
+      submissionStart: config.submissionStartAt?.toISOString() ?? null,
       submission: config.submissionDeadline?.toISOString() ?? null,
       editing: config.editingDeadline?.toISOString() ?? null,
+      scoringStart: config.scoringStartAt?.toISOString() ?? null,
       finalFile: config.finalFileDeadline?.toISOString() ?? null,
     },
     editingEnabled: config.editingEnabled,
@@ -285,9 +313,11 @@ export async function submitAbstract(
           submissionMode: true,
           globalWordLimit: true,
           sectionWordLimits: true,
+          submissionStartAt: true,
           submissionDeadline: true,
           editingDeadline: true,
           editingEnabled: true,
+          maxThemesPerAbstract: true,
           finalFileUploadEnabled: true,
           finalFileDeadline: true,
           additionalFieldsSchema: true,
@@ -309,6 +339,13 @@ export async function submitAbstract(
 
   // Deadline check
   const now = new Date();
+  if (config.submissionStartAt && now < config.submissionStartAt) {
+    throw new AppError(
+      "Abstract submissions are not open yet",
+      409,
+      ErrorCodes.ABSTRACT_SUBMISSIONS_NOT_OPEN,
+    );
+  }
   if (config.submissionDeadline && now > config.submissionDeadline) {
     throw new AppError(
       "Abstract submissions are closed",
@@ -324,7 +361,7 @@ export async function submitAbstract(
   validateWordLimits(body.content, config as unknown as AbstractConfig);
 
   // Theme validation
-  await validateThemes(body.themeIds, config.id);
+  await validateThemes(body.themeIds, config.id, config.maxThemesPerAbstract);
 
   // Additional fields validation
   const sanitizedAdditionalFields = validateAdditionalFields(
@@ -333,6 +370,21 @@ export async function submitAbstract(
   );
 
   const editToken = generateAbstractToken();
+  const authorEmailNormalized = normalizeAuthorEmail(body.authorEmail);
+  const duplicate = await prisma.abstract.findFirst({
+    where: {
+      eventId: event.id,
+      authorEmailNormalized,
+    },
+    select: { id: true },
+  });
+  if (duplicate) {
+    throw new AppError(
+      "An abstract has already been submitted for this first-author email",
+      409,
+      ErrorCodes.ABSTRACT_DUPLICATE_AUTHOR_EMAIL,
+    );
+  }
 
   // Transaction: create abstract + first revision + theme links
   const created = await prisma.$transaction(async (tx) => {
@@ -342,6 +394,7 @@ export async function submitAbstract(
         authorFirstName: body.authorFirstName,
         authorLastName: body.authorLastName,
         authorEmail: body.authorEmail,
+        authorEmailNormalized,
         authorPhone: body.authorPhone,
         requestedType: body.requestedType,
         content: body.content as unknown as Prisma.InputJsonValue,
@@ -515,6 +568,7 @@ export async function editAbstract(
               submissionMode: true,
               globalWordLimit: true,
               sectionWordLimits: true,
+              maxThemesPerAbstract: true,
               editingEnabled: true,
               editingDeadline: true,
               additionalFieldsSchema: true,
@@ -569,13 +623,29 @@ export async function editAbstract(
   // Re-validate everything
   validateMode(body.content.mode, config.submissionMode);
   validateWordLimits(body.content, config as unknown as AbstractConfig);
-  await validateThemes(body.themeIds, config.id);
+  await validateThemes(body.themeIds, config.id, config.maxThemesPerAbstract);
   const sanitizedAdditionalFields = validateAdditionalFields(
     body.additionalFieldsData,
     config.additionalFieldsSchema,
   );
 
   const nextRegistrationId = body.registrationId ?? abstract.registrationId;
+  const authorEmailNormalized = normalizeAuthorEmail(body.authorEmail);
+  const duplicate = await prisma.abstract.findFirst({
+    where: {
+      eventId: abstract.event.id,
+      authorEmailNormalized,
+      id: { not: id },
+    },
+    select: { id: true },
+  });
+  if (duplicate) {
+    throw new AppError(
+      "An abstract has already been submitted for this first-author email",
+      409,
+      ErrorCodes.ABSTRACT_DUPLICATE_AUTHOR_EMAIL,
+    );
+  }
   const revisionSnapshot = buildRevisionSnapshot(
     body,
     sanitizedAdditionalFields,
@@ -600,6 +670,7 @@ export async function editAbstract(
         authorFirstName: body.authorFirstName,
         authorLastName: body.authorLastName,
         authorEmail: body.authorEmail,
+        authorEmailNormalized,
         authorPhone: body.authorPhone,
         requestedType: body.requestedType,
         content: body.content as unknown as Prisma.InputJsonValue,

@@ -12,6 +12,7 @@ import { finalizeAbstract, reopenAbstract } from "./abstracts.admin.service.js";
 
 const eventId = "event-1";
 const abstractId = "abstract-1";
+const themeId = "theme-1";
 const performedBy = "admin-1";
 
 function makeAbstract(overrides: Record<string, unknown> = {}) {
@@ -43,7 +44,7 @@ function makeAbstract(overrides: Record<string, unknown> = {}) {
     registrationId: null,
     createdAt: new Date("2026-01-01T00:00:00.000Z"),
     updatedAt: new Date("2026-01-02T00:00:00.000Z"),
-    themes: [],
+    themes: [{ themeId, theme: { id: themeId, label: "Theme A", sortOrder: 1 } }],
     reviews: [],
     revisions: [],
     ...overrides,
@@ -51,7 +52,7 @@ function makeAbstract(overrides: Record<string, unknown> = {}) {
 }
 
 describe("abstracts admin service", () => {
-  it("finalizes accepted abstracts with a global event code and queues decision email", async () => {
+  it("finalizes accepted abstracts with a theme-scoped code and queues decision email", async () => {
     prismaMock.$transaction.mockImplementation(async (callback: any) => callback(prismaMock));
     prismaMock.abstract.findUnique
       .mockResolvedValueOnce(
@@ -70,16 +71,17 @@ describe("abstracts admin service", () => {
       .mockResolvedValueOnce(makeAbstract({
         status: AbstractStatus.ACCEPTED,
         finalType: "ORAL_COMMUNICATION",
-        code: "001-OC",
+        code: "OC1-01",
         codeNumber: 1,
       }) as any);
+    prismaMock.abstract.aggregate.mockResolvedValue({ _max: { codeNumber: null } } as any);
     prismaMock.abstractCodeCounter.upsert.mockResolvedValue({ lastValue: 1 } as any);
     prismaMock.abstract.update.mockResolvedValue({
       id: abstractId,
       eventId,
       status: AbstractStatus.ACCEPTED,
       finalType: "ORAL_COMMUNICATION",
-      code: "001-OC",
+      code: "OC1-01",
       codeNumber: 1,
       averageScore: 15,
       reviewCount: 2,
@@ -93,17 +95,17 @@ describe("abstracts admin service", () => {
     );
 
     expect(prismaMock.abstractCodeCounter.upsert).toHaveBeenCalledWith({
-      where: { eventId },
+      where: { eventId_themeId_finalType: { eventId, themeId, finalType: "ORAL_COMMUNICATION" } },
       update: { lastValue: { increment: 1 } },
-      create: { eventId, lastValue: 1 },
+      create: { eventId, themeId, finalType: "ORAL_COMMUNICATION", lastValue: 1 },
       select: { lastValue: true },
     });
     expect(prismaMock.abstract.update).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: abstractId },
+      where: expect.objectContaining({ id: abstractId }),
       data: expect.objectContaining({
         status: "ACCEPTED",
         finalType: "ORAL_COMMUNICATION",
-        code: "001-OC",
+        code: "OC1-01",
         codeNumber: 1,
       }),
     }));
@@ -111,7 +113,7 @@ describe("abstracts admin service", () => {
       trigger: "ABSTRACT_DECISION",
       abstractId,
     });
-    expect(result).toMatchObject({ status: "ACCEPTED", code: "001-OC" });
+    expect(result).toMatchObject({ status: "ACCEPTED", code: "OC1-01" });
   });
 
   it("requires a reopen before changing an already finalized abstract", async () => {

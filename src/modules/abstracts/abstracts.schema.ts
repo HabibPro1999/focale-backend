@@ -44,8 +44,10 @@ export const PatchConfigSchema = z.strictObject({
   submissionMode: z.enum(["FREE_TEXT", "STRUCTURED"]).optional(),
   globalWordLimit: z.union([z.number().int().min(0), z.null()]).optional(),
   sectionWordLimits: SectionWordLimitsSchema.optional(),
+  submissionStartAt: NullableDateTime,
   submissionDeadline: NullableDateTime,
   editingDeadline: NullableDateTime,
+  scoringStartAt: NullableDateTime,
   scoringDeadline: NullableDateTime,
   finalFileDeadline: NullableDateTime,
   editingEnabled: z.boolean().optional(),
@@ -53,7 +55,8 @@ export const PatchConfigSchema = z.strictObject({
   commentsSentToAuthor: z.boolean().optional(),
   finalFileUploadEnabled: z.boolean().optional(),
   reviewersPerAbstract: z.number().int().min(1).max(10).optional(),
-  divergenceThreshold: z.number().int().min(0).max(20).optional(),
+  divergenceThreshold: z.number().int().min(0).max(25).optional(),
+  maxThemesPerAbstract: z.union([z.number().int().min(1).max(20), z.null()]).optional(),
   distributeByTheme: z.boolean().optional(),
   bookFontFamily: z.string().min(1).max(100).optional(),
   bookFontSize: z.number().int().min(6).max(72).optional(),
@@ -175,16 +178,22 @@ export const ListAbstractsQuerySchema = z.strictObject({
 export const FinalizeAbstractSchema = z.discriminatedUnion("decision", [
   z.strictObject({
     decision: z.literal("ACCEPTED"),
-    finalType: z.enum(["ORAL_COMMUNICATION", "POSTER"]),
+    finalType: z.enum(["CONFERENCE", "ORAL_COMMUNICATION", "POSTER"]),
   }),
   z.strictObject({
     decision: z.enum(["REJECTED", "PENDING"]),
-    finalType: z.enum(["ORAL_COMMUNICATION", "POSTER"]).optional(),
+    finalType: z.enum(["CONFERENCE", "ORAL_COMMUNICATION", "POSTER"]).optional(),
   }),
 ]);
 
 export type ListAbstractsQuery = z.infer<typeof ListAbstractsQuerySchema>;
 export type FinalizeAbstractInput = z.infer<typeof FinalizeAbstractSchema>;
+
+export const MarkAbstractPresentedSchema = z.strictObject({
+  presented: z.boolean(),
+});
+
+export type MarkAbstractPresentedInput = z.infer<typeof MarkAbstractPresentedSchema>;
 // ============================================================================
 // Committee Schemas
 // ============================================================================
@@ -239,7 +248,7 @@ export const ReviewAbstractSchema = z.strictObject({
   score: z
     .number()
     .min(0)
-    .max(20)
+    .max(25)
     .refine((value) => Number.isInteger(value * 2), {
       message: "Score must be a multiple of 0.5",
     }),

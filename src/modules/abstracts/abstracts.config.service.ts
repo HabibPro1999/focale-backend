@@ -80,6 +80,8 @@ export async function updateConfig(
     data.reviewersPerAbstract = fields.reviewersPerAbstract;
   if (fields.divergenceThreshold !== undefined)
     data.divergenceThreshold = fields.divergenceThreshold;
+  if (fields.maxThemesPerAbstract !== undefined)
+    data.maxThemesPerAbstract = fields.maxThemesPerAbstract;
   if (fields.distributeByTheme !== undefined)
     data.distributeByTheme = fields.distributeByTheme;
   if (fields.bookFontFamily !== undefined)
@@ -94,8 +96,10 @@ export async function updateConfig(
 
   // Deadlines: accept ISO string or null → Date | null
   for (const key of [
+    "submissionStartAt",
     "submissionDeadline",
     "editingDeadline",
+    "scoringStartAt",
     "scoringDeadline",
     "finalFileDeadline",
   ] as const) {

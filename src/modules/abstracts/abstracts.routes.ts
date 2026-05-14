@@ -15,6 +15,7 @@ import {
   AbstractAdminParamSchema,
   ListAbstractsQuerySchema,
   FinalizeAbstractSchema,
+  MarkAbstractPresentedSchema,
   AbstractBookJobParamSchema,
   type PatchConfigInput,
   type CreateThemeInput,
@@ -22,6 +23,7 @@ import {
   type AdditionalFieldsInput,
   type ListAbstractsQuery,
   type FinalizeAbstractInput,
+  type MarkAbstractPresentedInput,
 } from "./abstracts.schema.js";
 import {
   getOrCreateConfig,
@@ -37,6 +39,7 @@ import {
   finalizeAbstract,
   getAdminAbstract,
   listAdminAbstracts,
+  markAbstractPresented,
   reopenAbstract,
 } from "./abstracts.admin.service.js";
 import {
@@ -261,6 +264,30 @@ export async function abstractsRoutes(app: AppInstance): Promise<void> {
       const result = await reopenAbstract(
         request.params.eventId,
         request.params.abstractId,
+        request.user!.id,
+      );
+      return reply.send(result);
+    },
+  );
+
+  // POST /api/events/:eventId/abstracts/:abstractId/presented
+  app.post<{
+    Params: { eventId: string; abstractId: string };
+    Body: MarkAbstractPresentedInput;
+  }>(
+    "/events/:eventId/abstracts/:abstractId/presented",
+    {
+      schema: {
+        params: AbstractAdminParamSchema,
+        body: MarkAbstractPresentedSchema,
+      },
+    },
+    async (request, reply) => {
+      await resolveEvent(request);
+      const result = await markAbstractPresented(
+        request.params.eventId,
+        request.params.abstractId,
+        request.body.presented,
         request.user!.id,
       );
       return reply.send(result);

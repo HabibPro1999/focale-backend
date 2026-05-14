@@ -14,11 +14,13 @@ import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { auditLog } from "@shared/utils/audit.js";
 import { logger } from "@shared/utils/logger.js";
-import { FINAL_STATUSES } from "./abstracts.constants.js";
+import { FINAL_STATUSES, FINAL_TYPE_SORT_ORDER } from "./abstracts.constants.js";
 
 const A4: [number, number] = [595.28, 841.89];
 const MARGIN = 54;
-const CONTENT_WIDTH = A4[0] - MARGIN * 2;
+const COLUMN_GAP = 18;
+const COLUMN_WIDTH = (A4[0] - MARGIN * 2 - COLUMN_GAP) / 2;
+const FULL_WIDTH = A4[0] - MARGIN * 2;
 const SIGNED_URL_TTL_SECONDS = 60 * 60;
 const ABSTRACT_BOOK_LEASE_MS = 60 * 60 * 1000;
 const ABSTRACT_BOOK_HEARTBEAT_MS = 60 * 1000;
@@ -132,6 +134,7 @@ function getAuthorLine(abstract: BookAbstract): string {
 }
 
 function typeLabel(value: string | null): string {
+  if (value === "CONFERENCE") return "Conference";
   if (value === "ORAL_COMMUNICATION") return "Oral Communication";
   if (value === "POSTER") return "Poster";
   return "—";
@@ -151,9 +154,12 @@ function sortAbstracts(abstracts: BookAbstract[], order: AbstractBookOrder): Boo
   }
   if (order === AbstractBookOrder.BY_THEME) {
     return copy.sort((a, b) => {
-      const themeA = themeLabel(a).toLocaleLowerCase();
-      const themeB = themeLabel(b).toLocaleLowerCase();
-      if (themeA !== themeB) return themeA.localeCompare(themeB);
+      const themeA = a.themes[0]?.theme.sortOrder ?? 0;
+      const themeB = b.themes[0]?.theme.sortOrder ?? 0;
+      if (themeA !== themeB) return themeA - themeB;
+      const typeA = a.finalType ? FINAL_TYPE_SORT_ORDER[a.finalType] : 99;
+      const typeB = b.finalType ? FINAL_TYPE_SORT_ORDER[b.finalType] : 99;
+      if (typeA !== typeB) return typeA - typeB;
       return (a.codeNumber ?? 0) - (b.codeNumber ?? 0);
     });
   }
@@ -198,6 +204,7 @@ function wrapText(text: string, font: PDFFont, size: number, maxWidth: number): 
 class PdfWriter {
   private page: PDFPage;
   private y: number;
+  private column = 0;
 
   constructor(
     private readonly pdfDoc: PDFDocument,
@@ -213,10 +220,24 @@ class PdfWriter {
   addPage() {
     this.page = this.pdfDoc.addPage(A4);
     this.y = A4[1] - MARGIN;
+    this.column = 0;
+  }
+
+  private columnX() {
+    return MARGIN + this.column * (COLUMN_WIDTH + COLUMN_GAP);
+  }
+
+  private nextColumnOrPage() {
+    if (this.column === 0) {
+      this.column = 1;
+      this.y = A4[1] - MARGIN;
+    } else {
+      this.addPage();
+    }
   }
 
   ensure(height: number) {
-    if (this.y - height < MARGIN) this.addPage();
+    if (this.y - height < MARGIN) this.nextColumnOrPage();
   }
 
   move(delta: number) {
@@ -230,7 +251,33 @@ class PdfWriter {
     const size = options?.size ?? this.fontSize;
     const font = options?.bold ? this.boldFont : this.regularFont;
     const lineHeight = Math.max(size * 1.25, this.lineHeight);
-    const lines = wrapText(text, font, size, CONTENT_WIDTH);
+    const lines = wrapText(text, font, size, COLUMN_WIDTH);
+    this.ensure(Math.max(lineHeight, lines.length * lineHeight));
+    for (const line of lines) {
+      if (this.y - lineHeight < MARGIN) this.nextColumnOrPage();
+      if (line) {
+        this.page.drawText(line, {
+          x: this.columnX(),
+          y: this.y,
+          size,
+          font,
+          color: options?.color ?? rgb(0.1, 0.1, 0.1),
+        });
+      }
+      this.y -= lineHeight;
+    }
+    this.y -= options?.gapAfter ?? 0;
+  }
+
+  fullWidthText(
+    text: string,
+    options?: { bold?: boolean; size?: number; color?: ReturnType<typeof rgb>; gapAfter?: number },
+  ) {
+    if (this.column !== 0) this.addPage();
+    const size = options?.size ?? this.fontSize;
+    const font = options?.bold ? this.boldFont : this.regularFont;
+    const lineHeight = Math.max(size * 1.25, this.lineHeight);
+    const lines = wrapText(text, font, size, FULL_WIDTH);
     this.ensure(Math.max(lineHeight, lines.length * lineHeight));
     for (const line of lines) {
       if (this.y - lineHeight < MARGIN) this.addPage();
@@ -295,17 +342,28 @@ export async function generateAbstractBookPdf(eventId: string): Promise<{ buffer
     config.bookFontSize * config.bookLineSpacing,
   );
 
-  writer.text(event.name, { bold: true, size: 22, gapAfter: 8 });
-  writer.text("Abstract Book", { bold: true, size: 16, gapAfter: 20, color: rgb(0.25, 0.25, 0.25) });
+  writer.fullWidthText(event.name, { bold: true, size: 22, gapAfter: 8 });
+  writer.fullWidthText("Abstract Book", { bold: true, size: 16, gapAfter: 20, color: rgb(0.25, 0.25, 0.25) });
 
   if (abstracts.length === 0) {
     writer.text("No accepted abstracts are available for this book.", { gapAfter: 10 });
   }
 
+  let currentGroup = "";
   abstracts.forEach((abstract, index) => {
     if (index > 0) writer.move(8);
+    const group = `${themeLabel(abstract) || "No theme"} · ${typeLabel(abstract.finalType)}`;
+    if (config.bookOrder === AbstractBookOrder.BY_THEME && group !== currentGroup) {
+      currentGroup = group;
+      writer.text(group, {
+        bold: true,
+        size: Math.max(9, config.bookFontSize + 1),
+        color: rgb(0.18, 0.18, 0.18),
+        gapAfter: 6,
+      });
+    }
     writer.ensure(120);
-    writer.text(`${abstract.code ?? "No code"} — ${getContentTitle(abstract.content)}`, {
+    writer.text(`${abstract.code ?? "No code"} ${getContentTitle(abstract.content)}`, {
       bold: true,
       size: config.bookFontSize + 2,
       gapAfter: 6,
@@ -313,7 +371,7 @@ export async function generateAbstractBookPdf(eventId: string): Promise<{ buffer
     if (config.bookIncludeAuthorNames) {
       writer.text(getAuthorLine(abstract), { bold: true, gapAfter: 4 });
     }
-    writer.text(`Type: ${typeLabel(abstract.finalType)}${themeLabel(abstract) ? ` · Themes: ${themeLabel(abstract)}` : ""}`, {
+    writer.text(`Correspondence: ${abstract.authorEmail}`, {
       size: Math.max(8, config.bookFontSize - 1),
       color: rgb(0.35, 0.35, 0.35),
       gapAfter: 8,
