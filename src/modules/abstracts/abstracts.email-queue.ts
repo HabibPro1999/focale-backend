@@ -5,7 +5,8 @@ import {
   buildAbstractEmailContext,
   type AbstractForEmail,
 } from "./abstracts.email-context.js";
-import type { AbstractEmailTrigger } from "@/generated/prisma/client.js";
+import { Prisma, type AbstractEmailTrigger } from "@/generated/prisma/client.js";
+import { getPrismaUniqueTarget } from "@shared/errors/prisma-error.js";
 
 // Plain-text fallback templates used when no admin template exists yet.
 const FALLBACK_SUBJECTS: Record<string, string> = {
@@ -90,14 +91,42 @@ FALLBACK_BODIES.ABSTRACT_FINAL_FILE_REQUEST = [
   "Thank you.",
 ].join("\n");
 
-function resolveVars(
-  template: string,
-  ctx: Record<string, unknown>,
-): string {
+function resolveVars(template: string, ctx: Record<string, unknown>): string {
   return template.replace(/\{\{(\w+)\}\}/g, (_m, key) => {
     const value = ctx[key];
     return value === null || value === undefined ? "" : String(value);
   });
+}
+
+function isAbstractSubmissionAckDedupeViolation(
+  error: unknown,
+  trigger: AbstractEmailTrigger,
+): boolean {
+  if (
+    trigger !== "ABSTRACT_SUBMISSION_ACK" ||
+    !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+    error.code !== "P2002"
+  ) {
+    return false;
+  }
+
+  const { fields, names } = getPrismaUniqueTarget(error);
+  const hasAbstractId = fields.some(
+    (field) => field === "abstractId" || field === "abstract_id",
+  );
+  const hasAbstractTrigger = fields.some(
+    (field) => field === "abstractTrigger" || field === "abstract_trigger",
+  );
+  const hasRecipientEmail = fields.some(
+    (field) => field === "recipientEmail" || field === "recipient_email",
+  );
+
+  return (
+    (hasAbstractId && hasAbstractTrigger && hasRecipientEmail) ||
+    names.some((name) =>
+      name.includes("email_logs_abstract_submission_ack_active_key"),
+    )
+  );
 }
 
 /**
@@ -184,16 +213,27 @@ export async function queueAbstractEmail(input: {
     }));
 
   if (clientTemplate) {
-    await queueEmail({
-      templateId: clientTemplate.id,
-      recipientEmail: recipientOverride?.email ?? abstract.authorEmail,
-      recipientName:
-        recipientOverride?.name ??
-        `${abstract.authorFirstName} ${abstract.authorLastName}`.trim(),
-      contextSnapshot: context,
-      abstractId,
-      abstractTrigger: trigger,
-    });
+    try {
+      await queueEmail({
+        templateId: clientTemplate.id,
+        recipientEmail: recipientOverride?.email ?? abstract.authorEmail,
+        recipientName:
+          recipientOverride?.name ??
+          `${abstract.authorFirstName} ${abstract.authorLastName}`.trim(),
+        contextSnapshot: context,
+        abstractId,
+        abstractTrigger: trigger,
+      });
+    } catch (error) {
+      if (isAbstractSubmissionAckDedupeViolation(error, trigger)) {
+        logger.info(
+          { trigger, abstractId },
+          "Abstract email already queued, skipping duplicate",
+        );
+        return;
+      }
+      throw error;
+    }
 
     logger.info(
       { trigger, abstractId, templateId: clientTemplate.id },
@@ -217,22 +257,33 @@ export async function queueAbstractEmail(input: {
   const resolvedSubject = resolveVars(fallbackSubject, context);
   const resolvedBody = resolveVars(fallbackBody, context);
 
-  await prisma.emailLog.create({
-    data: {
-      recipientEmail: recipientOverride?.email ?? abstract.authorEmail,
-      recipientName:
-        recipientOverride?.name ??
-        `${abstract.authorFirstName} ${abstract.authorLastName}`.trim(),
-      abstractId,
-      abstractTrigger: trigger,
-      subject: resolvedSubject,
-      status: "QUEUED",
-      contextSnapshot: {
-        ...context,
-        _fallbackPlainBody: resolvedBody,
+  try {
+    await prisma.emailLog.create({
+      data: {
+        recipientEmail: recipientOverride?.email ?? abstract.authorEmail,
+        recipientName:
+          recipientOverride?.name ??
+          `${abstract.authorFirstName} ${abstract.authorLastName}`.trim(),
+        abstractId,
+        abstractTrigger: trigger,
+        subject: resolvedSubject,
+        status: "QUEUED",
+        contextSnapshot: {
+          ...context,
+          _fallbackPlainBody: resolvedBody,
+        },
       },
-    },
-  });
+    });
+  } catch (error) {
+    if (isAbstractSubmissionAckDedupeViolation(error, trigger)) {
+      logger.info(
+        { trigger, abstractId },
+        "Abstract email already queued, skipping duplicate",
+      );
+      return;
+    }
+    throw error;
+  }
 
   logger.info(
     { trigger, abstractId },

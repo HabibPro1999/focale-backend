@@ -2,7 +2,7 @@ import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { auditLog } from "@shared/utils/audit.js";
-import { eventBus } from "@core/events/bus.js";
+import { enqueueRealtimeOutboxEvent } from "@core/outbox";
 
 const CHECKIN_ELIGIBLE_STATUSES = ["PAID", "SPONSORED", "WAIVED"];
 
@@ -89,31 +89,35 @@ export async function checkIn(
       };
     }
 
-    const checkInRecord = await prisma.accessCheckIn.create({
-      data: {
-        registrationId,
-        accessId,
-        checkedInBy: userId,
-      },
-    });
-
-    await auditLog(prisma, {
-      entityType: "AccessCheckIn",
-      entityId: checkInRecord.id,
-      action: "CHECK_IN",
-      changes: { accessId: { old: null, new: accessId } },
-      performedBy: userId,
-    });
-
-    if (registration.event?.clientId) {
-      eventBus.emit({
-        type: "registration.checkedIn",
-        clientId: registration.event.clientId,
-        eventId: registration.eventId,
-        payload: { id: registration.id, accessId },
-        ts: Date.now(),
+    const checkInRecord = await prisma.$transaction(async (tx) => {
+      const created = await tx.accessCheckIn.create({
+        data: {
+          registrationId,
+          accessId,
+          checkedInBy: userId,
+        },
       });
-    }
+
+      await auditLog(tx, {
+        entityType: "AccessCheckIn",
+        entityId: created.id,
+        action: "CHECK_IN",
+        changes: { accessId: { old: null, new: accessId } },
+        performedBy: userId,
+      });
+
+      if (registration.event?.clientId) {
+        await enqueueRealtimeOutboxEvent(tx, {
+          type: "registration.checkedIn",
+          clientId: registration.event.clientId,
+          eventId: registration.eventId,
+          payload: { id: registration.id, accessId },
+          ts: Date.now(),
+        });
+      }
+
+      return created;
+    });
 
     return {
       success: true,
@@ -148,28 +152,30 @@ export async function checkIn(
   }
 
   const now = new Date();
-  await prisma.registration.update({
-    where: { id: registrationId },
-    data: { checkedInAt: now, checkedInBy: userId },
-  });
-
-  await auditLog(prisma, {
-    entityType: "Registration",
-    entityId: registrationId,
-    action: "CHECK_IN",
-    changes: { checkedInAt: { old: null, new: now.toISOString() } },
-    performedBy: userId,
-  });
-
-  if (registration.event?.clientId) {
-    eventBus.emit({
-      type: "registration.checkedIn",
-      clientId: registration.event.clientId,
-      eventId: registration.eventId,
-      payload: { id: registration.id },
-      ts: Date.now(),
+  await prisma.$transaction(async (tx) => {
+    await tx.registration.update({
+      where: { id: registrationId },
+      data: { checkedInAt: now, checkedInBy: userId },
     });
-  }
+
+    await auditLog(tx, {
+      entityType: "Registration",
+      entityId: registrationId,
+      action: "CHECK_IN",
+      changes: { checkedInAt: { old: null, new: now.toISOString() } },
+      performedBy: userId,
+    });
+
+    if (registration.event?.clientId) {
+      await enqueueRealtimeOutboxEvent(tx, {
+        type: "registration.checkedIn",
+        clientId: registration.event.clientId,
+        eventId: registration.eventId,
+        payload: { id: registration.id },
+        ts: Date.now(),
+      });
+    }
+  });
 
   return {
     success: true,

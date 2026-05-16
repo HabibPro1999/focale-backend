@@ -11,8 +11,11 @@ import { UserRole } from "@shared/constants/roles.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { auditLog } from "@shared/utils/audit.js";
-import { eventBus } from "@core/events/bus.js";
-import { queueAbstractEmail } from "./abstracts.email-queue.js";
+import type { TxClient } from "@shared/types/prisma.js";
+import {
+  enqueueAbstractEmailOutboxEvent,
+  enqueueRealtimeOutboxEvent,
+} from "@core/outbox";
 import type {
   AddCommitteeMemberInput,
   AssignReviewersInput,
@@ -120,6 +123,7 @@ function getScoreDivergence(scores: number[]): { diverged: boolean; min: number 
 }
 
 async function notifyScoreDivergence(input: {
+  db: typeof prisma | TxClient;
   abstractId: string;
   eventId: string;
   clientId: string;
@@ -132,7 +136,7 @@ async function notifyScoreDivergence(input: {
   if (!diverged || min === null || max === null || max - min < input.threshold) return;
 
   const since = new Date(Date.now() - ONE_HOUR_MS);
-  const existing = await prisma.emailLog.findFirst({
+  const existing = await input.db.emailLog.findFirst({
     where: {
       abstractId: input.abstractId,
       abstractTrigger: "ABSTRACT_SCORE_DIVERGENCE",
@@ -142,7 +146,7 @@ async function notifyScoreDivergence(input: {
   });
   if (existing) return;
 
-  const admins = await prisma.user.findMany({
+  const admins = await input.db.user.findMany({
     where: {
       clientId: input.clientId,
       role: UserRole.CLIENT_ADMIN,
@@ -153,22 +157,26 @@ async function notifyScoreDivergence(input: {
 
   await Promise.all(
     admins.map((admin) =>
-      queueAbstractEmail({
-        trigger: "ABSTRACT_SCORE_DIVERGENCE",
-        abstractId: input.abstractId,
-        recipientOverride: { email: admin.email, name: admin.name },
-        extraContext: {
-          averageScore: input.averageScore,
-          reviewCount: input.reviewCount,
-          minScore: min,
-          maxScore: max,
-          divergenceThreshold: input.threshold,
+      enqueueAbstractEmailOutboxEvent(
+        input.db,
+        {
+          trigger: "ABSTRACT_SCORE_DIVERGENCE",
+          abstractId: input.abstractId,
+          recipientOverride: { email: admin.email, name: admin.name },
+          extraContext: {
+            averageScore: input.averageScore,
+            reviewCount: input.reviewCount,
+            minScore: min,
+            maxScore: max,
+            divergenceThreshold: input.threshold,
+          },
         },
-      }),
+        `email:abstract:ABSTRACT_SCORE_DIVERGENCE:${input.abstractId}:${admin.email}`,
+      ),
     ),
   );
 
-  eventBus.emit({
+  await enqueueRealtimeOutboxEvent(input.db, {
     type: "abstract.scoreDiverged",
     clientId: input.clientId,
     eventId: input.eventId,
@@ -607,34 +615,35 @@ export async function reviewAssignedAbstract(
       performedBy: reviewerId,
     });
 
+    if (updatedAbstract.status === AbstractStatus.REVIEW_COMPLETE) {
+      await enqueueRealtimeOutboxEvent(tx, {
+        type: "abstract.reviewCompleted",
+        clientId: abstract.event.clientId,
+        eventId: abstract.eventId,
+        payload: {
+          id: updatedAbstract.id,
+          status: updatedAbstract.status,
+          averageScore: updatedAbstract.averageScore,
+          reviewCount: updatedAbstract.reviewCount,
+        },
+        ts: Date.now(),
+      });
+    }
+
+    await notifyScoreDivergence({
+      db: tx,
+      abstractId,
+      eventId: abstract.eventId,
+      clientId: abstract.event.clientId,
+      averageScore: updatedAbstract.averageScore,
+      reviewCount: updatedAbstract.reviewCount,
+      scores,
+      threshold: abstract.event.abstractConfig?.divergenceThreshold ?? 6,
+    });
+
     return { ...updatedAbstract, scores };
   });
 
-
-  if (result.status === AbstractStatus.REVIEW_COMPLETE) {
-    eventBus.emit({
-      type: "abstract.reviewCompleted",
-      clientId: abstract.event.clientId,
-      eventId: abstract.eventId,
-      payload: {
-        id: result.id,
-        status: result.status,
-        averageScore: result.averageScore,
-        reviewCount: result.reviewCount,
-      },
-      ts: Date.now(),
-    });
-  }
-
-  await notifyScoreDivergence({
-    abstractId,
-    eventId: abstract.eventId,
-    clientId: abstract.event.clientId,
-    averageScore: result.averageScore,
-    reviewCount: result.reviewCount,
-    scores: result.scores,
-    threshold: abstract.event.abstractConfig?.divergenceThreshold ?? 6,
-  });
   const { scores: _scores, ...response } = result;
   void _scores;
   return response;

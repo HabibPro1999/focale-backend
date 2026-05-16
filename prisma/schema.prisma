@@ -693,6 +693,8 @@ model EmailLog {
   abstract     Abstract?      @relation(fields: [abstractId], references: [id], onDelete: SetNull)
 
   // Indexes
+  // Partial unique indexes for active trigger dedupe are created in raw SQL
+  // migration because Prisma cannot express filtered uniqueness by status.
   @@index([registrationId])
   @@index([abstractId])
   @@index([abstractId, abstractTrigger, queuedAt])
@@ -710,6 +712,43 @@ model EmailLog {
 // ============================================================================
 // AUDIT MODULE
 // ============================================================================
+
+model OutboxEvent {
+  id String @id @default(uuid())
+
+  type          String  // Handler key, e.g. realtime.emit or email.triggered
+  aggregateType String? @map("aggregate_type")
+  aggregateId   String? @map("aggregate_id")
+  clientId      String? @map("client_id")
+  eventId       String? @map("event_id")
+  dedupeKey     String? @map("dedupe_key")
+  payload       Json
+
+  status       String @default("PENDING")
+  attemptCount Int    @default(0) @map("attempt_count")
+  maxAttempts  Int    @default(5) @map("max_attempts")
+
+  lastAttemptAt DateTime? @map("last_attempt_at")
+  nextAttemptAt DateTime? @map("next_attempt_at")
+  lockedAt      DateTime? @map("locked_at")
+  lockedUntil   DateTime? @map("locked_until")
+  lockedBy      String?   @map("locked_by")
+  errorMessage  String?   @map("error_message")
+
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  processedAt DateTime? @map("processed_at")
+
+  // Partial unique index for non-null dedupe keys is created in raw SQL
+  // migration because CockroachDB treats nullable unique values differently.
+  @@index([status, nextAttemptAt, createdAt])
+  @@index([status, lockedUntil])
+  @@index([lockedBy])
+  @@index([type])
+  @@index([aggregateType, aggregateId])
+  @@index([clientId, eventId])
+  @@map("outbox_events")
+}
 
 model AuditLog {
   id          String   @id @default(uuid())
@@ -955,6 +994,8 @@ model Abstract {
   emailLogs    EmailLog[]
   reviews      AbstractReview[]
 
+  // Partial unique index for non-null normalized author emails is created in
+  // raw SQL migration: abstracts_event_id_author_email_normalized_key.
   @@unique([eventId, code])
   @@index([eventId, status])
   @@index([eventId, createdAt(sort: Desc)])

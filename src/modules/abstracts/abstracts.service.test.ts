@@ -2,8 +2,12 @@
 import { describe, it, expect, vi } from "vitest";
 import { prismaMock } from "../../../tests/mocks/prisma.js";
 import { faker } from "@faker-js/faker";
+import { Prisma } from "@/generated/prisma/client.js";
 import { countWords } from "./abstracts.service.js";
-import { verifyAbstractToken, generateAbstractToken } from "./abstract-token.js";
+import {
+  verifyAbstractToken,
+  generateAbstractToken,
+} from "./abstract-token.js";
 
 // Mock audit
 vi.mock("@shared/utils/audit.js", () => ({
@@ -15,17 +19,11 @@ vi.mock("@clients", () => ({
   assertClientModuleEnabled: vi.fn(),
 }));
 
-// Mock email queue
-vi.mock("./abstracts.email-queue.js", () => ({
-  queueAbstractEmail: vi.fn(),
-}));
-
 import {
   getPublicConfig,
   submitAbstract,
   editAbstract,
 } from "./abstracts.service.js";
-import { queueAbstractEmail } from "./abstracts.email-queue.js";
 
 // ============================================================================
 // Factories
@@ -86,7 +84,11 @@ function makeSubmitBody(overrides: Record<string, unknown> = {}) {
     coAuthors: [],
     requestedType: "ORAL_COMMUNICATION" as const,
     themeIds: [faker.string.uuid()],
-    content: { mode: "FREE_TEXT" as const, title: "My Abstract", body: "Some body text" },
+    content: {
+      mode: "FREE_TEXT" as const,
+      title: "My Abstract",
+      body: "Some body text",
+    },
     additionalFieldsData: {},
     registrationId: null as string | null,
     linkBaseUrl: "https://events.example.com",
@@ -125,6 +127,14 @@ function makeAbstract(overrides: Record<string, unknown> = {}) {
     updatedAt: new Date(),
     ...overrides,
   };
+}
+
+function prismaUniqueError(meta: Record<string, unknown>) {
+  return new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+    code: "P2002",
+    clientVersion: "7.2.0",
+    meta,
+  });
 }
 
 // ============================================================================
@@ -254,7 +264,15 @@ describe("submitAbstract", () => {
     } as any);
 
     prismaMock.abstractTheme.findMany.mockResolvedValue([
-      { id: themeId, configId, label: "Theme A", sortOrder: 0, active: true, createdAt: new Date(), updatedAt: new Date() },
+      {
+        id: themeId,
+        configId,
+        label: "Theme A",
+        sortOrder: 0,
+        active: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
     ] as any);
 
     const abstract = makeAbstract();
@@ -308,10 +326,36 @@ describe("submitAbstract", () => {
         }),
       }),
     });
-    expect(queueAbstractEmail).toHaveBeenCalledWith({
-      trigger: "ABSTRACT_SUBMISSION_ACK",
-      abstractId: abstract.id,
+    expect(prismaMock.outboxEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: "email.abstract",
+          dedupeKey: `email:abstract:ABSTRACT_SUBMISSION_ACK:${abstract.id}`,
+          payload: {
+            trigger: "ABSTRACT_SUBMISSION_ACK",
+            abstractId: abstract.id,
+          },
+        }),
+      }),
+    );
+  });
+
+  it("maps DB duplicate author-email races to the existing conflict", async () => {
+    mockSubmitSetup();
+    prismaMock.$transaction.mockRejectedValueOnce(
+      prismaUniqueError({
+        target: ["event_id", "author_email_normalized"],
+      }) as never,
+    );
+    const body = makeSubmitBody({ themeIds: [themeId] });
+
+    await expect(submitAbstract(slug, body)).rejects.toMatchObject({
+      statusCode: 409,
+      code: "ABS_18010",
+      message:
+        "An abstract has already been submitted for this first-author email",
     });
+    expect(prismaMock.outboxEvent.create).not.toHaveBeenCalled();
   });
 
   it("rejects when submission deadline has passed", async () => {
@@ -353,7 +397,12 @@ describe("submitAbstract", () => {
   it("rejects when mandatory additional field is missing (422)", async () => {
     mockSubmitSetup({
       additionalFieldsSchema: [
-        { id: "institution", type: "text", label: "Institution", required: true },
+        {
+          id: "institution",
+          type: "text",
+          label: "Institution",
+          required: true,
+        },
       ],
     });
     const body = makeSubmitBody({
@@ -411,7 +460,15 @@ describe("editAbstract", () => {
     prismaMock.abstract.findUnique.mockResolvedValue(abstract as any);
 
     prismaMock.abstractTheme.findMany.mockResolvedValue([
-      { id: themeId, configId, label: "Theme A", sortOrder: 0, active: true, createdAt: new Date(), updatedAt: new Date() },
+      {
+        id: themeId,
+        configId,
+        label: "Theme A",
+        sortOrder: 0,
+        active: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
     ] as any);
 
     const revisionCreate = vi.fn();
@@ -421,7 +478,15 @@ describe("editAbstract", () => {
           findFirst: vi.fn().mockResolvedValue({ revisionNo: 1 }),
           create: revisionCreate,
         },
-        abstract: { update: vi.fn().mockResolvedValue({ ...abstract, contentVersion: 2, lastEditedAt: new Date() }) },
+        abstract: {
+          update: vi
+            .fn()
+            .mockResolvedValue({
+              ...abstract,
+              contentVersion: 2,
+              lastEditedAt: new Date(),
+            }),
+        },
         abstractThemeOnAbstract: {
           deleteMany: vi.fn(),
           createMany: vi.fn(),
@@ -461,7 +526,12 @@ describe("editAbstract", () => {
       additionalFieldsData: { institution: "Edited Hospital" },
     });
 
-    const result = await editAbstract(abstract.id, editToken, body, "203.0.113.11");
+    const result = await editAbstract(
+      abstract.id,
+      editToken,
+      body,
+      "203.0.113.11",
+    );
 
     expect(result.id).toBe(abstract.id);
     expect(revisionCreate).toHaveBeenCalledWith({
@@ -484,17 +554,50 @@ describe("editAbstract", () => {
         }),
       }),
     });
-    expect(queueAbstractEmail).toHaveBeenCalledWith({
-      trigger: "ABSTRACT_EDIT_ACK",
-      abstractId: abstract.id,
+    expect(prismaMock.outboxEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: "email.abstract",
+          dedupeKey: `email:abstract:ABSTRACT_EDIT_ACK:${abstract.id}`,
+          payload: {
+            trigger: "ABSTRACT_EDIT_ACK",
+            abstractId: abstract.id,
+          },
+        }),
+      }),
+    );
+  });
+
+  it("maps DB duplicate author-email races during edit to the existing conflict", async () => {
+    const { abstract, editToken } = mockEditSetup();
+    prismaMock.$transaction.mockRejectedValueOnce(
+      prismaUniqueError({
+        target: "abstracts_event_id_author_email_normalized_key",
+      }) as never,
+    );
+    const body = makeSubmitBody({ themeIds: [themeId] });
+
+    await expect(
+      editAbstract(abstract.id, editToken, body),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "ABS_18010",
+      message:
+        "An abstract has already been submitted for this first-author email",
     });
+    expect(prismaMock.outboxEvent.create).not.toHaveBeenCalled();
   });
 
   it("rejects when editing is disabled (409)", async () => {
-    const { abstract, editToken } = mockEditSetup({}, { editingEnabled: false });
+    const { abstract, editToken } = mockEditSetup(
+      {},
+      { editingEnabled: false },
+    );
     const body = makeSubmitBody({ themeIds: [themeId] });
 
-    await expect(editAbstract(abstract.id, editToken, body)).rejects.toMatchObject({
+    await expect(
+      editAbstract(abstract.id, editToken, body),
+    ).rejects.toMatchObject({
       statusCode: 409,
       code: "ABS_18006",
     });
@@ -507,7 +610,9 @@ describe("editAbstract", () => {
     );
     const body = makeSubmitBody({ themeIds: [themeId] });
 
-    await expect(editAbstract(abstract.id, editToken, body)).rejects.toMatchObject({
+    await expect(
+      editAbstract(abstract.id, editToken, body),
+    ).rejects.toMatchObject({
       statusCode: 409,
       code: "ABS_18007",
     });
@@ -517,7 +622,9 @@ describe("editAbstract", () => {
     const { abstract, editToken } = mockEditSetup({ status: "ACCEPTED" });
     const body = makeSubmitBody({ themeIds: [themeId] });
 
-    await expect(editAbstract(abstract.id, editToken, body)).rejects.toMatchObject({
+    await expect(
+      editAbstract(abstract.id, editToken, body),
+    ).rejects.toMatchObject({
       statusCode: 409,
       code: "ABS_18008",
     });
@@ -527,7 +634,9 @@ describe("editAbstract", () => {
     const { abstract, editToken } = mockEditSetup({ status: "REJECTED" });
     const body = makeSubmitBody({ themeIds: [themeId] });
 
-    await expect(editAbstract(abstract.id, editToken, body)).rejects.toMatchObject({
+    await expect(
+      editAbstract(abstract.id, editToken, body),
+    ).rejects.toMatchObject({
       statusCode: 409,
       code: "ABS_18008",
     });

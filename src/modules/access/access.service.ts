@@ -1,7 +1,6 @@
 import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
-import { logger } from "@shared/utils/logger.js";
 import type { TxClient } from "@shared/types/prisma.js";
 import type {
   CreateEventAccessInput,
@@ -10,7 +9,7 @@ import type {
 import { Prisma, PaymentStatus } from "@/generated/prisma/client.js";
 import type { EventAccess } from "@/generated/prisma/client.js";
 import type { PriceBreakdown } from "@pricing";
-import { queueTriggeredEmail } from "@email";
+import { enqueueTriggeredEmailOutboxEvent } from "@core/outbox";
 
 // ============================================================================
 // Types
@@ -681,6 +680,7 @@ type CapacityReachedDbClient = CapacityDbClient & {
   registration: Pick<typeof prisma.registration, "findMany" | "update">;
   sponsorshipUsage: Pick<typeof prisma.sponsorshipUsage, "findMany">;
   auditLog: Pick<typeof prisma.auditLog, "create">;
+  outboxEvent: Pick<typeof prisma.outboxEvent, "create">;
 };
 
 type CoveredAccessDbClient = {
@@ -805,12 +805,20 @@ async function dropAccessFromUnsettledRegistrations(
     });
 
     if (isNowFullyCovered) {
-      queueTriggeredEmail("PAYMENT_CONFIRMED", eventId, {
-        id: reg.id,
-        email: reg.email,
-        firstName: reg.firstName,
-        lastName: reg.lastName,
-      }).catch((err) => logger.error({ err, registrationId: reg.id }, "Failed to queue confirmation email after access drop"));
+      await enqueueTriggeredEmailOutboxEvent(
+        db,
+        {
+          trigger: "PAYMENT_CONFIRMED",
+          eventId,
+          registration: {
+            id: reg.id,
+            email: reg.email,
+            firstName: reg.firstName,
+            lastName: reg.lastName,
+          },
+        },
+        `email:triggered:PAYMENT_CONFIRMED:${reg.id}`,
+      );
     }
 
     affected++;
@@ -937,12 +945,20 @@ export async function handleCapacityReached(
       });
 
       if (isNowFullyCovered) {
-        queueTriggeredEmail("PAYMENT_CONFIRMED", eventId, {
-          id: reg.id,
-          email: reg.email,
-          firstName: reg.firstName,
-          lastName: reg.lastName,
-        }).catch((err) => logger.error({ err, registrationId: reg.id }, "Failed to queue confirmation email after capacity drop"));
+        await enqueueTriggeredEmailOutboxEvent(
+          db,
+          {
+            trigger: "PAYMENT_CONFIRMED",
+            eventId,
+            registration: {
+              id: reg.id,
+              email: reg.email,
+              firstName: reg.firstName,
+              lastName: reg.lastName,
+            },
+          },
+          `email:triggered:PAYMENT_CONFIRMED:${reg.id}`,
+        );
       }
 
       totalAffected++;

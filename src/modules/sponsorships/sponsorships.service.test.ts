@@ -1450,6 +1450,8 @@ describe("Sponsorships Service", () => {
           coveredAccessIds: [],
           totalAmount: 200,
         }),
+        event: createOpenEvent(),
+        batch: createMockSponsorshipBatch({ id: batchId, eventId }),
         usages: [],
       };
       const mockRegistration = {
@@ -1492,6 +1494,13 @@ describe("Sponsorships Service", () => {
             update: registrationUpdateMock,
             findUnique: vi.fn().mockResolvedValue(asMock(mockRegistration)),
           },
+          eventPricing: {
+            findUnique: vi
+              .fn()
+              .mockResolvedValue(createMockEventPricing({ eventId })),
+          },
+          eventAccess: { findMany: vi.fn().mockResolvedValue([]) },
+          outboxEvent: { create: vi.fn().mockResolvedValue({}) },
           auditLog: { create: vi.fn().mockResolvedValue({}) },
         };
         return fn(txMock);
@@ -1526,6 +1535,8 @@ describe("Sponsorships Service", () => {
           coveredAccessIds: [],
           totalAmount: 200,
         }),
+        event: createOpenEvent(),
+        batch: createMockSponsorshipBatch({ id: batchId, eventId }),
         usages: [],
       };
       const mockRegistration = {
@@ -1572,6 +1583,13 @@ describe("Sponsorships Service", () => {
             update: txRegistrationUpdate,
             findUnique: vi.fn().mockResolvedValue(asMock(mockRegistration)),
           },
+          eventPricing: {
+            findUnique: vi
+              .fn()
+              .mockResolvedValue(createMockEventPricing({ eventId })),
+          },
+          eventAccess: { findMany: vi.fn().mockResolvedValue([]) },
+          outboxEvent: { create: vi.fn().mockResolvedValue({}) },
           auditLog: { create: vi.fn().mockResolvedValue({}) },
         };
         return fn(txMock);
@@ -1814,6 +1832,8 @@ describe("Sponsorships Service", () => {
           coveredAccessIds: [],
           totalAmount: 200,
         }),
+        event: createOpenEvent(),
+        batch: createMockSponsorshipBatch({ id: batchId, eventId }),
         usages: [],
       };
       const mockRegistration = {
@@ -1869,6 +1889,13 @@ describe("Sponsorships Service", () => {
             update: vi.fn().mockResolvedValue({}),
             findUnique: vi.fn().mockResolvedValue(asMock(mockRegistration)),
           },
+          eventPricing: {
+            findUnique: vi
+              .fn()
+              .mockResolvedValue(createMockEventPricing({ eventId })),
+          },
+          eventAccess: { findMany: vi.fn().mockResolvedValue([]) },
+          outboxEvent: { create: vi.fn().mockResolvedValue({}) },
           auditLog: { create: vi.fn().mockResolvedValue({}) },
         };
         return fn(txMock);
@@ -1911,6 +1938,7 @@ describe("Sponsorships Service", () => {
           email: "test@lab.com",
           phone: null,
         },
+        event: createOpenEvent(),
         usages: [],
       };
       const mockRegistration = {
@@ -1957,6 +1985,13 @@ describe("Sponsorships Service", () => {
             update: vi.fn().mockResolvedValue({}),
             findUnique: vi.fn().mockResolvedValue(asMock(mockRegistration)),
           },
+          eventPricing: {
+            findUnique: vi
+              .fn()
+              .mockResolvedValue(createMockEventPricing({ eventId })),
+          },
+          eventAccess: { findMany: vi.fn().mockResolvedValue([]) },
+          outboxEvent: { create: vi.fn().mockResolvedValue({}) },
           auditLog: { create: vi.fn().mockResolvedValue({}) },
         };
         return fn(txMock);

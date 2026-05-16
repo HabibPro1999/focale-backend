@@ -5,8 +5,10 @@ import {
   Prisma,
   type AbstractReview,
 } from "@/generated/prisma/client.js";
-import { eventBus } from "@core/events/bus.js";
-import { queueAbstractEmail } from "./abstracts.email-queue.js";
+import {
+  enqueueAbstractEmailOutboxEvent,
+  enqueueRealtimeOutboxEvent,
+} from "@core/outbox";
 import type { TxClient } from "@shared/types/prisma.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
@@ -234,7 +236,7 @@ export async function finalizeAbstract(
   input: FinalizeAbstractInput,
   performedBy: string,
 ) {
-  const finalized = await prisma.$transaction(async (tx) => {
+  await prisma.$transaction(async (tx) => {
     const existing = await tx.abstract.findUnique({
       where: { id: abstractId },
       include: {
@@ -346,56 +348,65 @@ export async function finalizeAbstract(
       performedBy,
     });
 
-    return {
-      updated,
-      clientId: existing.event.clientId,
-      config: existing.event.abstractConfig,
-      committeeComments: collectCommitteeComments(existing.reviews),
-    };
-  });
-
-  await queueAbstractEmail({
-    trigger: "ABSTRACT_DECISION",
-    abstractId,
-  });
-
-  if (
-    finalized.config?.commentsEnabled &&
-    finalized.config.commentsSentToAuthor &&
-    finalized.committeeComments
-  ) {
-    await queueAbstractEmail({
-      trigger: "ABSTRACT_COMMITTEE_COMMENTS",
-      abstractId,
-      extraContext: {
-        committeeComments: finalized.committeeComments,
-        committee_comments: finalized.committeeComments,
+    await enqueueAbstractEmailOutboxEvent(
+      tx,
+      {
+        trigger: "ABSTRACT_DECISION",
+        abstractId,
       },
-    });
-  }
+      `email:abstract:ABSTRACT_DECISION:${abstractId}`,
+    );
 
-  if (
-    finalized.updated.status === AbstractStatus.ACCEPTED &&
-    finalized.config?.finalFileUploadEnabled
-  ) {
-    await queueAbstractEmail({
-      trigger: "ABSTRACT_FINAL_FILE_REQUEST",
-      abstractId,
-    });
-  }
+    if (
+      existing.event.abstractConfig?.commentsEnabled &&
+      existing.event.abstractConfig.commentsSentToAuthor
+    ) {
+      const committeeComments = collectCommitteeComments(existing.reviews);
+      if (committeeComments) {
+        await enqueueAbstractEmailOutboxEvent(
+          tx,
+          {
+            trigger: "ABSTRACT_COMMITTEE_COMMENTS",
+            abstractId,
+            extraContext: {
+              committeeComments,
+              committee_comments: committeeComments,
+            },
+          },
+          `email:abstract:ABSTRACT_COMMITTEE_COMMENTS:${abstractId}`,
+        );
+      }
+    }
 
-  eventBus.emit({
-    type: "abstract.finalized",
-    clientId: finalized.clientId,
-    eventId,
-    payload: {
-      id: finalized.updated.id,
-      status: finalized.updated.status,
-      code: finalized.updated.code,
-      averageScore: finalized.updated.averageScore,
-      reviewCount: finalized.updated.reviewCount,
-    },
-    ts: Date.now(),
+    if (
+      updated.status === AbstractStatus.ACCEPTED &&
+      existing.event.abstractConfig?.finalFileUploadEnabled
+    ) {
+      await enqueueAbstractEmailOutboxEvent(
+        tx,
+        {
+          trigger: "ABSTRACT_FINAL_FILE_REQUEST",
+          abstractId,
+        },
+        `email:abstract:ABSTRACT_FINAL_FILE_REQUEST:${abstractId}`,
+      );
+    }
+
+    await enqueueRealtimeOutboxEvent(tx, {
+      type: "abstract.finalized",
+      clientId: existing.event.clientId,
+      eventId,
+      payload: {
+        id: updated.id,
+        status: updated.status,
+        code: updated.code,
+        averageScore: updated.averageScore,
+        reviewCount: updated.reviewCount,
+      },
+      ts: Date.now(),
+    });
+
+    return updated;
   });
 
   return getAdminAbstract(eventId, abstractId);
@@ -406,7 +417,7 @@ export async function reopenAbstract(
   abstractId: string,
   performedBy: string,
 ) {
-  const reopened = await prisma.$transaction(async (tx) => {
+  await prisma.$transaction(async (tx) => {
     const existing = await tx.abstract.findUnique({
       where: { id: abstractId },
       include: {
@@ -449,20 +460,20 @@ export async function reopenAbstract(
       performedBy,
     });
 
-    return { updated, clientId: existing.event.clientId };
-  });
+    await enqueueRealtimeOutboxEvent(tx, {
+      type: "abstract.reopened",
+      clientId: existing.event.clientId,
+      eventId,
+      payload: {
+        id: updated.id,
+        status: updated.status,
+        averageScore: updated.averageScore,
+        reviewCount: updated.reviewCount,
+      },
+      ts: Date.now(),
+    });
 
-  eventBus.emit({
-    type: "abstract.reopened",
-    clientId: reopened.clientId,
-    eventId,
-    payload: {
-      id: reopened.updated.id,
-      status: reopened.updated.status,
-      averageScore: reopened.updated.averageScore,
-      reviewCount: reopened.updated.reviewCount,
-    },
-    ts: Date.now(),
+    return updated;
   });
 
   return getAdminAbstract(eventId, abstractId);
@@ -496,29 +507,31 @@ export async function markAbstractPresented(
     );
   }
 
-  await prisma.abstract.update({
-    where: { id: abstractId },
-    data: presented
-      ? { presentedAt: new Date(), presentedBy: performedBy }
-      : { presentedAt: null, presentedBy: null },
-  });
+  await prisma.$transaction(async (tx) => {
+    await tx.abstract.update({
+      where: { id: abstractId },
+      data: presented
+        ? { presentedAt: new Date(), presentedBy: performedBy }
+        : { presentedAt: null, presentedBy: null },
+    });
 
-  await auditLog(prisma, {
-    entityType: "Abstract",
-    entityId: abstractId,
-    action: presented ? "mark_presented" : "unmark_presented",
-    changes: {
-      presentedAt: { old: existing.presentedAt, new: presented ? "now" : null },
-    },
-    performedBy,
-  });
+    await auditLog(tx, {
+      entityType: "Abstract",
+      entityId: abstractId,
+      action: presented ? "mark_presented" : "unmark_presented",
+      changes: {
+        presentedAt: { old: existing.presentedAt, new: presented ? "now" : null },
+      },
+      performedBy,
+    });
 
-  eventBus.emit({
-    type: "abstract.presentationChanged",
-    clientId: existing.event.clientId,
-    eventId,
-    payload: { id: abstractId, presented },
-    ts: Date.now(),
+    await enqueueRealtimeOutboxEvent(tx, {
+      type: "abstract.presentationChanged",
+      clientId: existing.event.clientId,
+      eventId,
+      payload: { id: abstractId, presented },
+      ts: Date.now(),
+    });
   });
 
   return getAdminAbstract(eventId, abstractId);

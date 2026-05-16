@@ -4,7 +4,6 @@ import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { logger } from "@shared/utils/logger.js";
 import { auditLog } from "@shared/utils/audit.js";
-import { queueTriggeredEmail } from "@email";
 import { assertModuleEnabledForClient } from "@clients";
 import {
   assertEventAcceptsPublicActions,
@@ -23,7 +22,10 @@ import {
   getAlreadyCoveredAccessIds,
 } from "@access";
 import type { PriceBreakdown } from "@pricing";
-import { eventBus } from "@core/events/bus.js";
+import {
+  enqueueRealtimeOutboxEvent,
+  enqueueTriggeredEmailOutboxEvent,
+} from "@core/outbox";
 import type { AppEvent } from "@core/events/types.js";
 
 // ============================================================================
@@ -100,13 +102,6 @@ export async function confirmPayment(
   performedBy?: string,
   ipAddress?: string,
 ): Promise<RegistrationWithRelations> {
-  // Capture pre-tx state for email queuing (email runs outside tx)
-  let prevStatus: string | null = null;
-  let eventId: string | null = null;
-  let email: string | null = null;
-  let firstName: string | null = null;
-  let lastName: string | null = null;
-
   const pending: AppEvent[] = [];
   await prisma.$transaction(async (tx) => {
     const oldRegistration = await tx.registration.findUnique({
@@ -249,13 +244,6 @@ export async function confirmPayment(
       }
     }
 
-    // Capture values for post-tx email
-    prevStatus = oldRegistration.paymentStatus;
-    eventId = oldRegistration.eventId;
-    email = oldRegistration.email;
-    firstName = oldRegistration.firstName;
-    lastName = oldRegistration.lastName;
-
     // Accumulate realtime events (reuses wasSettled/isSettled from above)
     const clientId = oldRegistration.event?.clientId;
     if (clientId) {
@@ -281,23 +269,30 @@ export async function confirmPayment(
         });
       }
     }
-  });
-  for (const ev of pending) eventBus.emit(ev);
 
-  // Queue PAYMENT_CONFIRMED email if status changed to PAID
-  if (input.paymentStatus === "PAID" && prevStatus !== "PAID" && eventId) {
-    queueTriggeredEmail("PAYMENT_CONFIRMED", eventId, {
-      id,
-      email: email!,
-      firstName,
-      lastName,
-    }).catch((err) => {
-      logger.error(
-        { err, registrationId: id },
-        "Failed to queue PAYMENT_CONFIRMED email",
+    await Promise.all(pending.map((ev) => enqueueRealtimeOutboxEvent(tx, ev)));
+
+    // Queue PAYMENT_CONFIRMED email if status changed to PAID
+    if (
+      input.paymentStatus === "PAID" &&
+      oldRegistration.paymentStatus !== "PAID"
+    ) {
+      await enqueueTriggeredEmailOutboxEvent(
+        tx,
+        {
+          trigger: "PAYMENT_CONFIRMED",
+          eventId: oldRegistration.eventId,
+          registration: {
+            id,
+            email: oldRegistration.email,
+            firstName: oldRegistration.firstName,
+            lastName: oldRegistration.lastName,
+          },
+        },
+        `email:triggered:PAYMENT_CONFIRMED:${id}`,
       );
-    });
-  }
+    }
+  });
 
   // Fetch and return updated registration with relations
   const registration = await prisma.registration.findUnique({
@@ -504,18 +499,21 @@ export async function uploadPaymentProof(
       },
       performedBy: "PUBLIC",
     });
-  });
 
-  // Queue email notification to admin
-  await queueTriggeredEmail("PAYMENT_PROOF_SUBMITTED", registration.eventId, {
-    id: registrationId,
-    email: registration.email,
-    firstName: registration.firstName,
-    lastName: registration.lastName,
-  }).catch((err) => {
-    logger.error(
-      { err, registrationId },
-      "Failed to queue PAYMENT_PROOF_SUBMITTED email",
+    // Queue email notification to admin in the same transaction as the proof update.
+    await enqueueTriggeredEmailOutboxEvent(
+      tx,
+      {
+        trigger: "PAYMENT_PROOF_SUBMITTED",
+        eventId: registration.eventId,
+        registration: {
+          id: registrationId,
+          email: registration.email,
+          firstName: registration.firstName,
+          lastName: registration.lastName,
+        },
+      },
+      `email:triggered:PAYMENT_PROOF_SUBMITTED:${registrationId}`,
     );
   });
 

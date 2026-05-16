@@ -2,7 +2,6 @@ import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { UserRole } from "@shared/constants/roles.js";
-import { logger } from "@shared/utils/logger.js";
 import { auditLog } from "@shared/utils/audit.js";
 import {
   assertEventAcceptsPublicActions,
@@ -20,7 +19,6 @@ import {
   handleCapacityReached,
 } from "@access";
 import { calculatePrice, type PriceBreakdown } from "@pricing";
-import { queueTriggeredEmail } from "@email";
 import { validateFormData, sanitizeFormData, type FormSchema } from "@forms";
 import type {
   CreateRegistrationInput,
@@ -41,9 +39,12 @@ import {
 import { validatePaymentTransition } from "./registration-payment.js";
 import { getRegistrationById } from "./registration-reads.js";
 import { calculateSettlement } from "@shared/utils/settlement.js";
-import { eventBus } from "@core/events/bus.js";
-import type { AppEvent } from "@core/events/types.js";
 import { calculateApplicableAmount } from "@shared/utils/sponsorship-math.js";
+import {
+  emitRegistrationPostCommitEvents,
+  queueRegistrationCreatedEmail,
+  type RegistrationPostCommitEvent,
+} from "./registration-side-effects.js";
 
 // ============================================================================
 // Re-exports — routes and barrel consume these from this file
@@ -425,7 +426,7 @@ export async function createRegistration(
   }
 
   // Create registration with access selections in a transaction
-  const pending: AppEvent[] = [];
+  const pending: RegistrationPostCommitEvent[] = [];
   const result = await prisma.$transaction(async (tx) => {
     // Re-check event status inside transaction to prevent TOCTOU race condition
     // Event might have been closed between initial check and transaction start
@@ -555,21 +556,19 @@ export async function createRegistration(
       }
     }
 
-    return enrichWithAccessSelections(createdReg);
-  });
-  for (const ev of pending) eventBus.emit(ev);
+    await emitRegistrationPostCommitEvents(tx, pending);
+    await queueRegistrationCreatedEmail(tx, {
+      eventId,
+      registration: {
+        id: createdReg.id,
+        email,
+        firstName,
+        lastName,
+      },
+      failureMessage: "Failed to queue confirmation email",
+    });
 
-  // Queue confirmation email (fire and forget - don't block registration response)
-  queueTriggeredEmail("REGISTRATION_CREATED", eventId, {
-    id: result.id,
-    email,
-    firstName,
-    lastName,
-  }).catch((err) => {
-    logger.error(
-      { err, registrationId: result.id },
-      "Failed to queue confirmation email",
-    );
+    return enrichWithAccessSelections(createdReg);
   });
 
   return result;
@@ -783,22 +782,21 @@ export async function createAdminRegistration(
       performedBy: adminUserId,
     });
 
+    if (sendEmail) {
+      await queueRegistrationCreatedEmail(tx, {
+        eventId,
+        registration: {
+          id: createdReg.id,
+          email,
+          firstName,
+          lastName,
+        },
+        failureMessage: "Failed to queue admin registration confirmation email",
+      });
+    }
+
     return enrichWithAccessSelections(createdReg);
   });
-
-  if (sendEmail) {
-    queueTriggeredEmail("REGISTRATION_CREATED", eventId, {
-      id: result.id,
-      email,
-      firstName,
-      lastName,
-    }).catch((err) => {
-      logger.error(
-        { err, registrationId: result.id },
-        "Failed to queue admin registration confirmation email",
-      );
-    });
-  }
 
   return result;
 }
@@ -812,7 +810,7 @@ export async function updateRegistration(
   input: UpdateRegistrationInput,
   performedBy?: string,
 ): Promise<RegistrationWithRelations> {
-  const pending: AppEvent[] = [];
+  const pending: RegistrationPostCommitEvent[] = [];
   await prisma.$transaction(async (tx) => {
     const registration = await tx.registration.findUnique({
       where: { id },
@@ -972,8 +970,8 @@ export async function updateRegistration(
         });
       }
     }
+    await emitRegistrationPostCommitEvents(tx, pending);
   });
-  for (const ev of pending) eventBus.emit(ev);
 
   const updated = await getRegistrationById(id);
   if (!updated) {
@@ -996,7 +994,7 @@ export async function adminEditRegistration(
   input: AdminEditRegistrationInput,
   adminUserId: string,
 ): Promise<RegistrationWithRelations> {
-  const pending: AppEvent[] = [];
+  const pending: RegistrationPostCommitEvent[] = [];
   await prisma.$transaction(async (tx) => {
     const registration = await tx.registration.findUnique({
       where: { id },
@@ -1377,8 +1375,8 @@ export async function adminEditRegistration(
         });
       }
     }
+    await emitRegistrationPostCommitEvents(tx, pending);
   });
-  for (const ev of pending) eventBus.emit(ev);
 
   const updated = await getRegistrationById(id);
   if (!updated) {
@@ -1418,7 +1416,7 @@ export async function deleteRegistration(
     );
   }
 
-  const pending: AppEvent[] = [];
+  const pending: RegistrationPostCommitEvent[] = [];
   await prisma.$transaction(async (tx) => {
     const registration = await tx.registration.findUnique({
       where: { id },
@@ -1542,8 +1540,8 @@ export async function deleteRegistration(
         ts: Date.now(),
       });
     }
+    await emitRegistrationPostCommitEvents(tx, pending);
   });
-  for (const ev of pending) eventBus.emit(ev);
 }
 
 // ============================================================================

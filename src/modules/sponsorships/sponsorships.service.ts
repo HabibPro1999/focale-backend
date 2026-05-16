@@ -15,7 +15,7 @@ import {
   getSponsorshipById,
   type SponsorshipWithUsages,
 } from "./sponsorship-queries.js";
-import { eventBus } from "@core/events/bus.js";
+import { enqueueRealtimeOutboxEvent } from "@core/outbox";
 import type { AppEvent } from "@core/events/types.js";
 
 // ============================================================================
@@ -245,8 +245,8 @@ export async function updateSponsorship(
         ts: Date.now(),
       });
     }
+    await Promise.all(pending.map((ev) => enqueueRealtimeOutboxEvent(tx, ev)));
   });
-  for (const ev of pending) eventBus.emit(ev);
 
   return getSponsorshipById(id) as Promise<SponsorshipWithUsages>;
 }
@@ -327,8 +327,8 @@ export async function cancelSponsorship(
         });
       }
     }
+    await Promise.all(pending.map((ev) => enqueueRealtimeOutboxEvent(tx, ev)));
   });
-  for (const ev of pending) eventBus.emit(ev);
 
   return getSponsorshipById(id) as Promise<SponsorshipWithUsages>;
 }
@@ -400,8 +400,8 @@ export async function deleteSponsorship(
         ts: Date.now(),
       });
     }
+    await Promise.all(pending.map((ev) => enqueueRealtimeOutboxEvent(tx, ev)));
   });
-  for (const ev of pending) eventBus.emit(ev);
 }
 
 // ============================================================================

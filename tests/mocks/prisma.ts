@@ -22,6 +22,14 @@ vi.mock("@/database/client.js", () => ({
 // Reset all mocks before each test
 beforeEach(() => {
   mockReset(prismaMock);
+  prismaMock.$transaction.mockImplementation(async (callback: unknown) => {
+    if (typeof callback === "function") {
+      return (callback as (tx: typeof prismaMock) => Promise<unknown>)(
+        prismaMock,
+      );
+    }
+    return Promise.all(callback as Iterable<unknown>);
+  });
 });
 
 export type PrismaMock = DeepMockProxy<PrismaClient>;

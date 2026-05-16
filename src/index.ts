@@ -1,12 +1,12 @@
-import { randomUUID } from "node:crypto";
-import { hostname } from "node:os";
 import { buildServer } from "@core/server.js";
 import { config } from "@config/app.config.js";
 import { logger } from "@shared/utils/logger.js";
 import { gracefulShutdown } from "@core/shutdown.js";
-import { processEmailQueue } from "@modules/email/index.js";
-import { processAbstractBookJobs } from "@abstracts";
-import { prisma } from "@/database/client.js";
+import {
+  shouldRunWorkers,
+  startWorkerRuntime,
+  waitForDatabase,
+} from "./worker-runtime.js";
 
 // Global error handlers
 process.on("unhandledRejection", (reason, promise) => {
@@ -19,60 +19,13 @@ process.on("uncaughtException", (error) => {
   process.exit(1);
 });
 
-// Retry until the database responds or we exhaust attempts.
-// A fixed sleep is a guess; this actually verifies the connection.
-// Linear backoff: 1s, 2s, 3s... up to maxRetries attempts (default max wait ~55s).
-async function waitForDatabase(
-  maxRetries = 10,
-  baseDelayMs = 1000,
-): Promise<void> {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      await prisma.$queryRaw`SELECT 1`;
-      logger.info(`Database ready (attempt ${attempt})`);
-      return;
-    } catch (error) {
-      if (attempt === maxRetries) {
-        logger.fatal(
-          { error },
-          `Database unreachable after ${maxRetries} attempts`,
-        );
-        throw error;
-      }
-      const delay = baseDelayMs * attempt;
-      logger.warn(
-        `Database not ready (attempt ${attempt}/${maxRetries}), retrying in ${delay}ms...`,
-      );
-      await new Promise((resolve) => setTimeout(resolve, delay));
-    }
-  }
-}
-
 async function main() {
   const server = await buildServer();
-  const workerId = `${hostname()}:${process.pid}:${randomUUID()}`;
-
-  // eslint-disable-next-line prefer-const -- assigned after listen, read by onClose registered before listen
-  let emailQueueInterval: ReturnType<typeof setInterval> | undefined;
-  let currentProcessing: Promise<void> | null = null;
-  // eslint-disable-next-line prefer-const -- assigned after listen, read by onClose registered before listen
-  let bookJobInterval: ReturnType<typeof setInterval> | undefined;
-  let currentBookProcessing: Promise<void> | null = null;
+  let workers: ReturnType<typeof startWorkerRuntime> | undefined;
 
   // Register hooks and shutdown BEFORE listen (Fastify disallows addHook after listen)
   server.addHook("onClose", async () => {
-    if (emailQueueInterval) clearInterval(emailQueueInterval);
-    if (bookJobInterval) clearInterval(bookJobInterval);
-    if (currentProcessing) {
-      logger.info("Waiting for in-flight email batch to complete...");
-      await currentProcessing;
-    }
-    logger.info("Email queue worker stopped");
-    if (currentBookProcessing) {
-      logger.info("Waiting for in-flight Abstract Book job to complete...");
-      await currentBookProcessing;
-    }
-    logger.info("Abstract Book worker stopped");
+    await workers?.stop();
   });
 
   gracefulShutdown(server);
@@ -82,50 +35,13 @@ async function main() {
   await server.listen({ port: config.PORT, host: "0.0.0.0" });
   logger.info(`Server running on port ${config.PORT}`);
 
-  // Verify the database is reachable before starting background workers
-  await waitForDatabase();
-
-  // Start email queue worker (processes every 15 seconds for faster email delivery)
-  let isProcessingEmails = false;
-  emailQueueInterval = setInterval(() => {
-    if (isProcessingEmails) return;
-    isProcessingEmails = true;
-    currentProcessing = processEmailQueue(50, { workerId })
-      .then((result) => {
-        if (result.processed > 0) {
-          logger.info({ result }, "Email queue processed");
-        }
-      })
-      .catch((err) => {
-        logger.error({ err }, "Email queue processing failed");
-      })
-      .finally(() => {
-        isProcessingEmails = false;
-        currentProcessing = null;
-      });
-  }, 15_000);
-  logger.info({ workerId }, "Email queue worker started (15s interval)");
-
-  // Start Abstract Book worker (processes one generation job every 30 seconds)
-  let isProcessingBookJobs = false;
-  bookJobInterval = setInterval(() => {
-    if (isProcessingBookJobs) return;
-    isProcessingBookJobs = true;
-    currentBookProcessing = processAbstractBookJobs(1, { workerId })
-      .then((result) => {
-        if (result.processed > 0) {
-          logger.info({ result }, "Abstract Book jobs processed");
-        }
-      })
-      .catch((err) => {
-        logger.error({ err }, "Abstract Book job processing failed");
-      })
-      .finally(() => {
-        isProcessingBookJobs = false;
-        currentBookProcessing = null;
-      });
-  }, 30_000);
-  logger.info({ workerId }, "Abstract Book worker started (30s interval)");
+  if (shouldRunWorkers()) {
+    // Verify the database is reachable before starting background workers
+    await waitForDatabase();
+    workers = startWorkerRuntime();
+  } else {
+    logger.info("RUN_WORKERS=false; in-process workers disabled");
+  }
 }
 
 main().catch((err) => {

@@ -21,6 +21,7 @@ import type { AutomaticEmailTrigger } from "./email.schema.js";
 import type { ImageCache } from "@modules/certificates/certificate-pdf.service.js";
 import type { CertificateZone } from "@modules/certificates/certificates.schema.js";
 import { eventBus } from "@core/events/bus.js";
+import { getPrismaUniqueTarget } from "@shared/errors/prisma-error.js";
 
 /**
  * Emit a realtime emailLog.statusChanged event.
@@ -109,7 +110,10 @@ function emailRetryDelayMs(failedAttemptCount: number): number {
   return 15 * 60 * 1000;
 }
 
-function nextEmailAttemptAt(failedAttemptCount: number, from = new Date()): Date {
+function nextEmailAttemptAt(
+  failedAttemptCount: number,
+  from = new Date(),
+): Date {
   return new Date(from.getTime() + emailRetryDelayMs(failedAttemptCount));
 }
 
@@ -119,6 +123,28 @@ function clearEmailLeaseFields() {
     lockedUntil: null,
     lockedBy: null,
   };
+}
+
+function isRegistrationTriggerDedupeViolation(error: unknown): boolean {
+  if (
+    !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+    error.code !== "P2002"
+  ) {
+    return false;
+  }
+
+  const { fields, names } = getPrismaUniqueTarget(error);
+  const hasRegistrationId = fields.some(
+    (field) => field === "registrationId" || field === "registration_id",
+  );
+  const hasTrigger = fields.some((field) => field === "trigger");
+
+  return (
+    (hasRegistrationId && hasTrigger) ||
+    names.some((name) =>
+      name.includes("email_logs_registration_trigger_active_key"),
+    )
+  );
 }
 
 /** Status ordering for webhook state machine — only forward transitions allowed */
@@ -222,16 +248,27 @@ export async function queueTriggeredEmail(
   }
 
   // 3. Queue the email
-  await queueEmail({
-    trigger,
-    templateId: template.id,
-    registrationId: registration.id,
-    recipientEmail: registration.email,
-    recipientName:
-      [registration.firstName, registration.lastName]
-        .filter(Boolean)
-        .join(" ") || undefined,
-  });
+  try {
+    await queueEmail({
+      trigger,
+      templateId: template.id,
+      registrationId: registration.id,
+      recipientEmail: registration.email,
+      recipientName:
+        [registration.firstName, registration.lastName]
+          .filter(Boolean)
+          .join(" ") || undefined,
+    });
+  } catch (error) {
+    if (isRegistrationTriggerDedupeViolation(error)) {
+      logger.info(
+        { registrationId: registration.id, trigger },
+        "Triggered email already queued, skipping duplicate",
+      );
+      return false;
+    }
+    throw error;
+  }
 
   logger.info(
     { trigger, eventId, registrationId: registration.id },
@@ -596,7 +633,10 @@ export async function recoverStaleEmailLeases(
   );
 
   if (requeued > 0 || deadLettered > 0) {
-    logger.warn({ requeued, deadLettered }, "Recovered stale email queue leases");
+    logger.warn(
+      { requeued, deadLettered },
+      "Recovered stale email queue leases",
+    );
   }
 
   return { requeued, deadLettered };
@@ -656,7 +696,11 @@ export async function processEmailQueue(
   const batch =
     claimedIds.length > 0
       ? await prisma.emailLog.findMany({
-          where: { id: { in: claimedIds }, status: "SENDING", lockedBy: workerId },
+          where: {
+            id: { in: claimedIds },
+            status: "SENDING",
+            lockedBy: workerId,
+          },
           orderBy: { queuedAt: "asc" },
           include: {
             template: true,
@@ -697,7 +741,11 @@ export async function processEmailQueue(
 
       // Skip if template is inactive
       if (!emailLog.template.isActive) {
-        return (await markAsSkipped(emailLog.id, workerId, "Template is inactive"))
+        return (await markAsSkipped(
+          emailLog.id,
+          workerId,
+          "Template is inactive",
+        ))
           ? "skipped"
           : "lease-lost";
       }
@@ -829,7 +877,9 @@ export async function processEmailQueue(
         }
       }
 
-      if (!(await refreshEmailLeaseBeforeSend(emailLog.id, workerId, leaseMs))) {
+      if (
+        !(await refreshEmailLeaseBeforeSend(emailLog.id, workerId, leaseMs))
+      ) {
         return "lease-lost";
       }
 
@@ -947,7 +997,10 @@ async function markAsSent(
   });
 
   if (updated.count === 0) {
-    logger.warn({ emailLogId: id, workerId }, "Email SENT update skipped because lease was lost");
+    logger.warn(
+      { emailLogId: id, workerId },
+      "Email SENT update skipped because lease was lost",
+    );
     return false;
   }
 
@@ -981,7 +1034,10 @@ async function markAsFailed(
   });
 
   if (updated.count === 0) {
-    logger.warn({ emailLogId: id, workerId }, "Email failure update skipped because lease was lost");
+    logger.warn(
+      { emailLogId: id, workerId },
+      "Email failure update skipped because lease was lost",
+    );
     return false;
   }
 
@@ -1005,7 +1061,10 @@ async function markAsSkipped(
   });
 
   if (updated.count === 0) {
-    logger.warn({ emailLogId: id, workerId }, "Email SKIPPED update skipped because lease was lost");
+    logger.warn(
+      { emailLogId: id, workerId },
+      "Email SKIPPED update skipped because lease was lost",
+    );
     return false;
   }
 
@@ -1192,7 +1251,8 @@ export async function getEmailQueueHealth() {
   const oldestQueuedAgeMs = oldestQueued?.queuedAt
     ? now.getTime() - oldestQueued.queuedAt.getTime()
     : 0;
-  const oldestInFlightAt = oldestInFlight?.lockedAt ?? oldestInFlight?.updatedAt;
+  const oldestInFlightAt =
+    oldestInFlight?.lockedAt ?? oldestInFlight?.updatedAt;
   const oldestInFlightAgeMs = oldestInFlightAt
     ? now.getTime() - oldestInFlightAt.getTime()
     : 0;

@@ -4,8 +4,10 @@
   "type": "module",
   "scripts": {
     "dev": "bun --watch src/index.ts",
+    "dev:worker": "bun --watch src/worker.ts",
     "build": "bun x prisma generate",
     "start": "bun src/index.ts",
+    "start:worker": "bun src/worker.ts",
     "type-check": "tsc --noEmit",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",

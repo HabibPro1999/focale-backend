@@ -4,10 +4,7 @@ import { prismaMock } from "../../../tests/mocks/prisma.js";
 import { AbstractStatus } from "@/generated/prisma/client.js";
 
 vi.mock("@shared/utils/audit.js", () => ({ auditLog: vi.fn() }));
-vi.mock("./abstracts.email-queue.js", () => ({ queueAbstractEmail: vi.fn() }));
-vi.mock("@core/events/bus.js", () => ({ eventBus: { emit: vi.fn() } }));
 
-import { queueAbstractEmail } from "./abstracts.email-queue.js";
 import { finalizeAbstract, reopenAbstract } from "./abstracts.admin.service.js";
 
 const eventId = "event-1";
@@ -109,10 +106,15 @@ describe("abstracts admin service", () => {
         codeNumber: 1,
       }),
     }));
-    expect(queueAbstractEmail).toHaveBeenCalledWith({
-      trigger: "ABSTRACT_DECISION",
-      abstractId,
-    });
+    expect(prismaMock.outboxEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: "email.abstract",
+          dedupeKey: `email:abstract:ABSTRACT_DECISION:${abstractId}`,
+          payload: { trigger: "ABSTRACT_DECISION", abstractId },
+        }),
+      }),
+    );
     expect(result).toMatchObject({ status: "ACCEPTED", code: "OC1-01" });
   });
 

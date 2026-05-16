@@ -5,9 +5,14 @@ import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { auditLog } from "@shared/utils/audit.js";
 import { assertClientModuleEnabled } from "@clients";
 import { validateFormData, sanitizeFormData, type FormSchema } from "@forms";
-import { generateAbstractToken, verifyAbstractToken } from "./abstract-token.js";
-import { queueAbstractEmail } from "./abstracts.email-queue.js";
+import {
+  generateAbstractToken,
+  verifyAbstractToken,
+} from "./abstract-token.js";
+import { getPrismaUniqueTarget } from "@shared/errors/prisma-error.js";
+import { enqueueAbstractEmailOutboxEvent } from "@core/outbox";
 import type {
+  Abstract,
   AbstractConfig,
   AbstractStatus,
 } from "@/generated/prisma/client.js";
@@ -27,6 +32,39 @@ export function countWords(s: string): number {
 
 function normalizeAuthorEmail(email: string): string {
   return email.trim().toLocaleLowerCase();
+}
+
+function isDuplicateAuthorEmailViolation(error: unknown): boolean {
+  if (
+    !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+    error.code !== "P2002"
+  ) {
+    return false;
+  }
+
+  const { fields, names } = getPrismaUniqueTarget(error);
+  const hasEventId = fields.some(
+    (field) => field === "eventId" || field === "event_id",
+  );
+  const hasAuthorEmail = fields.some(
+    (field) =>
+      field === "authorEmailNormalized" || field === "author_email_normalized",
+  );
+
+  return (
+    (hasEventId && hasAuthorEmail) ||
+    names.some((name) =>
+      name.includes("abstracts_event_id_author_email_normalized_key"),
+    )
+  );
+}
+
+function duplicateAuthorEmailError() {
+  return new AppError(
+    "An abstract has already been submitted for this first-author email",
+    409,
+    ErrorCodes.ABSTRACT_DUPLICATE_AUTHOR_EMAIL,
+  );
 }
 
 // ============================================================================
@@ -81,10 +119,7 @@ function buildRevisionSnapshot(
 // Validation helpers
 // ============================================================================
 
-function validateMode(
-  contentMode: string,
-  configMode: string,
-): void {
+function validateMode(contentMode: string, configMode: string): void {
   if (contentMode !== configMode) {
     throw new AppError(
       `Submission mode mismatch: expected ${configMode}, got ${contentMode}`,
@@ -101,12 +136,24 @@ function validateWordLimits(
   const errors: string[] = [];
 
   if (content.mode === "FREE_TEXT") {
-    if (config.globalWordLimit && countWords(content.body) > config.globalWordLimit) {
-      errors.push(`body (${countWords(content.body)} words, limit ${config.globalWordLimit})`);
+    if (
+      config.globalWordLimit &&
+      countWords(content.body) > config.globalWordLimit
+    ) {
+      errors.push(
+        `body (${countWords(content.body)} words, limit ${config.globalWordLimit})`,
+      );
     }
   } else {
-    const sectionLimits = (config.sectionWordLimits as Record<string, number> | null) ?? {};
-    const sections = ["introduction", "objective", "methods", "results", "conclusion"] as const;
+    const sectionLimits =
+      (config.sectionWordLimits as Record<string, number> | null) ?? {};
+    const sections = [
+      "introduction",
+      "objective",
+      "methods",
+      "results",
+      "conclusion",
+    ] as const;
     for (const section of sections) {
       const limit = sectionLimits[section];
       const text = (content as Record<string, string>)[section] ?? "";
@@ -117,7 +164,8 @@ function validateWordLimits(
     // Also check global limit against total
     if (config.globalWordLimit) {
       const total = sections.reduce(
-        (acc, s) => acc + countWords((content as Record<string, string>)[s] ?? ""),
+        (acc, s) =>
+          acc + countWords((content as Record<string, string>)[s] ?? ""),
         0,
       );
       if (total > config.globalWordLimit) {
@@ -255,7 +303,10 @@ export async function getPublicConfig(slug: string) {
     (!config.submissionStartAt || now >= config.submissionStartAt) &&
     (!config.submissionDeadline || now <= config.submissionDeadline);
 
-  const sectionLimits = (config.sectionWordLimits ?? {}) as Record<string, number | null>;
+  const sectionLimits = (config.sectionWordLimits ?? {}) as Record<
+    string,
+    number | null
+  >;
 
   return {
     enabled: true,
@@ -334,7 +385,11 @@ export async function submitAbstract(
 
   const config = event.abstractConfig;
   if (!config) {
-    throw new AppError("Abstract submissions not configured", 404, ErrorCodes.NOT_FOUND);
+    throw new AppError(
+      "Abstract submissions not configured",
+      404,
+      ErrorCodes.NOT_FOUND,
+    );
   }
 
   // Deadline check
@@ -379,82 +434,91 @@ export async function submitAbstract(
     select: { id: true },
   });
   if (duplicate) {
-    throw new AppError(
-      "An abstract has already been submitted for this first-author email",
-      409,
-      ErrorCodes.ABSTRACT_DUPLICATE_AUTHOR_EMAIL,
-    );
+    throw duplicateAuthorEmailError();
   }
 
   // Transaction: create abstract + first revision + theme links
-  const created = await prisma.$transaction(async (tx) => {
-    const abstract = await tx.abstract.create({
-      data: {
-        eventId: event.id,
-        authorFirstName: body.authorFirstName,
-        authorLastName: body.authorLastName,
-        authorEmail: body.authorEmail,
-        authorEmailNormalized,
-        authorPhone: body.authorPhone,
-        requestedType: body.requestedType,
-        content: body.content as unknown as Prisma.InputJsonValue,
-        coAuthors: body.coAuthors as unknown as Prisma.InputJsonValue,
-        additionalFieldsData: sanitizedAdditionalFields as unknown as Prisma.InputJsonValue,
-        status: "SUBMITTED",
-        editToken,
-        linkBaseUrl: body.linkBaseUrl,
-        registrationId: body.registrationId ?? null,
-      },
-    });
-
-    const revisionSnapshot = buildRevisionSnapshot(
-      body,
-      sanitizedAdditionalFields,
-      body.registrationId ?? null,
-      body.themeIds,
-    );
-
-    // Create initial revision
-    await tx.abstractRevision.create({
-      data: {
-        abstractId: abstract.id,
-        revisionNo: 1,
-        snapshot: revisionSnapshot,
-        editedBy: "PUBLIC",
-        editedIpAddress: ip,
-        content: body.content as unknown as Prisma.InputJsonValue,
-        coAuthors: body.coAuthors as unknown as Prisma.InputJsonValue,
-        additionalFieldsData: sanitizedAdditionalFields as unknown as Prisma.InputJsonValue,
-      },
-    });
-
-    // Link themes
-    if (body.themeIds.length > 0) {
-      await tx.abstractThemeOnAbstract.createMany({
-        data: body.themeIds.map((themeId) => ({
-          abstractId: abstract.id,
-          themeId,
-        })),
+  let created: Abstract;
+  try {
+    created = await prisma.$transaction(async (tx) => {
+      const abstract = await tx.abstract.create({
+        data: {
+          eventId: event.id,
+          authorFirstName: body.authorFirstName,
+          authorLastName: body.authorLastName,
+          authorEmail: body.authorEmail,
+          authorEmailNormalized,
+          authorPhone: body.authorPhone,
+          requestedType: body.requestedType,
+          content: body.content as unknown as Prisma.InputJsonValue,
+          coAuthors: body.coAuthors as unknown as Prisma.InputJsonValue,
+          additionalFieldsData:
+            sanitizedAdditionalFields as unknown as Prisma.InputJsonValue,
+          status: "SUBMITTED",
+          editToken,
+          linkBaseUrl: body.linkBaseUrl,
+          registrationId: body.registrationId ?? null,
+        },
       });
-    }
 
-    // Audit log
-    await auditLog(tx, {
-      entityType: "Abstract",
-      entityId: abstract.id,
-      action: "submit",
-      performedBy: "PUBLIC",
-      ipAddress: ip,
+      const revisionSnapshot = buildRevisionSnapshot(
+        body,
+        sanitizedAdditionalFields,
+        body.registrationId ?? null,
+        body.themeIds,
+      );
+
+      // Create initial revision
+      await tx.abstractRevision.create({
+        data: {
+          abstractId: abstract.id,
+          revisionNo: 1,
+          snapshot: revisionSnapshot,
+          editedBy: "PUBLIC",
+          editedIpAddress: ip,
+          content: body.content as unknown as Prisma.InputJsonValue,
+          coAuthors: body.coAuthors as unknown as Prisma.InputJsonValue,
+          additionalFieldsData:
+            sanitizedAdditionalFields as unknown as Prisma.InputJsonValue,
+        },
+      });
+
+      // Link themes
+      if (body.themeIds.length > 0) {
+        await tx.abstractThemeOnAbstract.createMany({
+          data: body.themeIds.map((themeId) => ({
+            abstractId: abstract.id,
+            themeId,
+          })),
+        });
+      }
+
+      // Audit log
+      await auditLog(tx, {
+        entityType: "Abstract",
+        entityId: abstract.id,
+        action: "submit",
+        performedBy: "PUBLIC",
+        ipAddress: ip,
+      });
+
+      await enqueueAbstractEmailOutboxEvent(
+        tx,
+        {
+          trigger: "ABSTRACT_SUBMISSION_ACK",
+          abstractId: abstract.id,
+        },
+        `email:abstract:ABSTRACT_SUBMISSION_ACK:${abstract.id}`,
+      );
+
+      return abstract;
     });
-
-    return abstract;
-  });
-
-  // Queue email after transaction
-  void queueAbstractEmail({
-    trigger: "ABSTRACT_SUBMISSION_ACK",
-    abstractId: created.id,
-  });
+  } catch (error) {
+    if (isDuplicateAuthorEmailViolation(error)) {
+      throw duplicateAuthorEmailError();
+    }
+    throw error;
+  }
 
   const statusUrl = `${body.linkBaseUrl}/${slug}/abstracts/${created.id}/${editToken}`;
 
@@ -640,11 +704,7 @@ export async function editAbstract(
     select: { id: true },
   });
   if (duplicate) {
-    throw new AppError(
-      "An abstract has already been submitted for this first-author email",
-      409,
-      ErrorCodes.ABSTRACT_DUPLICATE_AUTHOR_EMAIL,
-    );
+    throw duplicateAuthorEmailError();
   }
   const revisionSnapshot = buildRevisionSnapshot(
     body,
@@ -654,78 +714,90 @@ export async function editAbstract(
   );
 
   // Transaction: update + new revision + theme links
-  await prisma.$transaction(async (tx) => {
-    // Get next revision number
-    const lastRevision = await tx.abstractRevision.findFirst({
-      where: { abstractId: id },
-      orderBy: { revisionNo: "desc" },
-      select: { revisionNo: true },
-    });
-    const nextRevisionNo = (lastRevision?.revisionNo ?? 0) + 1;
-
-    // Update abstract
-    const updatedAbstract = await tx.abstract.update({
-      where: { id },
-      data: {
-        authorFirstName: body.authorFirstName,
-        authorLastName: body.authorLastName,
-        authorEmail: body.authorEmail,
-        authorEmailNormalized,
-        authorPhone: body.authorPhone,
-        requestedType: body.requestedType,
-        content: body.content as unknown as Prisma.InputJsonValue,
-        coAuthors: body.coAuthors as unknown as Prisma.InputJsonValue,
-        additionalFieldsData: sanitizedAdditionalFields as unknown as Prisma.InputJsonValue,
-        registrationId: nextRegistrationId,
-        lastEditedAt: now,
-        contentVersion: { increment: 1 },
-      },
-    });
-
-    // Append new revision
-    await tx.abstractRevision.create({
-      data: {
-        abstractId: id,
-        revisionNo: nextRevisionNo,
-        snapshot: revisionSnapshot,
-        editedBy: "PUBLIC",
-        editedIpAddress: ip,
-        content: body.content as unknown as Prisma.InputJsonValue,
-        coAuthors: body.coAuthors as unknown as Prisma.InputJsonValue,
-        additionalFieldsData: sanitizedAdditionalFields as unknown as Prisma.InputJsonValue,
-      },
-    });
-
-    // Replace theme links
-    await tx.abstractThemeOnAbstract.deleteMany({
-      where: { abstractId: id },
-    });
-    if (body.themeIds.length > 0) {
-      await tx.abstractThemeOnAbstract.createMany({
-        data: body.themeIds.map((themeId) => ({
-          abstractId: id,
-          themeId,
-        })),
+  try {
+    await prisma.$transaction(async (tx) => {
+      // Get next revision number
+      const lastRevision = await tx.abstractRevision.findFirst({
+        where: { abstractId: id },
+        orderBy: { revisionNo: "desc" },
+        select: { revisionNo: true },
       });
-    }
+      const nextRevisionNo = (lastRevision?.revisionNo ?? 0) + 1;
 
-    // Audit log
-    await auditLog(tx, {
-      entityType: "Abstract",
-      entityId: id,
-      action: "edit",
-      performedBy: "PUBLIC",
-      ipAddress: ip,
+      // Update abstract
+      const updatedAbstract = await tx.abstract.update({
+        where: { id },
+        data: {
+          authorFirstName: body.authorFirstName,
+          authorLastName: body.authorLastName,
+          authorEmail: body.authorEmail,
+          authorEmailNormalized,
+          authorPhone: body.authorPhone,
+          requestedType: body.requestedType,
+          content: body.content as unknown as Prisma.InputJsonValue,
+          coAuthors: body.coAuthors as unknown as Prisma.InputJsonValue,
+          additionalFieldsData:
+            sanitizedAdditionalFields as unknown as Prisma.InputJsonValue,
+          registrationId: nextRegistrationId,
+          lastEditedAt: now,
+          contentVersion: { increment: 1 },
+        },
+      });
+
+      // Append new revision
+      await tx.abstractRevision.create({
+        data: {
+          abstractId: id,
+          revisionNo: nextRevisionNo,
+          snapshot: revisionSnapshot,
+          editedBy: "PUBLIC",
+          editedIpAddress: ip,
+          content: body.content as unknown as Prisma.InputJsonValue,
+          coAuthors: body.coAuthors as unknown as Prisma.InputJsonValue,
+          additionalFieldsData:
+            sanitizedAdditionalFields as unknown as Prisma.InputJsonValue,
+        },
+      });
+
+      // Replace theme links
+      await tx.abstractThemeOnAbstract.deleteMany({
+        where: { abstractId: id },
+      });
+      if (body.themeIds.length > 0) {
+        await tx.abstractThemeOnAbstract.createMany({
+          data: body.themeIds.map((themeId) => ({
+            abstractId: id,
+            themeId,
+          })),
+        });
+      }
+
+      // Audit log
+      await auditLog(tx, {
+        entityType: "Abstract",
+        entityId: id,
+        action: "edit",
+        performedBy: "PUBLIC",
+        ipAddress: ip,
+      });
+
+      await enqueueAbstractEmailOutboxEvent(
+        tx,
+        {
+          trigger: "ABSTRACT_EDIT_ACK",
+          abstractId: id,
+        },
+        `email:abstract:ABSTRACT_EDIT_ACK:${id}`,
+      );
+
+      return updatedAbstract;
     });
-
-    return updatedAbstract;
-  });
-
-  // Queue email after transaction
-  void queueAbstractEmail({
-    trigger: "ABSTRACT_EDIT_ACK",
-    abstractId: id,
-  });
+  } catch (error) {
+    if (isDuplicateAuthorEmailViolation(error)) {
+      throw duplicateAuthorEmailError();
+    }
+    throw error;
+  }
 
   // Return the same shape as getAbstractByToken
   return getAbstractByToken(id, token);

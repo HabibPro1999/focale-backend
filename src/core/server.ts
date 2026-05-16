@@ -40,6 +40,7 @@ import {
   getAbstractBookQueueHealth,
 } from "@abstracts";
 import { realtimeRoutes, drainRealtimeConnections } from "@realtime";
+import { getOutboxHealth } from "@core/outbox";
 import type { AppInstance } from "@shared/types/fastify.js";
 
 async function getDatabaseHealth(): Promise<"healthy" | "unhealthy"> {
@@ -128,6 +129,12 @@ export async function buildServer(): Promise<AppInstance> {
   // Abstract Book worker health check
   app.get("/health/abstract-book-jobs", async (_request, reply) => {
     const health = await getAbstractBookQueueHealth();
+    return reply.status(health.isHealthy ? 200 : 503).send(health);
+  });
+
+  // Outbox worker health check
+  app.get("/health/outbox", async (_request, reply) => {
+    const health = await getOutboxHealth();
     return reply.status(health.isHealthy ? 200 : 503).send(health);
   });
 

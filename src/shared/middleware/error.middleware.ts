@@ -6,29 +6,7 @@ import { AppError } from "@shared/errors/app-error.js";
 import { formatZodError } from "@shared/errors/zod-error-formatter.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { logger } from "@shared/utils/logger.js";
-
-function getPrismaConstraintFields(
-  error: Prisma.PrismaClientKnownRequestError,
-) {
-  const target = error.meta?.target;
-  if (Array.isArray(target)) {
-    return target.filter((field): field is string => typeof field === "string");
-  }
-
-  const adapterFields = (
-    error.meta?.driverAdapterError as
-      | { cause?: { constraint?: { fields?: unknown } } }
-      | undefined
-  )?.cause?.constraint?.fields;
-
-  if (Array.isArray(adapterFields)) {
-    return adapterFields.filter(
-      (field): field is string => typeof field === "string",
-    );
-  }
-
-  return [];
-}
+import { getPrismaUniqueTarget } from "@shared/errors/prisma-error.js";
 
 export function errorHandler(
   error: FastifyError | Error,
@@ -57,7 +35,7 @@ export function errorHandler(
 
     switch (error.code) {
       case "P2002": {
-        const fields = getPrismaConstraintFields(error);
+        const { fields } = getPrismaUniqueTarget(error);
         const fieldStr = fields.join(", ");
 
         // Registration email+form uniqueness → domain-specific code

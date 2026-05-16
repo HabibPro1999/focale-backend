@@ -1,7 +1,6 @@
 import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
-import { logger } from "@shared/utils/logger.js";
 import { assertModuleEnabledForClient } from "@clients";
 import { assertEventOpen } from "@events";
 import {
@@ -18,17 +17,19 @@ import type {
 import type { Prisma, Sponsorship } from "@/generated/prisma/client.js";
 import type { TxClient } from "@shared/types/prisma.js";
 import {
-  queueSponsorshipEmail,
-  queueTriggeredEmail,
   buildBatchEmailContext,
   buildLinkedSponsorshipContext,
 } from "@email";
+import {
+  enqueueRealtimeOutboxEvent,
+  enqueueSponsorshipEmailOutboxEvent,
+  enqueueTriggeredEmailOutboxEvent,
+} from "@core/outbox";
 import {
   incrementPaidCount,
   handleCapacityReached,
   getAlreadyCoveredAccessIds,
 } from "@access";
-import { eventBus } from "@core/events/bus.js";
 
 // ============================================================================
 // Types
@@ -607,6 +608,7 @@ async function createLinkedModeSponsorships(
 }
 
 async function queueBatchEmails(input: {
+  db: typeof prisma | TxClient;
   eventId: string;
   event: EventForBatch;
   pricing: PricingForBatch | null;
@@ -616,6 +618,7 @@ async function queueBatchEmails(input: {
   result: BatchTransactionResult;
 }): Promise<void> {
   const {
+    db,
     eventId,
     event,
     pricing,
@@ -625,132 +628,118 @@ async function queueBatchEmails(input: {
     result,
   } = input;
 
-  try {
-    const batchContext = buildBatchEmailContext({
-      batch: result.batch,
-      sponsorships: result.sponsorships.map((s) => ({
-        beneficiaryName: s.beneficiaryName,
-        beneficiaryEmail: s.beneficiaryEmail,
-        totalAmount: s.totalAmount,
-      })),
-      event: {
-        name: event.name,
-        startDate: event.startDate,
-        location: event.location,
-        client: event.client,
-      },
-      currency,
-    });
+  const batchContext = buildBatchEmailContext({
+    batch: result.batch,
+    sponsorships: result.sponsorships.map((s) => ({
+      beneficiaryName: s.beneficiaryName,
+      beneficiaryEmail: s.beneficiaryEmail,
+      totalAmount: s.totalAmount,
+    })),
+    event: {
+      name: event.name,
+      startDate: event.startDate,
+      location: event.location,
+      client: event.client,
+    },
+    currency,
+  });
 
-    const batchEmailQueued = await queueSponsorshipEmail(
-      "SPONSORSHIP_BATCH_SUBMITTED",
+  await enqueueSponsorshipEmailOutboxEvent(
+    db,
+    {
+      trigger: "SPONSORSHIP_BATCH_SUBMITTED",
       eventId,
-      {
+      input: {
         recipientEmail: result.batch.email,
         recipientName: result.batch.contactName,
         context: batchContext,
       },
-    );
-    if (!batchEmailQueued) {
-      logger.warn(
-        { trigger: "SPONSORSHIP_BATCH_SUBMITTED", eventId },
-        "No email template configured - lab will not receive confirmation email",
-      );
-    }
+    },
+    `email:sponsorship:SPONSORSHIP_BATCH_SUBMITTED:${result.batchId}`,
+  );
+  if (!isLinkedMode || !result.autoApprove) {
+    return;
+  }
 
-    if (!isLinkedMode || !result.autoApprove) {
-      return;
-    }
+  for (const entry of result.linkedEmailEntries) {
+    const context = buildLinkedSponsorshipContext({
+      amountApplied: entry.amountApplied,
+      sponsorship: {
+        code: entry.sponsorship.code,
+        beneficiaryName: entry.sponsorship.beneficiaryName,
+        coversBasePrice: entry.sponsorship.coversBasePrice,
+        coveredAccessIds: entry.sponsorship.coveredAccessIds,
+        totalAmount: entry.sponsorship.totalAmount,
+        batch: {
+          labName: result.batch.labName,
+          contactName: result.batch.contactName,
+          email: result.batch.email,
+        },
+      },
+      registration: {
+        ...entry.registration,
+        phone: entry.registration.phone ?? null,
+      },
+      event: {
+        name: event.name,
+        slug: event.slug,
+        startDate: event.startDate,
+        location: event.location,
+        client: event.client,
+      },
+      pricing: pricing ? { basePrice: pricing.basePrice } : null,
+      accessItems,
+      currency,
+    });
 
-    for (const entry of result.linkedEmailEntries) {
-      const context = buildLinkedSponsorshipContext({
-        amountApplied: entry.amountApplied,
-        sponsorship: {
-          code: entry.sponsorship.code,
-          beneficiaryName: entry.sponsorship.beneficiaryName,
-          coversBasePrice: entry.sponsorship.coversBasePrice,
-          coveredAccessIds: entry.sponsorship.coveredAccessIds,
-          totalAmount: entry.sponsorship.totalAmount,
-          batch: {
-            labName: result.batch.labName,
-            contactName: result.batch.contactName,
-            email: result.batch.email,
-          },
-        },
-        registration: {
-          ...entry.registration,
-          phone: entry.registration.phone ?? null,
-        },
-        event: {
-          name: event.name,
-          slug: event.slug,
-          startDate: event.startDate,
-          location: event.location,
-          client: event.client,
-        },
-        pricing: pricing ? { basePrice: pricing.basePrice } : null,
-        accessItems,
-        currency,
-      });
-
-      const linkedEmailQueued = await queueSponsorshipEmail(
-        "SPONSORSHIP_LINKED",
+    await enqueueSponsorshipEmailOutboxEvent(
+      db,
+      {
+        trigger: "SPONSORSHIP_LINKED",
         eventId,
-        {
+        input: {
           recipientEmail: entry.registration.email,
           recipientName:
             entry.registration.firstName || entry.sponsorship.beneficiaryName,
           context,
           registrationId: entry.registration.id,
         },
-      );
-      if (!linkedEmailQueued) {
-        logger.warn(
-          {
-            trigger: "SPONSORSHIP_LINKED",
-            eventId,
-            registrationId: entry.registration.id,
-          },
-          "No email template configured - doctor will not receive sponsorship notification",
-        );
-      }
+      },
+      `email:sponsorship:SPONSORSHIP_LINKED:${entry.registration.id}:${entry.sponsorship.code}`,
+    );
 
-      if (entry.isFullySponsored) {
-        await queueTriggeredEmail("PAYMENT_CONFIRMED", eventId, {
-          id: entry.registration.id,
-          email: entry.registration.email,
-          firstName: entry.registration.firstName,
-          lastName: entry.registration.lastName,
-        });
-      } else if (entry.registration.sponsorshipAmount > 0) {
-        const partialQueued = await queueSponsorshipEmail(
-          "SPONSORSHIP_PARTIAL",
+    if (entry.isFullySponsored) {
+      await enqueueTriggeredEmailOutboxEvent(
+        db,
+        {
+          trigger: "PAYMENT_CONFIRMED",
           eventId,
-          {
+          registration: {
+            id: entry.registration.id,
+            email: entry.registration.email,
+            firstName: entry.registration.firstName,
+            lastName: entry.registration.lastName,
+          },
+        },
+        `email:triggered:PAYMENT_CONFIRMED:${entry.registration.id}`,
+      );
+    } else if (entry.registration.sponsorshipAmount > 0) {
+      await enqueueSponsorshipEmailOutboxEvent(
+        db,
+        {
+          trigger: "SPONSORSHIP_PARTIAL",
+          eventId,
+          input: {
             recipientEmail: entry.registration.email,
             recipientName:
               entry.registration.firstName || entry.sponsorship.beneficiaryName,
             context,
             registrationId: entry.registration.id,
           },
-        );
-        if (!partialQueued) {
-          logger.warn(
-            {
-              trigger: "SPONSORSHIP_PARTIAL",
-              eventId,
-              registrationId: entry.registration.id,
-            },
-            "No email template configured - doctor will not receive partial sponsorship notification",
-          );
-        }
-      }
+        },
+        `email:sponsorship:SPONSORSHIP_PARTIAL:${entry.registration.id}:${entry.sponsorship.code}`,
+      );
     }
-  } catch (emailError) {
-    logger.error(
-      { error: emailError, batchId: result.batchId },
-      "Failed to queue sponsorship emails",
-    );
   }
 }
 
@@ -826,7 +815,7 @@ export async function createSponsorshipBatch(
       );
     }
 
-    return {
+    const result = {
       batchId: batch.id,
       count: createdSponsorships.length,
       autoApprove,
@@ -839,42 +828,45 @@ export async function createSponsorshipBatch(
       sponsorships: createdSponsorships,
       linkedEmailEntries,
     } satisfies BatchTransactionResult;
-  });
 
-  await queueBatchEmails({
-    eventId,
-    event: context.event,
-    pricing: context.pricing,
-    currency: context.currency,
-    accessItems: context.accessItems,
-    isLinkedMode: context.isLinkedMode,
-    result,
-  });
-
-  const clientId = context.event?.clientId;
-  if (clientId) {
-    eventBus.emit({
-      type: "sponsorship.batchCreated",
-      clientId,
+    await queueBatchEmails({
+      db: tx,
       eventId,
-      payload: {
-        id: result.batchId,
-        batchId: result.batchId,
-        count: result.count,
-      },
-      ts: Date.now(),
+      event: context.event,
+      pricing: context.pricing,
+      currency: context.currency,
+      accessItems: context.accessItems,
+      isLinkedMode: context.isLinkedMode,
+      result,
     });
-    // Linked-mode batch can move registrations to PAID/PARTIAL and touch paid counts
-    if (context.isLinkedMode && result.autoApprove) {
-      eventBus.emit({
-        type: "eventAccess.countsChanged",
+
+    const clientId = context.event?.clientId;
+    if (clientId) {
+      await enqueueRealtimeOutboxEvent(tx, {
+        type: "sponsorship.batchCreated",
         clientId,
         eventId,
-        payload: { id: eventId, accessIds: [] },
+        payload: {
+          id: result.batchId,
+          batchId: result.batchId,
+          count: result.count,
+        },
         ts: Date.now(),
       });
+      // Linked-mode batch can move registrations to PAID/PARTIAL and touch paid counts
+      if (context.isLinkedMode && result.autoApprove) {
+        await enqueueRealtimeOutboxEvent(tx, {
+          type: "eventAccess.countsChanged",
+          clientId,
+          eventId,
+          payload: { id: eventId, accessIds: [] },
+          ts: Date.now(),
+        });
+      }
     }
-  }
+
+    return result;
+  });
 
   return {
     batchId: result.batchId,

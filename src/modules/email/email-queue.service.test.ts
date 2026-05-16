@@ -17,11 +17,8 @@ import {
   getEmailQueueHealth,
   getQueueStats,
 } from "./email-queue.service.js";
-import type {
-  EmailLog,
-  EmailTemplate,
-  Prisma,
-} from "@/generated/prisma/client.js";
+import { Prisma } from "@/generated/prisma/client.js";
+import type { EmailLog, EmailTemplate } from "@/generated/prisma/client.js";
 import type { TiptapDocument } from "./email.types.js";
 
 // Mock the email-sendgrid.service
@@ -125,6 +122,14 @@ function createMockEmailLog(overrides: Partial<EmailLog> = {}): EmailLog {
     failedAt: null,
     ...overrides,
   };
+}
+
+function prismaUniqueError(meta: Record<string, unknown>) {
+  return new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+    code: "P2002",
+    clientVersion: "7.2.0",
+    meta,
+  });
 }
 
 // Type for email log with relations
@@ -296,6 +301,31 @@ describe("Email Queue Service", () => {
 
       expect(result).toBe(false);
       expect(prismaMock.emailLog.create).not.toHaveBeenCalled();
+    });
+
+    it("should return false when the DB trigger dedupe index wins a race", async () => {
+      const mockTemplate = createMockEmailTemplate({
+        id: templateId,
+        trigger: "REGISTRATION_CREATED",
+      });
+
+      vi.mocked(getTemplateByTrigger).mockResolvedValue(mockTemplate);
+      prismaMock.emailLog.create.mockRejectedValueOnce(
+        prismaUniqueError({
+          target: "email_logs_registration_trigger_active_key",
+        }),
+      );
+
+      const result = await queueTriggeredEmail(
+        "REGISTRATION_CREATED",
+        eventId,
+        {
+          id: registrationId,
+          email: "test@example.com",
+        },
+      );
+
+      expect(result).toBe(false);
     });
 
     it("should handle registration with only firstName", async () => {
@@ -485,7 +515,11 @@ describe("Email Queue Service", () => {
       const mockEvent = createMockEvent({ clientId: mockClient.id });
 
       const mockEmailLog: EmailLogWithRelations = {
-        ...createMockEmailLog({ status: "QUEUED", retryCount: 3, attemptCount: 4 }), // Max retries reached
+        ...createMockEmailLog({
+          status: "QUEUED",
+          retryCount: 3,
+          attemptCount: 4,
+        }), // Max retries reached
         template: mockTemplate,
         registration: {
           id: registrationId,
@@ -510,7 +544,10 @@ describe("Email Queue Service", () => {
       expect(result.failed).toBe(1);
       expect(prismaMock.emailLog.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: expect.objectContaining({ id: mockEmailLog.id, lockedBy: expect.any(String) }),
+          where: expect.objectContaining({
+            id: mockEmailLog.id,
+            lockedBy: expect.any(String),
+          }),
           data: expect.objectContaining({
             status: "FAILED",
             errorMessage: "SendGrid API error",
@@ -528,7 +565,11 @@ describe("Email Queue Service", () => {
       const mockEvent = createMockEvent({ clientId: mockClient.id });
 
       const mockEmailLog: EmailLogWithRelations = {
-        ...createMockEmailLog({ status: "QUEUED", retryCount: 1, attemptCount: 2 }), // Retries remaining
+        ...createMockEmailLog({
+          status: "QUEUED",
+          retryCount: 1,
+          attemptCount: 2,
+        }), // Retries remaining
         template: mockTemplate,
         registration: {
           id: registrationId,
@@ -552,7 +593,10 @@ describe("Email Queue Service", () => {
 
       expect(prismaMock.emailLog.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: expect.objectContaining({ id: mockEmailLog.id, lockedBy: expect.any(String) }),
+          where: expect.objectContaining({
+            id: mockEmailLog.id,
+            lockedBy: expect.any(String),
+          }),
           data: expect.objectContaining({
             status: "QUEUED", // Re-queued for retry
             retryCount: { increment: 1 },
@@ -725,7 +769,11 @@ describe("Email Queue Service", () => {
       expect(result.skipped).toBe(0);
       expect(prismaMock.emailLog.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: mockEmailLog.id, status: "SENDING", lockedBy: "worker-a" },
+          where: {
+            id: mockEmailLog.id,
+            status: "SENDING",
+            lockedBy: "worker-a",
+          },
         }),
       );
     });
@@ -744,7 +792,7 @@ describe("Email Queue Service", () => {
       expect(result).toEqual({ requeued: 2, deadLettered: 1 });
       expect(prismaMock.$executeRawUnsafe).toHaveBeenNthCalledWith(
         1,
-        expect.stringContaining('"status" = \'QUEUED\''),
+        expect.stringContaining("\"status\" = 'QUEUED'"),
         now,
         new Date("2025-12-31T23:50:00.000Z"),
         new Date("2026-01-01T00:01:00.000Z"),
@@ -753,7 +801,7 @@ describe("Email Queue Service", () => {
       );
       expect(prismaMock.$executeRawUnsafe).toHaveBeenNthCalledWith(
         2,
-        expect.stringContaining('"status" = \'FAILED\''),
+        expect.stringContaining("\"status\" = 'FAILED'"),
         now,
         new Date("2025-12-31T23:50:00.000Z"),
       );
@@ -799,8 +847,13 @@ describe("Email Queue Service", () => {
         .mockResolvedValueOnce(4 as never)
         .mockResolvedValueOnce(2 as never);
       prismaMock.emailLog.findFirst
-        .mockResolvedValueOnce({ queuedAt: new Date(Date.now() - 1000) } as never)
-        .mockResolvedValueOnce({ lockedAt: new Date(Date.now() - 2000), updatedAt: new Date() } as never);
+        .mockResolvedValueOnce({
+          queuedAt: new Date(Date.now() - 1000),
+        } as never)
+        .mockResolvedValueOnce({
+          lockedAt: new Date(Date.now() - 2000),
+          updatedAt: new Date(),
+        } as never);
 
       const health = await getEmailQueueHealth();
 
