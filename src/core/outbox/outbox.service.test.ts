@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prismaMock } from "../../../tests/mocks/prisma.js";
+import { REALTIME_EMIT_TYPE } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   handleOutboxEvent: vi.fn(),
@@ -25,11 +26,12 @@ describe("outbox service", () => {
     vi.clearAllMocks();
     prismaMock.outboxEvent.create.mockResolvedValue({ id: "outbox-1" } as never);
     prismaMock.$executeRaw.mockResolvedValue(0);
+    prismaMock.outboxEvent.updateMany.mockResolvedValue({ count: 1 } as never);
   });
 
   it("enqueues outbox events with serialized payloads", async () => {
     await enqueueOutboxEvent(prismaMock as never, {
-      type: "realtime.emit",
+      type: REALTIME_EMIT_TYPE,
       aggregateType: "Registration",
       aggregateId: "registration-1",
       clientId: "client-1",
@@ -46,7 +48,7 @@ describe("outbox service", () => {
 
     expect(prismaMock.outboxEvent.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
-        type: "realtime.emit",
+        type: REALTIME_EMIT_TYPE,
         aggregateType: "Registration",
         aggregateId: "registration-1",
         clientId: "client-1",
@@ -69,7 +71,7 @@ describe("outbox service", () => {
     prismaMock.outboxEvent.findMany.mockResolvedValue([
       {
         id: "processed",
-        type: "realtime.emit",
+        type: REALTIME_EMIT_TYPE,
         payload: {},
         attemptCount: 1,
         maxAttempts: 5,
@@ -96,7 +98,12 @@ describe("outbox service", () => {
 
     const result = await processOutboxEvents(3, { workerId: "worker-1" });
 
-    expect(result).toEqual({ processed: 1, skipped: 1, failed: 1 });
+    expect(result).toEqual({
+      processed: 1,
+      skipped: 1,
+      failed: 1,
+      leaseLost: 0,
+    });
     expect(prismaMock.outboxEvent.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ id: "processed" }),
@@ -115,5 +122,115 @@ describe("outbox service", () => {
         data: expect.objectContaining({ status: "FAILED" }),
       }),
     );
+  });
+
+  it("claims only realtime rows for realtime scope", async () => {
+    prismaMock.$queryRawUnsafe.mockResolvedValue([]);
+
+    await processOutboxEvents(3, {
+      workerId: "worker-1",
+      scope: "realtime",
+    });
+
+    expect(prismaMock.$queryRawUnsafe).toHaveBeenCalledWith(
+      expect.stringContaining(`AND "type" = '${REALTIME_EMIT_TYPE}'`),
+      expect.any(Date),
+      expect.any(Date),
+      "worker-1",
+      3,
+    );
+  });
+
+  it("excludes realtime rows for background scope", async () => {
+    prismaMock.$queryRawUnsafe.mockResolvedValue([]);
+
+    await processOutboxEvents(3, {
+      workerId: "worker-1",
+      scope: "background",
+    });
+
+    expect(prismaMock.$queryRawUnsafe).toHaveBeenCalledWith(
+      expect.stringContaining(`AND "type" <> '${REALTIME_EMIT_TYPE}'`),
+      expect.any(Date),
+      expect.any(Date),
+      "worker-1",
+      3,
+    );
+  });
+
+  it("reports lease-lost rows when status marking affects no rows", async () => {
+    prismaMock.$queryRawUnsafe.mockResolvedValue([{ id: "processed" }]);
+    prismaMock.outboxEvent.findMany.mockResolvedValue([
+      {
+        id: "processed",
+        type: REALTIME_EMIT_TYPE,
+        payload: {},
+        attemptCount: 1,
+        maxAttempts: 5,
+      },
+    ] as never);
+    mocks.handleOutboxEvent.mockResolvedValueOnce("processed");
+    prismaMock.outboxEvent.updateMany.mockResolvedValueOnce({
+      count: 0,
+    } as never);
+
+    const result = await processOutboxEvents(1, { workerId: "worker-1" });
+
+    expect(result).toEqual({
+      processed: 0,
+      skipped: 0,
+      failed: 0,
+      leaseLost: 1,
+    });
+  });
+
+  it("renews the lease while a handler is in flight", async () => {
+    vi.useFakeTimers();
+    try {
+      prismaMock.$queryRawUnsafe.mockResolvedValue([{ id: "slow" }]);
+      prismaMock.outboxEvent.findMany.mockResolvedValue([
+        {
+          id: "slow",
+          type: REALTIME_EMIT_TYPE,
+          payload: {},
+          attemptCount: 1,
+          maxAttempts: 5,
+        },
+      ] as never);
+
+      let resolveHandler!: (value: "processed") => void;
+      const handlerPromise = new Promise<"processed">((resolve) => {
+        resolveHandler = resolve;
+      });
+      mocks.handleOutboxEvent.mockReturnValueOnce(handlerPromise);
+
+      const processing = processOutboxEvents(1, {
+        workerId: "worker-1",
+        leaseMs: 2_000,
+      });
+
+      await vi.waitFor(() => {
+        expect(mocks.handleOutboxEvent).toHaveBeenCalled();
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(prismaMock.outboxEvent.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            id: "slow",
+            status: "PROCESSING",
+            lockedBy: "worker-1",
+          }),
+          data: expect.objectContaining({
+            lockedUntil: expect.any(Date),
+          }),
+        }),
+      );
+
+      resolveHandler("processed");
+      await processing;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

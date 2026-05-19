@@ -47,7 +47,9 @@ bun run dev
 | Script | Description |
 |--------|-------------|
 | `bun run dev` | Start dev server with hot reload |
+| `bun run dev:worker` | Start background worker with hot reload |
 | `bun run start` | Run production build |
+| `bun run start:worker` | Run production background worker |
 | `bun run type-check` | TypeScript type checking |
 | `bun run lint` | Run ESLint |
 | `bun run test` | Run mocked unit tests in watch mode |
@@ -94,6 +96,7 @@ bun run dev
 
 | Module | Purpose | Exports |
 |--------|---------|---------|
+| **core/outbox** | Durable side effects, retries, worker dispatch | `enqueueOutboxEvent`, `processOutboxEvents`, `startRealtimeOutboxPump` |
 | **identity** | Users, roles, auth | `UserRole`, `usersRoutes` |
 | **clients** | Tenant organizations, module access | `clientExists`, `MODULE_IDS`, `clientsRoutes` |
 | **events** | Event CRUD, capacity | `getEventById`, `eventExists`, `eventsRoutes` |
@@ -104,6 +107,13 @@ bun run dev
 | **pricing** | Pricing rules engine | `calculatePrice`, `pricingRoutes` |
 | **email** | Templates, queue, delivery | `queueTriggeredEmail`, `emailRoutes` |
 | **reports** | Financial reports, exports | `reportsRoutes` |
+| **realtime** | Authenticated SSE stream for admin dashboards | `realtimeRoutes`, `drainRealtimeConnections` |
+
+### Runtime Workers
+
+The web process owns HTTP routes, SSE connections, and the realtime outbox pump. The realtime pump claims only `realtime.emit` outbox rows and emits them to the process-local SSE event bus.
+
+The background worker process (`bun run start:worker`) owns non-realtime outbox rows, email queue delivery, and abstract book jobs. When web and worker are split, run the web process with `RUN_WORKERS=false`; do not run realtime outbox processing in the standalone worker.
 
 ### Database Schema
 

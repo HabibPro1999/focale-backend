@@ -43,3 +43,7 @@ export type OutboxPayloadByType = {
 };
 
 export type OutboxEventType = keyof OutboxPayloadByType;
+
+export const REALTIME_EMIT_TYPE = "realtime.emit" satisfies OutboxEventType;
+
+export type RealtimeOutboxPayload = OutboxPayloadByType[typeof REALTIME_EMIT_TYPE];

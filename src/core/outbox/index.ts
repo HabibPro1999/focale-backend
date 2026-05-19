@@ -7,7 +7,12 @@ export {
   getOutboxHealth,
   processOutboxEvents,
 } from "./outbox.service.js";
-export type { OutboxClient } from "./outbox.service.js";
+export { startRealtimeOutboxPump } from "./realtime-pump.js";
+export type {
+  OutboxClient,
+  OutboxProcessingScope,
+  ProcessOutboxResult,
+} from "./outbox.service.js";
 export type {
   AbstractEmailPayload,
   OutboxEventStatus,

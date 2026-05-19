@@ -626,8 +626,10 @@ model EmailTemplate {
   event     Event?     @relation(fields: [eventId], references: [id], onDelete: SetNull)
   emailLogs EmailLog[]
 
-  // Constraints
-  @@unique([clientId, trigger, eventId]) // One template per trigger per event
+  // Trigger uniqueness is enforced by raw partial unique indexes because this
+  // repo keeps CockroachDB partial-index predicates in SQL migrations:
+  // - email_template_registration_uniq for registration triggers
+  // - email_template_abstract_uniq for abstract triggers
   @@index([clientId, category])
   @@index([clientId, trigger])
   @@index([eventId])

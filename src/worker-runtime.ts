@@ -5,6 +5,7 @@ import { processAbstractBookJobs } from "@abstracts";
 import { processOutboxEvents } from "@core/outbox";
 import { processEmailQueue } from "@modules/email/index.js";
 import { logger } from "@shared/utils/logger.js";
+import { startPoller, type Poller } from "@shared/utils/poller.js";
 
 type WorkerRuntime = {
   workerId: string;
@@ -47,99 +48,57 @@ export function shouldRunWorkers(): boolean {
 export function startWorkerRuntime(): WorkerRuntime {
   const workerId = `${hostname()}:${process.pid}:${randomUUID()}`;
 
-  let currentProcessing: Promise<void> | null = null;
-  let currentBookProcessing: Promise<void> | null = null;
-  let currentOutboxProcessing: Promise<void> | null = null;
-  let isStopping = false;
-  let isProcessingEmails = false;
-  let isProcessingBookJobs = false;
-  let isProcessingOutbox = false;
-
-  // Start outbox worker first: it turns durable domain events into queue rows
-  // and realtime notifications.
-  const outboxInterval = setInterval(() => {
-    if (isStopping || isProcessingOutbox) return;
-    isProcessingOutbox = true;
-    currentOutboxProcessing = processOutboxEvents(50, { workerId })
-      .then((result) => {
-        if (result.processed > 0 || result.skipped > 0 || result.failed > 0) {
-          logger.info({ result }, "Outbox events processed");
-        }
-      })
-      .catch((err) => {
-        logger.error({ err }, "Outbox event processing failed");
-      })
-      .finally(() => {
-        isProcessingOutbox = false;
-        currentOutboxProcessing = null;
+  // Start outbox worker first: it turns durable non-realtime domain events into
+  // queue rows. Realtime events are consumed by the web process that owns SSE.
+  const outboxPoller: Poller = startPoller({
+    name: "Outbox worker",
+    intervalMs: 5_000,
+    work: async () => {
+      const result = await processOutboxEvents(50, {
+        workerId,
+        scope: "background",
       });
-  }, 5_000);
-  logger.info({ workerId }, "Outbox worker started (5s interval)");
+      if (
+        result.processed > 0 ||
+        result.skipped > 0 ||
+        result.failed > 0 ||
+        result.leaseLost > 0
+      ) {
+        logger.info({ result }, "Outbox events processed");
+      }
+    },
+  });
 
-  // Start email queue worker (processes every 15 seconds for faster email delivery)
-  const emailQueueInterval = setInterval(() => {
-    if (isStopping || isProcessingEmails) return;
-    isProcessingEmails = true;
-    currentProcessing = processEmailQueue(50, { workerId })
-      .then((result) => {
-        if (result.processed > 0) {
-          logger.info({ result }, "Email queue processed");
-        }
-      })
-      .catch((err) => {
-        logger.error({ err }, "Email queue processing failed");
-      })
-      .finally(() => {
-        isProcessingEmails = false;
-        currentProcessing = null;
-      });
-  }, 15_000);
-  logger.info({ workerId }, "Email queue worker started (15s interval)");
+  const emailPoller: Poller = startPoller({
+    name: "Email queue worker",
+    intervalMs: 15_000,
+    work: async () => {
+      const result = await processEmailQueue(50, { workerId });
+      if (result.processed > 0) {
+        logger.info({ result }, "Email queue processed");
+      }
+    },
+  });
 
-  // Start Abstract Book worker (processes one generation job every 30 seconds)
-  const bookJobInterval = setInterval(() => {
-    if (isStopping || isProcessingBookJobs) return;
-    isProcessingBookJobs = true;
-    currentBookProcessing = processAbstractBookJobs(1, { workerId })
-      .then((result) => {
-        if (result.processed > 0) {
-          logger.info({ result }, "Abstract Book jobs processed");
-        }
-      })
-      .catch((err) => {
-        logger.error({ err }, "Abstract Book job processing failed");
-      })
-      .finally(() => {
-        isProcessingBookJobs = false;
-        currentBookProcessing = null;
-      });
-  }, 30_000);
-  logger.info({ workerId }, "Abstract Book worker started (30s interval)");
+  const bookPoller: Poller = startPoller({
+    name: "Abstract Book worker",
+    intervalMs: 30_000,
+    work: async () => {
+      const result = await processAbstractBookJobs(1, { workerId });
+      if (result.processed > 0) {
+        logger.info({ result }, "Abstract Book jobs processed");
+      }
+    },
+  });
 
   return {
     workerId,
     stop: async () => {
-      if (isStopping) return;
-      isStopping = true;
-
-      clearInterval(outboxInterval);
-      clearInterval(emailQueueInterval);
-      clearInterval(bookJobInterval);
-      if (currentOutboxProcessing) {
-        logger.info("Waiting for in-flight outbox batch to complete...");
-        await currentOutboxProcessing;
-      }
-      logger.info("Outbox worker stopped");
-      if (currentProcessing) {
-        logger.info("Waiting for in-flight email batch to complete...");
-        await currentProcessing;
-      }
-      logger.info("Email queue worker stopped");
-      if (currentBookProcessing) {
-        logger.info("Waiting for in-flight Abstract Book job to complete...");
-        await currentBookProcessing;
-      }
-      logger.info("Abstract Book worker stopped");
+      await Promise.all([
+        outboxPoller.stop(),
+        emailPoller.stop(),
+        bookPoller.stop(),
+      ]);
     },
   };
 }

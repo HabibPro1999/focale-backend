@@ -4,10 +4,11 @@ import { queueAbstractEmail } from "@modules/abstracts/abstracts.email-queue.js"
 import type {
   AbstractEmailPayload,
   OutboxEventType,
-  OutboxPayloadByType,
+  RealtimeOutboxPayload,
   SponsorshipEmailPayload,
   TriggeredEmailPayload,
 } from "./types.js";
+import { REALTIME_EMIT_TYPE } from "./types.js";
 
 export type OutboxHandlerResult = "processed" | "skipped";
 
@@ -16,8 +17,8 @@ export async function handleOutboxEvent(
   payload: unknown,
 ): Promise<OutboxHandlerResult> {
   switch (type as OutboxEventType) {
-    case "realtime.emit":
-      eventBus.emit(payload as OutboxPayloadByType["realtime.emit"]);
+    case REALTIME_EMIT_TYPE:
+      eventBus.emit(payload as RealtimeOutboxPayload);
       return "processed";
 
     case "email.triggered": {

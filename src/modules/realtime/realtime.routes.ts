@@ -76,7 +76,7 @@ export async function realtimeRoutes(app: AppInstance): Promise<void> {
 
       const matches = (ev: AppEvent): boolean => {
         if (ev.clientId !== scopedClientId) return false;
-        if (eventId && ev.eventId && ev.eventId !== eventId) return false;
+        if (eventId && ev.eventId !== eventId) return false;
         return true;
       };
 

@@ -253,6 +253,29 @@ describe("GET /api/stream", () => {
     expect(JSON.parse(dataOnly[0].data!).payload.id).toBe("match");
   });
 
+  it("does not deliver client-scoped events to an event-scoped stream", async () => {
+    h.currentUser = mockUsers.clientAdmin;
+    app = await buildTestApp();
+    const addr = await app.listen({ port: 0, host: "127.0.0.1" });
+
+    const conn = await openStream(addr + "/api/stream?eventId=ev-1");
+    openConn = conn;
+    await conn.waitFor((m) => m.some((x) => x.event === "ready"));
+
+    eventBus.emit({
+      type: "registration.updated",
+      clientId: "client-A",
+      payload: { id: "client-wide" },
+      ts: 1,
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+    const noDataFrames = (m: SseMessage[]) =>
+      m.filter((x) => x.data && !x.event).length === 0;
+    const res = await conn.waitFor((m) => noDataFrames(m), 100).catch(() => null);
+    expect(res).not.toBeNull();
+  });
+
   it("super admin without ?clientId receives scope-required and closes", async () => {
     h.currentUser = mockUsers.superAdmin;
     app = await buildTestApp();

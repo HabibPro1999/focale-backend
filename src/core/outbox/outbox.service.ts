@@ -5,16 +5,21 @@ import { Prisma } from "@/generated/prisma/client.js";
 import { logger } from "@shared/utils/logger.js";
 import { getPrismaUniqueTarget } from "@shared/errors/prisma-error.js";
 import { handleOutboxEvent } from "./handlers.js";
-import type {
-  OutboxEventType,
-  OutboxPayloadByType,
-  OutboxEventStatus,
+import {
+  REALTIME_EMIT_TYPE,
+  type OutboxEventType,
+  type OutboxPayloadByType,
+  type OutboxEventStatus,
+  type RealtimeOutboxPayload,
 } from "./types.js";
 
 const OUTBOX_LEASE_MS = 5 * 60 * 1000;
 const OUTBOX_UNHEALTHY_AGE_MS = 10 * 60 * 1000;
 const OUTBOX_UNHEALTHY_SIZE = 1000;
+const OUTBOX_RECOVERY_INTERVAL_MS = 60 * 1000;
 const DEFAULT_WORKER_ID = `outbox:${hostname()}:${process.pid}:${randomUUID()}`;
+
+let lastRecoveryAt = 0;
 
 export type OutboxClient = {
   outboxEvent: Pick<typeof prisma.outboxEvent, "create">;
@@ -34,6 +39,16 @@ export interface EnqueueOutboxInput<T extends OutboxEventType> {
 export interface ProcessOutboxOptions {
   workerId?: string;
   leaseMs?: number;
+  scope?: OutboxProcessingScope;
+}
+
+export type OutboxProcessingScope = "all" | "realtime" | "background";
+
+export interface ProcessOutboxResult {
+  processed: number;
+  skipped: number;
+  failed: number;
+  leaseLost: number;
 }
 
 function toJsonValue(value: unknown): Prisma.InputJsonValue {
@@ -57,6 +72,12 @@ function clearOutboxLeaseFields() {
     lockedUntil: null,
     lockedBy: null,
   };
+}
+
+function outboxScopeClause(scope: OutboxProcessingScope): string {
+  if (scope === "realtime") return `AND "type" = '${REALTIME_EMIT_TYPE}'`;
+  if (scope === "background") return `AND "type" <> '${REALTIME_EMIT_TYPE}'`;
+  return "";
 }
 
 function isOutboxDedupeViolation(error: unknown): boolean {
@@ -107,11 +128,11 @@ export async function enqueueOutboxEvent<T extends OutboxEventType>(
 
 export async function enqueueRealtimeOutboxEvent(
   client: OutboxClient,
-  payload: OutboxPayloadByType["realtime.emit"],
+  payload: RealtimeOutboxPayload,
   dedupeKey?: string,
 ): Promise<boolean> {
   return enqueueOutboxEvent(client, {
-    type: "realtime.emit",
+    type: REALTIME_EMIT_TYPE,
     payload,
     aggregateType: payload.type,
     aggregateId: String(payload.payload.id),
@@ -209,14 +230,13 @@ async function markOutboxProcessed(
   id: string,
   status: Extract<OutboxEventStatus, "PROCESSED" | "SKIPPED">,
   workerId: string,
-): Promise<void> {
+): Promise<boolean> {
   const now = new Date();
-  await prisma.outboxEvent.updateMany({
+  const updated = await prisma.outboxEvent.updateMany({
     where: {
       id,
       status: "PROCESSING",
       lockedBy: workerId,
-      lockedUntil: { gt: now },
     },
     data: {
       status,
@@ -226,6 +246,7 @@ async function markOutboxProcessed(
       ...clearOutboxLeaseFields(),
     },
   });
+  return updated.count > 0;
 }
 
 async function markOutboxFailed(
@@ -234,15 +255,14 @@ async function markOutboxFailed(
   attemptCount: number,
   maxAttempts: number,
   error: unknown,
-): Promise<void> {
+): Promise<boolean> {
   const now = new Date();
   const shouldDeadLetter = attemptCount >= maxAttempts;
-  await prisma.outboxEvent.updateMany({
+  const updated = await prisma.outboxEvent.updateMany({
     where: {
       id,
       status: "PROCESSING",
       lockedBy: workerId,
-      lockedUntil: { gt: now },
     },
     data: {
       status: shouldDeadLetter ? "DEAD_LETTERED" : "FAILED",
@@ -254,19 +274,65 @@ async function markOutboxFailed(
       ...clearOutboxLeaseFields(),
     },
   });
+  return updated.count > 0;
+}
+
+function startOutboxLeaseRenewal(
+  id: string,
+  workerId: string,
+  leaseMs: number,
+): () => void {
+  const renewEveryMs = Math.max(1_000, Math.floor(leaseMs / 2));
+  const timer: ReturnType<typeof setInterval> = setInterval(() => {
+    const now = new Date();
+    void prisma.outboxEvent
+      .updateMany({
+        where: {
+          id,
+          status: "PROCESSING",
+          lockedBy: workerId,
+        },
+        data: {
+          lockedUntil: new Date(now.getTime() + leaseMs),
+        },
+      })
+      .catch((err: unknown) => {
+        logger.warn({ err, outboxEventId: id }, "Outbox lease renewal failed");
+      });
+  }, renewEveryMs);
+  if (typeof timer.unref === "function") timer.unref();
+  return () => clearInterval(timer);
+}
+
+function recordLeaseLost(
+  result: ProcessOutboxResult,
+  id: string,
+  workerId: string,
+  status: OutboxEventStatus,
+): void {
+  result.leaseLost++;
+  logger.warn(
+    { outboxEventId: id, workerId, status },
+    "Outbox event lease was lost before status update",
+  );
 }
 
 export async function processOutboxEvents(
   batchSize = 50,
   options: ProcessOutboxOptions = {},
-): Promise<{ processed: number; skipped: number; failed: number }> {
-  const result = { processed: 0, skipped: 0, failed: 0 };
+): Promise<ProcessOutboxResult> {
+  const result = { processed: 0, skipped: 0, failed: 0, leaseLost: 0 };
   const workerId = options.workerId ?? DEFAULT_WORKER_ID;
   const leaseMs = options.leaseMs ?? OUTBOX_LEASE_MS;
+  const scope = options.scope ?? "all";
   const now = new Date();
   const lockedUntil = new Date(now.getTime() + leaseMs);
+  const scopeClause = outboxScopeClause(scope);
 
-  await recoverStaleOutboxLeases(now);
+  if (now.getTime() - lastRecoveryAt >= OUTBOX_RECOVERY_INTERVAL_MS) {
+    lastRecoveryAt = now.getTime();
+    await recoverStaleOutboxLeases(now);
+  }
 
   const claimedRows = await prisma.$queryRawUnsafe<Array<{ id: string }>>(
     `UPDATE "outbox_events"
@@ -284,6 +350,7 @@ export async function processOutboxEvents(
         WHERE "status" IN ('PENDING', 'FAILED')
           AND ("next_attempt_at" IS NULL OR "next_attempt_at" <= $1)
           AND "attempt_count" < "max_attempts"
+          ${scopeClause}
         ORDER BY "created_at" ASC
         LIMIT $4
         FOR UPDATE SKIP LOCKED
@@ -304,28 +371,38 @@ export async function processOutboxEvents(
   });
 
   for (const event of events) {
+    const stopRenewal = startOutboxLeaseRenewal(event.id, workerId, leaseMs);
     try {
       const outcome = await handleOutboxEvent(event.type, event.payload);
       if (outcome === "skipped") {
-        result.skipped++;
-        await markOutboxProcessed(event.id, "SKIPPED", workerId);
+        const marked = await markOutboxProcessed(event.id, "SKIPPED", workerId);
+        if (marked) result.skipped++;
+        else recordLeaseLost(result, event.id, workerId, "SKIPPED");
       } else {
-        result.processed++;
-        await markOutboxProcessed(event.id, "PROCESSED", workerId);
+        const marked = await markOutboxProcessed(
+          event.id,
+          "PROCESSED",
+          workerId,
+        );
+        if (marked) result.processed++;
+        else recordLeaseLost(result, event.id, workerId, "PROCESSED");
       }
     } catch (error) {
-      result.failed++;
       logger.error(
         { err: error, outboxEventId: event.id, type: event.type },
         "Outbox event processing failed",
       );
-      await markOutboxFailed(
+      const marked = await markOutboxFailed(
         event.id,
         workerId,
         event.attemptCount,
         event.maxAttempts,
         error,
       );
+      if (marked) result.failed++;
+      else recordLeaseLost(result, event.id, workerId, "FAILED");
+    } finally {
+      stopRenewal();
     }
   }
 

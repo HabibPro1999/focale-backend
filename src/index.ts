@@ -2,6 +2,7 @@ import { buildServer } from "@core/server.js";
 import { config } from "@config/app.config.js";
 import { logger } from "@shared/utils/logger.js";
 import { gracefulShutdown } from "@core/shutdown.js";
+import { startRealtimeOutboxPump } from "@core/outbox";
 import {
   shouldRunWorkers,
   startWorkerRuntime,
@@ -22,9 +23,18 @@ process.on("uncaughtException", (error) => {
 async function main() {
   const server = await buildServer();
   let workers: ReturnType<typeof startWorkerRuntime> | undefined;
+  let realtimePump: ReturnType<typeof startRealtimeOutboxPump> | undefined;
+  let databaseReady = false;
+
+  const ensureDatabaseReady = async () => {
+    if (databaseReady) return;
+    await waitForDatabase();
+    databaseReady = true;
+  };
 
   // Register hooks and shutdown BEFORE listen (Fastify disallows addHook after listen)
   server.addHook("onClose", async () => {
+    await realtimePump?.stop();
     await workers?.stop();
   });
 
@@ -35,9 +45,16 @@ async function main() {
   await server.listen({ port: config.PORT, host: "0.0.0.0" });
   logger.info(`Server running on port ${config.PORT}`);
 
+  if (!config.realtime.disabled) {
+    await ensureDatabaseReady();
+    realtimePump = startRealtimeOutboxPump();
+  } else {
+    logger.info("Realtime disabled; realtime outbox pump not started");
+  }
+
   if (shouldRunWorkers()) {
     // Verify the database is reachable before starting background workers
-    await waitForDatabase();
+    await ensureDatabaseReady();
     workers = startWorkerRuntime();
   } else {
     logger.info("RUN_WORKERS=false; in-process workers disabled");
