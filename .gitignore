@@ -26,6 +26,13 @@ Thumbs.db
 *.swp
 *.swo
 
+# Local agent workflow artifacts
+.codex/
+.memory/
+.progress/
+AGENTS.md
+CLAUDE.md
+
 # Test coverage
 coverage/
 
@@ -38,7 +45,6 @@ prisma/*.db
 prisma/*.db-journal
 prisma/seed.ts
 src/generated/
-CLAUDE.md
 docs/
 load-env.fish
 
