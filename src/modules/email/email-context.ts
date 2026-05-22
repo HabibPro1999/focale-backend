@@ -221,10 +221,10 @@ const HTML_SAFE_VARIABLES = new Set(["sponsoredItems", "beneficiaryList", "certi
 
 export function resolveVariables(
   template: string,
-  context: EmailContext,
+  context: EmailContext | Record<string, unknown>,
 ): string {
   return template.replace(/\{\{(\w+)\}\}/g, (_match, varId) => {
-    const value = context[varId as keyof EmailContext];
+    const value = (context as Record<string, unknown>)[varId];
 
     if (value !== undefined && value !== null && value !== "") {
       // Server-generated HTML variables skip sanitization

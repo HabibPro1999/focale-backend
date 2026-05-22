@@ -81,16 +81,20 @@ type EmailStatus =
   | "FAILED"
   | "SKIPPED";
 
-// Type guard for EmailContext - validates required fields at runtime
-function isValidEmailContext(obj: unknown): obj is EmailContext {
+type QueueEmailContext = EmailContext | Record<string, unknown>;
+
+function isUsableContextSnapshot(obj: unknown): obj is Record<string, unknown> {
   if (!obj || typeof obj !== "object") return false;
-  const ctx = obj as Record<string, unknown>;
-  // Check for essential required fields
-  return (
-    typeof ctx.firstName === "string" &&
-    typeof ctx.email === "string" &&
-    typeof ctx.eventName === "string"
-  );
+  if (Array.isArray(obj)) return false;
+  return Object.keys(obj).length > 0;
+}
+
+function getOptionalContextString(
+  context: QueueEmailContext,
+  key: string,
+): string | undefined {
+  const value = (context as Record<string, unknown>)[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 const MAX_RETRIES = 3;
@@ -751,12 +755,9 @@ export async function processEmailQueue(
       }
 
       // Build context
-      let context: EmailContext | null = null;
+      let context: QueueEmailContext | null = null;
 
-      if (
-        emailLog.contextSnapshot &&
-        isValidEmailContext(emailLog.contextSnapshot)
-      ) {
+      if (isUsableContextSnapshot(emailLog.contextSnapshot)) {
         context = emailLog.contextSnapshot;
       } else if (emailLog.registration) {
         // Build context from registration
@@ -887,9 +888,11 @@ export async function processEmailQueue(
       const sendResult = await sendEmail({
         to: emailLog.recipientEmail,
         toName: emailLog.recipientName || undefined,
-        fromName: context.eventName,
-        replyTo: context.organizerEmail || undefined,
-        replyToName: context.organizerName || undefined,
+        fromName:
+          getOptionalContextString(context, "eventName") ??
+          getOptionalContextString(context, "congressName"),
+        replyTo: getOptionalContextString(context, "organizerEmail"),
+        replyToName: getOptionalContextString(context, "organizerName"),
         subject: resolvedSubject,
         html: resolvedHtml,
         plainText: resolvedPlain,

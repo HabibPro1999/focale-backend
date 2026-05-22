@@ -650,6 +650,45 @@ describe("Email Queue Service", () => {
       expect(buildEmailContextWithAccess).not.toHaveBeenCalled();
     });
 
+    it("should send abstract emails with abstract-only context snapshots", async () => {
+      const contextSnapshot = {
+        authorName: "Jihed Bouguerra",
+        submissionTitle: "Les Bachlaouis au monde Habib Soula",
+        congressName: "test abstract 2",
+        abstractEditLink:
+          "https://pure-form-theta.vercel.app/testabstract2/abstracts/abstract-123/token",
+      };
+
+      const mockTemplate = createMockEmailTemplate({
+        isActive: true,
+        trigger: null,
+        abstractTrigger: "ABSTRACT_SUBMISSION_ACK",
+        subject: "Received {{submissionTitle}}",
+      });
+      const mockEmailLog: EmailLogWithRelations = {
+        ...createMockEmailLog({
+          status: "QUEUED",
+          registrationId: null,
+          abstractId: "abstract-123",
+          abstractTrigger: "ABSTRACT_SUBMISSION_ACK",
+          contextSnapshot: contextSnapshot as Prisma.JsonValue,
+        }),
+        template: mockTemplate,
+        registration: null,
+      };
+
+      mockClaimedEmails([mockEmailLog]);
+      prismaMock.emailLog.update.mockResolvedValue(mockEmailLog);
+      vi.mocked(sendEmail).mockResolvedValue({ success: true });
+
+      const result = await processEmailQueue();
+
+      expect(result.sent).toBe(1);
+      expect(result.skipped).toBe(0);
+      expect(buildEmailContextWithAccess).not.toHaveBeenCalled();
+      expect(sendEmail).toHaveBeenCalled();
+    });
+
     it("should skip emails when context cannot be built", async () => {
       const mockTemplate = createMockEmailTemplate({ isActive: true });
       const mockEmailLog: EmailLogWithRelations = {
@@ -664,6 +703,40 @@ describe("Email Queue Service", () => {
       const result = await processEmailQueue();
 
       expect(result.skipped).toBe(1);
+      expect(prismaMock.emailLog.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: mockEmailLog.id,
+          status: "SENDING",
+          lockedBy: expect.any(String),
+        },
+        data: expect.objectContaining({
+          status: "SKIPPED",
+          errorMessage: "Could not build email context",
+          lockedAt: null,
+          lockedUntil: null,
+          lockedBy: null,
+        }),
+      });
+    });
+
+    it("should skip emails with an empty context snapshot and no registration", async () => {
+      const mockTemplate = createMockEmailTemplate({ isActive: true });
+      const mockEmailLog: EmailLogWithRelations = {
+        ...createMockEmailLog({
+          status: "QUEUED",
+          contextSnapshot: {} as Prisma.JsonValue,
+        }),
+        template: mockTemplate,
+        registration: null,
+      };
+
+      mockClaimedEmails([mockEmailLog]);
+      prismaMock.emailLog.update.mockResolvedValue(mockEmailLog);
+
+      const result = await processEmailQueue();
+
+      expect(result.skipped).toBe(1);
+      expect(sendEmail).not.toHaveBeenCalled();
       expect(prismaMock.emailLog.updateMany).toHaveBeenCalledWith({
         where: {
           id: mockEmailLog.id,
