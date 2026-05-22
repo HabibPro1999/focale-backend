@@ -2,7 +2,10 @@ import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { auditLog } from "@shared/utils/audit.js";
-import { assertModuleEnabledForClient } from "@clients";
+import {
+  CLIENT_MODULE_GATE_SELECT,
+  assertModuleEnabledForClient,
+} from "@clients";
 import { assertEventWritable } from "@events";
 import { validateCoveredAccessTimeOverlap } from "./sponsorships.utils.js";
 import type { UpdateSponsorshipInput } from "./sponsorships.schema.js";
@@ -44,7 +47,7 @@ export async function updateSponsorship(
           select: {
             clientId: true,
             status: true,
-            client: { select: { enabledModules: true } },
+            client: { select: CLIENT_MODULE_GATE_SELECT },
           },
         },
       },
@@ -272,7 +275,7 @@ export async function cancelSponsorship(
           select: {
             clientId: true,
             status: true,
-            client: { select: { enabledModules: true } },
+            client: { select: CLIENT_MODULE_GATE_SELECT },
           },
         },
       },
@@ -355,7 +358,7 @@ export async function deleteSponsorship(
           select: {
             clientId: true,
             status: true,
-            client: { select: { enabledModules: true } },
+            client: { select: CLIENT_MODULE_GATE_SELECT },
           },
         },
       },

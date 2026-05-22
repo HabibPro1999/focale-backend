@@ -251,7 +251,7 @@ export function sanitizeForHtml(value: unknown): string {
 // FORMATTING HELPERS
 // =============================================================================
 
-function formatDate(date: Date | string | null | undefined): string {
+export function formatDate(date: Date | string | null | undefined): string {
   if (!date) return "";
   const d = new Date(date);
   return d.toLocaleDateString("en-US", {

@@ -163,7 +163,14 @@ export async function queueAbstractEmail(input: {
 
   const config = await prisma.abstractConfig.findUnique({
     where: { eventId: abstract.eventId },
-    select: { editingDeadline: true, finalFileDeadline: true },
+    select: {
+      submissionStartAt: true,
+      submissionDeadline: true,
+      editingDeadline: true,
+      scoringStartAt: true,
+      scoringDeadline: true,
+      finalFileDeadline: true,
+    },
   });
 
   const emailAbstract: AbstractForEmail = {
@@ -180,7 +187,11 @@ export async function queueAbstractEmail(input: {
     linkBaseUrl: abstract.linkBaseUrl,
     event: { name: abstract.event.name, slug: abstract.event.slug },
     config: {
+      submissionStartAt: config?.submissionStartAt ?? null,
+      submissionDeadline: config?.submissionDeadline ?? null,
       editingDeadline: config?.editingDeadline ?? null,
+      scoringStartAt: config?.scoringStartAt ?? null,
+      scoringDeadline: config?.scoringDeadline ?? null,
       finalFileDeadline: config?.finalFileDeadline ?? null,
     },
   };

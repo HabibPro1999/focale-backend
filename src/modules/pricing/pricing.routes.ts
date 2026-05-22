@@ -7,7 +7,11 @@ import {
   assertEventWritable,
   getEventById,
 } from "@events";
-import { assertClientModuleEnabled } from "@clients";
+import {
+  CLIENT_MODULE_GATE_SELECT,
+  assertClientModuleEnabled,
+  isModuleEnabledForClient,
+} from "@clients";
 import { validateFormData, sanitizeFormData, type FormSchema } from "@forms";
 import {
   getEventPricing,
@@ -232,7 +236,7 @@ export async function pricingPublicRoutes(app: AppInstance): Promise<void> {
             select: {
               status: true,
               endDate: true,
-              client: { select: { enabledModules: true } },
+              client: { select: CLIENT_MODULE_GATE_SELECT },
             },
           },
         },
@@ -242,7 +246,7 @@ export async function pricingPublicRoutes(app: AppInstance): Promise<void> {
         throw app.httpErrors.notFound("Form not found");
       }
       assertEventAcceptsPublicActions(form.event);
-      if (!form.event.client.enabledModules.includes("pricing")) {
+      if (!isModuleEnabledForClient(form.event.client, "pricing")) {
         throw new AppError(
           "Pricing module is disabled",
           403,

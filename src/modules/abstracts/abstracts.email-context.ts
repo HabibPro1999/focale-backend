@@ -1,4 +1,5 @@
 import type { AbstractEmailTrigger } from "@/generated/prisma/client.js";
+import { formatDate } from "@modules/email/email-context.js";
 
 export interface AbstractForEmail {
   id: string;
@@ -17,7 +18,11 @@ export interface AbstractForEmail {
     slug: string;
   };
   config: {
+    submissionStartAt: Date | null;
+    submissionDeadline: Date | null;
     editingDeadline: Date | null;
+    scoringStartAt: Date | null;
+    scoringDeadline: Date | null;
     finalFileDeadline: Date | null;
   };
 }
@@ -54,36 +59,33 @@ export function buildAbstractEmailContext(
   const congressName = abstract.event.name;
   const platformLink = `${baseUrl}/${slug}`;
   const abstractEditLink = `${baseUrl}/${slug}/abstracts/${abstract.id}/${abstract.editToken}`;
-  const deadlineDate = abstract.config.editingDeadline
-    ? abstract.config.editingDeadline.toISOString()
-    : "";
-  const finalFileDeadline = abstract.config.finalFileDeadline
-    ? abstract.config.finalFileDeadline.toISOString()
-    : "";
+
+  const submissionStartAt = formatDate(abstract.config.submissionStartAt);
+  const submissionDeadline = formatDate(abstract.config.submissionDeadline);
+  const editingDeadline = formatDate(abstract.config.editingDeadline);
+  const scoringStartAt = formatDate(abstract.config.scoringStartAt);
+  const scoringDeadline = formatDate(abstract.config.scoringDeadline);
+  const finalFileDeadline = formatDate(abstract.config.finalFileDeadline);
+
   const committeeComments = ""; // May be overridden by queueAbstractEmail extraContext
 
   return {
     authorName,
-    author_name: authorName,
     submissionTitle,
-    submission_title: submissionTitle,
     submissionStatus,
-    submission_status: submissionStatus,
     presentationType,
-    presentation_type: presentationType,
     submissionCode,
-    submission_code: submissionCode,
     congressName,
-    congress_name: congressName,
     platformLink,
-    platform_link: platformLink,
     abstractEditLink,
-    abstract_edit_link: abstractEditLink,
-    deadlineDate,
-    deadline_date: deadlineDate,
+    submissionStartAt,
+    submissionDeadline,
+    editingDeadline,
+    scoringStartAt,
+    scoringDeadline,
     finalFileDeadline,
-    final_file_deadline: finalFileDeadline,
+    // Back-compat alias for templates authored before explicit date variables existed.
+    deadlineDate: editingDeadline,
     committeeComments,
-    committee_comments: committeeComments,
   };
 }

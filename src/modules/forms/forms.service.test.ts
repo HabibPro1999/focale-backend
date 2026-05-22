@@ -293,6 +293,7 @@ describe("Forms Service", () => {
             status: "OPEN",
             endDate: { gte: expect.any(Date) },
             client: {
+              active: true,
               enabledModules: {
                 has: "registrations",
               },
@@ -757,6 +758,7 @@ describe("Forms Service", () => {
             status: "OPEN",
             endDate: { gte: expect.any(Date) },
             client: {
+              active: true,
               enabledModules: {
                 has: "sponsorships",
               },

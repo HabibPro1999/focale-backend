@@ -30,7 +30,7 @@ export async function clientsRoutes(app: AppInstance): Promise<void> {
       throw app.httpErrors.notFound('User is not associated with any client');
     }
 
-    const client = await getClientById(clientId);
+    const client = request.client ?? (await getClientById(clientId));
     if (!client) {
       throw app.httpErrors.notFound('Client not found');
     }
@@ -76,7 +76,10 @@ export async function clientsRoutes(app: AppInstance): Promise<void> {
         throw app.httpErrors.forbidden('Insufficient permissions to access this client');
       }
 
-      const client = await getClientById(request.params.id);
+      const client =
+        request.client?.id === request.params.id
+          ? request.client
+          : await getClientById(request.params.id);
       if (!client) {
         throw app.httpErrors.notFound('Client not found');
       }

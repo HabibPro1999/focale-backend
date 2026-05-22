@@ -25,7 +25,7 @@ describe("Pricing Service", () => {
   const eventId = "event-123";
   const pricingEnabledEvent = {
     status: "CLOSED" as const,
-    client: { enabledModules: ["pricing"] },
+    client: { active: true, enabledModules: ["pricing"] },
   };
 
   beforeEach(() => {

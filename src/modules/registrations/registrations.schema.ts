@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { AccessSelectionSchema } from "@access";
+import { PaymentMethod as PrismaPaymentMethod } from "@/generated/prisma/enums.js";
+import type { PaymentMethod as PaymentMethodValue } from "@/generated/prisma/enums.js";
 
 // ============================================================================
 // Enums
@@ -23,10 +25,10 @@ export const TransactionTypeSchema = z.enum([
 ]);
 
 export const PaymentMethodSchema = z.enum([
-  "BANK_TRANSFER",
-  "ONLINE",
-  "CASH",
-  "LAB_SPONSORSHIP",
+  PrismaPaymentMethod.BANK_TRANSFER,
+  PrismaPaymentMethod.ONLINE,
+  PrismaPaymentMethod.CASH,
+  PrismaPaymentMethod.LAB_SPONSORSHIP,
 ]);
 
 export const RegistrationRoleSchema = z.enum([
@@ -41,8 +43,12 @@ export const RegistrationRoleSchema = z.enum([
 // Shared Validation
 // ============================================================================
 
-const requireLabName = (data: { paymentMethod?: string; labName?: string }) =>
-  data.paymentMethod !== "LAB_SPONSORSHIP" || Boolean(data.labName);
+const requireLabName = (data: {
+  paymentMethod?: PaymentMethodValue;
+  labName?: string;
+}) =>
+  data.paymentMethod !== PrismaPaymentMethod.LAB_SPONSORSHIP ||
+  Boolean(data.labName);
 
 const labNameRefinement = {
   message: "Lab name is required when payment method is LAB_SPONSORSHIP",
@@ -92,7 +98,10 @@ export const CreateRegistrationSchema = z
 
 export const SelectPaymentMethodSchema = z
   .strictObject({
-    paymentMethod: z.enum(["CASH", "LAB_SPONSORSHIP"]),
+    paymentMethod: z.enum([
+      PrismaPaymentMethod.CASH,
+      PrismaPaymentMethod.LAB_SPONSORSHIP,
+    ]),
     labName: z.string().max(200).optional(),
   })
   .refine(requireLabName, labNameRefinement);

@@ -9,7 +9,11 @@ import {
   incrementRegisteredCountTx,
   decrementRegisteredCountTx,
 } from "@events";
-import { assertModuleEnabledForClient } from "@clients";
+import {
+  CLIENT_MODULE_GATE_SELECT,
+  assertModuleEnabledForClient,
+  isModuleEnabledForClient,
+} from "@clients";
 import {
   validateAccessSelections,
   incrementAccessRegisteredCountTx,
@@ -28,6 +32,8 @@ import type {
   PublicEditRegistrationInput,
 } from "./registrations.schema.js";
 import type { Prisma } from "@/generated/prisma/client.js";
+import { PaymentMethod } from "@/generated/prisma/enums.js";
+import type { PaymentMethod as PaymentMethodValue } from "@/generated/prisma/enums.js";
 
 // Imports from extracted sub-modules
 import { generateEditToken } from "./edit-token.js";
@@ -87,10 +93,10 @@ function normalizeEmail(email: string): string {
 
 function assertLabSponsorshipAllowed(
   client: { enabledModules: string[] },
-  paymentMethod: string | null | undefined,
+  paymentMethod: PaymentMethodValue | null | undefined,
 ): void {
   if (
-    paymentMethod === "LAB_SPONSORSHIP" &&
+    paymentMethod === PaymentMethod.LAB_SPONSORSHIP &&
     client.enabledModules.includes("sponsorships")
   ) {
     throw new AppError(
@@ -437,7 +443,7 @@ export async function createRegistration(
         endDate: true,
         maxCapacity: true,
         registeredCount: true,
-        client: { select: { enabledModules: true } },
+        client: { select: CLIENT_MODULE_GATE_SELECT },
       },
     });
 
@@ -648,7 +654,7 @@ export async function createAdminRegistration(
 
   const eventForPricing = await prisma.event.findUnique({
     where: { id: eventId },
-    select: { client: { select: { enabledModules: true } } },
+    select: { client: { select: CLIENT_MODULE_GATE_SELECT } },
   });
   if (!eventForPricing) {
     throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
@@ -673,7 +679,7 @@ export async function createAdminRegistration(
         status: true,
         maxCapacity: true,
         registeredCount: true,
-        client: { select: { enabledModules: true } },
+        client: { select: CLIENT_MODULE_GATE_SELECT },
       },
     });
 
@@ -819,7 +825,7 @@ export async function updateRegistration(
           select: {
             clientId: true,
             status: true,
-            client: { select: { enabledModules: true } },
+            client: { select: CLIENT_MODULE_GATE_SELECT },
           },
         },
       },
@@ -1003,7 +1009,7 @@ export async function adminEditRegistration(
           select: {
             clientId: true,
             status: true,
-            client: { select: { enabledModules: true } },
+            client: { select: CLIENT_MODULE_GATE_SELECT },
           },
         },
       },
@@ -1432,7 +1438,7 @@ export async function deleteRegistration(
           select: {
             clientId: true,
             status: true,
-            client: { select: { enabledModules: true } },
+            client: { select: CLIENT_MODULE_GATE_SELECT },
           },
         },
       },
@@ -1596,7 +1602,7 @@ export async function getRegistrationForEdit(
           clientId: true,
           status: true,
           endDate: true,
-          client: { select: { enabledModules: true } },
+          client: { select: CLIENT_MODULE_GATE_SELECT },
         },
       },
     },
@@ -1677,7 +1683,7 @@ export async function getRegistrationForEdit(
     restrictions.push("Event is not accepting changes");
   }
 
-  if (!registration.event.client.enabledModules.includes("registrations")) {
+  if (!isModuleEnabledForClient(registration.event.client, "registrations")) {
     canEdit = false;
     canEditPersonalInfo = false;
     canEditAccess = false;
@@ -1686,7 +1692,7 @@ export async function getRegistrationForEdit(
     restrictions.push("Registrations are disabled for this event");
   }
 
-  if (!registration.event.client.enabledModules.includes("pricing")) {
+  if (!isModuleEnabledForClient(registration.event.client, "pricing")) {
     canEdit = false;
     canEditPersonalInfo = false;
     canEditAccess = false;
@@ -1822,7 +1828,7 @@ export async function editRegistrationPublic(
             id: true,
             status: true,
             endDate: true,
-            client: { select: { enabledModules: true } },
+            client: { select: CLIENT_MODULE_GATE_SELECT },
           },
         },
       },

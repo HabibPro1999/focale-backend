@@ -10,6 +10,7 @@ import type {
   Sponsorship,
   SponsorshipBatch,
 } from "@/generated/prisma/client.js";
+import { DEFAULT_ENABLED_MODULES } from "../../src/modules/clients/clients.schema.js";
 
 // ============================================================================
 // Client Factory
@@ -25,13 +26,7 @@ export function createMockClient(overrides: Partial<Client> = {}): Client {
     email: faker.internet.email(),
     phone: faker.phone.number(),
     active: true,
-    enabledModules: [
-      "pricing",
-      "registrations",
-      "sponsorships",
-      "emails",
-      "certificates",
-    ],
+    enabledModules: [...DEFAULT_ENABLED_MODULES],
     createdAt: faker.date.past(),
     updatedAt: faker.date.recent(),
     ...overrides,
@@ -325,13 +320,8 @@ export function createMockSponsorship(
     event: {
       status: "OPEN",
       client: {
-        enabledModules: [
-          "pricing",
-          "registrations",
-          "sponsorships",
-          "emails",
-          "certificates",
-        ],
+        active: true,
+        enabledModules: [...DEFAULT_ENABLED_MODULES],
       },
     },
   } as unknown as Sponsorship;

@@ -1,7 +1,10 @@
 import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
-import { assertModuleEnabledForClient } from "@clients";
+import {
+  CLIENT_MODULE_GATE_WITH_NAME_SELECT,
+  assertModuleEnabledForClient,
+} from "@clients";
 import { assertEventOpen } from "@events";
 import {
   generateUniqueCode,
@@ -43,7 +46,7 @@ type EventForBatch = {
   startDate: Date;
   location: string | null;
   clientId: string;
-  client: { name: string; enabledModules: string[] };
+  client: { name: string; active: boolean; enabledModules: string[] };
 };
 
 type PricingForBatch = {
@@ -185,7 +188,7 @@ async function validateBatchInput(
       startDate: true,
       location: true,
       clientId: true,
-      client: { select: { name: true, enabledModules: true } },
+      client: { select: CLIENT_MODULE_GATE_WITH_NAME_SELECT },
     },
   });
 

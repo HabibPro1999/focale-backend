@@ -9,6 +9,7 @@ import {
   createMockSponsorship,
   createMockSponsorshipBatch,
 } from "../../../tests/helpers/factories.js";
+import { DEFAULT_ENABLED_MODULES } from "../clients/clients.schema.js";
 
 // Type for transaction callback - eslint-disable to allow any for mock flexibility
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -346,20 +347,14 @@ describe("Sponsorships Service", () => {
   const formId = faker.string.uuid();
   const batchId = faker.string.uuid();
   const adminUserId = faker.string.uuid();
-  const enabledModules = [
-    "pricing",
-    "registrations",
-    "sponsorships",
-    "emails",
-    "certificates",
-  ];
+  const enabledModules = [...DEFAULT_ENABLED_MODULES];
 
   function createOpenEvent(
     overrides: Parameters<typeof createMockEvent>[0] = {},
   ) {
     return {
       ...createMockEvent({ id: eventId, status: "OPEN", ...overrides }),
-      client: { name: "Test Client", enabledModules },
+      client: { name: "Test Client", active: true, enabledModules },
     };
   }
 

@@ -19,6 +19,7 @@
     "db:status": "bun x prisma migrate status",
     "db:seed": "bun prisma/seed.ts",
     "abstracts:setup-tshg": "bun src/scripts/setup-tshg-abstracts.ts",
+    "abstracts:requeue-skipped-emails": "bun src/scripts/requeue-skipped-abstract-emails.ts",
     "test": "bun x vitest --config vitest.config.ts",
     "test:run": "bun x vitest run --config vitest.config.ts",
     "test:unit": "bun x vitest run --config vitest.config.ts",

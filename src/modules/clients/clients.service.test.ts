@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { beforeEach, describe, it, expect } from "vitest";
 import { prismaMock } from "../../../tests/mocks/prisma.js";
 import {
   createMockClient,
@@ -14,8 +14,8 @@ import {
 } from "./clients.service.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
-import { MODULE_IDS } from "./clients.schema.js";
-const ALL_MODULE_IDS = [...MODULE_IDS];
+import { DEFAULT_ENABLED_MODULES } from "./clients.schema.js";
+const ALL_MODULE_IDS = [...DEFAULT_ENABLED_MODULES];
 
 describe("Clients Service", () => {
   const clientId = "client-123";
@@ -98,6 +98,24 @@ describe("Clients Service", () => {
       });
     });
 
+    it("should include abstracts in the default module set", async () => {
+      const mockClient = createMockClient({
+        name: "Default Modules Client",
+        enabledModules: ALL_MODULE_IDS,
+      });
+
+      prismaMock.client.create.mockResolvedValue(mockClient);
+
+      await createClient({ name: "Default Modules Client" });
+
+      expect(ALL_MODULE_IDS).toContain("abstracts");
+      expect(prismaMock.client.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          enabledModules: expect.arrayContaining(["abstracts"]),
+        }),
+      });
+    });
+
     it("should handle nullable fields correctly", async () => {
       const mockClient = createMockClient({
         name: "Nullable Test",
@@ -153,6 +171,10 @@ describe("Clients Service", () => {
   });
 
   describe("updateClient", () => {
+    beforeEach(() => {
+      prismaMock.user.findMany.mockResolvedValue([]);
+    });
+
     it("should update client name", async () => {
       const existingClient = createMockClient({
         id: clientId,
@@ -193,6 +215,7 @@ describe("Clients Service", () => {
 
       prismaMock.client.findUnique.mockResolvedValue(existingClient);
       prismaMock.client.update.mockResolvedValue(updatedClient);
+      prismaMock.user.findMany.mockResolvedValue([]);
 
       const result = await updateClient(clientId, {
         name: "Updated Company",
@@ -205,6 +228,57 @@ describe("Clients Service", () => {
       expect(result.email).toBe("new@example.com");
       expect(result.phone).toBe("+216 98 765 432");
       expect(result.active).toBe(false);
+      expect(prismaMock.user.findMany).toHaveBeenCalledWith({
+        where: { clientId },
+        select: { id: true },
+      });
+    });
+
+    it("should invalidate cached user entries when active is flipped", async () => {
+      const existingClient = createMockClient({
+        id: clientId,
+        active: true,
+      });
+      const updatedClient = createMockClient({
+        id: clientId,
+        active: false,
+      });
+
+      prismaMock.client.findUnique.mockResolvedValue(existingClient);
+      prismaMock.client.update.mockResolvedValue(updatedClient);
+      prismaMock.user.findMany.mockResolvedValue([
+        { id: "user-a" } as never,
+        { id: "user-b" } as never,
+      ]);
+
+      await updateClient(clientId, { active: false });
+
+      expect(prismaMock.user.findMany).toHaveBeenCalledWith({
+        where: { clientId },
+        select: { id: true },
+      });
+    });
+
+    it("should invalidate cached user entries after any successful update", async () => {
+      const existingClient = createMockClient({
+        id: clientId,
+        active: true,
+      });
+      const updatedClient = createMockClient({
+        id: clientId,
+        name: "Renamed",
+        active: true,
+      });
+
+      prismaMock.client.findUnique.mockResolvedValue(existingClient);
+      prismaMock.client.update.mockResolvedValue(updatedClient);
+
+      await updateClient(clientId, { name: "Renamed", active: true });
+
+      expect(prismaMock.user.findMany).toHaveBeenCalledWith({
+        where: { clientId },
+        select: { id: true },
+      });
     });
 
     it("should throw AppError when client not found", async () => {

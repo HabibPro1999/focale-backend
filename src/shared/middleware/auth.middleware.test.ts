@@ -10,6 +10,16 @@ import {
   createMockSuperAdmin,
   createMockClientAdmin,
 } from "../../../tests/helpers/factories.js";
+
+function userWithClientActive<T extends { clientId: string | null }>(
+  user: T,
+  active: boolean | null,
+): T & { client: { active: boolean } | null } {
+  return {
+    ...user,
+    client: active === null ? null : { active },
+  };
+}
 import {
   requireAuth,
   requireRole,
@@ -201,7 +211,9 @@ describe("requireAuth", () => {
       const mockUser = createMockUser({ id: "user-123", active: true });
 
       firebaseAuthMock.verifyIdToken.mockResolvedValue(decodedToken);
-      prismaMock.user.findUnique.mockResolvedValue(mockUser);
+      prismaMock.user.findUnique.mockResolvedValue(
+        userWithClientActive(mockUser, true),
+      );
 
       await requireAuth(request, mockReply);
 
@@ -211,6 +223,7 @@ describe("requireAuth", () => {
       );
       expect(prismaMock.user.findUnique).toHaveBeenCalledWith({
         where: { id: "user-123" },
+        include: { client: true },
       });
     });
 
@@ -222,7 +235,9 @@ describe("requireAuth", () => {
       const superAdmin = createMockSuperAdmin({ id: "super-admin-123" });
 
       firebaseAuthMock.verifyIdToken.mockResolvedValue(decodedToken);
-      prismaMock.user.findUnique.mockResolvedValue(superAdmin);
+      prismaMock.user.findUnique.mockResolvedValue(
+        userWithClientActive(superAdmin, null),
+      );
 
       await requireAuth(request, mockReply);
 
@@ -241,13 +256,37 @@ describe("requireAuth", () => {
       });
 
       firebaseAuthMock.verifyIdToken.mockResolvedValue(decodedToken);
-      prismaMock.user.findUnique.mockResolvedValue(clientAdmin);
+      prismaMock.user.findUnique.mockResolvedValue(
+        userWithClientActive(clientAdmin, true),
+      );
 
       await requireAuth(request, mockReply);
 
       expect(request.user).toEqual(clientAdmin);
       expect(request.user?.role).toBe(UserRole.CLIENT_ADMIN);
       expect(request.user?.clientId).toBe(clientId);
+    });
+
+    it("should throw 403 when tenant client is inactive", async () => {
+      const clientId = "client-456";
+      const request = createMockRequest({
+        headers: { authorization: "Bearer client-admin-token" },
+      });
+      const decodedToken = createMockDecodedToken({ uid: "client-admin-123" });
+      const clientAdmin = createMockClientAdmin(clientId, {
+        id: "client-admin-123",
+      });
+
+      firebaseAuthMock.verifyIdToken.mockResolvedValue(decodedToken);
+      prismaMock.user.findUnique.mockResolvedValue(
+        userWithClientActive(clientAdmin, false),
+      );
+
+      await expectAppError(() => requireAuth(request, mockReply), {
+        statusCode: 403,
+        code: ErrorCodes.FORBIDDEN,
+        message: "Client is inactive",
+      });
     });
   });
 
@@ -524,7 +563,9 @@ describe("Auth Middleware Integration", () => {
     const superAdmin = createMockSuperAdmin({ id: "super-admin-123" });
 
     firebaseAuthMock.verifyIdToken.mockResolvedValue(decodedToken);
-    prismaMock.user.findUnique.mockResolvedValue(superAdmin);
+    prismaMock.user.findUnique.mockResolvedValue(
+      userWithClientActive(superAdmin, null),
+    );
 
     // First middleware: authenticate
     await requireAuth(request, mockReply);
@@ -547,7 +588,9 @@ describe("Auth Middleware Integration", () => {
     });
 
     firebaseAuthMock.verifyIdToken.mockResolvedValue(decodedToken);
-    prismaMock.user.findUnique.mockResolvedValue(clientAdmin);
+    prismaMock.user.findUnique.mockResolvedValue(
+      userWithClientActive(clientAdmin, true),
+    );
 
     // First middleware: authenticate
     await requireAuth(request, mockReply);
@@ -571,7 +614,9 @@ describe("Auth Middleware Integration", () => {
     });
 
     firebaseAuthMock.verifyIdToken.mockResolvedValue(decodedToken);
-    prismaMock.user.findUnique.mockResolvedValue(clientAdmin);
+    prismaMock.user.findUnique.mockResolvedValue(
+      userWithClientActive(clientAdmin, true),
+    );
 
     // First middleware: authenticate
     await requireAuth(request, mockReply);

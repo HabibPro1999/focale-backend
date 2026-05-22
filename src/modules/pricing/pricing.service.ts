@@ -4,7 +4,10 @@ import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { calculateApplicableAmount } from "@shared/utils/sponsorship-math.js";
 import { evaluateConditions } from "@shared/utils/conditions.js";
-import { assertModuleEnabledForClient } from "@clients";
+import {
+  CLIENT_MODULE_GATE_SELECT,
+  assertModuleEnabledForClient,
+} from "@clients";
 import { assertEventWritable } from "@events";
 import type {
   UpdateEventPricingInput,
@@ -77,7 +80,7 @@ async function updateEventPricingTx(
     where: { id: eventId },
     select: {
       status: true,
-      client: { select: { enabledModules: true } },
+      client: { select: CLIENT_MODULE_GATE_SELECT },
       pricing: { select: { currency: true } },
     },
   });
@@ -266,7 +269,7 @@ export async function calculatePrice(
   const event = await db.event.findUnique({
     where: { id: eventId },
     select: {
-      client: { select: { enabledModules: true } },
+      client: { select: CLIENT_MODULE_GATE_SELECT },
     },
   });
   if (!event) {

@@ -4,7 +4,11 @@ import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { logger } from "@shared/utils/logger.js";
 import { auditLog } from "@shared/utils/audit.js";
-import { assertModuleEnabledForClient } from "@clients";
+import {
+  CLIENT_MODULE_GATE_SELECT,
+  assertModuleEnabledForClient,
+} from "@clients";
+import { PaymentMethod } from "@/generated/prisma/enums.js";
 import {
   assertEventAcceptsPublicActions,
   assertEventWritable,
@@ -123,7 +127,7 @@ export async function confirmPayment(
           select: {
             clientId: true,
             status: true,
-            client: { select: { enabledModules: true } },
+            client: { select: CLIENT_MODULE_GATE_SELECT },
           },
         },
       },
@@ -394,7 +398,7 @@ export async function uploadPaymentProof(
         select: {
           status: true,
           endDate: true,
-          client: { select: { enabledModules: true } },
+          client: { select: CLIENT_MODULE_GATE_SELECT },
         },
       },
     },
@@ -468,7 +472,7 @@ export async function uploadPaymentProof(
           select: {
             status: true,
             endDate: true,
-            client: { select: { enabledModules: true } },
+            client: { select: CLIENT_MODULE_GATE_SELECT },
           },
         },
       },
@@ -484,7 +488,7 @@ export async function uploadPaymentProof(
       data: {
         paymentProofUrl: fileUrl,
         paymentStatus: "VERIFYING",
-        paymentMethod: "BANK_TRANSFER",
+        paymentMethod: PaymentMethod.BANK_TRANSFER,
       },
     });
 
@@ -559,7 +563,12 @@ export function extractKeyFromUrl(url: string): string | null {
 
 export async function selectPaymentMethod(
   registrationId: string,
-  input: { paymentMethod: "CASH" | "LAB_SPONSORSHIP"; labName?: string },
+  input: {
+    paymentMethod:
+      | typeof PaymentMethod.CASH
+      | typeof PaymentMethod.LAB_SPONSORSHIP;
+    labName?: string;
+  },
 ): Promise<void> {
   await prisma.$transaction(async (tx) => {
     const registration = await tx.registration.findUnique({
@@ -569,7 +578,7 @@ export async function selectPaymentMethod(
           select: {
             status: true,
             endDate: true,
-            client: { select: { enabledModules: true } },
+            client: { select: CLIENT_MODULE_GATE_SELECT },
           },
         },
       },
@@ -582,7 +591,7 @@ export async function selectPaymentMethod(
     assertModuleEnabledForClient(registration.event.client, "registrations");
 
     if (
-      input.paymentMethod === "LAB_SPONSORSHIP" &&
+      input.paymentMethod === PaymentMethod.LAB_SPONSORSHIP &&
       registration.event.client.enabledModules.includes("sponsorships")
     ) {
       throw new AppError(
@@ -612,7 +621,7 @@ export async function selectPaymentMethod(
     };
 
     const nextLabName =
-      input.paymentMethod === "LAB_SPONSORSHIP"
+      input.paymentMethod === PaymentMethod.LAB_SPONSORSHIP
         ? (input.labName ?? null)
         : null;
     if (nextLabName !== registration.labName) {

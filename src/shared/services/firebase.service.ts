@@ -71,3 +71,11 @@ export async function setCustomClaims(
 export async function deleteFirebaseUser(uid: string): Promise<void> {
   await firebaseAuth.deleteUser(uid);
 }
+
+/**
+ * Generate a one-time password-reset link. Used to onboard newly created
+ * accounts without requiring an admin to set (and share) a temporary password.
+ */
+export async function generatePasswordResetLink(email: string): Promise<string> {
+  return firebaseAuth.generatePasswordResetLink(email);
+}

@@ -1,4 +1,4 @@
-import type { User } from "@/generated/prisma/client.js";
+import type { Client, User } from "@/generated/prisma/client.js";
 import type {
   FastifyInstance,
   RawReplyDefaultExpression,
@@ -19,5 +19,6 @@ export type AppInstance = FastifyInstance<
 declare module "fastify" {
   interface FastifyRequest {
     user?: User;
+    client?: Client | null;
   }
 }

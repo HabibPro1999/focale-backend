@@ -1,6 +1,7 @@
 import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { invalidateUserCacheForClient } from "@shared/middleware/auth.middleware.js";
 import {
   paginate,
   getSkip,
@@ -11,7 +12,10 @@ import type {
   UpdateClientInput,
   ListClientsQuery,
 } from "./clients.schema.js";
-import { MODULE_IDS } from "./clients.schema.js";
+import {
+  DEFAULT_ENABLED_MODULES,
+  normalizeEnabledModules,
+} from "./clients.schema.js";
 import type { Client, Prisma } from "@/generated/prisma/client.js";
 
 /**
@@ -27,7 +31,7 @@ export async function createClient(input: CreateClientInput): Promise<Client> {
       primaryColor: primaryColor ?? null,
       email: email ?? null,
       phone: phone ?? null,
-      enabledModules: enabledModules ?? [...MODULE_IDS],
+      enabledModules: enabledModules ?? [...DEFAULT_ENABLED_MODULES],
     },
   });
 }
@@ -63,9 +67,11 @@ export async function updateClient(
 
   const { enabledModules, ...restInput } = input;
   const nextEnabledModules =
-    enabledModules === undefined ? undefined : [...new Set(enabledModules)];
+    enabledModules === undefined
+      ? undefined
+      : normalizeEnabledModules(enabledModules);
 
-  return prisma.client.update({
+  const updated = await prisma.client.update({
     where: { id },
     data: {
       ...restInput,
@@ -74,6 +80,10 @@ export async function updateClient(
       }),
     },
   });
+
+  await invalidateUserCacheForClient(id);
+
+  return updated;
 }
 
 /**

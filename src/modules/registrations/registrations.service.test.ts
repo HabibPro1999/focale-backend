@@ -23,6 +23,7 @@ import {
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { calculatePrice, type PriceBreakdown } from "@pricing";
+import { DEFAULT_ENABLED_MODULES } from "../clients/clients.schema.js";
 import {
   decrementAccessRegisteredCountTx,
   incrementAccessRegisteredCountTx,
@@ -113,13 +114,7 @@ describe("Registrations Service", () => {
   const eventId = faker.string.uuid();
   const formId = faker.string.uuid();
   const clientId = faker.string.uuid();
-  const enabledModules = [
-    "pricing",
-    "registrations",
-    "sponsorships",
-    "emails",
-    "certificates",
-  ];
+  const enabledModules = [...DEFAULT_ENABLED_MODULES];
 
   function createPolicyEvent(overrides: Record<string, unknown> = {}) {
     return {
@@ -128,7 +123,7 @@ describe("Registrations Service", () => {
       slug: "test-event",
       clientId,
       status: "OPEN",
-      client: { enabledModules },
+      client: { active: true, enabledModules },
       ...overrides,
     };
   }
@@ -196,7 +191,7 @@ describe("Registrations Service", () => {
         maxCapacity: 100,
         registeredCount: 0,
       }),
-      client: { enabledModules },
+      client: { active: true, enabledModules },
     };
     const priceBreakdown = createMockPriceBreakdown();
 
@@ -1729,7 +1724,7 @@ describe("Registrations Service", () => {
           maxCapacity: 100,
           registeredCount: 0,
         }),
-        client: { enabledModules },
+        client: { active: true, enabledModules },
       };
 
       const createdRegistration = createMockRegistrationWithRelations({
@@ -1793,7 +1788,7 @@ describe("Registrations Service", () => {
       const mockForm = createMockForm({ id: formId, eventId });
       const mockEvent = {
         ...createMockEvent({ id: eventId, status: "OPEN" }),
-        client: { enabledModules },
+        client: { active: true, enabledModules },
       };
 
       const createdRegistration = createMockRegistrationWithRelations({

@@ -153,14 +153,15 @@ Request → requireAuth middleware
 Each client has `enabledModules` controlling which event features they can access:
 
 ```
-MODULE_IDS = ['pricing', 'registrations', 'sponsorships', 'emails']
+MODULE_IDS = ['pricing', 'registrations', 'sponsorships', 'emails', 'certificates', 'abstracts']
 ```
 
 | Behavior | Description |
 |----------|-------------|
 | **Forms derived** | Forms page visible if `registrations` OR `sponsorships` enabled |
-| **One-way enable** | Modules can be added but never removed |
-| **Default** | New clients get all 4 modules |
+| **Replacement updates** | `PATCH /api/clients/:id` replaces the module list when `enabledModules` is present; omitted means unchanged; `[]` disables all feature modules |
+| **Inactive clients** | `active=false` disables tenant-scoped feature access while super admins can still manage the client |
+| **Default** | New clients get all 6 modules |
 
 ## Project Structure
 

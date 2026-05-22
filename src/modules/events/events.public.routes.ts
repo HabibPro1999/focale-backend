@@ -1,5 +1,6 @@
 import { prisma } from "@/database/client.js";
 import { publicRateLimits } from "@core/plugins.js";
+import { isModuleEnabledForClient } from "@clients";
 import { EventIdParamSchema } from "./events.schema.js";
 import type { AppInstance } from "@shared/types/fastify.js";
 
@@ -29,6 +30,7 @@ export async function eventsPublicRoutes(app: AppInstance): Promise<void> {
               name: true,
               logo: true,
               primaryColor: true,
+              active: true,
               enabledModules: true,
             },
           },
@@ -41,9 +43,11 @@ export async function eventsPublicRoutes(app: AppInstance): Promise<void> {
 
       // Transform pricing for public consumption
       const pricing = event.pricing;
-      const registrationsEnabled =
-        event.client.enabledModules.includes("registrations");
-      const pricingEnabled = event.client.enabledModules.includes("pricing");
+      const registrationsEnabled = isModuleEnabledForClient(
+        event.client,
+        "registrations",
+      );
+      const pricingEnabled = isModuleEnabledForClient(event.client, "pricing");
       const paymentMethods: string[] = [];
       const exposePaymentConfig =
         event.status === "OPEN" && registrationsEnabled && pricingEnabled;
@@ -57,12 +61,13 @@ export async function eventsPublicRoutes(app: AppInstance): Promise<void> {
         }
       }
 
-      // Check if sponsorships module is enabled for the client
-      const sponsorshipsEnabled =
-        event.client.enabledModules.includes("sponsorships");
+      const sponsorshipsAvailableForActiveClient = isModuleEnabledForClient(
+        event.client,
+        "sponsorships",
+      );
 
       // Lab sponsorship option available when sponsorships module is disabled
-      if (exposePaymentConfig && !sponsorshipsEnabled) {
+      if (exposePaymentConfig && !sponsorshipsAvailableForActiveClient) {
         paymentMethods.push("LAB_SPONSORSHIP");
       }
 
@@ -84,7 +89,7 @@ export async function eventsPublicRoutes(app: AppInstance): Promise<void> {
             primaryColor: event.client.primaryColor,
           },
         },
-        sponsorshipsEnabled,
+        sponsorshipsEnabled: sponsorshipsAvailableForActiveClient,
         pricing:
           pricing && pricingEnabled && registrationsEnabled
             ? {

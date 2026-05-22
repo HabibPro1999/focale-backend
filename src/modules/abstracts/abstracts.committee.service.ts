@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { prisma } from "@/database/client.js";
 import {
   AbstractStatus,
@@ -5,17 +6,22 @@ import {
   type Abstract,
   type AbstractReview,
   type AbstractTheme,
+  type User,
 } from "@/generated/prisma/client.js";
 import { createUser } from "@modules/identity/users.service.js";
 import { UserRole } from "@shared/constants/roles.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { auditLog } from "@shared/utils/audit.js";
+import { logger } from "@shared/utils/logger.js";
 import type { TxClient } from "@shared/types/prisma.js";
 import {
   enqueueAbstractEmailOutboxEvent,
   enqueueRealtimeOutboxEvent,
 } from "@core/outbox";
+import { generatePasswordResetLink } from "@shared/services/firebase.service.js";
+import { sendEmail } from "@modules/email/email-sendgrid.service.js";
+import { compileMjmlToHtml } from "@modules/email/email-renderer.service.js";
 import type {
   AddCommitteeMemberInput,
   AssignReviewersInput,
@@ -245,17 +251,67 @@ export async function listCommitteeMembers(eventId: string) {
   }));
 }
 
+function generateThrowawayPassword(): string {
+  // Random throwaway used to satisfy Firebase Auth's password requirement.
+  // The user immediately overwrites it via the reset link in their invite email.
+  return `${randomUUID()}A!${randomUUID()}`;
+}
+
+async function sendCommitteeInviteEmail(
+  user: Pick<User, "email" | "name">,
+  eventName: string,
+): Promise<void> {
+  const link = await generatePasswordResetLink(user.email);
+  const mjml = `
+<mjml>
+  <mj-head>
+    <mj-attributes>
+      <mj-all font-family="Helvetica, Arial, sans-serif" />
+      <mj-text font-size="15px" line-height="1.6" color="#1f2937" />
+    </mj-attributes>
+  </mj-head>
+  <mj-body background-color="#fafaf9">
+    <mj-section padding="32px 24px">
+      <mj-column>
+        <mj-text font-size="20px" font-weight="600">Welcome to the scientific committee</mj-text>
+        <mj-text>Hello ${user.name},</mj-text>
+        <mj-text>You've been invited to join the scientific committee for <strong>${eventName}</strong> on Focale.</mj-text>
+        <mj-text>To activate your account, choose a password using the secure link below:</mj-text>
+        <mj-button background-color="#0d9488" color="#ffffff" border-radius="6px" href="${link}">Set my password</mj-button>
+        <mj-text font-size="13px" color="#6b7280">This link is valid for a limited time. Once you've set your password, you can sign in directly with your email and the password you chose.</mj-text>
+        <mj-text font-size="13px" color="#6b7280">If you didn't expect this invitation, you can safely ignore this email.</mj-text>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>`;
+  const { html } = compileMjmlToHtml(mjml);
+  const result = await sendEmail({
+    to: user.email,
+    toName: user.name,
+    subject: `You've been invited to the scientific committee for ${eventName}`,
+    html,
+    categories: ["committee-invite"],
+  });
+  if (!result.success) {
+    logger.error(
+      { email: user.email, error: result.error },
+      "Failed to send committee invitation email",
+    );
+  }
+}
+
 export async function addCommitteeMember(
   eventId: string,
   body: AddCommitteeMemberInput,
   performedBy: string,
 ) {
+  const isNewUser = !("userId" in body);
   const user = "userId" in body
     ? await prisma.user.findUnique({ where: { id: body.userId } })
     : await createUser({
         email: body.email,
         name: body.name,
-        password: body.password,
+        password: generateThrowawayPassword(),
         role: UserRole.SCIENTIFIC_COMMITTEE,
         clientId: null,
       });
@@ -286,6 +342,21 @@ export async function addCommitteeMember(
     changes: { active: { old: null, new: true } },
     performedBy,
   });
+
+  if (isNewUser) {
+    const event = await prisma.event.findUnique({
+      where: { id: eventId },
+      select: { name: true },
+    });
+    // Best-effort: invite delivery failure is logged but doesn't roll the user back.
+    // The admin can resend from Firebase if needed.
+    await sendCommitteeInviteEmail(user, event?.name ?? "the event").catch((err) => {
+      logger.error(
+        { err, userId: user.id, eventId },
+        "Committee invite email threw while sending",
+      );
+    });
+  }
 
   const member = (await listCommitteeMembers(eventId)).find((m) => m.userId === user.id);
   return member ?? {

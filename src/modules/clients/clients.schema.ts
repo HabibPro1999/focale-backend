@@ -19,9 +19,15 @@ export const MODULE_IDS = [
 
 export type ModuleId = (typeof MODULE_IDS)[number];
 
+export const DEFAULT_ENABLED_MODULES: ModuleId[] = [...MODULE_IDS];
+
+export function normalizeEnabledModules(modules: ModuleId[]): ModuleId[] {
+  return [...new Set(modules)];
+}
+
 const EnabledModulesSchema = z
   .array(z.enum(MODULE_IDS))
-  .transform((modules) => [...new Set(modules)]);
+  .transform(normalizeEnabledModules);
 
 const hasUpdateField = (data: Record<string, unknown>) =>
   Object.values(data).some((value) => value !== undefined);

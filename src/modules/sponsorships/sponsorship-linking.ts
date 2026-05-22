@@ -3,7 +3,11 @@ import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { auditLog } from "@shared/utils/audit.js";
 import { calculateSettlement } from "@shared/utils/settlement.js";
-import { assertModuleEnabledForClient } from "@clients";
+import {
+  CLIENT_MODULE_GATE_SELECT,
+  CLIENT_MODULE_GATE_WITH_NAME_SELECT,
+  assertModuleEnabledForClient,
+} from "@clients";
 import { assertEventWritable } from "@events";
 import {
   calculateApplicableAmount,
@@ -103,7 +107,7 @@ async function unlinkSponsorshipFromRegistrationInternal(
       event: {
         select: {
           status: true,
-          client: { select: { enabledModules: true } },
+          client: { select: CLIENT_MODULE_GATE_SELECT },
         },
       },
     },
@@ -367,7 +371,7 @@ export async function linkSponsorshipToRegistration(
             startDate: true,
             location: true,
             status: true,
-            client: { select: { name: true, enabledModules: true } },
+            client: { select: CLIENT_MODULE_GATE_WITH_NAME_SELECT },
           },
         },
         batch: { select: { labName: true, contactName: true, email: true } },
