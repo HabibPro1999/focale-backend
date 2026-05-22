@@ -21,6 +21,16 @@ export const AutomaticEmailTriggerSchema = z.enum([
   "CERTIFICATE_SENT",
 ]);
 
+export const AbstractEmailTriggerSchema = z.enum([
+  "ABSTRACT_SUBMISSION_ACK",
+  "ABSTRACT_EDIT_ACK",
+  "ABSTRACT_DECISION",
+  "ABSTRACT_COMMITTEE_INVITE",
+  "ABSTRACT_COMMITTEE_COMMENTS",
+  "ABSTRACT_SCORE_DIVERGENCE",
+  "ABSTRACT_FINAL_FILE_REQUEST",
+]);
+
 export const EmailStatusSchema = z.enum([
   "QUEUED",
   "SENDING",
@@ -71,23 +81,23 @@ export const CreateEmailTemplateSchema = z
     content: TiptapDocumentSchema,
     category: EmailTemplateCategorySchema,
     trigger: AutomaticEmailTriggerSchema.optional().nullable(),
+    abstractTrigger: AbstractEmailTriggerSchema.optional().nullable(),
     isActive: z.boolean().default(true),
   })
   .refine(
     (data) => {
-      // Automatic templates must have a trigger
-      if (data.category === "AUTOMATIC" && !data.trigger) {
-        return false;
+      const hasTrigger = data.trigger != null;
+      const hasAbstractTrigger = data.abstractTrigger != null;
+
+      if (data.category === "AUTOMATIC") {
+        return hasTrigger !== hasAbstractTrigger;
       }
-      // Manual templates should not have a trigger
-      if (data.category === "MANUAL" && data.trigger) {
-        return false;
-      }
-      return true;
+
+      return !hasTrigger && !hasAbstractTrigger;
     },
     {
       message:
-        "Automatic templates require a trigger; manual templates should not have a trigger",
+        "Automatic templates require exactly one trigger; manual templates should not have triggers",
       path: ["trigger"],
     },
   );
@@ -100,6 +110,7 @@ export const UpdateEmailTemplateSchema = z
     content: TiptapDocumentSchema.optional(),
     category: EmailTemplateCategorySchema.optional(),
     trigger: AutomaticEmailTriggerSchema.optional().nullable(),
+    abstractTrigger: AbstractEmailTriggerSchema.optional().nullable(),
     isActive: z.boolean().optional(),
   })
   .refine(hasUpdateField, {
@@ -110,6 +121,8 @@ export const ListEmailTemplatesQuerySchema = z.strictObject({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
   category: EmailTemplateCategorySchema.optional(),
+  trigger: AutomaticEmailTriggerSchema.optional(),
+  abstractTrigger: AbstractEmailTriggerSchema.optional(),
   search: z.string().max(200).optional(),
 });
 
@@ -208,6 +221,7 @@ export const EmailTemplateResponseSchema = z.object({
   content: z.unknown(),
   category: EmailTemplateCategorySchema,
   trigger: AutomaticEmailTriggerSchema.nullable(),
+  abstractTrigger: AbstractEmailTriggerSchema.nullable(),
   isDefault: z.boolean(),
   isActive: z.boolean(),
   createdAt: z.date(),
@@ -230,6 +244,7 @@ export const EmailTemplatesListResponseSchema = z.object({
 
 export type EmailTemplateCategory = z.infer<typeof EmailTemplateCategorySchema>;
 export type AutomaticEmailTrigger = z.infer<typeof AutomaticEmailTriggerSchema>;
+export type AbstractEmailTrigger = z.infer<typeof AbstractEmailTriggerSchema>;
 export type EmailStatus = z.infer<typeof EmailStatusSchema>;
 
 export type TiptapMark = z.infer<typeof TiptapMarkSchema>;
