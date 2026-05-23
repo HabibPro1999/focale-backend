@@ -6,6 +6,7 @@ import {
 } from "@shared/middleware/auth.middleware.js";
 import { assertClientModuleEnabled } from "@clients";
 import { getEventById } from "@events";
+import { publicRateLimits } from "@core/plugins.js";
 import type { AppInstance } from "@shared/types/fastify.js";
 import {
   AbstractIdParamSchema,
@@ -15,12 +16,15 @@ import {
   AssignReviewersSchema,
   CommitteeAbstractsQuerySchema,
   CommitteeMemberUserParamSchema,
+  ResetPasswordParamsSchema,
   ReviewAbstractSchema,
+  SetCommitteeMemberPasswordSchema,
   SetReviewerThemesSchema,
   type AddCommitteeMemberInput,
   type AssignReviewersInput,
   type CommitteeAbstractsQuery,
   type ReviewAbstractInput,
+  type SetCommitteeMemberPasswordInput,
   type SetReviewerThemesInput,
 } from "./abstracts.schema.js";
 import {
@@ -31,7 +35,9 @@ import {
   listAssignedAbstracts,
   listCommitteeMembers,
   removeCommitteeMember,
+  resendCommitteeInvite,
   reviewAssignedAbstract,
+  setCommitteeMemberPassword,
   setReviewerThemes,
 } from "./abstracts.committee.service.js";
 
@@ -103,6 +109,47 @@ export async function abstractsCommitteeAdminRoutes(app: AppInstance): Promise<v
         request.user!.id,
       );
       return reply.send(result);
+    },
+  );
+
+  app.post<{ Params: { eventId: string; userId: string } }>(
+    "/events/:eventId/abstracts/committee/:userId/reset-password",
+    {
+      config: { rateLimit: publicRateLimits.passwordReset },
+      schema: { params: ResetPasswordParamsSchema },
+    },
+    async (request, reply) => {
+      await resolveEvent(request);
+      const result = await resendCommitteeInvite(
+        request.params.eventId,
+        request.params.userId,
+        request.user!.id,
+      );
+      return reply.send(result);
+    },
+  );
+
+  app.post<{
+    Params: { eventId: string; userId: string };
+    Body: SetCommitteeMemberPasswordInput;
+  }>(
+    "/events/:eventId/abstracts/committee/:userId/set-password",
+    {
+      config: { rateLimit: publicRateLimits.passwordReset },
+      schema: {
+        params: ResetPasswordParamsSchema,
+        body: SetCommitteeMemberPasswordSchema,
+      },
+    },
+    async (request, reply) => {
+      await resolveEvent(request);
+      await setCommitteeMemberPassword(
+        request.params.eventId,
+        request.params.userId,
+        request.body.password,
+        request.user!.id,
+      );
+      return reply.send({ ok: true });
     },
   );
 

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { FormFieldSchema } from "@modules/forms/forms.schema.js";
+import { StrongPasswordSchema } from "@modules/identity/users.schema.js";
 
 // ============================================================================
 // Param Schemas
@@ -245,8 +246,23 @@ export const ReviewAbstractSchema = z.strictObject({
   comment: z.string().max(5000).nullish(),
 });
 
+// Admin-triggered password helpers for committee members. The eventId/userId
+// pair is used to scope the operation to a specific committee membership; the
+// userId is the Firebase Auth UID (also the User.id).
+export const ResetPasswordParamsSchema = z.strictObject({
+  eventId: z.string().uuid(),
+  userId: z.string().min(1),
+});
+
+export const SetCommitteeMemberPasswordSchema = z.strictObject({
+  password: StrongPasswordSchema,
+});
+
 export type AddCommitteeMemberInput = z.infer<typeof AddCommitteeMemberSchema>;
 export type SetReviewerThemesInput = z.infer<typeof SetReviewerThemesSchema>;
 export type AssignReviewersInput = z.infer<typeof AssignReviewersSchema>;
 export type CommitteeAbstractsQuery = z.infer<typeof CommitteeAbstractsQuerySchema>;
 export type ReviewAbstractInput = z.infer<typeof ReviewAbstractSchema>;
+export type SetCommitteeMemberPasswordInput = z.infer<
+  typeof SetCommitteeMemberPasswordSchema
+>;

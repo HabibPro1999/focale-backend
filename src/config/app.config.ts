@@ -22,6 +22,10 @@ const envSchema = z
     STORAGE_PROVIDER: z.enum(["firebase", "r2"]).default("firebase"),
     // Public URL for forms (used in email links)
     PUBLIC_FORMS_URL: z.string().url().optional(),
+    // Admin app base URL — used as the in-app target for Firebase password
+    // reset / action handler links. The Firebase Console "Customize action URL"
+    // setting should point at `${ADMIN_APP_URL}/auth/action`.
+    ADMIN_APP_URL: z.string().url().default("http://localhost:8080"),
     // Cloudflare R2
     R2_ACCOUNT_ID: z.string().optional(),
     R2_ACCESS_KEY_ID: z.string().optional(),
@@ -87,6 +91,22 @@ const envSchema = z
         "SENDGRID_FROM_EMAIL required in production when SENDGRID_API_KEY is set",
       path: ["SENDGRID_FROM_EMAIL"],
     },
+  )
+  .refine(
+    (data) => {
+      if (
+        data.NODE_ENV === "production" &&
+        data.ADMIN_APP_URL === "http://localhost:8080"
+      ) {
+        return false;
+      }
+      return true;
+    },
+    {
+      message:
+        "ADMIN_APP_URL must be set to the deployed admin origin in production (default localhost:8080 not allowed)",
+      path: ["ADMIN_APP_URL"],
+    },
   );
 
 export class ConfigError extends Error {
@@ -149,6 +169,9 @@ export function parseConfig(source: NodeJS.ProcessEnv) {
       fromName: env.SENDGRID_FROM_NAME ?? "Event Platform",
     },
     publicFormsUrl: env.PUBLIC_FORMS_URL,
+    urls: {
+      adminAppUrl: env.ADMIN_APP_URL,
+    },
     realtime: {
       disabled: env.REALTIME_DISABLED,
       heartbeatMs: env.SSE_HEARTBEAT_MS,

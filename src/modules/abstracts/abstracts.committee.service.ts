@@ -19,9 +19,15 @@ import {
   enqueueAbstractEmailOutboxEvent,
   enqueueRealtimeOutboxEvent,
 } from "@core/outbox";
-import { generatePasswordResetLink } from "@shared/services/firebase.service.js";
+import {
+  generatePasswordResetLink,
+  revokeFirebaseRefreshTokens,
+  updateFirebaseUserPassword,
+} from "@shared/services/firebase.service.js";
 import { sendEmail } from "@modules/email/email-sendgrid.service.js";
 import { compileMjmlToHtml, escapeHtml } from "@modules/email/email-renderer.service.js";
+import { config } from "@config/app.config.js";
+import type { ActionCodeSettings } from "firebase-admin/auth";
 import type {
   AddCommitteeMemberInput,
   AssignReviewersInput,
@@ -257,14 +263,63 @@ function generateThrowawayPassword(): string {
   return `${randomUUID()}A!${randomUUID()}`;
 }
 
-async function sendCommitteeInviteEmail(
-  user: Pick<User, "email" | "name">,
-  eventName: string,
+/**
+ * ActionCodeSettings forwarded with every committee password-reset link.
+ * The Firebase Console "Customize action URL" maps the action handler to
+ * ${ADMIN_APP_URL}/auth/action; the continueUrl tells our in-app handler
+ * where to send the user after they finish setting their password.
+ *
+ * `handleCodeInApp` is intentionally not set — that flag is for email-link
+ * sign-in, not password reset.
+ */
+function buildPasswordResetActionCodeSettings(): ActionCodeSettings {
+  return {
+    url: `${config.urls.adminAppUrl}/auth/action?continueUrl=${encodeURIComponent(
+      "/events",
+    )}`,
+  };
+}
+
+interface SendCommitteeMjmlEmailInput {
+  to: string;
+  toName: string;
+  subject: string;
+  headline: string;
+  intro: string;
+  ctaText: string;
+  link: string;
+  eventName: string;
+  category: string;
+  footnote?: string;
+  logContext: string;
+}
+
+/**
+ * Shared MJML + SendGrid plumbing for committee transactional emails.
+ *
+ * All user-controlled strings are HTML-escaped before being interpolated into
+ * the MJML template, since MJML treats text as raw markup.
+ */
+async function sendCommitteeMjmlEmail(
+  input: SendCommitteeMjmlEmailInput,
 ): Promise<boolean> {
-  const link = await generatePasswordResetLink(user.email);
-  const safeName = escapeHtml(user.name);
-  const safeEventName = escapeHtml(eventName);
-  const safeLink = escapeHtml(link);
+  const safeName = escapeHtml(input.toName);
+  const safeEventName = escapeHtml(input.eventName);
+  const safeLink = escapeHtml(input.link);
+  const safeHeadline = escapeHtml(input.headline);
+  const safeCtaText = escapeHtml(input.ctaText);
+  const safeIntro = input.intro.replaceAll(
+    "{eventName}",
+    `<strong>${safeEventName}</strong>`,
+  );
+  // The intro is composed by the caller — it intentionally allows the
+  // {eventName} placeholder to render as bold-wrapped, escaped event name.
+  // Caller-provided literal text is otherwise already plain English/French.
+  const footnoteBlock = input.footnote
+    ? `<mj-text font-size="13px" color="#6b7280">${escapeHtml(
+        input.footnote,
+      )}</mj-text>`
+    : "";
   const mjml = `
 <mjml>
   <mj-head>
@@ -276,32 +331,73 @@ async function sendCommitteeInviteEmail(
   <mj-body background-color="#fafaf9">
     <mj-section padding="32px 24px">
       <mj-column>
-        <mj-text font-size="20px" font-weight="600">Welcome to the scientific committee</mj-text>
+        <mj-text font-size="20px" font-weight="600">${safeHeadline}</mj-text>
         <mj-text>Hello ${safeName},</mj-text>
-        <mj-text>You've been invited to join the scientific committee for <strong>${safeEventName}</strong> on Focale.</mj-text>
-        <mj-text>To activate your account, choose a password using the secure link below:</mj-text>
-        <mj-button background-color="#0d9488" color="#ffffff" border-radius="6px" href="${safeLink}">Set my password</mj-button>
+        <mj-text>${safeIntro}</mj-text>
+        <mj-button background-color="#0d9488" color="#ffffff" border-radius="6px" href="${safeLink}">${safeCtaText}</mj-button>
         <mj-text font-size="13px" color="#6b7280">This link is valid for a limited time. Once you've set your password, you can sign in directly with your email and the password you chose.</mj-text>
-        <mj-text font-size="13px" color="#6b7280">If you didn't expect this invitation, you can safely ignore this email.</mj-text>
+        ${footnoteBlock}
       </mj-column>
     </mj-section>
   </mj-body>
 </mjml>`;
   const { html } = compileMjmlToHtml(mjml);
   const result = await sendEmail({
-    to: user.email,
-    toName: user.name,
-    subject: `You've been invited to the scientific committee for ${eventName}`,
+    to: input.to,
+    toName: input.toName,
+    subject: input.subject,
     html,
-    categories: ["committee-invite"],
+    categories: [input.category],
   });
   if (!result.success) {
     logger.error(
-      { email: user.email, error: result.error },
-      "Failed to send committee invitation email",
+      { email: input.to, error: result.error },
+      input.logContext,
     );
   }
   return result.success;
+}
+
+async function sendInviteEmail(
+  user: Pick<User, "email" | "name">,
+  eventName: string,
+  link: string,
+): Promise<boolean> {
+  return sendCommitteeMjmlEmail({
+    to: user.email,
+    toName: user.name,
+    subject: `You've been invited to the scientific committee for ${eventName}`,
+    headline: "Welcome to the scientific committee",
+    intro:
+      "You've been invited to join the scientific committee for {eventName} on Focale. To activate your account, choose a password using the secure link below:",
+    ctaText: "Set my password",
+    link,
+    eventName,
+    category: "committee-invite",
+    footnote: "If you didn't expect this invitation, you can safely ignore this email.",
+    logContext: "Failed to send committee invitation email",
+  });
+}
+
+async function sendResetPasswordEmail(
+  user: Pick<User, "email" | "name">,
+  eventName: string,
+  link: string,
+): Promise<boolean> {
+  return sendCommitteeMjmlEmail({
+    to: user.email,
+    toName: user.name,
+    subject: "Reset your committee password",
+    headline: "Reset your committee password",
+    intro:
+      "A password reset was requested for your scientific committee account on {eventName}. If this was you or an administrator helping you, use the secure link below to choose a new password:",
+    ctaText: "Set my password",
+    link,
+    eventName,
+    category: "committee-password-reset",
+    footnote: "If you didn't request this reset, you can safely ignore this email.",
+    logContext: "Failed to send committee password-reset email",
+  });
 }
 
 export async function addCommitteeMember(
@@ -355,15 +451,21 @@ export async function addCommitteeMember(
     });
     // Best-effort: invite delivery failure is reported back to the caller but
     // doesn't roll the user back. The admin sees a warning and can resend.
-    inviteEmailSent = await sendCommitteeInviteEmail(user, event?.name ?? "the event").catch(
-      (err) => {
+    inviteEmailSent = await (async () => {
+      try {
+        const link = await generatePasswordResetLink(
+          user.email,
+          buildPasswordResetActionCodeSettings(),
+        );
+        return await sendInviteEmail(user, event?.name ?? "the event", link);
+      } catch (err) {
         logger.error(
           { err, userId: user.id, eventId },
           "Committee invite email threw while sending",
         );
         return false;
-      },
-    );
+      }
+    })();
   }
 
   const member = (await listCommitteeMembers(eventId)).find((m) => m.userId === user.id) ?? {
@@ -726,4 +828,109 @@ export async function reviewAssignedAbstract(
   const { scores: _scores, ...response } = result;
   void _scores;
   return response;
+}
+
+/**
+ * Stricter cousin of {@link assertActiveMembership} for admin-triggered
+ * password operations. Returns 404 (vs. 403) because the admin context is
+ * "this committee member doesn't exist on this event", not "the caller lacks
+ * permission".
+ */
+async function assertCommitteeMemberExists(eventId: string, userId: string) {
+  const membership = await prisma.abstractCommitteeMembership.findUnique({
+    where: { userId_eventId: { userId, eventId } },
+  });
+  if (!membership?.active) {
+    throw new AppError(
+      "Committee member not found",
+      404,
+      ErrorCodes.NOT_FOUND,
+    );
+  }
+  return membership;
+}
+
+/**
+ * Re-issue a password-reset link for a committee member and email it to them.
+ * Used by admins to unblock members who lost the original invite email.
+ *
+ * The link itself is generated by Firebase regardless of whether SendGrid
+ * delivers the email; we audit-log the admin's intent and report the email
+ * outcome to the caller so the UI can surface a warning when delivery fails.
+ */
+export async function resendCommitteeInvite(
+  eventId: string,
+  userId: string,
+  performedBy: string,
+) {
+  await assertCommitteeMemberExists(eventId, userId);
+
+  const [user, event] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true, name: true },
+    }),
+    prisma.event.findUnique({
+      where: { id: eventId },
+      select: { name: true },
+    }),
+  ]);
+  if (!user) throw new AppError("User not found", 404, ErrorCodes.NOT_FOUND);
+
+  let inviteEmailSent = false;
+  try {
+    const link = await generatePasswordResetLink(
+      user.email,
+      buildPasswordResetActionCodeSettings(),
+    );
+    inviteEmailSent = await sendResetPasswordEmail(
+      user,
+      event?.name ?? "the event",
+      link,
+    );
+  } catch (err) {
+    logger.error(
+      { err, userId, eventId },
+      "Committee reset-password email threw while sending",
+    );
+    inviteEmailSent = false;
+  }
+
+  await auditLog(prisma, {
+    entityType: "User",
+    entityId: userId,
+    action: "admin_reset_password",
+    changes: { method: { old: null, new: "email_link" } },
+    performedBy,
+  });
+
+  return { inviteEmailSent };
+}
+
+/**
+ * Direct admin override: set a Firebase Auth user's password and revoke all
+ * refresh tokens so existing sessions cannot keep refreshing ID tokens with
+ * the stale credential context. The plaintext password never enters the
+ * audit log.
+ */
+export async function setCommitteeMemberPassword(
+  eventId: string,
+  userId: string,
+  newPassword: string,
+  performedBy: string,
+) {
+  await assertCommitteeMemberExists(eventId, userId);
+
+  await updateFirebaseUserPassword(userId, newPassword);
+  await revokeFirebaseRefreshTokens(userId);
+
+  await auditLog(prisma, {
+    entityType: "User",
+    entityId: userId,
+    action: "admin_reset_password",
+    changes: { method: { old: null, new: "direct" } },
+    performedBy,
+  });
+
+  return { ok: true as const };
 }

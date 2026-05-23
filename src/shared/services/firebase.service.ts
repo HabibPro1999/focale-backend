@@ -1,5 +1,5 @@
 import admin from "firebase-admin";
-import type { Auth } from "firebase-admin/auth";
+import type { ActionCodeSettings, Auth } from "firebase-admin/auth";
 import type { Storage } from "firebase-admin/storage";
 import { config } from "@config/app.config.js";
 
@@ -75,7 +75,34 @@ export async function deleteFirebaseUser(uid: string): Promise<void> {
 /**
  * Generate a one-time password-reset link. Used to onboard newly created
  * accounts without requiring an admin to set (and share) a temporary password.
+ *
+ * Optional ActionCodeSettings forward the continueUrl/handler URL so the link
+ * lands on our in-app handler page instead of Firebase's hosted action page.
  */
-export async function generatePasswordResetLink(email: string): Promise<string> {
-  return firebaseAuth.generatePasswordResetLink(email);
+export async function generatePasswordResetLink(
+  email: string,
+  actionCodeSettings?: ActionCodeSettings,
+): Promise<string> {
+  return firebaseAuth.generatePasswordResetLink(email, actionCodeSettings);
+}
+
+/**
+ * Set a Firebase Auth user's password directly. Used by admin override flows
+ * where the target user has lost access to their email and cannot use the
+ * password-reset email flow.
+ */
+export async function updateFirebaseUserPassword(
+  uid: string,
+  password: string,
+): Promise<void> {
+  await firebaseAuth.updateUser(uid, { password });
+}
+
+/**
+ * Invalidate all refresh tokens for a Firebase Auth user. Pairs with a direct
+ * password change so existing sessions cannot keep refreshing ID tokens with
+ * the old credential context.
+ */
+export async function revokeFirebaseRefreshTokens(uid: string): Promise<void> {
+  await firebaseAuth.revokeRefreshTokens(uid);
 }

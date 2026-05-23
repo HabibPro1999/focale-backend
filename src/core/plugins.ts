@@ -85,4 +85,5 @@ export const publicRateLimits = {
     max: config.security.publicAbstracts.readMax,
     timeWindow: config.security.publicAbstracts.timeWindow,
   },
+  passwordReset: { max: 5, timeWindow: "1 minute" },
 };

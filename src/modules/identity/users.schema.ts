@@ -2,21 +2,32 @@ import { z } from "zod";
 import { UserRole } from "@shared/constants/roles.js";
 
 // ============================================================================
+// Shared validators
+// ============================================================================
+
+/**
+ * Strong-password Zod string: ≥12 chars and at least one upper / lower / digit
+ * / special character. Reused by user creation and admin password-override flows
+ * (e.g. committee member direct password set) to keep policy aligned.
+ */
+export const StrongPasswordSchema = z
+  .string()
+  .min(12, "Password must be at least 12 characters")
+  .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
+  .regex(/[a-z]/, "Password must contain at least one lowercase letter")
+  .regex(/[0-9]/, "Password must contain at least one number")
+  .regex(
+    /[^a-zA-Z0-9]/,
+    "Password must contain at least one special character",
+  );
+
+// ============================================================================
 // Request Schemas
 // ============================================================================
 
 export const CreateUserSchema = z.strictObject({
   email: z.string().email(),
-  password: z
-    .string()
-    .min(12, "Password must be at least 12 characters")
-    .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
-    .regex(/[a-z]/, "Password must contain at least one lowercase letter")
-    .regex(/[0-9]/, "Password must contain at least one number")
-    .regex(
-      /[^a-zA-Z0-9]/,
-      "Password must contain at least one special character",
-    ),
+  password: StrongPasswordSchema,
   name: z.string().min(1).max(100),
   role: z
     .union([
