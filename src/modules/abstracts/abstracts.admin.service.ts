@@ -370,7 +370,6 @@ export async function finalizeAbstract(
             abstractId,
             extraContext: {
               committeeComments,
-              committee_comments: committeeComments,
             },
           },
           `email:abstract:ABSTRACT_COMMITTEE_COMMENTS:${abstractId}`,

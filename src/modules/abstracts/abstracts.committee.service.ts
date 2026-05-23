@@ -21,7 +21,7 @@ import {
 } from "@core/outbox";
 import { generatePasswordResetLink } from "@shared/services/firebase.service.js";
 import { sendEmail } from "@modules/email/email-sendgrid.service.js";
-import { compileMjmlToHtml } from "@modules/email/email-renderer.service.js";
+import { compileMjmlToHtml, escapeHtml } from "@modules/email/email-renderer.service.js";
 import type {
   AddCommitteeMemberInput,
   AssignReviewersInput,
@@ -260,8 +260,11 @@ function generateThrowawayPassword(): string {
 async function sendCommitteeInviteEmail(
   user: Pick<User, "email" | "name">,
   eventName: string,
-): Promise<void> {
+): Promise<boolean> {
   const link = await generatePasswordResetLink(user.email);
+  const safeName = escapeHtml(user.name);
+  const safeEventName = escapeHtml(eventName);
+  const safeLink = escapeHtml(link);
   const mjml = `
 <mjml>
   <mj-head>
@@ -274,10 +277,10 @@ async function sendCommitteeInviteEmail(
     <mj-section padding="32px 24px">
       <mj-column>
         <mj-text font-size="20px" font-weight="600">Welcome to the scientific committee</mj-text>
-        <mj-text>Hello ${user.name},</mj-text>
-        <mj-text>You've been invited to join the scientific committee for <strong>${eventName}</strong> on Focale.</mj-text>
+        <mj-text>Hello ${safeName},</mj-text>
+        <mj-text>You've been invited to join the scientific committee for <strong>${safeEventName}</strong> on Focale.</mj-text>
         <mj-text>To activate your account, choose a password using the secure link below:</mj-text>
-        <mj-button background-color="#0d9488" color="#ffffff" border-radius="6px" href="${link}">Set my password</mj-button>
+        <mj-button background-color="#0d9488" color="#ffffff" border-radius="6px" href="${safeLink}">Set my password</mj-button>
         <mj-text font-size="13px" color="#6b7280">This link is valid for a limited time. Once you've set your password, you can sign in directly with your email and the password you chose.</mj-text>
         <mj-text font-size="13px" color="#6b7280">If you didn't expect this invitation, you can safely ignore this email.</mj-text>
       </mj-column>
@@ -298,6 +301,7 @@ async function sendCommitteeInviteEmail(
       "Failed to send committee invitation email",
     );
   }
+  return result.success;
 }
 
 export async function addCommitteeMember(
@@ -343,23 +347,26 @@ export async function addCommitteeMember(
     performedBy,
   });
 
+  let inviteEmailSent: boolean | undefined;
   if (isNewUser) {
     const event = await prisma.event.findUnique({
       where: { id: eventId },
       select: { name: true },
     });
-    // Best-effort: invite delivery failure is logged but doesn't roll the user back.
-    // The admin can resend from Firebase if needed.
-    await sendCommitteeInviteEmail(user, event?.name ?? "the event").catch((err) => {
-      logger.error(
-        { err, userId: user.id, eventId },
-        "Committee invite email threw while sending",
-      );
-    });
+    // Best-effort: invite delivery failure is reported back to the caller but
+    // doesn't roll the user back. The admin sees a warning and can resend.
+    inviteEmailSent = await sendCommitteeInviteEmail(user, event?.name ?? "the event").catch(
+      (err) => {
+        logger.error(
+          { err, userId: user.id, eventId },
+          "Committee invite email threw while sending",
+        );
+        return false;
+      },
+    );
   }
 
-  const member = (await listCommitteeMembers(eventId)).find((m) => m.userId === user.id);
-  return member ?? {
+  const member = (await listCommitteeMembers(eventId)).find((m) => m.userId === user.id) ?? {
     userId: user.id,
     email: user.email,
     name: user.name,
@@ -368,6 +375,7 @@ export async function addCommitteeMember(
     assignedCount: 0,
     scoredCount: 0,
   };
+  return { ...member, inviteEmailSent };
 }
 
 export async function removeCommitteeMember(
