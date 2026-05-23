@@ -421,35 +421,72 @@ async function sendResetPasswordEmail(
   });
 }
 
+function assertCommitteeUserEligible(user: User) {
+  if (
+    user.role === UserRole.SUPER_ADMIN ||
+    user.role === UserRole.CLIENT_ADMIN
+  ) {
+    throw new AppError(
+      "This email belongs to an admin account. Admin accounts cannot be added as scientific committee members.",
+      400,
+      ErrorCodes.VALIDATION_ERROR,
+    );
+  }
+  if (user.role !== UserRole.SCIENTIFIC_COMMITTEE) {
+    throw new AppError(
+      "This email does not belong to a scientific committee account.",
+      400,
+      ErrorCodes.VALIDATION_ERROR,
+    );
+  }
+  if (!user.active) {
+    throw new AppError(
+      "This email belongs to an inactive scientific committee account. Reactivate the account before adding it to an event.",
+      400,
+      ErrorCodes.VALIDATION_ERROR,
+    );
+  }
+  if (user.clientId !== null) {
+    throw new AppError(
+      "This email belongs to a client-scoped account. Only unscoped scientific committee accounts can be added as committee members.",
+      400,
+      ErrorCodes.VALIDATION_ERROR,
+    );
+  }
+}
+
 export async function addCommitteeMember(
   eventId: string,
   body: AddCommitteeMemberInput,
   performedBy: string,
 ) {
-  const isNewUser = !("userId" in body);
-  const user =
-    "userId" in body
-      ? await prisma.user.findUnique({ where: { id: body.userId } })
-      : await createUser({
-          email: body.email,
-          name: body.name,
-          password: generateThrowawayPassword(),
-          role: UserRole.SCIENTIFIC_COMMITTEE,
-          clientId: null,
-        });
+  let createdUser = false;
+  let existingUserAdded = false;
+  let user: User | null;
+
+  if ("userId" in body) {
+    user = await prisma.user.findUnique({ where: { id: body.userId } });
+  } else {
+    const existingUser = await prisma.user.findUnique({
+      where: { email: body.email },
+    });
+    if (existingUser) {
+      user = existingUser;
+      existingUserAdded = true;
+    } else {
+      user = await createUser({
+        email: body.email,
+        name: body.name,
+        password: generateThrowawayPassword(),
+        role: UserRole.SCIENTIFIC_COMMITTEE,
+        clientId: null,
+      });
+      createdUser = true;
+    }
+  }
 
   if (!user) throw new AppError("User not found", 404, ErrorCodes.NOT_FOUND);
-  if (
-    user.role !== UserRole.SCIENTIFIC_COMMITTEE ||
-    !user.active ||
-    user.clientId !== null
-  ) {
-    throw new AppError(
-      "Committee member must be an active unscoped scientific committee user",
-      400,
-      ErrorCodes.VALIDATION_ERROR,
-    );
-  }
+  assertCommitteeUserEligible(user);
 
   await prisma.abstractCommitteeMembership.upsert({
     where: { userId_eventId: { userId: user.id, eventId } },
@@ -466,7 +503,7 @@ export async function addCommitteeMember(
   });
 
   let inviteEmailSent: boolean | undefined;
-  if (isNewUser) {
+  if (createdUser) {
     const event = await prisma.event.findUnique({
       where: { id: eventId },
       select: { name: true },
@@ -501,7 +538,11 @@ export async function addCommitteeMember(
     assignedCount: 0,
     scoredCount: 0,
   };
-  return { ...member, inviteEmailSent };
+  return {
+    ...member,
+    ...(inviteEmailSent !== undefined ? { inviteEmailSent } : {}),
+    ...(existingUserAdded ? { existingUserAdded } : {}),
+  };
 }
 
 export async function removeCommitteeMember(

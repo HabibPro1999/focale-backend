@@ -1,25 +1,25 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { beforeEach, describe, it, expect, vi } from "vitest";
 import { prismaMock } from "../../../tests/mocks/prisma.js";
+import { firebaseAuthMock } from "../../../tests/mocks/firebase.js";
 import { AbstractStatus } from "@/generated/prisma/client.js";
+import { UserRole } from "@shared/constants/roles.js";
 
 vi.mock("@shared/utils/audit.js", () => ({
   auditLog: vi.fn(),
 }));
 
-const generatePasswordResetLinkMock = vi.fn();
-const updateFirebaseUserPasswordMock = vi.fn();
-const revokeFirebaseRefreshTokensMock = vi.fn();
 const sendEmailMock = vi.fn();
 
-vi.mock("@shared/services/firebase.service.js", () => ({
-  generatePasswordResetLink: (...args: unknown[]) =>
-    generatePasswordResetLinkMock(...args),
-  updateFirebaseUserPassword: (...args: unknown[]) =>
-    updateFirebaseUserPasswordMock(...args),
-  revokeFirebaseRefreshTokens: (...args: unknown[]) =>
-    revokeFirebaseRefreshTokensMock(...args),
-}));
+const createFirebaseUserMock = firebaseAuthMock.createUser;
+const setCustomClaimsMock = firebaseAuthMock.setCustomUserClaims;
+const deleteFirebaseUserMock = firebaseAuthMock.deleteUser;
+const generatePasswordResetLinkMock =
+  firebaseAuthMock.generatePasswordResetLink;
+const updateFirebaseUserPasswordMock =
+  firebaseAuthMock.updateFirebaseUserPassword;
+const revokeFirebaseRefreshTokensMock =
+  firebaseAuthMock.revokeFirebaseRefreshTokens;
 
 vi.mock("@modules/email/email-sendgrid.service.js", () => ({
   sendEmail: (...args: unknown[]) => sendEmailMock(...args),
@@ -27,6 +27,7 @@ vi.mock("@modules/email/email-sendgrid.service.js", () => ({
 
 import { auditLog } from "@shared/utils/audit.js";
 import {
+  addCommitteeMember,
   assignReviewers,
   getAssignedAbstractDetail,
   listAssignedAbstracts,
@@ -113,6 +114,37 @@ function collectKeys(value: unknown, keys = new Set<string>()) {
     collectKeys(nested, keys);
   }
   return keys;
+}
+
+function makeCommitteeUser(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "committee-user-1",
+    email: "committee@example.com",
+    name: "Existing Committee",
+    role: UserRole.SCIENTIFIC_COMMITTEE,
+    clientId: null,
+    active: true,
+    createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+    ...overrides,
+  };
+}
+
+function mockCommitteeListResult(user: ReturnType<typeof makeCommitteeUser>) {
+  prismaMock.abstractCommitteeMembership.findMany.mockResolvedValue([
+    {
+      userId: user.id,
+      eventId,
+      active: true,
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+      updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+      user,
+    },
+  ] as any);
+  prismaMock.abstractReviewerTheme.findMany.mockResolvedValue([]);
+  (prismaMock.abstractReview.groupBy as any)
+    .mockResolvedValueOnce([])
+    .mockResolvedValueOnce([]);
 }
 
 describe("abstracts committee service", () => {
@@ -447,6 +479,183 @@ describe("abstracts committee service", () => {
         averageScore: 7.5,
         reviewCount: 2,
       });
+    });
+  });
+
+  describe("addCommitteeMember", () => {
+    beforeEach(() => {
+      createFirebaseUserMock.mockReset();
+      setCustomClaimsMock.mockReset();
+      deleteFirebaseUserMock.mockReset();
+      generatePasswordResetLinkMock.mockReset();
+      sendEmailMock.mockReset();
+      (auditLog as any).mockReset?.();
+    });
+
+    it.each([
+      ["adds membership to another event", makeCommitteeUser()],
+      [
+        "reactivates membership in the current event",
+        makeCommitteeUser({ id: "same-event-member" }),
+      ],
+    ])(
+      "%s when an active committee user already exists by email",
+      async (_caseName, user) => {
+        prismaMock.user.findUnique.mockResolvedValue(user as any);
+        mockCommitteeListResult(user);
+
+        const result = await addCommitteeMember(
+          eventId,
+          { email: user.email, name: "Ignored Name" },
+          performedBy,
+        );
+
+        expect(result).toMatchObject({
+          userId: user.id,
+          email: user.email,
+          existingUserAdded: true,
+        });
+        expect(createFirebaseUserMock).not.toHaveBeenCalled();
+        expect(generatePasswordResetLinkMock).not.toHaveBeenCalled();
+        expect(sendEmailMock).not.toHaveBeenCalled();
+        expect(
+          prismaMock.abstractCommitteeMembership.upsert,
+        ).toHaveBeenCalledWith({
+          where: { userId_eventId: { userId: user.id, eventId } },
+          update: { active: true },
+          create: { userId: user.id, eventId, active: true },
+        });
+      },
+    );
+
+    it("returns a clear error when the email belongs to an admin account", async () => {
+      const adminUser = makeCommitteeUser({
+        role: UserRole.SUPER_ADMIN,
+        email: "admin@example.com",
+      });
+      prismaMock.user.findUnique.mockResolvedValue(adminUser as any);
+
+      await expect(
+        addCommitteeMember(
+          eventId,
+          { email: adminUser.email, name: "Admin User" },
+          performedBy,
+        ),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        message:
+          "This email belongs to an admin account. Admin accounts cannot be added as scientific committee members.",
+      });
+
+      expect(createFirebaseUserMock).not.toHaveBeenCalled();
+      expect(
+        prismaMock.abstractCommitteeMembership.upsert,
+      ).not.toHaveBeenCalled();
+    });
+
+    it("returns a clear error when the email belongs to an inactive committee account", async () => {
+      const inactiveUser = makeCommitteeUser({ active: false });
+      prismaMock.user.findUnique.mockResolvedValue(inactiveUser as any);
+
+      await expect(
+        addCommitteeMember(
+          eventId,
+          { email: inactiveUser.email, name: inactiveUser.name },
+          performedBy,
+        ),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        message:
+          "This email belongs to an inactive scientific committee account. Reactivate the account before adding it to an event.",
+      });
+
+      expect(
+        prismaMock.abstractCommitteeMembership.upsert,
+      ).not.toHaveBeenCalled();
+    });
+
+    it("returns a clear error when the email belongs to a client-scoped committee account", async () => {
+      const scopedUser = makeCommitteeUser({ clientId: "client-1" });
+      prismaMock.user.findUnique.mockResolvedValue(scopedUser as any);
+
+      await expect(
+        addCommitteeMember(
+          eventId,
+          { email: scopedUser.email, name: scopedUser.name },
+          performedBy,
+        ),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        message:
+          "This email belongs to a client-scoped account. Only unscoped scientific committee accounts can be added as committee members.",
+      });
+
+      expect(
+        prismaMock.abstractCommitteeMembership.upsert,
+      ).not.toHaveBeenCalled();
+    });
+
+    it("creates a new Firebase and database user, adds membership, and sends the invite when the email is new", async () => {
+      const user = makeCommitteeUser({
+        id: "new-firebase-uid",
+        email: "new-committee@example.com",
+        name: "New Committee",
+      });
+      prismaMock.user.findUnique.mockResolvedValue(null);
+      createFirebaseUserMock.mockResolvedValue({ uid: user.id });
+      setCustomClaimsMock.mockResolvedValue(undefined);
+      prismaMock.user.create.mockResolvedValue(user as any);
+      prismaMock.event.findUnique.mockResolvedValue({
+        name: "Big Event",
+      } as any);
+      generatePasswordResetLinkMock.mockResolvedValue(
+        "https://admin.example/auth/action?oobCode=abc",
+      );
+      sendEmailMock.mockResolvedValue({ success: true });
+      mockCommitteeListResult(user);
+
+      const result = await addCommitteeMember(
+        eventId,
+        { email: user.email, name: user.name },
+        performedBy,
+      );
+
+      expect(result).toMatchObject({
+        userId: user.id,
+        inviteEmailSent: true,
+      });
+      expect(result).not.toHaveProperty("existingUserAdded");
+      expect(createFirebaseUserMock).toHaveBeenCalledWith(
+        user.email,
+        expect.any(String),
+      );
+      expect(setCustomClaimsMock).toHaveBeenCalledWith(user.id, {
+        role: UserRole.SCIENTIFIC_COMMITTEE,
+        clientId: null,
+      });
+      expect(prismaMock.user.create).toHaveBeenCalledWith({
+        data: {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          role: UserRole.SCIENTIFIC_COMMITTEE,
+          clientId: null,
+        },
+      });
+      expect(generatePasswordResetLinkMock).toHaveBeenCalledWith(
+        user.email,
+        expect.objectContaining({
+          url: expect.stringContaining("/committee"),
+        }),
+      );
+      expect(sendEmailMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: user.email,
+          subject:
+            "You've been invited to the scientific committee for Big Event",
+          categories: ["committee-invite"],
+        }),
+      );
     });
   });
 
