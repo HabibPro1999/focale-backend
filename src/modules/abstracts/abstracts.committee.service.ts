@@ -286,17 +286,17 @@ function generateThrowawayPassword(): string {
 /**
  * ActionCodeSettings forwarded with every committee password-reset link.
  * The Firebase Console "Customize action URL" maps the action handler to
- * ${ADMIN_APP_URL}/auth/action; the continueUrl tells our in-app handler
- * where to send the user after they finish setting their password.
+ * ${ADMIN_APP_URL}/auth/action; the `url` here is the final post-reset
+ * destination Firebase appends as `continueUrl`, *not* another action URL —
+ * pointing it back at /auth/action loops the redirect onto a handler page
+ * with no oobCode and renders an "unknown mode" error.
  *
  * `handleCodeInApp` is intentionally not set — that flag is for email-link
  * sign-in, not password reset.
  */
 function buildPasswordResetActionCodeSettings(): ActionCodeSettings {
   return {
-    url: `${config.urls.adminAppUrl}/auth/action?continueUrl=${encodeURIComponent(
-      "/events",
-    )}`,
+    url: `${config.urls.adminAppUrl}/committee`,
   };
 }
 

@@ -513,7 +513,7 @@ describe("abstracts committee service", () => {
       expect(generatePasswordResetLinkMock).toHaveBeenCalledWith(
         "reviewer9@example.com",
         expect.objectContaining({
-          url: expect.stringContaining("/auth/action?continueUrl="),
+          url: expect.stringContaining("/committee"),
         }),
       );
       expect(sendEmailMock).toHaveBeenCalledWith(
