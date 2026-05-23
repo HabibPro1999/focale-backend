@@ -106,7 +106,9 @@ function collectKeys(value: unknown, keys = new Set<string>()) {
     for (const item of value) collectKeys(item, keys);
     return keys;
   }
-  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+  for (const [key, nested] of Object.entries(
+    value as Record<string, unknown>,
+  )) {
     keys.add(key);
     collectKeys(nested, keys);
   }
@@ -123,7 +125,12 @@ describe("abstracts committee service", () => {
           active: true,
           createdAt: new Date("2026-01-01T00:00:00.000Z"),
           updatedAt: new Date("2026-01-01T00:00:00.000Z"),
-          user: { id: "reviewer-1", email: "one@example.com", name: "One", active: true },
+          user: {
+            id: "reviewer-1",
+            email: "one@example.com",
+            name: "One",
+            active: true,
+          },
         },
         {
           userId: "reviewer-2",
@@ -131,7 +138,12 @@ describe("abstracts committee service", () => {
           active: true,
           createdAt: new Date("2026-01-02T00:00:00.000Z"),
           updatedAt: new Date("2026-01-02T00:00:00.000Z"),
-          user: { id: "reviewer-2", email: "two@example.com", name: "Two", active: true },
+          user: {
+            id: "reviewer-2",
+            email: "two@example.com",
+            name: "Two",
+            active: true,
+          },
         },
       ] as any);
       prismaMock.abstractReviewerTheme.findMany.mockResolvedValue([
@@ -139,8 +151,12 @@ describe("abstracts committee service", () => {
         { userId: "reviewer-1", themeId: "theme-2" },
       ] as any);
       (prismaMock.abstractReview.groupBy as any)
-        .mockResolvedValueOnce([{ reviewerId: "reviewer-1", _count: { _all: 2 } }] as any)
-        .mockResolvedValueOnce([{ reviewerId: "reviewer-1", _count: { _all: 1 } }] as any);
+        .mockResolvedValueOnce([
+          { reviewerId: "reviewer-1", _count: { _all: 2 } },
+        ] as any)
+        .mockResolvedValueOnce([
+          { reviewerId: "reviewer-1", _count: { _all: 1 } },
+        ] as any);
 
       const result = await listCommitteeMembers(eventId);
 
@@ -164,13 +180,19 @@ describe("abstracts committee service", () => {
           scoredCount: 0,
         },
       ]);
-      expect(prismaMock.abstractCommitteeMembership.findMany).toHaveBeenCalledWith(
+      expect(
+        prismaMock.abstractCommitteeMembership.findMany,
+      ).toHaveBeenCalledWith(
         expect.objectContaining({ where: { eventId, active: true } }),
       );
       expect(prismaMock.abstractReview.groupBy).toHaveBeenNthCalledWith(
         1,
         expect.objectContaining({
-          where: { eventId, reviewerId: { in: ["reviewer-1", "reviewer-2"] }, active: true },
+          where: {
+            eventId,
+            reviewerId: { in: ["reviewer-1", "reviewer-2"] },
+            active: true,
+          },
         }),
       );
       expect(prismaMock.abstractReview.groupBy).toHaveBeenNthCalledWith(
@@ -195,7 +217,12 @@ describe("abstracts committee service", () => {
       ] as any);
 
       await expect(
-        assignReviewers(eventId, abstractId, { reviewerIds: ["reviewer-1", "inactive-reviewer"] }, performedBy),
+        assignReviewers(
+          eventId,
+          abstractId,
+          { reviewerIds: ["reviewer-1", "inactive-reviewer"] },
+          performedBy,
+        ),
       ).rejects.toMatchObject({ statusCode: 400 });
 
       expect(prismaMock.$transaction).not.toHaveBeenCalled();
@@ -209,7 +236,9 @@ describe("abstracts committee service", () => {
         { userId: "reviewer-1" },
         { userId: "reviewer-2" },
       ] as any);
-      prismaMock.$transaction.mockImplementation(async (callback: any) => callback(prismaMock));
+      prismaMock.$transaction.mockImplementation(async (callback: any) =>
+        callback(prismaMock),
+      );
       prismaMock.abstract.update.mockResolvedValue({
         id: abstractId,
         status: AbstractStatus.UNDER_REVIEW,
@@ -231,12 +260,16 @@ describe("abstracts committee service", () => {
         data: { active: false },
       });
       expect(prismaMock.abstractReview.upsert).toHaveBeenCalledWith({
-        where: { abstractId_reviewerId: { abstractId, reviewerId: "reviewer-1" } },
+        where: {
+          abstractId_reviewerId: { abstractId, reviewerId: "reviewer-1" },
+        },
         update: { eventId, active: true },
         create: { abstractId, eventId, reviewerId: "reviewer-1", active: true },
       });
       expect(prismaMock.abstractReview.upsert).toHaveBeenCalledWith({
-        where: { abstractId_reviewerId: { abstractId, reviewerId: "reviewer-2" } },
+        where: {
+          abstractId_reviewerId: { abstractId, reviewerId: "reviewer-2" },
+        },
         update: { eventId, active: true },
         create: { abstractId, eventId, reviewerId: "reviewer-2", active: true },
       });
@@ -264,7 +297,14 @@ describe("abstracts committee service", () => {
         {
           ...makeAbstract(),
           themes: [{ theme: { id: "theme-1", label: "Cardiology" } }],
-          reviews: [activeReview({ reviewerId, score: 8, comment: "Good", scoredAt: new Date("2026-01-03T00:00:00.000Z") })],
+          reviews: [
+            activeReview({
+              reviewerId,
+              score: 8,
+              comment: "Good",
+              scoredAt: new Date("2026-01-03T00:00:00.000Z"),
+            }),
+          ],
         },
       ] as any);
 
@@ -313,7 +353,11 @@ describe("abstracts committee service", () => {
     it("rejects scoring after the event scoring deadline", async () => {
       prismaMock.abstract.findUnique.mockResolvedValue({
         ...makeAbstract({ status: AbstractStatus.UNDER_REVIEW }),
-        event: { abstractConfig: { scoringDeadline: new Date("2000-01-01T00:00:00.000Z") } },
+        event: {
+          abstractConfig: {
+            scoringDeadline: new Date("2000-01-01T00:00:00.000Z"),
+          },
+        },
         reviews: [activeReview({ reviewerId })],
       } as any);
       prismaMock.abstractCommitteeMembership.findUnique.mockResolvedValue({
@@ -323,7 +367,10 @@ describe("abstracts committee service", () => {
       } as any);
 
       await expect(
-        reviewAssignedAbstract(abstractId, reviewerId, { score: 9, comment: "Strong" }),
+        reviewAssignedAbstract(abstractId, reviewerId, {
+          score: 9,
+          comment: "Strong",
+        }),
       ).rejects.toMatchObject({ statusCode: 403 });
 
       expect(prismaMock.$transaction).not.toHaveBeenCalled();
@@ -332,15 +379,24 @@ describe("abstracts committee service", () => {
     it("updates own active review, recalculates active scores, and completes when all active reviews are scored", async () => {
       prismaMock.abstract.findUnique.mockResolvedValue({
         ...makeAbstract({ status: AbstractStatus.UNDER_REVIEW }),
-        event: { abstractConfig: { scoringDeadline: new Date("2999-01-01T00:00:00.000Z") } },
-        reviews: [activeReview({ reviewerId }), activeReview({ reviewerId: "reviewer-2" })],
+        event: {
+          abstractConfig: {
+            scoringDeadline: new Date("2999-01-01T00:00:00.000Z"),
+          },
+        },
+        reviews: [
+          activeReview({ reviewerId }),
+          activeReview({ reviewerId: "reviewer-2" }),
+        ],
       } as any);
       prismaMock.abstractCommitteeMembership.findUnique.mockResolvedValue({
         userId: reviewerId,
         eventId,
         active: true,
       } as any);
-      prismaMock.$transaction.mockImplementation(async (callback: any) => callback(prismaMock));
+      prismaMock.$transaction.mockImplementation(async (callback: any) =>
+        callback(prismaMock),
+      );
       prismaMock.abstractReview.findMany.mockResolvedValue([
         { score: 8, scoredAt: new Date("2026-01-03T00:00:00.000Z") },
         { score: 7, scoredAt: new Date("2026-01-04T00:00:00.000Z") },
@@ -378,7 +434,12 @@ describe("abstracts committee service", () => {
           reviewCount: 2,
           status: AbstractStatus.REVIEW_COMPLETE,
         },
-        select: { id: true, status: true, averageScore: true, reviewCount: true },
+        select: {
+          id: true,
+          status: true,
+          averageScore: true,
+          reviewCount: true,
+        },
       });
       expect(result).toEqual({
         id: abstractId,
@@ -391,6 +452,16 @@ describe("abstracts committee service", () => {
 
   describe("resendCommitteeInvite", () => {
     const targetUserId = "reviewer-9";
+    const activeCommitteeMember = {
+      userId: targetUserId,
+      eventId,
+      active: true,
+      user: {
+        email: "reviewer9@example.com",
+        name: "Reviewer Nine",
+      },
+      event: { name: "Big Event" },
+    };
 
     beforeEach(() => {
       generatePasswordResetLinkMock.mockReset();
@@ -424,20 +495,19 @@ describe("abstracts committee service", () => {
     });
 
     it("generates a reset link, sends the email, and audit-logs on success", async () => {
-      prismaMock.abstractCommitteeMembership.findUnique.mockResolvedValue({
-        userId: targetUserId,
-        eventId,
-        active: true,
-      } as any);
-      prismaMock.user.findUnique.mockResolvedValue({
-        email: "reviewer9@example.com",
-        name: "Reviewer Nine",
-      } as any);
-      prismaMock.event.findUnique.mockResolvedValue({ name: "Big Event" } as any);
-      generatePasswordResetLinkMock.mockResolvedValue("https://admin.example/auth/action?oobCode=abc");
+      prismaMock.abstractCommitteeMembership.findUnique.mockResolvedValue(
+        activeCommitteeMember as any,
+      );
+      generatePasswordResetLinkMock.mockResolvedValue(
+        "https://admin.example/auth/action?oobCode=abc",
+      );
       sendEmailMock.mockResolvedValue({ success: true });
 
-      const result = await resendCommitteeInvite(eventId, targetUserId, performedBy);
+      const result = await resendCommitteeInvite(
+        eventId,
+        targetUserId,
+        performedBy,
+      );
 
       expect(result).toEqual({ inviteEmailSent: true });
       expect(generatePasswordResetLinkMock).toHaveBeenCalledWith(
@@ -466,20 +536,22 @@ describe("abstracts committee service", () => {
     });
 
     it("reports inviteEmailSent=false when SendGrid fails (still audit-logs the admin action)", async () => {
-      prismaMock.abstractCommitteeMembership.findUnique.mockResolvedValue({
-        userId: targetUserId,
-        eventId,
-        active: true,
-      } as any);
-      prismaMock.user.findUnique.mockResolvedValue({
-        email: "reviewer9@example.com",
-        name: "Reviewer Nine",
-      } as any);
-      prismaMock.event.findUnique.mockResolvedValue({ name: "Big Event" } as any);
-      generatePasswordResetLinkMock.mockResolvedValue("https://admin.example/auth/action?oobCode=abc");
-      sendEmailMock.mockResolvedValue({ success: false, error: "sendgrid down" });
+      prismaMock.abstractCommitteeMembership.findUnique.mockResolvedValue(
+        activeCommitteeMember as any,
+      );
+      generatePasswordResetLinkMock.mockResolvedValue(
+        "https://admin.example/auth/action?oobCode=abc",
+      );
+      sendEmailMock.mockResolvedValue({
+        success: false,
+        error: "sendgrid down",
+      });
 
-      const result = await resendCommitteeInvite(eventId, targetUserId, performedBy);
+      const result = await resendCommitteeInvite(
+        eventId,
+        targetUserId,
+        performedBy,
+      );
 
       expect(result).toEqual({ inviteEmailSent: false });
       expect(auditLog).toHaveBeenCalledWith(
@@ -492,19 +564,18 @@ describe("abstracts committee service", () => {
     });
 
     it("reports inviteEmailSent=false when generatePasswordResetLink throws", async () => {
-      prismaMock.abstractCommitteeMembership.findUnique.mockResolvedValue({
-        userId: targetUserId,
-        eventId,
-        active: true,
-      } as any);
-      prismaMock.user.findUnique.mockResolvedValue({
-        email: "reviewer9@example.com",
-        name: "Reviewer Nine",
-      } as any);
-      prismaMock.event.findUnique.mockResolvedValue({ name: "Big Event" } as any);
-      generatePasswordResetLinkMock.mockRejectedValue(new Error("firebase down"));
+      prismaMock.abstractCommitteeMembership.findUnique.mockResolvedValue(
+        activeCommitteeMember as any,
+      );
+      generatePasswordResetLinkMock.mockRejectedValue(
+        new Error("firebase down"),
+      );
 
-      const result = await resendCommitteeInvite(eventId, targetUserId, performedBy);
+      const result = await resendCommitteeInvite(
+        eventId,
+        targetUserId,
+        performedBy,
+      );
 
       expect(result).toEqual({ inviteEmailSent: false });
       expect(sendEmailMock).not.toHaveBeenCalled();
@@ -526,7 +597,12 @@ describe("abstracts committee service", () => {
       prismaMock.abstractCommitteeMembership.findUnique.mockResolvedValue(null);
 
       await expect(
-        setCommitteeMemberPassword(eventId, targetUserId, newPassword, performedBy),
+        setCommitteeMemberPassword(
+          eventId,
+          targetUserId,
+          newPassword,
+          performedBy,
+        ),
       ).rejects.toMatchObject({ statusCode: 404 });
 
       expect(updateFirebaseUserPasswordMock).not.toHaveBeenCalled();
@@ -550,8 +626,13 @@ describe("abstracts committee service", () => {
       );
 
       expect(result).toEqual({ ok: true });
-      expect(updateFirebaseUserPasswordMock).toHaveBeenCalledWith(targetUserId, newPassword);
-      expect(revokeFirebaseRefreshTokensMock).toHaveBeenCalledWith(targetUserId);
+      expect(updateFirebaseUserPasswordMock).toHaveBeenCalledWith(
+        targetUserId,
+        newPassword,
+      );
+      expect(revokeFirebaseRefreshTokensMock).toHaveBeenCalledWith(
+        targetUserId,
+      );
       expect(auditLog).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({

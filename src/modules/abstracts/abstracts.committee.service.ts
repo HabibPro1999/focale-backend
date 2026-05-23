@@ -25,7 +25,10 @@ import {
   updateFirebaseUserPassword,
 } from "@shared/services/firebase.service.js";
 import { sendEmail } from "@modules/email/email-sendgrid.service.js";
-import { compileMjmlToHtml, escapeHtml } from "@modules/email/email-renderer.service.js";
+import {
+  compileMjmlToHtml,
+  escapeHtml,
+} from "@modules/email/email-renderer.service.js";
 import { config } from "@config/app.config.js";
 import type { ActionCodeSettings } from "firebase-admin/auth";
 import type {
@@ -38,7 +41,6 @@ import { FINAL_STATUSES } from "./abstracts.constants.js";
 
 type AbstractContent = Record<string, unknown>;
 const ONE_HOUR_MS = 60 * 60 * 1000;
-
 
 type ThemeLink = { theme: Pick<AbstractTheme, "id" | "label"> };
 
@@ -109,25 +111,39 @@ function anonymizeAbstractDetail(
   };
 }
 
-async function assertActiveMembership(eventId: string, userId: string) {
-  const membership = await prisma.abstractCommitteeMembership.findUnique({
+async function findCommitteeMembership(eventId: string, userId: string) {
+  return prisma.abstractCommitteeMembership.findUnique({
     where: { userId_eventId: { userId, eventId } },
   });
+}
+
+async function assertActiveMembership(eventId: string, userId: string) {
+  const membership = await findCommitteeMembership(eventId, userId);
   if (!membership?.active) {
-    throw new AppError("Active committee membership required", 403, ErrorCodes.FORBIDDEN);
+    throw new AppError(
+      "Active committee membership required",
+      403,
+      ErrorCodes.FORBIDDEN,
+    );
   }
   return membership;
 }
 
 async function assertAbstractForEvent(abstractId: string, eventId: string) {
-  const abstract = await prisma.abstract.findUnique({ where: { id: abstractId } });
+  const abstract = await prisma.abstract.findUnique({
+    where: { id: abstractId },
+  });
   if (!abstract || abstract.eventId !== eventId) {
     throw new AppError("Abstract not found", 404, ErrorCodes.NOT_FOUND);
   }
   return abstract;
 }
 
-function getScoreDivergence(scores: number[]): { diverged: boolean; min: number | null; max: number | null } {
+function getScoreDivergence(scores: number[]): {
+  diverged: boolean;
+  min: number | null;
+  max: number | null;
+} {
   if (scores.length < 2) return { diverged: false, min: null, max: null };
   const min = Math.min(...scores);
   const max = Math.max(...scores);
@@ -145,7 +161,8 @@ async function notifyScoreDivergence(input: {
   threshold: number;
 }) {
   const { diverged, min, max } = getScoreDivergence(input.scores);
-  if (!diverged || min === null || max === null || max - min < input.threshold) return;
+  if (!diverged || min === null || max === null || max - min < input.threshold)
+    return;
 
   const since = new Date(Date.now() - ONE_HOUR_MS);
   const existing = await input.db.emailLog.findFirst({
@@ -204,7 +221,6 @@ async function notifyScoreDivergence(input: {
   });
 }
 
-
 export async function listCommitteeMembers(eventId: string) {
   const memberships = await prisma.abstractCommitteeMembership.findMany({
     where: { eventId, active: true },
@@ -243,8 +259,12 @@ export async function listCommitteeMembers(eventId: string) {
     current.push(pref.themeId);
     themesByUser.set(pref.userId, current);
   }
-  const assignedByUser = new Map(reviewGroups.map((g) => [g.reviewerId, g._count._all]));
-  const scoredByUser = new Map(scoredGroups.map((g) => [g.reviewerId, g._count._all]));
+  const assignedByUser = new Map(
+    reviewGroups.map((g) => [g.reviewerId, g._count._all]),
+  );
+  const scoredByUser = new Map(
+    scoredGroups.map((g) => [g.reviewerId, g._count._all]),
+  );
 
   return memberships.map((membership) => ({
     userId: membership.userId,
@@ -280,6 +300,8 @@ function buildPasswordResetActionCodeSettings(): ActionCodeSettings {
   };
 }
 
+const EVENT_NAME_TOKEN = "{eventName}";
+
 interface SendCommitteeMjmlEmailInput {
   to: string;
   toName: string;
@@ -308,8 +330,8 @@ async function sendCommitteeMjmlEmail(
   const safeLink = escapeHtml(input.link);
   const safeHeadline = escapeHtml(input.headline);
   const safeCtaText = escapeHtml(input.ctaText);
-  const safeIntro = input.intro.replaceAll(
-    "{eventName}",
+  const safeIntro = escapeHtml(input.intro).replaceAll(
+    EVENT_NAME_TOKEN,
     `<strong>${safeEventName}</strong>`,
   );
   // The intro is composed by the caller — it intentionally allows the
@@ -350,10 +372,7 @@ async function sendCommitteeMjmlEmail(
     categories: [input.category],
   });
   if (!result.success) {
-    logger.error(
-      { email: input.to, error: result.error },
-      input.logContext,
-    );
+    logger.error({ email: input.to, error: result.error }, input.logContext);
   }
   return result.success;
 }
@@ -374,7 +393,8 @@ async function sendInviteEmail(
     link,
     eventName,
     category: "committee-invite",
-    footnote: "If you didn't expect this invitation, you can safely ignore this email.",
+    footnote:
+      "If you didn't expect this invitation, you can safely ignore this email.",
     logContext: "Failed to send committee invitation email",
   });
 }
@@ -395,7 +415,8 @@ async function sendResetPasswordEmail(
     link,
     eventName,
     category: "committee-password-reset",
-    footnote: "If you didn't request this reset, you can safely ignore this email.",
+    footnote:
+      "If you didn't request this reset, you can safely ignore this email.",
     logContext: "Failed to send committee password-reset email",
   });
 }
@@ -406,15 +427,16 @@ export async function addCommitteeMember(
   performedBy: string,
 ) {
   const isNewUser = !("userId" in body);
-  const user = "userId" in body
-    ? await prisma.user.findUnique({ where: { id: body.userId } })
-    : await createUser({
-        email: body.email,
-        name: body.name,
-        password: generateThrowawayPassword(),
-        role: UserRole.SCIENTIFIC_COMMITTEE,
-        clientId: null,
-      });
+  const user =
+    "userId" in body
+      ? await prisma.user.findUnique({ where: { id: body.userId } })
+      : await createUser({
+          email: body.email,
+          name: body.name,
+          password: generateThrowawayPassword(),
+          role: UserRole.SCIENTIFIC_COMMITTEE,
+          clientId: null,
+        });
 
   if (!user) throw new AppError("User not found", 404, ErrorCodes.NOT_FOUND);
   if (
@@ -468,7 +490,9 @@ export async function addCommitteeMember(
     })();
   }
 
-  const member = (await listCommitteeMembers(eventId)).find((m) => m.userId === user.id) ?? {
+  const member = (await listCommitteeMembers(eventId)).find(
+    (m) => m.userId === user.id,
+  ) ?? {
     userId: user.id,
     email: user.email,
     name: user.name,
@@ -517,10 +541,15 @@ export async function setReviewerThemes(
     where: { eventId },
     include: { themes: { where: { active: true }, select: { id: true } } },
   });
-  if (!config) throw new AppError("Abstract config not found", 404, ErrorCodes.NOT_FOUND);
+  if (!config)
+    throw new AppError("Abstract config not found", 404, ErrorCodes.NOT_FOUND);
   const activeThemeIds = new Set(config.themes.map((theme) => theme.id));
   if (uniqueThemeIds.some((themeId) => !activeThemeIds.has(themeId))) {
-    throw new AppError("Invalid abstract themes", 400, ErrorCodes.ABSTRACT_INVALID_THEMES);
+    throw new AppError(
+      "Invalid abstract themes",
+      400,
+      ErrorCodes.ABSTRACT_INVALID_THEMES,
+    );
   }
 
   await prisma.$transaction(async (tx) => {
@@ -545,7 +574,9 @@ export async function setReviewerThemes(
     performedBy,
   });
 
-  const member = (await listCommitteeMembers(eventId)).find((m) => m.userId === userId);
+  const member = (await listCommitteeMembers(eventId)).find(
+    (m) => m.userId === userId,
+  );
   if (!member) {
     throw new AppError("Committee member not found", 404, ErrorCodes.NOT_FOUND);
   }
@@ -599,9 +630,15 @@ export async function assignReviewers(
       where: { eventId, userId: { in: reviewerIds }, active: true },
       select: { userId: true },
     });
-    const activeMemberIds = new Set(memberships.map((membership) => membership.userId));
+    const activeMemberIds = new Set(
+      memberships.map((membership) => membership.userId),
+    );
     if (reviewerIds.some((reviewerId) => !activeMemberIds.has(reviewerId))) {
-      throw new AppError("All reviewers must have active membership", 400, ErrorCodes.VALIDATION_ERROR);
+      throw new AppError(
+        "All reviewers must have active membership",
+        400,
+        ErrorCodes.VALIDATION_ERROR,
+      );
     }
   }
 
@@ -670,8 +707,12 @@ export async function getCommitteeProfile(userId: string) {
       _count: { _all: true },
     }),
   ]);
-  const assignedByEvent = new Map(assignedGroups.map((g) => [g.eventId, g._count._all]));
-  const scoredByEvent = new Map(scoredGroups.map((g) => [g.eventId, g._count._all]));
+  const assignedByEvent = new Map(
+    assignedGroups.map((g) => [g.eventId, g._count._all]),
+  );
+  const scoredByEvent = new Map(
+    scoredGroups.map((g) => [g.eventId, g._count._all]),
+  );
 
   return {
     events: memberships.map((membership) => ({
@@ -683,20 +724,31 @@ export async function getCommitteeProfile(userId: string) {
   };
 }
 
-export async function listAssignedAbstracts(eventId: string, reviewerId: string) {
+export async function listAssignedAbstracts(
+  eventId: string,
+  reviewerId: string,
+) {
   await assertActiveMembership(eventId, reviewerId);
   const abstracts = await prisma.abstract.findMany({
-    where: { eventId, reviews: { some: { reviewerId, eventId, active: true } } },
+    where: {
+      eventId,
+      reviews: { some: { reviewerId, eventId, active: true } },
+    },
     include: {
       themes: { include: { theme: { select: { id: true, label: true } } } },
       reviews: { where: { active: true } },
     },
     orderBy: { createdAt: "asc" },
   });
-  return abstracts.map((abstract) => anonymizeAbstractListItem(abstract, reviewerId));
+  return abstracts.map((abstract) =>
+    anonymizeAbstractListItem(abstract, reviewerId),
+  );
 }
 
-export async function getAssignedAbstractDetail(abstractId: string, reviewerId: string) {
+export async function getAssignedAbstractDetail(
+  abstractId: string,
+  reviewerId: string,
+) {
   const abstract = await prisma.abstract.findUnique({
     where: { id: abstractId },
     include: {
@@ -704,10 +756,19 @@ export async function getAssignedAbstractDetail(abstractId: string, reviewerId: 
       reviews: { where: { active: true } },
     },
   });
-  if (!abstract) throw new AppError("Abstract not found", 404, ErrorCodes.NOT_FOUND);
+  if (!abstract)
+    throw new AppError("Abstract not found", 404, ErrorCodes.NOT_FOUND);
   await assertActiveMembership(abstract.eventId, reviewerId);
-  if (!abstract.reviews.some((review) => review.reviewerId === reviewerId && review.active)) {
-    throw new AppError("Abstract assignment not found", 404, ErrorCodes.NOT_FOUND);
+  if (
+    !abstract.reviews.some(
+      (review) => review.reviewerId === reviewerId && review.active,
+    )
+  ) {
+    throw new AppError(
+      "Abstract assignment not found",
+      404,
+      ErrorCodes.NOT_FOUND,
+    );
   }
   return anonymizeAbstractDetail(abstract, reviewerId);
 }
@@ -736,24 +797,52 @@ export async function reviewAssignedAbstract(
       reviews: { where: { active: true } },
     },
   });
-  if (!abstract) throw new AppError("Abstract not found", 404, ErrorCodes.NOT_FOUND);
+  if (!abstract)
+    throw new AppError("Abstract not found", 404, ErrorCodes.NOT_FOUND);
   await assertActiveMembership(abstract.eventId, reviewerId);
   if (FINAL_STATUSES.includes(abstract.status)) {
-    throw new AppError("Abstract is not open for scoring", 409, ErrorCodes.INVALID_STATUS_TRANSITION);
+    throw new AppError(
+      "Abstract is not open for scoring",
+      409,
+      ErrorCodes.INVALID_STATUS_TRANSITION,
+    );
   }
   const deadline = abstract.event.abstractConfig?.scoringDeadline;
   const startAt = abstract.event.abstractConfig?.scoringStartAt;
   if (startAt && startAt.getTime() > Date.now()) {
-    throw new AppError("Scoring has not started yet", 403, ErrorCodes.FORBIDDEN);
+    throw new AppError(
+      "Scoring has not started yet",
+      403,
+      ErrorCodes.FORBIDDEN,
+    );
   }
   if (deadline && deadline.getTime() < Date.now()) {
-    throw new AppError("Scoring deadline has passed", 403, ErrorCodes.FORBIDDEN);
+    throw new AppError(
+      "Scoring deadline has passed",
+      403,
+      ErrorCodes.FORBIDDEN,
+    );
   }
-  if (abstract.event.abstractConfig?.commentsEnabled === false && body.comment?.trim()) {
-    throw new AppError("Reviewer comments are disabled for this event", 400, ErrorCodes.VALIDATION_ERROR);
+  if (
+    abstract.event.abstractConfig?.commentsEnabled === false &&
+    body.comment?.trim()
+  ) {
+    throw new AppError(
+      "Reviewer comments are disabled for this event",
+      400,
+      ErrorCodes.VALIDATION_ERROR,
+    );
   }
-  if (!abstract.reviews.some((review) => review.reviewerId === reviewerId && review.active)) {
-    throw new AppError("Abstract assignment not found", 404, ErrorCodes.NOT_FOUND);
+  if (
+    !abstract.reviews.some(
+      (review) => review.reviewerId === reviewerId && review.active,
+    )
+  ) {
+    throw new AppError(
+      "Abstract assignment not found",
+      404,
+      ErrorCodes.NOT_FOUND,
+    );
   }
 
   const result = await prisma.$transaction(async (tx) => {
@@ -763,7 +852,10 @@ export async function reviewAssignedAbstract(
         eventId: abstract.eventId,
         active: true,
         score: body.score,
-        comment: abstract.event.abstractConfig?.commentsEnabled === false ? null : body.comment ?? null,
+        comment:
+          abstract.event.abstractConfig?.commentsEnabled === false
+            ? null
+            : (body.comment ?? null),
         scoredAt: new Date(),
       },
     });
@@ -775,12 +867,18 @@ export async function reviewAssignedAbstract(
     const scores = assignments
       .map((review) => review.score)
       .filter((score): score is number => score !== null);
-    const reviewCount = assignments.filter((review) => review.scoredAt !== null).length;
+    const reviewCount = assignments.filter(
+      (review) => review.scoredAt !== null,
+    ).length;
     const averageScore = scores.length
       ? scores.reduce((sum, score) => sum + score, 0) / scores.length
       : null;
-    const allScored = assignments.length > 0 && assignments.every((review) => review.scoredAt !== null);
-    const status = allScored ? AbstractStatus.REVIEW_COMPLETE : AbstractStatus.UNDER_REVIEW;
+    const allScored =
+      assignments.length > 0 &&
+      assignments.every((review) => review.scoredAt !== null);
+    const status = allScored
+      ? AbstractStatus.REVIEW_COMPLETE
+      : AbstractStatus.UNDER_REVIEW;
 
     const updatedAbstract = await tx.abstract.update({
       where: { id: abstractId },
@@ -837,15 +935,9 @@ export async function reviewAssignedAbstract(
  * permission".
  */
 async function assertCommitteeMemberExists(eventId: string, userId: string) {
-  const membership = await prisma.abstractCommitteeMembership.findUnique({
-    where: { userId_eventId: { userId, eventId } },
-  });
+  const membership = await findCommitteeMembership(eventId, userId);
   if (!membership?.active) {
-    throw new AppError(
-      "Committee member not found",
-      404,
-      ErrorCodes.NOT_FOUND,
-    );
+    throw new AppError("Committee member not found", 404, ErrorCodes.NOT_FOUND);
   }
   return membership;
 }
@@ -863,29 +955,27 @@ export async function resendCommitteeInvite(
   userId: string,
   performedBy: string,
 ) {
-  await assertCommitteeMemberExists(eventId, userId);
-
-  const [user, event] = await Promise.all([
-    prisma.user.findUnique({
-      where: { id: userId },
-      select: { email: true, name: true },
-    }),
-    prisma.event.findUnique({
-      where: { id: eventId },
-      select: { name: true },
-    }),
-  ]);
-  if (!user) throw new AppError("User not found", 404, ErrorCodes.NOT_FOUND);
+  const membership = await prisma.abstractCommitteeMembership.findUnique({
+    where: { userId_eventId: { userId, eventId } },
+    select: {
+      active: true,
+      user: { select: { email: true, name: true } },
+      event: { select: { name: true } },
+    },
+  });
+  if (!membership?.active) {
+    throw new AppError("Committee member not found", 404, ErrorCodes.NOT_FOUND);
+  }
 
   let inviteEmailSent = false;
   try {
     const link = await generatePasswordResetLink(
-      user.email,
+      membership.user.email,
       buildPasswordResetActionCodeSettings(),
     );
     inviteEmailSent = await sendResetPasswordEmail(
-      user,
-      event?.name ?? "the event",
+      membership.user,
+      membership.event.name,
       link,
     );
   } catch (err) {
