@@ -24,21 +24,23 @@ export interface AbstractForEmail {
     scoringStartAt: Date | null;
     scoringDeadline: Date | null;
     finalFileDeadline: Date | null;
+    finalFileUploadEnabled: boolean;
   };
 }
 
 const STATUS_LABELS: Record<string, string> = {
-  SUBMITTED: "Submitted",
-  UNDER_REVIEW: "Under Review",
-  REVIEW_COMPLETE: "Review Complete",
-  ACCEPTED: "Accepted",
-  REJECTED: "Rejected",
-  PENDING: "Pending",
+  SUBMITTED: "Soumis",
+  UNDER_REVIEW: "En cours d'évaluation",
+  REVIEW_COMPLETE: "Évaluation terminée",
+  ACCEPTED: "Accepté",
+  REJECTED: "Refusé",
+  PENDING: "En attente",
 };
 
 const TYPE_LABELS: Record<string, string> = {
-  ORAL_COMMUNICATION: "Oral Communication",
-  POSTER: "Poster",
+  CONFERENCE: "Conférence",
+  ORAL_COMMUNICATION: "Communication orale",
+  POSTER: "Communication affichée",
 };
 
 export function buildAbstractEmailContext(
@@ -59,6 +61,7 @@ export function buildAbstractEmailContext(
   const congressName = abstract.event.name;
   const platformLink = `${baseUrl}/${slug}`;
   const abstractEditLink = `${baseUrl}/${slug}/abstracts/${abstract.id}/${abstract.editToken}`;
+  const finalFileUploadLink = abstractEditLink;
 
   const submissionStartAt = formatDate(abstract.config.submissionStartAt);
   const submissionDeadline = formatDate(abstract.config.submissionDeadline);
@@ -78,12 +81,14 @@ export function buildAbstractEmailContext(
     congressName,
     platformLink,
     abstractEditLink,
+    finalFileUploadLink,
     submissionStartAt,
     submissionDeadline,
     editingDeadline,
     scoringStartAt,
     scoringDeadline,
     finalFileDeadline,
+    finalFileUploadEnabled: abstract.config.finalFileUploadEnabled ? "Oui" : "Non",
     // Back-compat alias for templates authored before explicit date variables existed.
     deadlineDate: editingDeadline,
     committeeComments,

@@ -134,9 +134,9 @@ function getAuthorLine(abstract: BookAbstract): string {
 }
 
 function typeLabel(value: string | null): string {
-  if (value === "CONFERENCE") return "Conference";
-  if (value === "ORAL_COMMUNICATION") return "Oral Communication";
-  if (value === "POSTER") return "Poster";
+  if (value === "CONFERENCE") return "Conférence";
+  if (value === "ORAL_COMMUNICATION") return "Communication orale";
+  if (value === "POSTER") return "Communication affichée";
   return "—";
 }
 

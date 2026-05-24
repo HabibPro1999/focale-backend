@@ -445,10 +445,19 @@ describe("abstracts committee service", () => {
         comment: "Strong",
       });
 
-      expect(prismaMock.abstractReview.update).toHaveBeenCalledWith({
+      expect(prismaMock.abstractReview.upsert).toHaveBeenCalledWith({
         where: { abstractId_reviewerId: { abstractId, reviewerId } },
-        data: expect.objectContaining({
+        update: expect.objectContaining({
           eventId,
+          active: true,
+          score: 8,
+          comment: "Strong",
+          scoredAt: expect.any(Date),
+        }),
+        create: expect.objectContaining({
+          abstractId,
+          eventId,
+          reviewerId,
           active: true,
           score: 8,
           comment: "Strong",
@@ -502,6 +511,13 @@ describe("abstracts committee service", () => {
       "%s when an active committee user already exists by email",
       async (_caseName, user) => {
         prismaMock.user.findUnique.mockResolvedValue(user as any);
+        prismaMock.event.findUnique.mockResolvedValue({
+          name: "Big Event",
+        } as any);
+        generatePasswordResetLinkMock.mockResolvedValue(
+          "https://admin.example/auth/action?oobCode=abc",
+        );
+        sendEmailMock.mockResolvedValue({ success: true });
         mockCommitteeListResult(user);
 
         const result = await addCommitteeMember(
@@ -514,10 +530,22 @@ describe("abstracts committee service", () => {
           userId: user.id,
           email: user.email,
           existingUserAdded: true,
+          inviteEmailSent: true,
         });
         expect(createFirebaseUserMock).not.toHaveBeenCalled();
-        expect(generatePasswordResetLinkMock).not.toHaveBeenCalled();
-        expect(sendEmailMock).not.toHaveBeenCalled();
+        expect(generatePasswordResetLinkMock).toHaveBeenCalledWith(
+          user.email,
+          expect.objectContaining({
+            url: expect.stringContaining("/committee"),
+          }),
+        );
+        expect(sendEmailMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            to: user.email,
+            subject: "Invitation au comité scientifique - Big Event",
+            categories: ["committee-invite"],
+          }),
+        );
         expect(
           prismaMock.abstractCommitteeMembership.upsert,
         ).toHaveBeenCalledWith({
@@ -651,8 +679,7 @@ describe("abstracts committee service", () => {
       expect(sendEmailMock).toHaveBeenCalledWith(
         expect.objectContaining({
           to: user.email,
-          subject:
-            "You've been invited to the scientific committee for Big Event",
+          subject: "Invitation au comité scientifique - Big Event",
           categories: ["committee-invite"],
         }),
       );
@@ -728,7 +755,7 @@ describe("abstracts committee service", () => {
       expect(sendEmailMock).toHaveBeenCalledWith(
         expect.objectContaining({
           to: "reviewer9@example.com",
-          subject: "Reset your committee password",
+          subject: "Réinitialisation du mot de passe comité",
           categories: ["committee-password-reset"],
         }),
       );

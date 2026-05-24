@@ -96,27 +96,58 @@ async function allocateAbstractCode(
   finalType: AbstractFinalType,
   theme: { id: string; sortOrder: number },
 ): Promise<{ code: string; codeNumber: number }> {
-  const seeded = await tx.abstract.aggregate({
-    where: {
-      eventId,
-      finalType,
-      codeNumber: { not: null },
-      themes: { some: { themeId: theme.id } },
-    },
-    _max: { codeNumber: true },
+  const [abstractSeeded, counterSeeded] = await Promise.all([
+    tx.abstract.aggregate({
+      where: {
+        finalType,
+        codeNumber: { not: null },
+      },
+      _max: { codeNumber: true },
+    }),
+    tx.abstractCodeCounter.aggregate({
+      where: { finalType },
+      _max: { lastValue: true },
+    }),
+  ]);
+  const seedValue = Math.max(
+    abstractSeeded._max.codeNumber ?? 0,
+    counterSeeded._max.lastValue ?? 0,
+  );
+
+  await tx.abstractCodeSequence.upsert({
+    where: { finalType },
+    update: { updatedAt: new Date() },
+    create: { finalType, lastValue: seedValue },
+    select: { id: true },
   });
-  const seedValue = seeded._max.codeNumber ?? 0;
-  const counter = await tx.abstractCodeCounter.upsert({
-    where: { eventId_themeId_finalType: { eventId, themeId: theme.id, finalType } },
-    update: { lastValue: { increment: 1 } },
-    create: { eventId, themeId: theme.id, finalType, lastValue: seedValue + 1 },
+  await tx.abstractCodeSequence.updateMany({
+    where: { finalType, lastValue: { lt: seedValue } },
+    data: { lastValue: seedValue },
+  });
+  const sequence = await tx.abstractCodeSequence.update({
+    where: { finalType },
+    data: { lastValue: { increment: 1 } },
     select: { lastValue: true },
   });
-  const codeNumber = counter.lastValue;
+
+  await tx.abstractCodeCounter.upsert({
+    where: {
+      eventId_themeId_finalType: { eventId, themeId: theme.id, finalType },
+    },
+    update: { lastValue: sequence.lastValue },
+    create: {
+      eventId,
+      themeId: theme.id,
+      finalType,
+      lastValue: sequence.lastValue,
+    },
+    select: { lastValue: true },
+  });
+
+  const codeNumber = sequence.lastValue;
   const code = `${CODE_SUFFIX[finalType]}${theme.sortOrder}-${String(codeNumber).padStart(2, "0")}`;
   return { code, codeNumber };
 }
-
 function collectCommitteeComments(
   reviews: Array<{ reviewer: { name: string | null }; comment: string | null }>,
 ): string {
@@ -351,10 +382,21 @@ export async function finalizeAbstract(
     await enqueueAbstractEmailOutboxEvent(
       tx,
       {
-        trigger: "ABSTRACT_DECISION",
+        trigger:
+          updated.status === AbstractStatus.ACCEPTED
+            ? "ABSTRACT_ACCEPTED"
+            : updated.status === AbstractStatus.REJECTED
+              ? "ABSTRACT_REJECTED"
+              : "ABSTRACT_DECISION",
         abstractId,
       },
-      `email:abstract:ABSTRACT_DECISION:${abstractId}`,
+      `email:abstract:${
+        updated.status === AbstractStatus.ACCEPTED
+          ? "ABSTRACT_ACCEPTED"
+          : updated.status === AbstractStatus.REJECTED
+            ? "ABSTRACT_REJECTED"
+            : "ABSTRACT_DECISION"
+      }:${abstractId}`,
     );
 
     if (
@@ -442,7 +484,6 @@ export async function reopenAbstract(
         status: nextStatus,
         finalType: null,
         code: null,
-        codeNumber: null,
       },
       select: { id: true, status: true, averageScore: true, reviewCount: true },
     });

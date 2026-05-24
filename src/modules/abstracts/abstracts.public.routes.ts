@@ -4,7 +4,9 @@ import {
   EventSlugParamSchema,
   AbstractIdParamSchema,
   AbstractTokenQuerySchema,
+  EditAbstractSchema,
   SubmitAbstractSchema,
+  type EditAbstractInput,
   type SubmitAbstractInput,
 } from "./abstracts.schema.js";
 import {
@@ -93,7 +95,7 @@ export async function abstractsPublicRoutes(
   app.patch<{
     Params: { id: string };
     Querystring: { token?: string };
-    Body: SubmitAbstractInput;
+    Body: EditAbstractInput;
   }>(
     "/abstracts/:id",
     {
@@ -103,7 +105,7 @@ export async function abstractsPublicRoutes(
       schema: {
         params: AbstractIdParamSchema,
         querystring: AbstractTokenQuerySchema,
-        body: SubmitAbstractSchema,
+        body: EditAbstractSchema,
       },
     },
     async (request, reply) => {

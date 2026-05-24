@@ -19,15 +19,15 @@ export const ABSTRACT_EMAIL_VARIABLES: VariableDefinition[] = [
     id: "submissionStatus",
     label: "Submission Status",
     category: "abstract",
-    description: "Current status of the abstract (e.g. Submitted, Accepted)",
-    example: "Submitted",
+    description: "Current status of the abstract in French",
+    example: "Accepté",
   },
   {
     id: "presentationType",
     label: "Presentation Type",
     category: "abstract",
-    description: "Requested or final presentation type",
-    example: "Oral Communication",
+    description: "Requested or final presentation type in French",
+    example: "Communication orale",
   },
   {
     id: "submissionCode",
@@ -62,6 +62,13 @@ export const ABSTRACT_EMAIL_VARIABLES: VariableDefinition[] = [
     label: "Abstract Edit Link",
     category: "links",
     description: "Magic link for the author to view/edit their abstract",
+    example: "https://events.example.com/medical-2025/abstracts/abc123/token123",
+  },
+  {
+    id: "finalFileUploadLink",
+    label: "Final File Upload Link",
+    category: "links",
+    description: "Magic link that lets accepted authors upload their final file",
     example: "https://events.example.com/medical-2025/abstracts/abc123/token123",
   },
   {

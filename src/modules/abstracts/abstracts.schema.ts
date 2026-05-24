@@ -56,7 +56,7 @@ export const PatchConfigSchema = z.strictObject({
   commentsSentToAuthor: z.boolean().optional(),
   finalFileUploadEnabled: z.boolean().optional(),
   reviewersPerAbstract: z.number().int().min(1).max(10).optional(),
-  divergenceThreshold: z.number().int().min(0).max(25).optional(),
+  divergenceThreshold: z.number().int().min(0).max(20).optional(),
   maxThemesPerAbstract: z.union([z.number().int().min(1).max(20), z.null()]).optional(),
   distributeByTheme: z.boolean().optional(),
   bookFontFamily: z.string().min(1).max(100).optional(),
@@ -160,6 +160,16 @@ export const SubmitAbstractSchema = z.strictObject({
 
 export type SubmitAbstractInput = z.infer<typeof SubmitAbstractSchema>;
 
+export const EditAbstractSchema = SubmitAbstractSchema.omit({
+  linkBaseUrl: true,
+}).extend({
+  // Older form clients may still send this submit-only field on edit. Accept it
+  // for compatibility, but the edit service intentionally ignores it.
+  linkBaseUrl: z.string().url().optional(),
+});
+
+export type EditAbstractInput = z.infer<typeof EditAbstractSchema>;
+
 
 // ============================================================================
 // Admin Abstract Schemas
@@ -179,11 +189,11 @@ export const ListAbstractsQuerySchema = z.strictObject({
 export const FinalizeAbstractSchema = z.discriminatedUnion("decision", [
   z.strictObject({
     decision: z.literal("ACCEPTED"),
-    finalType: z.enum(["CONFERENCE", "ORAL_COMMUNICATION", "POSTER"]),
+    finalType: z.enum(["ORAL_COMMUNICATION", "POSTER"]),
   }),
   z.strictObject({
     decision: z.enum(["REJECTED", "PENDING"]),
-    finalType: z.enum(["CONFERENCE", "ORAL_COMMUNICATION", "POSTER"]).optional(),
+    finalType: z.enum(["ORAL_COMMUNICATION", "POSTER"]).optional(),
   }),
 ]);
 
@@ -239,7 +249,7 @@ export const ReviewAbstractSchema = z.strictObject({
   score: z
     .number()
     .min(0)
-    .max(25)
+    .max(20)
     .refine((value) => Number.isInteger(value * 2), {
       message: "Score must be a multiple of 0.5",
     }),

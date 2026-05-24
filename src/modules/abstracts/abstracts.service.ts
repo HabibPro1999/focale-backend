@@ -71,7 +71,7 @@ function duplicateAuthorEmailError() {
 // Types
 // ============================================================================
 
-interface SubmitAbstractInput {
+interface AbstractPayloadInput {
   authorFirstName: string;
   authorLastName: string;
   authorEmail: string;
@@ -92,11 +92,16 @@ interface SubmitAbstractInput {
       };
   additionalFieldsData: Record<string, unknown>;
   registrationId?: string | null;
+}
+
+interface SubmitAbstractInput extends AbstractPayloadInput {
   linkBaseUrl: string;
 }
 
+type EditAbstractInput = AbstractPayloadInput;
+
 function buildRevisionSnapshot(
-  body: SubmitAbstractInput,
+  body: AbstractPayloadInput,
   additionalFieldsData: Record<string, unknown>,
   registrationId: string | null,
   themeIds: string[],
@@ -614,7 +619,7 @@ const NON_EDITABLE_STATUSES: AbstractStatus[] = ["ACCEPTED", "REJECTED"];
 export async function editAbstract(
   id: string,
   token: string,
-  body: SubmitAbstractInput,
+  body: EditAbstractInput,
   ip?: string,
 ) {
   const abstract = await prisma.abstract.findUnique({

@@ -872,6 +872,8 @@ enum AbstractEmailTrigger {
   ABSTRACT_SUBMISSION_ACK
   ABSTRACT_EDIT_ACK
   ABSTRACT_DECISION
+  ABSTRACT_ACCEPTED
+  ABSTRACT_REJECTED
   ABSTRACT_COMMITTEE_INVITE
   ABSTRACT_COMMITTEE_COMMENTS
   ABSTRACT_SCORE_DIVERGENCE
@@ -900,6 +902,16 @@ model AbstractCodeCounter {
   @@unique([eventId, themeId, finalType])
   @@index([themeId])
   @@map("abstract_code_counters")
+}
+
+model AbstractCodeSequence {
+  id        String            @id @default(uuid())
+  finalType AbstractFinalType @unique @map("final_type")
+  lastValue Int               @default(0) @map("last_value")
+  createdAt DateTime          @default(now()) @map("created_at")
+  updatedAt DateTime          @updatedAt @map("updated_at")
+
+  @@map("abstract_code_sequences")
 }
 
 model AbstractBookJob {

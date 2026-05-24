@@ -129,6 +129,27 @@ async function assertActiveMembership(eventId: string, userId: string) {
   return membership;
 }
 
+async function listActiveReviewerThemeIds(
+  db: typeof prisma | TxClient,
+  eventId: string,
+  userId: string,
+) {
+  const rows = await db.abstractReviewerTheme.findMany({
+    where: { eventId, userId, active: true },
+    select: { themeId: true },
+  });
+  return (rows ?? []).map((row) => row.themeId);
+}
+
+function hasReviewerThemeCoverage(
+  abstract: { themes: ThemeLink[] },
+  reviewerThemeIds: string[],
+) {
+  if (reviewerThemeIds.length === 0) return false;
+  const covered = new Set(reviewerThemeIds);
+  return abstract.themes.some((link) => covered.has(link.theme.id));
+}
+
 async function assertAbstractForEvent(abstractId: string, eventId: string) {
   const abstract = await prisma.abstract.findUnique({
     where: { id: abstractId },
@@ -304,7 +325,7 @@ const EVENT_NAME_TOKEN = "{eventName}";
 
 interface SendCommitteeMjmlEmailInput {
   to: string;
-  toName: string;
+  toName?: string | null;
   subject: string;
   headline: string;
   intro: string;
@@ -325,7 +346,8 @@ interface SendCommitteeMjmlEmailInput {
 async function sendCommitteeMjmlEmail(
   input: SendCommitteeMjmlEmailInput,
 ): Promise<boolean> {
-  const safeName = escapeHtml(input.toName);
+  const toName = input.toName?.trim() || input.to;
+  const safeName = escapeHtml(toName);
   const safeEventName = escapeHtml(input.eventName);
   const safeLink = escapeHtml(input.link);
   const safeHeadline = escapeHtml(input.headline);
@@ -354,10 +376,10 @@ async function sendCommitteeMjmlEmail(
     <mj-section padding="32px 24px">
       <mj-column>
         <mj-text font-size="20px" font-weight="600">${safeHeadline}</mj-text>
-        <mj-text>Hello ${safeName},</mj-text>
+        <mj-text>Bonjour ${safeName},</mj-text>
         <mj-text>${safeIntro}</mj-text>
         <mj-button background-color="#0d9488" color="#ffffff" border-radius="6px" href="${safeLink}">${safeCtaText}</mj-button>
-        <mj-text font-size="13px" color="#6b7280">This link is valid for a limited time. Once you've set your password, you can sign in directly with your email and the password you chose.</mj-text>
+        <mj-text font-size="13px" color="#6b7280">Ce lien est valable pour une durée limitée. Après avoir défini votre mot de passe, vous pourrez vous connecter directement avec votre email.</mj-text>
         ${footnoteBlock}
       </mj-column>
     </mj-section>
@@ -366,7 +388,7 @@ async function sendCommitteeMjmlEmail(
   const { html } = compileMjmlToHtml(mjml);
   const result = await sendEmail({
     to: input.to,
-    toName: input.toName,
+    toName,
     subject: input.subject,
     html,
     categories: [input.category],
@@ -385,16 +407,16 @@ async function sendInviteEmail(
   return sendCommitteeMjmlEmail({
     to: user.email,
     toName: user.name,
-    subject: `You've been invited to the scientific committee for ${eventName}`,
-    headline: "Welcome to the scientific committee",
+    subject: `Invitation au comité scientifique - ${eventName}`,
+    headline: "Bienvenue au comité scientifique",
     intro:
-      "You've been invited to join the scientific committee for {eventName} on Focale. To activate your account, choose a password using the secure link below:",
-    ctaText: "Set my password",
+      "Vous êtes invité(e) à rejoindre le comité scientifique de {eventName} sur Focale. Pour activer votre compte, choisissez un mot de passe avec le lien sécurisé ci-dessous :",
+    ctaText: "Définir mon mot de passe",
     link,
     eventName,
     category: "committee-invite",
     footnote:
-      "If you didn't expect this invitation, you can safely ignore this email.",
+      "Si vous n'attendiez pas cette invitation, vous pouvez ignorer cet email.",
     logContext: "Failed to send committee invitation email",
   });
 }
@@ -407,16 +429,16 @@ async function sendResetPasswordEmail(
   return sendCommitteeMjmlEmail({
     to: user.email,
     toName: user.name,
-    subject: "Reset your committee password",
-    headline: "Reset your committee password",
+    subject: "Réinitialisation du mot de passe comité",
+    headline: "Réinitialiser votre mot de passe comité",
     intro:
-      "A password reset was requested for your scientific committee account on {eventName}. If this was you or an administrator helping you, use the secure link below to choose a new password:",
-    ctaText: "Set my password",
+      "Une réinitialisation du mot de passe a été demandée pour votre compte comité scientifique sur {eventName}. Utilisez le lien sécurisé ci-dessous pour choisir un nouveau mot de passe :",
+    ctaText: "Définir mon mot de passe",
     link,
     eventName,
     category: "committee-password-reset",
     footnote:
-      "If you didn't request this reset, you can safely ignore this email.",
+      "Si vous n'avez pas demandé cette réinitialisation, vous pouvez ignorer cet email.",
     logContext: "Failed to send committee password-reset email",
   });
 }
@@ -502,30 +524,27 @@ export async function addCommitteeMember(
     performedBy,
   });
 
-  let inviteEmailSent: boolean | undefined;
-  if (createdUser) {
-    const event = await prisma.event.findUnique({
-      where: { id: eventId },
-      select: { name: true },
-    });
-    // Best-effort: invite delivery failure is reported back to the caller but
-    // doesn't roll the user back. The admin sees a warning and can resend.
-    inviteEmailSent = await (async () => {
-      try {
-        const link = await generatePasswordResetLink(
-          user.email,
-          buildPasswordResetActionCodeSettings(),
-        );
-        return await sendInviteEmail(user, event?.name ?? "the event", link);
-      } catch (err) {
-        logger.error(
-          { err, userId: user.id, eventId },
-          "Committee invite email threw while sending",
-        );
-        return false;
-      }
-    })();
-  }
+  const event = await prisma.event.findUnique({
+    where: { id: eventId },
+    select: { name: true },
+  });
+  // Best-effort: invite delivery failure is reported back to the caller but
+  // doesn't roll the membership back. The admin sees a warning and can resend.
+  const inviteEmailSent = await (async () => {
+    try {
+      const link = await generatePasswordResetLink(
+        user.email,
+        buildPasswordResetActionCodeSettings(),
+      );
+      return await sendInviteEmail(user, event?.name ?? "the event", link);
+    } catch (err) {
+      logger.error(
+        { err, userId: user.id, eventId, createdUser },
+        "Committee invite email threw while sending",
+      );
+      return false;
+    }
+  })();
 
   const member = (await listCommitteeMembers(eventId)).find(
     (m) => m.userId === user.id,
@@ -540,7 +559,7 @@ export async function addCommitteeMember(
   };
   return {
     ...member,
-    ...(inviteEmailSent !== undefined ? { inviteEmailSent } : {}),
+    inviteEmailSent,
     ...(existingUserAdded ? { existingUserAdded } : {}),
   };
 }
@@ -770,10 +789,23 @@ export async function listAssignedAbstracts(
   reviewerId: string,
 ) {
   await assertActiveMembership(eventId, reviewerId);
+  const reviewerThemeIds = await listActiveReviewerThemeIds(
+    prisma,
+    eventId,
+    reviewerId,
+  );
+  const assignmentFilters: Prisma.AbstractWhereInput[] = [
+    { reviews: { some: { reviewerId, eventId, active: true } } },
+  ];
+  if (reviewerThemeIds.length > 0) {
+    assignmentFilters.push({
+      themes: { some: { themeId: { in: reviewerThemeIds } } },
+    });
+  }
   const abstracts = await prisma.abstract.findMany({
     where: {
       eventId,
-      reviews: { some: { reviewerId, eventId, active: true } },
+      OR: assignmentFilters,
     },
     include: {
       themes: { include: { theme: { select: { id: true, label: true } } } },
@@ -800,10 +832,16 @@ export async function getAssignedAbstractDetail(
   if (!abstract)
     throw new AppError("Abstract not found", 404, ErrorCodes.NOT_FOUND);
   await assertActiveMembership(abstract.eventId, reviewerId);
+  const reviewerThemeIds = await listActiveReviewerThemeIds(
+    prisma,
+    abstract.eventId,
+    reviewerId,
+  );
   if (
     !abstract.reviews.some(
       (review) => review.reviewerId === reviewerId && review.active,
-    )
+    ) &&
+    !hasReviewerThemeCoverage(abstract, reviewerThemeIds)
   ) {
     throw new AppError(
       "Abstract assignment not found",
@@ -835,12 +873,18 @@ export async function reviewAssignedAbstract(
           },
         },
       },
+      themes: { include: { theme: { select: { id: true, label: true } } } },
       reviews: { where: { active: true } },
     },
   });
   if (!abstract)
     throw new AppError("Abstract not found", 404, ErrorCodes.NOT_FOUND);
   await assertActiveMembership(abstract.eventId, reviewerId);
+  const reviewerThemeIds = await listActiveReviewerThemeIds(
+    prisma,
+    abstract.eventId,
+    reviewerId,
+  );
   if (FINAL_STATUSES.includes(abstract.status)) {
     throw new AppError(
       "Abstract is not open for scoring",
@@ -877,7 +921,8 @@ export async function reviewAssignedAbstract(
   if (
     !abstract.reviews.some(
       (review) => review.reviewerId === reviewerId && review.active,
-    )
+    ) &&
+    !hasReviewerThemeCoverage(abstract, reviewerThemeIds)
   ) {
     throw new AppError(
       "Abstract assignment not found",
@@ -887,10 +932,22 @@ export async function reviewAssignedAbstract(
   }
 
   const result = await prisma.$transaction(async (tx) => {
-    await tx.abstractReview.update({
+    await tx.abstractReview.upsert({
       where: { abstractId_reviewerId: { abstractId, reviewerId } },
-      data: {
+      update: {
         eventId: abstract.eventId,
+        active: true,
+        score: body.score,
+        comment:
+          abstract.event.abstractConfig?.commentsEnabled === false
+            ? null
+            : (body.comment ?? null),
+        scoredAt: new Date(),
+      },
+      create: {
+        abstractId,
+        eventId: abstract.eventId,
+        reviewerId,
         active: true,
         score: body.score,
         comment:

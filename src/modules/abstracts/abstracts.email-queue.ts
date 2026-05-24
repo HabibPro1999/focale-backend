@@ -11,62 +11,89 @@ import { getPrismaUniqueTarget } from "@shared/errors/prisma-error.js";
 // Plain-text fallback templates used when no admin template exists yet.
 const FALLBACK_SUBJECTS: Record<string, string> = {
   ABSTRACT_SUBMISSION_ACK:
-    "Your abstract has been submitted — {{congressName}}",
-  ABSTRACT_EDIT_ACK: "Your abstract has been updated — {{congressName}}",
-  ABSTRACT_DECISION: "Abstract decision — {{congressName}}",
-  ABSTRACT_COMMITTEE_COMMENTS: "Committee comments — {{congressName}}",
-  ABSTRACT_SCORE_DIVERGENCE: "Score divergence alert — {{congressName}}",
-  ABSTRACT_FINAL_FILE_REQUEST: "Final file requested — {{congressName}}",
+    "Votre abstract a été soumis — {{congressName}}",
+  ABSTRACT_EDIT_ACK: "Votre abstract a été mis à jour — {{congressName}}",
+  ABSTRACT_DECISION: "Décision abstract — {{congressName}}",
+  ABSTRACT_ACCEPTED: "Abstract accepté — {{congressName}}",
+  ABSTRACT_REJECTED: "Abstract refusé — {{congressName}}",
+  ABSTRACT_COMMITTEE_COMMENTS: "Commentaires du comité — {{congressName}}",
+  ABSTRACT_SCORE_DIVERGENCE: "Alerte d'écart de scores — {{congressName}}",
+  ABSTRACT_FINAL_FILE_REQUEST: "Fichier final demandé — {{congressName}}",
 };
 
 const FALLBACK_BODIES: Record<string, string> = {
   ABSTRACT_SUBMISSION_ACK: [
-    "Dear {{authorName}},",
+    "Bonjour {{authorName}},",
     "",
-    'Your abstract "{{submissionTitle}}" has been successfully submitted to {{congressName}}.',
+    'Votre abstract "{{submissionTitle}}" a bien été soumis pour {{congressName}}.',
     "",
-    "You can view or edit your submission using this link:",
+    "Vous pouvez consulter ou modifier votre soumission avec ce lien :",
     "{{abstractEditLink}}",
     "",
-    "Thank you.",
+    "Merci.",
   ].join("\n"),
   ABSTRACT_EDIT_ACK: [
-    "Dear {{authorName}},",
+    "Bonjour {{authorName}},",
     "",
-    'Your abstract "{{submissionTitle}}" has been updated.',
+    'Votre abstract "{{submissionTitle}}" a été mis à jour.',
     "",
-    "You can continue to view or edit your submission here:",
+    "Vous pouvez continuer à consulter ou modifier votre soumission ici :",
     "{{abstractEditLink}}",
     "",
-    "Thank you.",
+    "Merci.",
   ].join("\n"),
 };
 
 FALLBACK_BODIES.ABSTRACT_DECISION = [
-  "Dear {{authorName}},",
+  "Bonjour {{authorName}},",
   "",
-  'A decision has been made for your abstract "{{submissionTitle}}".',
-  "Status: {{submissionStatus}}",
-  "Presentation type: {{presentationType}}",
-  "Code: {{submissionCode}}",
+  'Une décision a été prise pour votre abstract "{{submissionTitle}}".',
+  "Statut : {{submissionStatus}}",
+  "Type de communication : {{presentationType}}",
+  "Code : {{submissionCode}}",
   "",
-  "You can view your submission here:",
+  "Vous pouvez consulter votre soumission ici :",
   "{{abstractEditLink}}",
   "",
-  "Thank you.",
+  "Merci.",
+].join("\n");
+
+FALLBACK_BODIES.ABSTRACT_ACCEPTED = [
+  "Bonjour {{authorName}},",
+  "",
+  'Votre abstract "{{submissionTitle}}" est accepté pour {{congressName}}.',
+  "Type de communication : {{presentationType}}",
+  "Code : {{submissionCode}}",
+  "",
+  "Si un fichier final est demandé, merci de le téléverser depuis ce lien :",
+  "{{finalFileUploadLink}}",
+  "",
+  "Merci.",
+].join("\n");
+
+FALLBACK_BODIES.ABSTRACT_REJECTED = [
+  "Bonjour {{authorName}},",
+  "",
+  "Votre abstract \"{{submissionTitle}}\" n'a pas été retenu pour {{congressName}}.",
+  "Statut : {{submissionStatus}}",
+  "",
+  "Vous pouvez consulter votre soumission ici :",
+  "{{abstractEditLink}}",
+  "",
+  "Merci.",
 ].join("\n");
 
 FALLBACK_BODIES.ABSTRACT_COMMITTEE_COMMENTS = [
-  "Dear {{authorName}},",
+  "Bonjour {{authorName}},",
   "",
-  'The committee left comments for your abstract "{{submissionTitle}}":',
+  'Le comité a laissé des commentaires pour votre abstract "{{submissionTitle}}" :',
   "",
   "{{committeeComments}}",
   "",
-  "You can view your submission here:",
+  "Vous pouvez consulter votre soumission ici :",
   "{{abstractEditLink}}",
   "",
-  "Thank you.",
+  "Merci.",
 ].join("\n");
 
 FALLBACK_BODIES.ABSTRACT_SCORE_DIVERGENCE = [
@@ -80,15 +107,15 @@ FALLBACK_BODIES.ABSTRACT_SCORE_DIVERGENCE = [
 ].join("\n");
 
 FALLBACK_BODIES.ABSTRACT_FINAL_FILE_REQUEST = [
-  "Dear {{authorName}},",
+  "Bonjour {{authorName}},",
   "",
-  'Your abstract "{{submissionTitle}}" has been accepted.',
-  "Please upload your final file before the deadline: {{finalFileDeadline}}",
+  'Votre abstract "{{submissionTitle}}" a été accepté.',
+  "Merci de téléverser votre fichier final avant la date limite : {{finalFileDeadline}}",
   "",
-  "Upload link:",
-  "{{abstractEditLink}}",
+  "Lien de téléversement :",
+  "{{finalFileUploadLink}}",
   "",
-  "Thank you.",
+  "Merci.",
 ].join("\n");
 
 function resolveVars(template: string, ctx: Record<string, unknown>): string {
@@ -170,6 +197,7 @@ export async function queueAbstractEmail(input: {
       scoringStartAt: true,
       scoringDeadline: true,
       finalFileDeadline: true,
+      finalFileUploadEnabled: true,
     },
   });
 
@@ -193,6 +221,7 @@ export async function queueAbstractEmail(input: {
       scoringStartAt: config?.scoringStartAt ?? null,
       scoringDeadline: config?.scoringDeadline ?? null,
       finalFileDeadline: config?.finalFileDeadline ?? null,
+      finalFileUploadEnabled: config?.finalFileUploadEnabled ?? false,
     },
   };
 
