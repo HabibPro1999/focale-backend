@@ -285,7 +285,7 @@ export async function getPublicConfig(slug: string) {
           themes: {
             where: { active: true },
             orderBy: { sortOrder: "asc" },
-            select: { id: true, label: true },
+            select: { id: true, label: true, description: true },
           },
         },
       },
@@ -330,6 +330,10 @@ export async function getPublicConfig(slug: string) {
       conclusion: sectionLimits.conclusion ?? null,
     },
     themes: config.themes,
+    requestedTypes: [
+      { value: "ORAL_COMMUNICATION", label: "Communication orale" },
+      { value: "POSTER", label: "Communication affichée" },
+    ],
     additionalFields: {
       fields: Array.isArray(config.additionalFieldsSchema)
         ? config.additionalFieldsSchema

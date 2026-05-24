@@ -208,6 +208,7 @@ export async function createTheme(
     data: {
       configId,
       label: body.label,
+      description: body.description?.trim() || null,
       sortOrder: body.sortOrder ?? 0,
       active: body.active ?? true,
     },
@@ -232,6 +233,9 @@ export async function updateTheme(
     where: { id: themeId },
     data: {
       ...(body.label !== undefined && { label: body.label }),
+      ...(body.description !== undefined && {
+        description: body.description?.trim() || null,
+      }),
       ...(body.sortOrder !== undefined && { sortOrder: body.sortOrder }),
       ...(body.active !== undefined && { active: body.active }),
     },

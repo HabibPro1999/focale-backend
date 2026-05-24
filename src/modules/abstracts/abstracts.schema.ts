@@ -75,12 +75,14 @@ export const PatchConfigSchema = z.strictObject({
 
 export const CreateThemeSchema = z.strictObject({
   label: z.string().min(1).max(120),
+  description: z.string().trim().max(500).nullish(),
   sortOrder: z.number().int().optional(),
   active: z.boolean().optional(),
 });
 
 export const UpdateThemeSchema = z.strictObject({
   label: z.string().min(1).max(120).optional(),
+  description: z.string().trim().max(500).nullish(),
   sortOrder: z.number().int().optional(),
   active: z.boolean().optional(),
 });

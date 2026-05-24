@@ -821,13 +821,14 @@ model AbstractConfig {
 }
 
 model AbstractTheme {
-  id        String   @id @default(uuid())
-  configId  String   @map("config_id")
-  label     String
-  sortOrder Int      @default(0) @map("sort_order")
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id          String   @id @default(uuid())
+  configId    String   @map("config_id")
+  label       String
+  description String?
+  sortOrder   Int      @default(0) @map("sort_order")
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
 
   config         AbstractConfig            @relation(fields: [configId], references: [id], onDelete: Cascade)
   abstracts      AbstractThemeOnAbstract[]

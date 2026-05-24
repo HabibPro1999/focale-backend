@@ -64,6 +64,7 @@ function makeTheme(overrides: Partial<AbstractTheme> = {}): AbstractTheme {
     id: overrides.id ?? faker.string.uuid(),
     configId,
     label: "Theme A",
+    description: null,
     sortOrder: 0,
     active: true,
     createdAt: new Date(),
@@ -260,6 +261,7 @@ describe("createTheme", () => {
       data: {
         configId,
         label: "New Theme",
+        description: null,
         sortOrder: 0,
         active: true,
       },
