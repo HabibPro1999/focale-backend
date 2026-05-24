@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prismaMock } from "../../../tests/mocks/prisma.js";
+import { Prisma } from "@/generated/prisma/client.js";
 import { REALTIME_EMIT_TYPE } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -20,6 +21,14 @@ vi.mock("@shared/utils/logger.js", () => ({
 }));
 
 import { enqueueOutboxEvent, processOutboxEvents } from "./outbox.service.js";
+
+function prismaUniqueError(meta: Record<string, unknown>) {
+  return new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+    code: "P2002",
+    clientVersion: "7.2.0",
+    meta,
+  });
+}
 
 describe("outbox service", () => {
   beforeEach(() => {
@@ -60,6 +69,25 @@ describe("outbox service", () => {
         }),
       }),
     });
+  });
+
+  it("treats adapter P2002 without metadata as an outbox dedupe hit", async () => {
+    prismaMock.outboxEvent.create.mockRejectedValueOnce(
+      prismaUniqueError({}) as never,
+    );
+
+    await expect(
+      enqueueOutboxEvent(prismaMock as never, {
+        type: "email.abstract",
+        aggregateType: "Abstract",
+        aggregateId: "abstract-1",
+        dedupeKey: "email:abstract:ABSTRACT_ACCEPTED:abstract-1",
+        payload: {
+          trigger: "ABSTRACT_ACCEPTED",
+          abstractId: "abstract-1",
+        },
+      }),
+    ).resolves.toBe(false);
   });
 
   it("claims and marks processed, skipped, and failed rows", async () => {

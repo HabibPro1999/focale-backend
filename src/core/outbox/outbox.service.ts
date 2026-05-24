@@ -80,7 +80,10 @@ function outboxScopeClause(scope: OutboxProcessingScope): string {
   return "";
 }
 
-function isOutboxDedupeViolation(error: unknown): boolean {
+function isOutboxDedupeViolation(
+  error: unknown,
+  dedupeKey?: string,
+): boolean {
   if (
     !(error instanceof Prisma.PrismaClientKnownRequestError) ||
     error.code !== "P2002"
@@ -91,7 +94,11 @@ function isOutboxDedupeViolation(error: unknown): boolean {
   const { fields, names } = getPrismaUniqueTarget(error);
   return (
     fields.some((field) => field === "dedupeKey" || field === "dedupe_key") ||
-    names.some((name) => name.includes("outbox_events_dedupe_key_key"))
+    names.some((name) => name.includes("outbox_events_dedupe_key_key")) ||
+    // CockroachDB/Prisma adapter errors do not always expose the violated
+    // index metadata. `outboxEvent.create` has no other caller-supplied unique
+    // value, so a P2002 while a dedupe key is present is the idempotency race.
+    (dedupeKey != null && fields.length === 0 && names.length === 0)
   );
 }
 
@@ -115,7 +122,7 @@ export async function enqueueOutboxEvent<T extends OutboxEventType>(
     });
     return true;
   } catch (error) {
-    if (isOutboxDedupeViolation(error)) {
+    if (isOutboxDedupeViolation(error, input.dedupeKey)) {
       logger.info(
         { type: input.type, dedupeKey: input.dedupeKey },
         "Outbox event already enqueued, skipping duplicate",
