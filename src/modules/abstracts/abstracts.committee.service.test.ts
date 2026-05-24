@@ -142,9 +142,8 @@ function mockCommitteeListResult(user: ReturnType<typeof makeCommitteeUser>) {
     },
   ] as any);
   prismaMock.abstractReviewerTheme.findMany.mockResolvedValue([]);
-  (prismaMock.abstractReview.groupBy as any)
-    .mockResolvedValueOnce([])
-    .mockResolvedValueOnce([]);
+  prismaMock.abstract.count.mockResolvedValue(0);
+  (prismaMock.abstractReview.groupBy as any).mockResolvedValueOnce([]);
 }
 
 describe("abstracts committee service", () => {
@@ -184,11 +183,11 @@ describe("abstracts committee service", () => {
       ] as any);
       (prismaMock.abstractReview.groupBy as any)
         .mockResolvedValueOnce([
-          { reviewerId: "reviewer-1", _count: { _all: 2 } },
-        ] as any)
-        .mockResolvedValueOnce([
           { reviewerId: "reviewer-1", _count: { _all: 1 } },
         ] as any);
+      prismaMock.abstract.count
+        .mockResolvedValueOnce(2)
+        .mockResolvedValueOnce(0);
 
       const result = await listCommitteeMembers(eventId);
 
@@ -219,16 +218,6 @@ describe("abstracts committee service", () => {
       );
       expect(prismaMock.abstractReview.groupBy).toHaveBeenNthCalledWith(
         1,
-        expect.objectContaining({
-          where: {
-            eventId,
-            reviewerId: { in: ["reviewer-1", "reviewer-2"] },
-            active: true,
-          },
-        }),
-      );
-      expect(prismaMock.abstractReview.groupBy).toHaveBeenNthCalledWith(
-        2,
         expect.objectContaining({
           where: {
             eventId,

@@ -49,7 +49,7 @@ function makeAbstract(overrides: Record<string, unknown> = {}) {
 }
 
 describe("abstracts admin service", () => {
-  it("finalizes accepted abstracts with a global sequence code and queues accepted email", async () => {
+  it("finalizes accepted abstracts with an event/theme sequence code and queues accepted email", async () => {
     prismaMock.$transaction.mockImplementation(async (callback: any) => callback(prismaMock));
     prismaMock.abstract.findUnique
       .mockResolvedValueOnce(
@@ -72,10 +72,7 @@ describe("abstracts admin service", () => {
         codeNumber: 1,
       }) as any);
     prismaMock.abstract.aggregate.mockResolvedValue({ _max: { codeNumber: null } } as any);
-    prismaMock.abstractCodeCounter.aggregate.mockResolvedValue({ _max: { lastValue: null } } as any);
-    prismaMock.abstractCodeSequence.upsert.mockResolvedValue({ id: "sequence-1" } as any);
-    prismaMock.abstractCodeSequence.updateMany.mockResolvedValue({ count: 0 } as any);
-    prismaMock.abstractCodeSequence.update.mockResolvedValue({ lastValue: 1 } as any);
+    prismaMock.abstractCodeCounter.findUnique.mockResolvedValue(null);
     prismaMock.abstractCodeCounter.upsert.mockResolvedValue({ lastValue: 1 } as any);
     prismaMock.abstract.update.mockResolvedValue({
       id: abstractId,
@@ -95,17 +92,22 @@ describe("abstracts admin service", () => {
       performedBy,
     );
 
-    expect(prismaMock.abstractCodeSequence.update).toHaveBeenCalledWith({
-      where: { finalType: "ORAL_COMMUNICATION" },
-      data: { lastValue: { increment: 1 } },
-      select: { lastValue: true },
+    expect(prismaMock.abstract.aggregate).toHaveBeenCalledWith({
+      where: {
+        eventId,
+        finalType: "ORAL_COMMUNICATION",
+        codeNumber: { not: null },
+        themes: { some: { themeId } },
+      },
+      _max: { codeNumber: true },
     });
     expect(prismaMock.abstractCodeCounter.upsert).toHaveBeenCalledWith({
       where: { eventId_themeId_finalType: { eventId, themeId, finalType: "ORAL_COMMUNICATION" } },
-      update: { lastValue: 1 },
+      update: { lastValue: { increment: 1 } },
       create: { eventId, themeId, finalType: "ORAL_COMMUNICATION", lastValue: 1 },
       select: { lastValue: true },
     });
+    expect(prismaMock.abstractCodeSequence.update).not.toHaveBeenCalled();
     expect(prismaMock.abstract.update).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ id: abstractId }),
       data: expect.objectContaining({

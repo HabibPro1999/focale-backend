@@ -576,7 +576,8 @@ export async function getAbstractByToken(id: string, token: string) {
   const now = new Date();
   const editingAllowed =
     !!config?.editingEnabled &&
-    (!config.editingDeadline || now <= config.editingDeadline);
+    (!config.editingDeadline || now <= config.editingDeadline) &&
+    !NON_EDITABLE_STATUSES.includes(abstract.status);
 
   return {
     id: abstract.id,

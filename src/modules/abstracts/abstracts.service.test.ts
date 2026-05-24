@@ -21,6 +21,7 @@ vi.mock("@clients", () => ({
 
 import {
   getPublicConfig,
+  getAbstractByToken,
   submitAbstract,
   editAbstract,
 } from "./abstracts.service.js";
@@ -437,6 +438,31 @@ describe("submitAbstract", () => {
 // ============================================================================
 // editAbstract
 // ============================================================================
+
+describe("getAbstractByToken", () => {
+  it("reports editing as locked after a final decision", async () => {
+    const token = generateAbstractToken();
+    prismaMock.abstract.findUnique.mockResolvedValue(
+      makeAbstract({
+        editToken: token,
+        status: "ACCEPTED",
+        themes: [{ theme: { id: faker.string.uuid(), label: "Theme A" } }],
+        event: {
+          abstractConfig: {
+            editingEnabled: true,
+            editingDeadline: null,
+            finalFileUploadEnabled: false,
+            finalFileDeadline: null,
+          },
+        },
+      }) as any,
+    );
+
+    const result = await getAbstractByToken(faker.string.uuid(), token);
+
+    expect(result.editing.allowed).toBe(false);
+  });
+});
 
 describe("editAbstract", () => {
   const themeId = faker.string.uuid();

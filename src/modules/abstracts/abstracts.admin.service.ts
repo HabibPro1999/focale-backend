@@ -13,6 +13,7 @@ import type { TxClient } from "@shared/types/prisma.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { auditLog } from "@shared/utils/audit.js";
+import { getStorageProvider } from "@shared/services/storage/index.js";
 import type {
   FinalizeAbstractInput,
   ListAbstractsQuery,
@@ -78,7 +79,7 @@ function formatAdminAbstract(abstract: Prisma.AbstractGetPayload<{
     authorLastName: abstract.authorLastName,
     authorEmail: abstract.authorEmail,
     authorPhone: abstract.authorPhone,
-    averageScore: abstract.averageScore,
+    averageScore: abstract.reviewCount > 0 ? abstract.averageScore : null,
     reviewCount: abstract.reviewCount,
     themeLabels: abstract.themes.map((link) => link.theme.label),
     themeIds: abstract.themes.map((link) => link.theme.id),
@@ -99,52 +100,40 @@ async function allocateAbstractCode(
   const [abstractSeeded, counterSeeded] = await Promise.all([
     tx.abstract.aggregate({
       where: {
+        eventId,
         finalType,
         codeNumber: { not: null },
+        themes: { some: { themeId: theme.id } },
       },
       _max: { codeNumber: true },
     }),
-    tx.abstractCodeCounter.aggregate({
-      where: { finalType },
-      _max: { lastValue: true },
+    tx.abstractCodeCounter.findUnique({
+      where: {
+        eventId_themeId_finalType: { eventId, themeId: theme.id, finalType },
+      },
+      select: { lastValue: true },
     }),
   ]);
   const seedValue = Math.max(
     abstractSeeded._max.codeNumber ?? 0,
-    counterSeeded._max.lastValue ?? 0,
+    counterSeeded?.lastValue ?? 0,
   );
 
-  await tx.abstractCodeSequence.upsert({
-    where: { finalType },
-    update: { updatedAt: new Date() },
-    create: { finalType, lastValue: seedValue },
-    select: { id: true },
-  });
-  await tx.abstractCodeSequence.updateMany({
-    where: { finalType, lastValue: { lt: seedValue } },
-    data: { lastValue: seedValue },
-  });
-  const sequence = await tx.abstractCodeSequence.update({
-    where: { finalType },
-    data: { lastValue: { increment: 1 } },
-    select: { lastValue: true },
-  });
-
-  await tx.abstractCodeCounter.upsert({
+  const counter = await tx.abstractCodeCounter.upsert({
     where: {
       eventId_themeId_finalType: { eventId, themeId: theme.id, finalType },
     },
-    update: { lastValue: sequence.lastValue },
+    update: { lastValue: { increment: 1 } },
     create: {
       eventId,
       themeId: theme.id,
       finalType,
-      lastValue: sequence.lastValue,
+      lastValue: seedValue + 1,
     },
     select: { lastValue: true },
   });
 
-  const codeNumber = sequence.lastValue;
+  const codeNumber = counter.lastValue;
   const code = `${CODE_SUFFIX[finalType]}${theme.sortOrder}-${String(codeNumber).padStart(2, "0")}`;
   return { code, codeNumber };
 }
@@ -231,6 +220,9 @@ export async function getAdminAbstract(eventId: string, abstractId: string) {
   if (!abstract || abstract.eventId !== eventId) {
     throw new AppError("Abstract not found", 404, ErrorCodes.NOT_FOUND);
   }
+  const finalFileDownloadUrl = abstract.finalFileKey
+    ? await getStorageProvider().getSignedUrl(abstract.finalFileKey, 3600)
+    : null;
 
   return {
     ...formatAdminAbstract({
@@ -246,6 +238,7 @@ export async function getAdminAbstract(eventId: string, abstractId: string) {
       kind: abstract.finalFileKind,
       size: abstract.finalFileSize,
       uploadedAt: abstract.finalFileUploadedAt?.toISOString() ?? null,
+      downloadUrl: finalFileDownloadUrl,
     },
     revisions: abstract.revisions.map((revision) => ({
       id: revision.id,

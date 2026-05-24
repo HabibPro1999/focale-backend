@@ -67,7 +67,7 @@ function anonymizeAbstractListItem(
     requestedType: abstract.requestedType,
     finalType: abstract.finalType,
     themeLabels: abstract.themes.map((link) => link.theme.label),
-    averageScore: abstract.averageScore,
+    averageScore: null,
     reviewCount: abstract.reviewCount,
     ownReview: ownReview
       ? {
@@ -96,7 +96,7 @@ function anonymizeAbstractDetail(
     content: abstract.content,
     contentVersion: abstract.contentVersion,
     themeLabels: abstract.themes.map((link) => link.theme.label),
-    averageScore: abstract.averageScore,
+    averageScore: null,
     reviewCount: abstract.reviewCount,
     createdAt: abstract.createdAt,
     updatedAt: abstract.updatedAt,
@@ -148,6 +148,33 @@ function hasReviewerThemeCoverage(
   if (reviewerThemeIds.length === 0) return false;
   const covered = new Set(reviewerThemeIds);
   return abstract.themes.some((link) => covered.has(link.theme.id));
+}
+
+function accessibleAbstractWhere(
+  eventId: string,
+  reviewerId: string,
+  reviewerThemeIds: string[],
+): Prisma.AbstractWhereInput {
+  const filters: Prisma.AbstractWhereInput[] = [
+    { reviews: { some: { reviewerId, eventId, active: true } } },
+  ];
+  if (reviewerThemeIds.length > 0) {
+    filters.push({
+      themes: { some: { themeId: { in: reviewerThemeIds } } },
+    });
+  }
+  return { eventId, OR: filters };
+}
+
+async function countAccessibleAbstracts(eventId: string, reviewerId: string) {
+  const reviewerThemeIds = await listActiveReviewerThemeIds(
+    prisma,
+    eventId,
+    reviewerId,
+  );
+  return prisma.abstract.count({
+    where: accessibleAbstractWhere(eventId, reviewerId, reviewerThemeIds),
+  });
 }
 
 async function assertAbstractForEvent(abstractId: string, eventId: string) {
@@ -252,15 +279,10 @@ export async function listCommitteeMembers(eventId: string) {
   });
 
   const userIds = memberships.map((membership) => membership.userId);
-  const [themePrefs, reviewGroups, scoredGroups] = await Promise.all([
+  const [themePrefs, scoredGroups] = await Promise.all([
     prisma.abstractReviewerTheme.findMany({
       where: { eventId, userId: { in: userIds }, active: true },
       select: { userId: true, themeId: true },
-    }),
-    prisma.abstractReview.groupBy({
-      by: ["reviewerId"],
-      where: { eventId, reviewerId: { in: userIds }, active: true },
-      _count: { _all: true },
     }),
     prisma.abstractReview.groupBy({
       by: ["reviewerId"],
@@ -280,11 +302,16 @@ export async function listCommitteeMembers(eventId: string) {
     current.push(pref.themeId);
     themesByUser.set(pref.userId, current);
   }
-  const assignedByUser = new Map(
-    reviewGroups.map((g) => [g.reviewerId, g._count._all]),
-  );
   const scoredByUser = new Map(
     scoredGroups.map((g) => [g.reviewerId, g._count._all]),
+  );
+  const assignedByUser = new Map(
+    await Promise.all(
+      memberships.map(async (membership) => [
+        membership.userId,
+        await countAccessibleAbstracts(eventId, membership.userId),
+      ] as const),
+    ),
   );
 
   return memberships.map((membership) => ({
@@ -750,12 +777,13 @@ export async function getCommitteeProfile(userId: string) {
     orderBy: { createdAt: "asc" },
   });
   const eventIds = memberships.map((membership) => membership.eventId);
-  const [assignedGroups, scoredGroups] = await Promise.all([
-    prisma.abstractReview.groupBy({
-      by: ["eventId"],
-      where: { reviewerId: userId, eventId: { in: eventIds }, active: true },
-      _count: { _all: true },
-    }),
+  const [assignedCounts, scoredGroups] = await Promise.all([
+    Promise.all(
+      memberships.map(async (membership) => [
+        membership.eventId,
+        await countAccessibleAbstracts(membership.eventId, userId),
+      ] as const),
+    ),
     prisma.abstractReview.groupBy({
       by: ["eventId"],
       where: {
@@ -767,9 +795,7 @@ export async function getCommitteeProfile(userId: string) {
       _count: { _all: true },
     }),
   ]);
-  const assignedByEvent = new Map(
-    assignedGroups.map((g) => [g.eventId, g._count._all]),
-  );
+  const assignedByEvent = new Map(assignedCounts);
   const scoredByEvent = new Map(
     scoredGroups.map((g) => [g.eventId, g._count._all]),
   );
@@ -794,19 +820,8 @@ export async function listAssignedAbstracts(
     eventId,
     reviewerId,
   );
-  const assignmentFilters: Prisma.AbstractWhereInput[] = [
-    { reviews: { some: { reviewerId, eventId, active: true } } },
-  ];
-  if (reviewerThemeIds.length > 0) {
-    assignmentFilters.push({
-      themes: { some: { themeId: { in: reviewerThemeIds } } },
-    });
-  }
   const abstracts = await prisma.abstract.findMany({
-    where: {
-      eventId,
-      OR: assignmentFilters,
-    },
+    where: accessibleAbstractWhere(eventId, reviewerId, reviewerThemeIds),
     include: {
       themes: { include: { theme: { select: { id: true, label: true } } } },
       reviews: { where: { active: true } },
