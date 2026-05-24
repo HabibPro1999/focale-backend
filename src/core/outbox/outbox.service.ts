@@ -22,7 +22,8 @@ const DEFAULT_WORKER_ID = `outbox:${hostname()}:${process.pid}:${randomUUID()}`;
 let lastRecoveryAt = 0;
 
 export type OutboxClient = {
-  outboxEvent: Pick<typeof prisma.outboxEvent, "create">;
+  outboxEvent: Pick<typeof prisma.outboxEvent, "create"> &
+    Partial<Pick<typeof prisma.outboxEvent, "findFirst">>;
 };
 
 export interface EnqueueOutboxInput<T extends OutboxEventType> {
@@ -117,6 +118,19 @@ export async function enqueueOutboxEvent<T extends OutboxEventType>(
 ): Promise<boolean> {
   try {
     const outboxEvent = client.outboxEvent ?? prisma.outboxEvent;
+    if (input.dedupeKey && outboxEvent.findFirst) {
+      const existing = await outboxEvent.findFirst({
+        where: { dedupeKey: input.dedupeKey },
+        select: { id: true },
+      });
+      if (existing) {
+        logger.info(
+          { type: input.type, dedupeKey: input.dedupeKey },
+          "Outbox event already enqueued, skipping duplicate",
+        );
+        return false;
+      }
+    }
     await outboxEvent.create({
       data: {
         type: input.type,

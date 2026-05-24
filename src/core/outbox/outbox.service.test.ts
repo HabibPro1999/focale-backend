@@ -33,6 +33,7 @@ function prismaUniqueError(meta: Record<string, unknown>) {
 describe("outbox service", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    prismaMock.outboxEvent.findFirst.mockResolvedValue(null);
     prismaMock.outboxEvent.create.mockResolvedValue({ id: "outbox-1" } as never);
     prismaMock.$executeRaw.mockResolvedValue(0);
     prismaMock.outboxEvent.updateMany.mockResolvedValue({ count: 1 } as never);
@@ -88,6 +89,26 @@ describe("outbox service", () => {
         },
       }),
     ).resolves.toBe(false);
+  });
+
+  it("skips existing dedupe keys before writing in the current transaction", async () => {
+    prismaMock.outboxEvent.findFirst.mockResolvedValueOnce({
+      id: "existing-outbox",
+    } as never);
+
+    await expect(
+      enqueueOutboxEvent(prismaMock as never, {
+        type: "email.abstract",
+        aggregateType: "Abstract",
+        aggregateId: "abstract-1",
+        dedupeKey: "email:abstract:ABSTRACT_ACCEPTED:abstract-1",
+        payload: {
+          trigger: "ABSTRACT_ACCEPTED",
+          abstractId: "abstract-1",
+        },
+      }),
+    ).resolves.toBe(false);
+    expect(prismaMock.outboxEvent.create).not.toHaveBeenCalled();
   });
 
   it("treats plain adapter P2002 objects as outbox dedupe hits", async () => {
