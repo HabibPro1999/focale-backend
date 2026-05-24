@@ -139,7 +139,7 @@ export async function abstractsPublicRoutes(
       const token = extractAbstractToken(request);
       const data = await request.file({
         limits: { fileSize: 50 * 1024 * 1024 },
-      });
+      }).catch(() => null);
       if (!data) {
         throw app.httpErrors.badRequest("No file uploaded");
       }
