@@ -84,14 +84,13 @@ function isOutboxDedupeViolation(
   error: unknown,
   dedupeKey?: string,
 ): boolean {
-  if (
-    !(error instanceof Prisma.PrismaClientKnownRequestError) ||
-    error.code !== "P2002"
-  ) {
+  if (!isPrismaUniqueViolation(error)) {
     return false;
   }
 
-  const { fields, names } = getPrismaUniqueTarget(error);
+  const { fields, names } = getPrismaUniqueTarget(
+    error as Prisma.PrismaClientKnownRequestError,
+  );
   return (
     fields.some((field) => field === "dedupeKey" || field === "dedupe_key") ||
     names.some((name) => name.includes("outbox_events_dedupe_key_key")) ||
@@ -99,6 +98,16 @@ function isOutboxDedupeViolation(
     // index metadata. `outboxEvent.create` has no other caller-supplied unique
     // value, so a P2002 while a dedupe key is present is the idempotency race.
     (dedupeKey != null && fields.length === 0 && names.length === 0)
+  );
+}
+
+function isPrismaUniqueViolation(error: unknown): boolean {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError ||
+    (typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: unknown }).code === "P2002")
   );
 }
 

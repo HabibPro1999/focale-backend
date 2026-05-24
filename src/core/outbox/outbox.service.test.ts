@@ -90,6 +90,26 @@ describe("outbox service", () => {
     ).resolves.toBe(false);
   });
 
+  it("treats plain adapter P2002 objects as outbox dedupe hits", async () => {
+    prismaMock.outboxEvent.create.mockRejectedValueOnce({
+      code: "P2002",
+      meta: {},
+    } as never);
+
+    await expect(
+      enqueueOutboxEvent(prismaMock as never, {
+        type: "email.abstract",
+        aggregateType: "Abstract",
+        aggregateId: "abstract-1",
+        dedupeKey: "email:abstract:ABSTRACT_ACCEPTED:abstract-1",
+        payload: {
+          trigger: "ABSTRACT_ACCEPTED",
+          abstractId: "abstract-1",
+        },
+      }),
+    ).resolves.toBe(false);
+  });
+
   it("claims and marks processed, skipped, and failed rows", async () => {
     prismaMock.$queryRawUnsafe.mockResolvedValue([
       { id: "processed" },
