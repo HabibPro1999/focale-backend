@@ -32,7 +32,25 @@ import {
 } from "@sponsorships";
 import { certificatesRoutes } from "@certificates";
 import { checkinRoutes } from "@checkin";
+import {
+  abstractsCommitteeAdminRoutes,
+  abstractsCommitteeRoutes,
+  abstractsPublicRoutes,
+  abstractsRoutes,
+  getAbstractBookQueueHealth,
+} from "@abstracts";
+import { realtimeRoutes, drainRealtimeConnections } from "@realtime";
+import { getOutboxHealth } from "@core/outbox";
 import type { AppInstance } from "@shared/types/fastify.js";
+
+async function getDatabaseHealth(): Promise<"healthy" | "unhealthy"> {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    return "healthy";
+  } catch {
+    return "unhealthy";
+  }
+}
 
 export async function buildServer(): Promise<AppInstance> {
   const app = Fastify({
@@ -75,14 +93,7 @@ export async function buildServer(): Promise<AppInstance> {
 
   // Health check — minimal public surface to avoid information disclosure
   app.get("/health", async (_request, reply) => {
-    let dbStatus: "healthy" | "unhealthy" = "healthy";
-
-    try {
-      await prisma.$queryRaw`SELECT 1`;
-    } catch {
-      dbStatus = "unhealthy";
-    }
-
+    const dbStatus = await getDatabaseHealth();
     const statusCode = dbStatus === "unhealthy" ? 503 : 200;
 
     return reply.status(statusCode).send({
@@ -101,17 +112,29 @@ export async function buildServer(): Promise<AppInstance> {
 
   // Readiness probe - "am I ready to accept traffic?"
   app.get("/health/ready", async (_request, reply) => {
-    try {
-      await prisma.$queryRaw`SELECT 1`;
+    const dbStatus = await getDatabaseHealth();
+    if (dbStatus === "healthy") {
       return reply.send({ status: "ready" });
-    } catch {
-      return reply.status(503).send({ status: "not ready" });
     }
+
+    return reply.status(503).send({ status: "not ready" });
   });
 
   // Email queue health check
   app.get("/health/email-queue", async (_request, reply) => {
     const health = await getEmailQueueHealth();
+    return reply.status(health.isHealthy ? 200 : 503).send(health);
+  });
+
+  // Abstract Book worker health check
+  app.get("/health/abstract-book-jobs", async (_request, reply) => {
+    const health = await getAbstractBookQueueHealth();
+    return reply.status(health.isHealthy ? 200 : 503).send(health);
+  });
+
+  // Outbox worker health check
+  app.get("/health/outbox", async (_request, reply) => {
+    const health = await getOutboxHealth();
     return reply.status(health.isHealthy ? 200 : 503).send(health);
   });
 
@@ -169,6 +192,19 @@ export async function buildServer(): Promise<AppInstance> {
 
   // Check-in routes
   await app.register(checkinRoutes, { prefix: "/api/events" });
+
+  // Realtime (SSE) stream for admin dashboards
+  await app.register(realtimeRoutes, { prefix: "/api" });
+
+  // Abstracts routes (config, themes, committee, public submitter)
+  await app.register(abstractsRoutes, { prefix: "/api" });
+  await app.register(abstractsCommitteeAdminRoutes, { prefix: "/api" });
+  await app.register(abstractsCommitteeRoutes, { prefix: "/api" });
+  await app.register(abstractsPublicRoutes, { prefix: "/api/public" });
+
+  app.addHook("onClose", async () => {
+    drainRealtimeConnections();
+  });
 
   return app;
 }

@@ -62,7 +62,7 @@ export async function getTemplate(id: string) {
     where: { id },
     include: {
       access: accessSelect,
-      event: { select: { clientId: true } },
+      event: { select: { clientId: true, status: true } },
     },
   });
 
@@ -270,7 +270,7 @@ export async function uploadTemplateImage(
   // Store at original quality (no compression — print quality)
   const ext = MIME_TO_EXT[detected.mime] ?? "png";
   const key = `${template.eventId}/certificates/${template.id}.${ext}`;
-  const templateUrl = await getStorageProvider().upload(
+  const templateUrl = await getStorageProvider().uploadPublic(
     file.buffer,
     key,
     detected.mime,

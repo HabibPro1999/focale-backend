@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
 import { prismaMock } from "../../../tests/mocks/prisma.js";
 import {
   createMockRegistration,
@@ -22,21 +22,31 @@ import {
 } from "./registrations.service.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
-import type { PriceBreakdown } from "@pricing";
+import { calculatePrice, type PriceBreakdown } from "@pricing";
+import { DEFAULT_ENABLED_MODULES } from "../clients/clients.schema.js";
+import {
+  decrementAccessRegisteredCountTx,
+  incrementAccessRegisteredCountTx,
+  validateAccessSelections,
+} from "@access";
 import { faker } from "@faker-js/faker";
 
 // Mock external module dependencies
-vi.mock("@events", () => ({
-  incrementRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
-  decrementRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock("@events", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@events")>();
+  return {
+    ...actual,
+    incrementRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
+    decrementRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
 vi.mock("@access", () => ({
   validateAccessSelections: vi
     .fn()
     .mockResolvedValue({ valid: true, errors: [] }),
-  reserveAccessSpot: vi.fn().mockResolvedValue(undefined),
-  releaseAccessSpot: vi.fn().mockResolvedValue(undefined),
+  incrementAccessRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
+  decrementAccessRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@pricing", () => ({
@@ -73,9 +83,10 @@ vi.mock("@forms", async (importOriginal) => {
 
 vi.mock("@shared/services/storage/index.js", () => ({
   getStorageProvider: vi.fn(() => ({
-    upload: vi
+    uploadPublic: vi
       .fn()
-      .mockResolvedValue("https://storage.example.com/test/proof.webp"),
+      .mockResolvedValue("https://storage.example.com/test/public.webp"),
+    uploadPrivate: vi.fn().mockResolvedValue("test/proof.webp"),
     getSignedUrl: vi.fn().mockResolvedValue("https://signed-url.example.com"),
     download: vi.fn().mockResolvedValue({
       buffer: Buffer.from("downloaded-content"),
@@ -103,6 +114,35 @@ describe("Registrations Service", () => {
   const eventId = faker.string.uuid();
   const formId = faker.string.uuid();
   const clientId = faker.string.uuid();
+  const enabledModules = [...DEFAULT_ENABLED_MODULES];
+
+  function createPolicyEvent(overrides: Record<string, unknown> = {}) {
+    return {
+      id: eventId,
+      name: "Test Event",
+      slug: "test-event",
+      clientId,
+      status: "OPEN",
+      client: { active: true, enabledModules },
+      ...overrides,
+    };
+  }
+
+  function createRegistrationForPolicy(
+    overrides: Parameters<typeof createMockRegistration>[0] = {},
+    eventOverrides: Record<string, unknown> = {},
+  ) {
+    return {
+      ...createMockRegistration({ eventId, ...overrides }),
+      event: createPolicyEvent(eventOverrides),
+    };
+  }
+
+  beforeEach(() => {
+    prismaMock.$queryRawUnsafe.mockResolvedValue([{ max_ref: null }] as never);
+    (prismaMock.registration.groupBy as unknown as Mock).mockResolvedValue([]);
+    prismaMock.sponsorshipUsage.findMany.mockResolvedValue([] as never);
+  });
 
   // Helper function to create a mock price breakdown
   function createMockPriceBreakdown(
@@ -138,18 +178,21 @@ describe("Registrations Service", () => {
     return {
       ...registration,
       form: { id: formId, name: "Test Form" },
-      event: { id: eventId, name: "Test Event", slug: "test-event", clientId },
+      event: createPolicyEvent(),
     };
   }
 
   describe("createRegistration", () => {
     const mockForm = createMockForm({ id: formId, eventId, schemaVersion: 1 });
-    const mockEvent = createMockEvent({
-      id: eventId,
-      status: "OPEN",
-      maxCapacity: 100,
-      registeredCount: 0,
-    });
+    const mockEvent = {
+      ...createMockEvent({
+        id: eventId,
+        status: "OPEN",
+        maxCapacity: 100,
+        registeredCount: 0,
+      }),
+      client: { active: true, enabledModules },
+    };
     const priceBreakdown = createMockPriceBreakdown();
 
     beforeEach(() => {
@@ -201,6 +244,34 @@ describe("Registrations Service", () => {
       });
     });
 
+    it("should reject lab sponsorship payment method when sponsorships are enabled", async () => {
+      const input = {
+        formId,
+        formData: {},
+        email: "lab@example.com",
+        accessSelections: [],
+        paymentMethod: "LAB_SPONSORSHIP" as const,
+        labName: "Research Lab",
+      };
+
+      prismaMock.form.findUnique.mockResolvedValue(mockForm);
+      prismaMock.registration.findUnique.mockResolvedValueOnce(null);
+      prismaMock.$transaction.mockImplementation(
+        async (callback: (tx: typeof prismaMock) => Promise<unknown>) => {
+          prismaMock.event.findUnique.mockResolvedValue(mockEvent);
+          return callback(prismaMock);
+        },
+      );
+
+      await expect(
+        createRegistration(input, priceBreakdown),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.BAD_REQUEST,
+      });
+      expect(prismaMock.registration.create).not.toHaveBeenCalled();
+    });
+
     it("should throw error when form not found", async () => {
       prismaMock.form.findUnique.mockResolvedValue(null);
 
@@ -229,7 +300,7 @@ describe("Registrations Service", () => {
       });
 
       prismaMock.form.findUnique.mockResolvedValue(mockForm);
-      prismaMock.registration.findUnique.mockResolvedValue(
+      prismaMock.registration.findFirst.mockResolvedValue(
         existingRegistration,
       );
 
@@ -451,7 +522,7 @@ describe("Registrations Service", () => {
 
   describe("updateRegistration", () => {
     it("should update registration note", async () => {
-      const registration = createMockRegistration({ note: null });
+      const registration = createRegistrationForPolicy({ note: null });
       const updatedRegistration = createMockRegistrationWithRelations({
         ...registration,
         note: "Updated note",
@@ -499,7 +570,7 @@ describe("Registrations Service", () => {
   describe("Payment Status Transitions", () => {
     describe("confirmPayment", () => {
       it("should transition from PENDING to PAID", async () => {
-        const registration = createMockRegistration({
+        const registration = createRegistrationForPolicy({
           paymentStatus: "PENDING",
           totalAmount: 300,
         });
@@ -533,7 +604,7 @@ describe("Registrations Service", () => {
       });
 
       it("should transition from PENDING to WAIVED", async () => {
-        const registration = createMockRegistration({
+        const registration = createRegistrationForPolicy({
           paymentStatus: "PENDING",
         });
         const waivedRegistration = createMockRegistrationWithRelations({
@@ -565,7 +636,7 @@ describe("Registrations Service", () => {
       });
 
       it("should transition from PAID to REFUNDED", async () => {
-        const registration = createMockRegistration({
+        const registration = createRegistrationForPolicy({
           paymentStatus: "PAID",
           paidAmount: 300,
         });
@@ -596,7 +667,7 @@ describe("Registrations Service", () => {
       });
 
       it("should reject invalid transition from REFUNDED", async () => {
-        const registration = createMockRegistration({
+        const registration = createRegistrationForPolicy({
           paymentStatus: "REFUNDED",
         });
 
@@ -621,7 +692,7 @@ describe("Registrations Service", () => {
       it("should reject transition from PENDING to REFUNDED directly", async () => {
         // Note: This is allowed in the state machine, PENDING -> REFUNDED is valid
         // Let's test an invalid transition instead
-        const registration = createMockRegistration({
+        const registration = createRegistrationForPolicy({
           paymentStatus: "WAIVED",
         });
 
@@ -641,7 +712,7 @@ describe("Registrations Service", () => {
 
     describe("updateRegistration payment status", () => {
       it("should allow same status update (no-op)", async () => {
-        const registration = createMockRegistration({
+        const registration = createRegistrationForPolicy({
           paymentStatus: "PENDING",
         });
         const updatedRegistration =
@@ -671,7 +742,9 @@ describe("Registrations Service", () => {
 
   describe("deleteRegistration", () => {
     it("should delete unpaid registration", async () => {
-      const registration = createMockRegistration({ paymentStatus: "PENDING" });
+      const registration = createRegistrationForPolicy({
+        paymentStatus: "PENDING",
+      });
 
       prismaMock.registration.findUnique.mockResolvedValue(registration);
       prismaMock.$transaction.mockImplementation(
@@ -688,7 +761,9 @@ describe("Registrations Service", () => {
     });
 
     it("should throw error when trying to delete paid registration", async () => {
-      const registration = createMockRegistration({ paymentStatus: "PAID" });
+      const registration = createRegistrationForPolicy({
+        paymentStatus: "PAID",
+      });
 
       prismaMock.$transaction.mockImplementation(
         async (callback: (tx: typeof prismaMock) => Promise<unknown>) => {
@@ -728,7 +803,9 @@ describe("Registrations Service", () => {
     // ------------------------------------------------------------------
 
     it("should successfully force-delete a PAID registration when user is CLIENT_ADMIN", async () => {
-      const registration = createMockRegistration({ paymentStatus: "PAID" });
+      const registration = createRegistrationForPolicy({
+        paymentStatus: "PAID",
+      });
       const userId = faker.string.uuid();
 
       prismaMock.registration.findUnique.mockResolvedValue(registration);
@@ -745,21 +822,18 @@ describe("Registrations Service", () => {
       ).resolves.toBeUndefined();
     });
 
-    it("should throw FORBIDDEN when force-deleting without CLIENT_ADMIN role", async () => {
-      const registration = createMockRegistration({ paymentStatus: "PAID" });
+    it("should throw FORBIDDEN when force-deleting without admin role", async () => {
+      const registration = createRegistrationForPolicy({
+        paymentStatus: "PAID",
+      });
       const userId = faker.string.uuid();
 
       await expect(
-        deleteRegistration(
-          registration.id,
-          userId,
-          true,
-          0 /* SUPER_ADMIN, not CLIENT_ADMIN */,
-        ),
+        deleteRegistration(registration.id, userId, true, 99 /* non-admin */),
       ).rejects.toThrow(AppError);
 
       await expect(
-        deleteRegistration(registration.id, userId, true, 0 /* SUPER_ADMIN */),
+        deleteRegistration(registration.id, userId, true, 99 /* non-admin */),
       ).rejects.toMatchObject({
         statusCode: 403,
         code: ErrorCodes.FORBIDDEN,
@@ -780,7 +854,7 @@ describe("Registrations Service", () => {
         ],
       });
 
-      const registration = createMockRegistration({
+      const registration = createRegistrationForPolicy({
         paymentStatus: "PENDING",
         priceBreakdown: priceWithAccess,
       });
@@ -796,9 +870,13 @@ describe("Registrations Service", () => {
 
       await deleteRegistration(registration.id);
 
-      // Verify releaseAccessSpot was called with tx client so it participates in the transaction
-      const { releaseAccessSpot } = await import("@access");
-      expect(releaseAccessSpot).toHaveBeenCalledWith(accessId, 2, prismaMock);
+      // Verify decrementAccessRegisteredCountTx was called with tx client so it participates in the transaction
+      const { decrementAccessRegisteredCountTx } = await import("@access");
+      expect(decrementAccessRegisteredCountTx).toHaveBeenCalledWith(
+        accessId,
+        2,
+        prismaMock,
+      );
     });
   });
 
@@ -957,11 +1035,7 @@ describe("Registrations Service", () => {
         ...createMockRegistration({ paymentStatus: "PENDING", paidAmount: 0 }),
         form: { id: formId, name: "Test Form", schema: {} },
         event: {
-          id: eventId,
-          name: "Test Event",
-          slug: "test-event",
-          clientId,
-          status: "OPEN",
+          ...createPolicyEvent({ status: "OPEN" }),
         },
       };
 
@@ -970,6 +1044,9 @@ describe("Registrations Service", () => {
 
       const result = await getRegistrationForEdit(registration.id);
 
+      expect(result.expectedUpdatedAt).toBe(
+        registration.updatedAt.toISOString(),
+      );
       expect(result.canEdit).toBe(true);
       expect(result.canRemoveAccess).toBe(true);
       expect(result.editRestrictions).toHaveLength(0);
@@ -980,11 +1057,7 @@ describe("Registrations Service", () => {
         ...createMockRegistration({ paymentStatus: "REFUNDED", paidAmount: 0 }),
         form: { id: formId, name: "Test Form", schema: {} },
         event: {
-          id: eventId,
-          name: "Test Event",
-          slug: "test-event",
-          clientId,
-          status: "OPEN",
+          ...createPolicyEvent({ status: "OPEN" }),
         },
       };
 
@@ -1004,11 +1077,7 @@ describe("Registrations Service", () => {
         ...createMockRegistration({ paymentStatus: "PENDING", paidAmount: 0 }),
         form: { id: formId, name: "Test Form", schema: {} },
         event: {
-          id: eventId,
-          name: "Test Event",
-          slug: "test-event",
-          clientId,
-          status: "CLOSED",
+          ...createPolicyEvent({ status: "CLOSED" }),
         },
       };
 
@@ -1028,11 +1097,7 @@ describe("Registrations Service", () => {
         ...createMockRegistration({ paymentStatus: "PAID", paidAmount: 300 }),
         form: { id: formId, name: "Test Form", schema: {} },
         event: {
-          id: eventId,
-          name: "Test Event",
-          slug: "test-event",
-          clientId,
-          status: "OPEN",
+          ...createPolicyEvent({ status: "OPEN" }),
         },
       };
 
@@ -1063,6 +1128,17 @@ describe("Registrations Service", () => {
   });
 
   describe("editRegistrationPublic", () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+      prismaMock.$transaction.mockImplementation(
+        async (callback: (tx: typeof prismaMock) => Promise<unknown>) =>
+          callback(prismaMock),
+      );
+      prismaMock.registration.updateMany.mockResolvedValue({
+        count: 1,
+      } as never);
+    });
+
     it("should update form data successfully", async () => {
       const registration = {
         ...createMockRegistration({
@@ -1072,7 +1148,7 @@ describe("Registrations Service", () => {
           sponsorshipCode: null,
         }),
         form: { id: formId, eventId, schema: {} },
-        event: { id: eventId, status: "OPEN" },
+        event: createPolicyEvent({ status: "OPEN" }),
       };
 
       const updatedRegistration = createMockRegistrationWithRelations({
@@ -1085,7 +1161,9 @@ describe("Registrations Service", () => {
         .mockResolvedValueOnce(updatedRegistration);
       prismaMock.$transaction.mockImplementation(
         async (callback: (tx: typeof prismaMock) => Promise<unknown>) => {
-          prismaMock.registration.update.mockResolvedValue(updatedRegistration);
+          prismaMock.registration.updateMany.mockResolvedValue({
+            count: 1,
+          } as never);
           prismaMock.auditLog.create.mockResolvedValue({} as never);
           return callback(prismaMock);
         },
@@ -1093,6 +1171,7 @@ describe("Registrations Service", () => {
       prismaMock.eventAccess.findMany.mockResolvedValue([]);
 
       const result = await editRegistrationPublic(registration.id, {
+        expectedUpdatedAt: registration.updatedAt.toISOString(),
         formData: { firstName: "Jane" },
       });
 
@@ -1103,16 +1182,22 @@ describe("Registrations Service", () => {
       const registration = {
         ...createMockRegistration({ paymentStatus: "REFUNDED" }),
         form: { id: formId, eventId, schema: {} },
-        event: { id: eventId, status: "OPEN" },
+        event: createPolicyEvent({ status: "OPEN" }),
       };
 
       prismaMock.registration.findUnique.mockResolvedValue(registration);
 
       await expect(
-        editRegistrationPublic(registration.id, { firstName: "Jane" }),
+        editRegistrationPublic(registration.id, {
+          expectedUpdatedAt: registration.updatedAt.toISOString(),
+          firstName: "Jane",
+        }),
       ).rejects.toThrow(AppError);
       await expect(
-        editRegistrationPublic(registration.id, { firstName: "Jane" }),
+        editRegistrationPublic(registration.id, {
+          expectedUpdatedAt: registration.updatedAt.toISOString(),
+          firstName: "Jane",
+        }),
       ).rejects.toMatchObject({
         statusCode: 400,
         code: ErrorCodes.REGISTRATION_REFUNDED,
@@ -1123,16 +1208,22 @@ describe("Registrations Service", () => {
       const registration = {
         ...createMockRegistration({ paymentStatus: "PENDING" }),
         form: { id: formId, eventId, schema: {} },
-        event: { id: eventId, status: "CLOSED" },
+        event: createPolicyEvent({ status: "CLOSED" }),
       };
 
       prismaMock.registration.findUnique.mockResolvedValue(registration);
 
       await expect(
-        editRegistrationPublic(registration.id, { firstName: "Jane" }),
+        editRegistrationPublic(registration.id, {
+          expectedUpdatedAt: registration.updatedAt.toISOString(),
+          firstName: "Jane",
+        }),
       ).rejects.toThrow(AppError);
       await expect(
-        editRegistrationPublic(registration.id, { firstName: "Jane" }),
+        editRegistrationPublic(registration.id, {
+          expectedUpdatedAt: registration.updatedAt.toISOString(),
+          firstName: "Jane",
+        }),
       ).rejects.toMatchObject({
         statusCode: 400,
         code: ErrorCodes.REGISTRATION_EDIT_FORBIDDEN,
@@ -1160,17 +1251,23 @@ describe("Registrations Service", () => {
           priceBreakdown: priceWithAccess,
         }),
         form: { id: formId, eventId, schema: {} },
-        event: { id: eventId, status: "OPEN" },
+        event: createPolicyEvent({ status: "OPEN" }),
       };
 
       prismaMock.registration.findUnique.mockResolvedValue(registration);
 
       // Trying to remove all access selections from a paid registration
       await expect(
-        editRegistrationPublic(registration.id, { accessSelections: [] }),
+        editRegistrationPublic(registration.id, {
+          expectedUpdatedAt: registration.updatedAt.toISOString(),
+          accessSelections: [],
+        }),
       ).rejects.toThrow(AppError);
       await expect(
-        editRegistrationPublic(registration.id, { accessSelections: [] }),
+        editRegistrationPublic(registration.id, {
+          expectedUpdatedAt: registration.updatedAt.toISOString(),
+          accessSelections: [],
+        }),
       ).rejects.toMatchObject({
         statusCode: 400,
         code: ErrorCodes.REGISTRATION_ACCESS_REMOVAL_BLOCKED,
@@ -1200,7 +1297,7 @@ describe("Registrations Service", () => {
           sponsorshipCode: null,
         }),
         form: { id: formId, eventId, schema: {} },
-        event: { id: eventId, status: "OPEN" },
+        event: createPolicyEvent({ status: "OPEN" }),
       };
 
       const updatedRegistration = createMockRegistrationWithRelations({
@@ -1213,7 +1310,9 @@ describe("Registrations Service", () => {
         .mockResolvedValueOnce(updatedRegistration);
       prismaMock.$transaction.mockImplementation(
         async (callback: (tx: typeof prismaMock) => Promise<unknown>) => {
-          prismaMock.registration.update.mockResolvedValue(updatedRegistration);
+          prismaMock.registration.updateMany.mockResolvedValue({
+            count: 1,
+          } as never);
           prismaMock.auditLog.create.mockResolvedValue({} as never);
           return callback(prismaMock);
         },
@@ -1224,6 +1323,7 @@ describe("Registrations Service", () => {
       ]);
 
       const result = await editRegistrationPublic(registration.id, {
+        expectedUpdatedAt: registration.updatedAt.toISOString(),
         accessSelections: [
           { accessId: existingAccessId, quantity: 1 },
           { accessId: newAccessId, quantity: 1 },
@@ -1232,16 +1332,162 @@ describe("Registrations Service", () => {
 
       expect(result.registration).toBeDefined();
     });
+
+    it("should use in-transaction state for access validation, pricing, and update precondition", async () => {
+      const existingAccessId = faker.string.uuid();
+      const newAccessId = faker.string.uuid();
+      const priceWithAccess = createMockPriceBreakdown({
+        accessItems: [
+          {
+            accessId: existingAccessId,
+            name: "Workshop 1",
+            unitPrice: 50,
+            quantity: 1,
+            subtotal: 50,
+          },
+        ],
+      });
+      const registration = {
+        ...createMockRegistration({
+          paymentStatus: "PENDING",
+          paidAmount: 0,
+          priceBreakdown: priceWithAccess,
+          sponsorshipCode: null,
+        }),
+        form: { id: formId, eventId, schema: {} },
+        event: createPolicyEvent({ status: "OPEN" }),
+      };
+      const updatedRegistration = createMockRegistrationWithRelations({
+        ...registration,
+        accessTypeIds: [existingAccessId, newAccessId],
+      });
+
+      prismaMock.registration.findUnique
+        .mockResolvedValueOnce(registration)
+        .mockResolvedValueOnce(updatedRegistration);
+      prismaMock.eventAccess.findMany.mockResolvedValue([
+        createMockEventAccess({ id: existingAccessId }),
+        createMockEventAccess({ id: newAccessId }),
+      ]);
+
+      await editRegistrationPublic(registration.id, {
+        expectedUpdatedAt: registration.updatedAt.toISOString(),
+        accessSelections: [
+          { accessId: existingAccessId, quantity: 1 },
+          { accessId: newAccessId, quantity: 1 },
+        ],
+      });
+
+      expect(validateAccessSelections).toHaveBeenCalledWith(
+        registration.eventId,
+        expect.any(Array),
+        expect.any(Object),
+        expect.any(Set),
+        prismaMock,
+      );
+      expect(calculatePrice).toHaveBeenCalledWith(
+        registration.eventId,
+        expect.objectContaining({
+          selectedAccessItems: [
+            { accessId: existingAccessId, quantity: 1 },
+            { accessId: newAccessId, quantity: 1 },
+          ],
+        }),
+        prismaMock,
+      );
+      expect(prismaMock.registration.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            id: registration.id,
+            updatedAt: registration.updatedAt,
+          },
+        }),
+      );
+    });
+
+    it("should throw concurrent modification when expectedUpdatedAt is stale", async () => {
+      const registration = {
+        ...createMockRegistration({
+          paymentStatus: "PENDING",
+          paidAmount: 0,
+          sponsorshipCode: null,
+        }),
+        form: { id: formId, eventId, schema: {} },
+        event: createPolicyEvent({ status: "OPEN" }),
+      };
+
+      prismaMock.registration.findUnique.mockResolvedValue(registration);
+      prismaMock.registration.updateMany.mockResolvedValue({
+        count: 0,
+      } as never);
+
+      await expect(
+        editRegistrationPublic(registration.id, {
+          expectedUpdatedAt: registration.updatedAt.toISOString(),
+          firstName: "Jane",
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 409,
+        code: ErrorCodes.CONCURRENT_MODIFICATION,
+      });
+    });
+
+    it("should apply access counter changes by quantity delta", async () => {
+      const accessId = faker.string.uuid();
+      const priceWithAccess = createMockPriceBreakdown({
+        accessItems: [
+          {
+            accessId,
+            name: "Workshop",
+            unitPrice: 50,
+            quantity: 1,
+            subtotal: 50,
+          },
+        ],
+      });
+      const registration = {
+        ...createMockRegistration({
+          paymentStatus: "PENDING",
+          paidAmount: 0,
+          priceBreakdown: priceWithAccess,
+          sponsorshipCode: null,
+        }),
+        form: { id: formId, eventId, schema: {} },
+        event: createPolicyEvent({ status: "OPEN" }),
+      };
+      const updatedRegistration = createMockRegistrationWithRelations({
+        ...registration,
+      });
+
+      prismaMock.registration.findUnique
+        .mockResolvedValueOnce(registration)
+        .mockResolvedValueOnce(updatedRegistration);
+      prismaMock.eventAccess.findMany.mockResolvedValue([
+        createMockEventAccess({ id: accessId }),
+      ]);
+
+      await editRegistrationPublic(registration.id, {
+        expectedUpdatedAt: registration.updatedAt.toISOString(),
+        accessSelections: [{ accessId, quantity: 3 }],
+      });
+
+      expect(incrementAccessRegisteredCountTx).toHaveBeenCalledWith(
+        accessId,
+        2,
+        prismaMock,
+      );
+      expect(decrementAccessRegisteredCountTx).not.toHaveBeenCalled();
+    });
   });
 
   describe("uploadPaymentProof", () => {
     it("should upload payment proof successfully (PDF)", async () => {
-      const registration = createMockRegistration({ eventId });
+      const registration = createRegistrationForPolicy({ eventId });
 
       prismaMock.registration.findUnique.mockResolvedValue(registration);
       prismaMock.registration.update.mockResolvedValue({
         ...registration,
-        paymentProofUrl: "https://storage.example.com/test/proof.webp",
+        paymentProofUrl: "test/proof.webp",
       });
 
       const result = await uploadPaymentProof(registration.id, {
@@ -1250,9 +1496,7 @@ describe("Registrations Service", () => {
         mimetype: "application/pdf",
       });
 
-      expect(result.fileUrl).toBe(
-        "https://storage.example.com/test/proof.webp",
-      );
+      expect(result.fileUrl).toBe("test/proof.webp");
       expect(result.fileName).toBe("proof.webp"); // After compression
       expect(result.mimeType).toBe("image/webp"); // After compression
       expect(result.fileSize).toBe(Buffer.from("compressed-content").length);
@@ -1335,7 +1579,7 @@ describe("Registrations Service", () => {
     // ------------------------------------------------------------------
 
     it("should reject upload when payment status is PAID", async () => {
-      const registration = createMockRegistration({
+      const registration = createRegistrationForPolicy({
         eventId,
         paymentStatus: "PAID",
       });
@@ -1363,7 +1607,7 @@ describe("Registrations Service", () => {
     });
 
     it("should reject upload when payment status is REFUNDED", async () => {
-      const registration = createMockRegistration({
+      const registration = createRegistrationForPolicy({
         eventId,
         paymentStatus: "REFUNDED",
       });
@@ -1391,12 +1635,12 @@ describe("Registrations Service", () => {
     });
 
     it("should accept PNG images (compressed to WebP)", async () => {
-      const registration = createMockRegistration({ eventId });
+      const registration = createRegistrationForPolicy({ eventId });
 
       prismaMock.registration.findUnique.mockResolvedValue(registration);
       prismaMock.registration.update.mockResolvedValue({
         ...registration,
-        paymentProofUrl: "https://storage.example.com/test/proof.webp",
+        paymentProofUrl: "test/proof.webp",
       });
 
       const result = await uploadPaymentProof(registration.id, {
@@ -1405,20 +1649,18 @@ describe("Registrations Service", () => {
         mimetype: "image/png",
       });
 
-      expect(result.fileUrl).toBe(
-        "https://storage.example.com/test/proof.webp",
-      );
+      expect(result.fileUrl).toBe("test/proof.webp");
       expect(result.fileName).toBe("proof.webp"); // Compressed to WebP
       expect(result.mimeType).toBe("image/webp"); // Compressed to WebP
     });
 
     it("should accept JPEG images (compressed to WebP)", async () => {
-      const registration = createMockRegistration({ eventId });
+      const registration = createRegistrationForPolicy({ eventId });
 
       prismaMock.registration.findUnique.mockResolvedValue(registration);
       prismaMock.registration.update.mockResolvedValue({
         ...registration,
-        paymentProofUrl: "https://storage.example.com/test/proof.webp",
+        paymentProofUrl: "test/proof.webp",
       });
 
       const result = await uploadPaymentProof(registration.id, {
@@ -1427,9 +1669,7 @@ describe("Registrations Service", () => {
         mimetype: "image/jpeg",
       });
 
-      expect(result.fileUrl).toBe(
-        "https://storage.example.com/test/proof.webp",
-      );
+      expect(result.fileUrl).toBe("test/proof.webp");
       expect(result.fileName).toBe("proof.webp"); // Compressed to WebP
       expect(result.mimeType).toBe("image/webp"); // Compressed to WebP
     });
@@ -1477,12 +1717,15 @@ describe("Registrations Service", () => {
         eventId,
         schemaVersion: 1,
       });
-      const mockEvent = createMockEvent({
-        id: eventId,
-        status: "OPEN",
-        maxCapacity: 100,
-        registeredCount: 0,
-      });
+      const mockEvent = {
+        ...createMockEvent({
+          id: eventId,
+          status: "OPEN",
+          maxCapacity: 100,
+          registeredCount: 0,
+        }),
+        client: { active: true, enabledModules },
+      };
 
       const createdRegistration = createMockRegistrationWithRelations({
         ...input,
@@ -1543,7 +1786,10 @@ describe("Registrations Service", () => {
       };
 
       const mockForm = createMockForm({ id: formId, eventId });
-      const mockEvent = createMockEvent({ id: eventId, status: "OPEN" });
+      const mockEvent = {
+        ...createMockEvent({ id: eventId, status: "OPEN" }),
+        client: { active: true, enabledModules },
+      };
 
       const createdRegistration = createMockRegistrationWithRelations({
         ...input,

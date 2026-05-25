@@ -63,6 +63,7 @@ function createMockEmailTemplate(overrides: Partial<EmailTemplate> = {}): EmailT
     trigger: null,
     isDefault: false,
     isActive: true,
+    abstractTrigger: null,
     createdAt: faker.date.past(),
     updatedAt: faker.date.recent(),
     ...overrides,
@@ -138,6 +139,41 @@ describe('Email Template Service', () => {
       expect(result.trigger).toBe('REGISTRATION_CREATED');
     });
 
+    it('should create an automatic abstract email template with abstractTrigger', async () => {
+      const mockEvent = createMockEvent({ id: eventId, clientId });
+      const mockTemplate = createMockEmailTemplate({
+        eventId,
+        clientId,
+        category: 'AUTOMATIC',
+        trigger: null,
+        abstractTrigger: 'ABSTRACT_DECISION',
+      });
+
+      prismaMock.event.findUnique.mockResolvedValue(mockEvent);
+      prismaMock.emailTemplate.findFirst.mockResolvedValue(null);
+      prismaMock.emailTemplate.create.mockResolvedValue(mockTemplate);
+
+      const result = await createEmailTemplate({
+        eventId,
+        name: 'Abstract Decision',
+        subject: 'Abstract Decision',
+        content: createMockTiptapDocument(),
+        category: 'AUTOMATIC',
+        trigger: null,
+        abstractTrigger: 'ABSTRACT_DECISION',
+      });
+
+      expect(result.category).toBe('AUTOMATIC');
+      expect(result.trigger).toBeNull();
+      expect(result.abstractTrigger).toBe('ABSTRACT_DECISION');
+      expect(prismaMock.emailTemplate.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          trigger: null,
+          abstractTrigger: 'ABSTRACT_DECISION',
+        }),
+      });
+    });
+
     it('should throw error when event not found', async () => {
       prismaMock.event.findUnique.mockResolvedValue(null);
 
@@ -200,6 +236,95 @@ describe('Email Template Service', () => {
       ).rejects.toMatchObject({
         statusCode: 409,
         code: ErrorCodes.CONFLICT,
+      });
+    });
+
+    it('should throw conflict error when automatic abstract template trigger already exists', async () => {
+      const mockEvent = createMockEvent({ id: eventId, clientId });
+      const existingTemplate = createMockEmailTemplate({
+        eventId,
+        category: 'AUTOMATIC',
+        trigger: null,
+        abstractTrigger: 'ABSTRACT_DECISION',
+        isActive: true,
+      });
+
+      prismaMock.event.findUnique.mockResolvedValue(mockEvent);
+      prismaMock.emailTemplate.findFirst.mockResolvedValue(existingTemplate);
+
+      await expect(
+        createEmailTemplate({
+          eventId,
+          name: 'Another Abstract Decision Email',
+          subject: 'Test',
+          content: createMockTiptapDocument(),
+          category: 'AUTOMATIC',
+          trigger: null,
+          abstractTrigger: 'ABSTRACT_DECISION',
+        })
+      ).rejects.toMatchObject({
+        statusCode: 409,
+        code: ErrorCodes.CONFLICT,
+      });
+    });
+
+    it('should reject automatic templates without a trigger', async () => {
+      const mockEvent = createMockEvent({ id: eventId, clientId });
+      prismaMock.event.findUnique.mockResolvedValue(mockEvent);
+
+      await expect(
+        createEmailTemplate({
+          eventId,
+          name: 'Broken Automatic Email',
+          subject: 'Test',
+          content: createMockTiptapDocument(),
+          category: 'AUTOMATIC',
+          trigger: null,
+          abstractTrigger: null,
+        })
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.BAD_REQUEST,
+      });
+    });
+
+    it('should reject automatic templates with both trigger types', async () => {
+      const mockEvent = createMockEvent({ id: eventId, clientId });
+      prismaMock.event.findUnique.mockResolvedValue(mockEvent);
+
+      await expect(
+        createEmailTemplate({
+          eventId,
+          name: 'Ambiguous Automatic Email',
+          subject: 'Test',
+          content: createMockTiptapDocument(),
+          category: 'AUTOMATIC',
+          trigger: 'REGISTRATION_CREATED',
+          abstractTrigger: 'ABSTRACT_DECISION',
+        })
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.BAD_REQUEST,
+      });
+    });
+
+    it('should reject manual templates with either trigger type', async () => {
+      const mockEvent = createMockEvent({ id: eventId, clientId });
+      prismaMock.event.findUnique.mockResolvedValue(mockEvent);
+
+      await expect(
+        createEmailTemplate({
+          eventId,
+          name: 'Manual Email',
+          subject: 'Test',
+          content: createMockTiptapDocument(),
+          category: 'MANUAL',
+          trigger: null,
+          abstractTrigger: 'ABSTRACT_DECISION',
+        })
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.BAD_REQUEST,
       });
     });
 
@@ -557,6 +682,49 @@ describe('Email Template Service', () => {
         }),
       });
     });
+
+    it('should convert an automatic registration template to an abstract template', async () => {
+      const existingTemplate = createMockEmailTemplate({
+        id: templateId,
+        eventId,
+        category: 'AUTOMATIC',
+        trigger: 'REGISTRATION_CREATED',
+        abstractTrigger: null,
+      });
+      const updatedTemplate = createMockEmailTemplate({
+        id: templateId,
+        category: 'AUTOMATIC',
+        trigger: null,
+        abstractTrigger: 'ABSTRACT_DECISION',
+      });
+
+      prismaMock.emailTemplate.findUnique.mockResolvedValue(existingTemplate);
+      prismaMock.emailTemplate.findFirst.mockResolvedValue(null);
+      prismaMock.emailTemplate.update.mockResolvedValue(updatedTemplate);
+
+      const result = await updateEmailTemplate(templateId, {
+        trigger: null,
+        abstractTrigger: 'ABSTRACT_DECISION',
+      });
+
+      expect(result.trigger).toBeNull();
+      expect(result.abstractTrigger).toBe('ABSTRACT_DECISION');
+      expect(prismaMock.emailTemplate.findFirst).toHaveBeenCalledWith({
+        where: {
+          eventId,
+          abstractTrigger: 'ABSTRACT_DECISION',
+          isActive: true,
+          id: { not: templateId },
+        },
+      });
+      expect(prismaMock.emailTemplate.update).toHaveBeenCalledWith({
+        where: { id: templateId },
+        data: expect.objectContaining({
+          trigger: null,
+          abstractTrigger: 'ABSTRACT_DECISION',
+        }),
+      });
+    });
   });
 
   describe('deleteEmailTemplate', () => {
@@ -685,6 +853,7 @@ describe('Email Template Service', () => {
         data: expect.objectContaining({
           category: 'MANUAL',
           trigger: null,
+          abstractTrigger: null,
           isActive: false,
         }),
       });

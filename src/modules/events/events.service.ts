@@ -4,7 +4,9 @@ import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { compressImage } from "@shared/services/storage/compress.js";
 import { getStorageProvider } from "@shared/services/storage/index.js";
+import { logger } from "@shared/utils/logger.js";
 import { clientExists } from "@clients";
+import { fileTypeFromBuffer } from "file-type";
 import {
   paginate,
   getSkip,
@@ -15,14 +17,97 @@ import type {
   UpdateEventInput,
   ListEventsQuery,
 } from "./events.schema.js";
-import type { Event, EventPricing, Prisma } from "@/generated/prisma/client.js";
+import { Prisma, type Event, type EventPricing } from "@/generated/prisma/client.js";
 import type { TxClient } from "@shared/types/prisma.js";
 
 // Transaction client type — minimal subset needed for raw capacity queries
-type TransactionClient = Pick<TxClient, "$executeRaw">;
+type TransactionClient = Pick<TxClient, "$queryRaw" | "event">;
 
 // Type for Event with pricing included
 type EventWithPricing = Event & { pricing: EventPricing | null };
+
+function normalizeBasePrice(basePrice: number | null | undefined): number {
+  return basePrice ?? 0;
+}
+
+export function assertEventWritable(event: Pick<Event, "status">): void {
+  if (event.status === "ARCHIVED") {
+    throw new AppError(
+      "Archived events cannot be modified",
+      400,
+      ErrorCodes.INVALID_STATUS_TRANSITION,
+    );
+  }
+}
+
+export function assertEventOpen(event: Pick<Event, "status">): void {
+  if (event.status !== "OPEN") {
+    throw new AppError(
+      "Event is not accepting public actions",
+      400,
+      ErrorCodes.EVENT_NOT_OPEN,
+    );
+  }
+}
+
+export function assertEventAcceptsPublicActions(
+  event: Pick<Event, "status" | "endDate">,
+  now = new Date(),
+): void {
+  assertEventOpen(event);
+  if (event.endDate < now) {
+    throw new AppError(
+      "Event is not accepting public actions",
+      400,
+      ErrorCodes.EVENT_NOT_OPEN,
+    );
+  }
+}
+
+function extractKeyFromStorage(value: string): string | null {
+  if (!value.includes("://")) {
+    return value || null;
+  }
+
+  try {
+    const parsed = new URL(value);
+    if (parsed.hostname === "storage.googleapis.com") {
+      const parts = parsed.pathname.split("/").filter(Boolean);
+      return decodeURIComponent(parts.slice(1).join("/"));
+    }
+    return decodeURIComponent(parsed.pathname.slice(1));
+  } catch {
+    return null;
+  }
+}
+
+async function deleteStoredObjectBestEffort(
+  location: string | null | undefined,
+  context: Record<string, unknown>,
+): Promise<void> {
+  if (!location) return;
+  const key = extractKeyFromStorage(location);
+  if (!key) return;
+
+  try {
+    await getStorageProvider().delete(key);
+  } catch (err) {
+    logger.warn({ err, key, ...context }, "Failed to delete stored event file");
+  }
+}
+
+function isPrismaKnownRequestError(
+  error: unknown,
+  code: string,
+): error is Prisma.PrismaClientKnownRequestError {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError && error.code === code
+  );
+}
+
+function eventHasRegistrationsMessage(count: number): string {
+  return `Cannot delete event with ${count} registration(s). Archive the event instead.`;
+}
 
 /**
  * Create a new event with pricing configuration.
@@ -40,7 +125,6 @@ export async function createEvent(
     startDate,
     endDate,
     location,
-    status,
     basePrice,
     currency,
   } = input;
@@ -75,14 +159,14 @@ export async function createEvent(
         startDate,
         endDate,
         location: location ?? null,
-        status: status ?? "CLOSED",
+        status: "CLOSED",
       },
     });
 
     const pricing = await tx.eventPricing.create({
       data: {
         eventId: event.id,
-        basePrice: basePrice ?? 0,
+        basePrice: normalizeBasePrice(basePrice),
         currency: currency ?? "TND",
       },
     });
@@ -129,103 +213,135 @@ export async function updateEvent(
   id: string,
   input: UpdateEventInput,
 ): Promise<EventWithPricing> {
-  // Check if event exists
-  const event = await prisma.event.findUnique({ where: { id } });
-  if (!event) {
-    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
-  }
-
-  // Validate status transition if status is being changed
-  if (input.status && input.status !== event.status) {
-    const allowed = VALID_STATUS_TRANSITIONS[event.status] ?? [];
-    if (!allowed.includes(input.status)) {
-      throw new AppError(
-        `Cannot transition event from ${event.status} to ${input.status}`,
-        400,
-        ErrorCodes.INVALID_STATUS_TRANSITION,
-      );
-    }
-  }
-
-  // Validate resulting date range (schema only checks when both are provided)
-  const resultingStart = input.startDate ?? event.startDate;
-  const resultingEnd = input.endDate ?? event.endDate;
-  if (resultingEnd < resultingStart) {
+  if (Object.values(input).every((value) => value === undefined)) {
     throw new AppError(
-      "End date must be greater than or equal to start date",
+      "At least one field must be provided for update",
       400,
       ErrorCodes.VALIDATION_ERROR,
     );
   }
 
-  // If slug is being updated, check global uniqueness
-  if (input.slug && input.slug !== event.slug) {
-    const existing = await prisma.event.findUnique({
-      where: { slug: input.slug },
-    });
-    if (existing) {
-      throw new AppError(
-        "Event with this slug already exists",
-        409,
-        ErrorCodes.CONFLICT,
-      );
-    }
-  }
-
   const { basePrice, currency, ...eventData } = input;
+  const hasEventData = Object.values(eventData).some(
+    (value) => value !== undefined,
+  );
 
-  // Block currency change if registrations exist
-  if (currency !== undefined) {
-    const existingPricing = await prisma.eventPricing.findUnique({
-      where: { eventId: id },
-      select: { currency: true },
-    });
-    if (existingPricing && currency !== existingPricing.currency) {
-      const registrationCount = await prisma.registration.count({
-        where: { eventId: id },
+  return prisma.$transaction(
+    async (tx) => {
+      const event = await tx.event.findUnique({
+        where: { id },
+        include: { pricing: true },
       });
-      if (registrationCount > 0) {
+      if (!event) {
+        throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
+      }
+
+      // Validate status transition if status is being changed.
+      if (input.status && input.status !== event.status) {
+        const allowed = VALID_STATUS_TRANSITIONS[event.status] ?? [];
+        if (!allowed.includes(input.status)) {
+          throw new AppError(
+            `Cannot transition event from ${event.status} to ${input.status}`,
+            400,
+            ErrorCodes.INVALID_STATUS_TRANSITION,
+          );
+        }
+      }
+      assertEventWritable(event);
+
+      // Validate resulting date range (schema only checks when both are provided).
+      const resultingStart = input.startDate ?? event.startDate;
+      const resultingEnd = input.endDate ?? event.endDate;
+      if (resultingEnd < resultingStart) {
         throw new AppError(
-          "Cannot change currency after registrations exist",
+          "End date must be greater than or equal to start date",
           400,
           ErrorCodes.VALIDATION_ERROR,
         );
       }
-    }
-  }
 
-  if (basePrice !== undefined || currency !== undefined) {
-    return prisma.$transaction(async (tx) => {
-      const updatedEvent = await tx.event.update({
-        where: { id },
-        data: eventData,
-        include: { pricing: true },
-      });
+      if (
+        input.maxCapacity !== undefined &&
+        input.maxCapacity !== null &&
+        input.maxCapacity < event.registeredCount
+      ) {
+        throw new AppError(
+          "Max capacity cannot be below current registered count",
+          400,
+          ErrorCodes.VALIDATION_ERROR,
+        );
+      }
 
-      if (updatedEvent.pricing) {
-        const pricingData: Record<string, unknown> = {};
-        if (basePrice !== undefined) pricingData.basePrice = basePrice;
-        if (currency !== undefined) pricingData.currency = currency;
+      // If slug is being updated, check global uniqueness.
+      if (input.slug && input.slug !== event.slug) {
+        const existing = await tx.event.findUnique({
+          where: { slug: input.slug },
+          select: { id: true },
+        });
+        if (existing) {
+          throw new AppError(
+            "Event with this slug already exists",
+            409,
+            ErrorCodes.CONFLICT,
+          );
+        }
+      }
 
-        await tx.eventPricing.update({
-          where: { eventId: id },
-          data: pricingData,
+      // Block currency change if registrations exist, in the same transaction as pricing update.
+      if (currency !== undefined) {
+        const currentCurrency = event.pricing?.currency ?? "TND";
+        if (currency !== currentCurrency) {
+          const registrationCount = await tx.registration.count({
+            where: { eventId: id },
+          });
+          if (registrationCount > 0) {
+            throw new AppError(
+              "Cannot change currency after registrations exist",
+              400,
+              ErrorCodes.VALIDATION_ERROR,
+            );
+          }
+        }
+      }
+
+      let updatedEvent: EventWithPricing = event;
+      if (hasEventData) {
+        updatedEvent = await tx.event.update({
+          where: { id },
+          data: eventData,
+          include: { pricing: true },
         });
       }
 
-      // Re-fetch with updated pricing
+      if (basePrice === undefined && currency === undefined) {
+        return updatedEvent;
+      }
+
+      const pricingData: { basePrice?: number; currency?: string } = {};
+      if (basePrice !== undefined) {
+        pricingData.basePrice = normalizeBasePrice(basePrice);
+      }
+      if (currency !== undefined) {
+        pricingData.currency = currency;
+      }
+
+      await tx.eventPricing.upsert({
+        where: { eventId: id },
+        update: pricingData,
+        create: {
+          eventId: id,
+          basePrice: pricingData.basePrice ?? 0,
+          currency: pricingData.currency ?? "TND",
+        },
+      });
+
       return tx.event.findUniqueOrThrow({
         where: { id },
         include: { pricing: true },
       });
-    });
-  }
-
-  return prisma.event.update({
-    where: { id },
-    data: eventData,
-    include: { pricing: true },
-  });
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+  );
 }
 
 /**
@@ -268,32 +384,69 @@ export async function listEvents(
  * Prevents deletion if event has registrations - use archive instead.
  */
 export async function deleteEvent(id: string): Promise<void> {
-  // Check if event exists and count related data
-  const event = await prisma.event.findUnique({
-    where: { id },
-    include: {
-      _count: {
-        select: {
-          registrations: true,
+  let filesToDelete: {
+    bannerUrl: string | null;
+    certificateTemplateImages: Array<{ templateUrl: string }>;
+  };
+
+  try {
+    filesToDelete = await prisma.$transaction(async (tx) => {
+      const event = await tx.event.findUnique({
+        where: { id },
+        include: {
+          _count: {
+            select: {
+              registrations: true,
+            },
+          },
         },
-      },
-    },
-  });
+      });
 
-  if (!event) {
-    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
+      if (!event) {
+        throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
+      }
+
+      if (event._count.registrations > 0) {
+        throw new AppError(
+          eventHasRegistrationsMessage(event._count.registrations),
+          409,
+          ErrorCodes.EVENT_HAS_REGISTRATIONS,
+        );
+      }
+
+      const certificateTemplateImages =
+        (await tx.certificateTemplate.findMany({
+          where: { eventId: id },
+          select: { templateUrl: true },
+        })) ?? [];
+
+      await tx.emailTemplate.deleteMany({ where: { eventId: id } });
+      await tx.event.delete({ where: { id } });
+
+      return { bannerUrl: event.bannerUrl, certificateTemplateImages };
+    });
+  } catch (err) {
+    if (isPrismaKnownRequestError(err, "P2003")) {
+      const registrationCount = await prisma.registration.count({
+        where: { eventId: id },
+      });
+      if (registrationCount > 0) {
+        throw new AppError(
+          eventHasRegistrationsMessage(registrationCount),
+          409,
+          ErrorCodes.EVENT_HAS_REGISTRATIONS,
+        );
+      }
+    }
+    throw err;
   }
 
-  // Prevent deletion if event has registrations
-  if (event._count.registrations > 0) {
-    throw new AppError(
-      `Cannot delete event with ${event._count.registrations} registration(s). Archive the event instead.`,
-      409,
-      ErrorCodes.EVENT_HAS_REGISTRATIONS,
-    );
-  }
-
-  await prisma.event.delete({ where: { id } });
+  await Promise.all([
+    deleteStoredObjectBestEffort(filesToDelete.bannerUrl, { eventId: id }),
+    ...filesToDelete.certificateTemplateImages.map((template) =>
+      deleteStoredObjectBestEffort(template.templateUrl, { eventId: id }),
+    ),
+  ]);
 }
 
 /**
@@ -312,16 +465,33 @@ export async function incrementRegisteredCountTx(
   tx: TransactionClient,
   id: string,
 ): Promise<void> {
-  const result = await tx.$executeRaw`
+  const rows = await tx.$queryRaw<Array<{ id: string }>>`
     UPDATE "events"
     SET registered_count = registered_count + 1
     WHERE id = ${id}
+    AND status = 'OPEN'
     AND (max_capacity IS NULL OR registered_count < max_capacity)
+    RETURNING id
   `;
 
-  if (result === 0) {
-    throw new AppError("Event is at capacity", 409, ErrorCodes.EVENT_FULL);
+  if (rows.length > 0) return;
+
+  const event = await tx.event.findUnique({
+    where: { id },
+    select: { status: true, maxCapacity: true, registeredCount: true },
+  });
+  if (!event) {
+    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
   }
+  if (event.status !== "OPEN") {
+    throw new AppError(
+      "Event is not accepting public actions",
+      400,
+      ErrorCodes.EVENT_NOT_OPEN,
+    );
+  }
+
+  throw new AppError("Event is at capacity", 409, ErrorCodes.EVENT_FULL);
 }
 
 /**
@@ -332,31 +502,41 @@ export async function uploadEventBanner(
   id: string,
   file: { buffer: Buffer; filename: string; mimetype: string },
 ): Promise<{ bannerUrl: string }> {
-  if (!file.mimetype.startsWith("image/")) {
+  const event = await prisma.event.findUnique({
+    where: { id },
+    select: { id: true, clientId: true, status: true, bannerUrl: true },
+  });
+  if (!event) {
+    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
+  }
+  assertEventWritable(event);
+
+  const detectedType = await fileTypeFromBuffer(file.buffer);
+  if (!detectedType?.mime.startsWith("image/")) {
     throw new AppError(
-      "Invalid file type. Only images are allowed.",
+      "Invalid file content. Only real images are allowed.",
       400,
       ErrorCodes.INVALID_FILE_TYPE,
     );
   }
 
-  const event = await prisma.event.findUnique({
-    where: { id },
-    select: { id: true, clientId: true },
-  });
-  if (!event) {
-    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
-  }
-
   const compressed = await compressImage(file.buffer);
   const key = `${id}/banner/${crypto.randomUUID()}.webp`;
-  const bannerUrl = await getStorageProvider().upload(
+  const storage = getStorageProvider();
+  const bannerUrl = await storage.uploadPublic(
     compressed.buffer,
     key,
     "image/webp",
   );
 
-  await prisma.event.update({ where: { id }, data: { bannerUrl } });
+  try {
+    await prisma.event.update({ where: { id }, data: { bannerUrl } });
+  } catch (err) {
+    await deleteStoredObjectBestEffort(bannerUrl, { eventId: id });
+    throw err;
+  }
+
+  await deleteStoredObjectBestEffort(event.bannerUrl, { eventId: id });
 
   return { bannerUrl };
 }
@@ -368,9 +548,27 @@ export async function decrementRegisteredCountTx(
   tx: TransactionClient,
   id: string,
 ): Promise<void> {
-  await tx.$executeRaw`
+  const rows = await tx.$queryRaw<Array<{ id: string }>>`
     UPDATE "events"
-    SET registered_count = GREATEST(0, registered_count - 1)
+    SET registered_count = registered_count - 1
     WHERE id = ${id}
+    AND registered_count > 0
+    RETURNING id
   `;
+
+  if (rows.length > 0) return;
+
+  const event = await tx.event.findUnique({
+    where: { id },
+    select: { registeredCount: true },
+  });
+  if (!event) {
+    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
+  }
+
+  throw new AppError(
+    "Event registered count is already zero",
+    400,
+    ErrorCodes.VALIDATION_ERROR,
+  );
 }

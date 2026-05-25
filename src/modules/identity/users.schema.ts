@@ -2,24 +2,39 @@ import { z } from "zod";
 import { UserRole } from "@shared/constants/roles.js";
 
 // ============================================================================
+// Shared validators
+// ============================================================================
+
+/**
+ * Strong-password Zod string: ≥12 chars and at least one upper / lower / digit
+ * / special character. Reused by user creation and admin password-override flows
+ * (e.g. committee member direct password set) to keep policy aligned.
+ */
+export const StrongPasswordSchema = z
+  .string()
+  .min(12, "Password must be at least 12 characters")
+  .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
+  .regex(/[a-z]/, "Password must contain at least one lowercase letter")
+  .regex(/[0-9]/, "Password must contain at least one number")
+  .regex(
+    /[^a-zA-Z0-9]/,
+    "Password must contain at least one special character",
+  );
+
+// ============================================================================
 // Request Schemas
 // ============================================================================
 
 export const CreateUserSchema = z.strictObject({
   email: z.string().email(),
-  password: z
-    .string()
-    .min(12, "Password must be at least 12 characters")
-    .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
-    .regex(/[a-z]/, "Password must contain at least one lowercase letter")
-    .regex(/[0-9]/, "Password must contain at least one number")
-    .regex(
-      /[^a-zA-Z0-9]/,
-      "Password must contain at least one special character",
-    ),
+  password: StrongPasswordSchema,
   name: z.string().min(1).max(100),
   role: z
-    .union([z.literal(UserRole.SUPER_ADMIN), z.literal(UserRole.CLIENT_ADMIN)])
+    .union([
+      z.literal(UserRole.SUPER_ADMIN),
+      z.literal(UserRole.CLIENT_ADMIN),
+      z.literal(UserRole.SCIENTIFIC_COMMITTEE),
+    ])
     .default(UserRole.CLIENT_ADMIN),
   clientId: z.string().uuid().optional().nullable(),
 });
@@ -27,7 +42,11 @@ export const CreateUserSchema = z.strictObject({
 export const UpdateUserSchema = z.strictObject({
   name: z.string().min(1).max(100).optional(),
   role: z
-    .union([z.literal(UserRole.SUPER_ADMIN), z.literal(UserRole.CLIENT_ADMIN)])
+    .union([
+      z.literal(UserRole.SUPER_ADMIN),
+      z.literal(UserRole.CLIENT_ADMIN),
+      z.literal(UserRole.SCIENTIFIC_COMMITTEE),
+    ])
     .optional(),
   clientId: z.string().uuid().optional().nullable(),
   active: z.boolean().optional(),
@@ -36,7 +55,7 @@ export const UpdateUserSchema = z.strictObject({
 export const ListUsersQuerySchema = z.strictObject({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
-  role: z.coerce.number().int().min(0).max(1).optional(),
+  role: z.coerce.number().int().min(0).max(2).optional(),
   clientId: z.string().uuid().optional(),
   active: z
     .enum(["true", "false"])

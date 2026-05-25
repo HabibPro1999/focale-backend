@@ -2,6 +2,9 @@ import { prisma } from "@/database/client.js";
 import { evaluateConditions } from "@shared/utils/conditions.js";
 import type { AccessSelection, AccessCondition } from "./access.schema.js";
 import type { EventAccess } from "@/generated/prisma/client.js";
+import type { TxClient } from "@shared/types/prisma.js";
+
+type AccessValidationDbClient = Pick<TxClient, "eventAccess">;
 
 /**
  * Validate access selections for a registration.
@@ -13,20 +16,22 @@ export async function validateAccessSelections(
   selections: AccessSelection[],
   formData: Record<string, unknown>,
   existingAccessIds?: Set<string>,
+  db: AccessValidationDbClient = prisma,
 ): Promise<{ valid: boolean; errors: string[] }> {
   const errors: string[] = [];
 
   const accessIds = selections.map((s) => s.accessId);
+  const accessIdSet = new Set(accessIds);
 
   // Fetch selected items and included items in parallel
   const [accessItems, includedAccesses] = await Promise.all([
     selections.length > 0
-      ? prisma.eventAccess.findMany({
+      ? db.eventAccess.findMany({
           where: { id: { in: accessIds }, eventId },
           include: { requiredAccess: { select: { id: true } } },
         })
       : Promise.resolve([]),
-    prisma.eventAccess.findMany({
+    db.eventAccess.findMany({
       where: { eventId, active: true, includedInBase: true },
       select: { id: true, name: true, conditions: true, conditionLogic: true },
     }),
@@ -45,7 +50,7 @@ export async function validateAccessSelections(
       )
         continue;
     }
-    if (!accessIds.includes(included.id)) {
+    if (!accessIdSet.has(included.id)) {
       errors.push(`"${included.name}" est inclus et doit être sélectionné`);
     }
   }
@@ -61,10 +66,7 @@ export async function validateAccessSelections(
     const access = accessMap.get(selection.accessId);
     if (!access) {
       errors.push(`Access item ${selection.accessId} not found`);
-    } else if (
-      !access.active &&
-      !existingAccessIds?.has(selection.accessId)
-    ) {
+    } else if (!access.active && !existingAccessIds?.has(selection.accessId)) {
       errors.push(`Access item ${selection.accessId} is inactive`);
     }
   }
@@ -115,7 +117,7 @@ export async function validateAccessSelections(
     const access = accessMap.get(selection.accessId)!;
     if (access.requiredAccess && access.requiredAccess.length > 0) {
       for (const req of access.requiredAccess) {
-        if (!accessIds.includes(req.id)) {
+        if (!accessIdSet.has(req.id)) {
           errors.push(
             `${access.name} requires selecting its prerequisite first`,
           );

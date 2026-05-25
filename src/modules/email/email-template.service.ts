@@ -17,6 +17,7 @@ import type {
   Prisma,
   EmailTemplate,
   AutomaticEmailTrigger,
+  AbstractEmailTrigger,
   EmailStatus,
 } from "@/generated/prisma/client.js";
 import type { ListEventEmailLogsQuery } from "./email.schema.js";
@@ -28,6 +29,68 @@ import type { ListEventEmailLogsQuery } from "./email.schema.js";
 type EmailTemplateWithRelations = Prisma.EmailTemplateGetPayload<{
   include: { event: true };
 }>;
+
+type TemplateCategory = "AUTOMATIC" | "MANUAL";
+
+interface TemplateTriggerState {
+  category: TemplateCategory;
+  trigger: AutomaticEmailTrigger | null;
+  abstractTrigger: AbstractEmailTrigger | null;
+}
+
+function validateTemplateTriggerState({
+  category,
+  trigger,
+  abstractTrigger,
+}: TemplateTriggerState): void {
+  if (category === "MANUAL") {
+    if (trigger || abstractTrigger) {
+      throw new AppError(
+        "Manual templates should not have triggers",
+        400,
+        ErrorCodes.BAD_REQUEST,
+      );
+    }
+    return;
+  }
+
+  if (Boolean(trigger) === Boolean(abstractTrigger)) {
+    throw new AppError(
+      "Automatic templates require exactly one trigger",
+      400,
+      ErrorCodes.BAD_REQUEST,
+    );
+  }
+}
+
+async function assertNoActiveTemplateForTrigger(input: {
+  eventId: string | null;
+  trigger: AutomaticEmailTrigger | null;
+  abstractTrigger: AbstractEmailTrigger | null;
+  excludeId?: string;
+}): Promise<void> {
+  if (!input.eventId || (!input.trigger && !input.abstractTrigger)) return;
+
+  const duplicate = await prisma.emailTemplate.findFirst({
+    where: {
+      eventId: input.eventId,
+      ...(input.trigger
+        ? { trigger: input.trigger }
+        : { abstractTrigger: input.abstractTrigger }),
+      isActive: true,
+      ...(input.excludeId ? { id: { not: input.excludeId } } : {}),
+    },
+  });
+
+  if (duplicate) {
+    const trigger = input.trigger ?? input.abstractTrigger;
+    throw new AppError(
+      `An active template for trigger "${trigger}" already exists for this event`,
+      409,
+      ErrorCodes.CONFLICT,
+    );
+  }
+}
 
 // =============================================================================
 // CREATE
@@ -41,6 +104,7 @@ export async function createEmailTemplate(input: {
   content: TiptapDocument;
   category: "AUTOMATIC" | "MANUAL";
   trigger?: AutomaticEmailTrigger | null;
+  abstractTrigger?: AbstractEmailTrigger | null;
   isActive?: boolean;
 }): Promise<EmailTemplate> {
   // Get the event to find clientId
@@ -55,23 +119,17 @@ export async function createEmailTemplate(input: {
       404, ErrorCodes.NOT_FOUND);
   }
 
-  // For automatic templates, check uniqueness per event+trigger
-  if (input.category === "AUTOMATIC" && input.trigger) {
-    const existing = await prisma.emailTemplate.findFirst({
-      where: {
-        eventId: input.eventId,
-        trigger: input.trigger,
-        isActive: true,
-      },
-    });
-    if (existing) {
-      throw new AppError(
-      `An active template for trigger "${input.trigger}" already exists for this event`,
-      409,
-        ErrorCodes.CONFLICT,
-      );
-    }
-  }
+  const triggerState: TemplateTriggerState = {
+    category: input.category,
+    trigger: input.trigger ?? null,
+    abstractTrigger: input.abstractTrigger ?? null,
+  };
+  validateTemplateTriggerState(triggerState);
+  await assertNoActiveTemplateForTrigger({
+    eventId: input.eventId,
+    trigger: triggerState.trigger,
+    abstractTrigger: triggerState.abstractTrigger,
+  });
 
   // Pre-compile the template (Tiptap -> MJML -> HTML + plain text)
   const mjmlContent = renderTemplateToMjml(input.content);
@@ -89,8 +147,9 @@ export async function createEmailTemplate(input: {
       mjmlContent,
       htmlContent,
       plainContent,
-      category: input.category,
-      trigger: input.trigger ?? null,
+      category: triggerState.category,
+      trigger: triggerState.trigger,
+      abstractTrigger: triggerState.abstractTrigger,
       isActive: input.isActive ?? true,
     },
   });
@@ -138,15 +197,26 @@ export async function listEmailTemplates(
     page?: number;
     limit?: number;
     category?: "AUTOMATIC" | "MANUAL";
+    trigger?: AutomaticEmailTrigger;
+    abstractTrigger?: AbstractEmailTrigger;
     search?: string;
   },
 ) {
-  const { page = 1, limit = 20, category, search } = query;
+  const {
+    page = 1,
+    limit = 20,
+    category,
+    trigger,
+    abstractTrigger,
+    search,
+  } = query;
   const skip = getSkip({ page, limit });
 
   const where: Prisma.EmailTemplateWhereInput = {
     eventId,
     ...(category && { category }),
+    ...(trigger && { trigger }),
+    ...(abstractTrigger && { abstractTrigger }),
     ...(search && {
       OR: [
         { name: { contains: search, mode: "insensitive" } },
@@ -196,6 +266,7 @@ export async function updateEmailTemplate(
     content?: TiptapDocument;
     category?: "AUTOMATIC" | "MANUAL";
     trigger?: AutomaticEmailTrigger | null;
+    abstractTrigger?: AbstractEmailTrigger | null;
     isActive?: boolean;
   },
 ): Promise<EmailTemplate> {
@@ -209,48 +280,35 @@ export async function updateEmailTemplate(
     );
   }
 
-  // Determine final category and trigger values
   const finalCategory = input.category ?? existing.category;
   const finalTrigger =
     input.trigger !== undefined ? input.trigger : existing.trigger;
+  const finalAbstractTrigger =
+    input.abstractTrigger !== undefined
+      ? input.abstractTrigger
+      : existing.abstractTrigger;
 
-  // Validate category/trigger consistency
-  if (finalCategory === "AUTOMATIC" && !finalTrigger) {
-    throw new AppError(
-      "Automatic templates require a trigger",
-      400,
-      ErrorCodes.BAD_REQUEST,
-    );
-  }
-  if (finalCategory === "MANUAL" && finalTrigger) {
-    throw new AppError(
-      "Manual templates should not have a trigger",
-      400,
-      ErrorCodes.BAD_REQUEST,
-    );
-  }
+  const triggerState: TemplateTriggerState =
+    finalCategory === "MANUAL"
+      ? { category: finalCategory, trigger: null, abstractTrigger: null }
+      : {
+          category: finalCategory,
+          trigger: finalTrigger,
+          abstractTrigger: finalAbstractTrigger,
+        };
+  validateTemplateTriggerState(triggerState);
 
-  // Check for duplicate trigger if changing to automatic or changing trigger
-  if (
-    finalCategory === "AUTOMATIC" &&
-    finalTrigger &&
-    (finalTrigger !== existing.trigger || finalCategory !== existing.category)
-  ) {
-    const duplicate = await prisma.emailTemplate.findFirst({
-      where: {
-        eventId: existing.eventId,
-        trigger: finalTrigger,
-        isActive: true,
-        id: { not: id }, // Exclude current template
-      },
+  const triggerChanged =
+    triggerState.trigger !== existing.trigger ||
+    triggerState.abstractTrigger !== existing.abstractTrigger ||
+    triggerState.category !== existing.category;
+  if (triggerState.category === "AUTOMATIC" && triggerChanged) {
+    await assertNoActiveTemplateForTrigger({
+      eventId: existing.eventId,
+      trigger: triggerState.trigger,
+      abstractTrigger: triggerState.abstractTrigger,
+      excludeId: id,
     });
-    if (duplicate) {
-      throw new AppError(
-      `An active template for trigger "${finalTrigger}" already exists for this event`,
-      409,
-        ErrorCodes.CONFLICT,
-      );
-    }
   }
 
   // If content is updated, re-compile
@@ -280,7 +338,14 @@ export async function updateEmailTemplate(
       }),
       ...compiledContent,
       ...(input.category !== undefined && { category: input.category }),
-      ...(input.trigger !== undefined && { trigger: input.trigger }),
+      ...(input.category !== undefined ||
+      input.trigger !== undefined ||
+      input.abstractTrigger !== undefined
+        ? {
+            trigger: triggerState.trigger,
+            abstractTrigger: triggerState.abstractTrigger,
+          }
+        : {}),
       ...(input.isActive !== undefined && { isActive: input.isActive }),
     },
   });
@@ -337,6 +402,7 @@ export async function duplicateEmailTemplate(
       plainContent: existing.plainContent,
       category: "MANUAL", // Duplicates are always manual
       trigger: null,
+      abstractTrigger: null,
       isActive: false, // Start as inactive
     },
   });

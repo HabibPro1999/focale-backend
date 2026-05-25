@@ -337,7 +337,7 @@ describe("exportRegistrations", () => {
 
     expect(result.filename).toMatch(/^my-event-registrations-.*\.json$/);
     expect(result.contentType).toBe("application/json");
-    expect(JSON.parse(result.data)).toEqual([]);
+    expect(JSON.parse(String(result.data))).toEqual([]);
   });
 
   it("should export CSV with correct headers and data", async () => {
@@ -373,7 +373,7 @@ describe("exportRegistrations", () => {
     expect(result.filename).toMatch(/^test-event-registrations-.*\.csv$/);
     expect(result.contentType).toBe("text/csv");
 
-    const lines = result.data.split("\n");
+    const lines = String(result.data).split("\n");
     expect(lines[0]).toContain("ID");
     expect(lines[0]).toContain("Email");
     expect(lines[0]).toContain("company");
@@ -428,7 +428,7 @@ describe("exportRegistrations", () => {
     ] as never);
 
     const result = await exportRegistrations(eventId, { format: "csv" });
-    const header = result.data.split("\n")[0];
+    const header = String(result.data).split("\n")[0];
 
     // Both dynamic keys should appear in the header (sorted alphabetically)
     expect(header).toContain("city");

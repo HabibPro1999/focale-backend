@@ -5,10 +5,15 @@ import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { UserRole } from "@shared/constants/roles.js";
 import { SimpleCache } from "@shared/utils/cache.js";
-import type { User } from "@/generated/prisma/client.js";
+import type { Client, User } from "@/generated/prisma/client.js";
+
+type CachedAuthUser = {
+  user: User;
+  client: Client | null;
+};
 
 // Cache user lookups for 60 seconds to reduce DB hits
-const userCache = new SimpleCache<User>(60);
+const userCache = new SimpleCache<CachedAuthUser>(60);
 
 /**
  * Invalidate user cache entry (call when user is updated/deleted).
@@ -18,10 +23,36 @@ export function invalidateUserCache(userId: string): void {
 }
 
 /**
+ * Invalidate all cached users for a client. Call when the client's `active`
+ * flag flips so subsequent requests reflect the change without waiting for
+ * the per-entry TTL.
+ */
+export async function invalidateUserCacheForClient(
+  clientId: string,
+): Promise<void> {
+  const users = await prisma.user.findMany({
+    where: { clientId },
+    select: { id: true },
+  });
+  for (const { id } of users) {
+    userCache.invalidate(id);
+  }
+}
+
+/**
  * Clear all user cache entries (useful for testing).
  */
 export function clearUserCache(): void {
   userCache.clear();
+}
+
+function assertTenantClientActive(authUser: CachedAuthUser): void {
+  if (authUser.user.role === UserRole.SUPER_ADMIN || !authUser.user.clientId) {
+    return;
+  }
+  if (authUser.client?.active !== true) {
+    throw new AppError("Client is inactive", 403, ErrorCodes.FORBIDDEN);
+  }
 }
 
 /**
@@ -48,22 +79,32 @@ export async function requireAuth(
     const decoded = await verifyToken(token);
 
     // Check cache first
-    let user = userCache.get(decoded.uid);
+    let authUser = userCache.get(decoded.uid);
 
-    if (!user) {
-      // Get user from database
-      user =
-        (await prisma.user.findUnique({
-          where: { id: decoded.uid },
-        })) ?? undefined;
-
-      // Cache the user if found
-      if (user) {
-        userCache.set(decoded.uid, user);
+    if (!authUser) {
+      const dbUser = await prisma.user.findUnique({
+        where: { id: decoded.uid },
+        include: { client: true },
+      });
+      if (dbUser) {
+        authUser = {
+          user: {
+            id: dbUser.id,
+            email: dbUser.email,
+            name: dbUser.name,
+            role: dbUser.role,
+            clientId: dbUser.clientId,
+            active: dbUser.active,
+            createdAt: dbUser.createdAt,
+            updatedAt: dbUser.updatedAt,
+          },
+          client: dbUser.client,
+        };
+        userCache.set(decoded.uid, authUser);
       }
     }
 
-    if (!user) {
+    if (!authUser) {
       throw new AppError(
         "User not found in database",
         401,
@@ -71,7 +112,7 @@ export async function requireAuth(
       );
     }
 
-    if (!user.active) {
+    if (!authUser.user.active) {
       throw new AppError(
         "User account is disabled",
         401,
@@ -79,8 +120,10 @@ export async function requireAuth(
       );
     }
 
-    // Attach user to request
-    request.user = user;
+    assertTenantClientActive(authUser);
+
+    request.user = authUser.user;
+    request.client = authUser.client;
   } catch (error) {
     if (error instanceof AppError) {
       throw error;
@@ -127,6 +170,13 @@ export const requireSuperAdmin = requireRole(UserRole.SUPER_ADMIN);
 export const requireAdmin = requireRole(
   UserRole.SUPER_ADMIN,
   UserRole.CLIENT_ADMIN,
+);
+
+/**
+ * Middleware that requires scientific committee role (role = 2).
+ */
+export const requireScientificCommittee = requireRole(
+  UserRole.SCIENTIFIC_COMMITTEE,
 );
 
 /**

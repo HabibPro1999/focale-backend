@@ -7,6 +7,9 @@ import {
 export { PricingConditionSchema };
 export type { PricingCondition };
 
+const hasUpdateField = (data: Record<string, unknown>) =>
+  Object.values(data).some((value) => value !== undefined);
+
 // ============================================================================
 // Embedded Pricing Rule Schema
 // Rules define conditional base price overrides: if conditions match → use this price
@@ -29,33 +32,41 @@ export const CreateEmbeddedRuleSchema = EmbeddedPricingRuleSchema.omit({
 });
 
 // For updating a single rule
-export const UpdateEmbeddedRuleSchema = z.strictObject({
-  name: z.string().min(1).max(200).optional(),
-  description: z.string().max(1000).optional().nullable(),
-  priority: z.number().int().min(0).optional(),
-  conditions: z.array(PricingConditionSchema).min(1).optional(),
-  conditionLogic: z.enum(["AND", "OR"]).optional(),
-  price: z.number().int().min(0).optional(),
-  active: z.boolean().optional(),
-});
+export const UpdateEmbeddedRuleSchema = z
+  .strictObject({
+    name: z.string().min(1).max(200).optional(),
+    description: z.string().max(1000).optional().nullable(),
+    priority: z.number().int().min(0).optional(),
+    conditions: z.array(PricingConditionSchema).min(1).optional(),
+    conditionLogic: z.enum(["AND", "OR"]).optional(),
+    price: z.number().int().min(0).optional(),
+    active: z.boolean().optional(),
+  })
+  .refine(hasUpdateField, {
+    message: "At least one field must be provided for update",
+  });
 
 // ============================================================================
 // Event Pricing Schemas (Unified: base price + embedded rules)
 // ============================================================================
 
-export const UpdateEventPricingSchema = z.strictObject({
-  basePrice: z.number().int().min(0).optional(),
-  currency: z.string().length(3).optional(),
-  rules: z.array(EmbeddedPricingRuleSchema).max(10).optional(),
-  // Payment Methods
-  onlinePaymentEnabled: z.boolean().optional(),
-  onlinePaymentUrl: z.string().url().optional().nullable(),
-  cashPaymentEnabled: z.boolean().optional(),
-  // Bank Transfer Details
-  bankName: z.string().max(200).optional().nullable(),
-  bankAccountName: z.string().max(200).optional().nullable(),
-  bankAccountNumber: z.string().max(50).optional().nullable(),
-});
+export const UpdateEventPricingSchema = z
+  .strictObject({
+    basePrice: z.number().int().min(0).nullable().optional(),
+    currency: z.string().length(3).optional(),
+    rules: z.array(EmbeddedPricingRuleSchema).max(10).optional(),
+    // Payment Methods
+    onlinePaymentEnabled: z.boolean().optional(),
+    onlinePaymentUrl: z.string().url().optional().nullable(),
+    cashPaymentEnabled: z.boolean().optional(),
+    // Bank Transfer Details
+    bankName: z.string().max(200).optional().nullable(),
+    bankAccountName: z.string().max(200).optional().nullable(),
+    bankAccountNumber: z.string().max(50).optional().nullable(),
+  })
+  .refine(hasUpdateField, {
+    message: "At least one field must be provided for update",
+  });
 
 export const EventIdParamSchema = z.strictObject({
   eventId: z.string().uuid(),

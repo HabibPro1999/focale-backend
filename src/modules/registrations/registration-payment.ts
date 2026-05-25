@@ -4,7 +4,15 @@ import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { logger } from "@shared/utils/logger.js";
 import { auditLog } from "@shared/utils/audit.js";
-import { queueTriggeredEmail } from "@email";
+import {
+  CLIENT_MODULE_GATE_SELECT,
+  assertModuleEnabledForClient,
+} from "@clients";
+import { PaymentMethod } from "@/generated/prisma/enums.js";
+import {
+  assertEventAcceptsPublicActions,
+  assertEventWritable,
+} from "@events";
 import { getStorageProvider } from "@shared/services/storage/index.js";
 import { compressFile } from "@shared/services/storage/compress.js";
 import { fileTypeFromBuffer } from "file-type";
@@ -18,6 +26,11 @@ import {
   getAlreadyCoveredAccessIds,
 } from "@access";
 import type { PriceBreakdown } from "@pricing";
+import {
+  enqueueRealtimeOutboxEvent,
+  enqueueTriggeredEmailOutboxEvent,
+} from "@core/outbox";
+import type { AppEvent } from "@core/events/types.js";
 
 // ============================================================================
 // Payment Status State Machine
@@ -93,13 +106,7 @@ export async function confirmPayment(
   performedBy?: string,
   ipAddress?: string,
 ): Promise<RegistrationWithRelations> {
-  // Capture pre-tx state for email queuing (email runs outside tx)
-  let prevStatus: string | null = null;
-  let eventId: string | null = null;
-  let email: string | null = null;
-  let firstName: string | null = null;
-  let lastName: string | null = null;
-
+  const pending: AppEvent[] = [];
   await prisma.$transaction(async (tx) => {
     const oldRegistration = await tx.registration.findUnique({
       where: { id },
@@ -116,6 +123,13 @@ export async function confirmPayment(
         totalAmount: true,
         accessTypeIds: true,
         priceBreakdown: true,
+        event: {
+          select: {
+            clientId: true,
+            status: true,
+            client: { select: CLIENT_MODULE_GATE_SELECT },
+          },
+        },
       },
     });
 
@@ -126,6 +140,8 @@ export async function confirmPayment(
         ErrorCodes.REGISTRATION_NOT_FOUND,
       );
     }
+    assertEventWritable(oldRegistration.event);
+    assertModuleEnabledForClient(oldRegistration.event.client, "registrations");
 
     // Validate payment status transition
     validatePaymentTransition(
@@ -135,9 +151,20 @@ export async function confirmPayment(
 
     // Warn if paid amount differs from total amount
     const effectivePaidAmount = input.paidAmount ?? oldRegistration.totalAmount;
+    if (effectivePaidAmount > oldRegistration.totalAmount) {
+      throw new AppError(
+        "Paid amount cannot exceed registration total",
+        400,
+        ErrorCodes.BAD_REQUEST,
+      );
+    }
     if (effectivePaidAmount !== oldRegistration.totalAmount) {
       logger.warn(
-        { registrationId: id, paidAmount: effectivePaidAmount, totalAmount: oldRegistration.totalAmount },
+        {
+          registrationId: id,
+          paidAmount: effectivePaidAmount,
+          totalAmount: oldRegistration.totalAmount,
+        },
         "Payment confirmation amount differs from total amount",
       );
     }
@@ -154,7 +181,9 @@ export async function confirmPayment(
           input.paymentReference ?? oldRegistration.paymentReference,
         paymentProofUrl:
           input.paymentProofUrl ?? oldRegistration.paymentProofUrl,
-        ...(newStatus === "PAID" || newStatus === "SPONSORED" || newStatus === "WAIVED"
+        ...(newStatus === "PAID" ||
+        newStatus === "SPONSORED" ||
+        newStatus === "WAIVED"
           ? { paidAt: new Date() }
           : {}),
       },
@@ -194,9 +223,10 @@ export async function confirmPayment(
         if (!wasSettled && isSettled) {
           // When coming from PARTIAL, some items are already covered by a sponsorship
           // and had paidCount incremented at that time — skip them to avoid double-counting.
-          const alreadyCovered = oldRegistration.paymentStatus === "PARTIAL"
-            ? await getAlreadyCoveredAccessIds(id, tx)
-            : new Set<string>();
+          const alreadyCovered =
+            oldRegistration.paymentStatus === "PARTIAL"
+              ? await getAlreadyCoveredAccessIds(id, tx)
+              : new Set<string>();
           const itemsToIncrement = accessItems.filter(
             (item) => !alreadyCovered.has(item.accessId),
           );
@@ -218,28 +248,55 @@ export async function confirmPayment(
       }
     }
 
-    // Capture values for post-tx email
-    prevStatus = oldRegistration.paymentStatus;
-    eventId = oldRegistration.eventId;
-    email = oldRegistration.email;
-    firstName = oldRegistration.firstName;
-    lastName = oldRegistration.lastName;
-  });
+    // Accumulate realtime events (reuses wasSettled/isSettled from above)
+    const clientId = oldRegistration.event?.clientId;
+    if (clientId) {
+      pending.push({
+        type:
+          !wasSettled && isSettled
+            ? "registration.paymentConfirmed"
+            : "registration.updated",
+        clientId,
+        eventId: oldRegistration.eventId,
+        payload: { id, paymentStatus: input.paymentStatus },
+        ts: Date.now(),
+      });
+      if (wasSettled !== isSettled) {
+        const breakdown = oldRegistration.priceBreakdown as PriceBreakdown;
+        const accessIds = breakdown.accessItems?.map((a) => a.accessId) ?? [];
+        pending.push({
+          type: "eventAccess.countsChanged",
+          clientId,
+          eventId: oldRegistration.eventId,
+          payload: { id: oldRegistration.eventId, accessIds },
+          ts: Date.now(),
+        });
+      }
+    }
 
-  // Queue PAYMENT_CONFIRMED email if status changed to PAID
-  if (input.paymentStatus === "PAID" && prevStatus !== "PAID" && eventId) {
-    queueTriggeredEmail("PAYMENT_CONFIRMED", eventId, {
-      id,
-      email: email!,
-      firstName,
-      lastName,
-    }).catch((err) => {
-      logger.error(
-        { err, registrationId: id },
-        "Failed to queue PAYMENT_CONFIRMED email",
+    await Promise.all(pending.map((ev) => enqueueRealtimeOutboxEvent(tx, ev)));
+
+    // Queue PAYMENT_CONFIRMED email if status changed to PAID
+    if (
+      input.paymentStatus === "PAID" &&
+      oldRegistration.paymentStatus !== "PAID"
+    ) {
+      await enqueueTriggeredEmailOutboxEvent(
+        tx,
+        {
+          trigger: "PAYMENT_CONFIRMED",
+          eventId: oldRegistration.eventId,
+          registration: {
+            id,
+            email: oldRegistration.email,
+            firstName: oldRegistration.firstName,
+            lastName: oldRegistration.lastName,
+          },
+        },
+        `email:triggered:PAYMENT_CONFIRMED:${id}`,
       );
-    });
-  }
+    }
+  });
 
   // Fetch and return updated registration with relations
   const registration = await prisma.registration.findUnique({
@@ -263,7 +320,12 @@ export async function confirmPayment(
 // Payment Proof Upload
 // ============================================================================
 
-const ALLOWED_MIME_TYPES = ["image/png", "image/jpeg", "image/webp", "application/pdf"];
+const ALLOWED_MIME_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "application/pdf",
+];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
 export interface PaymentProofResponse {
@@ -332,6 +394,13 @@ export async function uploadPaymentProof(
       lastName: true,
       paymentStatus: true,
       paymentProofUrl: true,
+      event: {
+        select: {
+          status: true,
+          endDate: true,
+          client: { select: CLIENT_MODULE_GATE_SELECT },
+        },
+      },
     },
   });
 
@@ -342,6 +411,8 @@ export async function uploadPaymentProof(
       ErrorCodes.REGISTRATION_NOT_FOUND,
     );
   }
+  assertEventAcceptsPublicActions(registration.event);
+  assertModuleEnabledForClient(registration.event.client, "registrations");
 
   // Validate that transitioning to VERIFYING is allowed from current status
   validatePaymentTransition(registration.paymentStatus, "VERIFYING");
@@ -370,10 +441,10 @@ export async function uploadPaymentProof(
     }
   }
 
-  // Upload compressed file
+  // Upload compressed file privately; access is granted through signed URLs.
   let fileUrl: string;
   try {
-    fileUrl = await storage.upload(
+    fileUrl = await storage.uploadPrivate(
       compressed.buffer,
       key,
       compressed.contentType,
@@ -395,10 +466,21 @@ export async function uploadPaymentProof(
   await prisma.$transaction(async (tx) => {
     const currentReg = await tx.registration.findUnique({
       where: { id: registrationId },
-      select: { paymentStatus: true },
+      select: {
+        paymentStatus: true,
+        event: {
+          select: {
+            status: true,
+            endDate: true,
+            client: { select: CLIENT_MODULE_GATE_SELECT },
+          },
+        },
+      },
     });
     if (!currentReg)
       throw new AppError("Registration not found", 404, ErrorCodes.NOT_FOUND);
+    assertEventAcceptsPublicActions(currentReg.event);
+    assertModuleEnabledForClient(currentReg.event.client, "registrations");
     validatePaymentTransition(currentReg.paymentStatus, "VERIFYING");
 
     await tx.registration.update({
@@ -406,7 +488,7 @@ export async function uploadPaymentProof(
       data: {
         paymentProofUrl: fileUrl,
         paymentStatus: "VERIFYING",
-        paymentMethod: "BANK_TRANSFER",
+        paymentMethod: PaymentMethod.BANK_TRANSFER,
       },
     });
 
@@ -421,18 +503,21 @@ export async function uploadPaymentProof(
       },
       performedBy: "PUBLIC",
     });
-  });
 
-  // Queue email notification to admin
-  await queueTriggeredEmail("PAYMENT_PROOF_SUBMITTED", registration.eventId, {
-    id: registrationId,
-    email: registration.email,
-    firstName: registration.firstName,
-    lastName: registration.lastName,
-  }).catch((err) => {
-    logger.error(
-      { err, registrationId },
-      "Failed to queue PAYMENT_PROOF_SUBMITTED email",
+    // Queue email notification to admin in the same transaction as the proof update.
+    await enqueueTriggeredEmailOutboxEvent(
+      tx,
+      {
+        trigger: "PAYMENT_PROOF_SUBMITTED",
+        eventId: registration.eventId,
+        registration: {
+          id: registrationId,
+          email: registration.email,
+          firstName: registration.firstName,
+          lastName: registration.lastName,
+        },
+      },
+      `email:triggered:PAYMENT_PROOF_SUBMITTED:${registrationId}`,
     );
   });
 
@@ -452,6 +537,10 @@ export async function uploadPaymentProof(
  * Handles both Firebase and R2 URL formats.
  */
 export function extractKeyFromUrl(url: string): string | null {
+  if (!url.includes("://")) {
+    return url || null;
+  }
+
   try {
     const parsed = new URL(url);
     // Firebase: https://storage.googleapis.com/bucket-name/path/to/file
@@ -474,15 +563,42 @@ export function extractKeyFromUrl(url: string): string | null {
 
 export async function selectPaymentMethod(
   registrationId: string,
-  input: { paymentMethod: "CASH" | "LAB_SPONSORSHIP"; labName?: string },
+  input: {
+    paymentMethod:
+      | typeof PaymentMethod.CASH
+      | typeof PaymentMethod.LAB_SPONSORSHIP;
+    labName?: string;
+  },
 ): Promise<void> {
   await prisma.$transaction(async (tx) => {
     const registration = await tx.registration.findUnique({
       where: { id: registrationId },
+      include: {
+        event: {
+          select: {
+            status: true,
+            endDate: true,
+            client: { select: CLIENT_MODULE_GATE_SELECT },
+          },
+        },
+      },
     });
 
     if (!registration) {
       throw new AppError("Registration not found", 404, ErrorCodes.NOT_FOUND);
+    }
+    assertEventAcceptsPublicActions(registration.event);
+    assertModuleEnabledForClient(registration.event.client, "registrations");
+
+    if (
+      input.paymentMethod === PaymentMethod.LAB_SPONSORSHIP &&
+      registration.event.client.enabledModules.includes("sponsorships")
+    ) {
+      throw new AppError(
+        "Lab sponsorship payment method is only available when sponsorships are disabled",
+        400,
+        ErrorCodes.BAD_REQUEST,
+      );
     }
 
     if (registration.paymentStatus !== "PENDING") {
@@ -505,7 +621,7 @@ export async function selectPaymentMethod(
     };
 
     const nextLabName =
-      input.paymentMethod === "LAB_SPONSORSHIP"
+      input.paymentMethod === PaymentMethod.LAB_SPONSORSHIP
         ? (input.labName ?? null)
         : null;
     if (nextLabName !== registration.labName) {

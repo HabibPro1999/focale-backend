@@ -3,8 +3,8 @@
 
 export {
   validateAccessSelections,
-  reserveAccessSpot,
-  releaseAccessSpot,
+  incrementAccessRegisteredCountTx,
+  decrementAccessRegisteredCountTx,
   incrementPaidCount,
   decrementPaidCount,
   handleCapacityReached,

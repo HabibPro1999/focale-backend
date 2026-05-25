@@ -8,21 +8,23 @@ import {
 import {
   createForm,
   getFormById,
+  getActiveRegistrationFormById,
   getFormByEventSlug,
   updateForm,
   listForms,
   deleteForm,
+  updateSponsorshipSettings,
   createDefaultSponsorSchema,
   getSponsorFormByEventSlug,
   getSponsorFormByEventId,
   createSponsorForm,
 } from "./forms.service.js";
-import { validateFormData } from "./form-data-validator.js";
+import { validateFormData, sanitizeFormData } from "./form-data-validator.js";
 
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { faker } from "@faker-js/faker";
-import type { Form } from "@/generated/prisma/client.js";
+import { Prisma, type Form } from "@/generated/prisma/client.js";
 
 // Mock the events module
 vi.mock("@events", () => ({
@@ -110,6 +112,23 @@ describe("Forms Service", () => {
       });
     });
 
+    it("should reject supplied registration schema without steps", async () => {
+      vi.mocked(mockEventExists).mockResolvedValue(true);
+      prismaMock.form.findFirst.mockResolvedValue(null);
+
+      await expect(
+        createForm({
+          eventId,
+          name: "Invalid Form",
+          schema: {} as never,
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.VALIDATION_ERROR,
+      });
+      expect(prismaMock.form.create).not.toHaveBeenCalled();
+    });
+
     it("should create a form with successTitle and successMessage", async () => {
       const mockForm = createMockForm({ eventId });
       const input = {
@@ -184,7 +203,9 @@ describe("Forms Service", () => {
       expect(result?.event.clientId).toBe("client-123");
       expect(prismaMock.form.findUnique).toHaveBeenCalledWith({
         where: { id: formId },
-        include: { event: { select: { clientId: true } } },
+        include: {
+          event: { select: { clientId: true, status: true, endDate: true } },
+        },
       });
     });
 
@@ -194,6 +215,37 @@ describe("Forms Service", () => {
       const result = await getFormById("non-existent");
 
       expect(result).toBeNull();
+    });
+  });
+
+  describe("getActiveRegistrationFormById", () => {
+    it("should return only active registration forms for open events", async () => {
+      const mockForm = {
+        ...createMockForm({ id: formId, type: "REGISTRATION", active: true }),
+        event: { clientId: "client-123", status: "OPEN" as const },
+      };
+      prismaMock.form.findFirst.mockResolvedValue(mockForm as never);
+
+      const result = await getActiveRegistrationFormById(formId);
+
+      expect(result).toEqual(mockForm);
+      expect(prismaMock.form.findFirst).toHaveBeenCalledWith({
+        where: {
+          id: formId,
+          type: "REGISTRATION",
+          active: true,
+          event: { status: "OPEN", endDate: { gte: expect.any(Date) } },
+        },
+        include: {
+          event: { select: { clientId: true, status: true, endDate: true } },
+        },
+      });
+    });
+
+    it("should return null for sponsor, inactive, missing, or closed-event forms", async () => {
+      prismaMock.form.findFirst.mockResolvedValue(null);
+
+      await expect(getActiveRegistrationFormById(formId)).resolves.toBeNull();
     });
   });
 
@@ -239,6 +291,13 @@ describe("Forms Service", () => {
           event: {
             slug: mockEvent.slug,
             status: "OPEN",
+            endDate: { gte: expect.any(Date) },
+            client: {
+              active: true,
+              enabledModules: {
+                has: "registrations",
+              },
+            },
           },
           active: true,
         },
@@ -418,6 +477,87 @@ describe("Forms Service", () => {
 
       // Check that registration count was queried
       expect(prismaMock.registration.count).toHaveBeenCalledWith({
+        where: { formId },
+      });
+    });
+
+    it("should reject registration schema updates without steps", async () => {
+      const mockForm = createMockForm({ id: formId, type: "REGISTRATION" });
+      prismaMock.form.findUnique.mockResolvedValue(mockForm);
+
+      await expect(updateForm(formId, { schema: {} as never })).rejects.toMatchObject(
+        {
+          statusCode: 400,
+          code: ErrorCodes.VALIDATION_ERROR,
+        },
+      );
+      expect(prismaMock.form.update).not.toHaveBeenCalled();
+    });
+
+    it("should check sponsorship mode lock inside a serializable transaction", async () => {
+      const currentSchema = createDefaultSponsorSchema();
+      const nextSchema = {
+        ...currentSchema,
+        sponsorshipSettings: { sponsorshipMode: "LINKED_ACCOUNT" as const },
+      };
+      const mockForm = createMockForm({
+        id: formId,
+        type: "SPONSOR",
+        schema: currentSchema as unknown as Prisma.JsonValue,
+      });
+      const updatedForm = createMockForm({
+        id: formId,
+        type: "SPONSOR",
+        schema: nextSchema as unknown as Prisma.JsonValue,
+      });
+
+      prismaMock.form.findUnique.mockResolvedValue(mockForm);
+      prismaMock.sponsorshipBatch.count.mockResolvedValue(0);
+      prismaMock.form.update.mockResolvedValue(updatedForm);
+      prismaMock.$transaction.mockImplementation(async (callback: unknown) =>
+        (callback as (tx: typeof prismaMock) => Promise<Form>)(prismaMock),
+      );
+
+      await expect(
+        updateForm(formId, { schema: nextSchema }),
+      ).resolves.toEqual(updatedForm);
+
+      expect(prismaMock.$transaction).toHaveBeenCalledWith(
+        expect.any(Function),
+        expect.objectContaining({ isolationLevel: "Serializable" }),
+      );
+      expect(prismaMock.sponsorshipBatch.count).toHaveBeenCalledWith({
+        where: { formId },
+      });
+    });
+  });
+
+  describe("updateSponsorshipSettings", () => {
+    it("should check sponsorship mode lock inside a serializable transaction", async () => {
+      const currentSchema = createDefaultSponsorSchema();
+      const mockForm = createMockForm({
+        id: formId,
+        type: "SPONSOR",
+        schema: currentSchema as unknown as Prisma.JsonValue,
+      });
+      const updatedForm = createMockForm({ id: formId, type: "SPONSOR" });
+
+      prismaMock.form.findUnique.mockResolvedValue(mockForm);
+      prismaMock.sponsorshipBatch.count.mockResolvedValue(0);
+      prismaMock.form.update.mockResolvedValue(updatedForm);
+      prismaMock.$transaction.mockImplementation(async (callback: unknown) =>
+        (callback as (tx: typeof prismaMock) => Promise<Form>)(prismaMock),
+      );
+
+      await expect(
+        updateSponsorshipSettings(formId, { sponsorshipMode: "LINKED_ACCOUNT" }),
+      ).resolves.toEqual(updatedForm);
+
+      expect(prismaMock.$transaction).toHaveBeenCalledWith(
+        expect.any(Function),
+        expect.objectContaining({ isolationLevel: "Serializable" }),
+      );
+      expect(prismaMock.sponsorshipBatch.count).toHaveBeenCalledWith({
         where: { formId },
       });
     });
@@ -616,6 +756,13 @@ describe("Forms Service", () => {
           event: {
             slug: mockEvent.slug,
             status: "OPEN",
+            endDate: { gte: expect.any(Date) },
+            client: {
+              active: true,
+              enabledModules: {
+                has: "sponsorships",
+              },
+            },
           },
           active: true,
         },
@@ -808,6 +955,115 @@ describe("Forms Service", () => {
 
       expect(result.valid).toBe(false);
       expect(result.errors.some((e) => e.fieldId === "nickname")).toBe(true);
+    });
+  });
+
+  describe("validateFormData and sanitizeFormData — hardened schemas", () => {
+    it("should return structured validation errors and empty sanitization for malformed schemas", () => {
+      const malformedSchema = {} as never;
+
+      const result = validateFormData(malformedSchema, { name: "Alice" });
+
+      expect(result).toMatchObject({
+        valid: false,
+        errors: [
+          expect.objectContaining({
+            fieldId: "schema",
+            code: "invalid_schema",
+          }),
+        ],
+      });
+      expect(sanitizeFormData(malformedSchema, { name: "Alice" })).toEqual({});
+    });
+
+    it("should reject blank required numbers while accepting zero and optional blanks", () => {
+      const numberSchema = {
+        steps: [
+          {
+            id: "step-1",
+            title: "Step 1",
+            fields: [
+              {
+                id: "age",
+                type: "number" as const,
+                label: "Age",
+                validation: { required: true, minValue: 0 },
+              },
+              {
+                id: "score",
+                type: "number" as const,
+                label: "Score",
+                validation: { minValue: 0, maxValue: 10 },
+              },
+            ],
+          },
+        ],
+      };
+
+      expect(validateFormData(numberSchema, { age: "", score: "" }).valid).toBe(
+        false,
+      );
+      expect(validateFormData(numberSchema, { age: null }).valid).toBe(false);
+      expect(validateFormData(numberSchema, { age: undefined }).valid).toBe(
+        false,
+      );
+      expect(validateFormData(numberSchema, { age: 0, score: "" }).valid).toBe(
+        true,
+      );
+    });
+
+    it("should enforce supported validation key aliases", () => {
+      const schema = {
+        steps: [
+          {
+            id: "step-1",
+            title: "Step 1",
+            fields: [
+              {
+                id: "attachment",
+                type: "file" as const,
+                label: "Attachment",
+                validation: { acceptedFileTypes: ["pdf"] },
+              },
+              {
+                id: "choices",
+                type: "checkbox" as const,
+                label: "Choices",
+                options: [
+                  { id: "a", label: "A" },
+                  { id: "b", label: "B" },
+                  { id: "c", label: "C" },
+                ],
+                validation: { minSelections: 2, maxSelections: 2 },
+              },
+              {
+                id: "count",
+                type: "number" as const,
+                label: "Count",
+                validation: { minValue: 1, maxValue: 3 },
+              },
+              {
+                id: "date",
+                type: "date" as const,
+                label: "Date",
+                validation: { minDate: "2026-01-01", maxDate: "2026-12-31" },
+              },
+            ],
+          },
+        ],
+      };
+
+      const result = validateFormData(schema, {
+        attachment: { name: "image.png", size: 10, type: "image/png" },
+        choices: ["a"],
+        count: 4,
+        date: "2027-01-01",
+      });
+
+      expect(result.valid).toBe(false);
+      expect(result.errors.map((error) => error.fieldId)).toEqual(
+        expect.arrayContaining(["attachment", "choices", "count", "date"]),
+      );
     });
   });
 });

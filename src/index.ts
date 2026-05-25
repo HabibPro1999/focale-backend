@@ -2,8 +2,12 @@ import { buildServer } from "@core/server.js";
 import { config } from "@config/app.config.js";
 import { logger } from "@shared/utils/logger.js";
 import { gracefulShutdown } from "@core/shutdown.js";
-import { processEmailQueue } from "@modules/email/index.js";
-import { prisma } from "@/database/client.js";
+import { startRealtimeOutboxPump } from "@core/outbox";
+import {
+  shouldRunWorkers,
+  startWorkerRuntime,
+  waitForDatabase,
+} from "./worker-runtime.js";
 
 // Global error handlers
 process.on("unhandledRejection", (reason, promise) => {
@@ -16,49 +20,22 @@ process.on("uncaughtException", (error) => {
   process.exit(1);
 });
 
-// Retry until the database responds or we exhaust attempts.
-// A fixed sleep is a guess; this actually verifies the connection.
-// Linear backoff: 1s, 2s, 3s... up to maxRetries attempts (default max wait ~55s).
-async function waitForDatabase(
-  maxRetries = 10,
-  baseDelayMs = 1000,
-): Promise<void> {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      await prisma.$queryRaw`SELECT 1`;
-      logger.info(`Database ready (attempt ${attempt})`);
-      return;
-    } catch (error) {
-      if (attempt === maxRetries) {
-        logger.fatal(
-          { error },
-          `Database unreachable after ${maxRetries} attempts`,
-        );
-        throw error;
-      }
-      const delay = baseDelayMs * attempt;
-      logger.warn(
-        `Database not ready (attempt ${attempt}/${maxRetries}), retrying in ${delay}ms...`,
-      );
-      await new Promise((resolve) => setTimeout(resolve, delay));
-    }
-  }
-}
-
 async function main() {
   const server = await buildServer();
+  let workers: ReturnType<typeof startWorkerRuntime> | undefined;
+  let realtimePump: ReturnType<typeof startRealtimeOutboxPump> | undefined;
+  let databaseReady = false;
 
-  let emailQueueInterval: ReturnType<typeof setInterval> | undefined;
-  let currentProcessing: Promise<void> | null = null;
+  const ensureDatabaseReady = async () => {
+    if (databaseReady) return;
+    await waitForDatabase();
+    databaseReady = true;
+  };
 
   // Register hooks and shutdown BEFORE listen (Fastify disallows addHook after listen)
   server.addHook("onClose", async () => {
-    if (emailQueueInterval) clearInterval(emailQueueInterval);
-    if (currentProcessing) {
-      logger.info("Waiting for in-flight email batch to complete...");
-      await currentProcessing;
-    }
-    logger.info("Email queue worker stopped");
+    await realtimePump?.stop();
+    await workers?.stop();
   });
 
   gracefulShutdown(server);
@@ -68,29 +45,20 @@ async function main() {
   await server.listen({ port: config.PORT, host: "0.0.0.0" });
   logger.info(`Server running on port ${config.PORT}`);
 
-  // Verify the database is reachable before starting background workers
-  await waitForDatabase();
+  if (!config.realtime.disabled) {
+    await ensureDatabaseReady();
+    realtimePump = startRealtimeOutboxPump();
+  } else {
+    logger.info("Realtime disabled; realtime outbox pump not started");
+  }
 
-  // Start email queue worker (processes every 15 seconds for faster email delivery)
-  let isProcessingEmails = false;
-  emailQueueInterval = setInterval(() => {
-    if (isProcessingEmails) return;
-    isProcessingEmails = true;
-    currentProcessing = processEmailQueue(50)
-      .then((result) => {
-        if (result.processed > 0) {
-          logger.info({ result }, "Email queue processed");
-        }
-      })
-      .catch((err) => {
-        logger.error({ err }, "Email queue processing failed");
-      })
-      .finally(() => {
-        isProcessingEmails = false;
-        currentProcessing = null;
-      });
-  }, 15_000);
-  logger.info("Email queue worker started (15s interval)");
+  if (shouldRunWorkers()) {
+    // Verify the database is reachable before starting background workers
+    await ensureDatabaseReady();
+    workers = startWorkerRuntime();
+  } else {
+    logger.info("RUN_WORKERS=false; in-process workers disabled");
+  }
 }
 
 main().catch((err) => {

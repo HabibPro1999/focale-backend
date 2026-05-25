@@ -7,6 +7,14 @@ import {
 export { AccessConditionSchema };
 export type { AccessCondition };
 
+const hasUpdateField = (data: Record<string, unknown>) =>
+  Object.values(data).some((value) => value !== undefined);
+
+const hasUniqueValues = (values: string[]) =>
+  new Set(values).size === values.length;
+
+const hasUniqueAccessSelections = (selections: { accessId: string }[]) =>
+  hasUniqueValues(selections.map((selection) => selection.accessId));
 // ============================================================================
 // Enums
 // ============================================================================
@@ -78,28 +86,41 @@ export const CreateEventAccessSchema = z
     { message: "End time must be after start time", path: ["endsAt"] },
   );
 
-export const UpdateEventAccessSchema = z.strictObject({
-  type: AccessTypeSchema.optional(),
-  name: z.string().min(1).max(200).optional(),
-  description: z.string().max(1000).optional().nullable(),
-  location: z.string().max(500).optional().nullable(),
-  startsAt: z.coerce.date().optional().nullable(),
-  endsAt: z.coerce.date().optional().nullable(),
-  price: z.number().int().min(0).optional(),
-  currency: z.string().length(3).optional(),
-  maxCapacity: z.number().int().positive().optional().nullable(),
-  availableFrom: z.coerce.date().optional().nullable(),
-  availableTo: z.coerce.date().optional().nullable(),
-  conditions: z.array(AccessConditionSchema).optional().nullable(),
-  conditionLogic: z.enum(["AND", "OR"]).optional(),
-  requiredAccessIds: z.array(z.string().uuid()).optional(),
-  sortOrder: z.number().int().optional(),
-  active: z.boolean().optional(),
-  groupLabel: z.string().max(100).optional().nullable(),
-  allowCompanion: z.boolean().optional(),
-  includedInBase: z.boolean().optional(),
-  companionPrice: z.number().int().min(0).optional(),
-});
+export const UpdateEventAccessSchema = z
+  .strictObject({
+    type: AccessTypeSchema.optional(),
+    name: z.string().min(1).max(200).optional(),
+    description: z.string().max(1000).optional().nullable(),
+    location: z.string().max(500).optional().nullable(),
+    startsAt: z.coerce.date().optional().nullable(),
+    endsAt: z.coerce.date().optional().nullable(),
+    price: z.number().int().min(0).optional(),
+    currency: z.string().length(3).optional(),
+    maxCapacity: z.number().int().positive().optional().nullable(),
+    availableFrom: z.coerce.date().optional().nullable(),
+    availableTo: z.coerce.date().optional().nullable(),
+    conditions: z.array(AccessConditionSchema).optional().nullable(),
+    conditionLogic: z.enum(["AND", "OR"]).optional(),
+    requiredAccessIds: z.array(z.string().uuid()).optional(),
+    sortOrder: z.number().int().optional(),
+    active: z.boolean().optional(),
+    groupLabel: z.string().max(100).optional().nullable(),
+    allowCompanion: z.boolean().optional(),
+    includedInBase: z.boolean().optional(),
+    companionPrice: z.number().int().min(0).optional(),
+  })
+  .refine(hasUpdateField, {
+    message: "At least one field must be provided for update",
+  })
+  .refine(
+    (data) => {
+      if (data.startsAt && data.endsAt) {
+        return data.endsAt >= data.startsAt;
+      }
+      return true;
+    },
+    { message: "End time must be after start time", path: ["endsAt"] },
+  );
 
 // ============================================================================
 // Query Schemas
@@ -167,14 +188,25 @@ export const GetGroupedAccessBodySchema = z.strictObject({
     .refine((obj) => Object.keys(obj).length <= 100, "Too many fields")
     .optional()
     .default({}),
-  selectedAccessIds: z.array(z.string().uuid()).optional().default([]),
+  selectedAccessIds: z
+    .array(z.string().uuid())
+    .max(100)
+    .refine(hasUniqueValues, "Duplicate access IDs are not allowed")
+    .optional()
+    .default([]),
 });
 
 export const ValidateAccessSelectionsBodySchema = z.strictObject({
   formData: z
     .record(z.string(), z.unknown())
     .refine((obj) => Object.keys(obj).length <= 100, "Too many fields"),
-  selections: z.array(AccessSelectionSchema),
+  selections: z
+    .array(AccessSelectionSchema)
+    .max(100)
+    .refine(
+      hasUniqueAccessSelections,
+      "Duplicate access selections are not allowed",
+    ),
 });
 
 // ============================================================================

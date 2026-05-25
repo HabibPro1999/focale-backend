@@ -1,5 +1,6 @@
 export interface UploadOptions {
   contentDisposition?: string;
+  cacheControl?: string;
 }
 
 export interface DownloadedFile {
@@ -9,13 +10,17 @@ export interface DownloadedFile {
 
 /**
  * Storage provider interface for file uploads.
- * Supports multiple backends (Firebase, R2).
+ * Public uploads return a URL. Private uploads return the storage key.
  */
 export interface StorageProvider {
-  /**
-   * Upload a file and return its public URL.
-   */
-  upload(
+  uploadPublic(
+    buffer: Buffer,
+    key: string,
+    contentType: string,
+    options?: UploadOptions,
+  ): Promise<string>;
+
+  uploadPrivate(
     buffer: Buffer,
     key: string,
     contentType: string,

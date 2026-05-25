@@ -1,6 +1,7 @@
 import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
+import { invalidateUserCacheForClient } from "@shared/middleware/auth.middleware.js";
 import {
   paginate,
   getSkip,
@@ -11,7 +12,10 @@ import type {
   UpdateClientInput,
   ListClientsQuery,
 } from "./clients.schema.js";
-import { MODULE_IDS } from "./clients.schema.js";
+import {
+  DEFAULT_ENABLED_MODULES,
+  normalizeEnabledModules,
+} from "./clients.schema.js";
 import type { Client, Prisma } from "@/generated/prisma/client.js";
 
 /**
@@ -27,7 +31,7 @@ export async function createClient(input: CreateClientInput): Promise<Client> {
       primaryColor: primaryColor ?? null,
       email: email ?? null,
       phone: phone ?? null,
-      enabledModules: enabledModules ?? [...MODULE_IDS],
+      enabledModules: enabledModules ?? [...DEFAULT_ENABLED_MODULES],
     },
   });
 }
@@ -41,35 +45,45 @@ export async function getClientById(id: string): Promise<Client | null> {
 
 /**
  * Update client.
- * Note: enabledModules uses one-way enable logic - modules can be added but never removed.
+ * enabledModules is replacement semantics: omitted means unchanged, [] disables all feature modules.
  */
 export async function updateClient(
   id: string,
   input: UpdateClientInput,
 ): Promise<Client> {
+  if (Object.values(input).every((value) => value === undefined)) {
+    throw new AppError(
+      "At least one field must be provided for update",
+      400,
+      ErrorCodes.VALIDATION_ERROR,
+    );
+  }
+
   // Check if client exists
   const client = await prisma.client.findUnique({ where: { id } });
   if (!client) {
     throw new AppError("Client not found", 404, ErrorCodes.NOT_FOUND);
   }
 
-  // One-way enable logic: merge new modules with existing (union, not replace)
-  let mergedModules: string[] | undefined;
-  if (input.enabledModules) {
-    const existingModules = new Set(client.enabledModules);
-    const newModules = input.enabledModules;
-    mergedModules = [...new Set([...existingModules, ...newModules])];
-  }
+  const { enabledModules, ...restInput } = input;
+  const nextEnabledModules =
+    enabledModules === undefined
+      ? undefined
+      : normalizeEnabledModules(enabledModules);
 
-  const { enabledModules: _removed, ...restInput } = input;
-
-  return prisma.client.update({
+  const updated = await prisma.client.update({
     where: { id },
     data: {
       ...restInput,
-      ...(mergedModules && { enabledModules: mergedModules }),
+      ...(nextEnabledModules !== undefined && {
+        enabledModules: nextEnabledModules,
+      }),
     },
   });
+
+  await invalidateUserCacheForClient(id);
+
+  return updated;
 }
 
 /**

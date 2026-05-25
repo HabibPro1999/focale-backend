@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+const hasUpdateField = (data: Record<string, unknown>) =>
+  Object.values(data).some((value) => value !== undefined);
+
 // ============================================================================
 // Zone Schema
 // ============================================================================
@@ -31,13 +34,17 @@ export const CreateCertificateTemplateSchema = z.strictObject({
   accessId: z.string().uuid().nullable().optional(),
 });
 
-export const UpdateCertificateTemplateSchema = z.strictObject({
-  name: z.string().min(1).max(200).optional(),
-  zones: z.array(CertificateZoneSchema).optional(),
-  applicableRoles: z.array(RegistrationRoleSchema).optional(),
-  accessId: z.string().uuid().nullable().optional(),
-  active: z.boolean().optional(),
-});
+export const UpdateCertificateTemplateSchema = z
+  .strictObject({
+    name: z.string().min(1).max(200).optional(),
+    zones: z.array(CertificateZoneSchema).optional(),
+    applicableRoles: z.array(RegistrationRoleSchema).optional(),
+    accessId: z.string().uuid().nullable().optional(),
+    active: z.boolean().optional(),
+  })
+  .refine(hasUpdateField, {
+    message: "At least one field must be provided for update",
+  });
 
 // ============================================================================
 // Param / Query Schemas

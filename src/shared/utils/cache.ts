@@ -89,14 +89,6 @@ export class SimpleCache<T> {
   }
 
   /**
-   * Get the number of entries in the cache.
-   * Note: May include expired entries that haven't been cleaned up yet.
-   */
-  get size(): number {
-    return this.cache.size;
-  }
-
-  /**
    * Remove all expired entries from the cache.
    */
   private sweep(): void {
@@ -106,12 +98,5 @@ export class SimpleCache<T> {
         this.cache.delete(key);
       }
     }
-  }
-
-  /**
-   * Stop the sweep timer. Call when the cache is no longer needed.
-   */
-  dispose(): void {
-    clearInterval(this.sweepTimer);
   }
 }

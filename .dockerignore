@@ -8,6 +8,7 @@ dist
 eslint.config.*
 coverage
 .vscode
+src/generated
 scripts
 tests
 **/*.test.ts

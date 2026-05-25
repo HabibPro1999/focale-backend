@@ -1,9 +1,11 @@
 import { z } from "zod";
 import {
   requireAuth,
+  requireAdmin,
   canAccessClient,
 } from "@shared/middleware/auth.middleware.js";
-import { getEventById, EventIdParamSchema } from "@events";
+import { assertEventWritable, getEventById, EventIdParamSchema } from "@events";
+import { assertClientModuleEnabled } from "@clients";
 import {
   createForm,
   getFormById,
@@ -32,6 +34,7 @@ import { UserRole } from "@shared/constants/roles.js";
 export async function formsRoutes(app: AppInstance): Promise<void> {
   // All routes require authentication
   app.addHook("onRequest", requireAuth);
+  app.addHook("onRequest", requireAdmin);
 
   // POST /api/forms - Create form
   app.post<{ Body: CreateFormInput }>(
@@ -52,6 +55,8 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
           "Insufficient permissions to create form for this event",
         );
       }
+      assertEventWritable(event);
+      await assertClientModuleEnabled(event.clientId, "registrations");
 
       const form = await createForm(request.body);
       return reply.status(201).send(form);
@@ -67,28 +72,39 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
     async (request, reply) => {
       const query = { ...request.query };
 
-      // For client_admin users, filter by their client's events
       if (request.user!.role === UserRole.CLIENT_ADMIN) {
         if (!request.user!.clientId) {
           throw app.httpErrors.badRequest(
             "User is not associated with any client",
           );
         }
-
-        // If eventId is provided, verify it belongs to this client
-        if (query.eventId) {
-          const event = await getEventById(query.eventId);
-          if (!event || event.clientId !== request.user!.clientId) {
-            throw app.httpErrors.forbidden(
-              "Insufficient permissions to access this event",
-            );
-          }
-        }
-        // If no eventId provided, we require it for client_admin users
-        else {
+        // Client admins must scope by event
+        if (!query.eventId) {
           throw app.httpErrors.badRequest(
             "Event ID is required for client admin users",
           );
+        }
+      } else if (request.user!.role !== UserRole.SUPER_ADMIN) {
+        throw app.httpErrors.forbidden("Insufficient permissions");
+      }
+
+      if (query.eventId) {
+        const event = await getEventById(query.eventId);
+        if (!event) {
+          throw app.httpErrors.notFound("Event not found");
+        }
+        if (!canAccessClient(request.user!, event.clientId)) {
+          throw app.httpErrors.forbidden(
+            "Insufficient permissions to access this event",
+          );
+        }
+        if (query.type === "SPONSOR") {
+          await assertClientModuleEnabled(event.clientId, "sponsorships");
+        } else if (query.type === "REGISTRATION") {
+          await assertClientModuleEnabled(event.clientId, "registrations");
+        } else {
+          await assertClientModuleEnabled(event.clientId, "registrations");
+          await assertClientModuleEnabled(event.clientId, "sponsorships");
         }
       }
 
@@ -114,6 +130,10 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
           "Insufficient permissions to access this form",
         );
       }
+      await assertClientModuleEnabled(
+        form.event.clientId,
+        form.type === "SPONSOR" ? "sponsorships" : "registrations",
+      );
 
       return reply.send(form);
     },
@@ -141,6 +161,7 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
       if (form.type !== "SPONSOR") {
         return reply.send({ locked: false });
       }
+      await assertClientModuleEnabled(form.event.clientId, "sponsorships");
 
       const locked = await isSponsorshipModeLocked(request.params.id);
       return reply.send({ locked });
@@ -168,6 +189,8 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
           "Insufficient permissions to update this form",
         );
       }
+      assertEventWritable(form.event);
+      await assertClientModuleEnabled(form.event.clientId, "sponsorships");
 
       const updatedForm = await updateSponsorshipSettings(
         request.params.id,
@@ -195,6 +218,11 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
           "Insufficient permissions to update this form",
         );
       }
+      assertEventWritable(form.event);
+      await assertClientModuleEnabled(
+        form.event.clientId,
+        form.type === "SPONSOR" ? "sponsorships" : "registrations",
+      );
 
       const updatedForm = await updateForm(request.params.id, request.body);
       return reply.send(updatedForm);
@@ -219,6 +247,11 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
           "Insufficient permissions to delete this form",
         );
       }
+      assertEventWritable(form.event);
+      await assertClientModuleEnabled(
+        form.event.clientId,
+        form.type === "SPONSOR" ? "sponsorships" : "registrations",
+      );
 
       await deleteForm(request.params.id);
       return reply.status(204).send();
@@ -248,6 +281,7 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
           "Insufficient permissions to access this event",
         );
       }
+      await assertClientModuleEnabled(event.clientId, "sponsorships");
 
       const form = await getSponsorFormByEventId(request.params.id);
       if (!form) {
@@ -280,6 +314,8 @@ export async function formsRoutes(app: AppInstance): Promise<void> {
           "Insufficient permissions to create form for this event",
         );
       }
+      assertEventWritable(event);
+      await assertClientModuleEnabled(event.clientId, "sponsorships");
 
       const form = await createSponsorForm(
         request.params.id,

@@ -2,7 +2,17 @@ import {
   requireAuth,
   canAccessClient,
 } from "@shared/middleware/auth.middleware.js";
-import { getEventById } from "@events";
+import {
+  assertEventAcceptsPublicActions,
+  assertEventWritable,
+  getEventById,
+} from "@events";
+import {
+  CLIENT_MODULE_GATE_SELECT,
+  assertClientModuleEnabled,
+  isModuleEnabledForClient,
+} from "@clients";
+import { validateFormData, sanitizeFormData, type FormSchema } from "@forms";
 import {
   getEventPricing,
   updateEventPricing,
@@ -27,6 +37,8 @@ import { z } from "zod";
 import { prisma } from "@/database/client.js";
 import type { AppInstance } from "@shared/types/fastify.js";
 import { publicRateLimits } from "@core/plugins.js";
+import { AppError } from "@shared/errors/app-error.js";
+import { ErrorCodes } from "@shared/errors/error-codes.js";
 
 const FormIdParamSchema = z.strictObject({
   formId: z.string().uuid(),
@@ -61,6 +73,7 @@ export async function pricingRulesRoutes(app: AppInstance): Promise<void> {
           "Insufficient permissions to access this event",
         );
       }
+      await assertClientModuleEnabled(event.clientId, "pricing");
 
       const pricing = await getEventPricing(eventId);
       if (!pricing) {
@@ -92,6 +105,8 @@ export async function pricingRulesRoutes(app: AppInstance): Promise<void> {
           "Insufficient permissions to update this event",
         );
       }
+      assertEventWritable(event);
+      await assertClientModuleEnabled(event.clientId, "pricing");
 
       const pricing = await updateEventPricing(eventId, request.body);
       return reply.send(pricing);
@@ -123,6 +138,8 @@ export async function pricingRulesRoutes(app: AppInstance): Promise<void> {
           "Insufficient permissions to create pricing rules for this event",
         );
       }
+      assertEventWritable(event);
+      await assertClientModuleEnabled(event.clientId, "pricing");
 
       const pricing = await addPricingRule(eventId, request.body);
       return reply.status(201).send(pricing);
@@ -153,6 +170,8 @@ export async function pricingRulesRoutes(app: AppInstance): Promise<void> {
           "Insufficient permissions to update this pricing rule",
         );
       }
+      assertEventWritable(event);
+      await assertClientModuleEnabled(event.clientId, "pricing");
 
       const pricing = await updatePricingRule(eventId, ruleId, request.body);
       return reply.send(pricing);
@@ -180,6 +199,8 @@ export async function pricingRulesRoutes(app: AppInstance): Promise<void> {
           "Insufficient permissions to delete this pricing rule",
         );
       }
+      assertEventWritable(event);
+      await assertClientModuleEnabled(event.clientId, "pricing");
 
       await deletePricingRule(eventId, ruleId);
       return reply.status(204).send();
@@ -203,17 +224,52 @@ export async function pricingPublicRoutes(app: AppInstance): Promise<void> {
       const { formId } = request.params;
       const input = request.body;
 
-      // Get form to find event
+      // Get the active registration form and event gates used for public quotes.
       const form = await prisma.form.findUnique({
         where: { id: formId },
-        select: { eventId: true },
+        select: {
+          eventId: true,
+          schema: true,
+          type: true,
+          active: true,
+          event: {
+            select: {
+              status: true,
+              endDate: true,
+              client: { select: CLIENT_MODULE_GATE_SELECT },
+            },
+          },
+        },
       });
 
-      if (!form) {
+      if (!form || form.type !== "REGISTRATION" || !form.active) {
         throw app.httpErrors.notFound("Form not found");
       }
+      assertEventAcceptsPublicActions(form.event);
+      if (!isModuleEnabledForClient(form.event.client, "pricing")) {
+        throw new AppError(
+          "Pricing module is disabled",
+          403,
+          ErrorCodes.FORBIDDEN,
+        );
+      }
 
-      const breakdown = await calculatePrice(form.eventId, input);
+      const formSchema = form.schema as unknown as FormSchema;
+      const validationResult = validateFormData(formSchema, input.formData);
+      if (!validationResult.valid) {
+        throw new AppError(
+          "Form validation failed",
+          400,
+          ErrorCodes.FORM_VALIDATION_ERROR,
+          { fieldErrors: validationResult.errors },
+        );
+      }
+
+      const sanitizedFormData = sanitizeFormData(formSchema, input.formData);
+      const breakdown = await calculatePrice(form.eventId, {
+        ...input,
+        formData: sanitizedFormData,
+      });
       return reply.send(breakdown);
     },
   );

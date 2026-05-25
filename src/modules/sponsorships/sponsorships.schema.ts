@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+const hasUpdateField = (data: Record<string, unknown>) =>
+  Object.values(data).some((value) => value !== undefined);
+
 // ============================================================================
 // Enums
 // ============================================================================
@@ -109,6 +112,9 @@ export const UpdateSponsorshipSchema = z
     coversBasePrice: z.boolean().optional(),
     coveredAccessIds: z.array(z.string().uuid()).optional(),
     status: z.literal("CANCELLED").optional(),
+  })
+  .refine(hasUpdateField, {
+    message: "At least one field must be provided for update",
   })
   .refine(
     (data) => {

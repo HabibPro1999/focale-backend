@@ -1,23 +1,12 @@
-import { config } from 'dotenv';
-import { resolve } from 'path';
-import { beforeEach, vi } from 'vitest';
+import { beforeEach, vi } from "vitest";
+import { loadUnitEnv } from "./helpers/test-env.js";
 
-// Load test environment variables
-config({ path: resolve(process.cwd(), '.env.test') });
+loadUnitEnv();
 
-// Fallback to .env if .env.test doesn't exist
-config({ path: resolve(process.cwd(), '.env') });
-
-// Validate we're in test mode
-if (process.env.NODE_ENV !== 'test') {
-  console.warn('Warning: NODE_ENV is not set to "test". Setting it now.');
-  process.env.NODE_ENV = 'test';
-}
-
-// Import mocks - these set up vi.mock() calls
-import './mocks/prisma.js';
-import './mocks/firebase.js';
-import './mocks/sendgrid.js';
+// Import mocks after the isolated test environment is in place.
+await import("./mocks/prisma.js");
+await import("./mocks/firebase.js");
+await import("./mocks/sendgrid.js");
 
 // Reset all mocks before each test
 beforeEach(() => {

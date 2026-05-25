@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { AccessSelectionSchema } from "@access";
+import { PaymentMethod as PrismaPaymentMethod } from "@/generated/prisma/enums.js";
+import type { PaymentMethod as PaymentMethodValue } from "@/generated/prisma/enums.js";
 
 // ============================================================================
 // Enums
@@ -23,10 +25,10 @@ export const TransactionTypeSchema = z.enum([
 ]);
 
 export const PaymentMethodSchema = z.enum([
-  "BANK_TRANSFER",
-  "ONLINE",
-  "CASH",
-  "LAB_SPONSORSHIP",
+  PrismaPaymentMethod.BANK_TRANSFER,
+  PrismaPaymentMethod.ONLINE,
+  PrismaPaymentMethod.CASH,
+  PrismaPaymentMethod.LAB_SPONSORSHIP,
 ]);
 
 export const RegistrationRoleSchema = z.enum([
@@ -41,13 +43,19 @@ export const RegistrationRoleSchema = z.enum([
 // Shared Validation
 // ============================================================================
 
-const requireLabName = (data: { paymentMethod?: string; labName?: string }) =>
-  data.paymentMethod !== "LAB_SPONSORSHIP" || Boolean(data.labName);
+const requireLabName = (data: {
+  paymentMethod?: PaymentMethodValue;
+  labName?: string;
+}) =>
+  data.paymentMethod !== PrismaPaymentMethod.LAB_SPONSORSHIP ||
+  Boolean(data.labName);
 
 const labNameRefinement = {
   message: "Lab name is required when payment method is LAB_SPONSORSHIP",
   path: ["labName"],
 };
+
+const PaymentProofLocationSchema = z.string().min(1).max(2048);
 
 // ============================================================================
 // Create Registration Schema (Public - for form submission)
@@ -90,7 +98,10 @@ export const CreateRegistrationSchema = z
 
 export const SelectPaymentMethodSchema = z
   .strictObject({
-    paymentMethod: z.enum(["CASH", "LAB_SPONSORSHIP"]),
+    paymentMethod: z.enum([
+      PrismaPaymentMethod.CASH,
+      PrismaPaymentMethod.LAB_SPONSORSHIP,
+    ]),
     labName: z.string().max(200).optional(),
   })
   .refine(requireLabName, labNameRefinement);
@@ -108,7 +119,7 @@ export const UpdatePaymentSchema = z.strictObject({
   paidAmount: z.number().int().min(0).optional(),
   paymentMethod: PaymentMethodSchema.optional(),
   paymentReference: z.string().max(200).optional(),
-  paymentProofUrl: z.string().url().optional(),
+  paymentProofUrl: PaymentProofLocationSchema.optional(),
 });
 
 export const UpdateRegistrationSchema = z.strictObject({
@@ -116,7 +127,7 @@ export const UpdateRegistrationSchema = z.strictObject({
   paidAmount: z.number().int().min(0).optional(),
   paymentMethod: PaymentMethodSchema.optional(),
   paymentReference: z.string().max(200).optional(),
-  paymentProofUrl: z.string().url().optional(),
+  paymentProofUrl: PaymentProofLocationSchema.optional(),
   note: z.string().max(2000).nullable().optional(),
   role: RegistrationRoleSchema.optional(),
 });
@@ -168,15 +179,13 @@ export const AdminEditRegistrationSchema = z
     paidAmount: z.number().int().min(0).optional(),
     paymentMethod: PaymentMethodSchema.nullable().optional(),
     paymentReference: z.string().max(200).nullable().optional(),
-    paymentProofUrl: z.string().url().nullable().optional(),
+    paymentProofUrl: PaymentProofLocationSchema.nullable().optional(),
     note: z.string().max(2000).nullable().optional(),
     labName: z.string().max(200).nullable().optional(),
   })
-  .refine(
-    (data) =>
-      Object.values(data).some((v) => v !== undefined),
-    { message: "At least one field must be provided for update" },
-  );
+  .refine((data) => Object.values(data).some((v) => v !== undefined), {
+    message: "At least one field must be provided for update",
+  });
 
 // ============================================================================
 // Query Schemas
@@ -216,6 +225,9 @@ export const FormIdParamSchema = z.strictObject({
 
 export const PublicEditRegistrationSchema = z
   .strictObject({
+    // Optimistic edit precondition from GET-for-edit registration.updatedAt
+    expectedUpdatedAt: z.string().datetime(),
+
     // Form data updates (partial - only changed fields)
     formData: z.record(z.string(), z.any()).optional(),
 

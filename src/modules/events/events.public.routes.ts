@@ -1,4 +1,6 @@
 import { prisma } from "@/database/client.js";
+import { publicRateLimits } from "@core/plugins.js";
+import { isModuleEnabledForClient } from "@clients";
 import { EventIdParamSchema } from "./events.schema.js";
 import type { AppInstance } from "@shared/types/fastify.js";
 
@@ -7,11 +9,12 @@ import type { AppInstance } from "@shared/types/fastify.js";
 // ============================================================================
 
 export async function eventsPublicRoutes(app: AppInstance): Promise<void> {
-  // GET /api/public/events/:eventId/payment-config - Get event payment configuration
+  // GET /api/public/events/:id/payment-config - Get event payment configuration
   app.get<{ Params: { id: string } }>(
     "/:id/payment-config",
     {
       schema: { params: EventIdParamSchema },
+      config: { rateLimit: publicRateLimits.accessPublic },
     },
     async (request, reply) => {
       const { id: eventId } = request.params;
@@ -27,6 +30,7 @@ export async function eventsPublicRoutes(app: AppInstance): Promise<void> {
               name: true,
               logo: true,
               primaryColor: true,
+              active: true,
               enabledModules: true,
             },
           },
@@ -39,20 +43,31 @@ export async function eventsPublicRoutes(app: AppInstance): Promise<void> {
 
       // Transform pricing for public consumption
       const pricing = event.pricing;
-      const paymentMethods: string[] = ["BANK_TRANSFER"]; // Bank transfer always available
-      if (pricing?.onlinePaymentEnabled && pricing?.onlinePaymentUrl) {
-        paymentMethods.push("ONLINE");
-      }
-      if (pricing?.cashPaymentEnabled) {
-        paymentMethods.push("CASH");
+      const registrationsEnabled = isModuleEnabledForClient(
+        event.client,
+        "registrations",
+      );
+      const pricingEnabled = isModuleEnabledForClient(event.client, "pricing");
+      const paymentMethods: string[] = [];
+      const exposePaymentConfig =
+        event.status === "OPEN" && registrationsEnabled && pricingEnabled;
+      if (exposePaymentConfig) {
+        paymentMethods.push("BANK_TRANSFER");
+        if (pricing?.onlinePaymentEnabled && pricing.onlinePaymentUrl) {
+          paymentMethods.push("ONLINE");
+        }
+        if (pricing?.cashPaymentEnabled) {
+          paymentMethods.push("CASH");
+        }
       }
 
-      // Check if sponsorships module is enabled for the client
-      const enabledModules = event.client.enabledModules as string[];
-      const sponsorshipsEnabled = enabledModules.includes("sponsorships");
+      const sponsorshipsAvailableForActiveClient = isModuleEnabledForClient(
+        event.client,
+        "sponsorships",
+      );
 
       // Lab sponsorship option available when sponsorships module is disabled
-      if (!sponsorshipsEnabled) {
+      if (exposePaymentConfig && !sponsorshipsAvailableForActiveClient) {
         paymentMethods.push("LAB_SPONSORSHIP");
       }
 
@@ -61,34 +76,41 @@ export async function eventsPublicRoutes(app: AppInstance): Promise<void> {
           id: event.id,
           name: event.name,
           slug: event.slug,
+          description: event.description,
           status: event.status,
           startDate: event.startDate,
           endDate: event.endDate,
           location: event.location,
-          client: event.client,
+          bannerUrl: event.bannerUrl,
+          client: {
+            id: event.client.id,
+            name: event.client.name,
+            logo: event.client.logo,
+            primaryColor: event.client.primaryColor,
+          },
         },
-        sponsorshipsEnabled,
-        pricing: pricing
-          ? {
-              basePrice: pricing.basePrice,
-              currency: pricing.currency,
-              rules: pricing.rules ?? [],
-              paymentMethods,
-              bankDetails:
-                event.status === "OPEN" && pricing.bankName
-                  ? {
-                      bankName: pricing.bankName,
-                      accountName: pricing.bankAccountName ?? "",
-                      iban: pricing.bankAccountNumber ?? "",
-                      bic: "",
-                    }
-                  : null,
-              onlinePaymentUrl:
-                event.status === "OPEN"
+        sponsorshipsEnabled: sponsorshipsAvailableForActiveClient,
+        pricing:
+          pricing && pricingEnabled && registrationsEnabled
+            ? {
+                basePrice: pricing.basePrice,
+                currency: pricing.currency,
+                rules: pricing.rules ?? [],
+                paymentMethods,
+                bankDetails:
+                  exposePaymentConfig && pricing.bankName
+                    ? {
+                        bankName: pricing.bankName,
+                        accountName: pricing.bankAccountName ?? "",
+                        iban: pricing.bankAccountNumber ?? "",
+                        bic: "",
+                      }
+                    : null,
+                onlinePaymentUrl: exposePaymentConfig
                   ? (pricing.onlinePaymentUrl ?? null)
                   : null,
-            }
-          : null,
+              }
+            : null,
       });
     },
   );

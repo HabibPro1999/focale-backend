@@ -34,26 +34,3 @@ export async function auditLog(
     },
   });
 }
-
-/**
- * Calculate changes between old and new objects for the given fields.
- * Uses JSON serialization for deep equality so objects and arrays compare correctly.
- * Returns undefined when no changes are detected.
- */
-export function diffChanges<T extends Record<string, unknown>>(
-  old: T | null,
-  updated: T,
-  fields: (keyof T)[],
-): Record<string, { old: unknown; new: unknown }> | undefined {
-  const changes: Record<string, { old: unknown; new: unknown }> = {};
-
-  for (const field of fields) {
-    const oldVal = old?.[field];
-    const newVal = updated[field];
-    if (JSON.stringify(oldVal) !== JSON.stringify(newVal)) {
-      changes[field as string] = { old: oldVal, new: newVal };
-    }
-  }
-
-  return Object.keys(changes).length > 0 ? changes : undefined;
-}

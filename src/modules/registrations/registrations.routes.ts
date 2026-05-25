@@ -3,7 +3,8 @@ import {
   requireAdmin,
   canAccessClient,
 } from "@shared/middleware/auth.middleware.js";
-import { getEventById } from "@events";
+import { assertEventWritable, getEventById } from "@events";
+import { assertClientModuleEnabled } from "@clients";
 import {
   getRegistrationById,
   updateRegistration,
@@ -131,6 +132,9 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
       if (!canAccessClient(request.user!, event.clientId)) {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
+      assertEventWritable(event);
+      await assertClientModuleEnabled(event.clientId, "registrations");
+      await assertClientModuleEnabled(event.clientId, "pricing");
 
       const registration = await createAdminRegistration(
         eventId,
@@ -165,6 +169,11 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
 
       if (!canAccessClient(request.user!, event.clientId)) {
         throw app.httpErrors.forbidden("Insufficient permissions");
+      }
+      assertEventWritable(event);
+      await assertClientModuleEnabled(event.clientId, "registrations");
+      if (request.body.accessSelections !== undefined) {
+        await assertClientModuleEnabled(event.clientId, "pricing");
       }
 
       const registration = await adminEditRegistration(
@@ -251,6 +260,7 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
       if (!canAccessClient(request.user!, clientId)) {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
+      await assertClientModuleEnabled(clientId, "registrations");
 
       const registration = await updateRegistration(
         id,
@@ -282,6 +292,7 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
       if (!canAccessClient(request.user!, clientId)) {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
+      await assertClientModuleEnabled(clientId, "registrations");
 
       // Pass user ID and IP for audit logging
       const registration = await confirmPayment(
@@ -318,6 +329,7 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
       if (!canAccessClient(request.user!, clientId)) {
         throw app.httpErrors.forbidden("Insufficient permissions");
       }
+      await assertClientModuleEnabled(clientId, "registrations");
 
       await deleteRegistration(id, request.user!.id, force, request.user!.role);
       return reply.status(204).send();
@@ -384,7 +396,7 @@ export async function registrationsRoutes(app: AppInstance): Promise<void> {
     },
   );
 
-  // GET /api/registrations/:id/payment-proof - Redirect to signed URL for payment proof
+  // GET /api/events/registrations/:id/payment-proof - Redirect to signed URL for payment proof
   app.get<{ Params: { id: string } }>(
     "/registrations/:id/payment-proof",
     {

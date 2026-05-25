@@ -10,6 +10,16 @@ import {
   createMockSuperAdmin,
   createMockClientAdmin,
 } from "../../../tests/helpers/factories.js";
+
+function userWithClientActive<T extends { clientId: string | null }>(
+  user: T,
+  active: boolean | null,
+): T & { client: { active: boolean } | null } {
+  return {
+    ...user,
+    client: active === null ? null : { active },
+  };
+}
 import {
   requireAuth,
   requireRole,
@@ -46,6 +56,19 @@ function createMockReply(): FastifyReply {
   return {} as FastifyReply;
 }
 
+async function expectAppError(
+  action: () => Promise<unknown>,
+  expected: Partial<Pick<AppError, "statusCode" | "code" | "message">> = {},
+): Promise<void> {
+  try {
+    await action();
+    throw new Error("Expected AppError");
+  } catch (error) {
+    expect(error).toBeInstanceOf(AppError);
+    expect(error).toMatchObject(expected);
+  }
+}
+
 // ============================================================================
 // requireAuth Tests
 // ============================================================================
@@ -61,18 +84,11 @@ describe("requireAuth", () => {
     it("should throw 401 when authorization header is missing", async () => {
       const request = createMockRequest({ headers: {} });
 
-      await expect(requireAuth(request, mockReply)).rejects.toThrow(AppError);
-
-      try {
-        await requireAuth(request, mockReply);
-      } catch (error) {
-        expect(error).toBeInstanceOf(AppError);
-        expect((error as AppError).statusCode).toBe(401);
-        expect((error as AppError).code).toBe(ErrorCodes.UNAUTHORIZED);
-        expect((error as AppError).message).toBe(
-          "Missing or invalid authorization header",
-        );
-      }
+      await expectAppError(() => requireAuth(request, mockReply), {
+        statusCode: 401,
+        code: ErrorCodes.UNAUTHORIZED,
+        message: "Missing or invalid authorization header",
+      });
     });
 
     it("should throw 401 when authorization header is empty string", async () => {
@@ -86,17 +102,10 @@ describe("requireAuth", () => {
         headers: { authorization: "Basic some-token" },
       });
 
-      await expect(requireAuth(request, mockReply)).rejects.toThrow(AppError);
-
-      try {
-        await requireAuth(request, mockReply);
-      } catch (error) {
-        expect(error).toBeInstanceOf(AppError);
-        expect((error as AppError).statusCode).toBe(401);
-        expect((error as AppError).message).toBe(
-          "Missing or invalid authorization header",
-        );
-      }
+      await expectAppError(() => requireAuth(request, mockReply), {
+        statusCode: 401,
+        message: "Missing or invalid authorization header",
+      });
     });
 
     it("should throw 401 when Bearer is present but token is missing", async () => {
@@ -123,16 +132,11 @@ describe("requireAuth", () => {
         new Error("Invalid token"),
       );
 
-      await expect(requireAuth(request, mockReply)).rejects.toThrow(AppError);
-
-      try {
-        await requireAuth(request, mockReply);
-      } catch (error) {
-        expect(error).toBeInstanceOf(AppError);
-        expect((error as AppError).statusCode).toBe(401);
-        expect((error as AppError).code).toBe(ErrorCodes.INVALID_TOKEN);
-        expect((error as AppError).message).toBe("Invalid or expired token");
-      }
+      await expectAppError(() => requireAuth(request, mockReply), {
+        statusCode: 401,
+        code: ErrorCodes.INVALID_TOKEN,
+        message: "Invalid or expired token",
+      });
     });
 
     it("should throw 401 when token is expired", async () => {
@@ -144,15 +148,10 @@ describe("requireAuth", () => {
       expiredError.name = "auth/id-token-expired";
       firebaseAuthMock.verifyIdToken.mockRejectedValue(expiredError);
 
-      await expect(requireAuth(request, mockReply)).rejects.toThrow(AppError);
-
-      try {
-        await requireAuth(request, mockReply);
-      } catch (error) {
-        expect(error).toBeInstanceOf(AppError);
-        expect((error as AppError).statusCode).toBe(401);
-        expect((error as AppError).code).toBe(ErrorCodes.INVALID_TOKEN);
-      }
+      await expectAppError(() => requireAuth(request, mockReply), {
+        statusCode: 401,
+        code: ErrorCodes.INVALID_TOKEN,
+      });
     });
 
     it("should throw 401 when token is revoked", async () => {
@@ -178,16 +177,11 @@ describe("requireAuth", () => {
       firebaseAuthMock.verifyIdToken.mockResolvedValue(decodedToken);
       prismaMock.user.findUnique.mockResolvedValue(null);
 
-      await expect(requireAuth(request, mockReply)).rejects.toThrow(AppError);
-
-      try {
-        await requireAuth(request, mockReply);
-      } catch (error) {
-        expect(error).toBeInstanceOf(AppError);
-        expect((error as AppError).statusCode).toBe(401);
-        expect((error as AppError).code).toBe(ErrorCodes.UNAUTHORIZED);
-        expect((error as AppError).message).toBe("User not found in database");
-      }
+      await expectAppError(() => requireAuth(request, mockReply), {
+        statusCode: 401,
+        code: ErrorCodes.UNAUTHORIZED,
+        message: "User not found in database",
+      });
     });
 
     it("should throw 401 when user account is disabled", async () => {
@@ -200,16 +194,11 @@ describe("requireAuth", () => {
       firebaseAuthMock.verifyIdToken.mockResolvedValue(decodedToken);
       prismaMock.user.findUnique.mockResolvedValue(inactiveUser);
 
-      await expect(requireAuth(request, mockReply)).rejects.toThrow(AppError);
-
-      try {
-        await requireAuth(request, mockReply);
-      } catch (error) {
-        expect(error).toBeInstanceOf(AppError);
-        expect((error as AppError).statusCode).toBe(401);
-        expect((error as AppError).code).toBe(ErrorCodes.UNAUTHORIZED);
-        expect((error as AppError).message).toBe("User account is disabled");
-      }
+      await expectAppError(() => requireAuth(request, mockReply), {
+        statusCode: 401,
+        code: ErrorCodes.UNAUTHORIZED,
+        message: "User account is disabled",
+      });
     });
   });
 
@@ -222,7 +211,9 @@ describe("requireAuth", () => {
       const mockUser = createMockUser({ id: "user-123", active: true });
 
       firebaseAuthMock.verifyIdToken.mockResolvedValue(decodedToken);
-      prismaMock.user.findUnique.mockResolvedValue(mockUser);
+      prismaMock.user.findUnique.mockResolvedValue(
+        userWithClientActive(mockUser, true),
+      );
 
       await requireAuth(request, mockReply);
 
@@ -232,6 +223,7 @@ describe("requireAuth", () => {
       );
       expect(prismaMock.user.findUnique).toHaveBeenCalledWith({
         where: { id: "user-123" },
+        include: { client: true },
       });
     });
 
@@ -243,7 +235,9 @@ describe("requireAuth", () => {
       const superAdmin = createMockSuperAdmin({ id: "super-admin-123" });
 
       firebaseAuthMock.verifyIdToken.mockResolvedValue(decodedToken);
-      prismaMock.user.findUnique.mockResolvedValue(superAdmin);
+      prismaMock.user.findUnique.mockResolvedValue(
+        userWithClientActive(superAdmin, null),
+      );
 
       await requireAuth(request, mockReply);
 
@@ -262,13 +256,37 @@ describe("requireAuth", () => {
       });
 
       firebaseAuthMock.verifyIdToken.mockResolvedValue(decodedToken);
-      prismaMock.user.findUnique.mockResolvedValue(clientAdmin);
+      prismaMock.user.findUnique.mockResolvedValue(
+        userWithClientActive(clientAdmin, true),
+      );
 
       await requireAuth(request, mockReply);
 
       expect(request.user).toEqual(clientAdmin);
       expect(request.user?.role).toBe(UserRole.CLIENT_ADMIN);
       expect(request.user?.clientId).toBe(clientId);
+    });
+
+    it("should throw 403 when tenant client is inactive", async () => {
+      const clientId = "client-456";
+      const request = createMockRequest({
+        headers: { authorization: "Bearer client-admin-token" },
+      });
+      const decodedToken = createMockDecodedToken({ uid: "client-admin-123" });
+      const clientAdmin = createMockClientAdmin(clientId, {
+        id: "client-admin-123",
+      });
+
+      firebaseAuthMock.verifyIdToken.mockResolvedValue(decodedToken);
+      prismaMock.user.findUnique.mockResolvedValue(
+        userWithClientActive(clientAdmin, false),
+      );
+
+      await expectAppError(() => requireAuth(request, mockReply), {
+        statusCode: 403,
+        code: ErrorCodes.FORBIDDEN,
+        message: "Client is inactive",
+      });
     });
   });
 
@@ -282,13 +300,9 @@ describe("requireAuth", () => {
       firebaseAuthMock.verifyIdToken.mockResolvedValue(decodedToken);
       prismaMock.user.findUnique.mockResolvedValue(null);
 
-      try {
-        await requireAuth(request, mockReply);
-      } catch (error) {
-        // The "User not found in database" AppError should be re-thrown as-is
-        expect(error).toBeInstanceOf(AppError);
-        expect((error as AppError).message).toBe("User not found in database");
-      }
+      await expectAppError(() => requireAuth(request, mockReply), {
+        message: "User not found in database",
+      });
     });
   });
 });
@@ -305,16 +319,11 @@ describe("requireRole", () => {
       const request = createMockRequest({ user: undefined });
       const middleware = requireRole(UserRole.SUPER_ADMIN);
 
-      await expect(middleware(request, mockReply)).rejects.toThrow(AppError);
-
-      try {
-        await middleware(request, mockReply);
-      } catch (error) {
-        expect(error).toBeInstanceOf(AppError);
-        expect((error as AppError).statusCode).toBe(401);
-        expect((error as AppError).code).toBe(ErrorCodes.UNAUTHORIZED);
-        expect((error as AppError).message).toBe("Authentication required");
-      }
+      await expectAppError(() => middleware(request, mockReply), {
+        statusCode: 401,
+        code: ErrorCodes.UNAUTHORIZED,
+        message: "Authentication required",
+      });
     });
   });
 
@@ -326,16 +335,11 @@ describe("requireRole", () => {
       } as Partial<FastifyRequest>);
       const middleware = requireRole(UserRole.SUPER_ADMIN);
 
-      await expect(middleware(request, mockReply)).rejects.toThrow(AppError);
-
-      try {
-        await middleware(request, mockReply);
-      } catch (error) {
-        expect(error).toBeInstanceOf(AppError);
-        expect((error as AppError).statusCode).toBe(403);
-        expect((error as AppError).code).toBe(ErrorCodes.FORBIDDEN);
-        expect((error as AppError).message).toBe("Insufficient permissions");
-      }
+      await expectAppError(() => middleware(request, mockReply), {
+        statusCode: 403,
+        code: ErrorCodes.FORBIDDEN,
+        message: "Insufficient permissions",
+      });
     });
 
     it("should pass when user role matches single allowed role", async () => {
@@ -386,15 +390,9 @@ describe("requireSuperAdmin", () => {
   it("should throw 401 when user is not authenticated", async () => {
     const request = createMockRequest({ user: undefined });
 
-    await expect(requireSuperAdmin(request, mockReply)).rejects.toThrow(
-      AppError,
-    );
-
-    try {
-      await requireSuperAdmin(request, mockReply);
-    } catch (error) {
-      expect((error as AppError).statusCode).toBe(401);
-    }
+    await expectAppError(() => requireSuperAdmin(request, mockReply), {
+      statusCode: 401,
+    });
   });
 
   it("should throw 403 when user is client admin", async () => {
@@ -403,16 +401,10 @@ describe("requireSuperAdmin", () => {
       user: clientAdmin,
     } as Partial<FastifyRequest>);
 
-    await expect(requireSuperAdmin(request, mockReply)).rejects.toThrow(
-      AppError,
-    );
-
-    try {
-      await requireSuperAdmin(request, mockReply);
-    } catch (error) {
-      expect((error as AppError).statusCode).toBe(403);
-      expect((error as AppError).message).toBe("Insufficient permissions");
-    }
+    await expectAppError(() => requireSuperAdmin(request, mockReply), {
+      statusCode: 403,
+      message: "Insufficient permissions",
+    });
   });
 
   it("should pass when user is super admin", async () => {
@@ -437,13 +429,9 @@ describe("requireAdmin", () => {
   it("should throw 401 when user is not authenticated", async () => {
     const request = createMockRequest({ user: undefined });
 
-    await expect(requireAdmin(request, mockReply)).rejects.toThrow(AppError);
-
-    try {
-      await requireAdmin(request, mockReply);
-    } catch (error) {
-      expect((error as AppError).statusCode).toBe(401);
-    }
+    await expectAppError(() => requireAdmin(request, mockReply), {
+      statusCode: 401,
+    });
   });
 
   it("should pass when user is super admin", async () => {
@@ -470,13 +458,9 @@ describe("requireAdmin", () => {
       user: unknownRoleUser,
     } as Partial<FastifyRequest>);
 
-    await expect(requireAdmin(request, mockReply)).rejects.toThrow(AppError);
-
-    try {
-      await requireAdmin(request, mockReply);
-    } catch (error) {
-      expect((error as AppError).statusCode).toBe(403);
-    }
+    await expectAppError(() => requireAdmin(request, mockReply), {
+      statusCode: 403,
+    });
   });
 });
 
@@ -579,7 +563,9 @@ describe("Auth Middleware Integration", () => {
     const superAdmin = createMockSuperAdmin({ id: "super-admin-123" });
 
     firebaseAuthMock.verifyIdToken.mockResolvedValue(decodedToken);
-    prismaMock.user.findUnique.mockResolvedValue(superAdmin);
+    prismaMock.user.findUnique.mockResolvedValue(
+      userWithClientActive(superAdmin, null),
+    );
 
     // First middleware: authenticate
     await requireAuth(request, mockReply);
@@ -602,7 +588,9 @@ describe("Auth Middleware Integration", () => {
     });
 
     firebaseAuthMock.verifyIdToken.mockResolvedValue(decodedToken);
-    prismaMock.user.findUnique.mockResolvedValue(clientAdmin);
+    prismaMock.user.findUnique.mockResolvedValue(
+      userWithClientActive(clientAdmin, true),
+    );
 
     // First middleware: authenticate
     await requireAuth(request, mockReply);
@@ -626,21 +614,16 @@ describe("Auth Middleware Integration", () => {
     });
 
     firebaseAuthMock.verifyIdToken.mockResolvedValue(decodedToken);
-    prismaMock.user.findUnique.mockResolvedValue(clientAdmin);
+    prismaMock.user.findUnique.mockResolvedValue(
+      userWithClientActive(clientAdmin, true),
+    );
 
     // First middleware: authenticate
     await requireAuth(request, mockReply);
     expect(request.user).toBeDefined();
 
-    // Second middleware: check super admin role - should fail
-    await expect(requireSuperAdmin(request, mockReply)).rejects.toThrow(
-      AppError,
-    );
-
-    try {
-      await requireSuperAdmin(request, mockReply);
-    } catch (error) {
-      expect((error as AppError).statusCode).toBe(403);
-    }
+    await expectAppError(() => requireSuperAdmin(request, mockReply), {
+      statusCode: 403,
+    });
   });
 });

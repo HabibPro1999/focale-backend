@@ -2,6 +2,11 @@ import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { auditLog } from "@shared/utils/audit.js";
+import {
+  CLIENT_MODULE_GATE_SELECT,
+  assertModuleEnabledForClient,
+} from "@clients";
+import { assertEventWritable } from "@events";
 import { validateCoveredAccessTimeOverlap } from "./sponsorships.utils.js";
 import type { UpdateSponsorshipInput } from "./sponsorships.schema.js";
 import type { Prisma } from "@/generated/prisma/client.js";
@@ -13,6 +18,8 @@ import {
   getSponsorshipById,
   type SponsorshipWithUsages,
 } from "./sponsorship-queries.js";
+import { enqueueRealtimeOutboxEvent } from "@core/outbox";
+import type { AppEvent } from "@core/events/types.js";
 
 // ============================================================================
 // Update Sponsorship (Admin)
@@ -30,15 +37,27 @@ export async function updateSponsorship(
     return cancelSponsorship(id, performedBy);
   }
 
+  const pending: AppEvent[] = [];
   await prisma.$transaction(async (tx) => {
     const sponsorship = await tx.sponsorship.findUnique({
       where: { id },
-      include: { usages: true },
+      include: {
+        usages: true,
+        event: {
+          select: {
+            clientId: true,
+            status: true,
+            client: { select: CLIENT_MODULE_GATE_SELECT },
+          },
+        },
+      },
     });
 
     if (!sponsorship) {
       throw new AppError("Sponsorship not found", 404, ErrorCodes.NOT_FOUND);
     }
+    assertEventWritable(sponsorship.event);
+    assertModuleEnabledForClient(sponsorship.event.client, "sponsorships");
 
     const coverageChanged =
       input.coversBasePrice !== undefined ||
@@ -218,6 +237,18 @@ export async function updateSponsorship(
         performedBy,
       });
     }
+
+    const clientId = sponsorship.event?.clientId;
+    if (clientId) {
+      pending.push({
+        type: "sponsorship.updated",
+        clientId,
+        eventId: sponsorship.eventId,
+        payload: { id },
+        ts: Date.now(),
+      });
+    }
+    await Promise.all(pending.map((ev) => enqueueRealtimeOutboxEvent(tx, ev)));
   });
 
   return getSponsorshipById(id) as Promise<SponsorshipWithUsages>;
@@ -234,15 +265,27 @@ export async function cancelSponsorship(
   id: string,
   performedBy?: string,
 ): Promise<SponsorshipWithUsages> {
+  const pending: AppEvent[] = [];
   await prisma.$transaction(async (tx) => {
     const sponsorship = await tx.sponsorship.findUnique({
       where: { id },
-      include: { usages: { select: { registrationId: true } } },
+      include: {
+        usages: { select: { registrationId: true } },
+        event: {
+          select: {
+            clientId: true,
+            status: true,
+            client: { select: CLIENT_MODULE_GATE_SELECT },
+          },
+        },
+      },
     });
 
     if (!sponsorship) {
       throw new AppError("Sponsorship not found", 404, ErrorCodes.NOT_FOUND);
     }
+    assertEventWritable(sponsorship.event);
+    assertModuleEnabledForClient(sponsorship.event.client, "sponsorships");
 
     await unlinkSponsorshipFromAllRegistrations(
       tx,
@@ -267,6 +310,27 @@ export async function cancelSponsorship(
         performedBy,
       });
     }
+
+    const clientId = sponsorship.event?.clientId;
+    if (clientId) {
+      pending.push({
+        type: "sponsorship.cancelled",
+        clientId,
+        eventId: sponsorship.eventId,
+        payload: { id },
+        ts: Date.now(),
+      });
+      if (sponsorship.usages.length > 0) {
+        pending.push({
+          type: "eventAccess.countsChanged",
+          clientId,
+          eventId: sponsorship.eventId,
+          payload: { id: sponsorship.eventId, accessIds: [] },
+          ts: Date.now(),
+        });
+      }
+    }
+    await Promise.all(pending.map((ev) => enqueueRealtimeOutboxEvent(tx, ev)));
   });
 
   return getSponsorshipById(id) as Promise<SponsorshipWithUsages>;
@@ -284,15 +348,27 @@ export async function deleteSponsorship(
   id: string,
   performedBy?: string,
 ): Promise<void> {
+  const pending: AppEvent[] = [];
   await prisma.$transaction(async (tx) => {
     const sponsorship = await tx.sponsorship.findUnique({
       where: { id },
-      include: { usages: { select: { registrationId: true } } },
+      include: {
+        usages: { select: { registrationId: true } },
+        event: {
+          select: {
+            clientId: true,
+            status: true,
+            client: { select: CLIENT_MODULE_GATE_SELECT },
+          },
+        },
+      },
     });
 
     if (!sponsorship) {
       throw new AppError("Sponsorship not found", 404, ErrorCodes.NOT_FOUND);
     }
+    assertEventWritable(sponsorship.event);
+    assertModuleEnabledForClient(sponsorship.event.client, "sponsorships");
 
     await unlinkSponsorshipFromAllRegistrations(
       tx,
@@ -316,6 +392,18 @@ export async function deleteSponsorship(
     });
 
     await tx.sponsorship.delete({ where: { id } });
+
+    const clientId = sponsorship.event?.clientId;
+    if (clientId) {
+      pending.push({
+        type: "sponsorship.deleted",
+        clientId,
+        eventId: sponsorship.eventId,
+        payload: { id },
+        ts: Date.now(),
+      });
+    }
+    await Promise.all(pending.map((ev) => enqueueRealtimeOutboxEvent(tx, ev)));
   });
 }
 

@@ -1,9 +1,14 @@
 import { prisma } from "@/database/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
-import { logger } from "@shared/utils/logger.js";
 import { auditLog } from "@shared/utils/audit.js";
 import { calculateSettlement } from "@shared/utils/settlement.js";
+import {
+  CLIENT_MODULE_GATE_SELECT,
+  CLIENT_MODULE_GATE_WITH_NAME_SELECT,
+  assertModuleEnabledForClient,
+} from "@clients";
+import { assertEventWritable } from "@events";
 import {
   calculateApplicableAmount,
   detectCoverageOverlap,
@@ -19,8 +24,13 @@ import {
   handleCapacityReached,
   getAlreadyCoveredAccessIds,
 } from "@access";
-import { queueSponsorshipEmail, buildLinkedSponsorshipContext } from "@email";
+import { buildLinkedSponsorshipContext } from "@email";
+import {
+  enqueueRealtimeOutboxEvent,
+  enqueueSponsorshipEmailOutboxEvent,
+} from "@core/outbox";
 import type { TxClient } from "@shared/types/prisma.js";
+import type { AppEvent } from "@core/events/types.js";
 
 // ============================================================================
 // Types
@@ -91,8 +101,24 @@ async function unlinkSponsorshipFromRegistrationInternal(
 
   const sponsorshipBefore = await tx.sponsorship.findUnique({
     where: { id: sponsorshipId },
-    select: { status: true, coveredAccessIds: true },
+    select: {
+      status: true,
+      coveredAccessIds: true,
+      event: {
+        select: {
+          status: true,
+          client: { select: CLIENT_MODULE_GATE_SELECT },
+        },
+      },
+    },
   });
+  if (sponsorshipBefore) {
+    assertEventWritable(sponsorshipBefore.event);
+    assertModuleEnabledForClient(
+      sponsorshipBefore.event.client,
+      "sponsorships",
+    );
+  }
 
   // Delete the usage
   await tx.sponsorshipUsage.delete({
@@ -116,10 +142,13 @@ async function unlinkSponsorshipFromRegistrationInternal(
   // Applies when the registration was settled or partial — meaning paidCount was
   // incremented for these items when the sponsorship was originally linked.
   const coveredAccessIds = sponsorshipBefore?.coveredAccessIds ?? [];
-  if (["PAID", "SPONSORED", "WAIVED", "PARTIAL"].includes(currentStatus) && coveredAccessIds.length > 0) {
-    const breakdown = registrationBefore?.priceBreakdown as
-      | { accessItems?: Array<{ accessId: string; quantity: number }> }
-      | null;
+  if (
+    ["PAID", "SPONSORED", "WAIVED", "PARTIAL"].includes(currentStatus) &&
+    coveredAccessIds.length > 0
+  ) {
+    const breakdown = registrationBefore?.priceBreakdown as {
+      accessItems?: Array<{ accessId: string; quantity: number }>;
+    } | null;
     const accessItems = breakdown?.accessItems ?? [];
     const itemsToDecrement = accessItems.filter((item) =>
       coveredAccessIds.includes(item.accessId),
@@ -328,11 +357,24 @@ export async function linkSponsorshipToRegistration(
   registrationId: string,
   adminUserId: string,
 ): Promise<LinkSponsorshipResult> {
+  const pending: AppEvent[] = [];
   // All reads and writes happen inside the transaction to prevent stale-data races
   const result = await prisma.$transaction(async (tx) => {
     const sponsorship = await tx.sponsorship.findUnique({
       where: { id: sponsorshipId },
       include: {
+        event: {
+          select: {
+            clientId: true,
+            name: true,
+            slug: true,
+            startDate: true,
+            location: true,
+            status: true,
+            client: { select: CLIENT_MODULE_GATE_WITH_NAME_SELECT },
+          },
+        },
+        batch: { select: { labName: true, contactName: true, email: true } },
         usages: {
           include: {
             sponsorship: {
@@ -350,6 +392,8 @@ export async function linkSponsorshipToRegistration(
     if (!sponsorship) {
       throw new AppError("Sponsorship not found", 404, ErrorCodes.NOT_FOUND);
     }
+    assertEventWritable(sponsorship.event);
+    assertModuleEnabledForClient(sponsorship.event.client, "sponsorships");
 
     if (sponsorship.status === "CANCELLED") {
       throw new AppError(
@@ -364,10 +408,16 @@ export async function linkSponsorshipToRegistration(
       where: { id: registrationId },
       select: {
         id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        phone: true,
         eventId: true,
         totalAmount: true,
         paidAmount: true,
         baseAmount: true,
+        linkBaseUrl: true,
+        editToken: true,
         accessTypeIds: true,
         priceBreakdown: true,
         paymentStatus: true,
@@ -494,11 +544,16 @@ export async function linkSponsorshipToRegistration(
 
     // Cap sponsorship amount at totalAmount to prevent over-sponsoring
     const rawSponsorshipAmount = calculateTotalSponsorshipAmount(allUsages);
-    const newSponsorshipAmount = Math.min(rawSponsorshipAmount, registration.totalAmount);
+    const newSponsorshipAmount = Math.min(
+      rawSponsorshipAmount,
+      registration.totalAmount,
+    );
 
     // Update registration sponsorship amount and paymentMethod
     const isFullySponsored = newSponsorshipAmount >= registration.totalAmount;
-    const wasAlreadySettled = ["PAID", "SPONSORED", "WAIVED"].includes(registration.paymentStatus);
+    const wasAlreadySettled = ["PAID", "SPONSORED", "WAIVED"].includes(
+      registration.paymentStatus,
+    );
     await tx.registration.update({
       where: { id: registrationId },
       data: {
@@ -518,11 +573,22 @@ export async function linkSponsorshipToRegistration(
       if (isFullySponsored) {
         // Fully sponsored: increment paidCount for items not already covered by prior sponsorships.
         // Exclude current sponsorship (its usage was just inserted) to get only previously-covered IDs.
-        const breakdown = registration.priceBreakdown as Record<string, unknown>;
-        const accessItems = (breakdown?.accessItems ?? []) as Array<{ accessId: string; quantity: number }>;
-        const alreadyCovered = registration.paymentStatus === "PARTIAL"
-          ? await getAlreadyCoveredAccessIds(registrationId, tx, sponsorshipId)
-          : new Set<string>();
+        const breakdown = registration.priceBreakdown as Record<
+          string,
+          unknown
+        >;
+        const accessItems = (breakdown?.accessItems ?? []) as Array<{
+          accessId: string;
+          quantity: number;
+        }>;
+        const alreadyCovered =
+          registration.paymentStatus === "PARTIAL"
+            ? await getAlreadyCoveredAccessIds(
+                registrationId,
+                tx,
+                sponsorshipId,
+              )
+            : new Set<string>();
         const itemsToIncrement = accessItems.filter(
           (item) => !alreadyCovered.has(item.accessId),
         );
@@ -536,10 +602,19 @@ export async function linkSponsorshipToRegistration(
             tx,
           );
         }
-      } else if (newSponsorshipAmount > 0 && sponsorship.coveredAccessIds.length > 0) {
+      } else if (
+        newSponsorshipAmount > 0 &&
+        sponsorship.coveredAccessIds.length > 0
+      ) {
         // Partial sponsorship: increment paidCount only for covered access items
-        const breakdown = registration.priceBreakdown as Record<string, unknown>;
-        const accessItems = (breakdown?.accessItems ?? []) as Array<{ accessId: string; quantity: number }>;
+        const breakdown = registration.priceBreakdown as Record<
+          string,
+          unknown
+        >;
+        const accessItems = (breakdown?.accessItems ?? []) as Array<{
+          accessId: string;
+          quantity: number;
+        }>;
         const coveredItems = accessItems.filter((a) =>
           sponsorship.coveredAccessIds.includes(a.accessId),
         );
@@ -576,9 +651,102 @@ export async function linkSponsorshipToRegistration(
       performedBy: adminUserId,
     });
 
+    const clientId = sponsorship.event?.clientId;
+    if (clientId) {
+      pending.push({
+        type: "sponsorship.linked",
+        clientId,
+        eventId: sponsorship.eventId,
+        payload: { id: sponsorshipId, registrationId },
+        ts: Date.now(),
+      });
+      pending.push({
+        type: "registration.updated",
+        clientId,
+        eventId: sponsorship.eventId,
+        payload: { id: registrationId },
+        ts: Date.now(),
+      });
+      if (!wasAlreadySettled) {
+        pending.push({
+          type: "eventAccess.countsChanged",
+          clientId,
+          eventId: sponsorship.eventId,
+          payload: { id: sponsorship.eventId, accessIds: [] },
+          ts: Date.now(),
+        });
+      }
+    }
+    await Promise.all(pending.map((ev) => enqueueRealtimeOutboxEvent(tx, ev)));
+
+    const [pricing, accessItems] = await Promise.all([
+      tx.eventPricing.findUnique({
+        where: { eventId: sponsorship.eventId },
+        select: { basePrice: true, currency: true },
+      }),
+      sponsorship.coveredAccessIds.length > 0
+        ? tx.eventAccess.findMany({
+            where: { id: { in: sponsorship.coveredAccessIds } },
+            select: { id: true, name: true, price: true },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const currency = pricing?.currency ?? "TND";
+    const context = buildLinkedSponsorshipContext({
+      amountApplied: usage.amountApplied,
+      sponsorship: {
+        code: sponsorship.code,
+        beneficiaryName: sponsorship.beneficiaryName,
+        coversBasePrice: sponsorship.coversBasePrice,
+        coveredAccessIds: sponsorship.coveredAccessIds,
+        totalAmount: sponsorship.totalAmount,
+        batch: {
+          labName: sponsorship.batch.labName,
+          contactName: sponsorship.batch.contactName,
+          email: sponsorship.batch.email,
+        },
+      },
+      registration: {
+        id: registration.id,
+        email: registration.email,
+        firstName: registration.firstName,
+        lastName: registration.lastName,
+        phone: registration.phone,
+        totalAmount: registration.totalAmount,
+        baseAmount: registration.baseAmount,
+        sponsorshipAmount: newSponsorshipAmount,
+        linkBaseUrl: registration.linkBaseUrl,
+        editToken: registration.editToken,
+      },
+      event: {
+        name: sponsorship.event.name,
+        slug: sponsorship.event.slug,
+        startDate: sponsorship.event.startDate,
+        location: sponsorship.event.location,
+        client: { name: sponsorship.event.client.name },
+      },
+      pricing: pricing ? { basePrice: pricing.basePrice } : null,
+      accessItems,
+      currency,
+    });
+
+    await enqueueSponsorshipEmailOutboxEvent(
+      tx,
+      {
+        trigger: "SPONSORSHIP_APPLIED",
+        eventId: sponsorship.eventId,
+        input: {
+          recipientEmail: registration.email,
+          recipientName: registration.firstName || sponsorship.beneficiaryName,
+          context,
+          registrationId: registration.id,
+        },
+      },
+      `email:sponsorship:SPONSORSHIP_APPLIED:${registration.id}:${sponsorshipId}`,
+    );
+
     return {
-      sponsorshipEventId: sponsorship.eventId,
-      sponsorshipCoveredAccessIds: sponsorship.coveredAccessIds,
       usage: {
         id: usage.id,
         sponsorshipId: usage.sponsorshipId,
@@ -596,113 +764,6 @@ export async function linkSponsorshipToRegistration(
       warnings,
     };
   });
-
-  // Queue SPONSORSHIP_APPLIED email to the doctor
-  try {
-    // Fetch data needed for email context
-    const [
-      sponsorshipWithBatch,
-      registrationDetails,
-      event,
-      pricing,
-      accessItems,
-    ] = await Promise.all([
-      prisma.sponsorship.findUnique({
-        where: { id: sponsorshipId },
-        include: {
-          batch: { select: { labName: true, contactName: true, email: true } },
-        },
-      }),
-      prisma.registration.findUnique({
-        where: { id: registrationId },
-        select: {
-          id: true,
-          email: true,
-          firstName: true,
-          lastName: true,
-          phone: true,
-          totalAmount: true,
-          baseAmount: true,
-          sponsorshipAmount: true,
-          linkBaseUrl: true,
-          editToken: true,
-        },
-      }),
-      prisma.event.findUnique({
-        where: { id: result.sponsorshipEventId },
-        select: {
-          name: true,
-          slug: true,
-          startDate: true,
-          location: true,
-          client: { select: { name: true } },
-        },
-      }),
-      prisma.eventPricing.findUnique({
-        where: { eventId: result.sponsorshipEventId },
-        select: { basePrice: true, currency: true },
-      }),
-      result.sponsorshipCoveredAccessIds.length > 0
-        ? prisma.eventAccess.findMany({
-            where: { id: { in: result.sponsorshipCoveredAccessIds } },
-            select: { id: true, name: true, price: true },
-          })
-        : Promise.resolve([]),
-    ]);
-
-    if (sponsorshipWithBatch && registrationDetails && event) {
-      const currency = pricing?.currency ?? "TND";
-      const context = buildLinkedSponsorshipContext({
-        amountApplied: result.usage.amountApplied,
-        sponsorship: {
-          code: sponsorshipWithBatch.code,
-          beneficiaryName: sponsorshipWithBatch.beneficiaryName,
-          coversBasePrice: sponsorshipWithBatch.coversBasePrice,
-          coveredAccessIds: sponsorshipWithBatch.coveredAccessIds,
-          totalAmount: sponsorshipWithBatch.totalAmount,
-          batch: {
-            labName: sponsorshipWithBatch.batch.labName,
-            contactName: sponsorshipWithBatch.batch.contactName,
-            email: sponsorshipWithBatch.batch.email,
-          },
-        },
-        registration: registrationDetails,
-        event,
-        pricing: pricing ? { basePrice: pricing.basePrice } : null,
-        accessItems,
-        currency,
-      });
-
-      const appliedEmailQueued = await queueSponsorshipEmail(
-        "SPONSORSHIP_APPLIED",
-        result.sponsorshipEventId,
-        {
-          recipientEmail: registrationDetails.email,
-          recipientName:
-            registrationDetails.firstName ||
-            sponsorshipWithBatch.beneficiaryName,
-          context,
-          registrationId: registrationDetails.id,
-        },
-      );
-      if (!appliedEmailQueued) {
-        logger.warn(
-          {
-            trigger: "SPONSORSHIP_APPLIED",
-            eventId: result.sponsorshipEventId,
-            registrationId,
-          },
-          "No email template configured - doctor will not receive sponsorship notification",
-        );
-      }
-    }
-  } catch (emailError) {
-    // Log error but don't fail the link operation
-    logger.error(
-      { error: emailError, sponsorshipId, registrationId },
-      "Failed to queue SPONSORSHIP_APPLIED email",
-    );
-  }
 
   return {
     usage: result.usage,
@@ -767,11 +828,47 @@ export async function unlinkSponsorshipFromRegistration(
   performedBy?: string,
 ): Promise<void> {
   await prisma.$transaction(async (tx) => {
+    const sponsorship = await tx.sponsorship.findUnique({
+      where: { id: sponsorshipId },
+      select: {
+        eventId: true,
+        event: { select: { clientId: true } },
+      },
+    });
+
     await unlinkSponsorshipFromRegistrationInternal(
       tx,
       sponsorshipId,
       registrationId,
       performedBy,
     );
+
+    const sponsorshipEventId = sponsorship?.eventId ?? null;
+    const clientId = sponsorship?.event?.clientId ?? null;
+    if (clientId && sponsorshipEventId) {
+      await Promise.all([
+        enqueueRealtimeOutboxEvent(tx, {
+          type: "sponsorship.unlinked",
+          clientId,
+          eventId: sponsorshipEventId,
+          payload: { id: sponsorshipId, registrationId },
+          ts: Date.now(),
+        }),
+        enqueueRealtimeOutboxEvent(tx, {
+          type: "registration.updated",
+          clientId,
+          eventId: sponsorshipEventId,
+          payload: { id: registrationId },
+          ts: Date.now(),
+        }),
+        enqueueRealtimeOutboxEvent(tx, {
+          type: "eventAccess.countsChanged",
+          clientId,
+          eventId: sponsorshipEventId,
+          payload: { id: sponsorshipEventId, accessIds: [] },
+          ts: Date.now(),
+        }),
+      ]);
+    }
   });
 }

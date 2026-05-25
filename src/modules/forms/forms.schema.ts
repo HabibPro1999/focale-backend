@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+const hasUpdateField = (data: Record<string, unknown>) =>
+  Object.values(data).some((value) => value !== undefined);
+
 // ============================================================================
 // Field Schemas
 // ============================================================================
@@ -126,9 +129,9 @@ export const FormStepSchema = z.strictObject({
 // ============================================================================
 
 // Registration form schema structure
-// Uses looseObject to allow top-level extensions while enforcing steps/fields structure
+// Uses looseObject to allow top-level extensions while requiring a valid persisted steps array
 export const FormSchemaJsonSchema = z.looseObject({
-  steps: z.array(FormStepSchema).optional(),
+  steps: z.array(FormStepSchema).min(1),
 });
 
 // ============================================================================
@@ -168,6 +171,11 @@ export const SponsorFormSchemaJsonSchema = z.looseObject({
   sponsorshipSettings: SponsorshipSettingsSchema.optional(),
 });
 
+const UpdatableFormSchemaJsonSchema = z.union([
+  FormSchemaJsonSchema,
+  SponsorFormSchemaJsonSchema,
+]);
+
 // ============================================================================
 // Request Schemas
 // ============================================================================
@@ -180,12 +188,16 @@ export const CreateFormSchema = z.strictObject({
   successMessage: z.string().optional().nullable(),
 });
 
-export const UpdateFormSchema = z.strictObject({
-  name: z.string().min(1).max(200).optional(),
-  schema: FormSchemaJsonSchema.optional(),
-  successTitle: z.string().optional().nullable(),
-  successMessage: z.string().optional().nullable(),
-});
+export const UpdateFormSchema = z
+  .strictObject({
+    name: z.string().min(1).max(200).optional(),
+    schema: UpdatableFormSchemaJsonSchema.optional(),
+    successTitle: z.string().optional().nullable(),
+    successMessage: z.string().optional().nullable(),
+  })
+  .refine(hasUpdateField, {
+    message: "At least one field must be provided for update",
+  });
 
 export const ListFormsQuerySchema = z.strictObject({
   page: z.coerce.number().int().min(1).default(1),

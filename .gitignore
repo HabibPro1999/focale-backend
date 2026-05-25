@@ -8,6 +8,9 @@ dist/
 .env
 .env.*
 !.env.example
+!.env.test.example
+!.env.test.db.example
+!.env.test.migration.example
 
 # Logs
 *.log
@@ -23,6 +26,13 @@ Thumbs.db
 *.swp
 *.swo
 
+# Local agent workflow artifacts
+.codex/
+.memory/
+.progress/
+AGENTS.md
+CLAUDE.md
+
 # Test coverage
 coverage/
 
@@ -35,9 +45,9 @@ prisma/*.db
 prisma/*.db-journal
 prisma/seed.ts
 src/generated/
-CLAUDE.md
 docs/
 load-env.fish
 
 # Database backups
 backups/
+Action items.md

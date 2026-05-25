@@ -68,27 +68,31 @@ export class R2StorageProvider implements StorageProvider {
     });
   }
 
-  async upload(
+  async uploadPublic(
     buffer: Buffer,
     key: string,
     contentType: string,
     options?: UploadOptions,
   ): Promise<string> {
-    const command = new PutObjectCommand({
-      Bucket: config.r2.bucket!,
-      Key: key,
-      Body: buffer,
-      ContentType: contentType,
-      CacheControl: "public, max-age=31536000",
-      ...(options?.contentDisposition && {
-        ContentDisposition: options.contentDisposition,
-      }),
+    await this.putObject(buffer, key, contentType, {
+      ...options,
+      cacheControl: options?.cacheControl ?? "public, max-age=31536000",
     });
 
-    await this.client.send(command);
+    return `${config.r2.publicUrl!.replace(/\/$/, "")}/${key}`;
+  }
 
-    // Return public URL
-    return `${config.r2.publicUrl}/${key}`;
+  async uploadPrivate(
+    buffer: Buffer,
+    key: string,
+    contentType: string,
+    options?: UploadOptions,
+  ): Promise<string> {
+    await this.putObject(buffer, key, contentType, {
+      ...options,
+      cacheControl: options?.cacheControl ?? "private, max-age=0",
+    });
+    return key;
   }
 
   async getSignedUrl(key: string, expiresInSeconds = 3600): Promise<string> {
@@ -118,6 +122,26 @@ export class R2StorageProvider implements StorageProvider {
     const command = new DeleteObjectCommand({
       Bucket: config.r2.bucket!,
       Key: key,
+    });
+
+    await this.client.send(command);
+  }
+
+  private async putObject(
+    buffer: Buffer,
+    key: string,
+    contentType: string,
+    options?: UploadOptions,
+  ): Promise<void> {
+    const command = new PutObjectCommand({
+      Bucket: config.r2.bucket!,
+      Key: key,
+      Body: buffer,
+      ContentType: contentType,
+      CacheControl: options?.cacheControl,
+      ...(options?.contentDisposition && {
+        ContentDisposition: options.contentDisposition,
+      }),
     });
 
     await this.client.send(command);

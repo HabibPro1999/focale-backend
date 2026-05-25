@@ -4,6 +4,11 @@ import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { calculateApplicableAmount } from "@shared/utils/sponsorship-math.js";
 import { evaluateConditions } from "@shared/utils/conditions.js";
+import {
+  CLIENT_MODULE_GATE_SELECT,
+  assertModuleEnabledForClient,
+} from "@clients";
+import { assertEventWritable } from "@events";
 import type {
   UpdateEventPricingInput,
   CreateEmbeddedRuleInput,
@@ -13,7 +18,8 @@ import type {
   PriceBreakdown,
   SelectedAccessItem,
 } from "./pricing.schema.js";
-import type { Prisma, EventPricing } from "@/generated/prisma/client.js";
+import { Prisma, type EventPricing } from "@/generated/prisma/client.js";
+import type { TxClient } from "@shared/types/prisma.js";
 
 // ============================================================================
 // Types
@@ -24,6 +30,18 @@ export type EventPricingWithRules = Omit<EventPricing, "rules"> & {
   rules: EmbeddedPricingRule[];
 };
 
+type PricingTxClient = Pick<
+  TxClient,
+  "event" | "eventPricing" | "registration" | "eventAccess" | "sponsorship"
+>;
+
+function parseEventPricing(pricing: EventPricing): EventPricingWithRules {
+  return {
+    ...pricing,
+    rules: (pricing.rules as unknown as EmbeddedPricingRule[]) ?? [],
+  };
+}
+
 // ============================================================================
 // Event Pricing CRUD (Unified with embedded rules)
 // ============================================================================
@@ -33,14 +51,12 @@ export type EventPricingWithRules = Omit<EventPricing, "rules"> & {
  */
 export async function getEventPricing(
   eventId: string,
+  db: Pick<TxClient, "eventPricing"> = prisma,
 ): Promise<EventPricingWithRules | null> {
-  const pricing = await prisma.eventPricing.findUnique({ where: { eventId } });
+  const pricing = await db.eventPricing.findUnique({ where: { eventId } });
   if (!pricing) return null;
 
-  return {
-    ...pricing,
-    rules: (pricing.rules as unknown as EmbeddedPricingRule[]) ?? [],
-  };
+  return parseEventPricing(pricing);
 }
 
 /**
@@ -50,19 +66,56 @@ export async function updateEventPricing(
   eventId: string,
   input: UpdateEventPricingInput,
 ): Promise<EventPricingWithRules> {
-  const pricing = await prisma.eventPricing.findUnique({ where: { eventId } });
-  if (!pricing) {
-    throw new AppError(
-      "Event pricing not found",
-      404,
-      ErrorCodes.PRICING_NOT_FOUND,
-    );
+  return prisma.$transaction((tx) => updateEventPricingTx(tx, eventId, input), {
+    isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+  });
+}
+
+async function updateEventPricingTx(
+  tx: PricingTxClient,
+  eventId: string,
+  input: UpdateEventPricingInput,
+): Promise<EventPricingWithRules> {
+  const event = await tx.event.findUnique({
+    where: { id: eventId },
+    select: {
+      status: true,
+      client: { select: CLIENT_MODULE_GATE_SELECT },
+      pricing: { select: { currency: true } },
+    },
+  });
+  if (!event) {
+    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
   }
+  assertEventWritable(event);
+  assertModuleEnabledForClient(event.client, "pricing");
 
   const updateData: Prisma.EventPricingUpdateInput = {};
+  const createData: Prisma.EventPricingCreateInput = {
+    event: { connect: { id: eventId } },
+    basePrice: input.basePrice ?? 0,
+    currency: input.currency ?? "TND",
+  };
 
-  if (input.basePrice !== undefined) updateData.basePrice = input.basePrice;
-  if (input.currency !== undefined) updateData.currency = input.currency;
+  if (input.basePrice !== undefined) {
+    updateData.basePrice = input.basePrice ?? 0;
+  }
+  if (input.currency !== undefined) {
+    const currentCurrency = event.pricing?.currency ?? "TND";
+    if (input.currency !== currentCurrency) {
+      const registrationCount = await tx.registration.count({
+        where: { eventId },
+      });
+      if (registrationCount > 0) {
+        throw new AppError(
+          "Cannot change currency after registrations exist",
+          400,
+          ErrorCodes.VALIDATION_ERROR,
+        );
+      }
+    }
+    updateData.currency = input.currency;
+  }
   if (input.rules !== undefined) {
     // Ensure all rules have IDs (in case new ones are added)
     const rulesWithIds = input.rules.map((rule) => ({
@@ -70,30 +123,42 @@ export async function updateEventPricing(
       id: rule.id ?? randomUUID(),
     }));
     updateData.rules = rulesWithIds as Prisma.InputJsonValue;
+    createData.rules = rulesWithIds as Prisma.InputJsonValue;
   }
 
   // Payment Methods
-  if (input.onlinePaymentEnabled !== undefined)
+  if (input.onlinePaymentEnabled !== undefined) {
     updateData.onlinePaymentEnabled = input.onlinePaymentEnabled;
-  if (input.onlinePaymentUrl !== undefined)
+    createData.onlinePaymentEnabled = input.onlinePaymentEnabled;
+  }
+  if (input.onlinePaymentUrl !== undefined) {
     updateData.onlinePaymentUrl = input.onlinePaymentUrl;
-  if (input.cashPaymentEnabled !== undefined)
+    createData.onlinePaymentUrl = input.onlinePaymentUrl;
+  }
+  if (input.cashPaymentEnabled !== undefined) {
     updateData.cashPaymentEnabled = input.cashPaymentEnabled;
-  if (input.bankName !== undefined) updateData.bankName = input.bankName;
-  if (input.bankAccountName !== undefined)
+    createData.cashPaymentEnabled = input.cashPaymentEnabled;
+  }
+  if (input.bankName !== undefined) {
+    updateData.bankName = input.bankName;
+    createData.bankName = input.bankName;
+  }
+  if (input.bankAccountName !== undefined) {
     updateData.bankAccountName = input.bankAccountName;
-  if (input.bankAccountNumber !== undefined)
+    createData.bankAccountName = input.bankAccountName;
+  }
+  if (input.bankAccountNumber !== undefined) {
     updateData.bankAccountNumber = input.bankAccountNumber;
+    createData.bankAccountNumber = input.bankAccountNumber;
+  }
 
-  const updated = await prisma.eventPricing.update({
+  const updated = await tx.eventPricing.upsert({
     where: { eventId },
-    data: updateData,
+    create: createData,
+    update: updateData,
   });
 
-  return {
-    ...updated,
-    rules: (updated.rules as unknown as EmbeddedPricingRule[]) ?? [],
-  };
+  return parseEventPricing(updated);
 }
 
 // ============================================================================
@@ -107,26 +172,18 @@ export async function addPricingRule(
   eventId: string,
   rule: CreateEmbeddedRuleInput,
 ): Promise<EventPricingWithRules> {
-  const pricing = await getEventPricing(eventId);
-  if (!pricing) {
-    throw new AppError(
-      "Event pricing not found",
-      404,
-      ErrorCodes.PRICING_NOT_FOUND,
-    );
-  }
+  return mutatePricingRules(eventId, (rules) => {
+    const newRule: EmbeddedPricingRule = {
+      ...rule,
+      id: randomUUID(),
+      description: rule.description ?? null,
+      priority: rule.priority ?? 0,
+      conditionLogic: rule.conditionLogic ?? "AND",
+      active: rule.active ?? true,
+    };
 
-  const newRule: EmbeddedPricingRule = {
-    ...rule,
-    id: randomUUID(),
-    description: rule.description ?? null,
-    priority: rule.priority ?? 0,
-    conditionLogic: rule.conditionLogic ?? "AND",
-    active: rule.active ?? true,
-  };
-
-  const updatedRules = [...pricing.rules, newRule];
-  return updateEventPricing(eventId, { rules: updatedRules });
+    return [...rules, newRule];
+  });
 }
 
 /**
@@ -137,24 +194,16 @@ export async function updatePricingRule(
   ruleId: string,
   updates: UpdateEmbeddedRuleInput,
 ): Promise<EventPricingWithRules> {
-  const pricing = await getEventPricing(eventId);
-  if (!pricing) {
-    throw new AppError(
-      "Event pricing not found",
-      404,
-      ErrorCodes.PRICING_NOT_FOUND,
-    );
-  }
+  return mutatePricingRules(eventId, (rules) => {
+    const ruleIndex = rules.findIndex((r) => r.id === ruleId);
+    if (ruleIndex === -1) {
+      throw new AppError("Pricing rule not found", 404, ErrorCodes.NOT_FOUND);
+    }
 
-  const ruleIndex = pricing.rules.findIndex((r) => r.id === ruleId);
-  if (ruleIndex === -1) {
-    throw new AppError("Pricing rule not found", 404, ErrorCodes.NOT_FOUND);
-  }
-
-  const updatedRules = [...pricing.rules];
-  updatedRules[ruleIndex] = { ...updatedRules[ruleIndex], ...updates };
-
-  return updateEventPricing(eventId, { rules: updatedRules });
+    const updatedRules = [...rules];
+    updatedRules[ruleIndex] = { ...updatedRules[ruleIndex], ...updates };
+    return updatedRules;
+  });
 }
 
 /**
@@ -164,22 +213,37 @@ export async function deletePricingRule(
   eventId: string,
   ruleId: string,
 ): Promise<EventPricingWithRules> {
-  const pricing = await getEventPricing(eventId);
-  if (!pricing) {
-    throw new AppError(
-      "Event pricing not found",
-      404,
-      ErrorCodes.PRICING_NOT_FOUND,
-    );
-  }
+  return mutatePricingRules(eventId, (rules) => {
+    const ruleExists = rules.some((r) => r.id === ruleId);
+    if (!ruleExists) {
+      throw new AppError("Pricing rule not found", 404, ErrorCodes.NOT_FOUND);
+    }
 
-  const ruleExists = pricing.rules.some((r) => r.id === ruleId);
-  if (!ruleExists) {
-    throw new AppError("Pricing rule not found", 404, ErrorCodes.NOT_FOUND);
-  }
+    return rules.filter((r) => r.id !== ruleId);
+  });
+}
 
-  const updatedRules = pricing.rules.filter((r) => r.id !== ruleId);
-  return updateEventPricing(eventId, { rules: updatedRules });
+async function mutatePricingRules(
+  eventId: string,
+  mutate: (rules: EmbeddedPricingRule[]) => EmbeddedPricingRule[],
+): Promise<EventPricingWithRules> {
+  return prisma.$transaction(
+    async (tx) => {
+      const pricing = await getEventPricing(eventId, tx);
+      if (!pricing) {
+        throw new AppError(
+          "Event pricing not found",
+          404,
+          ErrorCodes.PRICING_NOT_FOUND,
+        );
+      }
+
+      return updateEventPricingTx(tx, eventId, {
+        rules: mutate(pricing.rules),
+      });
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+  );
 }
 
 // ============================================================================
@@ -198,18 +262,28 @@ export async function deletePricingRule(
 export async function calculatePrice(
   eventId: string,
   input: CalculatePriceRequest,
+  db: PricingTxClient = prisma,
 ): Promise<PriceBreakdown> {
   const { formData, selectedAccessItems, sponsorshipCodes } = input;
 
-  // Get event pricing configuration with embedded rules
-  const pricing = await getEventPricing(eventId);
-  if (!pricing) {
-    throw new AppError(
-      "Event pricing not found",
-      404,
-      ErrorCodes.PRICING_NOT_FOUND,
-    );
+  const event = await db.event.findUnique({
+    where: { id: eventId },
+    select: {
+      client: { select: CLIENT_MODULE_GATE_SELECT },
+    },
+  });
+  if (!event) {
+    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
   }
+  assertModuleEnabledForClient(event.client, "pricing");
+
+  // Get event pricing configuration with embedded rules
+  const pricing =
+    (await getEventPricing(eventId, db)) ??
+    (await updateEventPricingTx(db, eventId, {
+      basePrice: 0,
+      currency: "TND",
+    }));
 
   const { basePrice, currency, rules } = pricing;
 
@@ -237,8 +311,11 @@ export async function calculatePrice(
   }
 
   // Calculate access items total
-  const accessItemsDetails =
-    await calculateAccessItemsTotal(selectedAccessItems);
+  const accessItemsDetails = await calculateAccessItemsTotal(
+    eventId,
+    selectedAccessItems,
+    db,
+  );
   const accessTotal = accessItemsDetails.reduce(
     (sum, e) => sum + e.subtotal,
     0,
@@ -257,6 +334,7 @@ export async function calculatePrice(
       accessItemsDetails,
       subtotal,
     },
+    db,
   );
   const sponsorshipTotal = sponsorships
     .filter((s) => s.valid)
@@ -288,13 +366,15 @@ export async function calculatePrice(
  * Calculate access items total from selected items.
  */
 async function calculateAccessItemsTotal(
+  eventId: string,
   selectedAccessItems: SelectedAccessItem[],
+  db: Pick<TxClient, "eventAccess"> = prisma,
 ): Promise<PriceBreakdown["accessItems"]> {
   if (!selectedAccessItems.length) return [];
 
   const accessIds = selectedAccessItems.map((e) => e.accessId);
-  const accessItems = await prisma.eventAccess.findMany({
-    where: { id: { in: accessIds } },
+  const accessItems = await db.eventAccess.findMany({
+    where: { id: { in: accessIds }, eventId },
   });
 
   const accessMap = new Map(accessItems.map((a) => [a.id, a]));
@@ -352,13 +432,14 @@ async function validateSponsorshipCodes(
   codes: string[],
   eventId: string,
   context: SponsorshipValidationContext,
+  db: Pick<TxClient, "sponsorship"> = prisma,
 ): Promise<PriceBreakdown["sponsorships"]> {
   if (!codes.length) return [];
 
   const upperCodes = codes.map((c) => c.toUpperCase());
 
   // Batch lookup: single query instead of one per code
-  const sponsorships = await prisma.sponsorship.findMany({
+  const sponsorships = await db.sponsorship.findMany({
     where: {
       eventId,
       code: { in: upperCodes },

@@ -3,6 +3,8 @@
 // Manages the database-backed email queue for reliable delivery with retries
 // =============================================================================
 
+import { randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import { prisma } from "@/database/client.js";
 import { logger } from "@shared/utils/logger.js";
 import { sendEmail } from "./email-sendgrid.service.js";
@@ -13,10 +15,54 @@ import {
 } from "./email-variable.service.js";
 import { getTemplateByTrigger } from "./email-template.service.js";
 import { Prisma } from "@/generated/prisma/client.js";
+import type { AbstractEmailTrigger } from "@/generated/prisma/client.js";
 import type { EmailContext, RegistrationWithRelations } from "./email.types.js";
 import type { AutomaticEmailTrigger } from "./email.schema.js";
 import type { ImageCache } from "@modules/certificates/certificate-pdf.service.js";
 import type { CertificateZone } from "@modules/certificates/certificates.schema.js";
+import { eventBus } from "@core/events/bus.js";
+import { getPrismaUniqueTarget } from "@shared/errors/prisma-error.js";
+
+/**
+ * Emit a realtime emailLog.statusChanged event.
+ * Fetches the client/event scope via join. Fails silently if the log or
+ * registration relation is missing — realtime is best-effort.
+ */
+async function emitEmailLogChanged(
+  emailLogId: string,
+  status: string,
+): Promise<void> {
+  try {
+    const log = await prisma.emailLog.findUnique({
+      where: { id: emailLogId },
+      select: {
+        registrationId: true,
+        registration: {
+          select: {
+            eventId: true,
+            event: { select: { clientId: true } },
+          },
+        },
+      },
+    });
+    const clientId = log?.registration?.event?.clientId;
+    const eventId = log?.registration?.eventId;
+    if (!clientId || !eventId) return;
+    eventBus.emit({
+      type: "emailLog.statusChanged",
+      clientId,
+      eventId,
+      payload: {
+        id: emailLogId,
+        status,
+        registrationId: log.registrationId ?? undefined,
+      },
+      ts: Date.now(),
+    });
+  } catch (err) {
+    logger.warn({ err, emailLogId }, "Failed to emit emailLog.statusChanged");
+  }
+}
 
 // =============================================================================
 // TYPES
@@ -35,19 +81,75 @@ type EmailStatus =
   | "FAILED"
   | "SKIPPED";
 
-// Type guard for EmailContext - validates required fields at runtime
-function isValidEmailContext(obj: unknown): obj is EmailContext {
+type QueueEmailContext = EmailContext | Record<string, unknown>;
+
+function isUsableContextSnapshot(obj: unknown): obj is Record<string, unknown> {
   if (!obj || typeof obj !== "object") return false;
-  const ctx = obj as Record<string, unknown>;
-  // Check for essential required fields
-  return (
-    typeof ctx.firstName === "string" &&
-    typeof ctx.email === "string" &&
-    typeof ctx.eventName === "string"
-  );
+  if (Array.isArray(obj)) return false;
+  return Object.keys(obj).length > 0;
+}
+
+function getOptionalContextString(
+  context: QueueEmailContext,
+  key: string,
+): string | undefined {
+  const value = (context as Record<string, unknown>)[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 const MAX_RETRIES = 3;
+const EMAIL_LEASE_MS = 10 * 60 * 1000;
+const EMAIL_QUEUE_UNHEALTHY_AGE_MS = 30 * 60 * 1000;
+const EMAIL_QUEUE_UNHEALTHY_SIZE = 1000;
+const DEFAULT_WORKER_ID = `email:${hostname()}:${process.pid}:${randomUUID()}`;
+
+export interface ProcessEmailQueueOptions {
+  workerId?: string;
+  leaseMs?: number;
+}
+
+function emailRetryDelayMs(failedAttemptCount: number): number {
+  if (failedAttemptCount <= 1) return 60 * 1000;
+  if (failedAttemptCount === 2) return 5 * 60 * 1000;
+  return 15 * 60 * 1000;
+}
+
+function nextEmailAttemptAt(
+  failedAttemptCount: number,
+  from = new Date(),
+): Date {
+  return new Date(from.getTime() + emailRetryDelayMs(failedAttemptCount));
+}
+
+function clearEmailLeaseFields() {
+  return {
+    lockedAt: null,
+    lockedUntil: null,
+    lockedBy: null,
+  };
+}
+
+function isRegistrationTriggerDedupeViolation(error: unknown): boolean {
+  if (
+    !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+    error.code !== "P2002"
+  ) {
+    return false;
+  }
+
+  const { fields, names } = getPrismaUniqueTarget(error);
+  const hasRegistrationId = fields.some(
+    (field) => field === "registrationId" || field === "registration_id",
+  );
+  const hasTrigger = fields.some((field) => field === "trigger");
+
+  return (
+    (hasRegistrationId && hasTrigger) ||
+    names.some((name) =>
+      name.includes("email_logs_registration_trigger_active_key"),
+    )
+  );
+}
 
 /** Status ordering for webhook state machine — only forward transitions allowed */
 const STATUS_RANK: Record<string, number> = {
@@ -74,6 +176,8 @@ export interface QueueEmailInput {
   registrationId?: string;
   recipientEmail: string;
   recipientName?: string;
+  abstractId?: string;
+  abstractTrigger?: AbstractEmailTrigger;
 
   // Template
   templateId: string;
@@ -83,11 +187,13 @@ export interface QueueEmailInput {
 }
 
 export async function queueEmail(input: QueueEmailInput) {
-  return prisma.emailLog.create({
+  const created = await prisma.emailLog.create({
     data: {
       trigger: input.trigger,
       templateId: input.templateId,
       registrationId: input.registrationId,
+      abstractId: input.abstractId,
+      abstractTrigger: input.abstractTrigger,
       recipientEmail: input.recipientEmail,
       recipientName: input.recipientName,
       subject: "", // Will be resolved when processing
@@ -96,6 +202,8 @@ export async function queueEmail(input: QueueEmailInput) {
         Prisma.JsonNull) as Prisma.InputJsonValue,
     },
   });
+  void emitEmailLogChanged(created.id, "QUEUED");
+  return created;
 }
 
 // =============================================================================
@@ -144,16 +252,27 @@ export async function queueTriggeredEmail(
   }
 
   // 3. Queue the email
-  await queueEmail({
-    trigger,
-    templateId: template.id,
-    registrationId: registration.id,
-    recipientEmail: registration.email,
-    recipientName:
-      [registration.firstName, registration.lastName]
-        .filter(Boolean)
-        .join(" ") || undefined,
-  });
+  try {
+    await queueEmail({
+      trigger,
+      templateId: template.id,
+      registrationId: registration.id,
+      recipientEmail: registration.email,
+      recipientName:
+        [registration.firstName, registration.lastName]
+          .filter(Boolean)
+          .join(" ") || undefined,
+    });
+  } catch (error) {
+    if (isRegistrationTriggerDedupeViolation(error)) {
+      logger.info(
+        { registrationId: registration.id, trigger },
+        "Triggered email already queued, skipping duplicate",
+      );
+      return false;
+    }
+    throw error;
+  }
 
   logger.info(
     { trigger, eventId, registrationId: registration.id },
@@ -397,7 +516,8 @@ export async function queueBulkCertificateEmails(
   };
 
   const prepared: PreparedInput[] = inputs.map((input) => {
-    const sentSet = alreadySentIds.get(input.registrationId) ?? new Set<string>();
+    const sentSet =
+      alreadySentIds.get(input.registrationId) ?? new Set<string>();
     const pairs = input.certificateTemplateIds
       .map((id, idx) => ({ id, name: input.certificateNames[idx] }))
       .filter((x) => !sentSet.has(x.id));
@@ -451,8 +571,84 @@ export interface ProcessQueueResult {
   skipped: number;
 }
 
+export async function recoverStaleEmailLeases(
+  now = new Date(),
+  leaseMs = EMAIL_LEASE_MS,
+) {
+  const staleCutoff = new Date(now.getTime() - leaseMs);
+  const retry1At = nextEmailAttemptAt(1, now);
+  const retry2At = nextEmailAttemptAt(2, now);
+  const retryLaterAt = nextEmailAttemptAt(3, now);
+
+  const requeued = await prisma.$executeRawUnsafe(
+    `UPDATE "email_logs"
+     SET
+       "status" = 'QUEUED',
+       "updated_at" = $1,
+       "locked_at" = NULL,
+       "locked_until" = NULL,
+       "locked_by" = NULL,
+       "retry_count" = "retry_count" + 1,
+       "next_attempt_at" = CASE
+         WHEN "attempt_count" <= 1 THEN $3
+         WHEN "attempt_count" = 2 THEN $4
+         ELSE $5
+       END,
+       "error_message" = COALESCE("error_message", 'Email send lease expired; requeued for retry')
+     WHERE "status" = 'SENDING'
+       AND (
+         "locked_until" < $1
+         OR (
+           "locked_until" IS NULL
+           AND COALESCE("locked_at", "last_attempt_at", "updated_at") < $2
+         )
+       )
+       AND "retry_count" < "max_retries"`,
+    now,
+    staleCutoff,
+    retry1At,
+    retry2At,
+    retryLaterAt,
+  );
+
+  const deadLettered = await prisma.$executeRawUnsafe(
+    `UPDATE "email_logs"
+     SET
+       "status" = 'FAILED',
+       "updated_at" = $1,
+       "failed_at" = $1,
+       "locked_at" = NULL,
+       "locked_until" = NULL,
+       "locked_by" = NULL,
+       "next_attempt_at" = NULL,
+       "retry_count" = "retry_count" + 1,
+       "error_message" = COALESCE("error_message", 'Email send lease expired and retry limit was exhausted')
+     WHERE "status" = 'SENDING'
+       AND (
+         "locked_until" < $1
+         OR (
+           "locked_until" IS NULL
+           AND COALESCE("locked_at", "last_attempt_at", "updated_at") < $2
+         )
+       )
+       AND "retry_count" >= "max_retries"`,
+    now,
+    staleCutoff,
+  );
+
+  if (requeued > 0 || deadLettered > 0) {
+    logger.warn(
+      { requeued, deadLettered },
+      "Recovered stale email queue leases",
+    );
+  }
+
+  return { requeued, deadLettered };
+}
+
 export async function processEmailQueue(
   batchSize = 50,
+  options: ProcessEmailQueueOptions = {},
 ): Promise<ProcessQueueResult> {
   const result: ProcessQueueResult = {
     processed: 0,
@@ -461,22 +657,40 @@ export async function processEmailQueue(
     skipped: 0,
   };
 
-  // Atomically claim a batch of queued emails using FOR UPDATE SKIP LOCKED.
-  // This prevents multiple server instances from grabbing the same rows,
-  // eliminating the race condition that could cause duplicate sends.
+  const workerId = options.workerId ?? DEFAULT_WORKER_ID;
+  const leaseMs = options.leaseMs ?? EMAIL_LEASE_MS;
+  const now = new Date();
+  const lockedUntil = new Date(now.getTime() + leaseMs);
+
+  await recoverStaleEmailLeases(now, leaseMs);
+
+  // Atomically claim a batch of due queued emails using FOR UPDATE SKIP LOCKED.
+  // This prevents multiple server instances from grabbing the same rows and
+  // records a lease owner so stale workers cannot write terminal outcomes.
   const claimedRows = await prisma.$queryRawUnsafe<Array<{ id: string }>>(
     `UPDATE "email_logs"
-     SET "status" = 'SENDING', "updated_at" = NOW()
+     SET
+       "status" = 'SENDING',
+       "updated_at" = $1,
+       "locked_at" = $1,
+       "locked_until" = $2,
+       "locked_by" = $3,
+       "last_attempt_at" = $1,
+       "attempt_count" = "attempt_count" + 1,
+       "error_message" = NULL
      WHERE "id" IN (
        SELECT "id" FROM "email_logs"
-       WHERE "status" = 'QUEUED'
-         AND "retry_count" < $1
-       ORDER BY "queued_at" ASC
-       LIMIT $2
-       FOR UPDATE SKIP LOCKED
+        WHERE "status" = 'QUEUED'
+          AND ("next_attempt_at" IS NULL OR "next_attempt_at" <= $1)
+          AND "attempt_count" <= "max_retries"
+        ORDER BY "queued_at" ASC
+        LIMIT $4
+        FOR UPDATE SKIP LOCKED
      )
      RETURNING "id"`,
-    MAX_RETRIES + 1,
+    now,
+    lockedUntil,
+    workerId,
     batchSize,
   );
 
@@ -485,21 +699,23 @@ export async function processEmailQueue(
   // Fetch full email log records with relations for processing
   const batch =
     claimedIds.length > 0
-      ? (
-          await prisma.emailLog.findMany({
-            where: { id: { in: claimedIds } },
-            orderBy: { queuedAt: "asc" },
-            include: {
-              template: true,
-              registration: {
-                include: {
-                  event: { include: { client: true } },
-                  form: true,
-                },
+      ? await prisma.emailLog.findMany({
+          where: {
+            id: { in: claimedIds },
+            status: "SENDING",
+            lockedBy: workerId,
+          },
+          orderBy: { queuedAt: "asc" },
+          include: {
+            template: true,
+            registration: {
+              include: {
+                event: { include: { client: true } },
+                form: true,
               },
             },
-          })
-        ).filter(isReadyForRetry)
+          },
+        })
       : [];
 
   if (batch.length === 0) {
@@ -518,27 +734,30 @@ export async function processEmailQueue(
   // Process a single email and return the outcome
   async function processEmail(
     emailLog: (typeof batch)[number],
-  ): Promise<"sent" | "failed" | "skipped"> {
+  ): Promise<"sent" | "failed" | "skipped" | "lease-lost"> {
     try {
       // Skip if no template
       if (!emailLog.template) {
-        await markAsSkipped(emailLog.id, "No template found");
-        return "skipped";
+        return (await markAsSkipped(emailLog.id, workerId, "No template found"))
+          ? "skipped"
+          : "lease-lost";
       }
 
       // Skip if template is inactive
       if (!emailLog.template.isActive) {
-        await markAsSkipped(emailLog.id, "Template is inactive");
-        return "skipped";
+        return (await markAsSkipped(
+          emailLog.id,
+          workerId,
+          "Template is inactive",
+        ))
+          ? "skipped"
+          : "lease-lost";
       }
 
       // Build context
-      let context: EmailContext | null = null;
+      let context: QueueEmailContext | null = null;
 
-      if (
-        emailLog.contextSnapshot &&
-        isValidEmailContext(emailLog.contextSnapshot)
-      ) {
+      if (isUsableContextSnapshot(emailLog.contextSnapshot)) {
         context = emailLog.contextSnapshot;
       } else if (emailLog.registration) {
         // Build context from registration
@@ -548,8 +767,13 @@ export async function processEmailQueue(
       }
 
       if (!context || Object.keys(context).length === 0) {
-        await markAsSkipped(emailLog.id, "Could not build email context");
-        return "skipped";
+        return (await markAsSkipped(
+          emailLog.id,
+          workerId,
+          "Could not build email context",
+        ))
+          ? "skipped"
+          : "lease-lost";
       }
 
       // Resolve variables
@@ -566,11 +790,24 @@ export async function processEmailQueue(
         context,
       );
 
-      // Update subject in log
-      await prisma.emailLog.update({
-        where: { id: emailLog.id },
+      // Update subject in log only if this worker still owns an active lease.
+      const subjectUpdated = await prisma.emailLog.updateMany({
+        where: {
+          id: emailLog.id,
+          status: "SENDING",
+          lockedBy: workerId,
+          lockedUntil: { gt: new Date() },
+        },
         data: { subject: resolvedSubject },
       });
+
+      if (subjectUpdated.count === 0) {
+        logger.warn(
+          { emailLogId: emailLog.id, workerId },
+          "Email subject update skipped because lease was lost before send",
+        );
+        return "lease-lost";
+      }
 
       // Generate certificate attachments if this is a CERTIFICATE_SENT email
       let attachments: EmailAttachment[] | undefined;
@@ -582,9 +819,8 @@ export async function processEmailQueue(
         ctxAny._certificateTemplateIds.length > 0 &&
         emailLog.registrationId
       ) {
-        const { generateCertificateAttachments } = await import(
-          "@modules/certificates/certificate-pdf.service.js"
-        );
+        const { generateCertificateAttachments } =
+          await import("@modules/certificates/certificate-pdf.service.js");
 
         // Fetch registration with check-in data for eligibility + variable resolution
         const registration = await prisma.registration.findUnique({
@@ -619,26 +855,44 @@ export async function processEmailQueue(
           );
         }
 
-        const expectedCount = (ctxAny._certificateTemplateIds as string[]).length;
+        const expectedCount = (ctxAny._certificateTemplateIds as string[])
+          .length;
         if (!attachments || attachments.length === 0) {
-          await markAsSkipped(emailLog.id, "No eligible certificates to attach");
-          return "skipped";
+          return (await markAsSkipped(
+            emailLog.id,
+            workerId,
+            "No eligible certificates to attach",
+          ))
+            ? "skipped"
+            : "lease-lost";
         }
         if (attachments.length < expectedCount) {
           logger.warn(
-            { emailLogId: emailLog.id, expected: expectedCount, actual: attachments.length },
+            {
+              emailLogId: emailLog.id,
+              expected: expectedCount,
+              actual: attachments.length,
+            },
             "Fewer certificates generated than queued — some templates may have been deactivated or check-in revoked",
           );
         }
+      }
+
+      if (
+        !(await refreshEmailLeaseBeforeSend(emailLog.id, workerId, leaseMs))
+      ) {
+        return "lease-lost";
       }
 
       // Send via SendGrid
       const sendResult = await sendEmail({
         to: emailLog.recipientEmail,
         toName: emailLog.recipientName || undefined,
-        fromName: context.eventName,
-        replyTo: context.organizerEmail || undefined,
-        replyToName: context.organizerName || undefined,
+        fromName:
+          getOptionalContextString(context, "eventName") ??
+          getOptionalContextString(context, "congressName"),
+        replyTo: getOptionalContextString(context, "organizerEmail"),
+        replyToName: getOptionalContextString(context, "organizerName"),
         subject: resolvedSubject,
         html: resolvedHtml,
         plainText: resolvedPlain,
@@ -647,15 +901,19 @@ export async function processEmailQueue(
       });
 
       if (sendResult.success) {
-        await markAsSent(emailLog.id, sendResult.messageId);
-        return "sent";
+        return (await markAsSent(emailLog.id, workerId, sendResult.messageId))
+          ? "sent"
+          : "lease-lost";
       } else {
-        await markAsFailed(
+        return (await markAsFailed(
           emailLog.id,
+          workerId,
           sendResult.error || "Unknown error",
-          emailLog.retryCount,
-        );
-        return "failed";
+          emailLog.attemptCount,
+          emailLog.maxRetries,
+        ))
+          ? "failed"
+          : "lease-lost";
       }
     } catch (error: unknown) {
       const err = error as Error;
@@ -663,8 +921,15 @@ export async function processEmailQueue(
         { emailLogId: emailLog.id, error: err.message },
         "Error processing email",
       );
-      await markAsFailed(emailLog.id, err.message, emailLog.retryCount);
-      return "failed";
+      return (await markAsFailed(
+        emailLog.id,
+        workerId,
+        err.message,
+        emailLog.attemptCount,
+        emailLog.maxRetries,
+      ))
+        ? "failed"
+        : "lease-lost";
     }
   }
 
@@ -676,7 +941,7 @@ export async function processEmailQueue(
     for (const outcome of outcomes) {
       if (outcome === "sent") result.sent++;
       else if (outcome === "failed") result.failed++;
-      else result.skipped++;
+      else if (outcome === "skipped") result.skipped++;
     }
   }
 
@@ -687,43 +952,127 @@ export async function processEmailQueue(
 // STATUS UPDATES
 // =============================================================================
 
-async function markAsSent(id: string, messageId?: string) {
-  await prisma.emailLog.update({
-    where: { id },
+async function refreshEmailLeaseBeforeSend(
+  id: string,
+  workerId: string,
+  leaseMs: number,
+): Promise<boolean> {
+  const now = new Date();
+  const updated = await prisma.emailLog.updateMany({
+    where: {
+      id,
+      status: "SENDING",
+      lockedBy: workerId,
+      lockedUntil: { gt: now },
+    },
+    data: {
+      lockedAt: now,
+      lockedUntil: new Date(now.getTime() + leaseMs),
+    },
+  });
+
+  if (updated.count === 0) {
+    logger.warn(
+      { emailLogId: id, workerId },
+      "Email send skipped because lease was lost before provider call",
+    );
+    return false;
+  }
+
+  return true;
+}
+
+async function markAsSent(
+  id: string,
+  workerId: string,
+  messageId?: string,
+): Promise<boolean> {
+  const updated = await prisma.emailLog.updateMany({
+    where: { id, status: "SENDING", lockedBy: workerId },
     data: {
       status: "SENT",
       sendgridMessageId: messageId,
       sentAt: new Date(),
+      errorMessage: null,
+      nextAttemptAt: null,
+      ...clearEmailLeaseFields(),
     },
   });
+
+  if (updated.count === 0) {
+    logger.warn(
+      { emailLogId: id, workerId },
+      "Email SENT update skipped because lease was lost",
+    );
+    return false;
+  }
+
+  void emitEmailLogChanged(id, "SENT");
+  return true;
 }
 
 async function markAsFailed(
   id: string,
+  workerId: string,
   errorMessage: string,
-  currentRetryCount: number,
-) {
-  const shouldRetry = currentRetryCount < MAX_RETRIES;
+  attemptCount: number,
+  maxRetries: number,
+): Promise<boolean> {
+  const retryLimit = maxRetries ?? MAX_RETRIES;
+  const shouldRetry = attemptCount <= retryLimit;
+  const retryCountAfterFailure = Math.max(1, attemptCount);
 
-  await prisma.emailLog.update({
-    where: { id },
+  const updated = await prisma.emailLog.updateMany({
+    where: { id, status: "SENDING", lockedBy: workerId },
     data: {
       status: shouldRetry ? "QUEUED" : "FAILED",
       errorMessage,
       retryCount: { increment: 1 },
       failedAt: shouldRetry ? null : new Date(),
+      nextAttemptAt: shouldRetry
+        ? nextEmailAttemptAt(retryCountAfterFailure)
+        : null,
+      ...clearEmailLeaseFields(),
     },
   });
+
+  if (updated.count === 0) {
+    logger.warn(
+      { emailLogId: id, workerId },
+      "Email failure update skipped because lease was lost",
+    );
+    return false;
+  }
+
+  void emitEmailLogChanged(id, shouldRetry ? "QUEUED" : "FAILED");
+  return true;
 }
 
-async function markAsSkipped(id: string, reason: string) {
-  await prisma.emailLog.update({
-    where: { id },
+async function markAsSkipped(
+  id: string,
+  workerId: string,
+  reason: string,
+): Promise<boolean> {
+  const updated = await prisma.emailLog.updateMany({
+    where: { id, status: "SENDING", lockedBy: workerId },
     data: {
       status: "SKIPPED",
       errorMessage: reason,
+      nextAttemptAt: null,
+      ...clearEmailLeaseFields(),
     },
   });
+
+  if (updated.count === 0) {
+    logger.warn(
+      { emailLogId: id, workerId },
+      "Email SKIPPED update skipped because lease was lost",
+    );
+    return false;
+  }
+
+  void emitEmailLogChanged(id, "SKIPPED");
+  return true;
 }
 
 // =============================================================================
@@ -789,8 +1138,7 @@ export async function updateEmailStatusFromWebhook(
     case "unsubscribe":
       updates.status = "BOUNCED";
       updates.bouncedAt = new Date();
-      updates.errorMessage =
-        metadata?.reason || "Recipient unsubscribed";
+      updates.errorMessage = metadata?.reason || "Recipient unsubscribed";
       break;
   }
 
@@ -839,6 +1187,9 @@ export async function updateEmailStatusFromWebhook(
       where: { id: emailLogId },
       data: updates,
     });
+    if (updates.status) {
+      void emitEmailLogChanged(emailLogId, updates.status);
+    }
   } catch (error) {
     logger.error(
       { emailLogId, event, error },
@@ -851,57 +1202,78 @@ export async function updateEmailStatusFromWebhook(
 // UTILITIES
 // =============================================================================
 
-/**
- * Calculate backoff time for retry.
- * Exponential backoff: 1min, 5min, 15min
- */
-function getBackoffMs(retryCount: number): number {
-  const backoffs = [60000, 300000, 900000]; // 1min, 5min, 15min
-  return backoffs[Math.min(retryCount, backoffs.length - 1)];
-}
-
-/**
- * Check if an email is ready for retry based on backoff timing.
- */
-function isReadyForRetry(email: {
-  retryCount: number;
-  updatedAt: Date;
-}): boolean {
-  if (email.retryCount === 0) return true;
-  const backoffMs = getBackoffMs(email.retryCount - 1);
-  const readyAt = new Date(email.updatedAt.getTime() + backoffMs);
-  return new Date() >= readyAt;
-}
-
 // =============================================================================
 // QUEUE HEALTH
 // =============================================================================
 
 export async function getEmailQueueHealth() {
-  const [queueSize, oldestQueued, recentFailures] = await Promise.all([
+  const now = new Date();
+  const [
+    queueSize,
+    dueQueuedCount,
+    sendingCount,
+    staleSendingCount,
+    failedCount,
+    recentFailures,
+    oldestQueued,
+    oldestInFlight,
+  ] = await Promise.all([
     prisma.emailLog.count({ where: { status: "QUEUED" } }),
-    prisma.emailLog.findFirst({
-      where: { status: "QUEUED" },
-      orderBy: { queuedAt: "asc" },
-      select: { queuedAt: true },
+    prisma.emailLog.count({
+      where: {
+        status: "QUEUED",
+        OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
+      },
     }),
+    prisma.emailLog.count({ where: { status: "SENDING" } }),
+    prisma.emailLog.count({
+      where: {
+        status: "SENDING",
+        OR: [{ lockedUntil: null }, { lockedUntil: { lt: now } }],
+      },
+    }),
+    prisma.emailLog.count({ where: { status: "FAILED" } }),
     prisma.emailLog.count({
       where: {
         status: "FAILED",
         updatedAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
       },
     }),
+    prisma.emailLog.findFirst({
+      where: { status: "QUEUED" },
+      orderBy: { queuedAt: "asc" },
+      select: { queuedAt: true },
+    }),
+    prisma.emailLog.findFirst({
+      where: { status: "SENDING" },
+      orderBy: { lockedAt: "asc" },
+      select: { lockedAt: true, updatedAt: true },
+    }),
   ]);
 
-  const oldestAgeMs = oldestQueued?.queuedAt
-    ? Date.now() - oldestQueued.queuedAt.getTime()
+  const oldestQueuedAgeMs = oldestQueued?.queuedAt
+    ? now.getTime() - oldestQueued.queuedAt.getTime()
+    : 0;
+  const oldestInFlightAt =
+    oldestInFlight?.lockedAt ?? oldestInFlight?.updatedAt;
+  const oldestInFlightAgeMs = oldestInFlightAt
+    ? now.getTime() - oldestInFlightAt.getTime()
     : 0;
 
-  const isHealthy = queueSize < 1000 && oldestAgeMs < 30 * 60 * 1000;
+  const isHealthy =
+    staleSendingCount === 0 &&
+    queueSize < EMAIL_QUEUE_UNHEALTHY_SIZE &&
+    oldestQueuedAgeMs < EMAIL_QUEUE_UNHEALTHY_AGE_MS;
 
   return {
     queueSize,
-    oldestQueuedAgeMs: oldestAgeMs,
+    dueQueuedCount,
+    sendingCount,
+    staleSendingCount,
+    failedCount,
+    deadLetterCount: failedCount,
+    oldestQueuedAgeMs,
+    oldestInFlightAgeMs,
     recentFailures24h: recentFailures,
     isHealthy,
   };
