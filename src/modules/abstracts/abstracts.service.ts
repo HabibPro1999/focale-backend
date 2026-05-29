@@ -142,7 +142,7 @@ function validateWordLimits(
 
   if (content.mode === "FREE_TEXT") {
     if (
-      config.globalWordLimit &&
+      config.globalWordLimit != null &&
       countWords(content.body) > config.globalWordLimit
     ) {
       errors.push(
@@ -162,12 +162,12 @@ function validateWordLimits(
     for (const section of sections) {
       const limit = sectionLimits[section];
       const text = (content as Record<string, string>)[section] ?? "";
-      if (limit && countWords(text) > limit) {
+      if (limit != null && countWords(text) > limit) {
         errors.push(`${section} (${countWords(text)} words, limit ${limit})`);
       }
     }
     // Also check global limit against total
-    if (config.globalWordLimit) {
+    if (config.globalWordLimit != null) {
       const total = sections.reduce(
         (acc, s) =>
           acc + countWords((content as Record<string, string>)[s] ?? ""),
@@ -797,7 +797,7 @@ export async function editAbstract(
           trigger: "ABSTRACT_EDIT_ACK",
           abstractId: id,
         },
-        `email:abstract:ABSTRACT_EDIT_ACK:${id}`,
+        `email:abstract:ABSTRACT_EDIT_ACK:${id}:${nextRevisionNo}`,
       );
 
       return updatedAbstract;

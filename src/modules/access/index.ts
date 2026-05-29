@@ -7,6 +7,7 @@ export {
   decrementAccessRegisteredCountTx,
   incrementPaidCount,
   decrementPaidCount,
+  syncPaidCountDelta,
   handleCapacityReached,
   getAlreadyCoveredAccessIds,
 } from "./access.service.js";

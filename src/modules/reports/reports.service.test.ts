@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, type Mock } from "vitest";
+import ExcelJS from "exceljs";
 import { prismaMock } from "../../../tests/mocks/prisma.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
@@ -6,6 +7,7 @@ import {
   getFinancialReport,
   getEventAnalytics,
   exportRegistrations,
+  getAccessRegistrants,
 } from "./reports.service.js";
 
 // Prisma's groupBy has complex generic overloads that vitest-mock-extended
@@ -106,6 +108,12 @@ describe("getFinancialReport", () => {
           currency: "TND",
           _sum: { totalAmount: 50 },
         },
+      ] as never)
+      .mockResolvedValueOnce([
+        {
+          currency: "TND",
+          _sum: { paidAmount: 800 },
+        },
       ] as never);
 
     prismaMock.registration.aggregate.mockResolvedValue({
@@ -137,6 +145,57 @@ describe("getFinancialReport", () => {
       totalRefunded: 50,
       registrationCount: 5,
     });
+  });
+
+  it("should exclude refunded paid amounts from total revenue", async () => {
+    registrationGroupBy
+      .mockResolvedValueOnce([
+        {
+          currency: "TND",
+          _sum: {
+            totalAmount: 1500,
+            paidAmount: 1500,
+            baseAmount: 1500,
+            accessAmount: 0,
+            discountAmount: 0,
+            sponsorshipAmount: 0,
+          },
+          _count: 2,
+        },
+      ] as never)
+      .mockResolvedValueOnce([] as never)
+      .mockResolvedValueOnce([] as never)
+      .mockResolvedValueOnce([
+        { currency: "TND", _sum: { totalAmount: 500 } },
+      ] as never)
+      .mockResolvedValueOnce([
+        { currency: "TND", _sum: { paidAmount: 1000 } },
+      ] as never);
+
+    prismaMock.registration.aggregate
+      .mockResolvedValueOnce({
+        _sum: {
+          totalAmount: 1500,
+          paidAmount: 1500,
+          baseAmount: 1500,
+          accessAmount: 0,
+          discountAmount: 0,
+          sponsorshipAmount: 0,
+        },
+        _avg: { totalAmount: 750 },
+        _count: 2,
+        _min: {},
+        _max: {},
+      } as never)
+      .mockResolvedValueOnce({
+        _sum: { paidAmount: 1000 },
+      } as never);
+
+    const result = await getFinancialReport(eventId, {});
+
+    expect(result.summary.totalRevenue).toBe(1000);
+    expect(result.summary.totalRefunded).toBe(500);
+    expect(result.summary.currencies[0].totalRevenue).toBe(1000);
   });
 
   it("should default primaryCurrency to TND when there are no registrations", async () => {
@@ -454,6 +513,66 @@ describe("exportRegistrations", () => {
     expect(call.where.submittedAt).toEqual({
       gte: new Date("2025-01-01T00:00:00.000Z"),
       lte: new Date("2025-01-31T23:59:59.000Z"),
+    });
+  });
+
+  it("should escape formulas in XLSX cells", async () => {
+    prismaMock.event.findUnique.mockResolvedValue({
+      slug: "evt",
+    } as never);
+    prismaMock.registration.findMany.mockResolvedValue([
+      {
+        id: "r-1",
+        email: "a@b.com",
+        firstName: '=HYPERLINK("https://evil.test")',
+        lastName: "+Injected",
+        phone: null,
+        paymentStatus: "PAID",
+        paymentMethod: null,
+        totalAmount: 0,
+        paidAmount: 0,
+        baseAmount: 0,
+        accessAmount: 0,
+        discountAmount: 0,
+        sponsorshipCode: null,
+        sponsorshipAmount: 0,
+        submittedAt: new Date("2025-01-01T00:00:00Z"),
+        paidAt: null,
+        formData: { note: "@cmd" },
+      },
+    ] as never);
+
+    const result = await exportRegistrations(eventId, { format: "xlsx" });
+    const workbook = new ExcelJS.Workbook();
+    const buffer = result.data as Buffer;
+    const workbookData = buffer.buffer.slice(
+      buffer.byteOffset,
+      buffer.byteOffset + buffer.byteLength,
+    ) as Parameters<typeof workbook.xlsx.load>[0];
+    await workbook.xlsx.load(workbookData);
+    const sheet = workbook.getWorksheet("Registrations")!;
+
+    expect(sheet.getCell("C2").value).toBe('\'=HYPERLINK("https://evil.test")');
+    expect(sheet.getCell("D2").value).toBe("'+Injected");
+    expect(sheet.getCell("Q2").value).toBe("'@cmd");
+  });
+});
+
+describe("getAccessRegistrants", () => {
+  it("should scope access lookup to the authorized event", async () => {
+    prismaMock.eventAccess.findFirst.mockResolvedValue(null);
+    prismaMock.registration.findMany.mockResolvedValue([]);
+
+    await expect(
+      getAccessRegistrants("event-1", "foreign-access"),
+    ).rejects.toMatchObject({
+      statusCode: 404,
+      code: ErrorCodes.NOT_FOUND,
+    });
+
+    expect(prismaMock.eventAccess.findFirst).toHaveBeenCalledWith({
+      where: { id: "foreign-access", eventId: "event-1" },
+      select: { name: true, type: true },
     });
   });
 });

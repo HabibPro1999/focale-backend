@@ -2,6 +2,7 @@ import ExcelJS from "exceljs";
 import JSZip from "jszip";
 import { prisma } from "@/database/client.js";
 import { buildSponsorshipWhere } from "@sponsorships";
+import { escapeExcelFormula, escapeExcelRow } from "./excel-safety.js";
 
 /**
  * Build a styled Excel workbook summarising total registrations,
@@ -108,7 +109,7 @@ export async function generateEventSummary(
 
   sheet.mergeCells(`A${row}:C${row}`);
   const titleCell = sheet.getCell(`A${row}`);
-  titleCell.value = event!.name;
+  titleCell.value = escapeExcelFormula(event!.name);
   titleCell.font = { bold: true, size: 16, color: { argb: "FF1F4E79" } };
   titleCell.alignment = { horizontal: "center" };
   row++;
@@ -123,7 +124,7 @@ export async function generateEventSummary(
   const addSectionHeader = (title: string) => {
     sheet.mergeCells(`A${row}:C${row}`);
     const cell = sheet.getCell(`A${row}`);
-    cell.value = title;
+    cell.value = escapeExcelFormula(title);
     cell.fill = headerFill;
     cell.font = headerFont;
     cell.border = border;
@@ -136,11 +137,11 @@ export async function generateEventSummary(
     opts?: { bold?: boolean; indent?: boolean },
   ) => {
     const labelCell = sheet.getCell(`A${row}`);
-    labelCell.value = opts?.indent ? `  - ${label}` : label;
+    labelCell.value = escapeExcelFormula(opts?.indent ? `  - ${label}` : label);
     if (opts?.bold) labelCell.font = { bold: true, size: 11 };
     labelCell.border = border;
     const valCell = sheet.getCell(`B${row}`);
-    valCell.value = value;
+    valCell.value = escapeExcelFormula(value);
     if (opts?.bold) valCell.font = { bold: true, size: 14 };
     valCell.border = border;
     row++;
@@ -149,7 +150,7 @@ export async function generateEventSummary(
   const addTableHeader = (cols: string[]) => {
     cols.forEach((col, i) => {
       const cell = sheet.getRow(row).getCell(i + 1);
-      cell.value = col;
+      cell.value = escapeExcelFormula(col);
       cell.fill = subHeaderFill;
       cell.font = subHeaderFont;
       cell.border = border;
@@ -158,9 +159,9 @@ export async function generateEventSummary(
   };
 
   const addAccessRow = (name: string, type: string, count: number) => {
-    sheet.getCell(`A${row}`).value = name;
+    sheet.getCell(`A${row}`).value = escapeExcelFormula(name);
     sheet.getCell(`A${row}`).border = border;
-    sheet.getCell(`B${row}`).value = type;
+    sheet.getCell(`B${row}`).value = escapeExcelFormula(type);
     sheet.getCell(`B${row}`).border = border;
     sheet.getCell(`C${row}`).value = count;
     sheet.getCell(`C${row}`).border = border;
@@ -310,15 +311,17 @@ export async function generateAccessRegistrantsReport(
     );
 
     for (const reg of accessRegs) {
-      const row = sheet.addRow([
-        reg.lastName ?? "",
-        reg.firstName ?? "",
-        reg.email,
-        reg.phone ?? "",
-        PAYMENT_STATUS_FR[reg.paymentStatus] ?? reg.paymentStatus,
-        reg.totalAmount,
-        reg.submittedAt.toLocaleDateString("fr-FR"),
-      ]);
+      const row = sheet.addRow(
+        escapeExcelRow([
+          reg.lastName ?? "",
+          reg.firstName ?? "",
+          reg.email,
+          reg.phone ?? "",
+          PAYMENT_STATUS_FR[reg.paymentStatus] ?? reg.paymentStatus,
+          reg.totalAmount,
+          reg.submittedAt.toLocaleDateString("fr-FR"),
+        ]),
+      );
       row.eachCell((cell) => {
         cell.border = border;
       });
@@ -431,7 +434,9 @@ export async function generateSponsorshipsReport(
 
   const sheet = workbook.addWorksheet("Sponsorships");
 
-  const titleRow = sheet.addRow([event?.name ?? "Sponsorships"]);
+  const titleRow = sheet.addRow([
+    escapeExcelFormula(event?.name ?? "Sponsorships"),
+  ]);
   sheet.mergeCells(`A${titleRow.number}:R${titleRow.number}`);
   titleRow.getCell(1).font = {
     bold: true,
@@ -532,27 +537,29 @@ export async function generateSponsorshipsReport(
       .map((usage) => formatDateTime(usage.appliedAt))
       .join(" | ");
 
-    const row = sheet.addRow([
-      sponsorship.code,
-      sponsorship.batch.labName,
-      sponsorship.batch.contactName,
-      sponsorship.batch.email,
-      sponsorship.batch.phone ?? "",
-      labTotals.get(getLabTotalKey(sponsorship.batch.labName)) ??
+    const row = sheet.addRow(
+      escapeExcelRow([
+        sponsorship.code,
+        sponsorship.batch.labName,
+        sponsorship.batch.contactName,
+        sponsorship.batch.email,
+        sponsorship.batch.phone ?? "",
+        labTotals.get(getLabTotalKey(sponsorship.batch.labName)) ??
+          sponsorship.totalAmount,
+        sponsorship.beneficiaryName,
+        sponsorship.beneficiaryEmail,
+        sponsorship.beneficiaryPhone ?? "",
+        sponsorship.beneficiaryAddress ?? "",
         sponsorship.totalAmount,
-      sponsorship.beneficiaryName,
-      sponsorship.beneficiaryEmail,
-      sponsorship.beneficiaryPhone ?? "",
-      sponsorship.beneficiaryAddress ?? "",
-      sponsorship.totalAmount,
-      currency,
-      sponsorship.status,
-      formatDateTime(sponsorship.createdAt),
-      coverageParts.join("; "),
-      linkedRegistrations,
-      amountApplied,
-      appliedDates,
-    ]);
+        currency,
+        sponsorship.status,
+        formatDateTime(sponsorship.createdAt),
+        coverageParts.join("; "),
+        linkedRegistrations,
+        amountApplied,
+        appliedDates,
+      ]),
+    );
 
     row.eachCell((cell) => {
       cell.border = border;
@@ -620,7 +627,7 @@ function buildCheckInSheet(
     checkedInAt: Date | null;
   }[],
 ): void {
-  const titleRow = sheet.addRow([title]);
+  const titleRow = sheet.addRow([escapeExcelFormula(title)]);
   sheet.mergeCells(`A${titleRow.number}:I${titleRow.number}`);
   titleRow.getCell(1).font = {
     bold: true,
@@ -678,17 +685,19 @@ function buildCheckInSheet(
       });
     }
 
-    const dataRow = sheet.addRow([
-      r.referenceNumber ?? "",
-      r.lastName ?? "",
-      r.firstName ?? "",
-      r.email,
-      r.phone ?? "",
-      PAYMENT_STATUS_FR[r.paymentStatus] ?? r.paymentStatus,
-      r.checkedIn ? "✓" : "✗",
-      dateStr,
-      timeStr,
-    ]);
+    const dataRow = sheet.addRow(
+      escapeExcelRow([
+        r.referenceNumber ?? "",
+        r.lastName ?? "",
+        r.firstName ?? "",
+        r.email,
+        r.phone ?? "",
+        PAYMENT_STATUS_FR[r.paymentStatus] ?? r.paymentStatus,
+        r.checkedIn ? "✓" : "✗",
+        dateStr,
+        timeStr,
+      ]),
+    );
 
     dataRow.eachCell((cell) => {
       cell.border = CHECKIN_BORDER;

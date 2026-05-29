@@ -9,6 +9,7 @@ import {
   createEvent,
   getEventById,
   getEventBySlug,
+  assertEventAcceptsPublicActions,
   assertEventOpen,
   assertEventWritable,
   updateEvent,
@@ -25,6 +26,12 @@ import { ErrorCodes } from "@shared/errors/error-codes.js";
 // Mock the clients module for clientExists
 vi.mock("@clients", () => ({
   clientExists: vi.fn(),
+}));
+const storageDeleteMock = vi.hoisted(() => vi.fn());
+vi.mock("@shared/services/storage/index.js", () => ({
+  getStorageProvider: () => ({
+    delete: storageDeleteMock,
+  }),
 }));
 
 import { clientExists as clientExistsMock } from "@clients";
@@ -76,6 +83,10 @@ function createCounterTxMock(
 describe("Events Service", () => {
   const clientId = "client-123";
   const eventId = "event-123";
+
+  beforeEach(() => {
+    storageDeleteMock.mockReset();
+  });
 
   describe("createEvent", () => {
     const validInput = {
@@ -130,6 +141,31 @@ describe("Events Service", () => {
         }),
       });
       expect(clientExistsMock).toHaveBeenCalledWith(clientId);
+    });
+
+    it("normalizes currency before creating pricing", async () => {
+      const mockEvent = createMockEvent({ id: eventId, clientId });
+      const mockPricing = createMockEventPricing({
+        eventId,
+        currency: "TND",
+      });
+
+      prismaMock.event.findUnique.mockResolvedValue(null);
+      mockCreateEventTransaction(mockEvent, mockPricing);
+
+      await createEvent({ ...validInput, currency: "tnd" });
+
+      const txCallback = prismaMock.$transaction.mock.calls[0][0] as unknown as (
+        tx: CreateEventTxMock,
+      ) => Promise<unknown>;
+      const txMock: CreateEventTxMock = {
+        event: { create: vi.fn().mockResolvedValue(mockEvent) },
+        eventPricing: { create: vi.fn().mockResolvedValue(mockPricing) },
+      };
+      await txCallback(txMock);
+      expect(txMock.eventPricing.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ currency: "TND" }),
+      });
     });
 
     it("should throw when client does not exist", async () => {
@@ -293,6 +329,26 @@ describe("Events Service", () => {
     );
   });
 
+  describe("assertEventAcceptsPublicActions", () => {
+    it("allows date-only end dates through the full final UTC day", () => {
+      expect(() =>
+        assertEventAcceptsPublicActions(
+          { status: "OPEN", endDate: new Date("2026-05-28T00:00:00.000Z") },
+          new Date("2026-05-28T18:00:00.000Z"),
+        ),
+      ).not.toThrow();
+    });
+
+    it("keeps explicit end times exact", () => {
+      expect(() =>
+        assertEventAcceptsPublicActions(
+          { status: "OPEN", endDate: new Date("2026-05-28T12:00:00.000Z") },
+          new Date("2026-05-28T18:00:00.000Z"),
+        ),
+      ).toThrow(AppError);
+    });
+  });
+
   describe("assertEventWritable", () => {
     it.each(["OPEN", "CLOSED"] as const)("should allow %s events", (status) => {
       expect(() => assertEventWritable({ status })).not.toThrow();
@@ -351,13 +407,13 @@ describe("Events Service", () => {
 
       prismaMock.event.findUnique.mockResolvedValue(mockEvent);
 
-      await expect(updateEvent(eventId, { maxCapacity: 9 })).rejects.toMatchObject(
-        {
-          statusCode: 400,
-          code: ErrorCodes.VALIDATION_ERROR,
-          message: "Max capacity cannot be below current registered count",
-        },
-      );
+      await expect(
+        updateEvent(eventId, { maxCapacity: 9 }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.VALIDATION_ERROR,
+        message: "Max capacity cannot be below current registered count",
+      });
       expect(prismaMock.event.update).not.toHaveBeenCalled();
     });
 
@@ -441,13 +497,13 @@ describe("Events Service", () => {
       prismaMock.event.findUnique.mockResolvedValue(eventWithPricing);
       prismaMock.registration.count.mockResolvedValue(1);
 
-      await expect(updateEvent(eventId, { currency: "EUR" })).rejects.toMatchObject(
-        {
-          statusCode: 400,
-          code: ErrorCodes.VALIDATION_ERROR,
-          message: "Cannot change currency after registrations exist",
-        },
-      );
+      await expect(
+        updateEvent(eventId, { currency: "EUR" }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.VALIDATION_ERROR,
+        message: "Cannot change currency after registrations exist",
+      });
       expect(prismaMock.eventPricing.upsert).not.toHaveBeenCalled();
     });
 
@@ -461,6 +517,25 @@ describe("Events Service", () => {
       prismaMock.event.findUniqueOrThrow.mockResolvedValue(eventWithPricing);
 
       await updateEvent(eventId, { currency: "TND" });
+
+      expect(prismaMock.registration.count).not.toHaveBeenCalled();
+      expect(prismaMock.eventPricing.upsert).toHaveBeenCalledWith({
+        where: { eventId },
+        update: { currency: "TND" },
+        create: { eventId, basePrice: 0, currency: "TND" },
+      });
+    });
+
+    it("normalizes currency before comparing with the current pricing", async () => {
+      const eventWithPricing = {
+        ...createMockEvent({ id: eventId }),
+        pricing: createMockEventPricing({ eventId, currency: "TND" }),
+      };
+
+      prismaMock.event.findUnique.mockResolvedValue(eventWithPricing);
+      prismaMock.event.findUniqueOrThrow.mockResolvedValue(eventWithPricing);
+
+      await updateEvent(eventId, { currency: "tnd" });
 
       expect(prismaMock.registration.count).not.toHaveBeenCalled();
       expect(prismaMock.eventPricing.upsert).toHaveBeenCalledWith({
@@ -826,6 +901,42 @@ describe("Events Service", () => {
       });
     });
 
+    it("should collect abstract and abstract-book storage keys before deleting the event", async () => {
+      const mockEvent = {
+        ...createMockEvent({ id: eventId, bannerUrl: "event/banner.webp" }),
+        _count: { registrations: 0 },
+      };
+
+      prismaMock.event.findUnique.mockResolvedValue(mockEvent);
+      prismaMock.certificateTemplate.findMany.mockResolvedValue([
+        { templateUrl: "certificates/template.png" },
+      ] as never);
+      prismaMock.abstract.findMany.mockResolvedValue([
+        { finalFileKey: "abstracts/final.pdf" },
+      ] as never);
+      prismaMock.abstractBookJob.findMany.mockResolvedValue([
+        { storageKey: "abstract-books/book.pdf" },
+      ] as never);
+      prismaMock.event.delete.mockResolvedValue(mockEvent);
+
+      await deleteEvent(eventId);
+
+      expect(prismaMock.abstract.findMany).toHaveBeenCalledWith({
+        where: { eventId, finalFileKey: { not: null } },
+        select: { finalFileKey: true },
+      });
+      expect(prismaMock.abstractBookJob.findMany).toHaveBeenCalledWith({
+        where: { eventId, storageKey: { not: null } },
+        select: { storageKey: true },
+      });
+      expect(storageDeleteMock).toHaveBeenCalledWith("event/banner.webp");
+      expect(storageDeleteMock).toHaveBeenCalledWith(
+        "certificates/template.png",
+      );
+      expect(storageDeleteMock).toHaveBeenCalledWith("abstracts/final.pdf");
+      expect(storageDeleteMock).toHaveBeenCalledWith("abstract-books/book.pdf");
+    });
+
     it("should throw when event not found", async () => {
       prismaMock.event.findUnique.mockResolvedValue(null);
 
@@ -889,9 +1000,9 @@ describe("Events Service", () => {
         eventId,
       );
 
-      const sql = (tx.$queryRaw.mock.calls[0]?.[0] as TemplateStringsArray).join(
-        " ",
-      );
+      const sql = (
+        tx.$queryRaw.mock.calls[0]?.[0] as TemplateStringsArray
+      ).join(" ");
       expect(sql).toContain("status = 'OPEN'");
       expect(sql).toContain(
         "max_capacity IS NULL OR registered_count < max_capacity",

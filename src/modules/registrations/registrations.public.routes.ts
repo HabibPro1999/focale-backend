@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { Prisma } from "@/generated/prisma/client.js";
 import {
   createRegistration,
   getRegistrationForEdit,
@@ -42,6 +43,21 @@ function extractEditToken(request: FastifyRequest): string {
     throw new AppError("Edit token required", 401, ErrorCodes.INVALID_TOKEN);
   }
   return token;
+}
+
+function isIdempotencyConflict(error: unknown): boolean {
+  if (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === "P2002"
+  ) {
+    const target = error.meta?.target;
+    return (
+      target === "registrations_idempotency_key_key" ||
+      (Array.isArray(target) && target.includes("idempotency_key")) ||
+      (Array.isArray(target) && target.includes("idempotencyKey"))
+    );
+  }
+  return false;
 }
 
 // ============================================================================
@@ -112,11 +128,10 @@ export async function registrationsPublicRoutes(
         );
       }
 
-      // Strip unknown keys — keep only field IDs from the form schema
-      input.formData = sanitizeFormData(
-        form.schema as unknown as FormSchema,
-        input.formData,
-      );
+      // Persist the validated/coerced values, not the raw request payload.
+      input.formData =
+        validationResult.data ??
+        sanitizeFormData(form.schema as unknown as FormSchema, input.formData);
 
       // Calculate price breakdown using the event ID from the form
       const selectedAccessItems =
@@ -154,10 +169,30 @@ export async function registrationsPublicRoutes(
       };
 
       // Create registration
-      const registration = await createRegistration(
-        input,
-        registrationPriceBreakdown,
-      );
+      let registration;
+      try {
+        registration = await createRegistration(
+          input,
+          registrationPriceBreakdown,
+        );
+      } catch (error) {
+        if (!input.idempotencyKey || !isIdempotencyConflict(error)) {
+          throw error;
+        }
+        const existingRegistration = await getRegistrationByIdempotencyKey(
+          input.idempotencyKey,
+        );
+        if (!existingRegistration) throw error;
+        const existingPriceBreakdown =
+          existingRegistration.priceBreakdown as unknown;
+        return reply.status(200).send({
+          registration: {
+            ...existingRegistration,
+            token: existingRegistration.editToken,
+          },
+          priceBreakdown: existingPriceBreakdown,
+        });
+      }
 
       return reply.status(201).send({
         registration: {

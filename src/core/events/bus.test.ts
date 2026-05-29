@@ -103,4 +103,16 @@ describe("eventBus", () => {
     eventBus.emit(makeEvent());
     expect(eventBus.getSince("999999999")).toEqual([]);
   });
+
+  it("marks a replay gap when the requested id predates the retained buffer", () => {
+    const firstId = Number(
+      eventBus.emit(makeEvent({ payload: { id: "first" } })),
+    );
+    for (let i = 0; i < 501; i++) {
+      eventBus.emit(makeEvent({ payload: { id: `overflow-${i}` } }));
+    }
+
+    expect(eventBus.hasReplayGap(String(firstId))).toBe(true);
+    expect(eventBus.hasReplayGap("not-a-number")).toBe(false);
+  });
 });

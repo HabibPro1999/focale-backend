@@ -9,22 +9,14 @@ import {
   assertModuleEnabledForClient,
 } from "@clients";
 import { PaymentMethod } from "@/generated/prisma/enums.js";
-import {
-  assertEventAcceptsPublicActions,
-  assertEventWritable,
-} from "@events";
+import { assertEventAcceptsPublicActions, assertEventWritable } from "@events";
 import { getStorageProvider } from "@shared/services/storage/index.js";
 import { compressFile } from "@shared/services/storage/compress.js";
 import { fileTypeFromBuffer } from "file-type";
 import { enrichWithAccessSelections } from "./registration-enrichment.js";
 import type { RegistrationWithRelations } from "./registration-enrichment.js";
 import type { UpdatePaymentInput } from "./registrations.schema.js";
-import {
-  incrementPaidCount,
-  decrementPaidCount,
-  handleCapacityReached,
-  getAlreadyCoveredAccessIds,
-} from "@access";
+import { getAlreadyCoveredAccessIds, syncPaidCountDelta } from "@access";
 import type { PriceBreakdown } from "@pricing";
 import {
   enqueueRealtimeOutboxEvent,
@@ -212,41 +204,32 @@ export async function confirmPayment(
       ipAddress: ipAddress ?? undefined,
     });
 
-    // Sync paid count on access items
-    const FULLY_SETTLED = ["PAID", "SPONSORED", "WAIVED"];
-    const wasSettled = FULLY_SETTLED.includes(oldRegistration.paymentStatus);
-    const isSettled = FULLY_SETTLED.includes(input.paymentStatus);
-    if (wasSettled !== isSettled) {
-      const breakdown = oldRegistration.priceBreakdown as PriceBreakdown;
-      const accessItems = breakdown.accessItems ?? [];
-      if (accessItems.length > 0) {
-        if (!wasSettled && isSettled) {
-          // When coming from PARTIAL, some items are already covered by a sponsorship
-          // and had paidCount incremented at that time — skip them to avoid double-counting.
-          const alreadyCovered =
-            oldRegistration.paymentStatus === "PARTIAL"
-              ? await getAlreadyCoveredAccessIds(id, tx)
-              : new Set<string>();
-          const itemsToIncrement = accessItems.filter(
-            (item) => !alreadyCovered.has(item.accessId),
-          );
-          for (const item of itemsToIncrement) {
-            await incrementPaidCount(item.accessId, item.quantity, tx);
-          }
-          if (itemsToIncrement.length > 0) {
-            await handleCapacityReached(
-              oldRegistration.eventId,
-              itemsToIncrement.map((a) => a.accessId),
-              tx,
-            );
-          }
-        } else {
-          for (const item of accessItems) {
-            await decrementPaidCount(item.accessId, item.quantity, tx);
-          }
-        }
-      }
-    }
+    const coveredAccessIds =
+      oldRegistration.paymentStatus === "PARTIAL" ||
+      input.paymentStatus === "PARTIAL"
+        ? await getAlreadyCoveredAccessIds(id, tx)
+        : new Set<string>();
+    await syncPaidCountDelta(
+      oldRegistration.eventId,
+      {
+        status: oldRegistration.paymentStatus,
+        priceBreakdown: oldRegistration.priceBreakdown as PriceBreakdown,
+        coveredAccessIds,
+      },
+      {
+        status: input.paymentStatus,
+        priceBreakdown: oldRegistration.priceBreakdown as PriceBreakdown,
+        coveredAccessIds,
+      },
+      tx,
+    );
+
+    const wasSettled = ["PAID", "SPONSORED", "WAIVED"].includes(
+      oldRegistration.paymentStatus,
+    );
+    const isSettled = ["PAID", "SPONSORED", "WAIVED"].includes(
+      input.paymentStatus,
+    );
 
     // Accumulate realtime events (reuses wasSettled/isSettled from above)
     const clientId = oldRegistration.event?.clientId;

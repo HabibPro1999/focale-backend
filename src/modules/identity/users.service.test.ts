@@ -94,6 +94,38 @@ describe("Users Service", () => {
       });
     });
 
+    it("should normalize email before uniqueness check, Firebase create, and DB create", async () => {
+      const input = {
+        ...validClientAdminInput,
+        email: "  User@Example.COM ",
+      };
+      const expectedUser = createMockClientAdmin("client-123", {
+        id: "firebase-uid",
+        email: "user@example.com",
+      });
+
+      prismaMock.user.findUnique.mockResolvedValue(null);
+      clientExistsMock.mockResolvedValue(true);
+      firebaseAuthMock.createUser.mockResolvedValue({ uid: "firebase-uid" });
+      firebaseAuthMock.setCustomUserClaims.mockResolvedValue(undefined);
+      prismaMock.user.create.mockResolvedValue(expectedUser);
+
+      await createUser(input);
+
+      expect(prismaMock.user.findUnique).toHaveBeenCalledWith({
+        where: { email: "user@example.com" },
+      });
+      expect(firebaseAuthMock.createUser).toHaveBeenCalledWith(
+        "user@example.com",
+        input.password,
+      );
+      expect(prismaMock.user.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ email: "user@example.com" }),
+        }),
+      );
+    });
+
     it("should create a SUPER_ADMIN user without client", async () => {
       const expectedUser = createMockSuperAdmin({
         id: "firebase-uid",
@@ -319,6 +351,9 @@ describe("Users Service", () => {
           clientId: null,
         },
       );
+      expect(firebaseAuthMock.revokeFirebaseRefreshTokens).toHaveBeenCalledWith(
+        "user-123",
+      );
     });
 
     it("should update clientId and sync Firebase claims", async () => {
@@ -361,11 +396,50 @@ describe("Users Service", () => {
 
       prismaMock.user.findUnique.mockResolvedValue(existingUser);
       prismaMock.user.update.mockResolvedValue(updatedUser);
+      firebaseAuthMock.revokeFirebaseRefreshTokens.mockResolvedValue(undefined);
 
       const result = await updateUser("user-123", { active: false });
 
       expect(result.active).toBe(false);
       // Should NOT sync Firebase claims when only active status changes
+      expect(firebaseAuthMock.setCustomUserClaims).not.toHaveBeenCalled();
+      expect(firebaseAuthMock.revokeFirebaseRefreshTokens).toHaveBeenCalledWith(
+        "user-123",
+      );
+    });
+
+    it("should reject self role/client/active changes when requester id is provided", async () => {
+      const existingUser = createMockSuperAdmin({ id: "admin-123" });
+
+      prismaMock.user.findUnique.mockResolvedValue(existingUser);
+
+      await expect(
+        updateUser("admin-123", { active: false }, "admin-123"),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.BAD_REQUEST,
+      });
+
+      expect(prismaMock.user.update).not.toHaveBeenCalled();
+    });
+
+    it("should reject demoting or deactivating the last active super admin", async () => {
+      const existingUser = createMockSuperAdmin({
+        id: "admin-123",
+        active: true,
+      });
+
+      prismaMock.user.findUnique.mockResolvedValue(existingUser);
+      prismaMock.user.count.mockResolvedValue(1);
+
+      await expect(
+        updateUser("admin-123", { active: false }, "other-admin"),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.BAD_REQUEST,
+      });
+
+      expect(prismaMock.user.update).not.toHaveBeenCalled();
       expect(firebaseAuthMock.setCustomUserClaims).not.toHaveBeenCalled();
     });
 
@@ -651,6 +725,9 @@ describe("Users Service", () => {
         where: { id: "user-123" },
       });
       expect(firebaseAuthMock.deleteUser).toHaveBeenCalledWith("user-123");
+      expect(firebaseAuthMock.revokeFirebaseRefreshTokens).toHaveBeenCalledWith(
+        "user-123",
+      );
       expect(prismaMock.user.delete).toHaveBeenCalledWith({
         where: { id: "user-123" },
       });
@@ -715,6 +792,9 @@ describe("Users Service", () => {
 
       await deleteUser("admin-123", "requester-id");
 
+      expect(firebaseAuthMock.revokeFirebaseRefreshTokens).toHaveBeenCalledWith(
+        "admin-123",
+      );
       expect(firebaseAuthMock.deleteUser).toHaveBeenCalledWith("admin-123");
       expect(prismaMock.user.delete).toHaveBeenCalledWith({
         where: { id: "admin-123" },

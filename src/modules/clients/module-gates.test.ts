@@ -17,7 +17,9 @@ describe("client module gates", () => {
         enabledModules: ["pricing"],
       });
 
-      expect(() => assertModuleEnabledForClient(client, "pricing")).not.toThrow();
+      expect(() =>
+        assertModuleEnabledForClient(client, "pricing"),
+      ).not.toThrow();
     });
 
     it("throws when the client is inactive", () => {
@@ -39,6 +41,20 @@ describe("client module gates", () => {
         active: true,
         enabledModules: ["registrations"],
       });
+
+      expect(() => assertModuleEnabledForClient(client, "pricing")).toThrow(
+        AppError,
+      );
+      expect(() => assertModuleEnabledForClient(client, "pricing")).toThrow(
+        "Pricing module is disabled for this client",
+      );
+    });
+
+    it("throws cleanly when enabled modules are missing", () => {
+      const client = {
+        active: true,
+        enabledModules: null,
+      };
 
       expect(() => assertModuleEnabledForClient(client, "pricing")).toThrow(
         AppError,
@@ -75,6 +91,16 @@ describe("client module gates", () => {
       });
 
       expect(isModuleEnabledForClient(client, "pricing")).toBe(false);
+    });
+
+    it("returns false for null clients or null enabled modules", () => {
+      expect(isModuleEnabledForClient(null, "pricing")).toBe(false);
+      expect(
+        isModuleEnabledForClient(
+          { active: true, enabledModules: null },
+          "pricing",
+        ),
+      ).toBe(false);
     });
   });
 

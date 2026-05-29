@@ -18,12 +18,7 @@ import {
   type ExistingUsage,
 } from "./sponsorships.utils.js";
 import { getSponsorshipByCode } from "./sponsorship-queries.js";
-import {
-  incrementPaidCount,
-  decrementPaidCount,
-  handleCapacityReached,
-  getAlreadyCoveredAccessIds,
-} from "@access";
+import { getAlreadyCoveredAccessIds, syncPaidCountDelta } from "@access";
 import { buildLinkedSponsorshipContext } from "@email";
 import {
   enqueueRealtimeOutboxEvent,
@@ -94,6 +89,7 @@ async function unlinkSponsorshipFromRegistrationInternal(
       paidAmount: true,
       paymentMethod: true,
       paymentStatus: true,
+      eventId: true,
       totalAmount: true,
       priceBreakdown: true,
     },
@@ -120,6 +116,10 @@ async function unlinkSponsorshipFromRegistrationInternal(
     );
   }
 
+  const oldCoveredAccessIds = registrationBefore
+    ? await getAlreadyCoveredAccessIds(registrationId, tx)
+    : new Set<string>();
+
   // Delete the usage
   await tx.sponsorshipUsage.delete({
     where: { id: usage.id },
@@ -131,41 +131,49 @@ async function unlinkSponsorshipFromRegistrationInternal(
     select: { amountApplied: true },
   });
 
-  const newSponsorshipAmount = calculateTotalSponsorshipAmount(remainingUsages);
+  const rawNewSponsorshipAmount =
+    calculateTotalSponsorshipAmount(remainingUsages);
+  const newSponsorshipAmount = registrationBefore
+    ? Math.min(rawNewSponsorshipAmount, registrationBefore.totalAmount)
+    : rawNewSponsorshipAmount;
 
   // Determine new payment status after unlink
   const paidAmount = registrationBefore?.paidAmount ?? 0;
   const totalAmount = registrationBefore?.totalAmount ?? 0;
   const currentStatus = registrationBefore?.paymentStatus ?? "PENDING";
 
-  // Decrement paidCount for access items that were covered by this sponsorship.
-  // Applies when the registration was settled or partial — meaning paidCount was
-  // incremented for these items when the sponsorship was originally linked.
-  const coveredAccessIds = sponsorshipBefore?.coveredAccessIds ?? [];
-  if (
-    ["PAID", "SPONSORED", "WAIVED", "PARTIAL"].includes(currentStatus) &&
-    coveredAccessIds.length > 0
-  ) {
-    const breakdown = registrationBefore?.priceBreakdown as {
-      accessItems?: Array<{ accessId: string; quantity: number }>;
-    } | null;
-    const accessItems = breakdown?.accessItems ?? [];
-    const itemsToDecrement = accessItems.filter((item) =>
-      coveredAccessIds.includes(item.accessId),
-    );
-    for (const item of itemsToDecrement) {
-      await decrementPaidCount(item.accessId, item.quantity, tx);
-    }
-  }
-
   let nextStatus: string | undefined;
-  // Only auto-transition from SPONSORED (fully covered by sponsorship)
   if (currentStatus === "SPONSORED" && newSponsorshipAmount < totalAmount) {
     if (paidAmount > 0 || newSponsorshipAmount > 0) {
       nextStatus = "PARTIAL";
     } else {
       nextStatus = "PENDING";
     }
+  } else if (currentStatus === "PARTIAL" && newSponsorshipAmount === 0) {
+    nextStatus = paidAmount > 0 ? "PARTIAL" : "PENDING";
+  }
+  if (registrationBefore) {
+    const newCoveredAccessIds = await getAlreadyCoveredAccessIds(
+      registrationId,
+      tx,
+    );
+    const priceBreakdown = registrationBefore.priceBreakdown as {
+      accessItems?: Array<{ accessId: string; quantity: number }>;
+    } | null;
+    await syncPaidCountDelta(
+      registrationBefore.eventId,
+      {
+        status: currentStatus,
+        priceBreakdown,
+        coveredAccessIds: oldCoveredAccessIds,
+      },
+      {
+        status: nextStatus ?? currentStatus,
+        priceBreakdown,
+        coveredAccessIds: newCoveredAccessIds,
+      },
+      tx,
+    );
   }
 
   await tx.registration.update({
@@ -264,8 +272,12 @@ async function recalculateUsageAmounts(
           registration: {
             select: {
               id: true,
+              eventId: true,
               totalAmount: true,
+              paidAmount: true,
               baseAmount: true,
+              paymentStatus: true,
+              paidAt: true,
               accessTypeIds: true,
               priceBreakdown: true,
             },
@@ -309,12 +321,82 @@ async function recalculateUsageAmounts(
       select: { amountApplied: true },
     });
 
-    const totalSponsorshipAmount = calculateTotalSponsorshipAmount(allUsages);
+    const totalSponsorshipAmount = Math.min(
+      calculateTotalSponsorshipAmount(allUsages),
+      usage.registration.totalAmount,
+    );
+    const oldPaymentStatus = usage.registration.paymentStatus;
+    const settlement = calculateSettlement({
+      totalAmount: usage.registration.totalAmount,
+      paidAmount: usage.registration.paidAmount,
+      sponsorshipAmount: totalSponsorshipAmount,
+    });
+    const nextPaymentStatus =
+      oldPaymentStatus === "PAID" ||
+      oldPaymentStatus === "WAIVED" ||
+      oldPaymentStatus === "REFUNDED"
+        ? oldPaymentStatus
+        : totalSponsorshipAmount >= usage.registration.totalAmount &&
+            usage.registration.totalAmount > 0
+          ? "SPONSORED"
+          : settlement.isPartiallyPaid
+            ? "PARTIAL"
+            : "PENDING";
+    const nextPaidAt =
+      nextPaymentStatus === "SPONSORED"
+        ? (usage.registration.paidAt ?? new Date())
+        : nextPaymentStatus === "PARTIAL" || nextPaymentStatus === "PENDING"
+          ? null
+          : usage.registration.paidAt;
+    const updatedPriceBreakdown = {
+      ...priceBreakdown,
+      sponsorshipTotal: totalSponsorshipAmount,
+      total: Math.max(
+        0,
+        ((priceBreakdown as { subtotal?: number }).subtotal ??
+          usage.registration.totalAmount) -
+          totalSponsorshipAmount,
+      ),
+    };
 
     await db.registration.update({
       where: { id: usage.registration.id },
-      data: { sponsorshipAmount: totalSponsorshipAmount },
+      data: {
+        sponsorshipAmount: totalSponsorshipAmount,
+        paymentStatus: nextPaymentStatus,
+        paidAt: nextPaidAt,
+        priceBreakdown: updatedPriceBreakdown,
+      },
     });
+
+    if (oldPaymentStatus !== nextPaymentStatus) {
+      const oldCoveredAccessIds =
+        oldPaymentStatus === "PARTIAL"
+          ? await getAlreadyCoveredAccessIds(
+              usage.registration.id,
+              db,
+              sponsorshipId,
+            )
+          : new Set<string>();
+      const newCoveredAccessIds =
+        nextPaymentStatus === "PARTIAL"
+          ? await getAlreadyCoveredAccessIds(usage.registration.id, db)
+          : new Set<string>();
+      await syncPaidCountDelta(
+        usage.registration.eventId,
+        {
+          status: oldPaymentStatus,
+          priceBreakdown,
+          coveredAccessIds: oldCoveredAccessIds,
+        },
+        {
+          status: nextPaymentStatus,
+          priceBreakdown: updatedPriceBreakdown,
+          coveredAccessIds: newCoveredAccessIds,
+        },
+        db as unknown as Parameters<typeof syncPaidCountDelta>[3],
+      );
+    }
   }
 }
 
@@ -508,6 +590,10 @@ export async function linkSponsorshipToRegistration(
         ErrorCodes.SPONSORSHIP_NOT_APPLICABLE,
       );
     }
+    const oldCoveredAccessIds = await getAlreadyCoveredAccessIds(
+      registrationId,
+      tx,
+    );
 
     // Create sponsorship usage
     const usage = await tx.sponsorshipUsage.create({
@@ -551,85 +637,48 @@ export async function linkSponsorshipToRegistration(
 
     // Update registration sponsorship amount and paymentMethod
     const isFullySponsored = newSponsorshipAmount >= registration.totalAmount;
-    const wasAlreadySettled = ["PAID", "SPONSORED", "WAIVED"].includes(
+    const nextPaymentStatus = ["PAID", "WAIVED"].includes(
       registration.paymentStatus,
-    );
+    )
+      ? registration.paymentStatus
+      : isFullySponsored
+        ? "SPONSORED"
+        : newSponsorshipAmount > 0
+          ? "PARTIAL"
+          : registration.paymentStatus;
     await tx.registration.update({
       where: { id: registrationId },
       data: {
         sponsorshipAmount: newSponsorshipAmount,
         paymentMethod: "LAB_SPONSORSHIP",
         // Fully sponsored → SPONSORED; partially → PARTIAL
-        ...(isFullySponsored
-          ? { paymentStatus: "SPONSORED", paidAt: new Date() }
-          : newSponsorshipAmount > 0
-            ? { paymentStatus: "PARTIAL" }
-            : {}),
+        paymentStatus: nextPaymentStatus as
+          | "PAID"
+          | "WAIVED"
+          | "SPONSORED"
+          | "PARTIAL",
+        ...(nextPaymentStatus === "SPONSORED" ? { paidAt: new Date() } : {}),
       },
     });
 
-    // Sync paid count for capacity tracking
-    if (!wasAlreadySettled) {
-      if (isFullySponsored) {
-        // Fully sponsored: increment paidCount for items not already covered by prior sponsorships.
-        // Exclude current sponsorship (its usage was just inserted) to get only previously-covered IDs.
-        const breakdown = registration.priceBreakdown as Record<
-          string,
-          unknown
-        >;
-        const accessItems = (breakdown?.accessItems ?? []) as Array<{
-          accessId: string;
-          quantity: number;
-        }>;
-        const alreadyCovered =
-          registration.paymentStatus === "PARTIAL"
-            ? await getAlreadyCoveredAccessIds(
-                registrationId,
-                tx,
-                sponsorshipId,
-              )
-            : new Set<string>();
-        const itemsToIncrement = accessItems.filter(
-          (item) => !alreadyCovered.has(item.accessId),
-        );
-        for (const item of itemsToIncrement) {
-          await incrementPaidCount(item.accessId, item.quantity, tx);
-        }
-        if (itemsToIncrement.length > 0) {
-          await handleCapacityReached(
-            registration.eventId,
-            itemsToIncrement.map((a) => a.accessId),
-            tx,
-          );
-        }
-      } else if (
-        newSponsorshipAmount > 0 &&
-        sponsorship.coveredAccessIds.length > 0
-      ) {
-        // Partial sponsorship: increment paidCount only for covered access items
-        const breakdown = registration.priceBreakdown as Record<
-          string,
-          unknown
-        >;
-        const accessItems = (breakdown?.accessItems ?? []) as Array<{
-          accessId: string;
-          quantity: number;
-        }>;
-        const coveredItems = accessItems.filter((a) =>
-          sponsorship.coveredAccessIds.includes(a.accessId),
-        );
-        for (const item of coveredItems) {
-          await incrementPaidCount(item.accessId, item.quantity, tx);
-        }
-        if (coveredItems.length > 0) {
-          await handleCapacityReached(
-            registration.eventId,
-            coveredItems.map((a) => a.accessId),
-            tx,
-          );
-        }
-      }
-    }
+    const newCoveredAccessIds = await getAlreadyCoveredAccessIds(
+      registrationId,
+      tx,
+    );
+    await syncPaidCountDelta(
+      registration.eventId,
+      {
+        status: registration.paymentStatus,
+        priceBreakdown: registration.priceBreakdown,
+        coveredAccessIds: oldCoveredAccessIds,
+      },
+      {
+        status: nextPaymentStatus,
+        priceBreakdown: registration.priceBreakdown,
+        coveredAccessIds: newCoveredAccessIds,
+      },
+      tx,
+    );
 
     const changes: Record<string, { old: unknown; new: unknown }> = {
       registrationId: { old: null, new: registrationId },
@@ -667,15 +716,13 @@ export async function linkSponsorshipToRegistration(
         payload: { id: registrationId },
         ts: Date.now(),
       });
-      if (!wasAlreadySettled) {
-        pending.push({
-          type: "eventAccess.countsChanged",
-          clientId,
-          eventId: sponsorship.eventId,
-          payload: { id: sponsorship.eventId, accessIds: [] },
-          ts: Date.now(),
-        });
-      }
+      pending.push({
+        type: "eventAccess.countsChanged",
+        clientId,
+        eventId: sponsorship.eventId,
+        payload: { id: sponsorship.eventId, accessIds: [] },
+        ts: Date.now(),
+      });
     }
     await Promise.all(pending.map((ev) => enqueueRealtimeOutboxEvent(tx, ev)));
 

@@ -29,6 +29,7 @@ import {
   compileMjmlToHtml,
   escapeHtml,
 } from "@modules/email/email-renderer.service.js";
+import { assertClientModuleEnabled } from "@clients";
 import { config } from "@config/app.config.js";
 import type { ActionCodeSettings } from "firebase-admin/auth";
 import type {
@@ -126,6 +127,14 @@ async function assertActiveMembership(eventId: string, userId: string) {
       ErrorCodes.FORBIDDEN,
     );
   }
+  const event = await prisma.event.findUnique({
+    where: { id: eventId },
+    select: { clientId: true },
+  });
+  if (!event) {
+    throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
+  }
+  await assertClientModuleEnabled(event.clientId, "abstracts");
   return membership;
 }
 
@@ -232,6 +241,8 @@ async function notifyScoreDivergence(input: {
     select: { email: true, name: true },
   });
 
+  const dedupeBucket = Math.floor(Date.now() / ONE_HOUR_MS);
+
   await Promise.all(
     admins.map((admin) =>
       enqueueAbstractEmailOutboxEvent(
@@ -248,7 +259,7 @@ async function notifyScoreDivergence(input: {
             divergenceThreshold: input.threshold,
           },
         },
-        `email:abstract:ABSTRACT_SCORE_DIVERGENCE:${input.abstractId}:${admin.email}`,
+        `email:abstract:ABSTRACT_SCORE_DIVERGENCE:${input.abstractId}:${admin.email}:${dedupeBucket}`,
       ),
     ),
   );
@@ -307,10 +318,13 @@ export async function listCommitteeMembers(eventId: string) {
   );
   const assignedByUser = new Map(
     await Promise.all(
-      memberships.map(async (membership) => [
-        membership.userId,
-        await countAccessibleAbstracts(eventId, membership.userId),
-      ] as const),
+      memberships.map(
+        async (membership) =>
+          [
+            membership.userId,
+            await countAccessibleAbstracts(eventId, membership.userId),
+          ] as const,
+      ),
     ),
   );
 
@@ -730,6 +744,21 @@ export async function assignReviewers(
   }
 
   const updated = await prisma.$transaction(async (tx) => {
+    const inactiveDesiredReviews =
+      reviewerIds.length > 0
+        ? await tx.abstractReview.findMany({
+            where: {
+              abstractId,
+              reviewerId: { in: reviewerIds },
+              active: false,
+            },
+            select: { reviewerId: true },
+          })
+        : [];
+    const reviewersNeedingScoreReset = new Set(
+      (inactiveDesiredReviews ?? []).map((review) => review.reviewerId),
+    );
+
     await tx.abstractReview.updateMany({
       where: {
         abstractId,
@@ -740,9 +769,16 @@ export async function assignReviewers(
     });
 
     for (const reviewerId of reviewerIds) {
+      const resetPriorScore = reviewersNeedingScoreReset.has(reviewerId);
       await tx.abstractReview.upsert({
         where: { abstractId_reviewerId: { abstractId, reviewerId } },
-        update: { eventId, active: true },
+        update: {
+          eventId,
+          active: true,
+          ...(resetPriorScore
+            ? { score: null, comment: null, scoredAt: null }
+            : {}),
+        },
         create: { abstractId, eventId, reviewerId, active: true },
       });
     }
@@ -779,10 +815,13 @@ export async function getCommitteeProfile(userId: string) {
   const eventIds = memberships.map((membership) => membership.eventId);
   const [assignedCounts, scoredGroups] = await Promise.all([
     Promise.all(
-      memberships.map(async (membership) => [
-        membership.eventId,
-        await countAccessibleAbstracts(membership.eventId, userId),
-      ] as const),
+      memberships.map(
+        async (membership) =>
+          [
+            membership.eventId,
+            await countAccessibleAbstracts(membership.eventId, userId),
+          ] as const,
+      ),
     ),
     prisma.abstractReview.groupBy({
       by: ["eventId"],

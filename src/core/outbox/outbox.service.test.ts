@@ -34,7 +34,9 @@ describe("outbox service", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     prismaMock.outboxEvent.findFirst.mockResolvedValue(null);
-    prismaMock.outboxEvent.create.mockResolvedValue({ id: "outbox-1" } as never);
+    prismaMock.outboxEvent.create.mockResolvedValue({
+      id: "outbox-1",
+    } as never);
     prismaMock.$executeRaw.mockResolvedValue(0);
     prismaMock.outboxEvent.updateMany.mockResolvedValue({ count: 1 } as never);
   });
@@ -89,6 +91,42 @@ describe("outbox service", () => {
         },
       }),
     ).resolves.toBe(false);
+  });
+
+  it("rolls back to a savepoint for transaction-scoped dedupe races", async () => {
+    const tx = {
+      outboxEvent: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockRejectedValue(prismaUniqueError({})),
+      },
+      $executeRawUnsafe: vi.fn().mockResolvedValue(0),
+    };
+
+    await expect(
+      enqueueOutboxEvent(tx as never, {
+        type: "email.abstract",
+        aggregateType: "Abstract",
+        aggregateId: "abstract-1",
+        dedupeKey: "email:abstract:ABSTRACT_ACCEPTED:abstract-1",
+        payload: {
+          trigger: "ABSTRACT_ACCEPTED",
+          abstractId: "abstract-1",
+        },
+      }),
+    ).resolves.toBe(false);
+
+    expect(tx.$executeRawUnsafe).toHaveBeenNthCalledWith(
+      1,
+      "SAVEPOINT outbox_enqueue_dedupe",
+    );
+    expect(tx.$executeRawUnsafe).toHaveBeenNthCalledWith(
+      2,
+      "ROLLBACK TO SAVEPOINT outbox_enqueue_dedupe",
+    );
+    expect(tx.$executeRawUnsafe).toHaveBeenNthCalledWith(
+      3,
+      "RELEASE SAVEPOINT outbox_enqueue_dedupe",
+    );
   });
 
   it("skips existing dedupe keys before writing in the current transaction", async () => {

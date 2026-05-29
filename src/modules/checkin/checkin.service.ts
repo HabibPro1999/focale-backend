@@ -1,10 +1,22 @@
 import { prisma } from "@/database/client.js";
+import { PaymentStatus, Prisma } from "@/generated/prisma/client.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { auditLog } from "@shared/utils/audit.js";
 import { enqueueRealtimeOutboxEvent } from "@core/outbox";
 
-const CHECKIN_ELIGIBLE_STATUSES = ["PAID", "SPONSORED", "WAIVED"];
+const CHECKIN_ELIGIBLE_STATUSES: PaymentStatus[] = [
+  "PAID",
+  "SPONSORED",
+  "WAIVED",
+];
+
+function isUniqueConstraintError(error: unknown): boolean {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === "P2002"
+  );
+}
 
 // ============================================================================
 // Check In
@@ -15,6 +27,7 @@ export async function checkIn(
   registrationId: string,
   accessId: string | undefined,
   userId: string,
+  checkedInAt = new Date(),
 ) {
   const registration = await prisma.registration.findUnique({
     where: { id: registrationId },
@@ -89,35 +102,63 @@ export async function checkIn(
       };
     }
 
-    const checkInRecord = await prisma.$transaction(async (tx) => {
-      const created = await tx.accessCheckIn.create({
-        data: {
-          registrationId,
-          accessId,
-          checkedInBy: userId,
+    let checkInRecord;
+    try {
+      checkInRecord = await prisma.$transaction(async (tx) => {
+        const created = await tx.accessCheckIn.create({
+          data: {
+            registrationId,
+            accessId,
+            checkedInBy: userId,
+            checkedInAt,
+          },
+        });
+
+        await auditLog(tx, {
+          entityType: "AccessCheckIn",
+          entityId: created.id,
+          action: "CHECK_IN",
+          changes: {
+            accessId: { old: null, new: accessId },
+            checkedInAt: { old: null, new: checkedInAt.toISOString() },
+          },
+          performedBy: userId,
+        });
+
+        if (registration.event?.clientId) {
+          await enqueueRealtimeOutboxEvent(tx, {
+            type: "registration.checkedIn",
+            clientId: registration.event.clientId,
+            eventId: registration.eventId,
+            payload: { id: registration.id, accessId },
+            ts: Date.now(),
+          });
+        }
+
+        return created;
+      });
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) throw error;
+      const existingAfterRace = await prisma.accessCheckIn.findUnique({
+        where: {
+          registrationId_accessId: { registrationId, accessId },
         },
       });
-
-      await auditLog(tx, {
-        entityType: "AccessCheckIn",
-        entityId: created.id,
-        action: "CHECK_IN",
-        changes: { accessId: { old: null, new: accessId } },
-        performedBy: userId,
-      });
-
-      if (registration.event?.clientId) {
-        await enqueueRealtimeOutboxEvent(tx, {
-          type: "registration.checkedIn",
-          clientId: registration.event.clientId,
-          eventId: registration.eventId,
-          payload: { id: registration.id, accessId },
-          ts: Date.now(),
-        });
-      }
-
-      return created;
-    });
+      if (!existingAfterRace) throw error;
+      return {
+        success: true,
+        alreadyCheckedIn: true,
+        checkedInAt: existingAfterRace.checkedInAt,
+        registration: {
+          id: registration.id,
+          firstName: registration.firstName,
+          lastName: registration.lastName,
+          email: registration.email,
+          referenceNumber: registration.referenceNumber,
+          paymentStatus: registration.paymentStatus,
+        },
+      };
+    }
 
     return {
       success: true,
@@ -151,18 +192,17 @@ export async function checkIn(
     };
   }
 
-  const now = new Date();
   await prisma.$transaction(async (tx) => {
     await tx.registration.update({
       where: { id: registrationId },
-      data: { checkedInAt: now, checkedInBy: userId },
+      data: { checkedInAt, checkedInBy: userId },
     });
 
     await auditLog(tx, {
       entityType: "Registration",
       entityId: registrationId,
       action: "CHECK_IN",
-      changes: { checkedInAt: { old: null, new: now.toISOString() } },
+      changes: { checkedInAt: { old: null, new: checkedInAt.toISOString() } },
       performedBy: userId,
     });
 
@@ -180,7 +220,7 @@ export async function checkIn(
   return {
     success: true,
     alreadyCheckedIn: false,
-    checkedInAt: now,
+    checkedInAt,
     registration: {
       id: registration.id,
       firstName: registration.firstName,
@@ -206,6 +246,13 @@ export async function getCheckInRegistrations(
   };
 
   if (accessId) {
+    const access = await prisma.eventAccess.findFirst({
+      where: { id: accessId, eventId, active: true },
+      select: { id: true },
+    });
+    if (!access) {
+      throw new AppError("Access item not found", 404, ErrorCodes.NOT_FOUND);
+    }
     where.accessTypeIds = { has: accessId };
   }
 
@@ -241,6 +288,7 @@ export async function batchSync(
         item.registrationId,
         item.accessId,
         userId,
+        new Date(item.scannedAt),
       );
       if (result.alreadyCheckedIn) {
         alreadyCheckedIn++;
@@ -263,38 +311,55 @@ export async function batchSync(
 // ============================================================================
 
 export async function getCheckInStats(eventId: string) {
-  const [total, checkedIn, accessCounts, accessItems] = await Promise.all([
-    prisma.registration.count({ where: { eventId } }),
-    prisma.registration.count({
-      where: { eventId, checkedInAt: { not: null } },
-    }),
-    prisma.accessCheckIn.groupBy({
-      by: ["accessId"],
-      where: {
-        registration: { eventId },
-      },
-      _count: { id: true },
-    }),
-    prisma.eventAccess.findMany({
-      where: { eventId, active: true },
-      select: {
-        id: true,
-        name: true,
-        type: true,
-        registeredCount: true,
-      },
-    }),
-  ]);
+  const [total, checkedIn, accessCounts, accessItems, eligibleRegistrations] =
+    await Promise.all([
+      prisma.registration.count({ where: { eventId } }),
+      prisma.registration.count({
+        where: { eventId, checkedInAt: { not: null } },
+      }),
+      prisma.accessCheckIn.groupBy({
+        by: ["accessId"],
+        where: {
+          registration: { eventId },
+          access: { eventId, active: true },
+        },
+        _count: { id: true },
+      }),
+      prisma.eventAccess.findMany({
+        where: { eventId, active: true },
+        select: {
+          id: true,
+          name: true,
+          type: true,
+        },
+      }),
+      prisma.registration.findMany({
+        where: {
+          eventId,
+          paymentStatus: { in: CHECKIN_ELIGIBLE_STATUSES },
+        },
+        select: { accessTypeIds: true },
+      }),
+    ]);
 
   const accessCountMap = new Map(
     accessCounts.map((c) => [c.accessId, c._count.id]),
   );
 
+  const activeAccessIds = new Set(accessItems.map((item) => item.id));
+  const totalByAccess = new Map<string, number>();
+  for (const registration of eligibleRegistrations) {
+    for (const id of registration.accessTypeIds) {
+      if (!activeAccessIds.has(id)) continue;
+      totalByAccess.set(id, (totalByAccess.get(id) ?? 0) + 1);
+    }
+  }
+
   const byAccess = accessItems.map((item) => ({
     accessId: item.id,
     name: item.name,
     type: item.type,
-    total: item.registeredCount,
+    total: totalByAccess.get(item.id) ?? 0,
     checkedIn: accessCountMap.get(item.id) ?? 0,
   }));
 

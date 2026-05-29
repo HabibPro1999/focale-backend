@@ -14,6 +14,10 @@ type EnrichedAccess = EventAccess & {
   isFull: boolean;
 };
 
+function hasConditions(conditions: unknown): boolean {
+  return Array.isArray(conditions) && conditions.length > 0;
+}
+
 /**
  * Returns access items grouped hierarchically by date and time slot,
  * filtered by availability, form conditions, and prerequisites.
@@ -39,7 +43,7 @@ export async function getGroupedAccess(
     if (access.availableFrom && access.availableFrom > now) return false;
     if (access.availableTo && access.availableTo < now) return false;
 
-    if (access.conditions) {
+    if (hasConditions(access.conditions)) {
       if (
         !evaluateConditions(
           access.conditions as AccessCondition[],

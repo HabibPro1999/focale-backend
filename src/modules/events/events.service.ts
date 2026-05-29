@@ -17,7 +17,11 @@ import type {
   UpdateEventInput,
   ListEventsQuery,
 } from "./events.schema.js";
-import { Prisma, type Event, type EventPricing } from "@/generated/prisma/client.js";
+import {
+  Prisma,
+  type Event,
+  type EventPricing,
+} from "@/generated/prisma/client.js";
 import type { TxClient } from "@shared/types/prisma.js";
 
 // Transaction client type — minimal subset needed for raw capacity queries
@@ -28,6 +32,25 @@ type EventWithPricing = Event & { pricing: EventPricing | null };
 
 function normalizeBasePrice(basePrice: number | null | undefined): number {
   return basePrice ?? 0;
+}
+
+function normalizeCurrency(currency: string | null | undefined): string {
+  return currency?.trim().toUpperCase() ?? "TND";
+}
+
+function effectivePublicEndDate(endDate: Date): Date {
+  if (
+    endDate.getUTCHours() !== 0 ||
+    endDate.getUTCMinutes() !== 0 ||
+    endDate.getUTCSeconds() !== 0 ||
+    endDate.getUTCMilliseconds() !== 0
+  ) {
+    return endDate;
+  }
+
+  const inclusiveEnd = new Date(endDate);
+  inclusiveEnd.setUTCHours(23, 59, 59, 999);
+  return inclusiveEnd;
 }
 
 export function assertEventWritable(event: Pick<Event, "status">): void {
@@ -55,7 +78,7 @@ export function assertEventAcceptsPublicActions(
   now = new Date(),
 ): void {
   assertEventOpen(event);
-  if (event.endDate < now) {
+  if (effectivePublicEndDate(event.endDate) < now) {
     throw new AppError(
       "Event is not accepting public actions",
       400,
@@ -167,7 +190,7 @@ export async function createEvent(
       data: {
         eventId: event.id,
         basePrice: normalizeBasePrice(basePrice),
-        currency: currency ?? "TND",
+        currency: normalizeCurrency(currency),
       },
     });
 
@@ -288,9 +311,11 @@ export async function updateEvent(
       }
 
       // Block currency change if registrations exist, in the same transaction as pricing update.
-      if (currency !== undefined) {
+      const normalizedCurrency =
+        currency !== undefined ? normalizeCurrency(currency) : undefined;
+      if (normalizedCurrency !== undefined) {
         const currentCurrency = event.pricing?.currency ?? "TND";
-        if (currency !== currentCurrency) {
+        if (normalizedCurrency !== currentCurrency) {
           const registrationCount = await tx.registration.count({
             where: { eventId: id },
           });
@@ -313,7 +338,7 @@ export async function updateEvent(
         });
       }
 
-      if (basePrice === undefined && currency === undefined) {
+      if (basePrice === undefined && normalizedCurrency === undefined) {
         return updatedEvent;
       }
 
@@ -321,8 +346,8 @@ export async function updateEvent(
       if (basePrice !== undefined) {
         pricingData.basePrice = normalizeBasePrice(basePrice);
       }
-      if (currency !== undefined) {
-        pricingData.currency = currency;
+      if (normalizedCurrency !== undefined) {
+        pricingData.currency = normalizedCurrency;
       }
 
       await tx.eventPricing.upsert({
@@ -387,6 +412,8 @@ export async function deleteEvent(id: string): Promise<void> {
   let filesToDelete: {
     bannerUrl: string | null;
     certificateTemplateImages: Array<{ templateUrl: string }>;
+    abstractFinalFiles: Array<{ finalFileKey: string | null }>;
+    abstractBookFiles: Array<{ storageKey: string | null }>;
   };
 
   try {
@@ -419,11 +446,26 @@ export async function deleteEvent(id: string): Promise<void> {
           where: { eventId: id },
           select: { templateUrl: true },
         })) ?? [];
+      const abstractFinalFiles =
+        (await tx.abstract.findMany({
+          where: { eventId: id, finalFileKey: { not: null } },
+          select: { finalFileKey: true },
+        })) ?? [];
+      const abstractBookFiles =
+        (await tx.abstractBookJob.findMany({
+          where: { eventId: id, storageKey: { not: null } },
+          select: { storageKey: true },
+        })) ?? [];
 
       await tx.emailTemplate.deleteMany({ where: { eventId: id } });
       await tx.event.delete({ where: { id } });
 
-      return { bannerUrl: event.bannerUrl, certificateTemplateImages };
+      return {
+        bannerUrl: event.bannerUrl,
+        certificateTemplateImages,
+        abstractFinalFiles,
+        abstractBookFiles,
+      };
     });
   } catch (err) {
     if (isPrismaKnownRequestError(err, "P2003")) {
@@ -445,6 +487,12 @@ export async function deleteEvent(id: string): Promise<void> {
     deleteStoredObjectBestEffort(filesToDelete.bannerUrl, { eventId: id }),
     ...filesToDelete.certificateTemplateImages.map((template) =>
       deleteStoredObjectBestEffort(template.templateUrl, { eventId: id }),
+    ),
+    ...filesToDelete.abstractFinalFiles.map((abstract) =>
+      deleteStoredObjectBestEffort(abstract.finalFileKey, { eventId: id }),
+    ),
+    ...filesToDelete.abstractBookFiles.map((job) =>
+      deleteStoredObjectBestEffort(job.storageKey, { eventId: id }),
     ),
   ]);
 }

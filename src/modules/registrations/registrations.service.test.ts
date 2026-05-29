@@ -27,6 +27,7 @@ import { DEFAULT_ENABLED_MODULES } from "../clients/clients.schema.js";
 import {
   decrementAccessRegisteredCountTx,
   incrementAccessRegisteredCountTx,
+  syncPaidCountDelta,
   validateAccessSelections,
 } from "@access";
 import { faker } from "@faker-js/faker";
@@ -47,6 +48,8 @@ vi.mock("@access", () => ({
     .mockResolvedValue({ valid: true, errors: [] }),
   incrementAccessRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
   decrementAccessRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
+  getAlreadyCoveredAccessIds: vi.fn().mockResolvedValue(new Set<string>()),
+  syncPaidCountDelta: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@pricing", () => ({
@@ -123,6 +126,7 @@ describe("Registrations Service", () => {
       slug: "test-event",
       clientId,
       status: "OPEN",
+      endDate: new Date("2999-01-01T00:00:00.000Z"),
       client: { active: true, enabledModules },
       ...overrides,
     };
@@ -300,9 +304,7 @@ describe("Registrations Service", () => {
       });
 
       prismaMock.form.findUnique.mockResolvedValue(mockForm);
-      prismaMock.registration.findFirst.mockResolvedValue(
-        existingRegistration,
-      );
+      prismaMock.registration.findFirst.mockResolvedValue(existingRegistration);
 
       const input = {
         formId,
@@ -1137,6 +1139,7 @@ describe("Registrations Service", () => {
       prismaMock.registration.updateMany.mockResolvedValue({
         count: 1,
       } as never);
+      prismaMock.sponsorshipUsage.findMany.mockResolvedValue([] as never);
     });
 
     it("should update form data successfully", async () => {
@@ -1176,6 +1179,19 @@ describe("Registrations Service", () => {
       });
 
       expect(result.registration).toBeDefined();
+      expect(prismaMock.outboxEvent.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            type: "realtime.emit",
+            payload: expect.objectContaining({
+              type: "registration.updated",
+              clientId,
+              eventId: registration.eventId,
+              payload: expect.objectContaining({ id: registration.id }),
+            }),
+          }),
+        }),
+      );
     });
 
     it("should throw error when editing refunded registration", async () => {
@@ -1477,6 +1493,114 @@ describe("Registrations Service", () => {
         prismaMock,
       );
       expect(decrementAccessRegisteredCountTx).not.toHaveBeenCalled();
+      expect(prismaMock.outboxEvent.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            type: "realtime.emit",
+            payload: expect.objectContaining({
+              type: "eventAccess.countsChanged",
+              payload: expect.objectContaining({ accessIds: [accessId] }),
+            }),
+          }),
+        }),
+      );
+    });
+
+    it("reconciles linked sponsorship settlement during public edit", async () => {
+      const accessId = faker.string.uuid();
+      const priceWithAccess = createMockPriceBreakdown({
+        calculatedBasePrice: 200,
+        accessItems: [
+          {
+            accessId,
+            name: "Workshop",
+            unitPrice: 100,
+            quantity: 1,
+            subtotal: 100,
+          },
+        ],
+        accessTotal: 100,
+        subtotal: 300,
+        sponsorshipTotal: 100,
+        total: 200,
+      });
+      const registration = {
+        ...createMockRegistration({
+          paymentStatus: "PARTIAL",
+          paidAmount: 0,
+          totalAmount: 300,
+          sponsorshipAmount: 100,
+          priceBreakdown: priceWithAccess,
+          sponsorshipCode: null,
+          paidAt: null,
+        }),
+        form: { id: formId, eventId, schema: {} },
+        event: createPolicyEvent({ status: "OPEN" }),
+      };
+      const updatedRegistration = createMockRegistrationWithRelations({
+        ...registration,
+        sponsorshipAmount: 300,
+        paymentStatus: "SPONSORED",
+      });
+
+      prismaMock.registration.findUnique
+        .mockResolvedValueOnce(registration)
+        .mockResolvedValueOnce(updatedRegistration);
+      vi.mocked(calculatePrice).mockResolvedValueOnce({
+        ...priceWithAccess,
+        sponsorshipTotal: 0,
+        total: 300,
+      });
+      prismaMock.sponsorshipUsage.findMany
+        .mockResolvedValueOnce([
+          {
+            id: "usage-1",
+            amountApplied: 100,
+            sponsorship: {
+              coversBasePrice: true,
+              coveredAccessIds: [accessId],
+              totalAmount: 300,
+            },
+          },
+        ] as never)
+        .mockResolvedValueOnce([
+          {
+            id: "usage-1",
+            amountApplied: 300,
+            sponsorship: {
+              coveredAccessIds: [accessId],
+            },
+          },
+        ] as never);
+      prismaMock.eventAccess.findMany.mockResolvedValue([]);
+
+      await editRegistrationPublic(registration.id, {
+        expectedUpdatedAt: registration.updatedAt.toISOString(),
+        firstName: "Jane",
+      });
+
+      expect(prismaMock.sponsorshipUsage.update).toHaveBeenCalledWith({
+        where: { id: "usage-1" },
+        data: { amountApplied: 300 },
+      });
+      expect(prismaMock.registration.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            sponsorshipAmount: 300,
+            paymentStatus: "SPONSORED",
+            priceBreakdown: expect.objectContaining({
+              sponsorshipTotal: 300,
+              total: 0,
+            }),
+          }),
+        }),
+      );
+      expect(syncPaidCountDelta).toHaveBeenCalledWith(
+        registration.eventId,
+        expect.objectContaining({ status: "PARTIAL" }),
+        expect.objectContaining({ status: "SPONSORED" }),
+        prismaMock,
+      );
     });
   });
 

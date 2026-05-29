@@ -390,8 +390,16 @@ export async function updateEventAccess(
         include: { requiredAccess: { select: { id: true, name: true } } },
       });
       if (isBeingDeactivated) {
-        await dropAccessFromUnsettledRegistrations(access.eventId, id, access.name, tx);
-      } else if (data.maxCapacity !== null && updated.paidCount === data.maxCapacity) {
+        await dropAccessFromUnsettledRegistrations(
+          access.eventId,
+          id,
+          access.name,
+          tx,
+        );
+      } else if (
+        data.maxCapacity !== null &&
+        updated.paidCount === data.maxCapacity
+      ) {
         await handleCapacityReached(access.eventId, [id], tx);
       }
       return updated;
@@ -511,7 +519,10 @@ export { getGroupedAccess } from "./access-grouping.js";
 
 // Structural type for a db client that can be either the global prisma instance
 // or a transaction client (tx). Matches the subset of operations used here.
-type CapacityDbClient = Pick<TxClient, "$executeRaw" | "$queryRaw" | "eventAccess">;
+type CapacityDbClient = Pick<
+  TxClient,
+  "$executeRaw" | "$queryRaw" | "eventAccess"
+>;
 
 /**
  * Record selected access items for reporting and later edit cleanup.
@@ -530,7 +541,7 @@ export async function incrementAccessRegisteredCountTx(
     UPDATE event_access
     SET registered_count = registered_count + ${quantity}
     WHERE id = ${accessId}
-    AND (max_capacity IS NULL OR paid_count < max_capacity)
+    AND (max_capacity IS NULL OR paid_count + ${quantity} <= max_capacity)
   `;
 
   if (updateResult === 0) {
@@ -676,6 +687,71 @@ export async function decrementPaidCount(
   );
 }
 
+function paidAccessQuantities(
+  status: string,
+  priceBreakdown: unknown,
+  coveredAccessIds = new Set<string>(),
+): Map<string, number> {
+  const quantities = new Map<string, number>();
+  const isFullySettled = FULLY_SETTLED_STATUSES.includes(status);
+  if (!isFullySettled && status !== "PARTIAL") {
+    return quantities;
+  }
+
+  const breakdown = priceBreakdown as PriceBreakdown;
+  for (const item of breakdown.accessItems ?? []) {
+    if (isFullySettled || coveredAccessIds.has(item.accessId)) {
+      quantities.set(
+        item.accessId,
+        (quantities.get(item.accessId) ?? 0) + item.quantity,
+      );
+    }
+  }
+  return quantities;
+}
+
+export async function syncPaidCountDelta(
+  eventId: string,
+  oldState: {
+    status: string;
+    priceBreakdown: unknown;
+    coveredAccessIds?: Set<string>;
+  },
+  newState: {
+    status: string;
+    priceBreakdown: unknown;
+    coveredAccessIds?: Set<string>;
+  },
+  db: CapacityReachedDbClient = prisma,
+): Promise<void> {
+  const oldPaid = paidAccessQuantities(
+    oldState.status,
+    oldState.priceBreakdown,
+    oldState.coveredAccessIds,
+  );
+  const newPaid = paidAccessQuantities(
+    newState.status,
+    newState.priceBreakdown,
+    newState.coveredAccessIds,
+  );
+  const accessIds = new Set([...oldPaid.keys(), ...newPaid.keys()]);
+  const incremented: string[] = [];
+
+  for (const accessId of accessIds) {
+    const delta = (newPaid.get(accessId) ?? 0) - (oldPaid.get(accessId) ?? 0);
+    if (delta > 0) {
+      await incrementPaidCount(accessId, delta, db);
+      incremented.push(accessId);
+    } else if (delta < 0) {
+      await decrementPaidCount(accessId, Math.abs(delta), db);
+    }
+  }
+
+  if (incremented.length > 0) {
+    await handleCapacityReached(eventId, incremented, db);
+  }
+}
+
 type CapacityReachedDbClient = CapacityDbClient & {
   registration: Pick<typeof prisma.registration, "findMany" | "update">;
   sponsorshipUsage: Pick<typeof prisma.sponsorshipUsage, "findMany">;
@@ -705,7 +781,7 @@ export async function getAlreadyCoveredAccessIds(
     },
     select: { sponsorship: { select: { coveredAccessIds: true } } },
   });
-  return new Set(usages.flatMap((u) => u.sponsorship.coveredAccessIds));
+  return new Set(usages.flatMap((u) => u.sponsorship?.coveredAccessIds ?? []));
 }
 
 /**
@@ -722,7 +798,9 @@ async function dropAccessFromUnsettledRegistrations(
   const registrations = await db.registration.findMany({
     where: {
       eventId,
-      paymentStatus: { notIn: [...FULLY_SETTLED_STATUSES, "REFUNDED"] as PaymentStatus[] },
+      paymentStatus: {
+        notIn: [...FULLY_SETTLED_STATUSES, "REFUNDED"] as PaymentStatus[],
+      },
       accessTypeIds: { has: accessId },
     },
     select: {
@@ -750,15 +828,23 @@ async function dropAccessFromUnsettledRegistrations(
     if (allCoveredIds.includes(accessId)) continue;
 
     const breakdown = reg.priceBreakdown as PriceBreakdown;
-    const droppedItem = breakdown.accessItems.find((a) => a.accessId === accessId);
+    const droppedItem = breakdown.accessItems.find(
+      (a) => a.accessId === accessId,
+    );
     if (!droppedItem) continue;
 
-    const newAccessItems = breakdown.accessItems.filter((a) => a.accessId !== accessId);
-    const newAccessTotal = newAccessItems.reduce((sum, a) => sum + a.subtotal, 0);
+    const newAccessItems = breakdown.accessItems.filter(
+      (a) => a.accessId !== accessId,
+    );
+    const newAccessTotal = newAccessItems.reduce(
+      (sum, a) => sum + a.subtotal,
+      0,
+    );
     const newSubtotal = breakdown.calculatedBasePrice + newAccessTotal;
     const newSponsorshipTotal = Math.min(reg.sponsorshipAmount, newSubtotal);
     const newTotal = Math.max(0, newSubtotal - newSponsorshipTotal);
-    const isNowFullyCovered = newSponsorshipTotal >= newSubtotal && newSubtotal > 0;
+    const isNowFullyCovered =
+      newSponsorshipTotal >= newSubtotal && newSubtotal > 0;
 
     const updatedBreakdown = {
       ...breakdown,
@@ -859,7 +945,9 @@ export async function handleCapacityReached(
     const registrations = await db.registration.findMany({
       where: {
         eventId,
-        paymentStatus: { notIn: [...FULLY_SETTLED_STATUSES, "REFUNDED"] as PaymentStatus[] },
+        paymentStatus: {
+          notIn: [...FULLY_SETTLED_STATUSES, "REFUNDED"] as PaymentStatus[],
+        },
         accessTypeIds: { has: accessId },
       },
       select: {
@@ -882,22 +970,32 @@ export async function handleCapacityReached(
         where: { registrationId: reg.id },
         select: { sponsorship: { select: { coveredAccessIds: true } } },
       });
-      const allCoveredAccessIds = usages.flatMap((u) => u.sponsorship.coveredAccessIds);
+      const allCoveredAccessIds = usages.flatMap(
+        (u) => u.sponsorship.coveredAccessIds,
+      );
       if (allCoveredAccessIds.includes(accessId)) {
         continue; // This access is covered by sponsorship — don't drop it
       }
 
       // Drop this access from the registration
       const breakdown = reg.priceBreakdown as PriceBreakdown;
-      const droppedItem = breakdown.accessItems.find((a) => a.accessId === accessId);
+      const droppedItem = breakdown.accessItems.find(
+        (a) => a.accessId === accessId,
+      );
       if (!droppedItem) continue;
 
-      const newAccessItems = breakdown.accessItems.filter((a) => a.accessId !== accessId);
-      const newAccessTotal = newAccessItems.reduce((sum, a) => sum + a.subtotal, 0);
+      const newAccessItems = breakdown.accessItems.filter(
+        (a) => a.accessId !== accessId,
+      );
+      const newAccessTotal = newAccessItems.reduce(
+        (sum, a) => sum + a.subtotal,
+        0,
+      );
       const newSubtotal = breakdown.calculatedBasePrice + newAccessTotal;
       const newSponsorshipTotal = Math.min(reg.sponsorshipAmount, newSubtotal);
       const newTotal = Math.max(0, newSubtotal - newSponsorshipTotal);
-      const isNowFullyCovered = newSponsorshipTotal >= newSubtotal && newSubtotal > 0;
+      const isNowFullyCovered =
+        newSponsorshipTotal >= newSubtotal && newSubtotal > 0;
 
       const updatedBreakdown = {
         ...breakdown,
@@ -922,13 +1020,20 @@ export async function handleCapacityReached(
           accessAmount: newAccessTotal,
           sponsorshipAmount: newSponsorshipTotal,
           ...(isNowFullyCovered
-            ? { paymentStatus: "SPONSORED" as PaymentStatus, paidAt: new Date() }
+            ? {
+                paymentStatus: "SPONSORED" as PaymentStatus,
+                paidAt: new Date(),
+              }
             : {}),
         },
       });
 
       // Remove this selection from registered_count reporting
-      await decrementAccessRegisteredCountTx(accessId, droppedItem.quantity, db);
+      await decrementAccessRegisteredCountTx(
+        accessId,
+        droppedItem.quantity,
+        db,
+      );
 
       await db.auditLog.create({
         data: {

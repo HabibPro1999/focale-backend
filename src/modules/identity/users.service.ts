@@ -6,6 +6,7 @@ import {
   createFirebaseUser,
   setCustomClaims,
   deleteFirebaseUser,
+  revokeFirebaseRefreshTokens,
 } from "@shared/services/firebase.service.js";
 import { clientExists } from "@clients";
 import { invalidateUserCache } from "@shared/middleware/auth.middleware.js";
@@ -19,7 +20,7 @@ import type {
   UpdateUserInput,
   ListUsersQuery,
 } from "./users.schema.js";
-import type { User, Prisma } from "@/generated/prisma/client.js";
+import { Prisma, type User } from "@/generated/prisma/client.js";
 import { UserRole } from "@shared/constants/roles.js";
 
 // Define type for user queries with include
@@ -82,11 +83,7 @@ function validateRoleClientConsistency(
       }
       return;
     default:
-      throw new AppError(
-        "Invalid user role",
-        400,
-        ErrorCodes.VALIDATION_ERROR,
-      );
+      throw new AppError("Invalid user role", 400, ErrorCodes.VALIDATION_ERROR);
   }
 }
 
@@ -101,6 +98,33 @@ async function assertUserExists(id: string): Promise<User> {
   return user;
 }
 
+async function assertNotLastActiveSuperAdmin(
+  tx: Pick<typeof prisma, "user">,
+  user: Pick<User, "id" | "role" | "active">,
+  next: { role?: number; active?: boolean },
+): Promise<void> {
+  if (user.role !== UserRole.SUPER_ADMIN || !user.active) {
+    return;
+  }
+
+  const nextRole = next.role ?? user.role;
+  const nextActive = next.active ?? user.active;
+  if (nextRole === UserRole.SUPER_ADMIN && nextActive) {
+    return;
+  }
+
+  const superAdminCount = await tx.user.count({
+    where: { role: UserRole.SUPER_ADMIN, active: true },
+  });
+  if (superAdminCount <= 1) {
+    throw new AppError(
+      "Cannot remove or deactivate the last super admin",
+      400,
+      ErrorCodes.BAD_REQUEST,
+    );
+  }
+}
+
 // ============================================================================
 // Service Functions
 // ============================================================================
@@ -110,9 +134,12 @@ async function assertUserExists(id: string): Promise<User> {
  */
 export async function createUser(input: CreateUserInput): Promise<User> {
   const { email, password, name, role, clientId } = input;
+  const normalizedEmail = email.trim().toLowerCase();
 
   // Check if user already exists in DB
-  const existing = await prisma.user.findUnique({ where: { email } });
+  const existing = await prisma.user.findUnique({
+    where: { email: normalizedEmail },
+  });
   if (existing) {
     throw new AppError(
       "User with this email already exists",
@@ -128,7 +155,7 @@ export async function createUser(input: CreateUserInput): Promise<User> {
   await validateClientId(clientId);
 
   // Create in Firebase Auth
-  const firebaseUser = await createFirebaseUser(email, password);
+  const firebaseUser = await createFirebaseUser(normalizedEmail, password);
 
   try {
     // Set custom claims in Firebase
@@ -141,7 +168,7 @@ export async function createUser(input: CreateUserInput): Promise<User> {
     return await prisma.user.create({
       data: {
         id: firebaseUser.uid,
-        email,
+        email: normalizedEmail,
         name,
         role,
         clientId: clientId ?? null,
@@ -155,7 +182,7 @@ export async function createUser(input: CreateUserInput): Promise<User> {
         {
           err: cleanupErr,
           uid: firebaseUser.uid,
-          email,
+          email: normalizedEmail,
           originalError: error,
         },
         "Failed to cleanup Firebase user after DB creation failure - orphaned user may exist",
@@ -181,8 +208,22 @@ export async function getUserById(id: string): Promise<UserWithClient | null> {
 export async function updateUser(
   id: string,
   input: UpdateUserInput,
+  requestingUserId?: string,
 ): Promise<UserWithClient> {
   const user = await assertUserExists(id);
+
+  if (
+    requestingUserId === id &&
+    (input.role !== undefined ||
+      input.clientId !== undefined ||
+      input.active !== undefined)
+  ) {
+    throw new AppError(
+      "Cannot change your own role, client assignment, or active status",
+      400,
+      ErrorCodes.BAD_REQUEST,
+    );
+  }
 
   // Validate clientId if being changed
   await validateClientId(input.clientId);
@@ -195,6 +236,10 @@ export async function updateUser(
 
     // Validate the resulting role-clientId combination
     validateRoleClientConsistency(newRole, newClientId);
+    await assertNotLastActiveSuperAdmin(prisma, user, {
+      role: newRole,
+      active: input.active,
+    });
 
     // Set Firebase claims (source of truth for auth) before DB update
     await setCustomClaims(id, {
@@ -208,6 +253,7 @@ export async function updateUser(
         data: input,
         include: { client: true },
       });
+      await revokeFirebaseRefreshTokens(id);
       invalidateUserCache(id);
       return updated;
     } catch (error) {
@@ -229,11 +275,17 @@ export async function updateUser(
     }
   }
 
+  await assertNotLastActiveSuperAdmin(prisma, user, { active: input.active });
+
   const updated = await prisma.user.update({
     where: { id },
     data: input,
     include: { client: true },
   });
+
+  if (input.active === false) {
+    await revokeFirebaseRefreshTokens(id);
+  }
 
   invalidateUserCache(id);
 
@@ -291,24 +343,30 @@ export async function deleteUser(
     );
   }
 
-  const userToDelete = await assertUserExists(id);
+  const userToDelete = await prisma.$transaction(
+    async (tx) => {
+      const user = await tx.user.findUnique({ where: { id } });
+      if (!user) {
+        throw new AppError("User not found", 404, ErrorCodes.NOT_FOUND);
+      }
+      await assertNotLastActiveSuperAdmin(tx, user, { active: false });
 
-  if (userToDelete.role === UserRole.SUPER_ADMIN) {
-    const superAdminCount = await prisma.user.count({
-      where: { role: UserRole.SUPER_ADMIN, active: true },
-    });
-    if (superAdminCount <= 1) {
-      throw new AppError(
-        "Cannot delete the last super admin",
-        400,
-        ErrorCodes.BAD_REQUEST,
-      );
-    }
-  }
-
-  await prisma.user.delete({ where: { id } });
+      await tx.user.delete({ where: { id } });
+      return user;
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+  );
 
   invalidateUserCache(id);
+
+  try {
+    await revokeFirebaseRefreshTokens(id);
+  } catch (error) {
+    logger.error(
+      { err: error, uid: id, email: userToDelete.email },
+      "DB user deleted but Firebase refresh-token revocation failed",
+    );
+  }
 
   try {
     await deleteFirebaseUser(id);

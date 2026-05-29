@@ -1,5 +1,6 @@
 import { describe, it, expect, type Mock } from "vitest";
 import { prismaMock } from "../../../tests/mocks/prisma.js";
+import { Prisma } from "@/generated/prisma/client.js";
 import {
   checkIn,
   getCheckInRegistrations,
@@ -14,6 +15,14 @@ const accessId = "access-001";
 const userId = "user-001";
 const blockedPaymentStatuses = ["PENDING", "VERIFYING", "PARTIAL", "REFUNDED"];
 const nonPaidAllowedPaymentStatuses = ["SPONSORED", "WAIVED"];
+
+function prismaUniqueError(meta: Record<string, unknown>) {
+  return new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+    code: "P2002",
+    clientVersion: "test",
+    meta,
+  });
+}
 
 const baseRegistration = {
   id: registrationId,
@@ -88,8 +97,37 @@ describe("Checkin Service", () => {
       expect(result.alreadyCheckedIn).toBe(false);
       expect(result.checkedInAt).toEqual(createdAt);
       expect(prismaMock.accessCheckIn.create).toHaveBeenCalledWith({
-        data: { registrationId, accessId, checkedInBy: userId },
+        data: {
+          registrationId,
+          accessId,
+          checkedInBy: userId,
+          checkedInAt: expect.any(Date),
+        },
       });
+    });
+
+    it("returns alreadyCheckedIn when a concurrent access check-in wins the insert race", async () => {
+      prismaMock.registration.findUnique.mockResolvedValue(
+        baseRegistration as never,
+      );
+      prismaMock.accessCheckIn.findUnique
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({
+          id: "aci-001",
+          registrationId,
+          accessId,
+          checkedInAt: new Date("2026-04-03T09:00:00Z"),
+          checkedInBy: "other-user",
+        } as never);
+      prismaMock.accessCheckIn.create.mockRejectedValue(
+        prismaUniqueError({ target: ["registration_id", "access_id"] }),
+      );
+
+      const result = await checkIn(eventId, registrationId, accessId, userId);
+
+      expect(result.success).toBe(true);
+      expect(result.alreadyCheckedIn).toBe(true);
+      expect(result.checkedInAt).toEqual(new Date("2026-04-03T09:00:00Z"));
     });
 
     it("should return alreadyCheckedIn for access-level re-check-in", async () => {
@@ -123,7 +161,12 @@ describe("Checkin Service", () => {
         prismaMock.registration.update.mockResolvedValue({} as never);
         prismaMock.auditLog.create.mockResolvedValue({} as never);
 
-        const result = await checkIn(eventId, registrationId, undefined, userId);
+        const result = await checkIn(
+          eventId,
+          registrationId,
+          undefined,
+          userId,
+        );
 
         expect(result.success).toBe(true);
         expect(result.alreadyCheckedIn).toBe(false);
@@ -158,7 +201,12 @@ describe("Checkin Service", () => {
         expect(result.success).toBe(true);
         expect(result.alreadyCheckedIn).toBe(false);
         expect(prismaMock.accessCheckIn.create).toHaveBeenCalledWith({
-          data: { registrationId, accessId, checkedInBy: userId },
+          data: {
+            registrationId,
+            accessId,
+            checkedInBy: userId,
+            checkedInAt: expect.any(Date),
+          },
         });
       },
     );
@@ -264,6 +312,9 @@ describe("Checkin Service", () => {
     });
 
     it("should filter by accessId when provided", async () => {
+      prismaMock.eventAccess.findFirst.mockResolvedValue({
+        id: accessId,
+      } as never);
       prismaMock.registration.findMany.mockResolvedValue([
         { id: "reg-1" },
       ] as never);
@@ -271,6 +322,10 @@ describe("Checkin Service", () => {
       const result = await getCheckInRegistrations(eventId, accessId);
 
       expect(result).toEqual(["reg-1"]);
+      expect(prismaMock.eventAccess.findFirst).toHaveBeenCalledWith({
+        where: { id: accessId, eventId, active: true },
+        select: { id: true },
+      });
       expect(prismaMock.registration.findMany).toHaveBeenCalledWith({
         where: {
           eventId,
@@ -279,6 +334,19 @@ describe("Checkin Service", () => {
         },
         select: { id: true },
       });
+    });
+
+    it("throws when accessId does not belong to the event", async () => {
+      prismaMock.eventAccess.findFirst.mockResolvedValue(null);
+
+      await expect(
+        getCheckInRegistrations(eventId, accessId),
+      ).rejects.toMatchObject({
+        statusCode: 404,
+        code: ErrorCodes.NOT_FOUND,
+      });
+
+      expect(prismaMock.registration.findMany).not.toHaveBeenCalled();
     });
 
     it("should return empty array when no matching registrations", async () => {
@@ -318,6 +386,13 @@ describe("Checkin Service", () => {
       expect(result.alreadyCheckedIn).toBe(1);
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0].registrationId).toBe("reg-003");
+      expect(prismaMock.registration.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            checkedInAt: new Date("2026-04-03T10:00:00Z"),
+          }),
+        }),
+      );
     });
   });
 
@@ -331,8 +406,12 @@ describe("Checkin Service", () => {
         { accessId: "a2", _count: { id: 10 } },
       ] as never);
       prismaMock.eventAccess.findMany.mockResolvedValue([
-        { id: "a1", name: "Workshop", type: "workshop", registeredCount: 50 },
-        { id: "a2", name: "Gala", type: "gala", registeredCount: 30 },
+        { id: "a1", name: "Workshop", type: "workshop" },
+        { id: "a2", name: "Gala", type: "gala" },
+      ] as never);
+      prismaMock.registration.findMany.mockResolvedValue([
+        { accessTypeIds: ["a1"] },
+        { accessTypeIds: ["a1", "a2"] },
       ] as never);
 
       const result = await getCheckInStats(eventId);
@@ -344,8 +423,16 @@ describe("Checkin Service", () => {
         accessId: "a1",
         name: "Workshop",
         type: "workshop",
-        total: 50,
+        total: 2,
         checkedIn: 20,
+      });
+      expect(prismaMock.accessCheckIn.groupBy).toHaveBeenCalledWith({
+        by: ["accessId"],
+        where: {
+          registration: { eventId },
+          access: { eventId, active: true },
+        },
+        _count: { id: true },
       });
     });
 
@@ -357,13 +444,17 @@ describe("Checkin Service", () => {
         [] as never,
       );
       prismaMock.eventAccess.findMany.mockResolvedValue([
-        { id: "a1", name: "Session", type: "session", registeredCount: 10 },
+        { id: "a1", name: "Session", type: "session" },
+      ] as never);
+      prismaMock.registration.findMany.mockResolvedValue([
+        { accessTypeIds: ["inactive-access"] },
       ] as never);
 
       const result = await getCheckInStats(eventId);
 
       expect(result.checkedIn).toBe(0);
       expect(result.byAccess[0].checkedIn).toBe(0);
+      expect(result.byAccess[0].total).toBe(0);
     });
   });
 });

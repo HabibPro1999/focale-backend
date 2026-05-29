@@ -280,7 +280,13 @@ export async function certificatesRoutes(app: AppInstance): Promise<void> {
 
       // 3. Get all active certificate templates for the event
       const certTemplates = await prisma.certificateTemplate.findMany({
-        where: { eventId, active: true },
+        where: {
+          eventId,
+          active: true,
+          templateUrl: { not: "" },
+          templateWidth: { gt: 0 },
+          templateHeight: { gt: 0 },
+        },
         include: { access: { select: { id: true, name: true } } },
       });
 
