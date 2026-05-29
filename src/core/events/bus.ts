@@ -75,6 +75,14 @@ class EventBus {
     return idx === -1 ? [] : this.buffer.slice(idx);
   }
 
+  hasReplayGap(lastEventId: string | null | undefined): boolean {
+    if (!lastEventId || this.buffer.length === 0) return false;
+    const after = Number(lastEventId);
+    if (!Number.isFinite(after)) return false;
+    const firstBuffered = Number(this.buffer[0].id);
+    return after < firstBuffered - 1;
+  }
+
   listenerCount(): number {
     return this.emitter.listenerCount(CHANNEL);
   }

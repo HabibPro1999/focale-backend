@@ -277,13 +277,25 @@ export async function calculatePrice(
   }
   assertModuleEnabledForClient(event.client, "pricing");
 
-  // Get event pricing configuration with embedded rules
+  // Price calculation is a read path, including public quote endpoints. Missing
+  // pricing is treated as a free default instead of mutating the database.
   const pricing =
     (await getEventPricing(eventId, db)) ??
-    (await updateEventPricingTx(db, eventId, {
+    ({
+      id: "",
+      eventId,
       basePrice: 0,
       currency: "TND",
-    }));
+      rules: [],
+      onlinePaymentEnabled: false,
+      onlinePaymentUrl: null,
+      cashPaymentEnabled: false,
+      bankName: null,
+      bankAccountName: null,
+      bankAccountNumber: null,
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    } satisfies EventPricingWithRules);
 
   const { basePrice, currency, rules } = pricing;
 
@@ -436,7 +448,14 @@ async function validateSponsorshipCodes(
 ): Promise<PriceBreakdown["sponsorships"]> {
   if (!codes.length) return [];
 
-  const upperCodes = codes.map((c) => c.toUpperCase());
+  const normalizedCodes = [
+    ...new Map(
+      codes.map((code) => [code.trim().toUpperCase(), code.trim()]),
+    ).entries(),
+  ].filter(([upperCode]) => upperCode.length > 0);
+  if (!normalizedCodes.length) return [];
+
+  const upperCodes = normalizedCodes.map(([upperCode]) => upperCode);
 
   // Batch lookup: single query instead of one per code
   const sponsorships = await db.sponsorship.findMany({
@@ -454,12 +473,13 @@ async function validateSponsorshipCodes(
   });
 
   const sponsorshipMap = new Map(sponsorships.map((s) => [s.code, s]));
+  let remainingAmount = context.subtotal;
 
-  return codes.map((code) => {
-    const sponsorship = sponsorshipMap.get(code.toUpperCase());
+  return normalizedCodes.map(([upperCode, displayCode]) => {
+    const sponsorship = sponsorshipMap.get(upperCode);
 
     if (!sponsorship) {
-      return { code, amount: 0, valid: false };
+      return { code: displayCode, amount: 0, valid: false };
     }
 
     const applicableAmount = calculateApplicableAmount(
@@ -481,7 +501,9 @@ async function validateSponsorshipCodes(
         },
       },
     );
+    const amount = Math.min(applicableAmount, remainingAmount);
+    remainingAmount = Math.max(0, remainingAmount - amount);
 
-    return { code, amount: applicableAmount, valid: true };
+    return { code: displayCode, amount, valid: true };
   });
 }

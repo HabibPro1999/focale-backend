@@ -10,6 +10,7 @@ import { faker } from "@faker-js/faker";
 import {
   queueEmail,
   queueTriggeredEmail,
+  queueSponsorshipEmail,
   queueBulkEmails,
   processEmailQueue,
   recoverStaleEmailLeases,
@@ -43,10 +44,23 @@ vi.mock("./email-template.service.js", () => ({
   getTemplateByTrigger: vi.fn(),
 }));
 
+// Mock certificate PDF generation for worker attachment tests
+vi.mock("@modules/certificates/certificate-pdf.service.js", () => ({
+  generateCertificateAttachments: vi.fn().mockResolvedValue([
+    {
+      content: "pdf-base64",
+      filename: "certificate.pdf",
+      type: "application/pdf",
+      disposition: "attachment",
+    },
+  ]),
+}));
+
 // Import the mocked modules to access mock functions
 import { sendEmail } from "./email-sendgrid.service.js";
 import { buildEmailContextWithAccess } from "./email-variable.service.js";
 import { getTemplateByTrigger } from "./email-template.service.js";
+import { generateCertificateAttachments } from "@modules/certificates/certificate-pdf.service.js";
 
 // ============================================================================
 // Test Data Factories
@@ -173,6 +187,7 @@ describe("Email Queue Service", () => {
     vi.clearAllMocks();
     resetSendGridMock();
     prismaMock.$executeRawUnsafe.mockResolvedValue(0 as never);
+    prismaMock.emailLog.updateMany.mockResolvedValue({ count: 1 } as never);
   });
 
   describe("queueEmail", () => {
@@ -366,6 +381,58 @@ describe("Email Queue Service", () => {
           recipientName: undefined,
         }),
       });
+    });
+  });
+
+  describe("queueSponsorshipEmail", () => {
+    it("returns false when an active sponsorship email already exists", async () => {
+      const mockTemplate = createMockEmailTemplate({
+        id: templateId,
+        trigger: "SPONSORSHIP_LINKED",
+      });
+      vi.mocked(getTemplateByTrigger).mockResolvedValue(mockTemplate);
+      prismaMock.emailLog.findFirst.mockResolvedValue(
+        createMockEmailLog({ id: "existing-log" }) as never,
+      );
+
+      const result = await queueSponsorshipEmail(
+        "SPONSORSHIP_LINKED",
+        eventId,
+        {
+          recipientEmail: "doctor@example.com",
+          recipientName: "Doctor",
+          context: { sponsorshipCode: "SP-1" },
+        },
+      );
+
+      expect(result).toBe(false);
+      expect(prismaMock.emailLog.create).not.toHaveBeenCalled();
+    });
+
+    it("returns false when the DB sponsorship dedupe index wins a race", async () => {
+      const mockTemplate = createMockEmailTemplate({
+        id: templateId,
+        trigger: "SPONSORSHIP_LINKED",
+      });
+      vi.mocked(getTemplateByTrigger).mockResolvedValue(mockTemplate);
+      prismaMock.emailLog.findFirst.mockResolvedValue(null);
+      prismaMock.emailLog.create.mockRejectedValueOnce(
+        prismaUniqueError({
+          target: "email_logs_template_recipient_trigger_active_key",
+        }),
+      );
+
+      const result = await queueSponsorshipEmail(
+        "SPONSORSHIP_LINKED",
+        eventId,
+        {
+          recipientEmail: "doctor@example.com",
+          recipientName: "Doctor",
+          context: { sponsorshipCode: "SP-1" },
+        },
+      );
+
+      expect(result).toBe(false);
     });
   });
 
@@ -850,6 +917,193 @@ describe("Email Queue Service", () => {
         }),
       );
     });
+
+    it("only attaches active certificate templates from the registration event", async () => {
+      const mockTemplate = createMockEmailTemplate({
+        isActive: true,
+        trigger: "CERTIFICATE_SENT",
+      });
+      const mockEmailLog: EmailLogWithRelations = {
+        ...createMockEmailLog({
+          status: "QUEUED",
+          trigger: "CERTIFICATE_SENT",
+          contextSnapshot: {
+            firstName: "John",
+            email: "john@example.com",
+            _certificateTemplateIds: ["cert-1"],
+          } as Prisma.JsonValue,
+        }),
+        template: mockTemplate,
+        registration: null,
+      };
+
+      mockClaimedEmails([mockEmailLog]);
+      prismaMock.registration.findUnique.mockResolvedValue({
+        id: mockEmailLog.registrationId,
+        firstName: "John",
+        lastName: "Doe",
+        role: "PARTICIPANT",
+        checkedInAt: new Date("2026-05-01T10:00:00.000Z"),
+        accessCheckIns: [],
+        event: {
+          id: "event-123",
+          name: "Event",
+          startDate: new Date("2026-05-01T00:00:00.000Z"),
+          location: "Tunis",
+        },
+      } as never);
+      prismaMock.certificateTemplate.findMany.mockResolvedValue([
+        {
+          id: "cert-1",
+          name: "Attendance",
+          templateUrl: "https://storage.example.com/cert.png",
+          templateWidth: 1000,
+          templateHeight: 700,
+          zones: [],
+          applicableRoles: [],
+          accessId: null,
+          access: null,
+        },
+      ] as never);
+
+      const result = await processEmailQueue(1);
+
+      expect(result.sent).toBe(1);
+      expect(prismaMock.certificateTemplate.findMany).toHaveBeenCalledWith({
+        where: {
+          id: { in: ["cert-1"] },
+          active: true,
+          eventId: "event-123",
+          templateUrl: { not: "" },
+          templateWidth: { gt: 0 },
+          templateHeight: { gt: 0 },
+        },
+        include: { access: { select: { id: true, name: true } } },
+      });
+      expect(sendEmail).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attachments: [
+            expect.objectContaining({
+              filename: "certificate.pdf",
+            }),
+          ],
+        }),
+      );
+    });
+
+    it("fails and does not send when a queued certificate template is inactive or out of scope", async () => {
+      const mockTemplate = createMockEmailTemplate({
+        isActive: true,
+        trigger: "CERTIFICATE_SENT",
+      });
+      const mockEmailLog: EmailLogWithRelations = {
+        ...createMockEmailLog({
+          status: "QUEUED",
+          trigger: "CERTIFICATE_SENT",
+          contextSnapshot: {
+            firstName: "John",
+            email: "john@example.com",
+            _certificateTemplateIds: ["cert-1"],
+          } as Prisma.JsonValue,
+        }),
+        template: mockTemplate,
+        registration: null,
+      };
+
+      mockClaimedEmails([mockEmailLog]);
+      prismaMock.registration.findUnique.mockResolvedValue({
+        id: mockEmailLog.registrationId,
+        firstName: "John",
+        lastName: "Doe",
+        role: "PARTICIPANT",
+        checkedInAt: new Date("2026-05-01T10:00:00.000Z"),
+        accessCheckIns: [],
+        event: {
+          id: "event-123",
+          name: "Event",
+          startDate: new Date("2026-05-01T00:00:00.000Z"),
+          location: "Tunis",
+        },
+      } as never);
+      prismaMock.certificateTemplate.findMany.mockResolvedValue([]);
+
+      const result = await processEmailQueue(1);
+
+      expect(result.failed).toBe(1);
+      expect(sendEmail).not.toHaveBeenCalled();
+      expect(prismaMock.emailLog.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            errorMessage:
+              "Queued certificate templates are no longer active for this registration event",
+          }),
+        }),
+      );
+    });
+
+    it("fails and does not send when certificate PDF generation fails", async () => {
+      const mockTemplate = createMockEmailTemplate({
+        isActive: true,
+        trigger: "CERTIFICATE_SENT",
+      });
+      const mockEmailLog: EmailLogWithRelations = {
+        ...createMockEmailLog({
+          status: "QUEUED",
+          trigger: "CERTIFICATE_SENT",
+          contextSnapshot: {
+            firstName: "John",
+            email: "john@example.com",
+            _certificateTemplateIds: ["cert-1"],
+          } as Prisma.JsonValue,
+        }),
+        template: mockTemplate,
+        registration: null,
+      };
+
+      mockClaimedEmails([mockEmailLog]);
+      prismaMock.registration.findUnique.mockResolvedValue({
+        id: mockEmailLog.registrationId,
+        firstName: "John",
+        lastName: "Doe",
+        role: "PARTICIPANT",
+        checkedInAt: new Date("2026-05-01T10:00:00.000Z"),
+        accessCheckIns: [],
+        event: {
+          id: "event-123",
+          name: "Event",
+          startDate: new Date("2026-05-01T00:00:00.000Z"),
+          location: "Tunis",
+        },
+      } as never);
+      prismaMock.certificateTemplate.findMany.mockResolvedValue([
+        {
+          id: "cert-1",
+          name: "Attendance",
+          templateUrl: "https://storage.example.com/cert.png",
+          templateWidth: 1000,
+          templateHeight: 700,
+          zones: [],
+          applicableRoles: [],
+          accessId: null,
+          access: null,
+        },
+      ] as never);
+      vi.mocked(generateCertificateAttachments).mockRejectedValueOnce(
+        new Error("PDF generation failed"),
+      );
+
+      const result = await processEmailQueue(1);
+
+      expect(result.failed).toBe(1);
+      expect(sendEmail).not.toHaveBeenCalled();
+      expect(prismaMock.emailLog.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            errorMessage: "PDF generation failed",
+          }),
+        }),
+      );
+    });
   });
 
   describe("recoverStaleEmailLeases", () => {
@@ -894,6 +1148,8 @@ describe("Email Queue Service", () => {
         'COALESCE("locked_at", "last_attempt_at", "updated_at") < $2',
       );
       expect(requeueSql).toContain('"retry_count" = "retry_count" + 1');
+      expect(requeueSql).toContain('WHEN "retry_count" + 1 <= 1');
+      expect(requeueSql).not.toContain('WHEN "attempt_count"');
       expect(requeueSql).toContain('"retry_count" < "max_retries"');
       expect(deadLetterSql).toContain('"locked_until" < $1');
       expect(deadLetterSql).toContain(
@@ -954,8 +1210,8 @@ describe("Email Queue Service", () => {
 
       await updateEmailStatusFromWebhook(emailLogId, "delivered");
 
-      expect(prismaMock.emailLog.update).toHaveBeenCalledWith({
-        where: { id: emailLogId },
+      expect(prismaMock.emailLog.updateMany).toHaveBeenCalledWith({
+        where: { id: emailLogId, status: "SENT" },
         data: expect.objectContaining({
           status: "DELIVERED",
           deliveredAt: expect.any(Date),
@@ -969,8 +1225,8 @@ describe("Email Queue Service", () => {
 
       await updateEmailStatusFromWebhook(emailLogId, "open");
 
-      expect(prismaMock.emailLog.update).toHaveBeenCalledWith({
-        where: { id: emailLogId },
+      expect(prismaMock.emailLog.updateMany).toHaveBeenCalledWith({
+        where: { id: emailLogId, status: "DELIVERED" },
         data: expect.objectContaining({
           status: "OPENED",
           openedAt: expect.any(Date),
@@ -986,8 +1242,8 @@ describe("Email Queue Service", () => {
         url: "https://example.com",
       });
 
-      expect(prismaMock.emailLog.update).toHaveBeenCalledWith({
-        where: { id: emailLogId },
+      expect(prismaMock.emailLog.updateMany).toHaveBeenCalledWith({
+        where: { id: emailLogId, status: "OPENED" },
         data: expect.objectContaining({
           status: "CLICKED",
           clickedAt: expect.any(Date),
@@ -1003,8 +1259,8 @@ describe("Email Queue Service", () => {
         reason: "Invalid email address",
       });
 
-      expect(prismaMock.emailLog.update).toHaveBeenCalledWith({
-        where: { id: emailLogId },
+      expect(prismaMock.emailLog.updateMany).toHaveBeenCalledWith({
+        where: { id: emailLogId, status: "SENT" },
         data: expect.objectContaining({
           status: "BOUNCED",
           bouncedAt: expect.any(Date),
@@ -1019,8 +1275,8 @@ describe("Email Queue Service", () => {
 
       await updateEmailStatusFromWebhook(emailLogId, "bounce");
 
-      expect(prismaMock.emailLog.update).toHaveBeenCalledWith({
-        where: { id: emailLogId },
+      expect(prismaMock.emailLog.updateMany).toHaveBeenCalledWith({
+        where: { id: emailLogId, status: "SENT" },
         data: expect.objectContaining({
           errorMessage: "Bounced",
         }),
@@ -1035,8 +1291,8 @@ describe("Email Queue Service", () => {
         reason: "Spam content detected",
       });
 
-      expect(prismaMock.emailLog.update).toHaveBeenCalledWith({
-        where: { id: emailLogId },
+      expect(prismaMock.emailLog.updateMany).toHaveBeenCalledWith({
+        where: { id: emailLogId, status: "SENT" },
         data: expect.objectContaining({
           status: "DROPPED",
           errorMessage: "Spam content detected",
@@ -1050,8 +1306,8 @@ describe("Email Queue Service", () => {
 
       await updateEmailStatusFromWebhook(emailLogId, "dropped");
 
-      expect(prismaMock.emailLog.update).toHaveBeenCalledWith({
-        where: { id: emailLogId },
+      expect(prismaMock.emailLog.updateMany).toHaveBeenCalledWith({
+        where: { id: emailLogId, status: "SENT" },
         data: expect.objectContaining({
           errorMessage: "Dropped",
         }),
@@ -1060,7 +1316,9 @@ describe("Email Queue Service", () => {
 
     it("should handle update errors gracefully", async () => {
       mockCurrentEmailStatus("SENT");
-      prismaMock.emailLog.update.mockRejectedValue(new Error("Database error"));
+      prismaMock.emailLog.updateMany.mockRejectedValue(
+        new Error("Database error"),
+      );
 
       // Should not throw
       await expect(

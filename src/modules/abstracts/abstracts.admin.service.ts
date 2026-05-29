@@ -31,9 +31,11 @@ function getTitle(content: Prisma.JsonValue): string {
   return "Untitled abstract";
 }
 
-function toReviewDto(review: AbstractReview & {
-  reviewer: { id: string; name: string | null; email: string };
-}) {
+function toReviewDto(
+  review: AbstractReview & {
+    reviewer: { id: string; name: string | null; email: string };
+  },
+) {
   return {
     id: review.id,
     reviewerId: review.reviewerId,
@@ -46,9 +48,11 @@ function toReviewDto(review: AbstractReview & {
   };
 }
 
-function reviewScoreSpread(
-  reviews: Array<{ score: number | null }>,
-): { min: number | null; max: number | null; spread: number | null } {
+function reviewScoreSpread(reviews: Array<{ score: number | null }>): {
+  min: number | null;
+  max: number | null;
+  spread: number | null;
+} {
   const scores = reviews
     .map((review) => review.score)
     .filter((score): score is number => score !== null);
@@ -58,12 +62,18 @@ function reviewScoreSpread(
   return { min, max, spread: max - min };
 }
 
-function formatAdminAbstract(abstract: Prisma.AbstractGetPayload<{
-  include: {
-    themes: { include: { theme: { select: { id: true; label: true } } } };
-    reviews: { include: { reviewer: { select: { id: true; name: true; email: true } } } };
-  };
-}>) {
+function formatAdminAbstract(
+  abstract: Prisma.AbstractGetPayload<{
+    include: {
+      themes: { include: { theme: { select: { id: true; label: true } } } };
+      reviews: {
+        include: {
+          reviewer: { select: { id: true; name: true; email: true } };
+        };
+      };
+    };
+  }>,
+) {
   return {
     id: abstract.id,
     eventId: abstract.eventId,
@@ -160,9 +170,7 @@ export async function listAdminAbstracts(
   const where: Prisma.AbstractWhereInput = {
     eventId,
     ...(query.status ? { status: query.status } : {}),
-    ...(query.themeId
-      ? { themes: { some: { themeId: query.themeId } } }
-      : {}),
+    ...(query.themeId ? { themes: { some: { themeId: query.themeId } } } : {}),
     ...(query.reviewerId
       ? { reviews: { some: { reviewerId: query.reviewerId, active: true } } }
       : {}),
@@ -185,7 +193,9 @@ export async function listAdminAbstracts(
         themes: { include: { theme: { select: { id: true, label: true } } } },
         reviews: {
           where: { active: true },
-          include: { reviewer: { select: { id: true, name: true, email: true } } },
+          include: {
+            reviewer: { select: { id: true, name: true, email: true } },
+          },
           orderBy: { createdAt: "asc" },
         },
       },
@@ -210,7 +220,9 @@ export async function getAdminAbstract(eventId: string, abstractId: string) {
     include: {
       themes: { include: { theme: { select: { id: true, label: true } } } },
       reviews: {
-        include: { reviewer: { select: { id: true, name: true, email: true } } },
+        include: {
+          reviewer: { select: { id: true, name: true, email: true } },
+        },
         orderBy: { createdAt: "asc" },
       },
       revisions: { orderBy: { revisionNo: "desc" } },
@@ -310,7 +322,8 @@ export async function finalizeAbstract(
 
     const nextData: Prisma.AbstractUpdateInput = {
       status: input.decision,
-      finalType: input.decision === AbstractStatus.ACCEPTED ? input.finalType : null,
+      finalType:
+        input.decision === AbstractStatus.ACCEPTED ? input.finalType : null,
     };
 
     let allocatedCode: { code: string; codeNumber: number } | null = null;
@@ -327,7 +340,12 @@ export async function finalizeAbstract(
         const code = `${CODE_SUFFIX[input.finalType!]}${codeTheme.sortOrder}-${String(existing.codeNumber).padStart(2, "0")}`;
         allocatedCode = { code, codeNumber: existing.codeNumber };
       } else {
-        allocatedCode = await allocateAbstractCode(tx, eventId, input.finalType!, codeTheme);
+        allocatedCode = await allocateAbstractCode(
+          tx,
+          eventId,
+          input.finalType!,
+          codeTheme,
+        );
       }
       nextData.code = allocatedCode.code;
       nextData.codeNumber = allocatedCode.codeNumber;
@@ -336,29 +354,34 @@ export async function finalizeAbstract(
       nextData.codeNumber = null;
     }
 
-    const updated = await tx.abstract.update({
-      where: { id: abstractId, status: { notIn: FINAL_STATUSES } },
-      data: nextData,
-      select: {
-        id: true,
-        eventId: true,
-        status: true,
-        finalType: true,
-        code: true,
-        codeNumber: true,
-        averageScore: true,
-        reviewCount: true,
-      },
-    }).catch((e: unknown) => {
-      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2025") {
-        throw new AppError(
-          "Abstract is already finalized; reopen before changing the decision",
-          409,
-          ErrorCodes.INVALID_STATUS_TRANSITION,
-        );
-      }
-      throw e;
-    });
+    const updated = await tx.abstract
+      .update({
+        where: { id: abstractId, status: { notIn: FINAL_STATUSES } },
+        data: nextData,
+        select: {
+          id: true,
+          eventId: true,
+          status: true,
+          finalType: true,
+          code: true,
+          codeNumber: true,
+          averageScore: true,
+          reviewCount: true,
+        },
+      })
+      .catch((e: unknown) => {
+        if (
+          e instanceof Prisma.PrismaClientKnownRequestError &&
+          e.code === "P2025"
+        ) {
+          throw new AppError(
+            "Abstract is already finalized; reopen before changing the decision",
+            409,
+            ErrorCodes.INVALID_STATUS_TRANSITION,
+          );
+        }
+        throw e;
+      });
 
     await auditLog(tx, {
       entityType: "Abstract",
@@ -372,24 +395,21 @@ export async function finalizeAbstract(
       performedBy,
     });
 
+    const decisionTrigger =
+      updated.status === AbstractStatus.ACCEPTED
+        ? "ABSTRACT_ACCEPTED"
+        : updated.status === AbstractStatus.REJECTED
+          ? "ABSTRACT_REJECTED"
+          : "ABSTRACT_DECISION";
+    const decisionDedupeSuffix = `${abstractId}:${existing.updatedAt.getTime()}`;
+
     await enqueueAbstractEmailOutboxEvent(
       tx,
       {
-        trigger:
-          updated.status === AbstractStatus.ACCEPTED
-            ? "ABSTRACT_ACCEPTED"
-            : updated.status === AbstractStatus.REJECTED
-              ? "ABSTRACT_REJECTED"
-              : "ABSTRACT_DECISION",
+        trigger: decisionTrigger,
         abstractId,
       },
-      `email:abstract:${
-        updated.status === AbstractStatus.ACCEPTED
-          ? "ABSTRACT_ACCEPTED"
-          : updated.status === AbstractStatus.REJECTED
-            ? "ABSTRACT_REJECTED"
-            : "ABSTRACT_DECISION"
-      }:${abstractId}`,
+      `email:abstract:${decisionTrigger}:${decisionDedupeSuffix}`,
     );
 
     if (
@@ -407,7 +427,7 @@ export async function finalizeAbstract(
               committeeComments,
             },
           },
-          `email:abstract:ABSTRACT_COMMITTEE_COMMENTS:${abstractId}`,
+          `email:abstract:ABSTRACT_COMMITTEE_COMMENTS:${decisionDedupeSuffix}`,
         );
       }
     }
@@ -422,7 +442,7 @@ export async function finalizeAbstract(
           trigger: "ABSTRACT_FINAL_FILE_REQUEST",
           abstractId,
         },
-        `email:abstract:ABSTRACT_FINAL_FILE_REQUEST:${abstractId}`,
+        `email:abstract:ABSTRACT_FINAL_FILE_REQUEST:${decisionDedupeSuffix}`,
       );
     }
 
@@ -464,12 +484,17 @@ export async function reopenAbstract(
       throw new AppError("Abstract not found", 404, ErrorCodes.NOT_FOUND);
     }
     if (!FINAL_STATUSES.includes(existing.status)) {
-      throw new AppError("Only finalized abstracts can be reopened", 409, ErrorCodes.INVALID_STATUS_TRANSITION);
+      throw new AppError(
+        "Only finalized abstracts can be reopened",
+        409,
+        ErrorCodes.INVALID_STATUS_TRANSITION,
+      );
     }
 
-    const nextStatus = existing.reviews.length > 0
-      ? AbstractStatus.UNDER_REVIEW
-      : AbstractStatus.SUBMITTED;
+    const nextStatus =
+      existing.reviews.length > 0
+        ? AbstractStatus.UNDER_REVIEW
+        : AbstractStatus.SUBMITTED;
 
     const updated = await tx.abstract.update({
       where: { id: abstractId },
@@ -477,6 +502,7 @@ export async function reopenAbstract(
         status: nextStatus,
         finalType: null,
         code: null,
+        codeNumber: null,
       },
       select: { id: true, status: true, averageScore: true, reviewCount: true },
     });
@@ -489,6 +515,7 @@ export async function reopenAbstract(
         status: { old: existing.status, new: nextStatus },
         finalType: { old: existing.finalType, new: null },
         code: { old: existing.code, new: null },
+        codeNumber: { old: existing.codeNumber, new: null },
       },
       performedBy,
     });
@@ -541,19 +568,33 @@ export async function markAbstractPresented(
   }
 
   await prisma.$transaction(async (tx) => {
-    await tx.abstract.update({
-      where: { id: abstractId },
+    const updated = await tx.abstract.updateMany({
+      where: {
+        id: abstractId,
+        eventId,
+        status: AbstractStatus.ACCEPTED,
+      },
       data: presented
         ? { presentedAt: new Date(), presentedBy: performedBy }
         : { presentedAt: null, presentedBy: null },
     });
+    if (updated.count === 0) {
+      throw new AppError(
+        "Only accepted abstracts can be marked as presented",
+        409,
+        ErrorCodes.INVALID_STATUS_TRANSITION,
+      );
+    }
 
     await auditLog(tx, {
       entityType: "Abstract",
       entityId: abstractId,
       action: presented ? "mark_presented" : "unmark_presented",
       changes: {
-        presentedAt: { old: existing.presentedAt, new: presented ? "now" : null },
+        presentedAt: {
+          old: existing.presentedAt,
+          new: presented ? "now" : null,
+        },
       },
       performedBy,
     });

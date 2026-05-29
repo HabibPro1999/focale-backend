@@ -9,6 +9,7 @@ vi.mock("@shared/utils/audit.js", () => ({
   auditLog: vi.fn(),
 }));
 
+const assertClientModuleEnabledMock = vi.fn();
 const sendEmailMock = vi.fn();
 
 const createFirebaseUserMock = firebaseAuthMock.createUser;
@@ -23,6 +24,10 @@ const revokeFirebaseRefreshTokensMock =
 
 vi.mock("@modules/email/email-sendgrid.service.js", () => ({
   sendEmail: (...args: unknown[]) => sendEmailMock(...args),
+}));
+vi.mock("@clients", () => ({
+  assertClientModuleEnabled: (...args: unknown[]) =>
+    assertClientModuleEnabledMock(...args),
 }));
 
 import { auditLog } from "@shared/utils/audit.js";
@@ -147,6 +152,13 @@ function mockCommitteeListResult(user: ReturnType<typeof makeCommitteeUser>) {
 }
 
 describe("abstracts committee service", () => {
+  beforeEach(() => {
+    assertClientModuleEnabledMock.mockResolvedValue(undefined);
+    prismaMock.event.findUnique.mockResolvedValue({
+      clientId: "client-1",
+    } as any);
+  });
+
   describe("listCommitteeMembers", () => {
     it("returns active members with theme and active review counts", async () => {
       prismaMock.abstractCommitteeMembership.findMany.mockResolvedValue([
@@ -181,10 +193,9 @@ describe("abstracts committee service", () => {
         { userId: "reviewer-1", themeId: "theme-1" },
         { userId: "reviewer-1", themeId: "theme-2" },
       ] as any);
-      (prismaMock.abstractReview.groupBy as any)
-        .mockResolvedValueOnce([
-          { reviewerId: "reviewer-1", _count: { _all: 1 } },
-        ] as any);
+      (prismaMock.abstractReview.groupBy as any).mockResolvedValueOnce([
+        { reviewerId: "reviewer-1", _count: { _all: 1 } },
+      ] as any);
       prismaMock.abstract.count
         .mockResolvedValueOnce(2)
         .mockResolvedValueOnce(0);
@@ -341,6 +352,27 @@ describe("abstracts committee service", () => {
         themeLabels: ["Cardiology"],
         ownReview: { score: 8, comment: "Good" },
       });
+      expect(assertClientModuleEnabledMock).toHaveBeenCalledWith(
+        "client-1",
+        "abstracts",
+      );
+    });
+
+    it("rejects assigned list access when the owning client cannot use abstracts", async () => {
+      prismaMock.abstractCommitteeMembership.findUnique.mockResolvedValue({
+        userId: reviewerId,
+        eventId,
+        active: true,
+      } as any);
+      assertClientModuleEnabledMock.mockRejectedValue(
+        new Error("module disabled"),
+      );
+
+      await expect(listAssignedAbstracts(eventId, reviewerId)).rejects.toThrow(
+        "module disabled",
+      );
+
+      expect(prismaMock.abstract.findMany).not.toHaveBeenCalled();
     });
 
     it("returns anonymized assigned detail without stored author PII keys", async () => {

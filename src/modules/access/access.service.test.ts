@@ -16,6 +16,7 @@ import {
   decrementAccessRegisteredCountTx,
   incrementPaidCount,
   decrementPaidCount,
+  syncPaidCountDelta,
   validateAccessSelections,
 } from "./access.service.js";
 import { AppError } from "@shared/errors/app-error.js";
@@ -354,7 +355,9 @@ describe("Access Service", () => {
       );
       prismaMock.$transaction.mockImplementation(runTransaction as never);
       prismaMock.eventAccess.update.mockResolvedValue(updatedAccess as never);
-      prismaMock.eventAccess.findMany.mockResolvedValue([updatedAccess] as never);
+      prismaMock.eventAccess.findMany.mockResolvedValue([
+        updatedAccess,
+      ] as never);
       prismaMock.registration.findMany.mockResolvedValue([] as never);
 
       const result = await updateEventAccess(accessId, { maxCapacity: 5 });
@@ -856,6 +859,27 @@ describe("Access Service", () => {
       expect(nonDoctorItems).toHaveLength(1);
     });
 
+    it("should treat an empty conditions array as condition-free", async () => {
+      const accessItems = [
+        createEventAccessWithRelations({
+          id: "condition-free",
+          eventId,
+          type: "WORKSHOP",
+          active: true,
+          conditionLogic: "OR",
+          conditions: [],
+        }),
+      ];
+
+      prismaMock.eventAccess.findMany.mockResolvedValue(accessItems as never);
+
+      const result = await getGroupedAccess(eventId, {}, []);
+
+      expect(getScheduledItems(result).map((item) => item.id)).toEqual([
+        "condition-free",
+      ]);
+    });
+
     it("should filter items by access prerequisites", async () => {
       const prerequisiteId = "basic-access";
 
@@ -1038,9 +1062,11 @@ describe("Access Service", () => {
 
       const [sql] = prismaMock.$executeRaw.mock.calls[0];
       expect((sql as TemplateStringsArray).join(" ")).toContain(
-        "paid_count < max_capacity",
+        "paid_count + ",
       );
-
+      expect((sql as TemplateStringsArray).join(" ")).toContain(
+        "<= max_capacity",
+      );
     });
 
     it("should record multiple selected access items", async () => {
@@ -1134,7 +1160,6 @@ describe("Access Service", () => {
       const statement = (sql as TemplateStringsArray).join(" ");
       expect(statement).toContain("paid_count +");
       expect(statement).toContain("RETURNING id");
-
     });
 
     it("should allow unlimited capacity", async () => {
@@ -1198,12 +1223,100 @@ describe("Access Service", () => {
 
     it("should throw on paid count underflow", async () => {
       prismaMock.eventAccess.updateMany.mockResolvedValue({ count: 0 });
-      prismaMock.eventAccess.findUnique.mockResolvedValue({ paidCount: 1 } as never);
+      prismaMock.eventAccess.findUnique.mockResolvedValue({
+        paidCount: 1,
+      } as never);
 
       await expect(decrementPaidCount("access-1", 2)).rejects.toMatchObject({
         code: ErrorCodes.VALIDATION_ERROR,
         details: { paidCount: 1, requested: 2 },
       });
+    });
+  });
+
+  describe("syncPaidCountDelta", () => {
+    it("increments only newly paid access quantities", async () => {
+      prismaMock.$queryRaw.mockResolvedValue([{ id: "access-2" }]);
+      prismaMock.eventAccess.findMany.mockResolvedValue([]);
+      prismaMock.registration.findMany.mockResolvedValue([]);
+
+      await syncPaidCountDelta(
+        eventId,
+        {
+          status: "PARTIAL",
+          priceBreakdown: {
+            accessItems: [
+              { accessId: "access-1", quantity: 1 },
+              { accessId: "access-2", quantity: 1 },
+            ],
+          },
+          coveredAccessIds: new Set(["access-1"]),
+        },
+        {
+          status: "PARTIAL",
+          priceBreakdown: {
+            accessItems: [
+              { accessId: "access-1", quantity: 1 },
+              { accessId: "access-2", quantity: 1 },
+            ],
+          },
+          coveredAccessIds: new Set(["access-1", "access-2"]),
+        },
+      );
+
+      expect(prismaMock.$queryRaw).toHaveBeenCalledTimes(1);
+      expect(prismaMock.eventAccess.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: { in: ["access-2"] } },
+        }),
+      );
+    });
+
+    it("decrements partial sponsorship coverage on refund", async () => {
+      prismaMock.eventAccess.updateMany.mockResolvedValue({ count: 1 });
+
+      await syncPaidCountDelta(
+        eventId,
+        {
+          status: "PARTIAL",
+          priceBreakdown: {
+            accessItems: [{ accessId: "access-1", quantity: 2 }],
+          },
+          coveredAccessIds: new Set(["access-1"]),
+        },
+        {
+          status: "REFUNDED",
+          priceBreakdown: {
+            accessItems: [{ accessId: "access-1", quantity: 2 }],
+          },
+        },
+      );
+
+      expect(prismaMock.eventAccess.updateMany).toHaveBeenCalledWith({
+        where: { id: "access-1", paidCount: { gte: 2 } },
+        data: { paidCount: { decrement: 2 } },
+      });
+    });
+
+    it("does not decrement when a fully settled registration remains fully settled", async () => {
+      await syncPaidCountDelta(
+        eventId,
+        {
+          status: "SPONSORED",
+          priceBreakdown: {
+            accessItems: [{ accessId: "access-1", quantity: 1 }],
+          },
+        },
+        {
+          status: "SPONSORED",
+          priceBreakdown: {
+            accessItems: [{ accessId: "access-1", quantity: 1 }],
+          },
+        },
+      );
+
+      expect(prismaMock.$queryRaw).not.toHaveBeenCalled();
+      expect(prismaMock.eventAccess.updateMany).not.toHaveBeenCalled();
     });
   });
 
@@ -1478,6 +1591,31 @@ describe("Access Service", () => {
 
       expect(result.valid).toBe(false);
       expect(result.errors.some((e) => e.includes("form answers"))).toBe(true);
+    });
+
+    it("should not reject empty OR condition arrays", async () => {
+      const accessItems = [
+        createEventAccessWithRelations({
+          id: "condition-free",
+          eventId,
+          name: "Condition-free Workshop",
+          active: true,
+          conditionLogic: "OR",
+          conditions: [],
+        }),
+      ];
+
+      prismaMock.eventAccess.findMany
+        .mockResolvedValueOnce(accessItems as never)
+        .mockResolvedValueOnce([] as never);
+
+      const result = await validateAccessSelections(
+        eventId,
+        [{ accessId: "condition-free", quantity: 1 }],
+        {},
+      );
+
+      expect(result.valid).toBe(true);
     });
 
     it("should validate capacity", async () => {

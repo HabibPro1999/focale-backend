@@ -433,6 +433,23 @@ describe("submitAbstract", () => {
       code: "ABS_18003",
     });
   });
+
+  it("enforces a configured zero word limit", async () => {
+    mockSubmitSetup({ globalWordLimit: 0 });
+    const body = makeSubmitBody({
+      themeIds: [themeId],
+      content: {
+        mode: "FREE_TEXT",
+        title: "Title",
+        body: "one",
+      },
+    });
+
+    await expect(submitAbstract(slug, body)).rejects.toMatchObject({
+      statusCode: 422,
+      code: "ABS_18003",
+    });
+  });
 });
 
 // ============================================================================
@@ -505,13 +522,11 @@ describe("editAbstract", () => {
           create: revisionCreate,
         },
         abstract: {
-          update: vi
-            .fn()
-            .mockResolvedValue({
-              ...abstract,
-              contentVersion: 2,
-              lastEditedAt: new Date(),
-            }),
+          update: vi.fn().mockResolvedValue({
+            ...abstract,
+            contentVersion: 2,
+            lastEditedAt: new Date(),
+          }),
         },
         abstractThemeOnAbstract: {
           deleteMany: vi.fn(),
@@ -584,7 +599,7 @@ describe("editAbstract", () => {
       expect.objectContaining({
         data: expect.objectContaining({
           type: "email.abstract",
-          dedupeKey: `email:abstract:ABSTRACT_EDIT_ACK:${abstract.id}`,
+          dedupeKey: `email:abstract:ABSTRACT_EDIT_ACK:${abstract.id}:2`,
           payload: {
             trigger: "ABSTRACT_EDIT_ACK",
             abstractId: abstract.id,

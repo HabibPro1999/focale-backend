@@ -1124,10 +1124,19 @@ describe("Sponsorships Service", () => {
             amountApplied: 0,
             registration: {
               id: registrationId1,
+              eventId,
               totalAmount: 300,
+              paidAmount: 0,
               baseAmount: 200,
+              paymentStatus: "PENDING",
+              paidAt: null,
               accessTypeIds: [],
-              priceBreakdown: { calculatedBasePrice: 200, accessItems: [] },
+              priceBreakdown: {
+                calculatedBasePrice: 200,
+                accessItems: [],
+                subtotal: 300,
+                total: 300,
+              },
             },
           },
           {
@@ -1137,10 +1146,19 @@ describe("Sponsorships Service", () => {
             amountApplied: 0,
             registration: {
               id: registrationId2,
+              eventId,
               totalAmount: 300,
+              paidAmount: 0,
               baseAmount: 200,
+              paymentStatus: "PENDING",
+              paidAt: null,
               accessTypeIds: [],
-              priceBreakdown: { calculatedBasePrice: 200, accessItems: [] },
+              priceBreakdown: {
+                calculatedBasePrice: 200,
+                accessItems: [],
+                subtotal: 300,
+                total: 300,
+              },
             },
           },
         ],
@@ -1168,7 +1186,7 @@ describe("Sponsorships Service", () => {
       const txUsageUpdate = vi.fn().mockResolvedValue({});
       const txUsageFindMany = vi
         .fn()
-        .mockResolvedValue([{ amountApplied: 200 }]);
+        .mockResolvedValue([{ amountApplied: 400 }]);
       const txRegistrationUpdate = vi.fn().mockResolvedValue({});
 
       prismaMock.$transaction.mockImplementation(async (fn: TxCallback) => {
@@ -1200,7 +1218,17 @@ describe("Sponsorships Service", () => {
       // The usage update should have been called for each of the 2 usages
       expect(txUsageUpdate).toHaveBeenCalled();
       // Registration sponsorshipAmount should be updated for linked registrations
-      expect(txRegistrationUpdate).toHaveBeenCalled();
+      expect(txRegistrationUpdate).toHaveBeenCalledWith({
+        where: { id: registrationId1 },
+        data: expect.objectContaining({
+          sponsorshipAmount: 300,
+          paymentStatus: "SPONSORED",
+          priceBreakdown: expect.objectContaining({
+            sponsorshipTotal: 300,
+            total: 0,
+          }),
+        }),
+      });
     });
 
     it("should delegate to cancelSponsorship when status is CANCELLED", async () => {

@@ -19,20 +19,13 @@ import type {
 } from "./sponsorships.schema.js";
 import type { Prisma, Sponsorship } from "@/generated/prisma/client.js";
 import type { TxClient } from "@shared/types/prisma.js";
-import {
-  buildBatchEmailContext,
-  buildLinkedSponsorshipContext,
-} from "@email";
+import { buildBatchEmailContext, buildLinkedSponsorshipContext } from "@email";
 import {
   enqueueRealtimeOutboxEvent,
   enqueueSponsorshipEmailOutboxEvent,
   enqueueTriggeredEmailOutboxEvent,
 } from "@core/outbox";
-import {
-  incrementPaidCount,
-  handleCapacityReached,
-  getAlreadyCoveredAccessIds,
-} from "@access";
+import { getAlreadyCoveredAccessIds, syncPaidCountDelta } from "@access";
 
 // ============================================================================
 // Types
@@ -484,6 +477,10 @@ async function createLinkedModeSponsorships(
 
     const priceBreakdown =
       registration.priceBreakdown as RegistrationForCalculation["priceBreakdown"];
+    const oldCoveredAccessIds =
+      registration.paymentStatus === "PARTIAL"
+        ? await getAlreadyCoveredAccessIds(linked.registrationId, tx)
+        : new Set<string>();
     const applicableAmount = calculateApplicableAmount(
       {
         coversBasePrice: linked.coversBasePrice,
@@ -513,6 +510,15 @@ async function createLinkedModeSponsorships(
     );
     const isFullySponsored =
       updatedSponsorshipAmount >= registration.totalAmount;
+    const nextPaymentStatus = ["PAID", "WAIVED"].includes(
+      registration.paymentStatus,
+    )
+      ? registration.paymentStatus
+      : isFullySponsored
+        ? "SPONSORED"
+        : updatedSponsorshipAmount > 0
+          ? "PARTIAL"
+          : registration.paymentStatus;
 
     await tx.registration.update({
       where: { id: linked.registrationId },
@@ -520,67 +526,33 @@ async function createLinkedModeSponsorships(
         sponsorshipAmount: updatedSponsorshipAmount,
         paymentMethod: "LAB_SPONSORSHIP",
         // Fully sponsored → SPONSORED; partially → PARTIAL
-        ...(isFullySponsored
-          ? { paymentStatus: "SPONSORED", paidAt: new Date() }
-          : updatedSponsorshipAmount > 0
-            ? { paymentStatus: "PARTIAL" }
-            : {}),
+        paymentStatus: nextPaymentStatus as
+          | "PAID"
+          | "WAIVED"
+          | "SPONSORED"
+          | "PARTIAL",
+        ...(nextPaymentStatus === "SPONSORED" ? { paidAt: new Date() } : {}),
       },
     });
 
-    // Sync paid count for capacity tracking (mirrors sponsorship-linking.ts)
-    const FULLY_SETTLED = ["PAID", "SPONSORED", "WAIVED"];
-    const wasAlreadySettled = FULLY_SETTLED.includes(
-      registration.paymentStatus,
+    const newCoveredAccessIds = new Set([
+      ...oldCoveredAccessIds,
+      ...linked.coveredAccessIds,
+    ]);
+    await syncPaidCountDelta(
+      eventId,
+      {
+        status: registration.paymentStatus,
+        priceBreakdown: registration.priceBreakdown,
+        coveredAccessIds: oldCoveredAccessIds,
+      },
+      {
+        status: nextPaymentStatus,
+        priceBreakdown: registration.priceBreakdown,
+        coveredAccessIds: newCoveredAccessIds,
+      },
+      tx,
     );
-    if (!wasAlreadySettled) {
-      const breakdown = registration.priceBreakdown as Record<string, unknown>;
-      const accessItems = (breakdown?.accessItems ?? []) as Array<{
-        accessId: string;
-        quantity: number;
-      }>;
-      if (isFullySponsored) {
-        // Exclude current sponsorship (just inserted) to get only previously-covered IDs.
-        const alreadyCovered =
-          registration.paymentStatus === "PARTIAL"
-            ? await getAlreadyCoveredAccessIds(
-                linked.registrationId,
-                tx,
-                sponsorship.id,
-              )
-            : new Set<string>();
-        const itemsToIncrement = accessItems.filter(
-          (item) => !alreadyCovered.has(item.accessId),
-        );
-        for (const item of itemsToIncrement) {
-          await incrementPaidCount(item.accessId, item.quantity, tx);
-        }
-        if (itemsToIncrement.length > 0) {
-          await handleCapacityReached(
-            eventId,
-            itemsToIncrement.map((a) => a.accessId),
-            tx,
-          );
-        }
-      } else if (
-        updatedSponsorshipAmount > 0 &&
-        linked.coveredAccessIds.length > 0
-      ) {
-        const coveredItems = accessItems.filter((a) =>
-          linked.coveredAccessIds.includes(a.accessId),
-        );
-        for (const item of coveredItems) {
-          await incrementPaidCount(item.accessId, item.quantity, tx);
-        }
-        if (coveredItems.length > 0) {
-          await handleCapacityReached(
-            eventId,
-            coveredItems.map((a) => a.accessId),
-            tx,
-          );
-        }
-      }
-    }
 
     registration.sponsorshipAmount = updatedSponsorshipAmount;
 

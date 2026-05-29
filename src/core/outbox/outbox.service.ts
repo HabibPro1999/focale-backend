@@ -24,6 +24,8 @@ let lastRecoveryAt = 0;
 export type OutboxClient = {
   outboxEvent: Pick<typeof prisma.outboxEvent, "create"> &
     Partial<Pick<typeof prisma.outboxEvent, "findFirst">>;
+  $executeRawUnsafe?: (query: string) => Promise<unknown>;
+  $transaction?: unknown;
 };
 
 export interface EnqueueOutboxInput<T extends OutboxEventType> {
@@ -81,10 +83,7 @@ function outboxScopeClause(scope: OutboxProcessingScope): string {
   return "";
 }
 
-function isOutboxDedupeViolation(
-  error: unknown,
-  dedupeKey?: string,
-): boolean {
+function isOutboxDedupeViolation(error: unknown, dedupeKey?: string): boolean {
   if (!isPrismaUniqueViolation(error)) {
     return false;
   }
@@ -112,6 +111,13 @@ function isPrismaUniqueViolation(error: unknown): boolean {
   );
 }
 
+function shouldUseOutboxDedupeSavepoint(client: OutboxClient): boolean {
+  return (
+    typeof client.$executeRawUnsafe === "function" &&
+    !("$transaction" in client)
+  );
+}
+
 export async function enqueueOutboxEvent<T extends OutboxEventType>(
   client: OutboxClient,
   input: EnqueueOutboxInput<T>,
@@ -131,18 +137,41 @@ export async function enqueueOutboxEvent<T extends OutboxEventType>(
         return false;
       }
     }
-    await outboxEvent.create({
-      data: {
-        type: input.type,
-        aggregateType: input.aggregateType ?? null,
-        aggregateId: input.aggregateId ?? null,
-        clientId: input.clientId ?? null,
-        eventId: input.eventId ?? null,
-        dedupeKey: input.dedupeKey ?? null,
-        payload: toJsonValue(input.payload),
-        maxAttempts: input.maxAttempts ?? 5,
-      },
-    });
+    const useSavepoint =
+      input.dedupeKey != null && shouldUseOutboxDedupeSavepoint(client);
+    if (useSavepoint) {
+      await client.$executeRawUnsafe?.("SAVEPOINT outbox_enqueue_dedupe");
+    }
+
+    try {
+      await outboxEvent.create({
+        data: {
+          type: input.type,
+          aggregateType: input.aggregateType ?? null,
+          aggregateId: input.aggregateId ?? null,
+          clientId: input.clientId ?? null,
+          eventId: input.eventId ?? null,
+          dedupeKey: input.dedupeKey ?? null,
+          payload: toJsonValue(input.payload),
+          maxAttempts: input.maxAttempts ?? 5,
+        },
+      });
+      if (useSavepoint) {
+        await client.$executeRawUnsafe?.(
+          "RELEASE SAVEPOINT outbox_enqueue_dedupe",
+        );
+      }
+    } catch (error) {
+      if (useSavepoint) {
+        await client.$executeRawUnsafe?.(
+          "ROLLBACK TO SAVEPOINT outbox_enqueue_dedupe",
+        );
+        await client.$executeRawUnsafe?.(
+          "RELEASE SAVEPOINT outbox_enqueue_dedupe",
+        );
+      }
+      throw error;
+    }
     return true;
   } catch (error) {
     if (isOutboxDedupeViolation(error, input.dedupeKey)) {
@@ -247,10 +276,7 @@ export async function recoverStaleOutboxLeases(
   `;
 
   if (requeued > 0 || deadLettered > 0) {
-    logger.warn(
-      { requeued, deadLettered },
-      "Recovered stale outbox leases",
-    );
+    logger.warn({ requeued, deadLettered }, "Recovered stale outbox leases");
   }
 
   return { requeued, deadLettered };

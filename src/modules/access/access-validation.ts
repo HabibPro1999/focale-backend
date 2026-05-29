@@ -6,6 +6,10 @@ import type { TxClient } from "@shared/types/prisma.js";
 
 type AccessValidationDbClient = Pick<TxClient, "eventAccess">;
 
+function hasConditions(conditions: unknown): boolean {
+  return Array.isArray(conditions) && conditions.length > 0;
+}
+
 /**
  * Validate access selections for a registration.
  * Checks: mandatory included items, time conflicts, prerequisites,
@@ -40,7 +44,7 @@ export async function validateAccessSelections(
   // Validate included accesses are present (before selection-specific checks)
   for (const included of includedAccesses) {
     // Skip if conditions don't match (exempt from mandatory)
-    if (included.conditions) {
+    if (hasConditions(included.conditions)) {
       if (
         !evaluateConditions(
           included.conditions as AccessCondition[],
@@ -141,7 +145,7 @@ export async function validateAccessSelections(
       }
     }
 
-    if (access.conditions) {
+    if (hasConditions(access.conditions)) {
       if (
         !evaluateConditions(
           access.conditions as AccessCondition[],

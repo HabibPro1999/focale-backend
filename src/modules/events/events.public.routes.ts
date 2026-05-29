@@ -40,6 +40,9 @@ export async function eventsPublicRoutes(app: AppInstance): Promise<void> {
       if (!event) {
         throw app.httpErrors.notFound("Event not found");
       }
+      if (event.status !== "OPEN" || event.client.active !== true) {
+        throw app.httpErrors.notFound("Event not found");
+      }
 
       // Transform pricing for public consumption
       const pricing = event.pricing;

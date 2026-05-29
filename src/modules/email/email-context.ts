@@ -217,13 +217,17 @@ export async function buildEmailContextWithAccess(
 // =============================================================================
 
 // Variables that contain server-generated HTML (not user input) and skip sanitization
-const HTML_SAFE_VARIABLES = new Set(["sponsoredItems", "beneficiaryList", "certificateList"]);
+const HTML_SAFE_VARIABLES = new Set([
+  "sponsoredItems",
+  "beneficiaryList",
+  "certificateList",
+]);
 
 export function resolveVariables(
   template: string,
   context: EmailContext | Record<string, unknown>,
 ): string {
-  return template.replace(/\{\{(\w+)\}\}/g, (_match, varId) => {
+  return template.replace(/\{\{([A-Za-z0-9_.-]+)\}\}/g, (_match, varId) => {
     const value = (context as Record<string, unknown>)[varId];
 
     if (value !== undefined && value !== null && value !== "") {

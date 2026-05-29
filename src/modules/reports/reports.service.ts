@@ -22,6 +22,7 @@ import type {
   EventAnalyticsResponse,
   AccessRegistrantsResponse,
 } from "./analytics.schemas.js";
+import { escapeExcelRow } from "./excel-safety.js";
 
 // ============================================================================
 // Financial Report
@@ -135,16 +136,29 @@ async function getFinancialSummary(
   const pendingMap = new Map(
     pendingByCurrency.map((p) => [
       p.currency,
-      (p._sum.totalAmount ?? 0) - (p._sum.paidAmount ?? 0),
+      Math.max(0, (p._sum.totalAmount ?? 0) - (p._sum.paidAmount ?? 0)),
     ]),
   );
   const refundedMap = new Map(
     refundedByCurrency.map((r) => [r.currency, r._sum.totalAmount ?? 0]),
   );
+  const revenueByCurrency = await prisma.registration.groupBy({
+    by: ["currency"],
+    where: {
+      ...where,
+      paymentStatus: { not: "REFUNDED" },
+    },
+    _sum: {
+      paidAmount: true,
+    },
+  });
+  const revenueMap = new Map(
+    revenueByCurrency.map((r) => [r.currency, r._sum.paidAmount ?? 0]),
+  );
 
   const currencies: CurrencySummary[] = byCurrency.map((c) => ({
     currency: c.currency,
-    totalRevenue: c._sum.paidAmount ?? 0,
+    totalRevenue: revenueMap.get(c.currency) ?? 0,
     totalPending: pendingMap.get(c.currency) ?? 0,
     totalRefunded: refundedMap.get(c.currency) ?? 0,
     registrationCount: c._count,
@@ -172,6 +186,15 @@ async function getFinancialSummary(
     },
     _count: true,
   });
+  const revenueAggregation = await prisma.registration.aggregate({
+    where: {
+      ...where,
+      paymentStatus: { not: "REFUNDED" },
+    },
+    _sum: {
+      paidAmount: true,
+    },
+  });
 
   // Calculate total pending across all currencies
   const totalPending = currencies.reduce((sum, c) => sum + c.totalPending, 0);
@@ -186,7 +209,7 @@ async function getFinancialSummary(
       : "TND";
 
   return {
-    totalRevenue: aggregation._sum.paidAmount ?? 0,
+    totalRevenue: revenueAggregation._sum.paidAmount ?? 0,
     totalPending,
     totalRefunded,
     averageRegistrationValue: Math.round(aggregation._avg.totalAmount ?? 0),
@@ -251,6 +274,7 @@ async function getAccessBreakdown(
     FROM registrations r,
     LATERAL jsonb_array_elements(r.price_breakdown->'accessItems') AS item
     WHERE r.event_id = ${eventId}
+      AND r.payment_status IN ('PAID', 'SPONSORED', 'WAIVED')
       AND jsonb_array_length(COALESCE(r.price_breakdown->'accessItems', '[]'::jsonb)) > 0
       ${startDateCondition}
       ${endDateCondition}
@@ -688,7 +712,7 @@ async function generateRegistrationsWorkbook(
     right: { style: "thin" },
   };
 
-  const headerRow = sheet.addRow(headers);
+  const headerRow = sheet.addRow(escapeExcelRow(headers));
   headerRow.eachCell((cell) => {
     cell.fill = headerFill;
     cell.font = headerFont;
@@ -703,30 +727,32 @@ async function generateRegistrationsWorkbook(
         ? (registration.formData as Record<string, unknown>)
         : {};
 
-    const row = sheet.addRow([
-      registration.id,
-      registration.email,
-      registration.firstName ?? "",
-      registration.lastName ?? "",
-      registration.phone ?? "",
-      registration.paymentStatus,
-      registration.paymentMethod ?? "",
-      registration.totalAmount,
-      registration.paidAmount,
-      registration.baseAmount,
-      registration.accessAmount,
-      registration.discountAmount,
-      registration.sponsorshipCode ?? "",
-      registration.sponsorshipAmount,
-      registration.submittedAt.toISOString(),
-      registration.paidAt?.toISOString() ?? "",
-      ...formDataKeys.map((key) => {
-        const value = fd[key];
-        if (value == null) return "";
-        if (typeof value === "object") return JSON.stringify(value);
-        return String(value);
-      }),
-    ]);
+    const row = sheet.addRow(
+      escapeExcelRow([
+        registration.id,
+        registration.email,
+        registration.firstName ?? "",
+        registration.lastName ?? "",
+        registration.phone ?? "",
+        registration.paymentStatus,
+        registration.paymentMethod ?? "",
+        registration.totalAmount,
+        registration.paidAmount,
+        registration.baseAmount,
+        registration.accessAmount,
+        registration.discountAmount,
+        registration.sponsorshipCode ?? "",
+        registration.sponsorshipAmount,
+        registration.submittedAt.toISOString(),
+        registration.paidAt?.toISOString() ?? "",
+        ...formDataKeys.map((key) => {
+          const value = fd[key];
+          if (value == null) return "";
+          if (typeof value === "object") return JSON.stringify(value);
+          return String(value);
+        }),
+      ]),
+    );
 
     row.eachCell((cell) => {
       cell.border = border;
@@ -806,8 +832,8 @@ export async function getAccessRegistrants(
   accessId: string,
 ): Promise<AccessRegistrantsResponse> {
   const [access, registrations] = await Promise.all([
-    prisma.eventAccess.findUnique({
-      where: { id: accessId },
+    prisma.eventAccess.findFirst({
+      where: { id: accessId, eventId },
       select: { name: true, type: true },
     }),
     prisma.registration.findMany({

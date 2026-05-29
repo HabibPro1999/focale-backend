@@ -391,6 +391,38 @@ describe("Pricing Service", () => {
       expect(result.total).toBe(150);
     });
 
+    it("should apply numeric rules to numeric string form values", async () => {
+      const mockPricing = createMockEventPricing({
+        eventId,
+        basePrice: 300,
+        rules: [
+          {
+            id: "adult-rule",
+            name: "Adult Price",
+            price: 500,
+            conditions: [
+              { fieldId: "age", operator: "greater_than", value: 18 },
+            ],
+            conditionLogic: "AND",
+            priority: 1,
+            active: true,
+            description: null,
+          },
+        ],
+      });
+
+      prismaMock.eventPricing.findUnique.mockResolvedValue(mockPricing);
+      prismaMock.eventAccess.findMany.mockResolvedValue([]);
+
+      const result = await calculatePrice(eventId, {
+        formData: { age: "25" },
+        selectedAccessItems: [],
+        sponsorshipCodes: [],
+      });
+
+      expect(result.calculatedBasePrice).toBe(500);
+    });
+
     it("should calculate extras total", async () => {
       const mockPricing = createMockEventPricing({
         eventId,
@@ -471,6 +503,69 @@ describe("Pricing Service", () => {
       expect(result.total).toBe(150); // 300 - 150
     });
 
+    it("should ignore duplicate sponsorship codes", async () => {
+      const mockPricing = createMockEventPricing({
+        eventId,
+        basePrice: 300,
+        rules: [],
+      });
+      const mockSponsorship = createMockSponsorship({
+        eventId,
+        code: "SPONSOR123",
+        totalAmount: 150,
+        status: "PENDING",
+      });
+
+      prismaMock.eventPricing.findUnique.mockResolvedValue(mockPricing);
+      prismaMock.eventAccess.findMany.mockResolvedValue([]);
+      prismaMock.sponsorship.findMany.mockResolvedValue([mockSponsorship]);
+
+      const result = await calculatePrice(eventId, {
+        formData: {},
+        selectedAccessItems: [],
+        sponsorshipCodes: ["SPONSOR123", "sponsor123"],
+      });
+
+      expect(result.sponsorships).toHaveLength(1);
+      expect(result.sponsorshipTotal).toBe(150);
+      expect(result.total).toBe(150);
+    });
+
+    it("should cap cumulative sponsorship amounts to the subtotal", async () => {
+      const mockPricing = createMockEventPricing({
+        eventId,
+        basePrice: 300,
+        rules: [],
+      });
+
+      prismaMock.eventPricing.findUnique.mockResolvedValue(mockPricing);
+      prismaMock.eventAccess.findMany.mockResolvedValue([]);
+      prismaMock.sponsorship.findMany.mockResolvedValue([
+        createMockSponsorship({
+          eventId,
+          code: "CODE1",
+          totalAmount: 300,
+          status: "PENDING",
+        }),
+        createMockSponsorship({
+          eventId,
+          code: "CODE2",
+          totalAmount: 300,
+          status: "PENDING",
+        }),
+      ]);
+
+      const result = await calculatePrice(eventId, {
+        formData: {},
+        selectedAccessItems: [],
+        sponsorshipCodes: ["CODE1", "CODE2"],
+      });
+
+      expect(result.sponsorshipTotal).toBe(300);
+      expect(result.sponsorships.map((s) => s.amount)).toEqual([300, 0]);
+      expect(result.total).toBe(0);
+    });
+
     it("should not go below zero", async () => {
       const mockPricing = createMockEventPricing({
         eventId,
@@ -497,16 +592,8 @@ describe("Pricing Service", () => {
       expect(result.total).toBe(0); // Should not be negative
     });
 
-    it("should repair missing pricing as a free event", async () => {
+    it("should treat missing pricing as a free event without writing", async () => {
       prismaMock.eventPricing.findUnique.mockResolvedValue(null);
-      prismaMock.eventPricing.upsert.mockResolvedValue(
-        createMockEventPricing({
-          eventId,
-          basePrice: 0,
-          currency: "TND",
-          rules: [],
-        }),
-      );
 
       const result = await calculatePrice(eventId, {
         formData: {},
@@ -516,6 +603,7 @@ describe("Pricing Service", () => {
 
       expect(result.total).toBe(0);
       expect(result.currency).toBe("TND");
+      expect(prismaMock.eventPricing.upsert).not.toHaveBeenCalled();
     });
 
     it("should apply highest priority rule first", async () => {

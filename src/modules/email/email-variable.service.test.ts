@@ -577,6 +577,18 @@ describe("Email Variable Service", () => {
       const result = resolveVariables(template, contextWithFormField);
       expect(result).toBe("Value: Custom Value");
     });
+
+    it("should handle dynamic variables with hyphens and dots", () => {
+      const contextWithDynamicFields = {
+        ...sampleContext,
+        "form_some-field": "Hyphen Value",
+        "profile.department.name": "Cardiology",
+      };
+      const template =
+        "{{form_some-field}} / {{profile.department.name}} / {{missing-field}}";
+      const result = resolveVariables(template, contextWithDynamicFields);
+      expect(result).toBe("Hyphen Value / Cardiology / ");
+    });
   });
 
   describe("sanitizeForHtml", () => {

@@ -7,6 +7,21 @@ import { z } from "zod";
 const BasePriceSchema = z.number().int().min(0).nullable();
 const hasUpdateField = (data: Record<string, unknown>) =>
   Object.values(data).some((value) => value !== undefined);
+const supportedCurrencies = new Set(
+  (
+    Intl as typeof Intl & {
+      supportedValuesOf?: (key: "currency") => string[];
+    }
+  ).supportedValuesOf?.("currency") ?? ["TND", "EUR", "USD"],
+);
+const CurrencySchema = z
+  .string()
+  .trim()
+  .transform((value) => value.toUpperCase())
+  .refine(
+    (value) => /^[A-Z]{3}$/.test(value) && supportedCurrencies.has(value),
+    "Currency must be a supported ISO 4217 code",
+  );
 
 export const CreateEventSchema = z
   .strictObject({
@@ -28,7 +43,7 @@ export const CreateEventSchema = z
     status: z.literal("CLOSED").optional().default("CLOSED"),
     // Pricing
     basePrice: BasePriceSchema.optional().default(0),
-    currency: z.string().length(3).default("TND"),
+    currency: CurrencySchema.default("TND"),
   })
   .refine((data) => data.endDate >= data.startDate, {
     message: "End date must be greater than or equal to start date",
@@ -55,7 +70,7 @@ export const UpdateEventSchema = z
     status: z.enum(["CLOSED", "OPEN", "ARCHIVED"]).optional(),
     // Pricing
     basePrice: BasePriceSchema.optional(),
-    currency: z.string().length(3).optional(),
+    currency: CurrencySchema.optional(),
   })
   .refine(
     (data) => {

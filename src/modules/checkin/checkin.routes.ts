@@ -51,7 +51,10 @@ export async function checkinRoutes(app: AppInstance): Promise<void> {
   );
 
   // GET /:eventId/checkin/registrations - Eligible registration IDs for scanner preload
-  app.get<{ Params: { eventId: string }; Querystring: CheckInRegistrationsQuery }>(
+  app.get<{
+    Params: { eventId: string };
+    Querystring: CheckInRegistrationsQuery;
+  }>(
     "/:eventId/checkin/registrations",
     {
       schema: {
@@ -116,4 +119,5 @@ export async function checkinRoutes(app: AppInstance): Promise<void> {
       );
       return reply.send(result);
     },
-  );}
+  );
+}

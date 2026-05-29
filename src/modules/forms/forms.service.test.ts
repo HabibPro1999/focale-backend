@@ -485,12 +485,12 @@ describe("Forms Service", () => {
       const mockForm = createMockForm({ id: formId, type: "REGISTRATION" });
       prismaMock.form.findUnique.mockResolvedValue(mockForm);
 
-      await expect(updateForm(formId, { schema: {} as never })).rejects.toMatchObject(
-        {
-          statusCode: 400,
-          code: ErrorCodes.VALIDATION_ERROR,
-        },
-      );
+      await expect(
+        updateForm(formId, { schema: {} as never }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.VALIDATION_ERROR,
+      });
       expect(prismaMock.form.update).not.toHaveBeenCalled();
     });
 
@@ -518,9 +518,9 @@ describe("Forms Service", () => {
         (callback as (tx: typeof prismaMock) => Promise<Form>)(prismaMock),
       );
 
-      await expect(
-        updateForm(formId, { schema: nextSchema }),
-      ).resolves.toEqual(updatedForm);
+      await expect(updateForm(formId, { schema: nextSchema })).resolves.toEqual(
+        updatedForm,
+      );
 
       expect(prismaMock.$transaction).toHaveBeenCalledWith(
         expect.any(Function),
@@ -550,7 +550,9 @@ describe("Forms Service", () => {
       );
 
       await expect(
-        updateSponsorshipSettings(formId, { sponsorshipMode: "LINKED_ACCOUNT" }),
+        updateSponsorshipSettings(formId, {
+          sponsorshipMode: "LINKED_ACCOUNT",
+        }),
       ).resolves.toEqual(updatedForm);
 
       expect(prismaMock.$transaction).toHaveBeenCalledWith(
@@ -1010,6 +1012,47 @@ describe("Forms Service", () => {
       expect(validateFormData(numberSchema, { age: 0, score: "" }).valid).toBe(
         true,
       );
+      expect(validateFormData(numberSchema, { age: true }).valid).toBe(false);
+      expect(validateFormData(numberSchema, { age: "   " }).valid).toBe(false);
+      expect(validateFormData(numberSchema, { age: "0x10" }).valid).toBe(false);
+      expect(validateFormData(numberSchema, { age: "25" }).data).toMatchObject({
+        age: 25,
+      });
+    });
+
+    it("should reject whitespace-only required text and invalid dates", () => {
+      const schema = {
+        steps: [
+          {
+            id: "step-1",
+            title: "Step 1",
+            fields: [
+              {
+                id: "name",
+                type: "text" as const,
+                label: "Name",
+                required: true,
+              },
+              {
+                id: "birthdate",
+                type: "date" as const,
+                label: "Birthdate",
+                required: true,
+                validation: { minDate: "2020-01-01" },
+              },
+            ],
+          },
+        ],
+      };
+
+      expect(
+        validateFormData(schema, { name: "   ", birthdate: "2026-01-01" })
+          .valid,
+      ).toBe(false);
+      expect(
+        validateFormData(schema, { name: "Alice", birthdate: "not-a-date" })
+          .valid,
+      ).toBe(false);
     });
 
     it("should enforce supported validation key aliases", () => {
@@ -1064,6 +1107,103 @@ describe("Forms Service", () => {
       expect(result.errors.map((error) => error.fieldId)).toEqual(
         expect.arrayContaining(["attachment", "choices", "count", "date"]),
       );
+    });
+
+    it("should normalize scalar checkbox submissions into a single selection", () => {
+      const schema = {
+        steps: [
+          {
+            id: "step-1",
+            title: "Step 1",
+            fields: [
+              {
+                id: "choices",
+                type: "checkbox" as const,
+                label: "Choices",
+                options: [
+                  { id: "a", label: "A" },
+                  { id: "b", label: "B" },
+                ],
+                validation: { required: true },
+              },
+            ],
+          },
+        ],
+      };
+
+      const result = validateFormData(schema, { choices: "a" });
+
+      expect(result.valid).toBe(true);
+      expect(result.data).toMatchObject({ choices: ["a"] });
+    });
+
+    it("should sanitize sponsor schema fields", () => {
+      const sponsorSchema = {
+        sponsorSteps: [
+          {
+            id: "sponsor-step",
+            fields: [{ id: "companyName", type: "text" as const }],
+          },
+        ],
+        beneficiaryTemplate: {
+          steps: [
+            {
+              id: "beneficiary-step",
+              fields: [{ id: "beneficiaryEmail", type: "email" as const }],
+            },
+          ],
+        },
+      };
+
+      expect(
+        sanitizeFormData(sponsorSchema, {
+          companyName: "Clinic",
+          beneficiaryEmail: "doctor@example.com",
+          injected: true,
+        }),
+      ).toEqual({
+        companyName: "Clinic",
+        beneficiaryEmail: "doctor@example.com",
+      });
+
+      expect(
+        sanitizeFormData(
+          { beneficiaryTemplate: sponsorSchema.beneficiaryTemplate },
+          {
+            beneficiaryEmail: "doctor@example.com",
+            injected: true,
+          },
+        ),
+      ).toEqual({ beneficiaryEmail: "doctor@example.com" });
+    });
+
+    it("should not accept file type substring matches", () => {
+      const schema = {
+        steps: [
+          {
+            id: "step-1",
+            title: "Step 1",
+            fields: [
+              {
+                id: "attachment",
+                type: "file" as const,
+                label: "Attachment",
+                validation: { acceptedFileTypes: ["pdf"] },
+              },
+            ],
+          },
+        ],
+      };
+
+      expect(
+        validateFormData(schema, {
+          attachment: {
+            name: "report.exe",
+            size: 10,
+            type: "application/pdf-malware",
+          },
+        }).valid,
+      ).toBe(false);
     });
   });
 });

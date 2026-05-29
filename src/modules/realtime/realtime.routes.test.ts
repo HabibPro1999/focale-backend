@@ -272,7 +272,9 @@ describe("GET /api/stream", () => {
     await new Promise((r) => setTimeout(r, 50));
     const noDataFrames = (m: SseMessage[]) =>
       m.filter((x) => x.data && !x.event).length === 0;
-    const res = await conn.waitFor((m) => noDataFrames(m), 100).catch(() => null);
+    const res = await conn
+      .waitFor((m) => noDataFrames(m), 100)
+      .catch(() => null);
     expect(res).not.toBeNull();
   });
 
@@ -392,6 +394,39 @@ describe("GET /api/stream", () => {
     const dataFrames = all.filter((x) => x.data && !x.event);
     const ids = dataFrames.map((x) => JSON.parse(x.data!).payload.id);
     expect(ids).toEqual(["mid", "late"]);
+  });
+
+  it("emits replay-gap when Last-Event-ID predates the retained buffer", async () => {
+    h.currentUser = mockUsers.clientAdmin;
+    app = await buildTestApp();
+    const addr = await app.listen({ port: 0, host: "127.0.0.1" });
+
+    const oldId = eventBus.emit({
+      type: "registration.updated",
+      clientId: "client-A",
+      eventId: "ev-1",
+      payload: { id: "old" },
+      ts: 1,
+    });
+    for (let i = 0; i < 501; i++) {
+      eventBus.emit({
+        type: "registration.updated",
+        clientId: "client-A",
+        eventId: "ev-1",
+        payload: { id: `overflow-${i}` },
+        ts: i + 2,
+      });
+    }
+
+    const conn = await openStream(addr + "/api/stream", {
+      "Last-Event-ID": oldId,
+    });
+    openConn = conn;
+
+    const all = await conn.waitFor((m) =>
+      m.some((x) => x.event === "replay-gap"),
+    );
+    expect(all.some((x) => x.event === "replay-gap")).toBe(true);
   });
 
   it("ignores Last-Event-ID for events outside client scope", async () => {

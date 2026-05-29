@@ -80,10 +80,15 @@ export async function realtimeRoutes(app: AppInstance): Promise<void> {
         return true;
       };
 
+      let closed = false;
+      let close: () => void = () => {
+        closed = true;
+      };
+
       const sendFrame = (id: string, ev: AppEvent) => {
-        if (!reply.sse.isConnected) return;
+        if (closed || !reply.sse.isConnected) return;
         reply.sse.send({ id, data: ev }).catch(() => {
-          /* client disconnected mid-write */
+          close();
         });
       };
 
@@ -92,8 +97,11 @@ export async function realtimeRoutes(app: AppInstance): Promise<void> {
         sendFrame(id, ev);
       };
 
-      const close = () => {
+      close = () => {
+        if (closed) return;
+        closed = true;
         eventBus.off(handler);
+        activeConnections.delete(close);
         try {
           reply.sse.close();
         } catch {
@@ -101,27 +109,28 @@ export async function realtimeRoutes(app: AppInstance): Promise<void> {
         }
       };
 
-      // Subscribe before replaying so live events that land during replay
-      // still reach the client (id stays monotonic — order is preserved).
-      eventBus.on(handler);
-      activeConnections.add(close);
-
-      reply.sse.onClose(() => {
-        eventBus.off(handler);
-        activeConnections.delete(close);
-      });
-
       // Replay events after Last-Event-ID. fetch-event-source sets this
       // header automatically on reconnect when the previous stream emitted
       // `id:` frames. Closes the gap window caused by proxy drops, deploys,
       // tab-switches, or network blips.
       const lastEventId = request.headers["last-event-id"];
       if (typeof lastEventId === "string" && lastEventId.length > 0) {
+        if (eventBus.hasReplayGap(lastEventId)) {
+          await reply.sse.send({
+            event: "replay-gap",
+            data: { lastEventId },
+          });
+        }
         const buffered = eventBus.getSince(lastEventId);
         for (const { id, ev } of buffered) {
           if (matches(ev)) sendFrame(id, ev);
         }
       }
+
+      eventBus.on(handler);
+      activeConnections.add(close);
+
+      reply.sse.onClose(close);
 
       await reply.sse.send({
         event: "ready",

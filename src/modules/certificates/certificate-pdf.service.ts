@@ -4,7 +4,10 @@
 // Uses pdf-lib (isomorphic) to generate certificate PDFs with text zones
 // =============================================================================
 
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import fontkit from "@pdf-lib/fontkit";
+import { PDFDocument, type PDFFont, rgb } from "pdf-lib";
+import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { downloadTemplateImage } from "./certificates.service.js";
 import { logger } from "@shared/utils/logger.js";
 import type { CertificateZone } from "./certificates.schema.js";
@@ -94,17 +97,61 @@ export function resolveCertificateVariable(
 // PDF GENERATION HELPERS
 // =============================================================================
 
+const require = createRequire(import.meta.url);
+const cssColorNames = require("color-name") as Record<
+  string,
+  [number, number, number]
+>;
+
+const DEFAULT_REGULAR_FONT_PATH =
+  require.resolve("dejavu-fonts-ttf/ttf/DejaVuSans.ttf");
+const DEFAULT_BOLD_FONT_PATH =
+  require.resolve("dejavu-fonts-ttf/ttf/DejaVuSans-Bold.ttf");
+
+const fontBytesCache = new Map<string, Uint8Array>();
+
+async function loadFontBytes(path: string): Promise<Uint8Array> {
+  const cached = fontBytesCache.get(path);
+  if (cached) return cached;
+
+  const bytes = await readFile(path);
+  fontBytesCache.set(path, bytes);
+  return bytes;
+}
+
+async function embedCertificateFonts(
+  pdfDoc: PDFDocument,
+): Promise<{ regularFont: PDFFont; boldFont: PDFFont }> {
+  pdfDoc.registerFontkit(fontkit);
+
+  const regularFontPath =
+    process.env.CERTIFICATE_FONT_PATH ?? DEFAULT_REGULAR_FONT_PATH;
+  const boldFontPath =
+    process.env.CERTIFICATE_BOLD_FONT_PATH ?? DEFAULT_BOLD_FONT_PATH;
+
+  const [regularBytes, boldBytes] = await Promise.all([
+    loadFontBytes(regularFontPath),
+    loadFontBytes(boldFontPath),
+  ]);
+
+  const [regularFont, boldFont] = await Promise.all([
+    pdfDoc.embedFont(regularBytes, { subset: true }),
+    pdfDoc.embedFont(boldBytes, { subset: true }),
+  ]);
+
+  return { regularFont, boldFont };
+}
+
 function findFitFontSize(
-  font: {
-    widthOfTextAtSize: (text: string, size: number) => number;
-    heightAtSize: (size: number) => number;
-  },
+  font: PDFFont,
   text: string,
   maxWidth: number,
   maxHeight: number,
   maxFontSize = 72,
-  minFontSize = 8,
+  minFontSize = 4,
 ): number {
+  if (maxWidth <= 0 || maxHeight <= 0) return minFontSize;
+
   let lo = minFontSize;
   let hi = maxFontSize;
   while (hi - lo > 0.5) {
@@ -120,13 +167,136 @@ function findFitFontSize(
   return Math.floor(lo);
 }
 
-function hexToRgb(hex: string): { r: number; g: number; b: number } {
-  const match = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-  if (!match) return { r: 0, g: 0, b: 0 };
+function truncateTextToWidth(
+  font: PDFFont,
+  text: string,
+  fontSize: number,
+  maxWidth: number,
+): string {
+  if (font.widthOfTextAtSize(text, fontSize) <= maxWidth) return text;
+
+  const ellipsis = "...";
+  if (font.widthOfTextAtSize(ellipsis, fontSize) > maxWidth) return "";
+
+  const chars = Array.from(text);
+  let lo = 0;
+  let hi = chars.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    const candidate = `${chars.slice(0, mid).join("")}${ellipsis}`;
+    if (font.widthOfTextAtSize(candidate, fontSize) <= maxWidth) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+
+  return `${chars.slice(0, lo).join("")}${ellipsis}`;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function getVerticalTextMetrics(
+  font: PDFFont,
+  size: number,
+): { height: number; baselineOffset: number } {
+  const fullHeight = font.heightAtSize(size, { descender: true });
+  const ascenderHeight = font.heightAtSize(size, { descender: false });
+
   return {
-    r: parseInt(match[1], 16) / 255,
-    g: parseInt(match[2], 16) / 255,
-    b: parseInt(match[3], 16) / 255,
+    height: fullHeight,
+    baselineOffset: Math.max(0, fullHeight - ascenderHeight),
+  };
+}
+
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  const color = hex.trim().toLowerCase();
+
+  const shortHexMatch = /^#?([a-f\d])([a-f\d])([a-f\d])$/i.exec(color);
+  if (shortHexMatch) {
+    return {
+      r: parseInt(shortHexMatch[1] + shortHexMatch[1], 16) / 255,
+      g: parseInt(shortHexMatch[2] + shortHexMatch[2], 16) / 255,
+      b: parseInt(shortHexMatch[3] + shortHexMatch[3], 16) / 255,
+    };
+  }
+
+  const longHexMatch = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(color);
+  if (longHexMatch) {
+    return {
+      r: parseInt(longHexMatch[1], 16) / 255,
+      g: parseInt(longHexMatch[2], 16) / 255,
+      b: parseInt(longHexMatch[3], 16) / 255,
+    };
+  }
+
+  const rgbMatch =
+    /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*(?:0|1|0?\.\d+))?\s*\)$/.exec(
+      color,
+    );
+  if (rgbMatch) {
+    const channels = rgbMatch
+      .slice(1, 4)
+      .map((channel) => clamp(Number(channel), 0, 255) / 255);
+    return { r: channels[0], g: channels[1], b: channels[2] };
+  }
+
+  const named = cssColorNames[color];
+  if (named) {
+    return {
+      r: named[0] / 255,
+      g: named[1] / 255,
+      b: named[2] / 255,
+    };
+  }
+
+  logger.warn(
+    { color: hex },
+    "Unsupported certificate text color; using black",
+  );
+  return { r: 0, g: 0, b: 0 };
+}
+
+function safeFilenameSegment(value: string, fallback: string): string {
+  const sanitized = value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9-_\s]/g, "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .slice(0, 80);
+
+  return sanitized || fallback;
+}
+
+export const __certificatePdfTestHooks = {
+  hexToRgb,
+  safeFilenameSegment,
+  truncateTextToWidth,
+};
+
+function fitTextToZone(
+  font: PDFFont,
+  text: string,
+  maxWidth: number,
+  maxHeight: number,
+  requestedFontSize: number | null,
+): { text: string; fontSize: number } {
+  const maxFontSize = requestedFontSize ?? 72;
+  const fontSize = findFitFontSize(
+    font,
+    text,
+    maxWidth,
+    maxHeight,
+    maxFontSize,
+  );
+  const fittedText = truncateTextToWidth(font, text, fontSize, maxWidth);
+
+  return {
+    text: fittedText,
+    fontSize,
   };
 }
 
@@ -173,7 +343,9 @@ export async function generateCertificatePdf(
   } else if (isJpg) {
     image = await pdfDoc.embedJpg(imageBuffer);
   } else {
-    throw new Error("Unsupported image format. Only PNG and JPEG are supported.");
+    throw new Error(
+      "Unsupported image format. Only PNG and JPEG are supported.",
+    );
   }
 
   const { templateWidth, templateHeight } = template;
@@ -186,12 +358,11 @@ export async function generateCertificatePdf(
     height: templateHeight,
   });
 
-  const regularFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const { regularFont, boldFont } = await embedCertificateFonts(pdfDoc);
 
   for (const zone of template.zones) {
-    const text = resolvedValues[zone.variable] || "";
-    if (!text || text === "—") continue;
+    const resolvedText = resolvedValues[zone.variable] || "";
+    if (!resolvedText || resolvedText === "—") continue;
 
     const font = zone.fontWeight === "bold" ? boldFont : regularFont;
 
@@ -200,13 +371,20 @@ export async function generateCertificatePdf(
     const zoneW = (zone.width / 100) * templateWidth;
     const zoneH = (zone.height / 100) * templateHeight;
 
-    const fontSize =
-      zone.fontSize != null
-        ? zone.fontSize
-        : findFitFontSize(font, text, zoneW, zoneH);
+    const { text, fontSize } = fitTextToZone(
+      font,
+      resolvedText,
+      zoneW,
+      zoneH,
+      zone.fontSize,
+    );
+    if (!text) continue;
 
     const textWidth = font.widthOfTextAtSize(text, fontSize);
-    const textHeight = font.heightAtSize(fontSize);
+    const { height: textHeight, baselineOffset } = getVerticalTextMetrics(
+      font,
+      fontSize,
+    );
 
     let textX = zoneX;
     if (zone.textAlign === "center") {
@@ -214,9 +392,15 @@ export async function generateCertificatePdf(
     } else if (zone.textAlign === "right") {
       textX = zoneX + zoneW - textWidth;
     }
+    textX = clamp(textX, zoneX, zoneX + Math.max(0, zoneW - textWidth));
 
     // PDF origin is bottom-left; zone Y is from top
-    const textY = templateHeight - zoneY - zoneH + (zoneH - textHeight) / 2;
+    const zoneBottom = templateHeight - zoneY - zoneH;
+    const textY = clamp(
+      zoneBottom + (zoneH - textHeight) / 2 + baselineOffset,
+      zoneBottom,
+      zoneBottom + Math.max(0, zoneH - textHeight) + baselineOffset,
+    );
 
     const { r, g, b } = hexToRgb(zone.color);
 
@@ -300,12 +484,16 @@ export async function generateCertificateAttachments(
         imageCache,
       );
 
-      const safeTemplateName = template.name.replace(/[^a-zA-Z0-9-_\s]/g, "").replace(/\s+/g, "-");
+      const safeTemplateName = safeFilenameSegment(
+        template.name,
+        "certificate",
+      );
+      const templateShortId = template.id.slice(0, 8);
       const shortId = registration.id.slice(0, 8);
 
       attachments.push({
         content: pdfBuffer.toString("base64"),
-        filename: `${safeTemplateName}-${shortId}.pdf`,
+        filename: `${safeTemplateName}-${templateShortId}-${shortId}.pdf`,
         type: "application/pdf",
         disposition: "attachment",
       });
@@ -318,7 +506,7 @@ export async function generateCertificateAttachments(
         },
         "Failed to generate certificate PDF",
       );
-      // Skip this certificate but continue with others
+      throw error;
     }
   }
 

@@ -7,7 +7,7 @@ import type { ModuleId } from "./clients.schema.js";
 type ClientModuleState = {
   id?: string;
   active: boolean;
-  enabledModules: string[];
+  enabledModules: string[] | null;
 };
 
 const MODULE_NAMES: Record<ModuleId, string> = {
@@ -37,7 +37,10 @@ export function assertModuleEnabledForClient(
     throw new AppError("Client is inactive", 403, ErrorCodes.FORBIDDEN);
   }
 
-  if (!client.enabledModules.includes(moduleId)) {
+  if (
+    !Array.isArray(client.enabledModules) ||
+    !client.enabledModules.includes(moduleId)
+  ) {
     throw new AppError(
       `${MODULE_NAMES[moduleId]} module is disabled for this client`,
       403,
@@ -47,10 +50,14 @@ export function assertModuleEnabledForClient(
 }
 
 export function isModuleEnabledForClient(
-  client: ClientModuleState,
+  client: ClientModuleState | null | undefined,
   moduleId: ModuleId,
 ): boolean {
-  return client.active && client.enabledModules.includes(moduleId);
+  return (
+    !!client?.active &&
+    Array.isArray(client.enabledModules) &&
+    client.enabledModules.includes(moduleId)
+  );
 }
 
 export async function assertClientModuleEnabled(

@@ -2,11 +2,7 @@ import { z, type ZodTypeAny } from "zod";
 import safeRegex from "safe-regex";
 
 const MIN_PHONE_LENGTH = 8;
-import type {
-  FormField,
-  FormStep,
-  FieldValidation,
-} from "./forms.schema.js";
+import type { FormField, FormStep, FieldValidation } from "./forms.schema.js";
 import { logger } from "@shared/utils/logger.js";
 import { evaluateConditions } from "@shared/utils/conditions.js";
 
@@ -42,12 +38,29 @@ function getFieldLabel(field: FormField): string {
   return field.label ?? field.id;
 }
 
-function hasValidSteps(formSchema: unknown): formSchema is FormSchema {
-  return (
-    !!formSchema &&
-    typeof formSchema === "object" &&
-    Array.isArray((formSchema as { steps?: unknown }).steps)
-  );
+function extractSchemaSteps(formSchema: unknown): FormStep[] | null {
+  if (!formSchema || typeof formSchema !== "object") {
+    return null;
+  }
+
+  const schema = formSchema as {
+    steps?: unknown;
+    sponsorSteps?: unknown;
+    beneficiaryTemplate?: { steps?: unknown };
+  };
+  if (Array.isArray(schema.steps)) {
+    return schema.steps as FormStep[];
+  }
+  const sponsorSteps = Array.isArray(schema.sponsorSteps)
+    ? (schema.sponsorSteps as FormStep[])
+    : [];
+  const beneficiarySteps = Array.isArray(schema.beneficiaryTemplate?.steps)
+    ? (schema.beneficiaryTemplate.steps as FormStep[])
+    : [];
+  if (sponsorSteps.length > 0 || beneficiarySteps.length > 0) {
+    return [...sponsorSteps, ...beneficiarySteps];
+  }
+  return null;
 }
 
 function invalidSchemaResult(): FormDataValidationResult {
@@ -130,7 +143,7 @@ function buildTextSchema(
   field: FormField,
   validation?: FieldValidation,
 ): ZodTypeAny {
-  let schema = z.string();
+  let schema = z.string().trim();
   const label = getFieldLabel(field);
 
   if (validation?.minLength) {
@@ -219,7 +232,7 @@ function buildNumberSchema(
   field: FormField,
   validation?: FieldValidation,
 ): ZodTypeAny {
-  let schema = z.coerce.number();
+  let schema = z.number();
   const label = getFieldLabel(field);
   const min = validation?.min ?? validation?.minValue;
   const max = validation?.max ?? validation?.maxValue;
@@ -231,13 +244,28 @@ function buildNumberSchema(
     schema = schema.max(max, `${label} must be at most ${max}`);
   }
 
-  const blankToUndefined = (value: unknown) =>
-    value === "" || value === null || value === undefined ? undefined : value;
+  const parseNumberInput = (value: unknown) => {
+    if (value === null || value === undefined) return undefined;
+    if (typeof value === "number") {
+      return Number.isFinite(value) ? value : value;
+    }
+    if (typeof value !== "string") return value;
+
+    const trimmed = value.trim();
+    if (trimmed === "") return undefined;
+
+    if (!/^[+-]?(?:\d+|\d*\.\d+)$/.test(trimmed)) {
+      return value;
+    }
+
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : value;
+  };
 
   if (validation?.required) {
-    return z.preprocess(blankToUndefined, schema);
+    return z.preprocess(parseNumberInput, schema);
   }
-  return z.preprocess(blankToUndefined, schema.optional());
+  return z.preprocess(parseNumberInput, schema.optional());
 }
 
 function buildDateSchema(
@@ -251,29 +279,28 @@ function buildDateSchema(
     return Number.isNaN(parsed.getTime()) ? null : parsed;
   };
 
+  schema = schema.refine(
+    (value) => value === "" || parseDate(value) !== null,
+    `${label} must be a valid date`,
+  );
+
   if (validation?.minDate) {
-    schema = schema.refine(
-      (value) => {
-        const valueDate = parseDate(value);
-        const minDate = parseDate(validation.minDate!);
-        return !valueDate || !minDate || valueDate >= minDate;
-      },
-      `${label} must be on or after ${validation.minDate}`,
-    );
+    schema = schema.refine((value) => {
+      const valueDate = parseDate(value);
+      const minDate = parseDate(validation.minDate!);
+      return valueDate !== null && (!minDate || valueDate >= minDate);
+    }, `${label} must be on or after ${validation.minDate}`);
   }
   if (validation?.maxDate) {
-    schema = schema.refine(
-      (value) => {
-        const valueDate = parseDate(value);
-        const maxDate = parseDate(validation.maxDate!);
-        return !valueDate || !maxDate || valueDate <= maxDate;
-      },
-      `${label} must be on or before ${validation.maxDate}`,
-    );
+    schema = schema.refine((value) => {
+      const valueDate = parseDate(value);
+      const maxDate = parseDate(validation.maxDate!);
+      return valueDate !== null && (!maxDate || valueDate <= maxDate);
+    }, `${label} must be on or before ${validation.maxDate}`);
   }
 
   if (validation?.required) {
-    return schema.min(1, `${label} is required`);
+    return schema.trim().min(1, `${label} is required`);
   }
   return schema.optional().or(z.literal(""));
 }
@@ -349,8 +376,24 @@ function buildCheckboxSchema(
   }
 
   return validation?.required || validation?.minSelections !== undefined
-    ? schema
-    : schema.optional().default([]);
+    ? z.preprocess(
+        (value) =>
+          value === undefined || value === "" || value === null
+            ? []
+            : Array.isArray(value)
+              ? value
+              : [value],
+        schema,
+      )
+    : z.preprocess(
+        (value) =>
+          value === undefined || value === "" || value === null
+            ? undefined
+            : Array.isArray(value)
+              ? value
+              : [value],
+        schema.optional().default([]),
+      );
 }
 
 function buildFileSchema(
@@ -358,7 +401,32 @@ function buildFileSchema(
   validation?: FieldValidation,
 ): ZodTypeAny {
   const label = getFieldLabel(field);
-  const allowedFileTypes = validation?.fileTypes ?? validation?.acceptedFileTypes;
+  const allowedFileTypes =
+    validation?.fileTypes ?? validation?.acceptedFileTypes;
+
+  const normalizeFileType = (value: string) =>
+    value.trim().toLowerCase().replace(/^\./, "");
+
+  const isAllowedFileType = (file: { name: string; type: string }) => {
+    if (!allowedFileTypes || allowedFileTypes.length === 0) {
+      return true;
+    }
+
+    const fileExtension = file.name.split(".").pop()?.toLowerCase() ?? "";
+    const mimeType = file.type.trim().toLowerCase();
+
+    return allowedFileTypes.some((allowed) => {
+      const normalizedAllowed = normalizeFileType(allowed);
+      if (normalizedAllowed.endsWith("/*")) {
+        const prefix = normalizedAllowed.slice(0, -1);
+        return mimeType.startsWith(prefix);
+      }
+      if (normalizedAllowed.includes("/")) {
+        return mimeType === normalizedAllowed;
+      }
+      return fileExtension === normalizedAllowed;
+    });
+  };
 
   // File metadata schema: { name, size, type, url? }
   const fileMetadataSchema = z
@@ -383,18 +451,7 @@ function buildFileSchema(
     )
     .refine(
       (file) => {
-        if (allowedFileTypes && allowedFileTypes.length > 0) {
-          const fileExtension = file.name.split(".").pop()?.toLowerCase();
-          const mimeType = file.type.toLowerCase();
-          return allowedFileTypes.some((allowed) => {
-            const normalizedAllowed = allowed.toLowerCase().replace(".", "");
-            return (
-              mimeType.includes(normalizedAllowed) ||
-              fileExtension === normalizedAllowed
-            );
-          });
-        }
-        return true;
+        return isAllowedFileType(file);
       },
       {
         message: allowedFileTypes
@@ -484,12 +541,13 @@ function buildFieldSchema(field: FormField): ZodTypeAny | null {
 export function buildFormDataValidator(
   formSchema: unknown,
 ): (formData: Record<string, unknown>) => FormDataValidationResult {
-  if (!hasValidSteps(formSchema)) {
+  const steps = extractSchemaSteps(formSchema);
+  if (!steps) {
     return () => invalidSchemaResult();
   }
 
   // Flatten all fields from all steps
-  const allFields: FormField[] = formSchema.steps.flatMap((step) =>
+  const allFields: FormField[] = steps.flatMap((step) =>
     Array.isArray(step.fields) ? step.fields : [],
   );
   return (formData: Record<string, unknown>): FormDataValidationResult => {
@@ -557,12 +615,13 @@ export function sanitizeFormData(
   formSchema: unknown,
   formData: Record<string, unknown>,
 ): Record<string, unknown> {
-  if (!hasValidSteps(formSchema)) {
+  const steps = extractSchemaSteps(formSchema);
+  if (!steps) {
     return {};
   }
 
   const knownIds = new Set<string>();
-  for (const step of formSchema.steps) {
+  for (const step of steps) {
     const fields = Array.isArray(step.fields) ? step.fields : [];
     for (const field of fields) {
       knownIds.add(field.id);

@@ -79,7 +79,11 @@ export async function usersRoutes(app: AppInstance): Promise<void> {
       schema: { params: UserIdParamSchema, body: UpdateUserSchema },
     },
     async (request, reply) => {
-      const user = await updateUser(request.params.id, request.body);
+      const user = await updateUser(
+        request.params.id,
+        request.body,
+        request.user!.id,
+      );
       return reply.send(user);
     },
   );

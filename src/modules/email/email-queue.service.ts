@@ -151,6 +151,22 @@ function isRegistrationTriggerDedupeViolation(error: unknown): boolean {
   );
 }
 
+function isAutomaticTriggerDedupeViolation(error: unknown): boolean {
+  if (
+    !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+    error.code !== "P2002"
+  ) {
+    return false;
+  }
+
+  const { names } = getPrismaUniqueTarget(error);
+  return names.some(
+    (name) =>
+      name.includes("email_logs_registration_trigger_active_key") ||
+      name.includes("email_logs_template_recipient_trigger_active_key"),
+  );
+}
+
 /** Status ordering for webhook state machine — only forward transitions allowed */
 const STATUS_RANK: Record<string, number> = {
   QUEUED: 0,
@@ -311,15 +327,44 @@ export async function queueSponsorshipEmail(
     return false;
   }
 
-  // 2. Queue the email with custom context
-  await queueEmail({
-    trigger,
-    templateId: template.id,
-    registrationId: input.registrationId,
-    recipientEmail: input.recipientEmail,
-    recipientName: input.recipientName,
-    contextSnapshot: input.context,
+  const existing = await prisma.emailLog.findFirst({
+    where: {
+      trigger,
+      templateId: template.id,
+      recipientEmail: input.recipientEmail,
+      ...(input.registrationId ? { registrationId: input.registrationId } : {}),
+      status: { in: ["QUEUED", "SENDING", "SENT", "DELIVERED"] },
+    },
+    select: { id: true },
   });
+  if (existing) {
+    logger.info(
+      { trigger, eventId, recipientEmail: input.recipientEmail },
+      "Sponsorship email already queued, skipping duplicate",
+    );
+    return false;
+  }
+
+  // 2. Queue the email with custom context
+  try {
+    await queueEmail({
+      trigger,
+      templateId: template.id,
+      registrationId: input.registrationId,
+      recipientEmail: input.recipientEmail,
+      recipientName: input.recipientName,
+      contextSnapshot: input.context,
+    });
+  } catch (error) {
+    if (isAutomaticTriggerDedupeViolation(error)) {
+      logger.info(
+        { trigger, eventId, recipientEmail: input.recipientEmail },
+        "Sponsorship email already queued, skipping duplicate",
+      );
+      return false;
+    }
+    throw error;
+  }
 
   logger.info(
     { trigger, eventId, recipientEmail: input.recipientEmail },
@@ -590,8 +635,8 @@ export async function recoverStaleEmailLeases(
        "locked_by" = NULL,
        "retry_count" = "retry_count" + 1,
        "next_attempt_at" = CASE
-         WHEN "attempt_count" <= 1 THEN $3
-         WHEN "attempt_count" = 2 THEN $4
+         WHEN "retry_count" + 1 <= 1 THEN $3
+         WHEN "retry_count" + 1 = 2 THEN $4
          ELSE $5
        END,
        "error_message" = COALESCE("error_message", 'Email send lease expired; requeued for retry')
@@ -832,15 +877,37 @@ export async function processEmailQueue(
             role: true,
             checkedInAt: true,
             accessCheckIns: { select: { accessId: true } },
-            event: { select: { name: true, startDate: true, location: true } },
+            event: {
+              select: {
+                id: true,
+                name: true,
+                startDate: true,
+                location: true,
+              },
+            },
           },
         });
 
-        // Fetch the certificate templates
+        // Fetch only active templates scoped to the registration's event.
         const certTemplates = await prisma.certificateTemplate.findMany({
-          where: { id: { in: ctxAny._certificateTemplateIds as string[] } },
+          where: {
+            id: { in: ctxAny._certificateTemplateIds as string[] },
+            active: true,
+            eventId: registration?.event.id,
+            templateUrl: { not: "" },
+            templateWidth: { gt: 0 },
+            templateHeight: { gt: 0 },
+          },
           include: { access: { select: { id: true, name: true } } },
         });
+
+        const expectedCount = (ctxAny._certificateTemplateIds as string[])
+          .length;
+        if (registration && certTemplates.length < expectedCount) {
+          throw new Error(
+            "Queued certificate templates are no longer active for this registration event",
+          );
+        }
 
         if (registration && certTemplates.length > 0) {
           attachments = await generateCertificateAttachments(
@@ -855,8 +922,6 @@ export async function processEmailQueue(
           );
         }
 
-        const expectedCount = (ctxAny._certificateTemplateIds as string[])
-          .length;
         if (!attachments || attachments.length === 0) {
           return (await markAsSkipped(
             emailLog.id,
@@ -867,13 +932,8 @@ export async function processEmailQueue(
             : "lease-lost";
         }
         if (attachments.length < expectedCount) {
-          logger.warn(
-            {
-              emailLogId: emailLog.id,
-              expected: expectedCount,
-              actual: attachments.length,
-            },
-            "Fewer certificates generated than queued — some templates may have been deactivated or check-in revoked",
+          throw new Error(
+            "Fewer certificate attachments generated than queued",
           );
         }
       }
@@ -1183,10 +1243,17 @@ export async function updateEmailStatusFromWebhook(
       }
     }
 
-    await prisma.emailLog.update({
-      where: { id: emailLogId },
+    const updateResult = await prisma.emailLog.updateMany({
+      where: { id: emailLogId, status: currentStatus },
       data: updates,
     });
+    if (updateResult.count === 0) {
+      logger.info(
+        { emailLogId, event, currentStatus },
+        "Webhook skipped — email status changed concurrently",
+      );
+      return;
+    }
     if (updates.status) {
       void emitEmailLogChanged(emailLogId, updates.status);
     }

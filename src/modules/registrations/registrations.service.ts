@@ -18,9 +18,8 @@ import {
   validateAccessSelections,
   incrementAccessRegisteredCountTx,
   decrementAccessRegisteredCountTx,
-  incrementPaidCount,
-  decrementPaidCount,
-  handleCapacityReached,
+  getAlreadyCoveredAccessIds,
+  syncPaidCountDelta,
 } from "@access";
 import { calculatePrice, type PriceBreakdown } from "@pricing";
 import { validateFormData, sanitizeFormData, type FormSchema } from "@forms";
@@ -115,6 +114,7 @@ function assertLabSponsorshipAllowed(
 async function syncPaidCount(
   tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
   registration: {
+    id: string;
     eventId: string;
     accessTypeIds: string[];
     priceBreakdown: unknown;
@@ -122,56 +122,25 @@ async function syncPaidCount(
   oldStatus: string,
   newStatus: string,
 ): Promise<void> {
-  const wasSettled = FULLY_SETTLED_STATUSES.includes(oldStatus);
-  const isSettled = FULLY_SETTLED_STATUSES.includes(newStatus);
-  if (wasSettled === isSettled) return; // No change in settled state
+  const coveredAccessIds =
+    oldStatus === "PARTIAL" || newStatus === "PARTIAL"
+      ? await getAlreadyCoveredAccessIds(registration.id, tx)
+      : new Set<string>();
 
-  const breakdown = registration.priceBreakdown as PriceBreakdown;
-  const accessItems = breakdown.accessItems ?? [];
-  if (accessItems.length === 0) return;
-
-  if (!wasSettled && isSettled) {
-    // Becoming fully settled: increment paidCount for all access items
-    await Promise.all(
-      accessItems.map(({ accessId, quantity }) =>
-        incrementPaidCount(accessId, quantity, tx),
-      ),
-    );
-    const accessIds = accessItems.map((a) => a.accessId);
-    await handleCapacityReached(registration.eventId, accessIds, tx);
-  } else {
-    // Losing settled status (e.g. refund): decrement paidCount
-    await Promise.all(
-      accessItems.map(({ accessId, quantity }) =>
-        decrementPaidCount(accessId, quantity, tx),
-      ),
-    );
-  }
-}
-
-function paidAccessQuantities(
-  status: string,
-  priceBreakdown: unknown,
-  coveredAccessIds = new Set<string>(),
-): Map<string, number> {
-  const quantities = new Map<string, number>();
-  if (!FULLY_SETTLED_STATUSES.includes(status) && status !== "PARTIAL") {
-    return quantities;
-  }
-
-  const breakdown = priceBreakdown as PriceBreakdown;
-  for (const item of breakdown.accessItems ?? []) {
-    if (
-      FULLY_SETTLED_STATUSES.includes(status) ||
-      coveredAccessIds.has(item.accessId)
-    ) {
-      quantities.set(
-        item.accessId,
-        (quantities.get(item.accessId) ?? 0) + item.quantity,
-      );
-    }
-  }
-  return quantities;
+  await syncPaidCountDelta(
+    registration.eventId,
+    {
+      status: oldStatus,
+      priceBreakdown: registration.priceBreakdown,
+      coveredAccessIds,
+    },
+    {
+      status: newStatus,
+      priceBreakdown: registration.priceBreakdown,
+      coveredAccessIds,
+    },
+    tx,
+  );
 }
 
 async function syncPaidCountForAccessEdit(
@@ -183,32 +152,12 @@ async function syncPaidCountForAccessEdit(
   newBreakdown: unknown,
   coveredAccessIds: Set<string>,
 ): Promise<void> {
-  const oldPaid = paidAccessQuantities(
-    oldStatus,
-    oldBreakdown,
-    coveredAccessIds,
+  await syncPaidCountDelta(
+    eventId,
+    { status: oldStatus, priceBreakdown: oldBreakdown, coveredAccessIds },
+    { status: newStatus, priceBreakdown: newBreakdown, coveredAccessIds },
+    tx,
   );
-  const newPaid = paidAccessQuantities(
-    newStatus,
-    newBreakdown,
-    coveredAccessIds,
-  );
-  const accessIds = new Set([...oldPaid.keys(), ...newPaid.keys()]);
-  const incremented: string[] = [];
-
-  for (const accessId of accessIds) {
-    const delta = (newPaid.get(accessId) ?? 0) - (oldPaid.get(accessId) ?? 0);
-    if (delta > 0) {
-      await incrementPaidCount(accessId, delta, tx);
-      incremented.push(accessId);
-    } else if (delta < 0) {
-      await decrementPaidCount(accessId, Math.abs(delta), tx);
-    }
-  }
-
-  if (incremented.length > 0) {
-    await handleCapacityReached(eventId, incremented, tx);
-  }
 }
 
 async function recalculateLinkedSponsorshipSettlement(
@@ -258,15 +207,12 @@ async function recalculateLinkedSponsorshipSettlement(
     for (const accessId of usage.sponsorship.coveredAccessIds) {
       coveredAccessIds.add(accessId);
     }
-    const amountApplied = calculateApplicableAmount(
-      usage.sponsorship,
-      {
-        totalAmount: priceBreakdown.subtotal,
-        baseAmount: priceBreakdown.calculatedBasePrice,
-        accessTypeIds,
-        priceBreakdown,
-      },
-    );
+    const amountApplied = calculateApplicableAmount(usage.sponsorship, {
+      totalAmount: priceBreakdown.subtotal,
+      baseAmount: priceBreakdown.calculatedBasePrice,
+      accessTypeIds,
+      priceBreakdown,
+    });
     sponsorshipAmount += amountApplied;
     if (amountApplied !== usage.amountApplied) {
       await tx.sponsorshipUsage.update({
@@ -763,6 +709,7 @@ export async function createAdminRegistration(
       await syncPaidCount(
         tx,
         {
+          id: createdReg.id,
           eventId,
           accessTypeIds: accessSelections?.map((s) => s.accessId) ?? [],
           priceBreakdown: priceBreakdown as unknown,
@@ -1239,7 +1186,9 @@ export async function adminEditRegistration(
       priceBreakdown = settlement.priceBreakdown;
 
       const nextPaymentStatus =
-        input.paymentStatus ?? settlement.paymentStatus ?? registration.paymentStatus;
+        input.paymentStatus ??
+        settlement.paymentStatus ??
+        registration.paymentStatus;
       const nextPaidAmount = input.paidAmount ?? registration.paidAmount;
       if (nextPaidAmount > priceBreakdown.total) {
         throw new AppError(
@@ -1273,7 +1222,10 @@ export async function adminEditRegistration(
           new: settlement.paymentStatus,
         };
       }
-      if (input.paymentStatus === undefined && settlement.paidAt !== undefined) {
+      if (
+        input.paymentStatus === undefined &&
+        settlement.paidAt !== undefined
+      ) {
         updateData.paidAt = settlement.paidAt;
       }
 
@@ -1325,6 +1277,7 @@ export async function adminEditRegistration(
       await syncPaidCount(
         tx,
         {
+          id,
           eventId,
           accessTypeIds: effectiveAccessTypeIds,
           priceBreakdown: effectivePriceBreakdown,
@@ -1482,6 +1435,10 @@ export async function deleteRegistration(
       where: { registrationId: id },
       select: { id: true, sponsorshipId: true },
     });
+    const coveredAccessIds =
+      registration.paymentStatus === "PARTIAL"
+        ? await getAlreadyCoveredAccessIds(id, tx)
+        : new Set<string>();
 
     if (usages.length > 0) {
       // Delete all usages for this registration
@@ -1513,14 +1470,16 @@ export async function deleteRegistration(
       );
     }
 
-    // Decrement paid count if registration was settled
-    if (FULLY_SETTLED_STATUSES.includes(registration.paymentStatus)) {
-      if (priceBreakdown.accessItems) {
-        for (const item of priceBreakdown.accessItems) {
-          await decrementPaidCount(item.accessId, item.quantity, tx);
-        }
-      }
-    }
+    await syncPaidCountDelta(
+      registration.eventId,
+      {
+        status: registration.paymentStatus,
+        priceBreakdown,
+        coveredAccessIds,
+      },
+      { status: "PENDING", priceBreakdown },
+      tx,
+    );
 
     // Decrement event registered count (atomic SQL within transaction)
     await decrementRegisteredCountTx(tx, registration.eventId);
@@ -1818,6 +1777,7 @@ export async function editRegistrationPublic(
         totalAmount: true,
         sponsorshipAmount: true,
         sponsorshipCode: true,
+        paidAt: true,
         firstName: true,
         lastName: true,
         phone: true,
@@ -1826,6 +1786,7 @@ export async function editRegistrationPublic(
         event: {
           select: {
             id: true,
+            clientId: true,
             status: true,
             endDate: true,
             client: { select: CLIENT_MODULE_GATE_SELECT },
@@ -1915,7 +1876,8 @@ export async function editRegistrationPublic(
           { fieldErrors: validationResult.errors },
         );
       }
-      newFormData = sanitizeFormData(formSchema, newFormData);
+      newFormData =
+        validationResult.data ?? sanitizeFormData(formSchema, newFormData);
     }
 
     const currentPriceBreakdown =
@@ -2010,6 +1972,22 @@ export async function editRegistrationPublic(
       },
       tx,
     );
+    const sponsorshipSettlement = await recalculateLinkedSponsorshipSettlement(
+      tx,
+      {
+        id: currentRegistration.id,
+        paymentStatus: currentRegistration.paymentStatus,
+        paidAt: currentRegistration.paidAt,
+      },
+      newPriceBreakdown,
+    );
+    newPriceBreakdown = sponsorshipSettlement.priceBreakdown;
+    const nextPaymentStatus =
+      sponsorshipSettlement.paymentStatus ?? currentRegistration.paymentStatus;
+    const nextPaidAt =
+      "paidAt" in sponsorshipSettlement
+        ? sponsorshipSettlement.paidAt
+        : currentRegistration.paidAt;
 
     await Promise.all(
       accessDeltas
@@ -2033,6 +2011,30 @@ export async function editRegistrationPublic(
       );
     }
 
+    if (
+      (isAccessEdit && accessDeltas.length > 0) ||
+      nextPaymentStatus !== currentRegistration.paymentStatus
+    ) {
+      const currentCoveredAccessIds =
+        currentRegistration.paymentStatus === "PARTIAL"
+          ? await getAlreadyCoveredAccessIds(registrationId, tx)
+          : new Set<string>();
+      await syncPaidCountDelta(
+        currentRegistration.eventId,
+        {
+          status: currentRegistration.paymentStatus,
+          priceBreakdown: currentPriceBreakdown,
+          coveredAccessIds: currentCoveredAccessIds,
+        },
+        {
+          status: nextPaymentStatus,
+          priceBreakdown: newPriceBreakdown,
+          coveredAccessIds: sponsorshipSettlement.coveredAccessIds,
+        },
+        tx,
+      );
+    }
+
     const newTotalAmount = currentIsPaid
       ? Math.max(currentRegistration.totalAmount, newPriceBreakdown.total)
       : newPriceBreakdown.total;
@@ -2049,7 +2051,9 @@ export async function editRegistrationPublic(
         baseAmount: newPriceBreakdown.calculatedBasePrice,
         accessAmount: newPriceBreakdown.accessTotal,
         discountAmount: calculateDiscountAmount(newPriceBreakdown.appliedRules),
-        sponsorshipAmount: newPriceBreakdown.sponsorshipTotal,
+        sponsorshipAmount: sponsorshipSettlement.sponsorshipAmount,
+        paymentStatus: nextPaymentStatus,
+        paidAt: nextPaidAt,
         accessTypeIds: newAccessSelections.map(
           (selection) => selection.accessId,
         ),
@@ -2115,6 +2119,33 @@ export async function editRegistrationPublic(
         performedBy: "PUBLIC",
       });
     }
+
+    await emitRegistrationPostCommitEvents(tx, [
+      {
+        type: "registration.updated",
+        clientId: currentRegistration.event.clientId,
+        eventId: currentRegistration.eventId,
+        payload: {
+          id: registrationId,
+          paymentStatus: nextPaymentStatus,
+        },
+        ts: Date.now(),
+      },
+      ...(isAccessEdit && accessDeltas.length > 0
+        ? [
+            {
+              type: "eventAccess.countsChanged",
+              clientId: currentRegistration.event.clientId,
+              eventId: currentRegistration.eventId,
+              payload: {
+                id: currentRegistration.eventId,
+                accessIds: accessDeltas.map((change) => change.accessId),
+              },
+              ts: Date.now(),
+            } satisfies RegistrationPostCommitEvent,
+          ]
+        : []),
+    ]);
   });
 
   const updatedRegistration = await getRegistrationById(registrationId);
