@@ -7,6 +7,7 @@ loadUnitEnv();
 await import("./mocks/prisma.js");
 await import("./mocks/firebase.js");
 await import("./mocks/sendgrid.js");
+await import("./mocks/resend.js");
 
 // Reset all mocks before each test
 beforeEach(() => {

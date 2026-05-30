@@ -20,7 +20,8 @@ describe("parseConfig", () => {
 
     expect(config.storage.provider).toBe("firebase");
     expect(config.firebase.storageBucket).toBe("demo-bucket");
-    expect(config.sendgrid.fromEmail).toBe("noreply@example.com");
+    expect(config.email.provider).toBe("sendgrid");
+    expect(config.email.fromEmail).toBe("noreply@example.com");
   });
 
   it("parses configurable abstract public rate limits", () => {
@@ -81,12 +82,46 @@ describe("parseConfig", () => {
   it("requires an explicit production sender when SendGrid is enabled", () => {
     const env = baseEnv({
       NODE_ENV: "production",
+      ADMIN_APP_URL: "https://admin.example.com",
       SENDGRID_API_KEY: "sendgrid-key",
     });
 
     expect(() => parseConfig(env)).toThrow(ConfigError);
     expect(() => parseConfig(env)).toThrow(
-      "SENDGRID_FROM_EMAIL required in production",
+      "A sender email (EMAIL_FROM_EMAIL or SENDGRID_FROM_EMAIL) is required in production",
     );
+  });
+
+  it("requires a Resend API key in production when EMAIL_PROVIDER=resend", () => {
+    const env = baseEnv({
+      NODE_ENV: "production",
+      ADMIN_APP_URL: "https://admin.example.com",
+      EMAIL_PROVIDER: "resend",
+      EMAIL_FROM_EMAIL: "noreply@example.com",
+    });
+
+    expect(() => parseConfig(env)).toThrow(ConfigError);
+    expect(() => parseConfig(env)).toThrow(
+      "RESEND_API_KEY is required in production when EMAIL_PROVIDER=resend",
+    );
+  });
+
+  it("accepts a complete Resend production configuration", () => {
+    const config = parseConfig(
+      baseEnv({
+        NODE_ENV: "production",
+        ADMIN_APP_URL: "https://admin.example.com",
+        EMAIL_PROVIDER: "resend",
+        RESEND_API_KEY: "re_test",
+        RESEND_WEBHOOK_SECRET: "whsec_test",
+        EMAIL_FROM_EMAIL: "noreply@example.com",
+        EMAIL_FROM_NAME: "Focale",
+      }),
+    );
+
+    expect(config.email.provider).toBe("resend");
+    expect(config.email.resend.apiKey).toBe("re_test");
+    expect(config.email.fromEmail).toBe("noreply@example.com");
+    expect(config.email.fromName).toBe("Focale");
   });
 });

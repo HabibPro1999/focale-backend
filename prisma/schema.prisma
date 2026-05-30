@@ -660,8 +660,9 @@ model EmailLog {
   // Delivery tracking
   status EmailStatus @default(QUEUED)
 
-  // SendGrid integration
-  sendgridMessageId String? @map("sendgrid_message_id") // For tracking via webhooks
+  // Provider integration — message id returned by the active email provider.
+  // Column name kept for back-compat (no data migration); field is provider-neutral.
+  providerMessageId String? @map("sendgrid_message_id") // For tracking via webhooks
 
   // Error handling
   errorMessage  String?   @map("error_message")
@@ -706,7 +707,7 @@ model EmailLog {
   @@index([status, lockedUntil])
   @@index([lockedBy])
   @@index([recipientEmail])
-  @@index([sendgridMessageId]) // For webhook lookups
+  @@index([providerMessageId]) // For webhook lookups
   @@index([trigger, queuedAt])
   @@map("email_logs")
 }

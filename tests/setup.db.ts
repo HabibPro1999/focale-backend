@@ -6,6 +6,7 @@ loadDbEnv();
 // Real-DB tiers keep Prisma real, but external network services remain mocked.
 await import("./mocks/firebase.js");
 await import("./mocks/sendgrid.js");
+await import("./mocks/resend.js");
 
 const { disconnectDatabase } = await import("./helpers/db.js");
 

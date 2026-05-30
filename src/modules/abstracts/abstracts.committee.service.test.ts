@@ -22,7 +22,7 @@ const updateFirebaseUserPasswordMock =
 const revokeFirebaseRefreshTokensMock =
   firebaseAuthMock.revokeFirebaseRefreshTokens;
 
-vi.mock("@modules/email/email-sendgrid.service.js", () => ({
+vi.mock("@modules/email/email-sender.service.js", () => ({
   sendEmail: (...args: unknown[]) => sendEmailMock(...args),
 }));
 vi.mock("@clients", () => ({

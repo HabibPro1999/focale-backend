@@ -1,30 +1,29 @@
 import { logger } from "@shared/utils/logger.js";
-import {
-  verifyWebhookSignature,
-  WebhookHeaders,
-  parseWebhookEvents,
-} from "./email-sendgrid.service.js";
+import { getEmailProvider } from "./providers/index.js";
+import type { WebhookResult } from "./providers/index.js";
 import { updateEmailStatusFromWebhook } from "./email-queue.service.js";
 import type { AppInstance } from "@shared/types/fastify.js";
 
-const WEBHOOK_TIMESTAMP_TOLERANCE_MS = 5 * 60 * 1000;
+type WebhookFailure = Extract<WebhookResult, { ok: false }>["reason"];
 
-const HANDLED_EVENTS = new Set([
-  "delivered",
-  "open",
-  "click",
-  "bounce",
-  "dropped",
-  "blocked",
-  "spam_report",
-  "unsubscribe",
-]);
-
-/** Events we acknowledge and log but do not trigger a status update */
-const LOG_ONLY_EVENTS = new Set(["deferred"]);
+function failureResponse(reason: WebhookFailure): {
+  status: number;
+  error: string;
+} {
+  switch (reason) {
+    case "unconfigured":
+      return { status: 503, error: "Webhook provider not configured" };
+    case "bad_payload":
+      return { status: 400, error: "Invalid payload" };
+    case "stale":
+    case "invalid_signature":
+      return { status: 401, error: "Invalid signature" };
+  }
+}
 
 export async function emailWebhookRoutes(app: AppInstance): Promise<void> {
-  // Use buffer parsing so we can verify the ECDSA signature against the raw body
+  // Parse the body as a raw buffer so the active provider can verify the
+  // signature against the exact bytes (ECDSA for SendGrid, Svix for Resend).
   app.addContentTypeParser(
     "application/json",
     { parseAs: "buffer" },
@@ -33,73 +32,38 @@ export async function emailWebhookRoutes(app: AppInstance): Promise<void> {
 
   app.post("/", async (request, reply) => {
     const body = request.body as Buffer;
-    const signature = request.headers[
-      WebhookHeaders.SIGNATURE.toLowerCase()
-    ] as string;
-    const timestamp = request.headers[
-      WebhookHeaders.TIMESTAMP.toLowerCase()
-    ] as string;
 
-    const timestampMs = Number(timestamp) * 1000;
-    if (
-      !Number.isFinite(timestampMs) ||
-      Math.abs(Date.now() - timestampMs) > WEBHOOK_TIMESTAMP_TOLERANCE_MS
-    ) {
-      return reply.status(401).send({ error: "Stale webhook timestamp" });
+    const result = await getEmailProvider().handleWebhook(
+      body,
+      request.headers,
+    );
+
+    if (!result.ok) {
+      const { status, error } = failureResponse(result.reason);
+      return reply.status(status).send({ error });
     }
 
-    if (!verifyWebhookSignature(body, signature, timestamp)) {
-      return reply.status(401).send({ error: "Invalid signature" });
+    for (const event of result.logOnly) {
+      logger.info(
+        { emailLogId: event.emailLogId, event: event.type, reason: event.reason },
+        "Webhook log-only event received",
+      );
     }
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(body.toString());
-    } catch {
-      return reply.status(400).send({ error: "Invalid JSON" });
-    }
-
-    const events = parseWebhookEvents(parsed);
-
-    for (const event of events) {
-      if (!event.emailLogId) continue;
-
-      // Log-only events (e.g. deferred) — acknowledge but don't update status
-      if (LOG_ONLY_EVENTS.has(event.event)) {
-        logger.info(
-          {
-            emailLogId: event.emailLogId,
-            event: event.event,
-            reason: event.reason,
-          },
-          "Webhook log-only event received",
-        );
-        continue;
-      }
-
-      if (!HANDLED_EVENTS.has(event.event)) continue;
-
+    for (const event of result.events) {
       await updateEmailStatusFromWebhook(
         event.emailLogId,
-        event.event as
-          | "delivered"
-          | "open"
-          | "click"
-          | "bounce"
-          | "dropped"
-          | "blocked"
-          | "spam_report"
-          | "unsubscribe",
-        { reason: event.reason, url: event.url },
+        event.type,
+        event.metadata,
       ).catch((err) => {
         logger.error(
-          { emailLogId: event.emailLogId, event: event.event, err },
+          { emailLogId: event.emailLogId, event: event.type, err },
           "Webhook event processing failed",
         );
       });
     }
 
-    // Always 200 — SendGrid retries on non-2xx
-    return reply.status(200).send({ received: events.length });
+    // Always 200 — providers retry on non-2xx.
+    return reply.status(200).send({ received: result.events.length });
   });
 }
