@@ -13,11 +13,19 @@ const envSchema = z
     FIREBASE_STORAGE_BUCKET: z.string().optional(),
     // Firebase service account JSON (for cloud deployments)
     FIREBASE_SERVICE_ACCOUNT: z.string().optional(),
+    // Email provider selection
+    EMAIL_PROVIDER: z.enum(["sendgrid", "resend"]).default("sendgrid"),
+    // Shared sender identity (falls back to SENDGRID_FROM_* for back-compat)
+    EMAIL_FROM_EMAIL: z.string().email().optional(),
+    EMAIL_FROM_NAME: z.string().optional(),
     // SendGrid
     SENDGRID_API_KEY: z.string().optional(),
     SENDGRID_WEBHOOK_PUBLIC_KEY: z.string().optional(),
     SENDGRID_FROM_EMAIL: z.string().email().optional(),
     SENDGRID_FROM_NAME: z.string().optional(),
+    // Resend
+    RESEND_API_KEY: z.string().optional(),
+    RESEND_WEBHOOK_SECRET: z.string().optional(),
     // Storage Provider
     STORAGE_PROVIDER: z.enum(["firebase", "r2"]).default("firebase"),
     // Public URL for forms (used in email links)
@@ -81,15 +89,51 @@ const envSchema = z
   )
   .refine(
     (data) => {
-      if (data.NODE_ENV === "production" && data.SENDGRID_API_KEY) {
-        return !!data.SENDGRID_FROM_EMAIL;
+      // SendGrid in production: if a key is configured, a resolvable sender is required.
+      if (
+        data.NODE_ENV === "production" &&
+        data.EMAIL_PROVIDER === "sendgrid" &&
+        data.SENDGRID_API_KEY
+      ) {
+        return !!(data.EMAIL_FROM_EMAIL ?? data.SENDGRID_FROM_EMAIL);
       }
       return true;
     },
     {
       message:
-        "SENDGRID_FROM_EMAIL required in production when SENDGRID_API_KEY is set",
-      path: ["SENDGRID_FROM_EMAIL"],
+        "A sender email (EMAIL_FROM_EMAIL or SENDGRID_FROM_EMAIL) is required in production when EMAIL_PROVIDER=sendgrid and SENDGRID_API_KEY is set",
+      path: ["EMAIL_FROM_EMAIL"],
+    },
+  )
+  .refine(
+    (data) => {
+      // Resend in production requires an API key.
+      if (data.NODE_ENV === "production" && data.EMAIL_PROVIDER === "resend") {
+        return !!data.RESEND_API_KEY;
+      }
+      return true;
+    },
+    {
+      message: "RESEND_API_KEY is required in production when EMAIL_PROVIDER=resend",
+      path: ["RESEND_API_KEY"],
+    },
+  )
+  .refine(
+    (data) => {
+      // Resend in production: a resolvable sender is required once a key is set.
+      if (
+        data.NODE_ENV === "production" &&
+        data.EMAIL_PROVIDER === "resend" &&
+        data.RESEND_API_KEY
+      ) {
+        return !!(data.EMAIL_FROM_EMAIL ?? data.SENDGRID_FROM_EMAIL);
+      }
+      return true;
+    },
+    {
+      message:
+        "A sender email (EMAIL_FROM_EMAIL or SENDGRID_FROM_EMAIL) is required in production when EMAIL_PROVIDER=resend",
+      path: ["EMAIL_FROM_EMAIL"],
     },
   )
   .refine(
@@ -162,11 +206,20 @@ export function parseConfig(source: NodeJS.ProcessEnv) {
       bucket: env.R2_BUCKET,
       publicUrl: env.R2_PUBLIC_URL,
     },
-    sendgrid: {
-      apiKey: env.SENDGRID_API_KEY,
-      webhookPublicKey: env.SENDGRID_WEBHOOK_PUBLIC_KEY,
-      fromEmail: env.SENDGRID_FROM_EMAIL ?? "noreply@example.com",
-      fromName: env.SENDGRID_FROM_NAME ?? "Event Platform",
+    email: {
+      provider: env.EMAIL_PROVIDER,
+      // Shared sender identity, with back-compat fallback to the legacy SendGrid vars.
+      fromEmail:
+        env.EMAIL_FROM_EMAIL ?? env.SENDGRID_FROM_EMAIL ?? "noreply@example.com",
+      fromName: env.EMAIL_FROM_NAME ?? env.SENDGRID_FROM_NAME ?? "Event Platform",
+      sendgrid: {
+        apiKey: env.SENDGRID_API_KEY,
+        webhookPublicKey: env.SENDGRID_WEBHOOK_PUBLIC_KEY,
+      },
+      resend: {
+        apiKey: env.RESEND_API_KEY,
+        webhookSecret: env.RESEND_WEBHOOK_SECRET,
+      },
     },
     publicFormsUrl: env.PUBLIC_FORMS_URL,
     urls: {

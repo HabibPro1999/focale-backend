@@ -1,30 +1,32 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import Fastify from "fastify";
 import { emailWebhookRoutes } from "./email.webhook.routes.js";
-import { WebhookHeaders } from "./email-sendgrid.service.js";
 
-const sendgridMocks = vi.hoisted(() => ({
-  verifyWebhookSignature: vi.fn(),
-  parseWebhookEvents: vi.fn(),
+const { handleWebhookMock, updateEmailStatusFromWebhookMock } = vi.hoisted(
+  () => ({
+    handleWebhookMock: vi.fn(),
+    updateEmailStatusFromWebhookMock: vi.fn(),
+  }),
+);
+
+// The route is provider-agnostic: it delegates verification/parsing to the
+// active provider and only maps the result to HTTP + applies status updates.
+vi.mock("./providers/index.js", () => ({
+  getEmailProvider: () => ({
+    name: "sendgrid",
+    isConfigured: () => true,
+    sendEmail: vi.fn(),
+    handleWebhook: handleWebhookMock,
+  }),
 }));
 
-vi.mock("./email-sendgrid.service.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("./email-sendgrid.service.js")>();
-  return {
-    ...actual,
-    verifyWebhookSignature: sendgridMocks.verifyWebhookSignature,
-    parseWebhookEvents: sendgridMocks.parseWebhookEvents,
-  };
-});
-
 vi.mock("./email-queue.service.js", () => ({
-  updateEmailStatusFromWebhook: vi.fn(),
+  updateEmailStatusFromWebhook: updateEmailStatusFromWebhookMock,
 }));
 
 async function buildTestApp() {
   const app = Fastify();
-  await app.register(emailWebhookRoutes, { prefix: "/webhook/sendgrid" });
+  await app.register(emailWebhookRoutes, { prefix: "/webhooks/email" });
   return app;
 }
 
@@ -32,27 +34,88 @@ describe("email webhook routes", () => {
   let app: Awaited<ReturnType<typeof buildTestApp>>;
 
   beforeEach(async () => {
-    vi.clearAllMocks();
+    handleWebhookMock.mockReset();
+    updateEmailStatusFromWebhookMock.mockReset().mockResolvedValue(undefined);
     app = await buildTestApp();
-    sendgridMocks.verifyWebhookSignature.mockReturnValue(true);
-    sendgridMocks.parseWebhookEvents.mockReturnValue([]);
   });
 
-  it("rejects stale signed webhook timestamps", async () => {
-    const response = await app.inject({
+  function post(payload = "[]") {
+    return app.inject({
       method: "POST",
-      url: "/webhook/sendgrid",
-      headers: {
-        "content-type": "application/json",
-        [WebhookHeaders.SIGNATURE.toLowerCase()]: "sig",
-        [WebhookHeaders.TIMESTAMP.toLowerCase()]: String(
-          Math.floor((Date.now() - 10 * 60 * 1000) / 1000),
-        ),
-      },
-      payload: JSON.stringify([]),
+      url: "/webhooks/email",
+      headers: { "content-type": "application/json" },
+      payload,
+    });
+  }
+
+  it("returns 401 when the provider reports an invalid signature", async () => {
+    handleWebhookMock.mockReturnValue({
+      ok: false,
+      reason: "invalid_signature",
+    });
+    const res = await post();
+    expect(res.statusCode).toBe(401);
+    expect(updateEmailStatusFromWebhookMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 401 for stale webhooks", async () => {
+    handleWebhookMock.mockReturnValue({ ok: false, reason: "stale" });
+    expect((await post()).statusCode).toBe(401);
+  });
+
+  it("returns 503 when the provider is unconfigured", async () => {
+    handleWebhookMock.mockReturnValue({ ok: false, reason: "unconfigured" });
+    expect((await post()).statusCode).toBe(503);
+  });
+
+  it("returns 400 for an unparseable payload", async () => {
+    handleWebhookMock.mockReturnValue({ ok: false, reason: "bad_payload" });
+    expect((await post()).statusCode).toBe(400);
+  });
+
+  it("applies each normalized event and returns 200", async () => {
+    handleWebhookMock.mockReturnValue({
+      ok: true,
+      logOnly: [{ type: "email.sent", emailLogId: "log-1" }],
+      events: [
+        { emailLogId: "log-1", type: "delivered" },
+        { emailLogId: "log-2", type: "click", metadata: { url: "https://x" } },
+      ],
     });
 
-    expect(response.statusCode).toBe(401);
-    expect(sendgridMocks.verifyWebhookSignature).not.toHaveBeenCalled();
+    const res = await post();
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ received: 2 });
+    expect(updateEmailStatusFromWebhookMock).toHaveBeenCalledTimes(2);
+    expect(updateEmailStatusFromWebhookMock).toHaveBeenCalledWith(
+      "log-1",
+      "delivered",
+      undefined,
+    );
+    expect(updateEmailStatusFromWebhookMock).toHaveBeenCalledWith(
+      "log-2",
+      "click",
+      { url: "https://x" },
+    );
+  });
+
+  it("isolates per-event failures and still returns 200", async () => {
+    updateEmailStatusFromWebhookMock
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce(undefined);
+    handleWebhookMock.mockReturnValue({
+      ok: true,
+      logOnly: [],
+      events: [
+        { emailLogId: "log-1", type: "delivered" },
+        { emailLogId: "log-2", type: "open" },
+      ],
+    });
+
+    const res = await post();
+
+    expect(res.statusCode).toBe(200);
+    expect(updateEmailStatusFromWebhookMock).toHaveBeenCalledTimes(2);
   });
 });

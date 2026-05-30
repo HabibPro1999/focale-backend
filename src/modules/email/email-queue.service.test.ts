@@ -22,8 +22,8 @@ import { Prisma } from "@/generated/prisma/client.js";
 import type { EmailLog, EmailTemplate } from "@/generated/prisma/client.js";
 import type { TiptapDocument } from "./email.types.js";
 
-// Mock the email-sendgrid.service
-vi.mock("./email-sendgrid.service.js", () => ({
+// Mock the email-sender facade (delegates to the active provider)
+vi.mock("./email-sender.service.js", () => ({
   sendEmail: vi.fn().mockResolvedValue({ success: true, messageId: "msg-123" }),
 }));
 
@@ -57,7 +57,7 @@ vi.mock("@modules/certificates/certificate-pdf.service.js", () => ({
 }));
 
 // Import the mocked modules to access mock functions
-import { sendEmail } from "./email-sendgrid.service.js";
+import { sendEmail } from "./email-sender.service.js";
 import { buildEmailContextWithAccess } from "./email-variable.service.js";
 import { getTemplateByTrigger } from "./email-template.service.js";
 import { generateCertificateAttachments } from "@modules/certificates/certificate-pdf.service.js";
@@ -116,7 +116,7 @@ function createMockEmailLog(overrides: Partial<EmailLog> = {}): EmailLog {
     subject: "Test Subject",
     contextSnapshot: null,
     status: "QUEUED",
-    sendgridMessageId: null,
+    providerMessageId: null,
     retryCount: 0,
     maxRetries: 3,
     attemptCount: 0,

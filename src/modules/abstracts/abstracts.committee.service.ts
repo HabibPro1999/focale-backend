@@ -24,7 +24,7 @@ import {
   revokeFirebaseRefreshTokens,
   updateFirebaseUserPassword,
 } from "@shared/services/firebase.service.js";
-import { sendEmail } from "@modules/email/email-sendgrid.service.js";
+import { sendEmail } from "@modules/email/email-sender.service.js";
 import {
   compileMjmlToHtml,
   escapeHtml,

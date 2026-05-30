@@ -7,8 +7,8 @@ import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { prisma } from "@/database/client.js";
 import { logger } from "@shared/utils/logger.js";
-import { sendEmail } from "./email-sendgrid.service.js";
-import type { EmailAttachment } from "./email-sendgrid.service.js";
+import { sendEmail } from "./email-sender.service.js";
+import type { EmailAttachment } from "./email-sender.service.js";
 import {
   resolveVariables,
   buildEmailContextWithAccess,
@@ -1051,7 +1051,7 @@ async function markAsSent(
     where: { id, status: "SENDING", lockedBy: workerId },
     data: {
       status: "SENT",
-      sendgridMessageId: messageId,
+      providerMessageId: messageId,
       sentAt: new Date(),
       errorMessage: null,
       nextAttemptAt: null,

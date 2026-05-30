@@ -11,7 +11,7 @@ import { createRequire } from "node:module";
 import { downloadTemplateImage } from "./certificates.service.js";
 import { logger } from "@shared/utils/logger.js";
 import type { CertificateZone } from "./certificates.schema.js";
-import type { EmailAttachment } from "@modules/email/email-sendgrid.service.js";
+import type { EmailAttachment } from "@modules/email/email-sender.service.js";
 
 // =============================================================================
 // TYPES

@@ -171,7 +171,11 @@ export async function buildServer(): Promise<AppInstance> {
   // Email routes (templates and campaigns)
   await app.register(emailRoutes, { prefix: "/api/events" });
 
-  // SendGrid webhook (public, no auth — secured by ECDSA signature verification)
+  // Email provider webhook (public, no auth — secured by per-provider signature
+  // verification). Mounted at a neutral path; the legacy /webhooks/sendgrid path
+  // is kept as an alias so existing provider dashboards keep working. Both
+  // delegate to the active provider selected by EMAIL_PROVIDER.
+  await app.register(emailWebhookRoutes, { prefix: "/webhooks/email" });
   await app.register(emailWebhookRoutes, { prefix: "/webhooks/sendgrid" });
 
   // Certificate routes (template management)

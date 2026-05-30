@@ -19,7 +19,7 @@ import {
   getSampleEmailContext,
   resolveVariables,
 } from "./email-variable.service.js";
-import { sendEmail } from "./email-sendgrid.service.js";
+import { sendEmail } from "./email-sender.service.js";
 import {
   queueBulkEmails,
   queueBulkSponsorEmails,
@@ -665,7 +665,7 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
           where: { id: emailLog.id },
           data: {
             status: "SENT",
-            sendgridMessageId: result.messageId,
+            providerMessageId: result.messageId,
             sentAt: new Date(),
           },
         });
