@@ -1,4 +1,5 @@
 import { prisma } from "@/database/client.js";
+import { withTxnRetry } from "@shared/db/with-txn-retry.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { logger } from "@shared/utils/logger.js";
@@ -343,18 +344,22 @@ export async function deleteUser(
     );
   }
 
-  const userToDelete = await prisma.$transaction(
-    async (tx) => {
-      const user = await tx.user.findUnique({ where: { id } });
-      if (!user) {
-        throw new AppError("User not found", 404, ErrorCodes.NOT_FOUND);
-      }
-      await assertNotLastActiveSuperAdmin(tx, user, { active: false });
+  const userToDelete = await withTxnRetry(
+    () =>
+      prisma.$transaction(
+        async (tx) => {
+          const user = await tx.user.findUnique({ where: { id } });
+          if (!user) {
+            throw new AppError("User not found", 404, ErrorCodes.NOT_FOUND);
+          }
+          await assertNotLastActiveSuperAdmin(tx, user, { active: false });
 
-      await tx.user.delete({ where: { id } });
-      return user;
-    },
-    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+          await tx.user.delete({ where: { id } });
+          return user;
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      ),
+    { label: "deleteUser" },
   );
 
   invalidateUserCache(id);

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { prisma } from "@/database/client.js";
+import { withTxnRetry } from "@shared/db/with-txn-retry.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { compressImage } from "@shared/services/storage/compress.js";
@@ -249,123 +250,127 @@ export async function updateEvent(
     (value) => value !== undefined,
   );
 
-  return prisma.$transaction(
-    async (tx) => {
-      const event = await tx.event.findUnique({
-        where: { id },
-        include: { pricing: true },
-      });
-      if (!event) {
-        throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
-      }
-
-      // Validate status transition if status is being changed.
-      if (input.status && input.status !== event.status) {
-        const allowed = VALID_STATUS_TRANSITIONS[event.status] ?? [];
-        if (!allowed.includes(input.status)) {
-          throw new AppError(
-            `Cannot transition event from ${event.status} to ${input.status}`,
-            400,
-            ErrorCodes.INVALID_STATUS_TRANSITION,
-          );
-        }
-      }
-      assertEventWritable(event);
-
-      // Validate resulting date range (schema only checks when both are provided).
-      const resultingStart = input.startDate ?? event.startDate;
-      const resultingEnd = input.endDate ?? event.endDate;
-      if (resultingEnd < resultingStart) {
-        throw new AppError(
-          "End date must be greater than or equal to start date",
-          400,
-          ErrorCodes.VALIDATION_ERROR,
-        );
-      }
-
-      if (
-        input.maxCapacity !== undefined &&
-        input.maxCapacity !== null &&
-        input.maxCapacity < event.registeredCount
-      ) {
-        throw new AppError(
-          "Max capacity cannot be below current registered count",
-          400,
-          ErrorCodes.VALIDATION_ERROR,
-        );
-      }
-
-      // If slug is being updated, check global uniqueness.
-      if (input.slug && input.slug !== event.slug) {
-        const existing = await tx.event.findUnique({
-          where: { slug: input.slug },
-          select: { id: true },
-        });
-        if (existing) {
-          throw new AppError(
-            "Event with this slug already exists",
-            409,
-            ErrorCodes.CONFLICT,
-          );
-        }
-      }
-
-      // Block currency change if registrations exist, in the same transaction as pricing update.
-      const normalizedCurrency =
-        currency !== undefined ? normalizeCurrency(currency) : undefined;
-      if (normalizedCurrency !== undefined) {
-        const currentCurrency = event.pricing?.currency ?? "TND";
-        if (normalizedCurrency !== currentCurrency) {
-          const registrationCount = await tx.registration.count({
-            where: { eventId: id },
+  return withTxnRetry(
+    () =>
+      prisma.$transaction(
+        async (tx) => {
+          const event = await tx.event.findUnique({
+            where: { id },
+            include: { pricing: true },
           });
-          if (registrationCount > 0) {
+          if (!event) {
+            throw new AppError("Event not found", 404, ErrorCodes.NOT_FOUND);
+          }
+
+          // Validate status transition if status is being changed.
+          if (input.status && input.status !== event.status) {
+            const allowed = VALID_STATUS_TRANSITIONS[event.status] ?? [];
+            if (!allowed.includes(input.status)) {
+              throw new AppError(
+                `Cannot transition event from ${event.status} to ${input.status}`,
+                400,
+                ErrorCodes.INVALID_STATUS_TRANSITION,
+              );
+            }
+          }
+          assertEventWritable(event);
+
+          // Validate resulting date range (schema only checks when both are provided).
+          const resultingStart = input.startDate ?? event.startDate;
+          const resultingEnd = input.endDate ?? event.endDate;
+          if (resultingEnd < resultingStart) {
             throw new AppError(
-              "Cannot change currency after registrations exist",
+              "End date must be greater than or equal to start date",
               400,
               ErrorCodes.VALIDATION_ERROR,
             );
           }
-        }
-      }
 
-      let updatedEvent: EventWithPricing = event;
-      if (hasEventData) {
-        updatedEvent = await tx.event.update({
-          where: { id },
-          data: eventData,
-          include: { pricing: true },
-        });
-      }
+          if (
+            input.maxCapacity !== undefined &&
+            input.maxCapacity !== null &&
+            input.maxCapacity < event.registeredCount
+          ) {
+            throw new AppError(
+              "Max capacity cannot be below current registered count",
+              400,
+              ErrorCodes.VALIDATION_ERROR,
+            );
+          }
 
-      if (basePrice === undefined && normalizedCurrency === undefined) {
-        return updatedEvent;
-      }
+          // If slug is being updated, check global uniqueness.
+          if (input.slug && input.slug !== event.slug) {
+            const existing = await tx.event.findUnique({
+              where: { slug: input.slug },
+              select: { id: true },
+            });
+            if (existing) {
+              throw new AppError(
+                "Event with this slug already exists",
+                409,
+                ErrorCodes.CONFLICT,
+              );
+            }
+          }
 
-      const pricingData: { basePrice?: number; currency?: string } = {};
-      if (basePrice !== undefined) {
-        pricingData.basePrice = normalizeBasePrice(basePrice);
-      }
-      if (normalizedCurrency !== undefined) {
-        pricingData.currency = normalizedCurrency;
-      }
+          // Block currency change if registrations exist, in the same transaction as pricing update.
+          const normalizedCurrency =
+            currency !== undefined ? normalizeCurrency(currency) : undefined;
+          if (normalizedCurrency !== undefined) {
+            const currentCurrency = event.pricing?.currency ?? "TND";
+            if (normalizedCurrency !== currentCurrency) {
+              const registrationCount = await tx.registration.count({
+                where: { eventId: id },
+              });
+              if (registrationCount > 0) {
+                throw new AppError(
+                  "Cannot change currency after registrations exist",
+                  400,
+                  ErrorCodes.VALIDATION_ERROR,
+                );
+              }
+            }
+          }
 
-      await tx.eventPricing.upsert({
-        where: { eventId: id },
-        update: pricingData,
-        create: {
-          eventId: id,
-          basePrice: pricingData.basePrice ?? 0,
-          currency: pricingData.currency ?? "TND",
+          let updatedEvent: EventWithPricing = event;
+          if (hasEventData) {
+            updatedEvent = await tx.event.update({
+              where: { id },
+              data: eventData,
+              include: { pricing: true },
+            });
+          }
+
+          if (basePrice === undefined && normalizedCurrency === undefined) {
+            return updatedEvent;
+          }
+
+          const pricingData: { basePrice?: number; currency?: string } = {};
+          if (basePrice !== undefined) {
+            pricingData.basePrice = normalizeBasePrice(basePrice);
+          }
+          if (normalizedCurrency !== undefined) {
+            pricingData.currency = normalizedCurrency;
+          }
+
+          await tx.eventPricing.upsert({
+            where: { eventId: id },
+            update: pricingData,
+            create: {
+              eventId: id,
+              basePrice: pricingData.basePrice ?? 0,
+              currency: pricingData.currency ?? "TND",
+            },
+          });
+
+          return tx.event.findUniqueOrThrow({
+            where: { id },
+            include: { pricing: true },
+          });
         },
-      });
-
-      return tx.event.findUniqueOrThrow({
-        where: { id },
-        include: { pricing: true },
-      });
-    },
-    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      ),
+    { label: "updateEvent" },
   );
 }
 
