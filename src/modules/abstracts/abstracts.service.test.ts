@@ -4,6 +4,7 @@ import { prismaMock } from "../../../tests/mocks/prisma.js";
 import { faker } from "@faker-js/faker";
 import { Prisma } from "@/generated/prisma/client.js";
 import { countWords } from "./abstracts.service.js";
+import { abstractHtmlToText, sanitizeAbstractHtml } from "./abstracts.html.js";
 import {
   verifyAbstractToken,
   generateAbstractToken,
@@ -80,6 +81,7 @@ function makeSubmitBody(overrides: Record<string, unknown> = {}) {
   return {
     authorFirstName: "Ahmed",
     authorLastName: "Salah",
+    authorAffiliation: "CHU Tunis",
     authorEmail: "ahmed@example.com",
     authorPhone: "+21612345678",
     coAuthors: [],
@@ -103,6 +105,7 @@ function makeAbstract(overrides: Record<string, unknown> = {}) {
     eventId,
     authorFirstName: "Ahmed",
     authorLastName: "Salah",
+    authorAffiliation: "CHU Tunis",
     authorEmail: "ahmed@example.com",
     authorPhone: "+21612345678",
     requestedType: "ORAL_COMMUNICATION" as const,
@@ -165,6 +168,38 @@ describe("countWords", () => {
 
   it("handles long single word", () => {
     expect(countWords("superlongword")).toBe(1);
+  });
+});
+
+describe("abstract rich-text helpers", () => {
+  it("keeps only the supported formatting tags", () => {
+    expect(
+      sanitizeAbstractHtml(
+        '<p class="x">Safe <b>bold</b> <i>italic</i> <u>under</u><script>alert(1)</script><span>plain</span></p>',
+      ),
+    ).toBe("<p>Safe <strong>bold</strong> <em>italic</em> <u>under</u>alert(1)plain</p>");
+  });
+
+  it("extracts visible text for counting and exports", () => {
+    expect(abstractHtmlToText("<p>One <strong>two</strong></p><ul><li>three</li></ul>")).toBe(
+      "One two\n\nthree",
+    );
+  });
+
+  it("does not glue adjacent formatted words together when counting", () => {
+    expect(abstractHtmlToText("<strong>one</strong><strong>two</strong>")).toBe("one two");
+  });
+
+  it("keeps inequalities and angle brackets in plain prose intact", () => {
+    expect(abstractHtmlToText("p < 0.05 and n > 30")).toBe("p < 0.05 and n > 30");
+    expect(sanitizeAbstractHtml("effect when x < 5 and y > 10")).toBe(
+      "effect when x &lt; 5 and y &gt; 10",
+    );
+  });
+
+  it("drops out-of-range and control-char numeric entities instead of crashing", () => {
+    expect(() => sanitizeAbstractHtml("<p>&#x110000;&#0;ok</p>")).not.toThrow();
+    expect(sanitizeAbstractHtml("<p>&#x110000;&#0;ok</p>")).toBe("<p>ok</p>");
   });
 });
 
@@ -277,11 +312,12 @@ describe("submitAbstract", () => {
     ] as any);
 
     const abstract = makeAbstract();
+    const abstractCreate = vi.fn().mockResolvedValue(abstract);
     const revisionCreate = vi.fn();
     // Mock transaction
     prismaMock.$transaction.mockImplementation(async (fn: any) => {
       const txClient = {
-        abstract: { create: vi.fn().mockResolvedValue(abstract) },
+        abstract: { create: abstractCreate },
         abstractRevision: { create: revisionCreate },
         abstractThemeOnAbstract: { createMany: vi.fn() },
         auditLog: { create: vi.fn() },
@@ -289,11 +325,11 @@ describe("submitAbstract", () => {
       return fn(txClient);
     });
 
-    return { abstract, revisionCreate };
+    return { abstract, abstractCreate, revisionCreate };
   }
 
   it("happy path: creates abstract and returns correct response", async () => {
-    const { abstract, revisionCreate } = mockSubmitSetup();
+    const { abstract, abstractCreate, revisionCreate } = mockSubmitSetup();
     const body = makeSubmitBody({
       themeIds: [themeId],
       registrationId: faker.string.uuid(),
@@ -307,6 +343,11 @@ describe("submitAbstract", () => {
     expect(result.status).toBe("SUBMITTED");
     expect(result.token).toHaveLength(64);
     expect(result.statusUrl).toContain(`/abstracts/${abstract.id}/`);
+    expect(abstractCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        authorAffiliation: body.authorAffiliation,
+      }),
+    });
     expect(revisionCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({
         abstractId: abstract.id,
@@ -316,6 +357,7 @@ describe("submitAbstract", () => {
         snapshot: expect.objectContaining({
           authorFirstName: body.authorFirstName,
           authorLastName: body.authorLastName,
+          authorAffiliation: body.authorAffiliation,
           authorEmail: body.authorEmail,
           authorPhone: body.authorPhone,
           coAuthors: body.coAuthors,
@@ -432,6 +474,54 @@ describe("submitAbstract", () => {
       statusCode: 422,
       code: "ABS_18003",
     });
+  });
+
+  it("sanitizes rich abstract HTML before persisting it", async () => {
+    const { abstractCreate, revisionCreate } = mockSubmitSetup();
+    const body = makeSubmitBody({
+      themeIds: [themeId],
+      content: {
+        mode: "FREE_TEXT",
+        title: "Title",
+        body: '<p>Hello <strong>world</strong><img src=x onerror=alert(1)> <span style="color:red">plain</span></p>',
+      },
+    });
+
+    await submitAbstract(slug, body);
+
+    const expectedContent = {
+      mode: "FREE_TEXT",
+      title: "Title",
+      body: "<p>Hello <strong>world</strong> plain</p>",
+    };
+    expect(abstractCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        content: expectedContent,
+      }),
+    });
+    expect(revisionCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        snapshot: expect.objectContaining({
+          content: expectedContent,
+        }),
+      }),
+    });
+  });
+
+  it("counts rich abstract HTML by visible text for word limits", async () => {
+    const { abstract } = mockSubmitSetup({ globalWordLimit: 2 });
+    const body = makeSubmitBody({
+      themeIds: [themeId],
+      content: {
+        mode: "FREE_TEXT",
+        title: "Title",
+        body: "<p>one <strong>two</strong></p>",
+      },
+    });
+
+    const result = await submitAbstract(slug, body);
+
+    expect(result.id).toBe(abstract.id);
   });
 
   it("enforces a configured zero word limit", async () => {
@@ -584,6 +674,7 @@ describe("editAbstract", () => {
         snapshot: expect.objectContaining({
           authorFirstName: body.authorFirstName,
           authorLastName: body.authorLastName,
+          authorAffiliation: body.authorAffiliation,
           authorEmail: body.authorEmail,
           authorPhone: body.authorPhone,
           coAuthors: body.coAuthors,

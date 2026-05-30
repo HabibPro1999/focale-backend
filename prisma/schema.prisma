@@ -952,6 +952,7 @@ model Abstract {
   // Author info
   authorFirstName       String  @map("author_first_name")
   authorLastName        String  @map("author_last_name")
+  authorAffiliation     String? @map("author_affiliation")
   authorEmail           String  @map("author_email")
   authorEmailNormalized String? @map("author_email_normalized")
   authorPhone           String  @map("author_phone")

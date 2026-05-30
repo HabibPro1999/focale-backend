@@ -18,6 +18,7 @@ function makeAbstract(overrides: Record<string, unknown> = {}) {
     eventId,
     authorFirstName: "Ada",
     authorLastName: "Lovelace",
+    authorAffiliation: "Analytical Institute",
     authorEmail: "ada@example.com",
     authorPhone: "+21612345678",
     requestedType: "ORAL_COMMUNICATION",

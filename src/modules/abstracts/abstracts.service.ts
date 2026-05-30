@@ -16,6 +16,13 @@ import type {
   AbstractConfig,
   AbstractStatus,
 } from "@/generated/prisma/client.js";
+import {
+  abstractContentFields,
+  abstractHtmlToText,
+  sanitizeAbstractContent,
+  STRUCTURED_SECTIONS,
+  type AbstractContent,
+} from "./abstracts.html.js";
 
 // ============================================================================
 // Word count helper
@@ -74,22 +81,13 @@ function duplicateAuthorEmailError() {
 interface AbstractPayloadInput {
   authorFirstName: string;
   authorLastName: string;
+  authorAffiliation: string;
   authorEmail: string;
   authorPhone: string;
   coAuthors: { firstName: string; lastName: string; affiliation?: string }[];
   requestedType: "ORAL_COMMUNICATION" | "POSTER";
   themeIds: string[];
-  content:
-    | { mode: "FREE_TEXT"; title: string; body: string }
-    | {
-        mode: "STRUCTURED";
-        title: string;
-        introduction: string;
-        objective: string;
-        methods: string;
-        results: string;
-        conclusion: string;
-      };
+  content: AbstractContent;
   additionalFieldsData: Record<string, unknown>;
   registrationId?: string | null;
 }
@@ -109,6 +107,7 @@ function buildRevisionSnapshot(
   return {
     authorFirstName: body.authorFirstName,
     authorLastName: body.authorLastName,
+    authorAffiliation: body.authorAffiliation,
     authorEmail: body.authorEmail,
     authorPhone: body.authorPhone,
     coAuthors: body.coAuthors as unknown as Prisma.InputJsonValue,
@@ -141,41 +140,32 @@ function validateWordLimits(
   const errors: string[] = [];
 
   if (content.mode === "FREE_TEXT") {
+    const bodyText = abstractHtmlToText(content.body);
     if (
       config.globalWordLimit != null &&
-      countWords(content.body) > config.globalWordLimit
+      countWords(bodyText) > config.globalWordLimit
     ) {
       errors.push(
-        `body (${countWords(content.body)} words, limit ${config.globalWordLimit})`,
+        `body (${countWords(bodyText)} words, limit ${config.globalWordLimit})`,
       );
     }
   } else {
     const sectionLimits =
       (config.sectionWordLimits as Record<string, number> | null) ?? {};
-    const sections = [
-      "introduction",
-      "objective",
-      "methods",
-      "results",
-      "conclusion",
-    ] as const;
-    for (const section of sections) {
+    let total = 0;
+    for (const section of STRUCTURED_SECTIONS) {
+      const count = countWords(
+        abstractHtmlToText((content as Record<string, string>)[section] ?? ""),
+      );
+      total += count;
       const limit = sectionLimits[section];
-      const text = (content as Record<string, string>)[section] ?? "";
-      if (limit != null && countWords(text) > limit) {
-        errors.push(`${section} (${countWords(text)} words, limit ${limit})`);
+      if (limit != null && count > limit) {
+        errors.push(`${section} (${count} words, limit ${limit})`);
       }
     }
     // Also check global limit against total
-    if (config.globalWordLimit != null) {
-      const total = sections.reduce(
-        (acc, s) =>
-          acc + countWords((content as Record<string, string>)[s] ?? ""),
-        0,
-      );
-      if (total > config.globalWordLimit) {
-        errors.push(`total (${total} words, limit ${config.globalWordLimit})`);
-      }
+    if (config.globalWordLimit != null && total > config.globalWordLimit) {
+      errors.push(`total (${total} words, limit ${config.globalWordLimit})`);
     }
   }
 
@@ -187,6 +177,19 @@ function validateWordLimits(
       { fields: errors },
     );
   }
+}
+
+function validateContentPresence(content: SubmitAbstractInput["content"]): void {
+  const emptyFields = abstractContentFields(content)
+    .filter((field) => abstractHtmlToText(field.value).length === 0)
+    .map((field) => field.name);
+  if (emptyFields.length === 0) return;
+  throw new AppError(
+    `Required abstract content is empty: ${emptyFields.join(", ")}`,
+    422,
+    ErrorCodes.VALIDATION_ERROR,
+    { fields: emptyFields },
+  );
 }
 
 async function validateThemes(
@@ -418,23 +421,29 @@ export async function submitAbstract(
     );
   }
 
+  const payload: SubmitAbstractInput = {
+    ...body,
+    content: sanitizeAbstractContent(body.content),
+  };
+
   // Mode check
-  validateMode(body.content.mode, config.submissionMode);
+  validateMode(payload.content.mode, config.submissionMode);
+  validateContentPresence(payload.content);
 
   // Word limit check
-  validateWordLimits(body.content, config as unknown as AbstractConfig);
+  validateWordLimits(payload.content, config as unknown as AbstractConfig);
 
   // Theme validation
-  await validateThemes(body.themeIds, config.id, config.maxThemesPerAbstract);
+  await validateThemes(payload.themeIds, config.id, config.maxThemesPerAbstract);
 
   // Additional fields validation
   const sanitizedAdditionalFields = validateAdditionalFields(
-    body.additionalFieldsData,
+    payload.additionalFieldsData,
     config.additionalFieldsSchema,
   );
 
   const editToken = generateAbstractToken();
-  const authorEmailNormalized = normalizeAuthorEmail(body.authorEmail);
+  const authorEmailNormalized = normalizeAuthorEmail(payload.authorEmail);
   const duplicate = await prisma.abstract.findFirst({
     where: {
       eventId: event.id,
@@ -453,28 +462,29 @@ export async function submitAbstract(
       const abstract = await tx.abstract.create({
         data: {
           eventId: event.id,
-          authorFirstName: body.authorFirstName,
-          authorLastName: body.authorLastName,
-          authorEmail: body.authorEmail,
+          authorFirstName: payload.authorFirstName,
+          authorLastName: payload.authorLastName,
+          authorAffiliation: payload.authorAffiliation,
+          authorEmail: payload.authorEmail,
           authorEmailNormalized,
-          authorPhone: body.authorPhone,
-          requestedType: body.requestedType,
-          content: body.content as unknown as Prisma.InputJsonValue,
-          coAuthors: body.coAuthors as unknown as Prisma.InputJsonValue,
+          authorPhone: payload.authorPhone,
+          requestedType: payload.requestedType,
+          content: payload.content as unknown as Prisma.InputJsonValue,
+          coAuthors: payload.coAuthors as unknown as Prisma.InputJsonValue,
           additionalFieldsData:
             sanitizedAdditionalFields as unknown as Prisma.InputJsonValue,
           status: "SUBMITTED",
           editToken,
-          linkBaseUrl: body.linkBaseUrl,
-          registrationId: body.registrationId ?? null,
+          linkBaseUrl: payload.linkBaseUrl,
+          registrationId: payload.registrationId ?? null,
         },
       });
 
       const revisionSnapshot = buildRevisionSnapshot(
-        body,
+        payload,
         sanitizedAdditionalFields,
-        body.registrationId ?? null,
-        body.themeIds,
+        payload.registrationId ?? null,
+        payload.themeIds,
       );
 
       // Create initial revision
@@ -485,17 +495,17 @@ export async function submitAbstract(
           snapshot: revisionSnapshot,
           editedBy: "PUBLIC",
           editedIpAddress: ip,
-          content: body.content as unknown as Prisma.InputJsonValue,
-          coAuthors: body.coAuthors as unknown as Prisma.InputJsonValue,
+          content: payload.content as unknown as Prisma.InputJsonValue,
+          coAuthors: payload.coAuthors as unknown as Prisma.InputJsonValue,
           additionalFieldsData:
             sanitizedAdditionalFields as unknown as Prisma.InputJsonValue,
         },
       });
 
       // Link themes
-      if (body.themeIds.length > 0) {
+      if (payload.themeIds.length > 0) {
         await tx.abstractThemeOnAbstract.createMany({
-          data: body.themeIds.map((themeId) => ({
+          data: payload.themeIds.map((themeId) => ({
             abstractId: abstract.id,
             themeId,
           })),
@@ -529,7 +539,7 @@ export async function submitAbstract(
     throw error;
   }
 
-  const statusUrl = `${body.linkBaseUrl}/${slug}/abstracts/${created.id}/${editToken}`;
+  const statusUrl = `${payload.linkBaseUrl}/${slug}/abstracts/${created.id}/${editToken}`;
 
   return {
     id: created.id,
@@ -589,6 +599,7 @@ export async function getAbstractByToken(id: string, token: string) {
     code: abstract.code,
     authorFirstName: abstract.authorFirstName,
     authorLastName: abstract.authorLastName,
+    authorAffiliation: abstract.authorAffiliation,
     authorEmail: abstract.authorEmail,
     authorPhone: abstract.authorPhone,
     coAuthors: abstract.coAuthors,
@@ -694,17 +705,23 @@ export async function editAbstract(
     );
   }
 
+  const payload: EditAbstractInput = {
+    ...body,
+    content: sanitizeAbstractContent(body.content),
+  };
+
   // Re-validate everything
-  validateMode(body.content.mode, config.submissionMode);
-  validateWordLimits(body.content, config as unknown as AbstractConfig);
-  await validateThemes(body.themeIds, config.id, config.maxThemesPerAbstract);
+  validateMode(payload.content.mode, config.submissionMode);
+  validateContentPresence(payload.content);
+  validateWordLimits(payload.content, config as unknown as AbstractConfig);
+  await validateThemes(payload.themeIds, config.id, config.maxThemesPerAbstract);
   const sanitizedAdditionalFields = validateAdditionalFields(
-    body.additionalFieldsData,
+    payload.additionalFieldsData,
     config.additionalFieldsSchema,
   );
 
-  const nextRegistrationId = body.registrationId ?? abstract.registrationId;
-  const authorEmailNormalized = normalizeAuthorEmail(body.authorEmail);
+  const nextRegistrationId = payload.registrationId ?? abstract.registrationId;
+  const authorEmailNormalized = normalizeAuthorEmail(payload.authorEmail);
   const duplicate = await prisma.abstract.findFirst({
     where: {
       eventId: abstract.event.id,
@@ -717,10 +734,10 @@ export async function editAbstract(
     throw duplicateAuthorEmailError();
   }
   const revisionSnapshot = buildRevisionSnapshot(
-    body,
+    payload,
     sanitizedAdditionalFields,
     nextRegistrationId,
-    body.themeIds,
+    payload.themeIds,
   );
 
   // Transaction: update + new revision + theme links
@@ -738,14 +755,15 @@ export async function editAbstract(
       const updatedAbstract = await tx.abstract.update({
         where: { id },
         data: {
-          authorFirstName: body.authorFirstName,
-          authorLastName: body.authorLastName,
-          authorEmail: body.authorEmail,
+          authorFirstName: payload.authorFirstName,
+          authorLastName: payload.authorLastName,
+          authorAffiliation: payload.authorAffiliation,
+          authorEmail: payload.authorEmail,
           authorEmailNormalized,
-          authorPhone: body.authorPhone,
-          requestedType: body.requestedType,
-          content: body.content as unknown as Prisma.InputJsonValue,
-          coAuthors: body.coAuthors as unknown as Prisma.InputJsonValue,
+          authorPhone: payload.authorPhone,
+          requestedType: payload.requestedType,
+          content: payload.content as unknown as Prisma.InputJsonValue,
+          coAuthors: payload.coAuthors as unknown as Prisma.InputJsonValue,
           additionalFieldsData:
             sanitizedAdditionalFields as unknown as Prisma.InputJsonValue,
           registrationId: nextRegistrationId,
@@ -762,8 +780,8 @@ export async function editAbstract(
           snapshot: revisionSnapshot,
           editedBy: "PUBLIC",
           editedIpAddress: ip,
-          content: body.content as unknown as Prisma.InputJsonValue,
-          coAuthors: body.coAuthors as unknown as Prisma.InputJsonValue,
+          content: payload.content as unknown as Prisma.InputJsonValue,
+          coAuthors: payload.coAuthors as unknown as Prisma.InputJsonValue,
           additionalFieldsData:
             sanitizedAdditionalFields as unknown as Prisma.InputJsonValue,
         },
@@ -773,9 +791,9 @@ export async function editAbstract(
       await tx.abstractThemeOnAbstract.deleteMany({
         where: { abstractId: id },
       });
-      if (body.themeIds.length > 0) {
+      if (payload.themeIds.length > 0) {
         await tx.abstractThemeOnAbstract.createMany({
-          data: body.themeIds.map((themeId) => ({
+          data: payload.themeIds.map((themeId) => ({
             abstractId: id,
             themeId,
           })),

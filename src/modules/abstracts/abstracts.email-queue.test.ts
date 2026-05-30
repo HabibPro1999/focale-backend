@@ -22,6 +22,7 @@ function mockAbstract() {
     eventId: "event-1",
     authorFirstName: "Ada",
     authorLastName: "Lovelace",
+    authorAffiliation: "Analytical Institute",
     authorEmail: "ada@example.com",
     content: { mode: "FREE_TEXT", title: "Analytical Engine" },
     status: "SUBMITTED",
