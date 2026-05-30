@@ -4,6 +4,7 @@
 // =============================================================================
 
 import mjml2html from "mjml";
+import { escapeHtml } from "@shared/utils/html.js";
 import type {
   TiptapDocument,
   TiptapNode,
@@ -473,17 +474,7 @@ function extractTextFromNode(node: TiptapNode): string {
 // UTILITIES
 // =============================================================================
 
-/**
- * Escapes HTML special characters to prevent XSS
- */
-export function escapeHtml(text: string): string {
-  const escapeMap: Record<string, string> = {
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#039;",
-  };
-
-  return text.replace(/[&<>"']/g, (char) => escapeMap[char]);
-}
+// escapeHtml now lives in @shared/utils/html so the email renderer and the
+// abstract sanitizer share a single implementation. Re-exported here to keep
+// the existing import surface of this module unchanged.
+export { escapeHtml };

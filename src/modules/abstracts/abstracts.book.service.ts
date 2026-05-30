@@ -15,6 +15,7 @@ import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { auditLog } from "@shared/utils/audit.js";
 import { logger } from "@shared/utils/logger.js";
 import { FINAL_STATUSES, FINAL_TYPE_SORT_ORDER } from "./abstracts.constants.js";
+import { abstractHtmlToText } from "./abstracts.html.js";
 
 const A4: [number, number] = [595.28, 841.89];
 const MARGIN = 54;
@@ -111,23 +112,35 @@ function getContentSections(content: Prisma.JsonValue): Array<{ label: string; t
       ["Results", record.results],
       ["Conclusion", record.conclusion],
     ]
-      .map(([label, value]) => ({ label: String(label), text: typeof value === "string" ? value.trim() : "" }))
+      .map(([label, value]) => ({
+        label: String(label),
+        text: typeof value === "string" ? abstractHtmlToText(value) : "",
+      }))
       .filter((section) => section.text.length > 0);
   }
-  const body = typeof record.body === "string" ? record.body.trim() : "";
+  const body = typeof record.body === "string" ? abstractHtmlToText(record.body) : "";
   return body ? [{ label: "Abstract", text: body }] : [];
 }
 
+function withAffiliation(name: string, affiliation: string | undefined): string {
+  const trimmed = affiliation?.trim();
+  return trimmed ? `${name} (${trimmed})` : name;
+}
+
 function getAuthorLine(abstract: BookAbstract): string {
-  const names = [`${abstract.authorFirstName} ${abstract.authorLastName}`.trim()];
+  const primaryName = `${abstract.authorFirstName} ${abstract.authorLastName}`.trim();
+  const names = [
+    withAffiliation(primaryName, abstract.authorAffiliation ?? undefined),
+  ];
   if (Array.isArray(abstract.coAuthors)) {
     for (const coAuthor of abstract.coAuthors) {
       if (!coAuthor || typeof coAuthor !== "object" || Array.isArray(coAuthor)) continue;
       const record = coAuthor as Record<string, unknown>;
       const firstName = typeof record.firstName === "string" ? record.firstName : "";
       const lastName = typeof record.lastName === "string" ? record.lastName : "";
+      const affiliation = typeof record.affiliation === "string" ? record.affiliation : undefined;
       const fullName = `${firstName} ${lastName}`.trim();
-      if (fullName) names.push(fullName);
+      if (fullName) names.push(withAffiliation(fullName, affiliation));
     }
   }
   return names.filter(Boolean).join(", ");
@@ -177,8 +190,37 @@ function fontForFamily(family: string): { regular: StandardFonts; bold: Standard
   return { regular: StandardFonts.Helvetica, bold: StandardFonts.HelveticaBold };
 }
 
+// pdf-lib's StandardFonts use WinAnsi (CP1252) encoding and THROW on any
+// character they cannot encode (emoji, Greek letters, CJK, …), which would
+// abort the whole book. These extra Unicode code points are the ones CP1252
+// maps in its 0x80–0x9F range; everything in Latin-1 (≤ 0xFF) is also fine.
+const WINANSI_EXTRA = new Set([
+  0x20ac, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030,
+  0x0160, 0x2039, 0x0152, 0x017d, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022,
+  0x2013, 0x2014, 0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x017e, 0x0178,
+]);
+
+function toWinAnsiSafe(text: string): string {
+  let result = "";
+  for (const char of text) {
+    const code = char.codePointAt(0) ?? 0;
+    if (
+      code === 0x09 ||
+      code === 0x0a ||
+      (code >= 0x20 && code <= 0x7e) ||
+      (code >= 0xa0 && code <= 0xff) ||
+      WINANSI_EXTRA.has(code)
+    ) {
+      result += char;
+    } else {
+      result += "?";
+    }
+  }
+  return result;
+}
+
 function wrapText(text: string, font: PDFFont, size: number, maxWidth: number): string[] {
-  const paragraphs = text.split(/\r?\n/);
+  const paragraphs = toWinAnsiSafe(text).split(/\r?\n/);
   const lines: string[] = [];
   for (const paragraph of paragraphs) {
     const words = paragraph.trim().split(/\s+/).filter(Boolean);

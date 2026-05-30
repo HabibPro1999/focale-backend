@@ -146,6 +146,10 @@ const StructuredContentSchema = z.strictObject({
 export const SubmitAbstractSchema = z.strictObject({
   authorFirstName: z.string().min(1).max(80),
   authorLastName: z.string().min(1).max(80),
+  // Required on both submit and edit (product decision). The DB column is
+  // nullable only so legacy abstracts created before this field can still be
+  // read; every new write must supply an affiliation.
+  authorAffiliation: z.string().trim().min(1).max(200),
   authorEmail: z.string().email(),
   authorPhone: z.string().min(1).max(40),
   coAuthors: z.array(CoAuthorSchema).max(20).default([]),

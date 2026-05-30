@@ -87,6 +87,7 @@ function formatAdminAbstract(
     presentedBy: abstract.presentedBy,
     authorFirstName: abstract.authorFirstName,
     authorLastName: abstract.authorLastName,
+    authorAffiliation: abstract.authorAffiliation,
     authorEmail: abstract.authorEmail,
     authorPhone: abstract.authorPhone,
     averageScore: abstract.reviewCount > 0 ? abstract.averageScore : null,
@@ -181,6 +182,7 @@ export async function listAdminAbstracts(
     where.OR = [
       { authorFirstName: { contains: q } },
       { authorLastName: { contains: q } },
+      { authorAffiliation: { contains: q } },
       { authorEmail: { contains: q } },
       { code: { contains: q } },
     ];

@@ -53,6 +53,7 @@ function makeAbstract(overrides: Record<string, unknown> = {}) {
     eventId,
     authorFirstName: "Ada",
     authorLastName: "Lovelace",
+    authorAffiliation: "Analytical Institute",
     authorEmail: "ada@example.com",
     authorPhone: "+21612345678",
     coAuthors: [{ firstName: "Grace", lastName: "Hopper" }],
@@ -97,6 +98,7 @@ function activeReview(overrides: Record<string, unknown> = {}) {
 
 const forbiddenPiiKeys = [
   "authorEmail",
+  "authorAffiliation",
   "authorFirstName",
   "authorPhone",
   "coAuthors",

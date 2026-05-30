@@ -87,6 +87,7 @@ describe("abstracts public routes", () => {
         payload: {
           authorFirstName: "Ahmed",
           authorLastName: "Salah",
+          authorAffiliation: "CHU Tunis",
           authorEmail: "ahmed@test.com",
           authorPhone: "+21612345678",
           coAuthors: [],
@@ -148,6 +149,7 @@ describe("abstracts public routes", () => {
         payload: {
           authorFirstName: "Ahmed",
           authorLastName: "Salah",
+          authorAffiliation: "CHU Tunis",
           authorEmail: "ahmed@test.com",
           authorPhone: "+21612345678",
           coAuthors: [],
