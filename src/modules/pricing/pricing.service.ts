@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { prisma } from "@/database/client.js";
+import { withTxnRetry } from "@shared/db/with-txn-retry.js";
 import { AppError } from "@shared/errors/app-error.js";
 import { ErrorCodes } from "@shared/errors/error-codes.js";
 import { calculateApplicableAmount } from "@shared/utils/sponsorship-math.js";
@@ -66,9 +67,13 @@ export async function updateEventPricing(
   eventId: string,
   input: UpdateEventPricingInput,
 ): Promise<EventPricingWithRules> {
-  return prisma.$transaction((tx) => updateEventPricingTx(tx, eventId, input), {
-    isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
-  });
+  return withTxnRetry(
+    () =>
+      prisma.$transaction((tx) => updateEventPricingTx(tx, eventId, input), {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      }),
+    { label: "updateEventPricing" },
+  );
 }
 
 async function updateEventPricingTx(
@@ -227,22 +232,26 @@ async function mutatePricingRules(
   eventId: string,
   mutate: (rules: EmbeddedPricingRule[]) => EmbeddedPricingRule[],
 ): Promise<EventPricingWithRules> {
-  return prisma.$transaction(
-    async (tx) => {
-      const pricing = await getEventPricing(eventId, tx);
-      if (!pricing) {
-        throw new AppError(
-          "Event pricing not found",
-          404,
-          ErrorCodes.PRICING_NOT_FOUND,
-        );
-      }
+  return withTxnRetry(
+    () =>
+      prisma.$transaction(
+        async (tx) => {
+          const pricing = await getEventPricing(eventId, tx);
+          if (!pricing) {
+            throw new AppError(
+              "Event pricing not found",
+              404,
+              ErrorCodes.PRICING_NOT_FOUND,
+            );
+          }
 
-      return updateEventPricingTx(tx, eventId, {
-        rules: mutate(pricing.rules),
-      });
-    },
-    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+          return updateEventPricingTx(tx, eventId, {
+            rules: mutate(pricing.rules),
+          });
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      ),
+    { label: "mutatePricingRules" },
   );
 }
 
