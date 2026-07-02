@@ -1,0 +1,34 @@
+{
+  "name": "@app/db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "commonjs",
+  "exports": {
+    ".": {
+      "@app/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "generate": "drizzle-kit generate",
+    "migrate": "drizzle-kit migrate",
+    "seed": "node --conditions=@app/source -r @swc-node/register src/seed.ts"
+  },
+  "dependencies": {
+    "@app/contracts": "workspace:*",
+    "@app/shared": "workspace:*",
+    "drizzle-orm": "^0.44.0",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@swc-node/register": "^1.10.9",
+    "@swc/core": "^1.10.1",
+    "@types/pg": "^8.11.10",
+    "drizzle-kit": "^0.31.0",
+    "vitest": "^3.2.4"
+  }
+}
