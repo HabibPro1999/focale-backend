@@ -1,10 +1,3 @@
-export * from "./envelope";
-export * from "./errors";
-export * from "./health";
-export * from "./roles";
-export * from "./condition.schema";
-export * from "./app-config";
-// Domain contract stubs (wave 0 — filled in by per-domain port agents).
 export * from "./identity";
 export * from "./clients";
 export * from "./events";

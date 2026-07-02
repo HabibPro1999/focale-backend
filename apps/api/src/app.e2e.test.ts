@@ -2,7 +2,6 @@ import "reflect-metadata";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { NestFastifyApplication } from "@nestjs/platform-fastify";
 import { buildApp } from "./app.factory";
-import { loadConfig } from "./core/config";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -10,7 +9,7 @@ describe("api e2e", () => {
   let app: NestFastifyApplication;
 
   beforeAll(async () => {
-    app = await buildApp(loadConfig({ NODE_ENV: "test" } as NodeJS.ProcessEnv));
+    app = await buildApp();
     await app.init();
     await app.getHttpAdapter().getInstance().ready();
   });
@@ -62,6 +61,11 @@ describe("api e2e", () => {
     });
     expect(res.statusCode).toBe(201);
     expect(res.json()).toMatchObject({ ok: true, data: { msg: "hi" } });
+  });
+
+  it("registers @fastify/multipart (multipart/form-data content-type parser)", () => {
+    const fastify = app.getHttpAdapter().getInstance();
+    expect(fastify.hasContentTypeParser("multipart/form-data")).toBe(true);
   });
 
   it("unknown route returns a NOT_FOUND envelope", async () => {

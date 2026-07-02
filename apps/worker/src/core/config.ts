@@ -6,5 +6,3 @@ export type Config = AppConfig;
 export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
   return parseAppConfig(source);
 }
-
-export const CONFIG = Symbol("CONFIG");

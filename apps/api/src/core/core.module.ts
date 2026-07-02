@@ -12,10 +12,9 @@ import { HttpExceptionFilter } from "./http-exception.filter";
   imports: [
     ThrottlerModule.forRootAsync({
       inject: [CONFIG],
+      // Legacy global limit: 100/min in prod, 1000/min otherwise, 1-minute window.
       useFactory: (config: Config) => ({
-        throttlers: [
-          { ttl: config.RATE_LIMIT_WINDOW_MS, limit: config.RATE_LIMIT_MAX },
-        ],
+        throttlers: [{ ttl: 60_000, limit: config.security.rateLimit.max }],
       }),
     }),
   ],

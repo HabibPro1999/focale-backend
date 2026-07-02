@@ -6,6 +6,8 @@ import {
 import helmet from "@fastify/helmet";
 import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
+import multipart from "@fastify/multipart";
+import fastifySSE from "@fastify/sse";
 import { newId } from "@app/shared";
 import { AppModule } from "./app.module";
 import { loadConfig, type Config } from "./core/config";
@@ -15,17 +17,18 @@ import { requestContext } from "./core/request-context";
 export async function buildApp(
   config: Config = loadConfig(),
 ): Promise<NestFastifyApplication> {
-  const wildcardCors = config.corsOrigins.includes("*");
-  if (config.isProduction && wildcardCors) {
+  // Legacy parity: wildcard CORS is forbidden in production (checked before registration).
+  if (config.isProduction && config.CORS_ORIGIN === "*") {
     throw new Error(
-      "Refusing to boot: wildcard CORS origin with credentials is not allowed in production.",
+      "CORS wildcard (*) is not allowed in production. Set CORS_ORIGIN to specific origins.",
     );
   }
 
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
     new FastifyAdapter({ trustProxy: true }),
-    { bufferLogs: true },
+    // rawBody: webhook controllers verify provider signatures over exact wire bytes.
+    { bufferLogs: true, rawBody: true },
   );
 
   const fastify = app.getHttpAdapter().getInstance();
@@ -40,12 +43,42 @@ export async function buildApp(
     done();
   });
 
-  await fastify.register(helmet);
+  // Multipart uploads (banner, payment proof, certificate image, abstract file) — 10MB, legacy limit.
+  await fastify.register(multipart, {
+    limits: { fileSize: 10 * 1024 * 1024 },
+  });
+
+  await fastify.register(helmet, {
+    contentSecurityPolicy: config.isProduction,
+    strictTransportSecurity: config.isProduction
+      ? { maxAge: 31536000, includeSubDomains: true, preload: true }
+      : false,
+    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+  });
+
+  // Legacy CORS: comma-split allow-list, no-origin requests allowed, credentials always on.
   await fastify.register(cors, {
-    origin: config.corsOrigins.length > 0 ? config.corsOrigins : false,
+    origin: (origin, callback) => {
+      const allowedOrigins = config.CORS_ORIGIN.split(",").map((o) => o.trim());
+      if (
+        !origin ||
+        allowedOrigins.includes("*") ||
+        allowedOrigins.includes(origin)
+      ) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"), false);
+      }
+    },
     credentials: true,
   });
+
   await fastify.register(cookie);
+
+  // Server-Sent Events — powers the realtime admin stream.
+  await fastify.register(fastifySSE, {
+    heartbeatInterval: config.realtime.heartbeatMs,
+  });
 
   app.enableShutdownHooks();
   return app;

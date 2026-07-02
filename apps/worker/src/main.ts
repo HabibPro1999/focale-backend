@@ -3,10 +3,17 @@ import { NestFactory } from "@nestjs/core";
 import { createLogger } from "@app/shared";
 import { WorkerModule } from "./worker.module";
 import { JobRunner } from "./job-runner";
+import { loadConfig } from "./core/config";
 
 const log = createLogger({ name: "worker" });
 
 async function bootstrap() {
+  const config = loadConfig(); // fail-fast at boot
+  if (!config.runWorkers) {
+    log.info("RUN_WORKERS=false; in-process workers disabled");
+    return;
+  }
+
   const ctx = await NestFactory.createApplicationContext(WorkerModule, {
     bufferLogs: true,
   });
