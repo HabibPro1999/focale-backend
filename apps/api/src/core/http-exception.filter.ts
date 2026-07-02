@@ -55,7 +55,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
       logger.error({ err: exception }, "Unhandled exception");
       const isProd = process.env.NODE_ENV === "production";
       error = {
-        code: ErrorCodes.INTERNAL,
+        code: ErrorCodes.INTERNAL_ERROR,
         message: isProd
           ? "Internal server error"
           : exception instanceof Error

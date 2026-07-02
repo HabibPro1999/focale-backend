@@ -49,7 +49,7 @@ describe("api e2e", () => {
     expect(res.statusCode).toBe(400);
     const body = res.json();
     expect(body.ok).toBe(false);
-    expect(body.error.code).toBe("VALIDATION_ERROR");
+    expect(body.error.code).toBe("VAL_2001");
     expect(body.error.details).toBeDefined();
     expect(body.requestId).toMatch(UUID);
   });
@@ -67,6 +67,6 @@ describe("api e2e", () => {
   it("unknown route returns a NOT_FOUND envelope", async () => {
     const res = await app.inject({ method: "GET", url: "/nope" });
     expect(res.statusCode).toBe(404);
-    expect(res.json().error.code).toBe("NOT_FOUND");
+    expect(res.json().error.code).toBe("RES_3001");
   });
 });
