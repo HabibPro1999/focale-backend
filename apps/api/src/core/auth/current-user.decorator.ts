@@ -1,10 +1,10 @@
 import { createParamDecorator, type ExecutionContext } from "@nestjs/common";
-import type { DecodedIdToken } from "firebase-admin/auth";
+import type { AuthUser } from "./user-cache";
 
-/** Returns the decoded Firebase user attached by AuthGuard. Undefined on unguarded routes. */
+/** Returns the DB-backed user (8-field allowlist) attached by AuthGuard. */
 export const CurrentUser = createParamDecorator(
-  (_data: unknown, ctx: ExecutionContext): DecodedIdToken | undefined => {
-    const req = ctx.switchToHttp().getRequest<{ user?: DecodedIdToken }>();
+  (_data: unknown, ctx: ExecutionContext): AuthUser | undefined => {
+    const req = ctx.switchToHttp().getRequest<{ user?: AuthUser }>();
     return req.user;
   },
 );
