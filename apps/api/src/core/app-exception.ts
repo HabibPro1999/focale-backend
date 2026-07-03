@@ -1,12 +1,14 @@
 import { HttpException } from "@nestjs/common";
 
 /**
- * Coded domain error (port of legacy AppError). The global HttpExceptionFilter
- * recognises the `{ code, message, details? }` response shape and renders the
- * error envelope verbatim, with the same HTTP status.
+ * Coded domain error — the port of the legacy AppError. The global
+ * HttpExceptionFilter recognises the `{ code, message, details? }` response
+ * shape (isErrorBody) and renders the error envelope verbatim; getStatus()
+ * supplies the HTTP status.
  *
- * ponytail: duplicated per-module (forms/pricing/sponsorships do the same) until
- * core ships a shared AppException; this agent may not edit core.
+ * `code`/`statusCode`/`details` are also exposed as own properties so
+ * legacy AppError-style assertions (toMatchObject({ code, statusCode, details }))
+ * keep working.
  */
 export class AppException extends HttpException {
   readonly code: string;

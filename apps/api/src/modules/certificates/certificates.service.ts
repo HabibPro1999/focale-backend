@@ -33,7 +33,7 @@ import {
   type CertificateTemplateData,
 } from "@app/integrations";
 import { logger } from "../../core/logger.service";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 
 const ALLOWED_MIME_TYPES = new Set(["image/png", "image/jpeg"]);
 

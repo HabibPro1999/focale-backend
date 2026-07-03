@@ -11,6 +11,7 @@ import { UserRole } from "@app/contracts";
 import { paginate, type PaginatedResult } from "@app/shared";
 import {
   getDb,
+  withSerializableTxn,
   type DbExecutor,
   type EventRow,
   type EventWithPricing,
@@ -152,32 +153,6 @@ const VALID_STATUS_TRANSITIONS: Record<string, string[]> = {
   ARCHIVED: [],
 };
 
-// --- Serializable retry (port of withTxnRetry; db package helper is absent) --
-// Retry only on CockroachDB serialization failures / deadlocks (40001 / 40P01).
-function isSerializationFailure(error: unknown): boolean {
-  const code = (error as { code?: unknown })?.code;
-  return code === "40001" || code === "40P01";
-}
-
-async function withSerializableRetry<T>(
-  fn: () => Promise<T>,
-  label: string,
-): Promise<T> {
-  const maxAttempts = 5;
-  const baseDelayMs = 25;
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      if (!isSerializationFailure(error) || attempt >= maxAttempts) throw error;
-      const backoff = baseDelayMs * 2 ** (attempt - 1);
-      const delay = backoff + Math.floor(Math.random() * backoff * 0.5);
-      logger.warn({ attempt, maxAttempts, delay, label }, "Serialization failure; retrying transaction");
-      await new Promise((resolve) => setTimeout(resolve, delay));
-    }
-  }
-}
-
 // --- Storage cleanup helpers (best-effort; failures only logged) ------------
 
 function extractKeyFromStorage(value: string): string | null {
@@ -293,9 +268,7 @@ export class EventsService {
     const { basePrice, currency, ...eventData } = input;
     const hasEventData = Object.values(eventData).some((v) => v !== undefined);
 
-    return withSerializableRetry(
-      () =>
-        getDb().transaction(
+    return withSerializableTxn(
           async (tx) => {
             const event = await getEventWithPricing(id, tx);
             if (!event) {
@@ -383,9 +356,6 @@ export class EventsService {
 
             return (await getEventWithPricing(id, tx)) as EventWithPricing;
           },
-          { isolationLevel: "serializable" },
-        ),
-      "updateEvent",
     );
   }
 

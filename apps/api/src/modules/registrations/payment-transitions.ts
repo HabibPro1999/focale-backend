@@ -1,5 +1,5 @@
 import { ErrorCodes } from "@app/contracts";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 
 /**
  * Payment status state machine (ported verbatim). Same-status is a no-op; any

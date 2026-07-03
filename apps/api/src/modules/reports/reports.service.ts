@@ -28,7 +28,7 @@ import type {
   AccessRegistrantsResponse,
   ExportRegistrationsBody,
 } from "@app/contracts";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 import { escapeExcelRow } from "./excel-safety";
 import {
   generateEventSummary,

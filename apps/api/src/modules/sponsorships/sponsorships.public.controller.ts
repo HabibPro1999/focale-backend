@@ -4,7 +4,7 @@ import { ErrorCodes } from "@app/contracts";
 import { getEventWithPricing, getEventWithPricingBySlug } from "@app/db";
 import { assertClientModuleEnabled } from "../clients/module-gates";
 import { assertEventAcceptsPublicActions } from "../events";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 import { SponsorshipsService } from "./sponsorships.service";
 import {
   CreateSponsorshipBatchDto,

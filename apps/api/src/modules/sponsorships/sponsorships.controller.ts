@@ -21,7 +21,7 @@ import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
 import { canAccessClient, type AuthUser } from "../events";
 import { assertEventWritable } from "../events";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 import { SponsorshipsService } from "./sponsorships.service";
 import {
   ListSponsorshipsQueryDto,

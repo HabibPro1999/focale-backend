@@ -8,7 +8,16 @@ function getPool(): Pool {
   if (!pool) {
     const url = process.env.DATABASE_URL;
     if (!url) throw new Error("DATABASE_URL is not set");
-    pool = new Pool({ connectionString: url });
+    // Pin the session to UTC. Our timestamp columns are `without time zone`
+    // holding naive-UTC wall time (helpers.ts): drizzle writes via toISOString
+    // (always UTC wall), so DEFAULT now() must match. On a non-UTC DB server,
+    // coercing now() (timestamptz) into a naive column uses the session TimeZone
+    // — pinning UTC keeps now() rows and $defaultFn rows on the same clock.
+    // (Reads: the drizzle ORM path parses naive timestamps as UTC; the raw
+    // db.execute path returns them as unparsed strings, so any time math on
+    // db.execute results is done in SQL — see the *Health fns. Proven in
+    // timezone.test.ts.)
+    pool = new Pool({ connectionString: url, options: "-c TimeZone=UTC" });
   }
   return pool;
 }

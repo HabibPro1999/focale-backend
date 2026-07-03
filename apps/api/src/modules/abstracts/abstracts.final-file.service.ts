@@ -5,7 +5,7 @@ import { ErrorCodes } from "@app/contracts";
 import { findAbstractForFinalFile, updateAbstractFinalFileTxn } from "@app/db";
 import { getStorageProvider } from "@app/integrations";
 import { logger } from "../../core/logger.service";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 import { verifyAbstractToken } from "./abstracts.token";
 import { AbstractsService } from "./abstracts.service";
 

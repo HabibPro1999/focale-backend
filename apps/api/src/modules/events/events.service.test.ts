@@ -5,6 +5,7 @@ import { ErrorCodes } from "@app/contracts";
 // --- Mock the db query layer (the seam the service talks to) ----------------
 vi.mock("@app/db", () => ({
   getDb: vi.fn(),
+  withSerializableTxn: vi.fn(),
   casDecrementRegisteredTx: vi.fn(),
   casIncrementRegisteredTx: vi.fn(),
   clientExistsById: vi.fn(),
@@ -96,6 +97,12 @@ function createManyMockEvents(n: number) {
 const transactionMock = vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn({}));
 function useTransaction() {
   vi.mocked(db.getDb).mockReturnValue({ transaction: transactionMock } as never);
+  // withSerializableTxn is now a db-package helper; mirror its real behaviour
+  // (getDb().transaction(fn, { isolationLevel: "serializable" })) so the
+  // serializable-isolation assertion on transactionMock still holds.
+  vi.mocked(db.withSerializableTxn).mockImplementation((fn) =>
+    db.getDb().transaction(fn as never, { isolationLevel: "serializable" } as never),
+  );
 }
 
 /** Assert a rejected promise is an HttpException with the given status/code/message. */

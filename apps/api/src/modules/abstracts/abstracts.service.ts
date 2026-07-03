@@ -23,7 +23,7 @@ import {
   type FormSchema,
 } from "@app/shared";
 import { assertClientModuleEnabled } from "../clients/module-gates";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 import { generateAbstractToken, verifyAbstractToken } from "./abstracts.token";
 import {
   abstractContentFields,

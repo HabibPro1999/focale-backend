@@ -54,7 +54,7 @@ const ft = vi.hoisted(() => ({ fileTypeFromBuffer: vi.fn() }));
 vi.mock("file-type", () => ft);
 
 import { RegistrationsService } from "./registrations.service";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 import type { AccessService } from "../access/access.service";
 import type { PricingService } from "../pricing/pricing.service";
 

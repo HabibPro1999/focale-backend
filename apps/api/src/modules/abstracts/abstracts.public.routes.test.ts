@@ -3,7 +3,7 @@ import type { FastifyRequest } from "fastify";
 import { SubmitAbstractSchema } from "@app/contracts";
 import { AbstractsPublicController } from "./abstracts.public.controller";
 import { extractAbstractToken } from "./abstracts.token";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 import type { AbstractsService } from "./abstracts.service";
 import type { AbstractsFinalFileService } from "./abstracts.final-file.service";
 

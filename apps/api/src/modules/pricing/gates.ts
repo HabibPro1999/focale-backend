@@ -1,5 +1,5 @@
 import { ErrorCodes } from "@app/contracts";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 
 type ClientModuleState = { active: boolean; enabledModules: string[] | null };
 

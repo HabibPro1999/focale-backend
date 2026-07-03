@@ -1,6 +1,15 @@
 import "reflect-metadata";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { NestFastifyApplication } from "@nestjs/platform-fastify";
+
+// Health probes call pingDb (SELECT 1). Override just that one export so the
+// suite is DB-independent; everything else in @app/db stays real (lazy client).
+const pingDbMock = vi.hoisted(() => vi.fn());
+vi.mock("@app/db", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  pingDb: pingDbMock,
+}));
+
 import { buildApp } from "./app.factory";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -18,25 +27,58 @@ describe("api e2e", () => {
     await app.close();
   });
 
-  it("GET /health returns a success envelope with x-request-id header (DI works under SWC)", async () => {
+  // Legacy /health parity: RAW body (no envelope), DB-gated status + code.
+  it("GET /health returns the raw legacy healthy body + 200 (DI works under SWC)", async () => {
+    pingDbMock.mockResolvedValue(true);
     const res = await app.inject({ method: "GET", url: "/health" });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.ok).toBe(true);
-    expect(body.data.status).toBe("ok");
-    expect(typeof body.data.uptimeSec).toBe("number");
-    expect(body.requestId).toMatch(UUID);
+    expect(body).toEqual({
+      status: "healthy",
+      timestamp: expect.any(String),
+      checks: { database: { status: "healthy" } },
+    });
+    expect(body.ok).toBeUndefined(); // not enveloped
     expect(res.headers["x-request-id"]).toMatch(UUID);
   });
 
-  it("echoes an incoming x-request-id header", async () => {
+  it("GET /health returns the raw legacy unhealthy body + 503 when the DB is down", async () => {
+    pingDbMock.mockResolvedValue(false);
+    const res = await app.inject({ method: "GET", url: "/health" });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({
+      status: "unhealthy",
+      timestamp: expect.any(String),
+      checks: { database: { status: "unhealthy" } },
+    });
+  });
+
+  it("GET /health/live is always 200 { status: 'ok' } with zero I/O", async () => {
+    const res = await app.inject({ method: "GET", url: "/health/live" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ status: "ok" });
+  });
+
+  it("GET /health/ready reflects DB readiness (200 ready / 503 not ready), raw body", async () => {
+    pingDbMock.mockResolvedValue(true);
+    const ok = await app.inject({ method: "GET", url: "/health/ready" });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json()).toEqual({ status: "ready" });
+
+    pingDbMock.mockResolvedValue(false);
+    const down = await app.inject({ method: "GET", url: "/health/ready" });
+    expect(down.statusCode).toBe(503);
+    expect(down.json()).toEqual({ status: "not ready" });
+  });
+
+  it("echoes an incoming x-request-id header on a health probe", async () => {
+    pingDbMock.mockResolvedValue(true);
     const res = await app.inject({
       method: "GET",
       url: "/health",
       headers: { "x-request-id": "test-123" },
     });
     expect(res.headers["x-request-id"]).toBe("test-123");
-    expect(res.json().requestId).toBe("test-123");
   });
 
   it("POST /health/echo with a bad body returns a VALIDATION_ERROR envelope", async () => {

@@ -14,6 +14,7 @@ import { ErrorCodes, UserRole } from "@app/contracts";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
 import type { AuthUser } from "../../core/auth/user-cache";
+import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { UsersService } from "./users.service";
 import {
   CreateUserDto,
@@ -77,6 +78,8 @@ export class UsersController {
   @Delete(":id")
   @Auth(UserRole.SUPER_ADMIN)
   @HttpCode(204)
+  // Bare 204, no envelope (matches legacy empty-body delete).
+  @SkipEnvelope()
   async remove(
     @Param() params: UserIdParamDto,
     @CurrentUser() user: AuthUser,

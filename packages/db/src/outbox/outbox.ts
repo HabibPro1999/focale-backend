@@ -449,9 +449,12 @@ export interface OutboxHealth {
 }
 
 export async function getOutboxHealth(): Promise<OutboxHealth> {
-  const now = Date.now();
   const db = getDb();
 
+  // Ages computed in SQL (now() - col) so they never JS-parse a naive timestamp
+  // string from db.execute (which node-postgres would misread as process-local
+  // on non-UTC hosts). EXTRACT(EPOCH FROM interval) is a pure wall-clock diff,
+  // TZ-independent.
   const [countsRes, oldestPendingRes, oldestProcessingRes] = await Promise.all([
     db.execute(sql`
       SELECT "status", COUNT(*)::int AS n FROM "outbox_events"
@@ -459,12 +462,12 @@ export async function getOutboxHealth(): Promise<OutboxHealth> {
       GROUP BY "status"
     `),
     db.execute(sql`
-      SELECT MIN("created_at") AS t FROM "outbox_events"
-      WHERE "status" IN ('PENDING', 'FAILED')
+      SELECT COALESCE(EXTRACT(EPOCH FROM (now() - MIN("created_at"))) * 1000, 0)::float8 AS age
+      FROM "outbox_events" WHERE "status" IN ('PENDING', 'FAILED')
     `),
     db.execute(sql`
-      SELECT MIN(COALESCE("locked_at", "updated_at")) AS t FROM "outbox_events"
-      WHERE "status" = 'PROCESSING'
+      SELECT COALESCE(EXTRACT(EPOCH FROM (now() - MIN(COALESCE("locked_at", "updated_at")))) * 1000, 0)::float8 AS age
+      FROM "outbox_events" WHERE "status" = 'PROCESSING'
     `),
   ]);
 
@@ -477,10 +480,8 @@ export async function getOutboxHealth(): Promise<OutboxHealth> {
       counts.deadLettered = Number(row.n);
   }
 
-  const ageOf = (res: unknown): number => {
-    const t = rowsOf<{ t: string | Date | null }>(res)[0]?.t ?? null;
-    return t ? now - new Date(t).getTime() : 0;
-  };
+  const ageOf = (res: unknown): number =>
+    Math.round(Number(rowsOf<{ age: number | string }>(res)[0]?.age ?? 0));
   const oldestPendingAgeMs = ageOf(oldestPendingRes);
   const oldestProcessingAgeMs = ageOf(oldestProcessingRes);
 

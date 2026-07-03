@@ -2,9 +2,12 @@ import { getDb, type Db } from "./client";
 
 type TxnFn<T> = (tx: Parameters<Parameters<Db["transaction"]>[0]>[0]) => Promise<T>;
 
-/** pg SQLSTATEs worth retrying: serialization failure / deadlock. */
-function isRetryableTxnError(err: unknown): boolean {
-  const code = (err as { code?: unknown })?.code;
+/**
+ * True for the pg SQLSTATEs worth retrying: 40001 serialization_failure
+ * (CockroachDB "restart transaction") and 40P01 deadlock_detected.
+ */
+export function isSerializationFailure(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
   return code === "40001" || code === "40P01";
 }
 
@@ -29,7 +32,7 @@ export async function withTxnRetry<T>(
       return await fn();
     } catch (err) {
       lastError = err;
-      if (attempt >= attempts || !isRetryableTxnError(err)) throw err;
+      if (attempt >= attempts || !isSerializationFailure(err)) throw err;
       const base = 25 * 2 ** (attempt - 1);
       const delay = base + Math.random() * (base * 0.5);
       await sleep(delay);

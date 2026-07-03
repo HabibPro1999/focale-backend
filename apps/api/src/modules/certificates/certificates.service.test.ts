@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ErrorCodes } from "@app/contracts";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 
 // ---------------------------------------------------------------------------
 // Mocks — the packages/db fn layer + @app/integrations (storage / context).

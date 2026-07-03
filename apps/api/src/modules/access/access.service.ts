@@ -45,7 +45,7 @@ import {
   insertAccessAuditLog,
   enqueueTriggeredEmailOutbox,
 } from "@app/db";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 import { groupAccess } from "./access-grouping";
 import { validateSelections } from "./access-validation";
 

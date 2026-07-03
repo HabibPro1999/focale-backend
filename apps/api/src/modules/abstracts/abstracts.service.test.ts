@@ -31,7 +31,7 @@ import {
   editAbstractTxn,
 } from "@app/db";
 import { AbstractsService, countWords } from "./abstracts.service";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 import {
   abstractHtmlToText,
   sanitizeAbstractHtml,

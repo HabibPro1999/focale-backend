@@ -1,5 +1,6 @@
 import { and, count, desc, eq, ilike, or, type SQL } from "drizzle-orm";
 import { getDb, type DbExecutor } from "../client";
+import { withSerializableTxn } from "../txn";
 import { clients, users } from "../schema/users-clients";
 
 export type UserRow = typeof users.$inferSelect;
@@ -164,43 +165,6 @@ export async function getUserIdsByClient(clientId: string): Promise<string[]> {
 // Transactional delete (Serializable + retry — last-super-admin race guard)
 // ============================================================================
 
-// Retryable transaction-conflict SQLSTATEs: 40001 = serialization_failure
-// (CockroachDB "restart transaction"), 40P01 = deadlock_detected.
-// ponytail: local to identity — the only serializable path in this module.
-// Recommend extracting into a shared packages/db/src/txn.ts (withTxnRetry /
-// isSerializationFailure) when events/pricing/forms are ported.
-const RETRYABLE_SQL_STATES = new Set(["40001", "40P01"]);
-
-function isSerializationFailure(error: unknown): boolean {
-  const code = (error as { code?: unknown } | null)?.code;
-  if (typeof code === "string" && RETRYABLE_SQL_STATES.has(code)) return true;
-  const message = error instanceof Error ? error.message : "";
-  return /\b40001\b|serialization failure|restart transaction|write conflict|deadlock detected/i.test(
-    message,
-  );
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function withTxnRetry<T>(
-  fn: () => Promise<T>,
-  maxAttempts = 5,
-  baseDelayMs = 25,
-): Promise<T> {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      if (!isSerializationFailure(error) || attempt >= maxAttempts) throw error;
-      const backoff = baseDelayMs * 2 ** (attempt - 1);
-      const delay = backoff + Math.floor(Math.random() * backoff * 0.5);
-      await sleep(delay);
-    }
-  }
-}
-
 export type DeleteUserResult =
   | { ok: true; user: UserRow }
   | { ok: false; reason: "not_found" | "last_super_admin" };
@@ -212,23 +176,18 @@ export type DeleteUserResult =
  * self-delete guard lives in the service, before this is ever called.
  */
 export async function deleteUser(id: string): Promise<DeleteUserResult> {
-  return withTxnRetry(() =>
-    getDb().transaction(
-      async (tx): Promise<DeleteUserResult> => {
-        const [user] = await tx.select().from(users).where(eq(users.id, id));
-        if (!user) return { ok: false, reason: "not_found" };
+  return withSerializableTxn(async (tx): Promise<DeleteUserResult> => {
+    const [user] = await tx.select().from(users).where(eq(users.id, id));
+    if (!user) return { ok: false, reason: "not_found" };
 
-        // assertNotLastActiveSuperAdmin against { active: false }: only an
-        // active super admin can trip the guard (delete => nextActive false).
-        if (user.role === 0 && user.active) {
-          const superAdmins = await countActiveSuperAdmins(tx);
-          if (superAdmins <= 1) return { ok: false, reason: "last_super_admin" };
-        }
+    // assertNotLastActiveSuperAdmin against { active: false }: only an
+    // active super admin can trip the guard (delete => nextActive false).
+    if (user.role === 0 && user.active) {
+      const superAdmins = await countActiveSuperAdmins(tx);
+      if (superAdmins <= 1) return { ok: false, reason: "last_super_admin" };
+    }
 
-        await tx.delete(users).where(eq(users.id, id));
-        return { ok: true, user };
-      },
-      { isolationLevel: "serializable" },
-    ),
-  );
+    await tx.delete(users).where(eq(users.id, id));
+    return { ok: true, user };
+  });
 }

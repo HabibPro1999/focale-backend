@@ -20,7 +20,7 @@ import {
   type AbstractConfigRow,
   type AbstractThemeRow,
 } from "@app/db";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 
 const SCALAR_FIELDS = [
   "submissionMode",

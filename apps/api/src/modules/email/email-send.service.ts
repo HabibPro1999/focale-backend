@@ -26,7 +26,7 @@ import {
   compileMjmlToHtml,
   extractPlainText,
 } from "@app/integrations";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 
 /** Minimal event shape the send paths need (subset of EventWithPricing). */
 export interface SendEventContext {

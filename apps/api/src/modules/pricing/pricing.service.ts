@@ -32,7 +32,7 @@ import {
   evaluateConditions,
   newId,
 } from "@app/shared";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 import { assertEventWritable, assertModuleEnabledForClient } from "./gates";
 
 // Transaction-scoped write path shared by base-pricing PATCH and rule mutations.

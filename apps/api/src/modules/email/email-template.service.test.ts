@@ -26,7 +26,7 @@ import {
   listEventEmailLogs,
 } from "@app/db";
 import { EmailTemplateService } from "./email-template.service";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 
 const service = new EmailTemplateService();
 const content = { type: "doc" as const, content: [] };

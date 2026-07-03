@@ -2,7 +2,7 @@ import { Body, Controller, HttpCode, Param, Post } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
 import { ErrorCodes, type PriceBreakdown } from "@app/contracts";
 import { sanitizeFormData, validateFormData } from "@app/shared";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 import { assertEventAcceptsPublicActions, isModuleEnabledForClient } from "./gates";
 import { PricingService } from "./pricing.service";
 import { CalculatePriceRequestDto, FormIdParamDto } from "./pricing.dto";

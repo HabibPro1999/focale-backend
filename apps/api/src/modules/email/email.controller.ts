@@ -20,7 +20,7 @@ import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
 import { assertEventWritable } from "../events/events.service";
 import { assertClientModuleEnabled } from "../clients/module-gates";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 import { EmailTemplateService } from "./email-template.service";
 import { EmailSendService } from "./email-send.service";
 import {

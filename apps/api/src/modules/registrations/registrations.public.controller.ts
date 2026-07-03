@@ -14,7 +14,7 @@ import {
 import { Throttle } from "@nestjs/throttler";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { ErrorCodes } from "@app/contracts";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 import { RegistrationsService } from "./registrations.service";
 import {
   CreateRegistrationBodyDto,

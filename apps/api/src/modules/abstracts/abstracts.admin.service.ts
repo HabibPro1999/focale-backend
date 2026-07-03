@@ -14,7 +14,7 @@ import {
   type AdminReviewRow,
 } from "@app/db";
 import { getStorageProvider } from "@app/integrations";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 
 const ALREADY_FINALIZED_MSG =
   "Abstract is already finalized; reopen before changing the decision";

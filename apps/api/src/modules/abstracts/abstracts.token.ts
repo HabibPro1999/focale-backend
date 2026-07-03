@@ -1,7 +1,7 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { FastifyRequest } from "fastify";
 import { ErrorCodes } from "@app/contracts";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 
 const TOKEN_LENGTH = 32; // 64 hex characters
 

@@ -48,7 +48,7 @@ import { assertClientModuleEnabled } from "../clients/module-gates";
 import { UsersService } from "../identity/users.service";
 import { CONFIG, type Config } from "../../core/config";
 import { logger } from "../../core/logger.service";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 
 type UserRow = NonNullable<Awaited<ReturnType<typeof getUserById>>>;
 

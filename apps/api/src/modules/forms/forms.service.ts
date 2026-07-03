@@ -36,7 +36,7 @@ import {
 } from "@app/db";
 import { newId, paginate, getSkip, type PaginatedResult } from "@app/shared";
 import { logger } from "../../core/logger.service";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 
 // ============================================================================
 // Default schema generators (pure)

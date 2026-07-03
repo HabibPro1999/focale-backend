@@ -21,7 +21,7 @@ import {
   markAbstractPresentedTxn,
 } from "@app/db";
 import { AbstractsAdminService } from "./abstracts.admin.service";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 
 const mock = <T>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
 const eventId = "event-1";

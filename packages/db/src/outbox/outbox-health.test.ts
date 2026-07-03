@@ -28,10 +28,13 @@ function stub(opts: {
     status,
     n,
   }));
+  // Ages are now computed in SQL (EXTRACT(EPOCH ...)); the mock returns the
+  // pre-computed age in ms that the query would yield for the fixture instant.
+  const ageMs = (t: Date | null) => (t ? Date.now() - t.getTime() : 0);
   dbMock.execute
     .mockResolvedValueOnce({ rows: countRows })
-    .mockResolvedValueOnce({ rows: [{ t: opts.pendingT }] })
-    .mockResolvedValueOnce({ rows: [{ t: opts.processingT }] });
+    .mockResolvedValueOnce({ rows: [{ age: ageMs(opts.pendingT) }] })
+    .mockResolvedValueOnce({ rows: [{ age: ageMs(opts.processingT) }] });
 }
 
 describe("getOutboxHealth thresholds", () => {

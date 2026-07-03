@@ -27,7 +27,7 @@ import {
   withSerializableTxn,
 } from "@app/db";
 import { PricingService } from "./pricing.service";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 
 const eventId = "event-123";
 const service = new PricingService();

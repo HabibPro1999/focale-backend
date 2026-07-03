@@ -17,7 +17,7 @@ import {
   getAbstractBookJob,
 } from "@app/db";
 import { AbstractsBookService } from "./abstracts.book.service";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 
 const mock = <T>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
 const eventId = "event-1";

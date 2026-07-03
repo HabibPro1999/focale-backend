@@ -26,7 +26,7 @@ import {
   extractPlainText,
 } from "@app/integrations";
 import { paginate, getSkip, type PaginatedResult } from "@app/shared";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 
 interface TemplateTriggerState {
   category: EmailTemplateCategory;

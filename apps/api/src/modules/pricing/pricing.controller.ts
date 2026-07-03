@@ -13,7 +13,7 @@ import type { PricingEventOwnership } from "@app/db";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 import { assertEventWritable, canAccessClient } from "./gates";
 import { PricingService } from "./pricing.service";
 import {

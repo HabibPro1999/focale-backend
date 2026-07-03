@@ -64,7 +64,7 @@ import {
   assertEventWritable,
 } from "../events";
 import { assertModuleEnabledForClient } from "../clients/module-gates";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 import {
   calculateTotalSponsorshipAmount,
   detectCoverageOverlap,

@@ -7,7 +7,7 @@ import {
   type AbstractBookJobRow,
 } from "@app/db";
 import { getStorageProvider } from "@app/integrations";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 
 const SIGNED_URL_TTL_SECONDS = 60 * 60;
 

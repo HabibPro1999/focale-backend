@@ -80,7 +80,7 @@ import {
   revokeFirebaseRefreshTokens,
 } from "@app/integrations";
 import { AbstractsCommitteeService } from "./abstracts.committee.service";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 
 const mock = <T>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
 

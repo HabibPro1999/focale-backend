@@ -7,7 +7,7 @@ import {
   FormsService,
   createDefaultSponsorSchema,
 } from "./forms.service";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 
 // ---------------------------------------------------------------------------
 // Compile-time contract: the @app/contracts zod-derived FormField/FormStep must

@@ -2617,17 +2617,18 @@ export async function getAbstractBookQueueHealth(): Promise<AbstractBookQueueHea
       )!,
     ),
     countWhere(eq(abstractBookJobs.status, "FAILED")),
+    // Age computed in SQL (now() - MIN(col)) — never JS-parse a naive timestamp
+    // read from the DB, which skews by the host offset on non-UTC hosts.
+    // Mirrors getOutboxHealth. MIN over an empty set → NULL → 0.
     db
-      .select({ createdAt: abstractBookJobs.createdAt })
+      .select({
+        age: sql<number>`coalesce(extract(epoch from (now() - min(${abstractBookJobs.createdAt}))) * 1000, 0)::float8`,
+      })
       .from(abstractBookJobs)
-      .where(eq(abstractBookJobs.status, "PENDING"))
-      .orderBy(asc(abstractBookJobs.createdAt))
-      .limit(1),
+      .where(eq(abstractBookJobs.status, "PENDING")),
   ]);
 
-  const oldestPendingAgeMs = oldestPending[0]?.createdAt
-    ? now.getTime() - oldestPending[0].createdAt.getTime()
-    : 0;
+  const oldestPendingAgeMs = Math.round(Number(oldestPending[0]?.age ?? 0));
 
   const isHealthy =
     staleRunningCount === 0 &&

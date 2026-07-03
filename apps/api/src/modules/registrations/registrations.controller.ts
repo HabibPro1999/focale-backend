@@ -21,7 +21,7 @@ import { CurrentUser } from "../../core/auth/current-user.decorator";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { canAccessClient, assertEventWritable, type AuthUser } from "../events";
 import { assertClientModuleEnabled } from "../clients/module-gates";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 import { RegistrationsService, extractKeyFromUrl } from "./registrations.service";
 import {
   AdminCreateRegistrationDto,

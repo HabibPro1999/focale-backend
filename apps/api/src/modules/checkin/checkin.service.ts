@@ -15,7 +15,7 @@ import {
   getRegistrationForCheckIn,
   type CheckInRegistration,
 } from "@app/db";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 
 const ELIGIBLE = new Set<string>(CHECKIN_ELIGIBLE_STATUSES);
 

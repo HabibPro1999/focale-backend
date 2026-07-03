@@ -85,7 +85,7 @@ import {
   isModuleEnabledForClient,
   type ClientModuleState,
 } from "../clients/module-gates";
-import { AppException } from "./app-exception";
+import { AppException } from "../../core/app-exception";
 import { validatePaymentTransition } from "./payment-transitions";
 import { getRegistrationTableColumns } from "./table-columns";
 import {

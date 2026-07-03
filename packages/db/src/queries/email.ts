@@ -1197,28 +1197,25 @@ export async function getEmailQueueHealth(): Promise<EmailQueueHealth> {
         gte(emailLogs.updatedAt, new Date(Date.now() - 24 * 60 * 60 * 1000)),
       )!,
     ),
+    // Ages computed in SQL (now() - MIN(col)) — never JS-parse a naive
+    // timestamp read from the DB, which skews by the host offset on non-UTC
+    // hosts. Mirrors getOutboxHealth. MIN over an empty set → NULL → 0.
     db
-      .select({ queuedAt: emailLogs.queuedAt })
+      .select({
+        age: sql<number>`coalesce(extract(epoch from (now() - min(${emailLogs.queuedAt}))) * 1000, 0)::float8`,
+      })
       .from(emailLogs)
-      .where(eq(emailLogs.status, "QUEUED"))
-      .orderBy(asc(emailLogs.queuedAt))
-      .limit(1),
+      .where(eq(emailLogs.status, "QUEUED")),
     db
-      .select({ lockedAt: emailLogs.lockedAt, updatedAt: emailLogs.updatedAt })
+      .select({
+        age: sql<number>`coalesce(extract(epoch from (now() - min(coalesce(${emailLogs.lockedAt}, ${emailLogs.updatedAt})))) * 1000, 0)::float8`,
+      })
       .from(emailLogs)
-      .where(eq(emailLogs.status, "SENDING"))
-      .orderBy(asc(emailLogs.lockedAt))
-      .limit(1),
+      .where(eq(emailLogs.status, "SENDING")),
   ]);
 
-  const oldestQueuedAgeMs = oldestQueued[0]?.queuedAt
-    ? now.getTime() - oldestQueued[0].queuedAt.getTime()
-    : 0;
-  const oldestInFlightAt =
-    oldestInFlight[0]?.lockedAt ?? oldestInFlight[0]?.updatedAt;
-  const oldestInFlightAgeMs = oldestInFlightAt
-    ? now.getTime() - oldestInFlightAt.getTime()
-    : 0;
+  const oldestQueuedAgeMs = Math.round(Number(oldestQueued[0]?.age ?? 0));
+  const oldestInFlightAgeMs = Math.round(Number(oldestInFlight[0]?.age ?? 0));
 
   const isHealthy =
     staleSendingCount === 0 &&
