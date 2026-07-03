@@ -1,1 +1,436 @@
-export {};
+import { z } from "zod";
+import { AccessSelectionSchema } from "./access";
+import { EmailStatusSchema } from "./email";
+
+// ============================================================================
+// Enums
+// ============================================================================
+
+export const PaymentStatusSchema = z.enum([
+  "PENDING",
+  "VERIFYING",
+  "PARTIAL",
+  "PAID",
+  "SPONSORED",
+  "WAIVED",
+  "REFUNDED",
+]);
+
+export const TransactionTypeSchema = z.enum([
+  "PAYMENT",
+  "REFUND",
+  "WAIVER",
+  "ADJUSTMENT",
+]);
+
+export const PaymentMethodSchema = z.enum([
+  "BANK_TRANSFER",
+  "ONLINE",
+  "CASH",
+  "LAB_SPONSORSHIP",
+]);
+
+export const RegistrationRoleSchema = z.enum([
+  "PARTICIPANT",
+  "SPEAKER",
+  "MODERATOR",
+  "ORGANIZER",
+  "INVITED",
+]);
+
+// ============================================================================
+// Shared Validation
+// ============================================================================
+
+const requireLabName = (data: { paymentMethod?: string; labName?: string }) =>
+  data.paymentMethod !== "LAB_SPONSORSHIP" || Boolean(data.labName);
+
+const labNameRefinement = {
+  message: "Lab name is required when payment method is LAB_SPONSORSHIP",
+  path: ["labName"],
+};
+
+const PaymentProofLocationSchema = z.string().min(1).max(2048);
+
+// ============================================================================
+// Create Registration Schema (Public - for form submission)
+// ============================================================================
+
+// Base object kept separate so `.omit()` (below) can run — zod4 forbids .omit()
+// on a schema that already carries a `.refine()`.
+const CreateRegistrationObject = z.strictObject({
+  formId: z.string().uuid(),
+  formData: z.record(z.string(), z.any()),
+
+  // Registrant info (extracted from formData for quick access)
+  email: z.string().email(),
+  firstName: z.string().max(100).optional(),
+  lastName: z.string().max(100).optional(),
+  phone: z.string().max(50).optional(),
+
+  // Access selections
+  accessSelections: z.array(AccessSelectionSchema).optional().default([]),
+
+  // Sponsorship
+  sponsorshipCode: z.string().max(50).optional(),
+
+  // Payment method selection
+  paymentMethod: PaymentMethodSchema.optional(),
+
+  // Lab sponsorship (when sponsorship module is disabled)
+  labName: z.string().max(200).optional(),
+
+  // Idempotency key for safe retries (prevents duplicate registrations)
+  idempotencyKey: z.string().uuid().optional(),
+
+  // Browser origin URL for email links (e.g., "https://summit.events.domain.com")
+  linkBaseUrl: z.string().url().optional(),
+});
+
+export const CreateRegistrationSchema = CreateRegistrationObject.refine(
+  requireLabName,
+  labNameRefinement,
+);
+
+// Public create body — formId is added back from the route param before use.
+export const CreateRegistrationBodySchema = CreateRegistrationObject.omit({
+  formId: true,
+}).refine(requireLabName, labNameRefinement);
+
+// ============================================================================
+// Select Payment Method Schema (Public - from payment page)
+// ============================================================================
+
+export const SelectPaymentMethodSchema = z
+  .strictObject({
+    paymentMethod: z.enum(["CASH", "LAB_SPONSORSHIP"]),
+    labName: z.string().max(200).optional(),
+  })
+  .refine(requireLabName, labNameRefinement);
+
+export type SelectPaymentMethodInput = z.infer<typeof SelectPaymentMethodSchema>;
+
+// ============================================================================
+// Update Registration Schema (Admin)
+// ============================================================================
+
+export const UpdatePaymentSchema = z.strictObject({
+  paymentStatus: PaymentStatusSchema,
+  paidAmount: z.number().int().min(0).optional(),
+  paymentMethod: PaymentMethodSchema.optional(),
+  paymentReference: z.string().max(200).optional(),
+  paymentProofUrl: PaymentProofLocationSchema.optional(),
+});
+
+export const UpdateRegistrationSchema = z.strictObject({
+  paymentStatus: PaymentStatusSchema.optional(),
+  paidAmount: z.number().int().min(0).optional(),
+  paymentMethod: PaymentMethodSchema.optional(),
+  paymentReference: z.string().max(200).optional(),
+  paymentProofUrl: PaymentProofLocationSchema.optional(),
+  note: z.string().max(2000).nullable().optional(),
+  role: RegistrationRoleSchema.optional(),
+});
+
+// ============================================================================
+// Admin Create Registration Schema
+// ============================================================================
+
+export const AdminCreateRegistrationSchema = z
+  .strictObject({
+    email: z.string().email(),
+    firstName: z.string().min(1).max(100),
+    lastName: z.string().min(1).max(100),
+    phone: z.string().max(50).optional(),
+    formData: z.record(z.string(), z.any()).optional().default({}),
+    role: RegistrationRoleSchema.default("PARTICIPANT"),
+    accessSelections: z.array(AccessSelectionSchema).optional().default([]),
+    paymentMethod: PaymentMethodSchema.optional(),
+    paymentStatus: PaymentStatusSchema.optional(),
+    labName: z.string().max(200).optional(),
+    sendEmail: z.boolean().optional().default(false),
+  })
+  .refine(requireLabName, labNameRefinement);
+
+// ============================================================================
+// Admin Edit Registration Schema (Full override — no restrictions)
+// ============================================================================
+
+export const AdminEditRegistrationSchema = z
+  .strictObject({
+    email: z.string().email().optional(),
+    firstName: z.string().max(100).optional(),
+    lastName: z.string().max(100).optional(),
+    phone: z.string().max(50).nullable().optional(),
+    formData: z.record(z.string(), z.any()).optional(),
+    role: RegistrationRoleSchema.optional(),
+    accessSelections: z.array(AccessSelectionSchema).optional(),
+    paymentStatus: PaymentStatusSchema.optional(),
+    paidAmount: z.number().int().min(0).optional(),
+    paymentMethod: PaymentMethodSchema.nullable().optional(),
+    paymentReference: z.string().max(200).nullable().optional(),
+    paymentProofUrl: PaymentProofLocationSchema.nullable().optional(),
+    note: z.string().max(2000).nullable().optional(),
+    labName: z.string().max(200).nullable().optional(),
+  })
+  .refine((data) => Object.values(data).some((v) => v !== undefined), {
+    message: "At least one field must be provided for update",
+  });
+
+// ============================================================================
+// Query Schemas
+// ============================================================================
+
+export const ListRegistrationsQuerySchema = z.strictObject({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  paymentStatus: PaymentStatusSchema.optional(),
+  paymentMethod: PaymentMethodSchema.optional(),
+  role: RegistrationRoleSchema.optional(),
+  search: z.string().max(200).optional(),
+});
+
+export const DeleteRegistrationQuerySchema = z.strictObject({
+  force: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+});
+
+// NOTE: EventIdParamSchema / FormIdParamSchema / RegistrationIdParamSchema
+// already live in the events/forms/sponsorships contracts — reused there rather
+// than re-declared here (barrel is `export *`, so duplicates would be ambiguous).
+
+export const EventRegistrationIdParamSchema = z.strictObject({
+  eventId: z.string().uuid(),
+  id: z.string().uuid(),
+});
+
+// ============================================================================
+// Public Edit Registration Schema (Self-Service)
+// ============================================================================
+
+export const PublicEditRegistrationSchema = z
+  .strictObject({
+    // Optimistic edit precondition from GET-for-edit registration.updatedAt
+    expectedUpdatedAt: z.string().datetime(),
+
+    // Form data updates (partial - only changed fields)
+    formData: z.record(z.string(), z.any()).optional(),
+
+    // Contact info updates
+    firstName: z.string().max(100).optional(),
+    lastName: z.string().max(100).optional(),
+    phone: z.string().max(50).optional(),
+    // Note: email cannot be changed (it's the unique identifier)
+
+    // Access selections (full replacement of current selections)
+    accessSelections: z.array(AccessSelectionSchema).optional(),
+  })
+  .refine(
+    (data) =>
+      data.formData !== undefined ||
+      data.firstName !== undefined ||
+      data.lastName !== undefined ||
+      data.phone !== undefined ||
+      data.accessSelections !== undefined,
+    { message: "At least one field must be provided for update" },
+  );
+
+export const RegistrationIdPublicParamSchema = z.strictObject({
+  registrationId: z.string().uuid(),
+});
+
+// 64-char hex edit token supplied via ?token= or X-Edit-Token header.
+export const EditTokenQuerySchema = z.strictObject({
+  token: z.string().length(64).optional(),
+});
+
+// ============================================================================
+// Table Column Schemas (for dynamic table rendering)
+// ============================================================================
+
+export const TableColumnTypeSchema = z.enum([
+  "text",
+  "email",
+  "phone",
+  "number",
+  "date",
+  "datetime",
+  "dropdown",
+  "radio",
+  "checkbox",
+  "currency",
+  "status",
+  "payment",
+  "file",
+  "textarea",
+]);
+
+export const TableColumnOptionSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+});
+
+export const TableColumnSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  type: TableColumnTypeSchema,
+  options: z.array(TableColumnOptionSchema).optional(),
+});
+
+export const RegistrationColumnsResponseSchema = z.object({
+  formColumns: z.array(TableColumnSchema),
+  fixedColumns: z.array(TableColumnSchema),
+});
+
+// ============================================================================
+// Types
+// ============================================================================
+
+export type PaymentStatus = z.infer<typeof PaymentStatusSchema>;
+export type PaymentMethod = z.infer<typeof PaymentMethodSchema>;
+export type CreateRegistrationInput = z.infer<typeof CreateRegistrationSchema>;
+export type UpdateRegistrationInput = z.infer<typeof UpdateRegistrationSchema>;
+export type UpdatePaymentInput = z.infer<typeof UpdatePaymentSchema>;
+
+// ============================================================================
+// Registration Stats (returned alongside list)
+// ============================================================================
+
+export interface RegistrationStats {
+  total: number;
+  totalAmount: number;
+  paid: { count: number; amount: number };
+  pending: { count: number; amount: number };
+  sponsored: { count: number; amount: number };
+}
+
+export type ListRegistrationsQuery = z.infer<typeof ListRegistrationsQuerySchema>;
+export type DeleteRegistrationQuery = z.infer<
+  typeof DeleteRegistrationQuerySchema
+>;
+export type PublicEditRegistrationInput = z.infer<
+  typeof PublicEditRegistrationSchema
+>;
+export type TableColumnType = z.infer<typeof TableColumnTypeSchema>;
+export type TableColumnOption = z.infer<typeof TableColumnOptionSchema>;
+export type TableColumn = z.infer<typeof TableColumnSchema>;
+export type RegistrationColumnsResponse = z.infer<
+  typeof RegistrationColumnsResponseSchema
+>;
+
+// ============================================================================
+// Audit Log Schemas
+// ============================================================================
+
+export const ListRegistrationAuditLogsQuerySchema = z.strictObject({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+
+export const AuditActionSchema = z.enum([
+  "CREATE",
+  "UPDATE",
+  "DELETE",
+  "PAYMENT_CONFIRMED",
+  "PAYMENT_PROOF_UPLOADED",
+  "PAYMENT_METHOD_SELECTED",
+  "ACCESS_CAPACITY_REACHED",
+]);
+
+export const RegistrationAuditLogSchema = z.object({
+  id: z.string(),
+  action: AuditActionSchema,
+  changes: z
+    .record(
+      z.string(),
+      z.object({ old: z.unknown().nullable(), new: z.unknown().nullable() }),
+    )
+    .nullable(),
+  performedBy: z.string().nullable(),
+  performedByName: z.string().nullable(),
+  performedAt: z.string(),
+  ipAddress: z.string().nullable(),
+});
+
+export type ListRegistrationAuditLogsQuery = z.infer<
+  typeof ListRegistrationAuditLogsQuerySchema
+>;
+export type AuditAction = z.infer<typeof AuditActionSchema>;
+export type RegistrationAuditLog = z.infer<typeof RegistrationAuditLogSchema>;
+
+// ============================================================================
+// Email Log Schemas
+// ============================================================================
+
+export const ListRegistrationEmailLogsQuerySchema = z.strictObject({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+
+// Registration email logs only ever carry these three triggers (or null).
+// `EmailStatusSchema` is reused from the email contract (single source).
+const RegistrationEmailTriggerSchema = z
+  .enum(["REGISTRATION_CREATED", "PAYMENT_PROOF_SUBMITTED", "PAYMENT_CONFIRMED"])
+  .nullable();
+
+export const RegistrationEmailLogSchema = z.object({
+  id: z.string(),
+  subject: z.string(),
+  status: EmailStatusSchema,
+  trigger: RegistrationEmailTriggerSchema,
+  templateName: z.string().nullable(),
+  errorMessage: z.string().nullable(),
+  queuedAt: z.string(),
+  sentAt: z.string().nullable(),
+  deliveredAt: z.string().nullable(),
+  openedAt: z.string().nullable(),
+  clickedAt: z.string().nullable(),
+  bouncedAt: z.string().nullable(),
+  failedAt: z.string().nullable(),
+});
+
+export type ListRegistrationEmailLogsQuery = z.infer<
+  typeof ListRegistrationEmailLogsQuerySchema
+>;
+export type RegistrationEmailLog = z.infer<typeof RegistrationEmailLogSchema>;
+
+// ============================================================================
+// Registrant Search Schemas (for Linked Account Sponsorship)
+// ============================================================================
+
+export const SearchRegistrantsQuerySchema = z.strictObject({
+  query: z.string().min(1).max(200),
+  unpaidOnly: z.coerce.boolean().optional().default(false),
+  limit: z.coerce.number().int().min(1).max(50).default(10),
+});
+
+export const RegistrantSearchResultSchema = z.object({
+  id: z.string().uuid(),
+  email: z.string(),
+  firstName: z.string().nullable(),
+  lastName: z.string().nullable(),
+  paymentStatus: PaymentStatusSchema,
+  totalAmount: z.number(),
+  baseAmount: z.number(),
+  sponsorshipAmount: z.number(),
+  accessTypeIds: z.array(z.string()),
+  coveredAccessIds: z.array(z.string()),
+  isBasePriceCovered: z.boolean(),
+  phone: z.string().nullable(),
+  formData: z.record(z.string(), z.unknown()).nullable(),
+});
+
+export type SearchRegistrantsQuery = z.infer<typeof SearchRegistrantsQuerySchema>;
+export type RegistrantSearchResult = z.infer<
+  typeof RegistrantSearchResultSchema
+>;
+
+export type RegistrationRole = z.infer<typeof RegistrationRoleSchema>;
+export type AdminCreateRegistrationInput = z.infer<
+  typeof AdminCreateRegistrationSchema
+>;
+export type AdminEditRegistrationInput = z.infer<
+  typeof AdminEditRegistrationSchema
+>;

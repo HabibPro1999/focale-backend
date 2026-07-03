@@ -1,0 +1,718 @@
+import { randomUUID } from "node:crypto";
+import { Inject, Injectable } from "@nestjs/common";
+import {
+  ErrorCodes,
+  UserRole,
+  FINAL_STATUSES,
+  type AddCommitteeMemberInput,
+  type AssignReviewersInput,
+  type ReviewAbstractInput,
+  type SetReviewerThemesInput,
+} from "@app/contracts";
+import {
+  findAbstractMembership,
+  findEventClientId,
+  findEventName,
+  listActiveReviewerThemeIds,
+  listCommitteeMembers,
+  getCommitteeProfile,
+  upsertCommitteeMembership,
+  deactivateCommitteeMembershipTxn,
+  getActiveThemeIdsForEvent,
+  setReviewerThemesTxn,
+  findCommitteeInviteTarget,
+  findAbstractBasic,
+  getCommitteeConfig,
+  findScoredReviewScores,
+  findActiveMembershipUserIds,
+  assignReviewersTxn,
+  listAssignedAbstracts,
+  getAssignedAbstractRow,
+  findAbstractForReview,
+  reviewAbstractTxn,
+  writeAbstractAuditLog,
+  getUserByEmail,
+  getUserById,
+  type ReviewerAbstractRow,
+  type AbstractReviewRow,
+} from "@app/db";
+import {
+  generatePasswordResetLink,
+  updateFirebaseUserPassword,
+  revokeFirebaseRefreshTokens,
+  getEmailProvider,
+  compileMjmlToHtml,
+} from "@app/integrations";
+import { escapeHtml } from "@app/shared";
+import { assertClientModuleEnabled } from "../clients/module-gates";
+import { UsersService } from "../identity/users.service";
+import { CONFIG, type Config } from "../../core/config";
+import { logger } from "../../core/logger.service";
+import { AppException } from "./app-exception";
+
+type UserRow = NonNullable<Awaited<ReturnType<typeof getUserById>>>;
+
+function getTitle(content: unknown): string {
+  if (content && typeof content === "object" && !Array.isArray(content)) {
+    const title = (content as { title?: unknown }).title;
+    if (typeof title === "string") return title;
+  }
+  return "Untitled abstract";
+}
+
+function ownReviewOf(reviews: AbstractReviewRow[], reviewerId: string) {
+  const own = reviews.find((r) => r.reviewerId === reviewerId);
+  return own
+    ? { score: own.score, comment: own.comment, scoredAt: own.scoredAt }
+    : null;
+}
+
+/** List DTO: NO author PII, averageScore ALWAYS null (reviewers see only their own). */
+function anonymizeAbstractListItem(
+  abstract: ReviewerAbstractRow,
+  reviewerId: string,
+) {
+  return {
+    id: abstract.id,
+    status: abstract.status,
+    title: getTitle(abstract.content),
+    requestedType: abstract.requestedType,
+    finalType: abstract.finalType,
+    themeLabels: abstract.themes.map((t) => t.label),
+    averageScore: null,
+    reviewCount: abstract.reviewCount,
+    ownReview: ownReviewOf(abstract.reviews, reviewerId),
+  };
+}
+
+function anonymizeAbstractDetail(
+  abstract: ReviewerAbstractRow,
+  reviewerId: string,
+) {
+  return {
+    id: abstract.id,
+    eventId: abstract.eventId,
+    status: abstract.status,
+    requestedType: abstract.requestedType,
+    finalType: abstract.finalType,
+    content: abstract.content,
+    contentVersion: abstract.contentVersion,
+    themeLabels: abstract.themes.map((t) => t.label),
+    averageScore: null,
+    reviewCount: abstract.reviewCount,
+    createdAt: abstract.createdAt,
+    updatedAt: abstract.updatedAt,
+    lastEditedAt: abstract.lastEditedAt,
+    ownReview: ownReviewOf(abstract.reviews, reviewerId),
+  };
+}
+
+function hasReviewerThemeCoverage(
+  themes: { id: string }[],
+  reviewerThemeIds: string[],
+): boolean {
+  if (reviewerThemeIds.length === 0) return false;
+  const covered = new Set(reviewerThemeIds);
+  return themes.some((t) => covered.has(t.id));
+}
+
+function generateThrowawayPassword(): string {
+  // Throwaway to satisfy Firebase's password policy — the user immediately
+  // overwrites it via the reset link in the invite email.
+  return `${randomUUID()}A!${randomUUID()}`;
+}
+
+const EVENT_NAME_TOKEN = "{eventName}";
+
+@Injectable()
+export class AbstractsCommitteeService {
+  constructor(
+    private readonly users: UsersService,
+    @Inject(CONFIG) private readonly config: Config,
+  ) {}
+
+  // ==========================================================================
+  // Membership guards
+  // ==========================================================================
+  private async assertActiveMembership(
+    eventId: string,
+    userId: string,
+  ): Promise<void> {
+    const membership = await findAbstractMembership(eventId, userId);
+    if (!membership?.active) {
+      throw new AppException(
+        ErrorCodes.FORBIDDEN,
+        "Active committee membership required",
+        403,
+      );
+    }
+    const event = await findEventClientId(eventId);
+    if (!event) {
+      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+    }
+    await assertClientModuleEnabled(event.clientId, "abstracts");
+  }
+
+  /** Stricter cousin for admin password ops: 404 (not 403) when not an active member. */
+  private async assertCommitteeMemberExists(
+    eventId: string,
+    userId: string,
+  ): Promise<void> {
+    const membership = await findAbstractMembership(eventId, userId);
+    if (!membership?.active) {
+      throw new AppException(
+        ErrorCodes.NOT_FOUND,
+        "Committee member not found",
+        404,
+      );
+    }
+  }
+
+  // ==========================================================================
+  // Committee member listing
+  // ==========================================================================
+  listCommitteeMembers(eventId: string) {
+    return listCommitteeMembers(eventId);
+  }
+
+  // ==========================================================================
+  // Add committee member (reuse-by-email / create-by-email / by-userId)
+  // ==========================================================================
+  private assertCommitteeUserEligible(user: UserRow): void {
+    if (
+      user.role === UserRole.SUPER_ADMIN ||
+      user.role === UserRole.CLIENT_ADMIN
+    ) {
+      throw new AppException(
+        ErrorCodes.VALIDATION_ERROR,
+        "This email belongs to an admin account. Admin accounts cannot be added as scientific committee members.",
+        400,
+      );
+    }
+    if (user.role !== UserRole.SCIENTIFIC_COMMITTEE) {
+      throw new AppException(
+        ErrorCodes.VALIDATION_ERROR,
+        "This email does not belong to a scientific committee account.",
+        400,
+      );
+    }
+    if (!user.active) {
+      throw new AppException(
+        ErrorCodes.VALIDATION_ERROR,
+        "This email belongs to an inactive scientific committee account. Reactivate the account before adding it to an event.",
+        400,
+      );
+    }
+    if (user.clientId !== null) {
+      throw new AppException(
+        ErrorCodes.VALIDATION_ERROR,
+        "This email belongs to a client-scoped account. Only unscoped scientific committee accounts can be added as committee members.",
+        400,
+      );
+    }
+  }
+
+  async addCommitteeMember(
+    eventId: string,
+    body: AddCommitteeMemberInput,
+    performedBy: string,
+  ) {
+    let existingUserAdded = false;
+    let user: UserRow | undefined;
+
+    if ("userId" in body) {
+      user = await getUserById(body.userId);
+    } else {
+      const existing = await getUserByEmail(body.email);
+      if (existing) {
+        user = existing;
+        existingUserAdded = true;
+      } else {
+        user = await this.users.createUser({
+          email: body.email,
+          name: body.name,
+          password: generateThrowawayPassword(),
+          role: UserRole.SCIENTIFIC_COMMITTEE,
+          clientId: null,
+        });
+      }
+    }
+
+    if (!user) {
+      throw new AppException(ErrorCodes.NOT_FOUND, "User not found", 404);
+    }
+    this.assertCommitteeUserEligible(user);
+
+    await upsertCommitteeMembership(eventId, user.id);
+    await writeAbstractAuditLog({
+      entityType: "AbstractCommitteeMembership",
+      entityId: `${eventId}:${user.id}`,
+      action: "upsert",
+      changes: { active: { old: null, new: true } },
+      performedBy,
+    });
+
+    const eventName = (await findEventName(eventId)) ?? "the event";
+    // Best-effort: invite delivery failure is reported, never rolls back membership.
+    const inviteEmailSent = await this.sendInviteBestEffort(
+      user.email,
+      user.name,
+      eventName,
+      { userId: user.id, eventId },
+    );
+
+    const member = (await listCommitteeMembers(eventId)).find(
+      (m) => m.userId === user!.id,
+    ) ?? {
+      userId: user.id,
+      email: user.email,
+      name: user.name,
+      active: true,
+      themeIds: [] as string[],
+      assignedCount: 0,
+      scoredCount: 0,
+    };
+
+    return {
+      ...member,
+      inviteEmailSent,
+      ...(existingUserAdded ? { existingUserAdded } : {}),
+    };
+  }
+
+  private async sendInviteBestEffort(
+    email: string,
+    name: string,
+    eventName: string,
+    ctx: { userId: string; eventId: string },
+  ): Promise<boolean> {
+    try {
+      const link = await generatePasswordResetLink(
+        email,
+        this.buildPasswordResetActionCodeSettings(),
+      );
+      return await this.sendCommitteeMjmlEmail({
+        to: email,
+        toName: name,
+        subject: `Invitation au comité scientifique - ${eventName}`,
+        headline: "Bienvenue au comité scientifique",
+        intro:
+          "Vous êtes invité(e) à rejoindre le comité scientifique de {eventName} sur Focale. Pour activer votre compte, choisissez un mot de passe avec le lien sécurisé ci-dessous :",
+        ctaText: "Définir mon mot de passe",
+        link,
+        eventName,
+        category: "committee-invite",
+        footnote:
+          "Si vous n'attendiez pas cette invitation, vous pouvez ignorer cet email.",
+        logContext: "Failed to send committee invitation email",
+      });
+    } catch (err) {
+      logger.error(
+        { err, ...ctx },
+        "Committee invite email threw while sending",
+      );
+      return false;
+    }
+  }
+
+  // ==========================================================================
+  // Remove committee member
+  // ==========================================================================
+  async removeCommitteeMember(
+    eventId: string,
+    userId: string,
+    performedBy: string,
+  ): Promise<void> {
+    await this.assertActiveMembership(eventId, userId);
+    await deactivateCommitteeMembershipTxn(eventId, userId);
+    await writeAbstractAuditLog({
+      entityType: "AbstractCommitteeMembership",
+      entityId: `${eventId}:${userId}`,
+      action: "deactivate",
+      changes: { active: { old: true, new: false } },
+      performedBy,
+    });
+  }
+
+  // ==========================================================================
+  // Set reviewer themes (replace active set)
+  // ==========================================================================
+  async setReviewerThemes(
+    eventId: string,
+    userId: string,
+    body: SetReviewerThemesInput,
+    performedBy: string,
+  ) {
+    await this.assertActiveMembership(eventId, userId);
+    const uniqueThemeIds = [...new Set(body.themeIds)];
+    const activeThemeIds = await getActiveThemeIdsForEvent(eventId);
+    if (activeThemeIds === null) {
+      throw new AppException(
+        ErrorCodes.NOT_FOUND,
+        "Abstract config not found",
+        404,
+      );
+    }
+    const activeSet = new Set(activeThemeIds);
+    if (uniqueThemeIds.some((id) => !activeSet.has(id))) {
+      throw new AppException(
+        ErrorCodes.ABSTRACT_INVALID_THEMES,
+        "Invalid abstract themes",
+        400,
+      );
+    }
+
+    await setReviewerThemesTxn(eventId, userId, uniqueThemeIds);
+    await writeAbstractAuditLog({
+      entityType: "AbstractReviewerTheme",
+      entityId: `${eventId}:${userId}`,
+      action: "replace",
+      changes: { themeIds: { old: null, new: uniqueThemeIds } },
+      performedBy,
+    });
+
+    const member = (await listCommitteeMembers(eventId)).find(
+      (m) => m.userId === userId,
+    );
+    if (!member) {
+      throw new AppException(
+        ErrorCodes.NOT_FOUND,
+        "Committee member not found",
+        404,
+      );
+    }
+    return member;
+  }
+
+  // ==========================================================================
+  // Assign reviewers
+  // ==========================================================================
+  async assignReviewers(
+    eventId: string,
+    abstractId: string,
+    body: AssignReviewersInput,
+    performedBy: string,
+  ) {
+    const abstract = await findAbstractBasic(abstractId);
+    if (!abstract || abstract.eventId !== eventId) {
+      throw new AppException(ErrorCodes.NOT_FOUND, "Abstract not found", 404);
+    }
+    const reviewerIds = [...new Set(body.reviewerIds)];
+    const config = await getCommitteeConfig(eventId);
+    const requiredReviewers = config?.reviewersPerAbstract ?? 2;
+
+    if (reviewerIds.length > 0) {
+      if (reviewerIds.length < requiredReviewers) {
+        throw new AppException(
+          ErrorCodes.VALIDATION_ERROR,
+          `Exactly ${requiredReviewers} reviewers are required for initial assignment`,
+          400,
+        );
+      }
+      if (reviewerIds.length > requiredReviewers) {
+        const scores = await findScoredReviewScores(abstractId);
+        const min = scores.length >= 2 ? Math.min(...scores) : null;
+        const max = scores.length >= 2 ? Math.max(...scores) : null;
+        const spread = min !== null && max !== null ? max - min : 0;
+        if (spread < (config?.divergenceThreshold ?? 6)) {
+          throw new AppException(
+            ErrorCodes.VALIDATION_ERROR,
+            "Extra reviewers can only be assigned after a score divergence alert",
+            400,
+          );
+        }
+      }
+      const activeMemberIds = new Set(
+        await findActiveMembershipUserIds(eventId, reviewerIds),
+      );
+      if (reviewerIds.some((id) => !activeMemberIds.has(id))) {
+        throw new AppException(
+          ErrorCodes.VALIDATION_ERROR,
+          "All reviewers must have active membership",
+          400,
+        );
+      }
+    }
+
+    const updated = await assignReviewersTxn({
+      eventId,
+      abstractId,
+      reviewerIds,
+      currentStatus: abstract.status,
+    });
+
+    await writeAbstractAuditLog({
+      entityType: "Abstract",
+      entityId: abstractId,
+      action: "assign_reviewers",
+      changes: { reviewerIds: { old: null, new: reviewerIds } },
+      performedBy,
+    });
+
+    return { abstractId: updated.id, status: updated.status, reviewerIds };
+  }
+
+  // ==========================================================================
+  // Committee self-service (reviewer-facing)
+  // ==========================================================================
+  getCommitteeProfile(userId: string) {
+    return getCommitteeProfile(userId);
+  }
+
+  async listAssignedAbstracts(eventId: string, reviewerId: string) {
+    await this.assertActiveMembership(eventId, reviewerId);
+    const abstracts = await listAssignedAbstracts(eventId, reviewerId);
+    return abstracts.map((a) => anonymizeAbstractListItem(a, reviewerId));
+  }
+
+  async getAssignedAbstractDetail(abstractId: string, reviewerId: string) {
+    const abstract = await getAssignedAbstractRow(abstractId);
+    if (!abstract) {
+      throw new AppException(ErrorCodes.NOT_FOUND, "Abstract not found", 404);
+    }
+    await this.assertActiveMembership(abstract.eventId, reviewerId);
+    const reviewerThemeIds = await listActiveReviewerThemeIds(
+      abstract.eventId,
+      reviewerId,
+    );
+    const hasExplicit = abstract.reviews.some(
+      (r) => r.reviewerId === reviewerId && r.active,
+    );
+    if (
+      !hasExplicit &&
+      !hasReviewerThemeCoverage(abstract.themes, reviewerThemeIds)
+    ) {
+      throw new AppException(
+        ErrorCodes.NOT_FOUND,
+        "Abstract assignment not found",
+        404,
+      );
+    }
+    return anonymizeAbstractDetail(abstract, reviewerId);
+  }
+
+  async reviewAssignedAbstract(
+    abstractId: string,
+    reviewerId: string,
+    body: ReviewAbstractInput,
+  ) {
+    const abstract = await findAbstractForReview(abstractId);
+    if (!abstract) {
+      throw new AppException(ErrorCodes.NOT_FOUND, "Abstract not found", 404);
+    }
+    await this.assertActiveMembership(abstract.eventId, reviewerId);
+    const reviewerThemeIds = await listActiveReviewerThemeIds(
+      abstract.eventId,
+      reviewerId,
+    );
+
+    if (FINAL_STATUSES.includes(abstract.status)) {
+      throw new AppException(
+        ErrorCodes.INVALID_STATUS_TRANSITION,
+        "Abstract is not open for scoring",
+        409,
+      );
+    }
+    const now = Date.now();
+    const startAt = abstract.config?.scoringStartAt;
+    const deadline = abstract.config?.scoringDeadline;
+    if (startAt && startAt.getTime() > now) {
+      throw new AppException(
+        ErrorCodes.FORBIDDEN,
+        "Scoring has not started yet",
+        403,
+      );
+    }
+    if (deadline && deadline.getTime() < now) {
+      throw new AppException(
+        ErrorCodes.FORBIDDEN,
+        "Scoring deadline has passed",
+        403,
+      );
+    }
+    if (abstract.config?.commentsEnabled === false && body.comment?.trim()) {
+      throw new AppException(
+        ErrorCodes.VALIDATION_ERROR,
+        "Reviewer comments are disabled for this event",
+        400,
+      );
+    }
+    const hasExplicit = abstract.reviews.some(
+      (r) => r.reviewerId === reviewerId && r.active,
+    );
+    if (
+      !hasExplicit &&
+      !hasReviewerThemeCoverage(abstract.themes, reviewerThemeIds)
+    ) {
+      throw new AppException(
+        ErrorCodes.NOT_FOUND,
+        "Abstract assignment not found",
+        404,
+      );
+    }
+
+    return reviewAbstractTxn({
+      abstractId,
+      eventId: abstract.eventId,
+      reviewerId,
+      clientId: abstract.clientId,
+      score: body.score,
+      comment: body.comment,
+      commentsEnabled: abstract.config?.commentsEnabled ?? true,
+      divergenceThreshold: abstract.config?.divergenceThreshold ?? 6,
+    });
+  }
+
+  // ==========================================================================
+  // Admin password ops
+  // ==========================================================================
+  async resendCommitteeInvite(
+    eventId: string,
+    userId: string,
+    performedBy: string,
+  ) {
+    const member = await findCommitteeInviteTarget(eventId, userId);
+    if (!member?.active) {
+      throw new AppException(
+        ErrorCodes.NOT_FOUND,
+        "Committee member not found",
+        404,
+      );
+    }
+
+    let inviteEmailSent = false;
+    try {
+      const link = await generatePasswordResetLink(
+        member.userEmail,
+        this.buildPasswordResetActionCodeSettings(),
+      );
+      inviteEmailSent = await this.sendCommitteeMjmlEmail({
+        to: member.userEmail,
+        toName: member.userName,
+        subject: "Réinitialisation du mot de passe comité",
+        headline: "Réinitialiser votre mot de passe comité",
+        intro:
+          "Une réinitialisation du mot de passe a été demandée pour votre compte comité scientifique sur {eventName}. Utilisez le lien sécurisé ci-dessous pour choisir un nouveau mot de passe :",
+        ctaText: "Définir mon mot de passe",
+        link,
+        eventName: member.eventName,
+        category: "committee-password-reset",
+        footnote:
+          "Si vous n'avez pas demandé cette réinitialisation, vous pouvez ignorer cet email.",
+        logContext: "Failed to send committee password-reset email",
+      });
+    } catch (err) {
+      logger.error(
+        { err, userId, eventId },
+        "Committee reset-password email threw while sending",
+      );
+      inviteEmailSent = false;
+    }
+
+    // Audit the admin's intent regardless of delivery outcome.
+    await writeAbstractAuditLog({
+      entityType: "User",
+      entityId: userId,
+      action: "admin_reset_password",
+      changes: { method: { old: null, new: "email_link" } },
+      performedBy,
+    });
+
+    return { inviteEmailSent };
+  }
+
+  async setCommitteeMemberPassword(
+    eventId: string,
+    userId: string,
+    newPassword: string,
+    performedBy: string,
+  ) {
+    await this.assertCommitteeMemberExists(eventId, userId);
+    await updateFirebaseUserPassword(userId, newPassword);
+    await revokeFirebaseRefreshTokens(userId);
+    await writeAbstractAuditLog({
+      entityType: "User",
+      entityId: userId,
+      action: "admin_reset_password",
+      // The plaintext password never enters the audit log.
+      changes: { method: { old: null, new: "direct" } },
+      performedBy,
+    });
+    return { ok: true as const };
+  }
+
+  // ==========================================================================
+  // Email plumbing (best-effort, synchronous, no EmailLog row)
+  // ==========================================================================
+  /**
+   * The `url` here is the Firebase `continueUrl` (final post-reset destination),
+   * NOT the action-handler URL — pointing it back at /auth/action loops onto a
+   * handler page with no oobCode ("unknown mode" error).
+   */
+  private buildPasswordResetActionCodeSettings(): { url: string } {
+    return { url: `${this.config.urls.adminAppUrl}/committee` };
+  }
+
+  private async sendCommitteeMjmlEmail(input: {
+    to: string;
+    toName?: string | null;
+    subject: string;
+    headline: string;
+    intro: string;
+    ctaText: string;
+    link: string;
+    eventName: string;
+    category: string;
+    footnote?: string;
+    logContext: string;
+  }): Promise<boolean> {
+    const toName = input.toName?.trim() || input.to;
+    const safeName = escapeHtml(toName);
+    const safeEventName = escapeHtml(input.eventName);
+    const safeLink = escapeHtml(input.link);
+    const safeHeadline = escapeHtml(input.headline);
+    const safeCtaText = escapeHtml(input.ctaText);
+    const safeIntro = escapeHtml(input.intro).replaceAll(
+      EVENT_NAME_TOKEN,
+      `<strong>${safeEventName}</strong>`,
+    );
+    const footnoteBlock = input.footnote
+      ? `<mj-text font-size="13px" color="#6b7280">${escapeHtml(
+          input.footnote,
+        )}</mj-text>`
+      : "";
+    const mjml = `
+<mjml>
+  <mj-head>
+    <mj-attributes>
+      <mj-all font-family="Helvetica, Arial, sans-serif" />
+      <mj-text font-size="15px" line-height="1.6" color="#1f2937" />
+    </mj-attributes>
+  </mj-head>
+  <mj-body background-color="#fafaf9">
+    <mj-section padding="32px 24px">
+      <mj-column>
+        <mj-text font-size="20px" font-weight="600">${safeHeadline}</mj-text>
+        <mj-text>Bonjour ${safeName},</mj-text>
+        <mj-text>${safeIntro}</mj-text>
+        <mj-button background-color="#0d9488" color="#ffffff" border-radius="6px" href="${safeLink}">${safeCtaText}</mj-button>
+        <mj-text font-size="13px" color="#6b7280">Ce lien est valable pour une durée limitée. Après avoir défini votre mot de passe, vous pourrez vous connecter directement avec votre email.</mj-text>
+        ${footnoteBlock}
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>`;
+    const { html } = compileMjmlToHtml(mjml);
+    const result = await getEmailProvider().sendEmail({
+      to: input.to,
+      toName,
+      subject: input.subject,
+      html,
+      categories: [input.category],
+    });
+    if (!result.success) {
+      logger.error({ email: input.to, error: result.error }, input.logContext);
+    }
+    return result.success;
+  }
+}
