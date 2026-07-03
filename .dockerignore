@@ -14,3 +14,15 @@ tests
 **/*.test.ts
 **/*.spec.ts
 firebase/*.json
+src
+prisma
+backups
+docs
+.progress
+.codex
+.memory
+.claude
+_schema_full.sql
+bun.lock
+package-lock.json
+bunfig.toml
