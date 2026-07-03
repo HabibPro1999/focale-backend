@@ -1,7 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { hostname } from "node:os";
 import { Injectable } from "@nestjs/common";
-import { createLogger } from "@app/shared";
+import { createLogger, makeWorkerId } from "@app/shared";
 import {
   processOutboxEvents,
   type OutboxHandlerRegistry,
@@ -69,7 +67,7 @@ export class OutboxJob implements Job {
   readonly name = "outbox";
   readonly intervalMs = 5_000;
 
-  private readonly workerId = `outbox:${hostname()}:${process.pid}:${randomUUID()}`;
+  private readonly workerId = makeWorkerId("outbox");
   private readonly handlers = buildOutboxHandlers();
 
   async run(): Promise<void> {

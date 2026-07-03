@@ -1,4 +1,5 @@
 import { HttpException } from "@nestjs/common";
+import { ErrorCodes } from "@app/contracts";
 
 /**
  * Coded domain error — the port of the legacy AppError. The global
@@ -24,4 +25,9 @@ export class AppException extends HttpException {
     this.statusCode = status;
     this.details = details;
   }
+}
+
+/** Throw the standard coded 403 (shared by the tenant-gated controllers). */
+export function forbidden(): never {
+  throw new AppException(ErrorCodes.FORBIDDEN, "Insufficient permissions", 403);
 }

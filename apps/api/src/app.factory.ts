@@ -7,7 +7,6 @@ import helmet from "@fastify/helmet";
 import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
-import fastifySSE from "@fastify/sse";
 import { newId } from "@app/shared";
 import { AppModule } from "./app.module";
 import { loadConfig, type Config } from "./core/config";
@@ -74,11 +73,6 @@ export async function buildApp(
   });
 
   await fastify.register(cookie);
-
-  // Server-Sent Events — powers the realtime admin stream.
-  await fastify.register(fastifySSE, {
-    heartbeatInterval: config.realtime.heartbeatMs,
-  });
 
   app.enableShutdownHooks();
   return app;

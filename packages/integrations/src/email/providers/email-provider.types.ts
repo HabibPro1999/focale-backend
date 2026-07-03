@@ -3,6 +3,8 @@
 // Shared types + interface implemented by each email provider (SendGrid, Resend)
 // =============================================================================
 
+import { abstractHtmlToText } from "@app/shared";
+
 // -----------------------------------------------------------------------------
 // SEND
 // -----------------------------------------------------------------------------
@@ -134,25 +136,12 @@ export function getHeader(
 }
 
 /**
- * Strip HTML tags to produce a plain-text fallback.
- * Removes style/script tags completely, then strips remaining HTML.
+ * Strip HTML tags to produce a plain-text fallback. Style/script blocks are
+ * removed first (their text content must not leak), then the shared
+ * abstractHtmlToText does tag stripping + entity decoding.
  */
 export function stripHtml(html: string): string {
-  return html
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p>/gi, "\n\n")
-    .replace(/<\/div>/gi, "\n")
-    .replace(/<\/li>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#039;/gi, "'")
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/[ \t]+/g, " ")
-    .trim();
+  return abstractHtmlToText(
+    html.replace(/<(style|script)[^>]*>[\s\S]*?<\/\1>/gi, ""),
+  );
 }

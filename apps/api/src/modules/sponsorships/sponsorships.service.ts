@@ -111,11 +111,6 @@ interface BatchContext {
 export class SponsorshipsService {
   constructor(private readonly access: AccessService) {}
 
-  /** READ COMMITTED txn (no retry — legacy parity). */
-  private runTxn<T>(fn: (tx: DbExecutor) => Promise<T>): Promise<T> {
-    return withTxn(fn);
-  }
-
   // ==========================================================================
   // Reads
   // ==========================================================================
@@ -216,7 +211,7 @@ export class SponsorshipsService {
     if (input.status === "CANCELLED") {
       return this.cancelSponsorship(id, performedBy);
     }
-    await this.runTxn((tx) => this.updateSponsorshipCore(tx, id, input));
+    await withTxn((tx) => this.updateSponsorshipCore(tx, id, input));
     return (await getSponsorshipById(id)) as SponsorshipWithUsages;
   }
 
@@ -306,7 +301,7 @@ export class SponsorshipsService {
     id: string,
     performedBy?: string,
   ): Promise<SponsorshipWithUsages> {
-    await this.runTxn((tx) => this.cancelSponsorshipCore(tx, id, performedBy));
+    await withTxn((tx) => this.cancelSponsorshipCore(tx, id, performedBy));
     return (await getSponsorshipById(id)) as SponsorshipWithUsages;
   }
 
@@ -336,7 +331,7 @@ export class SponsorshipsService {
   }
 
   async deleteSponsorship(id: string, performedBy?: string): Promise<void> {
-    await this.runTxn((tx) => this.deleteSponsorshipCore(tx, id, performedBy));
+    await withTxn((tx) => this.deleteSponsorshipCore(tx, id, performedBy));
   }
 
   private async deleteSponsorshipCore(
@@ -372,7 +367,7 @@ export class SponsorshipsService {
     const { sponsor, customFields } = input;
     const context = await this.validateBatchInput(eventId, formId, input);
 
-    return this.runTxn(async (tx) => {
+    return withTxn(async (tx) => {
       const batch = await insertSponsorshipBatch(tx, {
         eventId,
         formId: context.formId,
@@ -737,7 +732,7 @@ export class SponsorshipsService {
     registrationId: string,
     adminUserId: string,
   ): Promise<LinkSponsorshipResult> {
-    return this.runTxn((tx) =>
+    return withTxn((tx) =>
       this.linkSponsorshipToRegistrationTx(
         tx,
         sponsorshipId,
@@ -928,7 +923,7 @@ export class SponsorshipsService {
     registrationId: string,
     performedBy?: string,
   ): Promise<void> {
-    return this.runTxn((tx) =>
+    return withTxn((tx) =>
       this.unlinkSponsorshipFromRegistrationInternal(
         tx,
         sponsorshipId,

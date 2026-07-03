@@ -26,6 +26,7 @@ import {
 } from "drizzle-orm";
 import type { FormField } from "@app/contracts";
 import { getDb } from "../client";
+import { rowsOf } from "../helpers";
 import { registrations, paymentTransaction } from "../schema/registrations";
 import { events, eventAccess, accessCheckIns } from "../schema/events-access";
 import { eventPricing } from "../schema/pricing";
@@ -39,11 +40,6 @@ import {
 import { buildSponsorshipWhere } from "./sponsorships";
 
 type RegistrationRow = typeof registrations.$inferSelect;
-
-function rowsOf<T = Record<string, unknown>>(res: unknown): T[] {
-  const r = res as { rows?: unknown };
-  return Array.isArray(r?.rows) ? (r.rows as T[]) : [];
-}
 
 /** sum() over an integer column returns string|null; coerce to a JS number. */
 function num(v: string | number | null | undefined): number {

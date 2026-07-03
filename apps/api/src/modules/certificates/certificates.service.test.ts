@@ -32,7 +32,9 @@ const mockStorageDownload = vi.fn().mockResolvedValue({
   contentType: "image/png",
 });
 
-vi.mock("@app/integrations", () => ({
+vi.mock("@app/integrations", async (importOriginal) => ({
+  // Keep the real extractStorageKeyFromUrl (pure); stub the storage/IO fns.
+  ...(await importOriginal<Record<string, unknown>>()),
   getStorageProvider: vi.fn(() => ({
     uploadPublic: mockStorageUpload,
     uploadPrivate: vi.fn().mockResolvedValue("private-key"),

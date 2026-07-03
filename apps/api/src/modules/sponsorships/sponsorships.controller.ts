@@ -19,9 +19,9 @@ import {
 } from "@app/db";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
-import { canAccessClient, type AuthUser } from "../events";
+import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
 import { assertEventWritable } from "../events";
-import { AppException } from "../../core/app-exception";
+import { AppException, forbidden } from "../../core/app-exception";
 import { SponsorshipsService } from "./sponsorships.service";
 import {
   ListSponsorshipsQueryDto,
@@ -33,10 +33,6 @@ import {
   SponsorshipIdParamDto,
   UpdateSponsorshipDto,
 } from "./dto";
-
-function forbidden(): never {
-  throw new AppException(ErrorCodes.FORBIDDEN, "Insufficient permissions", 403);
-}
 
 // ============================================================================
 // Event-scoped list — GET /api/events/:eventId/sponsorships (no module gate)

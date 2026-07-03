@@ -31,7 +31,9 @@ vi.mock("@app/db", () => ({
 }));
 
 const storageDeleteMock = vi.hoisted(() => vi.fn());
-vi.mock("@app/integrations", () => ({
+vi.mock("@app/integrations", async (importOriginal) => ({
+  // Keep the real extractStorageKeyFromUrl (pure); stub the storage/IO fns.
+  ...(await importOriginal<Record<string, unknown>>()),
   getStorageProvider: () => ({ delete: storageDeleteMock, uploadPublic: vi.fn() }),
   compressImage: vi.fn(async () => ({ buffer: Buffer.from("webp"), contentType: "image/webp", ext: "webp" })),
 }));

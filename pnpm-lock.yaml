@@ -34,9 +34,6 @@ importers:
       '@fastify/multipart':
         specifier: ^9.3.0
         version: 9.4.0
-      '@fastify/sse':
-        specifier: 0.4.0
-        version: 0.4.0(fastify@5.8.5)
       '@nestjs/common':
         specifier: ^11.0.0
         version: 11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2)
@@ -55,9 +52,6 @@ importers:
       file-type:
         specifier: 21.3.0
         version: 21.3.0
-      firebase-admin:
-        specifier: ^13.6.0
-        version: 13.10.0
       jszip:
         specifier: 3.10.1
         version: 3.10.1
@@ -67,9 +61,6 @@ importers:
       rxjs:
         specifier: ^7.8.1
         version: 7.8.2
-      safe-regex:
-        specifier: ^2.1.1
-        version: 2.1.1
       zod:
         specifier: ^4.0.0
         version: 4.4.3
@@ -80,9 +71,6 @@ importers:
       '@swc/core':
         specifier: ^1.10.1
         version: 1.15.43
-      '@types/jszip':
-        specifier: 3.4.1
-        version: 3.4.1
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.2
@@ -116,12 +104,6 @@ importers:
       '@nestjs/core':
         specifier: ^11.0.0
         version: 11.1.27(@nestjs/common@11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2)
-      '@pdf-lib/fontkit':
-        specifier: 1.1.1
-        version: 1.1.1
-      dejavu-fonts-ttf:
-        specifier: 2.37.3
-        version: 2.37.3
       pdf-lib:
         specifier: 1.17.1
         version: 1.17.1
@@ -131,9 +113,6 @@ importers:
       rxjs:
         specifier: ^7.8.1
         version: 7.8.2
-      zod:
-        specifier: ^4.0.0
-        version: 4.4.3
     devDependencies:
       '@swc-node/register':
         specifier: ^1.10.9
@@ -227,9 +206,6 @@ importers:
       dejavu-fonts-ttf:
         specifier: 2.37.3
         version: 2.37.3
-      file-type:
-        specifier: 21.3.0
-        version: 21.3.0
       firebase-admin:
         specifier: ^13.6.0
         version: 13.10.0
@@ -267,6 +243,9 @@ importers:
       uuid:
         specifier: ^11.1.0
         version: 11.1.1
+      zod:
+        specifier: ^4.0.0
+        version: 4.4.3
     devDependencies:
       pino-pretty:
         specifier: ^13.0.0
@@ -950,12 +929,6 @@ packages:
 
   '@fastify/proxy-addr@5.1.0':
     resolution: {integrity: sha512-INS+6gh91cLUjB+PVHfu1UqcB76Sqtpyp7bnL+FYojhjygvOPA9ctiD/JDKsyD9Xgu4hUhCSJBPig/w7duNajw==}
-
-  '@fastify/sse@0.4.0':
-    resolution: {integrity: sha512-bBV96iT2kHEw6h3i8IMkZGaqA7Gk81ugUzTNctXuE6N2BEC/qBnUuzlD/O17V43OkJP73h0/kf3Bp/asXlSuFA==}
-    engines: {node: '>=20'}
-    peerDependencies:
-      fastify: ^5.x
 
   '@firebase/app-check-interop-types@0.3.4':
     resolution: {integrity: sha512-zz3i6e13B8BfWiLy8MABtTh8aGIACgKbf9UVnyHcWs+yQzJXgQcl8A46b0zfaiJHdQ+niF0ouAfcpuf+3LMPQg==}
@@ -1828,10 +1801,6 @@ packages:
 
   '@types/jsonwebtoken@9.0.10':
     resolution: {integrity: sha512-asx5hIG9Qmf/1oStypjanR7iKTv0gXQ1Ov/jfrX6kS/EO0OFni8orbmGCn0672NHR3kXHwpAwR+B368ZGN/2rA==}
-
-  '@types/jszip@3.4.1':
-    resolution: {integrity: sha512-TezXjmf3lj+zQ651r6hPqvSScqBLvyPI9FxdXBqpEwBijNGQ2NXpaFW/7joGzveYkKQUil7iiDHLo6LV71Pc0A==}
-    deprecated: This is a stub types definition. jszip provides its own type definitions, so you do not need this installed.
 
   '@types/long@4.0.2':
     resolution: {integrity: sha512-MqTGEo5bj5t157U6fA/BiDynNkn0YknVdh48CMPkTSpFTVmvao5UQmm7uEF6xBEo7qIMAlY/JSleYaE6VOdpaA==}
@@ -3309,10 +3278,6 @@ packages:
   reflect-metadata@0.2.2:
     resolution: {integrity: sha512-urBwgfrvVP/eAyXx4hluJivBKzuEbSQs9rKWCrCkbSxNv8mxPcUZKeuoF3Uy4mJl3Lwprp6yy5/39VWigZ4K6Q==}
 
-  regexp-tree@0.1.27:
-    resolution: {integrity: sha512-iETxpjK6YoRWJG5o6hXLwvjYAoW+FEZn9os0PD/b6AP6xQwsa/Y7lCVgIixBbUPMfhu+i2LtdeAqVTgGlQarfA==}
-    hasBin: true
-
   relateurl@0.2.7:
     resolution: {integrity: sha512-G08Dxvm4iDN3MLM0EsP62EDV9IuhXPR6blNz6Utcp7zyV3tr4HVNINt6MpaRWbxoOHT3Q7YN2P+jaHX8vUbgog==}
     engines: {node: '>= 0.10'}
@@ -3378,9 +3343,6 @@ packages:
   safe-regex2@5.1.1:
     resolution: {integrity: sha512-mOSBvHGDZMuIEZMdOz/aCEYDCv0E7nfcNsIhUF+/P+xC7Hyf3FkvymqgPbg9D1EdSGu+uKbJgy09K/RKKc7kJA==}
     hasBin: true
-
-  safe-regex@2.1.1:
-    resolution: {integrity: sha512-rx+x8AMzKb5Q5lQ95Zoi6ZbJqwCLkqi3XuJXp5P3rT8OEc6sZCJG5AE5dU3lsgRr/F4Bs31jSlVN+j5KrsGu9A==}
 
   safe-stable-stringify@2.5.0:
     resolution: {integrity: sha512-b3rppTKm9T+PsVCBEOUR46GWI7fdOs00VKZ1+9c1EWDaDMvjQc6tUwuFyIprgGgTcWoVHSKrU8H31ZHA2e0RHA==}
@@ -4456,11 +4418,6 @@ snapshots:
       '@fastify/forwarded': 3.0.1
       ipaddr.js: 2.4.0
 
-  '@fastify/sse@0.4.0(fastify@5.8.5)':
-    dependencies:
-      fastify: 5.8.5
-      fastify-plugin: 5.1.0
-
   '@firebase/app-check-interop-types@0.3.4': {}
 
   '@firebase/app-types@0.9.5':
@@ -5288,10 +5245,6 @@ snapshots:
     dependencies:
       '@types/ms': 2.1.0
       '@types/node': 24.13.2
-
-  '@types/jszip@3.4.1':
-    dependencies:
-      jszip: 3.10.1
 
   '@types/long@4.0.2':
     optional: true
@@ -7141,8 +7094,6 @@ snapshots:
 
   reflect-metadata@0.2.2: {}
 
-  regexp-tree@0.1.27: {}
-
   relateurl@0.2.7: {}
 
   require-directory@2.1.1: {}
@@ -7221,10 +7172,6 @@ snapshots:
   safe-regex2@5.1.1:
     dependencies:
       ret: 0.5.0
-
-  safe-regex@2.1.1:
-    dependencies:
-      regexp-tree: 0.1.27
 
   safe-stable-stringify@2.5.0: {}
 

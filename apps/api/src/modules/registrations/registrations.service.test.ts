@@ -35,7 +35,7 @@ const db = vi.hoisted(() => ({
   findRegistrationUsageLinks: vi.fn(),
   deleteRegistrationUsages: vi.fn(),
   generateReferenceNumber: vi.fn(),
-  insertRegistrationAuditLog: vi.fn(),
+  insertAuditLog: vi.fn(),
   listRegistrationAuditLogRows: vi.fn(),
   findUserNamesByIds: vi.fn(),
   listRegistrationEmailLogRows: vi.fn(),
@@ -54,7 +54,11 @@ const integ = vi.hoisted(() => ({
   getStorageProvider: vi.fn(),
   compressFile: vi.fn(),
 }));
-vi.mock("@app/integrations", () => integ);
+vi.mock("@app/integrations", async (importOriginal) => ({
+  // Keep the real extractStorageKeyFromUrl (pure); stub the storage/IO fns.
+  ...(await importOriginal<Record<string, unknown>>()),
+  ...integ,
+}));
 
 const ft = vi.hoisted(() => ({ fileTypeFromBuffer: vi.fn() }));
 vi.mock("file-type", () => ft);
@@ -139,7 +143,7 @@ describe("RegistrationsService", () => {
     db.casIncrementRegisteredTx.mockResolvedValue(true);
     db.casDecrementRegisteredTx.mockResolvedValue(true);
     db.generateReferenceNumber.mockResolvedValue("26-EV-001");
-    db.insertRegistrationAuditLog.mockResolvedValue(undefined);
+    db.insertAuditLog.mockResolvedValue(undefined);
     db.updateRegistrationRow.mockResolvedValue(undefined);
     db.findAccessDetailsByIds.mockResolvedValue([]);
     db.findClientModuleState.mockResolvedValue(activeClient());
@@ -422,7 +426,7 @@ describe("RegistrationsService", () => {
     it("updates a note and audits", async () => {
       await service.updateRegistration("reg1", { note: "hi" } as never, "admin1");
       expect(db.updateRegistrationRow).toHaveBeenCalled();
-      expect(db.insertRegistrationAuditLog).toHaveBeenCalled();
+      expect(db.insertAuditLog).toHaveBeenCalled();
     });
 
     it("404 when registration not found", async () => {
@@ -698,7 +702,7 @@ describe("RegistrationsService", () => {
         "1.2.3.4",
       );
       expect(result.editToken).toBe("tok-64"); // NOT stripped
-      const audit = db.insertRegistrationAuditLog.mock.calls[0][0];
+      const audit = db.insertAuditLog.mock.calls[0][0];
       expect(audit.action).toBe("PAYMENT_CONFIRMED");
       expect(audit.ipAddress).toBe("1.2.3.4");
       const email = db.enqueueTriggeredEmailOutbox.mock.calls[0];
@@ -886,7 +890,7 @@ describe("RegistrationsService", () => {
       expect(patch.paymentStatus).toBe("PENDING");
       expect(patch.paymentMethod).toBe("CASH");
       expect(patch.labName).toBeNull();
-      expect(db.insertRegistrationAuditLog.mock.calls[0][0].action).toBe(
+      expect(db.insertAuditLog.mock.calls[0][0].action).toBe(
         "PAYMENT_METHOD_SELECTED",
       );
     });

@@ -1,7 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { ErrorCodes } from "@app/contracts";
-import type { FormField as ContractsFormField, FormStep as ContractsFormStep } from "@app/contracts";
-import type { FormField as SharedFormField, FormStep as SharedFormStep } from "@app/shared";
+import type {
+  Condition as ContractsCondition,
+  FormField as ContractsFormField,
+  FormStep as ContractsFormStep,
+} from "@app/contracts";
+import type {
+  Condition as SharedCondition,
+  FormField as SharedFormField,
+  FormStep as SharedFormStep,
+} from "@app/shared";
 import type { Form, FormWithEvent } from "@app/db";
 import {
   FormsService,
@@ -17,10 +25,13 @@ import { AppException } from "../../core/app-exception";
 // ---------------------------------------------------------------------------
 type _AssertFieldSync = ContractsFormField extends SharedFormField ? true : never;
 type _AssertStepSync = ContractsFormStep extends SharedFormStep ? true : never;
+type _AssertConditionSync = ContractsCondition extends SharedCondition ? true : never;
 const _fieldSync: _AssertFieldSync = true;
 const _stepSync: _AssertStepSync = true;
+const _conditionSync: _AssertConditionSync = true;
 void _fieldSync;
 void _stepSync;
+void _conditionSync;
 
 // ---------------------------------------------------------------------------
 // Mock the db query layer (@app/db). The service owns orchestration + error

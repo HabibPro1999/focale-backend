@@ -3,7 +3,6 @@ import { getDb, type DbExecutor } from "../client";
 import { pgUniqueViolation } from "../txn";
 import {
   accessPrerequisites,
-  auditLogs,
   eventAccess,
   events,
   outboxEvents,
@@ -558,13 +557,6 @@ export async function updateRegistrationForAccessDrop(
   exec: DbExecutor = getDb(),
 ): Promise<void> {
   await exec.update(registrations).set(data).where(eq(registrations.id, registrationId));
-}
-
-export async function insertAccessAuditLog(
-  values: typeof auditLogs.$inferInsert,
-  exec: DbExecutor = getDb(),
-): Promise<void> {
-  await exec.insert(auditLogs).values(values);
 }
 
 // ---------------------------------------------------------------------------

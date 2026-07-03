@@ -14,16 +14,13 @@ import {
   Res,
 } from "@nestjs/common";
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { getEventWithPricing } from "@app/db";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
+import { assertEventAccess } from "../../core/auth/assert-event-access";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { assertClientModuleEnabled } from "../clients/module-gates";
-import {
-  assertEventWritable,
-  canAccessClient,
-  type AuthUser,
-} from "../events/events.service";
+import { assertEventWritable } from "../events/events.service";
+import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
 import { CertificatesService } from "./certificates.service";
 import {
   CertificateEventIdParamDto,
@@ -63,11 +60,7 @@ export class CertificatesController {
     @CurrentUser() user: AuthUser,
     @Param() params: CertificateEventIdParamDto,
   ) {
-    const event = await getEventWithPricing(params.eventId);
-    if (!event) throw new NotFoundException("Event not found");
-    if (!canAccessClient(user, event.clientId)) {
-      throw new ForbiddenException("Insufficient permissions");
-    }
+    const event = await assertEventAccess(user, params.eventId);
     await assertClientModuleEnabled(event.clientId, "certificates");
 
     return this.certificates.listTemplates(params.eventId);
@@ -81,11 +74,7 @@ export class CertificatesController {
     @Param() params: CertificateEventIdParamDto,
     @Body() body: CreateCertificateTemplateDto,
   ) {
-    const event = await getEventWithPricing(params.eventId);
-    if (!event) throw new NotFoundException("Event not found");
-    if (!canAccessClient(user, event.clientId)) {
-      throw new ForbiddenException("Insufficient permissions");
-    }
+    const event = await assertEventAccess(user, params.eventId);
     assertEventWritable(event);
     await assertClientModuleEnabled(event.clientId, "certificates");
 
@@ -206,11 +195,7 @@ export class CertificatesController {
     @Param() params: CertificateEventIdParamDto,
     @Body() body: SendCertificatesBodyDto,
   ) {
-    const event = await getEventWithPricing(params.eventId);
-    if (!event) throw new NotFoundException("Event not found");
-    if (!canAccessClient(user, event.clientId)) {
-      throw new ForbiddenException("Insufficient permissions");
-    }
+    const event = await assertEventAccess(user, params.eventId);
     assertEventWritable(event);
     await assertClientModuleEnabled(event.clientId, "certificates");
     await assertClientModuleEnabled(event.clientId, "emails");

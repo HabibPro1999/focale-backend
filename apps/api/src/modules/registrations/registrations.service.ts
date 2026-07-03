@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import { fileTypeFromBuffer } from "file-type";
-import { getStorageProvider, compressFile } from "@app/integrations";
+import { getStorageProvider, compressFile, extractStorageKeyFromUrl } from "@app/integrations";
 import {
   ErrorCodes,
   UserRole,
@@ -68,7 +68,7 @@ import {
   findRegistrationUsageLinks,
   deleteRegistrationUsages,
   generateReferenceNumber,
-  insertRegistrationAuditLog,
+  insertAuditLog,
   listRegistrationAuditLogRows,
   findUserNamesByIds,
   listRegistrationEmailLogRows,
@@ -123,28 +123,6 @@ export interface PaymentProofResponse {
   fileSize: number;
   mimeType: string;
   uploadedAt: string;
-}
-
-/**
- * Extract a storage key from a stored payment-proof URL. Handles bare keys
- * (no "://"), Firebase (storage.googleapis.com → strip bucket segment), and
- * R2/custom-domain URLs (strip leading "/"). Returns null on parse failure.
- * Ported verbatim; drives the admin signed-URL redirect + old-proof cleanup.
- */
-export function extractKeyFromUrl(url: string): string | null {
-  if (!url.includes("://")) {
-    return url || null;
-  }
-  try {
-    const parsed = new URL(url);
-    if (parsed.hostname === "storage.googleapis.com") {
-      const parts = parsed.pathname.split("/").filter(Boolean);
-      return decodeURIComponent(parts.slice(1).join("/"));
-    }
-    return decodeURIComponent(parsed.pathname.slice(1));
-  } catch {
-    return null;
-  }
 }
 
 function pgUnique(err: unknown): { isUnique: boolean; constraint: string } {
@@ -444,7 +422,7 @@ export class RegistrationsService {
       performedBy?: string | null;
     },
   ): Promise<void> {
-    return insertRegistrationAuditLog(
+    return insertAuditLog(
       {
         entityType: "Registration",
         entityId: entry.entityId,
@@ -2104,7 +2082,7 @@ export class RegistrationsService {
       }
       await updateRegistrationRow(id, patch, tx);
 
-      await insertRegistrationAuditLog(
+      await insertAuditLog(
         {
           entityType: "Registration",
           entityId: id,
@@ -2242,7 +2220,7 @@ export class RegistrationsService {
     // 6. Best-effort delete of any old proof.
     if (registration.paymentProofUrl) {
       try {
-        const oldKey = extractKeyFromUrl(registration.paymentProofUrl);
+        const oldKey = extractStorageKeyFromUrl(registration.paymentProofUrl);
         if (oldKey) await storage.delete(oldKey);
       } catch {
         // ponytail: legacy logger.warn on old-proof delete failure dropped (non-blocking).

@@ -30,7 +30,7 @@ import {
   getAssignedAbstractRow,
   findAbstractForReview,
   reviewAbstractTxn,
-  writeAbstractAuditLog,
+  insertAuditLog,
   getUserByEmail,
   getUserById,
   type ReviewerAbstractRow,
@@ -244,7 +244,7 @@ export class AbstractsCommitteeService {
     this.assertCommitteeUserEligible(user);
 
     await upsertCommitteeMembership(eventId, user.id);
-    await writeAbstractAuditLog({
+    await insertAuditLog({
       entityType: "AbstractCommitteeMembership",
       entityId: `${eventId}:${user.id}`,
       action: "upsert",
@@ -325,7 +325,7 @@ export class AbstractsCommitteeService {
   ): Promise<void> {
     await this.assertActiveMembership(eventId, userId);
     await deactivateCommitteeMembershipTxn(eventId, userId);
-    await writeAbstractAuditLog({
+    await insertAuditLog({
       entityType: "AbstractCommitteeMembership",
       entityId: `${eventId}:${userId}`,
       action: "deactivate",
@@ -363,7 +363,7 @@ export class AbstractsCommitteeService {
     }
 
     await setReviewerThemesTxn(eventId, userId, uniqueThemeIds);
-    await writeAbstractAuditLog({
+    await insertAuditLog({
       entityType: "AbstractReviewerTheme",
       entityId: `${eventId}:${userId}`,
       action: "replace",
@@ -441,7 +441,7 @@ export class AbstractsCommitteeService {
       currentStatus: abstract.status,
     });
 
-    await writeAbstractAuditLog({
+    await insertAuditLog({
       entityType: "Abstract",
       entityId: abstractId,
       action: "assign_reviewers",
@@ -610,7 +610,7 @@ export class AbstractsCommitteeService {
     }
 
     // Audit the admin's intent regardless of delivery outcome.
-    await writeAbstractAuditLog({
+    await insertAuditLog({
       entityType: "User",
       entityId: userId,
       action: "admin_reset_password",
@@ -630,7 +630,7 @@ export class AbstractsCommitteeService {
     await this.assertCommitteeMemberExists(eventId, userId);
     await updateFirebaseUserPassword(userId, newPassword);
     await revokeFirebaseRefreshTokens(userId);
-    await writeAbstractAuditLog({
+    await insertAuditLog({
       entityType: "User",
       entityId: userId,
       action: "admin_reset_password",

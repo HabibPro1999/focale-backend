@@ -1,11 +1,10 @@
-import { randomUUID } from "node:crypto";
-import { hostname } from "node:os";
 import { sql, type SQL } from "drizzle-orm";
-import { createLogger } from "@app/shared";
+import { createLogger, makeWorkerId } from "@app/shared";
 import type { AppEvent } from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
+import { rowsOf, rowCountOf } from "../helpers";
 import { pgUniqueViolation } from "../txn";
-import { outboxEvents } from "../schema";
+import { auditLogs, outboxEvents } from "../schema";
 import {
   REALTIME_EMIT_TYPE,
   type OutboxHandlerRegistry,
@@ -17,7 +16,7 @@ const logger = createLogger({ name: "db:outbox" });
 
 const OUTBOX_LEASE_MS = 5 * 60 * 1000;
 const OUTBOX_RECOVERY_INTERVAL_MS = 60 * 1000;
-const DEFAULT_WORKER_ID = `outbox:${hostname()}:${process.pid}:${randomUUID()}`;
+const DEFAULT_WORKER_ID = makeWorkerId("outbox");
 
 // Module-level, per-process: recovery runs at most once per minute, piggybacked
 // on whichever processOutboxEvents call ticks first.
@@ -54,18 +53,6 @@ interface ClaimedOutboxRow {
   payload: unknown;
   attemptCount: number;
   maxAttempts: number;
-}
-
-// pg (node-postgres) returns { rowCount, rows }. Guard for other drivers.
-function rowsOf<T = Record<string, unknown>>(res: unknown): T[] {
-  const r = res as { rows?: unknown };
-  return Array.isArray(r?.rows) ? (r.rows as T[]) : [];
-}
-
-function rowCountOf(res: unknown): number {
-  const r = res as { rowCount?: number | null; rows?: unknown[] };
-  if (typeof r?.rowCount === "number") return r.rowCount;
-  return Array.isArray(r?.rows) ? r.rows.length : 0;
 }
 
 // Serialize payloads exactly like the legacy `JSON.parse(JSON.stringify(v))`:
@@ -180,6 +167,14 @@ export async function enqueueOutboxEvent(
     }
     throw error;
   }
+}
+
+/** Audit-log insert. Rides the caller's transaction via the DbExecutor param. */
+export async function insertAuditLog(
+  values: typeof auditLogs.$inferInsert,
+  exec: DbExecutor = getDb(),
+): Promise<void> {
+  await exec.insert(auditLogs).values(values);
 }
 
 /** Realtime fan-out enqueue: maxAttempts 10 (a dropped live UI event is costly). */

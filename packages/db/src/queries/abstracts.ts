@@ -27,6 +27,7 @@ import {
 } from "@app/contracts";
 import { createLogger } from "@app/shared";
 import { getDb, type DbExecutor } from "../client";
+import { rowsOf, rowCountOf, standardRetryDelayMs } from "../helpers";
 import { withTxn, pgUniqueViolation } from "../txn";
 import {
   abstractConfig,
@@ -45,7 +46,7 @@ import { users } from "../schema/users-clients";
 import { emailLogs } from "../schema/email";
 import { abstractEmailTrigger } from "../schema/enums";
 import { auditLogs } from "../schema/outbox-audit";
-import { enqueueOutboxEvent, enqueueRealtimeOutboxEvent } from "../outbox";
+import { enqueueOutboxEvent, enqueueRealtimeOutboxEvent, insertAuditLog } from "../outbox";
 
 export type AbstractConfigRow = InferSelectModel<typeof abstractConfig>;
 export type AbstractThemeRow = InferSelectModel<typeof abstractThemes>;
@@ -72,13 +73,6 @@ export type AdminAbstractDetailRow = AdminAbstractRow & {
 // ============================================================================
 // Audit + outbox helpers
 // ============================================================================
-
-export async function writeAbstractAuditLog(
-  values: typeof auditLogs.$inferInsert,
-  exec: DbExecutor = getDb(),
-): Promise<void> {
-  await exec.insert(auditLogs).values(values);
-}
 
 export interface AbstractEmailOutboxPayload {
   trigger: string;
@@ -769,7 +763,7 @@ export async function submitAbstractTxn(
         );
       }
 
-      await writeAbstractAuditLog(
+      await insertAuditLog(
         {
           entityType: "Abstract",
           entityId: params.id,
@@ -870,7 +864,7 @@ export async function editAbstractTxn(
         );
       }
 
-      await writeAbstractAuditLog(
+      await insertAuditLog(
         {
           entityType: "Abstract",
           entityId: params.id,
@@ -914,7 +908,7 @@ export async function updateAbstractFinalFileTxn(
       .update(abstracts)
       .set(fields)
       .where(eq(abstracts.id, abstractId));
-    await writeAbstractAuditLog(auditValues, tx);
+    await insertAuditLog(auditValues, tx);
   });
 }
 
@@ -1771,7 +1765,7 @@ export async function reviewAbstractTxn(params: {
         reviewCount: abstracts.reviewCount,
       });
 
-    await writeAbstractAuditLog(
+    await insertAuditLog(
       {
         entityType: "AbstractReview",
         entityId: abstractId,
@@ -1997,7 +1991,7 @@ export async function finalizeAbstractTxn(params: {
       return { ok: false, reason: "already_finalized" };
     }
 
-    await writeAbstractAuditLog(
+    await insertAuditLog(
       {
         entityType: "Abstract",
         entityId: abstractId,
@@ -2118,7 +2112,7 @@ export async function reopenAbstractTxn(params: {
         reviewCount: abstracts.reviewCount,
       });
 
-    await writeAbstractAuditLog(
+    await insertAuditLog(
       {
         entityType: "Abstract",
         entityId: abstractId,
@@ -2201,7 +2195,7 @@ export async function markAbstractPresentedTxn(params: {
       return { ok: false, reason: "not_accepted" };
     }
 
-    await writeAbstractAuditLog(
+    await insertAuditLog(
       {
         entityType: "Abstract",
         entityId: abstractId,
@@ -2248,28 +2242,11 @@ export type AbstractBookJobRow = InferSelectModel<typeof abstractBookJobs>;
 /** Default worker lease (1 hour). Matches legacy ABSTRACT_BOOK_LEASE_MS. */
 export const ABSTRACT_BOOK_LEASE_MS = 60 * 60 * 1000;
 
-function abstractBookRetryDelayMs(failedAttemptCount: number): number {
-  if (failedAttemptCount <= 1) return 60 * 1000;
-  if (failedAttemptCount === 2) return 5 * 60 * 1000;
-  return 15 * 60 * 1000;
-}
-
 export function nextAbstractBookAttemptAt(
   failedAttemptCount: number,
   from = new Date(),
 ): Date {
-  return new Date(from.getTime() + abstractBookRetryDelayMs(failedAttemptCount));
-}
-
-function bookRowsOf<T = Record<string, unknown>>(res: unknown): T[] {
-  const r = res as { rows?: unknown };
-  return Array.isArray(r?.rows) ? (r.rows as T[]) : [];
-}
-
-function bookRowCountOf(res: unknown): number {
-  const r = res as { rowCount?: number | null; rows?: unknown[] };
-  if (typeof r?.rowCount === "number") return r.rowCount;
-  return Array.isArray(r?.rows) ? r.rows.length : 0;
+  return new Date(from.getTime() + standardRetryDelayMs(failedAttemptCount));
 }
 
 export type EnqueueBookJobResult =
@@ -2315,7 +2292,7 @@ export async function enqueueAbstractBookJob(params: {
       .insert(abstractBookJobs)
       .values({ eventId, requestedBy, status: "PENDING" })
       .returning();
-    await writeAbstractAuditLog(
+    await insertAuditLog(
       {
         entityType: "AbstractBookJob",
         entityId: job.id,
@@ -2391,7 +2368,7 @@ export async function claimAbstractBookJobs(
     )
     RETURNING "id"
   `);
-  const ids = bookRowsOf<{ id: string }>(res).map((r) => r.id);
+  const ids = rowsOf<{ id: string }>(res).map((r) => r.id);
   if (ids.length === 0) return [];
   return getDb()
     .select()
@@ -2548,8 +2525,8 @@ export async function recoverStaleAbstractBookJobs(
       AND "attempt_count" >= "max_attempts"
   `);
 
-  const requeued = bookRowCountOf(requeuedRes);
-  const deadLettered = bookRowCountOf(deadLetteredRes);
+  const requeued = rowCountOf(requeuedRes);
+  const deadLettered = rowCountOf(deadLetteredRes);
   if (requeued > 0 || deadLettered > 0) {
     bookLogger.warn(
       { requeued, deadLettered },

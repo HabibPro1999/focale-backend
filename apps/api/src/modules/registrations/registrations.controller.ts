@@ -15,14 +15,15 @@ import {
 import type { FastifyReply } from "fastify";
 import { ErrorCodes, UserRole } from "@app/contracts";
 import { getEventForRegistrationAdmin } from "@app/db";
-import { getStorageProvider } from "@app/integrations";
+import { getStorageProvider, extractStorageKeyFromUrl } from "@app/integrations";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
-import { canAccessClient, assertEventWritable, type AuthUser } from "../events";
+import { assertEventWritable } from "../events";
+import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
 import { assertClientModuleEnabled } from "../clients/module-gates";
-import { AppException } from "../../core/app-exception";
-import { RegistrationsService, extractKeyFromUrl } from "./registrations.service";
+import { AppException, forbidden } from "../../core/app-exception";
+import { RegistrationsService } from "./registrations.service";
 import {
   AdminCreateRegistrationDto,
   AdminEditRegistrationDto,
@@ -37,10 +38,6 @@ import {
   UpdatePaymentDto,
   UpdateRegistrationDto,
 } from "./registrations.dto";
-
-function forbidden(): never {
-  throw new AppException(ErrorCodes.FORBIDDEN, "Insufficient permissions", 403);
-}
 
 @Controller("api/events")
 @Auth()
@@ -244,7 +241,7 @@ export class RegistrationsController {
     if (!registration.paymentProofUrl) {
       throw new AppException(ErrorCodes.NOT_FOUND, "No payment proof uploaded", 404);
     }
-    const key = extractKeyFromUrl(registration.paymentProofUrl);
+    const key = extractStorageKeyFromUrl(registration.paymentProofUrl);
     if (!key) {
       // Un-parseable legacy URL — redirect straight to the stored value.
       return reply.redirect(registration.paymentProofUrl, 302);

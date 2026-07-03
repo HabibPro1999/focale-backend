@@ -30,3 +30,29 @@ export const timestamps = {
     .$defaultFn(() => new Date())
     .$onUpdate(() => new Date()),
 };
+
+// ---------------------------------------------------------------------------
+// Raw-result accessors — pg (node-postgres) returns { rowCount, rows }.
+// Guard for other drivers. Shared by outbox/email/abstract-book/reports.
+// ---------------------------------------------------------------------------
+
+export function rowsOf<T = Record<string, unknown>>(res: unknown): T[] {
+  const r = res as { rows?: unknown };
+  return Array.isArray(r?.rows) ? (r.rows as T[]) : [];
+}
+
+export function rowCountOf(res: unknown): number {
+  const r = res as { rowCount?: number | null; rows?: unknown[] };
+  if (typeof r?.rowCount === "number") return r.rowCount;
+  return Array.isArray(r?.rows) ? r.rows.length : 0;
+}
+
+/**
+ * Shared queue retry backoff (email + abstract-book): 1min, 5min, then 15min,
+ * keyed on the post-increment failed attempt count.
+ */
+export function standardRetryDelayMs(failedAttemptCount: number): number {
+  if (failedAttemptCount <= 1) return 60 * 1000;
+  if (failedAttemptCount === 2) return 5 * 60 * 1000;
+  return 15 * 60 * 1000;
+}

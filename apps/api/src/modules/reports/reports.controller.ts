@@ -1,8 +1,6 @@
 import {
   Controller,
-  ForbiddenException,
   Get,
-  NotFoundException,
   Param,
   Post,
   Query,
@@ -10,10 +8,10 @@ import {
   Res,
 } from "@nestjs/common";
 import type { FastifyReply } from "fastify";
-import { getEventWithPricing } from "@app/db";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
-import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
+import { assertEventAccess } from "../../core/auth/assert-event-access";
+import { type AuthUser } from "../../core/auth/user-cache";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { ReportsService } from "./reports.service";
 import {
@@ -39,11 +37,7 @@ export class ReportsController {
   constructor(private readonly reports: ReportsService) {}
 
   private async authorizeEvent(user: AuthUser, eventId: string): Promise<void> {
-    const event = await getEventWithPricing(eventId);
-    if (!event) throw new NotFoundException("Event not found");
-    if (!canAccessClient(user, event.clientId)) {
-      throw new ForbiddenException("Insufficient permissions");
-    }
+    await assertEventAccess(user, eventId);
   }
 
   // Shared file-download tail: sanitize the filename and stream the payload

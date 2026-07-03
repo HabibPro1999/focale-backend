@@ -1,6 +1,13 @@
 import "reflect-metadata";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { NestFastifyApplication } from "@nestjs/platform-fastify";
+import { Body, Controller, Module, Post } from "@nestjs/common";
+import { NestFactory } from "@nestjs/core";
+import {
+  FastifyAdapter,
+  type NestFastifyApplication,
+} from "@nestjs/platform-fastify";
+import { z } from "zod";
+import { newId } from "@app/shared";
 
 // Health probes call pingDb (SELECT 1). Override just that one export so the
 // suite is DB-independent; everything else in @app/db stays real (lazy client).
@@ -11,20 +18,57 @@ vi.mock("@app/db", async (importOriginal) => ({
 }));
 
 import { buildApp } from "./app.factory";
+import { AppModule } from "./app.module";
+import { createZodDto } from "./core/zod";
+import { requestContext } from "./core/request-context";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+// Test-only echo fixture (the shipped app no longer has POST /health/echo):
+// exercises the zod-pipe + success-envelope + validation-error pipeline
+// end-to-end against the real AppModule global providers.
+class EchoDto extends createZodDto(z.object({ msg: z.string().min(1) })) {}
+
+@Controller()
+class EchoFixtureController {
+  @Post("health/echo")
+  echo(@Body() body: EchoDto) {
+    return { msg: body.msg };
+  }
+}
+
+@Module({ imports: [AppModule], controllers: [EchoFixtureController] })
+class EchoFixtureModule {}
+
 describe("api e2e", () => {
   let app: NestFastifyApplication;
+  let echoApp: NestFastifyApplication;
 
   beforeAll(async () => {
     app = await buildApp();
     await app.init();
     await app.getHttpAdapter().getInstance().ready();
+
+    // Minimal second app for the echo fixture: AppModule's global pipe /
+    // interceptor / filter apply app-wide; only the requestId hook (normally
+    // added by buildApp) is replicated so envelopes carry a requestId.
+    echoApp = await NestFactory.create<NestFastifyApplication>(
+      EchoFixtureModule,
+      new FastifyAdapter(),
+      { logger: false },
+    );
+    const fastify = echoApp.getHttpAdapter().getInstance();
+    fastify.addHook("onRequest", (req, reply, done) => {
+      requestContext.enterWith({ requestId: newId() });
+      done();
+    });
+    await echoApp.init();
+    await fastify.ready();
   });
 
   afterAll(async () => {
     await app.close();
+    await echoApp.close();
   });
 
   // Legacy /health parity: RAW body (no envelope), DB-gated status + code.
@@ -82,7 +126,7 @@ describe("api e2e", () => {
   });
 
   it("POST /health/echo with a bad body returns a VALIDATION_ERROR envelope", async () => {
-    const res = await app.inject({
+    const res = await echoApp.inject({
       method: "POST",
       url: "/health/echo",
       payload: { msg: "" },
@@ -100,7 +144,7 @@ describe("api e2e", () => {
   });
 
   it("POST /health/echo with a valid body echoes msg inside the envelope", async () => {
-    const res = await app.inject({
+    const res = await echoApp.inject({
       method: "POST",
       url: "/health/echo",
       payload: { msg: "hi" },

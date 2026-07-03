@@ -13,7 +13,7 @@ import {
   type RegistrationEmailContext,
 } from "@app/db";
 import type { EmailContext } from "./types";
-import { escapeHtml } from "./renderer";
+import { escapeHtml } from "@app/shared";
 
 // =============================================================================
 // BUILD EMAIL CONTEXT FROM REGISTRATION (sync, no DB)

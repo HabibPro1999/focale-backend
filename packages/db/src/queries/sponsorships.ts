@@ -1132,20 +1132,6 @@ export async function findSponsorshipUnlinkState(
   };
 }
 
-/** eventId + clientId for the unlink wrapper's outbox scoping (best-effort). */
-export async function getSponsorshipEventClient(
-  db: DbExecutor,
-  sponsorshipId: string,
-): Promise<{ eventId: string; clientId: string } | null> {
-  const [row] = await db
-    .select({ eventId: sponsorships.eventId, clientId: events.clientId })
-    .from(sponsorships)
-    .innerJoin(events, eq(sponsorships.eventId, events.id))
-    .where(eq(sponsorships.id, sponsorshipId))
-    .limit(1);
-  return row ?? null;
-}
-
 export interface RecalcSponsorship {
   coversBasePrice: boolean;
   coveredAccessIds: string[];
@@ -1231,21 +1217,6 @@ export async function updateUsageAmount(
     .update(sponsorshipUsages)
     .set({ amountApplied })
     .where(eq(sponsorshipUsages.id, usageId));
-}
-
-export async function resolveCoveredAccessItems(
-  db: DbExecutor,
-  ids: string[],
-): Promise<Array<{ id: string; name: string; price: number }>> {
-  if (ids.length === 0) return [];
-  return db
-    .select({
-      id: eventAccess.id,
-      name: eventAccess.name,
-      price: eventAccess.price,
-    })
-    .from(eventAccess)
-    .where(inArray(eventAccess.id, ids));
 }
 
 // ============================================================================

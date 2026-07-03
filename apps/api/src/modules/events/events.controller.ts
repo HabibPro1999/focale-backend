@@ -18,12 +18,8 @@ import { ErrorCodes, UserRole } from "@app/contracts";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
-import {
-  EventsService,
-  canAccessClient,
-  assertEventWritable,
-  type AuthUser,
-} from "./events.service";
+import { EventsService, assertEventWritable } from "./events.service";
+import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
 import {
   CreateEventDto,
   UpdateEventDto,
@@ -61,6 +57,17 @@ function assertAdmin(user: AuthUser): void {
 export class EventsController {
   constructor(private readonly events: EventsService) {}
 
+  /** assertAdmin → fetch (404) → ownership (403, per-action message). */
+  private async requireOwnedEvent(u: AuthUser, id: string, action: string) {
+    assertAdmin(u);
+    const event = await this.events.getEventById(id);
+    if (!event) throw new NotFoundException({ code: ErrorCodes.NOT_FOUND, message: "Event not found" });
+    if (!canAccessClient(u, event.clientId)) {
+      throw forbidden(`Insufficient permissions to ${action} this event`);
+    }
+    return event;
+  }
+
   @Post()
   @HttpCode(201)
   async create(@CurrentUser() u: AuthUser, @Body() body: CreateEventDto) {
@@ -89,13 +96,7 @@ export class EventsController {
 
   @Get(":id")
   async getById(@CurrentUser() u: AuthUser, @Param() params: EventIdParamDto) {
-    assertAdmin(u);
-    const event = await this.events.getEventById(params.id);
-    if (!event) throw new NotFoundException({ code: ErrorCodes.NOT_FOUND, message: "Event not found" });
-    if (!canAccessClient(u, event.clientId)) {
-      throw forbidden("Insufficient permissions to access this event");
-    }
-    return event;
+    return this.requireOwnedEvent(u, params.id, "access");
   }
 
   @Patch(":id")
@@ -104,12 +105,7 @@ export class EventsController {
     @Param() params: EventIdParamDto,
     @Body() body: UpdateEventDto,
   ) {
-    assertAdmin(u);
-    const event = await this.events.getEventById(params.id);
-    if (!event) throw new NotFoundException({ code: ErrorCodes.NOT_FOUND, message: "Event not found" });
-    if (!canAccessClient(u, event.clientId)) {
-      throw forbidden("Insufficient permissions to update this event");
-    }
+    await this.requireOwnedEvent(u, params.id, "update");
     return this.events.updateEvent(params.id, body);
   }
 
@@ -117,12 +113,7 @@ export class EventsController {
   @HttpCode(204)
   @SkipEnvelope() // bare 204, no body/envelope (legacy parity)
   async remove(@CurrentUser() u: AuthUser, @Param() params: EventIdParamDto) {
-    assertAdmin(u);
-    const event = await this.events.getEventById(params.id);
-    if (!event) throw new NotFoundException({ code: ErrorCodes.NOT_FOUND, message: "Event not found" });
-    if (!canAccessClient(u, event.clientId)) {
-      throw forbidden("Insufficient permissions to delete this event");
-    }
+    await this.requireOwnedEvent(u, params.id, "delete");
     await this.events.deleteEvent(params.id);
   }
 
@@ -133,12 +124,7 @@ export class EventsController {
     @Param() params: EventIdParamDto,
     @Req() req: MultipartRequest,
   ) {
-    assertAdmin(u);
-    const event = await this.events.getEventById(params.id);
-    if (!event) throw new NotFoundException({ code: ErrorCodes.NOT_FOUND, message: "Event not found" });
-    if (!canAccessClient(u, event.clientId)) {
-      throw forbidden("Insufficient permissions to update this event");
-    }
+    const event = await this.requireOwnedEvent(u, params.id, "update");
     assertEventWritable(event);
 
     const data = await req.file();

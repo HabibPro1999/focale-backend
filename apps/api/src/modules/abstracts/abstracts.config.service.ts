@@ -11,7 +11,7 @@ import {
   updateAbstractConfig,
   abstractsTableExists,
   countAbstractsByEvent,
-  writeAbstractAuditLog,
+  insertAuditLog,
   listThemesByConfigId,
   insertTheme,
   findThemeWithEventId,
@@ -74,7 +74,7 @@ export class AbstractsConfigService {
         force ?? false,
       );
       if (forced) {
-        await writeAbstractAuditLog({
+        await insertAuditLog({
           entityType: "AbstractConfig",
           entityId: config.id,
           action: "mode_force_changed",
@@ -114,7 +114,7 @@ export class AbstractsConfigService {
       }
     }
 
-    await writeAbstractAuditLog({
+    await insertAuditLog({
       entityType: "AbstractConfig",
       entityId: config.id,
       action: "UPDATE",
@@ -224,7 +224,7 @@ export class AbstractsConfigService {
     await updateAbstractConfig(config.id, {
       additionalFieldsSchema: body.fields,
     });
-    await writeAbstractAuditLog({
+    await insertAuditLog({
       entityType: "AbstractConfig",
       entityId: config.id,
       action: "UPDATE",

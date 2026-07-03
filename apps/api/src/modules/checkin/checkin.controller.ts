@@ -1,18 +1,16 @@
 import {
   Body,
   Controller,
-  ForbiddenException,
   Get,
   HttpCode,
-  NotFoundException,
   Param,
   Post,
   Query,
 } from "@nestjs/common";
-import { getEventWithPricing } from "@app/db";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
-import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
+import { assertEventAccess } from "../../core/auth/assert-event-access";
+import { type AuthUser } from "../../core/auth/user-cache";
 import { CheckinService } from "./checkin.service";
 import {
   BatchSyncBodyDto,
@@ -34,11 +32,7 @@ export class CheckinController {
   constructor(private readonly checkin: CheckinService) {}
 
   private async authorizeEvent(user: AuthUser, eventId: string): Promise<void> {
-    const event = await getEventWithPricing(eventId);
-    if (!event) throw new NotFoundException("Event not found");
-    if (!canAccessClient(user, event.clientId)) {
-      throw new ForbiddenException("Insufficient permissions");
-    }
+    await assertEventAccess(user, eventId);
   }
 
   @Post(":eventId/checkin")

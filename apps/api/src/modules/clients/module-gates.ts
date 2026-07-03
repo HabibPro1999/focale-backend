@@ -6,10 +6,6 @@ import { findClientModuleState } from "@app/db";
 // abstracts, sponsorships, email, registrations, pricing, events, identity)
 // have a single clients-domain import point, matching the legacy `@clients`.
 export { clientExists } from "@app/db";
-export {
-  clientModuleGateColumns,
-  clientModuleGateWithNameColumns,
-} from "@app/db";
 
 /** The client fields a module-gate check needs (legacy CLIENT_MODULE_GATE_SELECT). */
 export type ClientModuleState = {

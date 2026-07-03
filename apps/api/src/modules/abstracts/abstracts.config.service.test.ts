@@ -6,7 +6,7 @@ vi.mock("@app/db", () => ({
   updateAbstractConfig: vi.fn(),
   abstractsTableExists: vi.fn(),
   countAbstractsByEvent: vi.fn(),
-  writeAbstractAuditLog: vi.fn(),
+  insertAuditLog: vi.fn(),
   listThemesByConfigId: vi.fn(),
   insertTheme: vi.fn(),
   findThemeWithEventId: vi.fn(),
@@ -19,7 +19,7 @@ import {
   updateAbstractConfig,
   abstractsTableExists,
   countAbstractsByEvent,
-  writeAbstractAuditLog,
+  insertAuditLog,
   listThemesByConfigId,
   insertTheme,
   findThemeWithEventId,
@@ -109,7 +109,7 @@ describe("updateConfig", () => {
     expect(updateAbstractConfig).toHaveBeenCalledWith(configId, {
       editingEnabled: true,
     });
-    expect(writeAbstractAuditLog).toHaveBeenCalledWith(
+    expect(insertAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({
         entityType: "AbstractConfig",
         entityId: configId,
@@ -138,13 +138,13 @@ describe("updateConfig", () => {
       userId,
     );
 
-    expect(writeAbstractAuditLog).toHaveBeenCalledWith(
+    expect(insertAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({
         action: "mode_force_changed",
         changes: { submissionMode: { old: "FREE_TEXT", new: "STRUCTURED" } },
       }),
     );
-    expect(writeAbstractAuditLog).toHaveBeenCalledWith(
+    expect(insertAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({ action: "UPDATE" }),
     );
     // `force` is stripped from the persisted data.
@@ -271,7 +271,7 @@ describe("additional fields", () => {
     expect(updateAbstractConfig).toHaveBeenCalledWith(configId, {
       additionalFieldsSchema: fields,
     });
-    expect(writeAbstractAuditLog).toHaveBeenCalledWith(
+    expect(insertAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({
         entityType: "AbstractConfig",
         action: "UPDATE",

@@ -1,10 +1,9 @@
 import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { getDb, type DbExecutor } from "../client";
 import { withTxn } from "../txn";
-import { enqueueRealtimeOutboxEvent } from "../outbox";
+import { enqueueRealtimeOutboxEvent, insertAuditLog } from "../outbox";
 import {
   accessCheckIns,
-  auditLogs,
   eventAccess,
   events,
   registrations,
@@ -235,15 +234,18 @@ export async function checkInRegistration(input: {
       .set({ checkedInAt: input.checkedInAt, checkedInBy: input.checkedInBy })
       .where(eq(registrations.id, input.registrationId));
 
-    await tx.insert(auditLogs).values({
-      entityType: "Registration",
-      entityId: input.registrationId,
-      action: "CHECK_IN",
-      changes: {
-        checkedInAt: { old: null, new: input.checkedInAt.toISOString() },
+    await insertAuditLog(
+      {
+        entityType: "Registration",
+        entityId: input.registrationId,
+        action: "CHECK_IN",
+        changes: {
+          checkedInAt: { old: null, new: input.checkedInAt.toISOString() },
+        },
+        performedBy: input.checkedInBy,
       },
-      performedBy: input.checkedInBy,
-    });
+      tx,
+    );
 
     if (input.clientId) {
       await enqueueRealtimeOutboxEvent(tx, {
@@ -277,16 +279,19 @@ export async function createAccessCheckIn(input: {
       })
       .returning();
 
-    await tx.insert(auditLogs).values({
-      entityType: "AccessCheckIn",
-      entityId: created.id,
-      action: "CHECK_IN",
-      changes: {
-        accessId: { old: null, new: input.accessId },
-        checkedInAt: { old: null, new: input.checkedInAt.toISOString() },
+    await insertAuditLog(
+      {
+        entityType: "AccessCheckIn",
+        entityId: created.id,
+        action: "CHECK_IN",
+        changes: {
+          accessId: { old: null, new: input.accessId },
+          checkedInAt: { old: null, new: input.checkedInAt.toISOString() },
+        },
+        performedBy: input.checkedInBy,
       },
-      performedBy: input.checkedInBy,
-    });
+      tx,
+    );
 
     if (input.clientId) {
       await enqueueRealtimeOutboxEvent(tx, {

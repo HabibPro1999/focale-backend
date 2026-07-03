@@ -1,14 +1,11 @@
 import { defineConfig } from "vitest/config";
-
-// Resolve @app/db to workspace source (mirrors vitest.config.ts).
-const conditions = ["@app/source", "require", "node", "default"];
+import { resolveConditions } from "./vitest.shared";
 
 // Concurrency tier: real DB, genuine parallel workers. Parallelism inside a test
 // comes from Promise.all over the pooled pg connections; fileParallelism is off
 // (mirrors legacy) so separate files never race on the shared database.
 export default defineConfig({
-  resolve: { conditions },
-  ssr: { resolve: { conditions } },
+  ...resolveConditions,
   test: {
     environment: "node",
     include: ["tests/concurrency/**/*.concurrency.test.ts"],

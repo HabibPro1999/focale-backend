@@ -36,7 +36,7 @@ vi.mock("@app/db", () => ({
   getUnsettledRegistrationsWithAccess: vi.fn(),
   getRegistrationCoveredAccessIds: vi.fn(),
   updateRegistrationForAccessDrop: vi.fn(),
-  insertAccessAuditLog: vi.fn(),
+  insertAuditLog: vi.fn(),
   enqueueTriggeredEmailOutbox: vi.fn(),
 }));
 
@@ -634,7 +634,7 @@ describe("handleCapacityReached", () => {
     expect(patch.paymentStatus).toBeUndefined();
     expect(m.enqueueTriggeredEmailOutbox).not.toHaveBeenCalled();
 
-    const [audit] = m.insertAccessAuditLog.mock.calls[0];
+    const [audit] = m.insertAuditLog.mock.calls[0];
     expect(audit.action).toBe("ACCESS_CAPACITY_REACHED");
     expect(audit.performedBy).toBe("SYSTEM");
   });

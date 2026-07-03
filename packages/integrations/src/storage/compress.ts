@@ -1,5 +1,6 @@
 import sharp from "sharp";
-import { IntegrationError, IntegrationErrorCodes } from "../errors";
+import { ErrorCodes } from "@app/contracts";
+import { IntegrationError } from "../errors";
 
 export interface CompressedFile {
   buffer: Buffer;
@@ -52,6 +53,6 @@ export async function compressFile(
   throw new IntegrationError(
     `Unsupported file type: ${mimetype}`,
     400,
-    IntegrationErrorCodes.INVALID_FILE_TYPE,
+    ErrorCodes.INVALID_FILE_TYPE,
   );
 }

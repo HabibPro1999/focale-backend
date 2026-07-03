@@ -20,7 +20,7 @@ import {
 } from "@app/db";
 import {
   __certificatePdfTestHooks,
-  createCertificateAttachmentGenerator,
+  generateCertificateEmailAttachments,
   generateCertificateAttachments,
   generateCertificatePdf,
   isEligibleForCertificate,
@@ -175,7 +175,7 @@ describe("isEligibleForCertificate", () => {
   });
 });
 
-describe("createCertificateAttachmentGenerator (worker seam)", () => {
+describe("generateCertificateEmailAttachments (worker seam)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockDownload.mockResolvedValue({
@@ -204,9 +204,8 @@ describe("createCertificateAttachmentGenerator (worker seam)", () => {
       { ...template(), zones: [] } as never,
     ]);
 
-    const generate = createCertificateAttachmentGenerator();
     await expect(
-      generate({
+      generateCertificateEmailAttachments({
         registrationId: "registration-123456",
         certificateTemplateIds: ["template-123456", "template-999999"],
         imageCache: new Map(),
@@ -233,8 +232,7 @@ describe("createCertificateAttachmentGenerator (worker seam)", () => {
       { ...template(), zones: [] } as never,
     ]);
 
-    const generate = createCertificateAttachmentGenerator();
-    const attachments = await generate({
+    const attachments = await generateCertificateEmailAttachments({
       registrationId: "registration-123456",
       certificateTemplateIds: ["template-123456"],
       imageCache: new Map(),

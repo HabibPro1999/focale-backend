@@ -1,11 +1,8 @@
 import { defineConfig } from "vitest/config";
-
-// @app/source first (workspace source). require/node before import so CJS-only deps resolve to their CJS entry.
-const conditions = ["@app/source", "require", "node", "default"];
+import { resolveConditions } from "./vitest.shared";
 
 export default defineConfig({
-  resolve: { conditions },
-  ssr: { resolve: { conditions } },
+  ...resolveConditions,
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"],

@@ -1,12 +1,10 @@
 import { defineConfig } from "vitest/config";
-
-const conditions = ["@app/source", "require", "node", "default"];
+import { resolveConditions } from "./vitest.shared";
 
 // Migration tier: applies packages/db/migrations/*.sql in order to a scratch
 // database it creates + drops itself (direct pg, no drizzle-kit), then introspects.
 export default defineConfig({
-  resolve: { conditions },
-  ssr: { resolve: { conditions } },
+  ...resolveConditions,
   test: {
     environment: "node",
     include: ["tests/migration/**/*.migration.test.ts"],

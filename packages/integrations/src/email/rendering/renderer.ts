@@ -414,7 +414,3 @@ function extractTextFromNode(node: TiptapNode): string {
       return childText;
   }
 }
-
-// escapeHtml re-exported so the email renderer + context sanitizer share one
-// implementation (the shared @app/shared/html util).
-export { escapeHtml };

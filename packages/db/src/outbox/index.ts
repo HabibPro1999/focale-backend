@@ -2,6 +2,7 @@ export {
   enqueueOutboxEvent,
   enqueueRealtimeOutboxEvent,
   getOutboxHealth,
+  insertAuditLog,
   processOutboxEvents,
   recoverStaleOutboxLeases,
 } from "./outbox";

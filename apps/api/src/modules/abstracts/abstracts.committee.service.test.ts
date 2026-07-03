@@ -25,7 +25,7 @@ vi.mock("@app/db", () => ({
   getAssignedAbstractRow: vi.fn(),
   findAbstractForReview: vi.fn(),
   reviewAbstractTxn: vi.fn(),
-  writeAbstractAuditLog: vi.fn(),
+  insertAuditLog: vi.fn(),
   getUserByEmail: vi.fn(),
   getUserById: vi.fn(),
 }));
@@ -70,7 +70,7 @@ import {
   getAssignedAbstractRow,
   findAbstractForReview,
   reviewAbstractTxn,
-  writeAbstractAuditLog,
+  insertAuditLog,
   getUserByEmail,
   getUserById,
 } from "@app/db";
@@ -340,7 +340,7 @@ describe("removeCommitteeMember", () => {
       eventId,
       reviewerId,
     );
-    expect(writeAbstractAuditLog).toHaveBeenCalledWith(
+    expect(insertAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({ action: "deactivate" }),
     );
   });
@@ -376,7 +376,7 @@ describe("setReviewerThemes", () => {
     expect(setReviewerThemesTxn).toHaveBeenCalledWith(eventId, reviewerId, [
       "theme-1",
     ]);
-    expect(writeAbstractAuditLog).toHaveBeenCalledWith(
+    expect(insertAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({ action: "replace" }),
     );
   });
@@ -713,7 +713,7 @@ describe("resendCommitteeInvite", () => {
         categories: ["committee-password-reset"],
       }),
     );
-    expect(writeAbstractAuditLog).toHaveBeenCalledWith(
+    expect(insertAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({
         entityType: "User",
         action: "admin_reset_password",
@@ -733,7 +733,7 @@ describe("resendCommitteeInvite", () => {
       performedBy,
     );
     expect(result).toEqual({ inviteEmailSent: false });
-    expect(writeAbstractAuditLog).toHaveBeenCalled();
+    expect(insertAuditLog).toHaveBeenCalled();
   });
 
   it("reports false but still audit-logs when link generation throws", async () => {
@@ -747,7 +747,7 @@ describe("resendCommitteeInvite", () => {
     );
     expect(result).toEqual({ inviteEmailSent: false });
     expect(sendEmailMock).not.toHaveBeenCalled();
-    expect(writeAbstractAuditLog).toHaveBeenCalled();
+    expect(insertAuditLog).toHaveBeenCalled();
   });
 });
 
@@ -779,7 +779,7 @@ describe("setCommitteeMemberPassword", () => {
     expect(result).toEqual({ ok: true });
     expect(updateFirebaseUserPassword).toHaveBeenCalledWith(reviewerId, newPassword);
     expect(revokeFirebaseRefreshTokens).toHaveBeenCalledWith(reviewerId);
-    const auditArg = mock(writeAbstractAuditLog).mock.calls.at(-1)?.[0];
+    const auditArg = mock(insertAuditLog).mock.calls.at(-1)?.[0];
     expect(auditArg).toMatchObject({
       action: "admin_reset_password",
       changes: { method: { old: null, new: "direct" } },

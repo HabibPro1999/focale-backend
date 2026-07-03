@@ -13,9 +13,7 @@
 // ownership, not conflict retry.
 // =============================================================================
 
-import { randomUUID } from "node:crypto";
-import { hostname } from "node:os";
-import { createLogger } from "@app/shared";
+import { createLogger, makeWorkerId } from "@app/shared";
 import type { AutomaticEmailTrigger, EmailStatus } from "@app/contracts";
 import {
   getTemplateByTrigger,
@@ -44,7 +42,7 @@ import { resolveVariables, buildEmailContextWithAccess } from "./rendering/index
 const logger = createLogger({ name: "email:queue" });
 
 const MAX_RETRIES = 3;
-const DEFAULT_WORKER_ID = `email:${hostname()}:${process.pid}:${randomUUID()}`;
+const DEFAULT_WORKER_ID = makeWorkerId("email");
 
 // -----------------------------------------------------------------------------
 // Realtime seam. In the legacy monolith the queue emitted emailLog.statusChanged

@@ -1,3 +1,4 @@
+import { parseArgs } from "node:util";
 import {
   enqueueAbstractEmailOutboxEvent,
   findSkippedAbstractEmails,
@@ -21,20 +22,30 @@ const ABSTRACT_EMAIL_TRIGGERS = [
   "ABSTRACT_FINAL_FILE_REQUEST",
 ] as const satisfies readonly AbstractEmailTrigger[];
 
-function readArg(name: string): string | null {
-  const prefix = `${name}=`;
-  const inline = process.argv.find((arg) => arg.startsWith(prefix));
-  if (inline) return inline.slice(prefix.length);
-  const index = process.argv.indexOf(name);
-  return index >= 0 ? (process.argv[index + 1] ?? null) : null;
+function parseCliArgs() {
+  const { values } = parseArgs({
+    options: {
+      help: { type: "boolean", short: "h" },
+      apply: { type: "boolean" },
+      "event-id": { type: "string" },
+      "abstract-id": { type: "string" },
+      trigger: { type: "string" },
+      limit: { type: "string" },
+    },
+    // Unknown flags were silently ignored by the hand-rolled parser; keep that.
+    strict: false,
+  });
+  return values as {
+    help?: boolean;
+    apply?: boolean;
+    "event-id"?: string;
+    "abstract-id"?: string;
+    trigger?: string;
+    limit?: string;
+  };
 }
 
-function hasFlag(name: string): boolean {
-  return process.argv.includes(name);
-}
-
-function parseLimit(): number {
-  const raw = readArg("--limit");
+function parseLimit(raw: string | undefined): number {
   if (!raw) return 50;
   const limit = Number(raw);
   if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
@@ -43,8 +54,7 @@ function parseLimit(): number {
   return limit;
 }
 
-function parseTrigger(): AbstractEmailTrigger | undefined {
-  const raw = readArg("--trigger");
+function parseTrigger(raw: string | undefined): AbstractEmailTrigger | undefined {
   if (!raw) return undefined;
   if (!ABSTRACT_EMAIL_TRIGGERS.includes(raw as AbstractEmailTrigger)) {
     throw new Error(
@@ -80,16 +90,17 @@ function dedupe(rows: SkippedAbstractEmailRow[]): SkippedAbstractEmailRow[] {
 }
 
 async function main() {
-  if (hasFlag("--help") || hasFlag("-h")) {
+  const args = parseCliArgs();
+  if (args.help) {
     console.log(usage());
     return;
   }
 
-  const apply = hasFlag("--apply");
-  const eventId = readArg("--event-id") ?? undefined;
-  const abstractId = readArg("--abstract-id") ?? undefined;
-  const trigger = parseTrigger();
-  const limit = parseLimit();
+  const apply = args.apply === true;
+  const eventId = args["event-id"] ?? undefined;
+  const abstractId = args["abstract-id"] ?? undefined;
+  const trigger = parseTrigger(args.trigger);
+  const limit = parseLimit(args.limit);
 
   const rows = await findSkippedAbstractEmails({
     eventId,

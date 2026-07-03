@@ -1,12 +1,10 @@
-import { randomUUID } from "node:crypto";
-import { hostname } from "node:os";
 import {
   Inject,
   Injectable,
   type OnApplicationBootstrap,
   type OnApplicationShutdown,
 } from "@nestjs/common";
-import { startPoller, type Poller } from "@app/shared";
+import { makeWorkerId, startPoller, type Poller } from "@app/shared";
 import {
   processOutboxEvents,
   REALTIME_EMIT_TYPE,
@@ -30,7 +28,7 @@ export class RealtimePumpService
   implements OnApplicationBootstrap, OnApplicationShutdown
 {
   private poller: Poller | null = null;
-  readonly workerId = `realtime:${hostname()}:${process.pid}:${randomUUID()}`;
+  readonly workerId = makeWorkerId("realtime");
 
   // The only handler this process registers: realtime.emit → bus fan-out.
   private readonly handlers: OutboxHandlerRegistry = {

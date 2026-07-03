@@ -654,13 +654,6 @@ export async function generateReferenceNumber(
 // Audit + edit token
 // ============================================================================
 
-export async function insertRegistrationAuditLog(
-  values: typeof auditLogs.$inferInsert,
-  db: DbExecutor,
-): Promise<void> {
-  await db.insert(auditLogs).values(values);
-}
-
 // ============================================================================
 // Audit-log + email-log subroute reads (paginated)
 // ============================================================================

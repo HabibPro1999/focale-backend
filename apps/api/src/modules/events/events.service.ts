@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { HttpException, Injectable } from "@nestjs/common";
+import { Injectable } from "@nestjs/common";
 import { ErrorCodes } from "@app/contracts";
 import type {
   CreateEventInput,
@@ -7,7 +7,6 @@ import type {
   ListEventsQuery,
   PublicPaymentConfigResponse,
 } from "@app/contracts";
-import { UserRole } from "@app/contracts";
 import { paginate, type PaginatedResult } from "@app/shared";
 import {
   getDb,
@@ -15,7 +14,6 @@ import {
   type DbExecutor,
   type EventRow,
   type EventWithPricing,
-  type ClientPublicFields,
   casDecrementRegisteredTx,
   casIncrementRegisteredTx,
   clientExistsById,
@@ -39,54 +37,15 @@ import {
   updateEventTx,
   upsertEventPricingTx,
 } from "@app/db";
-import { compressImage, getStorageProvider } from "@app/integrations";
+import {
+  compressImage,
+  extractStorageKeyFromUrl,
+  getStorageProvider,
+} from "@app/integrations";
 import { fileTypeFromBuffer } from "file-type";
+import { AppException } from "../../core/app-exception";
 import { logger } from "../../core/logger.service";
-
-/** HttpException carrying the wire error shape the global filter renders verbatim. */
-function appError(
-  code: string,
-  message: string,
-  status: number,
-  details?: unknown,
-): HttpException {
-  return new HttpException(
-    details === undefined ? { code, message } : { code, message, details },
-    status,
-  );
-}
-
-// The 8-field auth user the (future real) AuthGuard attaches to the request.
-// Interface pinned by port conventions; role is numeric.
-export interface AuthUser {
-  id: string;
-  email: string;
-  name: string;
-  role: number;
-  clientId: string | null;
-  active: boolean;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-/**
- * Ownership check — SUPER_ADMIN always; CLIENT_ADMIN only own client; everyone
- * else (incl. SCIENTIFIC_COMMITTEE / unknown) denied (fail-closed).
- * ponytail: kept local; belongs in a shared auth util once that wave lands.
- */
-export function canAccessClient(user: AuthUser, clientId: string): boolean {
-  if (user.role === UserRole.SUPER_ADMIN) return true;
-  if (user.role === UserRole.CLIENT_ADMIN) return user.clientId === clientId;
-  return false;
-}
-
-/** Module gate: client active AND enabledModules includes the module id. */
-export function isModuleEnabledForClient(
-  client: Pick<ClientPublicFields, "active" | "enabledModules">,
-  moduleId: string,
-): boolean {
-  return client.active === true && (client.enabledModules ?? []).includes(moduleId);
-}
+import { isModuleEnabledForClient } from "../clients/module-gates";
 
 // --- Pure event-status policy (consumed by other modules) -------------------
 
@@ -114,7 +73,7 @@ function effectivePublicEndDate(endDate: Date): Date {
 
 export function assertEventWritable(event: { status: string }): void {
   if (event.status === "ARCHIVED") {
-    throw appError(
+    throw new AppException(
       ErrorCodes.INVALID_STATUS_TRANSITION,
       "Archived events cannot be modified",
       400,
@@ -124,7 +83,7 @@ export function assertEventWritable(event: { status: string }): void {
 
 export function assertEventOpen(event: { status: string }): void {
   if (event.status !== "OPEN") {
-    throw appError(
+    throw new AppException(
       ErrorCodes.EVENT_NOT_OPEN,
       "Event is not accepting public actions",
       400,
@@ -138,7 +97,7 @@ export function assertEventAcceptsPublicActions(
 ): void {
   assertEventOpen(event);
   if (effectivePublicEndDate(event.endDate) < now) {
-    throw appError(
+    throw new AppException(
       ErrorCodes.EVENT_NOT_OPEN,
       "Event is not accepting public actions",
       400,
@@ -155,28 +114,12 @@ const VALID_STATUS_TRANSITIONS: Record<string, string[]> = {
 
 // --- Storage cleanup helpers (best-effort; failures only logged) ------------
 
-function extractKeyFromStorage(value: string): string | null {
-  if (!value.includes("://")) {
-    return value || null;
-  }
-  try {
-    const parsed = new URL(value);
-    if (parsed.hostname === "storage.googleapis.com") {
-      const parts = parsed.pathname.split("/").filter(Boolean);
-      return decodeURIComponent(parts.slice(1).join("/"));
-    }
-    return decodeURIComponent(parsed.pathname.slice(1));
-  } catch {
-    return null;
-  }
-}
-
 async function deleteStoredObjectBestEffort(
   location: string | null | undefined,
   context: Record<string, unknown>,
 ): Promise<void> {
   if (!location) return;
-  const key = extractKeyFromStorage(location);
+  const key = extractStorageKeyFromUrl(location);
   if (!key) return;
   try {
     await getStorageProvider().delete(key);
@@ -212,11 +155,11 @@ export class EventsService {
     } = input;
 
     if (!(await clientExistsById(clientId))) {
-      throw appError(ErrorCodes.NOT_FOUND, "Client not found", 404);
+      throw new AppException(ErrorCodes.NOT_FOUND, "Client not found", 404);
     }
 
     if ((await getEventIdBySlugTx(getDb(), slug)) !== null) {
-      throw appError(ErrorCodes.CONFLICT, "Event with this slug already exists", 409);
+      throw new AppException(ErrorCodes.CONFLICT, "Event with this slug already exists", 409);
     }
 
     return getDb().transaction(
@@ -258,7 +201,7 @@ export class EventsService {
   /** Update event (+pricing). Serializable + retry — currency guard runs inside the txn. */
   async updateEvent(id: string, input: UpdateEventInput): Promise<EventWithPricing> {
     if (Object.values(input).every((value) => value === undefined)) {
-      throw appError(
+      throw new AppException(
         ErrorCodes.VALIDATION_ERROR,
         "At least one field must be provided for update",
         400,
@@ -272,13 +215,13 @@ export class EventsService {
           async (tx) => {
             const event = await getEventWithPricing(id, tx);
             if (!event) {
-              throw appError(ErrorCodes.NOT_FOUND, "Event not found", 404);
+              throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
             }
 
             if (input.status && input.status !== event.status) {
               const allowed = VALID_STATUS_TRANSITIONS[event.status] ?? [];
               if (!allowed.includes(input.status)) {
-                throw appError(
+                throw new AppException(
                   ErrorCodes.INVALID_STATUS_TRANSITION,
                   `Cannot transition event from ${event.status} to ${input.status}`,
                   400,
@@ -290,7 +233,7 @@ export class EventsService {
             const resultingStart = input.startDate ?? event.startDate;
             const resultingEnd = input.endDate ?? event.endDate;
             if (resultingEnd < resultingStart) {
-              throw appError(
+              throw new AppException(
                 ErrorCodes.VALIDATION_ERROR,
                 "End date must be greater than or equal to start date",
                 400,
@@ -302,7 +245,7 @@ export class EventsService {
               input.maxCapacity !== null &&
               input.maxCapacity < event.registeredCount
             ) {
-              throw appError(
+              throw new AppException(
                 ErrorCodes.VALIDATION_ERROR,
                 "Max capacity cannot be below current registered count",
                 400,
@@ -312,7 +255,7 @@ export class EventsService {
             if (input.slug && input.slug !== event.slug) {
               const existingId = await getEventIdBySlugTx(tx, input.slug);
               if (existingId) {
-                throw appError(
+                throw new AppException(
                   ErrorCodes.CONFLICT,
                   "Event with this slug already exists",
                   409,
@@ -327,7 +270,7 @@ export class EventsService {
               if (normalizedCurrency !== currentCurrency) {
                 const registrationCount = await countRegistrationsTx(tx, id);
                 if (registrationCount > 0) {
-                  throw appError(
+                  throw new AppException(
                     ErrorCodes.VALIDATION_ERROR,
                     "Cannot change currency after registrations exist",
                     400,
@@ -385,10 +328,10 @@ export class EventsService {
         async (tx) => {
           const found = await getEventWithRegistrationCountTx(tx, id);
           if (!found) {
-            throw appError(ErrorCodes.NOT_FOUND, "Event not found", 404);
+            throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
           }
           if (found.registrations > 0) {
-            throw appError(
+            throw new AppException(
               ErrorCodes.EVENT_HAS_REGISTRATIONS,
               eventHasRegistrationsMessage(found.registrations),
               409,
@@ -415,7 +358,7 @@ export class EventsService {
       if (isForeignKeyViolation(err)) {
         const registrationCount = await countRegistrationsTx(getDb(), id);
         if (registrationCount > 0) {
-          throw appError(
+          throw new AppException(
             ErrorCodes.EVENT_HAS_REGISTRATIONS,
             eventHasRegistrationsMessage(registrationCount),
             409,
@@ -446,13 +389,13 @@ export class EventsService {
   ): Promise<{ bannerUrl: string }> {
     const event = await getEventWithPricing(id);
     if (!event) {
-      throw appError(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
     }
     assertEventWritable(event);
 
     const detectedType = await fileTypeFromBuffer(file.buffer);
     if (!detectedType?.mime.startsWith("image/")) {
-      throw appError(
+      throw new AppException(
         ErrorCodes.INVALID_FILE_TYPE,
         "Invalid file content. Only real images are allowed.",
         400,
@@ -488,16 +431,16 @@ export class EventsService {
 
     const info = await getEventCounterInfoTx(exec, id);
     if (!info) {
-      throw appError(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
     }
     if (info.status !== "OPEN") {
-      throw appError(
+      throw new AppException(
         ErrorCodes.EVENT_NOT_OPEN,
         "Event is not accepting public actions",
         400,
       );
     }
-    throw appError(ErrorCodes.EVENT_FULL, "Event is at capacity", 409);
+    throw new AppException(ErrorCodes.EVENT_FULL, "Event is at capacity", 409);
   }
 
   /** Atomic decrement (consumed by registrations). */
@@ -506,9 +449,9 @@ export class EventsService {
 
     const info = await getEventCounterInfoTx(exec, id);
     if (!info) {
-      throw appError(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
     }
-    throw appError(
+    throw new AppException(
       ErrorCodes.VALIDATION_ERROR,
       "Event registered count is already zero",
       400,
@@ -519,10 +462,10 @@ export class EventsService {
   async getPaymentConfig(id: string): Promise<PublicPaymentConfigResponse> {
     const event = await getEventWithPricingAndClient(id);
     if (!event) {
-      throw appError(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
     }
     if (event.status !== "OPEN" || event.client.active !== true) {
-      throw appError(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
     }
 
     const pricing = event.pricing;

@@ -3,11 +3,8 @@
 export { EventsModule } from "./events.module";
 export {
   EventsService,
-  canAccessClient,
-  isModuleEnabledForClient,
   assertEventWritable,
   assertEventOpen,
   assertEventAcceptsPublicActions,
-  type AuthUser,
 } from "./events.service";
 export { EventIdParamDto, EventSlugParamDto } from "./events.dto";

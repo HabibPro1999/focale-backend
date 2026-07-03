@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Res } from "@nestjs/common";
+import { Controller, Get, Res } from "@nestjs/common";
 import { SkipThrottle } from "@nestjs/throttler";
 import {
   getAbstractBookQueueHealth,
@@ -8,7 +8,6 @@ import {
 } from "@app/db";
 import type { FastifyReply } from "fastify";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
-import { EchoDto } from "./echo.dto";
 
 // Health probes are machine-consumed (load balancers, k8s, Render). They return
 // the RAW legacy bodies with legacy status codes and are @SkipEnvelope: the
@@ -47,35 +46,31 @@ export class HealthController {
     return { status: "not ready" };
   }
 
-  // Scaffold fixture retained deliberately: exercises the Zod validation +
-  // success-envelope pipeline (NOT a probe, so it keeps the envelope).
-  @Post("health/echo")
-  echo(@Body() body: EchoDto) {
-    return { msg: body.msg };
-  }
-
   // Operational queue probes: 200 when isHealthy, else 503; raw body either way.
-  @Get("health/email-queue")
-  @SkipEnvelope()
-  async emailQueue(@Res({ passthrough: true }) reply: FastifyReply) {
-    const health = await getEmailQueueHealth();
+  private async probe<T extends { isHealthy: boolean }>(
+    reply: FastifyReply,
+    check: () => Promise<T>,
+  ): Promise<T> {
+    const health = await check();
     if (!health.isHealthy) reply.status(503);
     return health;
+  }
+
+  @Get("health/email-queue")
+  @SkipEnvelope()
+  emailQueue(@Res({ passthrough: true }) reply: FastifyReply) {
+    return this.probe(reply, getEmailQueueHealth);
   }
 
   @Get("health/abstract-book-jobs")
   @SkipEnvelope()
-  async abstractBookJobs(@Res({ passthrough: true }) reply: FastifyReply) {
-    const health = await getAbstractBookQueueHealth();
-    if (!health.isHealthy) reply.status(503);
-    return health;
+  abstractBookJobs(@Res({ passthrough: true }) reply: FastifyReply) {
+    return this.probe(reply, getAbstractBookQueueHealth);
   }
 
   @Get("health/outbox")
   @SkipEnvelope()
-  async outbox(@Res({ passthrough: true }) reply: FastifyReply) {
-    const health = await getOutboxHealth();
-    if (!health.isHealthy) reply.status(503);
-    return health;
+  outbox(@Res({ passthrough: true }) reply: FastifyReply) {
+    return this.probe(reply, getOutboxHealth);
   }
 }

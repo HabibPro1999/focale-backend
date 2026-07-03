@@ -42,7 +42,7 @@ import {
   getUnsettledRegistrationsWithAccess,
   getRegistrationCoveredAccessIds,
   updateRegistrationForAccessDrop,
-  insertAccessAuditLog,
+  insertAuditLog,
   enqueueTriggeredEmailOutbox,
 } from "@app/db";
 import { AppException } from "../../core/app-exception";
@@ -746,7 +746,7 @@ export class AccessService {
         exec,
       );
 
-      await insertAccessAuditLog(
+      await insertAuditLog(
         {
           entityType: "Registration",
           entityId: reg.id,

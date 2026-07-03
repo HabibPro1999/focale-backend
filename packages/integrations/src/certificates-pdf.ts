@@ -546,19 +546,17 @@ export async function generateCertificateAttachments(
 }
 
 // =============================================================================
-// WORKER SEAM — build the CertificateAttachmentGenerator injected into
+// WORKER SEAM — the CertificateAttachmentGenerator injected into
 // processEmailQueue (email/queue.ts). Re-fetches the registration + re-validates
 // that the queued templates are still active/image-ready at SEND time (§5), then
 // renders. The "no attachments"/"fewer than queued" handling lives in the queue
 // loop; this only produces the attachments (throwing when templates vanished).
 // The worker bootstrap wires this: processEmailQueue(batch, {
-//   generateCertificateAttachments: createCertificateAttachmentGenerator() }).
+//   generateCertificateAttachments: generateCertificateEmailAttachments }).
 // =============================================================================
 
-export function createCertificateAttachmentGenerator(): CertificateAttachmentGenerator {
-  return async (
-    ctx: CertificateAttachmentContext,
-  ): Promise<EmailAttachment[]> => {
+export const generateCertificateEmailAttachments: CertificateAttachmentGenerator =
+  async (ctx: CertificateAttachmentContext): Promise<EmailAttachment[]> => {
     const registration = await getRegistrationForCertificateGeneration(
       ctx.registrationId,
     );
@@ -598,4 +596,3 @@ export function createCertificateAttachmentGenerator(): CertificateAttachmentGen
       ctx.imageCache as ImageCache,
     );
   };
-}

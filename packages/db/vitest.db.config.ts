@@ -1,13 +1,10 @@
 import { defineConfig } from "vitest/config";
-
-// Resolve @app/db to workspace source (mirrors vitest.config.ts).
-const conditions = ["@app/source", "require", "node", "default"];
+import { resolveConditions } from "./vitest.shared";
 
 // General real-DB tier. fileParallelism off (mirrors legacy) so files sharing the
 // disposable database run sequentially.
 export default defineConfig({
-  resolve: { conditions },
-  ssr: { resolve: { conditions } },
+  ...resolveConditions,
   test: {
     environment: "node",
     include: ["tests/db/**/*.db.test.ts"],

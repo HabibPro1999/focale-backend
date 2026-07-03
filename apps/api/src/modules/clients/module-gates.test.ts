@@ -6,8 +6,6 @@ import { ErrorCodes } from "@app/contracts";
 vi.mock("@app/db", () => ({
   findClientModuleState: vi.fn(),
   clientExists: vi.fn(),
-  clientModuleGateColumns: {},
-  clientModuleGateWithNameColumns: {},
 }));
 
 import { findClientModuleState } from "@app/db";

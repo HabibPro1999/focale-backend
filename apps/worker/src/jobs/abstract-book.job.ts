@@ -1,7 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { hostname } from "node:os";
 import { Injectable } from "@nestjs/common";
-import { createLogger } from "@app/shared";
+import { createLogger, makeWorkerId } from "@app/shared";
 import {
   ABSTRACT_BOOK_LEASE_MS,
   claimAbstractBookJobs,
@@ -25,7 +23,7 @@ export class AbstractBookJob implements Job {
   readonly name = "abstract-book";
   readonly intervalMs = 30_000;
 
-  private readonly workerId = `abstract-book:${hostname()}:${process.pid}:${randomUUID()}`;
+  private readonly workerId = makeWorkerId("abstract-book");
 
   async run(): Promise<void> {
     await recoverStaleAbstractBookJobs();

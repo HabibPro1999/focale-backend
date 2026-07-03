@@ -2,7 +2,6 @@ import {
   Body,
   Controller,
   Delete,
-  ForbiddenException,
   Get,
   HttpCode,
   NotFoundException,
@@ -12,10 +11,10 @@ import {
   Query,
 } from "@nestjs/common";
 import type { CreateEventAccessInput } from "@app/contracts";
-import { getEventWithPricing } from "@app/db";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
-import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
+import { assertEventAccess } from "../../core/auth/assert-event-access";
+import { type AuthUser } from "../../core/auth/user-cache";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { assertClientModuleEnabled } from "../clients/module-gates";
 import { assertEventWritable } from "../events/events.service";
@@ -46,11 +45,7 @@ export class AccessController {
     @Param() params: AccessEventIdParamDto,
     @Body() body: CreateEventAccessBodyDto,
   ) {
-    const event = await getEventWithPricing(params.eventId);
-    if (!event) throw new NotFoundException("Event not found");
-    if (!canAccessClient(user, event.clientId)) {
-      throw new ForbiddenException("Insufficient permissions");
-    }
+    const event = await assertEventAccess(user, params.eventId);
     assertEventWritable(event);
     await assertClientModuleEnabled(event.clientId, "registrations");
 
@@ -64,11 +59,7 @@ export class AccessController {
     @Param() params: AccessEventIdParamDto,
     @Query() query: ListEventAccessQueryDto,
   ) {
-    const event = await getEventWithPricing(params.eventId);
-    if (!event) throw new NotFoundException("Event not found");
-    if (!canAccessClient(user, event.clientId)) {
-      throw new ForbiddenException("Insufficient permissions");
-    }
+    const event = await assertEventAccess(user, params.eventId);
     await assertClientModuleEnabled(event.clientId, "registrations");
 
     return this.access.listEventAccess(params.eventId, {
@@ -85,11 +76,7 @@ export class AccessController {
     const access = await this.access.getEventAccessById(params.id);
     if (!access) throw new NotFoundException("Access item not found");
 
-    const event = await getEventWithPricing(access.eventId);
-    if (!event) throw new NotFoundException("Event not found");
-    if (!canAccessClient(user, event.clientId)) {
-      throw new ForbiddenException("Insufficient permissions");
-    }
+    const event = await assertEventAccess(user, access.eventId);
     await assertClientModuleEnabled(event.clientId, "registrations");
 
     return access;
@@ -104,11 +91,7 @@ export class AccessController {
     const access = await this.access.getEventAccessById(params.id);
     if (!access) throw new NotFoundException("Access item not found");
 
-    const event = await getEventWithPricing(access.eventId);
-    if (!event) throw new NotFoundException("Event not found");
-    if (!canAccessClient(user, event.clientId)) {
-      throw new ForbiddenException("Insufficient permissions");
-    }
+    const event = await assertEventAccess(user, access.eventId);
     assertEventWritable(event);
     await assertClientModuleEnabled(event.clientId, "registrations");
 
@@ -125,11 +108,7 @@ export class AccessController {
     const access = await this.access.getEventAccessById(params.id);
     if (!access) throw new NotFoundException("Access item not found");
 
-    const event = await getEventWithPricing(access.eventId);
-    if (!event) throw new NotFoundException("Event not found");
-    if (!canAccessClient(user, event.clientId)) {
-      throw new ForbiddenException("Insufficient permissions");
-    }
+    const event = await assertEventAccess(user, access.eventId);
     assertEventWritable(event);
     await assertClientModuleEnabled(event.clientId, "registrations");
 

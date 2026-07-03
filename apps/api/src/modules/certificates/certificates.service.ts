@@ -26,6 +26,7 @@ import {
   type EmailLogInsert,
 } from "@app/db";
 import {
+  extractStorageKeyFromUrl,
   getStorageProvider,
   buildEmailContextWithAccess,
   isEligibleForCertificate,
@@ -67,18 +68,10 @@ interface BulkCertificateInput {
   contextSnapshot: Record<string, unknown>;
 }
 
-/** Extract storage key from a full URL. Handles Firebase + R2 URL formats. */
+// Bare keys (no "://") are rejected: certificate templateUrls are always full
+// URLs and downloadTemplateImage must 400 on anything else (legacy parity).
 function extractKeyFromStorage(url: string): string | null {
-  try {
-    const parsed = new URL(url);
-    if (parsed.hostname === "storage.googleapis.com") {
-      const parts = parsed.pathname.split("/").filter(Boolean);
-      return decodeURIComponent(parts.slice(1).join("/"));
-    }
-    return decodeURIComponent(parsed.pathname.slice(1));
-  } catch {
-    return null;
-  }
+  return url.includes("://") ? extractStorageKeyFromUrl(url) : null;
 }
 
 @Injectable()

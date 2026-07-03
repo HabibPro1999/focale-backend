@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import { getDb, type Db } from "./client";
 
 type TxnFn<T> = (tx: Parameters<Parameters<Db["transaction"]>[0]>[0]) => Promise<T>;
@@ -23,10 +24,6 @@ export function pgUniqueViolation(
   const e = err as { code?: unknown; constraint?: unknown } | null;
   if (e?.code !== "23505") return null;
   return { constraint: typeof e.constraint === "string" ? e.constraint : "" };
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**

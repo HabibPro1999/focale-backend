@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@app/shared", () => ({
+// Keep the real startPoller (the runner's scheduling now rides it); only
+// silence the loggers.
+vi.mock("@app/shared", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@app/shared")>()),
   createLogger: () => ({
     info: vi.fn(),
     warn: vi.fn(),

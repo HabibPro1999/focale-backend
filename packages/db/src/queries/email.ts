@@ -20,6 +20,7 @@ import {
 } from "drizzle-orm";
 import { createLogger } from "@app/shared";
 import { getDb, type DbExecutor } from "../client";
+import { rowsOf, rowCountOf, standardRetryDelayMs } from "../helpers";
 import { pgUniqueViolation } from "../txn";
 import { emailLogs, emailTemplates } from "../schema/email";
 import { events, eventAccess } from "../schema/events-access";
@@ -701,25 +702,8 @@ const ACTIVE_EMAIL_STATUSES = [
   "DELIVERED",
 ] as const satisfies readonly EmailStatus[];
 
-function emailRetryDelayMs(failedAttemptCount: number): number {
-  if (failedAttemptCount <= 1) return 60 * 1000;
-  if (failedAttemptCount === 2) return 5 * 60 * 1000;
-  return 15 * 60 * 1000;
-}
-
 function nextEmailAttemptAt(failedAttemptCount: number, from = new Date()): Date {
-  return new Date(from.getTime() + emailRetryDelayMs(failedAttemptCount));
-}
-
-function rowsOf<T = Record<string, unknown>>(res: unknown): T[] {
-  const r = res as { rows?: unknown };
-  return Array.isArray(r?.rows) ? (r.rows as T[]) : [];
-}
-
-function rowCountOf(res: unknown): number {
-  const r = res as { rowCount?: number | null; rows?: unknown[] };
-  if (typeof r?.rowCount === "number") return r.rowCount;
-  return Array.isArray(r?.rows) ? r.rows.length : 0;
+  return new Date(from.getTime() + standardRetryDelayMs(failedAttemptCount));
 }
 
 // ----------------------------------------------------------------------------
@@ -1233,14 +1217,4 @@ export async function getEmailQueueHealth(): Promise<EmailQueueHealth> {
     recentFailures24h: recentFailures,
     isHealthy,
   };
-}
-
-export async function getQueueStats(): Promise<Record<string, number>> {
-  const rows = await getDb()
-    .select({ status: emailLogs.status, n: count() })
-    .from(emailLogs)
-    .groupBy(emailLogs.status);
-  const out: Record<string, number> = {};
-  for (const r of rows) out[r.status] = r.n;
-  return out;
 }

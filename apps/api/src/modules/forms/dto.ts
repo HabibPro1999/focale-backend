@@ -1,4 +1,3 @@
-import { z } from "zod";
 import {
   CreateFormSchema,
   UpdateFormSchema,
@@ -6,6 +5,8 @@ import {
   FormIdParamSchema,
   UpdateSponsorshipSettingsSchema,
   CreateSponsorFormBodySchema,
+  EventIdParamSchema,
+  EventSlugParamSchema,
 } from "@app/contracts";
 import { createZodDto } from "../../core/zod";
 
@@ -20,12 +21,5 @@ export class CreateSponsorFormBodyDto extends createZodDto(
   CreateSponsorFormBodySchema,
 ) {}
 
-// Event/slug params. Mirror the events module contract shapes (EventIdParamSchema
-// = { id: uuid }, EventSlugParamSchema = { slug: 1..100 }); kept local so the
-// forms controllers don't depend on the events contract barrel.
-export const EventIdParamSchema = z.strictObject({ id: z.string().uuid() });
-export const EventSlugParamSchema = z.strictObject({
-  slug: z.string().min(1).max(100),
-});
 export class EventIdParamDto extends createZodDto(EventIdParamSchema) {}
 export class EventSlugParamDto extends createZodDto(EventSlugParamSchema) {}

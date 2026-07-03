@@ -17,12 +17,3 @@ export class IntegrationError extends Error {
     }
   }
 }
-
-/**
- * Wire-contract code values (must stay byte-identical to the legacy
- * `src/shared/errors/error-codes.ts`). Kept local rather than added to
- * `@app/contracts` so the later full ErrorCodes port can't conflict.
- */
-export const IntegrationErrorCodes = {
-  INVALID_FILE_TYPE: "FIL_10001",
-} as const;
