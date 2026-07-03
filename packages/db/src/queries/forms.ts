@@ -14,7 +14,7 @@ import {
 import { createLogger } from "@app/shared";
 import { getSponsorshipMode, extractFieldIds } from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
-import { withSerializableTxn } from "../txn";
+import { withSerializableTxn, pgUniqueViolation } from "../txn";
 import { forms } from "../schema/forms";
 import { events, eventAccess } from "../schema/events-access";
 import { clients } from "../schema/users-clients";
@@ -287,7 +287,7 @@ export async function insertForm(
     const [form] = await getDb().insert(forms).values(values).returning();
     return { ok: true, form };
   } catch (err) {
-    if ((err as { code?: string })?.code === "23505") {
+    if (pgUniqueViolation(err) !== null) {
       return { ok: false, reason: "conflict" };
     }
     throw err;

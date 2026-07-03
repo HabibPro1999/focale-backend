@@ -1,7 +1,6 @@
 export * from "./id";
 export * from "./money";
 export * from "./time";
-export * from "./result";
 export * from "./logger";
 export * from "./conditions";
 export * from "./pagination";
@@ -11,3 +10,4 @@ export * from "./html";
 export * from "./regex-safety";
 export * from "./form-data-validator";
 export * from "./poller";
+export * from "./result";

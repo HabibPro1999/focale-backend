@@ -20,6 +20,7 @@ import {
 } from "drizzle-orm";
 import { createLogger } from "@app/shared";
 import { getDb, type DbExecutor } from "../client";
+import { pgUniqueViolation } from "../txn";
 import { emailLogs, emailTemplates } from "../schema/email";
 import { events, eventAccess } from "../schema/events-access";
 import { eventPricing } from "../schema/pricing";
@@ -50,9 +51,7 @@ export const EMAIL_LOGS_TEMPLATE_RECIPIENT_TRIGGER_ACTIVE_KEY =
   "email_logs_template_recipient_trigger_active_key";
 
 function uniqueViolationConstraint(err: unknown): string | null {
-  const e = err as { code?: unknown; constraint?: unknown };
-  if (e?.code !== "23505") return null;
-  return typeof e.constraint === "string" ? e.constraint : "";
+  return pgUniqueViolation(err)?.constraint ?? null;
 }
 
 // ============================================================================

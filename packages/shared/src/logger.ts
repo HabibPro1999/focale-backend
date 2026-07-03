@@ -9,7 +9,11 @@ export type CreateLoggerOptions = {
 /** pino factory. Level from LOG_LEVEL (default info). pino-pretty only outside production and when available. */
 export function createLogger(opts: CreateLoggerOptions): Logger {
   const level = opts.level ?? process.env.LOG_LEVEL ?? "info";
-  const options: LoggerOptions = { name: opts.name, level };
+  const options: LoggerOptions = {
+    name: opts.name,
+    level,
+    redact: ["req.headers.authorization", "password", "token"],
+  };
   if (opts.mixin) options.mixin = opts.mixin;
 
   if (process.env.NODE_ENV !== "production") {

@@ -45,6 +45,8 @@ export class ZodValidationPipe implements PipeTransform {
 
     const result = metatype.schema.safeParse(value);
     if (!result.success) {
+      // Target-spec mandate: VALIDATION_ERROR carries error.flatten() in details
+      // (overrides the legacy {issues:[{field,message}]} formatter).
       throw new ZodValidationException(result.error.flatten());
     }
     return result.data;

@@ -33,7 +33,8 @@ import {
   newId,
 } from "@app/shared";
 import { AppException } from "../../core/app-exception";
-import { assertEventWritable, assertModuleEnabledForClient } from "./gates";
+import { assertEventWritable } from "../events";
+import { assertModuleEnabledForClient } from "../clients/module-gates";
 
 // Transaction-scoped write path shared by base-pricing PATCH and rule mutations.
 // Mirrors legacy updateEventPricingTx: re-fetch event gate, re-assert

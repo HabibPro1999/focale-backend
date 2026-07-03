@@ -46,6 +46,7 @@ import {
   findActiveRegistrationFormById,
   findAccessDetailsByIds,
   searchRegistrantsForSponsorship as searchRegistrantsQuery,
+  pgUniqueViolation,
   type DbExecutor,
   // registrations-owned primitives
   getRegistrationByIdRow,
@@ -147,8 +148,8 @@ export function extractKeyFromUrl(url: string): string | null {
 }
 
 function pgUnique(err: unknown): { isUnique: boolean; constraint: string } {
-  const e = err as { code?: string; constraint?: string };
-  return { isUnique: e?.code === "23505", constraint: e?.constraint ?? "" };
+  const v = pgUniqueViolation(err);
+  return { isUnique: v !== null, constraint: v?.constraint ?? "" };
 }
 
 /**
@@ -221,6 +222,50 @@ export class RegistrationsService {
 
   private emitEvents(exec: DbExecutor, events: AppEvent[]): Promise<unknown> {
     return Promise.all(events.map((ev) => enqueueRealtimeOutboxEvent(exec, ev)));
+  }
+
+  /**
+   * Event pair for a status-affecting edit: registration.paymentConfirmed when
+   * the registration newly reached a fully-settled status, else
+   * registration.updated; plus eventAccess.countsChanged when access counts may
+   * have moved.
+   */
+  private settlementEventPair(args: {
+    id: string;
+    eventId: string;
+    clientId: string;
+    oldStatus: string;
+    newStatus: string | undefined;
+    emitCountsChanged: boolean;
+  }): AppEvent[] {
+    const { id, eventId, clientId, oldStatus, newStatus, emitCountsChanged } =
+      args;
+    const statusChanged = newStatus !== undefined && newStatus !== oldStatus;
+    const becameSettled =
+      statusChanged &&
+      FULLY_SETTLED_STATUSES.includes(newStatus as string) &&
+      !FULLY_SETTLED_STATUSES.includes(oldStatus);
+    const events: AppEvent[] = [
+      {
+        type: becameSettled
+          ? "registration.paymentConfirmed"
+          : "registration.updated",
+        clientId,
+        eventId,
+        payload: { id, paymentStatus: newStatus ?? oldStatus },
+        ts: Date.now(),
+      },
+    ];
+    if (emitCountsChanged) {
+      events.push({
+        type: "eventAccess.countsChanged",
+        clientId,
+        eventId,
+        payload: { id: eventId, accessIds: [] },
+        ts: Date.now(),
+      });
+    }
+    return events;
   }
 
   private queueRegistrationCreatedEmail(
@@ -1081,32 +1126,14 @@ export class RegistrationsService {
         });
       }
 
-      const becameSettled =
-        statusChanged &&
-        FULLY_SETTLED_STATUSES.includes(input.paymentStatus as string) &&
-        !FULLY_SETTLED_STATUSES.includes(registration.paymentStatus);
-      const clientId = registration.event.clientId;
-      const pending: AppEvent[] = [
-        {
-          type: becameSettled ? "registration.paymentConfirmed" : "registration.updated",
-          clientId,
-          eventId: registration.eventId,
-          payload: {
-            id,
-            paymentStatus: input.paymentStatus ?? registration.paymentStatus,
-          },
-          ts: Date.now(),
-        },
-      ];
-      if (statusChanged) {
-        pending.push({
-          type: "eventAccess.countsChanged",
-          clientId,
-          eventId: registration.eventId,
-          payload: { id: registration.eventId, accessIds: [] },
-          ts: Date.now(),
-        });
-      }
+      const pending = this.settlementEventPair({
+        id,
+        eventId: registration.eventId,
+        clientId: registration.event.clientId,
+        oldStatus: registration.paymentStatus,
+        newStatus: input.paymentStatus as string | undefined,
+        emitCountsChanged: statusChanged,
+      });
       await this.emitEvents(tx, pending);
     });
 
@@ -1418,35 +1445,17 @@ export class RegistrationsService {
       const statusChanged =
         input.paymentStatus !== undefined &&
         input.paymentStatus !== registration.paymentStatus;
-      const becameSettled =
-        statusChanged &&
-        FULLY_SETTLED_STATUSES.includes(input.paymentStatus as string) &&
-        !FULLY_SETTLED_STATUSES.includes(registration.paymentStatus);
-      const clientId = registration.event.clientId;
-      const pending: AppEvent[] = [
-        {
-          type: becameSettled ? "registration.paymentConfirmed" : "registration.updated",
-          clientId,
-          eventId,
-          payload: {
-            id,
-            paymentStatus: input.paymentStatus ?? registration.paymentStatus,
-          },
-          ts: Date.now(),
-        },
-      ];
-      if (
-        statusChanged ||
-        (input.accessSelections && input.accessSelections.length > 0)
-      ) {
-        pending.push({
-          type: "eventAccess.countsChanged",
-          clientId,
-          eventId,
-          payload: { id: eventId, accessIds: [] },
-          ts: Date.now(),
-        });
-      }
+      const pending = this.settlementEventPair({
+        id,
+        eventId,
+        clientId: registration.event.clientId,
+        oldStatus: registration.paymentStatus,
+        newStatus: input.paymentStatus as string | undefined,
+        emitCountsChanged: !!(
+          statusChanged ||
+          (input.accessSelections && input.accessSelections.length > 0)
+        ),
+      });
       await this.emitEvents(tx, pending);
     });
 

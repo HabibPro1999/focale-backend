@@ -16,6 +16,12 @@ vi.mock("@app/db", () => ({
   getEligibleRegistrationAccessTypeIds: vi.fn(),
   checkInRegistration: vi.fn(),
   createAccessCheckIn: vi.fn(),
+  pgUniqueViolation: (err: unknown) => {
+    const e = err as { code?: unknown; constraint?: unknown } | null;
+    return e?.code === "23505"
+      ? { constraint: typeof e.constraint === "string" ? e.constraint : "" }
+      : null;
+  },
 }));
 
 import * as db from "@app/db";

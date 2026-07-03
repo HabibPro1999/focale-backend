@@ -91,7 +91,11 @@ describe("api e2e", () => {
     const body = res.json();
     expect(body.ok).toBe(false);
     expect(body.error.code).toBe("VAL_2001");
-    expect(body.error.details).toBeDefined();
+    // Target-spec details contract: zod error.flatten() → { formErrors, fieldErrors }.
+    expect(body.error.details).toMatchObject({
+      formErrors: expect.any(Array),
+      fieldErrors: { msg: expect.arrayContaining([expect.any(String)]) },
+    });
     expect(body.requestId).toMatch(UUID);
   });
 

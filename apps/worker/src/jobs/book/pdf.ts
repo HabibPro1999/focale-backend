@@ -12,7 +12,7 @@ import {
   type PDFPage,
 } from "pdf-lib";
 import type { AbstractBookData, AbstractBookConfig } from "@app/db";
-import { abstractHtmlToText } from "./html";
+import { abstractHtmlToText } from "@app/shared";
 
 type BookAbstract = AbstractBookData["abstracts"][number];
 type BookOrder = AbstractBookConfig["bookOrder"];

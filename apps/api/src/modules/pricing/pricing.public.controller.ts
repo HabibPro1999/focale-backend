@@ -3,7 +3,8 @@ import { Throttle } from "@nestjs/throttler";
 import { ErrorCodes, type PriceBreakdown } from "@app/contracts";
 import { sanitizeFormData, validateFormData } from "@app/shared";
 import { AppException } from "../../core/app-exception";
-import { assertEventAcceptsPublicActions, isModuleEnabledForClient } from "./gates";
+import { assertEventAcceptsPublicActions } from "../events";
+import { isModuleEnabledForClient } from "../clients/module-gates";
 import { PricingService } from "./pricing.service";
 import { CalculatePriceRequestDto, FormIdParamDto } from "./pricing.dto";
 

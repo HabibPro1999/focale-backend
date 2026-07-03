@@ -4,6 +4,7 @@ import { sql, type SQL } from "drizzle-orm";
 import { createLogger } from "@app/shared";
 import type { AppEvent } from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
+import { pgUniqueViolation } from "../txn";
 import { outboxEvents } from "../schema";
 import {
   REALTIME_EMIT_TYPE,
@@ -109,15 +110,9 @@ function isTransactionExecutor(exec: DbExecutor): boolean {
 // dedupe key is present is the idempotency race, whether or not the driver
 // surfaces the constraint name.
 function isOutboxDedupeViolation(error: unknown, dedupeKey?: string): boolean {
-  const code = (error as { code?: unknown })?.code;
-  if (code !== "23505") return false;
-  const constraint = (error as { constraint?: unknown })?.constraint;
-  if (
-    typeof constraint === "string" &&
-    constraint.includes("outbox_events_dedupe_key_key")
-  ) {
-    return true;
-  }
+  const v = pgUniqueViolation(error);
+  if (v === null) return false;
+  if (v.constraint.includes("outbox_events_dedupe_key_key")) return true;
   return dedupeKey != null;
 }
 

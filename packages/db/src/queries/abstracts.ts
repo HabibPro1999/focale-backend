@@ -27,7 +27,7 @@ import {
 } from "@app/contracts";
 import { createLogger } from "@app/shared";
 import { getDb, type DbExecutor } from "../client";
-import { withTxn } from "../txn";
+import { withTxn, pgUniqueViolation } from "../txn";
 import {
   abstractConfig,
   abstractRevisions,
@@ -188,11 +188,10 @@ export async function findSkippedAbstractEmails(filter: {
 // first-author email per event. CockroachDB reports the constraint name in
 // `error.constraint`.
 function isDuplicateAuthorEmailViolation(error: unknown): boolean {
-  if ((error as { code?: string })?.code !== "23505") return false;
-  const constraint = (error as { constraint?: unknown })?.constraint;
+  const v = pgUniqueViolation(error);
   return (
-    typeof constraint === "string" &&
-    constraint.includes("abstracts_event_id_author_email_normalized_key")
+    v !== null &&
+    v.constraint.includes("abstracts_event_id_author_email_normalized_key")
   );
 }
 

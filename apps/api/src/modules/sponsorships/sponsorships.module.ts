@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { AccessModule } from "../access/access.module";
 import {
   RegistrationSponsorshipsController,
   SponsorshipDetailController,
@@ -8,6 +9,7 @@ import { SponsorshipsPublicController } from "./sponsorships.public.controller";
 import { SponsorshipsService } from "./sponsorships.service";
 
 @Module({
+  imports: [AccessModule],
   controllers: [
     SponsorshipsListController,
     SponsorshipDetailController,

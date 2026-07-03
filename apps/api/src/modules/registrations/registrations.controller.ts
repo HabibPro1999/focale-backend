@@ -161,6 +161,7 @@ export class RegistrationsController {
   // DELETE /api/events/registrations/:id
   @Delete("registrations/:id")
   @HttpCode(204)
+  @SkipEnvelope()
   async remove(
     @Param() { id }: RegistrationIdParamDto,
     @Query() { force }: DeleteRegistrationQueryDto,

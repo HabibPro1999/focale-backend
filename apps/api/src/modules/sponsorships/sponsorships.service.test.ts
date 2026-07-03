@@ -28,9 +28,7 @@ vi.mock("@app/db", () => {
     "sponsorshipCodeExists",
     "insertSponsorship",
     "insertUsage",
-    "getAlreadyCoveredAccessIds",
     "updateRegistrationSettlement",
-    "syncPaidCountDelta",
     "findSponsorshipForLink",
     "findRegistrationForLink",
     "findUsage",
@@ -48,18 +46,23 @@ vi.mock("@app/db", () => {
   for (const f of fns) mod[f] = vi.fn();
   const TX = { __tx: true };
   mod.withTxn = vi.fn((fn: (tx: unknown) => unknown) => fn(TX));
-  // Real class so the service's `instanceof` capacity-error check works.
-  mod.SponsorshipAccessError = class SponsorshipAccessError extends Error {};
   return mod;
 });
 
 import * as db from "@app/db";
 import { SponsorshipsService } from "./sponsorships.service";
+import type { AccessService } from "../access/access.service";
 
 const m = db as unknown as Record<string, ReturnType<typeof vi.fn>>;
 
+// AccessService is injected; the service only calls these two methods on it.
+const access = {
+  getAlreadyCoveredAccessIds: vi.fn(),
+  syncPaidCountDelta: vi.fn(),
+};
+
 function service() {
-  return new SponsorshipsService();
+  return new SponsorshipsService(access as unknown as AccessService);
 }
 
 // Gate-passing event/client defaults (assertEventWritable/assertModuleEnabledForClient).
@@ -73,8 +76,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   m.withTxn.mockImplementation((fn: (tx: unknown) => unknown) => fn({}));
   // Neutral defaults so unrelated calls don't throw.
-  m.getAlreadyCoveredAccessIds.mockResolvedValue(new Set());
-  m.syncPaidCountDelta.mockResolvedValue(undefined);
+  access.getAlreadyCoveredAccessIds.mockResolvedValue(new Set());
+  access.syncPaidCountDelta.mockResolvedValue(undefined);
   m.updateRegistrationSettlement.mockResolvedValue(undefined);
   m.updateSponsorshipRow.mockResolvedValue(undefined);
   m.updateUsageAmount.mockResolvedValue(undefined);

@@ -13,6 +13,7 @@ import {
   countCheckedInRegistrations,
   countEventRegistrations,
   getRegistrationForCheckIn,
+  pgUniqueViolation,
   type CheckInRegistration,
 } from "@app/db";
 import { AppException } from "../../core/app-exception";
@@ -25,7 +26,7 @@ const ELIGIBLE = new Set<string>(CHECKIN_ELIGIBLE_STATUSES);
  * (registration_id_access_id) so any 23505 from the insert is that race.
  */
 function isCheckInUniqueViolation(error: unknown): boolean {
-  return (error as { code?: unknown })?.code === "23505";
+  return pgUniqueViolation(error) !== null;
 }
 
 function registrationSummary(reg: CheckInRegistration) {

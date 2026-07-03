@@ -31,7 +31,6 @@ import {
   findUsage,
   findUsageAmountsByRegistration,
   getActiveSponsorForm,
-  getAlreadyCoveredAccessIds,
   getDb,
   getEventBasePrice,
   getEventPricingForBatch,
@@ -47,10 +46,8 @@ import {
   insertSponsorshipBatch,
   insertUsage,
   listSponsorships,
-  SponsorshipAccessError,
   searchRegistrantsForSponsorship,
   sponsorshipCodeExists,
-  syncPaidCountDelta,
   updateRegistrationSettlement,
   updateSponsorshipRow,
   updateUsageAmount,
@@ -64,6 +61,7 @@ import {
   assertEventWritable,
 } from "../events";
 import { assertModuleEnabledForClient } from "../clients/module-gates";
+import { AccessService } from "../access/access.service";
 import { AppException } from "../../core/app-exception";
 import {
   calculateTotalSponsorshipAmount,
@@ -111,20 +109,11 @@ interface BatchContext {
 
 @Injectable()
 export class SponsorshipsService {
-  /**
-   * READ COMMITTED txn (no retry — legacy parity). Translates the ported
-   * access-capacity error into an AppException so the filter renders the legacy
-   * ACCESS_CAPACITY_EXCEEDED (409) envelope instead of a bare 500.
-   */
-  private async runTxn<T>(fn: (tx: DbExecutor) => Promise<T>): Promise<T> {
-    try {
-      return await withTxn(fn);
-    } catch (err) {
-      if (err instanceof SponsorshipAccessError) {
-        throw new AppException(err.code, err.message, err.status, err.details);
-      }
-      throw err;
-    }
+  constructor(private readonly access: AccessService) {}
+
+  /** READ COMMITTED txn (no retry — legacy parity). */
+  private runTxn<T>(fn: (tx: DbExecutor) => Promise<T>): Promise<T> {
+    return withTxn(fn);
   }
 
   // ==========================================================================
@@ -673,7 +662,7 @@ export class SponsorshipsService {
         registration.priceBreakdown as RegistrationForCalculation["priceBreakdown"];
       const oldCovered =
         registration.paymentStatus === "PARTIAL"
-          ? await getAlreadyCoveredAccessIds(tx, linked.registrationId)
+          ? await this.access.getAlreadyCoveredAccessIds(linked.registrationId, tx)
           : new Set<string>();
       const applicableAmount = calculateApplicableAmount(
         {
@@ -716,8 +705,7 @@ export class SponsorshipsService {
       });
 
       const newCovered = new Set([...oldCovered, ...linked.coveredAccessIds]);
-      await syncPaidCountDelta(
-        tx,
+      await this.access.syncPaidCountDelta(
         eventId,
         {
           status: registration.paymentStatus,
@@ -729,6 +717,7 @@ export class SponsorshipsService {
           priceBreakdown: registration.priceBreakdown,
           coveredAccessIds: newCovered,
         },
+        tx,
       );
 
       // Mutate running total so a later beneficiary on the same reg sees it.
@@ -830,7 +819,7 @@ export class SponsorshipsService {
       );
     }
 
-    const oldCovered = await getAlreadyCoveredAccessIds(tx, registrationId);
+    const oldCovered = await this.access.getAlreadyCoveredAccessIds(registrationId, tx);
 
     const usage = await insertUsage(tx, {
       sponsorshipId,
@@ -868,9 +857,8 @@ export class SponsorshipsService {
       ...(nextPaymentStatus === "SPONSORED" ? { paidAt: new Date() } : {}),
     });
 
-    const newCovered = await getAlreadyCoveredAccessIds(tx, registrationId);
-    await syncPaidCountDelta(
-      tx,
+    const newCovered = await this.access.getAlreadyCoveredAccessIds(registrationId, tx);
+    await this.access.syncPaidCountDelta(
       registration.eventId,
       {
         status: registration.paymentStatus,
@@ -882,6 +870,7 @@ export class SponsorshipsService {
         priceBreakdown: registration.priceBreakdown,
         coveredAccessIds: newCovered,
       },
+      tx,
     );
 
     // ponytail: audit + realtime + SPONSORSHIP_APPLIED email omitted — deferred.
@@ -975,7 +964,7 @@ export class SponsorshipsService {
     }
 
     const oldCovered = registrationBefore
-      ? await getAlreadyCoveredAccessIds(tx, registrationId)
+      ? await this.access.getAlreadyCoveredAccessIds(registrationId, tx)
       : new Set<string>();
 
     await deleteUsage(tx, usage.id);
@@ -999,9 +988,8 @@ export class SponsorshipsService {
     }
 
     if (registrationBefore) {
-      const newCovered = await getAlreadyCoveredAccessIds(tx, registrationId);
-      await syncPaidCountDelta(
-        tx,
+      const newCovered = await this.access.getAlreadyCoveredAccessIds(registrationId, tx);
+      await this.access.syncPaidCountDelta(
         registrationBefore.eventId,
         {
           status: currentStatus,
@@ -1013,6 +1001,7 @@ export class SponsorshipsService {
           priceBreakdown: registrationBefore.priceBreakdown,
           coveredAccessIds: newCovered,
         },
+        tx,
       );
     }
 
@@ -1139,14 +1128,17 @@ export class SponsorshipsService {
       if (oldPaymentStatus !== nextPaymentStatus) {
         const oldCovered =
           oldPaymentStatus === "PARTIAL"
-            ? await getAlreadyCoveredAccessIds(tx, registration.id, sponsorshipId)
+            ? await this.access.getAlreadyCoveredAccessIds(
+                registration.id,
+                tx,
+                sponsorshipId,
+              )
             : new Set<string>();
         const newCovered =
           nextPaymentStatus === "PARTIAL"
-            ? await getAlreadyCoveredAccessIds(tx, registration.id)
+            ? await this.access.getAlreadyCoveredAccessIds(registration.id, tx)
             : new Set<string>();
-        await syncPaidCountDelta(
-          tx,
+        await this.access.syncPaidCountDelta(
           registration.eventId,
           {
             status: oldPaymentStatus,
@@ -1158,6 +1150,7 @@ export class SponsorshipsService {
             priceBreakdown: updatedPriceBreakdown,
             coveredAccessIds: newCovered,
           },
+          tx,
         );
       }
     }

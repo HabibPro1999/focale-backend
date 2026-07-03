@@ -18,6 +18,7 @@ import type { AbstractEmailTrigger } from "@app/contracts";
 import {
   getAbstractForEmailContext,
   findAbstractEmailTemplate,
+  pgUniqueViolation,
   type AbstractForEmailContext,
   type AbstractEmailOutboxPayload,
 } from "@app/db";
@@ -96,12 +97,8 @@ const ABSTRACT_ACK_DEDUPE_CONSTRAINT =
 
 function isAbstractAckDedupe(error: unknown, trigger: string): boolean {
   if (trigger !== "ABSTRACT_SUBMISSION_ACK") return false;
-  const e = error as { code?: unknown; constraint?: unknown };
-  return (
-    e?.code === "23505" &&
-    typeof e.constraint === "string" &&
-    e.constraint.includes(ABSTRACT_ACK_DEDUPE_CONSTRAINT)
-  );
+  const v = pgUniqueViolation(error);
+  return v !== null && v.constraint.includes(ABSTRACT_ACK_DEDUPE_CONSTRAINT);
 }
 
 /**

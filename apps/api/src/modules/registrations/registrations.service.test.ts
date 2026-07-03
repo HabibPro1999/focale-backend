@@ -40,6 +40,12 @@ const db = vi.hoisted(() => ({
   findUserNamesByIds: vi.fn(),
   listRegistrationEmailLogRows: vi.fn(),
   getRegistrationFormSchemaForEvent: vi.fn(),
+  pgUniqueViolation: (err: unknown) => {
+    const e = err as { code?: unknown; constraint?: unknown } | null;
+    return e?.code === "23505"
+      ? { constraint: typeof e.constraint === "string" ? e.constraint : "" }
+      : null;
+  },
 }));
 vi.mock("@app/db", () => db);
 

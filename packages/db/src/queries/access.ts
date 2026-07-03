@@ -1,5 +1,6 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { getDb, type DbExecutor } from "../client";
+import { pgUniqueViolation } from "../txn";
 import {
   accessPrerequisites,
   auditLogs,
@@ -587,7 +588,7 @@ export type TriggeredEmailOutboxPayload = {
 };
 
 function isUniqueViolation(error: unknown): boolean {
-  return (error as { code?: unknown })?.code === "23505";
+  return pgUniqueViolation(error) !== null;
 }
 
 /** Enqueue an `email.triggered` outbox event; idempotent per dedupeKey. Returns false if skipped. */

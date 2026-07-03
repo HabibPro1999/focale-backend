@@ -14,7 +14,8 @@ import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
 import { AppException } from "../../core/app-exception";
-import { assertEventWritable, canAccessClient } from "./gates";
+import { assertEventWritable } from "../events";
+import { canAccessClient } from "../../core/auth/user-cache";
 import { PricingService } from "./pricing.service";
 import {
   CreateEmbeddedRuleDto,
