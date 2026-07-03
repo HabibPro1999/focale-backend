@@ -10,6 +10,9 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r --workspace-concurrency=1 test",
+    "test:db": "pnpm --filter @app/db test:db",
+    "test:concurrency": "pnpm --filter @app/db test:concurrency",
+    "test:migration": "pnpm --filter @app/db test:migration",
     "dev": "pnpm --filter @app/api dev",
     "dev:worker": "pnpm --filter @app/worker dev"
   }

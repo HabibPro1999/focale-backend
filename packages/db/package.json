@@ -14,6 +14,9 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run --passWithNoTests",
+    "test:db": "vitest run --config vitest.db.config.ts",
+    "test:concurrency": "vitest run --config vitest.concurrency.config.ts",
+    "test:migration": "vitest run --config vitest.migration.config.ts",
     "generate": "drizzle-kit generate",
     "migrate": "drizzle-kit migrate",
     "seed": "node --conditions=@app/source -r @swc-node/register src/seed.ts"
