@@ -120,7 +120,7 @@ export async function getEligibleRegistrationIds(
     inArray(registrations.paymentStatus, [...CHECKIN_ELIGIBLE_STATUSES]),
   ];
   if (accessId) {
-    conds.push(sql`${accessId} = ANY(${registrations.accessTypeIds})`);
+    conds.push(sql`${accessId}::text = ANY(${registrations.accessTypeIds})`);
   }
   const rows = await exec
     .select({ id: registrations.id })

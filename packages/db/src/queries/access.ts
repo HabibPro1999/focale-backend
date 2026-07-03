@@ -318,7 +318,7 @@ export async function countRegistrationsWithAccess(
   const rows = await exec
     .select({ value: sql<number>`count(*)::int` })
     .from(registrations)
-    .where(sql`${accessId} = ANY(${registrations.accessTypeIds})`);
+    .where(sql`${accessId}::text = ANY(${registrations.accessTypeIds})`);
   return rows[0]?.value ?? 0;
 }
 
@@ -331,7 +331,7 @@ export async function countActiveSponsorshipsWithAccess(
     .from(sponsorships)
     .where(
       and(
-        sql`${accessId} = ANY(${sponsorships.coveredAccessIds})`,
+        sql`${accessId}::text = ANY(${sponsorships.coveredAccessIds})`,
         sql`${sponsorships.status} <> 'CANCELLED'`,
       ),
     );
@@ -527,7 +527,7 @@ export async function getUnsettledRegistrationsWithAccess(
       and(
         eq(registrations.eventId, eventId),
         sql`${registrations.paymentStatus} NOT IN ('PAID', 'SPONSORED', 'WAIVED', 'REFUNDED')`,
-        sql`${accessId} = ANY(${registrations.accessTypeIds})`,
+        sql`${accessId}::text = ANY(${registrations.accessTypeIds})`,
       ),
     );
   return rows;

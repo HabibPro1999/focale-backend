@@ -491,7 +491,7 @@ export async function getAccessRegistrantsData(
       .where(
         and(
           eq(registrations.eventId, eventId),
-          sql`${accessId} = ANY(${registrations.accessTypeIds})`,
+          sql`${accessId}::text = ANY(${registrations.accessTypeIds})`,
         ),
       )
       .orderBy(desc(registrations.submittedAt)),
