@@ -1,0 +1,287 @@
+import { z } from "zod";
+
+const hasUpdateField = (data: Record<string, unknown>) =>
+  Object.values(data).some((value) => value !== undefined);
+
+// ============================================================================
+// Field Schemas
+// ============================================================================
+
+export const FieldTypeSchema = z.enum([
+  "text",
+  "firstName",
+  "lastName",
+  "email",
+  "phone",
+  "number",
+  "textarea",
+  "dropdown",
+  "radio",
+  "checkbox",
+  "date",
+  "file",
+  "heading",
+  "paragraph",
+  "governorate",
+  "country",
+]);
+
+export const FieldOptionSchema = z.strictObject({
+  id: z.string(),
+  label: z.string(),
+  description: z.string().optional(),
+  maxCapacity: z.number().optional(),
+  currentCount: z.number().optional(),
+  priceModifier: z.number().optional(),
+});
+
+export const ConditionOperatorSchema = z.enum([
+  "equals",
+  "not_equals",
+  "contains",
+  "not_contains",
+  "greater_than",
+  "less_than",
+  "is_empty",
+  "is_not_empty",
+]);
+
+export const FieldConditionSchema = z.strictObject({
+  id: z.string().optional(),
+  fieldId: z.string(),
+  operator: ConditionOperatorSchema,
+  value: z.union([z.string(), z.number(), z.boolean()]).optional(),
+});
+
+export const FieldValidationErrorMessagesSchema = z.strictObject({
+  required: z.string().optional(),
+  minLength: z.string().optional(),
+  maxLength: z.string().optional(),
+  pattern: z.string().optional(),
+  email: z.string().optional(),
+  min: z.string().optional(),
+  max: z.string().optional(),
+});
+
+export const FieldValidationSchema = z.strictObject({
+  required: z.boolean().optional(),
+  minLength: z.number().int().positive().optional(),
+  maxLength: z.number().int().positive().optional(),
+  min: z.number().optional(),
+  max: z.number().optional(),
+  pattern: z.string().optional(),
+  fileTypes: z.array(z.string()).optional(),
+  maxFileSize: z.number().int().positive().optional(),
+  minValue: z.number().optional(),
+  maxValue: z.number().optional(),
+  step: z.number().optional(),
+  minDate: z.string().optional(),
+  maxDate: z.string().optional(),
+  acceptedFileTypes: z.array(z.string()).optional(),
+  minSelections: z.number().int().optional(),
+  maxSelections: z.number().int().optional(),
+  errorMessages: FieldValidationErrorMessagesSchema.optional(),
+});
+
+export const FormFieldSchema = z.strictObject({
+  id: z.string(),
+  type: FieldTypeSchema,
+  label: z.string().optional(),
+  placeholder: z.string().optional(),
+  helpText: z.string().optional(),
+  helperText: z.string().optional(),
+  required: z.boolean().optional(),
+  width: z.string().optional(),
+  options: z.array(FieldOptionSchema).optional(),
+  validation: FieldValidationSchema.optional(),
+  conditions: z.array(FieldConditionSchema).optional(),
+  conditionLogic: z.enum(["AND", "OR", "and", "or"]).optional(),
+  conditionAction: z.enum(["show", "disable"]).optional(),
+  clearOnHide: z.boolean().optional(),
+  defaultValue: z
+    .union([z.string(), z.number(), z.array(z.string())])
+    .optional(),
+  pricingEnabled: z.boolean().optional(),
+  gridColumn: z.string().optional(),
+  fieldKey: z.string().optional(),
+  phoneFormat: z.string().optional(),
+  dateFormat: z.string().optional(),
+  rows: z.number().int().optional(),
+  layout: z.enum(["vertical", "horizontal", "cards"]).optional(),
+  searchable: z.boolean().optional(),
+  headingSize: z.enum(["h2", "h3", "h4"]).optional(),
+  content: z.string().optional(),
+});
+
+// ============================================================================
+// Form Step Schema
+// ============================================================================
+
+export const FormStepSchema = z.strictObject({
+  id: z.string(),
+  title: z.string(),
+  description: z.string().optional(),
+  fields: z.array(FormFieldSchema),
+});
+
+// ============================================================================
+// Complete Form Schema (JSONB)
+// ============================================================================
+
+// Registration form schema structure
+// Uses looseObject to allow top-level extensions while requiring a valid persisted steps array
+export const FormSchemaJsonSchema = z.looseObject({
+  steps: z.array(FormStepSchema).min(1),
+});
+
+// ============================================================================
+// Sponsor Form Schemas
+// ============================================================================
+
+// Beneficiary template for sponsor forms
+export const BeneficiaryTemplateSchema = z.looseObject({
+  fields: z.array(FormFieldSchema),
+  minCount: z.number().int().min(1).default(1),
+  maxCount: z.number().int().max(500).default(100),
+});
+
+// Summary settings for sponsor forms
+export const SponsorSummarySettingsSchema = z.looseObject({
+  title: z.string().optional(),
+  showPriceBreakdown: z.boolean().default(true),
+  termsText: z.string().optional(),
+});
+
+// Sponsorship mode settings (only for SPONSOR forms)
+export const SponsorshipModeSchema = z.enum(["LINKED_ACCOUNT", "CODE"]);
+export const RegistrantSearchScopeSchema = z.enum(["ALL", "UNPAID_ONLY"]);
+
+export const SponsorshipSettingsSchema = z.strictObject({
+  sponsorshipMode: SponsorshipModeSchema.default("CODE"),
+  registrantSearchScope: RegistrantSearchScopeSchema.optional(),
+  autoApproveSponsorship: z.boolean().optional(),
+});
+
+// Sponsor form schema structure
+export const SponsorFormSchemaJsonSchema = z.looseObject({
+  formType: z.literal("SPONSOR"),
+  sponsorSteps: z.array(FormStepSchema),
+  beneficiaryTemplate: BeneficiaryTemplateSchema,
+  summarySettings: SponsorSummarySettingsSchema.optional(),
+  sponsorshipSettings: SponsorshipSettingsSchema.optional(),
+});
+
+const UpdatableFormSchemaJsonSchema = z.union([
+  FormSchemaJsonSchema,
+  SponsorFormSchemaJsonSchema,
+]);
+
+// ============================================================================
+// Request Schemas
+// ============================================================================
+
+export const CreateFormSchema = z.strictObject({
+  eventId: z.string().uuid(),
+  name: z.string().min(1).max(200),
+  schema: FormSchemaJsonSchema.optional(), // Optional - backend provides defaults
+  successTitle: z.string().optional().nullable(),
+  successMessage: z.string().optional().nullable(),
+});
+
+export const UpdateFormSchema = z
+  .strictObject({
+    name: z.string().min(1).max(200).optional(),
+    schema: UpdatableFormSchemaJsonSchema.optional(),
+    successTitle: z.string().optional().nullable(),
+    successMessage: z.string().optional().nullable(),
+  })
+  .refine(hasUpdateField, {
+    message: "At least one field must be provided for update",
+  });
+
+export const ListFormsQuerySchema = z.strictObject({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  eventId: z.string().uuid().optional(),
+  search: z.string().optional(),
+  type: z.enum(["REGISTRATION", "SPONSOR"]).optional(),
+});
+
+export const FormIdParamSchema = z.strictObject({
+  id: z.string().uuid(),
+});
+
+// Update sponsorship settings (for SPONSOR forms only)
+export const UpdateSponsorshipSettingsSchema = z.strictObject({
+  sponsorshipMode: SponsorshipModeSchema,
+  registrantSearchScope: RegistrantSearchScopeSchema.optional(),
+  autoApproveSponsorship: z.boolean().optional(),
+});
+
+// POST /api/forms/events/:id/sponsor body — looseObject: unknown keys accepted.
+export const CreateSponsorFormBodySchema = z.looseObject({
+  name: z.string().min(1).max(200).optional(),
+});
+
+// ============================================================================
+// Types
+// ============================================================================
+
+export type FieldType = z.infer<typeof FieldTypeSchema>;
+export type FieldCondition = z.infer<typeof FieldConditionSchema>;
+export type FieldValidation = z.infer<typeof FieldValidationSchema>;
+export type FormField = z.infer<typeof FormFieldSchema>;
+export type FormStep = z.infer<typeof FormStepSchema>;
+export type FormSchemaJson = z.infer<typeof FormSchemaJsonSchema>;
+export type SponsorshipSettings = z.infer<typeof SponsorshipSettingsSchema>;
+export type SponsorFormSchemaJson = z.infer<typeof SponsorFormSchemaJsonSchema>;
+export type CreateFormInput = z.infer<typeof CreateFormSchema>;
+export type UpdateFormInput = z.infer<typeof UpdateFormSchema>;
+export type ListFormsQuery = z.infer<typeof ListFormsQuerySchema>;
+export type CreateSponsorFormBody = z.infer<typeof CreateSponsorFormBodySchema>;
+export type UpdateSponsorshipSettingsInput = z.infer<
+  typeof UpdateSponsorshipSettingsSchema
+>;
+
+// ============================================================================
+// Pure schema helpers (shared by the api service layer and the db txn layer;
+// framework- and DB-free so both packages can consume them from @app/contracts).
+// ============================================================================
+
+/**
+ * Sponsorship mode embedded in a (sponsor) form schema. Defaults to "CODE"
+ * when absent — identical to the legacy getSponsorshipMode.
+ */
+export function getSponsorshipMode(
+  schema: unknown,
+): SponsorshipSettings["sponsorshipMode"] {
+  const settings = (
+    schema as { sponsorshipSettings?: SponsorshipSettings } | null
+  )?.sponsorshipSettings;
+  return settings?.sponsorshipMode ?? "CODE";
+}
+
+/**
+ * Collect field ids from a form schema. Walks ONLY `steps[].fields[].id`
+ * (NOT sponsorSteps / beneficiaryTemplate) — preserved verbatim from legacy,
+ * so on sponsor-shaped schemas this returns [] unless a `steps` key is present.
+ */
+export function extractFieldIds(schema: unknown): string[] {
+  const ids: string[] = [];
+  if (!schema || typeof schema !== "object") return ids;
+
+  const schemaObj = schema as {
+    steps?: Array<{ fields?: Array<{ id?: string }> }>;
+  };
+
+  if (Array.isArray(schemaObj.steps)) {
+    for (const step of schemaObj.steps) {
+      if (Array.isArray(step.fields)) {
+        for (const field of step.fields) {
+          if (field.id) ids.push(field.id);
+        }
+      }
+    }
+  }
+  return ids;
+}

@@ -1,12 +1,12 @@
-node_modules
-dist
+**/node_modules
+**/dist
 .git
-.env*
+**/.env*
 *.md
 .eslintrc*
 .prettierrc*
 eslint.config.*
-coverage
+**/coverage
 .vscode
 src/generated
 scripts
