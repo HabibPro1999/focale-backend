@@ -5,6 +5,7 @@
   "type": "commonjs",
   "scripts": {
     "dev": "node --watch --conditions=@app/source -r @swc-node/register src/main.ts",
+    "requeue-skipped-abstract-emails": "node --conditions=@app/source -r @swc-node/register src/scripts/requeue-skipped-abstract-emails.ts",
     "start": "node dist/main.js",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",

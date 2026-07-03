@@ -107,6 +107,44 @@ export async function findActiveTemplateForTrigger(
   return row ?? null;
 }
 
+/**
+ * Active template for an abstract email, matching the legacy cascade:
+ * event-specific (clientId + abstractTrigger + this eventId) first, then the
+ * client-wide template (eventId IS NULL). null when neither exists.
+ */
+export async function findAbstractEmailTemplate(
+  params: { clientId: string; eventId: string; abstractTrigger: AbstractTrigger },
+  exec: DbExecutor = getDb(),
+): Promise<EmailTemplateRow | null> {
+  const [eventSpecific] = await exec
+    .select()
+    .from(emailTemplates)
+    .where(
+      and(
+        eq(emailTemplates.clientId, params.clientId),
+        eq(emailTemplates.abstractTrigger, params.abstractTrigger),
+        eq(emailTemplates.eventId, params.eventId),
+        eq(emailTemplates.isActive, true),
+      ),
+    )
+    .limit(1);
+  if (eventSpecific) return eventSpecific;
+
+  const [clientWide] = await exec
+    .select()
+    .from(emailTemplates)
+    .where(
+      and(
+        eq(emailTemplates.clientId, params.clientId),
+        eq(emailTemplates.abstractTrigger, params.abstractTrigger),
+        isNull(emailTemplates.eventId),
+        eq(emailTemplates.isActive, true),
+      ),
+    )
+    .limit(1);
+  return clientWide ?? null;
+}
+
 /** Active AUTOMATIC template for an event+trigger (worker/automatic-send path). */
 export async function getTemplateByTrigger(
   eventId: string,
@@ -1018,9 +1056,9 @@ export async function recoverStaleEmailLeases(
         "locked_by" = NULL,
         "retry_count" = "retry_count" + 1,
         "next_attempt_at" = CASE
-          WHEN "retry_count" + 1 <= 1 THEN ${retry1At}
-          WHEN "retry_count" + 1 = 2 THEN ${retry2At}
-          ELSE ${retryLaterAt}
+          WHEN "retry_count" + 1 <= 1 THEN ${retry1At}::timestamp
+          WHEN "retry_count" + 1 = 2 THEN ${retry2At}::timestamp
+          ELSE ${retryLaterAt}::timestamp
         END,
         "error_message" = COALESCE("error_message", 'Email send lease expired; requeued for retry')
       WHERE "status" = 'SENDING'

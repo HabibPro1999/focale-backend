@@ -7,6 +7,9 @@ import {
   gte,
   inArray,
   isNotNull,
+  isNull,
+  lt,
+  lte,
   max,
   ne,
   notInArray,
@@ -14,6 +17,7 @@ import {
   sql,
   type InferInsertModel,
   type InferSelectModel,
+  type SQL,
 } from "drizzle-orm";
 import {
   UserRole,
@@ -39,6 +43,7 @@ import {
 import { events } from "../schema/events-access";
 import { users } from "../schema/users-clients";
 import { emailLogs } from "../schema/email";
+import { abstractEmailTrigger } from "../schema/enums";
 import { auditLogs } from "../schema/outbox-audit";
 import { enqueueOutboxEvent, enqueueRealtimeOutboxEvent } from "../outbox";
 
@@ -99,6 +104,84 @@ export async function enqueueAbstractEmailOutboxEvent(
     aggregateId: payload.abstractId,
     dedupeKey,
   });
+}
+
+export type AbstractEmailTrigger =
+  (typeof abstractEmailTrigger.enumValues)[number];
+
+export interface SkippedAbstractEmailRow {
+  id: string;
+  abstractId: string;
+  abstractTrigger: AbstractEmailTrigger;
+  recipientEmail: string;
+  recipientName: string | null;
+  errorMessage: string | null;
+  queuedAt: Date;
+}
+
+/**
+ * Ops query for `requeue-skipped-abstract-emails`: SKIPPED abstract-email rows
+ * (abstractId + abstractTrigger non-null), newest first, optionally filtered by
+ * event / abstract / trigger. Legacy parity: emailLog.findMany equivalent.
+ */
+export async function findSkippedAbstractEmails(filter: {
+  eventId?: string;
+  abstractId?: string;
+  trigger?: AbstractEmailTrigger;
+  limit: number;
+}): Promise<SkippedAbstractEmailRow[]> {
+  const db = getDb();
+  const rows = await db
+    .select({
+      id: emailLogs.id,
+      abstractId: emailLogs.abstractId,
+      abstractTrigger: emailLogs.abstractTrigger,
+      recipientEmail: emailLogs.recipientEmail,
+      recipientName: emailLogs.recipientName,
+      errorMessage: emailLogs.errorMessage,
+      queuedAt: emailLogs.queuedAt,
+    })
+    .from(emailLogs)
+    .where(
+      and(
+        eq(emailLogs.status, "SKIPPED"),
+        isNotNull(emailLogs.abstractId),
+        isNotNull(emailLogs.abstractTrigger),
+        filter.abstractId
+          ? eq(emailLogs.abstractId, filter.abstractId)
+          : undefined,
+        filter.trigger
+          ? eq(emailLogs.abstractTrigger, filter.trigger)
+          : undefined,
+        filter.eventId
+          ? inArray(
+              emailLogs.abstractId,
+              db
+                .select({ id: abstracts.id })
+                .from(abstracts)
+                .where(eq(abstracts.eventId, filter.eventId)),
+            )
+          : undefined,
+      ),
+    )
+    .orderBy(desc(emailLogs.queuedAt))
+    .limit(filter.limit);
+
+  return rows.flatMap((row): SkippedAbstractEmailRow[] =>
+    row.abstractId && row.abstractTrigger
+      ? [
+          {
+            id: row.id,
+            abstractId: row.abstractId,
+            abstractTrigger: row.abstractTrigger,
+            recipientEmail: row.recipientEmail,
+            recipientName: row.recipientName,
+            errorMessage: row.errorMessage,
+            queuedAt: row.queuedAt,
+          },
+        ]
+      : [],
+  );
 }
 
 // 23505 unique violation on the partial index enforcing one abstract per
@@ -2440,9 +2523,9 @@ export async function recoverStaleAbstractBookJobs(
       "locked_until" = NULL,
       "locked_by" = NULL,
       "next_attempt_at" = CASE
-        WHEN "attempt_count" <= 1 THEN ${retry1At}
-        WHEN "attempt_count" = 2 THEN ${retry2At}
-        ELSE ${retryLaterAt}
+        WHEN "attempt_count" <= 1 THEN ${retry1At}::timestamp
+        WHEN "attempt_count" = 2 THEN ${retry2At}::timestamp
+        ELSE ${retryLaterAt}::timestamp
       END,
       "error_message" = COALESCE("error_message", 'Abstract Book job lease expired; requeued for retry')
     WHERE "status" = 'RUNNING'
@@ -2475,4 +2558,248 @@ export async function recoverStaleAbstractBookJobs(
     );
   }
   return { requeued, deadLettered };
+}
+
+// ----------------------------------------------------------------------------
+// Abstract Book queue health (ops /health/abstract-book-jobs)
+// ----------------------------------------------------------------------------
+
+const ABSTRACT_BOOK_PENDING_UNHEALTHY_SIZE = 100;
+const ABSTRACT_BOOK_PENDING_UNHEALTHY_AGE_MS = 60 * 60 * 1000; // 1h
+
+export interface AbstractBookQueueHealth {
+  pendingCount: number;
+  duePendingCount: number;
+  runningCount: number;
+  staleRunningCount: number;
+  failedCount: number;
+  oldestPendingAgeMs: number;
+  isHealthy: boolean;
+}
+
+export async function getAbstractBookQueueHealth(): Promise<AbstractBookQueueHealth> {
+  const now = new Date();
+  const db = getDb();
+  const countWhere = async (where: SQL): Promise<number> => {
+    const [row] = await db
+      .select({ n: count() })
+      .from(abstractBookJobs)
+      .where(where);
+    return row?.n ?? 0;
+  };
+
+  const [
+    pendingCount,
+    duePendingCount,
+    runningCount,
+    staleRunningCount,
+    failedCount,
+    oldestPending,
+  ] = await Promise.all([
+    countWhere(eq(abstractBookJobs.status, "PENDING")),
+    countWhere(
+      and(
+        eq(abstractBookJobs.status, "PENDING"),
+        or(
+          isNull(abstractBookJobs.nextAttemptAt),
+          lte(abstractBookJobs.nextAttemptAt, now),
+        ),
+      )!,
+    ),
+    countWhere(eq(abstractBookJobs.status, "RUNNING")),
+    countWhere(
+      and(
+        eq(abstractBookJobs.status, "RUNNING"),
+        or(
+          isNull(abstractBookJobs.lockedUntil),
+          lt(abstractBookJobs.lockedUntil, now),
+        ),
+      )!,
+    ),
+    countWhere(eq(abstractBookJobs.status, "FAILED")),
+    db
+      .select({ createdAt: abstractBookJobs.createdAt })
+      .from(abstractBookJobs)
+      .where(eq(abstractBookJobs.status, "PENDING"))
+      .orderBy(asc(abstractBookJobs.createdAt))
+      .limit(1),
+  ]);
+
+  const oldestPendingAgeMs = oldestPending[0]?.createdAt
+    ? now.getTime() - oldestPending[0].createdAt.getTime()
+    : 0;
+
+  const isHealthy =
+    staleRunningCount === 0 &&
+    pendingCount < ABSTRACT_BOOK_PENDING_UNHEALTHY_SIZE &&
+    oldestPendingAgeMs < ABSTRACT_BOOK_PENDING_UNHEALTHY_AGE_MS;
+
+  return {
+    pendingCount,
+    duePendingCount,
+    runningCount,
+    staleRunningCount,
+    failedCount,
+    oldestPendingAgeMs,
+    isHealthy,
+  };
+}
+
+// ----------------------------------------------------------------------------
+// Abstract Book PDF data (worker book job renders the PDF from this snapshot).
+// Mirrors the legacy generateAbstractBookPdf fetch: event name + book config +
+// every ACCEPTED abstract with its themes. null → event missing; config null →
+// caller throws "Abstract configuration not found" (legacy 404 semantics).
+// ----------------------------------------------------------------------------
+
+export interface AbstractBookConfig {
+  bookFontFamily: string;
+  bookFontSize: number;
+  bookLineSpacing: number;
+  bookOrder: AbstractConfigRow["bookOrder"];
+  bookIncludeAuthorNames: boolean;
+}
+
+export interface AbstractBookData {
+  eventName: string;
+  config: AbstractBookConfig;
+  abstracts: (AbstractRow & { themes: ThemeWithSort[] })[];
+}
+
+export async function getAbstractBookData(
+  eventId: string,
+): Promise<AbstractBookData | null> {
+  const db = getDb();
+  const [ev] = await db
+    .select({ name: events.name })
+    .from(events)
+    .where(eq(events.id, eventId))
+    .limit(1);
+  if (!ev) return null;
+
+  const [cfg] = await db
+    .select({
+      bookFontFamily: abstractConfig.bookFontFamily,
+      bookFontSize: abstractConfig.bookFontSize,
+      bookLineSpacing: abstractConfig.bookLineSpacing,
+      bookOrder: abstractConfig.bookOrder,
+      bookIncludeAuthorNames: abstractConfig.bookIncludeAuthorNames,
+    })
+    .from(abstractConfig)
+    .where(eq(abstractConfig.eventId, eventId))
+    .limit(1);
+  if (!cfg) return null;
+
+  const rows = await db
+    .select()
+    .from(abstracts)
+    .where(and(eq(abstracts.eventId, eventId), eq(abstracts.status, "ACCEPTED")))
+    .orderBy(asc(abstracts.codeNumber));
+
+  const themeMap = await loadThemesWithSort(rows.map((r) => r.id));
+  return {
+    eventName: ev.name,
+    config: cfg,
+    abstracts: rows.map((r) => ({ ...r, themes: themeMap.get(r.id) ?? [] })),
+  };
+}
+
+// ----------------------------------------------------------------------------
+// Abstract email context (worker email.abstract handler → queueAbstractEmail).
+// Ports the legacy prisma fetch: abstract + its event (name/slug/clientId) +
+// the abstract config deadline fields. Config may be absent (dates default to
+// null / finalFileUploadEnabled false), matching legacy `config?.x ?? …`.
+// ----------------------------------------------------------------------------
+
+export interface AbstractForEmailContext {
+  id: string;
+  authorFirstName: string;
+  authorLastName: string;
+  authorEmail: string;
+  content: AbstractRow["content"];
+  status: string;
+  requestedType: string;
+  finalType: string | null;
+  code: string | null;
+  editToken: string;
+  linkBaseUrl: string | null;
+  eventId: string;
+  event: { name: string; slug: string; clientId: string };
+  config: {
+    submissionStartAt: Date | null;
+    submissionDeadline: Date | null;
+    editingDeadline: Date | null;
+    scoringStartAt: Date | null;
+    scoringDeadline: Date | null;
+    finalFileDeadline: Date | null;
+    finalFileUploadEnabled: boolean;
+  };
+}
+
+export async function getAbstractForEmailContext(
+  abstractId: string,
+): Promise<AbstractForEmailContext | null> {
+  const db = getDb();
+  const [row] = await db
+    .select({
+      id: abstracts.id,
+      authorFirstName: abstracts.authorFirstName,
+      authorLastName: abstracts.authorLastName,
+      authorEmail: abstracts.authorEmail,
+      content: abstracts.content,
+      status: abstracts.status,
+      requestedType: abstracts.requestedType,
+      finalType: abstracts.finalType,
+      code: abstracts.code,
+      editToken: abstracts.editToken,
+      linkBaseUrl: abstracts.linkBaseUrl,
+      eventId: abstracts.eventId,
+      eventName: events.name,
+      eventSlug: events.slug,
+      eventClientId: events.clientId,
+    })
+    .from(abstracts)
+    .innerJoin(events, eq(abstracts.eventId, events.id))
+    .where(eq(abstracts.id, abstractId))
+    .limit(1);
+  if (!row) return null;
+
+  const [cfg] = await db
+    .select({
+      submissionStartAt: abstractConfig.submissionStartAt,
+      submissionDeadline: abstractConfig.submissionDeadline,
+      editingDeadline: abstractConfig.editingDeadline,
+      scoringStartAt: abstractConfig.scoringStartAt,
+      scoringDeadline: abstractConfig.scoringDeadline,
+      finalFileDeadline: abstractConfig.finalFileDeadline,
+      finalFileUploadEnabled: abstractConfig.finalFileUploadEnabled,
+    })
+    .from(abstractConfig)
+    .where(eq(abstractConfig.eventId, row.eventId))
+    .limit(1);
+
+  return {
+    id: row.id,
+    authorFirstName: row.authorFirstName,
+    authorLastName: row.authorLastName,
+    authorEmail: row.authorEmail,
+    content: row.content,
+    status: row.status,
+    requestedType: row.requestedType,
+    finalType: row.finalType,
+    code: row.code,
+    editToken: row.editToken,
+    linkBaseUrl: row.linkBaseUrl,
+    eventId: row.eventId,
+    event: { name: row.eventName, slug: row.eventSlug, clientId: row.eventClientId },
+    config: {
+      submissionStartAt: cfg?.submissionStartAt ?? null,
+      submissionDeadline: cfg?.submissionDeadline ?? null,
+      editingDeadline: cfg?.editingDeadline ?? null,
+      scoringStartAt: cfg?.scoringStartAt ?? null,
+      scoringDeadline: cfg?.scoringDeadline ?? null,
+      finalFileDeadline: cfg?.finalFileDeadline ?? null,
+      finalFileUploadEnabled: cfg?.finalFileUploadEnabled ?? false,
+    },
+  };
 }

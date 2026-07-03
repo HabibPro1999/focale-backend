@@ -1,11 +1,13 @@
 export {
   enqueueOutboxEvent,
   enqueueRealtimeOutboxEvent,
+  getOutboxHealth,
   processOutboxEvents,
   recoverStaleOutboxLeases,
 } from "./outbox";
 export type {
   EnqueueOutboxInput,
+  OutboxHealth,
   ProcessOutboxOptions,
   ProcessOutboxResult,
 } from "./outbox";

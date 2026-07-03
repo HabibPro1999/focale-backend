@@ -428,3 +428,72 @@ export async function processOutboxEvents(
 
   return result;
 }
+
+// ----------------------------------------------------------------------------
+// Outbox health (ops /health/outbox)
+// ----------------------------------------------------------------------------
+
+const OUTBOX_UNHEALTHY_AGE_MS = 10 * 60 * 1000; // 10min
+const OUTBOX_UNHEALTHY_SIZE = 1000;
+
+export interface OutboxHealth {
+  isHealthy: boolean;
+  counts: {
+    pending: number;
+    failed: number;
+    processing: number;
+    deadLettered: number;
+  };
+  oldestPendingAgeMs: number;
+  oldestProcessingAgeMs: number;
+}
+
+export async function getOutboxHealth(): Promise<OutboxHealth> {
+  const now = Date.now();
+  const db = getDb();
+
+  const [countsRes, oldestPendingRes, oldestProcessingRes] = await Promise.all([
+    db.execute(sql`
+      SELECT "status", COUNT(*)::int AS n FROM "outbox_events"
+      WHERE "status" IN ('PENDING', 'FAILED', 'PROCESSING', 'DEAD_LETTERED')
+      GROUP BY "status"
+    `),
+    db.execute(sql`
+      SELECT MIN("created_at") AS t FROM "outbox_events"
+      WHERE "status" IN ('PENDING', 'FAILED')
+    `),
+    db.execute(sql`
+      SELECT MIN(COALESCE("locked_at", "updated_at")) AS t FROM "outbox_events"
+      WHERE "status" = 'PROCESSING'
+    `),
+  ]);
+
+  const counts = { pending: 0, failed: 0, processing: 0, deadLettered: 0 };
+  for (const row of rowsOf<{ status: string; n: number }>(countsRes)) {
+    if (row.status === "PENDING") counts.pending = Number(row.n);
+    else if (row.status === "FAILED") counts.failed = Number(row.n);
+    else if (row.status === "PROCESSING") counts.processing = Number(row.n);
+    else if (row.status === "DEAD_LETTERED")
+      counts.deadLettered = Number(row.n);
+  }
+
+  const ageOf = (res: unknown): number => {
+    const t = rowsOf<{ t: string | Date | null }>(res)[0]?.t ?? null;
+    return t ? now - new Date(t).getTime() : 0;
+  };
+  const oldestPendingAgeMs = ageOf(oldestPendingRes);
+  const oldestProcessingAgeMs = ageOf(oldestProcessingRes);
+
+  const isHealthy =
+    counts.deadLettered === 0 &&
+    counts.pending + counts.failed < OUTBOX_UNHEALTHY_SIZE &&
+    oldestPendingAgeMs < OUTBOX_UNHEALTHY_AGE_MS &&
+    oldestProcessingAgeMs < 2 * OUTBOX_LEASE_MS;
+
+  return {
+    isHealthy,
+    counts,
+    oldestPendingAgeMs,
+    oldestProcessingAgeMs,
+  };
+}

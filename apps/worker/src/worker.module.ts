@@ -1,7 +1,9 @@
 import { Module } from "@nestjs/common";
 import { JobRunner } from "./job-runner";
 import { JOBS } from "./job";
-import { HeartbeatJob } from "./jobs/heartbeat.job";
+import { OutboxJob } from "./jobs/outbox.job";
+import { EmailQueueJob } from "./jobs/email-queue.job";
+import { AbstractBookJob } from "./jobs/abstract-book.job";
 
 // JOBS is the registry token JobRunner injects. A factory returns the array of
 // job instances; add future jobs to both `inject` and the returned array.
@@ -10,11 +12,17 @@ import { HeartbeatJob } from "./jobs/heartbeat.job";
 @Module({
   providers: [
     JobRunner,
-    HeartbeatJob,
+    OutboxJob,
+    EmailQueueJob,
+    AbstractBookJob,
     {
       provide: JOBS,
-      useFactory: (heartbeat: HeartbeatJob) => [heartbeat],
-      inject: [HeartbeatJob],
+      useFactory: (
+        outbox: OutboxJob,
+        email: EmailQueueJob,
+        book: AbstractBookJob,
+      ) => [outbox, email, book],
+      inject: [OutboxJob, EmailQueueJob, AbstractBookJob],
     },
   ],
 })
