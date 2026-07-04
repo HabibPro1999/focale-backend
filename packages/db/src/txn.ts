@@ -4,12 +4,41 @@ import { getDb, type Db } from "./client";
 type TxnFn<T> = (tx: Parameters<Parameters<Db["transaction"]>[0]>[0]) => Promise<T>;
 
 /**
+ * Walk an error's `cause` chain until a pg error carrying `code` is found.
+ * drizzle-orm wraps every driver error in DrizzleQueryError, which exposes the
+ * pg error only on `.cause` (no `code` on the wrapper itself).
+ */
+function unwrapPgError(
+  err: unknown,
+): { code?: unknown; constraint?: unknown } | null {
+  let current = err as
+    | { code?: unknown; constraint?: unknown; cause?: unknown }
+    | null
+    | undefined;
+  for (let depth = 0; current && depth < 10; depth++) {
+    if (typeof current.code === "string") return current;
+    current = current.cause as typeof current;
+  }
+  return null;
+}
+
+/**
  * True for the pg SQLSTATEs worth retrying: 40001 serialization_failure
  * (CockroachDB "restart transaction") and 40P01 deadlock_detected.
  */
 export function isSerializationFailure(err: unknown): boolean {
-  const code = (err as { code?: unknown } | null)?.code;
+  const code = unwrapPgError(err)?.code;
   return code === "40001" || code === "40P01";
+}
+
+/**
+ * SQLSTATE of the pg error buried in `err`'s cause chain, or null when none.
+ * Restricted to 5-char SQLSTATE shape so Node errno codes (ENOENT, …) that
+ * also live on `.code` are not mistaken for database errors.
+ */
+export function pgErrorCode(err: unknown): string | null {
+  const code = unwrapPgError(err)?.code;
+  return typeof code === "string" && /^[0-9A-Z]{5}$/.test(code) ? code : null;
 }
 
 /**
@@ -21,7 +50,7 @@ export function isSerializationFailure(err: unknown): boolean {
 export function pgUniqueViolation(
   err: unknown,
 ): { constraint: string } | null {
-  const e = err as { code?: unknown; constraint?: unknown } | null;
+  const e = unwrapPgError(err);
   if (e?.code !== "23505") return null;
   return { constraint: typeof e.constraint === "string" ? e.constraint : "" };
 }

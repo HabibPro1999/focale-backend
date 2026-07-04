@@ -2,9 +2,13 @@
 // (fix #4 consolidation): 5 attempts total, retry ONLY on SQLSTATE 40001/40P01,
 // rethrow the ORIGINAL error. No DB needed — withTxnRetry just wraps a fn.
 import { describe, expect, it, vi } from "vitest";
-import { isSerializationFailure, withTxnRetry } from "./txn";
+import { isSerializationFailure, pgUniqueViolation, withTxnRetry } from "./txn";
 
 const err = (code?: string) => Object.assign(new Error("boom"), { code });
+// drizzle-orm wraps every driver error in DrizzleQueryError: the pg error
+// (with .code/.constraint) lives on .cause, the wrapper has no code.
+const wrapped = (cause: unknown) =>
+  Object.assign(new Error("Failed query"), { cause });
 
 describe("isSerializationFailure", () => {
   it("true only for 40001 / 40P01, by code", () => {
@@ -16,6 +20,39 @@ describe("isSerializationFailure", () => {
     // Message text alone is NOT retried (spec: code-only) — a deliberate
     // narrowing from the old identity.ts copy's message-regex fallback.
     expect(isSerializationFailure(new Error("serialization failure"))).toBe(false);
+  });
+
+  it("unwraps DrizzleQueryError-style wrappers via .cause", () => {
+    expect(isSerializationFailure(wrapped(err("40001")))).toBe(true);
+    expect(isSerializationFailure(wrapped(wrapped(err("40P01"))))).toBe(true);
+    expect(isSerializationFailure(wrapped(err("23505")))).toBe(false);
+    expect(isSerializationFailure(wrapped(new Error("no code")))).toBe(false);
+  });
+});
+
+describe("pgUniqueViolation", () => {
+  it("detects a bare pg 23505 and surfaces the constraint", () => {
+    const e = Object.assign(new Error("dup"), {
+      code: "23505",
+      constraint: "registrations_email_form_id_key",
+    });
+    expect(pgUniqueViolation(e)).toEqual({
+      constraint: "registrations_email_form_id_key",
+    });
+    expect(pgUniqueViolation(err("40001"))).toBeNull();
+    expect(pgUniqueViolation(null)).toBeNull();
+  });
+
+  it("unwraps DrizzleQueryError-style wrappers via .cause", () => {
+    const e = Object.assign(new Error("dup"), {
+      code: "23505",
+      constraint: "outbox_dedupe_key_key",
+    });
+    expect(pgUniqueViolation(wrapped(e))).toEqual({
+      constraint: "outbox_dedupe_key_key",
+    });
+    const noConstraint = Object.assign(new Error("dup"), { code: "23505" });
+    expect(pgUniqueViolation(wrapped(noConstraint))).toEqual({ constraint: "" });
   });
 });
 
