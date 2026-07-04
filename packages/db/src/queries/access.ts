@@ -1,11 +1,10 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { getDb, type DbExecutor } from "../client";
-import { pgUniqueViolation } from "../txn";
+import { enqueueOutboxEvent } from "../outbox";
 import {
   accessPrerequisites,
   eventAccess,
   events,
-  outboxEvents,
   registrations,
   sponsorshipUsages,
   sponsorships,
@@ -561,11 +560,10 @@ export async function updateRegistrationForAccessDrop(
 
 // ---------------------------------------------------------------------------
 // Outbox enqueue (triggered email).
-// ponytail: minimal, self-contained enqueue for the PAYMENT_CONFIRMED trigger —
-// the full outbox core (SAVEPOINT dedupe, claim/lease) is a separate wave
-// (packages/db/src/outbox/). Dedupe here = a pre-insert lookup + a 23505 catch,
-// which is behaviourally identical for this single call site. Swap for the outbox
-// core's enqueueTriggeredEmailOutboxEvent when it lands.
+// Delegates to the outbox core's enqueueOutboxEvent, whose SAVEPOINT-wrapped
+// dedupe insert keeps a swallowed 23505 from poisoning the caller's live
+// transaction (a bare caught unique violation would leave the txn aborted and
+// fail every subsequent statement with 25P02).
 // ---------------------------------------------------------------------------
 
 export type TriggeredEmailOutboxPayload = {
@@ -579,36 +577,19 @@ export type TriggeredEmailOutboxPayload = {
   };
 };
 
-function isUniqueViolation(error: unknown): boolean {
-  return pgUniqueViolation(error) !== null;
-}
-
 /** Enqueue an `email.triggered` outbox event; idempotent per dedupeKey. Returns false if skipped. */
 export async function enqueueTriggeredEmailOutbox(
   exec: DbExecutor,
   payload: TriggeredEmailOutboxPayload,
   dedupeKey: string,
 ): Promise<boolean> {
-  const existing = await exec
-    .select({ id: outboxEvents.id })
-    .from(outboxEvents)
-    .where(eq(outboxEvents.dedupeKey, dedupeKey))
-    .limit(1);
-  if (existing.length > 0) return false;
-
-  try {
-    await exec.insert(outboxEvents).values({
-      type: "email.triggered",
-      aggregateType: "Registration",
-      aggregateId: payload.registration.id,
-      eventId: payload.eventId,
-      dedupeKey,
-      payload: payload as unknown as Record<string, unknown>,
-      maxAttempts: 5,
-    });
-    return true;
-  } catch (error) {
-    if (isUniqueViolation(error)) return false;
-    throw error;
-  }
+  return enqueueOutboxEvent(exec, {
+    type: "email.triggered",
+    aggregateType: "Registration",
+    aggregateId: payload.registration.id,
+    eventId: payload.eventId,
+    dedupeKey,
+    payload,
+    maxAttempts: 5,
+  });
 }
