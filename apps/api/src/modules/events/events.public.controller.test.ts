@@ -9,6 +9,11 @@ import {
 
 vi.mock("@app/db", () => ({
   getEventWithPricingAndClient: vi.fn(),
+  // The exception filter calls these on every caught error; the real
+  // implementations return null for non-pg errors, which is all these
+  // tests throw.
+  pgErrorCode: () => null,
+  pgUniqueViolation: () => null,
 }));
 
 import * as db from "@app/db";

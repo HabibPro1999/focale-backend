@@ -26,6 +26,11 @@ vi.mock("@app/db", () => ({
   getUserWithClientById: vi.fn(),
   getUserIdsByClient: vi.fn(async () => []),
   getEventWithPricing: vi.fn(),
+  // The exception filter calls these on every caught error; the real
+  // implementations return null for non-pg errors, which is all these
+  // tests throw.
+  pgErrorCode: () => null,
+  pgUniqueViolation: () => null,
 }));
 
 import { getUserWithClientById, getEventWithPricing } from "@app/db";
