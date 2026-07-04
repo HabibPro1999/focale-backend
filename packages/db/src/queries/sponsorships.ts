@@ -18,6 +18,7 @@ import {
   type PaginatedResult,
 } from "@app/shared";
 import type { ListSponsorshipsQuery, SponsorshipStats } from "@app/contracts";
+import { enqueueOutboxEvent } from "../outbox";
 import { getDb, type DbExecutor } from "../client";
 import {
   sponsorships,
@@ -669,7 +670,7 @@ export interface EventForBatch {
   startDate: Date;
   location: string | null;
   clientId: string;
-  client: SponsorshipClientGate;
+  client: SponsorshipClientGate & { name: string };
 }
 
 export async function findEventForBatch(
@@ -687,6 +688,7 @@ export async function findEventForBatch(
       clientId: events.clientId,
       clientActive: clients.active,
       enabledModules: clients.enabledModules,
+      clientName: clients.name,
     })
     .from(events)
     .innerJoin(clients, eq(events.clientId, clients.id))
@@ -701,7 +703,11 @@ export async function findEventForBatch(
     startDate: row.startDate,
     location: row.location,
     clientId: row.clientId,
-    client: { active: row.clientActive, enabledModules: row.enabledModules },
+    client: {
+      active: row.clientActive,
+      enabledModules: row.enabledModules,
+      name: row.clientName,
+    },
   };
 }
 
@@ -1217,6 +1223,41 @@ export async function updateUsageAmount(
     .update(sponsorshipUsages)
     .set({ amountApplied })
     .where(eq(sponsorshipUsages.id, usageId));
+}
+
+// ---------------------------------------------------------------------------
+// Outbox enqueue (sponsorship email). Same SAVEPOINT-safe dedupe semantics as
+// access.ts's enqueueTriggeredEmailOutbox — rides the caller's transaction.
+// The worker's `email.sponsorship` handler consumes this payload shape
+// (trigger + eventId + QueueSponsorshipEmailInput).
+// ---------------------------------------------------------------------------
+
+export type SponsorshipEmailOutboxPayload = {
+  trigger: string;
+  eventId: string;
+  input: {
+    recipientEmail: string;
+    recipientName?: string;
+    context: Record<string, unknown>;
+    registrationId?: string;
+  };
+};
+
+/** Enqueue an `email.sponsorship` outbox event; idempotent per dedupeKey. Returns false if skipped. */
+export async function enqueueSponsorshipEmailOutbox(
+  exec: DbExecutor,
+  payload: SponsorshipEmailOutboxPayload,
+  dedupeKey: string,
+): Promise<boolean> {
+  return enqueueOutboxEvent(exec, {
+    type: "email.sponsorship",
+    aggregateType: "Registration",
+    aggregateId: payload.input.registrationId,
+    eventId: payload.eventId,
+    dedupeKey,
+    payload,
+    maxAttempts: 5,
+  });
 }
 
 // ============================================================================

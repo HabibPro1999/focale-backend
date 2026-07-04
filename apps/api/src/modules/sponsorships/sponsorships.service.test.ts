@@ -41,6 +41,8 @@ vi.mock("@app/db", () => {
     "countUsagesForSponsorship",
     "findSponsorshipForRecalc",
     "updateUsageAmount",
+    "enqueueSponsorshipEmailOutbox",
+    "enqueueTriggeredEmailOutbox",
   ];
   const mod: Record<string, unknown> = {};
   for (const f of fns) mod[f] = vi.fn();
@@ -707,7 +709,22 @@ function batchEvent() {
     startDate: new Date(),
     location: null,
     clientId: "c1",
-    client: { active: true, enabledModules: ["sponsorships"] },
+    client: { active: true, enabledModules: ["sponsorships"], name: "Client" },
+  };
+}
+
+// insertSponsorship rows feed the batch/linked email contexts, so the mocked
+// return values must carry the fields those builders read.
+function createdSponsorship(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "s1",
+    code: "SP-1",
+    beneficiaryName: "Ben",
+    beneficiaryEmail: "b@x.com",
+    coversBasePrice: true,
+    coveredAccessIds: [],
+    totalAmount: 100,
+    ...overrides,
   };
 }
 
@@ -719,7 +736,7 @@ describe("createSponsorshipBatch", () => {
     m.insertSponsorshipBatch.mockResolvedValue({ id: "b1" });
     m.getFormSchema.mockResolvedValue({ sponsorshipSettings: { autoApproveSponsorship: false } });
     m.sponsorshipCodeExists.mockResolvedValue(false);
-    m.insertSponsorship.mockResolvedValue({ id: "s1" });
+    m.insertSponsorship.mockResolvedValue(createdSponsorship());
 
     const result = await service().createSponsorshipBatch("e1", "f1", {
       sponsor: SPONSOR,
@@ -737,7 +754,7 @@ describe("createSponsorshipBatch", () => {
     m.insertSponsorshipBatch.mockResolvedValue({ id: "b1" });
     m.getFormSchema.mockResolvedValue({});
     m.sponsorshipCodeExists.mockResolvedValue(false);
-    m.insertSponsorship.mockResolvedValue({ id: "s1" });
+    m.insertSponsorship.mockResolvedValue(createdSponsorship());
 
     const result = await service().createSponsorshipBatch("e1", "f1", {
       sponsor: SPONSOR,
@@ -794,7 +811,7 @@ describe("createSponsorshipBatch", () => {
     m.insertSponsorshipBatch.mockResolvedValue({ id: "b1" });
     m.getFormSchema.mockResolvedValue({ sponsorshipSettings: { autoApproveSponsorship: false } });
     m.sponsorshipCodeExists.mockResolvedValue(false);
-    m.insertSponsorship.mockResolvedValue({ id: "s1" });
+    m.insertSponsorship.mockResolvedValue(createdSponsorship());
 
     const result = await service().createSponsorshipBatch("e1", "f1", {
       sponsor: SPONSOR,
@@ -820,7 +837,7 @@ describe("createSponsorshipBatch", () => {
     m.insertSponsorshipBatch.mockResolvedValue({ id: "b1" });
     m.getFormSchema.mockResolvedValue({ sponsorshipSettings: { autoApproveSponsorship: true } });
     m.sponsorshipCodeExists.mockResolvedValue(false);
-    m.insertSponsorship.mockResolvedValue({ id: "s1", code: "SP-1" });
+    m.insertSponsorship.mockResolvedValue(createdSponsorship());
 
     const result = await service().createSponsorshipBatch("e1", "f1", {
       sponsor: SPONSOR,
