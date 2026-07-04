@@ -82,11 +82,18 @@ class EventBus {
     return idx === -1 ? [] : this.buffer.slice(idx);
   }
 
-  /** True when the client resumes from before the retained window (events lost). */
+  /**
+   * True when events were lost between the client's last id and what this
+   * process can replay: either the client resumes from before the retained
+   * window, or its id was issued by a previous process (the counter resets to
+   * 1 on restart, so an id at or beyond `nextId` cannot be ours).
+   */
   hasReplayGap(lastEventId: string | null | undefined): boolean {
-    if (!lastEventId || this.buffer.length === 0) return false;
+    if (!lastEventId) return false;
     const after = Number(lastEventId);
     if (!Number.isFinite(after)) return false;
+    if (after >= this.nextId) return true;
+    if (this.buffer.length === 0) return false;
     const firstBuffered = Number(this.buffer[0].id);
     return after < firstBuffered - 1;
   }

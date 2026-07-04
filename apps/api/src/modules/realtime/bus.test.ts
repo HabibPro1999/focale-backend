@@ -115,4 +115,12 @@ describe("eventBus", () => {
     expect(eventBus.hasReplayGap(String(firstId))).toBe(true);
     expect(eventBus.hasReplayGap("not-a-number")).toBe(false);
   });
+
+  it("marks a replay gap when the requested id exceeds anything this process issued (restart)", () => {
+    const latest = eventBus.emit(makeEvent());
+    expect(eventBus.hasReplayGap(latest)).toBe(false);
+    // A restart resets the id counter, so a stored id from the previous
+    // process is beyond everything this process has emitted.
+    expect(eventBus.hasReplayGap("999999999")).toBe(true);
+  });
 });
