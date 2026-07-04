@@ -11,6 +11,21 @@ function hasConditions(conditions: unknown): boolean {
   return Array.isArray(conditions) && conditions.length > 0;
 }
 
+// Day buckets and their French headers must use the event's local calendar day,
+// not the UTC day — otherwise a session starting within the UTC offset after
+// local midnight (e.g. 00:30 in Tunisia, stored as 23:30Z the previous day)
+// would be listed under the previous day's header. Events carry no timezone
+// column yet; all events are Tunisia-based today.
+const EVENT_TIME_ZONE = "Africa/Tunis";
+
+// en-CA formats as YYYY-MM-DD, matching the dateKey contract.
+const localDayFormat = new Intl.DateTimeFormat("en-CA", {
+  timeZone: EVENT_TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
 /**
  * Pure grouping of active access items into date → time-slot groups, filtered by
  * availability window, form conditions, and prerequisites. Full items are NOT
@@ -68,11 +83,14 @@ export function groupAccess(
 
   const formatDateLabel = (dateStr: string): string => {
     if (dateStr === "no-date") return "Sans date";
-    const date = new Date(dateStr + "T00:00:00");
+    // dateKey is already the event-local calendar day; render exactly that day
+    // by anchoring at UTC midnight and formatting in UTC (server-TZ-independent).
+    const date = new Date(dateStr + "T00:00:00Z");
     const formatted = date.toLocaleDateString("fr-FR", {
       weekday: "long",
       day: "numeric",
       month: "long",
+      timeZone: "UTC",
     });
     return formatted.charAt(0).toUpperCase() + formatted.slice(1);
   };
@@ -80,7 +98,7 @@ export function groupAccess(
   const dateMap = new Map<string, EnrichedAccess[]>();
   for (const access of scheduledItems) {
     const dateKey = access.startsAt
-      ? access.startsAt.toISOString().split("T")[0]
+      ? localDayFormat.format(access.startsAt)
       : "no-date";
     if (!dateMap.has(dateKey)) dateMap.set(dateKey, []);
     dateMap.get(dateKey)!.push(access);
