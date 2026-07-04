@@ -391,7 +391,9 @@ export async function registrationExistsByEmailForm(
   excludeId?: string,
 ): Promise<boolean> {
   const clauses: (SQL | undefined)[] = [
-    ilike(registrations.email, email),
+    // Case-insensitive EQUALITY (legacy Prisma equals + mode:"insensitive").
+    // Not ilike: it would treat `_`/`%` in the email as LIKE wildcards.
+    sql`lower(${registrations.email}) = lower(${email})`,
     eq(registrations.formId, formId),
   ];
   if (excludeId) clauses.push(ne(registrations.id, excludeId));
@@ -620,31 +622,46 @@ export async function generateReferenceNumber(
   eventId: string,
   db: DbExecutor,
 ): Promise<string> {
+  // Lock the event row to serialize concurrent generation for this event:
+  // FOR UPDATE on the registrations scan alone locks nothing when no rows
+  // match yet, so two concurrent creates would both compute sequence 001.
   const [event] = await db
     .select({ slug: events.slug, startDate: events.startDate })
     .from(events)
     .where(eq(events.id, eventId))
-    .limit(1);
+    .limit(1)
+    .for("update");
   if (!event) return `REG-${Date.now().toString(36).toUpperCase()}`;
 
   const year = event.startDate.getFullYear().toString().slice(-2);
   const code = event.slug.replace(/[._]/g, "-").toUpperCase().slice(0, 12);
   const prefix = `${year}-${code}-`;
 
+  // The unique index on reference_number is GLOBAL and truncated slugs can
+  // collide across events, so the scan is scoped by prefix (not event_id):
+  // events sharing a prefix share one sequence instead of colliding at 001.
+  // MAX runs over the numeric suffix (lexicographic MAX on the text column
+  // breaks once sequences reach 4 digits: '...-999' > '...-1000'); the regex
+  // filter keeps rows whose prefix merely subsumes ours (e.g. '26-TSHG-' vs
+  // '26-TSHG-CONGRES-') out of the cast. Placeholder is cast for CockroachDB.
   const res = await db.execute(sql`
-    SELECT MAX("reference_number") as max_ref FROM (
-      SELECT "reference_number" FROM "registrations"
-      WHERE "event_id" = ${eventId} AND "reference_number" LIKE ${`${prefix}%`}
+    SELECT MAX(CAST(seq AS INT)) as max_seq FROM (
+      SELECT SUBSTRING("reference_number", CAST(${prefix.length + 1} AS INT)) AS seq
+      FROM "registrations"
+      WHERE "reference_number" LIKE ${`${prefix}%`}
       FOR UPDATE
     ) locked
+    WHERE seq ~ '^[0-9]+$'
   `);
   const rows =
-    (res as unknown as { rows?: Array<{ max_ref: string | null }> }).rows ?? [];
-  const maxRef = rows[0]?.max_ref ?? null;
+    (res as unknown as { rows?: Array<{ max_seq: number | string | null }> })
+      .rows ?? [];
+  const maxSeq = rows[0]?.max_seq;
 
   let nextSeq = 1;
-  if (maxRef) {
-    const lastSeq = parseInt(maxRef.slice(prefix.length), 10);
+  if (maxSeq != null) {
+    const lastSeq =
+      typeof maxSeq === "number" ? maxSeq : parseInt(maxSeq, 10);
     if (!Number.isNaN(lastSeq)) nextSeq = lastSeq + 1;
   }
   return `${prefix}${String(nextSeq).padStart(3, "0")}`;

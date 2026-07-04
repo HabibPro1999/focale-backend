@@ -141,7 +141,9 @@ export function buildListWhere(filter: ListEventsFilter) {
   if (filter.clientId) conds.push(eq(events.clientId, filter.clientId));
   if (filter.status) conds.push(eq(events.status, filter.status));
   if (filter.search) {
-    const term = `%${filter.search}%`;
+    // Escape LIKE metacharacters so user input matches literally (legacy
+    // Prisma `contains` semantics), not as `_`/`%` wildcards.
+    const term = `%${filter.search.replace(/[\\%_]/g, "\\$&")}%`;
     conds.push(
       or(
         ilike(events.name, term),
