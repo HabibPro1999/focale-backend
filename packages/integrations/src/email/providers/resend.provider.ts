@@ -197,7 +197,12 @@ export class ResendProvider implements EmailProvider {
     this.apiKey = opts.apiKey;
     this.webhookSecret = opts.webhookSecret;
     this.from = { fromEmail: opts.fromEmail, fromName: opts.fromName };
-    this.client = new Resend(this.apiKey);
+    // The Resend constructor throws on a missing key, which would make our own
+    // unconfigured handling (isConfigured, the "Resend not configured" send
+    // result, handleWebhook's `unconfigured` -> 503 path) unreachable. Webhook
+    // signature verification needs no API key, so fall back to a placeholder;
+    // sendEmail's `!this.apiKey` guard keeps it off the network.
+    this.client = new Resend(this.apiKey || "re_unconfigured_placeholder");
   }
 
   isConfigured(): boolean {

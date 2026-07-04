@@ -168,8 +168,15 @@ export async function buildEmailContextWithAccess(
       context.sponsoredItems = sponsoredItems
         .map((item) => `<div style="padding: 4px 0;">• ${item}</div>`)
         .join("");
+      // Use the clamped applied amount (registration.sponsorshipAmount), not
+      // the sponsorship's face value, which may exceed the registration total.
       context.remainingAmount = formatCurrency(
-        registration.totalAmount - sponsorship.totalAmount,
+        calculateSettlement({
+          totalAmount: registration.totalAmount,
+          paidAmount: 0,
+          sponsorshipAmount:
+            registration.sponsorshipAmount ?? sponsorship.totalAmount,
+        }).amountDue,
         registration.currency,
       );
     }

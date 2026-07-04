@@ -146,12 +146,15 @@ describe("buildEmailContextWithAccess (async, DB)", () => {
       batch: { labName: "Lab", contactName: "Contact", email: "lab@x.com" },
     });
     const ctx = await buildEmailContextWithAccess(
-      reg({ sponsorshipCode: "SP1", totalAmount: 250 }),
+      // sponsorshipAmount is the clamped applied amount stored on the
+      // registration (notNull default 0); remainingAmount now uses it
+      // instead of the sponsorship's face value.
+      reg({ sponsorshipCode: "SP1", totalAmount: 250, sponsorshipAmount: 150 }),
     );
     expect(ctx.sponsorshipCode).toBe("SP1");
     expect(ctx.labName).toBe("Lab");
     expect(ctx.sponsoredItems).toContain("Inscription de base");
-    expect(ctx.remainingAmount).toBe("100 TND"); // 250 - 150
+    expect(ctx.remainingAmount).toBe("100 TND"); // 250 - 150 applied
   });
 });
 
