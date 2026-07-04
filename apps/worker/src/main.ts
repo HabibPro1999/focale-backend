@@ -7,6 +7,11 @@ import { loadConfig } from "./core/config";
 
 const log = createLogger({ name: "worker" });
 
+process.on("unhandledRejection", (reason) => {
+  log.error({ err: reason }, "Unhandled promise rejection");
+  // Don't exit - let the application continue
+});
+
 async function bootstrap() {
   const config = loadConfig(); // fail-fast at boot
   if (!config.runWorkers) {

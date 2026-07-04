@@ -3,6 +3,11 @@ import { buildApp } from "./app.factory";
 import { loadConfig } from "./core/config";
 import { logger } from "./core/logger.service";
 
+process.on("unhandledRejection", (reason) => {
+  logger.error({ err: reason }, "Unhandled promise rejection");
+  // Don't exit - let the application continue
+});
+
 async function bootstrap() {
   const config = loadConfig();
   const app = await buildApp(config);
