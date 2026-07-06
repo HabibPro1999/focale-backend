@@ -13,6 +13,12 @@ const envSchema = z
     FIREBASE_STORAGE_BUCKET: z.string().optional(),
     // Firebase service account JSON (for cloud deployments)
     FIREBASE_SERVICE_ACCOUNT: z.string().optional(),
+    // Firebase web API key — a public identifier (same one shipped in the
+    // frontend bundle), used for the identitytoolkit token-verification
+    // fallback when Google blocks the x509 cert endpoint for our egress IP.
+    FIREBASE_WEB_API_KEY: z
+      .string()
+      .default("AIzaSyBiQGgDgPf9IAoo8y2zwHCS-EZ57N6KCus"),
     // Email provider selection
     EMAIL_PROVIDER: z.enum(["sendgrid", "resend"]).default("sendgrid"),
     // Shared sender identity (falls back to SENDGRID_FROM_* for back-compat)
@@ -195,6 +201,7 @@ export function parseConfig(source: NodeJS.ProcessEnv) {
       projectId: env.FIREBASE_PROJECT_ID,
       storageBucket: env.FIREBASE_STORAGE_BUCKET,
       serviceAccount: env.FIREBASE_SERVICE_ACCOUNT,
+      webApiKey: env.FIREBASE_WEB_API_KEY,
     },
     storage: {
       provider: env.STORAGE_PROVIDER,
