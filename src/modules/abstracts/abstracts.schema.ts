@@ -122,9 +122,9 @@ export const AbstractTokenQuerySchema = z.strictObject({
 });
 
 const CoAuthorSchema = z.strictObject({
-  firstName: z.string().min(1).max(80),
-  lastName: z.string().min(1).max(80),
-  affiliation: z.string().max(200).optional(),
+  firstName: z.string().min(1).max(200),
+  lastName: z.string().min(1).max(200),
+  affiliation: z.string().max(500).optional(),
 });
 
 const FreeTextContentSchema = z.strictObject({
@@ -149,7 +149,7 @@ export const SubmitAbstractSchema = z.strictObject({
   // Required on both submit and edit (product decision). The DB column is
   // nullable only so legacy abstracts created before this field can still be
   // read; every new write must supply an affiliation.
-  authorAffiliation: z.string().trim().min(1).max(200),
+  authorAffiliation: z.string().trim().min(1).max(500),
   authorEmail: z.string().email(),
   authorPhone: z.string().min(1).max(40),
   coAuthors: z.array(CoAuthorSchema).max(20).default([]),

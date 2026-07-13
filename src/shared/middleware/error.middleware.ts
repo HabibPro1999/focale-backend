@@ -139,6 +139,7 @@ export function errorHandler(
       message: v.message || "Invalid value",
     }));
     const context = fastifyError.validationContext ?? "body";
+    logger.warn({ issues, context, requestId }, "Schema validation failed");
 
     return reply.status(400).send({
       error:
