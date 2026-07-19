@@ -19,6 +19,7 @@ describe("BASE_VARIABLES", () => {
       "bank",
       "sponsorship",
       "certificate",
+      "abstract",
     ]) {
       expect(categories.has(c as never)).toBe(true);
     }
@@ -28,6 +29,15 @@ describe("BASE_VARIABLES", () => {
     for (const v of BASE_VARIABLES) {
       expect(v.example && v.example.length > 0).toBe(true);
     }
+  });
+
+  // M7 gap: the ABSTRACT_COMMITTEE_INVITE templated path (committee service)
+  // substitutes exactly reviewerName/eventName/loginLink — eventName already
+  // existed under "event"; reviewerName/loginLink must be picker-visible too.
+  it("lists the ABSTRACT_COMMITTEE_INVITE variables under the abstract category", () => {
+    const byId = new Map(BASE_VARIABLES.map((v) => [v.id, v]));
+    expect(byId.get("reviewerName")).toMatchObject({ category: "abstract" });
+    expect(byId.get("loginLink")).toMatchObject({ category: "abstract" });
   });
 });
 

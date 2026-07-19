@@ -76,4 +76,28 @@ describe.runIf(dbTestsEnabled())("db tier: book jobs + admin search", () => {
     expect(items).toHaveLength(1);
     expect(items[0].authorLastName).toBe("Dupont");
   });
+
+  // L6 coverage: the ILIKE fragment spans five fields — exercise each one so a
+  // regression in any single predicate (not just lastName) fails a test.
+  it("L6: search matches case-insensitively across all five searchable fields", async () => {
+    const event = await seedEvent({ status: "OPEN" });
+    const abstract = await seedAbstract({
+      eventId: event.id,
+      authorFirstName: "Amira",
+      authorLastName: "Bouazizi",
+      authorAffiliation: "Hôpital Charles Nicolle",
+      authorEmail: "Amira.Bouazizi@Example.test",
+      code: "OC0-07",
+    });
+
+    for (const q of ["amira", "bouazizi", "charles nicolle", "AMIRA.BOUAZIZI@", "oc0-07"]) {
+      const { items, total } = await listAdminAbstracts(event.id, {
+        q,
+        limit: 10,
+        offset: 0,
+      });
+      expect(total, `query "${q}"`).toBe(1);
+      expect(items[0].id, `query "${q}"`).toBe(abstract.id);
+    }
+  });
 });

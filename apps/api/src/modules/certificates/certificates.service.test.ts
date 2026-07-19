@@ -185,6 +185,8 @@ describe("CertificatesService", () => {
       await service.createTemplate(eventId, {
         name: "Attendance Certificate",
         applicableRoles: [],
+        scope: "BOTH",
+        allowedAbstractFinalTypes: [],
       });
 
       expect(createCertificateTemplate).toHaveBeenCalledWith({
@@ -192,6 +194,8 @@ describe("CertificatesService", () => {
         name: "Attendance Certificate",
         applicableRoles: [],
         accessId: null,
+        scope: "BOTH",
+        allowedAbstractFinalTypes: [],
       });
     });
 
@@ -204,6 +208,8 @@ describe("CertificatesService", () => {
         name: "Speaker Cert",
         applicableRoles: ["PARTICIPANT"],
         accessId: "access-001",
+        scope: "BOTH",
+        allowedAbstractFinalTypes: [],
       });
 
       expect(createCertificateTemplate).toHaveBeenCalledWith({
@@ -211,6 +217,31 @@ describe("CertificatesService", () => {
         name: "Speaker Cert",
         applicableRoles: ["PARTICIPANT"],
         accessId: "access-001",
+        scope: "BOTH",
+        allowedAbstractFinalTypes: [],
+      });
+    });
+
+    // H2: scope + allowedAbstractFinalTypes forwarding.
+    it("forwards an explicit scope and allowedAbstractFinalTypes", async () => {
+      vi.mocked(createCertificateTemplate).mockResolvedValue(
+        baseMockTemplate() as never,
+      );
+
+      await service.createTemplate(eventId, {
+        name: "Presenter Cert",
+        applicableRoles: [],
+        scope: "ABSTRACT",
+        allowedAbstractFinalTypes: ["POSTER"],
+      });
+
+      expect(createCertificateTemplate).toHaveBeenCalledWith({
+        eventId,
+        name: "Presenter Cert",
+        applicableRoles: [],
+        accessId: null,
+        scope: "ABSTRACT",
+        allowedAbstractFinalTypes: ["POSTER"],
       });
     });
   });
@@ -289,6 +320,35 @@ describe("CertificatesService", () => {
       expect(updateCertificateTemplate).toHaveBeenCalledWith(templateId, {
         accessId: "new-access",
       });
+    });
+
+    // H2: scope + allowedAbstractFinalTypes patch forwarding.
+    it("forwards a scope + allowedAbstractFinalTypes patch", async () => {
+      vi.mocked(updateCertificateTemplate).mockResolvedValue(
+        baseMockTemplate({ scope: "ABSTRACT" }) as never,
+      );
+
+      await service.updateTemplate(templateId, {
+        scope: "ABSTRACT",
+        allowedAbstractFinalTypes: ["ORAL_COMMUNICATION"],
+      });
+
+      expect(updateCertificateTemplate).toHaveBeenCalledWith(templateId, {
+        scope: "ABSTRACT",
+        allowedAbstractFinalTypes: ["ORAL_COMMUNICATION"],
+      });
+    });
+
+    it("omits scope/allowedAbstractFinalTypes from the patch when not provided", async () => {
+      vi.mocked(updateCertificateTemplate).mockResolvedValue(
+        baseMockTemplate({ name: "New Name" }) as never,
+      );
+
+      await service.updateTemplate(templateId, { name: "New Name" });
+
+      const patch = vi.mocked(updateCertificateTemplate).mock.calls[0][1];
+      expect(patch).not.toHaveProperty("scope");
+      expect(patch).not.toHaveProperty("allowedAbstractFinalTypes");
     });
   });
 
@@ -510,6 +570,8 @@ describe("CertificatesService", () => {
         applicableRoles: [],
         accessId: null,
         access: null,
+        scope: "BOTH",
+        allowedAbstractFinalTypes: null,
         ...overrides,
       };
     }
@@ -614,6 +676,8 @@ describe("CertificatesService", () => {
         applicableRoles: [],
         accessId: null,
         access: null,
+        scope: "BOTH",
+        allowedAbstractFinalTypes: null,
         ...overrides,
       };
     }
@@ -778,6 +842,122 @@ describe("CertificatesService", () => {
           }),
         }),
       ]);
+    });
+
+    // H2: {{abstractFinalType}} resolves to the label, not the raw enum.
+    it("resolves abstractFinalType to its label in the email context (not the raw enum)", async () => {
+      vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([
+        abstractRow({ finalType: "ORAL_COMMUNICATION" }) as never,
+      ]);
+      vi.mocked(getAlreadySentAbstractCertTemplateIds).mockResolvedValue(new Map());
+      vi.mocked(createEmailLogsBulk).mockResolvedValue(1);
+
+      await service.sendCertificates(event, [], ["abs-1"]);
+
+      const [[insert]] = vi.mocked(createEmailLogsBulk).mock.calls;
+      expect(insert[0].contextSnapshot).toMatchObject({
+        abstractFinalType: "Oral Communication",
+      });
+      expect(insert[0].contextSnapshot).not.toHaveProperty("abstractFinalTypeLabel");
+    });
+
+    it("labels a not-yet-finalized abstract by its requestedType", async () => {
+      vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([
+        abstractRow({ finalType: null, requestedType: "POSTER" }) as never,
+      ]);
+      vi.mocked(getAlreadySentAbstractCertTemplateIds).mockResolvedValue(new Map());
+      vi.mocked(createEmailLogsBulk).mockResolvedValue(1);
+
+      await service.sendCertificates(event, [], ["abs-1"]);
+
+      const [[insert]] = vi.mocked(createEmailLogsBulk).mock.calls;
+      expect(insert[0].contextSnapshot).toMatchObject({
+        abstractFinalType: "Poster",
+      });
+    });
+
+    // H2: certificate template scope + allowedAbstractFinalTypes gating.
+    describe("template scope + allowedAbstractFinalTypes gating", () => {
+      it("excludes a REGISTRATION-only-scoped template from the abstract send (no applicable templates)", async () => {
+        vi.mocked(listActiveImageReadyCertificateTemplates).mockResolvedValue([
+          certTemplate({ scope: "REGISTRATION" }) as never,
+        ]);
+        vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([
+          abstractRow() as never,
+        ]);
+        vi.mocked(getAlreadySentAbstractCertTemplateIds).mockResolvedValue(new Map());
+        vi.mocked(createEmailLogsBulk).mockResolvedValue(0);
+
+        const result = await service.sendCertificates(event, [], ["abs-1"]);
+
+        expect(result.abstracts).toMatchObject({
+          queued: 0,
+          skipped: 1,
+          total: 1,
+          results: [
+            {
+              abstractId: "abs-1",
+              status: "ineligible",
+              reason: "No certificate templates apply to this abstract",
+            },
+          ],
+        });
+        expect(createEmailLogsBulk).toHaveBeenCalledWith([]);
+      });
+
+      it("includes an ABSTRACT-scoped template in the abstract send", async () => {
+        vi.mocked(listActiveImageReadyCertificateTemplates).mockResolvedValue([
+          certTemplate({ scope: "ABSTRACT" }) as never,
+        ]);
+        vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([
+          abstractRow() as never,
+        ]);
+        vi.mocked(getAlreadySentAbstractCertTemplateIds).mockResolvedValue(new Map());
+        vi.mocked(createEmailLogsBulk).mockResolvedValue(1);
+
+        const result = await service.sendCertificates(event, [], ["abs-1"]);
+
+        expect(result.abstracts).toMatchObject({
+          queued: 1,
+          results: [{ abstractId: "abs-1", status: "queued" }],
+        });
+      });
+
+      it("excludes a template whose allowedAbstractFinalTypes doesn't include the abstract's finalType", async () => {
+        vi.mocked(listActiveImageReadyCertificateTemplates).mockResolvedValue([
+          certTemplate({ allowedAbstractFinalTypes: ["POSTER"] }) as never,
+        ]);
+        vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([
+          abstractRow({ finalType: "ORAL_COMMUNICATION" }) as never,
+        ]);
+        vi.mocked(getAlreadySentAbstractCertTemplateIds).mockResolvedValue(new Map());
+        vi.mocked(createEmailLogsBulk).mockResolvedValue(0);
+
+        const result = await service.sendCertificates(event, [], ["abs-1"]);
+
+        expect(result.abstracts).toMatchObject({
+          queued: 0,
+          results: [{ abstractId: "abs-1", status: "ineligible" }],
+        });
+      });
+
+      it("includes a template whose allowedAbstractFinalTypes includes the abstract's finalType", async () => {
+        vi.mocked(listActiveImageReadyCertificateTemplates).mockResolvedValue([
+          certTemplate({ allowedAbstractFinalTypes: ["ORAL_COMMUNICATION"] }) as never,
+        ]);
+        vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([
+          abstractRow({ finalType: "ORAL_COMMUNICATION" }) as never,
+        ]);
+        vi.mocked(getAlreadySentAbstractCertTemplateIds).mockResolvedValue(new Map());
+        vi.mocked(createEmailLogsBulk).mockResolvedValue(1);
+
+        const result = await service.sendCertificates(event, [], ["abs-1"]);
+
+        expect(result.abstracts).toMatchObject({
+          queued: 1,
+          results: [{ abstractId: "abs-1", status: "queued" }],
+        });
+      });
     });
   });
 });

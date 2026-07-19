@@ -38,6 +38,19 @@ export const CODE_SUFFIX: Record<AbstractFinalType, string> = {
   POSTER: "PC",
 };
 
+/**
+ * Presenter-facing display label per final type (H2). Lifted from a private
+ * `ABSTRACT_FINAL_TYPE_LABELS` copy in apps/api's certificates service so both
+ * the certificate PDF zone variables and the CERTIFICATE_SENT email context
+ * resolve `{{abstractFinalType}}` (and, on the abstract path, `{{role}}`) to
+ * this same label instead of the raw enum value.
+ */
+export const ABSTRACT_FINAL_TYPE_LABELS: Record<AbstractFinalType, string> = {
+  CONFERENCE: "Conference",
+  ORAL_COMMUNICATION: "Oral Communication",
+  POSTER: "Poster",
+};
+
 // ============================================================================
 // Param Schemas
 // ============================================================================

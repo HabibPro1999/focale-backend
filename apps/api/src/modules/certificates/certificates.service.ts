@@ -1,7 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { fileTypeFromBuffer } from "file-type";
 import sharp from "sharp";
-import { ErrorCodes } from "@app/contracts";
+import { ErrorCodes, ABSTRACT_FINAL_TYPE_LABELS } from "@app/contracts";
 import type {
   CreateCertificateTemplateInput,
   UpdateCertificateTemplateInput,
@@ -33,6 +33,7 @@ import {
   getStorageProvider,
   buildEmailContextWithAccess,
   isEligibleForCertificate,
+  isAbstractEligibleForCertificate,
   type DownloadedFile,
   type CertificateTemplateData,
 } from "@app/integrations";
@@ -99,12 +100,6 @@ export interface AbstractCertificateSendSummary {
   total: number;
   results: AbstractCertificateSendResult[];
 }
-
-const ABSTRACT_FINAL_TYPE_LABELS: Record<string, string> = {
-  CONFERENCE: "Conference",
-  ORAL_COMMUNICATION: "Oral Communication",
-  POSTER: "Poster",
-};
 
 /** Mirrors the local `getTitle` helper in abstracts.admin.service.ts — title
  * lives in the free-form `content` jsonb, not a dedicated column. */
@@ -202,6 +197,8 @@ export class CertificatesService {
       name: input.name,
       applicableRoles: input.applicableRoles ?? [],
       accessId: input.accessId ?? null,
+      scope: input.scope,
+      allowedAbstractFinalTypes: input.allowedAbstractFinalTypes,
     });
   }
 
@@ -228,6 +225,8 @@ export class CertificatesService {
       applicableRoles?: string[];
       active?: boolean;
       accessId?: string | null;
+      scope?: string;
+      allowedAbstractFinalTypes?: string[] | null;
     } = {};
     if (input.name !== undefined) patch.name = input.name;
     if (input.zones !== undefined) patch.zones = input.zones;
@@ -236,6 +235,10 @@ export class CertificatesService {
     }
     if (input.active !== undefined) patch.active = input.active;
     if (input.accessId !== undefined) patch.accessId = input.accessId;
+    if (input.scope !== undefined) patch.scope = input.scope;
+    if (input.allowedAbstractFinalTypes !== undefined) {
+      patch.allowedAbstractFinalTypes = input.allowedAbstractFinalTypes;
+    }
 
     return updateCertificateTemplate(id, patch);
   }
@@ -382,6 +385,8 @@ export class CertificatesService {
       applicableRoles: (t.applicableRoles as string[] | null) ?? [],
       accessId: t.accessId,
       access: t.access ? { id: t.access.id, name: t.access.name } : null,
+      scope: t.scope,
+      allowedAbstractFinalTypes: (t.allowedAbstractFinalTypes as string[] | null) ?? null,
     }));
 
     // 4. Filter to registrations with ≥1 eligible template (pure, no I/O).
@@ -533,10 +538,12 @@ export class CertificatesService {
 
   /**
    * Abstract presenter certificates (H2). Reuses the event's active,
-   * image-ready certificate templates and CERTIFICATE_SENT email template
-   * (no per-type template scoping exists yet — see module gaps). Per-id
-   * eligibility: must belong to the event, be ACCEPTED, and have
-   * presentedAt != null (set by markAbstractPresented). Ineligible /
+   * image-ready certificate templates and CERTIFICATE_SENT email template,
+   * narrowed per-abstract to those scoped ABSTRACT/BOTH whose
+   * allowedAbstractFinalTypes (if any) includes the abstract's finalType
+   * (isAbstractEligibleForCertificate). Per-id eligibility: must belong to
+   * the event, be ACCEPTED, have presentedAt != null (set by
+   * markAbstractPresented), and have ≥1 applicable template. Ineligible /
    * already-sent ids are reported individually rather than failing the
    * whole request. Recipient is the abstract's author (first/corresponding
    * author — abstracts have exactly one author on file).
@@ -574,8 +581,22 @@ export class CertificatesService {
       // event-scoped abstract (see its implementation above).
       const abstract = maybeAbstract as AbstractForCertificateSend;
 
+      // H2: scope + allowedAbstractFinalTypes gate — narrow to templates that
+      // actually apply to this abstract before the dedupe check below.
+      const applicableTemplates = certTemplates.filter((t) =>
+        isAbstractEligibleForCertificate(abstract.finalType, t),
+      );
+      if (applicableTemplates.length === 0) {
+        results.push({
+          abstractId: id,
+          status: "ineligible",
+          reason: "No certificate templates apply to this abstract",
+        });
+        continue;
+      }
+
       const sentIds = alreadySent.get(id) ?? new Set<string>();
-      const remaining = certTemplates.filter((t) => !sentIds.has(t.id));
+      const remaining = applicableTemplates.filter((t) => !sentIds.has(t.id));
       if (remaining.length === 0) {
         results.push({ abstractId: id, status: "already_sent" });
         continue;
@@ -585,6 +606,7 @@ export class CertificatesService {
         .filter(Boolean)
         .join(" ")
         .trim();
+      const abstractType = abstract.finalType ?? abstract.requestedType;
 
       values.push({
         trigger: "CERTIFICATE_SENT",
@@ -601,11 +623,10 @@ export class CertificatesService {
           fullName: authorName || "—",
           abstractTitle: getAbstractTitle(abstract.content),
           abstractCode: abstract.code ?? "—",
-          abstractFinalType: abstract.finalType ?? abstract.requestedType,
-          abstractFinalTypeLabel:
+          abstractFinalType:
             ABSTRACT_FINAL_TYPE_LABELS[
-              abstract.finalType ?? abstract.requestedType
-            ] ?? (abstract.finalType ?? abstract.requestedType),
+              abstractType as keyof typeof ABSTRACT_FINAL_TYPE_LABELS
+            ] ?? abstractType,
           eventName: abstract.event.name,
           eventDate: abstract.event.startDate.toISOString(),
           eventLocation: abstract.event.location ?? "—",

@@ -205,6 +205,10 @@ export async function createCertificateTemplate(
     name: string;
     applicableRoles: string[];
     accessId: string | null;
+    // H2: optional — omitted means "let the column defaults apply"
+    // (scope='BOTH', allowedAbstractFinalTypes=null), i.e. legacy behavior.
+    scope?: string;
+    allowedAbstractFinalTypes?: string[] | null;
   },
   exec: DbExecutor = getDb(),
 ): Promise<CertificateTemplateWithAccess> {
@@ -218,6 +222,15 @@ export async function createCertificateTemplate(
       templateHeight: 0,
       applicableRoles: values.applicableRoles as CertificateTemplateInsert["applicableRoles"],
       accessId: values.accessId,
+      ...(values.scope !== undefined
+        ? { scope: values.scope as CertificateTemplateInsert["scope"] }
+        : {}),
+      ...(values.allowedAbstractFinalTypes !== undefined
+        ? {
+            allowedAbstractFinalTypes:
+              values.allowedAbstractFinalTypes as CertificateTemplateInsert["allowedAbstractFinalTypes"],
+          }
+        : {}),
     })
     .returning();
   return (await loadTemplateWithAccess(inserted.id, exec)) as CertificateTemplateWithAccess;
@@ -237,6 +250,9 @@ export async function updateCertificateTemplate(
     applicableRoles?: string[];
     active?: boolean;
     accessId?: string | null;
+    // H2
+    scope?: string;
+    allowedAbstractFinalTypes?: string[] | null;
   },
   exec: DbExecutor = getDb(),
 ): Promise<CertificateTemplateWithAccess> {
@@ -246,6 +262,10 @@ export async function updateCertificateTemplate(
   if (patch.applicableRoles !== undefined) set.applicableRoles = patch.applicableRoles;
   if (patch.active !== undefined) set.active = patch.active;
   if (patch.accessId !== undefined) set.accessId = patch.accessId;
+  if (patch.scope !== undefined) set.scope = patch.scope;
+  if (patch.allowedAbstractFinalTypes !== undefined) {
+    set.allowedAbstractFinalTypes = patch.allowedAbstractFinalTypes;
+  }
 
   await exec
     .update(certificateTemplates)

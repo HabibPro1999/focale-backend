@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ABSTRACT_FINAL_TYPES } from "./abstracts";
 
 // Certificates module Zod contracts — ported verbatim from legacy
 // certificates.schema.ts. Param schemas are namespaced (Certificate*) to avoid
@@ -18,6 +19,21 @@ export const CertificateRegistrationRoleSchema = z.enum([
   "ORGANIZER",
   "INVITED",
 ]);
+
+// H2: registration-vs-abstract template scoping. 'BOTH' is the default —
+// existing templates (created before scoping existed) apply to both send
+// paths exactly as before.
+export const CERTIFICATE_TEMPLATE_SCOPES = [
+  "REGISTRATION",
+  "ABSTRACT",
+  "BOTH",
+] as const;
+export type CertificateTemplateScope = (typeof CERTIFICATE_TEMPLATE_SCOPES)[number];
+export const CertificateTemplateScopeSchema = z.enum(CERTIFICATE_TEMPLATE_SCOPES);
+
+// Allow-list of abstract final types a template applies to (abstract path
+// only). Empty/omitted = no restriction (all final types).
+export const CertificateAbstractFinalTypeSchema = z.enum(ABSTRACT_FINAL_TYPES);
 
 // ============================================================================
 // Zone Schema
@@ -45,6 +61,12 @@ export const CreateCertificateTemplateSchema = z.strictObject({
   name: z.string().min(1).max(200),
   applicableRoles: z.array(CertificateRegistrationRoleSchema).default([]),
   accessId: z.string().uuid().nullable().optional(),
+  // H2: additive, defaulted — existing callers omitting these get the
+  // legacy-equivalent "applies everywhere" template.
+  scope: CertificateTemplateScopeSchema.default("BOTH"),
+  allowedAbstractFinalTypes: z
+    .array(CertificateAbstractFinalTypeSchema)
+    .default([]),
 });
 
 export const UpdateCertificateTemplateSchema = z
@@ -54,6 +76,10 @@ export const UpdateCertificateTemplateSchema = z
     applicableRoles: z.array(CertificateRegistrationRoleSchema).optional(),
     accessId: z.string().uuid().nullable().optional(),
     active: z.boolean().optional(),
+    scope: CertificateTemplateScopeSchema.optional(),
+    allowedAbstractFinalTypes: z
+      .array(CertificateAbstractFinalTypeSchema)
+      .optional(),
   })
   .refine(hasUpdateField, {
     message: "At least one field must be provided for update",

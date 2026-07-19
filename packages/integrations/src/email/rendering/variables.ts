@@ -283,6 +283,22 @@ export const BASE_VARIABLES: VariableDefinition[] = [
     description: "Amount remaining after sponsorship",
     example: "150 TND",
   },
+
+  // Abstract (ABSTRACT_COMMITTEE_INVITE)
+  {
+    id: "reviewerName",
+    label: "Reviewer Name",
+    category: "abstract",
+    description: "Name of the invited scientific committee member",
+    example: "Dr. Ahmed Salah",
+  },
+  {
+    id: "loginLink",
+    label: "Committee Login Link",
+    category: "abstract",
+    description: "Secure link to set a password and sign in to the committee",
+    example: "https://...",
+  },
 ];
 
 // =============================================================================

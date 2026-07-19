@@ -36,6 +36,8 @@ import {
   getUserById,
   findCommitteeUserClientIds,
   findAbstractEmailTemplate,
+  createEmailLog,
+  updateEmailLogById,
   type ReviewerAbstractRow,
   type AbstractReviewRow,
   type EmailTemplateRow,
@@ -332,6 +334,7 @@ export class AbstractsCommitteeService {
         footnote:
           "Si vous n'attendiez pas cette invitation, vous pouvez ignorer cet email.",
         logContext: "Failed to send committee invitation email",
+        logAsInvite: true,
       });
     } catch (err) {
       logger.error(
@@ -353,8 +356,8 @@ export class AbstractsCommitteeService {
    * can still report inviteEmailSent immediately, matching the fallback
    * path's contract — queueEmail defers the actual send to the worker and
    * requires an abstractId, neither of which fits this abstract-less,
-   * synchronous invite flow. Gap: unlike other templated abstract sends,
-   * this does not create an email_logs row (see report).
+   * synchronous invite flow. sendAndLogInviteEmail still records the send in
+   * email_logs so it shows up in the admin's per-event log table.
    */
   private async sendTemplatedCommitteeEmail(
     template: EmailTemplateRow,
@@ -364,20 +367,14 @@ export class AbstractsCommitteeService {
   ): Promise<boolean> {
     const subject = resolveVariables(template.subject, variables);
     const html = resolveVariables(template.htmlContent ?? "", variables);
-    const result = await getEmailProvider().sendEmail({
+    return this.sendAndLogInviteEmail({
       to,
       toName,
       subject,
       html,
       categories: ["committee-invite"],
+      logContext: "Failed to send templated committee invite email",
     });
-    if (!result.success) {
-      logger.error(
-        { email: to, error: result.error },
-        "Failed to send templated committee invite email",
-      );
-    }
-    return result.success;
   }
 
   // ==========================================================================
@@ -748,7 +745,10 @@ export class AbstractsCommitteeService {
   }
 
   // ==========================================================================
-  // Email plumbing (best-effort, synchronous, no EmailLog row)
+  // Email plumbing (best-effort, synchronous). Only the ABSTRACT_COMMITTEE_INVITE
+  // path (logAsInvite) writes an email_logs row — resendCommitteeInvite /
+  // setCommitteeMemberPassword are password resets, not that trigger, and
+  // stay row-less as before.
   // ==========================================================================
   /**
    * The `url` here is the Firebase `continueUrl` (final post-reset destination),
@@ -757,6 +757,93 @@ export class AbstractsCommitteeService {
    */
   private buildPasswordResetActionCodeSettings(): { url: string } {
     return { url: `${this.config.urls.adminAppUrl}/committee` };
+  }
+
+  /**
+   * M7: create a SENDING email_logs row (trigger ABSTRACT_COMMITTEE_INVITE,
+   * no registrationId/abstractId — the invite predates both) BEFORE calling
+   * the provider, exactly like EmailSendService.sendCustom, so the row id can
+   * serve as the provider trackingId and a webhook arriving mid-send has
+   * something to correlate against. Updated to SENT/FAILED afterward,
+   * including when the provider call itself throws (rather than merely
+   * returning success:false). Log writes are themselves best-effort: a DB
+   * hiccup here logs and is swallowed, it never turns a real send outcome
+   * into a thrown error for the caller.
+   */
+  private async sendAndLogInviteEmail(input: {
+    to: string;
+    toName?: string | null;
+    subject: string;
+    html: string;
+    categories: string[];
+    logContext: string;
+  }): Promise<boolean> {
+    let emailLogId: string | null = null;
+    try {
+      const logResult = await createEmailLog({
+        trigger: null,
+        abstractTrigger: "ABSTRACT_COMMITTEE_INVITE",
+        templateId: null,
+        registrationId: null,
+        abstractId: null,
+        recipientEmail: input.to,
+        recipientName: input.toName || null,
+        subject: input.subject,
+        status: "SENDING",
+      });
+      if (logResult.ok) emailLogId = logResult.log.id;
+    } catch (err) {
+      logger.error(
+        { err, email: input.to },
+        "Failed to create committee invite email log",
+      );
+    }
+
+    let result: { success: boolean; messageId?: string; error?: string };
+    try {
+      result = await getEmailProvider().sendEmail({
+        to: input.to,
+        toName: input.toName ?? undefined,
+        subject: input.subject,
+        html: input.html,
+        categories: input.categories,
+        trackingId: emailLogId ?? undefined,
+      });
+    } catch (err) {
+      result = {
+        success: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+
+    if (emailLogId) {
+      try {
+        await updateEmailLogById(
+          emailLogId,
+          result.success
+            ? {
+                status: "SENT",
+                providerMessageId: result.messageId,
+                sentAt: new Date(),
+              }
+            : {
+                status: "FAILED",
+                errorMessage: result.error || "Unknown error",
+                failedAt: new Date(),
+              },
+        );
+      } catch (err) {
+        logger.error(
+          { err, emailLogId },
+          "Failed to update committee invite email log",
+        );
+      }
+    }
+
+    if (!result.success) {
+      logger.error({ email: input.to, error: result.error }, input.logContext);
+    }
+    return result.success;
   }
 
   private async sendCommitteeMjmlEmail(input: {
@@ -771,6 +858,8 @@ export class AbstractsCommitteeService {
     category: string;
     footnote?: string;
     logContext: string;
+    /** M7: only the ABSTRACT_COMMITTEE_INVITE fallback records an email_logs row. */
+    logAsInvite?: boolean;
   }): Promise<boolean> {
     const toName = input.toName?.trim() || input.to;
     const safeName = escapeHtml(toName);
@@ -809,6 +898,18 @@ export class AbstractsCommitteeService {
   </mj-body>
 </mjml>`;
     const { html } = compileMjmlToHtml(mjml);
+
+    if (input.logAsInvite) {
+      return this.sendAndLogInviteEmail({
+        to: input.to,
+        toName,
+        subject: input.subject,
+        html,
+        categories: [input.category],
+        logContext: input.logContext,
+      });
+    }
+
     const result = await getEmailProvider().sendEmail({
       to: input.to,
       toName,

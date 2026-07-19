@@ -10,6 +10,7 @@ import fontkit from "@pdf-lib/fontkit";
 import { PDFDocument, type PDFFont, rgb } from "pdf-lib";
 import { readFile } from "node:fs/promises";
 import type { CertificateZone } from "@app/contracts";
+import { ABSTRACT_FINAL_TYPE_LABELS } from "@app/contracts";
 import {
   getRegistrationForCertificateGeneration,
   getAbstractForCertificateGeneration,
@@ -39,6 +40,10 @@ export interface CertificateTemplateData {
   applicableRoles: string[];
   accessId: string | null;
   access: { id: string; name: string } | null;
+  // H2: registration-vs-abstract scoping (see isEligibleForCertificate /
+  // isAbstractEligibleForCertificate below).
+  scope: string;
+  allowedAbstractFinalTypes: string[] | null;
 }
 
 export interface RegistrationForCertificate {
@@ -94,6 +99,24 @@ function getAbstractTitle(content: unknown): string {
     if (typeof title === "string" && title.trim()) return title.trim();
   }
   return "Untitled abstract";
+}
+
+/** finalType, labeled, falling back to requestedType when not yet finalized
+ * (mirrors the legacy `abstract.finalType ?? abstract.requestedType` raw
+ * value this replaces — same fallback, now resolved through the shared label
+ * map instead of the raw enum). */
+function labelForAbstractType(finalType: string | null, requestedType: string): string {
+  const raw = finalType ?? requestedType;
+  return ABSTRACT_FINAL_TYPE_LABELS[raw as keyof typeof ABSTRACT_FINAL_TYPE_LABELS] ?? raw;
+}
+
+/** The "role" zone variable on an abstract certificate is the presenter's
+ * presentation type — but only once it's actually finalized. Unlike
+ * abstractFinalType (which falls back to requestedType so there's always a
+ * value to print), "role" shows "—" until finalType is set: a
+ * requested-but-unfinalized type isn't an official role yet. */
+function abstractRoleLabel(finalType: string | null, requestedType: string): string {
+  return finalType ? labelForAbstractType(finalType, requestedType) : "—";
 }
 
 /** Superset of the variables either a registration cert or an abstract
@@ -332,6 +355,8 @@ export const __certificatePdfTestHooks = {
   hexToRgb,
   safeFilenameSegment,
   truncateTextToWidth,
+  labelForAbstractType,
+  abstractRoleLabel,
 };
 
 function fitTextToZone(
@@ -505,6 +530,13 @@ export function isEligibleForCertificate(
   registration: RegistrationForCertificate,
   template: CertificateTemplateData,
 ): boolean {
+  // H2: scope gate — a template scoped ABSTRACT-only never applies to a
+  // registration send. Default ('BOTH') keeps every existing template
+  // eligible exactly as before scoping existed.
+  if (template.scope !== "REGISTRATION" && template.scope !== "BOTH") {
+    return false;
+  }
+
   // Role check: empty applicableRoles = all roles eligible
   const roleMatch =
     template.applicableRoles.length === 0 ||
@@ -522,6 +554,25 @@ export function isEligibleForCertificate(
     // Main event cert: need event-level check-in
     return registration.checkedInAt !== null;
   }
+}
+
+/**
+ * H2 abstract-path counterpart to isEligibleForCertificate: a template
+ * applies to an abstract certificate send when it's scoped ABSTRACT/BOTH
+ * (default 'BOTH' keeps every existing template eligible) AND, if it
+ * restricts allowedAbstractFinalTypes, the abstract's finalType is in that
+ * list (null/empty allow-list = unrestricted).
+ */
+export function isAbstractEligibleForCertificate(
+  finalType: string | null,
+  template: CertificateTemplateData,
+): boolean {
+  if (template.scope !== "ABSTRACT" && template.scope !== "BOTH") return false;
+
+  const allowed = template.allowedAbstractFinalTypes;
+  if (!allowed || allowed.length === 0) return true;
+
+  return finalType != null && allowed.includes(finalType);
 }
 
 // =============================================================================
@@ -617,17 +668,26 @@ export async function generateCertificateAttachments(
 }
 
 /**
- * Abstract presenter certificates (H2). No isEligibleForCertificate filter:
- * abstracts have no role/check-in state, so every template handed in applies
- * — mirrors apps/api CertificatesService.processAbstractCertificates, which
- * targets all active/image-ready templates for the event without the
- * role/check-in gate used for registrants.
+ * Abstract presenter certificates (H2). No role/check-in filter — abstracts
+ * have no such state — but templates ARE gated by scope/allowedAbstractFinalTypes
+ * (isAbstractEligibleForCertificate), mirroring apps/api
+ * CertificatesService.processAbstractCertificates's own filtering of the same
+ * template set for the same abstract.
  */
 export async function generateAbstractCertificateAttachments(
   abstract: AbstractForCertificate,
   templates: CertificateTemplateData[],
   imageCache: ImageCache,
 ): Promise<EmailAttachment[]> {
+  const eligible = templates.filter((t) =>
+    isAbstractEligibleForCertificate(abstract.finalType, t),
+  );
+
+  const abstractFinalTypeLabel = labelForAbstractType(
+    abstract.finalType,
+    abstract.requestedType,
+  );
+
   const variableData: CertificateVariableData = {
     firstName: abstract.authorFirstName,
     lastName: abstract.authorLastName,
@@ -636,11 +696,12 @@ export async function generateAbstractCertificateAttachments(
     eventLocation: abstract.event.location,
     abstractTitle: getAbstractTitle(abstract.content),
     abstractCode: abstract.code,
-    abstractFinalType: abstract.finalType ?? abstract.requestedType,
+    abstractFinalType: abstractFinalTypeLabel,
+    role: abstractRoleLabel(abstract.finalType, abstract.requestedType),
   };
 
   return renderCertificateAttachments(
-    templates,
+    eligible,
     variableData,
     abstract.id,
     imageCache,
@@ -674,6 +735,8 @@ function toCertificateTemplateData(
     applicableRoles: (t.applicableRoles as string[] | null) ?? [],
     accessId: t.accessId,
     access: t.access ? { id: t.access.id, name: t.access.name } : null,
+    scope: t.scope,
+    allowedAbstractFinalTypes: (t.allowedAbstractFinalTypes as string[] | null) ?? null,
   }));
 }
 

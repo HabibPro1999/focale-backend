@@ -27,6 +27,7 @@ import {
   generateAbstractCertificateAttachments,
   generateCertificatePdf,
   isEligibleForCertificate,
+  isAbstractEligibleForCertificate,
   resolveCertificateVariable,
 } from "./certificates-pdf";
 import type {
@@ -80,6 +81,10 @@ const template = (
   applicableRoles: [],
   accessId: null,
   access: null,
+  // H2: 'BOTH' + unrestricted final types = the legacy pre-scoping default,
+  // eligible on both send paths.
+  scope: "BOTH",
+  allowedAbstractFinalTypes: null,
   ...overrides,
 });
 
@@ -232,9 +237,145 @@ describe("generateAbstractCertificateAttachments (H2)", () => {
 
     expect(attachments).toHaveLength(1);
   });
+
+  // H2: scope + allowedAbstractFinalTypes gating.
+  it("excludes a REGISTRATION-scoped template from an abstract send", async () => {
+    const attachments = await generateAbstractCertificateAttachments(
+      abstract(),
+      [template({ scope: "REGISTRATION" })],
+      new Map(),
+    );
+    expect(attachments).toHaveLength(0);
+  });
+
+  it("includes ABSTRACT-scoped and BOTH-scoped templates in an abstract send", async () => {
+    const attachments = await generateAbstractCertificateAttachments(
+      abstract(),
+      [
+        template({ id: "t-abstract", scope: "ABSTRACT" }),
+        template({ id: "t-both", scope: "BOTH" }),
+      ],
+      new Map(),
+    );
+    expect(attachments).toHaveLength(2);
+  });
+
+  it("excludes a template whose allowedAbstractFinalTypes does not include the abstract's finalType", async () => {
+    const attachments = await generateAbstractCertificateAttachments(
+      abstract({ finalType: "POSTER" }),
+      [template({ scope: "ABSTRACT", allowedAbstractFinalTypes: ["ORAL_COMMUNICATION"] })],
+      new Map(),
+    );
+    expect(attachments).toHaveLength(0);
+  });
+
+  it("includes a template whose allowedAbstractFinalTypes includes the abstract's finalType", async () => {
+    const attachments = await generateAbstractCertificateAttachments(
+      abstract({ finalType: "POSTER" }),
+      [template({ scope: "ABSTRACT", allowedAbstractFinalTypes: ["POSTER"] })],
+      new Map(),
+    );
+    expect(attachments).toHaveLength(1);
+  });
+
+  it("empty allowedAbstractFinalTypes = no restriction", async () => {
+    const attachments = await generateAbstractCertificateAttachments(
+      abstract({ finalType: "POSTER" }),
+      [template({ scope: "ABSTRACT", allowedAbstractFinalTypes: [] })],
+      new Map(),
+    );
+    expect(attachments).toHaveLength(1);
+  });
+});
+
+describe("isAbstractEligibleForCertificate (H2)", () => {
+  it("excludes REGISTRATION scope, includes ABSTRACT/BOTH", () => {
+    expect(
+      isAbstractEligibleForCertificate(
+        "POSTER",
+        template({ scope: "REGISTRATION" }),
+      ),
+    ).toBe(false);
+    expect(
+      isAbstractEligibleForCertificate("POSTER", template({ scope: "ABSTRACT" })),
+    ).toBe(true);
+    expect(
+      isAbstractEligibleForCertificate("POSTER", template({ scope: "BOTH" })),
+    ).toBe(true);
+  });
+
+  it("null/empty allowedAbstractFinalTypes allows every final type", () => {
+    expect(
+      isAbstractEligibleForCertificate(
+        "POSTER",
+        template({ scope: "ABSTRACT", allowedAbstractFinalTypes: null }),
+      ),
+    ).toBe(true);
+    expect(
+      isAbstractEligibleForCertificate(
+        "POSTER",
+        template({ scope: "ABSTRACT", allowedAbstractFinalTypes: [] }),
+      ),
+    ).toBe(true);
+  });
+
+  it("a non-empty allowedAbstractFinalTypes restricts to its members", () => {
+    const t = template({
+      scope: "ABSTRACT",
+      allowedAbstractFinalTypes: ["ORAL_COMMUNICATION"],
+    });
+    expect(isAbstractEligibleForCertificate("ORAL_COMMUNICATION", t)).toBe(true);
+    expect(isAbstractEligibleForCertificate("POSTER", t)).toBe(false);
+    expect(isAbstractEligibleForCertificate(null, t)).toBe(false);
+  });
+});
+
+describe("labelForAbstractType / abstractRoleLabel (H2)", () => {
+  it("resolves a set finalType to its label", () => {
+    expect(
+      __certificatePdfTestHooks.labelForAbstractType("CONFERENCE", "POSTER"),
+    ).toBe("Conference");
+    expect(
+      __certificatePdfTestHooks.labelForAbstractType("ORAL_COMMUNICATION", "POSTER"),
+    ).toBe("Oral Communication");
+  });
+
+  it("falls back to the labeled requestedType when finalType is null", () => {
+    expect(__certificatePdfTestHooks.labelForAbstractType(null, "POSTER")).toBe(
+      "Poster",
+    );
+  });
+
+  it("abstractRoleLabel falls back to em dash (not requestedType) when finalType is null", () => {
+    expect(
+      __certificatePdfTestHooks.abstractRoleLabel(null, "ORAL_COMMUNICATION"),
+    ).toBe("—");
+  });
+
+  it("abstractRoleLabel resolves to the label once finalType is set", () => {
+    expect(
+      __certificatePdfTestHooks.abstractRoleLabel("POSTER", "ORAL_COMMUNICATION"),
+    ).toBe("Poster");
+  });
 });
 
 describe("isEligibleForCertificate", () => {
+  // H2: scope gate.
+  it("excludes an ABSTRACT-scoped template from a registration send", () => {
+    expect(
+      isEligibleForCertificate(registration, template({ scope: "ABSTRACT" })),
+    ).toBe(false);
+  });
+
+  it("includes REGISTRATION-scoped and BOTH-scoped (default) templates", () => {
+    expect(
+      isEligibleForCertificate(registration, template({ scope: "REGISTRATION" })),
+    ).toBe(true);
+    expect(isEligibleForCertificate(registration, template({ scope: "BOTH" }))).toBe(
+      true,
+    );
+  });
+
   it("requires a matching role when applicableRoles is non-empty", () => {
     expect(
       isEligibleForCertificate(registration, template({ applicableRoles: ["SPEAKER"] })),
