@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  BulkSendEmailSchema,
   CreateEmailTemplateSchema,
   CreateEmailTemplateBodySchema,
   UpdateEmailTemplateSchema,
@@ -148,5 +149,20 @@ describe("UpdateEmailTemplateSchema", () => {
       });
       expect(parsed.success).toBe(false);
     });
+  });
+});
+
+describe("BulkSendFilterSchema role filter", () => {
+  it("accepts INVITED (registrations can hold it; admin UI offers it)", () => {
+    const parsed = BulkSendEmailSchema.safeParse({
+      filters: { role: ["INVITED", "PARTICIPANT"] },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects an unknown role", () => {
+    expect(
+      BulkSendEmailSchema.safeParse({ filters: { role: ["GHOST"] } }).success,
+    ).toBe(false);
   });
 });

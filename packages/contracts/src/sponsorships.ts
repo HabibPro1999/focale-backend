@@ -69,6 +69,10 @@ export type SponsorInfo = z.infer<typeof SponsorInfoSchema>;
 export const CreateSponsorshipBatchSchema = z
   .strictObject({
     sponsor: SponsorInfoSchema,
+    // ponytail: accepted for legacy parity only — the form app always sends it
+    // and the legacy backend accepted-and-ignored it (no idempotency handling).
+    // Upgrade path: dedupe on it like registrations' idempotencyKey.
+    idempotencyKey: z.string().uuid().optional(),
     customFields: z.record(z.string(), z.unknown()).optional(),
     beneficiaries: z.array(BeneficiaryInputSchema).max(100).optional(), // CODE mode
     linkedBeneficiaries: z

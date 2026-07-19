@@ -20,7 +20,10 @@ export class FormsPublicController {
     // Transform for public consumption (startDate→startsAt, endDate→endsAt,
     // access→accessItems).
     return {
-      formId: form.id,
+      id: form.id,
+      formId: form.id, // ponytail: kept for back-compat with older form-app builds
+      eventId: form.event.id,
+      schemaVersion: form.schemaVersion,
       schema: form.schema,
       event: {
         id: form.event.id,
@@ -30,6 +33,7 @@ export class FormsPublicController {
         startsAt: form.event.startDate?.toISOString() ?? null,
         endsAt: form.event.endDate?.toISOString() ?? null,
         location: form.event.location,
+        bannerUrl: form.event.bannerUrl,
         client: form.event.client,
       },
       pricing: form.event.pricing,

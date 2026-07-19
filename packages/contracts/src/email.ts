@@ -193,7 +193,9 @@ export const BulkSendFilterSchema = z.strictObject({
     .optional(),
   accessTypeIds: z.array(z.string().uuid()).optional(),
   role: z
-    .array(z.enum(["PARTICIPANT", "SPEAKER", "MODERATOR", "ORGANIZER"]))
+    .array(
+      z.enum(["PARTICIPANT", "SPEAKER", "MODERATOR", "ORGANIZER", "INVITED"]),
+    )
     .optional(),
 });
 

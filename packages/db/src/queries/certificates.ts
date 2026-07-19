@@ -69,6 +69,11 @@ function toAccessRef(
     : null;
 }
 
+/** Legacy rows can hold NULL applicableRoles (nullable column); consumers expect an array. */
+function withRoles(template: CertificateTemplateRow): CertificateTemplateRow {
+  return { ...template, applicableRoles: template.applicableRoles ?? [] };
+}
+
 /** Reload a single template joined with its access relation, or null. */
 async function loadTemplateWithAccess(
   id: string,
@@ -87,7 +92,7 @@ async function loadTemplateWithAccess(
     .limit(1);
   const row = rows[0];
   if (!row) return null;
-  return { ...row.template, access: toAccessRef(row) };
+  return { ...withRoles(row.template), access: toAccessRef(row) };
 }
 
 // ---------------------------------------------------------------------------
@@ -110,7 +115,7 @@ export async function listCertificateTemplates(
     .leftJoin(eventAccess, eq(eventAccess.id, certificateTemplates.accessId))
     .where(eq(certificateTemplates.eventId, eventId))
     .orderBy(desc(certificateTemplates.createdAt));
-  return rows.map((row) => ({ ...row.template, access: toAccessRef(row) }));
+  return rows.map((row) => ({ ...withRoles(row.template), access: toAccessRef(row) }));
 }
 
 /** Single template + access relation + owning event's {clientId,status}, or null. */
@@ -135,7 +140,7 @@ export async function getCertificateTemplateWithEvent(
   const row = rows[0];
   if (!row) return null;
   return {
-    ...row.template,
+    ...withRoles(row.template),
     access: toAccessRef(row),
     event: { clientId: row.clientId, status: row.status },
   };
@@ -329,7 +334,7 @@ export async function listActiveImageReadyCertificateTemplates(
         gt(certificateTemplates.templateHeight, 0),
       ),
     );
-  return rows.map((row) => ({ ...row.template, access: toAccessRef(row) }));
+  return rows.map((row) => ({ ...withRoles(row.template), access: toAccessRef(row) }));
 }
 
 /**
@@ -361,7 +366,7 @@ export async function getActiveImageReadyCertificateTemplatesByIds(
         gt(certificateTemplates.templateHeight, 0),
       ),
     );
-  return rows.map((row) => ({ ...row.template, access: toAccessRef(row) }));
+  return rows.map((row) => ({ ...withRoles(row.template), access: toAccessRef(row) }));
 }
 
 /**

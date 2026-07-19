@@ -44,6 +44,7 @@ function makeEvent(overrides: Record<string, unknown> = {}) {
       name: "Client",
       logo: null,
       primaryColor: null,
+      phone: "+216 71 000 000",
       active: true,
       enabledModules: ["registrations", "pricing"],
     },
@@ -97,7 +98,7 @@ describe("events public routes", () => {
     expect(body.data.event).toMatchObject({
       id: EVENT_ID,
       status: "OPEN",
-      client: { id: "client-1", name: "Client" },
+      client: { id: "client-1", name: "Client", phone: "+216 71 000 000" },
     });
     expect(body.data.pricing.bankDetails).toMatchObject({ bic: "", iban: "TN59" });
   });

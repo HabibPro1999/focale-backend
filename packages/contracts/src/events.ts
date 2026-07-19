@@ -133,6 +133,7 @@ export interface PublicPaymentConfigResponse {
       name: string;
       logo: string | null;
       primaryColor: string | null;
+      phone: string | null;
     };
   };
   sponsorshipsEnabled: boolean;

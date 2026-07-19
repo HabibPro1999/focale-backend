@@ -509,6 +509,7 @@ export class EventsService {
           name: event.client.name,
           logo: event.client.logo,
           primaryColor: event.client.primaryColor,
+          phone: event.client.phone,
         },
       },
       sponsorshipsEnabled: sponsorshipsAvailableForActiveClient,

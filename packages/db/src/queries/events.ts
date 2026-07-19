@@ -78,6 +78,7 @@ export type ClientPublicFields = {
   name: string;
   logo: string | null;
   primaryColor: string | null;
+  phone: string | null;
   active: boolean;
   enabledModules: string[] | null;
 };
@@ -100,6 +101,7 @@ export async function getEventWithPricingAndClient(
         name: clients.name,
         logo: clients.logo,
         primaryColor: clients.primaryColor,
+        phone: clients.phone,
         active: clients.active,
         enabledModules: clients.enabledModules,
       },

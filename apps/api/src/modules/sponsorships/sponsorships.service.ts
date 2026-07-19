@@ -387,6 +387,7 @@ export class SponsorshipsService {
     formId: string,
     input: CreateSponsorshipBatchInput,
   ): Promise<CreateBatchResult> {
+    // input.idempotencyKey is intentionally ignored (legacy parity — see schema).
     const { sponsor, customFields } = input;
     const context = await this.validateBatchInput(eventId, formId, input);
 
