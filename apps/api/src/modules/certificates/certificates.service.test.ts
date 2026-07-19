@@ -21,6 +21,8 @@ vi.mock("@app/db", () => ({
   getAlreadySentCertTemplateIds: vi.fn(),
   getTemplateByTrigger: vi.fn(),
   createEmailLogsBulk: vi.fn(),
+  getAbstractsForCertificateSend: vi.fn(),
+  getAlreadySentAbstractCertTemplateIds: vi.fn(),
 }));
 
 const mockStorageUpload = vi
@@ -74,6 +76,8 @@ import {
   getAlreadySentCertTemplateIds,
   getTemplateByTrigger,
   createEmailLogsBulk,
+  getAbstractsForCertificateSend,
+  getAlreadySentAbstractCertTemplateIds,
 } from "@app/db";
 import { CertificatesService } from "./certificates.service";
 
@@ -590,6 +594,190 @@ describe("CertificatesService", () => {
       expect(result.skipped).toBe(1);
       expect(result.total).toBe(1);
       expect(createEmailLogsBulk).toHaveBeenCalledWith([]);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // sendCertificates — abstract certificates (H2)
+  // -------------------------------------------------------------------------
+  describe("sendCertificates — abstract certificates (H2)", () => {
+    const event = { id: eventId, clientId: "c1" };
+
+    function certTemplate(overrides: Record<string, unknown> = {}) {
+      return {
+        id: "c1",
+        name: "Presenter Certificate",
+        templateUrl: "url",
+        templateWidth: 10,
+        templateHeight: 10,
+        zones: [],
+        applicableRoles: [],
+        accessId: null,
+        access: null,
+        ...overrides,
+      };
+    }
+
+    function abstractRow(overrides: Record<string, unknown> = {}) {
+      return {
+        id: "abs-1",
+        eventId,
+        status: "ACCEPTED",
+        presentedAt: new Date("2026-07-10T00:00:00Z"),
+        finalType: "ORAL_COMMUNICATION",
+        requestedType: "ORAL_COMMUNICATION",
+        code: "OC1-01",
+        content: { title: "A Great Abstract" },
+        authorFirstName: "Ada",
+        authorLastName: "Lovelace",
+        authorEmail: "ada@example.com",
+        event: { name: "Event", startDate: new Date("2026-07-19"), location: "Tunis" },
+        ...overrides,
+      };
+    }
+
+    // No registrations in play for any of these — isolate the abstract path.
+    beforeEach(() => {
+      vi.mocked(getTemplateByTrigger).mockResolvedValue({ id: "et1" } as never);
+      vi.mocked(listActiveImageReadyCertificateTemplates).mockResolvedValue([
+        certTemplate() as never,
+      ]);
+      vi.mocked(getRegistrationsForCertificateSend).mockResolvedValue([]);
+    });
+
+    it("omitting abstractIds leaves the response shape untouched (no abstracts key)", async () => {
+      vi.mocked(createEmailLogsBulk).mockResolvedValue(0);
+
+      const result = await service.sendCertificates(event, []);
+
+      expect(result.abstracts).toBeUndefined();
+      expect(getAbstractsForCertificateSend).not.toHaveBeenCalled();
+    });
+
+    it("narrows registrations to none when abstractIds is provided without registrationIds", async () => {
+      vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([]);
+      vi.mocked(getAlreadySentAbstractCertTemplateIds).mockResolvedValue(new Map());
+      vi.mocked(createEmailLogsBulk).mockResolvedValue(0);
+
+      await service.sendCertificates(event, undefined, ["abs-1"]);
+
+      expect(getRegistrationsForCertificateSend).toHaveBeenCalledWith(eventId, []);
+    });
+
+    it("reports a not-ACCEPTED abstract as ineligible, per-id, without failing the request", async () => {
+      vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([
+        abstractRow({ status: "SUBMITTED" }) as never,
+      ]);
+      vi.mocked(getAlreadySentAbstractCertTemplateIds).mockResolvedValue(new Map());
+      vi.mocked(createEmailLogsBulk).mockResolvedValue(0);
+
+      const result = await service.sendCertificates(event, [], ["abs-1"]);
+
+      expect(result.abstracts).toMatchObject({
+        queued: 0,
+        skipped: 1,
+        total: 1,
+        results: [
+          {
+            abstractId: "abs-1",
+            status: "ineligible",
+            reason: "Abstract is not ACCEPTED",
+          },
+        ],
+      });
+      expect(createEmailLogsBulk).toHaveBeenCalledWith([]);
+    });
+
+    it("reports an ACCEPTED-but-not-presented abstract as ineligible", async () => {
+      vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([
+        abstractRow({ presentedAt: null }) as never,
+      ]);
+      vi.mocked(getAlreadySentAbstractCertTemplateIds).mockResolvedValue(new Map());
+      vi.mocked(createEmailLogsBulk).mockResolvedValue(0);
+
+      const result = await service.sendCertificates(event, [], ["abs-1"]);
+
+      expect(result.abstracts?.results).toEqual([
+        {
+          abstractId: "abs-1",
+          status: "ineligible",
+          reason: "Abstract has not been marked as presented",
+        },
+      ]);
+    });
+
+    it("reports an abstract not found for this event as ineligible (wrong event / bad id)", async () => {
+      // getAbstractsForCertificateSend is already event-scoped, so a
+      // wrong-event/missing id simply never comes back.
+      vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([]);
+      vi.mocked(getAlreadySentAbstractCertTemplateIds).mockResolvedValue(new Map());
+      vi.mocked(createEmailLogsBulk).mockResolvedValue(0);
+
+      const result = await service.sendCertificates(event, [], ["missing-abs"]);
+
+      expect(result.abstracts?.results).toEqual([
+        {
+          abstractId: "missing-abs",
+          status: "ineligible",
+          reason: "Abstract not found for this event",
+        },
+      ]);
+    });
+
+    it("skips an eligible abstract whose certificate was already sent (dedupe)", async () => {
+      vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([
+        abstractRow() as never,
+      ]);
+      vi.mocked(getAlreadySentAbstractCertTemplateIds).mockResolvedValue(
+        new Map([["abs-1", new Set(["c1"])]]),
+      );
+      vi.mocked(createEmailLogsBulk).mockResolvedValue(0);
+
+      const result = await service.sendCertificates(event, [], ["abs-1"]);
+
+      expect(result.abstracts).toMatchObject({
+        queued: 0,
+        skipped: 1,
+        total: 1,
+        results: [{ abstractId: "abs-1", status: "already_sent" }],
+      });
+      expect(createEmailLogsBulk).toHaveBeenCalledWith([]);
+    });
+
+    it("queues exactly one email with certificate + abstract context for the eligible, first-time case", async () => {
+      vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([
+        abstractRow() as never,
+      ]);
+      vi.mocked(getAlreadySentAbstractCertTemplateIds).mockResolvedValue(new Map());
+      vi.mocked(createEmailLogsBulk).mockResolvedValue(1);
+
+      const result = await service.sendCertificates(event, [], ["abs-1"]);
+
+      expect(result.abstracts).toMatchObject({
+        queued: 1,
+        skipped: 0,
+        total: 1,
+        results: [{ abstractId: "abs-1", status: "queued" }],
+      });
+      expect(createEmailLogsBulk).toHaveBeenCalledWith([
+        expect.objectContaining({
+          trigger: "CERTIFICATE_SENT",
+          templateId: "et1",
+          abstractId: "abs-1",
+          recipientEmail: "ada@example.com",
+          recipientName: "Ada Lovelace",
+          subject: "",
+          status: "QUEUED",
+          contextSnapshot: expect.objectContaining({
+            _certificateTemplateIds: ["c1"],
+            certificateCount: "1",
+            certificateList: "Presenter Certificate",
+            fullName: "Ada Lovelace",
+            abstractTitle: "A Great Abstract",
+            abstractCode: "OC1-01",
+          }),
+        }),
+      ]);
     });
   });
 });

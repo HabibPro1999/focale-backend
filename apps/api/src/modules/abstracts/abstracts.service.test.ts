@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import type { SubmitAbstractInput } from "@app/contracts";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { ErrorCodes, type SubmitAbstractInput } from "@app/contracts";
 import type { AbstractConfigRow } from "@app/db";
 
 // ---------------------------------------------------------------------------
@@ -10,9 +10,12 @@ vi.mock("@app/db", () => ({
   findPublicConfigData: vi.fn(),
   findEventConfigForSubmit: vi.fn(),
   findActiveThemeIds: vi.fn(),
+  findAbstractThemeIds: vi.fn(),
   findDuplicateAuthorEmail: vi.fn(),
   findAbstractForToken: vi.fn(),
   findAbstractForEdit: vi.fn(),
+  findEventClientId: vi.fn(),
+  findRegistrationEventId: vi.fn(),
   submitAbstractTxn: vi.fn(),
   editAbstractTxn: vi.fn(),
 }));
@@ -24,14 +27,18 @@ import {
   findPublicConfigData,
   findEventConfigForSubmit,
   findActiveThemeIds,
+  findAbstractThemeIds,
   findDuplicateAuthorEmail,
   findAbstractForToken,
   findAbstractForEdit,
+  findEventClientId,
+  findRegistrationEventId,
   submitAbstractTxn,
   editAbstractTxn,
 } from "@app/db";
 import { AbstractsService, countWords } from "./abstracts.service";
 import { AppException } from "../../core/app-exception";
+import { assertClientModuleEnabled } from "../clients/module-gates";
 import {
   abstractHtmlToText,
   sanitizeAbstractHtml,
@@ -244,6 +251,7 @@ describe("submitAbstract", () => {
     });
     mock(findActiveThemeIds).mockResolvedValue([themeId]);
     mock(findDuplicateAuthorEmail).mockResolvedValue(false);
+    mock(findRegistrationEventId).mockResolvedValue(eventId);
     mock(submitAbstractTxn).mockResolvedValue({ ok: true, createdAt: new Date() });
   }
 
@@ -398,12 +406,100 @@ describe("submitAbstract", () => {
     );
     expect(result.status).toBe("SUBMITTED");
   });
+
+  it("M4: rejects a registrationId that doesn't exist (422)", async () => {
+    setup();
+    mock(findRegistrationEventId).mockResolvedValue(null);
+    await expectAppError(
+      service.submitAbstract(
+        slug,
+        makeSubmitBody({ registrationId: "99999999-9999-4999-8999-999999999999" }),
+      ),
+      422,
+      "REG_8001",
+    );
+    expect(submitAbstractTxn).not.toHaveBeenCalled();
+  });
+
+  it("M4: rejects a registrationId belonging to a different event (422)", async () => {
+    setup();
+    mock(findRegistrationEventId).mockResolvedValue("some-other-event-id");
+    await expectAppError(
+      service.submitAbstract(
+        slug,
+        makeSubmitBody({ registrationId: "99999999-9999-4999-8999-999999999999" }),
+      ),
+      422,
+      "REG_8001",
+    );
+  });
+
+  it("M4: nullish registrationId stays allowed (no lookup)", async () => {
+    setup();
+    const result = await service.submitAbstract(
+      slug,
+      makeSubmitBody({ registrationId: null }),
+    );
+    expect(result.status).toBe("SUBMITTED");
+    expect(findRegistrationEventId).not.toHaveBeenCalled();
+  });
+
+  describe("H7: linkBaseUrl origin allow-list", () => {
+    const ORIGINAL_ENV = process.env.PUBLIC_LINK_ALLOWED_ORIGINS;
+
+    afterEach(() => {
+      if (ORIGINAL_ENV === undefined) {
+        delete process.env.PUBLIC_LINK_ALLOWED_ORIGINS;
+      } else {
+        process.env.PUBLIC_LINK_ALLOWED_ORIGINS = ORIGINAL_ENV;
+      }
+    });
+
+    it("rejects a linkBaseUrl whose origin isn't allow-listed", async () => {
+      process.env.PUBLIC_LINK_ALLOWED_ORIGINS = "https://events.example.com";
+      setup();
+      await expectAppError(
+        service.submitAbstract(
+          slug,
+          makeSubmitBody({ linkBaseUrl: "https://evil.example" }),
+        ),
+        422,
+        "VAL_2001",
+      );
+      expect(submitAbstractTxn).not.toHaveBeenCalled();
+    });
+
+    it("accepts a linkBaseUrl matching an allow-listed origin", async () => {
+      process.env.PUBLIC_LINK_ALLOWED_ORIGINS =
+        "https://other.example, https://events.example.com";
+      setup();
+      const result = await service.submitAbstract(
+        slug,
+        makeSubmitBody({ linkBaseUrl: "https://events.example.com/abstracts" }),
+      );
+      expect(result.status).toBe("SUBMITTED");
+    });
+
+    it("stays open (non-breaking) when no allow-list is configured", async () => {
+      delete process.env.PUBLIC_LINK_ALLOWED_ORIGINS;
+      setup();
+      const result = await service.submitAbstract(
+        slug,
+        makeSubmitBody({ linkBaseUrl: "https://anything.example" }),
+      );
+      expect(result.status).toBe("SUBMITTED");
+    });
+  });
 });
 
 // ===========================================================================
 // getAbstractByToken
 // ===========================================================================
 describe("getAbstractByToken", () => {
+  beforeEach(() => {
+    mock(findEventClientId).mockResolvedValue({ id: eventId, clientId });
+  });
+
   function makeStored(token: string, overrides: Record<string, unknown> = {}) {
     return {
       id: "abs-1",
@@ -446,6 +542,13 @@ describe("getAbstractByToken", () => {
     expect(result.editing.allowed).toBe(false);
   });
 
+  it("M1: reports editing locked for a PENDING-finalized abstract", async () => {
+    const token = generateAbstractToken();
+    mock(findAbstractForToken).mockResolvedValue(makeStored(token, { status: "PENDING" }));
+    const result = await service.getAbstractByToken("abs-1", token);
+    expect(result.editing.allowed).toBe(false);
+  });
+
   it("404s a well-formed but wrong token", async () => {
     const token = generateAbstractToken();
     mock(findAbstractForToken).mockResolvedValue(makeStored(token));
@@ -453,6 +556,19 @@ describe("getAbstractByToken", () => {
       service.getAbstractByToken("abs-1", generateAbstractToken()),
       404,
       "RES_3001",
+    );
+  });
+
+  it("M2: propagates the client module gate rejection", async () => {
+    const token = generateAbstractToken();
+    mock(findAbstractForToken).mockResolvedValue(makeStored(token));
+    mock(assertClientModuleEnabled).mockRejectedValueOnce(
+      new AppException(ErrorCodes.FORBIDDEN, "Abstracts module is disabled", 403),
+    );
+    await expectAppError(
+      service.getAbstractByToken("abs-1", token),
+      403,
+      "AUTH_1004",
     );
   });
 });
@@ -477,7 +593,10 @@ describe("editAbstract", () => {
     };
     mock(findAbstractForEdit).mockResolvedValue(abstract);
     mock(findActiveThemeIds).mockResolvedValue([themeId]);
+    mock(findAbstractThemeIds).mockResolvedValue([themeId]);
     mock(findDuplicateAuthorEmail).mockResolvedValue(false);
+    mock(findEventClientId).mockResolvedValue({ id: eventId, clientId });
+    mock(findRegistrationEventId).mockResolvedValue(eventId);
     mock(editAbstractTxn).mockResolvedValue({ ok: true });
     // Final read after edit.
     mock(findAbstractForToken).mockResolvedValue({
@@ -557,8 +676,10 @@ describe("editAbstract", () => {
     );
   });
 
-  it("rejects ACCEPTED / REJECTED abstracts (409 ABS_18008)", async () => {
-    for (const status of ["ACCEPTED", "REJECTED"]) {
+  it("rejects ACCEPTED / REJECTED / PENDING abstracts (409 ABS_18008)", async () => {
+    // M1: PENDING is a FINAL_STATUS (a real committee decision) — it must be
+    // just as locked as ACCEPTED/REJECTED, not left publicly editable.
+    for (const status of ["ACCEPTED", "REJECTED", "PENDING"]) {
       const { editToken } = setup({ status });
       await expectAppError(
         service.editAbstract("abs-1", editToken, makeSubmitBody()),
@@ -566,5 +687,88 @@ describe("editAbstract", () => {
         "ABS_18008",
       );
     }
+  });
+
+  it("M2: propagates the client module gate rejection (edit)", async () => {
+    const { editToken } = setup();
+    mock(assertClientModuleEnabled).mockRejectedValueOnce(
+      new AppException(ErrorCodes.FORBIDDEN, "Abstracts module is disabled", 403),
+    );
+    await expectAppError(
+      service.editAbstract("abs-1", editToken, makeSubmitBody()),
+      403,
+      "AUTH_1004",
+    );
+    expect(editAbstractTxn).not.toHaveBeenCalled();
+  });
+
+  it("M4: rejects a registrationId that doesn't exist (422)", async () => {
+    const { editToken } = setup();
+    mock(findRegistrationEventId).mockResolvedValue(null);
+    await expectAppError(
+      service.editAbstract(
+        "abs-1",
+        editToken,
+        makeSubmitBody({ registrationId: "99999999-9999-4999-8999-999999999999" }),
+      ),
+      422,
+      "REG_8001",
+    );
+    expect(editAbstractTxn).not.toHaveBeenCalled();
+  });
+
+  it("M4: rejects a registrationId belonging to a different event (422)", async () => {
+    const { editToken } = setup();
+    mock(findRegistrationEventId).mockResolvedValue("other-event-id");
+    await expectAppError(
+      service.editAbstract(
+        "abs-1",
+        editToken,
+        makeSubmitBody({ registrationId: "99999999-9999-4999-8999-999999999999" }),
+      ),
+      422,
+      "REG_8001",
+    );
+  });
+
+  it("M4: nullish registrationId stays allowed (no lookup)", async () => {
+    const { editToken } = setup();
+    await service.editAbstract(
+      "abs-1",
+      editToken,
+      makeSubmitBody({ registrationId: null }),
+    );
+    expect(findRegistrationEventId).not.toHaveBeenCalled();
+  });
+
+  it("M14: accepts the abstract's own deactivated theme on edit", async () => {
+    // Theme is no longer active (findActiveThemeIds excludes it) but is still
+    // linked to this abstract (findAbstractThemeIds includes it) — edit must
+    // not brick the author out just because the theme was deactivated.
+    const { editToken } = setup();
+    mock(findActiveThemeIds).mockResolvedValue([]);
+    mock(findAbstractThemeIds).mockResolvedValue([themeId]);
+    const result = await service.editAbstract(
+      "abs-1",
+      editToken,
+      makeSubmitBody({ themeIds: [themeId] }),
+    );
+    expect(result.id).toBe("abs-1");
+    expect(editAbstractTxn).toHaveBeenCalled();
+  });
+
+  it("M14: still rejects a theme ID that is neither active nor currently linked", async () => {
+    const { editToken } = setup();
+    mock(findActiveThemeIds).mockResolvedValue([]);
+    mock(findAbstractThemeIds).mockResolvedValue([themeId]);
+    await expectAppError(
+      service.editAbstract(
+        "abs-1",
+        editToken,
+        makeSubmitBody({ themeIds: ["55555555-5555-4555-8555-555555555555"] }),
+      ),
+      422,
+      "ABS_18004",
+    );
   });
 });

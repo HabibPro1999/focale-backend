@@ -29,6 +29,7 @@ import { clients } from "../schema/users-clients";
 import { registrations } from "../schema/registrations";
 import { sponsorshipBatches, sponsorships } from "../schema/sponsorships";
 import { forms } from "../schema/forms";
+import { abstracts } from "../schema/abstracts";
 
 export type EmailTemplateRow = InferSelectModel<typeof emailTemplates>;
 export type EmailTemplateInsert = InferInsertModel<typeof emailTemplates>;
@@ -50,6 +51,12 @@ export const EMAIL_LOGS_REGISTRATION_TRIGGER_ACTIVE_KEY =
   "email_logs_registration_trigger_active_key";
 export const EMAIL_LOGS_TEMPLATE_RECIPIENT_TRIGGER_ACTIVE_KEY =
   "email_logs_template_recipient_trigger_active_key";
+/**
+ * H6: per-outbox-delivery idempotency (packages/db/migrations/0003_email_fixes.sql).
+ * Conflicting on this index means "this exact delivery already produced a row" —
+ * callers should treat it as an idempotent success, not a dedupe-skip.
+ */
+export const EMAIL_LOGS_DEDUPE_KEY_ACTIVE_KEY = "email_logs_dedupe_key_active_key";
 
 function uniqueViolationConstraint(err: unknown): string | null {
   return pgUniqueViolation(err)?.constraint ?? null;
@@ -241,18 +248,31 @@ export async function insertEmailTemplate(
   }
 }
 
+/**
+ * Update an email template. When `expectedUpdatedAt` is provided (M11), the
+ * update is a CAS on `updatedAt` — 0 rows affected means either the id doesn't
+ * exist or a concurrent edit already moved `updatedAt` (the caller has already
+ * confirmed existence, so it can treat null as "stale precondition" and raise a
+ * structured 409). Omitted precondition preserves the prior last-write-wins
+ * behavior for backward compatibility.
+ */
 export async function updateEmailTemplate(
   id: string,
   patch: Partial<EmailTemplateInsert>,
-): Promise<EmailTemplateRow> {
+  expectedUpdatedAt?: Date,
+): Promise<EmailTemplateRow | null> {
   const set: Record<string, unknown> = { ...patch };
   if (Object.keys(set).length === 0) set.updatedAt = new Date();
+  const conds: SQL[] = [eq(emailTemplates.id, id)];
+  if (expectedUpdatedAt) {
+    conds.push(eq(emailTemplates.updatedAt, expectedUpdatedAt));
+  }
   const [row] = await getDb()
     .update(emailTemplates)
     .set(set)
-    .where(eq(emailTemplates.id, id))
+    .where(and(...conds))
     .returning();
-  return row;
+  return row ?? null;
 }
 
 export async function deleteEmailTemplateById(id: string): Promise<void> {
@@ -379,7 +399,8 @@ export async function createEmailLog(
     const constraint = uniqueViolationConstraint(err);
     if (
       constraint === EMAIL_LOGS_REGISTRATION_TRIGGER_ACTIVE_KEY ||
-      constraint === EMAIL_LOGS_TEMPLATE_RECIPIENT_TRIGGER_ACTIVE_KEY
+      constraint === EMAIL_LOGS_TEMPLATE_RECIPIENT_TRIGGER_ACTIVE_KEY ||
+      constraint === EMAIL_LOGS_DEDUPE_KEY_ACTIVE_KEY
     ) {
       return { ok: false, conflictIndex: constraint };
     }
@@ -442,6 +463,64 @@ export async function getRegistrationForEmailContext(
     ...rows[0].registration,
     event: { ...rows[0].event, client: rows[0].client },
   };
+}
+
+/** Resolved realtime fan-out target for an EmailLog (N3). */
+export interface EmailLogRealtimeTarget {
+  clientId: string;
+  eventId: string;
+  registrationId: string | null;
+}
+
+/**
+ * Resolve the (clientId, eventId, registrationId) a given EmailLog's realtime
+ * `emailLog.statusChanged` event should carry, mirroring the legacy
+ * `emitEmailLogChanged` — extended (per N3) to abstract-linked rows: via the
+ * registration relation when registrationId is set, via the abstract → event
+ * relation when abstractId is set. Returns null when the log (or its relation)
+ * no longer exists, or when it is linked to neither (nothing to resolve).
+ */
+export async function getEmailLogRealtimeTarget(
+  emailLogId: string,
+  exec: DbExecutor = getDb(),
+): Promise<EmailLogRealtimeTarget | null> {
+  const [log] = await exec
+    .select({
+      registrationId: emailLogs.registrationId,
+      abstractId: emailLogs.abstractId,
+    })
+    .from(emailLogs)
+    .where(eq(emailLogs.id, emailLogId))
+    .limit(1);
+  if (!log) return null;
+
+  if (log.registrationId) {
+    const [row] = await exec
+      .select({ clientId: events.clientId, eventId: events.id })
+      .from(registrations)
+      .innerJoin(events, eq(events.id, registrations.eventId))
+      .where(eq(registrations.id, log.registrationId))
+      .limit(1);
+    if (!row) return null;
+    return {
+      clientId: row.clientId,
+      eventId: row.eventId,
+      registrationId: log.registrationId,
+    };
+  }
+
+  if (log.abstractId) {
+    const [row] = await exec
+      .select({ clientId: events.clientId, eventId: events.id })
+      .from(abstracts)
+      .innerJoin(events, eq(events.id, abstracts.eventId))
+      .where(eq(abstracts.id, log.abstractId))
+      .limit(1);
+    if (!row) return null;
+    return { clientId: row.clientId, eventId: row.eventId, registrationId: null };
+  }
+
+  return null;
 }
 
 export interface BulkRegistrationRow {
@@ -808,6 +887,8 @@ export interface ClaimedEmailLog {
   trigger: AutomaticTrigger | null;
   templateId: string | null;
   registrationId: string | null;
+  /** H2: set instead of registrationId for abstract-linked certificate emails. */
+  abstractId: string | null;
   recipientEmail: string;
   recipientName: string | null;
   contextSnapshot: unknown;
@@ -894,6 +975,7 @@ export async function getClaimedEmailLogsForProcessing(
     trigger: l.trigger,
     templateId: l.templateId,
     registrationId: l.registrationId,
+    abstractId: l.abstractId,
     recipientEmail: l.recipientEmail,
     recipientName: l.recipientName,
     contextSnapshot: l.contextSnapshot,

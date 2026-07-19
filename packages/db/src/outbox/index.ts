@@ -16,6 +16,7 @@ export {
   REALTIME_EMIT_TYPE,
   type OutboxEventStatus,
   type OutboxHandler,
+  type OutboxHandlerMeta,
   type OutboxHandlerRegistry,
   type OutboxHandlerResult,
   type OutboxProcessingScope,

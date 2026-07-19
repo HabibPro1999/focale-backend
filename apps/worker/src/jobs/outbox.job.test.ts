@@ -40,11 +40,14 @@ describe("outbox handler registry", () => {
     const registration = { id: "r1", email: "a@b.c", firstName: "A", lastName: "B" };
     mocks.queueTriggeredEmail.mockResolvedValue(true);
 
-    const outcome = await handlers["email.triggered"]({
-      trigger: "REGISTRATION_CREATED",
-      eventId: "ev1",
-      registration,
-    });
+    const outcome = await handlers["email.triggered"](
+      {
+        trigger: "REGISTRATION_CREATED",
+        eventId: "ev1",
+        registration,
+      },
+      { id: "evt-1" },
+    );
 
     expect(mocks.queueTriggeredEmail).toHaveBeenCalledWith(
       "REGISTRATION_CREATED",
@@ -57,11 +60,14 @@ describe("outbox handler registry", () => {
   it("maps a false queue result to 'skipped' (no active template)", async () => {
     const handlers = buildOutboxHandlers();
     mocks.queueTriggeredEmail.mockResolvedValue(false);
-    const outcome = await handlers["email.triggered"]({
-      trigger: "REGISTRATION_CREATED",
-      eventId: "ev1",
-      registration: { id: "r1", email: "a@b.c", firstName: null, lastName: null },
-    });
+    const outcome = await handlers["email.triggered"](
+      {
+        trigger: "REGISTRATION_CREATED",
+        eventId: "ev1",
+        registration: { id: "r1", email: "a@b.c", firstName: null, lastName: null },
+      },
+      { id: "evt-2" },
+    );
     expect(outcome).toBe("skipped");
   });
 
@@ -70,11 +76,14 @@ describe("outbox handler registry", () => {
     const input = { recipientEmail: "s@p.c", context: {} };
     mocks.queueSponsorshipEmail.mockResolvedValue(true);
 
-    const outcome = await handlers["email.sponsorship"]({
-      trigger: "SPONSORSHIP_BATCH_SUBMITTED",
-      eventId: "ev2",
-      input,
-    });
+    const outcome = await handlers["email.sponsorship"](
+      {
+        trigger: "SPONSORSHIP_BATCH_SUBMITTED",
+        eventId: "ev2",
+        input,
+      },
+      { id: "evt-3" },
+    );
 
     expect(mocks.queueSponsorshipEmail).toHaveBeenCalledWith(
       "SPONSORSHIP_BATCH_SUBMITTED",
@@ -84,24 +93,36 @@ describe("outbox handler registry", () => {
     expect(outcome).toBe("processed");
   });
 
-  it("email.abstract → queueAbstractEmail(payload)", async () => {
+  it("email.abstract → queueAbstractEmail(payload, dedupeKey) using the outbox event's own id", async () => {
     const handlers = buildOutboxHandlers();
     const payload = { trigger: "ABSTRACT_DECISION", abstractId: "ab1" };
     mocks.queueAbstractEmail.mockResolvedValue(true);
 
-    const outcome = await handlers["email.abstract"](payload);
+    const outcome = await handlers["email.abstract"](payload, { id: "evt-1" });
 
-    expect(mocks.queueAbstractEmail).toHaveBeenCalledWith(payload);
+    expect(mocks.queueAbstractEmail).toHaveBeenCalledWith(payload, "evt-1");
     expect(outcome).toBe("processed");
   });
 
   it("email.abstract returns 'skipped' when no template resolves", async () => {
     const handlers = buildOutboxHandlers();
     mocks.queueAbstractEmail.mockResolvedValue(false);
-    const outcome = await handlers["email.abstract"]({
-      trigger: "ABSTRACT_DECISION",
-      abstractId: "ab1",
-    });
+    const outcome = await handlers["email.abstract"](
+      { trigger: "ABSTRACT_DECISION", abstractId: "ab1" },
+      { id: "evt-2" },
+    );
     expect(outcome).toBe("skipped");
+  });
+
+  it("email.abstract passes a distinct outbox event id through as a distinct dedupe key", async () => {
+    const handlers = buildOutboxHandlers();
+    mocks.queueAbstractEmail.mockResolvedValue(true);
+    const payload = { trigger: "ABSTRACT_ACCEPTED", abstractId: "ab1" };
+
+    await handlers["email.abstract"](payload, { id: "evt-a" });
+    await handlers["email.abstract"](payload, { id: "evt-b" });
+
+    expect(mocks.queueAbstractEmail).toHaveBeenNthCalledWith(1, payload, "evt-a");
+    expect(mocks.queueAbstractEmail).toHaveBeenNthCalledWith(2, payload, "evt-b");
   });
 });

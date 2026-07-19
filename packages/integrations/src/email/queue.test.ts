@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // --- Mock the @app/db fn layer (the raw-SQL/lease primitives are DB-tier) -----
 vi.mock("@app/db", () => ({
@@ -17,6 +17,9 @@ vi.mock("@app/db", () => ({
   markEmailSkipped: vi.fn(),
   readEmailLogStatus: vi.fn(),
   updateEmailLogStatusGuarded: vi.fn(),
+  getEmailLogRealtimeTarget: vi.fn(),
+  enqueueRealtimeOutboxEvent: vi.fn(),
+  getDb: vi.fn(() => "db-handle"),
 }));
 
 const sendEmailMock = vi.fn();
@@ -45,6 +48,8 @@ import {
   markEmailSkipped,
   readEmailLogStatus,
   updateEmailLogStatusGuarded,
+  getEmailLogRealtimeTarget,
+  enqueueRealtimeOutboxEvent,
 } from "@app/db";
 import { buildEmailContextWithAccess } from "./rendering/index";
 import {
@@ -53,6 +58,8 @@ import {
   queueSponsorshipEmail,
   processEmailQueue,
   updateEmailStatusFromWebhook,
+  setEmailStatusChangeListener,
+  emitEmailLogRealtimeEvent,
 } from "./queue";
 
 const mocked = <T>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
@@ -131,6 +138,32 @@ describe("queueEmail", () => {
         trigger: "REGISTRATION_CREATED",
         contextSnapshot: { foo: "bar" },
       }),
+    );
+  });
+
+  // H6: per-outbox-delivery idempotency key.
+  it("passes dedupeKey through, defaulting to null when omitted", async () => {
+    mocked(createEmailLog).mockResolvedValue({ ok: true, log: { id: "l1" } });
+    await queueEmail({
+      templateId: "t1",
+      recipientEmail: "a@x.com",
+      dedupeKey: "outbox:evt-1",
+    });
+    expect(createEmailLog).toHaveBeenCalledWith(
+      expect.objectContaining({ dedupeKey: "outbox:evt-1" }),
+    );
+
+    await queueEmail({ templateId: "t1", recipientEmail: "a@x.com" });
+    expect(createEmailLog).toHaveBeenLastCalledWith(
+      expect.objectContaining({ dedupeKey: null }),
+    );
+  });
+
+  it("allows an omitted templateId (fallback-only send, C1/N4)", async () => {
+    mocked(createEmailLog).mockResolvedValue({ ok: true, log: { id: "l1" } });
+    await queueEmail({ recipientEmail: "a@x.com" });
+    expect(createEmailLog).toHaveBeenCalledWith(
+      expect.objectContaining({ templateId: null }),
     );
   });
 });
@@ -291,6 +324,71 @@ describe("processEmailQueue", () => {
     expect(markEmailSkipped).toHaveBeenCalledWith("log-1", "w1", "No template found");
     expect(sendEmailMock).not.toHaveBeenCalled();
     expect(res.skipped).toBe(1);
+  });
+
+  // C1/N4: a no-template abstract email carries a plain-text fallback in its
+  // contextSnapshot (queueAbstractEmail) — it must be ACTUALLY SENT, not
+  // silently marked skipped like the legacy fallback-then-skip bug.
+  describe("no-template fallback (C1/N4)", () => {
+    it("sends using the fallback subject/body instead of skipping", async () => {
+      // resolveVariables is mocked to identity in this file (see top-of-file
+      // mock) — so the subject/plainText below are the fallback template text
+      // unchanged. Substitution itself is covered by rendering/*.test.ts; what
+      // this test guards is that the fallback markers route into a real SEND.
+      const res = await runOne(
+        claimed({
+          template: null,
+          registration: null,
+          contextSnapshot: {
+            authorName: "Jane Doe",
+            congressName: "Congress",
+            _fallbackSubject: "Hi {{authorName}} — {{congressName}}",
+            _fallbackPlainBody: "Body for {{authorName}}.",
+          },
+        }),
+      );
+
+      expect(markEmailSkipped).not.toHaveBeenCalled();
+      expect(sendEmailMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          subject: "Hi {{authorName}} — {{congressName}}",
+          plainText: "Body for {{authorName}}.",
+        }),
+      );
+      expect(markEmailSent).toHaveBeenCalledWith("log-1", "w1", "m1");
+      expect(res).toEqual({ processed: 1, sent: 1, failed: 0, skipped: 0 });
+    });
+
+    it("still skips when neither a template nor fallback markers are present", async () => {
+      const res = await runOne(
+        claimed({
+          template: null,
+          contextSnapshot: { eventName: "Conf" }, // no _fallback* keys
+        }),
+      );
+      expect(markEmailSkipped).toHaveBeenCalledWith(
+        "log-1",
+        "w1",
+        "No template found",
+      );
+      expect(sendEmailMock).not.toHaveBeenCalled();
+      expect(res.skipped).toBe(1);
+    });
+
+    it("renders the fallback body as escaped HTML for the html field", async () => {
+      await runOne(
+        claimed({
+          template: null,
+          registration: null,
+          contextSnapshot: {
+            _fallbackSubject: "S",
+            _fallbackPlainBody: "Line one\nLine <two>",
+          },
+        }),
+      );
+      const call = sendEmailMock.mock.calls[0][0];
+      expect(call.html).toContain("Line one\nLine &lt;two&gt;");
+    });
   });
 
   it("skips an email whose template is inactive", async () => {
@@ -477,6 +575,57 @@ describe("processEmailQueue", () => {
       );
       expect(res.failed).toBe(1);
     });
+
+    // H2: abstract-linked CERTIFICATE_SENT rows carry abstractId with
+    // registrationId left null (deliberately, so the wrong registration's data
+    // never gets borrowed) — the attachment branch must still trigger.
+    describe("abstract-linked emails (H2)", () => {
+      const abstractCertLog = () =>
+        claimed({
+          trigger: "CERTIFICATE_SENT",
+          registrationId: null,
+          abstractId: "abs-1",
+          contextSnapshot: {
+            eventName: "Conf",
+            _certificateTemplateIds: ["c1", "c2"],
+          },
+        });
+
+      it("attaches generated certificates for an abstract-linked email and sends", async () => {
+        const gen = vi.fn().mockResolvedValue([attachment, attachment]);
+        mocked(claimQueuedEmailLogs).mockResolvedValue(["log-1"]);
+        mocked(getClaimedEmailLogsForProcessing).mockResolvedValue([
+          abstractCertLog(),
+        ]);
+        const res = await processEmailQueue(50, {
+          workerId: "w1",
+          generateCertificateAttachments: gen,
+        });
+        expect(gen).toHaveBeenCalledWith(
+          expect.objectContaining({
+            abstractId: "abs-1",
+            registrationId: undefined,
+            certificateTemplateIds: ["c1", "c2"],
+          }),
+        );
+        expect(sendEmailMock).toHaveBeenCalledWith(
+          expect.objectContaining({ attachments: [attachment, attachment] }),
+        );
+        expect(res.sent).toBe(1);
+      });
+
+      it("fails when no generator is injected for an abstract-linked certificate email", async () => {
+        const res = await runOne(abstractCertLog());
+        expect(markEmailFailed).toHaveBeenCalledWith(
+          "log-1",
+          "w1",
+          "Certificate attachment generator not configured",
+          1,
+          3,
+        );
+        expect(res.failed).toBe(1);
+      });
+    });
   });
 });
 
@@ -570,5 +719,104 @@ describe("updateEmailStatusFromWebhook", () => {
     await expect(
       updateEmailStatusFromWebhook("log-1", "delivered"),
     ).resolves.toBeUndefined();
+  });
+});
+
+// =============================================================================
+// N3: realtime status-change fan-out
+// =============================================================================
+describe("emitEmailLogRealtimeEvent", () => {
+  it("enqueues a realtime.emit outbox event resolved via the registration relation", async () => {
+    mocked(getEmailLogRealtimeTarget).mockResolvedValue({
+      clientId: "client-1",
+      eventId: "ev-1",
+      registrationId: "reg-1",
+    });
+    await emitEmailLogRealtimeEvent("log-1", "SENT");
+
+    expect(enqueueRealtimeOutboxEvent).toHaveBeenCalledWith(
+      "db-handle",
+      expect.objectContaining({
+        type: "emailLog.statusChanged",
+        clientId: "client-1",
+        eventId: "ev-1",
+        payload: { id: "log-1", status: "SENT", registrationId: "reg-1" },
+      }),
+    );
+  });
+
+  it("enqueues via the abstract → event relation with no registrationId in the payload", async () => {
+    mocked(getEmailLogRealtimeTarget).mockResolvedValue({
+      clientId: "client-2",
+      eventId: "ev-2",
+      registrationId: null,
+    });
+    await emitEmailLogRealtimeEvent("log-2", "QUEUED");
+
+    const [, event] = mocked(enqueueRealtimeOutboxEvent).mock.calls[0];
+    expect(event.payload.registrationId).toBeUndefined();
+    expect(event.clientId).toBe("client-2");
+    expect(event.eventId).toBe("ev-2");
+  });
+
+  it("no-ops when the target cannot be resolved (log/relation gone)", async () => {
+    mocked(getEmailLogRealtimeTarget).mockResolvedValue(null);
+    await emitEmailLogRealtimeEvent("log-3", "SENT");
+    expect(enqueueRealtimeOutboxEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe("setEmailStatusChangeListener wiring", () => {
+  afterEach(() => setEmailStatusChangeListener(undefined));
+
+  it("QUEUED (queueEmail), SENT (processEmailQueue) each notify exactly once", async () => {
+    const listener = vi.fn();
+    setEmailStatusChangeListener(listener);
+
+    mocked(createEmailLog).mockResolvedValue({ ok: true, log: { id: "log-1" } });
+    await queueEmail({ templateId: "t1", recipientEmail: "a@x.com" });
+    expect(listener).toHaveBeenCalledWith("log-1", "QUEUED");
+
+    listener.mockClear();
+    await runOne(claimed());
+    expect(listener).toHaveBeenCalledWith("log-1", "SENT");
+  });
+
+  // N3/M8 residual: SKIPPED is a status transition too — the admin's live
+  // email-log table must hear about skips, not just QUEUED/SENT/FAILED.
+  it("SKIPPED (processEmailQueue skip paths) notifies once", async () => {
+    const listener = vi.fn();
+    setEmailStatusChangeListener(listener);
+
+    const res = await runOne(claimed({ template: null }));
+    expect(res.skipped).toBe(1);
+    expect(listener).toHaveBeenCalledExactlyOnceWith("log-1", "SKIPPED");
+  });
+
+  it("a listener rejection is caught and logged, never thrown/unhandled", async () => {
+    setEmailStatusChangeListener(() => Promise.reject(new Error("boom")));
+    mocked(createEmailLog).mockResolvedValue({ ok: true, log: { id: "log-1" } });
+    await expect(
+      queueEmail({ templateId: "t1", recipientEmail: "a@x.com" }),
+    ).resolves.toEqual({ ok: true, log: { id: "log-1" } });
+    // Give the fire-and-forget rejection a tick to settle before the test ends.
+    await new Promise((r) => setTimeout(r, 0));
+  });
+
+  it("a synchronously-throwing listener does not break the caller", async () => {
+    setEmailStatusChangeListener(() => {
+      throw new Error("sync boom");
+    });
+    mocked(createEmailLog).mockResolvedValue({ ok: true, log: { id: "log-1" } });
+    await expect(
+      queueEmail({ templateId: "t1", recipientEmail: "a@x.com" }),
+    ).resolves.toEqual({ ok: true, log: { id: "log-1" } });
+  });
+
+  it("no listener installed → notifyStatusChange is a silent no-op", async () => {
+    mocked(createEmailLog).mockResolvedValue({ ok: true, log: { id: "log-1" } });
+    await expect(
+      queueEmail({ templateId: "t1", recipientEmail: "a@x.com" }),
+    ).resolves.toEqual({ ok: true, log: { id: "log-1" } });
   });
 });

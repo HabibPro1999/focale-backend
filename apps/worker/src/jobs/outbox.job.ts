@@ -53,9 +53,12 @@ export function buildOutboxHandlers(): OutboxHandlerRegistry {
       );
       return queued ? "processed" : "skipped";
     },
-    "email.abstract": async (payload): Promise<OutboxHandlerResult> => {
+    "email.abstract": async (payload, meta): Promise<OutboxHandlerResult> => {
+      // H6: the claimed outbox row's own id is the per-delivery idempotency
+      // key — a crash-and-redeliver of this SAME row must not double-send.
       const queued = await queueAbstractEmail(
         payload as AbstractEmailOutboxPayload,
+        meta.id,
       );
       return queued ? "processed" : "skipped";
     },

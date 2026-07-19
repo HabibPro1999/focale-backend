@@ -232,6 +232,45 @@ describe("update", () => {
       }),
     ).rejects.toMatchObject({ status: 409 });
   });
+
+  // M11: optimistic-concurrency precondition.
+  describe("expectedUpdatedAt (M11)", () => {
+    it("passes the parsed Date through to the db layer when provided", async () => {
+      vi.mocked(getEmailTemplateById).mockResolvedValue(templateRow());
+      await service.update("tmpl-1", {
+        name: "New",
+        expectedUpdatedAt: "1970-01-01T00:00:00.000Z",
+      });
+      const call = vi.mocked(updateEmailTemplate).mock.calls[0];
+      expect(call[2]).toEqual(new Date("1970-01-01T00:00:00.000Z"));
+    });
+
+    it("400s on a malformed expectedUpdatedAt", async () => {
+      vi.mocked(getEmailTemplateById).mockResolvedValue(templateRow());
+      await expect(
+        service.update("tmpl-1", { name: "New", expectedUpdatedAt: "not-a-date" }),
+      ).rejects.toMatchObject({ status: 400 });
+      expect(updateEmailTemplate).not.toHaveBeenCalled();
+    });
+
+    it("409s (CONCURRENT_MODIFICATION) when the db layer reports no match", async () => {
+      vi.mocked(getEmailTemplateById).mockResolvedValue(templateRow());
+      vi.mocked(updateEmailTemplate).mockResolvedValue(null);
+      await expect(
+        service.update("tmpl-1", {
+          name: "New",
+          expectedUpdatedAt: "1970-01-01T00:00:00.000Z",
+        }),
+      ).rejects.toMatchObject({ status: 409, code: "CON_16001" });
+    });
+
+    it("omitted expectedUpdatedAt preserves last-write-wins (no CAS arg forced)", async () => {
+      vi.mocked(getEmailTemplateById).mockResolvedValue(templateRow());
+      await service.update("tmpl-1", { name: "New" });
+      const call = vi.mocked(updateEmailTemplate).mock.calls[0];
+      expect(call[2]).toBeUndefined();
+    });
+  });
 });
 
 describe("delete", () => {

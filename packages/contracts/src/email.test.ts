@@ -117,4 +117,36 @@ describe("UpdateEmailTemplateSchema", () => {
     const parsed = UpdateEmailTemplateSchema.safeParse({ description: null });
     expect(parsed.success).toBe(true);
   });
+
+  // M11: optimistic-concurrency precondition.
+  describe("expectedUpdatedAt", () => {
+    it("accepts an update alongside a valid ISO datetime", () => {
+      const parsed = UpdateEmailTemplateSchema.safeParse({
+        name: "New",
+        expectedUpdatedAt: "2026-07-19T00:00:00.000Z",
+      });
+      expect(parsed.success).toBe(true);
+    });
+
+    it("is optional — omitting it stays backward compatible", () => {
+      const parsed = UpdateEmailTemplateSchema.safeParse({ name: "New" });
+      expect(parsed.success).toBe(true);
+      expect(parsed.success && parsed.data.expectedUpdatedAt).toBeUndefined();
+    });
+
+    it("rejects a non-ISO-datetime value", () => {
+      const parsed = UpdateEmailTemplateSchema.safeParse({
+        name: "New",
+        expectedUpdatedAt: "not-a-date",
+      });
+      expect(parsed.success).toBe(false);
+    });
+
+    it("rejects a body containing only the precondition (nothing to update)", () => {
+      const parsed = UpdateEmailTemplateSchema.safeParse({
+        expectedUpdatedAt: "2026-07-19T00:00:00.000Z",
+      });
+      expect(parsed.success).toBe(false);
+    });
+  });
 });

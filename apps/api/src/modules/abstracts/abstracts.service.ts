@@ -1,7 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import {
   ErrorCodes,
-  NON_EDITABLE_STATUSES,
+  FINAL_STATUSES,
   type SubmitAbstractInput,
   type EditAbstractInput,
 } from "@app/contracts";
@@ -9,9 +9,12 @@ import {
   findPublicConfigData,
   findEventConfigForSubmit,
   findActiveThemeIds,
+  findAbstractThemeIds,
   findDuplicateAuthorEmail,
   findAbstractForToken,
   findAbstractForEdit,
+  findEventClientId,
+  findRegistrationEventId,
   submitAbstractTxn,
   editAbstractTxn,
   type AbstractConfigRow,
@@ -24,6 +27,7 @@ import {
 } from "@app/shared";
 import { assertClientModuleEnabled } from "../clients/module-gates";
 import { AppException } from "../../core/app-exception";
+import { logger } from "../../core/logger.service";
 import { generateAbstractToken, verifyAbstractToken } from "./abstracts.token";
 import {
   abstractContentFields,
@@ -47,6 +51,88 @@ export function countWords(s: string): number {
 
 function normalizeAuthorEmail(email: string): string {
   return email.trim().toLocaleLowerCase();
+}
+
+// ============================================================================
+// Client module gate (M2: token-based routes must re-check the client's
+// abstracts module the same way submit/getPublicConfig already do — a
+// disabled module must revoke access for existing magic-link holders too).
+// ============================================================================
+
+export async function assertAbstractModuleEnabled(eventId: string): Promise<void> {
+  const event = await findEventClientId(eventId);
+  if (!event) {
+    throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+  }
+  await assertClientModuleEnabled(event.clientId, "abstracts");
+}
+
+// ============================================================================
+// Public link-origin allow-list (H7: linkBaseUrl is attacker-controlled and
+// later used to build author-facing email links — restrict it to known
+// origins when configured; non-breaking default when unset).
+// ============================================================================
+
+let warnedNoLinkAllowlist = false;
+
+function allowedLinkOrigins(): string[] | null {
+  const raw = process.env.PUBLIC_LINK_ALLOWED_ORIGINS;
+  if (!raw || raw.trim().length === 0) return null;
+  return raw
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter((origin) => origin.length > 0);
+}
+
+function assertLinkBaseUrlAllowed(linkBaseUrl: string): void {
+  const allowed = allowedLinkOrigins();
+  if (!allowed) {
+    // ponytail: no allow-list configured — keep current (open) behavior but
+    // warn once so ops notice the phishing-relay exposure.
+    if (!warnedNoLinkAllowlist) {
+      logger.warn(
+        "PUBLIC_LINK_ALLOWED_ORIGINS is not set; linkBaseUrl origin is unrestricted",
+      );
+      warnedNoLinkAllowlist = true;
+    }
+    return;
+  }
+
+  let origin: string;
+  try {
+    origin = new URL(linkBaseUrl).origin;
+  } catch {
+    origin = "";
+  }
+  if (!allowed.includes(origin)) {
+    throw new AppException(
+      ErrorCodes.VALIDATION_ERROR,
+      "linkBaseUrl origin is not allowed",
+      422,
+      { allowedOrigins: allowed },
+    );
+  }
+}
+
+// ============================================================================
+// registrationId validation (M4: must exist and belong to the same event —
+// an unvalidated UUID otherwise links an abstract to any registration).
+// ============================================================================
+
+async function validateRegistration(
+  registrationId: string | null,
+  eventId: string,
+): Promise<void> {
+  if (registrationId == null) return;
+  const regEventId = await findRegistrationEventId(registrationId);
+  if (regEventId == null || regEventId !== eventId) {
+    throw new AppException(
+      ErrorCodes.REGISTRATION_NOT_FOUND,
+      "Registration not found for this event",
+      422,
+      { registrationId },
+    );
+  }
 }
 
 function duplicateAuthorEmailError(): AppException {
@@ -157,6 +243,11 @@ async function validateThemes(
   themeIds: string[],
   configId: string,
   maxThemesPerAbstract?: number | null,
+  // M14: on edit, the abstract's currently-linked themeIds stay acceptable
+  // even if the theme has since been deactivated — otherwise deactivating a
+  // theme bricks edits for every author already linked to it. Submit path
+  // leaves this empty, so it still validates against active themes only.
+  extraAllowedThemeIds: string[] = [],
 ): Promise<void> {
   if (themeIds.length === 0) {
     throw new AppException(
@@ -185,9 +276,9 @@ async function validateThemes(
   }
 
   const foundIds = await findActiveThemeIds(uniqueThemeIds, configId);
-  if (foundIds.length !== uniqueThemeIds.length) {
-    const found = new Set(foundIds);
-    const invalid = uniqueThemeIds.filter((id) => !found.has(id));
+  const allowed = new Set([...foundIds, ...extraAllowedThemeIds]);
+  const invalid = uniqueThemeIds.filter((id) => !allowed.has(id));
+  if (invalid.length > 0) {
     throw new AppException(
       ErrorCodes.ABSTRACT_INVALID_THEMES,
       `Invalid or inactive theme IDs: ${invalid.join(", ")}`,
@@ -327,6 +418,7 @@ export class AbstractsService {
     validateContentPresence(content);
     validateWordLimits(content, config);
     await validateThemes(body.themeIds, config.id, config.maxThemesPerAbstract);
+    assertLinkBaseUrlAllowed(body.linkBaseUrl);
     const sanitizedAdditionalFields = validateAdditionalFields(
       body.additionalFieldsData,
       config.additionalFieldsSchema,
@@ -336,6 +428,7 @@ export class AbstractsService {
     const abstractId = newId();
     const authorEmailNormalized = normalizeAuthorEmail(body.authorEmail);
     const registrationId = body.registrationId ?? null;
+    await validateRegistration(registrationId, found.event.id);
 
     if (
       await findDuplicateAuthorEmail(found.event.id, authorEmailNormalized)
@@ -399,13 +492,17 @@ export class AbstractsService {
         404,
       );
     }
+    await assertAbstractModuleEnabled(abstract.eventId);
 
     const config = abstract.config;
     const now = new Date();
+    // M1: PENDING is a terminal committee decision (see FINAL_STATUSES /
+    // abstracts.committee.service.ts, which locks reviewers out of PENDING
+    // abstracts too) — it must not stay publicly editable.
     const editingAllowed =
       !!config?.editingEnabled &&
       (!config.editingDeadline || now <= config.editingDeadline) &&
-      !NON_EDITABLE_STATUSES.includes(abstract.status);
+      !FINAL_STATUSES.includes(abstract.status);
 
     return {
       id: abstract.id,
@@ -460,6 +557,7 @@ export class AbstractsService {
         404,
       );
     }
+    await assertAbstractModuleEnabled(abstract.eventId);
 
     const config = abstract.config;
     if (!config) {
@@ -487,7 +585,10 @@ export class AbstractsService {
       );
     }
 
-    if (NON_EDITABLE_STATUSES.includes(abstract.status)) {
+    // M1: gate on FINAL_STATUSES (adds PENDING) — same terminal-decision set
+    // the committee side locks scoring on, so a PENDING-finalized abstract
+    // can't stay publicly editable while reviewers are locked out of it.
+    if (FINAL_STATUSES.includes(abstract.status)) {
       throw new AppException(
         ErrorCodes.ABSTRACT_NOT_EDITABLE,
         `Abstract cannot be edited in ${abstract.status} status`,
@@ -499,7 +600,14 @@ export class AbstractsService {
     validateMode(content.mode, config.submissionMode);
     validateContentPresence(content);
     validateWordLimits(content, config);
-    await validateThemes(body.themeIds, config.id, config.maxThemesPerAbstract);
+    // M14: the abstract's own (possibly now-deactivated) themes stay valid on edit.
+    const currentThemeIds = await findAbstractThemeIds(id);
+    await validateThemes(
+      body.themeIds,
+      config.id,
+      config.maxThemesPerAbstract,
+      currentThemeIds,
+    );
     const sanitizedAdditionalFields = validateAdditionalFields(
       body.additionalFieldsData,
       config.additionalFieldsSchema,
@@ -507,6 +615,7 @@ export class AbstractsService {
 
     const nextRegistrationId =
       body.registrationId ?? abstract.registrationId ?? null;
+    await validateRegistration(nextRegistrationId, abstract.eventId);
     const authorEmailNormalized = normalizeAuthorEmail(body.authorEmail);
 
     if (

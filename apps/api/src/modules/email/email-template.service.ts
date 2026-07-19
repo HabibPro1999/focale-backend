@@ -82,6 +82,8 @@ export interface UpdateTemplateArgs {
   trigger?: AutomaticEmailTrigger | null;
   abstractTrigger?: AbstractEmailTrigger | null;
   isActive?: boolean;
+  /** M11: optimistic-concurrency precondition from GET's `updatedAt`. Omitted → last-write-wins (back-compat). */
+  expectedUpdatedAt?: string;
 }
 
 @Injectable()
@@ -216,7 +218,29 @@ export class EmailTemplateService {
     }
     if (input.isActive !== undefined) patch.isActive = input.isActive;
 
-    return dbUpdateTemplate(id, patch);
+    let expectedUpdatedAt: Date | undefined;
+    if (input.expectedUpdatedAt !== undefined) {
+      expectedUpdatedAt = new Date(input.expectedUpdatedAt);
+      if (Number.isNaN(expectedUpdatedAt.getTime())) {
+        throw new AppException(
+          ErrorCodes.VALIDATION_ERROR,
+          "Invalid expectedUpdatedAt precondition",
+          400,
+        );
+      }
+    }
+
+    const updated = await dbUpdateTemplate(id, patch, expectedUpdatedAt);
+    if (!updated) {
+      // `existing` above already proved the row exists, so a miss here means
+      // the CAS precondition lost a race against a concurrent edit.
+      throw new AppException(
+        ErrorCodes.CONCURRENT_MODIFICATION,
+        "Email template changed. Refresh and try again.",
+        409,
+      );
+    }
+    return updated;
   }
 
   async delete(id: string): Promise<void> {

@@ -17,9 +17,6 @@ export const ABSTRACT_STATUSES = [
 ] as const;
 export type AbstractStatus = (typeof ABSTRACT_STATUSES)[number];
 
-/** Statuses in which a public author may no longer edit (PENDING is editable). */
-export const NON_EDITABLE_STATUSES: AbstractStatus[] = ["ACCEPTED", "REJECTED"];
-
 /** Terminal decision statuses — finalize is blocked while in these; reopen requires one. */
 export const FINAL_STATUSES: AbstractStatus[] = [
   "ACCEPTED",
@@ -93,7 +90,7 @@ export const PatchConfigSchema = z.strictObject({
   commentsSentToAuthor: z.boolean().optional(),
   finalFileUploadEnabled: z.boolean().optional(),
   reviewersPerAbstract: z.number().int().min(1).max(10).optional(),
-  divergenceThreshold: z.number().int().min(0).max(20).optional(),
+  divergenceThreshold: z.number().int().min(0).max(25).optional(),
   maxThemesPerAbstract: z
     .union([z.number().int().min(1).max(20), z.null()])
     .optional(),
@@ -130,6 +127,9 @@ export const UpdateThemeSchema = z.strictObject({
 
 export const AdditionalFieldsSchema = z.strictObject({
   fields: z.array(FormFieldSchema).max(50),
+  // H15: dropping a field id that abstracts already answered against orphans
+  // the stored data. Additive/optional so existing clients keep working.
+  force: z.boolean().optional(),
 });
 
 // ============================================================================
@@ -231,11 +231,11 @@ export type ListAbstractsQuery = z.infer<typeof ListAbstractsQuerySchema>;
 export const FinalizeAbstractSchema = z.discriminatedUnion("decision", [
   z.strictObject({
     decision: z.literal("ACCEPTED"),
-    finalType: z.enum(["ORAL_COMMUNICATION", "POSTER"]),
+    finalType: z.enum(ABSTRACT_FINAL_TYPES),
   }),
   z.strictObject({
     decision: z.enum(["REJECTED", "PENDING"]),
-    finalType: z.enum(["ORAL_COMMUNICATION", "POSTER"]).optional(),
+    finalType: z.enum(ABSTRACT_FINAL_TYPES).optional(),
   }),
 ]);
 export type FinalizeAbstractInput = z.infer<typeof FinalizeAbstractSchema>;
@@ -293,7 +293,7 @@ export const ReviewAbstractSchema = z.strictObject({
   score: z
     .number()
     .min(0)
-    .max(20)
+    .max(25)
     .refine((value) => Number.isInteger(value * 2), {
       message: "Score must be a multiple of 0.5",
     }),

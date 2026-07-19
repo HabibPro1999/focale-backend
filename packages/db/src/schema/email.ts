@@ -85,6 +85,12 @@ export const emailLogs = pgTable(
     lockedUntil: timestamp({ precision: 3 }),
     lockedBy: text(),
     contextSnapshot: jsonb(),
+    // Per-outbox-delivery idempotency key (H6): the outbox event id that
+    // produced this row, or a requeue-script-derived key. Partial unique index
+    // over active statuses lives in migrations/0003_email_fixes.sql (drizzle
+    // can't express partial indexes) — a redelivered outbox event conflicts
+    // instead of inserting a duplicate row.
+    dedupeKey: text(),
     queuedAt: timestamp({ precision: 3 }).defaultNow().notNull(),
     // App-managed (Prisma @updatedAt): no DB default, matches live column.
     updatedAt: timestamp({ precision: 3 })

@@ -7,6 +7,7 @@ const deleteFile = vi.fn();
 vi.mock("@app/db", () => ({
   findAbstractForFinalFile: vi.fn(),
   updateAbstractFinalFileTxn: vi.fn(),
+  findEventClientId: vi.fn(),
 }));
 vi.mock("@app/integrations", () => ({
   getStorageProvider: () => ({
@@ -15,15 +16,26 @@ vi.mock("@app/integrations", () => ({
     getSignedUrl: vi.fn(),
   }),
 }));
+vi.mock("../clients/module-gates", () => ({
+  assertClientModuleEnabled: vi.fn(),
+}));
 
-import { findAbstractForFinalFile, updateAbstractFinalFileTxn } from "@app/db";
+import {
+  findAbstractForFinalFile,
+  updateAbstractFinalFileTxn,
+  findEventClientId,
+} from "@app/db";
+import { assertClientModuleEnabled } from "../clients/module-gates";
 import { AbstractsFinalFileService } from "./abstracts.final-file.service";
 import type { AbstractsService } from "./abstracts.service";
+import { AppException } from "../../core/app-exception";
+import { ErrorCodes } from "@app/contracts";
 
 const mock = <T>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
 
 const abstractId = "abstract-1";
 const eventId = "event-1";
+const clientId = "client-1";
 const token = "a".repeat(64);
 
 const stubAbstracts = {
@@ -64,6 +76,7 @@ async function pptxBuffer() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mock(findEventClientId).mockResolvedValue({ id: eventId, clientId });
 });
 
 describe("uploadAbstractFinalFile", () => {
@@ -125,6 +138,57 @@ describe("uploadAbstractFinalFile", () => {
         mimetype: "application/pdf",
       }),
     ).rejects.toMatchObject({ status: 409 });
+    expect(uploadPrivate).not.toHaveBeenCalled();
+  });
+
+  // H1: CONFERENCE must be accepted like ORAL_COMMUNICATION, not blocked by
+  // the "finalType not set" message.
+  it("accepts a PPTX final file for a CONFERENCE abstract", async () => {
+    mock(findAbstractForFinalFile).mockResolvedValue(
+      makeAbstract({ finalType: "CONFERENCE" }),
+    );
+    uploadPrivate.mockResolvedValue(`${eventId}/abstracts/${abstractId}/final.pptx`);
+
+    const result = await service.uploadAbstractFinalFile(abstractId, token, {
+      buffer: await pptxBuffer(),
+      filename: "slides.pptx",
+      mimetype:
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    });
+
+    expect(uploadPrivate).toHaveBeenCalled();
+    expect(result).toMatchObject({ finalFile: { uploaded: true } });
+  });
+
+  it("H1: distinguishes 'no finalType yet' (409) from a disallowed kind for a set finalType (400)", async () => {
+    mock(findAbstractForFinalFile).mockResolvedValue(
+      makeAbstract({ finalType: null }),
+    );
+    await expect(
+      service.uploadAbstractFinalFile(abstractId, token, {
+        buffer: pdfBuffer(),
+        filename: "poster.pdf",
+        mimetype: "application/pdf",
+      }),
+    ).rejects.toMatchObject({
+      status: 409,
+      message: expect.stringContaining("has not been set"),
+    });
+    expect(uploadPrivate).not.toHaveBeenCalled();
+  });
+
+  it("M2: propagates the client module gate rejection (no upload)", async () => {
+    mock(findAbstractForFinalFile).mockResolvedValue(makeAbstract());
+    mock(assertClientModuleEnabled).mockRejectedValueOnce(
+      new AppException(ErrorCodes.FORBIDDEN, "Abstracts module is disabled", 403),
+    );
+    await expect(
+      service.uploadAbstractFinalFile(abstractId, token, {
+        buffer: pdfBuffer(),
+        filename: "poster.pdf",
+        mimetype: "application/pdf",
+      }),
+    ).rejects.toMatchObject({ status: 403 });
     expect(uploadPrivate).not.toHaveBeenCalled();
   });
 });

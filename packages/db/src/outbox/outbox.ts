@@ -383,7 +383,9 @@ export async function processOutboxEvents(
       if (!handler) {
         throw new Error(`Unknown outbox event type: ${event.type}`);
       }
-      const outcome: OutboxHandlerResult = await handler(event.payload);
+      const outcome: OutboxHandlerResult = await handler(event.payload, {
+        id: event.id,
+      });
       if (outcome === "skipped") {
         const marked = await markOutboxProcessed(event.id, "SKIPPED", workerId);
         if (marked) result.skipped++;

@@ -77,6 +77,10 @@ export const CertificateIdParamSchema = z.strictObject({
 
 export const SendCertificatesBodySchema = z.strictObject({
   registrationIds: z.array(z.string().uuid()).optional(),
+  // H2: abstract presenter certificates, additive alongside registrationIds.
+  // Omitted = no abstract certificates processed (existing registration-only
+  // callers are unaffected); [] = explicitly none.
+  abstractIds: z.array(z.string().uuid()).optional(),
 });
 
 // ============================================================================

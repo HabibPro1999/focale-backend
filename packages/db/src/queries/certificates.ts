@@ -18,6 +18,7 @@ import {
 } from "../schema/events-access";
 import { clients } from "../schema/users-clients";
 import { registrations } from "../schema/registrations";
+import { abstracts } from "../schema/abstracts";
 import { emailLogs } from "../schema/email";
 import type { RegistrationEmailContext } from "./email";
 
@@ -448,6 +449,60 @@ export async function getRegistrationForCertificateGeneration(
   };
 }
 
+/** Abstract projection the worker re-fetches to render certificate PDFs (H2, mirrors
+ * getRegistrationForCertificateGeneration). */
+export interface AbstractForCertificateGeneration {
+  id: string;
+  authorFirstName: string;
+  authorLastName: string;
+  finalType: string | null;
+  requestedType: string;
+  code: string | null;
+  content: unknown;
+  event: { id: string; name: string; startDate: Date; location: string | null };
+}
+
+export async function getAbstractForCertificateGeneration(
+  abstractId: string,
+  exec: DbExecutor = getDb(),
+): Promise<AbstractForCertificateGeneration | null> {
+  const [row] = await exec
+    .select({
+      id: abstracts.id,
+      authorFirstName: abstracts.authorFirstName,
+      authorLastName: abstracts.authorLastName,
+      finalType: abstracts.finalType,
+      requestedType: abstracts.requestedType,
+      code: abstracts.code,
+      content: abstracts.content,
+      eventId: events.id,
+      eventName: events.name,
+      eventStartDate: events.startDate,
+      eventLocation: events.location,
+    })
+    .from(abstracts)
+    .innerJoin(events, eq(events.id, abstracts.eventId))
+    .where(eq(abstracts.id, abstractId))
+    .limit(1);
+  if (!row) return null;
+
+  return {
+    id: row.id,
+    authorFirstName: row.authorFirstName,
+    authorLastName: row.authorLastName,
+    finalType: row.finalType,
+    requestedType: row.requestedType,
+    code: row.code,
+    content: row.content,
+    event: {
+      id: row.eventId,
+      name: row.eventName,
+      startDate: row.eventStartDate,
+      location: row.eventLocation,
+    },
+  };
+}
+
 /**
  * Per-registration set of certificate template ids already queued/sent. Reads
  * active CERTIFICATE_SENT EmailLog rows and extracts the durable dedupe key
@@ -486,6 +541,125 @@ export async function getAlreadySentCertTemplateIds(
       if (typeof id === "string") set.add(id);
     }
     map.set(row.registrationId, set);
+  }
+
+  return map;
+}
+
+// ---------------------------------------------------------------------------
+// Abstract certificate send route reads (H2)
+// ---------------------------------------------------------------------------
+
+/** Abstract projection the certificate send route needs for eligibility + context. */
+export interface AbstractForCertificateSend {
+  id: string;
+  eventId: string;
+  status: string;
+  presentedAt: Date | null;
+  finalType: string | null;
+  requestedType: string;
+  code: string | null;
+  content: unknown;
+  authorFirstName: string;
+  authorLastName: string;
+  authorEmail: string;
+  event: { name: string; startDate: Date; location: string | null };
+}
+
+/**
+ * Abstracts by id, scoped to the event (send route eligibility check §H2).
+ * Ids that don't exist or belong to a different event are simply absent from
+ * the result — the caller reports those as ineligible ("not found for this
+ * event") rather than failing the whole request.
+ */
+export async function getAbstractsForCertificateSend(
+  eventId: string,
+  abstractIds: string[],
+  exec: DbExecutor = getDb(),
+): Promise<AbstractForCertificateSend[]> {
+  if (abstractIds.length === 0) return [];
+
+  const rows = await exec
+    .select({
+      id: abstracts.id,
+      eventId: abstracts.eventId,
+      status: abstracts.status,
+      presentedAt: abstracts.presentedAt,
+      finalType: abstracts.finalType,
+      requestedType: abstracts.requestedType,
+      code: abstracts.code,
+      content: abstracts.content,
+      authorFirstName: abstracts.authorFirstName,
+      authorLastName: abstracts.authorLastName,
+      authorEmail: abstracts.authorEmail,
+      eventName: events.name,
+      eventStartDate: events.startDate,
+      eventLocation: events.location,
+    })
+    .from(abstracts)
+    .innerJoin(events, eq(events.id, abstracts.eventId))
+    .where(
+      and(eq(abstracts.eventId, eventId), inArray(abstracts.id, abstractIds)),
+    );
+
+  return rows.map((r) => ({
+    id: r.id,
+    eventId: r.eventId,
+    status: r.status,
+    presentedAt: r.presentedAt,
+    finalType: r.finalType,
+    requestedType: r.requestedType,
+    code: r.code,
+    content: r.content,
+    authorFirstName: r.authorFirstName,
+    authorLastName: r.authorLastName,
+    authorEmail: r.authorEmail,
+    event: {
+      name: r.eventName,
+      startDate: r.eventStartDate,
+      location: r.eventLocation,
+    },
+  }));
+}
+
+/**
+ * Per-abstract set of certificate template ids already queued/sent, mirroring
+ * getAlreadySentCertTemplateIds but scoped to emailLogs.abstractId instead of
+ * registrationId (H2 dedupe).
+ */
+export async function getAlreadySentAbstractCertTemplateIds(
+  abstractIds: string[],
+  exec: DbExecutor = getDb(),
+): Promise<Map<string, Set<string>>> {
+  const map = new Map<string, Set<string>>();
+  if (abstractIds.length === 0) return map;
+
+  const rows = await exec
+    .select({
+      abstractId: emailLogs.abstractId,
+      contextSnapshot: emailLogs.contextSnapshot,
+    })
+    .from(emailLogs)
+    .where(
+      and(
+        inArray(emailLogs.abstractId, abstractIds),
+        eq(emailLogs.trigger, "CERTIFICATE_SENT"),
+        inArray(emailLogs.status, ["QUEUED", "SENDING", "SENT", "DELIVERED"]),
+      ),
+    );
+
+  for (const row of rows) {
+    if (!row.abstractId) continue;
+    const snapshot = row.contextSnapshot as
+      | { _certificateTemplateIds?: unknown }
+      | null;
+    const ids = snapshot?._certificateTemplateIds;
+    if (!Array.isArray(ids)) continue;
+    const set = map.get(row.abstractId) ?? new Set<string>();
+    for (const id of ids) {
+      if (typeof id === "string") set.add(id);
+    }
+    map.set(row.abstractId, set);
   }
 
   return map;

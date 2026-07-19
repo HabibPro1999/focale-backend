@@ -28,7 +28,7 @@ import {
 import { createLogger } from "@app/shared";
 import { getDb, type DbExecutor } from "../client";
 import { rowsOf, rowCountOf, standardRetryDelayMs } from "../helpers";
-import { withTxn, pgUniqueViolation } from "../txn";
+import { withTxn, withSerializableTxn, pgUniqueViolation } from "../txn";
 import {
   abstractConfig,
   abstractRevisions,
@@ -43,6 +43,7 @@ import {
 } from "../schema/abstracts";
 import { events } from "../schema/events-access";
 import { users } from "../schema/users-clients";
+import { registrations } from "../schema/registrations";
 import { emailLogs } from "../schema/email";
 import { abstractEmailTrigger } from "../schema/enums";
 import { auditLogs } from "../schema/outbox-audit";
@@ -187,6 +188,14 @@ function isDuplicateAuthorEmailViolation(error: unknown): boolean {
     v !== null &&
     v.constraint.includes("abstracts_event_id_author_email_normalized_key")
   );
+}
+
+// 23505 unique violation on (eventId, code) — two themes sharing a sortOrder
+// can allocate the identical code string (H5); catching it here turns an
+// opaque 500 into a typed, retryable-by-the-admin failure reason.
+function isDuplicateCodeViolation(error: unknown): boolean {
+  const v = pgUniqueViolation(error);
+  return v !== null && v.constraint.includes("abstracts_event_id_code_key");
 }
 
 // ============================================================================
@@ -423,6 +432,19 @@ export async function findActiveThemeIds(
   return rows.map((r) => r.id);
 }
 
+/**
+ * The abstract's CURRENT linked themeIds, regardless of theme.active (M14:
+ * edit-time re-validation must accept an abstract's own now-deactivated
+ * theme, not just the active set findActiveThemeIds filters to).
+ */
+export async function findAbstractThemeIds(abstractId: string): Promise<string[]> {
+  const rows = await getDb()
+    .select({ themeId: abstractThemeLinks.themeId })
+    .from(abstractThemeLinks)
+    .where(eq(abstractThemeLinks.abstractId, abstractId));
+  return rows.map((r) => r.themeId);
+}
+
 export async function findDuplicateAuthorEmail(
   eventId: string,
   authorEmailNormalized: string,
@@ -630,7 +652,7 @@ export async function listAdminAbstracts(
   if (q) {
     const pat = `%${q}%`;
     conds.push(
-      sql`(${abstracts.authorFirstName} LIKE ${pat} OR ${abstracts.authorLastName} LIKE ${pat} OR ${abstracts.authorAffiliation} LIKE ${pat} OR ${abstracts.authorEmail} LIKE ${pat} OR ${abstracts.code} LIKE ${pat})`,
+      sql`(${abstracts.authorFirstName} ILIKE ${pat} OR ${abstracts.authorLastName} ILIKE ${pat} OR ${abstracts.authorAffiliation} ILIKE ${pat} OR ${abstracts.authorEmail} ILIKE ${pat} OR ${abstracts.code} ILIKE ${pat})`,
     );
   }
   const where = and(...conds);
@@ -813,7 +835,10 @@ export async function editAbstractTxn(
   params: EditAbstractTxnParams,
 ): Promise<{ ok: true } | { ok: false; reason: "duplicate_email" }> {
   try {
-    return await withTxn(async (tx) => {
+    // Serializable + retry: revisionNo is read-max-then-insert, which races
+    // under plain READ COMMITTED on abstract_revisions_abstract_id_revision_no_key
+    // for concurrent edits of the same abstract (M3).
+    return await withSerializableTxn(async (tx) => {
       const [last] = await tx
         .select({ revisionNo: abstractRevisions.revisionNo })
         .from(abstractRevisions)
@@ -1262,6 +1287,48 @@ export async function deactivateCommitteeMembershipTxn(
           eq(abstractReviewerThemes.userId, userId),
         ),
       );
+
+    // M15: also deactivate this reviewer's active reviews on the event's
+    // abstracts, then recompute averageScore/reviewCount/status for each
+    // affected abstract — otherwise their score keeps counting and any
+    // unscored assignment blocks REVIEW_COMPLETE forever.
+    //
+    // Finalized abstracts are deliberately untouched: their review rows and
+    // stored aggregates are the historical inputs to an already-made decision,
+    // and offboarding a member must not rewrite that record.
+    const candidateReviews = await tx
+      .select({ abstractId: abstractReviews.abstractId, status: abstracts.status })
+      .from(abstractReviews)
+      .innerJoin(abstracts, eq(abstracts.id, abstractReviews.abstractId))
+      .where(
+        and(
+          eq(abstractReviews.eventId, eventId),
+          eq(abstractReviews.reviewerId, userId),
+          eq(abstractReviews.active, true),
+        ),
+      );
+    const affected = candidateReviews.filter(
+      (r) => !FINAL_STATUSES.includes(r.status),
+    );
+    if (affected.length > 0) {
+      await tx
+        .update(abstractReviews)
+        .set({ active: false })
+        .where(
+          and(
+            eq(abstractReviews.eventId, eventId),
+            eq(abstractReviews.reviewerId, userId),
+            eq(abstractReviews.active, true),
+            inArray(
+              abstractReviews.abstractId,
+              affected.map((r) => r.abstractId),
+            ),
+          ),
+        );
+      for (const { abstractId, status } of affected) {
+        await applyReviewAggregate(tx, abstractId, status, false);
+      }
+    }
   });
 }
 
@@ -1314,6 +1381,26 @@ export async function setReviewerThemesTxn(
         });
     }
   });
+}
+
+/**
+ * DISTINCT clientIds of every event where the user holds an ACTIVE
+ * abstractCommitteeMemberships row. Committee accounts are deliberately
+ * global (one reviewer can serve multiple clients' events, see C2), so the
+ * set-password guard needs the caller's full cross-tenant membership footprint.
+ */
+export async function findCommitteeUserClientIds(userId: string): Promise<string[]> {
+  const rows = await getDb()
+    .selectDistinct({ clientId: events.clientId })
+    .from(abstractCommitteeMemberships)
+    .innerJoin(events, eq(abstractCommitteeMemberships.eventId, events.id))
+    .where(
+      and(
+        eq(abstractCommitteeMemberships.userId, userId),
+        eq(abstractCommitteeMemberships.active, true),
+      ),
+    );
+  return rows.map((r) => r.clientId);
 }
 
 export interface CommitteeInviteTarget {
@@ -1475,17 +1562,11 @@ export async function assignReviewersTxn(params: {
         });
     }
 
-    const nextStatus: AbstractRow["status"] =
-      reviewerIds.length > 0 && currentStatus === "SUBMITTED"
-        ? "UNDER_REVIEW"
-        : currentStatus;
-
-    const [updated] = await tx
-      .update(abstracts)
-      .set({ status: nextStatus })
-      .where(eq(abstracts.id, abstractId))
-      .returning({ id: abstracts.id, status: abstracts.status });
-    return updated;
+    // H8/M16: recompute averageScore/reviewCount/status from the surviving
+    // active reviews instead of carrying the old status through untouched —
+    // removed reviewers' scores must stop counting, and a stale
+    // REVIEW_COMPLETE must not survive a newly added unscored reviewer.
+    return applyReviewAggregate(tx, abstractId, currentStatus, reviewerIds.length > 0);
   });
 }
 
@@ -1683,6 +1764,88 @@ async function notifyScoreDivergence(input: {
   });
 }
 
+/**
+ * Aggregate an abstract's remaining ACTIVE reviews into averageScore/
+ * reviewCount/allScored. Shared by reviewAbstractTxn, assignReviewersTxn
+ * (H8/M16), and deactivateCommitteeMembershipTxn (M15) so a reviewer-set
+ * change never leaves stale aggregates behind.
+ */
+async function computeReviewAggregate(
+  tx: DbExecutor,
+  abstractId: string,
+): Promise<{
+  averageScore: number | null;
+  reviewCount: number;
+  allScored: boolean;
+  scores: number[];
+}> {
+  const assignments = await tx
+    .select({ scoredAt: abstractReviews.scoredAt, score: abstractReviews.score })
+    .from(abstractReviews)
+    .where(
+      and(eq(abstractReviews.abstractId, abstractId), eq(abstractReviews.active, true)),
+    );
+  const scores = assignments
+    .map((r) => r.score)
+    .filter((s): s is number => s !== null);
+  const reviewCount = assignments.filter((r) => r.scoredAt !== null).length;
+  const averageScore = scores.length
+    ? scores.reduce((sum, s) => sum + s, 0) / scores.length
+    : null;
+  const allScored =
+    assignments.length > 0 && assignments.every((r) => r.scoredAt !== null);
+  return { averageScore, reviewCount, allScored, scores };
+}
+
+/**
+ * Derive the post-recompute status. Never overrides a terminal decision
+ * (FINAL_STATUSES); otherwise preserves the SUBMITTED->UNDER_REVIEW
+ * transition on first assignment (`hasReviewers`), advances to
+ * REVIEW_COMPLETE once every active review is scored, and — the M16 fix —
+ * falls a stale REVIEW_COMPLETE back to UNDER_REVIEW the moment that stops
+ * being true (e.g. a post-divergence extra reviewer was just added unscored).
+ */
+function deriveReviewStatus(
+  currentStatus: AbstractRow["status"],
+  hasReviewers: boolean,
+  allScored: boolean,
+): AbstractRow["status"] {
+  if (FINAL_STATUSES.includes(currentStatus)) return currentStatus;
+  const base =
+    hasReviewers && currentStatus === "SUBMITTED" ? "UNDER_REVIEW" : currentStatus;
+  if (allScored) return "REVIEW_COMPLETE";
+  return base === "REVIEW_COMPLETE" ? "UNDER_REVIEW" : base;
+}
+
+/**
+ * Recompute + write averageScore/reviewCount/status for one abstract.
+ * No-op on finalized abstracts: the stored aggregate is part of the decision
+ * record and must never be rewritten after the fact (deriveReviewStatus
+ * already refuses to move a terminal status; this extends the same rule to
+ * the score fields).
+ */
+async function applyReviewAggregate(
+  tx: DbExecutor,
+  abstractId: string,
+  currentStatus: AbstractRow["status"],
+  hasReviewers: boolean,
+): Promise<{ id: string; status: AbstractRow["status"] }> {
+  if (FINAL_STATUSES.includes(currentStatus)) {
+    return { id: abstractId, status: currentStatus };
+  }
+  const { averageScore, reviewCount, allScored } = await computeReviewAggregate(
+    tx,
+    abstractId,
+  );
+  const status = deriveReviewStatus(currentStatus, hasReviewers, allScored);
+  const [updated] = await tx
+    .update(abstracts)
+    .set({ averageScore, reviewCount, status })
+    .where(eq(abstracts.id, abstractId))
+    .returning({ id: abstracts.id, status: abstracts.status });
+  return updated;
+}
+
 export async function reviewAbstractTxn(params: {
   abstractId: string;
   eventId: string;
@@ -1732,24 +1895,8 @@ export async function reviewAbstractTxn(params: {
         },
       });
 
-    const assignments = await tx
-      .select({ scoredAt: abstractReviews.scoredAt, score: abstractReviews.score })
-      .from(abstractReviews)
-      .where(
-        and(
-          eq(abstractReviews.abstractId, abstractId),
-          eq(abstractReviews.active, true),
-        ),
-      );
-    const scores = assignments
-      .map((r) => r.score)
-      .filter((s): s is number => s !== null);
-    const reviewCount = assignments.filter((r) => r.scoredAt !== null).length;
-    const averageScore = scores.length
-      ? scores.reduce((sum, s) => sum + s, 0) / scores.length
-      : null;
-    const allScored =
-      assignments.length > 0 && assignments.every((r) => r.scoredAt !== null);
+    const { averageScore, reviewCount, allScored, scores } =
+      await computeReviewAggregate(tx, abstractId);
     const status = allScored
       ? ("REVIEW_COMPLETE" as const)
       : ("UNDER_REVIEW" as const);
@@ -1876,7 +2023,12 @@ async function allocateAbstractCode(
 export type FinalizeResult =
   | {
       ok: false;
-      reason: "not_found" | "already_finalized" | "missing_final_type" | "no_theme";
+      reason:
+        | "not_found"
+        | "already_finalized"
+        | "missing_final_type"
+        | "no_theme"
+        | "code_conflict";
     }
   | { ok: true };
 
@@ -1888,177 +2040,187 @@ export async function finalizeAbstractTxn(params: {
   performedBy: string;
 }): Promise<FinalizeResult> {
   const { eventId, abstractId, decision, finalType, performedBy } = params;
-  return withTxn(async (tx): Promise<FinalizeResult> => {
-    const [existing] = await tx
-      .select()
-      .from(abstracts)
-      .where(eq(abstracts.id, abstractId))
-      .limit(1);
-    if (!existing || existing.eventId !== eventId) {
-      return { ok: false, reason: "not_found" };
-    }
-    if (FINAL_STATUSES.includes(existing.status)) {
-      return { ok: false, reason: "already_finalized" };
-    }
-    if (decision === "ACCEPTED" && !finalType) {
-      return { ok: false, reason: "missing_final_type" };
-    }
-
-    const [ev] = await tx
-      .select({ clientId: events.clientId })
-      .from(events)
-      .where(eq(events.id, eventId))
-      .limit(1);
-    const [cfg] = await tx
-      .select({
-        commentsEnabled: abstractConfig.commentsEnabled,
-        commentsSentToAuthor: abstractConfig.commentsSentToAuthor,
-        finalFileUploadEnabled: abstractConfig.finalFileUploadEnabled,
-      })
-      .from(abstractConfig)
-      .where(eq(abstractConfig.eventId, eventId))
-      .limit(1);
-    const reviews = await tx
-      .select({ comment: abstractReviews.comment, name: users.name })
-      .from(abstractReviews)
-      .innerJoin(users, eq(abstractReviews.reviewerId, users.id))
-      .where(
-        and(
-          eq(abstractReviews.abstractId, abstractId),
-          eq(abstractReviews.active, true),
-        ),
-      )
-      .orderBy(asc(abstractReviews.createdAt));
-    const themes = await tx
-      .select({ id: abstractThemes.id, sortOrder: abstractThemes.sortOrder })
-      .from(abstractThemeLinks)
-      .innerJoin(abstractThemes, eq(abstractThemeLinks.themeId, abstractThemes.id))
-      .where(eq(abstractThemeLinks.abstractId, abstractId))
-      .orderBy(asc(abstractThemes.sortOrder));
-
-    const nextData: {
-      status: AbstractRow["status"];
-      finalType: AbstractFinalType | null;
-      code?: string | null;
-      codeNumber?: number | null;
-    } = {
-      status: decision,
-      finalType: decision === "ACCEPTED" ? (finalType as AbstractFinalType) : null,
-    };
-
-    let allocatedCode: { code: string; codeNumber: number } | null = null;
-    if (decision === "ACCEPTED") {
-      const codeTheme = themes[0];
-      if (!codeTheme) {
-        return { ok: false, reason: "no_theme" };
+  try {
+    return await withTxn(async (tx): Promise<FinalizeResult> => {
+      const [existing] = await tx
+        .select()
+        .from(abstracts)
+        .where(eq(abstracts.id, abstractId))
+        .limit(1);
+      if (!existing || existing.eventId !== eventId) {
+        return { ok: false, reason: "not_found" };
       }
-      if (existing.codeNumber != null) {
-        const code = `${CODE_SUFFIX[finalType as AbstractFinalType]}${codeTheme.sortOrder}-${String(existing.codeNumber).padStart(2, "0")}`;
-        allocatedCode = { code, codeNumber: existing.codeNumber };
+      if (FINAL_STATUSES.includes(existing.status)) {
+        return { ok: false, reason: "already_finalized" };
+      }
+      if (decision === "ACCEPTED" && !finalType) {
+        return { ok: false, reason: "missing_final_type" };
+      }
+
+      const [ev] = await tx
+        .select({ clientId: events.clientId })
+        .from(events)
+        .where(eq(events.id, eventId))
+        .limit(1);
+      const [cfg] = await tx
+        .select({
+          commentsEnabled: abstractConfig.commentsEnabled,
+          commentsSentToAuthor: abstractConfig.commentsSentToAuthor,
+          finalFileUploadEnabled: abstractConfig.finalFileUploadEnabled,
+        })
+        .from(abstractConfig)
+        .where(eq(abstractConfig.eventId, eventId))
+        .limit(1);
+      const reviews = await tx
+        .select({ comment: abstractReviews.comment, name: users.name })
+        .from(abstractReviews)
+        .innerJoin(users, eq(abstractReviews.reviewerId, users.id))
+        .where(
+          and(
+            eq(abstractReviews.abstractId, abstractId),
+            eq(abstractReviews.active, true),
+          ),
+        )
+        .orderBy(asc(abstractReviews.createdAt));
+      const themes = await tx
+        .select({ id: abstractThemes.id, sortOrder: abstractThemes.sortOrder })
+        .from(abstractThemeLinks)
+        .innerJoin(abstractThemes, eq(abstractThemeLinks.themeId, abstractThemes.id))
+        .where(eq(abstractThemeLinks.abstractId, abstractId))
+        .orderBy(asc(abstractThemes.sortOrder));
+
+      const nextData: {
+        status: AbstractRow["status"];
+        finalType: AbstractFinalType | null;
+        code?: string | null;
+        codeNumber?: number | null;
+      } = {
+        status: decision,
+        finalType: decision === "ACCEPTED" ? (finalType as AbstractFinalType) : null,
+      };
+
+      let allocatedCode: { code: string; codeNumber: number } | null = null;
+      if (decision === "ACCEPTED") {
+        const codeTheme = themes[0];
+        if (!codeTheme) {
+          return { ok: false, reason: "no_theme" };
+        }
+        if (existing.codeNumber != null) {
+          const code = `${CODE_SUFFIX[finalType as AbstractFinalType]}${codeTheme.sortOrder}-${String(existing.codeNumber).padStart(2, "0")}`;
+          allocatedCode = { code, codeNumber: existing.codeNumber };
+        } else {
+          allocatedCode = await allocateAbstractCode(
+            tx,
+            eventId,
+            finalType as AbstractFinalType,
+            codeTheme,
+          );
+        }
+        nextData.code = allocatedCode.code;
+        nextData.codeNumber = allocatedCode.codeNumber;
       } else {
-        allocatedCode = await allocateAbstractCode(
-          tx,
-          eventId,
-          finalType as AbstractFinalType,
-          codeTheme,
-        );
+        nextData.code = null;
+        nextData.codeNumber = null;
       }
-      nextData.code = allocatedCode.code;
-      nextData.codeNumber = allocatedCode.codeNumber;
-    } else {
-      nextData.code = null;
-      nextData.codeNumber = null;
-    }
 
-    // Optimistic guard: another finalize racing to a terminal status ⇒ 0 rows.
-    const [updated] = await tx
-      .update(abstracts)
-      .set(nextData)
-      .where(
-        and(
-          eq(abstracts.id, abstractId),
-          notInArray(abstracts.status, FINAL_STATUSES),
-        ),
-      )
-      .returning({
-        id: abstracts.id,
-        status: abstracts.status,
-        code: abstracts.code,
-        averageScore: abstracts.averageScore,
-        reviewCount: abstracts.reviewCount,
-      });
-    if (!updated) {
-      return { ok: false, reason: "already_finalized" };
-    }
+      // Optimistic guard: another finalize racing to a terminal status ⇒ 0 rows.
+      const [updated] = await tx
+        .update(abstracts)
+        .set(nextData)
+        .where(
+          and(
+            eq(abstracts.id, abstractId),
+            notInArray(abstracts.status, FINAL_STATUSES),
+          ),
+        )
+        .returning({
+          id: abstracts.id,
+          status: abstracts.status,
+          code: abstracts.code,
+          averageScore: abstracts.averageScore,
+          reviewCount: abstracts.reviewCount,
+        });
+      if (!updated) {
+        return { ok: false, reason: "already_finalized" };
+      }
 
-    await insertAuditLog(
-      {
-        entityType: "Abstract",
-        entityId: abstractId,
-        action: "finalize",
-        changes: {
-          status: { old: existing.status, new: decision },
-          finalType: { old: existing.finalType, new: finalType ?? null },
-          code: { old: existing.code, new: allocatedCode?.code ?? null },
-        },
-        performedBy,
-      },
-      tx,
-    );
-
-    const decisionTrigger =
-      updated.status === "ACCEPTED"
-        ? "ABSTRACT_ACCEPTED"
-        : updated.status === "REJECTED"
-          ? "ABSTRACT_REJECTED"
-          : "ABSTRACT_DECISION";
-    const decisionDedupeSuffix = `${abstractId}:${existing.updatedAt.getTime()}`;
-
-    await enqueueAbstractEmailOutboxEvent(
-      tx,
-      { trigger: decisionTrigger, abstractId },
-      `email:abstract:${decisionTrigger}:${decisionDedupeSuffix}`,
-    );
-
-    if (cfg?.commentsEnabled && cfg.commentsSentToAuthor) {
-      const committeeComments = collectCommitteeComments(reviews);
-      if (committeeComments) {
-        await enqueueAbstractEmailOutboxEvent(
-          tx,
-          {
-            trigger: "ABSTRACT_COMMITTEE_COMMENTS",
-            abstractId,
-            extraContext: { committeeComments },
+      await insertAuditLog(
+        {
+          entityType: "Abstract",
+          entityId: abstractId,
+          action: "finalize",
+          changes: {
+            status: { old: existing.status, new: decision },
+            finalType: { old: existing.finalType, new: finalType ?? null },
+            code: { old: existing.code, new: allocatedCode?.code ?? null },
           },
-          `email:abstract:ABSTRACT_COMMITTEE_COMMENTS:${decisionDedupeSuffix}`,
-        );
-      }
-    }
+          performedBy,
+        },
+        tx,
+      );
 
-    if (updated.status === "ACCEPTED" && cfg?.finalFileUploadEnabled) {
+      const decisionTrigger =
+        updated.status === "ACCEPTED"
+          ? "ABSTRACT_ACCEPTED"
+          : updated.status === "REJECTED"
+            ? "ABSTRACT_REJECTED"
+            : "ABSTRACT_DECISION";
+      const decisionDedupeSuffix = `${abstractId}:${existing.updatedAt.getTime()}`;
+
       await enqueueAbstractEmailOutboxEvent(
         tx,
-        { trigger: "ABSTRACT_FINAL_FILE_REQUEST", abstractId },
-        `email:abstract:ABSTRACT_FINAL_FILE_REQUEST:${decisionDedupeSuffix}`,
+        { trigger: decisionTrigger, abstractId },
+        `email:abstract:${decisionTrigger}:${decisionDedupeSuffix}`,
       );
-    }
 
-    await enqueueRealtimeOutboxEvent(tx, {
-      type: "abstract.finalized",
-      clientId: ev?.clientId ?? "",
-      eventId,
-      payload: {
-        id: updated.id,
-        status: updated.status,
-        code: updated.code,
-        averageScore: updated.averageScore,
-        reviewCount: updated.reviewCount,
-      },
-      ts: Date.now(),
+      if (cfg?.commentsEnabled && cfg.commentsSentToAuthor) {
+        const committeeComments = collectCommitteeComments(reviews);
+        if (committeeComments) {
+          await enqueueAbstractEmailOutboxEvent(
+            tx,
+            {
+              trigger: "ABSTRACT_COMMITTEE_COMMENTS",
+              abstractId,
+              extraContext: { committeeComments },
+            },
+            `email:abstract:ABSTRACT_COMMITTEE_COMMENTS:${decisionDedupeSuffix}`,
+          );
+        }
+      }
+
+      if (updated.status === "ACCEPTED" && cfg?.finalFileUploadEnabled) {
+        await enqueueAbstractEmailOutboxEvent(
+          tx,
+          { trigger: "ABSTRACT_FINAL_FILE_REQUEST", abstractId },
+          `email:abstract:ABSTRACT_FINAL_FILE_REQUEST:${decisionDedupeSuffix}`,
+        );
+      }
+
+      await enqueueRealtimeOutboxEvent(tx, {
+        type: "abstract.finalized",
+        clientId: ev?.clientId ?? "",
+        eventId,
+        payload: {
+          id: updated.id,
+          status: updated.status,
+          code: updated.code,
+          averageScore: updated.averageScore,
+          reviewCount: updated.reviewCount,
+        },
+        ts: Date.now(),
+      });
+
+      return { ok: true };
     });
-
-    return { ok: true };
-  });
+  } catch (error) {
+    // H5: two themes sharing a sortOrder (or a codeNumber race) can allocate
+    // an identical code string, violating abstracts_event_id_code_key. Map it
+    // to a typed reason instead of letting the raw 23505 escape as a 500.
+    if (isDuplicateCodeViolation(error)) {
+      return { ok: false, reason: "code_conflict" };
+    }
+    throw error;
+  }
 }
 
 export type ReopenResult =
@@ -2103,7 +2265,16 @@ export async function reopenAbstractTxn(params: {
 
     const [updated] = await tx
       .update(abstracts)
-      .set({ status: nextStatus, finalType: null, code: null, codeNumber: null })
+      .set({
+        status: nextStatus,
+        finalType: null,
+        code: null,
+        codeNumber: null,
+        // M6: clear stale presented flags from a prior decision cycle so a
+        // reopened, re-decided abstract isn't still certificate-eligible.
+        presentedAt: null,
+        presentedBy: null,
+      })
       .where(eq(abstracts.id, abstractId))
       .returning({
         id: abstracts.id,
@@ -2254,10 +2425,41 @@ export type EnqueueBookJobResult =
   | { ok: false; reason: "unfinished"; unfinishedCount: number }
   | { ok: true; job: AbstractBookJobRow };
 
+const ACTIVE_BOOK_JOB_STATUSES = ["PENDING", "RUNNING"] as const;
+
+// 23505 unique violation on the partial index enforcing one active (PENDING/
+// RUNNING) book job per event (L1).
+function isDuplicateActiveBookJobViolation(error: unknown): boolean {
+  const v = pgUniqueViolation(error);
+  return v !== null && v.constraint.includes("abstract_book_jobs_event_id_active_key");
+}
+
+async function findActiveAbstractBookJob(
+  db: DbExecutor,
+  eventId: string,
+): Promise<AbstractBookJobRow | null> {
+  const [existing] = await db
+    .select()
+    .from(abstractBookJobs)
+    .where(
+      and(
+        eq(abstractBookJobs.eventId, eventId),
+        inArray(abstractBookJobs.status, ACTIVE_BOOK_JOB_STATUSES),
+      ),
+    )
+    .limit(1);
+  return existing ?? null;
+}
+
 /**
  * Enqueue a PENDING book job. Gated: the AbstractConfig must exist, and there
  * must be zero abstracts still outside FINAL_STATUSES. Create + audit ride one
  * READ COMMITTED transaction.
+ *
+ * L1: idempotent against duplicates — if a PENDING/RUNNING job already covers
+ * this event, that job is returned as-is (ok:true, no new insert) instead of
+ * enqueueing a second one; the partial unique index backstops the remaining
+ * check-then-insert race with the same idempotent response.
  */
 export async function enqueueAbstractBookJob(params: {
   eventId: string;
@@ -2287,23 +2489,34 @@ export async function enqueueAbstractBookJob(params: {
     return { ok: false, reason: "unfinished", unfinishedCount };
   }
 
-  return withTxn(async (tx): Promise<EnqueueBookJobResult> => {
-    const [job] = await tx
-      .insert(abstractBookJobs)
-      .values({ eventId, requestedBy, status: "PENDING" })
-      .returning();
-    await insertAuditLog(
-      {
-        entityType: "AbstractBookJob",
-        entityId: job.id,
-        action: "enqueue",
-        changes: { status: { old: null, new: "PENDING" } },
-        performedBy: requestedBy,
-      },
-      tx,
-    );
-    return { ok: true, job };
-  });
+  try {
+    return await withTxn(async (tx): Promise<EnqueueBookJobResult> => {
+      const existing = await findActiveAbstractBookJob(tx, eventId);
+      if (existing) return { ok: true, job: existing };
+
+      const [job] = await tx
+        .insert(abstractBookJobs)
+        .values({ eventId, requestedBy, status: "PENDING" })
+        .returning();
+      await insertAuditLog(
+        {
+          entityType: "AbstractBookJob",
+          entityId: job.id,
+          action: "enqueue",
+          changes: { status: { old: null, new: "PENDING" } },
+          performedBy: requestedBy,
+        },
+        tx,
+      );
+      return { ok: true, job };
+    });
+  } catch (error) {
+    if (isDuplicateActiveBookJobViolation(error)) {
+      const existing = await findActiveAbstractBookJob(db, eventId);
+      if (existing) return { ok: true, job: existing };
+    }
+    throw error;
+  }
 }
 
 /** Last 20 jobs for an event, newest first. */
@@ -2635,6 +2848,9 @@ export interface AbstractBookConfig {
   bookLineSpacing: number;
   bookOrder: AbstractConfigRow["bookOrder"];
   bookIncludeAuthorNames: boolean;
+  // H9: additive — lets the book renderer print each additional-field's
+  // (e.g. keywords) value alongside content sections, per its schema label.
+  additionalFieldsSchema: AbstractConfigRow["additionalFieldsSchema"];
 }
 
 export interface AbstractBookData {
@@ -2661,6 +2877,7 @@ export async function getAbstractBookData(
       bookLineSpacing: abstractConfig.bookLineSpacing,
       bookOrder: abstractConfig.bookOrder,
       bookIncludeAuthorNames: abstractConfig.bookIncludeAuthorNames,
+      additionalFieldsSchema: abstractConfig.additionalFieldsSchema,
     })
     .from(abstractConfig)
     .where(eq(abstractConfig.eventId, eventId))
@@ -2779,4 +2996,68 @@ export async function getAbstractForEmailContext(
       finalFileUploadEnabled: cfg?.finalFileUploadEnabled ?? false,
     },
   };
+}
+
+// ============================================================================
+// registrationId validation (M4)
+// ============================================================================
+
+/** The eventId a registration belongs to, or null if it doesn't exist. */
+export async function findRegistrationEventId(
+  registrationId: string,
+): Promise<string | null> {
+  const [row] = await getDb()
+    .select({ eventId: registrations.eventId })
+    .from(registrations)
+    .where(eq(registrations.id, registrationId))
+    .limit(1);
+  return row?.eventId ?? null;
+}
+
+// ============================================================================
+// L3: reviewer assignment config needs distributeByTheme too
+// ============================================================================
+
+/**
+ * Same shape as getCommitteeConfig plus distributeByTheme (L3: the flag was
+ * defined on the schema but read nowhere in the assignReviewers path, so
+ * assignments never enforced theme overlap even when admins turned it on).
+ * Appended rather than added as a field to getCommitteeConfig to avoid
+ * touching that existing export.
+ */
+export async function getReviewerAssignmentConfig(
+  eventId: string,
+): Promise<{
+  reviewersPerAbstract: number;
+  divergenceThreshold: number;
+  distributeByTheme: boolean;
+} | null> {
+  const [row] = await getDb()
+    .select({
+      reviewersPerAbstract: abstractConfig.reviewersPerAbstract,
+      divergenceThreshold: abstractConfig.divergenceThreshold,
+      distributeByTheme: abstractConfig.distributeByTheme,
+    })
+    .from(abstractConfig)
+    .where(eq(abstractConfig.eventId, eventId))
+    .limit(1);
+  return row ?? null;
+}
+
+// ============================================================================
+// H5: theme sortOrder guards — codes embed the live sortOrder, so a theme
+// that already has printed (coded) abstracts can't have its sortOrder moved
+// without splitting/colliding the printed series.
+// ============================================================================
+
+/** Count of abstracts linked to this theme that already have a printed code. */
+export async function countCodedAbstractsByTheme(themeId: string): Promise<number> {
+  const [row] = await getDb()
+    .select({ n: count() })
+    .from(abstractThemeLinks)
+    .innerJoin(abstracts, eq(abstracts.id, abstractThemeLinks.abstractId))
+    .where(
+      and(eq(abstractThemeLinks.themeId, themeId), isNotNull(abstracts.code)),
+    );
+  return row?.n ?? 0;
 }

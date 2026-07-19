@@ -187,7 +187,11 @@ export class CertificatesController {
       .send(file.buffer);
   }
 
-  // POST /api/events/:eventId/certificates/send — bulk-send certificates via email
+  // POST /api/events/:eventId/certificates/send — bulk-send certificates via
+  // email. `registrationIds` (undefined = all, [] = none) targets attendee
+  // certs as before; `abstractIds` (H2) additionally sends presenter
+  // certificates for eligible abstracts (ACCEPTED + presentedAt != null) to
+  // their author — omit it to leave abstract behavior untouched.
   @Post(":eventId/certificates/send")
   @HttpCode(200)
   async send(
@@ -203,6 +207,7 @@ export class CertificatesController {
     return this.certificates.sendCertificates(
       { id: event.id, clientId: event.clientId },
       body.registrationIds,
+      body.abstractIds,
     );
   }
 }

@@ -7,7 +7,7 @@ import { getStorageProvider } from "@app/integrations";
 import { logger } from "../../core/logger.service";
 import { AppException } from "../../core/app-exception";
 import { verifyAbstractToken } from "./abstracts.token";
-import { AbstractsService } from "./abstracts.service";
+import { AbstractsService, assertAbstractModuleEnabled } from "./abstracts.service";
 
 type AbstractFileKind = "PDF" | "PPT" | "PPTX";
 
@@ -89,10 +89,23 @@ async function detectFinalFileKind(file: {
   );
 }
 
+// H1: finalType is one of CONFERENCE / ORAL_COMMUNICATION / POSTER once set
+// (or null before finalize). Only POSTER restricts the uploaded kind; the
+// other two accept PDF/PPT/PPTX. Previously any non-POSTER, non-
+// ORAL_COMMUNICATION finalType (i.e. CONFERENCE) fell through to the "not
+// set yet" 409 — this distinguishes "no finalType yet" from "kind not
+// allowed" instead of conflating the two under one misleading message.
 function assertKindAllowed(
   kind: AbstractFileKind,
   finalType: string | null,
 ): void {
+  if (finalType == null) {
+    throw new AppException(
+      ErrorCodes.INVALID_STATUS_TRANSITION,
+      "Final presentation type has not been set for this abstract yet.",
+      409,
+    );
+  }
   if (finalType === "POSTER" && kind !== "PDF") {
     throw new AppException(
       ErrorCodes.INVALID_FILE_TYPE,
@@ -100,14 +113,8 @@ function assertKindAllowed(
       400,
     );
   }
-  if (finalType === "ORAL_COMMUNICATION") return;
-  if (finalType !== "POSTER") {
-    throw new AppException(
-      ErrorCodes.INVALID_STATUS_TRANSITION,
-      "Final presentation type is required before uploading a final file.",
-      409,
-    );
-  }
+  // ORAL_COMMUNICATION, POSTER (already PDF-checked above), and CONFERENCE
+  // all accept any detected kind (PDF/PPT/PPTX).
 }
 
 @Injectable()
@@ -139,6 +146,7 @@ export class AbstractsFinalFileService {
         404,
       );
     }
+    await assertAbstractModuleEnabled(abstract.eventId);
     if (abstract.status !== "ACCEPTED") {
       throw new AppException(
         ErrorCodes.INVALID_STATUS_TRANSITION,

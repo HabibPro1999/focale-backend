@@ -4,7 +4,12 @@
 -- 0000_init.sql. Index NAMES are byte-for-byte identical to the legacy CockroachDB
 -- migrations because application code (P2002 mapping, dedupe guards) matches on them.
 -- Source migrations: 20260426100000, 20260516000000, 20260528000000,
--- 20260512000000, 20260516001000, 20260319000001.
+-- 20260516001000, 20260319000001.
+-- NOTE (N2): 20260512000000's abstracts_event_id_code_number_key was
+-- intentionally NOT carried over here — 20260514000000 dropped it upstream
+-- once the code-number allocator became scoped per (event, theme, finalType),
+-- so code_number is deliberately non-unique per event. See 0002_drop_abstracts_code_number_unique.sql
+-- for the defensive DROP covering DBs already migrated with the old CREATE.
 
 -- One active AUTOMATIC email template per (client, trigger, event) namespace.
 CREATE UNIQUE INDEX IF NOT EXISTS "email_template_registration_uniq"
@@ -44,11 +49,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS "email_logs_template_recipient_trigger_active_
     AND "trigger" IS NOT NULL
     AND "status" IN ('QUEUED', 'SENDING', 'SENT', 'DELIVERED')
     AND "queued_at" >= TIMESTAMP '2026-05-29 00:03:03';
-
--- Unique numeric code portion per event, NULLs excluded.
-CREATE UNIQUE INDEX IF NOT EXISTS "abstracts_event_id_code_number_key"
-  ON "abstracts" ("event_id", "code_number")
-  WHERE "code_number" IS NOT NULL;
 
 -- Outbox dedupe: unique non-null dedupe_key.
 CREATE UNIQUE INDEX IF NOT EXISTS "outbox_events_dedupe_key_key"

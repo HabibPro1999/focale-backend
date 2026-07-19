@@ -20,9 +20,22 @@ export type OutboxProcessingScope = "all" | "realtime" | "background";
 /** A handler's verdict. Anything else (or a throw) is a failure → retry. */
 export type OutboxHandlerResult = "processed" | "skipped";
 
+/**
+ * Per-delivery metadata passed alongside the payload (H6). `id` is the claimed
+ * outbox_events row's own id — stable across the retry/backoff lifecycle of a
+ * single logical delivery, but a genuinely NEW outbox event (a legit re-trigger)
+ * gets a new one. Handlers that need per-delivery idempotency (e.g.
+ * queueAbstractEmail) thread it through as an email_logs dedupe key so a
+ * crash-and-redeliver of the SAME row can't double-send.
+ */
+export interface OutboxHandlerMeta {
+  id: string;
+}
+
 /** Per-type handler. Legacy `handleOutboxEvent` switch is now an injected map. */
 export type OutboxHandler = (
   payload: unknown,
+  meta: OutboxHandlerMeta,
 ) => Promise<OutboxHandlerResult> | OutboxHandlerResult;
 
 /** type → handler. The api process registers realtime.emit; the worker, email.* */

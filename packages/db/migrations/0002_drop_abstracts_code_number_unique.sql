@@ -1,0 +1,11 @@
+-- Hand-written, same convention as 0001_raw_indexes.sql (not tracked by
+-- drizzle-kit / meta/_journal.json).
+--
+-- N2 fix: 0001_raw_indexes.sql previously recreated
+-- abstracts_event_id_code_number_key, an index the legacy DB deliberately
+-- DROPPED (see legacy migration 20260514000000_tshg_abstract_requirements)
+-- once allocateAbstractCode's counter became scoped per
+-- (event, theme, finalType) — code_number is intentionally NOT unique per
+-- event (only the code STRING is, via abstracts_event_id_code_key). Any DB
+-- migrated before this fix still has the stray index; drop it defensively.
+DROP INDEX IF EXISTS "abstracts_event_id_code_number_key";

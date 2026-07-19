@@ -65,6 +65,98 @@ function getContentSections(
   return body ? [{ label: "Abstract", text: body }] : [];
 }
 
+// H9: additional-fields answers (e.g. keywords) never made it into the book —
+// the renderer only ever read `content`. additionalFieldsSchema/Data are raw
+// jsonb (unknown shape), so this reads them defensively field-by-field: schema
+// order drives iteration, so unanswered fields and stale/unknown data keys are
+// silently skipped (never printed), never guessed at.
+const NON_ANSWER_FIELD_TYPES = new Set(["heading", "paragraph", "file"]);
+
+function additionalFieldLabel(id: string, label: unknown): string {
+  return typeof label === "string" && label.length > 0 ? label : id;
+}
+
+function resolveOptionLabel(options: unknown, id: string): string {
+  if (Array.isArray(options)) {
+    for (const option of options) {
+      if (
+        option &&
+        typeof option === "object" &&
+        (option as Record<string, unknown>).id === id
+      ) {
+        const label = (option as Record<string, unknown>).label;
+        return typeof label === "string" && label.trim() ? label.trim() : id;
+      }
+    }
+  }
+  return id;
+}
+
+function formatAdditionalFieldValue(
+  type: string,
+  options: unknown,
+  value: unknown,
+): string {
+  const clean = (raw: string) => abstractHtmlToText(raw).trim();
+
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (typeof item === "string") return clean(resolveOptionLabel(options, item));
+        if (typeof item === "number") return String(item);
+        if (typeof item === "boolean") return item ? "Yes" : "No";
+        return "";
+      })
+      .filter((item) => item.length > 0)
+      .join(", ");
+  }
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "number") return String(value);
+  if (typeof value === "string") {
+    const resolved =
+      type === "dropdown" || type === "radio"
+        ? resolveOptionLabel(options, value)
+        : value;
+    return clean(resolved);
+  }
+  return "";
+}
+
+/**
+ * Pure field-rendering core of H9: given the event's additionalFieldsSchema
+ * and one abstract's additionalFieldsData, produce the labelled lines to
+ * print after the content sections — schema field order, label from the
+ * schema (falling back to id, mirroring form-data-validator's getFieldLabel),
+ * value formatted per type. Unanswered fields and unknown data keys are
+ * skipped silently; values are run through the same abstractHtmlToText used
+ * for author/content text so no stray markup reaches the page.
+ */
+export function getAdditionalFieldLines(
+  schema: unknown,
+  data: unknown,
+): Array<{ label: string; text: string }> {
+  if (!Array.isArray(schema)) return [];
+  if (!data || typeof data !== "object" || Array.isArray(data)) return [];
+  const record = data as Record<string, unknown>;
+
+  const lines: Array<{ label: string; text: string }> = [];
+  for (const entry of schema) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const field = entry as Record<string, unknown>;
+    const id = field.id;
+    if (typeof id !== "string" || !id) continue;
+    const type = typeof field.type === "string" ? field.type : "";
+    if (NON_ANSWER_FIELD_TYPES.has(type)) continue;
+    if (!(id in record)) continue; // unanswered — skip silently
+
+    const text = formatAdditionalFieldValue(type, field.options, record[id]);
+    if (!text) continue; // empty/missing value — skip silently
+
+    lines.push({ label: additionalFieldLabel(id, field.label), text });
+  }
+  return lines;
+}
+
 function withAffiliation(name: string, affiliation: string | undefined): string {
   const trimmed = affiliation?.trim();
   return trimmed ? `${name} (${trimmed})` : name;
@@ -360,6 +452,14 @@ export async function generateAbstractBookPdf(
     for (const section of getContentSections(abstract.content)) {
       writer.text(section.label, { bold: true, gapAfter: 2 });
       writer.text(section.text, { gapAfter: 8 });
+    }
+
+    for (const field of getAdditionalFieldLines(
+      config.additionalFieldsSchema,
+      abstract.additionalFieldsData,
+    )) {
+      writer.text(field.label, { bold: true, gapAfter: 2 });
+      writer.text(field.text, { gapAfter: 8 });
     }
   });
 

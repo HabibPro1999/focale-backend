@@ -128,8 +128,12 @@ export const CreateEmailTemplateBodySchema = z
   .strictObject(emailTemplateBaseShape)
   .refine(triggerXorRefine, triggerXorMessage);
 
+// expectedUpdatedAt is a precondition, not itself a field to update — a body
+// carrying only it has nothing to write.
 const hasUpdateField = (data: Record<string, unknown>) =>
-  Object.values(data).some((value) => value !== undefined);
+  Object.entries(data).some(
+    ([key, value]) => key !== "expectedUpdatedAt" && value !== undefined,
+  );
 
 export const UpdateEmailTemplateSchema = z
   .strictObject({
@@ -141,6 +145,9 @@ export const UpdateEmailTemplateSchema = z
     trigger: AutomaticEmailTriggerSchema.optional().nullable(),
     abstractTrigger: AbstractEmailTriggerSchema.optional().nullable(),
     isActive: z.boolean().optional(),
+    // M11: optimistic-concurrency precondition from GET's `updatedAt`. Optional
+    // for backward compatibility — omitted means last-write-wins, as before.
+    expectedUpdatedAt: z.string().datetime().optional(),
   })
   .refine(hasUpdateField, {
     message: "At least one field must be provided for update",

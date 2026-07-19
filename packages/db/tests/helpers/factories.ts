@@ -4,6 +4,8 @@ import { newId } from "@app/shared";
 import {
   getDb,
   abstractConfig,
+  abstractThemeLinks,
+  abstractThemes,
   abstracts,
   clients,
   eventAccess,
@@ -173,6 +175,23 @@ export async function seedAbstractConfig(
     .values(overrides)
     .returning();
   return row;
+}
+
+export async function seedAbstractTheme(
+  overrides: Partial<typeof abstractThemes.$inferInsert> & { configId: string },
+): Promise<Row<typeof abstractThemes>> {
+  const [row] = await getDb()
+    .insert(abstractThemes)
+    .values({ label: "Test Theme", ...overrides })
+    .returning();
+  return row;
+}
+
+export async function linkAbstractTheme(
+  abstractId: string,
+  themeId: string,
+): Promise<void> {
+  await getDb().insert(abstractThemeLinks).values({ abstractId, themeId });
 }
 
 export async function seedAbstract(

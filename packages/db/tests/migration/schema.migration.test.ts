@@ -8,6 +8,9 @@ const MIGRATIONS_DIR = fileURLToPath(new URL("../../migrations", import.meta.url
 
 // Partial-unique indexes drizzle-kit cannot express + the GIN index, applied by
 // 0001_raw_indexes.sql. Names are load-bearing (app code matches on them).
+// abstracts_event_id_code_number_key deliberately excluded (N2): 0001 must not
+// recreate it, and 0002 drops it defensively for already-migrated DBs — see
+// the dedicated assertion below.
 const RAW_INDEX_NAMES = [
   "email_template_registration_uniq",
   "email_template_abstract_uniq",
@@ -15,7 +18,6 @@ const RAW_INDEX_NAMES = [
   "email_logs_registration_trigger_active_key",
   "email_logs_abstract_submission_ack_active_key",
   "email_logs_template_recipient_trigger_active_key",
-  "abstracts_event_id_code_number_key",
   "outbox_events_dedupe_key_key",
 ];
 const GIN_INDEX_NAME = "registrations_access_type_ids_inverted_idx";
@@ -101,7 +103,7 @@ describe.runIf(dbTestsEnabled())("migration tier: apply + introspect", () => {
     expect(Number(rows[0].n)).toBe(19);
   });
 
-  it("creates the 8 partial-unique indexes + GIN index by exact name", async () => {
+  it("creates the 7 partial-unique indexes + GIN index by exact name", async () => {
     const { rows } = await client.query<{ indexname: string }>(
       `SELECT indexname FROM pg_indexes WHERE schemaname = 'public'`,
     );
@@ -117,6 +119,22 @@ describe.runIf(dbTestsEnabled())("migration tier: apply + introspect", () => {
       [GIN_INDEX_NAME],
     );
     expect(gin[0]?.amname).toBe("gin");
+  });
+
+  it("N2: does not recreate abstracts_event_id_code_number_key (code_number is not unique per event)", async () => {
+    const { rows } = await client.query<{ indexname: string }>(
+      `SELECT indexname FROM pg_indexes WHERE schemaname = 'public'`,
+    );
+    const names = new Set(rows.map((r) => r.indexname));
+    expect(names.has("abstracts_event_id_code_number_key")).toBe(false);
+  });
+
+  it("L1: creates the abstract_book_jobs one-active-job-per-event partial-unique index", async () => {
+    const { rows } = await client.query<{ indexname: string }>(
+      `SELECT indexname FROM pg_indexes WHERE schemaname = 'public'`,
+    );
+    const names = new Set(rows.map((r) => r.indexname));
+    expect(names.has("abstract_book_jobs_event_id_active_key")).toBe(true);
   });
 
   it("spot-checks column types: companion_price int8, text ids, updated_at no default", async () => {

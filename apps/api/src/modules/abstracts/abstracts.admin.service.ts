@@ -183,6 +183,12 @@ export class AbstractsAdminService {
             "Accepted abstracts must have a theme before a code can be allocated",
             400,
           );
+        case "code_conflict":
+          throw new AppException(
+            ErrorCodes.CONFLICT,
+            "Allocated abstract code collides with an existing one (themes sharing a sort order?) — fix theme sort orders and retry",
+            409,
+          );
       }
     }
     // Response reflects post-commit state via a fresh read (matches legacy).

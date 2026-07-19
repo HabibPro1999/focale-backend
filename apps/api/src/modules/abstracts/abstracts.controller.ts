@@ -302,7 +302,7 @@ export class AbstractsController {
       eventId,
       userId,
       body.password,
-      user.id,
+      user,
     );
     return { ok: true };
   }

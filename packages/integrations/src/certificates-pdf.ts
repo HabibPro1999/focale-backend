@@ -12,6 +12,7 @@ import { readFile } from "node:fs/promises";
 import type { CertificateZone } from "@app/contracts";
 import {
   getRegistrationForCertificateGeneration,
+  getAbstractForCertificateGeneration,
   getActiveImageReadyCertificateTemplatesByIds,
 } from "@app/db";
 import { getStorageProvider } from "./storage/index";
@@ -54,6 +55,24 @@ export interface RegistrationForCertificate {
   };
 }
 
+/** Abstract-shaped input to generateAbstractCertificateAttachments (H2) —
+ * presenter certs have no role/check-in concept, so this is intentionally
+ * narrower than RegistrationForCertificate. */
+export interface AbstractForCertificate {
+  id: string;
+  authorFirstName: string;
+  authorLastName: string;
+  finalType: string | null;
+  requestedType: string;
+  code: string | null;
+  content: unknown;
+  event: {
+    name: string;
+    startDate: Date;
+    location: string | null;
+  };
+}
+
 // =============================================================================
 // VARIABLE RESOLUTION
 // =============================================================================
@@ -66,17 +85,37 @@ function formatDate(date: Date): string {
   });
 }
 
+/** Mirrors the local `getTitle`/`getAbstractTitle` helper duplicated across the
+ * abstracts + certificates API modules — title lives in the free-form `content`
+ * jsonb, not a dedicated column. */
+function getAbstractTitle(content: unknown): string {
+  if (content && typeof content === "object" && !Array.isArray(content)) {
+    const title = (content as { title?: unknown }).title;
+    if (typeof title === "string" && title.trim()) return title.trim();
+  }
+  return "Untitled abstract";
+}
+
+/** Superset of the variables either a registration cert or an abstract
+ * (presenter) cert zone can reference. Shared by both generation paths so
+ * resolveCertificateVariable / generateCertificatePdf never fork per-subject. */
+export interface CertificateVariableData {
+  firstName?: string | null;
+  lastName?: string | null;
+  role?: string;
+  eventName?: string;
+  eventDate?: string;
+  eventLocation?: string | null;
+  accessName?: string;
+  // H2: abstract (presenter) certs only.
+  abstractTitle?: string;
+  abstractCode?: string | null;
+  abstractFinalType?: string;
+}
+
 export function resolveCertificateVariable(
   variableId: string,
-  data: {
-    firstName?: string | null;
-    lastName?: string | null;
-    role?: string;
-    eventName?: string;
-    eventDate?: string;
-    eventLocation?: string | null;
-    accessName?: string;
-  },
+  data: CertificateVariableData,
 ): string {
   switch (variableId) {
     case "fullName":
@@ -95,6 +134,12 @@ export function resolveCertificateVariable(
       return data.eventLocation || "—";
     case "accessName":
       return data.accessName || "—";
+    case "abstractTitle":
+      return data.abstractTitle || "—";
+    case "abstractCode":
+      return data.abstractCode || "—";
+    case "abstractFinalType":
+      return data.abstractFinalType || "—";
     case "issuanceDate":
       return formatDate(new Date());
     default:
@@ -480,27 +525,26 @@ export function isEligibleForCertificate(
 }
 
 // =============================================================================
-// GENERATE ALL CERTIFICATE ATTACHMENTS FOR ONE REGISTRANT
+// GENERATE ALL CERTIFICATE ATTACHMENTS FOR ONE SUBJECT (registrant or abstract)
+//
+// Shared core: resolves per-template variables (accessName varies per
+// template) then renders via generateCertificatePdf. Eligibility filtering is
+// the caller's job — it differs per subject (role/check-in for registrations,
+// none for abstracts) — this just renders whatever templates it's handed.
 // =============================================================================
 
-export async function generateCertificateAttachments(
-  registration: RegistrationForCertificate,
+async function renderCertificateAttachments(
   templates: CertificateTemplateData[],
+  baseVariableData: CertificateVariableData,
+  filenameId: string,
   imageCache: ImageCache,
+  logContext: Record<string, unknown>,
 ): Promise<EmailAttachment[]> {
   const attachments: EmailAttachment[] = [];
 
   for (const template of templates) {
-    if (!isEligibleForCertificate(registration, template)) continue;
-
-    // Resolve variables for this certificate
-    const variableData = {
-      firstName: registration.firstName,
-      lastName: registration.lastName,
-      role: registration.role,
-      eventName: registration.event.name,
-      eventDate: formatDate(registration.event.startDate),
-      eventLocation: registration.event.location,
+    const variableData: CertificateVariableData = {
+      ...baseVariableData,
       accessName: template.access?.name,
     };
 
@@ -521,7 +565,7 @@ export async function generateCertificateAttachments(
 
       const safeTemplateName = safeFilenameSegment(template.name, "certificate");
       const templateShortId = template.id.slice(0, 8);
-      const shortId = registration.id.slice(0, 8);
+      const shortId = filenameId.slice(0, 8);
 
       attachments.push({
         content: pdfBuffer.toString("base64"),
@@ -533,7 +577,7 @@ export async function generateCertificateAttachments(
       logger.error(
         {
           templateId: template.id,
-          registrationId: registration.id,
+          ...logContext,
           error: (error as Error).message,
         },
         "Failed to generate certificate PDF",
@@ -545,54 +589,175 @@ export async function generateCertificateAttachments(
   return attachments;
 }
 
+export async function generateCertificateAttachments(
+  registration: RegistrationForCertificate,
+  templates: CertificateTemplateData[],
+  imageCache: ImageCache,
+): Promise<EmailAttachment[]> {
+  const eligible = templates.filter((t) =>
+    isEligibleForCertificate(registration, t),
+  );
+
+  const variableData: CertificateVariableData = {
+    firstName: registration.firstName,
+    lastName: registration.lastName,
+    role: registration.role,
+    eventName: registration.event.name,
+    eventDate: formatDate(registration.event.startDate),
+    eventLocation: registration.event.location,
+  };
+
+  return renderCertificateAttachments(
+    eligible,
+    variableData,
+    registration.id,
+    imageCache,
+    { registrationId: registration.id },
+  );
+}
+
+/**
+ * Abstract presenter certificates (H2). No isEligibleForCertificate filter:
+ * abstracts have no role/check-in state, so every template handed in applies
+ * — mirrors apps/api CertificatesService.processAbstractCertificates, which
+ * targets all active/image-ready templates for the event without the
+ * role/check-in gate used for registrants.
+ */
+export async function generateAbstractCertificateAttachments(
+  abstract: AbstractForCertificate,
+  templates: CertificateTemplateData[],
+  imageCache: ImageCache,
+): Promise<EmailAttachment[]> {
+  const variableData: CertificateVariableData = {
+    firstName: abstract.authorFirstName,
+    lastName: abstract.authorLastName,
+    eventName: abstract.event.name,
+    eventDate: formatDate(abstract.event.startDate),
+    eventLocation: abstract.event.location,
+    abstractTitle: getAbstractTitle(abstract.content),
+    abstractCode: abstract.code,
+    abstractFinalType: abstract.finalType ?? abstract.requestedType,
+  };
+
+  return renderCertificateAttachments(
+    templates,
+    variableData,
+    abstract.id,
+    imageCache,
+    { abstractId: abstract.id },
+  );
+}
+
 // =============================================================================
 // WORKER SEAM — the CertificateAttachmentGenerator injected into
-// processEmailQueue (email/queue.ts). Re-fetches the registration + re-validates
-// that the queued templates are still active/image-ready at SEND time (§5), then
-// renders. The "no attachments"/"fewer than queued" handling lives in the queue
-// loop; this only produces the attachments (throwing when templates vanished).
-// The worker bootstrap wires this: processEmailQueue(batch, {
+// processEmailQueue (email/queue.ts). Re-fetches the registration/abstract +
+// re-validates that the queued templates are still active/image-ready at SEND
+// time (§5), then renders. The "no attachments"/"fewer than queued" handling
+// lives in the queue loop; this only produces the attachments (throwing when
+// the subject or its templates vanished). Wired in
+// apps/worker/src/jobs/email-queue.job.ts: processEmailQueue(batch, {
 //   generateCertificateAttachments: generateCertificateEmailAttachments }).
 // =============================================================================
 
+function toCertificateTemplateData(
+  templates: Awaited<
+    ReturnType<typeof getActiveImageReadyCertificateTemplatesByIds>
+  >,
+): CertificateTemplateData[] {
+  return templates.map((t) => ({
+    id: t.id,
+    name: t.name,
+    templateUrl: t.templateUrl,
+    templateWidth: t.templateWidth,
+    templateHeight: t.templateHeight,
+    zones: (t.zones as CertificateZone[]) ?? [],
+    applicableRoles: (t.applicableRoles as string[] | null) ?? [],
+    accessId: t.accessId,
+    access: t.access ? { id: t.access.id, name: t.access.name } : null,
+  }));
+}
+
+async function generateRegistrationCertificateEmailAttachments(
+  registrationId: string,
+  certificateTemplateIds: string[],
+  imageCache: ImageCache,
+): Promise<EmailAttachment[]> {
+  const registration = await getRegistrationForCertificateGeneration(
+    registrationId,
+  );
+  if (!registration) {
+    throw new Error(
+      "Registration not found while generating certificate attachments",
+    );
+  }
+
+  const templates = await getActiveImageReadyCertificateTemplatesByIds(
+    certificateTemplateIds,
+    registration.event.id,
+  );
+  if (templates.length < certificateTemplateIds.length) {
+    throw new Error(
+      "Queued certificate templates are no longer active for this registration event",
+    );
+  }
+
+  return generateCertificateAttachments(
+    registration,
+    toCertificateTemplateData(templates),
+    imageCache,
+  );
+}
+
+/** H2: abstract-shaped counterpart — re-fetches the abstract instead of a
+ * registration, re-validates templates against the abstract's event. */
+async function generateAbstractCertificateEmailAttachments(
+  abstractId: string,
+  certificateTemplateIds: string[],
+  imageCache: ImageCache,
+): Promise<EmailAttachment[]> {
+  const abstract = await getAbstractForCertificateGeneration(abstractId);
+  if (!abstract) {
+    throw new Error(
+      "Abstract not found while generating certificate attachments",
+    );
+  }
+
+  const templates = await getActiveImageReadyCertificateTemplatesByIds(
+    certificateTemplateIds,
+    abstract.event.id,
+  );
+  if (templates.length < certificateTemplateIds.length) {
+    throw new Error(
+      "Queued certificate templates are no longer active for this abstract's event",
+    );
+  }
+
+  return generateAbstractCertificateAttachments(
+    abstract,
+    toCertificateTemplateData(templates),
+    imageCache,
+  );
+}
+
 export const generateCertificateEmailAttachments: CertificateAttachmentGenerator =
   async (ctx: CertificateAttachmentContext): Promise<EmailAttachment[]> => {
-    const registration = await getRegistrationForCertificateGeneration(
+    const imageCache = ctx.imageCache as ImageCache;
+
+    if (ctx.abstractId) {
+      return generateAbstractCertificateEmailAttachments(
+        ctx.abstractId,
+        ctx.certificateTemplateIds,
+        imageCache,
+      );
+    }
+    if (!ctx.registrationId) {
+      throw new Error(
+        "Certificate attachment context has neither registrationId nor abstractId",
+      );
+    }
+    return generateRegistrationCertificateEmailAttachments(
       ctx.registrationId,
-    );
-    if (!registration) {
-      throw new Error(
-        "Registration not found while generating certificate attachments",
-      );
-    }
-
-    const expectedCount = ctx.certificateTemplateIds.length;
-    const templates = await getActiveImageReadyCertificateTemplatesByIds(
       ctx.certificateTemplateIds,
-      registration.event.id,
-    );
-
-    if (templates.length < expectedCount) {
-      throw new Error(
-        "Queued certificate templates are no longer active for this registration event",
-      );
-    }
-
-    const templateData: CertificateTemplateData[] = templates.map((t) => ({
-      id: t.id,
-      name: t.name,
-      templateUrl: t.templateUrl,
-      templateWidth: t.templateWidth,
-      templateHeight: t.templateHeight,
-      zones: (t.zones as CertificateZone[]) ?? [],
-      applicableRoles: (t.applicableRoles as string[] | null) ?? [],
-      accessId: t.accessId,
-      access: t.access ? { id: t.access.id, name: t.access.name } : null,
-    }));
-
-    return generateCertificateAttachments(
-      registration,
-      templateData,
-      ctx.imageCache as ImageCache,
+      imageCache,
     );
   };

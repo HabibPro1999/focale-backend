@@ -17,7 +17,8 @@ vi.mock("@app/db", () => ({
   setReviewerThemesTxn: vi.fn(),
   findCommitteeInviteTarget: vi.fn(),
   findAbstractBasic: vi.fn(),
-  getCommitteeConfig: vi.fn(),
+  findAbstractThemeIds: vi.fn(),
+  getReviewerAssignmentConfig: vi.fn(),
   findScoredReviewScores: vi.fn(),
   findActiveMembershipUserIds: vi.fn(),
   assignReviewersTxn: vi.fn(),
@@ -28,6 +29,8 @@ vi.mock("@app/db", () => ({
   insertAuditLog: vi.fn(),
   getUserByEmail: vi.fn(),
   getUserById: vi.fn(),
+  findCommitteeUserClientIds: vi.fn(),
+  findAbstractEmailTemplate: vi.fn(),
 }));
 
 const sendEmailMock = vi.fn();
@@ -37,6 +40,8 @@ vi.mock("@app/integrations", () => ({
   revokeFirebaseRefreshTokens: vi.fn(),
   getEmailProvider: () => ({ sendEmail: sendEmailMock }),
   compileMjmlToHtml: () => ({ html: "<html></html>" }),
+  resolveVariables: (template: string, vars: Record<string, string>) =>
+    template.replace(/\{\{(\w+)\}\}/g, (_m, key) => vars[key] ?? ""),
 }));
 
 const assertClientModuleEnabledMock = vi.fn();
@@ -62,7 +67,8 @@ import {
   setReviewerThemesTxn,
   findCommitteeInviteTarget,
   findAbstractBasic,
-  getCommitteeConfig,
+  findAbstractThemeIds,
+  getReviewerAssignmentConfig,
   findScoredReviewScores,
   findActiveMembershipUserIds,
   assignReviewersTxn,
@@ -73,6 +79,8 @@ import {
   insertAuditLog,
   getUserByEmail,
   getUserById,
+  findCommitteeUserClientIds,
+  findAbstractEmailTemplate,
 } from "@app/db";
 import {
   generatePasswordResetLink,
@@ -88,6 +96,16 @@ const eventId = "11111111-1111-1111-1111-111111111111";
 const abstractId = "22222222-2222-2222-2222-222222222222";
 const reviewerId = "reviewer-1";
 const performedBy = "admin-1";
+const clientAdminCaller = {
+  id: performedBy,
+  role: UserRole.CLIENT_ADMIN,
+  clientId: "client-1",
+};
+const superAdminCaller = {
+  id: performedBy,
+  role: UserRole.SUPER_ADMIN,
+  clientId: null,
+};
 
 const usersMock = { createUser: vi.fn() };
 const config = { urls: { adminAppUrl: "https://admin.example" } };
@@ -283,6 +301,68 @@ describe("addCommitteeMember", () => {
     expect(result).not.toHaveProperty("existingUserAdded");
   });
 
+  // M7: ABSTRACT_COMMITTEE_INVITE was a configurable trigger nobody ever
+  // consulted — the invite must render + send a configured template when one
+  // exists, and fall back to the hardcoded MJML only when it doesn't.
+  it("M7: renders and sends a configured ABSTRACT_COMMITTEE_INVITE template instead of the hardcoded fallback", async () => {
+    const user = committeeUser();
+    mock(getUserByEmail).mockResolvedValue(user);
+    mock(findEventName).mockResolvedValue("Big Event");
+    mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" });
+    mock(generatePasswordResetLink).mockResolvedValue("https://reset/link");
+    mock(findAbstractEmailTemplate).mockResolvedValue({
+      id: "tmpl-1",
+      subject: "Bienvenue {{reviewerName}} - {{eventName}}",
+      htmlContent: "<p>Bonjour {{reviewerName}}, connectez-vous : {{loginLink}}</p>",
+    });
+    sendEmailMock.mockResolvedValue({ success: true });
+    mock(listCommitteeMembers).mockResolvedValue([memberDto(user)]);
+
+    const result = await service.addCommitteeMember(
+      eventId,
+      { email: user.email, name: "Ignored" },
+      performedBy,
+    );
+
+    expect(result.inviteEmailSent).toBe(true);
+    expect(findAbstractEmailTemplate).toHaveBeenCalledWith({
+      clientId: "client-1",
+      eventId,
+      abstractTrigger: "ABSTRACT_COMMITTEE_INVITE",
+    });
+    expect(sendEmailMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: user.email,
+        subject: `Bienvenue ${user.name} - Big Event`,
+        html: expect.stringContaining("https://reset/link"),
+      }),
+    );
+  });
+
+  it("M7: falls back to the hardcoded MJML when no template is configured", async () => {
+    const user = committeeUser();
+    mock(getUserByEmail).mockResolvedValue(user);
+    mock(findEventName).mockResolvedValue("Big Event");
+    mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" });
+    mock(generatePasswordResetLink).mockResolvedValue("https://reset/link");
+    mock(findAbstractEmailTemplate).mockResolvedValue(null);
+    sendEmailMock.mockResolvedValue({ success: true });
+    mock(listCommitteeMembers).mockResolvedValue([memberDto(user)]);
+
+    const result = await service.addCommitteeMember(
+      eventId,
+      { email: user.email, name: "Ignored" },
+      performedBy,
+    );
+
+    expect(result.inviteEmailSent).toBe(true);
+    expect(sendEmailMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subject: "Invitation au comité scientifique - Big Event",
+      }),
+    );
+  });
+
   it("reports inviteEmailSent=false when the invite throws, without rolling back membership", async () => {
     const user = committeeUser();
     mock(getUserByEmail).mockResolvedValue(user);
@@ -414,9 +494,10 @@ describe("assignReviewers", () => {
       eventId,
       status: "SUBMITTED",
     });
-    mock(getCommitteeConfig).mockResolvedValue({
+    mock(getReviewerAssignmentConfig).mockResolvedValue({
       reviewersPerAbstract: 2,
       divergenceThreshold: 6,
+      distributeByTheme: false,
     });
   });
 
@@ -495,6 +576,89 @@ describe("assignReviewers", () => {
       service.assignReviewers(eventId, abstractId, { reviewerIds: [] }, performedBy),
       404,
     );
+  });
+
+  // L3: distributeByTheme wires up an until-now-dead config flag.
+  describe("distributeByTheme", () => {
+    it("permits zero-theme-overlap reviewers when distributeByTheme is off (default)", async () => {
+      mock(getReviewerAssignmentConfig).mockResolvedValue({
+        reviewersPerAbstract: 2,
+        divergenceThreshold: 6,
+        distributeByTheme: false,
+      });
+      mock(findActiveMembershipUserIds).mockResolvedValue(["r1", "r2"]);
+      mock(assignReviewersTxn).mockResolvedValue({
+        id: abstractId,
+        status: "UNDER_REVIEW",
+      });
+
+      await service.assignReviewers(
+        eventId,
+        abstractId,
+        { reviewerIds: ["r1", "r2"] },
+        performedBy,
+      );
+
+      expect(assignReviewersTxn).toHaveBeenCalled();
+      expect(findAbstractThemeIds).not.toHaveBeenCalled();
+    });
+
+    it("422s naming reviewers with zero theme overlap when distributeByTheme is on", async () => {
+      mock(getReviewerAssignmentConfig).mockResolvedValue({
+        reviewersPerAbstract: 2,
+        divergenceThreshold: 6,
+        distributeByTheme: true,
+      });
+      mock(findActiveMembershipUserIds).mockResolvedValue(["r1", "r2"]);
+      mock(findAbstractThemeIds).mockResolvedValue(["theme-1"]);
+      mock(listActiveReviewerThemeIds).mockImplementation(
+        async (_eventId: string, reviewerId: string) =>
+          reviewerId === "r1" ? ["theme-1"] : ["theme-2"],
+      );
+
+      const err = await service
+        .assignReviewers(
+          eventId,
+          abstractId,
+          { reviewerIds: ["r1", "r2"] },
+          performedBy,
+        )
+        .catch((e) => e);
+
+      expect((err as AppException).getStatus()).toBe(422);
+      expect((err as AppException).getResponse()).toMatchObject({
+        details: { reviewerIds: ["r2"] },
+      });
+      expect(assignReviewersTxn).not.toHaveBeenCalled();
+    });
+
+    it("succeeds when every reviewer shares a theme with the abstract", async () => {
+      mock(getReviewerAssignmentConfig).mockResolvedValue({
+        reviewersPerAbstract: 2,
+        divergenceThreshold: 6,
+        distributeByTheme: true,
+      });
+      mock(findActiveMembershipUserIds).mockResolvedValue(["r1", "r2"]);
+      mock(findAbstractThemeIds).mockResolvedValue(["theme-1"]);
+      mock(listActiveReviewerThemeIds).mockResolvedValue(["theme-1"]);
+      mock(assignReviewersTxn).mockResolvedValue({
+        id: abstractId,
+        status: "UNDER_REVIEW",
+      });
+
+      const result = await service.assignReviewers(
+        eventId,
+        abstractId,
+        { reviewerIds: ["r1", "r2"] },
+        performedBy,
+      );
+
+      expect(result).toEqual({
+        abstractId,
+        status: "UNDER_REVIEW",
+        reviewerIds: ["r1", "r2"],
+      });
+    });
   });
 });
 
@@ -651,7 +815,10 @@ describe("reviewAssignedAbstract", () => {
     expect(reviewAbstractTxn).not.toHaveBeenCalled();
   });
 
-  it("400s when comments are disabled but a comment is supplied", async () => {
+  // H10: a comment during a comments-disabled window must no longer reject
+  // the whole submission — the score still saves; the txn (not this service)
+  // drops the comment.
+  it("saves the score (and forwards the comment to the txn to drop) when comments are disabled", async () => {
     grantActiveMembership();
     mock(findAbstractForReview).mockResolvedValue(
       forReview({
@@ -663,14 +830,67 @@ describe("reviewAssignedAbstract", () => {
         },
       }),
     );
-    mock(listActiveReviewerThemeIds).mockResolvedValue([]);
-    await expectStatus(
-      service.reviewAssignedAbstract(abstractId, reviewerId, {
-        score: 9,
-        comment: "nope",
-      }),
-      400,
+    mock(reviewAbstractTxn).mockResolvedValue({
+      id: abstractId,
+      status: "REVIEW_COMPLETE",
+      averageScore: 9,
+      reviewCount: 1,
+    });
+
+    const result = await service.reviewAssignedAbstract(abstractId, reviewerId, {
+      score: 9,
+      comment: "should be dropped by the txn, not rejected here",
+    });
+
+    expect(result).toMatchObject({ status: "REVIEW_COMPLETE" });
+    expect(reviewAbstractTxn).toHaveBeenCalledWith(
+      expect.objectContaining({ score: 9, commentsEnabled: false }),
     );
+  });
+
+  // H4: scoring requires an ACTIVE explicit review row — theme coverage may
+  // grant read access (see "reviewer reads" above) but must never grant
+  // scoring, and a deactivated (removed) reviewer cannot self-reinstate.
+  it("403s a theme-matching reviewer with no explicit assignment (no txn)", async () => {
+    grantActiveMembership();
+    mock(findAbstractForReview).mockResolvedValue(forReview({ reviews: [] }));
+    await expectStatus(
+      service.reviewAssignedAbstract(abstractId, reviewerId, { score: 9 }),
+      403,
+    );
+    expect(reviewAbstractTxn).not.toHaveBeenCalled();
+  });
+
+  it("403s a removed (deactivated) reviewer — no self-reinstatement (no txn)", async () => {
+    grantActiveMembership();
+    mock(findAbstractForReview).mockResolvedValue(
+      forReview({ reviews: [{ reviewerId, active: false }] }),
+    );
+    await expectStatus(
+      service.reviewAssignedAbstract(abstractId, reviewerId, { score: 9 }),
+      403,
+    );
+    expect(reviewAbstractTxn).not.toHaveBeenCalled();
+  });
+
+  it("succeeds for an actively assigned reviewer", async () => {
+    grantActiveMembership();
+    mock(findAbstractForReview).mockResolvedValue(
+      forReview({ reviews: [{ reviewerId, active: true }] }),
+    );
+    mock(reviewAbstractTxn).mockResolvedValue({
+      id: abstractId,
+      status: "REVIEW_COMPLETE",
+      averageScore: 9,
+      reviewCount: 1,
+    });
+
+    const result = await service.reviewAssignedAbstract(abstractId, reviewerId, {
+      score: 9,
+    });
+
+    expect(result).toMatchObject({ status: "REVIEW_COMPLETE" });
+    expect(reviewAbstractTxn).toHaveBeenCalled();
   });
 });
 
@@ -760,7 +980,12 @@ describe("setCommitteeMemberPassword", () => {
   it("404s when the committee member does not exist", async () => {
     mock(findAbstractMembership).mockResolvedValue(null);
     await expectStatus(
-      service.setCommitteeMemberPassword(eventId, reviewerId, newPassword, performedBy),
+      service.setCommitteeMemberPassword(
+        eventId,
+        reviewerId,
+        newPassword,
+        clientAdminCaller,
+      ),
       404,
     );
     expect(updateFirebaseUserPassword).not.toHaveBeenCalled();
@@ -768,12 +993,13 @@ describe("setCommitteeMemberPassword", () => {
 
   it("sets the password, revokes tokens, and audit-logs without leaking the password", async () => {
     mock(findAbstractMembership).mockResolvedValue({ active: true });
+    mock(findCommitteeUserClientIds).mockResolvedValue(["client-1"]);
 
     const result = await service.setCommitteeMemberPassword(
       eventId,
       reviewerId,
       newPassword,
-      performedBy,
+      clientAdminCaller,
     );
 
     expect(result).toEqual({ ok: true });
@@ -785,5 +1011,55 @@ describe("setCommitteeMemberPassword", () => {
       changes: { method: { old: null, new: "direct" } },
     });
     expect(JSON.stringify(auditArg ?? {})).not.toContain(newPassword);
+  });
+
+  // C2: committee accounts are deliberately cross-tenant — forbid resetting a
+  // shared reviewer's password unless the caller's own access already covers
+  // every client that reviewer holds an active membership under.
+  it("403s a client admin when the target also reviews for a different client", async () => {
+    mock(findAbstractMembership).mockResolvedValue({ active: true });
+    mock(findCommitteeUserClientIds).mockResolvedValue(["client-1", "client-2"]);
+
+    await expectStatus(
+      service.setCommitteeMemberPassword(
+        eventId,
+        reviewerId,
+        newPassword,
+        clientAdminCaller,
+      ),
+      403,
+    );
+    expect(updateFirebaseUserPassword).not.toHaveBeenCalled();
+    expect(revokeFirebaseRefreshTokens).not.toHaveBeenCalled();
+  });
+
+  it("allows a client admin when the target's memberships are all within their own client (single-tenant)", async () => {
+    mock(findAbstractMembership).mockResolvedValue({ active: true });
+    mock(findCommitteeUserClientIds).mockResolvedValue(["client-1"]);
+
+    const result = await service.setCommitteeMemberPassword(
+      eventId,
+      reviewerId,
+      newPassword,
+      clientAdminCaller,
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(updateFirebaseUserPassword).toHaveBeenCalledWith(reviewerId, newPassword);
+  });
+
+  it("allows a super-admin caller even when the target spans multiple clients", async () => {
+    mock(findAbstractMembership).mockResolvedValue({ active: true });
+    mock(findCommitteeUserClientIds).mockResolvedValue(["client-1", "client-2"]);
+
+    const result = await service.setCommitteeMemberPassword(
+      eventId,
+      reviewerId,
+      newPassword,
+      superAdminCaller,
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(updateFirebaseUserPassword).toHaveBeenCalledWith(reviewerId, newPassword);
   });
 });

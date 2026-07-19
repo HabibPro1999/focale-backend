@@ -129,15 +129,26 @@ async function main() {
 
     if (!apply) continue;
 
+    // H6: dedupeKey derived from the original (SKIPPED) email_logs id, so
+    // running --apply twice on the same candidate enqueues only one outbox
+    // event — the outbox's own dedupe_key index rejects the second attempt —
+    // and that event's id then becomes the email_logs-level idempotency key
+    // (queueAbstractEmail), so a crash-redelivery of it can't double-send
+    // either. A different historical row (different original id) still gets
+    // its own event and still sends.
     await withTxn((tx) =>
-      enqueueAbstractEmailOutboxEvent(tx, {
-        trigger: candidate.abstractTrigger,
-        abstractId: candidate.abstractId,
-        recipientOverride: {
-          email: candidate.recipientEmail,
-          name: candidate.recipientName ?? undefined,
+      enqueueAbstractEmailOutboxEvent(
+        tx,
+        {
+          trigger: candidate.abstractTrigger,
+          abstractId: candidate.abstractId,
+          recipientOverride: {
+            email: candidate.recipientEmail,
+            name: candidate.recipientName ?? undefined,
+          },
         },
-      }),
+        `requeue-skipped-abstract-email:${candidate.id}`,
+      ),
     );
   }
 

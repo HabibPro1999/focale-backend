@@ -22,7 +22,8 @@ import {
   setReviewerThemesTxn,
   findCommitteeInviteTarget,
   findAbstractBasic,
-  getCommitteeConfig,
+  findAbstractThemeIds,
+  getReviewerAssignmentConfig,
   findScoredReviewScores,
   findActiveMembershipUserIds,
   assignReviewersTxn,
@@ -33,8 +34,11 @@ import {
   insertAuditLog,
   getUserByEmail,
   getUserById,
+  findCommitteeUserClientIds,
+  findAbstractEmailTemplate,
   type ReviewerAbstractRow,
   type AbstractReviewRow,
+  type EmailTemplateRow,
 } from "@app/db";
 import {
   generatePasswordResetLink,
@@ -42,6 +46,7 @@ import {
   revokeFirebaseRefreshTokens,
   getEmailProvider,
   compileMjmlToHtml,
+  resolveVariables,
 } from "@app/integrations";
 import { escapeHtml } from "@app/shared";
 import { assertClientModuleEnabled } from "../clients/module-gates";
@@ -49,6 +54,7 @@ import { UsersService } from "../identity/users.service";
 import { CONFIG, type Config } from "../../core/config";
 import { logger } from "../../core/logger.service";
 import { AppException } from "../../core/app-exception";
+import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
 
 type UserRow = NonNullable<Awaited<ReturnType<typeof getUserById>>>;
 
@@ -291,6 +297,27 @@ export class AbstractsCommitteeService {
         email,
         this.buildPasswordResetActionCodeSettings(),
       );
+
+      // M7: ABSTRACT_COMMITTEE_INVITE was a configurable trigger nobody ever
+      // consulted — consult it before falling back to the hardcoded French
+      // MJML below. Event-specific → client-wide cascade, same as every
+      // other abstract email trigger.
+      const event = await findEventClientId(ctx.eventId);
+      const template = event
+        ? await findAbstractEmailTemplate({
+            clientId: event.clientId,
+            eventId: ctx.eventId,
+            abstractTrigger: "ABSTRACT_COMMITTEE_INVITE",
+          })
+        : null;
+      if (template) {
+        return await this.sendTemplatedCommitteeEmail(template, email, name, {
+          reviewerName: name,
+          eventName,
+          loginLink: link,
+        });
+      }
+
       return await this.sendCommitteeMjmlEmail({
         to: email,
         toName: name,
@@ -313,6 +340,44 @@ export class AbstractsCommitteeService {
       );
       return false;
     }
+  }
+
+  /**
+   * M7: render a configured ABSTRACT_COMMITTEE_INVITE template and send it
+   * through the same provider call as the hardcoded fallback. Exposed
+   * variables mirror what the hardcoded MJML used: reviewerName, eventName,
+   * loginLink (the Firebase password-reset/continue link — the invite never
+   * had a plaintext temporary password to expose).
+   *
+   * Sent synchronously (not via queueEmail/the outbox) so addCommitteeMember
+   * can still report inviteEmailSent immediately, matching the fallback
+   * path's contract — queueEmail defers the actual send to the worker and
+   * requires an abstractId, neither of which fits this abstract-less,
+   * synchronous invite flow. Gap: unlike other templated abstract sends,
+   * this does not create an email_logs row (see report).
+   */
+  private async sendTemplatedCommitteeEmail(
+    template: EmailTemplateRow,
+    to: string,
+    toName: string,
+    variables: Record<string, string>,
+  ): Promise<boolean> {
+    const subject = resolveVariables(template.subject, variables);
+    const html = resolveVariables(template.htmlContent ?? "", variables);
+    const result = await getEmailProvider().sendEmail({
+      to,
+      toName,
+      subject,
+      html,
+      categories: ["committee-invite"],
+    });
+    if (!result.success) {
+      logger.error(
+        { email: to, error: result.error },
+        "Failed to send templated committee invite email",
+      );
+    }
+    return result.success;
   }
 
   // ==========================================================================
@@ -398,7 +463,7 @@ export class AbstractsCommitteeService {
       throw new AppException(ErrorCodes.NOT_FOUND, "Abstract not found", 404);
     }
     const reviewerIds = [...new Set(body.reviewerIds)];
-    const config = await getCommitteeConfig(eventId);
+    const config = await getReviewerAssignmentConfig(eventId);
     const requiredReviewers = config?.reviewersPerAbstract ?? 2;
 
     if (reviewerIds.length > 0) {
@@ -431,6 +496,31 @@ export class AbstractsCommitteeService {
           "All reviewers must have active membership",
           400,
         );
+      }
+
+      // L3: distributeByTheme wires up an until-now-dead config flag — when
+      // on, every assigned reviewer must share at least one theme with the
+      // abstract. Off (default) keeps the prior permissive behavior.
+      if (config?.distributeByTheme) {
+        const abstractThemeIds = new Set(await findAbstractThemeIds(abstractId));
+        const offending: string[] = [];
+        for (const reviewerId of reviewerIds) {
+          const reviewerThemeIds = await listActiveReviewerThemeIds(
+            eventId,
+            reviewerId,
+          );
+          if (!reviewerThemeIds.some((id) => abstractThemeIds.has(id))) {
+            offending.push(reviewerId);
+          }
+        }
+        if (offending.length > 0) {
+          throw new AppException(
+            ErrorCodes.VALIDATION_ERROR,
+            `Reviewers have no theme overlap with this abstract: ${offending.join(", ")}`,
+            422,
+            { reviewerIds: offending },
+          );
+        }
       }
     }
 
@@ -501,10 +591,6 @@ export class AbstractsCommitteeService {
       throw new AppException(ErrorCodes.NOT_FOUND, "Abstract not found", 404);
     }
     await this.assertActiveMembership(abstract.eventId, reviewerId);
-    const reviewerThemeIds = await listActiveReviewerThemeIds(
-      abstract.eventId,
-      reviewerId,
-    );
 
     if (FINAL_STATUSES.includes(abstract.status)) {
       throw new AppException(
@@ -530,24 +616,24 @@ export class AbstractsCommitteeService {
         403,
       );
     }
-    if (abstract.config?.commentsEnabled === false && body.comment?.trim()) {
-      throw new AppException(
-        ErrorCodes.VALIDATION_ERROR,
-        "Reviewer comments are disabled for this event",
-        400,
-      );
-    }
+    // H10: comments-disabled no longer rejects the whole submission (score
+    // included) — reviewAbstractTxn already null-coalesces the comment away
+    // when commentsEnabled is false, so the score still saves.
+    //
+    // H4: scoring requires an ACTIVE explicit review row, full stop. Theme
+    // coverage (hasReviewerThemeCoverage) only ever grants read/view access
+    // (see getAssignedAbstractDetail) — it must never grant scoring, or a
+    // removed reviewer (active:false, membership/theme prefs left intact)
+    // could self-reinstate via the upsert in reviewAbstractTxn and defeat the
+    // exactly-N-reviewers / divergence-gated-extras rules.
     const hasExplicit = abstract.reviews.some(
       (r) => r.reviewerId === reviewerId && r.active,
     );
-    if (
-      !hasExplicit &&
-      !hasReviewerThemeCoverage(abstract.themes, reviewerThemeIds)
-    ) {
+    if (!hasExplicit) {
       throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Abstract assignment not found",
-        404,
+        ErrorCodes.FORBIDDEN,
+        "You are not an active assigned reviewer for this abstract",
+        403,
       );
     }
 
@@ -625,9 +711,29 @@ export class AbstractsCommitteeService {
     eventId: string,
     userId: string,
     newPassword: string,
-    performedBy: string,
+    caller: Pick<AuthUser, "id" | "role" | "clientId">,
   ) {
     await this.assertCommitteeMemberExists(eventId, userId);
+
+    // C2: committee accounts are deliberately cross-tenant (a reviewer can
+    // belong to many clients' events — assertCommitteeUserEligible enforces
+    // clientId===null on the account itself), so resetting the account's
+    // password grants the caller a login that also reaches every OTHER
+    // client this user reviews for. Forbid unless the caller's own access
+    // (super-admin, or client-admin whose single client matches) already
+    // covers every client the target holds an active membership under.
+    const targetClientIds = await findCommitteeUserClientIds(userId);
+    const inaccessibleClientIds = targetClientIds.filter(
+      (clientId) => !canAccessClient(caller, clientId),
+    );
+    if (inaccessibleClientIds.length > 0) {
+      throw new AppException(
+        ErrorCodes.FORBIDDEN,
+        "This committee member is shared with other clients your account cannot access",
+        403,
+      );
+    }
+
     await updateFirebaseUserPassword(userId, newPassword);
     await revokeFirebaseRefreshTokens(userId);
     await insertAuditLog({
@@ -636,7 +742,7 @@ export class AbstractsCommitteeService {
       action: "admin_reset_password",
       // The plaintext password never enters the audit log.
       changes: { method: { old: null, new: "direct" } },
-      performedBy,
+      performedBy: caller.id,
     });
     return { ok: true as const };
   }

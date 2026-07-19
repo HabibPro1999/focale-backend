@@ -11,21 +11,26 @@ vi.mock("./storage/index", () => ({
 
 vi.mock("@app/db", () => ({
   getRegistrationForCertificateGeneration: vi.fn(),
+  getAbstractForCertificateGeneration: vi.fn(),
   getActiveImageReadyCertificateTemplatesByIds: vi.fn(),
 }));
 
 import {
   getRegistrationForCertificateGeneration,
+  getAbstractForCertificateGeneration,
   getActiveImageReadyCertificateTemplatesByIds,
 } from "@app/db";
 import {
   __certificatePdfTestHooks,
   generateCertificateEmailAttachments,
   generateCertificateAttachments,
+  generateAbstractCertificateAttachments,
   generateCertificatePdf,
   isEligibleForCertificate,
+  resolveCertificateVariable,
 } from "./certificates-pdf";
 import type {
+  AbstractForCertificate,
   CertificateTemplateData,
   RegistrationForCertificate,
 } from "./certificates-pdf";
@@ -75,6 +80,25 @@ const template = (
   applicableRoles: [],
   accessId: null,
   access: null,
+  ...overrides,
+});
+
+// H2: presenter certificate subject — no role/checkedInAt/accessCheckIns.
+const abstract = (
+  overrides: Partial<AbstractForCertificate> = {},
+): AbstractForCertificate => ({
+  id: "abstract-123456",
+  authorFirstName: "Ada",
+  authorLastName: "Lovelace",
+  finalType: "ORAL_COMMUNICATION",
+  requestedType: "ORAL_COMMUNICATION",
+  code: "ABS-001",
+  content: { title: "On Computing Engines" },
+  event: {
+    name: "Focale OS",
+    startDate: new Date("2026-05-01T00:00:00.000Z"),
+    location: "Tunis",
+  },
   ...overrides,
 });
 
@@ -137,6 +161,76 @@ describe("certificate PDF generation", () => {
     await expect(
       generateCertificateAttachments(registration, [template()], new Map()),
     ).rejects.toThrow("Unsupported image format");
+  });
+});
+
+describe("resolveCertificateVariable (H2 abstract variables)", () => {
+  it("resolves author name + abstract title/code/finalType", () => {
+    const data = {
+      firstName: "Ada",
+      lastName: "Lovelace",
+      abstractTitle: "On Computing Engines",
+      abstractCode: "ABS-001",
+      abstractFinalType: "ORAL_COMMUNICATION",
+    };
+    expect(resolveCertificateVariable("fullName", data)).toBe("Ada Lovelace");
+    expect(resolveCertificateVariable("abstractTitle", data)).toBe(
+      "On Computing Engines",
+    );
+    expect(resolveCertificateVariable("abstractCode", data)).toBe("ABS-001");
+    expect(resolveCertificateVariable("abstractFinalType", data)).toBe(
+      "ORAL_COMMUNICATION",
+    );
+  });
+
+  it("falls back to em dash when abstract fields are absent", () => {
+    expect(resolveCertificateVariable("abstractTitle", {})).toBe("—");
+    expect(resolveCertificateVariable("abstractCode", {})).toBe("—");
+    expect(resolveCertificateVariable("abstractFinalType", {})).toBe("—");
+  });
+});
+
+describe("generateAbstractCertificateAttachments (H2)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDownload.mockResolvedValue({
+      buffer: pngOneByOne,
+      contentType: "image/png",
+    });
+  });
+
+  it("renders presenter certificates from the abstract's own fields", async () => {
+    const attachments = await generateAbstractCertificateAttachments(
+      abstract(),
+      [template({ zones: [zone({ variable: "abstractTitle" })] })],
+      new Map(),
+    );
+
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0].type).toBe("application/pdf");
+  });
+
+  it("does not gate on applicableRoles/accessId (abstracts have no role/check-in state)", async () => {
+    // A registration with role PARTICIPANT would fail isEligibleForCertificate
+    // against a SPEAKER-only, access-gated template — the abstract path has no
+    // such filter, so this must still render.
+    const attachments = await generateAbstractCertificateAttachments(
+      abstract(),
+      [template({ applicableRoles: ["SPEAKER"], accessId: "acc-1" })],
+      new Map(),
+    );
+
+    expect(attachments).toHaveLength(1);
+  });
+
+  it("uses the abstract's own title/code/finalType untitled fallback when content has no title", async () => {
+    const attachments = await generateAbstractCertificateAttachments(
+      abstract({ content: {}, code: null, finalType: null }),
+      [template({ zones: [zone({ variable: "abstractTitle" })] })],
+      new Map(),
+    );
+
+    expect(attachments).toHaveLength(1);
   });
 });
 
@@ -240,5 +334,110 @@ describe("generateCertificateEmailAttachments (worker seam)", () => {
 
     expect(attachments).toHaveLength(1);
     expect(attachments[0].type).toBe("application/pdf");
+  });
+
+  it("throws when the registration no longer exists", async () => {
+    vi.mocked(getRegistrationForCertificateGeneration).mockResolvedValue(null);
+
+    await expect(
+      generateCertificateEmailAttachments({
+        registrationId: "gone",
+        certificateTemplateIds: ["template-123456"],
+        imageCache: new Map(),
+      }),
+    ).rejects.toThrow("Registration not found");
+  });
+
+  it("throws when neither registrationId nor abstractId is set on the context", async () => {
+    await expect(
+      generateCertificateEmailAttachments({
+        certificateTemplateIds: ["template-123456"],
+        imageCache: new Map(),
+      }),
+    ).rejects.toThrow(
+      "Certificate attachment context has neither registrationId nor abstractId",
+    );
+  });
+
+  // H2: abstract-linked CERTIFICATE_SENT rows carry abstractId instead of
+  // registrationId — the generator must branch to the abstract path and never
+  // touch getRegistrationForCertificateGeneration.
+  describe("abstract path (H2)", () => {
+    it("renders attachments via the abstract path when abstractId is set", async () => {
+      vi.mocked(getAbstractForCertificateGeneration).mockResolvedValue({
+        id: "abstract-123456",
+        authorFirstName: "Ada",
+        authorLastName: "Lovelace",
+        finalType: "ORAL_COMMUNICATION",
+        requestedType: "ORAL_COMMUNICATION",
+        code: "ABS-001",
+        content: { title: "On Computing Engines" },
+        event: {
+          id: "evt-1",
+          name: "Focale OS",
+          startDate: new Date(),
+          location: "Tunis",
+        },
+      });
+      vi.mocked(getActiveImageReadyCertificateTemplatesByIds).mockResolvedValue([
+        { ...template(), zones: [] } as never,
+      ]);
+
+      const attachments = await generateCertificateEmailAttachments({
+        abstractId: "abstract-123456",
+        certificateTemplateIds: ["template-123456"],
+        imageCache: new Map(),
+      });
+
+      expect(attachments).toHaveLength(1);
+      expect(attachments[0].type).toBe("application/pdf");
+      expect(getRegistrationForCertificateGeneration).not.toHaveBeenCalled();
+      expect(getActiveImageReadyCertificateTemplatesByIds).toHaveBeenCalledWith(
+        ["template-123456"],
+        "evt-1",
+      );
+    });
+
+    it("throws when the abstract no longer exists (deleted/never existed)", async () => {
+      vi.mocked(getAbstractForCertificateGeneration).mockResolvedValue(null);
+
+      await expect(
+        generateCertificateEmailAttachments({
+          abstractId: "gone",
+          certificateTemplateIds: ["template-123456"],
+          imageCache: new Map(),
+        }),
+      ).rejects.toThrow("Abstract not found");
+    });
+
+    it("throws when a queued template is no longer active for the abstract's event", async () => {
+      vi.mocked(getAbstractForCertificateGeneration).mockResolvedValue({
+        id: "abstract-123456",
+        authorFirstName: "Ada",
+        authorLastName: "Lovelace",
+        finalType: "ORAL_COMMUNICATION",
+        requestedType: "ORAL_COMMUNICATION",
+        code: "ABS-001",
+        content: { title: "On Computing Engines" },
+        event: {
+          id: "evt-1",
+          name: "Focale OS",
+          startDate: new Date(),
+          location: "Tunis",
+        },
+      });
+      // Two templates queued, only one still active → mismatch → throw.
+      vi.mocked(getActiveImageReadyCertificateTemplatesByIds).mockResolvedValue([
+        { ...template(), zones: [] } as never,
+      ]);
+
+      await expect(
+        generateCertificateEmailAttachments({
+          abstractId: "abstract-123456",
+          certificateTemplateIds: ["template-123456", "template-999999"],
+          imageCache: new Map(),
+        }),
+      ).rejects.toThrow("no longer active");
+    });
   });
 });

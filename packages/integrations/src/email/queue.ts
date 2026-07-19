@@ -13,8 +13,8 @@
 // ownership, not conflict retry.
 // =============================================================================
 
-import { createLogger, makeWorkerId } from "@app/shared";
-import type { AutomaticEmailTrigger, EmailStatus } from "@app/contracts";
+import { createLogger, makeWorkerId, escapeHtml } from "@app/shared";
+import type { AppEvent, AutomaticEmailTrigger, EmailStatus } from "@app/contracts";
 import {
   getTemplateByTrigger,
   createEmailLog,
@@ -30,6 +30,9 @@ import {
   markEmailSkipped,
   readEmailLogStatus,
   updateEmailLogStatusGuarded,
+  getEmailLogRealtimeTarget,
+  enqueueRealtimeOutboxEvent,
+  getDb,
   EMAIL_LEASE_MS,
   type ClaimedEmailLog,
   type EmailLogRow,
@@ -48,13 +51,15 @@ const DEFAULT_WORKER_ID = makeWorkerId("email");
 // Realtime seam. In the legacy monolith the queue emitted emailLog.statusChanged
 // on the in-process EventBus. In the split architecture realtime fan-out goes
 // through the outbox / EventBus in the api process, which this framework-free
-// package cannot reach. The worker/api bootstrap wires a listener here.
-// TODO(wave-3+): setEmailStatusChangeListener(enqueue realtime.emit outbox event).
+// package cannot reach. The worker/api bootstrap wires a listener here (N3):
+// see `emitEmailLogRealtimeEvent` below, installed via setEmailStatusChangeListener
+// at process startup in both apps/worker/src/main.ts and apps/api/src/main.ts —
+// emails can be queued/updated from either process.
 // -----------------------------------------------------------------------------
 export type EmailStatusChangeListener = (
   emailLogId: string,
   status: string,
-) => void;
+) => void | Promise<void>;
 
 let statusChangeListener: EmailStatusChangeListener | undefined;
 
@@ -64,13 +69,52 @@ export function setEmailStatusChangeListener(
   statusChangeListener = fn;
 }
 
+// Fire-and-forget: never blocks the caller, never throws. Handles both a
+// synchronous throw and an async rejection from the listener.
 function notifyStatusChange(emailLogId: string, status: string): void {
   if (!statusChangeListener) return;
   try {
-    statusChangeListener(emailLogId, status);
+    void Promise.resolve(statusChangeListener(emailLogId, status)).catch(
+      (err: unknown) => {
+        logger.warn(
+          { err, emailLogId },
+          "Failed to notify emailLog status change",
+        );
+      },
+    );
   } catch (err) {
     logger.warn({ err, emailLogId }, "Failed to notify emailLog status change");
   }
+}
+
+/**
+ * Default realtime listener body (N3): resolve the (clientId, eventId,
+ * registrationId) an EmailLog belongs to — via its registration when
+ * registrationId is set, via its abstract → event when abstractId is set —
+ * and enqueue a `realtime.emit` outbox event carrying `emailLog.statusChanged`.
+ * Installed as the process's EmailStatusChangeListener at startup. A log with
+ * neither relation (or one that's since vanished) resolves to null and is a
+ * silent no-op — nothing to fan out to.
+ */
+export async function emitEmailLogRealtimeEvent(
+  emailLogId: string,
+  status: string,
+): Promise<void> {
+  const target = await getEmailLogRealtimeTarget(emailLogId);
+  if (!target) return;
+
+  const event: AppEvent = {
+    type: "emailLog.statusChanged",
+    clientId: target.clientId,
+    eventId: target.eventId,
+    payload: {
+      id: emailLogId,
+      status,
+      registrationId: target.registrationId ?? undefined,
+    },
+    ts: Date.now(),
+  };
+  await enqueueRealtimeOutboxEvent(getDb(), event);
 }
 
 // -----------------------------------------------------------------------------
@@ -93,6 +137,34 @@ function getOptionalContextString(
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+// -----------------------------------------------------------------------------
+// Fallback template (C1/N4): when queueAbstractEmail found no admin template it
+// stashes an unresolved {{var}} subject/body pair directly in contextSnapshot
+// instead of a real EmailTemplate row. Detected here so the send path treats it
+// exactly like a template — resolved via the same resolveVariables call — and
+// ACTUALLY SENDS, rather than hitting the "no template" skip.
+// -----------------------------------------------------------------------------
+export const FALLBACK_SUBJECT_KEY = "_fallbackSubject";
+export const FALLBACK_BODY_KEY = "_fallbackPlainBody";
+
+interface FallbackTemplate {
+  subject: string;
+  body: string;
+}
+
+function getFallbackTemplate(contextSnapshot: unknown): FallbackTemplate | null {
+  if (!isUsableContextSnapshot(contextSnapshot)) return null;
+  const subject = contextSnapshot[FALLBACK_SUBJECT_KEY];
+  const body = contextSnapshot[FALLBACK_BODY_KEY];
+  if (typeof subject !== "string" || typeof body !== "string") return null;
+  return { subject, body };
+}
+
+/** Minimal plain-text → HTML: escape, then preserve newlines via CSS. */
+function plainTextToHtml(text: string): string {
+  return `<div style="white-space: pre-wrap; font-family: inherit;">${escapeHtml(text)}</div>`;
+}
+
 // =============================================================================
 // QUEUE EMAIL (low-level primitive)
 // =============================================================================
@@ -104,8 +176,11 @@ export interface QueueEmailInput {
   recipientName?: string;
   abstractId?: string;
   abstractTrigger?: EmailLogInsert["abstractTrigger"];
-  templateId: string;
+  /** Optional (C1/N4): a fallback-only send (no admin template) has none. */
+  templateId?: string;
   contextSnapshot?: Record<string, unknown>;
+  /** H6: per-outbox-delivery idempotency key (see EMAIL_LOGS_DEDUPE_KEY_ACTIVE_KEY). */
+  dedupeKey?: string;
 }
 
 /**
@@ -121,7 +196,7 @@ export async function queueEmail(
 > {
   const result = await createEmailLog({
     trigger: input.trigger ?? null,
-    templateId: input.templateId,
+    templateId: input.templateId ?? null,
     registrationId: input.registrationId ?? null,
     abstractId: input.abstractId ?? null,
     abstractTrigger: input.abstractTrigger ?? null,
@@ -130,6 +205,7 @@ export async function queueEmail(
     subject: "",
     status: "QUEUED",
     contextSnapshot: input.contextSnapshot ?? null,
+    dedupeKey: input.dedupeKey ?? null,
   });
   if (result.ok) notifyStatusChange(result.log.id, "QUEUED");
   return result;
@@ -275,10 +351,16 @@ export async function queueSponsorshipEmail(
 // free of a certificates dependency and remains testable with a stub. The
 // generator throwing (e.g. "templates no longer active") propagates to
 // processEmail's catch → markEmailFailed (retryable).
+//
+// H2: abstract-linked CERTIFICATE_SENT rows carry abstractId instead of
+// registrationId (deliberately — an abstract's optional registrationId link
+// would render the wrong registration's data). Exactly one of the two is set;
+// the generator branches on whichever is present.
 // =============================================================================
 
 export interface CertificateAttachmentContext {
-  registrationId: string;
+  registrationId?: string;
+  abstractId?: string;
   /** From contextSnapshot._certificateTemplateIds — the templates queued. */
   certificateTemplateIds: string[];
   /** Per-batch image cache, shared across the whole processEmailQueue run. */
@@ -343,21 +425,42 @@ export async function processEmailQueue(
   // Shared across the batch so certificate PDFs don't re-download the same image.
   const imageCache = new Map<string, unknown>();
 
+  // N3/M8: SKIPPED is a status transition like SENT/FAILED — the admin's live
+  // email-log table must hear about it too, not just the happy paths.
+  async function skipEmail(
+    emailLogId: string,
+    reason: string,
+  ): Promise<EmailOutcome> {
+    const ok = await markEmailSkipped(emailLogId, workerId, reason);
+    if (ok) notifyStatusChange(emailLogId, "SKIPPED");
+    return ok ? "skipped" : "lease-lost";
+  }
+
   async function processEmail(emailLog: ClaimedEmailLog): Promise<EmailOutcome> {
     try {
-      if (!emailLog.template) {
-        return (await markEmailSkipped(emailLog.id, workerId, "No template found"))
-          ? "skipped"
-          : "lease-lost";
-      }
-      if (!emailLog.template.isActive) {
-        return (await markEmailSkipped(
-          emailLog.id,
-          workerId,
-          "Template is inactive",
-        ))
-          ? "skipped"
-          : "lease-lost";
+      let templateSubject: string;
+      let templateHtml: string;
+      let templatePlain: string;
+
+      if (emailLog.template) {
+        if (!emailLog.template.isActive) {
+          return skipEmail(emailLog.id, "Template is inactive");
+        }
+        templateSubject = emailLog.template.subject;
+        templateHtml = emailLog.template.htmlContent || "";
+        templatePlain = emailLog.template.plainContent || "";
+      } else {
+        // C1/N4: a plain-text fallback body (built by queueAbstractEmail when
+        // no admin template exists) rides in contextSnapshot as an unresolved
+        // {{var}} template — same resolution path as a real template, so it
+        // gets ACTUALLY SENT rather than marked SKIPPED (the bug this restores).
+        const fallback = getFallbackTemplate(emailLog.contextSnapshot);
+        if (!fallback) {
+          return skipEmail(emailLog.id, "No template found");
+        }
+        templateSubject = fallback.subject;
+        templatePlain = fallback.body;
+        templateHtml = plainTextToHtml(fallback.body);
       }
 
       let context: QueueEmailContext | null = null;
@@ -370,24 +473,12 @@ export async function processEmailQueue(
       }
 
       if (!context || Object.keys(context).length === 0) {
-        return (await markEmailSkipped(
-          emailLog.id,
-          workerId,
-          "Could not build email context",
-        ))
-          ? "skipped"
-          : "lease-lost";
+        return skipEmail(emailLog.id, "Could not build email context");
       }
 
-      const resolvedSubject = resolveVariables(emailLog.template.subject, context);
-      const resolvedHtml = resolveVariables(
-        emailLog.template.htmlContent || "",
-        context,
-      );
-      const resolvedPlain = resolveVariables(
-        emailLog.template.plainContent || "",
-        context,
-      );
+      const resolvedSubject = resolveVariables(templateSubject, context);
+      const resolvedHtml = resolveVariables(templateHtml, context);
+      const resolvedPlain = resolveVariables(templatePlain, context);
 
       // Persist the resolved subject only if the lease is still held.
       if (
@@ -412,7 +503,7 @@ export async function processEmailQueue(
         emailLog.trigger === "CERTIFICATE_SENT" &&
         Array.isArray(certTemplateIds) &&
         certTemplateIds.length > 0 &&
-        emailLog.registrationId
+        (emailLog.registrationId || emailLog.abstractId)
       ) {
         const templateIds = certTemplateIds as string[];
         const expectedCount = templateIds.length;
@@ -423,19 +514,14 @@ export async function processEmailQueue(
         }
 
         attachments = await options.generateCertificateAttachments({
-          registrationId: emailLog.registrationId,
+          registrationId: emailLog.registrationId ?? undefined,
+          abstractId: emailLog.abstractId ?? undefined,
           certificateTemplateIds: templateIds,
           imageCache,
         });
 
         if (!attachments || attachments.length === 0) {
-          return (await markEmailSkipped(
-            emailLog.id,
-            workerId,
-            "No eligible certificates to attach",
-          ))
-            ? "skipped"
-            : "lease-lost";
+          return skipEmail(emailLog.id, "No eligible certificates to attach");
         }
         if (attachments.length < expectedCount) {
           throw new Error("Fewer certificate attachments generated than queued");
