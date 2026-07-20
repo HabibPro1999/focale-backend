@@ -22,16 +22,15 @@
 ALTER TABLE "certificate_templates"
   ADD COLUMN IF NOT EXISTS "scope" text NOT NULL DEFAULT 'BOTH';
 
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'certificate_templates_scope_check'
-  ) THEN
-    ALTER TABLE "certificate_templates"
-      ADD CONSTRAINT "certificate_templates_scope_check"
-      CHECK ("scope" IN ('REGISTRATION', 'ABSTRACT', 'BOTH'));
-  END IF;
-END $$;
+-- Idempotent without a DO block: CockroachDB does not implement ALTER TABLE
+-- inside plpgsql (crdb issue 110080), and Postgres lacks ADD CONSTRAINT IF
+-- NOT EXISTS — DROP+ADD is the portable spelling. Re-adding revalidates the
+-- (tiny) table, which is fine.
+ALTER TABLE "certificate_templates"
+  DROP CONSTRAINT IF EXISTS "certificate_templates_scope_check";
+ALTER TABLE "certificate_templates"
+  ADD CONSTRAINT "certificate_templates_scope_check"
+  CHECK ("scope" IN ('REGISTRATION', 'ABSTRACT', 'BOTH'));
 
 ALTER TABLE "certificate_templates"
   ADD COLUMN IF NOT EXISTS "allowed_abstract_final_types" "AbstractFinalType"[];
