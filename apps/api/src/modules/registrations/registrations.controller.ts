@@ -225,7 +225,10 @@ export class RegistrationsController {
     return this.service.listRegistrationEmailLogs(id, query);
   }
 
-  // GET /api/events/registrations/:id/payment-proof — 302 to a signed URL
+  // GET /api/events/registrations/:id/payment-proof — proxy the file bytes.
+  // A 302 to the signed storage URL made the admin's cross-origin
+  // fetch().blob() depend on bucket CORS config; stream through the API
+  // instead, like certificates/:id/image does.
   @Get("registrations/:id/payment-proof")
   @SkipEnvelope()
   async paymentProof(
@@ -246,7 +249,22 @@ export class RegistrationsController {
       // Un-parseable legacy URL — redirect straight to the stored value.
       return reply.redirect(registration.paymentProofUrl, 302);
     }
-    const signedUrl = await getStorageProvider().getSignedUrl(key, 3600);
-    return reply.redirect(signedUrl, 302);
+    let file;
+    try {
+      file = await getStorageProvider().download(key);
+    } catch (err: unknown) {
+      if ((err as { code?: number }).code === 404) {
+        throw new AppException(
+          ErrorCodes.NOT_FOUND,
+          "Payment proof not found in storage",
+          404,
+        );
+      }
+      throw err;
+    }
+    return reply
+      .header("Cache-Control", "private, max-age=300")
+      .type(file.contentType ?? "application/octet-stream")
+      .send(file.buffer);
   }
 }
