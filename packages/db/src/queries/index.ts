@@ -11,3 +11,4 @@ export * from "./abstracts";
 export * from "./certificates";
 export * from "./checkin";
 export * from "./reports";
+export * from "./committee-invites";

@@ -1,3 +1,6 @@
+import { CommitteeInviteService } from "./abstracts.committee-invite.service";
+import { CommitteeEmailsService } from "./abstracts.committee-emails";
+import { CommitteeInviteController } from "./abstracts.committee-invite.controller";
 import { Module } from "@nestjs/common";
 import { IdentityModule } from "../identity/identity.module";
 import { AbstractsController } from "./abstracts.controller";
@@ -13,11 +16,14 @@ import { AbstractsFinalFileService } from "./abstracts.final-file.service";
 @Module({
   imports: [IdentityModule],
   controllers: [
+    CommitteeInviteController,
     AbstractsController,
     AbstractsCommitteeController,
     AbstractsPublicController,
   ],
   providers: [
+    CommitteeInviteService,
+    CommitteeEmailsService,
     AbstractsService,
     AbstractsConfigService,
     AbstractsAdminService,

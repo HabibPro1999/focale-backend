@@ -86,12 +86,12 @@ describe.runIf(dbTestsEnabled())("migration tier: apply + introspect", () => {
     expect(files).toContain("0001_raw_indexes.sql");
   });
 
-  it("creates exactly 29 base tables", async () => {
+  it("creates exactly 30 base tables", async () => {
     const { rows } = await client.query<{ n: string }>(
       `SELECT count(*)::text AS n FROM information_schema.tables
        WHERE table_schema = 'public' AND table_type = 'BASE TABLE'`,
     );
-    expect(Number(rows[0].n)).toBe(29);
+    expect(Number(rows[0].n)).toBe(30);
   });
 
   it("creates exactly 19 enum types", async () => {
@@ -157,4 +157,25 @@ describe.runIf(dbTestsEnabled())("migration tier: apply + introspect", () => {
     expect(by("clients", "updated_at")?.data_type).toBe("timestamp without time zone");
     expect(by("clients", "updated_at")?.column_default).toBeNull();
   });
+  it("adds multilingual columns and timezone-aware check-in timestamps", async () => {
+    const { rows } = await client.query<{ table_name: string; column_name: string; data_type: string }>(
+      `SELECT table_name, column_name, data_type FROM information_schema.columns
+       WHERE (table_name = 'forms' AND column_name = 'success_translations')
+          OR (table_name = 'abstract_config' AND column_name = 'languages')
+          OR (table_name = 'abstract_themes' AND column_name = 'translations')
+          OR (table_name IN ('registrations', 'access_check_ins') AND column_name = 'checked_in_at')`);
+    expect(rows.filter((r) => r.data_type === "jsonb")).toHaveLength(3);
+    expect(rows.filter((r) => r.data_type === "timestamp with time zone")).toHaveLength(2);
+  });
+  it("can safely reapply the catch-up migrations to an already-migrated database", async () => {
+    for (const { name, sql } of migrationFiles()) {
+      if (Number(name.slice(0, 4)) >= 7) await client.query(sql);
+    }
+    const { rows } = await client.query<{ indexname: string }>(
+      `SELECT indexname FROM pg_indexes WHERE tablename = 'committee_invite_tokens'`);
+    expect(rows.map((r) => r.indexname)).toEqual(expect.arrayContaining([
+      "committee_invite_tokens_token_hash_key", "committee_invite_tokens_user_id_event_id_idx",
+    ]));
+  });
+
 });

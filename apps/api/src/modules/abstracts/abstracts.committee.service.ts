@@ -1,5 +1,7 @@
+import { CommitteeInviteService } from "./abstracts.committee-invite.service";
+import { CommitteeEmailsService } from "./abstracts.committee-emails";
 import { randomUUID } from "node:crypto";
-import { Inject, Injectable } from "@nestjs/common";
+import { Injectable } from "@nestjs/common";
 import {
   ErrorCodes,
   UserRole,
@@ -11,6 +13,7 @@ import {
 } from "@app/contracts";
 import {
   findAbstractMembership,
+  deleteUnusedCommitteeInvites,
   findEventClientId,
   findEventName,
   listActiveReviewerThemeIds,
@@ -35,25 +38,15 @@ import {
   getUserByEmail,
   getUserById,
   findCommitteeUserClientIds,
-  findAbstractEmailTemplate,
-  createEmailLog,
-  updateEmailLogById,
   type ReviewerAbstractRow,
   type AbstractReviewRow,
-  type EmailTemplateRow,
 } from "@app/db";
 import {
-  generatePasswordResetLink,
   updateFirebaseUserPassword,
   revokeFirebaseRefreshTokens,
-  getEmailProvider,
-  compileMjmlToHtml,
-  resolveVariables,
 } from "@app/integrations";
-import { escapeHtml } from "@app/shared";
 import { assertClientModuleEnabled } from "../clients/module-gates";
 import { UsersService } from "../identity/users.service";
-import { CONFIG, type Config } from "../../core/config";
 import { logger } from "../../core/logger.service";
 import { AppException } from "../../core/app-exception";
 import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
@@ -126,17 +119,17 @@ function hasReviewerThemeCoverage(
 
 function generateThrowawayPassword(): string {
   // Throwaway to satisfy Firebase's password policy — the user immediately
-  // overwrites it via the reset link in the invite email.
+  // overwrites it via the single-use link in the invite email.
   return `${randomUUID()}A!${randomUUID()}`;
 }
 
-const EVENT_NAME_TOKEN = "{eventName}";
 
 @Injectable()
 export class AbstractsCommitteeService {
   constructor(
     private readonly users: UsersService,
-    @Inject(CONFIG) private readonly config: Config,
+    private readonly invites: CommitteeInviteService,
+    private readonly emails: CommitteeEmailsService,
   ) {}
 
   // ==========================================================================
@@ -266,7 +259,7 @@ export class AbstractsCommitteeService {
       user.email,
       user.name,
       eventName,
-      { userId: user.id, eventId },
+      { userId: user.id, eventId, performedBy },
     );
 
     const member = (await listCommitteeMembers(eventId)).find(
@@ -292,89 +285,24 @@ export class AbstractsCommitteeService {
     email: string,
     name: string,
     eventName: string,
-    ctx: { userId: string; eventId: string },
+    ctx: { userId: string; eventId: string; performedBy: string },
   ): Promise<boolean> {
     try {
-      const link = await generatePasswordResetLink(
-        email,
-        this.buildPasswordResetActionCodeSettings(),
+      const token = await this.invites.mintCommitteeInviteToken(
+        ctx.userId,
+        ctx.eventId,
+        ctx.performedBy,
       );
-
-      // M7: ABSTRACT_COMMITTEE_INVITE was a configurable trigger nobody ever
-      // consulted — consult it before falling back to the hardcoded French
-      // MJML below. Event-specific → client-wide cascade, same as every
-      // other abstract email trigger.
-      const event = await findEventClientId(ctx.eventId);
-      const template = event
-        ? await findAbstractEmailTemplate({
-            clientId: event.clientId,
-            eventId: ctx.eventId,
-            abstractTrigger: "ABSTRACT_COMMITTEE_INVITE",
-          })
-        : null;
-      if (template) {
-        return await this.sendTemplatedCommitteeEmail(template, email, name, {
-          reviewerName: name,
-          eventName,
-          loginLink: link,
-        });
-      }
-
-      return await this.sendCommitteeMjmlEmail({
-        to: email,
-        toName: name,
-        subject: `Invitation au comité scientifique - ${eventName}`,
-        headline: "Bienvenue au comité scientifique",
-        intro:
-          "Vous êtes invité(e) à rejoindre le comité scientifique de {eventName} sur Focale. Pour activer votre compte, choisissez un mot de passe avec le lien sécurisé ci-dessous :",
-        ctaText: "Définir mon mot de passe",
-        link,
+      return await this.emails.sendInviteEmail(
+        { email, name },
         eventName,
-        category: "committee-invite",
-        footnote:
-          "Si vous n'attendiez pas cette invitation, vous pouvez ignorer cet email.",
-        logContext: "Failed to send committee invitation email",
-        logAsInvite: true,
-      });
-    } catch (err) {
-      logger.error(
-        { err, ...ctx },
-        "Committee invite email threw while sending",
+        this.invites.buildCommitteeInviteLink(token),
+        ctx.eventId,
       );
+    } catch (err) {
+      logger.error({ err, ...ctx }, "Committee invite email threw while sending");
       return false;
     }
-  }
-
-  /**
-   * M7: render a configured ABSTRACT_COMMITTEE_INVITE template and send it
-   * through the same provider call as the hardcoded fallback. Exposed
-   * variables mirror what the hardcoded MJML used: reviewerName, eventName,
-   * loginLink (the Firebase password-reset/continue link — the invite never
-   * had a plaintext temporary password to expose).
-   *
-   * Sent synchronously (not via queueEmail/the outbox) so addCommitteeMember
-   * can still report inviteEmailSent immediately, matching the fallback
-   * path's contract — queueEmail defers the actual send to the worker and
-   * requires an abstractId, neither of which fits this abstract-less,
-   * synchronous invite flow. sendAndLogInviteEmail still records the send in
-   * email_logs so it shows up in the admin's per-event log table.
-   */
-  private async sendTemplatedCommitteeEmail(
-    template: EmailTemplateRow,
-    to: string,
-    toName: string,
-    variables: Record<string, string>,
-  ): Promise<boolean> {
-    const subject = resolveVariables(template.subject, variables);
-    const html = resolveVariables(template.htmlContent ?? "", variables);
-    return this.sendAndLogInviteEmail({
-      to,
-      toName,
-      subject,
-      html,
-      categories: ["committee-invite"],
-      logContext: "Failed to send templated committee invite email",
-    });
   }
 
   // ==========================================================================
@@ -665,25 +593,10 @@ export class AbstractsCommitteeService {
 
     let inviteEmailSent = false;
     try {
-      const link = await generatePasswordResetLink(
-        member.userEmail,
-        this.buildPasswordResetActionCodeSettings(),
-      );
-      inviteEmailSent = await this.sendCommitteeMjmlEmail({
-        to: member.userEmail,
-        toName: member.userName,
-        subject: "Réinitialisation du mot de passe comité",
-        headline: "Réinitialiser votre mot de passe comité",
-        intro:
-          "Une réinitialisation du mot de passe a été demandée pour votre compte comité scientifique sur {eventName}. Utilisez le lien sécurisé ci-dessous pour choisir un nouveau mot de passe :",
-        ctaText: "Définir mon mot de passe",
-        link,
-        eventName: member.eventName,
-        category: "committee-password-reset",
-        footnote:
-          "Si vous n'avez pas demandé cette réinitialisation, vous pouvez ignorer cet email.",
-        logContext: "Failed to send committee password-reset email",
-      });
+      const token = await this.invites.mintCommitteeInviteToken(userId, eventId, performedBy);
+      inviteEmailSent = await this.emails.sendResetPasswordEmail(
+        { email: member.userEmail, name: member.userName }, member.eventName,
+        this.invites.buildCommitteeInviteLink(token));
     } catch (err) {
       logger.error(
         { err, userId, eventId },
@@ -697,7 +610,7 @@ export class AbstractsCommitteeService {
       entityType: "User",
       entityId: userId,
       action: "admin_reset_password",
-      changes: { method: { old: null, new: "email_link" } },
+      changes: { method: { old: null, new: "invite_token" } },
       performedBy,
     });
 
@@ -733,6 +646,8 @@ export class AbstractsCommitteeService {
 
     await updateFirebaseUserPassword(userId, newPassword);
     await revokeFirebaseRefreshTokens(userId);
+    try { await deleteUnusedCommitteeInvites(userId); }
+    catch (err) { logger.error({ err, userId, eventId }, "Failed to purge committee invite tokens after an admin password override"); }
     await insertAuditLog({
       entityType: "User",
       entityId: userId,
@@ -744,182 +659,4 @@ export class AbstractsCommitteeService {
     return { ok: true as const };
   }
 
-  // ==========================================================================
-  // Email plumbing (best-effort, synchronous). Only the ABSTRACT_COMMITTEE_INVITE
-  // path (logAsInvite) writes an email_logs row — resendCommitteeInvite /
-  // setCommitteeMemberPassword are password resets, not that trigger, and
-  // stay row-less as before.
-  // ==========================================================================
-  /**
-   * The `url` here is the Firebase `continueUrl` (final post-reset destination),
-   * NOT the action-handler URL — pointing it back at /auth/action loops onto a
-   * handler page with no oobCode ("unknown mode" error).
-   */
-  private buildPasswordResetActionCodeSettings(): { url: string } {
-    return { url: `${this.config.urls.adminAppUrl}/committee` };
-  }
-
-  /**
-   * M7: create a SENDING email_logs row (trigger ABSTRACT_COMMITTEE_INVITE,
-   * no registrationId/abstractId — the invite predates both) BEFORE calling
-   * the provider, exactly like EmailSendService.sendCustom, so the row id can
-   * serve as the provider trackingId and a webhook arriving mid-send has
-   * something to correlate against. Updated to SENT/FAILED afterward,
-   * including when the provider call itself throws (rather than merely
-   * returning success:false). Log writes are themselves best-effort: a DB
-   * hiccup here logs and is swallowed, it never turns a real send outcome
-   * into a thrown error for the caller.
-   */
-  private async sendAndLogInviteEmail(input: {
-    to: string;
-    toName?: string | null;
-    subject: string;
-    html: string;
-    categories: string[];
-    logContext: string;
-  }): Promise<boolean> {
-    let emailLogId: string | null = null;
-    try {
-      const logResult = await createEmailLog({
-        trigger: null,
-        abstractTrigger: "ABSTRACT_COMMITTEE_INVITE",
-        templateId: null,
-        registrationId: null,
-        abstractId: null,
-        recipientEmail: input.to,
-        recipientName: input.toName || null,
-        subject: input.subject,
-        status: "SENDING",
-      });
-      if (logResult.ok) emailLogId = logResult.log.id;
-    } catch (err) {
-      logger.error(
-        { err, email: input.to },
-        "Failed to create committee invite email log",
-      );
-    }
-
-    let result: { success: boolean; messageId?: string; error?: string };
-    try {
-      result = await getEmailProvider().sendEmail({
-        to: input.to,
-        toName: input.toName ?? undefined,
-        subject: input.subject,
-        html: input.html,
-        categories: input.categories,
-        trackingId: emailLogId ?? undefined,
-      });
-    } catch (err) {
-      result = {
-        success: false,
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
-
-    if (emailLogId) {
-      try {
-        await updateEmailLogById(
-          emailLogId,
-          result.success
-            ? {
-                status: "SENT",
-                providerMessageId: result.messageId,
-                sentAt: new Date(),
-              }
-            : {
-                status: "FAILED",
-                errorMessage: result.error || "Unknown error",
-                failedAt: new Date(),
-              },
-        );
-      } catch (err) {
-        logger.error(
-          { err, emailLogId },
-          "Failed to update committee invite email log",
-        );
-      }
-    }
-
-    if (!result.success) {
-      logger.error({ email: input.to, error: result.error }, input.logContext);
-    }
-    return result.success;
-  }
-
-  private async sendCommitteeMjmlEmail(input: {
-    to: string;
-    toName?: string | null;
-    subject: string;
-    headline: string;
-    intro: string;
-    ctaText: string;
-    link: string;
-    eventName: string;
-    category: string;
-    footnote?: string;
-    logContext: string;
-    /** M7: only the ABSTRACT_COMMITTEE_INVITE fallback records an email_logs row. */
-    logAsInvite?: boolean;
-  }): Promise<boolean> {
-    const toName = input.toName?.trim() || input.to;
-    const safeName = escapeHtml(toName);
-    const safeEventName = escapeHtml(input.eventName);
-    const safeLink = escapeHtml(input.link);
-    const safeHeadline = escapeHtml(input.headline);
-    const safeCtaText = escapeHtml(input.ctaText);
-    const safeIntro = escapeHtml(input.intro).replaceAll(
-      EVENT_NAME_TOKEN,
-      `<strong>${safeEventName}</strong>`,
-    );
-    const footnoteBlock = input.footnote
-      ? `<mj-text font-size="13px" color="#6b7280">${escapeHtml(
-          input.footnote,
-        )}</mj-text>`
-      : "";
-    const mjml = `
-<mjml>
-  <mj-head>
-    <mj-attributes>
-      <mj-all font-family="Helvetica, Arial, sans-serif" />
-      <mj-text font-size="15px" line-height="1.6" color="#1f2937" />
-    </mj-attributes>
-  </mj-head>
-  <mj-body background-color="#fafaf9">
-    <mj-section padding="32px 24px">
-      <mj-column>
-        <mj-text font-size="20px" font-weight="600">${safeHeadline}</mj-text>
-        <mj-text>Bonjour ${safeName},</mj-text>
-        <mj-text>${safeIntro}</mj-text>
-        <mj-button background-color="#0d9488" color="#ffffff" border-radius="6px" href="${safeLink}">${safeCtaText}</mj-button>
-        <mj-text font-size="13px" color="#6b7280">Ce lien est valable pour une durée limitée. Après avoir défini votre mot de passe, vous pourrez vous connecter directement avec votre email.</mj-text>
-        ${footnoteBlock}
-      </mj-column>
-    </mj-section>
-  </mj-body>
-</mjml>`;
-    const { html } = compileMjmlToHtml(mjml);
-
-    if (input.logAsInvite) {
-      return this.sendAndLogInviteEmail({
-        to: input.to,
-        toName,
-        subject: input.subject,
-        html,
-        categories: [input.category],
-        logContext: input.logContext,
-      });
-    }
-
-    const result = await getEmailProvider().sendEmail({
-      to: input.to,
-      toName,
-      subject: input.subject,
-      html,
-      categories: [input.category],
-    });
-    if (!result.success) {
-      logger.error({ email: input.to, error: result.error }, input.logContext);
-    }
-    return result.success;
-  }
 }

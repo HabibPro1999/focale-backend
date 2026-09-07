@@ -19,7 +19,7 @@ import { AppException } from "../../core/app-exception";
 const ALREADY_FINALIZED_MSG =
   "Abstract is already finalized; reopen before changing the decision";
 
-function getTitle(content: unknown): string {
+export function getTitle(content: unknown): string {
   if (content && typeof content === "object" && !Array.isArray(content)) {
     const title = (content as { title?: unknown }).title;
     if (typeof title === "string" && title.trim()) return title.trim();
@@ -40,7 +40,7 @@ function toReviewDto(review: AdminReviewRow) {
   };
 }
 
-function reviewScoreSpread(reviews: Array<{ score: number | null }>): {
+export function reviewScoreSpread(reviews: Array<{ score: number | null }>): {
   min: number | null;
   max: number | null;
   spread: number | null;
@@ -93,6 +93,7 @@ export class AbstractsAdminService {
       themeId: query.themeId,
       reviewerId: query.reviewerId,
       q: query.q,
+      presentationType: query.presentationType,
       limit,
       offset,
     });

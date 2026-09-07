@@ -175,7 +175,7 @@ export const GroupedAccessResponseSchema = z.object({
   groups: z.array(DateGroupSchema),
   addonGroup: z
     .object({
-      items: z.array(z.unknown()),
+      slots: z.array(TimeSlotSchema),
     })
     .nullable(),
 });

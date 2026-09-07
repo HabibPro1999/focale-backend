@@ -1,3 +1,4 @@
+import { getExclusivityKey } from "./access-grouping";
 import { evaluateConditions, type Condition } from "@app/shared";
 import type { EventAccessWithPrereqIds } from "@app/db";
 import type { AccessSelection } from "@app/contracts";
@@ -77,8 +78,7 @@ export function validateSelections(
   >();
   for (const selection of selections) {
     const access = accessMap.get(selection.accessId)!;
-    const typeKey =
-      access.type === "OTHER" ? `OTHER:${access.groupLabel || ""}` : access.type;
+    const typeKey = getExclusivityKey(access);
     if (!selectionsByType.has(typeKey)) selectionsByType.set(typeKey, []);
     selectionsByType.get(typeKey)!.push({ access, selection });
   }
@@ -95,6 +95,11 @@ export function validateSelections(
           if (!(aEnd <= bStart || bEnd <= aStart)) {
             errors.push(`Time conflict: "${a.name}" and "${b.name}" overlap`);
           }
+        }
+        const bothExisting = existingAccessIds?.has(a.id) && existingAccessIds.has(b.id);
+        if (a.type !== "ADDON" && a.startsAt === null && b.startsAt === null &&
+            !a.includedInBase && !b.includedInBase && !bothExisting) {
+          errors.push(`Only one of "${a.name}" and "${b.name}" can be selected`);
         }
       }
     }

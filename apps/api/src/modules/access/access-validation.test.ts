@@ -109,7 +109,7 @@ describe("validateSelections", () => {
 
   it("requires prerequisites to be selected", () => {
     const items = [
-      access({ id: "basic", name: "Basic" }),
+      access({ id: "basic", name: "Basic", type: "SESSION" }),
       access({ id: "adv", name: "Advanced", requiredAccess: [{ id: "basic" }] }),
     ];
     expect(
@@ -241,4 +241,19 @@ describe("validateSelections", () => {
       validateSelections([item], [], [sel("old")], {}, new Set(["old"]), NOW).valid,
     ).toBe(true);
   });
+});
+
+it("rejects undated alternatives but grandfathers pairs already held", () => {
+  const items = [access({ id: "a" }), access({ id: "b" })];
+  const selections = [sel("a"), sel("b")];
+  expect(validateSelections(items, [], selections, {}, undefined, NOW).errors).toContain('Only one of "Access" and "Access" can be selected');
+  expect(validateSelections(items, [], selections, {}, new Set(["a", "b"]), NOW).valid).toBe(true);
+  expect(validateSelections(items, [], selections, {}, new Set(["a"]), NOW).valid).toBe(false);
+});
+it("allows independent ADDONs, different OTHER labels and included items", () => {
+  for (const items of [
+    [access({ id: "a", type: "ADDON" }), access({ id: "b", type: "ADDON" })],
+    [access({ id: "a", type: "OTHER", groupLabel: "Hotel" }), access({ id: "b", type: "OTHER", groupLabel: "Dinner" })],
+    [access({ id: "a", includedInBase: true }), access({ id: "b" })],
+  ]) expect(validateSelections(items, [], [sel("a"), sel("b")], {}, undefined, NOW).valid).toBe(true);
 });

@@ -5,6 +5,7 @@ import { ErrorCodes, type EventPricingWithRules } from "@app/contracts";
 // passthrough that invokes the callback with a dummy tx (query fns are mocked, so
 // the tx value is never touched) — the equivalent of the legacy $transaction stub.
 vi.mock("@app/db", () => ({
+  findRegistrationFormSchema: vi.fn(),
   withSerializableTxn: vi.fn(),
   getEventPricing: vi.fn(),
   getEventPricingGate: vi.fn(),
@@ -19,6 +20,7 @@ vi.mock("@app/db", () => ({
 
 import {
   countRegistrations,
+  findRegistrationFormSchema,
   findEventAccessByIds,
   findPendingSponsorships,
   getEventPricing,
@@ -642,4 +644,44 @@ describe("calculatePrice", () => {
     expect(result.calculatedBasePrice).toBe(300);
     expect(result.appliedRules).toHaveLength(0);
   });
+});
+
+describe("new pricing condition guards", () => {
+  const rule = (overrides = {}) => ({ id: "rule-guard", name: "Country rate", price: 100, priority: 0, active: true,
+    conditions: [{ fieldId: "country", operator: "equals" as const, value: "TN" }], conditionLogic: "AND" as const, ...overrides });
+  it("rejects contradictory AND rules before writing", async () => {
+    pricingRead.mockResolvedValue(mockPricing());
+    const bad = rule({ conditions: [{ fieldId: "country", operator: "equals", value: "TN" }, { fieldId: "country", operator: "equals", value: "FR" }] });
+    await expect(service.updateEventPricing(eventId, { rules: [bad] })).rejects.toMatchObject({ code: ErrorCodes.PRICING_RULE_UNSATISFIABLE });
+    expect(upsert).not.toHaveBeenCalled();
+  });
+  it("allows rename/reprice/delete of unchanged legacy conditions", async () => {
+    const legacy = rule({ conditions: [{ fieldId: "country", operator: "equals", value: "TN" }, { fieldId: "country", operator: "equals", value: "FR" }] });
+    pricingRead.mockResolvedValue(mockPricing({ rules: [legacy] }));
+    await service.updatePricingRule(eventId, legacy.id, { name: "Renamed", price: 200 });
+    expect(upsert).toHaveBeenCalled();
+    await service.deletePricingRule(eventId, legacy.id);
+    expect(upsert).toHaveBeenCalledTimes(2);
+  });
+  it("validates merged conditions when a partial patch changes logic", async () => {
+    const legacy = rule({ conditionLogic: "OR", conditions: [{ fieldId: "country", operator: "equals", value: "TN" }, { fieldId: "country", operator: "equals", value: "FR" }] });
+    pricingRead.mockResolvedValue(mockPricing({ rules: [legacy] }));
+    await expect(service.updatePricingRule(eventId, legacy.id, { conditionLogic: "AND" })).rejects.toMatchObject({ code: ErrorCodes.PRICING_RULE_UNSATISFIABLE });
+  });
+});
+
+
+it("rejects option labels while grandfathering untouched rules in a bulk update", async () => {
+  const legacy = { id: "legacy", name: "Legacy", price: 100, priority: 0, active: true, conditionLogic: "AND" as const,
+    conditions: [{ fieldId: "country", operator: "equals" as const, value: "Tunisie" }] };
+  pricingRead.mockResolvedValue(mockPricing({ rules: [legacy] }));
+  vi.mocked(findRegistrationFormSchema).mockResolvedValue({ schema: { steps: [{ fields: [
+    { id: "country", type: "country", label: "Country", options: [{ id: "TN", label: "Tunisie" }] },
+  ] }] } });
+  await service.updateEventPricing(eventId, { rules: [{ ...legacy, name: "Renamed" }] });
+  expect(findRegistrationFormSchema).not.toHaveBeenCalled();
+  await expect(service.updateEventPricing(eventId, { rules: [{ ...legacy, id: "new" }] }))
+    .rejects.toMatchObject({ code: ErrorCodes.PRICING_CONDITION_INVALID_OPTION, details: { fieldId: "country", exampleOptionIds: ["TN"] } });
+  await service.updateEventPricing(eventId, { rules: [{ ...legacy, id: "new", conditions: [{ fieldId: "country", operator: "in", value: ["TN"] }] }] });
+  expect(upsert).toHaveBeenCalledTimes(2);
 });

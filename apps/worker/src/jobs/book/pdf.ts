@@ -1,3 +1,5 @@
+import { ABSTRACT_TYPE_LABELS_FR, type AbstractFinalType } from "@app/contracts";
+import { getAuthorLine } from "@app/shared";
 // Abstract Book PDF generation — ported verbatim (semantics) from legacy
 // src/modules/abstracts/abstracts.book.service.ts. Two-column A4 layout using
 // pdf-lib StandardFonts (WinAnsi/CP1252). toWinAnsiSafe replaces characters the
@@ -157,41 +159,8 @@ export function getAdditionalFieldLines(
   return lines;
 }
 
-function withAffiliation(name: string, affiliation: string | undefined): string {
-  const trimmed = affiliation?.trim();
-  return trimmed ? `${name} (${trimmed})` : name;
-}
-
-function getAuthorLine(abstract: BookAbstract): string {
-  const primaryName =
-    `${abstract.authorFirstName} ${abstract.authorLastName}`.trim();
-  const names = [
-    withAffiliation(primaryName, abstract.authorAffiliation ?? undefined),
-  ];
-  if (Array.isArray(abstract.coAuthors)) {
-    for (const coAuthor of abstract.coAuthors) {
-      if (!coAuthor || typeof coAuthor !== "object" || Array.isArray(coAuthor)) {
-        continue;
-      }
-      const record = coAuthor as Record<string, unknown>;
-      const firstName =
-        typeof record.firstName === "string" ? record.firstName : "";
-      const lastName =
-        typeof record.lastName === "string" ? record.lastName : "";
-      const affiliation =
-        typeof record.affiliation === "string" ? record.affiliation : undefined;
-      const fullName = `${firstName} ${lastName}`.trim();
-      if (fullName) names.push(withAffiliation(fullName, affiliation));
-    }
-  }
-  return names.filter(Boolean).join(", ");
-}
-
-function typeLabel(value: string | null): string {
-  if (value === "CONFERENCE") return "Conférence";
-  if (value === "ORAL_COMMUNICATION") return "Communication orale";
-  if (value === "POSTER") return "Communication affichée";
-  return "—";
+function typeLabel(value: AbstractFinalType | null): string {
+  return value ? ABSTRACT_TYPE_LABELS_FR[value] ?? "—" : "—";
 }
 
 function themeLabel(abstract: BookAbstract): string {

@@ -139,6 +139,7 @@ export async function listEventAccessRows(
       sql`${eventAccess.sortOrder} asc`,
       sql`${eventAccess.startsAt} asc nulls last`,
       sql`${eventAccess.createdAt} asc`,
+      sql`${eventAccess.createdAt} asc`,
     );
 
   const byOwner = await loadRequiredAccessByOwners(
@@ -189,7 +190,7 @@ export async function getEventPrereqEdges(
   return rows;
 }
 
-/** Active access for grouping, ordered [type, sortOrder, startsAt] asc, with prereq ids. */
+/** Active access for grouping, ordered [sortOrder, startsAt, createdAt] asc, with prereq ids. */
 export async function getActiveAccessForGrouping(
   eventId: string,
   exec: DbExecutor = getDb(),
@@ -199,9 +200,9 @@ export async function getActiveAccessForGrouping(
     .from(eventAccess)
     .where(and(eq(eventAccess.eventId, eventId), eq(eventAccess.active, true)))
     .orderBy(
-      sql`${eventAccess.type} asc`,
       sql`${eventAccess.sortOrder} asc`,
       sql`${eventAccess.startsAt} asc nulls last`,
+      sql`${eventAccess.createdAt} asc`,
     );
   const byOwner = await loadRequiredAccessByOwners(
     rows.map((r) => r.id),

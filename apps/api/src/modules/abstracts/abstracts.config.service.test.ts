@@ -65,6 +65,7 @@ function makeConfig(overrides: Partial<AbstractConfigRow> = {}): AbstractConfigR
     bookOrder: "BY_CODE",
     bookIncludeAuthorNames: true,
     additionalFieldsSchema: [],
+    languages: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,
@@ -77,6 +78,7 @@ function makeTheme(overrides: Partial<AbstractThemeRow> = {}): AbstractThemeRow 
     configId,
     label: "Theme A",
     description: null,
+    translations: null,
     sortOrder: 0,
     active: true,
     createdAt: new Date(),
@@ -315,6 +317,7 @@ describe("themes", () => {
       configId,
       label: "New Theme",
       description: null,
+    translations: null,
       sortOrder: 0,
       active: true,
     });

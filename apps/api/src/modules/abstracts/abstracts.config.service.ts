@@ -106,6 +106,7 @@ export class AbstractsConfigService {
     for (const key of SCALAR_FIELDS) {
       if (fields[key] !== undefined) data[key] = fields[key];
     }
+    if (fields.languages !== undefined) data.languages = fields.languages;
     for (const key of DEADLINE_FIELDS) {
       const value = fields[key];
       if (value !== undefined) {
@@ -273,6 +274,7 @@ export class AbstractsConfigService {
       configId,
       label: body.label,
       description: body.description?.trim() || null,
+      translations: body.translations ?? null,
       sortOrder,
       active: body.active ?? true,
     });
@@ -288,6 +290,7 @@ export class AbstractsConfigService {
       throw new AppException(ErrorCodes.NOT_FOUND, "Theme not found", 404);
     }
     const data: Record<string, unknown> = {};
+    if (body.translations !== undefined) data.translations = body.translations;
     if (body.label !== undefined) data.label = body.label;
     if (body.description !== undefined)
       data.description = body.description?.trim() || null;

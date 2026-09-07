@@ -24,6 +24,7 @@ export const forms = pgTable(
     schemaVersion: integer().notNull().default(1),
     successTitle: text(),
     successMessage: text(),
+    successTranslations: jsonb(),
     active: boolean().notNull().default(true),
     ...timestamps,
   },

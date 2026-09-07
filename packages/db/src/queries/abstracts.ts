@@ -339,7 +339,12 @@ export interface PublicConfigData {
   eventName: string;
   clientId: string;
   config: AbstractConfigRow | null;
-  themes: { id: string; label: string; description: string | null }[];
+  themes: {
+    id: string;
+    label: string;
+    description: string | null;
+    translations: unknown;
+  }[];
 }
 
 export async function findPublicConfigData(
@@ -364,6 +369,7 @@ export async function findPublicConfigData(
           id: abstractThemes.id,
           label: abstractThemes.label,
           description: abstractThemes.description,
+          translations: abstractThemes.translations,
         })
         .from(abstractThemes)
         .where(
@@ -606,6 +612,7 @@ async function loadActiveReviews(
 }
 
 export interface ListAdminAbstractsFilters {
+  presentationType?: AbstractRow["finalType"];
   status?: string;
   themeId?: string;
   reviewerId?: string;
@@ -614,10 +621,10 @@ export interface ListAdminAbstractsFilters {
   offset: number;
 }
 
-export async function listAdminAbstracts(
+export function buildAdminAbstractsWhere(
   eventId: string,
-  filters: ListAdminAbstractsFilters,
-): Promise<{ items: AdminAbstractRow[]; total: number }> {
+  filters: Omit<ListAdminAbstractsFilters, "limit" | "offset">,
+) {
   const conds = [eq(abstracts.eventId, eventId)];
   if (filters.status)
     conds.push(eq(abstracts.status, filters.status as AbstractRow["status"]));
@@ -655,8 +662,22 @@ export async function listAdminAbstracts(
       sql`(${abstracts.authorFirstName} ILIKE ${pat} OR ${abstracts.authorLastName} ILIKE ${pat} OR ${abstracts.authorAffiliation} ILIKE ${pat} OR ${abstracts.authorEmail} ILIKE ${pat} OR ${abstracts.code} ILIKE ${pat})`,
     );
   }
-  const where = and(...conds);
+  if (filters.presentationType) {
+    const type = filters.presentationType;
+    conds.push(
+      type === "CONFERENCE"
+        ? eq(abstracts.finalType, type)
+        : sql`(${abstracts.finalType} = ${type} OR (${abstracts.finalType} IS NULL AND ${abstracts.requestedType} = ${type}))`,
+    );
+  }
+  return and(...conds);
+}
 
+export async function listAdminAbstracts(
+  eventId: string,
+  filters: ListAdminAbstractsFilters,
+): Promise<{ items: AdminAbstractRow[]; total: number }> {
+  const where = buildAdminAbstractsWhere(eventId, filters);
   const [rows, totalRows] = await Promise.all([
     getDb()
       .select()
@@ -3060,4 +3081,26 @@ export async function countCodedAbstractsByTheme(themeId: string): Promise<numbe
       and(eq(abstractThemeLinks.themeId, themeId), isNotNull(abstracts.code)),
     );
   return row?.n ?? 0;
+}
+
+/** Same filters as the admin list, without pagination. */
+export async function findAbstractsForExport(
+  eventId: string,
+  filters: Omit<ListAdminAbstractsFilters, "limit" | "offset">,
+): Promise<AdminAbstractRow[]> {
+  const rows = await getDb()
+    .select()
+    .from(abstracts)
+    .where(buildAdminAbstractsWhere(eventId, filters))
+    .orderBy(asc(abstracts.code), desc(abstracts.createdAt));
+  const ids = rows.map((r) => r.id);
+  const [themes, reviews] = await Promise.all([
+    loadThemesWithSort(ids),
+    loadActiveReviews(ids),
+  ]);
+  return rows.map((row) => ({
+    ...row,
+    themes: themes.get(row.id) ?? [],
+    reviews: reviews.get(row.id) ?? [],
+  }));
 }

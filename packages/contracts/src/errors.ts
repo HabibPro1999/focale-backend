@@ -25,6 +25,8 @@ export const ErrorCodes = {
   EXTRA_NOT_AVAILABLE: "PRC_6003",
   INVALID_SPONSORSHIP_CODE: "PRC_6004",
   PRICING_NOT_FOUND: "PRC_6005",
+  PRICING_RULE_UNSATISFIABLE: "PRC_6006",
+  PRICING_CONDITION_INVALID_OPTION: "PRC_6007",
 
   // Access (7xxx)
   ACCESS_NOT_FOUND: "ACC_7001",
@@ -36,6 +38,8 @@ export const ErrorCodes = {
   ACCESS_HAS_REGISTRATIONS: "ACC_7008",
   ACCESS_DATE_OUT_OF_BOUNDS: "ACC_7009",
   ACCESS_HAS_SPONSORSHIPS: "ACC_7010",
+  ACCESS_CONDITION_INVALID_OPTION: "ACC_7011",
+  ACCESS_SELECTION_REQUIRED: "ACC_7012",
 
   // Events (8xxx)
   EVENT_HAS_REGISTRATIONS: "EVT_8000",
@@ -109,6 +113,12 @@ export const ErrorCodes = {
   ABSTRACT_SUBMISSIONS_NOT_OPEN: "ABS_18009",
   ABSTRACT_DUPLICATE_AUTHOR_EMAIL: "ABS_18010",
   ABSTRACT_TOO_MANY_THEMES: "ABS_18011",
+
+  // Committee invites (19xxx) — all surfaced as HTTP 410 on the public
+  // set-password endpoints so the admin app can distinguish dead-link causes.
+  COMMITTEE_INVITE_INVALID: "INV_19001",
+  COMMITTEE_INVITE_EXPIRED: "INV_19002",
+  COMMITTEE_INVITE_USED: "INV_19003",
 } as const;
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];

@@ -349,6 +349,7 @@ export class AbstractsService {
       submissionMode: config.submissionMode,
       globalWordLimit: config.globalWordLimit,
       maxThemesPerAbstract: config.maxThemesPerAbstract,
+      languages: config.languages ?? null,
       sectionWordLimits: {
         introduction: sectionLimits.introduction ?? null,
         objective: sectionLimits.objective ?? null,

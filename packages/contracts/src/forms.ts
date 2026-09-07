@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  FormLanguagesSchema,
+  translationsMapOf,
+} from "./i18n.schema";
 
 const hasUpdateField = (data: Record<string, unknown>) =>
   Object.values(data).some((value) => value !== undefined);
@@ -26,6 +30,11 @@ export const FieldTypeSchema = z.enum([
   "country",
 ]);
 
+export const OptionTranslationEntrySchema = z.strictObject({
+  label: z.string().optional(),
+  description: z.string().optional(),
+});
+
 export const FieldOptionSchema = z.strictObject({
   id: z.string(),
   label: z.string(),
@@ -33,6 +42,7 @@ export const FieldOptionSchema = z.strictObject({
   maxCapacity: z.number().optional(),
   currentCount: z.number().optional(),
   priceModifier: z.number().optional(),
+  translations: translationsMapOf(OptionTranslationEntrySchema).optional(),
 });
 
 export const ConditionOperatorSchema = z.enum([
@@ -83,6 +93,17 @@ export const FieldValidationSchema = z.strictObject({
   errorMessages: FieldValidationErrorMessagesSchema.optional(),
 });
 
+// Custom error-message translations live here, on the field sidecar, rather
+// than nested inside `validation` — the server never reads them.
+export const FieldTranslationEntrySchema = z.strictObject({
+  label: z.string().optional(),
+  placeholder: z.string().optional(),
+  helpText: z.string().optional(),
+  helperText: z.string().optional(),
+  content: z.string().optional(),
+  errorMessages: FieldValidationErrorMessagesSchema.optional(),
+});
+
 export const FormFieldSchema = z.strictObject({
   id: z.string(),
   type: FieldTypeSchema,
@@ -111,17 +132,48 @@ export const FormFieldSchema = z.strictObject({
   searchable: z.boolean().optional(),
   headingSize: z.enum(["h2", "h3", "h4"]).optional(),
   content: z.string().optional(),
+  translations: translationsMapOf(FieldTranslationEntrySchema).optional(),
 });
 
 // ============================================================================
 // Form Step Schema
 // ============================================================================
 
+export const StepTranslationEntrySchema = z.strictObject({
+  title: z.string().optional(),
+  description: z.string().optional(),
+});
+
 export const FormStepSchema = z.strictObject({
   id: z.string(),
   title: z.string(),
   description: z.string().optional(),
   fields: z.array(FormFieldSchema),
+  translations: translationsMapOf(StepTranslationEntrySchema).optional(),
+});
+
+// ============================================================================
+// Form Settings Schema
+// ============================================================================
+
+// Settings-level sidecar. Additive by design: the deferred per-language
+// settings copy (accessSectionTitle, addonGroupTitle, ...) lands here as one
+// optional key each, with no rename and no data migration.
+export const FormSettingsTranslationEntrySchema = z.strictObject({
+  registrationFeeLabel: z.string().max(120).optional(),
+});
+
+// Loose: existing persisted blobs already carry admin-authored settings keys
+// (isFree, screens, ...) that must keep round-tripping untouched.
+export const FormSettingsSchema = z.looseObject({
+  languages: FormLanguagesSchema.optional(),
+  // When true, the public registration form requires at least one non-included
+  // access option to be selected (skipped when nothing is selectable).
+  accessSelectionRequired: z.boolean().optional(),
+  registrationFeeLabel: z.string().max(120).optional(),
+  translations: translationsMapOf(
+    FormSettingsTranslationEntrySchema,
+  ).optional(),
 });
 
 // ============================================================================
@@ -132,6 +184,7 @@ export const FormStepSchema = z.strictObject({
 // Uses looseObject to allow top-level extensions while requiring a valid persisted steps array
 export const FormSchemaJsonSchema = z.looseObject({
   steps: z.array(FormStepSchema).min(1),
+  settings: FormSettingsSchema.optional(),
 });
 
 // ============================================================================
@@ -145,11 +198,19 @@ export const BeneficiaryTemplateSchema = z.looseObject({
   maxCount: z.number().int().max(500).default(100),
 });
 
+export const SponsorSummaryTranslationEntrySchema = z.strictObject({
+  title: z.string().optional(),
+  termsText: z.string().optional(),
+});
+
 // Summary settings for sponsor forms
 export const SponsorSummarySettingsSchema = z.looseObject({
   title: z.string().optional(),
   showPriceBreakdown: z.boolean().default(true),
   termsText: z.string().optional(),
+  translations: translationsMapOf(
+    SponsorSummaryTranslationEntrySchema,
+  ).optional(),
 });
 
 // Sponsorship mode settings (only for SPONSOR forms)
@@ -169,6 +230,7 @@ export const SponsorFormSchemaJsonSchema = z.looseObject({
   beneficiaryTemplate: BeneficiaryTemplateSchema,
   summarySettings: SponsorSummarySettingsSchema.optional(),
   sponsorshipSettings: SponsorshipSettingsSchema.optional(),
+  settings: FormSettingsSchema.optional(),
 });
 
 const UpdatableFormSchemaJsonSchema = z.union([
@@ -180,12 +242,20 @@ const UpdatableFormSchemaJsonSchema = z.union([
 // Request Schemas
 // ============================================================================
 
+export const SuccessTranslationsSchema = translationsMapOf(
+  z.strictObject({
+    successTitle: z.string().optional(),
+    successMessage: z.string().optional(),
+  }),
+);
+
 export const CreateFormSchema = z.strictObject({
   eventId: z.string().uuid(),
   name: z.string().min(1).max(200),
   schema: FormSchemaJsonSchema.optional(), // Optional - backend provides defaults
   successTitle: z.string().optional().nullable(),
   successMessage: z.string().optional().nullable(),
+  successTranslations: SuccessTranslationsSchema.optional().nullable(),
 });
 
 export const UpdateFormSchema = z
@@ -194,6 +264,7 @@ export const UpdateFormSchema = z
     schema: UpdatableFormSchemaJsonSchema.optional(),
     successTitle: z.string().optional().nullable(),
     successMessage: z.string().optional().nullable(),
+    successTranslations: SuccessTranslationsSchema.optional().nullable(),
   })
   .refine(hasUpdateField, {
     message: "At least one field must be provided for update",
@@ -230,8 +301,18 @@ export const CreateSponsorFormBodySchema = z.looseObject({
 export type FieldType = z.infer<typeof FieldTypeSchema>;
 export type FieldCondition = z.infer<typeof FieldConditionSchema>;
 export type FieldValidation = z.infer<typeof FieldValidationSchema>;
+export type FieldTranslationEntry = z.infer<typeof FieldTranslationEntrySchema>;
+export type OptionTranslationEntry = z.infer<
+  typeof OptionTranslationEntrySchema
+>;
+export type StepTranslationEntry = z.infer<typeof StepTranslationEntrySchema>;
 export type FormField = z.infer<typeof FormFieldSchema>;
 export type FormStep = z.infer<typeof FormStepSchema>;
+export type FormSettings = z.infer<typeof FormSettingsSchema>;
+export type FormSettingsTranslationEntry = z.infer<
+  typeof FormSettingsTranslationEntrySchema
+>;
+export type SuccessTranslations = z.infer<typeof SuccessTranslationsSchema>;
 export type FormSchemaJson = z.infer<typeof FormSchemaJsonSchema>;
 export type SponsorshipSettings = z.infer<typeof SponsorshipSettingsSchema>;
 export type SponsorFormSchemaJson = z.infer<typeof SponsorFormSchemaJsonSchema>;

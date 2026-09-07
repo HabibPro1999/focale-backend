@@ -58,7 +58,7 @@ export const registrations = pgTable(
     // scalar-list quirk on CockroachDB. Keep default, no .notNull().
     accessTypeIds: text("access_type_ids").array().default([]),
     droppedAccessIds: text("dropped_access_ids").array().default([]),
-    checkedInAt: timestamp({ precision: 3 }),
+    checkedInAt: timestamp({ precision: 3, withTimezone: true }),
     checkedInBy: text(),
   },
   (t) => [

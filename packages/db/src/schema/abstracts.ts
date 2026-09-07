@@ -54,6 +54,7 @@ export const abstractConfig = pgTable(
     bookOrder: abstractBookOrder().notNull().default("BY_CODE"),
     bookIncludeAuthorNames: boolean().notNull().default(true),
     additionalFieldsSchema: jsonb().notNull().default([]),
+    languages: jsonb(),
     ...timestamps,
   },
   (t) => [uniqueIndex("abstract_config_event_id_key").on(t.eventId)],
@@ -71,6 +72,7 @@ export const abstractThemes = pgTable(
       }),
     label: text().notNull(),
     description: text(),
+    translations: jsonb(),
     sortOrder: integer().notNull().default(0),
     active: boolean().notNull().default(true),
     ...timestamps,
@@ -355,6 +357,34 @@ export const abstractThemeLinks = pgTable(
     uniqueIndex("abstract_theme_links_abstract_id_theme_id_key").on(
       t.abstractId,
       t.themeId,
+    ),
+  ],
+);
+
+export const committeeInviteTokens = pgTable(
+  "committee_invite_tokens",
+  {
+    id: idPk(),
+    tokenHash: text().notNull(),
+    userId: text()
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    eventId: text()
+      .notNull()
+      .references(() => events.id, {
+        onDelete: "cascade",
+        onUpdate: "cascade",
+      }),
+    expiresAt: timestamp({ precision: 3 }).notNull(),
+    usedAt: timestamp({ precision: 3 }),
+    createdAt: timestamp({ precision: 3 }).notNull().defaultNow(),
+    createdBy: text(),
+  },
+  (t) => [
+    uniqueIndex("committee_invite_tokens_token_hash_key").on(t.tokenHash),
+    index("committee_invite_tokens_user_id_event_id_idx").on(
+      t.userId,
+      t.eventId,
     ),
   ],
 );

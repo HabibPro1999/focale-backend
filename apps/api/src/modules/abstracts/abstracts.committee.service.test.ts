@@ -6,6 +6,7 @@ import { UserRole } from "@app/contracts";
 // ---------------------------------------------------------------------------
 vi.mock("@app/db", () => ({
   findAbstractMembership: vi.fn(),
+  deleteUnusedCommitteeInvites: vi.fn(),
   findEventClientId: vi.fn(),
   findEventName: vi.fn(),
   listActiveReviewerThemeIds: vi.fn(),
@@ -37,7 +38,6 @@ vi.mock("@app/db", () => ({
 
 const sendEmailMock = vi.fn();
 vi.mock("@app/integrations", () => ({
-  generatePasswordResetLink: vi.fn(),
   updateFirebaseUserPassword: vi.fn(),
   revokeFirebaseRefreshTokens: vi.fn(),
   getEmailProvider: () => ({ sendEmail: sendEmailMock }),
@@ -87,10 +87,10 @@ import {
   updateEmailLogById,
 } from "@app/db";
 import {
-  generatePasswordResetLink,
   updateFirebaseUserPassword,
   revokeFirebaseRefreshTokens,
 } from "@app/integrations";
+import { CommitteeEmailsService } from "./abstracts.committee-emails";
 import { AbstractsCommitteeService } from "./abstracts.committee.service";
 import { AppException } from "../../core/app-exception";
 
@@ -112,9 +112,13 @@ const superAdminCaller = {
 };
 
 const usersMock = { createUser: vi.fn() };
-const config = { urls: { adminAppUrl: "https://admin.example" } };
+const mintCommitteeInviteToken = vi.fn();
+const config = { urls: { adminAppUrl: "https://admin.example" }, security: { committeeInvite: { tokenTtlDays: 7 } } };
+const invites = { mintCommitteeInviteToken,
+  buildCommitteeInviteLink: (token: string) => `https://admin.example/committee/set-password?token=${token}&lang=fr` };
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const service = new AbstractsCommitteeService(usersMock as any, config as any);
+const service = new AbstractsCommitteeService(usersMock as any, invites as any, new CommitteeEmailsService(config as any));
 
 async function expectStatus(p: Promise<unknown>, status: number): Promise<void> {
   const err = await p.then(
@@ -248,7 +252,7 @@ describe("addCommitteeMember", () => {
     const user = committeeUser();
     mock(getUserByEmail).mockResolvedValue(user);
     mock(findEventName).mockResolvedValue("Big Event");
-    mock(generatePasswordResetLink).mockResolvedValue("https://reset/link");
+    mock(mintCommitteeInviteToken).mockResolvedValue("a".repeat(64));
     mock(createEmailLog).mockResolvedValue({ ok: true, log: { id: "log-1" } });
     sendEmailMock.mockResolvedValue({ success: true });
     mock(listCommitteeMembers).mockResolvedValue([memberDto(user)]);
@@ -266,9 +270,8 @@ describe("addCommitteeMember", () => {
     });
     expect(usersMock.createUser).not.toHaveBeenCalled();
     expect(upsertCommitteeMembership).toHaveBeenCalledWith(eventId, user.id);
-    expect(generatePasswordResetLink).toHaveBeenCalledWith(
-      user.email,
-      expect.objectContaining({ url: expect.stringContaining("/committee") }),
+    expect(mintCommitteeInviteToken).toHaveBeenCalledWith(
+      user.id, eventId, performedBy,
     );
     expect(sendEmailMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -284,7 +287,7 @@ describe("addCommitteeMember", () => {
     mock(getUserByEmail).mockResolvedValue(undefined);
     usersMock.createUser.mockResolvedValue(user);
     mock(findEventName).mockResolvedValue("Big Event");
-    mock(generatePasswordResetLink).mockResolvedValue("https://reset/link");
+    mock(mintCommitteeInviteToken).mockResolvedValue("a".repeat(64));
     mock(createEmailLog).mockResolvedValue({ ok: true, log: { id: "log-1" } });
     sendEmailMock.mockResolvedValue({ success: true });
     mock(listCommitteeMembers).mockResolvedValue([memberDto(user)]);
@@ -315,7 +318,7 @@ describe("addCommitteeMember", () => {
     mock(getUserByEmail).mockResolvedValue(user);
     mock(findEventName).mockResolvedValue("Big Event");
     mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" });
-    mock(generatePasswordResetLink).mockResolvedValue("https://reset/link");
+    mock(mintCommitteeInviteToken).mockResolvedValue("a".repeat(64));
     mock(findAbstractEmailTemplate).mockResolvedValue({
       id: "tmpl-1",
       subject: "Bienvenue {{reviewerName}} - {{eventName}}",
@@ -341,7 +344,7 @@ describe("addCommitteeMember", () => {
       expect.objectContaining({
         to: user.email,
         subject: `Bienvenue ${user.name} - Big Event`,
-        html: expect.stringContaining("https://reset/link"),
+        html: expect.stringContaining("https://admin.example/committee/set-password?token=" + "a".repeat(64)),
       }),
     );
   });
@@ -351,7 +354,7 @@ describe("addCommitteeMember", () => {
     mock(getUserByEmail).mockResolvedValue(user);
     mock(findEventName).mockResolvedValue("Big Event");
     mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" });
-    mock(generatePasswordResetLink).mockResolvedValue("https://reset/link");
+    mock(mintCommitteeInviteToken).mockResolvedValue("a".repeat(64));
     mock(findAbstractEmailTemplate).mockResolvedValue(null);
     mock(createEmailLog).mockResolvedValue({ ok: true, log: { id: "log-1" } });
     sendEmailMock.mockResolvedValue({ success: true });
@@ -380,7 +383,7 @@ describe("addCommitteeMember", () => {
     mock(getUserByEmail).mockResolvedValue(user);
     mock(findEventName).mockResolvedValue("Big Event");
     mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" });
-    mock(generatePasswordResetLink).mockResolvedValue("https://reset/link");
+    mock(mintCommitteeInviteToken).mockResolvedValue("a".repeat(64));
     mock(findAbstractEmailTemplate).mockResolvedValue({
       id: "tmpl-1",
       subject: "Bienvenue {{reviewerName}} - {{eventName}}",
@@ -422,7 +425,7 @@ describe("addCommitteeMember", () => {
     mock(getUserByEmail).mockResolvedValue(user);
     mock(findEventName).mockResolvedValue("Big Event");
     mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" });
-    mock(generatePasswordResetLink).mockResolvedValue("https://reset/link");
+    mock(mintCommitteeInviteToken).mockResolvedValue("a".repeat(64));
     mock(findAbstractEmailTemplate).mockResolvedValue(null);
     mock(createEmailLog).mockResolvedValue({ ok: true, log: { id: "log-mjml" } });
     sendEmailMock.mockResolvedValue({ success: true, messageId: "msg-mjml" });
@@ -457,7 +460,7 @@ describe("addCommitteeMember", () => {
     mock(getUserByEmail).mockResolvedValue(user);
     mock(findEventName).mockResolvedValue("Big Event");
     mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" });
-    mock(generatePasswordResetLink).mockResolvedValue("https://reset/link");
+    mock(mintCommitteeInviteToken).mockResolvedValue("a".repeat(64));
     mock(findAbstractEmailTemplate).mockResolvedValue(null);
     mock(createEmailLog).mockResolvedValue({ ok: true, log: { id: "log-fail" } });
     sendEmailMock.mockRejectedValue(new Error("SMTP down"));
@@ -486,7 +489,7 @@ describe("addCommitteeMember", () => {
     usersMock.createUser.mockResolvedValue(user);
     mock(findEventName).mockResolvedValue("Big Event");
     mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" });
-    mock(generatePasswordResetLink).mockResolvedValue("https://reset/link");
+    mock(mintCommitteeInviteToken).mockResolvedValue("a".repeat(64));
     mock(findAbstractEmailTemplate).mockResolvedValue(null);
     mock(createEmailLog).mockResolvedValue({ ok: true, log: { id: "log-pwd" } });
     sendEmailMock.mockResolvedValue({ success: true });
@@ -510,7 +513,7 @@ describe("addCommitteeMember", () => {
     const user = committeeUser();
     mock(getUserByEmail).mockResolvedValue(user);
     mock(findEventName).mockResolvedValue("Big Event");
-    mock(generatePasswordResetLink).mockRejectedValue(new Error("firebase down"));
+    mock(mintCommitteeInviteToken).mockRejectedValue(new Error("firebase down"));
     mock(listCommitteeMembers).mockResolvedValue([memberDto(user)]);
 
     const result = await service.addCommitteeMember(
@@ -1054,12 +1057,12 @@ describe("resendCommitteeInvite", () => {
       service.resendCommitteeInvite(eventId, reviewerId, performedBy),
       404,
     );
-    expect(generatePasswordResetLink).not.toHaveBeenCalled();
+    expect(mintCommitteeInviteToken).not.toHaveBeenCalled();
   });
 
   it("sends the reset email and audit-logs on success", async () => {
     mock(findCommitteeInviteTarget).mockResolvedValue(target);
-    mock(generatePasswordResetLink).mockResolvedValue("https://reset/link");
+    mock(mintCommitteeInviteToken).mockResolvedValue("a".repeat(64));
     sendEmailMock.mockResolvedValue({ success: true });
 
     const result = await service.resendCommitteeInvite(
@@ -1072,7 +1075,7 @@ describe("resendCommitteeInvite", () => {
     expect(sendEmailMock).toHaveBeenCalledWith(
       expect.objectContaining({
         to: "r9@example.com",
-        subject: "Réinitialisation du mot de passe comité",
+        subject: "Nouveau lien d'accès - comité scientifique",
         categories: ["committee-password-reset"],
       }),
     );
@@ -1080,14 +1083,14 @@ describe("resendCommitteeInvite", () => {
       expect.objectContaining({
         entityType: "User",
         action: "admin_reset_password",
-        changes: { method: { old: null, new: "email_link" } },
+        changes: { method: { old: null, new: "invite_token" } },
       }),
     );
   });
 
   it("reports false but still audit-logs when SendGrid fails", async () => {
     mock(findCommitteeInviteTarget).mockResolvedValue(target);
-    mock(generatePasswordResetLink).mockResolvedValue("https://reset/link");
+    mock(mintCommitteeInviteToken).mockResolvedValue("a".repeat(64));
     sendEmailMock.mockResolvedValue({ success: false, error: "down" });
 
     const result = await service.resendCommitteeInvite(
@@ -1101,7 +1104,7 @@ describe("resendCommitteeInvite", () => {
 
   it("reports false but still audit-logs when link generation throws", async () => {
     mock(findCommitteeInviteTarget).mockResolvedValue(target);
-    mock(generatePasswordResetLink).mockRejectedValue(new Error("firebase"));
+    mock(mintCommitteeInviteToken).mockRejectedValue(new Error("firebase"));
 
     const result = await service.resendCommitteeInvite(
       eventId,

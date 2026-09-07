@@ -39,7 +39,7 @@ function access(
 
 type Item = { id: string; type: string; spotsRemaining: number | null; isFull: boolean };
 function scheduled(result: ReturnType<typeof groupAccess>): Item[] {
-  return result.groups.flatMap((g) => g.slots.flatMap((s) => s.items as Item[]));
+  return [...result.groups.flatMap((g) => g.slots.flatMap((s) => s.items as Item[])), ...(result.addonGroup?.slots.flatMap((s) => s.items as Item[]) ?? [])];
 }
 
 describe("groupAccess", () => {
@@ -196,7 +196,7 @@ describe("groupAccess", () => {
     expect(items.find((i) => i.id === "full-ws")).toBeDefined();
     expect(items.find((i) => i.id === "open-ws")).toBeDefined();
     expect(result.addonGroup).not.toBeNull();
-    expect(result.addonGroup?.items).toHaveLength(1);
+    expect(result.addonGroup?.slots[0].items).toHaveLength(1);
   });
 
   it("includes OTHER type items in date groups", () => {
@@ -235,5 +235,34 @@ describe("groupAccess", () => {
     expect(result.groups[0].dateKey).toBe("2025-06-01");
     expect(result.groups[1].dateKey).toBe("2025-06-02");
     expect(result.groups[2].dateKey).toBe("2025-06-03");
+  });
+});
+
+describe("options grouping parity", () => {
+  it("groups undated alternatives by type and OTHER label, isolating included items and ADDONs", () => {
+    const result = groupAccess([
+      access({ id: "d2", type: "DINNER", sortOrder: 3 }),
+      access({ id: "d1", type: "DINNER", sortOrder: 2 }),
+      access({ id: "included", type: "DINNER", includedInBase: true, sortOrder: 0 }),
+      access({ id: "o1", type: "OTHER", groupLabel: "Excursion", sortOrder: 4 }),
+      access({ id: "o2", type: "OTHER", groupLabel: "Hotel", sortOrder: 5 }),
+      access({ id: "addon", type: "ADDON", startsAt: new Date("2025-06-01"), sortOrder: 1 }),
+    ], {}, [], NOW);
+    expect(result.groups).toEqual([]);
+    expect(result.addonGroup?.slots.map((s) => ({ type: s.selectionType, ids: (s.items as Item[]).map((i) => i.id) }))).toEqual([
+      { type: "multiple", ids: ["included"] }, { type: "multiple", ids: ["addon"] },
+      { type: "single", ids: ["d1", "d2"] }, { type: "multiple", ids: ["o1"] }, { type: "multiple", ids: ["o2"] },
+    ]);
+    expect(result.addonGroup?.slots[1].startsAt).toBeNull();
+  });
+  it("breaks sort-order ties with creation time, independent of input order", () => {
+    const newer = access({ id: "newer", createdAt: new Date(2) });
+    const older = access({ id: "older", createdAt: new Date(1) });
+    expect(groupAccess([newer, older], {}, [], NOW)).toEqual(groupAccess([older, newer], {}, [], NOW));
+    expect((groupAccess([newer, older], {}, [], NOW).addonGroup?.slots[0].items as Item[]).map((i) => i.id)).toEqual(["older", "newer"]);
+  });
+  it("preserves the Nest event-local calendar date around midnight", () => {
+    const result = groupAccess([access({ id: "midnight", startsAt: new Date("2025-06-01T23:30:00Z") })], {}, [], NOW);
+    expect(result.groups[0].dateKey).toBe("2025-06-02");
   });
 });

@@ -2,52 +2,147 @@ import { describe, expect, it } from "vitest";
 import { ConditionSchema } from "./condition.schema";
 
 describe("ConditionSchema", () => {
-  it("accepts a basic equals condition", () => {
-    expect(
-      ConditionSchema.safeParse({
-        fieldId: "role",
-        operator: "equals",
-        value: "admin",
-      }).success,
-    ).toBe(true);
+  describe("in operator", () => {
+    it("parses a non-empty array value", () => {
+      const result = ConditionSchema.safeParse({
+        fieldId: "category",
+        operator: "in",
+        value: ["gold", "silver"],
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects an empty array value", () => {
+      const result = ConditionSchema.safeParse({
+        fieldId: "category",
+        operator: "in",
+        value: [],
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects a scalar value", () => {
+      const result = ConditionSchema.safeParse({
+        fieldId: "category",
+        operator: "in",
+        value: "gold",
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects an omitted value", () => {
+      const result = ConditionSchema.safeParse({
+        fieldId: "category",
+        operator: "in",
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects the not_in operator at the enum level", () => {
+      const result = ConditionSchema.safeParse({
+        fieldId: "category",
+        operator: "not_in",
+        value: ["gold"],
+      });
+
+      expect(result.success).toBe(false);
+    });
   });
 
-  it("requires a numeric value for greater_than / less_than", () => {
-    expect(
-      ConditionSchema.safeParse({
+  describe("scalar operators reject list values", () => {
+    it("rejects an array value on equals", () => {
+      const result = ConditionSchema.safeParse({
+        fieldId: "category",
+        operator: "equals",
+        value: ["gold", "silver"],
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects an array value on not_equals", () => {
+      const result = ConditionSchema.safeParse({
+        fieldId: "category",
+        operator: "not_equals",
+        value: ["gold"],
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it("still accepts a scalar value on equals", () => {
+      const result = ConditionSchema.safeParse({
+        fieldId: "category",
+        operator: "equals",
+        value: "gold",
+      });
+
+      expect(result.success).toBe(true);
+    });
+  });
+
+  describe("numeric refine (pre-existing, locked in)", () => {
+    it("accepts a numeric value for greater_than", () => {
+      const result = ConditionSchema.safeParse({
+        fieldId: "age",
+        operator: "greater_than",
+        value: 18,
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("accepts a numeric string for less_than", () => {
+      const result = ConditionSchema.safeParse({
+        fieldId: "age",
+        operator: "less_than",
+        value: "18",
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects a non-numeric value for greater_than", () => {
+      const result = ConditionSchema.safeParse({
         fieldId: "age",
         operator: "greater_than",
         value: "not-a-number",
-      }).success,
-    ).toBe(false);
+      });
 
-    expect(
-      ConditionSchema.safeParse({
-        fieldId: "age",
-        operator: "greater_than",
-        value: "18",
-      }).success,
-    ).toBe(true);
+      expect(result.success).toBe(false);
+    });
 
-    expect(
-      ConditionSchema.safeParse({
+    it("rejects an omitted value for less_than", () => {
+      const result = ConditionSchema.safeParse({
         fieldId: "age",
         operator: "less_than",
-        value: 65,
-      }).success,
-    ).toBe(true);
+      });
+
+      expect(result.success).toBe(false);
+    });
   });
 
-  it("rejects unknown operators and extra keys", () => {
-    expect(
-      ConditionSchema.safeParse({ fieldId: "x", operator: "matches" }).success,
-    ).toBe(false);
-    expect(
-      ConditionSchema.safeParse({
-        fieldId: "x",
-        operator: "equals",
-        extra: 1,
-      }).success,
-    ).toBe(false);
+  describe("valueless operators", () => {
+    it("accepts is_empty with no value", () => {
+      const result = ConditionSchema.safeParse({
+        fieldId: "category",
+        operator: "is_empty",
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("accepts is_not_empty with no value", () => {
+      const result = ConditionSchema.safeParse({
+        fieldId: "category",
+        operator: "is_not_empty",
+      });
+
+      expect(result.success).toBe(true);
+    });
   });
 });

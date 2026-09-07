@@ -8,6 +8,10 @@ import {
   UpdateThemeSchema,
   AdditionalFieldsSchema,
   ListAbstractsQuerySchema,
+  ExportAbstractsQuerySchema,
+  CommitteeInviteVerifySchema,
+  CommitteeInviteSetPasswordSchema,
+  CommitteeInviteResendSchema,
   AbstractSlugParamSchema,
   AbstractIdParamSchema,
   AbstractTokenQuerySchema,
@@ -77,3 +81,7 @@ export class ReviewAbstractDto extends createZodDto(ReviewAbstractSchema) {}
 export class SetCommitteeMemberPasswordDto extends createZodDto(
   SetCommitteeMemberPasswordSchema,
 ) {}
+export class ExportAbstractsQueryDto extends createZodDto(ExportAbstractsQuerySchema) {}
+export class CommitteeInviteVerifyDto extends createZodDto(CommitteeInviteVerifySchema) {}
+export class CommitteeInviteSetPasswordDto extends createZodDto(CommitteeInviteSetPasswordSchema) {}
+export class CommitteeInviteResendDto extends createZodDto(CommitteeInviteResendSchema) {}

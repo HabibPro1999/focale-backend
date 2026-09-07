@@ -1,3 +1,4 @@
+import { logger } from "../logger.service";
 import {
   ForbiddenException,
   Injectable,
@@ -90,6 +91,7 @@ export class AuthGuard implements CanActivate {
       ) {
         throw error;
       }
+      logger.warn({ err: error }, "Firebase token verification failed");
       throw new UnauthorizedException({
         code: ErrorCodes.INVALID_TOKEN,
         message: "Invalid or expired token",

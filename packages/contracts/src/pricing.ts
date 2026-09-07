@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { findConditionConflicts } from "./condition-satisfiability";
 import { ConditionSchema } from "./condition.schema";
 
 const hasUpdateField = (data: Record<string, unknown>) =>
@@ -22,8 +23,24 @@ export const EmbeddedPricingRuleSchema = z.strictObject({
 });
 
 // For creating rules (id is optional, will be generated)
+// A POST is a new rule by definition, so it can never be "legacy" — always
+// validate it against the contradiction guard. Do NOT add this refine to
+// `EmbeddedPricingRuleSchema` (reused inside `UpdateEventPricingSchema.rules`,
+// a full-replace path where a client legitimately echoes an untouched legacy
+// rule) or to `UpdateEmbeddedRuleSchema` (a partial patch — the service
+// shallow-merges it onto the stored rule, so only the service knows the
+// merged conditions; see the grandfathering logic in pricing.service.ts).
 export const CreateEmbeddedRuleSchema = EmbeddedPricingRuleSchema.omit({
   id: true,
+}).superRefine((rule, ctx) => {
+  const conflicts = findConditionConflicts(rule.conditions, rule.conditionLogic);
+  if (conflicts.length > 0) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["conditions"],
+      message: "Conditions are contradictory and can never all be true together",
+    });
+  }
 });
 
 // For updating a single rule

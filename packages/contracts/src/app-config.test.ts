@@ -145,4 +145,10 @@ describe("parseAppConfig", () => {
       false,
     );
   });
+  it("defaults invite links to seven days and accepts an override", () => {
+    expect(parseAppConfig(baseEnv()).security.committeeInvite.tokenTtlDays).toBe(7);
+    expect(parseAppConfig(baseEnv({ COMMITTEE_INVITE_TOKEN_TTL_DAYS: "14" })).security.committeeInvite.tokenTtlDays).toBe(14);
+    expect(() => parseAppConfig(baseEnv({ COMMITTEE_INVITE_TOKEN_TTL_DAYS: "0" }))).toThrow(ConfigError);
+  });
+
 });

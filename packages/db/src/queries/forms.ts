@@ -55,6 +55,7 @@ export type FormUpdatePatch = {
   name?: string;
   successTitle?: string | null;
   successMessage?: string | null;
+  successTranslations?: unknown;
   schema?: unknown;
   incrementSchemaVersion?: boolean;
 };
@@ -174,8 +175,8 @@ async function findPublicFormByEventSlug(
     .from(eventAccess)
     .where(and(eq(eventAccess.eventId, row.event.id), eq(eventAccess.active, true)))
     .orderBy(
-      asc(eventAccess.startsAt),
       asc(eventAccess.sortOrder),
+      asc(eventAccess.startsAt),
       asc(eventAccess.createdAt),
     );
 
@@ -300,6 +301,7 @@ function buildFormSet(patch: FormUpdatePatch): Record<string, unknown> {
   if (patch.successTitle !== undefined) set.successTitle = patch.successTitle;
   if (patch.successMessage !== undefined)
     set.successMessage = patch.successMessage;
+  if (patch.successTranslations !== undefined) set.successTranslations = patch.successTranslations;
   if (patch.schema !== undefined) set.schema = patch.schema;
   if (patch.incrementSchemaVersion) {
     set.schemaVersion = sql`${forms.schemaVersion} + 1`;
@@ -413,4 +415,11 @@ export function updateSponsorshipSettingsModeChange(
       .returning();
     return { ok: true, form } as const;
   });
+}
+
+/** Registration schema used to validate pricing/access condition option IDs. */
+export async function findRegistrationFormSchema(eventId: string, exec: DbExecutor = getDb()) {
+  const [row] = await exec.select({ schema: forms.schema }).from(forms)
+    .where(and(eq(forms.eventId, eventId), eq(forms.type, "REGISTRATION"))).limit(1);
+  return row ?? null;
 }

@@ -1,3 +1,4 @@
+import { ABSTRACT_STATUS_LABELS_FR, ABSTRACT_TYPE_LABELS_FR } from "@app/contracts";
 // =============================================================================
 // ABSTRACT EMAIL QUEUE
 // Consumes `email.abstract` outbox events (worker handler): looks up the
@@ -34,20 +35,8 @@ import { formatDate } from "./rendering/index";
 
 const logger = createLogger({ name: "email:abstract-queue" });
 
-const STATUS_LABELS: Record<string, string> = {
-  SUBMITTED: "Soumis",
-  UNDER_REVIEW: "En cours d'évaluation",
-  REVIEW_COMPLETE: "Évaluation terminée",
-  ACCEPTED: "Accepté",
-  REJECTED: "Refusé",
-  PENDING: "En attente",
-};
-
-const TYPE_LABELS: Record<string, string> = {
-  CONFERENCE: "Conférence",
-  ORAL_COMMUNICATION: "Communication orale",
-  POSTER: "Communication affichée",
-};
+const STATUS_LABELS = ABSTRACT_STATUS_LABELS_FR as Record<string, string>;
+const TYPE_LABELS = ABSTRACT_TYPE_LABELS_FR as Record<string, string>;
 
 // -----------------------------------------------------------------------------
 // Plain-text fallback templates (C1/N4), used when no admin template is

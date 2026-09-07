@@ -692,6 +692,9 @@ export class RegistrationsService {
       }
     }
 
+    await this.access.assertAccessSelectionRequirement(eventId, formData, accessSelections ?? [],
+      (form.schema as { settings?: { accessSelectionRequired?: boolean } } | null)?.settings);
+
     let createdId!: string;
     try {
       await withTxn(async (tx) => {
@@ -1863,6 +1866,11 @@ export class RegistrationsService {
             { errors: v.errors },
           );
         }
+      }
+
+      if (isAccessEdit) {
+        await this.access.assertAccessSelectionRequirement(current.eventId, newFormData, newAccessSelections,
+          (current.form.schema as { settings?: { accessSelectionRequired?: boolean } } | null)?.settings, tx);
       }
 
       newPriceBreakdown = await this.pricing.calculatePrice(

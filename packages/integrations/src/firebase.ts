@@ -1,5 +1,5 @@
 import admin from "firebase-admin";
-import type { ActionCodeSettings, Auth } from "firebase-admin/auth";
+import type { DecodedIdToken, Auth } from "firebase-admin/auth";
 import type { Storage } from "firebase-admin/storage";
 
 // ponytail: lazy-init deviation from legacy (was eager at import). Still
@@ -58,8 +58,60 @@ export function getFirebaseStorage(): Storage {
  * Verify a Firebase ID token and return the decoded token.
  * The `true` second arg checks token revocation.
  */
+async function verifyTokenViaIdentityToolkit(
+  idToken: string,
+): Promise<DecodedIdToken> {
+  const res = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${(process.env.FIREBASE_WEB_API_KEY ?? "AIzaSyBiQGgDgPf9IAoo8y2zwHCS-EZ57N6KCus")}`,
+    {
+      method: "POST",
+      signal: AbortSignal.timeout(10_000),
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ idToken }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(`identitytoolkit accounts:lookup failed: ${res.status}`);
+  }
+  const body = (await res.json()) as {
+    users?: Array<{ localId: string; disabled?: boolean; validSince?: string }>;
+  };
+  const user = body.users?.[0];
+  if (!user) {
+    throw new Error("identitytoolkit accounts:lookup returned no user");
+  }
+  if (user.disabled) {
+    throw new Error("identitytoolkit: user is disabled");
+  }
+  // Payload is trustworthy here: accounts:lookup only succeeds for a token
+  // Google itself verified.
+  const payload = JSON.parse(
+    Buffer.from(idToken.split(".")[1] ?? "", "base64url").toString("utf-8"),
+  ) as DecodedIdToken;
+  if ((payload.auth_time ?? 0) < Number(user.validSince ?? 0)) {
+    throw new Error("identitytoolkit: token issued before revocation");
+  }
+  return { ...payload, uid: user.localId };
+}
+
+/**
+ * Verify Firebase ID token and return decoded token.
+ */
 export async function verifyToken(idToken: string) {
-  return getFirebaseAuth().verifyIdToken(idToken, true);
+  try {
+    return await getFirebaseAuth().verifyIdToken(idToken, true);
+  } catch (error) {
+    // ponytail: Google 403-blocks our Render egress IP for the x509 cert
+    // endpoint, killing local signature verification. Fall back to letting
+    // Google verify the token server-side. Remove once the IP is unblocked.
+    if (
+      error instanceof Error &&
+      error.message.includes("Error fetching public keys")
+    ) {
+      return verifyTokenViaIdentityToolkit(idToken);
+    }
+    throw error;
+  }
 }
 
 /**
@@ -88,17 +140,6 @@ export async function setCustomClaims(
  */
 export async function deleteFirebaseUser(uid: string): Promise<void> {
   await getFirebaseAuth().deleteUser(uid);
-}
-
-/**
- * Generate a one-time password-reset link. Used to onboard newly created
- * accounts without requiring an admin to set (and share) a temporary password.
- */
-export async function generatePasswordResetLink(
-  email: string,
-  actionCodeSettings?: ActionCodeSettings,
-): Promise<string> {
-  return getFirebaseAuth().generatePasswordResetLink(email, actionCodeSettings);
 }
 
 /**

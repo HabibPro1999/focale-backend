@@ -1,3 +1,4 @@
+import { ErrorCodes } from "@app/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // --- @app/db mock -----------------------------------------------------------
@@ -122,6 +123,7 @@ function activeClient() {
 describe("RegistrationsService", () => {
   let service: RegistrationsService;
   let access: {
+    assertAccessSelectionRequirement: ReturnType<typeof vi.fn>;
     validateAccessSelections: ReturnType<typeof vi.fn>;
     incrementAccessRegisteredCountTx: ReturnType<typeof vi.fn>;
     decrementAccessRegisteredCountTx: ReturnType<typeof vi.fn>;
@@ -163,6 +165,7 @@ describe("RegistrationsService", () => {
     integ.getStorageProvider.mockReturnValue(storage);
 
     access = {
+      assertAccessSelectionRequirement: vi.fn().mockResolvedValue(undefined),
       validateAccessSelections: vi.fn().mockResolvedValue({ valid: true, errors: [] }),
       incrementAccessRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
       decrementAccessRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
@@ -264,6 +267,15 @@ describe("RegistrationsService", () => {
       });
       db.insertRegistrationRow.mockResolvedValue({ id: "reg1" });
       db.getRegistrationByIdRow.mockResolvedValue(makeRegRow());
+    });
+
+    it("enforces a required option before persisting a public registration", async () => {
+      db.findFormById.mockResolvedValue({ id: "form1", eventId: "ev1", schemaVersion: 3, schema: { settings: { accessSelectionRequired: true } } });
+      access.assertAccessSelectionRequirement.mockRejectedValue(new AppException(ErrorCodes.ACCESS_SELECTION_REQUIRED, "Choose an option", 400));
+      await expect(service.createRegistration(baseInput as never, emptyBreakdown(100)))
+        .rejects.toMatchObject({ code: ErrorCodes.ACCESS_SELECTION_REQUIRED });
+      expect(access.assertAccessSelectionRequirement).toHaveBeenCalledWith("ev1", {}, [], { accessSelectionRequired: true });
+      expect(db.insertRegistrationRow).not.toHaveBeenCalled();
     });
 
     it("creates, reserves nothing when no access, increments event, audits, emits, queues email", async () => {
@@ -587,6 +599,19 @@ describe("RegistrationsService", () => {
     });
 
     const expected = "2026-01-01T00:00:00.000Z";
+
+    it("checks required choices even when a public edit only removes access", async () => {
+      db.findRegistrationWithFormEvent.mockResolvedValue(editFetch({
+        paymentStatus: "PENDING", accessTypeIds: ["acc1"],
+        priceBreakdown: { ...emptyBreakdown(100), accessItems: [{ accessId: "acc1", quantity: 1, subtotal: 0 }] },
+        form: { id: "form1", name: "Reg", schema: { settings: { accessSelectionRequired: true } } },
+      }));
+      access.assertAccessSelectionRequirement.mockRejectedValue(new AppException(ErrorCodes.ACCESS_SELECTION_REQUIRED, "Choose an option", 400));
+      await expect(service.editRegistrationPublic("reg1", { expectedUpdatedAt: expected, accessSelections: [] } as never))
+        .rejects.toMatchObject({ code: ErrorCodes.ACCESS_SELECTION_REQUIRED });
+      expect(access.assertAccessSelectionRequirement).toHaveBeenCalledWith("ev1", expect.anything(), [], { accessSelectionRequired: true }, expect.anything());
+      expect(db.casUpdateRegistrationByUpdatedAt).not.toHaveBeenCalled();
+    });
 
     it("400 for a REFUNDED registration", async () => {
       db.findRegistrationWithFormEvent.mockResolvedValue(

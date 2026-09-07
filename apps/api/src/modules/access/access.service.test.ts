@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ErrorCodes } from "@app/contracts";
+import { ErrorCodes, CreateEventAccessSchema } from "@app/contracts";
 
 // Mock the db query layer (the seam the service talks to). withTxn is a
 // passthrough invoking the callback with a dummy tx (all query fns are mocked).
 vi.mock("@app/db", () => ({
+  findRegistrationFormSchema: vi.fn(),
   getDb: vi.fn(() => ({})),
   withTxn: vi.fn(),
   getEventDatesForAccess: vi.fn(),
@@ -680,5 +681,55 @@ describe("handleCapacityReached", () => {
     const affected = await service.handleCapacityReached(eventId, ["access-1"]);
     expect(affected).toBe(0);
     expect(m.getUnsettledRegistrationsWithAccess).not.toHaveBeenCalled();
+  });
+});
+
+describe("required access choice", () => {
+  const settings = { accessSelectionRequired: true };
+  it("does no reads when the setting is absent", async () => {
+    await service.assertAccessSelectionRequirement(eventId, {}, [], undefined);
+    expect(m.getActiveAccessForGrouping).not.toHaveBeenCalled();
+  });
+  it("rejects an empty choice if a visible, non-full option exists", async () => {
+    m.getActiveAccessForGrouping.mockResolvedValue([accessRow()]);
+    await expect(service.assertAccessSelectionRequirement(eventId, {}, [], settings)).rejects.toMatchObject({ code: ErrorCodes.ACCESS_SELECTION_REQUIRED });
+  });
+  it("accepts any selected non-included access", async () => {
+    m.getAccessByIdsForValidation.mockResolvedValue([accessRow()]);
+    await service.assertAccessSelectionRequirement(eventId, {}, [{ accessId: "access-1", quantity: 1 }], settings);
+    expect(m.getActiveAccessForGrouping).not.toHaveBeenCalled();
+  });
+  it("does not count automatically included access as a choice", async () => {
+    m.getAccessByIdsForValidation.mockResolvedValue([accessRow({ includedInBase: true })]);
+    m.getActiveAccessForGrouping.mockResolvedValue([accessRow({ id: "optional" })]);
+    await expect(service.assertAccessSelectionRequirement(eventId, {}, [{ accessId: "access-1", quantity: 1 }], settings)).rejects.toMatchObject({ code: ErrorCodes.ACCESS_SELECTION_REQUIRED });
+  });
+  it.each([
+    { maxCapacity: 1, paidCount: 1 }, { includedInBase: true },
+    { availableTo: new Date(0) }, { requiredAccess: [{ id: "unselected" }] },
+    { conditions: [{ fieldId: "category", operator: "equals", value: "doctor" }] },
+  ])("waives the requirement when no option is selectable: %j", async (row) => {
+    m.getActiveAccessForGrouping.mockResolvedValue([accessRow(row)]);
+    await expect(service.assertAccessSelectionRequirement(eventId, {}, [], settings)).resolves.toBeUndefined();
+  });
+});
+
+describe("condition option IDs", () => {
+  const schema = { steps: [{ fields: [{ id: "country", label: "Country", type: "country", options: [{ id: "TN", label: "Tunisie" }] }] }] };
+  it("rejects labels on create and allows actual option IDs", async () => {
+    m.getEventDatesForAccess.mockResolvedValue(eventDates);
+    m.findRegistrationFormSchema.mockResolvedValue({ schema });
+    const data = CreateEventAccessSchema.parse({ eventId: "11111111-1111-4111-8111-111111111111", name: "Dinner", conditions: [{ fieldId: "country", operator: "equals" as const, value: "Tunisie" }] });
+    await expect(service.createEventAccess(data)).rejects.toMatchObject({ code: ErrorCodes.ACCESS_CONDITION_INVALID_OPTION, details: { fieldId: "country", exampleOptionIds: ["TN"] } });
+    expect(m.insertEventAccess).not.toHaveBeenCalled();
+    await service.createEventAccess({ ...data, conditions: [{ ...data.conditions![0], value: "TN" }] });
+    expect(m.insertEventAccess).toHaveBeenCalled();
+  });
+  it("grandfathers conditions on unrelated updates, validates explicit edits", async () => {
+    m.getEventAccessForUpdate.mockResolvedValue({ ...accessRow(), event: eventDates });
+    m.findRegistrationFormSchema.mockResolvedValue({ schema });
+    await service.updateEventAccess("access-1", { name: "New name" });
+    expect(m.findRegistrationFormSchema).not.toHaveBeenCalled();
+    await expect(service.updateEventAccess("access-1", { conditions: [{ fieldId: "country", operator: "in", value: ["Tunisie"] }] })).rejects.toMatchObject({ code: ErrorCodes.ACCESS_CONDITION_INVALID_OPTION });
   });
 });

@@ -84,6 +84,7 @@ function makeConfig(overrides: Partial<AbstractConfigRow> = {}): AbstractConfigR
     bookOrder: "BY_CODE",
     bookIncludeAuthorNames: true,
     additionalFieldsSchema: [],
+    languages: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,

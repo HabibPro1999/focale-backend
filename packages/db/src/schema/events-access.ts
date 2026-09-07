@@ -120,7 +120,7 @@ export const accessCheckIns = pgTable(
         onDelete: "cascade",
         onUpdate: "cascade",
       }),
-    checkedInAt: timestamp({ precision: 3 }).defaultNow().notNull(),
+    checkedInAt: timestamp({ precision: 3, withTimezone: true }).defaultNow().notNull(),
     checkedInBy: text().notNull(),
   },
   (t) => [

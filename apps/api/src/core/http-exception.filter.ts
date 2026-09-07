@@ -73,6 +73,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const dbError = mapPgConstraintError(exception);
 
     if (exception instanceof ZodValidationException) {
+      logger.warn({ details: exception.details }, "Request validation failed");
       status = HttpStatus.BAD_REQUEST;
       error = {
         code: ErrorCodes.VALIDATION_ERROR,

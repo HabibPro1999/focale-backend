@@ -11,7 +11,10 @@ import {
   Post,
   Put,
   Query,
+  Res,
 } from "@nestjs/common";
+import type { FastifyReply } from "fastify";
+import { exportAbstractsWorkbook } from "./abstracts.export.service";
 import { Throttle } from "@nestjs/throttler";
 import {
   ErrorCodes,
@@ -19,7 +22,7 @@ import {
   type FinalizeAbstractInput,
   type AddCommitteeMemberInput,
 } from "@app/contracts";
-import { findEventClientId } from "@app/db";
+import { findEventClientId, getEventWithPricing } from "@app/db";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
 import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
@@ -39,6 +42,7 @@ import {
   UpdateThemeDto,
   AdditionalFieldsDto,
   ListAbstractsQueryDto,
+  ExportAbstractsQueryDto,
   FinalizeAbstractDto,
   MarkAbstractPresentedDto,
   CommitteeMemberParamDto,
@@ -83,6 +87,26 @@ export class AbstractsController {
   // ===========================================================================
   // Config
   // ===========================================================================
+  @Get(":eventId/abstracts/export")
+  @SkipEnvelope()
+  async exportAbstracts(
+    @Param() { eventId }: AbstractsEventIdParamDto,
+    @Query() query: ExportAbstractsQueryDto,
+    @CurrentUser() user: AuthUser,
+    @Res() reply: FastifyReply,
+  ) {
+    await this.resolveEvent(eventId, user);
+    const event = await getEventWithPricing(eventId);
+    const result = await exportAbstractsWorkbook(eventId, query, event!.slug);
+    return reply
+      .type("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+      .header(
+        "Content-Disposition",
+        `attachment; filename="${result.filename.replace(/[^a-zA-Z0-9._-]/g, "_")}"`,
+      )
+      .send(result.data);
+  }
+
   @Get(":eventId/abstracts/config")
   async getConfig(
     @Param() { eventId }: AbstractsEventIdParamDto,

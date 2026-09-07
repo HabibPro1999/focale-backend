@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import { ErrorCodes } from "@app/contracts";
+import { ErrorCodes, buildFieldOptionIndex, findInvalidOptionConditions } from "@app/contracts";
 import type {
   CreateEventAccessInput,
   UpdateEventAccessInput,
@@ -8,6 +8,7 @@ import type {
 } from "@app/contracts";
 import {
   getDb,
+  findRegistrationFormSchema,
   withTxn,
   type DbExecutor,
   type EventAccessWithPrereqs,
@@ -157,6 +158,61 @@ function paidAccessQuantities(
 
 @Injectable()
 export class AccessService {
+  private async assertValidOptionConditions(
+    eventId: string,
+    accessName: string,
+    conditions: CreateEventAccessInput["conditions"],
+    accessId?: string,
+  ): Promise<void> {
+    if (!conditions?.length) return;
+    const form = await findRegistrationFormSchema(eventId);
+    if (!form) return;
+    const bad = findInvalidOptionConditions(
+      conditions,
+      buildFieldOptionIndex(form.schema),
+    );
+    if (!bad.length) return;
+    const f = bad[0];
+    throw new AppException(
+      ErrorCodes.ACCESS_CONDITION_INVALID_OPTION,
+      `Access item "${accessName}": value "${String(f.value)}" for field "${f.fieldLabel}" is not one of the field's option ids (e.g. ${f.exampleOptionIds.map((id) => `"${id}"`).join(", ")}). Pick the option in the rule editor.`,
+      400,
+      { accessId, accessName, ...f },
+    );
+  }
+
+  async assertAccessSelectionRequirement(
+    eventId: string,
+    formData: Record<string, unknown>,
+    selections: AccessSelection[],
+    settings: { accessSelectionRequired?: boolean } | null | undefined,
+    db?: DbExecutor,
+  ): Promise<void> {
+    if (settings?.accessSelectionRequired !== true) return;
+    const ids = selections.filter((s) => s.quantity > 0).map((s) => s.accessId);
+    if (ids.length) {
+      const items = await getAccessByIdsForValidation(ids, eventId, db);
+      if (items.some((item) => !item.includedInBase)) return;
+    }
+    const grouped = groupAccess(
+      await getActiveAccessForGrouping(eventId, db),
+      formData,
+      ids,
+      new Date(),
+    );
+    const items = [
+      ...grouped.groups.flatMap((g) => g.slots.flatMap((s) => s.items)),
+      ...(grouped.addonGroup?.slots.flatMap((s) => s.items) ?? []),
+    ] as Array<{ includedInBase: boolean; isFull: boolean }>;
+    if (items.some((item) => !item.includedInBase && !item.isFull)) {
+      throw new AppException(
+        ErrorCodes.ACCESS_SELECTION_REQUIRED,
+        "Veuillez sélectionner au moins une option",
+        400,
+      );
+    }
+  }
+
   // =========================================================================
   // CRUD
   // =========================================================================
@@ -200,6 +256,8 @@ export class AccessService {
         );
       }
     }
+
+    await this.assertValidOptionConditions(eventId, data.name, data.conditions);
 
     const values: NewEventAccessValues = {
       eventId,
@@ -278,6 +336,13 @@ export class AccessService {
         400,
       );
     }
+
+    await this.assertValidOptionConditions(
+      access.eventId,
+      data.name ?? access.name,
+      data.conditions,
+      id,
+    );
 
     const updateData: Partial<NewEventAccessValues> = {};
     if (data.type !== undefined) updateData.type = data.type;
@@ -369,7 +434,10 @@ export class AccessService {
         ) {
           await this.handleCapacityReached(access.eventId, [id], tx);
         }
-        return (await getEventAccessWithPrereqs(id, tx)) as EventAccessWithPrereqs;
+        return (await getEventAccessWithPrereqs(
+          id,
+          tx,
+        )) as EventAccessWithPrereqs;
       });
     }
 
@@ -487,7 +555,11 @@ export class AccessService {
 
     const access = await getAccessCapacityInfo(accessId, exec);
     if (!access) {
-      throw new AppException(ErrorCodes.ACCESS_NOT_FOUND, "Access not found", 404);
+      throw new AppException(
+        ErrorCodes.ACCESS_NOT_FOUND,
+        "Access not found",
+        404,
+      );
     }
     const remaining =
       access.maxCapacity === null
@@ -510,7 +582,11 @@ export class AccessService {
 
     const access = await getAccessRegisteredCount(accessId, exec);
     if (!access) {
-      throw new AppException(ErrorCodes.ACCESS_NOT_FOUND, "Access not found", 404);
+      throw new AppException(
+        ErrorCodes.ACCESS_NOT_FOUND,
+        "Access not found",
+        404,
+      );
     }
     throw new AppException(
       ErrorCodes.VALIDATION_ERROR,
@@ -530,7 +606,11 @@ export class AccessService {
 
     const access = await getAccessCapacityInfo(accessId, exec);
     if (!access) {
-      throw new AppException(ErrorCodes.ACCESS_NOT_FOUND, "Access not found", 404);
+      throw new AppException(
+        ErrorCodes.ACCESS_NOT_FOUND,
+        "Access not found",
+        404,
+      );
     }
     const remaining =
       access.maxCapacity === null
@@ -553,7 +633,11 @@ export class AccessService {
 
     const access = await getAccessPaidCount(accessId, exec);
     if (!access) {
-      throw new AppException(ErrorCodes.ACCESS_NOT_FOUND, "Access not found", 404);
+      throw new AppException(
+        ErrorCodes.ACCESS_NOT_FOUND,
+        "Access not found",
+        404,
+      );
     }
     throw new AppException(
       ErrorCodes.VALIDATION_ERROR,
@@ -698,13 +782,18 @@ export class AccessService {
       if (coveredIds.includes(accessId)) continue;
 
       const breakdown = reg.priceBreakdown as RegistrationBreakdown;
-      const droppedItem = breakdown.accessItems.find((a) => a.accessId === accessId);
+      const droppedItem = breakdown.accessItems.find(
+        (a) => a.accessId === accessId,
+      );
       if (!droppedItem) continue;
 
       const newAccessItems = breakdown.accessItems.filter(
         (a) => a.accessId !== accessId,
       );
-      const newAccessTotal = newAccessItems.reduce((sum, a) => sum + a.subtotal, 0);
+      const newAccessTotal = newAccessItems.reduce(
+        (sum, a) => sum + a.subtotal,
+        0,
+      );
       const newSubtotal = breakdown.calculatedBasePrice + newAccessTotal;
       const newSponsorshipTotal = Math.min(reg.sponsorshipAmount, newSubtotal);
       const newTotal = Math.max(0, newSubtotal - newSponsorshipTotal);
@@ -727,7 +816,9 @@ export class AccessService {
       await updateRegistrationForAccessDrop(
         reg.id,
         {
-          accessTypeIds: (reg.accessTypeIds ?? []).filter((x) => x !== accessId),
+          accessTypeIds: (reg.accessTypeIds ?? []).filter(
+            (x) => x !== accessId,
+          ),
           droppedAccessIds: [...(reg.droppedAccessIds ?? []), accessId],
           priceBreakdown: updatedBreakdown as unknown as Record<string, unknown>,
           totalAmount: newTotal,

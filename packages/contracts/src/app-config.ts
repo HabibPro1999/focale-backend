@@ -13,6 +13,9 @@ const envSchema = z
     CORS_ORIGIN: z.string().default("http://localhost:8080"),
     // Firebase
     FIREBASE_PROJECT_ID: z.string(),
+    // Public frontend project identifier; override when using another Firebase project.
+    FIREBASE_WEB_API_KEY: z.string().default("AIzaSyBiQGgDgPf9IAoo8y2zwHCS-EZ57N6KCus"),
+    COMMITTEE_INVITE_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(7),
     FIREBASE_STORAGE_BUCKET: z.string().optional(),
     // Firebase service account JSON (for cloud deployments)
     FIREBASE_SERVICE_ACCOUNT: z.string().optional(),
@@ -35,9 +38,7 @@ const envSchema = z
     STORAGE_PROVIDER: z.enum(["firebase", "r2"]).default("firebase"),
     // Public URL for forms (used in email links)
     PUBLIC_FORMS_URL: z.string().url().optional(),
-    // Admin app base URL — used as the in-app target for Firebase password
-    // reset / action handler links. The Firebase Console "Customize action URL"
-    // setting should point at `${ADMIN_APP_URL}/auth/action`.
+    // Admin app base URL for committee invite links (/committee/set-password).
     ADMIN_APP_URL: z.string().url().default("http://localhost:8080"),
     // Cloudflare R2
     R2_ACCOUNT_ID: z.string().optional(),
@@ -203,6 +204,7 @@ export function parseAppConfig(source: NodeJS.ProcessEnv) {
         max: env.NODE_ENV === "production" ? 100 : 1000,
         timeWindow: "1 minute",
       },
+      committeeInvite: { tokenTtlDays: env.COMMITTEE_INVITE_TOKEN_TTL_DAYS },
       publicAbstracts: {
         submitMax: env.ABSTRACTS_SUBMIT_RATE_LIMIT_MAX,
         editMax: env.ABSTRACTS_EDIT_RATE_LIMIT_MAX,
@@ -212,6 +214,7 @@ export function parseAppConfig(source: NodeJS.ProcessEnv) {
     },
     firebase: {
       projectId: env.FIREBASE_PROJECT_ID,
+      webApiKey: env.FIREBASE_WEB_API_KEY,
       storageBucket: env.FIREBASE_STORAGE_BUCKET,
       serviceAccount: env.FIREBASE_SERVICE_ACCOUNT,
     },

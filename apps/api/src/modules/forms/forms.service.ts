@@ -146,7 +146,7 @@ export class FormsService {
   // createForm
   // --------------------------------------------------------------------------
   async createForm(input: CreateFormInput): Promise<Form> {
-    const { eventId, name, schema, successTitle, successMessage } = input;
+    const { eventId, name, schema, successTitle, successMessage, successTranslations } = input;
 
     if (!(await eventExists(eventId))) {
       throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
@@ -171,6 +171,7 @@ export class FormsService {
       schema: formSchema,
       successTitle: successTitle ?? null,
       successMessage: successMessage ?? null,
+      successTranslations: successTranslations ?? null,
     });
     if (!result.ok) {
       throw new AppException(ErrorCodes.CONFLICT, "Resource already exists", 409);
@@ -221,6 +222,7 @@ export class FormsService {
     if (input.successTitle !== undefined) patch.successTitle = input.successTitle;
     if (input.successMessage !== undefined)
       patch.successMessage = input.successMessage;
+    if (input.successTranslations !== undefined) patch.successTranslations = input.successTranslations;
 
     let nextSchema: FormSchemaJson | SponsorFormSchemaJson | undefined;
     if (input.schema !== undefined) {
