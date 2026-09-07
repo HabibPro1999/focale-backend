@@ -41,6 +41,29 @@ function access(
 const sel = (accessId: string, quantity = 1): AccessSelection => ({ accessId, quantity });
 
 describe("validateSelections", () => {
+  it.each([undefined, new Set(["single"])])("rejects companions on single-place access, including existing selections", (existing) => {
+    const result = validateSelections(
+      [access({ id: "single", price: 100, companionPrice: 0, allowCompanion: false })],
+      [], [sel("single", 4)], {}, existing, NOW,
+    );
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain("Access does not allow companions");
+  });
+
+  it("rejects duplicate selections that could bypass the companion limit", () => {
+    expect(validateSelections(
+      [access({ id: "single", type: "ADDON", allowCompanion: false })],
+      [], [sel("single"), sel("single")], {}, undefined, NOW,
+    ).valid).toBe(false);
+  });
+
+  it("allows additional places when companions are enabled", () => {
+    expect(validateSelections(
+      [access({ id: "group", allowCompanion: true })],
+      [], [sel("group", 4)], {}, undefined, NOW,
+    ).valid).toBe(true);
+  });
+
   it("is valid for empty selections (still runs mandatory-included check)", () => {
     const result = validateSelections([], [], [], {}, undefined, NOW);
     expect(result.valid).toBe(true);
@@ -176,7 +199,7 @@ describe("validateSelections", () => {
 
   it("validates capacity based on paidCount", () => {
     const result = validateSelections(
-      [access({ id: "limited", maxCapacity: 10, paidCount: 9 })],
+      [access({ id: "limited", allowCompanion: true, maxCapacity: 10, paidCount: 9 })],
       [],
       [sel("limited", 2)],
       {},

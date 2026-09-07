@@ -30,6 +30,23 @@ export async function deleteUnusedCommitteeInvites(
       ),
     );
 }
+/**
+ * Supersede only while the delivered replacement is still live. A concurrent
+ * resend may have already superseded it; that loser must not delete the winner.
+ * Keep delivery outside this retryable transaction.
+ */
+export function supersedeCommitteeInvite(id: string) {
+  return withSerializableTxn(async (tx) => {
+    const [invite] = await tx
+      .select()
+      .from(tokens)
+      .where(and(eq(tokens.id, id), isNull(tokens.usedAt)));
+    if (!invite) return false;
+    await deleteUnusedCommitteeInvites(invite.userId, invite.eventId, id, tx);
+    return true;
+  });
+}
+
 export function replaceCommitteeInvite(data: NewInvite) {
   return withSerializableTxn(async (tx) => {
     await deleteUnusedCommitteeInvites(

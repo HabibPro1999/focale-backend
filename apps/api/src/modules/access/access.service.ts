@@ -821,7 +821,7 @@ export class AccessService {
           ),
           droppedAccessIds: [...(reg.droppedAccessIds ?? []), accessId],
           priceBreakdown: updatedBreakdown as unknown as Record<string, unknown>,
-          totalAmount: newTotal,
+          totalAmount: newSubtotal,
           accessAmount: newAccessTotal,
           sponsorshipAmount: newSponsorshipTotal,
           ...(isNowFullyCovered
@@ -844,7 +844,7 @@ export class AccessService {
           action: auditAction,
           changes: {
             accessDropped: { old: accessName, new: reason },
-            totalAmount: { old: reg.totalAmount, new: newTotal },
+            totalAmount: { old: reg.totalAmount, new: newSubtotal },
             priceDeducted: { old: 0, new: droppedItem.subtotal },
           },
           performedBy: "SYSTEM",

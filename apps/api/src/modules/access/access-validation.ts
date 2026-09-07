@@ -34,6 +34,9 @@ export function validateSelections(
 
   const accessIds = selections.map((s) => s.accessId);
   const accessIdSet = new Set(accessIds);
+  if (accessIdSet.size !== accessIds.length) {
+    errors.push("Each access item must be selected only once");
+  }
 
   // Mandatory included items (runs even when selections is empty).
   for (const included of includedAccesses) {
@@ -63,6 +66,8 @@ export function validateSelections(
     const access = accessMap.get(selection.accessId);
     if (!access) {
       errors.push(`Access item ${selection.accessId} not found`);
+    } else if (!access.allowCompanion && selection.quantity > 1) {
+      errors.push(`${access.name} does not allow companions`);
     } else if (!access.active && !existingAccessIds?.has(selection.accessId)) {
       errors.push(`Access item ${selection.accessId} is inactive`);
     }

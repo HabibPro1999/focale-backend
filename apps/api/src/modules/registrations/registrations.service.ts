@@ -153,12 +153,13 @@ interface RecalcInput {
   id: string;
   paymentStatus: string;
   paidAt: Date | null;
+  paidAmount: number;
 }
 
 interface SettlementResult {
   priceBreakdown: PriceBreakdown;
   sponsorshipAmount: number;
-  paymentStatus?: "PENDING" | "PARTIAL" | "SPONSORED";
+  paymentStatus?: "PENDING" | "PARTIAL" | "SPONSORED" | "PAID";
   paidAt?: Date | null;
   coveredAccessIds: Set<string>;
 }
@@ -310,19 +311,14 @@ export class RegistrationsService {
     exec: DbExecutor,
     registration: RecalcInput,
     priceBreakdown: PriceBreakdown,
+    totalAmount = priceBreakdown.subtotal,
   ): Promise<SettlementResult> {
     const usages = await findRegistrationUsagesForRecalc(registration.id, exec);
     const accessTypeIds = priceBreakdown.accessItems.map((i) => i.accessId);
     const coveredAccessIds = new Set<string>();
     let sponsorshipAmount = 0;
 
-    if (usages.length === 0) {
-      return {
-        priceBreakdown,
-        sponsorshipAmount: priceBreakdown.sponsorshipTotal,
-        coveredAccessIds,
-      };
-    }
+    if (usages.length === 0) sponsorshipAmount = priceBreakdown.sponsorshipTotal;
 
     for (const usage of usages) {
       for (const accessId of usage.sponsorship.coveredAccessIds) {
@@ -354,25 +350,32 @@ export class RegistrationsService {
     };
 
     if (
-      registration.paymentStatus === "PAID" ||
       registration.paymentStatus === "WAIVED" ||
       registration.paymentStatus === "REFUNDED"
     ) {
       return result;
     }
 
-    if (sponsorshipAmount >= priceBreakdown.subtotal && priceBreakdown.subtotal > 0) {
+    const settlement = calculateSettlement({
+      totalAmount,
+      paidAmount: registration.paidAmount,
+      sponsorshipAmount,
+    });
+    if (sponsorshipAmount >= totalAmount && totalAmount > 0) {
       result.paymentStatus = "SPONSORED";
-      result.paidAt = registration.paidAt ?? new Date();
-    } else if (sponsorshipAmount > 0) {
-      result.paymentStatus = "PARTIAL";
-      result.paidAt = null;
     } else if (
-      registration.paymentStatus === "SPONSORED" ||
-      registration.paymentStatus === "PARTIAL"
+      settlement.isSettled &&
+      (registration.paidAmount > 0 || registration.paymentStatus === "PAID")
     ) {
-      result.paymentStatus = "PENDING";
-      result.paidAt = null;
+      result.paymentStatus = "PAID";
+    } else if (registration.paymentStatus !== "VERIFYING") {
+      result.paymentStatus = settlement.isPartiallyPaid ? "PARTIAL" : "PENDING";
+    }
+    if (result.paymentStatus !== undefined) {
+      result.paidAt =
+        result.paymentStatus === "PAID" || result.paymentStatus === "SPONSORED"
+          ? registration.paidAt ?? new Date()
+          : null;
     }
     return result;
   }
@@ -731,7 +734,7 @@ export class RegistrationsService {
           paymentStatus: "PENDING",
           paymentMethod: paymentMethod ?? null,
           labName: paymentMethod === "LAB_SPONSORSHIP" ? (labName ?? null) : null,
-          totalAmount: priceBreakdown.total,
+          totalAmount: priceBreakdown.subtotal,
           currency: priceBreakdown.currency,
           priceBreakdown,
           baseAmount: priceBreakdown.calculatedBasePrice,
@@ -765,7 +768,7 @@ export class RegistrationsService {
           email: { old: null, new: email },
           firstName: { old: null, new: firstName ?? null },
           lastName: { old: null, new: lastName ?? null },
-          totalAmount: { old: null, new: priceBreakdown.total },
+          totalAmount: { old: null, new: priceBreakdown.subtotal },
         },
         performedBy: "PUBLIC",
       });
@@ -938,7 +941,7 @@ export class RegistrationsService {
             : null,
           paymentMethod: paymentMethod ?? null,
           labName: paymentMethod === "LAB_SPONSORSHIP" ? (labName ?? null) : null,
-          totalAmount: priceBreakdown.total,
+          totalAmount: priceBreakdown.subtotal,
           currency: priceBreakdown.currency,
           priceBreakdown,
           baseAmount: priceBreakdown.calculatedBasePrice,
@@ -981,7 +984,7 @@ export class RegistrationsService {
           firstName: { old: null, new: firstName },
           lastName: { old: null, new: lastName },
           role: { old: null, new: role },
-          totalAmount: { old: null, new: priceBreakdown.total },
+          totalAmount: { old: null, new: priceBreakdown.subtotal },
         },
         performedBy: adminUserId,
       });
@@ -1038,7 +1041,7 @@ export class RegistrationsService {
         }
       }
       if (input.paidAmount !== undefined) {
-        if (input.paidAmount > registration.totalAmount) {
+        if (input.paidAmount > calculateSettlement(registration).netAmount) {
           throw new AppException(
             ErrorCodes.BAD_REQUEST,
             "Paid amount cannot exceed registration total",
@@ -1215,7 +1218,7 @@ export class RegistrationsService {
         input.paidAmount !== undefined &&
         input.paidAmount !== registration.paidAmount
       ) {
-        if (input.paidAmount > registration.totalAmount) {
+        if (input.paidAmount > calculateSettlement(registration).netAmount) {
           throw new AppException(
             ErrorCodes.BAD_REQUEST,
             "Paid amount cannot exceed registration total",
@@ -1323,7 +1326,7 @@ export class RegistrationsService {
 
         const settlement = await this.recalculateLinkedSponsorshipSettlement(
           tx,
-          registration,
+          { ...registration, paidAmount: input.paidAmount ?? registration.paidAmount },
           priceBreakdown,
         );
         priceBreakdown = settlement.priceBreakdown;
@@ -1341,7 +1344,7 @@ export class RegistrationsService {
           );
         }
 
-        patch.totalAmount = priceBreakdown.total;
+        patch.totalAmount = priceBreakdown.subtotal;
         patch.baseAmount = priceBreakdown.calculatedBasePrice;
         patch.accessAmount = priceBreakdown.accessTotal;
         patch.discountAmount = calculateDiscountAmount(priceBreakdown.appliedRules);
@@ -1370,7 +1373,7 @@ export class RegistrationsService {
         }
         changes.totalAmount = {
           old: registration.totalAmount,
-          new: priceBreakdown.total,
+          new: priceBreakdown.subtotal,
         };
 
         if (
@@ -1850,7 +1853,7 @@ export class RegistrationsService {
         );
       }
 
-      if (isAccessEdit && accessDeltas.some((c) => c.delta > 0)) {
+      if (isAccessEdit || input.formData !== undefined) {
         const v = await this.access.validateAccessSelections(
           current.eventId,
           newAccessSelections,
@@ -1868,7 +1871,7 @@ export class RegistrationsService {
         }
       }
 
-      if (isAccessEdit) {
+      if (isAccessEdit || input.formData !== undefined) {
         await this.access.assertAccessSelectionRequirement(current.eventId, newFormData, newAccessSelections,
           (current.form.schema as { settings?: { accessSelectionRequired?: boolean } } | null)?.settings, tx);
       }
@@ -1886,10 +1889,14 @@ export class RegistrationsService {
         tx,
       );
 
+      const newTotalAmount = currentIsPaid
+        ? Math.max(current.totalAmount, newPriceBreakdown.subtotal)
+        : newPriceBreakdown.subtotal;
       const settlement = await this.recalculateLinkedSponsorshipSettlement(
         tx,
         current,
         newPriceBreakdown,
+        newTotalAmount,
       );
       newPriceBreakdown = settlement.priceBreakdown;
       const nextPaymentStatus = settlement.paymentStatus ?? current.paymentStatus;
@@ -1940,10 +1947,6 @@ export class RegistrationsService {
           tx,
         );
       }
-
-      const newTotalAmount = currentIsPaid
-        ? Math.max(current.totalAmount, newPriceBreakdown.total)
-        : newPriceBreakdown.total;
 
       const affected = await casUpdateRegistrationByUpdatedAt(
         registrationId,
@@ -2065,8 +2068,9 @@ export class RegistrationsService {
 
       validatePaymentTransition(old.paymentStatus, input.paymentStatus);
 
-      const effectivePaidAmount = input.paidAmount ?? old.totalAmount;
-      if (effectivePaidAmount > old.totalAmount) {
+      const { netAmount } = calculateSettlement(old);
+      const effectivePaidAmount = input.paidAmount ?? netAmount;
+      if (effectivePaidAmount > netAmount) {
         throw new AppException(
           ErrorCodes.BAD_REQUEST,
           "Paid amount cannot exceed registration total",
@@ -2076,7 +2080,7 @@ export class RegistrationsService {
       // ponytail: legacy logger.warn on partial-amount confirm dropped (non-behavioral).
 
       const newStatus = input.paymentStatus;
-      const nextPaidAmount = input.paidAmount ?? old.totalAmount;
+      const nextPaidAmount = effectivePaidAmount;
       const nextPaymentMethod = input.paymentMethod ?? old.paymentMethod;
       const patch: RegistrationPatch = {
         paymentStatus: newStatus,

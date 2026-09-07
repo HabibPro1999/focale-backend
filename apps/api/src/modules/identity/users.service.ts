@@ -13,7 +13,6 @@ import {
 } from "@app/contracts";
 import {
   clientExists,
-  countActiveSuperAdmins,
   createUser as dbCreateUser,
   deleteUser as dbDeleteUser,
   getUserByEmail,
@@ -103,28 +102,22 @@ export class UsersService {
     return user;
   }
 
-  /**
-   * Guard the last active super admin. No-op unless the current user is an
-   * active super admin whose resulting state would no longer be one. Uses a
-   * live count each call (not cached).
-   */
-  private async assertNotLastActiveSuperAdmin(
-    user: Pick<UserRow, "role" | "active">,
-    next: { role?: number; active?: boolean },
-  ): Promise<void> {
-    if (user.role !== UserRole.SUPER_ADMIN || !user.active) return;
-
-    const nextRole = next.role ?? user.role;
-    const nextActive = next.active ?? user.active;
-    if (nextRole === UserRole.SUPER_ADMIN && nextActive) return;
-
-    const superAdminCount = await countActiveSuperAdmins();
-    if (superAdminCount <= 1) {
-      throw new BadRequestException({
-        code: ErrorCodes.BAD_REQUEST,
-        message: "Cannot remove or deactivate the last super admin",
+  private async updateUserRow(
+    id: string,
+    input: UpdateUserInput,
+  ): Promise<UserWithClient> {
+    const result = await dbUpdateUser(id, input);
+    if (result.ok) return result.user;
+    if (result.reason === "not_found") {
+      throw new NotFoundException({
+        code: ErrorCodes.NOT_FOUND,
+        message: "User not found",
       });
     }
+    throw new BadRequestException({
+      code: ErrorCodes.BAD_REQUEST,
+      message: "Cannot remove or deactivate the last super admin",
+    });
   }
 
   // --------------------------------------------------------------------------
@@ -214,16 +207,12 @@ export class UsersService {
         input.clientId !== undefined ? input.clientId : user.clientId;
 
       this.validateRoleClientConsistency(newRole, newClientId);
-      await this.assertNotLastActiveSuperAdmin(user, {
-        role: newRole,
-        active: input.active,
-      });
 
       // Firebase claims are the source of truth for auth — set before DB write.
       await setCustomClaims(id, { role: newRole, clientId: newClientId });
 
       try {
-        const updated = await dbUpdateUser(id, input);
+        const updated = await this.updateUserRow(id, input);
         await revokeFirebaseRefreshTokens(id);
         invalidateUserCache(id);
         return updated;
@@ -242,9 +231,7 @@ export class UsersService {
       }
     }
 
-    await this.assertNotLastActiveSuperAdmin(user, { active: input.active });
-
-    const updated = await dbUpdateUser(id, input);
+    const updated = await this.updateUserRow(id, input);
 
     if (input.active === false) {
       await revokeFirebaseRefreshTokens(id);

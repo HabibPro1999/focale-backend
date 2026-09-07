@@ -33,6 +33,9 @@ export class SseStream {
 
   private sendHeaders(): void {
     if (this.headersSent) return;
+    for (const [name, value] of Object.entries(this.reply.getHeaders())) {
+      if (value !== undefined) this.reply.raw.setHeader(name, value);
+    }
     this.reply.raw.setHeader("Content-Type", "text/event-stream");
     this.reply.raw.setHeader("Cache-Control", "no-cache");
     this.reply.raw.setHeader("Connection", "keep-alive");

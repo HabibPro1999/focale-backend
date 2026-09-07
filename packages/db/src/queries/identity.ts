@@ -83,10 +83,13 @@ export async function createUser(data: {
   return row;
 }
 
+export type UpdateUserResult =
+  | { ok: true; user: UserWithClient }
+  | { ok: false; reason: "not_found" | "last_super_admin" };
+
 /**
- * Update a user and return it with its client relation. `data` is the whole
- * validated patch (name/role/clientId/active as present) — mirrors legacy
- * `prisma.user.update({ data: input, include: { client: true } })`.
+ * Update atomically with the last-active-super-admin guard, using the same
+ * serializable isolation as deletion. The caller maps failure reasons to errors.
  */
 export async function updateUser(
   id: string,
@@ -96,25 +99,36 @@ export async function updateUser(
     clientId: string | null;
     active: boolean;
   }>,
-): Promise<UserWithClient> {
-  const db = getDb();
-  // Prisma ignored `undefined` keys and treated an empty patch as a no-op.
-  // Drizzle's `.set({})` throws, so strip undefined and skip the write when
-  // nothing remains (empty PATCH body just re-reads the row).
-  // ponytail: empty body does not bump updatedAt (Prisma arguably did); rare
-  // and untested — replicate the no-op read instead of forcing a write.
-  const clean = Object.fromEntries(
-    Object.entries(data).filter(([, v]) => v !== undefined),
-  );
-  const [updated] =
-    Object.keys(clean).length > 0
-      ? await db.update(users).set(clean).where(eq(users.id, id)).returning()
-      : await db.select().from(users).where(eq(users.id, id));
-  const client = updated.clientId
-    ? (await db.select().from(clients).where(eq(clients.id, updated.clientId)))[0] ??
-      null
-    : null;
-  return { ...updated, client };
+): Promise<UpdateUserResult> {
+  return withSerializableTxn(async (db): Promise<UpdateUserResult> => {
+    const [user] = await db.select().from(users).where(eq(users.id, id));
+    if (!user) return { ok: false, reason: "not_found" };
+    if (
+      user.role === 0 && user.active &&
+      ((data.role ?? user.role) !== 0 || (data.active ?? user.active) === false)
+    ) {
+      if (await countActiveSuperAdmins(db) <= 1) {
+        return { ok: false, reason: "last_super_admin" };
+      }
+    }
+    // Prisma ignored `undefined` keys and treated an empty patch as a no-op.
+    // Drizzle's `.set({})` throws, so strip undefined and skip the write when
+    // nothing remains (empty PATCH body just re-reads the row).
+    // ponytail: empty body does not bump updatedAt (Prisma arguably did); rare
+    // and untested — replicate the no-op read instead of forcing a write.
+    const clean = Object.fromEntries(
+      Object.entries(data).filter(([, v]) => v !== undefined),
+    );
+    const [updated] =
+      Object.keys(clean).length > 0
+        ? await db.update(users).set(clean).where(eq(users.id, id)).returning()
+        : await db.select().from(users).where(eq(users.id, id));
+    const client = updated.clientId
+      ? (await db.select().from(clients).where(eq(clients.id, updated.clientId)))[0] ??
+        null
+      : null;
+    return { ok: true, user: { ...updated, client } };
+  });
 }
 
 /** List users with filters, ordered by createdAt desc, plus a total count. */

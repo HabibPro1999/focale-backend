@@ -1,4 +1,6 @@
 /**
+ * totalAmount is gross (after pricing rules, before sponsorship).
+ * sponsorshipAmount is deducted here exactly once; priceBreakdown.total is net.
  * Registration settlement math. All operands are integer minor units (e.g.
  * millimes for TND) — plain ints, no floats, no rounding. Kept as raw numbers
  * to match the legacy behavior exactly (see sponsorship-math.ts).

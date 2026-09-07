@@ -3,6 +3,7 @@ import { ErrorCodes, UserRole } from "@app/contracts";
 import {
   replaceCommitteeInvite,
   insertCommitteeInvite,
+  supersedeCommitteeInvite,
   findCommitteeInviteByHash,
   findCommitteeInviteById,
   claimCommitteeInvite,
@@ -209,6 +210,7 @@ export class CommitteeInviteService {
     if (!invite || invite.usedAt || !(await this.eligible(invite)))
       return { ok: true };
     let createdId: string | null = null;
+    let delivered = false;
     try {
       const token = generateCommitteeInviteToken();
       const created = await insertCommitteeInvite(
@@ -225,17 +227,14 @@ export class CommitteeInviteService {
         await this.discardUndeliveredInvite(createdId);
         return { ok: true };
       }
-      await deleteUnusedCommitteeInvites(
-        invite.userId,
-        invite.eventId,
-        createdId,
-      );
+      delivered = true;
+      await supersedeCommitteeInvite(createdId);
     } catch (err) {
       logger.error(
         { err, userId: invite.userId, eventId: invite.eventId },
         "Committee invite self-resend failed",
       );
-      if (createdId) await this.discardUndeliveredInvite(createdId);
+      if (createdId && !delivered) await this.discardUndeliveredInvite(createdId);
       return { ok: true };
     }
     try {

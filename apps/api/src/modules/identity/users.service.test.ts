@@ -8,7 +8,6 @@ import { ErrorCodes, UserRole } from "@app/contracts";
 // (status/code, which side-effects fire), not from Prisma call shapes.
 vi.mock("@app/db", () => ({
   clientExists: vi.fn(),
-  countActiveSuperAdmins: vi.fn(),
   createUser: vi.fn(),
   deleteUser: vi.fn(),
   getUserByEmail: vi.fn(),
@@ -269,11 +268,11 @@ describe("updateUser", () => {
   it("updates the name without syncing Firebase claims", async () => {
     const existing = makeUser({ name: "Old" });
     dbm.getUserById.mockResolvedValue(existing as never);
-    dbm.updateUser.mockResolvedValue({
+    dbm.updateUser.mockResolvedValue({ ok: true, user: {
       ...existing,
       name: "New Name",
       client: null,
-    } as never);
+    } as never });
 
     const result = await service.updateUser("user-123", { name: "New Name" });
 
@@ -288,12 +287,12 @@ describe("updateUser", () => {
     const existing = makeUser();
     dbm.getUserById.mockResolvedValue(existing as never);
     fbm.setCustomClaims.mockResolvedValue(undefined);
-    dbm.updateUser.mockResolvedValue({
+    dbm.updateUser.mockResolvedValue({ ok: true, user: {
       ...existing,
       role: UserRole.SUPER_ADMIN,
       clientId: null,
       client: null,
-    } as never);
+    } as never });
 
     const result = await service.updateUser("user-123", {
       role: UserRole.SUPER_ADMIN,
@@ -313,11 +312,11 @@ describe("updateUser", () => {
     dbm.getUserById.mockResolvedValue(existing as never);
     dbm.clientExists.mockResolvedValue(true);
     fbm.setCustomClaims.mockResolvedValue(undefined);
-    dbm.updateUser.mockResolvedValue({
+    dbm.updateUser.mockResolvedValue({ ok: true, user: {
       ...existing,
       clientId: "client-456",
       client: null,
-    } as never);
+    } as never });
 
     await service.updateUser("user-123", { clientId: "client-456" });
 
@@ -331,11 +330,11 @@ describe("updateUser", () => {
   it("revokes tokens on deactivation but does not sync claims", async () => {
     const existing = makeUser({ active: true });
     dbm.getUserById.mockResolvedValue(existing as never);
-    dbm.updateUser.mockResolvedValue({
+    dbm.updateUser.mockResolvedValue({ ok: true, user: {
       ...existing,
       active: false,
       client: null,
-    } as never);
+    } as never });
     fbm.revokeFirebaseRefreshTokens.mockResolvedValue(undefined);
 
     const result = await service.updateUser("user-123", { active: false });
@@ -357,13 +356,13 @@ describe("updateUser", () => {
 
   it("blocks demoting/deactivating the last active super admin (400 BAD_REQUEST)", async () => {
     dbm.getUserById.mockResolvedValue(makeSuperAdmin({ active: true }) as never);
-    dbm.countActiveSuperAdmins.mockResolvedValue(1);
+    dbm.updateUser.mockResolvedValue({ ok: false, reason: "last_super_admin" });
     await expectHttp(
       () => service.updateUser("admin-123", { active: false }, "other-admin"),
       400,
       ErrorCodes.BAD_REQUEST,
     );
-    expect(dbm.updateUser).not.toHaveBeenCalled();
+    expect(fbm.revokeFirebaseRefreshTokens).not.toHaveBeenCalled();
     expect(fbm.setCustomClaims).not.toHaveBeenCalled();
   });
 
@@ -415,12 +414,12 @@ describe("role/client consistency on update", () => {
     const existing = makeUser();
     dbm.getUserById.mockResolvedValue(existing as never);
     fbm.setCustomClaims.mockResolvedValue(undefined);
-    dbm.updateUser.mockResolvedValue({
+    dbm.updateUser.mockResolvedValue({ ok: true, user: {
       ...existing,
       role: UserRole.SUPER_ADMIN,
       clientId: null,
       client: null,
-    } as never);
+    } as never });
 
     const result = await service.updateUser("user-123", {
       role: UserRole.SUPER_ADMIN,
@@ -434,14 +433,13 @@ describe("role/client consistency on update", () => {
     dbm.getUserById.mockResolvedValue(existing as never);
     dbm.clientExists.mockResolvedValue(true);
     // Demoting an active super admin is only allowed when others remain.
-    dbm.countActiveSuperAdmins.mockResolvedValue(2);
     fbm.setCustomClaims.mockResolvedValue(undefined);
-    dbm.updateUser.mockResolvedValue({
+    dbm.updateUser.mockResolvedValue({ ok: true, user: {
       ...existing,
       role: UserRole.CLIENT_ADMIN,
       clientId: "client-456",
       client: null,
-    } as never);
+    } as never });
 
     const result = await service.updateUser("admin-123", {
       role: UserRole.CLIENT_ADMIN,

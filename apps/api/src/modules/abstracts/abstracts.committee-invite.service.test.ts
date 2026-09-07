@@ -3,6 +3,7 @@ import { ErrorCodes, UserRole } from "@app/contracts";
 vi.mock("@app/db", () => ({
   replaceCommitteeInvite: vi.fn(),
   insertCommitteeInvite: vi.fn(),
+  supersedeCommitteeInvite: vi.fn(),
   findCommitteeInviteByHash: vi.fn(),
   findCommitteeInviteById: vi.fn(),
   claimCommitteeInvite: vi.fn(),
@@ -190,14 +191,15 @@ describe("committee invite lifecycle", () => {
     await expect(service.resendCommitteeInviteWithToken(raw)).resolves.toEqual({
       ok: true,
     });
-    expect(db.deleteUnusedCommitteeInvites).toHaveBeenCalledWith(
-      "user",
-      "event",
-      "new",
-    );
+    expect(db.supersedeCommitteeInvite).toHaveBeenCalledWith("new");
     expect(emails.sendInviteEmail.mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(db.deleteUnusedCommitteeInvites).mock.invocationCallOrder[0],
+      vi.mocked(db.supersedeCommitteeInvite).mock.invocationCallOrder[0],
     );
+  });
+  it("keeps a delivered link when supersession fails", async () => {
+    vi.mocked(db.supersedeCommitteeInvite).mockRejectedValue(new Error("database unavailable"));
+    await expect(service.resendCommitteeInviteWithToken(raw)).resolves.toEqual({ ok: true });
+    expect(db.discardCommitteeInvite).not.toHaveBeenCalled();
   });
   it.each([false, new Error("provider down")])(
     "preserves the previous link after delivery failure (%s)",

@@ -18,6 +18,8 @@ const db = vi.hoisted(() => ({
   findClientModuleState: vi.fn(),
   searchRegistrantsForSponsorship: vi.fn(),
   getRegistrationByIdRow: vi.fn(),
+  getRegistrationForCheckIn: vi.fn(),
+  CHECKIN_ELIGIBLE_STATUSES: ["PAID", "SPONSORED", "WAIVED"],
   getRegistrationByIdempotencyKeyRow: vi.fn(),
   getRegistrationClientId: vi.fn(),
   getRegistrationEditToken: vi.fn(),
@@ -64,6 +66,9 @@ vi.mock("@app/integrations", async (importOriginal) => ({
 const ft = vi.hoisted(() => ({ fileTypeFromBuffer: vi.fn() }));
 vi.mock("file-type", () => ft);
 
+import { calculateSettlement } from "@app/shared";
+import { validateSelections } from "../access/access-validation";
+import { CheckinService } from "../checkin/checkin.service";
 import { RegistrationsService } from "./registrations.service";
 import { AppException } from "../../core/app-exception";
 import type { AccessService } from "../access/access.service";
@@ -276,6 +281,15 @@ describe("RegistrationsService", () => {
         .rejects.toMatchObject({ code: ErrorCodes.ACCESS_SELECTION_REQUIRED });
       expect(access.assertAccessSelectionRequirement).toHaveBeenCalledWith("ev1", {}, [], { accessSelectionRequired: true });
       expect(db.insertRegistrationRow).not.toHaveBeenCalled();
+    });
+
+    it("stores gross total so a 40 sponsorship on 100 leaves 60 due", async () => {
+      await service.createRegistration(baseInput as never, {
+        ...emptyBreakdown(100), sponsorshipTotal: 40, total: 60,
+      });
+      const stored = db.insertRegistrationRow.mock.calls[0][0];
+      expect(stored).toMatchObject({ totalAmount: 100, sponsorshipAmount: 40 });
+      expect(calculateSettlement({ ...stored, paidAmount: 0 }).amountDue).toBe(60);
     });
 
     it("creates, reserves nothing when no access, increments event, audits, emits, queues email", async () => {
@@ -613,6 +627,76 @@ describe("RegistrationsService", () => {
       expect(db.casUpdateRegistrationByUpdatedAt).not.toHaveBeenCalled();
     });
 
+    it("reprices paid access additions as PARTIAL and blocks check-in", async () => {
+      const oldBreakdown = { ...emptyBreakdown(100), accessItems: [
+        { accessId: "old", quantity: 1, subtotal: 100 },
+      ] };
+      db.findRegistrationWithFormEvent.mockResolvedValue(editFetch({
+        paymentStatus: "PAID", paidAmount: 100, paidAt: new Date(),
+        priceBreakdown: oldBreakdown,
+      }));
+      pricing.calculatePrice.mockResolvedValue({ ...emptyBreakdown(150), accessItems: [
+        ...oldBreakdown.accessItems, { accessId: "new", quantity: 1, subtotal: 50 },
+      ] });
+      await service.editRegistrationPublic("reg1", { expectedUpdatedAt: expected,
+        accessSelections: [{ accessId: "old", quantity: 1 }, { accessId: "new", quantity: 1 }],
+      } as never);
+      const patch = db.casUpdateRegistrationByUpdatedAt.mock.calls[0][2];
+      expect(patch).toMatchObject({ totalAmount: 150, paymentStatus: "PARTIAL", paidAt: null });
+      expect(access.syncPaidCountDelta).toHaveBeenCalledWith("ev1",
+        expect.objectContaining({ status: "PAID" }),
+        expect.objectContaining({ status: "PARTIAL", coveredAccessIds: new Set() }), expect.anything());
+      db.getRegistrationForCheckIn.mockResolvedValue({ ...makeRegRow(), ...patch });
+      await expect(new CheckinService().checkIn("ev1", "reg1", "new", "admin"))
+        .rejects.toMatchObject({ code: ErrorCodes.CHECKIN_PAYMENT_REQUIRED });
+    });
+
+    it.each([0, 40])("keeps gross totals during repricing with %s sponsorship", async (sponsorshipAmount) => {
+      db.findRegistrationWithFormEvent.mockResolvedValue(editFetch({ sponsorshipAmount }));
+      pricing.calculatePrice.mockResolvedValue({ ...emptyBreakdown(100), sponsorshipTotal: sponsorshipAmount,
+        total: 100 - sponsorshipAmount });
+      await service.editRegistrationPublic("reg1", { expectedUpdatedAt: expected, formData: {} } as never);
+      const patch = db.casUpdateRegistrationByUpdatedAt.mock.calls[0][2];
+      expect(patch.totalAmount).toBe(100);
+      expect(calculateSettlement({ ...patch, paidAmount: 0 }).amountDue).toBe(100 - sponsorshipAmount);
+    });
+
+    it("validates retained dependencies when a prerequisite is removed", async () => {
+      db.findRegistrationWithFormEvent.mockResolvedValue(editFetch({ priceBreakdown: {
+        ...emptyBreakdown(100), accessItems: [
+          { accessId: "prerequisite", quantity: 1 }, { accessId: "workshop", quantity: 1 },
+        ],
+      } }));
+      access.validateAccessSelections.mockImplementation((_event, selections, data, existing) =>
+        validateSelections([{ id: "workshop", name: "Workshop", active: true, type: "WORKSHOP",
+          startsAt: null, endsAt: null, maxCapacity: null, requiredAccess: [{ id: "prerequisite" }],
+        }] as never, [], selections, data, existing, new Date()));
+      await expect(service.editRegistrationPublic("reg1", { expectedUpdatedAt: expected,
+        accessSelections: [{ accessId: "workshop", quantity: 1 }],
+      } as never)).rejects.toMatchObject({ code: ErrorCodes.BAD_REQUEST });
+      expect(db.casUpdateRegistrationByUpdatedAt).not.toHaveBeenCalled();
+    });
+
+    it("validates retained access eligibility after a form-only edit", async () => {
+      db.findRegistrationWithFormEvent.mockResolvedValue(editFetch({
+        formData: { profession: "doctor" },
+        form: { id: "form1", schema: { steps: [{ id: "step1", title: "Profile", fields: [
+          { id: "profession", type: "text", label: "Profession" },
+        ] }] } },
+        priceBreakdown: {
+        ...emptyBreakdown(100), accessItems: [{ accessId: "workshop", quantity: 1 }],
+      } }));
+      access.validateAccessSelections.mockImplementation((_event, selections, data, existing) =>
+        validateSelections([{ id: "workshop", name: "Workshop", active: true, type: "WORKSHOP",
+          startsAt: null, endsAt: null, maxCapacity: null, conditionLogic: "AND",
+          conditions: [{ fieldId: "profession", operator: "equals", value: "doctor" }],
+        }] as never, [], selections, data, existing, new Date()));
+      await expect(service.editRegistrationPublic("reg1", { expectedUpdatedAt: expected,
+        formData: { profession: "nurse" },
+      } as never)).rejects.toMatchObject({ code: ErrorCodes.BAD_REQUEST });
+      expect(db.casUpdateRegistrationByUpdatedAt).not.toHaveBeenCalled();
+    });
+
     it("400 for a REFUNDED registration", async () => {
       db.findRegistrationWithFormEvent.mockResolvedValue(
         editFetch({ paymentStatus: "REFUNDED" }),
@@ -717,6 +801,13 @@ describe("RegistrationsService", () => {
     beforeEach(() => {
       db.findRegistrationForMutation.mockResolvedValue(mutRow());
       db.getRegistrationByIdRow.mockResolvedValue(makeRegRow());
+    });
+
+    it("defaults payment confirmation to the net amount after sponsorship", async () => {
+      db.findRegistrationForMutation.mockResolvedValue(mutRow({ sponsorshipAmount: 40, totalAmount: 100 }));
+      await service.confirmPayment("reg1", { paymentStatus: "PAID" } as never);
+      expect(db.updateRegistrationRow).toHaveBeenCalledWith("reg1",
+        expect.objectContaining({ paidAmount: 60 }), expect.anything());
     });
 
     it("PENDING→PAID keeps editToken, audits with IP, queues PAYMENT_CONFIRMED", async () => {

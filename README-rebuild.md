@@ -125,3 +125,10 @@ live database — running them there would attempt to recreate existing objects.
   before any *future* migration.
 - **Fresh env (local/CI/new deploy):** `pnpm --filter @app/db exec drizzle-kit migrate`
   applies the baseline from scratch.
+
+For the registration settlement fix, apply
+`packages/db/migrations/0011_registration_gross_total.sql` alongside the API update
+using the existing SQL migration process. It repairs saved net totals only when
+`priceBreakdown` proves the old convention; it is safe to rerun. `totalAmount`
+is gross before sponsorship, while `priceBreakdown.total` is net. This data
+migration is not in Drizzle's baseline journal.

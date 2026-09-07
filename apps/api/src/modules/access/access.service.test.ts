@@ -654,7 +654,9 @@ describe("handleCapacityReached", () => {
 
     const [, patch] = m.updateRegistrationForAccessDrop.mock.calls[0];
     expect(patch.paymentStatus).toBe("SPONSORED");
-    expect(patch.totalAmount).toBe(0);
+    expect(patch.totalAmount).toBe(130);
+    expect(patch.sponsorshipAmount).toBe(130);
+    expect(patch.priceBreakdown.total).toBe(0);
     expect(m.enqueueTriggeredEmailOutbox).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ trigger: "PAYMENT_CONFIRMED" }),
