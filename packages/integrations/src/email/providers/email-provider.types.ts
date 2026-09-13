@@ -20,6 +20,8 @@ export interface SendEmailInput {
   to: string;
   toName?: string;
   fromName?: string; // Event name to use as sender name
+  fromEmail?: string; // Optional server-approved, provider-verified networking sender override.
+  senderClientId?: string; // Persisted event client ID; required for a From override.
   replyTo?: string; // Reply-to email (e.g., client email)
   replyToName?: string;
   subject: string;

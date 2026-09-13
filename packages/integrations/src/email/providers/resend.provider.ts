@@ -1,3 +1,4 @@
+import { resolveVerifiedNetworkingSender } from "./networking-sender";
 // =============================================================================
 // RESEND EMAIL PROVIDER
 // Sends via the Resend API; verifies + normalizes Resend (Svix-signed) webhooks.
@@ -216,8 +217,9 @@ export class ResendProvider implements EmailProvider {
     }
 
     try {
+      const approvedFrom = await resolveVerifiedNetworkingSender(input, this.name, this.apiKey);
       const { data, error } = await this.client.emails.send(
-        buildResendPayload(input, this.from),
+        buildResendPayload(input, approvedFrom ? { ...this.from, fromEmail: approvedFrom } : this.from),
         // emailLog id is a natural idempotency key for queued sends.
         input.trackingId ? { idempotencyKey: input.trackingId } : undefined,
       );

@@ -59,6 +59,7 @@ const PaymentProofLocationSchema = z.string().min(1).max(2048);
 // Base object kept separate so `.omit()` (below) can run — zod4 forbids .omit()
 // on a schema that already carries a `.refine()`.
 const CreateRegistrationObject = z.strictObject({
+  networkingOptIn: z.boolean().optional(),
   formId: z.string().uuid(),
   formData: z.record(z.string(), z.any()),
 

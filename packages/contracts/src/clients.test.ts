@@ -13,7 +13,7 @@ const UUID = "11111111-1111-4111-8111-111111111111";
 
 describe("client contracts", () => {
   describe("MODULE_IDS / defaults", () => {
-    it("has the 6 canonical modules including abstracts", () => {
+    it("has the 7 canonical modules including networking", () => {
       expect(MODULE_IDS).toEqual([
         "pricing",
         "registrations",
@@ -21,6 +21,7 @@ describe("client contracts", () => {
         "emails",
         "certificates",
         "abstracts",
+        "networking",
       ]);
       expect(DEFAULT_ENABLED_MODULES).toContain("abstracts");
     });

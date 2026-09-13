@@ -34,6 +34,7 @@ import {
 } from "@app/shared";
 import {
   withTxn,
+  syncNetworkingRegistration,
   enqueueRealtimeOutboxEvent,
   enqueueTriggeredEmailOutbox,
   casIncrementRegisteredTx,
@@ -199,7 +200,11 @@ export class RegistrationsService {
   // Shared side-effect + settlement helpers
   // ==========================================================================
 
-  private emitEvents(exec: DbExecutor, events: AppEvent[]): Promise<unknown> {
+  private async emitEvents(exec: DbExecutor, events: AppEvent[]): Promise<unknown> {
+    const changedIds = new Set(events.filter(ev =>
+      ev.type === "registration.updated" || ev.type === "registration.paymentConfirmed"
+    ).map(ev => String(ev.payload.id)));
+    for (const id of changedIds) await syncNetworkingRegistration(id, exec);
     return Promise.all(events.map((ev) => enqueueRealtimeOutboxEvent(exec, ev)));
   }
 
@@ -247,7 +252,7 @@ export class RegistrationsService {
     return events;
   }
 
-  private queueRegistrationCreatedEmail(
+  private async queueRegistrationCreatedEmail(
     exec: DbExecutor,
     eventId: string,
     registration: {
@@ -257,6 +262,7 @@ export class RegistrationsService {
       lastName?: string | null;
     },
   ): Promise<boolean> {
+    await syncNetworkingRegistration(registration.id, exec);
     return enqueueTriggeredEmailOutbox(
       exec,
       {
@@ -726,6 +732,7 @@ export class RegistrationsService {
           eventId,
           formData,
           formSchemaVersion: form.schemaVersion ?? 1,
+          networkingOptIn: input.networkingOptIn ?? null,
           email,
           firstName: firstName ?? null,
           lastName: lastName ?? null,

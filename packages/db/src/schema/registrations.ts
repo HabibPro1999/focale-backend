@@ -1,4 +1,5 @@
 import {
+  boolean,
   index,
   integer,
   jsonb,
@@ -23,6 +24,7 @@ export const registrations = pgTable(
       .notNull()
       .references(() => events.id, { onDelete: "restrict", onUpdate: "cascade" }),
     formData: jsonb().notNull(),
+    networkingOptIn: boolean(),
     submittedAt: timestamp({ precision: 3 }).defaultNow().notNull(),
     formSchemaVersion: integer().notNull().default(1),
     email: text().notNull(),

@@ -1,3 +1,4 @@
+import { NetworkingDeliveryJob, NetworkingMaintenanceJob, NetworkingEmbeddingJob } from "./jobs/networking.job";
 import { Module } from "@nestjs/common";
 import { JobRunner } from "./job-runner";
 import { JOBS } from "./job";
@@ -15,14 +16,20 @@ import { AbstractBookJob } from "./jobs/abstract-book.job";
     OutboxJob,
     EmailQueueJob,
     AbstractBookJob,
+    NetworkingDeliveryJob,
+    NetworkingMaintenanceJob,
+    NetworkingEmbeddingJob,
     {
       provide: JOBS,
       useFactory: (
         outbox: OutboxJob,
         email: EmailQueueJob,
         book: AbstractBookJob,
-      ) => [outbox, email, book],
-      inject: [OutboxJob, EmailQueueJob, AbstractBookJob],
+        networkingDelivery: NetworkingDeliveryJob,
+        networkingMaintenance: NetworkingMaintenanceJob,
+        networkingEmbedding: NetworkingEmbeddingJob,
+      ) => [outbox, email, book, networkingDelivery, networkingMaintenance, networkingEmbedding],
+      inject: [OutboxJob, EmailQueueJob, AbstractBookJob, NetworkingDeliveryJob, NetworkingMaintenanceJob, NetworkingEmbeddingJob],
     },
   ],
 })

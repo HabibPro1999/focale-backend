@@ -38,6 +38,15 @@ const envSchema = z
     STORAGE_PROVIDER: z.enum(["firebase", "r2"]).default("firebase"),
     // Public URL for forms (used in email links)
     PUBLIC_FORMS_URL: z.string().url().optional(),
+    PUBLIC_NETWORKING_URL: z.string().url().optional(),
+    NETWORKING_TOKEN_SECRET: z.preprocess(value => value === "" ? undefined : value, z.string().min(32).optional()),
+    NETWORKING_EMBEDDING_API_KEY: z.string().optional(),
+    OPENAI_API_KEY: z.string().optional(),
+    NETWORKING_EMBEDDING_MODEL: z.string().default("text-embedding-3-small"),
+    NETWORKING_EMBEDDING_BASE_URL: z.string().url().default("https://api.openai.com/v1"),
+    NETWORKING_VAPID_PUBLIC_KEY: z.string().optional(),
+    NETWORKING_VAPID_PRIVATE_KEY: z.string().optional(),
+    NETWORKING_VAPID_SUBJECT: z.string().optional(),
     // Admin app base URL for committee invite links (/committee/set-password).
     ADMIN_APP_URL: z.string().url().default("http://localhost:8080"),
     // Cloudflare R2

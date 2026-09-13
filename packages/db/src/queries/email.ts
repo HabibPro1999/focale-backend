@@ -870,6 +870,7 @@ export async function claimQueuedEmailLogs(
     WHERE "id" IN (
       SELECT "id" FROM "email_logs"
        WHERE "status" = 'QUEUED'
+         AND "context_snapshot"->>'dispatchOwner' IS DISTINCT FROM 'networking'
          AND ("next_attempt_at" IS NULL OR "next_attempt_at" <= ${now})
          AND "attempt_count" <= "max_retries"
        ORDER BY "queued_at" ASC
@@ -1127,6 +1128,7 @@ export async function recoverStaleEmailLeases(
         END,
         "error_message" = COALESCE("error_message", 'Email send lease expired; requeued for retry')
       WHERE "status" = 'SENDING'
+        AND "context_snapshot"->>'dispatchOwner' IS DISTINCT FROM 'networking'
         AND (
           "locked_until" < ${now}
           OR (
@@ -1152,6 +1154,7 @@ export async function recoverStaleEmailLeases(
         "retry_count" = "retry_count" + 1,
         "error_message" = COALESCE("error_message", 'Email send lease expired and retry limit was exhausted')
       WHERE "status" = 'SENDING'
+        AND "context_snapshot"->>'dispatchOwner' IS DISTINCT FROM 'networking'
         AND (
           "locked_until" < ${now}
           OR (

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // --- @app/db mock -----------------------------------------------------------
 const db = vi.hoisted(() => ({
   withTxn: vi.fn(),
+  syncNetworkingRegistration: vi.fn(),
   enqueueRealtimeOutboxEvent: vi.fn(),
   enqueueTriggeredEmailOutbox: vi.fn(),
   casIncrementRegisteredTx: vi.fn(),

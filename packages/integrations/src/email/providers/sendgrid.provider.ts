@@ -4,6 +4,7 @@
 // =============================================================================
 
 import sgMail from "@sendgrid/mail";
+import { resolveVerifiedNetworkingSender } from "./networking-sender";
 import { EventWebhook, EventWebhookHeader } from "@sendgrid/eventwebhook";
 import { logger } from "../../logger";
 import {
@@ -125,9 +126,10 @@ export class SendgridProvider implements EmailProvider {
     this.ensureApiKey();
 
     try {
+      const approvedFrom = await resolveVerifiedNetworkingSender(input, this.name, this.apiKey);
       const msg: sgMail.MailDataRequired = {
         to: input.toName ? { email: input.to, name: input.toName } : input.to,
-        from: { email: this.fromEmail, name: input.fromName || this.fromName },
+        from: { email: approvedFrom ?? this.fromEmail, name: input.fromName || this.fromName },
         ...(input.replyTo && {
           replyTo: {
             email: input.replyTo,

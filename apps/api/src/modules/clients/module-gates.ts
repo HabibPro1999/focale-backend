@@ -20,6 +20,7 @@ const MODULE_NAMES: Record<ModuleId, string> = {
   emails: "Emails",
   certificates: "Certificates",
   abstracts: "Abstracts",
+  networking: "Networking",
 };
 
 /** Sync gate for callers that already loaded the client (e.g. via event.client join). */
