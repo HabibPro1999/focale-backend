@@ -1,3 +1,4 @@
+import { NetworkingInventoryService } from "./networking.inventory.service";
 import { NetworkingMfaService } from "./networking.mfa.service";
 import { NetworkingMfaController } from "./networking.mfa.controller";
 import { NetworkingUploadsService } from "./networking.uploads.service";
@@ -21,6 +22,7 @@ import { NetworkingRecommendationsController, NetworkingRecommendationAdminContr
     NetworkingRecommendationAdminController,
   ],
   providers: [
+    NetworkingInventoryService,
     NetworkingMfaService,
     NetworkingUploadsService,
     NetworkingService,

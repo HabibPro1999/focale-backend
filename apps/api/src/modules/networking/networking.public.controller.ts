@@ -131,6 +131,11 @@ export class NetworkingPublicController {
   ) {
     return this.service.discover(await this.context(slug, req), query);
   }
+  @Get("profiles/:id/representatives") async representatives(
+    @Param("slug") slug: string, @Param("id") id: string, @Req() req: FastifyRequest, @Query() query: dto.NetworkingListDto,
+  ) {
+    return this.service.representatives(await this.context(slug, req), id, query.page);
+  }
   @Get("profiles/:id") async profile(
     @Param("slug") slug: string,
     @Param("id") id: string,

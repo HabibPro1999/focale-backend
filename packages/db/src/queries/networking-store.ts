@@ -18,6 +18,7 @@ const tables = {
   blocks: n.networkingBlocks,
   reports: n.networkingReports,
   tables: n.networkingTables,
+  spaces: n.networkingSpaces,
   availability: n.networkingAvailability,
   meetings: n.networkingMeetings,
   reservations: n.networkingReservations,

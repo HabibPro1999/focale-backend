@@ -1,3 +1,4 @@
+import { networkingInventoryResource } from "./networking.inventory-policy";
 import {
   getNetworkingConfig,
   networkingEmailMetrics,
@@ -14,6 +15,7 @@ type AnalyticsInput = {
   messages: NetworkingRow<"messages">[];
   meetings: NetworkingRow<"meetings">[];
   tables: NetworkingRow<"tables">[];
+  spaces?: NetworkingRow<"spaces">[];
   reports: NetworkingRow<"reports">[];
   audit: NetworkingRow<"audit">[];
   event: NetworkingRow<"events">;
@@ -163,25 +165,25 @@ export function calculateNetworkingAnalytics(
       )
       .map((stamp) => stamp.getTime()),
   );
+  const byProfile = new Map(profiles.map(profile => [profile.id, profile]));
+  const bySpace = new Map((input.spaces ?? []).map(space => [space.id, space]));
   const tableUsage = tables.map((table) => {
-    const assigned = planned.filter((meeting) => meeting.tableId === table.id);
-    const occupied = new Set(
-      assigned
-        .flatMap((meeting) => resourceQuanta(meeting.startsAt, meeting.endsAt))
-        .map((stamp) => stamp.getTime())
-        .filter((stamp) => openQuanta.has(stamp)),
-    );
-    return {
-      tableId: table.id,
-      name: table.name,
-      location: table.location,
-      active: table.active,
-      meetings: assigned.length,
-      availableMinutes: table.active ? openQuanta.size * 5 : 0,
-      occupiedMinutes: table.active ? occupied.size * 5 : 0,
-      occupancyRate:
-        table.active && openQuanta.size ? occupied.size / openQuanta.size : 0,
-    };
+    const representatives = profiles.filter(profile => (profile.standTableId === table.id || profile.id === table.ownerProfileId)
+      && profile.status === "ACTIVE" && profile.consent && !profile.withdrawnAt && profile.meetingsEnabled);
+    const stations = table.kind === "TABLE" ? 1 : representatives.length;
+    const active = table.active && (!table.spaceId || bySpace.get(table.spaceId)?.active === true);
+    const assigned = planned.filter(meeting => meeting.tableId === table.id);
+    const occupied = new Set(assigned.flatMap(meeting => {
+      const requester = byProfile.get(meeting.requesterId), recipient = byProfile.get(meeting.recipientId);
+      const resource = requester && recipient ? networkingInventoryResource(table, [requester, recipient]) : null;
+      if (!resource || (table.kind === "STAND" && !representatives.some(profile => resource.endsWith(`:profile:${profile.id}`)))) return [];
+      return resourceQuanta(meeting.startsAt, meeting.endsAt)
+        .filter(stamp => openQuanta.has(stamp.getTime())).map(stamp => `${resource}:${stamp.getTime()}`);
+    }));
+    const availableMinutes = active ? openQuanta.size * 5 * stations : 0;
+    const occupiedMinutes = active ? occupied.size * 5 : 0;
+    return { tableId: table.id, name: table.name, location: table.location, active, meetings: assigned.length,
+      availableMinutes, occupiedMinutes, occupancyRate: availableMinutes ? occupiedMinutes / availableMinutes : 0 };
   });
   const availableMinutes = tableUsage.reduce(
     (sum, row) => sum + row.availableMinutes,
@@ -331,6 +333,7 @@ export async function networkingAnalytics(
     messages,
     meetings,
     tables,
+    spaces,
     reports,
     audit,
     event,
@@ -343,6 +346,7 @@ export async function networkingAnalytics(
     store.all("messages", { eventId }),
     store.all("meetings", { eventId }),
     store.all("tables", { eventId }),
+    store.all("spaces", { eventId }),
     store.all("reports", { eventId }),
     store.all("audit", { eventId }),
     store.one("events", { id: eventId }),
@@ -358,6 +362,7 @@ export async function networkingAnalytics(
       messages,
       meetings,
       tables,
+      spaces,
       reports,
       audit,
       event,

@@ -144,7 +144,7 @@ describe.runIf(enabled)(
       await networkingStore().insert("tables", {
         eventId: ids.event,
         name: "Whole table",
-        capacity: 4,
+        capacity: 2,
       });
     }, 30000);
     it("creates one mutual connection under concurrent likes", async () => {

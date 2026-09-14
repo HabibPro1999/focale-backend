@@ -51,7 +51,7 @@ Vector lookup currently uses exact cosine distance within eligible event profile
 1. Enable `networking`, `registrations` and `emails` for the client.
 2. Open the event’s Networking settings in admin. Select manual or automatic networking approval and the payment states eligible for access.
 3. Map the registration’s professional fields (company, role, sector, interests, offers and needs). Review the projected values; option IDs must resolve to meaningful labels.
-4. Configure the event timezone, daily opening hours, slot duration and closures. Create tables or exhibitor stands. Enable meetings only with a valid schedule.
+4. Configure the event timezone, daily opening hours, slot duration and closures. Create spaces with capacity measured in tables or exhibitors. Tables seat two; each exhibitor can have several representatives with independent availability. See [spaces and migration](NETWORKING_SPACES.md). Enable meetings only with a valid schedule.
 5. Configure branding, language choices, participant/table labels, support details and notification templates.
 6. Synchronize existing registrations and approve pending participants where required. Registration changes subsequently update the networking projection.
 7. For sensitive events, enable the authenticator second factor. Participants complete enrollment after email verification, and retain their single-use recovery codes.

@@ -251,17 +251,34 @@ export const NetworkingAdminMeetingUpdateSchema = z
     (v) => v.action !== "ASSIGN" || !!v.tableId,
     "Assignment requires a table",
   );
+export const NetworkingSpaceSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  kind: z.enum(["TABLE", "STAND"]),
+  capacity: z.number().int().min(1).max(500),
+  location: z.string().trim().max(200).default(""),
+  active: z.boolean().default(true),
+}).strict();
+export const NetworkingSpaceUpdateSchema = NetworkingSpaceSchema.partial();
+export type NetworkingSpaceInput = z.infer<typeof NetworkingSpaceSchema>;
+export interface NetworkingSpace extends NetworkingSpaceInput {
+  id: string;
+  eventId: string;
+  allocatedCount?: number;
+}
 export const NetworkingTableSchema = z
   .object({
+    spaceId: id,
     name: z.string().trim().min(1).max(120),
-    capacity: z.number().int().min(2).max(100).default(2),
+    capacity: z.literal(2).default(2),
     location: z.string().max(200).default(""),
     active: z.boolean().default(true),
     kind: z.enum(["TABLE", "STAND"]).default("TABLE"),
     ownerProfileId: id.nullable().optional(),
+    representativeIds: z.array(id).max(500).optional(),
   })
   .strict();
 export const NetworkingTableUpdateSchema = NetworkingTableSchema.partial();
+export type NetworkingTableInput = z.infer<typeof NetworkingTableSchema>;
 export const NetworkingNotificationReadSchema = z
   .object({ ids: z.array(id).max(100).optional() })
   .strict();
@@ -313,6 +330,9 @@ export interface NetworkingProfile {
 export interface NetworkingTable {
   id: string;
   eventId: string;
+  spaceId?: string | null;
+  space?: NetworkingSpace | null;
+  representativeIds?: string[];
   name: string;
   capacity: number;
   location: string;

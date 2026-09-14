@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -70,6 +71,7 @@ export const networkingProfiles = pgTable(
     uniqueIndex("networking_profiles_registration_key").on(t.registrationId),
     index("networking_profiles_event_status_idx").on(t.eventId, t.status),
     index("networking_profiles_event_email_idx").on(t.eventId, t.email),
+    index("networking_profiles_stand_idx").on(t.eventId, t.standTableId),
     index("networking_profiles_embedding_scan_idx").on(t.updatedAt, t.id)
       .where(sql`${t.status}='ACTIVE' AND ${t.visible} AND ${t.consent} AND ${t.withdrawnAt} IS NULL`),
   ],
@@ -233,11 +235,30 @@ export const networkingReports = pgTable(
   },
   (t) => [index("networking_reports_event_status_idx").on(t.eventId, t.status)],
 );
+export const networkingSpaces = pgTable(
+  "networking_spaces",
+  {
+    id: idPk(),
+    eventId: eventId(),
+    name: text().notNull(),
+    kind: text().$type<"TABLE" | "STAND">().notNull().default("TABLE"),
+    capacity: integer().notNull().default(1),
+    location: text().notNull().default(""),
+    active: boolean().notNull().default(true),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex("networking_spaces_event_name_key").on(t.eventId, t.name),
+    check("networking_spaces_capacity_check", sql`${t.capacity} BETWEEN 1 AND 500`),
+    check("networking_spaces_kind_check", sql`${t.kind} IN ('TABLE', 'STAND')`),
+  ],
+);
 export const networkingTables = pgTable(
   "networking_tables",
   {
     id: idPk(),
     eventId: eventId(),
+    spaceId: text().references(() => networkingSpaces.id, { onDelete: "cascade" }),
     name: text().notNull(),
     capacity: integer().notNull().default(2),
     location: text().notNull().default(""),
@@ -249,7 +270,9 @@ export const networkingTables = pgTable(
     ...timestamps,
   },
   (t) => [
-    uniqueIndex("networking_tables_event_name_key").on(t.eventId, t.name),
+    uniqueIndex("networking_tables_space_name_key").on(t.spaceId, t.name),
+    index("networking_tables_event_space_idx").on(t.eventId, t.spaceId),
+    check("networking_tables_two_people_check", sql`${t.capacity} = 2`),
   ],
 );
 export const networkingAvailability = pgTable(
@@ -310,7 +333,7 @@ export const networkingMeetings = pgTable(
   ],
 );
 // Five-minute resource quanta protect overlaps across edits to configured slot duration.
-// Whole tables remain exclusive for each appointment, regardless of seat capacity.
+// Tables are exclusive pairs; exhibitor stations reserve each representative independently.
 export const networkingReservations = pgTable(
   "networking_reservations",
   {

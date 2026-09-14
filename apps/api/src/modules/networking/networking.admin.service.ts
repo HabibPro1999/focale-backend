@@ -1,3 +1,4 @@
+import { NetworkingInventoryService } from "./networking.inventory.service";
 import { networkingAnalytics } from "./networking.analytics";
 import {
   BadRequestException,
@@ -38,6 +39,7 @@ export class NetworkingAdminService {
   constructor(
     private readonly networking: NetworkingService,
     private readonly meetings: NetworkingMeetingsService,
+    readonly inventory: NetworkingInventoryService = new NetworkingInventoryService(),
   ) {}
   async config(
     eventId: string,
@@ -192,15 +194,12 @@ export class NetworkingAdminService {
     return networkingTransaction(eventId, async (store, db) => {
       const profile = await store.one("profiles", { eventId, id });
       if (!profile) throw new NotFoundException("Participant not found");
-      if (
-        input.standTableId &&
-        !(await store.one("tables", {
-          eventId,
-          id: input.standTableId,
-          kind: "STAND",
-        }))
-      )
-        throw new BadRequestException("Stand must belong to this event");
+      if (input.standTableId !== undefined) {
+        await this.inventory.assertRepresentativeMove(store, eventId, profile, input.standTableId);
+        if (profile.standTableId && profile.standTableId !== input.standTableId) {
+          await store.update("tables", { eventId, id: profile.standTableId, ownerProfileId: id }, { ownerProfileId: null });
+        }
+      }
       const [row] = await store.update(
         "profiles",
         { eventId, id },
@@ -236,89 +235,11 @@ export class NetworkingAdminService {
       return row;
     });
   }
-  async tables(eventId: string) {
-    const items = await networkingStore().all("tables", { eventId });
-    return {
-      items: items.sort((a, b) => a.name.localeCompare(b.name)),
-      total: items.length,
-    };
+  tables(eventId: string) { return this.inventory.tables(eventId); }
+  saveTable(eventId: string, input: Parameters<NetworkingInventoryService["saveTable"]>[1], actorId: string, id?: string) {
+    return this.inventory.saveTable(eventId, input, actorId, id);
   }
-  async saveTable(
-    eventId: string,
-    input: Partial<NetworkingRow<"tables">>,
-    actorId: string,
-    id?: string,
-  ) {
-    return networkingTransaction(eventId, async (store) => {
-      if (
-        input.ownerProfileId &&
-        !(await store.one("profiles", { eventId, id: input.ownerProfileId }))
-      )
-        throw new BadRequestException("Stand owner must belong to this event");
-      if (input.kind === "TABLE" && input.ownerProfileId)
-        throw new BadRequestException(
-          "Only exhibition stands can have an owner",
-        );
-      let row;
-      if (id) {
-        const existing = await store.one("tables", { eventId, id });
-        if (!existing) throw new NotFoundException("Table not found");
-        const booked = (
-          await store.all("meetings", { eventId, tableId: id })
-        ).some(
-          (v) =>
-            ["CONFIRMED", "PENDING_ALLOCATION"].includes(v.status) &&
-            v.endsAt > new Date(),
-        );
-        if (
-          booked &&
-          (input.active === false ||
-            (input.ownerProfileId !== undefined &&
-              input.ownerProfileId !== existing.ownerProfileId))
-        )
-          throw new ConflictException(
-            "Reassign upcoming meetings before changing this table",
-          );
-        [row] = await store.update("tables", { eventId, id }, input);
-      } else
-        row = await store.insert("tables", {
-          eventId,
-          name: input.name!,
-          ...input,
-        });
-      await store.insert("audit", {
-        eventId,
-        actorId,
-        action: id ? "TABLE_UPDATED" : "TABLE_CREATED",
-        targetId: row.id,
-        data: { fields: Object.keys(input) },
-      });
-      return row;
-    });
-  }
-  async removeTable(eventId: string, id: string, actorId: string) {
-    return networkingTransaction(eventId, async (store) => {
-      if (!(await store.one("tables", { eventId, id })))
-        throw new NotFoundException("Table not found");
-      if ((await store.all("meetings", { eventId, tableId: id })).length)
-        throw new ConflictException(
-          "This table has appointment history; deactivate it instead",
-        );
-      await store.update(
-        "profiles",
-        { eventId, standTableId: id },
-        { standTableId: null },
-      );
-      await store.remove("tables", { eventId, id });
-      await store.insert("audit", {
-        eventId,
-        actorId,
-        action: "TABLE_REMOVED",
-        targetId: id,
-      });
-      return { deleted: true };
-    });
-  }
+  removeTable(eventId: string, id: string, actorId: string) { return this.inventory.removeTable(eventId, id, actorId); }
   async listMeetings(
     eventId: string,
     query: {

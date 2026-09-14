@@ -17,10 +17,25 @@ function fixture():Input {
       {id:"oldtable",requesterId:"a",recipientId:"b",tableId:"inactive",status:"COMPLETED",startsAt:new Date("2030-05-01T23:30:00Z"),endsAt:new Date("2030-05-02T00:00:00Z"),createdAt:stamp,requesterCheckedInAt:null,recipientCheckedInAt:null},
       {id:"cancelled",requesterId:"a",recipientId:"b",tableId:"active",status:"CANCELLED",startsAt:new Date("2030-05-01T23:30:00Z"),endsAt:new Date("2030-05-02T00:00:00Z"),createdAt:stamp,requesterCheckedInAt:null,recipientCheckedInAt:null},
     ],
-    tables:[{id:"active",name:"Table1",location:"Zone A",active:true},{id:"inactive",name:"Old table",location:"Zone B",active:false}],reports:[],audit:[],
+    tables:[{id:"active",name:"Table1",kind:"TABLE",location:"Zone A",active:true},{id:"inactive",name:"Old table",kind:"TABLE",location:"Zone B",active:false}],reports:[],audit:[],
   } as unknown as Input;
 }
 describe("networking report definitions",()=>{
+  it("counts one independent meeting station for each exhibitor representative", () => {
+    const input = fixture();
+    input.profiles = [
+      ...input.profiles.map(profile => ({ ...profile, meetingsEnabled: true, standTableId: "stand" })),
+      { ...input.profiles[0], id: "visitor-a", standTableId: null },
+      { ...input.profiles[1], id: "visitor-b", standTableId: null },
+    ];
+    input.tables = [{ ...input.tables[0], id: "stand", kind: "STAND", ownerProfileId: "a" }];
+    input.meetings = [
+      { ...input.meetings[0], tableId: "stand", requesterId: "visitor-a", recipientId: "a" },
+      { ...input.meetings[0], id: "second", tableId: "stand", requesterId: "visitor-b", recipientId: "b" },
+    ];
+    const result = calculateNetworkingAnalytics(input);
+    expect(result.tableUsage[0]).toMatchObject({ availableMinutes: 120, occupiedMinutes: 60, occupancyRate: 0.5, meetings: 2 });
+  });
   it("keeps total gestures after pass reset while distinguishing match yield from reciprocity",()=>{
     const input=fixture();
     input.interests=[];

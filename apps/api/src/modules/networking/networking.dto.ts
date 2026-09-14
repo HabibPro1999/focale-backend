@@ -44,6 +44,8 @@ export class NetworkingAdminMeetingDto extends createZodDto(
   c.NetworkingAdminMeetingUpdateSchema,
 ) {}
 export class NetworkingTableDto extends createZodDto(c.NetworkingTableSchema) {}
+export class NetworkingSpaceDto extends createZodDto(c.NetworkingSpaceSchema) {}
+export class NetworkingSpaceUpdateDto extends createZodDto(c.NetworkingSpaceUpdateSchema) {}
 export class NetworkingTableUpdateDto extends createZodDto(
   c.NetworkingTableUpdateSchema,
 ) {}

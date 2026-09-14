@@ -23,6 +23,7 @@ import {
   networkingSlots,
   resourceQuanta,
 } from "./networking.policy";
+import { networkingInventoryResource } from "./networking.inventory-policy";
 import { readNetworkingBadge } from "./networking.security";
 @Injectable()
 export class NetworkingMeetingsService {
@@ -41,6 +42,11 @@ export class NetworkingMeetingsService {
         ? ctx.profile
         : await this.networking.target(ctx, profileId, store);
     if (!profile.meetingsEnabled) return [];
+    if (profile.standTableId) {
+      const stand = await store.one("tables", { eventId: ctx.event.id, id: profile.standTableId, kind: "STAND" });
+      const space = stand?.spaceId ? await store.one("spaces", { eventId: ctx.event.id, id: stand.spaceId }) : null;
+      if (!stand?.active || space?.active === false) return [];
+    }
     const availableSlots = networkingSlots(ctx.config, ctx.event).filter(
       (v) => Date.parse(v) > Date.now(),
     );
@@ -138,6 +144,7 @@ export class NetworkingMeetingsService {
         ? store.one("tables", { eventId: row.eventId, id: row.tableId })
         : null,
     ]);
+    const space = table?.spaceId ? await store.one("spaces", { eventId: row.eventId, id: table.spaceId }) : null;
     return {
       ...row,
       requester: requester
@@ -150,7 +157,7 @@ export class NetworkingMeetingsService {
           ? recipient
           : networkingPublicProfile(recipient)
         : null,
-      table,
+      table: table ? { ...table, space } : null,
     };
   }
   async expire(eventId: string) {
@@ -316,12 +323,8 @@ export class NetworkingMeetingsService {
     const reservations = (
       await store.all("reservations", { eventId: ctx.event.id })
     ).filter((v) => v.meetingId !== row.id);
-    const taken = (key: string) =>
-      reservations.some(
-        (v) =>
-          v.resourceKey === key &&
-          quanta.some((q) => q.getTime() === v.startsAt.getTime()),
-      );
+    const occupied = new Set(reservations.map(reservation => `${reservation.resourceKey}:${reservation.startsAt.getTime()}`));
+    const taken = (key: string) => quanta.some(quantum => occupied.has(`${key}:${quantum.getTime()}`));
     const participantKeys = [
       `profile:${row.requesterId}`,
       `profile:${row.recipientId}`,
@@ -330,42 +333,39 @@ export class NetworkingMeetingsService {
       throw new ConflictException(
         "One of the participants already has a meeting in this slot",
       );
+    const [requester, recipient, spaces] = await Promise.all([
+      store.one("profiles", { eventId: ctx.event.id, id: row.requesterId }),
+      store.one("profiles", { eventId: ctx.event.id, id: row.recipientId }),
+      store.all("spaces", { eventId: ctx.event.id }),
+    ]);
+    if (!requester || !recipient) throw new NotFoundException("Participant not found");
+    const bySpace = new Map(spaces.map(space => [space.id, space]));
     let tableId: string | null = null;
+    let inventoryResource: string | null = null;
     if (ctx.config.autoAssignTables || forcedTableId) {
       let tables = (
         await store.all("tables", { eventId: ctx.event.id, active: true })
       ).filter(
         (t) =>
-          t.capacity >= 2 &&
-          (!t.ownerProfileId ||
-            [row.requesterId, row.recipientId].includes(t.ownerProfileId)) &&
+          (!t.spaceId || bySpace.get(t.spaceId)?.active === true) &&
+          !!networkingInventoryResource(t, [requester, recipient]) &&
+          !taken(networkingInventoryResource(t, [requester, recipient])!) &&
           !taken(`table:${t.id}`),
       );
-      const requester = await store.one("profiles", {
-        eventId: ctx.event.id,
-        id: row.requesterId,
-      });
-      const recipient = await store.one("profiles", {
-        eventId: ctx.event.id,
-        id: row.recipientId,
-      });
       const assignedStand =
-        forcedTableId ?? requester?.standTableId ?? recipient?.standTableId;
+        forcedTableId ?? recipient.standTableId ?? requester.standTableId;
       if (assignedStand) tables = tables.filter((t) => t.id === assignedStand);
-      // Stable least-used whole-table allocation; stands are only available to their owner.
+      // Ordinary tables are exclusive; each exhibitor representative has an independent station.
       const meetings = await store.all("meetings", { eventId: ctx.event.id });
-      tables.sort(
-        (a, b) =>
-          meetings.filter((m) => m.tableId === a.id && m.status !== "CANCELLED")
-            .length -
-            meetings.filter(
-              (m) => m.tableId === b.id && m.status !== "CANCELLED",
-            ).length || a.name.localeCompare(b.name),
-      );
+      const usage = new Map<string, number>();
+      for (const meeting of meetings) if (meeting.tableId && meeting.status !== "CANCELLED")
+        usage.set(meeting.tableId, (usage.get(meeting.tableId) ?? 0) + 1);
+      tables.sort((a, b) => (usage.get(a.id) ?? 0) - (usage.get(b.id) ?? 0) || a.name.localeCompare(b.name));
       tableId = tables[0]?.id ?? null;
+      inventoryResource = tables[0] ? networkingInventoryResource(tables[0], [requester, recipient]) : null;
       if (!tableId)
         throw new ConflictException(
-          "No table is available for this slot; choose another time",
+          "No table or exhibitor representative is available for this slot; choose another time",
         );
     }
     await store.remove("reservations", {
@@ -374,7 +374,7 @@ export class NetworkingMeetingsService {
     });
     for (const resourceKey of [
       ...participantKeys,
-      ...(tableId ? [`table:${tableId}`] : []),
+      ...(inventoryResource ? [inventoryResource] : []),
     ])
       for (const start of quanta)
         await store.insert("reservations", {

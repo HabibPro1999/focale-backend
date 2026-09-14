@@ -33,6 +33,7 @@ import {
   networkingSearchMatches,
 } from "./networking-search";
 export interface NetworkingDiscoveryFilters {
+  standTableId?: string;
   q?: string;
   sector?: string;
   sectors?: string[];
@@ -68,6 +69,7 @@ function networkingDiscoveryWhere(
 ) {
   return and(
     eq(profiles.eventId, eventId),
+    query.standTableId ? eq(profiles.standTableId, query.standTableId) : undefined,
     ne(profiles.id, profileId),
     sql`lower(${profiles.email}) <> (SELECT lower(email) FROM networking_profiles WHERE id=${profileId} AND event_id=${eventId})`,
     eq(profiles.status, "ACTIVE"),

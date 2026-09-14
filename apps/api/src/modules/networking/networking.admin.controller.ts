@@ -94,6 +94,22 @@ export class NetworkingAdminController {
     await this.access(user, eventId, true);
     return this.service.updateProfile(eventId, id, body, user.id);
   }
+  @Get("spaces") async spaces(@CurrentUser() user: AuthUser, @Param("eventId") eventId: string) {
+    await this.access(user, eventId);
+    return this.service.inventory.spaces(eventId);
+  }
+  @Post("spaces") async createSpace(@CurrentUser() user: AuthUser, @Param("eventId") eventId: string, @Body() body: dto.NetworkingSpaceDto) {
+    await this.access(user, eventId, true);
+    return this.service.inventory.saveSpace(eventId, body, user.id);
+  }
+  @Patch("spaces/:id") async updateSpace(@CurrentUser() user: AuthUser, @Param("eventId") eventId: string, @Param("id") id: string, @Body() body: dto.NetworkingSpaceUpdateDto) {
+    await this.access(user, eventId, true);
+    return this.service.inventory.saveSpace(eventId, body, user.id, id);
+  }
+  @Delete("spaces/:id") async removeSpace(@CurrentUser() user: AuthUser, @Param("eventId") eventId: string, @Param("id") id: string) {
+    await this.access(user, eventId, true);
+    return this.service.inventory.removeSpace(eventId, id, user.id);
+  }
   @Get("tables") async tables(
     @CurrentUser() user: AuthUser,
     @Param("eventId") eventId: string,

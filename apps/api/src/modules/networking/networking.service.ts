@@ -445,6 +445,19 @@ export class NetworkingService {
     };
   }
 
+  async representatives(ctx: NetworkingContext, profileId: string, page = 1) {
+    if (!ctx.config.swipeEnabled && !ctx.config.searchEnabled) throw new ForbiddenException("Discovery is disabled");
+    const profile = await this.target(ctx, profileId);
+    const stand = profile.standTableId ? await networkingStore().one("tables", { eventId: ctx.event.id, id: profile.standTableId, kind: "STAND" }) : null;
+    if (!stand) return { items: [], total: 0, exhibitor: null };
+    const space = stand.spaceId ? await networkingStore().one("spaces", { eventId: ctx.event.id, id: stand.spaceId }) : null;
+    if (!stand.active || space?.active === false) return { items: [], total: 0, exhibitor: null };
+    const result = await listNetworkingDiscovery(ctx.event.id, ctx.profile.id, ctx.config.eligiblePaymentStatuses,
+      { standTableId: stand.id, page, limit: 30 });
+    return { items: result.items.map(networkingPublicProfile), total: result.total,
+      exhibitor: { id: stand.id, name: stand.name, spaceName: space?.name ?? null } };
+  }
+
   async personalAnalytics(ctx: NetworkingContext): Promise<NetworkingPersonalAnalytics> {
     const store = networkingStore();
     ctx = await this.currentParticipant(ctx, store);
