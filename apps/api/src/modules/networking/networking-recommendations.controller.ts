@@ -21,6 +21,9 @@ import {
 import { NetworkingService } from "./networking.service";
 import { networkingPublicProfile } from "./networking.policy";
 
+import { profileEmbeddingInput } from "@app/integrations";
+import { NetworkingRecommendationCache } from "./networking-recommendation-cache";
+
 const reasons = {
   fr: {
     needs: "Son offre correspond à vos recherches",
@@ -44,6 +47,7 @@ const reasons = {
 
 @Controller("api/networking/:slug")
 export class NetworkingRecommendationsController {
+  private readonly candidates = new NetworkingRecommendationCache();
   constructor(private readonly networking: NetworkingService) {}
 
   @Get("recommendations")
@@ -56,13 +60,22 @@ export class NetworkingRecommendationsController {
       throw new ForbiddenException("Participant discovery is disabled");
     const model =
       process.env.NETWORKING_EMBEDDING_MODEL || "text-embedding-3-small";
-    const candidates = await findNetworkingVectorCandidates(
+    const cacheKey = JSON.stringify([
       ctx.event.id,
       ctx.profile.id,
       model,
-      ctx.config.eligiblePaymentStatuses,
-      60,
-    );
+      profileEmbeddingInput(ctx.profile).hash,
+      [...ctx.config.eligiblePaymentStatuses].sort(),
+    ]);
+    const loadCandidates = () =>
+      findNetworkingVectorCandidates(
+        ctx.event.id,
+        ctx.profile.id,
+        model,
+        ctx.config.eligiblePaymentStatuses,
+        60,
+      );
+    let candidates = await this.candidates.get(cacheKey, loadCandidates);
     if (candidates === null || !candidates.length) {
       const result = await this.networking.discover(ctx, {
         sort: "recent",
@@ -88,18 +101,30 @@ export class NetworkingRecommendationsController {
         .slice(0, 30);
       return { items, total: items.length, strategy: "PROFILE_RULES" };
     }
-    const profiles = await getNetworkingRecommendationProfiles(
+    let profiles = await getNetworkingRecommendationProfiles(
       ctx.event.id,
       candidates.map((candidate) => candidate.profileId),
       ctx.profile.id,
       ctx.config.eligiblePaymentStatuses,
     );
+    // Swiping/blocking can exhaust a cached page. Refill once using current filters.
+    if (profiles.length < Math.min(30, candidates.length)) {
+      this.candidates.invalidate(cacheKey, candidates);
+      candidates = (await this.candidates.get(cacheKey, loadCandidates)) ?? [];
+      profiles = await getNetworkingRecommendationProfiles(
+        ctx.event.id,
+        candidates.map((candidate) => candidate.profileId),
+        ctx.profile.id,
+        ctx.config.eligiblePaymentStatuses,
+      );
+    }
+    const profilesById = new Map(
+      profiles.map((profile) => [profile.id, profile]),
+    );
     const copy = reasons[ctx.profile.language];
     const items = candidates
       .flatMap((candidate) => {
-        const profile = profiles.find(
-          (value) => value.id === candidate.profileId,
-        );
+        const profile = profilesById.get(candidate.profileId);
         if (!profile) return [];
         const explanation: string[] = [];
         if (candidate.needsScore >= 0.45) explanation.push(copy.needs);

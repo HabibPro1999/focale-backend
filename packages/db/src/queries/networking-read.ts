@@ -382,3 +382,12 @@ export async function explainNetworkingDiscovery(
     sql`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${statement.getSQL()}`,
   );
 }
+
+/** Activity must not change the content watermark used by the embedding worker. */
+export async function touchNetworkingProfileActivity(eventId: string, profileId: string): Promise<void> {
+  await getDb().execute(sql`
+    UPDATE networking_profiles SET last_active_at=now()
+    WHERE event_id=${eventId} AND id=${profileId}
+      AND (last_active_at IS NULL OR last_active_at < now() - interval '1 minute')
+  `);
+}

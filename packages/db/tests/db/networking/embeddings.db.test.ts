@@ -13,8 +13,11 @@ import {
   networkingEmbeddingJobs,
   networkingBlocks,
   networkingInterests,
+  networkingConnections,
   networkingConfigs,
   reindexNetworkingEvent,
+  saveNetworkingEmbeddings,
+  touchNetworkingProfileActivity,
   claimNetworkingEmbeddingJobs,
   enqueueChangedNetworkingEmbeddings,
   getNetworkingRecommendationProfiles,
@@ -49,57 +52,49 @@ async function participant(
   const eventId = options.eventId ?? ids.event;
   const registrationId = randomUUID();
   const id = randomUUID();
-  await db
-    .insert(registrations)
-    .values({
-      id: registrationId,
-      eventId,
-      formId: eventId === ids.event ? ids.form : ids.otherForm,
-      email: `${id}@example.test`,
-      firstName: name,
-      paymentStatus: options.paymentStatus ?? "PAID",
-      totalAmount: 0,
-      priceBreakdown: {},
-      formData: {},
-    });
-  await db
-    .insert(networkingProfiles)
-    .values({
-      id,
-      eventId,
-      registrationId,
-      email: `${id}@example.test`,
-      firstName: name,
-      status: "ACTIVE",
-      consent: true,
-      visible: options.visible ?? true,
-      offers: name === "Founder" ? "Product expertise" : "Funding",
-      seeks: name === "Founder" ? "Funding" : "Product expertise",
-    });
-  await db
-    .insert(networkingEmbeddingJobs)
-    .values({
-      profileId: id,
-      status: "READY",
-      model,
-      sourceHash: "fixture",
-      indexedProfileAt: new Date(),
-    });
+  await db.insert(registrations).values({
+    id: registrationId,
+    eventId,
+    formId: eventId === ids.event ? ids.form : ids.otherForm,
+    email: `${id}@example.test`,
+    firstName: name,
+    paymentStatus: options.paymentStatus ?? "PAID",
+    totalAmount: 0,
+    priceBreakdown: {},
+    formData: {},
+  });
+  await db.insert(networkingProfiles).values({
+    id,
+    eventId,
+    registrationId,
+    email: `${id}@example.test`,
+    firstName: name,
+    status: "ACTIVE",
+    consent: true,
+    visible: options.visible ?? true,
+    offers: name === "Founder" ? "Product expertise" : "Funding",
+    seeks: name === "Founder" ? "Funding" : "Product expertise",
+  });
+  await db.insert(networkingEmbeddingJobs).values({
+    profileId: id,
+    status: "READY",
+    model,
+    sourceHash: "fixture",
+    indexedProfileAt: new Date(),
+  });
   for (const [kind, dimension] of [
     ["PROFILE", 2],
     ["OFFER", name === "Founder" ? 3 : 0],
     ["NEED", name === "Founder" ? 0 : 3],
   ] as const) {
-    await db
-      .insert(networkingEmbeddings)
-      .values({
-        profileId: id,
-        eventId,
-        model,
-        kind,
-        sourceHash: "fixture",
-        embedding: vector(dimension),
-      });
+    await db.insert(networkingEmbeddings).values({
+      profileId: id,
+      eventId,
+      model,
+      kind,
+      sourceHash: "fixture",
+      embedding: vector(dimension),
+    });
   }
   participants.set(name, { id, registrationId, eventId });
   return id;
@@ -108,48 +103,43 @@ async function participant(
 describe.runIf(dbTestsEnabled())("networking native vector retrieval", () => {
   beforeAll(async () => {
     const db = getDb();
-    await db
-      .insert(clients)
-      .values({
-        id: ids.client,
-        name: "Networking vector test",
-        enabledModules: ["networking", "registrations", "emails"],
-      });
+    await db.insert(clients).values({
+      id: ids.client,
+      name: "Networking vector test",
+      enabledModules: ["networking", "registrations", "emails"],
+    });
     for (const [eventId, formId] of [
       [ids.event, ids.form],
       [ids.otherEvent, ids.otherForm],
     ]) {
-      await db
-        .insert(events)
-        .values({
-          id: eventId!,
-          clientId: ids.client,
-          name: "Isolated test event",
-          slug: eventId!,
-          startDate: new Date(),
-          endDate: new Date(Date.now() + 86_400_000),
-          status: "OPEN",
-        });
-      await db
-        .insert(forms)
-        .values({
-          id: formId!,
-          eventId: eventId!,
-          name: "Test registration",
-          schema: { steps: [] },
-          type: "REGISTRATION",
-        });
-    }
-    await db
-      .insert(networkingConfigs)
-      .values({
-        eventId: ids.event,
-        config: NetworkingConfigSchema.parse({ enabled: true }),
+      await db.insert(events).values({
+        id: eventId!,
+        clientId: ids.client,
+        name: "Isolated test event",
+        slug: eventId!,
+        startDate: new Date(),
+        endDate: new Date(Date.now() + 86_400_000),
+        status: "OPEN",
       });
+      await db.insert(forms).values({
+        id: formId!,
+        eventId: eventId!,
+        name: "Test registration",
+        schema: { steps: [] },
+        type: "REGISTRATION",
+      });
+    }
+    await db.insert(networkingConfigs).values({
+      eventId: ids.event,
+      config: NetworkingConfigSchema.parse({ enabled: true }),
+    });
     const founder = await participant("Founder");
     await participant("Investor");
     const shared = await participant("Shared email");
-    await db.update(networkingProfiles).set({ email: `${founder}@EXAMPLE.TEST` }).where(eq(networkingProfiles.id, shared));
+    await db
+      .update(networkingProfiles)
+      .set({ email: `${founder}@EXAMPLE.TEST` })
+      .where(eq(networkingProfiles.id, shared));
     await participant("Unpaid", { paymentStatus: "PENDING" });
     await participant("Hidden", { visible: false });
     await participant("Other event", { eventId: ids.otherEvent });
@@ -158,14 +148,12 @@ describe.runIf(dbTestsEnabled())("networking native vector retrieval", () => {
       .insert(networkingBlocks)
       .values({ eventId: ids.event, profileId: blocked, targetId: founder });
     const ignored = await participant("Ignored");
-    await db
-      .insert(networkingInterests)
-      .values({
-        eventId: ids.event,
-        profileId: founder,
-        targetId: ignored,
-        action: "PASS",
-      });
+    await db.insert(networkingInterests).values({
+      eventId: ids.event,
+      profileId: founder,
+      targetId: ignored,
+      action: "PASS",
+    });
   });
   afterAll(async () => {
     const db = getDb();
@@ -203,43 +191,208 @@ describe.runIf(dbTestsEnabled())("networking native vector retrieval", () => {
   it("rechecks payment, blocks, consent, visibility, event and shared email during final hydration", async () => {
     const db = getDb();
     const founderId = participants.get("Founder")!.id;
-    const idsToHydrate = [...participants.values()].map(p => p.id);
-    const eligibleIds = () => getNetworkingRecommendationProfiles(ids.event, idsToHydrate, founderId, ["PAID"]);
+    const idsToHydrate = [...participants.values()].map((p) => p.id);
+    const eligibleIds = () =>
+      getNetworkingRecommendationProfiles(ids.event, idsToHydrate, founderId, [
+        "PAID",
+      ]);
     const investor = participants.get("Investor")!;
-    // PASS is a ranking exclusion; final hydration independently rechecks the privacy/eligibility boundary.
-    expect((await eligibleIds()).map(p => p.id).sort()).toEqual([investor.id, participants.get("Ignored")!.id].sort());
-    await db.update(registrations).set({ paymentStatus: "PENDING" }).where(eq(registrations.id, investor.registrationId));
-    expect((await eligibleIds()).map(p => p.id)).not.toContain(investor.id);
-    await db.update(registrations).set({ paymentStatus: "PAID" }).where(eq(registrations.id, investor.registrationId));
-    await db.insert(networkingBlocks).values({ eventId: ids.event, profileId: founderId, targetId: investor.id });
-    expect((await eligibleIds()).map(p => p.id)).not.toContain(investor.id);
-    await db.delete(networkingBlocks).where(eq(networkingBlocks.targetId, investor.id));
-    await db.update(networkingProfiles).set({ consent: false }).where(eq(networkingProfiles.id, investor.id));
-    expect((await eligibleIds()).map(p => p.id)).not.toContain(investor.id);
-    await db.update(networkingProfiles).set({ consent: true }).where(eq(networkingProfiles.id, investor.id));
+    // Cached candidates must not resurrect profiles passed since the ranking was calculated.
+    expect((await eligibleIds()).map((p) => p.id).sort()).toEqual([
+      investor.id,
+    ]);
+    await db
+      .update(registrations)
+      .set({ paymentStatus: "PENDING" })
+      .where(eq(registrations.id, investor.registrationId));
+    expect((await eligibleIds()).map((p) => p.id)).not.toContain(investor.id);
+    await db
+      .update(registrations)
+      .set({ paymentStatus: "PAID" })
+      .where(eq(registrations.id, investor.registrationId));
+    await db.insert(networkingBlocks).values({
+      eventId: ids.event,
+      profileId: founderId,
+      targetId: investor.id,
+    });
+    expect((await eligibleIds()).map((p) => p.id)).not.toContain(investor.id);
+    await db
+      .delete(networkingBlocks)
+      .where(eq(networkingBlocks.targetId, investor.id));
+    await db
+      .update(networkingProfiles)
+      .set({ consent: false })
+      .where(eq(networkingProfiles.id, investor.id));
+    expect((await eligibleIds()).map((p) => p.id)).not.toContain(investor.id);
+    await db
+      .update(networkingProfiles)
+      .set({ consent: true })
+      .where(eq(networkingProfiles.id, investor.id));
+    const [profileAId, profileBId] = [founderId, investor.id].sort();
+    await db
+      .insert(networkingConnections)
+      .values({ eventId: ids.event, profileAId, profileBId });
+    expect((await eligibleIds()).map((p) => p.id)).not.toContain(investor.id);
+    await db
+      .delete(networkingConnections)
+      .where(eq(networkingConnections.eventId, ids.event));
+    await db.insert(networkingInterests).values({
+      eventId: ids.event,
+      profileId: founderId,
+      targetId: investor.id,
+      action: "PASS",
+    });
+    expect((await eligibleIds()).map((p) => p.id)).not.toContain(investor.id);
+    await db
+      .delete(networkingInterests)
+      .where(eq(networkingInterests.targetId, investor.id));
+  });
+  it("records activity without queueing unchanged profile text", async () => {
+    const db = getDb();
+    const id = await participant("Activity");
+    const [before] = await db
+      .select()
+      .from(networkingProfiles)
+      .where(eq(networkingProfiles.id, id));
+    await touchNetworkingProfileActivity(ids.otherEvent, id);
+    const [wrongEvent] = await db
+      .select()
+      .from(networkingProfiles)
+      .where(eq(networkingProfiles.id, id));
+    expect(wrongEvent.lastActiveAt).toBeNull();
+    await touchNetworkingProfileActivity(ids.event, id);
+    const [after] = await db
+      .select()
+      .from(networkingProfiles)
+      .where(eq(networkingProfiles.id, id));
+    expect(after.lastActiveAt).toBeInstanceOf(Date);
+    expect(after.updatedAt).toEqual(before.updatedAt);
+    await enqueueChangedNetworkingEmbeddings(model);
+    const [job] = await db
+      .select()
+      .from(networkingEmbeddingJobs)
+      .where(eq(networkingEmbeddingJobs.profileId, id));
+    expect(job.status).toBe("READY");
+  });
+  it("saves all three vectors atomically and rejects a stale worker lease", async () => {
+    const db = getDb();
+    const profileId = await participant("Batch save");
+    await db
+      .delete(networkingEmbeddings)
+      .where(eq(networkingEmbeddings.profileId, profileId));
+    for (const generation of [1, 2]) {
+      await db
+        .update(networkingEmbeddingJobs)
+        .set({ status: "PROCESSING", lockToken: "owner" })
+        .where(eq(networkingEmbeddingJobs.profileId, profileId));
+      const input = {
+        profileId,
+        eventId: ids.event,
+        lockToken: "owner",
+        model,
+        sourceHash: `generation-${generation}`,
+        indexedProfileAt: new Date(),
+        embeddings: (["PROFILE", "OFFER", "NEED"] as const).map(
+          (kind, index) => ({ kind, embedding: vector(index + generation) }),
+        ),
+      };
+      expect(
+        await saveNetworkingEmbeddings({ ...input, lockToken: "stale" }),
+      ).toBe(false);
+      expect(await saveNetworkingEmbeddings(input)).toBe(true);
+      const saved = await db
+        .select()
+        .from(networkingEmbeddings)
+        .where(eq(networkingEmbeddings.profileId, profileId));
+      expect(saved).toHaveLength(3);
+      for (const row of saved) {
+        expect(row.sourceHash).toBe(input.sourceHash);
+        expect(row.embedding).toEqual(
+          input.embeddings.find((item) => item.kind === row.kind)!.embedding,
+        );
+      }
+      const [job] = await db
+        .select()
+        .from(networkingEmbeddingJobs)
+        .where(eq(networkingEmbeddingJobs.profileId, profileId));
+      expect(job).toMatchObject({
+        status: "READY",
+        lockToken: null,
+        sourceHash: input.sourceHash,
+      });
+    }
   });
   it("terminalizes exhausted expired leases while allowing the last remaining attempt", async () => {
     const db = getDb();
     const founderId = participants.get("Founder")!.id;
-    await db.update(networkingEmbeddingJobs).set({ status: "PROCESSING", attempts: 5, lockToken: "expired", lockedUntil: new Date(0) }).where(eq(networkingEmbeddingJobs.profileId, founderId));
-    expect((await claimNetworkingEmbeddingJobs(100)).map(j => j.profile.id)).not.toContain(founderId);
-    const [job] = await db.select().from(networkingEmbeddingJobs).where(eq(networkingEmbeddingJobs.profileId, founderId));
-    expect(job).toMatchObject({ status: "FAILED", attempts: 5, lockedUntil: null, lockToken: null });
-    await db.update(networkingEmbeddingJobs).set({ status: "PROCESSING", attempts: 4, availableAt: new Date(0), lockToken: "expired", lockedUntil: new Date(0) }).where(eq(networkingEmbeddingJobs.profileId, founderId));
-    expect((await claimNetworkingEmbeddingJobs(100)).map(j => j.profile.id)).toContain(founderId);
+    await db
+      .update(networkingEmbeddingJobs)
+      .set({
+        status: "PROCESSING",
+        attempts: 5,
+        lockToken: "expired",
+        lockedUntil: new Date(0),
+      })
+      .where(eq(networkingEmbeddingJobs.profileId, founderId));
+    expect(
+      (await claimNetworkingEmbeddingJobs(100)).map((j) => j.profile.id),
+    ).not.toContain(founderId);
+    const [job] = await db
+      .select()
+      .from(networkingEmbeddingJobs)
+      .where(eq(networkingEmbeddingJobs.profileId, founderId));
+    expect(job).toMatchObject({
+      status: "FAILED",
+      attempts: 5,
+      lockedUntil: null,
+      lockToken: null,
+    });
+    await db
+      .update(networkingEmbeddingJobs)
+      .set({
+        status: "PROCESSING",
+        attempts: 4,
+        availableAt: new Date(0),
+        lockToken: "expired",
+        lockedUntil: new Date(0),
+      })
+      .where(eq(networkingEmbeddingJobs.profileId, founderId));
+    expect(
+      (await claimNetworkingEmbeddingJobs(100)).map((j) => j.profile.id),
+    ).toContain(founderId);
   });
   it("does not enqueue or claim when either required client dependency is revoked", async () => {
     const db = getDb();
     const founderId = participants.get("Founder")!.id;
-    for (const modules of [["networking", "emails"], ["networking", "registrations"]] as const) {
-      await db.update(clients).set({ enabledModules: [...modules] }).where(eq(clients.id, ids.client));
-      await db.delete(networkingEmbeddingJobs).where(eq(networkingEmbeddingJobs.profileId, founderId));
+    for (const modules of [
+      ["networking", "emails"],
+      ["networking", "registrations"],
+    ] as const) {
+      await db
+        .update(clients)
+        .set({ enabledModules: [...modules] })
+        .where(eq(clients.id, ids.client));
+      await db
+        .delete(networkingEmbeddingJobs)
+        .where(eq(networkingEmbeddingJobs.profileId, founderId));
       await enqueueChangedNetworkingEmbeddings(model);
-      expect(await db.select().from(networkingEmbeddingJobs).where(eq(networkingEmbeddingJobs.profileId, founderId))).toHaveLength(0);
+      expect(
+        await db
+          .select()
+          .from(networkingEmbeddingJobs)
+          .where(eq(networkingEmbeddingJobs.profileId, founderId)),
+      ).toHaveLength(0);
       await reindexNetworkingEvent(ids.event);
-      expect((await claimNetworkingEmbeddingJobs(100)).filter(job => job.profile.eventId === ids.event)).toHaveLength(0);
+      expect(
+        (await claimNetworkingEmbeddingJobs(100)).filter(
+          (job) => job.profile.eventId === ids.event,
+        ),
+      ).toHaveLength(0);
     }
-    await db.update(clients).set({ enabledModules: ["networking", "registrations", "emails"] }).where(eq(clients.id, ids.client));
+    await db
+      .update(clients)
+      .set({ enabledModules: ["networking", "registrations", "emails"] })
+      .where(eq(clients.id, ids.client));
   });
   it("revalidates consent and payment before claiming a queued embedding batch", async () => {
     await reindexNetworkingEvent(ids.event);

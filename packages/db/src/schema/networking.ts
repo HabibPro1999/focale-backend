@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   boolean,
   index,
@@ -69,6 +70,8 @@ export const networkingProfiles = pgTable(
     uniqueIndex("networking_profiles_registration_key").on(t.registrationId),
     index("networking_profiles_event_status_idx").on(t.eventId, t.status),
     index("networking_profiles_event_email_idx").on(t.eventId, t.email),
+    index("networking_profiles_embedding_scan_idx").on(t.updatedAt, t.id)
+      .where(sql`${t.status}='ACTIVE' AND ${t.visible} AND ${t.consent} AND ${t.withdrawnAt} IS NULL`),
   ],
 );
 export const networkingChallenges = pgTable(
@@ -148,6 +151,7 @@ export const networkingConnections = pgTable(
     createdAt: instant().notNull().defaultNow(),
   },
   (t) => [
+    index("networking_connections_reverse_pair_idx").on(t.eventId, t.profileBId, t.profileAId),
     uniqueIndex("networking_connections_pair_key").on(
       t.eventId,
       t.profileAId,
@@ -195,6 +199,7 @@ export const networkingBlocks = pgTable(
     createdAt: instant().notNull().defaultNow(),
   },
   (t) => [
+    index("networking_blocks_target_profile_idx").on(t.eventId, t.targetId, t.profileId),
     uniqueIndex("networking_blocks_pair_key").on(
       t.eventId,
       t.profileId,

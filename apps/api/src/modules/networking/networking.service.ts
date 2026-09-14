@@ -8,6 +8,7 @@ import {
 import { randomBytes, randomInt } from "node:crypto";
 import {
   listNetworkingDiscovery,
+  touchNetworkingProfileActivity,
   cancelNetworkingParticipantMeetings,
   getActiveEventAccessId,
   createNetworkingNotification,
@@ -187,11 +188,7 @@ export class NetworkingService {
       !profile.lastActiveAt ||
       Date.now() - profile.lastActiveAt.getTime() > 60_000
     )
-      await store.update(
-        "profiles",
-        { id: profile.id, eventId: event.id },
-        { lastActiveAt: new Date() },
-      );
+      await touchNetworkingProfileActivity(event.id, profile.id);
     return { event, config, profile, session };
   }
   /** Revalidate capabilities inside the event transaction, after concurrent admin/session changes. */
