@@ -35,6 +35,29 @@ import {
 } from "./networking.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
 import { networkingPublicProfile, networkingSlots, zonedInstant } from "./networking.policy";
+const participationCopy = {
+  en: {
+    title: "Networking participation updated",
+    ACTIVE: "Your networking participation is active.",
+    PENDING: "Your networking participation is awaiting approval.",
+    SUSPENDED: "Your networking participation is suspended.",
+    EXCLUDED: "You have been excluded from networking.",
+  },
+  fr: {
+    title: "Participation au networking mise à jour",
+    ACTIVE: "Votre participation au networking est active.",
+    PENDING: "Votre participation au networking est en attente de validation.",
+    SUSPENDED: "Votre participation au networking est suspendue.",
+    EXCLUDED: "Vous avez été exclu du networking.",
+  },
+  ar: {
+    title: "تم تحديث المشاركة في التواصل المهني",
+    ACTIVE: "مشاركتك في التواصل المهني مفعّلة.",
+    PENDING: "مشاركتك في التواصل المهني بانتظار الموافقة.",
+    SUSPENDED: "تم تعليق مشاركتك في التواصل المهني.",
+    EXCLUDED: "تم استبعادك من التواصل المهني.",
+  },
+};
 @Injectable()
 export class NetworkingAdminService {
   constructor(
@@ -230,8 +253,8 @@ export class NetworkingAdminService {
             eventId,
             profileId: id,
             type: "APPROVAL",
-            title: "Networking participation updated",
-            body: `Your participation is ${input.status.toLowerCase()}.`,
+            title: participationCopy[row.language].title,
+            body: participationCopy[row.language][input.status],
             data: { status: input.status },
           },
           db,
