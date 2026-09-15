@@ -39,7 +39,7 @@ describe("networking report definitions",()=>{
   it("keeps total gestures after pass reset while distinguishing match yield from reciprocity",()=>{
     const input=fixture();
     input.interests=[];
-    input.audit=[{actorId:"a",targetId:"b",action:"SWIPE_LIKE"},{actorId:"b",targetId:"a",action:"SWIPE_LIKE"},{actorId:"a",targetId:"c",action:"SWIPE_PASS"}] as unknown as Input["audit"];
+    input.audit=[{actorId:"a",targetId:"b",action:"SWIPE_LIKE"},{actorId:"b",targetId:"a",action:"SWIPE_LIKE"},{actorId:"a",targetId:"c",action:"SWIPE_PASS"}].map(row => ({...row, createdAt: new Date("2030-05-01T23:30:00Z")})) as unknown as Input["audit"];
     const result=calculateNetworkingAnalytics(input);
     expect(result.likes).toBe(2);expect(result.passes).toBe(1);
     expect(result.matchRate).toBe(0.5);expect(result.interestReciprocityRate).toBe(1);
@@ -48,8 +48,10 @@ describe("networking report definitions",()=>{
 
   it("groups activity and today's meetings by the event timezone, not UTC",()=>{
     const result=calculateNetworkingAnalytics(fixture(),new Date("2030-05-01T23:40:00Z"));
-    expect(result.timeSeries).toEqual([{date:"2030-05-02",matches:1,messages:2,meetings:2}]);
+    expect(result.timeSeries).toEqual([{date:"2030-05-02",matches:1,messages:2,meetings:2,bookingRequests:3}]);
     expect(result.todayMeetings).toBe(2);
+    expect(result.hourlyActivity.find(row => row.hour === "00:00")?.activity).toBe(6);
+    expect(result.hourlyActivity.reduce((total, row) => total + row.activity, 0)).toBe(6);
   });
   it("uses the same current inventory in the occupancy numerator and denominator",()=>{
     const result=calculateNetworkingAnalytics(fixture());

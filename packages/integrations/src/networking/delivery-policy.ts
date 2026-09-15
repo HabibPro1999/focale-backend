@@ -91,11 +91,12 @@ export function networkingDeliverySkipReason(
     )
       return "proposal_expired";
   }
-  if (
-    (meeting || connection) &&
-    (ctx.blocked || !eligible(contact, contactRegistration))
-  )
-    return ctx.blocked ? "participants_blocked" : "contact_ineligible";
+  if (meeting || connection) {
+    if (ctx.blocked) return "participants_blocked";
+    const cancellation = meeting?.status === "CANCELLED" &&
+      ["MEETING_CANCEL", "MEETING_CANCELLED"].includes(row.type);
+    if (!cancellation && !eligible(contact, contactRegistration)) return "contact_ineligible";
+  }
   if (row.type === "DAILY_DIGEST" && profile!.emailPreference !== "DAILY")
     return "digest_preference_changed";
   return undefined;

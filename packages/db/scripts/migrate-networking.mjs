@@ -112,19 +112,71 @@ try {
           "Vector index backfill on non-empty CockroachDB tables requires a planned maintenance window; sql_safe_updates is preserved",
         );
     }
-    await client.query("BEGIN");
-    try {
-      await client.query(source);
-      await client.query(
-        "INSERT INTO networking_migrations(name,checksum) VALUES($1,$2)",
-        [name, checksum],
-      );
-      await client.query("COMMIT");
-      console.log(`Applied ${name}`);
-    } catch (error) {
-      await client.query("ROLLBACK");
-      throw error;
+    const apply = async (key, sql, hash) => {
+      await client.query("BEGIN");
+      try {
+        await client.query(sql);
+        await client.query(
+          "INSERT INTO networking_migrations(name,checksum) VALUES($1,$2)",
+          [key, hash],
+        );
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      }
+    };
+    if (cockroach && name === "0018_networking_spaces.sql") {
+      // This fixed migration contains only simple statements (no procedural SQL).
+      // Commit each schema change before referencing its new columns. Step records
+      // make interrupted upgrades resumable without altering the original checksum.
+      const statements = source
+        .split(";")
+        .filter((statement) => statement.trim());
+      for (const [index, statement] of statements.entries()) {
+        const key = `${name}:step:${index}`;
+        const hash = createHash("sha256").update(statement).digest("hex");
+        const applied = (
+          await client.query(
+            "SELECT checksum FROM networking_migrations WHERE name=$1",
+            [key],
+          )
+        ).rows[0];
+        if (applied) {
+          if (applied.checksum !== hash)
+            throw new Error(
+              `Previously applied migration step changed: ${key}`,
+            );
+          continue;
+        }
+        // CockroachDB can retain DDL from a failed multi-statement transaction.
+        // Reconcile that known partial state while leaving sql_safe_updates enabled.
+        const guarded = statement
+          .replace(
+            "CREATE TABLE networking_spaces",
+            "CREATE TABLE IF NOT EXISTS networking_spaces",
+          )
+          .replace(/CREATE (UNIQUE )?INDEX /, "CREATE $1INDEX IF NOT EXISTS ")
+          .replace("ADD COLUMN space_id", "ADD COLUMN IF NOT EXISTS space_id")
+          .replace(
+            "ADD CONSTRAINT networking_tables_two_people_check",
+            "ADD CONSTRAINT IF NOT EXISTS networking_tables_two_people_check",
+          )
+          .replace(
+            "SELECT id,event_id,name,kind,1,location,active FROM networking_tables",
+            "SELECT id,event_id,name,kind,1,location,active FROM networking_tables ON CONFLICT (id) DO NOTHING",
+          )
+          .replace(
+            "UPDATE networking_tables SET space_id=id, capacity=2",
+            "UPDATE networking_tables SET space_id=coalesce(space_id,id), capacity=2 WHERE space_id IS NULL OR capacity<>2",
+          );
+        await apply(key, guarded, hash);
+      }
+      await apply(name, "SELECT 1", checksum);
+    } else {
+      await apply(name, source, checksum);
     }
+    console.log(`Applied ${name}`);
   }
   console.log(
     `Networking schema ready (${cockroach ? "CockroachDB native vectors" : "PostgreSQL pgvector"}). Small events use exact scoring; large events use a bounded candidate union with exact reranking. CockroachDB uses the event-scoped cosine index; PostgreSQL retains exact distance scans.`,

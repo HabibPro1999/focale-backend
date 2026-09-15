@@ -7,6 +7,8 @@ import {
 } from "@nestjs/common";
 import {
   createNetworkingNotification,
+  expireNetworkingProposals,
+  listNetworkingParticipantMeetings,
   networkingStore,
   networkingTransaction,
   type NetworkingRow,
@@ -24,7 +26,6 @@ import {
   resourceQuanta,
 } from "./networking.policy";
 import { networkingInventoryResource } from "./networking.inventory-policy";
-import { readNetworkingBadge } from "./networking.security";
 @Injectable()
 export class NetworkingMeetingsService {
   constructor(private readonly networking: NetworkingService) {}
@@ -136,6 +137,7 @@ export class NetworkingMeetingsService {
     row: NetworkingRow<"meetings">,
     store = networkingStore(),
     admin = false,
+    viewer?: NetworkingContext,
   ) {
     const [requester, recipient, table] = await Promise.all([
       store.one("profiles", { eventId: row.eventId, id: row.requesterId }),
@@ -145,57 +147,36 @@ export class NetworkingMeetingsService {
         : null,
     ]);
     const space = table?.spaceId ? await store.one("spaces", { eventId: row.eventId, id: table.spaceId }) : null;
+    const publicProfile = async (profile: typeof requester) => {
+      if (!profile || admin) return profile;
+      if (!viewer) return null;
+      if (profile.id !== viewer.profile.id) {
+        try { await this.networking.target(viewer, profile.id, store); }
+        catch (error) {
+          if (error instanceof NotFoundException) return null;
+          throw error;
+        }
+      }
+      return networkingPublicProfile(profile);
+    };
+    const [visibleRequester, visibleRecipient] = await Promise.all([
+      publicProfile(requester), publicProfile(recipient),
+    ]);
     return {
       ...row,
-      requester: requester
-        ? admin
-          ? requester
-          : networkingPublicProfile(requester)
-        : null,
-      recipient: recipient
-        ? admin
-          ? recipient
-          : networkingPublicProfile(recipient)
-        : null,
+      requester: visibleRequester,
+      recipient: visibleRecipient,
       table: table ? { ...table, space } : null,
     };
   }
   async expire(eventId: string) {
-    return networkingTransaction(eventId, async (store) => {
-      const rows = await store.all("meetings", { eventId });
-      for (const row of rows) {
-        if (row.status === "PENDING" && row.expiresAt <= new Date()) {
-          await store.update(
-            "meetings",
-            { eventId, id: row.id },
-            { status: "EXPIRED", revision: row.revision + 1 },
-          );
-          await store.remove("reservations", { eventId, meetingId: row.id });
-        } else if (row.proposedStartsAt && row.expiresAt <= new Date())
-          await store.update(
-            "meetings",
-            { eventId, id: row.id },
-            {
-              proposedStartsAt: null,
-              proposalBy: null,
-              revision: row.revision + 1,
-            },
-          );
-      }
-    });
+    return networkingTransaction(eventId, (_store, db) => expireNetworkingProposals(eventId, db));
   }
   async list(ctx: NetworkingContext) {
     await this.expire(ctx.event.id);
-    const rows = (
-      await networkingStore().all("meetings", { eventId: ctx.event.id })
-    )
-      .filter(
-        (v) =>
-          v.requesterId === ctx.profile.id || v.recipientId === ctx.profile.id,
-      )
-      .sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime());
+    const rows = await listNetworkingParticipantMeetings(ctx.event.id, ctx.profile.id);
     return {
-      items: await Promise.all(rows.map((v) => this.hydrate(v))),
+      items: await Promise.all(rows.map((v) => this.hydrate(v, undefined, false, ctx))),
       total: rows.length,
     };
   }
@@ -291,7 +272,7 @@ export class NetworkingMeetingsService {
         throw new ConflictException(
           "A meeting already exists for this pair and slot",
         );
-      const row = await store.insert("meetings", {
+      let row = await store.insert("meetings", {
         eventId: ctx.event.id,
         requesterId: ctx.profile.id,
         recipientId: input.profileId,
@@ -304,9 +285,11 @@ export class NetworkingMeetingsService {
           ),
         ),
       });
+      const hold = await this.reserve(ctx, row, dates.startsAt, dates.endsAt, store, undefined, true);
+      [row] = await store.update("meetings", { eventId: ctx.event.id, id: row.id }, hold);
       await this.notify(ctx, row, "MEETING_REQUEST", [input.profileId], db);
       await this.notify(ctx, row, "MEETING_REQUEST_SENT", [ctx.profile.id], db);
-      return this.hydrate(row, store);
+      return this.hydrate(row, store, false, ctx);
     });
   }
   async reserve(
@@ -316,9 +299,22 @@ export class NetworkingMeetingsService {
     endsAt: Date,
     store: NetworkingStore,
     forcedTableId?: string,
+    pending = false,
   ) {
+    if (row.status === "PENDING" && row.expiresAt <= new Date())
+      throw new ConflictException("This proposal has expired");
     await this.availableAt(ctx, row.requesterId, startsAt, store);
     await this.availableAt(ctx, row.recipientId, startsAt, store);
+    const meetings = await store.all("meetings", { eventId: ctx.event.id });
+    // Expired proposals must not keep inventory locked until the next maintenance tick.
+    for (const meeting of meetings) {
+      if (meeting.status === "PENDING" && meeting.expiresAt <= new Date()) {
+        await store.remove("reservations", { eventId: ctx.event.id, meetingId: meeting.id });
+        await store.update("meetings", { eventId: ctx.event.id, id: meeting.id }, {
+          status: "EXPIRED", revision: meeting.revision + 1,
+        });
+      }
+    }
     const quanta = resourceQuanta(startsAt, endsAt);
     const reservations = (
       await store.all("reservations", { eventId: ctx.event.id })
@@ -356,11 +352,10 @@ export class NetworkingMeetingsService {
         forcedTableId ?? recipient.standTableId ?? requester.standTableId;
       if (assignedStand) tables = tables.filter((t) => t.id === assignedStand);
       // Ordinary tables are exclusive; each exhibitor representative has an independent station.
-      const meetings = await store.all("meetings", { eventId: ctx.event.id });
       const usage = new Map<string, number>();
-      for (const meeting of meetings) if (meeting.tableId && meeting.status !== "CANCELLED")
+      for (const meeting of meetings) if (meeting.tableId && ["PENDING", "CONFIRMED", "PENDING_ALLOCATION", "COMPLETED"].includes(meeting.status))
         usage.set(meeting.tableId, (usage.get(meeting.tableId) ?? 0) + 1);
-      tables.sort((a, b) => (usage.get(a.id) ?? 0) - (usage.get(b.id) ?? 0) || a.name.localeCompare(b.name));
+      tables.sort((a, b) => Number(b.id === row.tableId) - Number(a.id === row.tableId) || (usage.get(a.id) ?? 0) - (usage.get(b.id) ?? 0) || a.name.localeCompare(b.name));
       tableId = tables[0]?.id ?? null;
       inventoryResource = tables[0] ? networkingInventoryResource(tables[0], [requester, recipient]) : null;
       if (!tableId)
@@ -373,7 +368,7 @@ export class NetworkingMeetingsService {
       meetingId: row.id,
     });
     for (const resourceKey of [
-      ...participantKeys,
+      ...(pending ? [] : participantKeys),
       ...(inventoryResource ? [inventoryResource] : []),
     ])
       for (const start of quanta)
@@ -385,7 +380,7 @@ export class NetworkingMeetingsService {
         });
     return {
       tableId,
-      status: tableId
+      status: pending ? ("PENDING" as const) : tableId
         ? ("CONFIRMED" as const)
         : ("PENDING_ALLOCATION" as const),
     };
@@ -428,6 +423,7 @@ export class NetworkingMeetingsService {
         update = {
           ...update,
           status: "CANCELLED",
+          cancellationNote: input.message?.trim() ?? "",
           proposedStartsAt: null,
           proposalBy: null,
         };
@@ -439,8 +435,13 @@ export class NetworkingMeetingsService {
         const dates = this.slot(ctx, input.startsAt!);
         await this.availableAt(ctx, row.requesterId, dates.startsAt, store);
         await this.availableAt(ctx, row.recipientId, dates.startsAt, store);
+        const hold = row.status === "PENDING"
+          ? await this.reserve(ctx, row, dates.startsAt, dates.endsAt, store, undefined, true)
+          : {};
         update = {
           ...update,
+          ...hold,
+          ...(row.status === "PENDING" ? dates : {}),
           proposedStartsAt: dates.startsAt,
           proposalBy: ctx.profile.id,
           expiresAt: new Date(
@@ -462,6 +463,8 @@ export class NetworkingMeetingsService {
         if (row.expiresAt <= new Date())
           throw new ConflictException("This proposal has expired");
         if (input.action === "DECLINE") {
+          if (row.status === "PENDING")
+            await store.remove("reservations", { eventId: ctx.event.id, meetingId: id });
           update = {
             ...update,
             ...(row.status === "PENDING"
@@ -503,7 +506,7 @@ export class NetworkingMeetingsService {
         [row.requesterId, row.recipientId],
         db,
       );
-      return this.hydrate(saved, store);
+      return this.hydrate(saved, store, false, ctx);
     });
   }
   async notify(
@@ -533,10 +536,10 @@ export class NetworkingMeetingsService {
       );
   }
   async checkin(ctx: NetworkingContext, id: string, token: string) {
-    const counterpart = readNetworkingBadge(token, ctx.event.id);
     return networkingTransaction(ctx.event.id, async (store) => {
       ctx = await this.networking.currentParticipant(ctx, store);
       const row = await this.meeting(ctx, id, store);
+      const counterpart = await this.networking.badgeProfileId(ctx.event.id, token, store);
       const other =
         row.requesterId === ctx.profile.id ? row.recipientId : row.requesterId;
       if (counterpart !== other)
@@ -566,7 +569,7 @@ export class NetworkingMeetingsService {
           revision: row.revision + 1,
         },
       );
-      return this.hydrate(saved, store);
+      return this.hydrate(saved, store, false, ctx);
     });
   }
 }

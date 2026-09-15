@@ -51,6 +51,7 @@ const config = NetworkingConfigSchema.parse({
   enabled: true,
   approvalMode: "AUTOMATIC",
   timezone: "UTC",
+  fieldMapping: { company: "company", jobTitle: "jobTitle", sector: "sector" },
   openingHours: [{ date: "2031-04-05", start: "09:00", end: "17:00" }],
 });
 async function pair(a: number, b: number) {
@@ -98,7 +99,7 @@ describe.runIf(enabled)(
         id: ids.form,
         eventId: ids.event,
         name: "Registration",
-        schema: { steps: [] },
+        schema: { steps: [{ id: "professional", fields: ["company", "jobTitle", "sector"].map(id => ({ id, type: "text" })) }] },
       });
       for (let i = 0; i < 8; i++)
         await db.insert(registrations).values({
@@ -107,10 +108,11 @@ describe.runIf(enabled)(
           formId: ids.form,
           email: `networking-${ids.event}-${i}@example.invalid`,
           firstName: `Participant ${i}`,
+          lastName: "Test",
           paymentStatus: "PAID",
           totalAmount: 0,
           priceBreakdown: {},
-          formData: {},
+          formData: { company: "Test company", jobTitle: "Director", sector: "Technology" },
         });
       await syncNetworkingEvent(ids.event);
       const profiles = (
@@ -282,27 +284,17 @@ describe.runIf(enabled)(
         )?.recoveryHashes,
       ).toHaveLength(9);
     });
-    it("reserves the entire table once under concurrent acceptances", async () => {
+    it("reserves the entire table once under concurrent requests", async () => {
       await pair(2, 3);
-      const a = await meetings.create(participants[0], {
-        profileId: participants[1].profile.id,
-        startsAt: slot("09:00"),
-      });
-      const b = await meetings.create(participants[2], {
-        profileId: participants[3].profile.id,
-        startsAt: slot("09:00"),
-      });
       const results = await Promise.allSettled([
-        meetings.respond(participants[1], a.id, { action: "ACCEPT" }),
-        meetings.respond(participants[3], b.id, { action: "ACCEPT" }),
+        meetings.create(participants[0], { profileId: participants[1].profile.id, startsAt: slot("09:00") }),
+        meetings.create(participants[2], { profileId: participants[3].profile.id, startsAt: slot("09:00") }),
       ]);
-      expect(results.filter((v) => v.status === "fulfilled")).toHaveLength(1);
-      expect(
-        await networkingStore().all("meetings", {
-          eventId: ids.event,
-          status: "CONFIRMED",
-        }),
-      ).toHaveLength(1);
+      expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+      const winner = results.find(result => result.status === "fulfilled")! as PromiseFulfilledResult<Awaited<ReturnType<typeof meetings.create>>>;
+      const recipient = participants.find(person => person.profile.id === winner.value.recipientId)!;
+      await meetings.respond(recipient, winner.value.id, { action: "ACCEPT" });
+      expect(await networkingStore().all("meetings", { eventId: ids.event, status: "CONFIRMED" })).toHaveLength(1);
     });
     it("prevents participant double booking even when multiple tables exist", async () => {
       await networkingStore().insert("tables", {

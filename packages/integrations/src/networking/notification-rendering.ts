@@ -18,6 +18,10 @@ const copy = {
     MEETING_REQUEST: "You received a meeting request",
     MEETING_REQUEST_SENT: "Your meeting request was sent",
     MEETING_ACCEPT: "Your meeting is confirmed",
+    MEETING_PENDING_ALLOCATION: "Your meeting is accepted; a place is being assigned",
+    instructions: "Access instructions",
+    plan: "Access plan",
+    cancellation: "Cancellation reason",
     MEETING_DECLINE: "Your meeting request was declined",
     MEETING_CANCEL: "Your meeting was cancelled",
     MEETING_RESCHEDULE: "A new meeting time was proposed",
@@ -60,6 +64,10 @@ const copy = {
     MEETING_REQUEST: "Vous avez reçu une demande de rendez-vous",
     MEETING_REQUEST_SENT: "Votre demande de rendez-vous a été envoyée",
     MEETING_ACCEPT: "Votre rendez-vous est confirmé",
+    MEETING_PENDING_ALLOCATION: "Votre rendez-vous est accepté ; le lieu reste à attribuer",
+    instructions: "Instructions d’accès",
+    plan: "Plan d’accès",
+    cancellation: "Motif de l’annulation",
     MEETING_DECLINE: "Votre demande de rendez-vous a été refusée",
     MEETING_CANCEL: "Votre rendez-vous a été annulé",
     MEETING_RESCHEDULE: "Un nouveau créneau vous est proposé",
@@ -102,6 +110,10 @@ const copy = {
     MEETING_REQUEST: "لديك طلب لقاء جديد",
     MEETING_REQUEST_SENT: "تم إرسال طلب اللقاء",
     MEETING_ACCEPT: "تم تأكيد موعدك",
+    MEETING_PENDING_ALLOCATION: "تم قبول موعدك وبانتظار تحديد المكان",
+    instructions: "تعليمات الدخول",
+    plan: "خريطة الوصول",
+    cancellation: "سبب الإلغاء",
     MEETING_DECLINE: "تم رفض طلب اللقاء",
     MEETING_CANCEL: "تم إلغاء موعدك",
     MEETING_RESCHEDULE: "تم اقتراح وقت جديد للقاء",
@@ -233,6 +245,12 @@ function foldIcs(value: string) {
   }
   return output + part;
 }
+function notificationContact(ctx: NetworkingNotificationContext) {
+  const contact = ctx.contact;
+  return contact && !ctx.blocked && contact.status === "ACTIVE" && contact.consent && !contact.withdrawnAt &&
+    ctx.contactRegistration?.networkingOptIn !== false && ctx.contactRegistration &&
+    ctx.config.eligiblePaymentStatuses.includes(ctx.contactRegistration.paymentStatus) ? contact : null;
+}
 export function networkingMeetingAttachment(
   ctx: NetworkingNotificationContext,
 ): EmailAttachment[] {
@@ -243,6 +261,7 @@ export function networkingMeetingAttachment(
   )
     return [];
   const cancelled = meeting.status === "CANCELLED";
+  const contact = notificationContact(ctx);
   const lang = (ctx.profile?.language ??
     ctx.config.defaultLanguage) as Language;
   const lines = [
@@ -256,7 +275,7 @@ export function networkingMeetingAttachment(
     `DTSTAMP:${icsTime(meeting.updatedAt)}`,
     `DTSTART:${icsTime(meeting.startsAt)}`,
     `DTEND:${icsTime(meeting.endsAt)}`,
-    `SUMMARY:${icsEscape(`${ctx.event?.name ?? "Networking"} - ${ctx.contact?.firstName ?? ""} ${ctx.contact?.lastName ?? ""}`)}`,
+    `SUMMARY:${icsEscape([ctx.event?.name ?? "Networking", contact?.firstName, contact?.lastName].filter(Boolean).join(" "))}`,
     `LOCATION:${icsEscape([ctx.table?.name, ctx.table?.location].filter(Boolean).join(" - "))}`,
     `STATUS:${cancelled ? "CANCELLED" : "CONFIRMED"}`,
     ...(!cancelled
@@ -296,7 +315,11 @@ export function renderNetworkingNotification(
     ctx.config.defaultLanguage) as Language;
   const words = copy[lang];
   const meeting = ctx.meeting;
-  const normalized = normalizedType(type);
+  const eventType = normalizedType(type);
+  const normalized = eventType === "MEETING_ACCEPT" && meeting?.status === "PENDING_ALLOCATION"
+    ? "MEETING_PENDING_ALLOCATION"
+    : eventType === "MEETING_ACCEPT" && meeting?.status === "PENDING"
+      ? "MEETING_REQUEST" : eventType;
   const title = words[normalized as keyof typeof words] ?? words.MESSAGE;
   const slug = encodeURIComponent(ctx.event?.slug ?? "");
   const relativeHref = `/e/${slug}/${type.startsWith("MEETING_") ? "agenda" : ctx.connection ? `connections/${encodeURIComponent(ctx.connection.id)}` : normalized === "APPROVAL" ? "profile" : "notifications"}`;
@@ -318,26 +341,35 @@ export function renderNetworkingNotification(
       dateStyle: "full",
       timeStyle: "short",
     }).format(date);
-  const contactName = [ctx.contact?.firstName, ctx.contact?.lastName]
+  const contact = notificationContact(ctx);
+  const contactName = [contact?.firstName, contact?.lastName]
     .filter(Boolean)
     .join(" ");
   const vars: Record<string, string> = {
     prenom: ctx.profile?.firstName ?? "",
     nom_contact: contactName,
+    entreprise_contact: contact?.company ?? "",
+    fonction_contact: contact?.jobTitle ?? "",
     heure_rdv: meeting ? format(meeting.startsAt) : "",
+    heure_fin_rdv: meeting ? format(meeting.endsAt) : "",
     numero_table: ctx.table?.name ?? "",
     lieu_rdv: ctx.table?.location ?? "",
     lien: href,
     message: ctx.message?.body.slice(0, 180) ?? "",
     statut: meeting ? statuses[lang][meeting.status] : "",
+    instructions_acces: ctx.config.accessInstructions ?? "",
+    plan_acces: ctx.config.accessPlanUrl ?? "",
+    telephone_assistance: ctx.config.supportPhone ?? "",
+    motif_annulation: meeting?.cancellationNote ?? "",
   };
+  const contactLabel = [contactName, contact?.jobTitle, contact?.company].filter(Boolean).join(" · ");
   let body = title;
   if (normalized === "POST_EVENT_CONTACTS") body = `${words.contactSummary}: ${Number(payload.contactCount ?? 0)}`;
   if (normalized === "APPROVAL") body = words.approved;
   else if (normalized === "MATCH")
-    body = [contactName, words.matched].filter(Boolean).join("\n\n");
+    body = [contactLabel, words.matched].filter(Boolean).join("\n\n");
   else if (normalized === "MESSAGE")
-    body = [`${words.from} ${contactName}`, vars.message]
+    body = [`${words.from} ${contactLabel}`, vars.message]
       .filter(Boolean)
       .join("\n\n");
   else if (normalized === "MODERATION_WARNING")
@@ -363,11 +395,11 @@ export function renderNetworkingNotification(
   if (meeting)
     body = [
       title,
-      `${words.contact}: ${contactName}`,
-      `${words.time}: ${vars.heure_rdv}`,
+      ...(contactLabel ? [`${words.contact}: ${contactLabel}`] : []),
+      `${words.time}: ${vars.heure_rdv} – ${vars.heure_fin_rdv}`,
       ...(meeting.proposedStartsAt
         ? [
-            `${words.proposed}: ${format(meeting.proposedStartsAt)}`,
+            `${words.proposed}: ${format(meeting.proposedStartsAt)} – ${format(new Date(meeting.proposedStartsAt.getTime() + ctx.config.slotDurationMinutes * 60_000))}`,
             ...(meeting.status === "CONFIRMED" ? [words.retained] : []),
           ]
         : []),
@@ -378,10 +410,15 @@ export function renderNetworkingNotification(
       ...(meeting.message
         ? [`${words.message}: ${meeting.message.slice(0, 1000)}`]
         : []),
+      ...(meeting.cancellationNote ? [`${words.cancellation}: ${meeting.cancellationNote}`] : []),
+      ...(vars.instructions_acces ? [`${words.instructions}: ${vars.instructions_acces}`] : []),
+      ...(vars.plan_acces ? [`${words.plan}: ${vars.plan_acces}`] : []),
+      ...([ctx.config.supportPhone, ctx.config.supportEmail].filter(Boolean)),
     ].join("\n");
   if (type === "OTP")
     body = `${words.code}: ${decryptNetworkingCode(String(payload.encryptedCode), process.env.NETWORKING_TOKEN_SECRET ?? "")}\n${words.expires} ${format(ctx.challenge!.expiresAt)}\n${words.secret}`;
-  const template = ctx.config.emailTemplates?.[type] ?? ctx.config.emailTemplates?.[normalized];
+  const template = ctx.config.emailTemplates?.[normalized] ??
+    (normalized === eventType ? ctx.config.emailTemplates?.[type] : undefined);
   const substitute = (text: string) =>
     text.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, key: string) => vars[key] ?? "");
   const subject = template
@@ -413,7 +450,9 @@ export function renderNetworkingNotification(
     ctx.config.logoUrl && /^https?:\/\//i.test(ctx.config.logoUrl)
       ? `<img src="${safe(ctx.config.logoUrl)}" width="100" alt="${safe(ctx.event?.name ?? "Focale")}" style="max-height:80px;object-fit:contain" />`
       : "";
-  const html = `<!doctype html><html lang="${lang}" dir="${lang === "ar" ? "rtl" : "ltr"}"><body style="margin:0;background:#f3f5f7;font-family:Arial,sans-serif"><main style="max-width:560px;margin:32px auto;padding:32px;background:white;border-radius:16px;border-top:4px solid ${safe(ctx.config.primaryColor)}">${logo}<h1 style="font-size:22px">${safe(subject)}</h1><p style="white-space:pre-line;line-height:1.7">${safe(body)}</p>${actions ? `<p>${actions}</p>` : ""}${href && type !== "OTP" ? `<p><a style="color:${safe(ctx.config.primaryColor)}" href="${safe(href)}">${safe(words.open)}</a></p>` : ""}<p style="font-size:12px;color:#64748b">${safe(ctx.config.supportEmail ?? "")}</p></main></body></html>`;
+  const accessPlan = meeting && vars.plan_acces && /^https?:\/\//i.test(vars.plan_acces)
+    ? `<p><a href="${safe(vars.plan_acces)}">${safe(words.plan)}</a></p>` : "";
+  const html = `<!doctype html><html lang="${lang}" dir="${lang === "ar" ? "rtl" : "ltr"}"><body style="margin:0;background:#f3f5f7;font-family:Arial,sans-serif"><main style="max-width:560px;margin:32px auto;padding:32px;background:white;border-radius:16px;border-top:4px solid ${safe(ctx.config.primaryColor)}">${logo}<h1 style="font-size:22px">${safe(subject)}</h1><p style="white-space:pre-line;line-height:1.7">${safe(body)}</p>${accessPlan}${actions ? `<p>${actions}</p>` : ""}${href && type !== "OTP" ? `<p><a style="color:${safe(ctx.config.primaryColor)}" href="${safe(href)}">${safe(words.open)}</a></p>` : ""}<p style="font-size:12px;color:#64748b">${safe([ctx.config.supportPhone, ctx.config.supportEmail].filter(Boolean).join(" · "))}</p></main></body></html>`;
   return {
     title,
     subject,

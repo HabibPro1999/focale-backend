@@ -1,4 +1,4 @@
-import type { NetworkingConfig } from "@app/contracts";
+import { NETWORKING_PROFESSIONAL_FIELDS, type NetworkingConfig } from "@app/contracts";
 type RecordValue = Record<string, unknown>;
 function object(value: unknown): RecordValue {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -49,7 +49,8 @@ export function projectNetworkingFields(
   config: Pick<NetworkingConfig, "fieldMapping" | "defaultLanguage">,
 ) {
   const fields = fieldsOf(schema);
-  const projection: RecordValue = {};
+  const projection: RecordValue = Object.fromEntries(NETWORKING_PROFESSIONAL_FIELDS.map(key =>
+    [key, key === "interests" ? [] : key === "website" || key === "photoUrl" ? null : ""]));
   for (const [key, fieldId] of Object.entries(config.fieldMapping)) {
     if (key === "consent" || !fieldId) continue;
     const field = fields.find((value) => value.id === fieldId);

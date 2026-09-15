@@ -28,6 +28,21 @@ const url = z
     "Only HTTP(S) URLs are allowed",
   );
 const nullableUrl = url.nullable().optional();
+export const NETWORKING_PROFESSIONAL_FIELDS = [
+  "company", "jobTitle", "sector", "bio", "city", "country", "website",
+  "photoUrl", "interests", "offers", "seeks",
+] as const;
+export function networkingProfileComplete(profile: {
+  firstName?: string; lastName?: string; company?: string; jobTitle?: string; sector?: string;
+}) {
+  return [profile.firstName, profile.lastName, profile.company, profile.jobTitle, profile.sector]
+    .every(value => typeof value === "string" && value.trim().length > 0);
+}
+/** Registration projection must never restore administrative or preference state. */
+export function networkingProfileOverrides(values: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(values).filter(([key]) =>
+    key === "consent" || (NETWORKING_PROFESSIONAL_FIELDS as readonly string[]).includes(key)));
+}
 export const NetworkingFieldMappingSchema = z.partialRecord(
   z.enum([
     "company",
@@ -103,6 +118,8 @@ export const NetworkingConfigSchema = z.object({
     .default({}),
   supportEmail: z.string().email().nullable().optional(),
   supportPhone: z.string().max(40).nullable().optional(),
+  accessInstructions: z.string().max(4000).default(""),
+  accessPlanUrl: nullableUrl,
   emailTemplates: z
     .record(
       z.string().max(100),
@@ -154,15 +171,17 @@ export const NetworkingProfileUpdateSchema = z
     emailPreference: z.enum(["IMMEDIATE", "DAILY", "OFF"]).optional(),
     language: z.enum(["fr", "en", "ar"]).optional(),
     consent: z.boolean().optional(),
+    resetFields: z.array(z.enum(NETWORKING_PROFESSIONAL_FIELDS)).max(11).optional(),
   })
   .strict();
 export const NetworkingAdminProfileUpdateSchema =
-  NetworkingProfileUpdateSchema.extend({
+  NetworkingProfileUpdateSchema.omit({ resetFields: true }).extend({
     status: z.enum(NETWORKING_PROFILE_STATUSES).optional(),
     featured: z.boolean().optional(),
     standTableId: id.nullable().optional(),
   }).strict();
 export const NetworkingListQuerySchema = z.object({
+  viewId: id.optional(),
   company: z.string().max(200).optional(),
   sectors: z.preprocess(
     (value) =>
@@ -175,7 +194,7 @@ export const NetworkingListQuerySchema = z.object({
   sector: z.string().max(120).optional(),
   status: z.string().max(30).optional(),
   activity: z
-    .enum(["ALL", "ACTIVE", "INACTIVE", "MATCHED", "MEETINGS"])
+    .enum(["ALL", "VERY_ACTIVE", "ACTIVE", "INACTIVE", "MATCHED", "MEETINGS"])
     .optional(),
   sort: z.enum(["recommended", "name", "company", "recent"]).default("name"),
   page: z.coerce.number().int().min(1).default(1),
@@ -359,14 +378,15 @@ export interface NetworkingMeeting {
   eventId: string;
   requesterId: string;
   recipientId: string;
-  requester: NetworkingProfile;
-  recipient: NetworkingProfile;
+  requester: NetworkingProfile | null;
+  recipient: NetworkingProfile | null;
   startsAt: string;
   endsAt: string;
   tableId: string | null;
   table: NetworkingTable | null;
   status: (typeof NETWORKING_MEETING_STATUSES)[number];
   message: string;
+  cancellationNote?: string;
   proposedStartsAt: string | null;
   proposalBy: string | null;
   revision: number;
@@ -425,8 +445,10 @@ export interface NetworkingAnalytics {
   pendingMeetings: number;
   tableOccupancyRate: number;
   reports: number;
+  hourlyActivity?: Array<{ hour: string; activity: number }>;
   timeSeries: Array<{
     date: string;
+    bookingRequests?: number;
     matches: number;
     messages: number;
     meetings: number;
@@ -491,4 +513,10 @@ export interface NetworkingPersonalAnalytics {
     plannedMeetings: number;
     completedMeetings: number;
   }>;
+}
+
+/** Recency tiers used by organizer filters: 24 hours, seven days, or older/no activity. */
+export function networkingActivity(lastActiveAt: Date | string | null, now = Date.now()) {
+  const age = lastActiveAt ? now - new Date(lastActiveAt).getTime() : Infinity;
+  return age <= 86_400_000 ? "VERY_ACTIVE" : age <= 7 * 86_400_000 ? "ACTIVE" : "INACTIVE";
 }

@@ -13,6 +13,7 @@ import {
   countCheckedInRegistrations,
   countEventRegistrations,
   getRegistrationForCheckIn,
+  isNetworkingAccessAllowed,
   pgUniqueViolation,
   type CheckInRegistration,
 } from "@app/db";
@@ -91,6 +92,13 @@ export class CheckinService {
         );
       }
 
+      if (!(await isNetworkingAccessAllowed(eventId, registrationId, accessId))) {
+        throw new AppException(
+          ErrorCodes.CHECKIN_NETWORKING_MEETING_REQUIRED,
+          "An eligible networking profile and a confirmed meeting are required for this area",
+          403,
+        );
+      }
       const existing = await getAccessCheckIn(registrationId, accessId);
       if (existing) {
         return {

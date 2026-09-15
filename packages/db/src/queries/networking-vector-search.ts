@@ -133,12 +133,10 @@ export async function rankNetworkingVectorCandidates(
       CROSS JOIN source
       WHERE p.event_id=${eventId} ${
         candidateIds
-          ? sql`AND p.id IN (${sql.join(
-              candidateIds.map((id) => sql`${id}`),
-              sql`,`,
-            )})`
+          ? sql`AND p.id = ANY(${sql.param(candidateIds)}::text[])`
           : sql``
       } AND p.id<>${profileId} AND lower(p.email)<>lower(source.email) AND p.status='ACTIVE' AND p.visible AND p.consent AND p.withdrawn_at IS NULL
+        AND btrim(p.first_name)<>'' AND btrim(p.last_name)<>'' AND btrim(p.company)<>'' AND btrim(p.job_title)<>'' AND btrim(p.sector)<>''
         AND r.networking_opt_in IS DISTINCT FROM false AND r.payment_status::text IN (${sql.join(
           paymentStatuses.map((status) => sql`${status}`),
           sql`,`,

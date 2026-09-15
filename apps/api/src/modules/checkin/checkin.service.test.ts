@@ -6,6 +6,7 @@ import { ErrorCodes } from "@app/contracts";
 vi.mock("@app/db", () => ({
   CHECKIN_ELIGIBLE_STATUSES: ["PAID", "SPONSORED", "WAIVED"],
   getRegistrationForCheckIn: vi.fn(),
+  isNetworkingAccessAllowed: vi.fn(),
   getAccessCheckIn: vi.fn(),
   getActiveEventAccessId: vi.fn(),
   getEligibleRegistrationIds: vi.fn(),
@@ -61,10 +62,20 @@ const baseRegistration = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  m.isNetworkingAccessAllowed.mockResolvedValue(true);
 });
 
 describe("CheckinService", () => {
   describe("checkIn", () => {
+    it("rejects networking entrance scans without a confirmed meeting before any check-in write", async () => {
+      m.getRegistrationForCheckIn.mockResolvedValue(baseRegistration);
+      m.isNetworkingAccessAllowed.mockResolvedValue(false);
+      await expect(service.checkIn(eventId, registrationId, accessId, userId)).rejects.toMatchObject({
+        code: ErrorCodes.CHECKIN_NETWORKING_MEETING_REQUIRED,
+      });
+      expect(m.getAccessCheckIn).not.toHaveBeenCalled();
+      expect(m.createAccessCheckIn).not.toHaveBeenCalled();
+    });
     it("should perform event-level check-in", async () => {
       m.getRegistrationForCheckIn.mockResolvedValue(baseRegistration);
       m.checkInRegistration.mockResolvedValue(undefined);

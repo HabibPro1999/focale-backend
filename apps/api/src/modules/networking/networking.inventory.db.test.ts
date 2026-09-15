@@ -129,6 +129,7 @@ describe.runIf(enabled)(
           registrationId: registration.id,
           email: registration.email,
           firstName: `Person ${index}`,
+          lastName: "Test",
           company: "Organization A",
           jobTitle: "Representative",
           sector: "Technology",
@@ -240,32 +241,19 @@ describe.runIf(enabled)(
         ).toBe(true);
     });
 
-    it("never double books one representative under concurrent acceptance", async () => {
+    it("never holds one representative twice under concurrent requests", async () => {
       await exhibitor();
-      const first = await request(2, 0),
-        second = await request(3, 0);
-      const results = await Promise.allSettled([
-        meetings.respond(people[0], first.id, { action: "ACCEPT" }),
-        meetings.respond(people[0], second.id, { action: "ACCEPT" }),
-      ]);
-      expect(
-        results.filter((result) => result.status === "fulfilled"),
-      ).toHaveLength(1);
-      expect(
-        results.filter((result) => result.status === "rejected"),
-      ).toHaveLength(1);
+      const results = await Promise.allSettled([request(2, 0), request(3, 0)]);
+      expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+      expect(results.filter(result => result.status === "rejected")).toHaveLength(1);
+      const winner = results.find(result => result.status === "fulfilled")! as PromiseFulfilledResult<Awaited<ReturnType<typeof request>>>;
+      expect((await meetings.respond(people[0], winner.value.id, { action: "ACCEPT" })).status).toBe("CONFIRMED");
     });
 
     it("does not allocate an exhibitor to two visitors or two of its representatives", async () => {
       await exhibitor();
-      const visitors = await request(2, 3),
-        colleagues = await request(0, 1);
-      await expect(
-        meetings.respond(people[3], visitors.id, { action: "ACCEPT" }),
-      ).rejects.toThrow(/available/);
-      await expect(
-        meetings.respond(people[1], colleagues.id, { action: "ACCEPT" }),
-      ).rejects.toThrow(/available/);
+      await expect(request(2, 3)).rejects.toThrow(/available/);
+      await expect(request(0, 1)).rejects.toThrow(/available/);
     });
 
     it("enforces exhibitor-space capacity and preserves memberships on failure", async () => {

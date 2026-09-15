@@ -186,6 +186,7 @@ export async function getNetworkingRecommendationProfiles(
       and(
         eq(networkingProfiles.eventId, eventId),
         eq(networkingProfiles.status, "ACTIVE"),
+        sql`btrim(${networkingProfiles.firstName})<>'' AND btrim(${networkingProfiles.lastName})<>'' AND btrim(${networkingProfiles.company})<>'' AND btrim(${networkingProfiles.jobTitle})<>'' AND btrim(${networkingProfiles.sector})<>''`,
         eq(networkingProfiles.visible, true),
         eq(networkingProfiles.consent, true),
         sql`${networkingProfiles.withdrawnAt} IS NULL`,

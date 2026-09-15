@@ -21,6 +21,8 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import {
   networkingDirectoryFacets,
   listNetworkingNotifications,
+  recordNetworkingProfileView,
+  networkingNotificationsSince,
   networkingStore,
   networkingTransaction,
   revokeNetworkingSessions,
@@ -31,7 +33,7 @@ import { NetworkingSocialService } from "./networking.social.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
 import { NetworkingExportsService } from "./networking.exports.service";
 import { issueNetworkingBadge } from "./networking.security";
-import { networkingPublicProfile } from "./networking.policy";
+import { networkingPublicProfile, networkingSlots } from "./networking.policy";
 import * as dto from "./networking.dto";
 @Controller("api/networking/:slug")
 export class NetworkingPublicController {
@@ -140,15 +142,11 @@ export class NetworkingPublicController {
     @Param("slug") slug: string,
     @Param("id") id: string,
     @Req() req: FastifyRequest,
+    @Query() query: dto.NetworkingListDto,
   ) {
     const ctx = await this.context(slug, req);
     const profile = await this.service.target(ctx, id);
-    await networkingStore().insert("audit", {
-      eventId: ctx.event.id,
-      actorId: ctx.profile.id,
-      action: "PROFILE_VIEW",
-      targetId: id,
-    });
+    await recordNetworkingProfileView(ctx.event.id, ctx.profile.id, id, query.viewId);
     return networkingPublicProfile(profile);
   }
   @Post("interests") async interest(
@@ -285,7 +283,10 @@ export class NetworkingPublicController {
   ) {
     const ctx = await this.context(slug, req);
     this.meetings.requireEnabled(ctx);
-    return { slots: await this.meetings.participantSlots(ctx, id) };
+    return {
+      slots: await this.meetings.participantSlots(ctx, id),
+      availableSlots: networkingSlots(ctx.config, ctx.event).filter(slot => Date.parse(slot) > Date.now()),
+    };
   }
   @Get("meetings") async listMeetings(
     @Param("slug") slug: string,
@@ -528,13 +529,9 @@ export class NetworkingPublicController {
       busy = true;
       try {
         const ctx = await this.context(slug, req);
-        const rows = (
-          await networkingStore().all("notifications", {
-            eventId: ctx.event.id,
-            profileId: ctx.profile.id,
-          })
-        ).filter((v) => v.createdAt.getTime() > last);
-        last = Date.now();
+        const checkedAt = Date.now();
+        const rows = await networkingNotificationsSince(ctx.event.id, ctx.profile.id, new Date(last));
+        last = checkedAt;
         if (rows.length)
           reply.raw.write(
             `event: notifications\ndata: ${JSON.stringify(rows)}\n\n`,

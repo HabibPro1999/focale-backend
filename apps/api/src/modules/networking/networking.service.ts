@@ -21,9 +21,9 @@ import {
   type NetworkingRow,
   type NetworkingStore,
 } from "@app/db";
-import { NetworkingConfigSchema, type NetworkingConfig, type NetworkingPersonalAnalytics } from "@app/contracts";
+import { NetworkingConfigSchema, networkingProfileComplete, networkingProfileOverrides, type NetworkingConfig, type NetworkingPersonalAnalytics } from "@app/contracts";
 import { assertClientModuleEnabled } from "../clients/module-gates";
-import { networkingHash, sealNetworkingCode } from "./networking.security";
+import { networkingHash, sealNetworkingCode, readNetworkingBadge } from "./networking.security";
 import {
   networkingSearchMatches,
   networkingPair,
@@ -50,6 +50,15 @@ export type NetworkingDiscoveryQuery = {
 };
 @Injectable()
 export class NetworkingService {
+  async badgeProfileId(eventId: string, token: string, store = networkingStore()) {
+    // Printed registration badges contain a UUID; the PWA also supports its signed, expiring badge.
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(token)) {
+      const profile = await store.one("profiles", { eventId, registrationId: token });
+      if (!profile) throw new NotFoundException("Participant not found");
+      return profile.id;
+    }
+    return readNetworkingBadge(token, eventId);
+  }
   async publicContext(slug: string, store = networkingStore()) {
     const event = await store.one("events", { slug });
     if (!event) throw new NotFoundException("Event not found");
@@ -381,7 +390,7 @@ export class NetworkingService {
       profile.email.trim().toLowerCase() ===
         ctx.profile.email.trim().toLowerCase() ||
       !(await this.eligible(profile, ctx.config, store)) ||
-      (visible && !profile.visible)
+      (visible && (!profile.visible || !networkingProfileComplete(profile)))
     )
       throw new NotFoundException("Participant not available");
     const current = await store.one("profiles", {
@@ -393,7 +402,7 @@ export class NetworkingService {
         "Networking participation is no longer eligible",
       );
     if (
-      (!profile.visible && !visible) ||
+      ((!profile.visible || !networkingProfileComplete(profile)) && !visible) ||
       (!ctx.config.swipeEnabled && !ctx.config.searchEnabled)
     ) {
       const [profileAId, profileBId] = networkingPair(ctx.profile.id, id);
@@ -499,13 +508,19 @@ export class NetworkingService {
   async updateMe(ctx: NetworkingContext, input: Record<string, unknown>) {
     return networkingTransaction(ctx.event.id, async (store, db) => {
       ctx = await this.currentParticipant(ctx, store);
-      const { consent, ...fields } = input;
+      const { consent, resetFields, ...fields } = input;
+      const overrides = networkingProfileOverrides(ctx.profile.overrides);
+      for (const key of (resetFields as string[] | undefined) ?? []) delete overrides[key];
       for (const field of ["company", "jobTitle", "sector"]) {
         if (field in fields) {
           if (typeof fields[field] !== "string" || !fields[field].trim())
             throw new BadRequestException(`${field} is required`);
           fields[field] = fields[field].trim();
         }
+      }
+      for (const [key, value] of Object.entries(networkingProfileOverrides({ ...fields, ...(consent !== undefined ? { consent } : {}) }))) {
+        if (JSON.stringify(value) !== JSON.stringify(ctx.profile[key as keyof typeof ctx.profile]))
+          overrides[key] = value;
       }
       if (
         typeof fields.language === "string" &&
@@ -522,7 +537,7 @@ export class NetworkingService {
           ...(consent !== undefined
             ? { consent: !!consent, consentAt: consent ? new Date() : null }
             : {}),
-          overrides: { ...ctx.profile.overrides, ...input },
+          overrides,
           ...(consent === false ? { visible: false } : {}),
         },
       );
@@ -533,6 +548,10 @@ export class NetworkingService {
           ctx.event.id,
           db,
         );
+      }
+      if (Array.isArray(resetFields) && resetFields.length) {
+        await syncNetworkingRegistration(ctx.profile.registrationId, db);
+        return (await store.one("profiles", { id: row.id, eventId: ctx.event.id }))!;
       }
       return row;
     });

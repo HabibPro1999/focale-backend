@@ -8,6 +8,8 @@ import {
 } from "@nestjs/common";
 import {
   NetworkingConfigSchema,
+  networkingProfileOverrides,
+  networkingActivity,
   type NetworkingConfig,
   type NetworkingAnalytics,
 } from "@app/contracts";
@@ -32,7 +34,6 @@ import {
   type NetworkingContext,
 } from "./networking.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
-import { readNetworkingBadge } from "./networking.security";
 import { networkingPublicProfile, networkingSlots } from "./networking.policy";
 @Injectable()
 export class NetworkingAdminService {
@@ -111,7 +112,7 @@ export class NetworkingAdminService {
     return config;
   }
   async verifyBadge(eventId: string, token: string, accessId?: string) {
-    const profileId = readNetworkingBadge(token, eventId);
+    const profileId = await this.networking.badgeProfileId(eventId, token);
     const store = networkingStore();
     const profile = await store.one("profiles", { id: profileId, eventId });
     const event = await store.one("events", { id: eventId });
@@ -173,9 +174,7 @@ export class NetworkingAdminService {
           ? p.matchCount > 0
           : query.activity === "MEETINGS"
             ? p.meetingCount > 0
-            : query.activity === "ACTIVE"
-              ? p.lastActiveAt !== null
-              : p.lastActiveAt === null),
+            : networkingActivity(p.lastActiveAt) === query.activity),
     );
     return {
       items: items.slice(
@@ -203,7 +202,7 @@ export class NetworkingAdminService {
       const [row] = await store.update(
         "profiles",
         { eventId, id },
-        { ...input, overrides: { ...profile.overrides, ...input } },
+        { ...input, overrides: networkingProfileOverrides({ ...profile.overrides, ...input }) },
       );
       if (
         (input.status && input.status !== "ACTIVE") ||
@@ -307,8 +306,8 @@ export class NetworkingAdminService {
         revision: row.revision + 1,
       };
       if (input.action === "ASSIGN") {
-        if (!["CONFIRMED", "PENDING_ALLOCATION"].includes(row.status))
-          throw new ConflictException("Only accepted meetings can be assigned");
+        if (!["PENDING", "CONFIRMED", "PENDING_ALLOCATION"].includes(row.status))
+          throw new ConflictException("Only active meetings can be assigned");
         const allocation = await this.meetings.reserve(
           { event, config, profile } as NetworkingContext,
           row,
@@ -316,6 +315,7 @@ export class NetworkingAdminService {
           row.endsAt,
           store,
           input.tableId,
+          row.status === "PENDING",
         );
         update = { ...update, ...allocation };
       } else {

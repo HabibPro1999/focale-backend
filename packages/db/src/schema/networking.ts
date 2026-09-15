@@ -319,6 +319,7 @@ export const networkingMeetings = pgTable(
       .notNull()
       .default("PENDING"),
     message: text().notNull().default(""),
+    cancellationNote: text().notNull().default(""),
     proposedStartsAt: instant(),
     proposalBy: text(),
     expiresAt: instant().notNull(),

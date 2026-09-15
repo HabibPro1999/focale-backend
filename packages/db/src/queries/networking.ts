@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { withSerializableTxn } from "../txn";
 import { and, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
-import { NetworkingConfigSchema, type NetworkingConfig } from "@app/contracts";
+import { NetworkingConfigSchema, networkingProfileOverrides, type NetworkingConfig } from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
 import {
   networkingConfigs,
@@ -109,7 +109,7 @@ export async function syncNetworkingRegistration(
   if (existing) {
     const values = {
       ...projection,
-      ...existing.overrides,
+      ...networkingProfileOverrides(existing.overrides),
       email: registration.email.trim().toLowerCase(),
       firstName: registration.firstName ?? "",
       lastName: registration.lastName ?? "",

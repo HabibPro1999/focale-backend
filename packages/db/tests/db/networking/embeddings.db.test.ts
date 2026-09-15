@@ -69,6 +69,7 @@ async function participant(
     registrationId,
     email: `${id}@example.test`,
     firstName: name,
+    lastName: "Test", company: "Test company", jobTitle: "Director", sector: "Technology",
     status: "ACTIVE",
     consent: true,
     visible: options.visible ?? true,

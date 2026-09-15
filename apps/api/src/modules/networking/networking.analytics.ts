@@ -109,13 +109,13 @@ export function calculateNetworkingAnalytics(
     }
   const dayRows = new Map<
     string,
-    { date: string; matches: number; messages: number; meetings: number }
+    { date: string; matches: number; messages: number; meetings: number; bookingRequests: number }
   >();
   const dayRow = (stamp: Date) => {
     const key = date.format(stamp);
     let row = dayRows.get(key);
     if (!row) {
-      row = { date: key, matches: 0, messages: 0, meetings: 0 };
+      row = { date: key, matches: 0, messages: 0, meetings: 0, bookingRequests: 0 };
       dayRows.set(key, row);
     }
     return row;
@@ -123,6 +123,14 @@ export function calculateNetworkingAnalytics(
   for (const connection of connections) dayRow(connection.createdAt).matches++;
   for (const message of messages) dayRow(message.createdAt).messages++;
   for (const meeting of planned) dayRow(meeting.startsAt).meetings++;
+  for (const meeting of meetings) dayRow(meeting.createdAt).bookingRequests++;
+  const hourlyActivity = Array.from({ length: 24 }, (_, hour) => ({ hour: `${String(hour).padStart(2, "0")}:00`, activity: 0 }));
+  const activityTimes = [
+    ...audit.filter(entry => ["SWIPE_LIKE", "SWIPE_PASS", "PROFILE_VIEW"].includes(entry.action)),
+    ...messages, ...connections, ...meetings,
+  ];
+  for (const entry of activityTimes) hourlyActivity[Number(time.format(entry.createdAt).split(":")[0])].activity++;
+
   const sectorById = new Map(
     profiles.map((profile) => [profile.id, profile.sector || "Unspecified"]),
   );
@@ -208,6 +216,8 @@ export function calculateNetworkingAnalytics(
     row.meetings++;
     peaks.set(key, row);
     const zone =
+      (meeting.tableId && tableById.get(meeting.tableId)?.spaceId
+        ? bySpace.get(tableById.get(meeting.tableId)!.spaceId!)?.name : null) ||
       (meeting.tableId ? tableById.get(meeting.tableId)?.location : null) ||
       "Unspecified";
     zones.set(zone, (zones.get(zone) ?? 0) + 1);
@@ -313,6 +323,7 @@ export function calculateNetworkingAnalytics(
         : 0,
     },
     reports: reports.filter((report) => report.status === "OPEN").length,
+    hourlyActivity,
     timeSeries: [...dayRows.values()].sort((a, b) =>
       a.date.localeCompare(b.date),
     ),

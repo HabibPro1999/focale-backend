@@ -68,6 +68,7 @@ describe("networking registration label projection", () => {
       ),
     ).toEqual({
       projection: {
+        company: "", jobTitle: "", city: "", country: "", offers: "", seeks: "", website: null, photoUrl: null,
         sector: "Financial services",
         interests: ["Healthcare", "Investment"],
         bio: "Offer",
@@ -91,10 +92,10 @@ describe("networking registration label projection", () => {
       ),
     ).toEqual({
       projection: {
+        company: "", jobTitle: "", city: "", country: "", offers: "", seeks: "", website: null, photoUrl: null,
         sector: "",
         interests: ["Healthcare"],
         bio: "",
-        company: "",
       },
       consent: false,
     });

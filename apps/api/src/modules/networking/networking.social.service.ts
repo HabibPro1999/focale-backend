@@ -6,6 +6,8 @@ import {
 } from "@nestjs/common";
 import {
   listNetworkingMessages,
+  listNetworkingConnectionSummaries,
+  markNetworkingMessageNotificationsRead,
   createNetworkingNotification,
   networkingStore,
   networkingTransaction,
@@ -138,43 +140,8 @@ export class NetworkingSocialService {
     });
   }
   async connections(ctx: NetworkingContext) {
-    const store = networkingStore();
-    const rows = (
-      await store.all("connections", { eventId: ctx.event.id })
-    ).filter(
-      (v) => v.profileAId === ctx.profile.id || v.profileBId === ctx.profile.id,
-    );
-    const items = [];
-    for (const row of rows) {
-      try {
-        const connection = await this.connection(ctx, row.id, store);
-        const messages = await store.all("messages", {
-          eventId: ctx.event.id,
-          connectionId: row.id,
-        });
-        messages.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-        const readAt =
-          row.profileAId === ctx.profile.id ? row.readAAt : row.readBAt;
-        items.push({
-          id: row.id,
-          profile: networkingPublicProfile(connection.profile),
-          lastMessage: messages[0] ?? null,
-          unreadCount: messages.filter(
-            (m) =>
-              m.senderId !== ctx.profile.id &&
-              (!readAt || m.createdAt > readAt),
-          ).length,
-          createdAt: row.createdAt,
-        });
-      } catch (error) {
-        if (!(error instanceof NotFoundException)) throw error;
-      }
-    }
-    items.sort(
-      (a, b) =>
-        (b.lastMessage?.createdAt ?? b.createdAt).getTime() -
-        (a.lastMessage?.createdAt ?? a.createdAt).getTime(),
-    );
+    const rows = await listNetworkingConnectionSummaries(ctx.event.id, ctx.profile.id, ctx.config.eligiblePaymentStatuses);
+    const items = rows.map(row => ({ ...row, profile: networkingPublicProfile(row.profile) }));
     return { items, total: items.length };
   }
   async messages(
@@ -247,13 +214,15 @@ export class NetworkingSocialService {
   }
   async markRead(ctx: NetworkingContext, id: string) {
     const row = await this.connection(ctx, id);
+    const readAt = new Date();
     await networkingStore().update(
       "connections",
       { id, eventId: ctx.event.id },
       row.profileAId === ctx.profile.id
-        ? { readAAt: new Date() }
-        : { readBAt: new Date() },
+        ? { readAAt: readAt }
+        : { readBAt: readAt },
     );
+    await markNetworkingMessageNotificationsRead(ctx.event.id, ctx.profile.id, id, readAt);
     return { read: true };
   }
   async block(ctx: NetworkingContext, targetId: string) {

@@ -1,0 +1,88 @@
+{
+  "profiles": 10000,
+  "exactProfileLimit": 5000,
+  "engine": "CockroachDB CCL v26.2.5 (aarch64-apple-darwin21.2, built 2026/07/28 19:18:29, go1.25.5)",
+  "dimensions": 1536,
+  "syntheticLatentDimensions": 32,
+  "samples": [
+    {
+      "exactMs": 955,
+      "annMs": 519,
+      "recallAt30": 1,
+      "returned": 30
+    },
+    {
+      "exactMs": 1046,
+      "annMs": 554,
+      "recallAt30": 1,
+      "returned": 30
+    },
+    {
+      "exactMs": 978,
+      "annMs": 525,
+      "recallAt30": 1,
+      "returned": 30
+    }
+  ],
+  "plan": [
+    {
+      "info": "distribution: local"
+    },
+    {
+      "info": ""
+    },
+    {
+      "info": "\u2022 top-k"
+    },
+    {
+      "info": "\u2502 estimated row count: 240"
+    },
+    {
+      "info": "\u2502 order: +column14"
+    },
+    {
+      "info": "\u2502 k: 240"
+    },
+    {
+      "info": "\u2502"
+    },
+    {
+      "info": "\u2514\u2500\u2500 \u2022 render"
+    },
+    {
+      "info": "    \u2502"
+    },
+    {
+      "info": "    \u2514\u2500\u2500 \u2022 lookup join"
+    },
+    {
+      "info": "        \u2502 table: networking_embeddings@networking_embeddings_pkey"
+    },
+    {
+      "info": "        \u2502 equality: (id) = (id)"
+    },
+    {
+      "info": "        \u2502 equality cols are key"
+    },
+    {
+      "info": "        \u2502"
+    },
+    {
+      "info": "        \u2514\u2500\u2500 \u2022 vector search"
+    },
+    {
+      "info": "              table: networking_embeddings@networking_embeddings_cosine_idx"
+    },
+    {
+      "info": "              target count: 240"
+    },
+    {
+      "info": "              prefix spans: [/'01fbcb9b-0466-410a-a47f-75235f8b3cab'/'PROFILE'/'synthetic-vector-benchmark' - /'01fbcb9b-0466-410a-a47f-75235f8b3cab'/'PROFILE'/'synthetic-vector-benchmark']"
+    }
+  ],
+  "limitations": "Three sequential callers on a local single-node database, synthetic vectors, no real-profile relevance or production concurrency claim.",
+  "measuredAt": "2026-09-15",
+  "databaseCacheMiB": 512,
+  "databaseSqlMemoryMiB": 1024,
+  "targetMet": false
+}

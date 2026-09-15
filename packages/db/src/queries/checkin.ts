@@ -39,6 +39,35 @@ export type CheckInRegistration = {
 // Reads
 // ---------------------------------------------------------------------------
 
+// Shared by live scans and offline preload. Ordinary event/access scanning is
+// unaffected unless this access item is configured as the networking entrance.
+function networkingAdmission(accessId: string) {
+  return sql`NOT EXISTS (
+    SELECT 1 FROM networking_configs c
+    WHERE c.event_id=${registrations.eventId} AND c.config->>'enabled'='true'
+      AND c.config->>'requiredAccessId'=${accessId}
+      AND NOT EXISTS (
+        SELECT 1 FROM networking_profiles p
+        WHERE p.registration_id=${registrations.id} AND p.event_id=c.event_id
+          AND p.status='ACTIVE' AND p.consent AND p.withdrawn_at IS NULL
+          AND ${registrations.networkingOptIn} IS DISTINCT FROM false
+          AND c.config->'eligiblePaymentStatuses' ? ${registrations.paymentStatus}::text
+          AND EXISTS (
+            SELECT 1 FROM networking_meetings m
+            WHERE m.event_id=p.event_id AND m.status='CONFIRMED'
+              AND (m.requester_id=p.id OR m.recipient_id=p.id)
+          )
+      )
+  )`;
+}
+
+export async function isNetworkingAccessAllowed(eventId: string, registrationId: string, accessId: string) {
+  const rows = await getDb().select({ id: registrations.id }).from(registrations)
+    .where(and(eq(registrations.eventId, eventId), eq(registrations.id, registrationId), networkingAdmission(accessId)))
+    .limit(1);
+  return rows.length > 0;
+}
+
 /** Registration + its event's clientId, or null. */
 export async function getRegistrationForCheckIn(
   registrationId: string,
@@ -121,6 +150,7 @@ export async function getEligibleRegistrationIds(
   ];
   if (accessId) {
     conds.push(sql`${accessId}::text = ANY(${registrations.accessTypeIds})`);
+    conds.push(networkingAdmission(accessId));
   }
   const rows = await exec
     .select({ id: registrations.id })

@@ -27,6 +27,8 @@ import {
 } from "../schema/networking";
 import { emailLogs } from "../schema/email";
 import { registrations } from "../schema/registrations";
+import { networkingUnreadMessageCount } from "./networking-participant-read";
+export * from "./networking-participant-read";
 import {
   normalizeNetworkingSearch,
   networkingSearchScore,
@@ -73,6 +75,7 @@ function networkingDiscoveryWhere(
     ne(profiles.id, profileId),
     sql`lower(${profiles.email}) <> (SELECT lower(email) FROM networking_profiles WHERE id=${profileId} AND event_id=${eventId})`,
     eq(profiles.status, "ACTIVE"),
+    sql`btrim(${profiles.firstName}) <> '' AND btrim(${profiles.lastName}) <> '' AND btrim(${profiles.company}) <> '' AND btrim(${profiles.jobTitle}) <> '' AND btrim(${profiles.sector}) <> ''`,
     eq(profiles.visible, true),
     eq(profiles.consent, true),
     isNull(profiles.withdrawnAt),
@@ -273,7 +276,7 @@ export async function listNetworkingNotifications(
     eq(notifications.eventId, eventId),
     eq(notifications.profileId, profileId),
   );
-  const [items, counts] = await Promise.all([
+  const [items, counts, unreadMessageCount] = await Promise.all([
     db
       .select()
       .from(notifications)
@@ -288,11 +291,13 @@ export async function listNetworkingNotifications(
       })
       .from(notifications)
       .where(where),
+    networkingUnreadMessageCount(eventId, profileId, db),
   ]);
   return {
     items,
     total: counts[0]?.total ?? 0,
     unreadCount: counts[0]?.unreadCount ?? 0,
+    unreadMessageCount,
   };
 }
 
