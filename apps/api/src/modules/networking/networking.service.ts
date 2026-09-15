@@ -54,7 +54,10 @@ export class NetworkingService {
     // Printed registration badges contain a UUID; the PWA also supports its signed, expiring badge.
     if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(token)) {
       const profile = await store.one("profiles", { eventId, registrationId: token });
-      if (!profile) throw new NotFoundException("Participant not found");
+      if (!profile) throw new NotFoundException({
+        code: "NETWORKING_BADGE_INVALID",
+        message: "Participant not found",
+      });
       return profile.id;
     }
     return readNetworkingBadge(token, eventId);

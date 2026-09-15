@@ -102,7 +102,11 @@ describe("networking boundary policies", () => {
     expect(readNetworkingBadge(badge.token, "event")).toBe("participant");
     expect(() => readNetworkingBadge(badge.token, "other")).toThrow(BadRequestException);
     expect(() => readNetworkingBadge(badge.token + "x", "event")).toThrow(BadRequestException);
-    expect(() => readNetworkingBadge("invalid-demo-token", "event")).toThrow(BadRequestException);
+    let invalid: unknown;
+    try { readNetworkingBadge("invalid-demo-token", "event"); } catch (error) { invalid = error; }
+    expect(invalid).toBeInstanceOf(BadRequestException);
+    expect((invalid as BadRequestException).getStatus()).toBe(400);
+    expect((invalid as BadRequestException).getResponse()).toMatchObject({ code: "NETWORKING_BADGE_INVALID" });
   });
   it("implements the RFC 4226 HOTP vector underlying TOTP", () => {
     expect(networkingTotp("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", 0)).toBe(

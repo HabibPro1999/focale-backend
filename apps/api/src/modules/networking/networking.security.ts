@@ -70,7 +70,10 @@ export function readNetworkingBadge(token: string, eventId: string) {
       throw new Error();
     return parsed.profileId;
   } catch {
-    throw new BadRequestException("Invalid or expired badge");
+    throw new BadRequestException({
+      code: "NETWORKING_BADGE_INVALID",
+      message: "Invalid or expired badge",
+    });
   }
 }
 

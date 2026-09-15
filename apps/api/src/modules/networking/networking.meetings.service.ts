@@ -543,15 +543,24 @@ export class NetworkingMeetingsService {
       const other =
         row.requesterId === ctx.profile.id ? row.recipientId : row.requesterId;
       if (counterpart !== other)
-        throw new BadRequestException("Scan your meeting partner’s badge");
+        throw new BadRequestException({
+          code: "NETWORKING_BADGE_WRONG_PARTICIPANT",
+          message: "Scan your meeting partner’s badge",
+        });
       await this.networking.target(ctx, other, store);
       if (row.status !== "CONFIRMED" && row.status !== "COMPLETED")
-        throw new ConflictException("Only confirmed meetings support check-in");
+        throw new ConflictException({
+          code: "NETWORKING_MEETING_CHECKIN_UNCONFIRMED",
+          message: "Only confirmed meetings support check-in",
+        });
       if (
         Date.now() < row.startsAt.getTime() - 30 * 60_000 ||
         Date.now() > row.endsAt.getTime() + 12 * 3_600_000
       )
-        throw new BadRequestException("Check-in is not available at this time");
+        throw new BadRequestException({
+          code: "NETWORKING_MEETING_CHECKIN_UNAVAILABLE",
+          message: "Check-in is not available at this time",
+        });
       const ownKey =
         row.requesterId === ctx.profile.id
           ? "requesterCheckedInAt"
