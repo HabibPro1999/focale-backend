@@ -13,23 +13,23 @@ export async function networkingPostEventReportData(
   const [summary] = rowsOf<Record<string, number>>(
     await db.execute(sql`
     SELECT
-      (SELECT count(*)::int FROM networking_profiles WHERE event_id=${eventId}) AS participants,
-      (SELECT count(*)::int FROM networking_profiles WHERE event_id=${eventId} AND last_active_at IS NOT NULL) AS active_participants,
-      (SELECT count(*)::int FROM networking_audit WHERE event_id=${eventId} AND action='PROFILE_VIEW') AS profile_views,
-      (SELECT count(*)::int FROM networking_interests WHERE event_id=${eventId} AND action='LIKE') AS interests,
-      (SELECT count(*)::int FROM networking_connections WHERE event_id=${eventId}) AS connections,
-      (SELECT count(*)::int FROM networking_messages WHERE event_id=${eventId}) AS messages,
-      (SELECT count(*)::int FROM networking_meetings WHERE event_id=${eventId}) AS meeting_requests,
-      (SELECT count(*)::int FROM networking_meetings WHERE event_id=${eventId} AND status IN ('CONFIRMED','COMPLETED','NO_SHOW')) AS meetings,
-      (SELECT count(*)::int FROM networking_meetings WHERE event_id=${eventId} AND status IN ('PENDING','PENDING_ALLOCATION')) AS pending_meetings,
-      (SELECT count(*)::int FROM (SELECT connection_id FROM networking_messages WHERE event_id=${eventId} GROUP BY connection_id HAVING count(DISTINCT sender_id)=2) replies) AS responsive_conversations,
-      (SELECT count(DISTINCT connection_id)::int FROM networking_messages WHERE event_id=${eventId}) AS conversations,
-      (SELECT count(*)::int FROM networking_meetings WHERE event_id=${eventId} AND status='COMPLETED') AS completed_meetings,
-      (SELECT count(*)::int FROM networking_meetings WHERE event_id=${eventId} AND status='NO_SHOW') AS no_shows,
-      (SELECT count(*)::int FROM networking_meetings WHERE event_id=${eventId} AND status='CANCELLED') AS cancelled_meetings,
-      (SELECT count(*)::int FROM email_logs WHERE context_snapshot->>'dispatchOwner'='networking' AND context_snapshot->>'eventId'=${eventId} AND sent_at IS NOT NULL) AS emails_sent,
-      (SELECT count(*)::int FROM email_logs WHERE context_snapshot->>'dispatchOwner'='networking' AND context_snapshot->>'eventId'=${eventId} AND opened_at IS NOT NULL) AS emails_opened,
-      (SELECT count(*)::int FROM email_logs WHERE context_snapshot->>'dispatchOwner'='networking' AND context_snapshot->>'eventId'=${eventId} AND clicked_at IS NOT NULL) AS emails_clicked
+      (SELECT count(*)::int4 FROM networking_profiles WHERE event_id=${eventId}) AS participants,
+      (SELECT count(*)::int4 FROM networking_profiles WHERE event_id=${eventId} AND last_active_at IS NOT NULL) AS active_participants,
+      (SELECT count(*)::int4 FROM networking_audit WHERE event_id=${eventId} AND action='PROFILE_VIEW') AS profile_views,
+      (SELECT count(*)::int4 FROM networking_interests WHERE event_id=${eventId} AND action='LIKE') AS interests,
+      (SELECT count(*)::int4 FROM networking_connections WHERE event_id=${eventId}) AS connections,
+      (SELECT count(*)::int4 FROM networking_messages WHERE event_id=${eventId}) AS messages,
+      (SELECT count(*)::int4 FROM networking_meetings WHERE event_id=${eventId}) AS meeting_requests,
+      (SELECT count(*)::int4 FROM networking_meetings WHERE event_id=${eventId} AND status IN ('CONFIRMED','COMPLETED','NO_SHOW')) AS meetings,
+      (SELECT count(*)::int4 FROM networking_meetings WHERE event_id=${eventId} AND status IN ('PENDING','PENDING_ALLOCATION')) AS pending_meetings,
+      (SELECT count(*)::int4 FROM (SELECT connection_id FROM networking_messages WHERE event_id=${eventId} GROUP BY connection_id HAVING count(DISTINCT sender_id)=2) replies) AS responsive_conversations,
+      (SELECT count(DISTINCT connection_id)::int4 FROM networking_messages WHERE event_id=${eventId}) AS conversations,
+      (SELECT count(*)::int4 FROM networking_meetings WHERE event_id=${eventId} AND status='COMPLETED') AS completed_meetings,
+      (SELECT count(*)::int4 FROM networking_meetings WHERE event_id=${eventId} AND status='NO_SHOW') AS no_shows,
+      (SELECT count(*)::int4 FROM networking_meetings WHERE event_id=${eventId} AND status='CANCELLED') AS cancelled_meetings,
+      (SELECT count(*)::int4 FROM email_logs WHERE context_snapshot->>'dispatchOwner'='networking' AND context_snapshot->>'eventId'=${eventId} AND sent_at IS NOT NULL) AS emails_sent,
+      (SELECT count(*)::int4 FROM email_logs WHERE context_snapshot->>'dispatchOwner'='networking' AND context_snapshot->>'eventId'=${eventId} AND opened_at IS NOT NULL) AS emails_opened,
+      (SELECT count(*)::int4 FROM email_logs WHERE context_snapshot->>'dispatchOwner'='networking' AND context_snapshot->>'eventId'=${eventId} AND clicked_at IS NOT NULL) AS emails_clicked
   `),
   );
   const sectors = rowsOf<{
@@ -39,7 +39,7 @@ export async function networkingPostEventReportData(
     meetings: number;
   }>(
     await db.execute(sql`
-    SELECT p.sector,count(DISTINCT p.id)::int AS participants,count(DISTINCT c.id)::int AS connections,count(DISTINCT m.id)::int AS meetings
+    SELECT p.sector,count(DISTINCT p.id)::int4 AS participants,count(DISTINCT c.id)::int4 AS connections,count(DISTINCT m.id)::int4 AS meetings
     FROM networking_profiles p LEFT JOIN networking_connections c ON c.event_id=p.event_id AND (c.profile_a_id=p.id OR c.profile_b_id=p.id)
       LEFT JOIN networking_meetings m ON m.event_id=p.event_id AND (m.requester_id=p.id OR m.recipient_id=p.id) AND m.status IN ('CONFIRMED','COMPLETED','NO_SHOW')
     WHERE p.event_id=${eventId} GROUP BY p.sector ORDER BY participants DESC,p.sector
@@ -53,7 +53,7 @@ export async function networkingPostEventReportData(
   }>(
     await db.execute(sql`
     SELECT to_char(stamp AT TIME ZONE ${timezone},'YYYY-MM-DD') AS date,
-      sum(connections)::int AS connections,sum(messages)::int AS messages,sum(meetings)::int AS meetings
+      sum(connections)::int4 AS connections,sum(messages)::int4 AS messages,sum(meetings)::int4 AS meetings
     FROM (
       SELECT created_at AS stamp,1 AS connections,0 AS messages,0 AS meetings FROM networking_connections WHERE event_id=${eventId}
       UNION ALL SELECT created_at,0,1,0 FROM networking_messages WHERE event_id=${eventId}

@@ -20,7 +20,10 @@ import {
   updateEmailLogById,
   type NetworkingRow,
 } from "@app/db";
-import { processNetworkingDeliveries } from "./notification-worker";
+import {
+  processNetworkingDeliveries as processDeliveryBatch,
+  type NetworkingDeliveryDependencies,
+} from "./notification-worker";
 import { updateEmailStatusFromWebhook } from "../email/queue";
 import type { EmailProvider, SendEmailInput } from "../email/providers";
 import type { StorageProvider } from "../storage";
@@ -141,6 +144,28 @@ async function fixture(options: { ended?: boolean; timezone?: string } = {}) {
   });
   return { eventId, event, config, people, connection, message, table };
 }
+// Like the scheduled worker, poll past transient SKIP LOCKED misses on committed
+// CockroachDB intents (cockroachdb/cockroach#167582); retain all dispatch assertions.
+async function processNetworkingDeliveries(
+  deps: NetworkingDeliveryDependencies & { eventId: string },
+) {
+  const result = { sent: 0, skipped: 0, failed: 0 };
+  await vi.waitFor(async () => {
+    const batch = await processDeliveryBatch(deps);
+    result.sent += batch.sent;
+    result.skipped += batch.skipped;
+    result.failed += batch.failed;
+    const rows = await store().all("deliveries", { eventId: deps.eventId });
+    const now = new Date();
+    const due = rows.filter(row =>
+      row.attempts < 5 && row.availableAt <= now &&
+      (row.status === "PENDING" || row.status === "FAILED" ||
+       (row.status === "PROCESSING" && row.lockedUntil && row.lockedUntil <= now)),
+    );
+    expect(due).toHaveLength(0);
+  }, { timeout: 3000, interval: 20 });
+  return result;
+}
 async function delivery(
   f: Awaited<ReturnType<typeof fixture>>,
   type = "MESSAGE",
@@ -221,6 +246,9 @@ describe.runIf(enabled)("networking worker real isolated database", () => {
     });
     expect(deliveries).toHaveLength(4);
     expect(notifications).toHaveLength(4);
+    expect(notifications.map((row) => row.href)).toEqual(
+      Array(4).fill(`/e/worker-${f.eventId}/agenda`),
+    );
     for (const row of deliveries)
       expect(
         notifications.some(
@@ -600,13 +628,13 @@ describe.runIf(enabled)("networking worker real isolated database", () => {
           updatedAt: past,
         })),
       );
-    const claimed = await claimQueuedEmailLogs(
-      "ordinary-test-worker",
-      100,
-      new Date(),
-      new Date(Date.now() + 60000),
-    );
-    expect(claimed).toContain(ids[1]);
+    const claimed: string[] = [];
+    await vi.waitFor(async () => {
+      claimed.push(...await claimQueuedEmailLogs(
+        "ordinary-test-worker", 100, new Date(), new Date(Date.now() + 60000),
+      ));
+      expect(claimed).toContain(ids[1]);
+    }, { timeout: 3000, interval: 20 });
     expect(claimed).not.toContain(ids[0]);
     await recoverStaleEmailLeases();
     expect((await log(ids[2])).status).toBe("SENDING");

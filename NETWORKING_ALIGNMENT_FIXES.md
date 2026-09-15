@@ -49,17 +49,24 @@ Migration, verification and external acceptance limits are recorded below.
 - B2B-001: form builder accepts a single checkbox option for explicit consent.
 - B2B-002: convert email counts to numbers at the database boundary; CockroachDB's integer wire values previously made string `"0"` truthy and displayed NaN percentages.
 - B2B-003: initial public networking consent is unchecked.
-- B2B-004: missing networking secret configured in Render; QA verified the code-entry screen is reachable. Actual email delivery remains a separate gate.
+- B2B-004: missing networking secret configured in Render; QA verified the code-entry screen is reachable. QA verified real inbox OTP sign-in for both participant accounts.
 - B2B-005: waived registrations show no net amount or balance due in admin.
-- B2B-006: neutral default registration success text no longer claims email delivery. The deployed service currently uses SendGrid; the user's available allowance is on Resend. Provider configuration is still being resolved.
+- B2B-006: neutral default registration success text no longer claims email delivery. Dev now uses the user-authorized Resend configuration. QA received OTP and action emails; the dev webhook returns HTTP 200 and updates delivered counts.
 - B2B-007: saved-template preview replaces catalog variables with escaped sample values.
 - B2B-008: malformed/expired badge validation returns HTTP 400 rather than organizer-session HTTP 401.
 - B2B-009: accepted product behavior. The user explicitly retains “Inclus” for free optional items; it means no extra charge if selected, not automatic selection.
 - B2B-010: backend rejects meeting opening hours outside the event boundaries before saving.
-- Deployment: the image now supports `APP=all` to supervise API and worker in one existing service. It forwards shutdown signals and stops the service if either child exits. The previous default API-only process did not run networking/email jobs. Deploying this mode is pending.
+- Deployment: the image now supports `APP=all` to supervise API and worker in one existing service. It forwards shutdown signals and stops the service if either child exits. The previous default API-only process did not run networking/email jobs. This mode is deployed; both processes and indexing are running.
 - Presentation: localize networking-auth unavailability; replace dummy contact links with organizer-contact guidance.
 
 Focused checks: 18 alignment database tests, 9 boundary-policy tests, 10 admin analytics/preview tests, and 3 runtime supervision tests pass. Numeric zero email counts were also verified on native CockroachDB. Backend typechecks/build and all frontend builds pass; form (113) and networking (48) suites pass. QA, rather than this implementation task, performs the live platform retests.
+
+## Native CockroachDB worker follow-up
+
+- Explicit reminder parameter types fix CockroachDB interval/CASE inference failures. Reminder links use the actual `/e/:slug/agenda` route.
+- Post-event aggregates use `int4`, preserving their existing PostgreSQL numeric contract on CockroachDB instead of serializing counts as strings.
+- All 18 worker database regressions pass on native CockroachDB 26.2.5. Tests poll due work like the scheduled worker because [CockroachDB can briefly skip committed intents](https://github.com/cockroachdb/cockroach/issues/167582); production locking and lease checks remain intact.
+- Jihed passed single-checkbox, long-message feedback, reciprocal connections, chat, reschedule/cancel/decline, slot release, badge admission/revocation, calendar and Excel/PDF exports. Moderation, fresh form consent and device push acceptance are still in progress.
 
 ## Performance result and remaining external acceptance
 

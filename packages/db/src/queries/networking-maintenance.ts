@@ -29,16 +29,16 @@ export async function maintainNetworkingLifecycle(eventId?: string) {
     await db.execute(sql`
       WITH candidates AS (
         SELECT gen_random_uuid()::text AS notification_id,m.id AS meeting_id,m.event_id,m.revision,p.id AS profile_id,
-          '/'||e.slug||'/agenda' AS href,
-          CASE p.language WHEN 'fr' THEN ${hours === 24 ? "Votre rendez-vous a lieu demain" : "Votre rendez-vous commence dans une heure"} WHEN 'ar' THEN ${hours === 24 ? "موعدك غداً" : "يبدأ موعدك خلال ساعة"} ELSE ${hours === 24 ? "Your meeting is tomorrow" : "Your meeting starts within an hour"} END AS title,
+          '/e/'||e.slug||'/agenda' AS href,
+          CASE p.language WHEN 'fr' THEN ${hours === 24 ? "Votre rendez-vous a lieu demain" : "Votre rendez-vous commence dans une heure"}::text WHEN 'ar' THEN ${hours === 24 ? "موعدك غداً" : "يبدأ موعدك خلال ساعة"}::text ELSE ${hours === 24 ? "Your meeting is tomorrow" : "Your meeting starts within an hour"}::text END AS title,
           to_char(m.starts_at AT TIME ZONE COALESCE(c.config->>'timezone','UTC'),'YYYY-MM-DD HH24:MI')||' · '||COALESCE(c.config->>'timezone','UTC') AS body
         FROM networking_meetings m JOIN networking_profiles p ON p.id=m.requester_id OR p.id=m.recipient_id
         JOIN networking_configs c ON c.event_id=m.event_id JOIN events e ON e.id=m.event_id
         JOIN clients cl ON cl.id=e.client_id JOIN registrations r ON r.id=p.registration_id
         JOIN networking_profiles peer ON peer.id=CASE WHEN p.id=m.requester_id THEN m.recipient_id ELSE m.requester_id END AND peer.event_id=m.event_id
         JOIN registrations peer_registration ON peer_registration.id=peer.registration_id
-        WHERE m.status='CONFIRMED' AND m.starts_at>now()+interval '1 hour'*${hours === 24 ? 23 : 0} AND m.starts_at<=now()+interval '1 hour'*${hours}
-          AND m.created_at<m.starts_at-interval '1 hour'*${hours}
+        WHERE m.status='CONFIRMED' AND m.starts_at>now()+interval '1 hour'*${hours === 24 ? 23 : 0}::int AND m.starts_at<=now()+interval '1 hour'*${hours}::int
+          AND m.created_at<m.starts_at-interval '1 hour'*${hours}::int
           AND c.config->>'enabled'='true' AND cl.active AND cl.enabled_modules @> ARRAY['networking','registrations','emails']::text[]
           AND p.status='ACTIVE' AND p.consent AND p.withdrawn_at IS NULL AND r.networking_opt_in IS DISTINCT FROM false
           AND c.config->'eligiblePaymentStatuses' ? r.payment_status::text
