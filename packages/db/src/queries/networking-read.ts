@@ -304,11 +304,11 @@ export async function listNetworkingNotifications(
 export async function networkingEmailMetrics(eventId: string) {
   const [row] = await getDb()
     .select({
-      emailSent: sql<number>`count(*) FILTER(WHERE ${emailLogs.sentAt} IS NOT NULL)::integer`,
-      emailDelivered: sql<number>`count(*) FILTER(WHERE ${emailLogs.deliveredAt} IS NOT NULL)::integer`,
-      emailOpened: sql<number>`count(*) FILTER(WHERE ${emailLogs.openedAt} IS NOT NULL)::integer`,
-      emailClicked: sql<number>`count(*) FILTER(WHERE ${emailLogs.clickedAt} IS NOT NULL)::integer`,
-      emailFailed: sql<number>`count(*) FILTER(WHERE ${emailLogs.status} IN ('FAILED','BOUNCED','DROPPED'))::integer`,
+      emailSent: sql<number>`count(*) FILTER(WHERE ${emailLogs.sentAt} IS NOT NULL)::integer`.mapWith(Number),
+      emailDelivered: sql<number>`count(*) FILTER(WHERE ${emailLogs.deliveredAt} IS NOT NULL)::integer`.mapWith(Number),
+      emailOpened: sql<number>`count(*) FILTER(WHERE ${emailLogs.openedAt} IS NOT NULL)::integer`.mapWith(Number),
+      emailClicked: sql<number>`count(*) FILTER(WHERE ${emailLogs.clickedAt} IS NOT NULL)::integer`.mapWith(Number),
+      emailFailed: sql<number>`count(*) FILTER(WHERE ${emailLogs.status} IN ('FAILED','BOUNCED','DROPPED'))::integer`.mapWith(Number),
     })
     .from(emailLogs)
     .where(

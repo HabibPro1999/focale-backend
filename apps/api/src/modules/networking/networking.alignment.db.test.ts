@@ -14,6 +14,7 @@ import {
   maintainNetworkingLifecycle,
   isNetworkingAccessAllowed,
   getEligibleRegistrationIds,
+  networkingEmailMetrics,
 } from "@app/db";
 import { NetworkingConfigSchema } from "@app/contracts";
 import {
@@ -38,6 +39,21 @@ const enabled =
   process.env.ALLOW_DB_TESTS === "1" && !!process.env.TEST_DATABASE_URL;
 
 describe.runIf(enabled)("PDF alignment audit reproductions", () => {
+  it("returns numeric zero email counts on the database wire protocol", async () => {
+    expect(await networkingEmailMetrics(people[0].event.id)).toEqual({
+      emailSent: 0, emailDelivered: 0, emailOpened: 0, emailClicked: 0, emailFailed: 0,
+    });
+  });
+  it("rejects meeting windows outside the event without saving them", async () => {
+    const { event } = people[0];
+    for (const date of ["2031-04-04", "2031-04-06"])
+      await expect(admin.config(event.id, {
+        openingHours: [{ date, start: "09:00", end: "10:00" }],
+      })).rejects.toThrow("within the event dates");
+    expect((await admin.config(event.id)).openingHours).toEqual([
+      { date: "2031-04-05", start: "09:00", end: "17:00" },
+    ]);
+  });
   beforeAll(() => {
     const url = new URL(process.env.TEST_DATABASE_URL!);
     if (

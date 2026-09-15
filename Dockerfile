@@ -1,6 +1,5 @@
 # Multi-stage build for the pnpm workspace (branch: nest-rebuild).
-# One image runs EITHER app: default CMD = api; build --build-arg APP=worker
-# (or override CMD at run) for the worker.
+# One image runs api (default), worker, or both with APP=all.
 #
 #   docker build -f Dockerfile.new -t focale-api .
 #   docker build -f Dockerfile.new --build-arg APP=worker -t focale-worker .
@@ -47,4 +46,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
   CMD node -e "fetch('http://localhost:'+(process.env.PORT||3000)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 # Default: api. Build with --build-arg APP=worker for a worker image.
-CMD ["sh", "-c", "node apps/$APP/dist/main.js"]
+CMD ["node", "start-runtime.mjs"]

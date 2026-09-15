@@ -34,7 +34,7 @@ import {
   type NetworkingContext,
 } from "./networking.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
-import { networkingPublicProfile, networkingSlots } from "./networking.policy";
+import { networkingPublicProfile, networkingSlots, zonedInstant } from "./networking.policy";
 @Injectable()
 export class NetworkingAdminService {
   constructor(
@@ -58,6 +58,11 @@ export class NetworkingAdminService {
       throw new BadRequestException("Closing date must follow opening date");
     const event = await networkingStore().one("events", { id: eventId });
     if (!event) throw new NotFoundException("Event not found");
+    if (config.openingHours.some((window) =>
+      zonedInstant(window.date, window.start, config.timezone) < event.startDate ||
+      zonedInstant(window.date, window.end, config.timezone) > event.endDate
+    ))
+      throw new BadRequestException("Meeting opening hours must be within the event dates");
     if (
       config.requiredAccessId &&
       !(await getActiveEventAccessId(config.requiredAccessId, eventId))

@@ -7,15 +7,16 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import {
+  BadRequestException,
   ServiceUnavailableException,
-  UnauthorizedException,
 } from "@nestjs/common";
 export function networkingSecret() {
   const value = process.env.NETWORKING_TOKEN_SECRET;
   if (!value || value.length < 32)
-    throw new ServiceUnavailableException(
-      "Networking authentication is not configured",
-    );
+    throw new ServiceUnavailableException({
+      code: "NETWORKING_AUTH_UNAVAILABLE",
+      message: "Networking authentication is not configured",
+    });
   return value;
 }
 export function networkingHash(value: string) {
@@ -69,7 +70,7 @@ export function readNetworkingBadge(token: string, eventId: string) {
       throw new Error();
     return parsed.profileId;
   } catch {
-    throw new UnauthorizedException("Invalid or expired badge");
+    throw new BadRequestException("Invalid or expired badge");
   }
 }
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { BadRequestException } from "@nestjs/common";
 import {
   NetworkingListQuerySchema,
   NetworkingConfigSchema,
@@ -99,8 +100,9 @@ describe("networking boundary policies", () => {
       "test-secret-for-networking-at-least-32-characters";
     const badge = issueNetworkingBadge("participant", "event");
     expect(readNetworkingBadge(badge.token, "event")).toBe("participant");
-    expect(() => readNetworkingBadge(badge.token, "other")).toThrow();
-    expect(() => readNetworkingBadge(badge.token + "x", "event")).toThrow();
+    expect(() => readNetworkingBadge(badge.token, "other")).toThrow(BadRequestException);
+    expect(() => readNetworkingBadge(badge.token + "x", "event")).toThrow(BadRequestException);
+    expect(() => readNetworkingBadge("invalid-demo-token", "event")).toThrow(BadRequestException);
   });
   it("implements the RFC 4226 HOTP vector underlying TOTP", () => {
     expect(networkingTotp("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", 0)).toBe(
