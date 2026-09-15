@@ -51,6 +51,15 @@ export function issueNetworkingBadge(profileId: string, eventId: string) {
 }
 export function readNetworkingBadge(token: string, eventId: string) {
   try {
+    let linkedProfileId: string | undefined;
+    if (/^https?:\/\//i.test(token)) {
+      const url = new URL(token);
+      const path = url.pathname.match(/^\/e\/[^/]+\/profiles\/([^/]+)$/);
+      if (!path || url.username || url.password) throw new Error();
+      linkedProfileId = decodeURIComponent(path[1]!);
+      // The fragment keeps the attendance proof out of HTTP requests/referrers.
+      token = new URLSearchParams(url.hash.slice(1)).get("badge") ?? "";
+    }
     if (token.split(".").length !== 2) throw new Error();
     const [payload, signature] = token.split(".");
     const expected = networkingHash(`badge:${payload}`);
@@ -65,6 +74,8 @@ export function readNetworkingBadge(token: string, eventId: string) {
     ) as { profileId: string; eventId: string; expiresAt: string };
     if (
       parsed.eventId !== eventId ||
+      (linkedProfileId !== undefined && parsed.profileId !== linkedProfileId) ||
+      !Number.isFinite(Date.parse(parsed.expiresAt)) ||
       new Date(parsed.expiresAt).getTime() <= Date.now()
     )
       throw new Error();

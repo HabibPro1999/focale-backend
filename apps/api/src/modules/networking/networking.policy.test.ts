@@ -1,10 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { BadRequestException } from "@nestjs/common";
 import {
   NetworkingListQuerySchema,
   NetworkingConfigSchema,
   NetworkingProfileUpdateSchema,
   NetworkingMessageSchema,
+  NetworkingCheckinSchema,
+  NetworkingBadgeVerifySchema,
 } from "@app/contracts";
 import {
   networkingSearchMatches,
@@ -107,6 +109,35 @@ describe("networking boundary policies", () => {
     expect(invalid).toBeInstanceOf(BadRequestException);
     expect((invalid as BadRequestException).getStatus()).toBe(400);
     expect((invalid as BadRequestException).getResponse()).toMatchObject({ code: "NETWORKING_BADGE_INVALID" });
+  });
+  it("accepts profile QR links without weakening badge identity or expiry checks", () => {
+    vi.stubEnv("NETWORKING_TOKEN_SECRET", "test-secret-for-networking-at-least-32-characters");
+    vi.useFakeTimers();
+    try {
+      const badge = issueNetworkingBadge("participant", "event");
+      const url = new URL("https://networking.example/e/test-event/profiles/participant");
+      url.hash = new URLSearchParams({ badge: badge.token }).toString();
+      expect(readNetworkingBadge(url.href, "event")).toBe("participant");
+      expect(() => readNetworkingBadge(url.href, "other-event")).toThrow(BadRequestException);
+      expect(() => readNetworkingBadge(url.href + "x", "event")).toThrow(BadRequestException);
+      expect(() => readNetworkingBadge(url.origin + url.pathname, "event")).toThrow(BadRequestException);
+      expect(() => readNetworkingBadge(url.href.replace("/profiles/participant", "/profiles/other"), "event")).toThrow(BadRequestException);
+      expect(() => readNetworkingBadge(url.href.replace("/profiles/participant", "/agenda"), "event")).toThrow(BadRequestException);
+      expect(() => readNetworkingBadge(url.href.replace("https:", "javascript:"), "event")).toThrow(BadRequestException);
+      vi.advanceTimersByTime(10 * 60_000);
+      expect(() => readNetworkingBadge(url.href, "event")).toThrow(BadRequestException);
+      expect(() => readNetworkingBadge(badge.token, "event")).toThrow(BadRequestException);
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+    }
+  });
+  it("allows full badge URLs in both scanners with a bounded input length", () => {
+    const token = `https://networking.example/e/${"a".repeat(200)}/profiles/participant#badge=${"b".repeat(300)}`;
+    for (const schema of [NetworkingCheckinSchema, NetworkingBadgeVerifySchema]) {
+      expect(schema.safeParse({ token }).success).toBe(true);
+      expect(schema.safeParse({ token: "a".repeat(2049) }).success).toBe(false);
+    }
   });
   it("implements the RFC 4226 HOTP vector underlying TOTP", () => {
     expect(networkingTotp("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", 0)).toBe(

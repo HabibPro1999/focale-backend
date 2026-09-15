@@ -314,7 +314,7 @@ export const NetworkingPushSchema = z.object({
   }),
 });
 export const NetworkingCheckinSchema = z
-  .object({ token: z.string().min(16).max(512) })
+  .object({ token: z.string().min(16).max(2048) })
   .strict();
 export interface NetworkingProfile {
   id: string;
@@ -495,7 +495,7 @@ export const NetworkingMfaCodeSchema = z
 
 export const NetworkingBadgeVerifySchema = z
   .object({
-    token: z.string().min(16).max(512),
+    token: z.string().min(16).max(2048),
     accessId: z.string().uuid().optional(),
   })
   .strict();
