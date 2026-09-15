@@ -25,6 +25,7 @@ const copy = {
     MEETING_DECLINE: "The meeting request was declined",
     MEETING_CANCEL: "Your meeting was cancelled",
     MEETING_RESCHEDULE: "A new meeting time was proposed",
+    MEETING_RESCHEDULE_DECLINED: "The proposed new time was declined; the original meeting is maintained",
     MEETING_REMINDER_DAY: "Your meeting is tomorrow",
     MEETING_REMINDER_HOUR: "Your meeting starts within an hour",
     MEETING_COMPLETED: "Your meeting attendance is confirmed",
@@ -71,6 +72,7 @@ const copy = {
     MEETING_DECLINE: "La demande de rendez-vous a été refusée",
     MEETING_CANCEL: "Votre rendez-vous a été annulé",
     MEETING_RESCHEDULE: "Un nouveau créneau a été proposé",
+    MEETING_RESCHEDULE_DECLINED: "Le nouveau créneau a été refusé ; le rendez-vous initial est maintenu",
     MEETING_REMINDER_DAY: "Votre rendez-vous a lieu demain",
     MEETING_REMINDER_HOUR: "Votre rendez-vous commence dans une heure",
     MEETING_COMPLETED: "Votre rencontre a été confirmée",
@@ -117,6 +119,7 @@ const copy = {
     MEETING_DECLINE: "تم رفض طلب اللقاء",
     MEETING_CANCEL: "تم إلغاء موعدك",
     MEETING_RESCHEDULE: "تم اقتراح وقت جديد للقاء",
+    MEETING_RESCHEDULE_DECLINED: "تم رفض الوقت المقترح الجديد؛ يبقى الموعد الأصلي مؤكّدًا",
     MEETING_REMINDER_DAY: "موعدك غداً",
     MEETING_REMINDER_HOUR: "يبدأ موعدك خلال ساعة",
     MEETING_COMPLETED: "تم تأكيد حضور اللقاء",
@@ -316,10 +319,13 @@ export function renderNetworkingNotification(
   const words = copy[lang];
   const meeting = ctx.meeting;
   const eventType = normalizedType(type);
-  const normalized = eventType === "MEETING_ACCEPT" && meeting?.status === "PENDING_ALLOCATION"
-    ? "MEETING_PENDING_ALLOCATION"
-    : eventType === "MEETING_ACCEPT" && meeting?.status === "PENDING"
-      ? "MEETING_REQUEST" : eventType;
+  let normalized = eventType;
+  if (eventType === "MEETING_ACCEPT" && meeting?.status === "PENDING_ALLOCATION")
+    normalized = "MEETING_PENDING_ALLOCATION";
+  else if (eventType === "MEETING_ACCEPT" && meeting?.status === "PENDING")
+    normalized = "MEETING_REQUEST";
+  else if (eventType === "MEETING_DECLINE" && meeting?.status === "CONFIRMED")
+    normalized = "MEETING_RESCHEDULE_DECLINED";
   const title = words[normalized as keyof typeof words] ?? words.MESSAGE;
   const slug = encodeURIComponent(ctx.event?.slug ?? "");
   const relativeHref = `/e/${slug}/${type.startsWith("MEETING_") ? "agenda" : ctx.connection ? `connections/${encodeURIComponent(ctx.connection.id)}` : normalized === "APPROVAL" ? "profile" : "notifications"}`;

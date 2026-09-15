@@ -55,7 +55,8 @@ Migration, verification and external acceptance limits are recorded below.
 - B2B-007: saved-template preview replaces catalog variables with escaped sample values.
 - B2B-008: malformed/expired badge validation returns HTTP 400 rather than organizer-session HTTP 401.
 - B2B-009: accepted product behavior. The user explicitly retains “Inclus” for free optional items; it means no extra charge if selected, not automatic selection.
-- B2B-010: backend rejects meeting opening hours outside the event boundaries before saving.
+- B2B-010: backend rejects meeting opening hours outside the event boundaries before saving; QA passed.
+- B2B-011: shared meeting notices use neutral wording and participation updates are localized in FR/EN/AR (QA passed). Declining a reschedule proposal now explicitly preserves the original confirmed meeting, distinct from declining the meeting itself; a native worker regression verifies email and in-app wording.
 - Deployment: the image now supports `APP=all` to supervise API and worker in one existing service. It forwards shutdown signals and stops the service if either child exits. The previous default API-only process did not run networking/email jobs. This mode is deployed; both processes and indexing are running.
 - Presentation: localize networking-auth unavailability; replace dummy contact links with organizer-contact guidance.
 

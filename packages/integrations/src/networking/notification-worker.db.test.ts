@@ -460,6 +460,34 @@ describe.runIf(enabled)("networking worker real isolated database", () => {
       Buffer.from(arabic.attachments![0].content, "base64").toString(),
     ).toContain(`SEQUENCE:${m.revision}`);
   });
+  it("distinguishes a rejected new time from a declined meeting in email and in-app notices", async () => {
+    const f = await fixture();
+    const confirmed = await meeting(f, 4, 6);
+    const declined = await meeting(f, 5, 6);
+    await store().update("meetings", { id: declined.id }, { status: "DECLINED" });
+    const send = vi.fn(async (_input: SendEmailInput) => ({ success: true }));
+    const notices: { notification: NetworkingRow<"notifications">; row: NetworkingRow<"deliveries"> }[] = [];
+    for (const m of [confirmed, declined]) {
+      const notification = await store().insert("notifications", {
+        eventId: f.eventId, profileId: f.people[0].id,
+        type: "MEETING_DECLINE", title: "Meeting update", body: "",
+      });
+      const row = await delivery(f, "MEETING_DECLINE", {
+        meetingId: m.id, revision: m.revision, notificationId: notification.id,
+      });
+      notices.push({ notification, row });
+    }
+    expect((await processNetworkingDeliveries({ eventId: f.eventId, email: emailProvider(send) })).sent).toBe(2);
+    const reschedule = send.mock.calls.find(([input]) => input.trackingId === notices[0].row.id)![0];
+    const rejection = send.mock.calls.find(([input]) => input.trackingId === notices[1].row.id)![0];
+    expect(reschedule.subject).toContain("Le nouveau créneau a été refusé");
+    expect(reschedule.plainText).toContain("le rendez-vous initial est maintenu");
+    expect(reschedule.plainText).toContain("Statut: Confirmé");
+    expect(rejection.subject).toContain("La demande de rendez-vous a été refusée");
+    expect(rejection.plainText).toContain("Statut: Refusé");
+    expect((await store().one("notifications", { id: notices[0].notification.id }))?.title)
+      .toContain("le rendez-vous initial est maintenu");
+  });
   it("sends valid OTPs without retaining encrypted or plaintext secrets in delivery payloads or email logs", async () => {
     const f = await fixture();
     await store().update(
