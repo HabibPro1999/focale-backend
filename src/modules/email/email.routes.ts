@@ -21,9 +21,12 @@ import {
 } from "./email-variable.service.js";
 import { sendEmail } from "./email-sender.service.js";
 import {
+  queueBulkAbstractEmails,
   queueBulkEmails,
   queueBulkSponsorEmails,
 } from "./email-queue.service.js";
+import { listAbstractsForBulkEmail } from "@modules/abstracts/abstracts.admin.service.js";
+import { buildAbstractBulkEmailContext } from "@modules/abstracts/abstracts.email-context.js";
 import {
   buildBatchEmailContext,
   buildEmailContextWithAccess,
@@ -393,7 +396,14 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
     },
     async (request, reply) => {
       const { eventId, templateId } = request.params;
-      const { audience, registrationIds, filters } = request.body;
+      const {
+        audience,
+        registrationIds,
+        filters,
+        abstractIds,
+        abstractFilters,
+        dedupeByEmail,
+      } = request.body;
 
       // Verify event access
       const event = await getEventById(eventId);
@@ -487,6 +497,7 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
           return reply.send({
             success: true,
             queued: 0,
+            skipped: 0,
             message: "No sponsors found for this event",
           });
         }
@@ -495,6 +506,44 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
         return reply.send({
           success: true,
           queued,
+          skipped: 0,
+          message: `${queued} emails queued for sending`,
+        });
+      }
+
+      // ── Abstract submitter audience ───────────────────────────────────
+      if (audience === "abstracts") {
+        await assertClientModuleEnabled(event.clientId, "abstracts");
+
+        const { recipients, skipped } = await listAbstractsForBulkEmail(
+          eventId,
+          { abstractIds, filters: abstractFilters, dedupeByEmail },
+        );
+
+        if (recipients.length === 0) {
+          return reply.send({
+            success: true,
+            queued: 0,
+            skipped,
+            message: "No abstract submitters matched the criteria",
+          });
+        }
+
+        const queued = await queueBulkAbstractEmails(
+          templateId,
+          recipients.map((abstract) => ({
+            abstractId: abstract.id,
+            email: abstract.authorEmail,
+            recipientName:
+              `${abstract.authorFirstName} ${abstract.authorLastName}`.trim(),
+            contextSnapshot: buildAbstractBulkEmailContext(abstract),
+          })),
+        );
+
+        return reply.send({
+          success: true,
+          queued,
+          skipped,
           message: `${queued} emails queued for sending`,
         });
       }
@@ -551,6 +600,7 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
         return reply.send({
           success: true,
           queued: 0,
+          skipped: 0,
           message: "No recipients matched the criteria",
         });
       }
@@ -561,6 +611,7 @@ export async function emailRoutes(app: AppInstance): Promise<void> {
       return reply.send({
         success: true,
         queued,
+        skipped: 0,
         message: `${queued} emails queued for sending`,
       });
     },

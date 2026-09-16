@@ -32,12 +32,23 @@ export interface AbstractForEmail {
   };
 }
 
+export interface AbstractForBulkEmail extends AbstractForEmail {
+  authorPhone: string;
+  authorAffiliation: string | null;
+  event: AbstractForEmail["event"] & {
+    startDate: Date;
+    endDate: Date;
+    location: string | null;
+    client: { name: string; email: string | null; phone: string | null };
+  };
+}
+
 const STATUS_LABELS = ABSTRACT_STATUS_LABELS_FR as Record<string, string>;
 const TYPE_LABELS = ABSTRACT_TYPE_LABELS_FR as Record<string, string>;
 
 export function buildAbstractEmailContext(
   abstract: AbstractForEmail,
-  _trigger: AbstractEmailTrigger,
+  _trigger?: AbstractEmailTrigger,
 ): Record<string, string> {
   const baseUrl = abstract.linkBaseUrl || "https://events.example.com";
   const slug = abstract.event.slug || "";
@@ -84,5 +95,29 @@ export function buildAbstractEmailContext(
     // Back-compat alias for templates authored before explicit date variables existed.
     deadlineDate: editingDeadline,
     committeeComments,
+  };
+}
+
+// Adds the base registrant variable ids so MANUAL templates ("Bonjour {{firstName}}") render for abstract authors.
+export function buildAbstractBulkEmailContext(
+  abstract: AbstractForBulkEmail,
+): Record<string, string> {
+  const context = buildAbstractEmailContext(abstract);
+
+  return {
+    ...context,
+    firstName: abstract.authorFirstName,
+    lastName: abstract.authorLastName,
+    fullName: context.authorName,
+    email: abstract.authorEmail,
+    phone: abstract.authorPhone,
+    authorAffiliation: abstract.authorAffiliation ?? "",
+    eventName: abstract.event.name,
+    eventDate: formatDate(abstract.event.startDate),
+    eventEndDate: formatDate(abstract.event.endDate),
+    eventLocation: abstract.event.location ?? "",
+    organizerName: abstract.event.client.name,
+    organizerEmail: abstract.event.client.email ?? "",
+    organizerPhone: abstract.event.client.phone ?? "",
   };
 }

@@ -3,6 +3,7 @@ import {
   AbstractFinalType,
   AbstractStatus,
   Prisma,
+  type AbstractRequestedType,
   type AbstractReview,
 } from "@/generated/prisma/client.js";
 import {
@@ -18,6 +19,10 @@ import type {
   FinalizeAbstractInput,
   ListAbstractsQuery,
 } from "./abstracts.schema.js";
+import type {
+  AbstractForBulkEmail,
+  AbstractForEmail,
+} from "./abstracts.email-context.js";
 import { FINAL_STATUSES, CODE_SUFFIX } from "./abstracts.constants.js";
 
 type AbstractContent = { title?: unknown } & Record<string, unknown>;
@@ -246,6 +251,142 @@ export async function listAdminAbstracts(
     limit,
     offset,
   };
+}
+
+export interface ListAbstractsForBulkEmailOptions {
+  abstractIds?: string[];
+  filters?: {
+    status?: AbstractStatus[];
+    themeId?: string;
+    presentationType?: AbstractRequestedType;
+  };
+  dedupeByEmail?: boolean;
+}
+
+export async function listAbstractsForBulkEmail(
+  eventId: string,
+  options: ListAbstractsForBulkEmailOptions = {},
+): Promise<{ recipients: AbstractForBulkEmail[]; skipped: number }> {
+  const { abstractIds, filters, dedupeByEmail = true } = options;
+  const useIds = Boolean(abstractIds && abstractIds.length > 0);
+
+  const where: Prisma.AbstractWhereInput = useIds
+    ? { eventId, id: { in: abstractIds } }
+    : buildAdminAbstractsWhere(eventId, {
+        themeId: filters?.themeId,
+        presentationType: filters?.presentationType,
+      });
+
+  if (!useIds && filters?.status && filters.status.length > 0) {
+    where.status = { in: filters.status };
+  }
+
+  const [rows, event] = await Promise.all([
+    prisma.abstract.findMany({
+      where,
+      orderBy: { createdAt: "asc" },
+      select: {
+        id: true,
+        authorFirstName: true,
+        authorLastName: true,
+        authorAffiliation: true,
+        authorEmail: true,
+        authorEmailNormalized: true,
+        authorPhone: true,
+        content: true,
+        status: true,
+        requestedType: true,
+        finalType: true,
+        code: true,
+        editToken: true,
+        linkBaseUrl: true,
+      },
+    }),
+    prisma.event.findUnique({
+      where: { id: eventId },
+      select: {
+        name: true,
+        slug: true,
+        startDate: true,
+        endDate: true,
+        location: true,
+        client: { select: { name: true, email: true, phone: true } },
+        abstractConfig: {
+          select: {
+            submissionStartAt: true,
+            submissionDeadline: true,
+            editingDeadline: true,
+            scoringStartAt: true,
+            scoringDeadline: true,
+            finalFileDeadline: true,
+            finalFileUploadEnabled: true,
+          },
+        },
+      },
+    }),
+  ]);
+
+  if (!event) return { recipients: [], skipped: 0 };
+
+  const eventContext = {
+    name: event.name,
+    slug: event.slug,
+    startDate: event.startDate,
+    endDate: event.endDate,
+    location: event.location,
+    client: event.client,
+  };
+  const config = {
+    submissionStartAt: event.abstractConfig?.submissionStartAt ?? null,
+    submissionDeadline: event.abstractConfig?.submissionDeadline ?? null,
+    editingDeadline: event.abstractConfig?.editingDeadline ?? null,
+    scoringStartAt: event.abstractConfig?.scoringStartAt ?? null,
+    scoringDeadline: event.abstractConfig?.scoringDeadline ?? null,
+    finalFileDeadline: event.abstractConfig?.finalFileDeadline ?? null,
+    finalFileUploadEnabled:
+      event.abstractConfig?.finalFileUploadEnabled ?? false,
+  };
+
+  const recipients: AbstractForBulkEmail[] = [];
+  const seen = new Set<string>();
+  let skipped = 0;
+
+  for (const row of rows) {
+    const authorEmail = row.authorEmail.trim();
+    if (!authorEmail) {
+      skipped++;
+      continue;
+    }
+
+    if (dedupeByEmail) {
+      const key = row.authorEmailNormalized ?? authorEmail.toLowerCase();
+      if (seen.has(key)) {
+        skipped++;
+        continue;
+      }
+      seen.add(key);
+    }
+
+    recipients.push({
+      id: row.id,
+      authorFirstName: row.authorFirstName,
+      authorLastName: row.authorLastName,
+      authorAffiliation: row.authorAffiliation,
+      authorEmail,
+      authorPhone: row.authorPhone,
+      content: row.content as AbstractForEmail["content"],
+      status: row.status,
+      requestedType: row.requestedType,
+      finalType: row.finalType,
+      code: row.code,
+      editToken: row.editToken,
+      linkBaseUrl: row.linkBaseUrl,
+      event: eventContext,
+      config,
+    });
+  }
+
+  return { recipients, skipped };
 }
 
 export async function getAdminAbstract(eventId: string, abstractId: string) {

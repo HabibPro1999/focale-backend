@@ -12,6 +12,7 @@ import {
   queueTriggeredEmail,
   queueSponsorshipEmail,
   queueBulkEmails,
+  queueBulkAbstractEmails,
   processEmailQueue,
   recoverStaleEmailLeases,
   updateEmailStatusFromWebhook,
@@ -494,6 +495,65 @@ describe("Email Queue Service", () => {
     });
   });
 
+  describe("queueBulkAbstractEmails", () => {
+    it("should queue snapshot-only logs linked to the abstract", async () => {
+      prismaMock.emailLog.createMany.mockResolvedValue({ count: 2 });
+
+      const result = await queueBulkAbstractEmails(templateId, [
+        {
+          abstractId: "abstract-1",
+          email: "ada@example.com",
+          recipientName: "Ada Lovelace",
+          contextSnapshot: { firstName: "Ada", congressName: "Congress" },
+        },
+        {
+          abstractId: "abstract-2",
+          email: "alan@example.com",
+          recipientName: "",
+          contextSnapshot: { firstName: "Alan" },
+        },
+      ]);
+
+      expect(result).toBe(2);
+      expect(prismaMock.emailLog.createMany).toHaveBeenCalledWith({
+        data: [
+          {
+            templateId,
+            abstractId: "abstract-1",
+            recipientEmail: "ada@example.com",
+            recipientName: "Ada Lovelace",
+            subject: "",
+            status: "QUEUED",
+            contextSnapshot: { firstName: "Ada", congressName: "Congress" },
+          },
+          {
+            templateId,
+            abstractId: "abstract-2",
+            recipientEmail: "alan@example.com",
+            recipientName: null,
+            subject: "",
+            status: "QUEUED",
+            contextSnapshot: { firstName: "Alan" },
+          },
+        ],
+      });
+    });
+
+    it("should skip blank emails and return 0 when nothing remains", async () => {
+      const result = await queueBulkAbstractEmails(templateId, [
+        {
+          abstractId: "abstract-1",
+          email: "   ",
+          recipientName: "Blank",
+          contextSnapshot: {},
+        },
+      ]);
+
+      expect(result).toBe(0);
+      expect(prismaMock.emailLog.createMany).not.toHaveBeenCalled();
+    });
+  });
+
   describe("processEmailQueue", () => {
     it("should process queued emails successfully", async () => {
       const mockClient = createMockClient();
@@ -528,6 +588,44 @@ describe("Email Queue Service", () => {
       expect(result.sent).toBe(1);
       expect(result.failed).toBe(0);
       expect(result.skipped).toBe(0);
+    });
+
+    it("should send snapshot-only abstract logs with no registration and no abstract trigger", async () => {
+      const mockTemplate = createMockEmailTemplate({
+        isActive: true,
+        category: "MANUAL",
+        trigger: null,
+      });
+
+      const mockEmailLog: EmailLogWithRelations = {
+        ...createMockEmailLog({
+          status: "QUEUED",
+          registrationId: null,
+          abstractId: "abstract-1",
+          abstractTrigger: null,
+          contextSnapshot: {
+            firstName: "Ada",
+            eventName: "Congress",
+          } as EmailLog["contextSnapshot"],
+        }),
+        template: mockTemplate,
+        registration: null,
+      };
+
+      mockClaimedEmails([mockEmailLog]);
+      vi.mocked(sendEmail).mockResolvedValue({
+        success: true,
+        messageId: "msg-abstract",
+      });
+
+      const result = await processEmailQueue(10);
+
+      expect(result.sent).toBe(1);
+      expect(result.skipped).toBe(0);
+      expect(buildEmailContextWithAccess).not.toHaveBeenCalled();
+      expect(sendEmail).toHaveBeenCalledWith(
+        expect.objectContaining({ fromName: "Congress" }),
+      );
     });
 
     it("should skip emails without template", async () => {

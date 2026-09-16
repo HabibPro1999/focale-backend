@@ -9,6 +9,7 @@ import {
   finalizeAbstract,
   reopenAbstract,
   buildAdminAbstractsWhere,
+  listAbstractsForBulkEmail,
 } from "./abstracts.admin.service.js";
 
 const eventId = "event-1";
@@ -289,5 +290,144 @@ describe("buildAdminAbstractsWhere", () => {
       status: "ACCEPTED",
     });
     expect(where.AND).toBeUndefined();
+  });
+});
+
+describe("listAbstractsForBulkEmail", () => {
+  function makeRow(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "abstract-1",
+      authorFirstName: "Ada",
+      authorLastName: "Lovelace",
+      authorAffiliation: "Analytical Institute",
+      authorEmail: "ada@example.com",
+      authorEmailNormalized: "ada@example.com",
+      authorPhone: "+21612345678",
+      content: { mode: "FREE_TEXT", title: "Computing" },
+      status: AbstractStatus.ACCEPTED,
+      requestedType: "ORAL_COMMUNICATION",
+      finalType: null,
+      code: null,
+      editToken: "token-1",
+      linkBaseUrl: "https://events.example.com",
+      ...overrides,
+    };
+  }
+
+  const event = {
+    name: "Congress",
+    slug: "congress",
+    startDate: new Date("2026-04-20T00:00:00.000Z"),
+    endDate: new Date("2026-04-22T00:00:00.000Z"),
+    location: "Tunis",
+    client: { name: "Client", email: "contact@client.tn", phone: "+216" },
+    abstractConfig: null,
+  };
+
+  it("dedupes by normalized author email keeping the oldest abstract", async () => {
+    prismaMock.abstract.findMany.mockResolvedValue([
+      makeRow({ id: "abstract-1" }),
+      makeRow({ id: "abstract-2" }),
+      makeRow({
+        id: "abstract-3",
+        authorEmail: "alan@example.com",
+        authorEmailNormalized: "alan@example.com",
+      }),
+    ] as any);
+    prismaMock.event.findUnique.mockResolvedValue(event as any);
+
+    const result = await listAbstractsForBulkEmail(eventId);
+
+    expect(result.recipients.map((r) => r.id)).toEqual([
+      "abstract-1",
+      "abstract-3",
+    ]);
+    expect(result.skipped).toBe(1);
+    expect(prismaMock.abstract.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { eventId },
+        orderBy: { createdAt: "asc" },
+      }),
+    );
+  });
+
+  it("keeps duplicates when dedupeByEmail is disabled and skips blank emails", async () => {
+    prismaMock.abstract.findMany.mockResolvedValue([
+      makeRow({ id: "abstract-1" }),
+      makeRow({ id: "abstract-2" }),
+      makeRow({
+        id: "abstract-3",
+        authorEmail: "   ",
+        authorEmailNormalized: null,
+      }),
+    ] as any);
+    prismaMock.event.findUnique.mockResolvedValue(event as any);
+
+    const result = await listAbstractsForBulkEmail(eventId, {
+      dedupeByEmail: false,
+    });
+
+    expect(result.recipients.map((r) => r.id)).toEqual([
+      "abstract-1",
+      "abstract-2",
+    ]);
+    expect(result.skipped).toBe(1);
+  });
+
+  it("constrains explicit abstract ids to the event and ignores filters", async () => {
+    prismaMock.abstract.findMany.mockResolvedValue([] as any);
+    prismaMock.event.findUnique.mockResolvedValue(event as any);
+
+    await listAbstractsForBulkEmail(eventId, {
+      abstractIds: ["abstract-9"],
+      filters: { status: [AbstractStatus.REJECTED], themeId },
+    });
+
+    expect(prismaMock.abstract.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { eventId, id: { in: ["abstract-9"] } },
+      }),
+    );
+  });
+
+  it("applies status, theme and presentation type filters", async () => {
+    prismaMock.abstract.findMany.mockResolvedValue([] as any);
+    prismaMock.event.findUnique.mockResolvedValue(event as any);
+
+    await listAbstractsForBulkEmail(eventId, {
+      filters: {
+        status: [AbstractStatus.ACCEPTED, AbstractStatus.PENDING],
+        themeId,
+        presentationType: "POSTER",
+      },
+    });
+
+    expect(prismaMock.abstract.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          eventId,
+          themes: { some: { themeId } },
+          status: { in: [AbstractStatus.ACCEPTED, AbstractStatus.PENDING] },
+          AND: [
+            {
+              OR: [
+                { finalType: "POSTER" },
+                { finalType: null, requestedType: "POSTER" },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+  });
+
+  it("falls back to the event config defaults and exposes base variables", async () => {
+    prismaMock.abstract.findMany.mockResolvedValue([makeRow()] as any);
+    prismaMock.event.findUnique.mockResolvedValue(event as any);
+
+    const { recipients } = await listAbstractsForBulkEmail(eventId);
+
+    expect(recipients[0].config.finalFileUploadEnabled).toBe(false);
+    expect(recipients[0].event.client.name).toBe("Client");
   });
 });
