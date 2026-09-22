@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NetworkingConfigSchema } from "@app/contracts";
 import type { NetworkingRow, NetworkingStore } from "@app/db";
-const mocks = vi.hoisted(() => ({ one: vi.fn(), all: vi.fn(), update: vi.fn(), remove: vi.fn(), insert: vi.fn(), notify: vi.fn() }));
+const mocks = vi.hoisted(() => ({ one: vi.fn(), all: vi.fn(), insertAvailability: vi.fn(), allocationMeetings: vi.fn(), allocationReservations: vi.fn(), allocationTableUsage: vi.fn(), update: vi.fn(), remove: vi.fn(), insert: vi.fn(), notify: vi.fn() }));
 vi.mock("@app/db", async (original) => ({
   ...(await original<typeof import("@app/db")>()),
   networkingStore: () => mocks,
@@ -25,6 +25,9 @@ beforeEach(() => {
   row = { id: "meeting", eventId: "event", requesterId: "a", recipientId: "b", status: "CONFIRMED", startsAt: start, endsAt: new Date(+start + 1800000), expiresAt: start, revision: 1, message: "Original note", proposedStartsAt: null, proposalBy: null, requesterCheckedInAt: null, recipientCheckedInAt: null } as NetworkingRow<"meetings">;
   mocks.one.mockImplementation(async (kind: string) => kind === "meetings" ? row : kind === "profiles" ? { id: "b", firstName: "Bob", lastName: "B" } : null);
   mocks.all.mockResolvedValue([]);
+  mocks.allocationMeetings.mockResolvedValue([]);
+  mocks.allocationReservations.mockResolvedValue([]);
+  mocks.allocationTableUsage.mockResolvedValue([]);
   mocks.update.mockImplementation(async (_kind, _where, patch) => [row = { ...row, ...patch }]);
   service = new NetworkingMeetingsService({ currentParticipant: async () => ctx, target: async () => ({ id: "b" }) } as unknown as NetworkingService);
   vi.spyOn(service, "hydrate").mockImplementation(async (saved) => saved as any);
@@ -108,5 +111,28 @@ describe("NetworkingSocialService notification data", () => {
     mocks.all.mockResolvedValue([row]);
     await social().block(ctx, "b");
     expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({ profileId: "a", data: expect.objectContaining({ meetingId: row.id, startsAt: start.toISOString(), status: "CANCELLED", counterpartName: "Bob B" }) }), {});
+  });
+});
+
+
+describe("bounded allocation and availability", () => {
+  it("saves normalized availability in bulk inside the transaction", async () => {
+    await service.saveAvailability(ctx, [start.toISOString(), start.toISOString()]);
+    expect(mocks.insertAvailability).toHaveBeenCalledWith([{ eventId: "event", profileId: "a", startsAt: start }]);
+    expect(mocks.insert).not.toHaveBeenCalled();
+  });
+  it("uses candidate windows and historical aggregated table usage without loading history", async () => {
+    vi.spyOn(service, "availableAt").mockResolvedValue(undefined);
+    mocks.all.mockImplementation(async (kind) => kind === "tables" ? [
+      { id: "busy", name: "A", kind: "TABLE" }, { id: "quiet", name: "B", kind: "TABLE" },
+    ] : []);
+    // Completed meetings remain part of the historical balancing count.
+    mocks.allocationTableUsage.mockResolvedValue([{ tableId: "busy", count: 4 }, { tableId: "quiet", count: 0 }]);
+    const result = await service.reserve({ ...ctx, config: { ...ctx.config, autoAssignTables: true } }, row, start, row.endsAt, mocks as unknown as NetworkingStore);
+    expect(result.tableId).toBe("quiet");
+    expect(mocks.allocationMeetings).toHaveBeenCalledWith("event", start, row.endsAt);
+    expect(mocks.allocationReservations).toHaveBeenCalledWith("event", start, row.endsAt);
+    expect(mocks.allocationTableUsage).toHaveBeenCalledWith("event");
+    expect(mocks.all.mock.calls.some(([kind]) => ["meetings", "reservations"].includes(kind))).toBe(false);
   });
 });

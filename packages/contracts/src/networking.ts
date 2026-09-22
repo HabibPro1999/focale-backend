@@ -195,6 +195,24 @@ export const NetworkingAdminProfileUpdateSchema =
     featured: z.boolean().optional(),
     standTableId: id.nullable().optional(),
   }).strict();
+/** Omit both fields for the one-release, unbounded legacy response. */
+export const NetworkingParticipantListQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  cursor: z.string().min(1).max(2048).regex(/^[A-Za-z0-9_-]+$/).optional(),
+});
+export type NetworkingParticipantListQuery = z.infer<typeof NetworkingParticipantListQuerySchema>;
+export const NetworkingParticipantCursorSchema = z.object({
+  version: z.literal(1),
+  scope: z.string().max(1024),
+  at: instant,
+  id,
+}).strict();
+export interface NetworkingParticipantPage<T> {
+  items: T[];
+  nextCursor: string | null;
+  total: number;
+}
+
 export const NetworkingListQuerySchema = z.object({
   viewId: id.optional(),
   company: z.string().max(200).optional(),
@@ -222,6 +240,15 @@ export const NetworkingListQuerySchema = z.object({
     .optional(),
   tableId: id.optional(),
 });
+/** Calendar uses the meeting's start date in the event timezone (same as the organizer list). */
+export const NetworkingCalendarQuerySchema = NetworkingListQuerySchema.pick({ status: true, tableId: true }).extend({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value => {
+    const timestamp = Date.parse(`${value}T00:00:00Z`);
+    return Number.isFinite(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === value;
+  }, "Invalid calendar date"),
+});
+export type NetworkingCalendarQuery = z.infer<typeof NetworkingCalendarQuerySchema>;
+
 export const NetworkingOtpRequestSchema = z
   .object({
     email: z
@@ -292,7 +319,17 @@ export const NetworkingSpaceSchema = z.object({
   location: z.string().trim().max(200).default(""),
   active: z.boolean().default(true),
 }).strict();
-export const NetworkingSpaceUpdateSchema = NetworkingSpaceSchema.partial();
+const networkingSpacePatchSchema = NetworkingSpaceSchema.partial().strict();
+// Preserve supplied keys: Zod 4 partial() otherwise injects create defaults.
+export const NetworkingSpaceUpdateSchema = z.unknown().transform((input, ctx) => {
+  const parsed = networkingSpacePatchSchema.safeParse(input);
+  if (!parsed.success) {
+    for (const issue of parsed.error.issues) ctx.addIssue({ ...issue });
+    return z.NEVER;
+  }
+  const keys = new Set(Object.keys(input as object));
+  return Object.fromEntries(Object.entries(parsed.data).filter(([key]) => keys.has(key))) as z.infer<typeof networkingSpacePatchSchema>;
+});
 export type NetworkingSpaceInput = z.infer<typeof NetworkingSpaceSchema>;
 export interface NetworkingSpace extends NetworkingSpaceInput {
   id: string;
@@ -311,7 +348,17 @@ export const NetworkingTableSchema = z
     representativeIds: z.array(id).max(500).optional(),
   })
   .strict();
-export const NetworkingTableUpdateSchema = NetworkingTableSchema.partial();
+const networkingTablePatchSchema = NetworkingTableSchema.partial().strict();
+// Preserve supplied keys: Zod 4 partial() otherwise injects create defaults.
+export const NetworkingTableUpdateSchema = z.unknown().transform((input, ctx) => {
+  const parsed = networkingTablePatchSchema.safeParse(input);
+  if (!parsed.success) {
+    for (const issue of parsed.error.issues) ctx.addIssue({ ...issue });
+    return z.NEVER;
+  }
+  const keys = new Set(Object.keys(input as object));
+  return Object.fromEntries(Object.entries(parsed.data).filter(([key]) => keys.has(key))) as z.infer<typeof networkingTablePatchSchema>;
+});
 export type NetworkingTableInput = z.infer<typeof NetworkingTableSchema>;
 export const NetworkingNotificationReadSchema = z
   .object({ ids: z.array(id).max(100).optional() })

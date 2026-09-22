@@ -1,3 +1,5 @@
+import { networkingCalendarDay } from "./networking.calendar";
+import { NetworkingCalendarQuerySchema, type NetworkingCalendarQuery } from "@app/contracts";
 import { randomUUID } from "node:crypto";
 import { NetworkingInventoryService } from "./networking.inventory.service";
 import { networkingAnalytics } from "./networking.analytics";
@@ -295,6 +297,19 @@ export class NetworkingAdminService {
     return this.inventory.saveTable(eventId, input, actorId, id);
   }
   removeTable(eventId: string, id: string, actorId: string) { return this.inventory.removeTable(eventId, id, actorId); }
+  async calendar(eventId: string, input: NetworkingCalendarQuery) {
+    const parsed = NetworkingCalendarQuerySchema.safeParse(input);
+    if (!parsed.success) throw new BadRequestException({ code: "NETWORKING_VALIDATION", message: "Invalid calendar query" });
+    const query = parsed.data;
+    const { timezone } = await getNetworkingConfig(eventId);
+    const { start, end } = networkingCalendarDay(query.date, timezone);
+    await this.meetings.expire(eventId);
+    const rows = await networkingStore().calendarMeetings(eventId, start, end, query);
+    if (rows.length > 5000) throw new BadRequestException({
+      code: "NETWORKING_VALIDATION", message: "Calendar exceeds 5000 meetings. Use the paginated list.",
+    });
+    return { date: query.date, timezone, items: await this.meetings.hydrateCalendar(eventId, rows) };
+  }
   async listMeetings(
     eventId: string,
     query: {

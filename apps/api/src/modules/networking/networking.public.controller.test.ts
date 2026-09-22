@@ -50,3 +50,21 @@ it("returns notification data unchanged for participant localization", async () 
   expect(await controller.notifications("event", { headers: {} } as FastifyRequest, { page: 1, limit: 30, sort: "recommended" })).toEqual(payload);
   expect(mocks.notifications).toHaveBeenCalledWith("e", "p", 1, 30);
 });
+
+it.each(["connections", "listMeetings"] as const)("%s authenticates the participant and forwards pagination unchanged", async (method) => {
+  const ctx = { event: { id: "event" }, profile: { id: "self" } };
+  const participant = vi.fn().mockResolvedValue(ctx);
+  const list = vi.fn().mockResolvedValue({ items: [], total: 0, nextCursor: null });
+  const controller = new NetworkingPublicController(
+    {} as NetworkingUploadsService, { participant } as unknown as NetworkingService,
+    { connections: list } as unknown as NetworkingSocialService,
+    { list } as unknown as NetworkingMeetingsService, {} as NetworkingExportsService,
+  );
+  const query = { limit: 50, cursor: "opaque" };
+  expect(await controller[method]("slug", { headers: { authorization: "Bearer token" } } as FastifyRequest, query)).toEqual({ items: [], total: 0, nextCursor: null });
+  expect(participant).toHaveBeenCalledWith("slug", "Bearer token");
+  expect(list).toHaveBeenCalledWith(ctx, query);
+  participant.mockRejectedValueOnce(new Error("ineligible"));
+  await expect(controller[method]("slug", { headers: {} } as FastifyRequest, {})).rejects.toThrow("ineligible");
+  expect(list).toHaveBeenCalledOnce();
+});

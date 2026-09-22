@@ -1,3 +1,5 @@
+import type { NetworkingParticipantListQuery } from "@app/contracts";
+import { participantPagination } from "./networking.pagination";
 import {
   BadRequestException,
   ForbiddenException,
@@ -7,6 +9,7 @@ import {
 import {
   listNetworkingMessages,
   listNetworkingConnectionSummaries,
+  countNetworkingConnectionSummaries,
   markNetworkingMessageNotificationsRead,
   createNetworkingNotification,
   networkingStore,
@@ -137,10 +140,18 @@ export class NetworkingSocialService {
       return { matched: true, connectionId: connection.id };
     });
   }
-  async connections(ctx: NetworkingContext) {
-    const rows = await listNetworkingConnectionSummaries(ctx.event.id, ctx.profile.id, ctx.config.eligiblePaymentStatuses);
-    const items = rows.map(row => ({ ...row, profile: networkingPublicProfile(row.profile) }));
-    return { items, total: items.length };
+  async connections(ctx: NetworkingContext, query: NetworkingParticipantListQuery = {}) {
+    const page = participantPagination("connections", ctx, query);
+    const rows = await listNetworkingConnectionSummaries(ctx.event.id, ctx.profile.id, ctx.config.eligiblePaymentStatuses, page);
+    const visibleRows = page ? rows.slice(0, page.limit) : rows;
+    const items = visibleRows.map(row => ({ ...row, profile: networkingPublicProfile(row.profile) }));
+    if (!page) return { items, total: items.length };
+    const last = visibleRows.at(-1);
+    return {
+      items,
+      total: await countNetworkingConnectionSummaries(ctx.event.id, ctx.profile.id, ctx.config.eligiblePaymentStatuses),
+      nextCursor: rows.length > page.limit && last ? page.cursor(last.createdAt, last.id) : null,
+    };
   }
   async messages(
     ctx: NetworkingContext,

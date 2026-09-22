@@ -11,11 +11,58 @@ import {
 } from "../schema/networking";
 import { registrations } from "../schema/registrations";
 
+export interface NetworkingParticipantPage {
+  limit: number;
+  after?: { at: Date; id: string };
+}
+
+function connectionVisibility(eventId: string, profileId: string, paymentStatuses: readonly string[]) {
+  return and(
+        eq(connections.eventId, eventId),
+        eq(profiles.eventId, eventId),
+        eq(registrations.eventId, eventId),
+        or(
+          eq(connections.profileAId, profileId),
+          eq(connections.profileBId, profileId),
+        ),
+        eq(profiles.status, "ACTIVE"),
+        eq(profiles.consent, true),
+        sql`${profiles.withdrawnAt} IS NULL`,
+        sql`${registrations.networkingOptIn} IS DISTINCT FROM false`,
+        inArray(registrations.paymentStatus, [
+          ...paymentStatuses,
+        ] as (typeof registrations.$inferSelect.paymentStatus)[]),
+        sql`lower(${profiles.email})<>(SELECT lower(email) FROM networking_profiles WHERE id=${profileId} AND event_id=${eventId})`,
+        sql`NOT EXISTS (SELECT 1 FROM networking_blocks b WHERE b.event_id=${eventId} AND
+        ((b.profile_id=${profileId} AND b.target_id=${profiles.id}) OR (b.target_id=${profileId} AND b.profile_id=${profiles.id})))`,
+      );
+}
+
+export async function countNetworkingConnectionSummaries(eventId: string, profileId: string, paymentStatuses: readonly string[]) {
+  const [row] = await getDb().select({ total: sql<number>`count(*)::int`.mapWith(Number) })
+    .from(connections)
+    .innerJoin(profiles, eq(profiles.id, sql`CASE WHEN ${connections.profileAId}=${profileId} THEN ${connections.profileBId} ELSE ${connections.profileAId} END`))
+    .innerJoin(registrations, eq(registrations.id, profiles.registrationId))
+    .where(connectionVisibility(eventId, profileId, paymentStatuses));
+  return row?.total ?? 0;
+}
+
+function participantMeetingsScope(eventId: string, profileId: string) {
+  return and(eq(meetings.eventId, eventId), or(eq(meetings.requesterId, profileId), eq(meetings.recipientId, profileId)));
+}
+
+export async function countNetworkingParticipantMeetings(eventId: string, profileId: string) {
+  const [row] = await getDb().select({ total: sql<number>`count(*)::int`.mapWith(Number) })
+    .from(meetings).where(participantMeetingsScope(eventId, profileId));
+  return row?.total ?? 0;
+}
+
 /** One scoped query for connection previews; never load the event's message history. */
 export async function listNetworkingConnectionSummaries(
   eventId: string,
   profileId: string,
   paymentStatuses: readonly string[],
+  page?: NetworkingParticipantPage,
 ) {
   const db = getDb();
   const latest = db
@@ -31,7 +78,7 @@ export async function listNetworkingConnectionSummaries(
     .limit(1)
     .as("latest_message");
   const readAt = sql`CASE WHEN ${connections.profileAId}=${profileId} THEN ${connections.readAAt} ELSE ${connections.readBAt} END`;
-  return db
+  const query = db
     .select({
       id: connections.id,
       profile: getTableColumns(profiles),
@@ -60,49 +107,31 @@ export async function listNetworkingConnectionSummaries(
     .innerJoin(registrations, eq(registrations.id, profiles.registrationId))
     .leftJoinLateral(latest, sql`true`)
     .where(
-      and(
-        eq(connections.eventId, eventId),
-        eq(profiles.eventId, eventId),
-        eq(registrations.eventId, eventId),
-        or(
-          eq(connections.profileAId, profileId),
-          eq(connections.profileBId, profileId),
-        ),
-        eq(profiles.status, "ACTIVE"),
-        eq(profiles.consent, true),
-        sql`${profiles.withdrawnAt} IS NULL`,
-        sql`${registrations.networkingOptIn} IS DISTINCT FROM false`,
-        inArray(registrations.paymentStatus, [
-          ...paymentStatuses,
-        ] as (typeof registrations.$inferSelect.paymentStatus)[]),
-        sql`lower(${profiles.email})<>(SELECT lower(email) FROM networking_profiles WHERE id=${profileId} AND event_id=${eventId})`,
-        sql`NOT EXISTS (SELECT 1 FROM networking_blocks b WHERE b.event_id=${eventId} AND
-        ((b.profile_id=${profileId} AND b.target_id=${profiles.id}) OR (b.target_id=${profileId} AND b.profile_id=${profiles.id})))`,
-      ),
+      and(connectionVisibility(eventId, profileId, paymentStatuses), page?.after
+        ? sql`(${connections.createdAt}, ${connections.id}) < (${page.after.at.toISOString()}, ${page.after.id})`
+        : undefined),
     )
-    .orderBy(
-      sql`coalesce(${latest.createdAt},${connections.createdAt}) DESC`,
-      connections.id,
-    );
+    .orderBy(...(page
+      ? [desc(connections.createdAt), desc(connections.id)]
+      : [sql`coalesce(${latest.createdAt},${connections.createdAt}) DESC`, connections.id]))
+    .$dynamic();
+  return page ? query.limit(page.limit + 1) : query;
 }
 
 export async function listNetworkingParticipantMeetings(
   eventId: string,
   profileId: string,
+  page?: NetworkingParticipantPage,
 ) {
-  return getDb()
+  const query = getDb()
     .select()
     .from(meetings)
-    .where(
-      and(
-        eq(meetings.eventId, eventId),
-        or(
-          eq(meetings.requesterId, profileId),
-          eq(meetings.recipientId, profileId),
-        ),
-      ),
-    )
-    .orderBy(meetings.startsAt, meetings.id);
+    .where(and(participantMeetingsScope(eventId, profileId), page?.after
+      ? sql`(${meetings.startsAt}, ${meetings.id}) > (${page.after.at.toISOString()}, ${page.after.id})`
+      : undefined))
+    .orderBy(meetings.startsAt, meetings.id)
+    .$dynamic();
+  return page ? query.limit(page.limit + 1) : query;
 }
 
 export async function markNetworkingMessageNotificationsRead(

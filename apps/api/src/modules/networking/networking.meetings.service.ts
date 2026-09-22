@@ -1,3 +1,5 @@
+import type { NetworkingParticipantListQuery } from "@app/contracts";
+import { participantPagination } from "./networking.pagination";
 import {
   BadRequestException,
   ConflictException,
@@ -9,6 +11,7 @@ import {
   createNetworkingNotification,
   expireNetworkingProposals,
   listNetworkingParticipantMeetings,
+  countNetworkingParticipantMeetings,
   networkingStore,
   networkingTransaction,
   type NetworkingRow,
@@ -61,10 +64,11 @@ export class NetworkingMeetingsService {
           ).map((v) => v.startsAt.toISOString()),
         )
       : new Set<string>();
-    const booked = await store.all("reservations", {
-      eventId: ctx.event.id,
-      resourceKey: `profile:${profileId}`,
-    });
+    const booked = availableSlots.length ? await store.allocationReservations(
+      ctx.event.id, new Date(Math.floor(Date.parse(availableSlots[0]) / 300_000) * 300_000),
+      new Date(Date.parse(availableSlots[availableSlots.length - 1]) + ctx.config.slotDurationMinutes * 60_000),
+      `profile:${profileId}`,
+    ) : [];
     return availableSlots.filter(
       (v) =>
         own.has(v) &&
@@ -115,12 +119,11 @@ export class NetworkingMeetingsService {
         eventId: ctx.event.id,
         profileId: ctx.profile.id,
       });
-      for (const slot of normalized)
-        await store.insert("availability", {
+      await store.insertAvailability(normalized.map(slot => ({
           eventId: ctx.event.id,
           profileId: ctx.profile.id,
           startsAt: new Date(slot),
-        });
+        })));
       await store.update(
         "profiles",
         { eventId: ctx.event.id, id: ctx.profile.id },
@@ -134,15 +137,23 @@ export class NetworkingMeetingsService {
     store = networkingStore(),
     admin = false,
     viewer?: NetworkingContext,
+    relations?: {
+      requester: NetworkingRow<"profiles"> | null;
+      recipient: NetworkingRow<"profiles"> | null;
+      table: (NetworkingRow<"tables"> & { representativeIds?: string[]; representatives?: Pick<NetworkingRow<"profiles">, "id" | "firstName" | "lastName" | "company">[] }) | null;
+      space: NetworkingRow<"spaces"> | null;
+    },
   ) {
-    const [requester, recipient, table] = await Promise.all([
+    const [requester, recipient, table] = relations
+      ? [relations.requester, relations.recipient, relations.table]
+      : await Promise.all([
       store.one("profiles", { eventId: row.eventId, id: row.requesterId }),
       store.one("profiles", { eventId: row.eventId, id: row.recipientId }),
       row.tableId
         ? store.one("tables", { eventId: row.eventId, id: row.tableId })
         : null,
     ]);
-    const space = table?.spaceId ? await store.one("spaces", { eventId: row.eventId, id: table.spaceId }) : null;
+    const space = relations ? relations.space : table?.spaceId ? await store.one("spaces", { eventId: row.eventId, id: table.spaceId }) : null;
     const publicProfile = async (profile: typeof requester) => {
       if (!profile || admin) return profile;
       if (!viewer) return null;
@@ -165,15 +176,50 @@ export class NetworkingMeetingsService {
       table: table ? { ...table, space } : null,
     };
   }
+  async hydrateCalendar(eventId: string, rows: NetworkingRow<"meetings">[]) {
+    if (!rows.length) return [];
+    const store = networkingStore();
+    const relations = await store.calendarRelations(eventId, rows);
+    const profiles = new Map(relations.profiles.map(profile => [profile.id, profile]));
+    const spaces = new Map(relations.spaces.map(space => [space.id, space]));
+    const representatives = new Map<string, typeof relations.profiles>();
+    for (const profile of relations.profiles) {
+      if (!profile.standTableId) continue;
+      const group = representatives.get(profile.standTableId) ?? [];
+      group.push(profile);
+      representatives.set(profile.standTableId, group);
+    }
+    const tables = new Map(relations.tables.map(table => {
+      const members = [...(representatives.get(table.id) ?? [])];
+      const owner = table.ownerProfileId ? profiles.get(table.ownerProfileId) : undefined;
+      if (owner && !members.some(profile => profile.id === owner.id)) members.push(owner);
+      return [table.id, { ...table, representativeIds: members.map(profile => profile.id),
+        representatives: members.map(({ id, firstName, lastName, company }) => ({ id, firstName, lastName, company })) }];
+    }));
+    return Promise.all(rows.map(row => {
+      const table = row.tableId ? tables.get(row.tableId) ?? null : null;
+      return this.hydrate(row, store, true, undefined, {
+        requester: profiles.get(row.requesterId) ?? null,
+        recipient: profiles.get(row.recipientId) ?? null,
+        table, space: table?.spaceId ? spaces.get(table.spaceId) ?? null : null,
+      });
+    }));
+  }
   async expire(eventId: string) {
     return networkingTransaction(eventId, (_store, db) => expireNetworkingProposals(eventId, db));
   }
-  async list(ctx: NetworkingContext) {
+  async list(ctx: NetworkingContext, query: NetworkingParticipantListQuery = {}) {
+    const page = participantPagination("meetings", ctx, query);
     await this.expire(ctx.event.id);
-    const rows = await listNetworkingParticipantMeetings(ctx.event.id, ctx.profile.id);
+    const rows = await listNetworkingParticipantMeetings(ctx.event.id, ctx.profile.id, page);
+    const visibleRows = page ? rows.slice(0, page.limit) : rows;
+    const items = await Promise.all(visibleRows.map((v) => this.hydrate(v, undefined, false, ctx)));
+    if (!page) return { items, total: rows.length };
+    const last = visibleRows.at(-1);
     return {
-      items: await Promise.all(rows.map((v) => this.hydrate(v, undefined, false, ctx))),
-      total: rows.length,
+      items,
+      total: await countNetworkingParticipantMeetings(ctx.event.id, ctx.profile.id),
+      nextCursor: rows.length > page.limit && last ? page.cursor(last.startsAt, last.id) : null,
     };
   }
   async meeting(ctx: NetworkingContext, id: string, store = networkingStore()) {
@@ -252,7 +298,7 @@ export class NetworkingMeetingsService {
       await this.availableAt(ctx, ctx.profile.id, dates.startsAt, store);
       await this.availableAt(ctx, input.profileId, dates.startsAt, store);
       const same = (
-        await store.all("meetings", { eventId: ctx.event.id })
+        await store.allocationMeetings(ctx.event.id, dates.startsAt, dates.endsAt)
       ).find(
         (m) =>
           ["PENDING", "CONFIRMED", "PENDING_ALLOCATION"].includes(m.status) &&
@@ -295,7 +341,8 @@ export class NetworkingMeetingsService {
       throw new ConflictException({ code: "NETWORKING_MEETING_LOCKED", message: "This proposal has expired" });
     await this.availableAt(ctx, row.requesterId, startsAt, store);
     await this.availableAt(ctx, row.recipientId, startsAt, store);
-    const meetings = await store.all("meetings", { eventId: ctx.event.id });
+    const quanta = resourceQuanta(startsAt, endsAt);
+    const meetings = await store.allocationMeetings(ctx.event.id, quanta[0], endsAt);
     // Expired proposals must not keep inventory locked until the next maintenance tick.
     for (const meeting of meetings) {
       if (meeting.status === "PENDING" && meeting.expiresAt <= new Date()) {
@@ -305,9 +352,8 @@ export class NetworkingMeetingsService {
         });
       }
     }
-    const quanta = resourceQuanta(startsAt, endsAt);
     const reservations = (
-      await store.all("reservations", { eventId: ctx.event.id })
+      await store.allocationReservations(ctx.event.id, quanta[0], endsAt)
     ).filter((v) => v.meetingId !== row.id);
     const occupied = new Set(reservations.map(reservation => `${reservation.resourceKey}:${reservation.startsAt.getTime()}`));
     const taken = (key: string) => quanta.some(quantum => occupied.has(`${key}:${quantum.getTime()}`));
@@ -341,8 +387,8 @@ export class NetworkingMeetingsService {
       if (assignedStand) tables = tables.filter((t) => t.id === assignedStand);
       // Ordinary tables are exclusive; each exhibitor representative has an independent station.
       const usage = new Map<string, number>();
-      for (const meeting of meetings) if (meeting.tableId && ["PENDING", "CONFIRMED", "PENDING_ALLOCATION", "COMPLETED"].includes(meeting.status))
-        usage.set(meeting.tableId, (usage.get(meeting.tableId) ?? 0) + 1);
+      for (const entry of await store.allocationTableUsage(ctx.event.id))
+        if (entry.tableId) usage.set(entry.tableId, entry.count);
       tables.sort((a, b) => Number(b.id === row.tableId) - Number(a.id === row.tableId) || (usage.get(a.id) ?? 0) - (usage.get(b.id) ?? 0) || a.name.localeCompare(b.name));
       tableId = tables[0]?.id ?? null;
       inventoryResource = tables[0] ? networkingInventoryResource(tables[0], [requester, recipient]) : null;

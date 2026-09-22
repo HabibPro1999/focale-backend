@@ -176,8 +176,9 @@ export class NetworkingPublicController {
   @Get("connections") async connections(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
+    @Query() query: dto.NetworkingParticipantListDto,
   ) {
-    return this.social.connections(await this.context(slug, req));
+    return this.social.connections(await this.context(slug, req), query);
   }
   @Get("connections/:id/messages") async messages(
     @Param("slug") slug: string,
@@ -292,8 +293,9 @@ export class NetworkingPublicController {
   @Get("meetings") async listMeetings(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
+    @Query() query: dto.NetworkingParticipantListDto,
   ) {
-    return this.meetings.list(await this.context(slug, req));
+    return this.meetings.list(await this.context(slug, req), query);
   }
   @Post("meetings") async createMeeting(
     @Param("slug") slug: string,

@@ -28,26 +28,32 @@ export class NetworkingMaintenanceJob implements Job {
   readonly intervalMs = 60_000;
   async run() {
     await maintainNetworkingLifecycle(undefined, async (profiles) => {
-      for (const profile of profiles) {
-        if (!profile.photoUrl) continue;
-        try {
-          const key = extractStorageKeyFromUrl(profile.photoUrl);
-          if (key) await getStorageProvider().delete(key);
-        } catch (error) {
-          const failure = error as {
-            code?: string | number;
-            name?: string;
-            $metadata?: { httpStatusCode?: number };
-          };
-          if (
-            failure?.code === 404 ||
-            failure?.code === "404" ||
-            failure?.name === "NoSuchKey" ||
-            failure?.$metadata?.httpStatusCode === 404
-          ) continue;
-          log.warn({ err: error, profileId: profile.id }, "Failed to delete purged networking photo");
+      // Purge has committed. Cleanup has no durable retry; failures may leave orphaned objects.
+      let next = 0;
+      const cleanup = async () => {
+        while (next < profiles.length) {
+          const profile = profiles[next++]!;
+          if (!profile.photoUrl) continue;
+          try {
+            const key = extractStorageKeyFromUrl(profile.photoUrl);
+            if (key) await getStorageProvider().delete(key);
+          } catch (error) {
+            const failure = error as {
+              code?: string | number;
+              name?: string;
+              $metadata?: { httpStatusCode?: number };
+            };
+            if (
+              failure?.code === 404 ||
+              failure?.code === "404" ||
+              failure?.name === "NoSuchKey" ||
+              failure?.$metadata?.httpStatusCode === 404
+            ) continue;
+            log.warn({ err: error, profileId: profile.id }, "Failed to delete purged networking photo");
+          }
         }
-      }
+      };
+      await Promise.all(Array.from({ length: Math.min(4, profiles.length) }, cleanup));
     });
   }
 }

@@ -20,7 +20,7 @@ export async function expireNetworkingProposals(eventId?: string, db: DbExecutor
 /** Each reminder and its in-app record are committed by one statement, with delivery dedupe winning races. */
 export async function maintainNetworkingLifecycle(
   eventId?: string,
-  onBeforePurge?: (profiles: { id: string; photoUrl: string | null }[]) => Promise<void>,
+  onAfterPurge?: (profiles: { id: string; photoUrl: string | null }[]) => Promise<void>,
 ) {
   const db = getDb();
   const scope = eventId ? sql`AND event_id=${eventId}` : sql``;
@@ -119,8 +119,8 @@ export async function maintainNetworkingLifecycle(
       sql`SELECT c.event_id FROM networking_configs c JOIN events e ON e.id=c.event_id WHERE EXISTS (SELECT 1 FROM networking_profiles p WHERE p.event_id=c.event_id) AND e.end_date+COALESCE((c.config->>'retentionDays')::int,90)*interval '1 day'<now() ${eventId ? sql`AND c.event_id=${eventId}` : sql``}`,
     ),
   );
-  for (const { event_id } of expired)
-    await db.transaction(async (tx) => {
+  for (const { event_id } of expired) {
+    const profiles = await db.transaction(async (tx) => {
       await tx.execute(
         sql`UPDATE networking_configs SET config=jsonb_set(config,'{enabled}','false'::jsonb),updated_at=now() WHERE event_id=${event_id}`,
       );
@@ -129,9 +129,12 @@ export async function maintainNetworkingLifecycle(
         .select({ id: networkingProfiles.id, photoUrl: networkingProfiles.photoUrl })
         .from(networkingProfiles)
         .where(eq(networkingProfiles.eventId, event_id));
-      await onBeforePurge?.(profiles);
       await tx
         .delete(networkingProfiles)
         .where(eq(networkingProfiles.eventId, event_id));
+      return profiles;
     });
+    // Best effort after commit: no durable retries; a crash or cleanup failure can orphan photos.
+    await onAfterPurge?.(profiles);
+  }
 }

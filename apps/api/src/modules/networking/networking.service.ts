@@ -469,29 +469,22 @@ export class NetworkingService {
     const store = networkingStore();
     ctx = await this.currentParticipant(ctx, store);
     const email = ctx.profile.email.trim().toLowerCase();
-    const events = await store.all("events", { clientId: ctx.event.clientId });
+    const profiles = await store.personalAnalyticsProfiles(ctx.event.clientId, email);
+    const events = new Map(profiles.map(profile => [profile.eventId, profile]));
     const result: NetworkingPersonalAnalytics["events"] = [];
-    for (const event of events) {
-      const profiles = await store.all("profiles", { eventId: event.id });
-      const ownIds = new Set(profiles.filter(profile => profile.email.trim().toLowerCase() === email).map(profile => profile.id));
-      if (!ownIds.size) continue;
-      const [audit, connections, messages, meetings] = await Promise.all([
-        store.all("audit", { eventId: event.id }),
-        store.all("connections", { eventId: event.id }),
-        store.all("messages", { eventId: event.id }),
-        store.all("meetings", { eventId: event.id }),
-      ]);
-      const byId = new Map(profiles.map(profile => [profile.id, profile]));
+    for (const event of events.values()) {
+      const ownIds = new Set(profiles.filter(profile => profile.eventId === event.eventId).map(profile => profile.id));
+      const { audit, connections, messages, meetings } = await store.personalAnalyticsRows(event.eventId, [...ownIds]);
       const contacts = new Set<string>();
       for (const connection of connections) {
         if (!ownIds.has(connection.profileAId) && !ownIds.has(connection.profileBId)) continue;
         const otherId = ownIds.has(connection.profileAId) ? connection.profileBId : connection.profileAId;
         if (ownIds.has(otherId)) continue;
-        contacts.add(byId.get(otherId)?.email.trim().toLowerCase() || otherId);
+        contacts.add(connection.email.trim().toLowerCase() || otherId);
       }
       const ownMeetings = meetings.filter(meeting => ownIds.has(meeting.requesterId) || ownIds.has(meeting.recipientId));
       result.push({
-        eventId: event.id, eventName: event.name,
+        eventId: event.eventId, eventName: event.name,
         startsAt: event.startDate.toISOString(), endsAt: event.endDate.toISOString(),
         profileViews: audit.filter(entry => entry.action === "PROFILE_VIEW" && ownIds.has(entry.targetId ?? "")).length,
         matches: contacts.size,

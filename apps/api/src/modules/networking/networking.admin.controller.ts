@@ -151,6 +151,14 @@ export class NetworkingAdminController {
     await this.access(user, eventId);
     return this.service.listMeetings(eventId, query);
   }
+  @Get("meetings/calendar") async calendar(
+    @CurrentUser() user: AuthUser,
+    @Param("eventId") eventId: string,
+    @Query() query: dto.NetworkingCalendarDto,
+  ) {
+    await this.access(user, eventId);
+    return this.service.calendar(eventId, query);
+  }
   @Patch("meetings/:id") async updateMeeting(
     @CurrentUser() user: AuthUser,
     @Param("eventId") eventId: string,

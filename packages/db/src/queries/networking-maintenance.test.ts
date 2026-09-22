@@ -2,30 +2,72 @@ import { expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({ execute: vi.fn(), transaction: vi.fn() }));
 vi.mock("../client", () => ({ getDb: () => mocks }));
 import { maintainNetworkingLifecycle } from "./networking-maintenance";
-it("exposes profile photos before retention deletes their rows", async () => {
+function retentionHarness(failCommit = false) {
   const profiles = [{ id: "p", photoUrl: "https://storage.test/p.webp" }, { id: "q", photoUrl: null }];
-  mocks.execute.mockResolvedValue({ rows: [] });
-  // Retention discovery is the final execute outside the transaction.
+  const state = { inTransaction: false, committed: false, rolledBack: false };
   mocks.execute.mockImplementation(async (query) => {
     const { PgDialect } = await import("drizzle-orm/pg-core");
     const text = new PgDialect().sqlToQuery(query).sql;
     return { rows: text.startsWith("SELECT c.event_id") ? [{ event_id: "event" }] : [] };
   });
   const deleted = vi.fn().mockResolvedValue(undefined);
-  const beforePurge = vi.fn(async (rows) => {
-    expect(deleted).not.toHaveBeenCalled();
-    expect(rows).toEqual(profiles);
+  mocks.transaction.mockImplementation(async (run) => {
+    state.inTransaction = true;
+    try {
+      const result = await run({
+        execute: vi.fn(),
+        select: () => ({ from: () => ({ where: async () => profiles }) }),
+        delete: () => ({ where: deleted }),
+      });
+      if (failCommit) throw new Error("commit failed");
+      state.committed = true;
+      return result;
+    } catch (error) {
+      state.rolledBack = true;
+      throw error;
+    } finally {
+      state.inTransaction = false;
+    }
   });
-  const selected = vi.fn().mockResolvedValue(profiles);
-  mocks.transaction.mockImplementation(async (run) => run({
-    execute: vi.fn(),
-    select: () => ({ from: () => ({ where: selected }) }),
-    delete: () => ({ where: deleted }),
-  }));
-  await maintainNetworkingLifecycle("event", beforePurge);
-  expect(beforePurge).toHaveBeenCalledOnce();
-  expect(selected).toHaveBeenCalledOnce();
+  return { profiles, state, deleted };
+}
+
+it("invokes photo storage cleanup only after the purge transaction commits", async () => {
+  const { profiles, state, deleted } = retentionHarness();
+  const storageDelete = vi.fn(async () => {
+    expect(state.inTransaction).toBe(false);
+    expect(state.committed).toBe(true);
+    expect(deleted).toHaveBeenCalledOnce();
+  });
+  const afterPurge = vi.fn(async (rows) => {
+    expect(rows).toEqual(profiles);
+    await storageDelete();
+  });
+  await maintainNetworkingLifecycle("event", afterPurge);
+  expect(afterPurge).toHaveBeenCalledOnce();
+  expect(storageDelete).toHaveBeenCalledOnce();
+});
+
+it("never invokes cleanup when the purge transaction rolls back", async () => {
+  const { state, deleted } = retentionHarness(true);
+  const afterPurge = vi.fn();
+  await expect(maintainNetworkingLifecycle("event", afterPurge)).rejects.toThrow("commit failed");
   expect(deleted).toHaveBeenCalledOnce();
+  expect(state.rolledBack).toBe(true);
+  expect(state.committed).toBe(false);
+  expect(afterPurge).not.toHaveBeenCalled();
+});
+
+it("cleanup failure cannot roll back the committed purge", async () => {
+  const { state, deleted } = retentionHarness();
+  const afterPurge = vi.fn(async () => {
+    expect(state.inTransaction).toBe(false);
+    throw new Error("storage unavailable");
+  });
+  await expect(maintainNetworkingLifecycle("event", afterPurge)).rejects.toThrow("storage unavailable");
+  expect(deleted).toHaveBeenCalledOnce();
+  expect(state.committed).toBe(true);
+  expect(state.rolledBack).toBe(false);
 });
 
 it("queues automatic reports and contacts only at end +24 hours, retaining dedupe", async () => {

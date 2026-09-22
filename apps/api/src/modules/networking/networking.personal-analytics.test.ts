@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { NetworkingProfileUpdateSchema } from "@app/contracts";
 const fixture = vi.hoisted(() => ({ rows: {} as Record<string, Array<Record<string, any>>> }));
-vi.mock("@app/db", () => ({ networkingStore: () => ({ all: async (kind: string, filter: Record<string, string>) => (fixture.rows[kind] ?? []).filter(row => Object.entries(filter).every(([key, value]) => row[key] === value)) }) }));
+const queries = vi.hoisted(() => ({ profiles: vi.fn(), rows: vi.fn(), all: vi.fn() }));
+vi.mock("@app/db", () => ({ networkingStore: () => ({
+  all: queries.all,
+  personalAnalyticsProfiles: queries.profiles,
+  personalAnalyticsRows: queries.rows,
+}) }));
 import { NetworkingService, type NetworkingContext } from "./networking.service";
 const ctx = { event: { id: "current", clientId: "owner" }, profile: { id: "a", email: "OWN@example.test" } } as NetworkingContext;
 describe("private cross-event ROI", () => {
@@ -22,9 +27,24 @@ describe("private cross-event ROI", () => {
       audit: ["a", "duplicate", "b"].map(targetId => ({ targetId, action: "PROFILE_VIEW", eventId: "current" })),
       meetings: ["CONFIRMED", "COMPLETED", "NO_SHOW", "CANCELLED", "PENDING"].map(status => ({ requesterId: "a", recipientId: "duplicate", status, eventId: "current" })),
     };
+    queries.profiles.mockImplementation(async (clientId, email) => fixture.rows.profiles.flatMap(profile => {
+      const event = fixture.rows.events.find(event => event.id === profile.eventId && event.clientId === clientId);
+      return event && profile.email.trim().toLowerCase() === email ? [{ ...event, ...profile }] : [];
+    }));
+    queries.rows.mockImplementation(async (eventId, ids: string[]) => ({
+      audit: fixture.rows.audit.filter(row => row.eventId === eventId && ids.includes(row.targetId)),
+      messages: fixture.rows.messages.filter(row => row.eventId === eventId && ids.includes(row.senderId)),
+      meetings: fixture.rows.meetings.filter(row => row.eventId === eventId && (ids.includes(row.requesterId) || ids.includes(row.recipientId))),
+      connections: fixture.rows.connections.filter(row => row.eventId === eventId && (ids.includes(row.profileAId) || ids.includes(row.profileBId))).map(row => ({ ...row,
+        email: fixture.rows.profiles.find(p => p.id === (ids.includes(row.profileAId) ? row.profileBId : row.profileAId))!.email,
+      })),
+    }));
     const service = new NetworkingService();
     const eligibility = vi.spyOn(service, "currentParticipant").mockResolvedValue(ctx);
     const result = await service.personalAnalytics(ctx);
+    expect(queries.all).not.toHaveBeenCalled();
+    expect(queries.profiles).toHaveBeenCalledWith("owner", "own@example.test");
+    expect(queries.rows.mock.calls).toEqual([["current", ["a", "duplicate"]], ["prior", ["old"]]]);
     expect(eligibility).toHaveBeenCalledWith(ctx, expect.anything());
     expect(result.events.map(event => event.eventId)).toEqual(["current", "prior"]);
     expect(result.events[0]).toMatchObject({ profileViews: 2, matches: 1, sentMessages: 2, plannedMeetings: 3, completedMeetings: 1 });
