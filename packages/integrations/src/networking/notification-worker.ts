@@ -53,6 +53,7 @@ async function processOne(
   row: NetworkingDeliveryRow,
   dependencies: NetworkingDeliveryDependencies,
 ) {
+  if (!(await refreshNetworkingDeliveryLease(row))) return "lease_lost";
   let context = await networkingDeliveryContext(row);
   if (row.type === "POST_EVENT_REPORT")
     return processNetworkingPostEventReport(row, context, dependencies.storage);
@@ -136,11 +137,13 @@ async function processOne(
           recipientName: context.profile!.firstName,
           subject: rendered.subject,
         });
+        if (tracking.leaseLost) return "lease_lost";
         if (!tracking.alreadySent) {
           const provider = dependencies.email ?? getEmailProvider();
           if (!provider.isConfigured())
             throw new Error("Email provider is not configured");
           const sender = getNetworkingEmailSender(context.event!.clientId, provider.name);
+          if (!(await refreshNetworkingDeliveryLease(row))) return "lease_lost";
           const result = await provider.sendEmail({
             to: context.profile!.email,
             toName: context.profile!.firstName,
@@ -192,6 +195,7 @@ async function processOne(
           subject = process.env.NETWORKING_VAPID_SUBJECT;
         if (!publicKey || !privateKey || !subject)
           throw new Error("Push provider is not configured");
+        if (!(await refreshNetworkingDeliveryLease(row))) return "lease_lost";
         await push(
           { endpoint: subscription.endpoint, keys: subscription.keys },
           JSON.stringify({

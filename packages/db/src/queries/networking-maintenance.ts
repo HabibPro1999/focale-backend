@@ -78,7 +78,7 @@ export async function maintainNetworkingLifecycle(
   await db.execute(sql`
     INSERT INTO networking_deliveries (id,event_id,type,payload,status,available_at,dedupe_key,created_at,updated_at)
     SELECT gen_random_uuid()::text,e.id,'POST_EVENT_REPORT','{}'::jsonb,'PENDING',now(),'post-event-report:'||e.id,now(),now()
-    FROM events e JOIN networking_configs c ON c.event_id=e.id WHERE c.config->>'enabled'='true' AND e.end_date<=now()
+    FROM events e JOIN networking_configs c ON c.event_id=e.id WHERE c.config->>'enabled'='true' AND e.end_date+interval '24 hours'<=now()
       ${eventId ? sql`AND e.id=${eventId}` : sql``} ON CONFLICT (dedupe_key) DO NOTHING
   `);
   await db.execute(sql`
@@ -87,7 +87,7 @@ export async function maintainNetworkingLifecycle(
         CASE p.language WHEN 'fr' THEN 'Vos connexions après l’événement' WHEN 'ar' THEN 'علاقاتك بعد الحدث' ELSE 'Your post-event connections' END AS title,
         CASE p.language WHEN 'fr' THEN 'Retrouvez les contacts rencontrés pendant l’événement et exportez vos connexions.' WHEN 'ar' THEN 'راجع جهات الاتصال التي تعرّفت عليها خلال الحدث وصدّر علاقاتك.' ELSE 'Review the people you connected with and export your contacts.' END AS body
       FROM networking_profiles p JOIN events e ON e.id=p.event_id JOIN networking_configs c ON c.event_id=p.event_id JOIN registrations r ON r.id=p.registration_id
-      WHERE e.end_date<=now() AND c.config->>'enabled'='true' AND p.status='ACTIVE' AND p.consent AND p.withdrawn_at IS NULL
+      WHERE e.end_date+interval '24 hours'<=now() AND c.config->>'enabled'='true' AND p.status='ACTIVE' AND p.consent AND p.withdrawn_at IS NULL
         AND r.networking_opt_in IS DISTINCT FROM false AND c.config->'eligiblePaymentStatuses' ? r.payment_status::text
         ${eventId ? sql`AND p.event_id=${eventId}` : sql``}
     ), inserted AS (

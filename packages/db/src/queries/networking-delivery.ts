@@ -1,6 +1,5 @@
 import { and, eq, gt, inArray, or, sql } from "drizzle-orm";
 import { getDb } from "../client";
-import { rowsOf } from "../helpers";
 import {
   networkingDeliveries,
   networkingProfiles,
@@ -27,28 +26,18 @@ export async function claimNetworkingDeliveries(
   limit = 20,
   eventId?: string,
 ): Promise<NetworkingDeliveryRow[]> {
-  const ids = rowsOf<{ id: string }>(
-    await getDb().execute(sql`
-    WITH candidates AS (
+  // RETURNING is decoded by Drizzle, including the exact millisecond lease fence.
+  return getDb().update(networkingDeliveries).set({
+    status: "PROCESSING",
+    attempts: sql`attempts+1`,
+    lockedUntil: sql`date_trunc('milliseconds',now())+interval '5 minutes'`,
+    updatedAt: sql`now()`,
+  }).where(sql`id IN (
       SELECT id FROM networking_deliveries
       WHERE ((status='PENDING' AND attempts<5) OR (status='PROCESSING' AND locked_until<now() AND attempts<5) OR (status='FAILED' AND attempts<5))
         AND available_at<=now() ${eventId ? sql`AND event_id=${eventId}` : sql``}
       ORDER BY CASE WHEN type='OTP' THEN 0 ELSE 1 END,available_at LIMIT ${Math.max(1, Math.min(limit, 100))} FOR UPDATE SKIP LOCKED
-    )
-    UPDATE networking_deliveries d SET status='PROCESSING',attempts=attempts+1,locked_until=now()+interval '5 minutes',updated_at=now()
-    FROM candidates WHERE d.id=candidates.id RETURNING d.id
-  `),
-  );
-  if (!ids.length) return [];
-  return getDb()
-    .select()
-    .from(networkingDeliveries)
-    .where(
-      inArray(
-        networkingDeliveries.id,
-        ids.map((row) => row.id),
-      ),
-    );
+  )`).returning();
 }
 export async function updateNetworkingDelivery(
   row: NetworkingDeliveryRow,
@@ -285,6 +274,7 @@ export async function localizeNetworkingNotification(
     .where(
       and(
         eq(networkingNotifications.id, row.payload.notificationId),
+        sql`EXISTS (SELECT 1 FROM networking_deliveries WHERE id=${row.id} AND status='PROCESSING' AND locked_until=${row.lockedUntil?.toISOString()}::timestamp AND locked_until>now())`,
         eq(networkingNotifications.eventId, row.eventId),
         eq(networkingNotifications.profileId, row.profileId),
       ),

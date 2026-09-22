@@ -6,6 +6,7 @@ const state = vi.hoisted(() => ({
   transaction: false,
   requireTransaction: false,
   audits: [] as unknown[],
+  deliveries: [] as any[],
   tail: Promise.resolve() as Promise<unknown>,
 }));
 vi.mock("@app/db", () => {
@@ -17,13 +18,14 @@ vi.mock("@app/db", () => {
       }
       return { id: "event", startDate: new Date("2030-01-01Z"), endDate: new Date("2031-01-01Z") };
     },
-    all: async () => [],
+    all: async (kind: string) => kind === "deliveries" ? state.deliveries : [],
     update: async (_kind: string, _where: unknown, values: object) => {
       state.row = { ...state.row!, ...values };
       return [state.row];
     },
     insert: async (kind: string, values: any) => {
       if (kind === "configs") state.row = values;
+      else if (kind === "deliveries") state.deliveries.push(values);
       else state.audits.push(values);
       return values;
     },
@@ -53,6 +55,7 @@ beforeEach(() => {
   state.transaction = false;
   state.requireTransaction = false;
   state.audits = [];
+  state.deliveries = [];
   state.tail = Promise.resolve();
 });
 afterEach(() => vi.useRealTimers());
@@ -126,5 +129,30 @@ describe("NetworkingAdminService config", () => {
   ])("rejects invalid instants/windows with a validation code: %j", async (patch) => {
     await expect(service.config("event", patch)).rejects.toMatchObject({ status: 400, response: { code: "NETWORKING_VALIDATION" } });
     expect(state.audits).toEqual([]);
+  });
+});
+
+describe("NetworkingAdminService report regeneration", () => {
+  it("refuses regeneration before event end", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date("2030-12-31Z"));
+    await expect(service.regeneratePostEventReport("event", "admin")).rejects.toMatchObject({
+      status: 409, response: { code: "NETWORKING_VALIDATION" },
+    });
+    expect(state.deliveries).toEqual([]);
+  });
+  it("queues immediately after end, reuses in-flight work, and creates a new completed version", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date("2031-01-01T01:00:00Z"));
+    const [first, duplicate] = await Promise.all([
+      service.regeneratePostEventReport("event", "admin"), service.regeneratePostEventReport("event", "admin"),
+    ]);
+    expect(first).toEqual(duplicate);
+    expect(first.availableAt).toEqual(new Date());
+    expect(first.version).toBe(first.deliveryId);
+    expect(state.deliveries).toHaveLength(1);
+    expect(state.audits).toMatchObject([{ actorId: "admin", action: "post_event_report.regenerate" }]);
+    state.deliveries[0].status = "SENT";
+    const second = await service.regeneratePostEventReport("event", "admin");
+    expect(second.version).not.toBe(first.version);
+    expect(state.deliveries[1].dedupeKey).not.toBe(state.deliveries[0].dedupeKey);
   });
 });

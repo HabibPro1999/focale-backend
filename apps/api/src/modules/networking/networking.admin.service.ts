@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { NetworkingInventoryService } from "./networking.inventory.service";
 import { networkingAnalytics } from "./networking.analytics";
 import {
@@ -493,6 +494,28 @@ export class NetworkingAdminService {
         data: { note: input.note },
       });
       return saved;
+    });
+  }
+  async regeneratePostEventReport(eventId: string, actorId: string) {
+    return networkingTransaction(eventId, async (store) => {
+      const event = await store.one("events", { id: eventId });
+      if (!event) throw new NotFoundException("Event not found");
+      const now = new Date();
+      if (event.endDate > now) throw new ConflictException({
+        code: "NETWORKING_VALIDATION", message: "Report can be generated after the event ends",
+      });
+      const pending = (await store.all("deliveries", { eventId, type: "POST_EVENT_REPORT" }))
+        .find((row) => row.status === "PENDING" || row.status === "PROCESSING" || (row.status === "FAILED" && row.attempts < 5));
+      if (pending) return { deliveryId: pending.id, availableAt: pending.availableAt, version: pending.id };
+      const id = randomUUID();
+      await store.insert("deliveries", {
+        id, eventId, type: "POST_EVENT_REPORT", payload: { version: id, manual: true },
+        status: "PENDING", availableAt: now, dedupeKey: `post-event-report:${eventId}:${id}`,
+      });
+      await store.insert("audit", {
+        eventId, actorId, action: "post_event_report.regenerate", targetId: id, data: { version: id },
+      });
+      return { deliveryId: id, availableAt: now, version: id };
     });
   }
   async postEventReport(eventId:string) {

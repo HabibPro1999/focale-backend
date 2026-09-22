@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
   Param,
   Patch,
   Post,
@@ -201,6 +202,12 @@ export class NetworkingAdminController {
   ) {
     await this.access(user, eventId);
     return this.service.verifyBadge(eventId, body.token, body.accessId);
+  }
+  @Post("post-event-report")
+  @HttpCode(202)
+  async regeneratePostEventReport(@CurrentUser() user: AuthUser, @Param("eventId") eventId: string) {
+    await this.access(user, eventId);
+    return this.service.regeneratePostEventReport(eventId, user.id);
   }
   @Get("post-event-report")
   async postEventReport(@CurrentUser() user:AuthUser,@Param("eventId") eventId:string){await this.access(user,eventId);return this.service.postEventReport(eventId);}
