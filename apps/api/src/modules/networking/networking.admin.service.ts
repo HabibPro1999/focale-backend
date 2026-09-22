@@ -8,6 +8,8 @@ import {
 } from "@nestjs/common";
 import {
   NetworkingConfigSchema,
+  NETWORKING_CONFIG_UNCONFIGURED_REVISION,
+  type NetworkingConfigWithRevision,
   networkingProfileOverrides,
   networkingActivity,
   type NetworkingConfig,
@@ -67,41 +69,63 @@ export class NetworkingAdminService {
   ) {}
   async config(
     eventId: string,
-    input?: Partial<NetworkingConfig>,
+    input?: Partial<NetworkingConfig> & { expectedRevision?: string; revision?: string },
     actorId?: string,
-  ) {
-    const current = await getNetworkingConfig(eventId);
-    if (!input) return current;
-    const parsed = NetworkingConfigSchema.safeParse({ ...current, ...input });
-    if (!parsed.success) throw new BadRequestException(parsed.error.flatten());
-    const config = parsed.data;
-    if (!config.languages.includes(config.defaultLanguage))
-      throw new BadRequestException("Default language must be enabled");
-    if (config.opensAt && config.closesAt && config.opensAt >= config.closesAt)
-      throw new BadRequestException("Closing date must follow opening date");
-    const event = await networkingStore().one("events", { id: eventId });
-    if (!event) throw new NotFoundException("Event not found");
-    if (config.openingHours.some((window) =>
-      zonedInstant(window.date, window.start, config.timezone) < event.startDate ||
-      zonedInstant(window.date, window.end, config.timezone) > event.endDate
-    ))
-      throw new BadRequestException("Meeting opening hours must be within the event dates");
-    if (
-      config.requiredAccessId &&
-      !(await getActiveEventAccessId(config.requiredAccessId, eventId))
-    )
-      throw new BadRequestException(
-        "Networking area access must be active and belong to this event",
-      );
-    if (config.enabled) {
-      await assertClientModuleEnabled(event.clientId, "registrations");
-      await assertClientModuleEnabled(event.clientId, "emails");
-      if (config.meetingsEnabled && !config.openingHours.length)
-        throw new BadRequestException(
-          "Configure meeting opening hours before activating meetings",
-        );
+  ): Promise<NetworkingConfigWithRevision> {
+    if (!input) {
+      const row = await networkingStore().one("configs", { eventId });
+      return {
+        ...NetworkingConfigSchema.parse(row?.config ?? {}),
+        revision: row?.updatedAt.toISOString() ?? NETWORKING_CONFIG_UNCONFIGURED_REVISION,
+      };
     }
-    await networkingTransaction(eventId, async (store) => {
+    const { expectedRevision, revision: _revision, ...changes } = input;
+    const config = await networkingTransaction(eventId, async (store) => {
+      const current = await store.one("configs", { eventId });
+      const revision = current?.updatedAt.toISOString() ?? NETWORKING_CONFIG_UNCONFIGURED_REVISION;
+      if (expectedRevision !== undefined && expectedRevision !== revision)
+        throw new ConflictException({
+          code: "NETWORKING_CONFIG_STALE",
+          message: "Networking configuration has changed. Reload before saving.",
+        });
+      const invalid = (message: string, details?: unknown) => new BadRequestException({
+        code: "NETWORKING_VALIDATION", message, ...(details ? { details } : {}),
+      });
+      const parsed = NetworkingConfigSchema.safeParse({ ...current?.config, ...changes });
+      if (!parsed.success) throw invalid("Invalid networking configuration", parsed.error.flatten());
+      const config = parsed.data;
+      if (!config.languages.includes(config.defaultLanguage))
+        throw invalid("Default language must be enabled");
+      if ([config.opensAt, config.closesAt, ...config.blackoutSlots].some(
+        (value) => value != null && !Number.isFinite(Date.parse(value)),
+      )) throw invalid("Invalid networking date");
+      if (config.opensAt && config.closesAt && Date.parse(config.opensAt) >= Date.parse(config.closesAt))
+        throw invalid("Closing date must follow opening date");
+      const event = await store.one("events", { id: eventId });
+      if (!event) throw new NotFoundException("Event not found");
+      if (config.openingHours.some((window) => {
+        let start: number, end: number;
+        try {
+          start = zonedInstant(window.date, window.start, config.timezone).getTime();
+          end = zonedInstant(window.date, window.end, config.timezone).getTime();
+        } catch {
+          throw invalid("Invalid meeting opening hours");
+        }
+        return !Number.isFinite(start) || !Number.isFinite(end) || start >= end ||
+          start < event.startDate.getTime() || end > event.endDate.getTime();
+      }))
+        throw invalid("Meeting opening hours must be within the event dates");
+      if (
+        config.requiredAccessId &&
+        !(await getActiveEventAccessId(config.requiredAccessId, eventId))
+      )
+        throw invalid("Networking area access must be active and belong to this event");
+      if (config.enabled) {
+        await assertClientModuleEnabled(event.clientId, "registrations");
+        await assertClientModuleEnabled(event.clientId, "emails");
+        if (config.meetingsEnabled && !config.openingHours.length)
+          throw invalid("Configure meeting opening hours before activating meetings");
+      }
       const meetings = await store.all("meetings", { eventId });
       const valid = new Set(networkingSlots(config, event));
       if (
@@ -117,15 +141,18 @@ export class NetworkingAdminService {
         throw new ConflictException(
           "Existing appointments conflict with the proposed opening hours or duration",
         );
-      if (await store.one("configs", { eventId }))
-        await store.update("configs", { eventId }, { config });
-      else await store.insert("configs", { eventId, config });
+      // Millisecond storage precision must not let consecutive writes share a revision.
+      const updatedAt = new Date(Math.max(Date.now(), (current?.updatedAt.getTime() ?? -1) + 1));
+      if (current)
+        await store.update("configs", { eventId }, { config, updatedAt });
+      else await store.insert("configs", { eventId, config, updatedAt });
       await store.insert("audit", {
         eventId,
         actorId: actorId!,
         action: "CONFIG_UPDATED",
-        data: { fields: Object.keys(input) },
+        data: { fields: Object.keys(changes) },
       });
+      return { ...config, revision: updatedAt.toISOString() };
     });
     if (
       config.enabled &&
@@ -134,7 +161,7 @@ export class NetworkingAdminService {
         "approvalMode",
         "eligiblePaymentStatuses",
         "fieldMapping",
-      ].some((key) => key in input)
+      ].some((key) => key in changes)
     )
       await syncNetworkingEvent(eventId);
     return config;

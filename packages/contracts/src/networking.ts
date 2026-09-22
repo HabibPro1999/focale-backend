@@ -150,9 +150,24 @@ export const NetworkingConfigSchema = z.object({
     .default([]),
   blackoutSlots: z.array(instant).max(20000).default([]),
 });
-export const UpdateNetworkingConfigSchema =
-  NetworkingConfigSchema.partial().strict();
+const networkingConfigPatchSchema =
+  NetworkingConfigSchema.partial().extend({
+    expectedRevision: z.string().optional(),
+    revision: z.string().optional(),
+  }).strict();
+// Zod 4 applies inner defaults even through partial(); a PATCH must retain only supplied keys.
+export const UpdateNetworkingConfigSchema = z.unknown().transform((input, ctx) => {
+  const parsed = networkingConfigPatchSchema.safeParse(input);
+  if (!parsed.success) {
+    for (const issue of parsed.error.issues) ctx.addIssue({ ...issue });
+    return z.NEVER;
+  }
+  const keys = new Set(Object.keys(input as object));
+  return Object.fromEntries(Object.entries(parsed.data).filter(([key]) => keys.has(key))) as z.infer<typeof networkingConfigPatchSchema>;
+});
 export type NetworkingConfig = z.infer<typeof NetworkingConfigSchema>;
+export const NETWORKING_CONFIG_UNCONFIGURED_REVISION = "unconfigured";
+export type NetworkingConfigWithRevision = NetworkingConfig & { revision: string };
 export const NetworkingProfileUpdateSchema = z
   .object({
     company: z.string().trim().min(1).max(200).optional(),

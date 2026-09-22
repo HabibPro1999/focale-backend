@@ -42,6 +42,28 @@ function optionValues(
   }
   return [...new Set(result)];
 }
+const affirmativeConsent = /^(true|yes|on|1|oui|accept|agree|j'accepte|نعم)$/i;
+const negativeConsent = /\b(false|0|off|no|non|decline|refuse|do not|don't)\b|(?:^|\s)لا(?:\s|$)/i;
+function consentAnswer(field: RecordValue, answer: unknown): boolean {
+  if (typeof answer === "boolean") return answer;
+  if (!["radio", "select", "dropdown", "checkbox", "multi"].includes(String(field.type)))
+    return typeof answer === "string" && affirmativeConsent.test(answer.trim());
+
+  const selected = Array.isArray(answer) ? answer : [answer];
+  const options = Array.isArray(field.options) ? field.options.map(object) : [];
+  const values = options
+    .filter((option) => selected.includes(option.id))
+    .flatMap((option) => [
+      option.id,
+      option.value,
+      option.label,
+      ...Object.values(object(option.translations)).map((translation) => object(translation).label),
+    ])
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim());
+  return values.some((value) => affirmativeConsent.test(value)) &&
+    !values.some((value) => negativeConsent.test(value));
+}
 /** Project display labels, never option IDs; missing/deleted mappings clear stale machine values. */
 export function projectNetworkingFields(
   schema: unknown,
@@ -87,16 +109,14 @@ export function projectNetworkingFields(
             : ""
       ).slice(0, ["offers", "seeks", "bio"].includes(key) ? 2000 : 200);
   }
+  // Preserve unmapped-consent compatibility documented in migration 0014.
   let consent = true;
   if (config.fieldMapping.consent) {
     const field = fields.find(
       (value) => value.id === config.fieldMapping.consent,
     );
     const answer = field ? formData[config.fieldMapping.consent] : undefined;
-    consent =
-      answer === true ||
-      (typeof answer === "string" && /^(true|yes|on|1)$/i.test(answer)) ||
-      !!(field && optionValues(field, answer, config.defaultLanguage).length);
+    consent = !!field && consentAnswer(field, answer);
   }
   return { projection, consent };
 }
