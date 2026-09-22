@@ -64,7 +64,7 @@ export class NetworkingService {
   }
   async publicContext(slug: string, store = networkingStore()) {
     const event = await store.one("events", { slug });
-    if (!event) throw new NotFoundException("Event not found");
+    if (!event) throw new NotFoundException({ code: "NETWORKING_VALIDATION", message: "Event not found" });
     await assertClientModuleEnabled(event.clientId, "networking");
     await assertClientModuleEnabled(event.clientId, "registrations");
     await assertClientModuleEnabled(event.clientId, "emails");
@@ -72,18 +72,16 @@ export class NetworkingService {
       (await store.one("configs", { eventId: event.id }))?.config ?? {},
     );
     if (!config.enabled || event.status === "ARCHIVED")
-      throw new ForbiddenException(
-        "Networking is not available for this event",
-      );
+      throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Networking is not available for this event" });
     if (config.opensAt && Date.parse(config.opensAt) > Date.now())
-      throw new ForbiddenException("Networking is not open yet");
+      throw new ForbiddenException({ code: "NETWORKING_CLOSED", message: "Networking is not open yet" });
     if (config.closesAt && Date.parse(config.closesAt) < Date.now())
-      throw new ForbiddenException("Networking has closed");
+      throw new ForbiddenException({ code: "NETWORKING_CLOSED", message: "Networking has closed" });
     if (
       Date.now() >
       event.endDate.getTime() + config.retentionDays * 86_400_000
     )
-      throw new ForbiddenException("Networking retention period has ended");
+      throw new ForbiddenException({ code: "NETWORKING_CLOSED", message: "Networking retention period has ended" });
     return { event, config };
   }
   async publicConfig(slug: string) {
@@ -102,7 +100,9 @@ export class NetworkingService {
         if (["http:", "https:"].includes(url.protocol))
           networkingUrl = `${url.origin}${url.pathname.replace(/\/$/, "")}/${encodeURIComponent(event.slug)}`;
       }
-    } catch {}
+    } catch {
+      // An invalid optional public URL is omitted from the public config.
+    }
     return {
       event: {
         id: event.id,
@@ -168,7 +168,7 @@ export class NetworkingService {
   ): Promise<NetworkingContext> {
     const { event, config } = await this.publicContext(slug);
     const token = authorization?.match(/^Bearer ([A-Za-z0-9_-]{40,128})$/)?.[1];
-    if (!token) throw new UnauthorizedException("Participant session required");
+    if (!token) throw new UnauthorizedException({ code: "NETWORKING_VALIDATION", message: "Participant session required" });
     const store = networkingStore();
     const session = await store.one("sessions", {
       eventId: event.id,
@@ -176,15 +176,13 @@ export class NetworkingService {
       revokedAt: null,
     });
     if (!session || session.expiresAt.getTime() <= Date.now())
-      throw new UnauthorizedException("Participant session expired");
+      throw new UnauthorizedException({ code: "NETWORKING_VALIDATION", message: "Participant session expired" });
     const profile = await store.one("profiles", {
       id: session.profileId,
       eventId: event.id,
     });
     if (!profile || !(await this.eligible(profile, config)))
-      throw new ForbiddenException(
-        "Networking participation is not approved or eligible",
-      );
+      throw new ForbiddenException({ code: "NETWORKING_NOT_ELIGIBLE", message: "Networking participation is not approved or eligible" });
     const factor = await store.one("secondFactors", { profileId: profile.id });
     if (
       (config.requireSecondFactor || factor?.enabledAt) &&
@@ -215,14 +213,15 @@ export class NetworkingService {
     if (
       !event ||
       event.status === "ARCHIVED" ||
-      !config.enabled ||
+      !config.enabled
+    )
+      throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Networking is not available for this event" });
+    if (
       (config.opensAt && Date.parse(config.opensAt) > Date.now()) ||
       (config.closesAt && Date.parse(config.closesAt) <= Date.now()) ||
       event.endDate.getTime() + config.retentionDays * 86400000 < Date.now()
     )
-      throw new ForbiddenException(
-        "Networking is not available for this event",
-      );
+      throw new ForbiddenException({ code: "NETWORKING_CLOSED", message: "Networking is not available for this event" });
     await assertClientModuleEnabled(event.clientId, "networking");
     const session = await store.one("sessions", {
       id: ctx.session.id,
@@ -231,15 +230,13 @@ export class NetworkingService {
       revokedAt: null,
     });
     if (!session || session.expiresAt.getTime() <= Date.now())
-      throw new UnauthorizedException("Participant session expired");
+      throw new UnauthorizedException({ code: "NETWORKING_VALIDATION", message: "Participant session expired" });
     const profile = await store.one("profiles", {
       id: ctx.profile.id,
       eventId: event.id,
     });
     if (!profile || !(await this.eligible(profile, config, store)))
-      throw new ForbiddenException(
-        "Networking participation is no longer eligible",
-      );
+      throw new ForbiddenException({ code: "NETWORKING_NOT_ELIGIBLE", message: "Networking participation is no longer eligible" });
     const factor = await store.one("secondFactors", { profileId: profile.id });
     if (
       (config.requireSecondFactor || factor?.enabledAt) &&
@@ -376,7 +373,7 @@ export class NetworkingService {
       return null;
     });
     if (!result)
-      throw new UnauthorizedException("Invalid or expired verification code");
+      throw new UnauthorizedException({ code: "NETWORKING_VALIDATION", message: "Invalid or expired verification code" });
     return result;
   }
   async target(
@@ -386,7 +383,7 @@ export class NetworkingService {
     visible = false,
   ) {
     if (id === ctx.profile.id)
-      throw new BadRequestException("Choose another participant");
+      throw new BadRequestException({ code: "NETWORKING_VALIDATION", message: "Choose another participant" });
     const profile = await store.one("profiles", { id, eventId: ctx.event.id });
     if (
       !profile ||
@@ -395,15 +392,13 @@ export class NetworkingService {
       !(await this.eligible(profile, ctx.config, store)) ||
       (visible && (!profile.visible || !networkingProfileComplete(profile)))
     )
-      throw new NotFoundException("Participant not available");
+      throw new NotFoundException({ code: "NETWORKING_VALIDATION", message: "Participant not available" });
     const current = await store.one("profiles", {
       id: ctx.profile.id,
       eventId: ctx.event.id,
     });
     if (!current || !(await this.eligible(current, ctx.config, store)))
-      throw new ForbiddenException(
-        "Networking participation is no longer eligible",
-      );
+      throw new ForbiddenException({ code: "NETWORKING_NOT_ELIGIBLE", message: "Networking participation is no longer eligible" });
     if (
       ((!profile.visible || !networkingProfileComplete(profile)) && !visible) ||
       (!ctx.config.swipeEnabled && !ctx.config.searchEnabled)
@@ -416,7 +411,7 @@ export class NetworkingService {
           profileBId,
         }))
       )
-        throw new NotFoundException("Participant not available");
+        throw new NotFoundException({ code: "NETWORKING_VALIDATION", message: "Participant not available" });
     }
     const blocked =
       (await store.one("blocks", {
@@ -429,12 +424,12 @@ export class NetworkingService {
         profileId: id,
         targetId: ctx.profile.id,
       }));
-    if (blocked) throw new NotFoundException("Participant not available");
+    if (blocked) throw new NotFoundException({ code: "NETWORKING_VALIDATION", message: "Participant not available" });
     return profile;
   }
   async discover(ctx: NetworkingContext, query: NetworkingDiscoveryQuery = {}) {
     if (!ctx.config.swipeEnabled && !ctx.config.searchEnabled)
-      throw new ForbiddenException("Discovery is disabled");
+      throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Discovery is disabled" });
     if (
       (query.q ||
         query.sector ||
@@ -444,7 +439,7 @@ export class NetworkingService {
         query.country) &&
       !ctx.config.searchEnabled
     )
-      throw new ForbiddenException("Search is disabled");
+      throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Search is disabled" });
     const result = await listNetworkingDiscovery(
       ctx.event.id,
       ctx.profile.id,
@@ -458,7 +453,7 @@ export class NetworkingService {
   }
 
   async representatives(ctx: NetworkingContext, profileId: string, page = 1) {
-    if (!ctx.config.swipeEnabled && !ctx.config.searchEnabled) throw new ForbiddenException("Discovery is disabled");
+    if (!ctx.config.swipeEnabled && !ctx.config.searchEnabled) throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Discovery is disabled" });
     const profile = await this.target(ctx, profileId);
     const stand = profile.standTableId ? await networkingStore().one("tables", { eventId: ctx.event.id, id: profile.standTableId, kind: "STAND" }) : null;
     if (!stand) return { items: [], total: 0, exhibitor: null };
@@ -517,7 +512,7 @@ export class NetworkingService {
       for (const field of ["company", "jobTitle", "sector"]) {
         if (field in fields) {
           if (typeof fields[field] !== "string" || !fields[field].trim())
-            throw new BadRequestException(`${field} is required`);
+            throw new BadRequestException({ code: "NETWORKING_VALIDATION", message: `${field} is required` });
           fields[field] = fields[field].trim();
         }
       }
@@ -529,9 +524,7 @@ export class NetworkingService {
         typeof fields.language === "string" &&
         !ctx.config.languages.includes(fields.language as "fr" | "en" | "ar")
       )
-        throw new BadRequestException(
-          "This language is not enabled for the event",
-        );
+        throw new BadRequestException({ code: "NETWORKING_VALIDATION", message: "This language is not enabled for the event" });
       const [row] = await store.update(
         "profiles",
         { id: ctx.profile.id, eventId: ctx.event.id },

@@ -23,9 +23,7 @@ export class NetworkingSocialService {
   constructor(private readonly networking: NetworkingService) {}
   async incoming(ctx: NetworkingContext) {
     if (!ctx.profile.featured && !ctx.profile.standTableId)
-      throw new ForbiddenException(
-        "Incoming interests are available to exhibitors",
-      );
+      throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Incoming interests are available to exhibitors" });
     const interests = await networkingStore().all("interests", {
       eventId: ctx.event.id,
       targetId: ctx.profile.id,
@@ -56,7 +54,7 @@ export class NetworkingSocialService {
       !row ||
       (row.profileAId !== ctx.profile.id && row.profileBId !== ctx.profile.id)
     )
-      throw new NotFoundException("Connection not found");
+      throw new NotFoundException({ code: "NETWORKING_VALIDATION", message: "Connection not found" });
     const profile = await this.networking.target(
       ctx,
       row.profileAId === ctx.profile.id ? row.profileBId : row.profileAId,
@@ -70,12 +68,12 @@ export class NetworkingSocialService {
     action: "LIKE" | "PASS",
   ) {
     if (!ctx.config.swipeEnabled && !ctx.config.searchEnabled)
-      throw new ForbiddenException("Discovery is disabled");
+      throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Discovery is disabled" });
     return networkingTransaction(ctx.event.id, async (store, db) => {
       ctx = await this.networking.currentParticipant(ctx, store);
       if (!ctx.config.swipeEnabled && !ctx.config.searchEnabled)
-        throw new ForbiddenException("Discovery is disabled");
-      await this.networking.target(ctx, targetId, store, true);
+        throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Discovery is disabled" });
+      const target = await this.networking.target(ctx, targetId, store, true);
       const existing = await store.one("interests", {
         eventId: ctx.event.id,
         profileId: ctx.profile.id,
@@ -131,7 +129,7 @@ export class NetworkingSocialService {
               title: "New connection",
               body: "You have a new mutual connection.",
               href: `/${ctx.event.slug}/connections/${connection.id}`,
-              data: { connectionId: connection.id },
+              data: { connectionId: connection.id, counterpartName: profileId === ctx.profile.id ? `${target.firstName} ${target.lastName}`.trim() : `${ctx.profile.firstName} ${ctx.profile.lastName}`.trim() },
             },
             db,
           );
@@ -150,11 +148,9 @@ export class NetworkingSocialService {
     query: { before?: string; beforeId?: string; limit?: number } = {},
   ) {
     if (!ctx.config.chatEnabled)
-      throw new ForbiddenException("Chat is disabled");
+      throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Chat is disabled" });
     if (query.beforeId && !query.before)
-      throw new BadRequestException(
-        "A message timestamp is required with beforeId",
-      );
+      throw new BadRequestException({ code: "NETWORKING_VALIDATION", message: "A message timestamp is required with beforeId" });
     await this.connection(ctx, id);
     return listNetworkingMessages(ctx.event.id, id, query);
   }
@@ -166,11 +162,11 @@ export class NetworkingSocialService {
     clientMessageId: string,
   ) {
     if (!ctx.config.chatEnabled)
-      throw new ForbiddenException("Chat is disabled");
+      throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Chat is disabled" });
     return networkingTransaction(ctx.event.id, async (store, db) => {
       ctx = await this.networking.currentParticipant(ctx, store);
       if (!ctx.config.chatEnabled)
-        throw new ForbiddenException("Chat is disabled");
+        throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Chat is disabled" });
       const connection = await this.connection(ctx, id, store);
       const previous = await store.one("messages", {
         senderId: ctx.profile.id,
@@ -178,9 +174,7 @@ export class NetworkingSocialService {
       });
       if (previous) {
         if (previous.connectionId !== id || previous.body !== body)
-          throw new BadRequestException(
-            "Message key was already used for another message",
-          );
+          throw new BadRequestException({ code: "NETWORKING_VALIDATION", message: "Message key was already used for another message" });
         return previous;
       }
       const message = await store.insert("messages", {
@@ -205,7 +199,7 @@ export class NetworkingSocialService {
           title: "New message",
           body: `${ctx.profile.firstName} sent you a message.`,
           href: `/${ctx.event.slug}/connections/${id}`,
-          data: { connectionId: id, messageId: message.id },
+          data: { connectionId: id, messageId: message.id, counterpartName: `${ctx.profile.firstName} ${ctx.profile.lastName}`.trim() },
         },
         db,
       );
@@ -229,12 +223,12 @@ export class NetworkingSocialService {
     return networkingTransaction(ctx.event.id, async (store, db) => {
       ctx = await this.networking.currentParticipant(ctx, store);
       if (targetId === ctx.profile.id)
-        throw new BadRequestException("Cannot block yourself");
+        throw new BadRequestException({ code: "NETWORKING_VALIDATION", message: "Cannot block yourself" });
       const target = await store.one("profiles", {
         id: targetId,
         eventId: ctx.event.id,
       });
-      if (!target) throw new NotFoundException("Participant not found");
+      if (!target) throw new NotFoundException({ code: "NETWORKING_VALIDATION", message: "Participant not found" });
       if (
         !(await store.one("blocks", {
           eventId: ctx.event.id,
@@ -280,7 +274,12 @@ export class NetworkingSocialService {
               title: "Meeting cancelled",
               body: "This meeting is no longer available.",
               href: `/${ctx.event.slug}/agenda`,
-              data: { meetingId: meeting.id, revision: meeting.revision + 1 },
+              data: {
+                meetingId: meeting.id, revision: meeting.revision + 1,
+                startsAt: meeting.startsAt.toISOString(), endsAt: meeting.endsAt.toISOString(),
+                status: "CANCELLED",
+                counterpartName: profileId === ctx.profile.id ? `${target.firstName} ${target.lastName}`.trim() : `${ctx.profile.firstName} ${ctx.profile.lastName}`.trim(),
+              },
             },
             db,
           );
@@ -300,7 +299,7 @@ export class NetworkingSocialService {
         eventId: ctx.event.id,
       }))
     )
-      throw new NotFoundException("Participant not found");
+      throw new NotFoundException({ code: "NETWORKING_VALIDATION", message: "Participant not found" });
     if (input.messageId) {
       const message = await store.one("messages", {
         id: input.messageId,
@@ -318,7 +317,7 @@ export class NetworkingSocialService {
         (connection.profileAId !== ctx.profile.id &&
           connection.profileBId !== ctx.profile.id)
       )
-        throw new NotFoundException("Message not found");
+        throw new NotFoundException({ code: "NETWORKING_VALIDATION", message: "Message not found" });
     }
     return store.insert("reports", {
       eventId: ctx.event.id,

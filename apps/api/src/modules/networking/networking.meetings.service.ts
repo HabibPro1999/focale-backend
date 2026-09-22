@@ -31,7 +31,7 @@ export class NetworkingMeetingsService {
   constructor(private readonly networking: NetworkingService) {}
   requireEnabled(ctx: NetworkingContext) {
     if (!ctx.config.meetingsEnabled || !ctx.profile.meetingsEnabled)
-      throw new ForbiddenException("Meetings are disabled");
+      throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Meetings are disabled" });
   }
   async participantSlots(
     ctx: NetworkingContext,
@@ -104,17 +104,13 @@ export class NetworkingMeetingsService {
       ...new Set(slots.map((v) => new Date(v).toISOString())),
     ];
     if (normalized.some((v) => !allowed.has(v)))
-      throw new BadRequestException(
-        "Availability contains a slot outside event opening hours",
-      );
+      throw new BadRequestException({ code: "NETWORKING_SLOT_INVALID", message: "Availability contains a slot outside event opening hours" });
     return networkingTransaction(ctx.event.id, async (store) => {
       ctx = await this.networking.currentParticipant(ctx, store);
       this.requireEnabled(ctx);
       const currentSlots = new Set(networkingSlots(ctx.config, ctx.event));
       if (normalized.some((slot) => !currentSlots.has(slot)))
-        throw new BadRequestException(
-          "Availability contains a slot outside event opening hours",
-        );
+        throw new BadRequestException({ code: "NETWORKING_SLOT_INVALID", message: "Availability contains a slot outside event opening hours" });
       await store.remove("availability", {
         eventId: ctx.event.id,
         profileId: ctx.profile.id,
@@ -186,7 +182,7 @@ export class NetworkingMeetingsService {
       !row ||
       (row.requesterId !== ctx.profile.id && row.recipientId !== ctx.profile.id)
     )
-      throw new NotFoundException("Meeting not found");
+      throw new NotFoundException({ code: "NETWORKING_VALIDATION", message: "Meeting not found" });
     return row;
   }
   slot(ctx: NetworkingContext, startsAt: string) {
@@ -195,9 +191,7 @@ export class NetworkingMeetingsService {
       start <= new Date() ||
       !networkingSlots(ctx.config, ctx.event).includes(start.toISOString())
     )
-      throw new BadRequestException(
-        "Choose a future event slot within opening hours",
-      );
+      throw new BadRequestException({ code: "NETWORKING_SLOT_INVALID", message: "Choose a future event slot within opening hours" });
     return {
       startsAt: start,
       endsAt: new Date(
@@ -221,7 +215,7 @@ export class NetworkingMeetingsService {
       !p.meetingsEnabled ||
       !(await this.networking.eligible(p, ctx.config, store))
     )
-      throw new ConflictException("Participant is unavailable");
+      throw new ConflictException({ code: "NETWORKING_SLOT_CONFLICT", message: "Participant is unavailable" });
     if (
       p.availabilitySet &&
       !(await store.one("availability", {
@@ -230,7 +224,7 @@ export class NetworkingMeetingsService {
         startsAt,
       }))
     )
-      throw new ConflictException("Participant is unavailable at this time");
+      throw new ConflictException({ code: "NETWORKING_SLOT_CONFLICT", message: "Participant is unavailable at this time" });
   }
   async create(
     ctx: NetworkingContext,
@@ -254,9 +248,7 @@ export class NetworkingMeetingsService {
           profileBId,
         }))
       )
-        throw new ForbiddenException(
-          "A mutual connection is required before requesting a meeting",
-        );
+        throw new ForbiddenException({ code: "NETWORKING_CONNECTION_REQUIRED", message: "A mutual connection is required before requesting a meeting" });
       await this.availableAt(ctx, ctx.profile.id, dates.startsAt, store);
       await this.availableAt(ctx, input.profileId, dates.startsAt, store);
       const same = (
@@ -269,9 +261,7 @@ export class NetworkingMeetingsService {
           [m.requesterId, m.recipientId].includes(input.profileId),
       );
       if (same)
-        throw new ConflictException(
-          "A meeting already exists for this pair and slot",
-        );
+        throw new ConflictException({ code: "NETWORKING_SLOT_CONFLICT", message: "A meeting already exists for this pair and slot" });
       let row = await store.insert("meetings", {
         eventId: ctx.event.id,
         requesterId: ctx.profile.id,
@@ -302,7 +292,7 @@ export class NetworkingMeetingsService {
     pending = false,
   ) {
     if (row.status === "PENDING" && row.expiresAt <= new Date())
-      throw new ConflictException("This proposal has expired");
+      throw new ConflictException({ code: "NETWORKING_MEETING_LOCKED", message: "This proposal has expired" });
     await this.availableAt(ctx, row.requesterId, startsAt, store);
     await this.availableAt(ctx, row.recipientId, startsAt, store);
     const meetings = await store.all("meetings", { eventId: ctx.event.id });
@@ -326,15 +316,13 @@ export class NetworkingMeetingsService {
       `profile:${row.recipientId}`,
     ];
     if (participantKeys.some(taken))
-      throw new ConflictException(
-        "One of the participants already has a meeting in this slot",
-      );
+      throw new ConflictException({ code: "NETWORKING_SLOT_CONFLICT", message: "One of the participants already has a meeting in this slot" });
     const [requester, recipient, spaces] = await Promise.all([
       store.one("profiles", { eventId: ctx.event.id, id: row.requesterId }),
       store.one("profiles", { eventId: ctx.event.id, id: row.recipientId }),
       store.all("spaces", { eventId: ctx.event.id }),
     ]);
-    if (!requester || !recipient) throw new NotFoundException("Participant not found");
+    if (!requester || !recipient) throw new NotFoundException({ code: "NETWORKING_VALIDATION", message: "Participant not found" });
     const bySpace = new Map(spaces.map(space => [space.id, space]));
     let tableId: string | null = null;
     let inventoryResource: string | null = null;
@@ -359,9 +347,7 @@ export class NetworkingMeetingsService {
       tableId = tables[0]?.id ?? null;
       inventoryResource = tables[0] ? networkingInventoryResource(tables[0], [requester, recipient]) : null;
       if (!tableId)
-        throw new ConflictException(
-          "No table or exhibitor representative is available for this slot; choose another time",
-        );
+        throw new ConflictException({ code: "NETWORKING_SLOT_CONFLICT", message: "No table or exhibitor representative is available for this slot; choose another time" });
     }
     await store.remove("reservations", {
       eventId: ctx.event.id,
@@ -399,15 +385,17 @@ export class NetworkingMeetingsService {
       ctx = await this.networking.currentParticipant(ctx, store);
       if (input.action !== "CANCEL") this.requireEnabled(ctx);
       const row = await this.meeting(ctx, id, store);
+      if (input.action === "RESCHEDULE" && (row.requesterCheckedInAt || row.recipientCheckedInAt))
+        throw new ConflictException({ code: "NETWORKING_MEETING_CHECKED_IN", message: "A checked-in meeting cannot be rescheduled" });
       if (!["PENDING", "CONFIRMED", "PENDING_ALLOCATION"].includes(row.status))
-        throw new ConflictException("This meeting can no longer be changed");
+        throw new ConflictException({ code: "NETWORKING_MEETING_LOCKED", message: "This meeting can no longer be changed" });
       await this.networking.target(
         ctx,
         row.requesterId === ctx.profile.id ? row.recipientId : row.requesterId,
         store,
       );
       if (row.status === "PENDING" && row.expiresAt <= new Date())
-        throw new ConflictException("This proposal has expired");
+        throw new ConflictException({ code: "NETWORKING_MEETING_LOCKED", message: "This proposal has expired" });
       const proposalEnd = row.proposedStartsAt
         ? new Date(
             row.proposedStartsAt.getTime() +
@@ -415,7 +403,7 @@ export class NetworkingMeetingsService {
           )
         : row.endsAt;
       if (proposalEnd <= new Date())
-        throw new ConflictException("This meeting has already ended");
+        throw new ConflictException({ code: "NETWORKING_MEETING_LOCKED", message: "This meeting has already ended" });
       let update: Partial<NetworkingRow<"meetings">> = {
         revision: row.revision + 1,
       };
@@ -450,18 +438,16 @@ export class NetworkingMeetingsService {
               dates.startsAt.getTime(),
             ),
           ),
-          ...(input.message !== undefined ? { message: input.message } : {}),
+          ...(input.message?.trim() ? { message: input.message } : {}),
         };
       } else {
         const proposer = row.proposalBy ?? row.requesterId;
         if (proposer === ctx.profile.id)
-          throw new ForbiddenException(
-            "Only the other participant can respond to this proposal",
-          );
+          throw new ForbiddenException({ code: "NETWORKING_VALIDATION", message: "Only the other participant can respond to this proposal" });
         if (!row.proposedStartsAt && row.status !== "PENDING")
-          throw new ConflictException("No proposal is awaiting a response");
+          throw new ConflictException({ code: "NETWORKING_MEETING_LOCKED", message: "No proposal is awaiting a response" });
         if (row.expiresAt <= new Date())
-          throw new ConflictException("This proposal has expired");
+          throw new ConflictException({ code: "NETWORKING_MEETING_LOCKED", message: "This proposal has expired" });
         if (input.action === "DECLINE") {
           if (row.status === "PENDING")
             await store.remove("reservations", { eventId: ctx.event.id, meetingId: id });
@@ -489,6 +475,8 @@ export class NetworkingMeetingsService {
             ...update,
             ...dates,
             ...allocation,
+            requesterCheckedInAt: null,
+            recipientCheckedInAt: null,
             proposedStartsAt: null,
             proposalBy: null,
           };
@@ -516,7 +504,14 @@ export class NetworkingMeetingsService {
     profileIds: string[],
     db: DbExecutor,
   ) {
-    for (const profileId of profileIds)
+    const store = networkingStore(db);
+    const table = row.tableId ? await store.one("tables", { eventId: row.eventId, id: row.tableId }) : null;
+    const space = table?.spaceId ? await store.one("spaces", { eventId: row.eventId, id: table.spaceId }) : null;
+    for (const profileId of profileIds) {
+      const counterpart = await store.one("profiles", {
+        eventId: row.eventId,
+        id: profileId === row.requesterId ? row.recipientId : row.requesterId,
+      });
       await createNetworkingNotification(
         {
           eventId: row.eventId,
@@ -529,11 +524,16 @@ export class NetworkingMeetingsService {
             meetingId: row.id,
             revision: row.revision,
             startsAt: row.startsAt.toISOString(),
+            endsAt: row.endsAt.toISOString(),
+            ...(counterpart ? { counterpartName: `${counterpart.firstName} ${counterpart.lastName}`.trim() } : {}),
+            ...(table ? { tableName: table.name } : {}),
+            ...(space ? { spaceName: space.name } : {}),
             status: row.status,
           },
         },
         db,
       );
+    }
   }
   async checkin(ctx: NetworkingContext, id: string, token: string) {
     return networkingTransaction(ctx.event.id, async (store) => {

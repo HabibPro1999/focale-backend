@@ -410,6 +410,7 @@ export interface NetworkingMeeting {
   recipientCheckedInAt?: string | null;
 }
 export interface NetworkingNotification {
+  data?: Record<string, unknown>;
   id: string;
   type: string;
   title: string;

@@ -121,3 +121,26 @@ Real browser verification must additionally cover mobile/desktop layouts, FR/EN/
 ## Registration development proxy
 
 The form retains its production CSP. For a local HTTP backend use `VITE_API_URL=/api` and `VITE_DEV_API_URL=http://127.0.0.1:3080` in the form dev server. Vite proxies requests under the same origin. This avoids weakening the production connection policy for local QA.
+
+## Participant error codes
+
+Participant errors use `{ code, message, details? }` inside the existing error envelope.
+Clients localize codes rather than displaying the English message.
+
+- `NETWORKING_MFA_REQUIRED`
+- `NETWORKING_AUTH_UNAVAILABLE`
+- `NETWORKING_BADGE_INVALID`
+- `NETWORKING_BADGE_WRONG_PARTICIPANT`
+- `NETWORKING_MEETING_CHECKIN_UNCONFIRMED`
+- `NETWORKING_MEETING_CHECKIN_UNAVAILABLE`
+- `NETWORKING_NOT_ELIGIBLE`
+- `NETWORKING_CLOSED`
+- `NETWORKING_FEATURE_DISABLED`
+- `NETWORKING_CONNECTION_REQUIRED`
+- `NETWORKING_SLOT_INVALID`
+- `NETWORKING_SLOT_CONFLICT`
+- `NETWORKING_MEETING_LOCKED`
+- `NETWORKING_MEETING_CHECKED_IN`
+- `NETWORKING_RATE_LIMITED`
+- `NETWORKING_CONFIG_STALE`
+- `NETWORKING_VALIDATION`

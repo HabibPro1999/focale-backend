@@ -5,6 +5,7 @@ import {
   type ArgumentsHost,
   type ExceptionFilter,
 } from "@nestjs/common";
+import { ThrottlerException } from "@nestjs/throttler";
 import { ErrorCodes, statusToCode, type ApiError } from "@app/contracts";
 import { pgErrorCode, pgUniqueViolation } from "@app/db";
 import type { FastifyReply } from "fastify";
@@ -67,16 +68,20 @@ export class HttpExceptionFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost): void {
     const reply = host.switchToHttp().getResponse<FastifyReply>();
     const requestId = getRequestId() ?? "";
+    const isNetworking = host.switchToHttp().getRequest<{ url?: string }>()?.url?.split("?")[0]?.includes("/networking") ?? false;
 
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let error: ErrorBody;
     const dbError = mapPgConstraintError(exception);
 
-    if (exception instanceof ZodValidationException) {
+    if (isNetworking && exception instanceof ThrottlerException) {
+      status = HttpStatus.TOO_MANY_REQUESTS;
+      error = { code: ErrorCodes.NETWORKING_RATE_LIMITED, message: "Too many requests" };
+    } else if (exception instanceof ZodValidationException) {
       logger.warn({ details: exception.details }, "Request validation failed");
       status = HttpStatus.BAD_REQUEST;
       error = {
-        code: ErrorCodes.VALIDATION_ERROR,
+        code: isNetworking ? ErrorCodes.NETWORKING_VALIDATION : ErrorCodes.VALIDATION_ERROR,
         message: "Validation failed",
         details: exception.details,
       };
