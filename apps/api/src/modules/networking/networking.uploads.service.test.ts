@@ -35,6 +35,7 @@ describe("networking image uploads", () => {
     );
     const [bytes, key, mime] = storage.uploadPublic.mock.calls[0];
     expect(mime).toBe("image/webp");
+    expect(storage.uploadPublic.mock.calls[0][3]).toEqual({ cacheControl: "public, max-age=86400" });
     expect(key).toMatch(/^networking\/event\/profiles\/profile\/.*\.webp$/);
     const metadata = await sharp(bytes).metadata();
     expect(metadata.orientation).toBeUndefined();
@@ -85,4 +86,17 @@ describe("networking image uploads", () => {
     );
     expect(storage.delete).not.toHaveBeenCalled();
   });
+});
+
+it("deletes a withdrawn photo and tolerates storage failures", async () => {
+  await service.deletePhoto("https://storage.example/networking/photo.webp", "p");
+  expect(storage.delete).toHaveBeenCalledWith("networking/photo.webp");
+  storage.delete.mockRejectedValueOnce(new Error("storage unavailable"));
+  await expect(service.deletePhoto("https://storage.example/networking/photo.webp", "p")).resolves.toBeUndefined();
+});
+it("removes the previous owned photo after replacement", async () => {
+  const png = await sharp({ create: { width: 1, height: 1, channels: 3, background: "red" } }).png().toBuffer();
+  await service.image(request(png), "networking/event/profiles/p", async () => null,
+    "https://storage.example/networking/event/profiles/p/old.webp");
+  expect(storage.delete).toHaveBeenCalledWith("networking/event/profiles/p/old.webp");
 });

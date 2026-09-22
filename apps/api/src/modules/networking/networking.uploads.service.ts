@@ -5,7 +5,9 @@ import {
   extractStorageKeyFromUrl,
   getStorageProvider,
 } from "@app/integrations";
+import { createLogger } from "@app/shared";
 import type { FastifyRequest } from "fastify";
+const log = createLogger({ name: "networking:uploads" });
 export type NetworkingMultipartRequest = FastifyRequest & {
   file(options?: {
     limits: { fileSize: number; files: number };
@@ -13,6 +15,26 @@ export type NetworkingMultipartRequest = FastifyRequest & {
 };
 @Injectable()
 export class NetworkingUploadsService {
+  async deletePhoto(photoUrl: string | null | undefined, profileId: string) {
+    if (!photoUrl) return;
+    try {
+      const key = extractStorageKeyFromUrl(photoUrl);
+      if (key) await getStorageProvider().delete(key);
+    } catch (error) {
+      const failure = error as {
+        code?: string | number;
+        name?: string;
+        $metadata?: { httpStatusCode?: number };
+      };
+      if (
+        failure?.code === 404 ||
+        failure?.code === "404" ||
+        failure?.name === "NoSuchKey" ||
+        failure?.$metadata?.httpStatusCode === 404
+      ) return;
+      log.warn({ err: error, profileId }, "Failed to delete withdrawn networking photo");
+    }
+  }
   async image(
     req: NetworkingMultipartRequest,
     prefix: string,
@@ -22,7 +44,7 @@ export class NetworkingUploadsService {
     const part = await req.file({
       limits: { fileSize: 5 * 1024 * 1024, files: 1 },
     });
-    if (!part) throw new BadRequestException("Choose an image to upload");
+    if (!part) throw new BadRequestException({ code: "NETWORKING_VALIDATION", message: "Choose an image to upload" });
     const source = await part.toBuffer();
     let bytes: Buffer;
     try {
@@ -39,14 +61,12 @@ export class NetworkingUploadsService {
         .webp({ quality: 85 })
         .toBuffer();
     } catch {
-      throw new BadRequestException(
-        "Use a valid PNG, JPEG or WebP image up to 5 MB and 20 megapixels",
-      );
+      throw new BadRequestException({ code: "NETWORKING_VALIDATION", message: "Use a valid PNG, JPEG or WebP image up to 5 MB and 20 megapixels" });
     }
     const storage = getStorageProvider();
     const key = `${prefix}/${randomUUID()}.webp`;
     const url = await storage.uploadPublic(bytes, key, "image/webp", {
-      cacheControl: "public, max-age=31536000, immutable",
+      cacheControl: "public, max-age=86400",
     });
     let saved: unknown;
     try {
@@ -54,14 +74,18 @@ export class NetworkingUploadsService {
     } catch (error) {
       try {
         await storage.delete(key);
-      } catch {}
+      } catch (error) {
+        log.warn({ err: error, key }, "Failed to delete unsaved networking image");
+      }
       throw error;
     }
     const old = previousUrl ? extractStorageKeyFromUrl(previousUrl) : null;
     if (old?.startsWith(`${prefix}/`)) {
       try {
         await storage.delete(old);
-      } catch {}
+      } catch (error) {
+        log.warn({ err: error, key: old }, "Failed to delete replaced networking image");
+      }
     }
     return { url, resource: saved };
   }

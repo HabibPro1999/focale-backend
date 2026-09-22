@@ -462,11 +462,13 @@ export class NetworkingPublicController {
     @Req() req: FastifyRequest,
   ) {
     const ctx = await this.context(slug, req);
-    return networkingTransaction(ctx.event.id, async (store, db) => {
+    const photoUrl = await networkingTransaction(ctx.event.id, async (store, db) => {
+      const current = await store.one("profiles", { eventId: ctx.event.id, id: ctx.profile.id });
       await store.update(
         "profiles",
         { eventId: ctx.event.id, id: ctx.profile.id },
         {
+          photoUrl: null,
           consent: false,
           visible: false,
           withdrawnAt: new Date(),
@@ -504,8 +506,10 @@ export class NetworkingPublicController {
           db,
         );
       }
-      return { withdrawn: true };
+      return current?.photoUrl;
     });
+    await this.uploads.deletePhoto(photoUrl, ctx.profile.id);
+    return { withdrawn: true };
   }
   @Get("stream") @SkipEnvelope() async stream(
     @Param("slug") slug: string,
