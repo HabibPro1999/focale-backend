@@ -47,11 +47,12 @@ export class NetworkingPublicController {
   private context(slug: string, request: FastifyRequest) {
     return this.service.participant(slug, request.headers.authorization);
   }
+  @Throttle({ default: { limit: 600, ttl: 60_000 } })
   @Get("config") config(@Param("slug") slug: string) {
     return this.service.publicConfig(slug);
   }
   @Post("auth/request")
-  @Throttle({ default: { limit: 8, ttl: 60_000 } })
+  @Throttle({ default: { limit: 5, ttl: 600_000 } })
   requestCode(
     @Param("slug") slug: string,
     @Body() body: dto.NetworkingOtpRequestDto,
@@ -59,7 +60,7 @@ export class NetworkingPublicController {
     return this.service.requestCode(slug, body.email);
   }
   @Post("auth/verify")
-  @Throttle({ default: { limit: 15, ttl: 60_000 } })
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   verifyCode(
     @Param("slug") slug: string,
     @Body() body: dto.NetworkingOtpVerifyDto,

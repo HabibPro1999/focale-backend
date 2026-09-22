@@ -144,3 +144,16 @@ Clients localize codes rather than displaying the English message.
 - `NETWORKING_RATE_LIMITED`
 - `NETWORKING_CONFIG_STALE`
 - `NETWORKING_VALIDATION`
+
+## Rate limits
+
+Networking requests have a shared venue-IP abuse ceiling of **600 requests/minute** across all networking routes, checked before identity quotas. Public config reads also allow 600/minute per IP. Other modules retain the legacy per-IP limits (100/minute in production by default).
+
+Identity quotas are separate per handler:
+- OTP request: **5 per 10 minutes**, keyed by event slug and trimmed, lowercase email (even when a bearer header is supplied).
+- OTP verify: **10/minute per event slug and challenge ID**. The verify contract contains no email; the existing database-enforced five-attempt challenge cap remains in place. Invalid/missing challenge IDs fall back to IP.
+- MFA: **10/minute per bearer session** per endpoint.
+- Chat sends: **30/minute per bearer session**.
+- Other authenticated networking requests, including mutations: the configured default limit per bearer session (100/minute in production), unless an endpoint has a tighter override (reports: 5/minute).
+
+Trackers hash session tokens and OTP identities; raw tokens/emails are not stored in throttle keys. Other anonymous requests fall back to IP. Throttled networking responses use HTTP 429 and `NETWORKING_RATE_LIMITED` inside the normal error envelope. These in-memory quotas are per API process; the OTP service also retains its existing persistent request/attempt checks.
