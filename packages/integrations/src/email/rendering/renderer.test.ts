@@ -107,7 +107,7 @@ describe("renderTemplateToMjml", () => {
     );
   });
 
-  it("normalizes image widths and falls back when a width is not an MJML pixel value", () => {
+  it("normalizes image widths and falls back when a width is not an MJML pixel value", async () => {
     const mjml = renderTemplateToMjml(
       doc([
         {
@@ -127,26 +127,32 @@ describe("renderTemplateToMjml", () => {
     expect(mjml).toContain('width="320px"');
     expect(mjml).toContain('width="600px"');
     expect(mjml).not.toContain("<mj-include");
-    expect(() => compileMjmlToHtml(mjml)).not.toThrow();
+    await expect(Promise.resolve(compileMjmlToHtml(mjml))).resolves.toMatchObject({
+      html: expect.stringContaining("<html"),
+    });
   });
 });
 
 describe("compileMjmlToHtml", () => {
-  it("compiles valid MJML (with unresolved {{vars}}) to HTML without throwing", () => {
+  it("compiles valid MJML (with unresolved {{vars}}) to HTML without throwing", async () => {
     const mjml = renderTemplateToMjml(
       doc([{ type: "paragraph", content: [{ type: "text", text: "Hi" }] }]),
     );
-    const { html } = compileMjmlToHtml(mjml);
+    const { html } = await compileMjmlToHtml(mjml);
     expect(html).toContain("<html");
     expect(html).toContain("Hi");
   });
 
-  it("throws on genuinely invalid MJML (surfaces as an unhandled 500)", () => {
+  it("throws on genuinely invalid MJML (surfaces as an unhandled 500)", async () => {
     // Strict-mode mjml2html throws a ValidationError for unregistered elements.
-    expect(() => compileMjmlToHtml("<mjml><mj-not-real /></mjml>")).toThrow();
+    await expect(
+      Promise.resolve().then(() =>
+        compileMjmlToHtml("<mjml><mj-not-real /></mjml>"),
+      ),
+    ).rejects.toThrow();
   });
 
-  it("does not read or include a temporary canary file", () => {
+  it("does not read or include a temporary canary file", async () => {
     const directory = mkdtempSync(join(tmpdir(), "mjml-include-canary-"));
     const canary = join(directory, "canary.mjml");
     const marker = "MJML_INCLUDE_CANARY_SHOULD_NOT_APPEAR";
@@ -156,7 +162,7 @@ describe("compileMjmlToHtml", () => {
     );
 
     try {
-      const { html } = compileMjmlToHtml(
+      const { html } = await compileMjmlToHtml(
         `<mjml><mj-body><mj-include path="${canary}" /></mj-body></mjml>`,
       );
       expect(html).not.toContain(marker);

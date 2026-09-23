@@ -218,7 +218,7 @@ export async function runEmailTemplateStylePreflight(
 
     try {
       const mjmlContent = renderTemplateToMjml(preflight.content);
-      const { html: htmlContent } = compileMjmlToHtml(mjmlContent);
+      const { html: htmlContent } = await compileMjmlToHtml(mjmlContent);
       const update: EmailTemplatePreflightUpdate = {
         content: preflight.content,
         mjmlContent,
