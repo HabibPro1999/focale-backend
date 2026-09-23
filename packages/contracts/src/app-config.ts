@@ -38,6 +38,8 @@ const envSchema = z
     STORAGE_PROVIDER: z.enum(["firebase", "r2"]).default("firebase"),
     // Public URL for forms (used in email links)
     PUBLIC_FORMS_URL: z.string().url().optional(),
+    // Exact origins allowed for public linkBaseUrl values stored with submissions.
+    PUBLIC_LINK_ALLOWED_ORIGINS: z.string().optional(),
     PUBLIC_NETWORKING_URL: z.string().url().optional(),
     NETWORKING_TOKEN_SECRET: z.preprocess(value => value === "" ? undefined : value, z.string().min(32).optional()),
     NETWORKING_EMBEDDING_API_KEY: z.string().optional(),
@@ -175,7 +177,55 @@ const envSchema = z
         "ADMIN_APP_URL must be set to the deployed admin origin in production (default localhost:8080 not allowed)",
       path: ["ADMIN_APP_URL"],
     },
+  )
+  .refine(
+    (data) => {
+      const origins = parsePublicLinkAllowedOrigins(
+        data.PUBLIC_LINK_ALLOWED_ORIGINS,
+      );
+      return (
+        (data.NODE_ENV !== "production" || origins.length > 0) &&
+        origins.length ===
+          (data.PUBLIC_LINK_ALLOWED_ORIGINS?.split(",")
+            .map((origin) => origin.trim())
+            .filter(Boolean).length ?? 0)
+      );
+    },
+    {
+      message:
+        "PUBLIC_LINK_ALLOWED_ORIGINS must contain valid HTTP(S) origins and is required in production",
+      path: ["PUBLIC_LINK_ALLOWED_ORIGINS"],
+    },
   );
+
+function canonicalPublicOrigin(value: string): string | null {
+  try {
+    const url = new URL(value);
+    if (
+      (url.protocol !== "http:" && url.protocol !== "https:") ||
+      url.username ||
+      url.password ||
+      url.pathname !== "/" ||
+      url.search ||
+      url.hash
+    ) {
+      return null;
+    }
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+function parsePublicLinkAllowedOrigins(raw?: string): string[] {
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+    .map((origin) => canonicalPublicOrigin(origin))
+    .filter((origin): origin is string => origin !== null);
+}
 
 export class ConfigError extends Error {
   constructor(public issues: z.ZodIssue[]) {
@@ -257,6 +307,9 @@ export function parseAppConfig(source: NodeJS.ProcessEnv) {
       boldFontPath: env.CERTIFICATE_BOLD_FONT_PATH,
     },
     publicFormsUrl: env.PUBLIC_FORMS_URL,
+    publicLinkAllowedOrigins: parsePublicLinkAllowedOrigins(
+      env.PUBLIC_LINK_ALLOWED_ORIGINS,
+    ),
     urls: {
       adminAppUrl: env.ADMIN_APP_URL,
     },
