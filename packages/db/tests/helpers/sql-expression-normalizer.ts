@@ -71,12 +71,20 @@ function protectQuotedTokens(expression: string): {
   };
 
   while (index < expression.length) {
+    const escapeStringPrefix = (expression[index] === "e" || expression[index] === "E") &&
+      expression[index + 1] === "'" &&
+      (index === 0 || !/[a-z0-9_$]/i.test(expression[index - 1]));
+    if (escapeStringPrefix) {
+      text += "e";
+      const end = readSingleQuotedEnd(expression, index + 1, true);
+      protect(expression.slice(index + 1, end), "literal");
+      index = end;
+      continue;
+    }
+
     if (expression[index] === "'") {
-      const escapePrefix = index > 0 && /e/i.test(expression[index - 1]) &&
-        (index === 1 || !/[a-z0-9_$]/i.test(expression[index - 2]));
-      const tokenStart = escapePrefix ? index - 1 : index;
-      const end = readSingleQuotedEnd(expression, index, escapePrefix);
-      protect(expression.slice(tokenStart, end), "literal");
+      const end = readSingleQuotedEnd(expression, index, false);
+      protect(expression.slice(index, end), "literal");
       index = end;
       continue;
     }
@@ -111,7 +119,7 @@ function protectQuotedTokens(expression: string): {
     text,
     restore(normalized: string) {
       for (const token of protectedTokens) {
-        normalized = normalized.replace(token.marker, token.original);
+        normalized = normalized.replaceAll(token.marker, token.original);
       }
       return normalized;
     },

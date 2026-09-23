@@ -25,6 +25,10 @@ describe("normalizeSqlExpression", () => {
       .toBe(normalizeSqlExpression("'PENDING'"));
     expect(normalizeSqlExpression("capacity BETWEEN 1 AND 10"))
       .toBe(normalizeSqlExpression("capacity >= 1 and capacity <= 10"));
+    const between = normalizeSqlExpression("char_length('Foo') BETWEEN 1 AND 10");
+    expect(between).toBe("char_length('Foo')>=1 and char_length('Foo')<=10");
+    expect(between).toBe(normalizeSqlExpression("char_length('Foo') >= 1 AND char_length('Foo') <= 10"));
+    expect(between).not.toContain("\uE000");
     expect(normalizeSqlExpression("scope = ANY(ARRAY['A'::text, 'B'::text])"))
       .toBe(normalizeSqlExpression("scope IN ('A', 'B')"));
     expect(normalizeSqlExpression("CURRENT_TIMESTAMP"))
@@ -32,8 +36,11 @@ describe("normalizeSqlExpression", () => {
   });
 
   it("keeps escaped and dollar-quoted literal bytes intact", () => {
-    expect(normalizeSqlExpression("E'A\\\\B'"))
-      .not.toBe(normalizeSqlExpression("E'a\\\\b'"));
+    const uppercasePrefix = normalizeSqlExpression("E'A\\\\B'");
+    const lowercasePrefix = normalizeSqlExpression("e'A\\\\B'");
+    expect(uppercasePrefix).toBe("e'A\\\\B'");
+    expect(uppercasePrefix).toBe(lowercasePrefix);
+    expect(normalizeSqlExpression("E'Foo'")).not.toBe(normalizeSqlExpression("e'foo'"));
     expect(normalizeSqlExpression("$tag$A  B$tag$"))
       .not.toBe(normalizeSqlExpression("$tag$a b$tag$"));
   });
