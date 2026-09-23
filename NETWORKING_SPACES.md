@@ -20,7 +20,7 @@ The organizer's Spaces tab manages space capacity and contents. Calendar cells s
 
 ## Deployment and migration
 
-Apply **`0018_networking_spaces.sql` before deploying the new API**, then deploy matching admin/PWA builds. The existing checked networking migration runner discovers it automatically:
+Apply **`0018_networking_spaces.sql` before deploying the new API**, then deploy matching admin/PWA builds. The compatibility script delegates to the unified runner:
 
 ```sh
 # Inspect only.
@@ -28,6 +28,8 @@ pnpm --filter @app/db exec node scripts/migrate-networking.mjs
 # Apply using the explicitly selected deployment DATABASE_URL.
 pnpm --filter @app/db exec node scripts/migrate-networking.mjs --apply
 ```
+
+In this branch, adoption is deferred to plan item 1.4. The `adopt` command reports that boundary and writes nothing; wait for adoption support before applying this migration to an existing database.
 
 Legacy table/exhibitor and meeting IDs are preserved. Each existing inventory record is placed in its own one-slot space. **Old seating capacity is not reinterpreted as a table count.** Review existing space names/capacities after migration and set the intended number of tables/exhibitors in admin.
 

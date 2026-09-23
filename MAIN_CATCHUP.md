@@ -33,14 +33,13 @@ New manual migrations, following the existing repository convention:
 3. `0009_committee_invite_lookup_index.sql`: secondary lookup index.
 4. `0010_checkin_timestamptz.sql`: UTC-preserving check-in type alignment.
 
-Apply these in filename order before deploying the updated API/worker. Keep
-file transaction boundaries separate: `0008` must commit before `0009`, to
-avoid CockroachDB's new-table schema-lock issue. Existing databases with the
-main migrations already applied can reapply these additive migrations.
-
-As with `0001`–`0006`, these SQL files are **manual**, not registered in
-`meta/_journal.json`; `drizzle-kit migrate` alone does not apply them. Do not
-reapply the `0000` baseline to an existing database. The development rollout is recorded below.
+The unified runner applies these in filename order; `0008` commits before
+`0009` to avoid CockroachDB's new-table schema-lock issue. These SQL files are
+manual migrations, and the old Drizzle journal and `drizzle-kit migrate` path
+have been removed. Existing databases must be adopted before `apply` will
+proceed. Adoption is deferred to plan item 1.4 in this branch, so do not apply
+these migrations to an existing database yet or reapply the `0000` baseline.
+The development rollout is recorded below.
 
 `COMMITTEE_INVITE_TOKEN_TTL_DAYS` defaults to 7. `ADMIN_APP_URL` is the base for
 `/committee/set-password`. `FIREBASE_WEB_API_KEY` retains main's public project

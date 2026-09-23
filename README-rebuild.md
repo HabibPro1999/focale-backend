@@ -113,22 +113,20 @@ are enqueued but never drained — **they pile up unboundedly**. Only disable
 realtime in environments where nothing produces those rows, or run at least one
 api instance with realtime enabled to drain them.
 
-## Migrations / baseline (existing DBs)
+## Database migrations
 
-Drizzle migrations `packages/db/migrations/0000_init.sql` and
-`0001_raw_indexes.sql` are a **baseline snapshot matching the live schema**
-(the schema Prisma already created). They are **not** meant to be applied to the
-live database — running them there would attempt to recreate existing objects.
+Every SQL migration under `packages/db/migrations/` runs through the unified
+ledger runner. The Drizzle `generate` and `migrate` commands are removed so the
+old journal cannot apply `0000_init.sql` a second time.
 
-- **Existing / live DB:** do **not** run `drizzle-kit migrate`. Mark the
-  baseline as already-applied (record `0000`/`0001` in the drizzle journal)
-  before any *future* migration.
-- **Fresh env (local/CI/new deploy):** `pnpm --filter @app/db exec drizzle-kit migrate`
-  applies the baseline from scratch.
+- **Fresh local/CI database:** build `@app/db`, then run
+  `node packages/db/dist/migrator/cli.js apply --yes`. PostgreSQL must already
+  have the `vector` extension installed before migration 0013; the runner checks
+  that prerequisite and does not install it.
+- **Existing database:** `apply` refuses a non-empty schema with no migration
+  ledger. Adoption is handled by plan item 1.4; do not use a Drizzle journal or
+  run baseline SQL directly.
 
-For the registration settlement fix, apply
-`packages/db/migrations/0011_registration_gross_total.sql` alongside the API update
-using the existing SQL migration process. It repairs saved net totals only when
-`priceBreakdown` proves the old convention; it is safe to rerun. `totalAmount`
-is gross before sponsorship, while `priceBreakdown.total` is net. This data
-migration is not in Drizzle's baseline journal.
+Migration 0011 repairs saved net totals only when `priceBreakdown` proves the
+old convention; it is safe to rerun. `totalAmount` is gross before sponsorship,
+while `priceBreakdown.total` is net.
