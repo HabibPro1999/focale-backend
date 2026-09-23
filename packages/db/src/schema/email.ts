@@ -6,7 +6,9 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { idPk, timestamps } from "../helpers";
 import {
   abstractEmailTrigger,
@@ -48,6 +50,12 @@ export const emailTemplates = pgTable(
     index("email_templates_client_id_category_idx").on(t.clientId, t.category),
     index("email_templates_client_id_trigger_idx").on(t.clientId, t.trigger),
     index("email_templates_event_id_idx").on(t.eventId),
+    uniqueIndex("email_template_registration_uniq")
+      .on(t.clientId, t.trigger, t.eventId)
+      .where(sql`${t.abstractTrigger} IS NULL`),
+    uniqueIndex("email_template_abstract_uniq")
+      .on(t.clientId, t.abstractTrigger, t.eventId)
+      .where(sql`${t.trigger} IS NULL`),
   ],
 );
 
@@ -124,5 +132,17 @@ export const emailLogs = pgTable(
     index("email_logs_recipient_email_idx").on(t.recipientEmail),
     index("email_logs_sendgrid_message_id_idx").on(t.providerMessageId),
     index("email_logs_trigger_queued_at_idx").on(t.trigger, t.queuedAt),
+    uniqueIndex("email_logs_registration_trigger_active_key")
+      .on(t.registrationId, t.trigger)
+      .where(sql`${t.registrationId} IS NOT NULL AND ${t.trigger} IS NOT NULL AND ${t.status} IN ('QUEUED', 'SENDING', 'SENT', 'DELIVERED') AND ${t.queuedAt} >= TIMESTAMP '2026-05-29 00:03:03'`),
+    uniqueIndex("email_logs_abstract_submission_ack_active_key")
+      .on(t.abstractId, t.abstractTrigger, t.recipientEmail)
+      .where(sql`${t.abstractId} IS NOT NULL AND ${t.abstractTrigger} = 'ABSTRACT_SUBMISSION_ACK' AND ${t.status} IN ('QUEUED', 'SENDING', 'SENT', 'DELIVERED')`),
+    uniqueIndex("email_logs_template_recipient_trigger_active_key")
+      .on(t.templateId, t.recipientEmail, t.trigger)
+      .where(sql`${t.templateId} IS NOT NULL AND ${t.trigger} IS NOT NULL AND ${t.status} IN ('QUEUED', 'SENDING', 'SENT', 'DELIVERED') AND ${t.queuedAt} >= TIMESTAMP '2026-05-29 00:03:03'`),
+    uniqueIndex("email_logs_dedupe_key_active_key")
+      .on(t.dedupeKey)
+      .where(sql`${t.dedupeKey} IS NOT NULL AND ${t.status} IN ('QUEUED', 'SENDING', 'SENT', 'DELIVERED')`),
   ],
 );

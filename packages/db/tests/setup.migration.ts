@@ -1,6 +1,4 @@
-import { dbTestsEnabled, loadMigrationEnv } from "./helpers/test-env";
+import { dbTestsEnabled } from "./helpers/test-env";
 
-// The migration tier owns its scratch DB lifecycle, so setup only runs the gate.
-if (dbTestsEnabled()) {
-  loadMigrationEnv();
-}
+// Fail closed if the opt-in is present without a safe admin URL.
+dbTestsEnabled();

@@ -10,7 +10,6 @@ dist/
 !.env.example
 !.env.test.example
 !.env.test.db.example
-!.env.test.migration.example
 
 # Logs
 *.log
