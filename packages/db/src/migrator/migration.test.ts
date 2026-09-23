@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import type { Client } from "pg";
 import { describe, expect, it } from "vitest";
+import type { CatalogObjectProbe } from "./types";
 import { deriveCatalogProbes, deriveEffectiveCatalogProbes } from "./catalog";
 import { assertAdoptionRequiredIfNonEmpty } from "./runner";
 import { redactCredentials } from "./security";
@@ -158,7 +159,9 @@ describe("unified migration format", () => {
     const postgres = await loadMigrations(migrationsDirectory, "postgres");
     const probesById = new Map(postgres.map((migration) => [
       migration.id,
-      deriveCatalogProbes(migration).filter((probe) => "kind" in probe && probe.kind !== "extension"),
+      deriveCatalogProbes(migration).filter(
+        (probe): probe is CatalogObjectProbe => "kind" in probe && probe.kind !== "extension",
+      ),
     ]));
 
     expect(probesById.get("0015")).toEqual(expect.arrayContaining([
@@ -182,7 +185,9 @@ describe("unified migration format", () => {
     const postgres = await loadMigrations(migrationsDirectory, "postgres");
     const probesById = new Map(postgres.map((migration) => [
       migration.id,
-      deriveCatalogProbes(migration).filter((probe) => "kind" in probe && probe.kind !== "extension"),
+      deriveCatalogProbes(migration).filter(
+        (probe): probe is CatalogObjectProbe => "kind" in probe && probe.kind !== "extension",
+      ),
     ]));
     const names = (id: string) => probesById.get(id)?.map((probe) => `${probe.kind}:${probe.table ?? ""}:${probe.name}`).sort();
 
