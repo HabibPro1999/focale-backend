@@ -3,6 +3,7 @@ import {
   BulkSendEmailSchema,
   CreateEmailTemplateSchema,
   CreateEmailTemplateBodySchema,
+  TiptapDocumentSchema,
   UpdateEmailTemplateSchema,
 } from "./email";
 
@@ -149,6 +150,79 @@ describe("UpdateEmailTemplateSchema", () => {
       });
       expect(parsed.success).toBe(false);
     });
+  });
+});
+
+describe("TiptapDocumentSchema node style attributes", () => {
+  it("accepts editor-shaped default attrs and preserves other node and mark attrs", () => {
+    const parsed = TiptapDocumentSchema.safeParse({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          attrs: { textAlign: null, fontSize: null, lineHeight: null },
+          content: [
+            {
+              type: "text",
+              text: "A link",
+              marks: [
+                {
+                  type: "link",
+                  attrs: { href: "https://example.test", target: "_blank" },
+                },
+              ],
+            },
+            { type: "mention", attrs: { id: "firstName" } },
+          ],
+        },
+        {
+          type: "heading",
+          attrs: { level: 2, textAlign: "center" },
+          content: [{ type: "text", text: "Heading" }],
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.content[0]?.attrs).toMatchObject({
+      textAlign: null,
+      fontSize: null,
+      lineHeight: null,
+    });
+    expect(parsed.data.content[1]?.attrs).toMatchObject({
+      level: 2,
+      textAlign: "center",
+    });
+  });
+
+  it("normalizes unitless CSS lengths and rejects injected style values", () => {
+    const parsed = TiptapDocumentSchema.safeParse({
+      type: "doc",
+      content: [
+        { type: "paragraph", attrs: { fontSize: "16", lineHeight: 1.6 } },
+      ],
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.content[0]?.attrs).toMatchObject({
+        fontSize: "16px",
+        lineHeight: "1.6",
+      });
+    }
+
+    for (const attrs of [
+      { fontSize: '18px"><mj-include path="/tmp/canary" />' },
+      { lineHeight: '1.5"><mj-include path="/tmp/canary" />' },
+      { textAlign: 'left"><mj-include path="/tmp/canary" />' },
+    ]) {
+      expect(
+        TiptapDocumentSchema.safeParse({
+          type: "doc",
+          content: [{ type: "paragraph", attrs }],
+        }).success,
+      ).toBe(false);
+    }
   });
 });
 
