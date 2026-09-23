@@ -145,14 +145,23 @@ export async function listMigrationStepRecords(
   migrationId: string,
   variant: MigrationVariant,
 ): Promise<SchemaMigrationStepRecord[]> {
-  const result = await client.query<SchemaMigrationStepRecord>(
+  // CockroachDB maps SQL INTEGER to INT8 and its PostgreSQL wire driver returns
+  // those values as decimal strings, while PostgreSQL returns JavaScript
+  // numbers. Normalize the ledger boundary so resumption uses the same keys.
+  const result = await client.query<Omit<SchemaMigrationStepRecord, "step_index"> & { step_index: number | string }>(
     `SELECT migration_id, variant, step_index, checksum, applied_at, applied_by
      FROM public.schema_migration_steps
      WHERE migration_id = $1 AND variant = $2
      ORDER BY step_index`,
     [migrationId, variant],
   );
-  return result.rows;
+  return result.rows.map((record) => {
+    const stepIndex = Number(record.step_index);
+    if (!Number.isSafeInteger(stepIndex) || stepIndex < 0) {
+      throw new Error(`Migration ${migrationId} has an invalid recorded step index`);
+    }
+    return { ...record, step_index: stepIndex };
+  });
 }
 
 function isSerializationFailure(error: unknown): boolean {
@@ -193,10 +202,10 @@ export async function refreshMigrationLease(client: Client, owner: string): Prom
       const result = await client.query(
         `UPDATE public.schema_migration_lock
          SET lease_until = now() + interval '${LEASE_TTL_SECONDS} seconds'
-         WHERE id = 1 AND owner = $1`,
+         WHERE id = 1 AND owner = $1 AND lease_until > now()`,
         [owner],
       );
-      if (result.rowCount !== 1) throw new Error("Migration lease was lost; stopping before the next SQL statement");
+      if (result.rowCount !== 1) throw new Error("Migration lease was lost or expired; stopping before the next SQL statement");
       return;
     } catch (error) {
       if (!isSerializationFailure(error) || attempt === 3) throw error;
@@ -214,12 +223,20 @@ export async function releaseMigrationLease(client: Client, owner: string): Prom
 
 interface LeaseHeartbeat {
   assertAlive(): void;
+  checkAlive(): Promise<void>;
   close(): Promise<void>;
 }
 
 async function startLeaseHeartbeat(connectionString: string, owner: string): Promise<LeaseHeartbeat> {
   const keeper = new Client({ connectionString, application_name: "focale-migration-lease" });
   await keeper.connect();
+  const observer = new Client({ connectionString, application_name: "focale-migration-lease-check" });
+  try {
+    await observer.connect();
+  } catch (error) {
+    await keeper.end().catch(() => undefined);
+    throw error;
+  }
   let stopped = false;
   let failure: Error | undefined;
   let timer: NodeJS.Timeout;
@@ -239,14 +256,27 @@ async function startLeaseHeartbeat(connectionString: string, owner: string): Pro
   };
   timer = setTimeout(() => void beat(), intervalMs);
   timer.unref();
+  const assertAlive = (): void => {
+    if (failure) throw new Error(`Migration lease renewal failed: ${failure.message}`);
+  };
   return {
-    assertAlive() {
-      if (failure) throw new Error(`Migration lease renewal failed: ${failure.message}`);
+    assertAlive,
+    async checkAlive() {
+      assertAlive();
+      const result = await observer.query<{ owner: string; active: boolean }>(
+        `SELECT owner, lease_until > now() AS active
+         FROM public.schema_migration_lock WHERE id = 1`,
+      );
+      if (result.rows[0]?.owner !== owner || !result.rows[0]?.active) {
+        failure = new Error("Migration lease was lost or expired");
+        assertAlive();
+      }
+      assertAlive();
     },
     async close() {
       stopped = true;
       clearTimeout(timer);
-      await keeper.end();
+      await Promise.all([keeper.end(), observer.end()]);
     },
   };
 }
@@ -258,6 +288,62 @@ async function refreshLease(
 ): Promise<void> {
   heartbeat?.assertAlive();
   await refreshMigrationLease(client, owner);
+}
+
+function beginsWithCockroachVectorIndex(statement: string): boolean {
+  const sql = statement
+    .replace(/^(?:\s*--[^\r\n]*(?:\r?\n|$))+/, "")
+    .trimStart();
+  return /^CREATE\s+VECTOR\s+INDEX\b/i.test(sql);
+}
+
+/**
+ * Fence a transaction immediately before commit. Updating the conditional lease
+ * row holds its write lock until commit, so a competing runner cannot take the
+ * lease between this ownership check and the schema/ledger commit.
+ */
+async function fenceMigrationLease(
+  client: Client,
+  owner: string,
+  heartbeat?: LeaseHeartbeat,
+): Promise<void> {
+  await heartbeat?.checkAlive();
+  const result = await client.query(
+    `UPDATE public.schema_migration_lock
+     SET lease_until = now() + interval '${LEASE_TTL_SECONDS} seconds'
+     WHERE id = 1 AND owner = $1 AND lease_until > now()`,
+    [owner],
+  );
+  if (result.rowCount !== 1) {
+    throw new Error("Migration lease was lost or expired; refusing to commit migration work");
+  }
+}
+
+async function assertLeaseAlive(
+  client: Client,
+  owner: string,
+  heartbeat?: LeaseHeartbeat,
+): Promise<void> {
+  if (heartbeat) {
+    await heartbeat.checkAlive();
+    return;
+  }
+  const result = await client.query<{ owner: string; active: boolean }>(
+    `SELECT owner, lease_until > now() AS active
+     FROM public.schema_migration_lock WHERE id = 1`,
+  );
+  if (result.rows[0]?.owner !== owner || !result.rows[0]?.active) {
+    throw new Error("Migration lease was lost or expired; stopping before the next SQL statement");
+  }
+}
+
+async function commitWithLeaseFence(
+  client: Client,
+  owner: string,
+  heartbeat: LeaseHeartbeat | undefined,
+): Promise<void> {
+  await fenceMigrationLease(client, owner, heartbeat);
+  await client.query("COMMIT");
 }
 
 async function unmetRequirement(
@@ -277,7 +363,7 @@ async function unmetRequirement(
     }
   }
 
-  if (engine === "cockroach" && migration.statements.some((statement) => /^\s*CREATE\s+VECTOR\s+INDEX\b/i.test(statement))) {
+  if (engine === "cockroach" && migration.statements.some(beginsWithCockroachVectorIndex)) {
     const result = await client.query("SHOW CLUSTER SETTING feature.vector_index.enabled");
     const value = Object.values(result.rows[0] ?? {}).some((entry) => entry === true || entry === "true" || entry === "on");
     if (!value) return "CockroachDB vector indexes require feature.vector_index.enabled; ask the database administrator to enable it";
@@ -378,9 +464,11 @@ async function executeStatement(
   await refreshLease(client, owner, heartbeat);
   await client.query("BEGIN");
   try {
+    await assertLeaseAlive(client, owner, heartbeat);
     await client.query(migration.statements[stepIndex]);
+    await assertLeaseAlive(client, owner, heartbeat);
     await writeMigrationStepRecord(client, migration, stepIndex, appliedBy);
-    await client.query("COMMIT");
+    await commitWithLeaseFence(client, owner, heartbeat);
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw error;
@@ -403,11 +491,13 @@ async function executeMigration(
     await client.query("BEGIN");
     try {
       for (const [stepIndex, statement] of migration.statements.entries()) {
+        await assertLeaseAlive(client, owner, heartbeat);
         await client.query(statement);
+        await assertLeaseAlive(client, owner, heartbeat);
         await writeMigrationStepRecord(client, migration, stepIndex, appliedBy);
       }
       await writeMigrationRecord(client, migration, "applied", appliedBy, {});
-      await client.query("COMMIT");
+      await commitWithLeaseFence(client, owner, heartbeat);
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
       throw error;
@@ -422,11 +512,26 @@ async function executeMigration(
     } else {
       await refreshLease(client, owner, heartbeat);
       await client.query(statement);
-      await writeMigrationStepRecord(client, migration, stepIndex, appliedBy);
+      await assertLeaseAlive(client, owner, heartbeat);
+      await client.query("BEGIN");
+      try {
+        await writeMigrationStepRecord(client, migration, stepIndex, appliedBy);
+        await commitWithLeaseFence(client, owner, heartbeat);
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => undefined);
+        throw error;
+      }
     }
   }
   await refreshLease(client, owner, heartbeat);
-  await writeMigrationRecord(client, migration, "applied", appliedBy, {});
+  await client.query("BEGIN");
+  try {
+    await writeMigrationRecord(client, migration, "applied", appliedBy, {});
+    await commitWithLeaseFence(client, owner, heartbeat);
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  }
 }
 
 function assertExistingRecord(record: SchemaMigrationRecord, migration: MigrationDefinition): void {

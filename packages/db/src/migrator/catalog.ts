@@ -188,10 +188,13 @@ export async function inspectMigrationCatalog(
   engine: DatabaseEngine,
   migration: MigrationDefinition,
 ): Promise<MigrationCatalogReport> {
-  const results = await Promise.all(deriveCatalogProbes(migration).map(async (probe) => ({
-    probe,
-    passed: "query" in probe ? await sqlProbe(client, probe) : await objectExists(client, engine, probe),
-  })));
+  const results: Array<{ probe: CatalogObjectProbe | CatalogSqlProbe; passed: boolean }> = [];
+  for (const probe of deriveCatalogProbes(migration)) {
+    const passed = "query" in probe
+      ? await sqlProbe(client, probe)
+      : await objectExists(client, engine, probe);
+    results.push({ probe, passed });
+  }
   const matched = results.filter((result) => result.passed).length;
   const total = results.length;
   const state = total === 0 ? "unverifiable" : matched === total ? "all" : matched === 0 ? "none" : "partial";
