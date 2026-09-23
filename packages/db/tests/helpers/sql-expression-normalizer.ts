@@ -119,7 +119,7 @@ function protectQuotedTokens(expression: string): {
     text,
     restore(normalized: string) {
       for (const token of protectedTokens) {
-        normalized = normalized.replaceAll(token.marker, token.original);
+        normalized = normalized.replaceAll(token.marker, () => token.original);
       }
       return normalized;
     },
