@@ -1,3 +1,4 @@
+-- migrate: transaction per-file
 CREATE TYPE "public"."AbstractBookJobStatus" AS ENUM('PENDING', 'RUNNING', 'COMPLETED', 'FAILED');--> statement-breakpoint
 CREATE TYPE "public"."AbstractBookOrder" AS ENUM('BY_CODE', 'BY_THEME', 'BY_SUBMISSION_ORDER');--> statement-breakpoint
 CREATE TYPE "public"."AbstractEmailTrigger" AS ENUM('ABSTRACT_SUBMISSION_ACK', 'ABSTRACT_EDIT_ACK', 'ABSTRACT_DECISION', 'ABSTRACT_ACCEPTED', 'ABSTRACT_REJECTED', 'ABSTRACT_COMMITTEE_INVITE', 'ABSTRACT_COMMITTEE_COMMENTS', 'ABSTRACT_SCORE_DIVERGENCE', 'ABSTRACT_FINAL_FILE_REQUEST');--> statement-breakpoint
