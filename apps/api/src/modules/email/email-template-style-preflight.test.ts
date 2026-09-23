@@ -90,7 +90,7 @@ describe("preflightEmailTemplateContent", () => {
     expect(result.validationIssues.length).toBeGreaterThan(0);
   });
 
-  it("finds suspicious attrs on images, mentions, and link marks without changing them", () => {
+  it("finds suspicious attrs on images, mentions, and link marks without changing them", async () => {
     const document = suspiciousDocument();
     const result = preflightEmailTemplateContent(document);
 
@@ -114,9 +114,11 @@ describe("preflightEmailTemplateContent", () => {
       target: '_blank"><mj-include path="/tmp/canary" />',
       custom: "data<mj-include",
     });
-    expect(() =>
-      compileMjmlToHtml(renderTemplateToMjml(result.content!)),
-    ).not.toThrow();
+    await expect(
+      Promise.resolve().then(() =>
+        compileMjmlToHtml(renderTemplateToMjml(result.content!)),
+      ),
+    ).resolves.toMatchObject({ html: expect.stringContaining("<html") });
   });
 
   it("re-renders schema-valid templates with suspicious attrs in dry-run mode", async () => {
