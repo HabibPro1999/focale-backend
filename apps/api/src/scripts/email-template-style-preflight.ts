@@ -3,12 +3,7 @@ import {
   getDb,
   updateEmailTemplate,
 } from "@app/db";
-import {
-  compileMjmlToHtml,
-  extractPlainText,
-  renderTemplateToMjml,
-} from "@app/integrations";
-import { preflightEmailTemplateContent } from "../modules/email/email-template-style-preflight";
+import { runEmailTemplateStylePreflight } from "../modules/email/email-template-style-preflight";
 
 // Run from apps/api with `node --conditions=@app/source -r @swc-node/register src/scripts/email-template-style-preflight.ts`.
 // Review the default dry-run output before rerunning with `--apply`.
@@ -20,9 +15,6 @@ async function main(): Promise<void> {
   }
 
   const db = getDb();
-  let changed = 0;
-  let manualReview = 0;
-  let conflicts = 0;
 
   try {
     const rows = await db
@@ -34,71 +26,50 @@ async function main(): Promise<void> {
       })
       .from(emailTemplates);
 
-    console.log(
-      `Scanned ${rows.length} email template(s); mode=${apply ? "apply" : "dry-run"}.`,
-    );
-
-    for (const row of rows) {
-      const preflight = preflightEmailTemplateContent(row.content);
-      if (preflight.changes.length === 0) {
-        if (preflight.validationIssues.length > 0) {
-          manualReview += 1;
-          console.error(
-            `[MANUAL REVIEW] ${row.id} (${row.name}): ${preflight.validationIssues.join("; ")}`,
-          );
-        }
-        continue;
-      }
-
-      const changeSummary = preflight.changes
-        .map(({ path, attribute, action }) => `${path}.${attribute}:${action}`)
-        .join(", ");
-      console.log(`[STYLE ATTRS] ${row.id} (${row.name}): ${changeSummary}`);
-
-      if (!preflight.content) {
-        manualReview += 1;
-        console.error(
-          `[MANUAL REVIEW] ${row.id} (${row.name}): ${preflight.validationIssues.join("; ")}`,
-        );
-        continue;
-      }
-
-      try {
-        const mjmlContent = renderTemplateToMjml(preflight.content);
-        const { html: htmlContent } = compileMjmlToHtml(mjmlContent);
-        const plainContent = extractPlainText(preflight.content);
-        changed += 1;
-
-        if (!apply) continue;
-
-        const updated = await updateEmailTemplate(
+    const summary = await runEmailTemplateStylePreflight(rows, {
+      apply,
+      update: (row, update) =>
+        updateEmailTemplate(
           row.id,
           {
-            content: preflight.content,
-            mjmlContent,
-            htmlContent,
-            plainContent,
+            content: update.content,
+            mjmlContent: update.mjmlContent,
+            htmlContent: update.htmlContent,
+            plainContent: update.plainContent,
           },
           row.updatedAt,
+        ),
+    });
+
+    console.log(
+      `Scanned ${summary.scanned} email template(s); mode=${apply ? "apply" : "dry-run"}.`,
+    );
+    for (const report of summary.reports) {
+      const label = `${report.id} (${report.name})`;
+      if (report.changes.length > 0) {
+        const changeSummary = report.changes
+          .map(({ path, attribute, action }) => `${path}.${attribute}:${action}`)
+          .join(", ");
+        console.log(`[STYLE ATTRS] ${label}: ${changeSummary}`);
+      }
+      if (report.suspiciousAttributes.length > 0) {
+        console.log(
+          `[SUSPICIOUS ATTRS] ${label}: ${report.suspiciousAttributes.join(", ")}`,
         );
-        if (!updated) {
-          conflicts += 1;
-          console.error(
-            `[CONCURRENT EDIT] ${row.id} (${row.name}) changed after the scan; skipped.`,
-          );
-        }
-      } catch (error) {
-        manualReview += 1;
+      }
+      if (report.status === "manual-review") {
         console.error(
-          `[MANUAL REVIEW] ${row.id} (${row.name}): could not re-render (${error instanceof Error ? error.message : "unknown error"}).`,
+          `[MANUAL REVIEW] ${label}: ${report.validationIssues.join("; ") || report.detail || "preflight failed"}`,
         );
+      } else if (report.status === "conflict") {
+        console.error(`[CONCURRENT EDIT] ${label}: ${report.detail}.`);
       }
     }
 
     console.log(
-      `${apply ? "Updated" : "Would update"} ${changed - conflicts} template(s); ${manualReview} need manual review; ${conflicts} concurrent edit(s) skipped.`,
+      `${apply ? "Updated" : "Would update"} ${apply ? summary.updated : summary.wouldUpdate} template(s); ${summary.manualReview} need manual review; ${summary.conflicts} concurrent edit(s) skipped.`,
     );
-    if (manualReview > 0 || conflicts > 0) process.exitCode = 1;
+    if (summary.manualReview > 0 || summary.conflicts > 0) process.exitCode = 1;
   } finally {
     await db.$client.end();
   }
