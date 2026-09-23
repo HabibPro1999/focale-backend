@@ -20,6 +20,7 @@ const db = vi.hoisted(() => ({
   searchRegistrantsForSponsorship: vi.fn(),
   getRegistrationByIdRow: vi.fn(),
   getRegistrationForCheckIn: vi.fn(),
+  checkInRegistration: vi.fn(),
   CHECKIN_ELIGIBLE_STATUSES: ["PAID", "SPONSORED", "WAIVED"],
   getRegistrationByIdempotencyKeyRow: vi.fn(),
   getRegistrationClientId: vi.fn(),
@@ -249,6 +250,49 @@ describe("RegistrationsService", () => {
       expect(res.stats.paid).toEqual({ count: 1, amount: 90 });
       expect(res.stats.pending).toEqual({ count: 1, amount: 50 });
       expect(res.stats.sponsored).toEqual({ count: 1, amount: 70 });
+    });
+  });
+
+  // ---- createAdminRegistration --------------------------------------------
+  describe("createAdminRegistration", () => {
+    beforeEach(() => {
+      db.findRegistrationFormForEvent.mockResolvedValue({
+        id: "form1",
+        eventId: "ev1",
+        schemaVersion: 3,
+      });
+      db.registrationExistsByEmailForm.mockResolvedValue(false);
+      db.getEventForRegistrationAdmin.mockResolvedValue({
+        id: "ev1",
+        clientId: "c1",
+        status: "OPEN",
+        endDate: FUTURE,
+        maxCapacity: null,
+        registeredCount: 0,
+        client: activeClient(),
+      });
+      db.insertRegistrationRow.mockResolvedValue({ id: "reg1" });
+      db.getRegistrationByIdRow.mockResolvedValue(makeRegRow());
+    });
+
+    it("sets paidAmount to the net price when created as PAID", async () => {
+      await service.createAdminRegistration(
+        "ev1",
+        {
+          email: "paid@example.com",
+          firstName: "Paid",
+          lastName: "Registrant",
+          paymentStatus: "PAID",
+          accessSelections: [],
+        } as never,
+        "admin1",
+      );
+
+      expect(db.insertRegistrationRow.mock.calls[0]?.[0]).toMatchObject({
+        paymentStatus: "PAID",
+        totalAmount: 100,
+        paidAmount: 100,
+      });
     });
   });
 
@@ -483,6 +527,198 @@ describe("RegistrationsService", () => {
       );
       expect(countsEvt?.[1].payload.accessIds).toEqual([]);
     });
+
+    it("defaults PAID to the net amount after sponsorship", async () => {
+      db.findRegistrationForMutation.mockResolvedValue(
+        makeRegRow({
+          paymentStatus: "PARTIAL",
+          paidAmount: 20,
+          totalAmount: 100,
+          sponsorshipAmount: 40,
+          event: { clientId: "c1", status: "OPEN", client: activeClient() },
+        }),
+      );
+
+      await service.updateRegistration("reg1", { paymentStatus: "PAID" } as never);
+
+      expect(db.updateRegistrationRow.mock.calls[0]?.[1]).toMatchObject({
+        paymentStatus: "PAID",
+        paidAmount: 60,
+      });
+    });
+  });
+
+  // ---- adminEditRegistration ----------------------------------------------
+  describe("adminEditRegistration", () => {
+    const adminRow = (overrides: Record<string, unknown> = {}) =>
+      makeRegRow({
+        event: {
+          id: "ev1",
+          clientId: "c1",
+          status: "OPEN",
+          client: activeClient(),
+        },
+        ...overrides,
+      });
+
+    beforeEach(() => {
+      db.findRegistrationForMutation.mockResolvedValue(adminRow());
+      db.getRegistrationByIdRow.mockResolvedValue(adminRow());
+      db.findRegistrationUsagesForRecalc.mockResolvedValue([]);
+      pricing.calculatePrice.mockResolvedValue(emptyBreakdown(100));
+    });
+
+    it("keeps a PAID registration PAID when an admin reprices it", async () => {
+      db.findRegistrationForMutation.mockResolvedValue(
+        adminRow({
+          paymentStatus: "PAID",
+          paidAmount: 100,
+          paidAt: new Date("2026-01-01T00:00:00.000Z"),
+        }),
+      );
+      pricing.calculatePrice.mockResolvedValue(emptyBreakdown(150));
+
+      await service.adminEditRegistration(
+        "ev1",
+        "reg1",
+        { formData: { answer: "repriced" } } as never,
+        "admin1",
+      );
+
+      const patch = db.updateRegistrationRow.mock.calls[0]?.[1];
+      expect(patch).toMatchObject({ totalAmount: 150 });
+      expect(patch.paymentStatus).toBeUndefined();
+      expect(patch.paidAmount).toBeUndefined();
+      expect(patch.paidAt).toBeUndefined();
+    });
+
+    it("keeps VERIFYING while sponsorship settlement is recalculated", async () => {
+      db.findRegistrationForMutation.mockResolvedValue(
+        adminRow({ paymentStatus: "VERIFYING", paidAmount: 0 }),
+      );
+      pricing.calculatePrice.mockResolvedValue({
+        ...emptyBreakdown(100),
+        sponsorshipTotal: 100,
+        total: 0,
+      });
+
+      await service.adminEditRegistration(
+        "ev1",
+        "reg1",
+        { formData: { answer: "sponsored" } } as never,
+        "admin1",
+      );
+
+      expect(db.updateRegistrationRow.mock.calls[0]?.[1].paymentStatus).toBeUndefined();
+      const event = db.enqueueRealtimeOutboxEvent.mock.calls
+        .map((call) => call[1])
+        .find((candidate) => candidate.type === "registration.updated");
+      expect(event?.payload.paymentStatus).toBe("VERIFYING");
+    });
+
+    it("emits the settlement-derived status after an admin price edit", async () => {
+      pricing.calculatePrice.mockResolvedValue({
+        ...emptyBreakdown(100),
+        sponsorshipTotal: 100,
+        total: 0,
+      });
+
+      await service.adminEditRegistration(
+        "ev1",
+        "reg1",
+        { formData: { answer: "sponsored" } } as never,
+        "admin1",
+      );
+
+      const event = db.enqueueRealtimeOutboxEvent.mock.calls
+        .map((call) => call[1])
+        .find((candidate) => candidate.type === "registration.paymentConfirmed");
+      expect(event?.payload.paymentStatus).toBe("SPONSORED");
+    });
+
+    it("defaults payment-only PAID edits to the current net amount", async () => {
+      db.findRegistrationForMutation.mockResolvedValue(
+        adminRow({
+          paymentStatus: "PARTIAL",
+          paidAmount: 20,
+          totalAmount: 100,
+          sponsorshipAmount: 40,
+        }),
+      );
+
+      await service.adminEditRegistration(
+        "ev1",
+        "reg1",
+        { paymentStatus: "PAID" } as never,
+        "admin1",
+      );
+
+      expect(db.updateRegistrationRow.mock.calls[0]?.[1]).toMatchObject({
+        paymentStatus: "PAID",
+        paidAmount: 60,
+      });
+    });
+
+    it("defaults combined PAID repricing edits to the final net after sponsorship", async () => {
+      db.findRegistrationForMutation.mockResolvedValue(
+        adminRow({
+          paymentStatus: "PENDING",
+          paidAmount: 0,
+          totalAmount: 100,
+          sponsorshipAmount: 40,
+        }),
+      );
+      db.findRegistrationUsagesForRecalc.mockResolvedValue([
+        {
+          id: "usage1",
+          amountApplied: 40,
+          sponsorship: {
+            coversBasePrice: true,
+            coveredAccessIds: [],
+            totalAmount: 60,
+          },
+        },
+      ]);
+      pricing.calculatePrice.mockResolvedValue({
+        ...emptyBreakdown(150),
+        basePrice: 120,
+        calculatedBasePrice: 120,
+      });
+
+      await service.adminEditRegistration(
+        "ev1",
+        "reg1",
+        { paymentStatus: "PAID", formData: { answer: "repriced" } } as never,
+        "admin1",
+      );
+
+      expect(db.updateUsageAmount).toHaveBeenCalledWith(expect.anything(), "usage1", 60);
+      expect(db.updateRegistrationRow.mock.calls[0]?.[1]).toMatchObject({
+        paymentStatus: "PAID",
+        totalAmount: 150,
+        sponsorshipAmount: 60,
+        paidAmount: 90,
+      });
+    });
+
+    it("preserves an explicitly supplied paid amount", async () => {
+      db.findRegistrationForMutation.mockResolvedValue(
+        adminRow({
+          paymentStatus: "PENDING",
+          totalAmount: 100,
+          sponsorshipAmount: 40,
+        }),
+      );
+
+      await service.adminEditRegistration(
+        "ev1",
+        "reg1",
+        { paymentStatus: "PAID", paidAmount: 55 } as never,
+        "admin1",
+      );
+
+      expect(db.updateRegistrationRow.mock.calls[0]?.[1].paidAmount).toBe(55);
+    });
   });
 
   // ---- deleteRegistration --------------------------------------------------
@@ -643,12 +879,13 @@ describe("RegistrationsService", () => {
       expect(db.casUpdateRegistrationByUpdatedAt).not.toHaveBeenCalled();
     });
 
-    it("reprices paid access additions as PARTIAL and blocks check-in", async () => {
+    it("keeps PAID after a price increase, leaves an amount due, and allows check-in", async () => {
+      const paidAt = new Date("2026-01-01T00:00:00.000Z");
       const oldBreakdown = { ...emptyBreakdown(100), accessItems: [
         { accessId: "old", quantity: 1, subtotal: 100 },
       ] };
       db.findRegistrationWithFormEvent.mockResolvedValue(editFetch({
-        paymentStatus: "PAID", paidAmount: 100, paidAt: new Date(),
+        paymentStatus: "PAID", paidAmount: 100, paidAt,
         priceBreakdown: oldBreakdown,
       }));
       pricing.calculatePrice.mockResolvedValue({ ...emptyBreakdown(150), accessItems: [
@@ -658,13 +895,39 @@ describe("RegistrationsService", () => {
         accessSelections: [{ accessId: "old", quantity: 1 }, { accessId: "new", quantity: 1 }],
       } as never);
       const patch = db.casUpdateRegistrationByUpdatedAt.mock.calls[0][2];
-      expect(patch).toMatchObject({ totalAmount: 150, paymentStatus: "PARTIAL", paidAt: null });
+      expect(patch).toMatchObject({ totalAmount: 150, paymentStatus: "PAID", paidAt });
+      expect(patch.sponsorshipAmount).toBe(0);
+      expect(calculateSettlement({ ...patch, paidAmount: 100 }).amountDue).toBe(50);
       expect(access.syncPaidCountDelta).toHaveBeenCalledWith("ev1",
         expect.objectContaining({ status: "PAID" }),
-        expect.objectContaining({ status: "PARTIAL", coveredAccessIds: new Set() }), expect.anything());
-      db.getRegistrationForCheckIn.mockResolvedValue({ ...makeRegRow(), ...patch });
-      await expect(new CheckinService().checkIn("ev1", "reg1", "new", "admin"))
-        .rejects.toMatchObject({ code: ErrorCodes.CHECKIN_PAYMENT_REQUIRED });
+        expect.objectContaining({
+          status: "PAID",
+          coveredAccessIds: new Set(),
+          priceBreakdown: expect.objectContaining({
+            accessItems: expect.arrayContaining([
+              expect.objectContaining({ accessId: "new" }),
+            ]),
+          }),
+        }), expect.anything());
+      expect(access.incrementAccessRegisteredCountTx).toHaveBeenCalledWith(
+        "new",
+        1,
+        expect.anything(),
+      );
+
+      db.getRegistrationForCheckIn.mockResolvedValue({
+        ...makeRegRow(),
+        ...patch,
+        clientId: "c1",
+      });
+      db.checkInRegistration.mockResolvedValue(undefined);
+      await expect(
+        new CheckinService().checkIn("ev1", "reg1", undefined, "admin"),
+      ).resolves.toMatchObject({
+        success: true,
+        registration: { paymentStatus: "PAID" },
+      });
+      expect(db.checkInRegistration).toHaveBeenCalled();
     });
 
     it.each([0, 40])("keeps gross totals during repricing with %s sponsorship", async (sponsorshipAmount) => {
