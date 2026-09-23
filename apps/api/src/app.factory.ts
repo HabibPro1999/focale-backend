@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { NestFactory } from "@nestjs/core";
 import {
   FastifyAdapter,
@@ -13,20 +14,64 @@ import { loadConfig, type Config } from "./core/config";
 import { requestContext } from "./core/request-context";
 
 /**
- * Reverse-proxy hops whose X-Forwarded-For entries are trusted for `req.ip` (venue rate limits key on it).
- * Required in production; unset elsewhere means the socket address.
+ * Explicit reverse-proxy peers whose forwarded headers Fastify may trust.
+ * Numeric hop counts are deliberately rejected because they cannot validate
+ * the address that connected to the API. Production must configure the real
+ * proxy IP/CIDR list, or explicitly set TRUST_PROXY=false for direct traffic.
  */
-export function trustProxyHops(env: NodeJS.ProcessEnv = process.env): number | false {
+export function trustedProxyAddresses(
+  env: NodeJS.ProcessEnv = process.env,
+): string[] | false {
   const raw = env.TRUST_PROXY?.trim();
   if (!raw) {
-    if (env.NODE_ENV === "production")
-      throw new Error("TRUST_PROXY must be set in production to the number of reverse-proxy hops in front of the API (for example 1).");
+    if (env.NODE_ENV === "production") {
+      throw new Error(
+        'TRUST_PROXY is required in production. Set it to a comma-separated list of trusted proxy IP/CIDR addresses, or "false" only when requests reach the API directly. Replace legacy hop counts with the actual proxy peer addresses; do not use "true" or wildcard trust.',
+      );
+    }
     return false;
   }
-  const hops = Number(raw);
-  if (!Number.isInteger(hops) || hops < 0)
-    throw new Error(`TRUST_PROXY must be a non-negative integer hop count, got "${raw}".`);
-  return hops;
+
+  if (raw.toLowerCase() === "false") return false;
+
+  if (
+    raw.toLowerCase() === "true" ||
+    raw === "*" ||
+    Number.isFinite(Number(raw))
+  ) {
+    throw new Error(
+      `TRUST_PROXY value "${raw}" is unsafe or no longer supported. Set a comma-separated list of trusted proxy IP/CIDR addresses, or "false" only for direct traffic. Numeric hop counts cannot validate the connecting peer; wildcard trust is not allowed.`,
+    );
+  }
+
+  const addresses = raw.split(",").map((address) => address.trim());
+  if (
+    addresses.some(
+      (address) => !address || !isExplicitProxyAddress(address),
+    )
+  ) {
+    throw new Error(
+      `TRUST_PROXY must contain only explicit IP addresses or CIDRs separated by commas; wildcard trust, hostnames, empty entries, and /0 networks are not allowed (received "${raw}"). Configure the actual proxy peer addresses; do not use a hop count.`,
+    );
+  }
+
+  return [...new Set(addresses)];
+}
+
+function isExplicitProxyAddress(value: string): boolean {
+  const parts = value.split("/");
+  if (parts.length > 2) return false;
+
+  const [address, prefix] = parts;
+  const family = isIP(address ?? "");
+  if (family === 0) return false;
+  if (prefix === undefined) return true;
+  if (!/^\d+$/.test(prefix)) return false;
+
+  const bits = Number(prefix);
+  const maxBits = family === 4 ? 32 : 128;
+  // A zero-prefix CIDR trusts every possible peer and is equivalent to '*'.
+  return Number.isInteger(bits) && bits > 0 && bits <= maxBits;
 }
 
 /** Build the fully-wired Nest+Fastify app (plugins, requestId hook). Shared by main.ts and tests. */
@@ -42,7 +87,7 @@ export async function buildApp(
 
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
-    new FastifyAdapter({ trustProxy: trustProxyHops() }),
+    new FastifyAdapter({ trustProxy: trustedProxyAddresses() }),
     // rawBody: webhook controllers verify provider signatures over exact wire bytes.
     { bufferLogs: true, rawBody: true },
   );
