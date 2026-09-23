@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   one: vi.fn(), update: vi.fn(), remove: vi.fn(), all: vi.fn(),
   notifications: vi.fn(), since: vi.fn(), transaction: vi.fn(), revoke: vi.fn(), delete: vi.fn(),
+  store: vi.fn(),
 }));
 vi.mock("@app/db", async (original) => ({
   ...(await original<typeof import("@app/db")>()),
+  networkingStore: mocks.store,
   networkingTransaction: mocks.transaction,
   listNetworkingNotifications: mocks.notifications,
   networkingNotificationsSince: mocks.since,
@@ -30,10 +32,256 @@ function controller(service: Partial<NetworkingService>, meetings: Partial<Netwo
 }
 beforeEach(() => {
   vi.resetAllMocks();
+  mocks.store.mockReturnValue({
+    all: mocks.all,
+    one: mocks.one,
+    remove: mocks.remove,
+  });
   mocks.transaction.mockImplementation(async (_event, run) => run(mocks, {}));
   mocks.one.mockResolvedValue({ photoUrl: own, overrides: { company: "Current Co" } });
   mocks.all.mockResolvedValue([]);
   mocks.update.mockImplementation(async (_kind, _where, patch) => [patch]);
+});
+
+describe("blocks", () => {
+  const viewer = {
+    id: "viewer-1",
+    eventId: "event-1",
+    email: "viewer@example.test",
+    status: "ACTIVE",
+    consent: true,
+    withdrawnAt: null,
+  };
+
+  function makeProfile(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "target-1",
+      eventId: "event-1",
+      email: "target@example.test",
+      firstName: "Taylor",
+      lastName: "Target",
+      company: "Example Org",
+      jobTitle: "Researcher",
+      sector: "Health",
+      status: "ACTIVE",
+      consent: true,
+      withdrawnAt: null,
+      visible: true,
+      registrationId: "registration-1",
+      ...overrides,
+    };
+  }
+
+  function setup(
+    profile: ReturnType<typeof makeProfile> | null,
+    options: { connected?: boolean; swipeEnabled?: boolean; searchEnabled?: boolean } = {},
+  ) {
+    const ctx = {
+      event: { id: "event-1" },
+      profile: viewer,
+      config: {
+        swipeEnabled: options.swipeEnabled ?? true,
+        searchEnabled: options.searchEnabled ?? true,
+      },
+    };
+    const row = {
+      id: "block-row-1",
+      eventId: "event-1",
+      profileId: viewer.id,
+      targetId: profile?.id ?? "target-1",
+    };
+    mocks.all.mockResolvedValue([row]);
+    mocks.one.mockImplementation(async (name, where) => {
+      if (name === "profiles" && where.id === viewer.id) return viewer;
+      if (name === "profiles" && where.id === profile?.id) return profile;
+      if (name === "connections") {
+        return options.connected ? { id: "connection-1" } : null;
+      }
+      return null;
+    });
+    const participant = vi.fn().mockResolvedValue(ctx);
+    const eligible = vi.fn(
+      async (candidate: { status: string; withdrawnAt: Date | null; consent: boolean }) =>
+        candidate.status === "ACTIVE" && !candidate.withdrawnAt && candidate.consent,
+    );
+    const instance = controller({
+      participant,
+      eligible,
+    } as unknown as NetworkingService);
+    return { ctx, row, instance, participant, eligible };
+  }
+
+  it("returns the public profile for an eligible, visible target", async () => {
+    const target = makeProfile();
+    const { instance } = setup(target);
+
+    const result = await instance.blocks(
+      "event",
+      { headers: {} } as FastifyRequest,
+    );
+
+    expect(result).toMatchObject({
+      total: 1,
+      items: [{
+        id: "block-row-1",
+        targetId: "target-1",
+        profile: { id: "target-1", firstName: "Taylor" },
+      }],
+    });
+    expect(mocks.one).toHaveBeenCalledWith("profiles", {
+      id: "target-1",
+      eventId: "event-1",
+    });
+  });
+
+  it("keeps a block row with a null profile when the target is missing", async () => {
+    const { instance, row } = setup(null);
+
+    const result = await instance.blocks(
+      "event",
+      { headers: {} } as FastifyRequest,
+    );
+
+    expect(result).toEqual({ items: [{ ...row, profile: null }], total: 1 });
+  });
+
+  it.each([
+    ["ineligible", { consent: false }],
+    ["withdrawn", { withdrawnAt: new Date("2026-01-01T00:00:00Z") }],
+    ["suspended", { status: "SUSPENDED" }],
+  ])("keeps the row but hides an %s target", async (_reason, changes) => {
+    const { instance, row } = setup(makeProfile(changes));
+
+    const result = await instance.blocks(
+      "event",
+      { headers: {} } as FastifyRequest,
+    );
+
+    expect(result).toEqual({ items: [{ ...row, profile: null }], total: 1 });
+  });
+
+  it.each([
+    ["hidden", { visible: false }],
+    ["incomplete", { sector: "" }],
+  ])("requires a connection before showing an eligible %s target", async (_reason, changes) => {
+    const target = makeProfile(changes);
+    const disconnected = setup(target);
+    const unavailable = await disconnected.instance.blocks(
+      "event",
+      { headers: {} } as FastifyRequest,
+    );
+    expect(unavailable.items).toEqual([{ ...disconnected.row, profile: null }]);
+
+    const connected = setup(target, { connected: true });
+    const visible = await connected.instance.blocks(
+      "event",
+      { headers: {} } as FastifyRequest,
+    );
+    expect(visible.items[0]).toMatchObject({
+      targetId: "target-1",
+      profile: { id: "target-1", firstName: "Taylor" },
+    });
+    expect(mocks.one).toHaveBeenCalledWith("connections", {
+      eventId: "event-1",
+      profileAId: "target-1",
+      profileBId: "viewer-1",
+    });
+  });
+
+  it("hides a matching email identity even when its profile has another ID", async () => {
+    const target = makeProfile({ email: "  VIEWER@example.test " });
+    const { instance, row } = setup(target, { connected: true });
+
+    const result = await instance.blocks(
+      "event",
+      { headers: {} } as FastifyRequest,
+    );
+
+    expect(result.items).toEqual([{ ...row, profile: null }]);
+    expect(mocks.one).not.toHaveBeenCalledWith("connections", expect.anything());
+  });
+
+  it("requires a connection while discovery is disabled", async () => {
+    const target = makeProfile();
+    const disconnected = setup(target, {
+      swipeEnabled: false,
+      searchEnabled: false,
+    });
+    const unavailable = await disconnected.instance.blocks(
+      "event",
+      { headers: {} } as FastifyRequest,
+    );
+    expect(unavailable.items).toEqual([{ ...disconnected.row, profile: null }]);
+
+    const connected = setup(target, {
+      connected: true,
+      swipeEnabled: false,
+      searchEnabled: false,
+    });
+    const visible = await connected.instance.blocks(
+      "event",
+      { headers: {} } as FastifyRequest,
+    );
+    expect(visible.items[0].profile).toMatchObject({ id: "target-1" });
+  });
+
+  it("rejects the viewer's own profile as a block target", async () => {
+    mocks.all.mockResolvedValue([{
+      id: "block-row-self",
+      eventId: "event-1",
+      profileId: viewer.id,
+      targetId: viewer.id,
+    }]);
+    const participant = vi.fn().mockResolvedValue({
+      event: { id: "event-1" },
+      profile: viewer,
+      config: { swipeEnabled: true, searchEnabled: true },
+    });
+    const instance = controller({ participant });
+
+    await expect(
+      instance.blocks("event", { headers: {} } as FastifyRequest),
+    ).rejects.toMatchObject({
+      response: { code: "NETWORKING_VALIDATION" },
+    });
+  });
+
+  it("denies the block list when the current profile is no longer eligible", async () => {
+    const target = makeProfile();
+    const { instance } = setup(target);
+    const participant = vi.fn().mockResolvedValue({
+      event: { id: "event-1" },
+      profile: viewer,
+      config: { swipeEnabled: true, searchEnabled: true },
+    });
+    const eligible = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const instanceWithEligibility = controller({
+      participant,
+      eligible,
+    } as unknown as NetworkingService);
+
+    await expect(
+      instanceWithEligibility.blocks("event", { headers: {} } as FastifyRequest),
+    ).rejects.toMatchObject({
+      response: { code: "NETWORKING_NOT_ELIGIBLE" },
+    });
+    expect(mocks.store).toHaveBeenCalled();
+  });
+
+  it("keeps the target ID available to unblock after hiding the profile", async () => {
+    const { instance, row } = setup(makeProfile({ withdrawnAt: new Date() }));
+    const request = { headers: {} } as FastifyRequest;
+
+    const result = await instance.blocks("event", request);
+    expect(result.items[0]).toEqual({ ...row, profile: null });
+    await instance.unblock("event", row.targetId, request);
+
+    expect(mocks.remove).toHaveBeenCalledWith("blocks", {
+      eventId: "event-1",
+      profileId: viewer.id,
+      targetId: row.targetId,
+    });
+  });
 });
 
 describe("withdrawal", () => {
