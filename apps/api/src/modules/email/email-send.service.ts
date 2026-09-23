@@ -237,7 +237,7 @@ export class EmailSendService {
     const context = await buildEmailContextWithAccess(registration);
 
     const mjml = renderTemplateToMjml(content);
-    const { html: rawHtml } = compileMjmlToHtml(mjml);
+    const { html: rawHtml } = await compileMjmlToHtml(mjml);
     const rawPlain = extractPlainText(content);
 
     const resolvedSubject = resolveVariables(subject, context);

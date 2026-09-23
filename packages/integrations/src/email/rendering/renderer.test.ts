@@ -60,18 +60,20 @@ describe("renderTemplateToMjml", () => {
 });
 
 describe("compileMjmlToHtml", () => {
-  it("compiles valid MJML (with unresolved {{vars}}) to HTML without throwing", () => {
+  it("compiles valid MJML (with unresolved {{vars}}) to HTML without throwing", async () => {
     const mjml = renderTemplateToMjml(
       doc([{ type: "paragraph", content: [{ type: "text", text: "Hi" }] }]),
     );
-    const { html } = compileMjmlToHtml(mjml);
+    const { html } = await compileMjmlToHtml(mjml);
     expect(html).toContain("<html");
     expect(html).toContain("Hi");
   });
 
-  it("throws on genuinely invalid MJML (surfaces as an unhandled 500)", () => {
+  it("throws on genuinely invalid MJML (surfaces as an unhandled 500)", async () => {
     // Strict-mode mjml2html throws a ValidationError for unregistered elements.
-    expect(() => compileMjmlToHtml("<mjml><mj-not-real /></mjml>")).toThrow();
+    await expect(
+      compileMjmlToHtml("<mjml><mj-not-real /></mjml>"),
+    ).rejects.toThrow();
   });
 });
 
