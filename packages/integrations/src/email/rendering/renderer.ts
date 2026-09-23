@@ -304,7 +304,9 @@ function renderBlockquote(node: TiptapNode): string {
 function renderImage(node: TiptapNode): string {
   const src = escapeHtml(String(node.attrs?.src || ""));
   const alt = escapeHtml(String(node.attrs?.alt ?? ""));
-  const width = String(node.attrs?.width || "600");
+  const widthValue = String(node.attrs?.width ?? "600").trim();
+  const widthMatch = /^(\d+(?:\.\d+)?)(?:px)?$/i.exec(widthValue);
+  const width = widthMatch ? `${widthMatch[1]}px` : "600px";
 
   if (!src) return "";
 

@@ -106,6 +106,29 @@ describe("renderTemplateToMjml", () => {
       '<mj-text align="left" font-size="16px" line-height="1.6">Readable spacing</mj-text>',
     );
   });
+
+  it("normalizes image widths and falls back when a width is not an MJML pixel value", () => {
+    const mjml = renderTemplateToMjml(
+      doc([
+        {
+          type: "image",
+          attrs: { src: "https://assets.example/image.png", width: 320 },
+        },
+        {
+          type: "image",
+          attrs: {
+            src: "https://assets.example/injected.png",
+            width: '600"><mj-include path="/tmp/canary" />',
+          },
+        },
+      ]),
+    );
+
+    expect(mjml).toContain('width="320px"');
+    expect(mjml).toContain('width="600px"');
+    expect(mjml).not.toContain("<mj-include");
+    expect(() => compileMjmlToHtml(mjml)).not.toThrow();
+  });
 });
 
 describe("compileMjmlToHtml", () => {
