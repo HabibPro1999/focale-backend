@@ -19,6 +19,14 @@ vector index is also recorded as deferred when its cluster feature setting is
 off; it still requires an explicit `--apply-deferred` after an administrator
 enables the setting.
 
+Provision PostgreSQL extensions before invoking the runner. The disposable DB
+test helper may install `vector` in its newly-created test database; production
+`apply` only verifies that the extension is already present. On each migration,
+the runner checks lease ownership between statements and fences each commit by
+updating the conditional lease row. If another runner takes an expired lease,
+the current transaction rolls back and the runner stops before the next SQL
+statement.
+
 SQL is divided only at `--> statement-breakpoint` lines. The runner never splits
 on semicolons. New files should use breakpoints wherever individual statements
 need separate transactions. The `-- migrate:` header is removed from whole-file
