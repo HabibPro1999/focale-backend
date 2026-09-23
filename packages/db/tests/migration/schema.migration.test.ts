@@ -5,6 +5,7 @@ import * as schema from "../../src/schema";
 import type { ScratchDatabase } from "@app/db/testing";
 import { createScratchDatabase } from "@app/db/testing";
 import { dbTestsEnabled } from "../helpers/test-env";
+import { normalizeSqlExpression } from "../helpers/sql-expression-normalizer";
 import { dbTestSetupTimeoutMs } from "../../vitest.shared";
 
 const RAW_INDEX_NAMES = [
@@ -109,33 +110,138 @@ function normalizeType(type: string): string {
     .toLowerCase();
 }
 
-function normalizeSqlExpression(expression: string | null, tableName?: string): string | null {
-  if (expression === null) return null;
-  const tableQualifier = tableName ? new RegExp(`\\b${tableName}\\.`, "gi") : /$^/;
-  return expression
-    .replace(/"([^"]+)"/g, "$1")
-    .replace(tableQualifier, "")
-    .replace(/('(?:[^']|'')*')\s*::\s*(?:[a-z_][a-z0-9_]*\.)?[a-z_][a-z0-9_]*(?:\[\])?(?:\s+(?:without|with)\s+time\s+zone)?/gi, "$1")
-    .replace(/\btimestamp\s+('(?:[^']|'')*')/gi, "$1")
-    .replace(/\bcurrent_timestamp\b/gi, "now()")
-    .replace(/\b((?:[a-z_][a-z0-9_]*\s*\([^()]*\)|[a-z_][a-z0-9_]*))\s+between\s+([+-]?\w+)\s+and\s+([+-]?\w+)/gi, "$1 >= $2 AND $1 <= $3")
-    .replace(/\b([a-z_][a-z0-9_]*)\s*=\s*any\s*\(\s*array\s*\[([^\]]*)\]\s*\)/gi, "$1 IN ($2)")
-    .replace(/\bin\s*\(([^()]*)\)/gi, "IN[$1]")
-    .replace(/\(([a-z_][a-z0-9_]*\s+in\x5b[^\x5b\x5d]*\x5d)\)/gi, "$1")
-    .replace(/\s*(>=|<=|<>|!=|=|>|<)\s*/g, "$1")
-    .replace(/\s+/g, " ")
-    .replace(/\s*([(),])\s*/g, "$1")
-    .trim()
-    .toLowerCase();
+function quoteSnapshotColumnNames(expression: string, table: DrizzleTables[string]): string {
+  // Drizzle's snapshot stores _AccessPrerequisites references as lowercase
+  // property names even though the physical SQL columns are uppercase A/B.
+  // Quote only physical names whose spelling cannot be represented unquoted.
+  const columnNames = new Map(Object.values(table.columns)
+    .filter((column) => column.name !== column.name.toLowerCase() || !/^[a-z_][a-z0-9_]*$/.test(column.name))
+    .map((column) => [column.name.toLowerCase(), column.name]));
+  let result = "";
+  let index = 0;
+
+  while (index < expression.length) {
+    const char = expression[index];
+    if (char === "'") {
+      const escapePrefix = index > 0 && /e/i.test(expression[index - 1]) &&
+        (index === 1 || !/[a-z0-9_$]/i.test(expression[index - 2]));
+      let end = index + 1;
+      while (end < expression.length) {
+        if (escapePrefix && expression[end] === "\\") {
+          end += 2;
+          continue;
+        }
+        if (expression[end] !== "'") {
+          end++;
+          continue;
+        }
+        if (expression[end + 1] === "'") {
+          end += 2;
+          continue;
+        }
+        end++;
+        break;
+      }
+      result += expression.slice(index, end);
+      index = end;
+      continue;
+    }
+    if (char === '"') {
+      let end = index + 1;
+      while (end < expression.length) {
+        if (expression[end] !== '"') {
+          end++;
+          continue;
+        }
+        if (expression[end + 1] === '"') {
+          end += 2;
+          continue;
+        }
+        end++;
+        break;
+      }
+      result += expression.slice(index, end);
+      index = end;
+      continue;
+    }
+    if (char === "$") {
+      const delimiter = /^\$(?:[a-z_][a-z0-9_]*)?\$/i.exec(expression.slice(index))?.[0];
+      if (delimiter) {
+        const close = expression.indexOf(delimiter, index + delimiter.length);
+        if (close >= 0) {
+          const end = close + delimiter.length;
+          result += expression.slice(index, end);
+          index = end;
+          continue;
+        }
+      }
+    }
+    if (/[a-z_]/i.test(char)) {
+      let end = index + 1;
+      while (end < expression.length && /[a-z0-9_$]/i.test(expression[end])) end++;
+      const token = expression.slice(index, end);
+      const columnName = columnNames.get(token.toLowerCase());
+      result += columnName === undefined ? token : `"${columnName.replace(/"/g, '""')}"`;
+      index = end;
+      continue;
+    }
+    result += char;
+    index++;
+  }
+
+  return result;
+}
+
+function normalizeDrizzleExpression(expression: string | null, table: DrizzleTables[string]): string | null {
+  return expression === null
+    ? null
+    : normalizeSqlExpression(quoteSnapshotColumnNames(expression, table), table.name);
 }
 
 function normalizeAction(action: string | undefined): string {
   return (action ?? "no action").replace(/_/g, " ").toLowerCase();
 }
 
+function normalizeSimpleArrayLiteral(expression: string): string | null {
+  const body = /^'\{(.*)\}'$/.exec(expression)?.[1];
+  if (body === undefined) return null;
+  if (body === "") return "[]";
+
+  const values: Array<string | null> = [];
+  let offset = 0;
+  while (offset < body.length) {
+    let value: string;
+    let quoted = false;
+    if (body[offset] === '"') {
+      quoted = true;
+      const end = body.indexOf('"', offset + 1);
+      if (end < 0) return null;
+      value = body.slice(offset + 1, end);
+      if (!/^[a-z_][a-z0-9_]*$/i.test(value)) return null;
+      offset = end + 1;
+    } else {
+      const match = /^[a-z_][a-z0-9_]*/i.exec(body.slice(offset));
+      if (!match) return null;
+      value = match[0];
+      offset += value.length;
+    }
+
+    values.push(!quoted && value.toUpperCase() === "NULL" ? null : value);
+    if (offset === body.length) break;
+    if (body[offset] !== ",") return null;
+    offset++;
+    if (offset === body.length) return null;
+  }
+  return JSON.stringify(values);
+}
+
 function normalizeColumnDefault(expression: string | null, type: string): string | null {
   const normalized = normalizeSqlExpression(expression);
   if (normalized === null) return null;
+  if (type.endsWith("[]")) {
+    const arrayValue = normalizeSimpleArrayLiteral(normalized);
+    if (arrayValue !== null) return arrayValue;
+  }
   if (/^(smallint|integer|bigint|numeric|real|double precision)$/.test(type)) {
     const quotedNumber = /^'([+-]?\d+(?:\.\d+)?)'$/.exec(normalized);
     if (quotedNumber) return quotedNumber[1];
@@ -431,11 +537,11 @@ describe.runIf(dbTestsEnabled())("migration tier: apply + introspect", () => {
       const expectedIndexDetails = new Map(Object.values(tables).flatMap((table) =>
         Object.values(table.indexes).map((index) => [index.name, {
           table_name: table.name,
-          key_columns: index.columns.map((column) => normalizeSqlExpression(column.expression, table.name)),
+          key_columns: index.columns.map((column) => normalizeDrizzleExpression(column.expression, table)),
           is_unique: index.isUnique,
           method: index.method.toLowerCase(),
           is_partial: Boolean(index.where),
-          predicate: normalizeSqlExpression(index.where ?? null, table.name),
+          predicate: normalizeDrizzleExpression(index.where ?? null, table),
         }] as const),
       ));
       const expectedIndexes = new Set([
@@ -468,13 +574,16 @@ describe.runIf(dbTestsEnabled())("migration tier: apply + introspect", () => {
         ...Object.values(tables).flatMap((table) =>
           Object.values(table.checkConstraints).map((constraint) => [constraint.name, {
             table_name: table.name,
-            expression: normalizeSqlExpression(constraint.value, table.name),
+            expression: normalizeDrizzleExpression(constraint.value, table),
           }] as const),
         ),
-        ...Object.entries(RAW_CHECK_CONSTRAINTS).map(([name, constraint]) => [name, {
-          table_name: constraint.table_name,
-          expression: normalizeSqlExpression(constraint.expression, constraint.table_name),
-        }] as const),
+        ...Object.entries(RAW_CHECK_CONSTRAINTS).map(([name, constraint]) => {
+          const table = Object.values(tables).find((candidate) => candidate.name === constraint.table_name)!;
+          return [name, {
+            table_name: constraint.table_name,
+            expression: normalizeDrizzleExpression(constraint.expression, table),
+          }] as const;
+        }),
       ]);
       const comparableActualChecks = actualChecks;
       expect(comparableActualChecks).toEqual(expectedCheckDetails);
@@ -495,11 +604,12 @@ describe.runIf(dbTestsEnabled())("migration tier: apply + introspect", () => {
     },
   );
 
-  it("detects drift in an index predicate, CHECK expression, column default, and foreign key", async ({ skip }) => {
+  it("detects drift in an index predicate, case-sensitive CHECK/default literals, and foreign key", async ({ skip }) => {
     if (scratch.engine !== "postgres") skip();
     const expected = generateDrizzleJson(schema, undefined, ["public"], "snake_case");
     const tables = expected.tables as DrizzleTables;
     const clientsTable = Object.values(tables).find((table) => table.name === "clients")!;
+    const eventAccessTable = Object.values(tables).find((table) => table.name === "event_access")!;
     const emailDedupeTable = Object.values(tables).find((table) =>
       Object.values(table.indexes).some((index) => index.name === "email_logs_dedupe_key_active_key"),
     )!;
@@ -511,6 +621,7 @@ describe.runIf(dbTestsEnabled())("migration tier: apply + introspect", () => {
     const scopeCheck = Object.values(scopeCheckTable.checkConstraints)
       .find((constraint) => constraint.name === "certificate_templates_scope_check")!;
     const activeColumn = clientsTable.columns.active;
+    const currencyColumn = eventAccessTable.columns.currency;
     const rawPairCheck = RAW_CHECK_CONSTRAINTS.networking_connections_ordered_pair;
     const eventForeignKey = Object.values(tables).flatMap((table) => Object.values(table.foreignKeys))
       .find((foreignKey) => foreignKey.name === "certificate_templates_event_id_events_id_fk")!;
@@ -524,13 +635,14 @@ describe.runIf(dbTestsEnabled())("migration tier: apply + introspect", () => {
         DROP CONSTRAINT certificate_templates_scope_check`);
       await scratch.client.query(`ALTER TABLE certificate_templates
         ADD CONSTRAINT certificate_templates_scope_check
-        CHECK (scope IN ('REGISTRATION', 'ABSTRACT', 'BOTH', 'OTHER'))`);
+        CHECK (scope IN ('registration', 'ABSTRACT', 'BOTH', 'OTHER'))`);
       await scratch.client.query(`ALTER TABLE networking_connections
         DROP CONSTRAINT networking_connections_ordered_pair`);
       await scratch.client.query(`ALTER TABLE networking_connections
         ADD CONSTRAINT networking_connections_ordered_pair
         CHECK (profile_a_id <= profile_b_id)`);
       await scratch.client.query("ALTER TABLE clients ALTER COLUMN active SET DEFAULT false");
+      await scratch.client.query("ALTER TABLE event_access ALTER COLUMN currency SET DEFAULT 'tnd'");
       await scratch.client.query(`ALTER TABLE certificate_templates
         DROP CONSTRAINT certificate_templates_event_id_events_id_fk`);
       await scratch.client.query(`ALTER TABLE certificate_templates
@@ -541,6 +653,7 @@ describe.runIf(dbTestsEnabled())("migration tier: apply + introspect", () => {
       expect(alteredIndex.predicate).not.toBe(normalizeSqlExpression(emailDedupe.where ?? null, emailDedupeTable.name));
       const alteredCheck = (await readPostgresCheckDetails(scratch.client)).certificate_templates_scope_check;
       expect(alteredCheck.expression).not.toBe(normalizeSqlExpression(scopeCheck.value, scopeCheckTable.name));
+      expect(alteredCheck.expression).toContain("'registration'");
       const alteredRawCheck = (await readPostgresCheckDetails(scratch.client)).networking_connections_ordered_pair;
       expect(alteredRawCheck).not.toEqual({
         table_name: rawPairCheck.table_name,
@@ -549,6 +662,9 @@ describe.runIf(dbTestsEnabled())("migration tier: apply + introspect", () => {
       const alteredColumns = await readPostgresColumnDetails(scratch.client);
       expect(alteredColumns["clients.active"].default)
         .not.toBe(normalizeSqlExpression(activeColumn.default === undefined ? null : String(activeColumn.default)));
+      expect(alteredColumns["event_access.currency"].default).not.toBe(
+        normalizeSqlExpression(currencyColumn.default === undefined ? null : String(currencyColumn.default)),
+      );
       const alteredForeignKeys = await readPostgresForeignKeyDetails(scratch.client);
       const foreignKeyExpected = {
         table_name: eventForeignKey.tableFrom,
