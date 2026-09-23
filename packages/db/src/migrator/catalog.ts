@@ -55,6 +55,30 @@ const HISTORICAL_MULTI_STATEMENT_OBJECTS: Record<
     expectedPresent?: boolean;
   }>
 > = {
+  "0001:shared": [
+    { kind: "index", name: "email_template_registration_uniq", table: "email_templates" },
+    { kind: "index", name: "email_template_abstract_uniq", table: "email_templates" },
+    { kind: "index", name: "abstracts_event_id_author_email_normalized_key", table: "abstracts" },
+    { kind: "index", name: "email_logs_registration_trigger_active_key", table: "email_logs" },
+    { kind: "index", name: "email_logs_abstract_submission_ack_active_key", table: "email_logs" },
+    { kind: "index", name: "email_logs_template_recipient_trigger_active_key", table: "email_logs" },
+    { kind: "index", name: "outbox_events_dedupe_key_key", table: "outbox_events" },
+    { kind: "index", name: "registrations_access_type_ids_inverted_idx", table: "registrations" },
+  ],
+  "0003:shared": [
+    { kind: "column", name: "dedupe_key", table: "email_logs" },
+    { kind: "index", name: "email_logs_dedupe_key_active_key", table: "email_logs" },
+  ],
+  "0005:shared": [
+    { kind: "column", name: "scope", table: "certificate_templates" },
+    { kind: "constraint", name: "certificate_templates_scope_check", table: "certificate_templates" },
+    { kind: "column", name: "allowed_abstract_final_types", table: "certificate_templates" },
+  ],
+  "0007:shared": [
+    { kind: "column", name: "success_translations", table: "forms" },
+    { kind: "column", name: "translations", table: "abstract_themes" },
+    { kind: "column", name: "languages", table: "abstract_config" },
+  ],
   "0015:shared": [
     { kind: "column", name: "second_factor_verified_at", table: "networking_sessions" },
     { kind: "table", name: "networking_second_factors" },
@@ -80,6 +104,13 @@ const HISTORICAL_MULTI_STATEMENT_OBJECTS: Record<
     { kind: "index", name: "networking_notifications_unread_idx", table: "networking_notifications" },
     { kind: "index", name: "networking_meetings_requester_start_idx", table: "networking_meetings" },
     { kind: "index", name: "networking_meetings_recipient_start_idx", table: "networking_meetings" },
+  ],
+  "0013:shared": [
+    { kind: "table", name: "networking_embeddings" },
+    { kind: "index", name: "networking_embeddings_profile_kind_model_key", table: "networking_embeddings" },
+    { kind: "index", name: "networking_embeddings_event_kind_model_idx", table: "networking_embeddings" },
+    { kind: "table", name: "networking_embedding_jobs" },
+    { kind: "index", name: "networking_embedding_jobs_pending_idx", table: "networking_embedding_jobs" },
   ],
 };
 
