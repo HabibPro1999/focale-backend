@@ -34,47 +34,47 @@ export const LEGACY_NETWORKING_0018_CROSSWALK = Object.freeze({
       variantChecksum: "b3af595506e88a8092c7bc1e28cb9d56c94458f53cc497a0e52e1d46c3d5864a",
     },
     {
-      legacyChecksum: "8842a6fd6caabb48df44b5719242434c4742dc7730fba3fe8ea80acabe4fcdb8",
+      legacyChecksum: "28e2238eb2fbf5099c8751ebc92e277a3c0741e6bd866aad3ff94249d8a9c606",
       variantChecksum: "6efda7d1a2f5b9b42c4f4d3c8376d119442d6ed984f65539dc62260401a503a7",
     },
     {
-      legacyChecksum: "18d9ce1a8f993985e4a90315cbf66b901fc95cf75a92bb2d9bfb3bcfe4438637",
+      legacyChecksum: "b78fd3200f9a8071ba1489a8286f07793e6145b7f9db449fb31b9ed2406c9089",
       variantChecksum: "d0b6ad4258d86408d13a57f225b1197b2ca9994d6aff6c03f81b7683f58de4b1",
     },
     {
-      legacyChecksum: "f05a449e79123d5b44d0c5b0a3a3a59640c7c616d5314d6c9d89550a344b5e6e",
+      legacyChecksum: "a1c6a506111a13c45000326ed01af0ba35bbb01542946c37c3f7bc6b2bfc0eec",
       variantChecksum: "4a6666e96ce8bacbcbb0fa31f7c77c1c95ee5b1675792fedbd89ede60b041027",
     },
     {
-      legacyChecksum: "73380e89b857ad4ef56fabf9bd53cbcdd4273c809c7e5ed6401e7045a04387de",
+      legacyChecksum: "a4bb3173670c953f0fbc4132f18c9c35cfee1a78472d6f3aaabb06791a6596a0",
       variantChecksum: "5709043d1c39eadb3bf7c76e1d84e7e8aa06790aba1c99d34261d58d74bf770c",
     },
     {
-      legacyChecksum: "31cb1868bd387707015b3e5fc3ba1ea5b2d9882cf62f7348fdf754257fc0d308",
+      legacyChecksum: "cac600198f8101f6b3a0233fdf1e8308201ebaae78a8f207c55626c903793c5c",
       variantChecksum: "6de3fb41830eae3cd3612e9f7d729d39797e64287ae086254715f2ca1de3ff09",
     },
     {
-      legacyChecksum: "e4def8f94e12de8fbe6545cc1bf30ab07aa780de211619c9897a9118116dced9",
+      legacyChecksum: "5ae54ddb7f4818fb498e0bda20d54d9c58a53017a22610351c9679be786dca3b",
       variantChecksum: "e4def8f94e12de8fbe6545cc1bf30ab07aa780de211619c9897a9118116dced9",
     },
     {
-      legacyChecksum: "260d7582b58ab5bfb3e13a026eb5f10f514374f686563185f6f466f87ccdec50",
+      legacyChecksum: "e4579148c3ca4b694f8af990504f8d4b8e65796bf26c3949623496d7fc1740e2",
       variantChecksum: "786d19e56069beb7f663926a4991c6f4d8e7f187d100b4b93d6a92f9cbc9a703",
     },
     {
-      legacyChecksum: "7e1b3f23fcbbdad97c9d10c55a4d7bb280bb93c446a4a4eaf437422cff2c890b",
+      legacyChecksum: "eadc0c7b63dd080bcb6c27a0f7e17f8e3e71458d5ce7d5b8d0e0fd29920f7f95",
       variantChecksum: "55071786f0f21370c731859b17acd35401d4d97ea544055d4ae4b2c1e67ee738",
     },
     {
-      legacyChecksum: "fd5cc197f53ebfbb2833bce852a5aa915d6fd39eedf0a8e41ff506537154e69f",
+      legacyChecksum: "f9e61ca2bd368d2d25c56b9a9d4e92e073080f4955c430c1350bcfc911760ca6",
       variantChecksum: "ce7a4dc2e806c45739946f9f6803fb88e55b8d1f9fbae5ee314a0fbd913b63e8",
     },
     {
-      legacyChecksum: "58d30b35d578e9da4c49a20130f8415c76c7d0e23c05980ef284c1cf3ab5d067",
+      legacyChecksum: "53932d255d65a628188538614d9600d80fa29388d805fb723fefca6f8b8f4633",
       variantChecksum: "58d30b35d578e9da4c49a20130f8415c76c7d0e23c05980ef284c1cf3ab5d067",
     },
     {
-      legacyChecksum: "1712e1cb049bec004a7b3459a60a03d00dc974120ee1cdc9b6f33f0f233638d5",
+      legacyChecksum: "966b02480606ef460994f2fe02992fea148e10f203fb47b1e9f1b8a47485b9ef",
       variantChecksum: "1712e1cb049bec004a7b3459a60a03d00dc974120ee1cdc9b6f33f0f233638d5",
     },
   ]),

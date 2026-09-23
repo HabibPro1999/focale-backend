@@ -27,12 +27,18 @@ updating the conditional lease row. If another runner takes an expired lease,
 the current transaction rolls back and the runner stops before the next SQL
 statement.
 
-SQL is divided only at `--> statement-breakpoint` lines. The runner never splits
-on semicolons. New files should use breakpoints wherever individual statements
-need separate transactions. The `-- migrate:` header is removed from whole-file
-and per-step checksums so adding runner metadata does not change historical
-checksums. The CockroachDB 0018 execution variant has a fixed legacy crosswalk
-in `legacy-networking.ts`; changes to it require an explicit crosswalk update.
+SQL is divided only at explicit `--> statement-breakpoint` markers, both the
+inline Drizzle form (`;--> statement-breakpoint`) and standalone lines used by
+the CockroachDB override. The runner never splits on ordinary semicolons. New
+files should use breakpoints wherever individual statements need separate
+transactions. The `-- migrate:` header is removed from whole-file and per-step
+checksums so adding runner metadata does not change historical checksums. The
+CockroachDB 0018 execution variant has a fixed legacy crosswalk in
+`legacy-networking.ts`; changes to it require an explicit crosswalk update.
+Catalog verification reads every marked statement and has explicit metadata
+for older multi-statement networking files whose bodies cannot change. It
+checks each object's final declared state so later index drops supersede older
+create expectations; adoption still receives each migration's own probes.
 
 The CLI is emitted at `packages/db/dist/migrator/cli.js`:
 
@@ -40,6 +46,8 @@ The CLI is emitted at `packages/db/dist/migrator/cli.js`:
 - `status` reads the ledger.
 - `apply [--dry-run] --yes` applies pending migrations after setting the
   session time zone to UTC and acquiring a conditional-update lease.
+  A dry-run reports a precondition as unknown if an earlier pending migration
+  creates the relation the condition needs; it does not guess or modify schema.
 - `apply --apply-deferred=NNNN --yes` explicitly retries a migration already
   recorded as deferred.
 - `verify [--schema]` checks ledger checksums and, with `--schema`, catalog and

@@ -33,7 +33,10 @@ export function defaultMigrationsDirectory(): string {
 }
 
 const MIGRATION_FILE = /^(\d{4})_[a-z0-9][a-z0-9_-]*\.sql$/i;
-const BREAKPOINT = /^\s*-->\s*statement-breakpoint\s*$/gm;
+// Drizzle emits this separator inline after a terminating semicolon, while the
+// Cockroach override uses a standalone marker. Both are explicit boundaries;
+// ordinary SQL semicolons remain part of the statement.
+const BREAKPOINT = /(?:;[ \t]*-->[ \t]*statement-breakpoint[ \t]*(?:\r?\n|$)|^[ \t]*-->[ \t]*statement-breakpoint[ \t\r]*$(?:\r?\n)?)/gm;
 const MIGRATE_DIRECTIVE = /^\s*--\s*migrate:\s*(.*)$/i;
 
 export function sha256(value: string): string {

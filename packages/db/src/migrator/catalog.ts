@@ -27,7 +27,7 @@ function findProbe(
   statementIndex: number,
   kind: CatalogObjectKind,
   name: string,
-  options: { table?: string; expectedPresent?: boolean } = {},
+  options: { table?: string; expectedPresent?: boolean; source?: CatalogObjectProbe["source"] } = {},
 ): CatalogObjectProbe {
   return {
     migrationId: migration.id,
@@ -37,8 +37,55 @@ function findProbe(
     name,
     ...(options.table ? { table: options.table } : {}),
     expectedPresent: options.expectedPresent ?? true,
-    source: "ddl",
+    source: options.source ?? "ddl",
   };
+}
+
+/**
+ * These original networking files are single per-file execution steps so
+ * their legacy file checksums stay fixed. Keep complete catalog metadata here
+ * instead of adding breakpoints to those historical SQL bodies.
+ */
+const HISTORICAL_MULTI_STATEMENT_OBJECTS: Record<
+  string,
+  Array<{
+    kind: CatalogObjectKind;
+    name: string;
+    table?: string;
+    expectedPresent?: boolean;
+  }>
+> = {
+  "0015:shared": [
+    { kind: "column", name: "second_factor_verified_at", table: "networking_sessions" },
+    { kind: "table", name: "networking_second_factors" },
+  ],
+  "0016:shared": [
+    { kind: "index", name: "networking_blocks_target_profile_idx", table: "networking_blocks" },
+    { kind: "index", name: "networking_connections_reverse_pair_idx", table: "networking_connections" },
+    { kind: "index", name: "networking_profiles_embedding_scan_idx", table: "networking_profiles" },
+  ],
+  "0018:shared": [
+    { kind: "table", name: "networking_spaces" },
+    { kind: "index", name: "networking_spaces_event_name_key", table: "networking_spaces" },
+    { kind: "column", name: "space_id", table: "networking_tables" },
+    { kind: "constraint", name: "networking_tables_two_people_check", table: "networking_tables" },
+    { kind: "index", name: "networking_tables_event_name_key", table: "networking_tables", expectedPresent: false },
+    { kind: "index", name: "networking_tables_space_name_key", table: "networking_tables" },
+    { kind: "index", name: "networking_tables_event_space_idx", table: "networking_tables" },
+    { kind: "index", name: "networking_profiles_stand_idx", table: "networking_profiles" },
+  ],
+  "0019:shared": [
+    { kind: "column", name: "cancellation_note", table: "networking_meetings" },
+    { kind: "index", name: "networking_messages_sender_created_idx", table: "networking_messages" },
+    { kind: "index", name: "networking_notifications_unread_idx", table: "networking_notifications" },
+    { kind: "index", name: "networking_meetings_requester_start_idx", table: "networking_meetings" },
+    { kind: "index", name: "networking_meetings_recipient_start_idx", table: "networking_meetings" },
+  ],
+};
+
+function catalogObjectKey(probe: CatalogObjectProbe): string {
+  if (probe.kind === "index") return `${probe.kind}:${probe.name}`;
+  return `${probe.kind}:${probe.table ?? ""}:${probe.name}`;
 }
 
 function probesForStatement(
@@ -88,12 +135,19 @@ function probesForStatement(
 }
 
 export function deriveCatalogProbes(migration: MigrationDefinition): Array<CatalogObjectProbe | CatalogSqlProbe> {
-  const probes: Array<CatalogObjectProbe | CatalogSqlProbe> = [];
+  const objects = new Map<string, CatalogObjectProbe>();
+  const sqlProbes: CatalogSqlProbe[] = [];
   migration.statements.forEach((statement, index) => {
-    probes.push(...probesForStatement(migration, statement, index));
+    for (const probe of probesForStatement(migration, statement, index)) {
+      objects.set(catalogObjectKey(probe), probe);
+    }
   });
+  for (const object of HISTORICAL_MULTI_STATEMENT_OBJECTS[`${migration.id}:${migration.variant}`] ?? []) {
+    const probe = findProbe(migration, 0, object.kind, object.name, { ...object, source: "manifest" });
+    objects.set(catalogObjectKey(probe), probe);
+  }
   for (const extension of migration.directives.requiresExtensions) {
-    probes.push({
+    const probe: CatalogObjectProbe = {
       migrationId: migration.id,
       variant: migration.variant,
       statementIndex: -1,
@@ -101,12 +155,50 @@ export function deriveCatalogProbes(migration: MigrationDefinition): Array<Catal
       name: extension,
       expectedPresent: true,
       source: "directive",
-    });
+    };
+    objects.set(catalogObjectKey(probe), probe);
   }
   for (const query of migration.directives.verify) {
-    probes.push({ migrationId: migration.id, variant: migration.variant, query, source: "verify" });
+    sqlProbes.push({ migrationId: migration.id, variant: migration.variant, query, source: "verify" });
   }
-  return probes;
+  return [...objects.values(), ...sqlProbes];
+}
+
+/**
+ * Final schema verification checks the last declared state of each object.
+ * A later migration may intentionally remove an index introduced earlier.
+ * Per-migration probe sets remain available to adoption through
+ * deriveCatalogProbes/inspectMigrationCatalog.
+ */
+export function deriveEffectiveCatalogProbes(
+  migrations: MigrationDefinition[],
+): Map<string, Array<CatalogObjectProbe | CatalogSqlProbe>> {
+  const finalObjects = new Map<string, CatalogObjectProbe>();
+  const sqlByMigration = new Map<string, CatalogSqlProbe[]>();
+  for (const migration of migrations) {
+    for (const probe of deriveCatalogProbes(migration)) {
+      if ("query" in probe) {
+        const current = sqlByMigration.get(migration.id) ?? [];
+        current.push(probe);
+        sqlByMigration.set(migration.id, current);
+      } else {
+        finalObjects.set(catalogObjectKey(probe), probe);
+      }
+    }
+  }
+
+  const grouped = new Map<string, Array<CatalogObjectProbe | CatalogSqlProbe>>();
+  for (const probe of finalObjects.values()) {
+    const current = grouped.get(probe.migrationId) ?? [];
+    current.push(probe);
+    grouped.set(probe.migrationId, current);
+  }
+  for (const [migrationId, probes] of sqlByMigration) {
+    const current = grouped.get(migrationId) ?? [];
+    current.push(...probes);
+    grouped.set(migrationId, current);
+  }
+  return grouped;
 }
 
 async function objectExists(
@@ -188,8 +280,17 @@ export async function inspectMigrationCatalog(
   engine: DatabaseEngine,
   migration: MigrationDefinition,
 ): Promise<MigrationCatalogReport> {
+  return inspectCatalogProbes(client, engine, migration, deriveCatalogProbes(migration));
+}
+
+export async function inspectCatalogProbes(
+  client: Client,
+  engine: DatabaseEngine,
+  migration: MigrationDefinition,
+  probes: Array<CatalogObjectProbe | CatalogSqlProbe>,
+): Promise<MigrationCatalogReport> {
   const results: Array<{ probe: CatalogObjectProbe | CatalogSqlProbe; passed: boolean }> = [];
-  for (const probe of deriveCatalogProbes(migration)) {
+  for (const probe of probes) {
     const passed = "query" in probe
       ? await sqlProbe(client, probe)
       : await objectExists(client, engine, probe);

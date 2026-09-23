@@ -6,6 +6,14 @@ import { Client } from "pg";
 import { lintMigrationDirectory, loadMigrations } from "./migration";
 import { redactCredentials } from "./security";
 import {
+  applyDeferredOption,
+  parseArguments,
+  requireKnownOptions,
+  requireNoPositionals,
+  requirePositionalCount,
+  throughOption,
+} from "./cli-arguments";
+import {
   applyMigrations,
   databaseEngine,
   listMigrationRecords,
@@ -17,42 +25,7 @@ import {
 
 const MIGRATIONS_DIRECTORY = resolve(__dirname, "../../migrations");
 
-interface Arguments {
-  command: string;
-  positional: string[];
-  flags: Set<string>;
-  values: Map<string, string>;
-}
-
-function parseArguments(argv: string[]): Arguments {
-  const [command = "", ...tail] = argv;
-  const positional: string[] = [];
-  const flags = new Set<string>();
-  const values = new Map<string, string>();
-  for (const value of tail) {
-    if (!value.startsWith("--")) {
-      positional.push(value);
-      continue;
-    }
-    const index = value.indexOf("=");
-    if (index < 0) flags.add(value);
-    else values.set(value.slice(0, index), value.slice(index + 1));
-  }
-  return { command, positional, flags, values };
-}
-
-function throughOption(args: Arguments): string | undefined {
-  const through = args.values.get("--through");
-  if (through && !/^\d{4}$/.test(through)) throw new Error("Use --through=NNNN");
-  return through;
-}
-
-function requireKnownOptions(args: Arguments, flags: string[], values: string[]): void {
-  const knownFlags = new Set(flags);
-  const knownValues = new Set(values);
-  for (const flag of args.flags) if (!knownFlags.has(flag)) throw new Error(`Unknown option: ${flag}`);
-  for (const key of args.values.keys()) if (!knownValues.has(key)) throw new Error(`Unknown option: ${key}`);
-}
+import type { Arguments } from "./cli-arguments";
 
 function databaseConnectionString(): string {
   const connectionString = process.env.DATABASE_URL;
@@ -144,11 +117,10 @@ async function status(): Promise<void> {
 }
 
 async function apply(args: Arguments, dryRun: boolean): Promise<void> {
+  const through = throughOption(args);
+  const applyDeferred = applyDeferredOption(args);
   if (!dryRun && !args.flags.has("--yes")) throw new Error("Apply requires explicit confirmation: pass --yes");
   if (dryRun && args.values.has("--apply-deferred")) throw new Error("--apply-deferred cannot be combined with --dry-run");
-  const through = throughOption(args);
-  const applyDeferred = args.values.get("--apply-deferred");
-  if (applyDeferred && !/^\d{4}$/.test(applyDeferred)) throw new Error("Use --apply-deferred=NNNN");
   if (applyDeferred && !args.flags.has("--yes")) throw new Error("Applying a deferred migration requires explicit confirmation: pass --yes");
 
   await withDatabase(async (client, connectionString) => {
@@ -164,14 +136,16 @@ async function apply(args: Arguments, dryRun: boolean): Promise<void> {
     const verb = dryRun ? "Would apply" : "Applied";
     console.log(`${verb} on ${result.engine}: ${result.applied.length ? result.applied.join(", ") : "none"}`);
     if (result.deferred.length) console.log(`Deferred: ${result.deferred.join(", ")}`);
+    if (result.unknownPreconditions.length) console.log(`Preconditions unknown until earlier migrations apply: ${result.unknownPreconditions.join(", ")}`);
     if (result.skipped.length) console.log(`Already applied: ${result.skipped.join(", ")}`);
   });
 }
 
 async function verify(args: Arguments): Promise<void> {
+  const through = throughOption(args);
   await withDatabase(async (client) => {
     const engine = await databaseEngine(client);
-    const migrations = await loadMigrations(MIGRATIONS_DIRECTORY, engine, { through: throughOption(args) });
+    const migrations = await loadMigrations(MIGRATIONS_DIRECTORY, engine, { through });
     const result = await verifyMigrations(client, engine, migrations, { schema: args.flags.has("--schema") });
     console.log(`Migration verification (${result.engine}):`);
     for (const warning of result.warnings) console.warn(`  warning: ${warning}`);
@@ -209,26 +183,32 @@ async function run(): Promise<void> {
   const args = parseArguments(process.argv.slice(2));
   switch (args.command) {
     case "plan":
+      requireNoPositionals(args, "plan");
       requireKnownOptions(args, [], ["--through"]);
       await plan(throughOption(args));
       return;
     case "status":
+      requireNoPositionals(args, "status");
       requireKnownOptions(args, [], []);
       await status();
       return;
     case "apply":
+      requireNoPositionals(args, "apply");
       requireKnownOptions(args, ["--yes", "--dry-run"], ["--through", "--apply-deferred"]);
       await apply(args, args.flags.has("--dry-run"));
       return;
     case "adopt":
+      requireNoPositionals(args, "adopt");
+      requireKnownOptions(args, [], []);
       throw new Error("migrate adopt is intentionally deferred to plan item 1.4; no ledger rows were written");
     case "verify":
+      requireNoPositionals(args, "verify");
       requireKnownOptions(args, ["--schema"], ["--through"]);
       await verify(args);
       return;
     case "new":
       requireKnownOptions(args, [], []);
-      if (args.positional.length !== 1) throw new Error("Usage: migrator new <name>");
+      requirePositionalCount(args, "new", 1);
       await createMigration(args.positional[0]);
       return;
     default:
