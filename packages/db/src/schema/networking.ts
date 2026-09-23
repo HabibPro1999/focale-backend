@@ -247,6 +247,12 @@ export const networkingSpaces = pgTable(
     location: text().notNull().default(""),
     active: boolean().notNull().default(true),
     ...timestamps,
+    // Historical 0018 SQL has a database default for this one table's updated_at.
+    updatedAt: timestamp({ precision: 3 })
+      .notNull()
+      .defaultNow()
+      .$defaultFn(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (t) => [
     uniqueIndex("networking_spaces_event_name_key").on(t.eventId, t.name),

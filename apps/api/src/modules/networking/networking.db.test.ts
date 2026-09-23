@@ -8,7 +8,6 @@ import {
 import {
   updateClientRow,
   clients,
-  events,
   forms,
   registrations,
   getDb,
@@ -32,8 +31,8 @@ import {
   networkingTotp,
   networkingHash,
 } from "./networking.security";
-const enabled =
-  process.env.ALLOW_DB_TESTS === "1" && !!process.env.TEST_DATABASE_URL;
+import { dbTestsEnabled } from "@app/db/testing";
+const enabled = dbTestsEnabled();
 const mfa = new NetworkingMfaService();
 const service = new NetworkingService();
 const social = new NetworkingSocialService(service);
@@ -65,15 +64,6 @@ describe.runIf(enabled)(
   "networking real database authorization and booking",
   () => {
     beforeAll(async () => {
-      const url = new URL(process.env.TEST_DATABASE_URL!);
-      if (
-        !/(test|ci)/i.test(url.pathname) ||
-        !["localhost", "127.0.0.1"].includes(url.hostname)
-      )
-        throw new Error(
-          "Networking tests require an isolated local test database",
-        );
-      process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
       process.env.NETWORKING_TOKEN_SECRET =
         "test-networking-secret-at-least-32-characters";
       const db = getDb();

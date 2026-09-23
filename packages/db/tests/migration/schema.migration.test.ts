@@ -26,18 +26,271 @@ const LEDGER_TABLES = new Set([
 // in Drizzle now. This allowlist is intentionally empty; new raw-only indexes
 // need a named entry and a short reason here before they can pass drift checks.
 const RAW_INDEX_ALLOWLIST = new Set<string>();
-const RAW_CHECK_CONSTRAINT_ALLOWLIST = new Set([
-  // Still authored in the legacy 0012/0013 SQL migrations.
-  "networking_blocks_no_self",
-  "networking_connections_ordered_pair",
-  "networking_embedding_jobs_status_check",
-  "networking_embeddings_kind_check",
-  "networking_interests_no_self",
-  "networking_meetings_valid_interval",
-  "networking_meetings_valid_pair",
-  "networking_messages_body_length",
-  "networking_tables_minimum_capacity",
-]);
+// These domain invariants remain authored in raw 0012/0013 SQL. Keep their
+// actual table and expression in the expected catalog so raw checks are not
+// reduced to name-only allowlist entries.
+const RAW_CHECK_CONSTRAINTS = {
+  networking_blocks_no_self: {
+    table_name: "networking_blocks",
+    expression: "profile_id <> target_id",
+  },
+  networking_connections_ordered_pair: {
+    table_name: "networking_connections",
+    expression: "profile_a_id < profile_b_id",
+  },
+  networking_embedding_jobs_status_check: {
+    table_name: "networking_embedding_jobs",
+    expression: "status IN ('PENDING','PROCESSING','READY','FAILED')",
+  },
+  networking_embeddings_kind_check: {
+    table_name: "networking_embeddings",
+    expression: "kind IN ('PROFILE','OFFER','NEED')",
+  },
+  networking_interests_no_self: {
+    table_name: "networking_interests",
+    expression: "profile_id <> target_id",
+  },
+  networking_meetings_valid_interval: {
+    table_name: "networking_meetings",
+    expression: "ends_at > starts_at",
+  },
+  networking_meetings_valid_pair: {
+    table_name: "networking_meetings",
+    expression: "requester_id <> recipient_id",
+  },
+  networking_messages_body_length: {
+    table_name: "networking_messages",
+    expression: "char_length(body) BETWEEN 1 AND 1000",
+  },
+  networking_tables_minimum_capacity: {
+    table_name: "networking_tables",
+    expression: "capacity >= 2",
+  },
+} as const;
+
+type DrizzleColumn = {
+  name: string;
+  type: string;
+  primaryKey: boolean;
+  notNull: boolean;
+  default?: string | number | boolean;
+};
+type DrizzleIndex = {
+  name: string;
+  columns: Array<{ expression: string }>;
+  isUnique: boolean;
+  method: string;
+  where?: string;
+};
+type DrizzleForeignKey = {
+  name: string;
+  tableFrom: string;
+  tableTo: string;
+  columnsFrom: string[];
+  columnsTo: string[];
+  onDelete?: string;
+  onUpdate?: string;
+};
+type DrizzleCheck = { name: string; value: string };
+type DrizzleTables = Record<string, {
+  name: string;
+  columns: Record<string, DrizzleColumn>;
+  indexes: Record<string, DrizzleIndex>;
+  uniqueConstraints: Record<string, { name: string }>;
+  foreignKeys: Record<string, DrizzleForeignKey>;
+  checkConstraints: Record<string, DrizzleCheck>;
+}>;
+
+function normalizeType(type: string): string {
+  return type
+    .replace(/"([^"]+)"/g, "$1")
+    .replace(/\s*\(\s*(\d+)\s*\)/g, "($1)")
+    .replace(/ without time zone/g, "")
+    .toLowerCase();
+}
+
+function normalizeSqlExpression(expression: string | null, tableName?: string): string | null {
+  if (expression === null) return null;
+  const tableQualifier = tableName ? new RegExp(`\\b${tableName}\\.`, "gi") : /$^/;
+  return expression
+    .replace(/"([^"]+)"/g, "$1")
+    .replace(tableQualifier, "")
+    .replace(/('(?:[^']|'')*')\s*::\s*(?:[a-z_][a-z0-9_]*\.)?[a-z_][a-z0-9_]*(?:\[\])?(?:\s+(?:without|with)\s+time\s+zone)?/gi, "$1")
+    .replace(/\btimestamp\s+('(?:[^']|'')*')/gi, "$1")
+    .replace(/\bcurrent_timestamp\b/gi, "now()")
+    .replace(/\b((?:[a-z_][a-z0-9_]*\s*\([^()]*\)|[a-z_][a-z0-9_]*))\s+between\s+([+-]?\w+)\s+and\s+([+-]?\w+)/gi, "$1 >= $2 AND $1 <= $3")
+    .replace(/\b([a-z_][a-z0-9_]*)\s*=\s*any\s*\(\s*array\s*\[([^\]]*)\]\s*\)/gi, "$1 IN ($2)")
+    .replace(/\bin\s*\(([^()]*)\)/gi, "IN[$1]")
+    .replace(/\(([a-z_][a-z0-9_]*\s+in\x5b[^\x5b\x5d]*\x5d)\)/gi, "$1")
+    .replace(/\s*(>=|<=|<>|!=|=|>|<)\s*/g, "$1")
+    .replace(/\s+/g, " ")
+    .replace(/\s*([(),])\s*/g, "$1")
+    .trim()
+    .toLowerCase();
+}
+
+function normalizeAction(action: string | undefined): string {
+  return (action ?? "no action").replace(/_/g, " ").toLowerCase();
+}
+
+function normalizeColumnDefault(expression: string | null, type: string): string | null {
+  const normalized = normalizeSqlExpression(expression);
+  if (normalized === null) return null;
+  if (/^(smallint|integer|bigint|numeric|real|double precision)$/.test(type)) {
+    const quotedNumber = /^'([+-]?\d+(?:\.\d+)?)'$/.exec(normalized);
+    if (quotedNumber) return quotedNumber[1];
+  }
+  return normalized;
+}
+
+async function readPostgresColumnDetails(client: ScratchDatabase["client"]) {
+  const { rows } = await client.query<{
+    table_name: string;
+    column_name: string;
+    type: string;
+    not_null: boolean;
+    primary_key: boolean;
+    default_expression: string | null;
+  }>(`SELECT c.relname AS table_name, a.attname AS column_name,
+            format_type(a.atttypid, a.atttypmod) AS type,
+            a.attnotnull AS not_null,
+            EXISTS (
+              SELECT 1 FROM pg_constraint pc
+              WHERE pc.conrelid=c.oid AND pc.contype='p'
+                AND a.attnum = ANY(pc.conkey)
+            ) AS primary_key,
+            pg_get_expr(d.adbin, d.adrelid, true) AS default_expression
+     FROM pg_attribute a
+     JOIN pg_class c ON c.oid=a.attrelid
+     JOIN pg_namespace n ON n.oid=c.relnamespace
+     LEFT JOIN pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum
+     WHERE n.nspname='public' AND c.relkind IN ('r','p')
+       AND a.attnum > 0 AND NOT a.attisdropped
+     ORDER BY c.relname,a.attnum`);
+  return Object.fromEntries(rows.map((column) => [
+    `${column.table_name}.${column.column_name}`,
+    {
+      name: column.column_name,
+      type: normalizeType(column.type),
+      primaryKey: column.primary_key,
+      notNull: column.not_null,
+      default: normalizeColumnDefault(column.default_expression, normalizeType(column.type)),
+    },
+  ]));
+}
+
+async function readPostgresIndexDetails(client: ScratchDatabase["client"]) {
+  const { rows } = await client.query<{
+    index_name: string;
+    table_name: string;
+    is_primary: boolean;
+    is_unique: boolean;
+    method: string;
+    is_partial: boolean;
+    key_columns: string[];
+    predicate: string | null;
+  }>(`SELECT index_relation.relname AS index_name,
+            table_relation.relname AS table_name,
+            index_definition.indisprimary AS is_primary,
+            index_definition.indisunique AS is_unique,
+            access_method.amname AS method,
+            index_definition.indpred IS NOT NULL AS is_partial,
+            ARRAY(
+              SELECT pg_get_indexdef(index_definition.indexrelid, key_position, true)
+              FROM generate_series(1, index_definition.indnkeyatts) AS key_position
+            ) AS key_columns,
+            pg_get_expr(index_definition.indpred, index_definition.indrelid, true) AS predicate
+     FROM pg_index index_definition
+     JOIN pg_class index_relation ON index_relation.oid=index_definition.indexrelid
+     JOIN pg_class table_relation ON table_relation.oid=index_definition.indrelid
+     JOIN pg_am access_method ON access_method.oid=index_relation.relam
+     JOIN pg_namespace n ON n.oid=table_relation.relnamespace
+     WHERE n.nspname='public'`);
+  return Object.fromEntries(rows.filter((index) => !index.is_primary).map((index) => [
+    index.index_name,
+    {
+      table_name: index.table_name,
+      key_columns: index.key_columns.map((expression) => normalizeSqlExpression(expression, index.table_name)),
+      is_unique: index.is_unique,
+      method: index.method.toLowerCase(),
+      is_partial: index.is_partial,
+      predicate: normalizeSqlExpression(index.predicate, index.table_name),
+    },
+  ]));
+}
+
+async function readPostgresCheckDetails(client: ScratchDatabase["client"]) {
+  const { rows } = await client.query<{
+    table_name: string;
+    constraint_name: string;
+    expression: string;
+  }>(`SELECT table_relation.relname AS table_name,
+            constraint_row.conname AS constraint_name,
+            pg_get_expr(constraint_row.conbin, constraint_row.conrelid, true) AS expression
+     FROM pg_constraint constraint_row
+     JOIN pg_class table_relation ON table_relation.oid=constraint_row.conrelid
+     JOIN pg_namespace n ON n.oid=table_relation.relnamespace
+     WHERE n.nspname='public' AND constraint_row.contype='c'`);
+  return Object.fromEntries(rows
+    .filter((constraint) => !LEDGER_TABLES.has(constraint.table_name))
+    .map((constraint) => [constraint.constraint_name, {
+      table_name: constraint.table_name,
+      expression: normalizeSqlExpression(constraint.expression, constraint.table_name),
+    }]));
+}
+
+async function readPostgresForeignKeyDetails(client: ScratchDatabase["client"]) {
+  const { rows } = await client.query<{
+    constraint_name: string;
+    table_name: string;
+    referenced_table: string;
+    columns_from: string[];
+    columns_to: string[];
+    on_delete: string;
+    on_update: string;
+  }>(`SELECT constraint_row.conname AS constraint_name,
+            source_table.relname AS table_name,
+            target_table.relname AS referenced_table,
+            ARRAY(
+              SELECT source_column.attname
+              FROM unnest(constraint_row.conkey) WITH ORDINALITY AS source_key(attnum, ordinality)
+              JOIN pg_attribute source_column
+                ON source_column.attrelid=constraint_row.conrelid
+               AND source_column.attnum=source_key.attnum
+              ORDER BY source_key.ordinality
+            )::text[] AS columns_from,
+            ARRAY(
+              SELECT target_column.attname
+              FROM unnest(constraint_row.confkey) WITH ORDINALITY AS target_key(attnum, ordinality)
+              JOIN pg_attribute target_column
+                ON target_column.attrelid=constraint_row.confrelid
+               AND target_column.attnum=target_key.attnum
+              ORDER BY target_key.ordinality
+            )::text[] AS columns_to,
+            CASE constraint_row.confdeltype
+              WHEN 'a' THEN 'no action' WHEN 'r' THEN 'restrict' WHEN 'c' THEN 'cascade'
+              WHEN 'n' THEN 'set null' WHEN 'd' THEN 'set default'
+            END AS on_delete,
+            CASE constraint_row.confupdtype
+              WHEN 'a' THEN 'no action' WHEN 'r' THEN 'restrict' WHEN 'c' THEN 'cascade'
+              WHEN 'n' THEN 'set null' WHEN 'd' THEN 'set default'
+            END AS on_update
+     FROM pg_constraint constraint_row
+     JOIN pg_class source_table ON source_table.oid=constraint_row.conrelid
+     JOIN pg_namespace source_schema ON source_schema.oid=source_table.relnamespace
+     JOIN pg_class target_table ON target_table.oid=constraint_row.confrelid
+     JOIN pg_namespace target_schema ON target_schema.oid=target_table.relnamespace
+     WHERE constraint_row.contype='f' AND source_schema.nspname='public'
+       AND target_schema.nspname='public'`);
+  return Object.fromEntries(rows.map((foreignKey) => [foreignKey.constraint_name, {
+    table_name: foreignKey.table_name,
+    columns_from: foreignKey.columns_from,
+    referenced_table: foreignKey.referenced_table,
+    columns_to: foreignKey.columns_to,
+    on_delete: normalizeAction(foreignKey.on_delete),
+    on_update: normalizeAction(foreignKey.on_update),
+  }]));
+}
 
 const DRIZZLE_TABLES = Object.values(schema)
   .filter((value): value is PgTable => value instanceof PgTable)
@@ -148,22 +401,7 @@ describe.runIf(dbTestsEnabled())("migration tier: apply + introspect", () => {
     async ({ skip }) => {
       if (scratch.engine !== "postgres") skip();
       const expected = generateDrizzleJson(schema, undefined, ["public"], "snake_case");
-      const tables = expected.tables as Record<
-        string,
-        {
-          name: string;
-          columns: Record<string, { name: string; type: string; primaryKey: boolean; notNull: boolean }>;
-          indexes: Record<string, {
-            name: string;
-            columns: Array<{ expression: string }>;
-            isUnique: boolean;
-            method: string;
-            where?: string;
-          }>;
-          uniqueConstraints: Record<string, { name: string }>;
-          checkConstraints: Record<string, { name: string }>;
-        }
-      >;
+      const tables = expected.tables as DrizzleTables;
       const expectedTableNames = Object.values(tables).map((table) => table.name).sort();
 
       const { rows: catalogTables } = await scratch.client.query<{ table_name: string }>(
@@ -176,61 +414,28 @@ describe.runIf(dbTestsEnabled())("migration tier: apply + introspect", () => {
         .sort();
       expect(actualTableNames).toEqual(expectedTableNames);
 
-      const { rows: columns } = await scratch.client.query<{
-        table_name: string;
-        column_name: string;
-        type: string;
-        not_null: boolean;
-        primary_key: boolean;
-      }>(`SELECT c.relname AS table_name, a.attname AS column_name,
-                format_type(a.atttypid, a.atttypmod) AS type,
-                a.attnotnull AS not_null,
-                EXISTS (
-                  SELECT 1 FROM pg_constraint pc
-                  WHERE pc.conrelid=c.oid AND pc.contype='p'
-                    AND a.attnum = ANY(pc.conkey)
-                ) AS primary_key
-         FROM pg_attribute a
-         JOIN pg_class c ON c.oid=a.attrelid
-         JOIN pg_namespace n ON n.oid=c.relnamespace
-         WHERE n.nspname='public' AND c.relkind IN ('r','p')
-           AND a.attnum > 0 AND NOT a.attisdropped
-         ORDER BY c.relname,a.attnum`);
-      const normalizeType = (type: string) => type
-        .replace(/"([^"]+)"/g, "$1")
-        .replace(/\s*\(\s*(\d+)\s*\)/g, "($1)")
-        .replace(/ without time zone/g, "")
-        .toLowerCase();
-      const actualColumns = Object.fromEntries(
-        expectedTableNames.map((tableName) => [tableName, columns
-          .filter((column) => column.table_name === tableName)
-          .map((column) => ({
-            name: column.column_name,
-            type: normalizeType(column.type),
-            primaryKey: column.primary_key,
-            notNull: column.not_null,
-          }))
-          .sort((a, b) => a.name.localeCompare(b.name))]),
-      );
-      const expectedColumns = Object.fromEntries(
-        Object.values(tables).map((table) => [table.name, Object.values(table.columns)
-          .map((column) => ({
-            name: column.name,
-            type: normalizeType(column.type),
-            primaryKey: column.primaryKey,
-            notNull: column.notNull,
-          }))
-          .sort((a, b) => a.name.localeCompare(b.name))]),
-      );
-      expect(actualColumns).toEqual(expectedColumns);
+      const actualColumns = await readPostgresColumnDetails(scratch.client);
+      const comparableActualColumns = Object.fromEntries(Object.entries(actualColumns)
+        .filter(([key]) => !LEDGER_TABLES.has(key.split(".")[0])));
+      const expectedColumns = Object.fromEntries(Object.values(tables).flatMap((table) =>
+        Object.values(table.columns).map((column) => [`${table.name}.${column.name}`, {
+          name: column.name,
+          type: normalizeType(column.type),
+          primaryKey: column.primaryKey,
+          notNull: column.notNull,
+          default: normalizeColumnDefault(column.default === undefined ? null : String(column.default), normalizeType(column.type)),
+        }] as const),
+      ));
+      expect(comparableActualColumns).toEqual(expectedColumns);
 
       const expectedIndexDetails = new Map(Object.values(tables).flatMap((table) =>
         Object.values(table.indexes).map((index) => [index.name, {
           table_name: table.name,
-          key_columns: index.columns.map((column) => column.expression),
+          key_columns: index.columns.map((column) => normalizeSqlExpression(column.expression, table.name)),
           is_unique: index.isUnique,
-          method: index.method,
+          method: index.method.toLowerCase(),
           is_partial: Boolean(index.where),
+          predicate: normalizeSqlExpression(index.where ?? null, table.name),
         }] as const),
       ));
       const expectedIndexes = new Set([
@@ -239,94 +444,123 @@ describe.runIf(dbTestsEnabled())("migration tier: apply + introspect", () => {
           Object.values(table.uniqueConstraints).map((constraint) => constraint.name),
         ),
       ]);
-      const { rows: catalogIndexes } = await scratch.client.query<{
-        index_name: string;
-        table_name: string;
-        is_primary: boolean;
-        is_unique: boolean;
-        method: string;
-        is_partial: boolean;
-        key_columns: string[];
-      }>(`SELECT index_relation.relname AS index_name,
-                table_relation.relname AS table_name,
-                index_definition.indisprimary AS is_primary,
-                index_definition.indisunique AS is_unique,
-                access_method.amname AS method,
-                index_definition.indpred IS NOT NULL AS is_partial,
-                ARRAY(
-                  SELECT pg_get_indexdef(index_definition.indexrelid, key_position, true)
-                  FROM generate_series(1, index_definition.indnkeyatts) AS key_position
-                ) AS key_columns
-         FROM pg_index index_definition
-         JOIN pg_class index_relation ON index_relation.oid=index_definition.indexrelid
-         JOIN pg_class table_relation ON table_relation.oid=index_definition.indrelid
-         JOIN pg_am access_method ON access_method.oid=index_relation.relam
-         JOIN pg_namespace n ON n.oid=table_relation.relnamespace
-         WHERE n.nspname='public'`);
-      const actualIndexes = new Set(catalogIndexes
-        .filter((index) => !index.is_primary)
-        .map((index) => index.index_name));
+      const actualIndexDetails = await readPostgresIndexDetails(scratch.client);
+      const actualIndexes = new Set(Object.keys(actualIndexDetails));
       const missingIndexes = [...expectedIndexes].filter((name) => !actualIndexes.has(name)).sort();
       const unexpectedIndexes = [...actualIndexes]
         .filter((name) => !expectedIndexes.has(name) && !RAW_INDEX_ALLOWLIST.has(name))
         .sort();
       expect({ missingIndexes, unexpectedIndexes }).toEqual({ missingIndexes: [], unexpectedIndexes: [] });
 
-      const normalizeExpression = (expression: string) => expression
-        .replace(/"([^"]+)"/g, "$1")
-        .replace(/\b[a-z_][a-z0-9_]*\./gi, "")
-        .replace(/\s+/g, " ")
-        .trim()
-        .toLowerCase();
-      const actualIndexDetails = new Map(catalogIndexes
-        .filter((index) => !index.is_primary)
-        .map((index) => [index.index_name, {
-          table_name: index.table_name,
-          key_columns: index.key_columns.map(normalizeExpression),
-          is_unique: index.is_unique,
-          method: index.method,
-          is_partial: index.is_partial,
-        }] as const));
-      const normalizeIndexDetail = (details: {
-        table_name: string;
-        key_columns: string[];
-        is_unique: boolean;
-        method: string;
-        is_partial: boolean;
-      }) => ({
-        table_name: details.table_name,
-        key_columns: details.key_columns.map(normalizeExpression),
-        is_unique: details.is_unique,
-        method: details.method.toLowerCase(),
-        is_partial: details.is_partial,
-      });
-      const comparableExpectedIndexes = Object.fromEntries([...expectedIndexDetails]
-        .map(([name, details]) => [name, normalizeIndexDetail(details)]));
+      const comparableExpectedIndexes = Object.fromEntries(expectedIndexDetails);
       const comparableActualIndexes = Object.fromEntries([...expectedIndexDetails.keys()]
-        .map((name) => [name, actualIndexDetails.get(name)]));
+        .map((name) => [name, actualIndexDetails[name]]));
       expect(comparableActualIndexes).toEqual(comparableExpectedIndexes);
 
-      const expectedChecks = new Set([
-        ...Object.values(tables).flatMap((table) =>
-          Object.values(table.checkConstraints).map((constraint) => constraint.name),
-        ),
-        ...RAW_CHECK_CONSTRAINT_ALLOWLIST,
+      const expectedCheckNames = new Set([
+        ...Object.values(tables).flatMap((table) => Object.values(table.checkConstraints).map((constraint) => constraint.name)),
+        ...Object.keys(RAW_CHECK_CONSTRAINTS),
       ]);
-      const { rows: catalogChecks } = await scratch.client.query<{
-        table_name: string;
-        constraint_name: string;
-      }>(
-        `SELECT table_relation.relname AS table_name,
-                constraint_row.conname AS constraint_name
-         FROM pg_constraint constraint_row
-         JOIN pg_class table_relation ON table_relation.oid=constraint_row.conrelid
-         JOIN pg_namespace n ON n.oid=table_relation.relnamespace
-         WHERE n.nspname='public' AND constraint_row.contype='c'`,
-      );
-      const actualChecks = new Set(catalogChecks
-        .filter((constraint) => !LEDGER_TABLES.has(constraint.table_name))
-        .map((constraint) => constraint.constraint_name));
-      expect(actualChecks).toEqual(expectedChecks);
+      const actualChecks = await readPostgresCheckDetails(scratch.client);
+      const actualCheckNames = new Set(Object.keys(actualChecks));
+      expect([...actualCheckNames].sort()).toEqual([...expectedCheckNames].sort());
+      const expectedCheckDetails = Object.fromEntries([
+        ...Object.values(tables).flatMap((table) =>
+          Object.values(table.checkConstraints).map((constraint) => [constraint.name, {
+            table_name: table.name,
+            expression: normalizeSqlExpression(constraint.value, table.name),
+          }] as const),
+        ),
+        ...Object.entries(RAW_CHECK_CONSTRAINTS).map(([name, constraint]) => [name, {
+          table_name: constraint.table_name,
+          expression: normalizeSqlExpression(constraint.expression, constraint.table_name),
+        }] as const),
+      ]);
+      const comparableActualChecks = actualChecks;
+      expect(comparableActualChecks).toEqual(expectedCheckDetails);
+
+      const expectedForeignKeys = Object.values(tables).flatMap((table) =>
+        Object.values(table.foreignKeys).map((foreignKey) => ({
+          table_name: foreignKey.tableFrom,
+          columns_from: foreignKey.columnsFrom,
+          referenced_table: foreignKey.tableTo,
+          columns_to: foreignKey.columnsTo,
+          on_delete: normalizeAction(foreignKey.onDelete),
+          on_update: normalizeAction(foreignKey.onUpdate),
+        })),
+      ).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+      const actualForeignKeys = await readPostgresForeignKeyDetails(scratch.client);
+      expect(Object.values(actualForeignKeys).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))))
+        .toEqual(expectedForeignKeys);
     },
   );
+
+  it("detects drift in an index predicate, CHECK expression, column default, and foreign key", async ({ skip }) => {
+    if (scratch.engine !== "postgres") skip();
+    const expected = generateDrizzleJson(schema, undefined, ["public"], "snake_case");
+    const tables = expected.tables as DrizzleTables;
+    const clientsTable = Object.values(tables).find((table) => table.name === "clients")!;
+    const emailDedupeTable = Object.values(tables).find((table) =>
+      Object.values(table.indexes).some((index) => index.name === "email_logs_dedupe_key_active_key"),
+    )!;
+    const emailDedupe = Object.values(emailDedupeTable.indexes)
+      .find((index) => index.name === "email_logs_dedupe_key_active_key")!;
+    const scopeCheckTable = Object.values(tables).find((table) =>
+      Object.values(table.checkConstraints).some((constraint) => constraint.name === "certificate_templates_scope_check"),
+    )!;
+    const scopeCheck = Object.values(scopeCheckTable.checkConstraints)
+      .find((constraint) => constraint.name === "certificate_templates_scope_check")!;
+    const activeColumn = clientsTable.columns.active;
+    const rawPairCheck = RAW_CHECK_CONSTRAINTS.networking_connections_ordered_pair;
+    const eventForeignKey = Object.values(tables).flatMap((table) => Object.values(table.foreignKeys))
+      .find((foreignKey) => foreignKey.name === "certificate_templates_event_id_events_id_fk")!;
+
+    await scratch.client.query("BEGIN");
+    try {
+      await scratch.client.query("DROP INDEX email_logs_dedupe_key_active_key");
+      await scratch.client.query(`CREATE UNIQUE INDEX email_logs_dedupe_key_active_key
+        ON email_logs (dedupe_key) WHERE dedupe_key IS NOT NULL`);
+      await scratch.client.query(`ALTER TABLE certificate_templates
+        DROP CONSTRAINT certificate_templates_scope_check`);
+      await scratch.client.query(`ALTER TABLE certificate_templates
+        ADD CONSTRAINT certificate_templates_scope_check
+        CHECK (scope IN ('REGISTRATION', 'ABSTRACT', 'BOTH', 'OTHER'))`);
+      await scratch.client.query(`ALTER TABLE networking_connections
+        DROP CONSTRAINT networking_connections_ordered_pair`);
+      await scratch.client.query(`ALTER TABLE networking_connections
+        ADD CONSTRAINT networking_connections_ordered_pair
+        CHECK (profile_a_id <= profile_b_id)`);
+      await scratch.client.query("ALTER TABLE clients ALTER COLUMN active SET DEFAULT false");
+      await scratch.client.query(`ALTER TABLE certificate_templates
+        DROP CONSTRAINT certificate_templates_event_id_events_id_fk`);
+      await scratch.client.query(`ALTER TABLE certificate_templates
+        ADD CONSTRAINT certificate_templates_event_id_events_id_fk
+        FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE RESTRICT ON UPDATE CASCADE`);
+
+      const alteredIndex = (await readPostgresIndexDetails(scratch.client)).email_logs_dedupe_key_active_key;
+      expect(alteredIndex.predicate).not.toBe(normalizeSqlExpression(emailDedupe.where ?? null, emailDedupeTable.name));
+      const alteredCheck = (await readPostgresCheckDetails(scratch.client)).certificate_templates_scope_check;
+      expect(alteredCheck.expression).not.toBe(normalizeSqlExpression(scopeCheck.value, scopeCheckTable.name));
+      const alteredRawCheck = (await readPostgresCheckDetails(scratch.client)).networking_connections_ordered_pair;
+      expect(alteredRawCheck).not.toEqual({
+        table_name: rawPairCheck.table_name,
+        expression: normalizeSqlExpression(rawPairCheck.expression, rawPairCheck.table_name),
+      });
+      const alteredColumns = await readPostgresColumnDetails(scratch.client);
+      expect(alteredColumns["clients.active"].default)
+        .not.toBe(normalizeSqlExpression(activeColumn.default === undefined ? null : String(activeColumn.default)));
+      const alteredForeignKeys = await readPostgresForeignKeyDetails(scratch.client);
+      const foreignKeyExpected = {
+        table_name: eventForeignKey.tableFrom,
+        columns_from: eventForeignKey.columnsFrom,
+        referenced_table: eventForeignKey.tableTo,
+        columns_to: eventForeignKey.columnsTo,
+        on_delete: normalizeAction(eventForeignKey.onDelete),
+        on_update: normalizeAction(eventForeignKey.onUpdate),
+      };
+      expect(alteredForeignKeys[eventForeignKey.name]).not.toEqual(foreignKeyExpected);
+    } finally {
+      await scratch.client.query("ROLLBACK");
+    }
+  });
 });

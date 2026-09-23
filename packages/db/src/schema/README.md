@@ -22,7 +22,9 @@ table = **29 tables**, **19 pg enums**.
 - **Timestamps**: `timestamp({ precision: 3 })` — naive `TIMESTAMP(3)`, NO timezone,
   matching the live DB. `createdAt`/`updatedAt` via the `timestamps` helper
   (`updatedAt` is app-managed via `$defaultFn` on insert + `$onUpdate`, with NO DB
-  default — matching the live `TIMESTAMP(3) NOT NULL` column). Tables without `updatedAt`
+  default — matching the live `TIMESTAMP(3) NOT NULL` column), except the three
+  networking tables created by 0013/0018 whose historical SQL defines `DEFAULT now()`;
+  those table declarations preserve both the SQL default and app-side hooks. Tables without `updatedAt`
   (payment_transaction, sponsorship_batches, sponsorship_usages, abstract_revisions,
   access_check_ins, audit_logs) declare only the columns they have.
 - **Types matching the live dump**: `event_access.companion_price` is `integer`

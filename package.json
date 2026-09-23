@@ -12,7 +12,7 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r --workspace-concurrency=1 test",
     "test:runtime": "node --test scripts/start-runtime.test.mjs",
-    "test:db": "pnpm -r --if-present test:db",
+    "test:db": "pnpm -r --workspace-concurrency=1 --if-present test:db",
     "test:concurrency": "pnpm --filter @app/db test:concurrency",
     "test:migration": "pnpm --filter @app/db test:migration",
     "dev": "pnpm --filter @app/api dev",

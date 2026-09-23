@@ -58,13 +58,13 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
         ports:
-          - 5432:5432
+          - 127.0.0.1:5432:5432
         options: >-
           --health-cmd "pg_isready -U postgres -d focale_ci_admin"
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
       ALLOW_DB_TESTS: "1"
-      TEST_DB_ADMIN_URL: ${{ matrix.engine == 'postgres' && 'postgresql://postgres:postgres@127.0.0.1:5432/focale_ci_admin' || 'postgresql://root@127.0.0.1:26257/focale_ci_admin?sslmode=disable' }}
+      TEST_DB_ADMIN_URL: ${{ matrix.engine == 'postgres' && 'postgresql://postgres:postgres@127.0.0.1:5432/focale_ci_admin' || '' }}
       TEST_DB_ALLOWED_HOSTS: 127.0.0.1
       TEST_DB_MAX_WORKERS: ${{ matrix.engine == 'postgres' && '2' || '1' }}
       TEST_DB_SETUP_TIMEOUT_MS: ${{ matrix.engine == 'postgres' && '120000' || '300000' }}
@@ -80,18 +80,36 @@ jobs:
       - name: Start disposable CockroachDB 26.2.5
         if: matrix.engine == 'cockroach'
         run: |
-          docker run -d --name focale-ci-crdb -p 26257:26257 -p 8080:8080 \
-            cockroachdb/cockroach:v26.2.5 start-single-node --insecure \
-            --listen-addr=0.0.0.0:26257 --http-addr=0.0.0.0:8080 \
+          certs_dir="$RUNNER_TEMP/focale-ci-crdb-certs"
+          mkdir -p "$certs_dir"
+          docker run --rm --user "$(id -u):$(id -g)" -v "$certs_dir:/certs" \
+            --entrypoint=/cockroach/cockroach cockroachdb/cockroach:v26.2.5 \
+            cert create-ca --certs-dir=/certs --ca-key=/certs/ca.key
+          docker run --rm --user "$(id -u):$(id -g)" -v "$certs_dir:/certs" \
+            --entrypoint=/cockroach/cockroach cockroachdb/cockroach:v26.2.5 \
+            cert create-node localhost 127.0.0.1 --certs-dir=/certs --ca-key=/certs/ca.key
+          docker run --rm --user "$(id -u):$(id -g)" -v "$certs_dir:/certs" \
+            --entrypoint=/cockroach/cockroach cockroachdb/cockroach:v26.2.5 \
+            cert create-client root --certs-dir=/certs --ca-key=/certs/ca.key
+          docker run -d --name focale-ci-crdb -p 127.0.0.1:26257:26257 -p 127.0.0.1:8080:8080 \
+            -v "$certs_dir:/cockroach/certs" --entrypoint=/cockroach/cockroach \
+            cockroachdb/cockroach:v26.2.5 start-single-node \
+            --certs-dir=/cockroach/certs --listen-addr=0.0.0.0:26257 \
+            --advertise-addr=localhost:26257 --http-addr=0.0.0.0:8080 \
             --store=type=mem,size=1GiB
           for attempt in $(seq 1 60); do
-            if docker exec focale-ci-crdb cockroach sql --insecure --host=localhost:26257 --execute='SELECT 1' >/dev/null 2>&1; then
+            if docker exec focale-ci-crdb /cockroach/cockroach sql \
+              --certs-dir=/cockroach/certs --host=localhost:26257 --execute='SELECT 1' >/dev/null 2>&1; then
               break
             fi
             sleep 2
           done
-          docker exec focale-ci-crdb cockroach sql --insecure --host=localhost:26257 \
-            --execute='CREATE DATABASE focale_ci_admin; SET CLUSTER SETTING feature.vector_index.enabled = true;'
+          docker exec focale-ci-crdb /cockroach/cockroach sql \
+            --certs-dir=/cockroach/certs --host=localhost:26257 --execute='CREATE DATABASE focale_ci_admin'
+          docker exec focale-ci-crdb /cockroach/cockroach sql \
+            --certs-dir=/cockroach/certs --host=localhost:26257 \
+            --execute='SET CLUSTER SETTING feature.vector_index.enabled = true'
+          echo "TEST_DB_ADMIN_URL=postgresql://root@127.0.0.1:26257/focale_ci_admin?sslmode=verify-full&sslrootcert=$certs_dir/ca.crt&sslcert=$certs_dir/client.root.crt&sslkey=$certs_dir/client.root.key" >> "$GITHUB_ENV"
       - run: pnpm install --frozen-lockfile
       - name: Run ${{ matrix.command }}
         run: pnpm ${{ matrix.command }}

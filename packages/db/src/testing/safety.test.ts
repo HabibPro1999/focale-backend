@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { Client } from "pg";
 import { assertDisposableDatabaseUrl, dbTestsEnabled } from "./safety";
 
 afterEach(() => vi.unstubAllEnvs());
@@ -16,6 +17,33 @@ describe("assertDisposableDatabaseUrl", () => {
     const url = "postgres://user:secret@db.internal:5432/focale_ci_admin";
     expect(() => assertDisposableDatabaseUrl(url, "db.internal,other.internal")).not.toThrow();
     expect(() => assertDisposableDatabaseUrl(url, "internal")).toThrow(/loopback or listed/);
+  });
+
+  it.each([
+    "postgres://test@localhost:5432/focale_test_admin?host=unapproved.example",
+    "postgres://test@localhost:5432/focale_test_admin?host=%2Ftmp%2Fpgsock",
+    "postgres://test@localhost:5432/focale_test_admin?port=6543",
+    "postgres://test@localhost:5432/focale_test_admin?hostaddr=192.0.2.20",
+    "postgres://test@localhost:5432/focale_test_admin?database=postgres",
+  ])("rejects a driver routing override before connection: %s", (url) => {
+    expect(() => assertDisposableDatabaseUrl(url, "unapproved.example")).toThrow(/override|authority/);
+  });
+
+  it("rejects routing overrides on a rewritten scratch URL and preserves TLS options", () => {
+    const routedAdmin = "postgres://test@localhost:32772/focale_test_admin?host=unapproved.example";
+    const routedScratch = new URL(routedAdmin);
+    routedScratch.pathname = "/focale_test_abc123_schema_deadbeef00";
+    const driver = new Client({ connectionString: routedScratch.toString() });
+    const routing = (driver as unknown as {
+      connectionParameters: { host: string; port: number; database: string; isDomainSocket: boolean };
+    }).connectionParameters;
+    expect(routing).toMatchObject({ host: "unapproved.example", port: 32772, isDomainSocket: false });
+    expect(() => assertDisposableDatabaseUrl(routedScratch.toString())).toThrow(/override/);
+
+    const tlsUrl = "postgres://test@db.internal:26257/focale_ci_admin?sslmode=verify-full&sslrootcert=%2Ftmp%2Fca.crt";
+    const validated = assertDisposableDatabaseUrl(tlsUrl, "db.internal");
+    expect(validated.searchParams.get("sslmode")).toBe("verify-full");
+    expect(validated.searchParams.get("sslrootcert")).toBe("/tmp/ca.crt");
   });
 
   it.each([

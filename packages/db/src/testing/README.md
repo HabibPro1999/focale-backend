@@ -26,8 +26,12 @@ pinned CockroachDB CCL 26.2.5 reports `CREATE DATABASE ... TEMPLATE` as
 unimplemented (issue 10151), so each file instead creates a unique database and
 applies migrations from the same runner. PostgreSQL jobs use at most two file
 workers; Cockroach jobs run files serially to keep migration setup within the
-in-memory service budget. Every file owns and drops its own database. The suite startup janitor removes
-only helper-named databases older than 24 hours, never the admin database or a
+in-memory service budget. Every file owns and drops its own database. The full
+generated `focale_test_<timestamp>_<label>_<hex>` namespace is reserved
+exclusively for this helper on the allowed disposable server. The startup
+janitor's age-and-name match relies on that namespace convention; it is not a
+cryptographic ownership proof. It explicitly excludes the selected admin
+database and removes only matching databases older than 24 hours, never a
 recent template.
 
 CI pins PostgreSQL to `pgvector/pgvector:pg16` and CockroachDB to

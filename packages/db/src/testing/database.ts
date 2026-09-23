@@ -78,7 +78,9 @@ async function dropScratchDatabase(name: string, adminUrl: string, engine: Datab
   }
 }
 
-/** Remove only helper-owned scratch databases older than the requested age. */
+/**
+ * Remove stale databases in the helper's reserved namespace after the requested age.
+ */
 export async function janitorScratchDatabases(options: { olderThanMs?: number } = {}): Promise<string[]> {
   const olderThanMs = options.olderThanMs ?? 24 * 60 * 60 * 1000;
   if (!Number.isFinite(olderThanMs) || olderThanMs < 0) {
@@ -86,6 +88,7 @@ export async function janitorScratchDatabases(options: { olderThanMs?: number } 
   }
   const adminUrl = loadDbTestAdminUrl();
   const { client: admin, engine } = await openAdmin(adminUrl);
+  const adminDatabaseName = decodeURIComponent(assertDisposableDatabaseUrl(adminUrl).pathname.replace(/^\//, ""));
   const stale: string[] = [];
   try {
     const result = engine === "postgres"
@@ -96,6 +99,7 @@ export async function janitorScratchDatabases(options: { olderThanMs?: number } 
     const names = result.rows.map((row) => "datname" in row ? row.datname : row.database_name);
     const now = Date.now();
     for (const name of names) {
+      if (name === adminDatabaseName) continue;
       const match = /^focale_test_([a-z0-9]+)_[a-z0-9_]+_[0-9a-f]{10}$/.exec(name);
       if (!match) continue;
       const createdAt = Number.parseInt(match[1], 36);

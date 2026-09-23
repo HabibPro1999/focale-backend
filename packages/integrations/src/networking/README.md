@@ -37,10 +37,10 @@ Unit regression suite:
 pnpm --filter @app/integrations test
 ```
 
-Real worker tests require a dedicated local disposable database whose name starts with `focale_networking_test_worker_` or `networking_test_worker_`. Bootstrap it with the repository networking migration runner, then run:
+Real worker tests use the guarded per-file scratch database helper and the unified migration runner. Set `TEST_DB_ADMIN_URL` to a local disposable maintenance database with an exact `test` or `ci` token, then run:
 
 ```sh
-ALLOW_DB_TESTS=1 TEST_DATABASE_URL=postgresql://localhost/focale_networking_test_worker_example pnpm --filter @app/integrations exec vitest run src/networking/notification-worker.db.test.ts src/networking/notification-rendering.test.ts
+ALLOW_DB_TESTS=1 TEST_DB_ADMIN_URL=postgresql://postgres:postgres@127.0.0.1:5432/focale_test_admin pnpm --filter @app/integrations test:db
 ```
 
 The tests inject email, push and private-storage providers. They cover concurrent reminder deduplication, stale revisions, consent/block/payment changes, independent retries, OTP expiry/secrecy, digest preferences, generic queue ownership, webhook ordering, localized notes/ICS, disabled-module retention and idempotent private report generation. Event-scoped worker/maintenance arguments provide an additional fixture isolation boundary.

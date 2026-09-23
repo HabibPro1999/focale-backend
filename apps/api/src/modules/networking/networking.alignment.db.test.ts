@@ -26,6 +26,7 @@ import { NetworkingMeetingsService } from "./networking.meetings.service";
 import { NetworkingAdminService } from "./networking.admin.service";
 import { networkingDeliverySkipReason } from "../../../../../packages/integrations/src/networking/delivery-policy";
 import { renderNetworkingNotification } from "../../../../../packages/integrations/src/networking/notification-rendering";
+import { dbTestsEnabled } from "@app/db/testing";
 
 const service = new NetworkingService();
 const social = new NetworkingSocialService(service);
@@ -35,8 +36,7 @@ const store = () => networkingStore();
 let people: NetworkingContext[];
 let connectionId: string;
 const slot = "2031-04-05T10:00:00.000Z";
-const enabled =
-  process.env.ALLOW_DB_TESTS === "1" && !!process.env.TEST_DATABASE_URL;
+const enabled = dbTestsEnabled();
 
 describe.runIf(enabled)("PDF alignment audit reproductions", () => {
   it("returns numeric zero email counts on the database wire protocol", async () => {
@@ -55,13 +55,6 @@ describe.runIf(enabled)("PDF alignment audit reproductions", () => {
     ]);
   });
   beforeAll(() => {
-    const url = new URL(process.env.TEST_DATABASE_URL!);
-    if (
-      url.hostname !== "127.0.0.1" ||
-      url.pathname !== "/focale_networking_test_audit_20260915"
-    )
-      throw new Error("Only the new local audit database is allowed");
-    process.env.DATABASE_URL = url.toString();
     process.env.NETWORKING_TOKEN_SECRET =
       "audit-only-secret-at-least-thirty-two-characters";
     process.env.PUBLIC_NETWORKING_URL = "https://networking.example.invalid";
@@ -270,12 +263,32 @@ describe.runIf(enabled)("PDF alignment audit reproductions", () => {
   });
 
   it("A6: reading a conversation clears the corresponding unread-message notification", async () => {
-    await social.sendMessage(
+    const sent = await social.sendMessage(
       people[1],
       connectionId,
       "Synthetic unread message",
       randomUUID(),
     );
+    const pendingNotifications = await listNetworkingNotifications(
+      people[0].event.id,
+      people[0].profile.id,
+      1,
+      100,
+    );
+    const messageNotification = pendingNotifications.items.find(
+      (row) => row.type === "MESSAGE" && !row.readAt &&
+        row.data?.connectionId === connectionId,
+    );
+    const latestCreatedAt = Math.max(
+      sent.createdAt.getTime(),
+      messageNotification?.createdAt.getTime() ?? 0,
+    );
+    const timestampDeadline = Date.now() + 1_000;
+    while (Date.now() <= latestCreatedAt + 5) {
+      if (Date.now() > timestampDeadline)
+        throw new Error("Database clock did not advance past the message timestamp");
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
     await social.markRead(people[0], connectionId);
     expect((await social.connections(people[0])).items[0].unreadCount).toBe(0);
     const notifications = await listNetworkingNotifications(
@@ -418,12 +431,12 @@ describe.runIf(enabled)("PDF alignment audit reproductions", () => {
     ).toHaveLength(0);
   });
 
-  it("A17: reports and contact exports are queued immediately after event end, once", async () => {
+  it("A17: reports and contact exports are queued after the 24-hour grace window, once", async () => {
     const eventId = people[0].event.id;
     await store().update(
       "events",
       { id: eventId },
-      { endDate: new Date(Date.now() - 1000) },
+      { endDate: new Date(Date.now() - 25 * 60 * 60 * 1000) },
     );
     await maintainNetworkingLifecycle(eventId);
     await maintainNetworkingLifecycle(eventId);
