@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { Injectable } from "@nestjs/common";
+import { Inject, Injectable } from "@nestjs/common";
 import { fileTypeFromBuffer } from "file-type";
 import { getStorageProvider, compressFile, extractStorageKeyFromUrl } from "@app/integrations";
 import { deleteNetworkingPhoto } from "../networking/networking.uploads.service";
@@ -90,6 +90,8 @@ import {
   type ClientModuleState,
 } from "../clients/module-gates";
 import { AppException } from "../../core/app-exception";
+import { CONFIG, type Config } from "../../core/config";
+import { assertPublicLinkBaseUrlAllowed } from "../../core/public-link-origin";
 import { validatePaymentTransition } from "./payment-transitions";
 import { getRegistrationTableColumns } from "./table-columns";
 import {
@@ -196,6 +198,7 @@ export class RegistrationsService {
   constructor(
     private readonly access: AccessService,
     private readonly pricing: PricingService,
+    @Inject(CONFIG) private readonly config: Config,
   ) {}
 
   // ==========================================================================
@@ -672,6 +675,13 @@ export class RegistrationsService {
       linkBaseUrl,
     } = input;
     const email = normalizeEmail(rawEmail);
+
+    if (linkBaseUrl) {
+      assertPublicLinkBaseUrlAllowed(
+        linkBaseUrl,
+        this.config.publicLinkAllowedOrigins,
+      );
+    }
 
     const form = await findFormById(formId);
     if (!form) {

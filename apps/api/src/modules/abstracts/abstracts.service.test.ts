@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { ErrorCodes, type SubmitAbstractInput } from "@app/contracts";
 import type { AbstractConfigRow } from "@app/db";
 
@@ -38,6 +38,7 @@ import {
 } from "@app/db";
 import { AbstractsService, countWords } from "./abstracts.service";
 import { AppException } from "../../core/app-exception";
+import type { Config } from "../../core/config";
 import { assertClientModuleEnabled } from "../clients/module-gates";
 import {
   abstractHtmlToText,
@@ -125,7 +126,10 @@ async function expectAppError(
   expect((err as AppException).getResponse()).toMatchObject({ code });
 }
 
-const service = new AbstractsService();
+const config = {
+  publicLinkAllowedOrigins: ["https://events.example.com"],
+} as Config;
+const service = new AbstractsService(config);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -446,18 +450,8 @@ describe("submitAbstract", () => {
   });
 
   describe("H7: linkBaseUrl origin allow-list", () => {
-    const ORIGINAL_ENV = process.env.PUBLIC_LINK_ALLOWED_ORIGINS;
-
-    afterEach(() => {
-      if (ORIGINAL_ENV === undefined) {
-        delete process.env.PUBLIC_LINK_ALLOWED_ORIGINS;
-      } else {
-        process.env.PUBLIC_LINK_ALLOWED_ORIGINS = ORIGINAL_ENV;
-      }
-    });
-
     it("rejects a linkBaseUrl whose origin isn't allow-listed", async () => {
-      process.env.PUBLIC_LINK_ALLOWED_ORIGINS = "https://events.example.com";
+      config.publicLinkAllowedOrigins = ["https://events.example.com"];
       setup();
       await expectAppError(
         service.submitAbstract(
@@ -471,8 +465,10 @@ describe("submitAbstract", () => {
     });
 
     it("accepts a linkBaseUrl matching an allow-listed origin", async () => {
-      process.env.PUBLIC_LINK_ALLOWED_ORIGINS =
-        "https://other.example, https://events.example.com";
+      config.publicLinkAllowedOrigins = [
+        "https://other.example",
+        "https://events.example.com",
+      ];
       setup();
       const result = await service.submitAbstract(
         slug,
@@ -481,14 +477,18 @@ describe("submitAbstract", () => {
       expect(result.status).toBe("SUBMITTED");
     });
 
-    it("stays open (non-breaking) when no allow-list is configured", async () => {
-      delete process.env.PUBLIC_LINK_ALLOWED_ORIGINS;
+    it("fails closed when no allow-list is configured", async () => {
+      config.publicLinkAllowedOrigins = [];
       setup();
-      const result = await service.submitAbstract(
-        slug,
-        makeSubmitBody({ linkBaseUrl: "https://anything.example" }),
+      await expectAppError(
+        service.submitAbstract(
+          slug,
+          makeSubmitBody({ linkBaseUrl: "https://anything.example" }),
+        ),
+        422,
+        "VAL_2001",
       );
-      expect(result.status).toBe("SUBMITTED");
+      expect(submitAbstractTxn).not.toHaveBeenCalled();
     });
   });
 });

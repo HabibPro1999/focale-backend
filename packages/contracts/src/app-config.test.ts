@@ -42,6 +42,20 @@ describe("parseAppConfig", () => {
     });
   });
 
+  it("parses and normalizes the public link origin allow-list", () => {
+    const config = parseAppConfig(
+      baseEnv({
+        PUBLIC_LINK_ALLOWED_ORIGINS:
+          " https://events.example.com/,http://localhost:8080 ",
+      }),
+    );
+
+    expect(config.publicLinkAllowedOrigins).toEqual([
+      "https://events.example.com",
+      "http://localhost:8080",
+    ]);
+  });
+
   it("requires a firebase bucket when firebase storage is selected", () => {
     const env = baseEnv({ FIREBASE_STORAGE_BUCKET: undefined });
 
@@ -115,6 +129,27 @@ describe("parseAppConfig", () => {
     );
   });
 
+  it("requires valid public link origins in production", () => {
+    expect(() =>
+      parseAppConfig(
+        baseEnv({
+          NODE_ENV: "production",
+          ADMIN_APP_URL: "https://admin.example.com",
+        }),
+      ),
+    ).toThrow("PUBLIC_LINK_ALLOWED_ORIGINS");
+
+    expect(() =>
+      parseAppConfig(
+        baseEnv({
+          NODE_ENV: "production",
+          ADMIN_APP_URL: "https://admin.example.com",
+          PUBLIC_LINK_ALLOWED_ORIGINS: "https://events.example.com/path",
+        }),
+      ),
+    ).toThrow("PUBLIC_LINK_ALLOWED_ORIGINS");
+  });
+
   it("accepts a complete Resend production configuration", () => {
     const config = parseAppConfig(
       baseEnv({
@@ -125,6 +160,7 @@ describe("parseAppConfig", () => {
         RESEND_WEBHOOK_SECRET: "whsec_test",
         EMAIL_FROM_EMAIL: "noreply@example.com",
         EMAIL_FROM_NAME: "Focale",
+        PUBLIC_LINK_ALLOWED_ORIGINS: "https://events.example.com",
       }),
     );
 
