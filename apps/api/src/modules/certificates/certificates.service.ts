@@ -10,6 +10,7 @@ import {
   listCertificateTemplates,
   getCertificateTemplateWithEvent,
   getCertificateTemplateImageState,
+  findExistingAccessIdsInEvent,
   getCertificateTemplateForDelete,
   getCertificateTemplateForUpload,
   createCertificateTemplate,
@@ -188,10 +189,14 @@ export class CertificatesService {
   // ==========================================================================
 
   /** Create a template. `active` unset → schema default true applies (legacy gotcha). */
-  createTemplate(
+  async createTemplate(
     eventId: string,
     input: CreateCertificateTemplateInput,
   ): Promise<CertificateTemplateWithAccess> {
+    if (input.accessId != null) {
+      await this.assertAccessBelongsToEvent(input.accessId, eventId);
+    }
+
     return createCertificateTemplate({
       eventId,
       name: input.name,
@@ -202,14 +207,33 @@ export class CertificatesService {
     });
   }
 
-  /** Update a template. Reads current row only when activating (image guard). */
+  private async assertAccessBelongsToEvent(
+    accessId: string,
+    eventId: string,
+  ): Promise<void> {
+    const matchingIds = await findExistingAccessIdsInEvent([accessId], eventId);
+    if (!matchingIds.includes(accessId)) {
+      throw new AppException(
+        ErrorCodes.VALIDATION_ERROR,
+        "Certificate access item must belong to the template's event",
+        400,
+      );
+    }
+  }
+
+  /** Update a template. Reads current state when activating or linking access. */
   async updateTemplate(
     id: string,
     input: UpdateCertificateTemplateInput,
   ): Promise<CertificateTemplateWithAccess> {
-    // Fetch current state only when needed to validate activation.
+    // Fetch current event and image state only when the patch needs validation.
+    let current: Awaited<
+      ReturnType<typeof getCertificateTemplateImageState>
+    > = null;
+    if (input.active === true || input.accessId != null) {
+      current = await getCertificateTemplateImageState(id);
+    }
     if (input.active === true) {
-      const current = await getCertificateTemplateImageState(id);
       if (!current?.templateUrl) {
         throw new AppException(
           ErrorCodes.VALIDATION_ERROR,
@@ -217,6 +241,16 @@ export class CertificatesService {
           400,
         );
       }
+    }
+    if (input.accessId != null) {
+      if (!current) {
+        throw new AppException(
+          ErrorCodes.NOT_FOUND,
+          "Certificate template not found",
+          404,
+        );
+      }
+      await this.assertAccessBelongsToEvent(input.accessId, current.eventId);
     }
 
     const patch: {
