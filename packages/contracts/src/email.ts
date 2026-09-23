@@ -51,9 +51,18 @@ export interface TiptapMark {
   attrs?: Record<string, unknown>;
 }
 
+export type EmailTextAlign = "left" | "center" | "right" | "justify";
+
+export interface TiptapNodeAttributes {
+  textAlign?: EmailTextAlign | null;
+  fontSize?: string | null;
+  lineHeight?: string | null;
+  [key: string]: unknown;
+}
+
 export interface TiptapNode {
   type: string;
-  attrs?: Record<string, unknown>;
+  attrs?: TiptapNodeAttributes;
   marks?: TiptapMark[];
   content?: TiptapNode[];
   text?: string;
@@ -69,10 +78,48 @@ export const TiptapMarkSchema = z.strictObject({
   attrs: z.record(z.string(), z.unknown()).optional(),
 });
 
+export const EmailTextAlignSchema = z.enum([
+  "left",
+  "center",
+  "right",
+  "justify",
+]);
+
+const CSS_LENGTH_PATTERN =
+  /^(?:0|(?:\d+(?:\.\d+)?|\.\d+)(?:px|pt|pc|in|cm|mm|em|rem|ex|ch|vw|vh|vmin|vmax|%)?)$/i;
+const UNIT_LESS_NUMBER_PATTERN = /^(?:\d+(?:\.\d+)?|\.\d+)$/;
+
+function cssLengthSchema(normalizeUnitless: boolean) {
+  return z
+    .union([z.string(), z.number()])
+    .transform((value) => String(value).trim())
+    .pipe(z.string().regex(CSS_LENGTH_PATTERN))
+    .transform((value) =>
+      normalizeUnitless && UNIT_LESS_NUMBER_PATTERN.test(value)
+        ? `${value}px`
+        : value,
+    );
+}
+
+/** Unitless legacy font sizes mean pixels. */
+export const EmailFontSizeSchema = cssLengthSchema(true);
+
+/** Unitless line-height is a multiplier and must remain unitless. */
+export const EmailLineHeightSchema = cssLengthSchema(false);
+
+export const TiptapNodeAttributesSchema = z
+  .object({
+    // Tiptap serializes unset extension attributes as null.
+    textAlign: EmailTextAlignSchema.nullable().optional(),
+    fontSize: EmailFontSizeSchema.nullable().optional(),
+    lineHeight: EmailLineHeightSchema.nullable().optional(),
+  })
+  .catchall(z.unknown());
+
 export const TiptapNodeSchema: z.ZodType<TiptapNode> = z.lazy(() =>
   z.strictObject({
     type: z.string(),
-    attrs: z.record(z.string(), z.unknown()).optional(),
+    attrs: TiptapNodeAttributesSchema.optional(),
     marks: z.array(TiptapMarkSchema).optional(),
     content: z.array(TiptapNodeSchema).optional(),
     text: z.string().optional(),
