@@ -10,6 +10,7 @@ vi.mock("@app/db", () => ({
   listCertificateTemplates: vi.fn(),
   getCertificateTemplateWithEvent: vi.fn(),
   getCertificateTemplateImageState: vi.fn(),
+  findExistingAccessIdsInEvent: vi.fn(),
   getCertificateTemplateForDelete: vi.fn(),
   getCertificateTemplateForUpload: vi.fn(),
   createCertificateTemplate: vi.fn(),
@@ -65,6 +66,7 @@ import {
   listCertificateTemplates,
   getCertificateTemplateWithEvent,
   getCertificateTemplateImageState,
+  findExistingAccessIdsInEvent,
   getCertificateTemplateForDelete,
   getCertificateTemplateForUpload,
   createCertificateTemplate,
@@ -111,6 +113,7 @@ describe("CertificatesService", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(findExistingAccessIdsInEvent).mockImplementation(async (ids) => ids);
     mockStorageDownload.mockResolvedValue({
       buffer: Buffer.from("image-bytes"),
       contentType: "image/png",
@@ -199,6 +202,24 @@ describe("CertificatesService", () => {
       });
     });
 
+    it("rejects an accessId from another event", async () => {
+      vi.mocked(findExistingAccessIdsInEvent).mockResolvedValue([]);
+
+      await expect(
+        service.createTemplate(eventId, {
+          name: "Speaker Cert",
+          applicableRoles: [],
+          accessId: "foreign-access",
+          scope: "BOTH",
+          allowedAbstractFinalTypes: [],
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.VALIDATION_ERROR,
+      });
+      expect(createCertificateTemplate).not.toHaveBeenCalled();
+    });
+
     it("forwards optional applicableRoles and accessId", async () => {
       vi.mocked(createCertificateTemplate).mockResolvedValue(
         baseMockTemplate() as never,
@@ -220,6 +241,10 @@ describe("CertificatesService", () => {
         scope: "BOTH",
         allowedAbstractFinalTypes: [],
       });
+      expect(findExistingAccessIdsInEvent).toHaveBeenCalledWith(
+        ["access-001"],
+        eventId,
+      );
     });
 
     // H2: scope + allowedAbstractFinalTypes forwarding.
@@ -268,6 +293,7 @@ describe("CertificatesService", () => {
 
     it("rejects activating a template without an uploaded image", async () => {
       vi.mocked(getCertificateTemplateImageState).mockResolvedValue({
+        eventId,
         templateUrl: "",
         accessId: null,
       });
@@ -283,6 +309,7 @@ describe("CertificatesService", () => {
 
     it("allows activating a template that has an image", async () => {
       vi.mocked(getCertificateTemplateImageState).mockResolvedValue({
+        eventId,
         templateUrl: "https://storage.googleapis.com/bucket/img.png",
         accessId: null,
       });
@@ -317,9 +344,31 @@ describe("CertificatesService", () => {
 
       await service.updateTemplate(templateId, { accessId: "new-access" });
 
+      expect(getCertificateTemplateImageState).toHaveBeenCalledWith(templateId);
+      expect(findExistingAccessIdsInEvent).toHaveBeenCalledWith(
+        ["new-access"],
+        eventId,
+      );
       expect(updateCertificateTemplate).toHaveBeenCalledWith(templateId, {
         accessId: "new-access",
       });
+    });
+
+    it("rejects linking an accessId from another event", async () => {
+      vi.mocked(getCertificateTemplateImageState).mockResolvedValue({
+        eventId,
+        templateUrl: "https://storage.googleapis.com/bucket/img.png",
+        accessId: null,
+      });
+      vi.mocked(findExistingAccessIdsInEvent).mockResolvedValue([]);
+
+      await expect(
+        service.updateTemplate(templateId, { accessId: "foreign-access" }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.VALIDATION_ERROR,
+      });
+      expect(updateCertificateTemplate).not.toHaveBeenCalled();
     });
 
     // H2: scope + allowedAbstractFinalTypes patch forwarding.
