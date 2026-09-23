@@ -129,7 +129,8 @@ async function processOne(
       (row.type === "DAILY_DIGEST"
         ? context.profile!.emailPreference === "DAILY"
         : context.profile!.emailPreference === "IMMEDIATE");
-    if (stillWantsEmail)
+    if (stillWantsEmail) {
+      let accepted: { messageId?: string } | undefined;
       try {
         const tracking = await beginNetworkingEmailLog(row, {
           registrationId: context.registration!.id,
@@ -138,7 +139,8 @@ async function processOne(
           subject: rendered.subject,
         });
         if (tracking.leaseLost) return "lease_lost";
-        if (!tracking.alreadySent) {
+        if (tracking.alreadySent) progress.emailSent = true;
+        else {
           const provider = dependencies.email ?? getEmailProvider();
           if (!provider.isConfigured())
             throw new Error("Email provider is not configured");
@@ -159,15 +161,30 @@ async function processOne(
           });
           if (!result.success)
             throw new Error("Email provider rejected delivery");
-          await finishNetworkingEmailLog(row, "sent", result.messageId);
+          accepted = { messageId: result.messageId };
         }
-        progress.emailSent = true;
-        if (!(await updateNetworkingDelivery(row, { payload })))
-          return "lease_lost";
       } catch {
         failures.push("email");
         await finishNetworkingEmailLog(row, "failed");
       }
+      // Only dispatch failures above count as email failures: once the provider accepted the
+      // email, bookkeeping errors must never mark it failed or schedule a resend.
+      if (accepted) {
+        progress.emailSent = true;
+        try {
+          await finishNetworkingEmailLog(row, "sent", accepted.messageId);
+        } catch {
+          /* Accepted by the provider: the persisted progress below keeps later claims from resending. */
+        }
+      }
+      if (progress.emailSent) {
+        try {
+          if (!(await updateNetworkingDelivery(row, { payload }))) return "lease_lost";
+        } catch {
+          return "lease_lost";
+        }
+      }
+    }
   }
   if (row.type !== "OTP" && row.type !== "DAILY_DIGEST") {
     const delivered = new Set(progress.pushEndpoints ?? []);

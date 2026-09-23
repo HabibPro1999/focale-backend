@@ -1,10 +1,7 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
 import sharp from "sharp";
-import {
-  extractStorageKeyFromUrl,
-  getStorageProvider,
-} from "@app/integrations";
+import { getStorageProvider, ownedStorageKey } from "@app/integrations";
 import { createLogger } from "@app/shared";
 import type { FastifyRequest } from "fastify";
 const log = createLogger({ name: "networking:uploads" });
@@ -13,27 +10,29 @@ export type NetworkingMultipartRequest = FastifyRequest & {
     limits: { fileSize: number; files: number };
   }): Promise<{ toBuffer(): Promise<Buffer> } | undefined>;
 };
+const missing = (error: unknown) => {
+  const failure = error as { code?: string | number; name?: string; $metadata?: { httpStatusCode?: number } };
+  return failure?.code === 404 || failure?.code === "404" || failure?.name === "NoSuchKey" ||
+    failure?.$metadata?.httpStatusCode === 404;
+};
+/** Best-effort: only objects under the participant's own upload prefix are ever deleted. */
+export async function deleteNetworkingPhoto(
+  photoUrl: string | null | undefined,
+  eventId: string,
+  profileId: string,
+) {
+  const key = ownedStorageKey(photoUrl, `networking/${eventId}/profiles/${profileId}`);
+  if (!key) return;
+  try {
+    await getStorageProvider().delete(key);
+  } catch (error) {
+    if (!missing(error)) log.warn({ err: error, profileId }, "Failed to delete networking photo");
+  }
+}
 @Injectable()
 export class NetworkingUploadsService {
-  async deletePhoto(photoUrl: string | null | undefined, profileId: string) {
-    if (!photoUrl) return;
-    try {
-      const key = extractStorageKeyFromUrl(photoUrl);
-      if (key) await getStorageProvider().delete(key);
-    } catch (error) {
-      const failure = error as {
-        code?: string | number;
-        name?: string;
-        $metadata?: { httpStatusCode?: number };
-      };
-      if (
-        failure?.code === 404 ||
-        failure?.code === "404" ||
-        failure?.name === "NoSuchKey" ||
-        failure?.$metadata?.httpStatusCode === 404
-      ) return;
-      log.warn({ err: error, profileId }, "Failed to delete withdrawn networking photo");
-    }
+  deletePhoto(photoUrl: string | null | undefined, eventId: string, profileId: string) {
+    return deleteNetworkingPhoto(photoUrl, eventId, profileId);
   }
   async image(
     req: NetworkingMultipartRequest,
@@ -79,8 +78,8 @@ export class NetworkingUploadsService {
       }
       throw error;
     }
-    const old = previousUrl ? extractStorageKeyFromUrl(previousUrl) : null;
-    if (old?.startsWith(`${prefix}/`)) {
+    const old = ownedStorageKey(previousUrl, prefix);
+    if (old) {
       try {
         await storage.delete(old);
       } catch (error) {

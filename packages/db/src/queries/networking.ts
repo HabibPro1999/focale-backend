@@ -14,7 +14,7 @@ import {
 } from "../schema/networking";
 import { events } from "../schema/events-access";
 import { forms } from "../schema/forms";
-import { projectNetworkingFields } from "./networking-projection";
+import { projectNetworkingFields, resolveNetworkingConsent } from "./networking-projection";
 import { registrations } from "../schema/registrations";
 
 export async function getNetworkingConfig(
@@ -97,42 +97,49 @@ export async function syncNetworkingRegistration(
         eq(forms.eventId, registration.eventId),
       ),
     );
-  const { projection, consent: mappedConsent } = projectNetworkingFields(
+  const { projection, consent: mapped } = projectNetworkingFields(
     form?.schema,
     formData,
     config,
   );
-  const consent = registration.networkingOptIn !== false && mappedConsent;
+  const overrides = networkingProfileOverrides(existing?.overrides ?? {});
+  // K1: an opt-in boolean decides; otherwise the participant's choice, then the mapped answer.
+  const { consent, undecided } = resolveNetworkingConsent({
+    optIn: registration.networkingOptIn,
+    choice: overrides.consent,
+    mapped,
+    withdrawn: !!existing?.withdrawnAt,
+  });
   const eligible = config.eligiblePaymentStatuses.includes(
     registration.paymentStatus as NetworkingConfig["eligiblePaymentStatuses"][number],
   );
   if (existing) {
     const values = {
       ...projection,
-      ...networkingProfileOverrides(existing.overrides),
+      ...overrides,
       email: registration.email.trim().toLowerCase(),
       firstName: registration.firstName ?? "",
       lastName: registration.lastName ?? "",
     };
-    // Registration opt-out always wins; participant consent cannot override it.
-    const effectiveConsent = consent && existing.overrides.consent !== false;
     await db
       .update(networkingProfiles)
       .set({
         ...values,
-        consent: effectiveConsent,
+        consent,
+        ...(consent && !existing.consent ? { visible: true, consentAt: new Date() } : {}),
         ...(existing.status === "PENDING" &&
         config.approvalMode === "AUTOMATIC" &&
         eligible
           ? { status: "ACTIVE" as const }
           : {}),
-        ...(!effectiveConsent ? { visible: false } : {}),
+        ...(!consent ? { visible: false } : {}),
         updatedAt: new Date(),
       })
       .where(eq(networkingProfiles.id, existing.id));
+    // Undecided registrants keep their consent-pending sessions to opt in from the PWA.
     if (
       !eligible ||
-      !effectiveConsent ||
+      (!consent && !undecided) ||
       existing.email !== registration.email.trim().toLowerCase()
     )
       await db
@@ -144,7 +151,7 @@ export async function syncNetworkingRegistration(
             isNull(networkingSessions.revokedAt),
           ),
         );
-    if (!eligible || !effectiveConsent)
+    if (!eligible || !consent)
       await cancelNetworkingParticipantMeetings(
         existing.id,
         registration.eventId,
@@ -152,7 +159,7 @@ export async function syncNetworkingRegistration(
       );
     if (
       eligible &&
-      effectiveConsent &&
+      consent &&
       !existing.withdrawnAt &&
       (existing.status === "ACTIVE" ||
         (existing.status === "PENDING" && config.approvalMode === "AUTOMATIC"))
@@ -195,6 +202,17 @@ export async function syncNetworkingEvent(eventId: string) {
     updated += result.updated;
   }
   return { created, updated };
+}
+/** Captured before a registration delete cascades to its profile, for post-commit photo cleanup. */
+export async function getNetworkingProfilePhotoByRegistration(
+  registrationId: string,
+  db: DbExecutor = getDb(),
+) {
+  const [row] = await db
+    .select({ id: networkingProfiles.id, eventId: networkingProfiles.eventId, photoUrl: networkingProfiles.photoUrl })
+    .from(networkingProfiles)
+    .where(eq(networkingProfiles.registrationId, registrationId));
+  return row ?? null;
 }
 export async function revokeNetworkingSessions(
   profileId: string,
@@ -263,12 +281,14 @@ export async function cancelNetworkingParticipantMeetings(
           type: "MEETING_CANCELLED",
           title: "Meeting cancelled",
           body: "This meeting is no longer available.",
-          href: `/${event.slug}/agenda`,
+          href: `/e/${event.slug}/agenda`,
           data: {
             meetingId: row.id,
             revision: row.revision,
+            action: "CANCEL",
             status: "CANCELLED",
             startsAt: row.startsAt.toISOString(),
+            endsAt: row.endsAt.toISOString(),
           },
         },
         db,
@@ -289,7 +309,7 @@ export async function queueNetworkingActivation(
   const notificationId = randomUUID();
   const title = "Networking is ready",
     body = "Your networking participation is active.",
-    href = `/${event.slug}`;
+    href = `/e/${event.slug}`;
   const delivery = await enqueueNetworkingDelivery(
     {
       eventId,

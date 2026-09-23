@@ -20,7 +20,7 @@ export async function expireNetworkingProposals(eventId?: string, db: DbExecutor
 /** Each reminder and its in-app record are committed by one statement, with delivery dedupe winning races. */
 export async function maintainNetworkingLifecycle(
   eventId?: string,
-  onAfterPurge?: (profiles: { id: string; photoUrl: string | null }[]) => Promise<void>,
+  onAfterPurge?: (profiles: { id: string; eventId: string; photoUrl: string | null }[]) => Promise<void>,
 ) {
   const db = getDb();
   const scope = eventId ? sql`AND event_id=${eventId}` : sql``;
@@ -126,7 +126,7 @@ export async function maintainNetworkingLifecycle(
       );
       // photoUrl is the profile's only managed asset; preserve it before cascading deletion.
       const profiles = await tx
-        .select({ id: networkingProfiles.id, photoUrl: networkingProfiles.photoUrl })
+        .select({ id: networkingProfiles.id, eventId: networkingProfiles.eventId, photoUrl: networkingProfiles.photoUrl })
         .from(networkingProfiles)
         .where(eq(networkingProfiles.eventId, event_id));
       await tx

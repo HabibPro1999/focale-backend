@@ -31,16 +31,18 @@ export function networkingDeliverySkipReason(
     return "event_unavailable";
   if (row.type !== "POST_EVENT_CONTACTS" && row.type !== "DAILY_DIGEST" && config.closesAt && new Date(config.closesAt) <= now)
     return "networking_closed";
-  const eligible = (person: typeof profile, registrant: typeof registration) =>
+  const eligible = (person: typeof profile, registrant: typeof registration, consentPending = false) =>
     !!person &&
     person.status === "ACTIVE" &&
-    person.consent &&
+    (person.consent || consentPending) &&
     !person.withdrawnAt &&
     !!registrant &&
     registrant.eventId === row.eventId &&
     registrant.networkingOptIn !== false &&
     config.eligiblePaymentStatuses.includes(registrant.paymentStatus);
-  if (!eligible(profile, registration)) return "participant_ineligible";
+  // Undecided registrants may still receive a sign-in code to give consent in the PWA.
+  if (!eligible(profile, registration, row.type === "OTP" && ctx.consentPending))
+    return "participant_ineligible";
   if (
     row.type === "OTP" &&
     (!challenge ||

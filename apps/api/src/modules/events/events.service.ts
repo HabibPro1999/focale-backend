@@ -30,6 +30,7 @@ import {
   getEventWithPricingBySlug,
   getEventWithPricingAndClient,
   getEventWithRegistrationCountTx,
+  getNetworkingConfig,
   insertEventPricingTx,
   insertEventTx,
   listEvents as listEventsQuery,
@@ -41,6 +42,7 @@ import {
   compressImage,
   extractStorageKeyFromUrl,
   getStorageProvider,
+  ownedStorageKey,
 } from "@app/integrations";
 import { fileTypeFromBuffer } from "file-type";
 import { AppException } from "../../core/app-exception";
@@ -321,6 +323,7 @@ export class EventsService {
       certificateTemplateImages: Array<{ templateUrl: string }>;
       abstractFinalFiles: Array<{ finalFileKey: string | null }>;
       abstractBookFiles: Array<{ storageKey: string | null }>;
+      networkingLogoKey: string | null;
     };
 
     try {
@@ -341,6 +344,11 @@ export class EventsService {
           const certificateTemplateImages = await getCertificateTemplateUrlsTx(tx, id);
           const abstractFinalFiles = await getAbstractFinalFileKeysTx(tx, id);
           const abstractBookFiles = await getAbstractBookStorageKeysTx(tx, id);
+          // Only the organizer-uploaded branding object is owned; an external logo URL is never deleted.
+          const networkingLogoKey = ownedStorageKey(
+            (await getNetworkingConfig(id, tx)).logoUrl,
+            `networking/${id}/branding`,
+          );
 
           await deleteEmailTemplatesByEventTx(tx, id);
           await deleteEventTx(tx, id);
@@ -350,6 +358,7 @@ export class EventsService {
             certificateTemplateImages,
             abstractFinalFiles,
             abstractBookFiles,
+            networkingLogoKey,
           };
         },
         { isolationLevel: "read committed" },
@@ -379,6 +388,7 @@ export class EventsService {
       ...filesToDelete.abstractBookFiles.map((j) =>
         deleteStoredObjectBestEffort(j.storageKey, { eventId: id }),
       ),
+      deleteStoredObjectBestEffort(filesToDelete.networkingLogoKey, { eventId: id }),
     ]);
   }
 

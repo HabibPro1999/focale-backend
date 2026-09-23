@@ -12,6 +12,7 @@ import type { FastifyReply } from "fastify";
 import { getRequestId } from "./request-context";
 import { logger } from "./logger.service";
 import { ZodValidationException } from "./zod";
+import { isParticipantNetworkingRequest } from "./networking-throttler.guard";
 
 type ErrorBody = { code: string; message: string; details?: unknown };
 
@@ -68,7 +69,8 @@ export class HttpExceptionFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost): void {
     const reply = host.switchToHttp().getResponse<FastifyReply>();
     const requestId = getRequestId() ?? "";
-    const isNetworking = host.switchToHttp().getRequest<{ url?: string }>()?.url?.split("?")[0]?.includes("/networking") ?? false;
+    // Organizer networking routes keep generic codes (VAL_2001 with details); only the PWA API is localized by code.
+    const isNetworking = isParticipantNetworkingRequest(host.switchToHttp().getRequest());
 
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let error: ErrorBody;

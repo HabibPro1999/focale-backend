@@ -31,9 +31,10 @@ export function zonedInstant(date: string, time: string, timezone: string) {
     if (actual === desired) return new Date(stamp);
     stamp += Date.parse(`${desired}:00Z`) - Date.parse(`${actual}:00Z`);
   }
-  throw new BadRequestException(
-    `Nonexistent local time ${desired} in ${timezone}`,
-  );
+  throw new BadRequestException({
+    code: "NETWORKING_SLOT_INVALID",
+    message: `Nonexistent local time ${desired} in ${timezone}`,
+  });
 }
 export function networkingSlots(
   config: NetworkingConfig,

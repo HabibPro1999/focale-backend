@@ -214,7 +214,7 @@ export class NetworkingAdminController {
   @Post("post-event-report")
   @HttpCode(202)
   async regeneratePostEventReport(@CurrentUser() user: AuthUser, @Param("eventId") eventId: string) {
-    await this.access(user, eventId);
+    await this.access(user, eventId, true);
     return this.service.regeneratePostEventReport(eventId, user.id);
   }
   @Get("post-event-report")

@@ -1,8 +1,8 @@
 import { Injectable } from "@nestjs/common";
 import { maintainNetworkingLifecycle } from "@app/db";
 import {
-  extractStorageKeyFromUrl,
   getStorageProvider,
+  ownedStorageKey,
   processNetworkingDeliveries,
   processNetworkingEmbeddings,
 } from "@app/integrations";
@@ -33,10 +33,11 @@ export class NetworkingMaintenanceJob implements Job {
       const cleanup = async () => {
         while (next < profiles.length) {
           const profile = profiles[next++]!;
-          if (!profile.photoUrl) continue;
+          // Form-projected or foreign URLs are never ours to delete.
+          const key = ownedStorageKey(profile.photoUrl, `networking/${profile.eventId}/profiles/${profile.id}`);
+          if (!key) continue;
           try {
-            const key = extractStorageKeyFromUrl(profile.photoUrl);
-            if (key) await getStorageProvider().delete(key);
+            await getStorageProvider().delete(key);
           } catch (error) {
             const failure = error as {
               code?: string | number;

@@ -1,4 +1,4 @@
-import type { NetworkingParticipantListQuery } from "@app/contracts";
+import { ErrorCodes, type NetworkingParticipantListQuery } from "@app/contracts";
 import { participantPagination } from "./networking.pagination";
 import {
   BadRequestException,
@@ -21,6 +21,9 @@ import {
   type NetworkingContext,
 } from "./networking.service";
 import { networkingPair, networkingPublicProfile } from "./networking.policy";
+const notFound = (message: string) => new NotFoundException({ code: ErrorCodes.NETWORKING_NOT_FOUND, message });
+type ConnectionSummaryRow = Awaited<ReturnType<typeof listNetworkingConnectionSummaries>>[number];
+const summary = (row: ConnectionSummaryRow) => ({ ...row, profile: networkingPublicProfile(row.profile) });
 @Injectable()
 export class NetworkingSocialService {
   constructor(private readonly networking: NetworkingService) {}
@@ -57,7 +60,7 @@ export class NetworkingSocialService {
       !row ||
       (row.profileAId !== ctx.profile.id && row.profileBId !== ctx.profile.id)
     )
-      throw new NotFoundException({ code: "NETWORKING_VALIDATION", message: "Connection not found" });
+      throw notFound("Connection not found");
     const profile = await this.networking.target(
       ctx,
       row.profileAId === ctx.profile.id ? row.profileBId : row.profileAId,
@@ -131,7 +134,7 @@ export class NetworkingSocialService {
               type: "MATCH",
               title: "New connection",
               body: "You have a new mutual connection.",
-              href: `/${ctx.event.slug}/connections/${connection.id}`,
+              href: `/e/${ctx.event.slug}/connections/${connection.id}`,
               data: { connectionId: connection.id, counterpartName: profileId === ctx.profile.id ? `${target.firstName} ${target.lastName}`.trim() : `${ctx.profile.firstName} ${ctx.profile.lastName}`.trim() },
             },
             db,
@@ -143,15 +146,37 @@ export class NetworkingSocialService {
   async connections(ctx: NetworkingContext, query: NetworkingParticipantListQuery = {}) {
     const page = participantPagination("connections", ctx, query);
     const rows = await listNetworkingConnectionSummaries(ctx.event.id, ctx.profile.id, ctx.config.eligiblePaymentStatuses, page);
-    const visibleRows = page ? rows.slice(0, page.limit) : rows;
-    const items = visibleRows.map(row => ({ ...row, profile: networkingPublicProfile(row.profile) }));
-    if (!page) return { items, total: items.length };
+    const visibleRows = rows.slice(0, page.limit);
     const last = visibleRows.at(-1);
     return {
-      items,
-      total: await countNetworkingConnectionSummaries(ctx.event.id, ctx.profile.id, ctx.config.eligiblePaymentStatuses),
+      items: visibleRows.map(summary),
       nextCursor: rows.length > page.limit && last ? page.cursor(last.createdAt, last.id) : null,
+      // Counted once per listing: later pages never repeat the aggregate.
+      ...(page.after ? {} : { total: await countNetworkingConnectionSummaries(ctx.event.id, ctx.profile.id, ctx.config.eligiblePaymentStatuses) }),
     };
+  }
+  /** Internal, unpaginated: exports must never be truncated. Not exposed over HTTP. */
+  async allConnections(ctx: NetworkingContext) {
+    return (await listNetworkingConnectionSummaries(ctx.event.id, ctx.profile.id, ctx.config.eligiblePaymentStatuses)).map(summary);
+  }
+  /** One visible connection summary, same shape as a GET connections item (K2). */
+  async connectionSummary(ctx: NetworkingContext, id: string) {
+    await this.connection(ctx, id);
+    const [row] = await listNetworkingConnectionSummaries(ctx.event.id, ctx.profile.id, ctx.config.eligiblePaymentStatuses, undefined, { connectionId: id });
+    if (!row) throw notFound("Connection not found");
+    return summary(row);
+  }
+  async connectionWith(ctx: NetworkingContext, profileId: string) {
+    if (profileId === ctx.profile.id) return null;
+    const [profileAId, profileBId] = networkingPair(ctx.profile.id, profileId);
+    const row = await networkingStore().one("connections", { eventId: ctx.event.id, profileAId, profileBId });
+    if (!row) return null;
+    try {
+      return await this.connectionSummary(ctx, row.id);
+    } catch (error) {
+      if (error instanceof NotFoundException) return null;
+      throw error;
+    }
   }
   async messages(
     ctx: NetworkingContext,
@@ -209,7 +234,7 @@ export class NetworkingSocialService {
           type: "MESSAGE",
           title: "New message",
           body: `${ctx.profile.firstName} sent you a message.`,
-          href: `/${ctx.event.slug}/connections/${id}`,
+          href: `/e/${ctx.event.slug}/connections/${id}`,
           data: { connectionId: id, messageId: message.id, counterpartName: `${ctx.profile.firstName} ${ctx.profile.lastName}`.trim() },
         },
         db,
@@ -239,7 +264,7 @@ export class NetworkingSocialService {
         id: targetId,
         eventId: ctx.event.id,
       });
-      if (!target) throw new NotFoundException({ code: "NETWORKING_VALIDATION", message: "Participant not found" });
+      if (!target) throw notFound("Participant not found");
       if (
         !(await store.one("blocks", {
           eventId: ctx.event.id,
@@ -284,12 +309,12 @@ export class NetworkingSocialService {
               type: "MEETING_CANCELLED",
               title: "Meeting cancelled",
               body: "This meeting is no longer available.",
-              href: `/${ctx.event.slug}/agenda`,
+              href: `/e/${ctx.event.slug}/agenda`,
+              // A block never names the other participant (K5).
               data: {
-                meetingId: meeting.id, revision: meeting.revision + 1,
+                meetingId: meeting.id, revision: meeting.revision + 1, action: "CANCEL",
                 startsAt: meeting.startsAt.toISOString(), endsAt: meeting.endsAt.toISOString(),
                 status: "CANCELLED",
-                counterpartName: profileId === ctx.profile.id ? `${target.firstName} ${target.lastName}`.trim() : `${ctx.profile.firstName} ${ctx.profile.lastName}`.trim(),
               },
             },
             db,
@@ -310,7 +335,7 @@ export class NetworkingSocialService {
         eventId: ctx.event.id,
       }))
     )
-      throw new NotFoundException({ code: "NETWORKING_VALIDATION", message: "Participant not found" });
+      throw notFound("Participant not found");
     if (input.messageId) {
       const message = await store.one("messages", {
         id: input.messageId,
@@ -328,7 +353,7 @@ export class NetworkingSocialService {
         (connection.profileAId !== ctx.profile.id &&
           connection.profileBId !== ctx.profile.id)
       )
-        throw new NotFoundException({ code: "NETWORKING_VALIDATION", message: "Message not found" });
+        throw notFound("Message not found");
     }
     return store.insert("reports", {
       eventId: ctx.event.id,

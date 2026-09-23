@@ -63,8 +63,27 @@ export async function listNetworkingConnectionSummaries(
   profileId: string,
   paymentStatuses: readonly string[],
   page?: NetworkingParticipantPage,
+  filter: { connectionId?: string } = {},
 ) {
   const db = getDb();
+  const counterpart = sql`CASE WHEN ${connections.profileAId}=${profileId} THEN ${connections.profileBId} ELSE ${connections.profileAId} END`;
+  const scoped = and(
+    connectionVisibility(eventId, profileId, paymentStatuses),
+    filter.connectionId ? eq(connections.id, filter.connectionId) : undefined,
+  );
+  // Keyset + limit pick the page first, so the latest-message lateral runs for at most limit+1 rows.
+  const pageIds = page
+    ? db
+        .select({ id: connections.id })
+        .from(connections)
+        .innerJoin(profiles, eq(profiles.id, counterpart))
+        .innerJoin(registrations, eq(registrations.id, profiles.registrationId))
+        .where(and(scoped, page.after
+          ? sql`(${connections.createdAt}, ${connections.id}) < (${page.after.at.toISOString()}, ${page.after.id})`
+          : undefined))
+        .orderBy(desc(connections.createdAt), desc(connections.id))
+        .limit(page.limit + 1)
+    : undefined;
   const latest = db
     .select()
     .from(messages)
@@ -78,7 +97,7 @@ export async function listNetworkingConnectionSummaries(
     .limit(1)
     .as("latest_message");
   const readAt = sql`CASE WHEN ${connections.profileAId}=${profileId} THEN ${connections.readAAt} ELSE ${connections.readBAt} END`;
-  const query = db
+  return db
     .select({
       id: connections.id,
       profile: getTableColumns(profiles),
@@ -97,25 +116,13 @@ export async function listNetworkingConnectionSummaries(
         ),
     })
     .from(connections)
-    .innerJoin(
-      profiles,
-      eq(
-        profiles.id,
-        sql`CASE WHEN ${connections.profileAId}=${profileId} THEN ${connections.profileBId} ELSE ${connections.profileAId} END`,
-      ),
-    )
+    .innerJoin(profiles, eq(profiles.id, counterpart))
     .innerJoin(registrations, eq(registrations.id, profiles.registrationId))
     .leftJoinLateral(latest, sql`true`)
-    .where(
-      and(connectionVisibility(eventId, profileId, paymentStatuses), page?.after
-        ? sql`(${connections.createdAt}, ${connections.id}) < (${page.after.at.toISOString()}, ${page.after.id})`
-        : undefined),
-    )
+    .where(pageIds ? and(eq(connections.eventId, eventId), inArray(connections.id, pageIds)) : scoped)
     .orderBy(...(page
       ? [desc(connections.createdAt), desc(connections.id)]
-      : [sql`coalesce(${latest.createdAt},${connections.createdAt}) DESC`, connections.id]))
-    .$dynamic();
-  return page ? query.limit(page.limit + 1) : query;
+      : [sql`coalesce(${latest.createdAt},${connections.createdAt}) DESC`, connections.id]));
 }
 
 export async function listNetworkingParticipantMeetings(

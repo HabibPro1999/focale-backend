@@ -34,6 +34,7 @@ const db = vi.hoisted(() => ({
   insertRegistrationRow: vi.fn(),
   updateRegistrationRow: vi.fn(),
   deleteRegistrationRow: vi.fn(),
+  getNetworkingProfilePhotoByRegistration: vi.fn(),
   casUpdateRegistrationByUpdatedAt: vi.fn(),
   findRegistrationUsagesForRecalc: vi.fn(),
   findRegistrationUsageLinks: vi.fn(),
@@ -493,6 +494,7 @@ describe("RegistrationsService", () => {
         }),
       );
       db.findRegistrationUsageLinks.mockResolvedValue([]);
+      db.getNetworkingProfilePhotoByRegistration.mockResolvedValue(null);
     });
 
     it("deletes an unpaid registration and emits REAL accessIds", async () => {
@@ -513,6 +515,19 @@ describe("RegistrationsService", () => {
         (c) => c[1].type === "eventAccess.countsChanged",
       );
       expect(countsEvt?.[1].payload.accessIds).toEqual(["acc1"]);
+    });
+
+    it.each([
+      ["https://assets.example/networking/ev1/profiles/np1/photo.webp", "networking/ev1/profiles/np1/photo.webp"],
+      ["https://assets.example/forms/uploads/registrant-photo.webp", null],
+      ["https://assets.example/networking/ev1/profiles/other/photo.webp", null],
+    ])("after commit deletes only the profile's own networking photo: %s", async (photoUrl, key) => {
+      db.getNetworkingProfilePhotoByRegistration.mockResolvedValue({ id: "np1", eventId: "ev1", photoUrl });
+      await service.deleteRegistration("reg1", "admin1");
+      expect(db.getNetworkingProfilePhotoByRegistration.mock.invocationCallOrder[0])
+        .toBeLessThan(db.deleteRegistrationRow.mock.invocationCallOrder[0]!);
+      if (key) expect(storage.delete).toHaveBeenCalledWith(key);
+      else expect(storage.delete).not.toHaveBeenCalled();
     });
 
     it("blocks deleting a PAID registration without force", async () => {

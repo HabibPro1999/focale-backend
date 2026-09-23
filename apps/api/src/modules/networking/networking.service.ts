@@ -7,7 +7,9 @@ import {
 } from "@nestjs/common";
 import { randomBytes, randomInt } from "node:crypto";
 import {
+  findClientModuleState,
   listNetworkingDiscovery,
+  networkingConsentPending,
   touchNetworkingProfileActivity,
   cancelNetworkingParticipantMeetings,
   getActiveEventAccessId,
@@ -21,8 +23,9 @@ import {
   type NetworkingRow,
   type NetworkingStore,
 } from "@app/db";
-import { NetworkingConfigSchema, networkingProfileComplete, networkingProfileOverrides, type NetworkingConfig, type NetworkingPersonalAnalytics } from "@app/contracts";
-import { assertClientModuleEnabled } from "../clients/module-gates";
+import { ErrorCodes, NetworkingConfigSchema, networkingProfileComplete, networkingProfileOverrides, type ModuleId, type NetworkingConfig, type NetworkingPersonalAnalytics, type NetworkingRegistrationInfo } from "@app/contracts";
+import { isModuleEnabledForClient } from "../clients/module-gates";
+import { deleteNetworkingPhoto } from "./networking.uploads.service";
 import { networkingHash, sealNetworkingCode, readNetworkingBadge } from "./networking.security";
 import {
   networkingSearchMatches,
@@ -34,7 +37,17 @@ export type NetworkingContext = {
   config: NetworkingConfig;
   profile: NetworkingRow<"profiles">;
   session: NetworkingRow<"sessions">;
+  /** Signed in without consent yet (K1b): only the consent allow-list may proceed. */
+  consentPending?: boolean;
 };
+export type NetworkingAccess = "CONSENTED" | "CONSENT_PENDING";
+const expired = (message = "Participant session expired") =>
+  new UnauthorizedException({ code: ErrorCodes.NETWORKING_SESSION_EXPIRED, message });
+const notFound = (message: string) => new NotFoundException({ code: ErrorCodes.NETWORKING_NOT_FOUND, message });
+const unavailable = () => new ForbiddenException({ code: ErrorCodes.NETWORKING_FEATURE_DISABLED, message: "Networking is not available for this event" });
+const consentRequired = () =>
+  new ForbiddenException({ code: ErrorCodes.NETWORKING_CONSENT_REQUIRED, message: "Networking consent is required" });
+const bearer = (authorization?: string) => authorization?.match(/^Bearer ([A-Za-z0-9_-]{40,128})$/)?.[1];
 export type NetworkingDiscoveryQuery = {
   q?: string;
   sector?: string;
@@ -55,24 +68,25 @@ export class NetworkingService {
     if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(token)) {
       const profile = await store.one("profiles", { eventId, registrationId: token });
       if (!profile) throw new NotFoundException({
-        code: "NETWORKING_BADGE_INVALID",
+        code: ErrorCodes.NETWORKING_BADGE_INVALID,
         message: "Participant not found",
       });
       return profile.id;
     }
     return readNetworkingBadge(token, eventId);
   }
+  async modulesEnabled(clientId: string, modules: ModuleId[] = ["networking", "registrations", "emails"]) {
+    const client = await findClientModuleState(clientId);
+    return modules.every((module) => isModuleEnabledForClient(client, module));
+  }
   async publicContext(slug: string, store = networkingStore()) {
     const event = await store.one("events", { slug });
-    if (!event) throw new NotFoundException({ code: "NETWORKING_VALIDATION", message: "Event not found" });
-    await assertClientModuleEnabled(event.clientId, "networking");
-    await assertClientModuleEnabled(event.clientId, "registrations");
-    await assertClientModuleEnabled(event.clientId, "emails");
+    if (!event) throw notFound("Event not found");
+    if (!(await this.modulesEnabled(event.clientId))) throw unavailable();
     const config = NetworkingConfigSchema.parse(
       (await store.one("configs", { eventId: event.id }))?.config ?? {},
     );
-    if (!config.enabled || event.status === "ARCHIVED")
-      throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Networking is not available for this event" });
+    if (!config.enabled || event.status === "ARCHIVED") throw unavailable();
     if (config.opensAt && Date.parse(config.opensAt) > Date.now())
       throw new ForbiddenException({ code: "NETWORKING_CLOSED", message: "Networking is not open yet" });
     if (config.closesAt && Date.parse(config.closesAt) < Date.now())
@@ -92,17 +106,7 @@ export class NetworkingService {
       emailTemplates,
       ...publicConfig
     } = config;
-    const base = process.env.PUBLIC_NETWORKING_URL;
-    let networkingUrl: string | undefined;
-    try {
-      if (base) {
-        const url = new URL(base);
-        if (["http:", "https:"].includes(url.protocol))
-          networkingUrl = `${url.origin}${url.pathname.replace(/\/$/, "")}/${encodeURIComponent(event.slug)}`;
-      }
-    } catch {
-      // An invalid optional public URL is omitted from the public config.
-    }
+    const networkingUrl = this.networkingUrl(event.slug);
     return {
       event: {
         id: event.id,
@@ -116,6 +120,44 @@ export class NetworkingService {
       config: publicConfig,
       pushPublicKey: process.env.NETWORKING_VAPID_PUBLIC_KEY ?? null,
       networkingUrl,
+    };
+  }
+  /** PWA event URL; an unset or invalid optional PUBLIC_NETWORKING_URL is omitted. */
+  networkingUrl(slug: string) {
+    try {
+      const base = process.env.PUBLIC_NETWORKING_URL;
+      if (!base) return undefined;
+      const url = new URL(base);
+      if (!["http:", "https:"].includes(url.protocol)) return undefined;
+      return `${url.origin}${url.pathname.replace(/\/$/, "")}/e/${encodeURIComponent(slug)}`;
+    } catch {
+      return undefined;
+    }
+  }
+  /** Registration-form view (K2): available before opensAt, never throws for an unavailable event. */
+  async registrationInfo(slug: string): Promise<NetworkingRegistrationInfo> {
+    const store = networkingStore();
+    const event = await store.one("events", { slug });
+    if (!event) throw notFound("Event not found");
+    const config = NetworkingConfigSchema.parse(
+      (await store.one("configs", { eventId: event.id }))?.config ?? {},
+    );
+    if (
+      !config.enabled ||
+      event.status === "ARCHIVED" ||
+      (config.closesAt && Date.parse(config.closesAt) < Date.now()) ||
+      Date.now() > event.endDate.getTime() + config.retentionDays * 86_400_000 ||
+      !(await this.modulesEnabled(event.clientId))
+    )
+      return { enabled: false };
+    const networkingUrl = this.networkingUrl(event.slug);
+    return {
+      enabled: true,
+      opensAt: config.opensAt ?? null,
+      closesAt: config.closesAt ?? null,
+      approvalMode: config.approvalMode,
+      fieldMapping: { ...config.fieldMapping, consent: config.fieldMapping.consent ?? null },
+      ...(networkingUrl ? { networkingUrl } : {}),
     };
   }
   async areaAccess(
@@ -140,48 +182,60 @@ export class NetworkingService {
     });
     return !!registration?.accessTypeIds?.includes(accessId);
   }
+  /** Consented and eligible: required by every capability and every visible counterpart. */
   async eligible(
     profile: NetworkingRow<"profiles">,
     config: NetworkingConfig,
     store = networkingStore(),
   ) {
-    if (profile.status !== "ACTIVE" || !profile.consent || profile.withdrawnAt)
-      return false;
+    return (await this.access(profile, config, store, false)) === "CONSENTED";
+  }
+  /** Who may sign in: consented participants, or undecided registrants choosing in the PWA (K1b). */
+  async access(
+    profile: NetworkingRow<"profiles">,
+    config: NetworkingConfig,
+    store = networkingStore(),
+    allowPending = true,
+  ): Promise<NetworkingAccess | null> {
+    if (profile.status !== "ACTIVE" || profile.withdrawnAt || (!profile.consent && !allowPending))
+      return null;
     const registration = await store.one("registrations", {
       id: profile.registrationId,
       eventId: profile.eventId,
     });
-    return (
-      !!registration &&
-      (
-        registration as typeof registration & {
-          networkingOptIn?: boolean | null;
-        }
-      ).networkingOptIn !== false &&
-      config.eligiblePaymentStatuses.includes(registration.paymentStatus)
-    );
+    if (
+      !registration ||
+      registration.networkingOptIn === false ||
+      !config.eligiblePaymentStatuses.includes(registration.paymentStatus)
+    )
+      return null;
+    if (profile.consent) return "CONSENTED";
+    const form = await store.one("forms", { id: registration.formId, eventId: profile.eventId });
+    return networkingConsentPending({
+      profile, optIn: registration.networkingOptIn, formSchema: form?.schema, formData: registration.formData, config,
+    }) ? "CONSENT_PENDING" : null;
   }
   async participant(
     slug: string,
     authorization?: string,
-    options: { allowPendingSecondFactor?: boolean } = {},
+    options: { allowPendingSecondFactor?: boolean; allowConsentPending?: boolean } = {},
   ): Promise<NetworkingContext> {
     const { event, config } = await this.publicContext(slug);
-    const token = authorization?.match(/^Bearer ([A-Za-z0-9_-]{40,128})$/)?.[1];
-    if (!token) throw new UnauthorizedException({ code: "NETWORKING_VALIDATION", message: "Participant session required" });
+    const token = bearer(authorization);
+    if (!token) throw expired("Participant session required");
     const store = networkingStore();
     const session = await store.one("sessions", {
       eventId: event.id,
       tokenHash: networkingHash(token),
       revokedAt: null,
     });
-    if (!session || session.expiresAt.getTime() <= Date.now())
-      throw new UnauthorizedException({ code: "NETWORKING_VALIDATION", message: "Participant session expired" });
+    if (!session || session.expiresAt.getTime() <= Date.now()) throw expired();
     const profile = await store.one("profiles", {
       id: session.profileId,
       eventId: event.id,
     });
-    if (!profile || !(await this.eligible(profile, config)))
+    const access = profile ? await this.access(profile, config, store) : null;
+    if (!profile || !access)
       throw new ForbiddenException({ code: "NETWORKING_NOT_ELIGIBLE", message: "Networking participation is not approved or eligible" });
     const factor = await store.one("secondFactors", { profileId: profile.id });
     if (
@@ -194,17 +248,33 @@ export class NetworkingService {
         message: "Authenticator verification is required",
       });
     }
+    if (access === "CONSENT_PENDING" && !options.allowConsentPending) throw consentRequired();
     if (
       !profile.lastActiveAt ||
       Date.now() - profile.lastActiveAt.getTime() > 60_000
     )
       await touchNetworkingProfileActivity(event.id, profile.id);
-    return { event, config, profile, session };
+    return { event, config, profile, session, consentPending: access === "CONSENT_PENDING" };
+  }
+  /** Token-only: logging out never depends on eligibility, consent, MFA or the event window. */
+  async logout(slug: string, authorization?: string) {
+    const token = bearer(authorization);
+    if (!token) throw expired("Participant session required");
+    const store = networkingStore();
+    const event = await store.one("events", { slug });
+    if (event)
+      await store.update(
+        "sessions",
+        { eventId: event.id, tokenHash: networkingHash(token), revokedAt: null },
+        { revokedAt: new Date() },
+      );
+    return { loggedOut: true };
   }
   /** Revalidate capabilities inside the event transaction, after concurrent admin/session changes. */
   async currentParticipant(
     ctx: NetworkingContext,
     store: NetworkingStore,
+    options: { allowConsentPending?: boolean } = {},
   ): Promise<NetworkingContext> {
     const event = await store.one("events", { id: ctx.event.id });
     const config = NetworkingConfigSchema.parse(
@@ -215,27 +285,27 @@ export class NetworkingService {
       event.status === "ARCHIVED" ||
       !config.enabled
     )
-      throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Networking is not available for this event" });
+      throw unavailable();
     if (
       (config.opensAt && Date.parse(config.opensAt) > Date.now()) ||
       (config.closesAt && Date.parse(config.closesAt) <= Date.now()) ||
       event.endDate.getTime() + config.retentionDays * 86400000 < Date.now()
     )
       throw new ForbiddenException({ code: "NETWORKING_CLOSED", message: "Networking is not available for this event" });
-    await assertClientModuleEnabled(event.clientId, "networking");
+    if (!(await this.modulesEnabled(event.clientId, ["networking"]))) throw unavailable();
     const session = await store.one("sessions", {
       id: ctx.session.id,
       eventId: event.id,
       profileId: ctx.profile.id,
       revokedAt: null,
     });
-    if (!session || session.expiresAt.getTime() <= Date.now())
-      throw new UnauthorizedException({ code: "NETWORKING_VALIDATION", message: "Participant session expired" });
+    if (!session || session.expiresAt.getTime() <= Date.now()) throw expired();
     const profile = await store.one("profiles", {
       id: ctx.profile.id,
       eventId: event.id,
     });
-    if (!profile || !(await this.eligible(profile, config, store)))
+    const access = profile ? await this.access(profile, config, store, !!options.allowConsentPending) : null;
+    if (!profile || !access)
       throw new ForbiddenException({ code: "NETWORKING_NOT_ELIGIBLE", message: "Networking participation is no longer eligible" });
     const factor = await store.one("secondFactors", { profileId: profile.id });
     if (
@@ -246,7 +316,7 @@ export class NetworkingService {
         code: "NETWORKING_MFA_REQUIRED",
         message: "Authenticator verification is required",
       });
-    return { event, config, profile, session };
+    return { event, config, profile, session, consentPending: access === "CONSENT_PENDING" };
   }
   async requestCode(slug: string, email: string) {
     email = email.trim().toLowerCase();
@@ -285,7 +355,7 @@ export class NetworkingService {
       );
       let profile: NetworkingRow<"profiles"> | undefined;
       for (const candidate of profiles) {
-        if (await this.eligible(candidate, config, store)) {
+        if (await this.access(candidate, config, store)) {
           profile = candidate;
           break;
         }
@@ -348,7 +418,7 @@ export class NetworkingService {
           a.id.localeCompare(b.id),
       );
       for (const profile of profiles) {
-        if (!(await this.eligible(profile, config, store))) continue;
+        if (!(await this.access(profile, config, store))) continue;
         const token = randomBytes(48).toString("base64url");
         const expiresAt = new Date(Date.now() + 30 * 86_400_000);
         await store.insert("sessions", {
@@ -372,8 +442,9 @@ export class NetworkingService {
       }
       return null;
     });
+    // Stays 401 (no session issued); NETWORKING_VALIDATION is reserved for HTTP 400.
     if (!result)
-      throw new UnauthorizedException({ code: "NETWORKING_VALIDATION", message: "Invalid or expired verification code" });
+      throw new UnauthorizedException({ code: ErrorCodes.UNAUTHORIZED, message: "Invalid or expired verification code" });
     return result;
   }
   async target(
@@ -392,7 +463,7 @@ export class NetworkingService {
       !(await this.eligible(profile, ctx.config, store)) ||
       (visible && (!profile.visible || !networkingProfileComplete(profile)))
     )
-      throw new NotFoundException({ code: "NETWORKING_VALIDATION", message: "Participant not available" });
+      throw notFound("Participant not available");
     const current = await store.one("profiles", {
       id: ctx.profile.id,
       eventId: ctx.event.id,
@@ -411,7 +482,7 @@ export class NetworkingService {
           profileBId,
         }))
       )
-        throw new NotFoundException({ code: "NETWORKING_VALIDATION", message: "Participant not available" });
+        throw notFound("Participant not available");
     }
     const blocked =
       (await store.one("blocks", {
@@ -424,7 +495,7 @@ export class NetworkingService {
         profileId: id,
         targetId: ctx.profile.id,
       }));
-    if (blocked) throw new NotFoundException({ code: "NETWORKING_VALIDATION", message: "Participant not available" });
+    if (blocked) throw notFound("Participant not available");
     return profile;
   }
   async discover(ctx: NetworkingContext, query: NetworkingDiscoveryQuery = {}) {
@@ -473,32 +544,22 @@ export class NetworkingService {
     const events = new Map(profiles.map(profile => [profile.eventId, profile]));
     const result: NetworkingPersonalAnalytics["events"] = [];
     for (const event of events.values()) {
-      const ownIds = new Set(profiles.filter(profile => profile.eventId === event.eventId).map(profile => profile.id));
-      const { audit, connections, messages, meetings } = await store.personalAnalyticsRows(event.eventId, [...ownIds]);
-      const contacts = new Set<string>();
-      for (const connection of connections) {
-        if (!ownIds.has(connection.profileAId) && !ownIds.has(connection.profileBId)) continue;
-        const otherId = ownIds.has(connection.profileAId) ? connection.profileBId : connection.profileAId;
-        if (ownIds.has(otherId)) continue;
-        contacts.add(connection.email.trim().toLowerCase() || otherId);
-      }
-      const ownMeetings = meetings.filter(meeting => ownIds.has(meeting.requesterId) || ownIds.has(meeting.recipientId));
+      const ownIds = profiles.filter(profile => profile.eventId === event.eventId).map(profile => profile.id);
       result.push({
         eventId: event.eventId, eventName: event.name,
         startsAt: event.startDate.toISOString(), endsAt: event.endDate.toISOString(),
-        profileViews: audit.filter(entry => entry.action === "PROFILE_VIEW" && ownIds.has(entry.targetId ?? "")).length,
-        matches: contacts.size,
-        sentMessages: messages.filter(message => ownIds.has(message.senderId)).length,
-        plannedMeetings: ownMeetings.filter(meeting => ["CONFIRMED", "COMPLETED", "NO_SHOW"].includes(meeting.status)).length,
-        completedMeetings: ownMeetings.filter(meeting => meeting.status === "COMPLETED").length,
+        ...(await store.personalAnalyticsCounts(event.eventId, ownIds)),
       });
     }
     result.sort((a,b) => b.startsAt.localeCompare(a.startsAt) || a.eventId.localeCompare(b.eventId));
     return { currentEventId: ctx.event.id, events: result };
   }
   async updateMe(ctx: NetworkingContext, input: Record<string, unknown>) {
-    return networkingTransaction(ctx.event.id, async (store, db) => {
-      ctx = await this.currentParticipant(ctx, store);
+    const { row, previousPhotoUrl } = await networkingTransaction(ctx.event.id, async (store, db) => {
+      ctx = await this.currentParticipant(ctx, store, { allowConsentPending: ctx.consentPending });
+      const previousPhotoUrl = ctx.profile.photoUrl;
+      // A consent-pending session may only record its consent choice (K1b).
+      if (ctx.consentPending) input = input.consent === undefined ? {} : { consent: input.consent };
       const { consent, resetFields, ...fields } = input;
       const overrides = networkingProfileOverrides(ctx.profile.overrides);
       for (const key of (resetFields as string[] | undefined) ?? []) delete overrides[key];
@@ -509,10 +570,12 @@ export class NetworkingService {
           fields[field] = fields[field].trim();
         }
       }
-      for (const [key, value] of Object.entries(networkingProfileOverrides({ ...fields, ...(consent !== undefined ? { consent } : {}) }))) {
+      for (const [key, value] of Object.entries(networkingProfileOverrides(fields))) {
         if (JSON.stringify(value) !== JSON.stringify(ctx.profile[key as keyof typeof ctx.profile]))
           overrides[key] = value;
       }
+      // An explicit PWA choice outranks the mapped form answer (K1).
+      if (typeof consent === "boolean") overrides.consent = consent;
       if (
         typeof fields.language === "string" &&
         !ctx.config.languages.includes(fields.language as "fr" | "en" | "ar")
@@ -527,7 +590,7 @@ export class NetworkingService {
             ? { consent: !!consent, consentAt: consent ? new Date() : null }
             : {}),
           overrides,
-          ...(consent === false ? { visible: false } : {}),
+          ...(consent === false ? { visible: false } : consent === true && !ctx.profile.consent ? { visible: true } : {}),
         },
       );
       if (consent === false) {
@@ -540,9 +603,12 @@ export class NetworkingService {
       }
       if (Array.isArray(resetFields) && resetFields.length) {
         await syncNetworkingRegistration(ctx.profile.registrationId, db);
-        return (await store.one("profiles", { id: row.id, eventId: ctx.event.id }))!;
+        return { row: (await store.one("profiles", { id: row.id, eventId: ctx.event.id }))!, previousPhotoUrl };
       }
-      return row;
+      return { row, previousPhotoUrl };
     });
+    // Replaced, removed or reset photos are deleted after commit, and only from the participant's own prefix.
+    if (row.photoUrl !== previousPhotoUrl) await deleteNetworkingPhoto(previousPhotoUrl, ctx.event.id, ctx.profile.id);
+    return row;
   }
 }

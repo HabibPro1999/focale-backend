@@ -12,6 +12,23 @@ import { AppModule } from "./app.module";
 import { loadConfig, type Config } from "./core/config";
 import { requestContext } from "./core/request-context";
 
+/**
+ * Reverse-proxy hops whose X-Forwarded-For entries are trusted for `req.ip` (venue rate limits key on it).
+ * Required in production; unset elsewhere means the socket address.
+ */
+export function trustProxyHops(env: NodeJS.ProcessEnv = process.env): number | false {
+  const raw = env.TRUST_PROXY?.trim();
+  if (!raw) {
+    if (env.NODE_ENV === "production")
+      throw new Error("TRUST_PROXY must be set in production to the number of reverse-proxy hops in front of the API (for example 1).");
+    return false;
+  }
+  const hops = Number(raw);
+  if (!Number.isInteger(hops) || hops < 0)
+    throw new Error(`TRUST_PROXY must be a non-negative integer hop count, got "${raw}".`);
+  return hops;
+}
+
 /** Build the fully-wired Nest+Fastify app (plugins, requestId hook). Shared by main.ts and tests. */
 export async function buildApp(
   config: Config = loadConfig(),
@@ -25,7 +42,7 @@ export async function buildApp(
 
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
-    new FastifyAdapter({ trustProxy: true }),
+    new FastifyAdapter({ trustProxy: trustProxyHops() }),
     // rawBody: webhook controllers verify provider signatures over exact wire bytes.
     { bufferLogs: true, rawBody: true },
   );

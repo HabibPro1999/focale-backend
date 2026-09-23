@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { NetworkingParticipantListQuerySchema as schema, NetworkingSpaceSchema, NetworkingSpaceUpdateSchema, NetworkingTableSchema, NetworkingTableUpdateSchema, UpdateNetworkingConfigSchema } from "./networking";
+import { NetworkingAdminProfileUpdateSchema, NetworkingParticipantListQuerySchema as schema, NetworkingProfileUpdateSchema, NetworkingSpaceSchema, NetworkingSpaceUpdateSchema, NetworkingTableSchema, NetworkingTableUpdateSchema, UpdateNetworkingConfigSchema } from "./networking";
 describe("UpdateNetworkingConfigSchema", () => {
   it("does not inject defaults into partial updates", () => {
     expect(UpdateNetworkingConfigSchema.parse({})).toEqual({});
     expect(UpdateNetworkingConfigSchema.parse({ requireSecondFactor: true })).toEqual({ requireSecondFactor: true });
     expect(UpdateNetworkingConfigSchema.parse({ requireSecondFactor: true, expectedRevision: "version" })).toEqual({ requireSecondFactor: true, expectedRevision: "version" });
   });
-  it("accepts revision metadata but still rejects unknown keys and invalid values", () => {
-    expect(UpdateNetworkingConfigSchema.parse({ revision: "ignored" })).toEqual({ revision: "ignored" });
+  it("rejects a stray read-only revision, unknown keys and invalid values", () => {
+    expect(UpdateNetworkingConfigSchema.safeParse({ revision: "ignored" }).success).toBe(false);
     expect(UpdateNetworkingConfigSchema.safeParse({ unknown: true }).success).toBe(false);
     expect(UpdateNetworkingConfigSchema.safeParse({ requireSecondFactor: "yes" }).success).toBe(false);
   });
@@ -54,4 +54,13 @@ it("participant pagination preserves opt-in, validates limits and bounds opaque 
   expect(schema.parse({ cursor: "opaque" })).toEqual({ cursor: "opaque" });
   for (const limit of ["", "no", "1.5", "0", "201", -1, null]) expect(schema.safeParse({ limit }).success).toBe(false);
   for (const cursor of ["", "x".repeat(2049), "not base64!", ["a"], null]) expect(schema.safeParse({ cursor }).success).toBe(false);
+});
+
+it.each([
+  ["participant", NetworkingProfileUpdateSchema],
+  ["admin", NetworkingAdminProfileUpdateSchema],
+] as const)("%s profile PATCH can only remove a photo, never point it at an arbitrary URL", (_label, profile) => {
+  expect(profile.parse({ photoUrl: null })).toEqual({ photoUrl: null });
+  for (const photoUrl of ["https://storage.example/networking/other/profiles/x/photo.webp", "https://evil.example/a.webp", ""])
+    expect(profile.safeParse({ photoUrl }).success).toBe(false);
 });

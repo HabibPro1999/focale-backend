@@ -1,10 +1,11 @@
-import { and, eq, getTableColumns, isNull, inArray, or, sql, lt, gt, gte, count, type AnyColumn } from "drizzle-orm";
+import { and, eq, getTableColumns, isNull, inArray, notInArray, or, sql, lt, gt, gte, count, type AnyColumn } from "drizzle-orm";
 import type { PgTable } from "drizzle-orm/pg-core";
 import { getDb, type DbExecutor } from "../client";
 import { withSerializableTxn } from "../txn";
 import * as n from "../schema/networking";
 import { events } from "../schema/events-access";
 import { registrations } from "../schema/registrations";
+import { forms } from "../schema/forms";
 import { networkingSecondFactors } from "../schema/networking-mfa";
 const tables = {
   secondFactors: networkingSecondFactors,
@@ -28,7 +29,10 @@ const tables = {
   audit: n.networkingAudit,
   events,
   registrations,
+  forms,
 };
+// Early-completed and no-show meetings keep holding their participants, table and exhibitor.
+const RELEASED_MEETING_STATUSES = ["CANCELLED", "DECLINED", "EXPIRED"] as const;
 export type NetworkingEntity = keyof typeof tables;
 export type NetworkingRow<K extends NetworkingEntity> =
   (typeof tables)[K]["$inferSelect"];
@@ -56,19 +60,30 @@ export function networkingStore(db: DbExecutor = getDb()) {
         .from(n.networkingProfiles).innerJoin(events, eq(events.id, n.networkingProfiles.eventId))
         .where(and(eq(events.clientId, clientId), sql`lower(trim(${n.networkingProfiles.email})) = ${email}`));
     },
-    async personalAnalyticsRows(eventId: string, profileIds: string[]) {
+    /** Aggregates in SQL; contacts are deduplicated by the same lower(trim(email)) normalization. */
+    async personalAnalyticsCounts(eventId: string, profileIds: string[]) {
       const p = n.networkingProfiles, a = n.networkingAudit, c = n.networkingConnections;
       const m = n.networkingMessages, meetings = n.networkingMeetings;
-      const [audit, connections, messages, meetingRows] = await Promise.all([
-        db.select({ targetId: a.targetId, action: a.action }).from(a).where(and(eq(a.eventId, eventId), eq(a.action, "PROFILE_VIEW"), inArray(a.targetId, profileIds))),
-        db.select({ profileAId: c.profileAId, profileBId: c.profileBId, email: p.email }).from(c)
+      const counted = (value: ReturnType<typeof sql>) => sql<number>`coalesce(${value},0)::int`.mapWith(Number);
+      const [[views], [contacts], [sent], [meetingCounts]] = await Promise.all([
+        db.select({ count: count() }).from(a).where(and(eq(a.eventId, eventId), eq(a.action, "PROFILE_VIEW"), inArray(a.targetId, profileIds))),
+        db.select({ count: counted(sql`count(DISTINCT coalesce(nullif(lower(trim(${p.email})),''),${p.id}))`) }).from(c)
           .innerJoin(p, and(eq(p.eventId, c.eventId), eq(p.id, sql`case when ${inArray(c.profileAId, profileIds)} then ${c.profileBId} else ${c.profileAId} end`)))
-          .where(and(eq(c.eventId, eventId), or(inArray(c.profileAId, profileIds), inArray(c.profileBId, profileIds)))),
-        db.select({ senderId: m.senderId }).from(m).where(and(eq(m.eventId, eventId), inArray(m.senderId, profileIds))),
-        db.select({ requesterId: meetings.requesterId, recipientId: meetings.recipientId, status: meetings.status }).from(meetings)
+          .where(and(eq(c.eventId, eventId), or(inArray(c.profileAId, profileIds), inArray(c.profileBId, profileIds)), notInArray(p.id, profileIds))),
+        db.select({ count: count() }).from(m).where(and(eq(m.eventId, eventId), inArray(m.senderId, profileIds))),
+        db.select({
+          planned: counted(sql`count(CASE WHEN ${meetings.status} IN ('CONFIRMED','COMPLETED','NO_SHOW') THEN 1 END)`),
+          completed: counted(sql`count(CASE WHEN ${meetings.status}='COMPLETED' THEN 1 END)`),
+        }).from(meetings)
           .where(and(eq(meetings.eventId, eventId), or(inArray(meetings.requesterId, profileIds), inArray(meetings.recipientId, profileIds)))),
       ]);
-      return { audit, connections, messages, meetings: meetingRows };
+      return {
+        profileViews: Number(views?.count ?? 0),
+        matches: contacts?.count ?? 0,
+        sentMessages: Number(sent?.count ?? 0),
+        plannedMeetings: meetingCounts?.planned ?? 0,
+        completedMeetings: meetingCounts?.completed ?? 0,
+      };
     },
     async insertAvailability(values: NetworkingInsert<"availability">[]) {
       for (let offset = 0; offset < values.length; offset += 500)
@@ -101,14 +116,14 @@ export function networkingStore(db: DbExecutor = getDb()) {
     async allocationMeetings(eventId: string, startsAt: Date, endsAt: Date) {
       const m = n.networkingMeetings;
       return db.select().from(m).where(and(eq(m.eventId, eventId),
-        inArray(m.status, ["PENDING", "CONFIRMED", "PENDING_ALLOCATION"]),
+        notInArray(m.status, [...RELEASED_MEETING_STATUSES]),
         lt(m.startsAt, endsAt), gt(m.endsAt, startsAt)));
     },
     async allocationReservations(eventId: string, startsAt: Date, endsAt: Date, resourceKey?: string) {
       const r = n.networkingReservations, m = n.networkingMeetings;
       return db.select(getTableColumns(r)).from(r).innerJoin(m, eq(m.id, r.meetingId))
         .where(and(eq(r.eventId, eventId), eq(m.eventId, eventId),
-          inArray(m.status, ["PENDING", "CONFIRMED", "PENDING_ALLOCATION"]),
+          notInArray(m.status, [...RELEASED_MEETING_STATUSES]),
           gte(r.startsAt, startsAt), lt(r.startsAt, endsAt),
           resourceKey === undefined ? undefined : eq(r.resourceKey, resourceKey)));
     },

@@ -39,6 +39,22 @@ export function extractStorageKeyFromUrl(url: string): string | null {
   }
 }
 
+/**
+ * Storage key of `url` only when it lies strictly under `prefix/`, so callers can
+ * delete an object they own without trusting a user- or form-supplied URL.
+ */
+export function ownedStorageKey(
+  url: string | null | undefined,
+  prefix: string,
+): string | null {
+  if (!url || !prefix) return null;
+  const key = extractStorageKeyFromUrl(url);
+  if (!key?.startsWith(`${prefix.replace(/\/+$/, "")}/`)) return null;
+  return key.split("/").some((segment) => !segment || segment === "." || segment === "..")
+    ? null
+    : key;
+}
+
 export { FirebaseStorageProvider } from "./firebase-storage.provider";
 export { R2StorageProvider } from "./r2-storage.provider";
 export {

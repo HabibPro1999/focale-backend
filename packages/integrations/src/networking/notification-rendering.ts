@@ -324,7 +324,8 @@ export function renderNetworkingNotification(
     normalized = "MEETING_PENDING_ALLOCATION";
   else if (eventType === "MEETING_ACCEPT" && meeting?.status === "PENDING")
     normalized = "MEETING_REQUEST";
-  else if (eventType === "MEETING_DECLINE" && meeting?.status === "CONFIRMED")
+  // A declined counter-proposal keeps the meeting (and its original time), allocated or not.
+  else if (eventType === "MEETING_DECLINE" && (meeting?.status === "CONFIRMED" || meeting?.status === "PENDING_ALLOCATION"))
     normalized = "MEETING_RESCHEDULE_DECLINED";
   const title = words[normalized as keyof typeof words] ?? words.MESSAGE;
   const slug = encodeURIComponent(ctx.event?.slug ?? "");

@@ -15,7 +15,9 @@ import {
 import { events } from "../schema/events-access";
 import { registrations } from "../schema/registrations";
 import { clients } from "../schema/users-clients";
+import { forms } from "../schema/forms";
 import { getNetworkingConfig } from "./networking";
+import { networkingConsentPending } from "./networking-projection";
 export * from "./networking-maintenance";
 export * from "./networking-contact-export";
 export * from "./networking-email-tracking";
@@ -222,6 +224,14 @@ export async function networkingDeliveryContext(row: NetworkingDeliveryRow) {
         )
     : [];
   const config = await getNetworkingConfig(row.eventId);
+  // OTP only: undecided registrants sign in to give consent in the PWA (K1b).
+  const [form] = row.type === "OTP" && profile && registration && !profile.consent
+    ? await db.select({ schema: forms.schema }).from(forms)
+        .where(and(eq(forms.id, registration.formId), eq(forms.eventId, row.eventId)))
+    : [];
+  const consentPending = !!form && !!profile && !!registration && networkingConsentPending({
+    profile, optIn: registration.networkingOptIn, formSchema: form.schema, formData: registration.formData, config,
+  });
   return {
     event,
     client,
@@ -237,6 +247,7 @@ export async function networkingDeliveryContext(row: NetworkingDeliveryRow) {
     challenge,
     subscriptions,
     config,
+    consentPending,
   };
 }
 export async function networkingDigestNotifications(

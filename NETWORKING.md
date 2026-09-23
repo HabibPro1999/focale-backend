@@ -19,6 +19,7 @@ Run the API and worker as separate processes, using the same database and networ
 | `NETWORKING_VAPID_PRIVATE_KEY` | Browser push private key; keep server-side. |
 | `NETWORKING_VAPID_SUBJECT` | Contact URI for the push sender, such as a `mailto:` URI. |
 | `NETWORKING_EMAIL_SENDERS` | Optional server-owned client-to-verified-sender JSON map; see [delivery setup](packages/integrations/src/networking/README.md). |
+| `TRUST_PROXY` | Number of reverse-proxy hops in front of the API whose `X-Forwarded-For` entries are trusted (usually `1`). **Required in production** (startup fails without it); venue rate limits key on the resulting client IP. Unset outside production = socket address. |
 | `RESEND_DOMAIN_READ_API_KEY` / `SENDGRID_DOMAIN_READ_API_KEY` | Optional server-side domain-read credentials for custom sender verification. |
 | Existing `EMAIL_PROVIDER` and provider credentials | Networking uses the same configured email delivery provider as the platform. |
 
@@ -127,7 +128,12 @@ The form retains its production CSP. For a local HTTP backend use `VITE_API_URL=
 Participant errors use `{ code, message, details? }` inside the existing error envelope.
 Clients localize codes rather than displaying the English message.
 
-- `NETWORKING_MFA_REQUIRED`
+- `NETWORKING_MFA_REQUIRED` (403) — verify the second factor for this session; nothing else.
+- `NETWORKING_MFA_ENFORCED` (403) — 2FA cannot be disabled while the event requires it (must not re-arm the 2FA prompt).
+- `NETWORKING_CONSENT_REQUIRED` (403) — consent-pending session (see below).
+- `NETWORKING_SESSION_EXPIRED` (401) — participant session missing, expired or revoked.
+- `NETWORKING_NOT_FOUND` (404) — event, participant, meeting, connection or message not found or not visible.
+- `NETWORKING_ACTION_NOT_ALLOWED` (403/409) — e.g. only the other participant can respond; authenticator already enrolled; report requested before the event ended.
 - `NETWORKING_AUTH_UNAVAILABLE`
 - `NETWORKING_BADGE_INVALID`
 - `NETWORKING_BADGE_WRONG_PARTICIPANT`
@@ -135,19 +141,27 @@ Clients localize codes rather than displaying the English message.
 - `NETWORKING_MEETING_CHECKIN_UNAVAILABLE`
 - `NETWORKING_NOT_ELIGIBLE`
 - `NETWORKING_CLOSED`
-- `NETWORKING_FEATURE_DISABLED`
+- `NETWORKING_FEATURE_DISABLED` (403) — also a module disabled for the client, search/discovery/recommendations disabled.
 - `NETWORKING_CONNECTION_REQUIRED`
-- `NETWORKING_SLOT_INVALID`
-- `NETWORKING_SLOT_CONFLICT`
+- `NETWORKING_SLOT_INVALID` — including a nonexistent local time in a DST gap.
+- `NETWORKING_SLOT_CONFLICT` (409) — including a concurrent booking of the same resource.
 - `NETWORKING_MEETING_LOCKED`
-- `NETWORKING_MEETING_CHECKED_IN`
-- `NETWORKING_RATE_LIMITED`
+- `NETWORKING_MEETING_CHECKED_IN` (409) — a checked-in meeting cannot be rescheduled or moved by accepting a counter-proposal.
+- `NETWORKING_RATE_LIMITED` (429)
 - `NETWORKING_CONFIG_STALE`
-- `NETWORKING_VALIDATION`
+- `NETWORKING_VALIDATION` — HTTP 400 only.
+
+A wrong or expired OTP on `auth/verify` stays HTTP 401 (`AUTH_1001`); no session is issued. Organizer routes (`/api/events/:eventId/networking/*`) keep the generic codes: request validation failures return `VAL_2001` with `details`.
+
+### Consent
+
+`registration.networkingOptIn` decides when it is a boolean (`false` excludes the registrant). When it is null, the participant's explicit PWA choice wins, then the mapped consent field (yes / no / unanswered; option labels and translations are read, never option IDs), else the registrant is undecided. Withdrawal or an explicit "no" always wins. Undecided registrants who are otherwise eligible can request a code and sign in; their session is consent-pending: every participant endpoint except `GET me`, `PATCH me` (only `consent` is applied), `DELETE me`, `POST auth/logout`, `GET config` and `auth/mfa/*` returns 403 `NETWORKING_CONSENT_REQUIRED` until `PATCH me {"consent": true}`, which records the choice and makes the profile visible. A consent mapping must point at a checkbox, radio or select field of the event's form.
 
 ## Rate limits
 
-Networking requests have a shared venue-IP abuse ceiling of **600 requests/minute** across all networking routes, checked before identity quotas. Public config reads also allow 600/minute per IP. Other modules retain the legacy per-IP limits (100/minute in production by default).
+Participant routes (`/api/networking/:slug/…`) share a venue bucket of **24,000 requests/minute per client IP and event slug**, sized for 500–2,000 attendees behind one public IP and checked alongside identity quotas. `config` and `registration` reads skip the per-IP default limit and are bounded only by the venue bucket. Organizer routes (`/api/events/:eventId/networking/…`) are outside the venue bucket; organizer bearer requests (e.g. badge scanning) get per-token quotas. Other modules retain the legacy per-IP limits (100/minute in production by default).
+
+Sign-in endpoints (`auth/request`, `auth/verify`, `auth/mfa/verify`) also share **300/minute per client IP and event slug** per endpoint.
 
 Identity quotas are separate per handler:
 - OTP request: **5 per 10 minutes**, keyed by event slug and trimmed, lowercase email (even when a bearer header is supplied).
@@ -156,4 +170,8 @@ Identity quotas are separate per handler:
 - Chat sends: **30/minute per bearer session**.
 - Other authenticated networking requests, including mutations: the configured default limit per bearer session (100/minute in production), unless an endpoint has a tighter override (reports: 5/minute).
 
-Trackers hash session tokens and OTP identities; raw tokens/emails are not stored in throttle keys. Other anonymous requests fall back to IP. Throttled networking responses use HTTP 429 and `NETWORKING_RATE_LIMITED` inside the normal error envelope. These in-memory quotas are per API process; the OTP service also retains its existing persistent request/attempt checks.
+Trackers hash session tokens and OTP identities; raw tokens/emails are not stored in throttle keys. Other anonymous requests fall back to IP. The client IP comes from `TRUST_PROXY` hops of `X-Forwarded-For`. Throttled participant responses use HTTP 429 and `NETWORKING_RATE_LIMITED` inside the normal error envelope. **All quotas are in memory and therefore per API replica**: with N replicas behind a load balancer the effective ceilings are up to N times higher. The OTP service also retains its existing persistent request/attempt checks.
+
+## Participant lists
+
+`GET connections` and `GET meetings` always paginate (`limit` 1–200, default 50; opaque `cursor`). The first page returns `{ items, nextCursor, total }`; later pages omit `total`. Cursors are scoped to the event, participant and list, and survive organizer configuration edits. `GET connections/:id`, `GET connections/with/:profileId` (`{ connection }`, possibly null) and `GET meetings/:id` return single items in the list shapes. Calendar, CSV and personal-data exports are never truncated.

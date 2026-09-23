@@ -42,7 +42,7 @@ export class NetworkingExportsService {
     private readonly meetings: NetworkingMeetingsService,
   ) {}
   async calendar(ctx: NetworkingContext) {
-    const rows = (await this.meetings.list(ctx)).items.filter((m) =>
+    const rows = (await this.meetings.allMeetings(ctx)).filter((m) =>
       ["CONFIRMED", "COMPLETED", "CANCELLED"].includes(m.status),
     );
     const lines = [
@@ -73,7 +73,7 @@ export class NetworkingExportsService {
     return lines.map(foldIcs).join("\r\n") + "\r\n";
   }
   async connections(ctx: NetworkingContext) {
-    const { items } = await this.social.connections(ctx);
+    const items = await this.social.allConnections(ctx);
     return csv(
       ["First name", "Last name", "Company", "Role", "Sector", "Website"],
       items.map(({ profile: p }) => [
@@ -119,8 +119,8 @@ export class NetworkingExportsService {
       reports: reports.map(({ resolvedBy, note, ...report }) => report),
       blocks,
       notifications,
-      connections: await this.social.connections(ctx),
-      meetings: await this.meetings.list(ctx),
+      connections: await this.social.allConnections(ctx),
+      meetings: await this.meetings.allMeetings(ctx),
     };
   }
   async admin(event: NetworkingRow<"events">, kind: string, format: string) {

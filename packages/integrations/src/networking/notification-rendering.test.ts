@@ -1,6 +1,7 @@
 import { createCipheriv,createHash,randomBytes } from "node:crypto";
 import { describe,expect,it } from "vitest";
-import { decryptNetworkingCode,escapeNetworkingHtml } from "./notification-rendering";
+import { NetworkingConfigSchema } from "@app/contracts";
+import { decryptNetworkingCode,escapeNetworkingHtml,renderNetworkingNotification,type NetworkingNotificationContext } from "./notification-rendering";
 import { allowedNetworkingPushEndpoint } from "./notification-worker";
 
 describe("networking notification boundaries",()=>{
@@ -24,4 +25,19 @@ describe("networking notification boundaries",()=>{
   expect(allowedNetworkingPushEndpoint("https://web.push.apple.com/test")).toBe(true);
   for(const url of ["http://localhost/","https://127.0.0.1/admin","https://metadata.google.internal/","https://fcm.googleapis.com.evil.example/","https://evil.example/fcm.googleapis.com","https://user:pass@fcm.googleapis.com/test"])expect(allowedNetworkingPushEndpoint(url)).toBe(false);
  });
+});
+
+describe("declined counter-proposals", () => {
+  it.each(["CONFIRMED", "PENDING_ALLOCATION"] as const)("renders a declined new time on a %s meeting as 'new time declined', not a declined meeting", (status) => {
+    const startsAt = new Date("2099-04-20T08:00:00.000Z");
+    const ctx = {
+      event: { slug: "demo", name: "Demo" }, profile: { id: "a", language: "en", firstName: "Ann" },
+      config: NetworkingConfigSchema.parse({ timezone: "UTC", defaultLanguage: "en" }),
+      meeting: { id: "m", status, startsAt, endsAt: new Date(startsAt.getTime() + 1_800_000), requesterId: "a", recipientId: "b", proposedStartsAt: null, proposalBy: null, message: "", cancellationNote: "", updatedAt: startsAt, revision: 2 },
+      table: null, contact: null, blocked: false, subscriptions: [],
+    } as unknown as NetworkingNotificationContext;
+    const rendered = renderNetworkingNotification("MEETING_DECLINE", {}, ctx);
+    expect(rendered.title).toBe("The proposed new time was declined; the original meeting is maintained");
+    expect(rendered.relativeHref).toBe("/e/demo/agenda");
+  });
 });

@@ -17,26 +17,47 @@ beforeEach(() => {
   db.returning.mockResolvedValue([]);
   db.where.mockResolvedValue([{ status: "SENDING", lockedUntil: row.lockedUntil }]);
 });
-it("refuses a second live SENDING log without updating it", async () => {
-  expect(await beginNetworkingEmailLog(row, input)).toMatchObject({ alreadySent: false, leaseLost: true });
+it("reuses an existing SENDING log from an expired earlier attempt instead of refusing it", async () => {
+  db.where.mockResolvedValue([{ status: "SENDING", lockedUntil: new Date(Date.now() + 60_000) }]);
+  expect(await beginNetworkingEmailLog(row, input)).toEqual({ alreadySent: false });
+  expect(db.set).toHaveBeenCalledWith(expect.objectContaining({ status: "SENDING", lockedUntil: row.lockedUntil }));
+});
+it("reports an already provider-accepted log so the worker never resends it", async () => {
+  for (const status of ["SENT", "DELIVERED", "OPENED"]) {
+    db.where.mockResolvedValue([{ status }]);
+    expect(await beginNetworkingEmailLog(row, input)).toEqual({ alreadySent: true });
+  }
   expect(db.update).not.toHaveBeenCalled();
 });
-it("allows the newly inserted owner and an expired SENDING retry", async () => {
-  db.returning.mockResolvedValueOnce([{ id: row.id }]);
-  expect(await beginNetworkingEmailLog(row, input)).toEqual({ alreadySent: false });
-  db.where.mockResolvedValue([{ status: "SENDING", lockedUntil: new Date(0) }]);
-  expect(await beginNetworkingEmailLog(row, input)).toEqual({ alreadySent: false });
-});
-it("fences all begin and finish writes with the exact unexpired delivery lease under a row lock", async () => {
+it("fences begin and failed/skipped finishes with the exact unexpired delivery lease under a row lock", async () => {
   db.execute.mockResolvedValue({ rows: [] });
   expect(await beginNetworkingEmailLog(row, input)).toMatchObject({ leaseLost: true });
-  for (const outcome of ["sent", "failed", "skipped"] as const) await finishNetworkingEmailLog(row, outcome);
+  for (const outcome of ["failed", "skipped"] as const) await finishNetworkingEmailLog(row, outcome);
   expect(db.insert).not.toHaveBeenCalled();
   expect(db.update).not.toHaveBeenCalled();
+  expect(db.execute).toHaveBeenCalledTimes(3);
   for (const [query] of db.execute.mock.calls) {
     const compiled = new PgDialect().sqlToQuery(query);
     expect(compiled.sql).toContain("locked_until=");
     expect(compiled.sql).toContain("locked_until>now() FOR UPDATE");
     expect(compiled.params).toContain(row.lockedUntil!.toISOString());
   }
+});
+it("records a provider-confirmed send after the lease was lost, upgrading a FAILED/SKIPPED log to SENT", async () => {
+  db.execute.mockResolvedValue({ rows: [] });
+  db.where.mockResolvedValue([]);
+  await finishNetworkingEmailLog(row, "sent", "provider-message");
+  expect(db.execute).not.toHaveBeenCalled();
+  expect(db.set).toHaveBeenCalledWith(expect.objectContaining({ providerMessageId: "provider-message", lockedUntil: null }));
+  expect(db.set).toHaveBeenCalledWith({ status: "SENT", failedAt: null });
+  const upgrade = new PgDialect().sqlToQuery(db.where.mock.calls.at(-1)![0]);
+  expect(upgrade.params).toEqual(expect.arrayContaining(["delivery", "SENDING", "FAILED", "SKIPPED"]));
+  expect(upgrade.params).not.toContain("DELIVERED");
+});
+it("retries a serialization failure instead of dropping the sent record", async () => {
+  const restart = Object.assign(new Error("restart transaction"), { code: "40001" });
+  db.transaction.mockRejectedValueOnce(restart).mockImplementation((run) => run(db));
+  db.where.mockResolvedValue([]);
+  await finishNetworkingEmailLog(row, "sent", "message");
+  expect(db.transaction).toHaveBeenCalledTimes(2);
 });

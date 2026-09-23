@@ -53,3 +53,32 @@ it("rechecks ownership after tracking and immediately before provider dispatch",
   expect(db.beginNetworkingEmailLog).toHaveBeenCalledOnce();
   expect(email.sendEmail).not.toHaveBeenCalled();
 });
+it("never marks a provider-accepted email failed when its sent bookkeeping fails", async () => {
+  db.claimNetworkingDeliveries.mockResolvedValue([row(freshLease)]);
+  db.refreshNetworkingDeliveryLease.mockResolvedValue(true);
+  db.finishNetworkingEmailLog.mockImplementation(async (_row, outcome) => {
+    if (outcome === "sent") throw new Error("database unavailable");
+  });
+  expect(await processNetworkingDeliveries({ email })).toEqual({ sent: 1, skipped: 0, failed: 0 });
+  expect(email.sendEmail).toHaveBeenCalledOnce();
+  expect(db.finishNetworkingEmailLog).not.toHaveBeenCalledWith(expect.anything(), "failed");
+  expect(db.updateNetworkingDelivery).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ payload: expect.objectContaining({ _deliveryProgress: { emailSent: true } }) }));
+  expect(db.updateNetworkingDelivery).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ status: "FAILED" }));
+});
+it("abandons the claim without a failed retry when persisting sent progress throws", async () => {
+  db.claimNetworkingDeliveries.mockResolvedValue([row(freshLease)]);
+  db.refreshNetworkingDeliveryLease.mockResolvedValue(true);
+  db.updateNetworkingDelivery.mockRejectedValueOnce(new Error("database unavailable"));
+  expect(await processNetworkingDeliveries({ email })).toEqual({ sent: 0, skipped: 0, failed: 0 });
+  expect(email.sendEmail).toHaveBeenCalledOnce();
+  expect(db.finishNetworkingEmailLog).toHaveBeenCalledWith(expect.anything(), "sent", "message");
+  expect(db.updateNetworkingDelivery).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ status: "FAILED" }));
+});
+it("still records a genuine provider rejection as a failed, retried email", async () => {
+  db.claimNetworkingDeliveries.mockResolvedValue([row(freshLease)]);
+  db.refreshNetworkingDeliveryLease.mockResolvedValue(true);
+  email.sendEmail.mockResolvedValue({ success: false });
+  expect(await processNetworkingDeliveries({ email })).toEqual({ sent: 0, skipped: 0, failed: 1 });
+  expect(db.finishNetworkingEmailLog).toHaveBeenCalledWith(expect.anything(), "failed");
+  expect(db.updateNetworkingDelivery).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ status: "FAILED" }));
+});

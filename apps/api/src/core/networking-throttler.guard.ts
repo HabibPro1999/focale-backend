@@ -2,30 +2,59 @@ import { createHash } from "node:crypto";
 import { Injectable, type ExecutionContext } from "@nestjs/common";
 import { ThrottlerGuard, type ThrottlerOptions } from "@nestjs/throttler";
 
+type ThrottledRequest = {
+  url?: string;
+  ip?: string;
+  routeOptions?: { url?: string };
+  params?: { slug?: unknown };
+  body?: { email?: unknown; challengeId?: unknown };
+  headers?: { authorization?: unknown };
+};
+
 function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function networkingPath(req: { url?: string }): string | undefined {
-  const path = req.url?.split("?")[0];
-  return path && /\/networking(?:\/|$)/.test(path) ? path : undefined;
+/** Matched route template when routed, else the request path without its query string. */
+function routePath(req: ThrottledRequest): string {
+  return req.routeOptions?.url ?? req.url?.split("?")[0] ?? "";
 }
 
-// Shared across networking handlers and identities; checked before identity quotas.
-export const networkingIpThrottler: ThrottlerOptions = {
-  name: "networking-ip",
+/** Participant PWA routes (`/api/networking/:slug/…`); organizer `/api/events/:eventId/networking/…` routes are not. */
+export function isParticipantNetworkingRequest(req: ThrottledRequest | undefined): boolean {
+  return !!req && routePath(req).startsWith("/api/networking/");
+}
+
+const venue = (req: ThrottledRequest) =>
+  `${req.ip ?? ""}:${typeof req.params?.slug === "string" ? req.params.slug : ""}`;
+const request = (context: ExecutionContext) => context.switchToHttp().getRequest<ThrottledRequest>();
+const AUTH_ROUTE = /^\/api\/networking\/[^/]+\/auth\/(?:request|verify|mfa\/verify)$/;
+
+// Shared by every participant handler of one event behind one venue IP (500–2,000 attendees).
+export const networkingVenueThrottler: ThrottlerOptions = {
+  name: "networking-venue",
   ttl: 60_000,
-  limit: 600,
-  skipIf: (context: ExecutionContext) => !networkingPath(context.switchToHttp().getRequest()),
-  getTracker: async (req) => req.ip,
-  generateKey: (_context, tracker) => digest(`networking-ip:${tracker}`),
+  limit: 24_000,
+  skipIf: (context) => !isParticipantNetworkingRequest(request(context)),
+  getTracker: async (req) => venue(req as ThrottledRequest),
+  generateKey: (_context, tracker) => digest(`networking-venue:${tracker}`),
+};
+
+// Sign-in endpoints per venue IP and event, alongside their per-email/per-challenge/per-session quotas.
+export const networkingAuthThrottler: ThrottlerOptions = {
+  name: "networking-auth",
+  ttl: 60_000,
+  limit: 300,
+  skipIf: (context) => !AUTH_ROUTE.test(routePath(request(context))),
+  getTracker: async (req) => venue(req as ThrottledRequest),
 };
 
 @Injectable()
 export class NetworkingThrottlerGuard extends ThrottlerGuard {
-  protected override async getTracker(req: { url?: string; ip?: string; params?: { slug?: unknown }; body?: { email?: unknown; challengeId?: unknown }; headers?: { authorization?: unknown } }): Promise<string> {
-    const path = networkingPath(req);
-    if (!path) return super.getTracker(req);
+  protected override async getTracker(req: ThrottledRequest): Promise<string> {
+    const path = routePath(req);
+    // Participant and organizer networking routes key identities; other modules keep per-IP limits.
+    if (!/^\/api\/(?:networking\/|events\/[^/]+\/networking(?:\/|$))/.test(path)) return super.getTracker(req);
     const slug = typeof req.params?.slug === "string" ? req.params.slug : "";
     // Auth identity takes precedence over any supplied bearer header.
     if (path.endsWith("/auth/request")) {
@@ -41,6 +70,7 @@ export class NetworkingThrottlerGuard extends ThrottlerGuard {
         return digest(`verify:${slug}:${challengeId.toLowerCase()}`);
       return super.getTracker(req);
     }
+    // Bearer sessions (participant or organizer badge scanning) get their own quota.
     const authorization = req.headers?.authorization;
     const token = typeof authorization === "string" ? /^Bearer\s+(\S+)$/i.exec(authorization)?.[1] : undefined;
     return token ? digest(`session:${token}`) : super.getTracker(req);

@@ -112,6 +112,8 @@ describe.runIf(enabled)(
           paymentStatus: "PAID",
           totalAmount: 0,
           priceBreakdown: {},
+          // Unmapped consent is undecided (K1): fixtures opt in explicitly, as the form checkbox does.
+          networkingOptIn: true,
           formData: { company: "Test company", jobTitle: "Director", sector: "Technology" },
         });
       await syncNetworkingEvent(ids.event);

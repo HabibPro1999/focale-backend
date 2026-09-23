@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Body,
+  ForbiddenException,
   Controller,
   Delete,
   Get,
@@ -16,7 +17,8 @@ import {
   NetworkingUploadsService,
   type NetworkingMultipartRequest,
 } from "./networking.uploads.service";
-import { Throttle } from "@nestjs/throttler";
+import { SkipThrottle, Throttle } from "@nestjs/throttler";
+import { ErrorCodes } from "@app/contracts";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import {
   networkingDirectoryFacets,
@@ -44,12 +46,17 @@ export class NetworkingPublicController {
     private readonly meetings: NetworkingMeetingsService,
     private readonly exports: NetworkingExportsService,
   ) {}
-  private context(slug: string, request: FastifyRequest) {
-    return this.service.participant(slug, request.headers.authorization);
+  private context(slug: string, request: FastifyRequest, options: { allowConsentPending?: boolean } = {}) {
+    return this.service.participant(slug, request.headers.authorization, options);
   }
-  @Throttle({ default: { limit: 600, ttl: 60_000 } })
+  // Public reads are bounded only by the shared venue bucket.
+  @SkipThrottle({ default: true })
   @Get("config") config(@Param("slug") slug: string) {
     return this.service.publicConfig(slug);
+  }
+  @SkipThrottle({ default: true })
+  @Get("registration") registration(@Param("slug") slug: string) {
+    return this.service.registrationInfo(slug);
   }
   @Post("auth/request")
   @Throttle({ default: { limit: 5, ttl: 600_000 } })
@@ -67,24 +74,14 @@ export class NetworkingPublicController {
   ) {
     return this.service.verifyCode(slug, body.challengeId, body.code);
   }
-  @Post("auth/logout") async logout(
+  @Post("auth/logout") logout(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
   ) {
-    const ctx = await this.service.participant(
-      slug,
-      req.headers.authorization,
-      { allowPendingSecondFactor: true },
-    );
-    await networkingStore().update(
-      "sessions",
-      { id: ctx.session.id, eventId: ctx.event.id },
-      { revokedAt: new Date() },
-    );
-    return { loggedOut: true };
+    return this.service.logout(slug, req.headers.authorization);
   }
   @Get("me") async me(@Param("slug") slug: string, @Req() req: FastifyRequest) {
-    return (await this.context(slug, req)).profile;
+    return (await this.context(slug, req, { allowConsentPending: true })).profile;
   }
   @Get("me/analytics") async personalAnalytics(@Param("slug") slug: string, @Req() req: FastifyRequest) {
     return this.service.personalAnalytics(await this.context(slug, req));
@@ -94,7 +91,7 @@ export class NetworkingPublicController {
     @Req() req: FastifyRequest,
     @Body() body: dto.NetworkingProfileDto,
   ) {
-    return this.service.updateMe(await this.context(slug, req), { ...body });
+    return this.service.updateMe(await this.context(slug, req, { allowConsentPending: true }), { ...body });
   }
   @Post("me/photo")
   async uploadPhoto(
@@ -102,11 +99,11 @@ export class NetworkingPublicController {
     @Req() request: NetworkingMultipartRequest,
   ) {
     const ctx = await this.context(slug, request);
+    // updateMe removes the replaced photo after its transaction commits.
     return this.uploads.image(
       request,
       `networking/${ctx.event.id}/profiles/${ctx.profile.id}`,
       (url) => this.service.updateMe(ctx, { photoUrl: url }),
-      ctx.profile.photoUrl,
     );
   }
   @Get("interests/incoming")
@@ -120,7 +117,7 @@ export class NetworkingPublicController {
   async facets(@Param("slug") slug: string, @Req() request: FastifyRequest) {
     const ctx = await this.context(slug, request);
     if (!ctx.config.searchEnabled)
-      throw new BadRequestException("Search is disabled");
+      throw new ForbiddenException({ code: ErrorCodes.NETWORKING_FEATURE_DISABLED, message: "Search is disabled" });
     return networkingDirectoryFacets(
       ctx.event.id,
       ctx.profile.id,
@@ -179,6 +176,20 @@ export class NetworkingPublicController {
     @Query() query: dto.NetworkingParticipantListDto,
   ) {
     return this.social.connections(await this.context(slug, req), query);
+  }
+  @Get("connections/with/:profileId") async connectionWith(
+    @Param("slug") slug: string,
+    @Param("profileId") profileId: string,
+    @Req() req: FastifyRequest,
+  ) {
+    return { connection: await this.social.connectionWith(await this.context(slug, req), profileId) };
+  }
+  @Get("connections/:id") async connection(
+    @Param("slug") slug: string,
+    @Param("id") id: string,
+    @Req() req: FastifyRequest,
+  ) {
+    return this.social.connectionSummary(await this.context(slug, req), id);
   }
   @Get("connections/:id/messages") async messages(
     @Param("slug") slug: string,
@@ -297,6 +308,13 @@ export class NetworkingPublicController {
   ) {
     return this.meetings.list(await this.context(slug, req), query);
   }
+  @Get("meetings/:id") async meeting(
+    @Param("slug") slug: string,
+    @Param("id") id: string,
+    @Req() req: FastifyRequest,
+  ) {
+    return this.meetings.get(await this.context(slug, req), id);
+  }
   @Post("meetings") async createMeeting(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
@@ -371,7 +389,13 @@ export class NetworkingPublicController {
     @Body() body: dto.NetworkingPushDto,
   ) {
     const ctx = await this.context(slug, req);
-    const url = new URL(body.endpoint);
+    const unsupported = () => new BadRequestException({ code: ErrorCodes.NETWORKING_VALIDATION, message: "Unsupported push service endpoint" });
+    let url: URL;
+    try {
+      url = new URL(body.endpoint);
+    } catch {
+      throw unsupported();
+    }
     const host = url.hostname;
     const allowed = [
       "fcm.googleapis.com",
@@ -380,7 +404,7 @@ export class NetworkingPublicController {
       "notify.windows.com",
     ].some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
     if (!allowed || url.username || url.password || url.port)
-      throw new BadRequestException("Unsupported push service endpoint");
+      throw unsupported();
     return networkingTransaction(ctx.event.id, async (store) => {
       const existing = await store.one("pushSubscriptions", {
         endpoint: body.endpoint,
@@ -464,9 +488,10 @@ export class NetworkingPublicController {
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
   ) {
-    const ctx = await this.context(slug, req);
+    const ctx = await this.context(slug, req, { allowConsentPending: true });
     const photoUrl = await networkingTransaction(ctx.event.id, async (store, db) => {
       const current = await store.one("profiles", { eventId: ctx.event.id, id: ctx.profile.id });
+      // The in-transaction row is authoritative; a null photo override stops sync restoring a form photo.
       await store.update(
         "profiles",
         { eventId: ctx.event.id, id: ctx.profile.id },
@@ -475,7 +500,7 @@ export class NetworkingPublicController {
           consent: false,
           visible: false,
           withdrawnAt: new Date(),
-          overrides: { ...ctx.profile.overrides, consent: false },
+          overrides: { ...(current?.overrides ?? ctx.profile.overrides), photoUrl: null, consent: false },
         },
       );
       await revokeNetworkingSessions(ctx.profile.id, db);
@@ -495,7 +520,7 @@ export class NetworkingPublicController {
         const [saved] = await store.update(
           "meetings",
           { eventId: ctx.event.id, id: row.id },
-          { status: "CANCELLED", revision: row.revision + 1 },
+          { status: "CANCELLED", revision: row.revision + 1, proposedStartsAt: null, proposalBy: null },
         );
         await store.remove("reservations", {
           eventId: ctx.event.id,
@@ -507,11 +532,12 @@ export class NetworkingPublicController {
           "MEETING_CANCELLED",
           [row.requesterId, row.recipientId],
           db,
+          { counterpart: false },
         );
       }
       return current?.photoUrl;
     });
-    await this.uploads.deletePhoto(photoUrl, ctx.profile.id);
+    await this.uploads.deletePhoto(photoUrl, ctx.event.id, ctx.profile.id);
     return { withdrawn: true };
   }
   @Get("stream") @SkipEnvelope() async stream(
@@ -519,7 +545,7 @@ export class NetworkingPublicController {
     @Req() req: FastifyRequest,
     @Res() reply: FastifyReply,
   ) {
-    await this.context(slug, req);
+    let ctx = await this.context(slug, req);
     reply.hijack();
     for (const [key, value] of Object.entries(reply.getHeaders()))
       if (value !== undefined) reply.raw.setHeader(key, value);
@@ -529,16 +555,28 @@ export class NetworkingPublicController {
       connection: "keep-alive",
     });
     reply.raw.write(`event: ready\ndata: {}\n\n`);
+    // Overlapping reads tolerate commit/clock skew; the bounded sent-id set keeps rows from repeating.
+    const sent = new Set<string>();
     let last = Date.now();
+    let verifiedAt = Date.now();
     let busy = false;
     const timer = setInterval(async () => {
       if (busy) return;
       busy = true;
       try {
-        const ctx = await this.context(slug, req);
+        if (Date.now() - verifiedAt >= 30_000) {
+          ctx = await this.context(slug, req);
+          verifiedAt = Date.now();
+        }
         const checkedAt = Date.now();
-        const rows = await networkingNotificationsSince(ctx.event.id, ctx.profile.id, new Date(last));
+        const rows = (await networkingNotificationsSince(ctx.event.id, ctx.profile.id, new Date(last - 10_000)))
+          .filter((row) => !sent.has(row.id));
         last = checkedAt;
+        for (const row of rows) sent.add(row.id);
+        for (const id of sent) {
+          if (sent.size <= 1000) break;
+          sent.delete(id);
+        }
         if (rows.length)
           reply.raw.write(
             `event: notifications\ndata: ${JSON.stringify(rows)}\n\n`,

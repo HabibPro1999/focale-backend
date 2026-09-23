@@ -2,6 +2,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import { fileTypeFromBuffer } from "file-type";
 import { getStorageProvider, compressFile, extractStorageKeyFromUrl } from "@app/integrations";
+import { deleteNetworkingPhoto } from "../networking/networking.uploads.service";
 import {
   ErrorCodes,
   UserRole,
@@ -64,6 +65,7 @@ import {
   insertRegistrationRow,
   updateRegistrationRow,
   deleteRegistrationRow,
+  getNetworkingProfilePhotoByRegistration,
   casUpdateRegistrationByUpdatedAt,
   findRegistrationUsagesForRecalc,
   findRegistrationUsageLinks,
@@ -1475,7 +1477,7 @@ export class RegistrationsService {
       );
     }
 
-    await withTxn(async (tx) => {
+    const networkingPhoto = await withTxn(async (tx) => {
       const registration = await findRegistrationForMutation(id, tx);
       if (!registration) {
         throw new AppException(
@@ -1545,6 +1547,8 @@ export class RegistrationsService {
       );
 
       await this.decrementEventRegistered(tx, registration.eventId);
+      // The networking profile cascades with the row; keep its photo for cleanup after commit.
+      const photo = await getNetworkingProfilePhotoByRegistration(id, tx);
       await deleteRegistrationRow(id, tx);
 
       const clientId = registration.event.clientId;
@@ -1566,7 +1570,10 @@ export class RegistrationsService {
         },
       ];
       await this.emitEvents(tx, pending);
+      return photo;
     });
+    if (networkingPhoto)
+      await deleteNetworkingPhoto(networkingPhoto.photoUrl, networkingPhoto.eventId, networkingPhoto.id);
   }
 
   // ==========================================================================

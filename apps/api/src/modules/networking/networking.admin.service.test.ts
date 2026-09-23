@@ -7,18 +7,23 @@ const state = vi.hoisted(() => ({
   requireTransaction: false,
   audits: [] as unknown[],
   deliveries: [] as any[],
+  forms: [] as any[],
+  profile: null as Record<string, unknown> | null,
+  delete: vi.fn(),
+  sync: vi.fn(),
   tail: Promise.resolve() as Promise<unknown>,
 }));
 vi.mock("@app/db", () => {
   const store = {
     one: async (kind: string) => {
+      if (kind === "profiles" && state.profile) return state.profile;
       if (kind === "configs") {
         if (state.requireTransaction) expect(state.transaction).toBe(true);
         return state.row;
       }
       return { id: "event", startDate: new Date("2030-01-01Z"), endDate: new Date("2031-01-01Z") };
     },
-    all: async (kind: string) => kind === "deliveries" ? state.deliveries : [],
+    all: async (kind: string) => kind === "deliveries" ? state.deliveries : kind === "forms" ? state.forms : [],
     update: async (_kind: string, _where: unknown, values: object) => {
       state.row = { ...state.row!, ...values };
       return [state.row];
@@ -31,6 +36,8 @@ vi.mock("@app/db", () => {
     },
   };
   return {
+    syncNetworkingEvent: state.sync,
+    networkingFormField: (schema: { fields?: { id: string }[] }, id: string) => schema.fields?.find((field) => field.id === id),
     networkingStore: () => store,
     networkingTransaction: (_eventId: string, run: (store: NetworkingStore) => Promise<unknown>) => {
       const result = state.tail.then(async () => {
@@ -43,6 +50,11 @@ vi.mock("@app/db", () => {
     },
   };
 });
+vi.mock("../clients/module-gates", () => ({ assertClientModuleEnabled: vi.fn() }));
+vi.mock("@app/integrations", async (original) => ({
+  ...(await original<typeof import("@app/integrations")>()),
+  getStorageProvider: () => ({ delete: state.delete }),
+}));
 import { ZodValidationPipe } from "../../core/zod";
 import { NetworkingConfigDto } from "./networking.dto";
 import { NetworkingAdminService } from "./networking.admin.service";
@@ -56,6 +68,10 @@ beforeEach(() => {
   state.requireTransaction = false;
   state.audits = [];
   state.deliveries = [];
+  state.forms = [];
+  state.profile = null;
+  state.delete.mockReset();
+  state.sync.mockReset();
   state.tail = Promise.resolve();
 });
 afterEach(() => vi.useRealTimers());
@@ -71,8 +87,11 @@ describe("NetworkingAdminService config", () => {
     expect(state.row!.config.requireSecondFactor).toBe(false);
     expect(state.audits).toEqual([]);
   });
-  it("accepts matching revisions and strips both transport fields from storage and audit", async () => {
-    const patch = UpdateNetworkingConfigSchema.parse({ expectedRevision: revision, revision: "ignored", requireSecondFactor: true });
+  it("rejects a stray read-only revision in a PATCH body", () => {
+    expect(() => new ZodValidationPipe().transform({ revision: revision, requireSecondFactor: true }, { type: "body", metatype: NetworkingConfigDto })).toThrow();
+  });
+  it("accepts matching revisions and strips the transport field from storage and audit", async () => {
+    const patch = UpdateNetworkingConfigSchema.parse({ expectedRevision: revision, requireSecondFactor: true });
     const result = await service.config("event", patch);
     expect(result.requireSecondFactor).toBe(true);
     expect(state.row!.config).not.toHaveProperty("revision");
@@ -132,11 +151,54 @@ describe("NetworkingAdminService config", () => {
   });
 });
 
+describe("NetworkingAdminService config consent mapping and sync", () => {
+  const form = (type: string) => ({ schema: { fields: [{ id: "consent_field", type }] } });
+  it.each(["checkbox", "radio", "dropdown"])("accepts a consent mapping to a %s field", async (type) => {
+    state.forms = [form(type)];
+    await expect(service.config("event", { fieldMapping: { consent: "consent_field" } })).resolves.toHaveProperty("revision");
+  });
+  it.each([["a text field", [form("text")]], ["a deleted field", [form("radio")].map(() => ({ schema: { fields: [] } }))], ["no form", []]])("rejects a consent mapping to %s", async (_label, forms) => {
+    state.forms = forms;
+    await expect(service.config("event", { fieldMapping: { consent: "consent_field" } })).rejects.toMatchObject({ status: 400, response: { code: "NETWORKING_VALIDATION" } });
+    expect(state.audits).toEqual([]);
+  });
+  it("returns the committed config and revision even when the registration re-sync fails", async () => {
+    state.sync.mockRejectedValue(new Error("sync crashed"));
+    const result = await service.config("event", { enabled: true, meetingsEnabled: false }, "admin");
+    expect(state.sync).toHaveBeenCalledWith("event");
+    expect(result).toMatchObject({ enabled: true, revision: expect.any(String) });
+    expect(state.row!.config.enabled).toBe(true);
+  });
+});
+
+describe("NetworkingAdminService profile photo removal", () => {
+  it.each([
+    ["https://storage.example/networking/event/profiles/p/photo.webp", "networking/event/profiles/p/photo.webp"],
+    ["https://storage.example/forms/uploads/registrant.webp", null],
+    ["https://storage.example/networking/event/profiles/other/photo.webp", null],
+  ])("removing %s deletes only the participant's own upload after commit", async (photoUrl, key) => {
+    state.profile = { id: "p", eventId: "event", photoUrl, overrides: {} };
+    const row = await service.updateProfile("event", "p", { photoUrl: null }, "admin");
+    expect(row).toMatchObject({ photoUrl: null, overrides: { photoUrl: null } });
+    if (key) expect(state.delete).toHaveBeenCalledWith(key);
+    else expect(state.delete).not.toHaveBeenCalled();
+  });
+});
+
 describe("NetworkingAdminService report regeneration", () => {
+  beforeEach(() => { state.row = { ...state.row!, config: NetworkingConfigSchema.parse({ enabled: true }) }; });
   it("refuses regeneration before event end", async () => {
     vi.useFakeTimers(); vi.setSystemTime(new Date("2030-12-31Z"));
     await expect(service.regeneratePostEventReport("event", "admin")).rejects.toMatchObject({
-      status: 409, response: { code: "NETWORKING_VALIDATION" },
+      status: 409, response: { code: "NETWORKING_ACTION_NOT_ALLOWED" },
+    });
+    expect(state.deliveries).toEqual([]);
+  });
+  it("refuses regeneration when networking is disabled for the event", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date("2031-01-01T01:00:00Z"));
+    state.row = { ...state.row!, config: NetworkingConfigSchema.parse({ enabled: false }) };
+    await expect(service.regeneratePostEventReport("event", "admin")).rejects.toMatchObject({
+      status: 403, response: { code: "NETWORKING_FEATURE_DISABLED" },
     });
     expect(state.deliveries).toEqual([]);
   });
@@ -149,7 +211,7 @@ describe("NetworkingAdminService report regeneration", () => {
     expect(first.availableAt).toEqual(new Date());
     expect(first.version).toBe(first.deliveryId);
     expect(state.deliveries).toHaveLength(1);
-    expect(state.audits).toMatchObject([{ actorId: "admin", action: "post_event_report.regenerate" }]);
+    expect(state.audits).toMatchObject([{ actorId: "admin", action: "POST_EVENT_REPORT_REGENERATE" }]);
     state.deliveries[0].status = "SENT";
     const second = await service.regeneratePostEventReport("event", "admin");
     expect(second.version).not.toBe(first.version);

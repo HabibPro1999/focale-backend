@@ -29,32 +29,38 @@ it("inserts availability in chunks of 500 without returning rows", async () => {
   expect(insert).toHaveBeenCalledTimes(3);
 });
 
-it("scopes analytics by client and normalized email, then by own profile IDs without message bodies", async () => {
-  const { store, predicates, selections } = reader();
+it("scopes analytics by client and normalized email, then aggregates own-profile counts in SQL", async () => {
+  const { store, predicates, selections, chain } = reader();
   await store.personalAnalyticsProfiles("client", "own@example.test");
   expect(compiled(predicates[0]).sql).toContain('lower(trim("networking_profiles"."email"))');
   expect(compiled(predicates[0]).params).toEqual(["client", "own@example.test"]);
-  await store.personalAnalyticsRows("event", ["own", "duplicate"]);
+  const results = [[{ count: 4 }], [{ count: 2 }], [{ count: 3 }], [{ planned: 5, completed: 1 }]];
+  chain.then = (resolve: (value: unknown[]) => unknown) => Promise.resolve(resolve(results.shift()!));
+  expect(await store.personalAnalyticsCounts("event", ["own", "duplicate"])).toEqual({
+    profileViews: 4, matches: 2, sentMessages: 3, plannedMeetings: 5, completedMeetings: 1,
+  });
   for (const predicate of predicates.slice(1)) {
-    expect(compiled(predicate).params).toContain("event");
-    expect(compiled(predicate).params).toContain("own");
-    expect(compiled(predicate).params).toContain("duplicate");
+    expect(compiled(predicate).params).toEqual(expect.arrayContaining(["event", "own", "duplicate"]));
   }
-  expect(selections[3]).toHaveProperty("senderId");
-  expect(Object.keys(selections[3])).toEqual(["senderId"]);
-  expect(selections.every(columns => columns !== undefined)).toBe(true);
+  // Aggregates only: no message bodies, connection rows or participant emails leave the database.
+  for (const columns of selections.slice(1)) expect(Object.keys(columns).every((key) => ["count", "planned", "completed"].includes(key))).toBe(true);
+  const contacts = compiled(selections[2].count);
+  expect(contacts.sql).toContain("count(DISTINCT coalesce(nullif(lower(trim(");
+  // Connections between one's own duplicate profiles are not contacts.
+  expect(compiled(predicates[2]).sql).toMatch(/not in/i);
 });
 
-it("bounds conflict queries by active status and half-open candidate windows and aggregates historical usage including completed", async () => {
+it("keeps early-completed and no-show meetings holding inventory; only released statuses free it", async () => {
   const { store, predicates, chain } = reader();
   const start = new Date("2099-01-01T09:00Z"), end = new Date("2099-01-01T09:30Z");
   await store.allocationMeetings("event", start, end);
   await store.allocationReservations("event", start, end, "profile:p");
   for (const predicate of predicates) {
     const query = compiled(predicate);
-    expect(query.params).toEqual(expect.arrayContaining(["event", "PENDING", "CONFIRMED", "PENDING_ALLOCATION", start.toISOString(), end.toISOString()]));
+    expect(query.params).toEqual(expect.arrayContaining(["event", "CANCELLED", "DECLINED", "EXPIRED", start.toISOString(), end.toISOString()]));
+    expect(query.sql).toMatch(/"status" not in/i);
     expect(query.sql).toContain('"starts_at" <');
-    expect(query.params).not.toContain("COMPLETED");
+    for (const held of ["PENDING", "CONFIRMED", "PENDING_ALLOCATION", "COMPLETED", "NO_SHOW"]) expect(query.params).not.toContain(held);
   }
   expect(compiled(predicates[0]).sql).toContain('"ends_at" >');
   expect(compiled(predicates[1]).sql).toContain('"starts_at" >=');

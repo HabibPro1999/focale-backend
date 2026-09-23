@@ -1,9 +1,16 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { rowsOf } from "../helpers";
-import { getDb } from "../client";
+import { getDb, type DbExecutor } from "../client";
+import { withTxnRetry } from "../txn";
 import { emailLogs } from "../schema/email";
 import type { NetworkingDeliveryRow } from "./networking-delivery";
 
+// Lock the delivery while checking ownership and writing its email log.
+async function ownsDelivery(db: DbExecutor, row: NetworkingDeliveryRow) {
+  return rowsOf(await db.execute(sql`SELECT id FROM networking_deliveries
+      WHERE id=${row.id} AND status='PROCESSING' AND locked_until=${row.lockedUntil?.toISOString()}::timestamp
+        AND locked_until>now() FOR UPDATE`)).length > 0;
+}
 /** These rows belong exclusively to the networking worker, never to the generic email queue. */
 export async function beginNetworkingEmailLog(
   row: NetworkingDeliveryRow,
@@ -14,13 +21,9 @@ export async function beginNetworkingEmailLog(
     subject: string;
   },
 ) {
-  return getDb().transaction(async (db) => {
-    // Lock the delivery while checking ownership and writing its email log.
-    const owned = rowsOf(await db.execute(sql`SELECT id FROM networking_deliveries
-      WHERE id=${row.id} AND status='PROCESSING' AND locked_until=${row.lockedUntil?.toISOString()}::timestamp
-        AND locked_until>now() FOR UPDATE`));
-    if (!owned.length) return { alreadySent: false, leaseLost: true };
-    const inserted = await db
+  return withTxnRetry(() => getDb().transaction(async (db) => {
+    if (!(await ownsDelivery(db, row))) return { alreadySent: false, leaseLost: true };
+    await db
       .insert(emailLogs)
       .values({
         id: row.id,
@@ -41,7 +44,7 @@ export async function beginNetworkingEmailLog(
           deliveryId: row.id,
         },
       })
-      .onConflictDoNothing({ target: emailLogs.id }).returning({ id: emailLogs.id });
+      .onConflictDoNothing({ target: emailLogs.id });
     const [existing] = await db
       .select()
       .from(emailLogs)
@@ -53,8 +56,6 @@ export async function beginNetworkingEmailLog(
       )
     )
       return { alreadySent: true };
-    if (!inserted.length && existing.status === "SENDING" && existing.lockedUntil && existing.lockedUntil > new Date())
-      return { alreadySent: false, leaseLost: true };
     await db
       .update(emailLogs)
       .set({
@@ -77,19 +78,17 @@ export async function beginNetworkingEmailLog(
         ),
       );
     return { alreadySent: false };
-  });
+  }));
 }
 export async function finishNetworkingEmailLog(
   row: NetworkingDeliveryRow,
   outcome: "sent" | "failed" | "skipped",
   messageId?: string,
 ) {
-  return getDb().transaction(async (db) => {
-    // Lock the delivery while checking ownership and writing its email log.
-    const owned = rowsOf(await db.execute(sql`SELECT id FROM networking_deliveries
-      WHERE id=${row.id} AND status='PROCESSING' AND locked_until=${row.lockedUntil?.toISOString()}::timestamp
-        AND locked_until>now() FOR UPDATE`));
-    if (!owned.length) return { alreadySent: false, leaseLost: true };
+  return withTxnRetry(() => getDb().transaction(async (db) => {
+    // A provider-confirmed send is a fact even after the lease was lost; failures/skips stay fenced.
+    if (outcome !== "sent" && !(await ownsDelivery(db, row)))
+      return { alreadySent: false, leaseLost: true };
     if (outcome === "sent") {
       // Fast webhooks can arrive before the provider response: never downgrade their delivery/open/click state.
       await db
@@ -106,8 +105,8 @@ export async function finishNetworkingEmailLog(
         .where(eq(emailLogs.id, row.id));
       await db
         .update(emailLogs)
-        .set({ status: "SENT" })
-        .where(and(eq(emailLogs.id, row.id), eq(emailLogs.status, "SENDING")));
+        .set({ status: "SENT", failedAt: null })
+        .where(and(eq(emailLogs.id, row.id), inArray(emailLogs.status, ["SENDING", "FAILED", "SKIPPED"])));
     } else {
       await db
         .update(emailLogs)
@@ -136,5 +135,5 @@ export async function finishNetworkingEmailLog(
           ),
         );
     }
-  });
+  }));
 }

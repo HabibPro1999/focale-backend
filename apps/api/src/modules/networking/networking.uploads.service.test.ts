@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import sharp from "sharp";
 const storage = vi.hoisted(() => ({ uploadPublic: vi.fn(), delete: vi.fn() }));
-vi.mock("@app/integrations", () => ({
+vi.mock("@app/integrations", async (original) => ({
+  ...(await original<typeof import("@app/integrations")>()),
   getStorageProvider: () => storage,
-  extractStorageKeyFromUrl: (url: string) => new URL(url).pathname.slice(1),
 }));
 import {
   NetworkingUploadsService,
@@ -88,11 +88,27 @@ describe("networking image uploads", () => {
   });
 });
 
-it("deletes a withdrawn photo and tolerates storage failures", async () => {
-  await service.deletePhoto("https://storage.example/networking/photo.webp", "p");
-  expect(storage.delete).toHaveBeenCalledWith("networking/photo.webp");
-  storage.delete.mockRejectedValueOnce(new Error("storage unavailable"));
-  await expect(service.deletePhoto("https://storage.example/networking/photo.webp", "p")).resolves.toBeUndefined();
+describe("guarded networking photo deletion", () => {
+  const own = "https://storage.example/networking/event/profiles/p/photo.webp";
+  it("deletes only the participant's own photo and tolerates storage failures", async () => {
+    await service.deletePhoto(own, "event", "p");
+    expect(storage.delete).toHaveBeenCalledWith("networking/event/profiles/p/photo.webp");
+    storage.delete.mockRejectedValueOnce(new Error("storage unavailable"));
+    await expect(service.deletePhoto(own, "event", "p")).resolves.toBeUndefined();
+  });
+  it.each([
+    "https://storage.example/forms/uploads/registrant-photo.webp",
+    "https://storage.example/networking/event/profiles/other/photo.webp",
+    "https://storage.example/networking/other-event/profiles/p/photo.webp",
+    "https://storage.example/networking/event/profiles/p/../../../../abstracts/final.pdf",
+    "https://storage.example/networking/event/branding/logo.webp",
+    "abstracts/final.pdf",
+    "",
+    null,
+  ])("never deletes an arbitrary or foreign object: %s", async (url) => {
+    await service.deletePhoto(url, "event", "p");
+    expect(storage.delete).not.toHaveBeenCalled();
+  });
 });
 it("removes the previous owned photo after replacement", async () => {
   const png = await sharp({ create: { width: 1, height: 1, channels: 3, background: "red" } }).png().toBuffer();

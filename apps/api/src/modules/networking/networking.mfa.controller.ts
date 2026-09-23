@@ -21,6 +21,7 @@ export class NetworkingMfaController {
   private context(slug: string, authorization?: string) {
     return this.networking.participant(slug, authorization, {
       allowPendingSecondFactor: true,
+      allowConsentPending: true,
     });
   }
   @Get() async state(
@@ -59,7 +60,7 @@ export class NetworkingMfaController {
     @Headers("authorization") authorization?: string,
   ) {
     return this.mfa.verify(
-      await this.networking.participant(slug, authorization),
+      await this.networking.participant(slug, authorization, { allowConsentPending: true }),
       body.code,
       "DISABLE",
     );

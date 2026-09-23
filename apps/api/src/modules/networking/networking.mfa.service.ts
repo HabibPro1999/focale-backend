@@ -33,7 +33,7 @@ export class NetworkingMfaService {
         profileId: ctx.profile.id,
       });
       if (factor?.enabledAt)
-        throw new ConflictException({ code: "NETWORKING_VALIDATION", message: "An authenticator is already enrolled" });
+        throw new ConflictException({ code: "NETWORKING_ACTION_NOT_ALLOWED", message: "An authenticator is already enrolled" });
       const secret = factor?.pendingEncryptedSecret
         ? openNetworkingSecret(factor.pendingEncryptedSecret)
         : newNetworkingTotpSecret();
@@ -63,7 +63,7 @@ export class NetworkingMfaService {
     action: "VERIFY" | "CONFIRM" | "DISABLE" = "VERIFY",
   ) {
     if (action === "DISABLE" && ctx.config.requireSecondFactor)
-      throw new ForbiddenException({ code: "NETWORKING_MFA_REQUIRED", message: "This event requires two-factor authentication" });
+      throw new ForbiddenException({ code: "NETWORKING_MFA_ENFORCED", message: "This event requires two-factor authentication" });
     const result = await networkingTransaction(ctx.event.id, async (store) => {
       const factor = await store.one("secondFactors", {
         profileId: ctx.profile.id,

@@ -6,6 +6,7 @@ import { networkingAnalytics } from "./networking.analytics";
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
@@ -26,6 +27,7 @@ import {
   getActiveEventAccessId,
   createNetworkingNotification,
   getNetworkingConfig,
+  networkingFormField,
   networkingStore,
   networkingTransaction,
   revokeNetworkingSessions,
@@ -33,6 +35,8 @@ import {
   type NetworkingRow,
 } from "@app/db";
 import { getStorageProvider } from "@app/integrations";
+import { createLogger } from "@app/shared";
+import { deleteNetworkingPhoto } from "./networking.uploads.service";
 import { assertClientModuleEnabled } from "../clients/module-gates";
 import {
   NetworkingService,
@@ -40,6 +44,8 @@ import {
 } from "./networking.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
 import { networkingPublicProfile, networkingSlots, zonedInstant } from "./networking.policy";
+const log = createLogger({ name: "networking:admin" });
+const CONSENT_FIELD_TYPES = ["checkbox", "radio", "dropdown", "select"];
 const participationCopy = {
   en: {
     title: "Networking participation updated",
@@ -72,7 +78,7 @@ export class NetworkingAdminService {
   ) {}
   async config(
     eventId: string,
-    input?: Partial<NetworkingConfig> & { expectedRevision?: string; revision?: string },
+    input?: Partial<NetworkingConfig> & { expectedRevision?: string },
     actorId?: string,
   ): Promise<NetworkingConfigWithRevision> {
     if (!input) {
@@ -82,7 +88,7 @@ export class NetworkingAdminService {
         revision: row?.updatedAt.toISOString() ?? NETWORKING_CONFIG_UNCONFIGURED_REVISION,
       };
     }
-    const { expectedRevision, revision: _revision, ...changes } = input;
+    const { expectedRevision, ...changes } = input;
     const config = await networkingTransaction(eventId, async (store) => {
       const current = await store.one("configs", { eventId });
       const revision = current?.updatedAt.toISOString() ?? NETWORKING_CONFIG_UNCONFIGURED_REVISION;
@@ -123,6 +129,14 @@ export class NetworkingAdminService {
         !(await getActiveEventAccessId(config.requiredAccessId, eventId))
       )
         throw invalid("Networking area access must be active and belong to this event");
+      const consentFieldId = config.fieldMapping.consent;
+      if ("fieldMapping" in changes && consentFieldId) {
+        const field = (await store.all("forms", { eventId }))
+          .map((form) => networkingFormField(form.schema, consentFieldId))
+          .find(Boolean);
+        if (!field || !CONSENT_FIELD_TYPES.includes(String(field.type)))
+          throw invalid("Consent mapping must point to a checkbox, radio or select field of the registration form");
+      }
       if (config.enabled) {
         await assertClientModuleEnabled(event.clientId, "registrations");
         await assertClientModuleEnabled(event.clientId, "emails");
@@ -166,7 +180,12 @@ export class NetworkingAdminService {
         "fieldMapping",
       ].some((key) => key in changes)
     )
-      await syncNetworkingEvent(eventId);
+      try {
+        await syncNetworkingEvent(eventId);
+      } catch (error) {
+        // The config is committed; the organizer can rerun sync, so the saved revision is still returned.
+        log.error({ err: error, eventId }, "Networking registration sync failed after a config update");
+      }
     return config;
   }
   async verifyBadge(eventId: string, token: string, accessId?: string) {
@@ -248,9 +267,10 @@ export class NetworkingAdminService {
     input: Partial<NetworkingRow<"profiles">>,
     actorId: string,
   ) {
-    return networkingTransaction(eventId, async (store, db) => {
+    const { row, previousPhotoUrl } = await networkingTransaction(eventId, async (store, db) => {
       const profile = await store.one("profiles", { eventId, id });
       if (!profile) throw new NotFoundException("Participant not found");
+      const previousPhotoUrl = profile.photoUrl;
       if (input.standTableId !== undefined) {
         await this.inventory.assertRepresentativeMove(store, eventId, profile, input.standTableId);
         if (profile.standTableId && profile.standTableId !== input.standTableId) {
@@ -289,8 +309,10 @@ export class NetworkingAdminService {
           },
           db,
         );
-      return row;
+      return { row, previousPhotoUrl };
     });
+    if (row.photoUrl !== previousPhotoUrl) await deleteNetworkingPhoto(previousPhotoUrl, eventId, id);
+    return row;
   }
   tables(eventId: string) { return this.inventory.tables(eventId); }
   saveTable(eventId: string, input: Parameters<NetworkingInventoryService["saveTable"]>[1], actorId: string, id?: string) {
@@ -515,9 +537,11 @@ export class NetworkingAdminService {
     return networkingTransaction(eventId, async (store) => {
       const event = await store.one("events", { id: eventId });
       if (!event) throw new NotFoundException("Event not found");
+      if (!NetworkingConfigSchema.parse((await store.one("configs", { eventId }))?.config ?? {}).enabled)
+        throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Networking is not enabled for this event" });
       const now = new Date();
       if (event.endDate > now) throw new ConflictException({
-        code: "NETWORKING_VALIDATION", message: "Report can be generated after the event ends",
+        code: "NETWORKING_ACTION_NOT_ALLOWED", message: "Report can be generated after the event ends",
       });
       const pending = (await store.all("deliveries", { eventId, type: "POST_EVENT_REPORT" }))
         .find((row) => row.status === "PENDING" || row.status === "PROCESSING" || (row.status === "FAILED" && row.attempts < 5));
@@ -528,7 +552,7 @@ export class NetworkingAdminService {
         status: "PENDING", availableAt: now, dedupeKey: `post-event-report:${eventId}:${id}`,
       });
       await store.insert("audit", {
-        eventId, actorId, action: "post_event_report.regenerate", targetId: id, data: { version: id },
+        eventId, actorId, action: "POST_EVENT_REPORT_REGENERATE", targetId: id, data: { version: id },
       });
       return { deliveryId: id, availableAt: now, version: id };
     });

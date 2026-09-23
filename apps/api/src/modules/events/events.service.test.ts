@@ -22,6 +22,7 @@ vi.mock("@app/db", () => ({
   getEventWithPricingBySlug: vi.fn(),
   getEventWithPricingAndClient: vi.fn(),
   getEventWithRegistrationCountTx: vi.fn(),
+  getNetworkingConfig: vi.fn(),
   insertEventPricingTx: vi.fn(),
   insertEventTx: vi.fn(),
   listEvents: vi.fn(),
@@ -565,6 +566,7 @@ describe("EventsService", () => {
       vi.mocked(db.getCertificateTemplateUrlsTx).mockResolvedValue([]);
       vi.mocked(db.getAbstractFinalFileKeysTx).mockResolvedValue([]);
       vi.mocked(db.getAbstractBookStorageKeysTx).mockResolvedValue([]);
+      vi.mocked(db.getNetworkingConfig).mockResolvedValue({ logoUrl: null } as never);
     });
 
     it("deletes an event without registrations", async () => {
@@ -598,6 +600,21 @@ describe("EventsService", () => {
       expect(storageDeleteMock).toHaveBeenCalledWith("certificates/template.png");
       expect(storageDeleteMock).toHaveBeenCalledWith("abstracts/final.pdf");
       expect(storageDeleteMock).toHaveBeenCalledWith("abstract-books/book.pdf");
+    });
+
+    it.each([
+      [`https://assets.example/networking/${eventId}/branding/logo.webp`, `networking/${eventId}/branding/logo.webp`],
+      ["https://cdn.example/brand/logo.png", null],
+      [`https://assets.example/networking/other-event/branding/logo.webp`, null],
+    ])("deletes the networking branding logo %s only when it is this event's upload", async (logoUrl, key) => {
+      vi.mocked(db.getEventWithRegistrationCountTx).mockResolvedValue({
+        event: createMockEvent() as never,
+        registrations: 0,
+      });
+      vi.mocked(db.getNetworkingConfig).mockResolvedValue({ logoUrl } as never);
+      await service.deleteEvent(eventId);
+      if (key) expect(storageDeleteMock).toHaveBeenCalledWith(key);
+      else expect(storageDeleteMock).not.toHaveBeenCalled();
     });
 
     it("404 when event missing", async () => {

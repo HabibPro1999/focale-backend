@@ -153,7 +153,6 @@ export const NetworkingConfigSchema = z.object({
 const networkingConfigPatchSchema =
   NetworkingConfigSchema.partial().extend({
     expectedRevision: z.string().optional(),
-    revision: z.string().optional(),
   }).strict();
 // Zod 4 applies inner defaults even through partial(); a PATCH must retain only supplied keys.
 export const UpdateNetworkingConfigSchema = z.unknown().transform((input, ctx) => {
@@ -177,7 +176,8 @@ export const NetworkingProfileUpdateSchema = z
     city: z.string().max(100).optional(),
     country: z.string().max(100).optional(),
     website: nullableUrl,
-    photoUrl: nullableUrl,
+    // Photos are set only by the upload route; clients may only remove them.
+    photoUrl: z.null().optional(),
     interests: z.array(z.string().max(100)).max(30).optional(),
     offers: z.string().max(2000).optional(),
     seeks: z.string().max(2000).optional(),
@@ -195,7 +195,7 @@ export const NetworkingAdminProfileUpdateSchema =
     featured: z.boolean().optional(),
     standTableId: id.nullable().optional(),
   }).strict();
-/** Omit both fields for the one-release, unbounded legacy response. */
+/** Always paginated: 50 items by default, at most 200. */
 export const NetworkingParticipantListQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).optional(),
   cursor: z.string().min(1).max(2048).regex(/^[A-Za-z0-9_-]+$/).optional(),
@@ -210,8 +210,20 @@ export const NetworkingParticipantCursorSchema = z.object({
 export interface NetworkingParticipantPage<T> {
   items: T[];
   nextCursor: string | null;
-  total: number;
+  /** First page only. */
+  total?: number;
 }
+/** Public registration-form view of an event's networking (GET registration). */
+export type NetworkingRegistrationInfo =
+  | { enabled: false }
+  | {
+      enabled: true;
+      opensAt: string | null;
+      closesAt: string | null;
+      approvalMode: "AUTOMATIC" | "MANUAL";
+      fieldMapping: Partial<Record<keyof z.infer<typeof NetworkingFieldMappingSchema>, string | null>>;
+      networkingUrl?: string;
+    };
 
 export const NetworkingListQuerySchema = z.object({
   viewId: id.optional(),

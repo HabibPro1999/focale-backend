@@ -57,7 +57,7 @@ export class NetworkingRecommendationsController {
   ) {
     const ctx = await this.networking.participant(slug, authorization);
     if (!ctx.config.swipeEnabled && !ctx.config.searchEnabled)
-      throw new ForbiddenException("Participant discovery is disabled");
+      throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Participant discovery is disabled" });
     const model =
       process.env.NETWORKING_EMBEDDING_MODEL || "text-embedding-3-small";
     const cacheKey = JSON.stringify([
