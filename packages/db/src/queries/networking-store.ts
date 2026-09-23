@@ -39,6 +39,18 @@ export type NetworkingRow<K extends NetworkingEntity> =
 export type NetworkingInsert<K extends NetworkingEntity> =
   (typeof tables)[K]["$inferInsert"];
 type Where<K extends NetworkingEntity> = Partial<NetworkingRow<K>>;
+function assertScopedMutationWhere(
+  operation: "update" | "delete",
+  where: Record<string, unknown>,
+) {
+  if (!Object.keys(where).length) {
+    throw new Error(`Scoped ${operation} required`);
+  }
+  if (Object.values(where).some((value) => value === undefined)) {
+    throw new Error(`Scoped ${operation} cannot contain undefined predicates`);
+  }
+}
+
 function condition<K extends NetworkingEntity>(name: K, where: Where<K>) {
   const columns = getTableColumns(tables[name]) as Record<string, AnyColumn>;
   return and(
@@ -171,7 +183,7 @@ export function networkingStore(db: DbExecutor = getDb()) {
       where: Where<K>,
       value: Partial<NetworkingInsert<K>>,
     ): Promise<NetworkingRow<K>[]> {
-      if (!Object.keys(where).length) throw new Error("Scoped update required");
+      assertScopedMutationWhere("update", where);
       // SAFETY: The table selected by name defines NetworkingRow<K>; Drizzle loses that generic correlation.
       return (await db
         .update(tables[name] as PgTable)
@@ -180,7 +192,7 @@ export function networkingStore(db: DbExecutor = getDb()) {
         .returning()) as unknown as NetworkingRow<K>[];
     },
     async remove<K extends NetworkingEntity>(name: K, where: Where<K>) {
-      if (!Object.keys(where).length) throw new Error("Scoped delete required");
+      assertScopedMutationWhere("delete", where);
       await db.delete(tables[name] as PgTable).where(condition(name, where));
     },
   };
