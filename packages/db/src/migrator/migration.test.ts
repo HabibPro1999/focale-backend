@@ -158,7 +158,7 @@ describe("unified migration format", () => {
     const postgres = await loadMigrations(migrationsDirectory, "postgres");
     const probesById = new Map(postgres.map((migration) => [
       migration.id,
-      deriveCatalogProbes(migration).filter((probe) => "kind" in probe),
+      deriveCatalogProbes(migration).filter((probe) => "kind" in probe && probe.kind !== "extension"),
     ]));
 
     expect(probesById.get("0015")).toEqual(expect.arrayContaining([
@@ -176,6 +176,52 @@ describe("unified migration format", () => {
       expect.objectContaining({ kind: "index", name: "networking_meetings_requester_start_idx", table: "networking_meetings", source: "manifest" }),
       expect.objectContaining({ kind: "index", name: "networking_meetings_recipient_start_idx", table: "networking_meetings", source: "manifest" }),
     ]));
+  });
+
+  it("declares every DDL object in the earlier unmarked multi-statement migrations", async () => {
+    const postgres = await loadMigrations(migrationsDirectory, "postgres");
+    const probesById = new Map(postgres.map((migration) => [
+      migration.id,
+      deriveCatalogProbes(migration).filter((probe) => "kind" in probe && probe.kind !== "extension"),
+    ]));
+    const names = (id: string) => probesById.get(id)?.map((probe) => `${probe.kind}:${probe.table ?? ""}:${probe.name}`).sort();
+
+    expect(names("0001")).toEqual(expect.arrayContaining([
+      "index:email_templates:email_template_registration_uniq",
+      "index:email_templates:email_template_abstract_uniq",
+      "index:abstracts:abstracts_event_id_author_email_normalized_key",
+      "index:email_logs:email_logs_registration_trigger_active_key",
+      "index:email_logs:email_logs_abstract_submission_ack_active_key",
+      "index:email_logs:email_logs_template_recipient_trigger_active_key",
+      "index:outbox_events:outbox_events_dedupe_key_key",
+      "index:registrations:registrations_access_type_ids_inverted_idx",
+    ]));
+    expect(names("0001")).toHaveLength(8);
+    expect(names("0003")).toEqual(expect.arrayContaining([
+      "column:email_logs:dedupe_key",
+      "index:email_logs:email_logs_dedupe_key_active_key",
+    ]));
+    expect(names("0003")).toHaveLength(2);
+    expect(names("0005")).toEqual(expect.arrayContaining([
+      "column:certificate_templates:scope",
+      "constraint:certificate_templates:certificate_templates_scope_check",
+      "column:certificate_templates:allowed_abstract_final_types",
+    ]));
+    expect(names("0005")).toHaveLength(3);
+    expect(names("0007")).toEqual(expect.arrayContaining([
+      "column:forms:success_translations",
+      "column:abstract_themes:translations",
+      "column:abstract_config:languages",
+    ]));
+    expect(names("0007")).toHaveLength(3);
+    expect(names("0013")).toEqual(expect.arrayContaining([
+      "table::networking_embeddings",
+      "index:networking_embeddings:networking_embeddings_profile_kind_model_key",
+      "index:networking_embeddings:networking_embeddings_event_kind_model_idx",
+      "table::networking_embedding_jobs",
+      "index:networking_embedding_jobs:networking_embedding_jobs_pending_idx",
+    ]));
+    expect(names("0013")).toHaveLength(5);
   });
 
   it("uses the final migration state for catalog checks when later DDL replaces an object", async () => {

@@ -36,7 +36,7 @@ checksums so adding runner metadata does not change historical checksums. The
 CockroachDB 0018 execution variant has a fixed legacy crosswalk in
 `legacy-networking.ts`; changes to it require an explicit crosswalk update.
 Catalog verification reads every marked statement and has explicit metadata
-for older multi-statement networking files whose bodies cannot change. It
+for older multi-statement SQL whose bodies remain fixed for compatibility. It
 checks each object's final declared state so later index drops supersede older
 create expectations; adoption still receives each migration's own probes.
 
