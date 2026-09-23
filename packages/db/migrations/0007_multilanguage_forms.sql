@@ -1,3 +1,5 @@
+-- migrate: transaction per-file
+-- migrate: idempotent
 ALTER TABLE "forms"
   ADD COLUMN IF NOT EXISTS "success_translations" JSONB;
 

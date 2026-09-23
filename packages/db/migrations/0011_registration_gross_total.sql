@@ -1,3 +1,5 @@
+-- migrate: transaction per-file
+-- migrate: idempotent
 -- Creation/repricing previously stored priceBreakdown.total (net) in total_amount,
 -- although settlement and sponsorship linking interpret total_amount as gross.
 -- Repair only rows whose saved breakdown proves they use the old net convention.

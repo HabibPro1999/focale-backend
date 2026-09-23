@@ -1,3 +1,6 @@
+-- migrate: transaction per-file
+-- migrate: deferrable
+-- migrate: defer-unless "SELECT NOT EXISTS (SELECT 1 FROM networking_embeddings)"
 -- All three prefix values are constrained in each ANN search.
 -- Do not disable sql_safe_updates: backfilling a non-empty table can block writes
 -- on CockroachDB 26.2 and requires a separately planned maintenance window.

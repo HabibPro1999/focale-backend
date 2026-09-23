@@ -1,3 +1,5 @@
+-- migrate: transaction per-file
+-- migrate: idempotent
 -- Hand-written, same convention as 0001_raw_indexes.sql / 0003_email_fixes.sql
 -- (not tracked by drizzle-kit / meta/_journal.json). Must be applied after
 -- 0000_init.sql (needs the pre-existing "AbstractFinalType" enum).

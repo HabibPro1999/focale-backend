@@ -1,3 +1,4 @@
+-- migrate: transaction per-file
 CREATE TABLE "networking_audit" (
 	"id" text PRIMARY KEY NOT NULL,
 	"event_id" text NOT NULL,
