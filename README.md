@@ -292,7 +292,7 @@ bun run test:unit
 bun run test:coverage
 ```
 
-DB-backed tiers are explicit and guarded. Create a disposable maintenance database with an exact `test` or `ci` token in its name, then set `TEST_DB_ADMIN_URL`. The helper creates a fresh migrated scratch database for every test file and removes it afterward. PostgreSQL clones a per-run migrated template; CockroachDB uses fresh per-file databases because the pinned 26.2.5 release does not support database template cloning. Stale helper-owned scratch databases older than 24 hours are removed at suite startup.
+DB-backed tiers are explicit and guarded. Create a disposable maintenance database with an exact `test` or `ci` token in its name, then set `TEST_DB_ADMIN_URL`. Root `test:db` runs every package's database suite sequentially, including API networking and integration notification-worker coverage; performance experiments stay outside this default tier. The helper creates a fresh migrated scratch database for every test file and removes it afterward. PostgreSQL clones a per-run migrated template; CockroachDB uses fresh per-file databases because the pinned 26.2.5 release does not support database template cloning. Stale helper-owned scratch databases older than 24 hours are removed at suite startup.
 
 ```bash
 # DB integration tier

@@ -13,7 +13,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "test:db": "vitest run --config vitest.db.config.ts"
   },
   "dependencies": {
     "@app/contracts": "workspace:*",

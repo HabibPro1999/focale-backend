@@ -1,6 +1,17 @@
 import { isIP } from "node:net";
+import { Client } from "pg";
 
 const PRODUCTION_TOKENS = new Set(["prod", "production", "main", "staging", "live"]);
+const ROUTING_QUERY_PARAMETERS = new Set([
+  "host",
+  "hostaddr",
+  "port",
+  "socket",
+  "service",
+  "servicefile",
+  "database",
+  "dbname",
+]);
 
 function tokens(value: string): string[] {
   return value.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
@@ -34,6 +45,10 @@ export function assertDisposableDatabaseUrl(
     throw new Error("[test-db] Database URL must use postgres:// or postgresql://.");
   }
 
+  if ([...parsed.searchParams.keys()].some((key) => ROUTING_QUERY_PARAMETERS.has(key.toLowerCase()))) {
+    throw new Error("[test-db] Database URL must not override its connection host or port in query parameters.");
+  }
+
   const databaseName = decodeURIComponent(parsed.pathname.replace(/^\//, ""));
   if (!databaseName || !/^[A-Za-z0-9_.-]+$/.test(databaseName)) {
     throw new Error("[test-db] Database URL must contain a simple database name.");
@@ -47,6 +62,17 @@ export function assertDisposableDatabaseUrl(
   }
 
   const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  const routingProbe = new URL(parsed.toString());
+  routingProbe.search = "";
+  const driver = new Client({ connectionString: routingProbe.toString() });
+  const routing = (driver as unknown as {
+    connectionParameters: { host: string; port: number; database: string; isDomainSocket: boolean };
+  }).connectionParameters;
+  const driverHost = routing.host.toLowerCase().replace(/^\[|\]$/g, "");
+  const urlPort = parsed.port ? Number(parsed.port) : 5432;
+  if (routing.isDomainSocket || driverHost !== host || routing.port !== urlPort || routing.database !== databaseName) {
+    throw new Error("[test-db] Database URL must connect to the database, host, and port in its authority.");
+  }
   if (tokens(host).some((token) => PRODUCTION_TOKENS.has(token))) {
     throw new Error("[test-db] Refusing a production-like database host.");
   }

@@ -27,9 +27,9 @@ import {
 import { updateEmailStatusFromWebhook } from "../email/queue";
 import type { EmailProvider, SendEmailInput } from "../email/providers";
 import type { StorageProvider } from "../storage";
+import { dbTestsEnabled } from "@app/db/testing";
 
-const enabled =
-  process.env.ALLOW_DB_TESTS === "1" && !!process.env.TEST_DATABASE_URL;
+const enabled = dbTestsEnabled();
 const secret = "test-only-networking-worker-secret-more-than-32-characters";
 const store = () => networkingStore();
 function emailProvider(
@@ -217,15 +217,6 @@ async function log(id: string) {
 
 describe.runIf(enabled)("networking worker real isolated database", () => {
   beforeAll(() => {
-    const url = new URL(process.env.TEST_DATABASE_URL!);
-    if (
-      !["localhost", "127.0.0.1"].includes(url.hostname) ||
-      !/^\/(focale_)?networking_test_worker_[a-z0-9_]+$/.test(url.pathname)
-    )
-      throw new Error(
-        "Worker tests require their own disposable local networking_test_worker database",
-      );
-    process.env.DATABASE_URL = url.toString();
     process.env.NETWORKING_TOKEN_SECRET = secret;
     process.env.PUBLIC_NETWORKING_URL = "https://networking.example.invalid";
     process.env.NETWORKING_VAPID_PUBLIC_KEY = "test-only-public";

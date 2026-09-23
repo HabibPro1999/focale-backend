@@ -27,6 +27,12 @@ export const networkingEmbeddings = pgTable(
     sourceHash: text().notNull(),
     embedding: vector({ dimensions: 1536 }).notNull(),
     ...timestamps,
+    // Historical 0013 SQL retains DEFAULT now() for this table.
+    updatedAt: timestamp({ precision: 3 })
+      .notNull()
+      .defaultNow()
+      .$defaultFn(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => [
     uniqueIndex("networking_embeddings_profile_kind_model_key").on(
@@ -64,6 +70,12 @@ export const networkingEmbeddingJobs = pgTable(
     lastError: text(),
     metrics: jsonb().$type<Record<string, number>>().notNull().default({}),
     ...timestamps,
+    // Historical 0013 SQL retains DEFAULT now() for this table.
+    updatedAt: timestamp({ precision: 3 })
+      .notNull()
+      .defaultNow()
+      .$defaultFn(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => [
     index("networking_embedding_jobs_pending_idx").on(
