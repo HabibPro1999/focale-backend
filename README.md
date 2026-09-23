@@ -37,7 +37,7 @@ bun run dev
 
 - Copy `.env.example` to `.env` for local development, then replace placeholders with local-only values.
 - Never commit real `.env*` files; only `.env.example`, `.env.test.example`, `.env.test.db.example`, and `.env.test.migration.example` are intended to be tracked.
-- `TRUST_PROXY` (integer hop count of trusted reverse proxies, e.g. `1`) is required when `NODE_ENV=production`; the API refuses to start without it because per-IP rate limits key on the forwarded client address.
+- `TRUST_PROXY` is required when `NODE_ENV=production` and must be a comma-separated list of the actual trusted proxy IP/CIDR addresses, or the literal `false` when clients connect directly without a proxy. The API refuses numeric hop counts, `true`, wildcard trust, and `/0` networks because forwarded headers must only be trusted after validating the connecting peer. Before deployment, replace any old integer value with the proxy peer addresses supplied by the deployment network configuration; do not guess proxy ranges.
 - Production secrets belong only in the deployment secret manager. If production-like credentials are found in local env files, rotate them in the owning service and remove local copies.
 - Unit tests load `.env.test` when present and otherwise use safe in-code defaults. They never fall back to `.env`, and `DATABASE_URL` is forced to a dummy local test URL for the mocked unit tier.
 - DB-backed test tiers load only `.env.test.db`/`.env.test.migration` or process env. They require `ALLOW_DB_TESTS=1` plus `TEST_DATABASE_URL` or `TEST_MIGRATION_DATABASE_URL`, and refuse database names that do not clearly contain `test` or `ci`.
