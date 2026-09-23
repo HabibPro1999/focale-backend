@@ -32,12 +32,11 @@ table = **29 tables**, **19 pg enums**.
   are nullable `text[]` with a default (Prisma scalar-list quirk on CockroachDB — no
   NOT NULL); `applicable_roles` is a nullable `RegistrationRole[]` enum array.
 
-## Raw-SQL-only indexes — NOT tracked by drizzle-kit
+## Raw-SQL-only indexes — applied by the migration runner
 
 Drizzle's schema builder cannot express partial (`WHERE`) unique indexes or GIN /
-inverted indexes, so **`drizzle-kit generate` / `drizzle-kit migrate` will never see or
-track these**. They live in the hand-written `migrations/0001_raw_indexes.sql`, applied
-after `0000_init.sql`, with index NAMES byte-for-byte identical to the legacy
+inverted indexes, so these remain hand-written SQL in `migrations/0001_raw_indexes.sql`.
+The unified runner applies them after `0000_init.sql`, with index NAMES byte-for-byte identical to the legacy
 CockroachDB migrations (app code matches on them for P2002 mapping and dedupe guards):
 
 | Index | Table | Kind |

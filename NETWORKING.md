@@ -29,21 +29,24 @@ A missing embedding credential leaves the participant directory usable with an e
 
 ## Database migration
 
-Existing databases must already have the platform baseline through0011 applied. Do not rerun the baseline on an existing database.
+Existing databases must already have the platform baseline through 0011 applied. The unified runner refuses to run against an existing database without its ledger; item 1.4 must adopt the existing history first.
 
-PostgreSQL requires the pgvector extension package installed on the server. The networking migration runner enables the extension. CockroachDB uses its native `VECTOR` type; the runner detects CockroachDB and does not execute `CREATE EXTENSION`. Verify the deployed CockroachDB version has native vector support before migration.
+PostgreSQL requires the pgvector extension package installed on the server and the `vector` extension installed in the database before migration 0013. The runner checks for it and never installs extensions. CockroachDB uses native `VECTOR`; the runner detects CockroachDB and does not check for a PostgreSQL extension. Verify the deployed CockroachDB version has native vector support before migration.
 
 From the backend root:
 
 ```sh
+# Build the package so the compatibility shim can delegate to the compiled CLI.
+pnpm --filter @app/db build
+
 # Print the networking migration plan without connecting or changing a database.
 pnpm --filter @app/db exec node scripts/migrate-networking.mjs
 
-# Apply additive networking migrations to the explicitly configured database.
+# Apply on a fresh database, or after an existing database has been adopted.
 pnpm --filter @app/db exec node scripts/migrate-networking.mjs --apply
 ```
 
-The runner records migration checksums and skips previously applied files; changed applied migrations cause an error. Future changes belong in a new numbered migration. Existing `drizzle-kit migrate` only knows migrations in its journal, so use the networking runner for these manually maintained migrations.
+The shim delegates to the unified runner, which records migration checksums and skips previously applied files; changed applied migrations cause an error. Future changes belong in a new numbered migration. Existing databases without the unified ledger require adoption before `apply` will proceed. Adoption is explicitly deferred to plan item 1.4 in this branch, so do not apply migrations to an existing database until that step is available.
 
 Vector lookup currently uses exact cosine distance within eligible event profiles. This keeps relevance and tenant filtering explicit. Evaluate both recall and latency before adding engine-specific approximate indexes; an approximate index is not automatically used by a weighted multi-vector ranking query.
 
@@ -77,6 +80,9 @@ After fixing provider credentials or a delivery failure, inspect job state and e
 The local QA setup uses a `demo-` Firebase Auth emulator project and disposable PostgreSQL databases. The API launcher in the local QA directory removes real email, storage service-account and embedding credentials from its process environment.
 
 ```sh
+# Build the CLI used by the compatibility shim.
+pnpm --filter @app/db build
+
 # Bootstrap only an EMPTY local database with a dedicated networking_test name.
 DATABASE_URL=postgresql://localhost/focale_networking_test_example \
   pnpm --filter @app/db exec node scripts/migrate-networking.mjs --apply --bootstrap-test
