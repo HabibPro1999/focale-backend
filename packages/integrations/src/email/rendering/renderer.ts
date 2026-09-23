@@ -6,7 +6,14 @@
 
 import mjml2html from "mjml";
 import { escapeHtml } from "@app/shared";
-import type { TiptapDocument, TiptapNode, TiptapMark } from "@app/contracts";
+import {
+  EmailFontSizeSchema,
+  EmailLineHeightSchema,
+  EmailTextAlignSchema,
+  type TiptapDocument,
+  type TiptapNode,
+  type TiptapMark,
+} from "@app/contracts";
 import type { MjmlCompilationResult } from "./types";
 
 // =============================================================================
@@ -93,7 +100,12 @@ export function compileMjmlToHtml(mjml: string): MjmlCompilationResult {
   // the signature to the real sync shape at the call site.
   const compile = mjml2html as unknown as (
     input: string,
-    opts: { validationLevel: string; minify: boolean; beautify: boolean },
+    opts: {
+      validationLevel: string;
+      minify: boolean;
+      beautify: boolean;
+      ignoreIncludes: boolean;
+    },
   ) => {
     html: string;
     errors: Array<{ message?: string; formattedMessage?: string }>;
@@ -102,6 +114,7 @@ export function compileMjmlToHtml(mjml: string): MjmlCompilationResult {
     validationLevel: "strict",
     minify: false,
     beautify: false,
+    ignoreIncludes: true,
   });
 
   const errors = (result.errors || []).filter((error) => {
@@ -174,9 +187,26 @@ const LINK_BUTTON_LABELS: Record<string, string> = {
   paymentLink: "Envoyer le justificatif de paiement",
 };
 
+function safeTextAlign(value: unknown): string {
+  const parsed = EmailTextAlignSchema.safeParse(value);
+  return parsed.success ? parsed.data : "left";
+}
+
+function safeFontSize(value: unknown): string | undefined {
+  if (value == null) return undefined;
+  const parsed = EmailFontSizeSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+function safeLineHeight(value: unknown): string | undefined {
+  if (value == null) return undefined;
+  const parsed = EmailLineHeightSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
 function renderParagraph(node: TiptapNode): string {
   const nodes = node.content || [];
-  const align = (node.attrs?.textAlign as string) || "left";
+  const align = safeTextAlign(node.attrs?.textAlign);
 
   const nonEmptyNodes = nodes.filter(
     (n) => !(n.type === "text" && (!n.text || n.text.trim() === "")),
@@ -185,16 +215,17 @@ function renderParagraph(node: TiptapNode): string {
     const varId = (nonEmptyNodes[0].attrs?.id as string) || "";
     if (LINK_VARIABLE_IDS.has(varId)) {
       const label = LINK_BUTTON_LABELS[varId] || varId;
-      return `<mj-button href="{{${varId}}}" align="${align}">${label}</mj-button>`;
+      return `<mj-button href="{{${escapeHtml(varId)}}}" align="${escapeHtml(align)}">${label}</mj-button>`;
     }
   }
 
   const content = renderInlineContent(nodes);
 
-  const attrs: string[] = [`align="${align}"`];
-  if (node.attrs?.fontSize) attrs.push(`font-size="${node.attrs.fontSize}"`);
-  if (node.attrs?.lineHeight)
-    attrs.push(`line-height="${node.attrs.lineHeight}"`);
+  const attrs: string[] = [`align="${escapeHtml(align)}"`];
+  const fontSize = safeFontSize(node.attrs?.fontSize);
+  const lineHeight = safeLineHeight(node.attrs?.lineHeight);
+  if (fontSize) attrs.push(`font-size="${escapeHtml(fontSize)}"`);
+  if (lineHeight) attrs.push(`line-height="${escapeHtml(lineHeight)}"`);
 
   if (!content || content.trim() === "") {
     return "<mj-text>&nbsp;</mj-text>";
@@ -206,7 +237,7 @@ function renderParagraph(node: TiptapNode): string {
 function renderHeading(node: TiptapNode): string {
   const level = (node.attrs?.level as number) || 1;
   const content = renderInlineContent(node.content || []);
-  const align = (node.attrs?.textAlign as string) || "left";
+  const align = safeTextAlign(node.attrs?.textAlign);
 
   const sizes: Record<number, string> = {
     1: "28px",
@@ -229,7 +260,7 @@ function renderHeading(node: TiptapNode): string {
   const fontSize = sizes[level] || "14px";
   const lineHeight = lineHeights[level] || "1.4";
 
-  return `<mj-text align="${align}" font-size="${fontSize}" font-weight="bold" line-height="${lineHeight}" padding-bottom="10px">${content}</mj-text>`;
+  return `<mj-text align="${escapeHtml(align)}" font-size="${escapeHtml(fontSize)}" font-weight="bold" line-height="${escapeHtml(lineHeight)}" padding-bottom="10px">${content}</mj-text>`;
 }
 
 function renderBulletList(node: TiptapNode): string {
@@ -277,7 +308,7 @@ function renderImage(node: TiptapNode): string {
 
   if (!src) return "";
 
-  return `<mj-image src="${src}" alt="${alt}" width="${width}" />`;
+  return `<mj-image src="${src}" alt="${alt}" width="${escapeHtml(width)}" />`;
 }
 
 // =============================================================================
@@ -304,10 +335,10 @@ export function renderInlineNode(node: TiptapNode): string {
 
     if (LINK_VARIABLE_IDS.has(varId)) {
       const label = LINK_BUTTON_LABELS[varId] || varId;
-      return `<a href="{{${varId}}}" target="_blank" style="color: #4F46E5;">${label}</a>`;
+      return `<a href="{{${escapeHtml(varId)}}}" target="_blank" style="color: #4F46E5;">${label}</a>`;
     }
 
-    return `{{${varId}}}`;
+    return `{{${escapeHtml(varId)}}}`;
   }
 
   if (node.type === "hardBreak") {
@@ -343,7 +374,7 @@ export function applyMarks(text: string, marks: TiptapMark[]): string {
         break;
       case "link": {
         const href = escapeHtml(String(mark.attrs?.href || "#"));
-        const target = (mark.attrs?.target as string) || "_blank";
+        const target = escapeHtml(String(mark.attrs?.target || "_blank"));
         result = `<a href="${href}" target="${target}" style="color: #4F46E5;">${result}</a>`;
         break;
       }
