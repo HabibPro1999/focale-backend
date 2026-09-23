@@ -5,7 +5,7 @@ export default defineConfig({
   ...resolveConditions,
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "tests/helpers/**/*.test.ts"],
     setupFiles: ["../../vitest.unit.setup.ts"],
   },
 });

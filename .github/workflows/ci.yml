@@ -29,3 +29,79 @@ jobs:
       - run: pnpm test
       - run: pnpm test:runtime
       - run: pnpm audit --prod --audit-level=high
+
+  db:
+    name: db / ${{ matrix.engine }} / ${{ matrix.command }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - engine: postgres
+            command: test:migration
+          - engine: postgres
+            command: test:db
+          - engine: postgres
+            command: test:concurrency
+          - engine: cockroach
+            command: test:migration
+          - engine: cockroach
+            command: test:db
+          - engine: cockroach
+            command: test:concurrency
+    continue-on-error: ${{ matrix.engine == 'cockroach' && matrix.command != 'test:migration' }}
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: focale_ci_admin
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d focale_ci_admin"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      ALLOW_DB_TESTS: "1"
+      TEST_DB_ADMIN_URL: ${{ matrix.engine == 'postgres' && 'postgresql://postgres:postgres@127.0.0.1:5432/focale_ci_admin' || 'postgresql://root@127.0.0.1:26257/focale_ci_admin?sslmode=disable' }}
+      TEST_DB_ALLOWED_HOSTS: 127.0.0.1
+      TEST_DB_MAX_WORKERS: ${{ matrix.engine == 'postgres' && '2' || '1' }}
+      TEST_DB_SETUP_TIMEOUT_MS: ${{ matrix.engine == 'postgres' && '120000' || '300000' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 10.12.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Start disposable CockroachDB 26.2.5
+        if: matrix.engine == 'cockroach'
+        run: |
+          docker run -d --name focale-ci-crdb -p 26257:26257 -p 8080:8080 \
+            cockroachdb/cockroach:v26.2.5 start-single-node --insecure \
+            --listen-addr=0.0.0.0:26257 --http-addr=0.0.0.0:8080 \
+            --store=type=mem,size=1GiB
+          for attempt in $(seq 1 60); do
+            if docker exec focale-ci-crdb cockroach sql --insecure --host=localhost:26257 --execute='SELECT 1' >/dev/null 2>&1; then
+              break
+            fi
+            sleep 2
+          done
+          docker exec focale-ci-crdb cockroach sql --insecure --host=localhost:26257 \
+            --execute='CREATE DATABASE focale_ci_admin; SET CLUSTER SETTING feature.vector_index.enabled = true;'
+      - run: pnpm install --frozen-lockfile
+      - name: Run ${{ matrix.command }}
+        run: pnpm ${{ matrix.command }}
+
+  image:
+    name: image / migrator plan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build runtime image
+        run: docker build -f Dockerfile -t focale-backend:ci .
+      - name: Check migration plan in image
+        run: docker run --rm --entrypoint node focale-backend:ci packages/db/dist/migrator/cli.js plan

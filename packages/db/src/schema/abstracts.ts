@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   boolean,
   doublePrecision,
@@ -77,7 +78,12 @@ export const abstractThemes = pgTable(
     active: boolean().notNull().default(true),
     ...timestamps,
   },
-  (t) => [index("abstract_themes_config_id_active_idx").on(t.configId, t.active)],
+  (t) => [
+    index("abstract_themes_config_id_active_idx").on(t.configId, t.active),
+    uniqueIndex("abstract_themes_config_id_sort_order_active_key")
+      .on(t.configId, t.sortOrder)
+      .where(sql`${t.active}`),
+  ],
 );
 
 export const abstractCodeCounters = pgTable(
@@ -159,6 +165,9 @@ export const abstractBookJobs = pgTable(
     ),
     index("abstract_book_jobs_status_locked_until_idx").on(t.status, t.lockedUntil),
     index("abstract_book_jobs_locked_by_idx").on(t.lockedBy),
+    uniqueIndex("abstract_book_jobs_event_id_active_key")
+      .on(t.eventId)
+      .where(sql`${t.status} IN ('PENDING', 'RUNNING')`),
   ],
 );
 
@@ -210,6 +219,9 @@ export const abstracts = pgTable(
       t.eventId,
       t.authorEmailNormalized,
     ),
+    uniqueIndex("abstracts_event_id_author_email_normalized_key")
+      .on(t.eventId, t.authorEmailNormalized)
+      .where(sql`${t.authorEmailNormalized} IS NOT NULL`),
     index("abstracts_registration_id_idx").on(t.registrationId),
     uniqueIndex("abstracts_event_id_code_key").on(t.eventId, t.code),
   ],

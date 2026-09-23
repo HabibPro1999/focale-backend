@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
-import { abstracts, finalizeAbstractTxn, getDb, reopenAbstractTxn } from "@app/db";
+import {
+  abstractCodeCounters,
+  abstractThemes,
+  abstracts,
+  finalizeAbstractTxn,
+  getDb,
+  reopenAbstractTxn,
+} from "@app/db";
 import { dbTestsEnabled } from "../helpers/test-env";
 import { cleanupDatabase } from "../helpers/cleanup";
 import {
@@ -64,15 +71,14 @@ describe.runIf(dbTestsEnabled())("db tier: finalize / reopen", () => {
     expect(rowB.code).toBe("OC1-01");
   });
 
-  // H5: two themes sharing a sortOrder produce the identical code string
-  // (e.g. both OC0-01), violating abstracts_event_id_code_key. Without the
-  // fix, this raw 23505 escapes finalizeAbstractTxn as an opaque throw instead
-  // of a typed { ok: false, reason: "code_conflict" } result.
-  it("H5: two themes sharing a sortOrder surface a typed code_conflict instead of throwing", async () => {
+  // H5: a valid theme reorder can still make a later allocation collide with
+  // an already-issued code. This reproduces the unique violation without ever
+  // violating 0006's active-theme sortOrder constraint.
+  it("H5: a code collision after theme reordering returns a typed code_conflict", async () => {
     const event = await seedEvent({ status: "OPEN" });
     const config = await seedAbstractConfig({ eventId: event.id });
     const themeA = await seedAbstractTheme({ configId: config.id, sortOrder: 0 });
-    const themeB = await seedAbstractTheme({ configId: config.id, sortOrder: 0 });
+    const themeB = await seedAbstractTheme({ configId: config.id, sortOrder: 1 });
 
     const abstractA = await seedAbstract({ eventId: event.id, status: "SUBMITTED" });
     await linkAbstractTheme(abstractA.id, themeA.id);
@@ -88,17 +94,38 @@ describe.runIf(dbTestsEnabled())("db tier: finalize / reopen", () => {
     });
     expect(resultA.ok).toBe(true);
 
+    // The first code remains OC0-01 after its theme moves. Free slot 0 before
+    // moving themeB into it, keeping both ACTIVE sort orders unique.
+    await getDb()
+      .update(abstractThemes)
+      .set({ sortOrder: 2 })
+      .where(eq(abstractThemes.id, themeA.id));
+    await getDb()
+      .update(abstractThemes)
+      .set({ sortOrder: 0 })
+      .where(eq(abstractThemes.id, themeB.id));
+
     // Same finalType + same sortOrder ⇒ allocateAbstractCode's per-theme counter
-    // independently starts at 1 for themeB, producing the same "OC0-01" string.
-    await expect(
-      finalizeAbstractTxn({
+    // independently starts at 1 for themeB, producing the existing "OC0-01".
+    const resultB = await finalizeAbstractTxn({
         eventId: event.id,
         abstractId: abstractB.id,
         decision: "ACCEPTED",
         finalType: "ORAL_COMMUNICATION",
         performedBy: "test-admin",
-      }),
-    ).resolves.toEqual({ ok: false, reason: "code_conflict" });
+      });
+    expect(resultB).toEqual({ ok: false, reason: "code_conflict" });
+
+    const [unfinalized] = await getDb()
+      .select({ status: abstracts.status, code: abstracts.code, codeNumber: abstracts.codeNumber })
+      .from(abstracts)
+      .where(eq(abstracts.id, abstractB.id));
+    expect(unfinalized).toMatchObject({ status: "SUBMITTED", code: null, codeNumber: null });
+    const rolledBackCounter = await getDb()
+      .select({ id: abstractCodeCounters.id })
+      .from(abstractCodeCounters)
+      .where(eq(abstractCodeCounters.themeId, themeB.id));
+    expect(rolledBackCounter).toHaveLength(0);
   });
 
   // M6: reopen must clear presentedAt/presentedBy from a prior decision cycle,

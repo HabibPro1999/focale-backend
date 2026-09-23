@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   index,
   integer,
@@ -5,6 +6,7 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { idPk, timestamps } from "../helpers";
 
@@ -47,6 +49,7 @@ export const outboxEvents = pgTable(
       t.aggregateId,
     ),
     index("outbox_events_client_id_event_id_idx").on(t.clientId, t.eventId),
+    uniqueIndex("outbox_events_dedupe_key_key").on(t.dedupeKey).where(sql`${t.dedupeKey} IS NOT NULL`),
   ],
 );
 

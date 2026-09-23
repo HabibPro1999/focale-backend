@@ -5,10 +5,8 @@
 // non-UTC zone. Before the fix, the raw path skewed by the host offset (~1h on
 // UTC+1) because node-postgres parses OID 1114 as process-local.
 //
-// Gated: runs only when TZ_TEST_DATABASE_URL points at a reachable postgres;
-// otherwise every case skips (normal CI/dev has no DB).
-//
-//   TZ_TEST_DATABASE_URL=postgres://user:pass@localhost:5432/db pnpm --filter @app/db test
+// This is in the guarded real-DB tier. setup.db gives each file its own
+// disposable migrated database before the first query.
 //
 // Force a non-UTC process TZ; Node re-reads process.env.TZ per Date op.
 process.env.TZ = "Africa/Tunis";
@@ -17,11 +15,9 @@ import { sql } from "drizzle-orm";
 import { pgTable, text, timestamp } from "drizzle-orm/pg-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 // client reads DATABASE_URL lazily inside getPool(), so a static import is fine
-// as long as DATABASE_URL is set before the first getDb() call (below).
-import { getDb } from "./client";
-
-const url = process.env.TZ_TEST_DATABASE_URL;
-if (url) process.env.DATABASE_URL = url;
+// because the real-DB setup assigns it before beforeAll executes.
+import { getDb } from "../../src/client";
+import { dbTestsEnabled } from "../helpers/test-env";
 
 // Mirror the production schema: naive `timestamp` (no tz), ms precision, with a
 // DEFAULT now() column and a $defaultFn (JS Date) column — exactly helpers.ts.
@@ -33,44 +29,26 @@ const probe = pgTable("tz_correctness_probe", {
     .$defaultFn(() => new Date()),
 });
 
-describe.skipIf(!url)("timezone correctness (real postgres)", () => {
-  let reachable = false;
-
+describe.runIf(dbTestsEnabled())("timezone correctness (real database)", () => {
   beforeAll(async () => {
-    try {
-      const db = getDb();
-      await db.execute(sql`select 1`);
-      await db.execute(sql`
-        create table if not exists tz_correctness_probe (
-          id text primary key,
-          created_at timestamp(3) not null default now(),
-          fn_at timestamp(3) not null
-        )`);
-      await db.execute(sql`truncate tz_correctness_probe`);
-      reachable = true;
-    } catch (e) {
-      console.error("[tz-test] unreachable:", (e as Error).message);
-      reachable = false;
-    }
+    await getDb().execute(sql`select 1`);
+    await getDb().execute(sql`
+      create table tz_correctness_probe (
+        id text primary key,
+        created_at timestamp(3) not null default now(),
+        fn_at timestamp(3) not null
+      )`);
   });
 
   afterAll(async () => {
-    if (reachable) {
-      try {
-        await getDb().execute(sql`drop table if exists tz_correctness_probe`);
-      } catch {
-        /* ignore */
-      }
-    }
+    await getDb().execute(sql`drop table if exists tz_correctness_probe`);
   });
 
-  it("process runs in a non-UTC zone (offset != 0)", (t) => {
-    if (!reachable) return t.skip();
+  it("process runs in a non-UTC zone (offset != 0)", () => {
     expect(new Date().getTimezoneOffset()).not.toBe(0);
   });
 
-  it("drizzle write → read back yields the same instant (stored value is UTC wall)", async (t) => {
-    if (!reachable) return t.skip();
+  it("drizzle write → read back yields the same instant (stored value is UTC wall)", async () => {
     const at = new Date();
     await getDb().insert(probe).values({ id: "rw", fnAt: at });
 
@@ -103,8 +81,7 @@ describe.skipIf(!url)("timezone correctness (real postgres)", () => {
     expect(Math.abs(skewMs - offsetMs)).toBeLessThan(1000);
   });
 
-  it("DEFAULT now() row and $defaultFn (JS Date) row agree within tolerance", async (t) => {
-    if (!reachable) return t.skip();
+  it("DEFAULT now() row and $defaultFn (JS Date) row agree within tolerance", async () => {
     // createdAt via DEFAULT now() (server, UTC-pinned session); fnAt via JS Date.
     await getDb().insert(probe).values({ id: "def", fnAt: new Date() });
     const [row] = await getDb().select().from(probe).where(sql`id = 'def'`);
@@ -114,8 +91,7 @@ describe.skipIf(!url)("timezone correctness (real postgres)", () => {
     expect(Math.abs(created - fn)).toBeLessThan(5000);
   });
 
-  it("age of a just-inserted now() row is ~0 despite Africa/Tunis TZ", async (t) => {
-    if (!reachable) return t.skip();
+  it("age of a just-inserted now() row is ~0 despite Africa/Tunis TZ", async () => {
     // Insert via raw SQL now() (timestamptz coerced into a naive column using
     // the session TimeZone — the exact write the verifier flagged as skewing on
     // non-UTC hosts). With the session pinned UTC it stores UTC wall time.

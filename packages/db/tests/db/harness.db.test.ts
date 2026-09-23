@@ -3,6 +3,7 @@ import { getDb, getEventAccessById, listEventAccessRows, events } from "@app/db"
 import { dbTestsEnabled } from "../helpers/test-env";
 import { cleanupDatabase } from "../helpers/cleanup";
 import { seedEvent, seedEventAccess } from "../helpers/factories";
+import { assertDisposableDatabaseUrl } from "@app/db/testing";
 
 // General real-DB tier: proves the ported harness (env gate, factories, FK-ordered
 // cleanup) works against the live schema and that @app/db query fns round-trip.
@@ -10,10 +11,10 @@ describe.runIf(dbTestsEnabled())("db tier: harness", () => {
   beforeEach(cleanupDatabase);
   afterEach(cleanupDatabase);
 
-  it("runs against an explicitly allowed disposable database", () => {
+  it("runs against its own explicitly allowed scratch database", () => {
     expect(process.env.ALLOW_DB_TESTS).toBe("1");
-    expect(process.env.TEST_DATABASE_URL).toBeTruthy();
-    expect(process.env.DATABASE_URL).toBe(process.env.TEST_DATABASE_URL);
+    expect(process.env.TEST_DB_ADMIN_URL).toBeTruthy();
+    expect(assertDisposableDatabaseUrl(process.env.DATABASE_URL!).pathname).toMatch(/^\/focale_test_/);
   });
 
   it("factories seed and query fns read them back", async () => {

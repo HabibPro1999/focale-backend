@@ -74,6 +74,7 @@ export const registrations = pgTable(
     index("registrations_sponsorship_code_idx").on(t.sponsorshipCode),
     index("registrations_payment_status_updated_at_idx").on(t.paymentStatus, t.updatedAt),
     uniqueIndex("registrations_email_form_id_key").on(t.email, t.formId),
+    index("registrations_access_type_ids_inverted_idx").using("gin", t.accessTypeIds),
   ],
 );
 
