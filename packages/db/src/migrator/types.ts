@@ -32,7 +32,7 @@ export interface CatalogObjectProbe {
   name: string;
   table?: string;
   expectedPresent: boolean;
-  source: "ddl" | "directive";
+  source: "ddl" | "manifest" | "directive";
 }
 
 export interface CatalogSqlProbe {

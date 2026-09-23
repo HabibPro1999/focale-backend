@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 import { defaultMigrationsDirectory, loadMigrations } from "./migration";
-import { inspectMigrationCatalog } from "./catalog";
+import {
+  deriveCatalogProbes,
+  deriveEffectiveCatalogProbes,
+  inspectCatalogProbes,
+  inspectMigrationCatalog,
+} from "./catalog";
 import type { DatabaseEngine, MigrationDefinition, MigrationVariant } from "./migration";
 import { statementChecksum } from "./migration";
 import type {
@@ -30,6 +35,7 @@ export interface ApplyMigrationsResult {
   applied: string[];
   deferred: string[];
   skipped: string[];
+  unknownPreconditions: string[];
 }
 
 export interface VerifyMigrationsResult {
@@ -383,6 +389,36 @@ async function evaluateSafeCondition(client: Client, sql: string): Promise<boole
   return firstValue === true || firstValue === "true" || firstValue === 1;
 }
 
+function missingRelationFrom(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const candidate = error as { code?: unknown; message?: unknown };
+  if (candidate.code !== "42P01" || typeof candidate.message !== "string") return undefined;
+  const match = candidate.message.match(/relation\s+["']?([a-zA-Z_][a-zA-Z0-9_$.]*)/i);
+  return match?.[1];
+}
+
+function migrationCreatesTable(migration: MigrationDefinition, relationName: string): boolean {
+  const name = relationName.split(".").at(-1)?.replaceAll('"', "");
+  if (!name) return false;
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const sql = migration.source.replace(/--[^\r\n]*/g, " ").replace(/\/\*[\s\S]*?\*\//g, " ");
+  return new RegExp(
+    `CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?(?:(?:public|"public")\\s*\\.\\s*)?(?:"${escaped}"|${escaped})(?![a-zA-Z0-9_$])`,
+    "i",
+  ).test(sql);
+}
+
+function pendingMigrationCreatingRelation(
+  relationName: string,
+  earlierMigrations: MigrationDefinition[],
+  records: Map<string, SchemaMigrationRecord>,
+): MigrationDefinition | undefined {
+  return earlierMigrations.find((migration) => {
+    const record = records.get(migration.id);
+    return record === undefined && migrationCreatesTable(migration, relationName);
+  });
+}
+
 export async function writeMigrationRecord(
   client: Client,
   migration: MigrationDefinition,
@@ -405,6 +441,25 @@ export async function writeMigrationRecord(
   );
   if (result.rowCount !== 1) {
     throw new Error(`Refusing to replace an existing non-deferred migration record: ${migration.id}`);
+  }
+}
+
+async function writeDeferredMigrationRecordWithLeaseFence(
+  client: Client,
+  migration: MigrationDefinition,
+  appliedBy: string,
+  evidence: Record<string, unknown>,
+  owner: string,
+  heartbeat?: LeaseHeartbeat,
+): Promise<void> {
+  await client.query("BEGIN");
+  try {
+    await assertLeaseAlive(client, owner, heartbeat);
+    await writeMigrationRecord(client, migration, "deferred", appliedBy, evidence);
+    await commitWithLeaseFence(client, owner, heartbeat);
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
   }
 }
 
@@ -573,24 +628,45 @@ export async function applyMigrations(
 
   if (options.dryRun) {
     await assertAdoptionRequiredIfNonEmpty(client);
-    for (const migration of selected) {
+    const unknownPreconditions: string[] = [];
+    for (const [index, migration] of selected.entries()) {
       const record = byId.get(migration.id);
       if (record) assertExistingRecord(record, migration);
-      if (record?.status === "applied" || record?.status === "baseline") skipped.push(migration.id);
-      else if (record?.status === "deferred") deferred.push(migration.id);
-      else if (migration.directives.deferUnless && !(await evaluateSafeCondition(client, migration.directives.deferUnless))) {
-        if (!migration.directives.deferrable) {
-          throw new Error(`Migration ${migration.id} precondition is false and it is not deferrable`);
-        }
-        deferred.push(migration.id);
-      } else {
-        const requirementFailure = await unmetRequirement(client, engine, migration);
-        if (requirementFailure && mayDeferRequirement(engine, migration, options)) deferred.push(migration.id);
-        else if (requirementFailure) throw new Error(requirementFailure);
-        else applied.push(migration.id);
+      if (record?.status === "applied" || record?.status === "baseline") {
+        skipped.push(migration.id);
+        continue;
       }
+      if (record?.status === "deferred") {
+        deferred.push(migration.id);
+        continue;
+      }
+      if (migration.directives.deferUnless) {
+        let safe: boolean;
+        try {
+          safe = await evaluateSafeCondition(client, migration.directives.deferUnless);
+        } catch (error) {
+          const missingRelation = missingRelationFrom(error);
+          const prerequisite = missingRelation
+            ? pendingMigrationCreatingRelation(missingRelation, selected.slice(0, index), byId)
+            : undefined;
+          if (!prerequisite) throw error;
+          unknownPreconditions.push(`${migration.id} (${missingRelation} will be created by pending ${prerequisite.id})`);
+          continue;
+        }
+        if (!safe) {
+          if (!migration.directives.deferrable) {
+            throw new Error(`Migration ${migration.id} precondition is false and it is not deferrable`);
+          }
+          deferred.push(migration.id);
+          continue;
+        }
+      }
+      const requirementFailure = await unmetRequirement(client, engine, migration);
+      if (requirementFailure && mayDeferRequirement(engine, migration, options)) deferred.push(migration.id);
+      else if (requirementFailure) throw new Error(requirementFailure);
+      else applied.push(migration.id);
     }
-    return { engine, applied, deferred, skipped };
+    return { engine, applied, deferred, skipped, unknownPreconditions };
   }
 
   await assertAdoptionRequiredIfNonEmpty(client);
@@ -627,10 +703,10 @@ export async function applyMigrations(
           if (!migration.directives.deferrable) {
             throw new Error(`Migration ${migration.id} precondition is false and it is not deferrable`);
           }
-          await writeMigrationRecord(client, migration, "deferred", appliedBy, {
+          await writeDeferredMigrationRecordWithLeaseFence(client, migration, appliedBy, {
             reason: "defer-unless precondition returned false",
             condition: migration.directives.deferUnless,
-          });
+          }, owner, heartbeat);
           deferred.push(migration.id);
           latestById.set(migration.id, {
             id: migration.id,
@@ -648,9 +724,9 @@ export async function applyMigrations(
       const requirementFailure = await unmetRequirement(client, engine, migration);
       if (requirementFailure) {
         if (!mayDeferRequirement(engine, migration, options)) throw new Error(requirementFailure);
-        await writeMigrationRecord(client, migration, "deferred", appliedBy, {
+        await writeDeferredMigrationRecordWithLeaseFence(client, migration, appliedBy, {
           reason: requirementFailure,
-        });
+        }, owner, heartbeat);
         deferred.push(migration.id);
         latestById.set(migration.id, {
           id: migration.id,
@@ -680,7 +756,7 @@ export async function applyMigrations(
     await heartbeat?.close().catch(() => undefined);
     await releaseMigrationLease(client, owner).catch(() => undefined);
   }
-  return { engine, applied, deferred, skipped };
+  return { engine, applied, deferred, skipped, unknownPreconditions: [] };
 }
 
 /** Engine-aware entry point for the disposable-database helper in plan item 1.3. */
@@ -712,6 +788,12 @@ export async function verifyMigrations(
   const records = await listMigrationRecords(client);
   const byId = new Map(records.map((record) => [record.id, record]));
   const knownIds = new Set(migrations.map((migration) => migration.id));
+  const effectiveCatalogProbes = options.schema
+    ? deriveEffectiveCatalogProbes(migrations.filter((migration) => {
+        const status = byId.get(migration.id)?.status;
+        return status === "applied" || status === "baseline";
+      }))
+    : new Map();
 
   for (const migration of migrations) {
     const record = byId.get(migration.id);
@@ -728,10 +810,13 @@ export async function verifyMigrations(
       continue;
     }
     if (options.schema) {
-      const catalog = await inspectMigrationCatalog(client, engine, migration);
-      if (catalog.state === "partial" || catalog.state === "none") {
-        errors.push(`Migration ${migration.id} schema probes passed ${catalog.matched}/${catalog.total}`);
-      } else if (catalog.state === "unverifiable") {
+      const probes = effectiveCatalogProbes.get(migration.id) ?? [];
+      if (probes.length) {
+        const catalog = await inspectCatalogProbes(client, engine, migration, probes);
+        if (catalog.state === "partial" || catalog.state === "none") {
+          errors.push(`Migration ${migration.id} final schema probes passed ${catalog.matched}/${catalog.total}`);
+        }
+      } else if (deriveCatalogProbes(migration).length === 0) {
         warnings.push(`Migration ${migration.id} has no catalog probes`);
       }
     }

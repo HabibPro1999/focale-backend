@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import type { Client } from "pg";
 import { describe, expect, it } from "vitest";
-import { deriveCatalogProbes } from "./catalog";
+import { deriveCatalogProbes, deriveEffectiveCatalogProbes } from "./catalog";
 import { assertAdoptionRequiredIfNonEmpty } from "./runner";
 import { redactCredentials } from "./security";
 import {
@@ -9,8 +9,8 @@ import {
   loadMigrations,
   migrationChecksum,
   parseMigrationDirectives,
+  sha256,
   splitMigrationStatements,
-  statementChecksum,
 } from "./migration";
 import {
   assertLegacyNetworking0018Crosswalk,
@@ -54,6 +54,18 @@ describe("unified migration format", () => {
   it("splits only on explicit breakpoint markers, never on SQL semicolons", () => {
     expect(splitMigrationStatements("SELECT 1; SELECT 2;")).toEqual(["SELECT 1; SELECT 2;"]);
     expect(splitMigrationStatements("SELECT 1;\n--> statement-breakpoint\nSELECT 2;")).toHaveLength(2);
+    expect(splitMigrationStatements("SELECT 1;--> statement-breakpoint\nSELECT 2;")).toEqual(["SELECT 1", "SELECT 2;"]);
+  });
+
+  it("splits every inline Drizzle boundary in the baseline and networking files", async () => {
+    const postgres = await loadMigrations(migrationsDirectory, "postgres");
+    for (const id of ["0000", "0012"]) {
+      const migration = postgres.find((candidate) => candidate.id === id);
+      expect(migration).toBeDefined();
+      const markerCount = migration!.source.match(/statement-breakpoint/g)?.length ?? 0;
+      expect(markerCount).toBeGreaterThan(0);
+      expect(migration!.statements).toHaveLength(markerCount + 1);
+    }
   });
 
   it("records three separate 0010 statements for CockroachDB", async () => {
@@ -105,13 +117,16 @@ describe("unified migration format", () => {
     expect(legacyFile).toBeDefined();
     assertLegacyNetworking0018Crosswalk(migration!);
 
-    // This split exists only to lock down hashes emitted by the historical
-    // migrate-networking.mjs implementation for this one immutable fixture.
-    const historicalChecksums = legacyFile!.source
+    // Reproduce the immutable 1.1 shim byte-for-byte: filter empty raw chunks,
+    // preserve leading newlines/whitespace, then hash each chunk without trim.
+    const legacySource = legacyFile!.source
+      .split(/(?<=\n)/)
+      .filter((line) => !/^\s*--\s*migrate:/i.test(line))
+      .join("");
+    const historicalChecksums = legacySource
       .split(";")
-      .map((statement) => statement.trim())
-      .filter(Boolean)
-      .map(statementChecksum);
+      .filter((statement) => statement.trim())
+      .map(sha256);
     expect(historicalChecksums).toEqual(
       LEGACY_NETWORKING_0018_CROSSWALK.steps.map((step) => step.legacyChecksum),
     );
@@ -137,6 +152,42 @@ describe("unified migration format", () => {
     expect(probes).toContainEqual(expect.objectContaining({ kind: "index", name: "networking_spaces_event_name_key", table: "networking_spaces" }));
     expect(probes).toContainEqual(expect.objectContaining({ kind: "column", name: "space_id", table: "networking_tables" }));
     expect(probes).toContainEqual(expect.objectContaining({ kind: "constraint", name: "networking_tables_two_people_check", table: "networking_tables" }));
+  });
+
+  it("declares complete catalog probes for the historical multi-statement networking files", async () => {
+    const postgres = await loadMigrations(migrationsDirectory, "postgres");
+    const probesById = new Map(postgres.map((migration) => [
+      migration.id,
+      deriveCatalogProbes(migration).filter((probe) => "kind" in probe),
+    ]));
+
+    expect(probesById.get("0015")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "column", name: "second_factor_verified_at", table: "networking_sessions", source: "manifest" }),
+      expect.objectContaining({ kind: "table", name: "networking_second_factors", source: "manifest" }),
+    ]));
+    expect(probesById.get("0016")).toHaveLength(3);
+    expect(probesById.get("0018")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "index", name: "networking_tables_event_name_key", expectedPresent: false, source: "manifest" }),
+      expect.objectContaining({ kind: "constraint", name: "networking_tables_two_people_check", source: "manifest" }),
+    ]));
+    expect(probesById.get("0019")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "index", name: "networking_messages_sender_created_idx", table: "networking_messages", source: "manifest" }),
+      expect.objectContaining({ kind: "index", name: "networking_notifications_unread_idx", table: "networking_notifications", source: "manifest" }),
+      expect.objectContaining({ kind: "index", name: "networking_meetings_requester_start_idx", table: "networking_meetings", source: "manifest" }),
+      expect.objectContaining({ kind: "index", name: "networking_meetings_recipient_start_idx", table: "networking_meetings", source: "manifest" }),
+    ]));
+  });
+
+  it("uses the final migration state for catalog checks when later DDL replaces an object", async () => {
+    const cockroach = await loadMigrations(migrationsDirectory, "cockroach");
+    const effective = deriveEffectiveCatalogProbes(cockroach);
+    const droppedIndex = [...effective.values()].flat().find((probe) =>
+      "kind" in probe && probe.kind === "index" && probe.name === "networking_tables_event_name_key",
+    );
+    expect(droppedIndex).toEqual(expect.objectContaining({ migrationId: "0018", expectedPresent: false }));
+    expect(effective.get("0012")?.some((probe) =>
+      "kind" in probe && probe.kind === "index" && probe.name === "networking_tables_event_name_key",
+    )).toBe(false);
   });
 
   it("requires a declared transaction mode and valid deferral condition", () => {
