@@ -3,7 +3,7 @@
 // and a dummy DATABASE_URL (unit/e2e tests never connect), supply the minimal
 // firebase-storage vars the schema refines require.
 process.env.NODE_ENV = "test";
-process.env.DATABASE_URL ??=
+process.env.DATABASE_URL =
   "postgresql://test_user:test_password@localhost:5432/focale_unit_test";
 process.env.CORS_ORIGIN ??= "http://localhost:8080";
 process.env.STORAGE_PROVIDER ??= "firebase";
