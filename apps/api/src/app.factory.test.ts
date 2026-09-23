@@ -17,3 +17,11 @@ describe("TRUST_PROXY", () => {
     expect(trustProxyHops({})).toBe(false);
   });
 });
+
+describe("unit-test environment", () => {
+  it("replaces an inherited database URL with the local dummy URL", () => {
+    expect(process.env.DATABASE_URL).toBe(
+      "postgresql://test_user:test_password@localhost:5432/focale_unit_test",
+    );
+  });
+});
