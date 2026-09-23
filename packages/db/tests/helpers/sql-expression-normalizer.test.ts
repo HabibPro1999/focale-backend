@@ -43,5 +43,12 @@ describe("normalizeSqlExpression", () => {
     expect(normalizeSqlExpression("E'Foo'")).not.toBe(normalizeSqlExpression("e'foo'"));
     expect(normalizeSqlExpression("$tag$A  B$tag$"))
       .not.toBe(normalizeSqlExpression("$tag$a b$tag$"));
+    expect(normalizeSqlExpression("$$Foo$$")).toBe("$$Foo$$");
+  });
+
+  it("restores dollar metacharacters inside string literals exactly", () => {
+    for (const literal of ["'$$'", "'$&'", "'$`'", "'$'''"]) {
+      expect(normalizeSqlExpression(literal)).toBe(literal);
+    }
   });
 });
