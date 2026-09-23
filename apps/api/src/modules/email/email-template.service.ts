@@ -125,7 +125,7 @@ export class EmailTemplateService {
     });
 
     const mjmlContent = renderTemplateToMjml(input.content);
-    const { html: htmlContent } = compileMjmlToHtml(mjmlContent);
+    const { html: htmlContent } = await compileMjmlToHtml(mjmlContent);
     const plainContent = extractPlainText(input.content);
 
     const values: EmailTemplateInsert = {
@@ -204,7 +204,9 @@ export class EmailTemplateService {
     if (input.content) {
       patch.content = input.content;
       patch.mjmlContent = renderTemplateToMjml(input.content);
-      patch.htmlContent = compileMjmlToHtml(patch.mjmlContent).html;
+      patch.htmlContent = (
+        await compileMjmlToHtml(patch.mjmlContent)
+      ).html;
       patch.plainContent = extractPlainText(input.content);
     }
     if (input.category !== undefined) patch.category = input.category;

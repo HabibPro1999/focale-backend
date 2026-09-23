@@ -207,7 +207,7 @@ export class CommitteeEmailsService {
     </mj-section>
   </mj-body>
 </mjml>`;
-    const { html } = compileMjmlToHtml(mjml);
+    const { html } = await compileMjmlToHtml(mjml);
 
     if (input.logAsInvite) {
       return this.sendAndLogInviteEmail({
