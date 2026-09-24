@@ -13,6 +13,7 @@ import {
   migrationAdoptionSupport,
   migrationAdoptionWorkflow,
   migrationLedgerExists,
+  refreshMigrationLease,
   verifyMigrations,
   type MigrationAdoptionReport,
   type MigrationDefinition,
@@ -262,6 +263,54 @@ describe.runIf(dbTestsEnabled())("migrate adopt on existing databases", () => {
       // apply still refuses the unadopted, non-empty schema.
       await expect(applyMigrations(database.client, migrations, { appliedBy: "adopt-test" })).rejects.toThrow(/run migrate adopt first/);
     });
+  });
+
+  describe("lease renewal during the ledger write", () => {
+    let database: ScratchDatabase;
+    beforeAll(async () => {
+      database = await scratch("adopt_lease_race");
+      await writeOldScriptLedger(database.client, migrations, { through: "0019" });
+    }, dbTestSetupTimeoutMs());
+
+    it("writes the ledger again when a heartbeat renewal commits inside its transaction", async () => {
+      const other = new Client({ connectionString: database.url });
+      await other.connect();
+      let renewed = false;
+      let writes = 0;
+      const support: typeof migrationAdoptionSupport = {
+        ...migrationAdoptionSupport,
+        ledger: {
+          ...migrationAdoptionSupport.ledger,
+          async writeMigration(...args: Parameters<typeof migrationAdoptionSupport.ledger.writeMigration>) {
+            writes += 1;
+            if (!renewed) {
+              renewed = true;
+              // What the heartbeat does every 30 s, landing while the ledger transaction is open.
+              const lock = await other.query<{ owner: string }>("SELECT owner FROM public.schema_migration_lock WHERE id = 1");
+              await refreshMigrationLease(other, lock.rows[0]!.owner);
+            }
+            return migrationAdoptionSupport.ledger.writeMigration(...args);
+          },
+        },
+      };
+      try {
+        const report = await migrationAdoptionWorkflow.run(
+          database.client,
+          database.engine,
+          migrations,
+          { writeLedger: true, appliedBy: "adopt-test", leaseConnectionString: database.url },
+          support,
+        );
+        expect(report.errors).toEqual([]);
+        const adopted = migrations.length - 1; // all but 0011
+        expect(report.written.migrations).toBe(adopted);
+        expect((await listMigrationRecords(database.client)).length).toBe(adopted);
+        // CockroachDB rejects the first commit at the lease fence (40001); the whole transaction is written again.
+        expect(writes).toBe(database.engine === "cockroach" ? 2 * adopted : adopted);
+      } finally {
+        await other.end();
+      }
+    }, dbTestSetupTimeoutMs());
   });
 
   describe("populated embeddings (old script stopped before the CockroachDB vector index)", () => {
