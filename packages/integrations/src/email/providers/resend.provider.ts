@@ -10,6 +10,7 @@ import {
   type WebhookEventPayload,
 } from "resend";
 import { logger } from "../../logger";
+import { integrationsConfig } from "../../config";
 import {
   getHeader,
   resolveEmailSender,
@@ -281,9 +282,10 @@ export class ResendProvider implements EmailProvider {
 }
 
 export function createResendProvider(): EmailProvider {
+  const { apiKey, webhookSecret } = integrationsConfig().email.resend;
   return new ResendProvider({
-    apiKey: process.env.RESEND_API_KEY,
-    webhookSecret: process.env.RESEND_WEBHOOK_SECRET,
+    apiKey,
+    webhookSecret,
     ...resolveEmailSender(),
   });
 }

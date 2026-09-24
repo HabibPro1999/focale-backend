@@ -1,8 +1,9 @@
 import { z } from "zod";
 
 // Database pool/session settings. One definition serves both the app-config
-// schema (fail fast at boot) and the db client, which reads process.env
-// directly when it lazily builds the pool.
+// schema (fail fast at boot) and the db client. The apps hand the parsed
+// settings to configureDb; tools and tests that never call it fall back to
+// resolveDbRuntimeSettings(process.env) when the pool is first built.
 
 /** Upper bound for every DB_*_MS setting (one hour). */
 export const DB_TIMEOUT_MAX_MS = 3_600_000;
@@ -57,10 +58,26 @@ export const dbEnvShape = {
     1,
     DB_POOL_MAX_LIMIT,
     `DB_POOL_MAX must be an integer from 1 to ${DB_POOL_MAX_LIMIT}`,
-  ),
-  DB_STATEMENT_TIMEOUT_MS: envTimeoutMs("DB_STATEMENT_TIMEOUT_MS"),
-  DB_IDLE_IN_TRANSACTION_TIMEOUT_MS: envTimeoutMs("DB_IDLE_IN_TRANSACTION_TIMEOUT_MS"),
-  DB_EXPORT_STATEMENT_TIMEOUT_MS: envTimeoutMs("DB_EXPORT_STATEMENT_TIMEOUT_MS"),
+  ).meta({
+    section: "database",
+    description: `Pool size per process (1-${DB_POOL_MAX_LIMIT}). Default ${DB_SETTING_DEFAULTS.poolMaxProduction} when NODE_ENV=production, ${DB_SETTING_DEFAULTS.poolMaxOther} otherwise.`,
+    example: String(DB_SETTING_DEFAULTS.poolMaxOther),
+  }),
+  DB_STATEMENT_TIMEOUT_MS: envTimeoutMs("DB_STATEMENT_TIMEOUT_MS").meta({
+    section: "database",
+    description: `Server-side statement timeout in ms (0 disables; otherwise ${DB_TIMEOUT_MIN_MS}-${DB_TIMEOUT_MAX_MS}).`,
+    example: String(DB_SETTING_DEFAULTS.statementTimeoutMs),
+  }),
+  DB_IDLE_IN_TRANSACTION_TIMEOUT_MS: envTimeoutMs("DB_IDLE_IN_TRANSACTION_TIMEOUT_MS").meta({
+    section: "database",
+    description: "Idle-in-transaction session timeout in ms (0 disables).",
+    example: String(DB_SETTING_DEFAULTS.idleInTransactionTimeoutMs),
+  }),
+  DB_EXPORT_STATEMENT_TIMEOUT_MS: envTimeoutMs("DB_EXPORT_STATEMENT_TIMEOUT_MS").meta({
+    section: "database",
+    description: "Statement timeout in ms for report/registration export fetches (0 disables).",
+    example: String(DB_SETTING_DEFAULTS.exportStatementTimeoutMs),
+  }),
 };
 
 const dbEnvSchema = z.object(dbEnvShape);

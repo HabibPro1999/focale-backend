@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import admin from "firebase-admin";
 import type { DecodedIdToken, Auth } from "firebase-admin/auth";
 import type { Storage } from "firebase-admin/storage";
+import { decodeFirebaseServiceAccount } from "@app/contracts";
+import { integrationsConfig } from "./config";
 
 // ponytail: lazy-init deviation from legacy (was eager at import). Still
 // fail-fast loudly on first use so the API/worker can boot in tests without
@@ -9,24 +11,13 @@ import type { Storage } from "firebase-admin/storage";
 
 /**
  * Resolve the Firebase Admin credential.
- * Priority: FIREBASE_SERVICE_ACCOUNT (base64-encoded JSON) → application default
- * (GOOGLE_APPLICATION_CREDENTIALS file path).
+ * Priority: FIREBASE_SERVICE_ACCOUNT (raw or base64-encoded JSON, validated at
+ * boot) → application default (GOOGLE_APPLICATION_CREDENTIALS file path).
  */
 function getCredential(): admin.credential.Credential {
-  const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT;
+  const serviceAccount = integrationsConfig().firebase.serviceAccount;
   if (serviceAccount) {
-    let parsed: object;
-    try {
-      const jsonString = Buffer.from(serviceAccount, "base64").toString(
-        "utf-8",
-      );
-      parsed = JSON.parse(jsonString);
-    } catch {
-      throw new Error(
-        "FIREBASE_SERVICE_ACCOUNT is not valid base64-encoded JSON. " +
-          "Ensure the environment variable contains a base64-encoded Firebase service account JSON file.",
-      );
-    }
+    const parsed = decodeFirebaseServiceAccount(serviceAccount);
     return admin.credential.cert(parsed as admin.ServiceAccount);
   }
   // Fallback to application default (GOOGLE_APPLICATION_CREDENTIALS file path)
@@ -38,7 +29,7 @@ let app: admin.app.App | null = null;
 /** Initialize (once) and return the Firebase Admin app. Fail-fast on bad creds. */
 function getApp(): admin.app.App {
   if (!app) {
-    const storageBucket = process.env.FIREBASE_STORAGE_BUCKET;
+    const storageBucket = integrationsConfig().firebase.storageBucket;
     app = admin.initializeApp({
       credential: getCredential(),
       ...(storageBucket && { storageBucket }),
@@ -80,8 +71,9 @@ type CachedLookup = { decoded: DecodedIdToken; expiresAt: number };
 const lookupCache = new Map<string, CachedLookup>();
 
 function lookupFallbackApiKey(): string | null {
-  if (process.env.FIREBASE_AUTH_LOOKUP_FALLBACK !== "true") return null;
-  return process.env.FIREBASE_WEB_API_KEY || null;
+  const firebase = integrationsConfig().firebase;
+  if (!firebase.authLookupFallback) return null;
+  return firebase.webApiKey || null;
 }
 
 function lookupCacheKey(idToken: string): string {
@@ -168,7 +160,7 @@ async function verifyTokenViaIdentityToolkit(
   idToken: string,
   apiKey: string,
 ): Promise<DecodedIdToken> {
-  const projectId = process.env.FIREBASE_PROJECT_ID;
+  const projectId = integrationsConfig().firebase.projectId;
   if (!projectId) {
     throw new Error("identitytoolkit: FIREBASE_PROJECT_ID is not configured");
   }

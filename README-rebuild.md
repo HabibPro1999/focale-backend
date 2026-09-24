@@ -52,14 +52,52 @@ artifact** for a specific event (TSHG themes + deadlines). It is intentionally
 
 ## Environment
 
-See **`.env.example.new`** for the full annotated list. The schema lives in
-`packages/contracts/src/app-config.ts` and is parsed eagerly at boot in each
-app's `core/config.ts` — invalid/missing values fail fast.
+One schema, `packages/contracts/src/app-config.ts`, covers every key both
+processes read; `.env.example` is **generated** from its `.meta()` docs
+(`pnpm env:example`; CI runs `pnpm env:example --check` and fails on drift).
+Each app parses the environment once at boot (`core/config.ts` `loadConfig`,
+fail fast with every failing key listed, never values) and hands typed slices
+to `@app/db` (`configureDb`) and `@app/integrations` (`configureIntegrations`).
+Blank values count as unset.
 
 Both processes read the **same** env. Key vars: `DATABASE_URL`, `PORT`,
-`CORS_ORIGIN`, `FIREBASE_*` / `STORAGE_PROVIDER` (+ `R2_*`), `EMAIL_PROVIDER`
-(+ `SENDGRID_*` / `RESEND_*`), `ADMIN_APP_URL`, `REALTIME_DISABLED`,
-`SSE_HEARTBEAT_MS`, `RUN_WORKERS`.
+`CORS_ORIGIN`, `TRUST_PROXY`, `FIREBASE_*` / `STORAGE_PROVIDER` (+ `R2_*`),
+`EMAIL_PROVIDER` (+ `SENDGRID_*` / `RESEND_*`), `ADMIN_APP_URL`,
+`PUBLIC_FORMS_URL`, `PUBLIC_LINK_ALLOWED_ORIGINS`, `NETWORKING_*`,
+`REALTIME_DISABLED`, `SSE_HEARTBEAT_MS`, `RUN_WORKERS`.
+
+Production (`NODE_ENV=production`) additionally requires:
+
+- `TRUST_PROXY`: explicit proxy IP/CIDR list, or `false` for direct traffic.
+- `CORS_ORIGIN`: explicit origins only (no `*`, no paths).
+- `ADMIN_APP_URL` (not the localhost default), `PUBLIC_FORMS_URL`,
+  `PUBLIC_LINK_ALLOWED_ORIGINS`.
+- The selected email provider's API key (`SENDGRID_API_KEY` or
+  `RESEND_API_KEY`) and a sender (`EMAIL_FROM_EMAIL` or `SENDGRID_FROM_EMAIL`).
+- `NETWORKING_TOKEN_SECRET` (32+ characters) unless `NETWORKING_DISABLED=true`.
+
+`FIREBASE_SERVICE_ACCOUNT` accepts raw JSON or base64 JSON;
+`NETWORKING_EMAIL_SENDERS` must be a JSON object.
+
+### Pre-deploy config check (operator, read-only)
+
+Run this against each service's environment (API and worker) before the first
+deploy of a build that tightens config rules (3.1 does):
+
+```bash
+node packages/contracts/dist/cli/check-config.js
+```
+
+It validates the process environment with the production rules (`NODE_ENV`
+forced to production) and prints only the names of failing keys and the rule
+each one breaks, never values. It connects to nothing and writes nothing; exit
+code 0 means the new build will accept that environment. It needs the new
+build's files, so run it where that build is installed with the service's
+environment: a Render one-off job or shell on the new image, or as the first
+step of the service's Pre-Deploy Command (a failure then stops the deploy
+before any instance switches). From a repo checkout, `pnpm build &&
+pnpm config:check` checks the current shell's environment. A new build that
+fails the rules would otherwise refuse to boot, listing the same keys.
 
 ## Health endpoints (API)
 

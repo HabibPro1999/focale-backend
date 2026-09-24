@@ -2,7 +2,11 @@ import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
 import { assertSchemaCurrent, closeDb, configureDb } from "@app/db";
 import { createLogger } from "@app/shared";
-import { setEmailStatusChangeListener, emitEmailLogRealtimeEvent } from "@app/integrations";
+import {
+  configureIntegrations,
+  emitEmailLogRealtimeEvent,
+  setEmailStatusChangeListener,
+} from "@app/integrations";
 import { WorkerModule } from "./worker.module";
 import { JobRunner } from "./job-runner";
 import { loadConfig } from "./core/config";
@@ -15,8 +19,14 @@ process.on("unhandledRejection", (reason) => {
 });
 
 async function bootstrap() {
-  const config = loadConfig(); // fail-fast at boot
-  configureDb({ applicationName: "focale-worker" });
+  // Parse the environment once (fail fast) and hand each package its slice.
+  const config = loadConfig();
+  configureDb({
+    applicationName: "focale-worker",
+    databaseUrl: config.DATABASE_URL,
+    settings: config.database,
+  });
+  configureIntegrations(config.integrations);
 
   // N3: emails can be queued/updated from either process — wire the same
   // listener here and in apps/api/src/main.ts so no email-log status change

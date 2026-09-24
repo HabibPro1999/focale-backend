@@ -2,6 +2,8 @@ import {
   Catch,
   HttpException,
   HttpStatus,
+  Inject,
+  Optional,
   type ArgumentsHost,
   type ExceptionFilter,
 } from "@nestjs/common";
@@ -10,6 +12,7 @@ import { ErrorCodes, statusToCode, type ApiError } from "@app/contracts";
 import { sanitizeErrorForLog } from "@app/shared";
 import { pgErrorCode, pgErrorLogFields, pgUniqueViolation } from "@app/db";
 import type { FastifyReply } from "fastify";
+import { CONFIG, type Config } from "./config";
 import { getRequestId } from "./request-context";
 import { logger } from "./logger.service";
 import { ZodValidationException } from "./zod";
@@ -23,6 +26,30 @@ function isErrorBody(v: unknown): v is ErrorBody {
     v !== null &&
     typeof (v as ErrorBody).code === "string" &&
     typeof (v as ErrorBody).message === "string"
+  );
+}
+
+/**
+ * @app/integrations' framework-free IntegrationError (status/code/message,
+ * optional details). Matched structurally rather than with instanceof so the
+ * filter does not depend on the integrations module instance (tests mock it).
+ */
+interface IntegrationErrorLike extends Error {
+  name: "IntegrationError";
+  status: number;
+  code: string;
+  details?: Record<string, unknown>;
+}
+
+function isIntegrationError(value: unknown): value is IntegrationErrorLike {
+  if (!(value instanceof Error) || value.name !== "IntegrationError") return false;
+  const { status, code } = value as Partial<IntegrationErrorLike>;
+  return (
+    typeof code === "string" &&
+    typeof status === "number" &&
+    Number.isInteger(status) &&
+    status >= 400 &&
+    status <= 599
   );
 }
 
@@ -67,6 +94,14 @@ function mapPgConstraintError(
 
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
+  /** Non-production responses keep unhandled error messages for debugging. */
+  private readonly exposeErrorMessages: boolean;
+
+  constructor(@Optional() @Inject(CONFIG) config?: Pick<Config, "isProduction">) {
+    // No injected config (bare unit fixtures): fail safe with production behavior.
+    this.exposeErrorMessages = config ? !config.isProduction : false;
+  }
+
   catch(exception: unknown, host: ArgumentsHost): void {
     const reply = host.switchToHttp().getResponse<FastifyReply>();
     const requestId = getRequestId() ?? "";
@@ -101,6 +136,26 @@ export class HttpExceptionFilter implements ExceptionFilter {
               exception.message;
         error = { code: statusToCode(status), message };
       }
+      // 5xx HttpExceptions used to leave no trace. 503s are deliberate
+      // back-pressure/unavailability signals, so they log at warn.
+      if (status === HttpStatus.SERVICE_UNAVAILABLE) {
+        logger.warn({ status, code: error.code }, "Service unavailable response");
+      } else if (status >= 500) {
+        logger.error({ err: exception, status, code: error.code }, "Server error response");
+      }
+    } else if (isIntegrationError(exception)) {
+      // Coded integration failure (e.g. a rejected image → 400 INVALID_FILE_TYPE):
+      // its own status, code and message instead of a generic 500.
+      status = exception.status;
+      error =
+        exception.details !== undefined
+          ? { code: exception.code, message: exception.message, details: exception.details }
+          : { code: exception.code, message: exception.message };
+      if (status >= 500) {
+        logger.error({ err: exception, status, code: exception.code }, "Integration error");
+      } else {
+        logger.warn({ status, code: exception.code }, "Integration request rejected");
+      }
     } else if (dbError !== null) {
       // Value-free: a Drizzle error message embeds the SQL + params and the pg
       // `detail` echoes row values (`Key (email)=(…)`).
@@ -111,12 +166,11 @@ export class HttpExceptionFilter implements ExceptionFilter {
       // `err` goes through the shared sanitizing serializer (no SQL/params/detail).
       const dbFields = pgErrorLogFields(exception);
       logger.error({ ...dbFields, err: exception }, "Unhandled exception");
-      const isProd = process.env.NODE_ENV === "production";
       error = {
         code: ErrorCodes.INTERNAL_ERROR,
         // Non-production keeps the message for debugging, minus SQL/params.
         message:
-          isProd || !(exception instanceof Error)
+          !this.exposeErrorMessages || !(exception instanceof Error)
             ? "Internal server error"
             : (sanitizeErrorForLog(exception) as Error).message,
       };

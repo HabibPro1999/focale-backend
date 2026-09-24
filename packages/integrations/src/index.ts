@@ -1,4 +1,5 @@
 export * from "./errors";
+export * from "./config";
 export * from "./firebase";
 export * from "./storage/index";
 export * from "./email/index";

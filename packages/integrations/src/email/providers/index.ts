@@ -1,18 +1,19 @@
 // =============================================================================
 // EMAIL PROVIDER FACTORY
-// Resolves the active provider from env (EMAIL_PROVIDER), memoized.
+// Resolves the active provider from config (EMAIL_PROVIDER), memoized.
 // =============================================================================
 
 import type { EmailProvider } from "./email-provider.types";
 import { createSendgridProvider } from "./sendgrid.provider";
 import { createResendProvider } from "./resend.provider";
+import { integrationsConfig } from "../../config";
 
 let cached: EmailProvider | null = null;
 
 export function getEmailProvider(): EmailProvider {
   if (cached) return cached;
   cached =
-    process.env.EMAIL_PROVIDER === "resend"
+    integrationsConfig().email.provider === "resend"
       ? createResendProvider()
       : createSendgridProvider();
   return cached;

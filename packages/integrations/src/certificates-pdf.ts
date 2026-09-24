@@ -18,6 +18,7 @@ import {
 } from "@app/db";
 import { getStorageProvider } from "./storage/index";
 import { logger } from "./logger";
+import { integrationsConfig } from "./config";
 import type { EmailAttachment } from "./email/index";
 import type {
   CertificateAttachmentContext,
@@ -204,10 +205,9 @@ async function embedCertificateFonts(
 ): Promise<{ regularFont: PDFFont; boldFont: PDFFont }> {
   pdfDoc.registerFontkit(fontkit);
 
-  const regularFontPath =
-    process.env.CERTIFICATE_FONT_PATH ?? DEFAULT_REGULAR_FONT_PATH;
-  const boldFontPath =
-    process.env.CERTIFICATE_BOLD_FONT_PATH ?? DEFAULT_BOLD_FONT_PATH;
+  const fonts = integrationsConfig().certificates;
+  const regularFontPath = fonts.fontPath ?? DEFAULT_REGULAR_FONT_PATH;
+  const boldFontPath = fonts.boldFontPath ?? DEFAULT_BOLD_FONT_PATH;
 
   const [regularBytes, boldBytes] = await Promise.all([
     loadFontBytes(regularFontPath),

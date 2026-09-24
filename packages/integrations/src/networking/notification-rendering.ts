@@ -1,6 +1,7 @@
 import { createDecipheriv, createHash } from "node:crypto";
 import type { networkingDeliveryContext } from "@app/db";
 import type { EmailAttachment } from "../email/providers";
+import { networkingConfig } from "../config";
 export type NetworkingNotificationContext = Awaited<
   ReturnType<typeof networkingDeliveryContext>
 >;
@@ -332,7 +333,7 @@ export function renderNetworkingNotification(
   const relativeHref = `/e/${slug}/${type.startsWith("MEETING_") ? "agenda" : ctx.connection ? `connections/${encodeURIComponent(ctx.connection.id)}` : normalized === "APPROVAL" ? "profile" : "notifications"}`;
   let href = "";
   try {
-    const base = new URL(process.env.PUBLIC_NETWORKING_URL ?? "");
+    const base = new URL(networkingConfig().publicUrl ?? "");
     if (
       ["https:", "http:"].includes(base.protocol) &&
       !base.username &&
@@ -423,7 +424,7 @@ export function renderNetworkingNotification(
       ...([ctx.config.supportPhone, ctx.config.supportEmail].filter(Boolean)),
     ].join("\n");
   if (type === "OTP")
-    body = `${words.code}: ${decryptNetworkingCode(String(payload.encryptedCode), process.env.NETWORKING_TOKEN_SECRET ?? "")}\n${words.expires} ${format(ctx.challenge!.expiresAt)}\n${words.secret}`;
+    body = `${words.code}: ${decryptNetworkingCode(String(payload.encryptedCode), networkingConfig().tokenSecret ?? "")}\n${words.expires} ${format(ctx.challenge!.expiresAt)}\n${words.secret}`;
   const template = ctx.config.emailTemplates?.[normalized] ??
     (normalized === eventType ? ctx.config.emailTemplates?.[type] : undefined);
   const substitute = (text: string) =>

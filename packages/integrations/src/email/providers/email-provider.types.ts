@@ -4,6 +4,7 @@
 // =============================================================================
 
 import { abstractHtmlToText } from "@app/shared";
+import { integrationsConfig } from "../../config";
 
 // -----------------------------------------------------------------------------
 // SEND
@@ -111,21 +112,14 @@ export interface EmailProvider {
 // -----------------------------------------------------------------------------
 
 /**
- * Resolve the shared sender identity from env, preserving the legacy fallback
- * chain (EMAIL_FROM_* ?? SENDGRID_FROM_* ?? default). Note: the SENDGRID_FROM_*
- * fallback applies even under Resend — a legacy naming leak kept on purpose.
+ * Resolve the shared sender identity from config, which keeps the legacy
+ * fallback chain (EMAIL_FROM_* ?? SENDGRID_FROM_* ?? default). Note: the
+ * SENDGRID_FROM_* fallback applies even under Resend — a legacy naming leak
+ * kept on purpose.
  */
 export function resolveEmailSender(): { fromEmail: string; fromName: string } {
-  return {
-    fromEmail:
-      process.env.EMAIL_FROM_EMAIL ??
-      process.env.SENDGRID_FROM_EMAIL ??
-      "noreply@example.com",
-    fromName:
-      process.env.EMAIL_FROM_NAME ??
-      process.env.SENDGRID_FROM_NAME ??
-      "Event Platform",
-  };
+  const { fromEmail, fromName } = integrationsConfig().email;
+  return { fromEmail, fromName };
 }
 
 /** Read a single header value (HTTP headers may arrive as string[]). */

@@ -19,6 +19,7 @@ vi.mock("@app/db", async (importOriginal) => ({
 
 import { buildApp } from "./app.factory";
 import { AppModule } from "./app.module";
+import { getConfig } from "./core/config";
 import { createZodDto } from "./core/zod";
 import { requestContext } from "./core/request-context";
 
@@ -37,7 +38,7 @@ class EchoFixtureController {
   }
 }
 
-@Module({ imports: [AppModule], controllers: [EchoFixtureController] })
+@Module({ imports: [AppModule.forRoot(getConfig())], controllers: [EchoFixtureController] })
 class EchoFixtureModule {}
 
 describe("api e2e", () => {

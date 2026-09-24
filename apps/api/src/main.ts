@@ -1,6 +1,10 @@
 import "reflect-metadata";
 import { assertSchemaCurrent, closeDb, configureDb } from "@app/db";
-import { setEmailStatusChangeListener, emitEmailLogRealtimeEvent } from "@app/integrations";
+import {
+  configureIntegrations,
+  emitEmailLogRealtimeEvent,
+  setEmailStatusChangeListener,
+} from "@app/integrations";
 import { buildApp } from "./app.factory";
 import { loadConfig } from "./core/config";
 import { logger } from "./core/logger.service";
@@ -12,8 +16,14 @@ process.on("unhandledRejection", (reason) => {
 });
 
 async function bootstrap() {
+  // Parse the environment once (fail fast) and hand each package its slice.
   const config = loadConfig();
-  configureDb({ applicationName: "focale-api" });
+  configureDb({
+    applicationName: "focale-api",
+    databaseUrl: config.DATABASE_URL,
+    settings: config.database,
+  });
+  configureIntegrations(config.integrations);
 
   // N3: emails can be queued/updated from either process — wire the same
   // listener here and in apps/worker/src/main.ts so no email-log status

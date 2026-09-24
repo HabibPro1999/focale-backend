@@ -31,6 +31,7 @@ import {
   type AbstractEmailOutboxPayload,
 } from "@app/db";
 import { queueEmail } from "./queue";
+import { integrationsConfig } from "../config";
 import { formatDate } from "./rendering/index";
 
 const logger = createLogger({ name: "email:abstract-queue" });
@@ -161,7 +162,7 @@ function contentTitle(content: unknown): string {
 function buildAbstractEmailContext(
   abstract: AbstractForEmailContext,
 ): Record<string, string> {
-  const baseUrl = abstract.linkBaseUrl || "https://events.example.com";
+  const baseUrl = abstract.linkBaseUrl || integrationsConfig().publicFormsUrl;
   const slug = abstract.event.slug || "";
 
   const authorName =

@@ -9,6 +9,8 @@ import {
   profileEmbeddingInput,
   type NetworkingEmbeddingClient,
 } from "./embeddings";
+import { integrationsConfigFromEnv } from "@app/contracts";
+import { networkingConfig } from "../config";
 
 export interface EmbeddingWorkerOptions {
   batchSize: number;
@@ -16,21 +18,15 @@ export interface EmbeddingWorkerOptions {
   concurrency: number;
 }
 
-export function embeddingWorkerOptions(
-  env: NodeJS.ProcessEnv = process.env,
-): EmbeddingWorkerOptions {
-  const read = (key: string, fallback: number, maximum: number) => {
-    const value = env[key] === undefined ? fallback : Number(env[key]);
-    if (!Number.isInteger(value) || value < 1 || value > maximum) {
-      throw new Error(`${key} must be an integer between 1 and ${maximum}`);
-    }
-    return value;
-  };
-  return {
-    batchSize: read("NETWORKING_EMBEDDING_BATCH_SIZE", 16, 32),
-    batchesPerTick: read("NETWORKING_EMBEDDING_BATCHES_PER_TICK", 8, 32),
-    concurrency: read("NETWORKING_EMBEDDING_CONCURRENCY", 2, 4),
-  };
+/**
+ * Worker throughput bounds (validated by the config schema): the configured
+ * slice, or `source` parsed with the same rules when given.
+ */
+export function embeddingWorkerOptions(source?: NodeJS.ProcessEnv): EmbeddingWorkerOptions {
+  const { batchSize, batchesPerTick, concurrency } = (
+    source ? integrationsConfigFromEnv(source).networking : networkingConfig()
+  ).embedding;
+  return { batchSize, batchesPerTick, concurrency };
 }
 
 export async function processNetworkingEmbeddings(

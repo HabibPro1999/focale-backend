@@ -14,6 +14,7 @@ import {
 } from "@app/db";
 import type { EmailContext } from "./types";
 import { escapeHtml } from "@app/shared";
+import { integrationsConfig } from "../../config";
 
 // =============================================================================
 // REGISTRANT SELF-SERVICE LINKS
@@ -27,8 +28,8 @@ export interface RegistrationSelfLinks {
 
 /**
  * Registrant self-service links (view/edit and payment). Base URL: the
- * registration's stored `linkBaseUrl`, else PUBLIC_FORMS_URL, else a
- * placeholder. The single builder for emails and the admin edit-link endpoint.
+ * registration's stored `linkBaseUrl`, else PUBLIC_FORMS_URL (required in
+ * production). The single builder for emails and the admin edit-link endpoint.
  */
 export function buildRegistrationSelfLinks(input: {
   registrationId: string;
@@ -36,10 +37,7 @@ export function buildRegistrationSelfLinks(input: {
   editToken: string | null;
   linkBaseUrl: string | null;
 }): RegistrationSelfLinks {
-  const baseUrl =
-    input.linkBaseUrl ||
-    process.env.PUBLIC_FORMS_URL ||
-    "https://events.example.com";
+  const baseUrl = input.linkBaseUrl || integrationsConfig().publicFormsUrl;
   const slug = input.eventSlug || "";
   const token = input.editToken || "";
   const selfLink = `${baseUrl}/${slug}/registration/${input.registrationId}/${token}`;

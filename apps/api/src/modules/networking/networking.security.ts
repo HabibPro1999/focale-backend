@@ -10,8 +10,10 @@ import {
   BadRequestException,
   ServiceUnavailableException,
 } from "@nestjs/common";
+import { getConfig } from "../../core/config";
 export function networkingSecret() {
-  const value = process.env.NETWORKING_TOKEN_SECRET;
+  // Unset when NETWORKING_DISABLED=true or not configured (outside production).
+  const value = getConfig().networking.tokenSecret;
   if (!value || value.length < 32)
     throw new ServiceUnavailableException({
       code: "NETWORKING_AUTH_UNAVAILABLE",
