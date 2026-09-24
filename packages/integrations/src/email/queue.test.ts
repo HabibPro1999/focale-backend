@@ -51,7 +51,7 @@ import {
   getEmailLogRealtimeTarget,
   enqueueRealtimeOutboxEvent,
 } from "@app/db";
-import { buildEmailContextWithAccess } from "./rendering/index";
+import { buildEmailContextWithAccess, resolveVariables } from "./rendering/index";
 import {
   queueEmail,
   queueTriggeredEmail,
@@ -297,6 +297,14 @@ describe("processEmailQueue", () => {
     );
     expect(markEmailSent).toHaveBeenCalledWith("log-1", "w1", "m1");
     expect(res).toEqual({ processed: 1, sent: 1, failed: 0, skipped: 0 });
+    // Subject and plain text are resolved as text (no HTML entities), the
+    // HTML body with escaping (6.1).
+    const calls = vi.mocked(resolveVariables).mock.calls;
+    expect(calls.map(([tpl, , options]) => [tpl, options])).toEqual([
+      ["Sub", { mode: "text" }],
+      ["H", undefined],
+      ["P", { mode: "text" }],
+    ]);
   });
 
   it("returns a zero result when nothing is due", async () => {

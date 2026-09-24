@@ -476,9 +476,9 @@ export async function processEmailQueue(
         return skipEmail(emailLog.id, "Could not build email context");
       }
 
-      const resolvedSubject = resolveVariables(templateSubject, context);
+      const resolvedSubject = resolveVariables(templateSubject, context, { mode: "text" });
       const resolvedHtml = resolveVariables(templateHtml, context);
-      const resolvedPlain = resolveVariables(templatePlain, context);
+      const resolvedPlain = resolveVariables(templatePlain, context, { mode: "text" });
 
       // Persist the resolved subject only if the lease is still held.
       if (

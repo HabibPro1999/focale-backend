@@ -68,7 +68,7 @@ export class CommitteeEmailsService {
     toName: string,
     variables: Record<string, string>,
   ): Promise<boolean> {
-    const subject = resolveVariables(template.subject, variables);
+    const subject = resolveVariables(template.subject, variables, { mode: "text" });
     const html = resolveVariables(template.htmlContent ?? "", variables);
     return this.sendAndLogInviteEmail({
       to,

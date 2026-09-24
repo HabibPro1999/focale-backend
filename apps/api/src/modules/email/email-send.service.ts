@@ -50,7 +50,9 @@ export class EmailSendService {
   ): Promise<{ success: true; message: string; messageId?: string }> {
     const sampleContext = getSampleEmailContext();
 
-    const resolvedSubject = resolveVariables(template.subject, sampleContext);
+    const resolvedSubject = resolveVariables(template.subject, sampleContext, {
+      mode: "text",
+    });
     const resolvedHtml = resolveVariables(
       template.htmlContent || "",
       sampleContext,
@@ -58,6 +60,7 @@ export class EmailSendService {
     const resolvedPlainText = resolveVariables(
       template.plainContent || "",
       sampleContext,
+      { mode: "text" },
     );
 
     const result = await getEmailProvider().sendEmail({
@@ -240,9 +243,9 @@ export class EmailSendService {
     const { html: rawHtml } = await compileMjmlToHtml(mjml);
     const rawPlain = extractPlainText(content);
 
-    const resolvedSubject = resolveVariables(subject, context);
+    const resolvedSubject = resolveVariables(subject, context, { mode: "text" });
     const resolvedHtml = resolveVariables(rawHtml, context);
-    const resolvedPlain = resolveVariables(rawPlain, context);
+    const resolvedPlain = resolveVariables(rawPlain, context, { mode: "text" });
 
     const recipientName =
       [registration.firstName, registration.lastName]
