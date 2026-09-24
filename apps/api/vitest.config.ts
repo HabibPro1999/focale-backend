@@ -22,7 +22,7 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"],
-    exclude: ["**/*.db.test.ts", "**/*.perf.test.ts"],
+    exclude: ["**/*.db.test.ts", "**/*.concurrency.test.ts", "**/*.perf.test.ts"],
     setupFiles: ["./vitest.setup.ts"],
   },
 });

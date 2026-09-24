@@ -100,6 +100,7 @@ type DrizzleTables = Record<string, {
   uniqueConstraints: Record<string, { name: string }>;
   foreignKeys: Record<string, DrizzleForeignKey>;
   checkConstraints: Record<string, DrizzleCheck>;
+  compositePrimaryKeys: Record<string, { name: string; columns: string[] }>;
 }>;
 
 function normalizeType(type: string): string {
@@ -527,7 +528,9 @@ describe.runIf(dbTestsEnabled())("migration tier: apply + introspect", () => {
         Object.values(table.columns).map((column) => [`${table.name}.${column.name}`, {
           name: column.name,
           type: normalizeType(column.type),
-          primaryKey: column.primaryKey,
+          // The catalog flags every column of a composite primary key (e.g. networking_allocation_locks).
+          primaryKey: column.primaryKey || Object.values(table.compositePrimaryKeys ?? {})
+            .some((key) => key.columns.includes(column.name)),
           notNull: column.notNull,
           default: normalizeColumnDefault(column.default === undefined ? null : String(column.default), normalizeType(column.type)),
         }] as const),

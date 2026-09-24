@@ -22,6 +22,7 @@ import {
   networkingTransaction,
   revokeNetworkingSessions,
   syncNetworkingRegistration,
+  type DbExecutor,
   type NetworkingRow,
   type NetworkingStore,
 } from "@app/db";
@@ -87,8 +88,13 @@ export class NetworkingService {
     }
     return readNetworkingBadge(token, eventId);
   }
-  async modulesEnabled(clientId: string, modules: ModuleId[] = ["networking", "registrations", "emails"]) {
-    const client = await findClientModuleState(clientId);
+  /** Inside a networking transaction pass its executor: the check must not take a second pool connection. */
+  async modulesEnabled(
+    clientId: string,
+    modules: ModuleId[] = ["networking", "registrations", "emails"],
+    db?: DbExecutor,
+  ) {
+    const client = await findClientModuleState(clientId, db);
     return modules.every((module) => isModuleEnabledForClient(client, module));
   }
   async publicContext(slug: string, store = networkingStore()) {
@@ -299,29 +305,30 @@ export class NetworkingService {
       );
     return { loggedOut: true };
   }
-  /** Revalidate capabilities inside the event transaction, after concurrent admin/session changes. */
+  /**
+   * Revalidate capabilities inside the networking transaction, after concurrent
+   * admin/session changes. The event row comes from the request context and is
+   * not re-read: registrations bump its counters, and reading it in every
+   * SERIALIZABLE participant write would turn registration surges into
+   * networking retries.
+   */
   async currentParticipant(
     ctx: NetworkingContext,
     store: NetworkingStore,
     options: { allowConsentPending?: boolean } = {},
   ): Promise<NetworkingContext> {
-    const event = await store.one("events", { id: ctx.event.id });
+    const event = ctx.event;
     const config = NetworkingConfigSchema.parse(
-      (await store.one("configs", { eventId: ctx.event.id }))?.config ?? {},
+      (await store.one("configs", { eventId: event.id }))?.config ?? {},
     );
-    if (
-      !event ||
-      event.status === "ARCHIVED" ||
-      !config.enabled
-    )
-      throw unavailable();
+    if (event.status === "ARCHIVED" || !config.enabled) throw unavailable();
     if (
       (config.opensAt && Date.parse(config.opensAt) > Date.now()) ||
       (config.closesAt && Date.parse(config.closesAt) <= Date.now()) ||
       event.endDate.getTime() + config.retentionDays * 86400000 < Date.now()
     )
       throw new ForbiddenException({ code: "NETWORKING_CLOSED", message: "Networking is not available for this event" });
-    if (!(await this.modulesEnabled(event.clientId, ["networking"]))) throw unavailable();
+    if (!(await this.modulesEnabled(event.clientId, ["networking"], store.executor))) throw unavailable();
     const session = await store.one("sessions", {
       id: ctx.session.id,
       eventId: event.id,
@@ -355,8 +362,8 @@ export class NetworkingService {
     const { event, config } = await this.publicContext(slug);
     const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
     const codeHash = networkingHash(`otp:${event.id}:${email}:${code}`);
+    // The event/config gate ran just above; the transaction only touches rows keyed by this email.
     return networkingTransaction(event.id, async (store, db) => {
-      const { config } = await this.publicContext(slug, store);
       const recent = (
         await store.all("challenges", { eventId: event.id, email })
       ).filter((v) => Date.now() - v.createdAt.getTime() < 15 * 60_000);
@@ -416,7 +423,6 @@ export class NetworkingService {
   async verifyCode(slug: string, challengeId: string, code: string) {
     const { event, config } = await this.publicContext(slug);
     const result = await networkingTransaction(event.id, async (store) => {
-      const { config } = await this.publicContext(slug, store);
       const challenge = await store.one("challenges", {
         id: challengeId,
         eventId: event.id,
@@ -429,7 +435,7 @@ export class NetworkingService {
       )
         return null;
       // Checked before the code is compared, so a limited address learns nothing about it.
-      // The event lock taken by networkingTransaction serializes concurrent attempts.
+      // SERIALIZABLE makes concurrent attempts on this email's challenges commit one at a time.
       const now = Date.now();
       const failed = await store.failedOtpAttempts(
         event.id,

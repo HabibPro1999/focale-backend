@@ -90,7 +90,7 @@ export class NetworkingAdminService {
       };
     }
     const { expectedRevision, ...changes } = input;
-    const config = await networkingTransaction(eventId, async (store) => {
+    const config = await networkingTransaction(eventId, async (store, db) => {
       const current = await store.one("configs", { eventId });
       const revision = current?.updatedAt.toISOString() ?? NETWORKING_CONFIG_UNCONFIGURED_REVISION;
       if (expectedRevision !== undefined && expectedRevision !== revision)
@@ -127,7 +127,7 @@ export class NetworkingAdminService {
         throw invalid("Meeting opening hours must be within the event dates");
       if (
         config.requiredAccessId &&
-        !(await getActiveEventAccessId(config.requiredAccessId, eventId))
+        !(await getActiveEventAccessId(config.requiredAccessId, eventId, db))
       )
         throw invalid("Networking area access must be active and belong to this event");
       const consentFieldId = config.fieldMapping.consent;
@@ -139,8 +139,8 @@ export class NetworkingAdminService {
           throw invalid("Consent mapping must point to a checkbox, radio or select field of the registration form");
       }
       if (config.enabled) {
-        await assertClientModuleEnabled(event.clientId, "registrations");
-        await assertClientModuleEnabled(event.clientId, "emails");
+        await assertClientModuleEnabled(event.clientId, "registrations", db);
+        await assertClientModuleEnabled(event.clientId, "emails", db);
         if (config.meetingsEnabled && !config.openingHours.length)
           throw invalid("Configure meeting opening hours before activating meetings");
       }
@@ -387,7 +387,13 @@ export class NetworkingAdminService {
     },
     actorId: string,
   ) {
-    return networkingTransaction(eventId, async (store, db) => {
+    // Assigning claims the meeting's own slot; the other actions only release resources.
+    const plan = async () => {
+      if (input.action !== "ASSIGN") return [];
+      const row = await networkingStore().one("meetings", { eventId, id });
+      return row ? [{ startsAt: row.startsAt, endsAt: row.endsAt }] : [];
+    };
+    return this.meetings.allocation(eventId, plan, async (store, db) => {
       const row = await store.one("meetings", { eventId, id });
       if (!row) throw new NotFoundException("Meeting not found");
       const event = await store.one("events", { id: eventId });

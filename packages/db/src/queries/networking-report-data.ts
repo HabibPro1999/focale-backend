@@ -1,6 +1,7 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import { getDb } from "../client";
 import { rowsOf } from "../helpers";
+import { withSerializableTxn } from "../txn";
 import { networkingAudit, networkingDeliveries } from "../schema/networking";
 import type { NetworkingDeliveryRow } from "./networking-delivery";
 
@@ -68,7 +69,8 @@ export async function saveNetworkingPostEventReport(
   storageKey: string,
   summary: Record<string, number>,
 ) {
-  return getDb().transaction(async (tx) => {
+  // SERIALIZABLE with retries: the lease-checked claim and its audit row commit together or not at all.
+  return withSerializableTxn(async (tx) => {
     const data = { storageKey, generatedAt: new Date().toISOString(), summary };
     const claimed = await tx
       .update(networkingDeliveries)

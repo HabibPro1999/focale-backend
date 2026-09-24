@@ -127,7 +127,14 @@ describe("client module gates", () => {
       await expect(
         assertClientModuleEnabled("client-1", "abstracts"),
       ).resolves.toBeUndefined();
-      expect(findState).toHaveBeenCalledWith("client-1");
+      expect(findState).toHaveBeenCalledWith("client-1", undefined);
+    });
+
+    it("reads the client state on the caller's transaction when given one", async () => {
+      findState.mockResolvedValue({ active: true, enabledModules: ["networking"] });
+      const tx = { transaction: true } as never;
+      await expect(assertClientModuleEnabled("client-1", "networking", tx)).resolves.toBeUndefined();
+      expect(findState).toHaveBeenCalledWith("client-1", tx);
     });
 
     it("throws 404 when the client is not found", async () => {

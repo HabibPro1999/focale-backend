@@ -13,7 +13,7 @@
     "test": "pnpm -r --workspace-concurrency=1 test",
     "test:runtime": "node --test scripts/start-runtime.test.mjs",
     "test:db": "pnpm -r --workspace-concurrency=1 --if-present test:db",
-    "test:concurrency": "pnpm --filter @app/db test:concurrency",
+    "test:concurrency": "pnpm -r --workspace-concurrency=1 --if-present test:concurrency",
     "test:migration": "pnpm --filter @app/db test:migration",
     "dev": "pnpm --filter @app/api dev",
     "dev:worker": "pnpm --filter @app/worker dev"

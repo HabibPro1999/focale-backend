@@ -10,15 +10,20 @@ import {
 import {
   createNetworkingNotification,
   expireNetworkingProposals,
+  getNetworkingConfig,
   listNetworkingParticipantMeetings,
   countNetworkingParticipantMeetings,
+  networkingAllocationTransaction,
+  NetworkingAllocationLockError,
+  NetworkingBusyError,
   networkingStore,
   networkingTransaction,
-  pgUniqueViolation,
+  type NetworkingInterval,
   type NetworkingRow,
   type NetworkingStore,
   type DbExecutor,
 } from "@app/db";
+import type { NetworkingConfig } from "@app/contracts";
 import {
   NetworkingService,
   type NetworkingContext,
@@ -30,6 +35,14 @@ import {
   resourceQuanta,
 } from "./networking.policy";
 import { networkingInventoryResource } from "./networking.inventory-policy";
+/** Re-plans after the meeting moved between the lock plan's read and the lock. */
+const ALLOCATION_PLAN_ATTEMPTS = 3;
+/** The slot a meeting would occupy from `start`, or none when `start` is not a valid instant. */
+function slotInterval(start: Date | string | null | undefined, config: Pick<NetworkingConfig, "slotDurationMinutes">): NetworkingInterval[] {
+  const startsAt = start ? new Date(start) : null;
+  if (!startsAt || !Number.isFinite(startsAt.getTime())) return [];
+  return [{ startsAt, endsAt: new Date(startsAt.getTime() + config.slotDurationMinutes * 60_000) }];
+}
 const actions: Record<string, string> = {
   MEETING_REQUEST: "REQUEST", MEETING_REQUEST_SENT: "REQUEST", MEETING_ACCEPT: "ACCEPT", MEETING_DECLINE: "DECLINE",
   MEETING_CANCEL: "CANCEL", MEETING_CANCELLED: "CANCEL", MEETING_RESCHEDULE: "RESCHEDULE", MEETING_ASSIGN: "ASSIGN",
@@ -211,7 +224,7 @@ export class NetworkingMeetingsService {
       });
     }));
   }
-  /** Idempotent single statements: no event lock is needed on read paths. */
+  /** Idempotent single statements: read paths need no transaction. */
   async expire(eventId: string) {
     await expireNetworkingProposals(eventId);
   }
@@ -294,56 +307,83 @@ export class NetworkingMeetingsService {
     input: { profileId: string; startsAt: string; message?: string },
   ) {
     this.requireEnabled(ctx);
-    const dates = this.slot(ctx, input.startsAt);
-    return networkingTransaction(ctx.event.id, async (store, db) => {
-      ctx = await this.networking.currentParticipant(ctx, store);
-      this.requireEnabled(ctx);
-      const dates = this.slot(ctx, input.startsAt);
-      await this.networking.target(ctx, input.profileId, store);
-      const [profileAId, profileBId] = networkingPair(
-        ctx.profile.id,
-        input.profileId,
-      );
-      if (
-        !(await store.one("connections", {
+    this.slot(ctx, input.startsAt);
+    return this.allocation(
+      ctx.event.id,
+      async (fresh) => slotInterval(input.startsAt, (await fresh()) ?? ctx.config),
+      async (store, db) => {
+        ctx = await this.networking.currentParticipant(ctx, store);
+        this.requireEnabled(ctx);
+        const dates = this.slot(ctx, input.startsAt);
+        await this.networking.target(ctx, input.profileId, store);
+        const [profileAId, profileBId] = networkingPair(
+          ctx.profile.id,
+          input.profileId,
+        );
+        if (
+          !(await store.one("connections", {
+            eventId: ctx.event.id,
+            profileAId,
+            profileBId,
+          }))
+        )
+          throw new ForbiddenException({ code: "NETWORKING_CONNECTION_REQUIRED", message: "A mutual connection is required before requesting a meeting" });
+        await this.availableAt(ctx, ctx.profile.id, dates.startsAt, store);
+        await this.availableAt(ctx, input.profileId, dates.startsAt, store);
+        const same = (
+          await store.allocationMeetings(ctx.event.id, dates.startsAt, dates.endsAt)
+        ).find(
+          (m) =>
+            ["PENDING", "CONFIRMED", "PENDING_ALLOCATION"].includes(m.status) &&
+            m.startsAt.getTime() === dates.startsAt.getTime() &&
+            [m.requesterId, m.recipientId].includes(ctx.profile.id) &&
+            [m.requesterId, m.recipientId].includes(input.profileId),
+        );
+        if (same)
+          throw new ConflictException({ code: "NETWORKING_SLOT_CONFLICT", message: "A meeting already exists for this pair and slot" });
+        let row = await store.insert("meetings", {
           eventId: ctx.event.id,
-          profileAId,
-          profileBId,
-        }))
-      )
-        throw new ForbiddenException({ code: "NETWORKING_CONNECTION_REQUIRED", message: "A mutual connection is required before requesting a meeting" });
-      await this.availableAt(ctx, ctx.profile.id, dates.startsAt, store);
-      await this.availableAt(ctx, input.profileId, dates.startsAt, store);
-      const same = (
-        await store.allocationMeetings(ctx.event.id, dates.startsAt, dates.endsAt)
-      ).find(
-        (m) =>
-          ["PENDING", "CONFIRMED", "PENDING_ALLOCATION"].includes(m.status) &&
-          m.startsAt.getTime() === dates.startsAt.getTime() &&
-          [m.requesterId, m.recipientId].includes(ctx.profile.id) &&
-          [m.requesterId, m.recipientId].includes(input.profileId),
-      );
-      if (same)
-        throw new ConflictException({ code: "NETWORKING_SLOT_CONFLICT", message: "A meeting already exists for this pair and slot" });
-      let row = await store.insert("meetings", {
-        eventId: ctx.event.id,
-        requesterId: ctx.profile.id,
-        recipientId: input.profileId,
-        ...dates,
-        message: input.message ?? "",
-        expiresAt: new Date(
-          Math.min(
-            Date.now() + ctx.config.requestExpiryHours * 3_600_000,
-            dates.startsAt.getTime(),
+          requesterId: ctx.profile.id,
+          recipientId: input.profileId,
+          ...dates,
+          message: input.message ?? "",
+          expiresAt: new Date(
+            Math.min(
+              Date.now() + ctx.config.requestExpiryHours * 3_600_000,
+              dates.startsAt.getTime(),
+            ),
           ),
-        ),
-      });
-      const hold = await this.reserve(ctx, row, dates.startsAt, dates.endsAt, store, undefined, true);
-      [row] = await store.update("meetings", { eventId: ctx.event.id, id: row.id }, hold);
-      await this.notify(ctx, row, "MEETING_REQUEST", [input.profileId], db);
-      await this.notify(ctx, row, "MEETING_REQUEST_SENT", [ctx.profile.id], db);
-      return this.hydrate(row, store, false, ctx);
-    });
+        });
+        const hold = await this.reserve(ctx, row, dates.startsAt, dates.endsAt, store, undefined, true);
+        [row] = await store.update("meetings", { eventId: ctx.event.id, id: row.id }, hold);
+        await this.notify(ctx, row, "MEETING_REQUEST", [input.profileId], db);
+        await this.notify(ctx, row, "MEETING_REQUEST_SENT", [ctx.profile.id], db);
+        return this.hydrate(row, store, false, ctx);
+      },
+    );
+  }
+  /**
+   * Run a write that may claim resources under the hour locks `plan` derives
+   * from a fresh read (no lock when it returns none). A claim outside those
+   * hours means the meeting or slot duration moved in between: re-plan, with
+   * `fresh()` then returning the current config.
+   */
+  async allocation<T>(
+    eventId: string,
+    plan: (fresh: () => Promise<NetworkingConfig | null>) => Promise<NetworkingInterval[]>,
+    run: (store: NetworkingStore, db: DbExecutor) => Promise<T>,
+  ): Promise<T> {
+    for (let attempt = 1; ; attempt++) {
+      const intervals = await plan(async () => (attempt === 1 ? null : getNetworkingConfig(eventId)));
+      try {
+        return intervals.length
+          ? await networkingAllocationTransaction(eventId, intervals, run)
+          : await networkingTransaction(eventId, run);
+      } catch (error) {
+        if (!(error instanceof NetworkingAllocationLockError)) throw error;
+        if (attempt >= ALLOCATION_PLAN_ATTEMPTS) throw new NetworkingBusyError({ cause: error });
+      }
+    }
   }
   async reserve(
     ctx: NetworkingContext,
@@ -378,8 +418,11 @@ export class NetworkingMeetingsService {
       `profile:${row.requesterId}`,
       `profile:${row.recipientId}`,
     ];
-    if (participantKeys.some(taken))
-      throw new ConflictException({ code: "NETWORKING_SLOT_CONFLICT", message: "One of the participants already has a meeting in this slot" });
+    const participantBusy = () =>
+      new ConflictException({ code: "NETWORKING_SLOT_CONFLICT", message: "One of the participants already has a meeting in this slot" });
+    const noTable = () =>
+      new ConflictException({ code: ErrorCodes.NETWORKING_SLOT_CONFLICT, message: "No table or exhibitor representative is available for this slot; choose another time" });
+    if (participantKeys.some(taken)) throw participantBusy();
     const [requester, recipient, spaces] = await Promise.all([
       store.one("profiles", { eventId: ctx.event.id, id: row.requesterId }),
       store.one("profiles", { eventId: ctx.event.id, id: row.recipientId }),
@@ -387,8 +430,7 @@ export class NetworkingMeetingsService {
     ]);
     if (!requester || !recipient) throw new NotFoundException({ code: ErrorCodes.NETWORKING_NOT_FOUND, message: "Participant not found" });
     const bySpace = new Map(spaces.map(space => [space.id, space]));
-    let tableId: string | null = null;
-    let inventoryResource: string | null = null;
+    let candidates: NetworkingRow<"tables">[] = [];
     if (ctx.config.autoAssignTables || forcedTableId) {
       let tables = (
         await store.all("tables", { eventId: ctx.event.id, active: true })
@@ -402,38 +444,32 @@ export class NetworkingMeetingsService {
       const assignedStand =
         forcedTableId ?? recipient.standTableId ?? requester.standTableId;
       if (assignedStand) tables = tables.filter((t) => t.id === assignedStand);
-      // Ordinary tables are exclusive; each exhibitor representative has an independent station.
+      // Spread order: the meeting's current table, then the least used; each exhibitor
+      // representative has an independent station, ordinary tables are exclusive.
       const usage = new Map<string, number>();
       for (const entry of await store.allocationTableUsage(ctx.event.id))
         if (entry.tableId) usage.set(entry.tableId, entry.count);
       tables.sort((a, b) => Number(b.id === row.tableId) - Number(a.id === row.tableId) || (usage.get(a.id) ?? 0) - (usage.get(b.id) ?? 0) || a.name.localeCompare(b.name));
-      tableId = tables[0]?.id ?? null;
-      inventoryResource = tables[0] ? networkingInventoryResource(tables[0], [requester, recipient]) : null;
-      if (!tableId)
-        throw new ConflictException({ code: "NETWORKING_SLOT_CONFLICT", message: "No table or exhibitor representative is available for this slot; choose another time" });
+      candidates = tables;
+      if (!candidates.length) throw noTable();
     }
     await store.remove("reservations", {
       eventId: ctx.event.id,
       meetingId: row.id,
     });
-    try {
-      for (const resourceKey of [
-        ...(pending ? [] : participantKeys),
-        ...(inventoryResource ? [inventoryResource] : []),
-      ])
-        for (const start of quanta)
-          await store.insert("reservations", {
-            eventId: ctx.event.id,
-            meetingId: row.id,
-            resourceKey,
-            startsAt: start,
-          });
-    } catch (error) {
-      // A concurrent booking won the unique resource/time reservation.
-      if (pgUniqueViolation(error))
-        throw new ConflictException({ code: ErrorCodes.NETWORKING_SLOT_CONFLICT, message: "This slot was just booked; choose another time" });
-      throw error;
+    // The unique resource/slot index decides; each claim is all-or-nothing and never aborts the transaction.
+    const claim = (resourceKey: string) => store.claimResource(ctx.event.id, row.id, resourceKey, quanta);
+    if (!pending)
+      for (const key of participantKeys)
+        if (!(await claim(key))) throw participantBusy();
+    let tableId: string | null = null;
+    for (const table of candidates) {
+      if (await claim(networkingInventoryResource(table, [requester, recipient])!)) {
+        tableId = table.id;
+        break;
+      }
     }
+    if (candidates.length && !tableId) throw noTable();
     return {
       tableId,
       status: pending ? ("PENDING" as const) : tableId
@@ -451,7 +487,16 @@ export class NetworkingMeetingsService {
     },
   ) {
     if (input.action !== "CANCEL") this.requireEnabled(ctx);
-    return networkingTransaction(ctx.event.id, async (store, db) => {
+    // Accepting claims the proposed slot; rescheduling a pending request moves its table hold.
+    const plan = async (fresh: () => Promise<NetworkingConfig | null>) => {
+      if (input.action !== "ACCEPT" && input.action !== "RESCHEDULE") return [];
+      const row = await networkingStore().one("meetings", { eventId: ctx.event.id, id });
+      if (!row) return [];
+      const config = (await fresh()) ?? ctx.config;
+      if (input.action === "ACCEPT") return slotInterval(row.proposedStartsAt ?? row.startsAt, config);
+      return row.status === "PENDING" ? slotInterval(input.startsAt, config) : [];
+    };
+    return this.allocation(ctx.event.id, plan, async (store, db) => {
       ctx = await this.networking.currentParticipant(ctx, store);
       if (input.action !== "CANCEL") this.requireEnabled(ctx);
       const row = await this.meeting(ctx, id, store);

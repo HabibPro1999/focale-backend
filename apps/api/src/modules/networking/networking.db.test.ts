@@ -11,7 +11,7 @@ import {
   forms,
   registrations,
   getDb,
-  networkingTransaction,
+  networkingAllocationTransaction,
   networkingStore,
   syncNetworkingEvent,
   type NetworkingRow,
@@ -545,7 +545,7 @@ describe.runIf(enabled)(
         expiresAt: new Date("2031-04-06T00:00Z"),
       });
       await expect(
-        networkingTransaction(ids.event, (store) =>
+        networkingAllocationTransaction(ids.event, [{ startsAt: offsetStart, endsAt: offsetEnd }], (store) =>
           meetings.reserve(
             participants[4],
             legacy,

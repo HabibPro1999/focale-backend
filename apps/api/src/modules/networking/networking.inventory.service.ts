@@ -23,7 +23,10 @@ const upcoming = (meeting: NetworkingRow<"meetings">) =>
 const location = (space: NetworkingRow<"spaces">) =>
   [space.name, space.location].filter(Boolean).join(" · ");
 
-/** Inventory changes use the same event transaction lock as meeting allocation. */
+/**
+ * Inventory changes are SERIALIZABLE networking transactions: an allocation
+ * that read the same tables, spaces or meetings either commits first or retries.
+ */
 @Injectable()
 export class NetworkingInventoryService {
   async spaces(eventId: string) {

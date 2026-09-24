@@ -1,6 +1,6 @@
 import { ForbiddenException, NotFoundException } from "@nestjs/common";
 import { ErrorCodes, type ModuleId } from "@app/contracts";
-import { findClientModuleState } from "@app/db";
+import { findClientModuleState, type DbExecutor } from "@app/db";
 
 // Re-exported so the ~10 consumer modules (forms, access, certificates,
 // abstracts, sponsorships, email, registrations, pricing, events, identity)
@@ -58,12 +58,16 @@ export function isModuleEnabledForClient(
   );
 }
 
-/** DB-backed gate: loads the client's active/modules state then asserts. */
+/**
+ * DB-backed gate: loads the client's active/modules state then asserts. Inside
+ * a transaction pass its executor, so the check rides that connection.
+ */
 export async function assertClientModuleEnabled(
   clientId: string,
   moduleId: ModuleId,
+  executor?: DbExecutor,
 ): Promise<void> {
-  const client = await findClientModuleState(clientId);
+  const client = await findClientModuleState(clientId, executor);
   if (!client) {
     throw new NotFoundException({
       code: ErrorCodes.NOT_FOUND,

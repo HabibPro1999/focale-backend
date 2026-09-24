@@ -12,7 +12,9 @@ import {
   Query,
   Req,
   Res,
+  UseInterceptors,
 } from "@nestjs/common";
+import { NetworkingBusyInterceptor } from "./networking.busy";
 import {
   NetworkingUploadsService,
   type NetworkingMultipartRequest,
@@ -21,6 +23,7 @@ import { SkipThrottle, Throttle } from "@nestjs/throttler";
 import { ErrorCodes, networkingProfileComplete } from "@app/contracts";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import {
+  cancelNetworkingParticipantMeetings,
   networkingDirectoryFacets,
   listNetworkingNotifications,
   recordNetworkingProfileView,
@@ -100,6 +103,7 @@ async function blockedProfileForViewer(
   return profile;
 }
 
+@UseInterceptors(NetworkingBusyInterceptor)
 @Controller("api/networking/:slug")
 export class NetworkingPublicController {
   constructor(
@@ -471,34 +475,13 @@ export class NetworkingPublicController {
     ].some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
     if (!allowed || url.username || url.password || url.port)
       throw unsupported();
-    return networkingTransaction(ctx.event.id, async (store) => {
-      const existing = await store.one("pushSubscriptions", {
-        endpoint: body.endpoint,
-      });
-      if (existing && existing.profileId !== ctx.profile.id)
-        await store.remove("pushSubscriptions", { id: existing.id });
-      if (existing && existing.profileId === ctx.profile.id) {
-        const [row] = await store.update(
-          "pushSubscriptions",
-          { id: existing.id, profileId: ctx.profile.id },
-          {
-            keys: body.keys,
-            expirationTime: body.expirationTime
-              ? new Date(body.expirationTime)
-              : null,
-          },
-        );
-        return row;
-      }
-      return store.insert("pushSubscriptions", {
-        eventId: ctx.event.id,
-        profileId: ctx.profile.id,
-        endpoint: body.endpoint,
-        keys: body.keys,
-        expirationTime: body.expirationTime
-          ? new Date(body.expirationTime)
-          : null,
-      });
+    // One upsert on the unique endpoint: a browser re-subscribing moves its endpoint to this participant.
+    return networkingStore().upsertPushSubscription({
+      eventId: ctx.event.id,
+      profileId: ctx.profile.id,
+      endpoint: body.endpoint,
+      keys: body.keys,
+      expirationTime: body.expirationTime ? new Date(body.expirationTime) : null,
     });
   }
   @Delete("push-subscriptions") async unsubscribe(
@@ -574,33 +557,8 @@ export class NetworkingPublicController {
         eventId: ctx.event.id,
         profileId: ctx.profile.id,
       });
-      const meetings = (
-        await store.all("meetings", { eventId: ctx.event.id })
-      ).filter(
-        (m) =>
-          [m.requesterId, m.recipientId].includes(ctx.profile.id) &&
-          ["PENDING", "PENDING_ALLOCATION", "CONFIRMED"].includes(m.status) &&
-          m.endsAt > new Date(),
-      );
-      for (const row of meetings) {
-        const [saved] = await store.update(
-          "meetings",
-          { eventId: ctx.event.id, id: row.id },
-          { status: "CANCELLED", revision: row.revision + 1, proposedStartsAt: null, proposalBy: null },
-        );
-        await store.remove("reservations", {
-          eventId: ctx.event.id,
-          meetingId: row.id,
-        });
-        await this.meetings.notify(
-          ctx,
-          saved,
-          "MEETING_CANCELLED",
-          [row.requesterId, row.recipientId],
-          db,
-          { counterpart: false },
-        );
-      }
+      // One UPDATE … RETURNING over this participant's active meetings; notices never name the other side (K5).
+      await cancelNetworkingParticipantMeetings(ctx.profile.id, ctx.event.id, db, { slug: ctx.event.slug });
       return current?.photoUrl;
     });
     networkingIdentityCache.forgetProfile(ctx.profile.id);

@@ -37,7 +37,8 @@ it("invokes photo storage cleanup only after the purge transaction commits", asy
   const storageDelete = vi.fn(async () => {
     expect(state.inTransaction).toBe(false);
     expect(state.committed).toBe(true);
-    expect(deleted).toHaveBeenCalledOnce();
+    // Profiles (cascading) and the event's allocation lock rows.
+    expect(deleted).toHaveBeenCalledTimes(2);
   });
   const afterPurge = vi.fn(async (rows) => {
     expect(rows).toEqual(profiles);
@@ -46,13 +47,14 @@ it("invokes photo storage cleanup only after the purge transaction commits", asy
   await maintainNetworkingLifecycle("event", afterPurge);
   expect(afterPurge).toHaveBeenCalledOnce();
   expect(storageDelete).toHaveBeenCalledOnce();
+  expect(mocks.transaction).toHaveBeenCalledWith(expect.any(Function), { isolationLevel: "serializable" });
 });
 
 it("never invokes cleanup when the purge transaction rolls back", async () => {
   const { state, deleted } = retentionHarness(true);
   const afterPurge = vi.fn();
   await expect(maintainNetworkingLifecycle("event", afterPurge)).rejects.toThrow("commit failed");
-  expect(deleted).toHaveBeenCalledOnce();
+  expect(deleted).toHaveBeenCalledTimes(2);
   expect(state.rolledBack).toBe(true);
   expect(state.committed).toBe(false);
   expect(afterPurge).not.toHaveBeenCalled();
@@ -65,7 +67,7 @@ it("cleanup failure cannot roll back the committed purge", async () => {
     throw new Error("storage unavailable");
   });
   await expect(maintainNetworkingLifecycle("event", afterPurge)).rejects.toThrow("storage unavailable");
-  expect(deleted).toHaveBeenCalledOnce();
+  expect(deleted).toHaveBeenCalledTimes(2);
   expect(state.committed).toBe(true);
   expect(state.rolledBack).toBe(false);
 });
