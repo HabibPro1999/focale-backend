@@ -1,10 +1,10 @@
 import { Body, Controller, HttpCode, Param, Post } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
 import { ErrorCodes, type PriceBreakdown } from "@app/contracts";
-import { sanitizeFormData, validateFormData } from "@app/shared";
 import { AppException } from "../../core/app-exception";
 import { assertEventAcceptsPublicActions } from "../events";
 import { isModuleEnabledForClient } from "../clients/module-gates";
+import { prepareFormDataForPricing } from "./form-data-for-pricing";
 import { PricingService } from "./pricing.service";
 import { CalculatePriceRequestDto, FormIdParamDto } from "./pricing.dto";
 
@@ -36,20 +36,8 @@ export class PricingPublicController {
       );
     }
 
-    const validationResult = validateFormData(form.schema, input.formData);
-    if (!validationResult.valid) {
-      throw new AppException(
-        ErrorCodes.FORM_VALIDATION_ERROR,
-        "Form validation failed",
-        400,
-        { fieldErrors: validationResult.errors },
-      );
-    }
-
-    const sanitizedFormData = sanitizeFormData(form.schema, input.formData);
-    return this.pricing.calculatePrice(form.eventId, {
-      ...input,
-      formData: sanitizedFormData,
-    });
+    // Same input as create/edit, so the quote equals the charge.
+    const formData = prepareFormDataForPricing(form.schema, input.formData);
+    return this.pricing.calculatePrice(form.eventId, { ...input, formData });
   }
 }

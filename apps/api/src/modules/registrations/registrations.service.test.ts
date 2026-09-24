@@ -126,6 +126,11 @@ function makeRegRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+// Registration form with one free-text answer (admin create/edit load it).
+const ANSWER_SCHEMA = {
+  steps: [{ id: "s1", title: "Step", fields: [{ id: "answer", type: "text" }] }],
+};
+
 function activeClient() {
   return { active: true, enabledModules: ["registrations", "pricing"] };
 }
@@ -160,6 +165,7 @@ describe("RegistrationsService", () => {
     db.findAccessDetailsByIds.mockResolvedValue([]);
     db.findClientModuleState.mockResolvedValue(activeClient());
     db.findRegistrationUsagesForRecalc.mockResolvedValue([]);
+    db.getRegistrationFormSchemaForEvent.mockResolvedValue({ schema: ANSWER_SCHEMA });
 
     ft.fileTypeFromBuffer.mockResolvedValue({ mime: "application/pdf", ext: "pdf" });
     integ.compressFile.mockResolvedValue({
@@ -288,6 +294,7 @@ describe("RegistrationsService", () => {
           email: "paid@example.com",
           firstName: "Paid",
           lastName: "Registrant",
+          formData: {},
           paymentStatus: "PAID",
           accessSelections: [],
         } as never,

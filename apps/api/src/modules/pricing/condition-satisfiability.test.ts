@@ -4,7 +4,7 @@ import {
   conditionSetSignature,
   type FindConditionConflictsOptions,
 } from "@app/contracts";
-import { evaluateConditions, type Condition } from "@app/shared";
+import { evaluateRuleConditions, type Condition } from "@app/shared";
 
 // ============================================================================
 // Keystone cross-check harness
@@ -88,14 +88,14 @@ function assertNeverSatisfiable(conditions: Condition[], logic: string): void {
   const combos = bruteForceFormData(conditions);
   expect(combos.length).toBeGreaterThan(0);
   for (const formData of combos) {
-    expect(evaluateConditions(conditions, logic, formData)).toBe(false);
+    expect(evaluateRuleConditions(conditions, logic, formData)).toBe(false);
   }
 }
 
 function assertWitnessExists(conditions: Condition[], logic: string): void {
   const combos = bruteForceFormData(conditions);
   const witnessExists = combos.some((formData) =>
-    evaluateConditions(conditions, logic, formData),
+    evaluateRuleConditions(conditions, logic, formData),
   );
   expect(witnessExists).toBe(true);
 }
@@ -318,7 +318,7 @@ describe("findConditionConflicts — conflict shape", () => {
       { fieldId: "f", operator: "in", value: "a" },
     ];
     expect(findConditionConflicts(conditions, "AND")).toEqual([]);
-    expect(evaluateConditions(conditions, "AND", { f: "a" })).toBe(true);
+    expect(evaluateRuleConditions(conditions, "AND", { f: "a" })).toBe(true);
   });
 
   it("does not flag `in` with an omitted value (unsatisfiable, but not this rule's job)", () => {
@@ -409,7 +409,7 @@ describe("findConditionConflicts — near-boundary satisfiable range (not a brut
       { fieldId: "age", operator: "less_than", value: 6 },
     ];
     expect(findConditionConflicts(conditions, "AND")).toEqual([]);
-    expect(evaluateConditions(conditions, "AND", { age: 5.5 })).toBe(true);
+    expect(evaluateRuleConditions(conditions, "AND", { age: 5.5 })).toBe(true);
   });
 });
 

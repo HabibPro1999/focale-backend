@@ -1,4 +1,4 @@
-import { evaluateConditions, type Condition } from "@app/shared";
+import { evaluateRuleConditions, type Condition } from "@app/shared";
 import type { EventAccessWithPrereqIds } from "@app/db";
 import type { DateGroup, GroupedAccessResponse, TimeSlot } from "@app/contracts";
 
@@ -69,7 +69,7 @@ export function groupAccess(
 
     if (hasConditions(access.conditions)) {
       if (
-        !evaluateConditions(
+        !evaluateRuleConditions(
           access.conditions as Condition[],
           access.conditionLogic,
           formData,

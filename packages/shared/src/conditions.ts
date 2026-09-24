@@ -1,5 +1,10 @@
 /**
- * Shared condition evaluation logic used by pricing, access, and form validation.
+ * Strict rule-condition evaluation, used by pricing rules and access conditions.
+ *
+ * NOT used for form-field visibility: that follows the public form app's
+ * lenient evaluator exactly (`./field-visibility`). The form app's pricing
+ * preview (`form/src/lib/pricing-conditions.ts`) is a copy of this file, so
+ * changing a rule here silently re-prices every quote and registration.
  *
  * Design decisions:
  * - `equals`/`not_equals` coerce both sides to string before comparing, so
@@ -77,7 +82,7 @@ function isInValue(actual: unknown, expected: unknown): boolean {
 /**
  * Evaluate a single condition against form data.
  */
-export function evaluateSingleCondition(
+export function evaluateRuleCondition(
   condition: Condition,
   formData: Record<string, unknown>,
 ): boolean {
@@ -124,7 +129,7 @@ export function evaluateSingleCondition(
  * - Empty array + AND → true (vacuous truth)
  * - Empty array + OR → false (no condition satisfied)
  */
-export function evaluateConditions(
+export function evaluateRuleConditions(
   conditions: Condition[],
   logic: string,
   formData: Record<string, unknown>,
@@ -137,7 +142,7 @@ export function evaluateConditions(
   if (conditions.length === 0) {
     return normalizedLogic === "AND"; // AND: true (no constraints); OR: false (nothing satisfied)
   }
-  const results = conditions.map((c) => evaluateSingleCondition(c, formData));
+  const results = conditions.map((c) => evaluateRuleCondition(c, formData));
   return normalizedLogic === "AND"
     ? results.every(Boolean)
     : results.some(Boolean);

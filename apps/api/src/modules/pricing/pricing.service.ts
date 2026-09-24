@@ -34,7 +34,7 @@ import {
 } from "@app/db";
 import {
   calculateApplicableAmount,
-  evaluateConditions,
+  evaluateRuleConditions,
   newId,
 } from "@app/shared";
 import { AppException } from "../../core/app-exception";
@@ -358,7 +358,7 @@ export class PricingService {
     const appliedRules: PriceBreakdown["appliedRules"] = [];
     let calculatedBasePrice = basePrice;
     for (const rule of activeRules) {
-      if (evaluateConditions(rule.conditions, rule.conditionLogic, formData)) {
+      if (evaluateRuleConditions(rule.conditions, rule.conditionLogic, formData)) {
         calculatedBasePrice = rule.price;
         appliedRules.push({
           ruleId: rule.id,

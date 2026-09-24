@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { evaluateConditions, evaluateSingleCondition } from "./conditions";
+import { evaluateRuleConditions, evaluateRuleCondition } from "./conditions";
 
-describe("evaluateSingleCondition", () => {
+describe("evaluateRuleCondition", () => {
   it("returns true for not_contains when value is non-string", () => {
-    const result = evaluateSingleCondition(
+    const result = evaluateRuleCondition(
       {
         fieldId: "age",
         operator: "not_contains",
@@ -16,7 +16,7 @@ describe("evaluateSingleCondition", () => {
   });
 
   it("returns false for not_contains when string contains substring", () => {
-    const result = evaluateSingleCondition(
+    const result = evaluateRuleCondition(
       {
         fieldId: "name",
         operator: "not_contains",
@@ -29,7 +29,7 @@ describe("evaluateSingleCondition", () => {
   });
 
   it("returns true for not_contains when value is undefined", () => {
-    const result = evaluateSingleCondition(
+    const result = evaluateRuleCondition(
       {
         fieldId: "company",
         operator: "not_contains",
@@ -43,14 +43,14 @@ describe("evaluateSingleCondition", () => {
 
   it("compares numeric strings for greater_than and less_than", () => {
     expect(
-      evaluateSingleCondition(
+      evaluateRuleCondition(
         { fieldId: "age", operator: "greater_than", value: 18 },
         { age: "25" },
       ),
     ).toBe(true);
 
     expect(
-      evaluateSingleCondition(
+      evaluateRuleCondition(
         { fieldId: "age", operator: "less_than", value: "18" },
         { age: "25" },
       ),
@@ -59,21 +59,21 @@ describe("evaluateSingleCondition", () => {
 
   it("does not treat zero or false as empty", () => {
     expect(
-      evaluateSingleCondition(
+      evaluateRuleCondition(
         { fieldId: "count", operator: "is_not_empty" },
         { count: 0 },
       ),
     ).toBe(true);
 
     expect(
-      evaluateSingleCondition(
+      evaluateRuleCondition(
         { fieldId: "accepted", operator: "is_not_empty" },
         { accepted: false },
       ),
     ).toBe(true);
 
     expect(
-      evaluateSingleCondition(
+      evaluateRuleCondition(
         { fieldId: "items", operator: "is_empty" },
         { items: [] },
       ),
@@ -84,7 +84,7 @@ describe("evaluateSingleCondition", () => {
 describe("in operator", () => {
   it("matches a scalar field value present in the list", () => {
     expect(
-      evaluateSingleCondition(
+      evaluateRuleCondition(
         { fieldId: "category", operator: "in", value: ["gold", "silver"] },
         { category: "gold" },
       ),
@@ -93,7 +93,7 @@ describe("in operator", () => {
 
   it("does not match a scalar field value absent from the list", () => {
     expect(
-      evaluateSingleCondition(
+      evaluateRuleCondition(
         { fieldId: "category", operator: "in", value: ["gold", "silver"] },
         { category: "bronze" },
       ),
@@ -102,7 +102,7 @@ describe("in operator", () => {
 
   it("matches an array field value with at least one overlap (checkbox support)", () => {
     expect(
-      evaluateSingleCondition(
+      evaluateRuleCondition(
         { fieldId: "interests", operator: "in", value: ["a", "b"] },
         { interests: ["c", "b"] },
       ),
@@ -111,7 +111,7 @@ describe("in operator", () => {
 
   it("does not match an array field value with no overlap", () => {
     expect(
-      evaluateSingleCondition(
+      evaluateRuleCondition(
         { fieldId: "interests", operator: "in", value: ["a", "b"] },
         { interests: ["c", "d"] },
       ),
@@ -120,7 +120,7 @@ describe("in operator", () => {
 
   it("does not match an empty array field value", () => {
     expect(
-      evaluateSingleCondition(
+      evaluateRuleCondition(
         { fieldId: "interests", operator: "in", value: ["a", "b"] },
         { interests: [] },
       ),
@@ -129,7 +129,7 @@ describe("in operator", () => {
 
   it("does not match a missing field", () => {
     expect(
-      evaluateSingleCondition(
+      evaluateRuleCondition(
         { fieldId: "category", operator: "in", value: ["gold"] },
         {},
       ),
@@ -138,7 +138,7 @@ describe("in operator", () => {
 
   it("does not match a null field", () => {
     expect(
-      evaluateSingleCondition(
+      evaluateRuleCondition(
         { fieldId: "category", operator: "in", value: ["gold"] },
         { category: null },
       ),
@@ -147,7 +147,7 @@ describe("in operator", () => {
 
   it("never matches an empty list", () => {
     expect(
-      evaluateSingleCondition(
+      evaluateRuleCondition(
         { fieldId: "category", operator: "in", value: [] },
         { category: "gold" },
       ),
@@ -156,14 +156,14 @@ describe("in operator", () => {
 
   it("coerces numeric and boolean values identically to equals", () => {
     expect(
-      evaluateSingleCondition(
+      evaluateRuleCondition(
         { fieldId: "age", operator: "in", value: ["18", "25"] },
         { age: 25 },
       ),
     ).toBe(true);
 
     expect(
-      evaluateSingleCondition(
+      evaluateRuleCondition(
         { fieldId: "accepted", operator: "in", value: ["true"] },
         { accepted: true },
       ),
@@ -172,7 +172,7 @@ describe("in operator", () => {
 
   it("degrades to equals when the condition value is a scalar, not a list", () => {
     expect(
-      evaluateSingleCondition(
+      evaluateRuleCondition(
         {
           fieldId: "category",
           operator: "in",
@@ -183,7 +183,7 @@ describe("in operator", () => {
     ).toBe(true);
 
     expect(
-      evaluateSingleCondition(
+      evaluateRuleCondition(
         {
           fieldId: "category",
           operator: "in",
@@ -199,20 +199,20 @@ describe("in operator", () => {
     // the explicit null/undefined guard in isInValue, an omitted value would
     // degrade to candidates = [undefined] and match a missing field.
     expect(
-      evaluateSingleCondition({ fieldId: "category", operator: "in" }, {}),
+      evaluateRuleCondition({ fieldId: "category", operator: "in" }, {}),
     ).toBe(false);
   });
 
   it("fails closed for the unknown not_in operator", () => {
     expect(
-      evaluateSingleCondition(
+      evaluateRuleCondition(
         { fieldId: "category", operator: "not_in", value: ["gold"] },
         { category: "silver" },
       ),
     ).toBe(false);
 
     expect(
-      evaluateSingleCondition(
+      evaluateRuleCondition(
         { fieldId: "category", operator: "not_in", value: ["gold"] },
         { category: "gold" },
       ),
@@ -232,7 +232,7 @@ describe("in operator", () => {
         value: "opt_purchase_order",
       },
     ];
-    expect(evaluateConditions(threeEquals, "AND", formData)).toBe(false);
+    expect(evaluateRuleConditions(threeEquals, "AND", formData)).toBe(false);
 
     const equivalentIn = [
       {
@@ -246,13 +246,13 @@ describe("in operator", () => {
         value: "opt_purchase_order",
       },
     ];
-    expect(evaluateConditions(equivalentIn, "AND", formData)).toBe(true);
+    expect(evaluateRuleConditions(equivalentIn, "AND", formData)).toBe(true);
   });
 });
 
-describe("evaluateConditions", () => {
+describe("evaluateRuleConditions", () => {
   it("fails closed for unknown logic", () => {
-    const result = evaluateConditions(
+    const result = evaluateRuleConditions(
       [{ fieldId: "role", operator: "equals", value: "admin" }],
       "XOR",
       { role: "admin" },
@@ -262,14 +262,14 @@ describe("evaluateConditions", () => {
   });
 
   it("keeps vacuous truth only for AND", () => {
-    expect(evaluateConditions([], "AND", {})).toBe(true);
-    expect(evaluateConditions([], "OR", {})).toBe(false);
-    expect(evaluateConditions([], "INVALID", {})).toBe(false);
+    expect(evaluateRuleConditions([], "AND", {})).toBe(true);
+    expect(evaluateRuleConditions([], "OR", {})).toBe(false);
+    expect(evaluateRuleConditions([], "INVALID", {})).toBe(false);
   });
 
   it("supports boolean equality without collapsing missing values to null", () => {
     expect(
-      evaluateConditions(
+      evaluateRuleConditions(
         [{ fieldId: "active", operator: "equals", value: true }],
         "AND",
         { active: true },
@@ -277,7 +277,7 @@ describe("evaluateConditions", () => {
     ).toBe(true);
 
     expect(
-      evaluateConditions(
+      evaluateRuleConditions(
         [{ fieldId: "missing", operator: "equals", value: null }],
         "AND",
         {},
@@ -285,11 +285,57 @@ describe("evaluateConditions", () => {
     ).toBe(false);
 
     expect(
-      evaluateConditions(
+      evaluateRuleConditions(
         [{ fieldId: "blank", operator: "equals", value: "" }],
         "AND",
         { blank: "" },
       ),
     ).toBe(true);
+  });
+});
+
+// Copied from the form app's own test of its pricing copy of this evaluator
+// (form/src/lib/pricing-conditions.test.ts, develop ba6c271), with the names
+// mapped: the form's pricing preview must keep charging what the server charges.
+describe("rule conditions — parity with the form app's pricing evaluator", () => {
+  const evaluateSingleCondition = evaluateRuleCondition;
+  const evaluateConditions = evaluateRuleConditions;
+
+  it("compares case-sensitively while allowing numeric strings", () => {
+    expect(evaluateSingleCondition({ fieldId: "x", operator: "equals", value: "Member" }, { x: "member" })).toBe(false);
+    expect(evaluateSingleCondition({ fieldId: "x", operator: "equals", value: 42 }, { x: "42" })).toBe(true);
+  });
+
+  it("uses in for checkbox intersections without changing equals", () => {
+    const data = { x: ["member", "speaker"] };
+    expect(evaluateSingleCondition({ fieldId: "x", operator: "in", value: ["speaker", "student"] }, data)).toBe(true);
+    expect(evaluateSingleCondition({ fieldId: "x", operator: "equals", value: "speaker" }, data)).toBe(false);
+    expect(evaluateSingleCondition({ fieldId: "x", operator: "in", value: [] }, data)).toBe(false);
+    expect(evaluateSingleCondition({ fieldId: "x", operator: "in" }, {})).toBe(false);
+  });
+
+  it.each(["", " ", null, false, "2026-09-07", Infinity])("rejects invalid numeric input %s", (x) => {
+    expect(evaluateSingleCondition({ fieldId: "x", operator: "less_than", value: 10 }, { x })).toBe(false);
+  });
+
+  it("honors empty AND/OR and rejects unknown operators and logic", () => {
+    expect(evaluateConditions([], "AND", {})).toBe(true);
+    expect(evaluateConditions([], "OR", {})).toBe(false);
+    expect(evaluateConditions([], "unknown", {})).toBe(false);
+    expect(evaluateSingleCondition({ fieldId: "x", operator: "unknown" }, {})).toBe(false);
+  });
+
+  it("differs from field visibility on purpose: case-sensitive, and logic case-insensitive", () => {
+    expect(evaluateConditions([{ fieldId: "x", operator: "equals", value: "Other" }], "and", { x: "other" })).toBe(false);
+    expect(
+      evaluateConditions(
+        [
+          { fieldId: "a", operator: "equals", value: "1" },
+          { fieldId: "b", operator: "equals", value: "2" },
+        ],
+        "AND",
+        { a: "1", b: "x" },
+      ),
+    ).toBe(false);
   });
 });
