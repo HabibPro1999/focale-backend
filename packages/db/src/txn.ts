@@ -1,7 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { sql } from "drizzle-orm";
 import { DB_TIMEOUT_MAX_MS } from "@app/contracts";
-import { getDb, getDbSettings, type Db } from "./client";
+import { getDb, getDbSettings, type Db, type DbExecutor } from "./client";
 
 type TxnFn<T> = (tx: Parameters<Parameters<Db["transaction"]>[0]>[0]) => Promise<T>;
 
@@ -105,6 +105,27 @@ export async function withTxnRetry<T>(
  */
 export function withTxn<T>(fn: TxnFn<T>): Promise<T> {
   return getDb().transaction(fn, { isolationLevel: "read committed" });
+}
+
+/**
+ * True when `exec` is a transaction. A drizzle transaction executor exposes
+ * rollback(); the root db does not. Row locks and savepoints only make sense
+ * inside a transaction.
+ */
+export function isTransactionExecutor(exec: DbExecutor): boolean {
+  return typeof (exec as { rollback?: unknown }).rollback === "function";
+}
+
+/**
+ * READ COMMITTED transaction for the lock-first pattern (ADR 0001): take the
+ * row locks from `locks.ts` first, re-read the locked rows, then write. The
+ * whole transaction runs again on 40001/40P01: a deadlock between lockers
+ * (40P01 on PostgreSQL, 40001 on CockroachDB) or a CockroachDB restart.
+ * `fn` must be safe to re-run, so keep side effects other than database
+ * writes (email, storage, HTTP) outside it; use the outbox instead.
+ */
+export function withLockingTxn<T>(fn: TxnFn<T>): Promise<T> {
+  return withTxnRetry(() => withTxn(fn));
 }
 
 /** SERIALIZABLE transaction wrapped in withTxnRetry. */
