@@ -3,7 +3,7 @@ import { createLogger, makeWorkerId } from "@app/shared";
 import type { AppEvent } from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
 import { rowsOf, rowCountOf } from "../helpers";
-import { pgUniqueViolation } from "../txn";
+import { isTransactionExecutor, pgUniqueViolation } from "../txn";
 import { auditLogs, outboxEvents } from "../schema";
 import {
   REALTIME_EMIT_TYPE,
@@ -83,13 +83,6 @@ function outboxScopeClause(scope: OutboxProcessingScope): SQL {
   if (scope === "background")
     return sql.raw(`AND "type" <> '${REALTIME_EMIT_TYPE}'`);
   return sql.raw("");
-}
-
-// A drizzle transaction executor exposes rollback(); the root db does not. Used
-// to decide whether a failed dedupe insert needs a SAVEPOINT to avoid poisoning
-// the caller's transaction.
-function isTransactionExecutor(exec: DbExecutor): boolean {
-  return typeof (exec as { rollback?: unknown }).rollback === "function";
 }
 
 // outbox_events has exactly one caller-supplied unique index (the partial

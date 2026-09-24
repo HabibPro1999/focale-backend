@@ -19,6 +19,7 @@ import {
   type ExportRegistrationRow,
 } from "@app/db";
 import { ErrorCodes } from "@app/contracts";
+import { isFullySettled } from "@app/shared";
 import type {
   ReportQuery,
   FinancialReportResponse,
@@ -45,8 +46,6 @@ function buildDateFilter(query: ReportQuery): DateRange {
     endDate: query.endDate ? new Date(query.endDate) : null,
   };
 }
-
-const SETTLED_STATUSES = ["PAID", "SPONSORED", "WAIVED"];
 
 @Injectable()
 export class ReportsService {
@@ -171,10 +170,10 @@ export class ReportsService {
     });
 
     const settledList = registrations
-      .filter((r) => SETTLED_STATUSES.includes(r.paymentStatus))
+      .filter((r) => isFullySettled(r.paymentStatus))
       .map(mapRegistrant);
     const notSettledList = registrations
-      .filter((r) => !SETTLED_STATUSES.includes(r.paymentStatus))
+      .filter((r) => !isFullySettled(r.paymentStatus))
       .map(mapRegistrant);
 
     return {
