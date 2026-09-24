@@ -13,8 +13,17 @@ const envSchema = z
     CORS_ORIGIN: z.string().default("http://localhost:8080"),
     // Firebase
     FIREBASE_PROJECT_ID: z.string(),
-    // Public frontend project identifier; override when using another Firebase project.
-    FIREBASE_WEB_API_KEY: z.string().default("AIzaSyBiQGgDgPf9IAoo8y2zwHCS-EZ57N6KCus"),
+    // Opt-in accounts:lookup verification fallback for when the Admin SDK cannot
+    // fetch Google's public keys (Render egress block). Requires FIREBASE_WEB_API_KEY.
+    FIREBASE_AUTH_LOOKUP_FALLBACK: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((v) => v === "true"),
+    // Web API key of FIREBASE_PROJECT_ID; used only by the lookup fallback. No default.
+    FIREBASE_WEB_API_KEY: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.string().optional(),
+    ),
     COMMITTEE_INVITE_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(7),
     FIREBASE_STORAGE_BUCKET: z.string().optional(),
     // Firebase service account JSON (for cloud deployments)
@@ -77,6 +86,14 @@ const envSchema = z
       .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
       .optional(),
   })
+  .refine(
+    (data) => !data.FIREBASE_AUTH_LOOKUP_FALLBACK || !!data.FIREBASE_WEB_API_KEY,
+    {
+      message:
+        "FIREBASE_WEB_API_KEY is required when FIREBASE_AUTH_LOOKUP_FALLBACK=true",
+      path: ["FIREBASE_WEB_API_KEY"],
+    },
+  )
   .refine(
     (data) => {
       if (
@@ -224,6 +241,7 @@ export function parseAppConfig(source: NodeJS.ProcessEnv) {
     firebase: {
       projectId: env.FIREBASE_PROJECT_ID,
       webApiKey: env.FIREBASE_WEB_API_KEY,
+      authLookupFallback: env.FIREBASE_AUTH_LOOKUP_FALLBACK,
       storageBucket: env.FIREBASE_STORAGE_BUCKET,
       serviceAccount: env.FIREBASE_SERVICE_ACCOUNT,
     },

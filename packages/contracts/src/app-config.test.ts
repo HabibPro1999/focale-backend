@@ -151,4 +151,46 @@ describe("parseAppConfig", () => {
     expect(() => parseAppConfig(baseEnv({ COMMITTEE_INVITE_TOKEN_TTL_DAYS: "0" }))).toThrow(ConfigError);
   });
 
+  it("keeps the Firebase lookup fallback off with no built-in web API key", () => {
+    const config = parseAppConfig(baseEnv());
+
+    expect(config.firebase.authLookupFallback).toBe(false);
+    expect(config.firebase.webApiKey).toBeUndefined();
+    expect(
+      parseAppConfig(baseEnv({ FIREBASE_WEB_API_KEY: "" })).firebase.webApiKey,
+    ).toBeUndefined();
+  });
+
+  it("enables the Firebase lookup fallback only with a web API key", () => {
+    const config = parseAppConfig(
+      baseEnv({
+        FIREBASE_AUTH_LOOKUP_FALLBACK: "true",
+        FIREBASE_WEB_API_KEY: "web-key",
+      }),
+    );
+
+    expect(config.firebase.authLookupFallback).toBe(true);
+    expect(config.firebase.webApiKey).toBe("web-key");
+  });
+
+  it.each([undefined, ""])(
+    "fails at boot when the lookup fallback is on without a web API key (%j)",
+    (key) => {
+      const env = baseEnv({
+        FIREBASE_AUTH_LOOKUP_FALLBACK: "true",
+        FIREBASE_WEB_API_KEY: key,
+      });
+
+      expect(() => parseAppConfig(env)).toThrow(ConfigError);
+      expect(() => parseAppConfig(env)).toThrow(
+        "FIREBASE_WEB_API_KEY is required when FIREBASE_AUTH_LOOKUP_FALLBACK=true",
+      );
+    },
+  );
+
+  it("rejects a non-boolean lookup fallback flag", () => {
+    expect(() =>
+      parseAppConfig(baseEnv({ FIREBASE_AUTH_LOOKUP_FALLBACK: "yes" })),
+    ).toThrow(ConfigError);
+  });
 });
