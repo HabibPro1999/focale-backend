@@ -40,10 +40,34 @@ export class JobRunner {
     return run;
   }
 
-  /** Stop scheduling and await any in-flight runs. */
-  async stop(): Promise<void> {
-    await Promise.all(this.pollers.map((poller) => poller.stop()));
-    this.pollers.length = 0;
-    await Promise.allSettled([...this.inFlight.values()]);
+  /**
+   * Stop scheduling and wait for in-flight runs, until `deadline` (epoch ms)
+   * when given. Returns the jobs still running at the deadline; they cannot be
+   * aborted yet (the job contract gains an abort signal in plan item 3.3).
+   */
+  async stop(options: { deadline?: number } = {}): Promise<{ unfinished: string[] }> {
+    const pollers = this.pollers.splice(0);
+    // poller.stop() flips its stop flag synchronously, so no new tick starts.
+    const settled = Promise.all([
+      ...pollers.map((poller) => poller.stop()),
+      Promise.allSettled([...this.inFlight.values()]),
+    ]).then(() => "settled" as const);
+    if (options.deadline === undefined) {
+      await settled;
+      return { unfinished: [] };
+    }
+    let timer: NodeJS.Timeout | undefined;
+    const expired = new Promise<"expired">((resolve) => {
+      timer = setTimeout(() => resolve("expired"), Math.max(0, options.deadline! - Date.now()));
+    });
+    try {
+      const outcome = await Promise.race([settled, expired]);
+      if (outcome === "settled") return { unfinished: [] };
+      const unfinished = [...this.inFlight.keys()];
+      log.warn({ jobs: unfinished }, "shutdown deadline reached with jobs still running");
+      return { unfinished };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }

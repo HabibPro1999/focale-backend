@@ -131,3 +131,37 @@ describe("JobRunner", () => {
     }
   });
 });
+
+describe("JobRunner.stop({ deadline })", () => {
+  it("returns as soon as in-flight runs settle, before the deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const { job, resolveLatest } = deferredJob("quick", 1_000);
+      const runner = new JobRunner([job]);
+      runner.start();
+      const stopping = runner.stop({ deadline: Date.now() + 10_000 });
+      resolveLatest();
+      await expect(stopping).resolves.toEqual({ unfinished: [] });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(job.run).toHaveBeenCalledTimes(1); // no tick after stop
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops waiting at the deadline and reports the jobs still running", async () => {
+    vi.useFakeTimers();
+    try {
+      const { job } = deferredJob("stuck", 1_000);
+      const done: Job = { name: "done", intervalMs: 1_000, run: vi.fn().mockResolvedValue(undefined) };
+      const runner = new JobRunner([job, done]);
+      runner.start();
+      const stopping = runner.stop({ deadline: Date.now() + 3_000 });
+      await vi.advanceTimersByTimeAsync(3_000);
+      await expect(stopping).resolves.toEqual({ unfinished: ["stuck"] });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

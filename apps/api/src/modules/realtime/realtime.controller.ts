@@ -8,7 +8,7 @@ import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { CONFIG, type Config } from "../../core/config";
 import type { AuthUser } from "../../core/auth/user-cache";
 import { eventBus, type AppEventHandler } from "./bus";
-import { RealtimeConnectionRegistry } from "./connections";
+import { ShutdownCoordinator } from "../../core/shutdown";
 import { SseStream } from "./sse";
 import { StreamQueryDto } from "./realtime.dto";
 
@@ -26,7 +26,7 @@ import { StreamQueryDto } from "./realtime.dto";
 export class RealtimeController {
   constructor(
     @Inject(CONFIG) private readonly config: Config,
-    private readonly registry: RealtimeConnectionRegistry,
+    private readonly lifecycle: ShutdownCoordinator,
   ) {}
 
   @Get("api/stream")
@@ -38,6 +38,9 @@ export class RealtimeController {
     @Req() req: FastifyRequest,
     @Res() reply: FastifyReply,
   ): Promise<void> {
+    // Draining for shutdown: 503 + Retry-After instead of a stream that would
+    // be cut moments later.
+    this.lifecycle.assertAcceptingStreams(reply);
     if (this.config.realtime.disabled) {
       await reply.status(503).send({ error: "Realtime disabled" });
       return;
@@ -87,6 +90,7 @@ export class RealtimeController {
     };
 
     let closed = false;
+    let untrack: () => void = () => undefined;
     let close: () => void = () => {
       closed = true;
     };
@@ -107,7 +111,7 @@ export class RealtimeController {
       if (closed) return;
       closed = true;
       eventBus.off(handler);
-      this.registry.remove(close);
+      untrack();
       try {
         sse.close();
       } catch {
@@ -130,7 +134,14 @@ export class RealtimeController {
     }
 
     eventBus.on(handler);
-    this.registry.add(close);
+    // On shutdown: tell the client when to reconnect (jittered), then close.
+    untrack = this.lifecycle.trackStream((reconnectInMs) => {
+      if (closed || !sse.isConnected) return close();
+      void sse
+        .send({ event: "shutdown", retry: reconnectInMs, data: { reconnectInMs } })
+        .catch(() => undefined)
+        .finally(close);
+    });
     sse.onClose(close);
 
     await sse.send({

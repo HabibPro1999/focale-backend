@@ -10,6 +10,7 @@ import {
 import { WorkerModule } from "./worker.module";
 import { JobRunner } from "./job-runner";
 import { loadConfig } from "./core/config";
+import { WorkerHeartbeat, createWorkerShutdown } from "./core/lifecycle";
 
 const log = createLogger({ name: "worker" });
 
@@ -33,8 +34,25 @@ async function bootstrap() {
   // is silently dropped depending on which process handled it.
   setEmailStatusChangeListener(emitEmailLogRealtimeEvent);
 
+  const heartbeat = new WorkerHeartbeat(config.lifecycle.workerHeartbeatFile, log);
+  const onSignals = (shutdown: (signal: string) => Promise<void>) => {
+    process.on("SIGINT", () => void shutdown("SIGINT"));
+    process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  };
+
   if (!config.runWorkers) {
-    log.info("RUN_WORKERS=false; in-process workers disabled");
+    // Idle instead of exiting: an exited worker ends (or restarts) its container.
+    log.info("RUN_WORKERS=false; jobs disabled, worker idling with a disabled heartbeat");
+    heartbeat.start({ disabled: true });
+    onSignals(
+      createWorkerShutdown({
+        graceMs: config.lifecycle.shutdownGraceMs,
+        closeDb,
+        heartbeat,
+        exit: (code) => process.exit(code),
+        logger: log,
+      }),
+    );
     return;
   }
 
@@ -46,33 +64,22 @@ async function bootstrap() {
   });
   const runner = ctx.get(JobRunner);
   runner.start();
+  heartbeat.start({ disabled: false });
   log.info("worker started");
 
-  let shuttingDown = false;
-  const shutdown = async (signal: string) => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    log.info({ signal }, "worker shutting down");
-    let exitCode = 0;
-    try {
-      await runner.stop();
-      await ctx.close();
-    } catch (err) {
-      exitCode = 1;
-      log.error({ err }, "worker shutdown failed");
-    }
-    try {
-      await closeDb();
-    } catch (err) {
-      exitCode = 1;
-      log.error({ err }, "database pool close failed");
-    }
-    log.info("worker stopped");
-    process.exit(exitCode);
-  };
-
-  process.on("SIGINT", () => void shutdown("SIGINT"));
-  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  // SIGTERM: stop scheduling, give running jobs until grace − 5 s, close the
+  // context and the pool, hard-exit at SHUTDOWN_GRACE_MS.
+  onSignals(
+    createWorkerShutdown({
+      graceMs: config.lifecycle.shutdownGraceMs,
+      stopRunner: (deadline) => runner.stop({ deadline }),
+      closeContext: () => ctx.close(),
+      closeDb,
+      heartbeat,
+      exit: (code) => process.exit(code),
+      logger: log,
+    }),
+  );
 }
 
 bootstrap().catch((err) => {
