@@ -22,7 +22,9 @@ table = **29 tables**, **19 pg enums**.
 - **Timestamps**: `timestamp({ precision: 3 })` — naive `TIMESTAMP(3)`, NO timezone,
   matching the live DB. `createdAt`/`updatedAt` via the `timestamps` helper
   (`updatedAt` is app-managed via `$defaultFn` on insert + `$onUpdate`, with NO DB
-  default — matching the live `TIMESTAMP(3) NOT NULL` column). Tables without `updatedAt`
+  default — matching the live `TIMESTAMP(3) NOT NULL` column), except the three
+  networking tables created by 0013/0018 whose historical SQL defines `DEFAULT now()`;
+  those table declarations preserve both the SQL default and app-side hooks. Tables without `updatedAt`
   (payment_transaction, sponsorship_batches, sponsorship_usages, abstract_revisions,
   access_check_ins, audit_logs) declare only the columns they have.
 - **Types matching the live dump**: `event_access.companion_price` is `integer`
@@ -32,12 +34,14 @@ table = **29 tables**, **19 pg enums**.
   are nullable `text[]` with a default (Prisma scalar-list quirk on CockroachDB — no
   NOT NULL); `applicable_roles` is a nullable `RegistrationRole[]` enum array.
 
-## Raw-SQL-only indexes — applied by the migration runner
+## Indexes and constraints from raw migrations
 
-Drizzle's schema builder cannot express partial (`WHERE`) unique indexes or GIN /
-inverted indexes, so these remain hand-written SQL in `migrations/0001_raw_indexes.sql`.
-The unified runner applies them after `0000_init.sql`, with index NAMES byte-for-byte identical to the legacy
-CockroachDB migrations (app code matches on them for P2002 mapping and dedupe guards):
+The runner still applies the historical SQL in `migrations/0001_raw_indexes.sql`,
+`0003`–`0006`, and `0019` to preserve migration history. Their final catalog shape
+is also declared in this Drizzle schema so drift checks can compare a fresh
+migration against the application model. The index names remain byte-for-byte
+identical to the legacy CockroachDB migrations (application error mapping and
+dedupe guards depend on them):
 
 | Index | Table | Kind |
 |---|---|---|
@@ -47,9 +51,19 @@ CockroachDB migrations (app code matches on them for P2002 mapping and dedupe gu
 | `email_logs_registration_trigger_active_key` | email_logs | partial unique (status + queued_at cutoff) |
 | `email_logs_abstract_submission_ack_active_key` | email_logs | partial unique |
 | `email_logs_template_recipient_trigger_active_key` | email_logs | partial unique (status + queued_at cutoff) |
-| `abstracts_event_id_code_number_key` | abstracts | partial unique (`WHERE code_number IS NOT NULL`) |
 | `outbox_events_dedupe_key_key` | outbox_events | partial unique (`WHERE dedupe_key IS NOT NULL`) |
 | `registrations_access_type_ids_inverted_idx` | registrations | GIN (CRDB `INVERTED INDEX`) |
+| `email_logs_dedupe_key_active_key` | email_logs | partial unique (active statuses only) |
+| `abstract_book_jobs_event_id_active_key` | abstract_book_jobs | partial unique (pending/running only) |
+| `abstract_themes_config_id_sort_order_active_key` | abstract_themes | partial unique (active themes only) |
+| `networking_messages_sender_created_idx` | networking_messages | composite index from 0019 |
+| `networking_notifications_unread_idx` | networking_notifications | partial index from 0019 |
+| `networking_meetings_requester_start_idx` | networking_meetings | composite index from 0019 |
+| `networking_meetings_recipient_start_idx` | networking_meetings | composite index from 0019 |
+
+`abstracts_event_id_code_number_key` was intentionally removed in migration 0002
+and is not part of the final schema. The old `networking_tables_event_name_key`
+is dropped by 0018 and replaced with the space-scoped uniqueness rule.
 
 **CRDB vs Postgres divergence**: the last one is a CockroachDB `INVERTED INDEX` in prod.
 `0001` writes it as `CREATE INDEX ... USING GIN`, which is valid on Postgres and is also

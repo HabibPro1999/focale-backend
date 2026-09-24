@@ -185,6 +185,7 @@ export const networkingMessages = pgTable(
       t.connectionId,
       t.createdAt,
     ),
+    index("networking_messages_sender_created_idx").on(t.eventId, t.senderId, t.createdAt),
   ],
 );
 export const networkingBlocks = pgTable(
@@ -246,6 +247,12 @@ export const networkingSpaces = pgTable(
     location: text().notNull().default(""),
     active: boolean().notNull().default(true),
     ...timestamps,
+    // Historical 0018 SQL has a database default for this one table's updated_at.
+    updatedAt: timestamp({ precision: 3 })
+      .notNull()
+      .defaultNow()
+      .$defaultFn(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (t) => [
     uniqueIndex("networking_spaces_event_name_key").on(t.eventId, t.name),
@@ -331,6 +338,8 @@ export const networkingMeetings = pgTable(
   (t) => [
     index("networking_meetings_event_starts_idx").on(t.eventId, t.startsAt),
     index("networking_meetings_pending_idx").on(t.status, t.expiresAt),
+    index("networking_meetings_requester_start_idx").on(t.eventId, t.requesterId, t.startsAt),
+    index("networking_meetings_recipient_start_idx").on(t.eventId, t.recipientId, t.startsAt),
   ],
 );
 // Five-minute resource quanta protect overlaps across edits to configured slot duration.
@@ -376,6 +385,9 @@ export const networkingNotifications = pgTable(
       t.profileId,
       t.createdAt,
     ),
+    index("networking_notifications_unread_idx")
+      .on(t.eventId, t.profileId, t.createdAt)
+      .where(sql`${t.readAt} IS NULL`),
   ],
 );
 export const networkingDeliveries = pgTable(

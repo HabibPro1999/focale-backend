@@ -36,12 +36,12 @@ bun run dev
 ## Environment and Test Safety
 
 - Copy `.env.example` to `.env` for local development, then replace placeholders with local-only values.
-- Never commit real `.env*` files; only `.env.example`, `.env.test.example`, `.env.test.db.example`, and `.env.test.migration.example` are intended to be tracked.
+- Never commit real `.env*` files; only `.env.example`, `.env.test.example`, and `.env.test.db.example` are intended to be tracked.
 - `TRUST_PROXY` is required when `NODE_ENV=production` and must be a comma-separated list of the actual trusted proxy IP/CIDR addresses, or the literal `false` when clients connect directly without a proxy. The API refuses numeric hop counts, `true`, wildcard trust, and `/0` networks because forwarded headers must only be trusted after validating the connecting peer. Before deployment, replace any old integer value with the proxy peer addresses supplied by the deployment network configuration; do not guess proxy ranges.
 - Production secrets belong only in the deployment secret manager. If production-like credentials are found in local env files, rotate them in the owning service and remove local copies.
 - Unit tests load `.env.test` when present and otherwise use safe in-code defaults. They never fall back to `.env`, and `DATABASE_URL` is forced to a dummy local test URL for the mocked unit tier.
-- DB-backed test tiers load only `.env.test.db`/`.env.test.migration` or process env. They require `ALLOW_DB_TESTS=1` plus `TEST_DATABASE_URL` or `TEST_MIGRATION_DATABASE_URL`, and refuse database names that do not clearly contain `test` or `ci`.
-- Useful validation: `git check-ignore -v .env .env.prod .env.test .env.test.db .env.test.migration`, `git check-ignore -v .env.example .env.test.example .env.test.db.example .env.test.migration.example`, `bun run type-check`, `bun run lint`, and `bun run test:run`.
+- DB-backed tiers read process environment only. Use `.env.test.db.example` as the shared template and source it explicitly when desired. They require `ALLOW_DB_TESTS=1` plus a guarded `TEST_DB_ADMIN_URL`; the URL must target loopback or a host in `TEST_DB_ALLOWED_HOSTS`, and its database name must contain an exact `test` or `ci` token.
+- Useful validation: `git check-ignore -v .env .env.prod .env.test .env.test.db`, `git check-ignore -v .env.example .env.test.example .env.test.db.example`, `bun run type-check`, `bun run lint`, and `bun run test:run`.
 
 ## Scripts
 
@@ -56,9 +56,9 @@ bun run dev
 | `bun run test` | Run mocked unit tests in watch mode |
 | `bun run test:run` | Run mocked unit tests once |
 | `bun run test:unit` | Alias for the fast mocked unit test run |
-| `bun run test:db` | Run opt-in DB integration tier (`ALLOW_DB_TESTS=1` + `TEST_DATABASE_URL`) |
+| `bun run test:db` | Run opt-in DB integration tier (`ALLOW_DB_TESTS=1` + `TEST_DB_ADMIN_URL`) |
 | `bun run test:concurrency` | Run opt-in real-DB concurrency tier |
-| `bun run test:migration` | Run opt-in migration tier (`TEST_MIGRATION_DATABASE_URL`) |
+| `bun run test:migration` | Run opt-in migration tier (`TEST_DB_ADMIN_URL`) |
 | `bun run test:ci` | Type-check plus unit tests only |
 | `bun run test:ci:db` | Type-check, unit, DB, concurrency, and migration tiers when DB env is present |
 | `bun run test:coverage` | Run mocked unit tests with coverage |
@@ -292,20 +292,20 @@ bun run test:unit
 bun run test:coverage
 ```
 
-DB-backed tiers are explicit and guarded. Prepare a disposable CockroachDB/PostgreSQL-compatible database whose database name contains `test` or `ci`, then provide env from process env or the matching template file.
+DB-backed tiers are explicit and guarded. Create a disposable maintenance database with an exact `test` or `ci` token in its name, then set `TEST_DB_ADMIN_URL`. Root `test:db` runs every package's database suite sequentially, including API networking and integration notification-worker coverage; performance experiments stay outside this default tier. The helper creates a fresh migrated scratch database for every test file and removes it afterward. PostgreSQL clones a per-run migrated template; CockroachDB uses fresh per-file databases because the pinned 26.2.5 release does not support database template cloning. Stale helper-owned scratch databases older than 24 hours are removed at suite startup.
 
 ```bash
 # DB integration tier
-ALLOW_DB_TESTS=1 TEST_DATABASE_URL='postgresql://...' bun run test:db
+ALLOW_DB_TESTS=1 TEST_DB_ADMIN_URL='postgresql://postgres:...@127.0.0.1:5432/focale_test_admin' pnpm test:db
 
 # Real-DB concurrency tier
-ALLOW_DB_TESTS=1 TEST_DATABASE_URL='postgresql://...' bun run test:concurrency
+ALLOW_DB_TESTS=1 TEST_DB_ADMIN_URL='postgresql://postgres:...@127.0.0.1:5432/focale_test_admin' pnpm test:concurrency
 
 # Migration tier against a separate disposable database
-ALLOW_DB_TESTS=1 TEST_MIGRATION_DATABASE_URL='postgresql://...' bun run test:migration
+ALLOW_DB_TESTS=1 TEST_DB_ADMIN_URL='postgresql://postgres:...@127.0.0.1:5432/focale_test_admin' pnpm test:migration
 ```
 
-Use `.env.test.example` only for unit-safe overrides, `.env.test.db.example` for DB tiers, and `.env.test.migration.example` for migration smoke tests. Keep all values local/disposable placeholders; never place production or shared development credentials in test env files.
+Use `.env.test.example` only for unit-safe overrides and `.env.test.db.example` for all DB tiers. The tests do not load `.env` or `.env.test.db`; set variables explicitly or source the example in your shell. Keep values local/disposable; never use production or shared development credentials.
 
 ### Writing Tests
 

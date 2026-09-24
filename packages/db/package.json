@@ -8,6 +8,9 @@
       "@app/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./testing": {
+      "@app/source": "./src/testing/index.ts"
     }
   },
   "scripts": {

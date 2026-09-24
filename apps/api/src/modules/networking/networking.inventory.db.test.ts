@@ -18,9 +18,9 @@ import { NetworkingMeetingsService } from "./networking.meetings.service";
 import { NetworkingSocialService } from "./networking.social.service";
 import { NetworkingInventoryService } from "./networking.inventory.service";
 import { networkingHash } from "./networking.security";
+import { dbTestsEnabled } from "@app/db/testing";
 
-const enabled =
-  process.env.ALLOW_DB_TESTS === "1" && !!process.env.TEST_DATABASE_URL;
+const enabled = dbTestsEnabled();
 const inventory = new NetworkingInventoryService();
 const service = new NetworkingService();
 const meetings = new NetworkingMeetingsService(service);
@@ -70,15 +70,6 @@ describe.runIf(enabled)(
   "networking spaces and independent exhibitor representatives",
   () => {
     beforeAll(() => {
-      const url = new URL(process.env.TEST_DATABASE_URL!);
-      if (
-        !["localhost", "127.0.0.1"].includes(url.hostname) ||
-        !url.pathname.startsWith("/focale_networking_test_spaces_")
-      )
-        throw new Error(
-          "Inventory tests require their dedicated local spaces test database",
-        );
-      process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
       process.env.NETWORKING_TOKEN_SECRET =
         "spaces-test-secret-at-least-32-characters";
     });

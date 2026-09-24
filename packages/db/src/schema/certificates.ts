@@ -1,11 +1,13 @@
 import {
   boolean,
+  check,
   index,
   integer,
   jsonb,
   pgTable,
   text,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { idPk, timestamps } from "../helpers";
 import { registrationRole, abstractFinalType } from "./enums";
 import { eventAccess, events } from "./events-access";
@@ -44,5 +46,8 @@ export const certificateTemplates = pgTable(
     allowedAbstractFinalTypes: abstractFinalType().array(),
     ...timestamps,
   },
-  (t) => [index("certificate_templates_event_id_idx").on(t.eventId)],
+  (t) => [
+    index("certificate_templates_event_id_idx").on(t.eventId),
+    check("certificate_templates_scope_check", sql`${t.scope} IN ('REGISTRATION', 'ABSTRACT', 'BOTH')`),
+  ],
 );
