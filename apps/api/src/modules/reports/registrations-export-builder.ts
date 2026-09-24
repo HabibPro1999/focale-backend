@@ -5,6 +5,7 @@ import {
   getEventAccessNames,
   getEventSlugAndName,
   getSponsorshipLabDetails,
+  withExportStatementTimeout,
   type ModularRegistrationRow,
   type RegistrationFormColumn,
 } from "@app/db";
@@ -792,35 +793,50 @@ export async function buildRegistrationsWorkbook(
   const lang = body.language;
   const { columns: cols } = body;
 
-  // Parallel fetch: event metadata, form columns, access items, registrations.
-  const [event, tableColumns, accessItems, registrations] = await Promise.all([
-    getEventSlugAndName(eventId),
-    getRegistrationTableColumns(eventId),
-    getEventAccessNames(eventId),
-    getRegistrationsForModularExport(eventId, {
-      paymentStatus: body.filters.paymentStatus,
-      paymentMethod: body.filters.paymentMethod,
-      search: body.filters.search,
-      startDate: body.filters.startDate,
-      endDate: body.filters.endDate,
-      needCheckIns: cols.checkinAccessIds.length > 0 || cols.includeGlobalCheckin,
-      needTransactions: cols.includeTransactions,
-    }),
-  ]);
-
   // Lab details only when sponsorship-deep columns are requested.
   const needsLabDetails = body.columns.sponsorship.some((f) =>
     ["labContactName", "labEmail", "labPhone", "beneficiaryAddress"].includes(f),
   );
+
+  // Event metadata, form columns, access items, registrations (+ lab details),
+  // fetched in one transaction under the export statement timeout.
+  const { event, tableColumns, accessItems, registrations, labDetails } =
+    await withExportStatementTimeout(async (tx) => {
+      const eventRow = await getEventSlugAndName(eventId, tx);
+      const columns = await getRegistrationTableColumns(eventId, tx);
+      const access = await getEventAccessNames(eventId, tx);
+      const rows = await getRegistrationsForModularExport(
+        eventId,
+        {
+          paymentStatus: body.filters.paymentStatus,
+          paymentMethod: body.filters.paymentMethod,
+          search: body.filters.search,
+          startDate: body.filters.startDate,
+          endDate: body.filters.endDate,
+          needCheckIns: cols.checkinAccessIds.length > 0 || cols.includeGlobalCheckin,
+          needTransactions: cols.includeTransactions,
+        },
+        tx,
+      );
+      const details = needsLabDetails
+        ? await getSponsorshipLabDetails(
+            eventId,
+            rows.map((r) => r.sponsorshipCode).filter((c): c is string => Boolean(c)),
+            tx,
+          )
+        : [];
+      return {
+        event: eventRow,
+        tableColumns: columns,
+        accessItems: access,
+        registrations: rows,
+        labDetails: details,
+      };
+    });
+
   const sponsorshipByCode: RowContext["sponsorshipByCode"] = new Map();
   if (needsLabDetails) {
-    const details = await getSponsorshipLabDetails(
-      eventId,
-      registrations
-        .map((r) => r.sponsorshipCode)
-        .filter((c): c is string => Boolean(c)),
-    );
-    for (const d of details) {
+    for (const d of labDetails) {
       sponsorshipByCode.set(d.code, {
         beneficiaryAddress: d.beneficiaryAddress,
         batch: d.batch,

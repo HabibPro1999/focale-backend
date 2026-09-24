@@ -6,7 +6,12 @@ import { ErrorCodes } from "@app/contracts";
 // are read-only fetches; the service does the aggregation/formatting math we
 // assert on here. We do NOT assert internal call order (the legacy test pinned
 // Promise.all mock order — that was an implementation detail); we assert outputs.
+// Export fetches run inside withExportStatementTimeout; the fake hands them a
+// sentinel executor so tests can assert they received the export transaction.
+const EXPORT_TX = vi.hoisted(() => ({ exportTransaction: true }));
+
 vi.mock("@app/db", () => ({
+  withExportStatementTimeout: vi.fn((fn: (tx: unknown) => unknown) => fn(EXPORT_TX)),
   // Financial
   getFinancialSummaryAggregates: vi.fn(),
   getPaymentStatusBreakdown: vi.fn(),
@@ -447,12 +452,14 @@ describe("exportRegistrations", () => {
       endDate: "2025-01-31T23:59:59.000Z",
     });
 
+    expect(m.getEventSlug).toHaveBeenCalledWith(eventId, EXPORT_TX);
     expect(m.getRegistrationsForExport).toHaveBeenCalledWith(
       eventId,
       expect.objectContaining({
         startDate: "2025-01-01T00:00:00.000Z",
         endDate: "2025-01-31T23:59:59.000Z",
       }),
+      EXPORT_TX,
     );
   });
 
