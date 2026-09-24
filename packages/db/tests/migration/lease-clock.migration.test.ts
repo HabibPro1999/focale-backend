@@ -46,7 +46,7 @@ describe.runIf(dbTestsEnabled())("migration lease clock inside open transactions
   async function shortenLease(seconds: number): Promise<void> {
     await database.client.query(
       `UPDATE public.schema_migration_lock
-       SET lease_until = clock_timestamp() + $1 * interval '1 second'
+       SET lease_until = clock_timestamp() + $1::int * interval '1 second'
        WHERE id = 1 AND owner = $2`,
       [seconds, OWNER],
     );
