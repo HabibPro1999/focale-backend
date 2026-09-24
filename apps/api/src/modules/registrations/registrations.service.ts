@@ -359,7 +359,9 @@ export class RegistrationsService {
 
     if (
       registration.paymentStatus === "WAIVED" ||
-      registration.paymentStatus === "REFUNDED"
+      registration.paymentStatus === "REFUNDED" ||
+      registration.paymentStatus === "PAID" ||
+      registration.paymentStatus === "VERIFYING"
     ) {
       return result;
     }
@@ -945,6 +947,14 @@ export class RegistrationsService {
           referenceNumber,
           role,
           paymentStatus: resolvedPaymentStatus,
+          paidAmount:
+            resolvedPaymentStatus === "PAID"
+              ? calculateSettlement({
+                  totalAmount: priceBreakdown.subtotal,
+                  paidAmount: 0,
+                  sponsorshipAmount: 0,
+                }).netAmount
+              : 0,
           paidAt: FULLY_SETTLED_STATUSES.includes(resolvedPaymentStatus)
             ? new Date()
             : null,
@@ -1049,15 +1059,20 @@ export class RegistrationsService {
           patch.paidAt = new Date();
         }
       }
-      if (input.paidAmount !== undefined) {
-        if (input.paidAmount > calculateSettlement(registration).netAmount) {
+      const paidAmount =
+        input.paidAmount ??
+        (input.paymentStatus === "PAID"
+          ? calculateSettlement(registration).netAmount
+          : undefined);
+      if (paidAmount !== undefined) {
+        if (paidAmount > calculateSettlement(registration).netAmount) {
           throw new AppException(
             ErrorCodes.BAD_REQUEST,
             "Paid amount cannot exceed registration total",
             400,
           );
         }
-        patch.paidAmount = input.paidAmount;
+        patch.paidAmount = paidAmount;
       }
       if (input.paymentMethod !== undefined) patch.paymentMethod = input.paymentMethod;
       if (input.paymentReference !== undefined)
@@ -1081,10 +1096,13 @@ export class RegistrationsService {
         };
       }
       if (
-        input.paidAmount !== undefined &&
-        input.paidAmount !== registration.paidAmount
+        patch.paidAmount !== undefined &&
+        patch.paidAmount !== registration.paidAmount
       ) {
-        changes.paidAmount = { old: registration.paidAmount, new: input.paidAmount };
+        changes.paidAmount = {
+          old: registration.paidAmount,
+          new: patch.paidAmount,
+        };
       }
       if (
         input.paymentMethod !== undefined &&
@@ -1167,6 +1185,17 @@ export class RegistrationsService {
 
       const patch: RegistrationPatch = {};
       const changes: Record<string, { old: unknown; new: unknown }> = {};
+      const hasPriceEdits =
+        input.accessSelections !== undefined || input.formData !== undefined;
+      const setDefaultPaidAmount = (paidAmount: number) => {
+        patch.paidAmount = paidAmount;
+        if (paidAmount !== registration.paidAmount) {
+          changes.paidAmount = {
+            old: registration.paidAmount,
+            new: paidAmount,
+          };
+        }
+      };
 
       const inputEmail =
         input.email !== undefined ? normalizeEmail(input.email) : undefined;
@@ -1254,7 +1283,7 @@ export class RegistrationsService {
       if (input.labName !== undefined) patch.labName = input.labName;
 
       // Price-affecting edit branch.
-      if (input.accessSelections !== undefined || input.formData !== undefined) {
+      if (hasPriceEdits) {
         assertModuleEnabledForClient(
           registration.event.client as ClientModuleState,
           "pricing",
@@ -1344,7 +1373,17 @@ export class RegistrationsService {
           input.paymentStatus ??
           settlement.paymentStatus ??
           registration.paymentStatus;
-        const nextPaidAmount = input.paidAmount ?? registration.paidAmount;
+        const shouldDefaultPaidAmount =
+          input.paymentStatus === "PAID" && input.paidAmount === undefined;
+        const defaultPaidAmount = shouldDefaultPaidAmount
+          ? calculateSettlement({
+              totalAmount: priceBreakdown.subtotal,
+              paidAmount: registration.paidAmount,
+              sponsorshipAmount: settlement.sponsorshipAmount,
+            }).netAmount
+          : undefined;
+        const nextPaidAmount =
+          input.paidAmount ?? defaultPaidAmount ?? registration.paidAmount;
         if (nextPaidAmount > priceBreakdown.total) {
           throw new AppException(
             ErrorCodes.BAD_REQUEST,
@@ -1360,6 +1399,9 @@ export class RegistrationsService {
         patch.sponsorshipAmount = settlement.sponsorshipAmount;
         patch.accessTypeIds = effectiveAccessSelections.map((s) => s.accessId);
         patch.priceBreakdown = priceBreakdown;
+        if (shouldDefaultPaidAmount) {
+          setDefaultPaidAmount(nextPaidAmount);
+        }
         if (
           input.paymentStatus === undefined &&
           settlement.paymentStatus !== undefined &&
@@ -1406,6 +1448,14 @@ export class RegistrationsService {
         }
       }
 
+      if (
+        !hasPriceEdits &&
+        input.paymentStatus === "PAID" &&
+        input.paidAmount === undefined
+      ) {
+        setDefaultPaidAmount(calculateSettlement(registration).netAmount);
+      }
+
       patch.lastEditedAt = new Date();
       await updateRegistrationRow(id, patch, tx);
 
@@ -1443,7 +1493,8 @@ export class RegistrationsService {
         eventId,
         clientId: registration.event.clientId,
         oldStatus: registration.paymentStatus,
-        newStatus: input.paymentStatus as string | undefined,
+        newStatus:
+          (patch.paymentStatus as string | undefined) ?? input.paymentStatus,
         emitCountsChanged: !!(
           statusChanged ||
           (input.accessSelections && input.accessSelections.length > 0)
