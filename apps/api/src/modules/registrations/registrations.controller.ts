@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   HttpCode,
   Ip,
   Param,
@@ -177,7 +178,7 @@ export class RegistrationsController {
     await this.service.deleteRegistration(id, user.id, force, user.role);
   }
 
-  // POST /api/events/registrations/:id/confirm — confirm payment (keeps editToken)
+  // POST /api/events/registrations/:id/confirm — confirm payment
   @Post("registrations/:id/confirm")
   @HttpCode(200)
   async confirm(
@@ -266,5 +267,33 @@ export class RegistrationsController {
       .header("Cache-Control", "private, max-age=300")
       .type(file.contentType ?? "application/octet-stream")
       .send(file.buffer);
+  }
+}
+
+// ============================================================================
+// Registration-scoped admin routes — /api/registrations/:id/...
+// ============================================================================
+
+@Controller("api/registrations")
+@Auth()
+export class RegistrationEditLinkController {
+  constructor(private readonly service: RegistrationsService) {}
+
+  // GET /api/registrations/:id/edit-link — the registrant's self-edit link.
+  // Same auth + tenant scoping as GET /api/events/registrations/:id (404 when
+  // missing, 403 for another tenant). Every issuance is audited.
+  @Get(":id/edit-link")
+  @Header("Cache-Control", "no-store")
+  async editLink(
+    @Param() { id }: RegistrationIdParamDto,
+    @CurrentUser() user: AuthUser,
+    @Ip() ip: string,
+  ) {
+    const clientId = await this.service.getRegistrationClientId(id);
+    if (clientId === null) {
+      throw new AppException(ErrorCodes.NOT_FOUND, "Registration not found", 404);
+    }
+    if (!canAccessClient(user, clientId)) forbidden();
+    return this.service.issueSelfEditLink(id, user.id, ip);
   }
 }
