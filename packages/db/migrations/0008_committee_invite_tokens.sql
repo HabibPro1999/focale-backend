@@ -1,3 +1,5 @@
+-- migrate: transaction per-file
+-- migrate: idempotent
 -- Inline constraints work on both Postgres and CockroachDB. The secondary
 -- index is in 0009, after the create transaction commits (CRDB schema_locked).
 CREATE TABLE IF NOT EXISTS "committee_invite_tokens" (

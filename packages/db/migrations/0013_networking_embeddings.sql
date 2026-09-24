@@ -1,3 +1,5 @@
+-- migrate: transaction per-file
+-- migrate: requires-extension vector
 -- PostgreSQL prerequisite: install pgvector and CREATE EXTENSION IF NOT EXISTS vector.
 -- CockroachDB: VECTOR is native; do not execute CREATE EXTENSION on CockroachDB.
 -- Run through scripts/migrate-networking.mjs for database-specific setup.

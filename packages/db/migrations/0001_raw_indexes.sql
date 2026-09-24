@@ -1,3 +1,5 @@
+-- migrate: transaction per-file
+-- migrate: idempotent
 -- Hand-written. NOT generated or tracked by drizzle-kit (not in meta/_journal.json).
 -- Drizzle's schema builder cannot express partial (WHERE) unique indexes, expression
 -- predicates, or GIN/inverted indexes, so these live here and must be applied after

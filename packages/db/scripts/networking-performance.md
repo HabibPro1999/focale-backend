@@ -34,6 +34,7 @@ The deployed `EXPLAIN` selects `networking_embeddings_cosine_idx`. The table was
 For another environment, from the backend directory:
 
 ```sh
+pnpm --filter @app/db build
 node packages/db/scripts/migrate-networking.mjs --through=0017
 # DATABASE_URL must already identify the intended database:
 node packages/db/scripts/migrate-networking.mjs --apply --through=0017

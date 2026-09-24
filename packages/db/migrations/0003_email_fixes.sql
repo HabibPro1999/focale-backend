@@ -1,3 +1,5 @@
+-- migrate: transaction per-file
+-- migrate: idempotent
 -- Hand-written. NOT generated or tracked by drizzle-kit (not in meta/_journal.json,
 -- same rationale as 0001_raw_indexes.sql). Must be applied after 0001_raw_indexes.sql.
 --

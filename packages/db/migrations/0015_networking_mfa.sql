@@ -1,3 +1,4 @@
+-- migrate: transaction per-file
 ALTER TABLE networking_sessions ADD COLUMN second_factor_verified_at TIMESTAMPTZ(3);
 CREATE TABLE networking_second_factors (
  profile_id TEXT PRIMARY KEY REFERENCES networking_profiles(id) ON DELETE CASCADE,
