@@ -1,11 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NetworkingConfigSchema } from "@app/contracts";
 import type { NetworkingRow, NetworkingStore } from "@app/db";
-const mocks = vi.hoisted(() => ({ one: vi.fn(), all: vi.fn(), insertAvailability: vi.fn(), allocationMeetings: vi.fn(), allocationReservations: vi.fn(), allocationTableUsage: vi.fn(), update: vi.fn(), remove: vi.fn(), insert: vi.fn(), notify: vi.fn(), summaries: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  one: vi.fn(), all: vi.fn(), insertAvailability: vi.fn(), allocationMeetings: vi.fn(), allocationReservations: vi.fn(), allocationTableUsage: vi.fn(),
+  update: vi.fn(), remove: vi.fn(), insert: vi.fn(), notify: vi.fn(), summaries: vi.fn(), claimResource: vi.fn(),
+  upsertInterest: vi.fn(), ensureConnection: vi.fn(), insertMessageOnce: vi.fn(), insertBlockOnce: vi.fn(), cancel: vi.fn(),
+  transaction: vi.fn(), allocationTransaction: vi.fn(), config: vi.fn(),
+}));
 vi.mock("@app/db", async (original) => ({
   ...(await original<typeof import("@app/db")>()),
   networkingStore: () => mocks,
-  networkingTransaction: async (_id: string, run: Function) => run(mocks, {}),
+  networkingTransaction: mocks.transaction,
+  networkingAllocationTransaction: mocks.allocationTransaction,
+  cancelNetworkingParticipantMeetings: mocks.cancel,
+  getNetworkingConfig: mocks.config,
   createNetworkingNotification: mocks.notify,
   findClientModuleState: vi.fn(),
   listNetworkingConnectionSummaries: mocks.summaries,
@@ -15,6 +23,7 @@ vi.mock("../clients/module-gates", () => ({ isModuleEnabledForClient: () => true
 import { NetworkingService, type NetworkingContext } from "./networking.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
 import { NetworkingSocialService } from "./networking.social.service";
+import { NetworkingAllocationLockError, NetworkingBusyError } from "@app/db";
 const start = new Date("2099-01-01T09:00:00Z");
 const ctx = {
   event: { id: "event", slug: "event", startDate: start, endDate: new Date("2099-01-02Z"), timezone: "UTC" },
@@ -22,6 +31,7 @@ const ctx = {
   profile: { id: "a", firstName: "Alice", lastName: "A", meetingsEnabled: true }, session: { id: "session" },
 } as unknown as NetworkingContext;
 let row: NetworkingRow<"meetings">;
+type Run = (store: unknown, db: unknown) => unknown;
 let service: NetworkingMeetingsService;
 beforeEach(() => {
   vi.restoreAllMocks(); vi.clearAllMocks();
@@ -32,6 +42,9 @@ beforeEach(() => {
   mocks.allocationReservations.mockResolvedValue([]);
   mocks.allocationTableUsage.mockResolvedValue([]);
   mocks.update.mockImplementation(async (_kind, _where, patch) => [row = { ...row, ...patch }]);
+  mocks.claimResource.mockResolvedValue(true);
+  mocks.transaction.mockImplementation(async (_id: string, run: Run) => run(mocks, {}));
+  mocks.allocationTransaction.mockImplementation(async (_id: string, _intervals: unknown, run: Run) => run(mocks, {}));
   service = new NetworkingMeetingsService({ currentParticipant: async () => ctx, target: async () => ({ id: "b" }) } as unknown as NetworkingService);
   vi.spyOn(service, "hydrate").mockImplementation(async (saved) => saved as any);
 });
@@ -110,14 +123,23 @@ describe("participant error codes", () => {
     await service.get(ctx, row.id);
     expect(hydrate).toHaveBeenCalledWith(row, mocks, false, ctx);
   });
-  it("maps a concurrent unique reservation violation to a slot conflict", async () => {
+  it("maps a participant claim lost to a concurrent booking to a slot conflict", async () => {
     vi.spyOn(service, "availableAt").mockResolvedValue(undefined);
-    mocks.insert.mockRejectedValue(Object.assign(new Error("duplicate key"), { cause: { code: "23505", constraint: "networking_reservations_resource_key" } }));
+    mocks.claimResource.mockImplementation(async (_event, _meeting, key: string) => key !== "profile:b");
     const manual = { ...ctx, config: { ...ctx.config, autoAssignTables: false } };
-    await expect(service.reserve(manual, row, start, row.endsAt, mocks as unknown as NetworkingStore)).rejects.toMatchObject({ status: 409, response: { code: "NETWORKING_SLOT_CONFLICT", message: "This slot was just booked; choose another time" } });
-    expect(mocks.insert).toHaveBeenCalledWith("reservations", expect.objectContaining({ meetingId: row.id }));
-    mocks.insert.mockRejectedValue(new Error("connection reset"));
+    await expect(service.reserve(manual, row, start, row.endsAt, mocks as unknown as NetworkingStore)).rejects.toMatchObject({ status: 409, response: { code: "NETWORKING_SLOT_CONFLICT", message: "One of the participants already has a meeting in this slot" } });
+    const quanta = Array.from({ length: 6 }, (_, i) => new Date(+start + i * 300_000));
+    expect(mocks.claimResource.mock.calls).toEqual([["event", row.id, "profile:a", quanta], ["event", row.id, "profile:b", quanta]]);
+    expect(mocks.insert).not.toHaveBeenCalled();
+    mocks.claimResource.mockRejectedValue(new Error("connection reset"));
     await expect(service.reserve(manual, row, start, row.endsAt, mocks as unknown as NetworkingStore)).rejects.toThrow("connection reset");
+  });
+  it("a pending hold claims only its table, never the participants", async () => {
+    vi.spyOn(service, "availableAt").mockResolvedValue(undefined);
+    mocks.all.mockImplementation(async (kind) => kind === "tables" ? [{ id: "t", name: "A", kind: "TABLE" }] : []);
+    const hold = await service.reserve(ctx, { ...row, status: "PENDING", expiresAt: new Date(Date.now() + 60_000) }, start, row.endsAt, mocks as unknown as NetworkingStore, undefined, true);
+    expect(hold).toEqual({ tableId: "t", status: "PENDING" });
+    expect(mocks.claimResource.mock.calls.map(([, , key]) => key)).toEqual(["table:t"]);
   });
   it("codes locked meetings", async () => {
     row.status = "COMPLETED";
@@ -145,28 +167,51 @@ describe("NetworkingSocialService notification data", () => {
   const social = () => new NetworkingSocialService({ currentParticipant: async () => ctx, target: async () => target } as unknown as NetworkingService);
   it("writes counterpart names and connection IDs for matches", async () => {
     mocks.one.mockImplementation(async (kind, where) => kind === "interests" && where.profileId === "b" ? { action: "LIKE" } : null);
-    mocks.insert.mockImplementation(async (_kind, values) => ({ id: "connection", ...values }));
-    await social().interest(ctx, "b", "LIKE");
+    mocks.ensureConnection.mockResolvedValue({ connection: { id: "connection" }, created: true });
+    expect(await social().interest(ctx, "b", "LIKE")).toEqual({ matched: true, connectionId: "connection" });
+    expect(mocks.upsertInterest).toHaveBeenCalledWith("event", "a", "b", "LIKE");
+    expect(mocks.ensureConnection).toHaveBeenCalledWith("event", "a", "b");
     expect(mocks.notify.mock.calls.map(([notification]) => notification.data)).toEqual([
       { connectionId: "connection", counterpartName: "Bob B" },
       { connectionId: "connection", counterpartName: "Alice A" },
     ]);
     expect(mocks.notify.mock.calls.map(([notification]) => notification.href)).toEqual(["/e/event/connections/connection", "/e/event/connections/connection"]);
   });
+  it("announces a match only from the call that created the connection", async () => {
+    mocks.one.mockImplementation(async (kind, where) => kind === "interests" && where.profileId === "b" ? { action: "LIKE" } : null);
+    mocks.ensureConnection.mockResolvedValue({ connection: { id: "connection" }, created: false });
+    expect(await social().interest(ctx, "b", "LIKE")).toEqual({ matched: true, connectionId: "connection" });
+    expect(mocks.notify).not.toHaveBeenCalled();
+  });
+  it("a repeated identical swipe writes neither the interest nor an audit row", async () => {
+    mocks.one.mockImplementation(async (kind, where) => kind === "interests" && where.profileId === "a" ? { action: "PASS" } : null);
+    expect(await social().interest(ctx, "b", "PASS")).toEqual({ matched: false });
+    expect(mocks.upsertInterest).not.toHaveBeenCalled();
+    expect(mocks.insert).not.toHaveBeenCalled();
+  });
   it("writes the sender name for message notifications", async () => {
     mocks.one.mockImplementation(async (kind) => kind === "connections" ? { id: "connection", profileAId: "a", profileBId: "b" } : null);
-    mocks.insert.mockImplementation(async (_kind, values) => ({ id: "message", createdAt: new Date(), ...values }));
+    mocks.insertMessageOnce.mockImplementation(async (values) => ({ id: "message", createdAt: new Date(), ...values }));
     await social().sendMessage(ctx, "connection", "Hello", "key");
     expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({ href: "/e/event/connections/connection", data: { connectionId: "connection", messageId: "message", counterpartName: "Alice A" } }), {});
   });
-  it("writes cancellation dates and status when blocking but never names either side", async () => {
+  it("replays a message key idempotently and rejects its reuse for another message", async () => {
+    const previous = { id: "message", connectionId: "connection", body: "Hello" };
+    mocks.one.mockImplementation(async (kind) => kind === "connections" ? { id: "connection", profileAId: "a", profileBId: "b" } : kind === "messages" ? previous : null);
+    mocks.insertMessageOnce.mockResolvedValue(null);
+    expect(await social().sendMessage(ctx, "connection", "Hello", "key")).toBe(previous);
+    await expect(social().sendMessage(ctx, "connection", "Other", "key")).rejects.toMatchObject({ status: 400, response: { code: "NETWORKING_VALIDATION" } });
+    expect(mocks.notify).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+  it("blocks idempotently and cancels only the pair's meetings, by slug, in the same transaction", async () => {
     mocks.one.mockImplementation(async (kind) => kind === "profiles" ? target : null);
-    mocks.all.mockResolvedValue([row]);
-    await social().block(ctx, "b");
-    expect(mocks.notify.mock.calls.map(([notification]) => notification.profileId)).toEqual(["a", "b"]);
-    for (const [notification] of mocks.notify.mock.calls)
-      expect(notification).toMatchObject({ href: "/e/event/agenda", data: { meetingId: row.id, revision: 2, action: "CANCEL", startsAt: start.toISOString(), endsAt: row.endsAt.toISOString(), status: "CANCELLED" } });
-    for (const [notification] of mocks.notify.mock.calls) expect(notification.data).not.toHaveProperty("counterpartName");
+    const tx = {};
+    mocks.transaction.mockImplementation(async (_id: string, run: Run) => run(mocks, tx));
+    expect(await social().block(ctx, "b")).toEqual({ blocked: true });
+    expect(mocks.insertBlockOnce).toHaveBeenCalledWith("event", "a", "b");
+    expect(mocks.cancel).toHaveBeenCalledWith("a", "event", tx, { counterpartId: "b", slug: "event" });
+    expect(mocks.all).not.toHaveBeenCalledWith("meetings", expect.anything());
   });
 });
 
@@ -186,6 +231,12 @@ describe("bounded allocation and availability", () => {
     mocks.allocationTableUsage.mockResolvedValue([{ tableId: "busy", count: 4 }, { tableId: "quiet", count: 0 }]);
     const result = await service.reserve({ ...ctx, config: { ...ctx.config, autoAssignTables: true } }, row, start, row.endsAt, mocks as unknown as NetworkingStore);
     expect(result.tableId).toBe("quiet");
+    // A table lost to a concurrent claim falls through to the next one in spread order.
+    mocks.claimResource.mockImplementation(async (_event, _meeting, key: string) => key !== "table:quiet");
+    expect((await service.reserve({ ...ctx, config: { ...ctx.config, autoAssignTables: true } }, row, start, row.endsAt, mocks as unknown as NetworkingStore)).tableId).toBe("busy");
+    mocks.claimResource.mockImplementation(async (_event, _meeting, key: string) => !key.startsWith("table:"));
+    await expect(service.reserve({ ...ctx, config: { ...ctx.config, autoAssignTables: true } }, row, start, row.endsAt, mocks as unknown as NetworkingStore))
+      .rejects.toMatchObject({ status: 409, response: { code: "NETWORKING_SLOT_CONFLICT" } });
     expect(mocks.allocationMeetings).toHaveBeenCalledWith("event", start, row.endsAt);
     expect(mocks.allocationReservations).toHaveBeenCalledWith("event", start, row.endsAt);
     expect(mocks.allocationTableUsage).toHaveBeenCalledWith("event");
@@ -223,5 +274,53 @@ describe("targeted connection lookups (K2)", () => {
     expect(await lookup(async () => ({ id: "a" })).connectionWith(ctx, "a")).toBeNull();
     const { NotFoundException } = await import("@nestjs/common");
     expect(await lookup(async () => { throw new NotFoundException(); }).connectionWith(ctx, "b")).toBeNull();
+  });
+});
+
+describe("allocation locks", () => {
+  const future = new Date(Date.now() + 86_400_000);
+  const slotAt = (date: Date) => ({ startsAt: date, endsAt: new Date(+date + 1_800_000) });
+  beforeEach(() => {
+    vi.spyOn(service, "slot").mockImplementation((_ctx, value) => slotAt(new Date(value)));
+    vi.spyOn(service, "availableAt").mockResolvedValue(undefined);
+    vi.spyOn(service, "reserve").mockResolvedValue({ tableId: "t", status: "CONFIRMED" });
+  });
+  it("a meeting request locks the requested slot's hours", async () => {
+    mocks.one.mockImplementation(async (kind) => kind === "connections" ? { id: "c" } : kind === "profiles" ? { id: "b" } : null);
+    mocks.insert.mockImplementation(async (_kind, values) => ({ ...row, ...values, id: "new", status: "PENDING", expiresAt: future }));
+    await service.create(ctx, { profileId: "b", startsAt: future.toISOString() });
+    expect(mocks.allocationTransaction).toHaveBeenCalledOnce();
+    expect(mocks.allocationTransaction.mock.calls[0]![1]).toEqual([slotAt(future)]);
+    expect(mocks.transaction).not.toHaveBeenCalled();
+  });
+  it("accepting locks the proposed slot; cancelling and declining take no allocation lock", async () => {
+    row.proposedStartsAt = future; row.proposalBy = "b"; row.expiresAt = future; row.endsAt = new Date(+future + 7_200_000);
+    await service.respond(ctx, row.id, { action: "ACCEPT" });
+    expect(mocks.allocationTransaction.mock.calls[0]![1]).toEqual([slotAt(future)]);
+    mocks.allocationTransaction.mockClear();
+    row.status = "CONFIRMED"; row.proposedStartsAt = future; row.proposalBy = "b";
+    await service.respond(ctx, row.id, { action: "DECLINE" });
+    await service.respond(ctx, row.id, { action: "CANCEL" });
+    expect(mocks.allocationTransaction).not.toHaveBeenCalled();
+    expect(mocks.transaction).toHaveBeenCalledTimes(2);
+  });
+  it("rescheduling locks the new slot only while the request is still a pending hold", async () => {
+    row.endsAt = new Date(+future + 7_200_000);
+    await service.respond(ctx, row.id, { action: "RESCHEDULE", startsAt: future.toISOString() });
+    expect(mocks.allocationTransaction).not.toHaveBeenCalled();
+    row.status = "PENDING"; row.proposedStartsAt = null; row.proposalBy = null; row.expiresAt = future;
+    await service.respond(ctx, row.id, { action: "RESCHEDULE", startsAt: future.toISOString() });
+    expect(mocks.allocationTransaction.mock.calls[0]![1]).toEqual([slotAt(future)]);
+  });
+  it("re-plans from a fresh read when the claim fell outside the locked hours, then gives up as busy", async () => {
+    row.proposedStartsAt = future; row.proposalBy = "b"; row.expiresAt = future; row.endsAt = new Date(+future + 7_200_000);
+    mocks.config.mockResolvedValue({ ...ctx.config, slotDurationMinutes: 60 });
+    mocks.allocationTransaction.mockRejectedValueOnce(new NetworkingAllocationLockError());
+    await service.respond(ctx, row.id, { action: "ACCEPT" });
+    expect(mocks.allocationTransaction).toHaveBeenCalledTimes(2);
+    expect(mocks.allocationTransaction.mock.calls[1]![1]).toEqual([{ startsAt: future, endsAt: new Date(+future + 3_600_000) }]);
+    mocks.allocationTransaction.mockClear().mockRejectedValue(new NetworkingAllocationLockError());
+    await expect(service.respond(ctx, row.id, { action: "ACCEPT" })).rejects.toBeInstanceOf(NetworkingBusyError);
+    expect(mocks.allocationTransaction).toHaveBeenCalledTimes(3);
   });
 });

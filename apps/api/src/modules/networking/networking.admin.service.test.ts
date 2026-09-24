@@ -9,6 +9,8 @@ const state = vi.hoisted(() => ({
   deliveries: [] as any[],
   forms: [] as any[],
   profile: null as Record<string, unknown> | null,
+  meeting: null as Record<string, unknown> | null,
+  tx: { executor: "transaction" },
   delete: vi.fn(),
   sync: vi.fn(),
   tail: Promise.resolve() as Promise<unknown>,
@@ -17,11 +19,12 @@ vi.mock("@app/db", () => {
   const store = {
     one: async (kind: string) => {
       if (kind === "profiles" && state.profile) return state.profile;
+      if (kind === "meetings") return state.meeting;
       if (kind === "configs") {
         if (state.requireTransaction) expect(state.transaction).toBe(true);
         return state.row;
       }
-      return { id: "event", startDate: new Date("2030-01-01Z"), endDate: new Date("2031-01-01Z") };
+      return { id: "event", clientId: "client", startDate: new Date("2030-01-01Z"), endDate: new Date("2031-01-01Z") };
     },
     all: async (kind: string) => kind === "deliveries" ? state.deliveries : kind === "forms" ? state.forms : [],
     update: async (_kind: string, _where: unknown, values: object) => {
@@ -39,10 +42,11 @@ vi.mock("@app/db", () => {
     syncNetworkingEvent: state.sync,
     networkingFormField: (schema: { fields?: { id: string }[] }, id: string) => schema.fields?.find((field) => field.id === id),
     networkingStore: () => store,
-    networkingTransaction: (_eventId: string, run: (store: NetworkingStore) => Promise<unknown>) => {
+    getNetworkingConfig: async () => NetworkingConfigSchema.parse({}),
+    networkingTransaction: (_eventId: string, run: (store: NetworkingStore, db: unknown) => Promise<unknown>) => {
       const result = state.tail.then(async () => {
         state.transaction = true;
-        try { return await run(store as unknown as NetworkingStore); }
+        try { return await run(store as unknown as NetworkingStore, state.tx); }
         finally { state.transaction = false; }
       });
       state.tail = result.catch(() => {});
@@ -55,6 +59,7 @@ vi.mock("@app/integrations", async (original) => ({
   ...(await original<typeof import("@app/integrations")>()),
   getStorageProvider: () => ({ delete: state.delete }),
 }));
+import { assertClientModuleEnabled } from "../clients/module-gates";
 import { ZodValidationPipe } from "../../core/zod";
 import { NetworkingConfigDto } from "./networking.dto";
 import { NetworkingAdminService } from "./networking.admin.service";
@@ -165,6 +170,10 @@ describe("NetworkingAdminService config consent mapping and sync", () => {
   it("returns the committed config and revision even when the registration re-sync fails", async () => {
     state.sync.mockRejectedValue(new Error("sync crashed"));
     const result = await service.config("event", { enabled: true, meetingsEnabled: false }, "admin");
+    // Module gates ride the config transaction's connection.
+    expect(vi.mocked(assertClientModuleEnabled).mock.calls).toEqual([
+      ["client", "registrations", state.tx], ["client", "emails", state.tx],
+    ]);
     expect(state.sync).toHaveBeenCalledWith("event");
     expect(result).toMatchObject({ enabled: true, revision: expect.any(String) });
     expect(state.row!.config.enabled).toBe(true);
@@ -216,5 +225,36 @@ describe("NetworkingAdminService report regeneration", () => {
     const second = await service.regeneratePostEventReport("event", "admin");
     expect(second.version).not.toBe(first.version);
     expect(state.deliveries[1].dedupeKey).not.toBe(state.deliveries[0].dedupeKey);
+  });
+});
+
+describe("NetworkingAdminService meeting assignment", () => {
+  const startsAt = new Date("2099-01-01T09:00:00Z"), endsAt = new Date("2099-01-01T09:30:00Z");
+  function harness() {
+    const plans: unknown[] = [];
+    const store = {
+      one: async (kind: string) => kind === "meetings" ? state.meeting : kind === "profiles" ? { id: "a" } : { id: "event" },
+      update: async (_kind: string, _where: unknown, values: object) => [{ ...state.meeting, ...values }],
+      insert: async () => ({}),
+      remove: async () => undefined,
+    };
+    const meetings = {
+      allocation: vi.fn(async (_eventId: string, plan: () => Promise<unknown>, run: (store: unknown, db: unknown) => Promise<unknown>) => {
+        plans.push(await plan());
+        return run(store, state.tx);
+      }),
+      reserve: vi.fn(async () => ({ tableId: "t", status: "CONFIRMED" })),
+      notify: vi.fn(),
+      hydrate: vi.fn(async (row: unknown) => row),
+    };
+    return { plans, meetings, admin: new NetworkingAdminService({} as NetworkingService, meetings as unknown as NetworkingMeetingsService) };
+  }
+  it("locks the meeting's own slot to assign a table and nothing to cancel it", async () => {
+    state.meeting = { id: "m", eventId: "event", requesterId: "a", recipientId: "b", status: "CONFIRMED", startsAt, endsAt, revision: 1 };
+    const { plans, meetings, admin } = harness();
+    await admin.updateMeeting("event", "m", { action: "ASSIGN", tableId: "t" }, "admin");
+    expect(meetings.reserve).toHaveBeenCalledWith(expect.anything(), state.meeting, startsAt, endsAt, expect.anything(), "t", false);
+    await admin.updateMeeting("event", "m", { action: "CANCEL" }, "admin");
+    expect(plans).toEqual([[{ startsAt, endsAt }], []]);
   });
 });

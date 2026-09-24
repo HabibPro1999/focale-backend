@@ -1,7 +1,8 @@
 import { eq, sql } from "drizzle-orm";
 import { getDb, type DbExecutor } from "../client";
 import { rowsOf } from "../helpers";
-import { networkingProfiles } from "../schema/networking";
+import { withSerializableTxn } from "../txn";
+import { networkingAllocationLocks, networkingProfiles } from "../schema/networking";
 
 /** Expire proposals without loading an event's meeting history on every agenda read. */
 export async function expireNetworkingProposals(eventId?: string, db: DbExecutor = getDb()) {
@@ -120,7 +121,9 @@ export async function maintainNetworkingLifecycle(
     ),
   );
   for (const { event_id } of expired) {
-    const profiles = await db.transaction(async (tx) => {
+    // SERIALIZABLE with retries, like every networking write: a concurrent
+    // participant write either commits first or retries after the purge.
+    const profiles = await withSerializableTxn(async (tx) => {
       await tx.execute(
         sql`UPDATE networking_configs SET config=jsonb_set(config,'{enabled}','false'::jsonb),updated_at=now() WHERE event_id=${event_id}`,
       );
@@ -132,6 +135,9 @@ export async function maintainNetworkingLifecycle(
       await tx
         .delete(networkingProfiles)
         .where(eq(networkingProfiles.eventId, event_id));
+      await tx
+        .delete(networkingAllocationLocks)
+        .where(eq(networkingAllocationLocks.eventId, event_id));
       return profiles;
     });
     // Best effort after commit: no durable retries; a crash or cleanup failure can orphan photos.

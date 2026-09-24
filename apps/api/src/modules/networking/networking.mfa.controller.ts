@@ -7,11 +7,14 @@ import {
   Ip,
   Param,
   Post,
+  UseInterceptors,
 } from "@nestjs/common";
+import { NetworkingBusyInterceptor } from "./networking.busy";
 import { Throttle } from "@nestjs/throttler";
 import { NetworkingService } from "./networking.service";
 import { NetworkingMfaService } from "./networking.mfa.service";
 import { NetworkingMfaCodeDto } from "./networking.dto";
+@UseInterceptors(NetworkingBusyInterceptor)
 @Controller("api/networking/:slug/auth/mfa")
 @Throttle({ default: { limit: 10, ttl: 60_000 } })
 export class NetworkingMfaController {

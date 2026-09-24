@@ -11,6 +11,7 @@ import {
   listNetworkingConnectionSummaries,
   countNetworkingConnectionSummaries,
   markNetworkingMessageNotificationsRead,
+  cancelNetworkingParticipantMeetings,
   createNetworkingNotification,
   networkingStore,
   networkingTransaction,
@@ -80,25 +81,15 @@ export class NetworkingSocialService {
       if (!ctx.config.swipeEnabled && !ctx.config.searchEnabled)
         throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Discovery is disabled" });
       const target = await this.networking.target(ctx, targetId, store, true);
+      // Read first for the audit's previous action; the upsert on the pair's unique
+      // index keeps a concurrent duplicate swipe from failing on insert.
       const existing = await store.one("interests", {
         eventId: ctx.event.id,
         profileId: ctx.profile.id,
         targetId,
       });
-      if (existing)
-        await store.update(
-          "interests",
-          { id: existing.id, eventId: ctx.event.id },
-          { action },
-        );
-      else
-        await store.insert("interests", {
-          eventId: ctx.event.id,
-          profileId: ctx.profile.id,
-          targetId,
-          action,
-        });
-      if (!existing || existing.action !== action)
+      if (existing?.action !== action) {
+        await store.upsertInterest(ctx.event.id, ctx.profile.id, targetId, action);
         await store.insert("audit", {
           eventId: ctx.event.id,
           actorId: ctx.profile.id,
@@ -106,6 +97,7 @@ export class NetworkingSocialService {
           targetId,
           data: { previousAction: existing?.action ?? null },
         });
+      }
       if (action !== "LIKE") return { matched: false };
       const reciprocal = await store.one("interests", {
         eventId: ctx.event.id,
@@ -115,17 +107,9 @@ export class NetworkingSocialService {
       });
       if (!reciprocal) return { matched: false };
       const [profileAId, profileBId] = networkingPair(ctx.profile.id, targetId);
-      let connection = await store.one("connections", {
-        eventId: ctx.event.id,
-        profileAId,
-        profileBId,
-      });
-      if (!connection) {
-        connection = await store.insert("connections", {
-          eventId: ctx.event.id,
-          profileAId,
-          profileBId,
-        });
+      // Only the call that inserts the pair's connection announces the match.
+      const { connection, created } = await store.ensureConnection(ctx.event.id, profileAId, profileBId);
+      if (created) {
         for (const profileId of [profileAId, profileBId])
           await createNetworkingNotification(
             {
@@ -204,22 +188,20 @@ export class NetworkingSocialService {
       if (!ctx.config.chatEnabled)
         throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Chat is disabled" });
       const connection = await this.connection(ctx, id, store);
-      const previous = await store.one("messages", {
-        senderId: ctx.profile.id,
-        clientMessageId,
-      });
-      if (previous) {
-        if (previous.connectionId !== id || previous.body !== body)
-          throw new BadRequestException({ code: "NETWORKING_VALIDATION", message: "Message key was already used for another message" });
-        return previous;
-      }
-      const message = await store.insert("messages", {
+      // The (sender, clientMessageId) unique index makes a retried send idempotent.
+      const message = await store.insertMessageOnce({
         eventId: ctx.event.id,
         connectionId: id,
         senderId: ctx.profile.id,
         body,
         clientMessageId,
       });
+      if (!message) {
+        const previous = await store.one("messages", { senderId: ctx.profile.id, clientMessageId });
+        if (!previous || previous.connectionId !== id || previous.body !== body)
+          throw new BadRequestException({ code: "NETWORKING_VALIDATION", message: "Message key was already used for another message" });
+        return previous;
+      }
       await store.update(
         "connections",
         { id, eventId: ctx.event.id },
@@ -265,61 +247,12 @@ export class NetworkingSocialService {
         eventId: ctx.event.id,
       });
       if (!target) throw notFound("Participant not found");
-      if (
-        !(await store.one("blocks", {
-          eventId: ctx.event.id,
-          profileId: ctx.profile.id,
-          targetId,
-        }))
-      )
-        await store.insert("blocks", {
-          eventId: ctx.event.id,
-          profileId: ctx.profile.id,
-          targetId,
-        });
-      const meetings = (
-        await store.all("meetings", { eventId: ctx.event.id })
-      ).filter(
-        (m) =>
-          ((m.requesterId === ctx.profile.id && m.recipientId === targetId) ||
-            (m.recipientId === ctx.profile.id && m.requesterId === targetId)) &&
-          ["PENDING", "PENDING_ALLOCATION", "CONFIRMED"].includes(m.status) &&
-          m.endsAt > new Date(),
-      );
-      for (const meeting of meetings) {
-        await store.update(
-          "meetings",
-          { id: meeting.id, eventId: ctx.event.id },
-          {
-            status: "CANCELLED",
-            revision: meeting.revision + 1,
-            proposedStartsAt: null,
-            proposalBy: null,
-          },
-        );
-        await store.remove("reservations", {
-          eventId: ctx.event.id,
-          meetingId: meeting.id,
-        });
-        for (const profileId of [meeting.requesterId, meeting.recipientId])
-          await createNetworkingNotification(
-            {
-              eventId: ctx.event.id,
-              profileId,
-              type: "MEETING_CANCELLED",
-              title: "Meeting cancelled",
-              body: "This meeting is no longer available.",
-              href: `/e/${ctx.event.slug}/agenda`,
-              // A block never names the other participant (K5).
-              data: {
-                meetingId: meeting.id, revision: meeting.revision + 1, action: "CANCEL",
-                startsAt: meeting.startsAt.toISOString(), endsAt: meeting.endsAt.toISOString(),
-                status: "CANCELLED",
-              },
-            },
-            db,
-          );
-      }
+      await store.insertBlockOnce(ctx.event.id, ctx.profile.id, targetId);
+      // Only the pair's active meetings; a block never names the other participant (K5).
+      await cancelNetworkingParticipantMeetings(ctx.profile.id, ctx.event.id, db, {
+        counterpartId: targetId,
+        slug: ctx.event.slug,
+      });
       return { blocked: true };
     });
   }

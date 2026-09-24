@@ -10,7 +10,9 @@ import {
   Query,
   Res,
   Req,
+  UseInterceptors,
 } from "@nestjs/common";
+import { NetworkingBusyInterceptor } from "./networking.busy";
 import {
   NetworkingUploadsService,
   type NetworkingMultipartRequest,
@@ -28,6 +30,7 @@ import { NetworkingAdminService } from "./networking.admin.service";
 import { NetworkingExportsService } from "./networking.exports.service";
 import * as dto from "./networking.dto";
 @Auth()
+@UseInterceptors(NetworkingBusyInterceptor)
 @Controller("api/events/:eventId/networking")
 export class NetworkingAdminController {
   constructor(

@@ -15,7 +15,7 @@
     "env:example": "pnpm --filter @app/contracts build && node packages/contracts/dist/cli/env-example.js",
     "config:check": "node packages/contracts/dist/cli/check-config.js",
     "test:db": "pnpm -r --workspace-concurrency=1 --if-present test:db",
-    "test:concurrency": "pnpm --filter @app/db test:concurrency",
+    "test:concurrency": "pnpm -r --workspace-concurrency=1 --if-present test:concurrency",
     "test:migration": "pnpm --filter @app/db test:migration",
     "dev": "pnpm --filter @app/api dev",
     "dev:worker": "pnpm --filter @app/worker dev"

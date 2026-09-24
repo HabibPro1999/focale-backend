@@ -156,12 +156,19 @@ Clients localize codes rather than displaying the English message.
 - `NETWORKING_RATE_LIMITED` (429)
 - `NETWORKING_CONFIG_STALE`
 - `NETWORKING_VALIDATION` — HTTP 400 only.
+- `NETWORKING_BUSY` (503, with `Retry-After` in seconds) — a write ran out of database serialization retries under contention; nothing was saved and the same request can be retried after the delay. Participant and organizer networking routes.
 
 A wrong or expired OTP on `auth/verify` stays HTTP 401 (`AUTH_1001`); no session is issued. Organizer routes (`/api/events/:eventId/networking/*`) keep the generic codes: request validation failures return `VAL_2001` with `details`.
 
 ### Consent
 
 `registration.networkingOptIn` decides when it is a boolean (`false` excludes the registrant). When it is null, the participant's explicit PWA choice wins, then the mapped consent field (yes / no / unanswered; option labels and translations are read, never option IDs), else the registrant is undecided. Withdrawal or an explicit "no" always wins. Undecided registrants who are otherwise eligible can request a code and sign in; their session is consent-pending: every participant endpoint except `GET me`, `PATCH me` (only `consent` is applied), `DELETE me`, `POST auth/logout`, `GET config` and `auth/mfa/*` returns 403 `NETWORKING_CONSENT_REQUIRED` until `PATCH me {"consent": true}`, which records the choice and makes the profile visible. A consent mapping must point at a checkbox, radio or select field of the event's form.
+
+## Write concurrency
+
+Every networking write is one SERIALIZABLE transaction on one pool connection, retried on serialization failures (40001/40P01) with a bounded, jittered backoff; when the retries run out the API answers 503 `NETWORKING_BUSY` with `Retry-After`. No write locks the event row. Invariants are the unique indexes: interest, connection, block and message pairs, reservation resource+slot, push endpoint and profile registration. Swipes, connections, messages, blocks and push subscriptions are `ON CONFLICT` writes, so a duplicate request is idempotent instead of failing.
+
+Only allocations (a meeting request's table hold, accepting a proposal, rescheduling a pending request and organizer assignment) take a lock: their first statement upserts one `networking_allocation_locks (event_id, bucket_start)` row per UTC hour the meeting overlaps, so allocations for overlapping times serialize while others proceed. Resources are then claimed with multi-row `INSERT … ON CONFLICT DO NOTHING`, trying tables least used first; a conflict answers 409 `NETWORKING_SLOT_CONFLICT`. Blocking and withdrawal cancel only the affected participant's active meetings with one `UPDATE … RETURNING`.
 
 ## Rate limits
 

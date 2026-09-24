@@ -4,12 +4,19 @@ const db = vi.hoisted(() => ({
   rows: {} as Record<string, Array<Record<string, unknown>>>,
   update: vi.fn(), insert: vi.fn(), enqueue: vi.fn(), modules: vi.fn(), sync: vi.fn(), delete: vi.fn(),
   failedOtpAttempts: vi.fn(),
+  reads: [] as string[],
+  transactions: 0,
+  tx: { transaction: true },
 }));
 vi.mock("@app/db", async (original) => {
   const matches = (row: Record<string, unknown>, where: Record<string, unknown>) =>
     Object.entries(where).every(([key, value]) => value === undefined || (value === null ? row[key] == null : row[key] === value));
   const store = {
-    one: async (kind: string, where: Record<string, unknown>) => (db.rows[kind] ?? []).find((row) => matches(row, where)) ?? null,
+    executor: db.tx,
+    one: async (kind: string, where: Record<string, unknown>) => {
+      db.reads.push(kind);
+      return (db.rows[kind] ?? []).find((row) => matches(row, where)) ?? null;
+    },
     all: async (kind: string, where: Record<string, unknown>) => (db.rows[kind] ?? []).filter((row) => matches(row, where)),
     update: async (kind: string, where: Record<string, unknown>, values: Record<string, unknown>) => {
       db.update(kind, where, values);
@@ -21,7 +28,10 @@ vi.mock("@app/db", async (original) => {
   return {
     ...(await original<typeof import("@app/db")>()),
     networkingStore: () => store,
-    networkingTransaction: async (_event: string, run: (s: typeof store, tx: object) => unknown) => run(store, {}),
+    networkingTransaction: async (_event: string, run: (s: typeof store, tx: object) => unknown) => {
+      db.transactions++;
+      return run(store, db.tx);
+    },
     enqueueNetworkingDelivery: db.enqueue,
     findClientModuleState: db.modules,
     touchNetworkingProfileActivity: vi.fn(),
@@ -58,6 +68,8 @@ const service = new NetworkingService();
 const bearer = `Bearer ${token}`;
 beforeEach(() => {
   vi.clearAllMocks();
+  db.reads = [];
+  db.transactions = 0;
   process.env.NETWORKING_TOKEN_SECRET = "test-networking-secret-at-least-32-characters";
   db.modules.mockResolvedValue({ active: true, enabledModules: ["networking", "registrations", "emails"] });
   db.failedOtpAttempts.mockResolvedValue({ recent: 0, daily: 0 });
@@ -90,7 +102,7 @@ describe("K1b consent-pending sessions", () => {
   });
   it("sends an OTP to an undecided registrant but not to one whose mapped answer is no", async () => {
     await service.requestCode("demo", "Ann@Example.test");
-    expect(db.enqueue).toHaveBeenCalledWith(expect.objectContaining({ type: "OTP", profileId: "p", email: "ann@example.test" }), {});
+    expect(db.enqueue).toHaveBeenCalledWith(expect.objectContaining({ type: "OTP", profileId: "p", email: "ann@example.test" }), db.tx);
     db.enqueue.mockClear();
     seed({ registration: { formData: { consent: "o-no" } } });
     expect(await service.requestCode("demo", "ann@example.test")).toHaveProperty("challengeId");
@@ -291,5 +303,28 @@ describe("OTP failed-attempt limits (0.9)", () => {
     expect(Object.keys(result).sort()).toEqual(["expiresAt", "mfaEnrollmentRequired", "profile", "requiresSecondFactor", "token"]);
     expect(remember).toHaveBeenCalledWith(result.token, expect.objectContaining({ profileId: "p", eventId: "event" }));
     remember.mockRestore();
+  });
+});
+
+describe("networking transactions ride one connection", () => {
+  it("revalidates a participant without re-reading the event row and gates modules on the transaction", async () => {
+    const ctx = await service.participant("demo", bearer, { allowConsentPending: true });
+    db.reads = [];
+    db.modules.mockClear();
+    await service.currentParticipant(ctx, (await import("@app/db")).networkingStore(), { allowConsentPending: true });
+    expect(db.reads).not.toContain("events");
+    expect(db.modules).toHaveBeenCalledExactlyOnceWith("client", db.tx);
+  });
+  it("gates OTP requests and verification once, before the transaction", async () => {
+    seed({ profile: { consent: true } });
+    await service.requestCode("demo", "ann@example.test");
+    expect(db.transactions).toBe(1);
+    expect(db.modules).toHaveBeenCalledExactlyOnceWith("client", undefined);
+    expect(db.reads.filter((kind) => kind === "events")).toHaveLength(1);
+    db.modules.mockClear();
+    db.reads = [];
+    await service.verifyCode("demo", "missing", "123456").catch(() => undefined);
+    expect(db.modules).toHaveBeenCalledExactlyOnceWith("client", undefined);
+    expect(db.reads.filter((kind) => kind === "events")).toHaveLength(1);
   });
 });

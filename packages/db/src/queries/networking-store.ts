@@ -1,7 +1,8 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import { and, eq, getTableColumns, isNull, inArray, notInArray, or, sql, lt, gt, gte, count, type AnyColumn } from "drizzle-orm";
 import type { PgTable } from "drizzle-orm/pg-core";
-import { getDb, type DbExecutor } from "../client";
-import { withSerializableTxn } from "../txn";
+import { getDb, type Db, type DbExecutor } from "../client";
+import { isSerializationFailure } from "../txn";
 import * as n from "../schema/networking";
 import { events } from "../schema/events-access";
 import { registrations } from "../schema/registrations";
@@ -63,9 +64,85 @@ function condition<K extends NetworkingEntity>(name: K, where: Where<K>) {
       }),
   );
 }
+const HOUR_MS = 3_600_000;
+/** A meeting never spans more than a day; a larger request is a caller bug, not a lock plan. */
+const MAX_ALLOCATION_BUCKETS = 48;
+export type NetworkingInterval = { startsAt: Date; endsAt: Date };
+/** UTC hour starts overlapped by the half-open intervals, ascending and deduplicated. */
+export function networkingAllocationBuckets(intervals: readonly NetworkingInterval[]): Date[] {
+  const buckets = new Set<number>();
+  for (const { startsAt, endsAt } of intervals) {
+    const start = startsAt.getTime(), end = endsAt.getTime();
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start)
+      throw new Error("Allocation intervals must be non-empty time ranges");
+    for (let hour = Math.floor(start / HOUR_MS) * HOUR_MS; hour < end; hour += HOUR_MS) {
+      buckets.add(hour);
+      if (buckets.size > MAX_ALLOCATION_BUCKETS)
+        throw new Error(`Allocation intervals span more than ${MAX_ALLOCATION_BUCKETS} hours`);
+    }
+  }
+  return [...buckets].sort((a, b) => a - b).map((hour) => new Date(hour));
+}
+/**
+ * A networking write ran out of serialization retries. The API maps it to
+ * 503 NETWORKING_BUSY with Retry-After; nothing was committed.
+ */
+export class NetworkingBusyError extends Error {
+  constructor(options?: { cause?: unknown }) {
+    super("Networking is busy; retry shortly", options);
+    this.name = "NetworkingBusyError";
+  }
+}
+/**
+ * A resource claim fell outside the hours its allocation transaction locked,
+ * e.g. the meeting moved between the caller's pre-read and the lock. Nothing
+ * was committed; the caller re-plans the lock from a fresh read.
+ */
+export class NetworkingAllocationLockError extends Error {
+  constructor() {
+    super("Resource claim is outside the locked allocation hours");
+    this.name = "NetworkingAllocationLockError";
+  }
+}
+/**
+ * Retry budget for networking SERIALIZABLE transactions. withSerializableTxn's
+ * five attempts are too few on PostgreSQL: every waiter on a hot allocation
+ * hour fails with 40001 once the holder commits, and SSI's page-level
+ * predicate locks also abort some writes by distinct participants (ten
+ * concurrent writers needed up to six attempts in the concurrency suite).
+ * The backoff is capped, so the whole budget waits at most about 4.5 s.
+ */
+export const NETWORKING_TXN_ATTEMPTS = 12;
+const NETWORKING_RETRY_BASE_MS = 20;
+const NETWORKING_RETRY_CAP_MS = 400;
+function networkingRetryDelay(attempt: number) {
+  const ceiling = Math.min(NETWORKING_RETRY_BASE_MS * 2 ** (attempt - 1), NETWORKING_RETRY_CAP_MS);
+  return ceiling / 2 + Math.random() * ceiling;
+}
+type NetworkingTx = Parameters<Parameters<Db["transaction"]>[0]>[0];
+/**
+ * One SERIALIZABLE transaction on one pool connection, retried on 40001/40P01.
+ * Invariants live in unique indexes, so no event row is locked. When the
+ * budget runs out the last serialization failure becomes NetworkingBusyError.
+ */
+async function networkingSerializable<T>(run: (db: NetworkingTx) => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await getDb().transaction(run, { isolationLevel: "serializable" });
+    } catch (error) {
+      if (!isSerializationFailure(error)) throw error;
+      if (attempt >= NETWORKING_TXN_ATTEMPTS) throw new NetworkingBusyError({ cause: error });
+      await sleep(networkingRetryDelay(attempt));
+    }
+  }
+}
+type NetworkingStoreOptions = { allocationBuckets?: readonly Date[] };
 /** Narrow repository shared by networking services; all mutations require explicit scope predicates. */
-export function networkingStore(db: DbExecutor = getDb()) {
+export function networkingStore(db: DbExecutor = getDb(), options: NetworkingStoreOptions = {}) {
+  const locked = new Set(options.allocationBuckets?.map((bucket) => bucket.getTime()));
   return {
+    /** The connection or transaction this store runs on, for helpers outside the store. */
+    executor: db,
     async personalAnalyticsProfiles(clientId: string, email: string) {
       return db.select({ id: n.networkingProfiles.id, eventId: events.id,
         name: events.name, startDate: events.startDate, endDate: events.endDate })
@@ -163,6 +240,79 @@ export function networkingStore(db: DbExecutor = getDb()) {
         .where(and(eq(m.eventId, eventId), inArray(m.status, ["PENDING", "CONFIRMED", "PENDING_ALLOCATION", "COMPLETED"])))
         .groupBy(m.tableId);
     },
+    /**
+     * Claim one resource for every quantum in one statement. All-or-nothing:
+     * a conflicting quantum (unique resource/slot index) undoes the rows this
+     * call inserted and returns false, so the caller can try another table
+     * without aborting the transaction. Only inside the hours the allocation
+     * transaction locked.
+     */
+    async claimResource(eventId: string, meetingId: string, resourceKey: string, quanta: readonly Date[]) {
+      if (!quanta.length) return true;
+      if (quanta.some((quantum) => !locked.has(Math.floor(quantum.getTime() / HOUR_MS) * HOUR_MS)))
+        throw new NetworkingAllocationLockError();
+      const r = n.networkingReservations;
+      const inserted = await db.insert(r)
+        .values(quanta.map((startsAt) => ({ eventId, meetingId, resourceKey, startsAt })))
+        .onConflictDoNothing({ target: [r.eventId, r.resourceKey, r.startsAt] })
+        .returning({ id: r.id });
+      if (inserted.length === quanta.length) return true;
+      if (inserted.length)
+        await db.delete(r).where(and(eq(r.eventId, eventId), inArray(r.id, inserted.map((row) => row.id))));
+      return false;
+    },
+    /** Swipe upsert on the (event, profile, target) pair; returns the stored row. */
+    async upsertInterest(eventId: string, profileId: string, targetId: string, action: "LIKE" | "PASS") {
+      const i = n.networkingInterests;
+      const [row] = await db.insert(i).values({ eventId, profileId, targetId, action })
+        .onConflictDoUpdate({
+          target: [i.eventId, i.profileId, i.targetId],
+          set: { action: sql`excluded.action`, updatedAt: new Date() },
+        })
+        .returning();
+      return row;
+    },
+    /** The pair's connection, created if absent; `created` is true only for the inserting call. */
+    async ensureConnection(eventId: string, profileAId: string, profileBId: string) {
+      const c = n.networkingConnections;
+      const [created] = await db.insert(c).values({ eventId, profileAId, profileBId })
+        .onConflictDoNothing({ target: [c.eventId, c.profileAId, c.profileBId] })
+        .returning();
+      if (created) return { connection: created, created: true };
+      const [existing] = await db.select().from(c)
+        .where(and(eq(c.eventId, eventId), eq(c.profileAId, profileAId), eq(c.profileBId, profileBId)));
+      return { connection: existing, created: false };
+    },
+    /** A message keyed by (sender, clientMessageId); null when that key already exists. */
+    async insertMessageOnce(value: NetworkingInsert<"messages">) {
+      const m = n.networkingMessages;
+      const [row] = await db.insert(m).values(value)
+        .onConflictDoNothing({ target: [m.senderId, m.clientMessageId] })
+        .returning();
+      return row ?? null;
+    },
+    /** Idempotent block edge on the (event, profile, target) pair. */
+    async insertBlockOnce(eventId: string, profileId: string, targetId: string) {
+      const b = n.networkingBlocks;
+      await db.insert(b).values({ eventId, profileId, targetId })
+        .onConflictDoNothing({ target: [b.eventId, b.profileId, b.targetId] });
+    },
+    /** A push endpoint belongs to the last participant that subscribed it (unique endpoint). */
+    async upsertPushSubscription(value: NetworkingInsert<"pushSubscriptions">) {
+      const p = n.networkingPushSubscriptions;
+      const [row] = await db.insert(p).values(value)
+        .onConflictDoUpdate({
+          target: p.endpoint,
+          set: {
+            eventId: sql`excluded.event_id`,
+            profileId: sql`excluded.profile_id`,
+            keys: sql`excluded.keys`,
+            expirationTime: sql`excluded.expiration_time`,
+          },
+        })
+        .returning();
+      return row;
+    },
     async all<K extends NetworkingEntity>(
       name: K,
       where: Where<K>,
@@ -216,17 +366,37 @@ export function networkingStore(db: DbExecutor = getDb()) {
   };
 }
 export type NetworkingStore = ReturnType<typeof networkingStore>;
+/**
+ * A networking write: SERIALIZABLE, retried, one pool connection. Every helper
+ * called inside `run` must use `store`/`db`; a second connection deadlocks a
+ * small pool. `eventId` names the event the write belongs to.
+ */
 export function networkingTransaction<T>(
-  eventId: string,
+  _eventId: string,
   run: (store: NetworkingStore, db: DbExecutor) => Promise<T>,
 ): Promise<T> {
-  return withSerializableTxn(async (db) => {
-    // Lock one event to serialize mutual matching and resource allocation across API replicas.
+  return networkingSerializable((db) => run(networkingStore(db), db));
+}
+/**
+ * A networking write that claims participants, tables or stands. Its first
+ * statement upserts one networking_allocation_locks row per UTC hour the
+ * intervals overlap (ascending, in one statement), so competing allocations
+ * for overlapping times serialize there. Only claims inside those hours are
+ * allowed (store.claimResource throws NetworkingAllocationLockError otherwise).
+ */
+export async function networkingAllocationTransaction<T>(
+  eventId: string,
+  intervals: readonly NetworkingInterval[],
+  run: (store: NetworkingStore, db: DbExecutor) => Promise<T>,
+): Promise<T> {
+  const buckets = networkingAllocationBuckets(intervals);
+  if (!buckets.length) throw new Error("An allocation needs at least one interval");
+  const l = n.networkingAllocationLocks;
+  return networkingSerializable(async (db) => {
     await db
-      .select({ id: events.id })
-      .from(events)
-      .where(eq(events.id, eventId))
-      .for("update");
-    return run(networkingStore(db), db);
+      .insert(l)
+      .values(buckets.map((bucketStart) => ({ eventId, bucketStart })))
+      .onConflictDoUpdate({ target: [l.eventId, l.bucketStart], set: { lockedAt: sql`now()` } });
+    return run(networkingStore(db, { allocationBuckets: buckets }), db);
   });
 }

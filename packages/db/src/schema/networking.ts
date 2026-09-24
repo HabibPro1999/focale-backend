@@ -6,6 +6,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -448,4 +449,21 @@ export const networkingAudit = pgTable(
   (t) => [
     index("networking_audit_event_created_idx").on(t.eventId, t.createdAt),
   ],
+);
+/**
+ * One row per (event, UTC hour). Allocation transactions (hold, accept,
+ * reschedule of a pending hold, organizer assign) upsert the hours their
+ * meeting overlaps as their first statement, so two allocations that could
+ * compete for the same participant, table or stand serialize on these rows
+ * instead of on the event row. The unique reservation index stays the
+ * invariant; the lock only keeps competing allocations from retrying.
+ */
+export const networkingAllocationLocks = pgTable(
+  "networking_allocation_locks",
+  {
+    eventId: eventId(),
+    bucketStart: instant().notNull(),
+    lockedAt: instant().notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.eventId, t.bucketStart] })],
 );

@@ -229,50 +229,55 @@ export async function revokeNetworkingSessions(
     );
 }
 
-/** Release future resources when registration approval/consent/eligibility is revoked. */
+/**
+ * Release future resources when registration approval/consent/eligibility is
+ * revoked, the participant withdraws, or (with `counterpartId`) blocks someone:
+ * one UPDATE … RETURNING over the participant's active meetings, never a scan
+ * of the event's meeting history. Notifications never name the other side.
+ * `slug` avoids re-reading the event row inside a networking transaction.
+ */
 export async function cancelNetworkingParticipantMeetings(
   profileId: string,
   eventId: string,
   db: DbExecutor = getDb(),
+  options: { counterpartId?: string; slug?: string } = {},
 ) {
+  const m = networkingMeetings;
   const rows = await db
-    .update(networkingMeetings)
+    .update(m)
     .set({
       status: "CANCELLED",
-      revision: sql`${networkingMeetings.revision}+1`,
+      revision: sql`${m.revision}+1`,
       proposedStartsAt: null,
       proposalBy: null,
     })
     .where(
       and(
-        eq(networkingMeetings.eventId, eventId),
-        or(
-          eq(networkingMeetings.requesterId, profileId),
-          eq(networkingMeetings.recipientId, profileId),
-        ),
-        inArray(networkingMeetings.status, [
-          "PENDING",
-          "PENDING_ALLOCATION",
-          "CONFIRMED",
-        ]),
-        gt(networkingMeetings.endsAt, new Date()),
+        eq(m.eventId, eventId),
+        options.counterpartId === undefined
+          ? or(eq(m.requesterId, profileId), eq(m.recipientId, profileId))
+          : or(
+              and(eq(m.requesterId, profileId), eq(m.recipientId, options.counterpartId)),
+              and(eq(m.requesterId, options.counterpartId), eq(m.recipientId, profileId)),
+            ),
+        inArray(m.status, ["PENDING", "PENDING_ALLOCATION", "CONFIRMED"]),
+        gt(m.endsAt, new Date()),
       ),
     )
     .returning();
-  if (!rows.length) return;
-  const [event] = await db
-    .select({ slug: events.slug })
-    .from(events)
-    .where(eq(events.id, eventId));
-  for (const row of rows) {
-    await db
-      .delete(networkingReservations)
-      .where(
-        and(
-          eq(networkingReservations.eventId, eventId),
-          eq(networkingReservations.meetingId, row.id),
-        ),
-      );
+  if (!rows.length) return [];
+  await db
+    .delete(networkingReservations)
+    .where(
+      and(
+        eq(networkingReservations.eventId, eventId),
+        inArray(networkingReservations.meetingId, rows.map((row) => row.id)),
+      ),
+    );
+  const slug = options.slug ?? (
+    await db.select({ slug: events.slug }).from(events).where(eq(events.id, eventId))
+  )[0]?.slug;
+  for (const row of rows)
     for (const recipient of [row.requesterId, row.recipientId])
       await createNetworkingNotification(
         {
@@ -281,7 +286,7 @@ export async function cancelNetworkingParticipantMeetings(
           type: "MEETING_CANCELLED",
           title: "Meeting cancelled",
           body: "This meeting is no longer available.",
-          href: `/e/${event.slug}/agenda`,
+          href: `/e/${slug}/agenda`,
           data: {
             meetingId: row.id,
             revision: row.revision,
@@ -293,7 +298,7 @@ export async function cancelNetworkingParticipantMeetings(
         },
         db,
       );
-  }
+  return rows;
 }
 
 /** One activation notification per profile, shared by automatic and organizer approvals. */

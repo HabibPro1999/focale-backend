@@ -22,6 +22,8 @@ export const ErrorCodes = {
   NETWORKING_ACTION_NOT_ALLOWED: "NETWORKING_ACTION_NOT_ALLOWED",
   NETWORKING_MFA_ENFORCED: "NETWORKING_MFA_ENFORCED",
   NETWORKING_CONSENT_REQUIRED: "NETWORKING_CONSENT_REQUIRED",
+  /** 503 with Retry-After: a networking write ran out of serialization retries; nothing was saved. */
+  NETWORKING_BUSY: "NETWORKING_BUSY",
 
   // Auth (1xxx)
   UNAUTHORIZED: "AUTH_1001",

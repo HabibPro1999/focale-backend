@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   one: vi.fn(), update: vi.fn(), remove: vi.fn(), all: vi.fn(),
   notifications: vi.fn(), since: vi.fn(), transaction: vi.fn(), revoke: vi.fn(), delete: vi.fn(),
-  store: vi.fn(),
+  store: vi.fn(), cancel: vi.fn(), upsertPush: vi.fn(),
 }));
 vi.mock("@app/db", async (original) => ({
   ...(await original<typeof import("@app/db")>()),
@@ -11,6 +11,7 @@ vi.mock("@app/db", async (original) => ({
   listNetworkingNotifications: mocks.notifications,
   networkingNotificationsSince: mocks.since,
   revokeNetworkingSessions: mocks.revoke,
+  cancelNetworkingParticipantMeetings: mocks.cancel,
 }));
 vi.mock("@app/integrations", async (original) => ({
   ...(await original<typeof import("@app/integrations")>()),
@@ -36,6 +37,7 @@ beforeEach(() => {
     all: mocks.all,
     one: mocks.one,
     remove: mocks.remove,
+    upsertPushSubscription: mocks.upsertPush,
   });
   mocks.transaction.mockImplementation(async (_event, run) => run(mocks, {}));
   mocks.one.mockResolvedValue({ photoUrl: own, overrides: { company: "Current Co" } });
@@ -287,7 +289,7 @@ describe("blocks", () => {
 describe("withdrawal", () => {
   const participant = vi.fn();
   beforeEach(() => participant.mockResolvedValue({
-    event: { id: "e" }, profile: { id: "p", photoUrl: "stale.webp", overrides: { company: "Stale Co" } },
+    event: { id: "e", slug: "event" }, profile: { id: "p", photoUrl: "stale.webp", overrides: { company: "Stale Co" } },
   }));
   it.each([false, true])("uses the in-transaction row, clears and deletes the owned photo even when storage fails: %s", async (fails) => {
     if (fails) mocks.delete.mockRejectedValue(new Error("storage unavailable"));
@@ -309,13 +311,12 @@ describe("withdrawal", () => {
     await controller({ participant }).withdraw("event", { headers: {} } as FastifyRequest);
     expect(mocks.delete).not.toHaveBeenCalled();
   });
-  it("cancels active meetings, clears their proposals and never names the counterpart", async () => {
-    const future = new Date(Date.now() + 3_600_000);
-    mocks.all.mockResolvedValue([{ id: "m", requesterId: "p", recipientId: "q", status: "CONFIRMED", endsAt: future, revision: 2, proposedStartsAt: future, proposalBy: "q" }]);
-    const notify = vi.fn();
-    await controller({ participant }, { notify }).withdraw("event", { headers: {} } as FastifyRequest);
-    expect(mocks.update).toHaveBeenCalledWith("meetings", { eventId: "e", id: "m" }, { status: "CANCELLED", revision: 3, proposedStartsAt: null, proposalBy: null });
-    expect(notify).toHaveBeenCalledWith(expect.anything(), expect.anything(), "MEETING_CANCELLED", ["p", "q"], {}, { counterpart: false });
+  it("cancels the participant's active meetings in the same transaction without loading the event's meetings", async () => {
+    const tx = { transaction: true };
+    mocks.transaction.mockImplementation(async (_event, run) => run(mocks, tx));
+    await controller({ participant }).withdraw("event", { headers: {} } as FastifyRequest);
+    expect(mocks.cancel).toHaveBeenCalledWith("p", "e", tx, { slug: "event" });
+    expect(mocks.all).not.toHaveBeenCalledWith("meetings", expect.anything());
   });
 });
 
@@ -360,6 +361,16 @@ it.each(["connections", "listMeetings"] as const)("%s authenticates the particip
   participant.mockRejectedValueOnce(new Error("ineligible"));
   await expect(instance[method]("slug", { headers: {} } as FastifyRequest, {})).rejects.toThrow("ineligible");
   expect(list).toHaveBeenCalledOnce();
+});
+
+it("subscribes a push endpoint with one upsert on the unique endpoint", async () => {
+  const participant = async () => ({ event: { id: "e" }, profile: { id: "p" } });
+  const row = { id: "sub" };
+  mocks.upsertPush.mockResolvedValue(row);
+  const body = { endpoint: "https://fcm.googleapis.com/fcm/send/abc", keys: { p256dh: "k", auth: "a" }, expirationTime: null };
+  expect(await controller({ participant } as never).subscribe("slug", { headers: {} } as FastifyRequest, body as never)).toBe(row);
+  expect(mocks.upsertPush).toHaveBeenCalledWith({ eventId: "e", profileId: "p", endpoint: body.endpoint, keys: body.keys, expirationTime: null });
+  expect(mocks.transaction).not.toHaveBeenCalled();
 });
 
 it("rejects a malformed push endpoint with a coded 400 instead of a TypeError", async () => {
