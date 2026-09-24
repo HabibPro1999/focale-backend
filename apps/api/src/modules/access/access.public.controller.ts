@@ -1,6 +1,11 @@
 import { Body, Controller, Get, NotFoundException, Param, Post } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
-import { getEventWithPricing, type EventAccessWithPrereqs } from "@app/db";
+import {
+  getEventWithPricing,
+  getRegistrationFormSchemaForEvent,
+  type EventAccessWithPrereqs,
+} from "@app/db";
+import { visibleFormAnswers } from "@app/shared";
 import { assertEventAcceptsPublicActions } from "../events/events.service";
 import { assertClientModuleEnabled } from "../clients/module-gates";
 import { AccessService } from "./access.service";
@@ -33,6 +38,22 @@ function isPublicVisibleAccess(
 }
 
 /**
+ * Access conditions see only the answers the registration form shows, coerced
+ * as create/edit store them — the data create/edit validate selections
+ * against. The form app sends every answer it holds, including answers to
+ * fields it now hides, so without this an access could be offered here and
+ * then rejected on submit. Required answers are not enforced: the form may
+ * still be being filled in.
+ */
+async function visibleAnswers(
+  eventId: string,
+  formData: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const form = await getRegistrationFormSchemaForEvent(eventId);
+  return visibleFormAnswers(form?.schema, formData);
+}
+
+/**
  * Public (unauthenticated) access routes, mounted at /api/public/events.
  * All routes share the legacy accessPublic preset: 20 requests / minute.
  */
@@ -49,7 +70,7 @@ export class AccessPublicController {
     await this.assertPublicAccessEnabled(params.eventId);
     return this.access.getGroupedAccess(
       params.eventId,
-      body.formData,
+      await visibleAnswers(params.eventId, body.formData),
       body.selectedAccessIds,
     );
   }
@@ -63,7 +84,7 @@ export class AccessPublicController {
     return this.access.validateAccessSelections(
       params.eventId,
       body.selections,
-      body.formData,
+      await visibleAnswers(params.eventId, body.formData),
     );
   }
 
