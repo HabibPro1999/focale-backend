@@ -87,7 +87,8 @@ Pending migrations are left for `apply`, which also evaluates `defer-unless`:
 on CockroachDB with populated `networking_embeddings`, 0017 is recorded as
 `deferred` and 0018/0019 still apply. 0011 is a guarded data repair without
 catalog objects, so adoption leaves it pending and `apply` re-runs it (it is
-declared idempotent). The old `networking_migrations` and `_prisma_migrations`
+declared idempotent, but it rewrites `registrations.total_amount`; see rollout
+step 4). The old `networking_migrations` and `_prisma_migrations`
 tables are left untouched.
 
 ## Boot check (`MIGRATIONS_CHECK`)
@@ -116,12 +117,30 @@ the way operators already do; nothing here is automated by the repository.
    and any abort reasons. This also settles whether production has 0016/0017.
 3. Run `adopt --apply`. It re-assesses under the migration lease and writes the
    same rows, or aborts without writing if the evidence changed.
-4. Off-peak, run `apply --dry-run`, then `apply --yes` for the pending
+4. Before `apply`, check what 0011 would change. Adoption cannot prove 0011 (a
+   guarded data repair of `registrations.total_amount` with no catalog
+   objects), so it stays pending and `apply` runs it again. Run its predicate
+   read-only first:
+
+   ```sql
+   SELECT id, event_id, total_amount, price_breakdown->>'subtotal' AS subtotal
+   FROM registrations
+   WHERE sponsorship_amount > 0
+     AND jsonb_typeof(price_breakdown->'subtotal') = 'number'
+     AND jsonb_typeof(price_breakdown->'total') = 'number'
+     AND total_amount = (price_breakdown->>'total')::integer
+     AND (price_breakdown->>'subtotal')::integer > total_amount;
+   ```
+
+   No rows: re-running 0011 changes nothing; continue. Any rows: stop. `apply`
+   would rewrite those live totals from net to gross, so get sign-off on that
+   row list first (the same bar as the plan's per-row money-repair manifest).
+5. Off-peak, run `apply --dry-run`, then `apply --yes` for the pending
    migrations (on CockroachDB 0017 stays deferred while embeddings exist; apply
    it later with `apply --apply-deferred=0017 --yes` in a maintenance window).
-5. Run `verify --schema`; it must report no errors.
-6. Set `MIGRATIONS_CHECK=enforce` on every service and add the Render
+6. Run `verify --schema`; it must report no errors.
+7. Set `MIGRATIONS_CHECK=enforce` on every service and add the Render
    Pre-Deploy Command `node packages/db/dist/migrator/cli.js apply --yes` to
    the API and worker services (the lease serializes them). Use `/health/live`
    as the API health check path.
-7. After this rollout, retire the laptop migration flow (`load-env.fish`).
+8. After this rollout, retire the laptop migration flow (`load-env.fish`).
