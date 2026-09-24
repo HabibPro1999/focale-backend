@@ -1,9 +1,14 @@
+import { randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import JSZip from "jszip";
 import { fileTypeFromBuffer } from "file-type";
 import { ErrorCodes } from "@app/contracts";
-import { findAbstractForFinalFile, updateAbstractFinalFileTxn } from "@app/db";
-import { getStorageProvider } from "@app/integrations";
+import {
+  findAbstractForFinalFile,
+  updateAbstractFinalFileTxn,
+  type AbstractForFinalFile,
+} from "@app/db";
+import { getStorageProvider, ownedStorageKey } from "@app/integrations";
 import { logger } from "../../core/logger.service";
 import { AppException } from "../../core/app-exception";
 import { verifyAbstractToken } from "./abstracts.token";
@@ -11,7 +16,44 @@ import { AbstractsService, assertAbstractModuleEnabled } from "./abstracts.servi
 
 type AbstractFileKind = "PDF" | "PPT" | "PPTX";
 
-const MAX_FINAL_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+export interface FinalFileInput {
+  buffer: Buffer;
+  filename: string;
+  mimetype: string;
+}
+
+export const MAX_FINAL_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+
+/**
+ * Content-Length counts the whole multipart body, not just the file. This fixed
+ * margin covers the boundary lines and headers around the single file part the
+ * form sends (busboy caps each part's headers far below it).
+ */
+export const MULTIPART_OVERHEAD_BYTES = 64 * 1024;
+
+export function finalFileTooLarge(): AppException {
+  return new AppException(
+    ErrorCodes.FILE_TOO_LARGE,
+    "Final file is too large. Maximum: 50MB.",
+    413,
+  );
+}
+
+/**
+ * Rejects a declared body that cannot hold a file within the limit, before any
+ * of it is read. Without Content-Length (chunked), the multipart fileSize limit
+ * stops the stream instead.
+ */
+export function assertFinalFileContentLength(contentLength: string | undefined): void {
+  if (contentLength === undefined) return;
+  const declared = Number(contentLength);
+  if (
+    Number.isFinite(declared) &&
+    declared > MAX_FINAL_FILE_SIZE + MULTIPART_OVERHEAD_BYTES
+  ) {
+    throw finalFileTooLarge();
+  }
+}
 
 const CONTENT_TYPES: Record<AbstractFileKind, string> = {
   PDF: "application/pdf",
@@ -117,84 +159,100 @@ function assertKindAllowed(
   // all accept any detected kind (PDF/PPT/PPTX).
 }
 
+function assertAbstractToken(
+  abstract: AbstractForFinalFile | null,
+  token: string,
+): asserts abstract is AbstractForFinalFile {
+  if (!abstract) {
+    throw new AppException(ErrorCodes.NOT_FOUND, "Abstract not found", 404);
+  }
+  if (!verifyAbstractToken(abstract.editToken, token)) {
+    throw new AppException(
+      ErrorCodes.NOT_FOUND,
+      "Invalid abstract token",
+      404,
+    );
+  }
+}
+
+function assertUploadWindowOpen(abstract: AbstractForFinalFile): void {
+  if (abstract.status !== "ACCEPTED") {
+    throw new AppException(
+      ErrorCodes.INVALID_STATUS_TRANSITION,
+      "Final files can only be uploaded after acceptance.",
+      409,
+    );
+  }
+
+  const config = abstract.config;
+  if (!config?.finalFileUploadEnabled) {
+    throw new AppException(
+      ErrorCodes.VALIDATION_ERROR,
+      "Final file upload is not enabled.",
+      409,
+    );
+  }
+  if (
+    config.finalFileDeadline &&
+    config.finalFileDeadline.getTime() < Date.now()
+  ) {
+    throw new AppException(
+      ErrorCodes.VALIDATION_ERROR,
+      "Final file upload deadline has passed.",
+      409,
+    );
+  }
+}
+
+async function deleteObjectBestEffort(
+  key: string,
+  context: Record<string, unknown>,
+  message: string,
+): Promise<void> {
+  try {
+    await getStorageProvider().delete(key);
+  } catch (err) {
+    logger.warn({ err, key, ...context }, message);
+  }
+}
+
 @Injectable()
 export class AbstractsFinalFileService {
   constructor(private readonly abstracts: AbstractsService) {}
 
+  /**
+   * `readFile` is called only after every check that needs no file has passed,
+   * so an anonymous caller with a bad token or a closed window never gets the
+   * request body buffered. The same checks run again under a row lock at write
+   * time; the early pass is only a gate.
+   */
   async uploadAbstractFinalFile(
     abstractId: string,
     token: string,
-    file: { buffer: Buffer; filename: string; mimetype: string },
+    readFile: () => Promise<FinalFileInput>,
     ipAddress?: string,
   ) {
-    if (file.buffer.length > MAX_FINAL_FILE_SIZE) {
-      throw new AppException(
-        ErrorCodes.FILE_TOO_LARGE,
-        "Final file is too large. Maximum: 50MB.",
-        400,
-      );
-    }
-
     const abstract = await findAbstractForFinalFile(abstractId);
-    if (!abstract) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Abstract not found", 404);
-    }
-    if (!verifyAbstractToken(abstract.editToken, token)) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Invalid abstract token",
-        404,
-      );
-    }
+    assertAbstractToken(abstract, token);
     await assertAbstractModuleEnabled(abstract.eventId);
-    if (abstract.status !== "ACCEPTED") {
-      throw new AppException(
-        ErrorCodes.INVALID_STATUS_TRANSITION,
-        "Final files can only be uploaded after acceptance.",
-        409,
-      );
-    }
+    assertUploadWindowOpen(abstract);
 
-    const config = abstract.config;
-    if (!config?.finalFileUploadEnabled) {
-      throw new AppException(
-        ErrorCodes.VALIDATION_ERROR,
-        "Final file upload is not enabled.",
-        409,
-      );
-    }
-    if (
-      config.finalFileDeadline &&
-      config.finalFileDeadline.getTime() < Date.now()
-    ) {
-      throw new AppException(
-        ErrorCodes.VALIDATION_ERROR,
-        "Final file upload deadline has passed.",
-        409,
-      );
+    const file = await readFile();
+    if (file.buffer.length > MAX_FINAL_FILE_SIZE) {
+      throw finalFileTooLarge();
     }
 
     const kind = await detectFinalFileKind(file);
     assertKindAllowed(kind, abstract.finalType);
 
     const ext = EXTENSIONS[kind];
-    const key = `${abstract.eventId}/abstracts/${abstract.id}/final.${ext}`;
-    const storage = getStorageProvider();
-
-    if (abstract.finalFileKey && abstract.finalFileKey !== key) {
-      try {
-        await storage.delete(abstract.finalFileKey);
-      } catch (err) {
-        logger.warn(
-          { err, abstractId, key: abstract.finalFileKey },
-          "Failed to delete old abstract final file",
-        );
-      }
-    }
+    const ownedPrefix = `${abstract.eventId}/abstracts/${abstract.id}`;
+    // A fresh key per upload, so the object the row points at is never overwritten.
+    const key = `${ownedPrefix}/final-${randomUUID()}.${ext}`;
 
     let storedKey: string;
     try {
-      storedKey = await storage.uploadPrivate(
+      storedKey = await getStorageProvider().uploadPrivate(
         file.buffer,
         key,
         CONTENT_TYPES[kind],
@@ -212,31 +270,62 @@ export class AbstractsFinalFileService {
       );
     }
 
-    const uploadedAt = new Date();
-    await updateAbstractFinalFileTxn(
-      abstractId,
-      {
-        finalFileKey: storedKey,
-        finalFileKind: kind,
-        finalFileSize: file.buffer.length,
-        finalFileUploadedAt: uploadedAt,
-      },
-      {
-        entityType: "Abstract",
-        entityId: abstractId,
-        action: "final_file_upload",
-        changes: {
-          finalFileKey: { old: abstract.finalFileKey, new: storedKey },
-          finalFileKind: { old: abstract.finalFileKind, new: kind },
-          finalFileSize: {
-            old: abstract.finalFileSize,
-            new: file.buffer.length,
+    let previousKey: string | null;
+    try {
+      await assertAbstractModuleEnabled(abstract.eventId);
+      ({ previousKey } = await updateAbstractFinalFileTxn(abstractId, (current) => {
+        assertAbstractToken(current, token);
+        assertUploadWindowOpen(current);
+        assertKindAllowed(kind, current.finalType);
+        return {
+          fields: {
+            finalFileKey: storedKey,
+            finalFileKind: kind,
+            finalFileSize: file.buffer.length,
+            finalFileUploadedAt: new Date(),
           },
-        },
-        performedBy: "PUBLIC",
-        ipAddress: ipAddress ?? null,
-      },
-    );
+          audit: {
+            entityType: "Abstract",
+            entityId: abstractId,
+            action: "final_file_upload",
+            changes: {
+              finalFileKey: { old: current.finalFileKey, new: storedKey },
+              finalFileKind: { old: current.finalFileKind, new: kind },
+              finalFileSize: {
+                old: current.finalFileSize,
+                new: file.buffer.length,
+              },
+            },
+            performedBy: "PUBLIC",
+            ipAddress: ipAddress ?? null,
+          },
+        };
+      }));
+    } catch (err) {
+      // The row still points at the previous file; drop the one nobody references.
+      await deleteObjectBestEffort(
+        storedKey,
+        { abstractId },
+        "Failed to delete unreferenced abstract final file",
+      );
+      throw err;
+    }
+
+    if (previousKey && previousKey !== storedKey) {
+      const oldKey = ownedStorageKey(previousKey, ownedPrefix);
+      if (oldKey) {
+        await deleteObjectBestEffort(
+          oldKey,
+          { abstractId },
+          "Failed to delete old abstract final file",
+        );
+      } else {
+        logger.warn(
+          { abstractId, key: previousKey },
+          "Previous abstract final file is outside the abstract's storage prefix; not deleting",
+        );
+      }
+    }
 
     return this.abstracts.getAbstractByToken(abstractId, token);
   }

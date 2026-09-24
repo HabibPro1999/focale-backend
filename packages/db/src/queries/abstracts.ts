@@ -537,16 +537,20 @@ export interface AbstractForFinalFile extends AbstractRow {
   } | null;
 }
 
+/** `forUpdate` row-locks the abstract (inside the caller's transaction). */
 export async function findAbstractForFinalFile(
   id: string,
+  exec: DbExecutor = getDb(),
+  opts: { forUpdate?: boolean } = {},
 ): Promise<AbstractForFinalFile | null> {
-  const [abstract] = await getDb()
+  const query = exec
     .select()
     .from(abstracts)
     .where(eq(abstracts.id, id))
     .limit(1);
+  const [abstract] = opts.forUpdate ? await query.for("update") : await query;
   if (!abstract) return null;
-  const [config] = await getDb()
+  const [config] = await exec
     .select({
       finalFileUploadEnabled: abstractConfig.finalFileUploadEnabled,
       finalFileDeadline: abstractConfig.finalFileDeadline,
@@ -944,17 +948,30 @@ export interface FinalFileUpdate {
   finalFileUploadedAt: Date;
 }
 
+/**
+ * Replace an abstract's final file under a row lock. `prepare` re-validates the
+ * locked row (throw to abort; nothing is written) and returns the fields and
+ * audit row to persist. Resolves with the key the row held before, so the
+ * caller can delete that object once this has committed.
+ */
 export async function updateAbstractFinalFileTxn(
   abstractId: string,
-  fields: FinalFileUpdate,
-  auditValues: typeof auditLogs.$inferInsert,
-): Promise<void> {
-  await withTxn(async (tx) => {
+  prepare: (current: AbstractForFinalFile | null) => {
+    fields: FinalFileUpdate;
+    audit: typeof auditLogs.$inferInsert;
+  },
+): Promise<{ previousKey: string | null }> {
+  return withTxn(async (tx) => {
+    const current = await findAbstractForFinalFile(abstractId, tx, {
+      forUpdate: true,
+    });
+    const { fields, audit } = prepare(current);
     await tx
       .update(abstracts)
       .set(fields)
       .where(eq(abstracts.id, abstractId));
-    await insertAuditLog(auditValues, tx);
+    await insertAuditLog(audit, tx);
+    return { previousKey: current?.finalFileKey ?? null };
   });
 }
 

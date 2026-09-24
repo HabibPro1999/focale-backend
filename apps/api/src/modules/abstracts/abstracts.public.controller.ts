@@ -14,7 +14,13 @@ import { Throttle } from "@nestjs/throttler";
 import type { FastifyRequest } from "fastify";
 import { ErrorCodes } from "@app/contracts";
 import { AbstractsService } from "./abstracts.service";
-import { AbstractsFinalFileService } from "./abstracts.final-file.service";
+import {
+  AbstractsFinalFileService,
+  MAX_FINAL_FILE_SIZE,
+  assertFinalFileContentLength,
+  finalFileTooLarge,
+  type FinalFileInput,
+} from "./abstracts.final-file.service";
 import { extractAbstractToken } from "./abstracts.token";
 import {
   EventSlugParamDto,
@@ -33,6 +39,30 @@ interface MultipartFile {
 type MultipartRequest = FastifyRequest & {
   file(opts?: { limits?: { fileSize?: number } }): Promise<MultipartFile | undefined>;
 };
+
+/** Reads the single final-file part; the multipart fileSize limit bounds a chunked body. */
+async function readFinalFile(req: MultipartRequest): Promise<FinalFileInput> {
+  const data = await req
+    .file({ limits: { fileSize: MAX_FINAL_FILE_SIZE } })
+    .catch(() => null);
+  if (!data) {
+    throw new BadRequestException({
+      code: ErrorCodes.VALIDATION_ERROR,
+      message: "No file uploaded",
+    });
+  }
+  let buffer: Buffer;
+  try {
+    buffer = await data.toBuffer();
+  } catch (err) {
+    // @fastify/multipart's RequestFileTooLargeError is not an HttpException (it would render as 500).
+    if ((err as { code?: unknown }).code === "FST_REQ_FILE_TOO_LARGE") {
+      throw finalFileTooLarge();
+    }
+    throw err;
+  }
+  return { buffer, filename: data.filename, mimetype: data.mimetype };
+}
 
 // Env-driven public rate limits (legacy publicRateLimits.abstracts*). Read at
 // module load — the app-config zod schema validates these at boot.
@@ -130,20 +160,13 @@ export class AbstractsPublicController {
     @Req() req: MultipartRequest,
   ) {
     const token = extractAbstractToken(req);
-    const data = await req
-      .file({ limits: { fileSize: 50 * 1024 * 1024 } })
-      .catch(() => null);
-    if (!data) {
-      throw new BadRequestException({
-        code: ErrorCodes.VALIDATION_ERROR,
-        message: "No file uploaded",
-      });
-    }
-    const buffer = await data.toBuffer();
+    assertFinalFileContentLength(req.headers["content-length"]);
+    // The service checks the abstract, token, status and window before it
+    // calls readFinalFile, so a rejected caller's body is never buffered.
     return this.finalFile.uploadAbstractFinalFile(
       id,
       token,
-      { buffer, filename: data.filename, mimetype: data.mimetype },
+      () => readFinalFile(req),
       req.ip,
     );
   }

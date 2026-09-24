@@ -1189,7 +1189,7 @@ describe("RegistrationsService", () => {
       const result = await service.uploadPaymentProof("reg1", pdf());
       expect(storage.uploadPrivate).toHaveBeenCalledWith(
         expect.anything(),
-        "ev1/reg1/proof.pdf",
+        expect.stringMatching(/^ev1\/reg1\/proof-[0-9a-f-]{36}\.pdf$/),
         "application/pdf",
         { contentDisposition: "attachment" },
       );
@@ -1274,6 +1274,115 @@ describe("RegistrationsService", () => {
       });
       expect(result.fileName).toBe("proof.webp");
       expect(result.mimeType).toBe("image/webp");
+    });
+
+    // ---- write ordering: upload new key → update row → delete old ----------
+    describe("write ordering", () => {
+      const oldProof = "ev1/reg1/proof.pdf";
+      const uploadedKey = () => storage.uploadPrivate.mock.calls[0][1] as string;
+
+      beforeEach(() => {
+        storage.uploadPrivate.mockImplementation(
+          async (_buffer: Buffer, key: string) => key,
+        );
+        db.findRegistrationWithFormEvent.mockResolvedValue(
+          proofFetch({ paymentProofUrl: oldProof, paymentStatus: "VERIFYING" }),
+        );
+      });
+
+      it("uploads under a fresh key and deletes the old proof only after the row update", async () => {
+        const result = await service.uploadPaymentProof("reg1", pdf());
+
+        expect(uploadedKey()).not.toBe(oldProof);
+        expect(result.fileUrl).toBe(uploadedKey());
+        expect(db.updateRegistrationRow.mock.calls[0][1].paymentProofUrl).toBe(
+          uploadedKey(),
+        );
+        expect(storage.delete).toHaveBeenCalledTimes(1);
+        expect(storage.delete).toHaveBeenCalledWith(oldProof);
+        const [uploadOrder] = storage.uploadPrivate.mock.invocationCallOrder;
+        const [updateOrder] = db.updateRegistrationRow.mock.invocationCallOrder;
+        const [deleteOrder] = storage.delete.mock.invocationCallOrder;
+        expect(uploadOrder).toBeLessThan(updateOrder);
+        expect(updateOrder).toBeLessThan(deleteOrder);
+      });
+
+      it("never reuses a key across uploads", async () => {
+        await service.uploadPaymentProof("reg1", pdf());
+        await service.uploadPaymentProof("reg1", pdf());
+        const [first, second] = storage.uploadPrivate.mock.calls.map((c) => c[1]);
+        expect(first).not.toBe(second);
+      });
+
+      it("row update failure keeps the old proof, deletes the new object and rethrows", async () => {
+        const dbDown = new Error("db down");
+        db.updateRegistrationRow.mockRejectedValueOnce(dbDown);
+
+        await expect(service.uploadPaymentProof("reg1", pdf())).rejects.toBe(dbDown);
+
+        expect(storage.delete).toHaveBeenCalledTimes(1);
+        expect(storage.delete).toHaveBeenCalledWith(uploadedKey());
+        expect(storage.delete).not.toHaveBeenCalledWith(oldProof);
+      });
+
+      it("post-upload re-validation failure (now PAID) removes the new object and keeps the old", async () => {
+        db.findRegistrationWithFormEvent
+          .mockResolvedValueOnce(
+            proofFetch({ paymentProofUrl: oldProof, paymentStatus: "VERIFYING" }),
+          )
+          .mockResolvedValueOnce(
+            proofFetch({ paymentProofUrl: oldProof, paymentStatus: "PAID" }),
+          );
+
+        await expect(service.uploadPaymentProof("reg1", pdf())).rejects.toMatchObject({
+          code: "STT_12002",
+          statusCode: 400,
+        });
+
+        expect(db.updateRegistrationRow).not.toHaveBeenCalled();
+        expect(storage.delete).toHaveBeenCalledTimes(1);
+        expect(storage.delete).toHaveBeenCalledWith(uploadedKey());
+      });
+
+      it("deletes the proof the transaction replaced, not the one seen before the upload", async () => {
+        const raced = "ev1/reg1/proof-11111111-1111-4111-8111-111111111111.webp";
+        db.findRegistrationWithFormEvent
+          .mockResolvedValueOnce(
+            proofFetch({ paymentProofUrl: oldProof, paymentStatus: "VERIFYING" }),
+          )
+          .mockResolvedValueOnce(
+            proofFetch({ paymentProofUrl: raced, paymentStatus: "VERIFYING" }),
+          );
+
+        await service.uploadPaymentProof("reg1", pdf());
+
+        expect(storage.delete).toHaveBeenCalledTimes(1);
+        expect(storage.delete).toHaveBeenCalledWith(raced);
+      });
+
+      it("an old-proof delete failure does not fail the request", async () => {
+        storage.delete.mockRejectedValueOnce(new Error("storage down"));
+
+        const result = await service.uploadPaymentProof("reg1", pdf());
+
+        expect(result.fileUrl).toBe(uploadedKey());
+        expect(storage.delete).toHaveBeenCalledWith(oldProof);
+      });
+
+      it.each([
+        ["another registration's object", "ev1/reg2/proof.pdf"],
+        ["another event's object", "ev2/reg1/proof.pdf"],
+        ["an external URL", "https://evil.example/whatever.pdf"],
+      ])("never deletes a stored proof URL outside this registration's prefix (%s)", async (_label, url) => {
+        db.findRegistrationWithFormEvent.mockResolvedValue(
+          proofFetch({ paymentProofUrl: url, paymentStatus: "VERIFYING" }),
+        );
+
+        await service.uploadPaymentProof("reg1", pdf());
+
+        expect(db.updateRegistrationRow).toHaveBeenCalledTimes(1);
+        expect(storage.delete).not.toHaveBeenCalled();
+      });
     });
   });
 
