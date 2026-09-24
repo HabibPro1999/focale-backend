@@ -74,6 +74,11 @@ function withRoles(template: CertificateTemplateRow): CertificateTemplateRow {
   return { ...template, applicableRoles: template.applicableRoles ?? [] };
 }
 
+const templateAccessJoin = and(
+  eq(eventAccess.id, certificateTemplates.accessId),
+  eq(eventAccess.eventId, certificateTemplates.eventId),
+);
+
 /** Reload a single template joined with its access relation, or null. */
 async function loadTemplateWithAccess(
   id: string,
@@ -87,7 +92,7 @@ async function loadTemplateWithAccess(
       accessRefType: eventAccess.type,
     })
     .from(certificateTemplates)
-    .leftJoin(eventAccess, eq(eventAccess.id, certificateTemplates.accessId))
+    .leftJoin(eventAccess, templateAccessJoin)
     .where(eq(certificateTemplates.id, id))
     .limit(1);
   const row = rows[0];
@@ -112,7 +117,7 @@ export async function listCertificateTemplates(
       accessRefType: eventAccess.type,
     })
     .from(certificateTemplates)
-    .leftJoin(eventAccess, eq(eventAccess.id, certificateTemplates.accessId))
+    .leftJoin(eventAccess, templateAccessJoin)
     .where(eq(certificateTemplates.eventId, eventId))
     .orderBy(desc(certificateTemplates.createdAt));
   return rows.map((row) => ({ ...withRoles(row.template), access: toAccessRef(row) }));
@@ -134,7 +139,7 @@ export async function getCertificateTemplateWithEvent(
     })
     .from(certificateTemplates)
     .innerJoin(events, eq(events.id, certificateTemplates.eventId))
-    .leftJoin(eventAccess, eq(eventAccess.id, certificateTemplates.accessId))
+    .leftJoin(eventAccess, templateAccessJoin)
     .where(eq(certificateTemplates.id, id))
     .limit(1);
   const row = rows[0];
@@ -150,9 +155,14 @@ export async function getCertificateTemplateWithEvent(
 export async function getCertificateTemplateImageState(
   id: string,
   exec: DbExecutor = getDb(),
-): Promise<{ templateUrl: string; accessId: string | null } | null> {
+): Promise<{
+  eventId: string;
+  templateUrl: string;
+  accessId: string | null;
+} | null> {
   const [row] = await exec
     .select({
+      eventId: certificateTemplates.eventId,
       templateUrl: certificateTemplates.templateUrl,
       accessId: certificateTemplates.accessId,
     })
@@ -244,8 +254,8 @@ export async function createCertificateTemplate(
 /**
  * Update a template with a sparse column patch, returning the row + access.
  * `accessId` is a plain nullable column here (no Prisma connect/disconnect);
- * setting it to null unlinks, to a uuid links (FK violation surfaces as pg 23503
- * if the access row doesn't exist — mapped by the global filter).
+ * setting it to null unlinks, to a uuid links. The service verifies that the
+ * access row belongs to this template's event before this query runs.
  */
 export async function updateCertificateTemplate(
   id: string,
@@ -324,7 +334,7 @@ export async function listActiveImageReadyCertificateTemplates(
       accessRefType: eventAccess.type,
     })
     .from(certificateTemplates)
-    .leftJoin(eventAccess, eq(eventAccess.id, certificateTemplates.accessId))
+    .leftJoin(eventAccess, templateAccessJoin)
     .where(
       and(
         eq(certificateTemplates.eventId, eventId),
@@ -355,7 +365,7 @@ export async function getActiveImageReadyCertificateTemplatesByIds(
       accessRefType: eventAccess.type,
     })
     .from(certificateTemplates)
-    .leftJoin(eventAccess, eq(eventAccess.id, certificateTemplates.accessId))
+    .leftJoin(eventAccess, templateAccessJoin)
     .where(
       and(
         inArray(certificateTemplates.id, ids),
