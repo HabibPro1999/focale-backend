@@ -9,6 +9,7 @@ import {
   ForbiddenException,
   Get,
   Headers,
+  Ip,
   Param,
   Post,
 } from "@nestjs/common";
@@ -53,9 +54,10 @@ export class NetworkingRecommendationsController {
   @Get("recommendations")
   async recommendations(
     @Param("slug") slug: string,
+    @Ip() ip: string,
     @Headers("authorization") authorization?: string,
   ) {
-    const ctx = await this.networking.participant(slug, authorization);
+    const ctx = await this.networking.participant(slug, authorization, { ip });
     if (!ctx.config.swipeEnabled && !ctx.config.searchEnabled)
       throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Participant discovery is disabled" });
     const model =

@@ -8,6 +8,7 @@ import {
 import { randomBytes } from "node:crypto";
 import { networkingStore, networkingTransaction } from "@app/db";
 import type { NetworkingContext } from "./networking.service";
+import { networkingIdentityCache } from "../../core/networking-identity-cache";
 import {
   newNetworkingTotpSecret,
   networkingHash,
@@ -170,6 +171,8 @@ export class NetworkingMfaService {
     });
     if (!result.valid)
       throw new BadRequestException({ code: "NETWORKING_VALIDATION", message: "Invalid, reused or expired authenticator/recovery code" });
+    // Disabling revoked the participant's other sessions; the current one is re-verified on its next request.
+    if (action === "DISABLE") networkingIdentityCache.forgetProfile(ctx.profile.id);
     return {
       verified: true,
       ...(result.recoveryCodes ? { recoveryCodes: result.recoveryCodes } : {}),

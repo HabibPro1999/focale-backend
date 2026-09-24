@@ -165,18 +165,23 @@ A wrong or expired OTP on `auth/verify` stays HTTP 401 (`AUTH_1001`); no session
 
 ## Rate limits
 
-Participant routes (`/api/networking/:slug/…`) share a venue bucket of **24,000 requests/minute per client IP and event slug**, sized for 500–2,000 attendees behind one public IP and checked alongside identity quotas. `config` and `registration` reads skip the per-IP default limit and are bounded only by the venue bucket. Organizer routes (`/api/events/:eventId/networking/…`) are outside the venue bucket; organizer bearer requests (e.g. badge scanning) get per-token quotas. Other modules retain the legacy per-IP limits (100/minute in production by default).
+Participant routes (`/api/networking/:slug/…`) share a venue bucket of **24,000 requests/minute per client IP and event slug**, sized for 500–2,000 attendees behind one public IP and checked alongside identity quotas. `config` and `registration` reads skip the per-IP default limit and are bounded only by the venue bucket. Organizer routes (`/api/events/:eventId/networking/…`) are outside the venue bucket; they share a backstop of **600 requests/minute per client IP**, and organizer bearer requests (e.g. badge scanning) also get per-token quotas. Other modules retain the legacy per-IP limits (100/minute in production by default).
 
 Sign-in endpoints (`auth/request`, `auth/verify`, `auth/mfa/verify`) also share **300/minute per client IP and event slug** per endpoint.
 
+Participant bearers are keyed by verified identity. After the participant service verifies a bearer's session (every authenticated request, and at issuance by `auth/verify`), it records sha256(token) → session id in an in-memory LRU for at most 5 minutes (never past the session's expiry). Logout, withdrawal, consent withdrawal, organizer suspension/exclusion/status changes and MFA disable evict eagerly; a rejected bearer is evicted on its next use.
+- A **verified** bearer uses the per-session identity quotas below.
+- Any other bearer (after a restart, after 5 idle minutes, or a revoked or random token) is **unverified**: it shares **12,000 requests/minute per client IP and event slug** (half the venue bucket, so a cold cache at venue scale does not 429) and keeps a per-token quota under a separate namespace.
+- **Invalid-bearer lockout:** when the service rejects **200 distinct bearers** (missing, unknown, revoked or expired sessions; not eligibility/consent/MFA refusals) from one client IP for one event slug within 10 minutes, unverified bearer requests from that IP and slug get 429 with `Retry-After` for **10 minutes**. Verified sessions, the sign-in endpoints and `config`/`registration` are unaffected.
+
 Identity quotas are separate per handler:
 - OTP request: **5 per 10 minutes**, keyed by event slug and trimmed, lowercase email (even when a bearer header is supplied).
-- OTP verify: **10/minute per event slug and challenge ID**. The verify contract contains no email; the existing database-enforced five-attempt challenge cap remains in place. Invalid/missing challenge IDs fall back to IP.
+- OTP verify: **10/minute per event slug and challenge ID**. The verify contract contains no email; the database-enforced five-attempt challenge cap remains in place, and failed attempts are also summed per event and email across challenges: **10 per 15 minutes and 30 per 24 hours**. Over either, `auth/verify` returns 429 `NETWORKING_RATE_LIMITED` before the code is compared. Invalid/missing challenge IDs fall back to IP.
 - MFA: **10/minute per bearer session** per endpoint.
 - Chat sends: **30/minute per bearer session**.
 - Other authenticated networking requests, including mutations: the configured default limit per bearer session (100/minute in production), unless an endpoint has a tighter override (reports: 5/minute).
 
-Trackers hash session tokens and OTP identities; raw tokens/emails are not stored in throttle keys. Other anonymous requests fall back to IP. The client IP uses `X-Forwarded-For` only when the immediate socket peer matches an explicitly configured `TRUST_PROXY` IP/CIDR; requests from other peers ignore forwarded headers. Throttled participant responses use HTTP 429 and `NETWORKING_RATE_LIMITED` inside the normal error envelope. **All quotas are in memory and therefore per API replica**: with N replicas behind a load balancer the effective ceilings are up to N times higher. The OTP service also retains its existing persistent request/attempt checks.
+Trackers hash session tokens and OTP identities; raw tokens/emails are not stored in throttle keys. Other anonymous requests fall back to IP. The client IP uses `X-Forwarded-For` only when the immediate socket peer matches an explicitly configured `TRUST_PROXY` IP/CIDR; requests from other peers ignore forwarded headers. Throttled participant responses use HTTP 429 and `NETWORKING_RATE_LIMITED` inside the normal error envelope. **All quotas, verified identities and lockouts are in memory and therefore per API process.** The deployment runs one API instance; with N replicas the effective ceilings would be up to N times higher and a lockout or verified identity on one replica would be invisible to the others. The OTP failed-attempt sums are persistent (database).
 
 ## Participant lists
 
