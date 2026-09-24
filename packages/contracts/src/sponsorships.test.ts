@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CreateSponsorshipBatchSchema } from "./sponsorships";
+import { CreateSponsorshipBatchSchema, RegistrantSearchQuerySchema } from "./sponsorships";
 
 const base = {
   sponsor: {
@@ -33,5 +33,18 @@ describe("CreateSponsorshipBatchSchema idempotencyKey (legacy parity)", () => {
     expect(
       CreateSponsorshipBatchSchema.safeParse({ ...base, bogus: true }).success,
     ).toBe(false);
+  });
+});
+
+describe("RegistrantSearchQuerySchema (anonymous sponsor search)", () => {
+  it("rejects fewer than 3 characters after trimming", () => {
+    for (const query of ["", "ab", "  ab  ", "   "]) {
+      expect(RegistrantSearchQuerySchema.safeParse({ query }).success).toBe(false);
+    }
+  });
+
+  it("accepts 3+ characters and trims the query", () => {
+    const parsed = RegistrantSearchQuerySchema.parse({ query: "  abc ", unpaidOnly: "true" });
+    expect(parsed).toEqual({ query: "abc", unpaidOnly: "true" });
   });
 });
