@@ -40,9 +40,7 @@ if (enabled) {
 
 afterAll(async () => {
   if (!scratch) return;
-  const { getDb } = await import("@app/db");
-  const client = (getDb() as unknown as { $client?: { end?: () => Promise<void> } })
-    .$client;
-  await client?.end?.();
+  const { closeDb } = await import("@app/db");
+  await closeDb();
   await scratch.close();
 });

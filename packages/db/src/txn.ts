@@ -1,5 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { getDb, type Db } from "./client";
+import { sql } from "drizzle-orm";
+import { DB_TIMEOUT_MAX_MS } from "@app/contracts";
+import { getDb, getDbSettings, type Db } from "./client";
 
 type TxnFn<T> = (tx: Parameters<Parameters<Db["transaction"]>[0]>[0]) => Promise<T>;
 
@@ -94,4 +96,32 @@ export function withSerializableTxn<T>(fn: TxnFn<T>): Promise<T> {
   return withTxnRetry(() =>
     getDb().transaction(fn, { isolationLevel: "serializable" }),
   );
+}
+
+/**
+ * READ COMMITTED transaction whose statements may run for `timeoutMs`
+ * (0 = unlimited) instead of the pool's DB_STATEMENT_TIMEOUT_MS. `SET LOCAL`
+ * reverts at COMMIT/ROLLBACK on PostgreSQL and CockroachDB, so the pooled
+ * session keeps its default afterwards. Keep only queries inside `fn`; the
+ * idle-in-transaction timeout still applies between them.
+ */
+export function withStatementTimeout<T>(timeoutMs: number, fn: TxnFn<T>): Promise<T> {
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > DB_TIMEOUT_MAX_MS) {
+    return Promise.reject(
+      new Error(`Statement timeout must be an integer from 0 to ${DB_TIMEOUT_MAX_MS} ms`),
+    );
+  }
+  return getDb().transaction(
+    async (tx) => {
+      // SET takes no bind parameters; timeoutMs is a validated integer.
+      await tx.execute(sql.raw(`SET LOCAL statement_timeout = ${timeoutMs}`));
+      return fn(tx);
+    },
+    { isolationLevel: "read committed" },
+  );
+}
+
+/** Report/registration export fetches: DB_EXPORT_STATEMENT_TIMEOUT_MS per statement. */
+export function withExportStatementTimeout<T>(fn: TxnFn<T>): Promise<T> {
+  return withStatementTimeout(getDbSettings().exportStatementTimeoutMs, fn);
 }

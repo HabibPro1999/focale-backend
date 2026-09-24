@@ -5,6 +5,7 @@ import {
   getAccessRegistrantsReportData,
   getSponsorshipsReportData,
   getCheckInReportData,
+  withExportStatementTimeout,
 } from "@app/db";
 import { escapeExcelFormula, escapeExcelRow } from "./excel-safety";
 
@@ -15,7 +16,9 @@ import { escapeExcelFormula, escapeExcelRow } from "./excel-safety";
 export async function generateEventSummary(
   eventId: string,
 ): Promise<{ filename: string; data: Buffer }> {
-  const { event, accessTypes, registrations } = await getEventSummaryData(eventId);
+  const { event, accessTypes, registrations } = await withExportStatementTimeout((tx) =>
+    getEventSummaryData(eventId, tx),
+  );
 
   // ── Compute stats ──
 
@@ -214,7 +217,7 @@ export async function generateAccessRegistrantsReport(
   eventId: string,
 ): Promise<{ filename: string; data: Buffer }> {
   const { event, accessItems, registrations } =
-    await getAccessRegistrantsReportData(eventId);
+    await withExportStatementTimeout((tx) => getAccessRegistrantsReportData(eventId, tx));
 
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Focale OS";
@@ -336,7 +339,7 @@ export async function generateSponsorshipsReport(
   filters?: { status?: string; search?: string },
 ): Promise<{ filename: string; data: Buffer }> {
   const { event, currency, accessItems, sponsorships } =
-    await getSponsorshipsReportData(eventId, filters);
+    await withExportStatementTimeout((tx) => getSponsorshipsReportData(eventId, filters, tx));
 
   const accessNameById = new Map(accessItems.map((item) => [item.id, item.name]));
 
@@ -641,7 +644,9 @@ function slugify(name: string): string {
 export async function generateCheckInReport(
   eventId: string,
 ): Promise<{ filename: string; data: Buffer }> {
-  const { event, accessItems, registrations } = await getCheckInReportData(eventId);
+  const { event, accessItems, registrations } = await withExportStatementTimeout((tx) =>
+    getCheckInReportData(eventId, tx),
+  );
 
   const zip = new JSZip();
   const timestamp = new Date().toISOString().split("T")[0];

@@ -13,6 +13,7 @@ import {
   getAccessRegistrantsData,
   getEventSlug,
   getRegistrationsForExport,
+  withExportStatementTimeout,
   type DateRange,
   type FinancialSummaryAggregates,
   type ExportRegistrationRow,
@@ -196,19 +197,27 @@ export class ReportsService {
     eventId: string,
     query: ExportRegistrationsQuery,
   ): Promise<{ filename: string; contentType: string; data: string | Buffer }> {
-    // Fail fast — verify event exists before querying registrations.
-    const event = await getEventSlug(eventId);
+    // Export fetches run under the export statement timeout. Fail fast —
+    // verify the event exists before querying registrations.
+    const { event, registrations } = await withExportStatementTimeout(async (tx) => {
+      const found = await getEventSlug(eventId, tx);
+      if (!found) return { event: null, registrations: [] };
+      const rows = await getRegistrationsForExport(
+        eventId,
+        {
+          paymentStatus: query.paymentStatus,
+          paymentMethod: query.paymentMethod,
+          search: query.search,
+          startDate: query.startDate,
+          endDate: query.endDate,
+        },
+        tx,
+      );
+      return { event: found, registrations: rows };
+    });
     if (!event) {
       throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
     }
-
-    const registrations = await getRegistrationsForExport(eventId, {
-      paymentStatus: query.paymentStatus,
-      paymentMethod: query.paymentMethod,
-      search: query.search,
-      startDate: query.startDate,
-      endDate: query.endDate,
-    });
 
     const timestamp = new Date().toISOString().split("T")[0];
     const filename = `${event.slug}-registrations-${timestamp}`;

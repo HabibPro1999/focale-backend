@@ -1,8 +1,10 @@
 // ============================================================================
 // Reports Module — DB query layer (read-only)
 //
-// Every fn here is a pure data fetch (no writes, no transactions — the legacy
-// reports module was entirely read-only; READ COMMITTED default is fine). The
+// Every fn here is a pure data fetch (no writes — the legacy reports module was
+// entirely read-only; READ COMMITTED default is fine). Export fetches accept an
+// optional executor so the API can run them inside withExportStatementTimeout
+// (they then query sequentially: one transaction is one connection). The
 // api-layer service/generators consume these and do all formatting/aggregation
 // math. Raw-SQL semantics (jsonb_array_elements LATERAL, DATE() grouping,
 // settled-only access breakdown) are preserved byte-for-byte via drizzle `sql`.
@@ -25,7 +27,7 @@ import {
   type SQL,
 } from "drizzle-orm";
 import type { FormField } from "@app/contracts";
-import { getDb } from "../client";
+import { getDb, type DbExecutor } from "../client";
 import { rowsOf } from "../helpers";
 import { registrations, paymentTransaction } from "../schema/registrations";
 import { events, eventAccess, accessCheckIns } from "../schema/events-access";
@@ -503,8 +505,11 @@ export async function getAccessRegistrantsData(
 // CSV / JSON / XLSX registrations export (GET)
 // ============================================================================
 
-export async function getEventSlug(eventId: string): Promise<{ slug: string } | null> {
-  const rows = await getDb()
+export async function getEventSlug(
+  eventId: string,
+  db: DbExecutor = getDb(),
+): Promise<{ slug: string } | null> {
+  const rows = await db
     .select({ slug: events.slug })
     .from(events)
     .where(eq(events.id, eventId))
@@ -535,8 +540,9 @@ export interface ExportRegistrationRow {
 export async function getRegistrationsForExport(
   eventId: string,
   filters: RegistrationExportFilters,
+  db: DbExecutor = getDb(),
 ): Promise<ExportRegistrationRow[]> {
-  return getDb()
+  return db
     .select({
       id: registrations.id,
       email: registrations.email,
@@ -618,9 +624,10 @@ function getDefaultFixedColumns() {
 
 export async function getRegistrationTableColumns(
   eventId: string,
+  db: DbExecutor = getDb(),
 ): Promise<RegistrationTableColumns> {
   const form = (
-    await getDb()
+    await db
       .select({ schema: forms.schema })
       .from(forms)
       .where(and(eq(forms.eventId, eventId), eq(forms.type, "REGISTRATION")))
@@ -712,8 +719,11 @@ export interface EventAccessNameRow {
   name: string;
 }
 
-export async function getEventAccessNames(eventId: string): Promise<EventAccessNameRow[]> {
-  return getDb()
+export async function getEventAccessNames(
+  eventId: string,
+  db: DbExecutor = getDb(),
+): Promise<EventAccessNameRow[]> {
+  return db
     .select({ id: eventAccess.id, name: eventAccess.name })
     .from(eventAccess)
     .where(eq(eventAccess.eventId, eventId))
@@ -722,8 +732,9 @@ export async function getEventAccessNames(eventId: string): Promise<EventAccessN
 
 export async function getEventSlugAndName(
   eventId: string,
+  db: DbExecutor = getDb(),
 ): Promise<{ slug: string; name: string } | null> {
-  const rows = await getDb()
+  const rows = await db
     .select({ slug: events.slug, name: events.name })
     .from(events)
     .where(eq(events.id, eventId))
@@ -777,8 +788,8 @@ export interface ModularExportOptions {
 export async function getRegistrationsForModularExport(
   eventId: string,
   opts: ModularExportOptions,
+  db: DbExecutor = getDb(),
 ): Promise<ModularRegistrationRow[]> {
-  const db = getDb();
   const rows = await db
     .select()
     .from(registrations)
@@ -864,10 +875,11 @@ export interface SponsorshipLabDetail {
 export async function getSponsorshipLabDetails(
   eventId: string,
   codes: string[],
+  db: DbExecutor = getDb(),
 ): Promise<SponsorshipLabDetail[]> {
   const uniqueCodes = Array.from(new Set(codes.filter(Boolean)));
   if (uniqueCodes.length === 0) return [];
-  return getDb()
+  return db
     .select({
       code: sponsorships.code,
       beneficiaryAddress: sponsorships.beneficiaryAddress,
@@ -900,27 +912,27 @@ export interface EventSummaryData {
   }>;
 }
 
-export async function getEventSummaryData(eventId: string): Promise<EventSummaryData> {
-  const db = getDb();
-  const [event, accessTypes, regs] = await Promise.all([
-    getEventSlugAndName(eventId),
-    db
-      .select({ id: eventAccess.id, name: eventAccess.name, type: eventAccess.type })
-      .from(eventAccess)
-      .where(eq(eventAccess.eventId, eventId))
-      .orderBy(asc(eventAccess.sortOrder)),
-    db
-      .select({
-        id: registrations.id,
-        paymentStatus: registrations.paymentStatus,
-        paymentMethod: registrations.paymentMethod,
-        accessTypeIds: registrations.accessTypeIds,
-        sponsorshipAmount: registrations.sponsorshipAmount,
-        totalAmount: registrations.totalAmount,
-      })
-      .from(registrations)
-      .where(eq(registrations.eventId, eventId)),
-  ]);
+export async function getEventSummaryData(
+  eventId: string,
+  db: DbExecutor = getDb(),
+): Promise<EventSummaryData> {
+  const event = await getEventSlugAndName(eventId, db);
+  const accessTypes = await db
+    .select({ id: eventAccess.id, name: eventAccess.name, type: eventAccess.type })
+    .from(eventAccess)
+    .where(eq(eventAccess.eventId, eventId))
+    .orderBy(asc(eventAccess.sortOrder));
+  const regs = await db
+    .select({
+      id: registrations.id,
+      paymentStatus: registrations.paymentStatus,
+      paymentMethod: registrations.paymentMethod,
+      accessTypeIds: registrations.accessTypeIds,
+      sponsorshipAmount: registrations.sponsorshipAmount,
+      totalAmount: registrations.totalAmount,
+    })
+    .from(registrations)
+    .where(eq(registrations.eventId, eventId));
   return {
     event,
     accessTypes,
@@ -946,16 +958,14 @@ export interface AccessRegistrantsReportData {
 
 export async function getAccessRegistrantsReportData(
   eventId: string,
+  db: DbExecutor = getDb(),
 ): Promise<AccessRegistrantsReportData> {
-  const db = getDb();
-  const [event, accessItems] = await Promise.all([
-    getEventSlugAndName(eventId),
-    db
-      .select({ id: eventAccess.id, name: eventAccess.name, type: eventAccess.type })
-      .from(eventAccess)
-      .where(eq(eventAccess.eventId, eventId))
-      .orderBy(asc(eventAccess.sortOrder)),
-  ]);
+  const event = await getEventSlugAndName(eventId, db);
+  const accessItems = await db
+    .select({ id: eventAccess.id, name: eventAccess.name, type: eventAccess.type })
+    .from(eventAccess)
+    .where(eq(eventAccess.eventId, eventId))
+    .orderBy(asc(eventAccess.sortOrder));
   const regs = await db
     .select({
       firstName: registrations.firstName,
@@ -1009,37 +1019,35 @@ export interface SponsorshipsReportData {
 export async function getSponsorshipsReportData(
   eventId: string,
   filters?: { status?: string; search?: string },
+  db: DbExecutor = getDb(),
 ): Promise<SponsorshipsReportData> {
-  const db = getDb();
   const where = buildSponsorshipWhere(eventId, filters);
 
-  const [event, pricing, accessItems, sponsorshipRows] = await Promise.all([
-    getEventSlugAndName(eventId),
-    db
-      .select({ currency: eventPricing.currency })
-      .from(eventPricing)
-      .where(eq(eventPricing.eventId, eventId))
-      .limit(1),
-    db
-      .select({ id: eventAccess.id, name: eventAccess.name })
-      .from(eventAccess)
-      .where(eq(eventAccess.eventId, eventId))
-      .orderBy(asc(eventAccess.sortOrder)),
-    db
-      .select({
-        sponsorship: sponsorships,
-        batch: {
-          labName: sponsorshipBatches.labName,
-          contactName: sponsorshipBatches.contactName,
-          email: sponsorshipBatches.email,
-          phone: sponsorshipBatches.phone,
-        },
-      })
-      .from(sponsorships)
-      .innerJoin(sponsorshipBatches, eq(sponsorships.batchId, sponsorshipBatches.id))
-      .where(where)
-      .orderBy(desc(sponsorships.createdAt)),
-  ]);
+  const event = await getEventSlugAndName(eventId, db);
+  const pricing = await db
+    .select({ currency: eventPricing.currency })
+    .from(eventPricing)
+    .where(eq(eventPricing.eventId, eventId))
+    .limit(1);
+  const accessItems = await db
+    .select({ id: eventAccess.id, name: eventAccess.name })
+    .from(eventAccess)
+    .where(eq(eventAccess.eventId, eventId))
+    .orderBy(asc(eventAccess.sortOrder));
+  const sponsorshipRows = await db
+    .select({
+      sponsorship: sponsorships,
+      batch: {
+        labName: sponsorshipBatches.labName,
+        contactName: sponsorshipBatches.contactName,
+        email: sponsorshipBatches.email,
+        phone: sponsorshipBatches.phone,
+      },
+    })
+    .from(sponsorships)
+    .innerJoin(sponsorshipBatches, eq(sponsorships.batchId, sponsorshipBatches.id))
+    .where(where)
+    .orderBy(desc(sponsorships.createdAt));
 
   // Usages (+ registration) for the fetched sponsorships, ordered appliedAt asc.
   const sponsorshipIds = sponsorshipRows.map((s) => s.sponsorship.id);
@@ -1112,16 +1120,16 @@ export interface CheckInReportData {
   }>;
 }
 
-export async function getCheckInReportData(eventId: string): Promise<CheckInReportData> {
-  const db = getDb();
-  const [event, accessItems] = await Promise.all([
-    getEventSlugAndName(eventId),
-    db
-      .select({ id: eventAccess.id, name: eventAccess.name })
-      .from(eventAccess)
-      .where(eq(eventAccess.eventId, eventId))
-      .orderBy(asc(eventAccess.sortOrder)),
-  ]);
+export async function getCheckInReportData(
+  eventId: string,
+  db: DbExecutor = getDb(),
+): Promise<CheckInReportData> {
+  const event = await getEventSlugAndName(eventId, db);
+  const accessItems = await db
+    .select({ id: eventAccess.id, name: eventAccess.name })
+    .from(eventAccess)
+    .where(eq(eventAccess.eventId, eventId))
+    .orderBy(asc(eventAccess.sortOrder));
 
   const regs = await db
     .select({

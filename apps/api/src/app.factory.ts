@@ -91,6 +91,7 @@ export async function buildApp(
 
   await fastify.register(cookie);
 
-  app.enableShutdownHooks();
+  // No app.enableShutdownHooks(): main.ts owns SIGTERM/SIGINT so the app is
+  // closed exactly once, followed by the database pool.
   return app;
 }
