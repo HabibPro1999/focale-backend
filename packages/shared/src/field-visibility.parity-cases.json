@@ -1,0 +1,72 @@
+{
+  "description": "Field-visibility cases shared with the public form app. Each case is evaluateConditions(conditions, logic, formData) from form/src/lib/conditions.ts; `logic` omitted means the default ('and'); `expected` is the visibility, or \"throws\" where the form app throws. Verified against the form app's own code (develop 777295a, identical on main).",
+  "cases": [
+    { "name": "no conditions: visible", "conditions": [], "logic": "and", "formData": {}, "expected": true },
+    { "name": "no conditions under 'or': still visible", "conditions": [], "logic": "or", "formData": {}, "expected": true },
+    { "name": "no conditions under uppercase 'AND': still visible", "conditions": [], "logic": "AND", "formData": {}, "expected": true },
+
+    { "name": "equals compares strings case-insensitively", "conditions": [{ "id": "c1", "fieldId": "specialty", "operator": "equals", "value": "other" }], "formData": { "specialty": "Other" }, "expected": true },
+    { "name": "equals does not trim", "conditions": [{ "id": "c1", "fieldId": "specialty", "operator": "equals", "value": "other" }], "formData": { "specialty": " other" }, "expected": false },
+    { "name": "equals looks inside a checkbox array, case-insensitively", "conditions": [{ "id": "c1", "fieldId": "topics", "operator": "equals", "value": "b" }], "formData": { "topics": ["a", "B"] }, "expected": true },
+    { "name": "equals on an array without the value", "conditions": [{ "id": "c1", "fieldId": "topics", "operator": "equals", "value": "c" }], "formData": { "topics": ["a", "b"] }, "expected": false },
+    { "name": "equals on a missing field matches an empty condition value", "conditions": [{ "id": "c1", "fieldId": "nickname", "operator": "equals", "value": "" }], "formData": {}, "expected": true },
+    { "name": "equals on a null field matches the literal 'null'", "conditions": [{ "id": "c1", "fieldId": "nickname", "operator": "equals", "value": "null" }], "formData": { "nickname": null }, "expected": true },
+    { "name": "equals on a missing field matches the literal 'undefined'", "conditions": [{ "id": "c1", "fieldId": "nickname", "operator": "equals", "value": "undefined" }], "formData": {}, "expected": true },
+    { "name": "equals on a missing field and a real value: hidden", "conditions": [{ "id": "c1", "fieldId": "nickname", "operator": "equals", "value": "x" }], "formData": {}, "expected": false },
+    { "name": "equals on a boolean field compares with 'true'", "conditions": [{ "id": "c1", "fieldId": "agree", "operator": "equals", "value": "true" }], "formData": { "agree": true }, "expected": true },
+    { "name": "equals false with 'false'", "conditions": [{ "id": "c1", "fieldId": "agree", "operator": "equals", "value": "false" }], "formData": { "agree": false }, "expected": true },
+    { "name": "equals false with any non-'true' string", "conditions": [{ "id": "c1", "fieldId": "agree", "operator": "equals", "value": "no" }], "formData": { "agree": false }, "expected": true },
+    { "name": "equals on a number field compares numerically", "conditions": [{ "id": "c1", "fieldId": "age", "operator": "equals", "value": "042" }], "formData": { "age": 42 }, "expected": true },
+    { "name": "equals 0 with an empty condition value (Number('') is 0)", "conditions": [{ "id": "c1", "fieldId": "age", "operator": "equals", "value": "" }], "formData": { "age": 0 }, "expected": true },
+    { "name": "equals on a numeric string compares as text", "conditions": [{ "id": "c1", "fieldId": "age", "operator": "equals", "value": "042" }], "formData": { "age": "42" }, "expected": false },
+    { "name": "equals with a number condition value on a number field", "conditions": [{ "id": "c1", "fieldId": "age", "operator": "equals", "value": 42 }], "formData": { "age": 42 }, "expected": true },
+    { "name": "equals with a boolean condition value on a boolean field never matches", "conditions": [{ "id": "c1", "fieldId": "agree", "operator": "equals", "value": true }], "formData": { "agree": true }, "expected": false },
+    { "name": "equals with a number condition value on a missing field", "conditions": [{ "id": "c1", "fieldId": "age", "operator": "equals", "value": 42 }], "formData": {}, "expected": false },
+
+    { "name": "not_equals on a missing field", "conditions": [{ "id": "c1", "fieldId": "specialty", "operator": "not_equals", "value": "other" }], "formData": {}, "expected": true },
+    { "name": "not_equals is case-insensitive", "conditions": [{ "id": "c1", "fieldId": "specialty", "operator": "not_equals", "value": "OTHER" }], "formData": { "specialty": "other" }, "expected": false },
+
+    { "name": "contains is case-insensitive", "conditions": [{ "id": "c1", "fieldId": "specialty", "operator": "contains", "value": "cardio" }], "formData": { "specialty": "Cardiology" }, "expected": true },
+    { "name": "contains looks inside array items", "conditions": [{ "id": "c1", "fieldId": "topics", "operator": "contains", "value": "ELL" }], "formData": { "topics": ["x", "Hello"] }, "expected": true },
+    { "name": "contains stringifies numbers", "conditions": [{ "id": "c1", "fieldId": "code", "operator": "contains", "value": "2" }], "formData": { "code": 123 }, "expected": true },
+    { "name": "contains on a missing field", "conditions": [{ "id": "c1", "fieldId": "specialty", "operator": "contains", "value": "a" }], "formData": {}, "expected": false },
+    { "name": "not_contains on a missing field", "conditions": [{ "id": "c1", "fieldId": "specialty", "operator": "not_contains", "value": "a" }], "formData": {}, "expected": true },
+    { "name": "not_contains when the text contains it", "conditions": [{ "id": "c1", "fieldId": "specialty", "operator": "not_contains", "value": "CARDIO" }], "formData": { "specialty": "cardiology" }, "expected": false },
+
+    { "name": "is_empty on whitespace", "conditions": [{ "id": "c1", "fieldId": "notes", "operator": "is_empty", "value": "" }], "formData": { "notes": "   " }, "expected": true },
+    { "name": "is_empty on an empty array", "conditions": [{ "id": "c1", "fieldId": "topics", "operator": "is_empty", "value": "" }], "formData": { "topics": [] }, "expected": true },
+    { "name": "is_empty on a missing field", "conditions": [{ "id": "c1", "fieldId": "notes", "operator": "is_empty", "value": "" }], "formData": {}, "expected": true },
+    { "name": "is_empty: zero is not empty", "conditions": [{ "id": "c1", "fieldId": "age", "operator": "is_empty", "value": "" }], "formData": { "age": 0 }, "expected": false },
+    { "name": "is_empty: false is not empty", "conditions": [{ "id": "c1", "fieldId": "agree", "operator": "is_empty", "value": "" }], "formData": { "agree": false }, "expected": false },
+    { "name": "is_empty: an object is not empty", "conditions": [{ "id": "c1", "fieldId": "file", "operator": "is_empty", "value": "" }], "formData": { "file": {} }, "expected": false },
+    { "name": "is_not_empty on text", "conditions": [{ "id": "c1", "fieldId": "notes", "operator": "is_not_empty", "value": "" }], "formData": { "notes": "x" }, "expected": true },
+    { "name": "is_not_empty with no condition value", "conditions": [{ "id": "c1", "fieldId": "notes", "operator": "is_not_empty" }], "formData": { "notes": "x" }, "expected": true },
+
+    { "name": "greater_than compares numeric strings as numbers", "conditions": [{ "id": "c1", "fieldId": "age", "operator": "greater_than", "value": "9" }], "formData": { "age": "10" }, "expected": true },
+    { "name": "greater_than falls back to string comparison for dates", "conditions": [{ "id": "c1", "fieldId": "arrival", "operator": "greater_than", "value": "2026-04-30" }], "formData": { "arrival": "2026-05-01" }, "expected": true },
+    { "name": "greater_than compares non-numeric text as strings", "conditions": [{ "id": "c1", "fieldId": "age", "operator": "greater_than", "value": "5" }], "formData": { "age": "abc" }, "expected": true },
+    { "name": "greater_than treats an empty answer as 0", "conditions": [{ "id": "c1", "fieldId": "age", "operator": "greater_than", "value": "-1" }], "formData": { "age": "" }, "expected": true },
+    { "name": "greater_than treats null as 0", "conditions": [{ "id": "c1", "fieldId": "age", "operator": "greater_than", "value": "0" }], "formData": { "age": null }, "expected": false },
+    { "name": "greater_than on a missing field", "conditions": [{ "id": "c1", "fieldId": "age", "operator": "greater_than", "value": "0" }], "formData": {}, "expected": false },
+    { "name": "less_than treats an empty array as 0", "conditions": [{ "id": "c1", "fieldId": "topics", "operator": "less_than", "value": "1" }], "formData": { "topics": [] }, "expected": true },
+    { "name": "less_than on booleans (true is 1)", "conditions": [{ "id": "c1", "fieldId": "agree", "operator": "less_than", "value": "2" }], "formData": { "agree": true }, "expected": true },
+    { "name": "less_than with a non-numeric condition on a number field", "conditions": [{ "id": "c1", "fieldId": "age", "operator": "less_than", "value": "abc" }], "formData": { "age": 3 }, "expected": false },
+
+    { "name": "unknown operator fails closed", "conditions": [{ "id": "c1", "fieldId": "specialty", "operator": "in", "value": "other" }], "formData": { "specialty": "other" }, "expected": false },
+
+    { "name": "lowercase 'and' requires every condition", "conditions": [{ "id": "c1", "fieldId": "a", "operator": "equals", "value": "1" }, { "id": "c2", "fieldId": "b", "operator": "equals", "value": "2" }], "logic": "and", "formData": { "a": "1", "b": "x" }, "expected": false },
+    { "name": "omitted logic defaults to 'and'", "conditions": [{ "id": "c1", "fieldId": "a", "operator": "equals", "value": "1" }, { "id": "c2", "fieldId": "b", "operator": "equals", "value": "2" }], "formData": { "a": "1", "b": "x" }, "expected": false },
+    { "name": "uppercase 'AND' is evaluated as OR", "conditions": [{ "id": "c1", "fieldId": "a", "operator": "equals", "value": "1" }, { "id": "c2", "fieldId": "b", "operator": "equals", "value": "2" }], "logic": "AND", "formData": { "a": "1", "b": "x" }, "expected": true },
+    { "name": "uppercase 'AND' with no condition met: hidden", "conditions": [{ "id": "c1", "fieldId": "a", "operator": "equals", "value": "1" }, { "id": "c2", "fieldId": "b", "operator": "equals", "value": "2" }], "logic": "AND", "formData": { "a": "0", "b": "x" }, "expected": false },
+    { "name": "lowercase 'or' needs one condition", "conditions": [{ "id": "c1", "fieldId": "a", "operator": "equals", "value": "1" }, { "id": "c2", "fieldId": "b", "operator": "equals", "value": "2" }], "logic": "or", "formData": { "a": "0", "b": "2" }, "expected": true },
+    { "name": "uppercase 'OR' needs one condition", "conditions": [{ "id": "c1", "fieldId": "a", "operator": "equals", "value": "1" }, { "id": "c2", "fieldId": "b", "operator": "equals", "value": "2" }], "logic": "OR", "formData": { "a": "0", "b": "2" }, "expected": true },
+    { "name": "a condition on a field that does not exist compares against undefined", "conditions": [{ "id": "c1", "fieldId": "deleted-field", "operator": "equals", "value": "yes" }], "logic": "and", "formData": { "other": "yes" }, "expected": false },
+
+    { "name": "a number condition value throws on a text answer", "conditions": [{ "id": "c1", "fieldId": "age", "operator": "equals", "value": 42 }], "formData": { "age": "42" }, "expected": "throws" },
+    { "name": "a number condition value throws on a checkbox answer", "conditions": [{ "id": "c1", "fieldId": "topics", "operator": "equals", "value": 1 }], "formData": { "topics": ["1"] }, "expected": "throws" },
+    { "name": "a boolean condition value throws in contains on text", "conditions": [{ "id": "c1", "fieldId": "notes", "operator": "contains", "value": true }], "formData": { "notes": "true" }, "expected": "throws" },
+    { "name": "a missing condition value throws in equals on text", "conditions": [{ "id": "c1", "fieldId": "notes", "operator": "equals" }], "formData": { "notes": "x" }, "expected": "throws" },
+    { "name": "a number condition value does not throw on a missing answer", "conditions": [{ "id": "c1", "fieldId": "notes", "operator": "not_equals", "value": 3 }], "formData": {}, "expected": true },
+    { "name": "every condition is evaluated, so a later throw still throws under 'or'", "conditions": [{ "id": "c1", "fieldId": "a", "operator": "equals", "value": "1" }, { "id": "c2", "fieldId": "b", "operator": "equals", "value": 2 }], "logic": "or", "formData": { "a": "1", "b": "2" }, "expected": "throws" }
+  ]
+}

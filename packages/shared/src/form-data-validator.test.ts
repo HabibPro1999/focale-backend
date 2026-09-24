@@ -333,3 +333,178 @@ describe("validateFormData and sanitizeFormData — hardened schemas", () => {
     ).toBe(false);
   });
 });
+
+describe("validateFormData — field visibility follows the form app", () => {
+  const field = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    type: "text" as const,
+    label: id,
+    ...extra,
+  });
+  const schemaOf = (...fields: Array<Record<string, unknown>>) => ({
+    steps: [{ id: "s1", title: "Step", fields }],
+  });
+  const specialtySchema = schemaOf(
+    field("specialty"),
+    field("otherSpecialty", {
+      required: true,
+      conditions: [{ id: "c1", fieldId: "specialty", operator: "equals", value: "other" }],
+    }),
+  );
+
+  it("requires and keeps a field the form shows through a case-insensitive match", () => {
+    expect(
+      validateFormData(specialtySchema, { specialty: "Other" }).errors.map((e) => e.fieldId),
+    ).toEqual(["otherSpecialty"]);
+
+    expect(
+      validateFormData(specialtySchema, { specialty: "Other", otherSpecialty: "Nephro" }).data,
+    ).toEqual({ specialty: "Other", otherSpecialty: "Nephro" });
+  });
+
+  it("neither requires nor keeps a field the form hides", () => {
+    const result = validateFormData(specialtySchema, {
+      specialty: "cardiology",
+      otherSpecialty: "stale answer",
+    });
+    expect(result.valid).toBe(true);
+    expect(result.data).toEqual({ specialty: "cardiology" });
+  });
+
+  it("evaluates uppercase AND as OR, like the form app", () => {
+    const schema = schemaOf(
+      field("a"),
+      field("b"),
+      field("both", {
+        required: true,
+        conditionLogic: "AND",
+        conditions: [
+          { id: "c1", fieldId: "a", operator: "equals", value: "1" },
+          { id: "c2", fieldId: "b", operator: "equals", value: "2" },
+        ],
+      }),
+    );
+    // Only one condition holds: the form shows the field, so it is required.
+    expect(validateFormData(schema, { a: "1", b: "x" }).errors.map((e) => e.fieldId)).toEqual([
+      "both",
+    ]);
+    // Lowercase "and" needs both.
+    const lower = schemaOf(
+      field("a"),
+      field("b"),
+      field("both", {
+        required: true,
+        conditionLogic: "and",
+        conditions: [
+          { id: "c1", fieldId: "a", operator: "equals", value: "1" },
+          { id: "c2", fieldId: "b", operator: "equals", value: "2" },
+        ],
+      }),
+    );
+    expect(validateFormData(lower, { a: "1", b: "x" }).valid).toBe(true);
+  });
+
+  it("hides a field whose condition references a field that does not exist", () => {
+    const schema = schemaOf(
+      field("detail", {
+        required: true,
+        conditions: [{ id: "c1", fieldId: "deleted", operator: "equals", value: "yes" }],
+      }),
+    );
+    const result = validateFormData(schema, { detail: "kept?" });
+    expect(result.valid).toBe(true);
+    expect(result.data).toEqual({});
+  });
+
+  it("evaluates visibility on the submitted answers, including hidden ones", () => {
+    // The form app does not cascade: a hidden field's answer still drives
+    // the fields that depend on it.
+    const schema = schemaOf(
+      field("a"),
+      field("b", { conditions: [{ id: "c1", fieldId: "a", operator: "equals", value: "yes" }] }),
+      field("c", {
+        required: true,
+        conditions: [{ id: "c2", fieldId: "b", operator: "is_not_empty", value: "" }],
+      }),
+    );
+    const result = validateFormData(schema, { a: "no", b: "stale" });
+    expect(result.errors.map((e) => e.fieldId)).toEqual(["c"]);
+  });
+
+  it("rejects a condition the form app cannot evaluate", () => {
+    const schema = schemaOf(
+      field("age"),
+      field("note", {
+        conditions: [{ id: "c1", fieldId: "age", operator: "equals", value: 42 }],
+      }),
+    );
+    const result = validateFormData(schema, { age: "42", note: "x" });
+    expect(result.valid).toBe(false);
+    expect(result.errors).toEqual([
+      expect.objectContaining({ fieldId: "note", code: "invalid_condition" }),
+    ]);
+    // With no answer to compare, the form app does not throw either.
+    expect(validateFormData(schema, { note: "x" }).valid).toBe(true);
+  });
+});
+
+describe("validateFormData — enforceRequired: false (admin create/edit)", () => {
+  const schema = {
+    steps: [
+      {
+        id: "s1",
+        title: "Step",
+        fields: [
+          { id: "name", type: "text" as const, label: "Name", required: true },
+          {
+            id: "track",
+            type: "dropdown" as const,
+            label: "Track",
+            required: true,
+            options: [{ id: "clinical" }, { id: "research" }],
+          },
+          {
+            id: "topics",
+            type: "checkbox" as const,
+            label: "Topics",
+            options: [{ id: "a" }, { id: "b" }, { id: "c" }],
+            validation: { minSelections: 2 },
+          },
+          { id: "age", type: "number" as const, label: "Age" },
+          {
+            id: "lab",
+            type: "text" as const,
+            label: "Lab",
+            required: true,
+            conditions: [{ id: "c1", fieldId: "track", operator: "equals", value: "research" }],
+          },
+        ],
+      },
+    ],
+  };
+  const admin = { enforceRequired: false };
+
+  it("accepts blank answers to required fields and keeps them as sent", () => {
+    const result = validateFormData(schema, { name: "", track: null, topics: [] }, admin);
+    expect(result.valid).toBe(true);
+    expect(result.data).toEqual({ name: "", track: null, topics: [] });
+    expect(validateFormData(schema, { name: "" }).valid).toBe(false);
+  });
+
+  it("still type-checks answers that are given, and coerces them", () => {
+    expect(validateFormData(schema, { track: "unknown" }, admin).errors.map((e) => e.fieldId)).toEqual([
+      "track",
+    ]);
+    expect(validateFormData(schema, { topics: ["a"] }, admin).valid).toBe(false);
+    expect(validateFormData(schema, { name: " Ada ", age: "33" }, admin).data).toEqual({
+      name: "Ada",
+      age: 33,
+    });
+  });
+
+  it("drops answers to fields the form hides", () => {
+    expect(validateFormData(schema, { track: "clinical", lab: "stale" }, admin).data).toEqual({
+      track: "clinical",
+    });
+  });
+});

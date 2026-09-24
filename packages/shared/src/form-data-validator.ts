@@ -1,6 +1,9 @@
 import { z, type ZodTypeAny } from "zod";
 import { createLogger } from "./logger";
-import { evaluateConditions } from "./conditions";
+import {
+  evaluateConditions as evaluateFieldVisibility,
+  type FieldCondition as VisibilityCondition,
+} from "./field-visibility";
 import { isSafePattern } from "./regex-safety";
 
 const MIN_PHONE_LENGTH = 8;
@@ -98,6 +101,15 @@ export interface FormDataFieldError {
   code: string;
 }
 
+export interface FormDataValidationOptions {
+  /**
+   * Reject a blank answer to a required visible field (default `true`, the
+   * public form). Admin create/edit pass `false`: a blank answer is accepted
+   * and kept as sent, while any other answer is still type-checked.
+   */
+  enforceRequired?: boolean;
+}
+
 // ============================================================================
 // Helper Functions
 // ============================================================================
@@ -158,34 +170,36 @@ function formatFileSize(bytes: number): string {
 }
 
 // ============================================================================
-// Condition Evaluation (delegates to shared evaluator)
+// Field Visibility (the public form app's evaluator, ported exactly)
 // ============================================================================
 
 /**
- * Determine if a field should be validated based on its conditions.
- * Hidden fields (conditions not met) should be skipped during validation.
+ * Whether the public form app shows this field, so it is validated, can be
+ * required and is stored. Evaluated on the submitted data, as the form app's
+ * submit validation does (`buildStepSchema` in `form/src/lib/validation.ts`).
+ * Throws where the form app throws (a non-string condition value).
  */
-function shouldValidateField(
+function isFieldVisible(
   field: FormField,
   formData: Record<string, unknown>,
-  allFields: FormField[],
 ): boolean {
-  if (!field.conditions || field.conditions.length === 0) {
-    return true; // No conditions, always validate
-  }
-
-  // Filter conditions to only those referencing fields that exist in the schema.
-  // Missing-field conditions are treated as met (field visible by default).
-  const applicableConditions = field.conditions.filter((c) =>
-    allFields.some((f) => f.id === c.fieldId),
+  // Stored conditions can hold non-string values and uppercase logic; the
+  // port treats them exactly as the form app does (see field-visibility.ts).
+  return evaluateFieldVisibility(
+    field.conditions as VisibilityCondition[] | undefined,
+    field.conditionLogic as "and" | "or" | undefined,
+    formData,
   );
+}
 
-  if (applicableConditions.length === 0) {
-    return true; // All referenced fields missing — treat as visible
-  }
-
-  const logic = field.conditionLogic ?? "AND";
-  return evaluateConditions(applicableConditions, logic, formData);
+/** A missing or empty answer: accepted as-is when required is not enforced. */
+function isBlankAnswer(value: unknown): boolean {
+  return (
+    value === undefined ||
+    value === null ||
+    value === "" ||
+    (Array.isArray(value) && value.length === 0)
+  );
 }
 
 // ============================================================================
@@ -530,10 +544,15 @@ function buildFileSchema(
  * Note: merges field.required into validation.required so build functions
  * only need to check validation?.required (single source of truth inside builders).
  */
-function buildFieldSchema(field: FormField): ZodTypeAny | null {
+function buildFieldSchema(
+  field: FormField,
+  enforceRequired: boolean,
+): ZodTypeAny | null {
   // field.required is the top-level required flag; validation.required is nested.
   // Either source should make the field required.
-  const isRequired = field.validation?.required || field.required || false;
+  const isRequired =
+    enforceRequired &&
+    (field.validation?.required || field.required || false);
   const validation: FieldValidation | undefined = field.validation
     ? { ...field.validation, required: isRequired }
     : isRequired
@@ -589,11 +608,14 @@ function buildFieldSchema(field: FormField): ZodTypeAny | null {
 
 /**
  * Build a form data validator function from a form schema.
- * The validator respects conditional field visibility.
+ * The validator respects conditional field visibility: a field the form app
+ * hides is neither validated nor required, and is left out of `data`.
  */
 export function buildFormDataValidator(
   formSchema: unknown,
+  options: FormDataValidationOptions = {},
 ): (formData: Record<string, unknown>) => FormDataValidationResult {
+  const enforceRequired = options.enforceRequired ?? true;
   const steps = extractSchemaSteps(formSchema);
   if (!steps) {
     return () => invalidSchemaResult();
@@ -613,16 +635,34 @@ export function buildFormDataValidator(
         continue;
       }
 
-      // Check if field should be validated based on conditions
-      if (!shouldValidateField(field, formData, allFields)) {
-        // Field is hidden, skip validation and don't include in output
+      let visible: boolean;
+      try {
+        visible = isFieldVisible(field, formData);
+      } catch {
+        // The form app throws on the same condition, so it cannot render
+        // this form either: reject instead of guessing.
+        errors.push({
+          fieldId: field.id,
+          fieldName: getFieldLabel(field),
+          message: `${getFieldLabel(field)} has a display condition that cannot be evaluated`,
+          code: "invalid_condition",
+        });
+        continue;
+      }
+      if (!visible) {
+        // Hidden field: skip validation and leave it out of the output.
         continue;
       }
 
-      const fieldSchema = buildFieldSchema(field);
+      const value = formData[field.id];
+      if (!enforceRequired && isBlankAnswer(value)) {
+        if (value !== undefined) validatedData[field.id] = value;
+        continue;
+      }
+
+      const fieldSchema = buildFieldSchema(field, enforceRequired);
       if (!fieldSchema) continue;
 
-      const value = formData[field.id];
       const result = fieldSchema.safeParse(value);
 
       if (!result.success) {
@@ -654,8 +694,9 @@ export function buildFormDataValidator(
 export function validateFormData(
   formSchema: unknown,
   formData: Record<string, unknown>,
+  options?: FormDataValidationOptions,
 ): FormDataValidationResult {
-  const validator = buildFormDataValidator(formSchema);
+  const validator = buildFormDataValidator(formSchema, options);
   return validator(formData);
 }
 

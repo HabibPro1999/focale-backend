@@ -33,10 +33,7 @@ import {
   calculateSettlement,
   getSkip,
   paginate,
-  validateFormData,
-  sanitizeFormData,
   type PaginatedResult,
-  type FormSchema,
 } from "@app/shared";
 import {
   withTxn,
@@ -65,6 +62,7 @@ import {
   getEventForRegistrationCreate,
   getEventForRegistrationAdmin,
   findRegistrationFormForEvent,
+  getRegistrationFormSchemaForEvent,
   registrationExistsByEmailForm,
   findRegistrationForMutation,
   findRegistrationWithFormEvent,
@@ -85,6 +83,7 @@ import {
 } from "@app/db";
 import { AccessService } from "../access/access.service";
 import { PricingService } from "../pricing/pricing.service";
+import { prepareFormDataForPricing } from "../pricing/form-data-for-pricing";
 import {
   assertEventAcceptsPublicActions,
   assertEventWritable,
@@ -599,18 +598,9 @@ export class RegistrationsService {
     await assertClientModuleEnabled(form.event.clientId, "registrations");
     await assertClientModuleEnabled(form.event.clientId, "pricing");
 
-    // 4. Form-data validation → sanitized/coerced data persisted (never raw).
-    const validation = validateFormData(form.schema as FormSchema, input.formData);
-    if (!validation.valid) {
-      throw new AppException(
-        ErrorCodes.FORM_VALIDATION_ERROR,
-        "Form validation failed",
-        400,
-        { fieldErrors: validation.errors },
-      );
-    }
-    const sanitizedFormData =
-      validation.data ?? sanitizeFormData(form.schema as FormSchema, input.formData);
+    // 4. Form-data validation → the visible, coerced answers are both stored
+    //    and priced (the quote prices the same data).
+    const sanitizedFormData = prepareFormDataForPricing(form.schema, input.formData);
     const normalizedInput: CreateRegistrationInput = {
       ...input,
       formData: sanitizedFormData,
@@ -877,7 +867,7 @@ export class RegistrationsService {
       firstName,
       lastName,
       phone,
-      formData,
+      formData: rawFormData,
       role,
       accessSelections,
       paymentMethod,
@@ -895,6 +885,13 @@ export class RegistrationsService {
         404,
       );
     }
+    // Admin answers: visible fields only, type-checked, required not enforced;
+    // stored and priced as returned.
+    const formData = prepareFormDataForPricing(
+      (await getRegistrationFormSchemaForEvent(eventId))?.schema,
+      rawFormData,
+      { enforceRequired: false },
+    );
 
     if (await registrationExistsByEmailForm(email, form.id)) {
       throw new AppException(
@@ -1242,8 +1239,18 @@ export class RegistrationsService {
         patch.phone = input.phone;
         changes.phone = { old: registration.phone, new: input.phone };
       }
-      if (input.formData !== undefined) {
-        patch.formData = input.formData;
+      // Admin answers: visible fields only, type-checked, required not
+      // enforced; stored and priced as returned.
+      const editedFormData =
+        input.formData !== undefined
+          ? prepareFormDataForPricing(
+              (await getRegistrationFormSchemaForEvent(eventId, tx))?.schema,
+              input.formData,
+              { enforceRequired: false },
+            )
+          : undefined;
+      if (editedFormData !== undefined) {
+        patch.formData = editedFormData;
         changes.formData = { old: "(previous)", new: "(updated)" };
       }
       if (input.role !== undefined && input.role !== registration.role) {
@@ -1309,7 +1316,7 @@ export class RegistrationsService {
           "pricing",
         );
         const effectiveFormData =
-          input.formData ??
+          editedFormData ??
           (registration.formData as Record<string, unknown>) ??
           {};
         const oldBreakdown = registration.priceBreakdown as PriceBreakdown | null;
@@ -1860,21 +1867,7 @@ export class RegistrationsService {
         : currentFormData;
 
       if (input.formData) {
-        const validation = validateFormData(
-          current.form.schema as FormSchema,
-          newFormData,
-        );
-        if (!validation.valid) {
-          throw new AppException(
-            ErrorCodes.FORM_VALIDATION_ERROR,
-            "Form validation failed",
-            400,
-            { fieldErrors: validation.errors },
-          );
-        }
-        newFormData =
-          validation.data ??
-          sanitizeFormData(current.form.schema as FormSchema, newFormData);
+        newFormData = prepareFormDataForPricing(current.form.schema, newFormData);
       }
 
       const currentPriceBreakdown =

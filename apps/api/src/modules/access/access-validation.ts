@@ -1,5 +1,5 @@
 import { getExclusivityKey } from "./access-grouping";
-import { evaluateConditions, type Condition } from "@app/shared";
+import { evaluateRuleConditions, type Condition } from "@app/shared";
 import type { EventAccessWithPrereqIds } from "@app/db";
 import type { AccessSelection } from "@app/contracts";
 
@@ -42,7 +42,7 @@ export function validateSelections(
   for (const included of includedAccesses) {
     if (hasConditions(included.conditions)) {
       if (
-        !evaluateConditions(
+        !evaluateRuleConditions(
           included.conditions as Condition[],
           included.conditionLogic,
           formData,
@@ -138,7 +138,7 @@ export function validateSelections(
 
     if (hasConditions(access.conditions)) {
       if (
-        !evaluateConditions(
+        !evaluateRuleConditions(
           access.conditions as Condition[],
           access.conditionLogic,
           formData,
