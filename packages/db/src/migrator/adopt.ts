@@ -496,6 +496,38 @@ async function writeAdoptionLedger(
   }
 }
 
+/** Attempts of the ledger-write transaction on a serialization failure (40001). */
+export const ADOPTION_LEDGER_WRITE_ATTEMPTS = 5;
+
+function isSerializationFailure(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "40001";
+}
+
+/**
+ * On CockroachDB, a lease renewal the heartbeat commits while the ledger
+ * transaction is open makes the pre-commit fence fail with 40001 (it updates
+ * the lease row after another transaction changed it). The transaction was
+ * rolled back and the lease is still ours, so write it again.
+ */
+async function writeAdoptionLedgerWithRetry(
+  client: Client,
+  assessments: AdoptionAssessment[],
+  options: MigrationAdoptionOptions,
+  support: MigrationAdoptionSupport,
+  owner: string,
+  heartbeat: LeaseHeartbeat | undefined,
+): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await writeAdoptionLedger(client, assessments, options, support, owner, heartbeat);
+      return;
+    } catch (error) {
+      if (!isSerializationFailure(error) || attempt >= ADOPTION_LEDGER_WRITE_ATTEMPTS) throw error;
+      await new Promise((resolve) => setTimeout(resolve, attempt * 100));
+    }
+  }
+}
+
 export const migrationAdoptionWorkflow: MigrationAdoptionWorkflow = {
   async run(client, engine, migrations, options, support): Promise<MigrationAdoptionReport> {
     await setUtcSession(client);
@@ -522,7 +554,7 @@ export const migrationAdoptionWorkflow: MigrationAdoptionWorkflow = {
       // Evidence may have changed before the lease was held; decide again.
       const confirmed = await assessAdoption(client, migrations, support, engine);
       if (confirmed.errors.length) return report(confirmed);
-      await writeAdoptionLedger(client, confirmed.assessments, options, support, owner, heartbeat);
+      await writeAdoptionLedgerWithRetry(client, confirmed.assessments, options, support, owner, heartbeat);
       return report(confirmed, rowsToWrite(confirmed.assessments));
     } finally {
       await heartbeat?.close().catch(() => undefined);
