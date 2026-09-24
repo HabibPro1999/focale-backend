@@ -4,6 +4,8 @@ export * from "./firebase";
 export * from "./storage/index";
 export * from "./email/index";
 export * from "./certificates-pdf";
+export * from "./pdf-fonts";
+export { pdfTextRuns } from "./networking/pdf-text";
 export * from "./networking/embeddings";
 export * from "./networking/embedding-worker";
 export * from "./networking/notification-worker";

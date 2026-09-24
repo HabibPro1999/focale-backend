@@ -1,7 +1,6 @@
 import { drawNetworkingText } from "./networking/pdf-text";
 import { PDFDocument, rgb } from "pdf-lib";
-import fontkit from "@pdf-lib/fontkit";
-import { readFile } from "node:fs/promises";
+import { embedDejaVuFont } from "./pdf-fonts";
 /** Paginated UTF-8 report; each record is printed in full without truncation. */
 export async function generateNetworkingReportPdf(
   title: string,
@@ -9,11 +8,7 @@ export async function generateNetworkingReportPdf(
   rows: unknown[][],
 ): Promise<Buffer> {
   const document = await PDFDocument.create();
-  document.registerFontkit(fontkit);
-  const font = await document.embedFont(
-    await readFile(require.resolve("dejavu-fonts-ttf/ttf/DejaVuSans.ttf")),
-    { subset: true },
-  );
+  const font = await embedDejaVuFont(document, "DejaVuSans.ttf");
   let page = document.addPage([595.28, 841.89]);
   let y = 790;
   let pageNumber = 1;

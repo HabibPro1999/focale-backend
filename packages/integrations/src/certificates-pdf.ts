@@ -6,9 +6,7 @@
 // on db/shared/contracts + pdf-lib/fontkit/color-name + the storage provider.
 // =============================================================================
 
-import fontkit from "@pdf-lib/fontkit";
 import { PDFDocument, type PDFFont, rgb } from "pdf-lib";
-import { readFile } from "node:fs/promises";
 import type { CertificateZone } from "@app/contracts";
 import { ABSTRACT_FINAL_TYPE_LABELS } from "@app/contracts";
 import {
@@ -17,6 +15,7 @@ import {
   getActiveImageReadyCertificateTemplatesByIds,
 } from "@app/db";
 import { getStorageProvider } from "./storage/index";
+import { dejaVuFontPath, embedFontFile } from "./pdf-fonts";
 import { logger } from "./logger";
 import { integrationsConfig } from "./config";
 import type { EmailAttachment } from "./email/index";
@@ -175,48 +174,23 @@ export function resolveCertificateVariable(
 // PDF GENERATION HELPERS
 // =============================================================================
 
-// color-name / dejavu-fonts-ttf are CommonJS packages (no type decls / bundled
-// asset). @app/integrations is type:commonjs, so the global require resolves them.
+// color-name is a CommonJS package (no type decls). @app/integrations is
+// type:commonjs, so the global require resolves it.
 const cssColorNames = require("color-name") as Record<
   string,
   [number, number, number]
 >;
 
-const DEFAULT_REGULAR_FONT_PATH = require.resolve(
-  "dejavu-fonts-ttf/ttf/DejaVuSans.ttf",
-);
-const DEFAULT_BOLD_FONT_PATH = require.resolve(
-  "dejavu-fonts-ttf/ttf/DejaVuSans-Bold.ttf",
-);
-
-const fontBytesCache = new Map<string, Uint8Array>();
-
-async function loadFontBytes(path: string): Promise<Uint8Array> {
-  const cached = fontBytesCache.get(path);
-  if (cached) return cached;
-
-  const bytes = await readFile(path);
-  fontBytesCache.set(path, bytes);
-  return bytes;
-}
-
 async function embedCertificateFonts(
   pdfDoc: PDFDocument,
 ): Promise<{ regularFont: PDFFont; boldFont: PDFFont }> {
-  pdfDoc.registerFontkit(fontkit);
-
   const fonts = integrationsConfig().certificates;
-  const regularFontPath = fonts.fontPath ?? DEFAULT_REGULAR_FONT_PATH;
-  const boldFontPath = fonts.boldFontPath ?? DEFAULT_BOLD_FONT_PATH;
-
-  const [regularBytes, boldBytes] = await Promise.all([
-    loadFontBytes(regularFontPath),
-    loadFontBytes(boldFontPath),
-  ]);
+  const regularFontPath = fonts.fontPath ?? dejaVuFontPath("DejaVuSans.ttf");
+  const boldFontPath = fonts.boldFontPath ?? dejaVuFontPath("DejaVuSans-Bold.ttf");
 
   const [regularFont, boldFont] = await Promise.all([
-    pdfDoc.embedFont(regularBytes, { subset: true }),
-    pdfDoc.embedFont(boldBytes, { subset: true }),
+    embedFontFile(pdfDoc, regularFontPath),
+    embedFontFile(pdfDoc, boldFontPath),
   ]);
 
   return { regularFont, boldFont };
