@@ -124,8 +124,11 @@ old journal cannot apply `0000_init.sql` a second time.
   have the `vector` extension installed before migration 0013; the runner checks
   that prerequisite and does not install it.
 - **Existing database:** `apply` refuses a non-empty schema with no migration
-  ledger. Adoption is handled by plan item 1.4; do not use a Drizzle journal or
-  run baseline SQL directly.
+  ledger. Run `node packages/db/dist/migrator/cli.js adopt` (a dry run), review
+  the report, then `adopt --apply` before `apply`; do not use a Drizzle journal
+  or run baseline SQL directly. The adoption rules, the `MIGRATIONS_CHECK` boot
+  check and the production rollout steps are in
+  `packages/db/src/migrator/README.md`.
 
 Migration 0011 repairs saved net totals only when `priceBreakdown` proves the
 old convention; it is safe to rerun. `totalAmount` is gross before sponsorship,

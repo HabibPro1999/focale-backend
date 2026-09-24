@@ -74,7 +74,7 @@ async function tableExists(client: Client, name: string): Promise<boolean> {
   return Boolean(result.rows[0]?.present);
 }
 
-async function schemaHasApplicationObjects(client: Client): Promise<boolean> {
+export async function schemaHasApplicationObjects(client: Client): Promise<boolean> {
   const result = await client.query<{ present: boolean }>(
     `SELECT EXISTS (
       SELECT 1 FROM information_schema.tables
@@ -227,13 +227,13 @@ export async function releaseMigrationLease(client: Client, owner: string): Prom
   );
 }
 
-interface LeaseHeartbeat {
+export interface LeaseHeartbeat {
   assertAlive(): void;
   checkAlive(): Promise<void>;
   close(): Promise<void>;
 }
 
-async function startLeaseHeartbeat(connectionString: string, owner: string): Promise<LeaseHeartbeat> {
+export async function startLeaseHeartbeat(connectionString: string, owner: string): Promise<LeaseHeartbeat> {
   const keeper = new Client({ connectionString, application_name: "focale-migration-lease" });
   await keeper.connect();
   const observer = new Client({ connectionString, application_name: "focale-migration-lease-check" });
@@ -325,7 +325,7 @@ async function fenceMigrationLease(
   }
 }
 
-async function assertLeaseAlive(
+export async function assertLeaseAlive(
   client: Client,
   owner: string,
   heartbeat?: LeaseHeartbeat,
@@ -343,7 +343,7 @@ async function assertLeaseAlive(
   }
 }
 
-async function commitWithLeaseFence(
+export async function commitWithLeaseFence(
   client: Client,
   owner: string,
   heartbeat: LeaseHeartbeat | undefined,
