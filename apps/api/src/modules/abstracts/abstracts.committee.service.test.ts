@@ -42,8 +42,16 @@ vi.mock("@app/integrations", () => ({
   revokeFirebaseRefreshTokens: vi.fn(),
   getEmailProvider: () => ({ sendEmail: sendEmailMock }),
   compileMjmlToHtml: () => ({ html: "<html></html>" }),
-  resolveVariables: (template: string, vars: Record<string, string>) =>
-    template.replace(/\{\{(\w+)\}\}/g, (_m, key) => vars[key] ?? ""),
+  // Mirrors the real resolver's modes: html escapes values, text does not.
+  resolveVariables: (
+    template: string,
+    vars: Record<string, string>,
+    options?: { mode?: "html" | "text" },
+  ) =>
+    template.replace(/\{\{(\w+)\}\}/g, (_m, key) => {
+      const value = vars[key] ?? "";
+      return options?.mode === "text" ? value : value.replace(/&/g, "&amp;");
+    }),
 }));
 
 const assertClientModuleEnabledMock = vi.fn();
@@ -313,6 +321,31 @@ describe("addCommitteeMember", () => {
   // M7: ABSTRACT_COMMITTEE_INVITE was a configurable trigger nobody ever
   // consulted — the invite must render + send a configured template when one
   // exists, and fall back to the hardcoded MJML only when it doesn't.
+  it("resolves a templated invite subject as text, not HTML (6.1)", async () => {
+    const user = committeeUser({ name: "Zoë Martin & Fils" });
+    mock(getUserByEmail).mockResolvedValue(user);
+    mock(findEventName).mockResolvedValue("Big Event");
+    mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" });
+    mock(mintCommitteeInviteToken).mockResolvedValue("a".repeat(64));
+    mock(findAbstractEmailTemplate).mockResolvedValue({
+      id: "tmpl-1",
+      subject: "Bienvenue {{reviewerName}}",
+      htmlContent: "<p>Bonjour {{reviewerName}}</p>",
+    });
+    mock(createEmailLog).mockResolvedValue({ ok: true, log: { id: "log-1" } });
+    sendEmailMock.mockResolvedValue({ success: true });
+    mock(listCommitteeMembers).mockResolvedValue([memberDto(user)]);
+
+    await service.addCommitteeMember(eventId, { email: user.email, name: "Ignored" }, performedBy);
+
+    expect(sendEmailMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subject: "Bienvenue Zoë Martin & Fils",
+        html: "<p>Bonjour Zoë Martin &amp; Fils</p>",
+      }),
+    );
+  });
+
   it("M7: renders and sends a configured ABSTRACT_COMMITTEE_INVITE template instead of the hardcoded fallback", async () => {
     const user = committeeUser();
     mock(getUserByEmail).mockResolvedValue(user);

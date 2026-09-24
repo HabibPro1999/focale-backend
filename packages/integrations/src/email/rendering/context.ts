@@ -13,7 +13,7 @@ import {
   type RegistrationEmailContext,
 } from "@app/db";
 import type { EmailContext } from "./types";
-import { escapeHtml } from "@app/shared";
+import { decodeEntities, escapeHtml } from "@app/shared";
 import { integrationsConfig } from "../../config";
 
 // =============================================================================
@@ -219,21 +219,37 @@ export async function buildEmailContextWithAccess(
 // RESOLVE VARIABLES IN TEMPLATE
 // =============================================================================
 
-// Variables that contain server-generated HTML (not user input) — skip escaping.
-const HTML_SAFE_VARIABLES = new Set([
-  "sponsoredItems",
-  "beneficiaryList",
-  "certificateList",
-]);
+// Variables that hold server-built HTML (their user parts are escaped when they
+// are built) — inserted as-is into HTML, converted to text in text mode.
+const HTML_SAFE_VARIABLES = new Set(["sponsoredItems", "beneficiaryList"]);
+
+export interface ResolveVariablesOptions {
+  /**
+   * `html` (default): values are HTML-escaped, for HTML bodies.
+   * `text`: for subjects and plain-text bodies. Values are inserted unescaped
+   * (so "Dupont & Fils" is not sent as "Dupont &amp; Fils"), server-built HTML
+   * values become text, and CR/LF in values becomes a space (no header
+   * injection through a subject).
+   */
+  mode?: "html" | "text";
+}
 
 export function resolveVariables(
   template: string,
   context: EmailContext | Record<string, unknown>,
+  options: ResolveVariablesOptions = {},
 ): string {
+  const mode = options.mode ?? "html";
   return template.replace(/\{\{([A-Za-z0-9_.-]+)\}\}/g, (_match, varId) => {
     const value = (context as Record<string, unknown>)[varId];
 
     if (value !== undefined && value !== null && value !== "") {
+      if (mode === "text") {
+        const text = HTML_SAFE_VARIABLES.has(varId)
+          ? serverHtmlToText(String(value))
+          : String(value);
+        return text.replace(/[\r\n]+/g, " ");
+      }
       if (HTML_SAFE_VARIABLES.has(varId)) {
         return String(value);
       }
@@ -242,6 +258,20 @@ export function resolveVariables(
 
     return "";
   });
+}
+
+/** Server-built HTML list (`<div>• …</div>…`) → text, one item per line. */
+function serverHtmlToText(html: string): string {
+  return decodeEntities(
+    html
+      .replace(/<\s*br\s*\/?>/gi, "\n")
+      .replace(/<\s*\/\s*(div|p|li)\s*>/gi, "\n")
+      .replace(/<[^>]*>/g, ""),
+  )
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n");
 }
 
 // =============================================================================

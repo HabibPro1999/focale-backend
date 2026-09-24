@@ -37,6 +37,7 @@ import {
   createEmailLogsBulk,
   updateEmailLogById,
 } from "@app/db";
+import { resolveVariables } from "@app/integrations";
 import { EmailSendService } from "./email-send.service";
 
 const service = new EmailSendService();
@@ -82,6 +83,12 @@ describe("testSend", () => {
       }),
     );
     expect(createEmailLog).not.toHaveBeenCalled();
+    // 6.1: subject and plain text resolve as text; HTML keeps escaping.
+    expect(vi.mocked(resolveVariables).mock.calls.map((c) => c[2])).toEqual([
+      { mode: "text" },
+      undefined,
+      { mode: "text" },
+    ]);
   });
 
   it("throws 502 when the provider fails", async () => {
@@ -241,6 +248,11 @@ describe("sendCustom", () => {
 
     const res = await service.sendCustom(event, "reg-1", "Subject", content);
     expect(order).toEqual(["create", "send"]);
+    expect(vi.mocked(resolveVariables).mock.calls.map((c) => c[2])).toEqual([
+      { mode: "text" },
+      undefined,
+      { mode: "text" },
+    ]);
     expect(sendEmailMock).toHaveBeenCalledWith(
       expect.objectContaining({ trackingId: "log-1", subject: "Subject" }),
     );
