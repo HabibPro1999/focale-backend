@@ -94,10 +94,13 @@ export async function buildNetworkingVectorIndex(
   const blocker = networkingVectorIndexBuildBlocker(before);
   if (blocker) throw new Error(blocker);
   const engine = await databaseEngine(client);
-  const migrations = await loadMigrations(options.migrationsDirectory, engine, { through: NETWORKING_VECTOR_INDEX_MIGRATION });
+  // The runner needs every migration it knows (later ledger rows would be "unknown");
+  // `through` below limits what it applies.
+  const migrations = await loadMigrations(options.migrationsDirectory, engine);
   // Build only 0017: anything earlier still pending belongs to a normal `apply`.
   const recorded = new Set((await listMigrationRecords(client)).map((record) => record.id));
-  const pending = migrations.filter((migration) => migration.id !== NETWORKING_VECTOR_INDEX_MIGRATION && !recorded.has(migration.id));
+  const pending = migrations.filter((migration) =>
+    migration.id < NETWORKING_VECTOR_INDEX_MIGRATION && !recorded.has(migration.id));
   if (pending.length)
     throw new Error(`Migrations ${pending.map((migration) => migration.id).join(", ")} are pending: run migrator apply --yes first`);
   options.onStart?.();
