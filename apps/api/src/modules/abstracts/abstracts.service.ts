@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Inject, Injectable } from "@nestjs/common";
 import {
   ErrorCodes,
   FINAL_STATUSES,
@@ -27,7 +27,9 @@ import {
 } from "@app/shared";
 import { assertClientModuleEnabled } from "../clients/module-gates";
 import { AppException } from "../../core/app-exception";
+import { CONFIG, type Config } from "../../core/config";
 import { logger } from "../../core/logger.service";
+import { assertPublicLinkBaseUrlAllowed } from "../../core/public-link-origin";
 import { generateAbstractToken, verifyAbstractToken } from "./abstracts.token";
 import {
   abstractContentFields,
@@ -69,50 +71,8 @@ export async function assertAbstractModuleEnabled(eventId: string): Promise<void
 
 // ============================================================================
 // Public link-origin allow-list (H7: linkBaseUrl is attacker-controlled and
-// later used to build author-facing email links — restrict it to known
-// origins when configured; non-breaking default when unset).
+// later used to build author-facing email links).
 // ============================================================================
-
-let warnedNoLinkAllowlist = false;
-
-function allowedLinkOrigins(): string[] | null {
-  const raw = process.env.PUBLIC_LINK_ALLOWED_ORIGINS;
-  if (!raw || raw.trim().length === 0) return null;
-  return raw
-    .split(",")
-    .map((origin) => origin.trim())
-    .filter((origin) => origin.length > 0);
-}
-
-function assertLinkBaseUrlAllowed(linkBaseUrl: string): void {
-  const allowed = allowedLinkOrigins();
-  if (!allowed) {
-    // ponytail: no allow-list configured — keep current (open) behavior but
-    // warn once so ops notice the phishing-relay exposure.
-    if (!warnedNoLinkAllowlist) {
-      logger.warn(
-        "PUBLIC_LINK_ALLOWED_ORIGINS is not set; linkBaseUrl origin is unrestricted",
-      );
-      warnedNoLinkAllowlist = true;
-    }
-    return;
-  }
-
-  let origin: string;
-  try {
-    origin = new URL(linkBaseUrl).origin;
-  } catch {
-    origin = "";
-  }
-  if (!allowed.includes(origin)) {
-    throw new AppException(
-      ErrorCodes.VALIDATION_ERROR,
-      "linkBaseUrl origin is not allowed",
-      422,
-      { allowedOrigins: allowed },
-    );
-  }
-}
 
 // ============================================================================
 // registrationId validation (M4: must exist and belong to the same event —
@@ -314,6 +274,8 @@ function validateAdditionalFields(
 
 @Injectable()
 export class AbstractsService {
+  constructor(@Inject(CONFIG) private readonly config: Config) {}
+
   // --------------------------------------------------------------------------
   // Public config
   // --------------------------------------------------------------------------
@@ -419,7 +381,10 @@ export class AbstractsService {
     validateContentPresence(content);
     validateWordLimits(content, config);
     await validateThemes(body.themeIds, config.id, config.maxThemesPerAbstract);
-    assertLinkBaseUrlAllowed(body.linkBaseUrl);
+    assertPublicLinkBaseUrlAllowed(
+      body.linkBaseUrl,
+      this.config.publicLinkAllowedOrigins,
+    );
     const sanitizedAdditionalFields = validateAdditionalFields(
       body.additionalFieldsData,
       config.additionalFieldsSchema,

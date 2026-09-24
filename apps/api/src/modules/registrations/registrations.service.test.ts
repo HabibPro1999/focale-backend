@@ -74,6 +74,7 @@ import { validateSelections } from "../access/access-validation";
 import { CheckinService } from "../checkin/checkin.service";
 import { RegistrationsService } from "./registrations.service";
 import { AppException } from "../../core/app-exception";
+import type { Config } from "../../core/config";
 import type { AccessService } from "../access/access.service";
 import type { PricingService } from "../pricing/pricing.service";
 
@@ -185,6 +186,9 @@ describe("RegistrationsService", () => {
     service = new RegistrationsService(
       access as unknown as AccessService,
       pricing as unknown as PricingService,
+      {
+        publicLinkAllowedOrigins: ["https://events.example.com"],
+      } as Config,
     );
   });
 
@@ -326,6 +330,20 @@ describe("RegistrationsService", () => {
       await expect(service.createRegistration(baseInput as never, emptyBreakdown(100)))
         .rejects.toMatchObject({ code: ErrorCodes.ACCESS_SELECTION_REQUIRED });
       expect(access.assertAccessSelectionRequirement).toHaveBeenCalledWith("ev1", {}, [], { accessSelectionRequired: true });
+      expect(db.insertRegistrationRow).not.toHaveBeenCalled();
+    });
+
+    it("rejects a public linkBaseUrl outside the configured origins", async () => {
+      await expect(
+        service.createRegistration(
+          { ...baseInput, linkBaseUrl: "https://evil.example" } as never,
+          emptyBreakdown(100),
+        ),
+      ).rejects.toMatchObject({
+        statusCode: 422,
+        code: ErrorCodes.VALIDATION_ERROR,
+      });
+      expect(db.findFormById).not.toHaveBeenCalled();
       expect(db.insertRegistrationRow).not.toHaveBeenCalled();
     });
 
