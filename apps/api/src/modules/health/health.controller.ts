@@ -8,6 +8,7 @@ import {
 } from "@app/db";
 import type { FastifyReply } from "fastify";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
+import { ShutdownCoordinator } from "../../core/shutdown";
 
 // Health probes are machine-consumed (load balancers, k8s, Render). They return
 // the RAW legacy bodies with legacy status codes and are @SkipEnvelope: the
@@ -16,6 +17,8 @@ import { SkipEnvelope } from "../../core/envelope.interceptor";
 @Controller()
 @SkipThrottle()
 export class HealthController {
+  constructor(private readonly lifecycle: ShutdownCoordinator) {}
+
   // Overall health — DB-gated (SELECT 1 via pingDb). Minimal public surface to
   // avoid information disclosure: no DB error detail leaks. 503 when unhealthy.
   @Get("health")
@@ -37,10 +40,15 @@ export class HealthController {
     return { status: "ok" };
   }
 
-  // Readiness — same DB check as /health, terser body. 503 when not ready.
+  // Readiness — same DB check as /health, terser body. 503 when not ready,
+  // and 503 "draining" from the moment shutdown starts.
   @Get("health/ready")
   @SkipEnvelope()
   async ready(@Res({ passthrough: true }) reply: FastifyReply) {
+    if (this.lifecycle.draining) {
+      reply.status(503);
+      return { status: "draining" };
+    }
     if (await pingDb()) return { status: "ready" };
     reply.status(503);
     return { status: "not ready" };

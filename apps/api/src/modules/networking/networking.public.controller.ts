@@ -3,6 +3,7 @@ import {
   Body,
   ForbiddenException,
   Controller,
+  Optional,
   Delete,
   Get,
   Param,
@@ -35,6 +36,7 @@ import {
   type NetworkingStore,
 } from "@app/db";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
+import { ShutdownCoordinator } from "../../core/shutdown";
 import { networkingIdentityCache } from "../../core/networking-identity-cache";
 import { NetworkingService, type NetworkingContext } from "./networking.service";
 import { NetworkingSocialService } from "./networking.social.service";
@@ -112,6 +114,8 @@ export class NetworkingPublicController {
     private readonly social: NetworkingSocialService,
     private readonly meetings: NetworkingMeetingsService,
     private readonly exports: NetworkingExportsService,
+    // Global (CoreModule); optional only so unit tests can construct the controller directly.
+    @Optional() private readonly lifecycle?: ShutdownCoordinator,
   ) {}
   private context(slug: string, request: FastifyRequest, options: { allowConsentPending?: boolean } = {}) {
     return this.service.participant(slug, request.headers.authorization, { ...options, ip: request.ip });
@@ -570,6 +574,7 @@ export class NetworkingPublicController {
     @Req() req: FastifyRequest,
     @Res() reply: FastifyReply,
   ) {
+    this.lifecycle?.assertAcceptingStreams(reply);
     let ctx = await this.context(slug, req);
     reply.hijack();
     for (const [key, value] of Object.entries(reply.getHeaders()))
@@ -614,9 +619,17 @@ export class NetworkingPublicController {
       }
     }, 3000);
     const timeout = setTimeout(() => reply.raw.end(), 60_000);
+    // Shutdown drain: tell the client when to reconnect (jittered), then close.
+    const untrack = this.lifecycle?.trackStream((reconnectInMs) => {
+      reply.raw.write(
+        `event: shutdown\nretry: ${reconnectInMs}\ndata: ${JSON.stringify({ reconnectInMs })}\n\n`,
+      );
+      reply.raw.end();
+    });
     reply.raw.on("close", () => {
       clearInterval(timer);
       clearTimeout(timeout);
+      untrack?.();
     });
   }
 }

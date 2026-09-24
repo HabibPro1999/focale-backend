@@ -23,7 +23,7 @@ import { clearUserCache } from "../../core/auth/user-cache";
 import { ZodValidationPipe } from "../../core/zod";
 import { CONFIG, type Config } from "../../core/config";
 import { RealtimeController } from "./realtime.controller";
-import { RealtimeConnectionRegistry } from "./connections";
+import { ShutdownCoordinator } from "../../core/shutdown";
 import { eventBus } from "./bus";
 
 const getUser = vi.mocked(getUserWithClientById);
@@ -68,7 +68,7 @@ function dbUser(role: number, clientId: string | null, active = true) {
 @Module({
   controllers: [RealtimeController],
   providers: [
-    RealtimeConnectionRegistry,
+    ShutdownCoordinator,
     { provide: CONFIG, useValue: testConfig },
     Reflector,
     { provide: APP_PIPE, useClass: ZodValidationPipe },
@@ -185,7 +185,7 @@ describe("GET /api/stream", () => {
       openConn = null;
     }
     if (app) {
-      app.get(RealtimeConnectionRegistry).drainAll();
+      app.get(ShutdownCoordinator).drainStreams();
       await app.close();
       app = null;
     }

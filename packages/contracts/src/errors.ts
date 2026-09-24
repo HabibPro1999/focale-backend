@@ -44,6 +44,8 @@ export const ErrorCodes = {
   // Server (5xxx)
   INTERNAL_ERROR: "SRV_5001",
   DATABASE_ERROR: "SRV_5002",
+  /** The process is draining for shutdown; retry after Retry-After. */
+  SERVER_SHUTTING_DOWN: "SRV_5003",
 
   // Pricing (6xxx)
   EXTRA_CAPACITY_EXCEEDED: "PRC_6001",

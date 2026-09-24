@@ -6,6 +6,7 @@ export * from "./condition.schema";
 export * from "./app-config";
 export * from "./db-settings";
 export * from "./trust-proxy";
+export * from "./lifecycle";
 export * from "./firebase-service-account";
 export * from "./config-check";
 export * from "./env-example";

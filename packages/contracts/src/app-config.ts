@@ -3,6 +3,17 @@ import { dbEnvShape, dbRuntimeSettingsFrom } from "./db-settings";
 import { envFlag, envInt, envKey, envKeyMeta } from "./env-meta";
 import { decodeFirebaseServiceAccount } from "./firebase-service-account";
 import {
+  SHUTDOWN_ESCALATION_MS,
+  SHUTDOWN_FORCE_CLOSE_LEAD_MS,
+  SHUTDOWN_GRACE_DEFAULT_MS,
+  SHUTDOWN_GRACE_MAX_MS,
+  SHUTDOWN_GRACE_MIN_MS,
+  WORKER_HEARTBEAT_FILE_NAME,
+  WORKER_HEARTBEAT_INTERVAL_MS,
+  WORKER_HEARTBEAT_MAX_AGE_MS,
+  defaultWorkerHeartbeatFile,
+} from "./lifecycle";
+import {
   TRUST_PROXY_REQUIRED_MESSAGE,
   resolveTrustProxy,
   trustProxyValueError,
@@ -375,11 +386,29 @@ const envShape = {
   }),
 
   // --- Processes ----------------------------------------------------------
+  APP: envKey(z.enum(["api", "worker", "all"]).default("api"), {
+    section: "processes",
+    description:
+      "Which process the image CMD (start-runtime.mjs) supervises: api | worker | all (both in\none container). Also selects the image HEALTHCHECK (API liveness or worker heartbeat).",
+    example: "api",
+  }),
   RUN_WORKERS: envKey(z.string().optional(), {
     section: "processes",
     description:
-      'Worker kill switch: background jobs run unless this is the literal "false".',
+      'Worker kill switch: background jobs run unless this is the literal "false". With "false"\nthe worker process idles with a disabled heartbeat, and APP=all starts only the API.',
     example: "true",
+  }),
+  SHUTDOWN_GRACE_MS: envInt(SHUTDOWN_GRACE_MIN_MS, SHUTDOWN_GRACE_MAX_MS, SHUTDOWN_GRACE_DEFAULT_MS, {
+    section: "processes",
+    description:
+      `Graceful shutdown budget per process after SIGTERM (${SHUTDOWN_GRACE_MIN_MS}-${SHUTDOWN_GRACE_MAX_MS} ms). The API drains SSE\nstreams, closes HTTP, force-closes sockets ${SHUTDOWN_FORCE_CLOSE_LEAD_MS / 1000} s before the end, then closes the pool; each\nprocess hard-exits at the limit and start-runtime.mjs SIGKILLs ${SHUTDOWN_ESCALATION_MS / 1000} s later. Keep it\n${SHUTDOWN_ESCALATION_MS / 1000}+ s below the platform's SIGKILL delay (Render maxShutdownDelaySeconds, 30 s).`,
+    example: String(SHUTDOWN_GRACE_DEFAULT_MS),
+  }, "SHUTDOWN_GRACE_MS"),
+  WORKER_HEARTBEAT_FILE: envKey(z.string().default(defaultWorkerHeartbeatFile()), {
+    section: "processes",
+    description:
+      `Worker heartbeat file, touched every ${WORKER_HEARTBEAT_INTERVAL_MS / 1000} s (the image HEALTHCHECK fails a worker whose\nfile is older than ${WORKER_HEARTBEAT_MAX_AGE_MS / 1000} s). Default: <os tmpdir>/${WORKER_HEARTBEAT_FILE_NAME}.`,
+    example: `/tmp/${WORKER_HEARTBEAT_FILE_NAME}`,
   }),
   LOG_LEVEL: envKey(
     z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).optional(),
@@ -834,6 +863,10 @@ export function parseAppConfig(source: NodeJS.ProcessEnv) {
     logLevel: env.LOG_LEVEL ?? (isDevelopment ? "debug" : "info"),
     // Legacy: workers run unless RUN_WORKERS is the literal string "false".
     runWorkers: env.RUN_WORKERS !== "false",
+    lifecycle: {
+      shutdownGraceMs: env.SHUTDOWN_GRACE_MS,
+      workerHeartbeatFile: env.WORKER_HEARTBEAT_FILE,
+    },
     // Same values the db client derives at pool construction.
     database: dbRuntimeSettingsFrom(env, env.NODE_ENV),
     http: {
