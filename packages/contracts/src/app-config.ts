@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { dbEnvShape, dbRuntimeSettingsFrom } from "./db-settings";
 
 // Ported wholesale from the legacy Fastify app's src/config/app.config.ts.
 // Zod-only lives in contracts (leaf package); both apps import parseAppConfig
@@ -10,6 +11,8 @@ const envSchema = z
       .default("development"),
     PORT: z.coerce.number().default(3000),
     DATABASE_URL: z.string().url(),
+    // Database pool/session limits (shared with the db client; see db-settings.ts)
+    ...dbEnvShape,
     CORS_ORIGIN: z.string().default("http://localhost:8080"),
     // Firebase
     FIREBASE_PROJECT_ID: z.string(),
@@ -272,9 +275,8 @@ export function parseAppConfig(source: NodeJS.ProcessEnv) {
     logLevel: env.LOG_LEVEL ?? (isDevelopment ? "debug" : "info"),
     // Legacy: workers run unless RUN_WORKERS is the literal string "false".
     runWorkers: env.RUN_WORKERS !== "false",
-    database: {
-      poolSize: env.NODE_ENV === "production" ? 20 : 5,
-    },
+    // Same values the db client derives at pool construction.
+    database: dbRuntimeSettingsFrom(env, env.NODE_ENV),
     security: {
       rateLimit: {
         max: env.NODE_ENV === "production" ? 100 : 1000,
