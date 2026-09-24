@@ -3,10 +3,12 @@ import { SkipThrottle } from "@nestjs/throttler";
 import {
   getAbstractBookQueueHealth,
   getEmailQueueHealth,
+  getNetworkingVectorIndexHealth,
   getOutboxHealth,
   pingDb,
 } from "@app/db";
 import type { FastifyReply } from "fastify";
+import { getConfig } from "../../core/config";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
 
 // Health probes are machine-consumed (load balancers, k8s, Render). They return
@@ -72,5 +74,15 @@ export class HealthController {
   @SkipEnvelope()
   outbox(@Res({ passthrough: true }) reply: FastifyReply) {
     return this.probe(reply, getOutboxHealth);
+  }
+
+  // Networking ANN index: 503 while an event above the exact-ranking limit
+  // ranks recommendations with the deterministic fallback (index missing).
+  @Get("health/networking-vector-index")
+  @SkipEnvelope()
+  networkingVectorIndex(@Res({ passthrough: true }) reply: FastifyReply) {
+    return this.probe(reply, () =>
+      getNetworkingVectorIndexHealth(getConfig().networking.embedding.model),
+    );
   }
 }

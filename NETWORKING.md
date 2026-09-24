@@ -48,7 +48,7 @@ pnpm --filter @app/db exec node scripts/migrate-networking.mjs --apply
 
 The shim delegates to the unified runner, which records migration checksums and skips previously applied files; changed applied migrations cause an error. Future changes belong in a new numbered migration. Existing databases without the unified ledger require adoption (`adopt`, then `adopt --apply`) before `apply` will proceed; `adopt` maps the old `networking_migrations` rows, including the CockroachDB 0018 steps, onto the unified ledger.
 
-Vector lookup currently uses exact cosine distance within eligible event profiles. This keeps relevance and tenant filtering explicit. Evaluate both recall and latency before adding engine-specific approximate indexes; an approximate index is not automatically used by a weighted multi-vector ranking query.
+Vector lookup uses exact cosine distance within eligible event profiles up to 5,000 embedded profiles per event. Above that it retrieves bounded candidates through the approximate (ANN) index and reranks them exactly. Only CockroachDB has an ANN migration (0017, see below); PostgreSQL has none, so large events there always use the fallback.
 
 ## Event activation
 
@@ -74,6 +74,20 @@ Administrator endpoints:
 - `POST /api/events/:eventId/networking/recommendations/reindex`: retry/rebuild eligible event profiles, preserving live worker leases.
 
 After fixing provider credentials or a delivery failure, inspect job state and explicitly reindex exhausted embedding jobs as needed. Validate recommendation relevance using reviewed real professional pairs; synthetic distance tests prove filtering and ranking mechanics, not real-world matchmaking accuracy.
+
+### Vector index health and runbook (CockroachDB)
+
+Without the ANN index, every recommendation request for an event above 5,000 embedded profiles would scan and sort that event's embeddings. Such events therefore fall back to the deterministic profile rules (`strategy: "PROFILE_RULES"`, the same response as without embeddings) until the index exists. Each API process re-checks the index once a minute.
+
+`GET /health/networking-vector-index` (raw body, like the queue probes) returns `{ isHealthy, index: "present" | "missing", recommendations: "vector" | "deterministic-fallback", eventsAboveThreshold, threshold }`. It is 503 while the fallback is active, that is an event is above the limit and the index is missing. It is informational: keep `/health/live` as the service health check.
+
+Migration 0017 creates `networking_embeddings_cosine_idx`. `apply` records it as deferred while `networking_embeddings` has rows, because building it blocks writes to that table until the backfill finishes. To build it in a maintenance window:
+
+1. Read-only check (safe any time): `node packages/db/dist/ops/networking-vector-index-cli.js status` with `DATABASE_URL` set. It prints the index state, 0017's ledger status, `feature.vector_index.enabled`, embedding row count, events above the limit, and whether a build can proceed.
+2. As a database administrator, if needed: `SET CLUSTER SETTING feature.vector_index.enabled = true`.
+3. Stop the worker (the embedding worker writes embeddings) and announce the window; participant writes elsewhere are unaffected.
+4. `node packages/db/dist/ops/networking-vector-index-cli.js build --yes`. It refuses unless the engine is CockroachDB, the index is missing, 0017 is recorded as deferred and nothing earlier is pending. It then applies 0017 through the migrator (`apply --apply-deferred=0017 --through=0017`, same lease and ledger) and confirms the index is present.
+5. Restart the worker. `status` and `/health/networking-vector-index` now report the index present; API processes switch to vector ranking within a minute.
 
 ## Local verification without live services
 
