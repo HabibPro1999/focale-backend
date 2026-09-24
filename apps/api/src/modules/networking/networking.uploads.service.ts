@@ -1,10 +1,14 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
+import { fileTypeFromBuffer } from "file-type";
 import sharp from "sharp";
-import { getStorageProvider, ownedStorageKey } from "@app/integrations";
+import { IMAGE_INPUT_LIMITS, getStorageProvider, ownedStorageKey } from "@app/integrations";
 import { createLogger } from "@app/shared";
 import type { FastifyRequest } from "fastify";
 const log = createLogger({ name: "networking:uploads" });
+const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+const invalidImage = () =>
+  new BadRequestException({ code: "NETWORKING_VALIDATION", message: "Use a valid PNG, JPEG or WebP image up to 5 MB and 20 megapixels" });
 export type NetworkingMultipartRequest = FastifyRequest & {
   file(options?: {
     limits: { fileSize: number; files: number };
@@ -45,12 +49,12 @@ export class NetworkingUploadsService {
     });
     if (!part) throw new BadRequestException({ code: "NETWORKING_VALIDATION", message: "Choose an image to upload" });
     const source = await part.toBuffer();
+    // Magic bytes first: only PNG/JPEG/WebP ever reach a decoder (never SVG, GIF, TIFF...).
+    const detected = await fileTypeFromBuffer(source);
+    if (!detected || !IMAGE_MIME_TYPES.has(detected.mime)) throw invalidImage();
     let bytes: Buffer;
     try {
-      const image = sharp(source, {
-        limitInputPixels: 20_000_000,
-        animated: false,
-      });
+      const image = sharp(source, { ...IMAGE_INPUT_LIMITS, animated: false });
       const metadata = await image.metadata();
       if (!["png", "jpeg", "webp"].includes(metadata.format ?? ""))
         throw new Error();
@@ -60,7 +64,7 @@ export class NetworkingUploadsService {
         .webp({ quality: 85 })
         .toBuffer();
     } catch {
-      throw new BadRequestException({ code: "NETWORKING_VALIDATION", message: "Use a valid PNG, JPEG or WebP image up to 5 MB and 20 megapixels" });
+      throw invalidImage();
     }
     const storage = getStorageProvider();
     const key = `${prefix}/${randomUUID()}.webp`;

@@ -31,6 +31,7 @@ import {
   type AbstractForCertificateSend,
 } from "@app/db";
 import {
+  IMAGE_INPUT_LIMITS,
   extractStorageKeyFromUrl,
   getStorageProvider,
   ownedStorageKey,
@@ -343,7 +344,17 @@ export class CertificatesService {
       );
     }
 
-    const metadata = await sharp(file.buffer).metadata();
+    // Header-only read, but it enforces the pixel limit before anything is stored
+    // (the image is later decoded at full size to render certificates).
+    const metadata = await sharp(file.buffer, IMAGE_INPUT_LIMITS)
+      .metadata()
+      .catch(() => {
+        throw new AppException(
+          ErrorCodes.VALIDATION_ERROR,
+          "Invalid image. Upload a valid PNG or JPEG of at most 20 megapixels.",
+          400,
+        );
+      });
     const width = metadata.width ?? 0;
     const height = metadata.height ?? 0;
 
