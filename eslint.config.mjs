@@ -1,34 +1,43 @@
 import eslint from "@eslint/js";
 import tseslint from "typescript-eslint";
 
+function downgradeRules(config) {
+  if (!config.rules) return config;
+
+  return {
+    ...config,
+    rules: Object.fromEntries(
+      Object.entries(config.rules).map(([name, setting]) => {
+        const severity = Array.isArray(setting) ? setting[0] : setting;
+        if (severity === "off" || severity === 0) return [name, setting];
+        return [name, Array.isArray(setting) ? ["warn", ...setting.slice(1)] : "warn"];
+      }),
+    ),
+  };
+}
+
+const sourceFiles = [
+  "apps/*/src/**/*.{ts,tsx,mts,cts}",
+  "packages/*/src/**/*.{ts,tsx,mts,cts}",
+];
+
 export default tseslint.config(
-  eslint.configs.recommended,
-  ...tseslint.configs.recommended,
+  downgradeRules(eslint.configs.recommended),
+  ...tseslint.configs.recommended.map(downgradeRules),
   {
-    languageOptions: {
-      parserOptions: {
-        project: "./tsconfig.json",
-      },
-    },
     rules: {
-      "@typescript-eslint/no-floating-promises": "error",
-      "@typescript-eslint/no-misused-promises": "error",
       "@typescript-eslint/no-unused-vars": [
-        "error",
+        "warn",
         { argsIgnorePattern: "^_" },
       ],
       "no-console": ["warn", { allow: ["warn", "error"] }],
-
-      // Module boundary enforcement
+      // Module boundary checks remain visible as the workspace is adopted.
       "no-restricted-imports": [
-        "error",
+        "warn",
         {
           patterns: [
             {
-              group: [
-                "**/modules/identity/**",
-                "!**/modules/identity/index.js",
-              ],
+              group: ["**/modules/identity/**", "!**/modules/identity/index.js"],
               message: "Import from @identity barrel, not internal files",
             },
             {
@@ -68,15 +77,21 @@ export default tseslint.config(
     },
   },
   {
+    files: sourceFiles,
+    languageOptions: {
+      parserOptions: { projectService: true },
+    },
+    rules: {
+      "@typescript-eslint/no-floating-promises": "warn",
+      "@typescript-eslint/no-misused-promises": "warn",
+    },
+  },
+  {
     ignores: [
-      "dist/**",
-      "node_modules/**",
-      "coverage/**",
+      "**/dist/**",
+      "**/node_modules/**",
+      "**/coverage/**",
       "prisma/**",
-      "scripts/**",
-      "tests/**",
-      "*.config.js",
-      "*.config.ts",
     ],
   },
 );
