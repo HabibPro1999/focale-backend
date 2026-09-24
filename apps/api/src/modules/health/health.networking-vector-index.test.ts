@@ -8,6 +8,10 @@ vi.mock("@app/db", async (original) => ({
 
 import { HealthController } from "./health.controller";
 import { getConfig } from "../../core/config";
+import type { ShutdownCoordinator } from "../../core/shutdown";
+
+// This probe does not consult the shutdown state.
+const controller = () => new HealthController({} as ShutdownCoordinator);
 
 const reply = () => ({ status: vi.fn().mockReturnThis() });
 
@@ -17,7 +21,7 @@ describe("GET /health/networking-vector-index", () => {
     const body = { isHealthy: true, index: "present", recommendations: "vector", eventsAboveThreshold: 2, threshold: 5000 };
     health.mockResolvedValue(body);
     const target = reply();
-    expect(await new HealthController().networkingVectorIndex(target as never)).toBe(body);
+    expect(await controller().networkingVectorIndex(target as never)).toBe(body);
     expect(target.status).not.toHaveBeenCalled();
     expect(health).toHaveBeenCalledWith(getConfig().networking.embedding.model);
   });
@@ -25,7 +29,7 @@ describe("GET /health/networking-vector-index", () => {
     const body = { isHealthy: false, index: "missing", recommendations: "deterministic-fallback", eventsAboveThreshold: 1, threshold: 5000 };
     health.mockResolvedValue(body);
     const target = reply();
-    expect(await new HealthController().networkingVectorIndex(target as never)).toBe(body);
+    expect(await controller().networkingVectorIndex(target as never)).toBe(body);
     expect(target.status).toHaveBeenCalledWith(503);
   });
 });
