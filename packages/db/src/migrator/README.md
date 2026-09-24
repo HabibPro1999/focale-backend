@@ -23,7 +23,8 @@ Provision PostgreSQL extensions before invoking the runner. The disposable DB
 test helper may install `vector` in its newly-created test database; production
 `apply` only verifies that the extension is already present. On each migration,
 the runner checks lease ownership between statements and fences each commit by
-updating the conditional lease row. If another runner takes an expired lease,
+updating the conditional lease row. Lease times always use `clock_timestamp()`,
+because `now()` is frozen at the start of a transaction. If another runner takes an expired lease,
 the current transaction rolls back and the runner stops before the next SQL
 statement. On CockroachDB, a heartbeat renewal that commits while a fenced
 transaction is open can fail that fence with a serialization error (40001);

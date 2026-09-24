@@ -18,6 +18,12 @@ import type {
   SchemaMigrationStepRecord,
 } from "./types";
 
+// Every lease time reads the wall clock (clock_timestamp()), never now(). Inside
+// a transaction, now() is the transaction's start time on PostgreSQL and
+// CockroachDB, so the pre-commit fence of a long migration transaction would
+// write a lease already shortened by the transaction's duration (overwriting
+// the heartbeat's later renewals), and the fence and the in-transaction
+// liveness check would accept a lease that expired while it was open.
 const LEASE_TTL_SECONDS = 90;
 const LEASE_WAIT_MS = 2 * 60 * 1000;
 
@@ -185,8 +191,8 @@ export async function acquireMigrationLease(client: Client, owner: string): Prom
     try {
       await client.query(
         `UPDATE public.schema_migration_lock
-         SET owner = $1, lease_until = now() + interval '${LEASE_TTL_SECONDS} seconds'
-         WHERE id = 1 AND (owner IS NULL OR lease_until < now() OR owner = $1)`,
+         SET owner = $1, lease_until = clock_timestamp() + interval '${LEASE_TTL_SECONDS} seconds'
+         WHERE id = 1 AND (owner IS NULL OR lease_until < clock_timestamp() OR owner = $1)`,
         [owner],
       );
       const result = await client.query<{ owner: string }>(
@@ -207,8 +213,8 @@ export async function refreshMigrationLease(client: Client, owner: string): Prom
     try {
       const result = await client.query(
         `UPDATE public.schema_migration_lock
-         SET lease_until = now() + interval '${LEASE_TTL_SECONDS} seconds'
-         WHERE id = 1 AND owner = $1 AND lease_until > now()`,
+         SET lease_until = clock_timestamp() + interval '${LEASE_TTL_SECONDS} seconds'
+         WHERE id = 1 AND owner = $1 AND lease_until > clock_timestamp()`,
         [owner],
       );
       if (result.rowCount !== 1) throw new Error("Migration lease was lost or expired; stopping before the next SQL statement");
@@ -270,7 +276,7 @@ export async function startLeaseHeartbeat(connectionString: string, owner: strin
     async checkAlive() {
       assertAlive();
       const result = await observer.query<{ owner: string; active: boolean }>(
-        `SELECT owner, lease_until > now() AS active
+        `SELECT owner, lease_until > clock_timestamp() AS active
          FROM public.schema_migration_lock WHERE id = 1`,
       );
       if (result.rows[0]?.owner !== owner || !result.rows[0]?.active) {
@@ -316,8 +322,8 @@ async function fenceMigrationLease(
   await heartbeat?.checkAlive();
   const result = await client.query(
     `UPDATE public.schema_migration_lock
-     SET lease_until = now() + interval '${LEASE_TTL_SECONDS} seconds'
-     WHERE id = 1 AND owner = $1 AND lease_until > now()`,
+     SET lease_until = clock_timestamp() + interval '${LEASE_TTL_SECONDS} seconds'
+     WHERE id = 1 AND owner = $1 AND lease_until > clock_timestamp()`,
     [owner],
   );
   if (result.rowCount !== 1) {
@@ -335,7 +341,7 @@ export async function assertLeaseAlive(
     return;
   }
   const result = await client.query<{ owner: string; active: boolean }>(
-    `SELECT owner, lease_until > now() AS active
+    `SELECT owner, lease_until > clock_timestamp() AS active
      FROM public.schema_migration_lock WHERE id = 1`,
   );
   if (result.rows[0]?.owner !== owner || !result.rows[0]?.active) {
