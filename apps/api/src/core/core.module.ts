@@ -6,18 +6,18 @@ import { LoggerService } from "./logger.service";
 import { ZodValidationPipe } from "./zod";
 import { EnvelopeInterceptor } from "./envelope.interceptor";
 import { HttpExceptionFilter } from "./http-exception.filter";
-import { NetworkingThrottlerGuard, networkingAuthThrottler, networkingVenueThrottler } from "./networking-throttler.guard";
+import { NetworkingThrottlerGuard, networkingThrottlers } from "./networking-throttler.guard";
 
 @Global()
 @Module({
   imports: [
     ThrottlerModule.forRootAsync({
       inject: [CONFIG],
-      // Legacy global limit: 100/min in prod, 1000/min otherwise, 1-minute window. In-memory: per replica.
+      // Legacy global limit: 100/min in prod, 1000/min otherwise, 1-minute window.
+      // In-memory storage, per process: every limit assumes a single API instance.
       useFactory: (config: Config) => ({
         throttlers: [
-          networkingVenueThrottler,
-          networkingAuthThrottler,
+          ...networkingThrottlers,
           { ttl: 60_000, limit: config.security.rateLimit.max },
         ],
       }),

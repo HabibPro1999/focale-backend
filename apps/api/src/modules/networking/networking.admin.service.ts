@@ -38,6 +38,7 @@ import { getStorageProvider } from "@app/integrations";
 import { createLogger } from "@app/shared";
 import { deleteNetworkingPhoto } from "./networking.uploads.service";
 import { assertClientModuleEnabled } from "../clients/module-gates";
+import { networkingIdentityCache } from "../../core/networking-identity-cache";
 import {
   NetworkingService,
   type NetworkingContext,
@@ -311,6 +312,8 @@ export class NetworkingAdminService {
         );
       return { row, previousPhotoUrl };
     });
+    if ((input.status && input.status !== "ACTIVE") || input.consent === false)
+      networkingIdentityCache.forgetProfile(id);
     if (row.photoUrl !== previousPhotoUrl) await deleteNetworkingPhoto(previousPhotoUrl, eventId, id);
     return row;
   }
@@ -481,7 +484,8 @@ export class NetworkingAdminService {
     },
     actorId: string,
   ) {
-    return networkingTransaction(eventId, async (store, db) => {
+    let revokedProfileId: string | undefined;
+    const resolved = await networkingTransaction(eventId, async (store, db) => {
       const report = await store.one("reports", { eventId, id });
       if (!report) throw new NotFoundException("Report not found");
       if (input.action === "SUSPEND" || input.action === "EXCLUDE") {
@@ -494,6 +498,7 @@ export class NetworkingAdminService {
           },
         );
         await revokeNetworkingSessions(report.profileId, db);
+        revokedProfileId = report.profileId;
         await cancelNetworkingParticipantMeetings(
           report.profileId,
           eventId,
@@ -532,6 +537,8 @@ export class NetworkingAdminService {
       });
       return saved;
     });
+    if (revokedProfileId) networkingIdentityCache.forgetProfile(revokedProfileId);
+    return resolved;
   }
   async regeneratePostEventReport(eventId: string, actorId: string) {
     return networkingTransaction(eventId, async (store) => {

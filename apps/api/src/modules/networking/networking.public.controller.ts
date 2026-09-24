@@ -32,6 +32,7 @@ import {
   type NetworkingStore,
 } from "@app/db";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
+import { networkingIdentityCache } from "../../core/networking-identity-cache";
 import { NetworkingService, type NetworkingContext } from "./networking.service";
 import { NetworkingSocialService } from "./networking.social.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
@@ -109,7 +110,7 @@ export class NetworkingPublicController {
     private readonly exports: NetworkingExportsService,
   ) {}
   private context(slug: string, request: FastifyRequest, options: { allowConsentPending?: boolean } = {}) {
-    return this.service.participant(slug, request.headers.authorization, options);
+    return this.service.participant(slug, request.headers.authorization, { ...options, ip: request.ip });
   }
   // Public reads are bounded only by the shared venue bucket.
   @SkipThrottle({ default: true })
@@ -602,6 +603,7 @@ export class NetworkingPublicController {
       }
       return current?.photoUrl;
     });
+    networkingIdentityCache.forgetProfile(ctx.profile.id);
     await this.uploads.deletePhoto(photoUrl, ctx.event.id, ctx.profile.id);
     return { withdrawn: true };
   }

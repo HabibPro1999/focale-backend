@@ -3,6 +3,7 @@ import { NetworkingConfigSchema } from "@app/contracts";
 const db = vi.hoisted(() => ({
   rows: {} as Record<string, Array<Record<string, unknown>>>,
   update: vi.fn(), insert: vi.fn(), enqueue: vi.fn(), modules: vi.fn(), sync: vi.fn(), delete: vi.fn(),
+  failedOtpAttempts: vi.fn(),
 }));
 vi.mock("@app/db", async (original) => {
   const matches = (row: Record<string, unknown>, where: Record<string, unknown>) =>
@@ -15,6 +16,7 @@ vi.mock("@app/db", async (original) => {
       return (db.rows[kind] ?? []).filter((row) => matches(row, where)).map((row) => Object.assign(row, values));
     },
     insert: async (kind: string, values: Record<string, unknown>) => { db.insert(kind, values); return values; },
+    failedOtpAttempts: db.failedOtpAttempts,
   };
   return {
     ...(await original<typeof import("@app/db")>()),
@@ -34,6 +36,7 @@ vi.mock("@app/integrations", async (original) => ({
 }));
 import { NetworkingService } from "./networking.service";
 import { networkingHash } from "./networking.security";
+import { networkingBearerLockout, networkingIdentityCache, networkingVenueKey } from "../../core/networking-identity-cache";
 
 const token = "t".repeat(48);
 const consentForm = {
@@ -57,6 +60,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   process.env.NETWORKING_TOKEN_SECRET = "test-networking-secret-at-least-32-characters";
   db.modules.mockResolvedValue({ active: true, enabledModules: ["networking", "registrations", "emails"] });
+  db.failedOtpAttempts.mockResolvedValue({ recent: 0, daily: 0 });
+  networkingIdentityCache.clear();
+  networkingBearerLockout.clear();
   seed();
 });
 afterEach(() => { delete process.env.PUBLIC_NETWORKING_URL; });
@@ -189,5 +195,101 @@ describe("participant photo changes", () => {
     expect(db.update).toHaveBeenCalledWith("profiles", { id: "p", eventId: "event" }, expect.objectContaining({ overrides: {} }));
     expect(row.photoUrl).toBe("https://storage.example/forms/uploads/registrant.webp");
     expect(db.delete).toHaveBeenCalledWith("networking/event/profiles/p/old.webp");
+  });
+});
+
+describe("verified bearer identities (0.9)", () => {
+  const ip = "192.0.2.1";
+  const venue = networkingVenueKey(ip, "demo");
+  it("remembers a live session for the throttler, even when the profile is refused", async () => {
+    seed({ profile: { consent: true } });
+    await service.participant("demo", bearer, { ip });
+    expect(networkingIdentityCache.sessionFor(token)).toBe("session");
+    networkingIdentityCache.clear();
+    seed({ profile: { status: "SUSPENDED" } });
+    await expect(service.participant("demo", bearer, { ip })).rejects.toMatchObject({ status: 403 });
+    expect(networkingIdentityCache.sessionFor(token)).toBe("session");
+  });
+  it.each([
+    ["an unknown token", `Bearer ${"u".repeat(48)}`, {}],
+    ["a malformed token", "Bearer short", {}],
+    ["an expired session", bearer, { session: { expiresAt: new Date(Date.now() - 1) } }],
+    ["a revoked session", bearer, { session: { revokedAt: new Date() } }],
+  ])("forgets and counts %s toward the venue lockout", async (_label, authorization, overrides) => {
+    networkingIdentityCache.remember(authorization.slice(7), { id: "stale", profileId: "p", expiresAt: new Date(Date.now() + 60_000) });
+    seed(overrides);
+    const record = vi.spyOn(networkingBearerLockout, "recordRejected");
+    await expect(service.participant("demo", authorization, { ip })).rejects.toMatchObject({ status: 401, response: { code: "NETWORKING_SESSION_EXPIRED" } });
+    expect(record).toHaveBeenCalledWith(venue, authorization.slice(7));
+    expect(networkingIdentityCache.sessionFor(authorization.slice(7))).toBeUndefined();
+    record.mockRestore();
+  });
+  it("counts nothing without a bearer, for refused valid sessions, or for a closed event", async () => {
+    const record = vi.spyOn(networkingBearerLockout, "recordRejected");
+    await expect(service.participant("demo", undefined, { ip })).rejects.toMatchObject({ status: 401 });
+    await expect(service.participant("demo", bearer, { ip })).rejects.toMatchObject({ status: 403, response: { code: "NETWORKING_CONSENT_REQUIRED" } });
+    seed({ profile: { consent: true } });
+    db.rows.secondFactors = [{ profileId: "p", enabledAt: new Date() }];
+    await expect(service.participant("demo", bearer, { ip })).rejects.toMatchObject({ status: 403, response: { code: "NETWORKING_MFA_REQUIRED" } });
+    seed({ config: { closesAt: "2000-01-01T00:00:00.000Z" } });
+    await expect(service.participant("demo", `Bearer ${"u".repeat(48)}`, { ip })).rejects.toMatchObject({ response: { code: "NETWORKING_CLOSED" } });
+    expect(record).not.toHaveBeenCalled();
+    record.mockRestore();
+  });
+  it("locks the venue after 200 distinct rejected bearers", async () => {
+    for (let i = 0; i < 200; i++)
+      await expect(service.participant("demo", `Bearer ${String(i).padStart(48, "x")}`, { ip })).rejects.toMatchObject({ status: 401 });
+    expect(networkingBearerLockout.lockedFor(venue)).toBeGreaterThan(0);
+    expect(networkingBearerLockout.lockedFor(networkingVenueKey(ip, "other"))).toBe(0);
+  });
+  it("forgets the token on logout", async () => {
+    networkingIdentityCache.remember(token, { id: "session", profileId: "p", expiresAt: new Date(Date.now() + 60_000) });
+    await service.logout("demo", bearer);
+    expect(networkingIdentityCache.sessionFor(token)).toBeUndefined();
+  });
+});
+
+describe("OTP failed-attempt limits (0.9)", () => {
+  const code = "123456";
+  function seedChallenge(overrides: object = {}) {
+    db.rows.challenges = [{
+      id: "c1", eventId: "event", email: "ann@example.test", attempts: 0, consumedAt: null, verifiedAt: null,
+      codeHash: networkingHash(`otp:event:ann@example.test:${code}`), expiresAt: new Date(Date.now() + 60_000), ...overrides,
+    }];
+  }
+  it.each([
+    ["ten failures in 15 minutes", { recent: 10, daily: 10 }],
+    ["thirty failures in 24 hours", { recent: 0, daily: 30 }],
+  ])("returns 429 before comparing the code after %s", async (_label, failed) => {
+    seedChallenge();
+    db.failedOtpAttempts.mockResolvedValue(failed);
+    const error = await service.verifyCode("demo", "c1", code).catch((e) => e);
+    expect(error.status).toBe(429);
+    expect(error.response).toEqual({ code: "NETWORKING_RATE_LIMITED", message: "Too many verification attempts" });
+    expect(db.update).not.toHaveBeenCalled();
+    expect(db.insert).not.toHaveBeenCalledWith("sessions", expect.anything());
+    expect(db.failedOtpAttempts).toHaveBeenCalledWith("event", "ann@example.test", expect.any(Date), expect.any(Date));
+    const [, , recentSince, dailySince] = db.failedOtpAttempts.mock.calls[0];
+    expect(recentSince.getTime() - dailySince.getTime()).toBe(86_400_000 - 15 * 60_000);
+    expect(Math.abs(Date.now() - 15 * 60_000 - recentSince.getTime())).toBeLessThan(5_000);
+  });
+  it("still compares the code just below both limits", async () => {
+    seedChallenge();
+    db.failedOtpAttempts.mockResolvedValue({ recent: 9, daily: 29 });
+    const error = await service.verifyCode("demo", "c1", "000000").catch((e) => e);
+    expect(error.status).toBe(401);
+    expect(db.update).toHaveBeenCalledWith("challenges", { id: "c1", eventId: "event" }, { attempts: 1 });
+  });
+  it("marks the successful attempt verified and throttles the new bearer as its session", async () => {
+    seedChallenge({ attempts: 2 });
+    const remember = vi.spyOn(networkingIdentityCache, "remember");
+    const result = await service.verifyCode("demo", "c1", code);
+    expect(db.update).toHaveBeenCalledWith("challenges", { id: "c1", eventId: "event" }, {
+      attempts: 3, consumedAt: expect.any(Date), verifiedAt: expect.any(Date),
+    });
+    expect(result).not.toHaveProperty("session");
+    expect(Object.keys(result).sort()).toEqual(["expiresAt", "mfaEnrollmentRequired", "profile", "requiresSecondFactor", "token"]);
+    expect(remember).toHaveBeenCalledWith(result.token, expect.objectContaining({ profileId: "p", eventId: "event" }));
+    remember.mockRestore();
   });
 });

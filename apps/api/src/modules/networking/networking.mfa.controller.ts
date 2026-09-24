@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Headers,
+  Ip,
   Param,
   Post,
 } from "@nestjs/common";
@@ -18,31 +19,35 @@ export class NetworkingMfaController {
     private readonly networking: NetworkingService,
     private readonly mfa: NetworkingMfaService,
   ) {}
-  private context(slug: string, authorization?: string) {
+  private context(slug: string, ip: string, authorization?: string) {
     return this.networking.participant(slug, authorization, {
       allowPendingSecondFactor: true,
       allowConsentPending: true,
+      ip,
     });
   }
   @Get() async state(
     @Param("slug") slug: string,
+    @Ip() ip: string,
     @Headers("authorization") authorization?: string,
   ) {
-    return this.mfa.state(await this.context(slug, authorization));
+    return this.mfa.state(await this.context(slug, ip, authorization));
   }
   @Post("enroll") async enroll(
     @Param("slug") slug: string,
+    @Ip() ip: string,
     @Headers("authorization") authorization?: string,
   ) {
-    return this.mfa.enroll(await this.context(slug, authorization));
+    return this.mfa.enroll(await this.context(slug, ip, authorization));
   }
   @Post("confirm") async confirm(
     @Param("slug") slug: string,
     @Body() body: NetworkingMfaCodeDto,
+    @Ip() ip: string,
     @Headers("authorization") authorization?: string,
   ) {
     return this.mfa.verify(
-      await this.context(slug, authorization),
+      await this.context(slug, ip, authorization),
       body.code,
       "CONFIRM",
     );
@@ -50,17 +55,19 @@ export class NetworkingMfaController {
   @Post("verify") async verify(
     @Param("slug") slug: string,
     @Body() body: NetworkingMfaCodeDto,
+    @Ip() ip: string,
     @Headers("authorization") authorization?: string,
   ) {
-    return this.mfa.verify(await this.context(slug, authorization), body.code);
+    return this.mfa.verify(await this.context(slug, ip, authorization), body.code);
   }
   @Delete() async disable(
     @Param("slug") slug: string,
     @Body() body: NetworkingMfaCodeDto,
+    @Ip() ip: string,
     @Headers("authorization") authorization?: string,
   ) {
     return this.mfa.verify(
-      await this.networking.participant(slug, authorization, { allowConsentPending: true }),
+      await this.networking.participant(slug, authorization, { allowConsentPending: true, ip }),
       body.code,
       "DISABLE",
     );

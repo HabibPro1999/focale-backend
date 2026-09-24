@@ -1,6 +1,15 @@
 import { createHash } from "node:crypto";
 import { Injectable, type ExecutionContext } from "@nestjs/common";
-import { ThrottlerGuard, type ThrottlerOptions } from "@nestjs/throttler";
+import { ThrottlerException, ThrottlerGuard, type ThrottlerOptions } from "@nestjs/throttler";
+import {
+  networkingBearerLockout,
+  networkingBearerToken,
+  networkingIdentityCache,
+  networkingVenueKey,
+} from "./networking-identity-cache";
+
+// All throttler counters, verified identities and lockouts are in-memory and
+// per process: the limits below hold only while the API runs as ONE instance.
 
 type ThrottledRequest = {
   url?: string;
@@ -26,9 +35,37 @@ export function isParticipantNetworkingRequest(req: ThrottledRequest | undefined
 }
 
 const venue = (req: ThrottledRequest) =>
-  `${req.ip ?? ""}:${typeof req.params?.slug === "string" ? req.params.slug : ""}`;
+  networkingVenueKey(req.ip, typeof req.params?.slug === "string" ? req.params.slug : "");
 const request = (context: ExecutionContext) => context.switchToHttp().getRequest<ThrottledRequest>();
 const AUTH_ROUTE = /^\/api\/networking\/[^/]+\/auth\/(?:request|verify|mfa\/verify)$/;
+// Participant routes that never read the bearer: their identity is the email/challenge or the venue.
+const BEARER_AGNOSTIC_ROUTE = /^\/api\/networking\/[^/]+\/(?:config|registration|auth\/request|auth\/verify)$/;
+const ORGANIZER_ROUTE = /^\/api\/events\/[^/]+\/networking(?:\/|$)/;
+
+type BearerIdentity =
+  | { kind: "none" }
+  | { kind: "session"; sessionId: string }
+  | { kind: "unverified"; venue: string };
+const identities = new WeakMap<object, BearerIdentity>();
+
+/**
+ * How a participant request's bearer is keyed, resolved once per request:
+ * `session` when the token maps to a session the service verified recently,
+ * `unverified` for any other bearer, `none` without a bearer or off the
+ * bearer-reading participant routes.
+ */
+function participantBearerIdentity(req: ThrottledRequest): BearerIdentity {
+  const known = identities.get(req);
+  if (known) return known;
+  let identity: BearerIdentity = { kind: "none" };
+  const token = networkingBearerToken(req.headers?.authorization);
+  if (token && isParticipantNetworkingRequest(req) && !BEARER_AGNOSTIC_ROUTE.test(routePath(req))) {
+    const sessionId = networkingIdentityCache.sessionFor(token);
+    identity = sessionId ? { kind: "session", sessionId } : { kind: "unverified", venue: venue(req) };
+  }
+  identities.set(req, identity);
+  return identity;
+}
 
 // Shared by every participant handler of one event behind one venue IP (500–2,000 attendees).
 export const networkingVenueThrottler: ThrottlerOptions = {
@@ -49,8 +86,61 @@ export const networkingAuthThrottler: ThrottlerOptions = {
   getTracker: async (req) => venue(req as ThrottledRequest),
 };
 
+/**
+ * Every participant bearer the service has not verified recently shares one
+ * bucket per venue IP and event. Sized for cache misses at venue scale: after
+ * a restart, or 5 idle minutes, each of up to 2,000 attendees behind one NAT
+ * sends a few requests before its session is re-verified and cached; 12,000/min
+ * (half the venue bucket, ~6 per attendee) absorbs that without 429s. Rotating
+ * random bearers are stopped by the invalid-bearer lockout, and each bearer
+ * keeps its own per-handler quota.
+ */
+export const NETWORKING_UNVERIFIED_LIMIT = 12_000;
+export const networkingUnverifiedThrottler: ThrottlerOptions = {
+  name: "networking-unverified",
+  ttl: 60_000,
+  limit: NETWORKING_UNVERIFIED_LIMIT,
+  skipIf: (context) => participantBearerIdentity(request(context)).kind !== "unverified",
+  getTracker: async (req) => venue(req as ThrottledRequest),
+  generateKey: (_context, tracker) => digest(`networking-unverified:${tracker}`),
+};
+
+// Organizer networking routes (/api/events/:eventId/networking/**): a per-IP backstop over per-bearer quotas.
+export const NETWORKING_ORGANIZER_LIMIT = 600;
+export const networkingOrganizerThrottler: ThrottlerOptions = {
+  name: "networking-organizer",
+  ttl: 60_000,
+  limit: NETWORKING_ORGANIZER_LIMIT,
+  skipIf: (context) => !ORGANIZER_ROUTE.test(routePath(request(context))),
+  getTracker: async (req) => (req as ThrottledRequest).ip ?? "",
+  generateKey: (_context, tracker) => digest(`networking-organizer:${tracker}`),
+};
+
+/** Throttlers registered ahead of the global default (see CoreModule). */
+export const networkingThrottlers: ThrottlerOptions[] = [
+  networkingVenueThrottler,
+  networkingAuthThrottler,
+  networkingUnverifiedThrottler,
+  networkingOrganizerThrottler,
+];
+
 @Injectable()
 export class NetworkingThrottlerGuard extends ThrottlerGuard {
+  override async canActivate(context: ExecutionContext): Promise<boolean> {
+    const req = request(context);
+    const identity = participantBearerIdentity(req);
+    // Invalid-bearer lockout: blocks unverified bearers only; sign-in routes keep their own limits.
+    if (identity.kind === "unverified" && !AUTH_ROUTE.test(routePath(req))) {
+      const lockedMs = networkingBearerLockout.lockedFor(identity.venue);
+      if (lockedMs > 0) {
+        const reply = context.switchToHttp().getResponse<{ header?: (name: string, value: number) => unknown }>();
+        reply.header?.("Retry-After", Math.ceil(lockedMs / 1000));
+        throw new ThrottlerException();
+      }
+    }
+    return super.canActivate(context);
+  }
+
   protected override async getTracker(req: ThrottledRequest): Promise<string> {
     const path = routePath(req);
     // Participant and organizer networking routes key identities; other modules keep per-IP limits.
@@ -65,14 +155,17 @@ export class NetworkingThrottlerGuard extends ThrottlerGuard {
     }
     if (path.endsWith("/auth/verify")) {
       const challengeId = req.body?.challengeId;
-      // Verify has no email in its contract. The service also caps attempts per challenge.
+      // Verify has no email in its contract. The service also caps attempts per challenge and per email.
       if (typeof challengeId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(challengeId))
         return digest(`verify:${slug}:${challengeId.toLowerCase()}`);
       return super.getTracker(req);
     }
-    // Bearer sessions (participant or organizer badge scanning) get their own quota.
-    const authorization = req.headers?.authorization;
-    const token = typeof authorization === "string" ? /^Bearer\s+(\S+)$/i.exec(authorization)?.[1] : undefined;
-    return token ? digest(`session:${token}`) : super.getTracker(req);
+    // A verified participant session gets its own quota. Any other bearer (unverified participant
+    // tokens, organizer ID tokens) keeps a per-token quota in a separate namespace, so presenting
+    // a session id as a bearer can never draw on that session's bucket.
+    const identity = participantBearerIdentity(req);
+    if (identity.kind === "session") return digest(`session:${identity.sessionId}`);
+    const token = networkingBearerToken(req.headers?.authorization);
+    return token ? digest(`bearer:${token}`) : super.getTracker(req);
   }
 }
