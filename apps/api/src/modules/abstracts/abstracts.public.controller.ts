@@ -13,6 +13,7 @@ import {
 import { Throttle } from "@nestjs/throttler";
 import type { FastifyRequest } from "fastify";
 import { ErrorCodes } from "@app/contracts";
+import { getConfig as getAppConfig } from "../../core/config";
 import { AbstractsService } from "./abstracts.service";
 import {
   AbstractsFinalFileService,
@@ -64,44 +65,18 @@ async function readFinalFile(req: MultipartRequest): Promise<FinalFileInput> {
   return { buffer, filename: data.filename, mimetype: data.mimetype };
 }
 
-// Env-driven public rate limits (legacy publicRateLimits.abstracts*). Read at
-// module load — the app-config zod schema validates these at boot.
-// ponytail: parseWindowMs handles a bare-ms number or "N unit"; extend the unit
-// map if an exotic window string is ever configured.
-function parseWindowMs(raw: string | undefined): number {
-  if (!raw) return 60_000;
-  const trimmed = raw.trim();
-  if (/^\d+$/.test(trimmed)) return Number(trimmed);
-  const match = /^(\d+)\s*(ms|s|sec|second|seconds|m|min|minute|minutes|h|hour|hours)$/i.exec(
-    trimmed,
-  );
-  if (!match) return 60_000;
-  const n = Number(match[1]);
-  const unit = match[2].toLowerCase();
-  if (unit === "ms") return n;
-  if (unit.startsWith("h")) return n * 3_600_000;
-  if (unit === "m" || unit.startsWith("min")) return n * 60_000;
-  return n * 1_000;
-}
-
-const WINDOW_MS = parseWindowMs(process.env.ABSTRACTS_RATE_LIMIT_WINDOW);
+// Public rate limits (legacy publicRateLimits.abstracts*), validated by the
+// config schema and resolved per request from the process config.
+const abstractLimits = () => getAppConfig().security.publicAbstracts;
+const windowMs = () => abstractLimits().windowMs;
 const SUBMIT_THROTTLE = {
-  default: {
-    limit: Number(process.env.ABSTRACTS_SUBMIT_RATE_LIMIT_MAX) || 60,
-    ttl: WINDOW_MS,
-  },
+  default: { limit: () => abstractLimits().submitMax, ttl: windowMs },
 };
 const EDIT_THROTTLE = {
-  default: {
-    limit: Number(process.env.ABSTRACTS_EDIT_RATE_LIMIT_MAX) || 30,
-    ttl: WINDOW_MS,
-  },
+  default: { limit: () => abstractLimits().editMax, ttl: windowMs },
 };
 const READ_THROTTLE = {
-  default: {
-    limit: Number(process.env.ABSTRACTS_READ_RATE_LIMIT_MAX) || 120,
-    ttl: WINDOW_MS,
-  },
+  default: { limit: () => abstractLimits().readMax, ttl: windowMs },
 };
 
 @Controller("api/public")

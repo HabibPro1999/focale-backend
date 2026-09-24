@@ -27,6 +27,7 @@ import {
 } from "@app/db";
 import { ErrorCodes, NetworkingConfigSchema, networkingProfileComplete, networkingProfileOverrides, type ModuleId, type NetworkingConfig, type NetworkingPersonalAnalytics, type NetworkingRegistrationInfo } from "@app/contracts";
 import { isModuleEnabledForClient } from "../clients/module-gates";
+import { getConfig } from "../../core/config";
 import {
   networkingBearerLockout,
   networkingBearerToken,
@@ -130,14 +131,14 @@ export class NetworkingService {
         bannerUrl: event.bannerUrl,
       },
       config: publicConfig,
-      pushPublicKey: process.env.NETWORKING_VAPID_PUBLIC_KEY ?? null,
+      pushPublicKey: getConfig().networking.vapid.publicKey ?? null,
       networkingUrl,
     };
   }
   /** PWA event URL; an unset or invalid optional PUBLIC_NETWORKING_URL is omitted. */
   networkingUrl(slug: string) {
     try {
-      const base = process.env.PUBLIC_NETWORKING_URL;
+      const base = getConfig().networking.publicUrl;
       if (!base) return undefined;
       const url = new URL(base);
       if (!["http:", "https:"].includes(url.protocol)) return undefined;

@@ -22,31 +22,52 @@ import {
 const log = createLogger({ name: "db:pool" });
 
 let applicationName = DEFAULT_DB_APPLICATION_NAME;
-let settings: DbRuntimeSettings | undefined;
+/** Set by configureDb (the apps, from their parsed config). */
+let configured: { databaseUrl: string; settings: DbRuntimeSettings } | undefined;
+/** Env-derived settings for tools/tests that never pass a config slice. */
+let envSettings: DbRuntimeSettings | undefined;
 let pool: Pool | undefined;
 let db: ReturnType<typeof drizzle> | undefined;
 let closing: Promise<void> | undefined;
 
+export interface DbConfig {
+  /** `application_name` for this process's sessions (default `focale`). */
+  applicationName: string;
+  /** The app's parsed DATABASE_URL and DB_* settings (config.DATABASE_URL, config.database). */
+  databaseUrl?: string;
+  settings?: DbRuntimeSettings;
+}
+
 /**
- * Name this process's database sessions (`application_name`). Call once at
- * startup, before the first query; the default is `focale`.
+ * Configure this process's database client. Call once at startup, before the
+ * first query. The apps pass their parsed config slice (URL + settings);
+ * tools and tests that pass only a name, or never call this, read
+ * DATABASE_URL and DB_* from the environment when the pool is first built.
  */
-export function configureDb(options: { applicationName: string }): void {
+export function configureDb(options: DbConfig): void {
   const name = assertApplicationName(options.applicationName);
   if (pool && name !== applicationName) {
     throw new Error("configureDb must run before the database pool is first used");
+  }
+  if (options.databaseUrl !== undefined || options.settings !== undefined) {
+    if (!options.databaseUrl || !options.settings) {
+      throw new Error("configureDb needs both databaseUrl and settings when either is given");
+    }
+    if (pool) throw new Error("configureDb must run before the database pool is first used");
+    configured = { databaseUrl: options.databaseUrl, settings: options.settings };
   }
   applicationName = name;
 }
 
 /** Validated DB_* settings (pool size, timeouts) for this process. */
 export function getDbSettings(): DbRuntimeSettings {
-  settings ??= resolveDbRuntimeSettings(process.env);
-  return settings;
+  if (configured) return configured.settings;
+  envSettings ??= resolveDbRuntimeSettings(process.env);
+  return envSettings;
 }
 
 function databaseUrl(): string {
-  const url = process.env.DATABASE_URL;
+  const url = configured?.databaseUrl ?? process.env.DATABASE_URL;
   if (!url) throw new Error("DATABASE_URL is not set");
   return url;
 }
@@ -105,7 +126,7 @@ export type DbExecutor = Db | Parameters<Parameters<Db["transaction"]>[0]>[0];
  * one close, and a later getDb() builds a fresh pool.
  */
 export function closeDb(): Promise<void> {
-  settings = undefined;
+  envSettings = undefined;
   if (pool) {
     const current = pool;
     pool = undefined;

@@ -47,15 +47,17 @@ describe.runIf(enabled)("networking isolated event-scale benchmark", () => {
         { FastifyAdapter },
         { CoreModule },
         { NetworkingModule },
+        { getConfig },
       ] = await Promise.all([
         import("@nestjs/common"),
         import("@nestjs/core"),
         import("@nestjs/platform-fastify"),
         import("../../core/core.module.js"),
         import("./networking.module.js"),
+        import("../../core/config.js"),
       ]);
       class PerformanceModule {}
-      Module({ imports: [CoreModule, NetworkingModule] })(PerformanceModule);
+      Module({ imports: [CoreModule.forRoot(getConfig()), NetworkingModule] })(PerformanceModule);
       app = await NestFactory.create<NestFastifyApplication>(
         PerformanceModule,
         new FastifyAdapter({ logger: false }),

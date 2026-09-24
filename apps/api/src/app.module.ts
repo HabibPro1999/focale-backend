@@ -1,6 +1,7 @@
 import { NetworkingModule } from "./modules/networking/networking.module";
-import { Module } from "@nestjs/common";
+import { Module, type DynamicModule } from "@nestjs/common";
 import { CoreModule } from "./core/core.module";
+import type { Config } from "./core/config";
 import { HealthModule } from "./modules/health/health.module";
 import { IdentityModule } from "./modules/identity/identity.module";
 import { ClientsModule } from "./modules/clients/clients.module";
@@ -19,7 +20,6 @@ import { ReportsModule } from "./modules/reports/reports.module";
 
 @Module({
   imports: [
-    CoreModule,
     HealthModule,
     IdentityModule,
     ClientsModule,
@@ -38,4 +38,9 @@ import { ReportsModule } from "./modules/reports/reports.module";
     NetworkingModule,
   ],
 })
-export class AppModule {}
+export class AppModule {
+  /** The whole API, wired to the config parsed once at boot. */
+  static forRoot(config: Config): DynamicModule {
+    return { module: AppModule, imports: [CoreModule.forRoot(config)] };
+  }
+}

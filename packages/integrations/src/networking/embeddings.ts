@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { networkingConfig } from "../config";
 
 export const NETWORKING_EMBEDDING_DIMENSIONS = 1536;
 export const NETWORKING_EMBEDDING_VERSION = 1;
@@ -165,12 +166,7 @@ export class NetworkingEmbeddingClient {
 }
 
 export function configuredNetworkingEmbeddingClient(): NetworkingEmbeddingClient | null {
-  const apiKey =
-    process.env.NETWORKING_EMBEDDING_API_KEY || process.env.OPENAI_API_KEY;
+  const { apiKey, model, baseUrl } = networkingConfig().embedding;
   if (!apiKey) return null;
-  return new NetworkingEmbeddingClient({
-    apiKey,
-    model: process.env.NETWORKING_EMBEDDING_MODEL,
-    baseUrl: process.env.NETWORKING_EMBEDDING_BASE_URL,
-  });
+  return new NetworkingEmbeddingClient({ apiKey, model, baseUrl });
 }

@@ -15,6 +15,7 @@ import {
 import { getEmailProvider, getNetworkingEmailSender, type EmailProvider } from "../email/providers";
 import type { StorageProvider } from "../storage";
 import { renderNetworkingNotification } from "./notification-rendering";
+import { networkingConfig } from "../config";
 import { networkingContactAttachment } from "./contact-export";
 import { networkingDeliverySkipReason } from "./delivery-policy";
 import { processNetworkingPostEventReport } from "./post-event-report";
@@ -207,9 +208,7 @@ async function processOne(
         continue;
       rendered = renderNetworkingNotification(row.type, row.payload, current);
       try {
-        const publicKey = process.env.NETWORKING_VAPID_PUBLIC_KEY,
-          privateKey = process.env.NETWORKING_VAPID_PRIVATE_KEY,
-          subject = process.env.NETWORKING_VAPID_SUBJECT;
+        const { publicKey, privateKey, subject } = networkingConfig().vapid;
         if (!publicKey || !privateKey || !subject)
           throw new Error("Push provider is not configured");
         if (!(await refreshNetworkingDeliveryLease(row))) return "lease_lost";

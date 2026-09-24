@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { SendEmailInput } from "./email-provider.types";
+import { integrationsConfig } from "../../config";
 
 type ProviderName = "resend" | "sendgrid";
 export interface NetworkingEmailSender { provider: ProviderName; email: string; domainId: string; name?: string; }
@@ -7,9 +8,10 @@ const verified = new Map<string, number>();
 const lifetime = 5 * 60_000;
 /** Server-owned, client-keyed allowlist. This configuration is never accepted from participant requests. */
 export function getNetworkingEmailSender(clientId: string, provider: ProviderName): NetworkingEmailSender | null {
-  if (!process.env.NETWORKING_EMAIL_SENDERS) return null;
+  const senders = integrationsConfig().networking.emailSenders;
+  if (!senders) return null;
   let map: unknown;
-  try { map = JSON.parse(process.env.NETWORKING_EMAIL_SENDERS); } catch { throw new Error("Networking sender configuration is invalid"); }
+  try { map = JSON.parse(senders); } catch { throw new Error("Networking sender configuration is invalid"); }
   if (!map || typeof map !== "object" || Array.isArray(map)) throw new Error("Networking sender configuration is invalid");
   if (!Object.prototype.hasOwnProperty.call(map, clientId)) return null;
   const entry = (map as Record<string, unknown>)[clientId] as Partial<NetworkingEmailSender> | null;
@@ -23,7 +25,7 @@ export async function resolveVerifiedNetworkingSender(input: Pick<SendEmailInput
   if (!input.senderClientId) throw new Error("A client-owned sender identity is required");
   const sender = getNetworkingEmailSender(input.senderClientId, provider);
   if (!sender || sender.email.toLowerCase() !== input.fromEmail.toLowerCase()) throw new Error("Sender identity is not approved for this client");
-  const readKey = (provider === "resend" ? process.env.RESEND_DOMAIN_READ_API_KEY : process.env.SENDGRID_DOMAIN_READ_API_KEY) ?? apiKey;
+  const readKey = integrationsConfig().email[provider].domainReadApiKey ?? apiKey;
   if (!readKey) throw new Error("Sender domain verification credentials are not configured");
   const cacheKey = `${provider}:${sender.domainId}:${sender.email.toLowerCase()}:${createHash("sha256").update(readKey).digest("hex")}`;
   if ((verified.get(cacheKey) ?? 0) > Date.now()) return sender.email;
@@ -40,9 +42,10 @@ export async function resolveVerifiedNetworkingSender(input: Pick<SendEmailInput
   return sender.email;
 }
 export async function networkingEmailSenderStatus(clientId: string) {
-  const provider: ProviderName = process.env.EMAIL_PROVIDER === "resend" ? "resend" : "sendgrid";
+  const email = integrationsConfig().email;
+  const provider: ProviderName = email.provider;
   const sender = getNetworkingEmailSender(clientId, provider);
   if (!sender) return { configured: false as const, provider };
-  try { await resolveVerifiedNetworkingSender({ fromEmail: sender.email, senderClientId: clientId }, provider, provider === "resend" ? process.env.RESEND_API_KEY : process.env.SENDGRID_API_KEY); return { configured: true as const, verified: true, provider, email: sender.email, name: sender.name }; }
+  try { await resolveVerifiedNetworkingSender({ fromEmail: sender.email, senderClientId: clientId }, provider, email[provider].apiKey); return { configured: true as const, verified: true, provider, email: sender.email, name: sender.name }; }
   catch (error) { return { configured: true as const, verified: false, provider, email: sender.email, name: sender.name, error: error instanceof Error ? error.message : "Sender verification failed" }; }
 }

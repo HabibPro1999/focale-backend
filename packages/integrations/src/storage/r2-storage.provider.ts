@@ -5,6 +5,7 @@ import {
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { integrationsConfig } from "../config";
 import type {
   DownloadedFile,
   StorageProvider,
@@ -58,15 +59,16 @@ export class R2StorageProvider implements StorageProvider {
   private publicUrl: string;
 
   constructor() {
-    // App config .refine() guarantees these R2 vars exist when STORAGE_PROVIDER=r2.
-    this.bucket = process.env.R2_BUCKET!;
-    this.publicUrl = process.env.R2_PUBLIC_URL!;
+    // App config rules guarantee these R2 keys exist when STORAGE_PROVIDER=r2.
+    const r2 = integrationsConfig().r2;
+    this.bucket = r2.bucket!;
+    this.publicUrl = r2.publicUrl!;
     this.client = new S3Client({
       region: "auto",
-      endpoint: `https://${process.env.R2_ACCOUNT_ID!}.r2.cloudflarestorage.com`,
+      endpoint: `https://${r2.accountId!}.r2.cloudflarestorage.com`,
       credentials: {
-        accessKeyId: process.env.R2_ACCESS_KEY_ID!,
-        secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
+        accessKeyId: r2.accessKeyId!,
+        secretAccessKey: r2.secretAccessKey!,
       },
     });
   }

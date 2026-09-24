@@ -26,6 +26,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm build
+      - run: pnpm env:example --check
       - run: pnpm test
       - run: pnpm test:runtime
       - run: pnpm audit --prod --audit-level=high

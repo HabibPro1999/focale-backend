@@ -1,77 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { FastifyAdapter } from "@nestjs/platform-fastify";
-import { trustedProxyAddresses } from "./app.factory";
+import { parseAppConfig, resolveTrustProxy } from "@app/contracts";
+import { buildApp } from "./app.factory";
 
+// TRUST_PROXY parsing and its production rules live in the config schema
+// (packages/contracts/src/trust-proxy.test.ts); buildApp passes the parsed
+// value straight to Fastify.
 describe("TRUST_PROXY", () => {
-  it("requires an explicit proxy configuration in production", () => {
-    expect(() => trustedProxyAddresses({ NODE_ENV: "production" })).toThrow(
-      /TRUST_PROXY is required in production/,
-    );
-    expect(() =>
-      trustedProxyAddresses({ NODE_ENV: "production", TRUST_PROXY: " " }),
-    ).toThrow(/actual proxy peer addresses/);
-  });
-
-  it.each([
-    ["127.0.0.1", ["127.0.0.1"]],
-    ["10.0.0.0/24, 2001:db8::1", ["10.0.0.0/24", "2001:db8::1"]],
-  ])("parses explicit proxy addresses %s", (value, addresses) => {
-    expect(
-      trustedProxyAddresses({ NODE_ENV: "production", TRUST_PROXY: value }),
-    ).toEqual(addresses);
-  });
-
-  it.each([
-    "0",
-    "1",
-    "2",
-    "true",
-    "*",
-    "loopback",
-    "0.0.0.0/0",
-    "::/0",
-    "10.0.0.0/33",
-    "2001:db8::/129",
-    "not-an-ip",
-    "127.0.0.1,",
-    "127.0.0.1,,192.0.2.1",
-  ])("rejects unsafe or invalid proxy trust value %s", (value) => {
-    expect(() =>
-      trustedProxyAddresses({ NODE_ENV: "production", TRUST_PROXY: value }),
-    ).toThrow(/TRUST_PROXY/);
-  });
-
-  it("allows an explicit no-proxy production mode", () => {
-    expect(
-      trustedProxyAddresses({ NODE_ENV: "production", TRUST_PROXY: "false" }),
-    ).toBe(false);
-  });
-
-  it.each(["development", "test"])(
-    "uses the socket address in %s when unset",
-    (NODE_ENV) => {
-      expect(trustedProxyAddresses({ NODE_ENV })).toBe(false);
-    },
-  );
-
-  it("defaults to no trusted proxies when NODE_ENV is unset", () => {
-    expect(trustedProxyAddresses({})).toBe(false);
-  });
-
   it("honors X-Forwarded-For only from a configured immediate peer", async () => {
     const trustedPeerFastify = new FastifyAdapter({
-      trustProxy: trustedProxyAddresses({
-        NODE_ENV: "test",
-        TRUST_PROXY: "127.0.0.0/8",
-      }),
+      trustProxy: resolveTrustProxy("127.0.0.0/8"),
     }).getInstance();
     trustedPeerFastify.get("/client-ip", async (request) => ({ ip: request.ip }));
 
     const untrustedPeerFastify = new FastifyAdapter({
-      trustProxy: trustedProxyAddresses({
-        NODE_ENV: "test",
-        TRUST_PROXY: "192.0.2.1",
-      }),
+      trustProxy: resolveTrustProxy("192.0.2.1"),
     }).getInstance();
     untrustedPeerFastify.get("/client-ip", async (request) => ({ ip: request.ip }));
 
@@ -106,5 +49,33 @@ describe("unit-test environment", () => {
     expect(process.env.DATABASE_URL).toBe(
       "postgresql://test_user:test_password@localhost:5432/focale_unit_test",
     );
+  });
+});
+
+describe("buildApp config wiring", () => {
+  it("allows only the configured CORS origins", async () => {
+    const config = parseAppConfig({
+      ...process.env,
+      CORS_ORIGIN: "https://admin.example.com/, https://forms.example.com",
+    });
+    const app = await buildApp(config);
+    try {
+      await app.init();
+      await app.getHttpAdapter().getInstance().ready();
+      const allowed = await app.inject({
+        method: "GET",
+        url: "/health/live",
+        headers: { origin: "https://admin.example.com" },
+      });
+      expect(allowed.headers["access-control-allow-origin"]).toBe("https://admin.example.com");
+      const denied = await app.inject({
+        method: "GET",
+        url: "/health/live",
+        headers: { origin: "https://evil.example.com" },
+      });
+      expect(denied.headers["access-control-allow-origin"]).toBeUndefined();
+    } finally {
+      await app.close();
+    }
   });
 });

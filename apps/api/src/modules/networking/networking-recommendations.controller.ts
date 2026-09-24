@@ -2,6 +2,7 @@ import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
 import type { AuthUser } from "../../core/auth/user-cache";
 import { assertEventAccess } from "../../core/auth/assert-event-access";
+import { getConfig } from "../../core/config";
 import { assertClientModuleEnabled } from "../clients/module-gates";
 import { assertEventWritable } from "../events/events.service";
 import {
@@ -60,8 +61,7 @@ export class NetworkingRecommendationsController {
     const ctx = await this.networking.participant(slug, authorization, { ip });
     if (!ctx.config.swipeEnabled && !ctx.config.searchEnabled)
       throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Participant discovery is disabled" });
-    const model =
-      process.env.NETWORKING_EMBEDDING_MODEL || "text-embedding-3-small";
+    const model = getConfig().networking.embedding.model;
     const cacheKey = JSON.stringify([
       ctx.event.id,
       ctx.profile.id,
@@ -174,10 +174,8 @@ export class NetworkingRecommendationAdminController {
   ) {
     await this.access(user, eventId);
     return {
-      configured: Boolean(
-        process.env.NETWORKING_EMBEDDING_API_KEY || process.env.OPENAI_API_KEY,
-      ),
-      model: process.env.NETWORKING_EMBEDDING_MODEL || "text-embedding-3-small",
+      configured: Boolean(getConfig().networking.embedding.apiKey),
+      model: getConfig().networking.embedding.model,
       dimensions: 1536,
       jobs: await getNetworkingEmbeddingHealth(eventId),
     };

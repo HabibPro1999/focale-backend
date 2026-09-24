@@ -12,6 +12,8 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r --workspace-concurrency=1 test",
     "test:runtime": "node --test scripts/start-runtime.test.mjs",
+    "env:example": "pnpm --filter @app/contracts build && node packages/contracts/dist/cli/env-example.js",
+    "config:check": "node packages/contracts/dist/cli/check-config.js",
     "test:db": "pnpm -r --workspace-concurrency=1 --if-present test:db",
     "test:concurrency": "pnpm --filter @app/db test:concurrency",
     "test:migration": "pnpm --filter @app/db test:migration",

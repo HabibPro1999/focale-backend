@@ -38,8 +38,15 @@ describe("parseAppConfig", () => {
       submitMax: 250,
       editMax: 40,
       readMax: 500,
-      timeWindow: "2 minutes",
+      windowMs: 120_000,
     });
+  });
+
+  it("rejects an unparseable abstracts rate-limit window instead of silently using 60 s", () => {
+    expect(() => parseAppConfig(baseEnv({ ABSTRACTS_RATE_LIMIT_WINDOW: "fortnight" }))).toThrow(
+      "ABSTRACTS_RATE_LIMIT_WINDOW",
+    );
+    expect(parseAppConfig(baseEnv({ ABSTRACTS_RATE_LIMIT_WINDOW: "90000" })).security.publicAbstracts.windowMs).toBe(90_000);
   });
 
   it("parses and normalizes the public link origin allow-list", () => {
@@ -155,6 +162,10 @@ describe("parseAppConfig", () => {
       baseEnv({
         NODE_ENV: "production",
         ADMIN_APP_URL: "https://admin.example.com",
+        CORS_ORIGIN: "https://admin.example.com",
+        TRUST_PROXY: "10.0.0.0/24",
+        PUBLIC_FORMS_URL: "https://events.example.com",
+        NETWORKING_TOKEN_SECRET: "n".repeat(32),
         EMAIL_PROVIDER: "resend",
         RESEND_API_KEY: "re_test",
         RESEND_WEBHOOK_SECRET: "whsec_test",

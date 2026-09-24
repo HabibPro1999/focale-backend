@@ -1,6 +1,7 @@
 import { FirebaseStorageProvider } from "./firebase-storage.provider";
 import { R2StorageProvider } from "./r2-storage.provider";
 import type { StorageProvider } from "./storage.provider";
+import { integrationsConfig } from "../config";
 
 let instance: StorageProvider | null = null;
 
@@ -11,7 +12,7 @@ let instance: StorageProvider | null = null;
 export function getStorageProvider(): StorageProvider {
   if (!instance) {
     instance =
-      process.env.STORAGE_PROVIDER === "r2"
+      integrationsConfig().storage.provider === "r2"
         ? new R2StorageProvider()
         : new FirebaseStorageProvider();
   }

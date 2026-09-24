@@ -7,6 +7,7 @@ import sgMail from "@sendgrid/mail";
 import { resolveVerifiedNetworkingSender } from "./networking-sender";
 import { EventWebhook, EventWebhookHeader } from "@sendgrid/eventwebhook";
 import { logger } from "../../logger";
+import { integrationsConfig } from "../../config";
 import {
   getHeader,
   resolveEmailSender,
@@ -243,9 +244,10 @@ export class SendgridProvider implements EmailProvider {
 }
 
 export function createSendgridProvider(): EmailProvider {
+  const { apiKey, webhookPublicKey } = integrationsConfig().email.sendgrid;
   return new SendgridProvider({
-    apiKey: process.env.SENDGRID_API_KEY,
-    webhookPublicKey: process.env.SENDGRID_WEBHOOK_PUBLIC_KEY,
+    apiKey,
+    webhookPublicKey,
     ...resolveEmailSender(),
   });
 }
