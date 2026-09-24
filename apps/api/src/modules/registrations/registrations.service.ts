@@ -1,7 +1,12 @@
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
 import { fileTypeFromBuffer } from "file-type";
-import { getStorageProvider, compressFile, ownedStorageKey } from "@app/integrations";
+import {
+  getStorageProvider,
+  compressFile,
+  ownedStorageKey,
+  buildRegistrationSelfLinks,
+} from "@app/integrations";
 import { deleteNetworkingPhoto } from "../networking/networking.uploads.service";
 import {
   ErrorCodes,
@@ -55,6 +60,7 @@ import {
   getRegistrationByIdempotencyKeyRow,
   getRegistrationClientId as getRegistrationClientIdQuery,
   getRegistrationEditToken,
+  getRegistrationEditLinkSource,
   listRegistrationRows,
   getEventForRegistrationCreate,
   getEventForRegistrationAdmin,
@@ -101,6 +107,15 @@ import {
   enrichManyWithAccessSelections,
   type RegistrationWithRelations,
 } from "./registrations.enrichment";
+import {
+  toAdminRegistration,
+  toPublicRegistration,
+  type AdminView,
+  type PublicRegistration,
+} from "./registrations.mappers";
+
+/** Admin-facing registration: no editToken / idempotencyKey (see mappers). */
+export type AdminRegistration = AdminView<RegistrationWithRelations>;
 
 const FULLY_SETTLED_STATUSES = ["PAID", "SPONSORED", "WAIVED"];
 const EDIT_TOKEN_BYTES = 32; // 64 hex characters
@@ -171,7 +186,7 @@ interface SettlementResult {
 }
 
 export type GetRegistrationForEditResult = {
-  registration: Record<string, unknown>;
+  registration: PublicRegistration;
   expectedUpdatedAt: string;
   canEdit: boolean;
   canEditPersonalInfo: boolean;
@@ -184,13 +199,13 @@ export type GetRegistrationForEditResult = {
 };
 
 export type EditRegistrationPublicResult = {
-  registration: RegistrationWithRelations;
+  registration: PublicRegistration;
   priceBreakdown: PriceBreakdown;
 };
 
 export type PublicCreateResult = {
   created: boolean;
-  registration: Record<string, unknown>;
+  registration: PublicRegistration;
   priceBreakdown: PriceBreakdown;
 };
 
@@ -455,13 +470,10 @@ export class RegistrationsService {
   // Reads
   // ==========================================================================
 
-  async getRegistrationById(id: string): Promise<RegistrationWithRelations | null> {
+  async getRegistrationById(id: string): Promise<AdminRegistration | null> {
     const row = await getRegistrationByIdRow(id);
     if (!row) return null;
-    const enriched = await enrichWithAccessSelections(row);
-    // M23: strip editToken from admin-facing reads.
-    const { editToken: _editToken, ...safe } = enriched;
-    return safe as RegistrationWithRelations;
+    return toAdminRegistration(await enrichWithAccessSelections(row));
   }
 
   /** editToken intentionally NOT stripped (renamed to `token` by the create route). */
@@ -488,7 +500,7 @@ export class RegistrationsService {
   async listRegistrations(
     eventId: string,
     query: ListRegistrationsQuery,
-  ): Promise<PaginatedResult<RegistrationWithRelations> & { stats: RegistrationStats }> {
+  ): Promise<PaginatedResult<AdminView<RegistrationWithRelations>> & { stats: RegistrationStats }> {
     const { rows, total, stats: statsRaw } = await listRegistrationRows(
       eventId,
       query,
@@ -524,7 +536,9 @@ export class RegistrationsService {
       }
     }
 
-    const enriched = await enrichManyWithAccessSelections(rows);
+    // The query selects admin columns only; the mapper keeps that true for
+    // any future change to the row source.
+    const enriched = (await enrichManyWithAccessSelections(rows)).map(toAdminRegistration);
     const { page, limit } = query;
     return { ...paginate(enriched, total, { page, limit }), stats };
   }
@@ -569,7 +583,7 @@ export class RegistrationsService {
       if (existing) {
         return {
           created: false,
-          registration: this.withToken(existing),
+          registration: toPublicRegistration(existing, { token: existing.editToken }),
           priceBreakdown: existing.priceBreakdown as PriceBreakdown,
         };
       }
@@ -627,7 +641,7 @@ export class RegistrationsService {
       const created = await this.createRegistration(normalizedInput, priceBreakdown);
       return {
         created: true,
-        registration: this.withToken(created),
+        registration: toPublicRegistration(created, { token: created.editToken }),
         priceBreakdown,
       };
     } catch (err) {
@@ -643,18 +657,13 @@ export class RegistrationsService {
         if (existing) {
           return {
             created: false,
-            registration: this.withToken(existing),
+            registration: toPublicRegistration(existing, { token: existing.editToken }),
             priceBreakdown: existing.priceBreakdown as PriceBreakdown,
           };
         }
       }
       throw err;
     }
-  }
-
-  /** { ...registration, token: editToken } — the public shape. */
-  private withToken(reg: RegistrationWithRelations): Record<string, unknown> {
-    return { ...reg, token: reg.editToken };
   }
 
   async createRegistration(
@@ -842,7 +851,7 @@ export class RegistrationsService {
     return enrichWithAccessSelections(row);
   }
 
-  private async getStrippedById(id: string): Promise<RegistrationWithRelations> {
+  private async getStrippedById(id: string): Promise<AdminRegistration> {
     const enriched = await this.getRegistrationById(id);
     if (!enriched) {
       throw new AppException(
@@ -862,7 +871,7 @@ export class RegistrationsService {
     eventId: string,
     input: AdminCreateRegistrationInput,
     adminUserId: string,
-  ): Promise<RegistrationWithRelations> {
+  ): Promise<AdminRegistration> {
     const {
       email: rawEmail,
       firstName,
@@ -1032,7 +1041,7 @@ export class RegistrationsService {
       translateCreateUniqueViolation(err);
     }
 
-    return this.getEnrichedRow(createdId);
+    return toAdminRegistration(await this.getEnrichedRow(createdId));
   }
 
   // ==========================================================================
@@ -1043,7 +1052,7 @@ export class RegistrationsService {
     id: string,
     input: UpdateRegistrationInput,
     performedBy?: string,
-  ): Promise<RegistrationWithRelations> {
+  ): Promise<AdminRegistration> {
     await withTxn(async (tx) => {
       const registration = await findRegistrationForMutation(id, tx);
       if (!registration) {
@@ -1171,7 +1180,7 @@ export class RegistrationsService {
     id: string,
     input: AdminEditRegistrationInput,
     adminUserId: string,
-  ): Promise<RegistrationWithRelations> {
+  ): Promise<AdminRegistration> {
     await withTxn(async (tx) => {
       const registration = await findRegistrationForMutation(id, tx);
       if (!registration) {
@@ -1746,18 +1755,8 @@ export class RegistrationsService {
       sponsorshipAmount: registration.sponsorshipAmount,
     });
 
-    const { editToken: _t, ...regRest } = registration;
-    const publicEvent = {
-      id: registration.event.id,
-      name: registration.event.name,
-      slug: registration.event.slug,
-      clientId: registration.event.clientId,
-      status: registration.event.status,
-      endDate: registration.event.endDate,
-    };
-
     return {
-      registration: { ...regRest, event: publicEvent, accessSelections },
+      registration: toPublicRegistration({ ...registration, accessSelections }),
       expectedUpdatedAt: registration.updatedAt.toISOString(),
       canEdit,
       canEditPersonalInfo,
@@ -2113,12 +2112,12 @@ export class RegistrationsService {
       await this.emitEvents(tx, pending);
     });
 
-    const registration = await this.getStrippedById(registrationId);
+    const registration = toPublicRegistration(await this.getEnrichedRow(registrationId));
     return { registration, priceBreakdown: newPriceBreakdown };
   }
 
   // ==========================================================================
-  // Confirm payment (admin) — strict transition; response KEEPS editToken
+  // Confirm payment (admin) — strict transition
   // ==========================================================================
 
   async confirmPayment(
@@ -2126,7 +2125,7 @@ export class RegistrationsService {
     input: UpdatePaymentInput,
     performedBy?: string,
     ipAddress?: string,
-  ): Promise<RegistrationWithRelations> {
+  ): Promise<AdminRegistration> {
     await withTxn(async (tx) => {
       const old = await findRegistrationForMutation(id, tx);
       if (!old) {
@@ -2239,8 +2238,53 @@ export class RegistrationsService {
       }
     });
 
-    // Fresh read — editToken intentionally NOT stripped (legacy asymmetry).
-    return this.getEnrichedRow(id);
+    return this.getStrippedById(id);
+  }
+
+  // ==========================================================================
+  // Admin: audited self-edit link (the only admin path to the edit token)
+  // ==========================================================================
+
+  /**
+   * Registrant self-edit link for an admin, built exactly like the emailed
+   * link. Every issuance writes an EDIT_LINK_ISSUED audit entry (actor + IP,
+   * never the link). 404 when the registration has no edit token (admin-created
+   * registrations are never given one).
+   */
+  async issueSelfEditLink(
+    id: string,
+    performedBy: string,
+    ipAddress?: string,
+  ): Promise<{ url: string }> {
+    const source = await getRegistrationEditLinkSource(id);
+    if (!source) {
+      throw new AppException(
+        ErrorCodes.REGISTRATION_NOT_FOUND,
+        "Registration not found",
+        404,
+      );
+    }
+    if (!source.editToken) {
+      throw new AppException(
+        ErrorCodes.NOT_FOUND,
+        "This registration has no self-edit link",
+        404,
+      );
+    }
+    await insertAuditLog({
+      entityType: "Registration",
+      entityId: id,
+      action: "EDIT_LINK_ISSUED",
+      performedBy,
+      ipAddress: ipAddress ?? null,
+    });
+    const { editRegistrationLink } = buildRegistrationSelfLinks({
+      registrationId: source.id,
+      eventSlug: source.eventSlug,
+      editToken: source.editToken,
+      linkBaseUrl: source.linkBaseUrl,
+    });
+    return { url: editRegistrationLink };
   }
 
   // ==========================================================================

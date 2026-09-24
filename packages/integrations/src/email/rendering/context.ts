@@ -16,6 +16,41 @@ import type { EmailContext } from "./types";
 import { escapeHtml } from "@app/shared";
 
 // =============================================================================
+// REGISTRANT SELF-SERVICE LINKS
+// =============================================================================
+
+export interface RegistrationSelfLinks {
+  registrationLink: string;
+  editRegistrationLink: string;
+  paymentLink: string;
+}
+
+/**
+ * Registrant self-service links (view/edit and payment). Base URL: the
+ * registration's stored `linkBaseUrl`, else PUBLIC_FORMS_URL, else a
+ * placeholder. The single builder for emails and the admin edit-link endpoint.
+ */
+export function buildRegistrationSelfLinks(input: {
+  registrationId: string;
+  eventSlug: string;
+  editToken: string | null;
+  linkBaseUrl: string | null;
+}): RegistrationSelfLinks {
+  const baseUrl =
+    input.linkBaseUrl ||
+    process.env.PUBLIC_FORMS_URL ||
+    "https://events.example.com";
+  const slug = input.eventSlug || "";
+  const token = input.editToken || "";
+  const selfLink = `${baseUrl}/${slug}/registration/${input.registrationId}/${token}`;
+  return {
+    registrationLink: selfLink,
+    editRegistrationLink: selfLink,
+    paymentLink: `${baseUrl}/${slug}/payment/${input.registrationId}/${token}`,
+  };
+}
+
+// =============================================================================
 // BUILD EMAIL CONTEXT FROM REGISTRATION (sync, no DB)
 // =============================================================================
 
@@ -25,13 +60,12 @@ export function buildEmailContext(
   const formData =
     (registration.formData as Record<string, unknown>) || {};
 
-  const baseUrl =
-    registration.linkBaseUrl ||
-    process.env.PUBLIC_FORMS_URL ||
-    "https://events.example.com";
-
-  const slug = registration.event.slug || "";
-  const token = registration.editToken || "";
+  const selfLinks = buildRegistrationSelfLinks({
+    registrationId: registration.id,
+    eventSlug: registration.event.slug,
+    editToken: registration.editToken,
+    linkBaseUrl: registration.linkBaseUrl,
+  });
 
   const context: EmailContext = {
     firstName: registration.firstName || String(formData.firstName || ""),
@@ -72,9 +106,7 @@ export function buildEmailContext(
     selectedWorkshops: "",
     selectedDinners: "",
 
-    registrationLink: `${baseUrl}/${slug}/registration/${registration.id}/${token}`,
-    editRegistrationLink: `${baseUrl}/${slug}/registration/${registration.id}/${token}`,
-    paymentLink: `${baseUrl}/${slug}/payment/${registration.id}/${token}`,
+    ...selfLinks,
 
     organizerName: registration.event.client.name,
     organizerEmail: registration.event.client.email || "",
@@ -463,11 +495,12 @@ export function buildLinkedSponsorshipContext(
     sponsorshipAmount: registration.sponsorshipAmount,
   });
 
-  const baseUrl =
-    registration.linkBaseUrl ||
-    process.env.PUBLIC_FORMS_URL ||
-    "https://events.example.com";
-  const token = registration.editToken || "";
+  const selfLinks = buildRegistrationSelfLinks({
+    registrationId: registration.id,
+    eventSlug: event.slug,
+    editToken: registration.editToken,
+    linkBaseUrl: registration.linkBaseUrl,
+  });
 
   const isFullySponsored =
     registration.sponsorshipAmount >= registration.totalAmount;
@@ -506,9 +539,7 @@ export function buildLinkedSponsorshipContext(
     selectedWorkshops: "",
     selectedDinners: "",
 
-    registrationLink: `${baseUrl}/${event.slug}/registration/${registration.id}/${token}`,
-    editRegistrationLink: `${baseUrl}/${event.slug}/registration/${registration.id}/${token}`,
-    paymentLink: `${baseUrl}/${event.slug}/payment/${registration.id}/${token}`,
+    ...selfLinks,
 
     bankName: "",
     bankAccountName: "",

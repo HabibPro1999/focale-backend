@@ -4,6 +4,7 @@ import {
   UpdateRegistrationSchema,
   AdminEditRegistrationSchema,
   SelectPaymentMethodSchema,
+  AuditActionSchema,
 } from "./registrations";
 
 // Ported from legacy registrations.schema.test.ts — paymentProofUrl accepts both
@@ -76,5 +77,11 @@ describe("lab-name refinement (SelectPaymentMethodSchema)", () => {
       AdminEditRegistrationSchema.safeParse({ paymentMethod: "LAB_SPONSORSHIP" })
         .success,
     ).toBe(true);
+  });
+});
+
+describe("AuditActionSchema", () => {
+  it("includes the admin self-edit link issuance action", () => {
+    expect(AuditActionSchema.parse("EDIT_LINK_ISSUED")).toBe("EDIT_LINK_ISSUED");
   });
 });

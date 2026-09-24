@@ -29,10 +29,15 @@ export type DroppedAccessSelectionItem = AccessSelectionItem & {
   reason: string;
 };
 
-export type RegistrationWithRelations = RegistrationWithMeta & {
+/** Minimal shape the enrichment reads. */
+type EnrichableRegistration = { id: string; priceBreakdown: unknown };
+
+export type WithAccessSelections<T> = T & {
   accessSelections: AccessSelectionItem[];
   droppedAccessSelections: DroppedAccessSelectionItem[];
 };
+
+export type RegistrationWithRelations = WithAccessSelections<RegistrationWithMeta>;
 
 // ============================================================================
 // Discount total from applied pricing rules (abs of the negative effects).
@@ -59,7 +64,7 @@ function fallbackAccess(item: { accessId: string; name: unknown }) {
 }
 
 function buildSelections(
-  registration: RegistrationWithMeta,
+  registration: EnrichableRegistration,
   accessMap: Map<string, AccessDisplayDetail>,
 ): { accessSelections: AccessSelectionItem[]; droppedAccessSelections: DroppedAccessSelectionItem[] } {
   const priceBreakdown = registration.priceBreakdown as PriceBreakdown;
@@ -90,10 +95,10 @@ function buildSelections(
  * priceBreakdown JSON, joined against live EventAccess for display metadata.
  * Zero extra queries when the breakdown has neither active nor dropped items.
  */
-export async function enrichWithAccessSelections(
-  registration: RegistrationWithMeta,
+export async function enrichWithAccessSelections<T extends EnrichableRegistration>(
+  registration: T,
   db?: DbExecutor,
-): Promise<RegistrationWithRelations> {
+): Promise<WithAccessSelections<T>> {
   const priceBreakdown = registration.priceBreakdown as PriceBreakdown;
   const dropped = priceBreakdown.droppedAccessItems ?? [];
   const hasItems = (priceBreakdown.accessItems?.length ?? 0) > 0;
@@ -110,10 +115,10 @@ export async function enrichWithAccessSelections(
 }
 
 /** Batched enrichment — a single EventAccess fetch across all registrations. */
-export async function enrichManyWithAccessSelections(
-  registrations: RegistrationWithMeta[],
+export async function enrichManyWithAccessSelections<T extends EnrichableRegistration>(
+  registrations: T[],
   db?: DbExecutor,
-): Promise<RegistrationWithRelations[]> {
+): Promise<WithAccessSelections<T>[]> {
   const ids = new Set<string>();
   for (const reg of registrations) {
     const pb = reg.priceBreakdown as PriceBreakdown;
