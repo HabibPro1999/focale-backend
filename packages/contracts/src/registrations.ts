@@ -338,6 +338,8 @@ export const AuditActionSchema = z.enum([
   "PAYMENT_PROOF_UPLOADED",
   "PAYMENT_METHOD_SELECTED",
   "ACCESS_CAPACITY_REACHED",
+  // An admin fetched the registrant's self-edit link (GET /api/registrations/:id/edit-link).
+  "EDIT_LINK_ISSUED",
 ]);
 
 export const RegistrationAuditLogSchema = z.object({

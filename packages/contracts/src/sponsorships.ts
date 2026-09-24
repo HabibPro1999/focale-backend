@@ -191,8 +191,10 @@ export const SponsorshipEventSlugParamSchema = z.strictObject({
   slug: z.string().min(1).max(100),
 });
 
+// Anonymous sponsor-form search: ≥ 3 characters (after trim) so the endpoint
+// cannot be used to page through registrants with one- or two-letter probes.
 export const RegistrantSearchQuerySchema = z.strictObject({
-  query: z.string().trim().min(2).max(200),
+  query: z.string().trim().min(3).max(200),
   unpaidOnly: z.string().optional(),
 });
 

@@ -25,6 +25,7 @@ const db = vi.hoisted(() => ({
   getRegistrationByIdempotencyKeyRow: vi.fn(),
   getRegistrationClientId: vi.fn(),
   getRegistrationEditToken: vi.fn(),
+  getRegistrationEditLinkSource: vi.fn(),
   listRegistrationRows: vi.fn(),
   getEventForRegistrationCreate: vi.fn(),
   getEventForRegistrationAdmin: vi.fn(),
@@ -215,11 +216,12 @@ describe("RegistrationsService", () => {
 
   // ---- getRegistrationById -------------------------------------------------
   describe("getRegistrationById", () => {
-    it("strips editToken", async () => {
-      db.getRegistrationByIdRow.mockResolvedValue(makeRegRow());
+    it("strips editToken and idempotencyKey", async () => {
+      db.getRegistrationByIdRow.mockResolvedValue(makeRegRow({ idempotencyKey: "idem-key-1" }));
       const result = await service.getRegistrationById("reg1");
       expect(result).not.toBeNull();
       expect("editToken" in (result as object)).toBe(false);
+      expect("idempotencyKey" in (result as object)).toBe(false);
     });
     it("returns null when missing", async () => {
       db.getRegistrationByIdRow.mockResolvedValue(null);
@@ -1107,14 +1109,14 @@ describe("RegistrationsService", () => {
         expect.objectContaining({ paidAmount: 60 }), expect.anything());
     });
 
-    it("PENDING→PAID keeps editToken, audits with IP, queues PAYMENT_CONFIRMED", async () => {
+    it("PENDING→PAID strips editToken, audits with IP, queues PAYMENT_CONFIRMED", async () => {
       const result = await service.confirmPayment(
         "reg1",
         { paymentStatus: "PAID" } as never,
         "admin1",
         "1.2.3.4",
       );
-      expect(result.editToken).toBe("tok-64"); // NOT stripped
+      expect("editToken" in result).toBe(false);
       const audit = db.insertAuditLog.mock.calls[0][0];
       expect(audit.action).toBe("PAYMENT_CONFIRMED");
       expect(audit.ipAddress).toBe("1.2.3.4");
@@ -1530,6 +1532,256 @@ describe("RegistrationsService", () => {
       expect(res.data[0].queuedAt).toBe("2026-01-01T00:00:00.000Z");
       expect(res.data[0].sentAt).toBe("2026-01-01T00:05:00.000Z");
       expect(res.data[0].deliveredAt).toBeNull();
+    });
+  });
+
+  // ---- 0.5: response shapes (no credentials / internal fields) -------------
+  describe("response shapes", () => {
+    // Every internal column populated with a recognisable sentinel.
+    const SENTINELS = [
+      "tok-64",
+      "idem-key-1",
+      "SECRET-NOTE",
+      "staff-user-1",
+      "https://link-base.example",
+      "proofs/secret-proof.pdf",
+      "BANKREF-1",
+    ];
+    const internalRow = (overrides: Record<string, unknown> = {}) =>
+      makeRegRow({
+        referenceNumber: "26-EV-001",
+        networkingOptIn: true,
+        paymentMethod: "BANK_TRANSFER",
+        labName: null,
+        currency: "TND",
+        baseAmount: 100,
+        discountAmount: 0,
+        accessAmount: 0,
+        submittedAt: new Date("2026-01-01T00:00:00.000Z"),
+        createdAt: new Date("2026-01-01T00:00:00.000Z"),
+        lastEditedAt: null,
+        formSchemaVersion: 3,
+        droppedAccessIds: [],
+        idempotencyKey: "idem-key-1",
+        note: "SECRET-NOTE",
+        checkedInAt: new Date("2026-01-02T00:00:00.000Z"),
+        checkedInBy: "staff-user-1",
+        linkBaseUrl: "https://link-base.example",
+        paymentProofUrl: "proofs/secret-proof.pdf",
+        paymentReference: "BANKREF-1",
+        ...overrides,
+      });
+    const PUBLIC_KEYS = [
+      "accessAmount",
+      "accessSelections",
+      "baseAmount",
+      "createdAt",
+      "currency",
+      "discountAmount",
+      "droppedAccessSelections",
+      "email",
+      "event",
+      "eventId",
+      "firstName",
+      "form",
+      "formData",
+      "formId",
+      "hasPaymentProof",
+      "id",
+      "labName",
+      "lastEditedAt",
+      "lastName",
+      "networkingOptIn",
+      "paidAmount",
+      "paidAt",
+      "paymentMethod",
+      "paymentStatus",
+      "phone",
+      "priceBreakdown",
+      "referenceNumber",
+      "sponsorshipAmount",
+      "sponsorshipCode",
+      "submittedAt",
+      "totalAmount",
+      "updatedAt",
+    ];
+    const withoutSentinels = (value: unknown, allow: string[] = []) => {
+      const json = JSON.stringify(value);
+      for (const sentinel of SENTINELS.filter((x) => !allow.includes(x))) {
+        expect(json).not.toContain(sentinel);
+      }
+    };
+
+    it("admin list rows never carry editToken or idempotencyKey", async () => {
+      db.listRegistrationRows.mockResolvedValue({
+        rows: [internalRow()],
+        total: 1,
+        stats: [],
+      });
+      const res = await service.listRegistrations("ev1", { page: 1, limit: 20 } as never);
+      expect(res.data[0]).not.toHaveProperty("editToken");
+      expect(res.data[0]).not.toHaveProperty("idempotencyKey");
+      // Admin-only data stays available to admins.
+      expect(res.data[0]).toMatchObject({ note: "SECRET-NOTE", checkedInBy: "staff-user-1" });
+    });
+
+    it("admin create, update and admin-edit responses never carry editToken", async () => {
+      db.getRegistrationByIdRow.mockResolvedValue(internalRow());
+      db.findRegistrationForMutation.mockResolvedValue(
+        internalRow({ event: { clientId: "c1", status: "OPEN", client: activeClient() } }),
+      );
+      const updated = await service.updateRegistration("reg1", { note: "x" } as never, "admin1");
+      expect(updated).not.toHaveProperty("editToken");
+      expect(updated).not.toHaveProperty("idempotencyKey");
+
+      db.getEventForRegistrationAdmin.mockResolvedValue({
+        clientId: "c1",
+        status: "OPEN",
+        client: activeClient(),
+      });
+      db.findRegistrationFormForEvent.mockResolvedValue({ id: "form1", schemaVersion: 1, schema: null });
+      db.registrationExistsByEmailForm.mockResolvedValue(false);
+      db.getEventForRegistrationCreate.mockResolvedValue({
+        clientId: "c1",
+        status: "OPEN",
+        endDate: FUTURE,
+        maxCapacity: null,
+        registeredCount: 0,
+        client: activeClient(),
+      });
+      db.insertRegistrationRow.mockResolvedValue({ id: "reg1" });
+      const created = await service.createAdminRegistration(
+        "ev1",
+        { email: "x@y.tn", firstName: "X", lastName: "Y", formData: {}, role: "PARTICIPANT", accessSelections: [], sendEmail: false } as never,
+        "admin1",
+      );
+      expect(created).not.toHaveProperty("editToken");
+      expect(created).not.toHaveProperty("idempotencyKey");
+    });
+
+    it("public create (idempotent replay) returns the allowlisted DTO plus the registrant's token", async () => {
+      db.getRegistrationByIdempotencyKeyRow.mockResolvedValue(internalRow());
+      const res = await service.createPublicRegistration("form1", {
+        idempotencyKey: "11111111-1111-1111-1111-111111111111",
+        formData: {},
+        email: "a@b.com",
+        accessSelections: [],
+      } as never);
+      expect(Object.keys(res.registration).sort()).toEqual([...PUBLIC_KEYS, "token"].sort());
+      expect(res.registration.token).toBe("tok-64");
+      expect(res.registration.hasPaymentProof).toBe(true);
+      expect(res.registration.event).toEqual({ id: "ev1", name: "Ev", slug: "ev" });
+      expect(res.registration.form).toEqual({ id: "form1", name: "Reg Form" });
+      withoutSentinels(res.registration, ["tok-64"]);
+      expect(JSON.stringify(res.registration).match(/tok-64/g)).toHaveLength(1);
+    });
+
+    it("public edit returns the DTO without any token", async () => {
+      db.findRegistrationWithFormEvent.mockResolvedValue(
+        internalRow({
+          paymentStatus: "PAID",
+          priceBreakdown: {
+            ...emptyBreakdown(100),
+            accessItems: [{ accessId: "acc1", name: "A", unitPrice: 10, quantity: 1, subtotal: 10 }],
+          },
+          form: { id: "form1", name: "Reg", schema: { steps: [{ fields: [] }] } },
+          event: {
+            id: "ev1",
+            name: "Ev",
+            slug: "ev",
+            clientId: "c1",
+            status: "OPEN",
+            endDate: FUTURE,
+            client: activeClient(),
+          },
+        }),
+      );
+      db.casUpdateRegistrationByUpdatedAt.mockResolvedValue(1);
+      db.getRegistrationByIdRow.mockResolvedValue(internalRow({ paymentProofUrl: null }));
+      const res = await service.editRegistrationPublic("reg1", {
+        expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
+        accessSelections: [{ accessId: "acc1", quantity: 2 }],
+      } as never);
+      expect(Object.keys(res.registration).sort()).toEqual(PUBLIC_KEYS);
+      expect(res.registration.hasPaymentProof).toBe(false);
+      withoutSentinels(res);
+    });
+
+    it("GET-for-edit returns the DTO with the form schema and a minimal event", async () => {
+      db.findRegistrationWithFormEvent.mockResolvedValue(
+        internalRow({
+          form: { id: "form1", name: "Reg", schema: { steps: [] } },
+          event: {
+            id: "ev1",
+            name: "Ev",
+            slug: "ev",
+            clientId: "c1",
+            status: "OPEN",
+            endDate: FUTURE,
+            client: activeClient(),
+          },
+        }),
+      );
+      const res = await service.getRegistrationForEdit("reg1");
+      const keys = PUBLIC_KEYS.filter((k) => k !== "droppedAccessSelections");
+      expect(Object.keys(res.registration).sort()).toEqual(keys);
+      expect(res.registration.form).toEqual({ id: "form1", name: "Reg", schema: { steps: [] } });
+      expect(res.registration.event).toEqual({
+        id: "ev1",
+        name: "Ev",
+        slug: "ev",
+        status: "OPEN",
+        endDate: FUTURE,
+      });
+      expect(res.registration.hasPaymentProof).toBe(true);
+      withoutSentinels(res);
+    });
+  });
+
+  // ---- 0.5: audited self-edit link ------------------------------------------
+  describe("issueSelfEditLink", () => {
+    it("audits the issuance and returns the email self-edit link", async () => {
+      db.getRegistrationEditLinkSource.mockResolvedValue({
+        id: "reg1",
+        editToken: "tok-64",
+        linkBaseUrl: "https://forms.example.org",
+        eventSlug: "summit",
+      });
+      const res = await service.issueSelfEditLink("reg1", "admin1", "1.2.3.4");
+      expect(res).toEqual({ url: "https://forms.example.org/summit/registration/reg1/tok-64" });
+      expect(db.insertAuditLog).toHaveBeenCalledTimes(1);
+      const [entry] = db.insertAuditLog.mock.calls[0];
+      expect(entry).toMatchObject({
+        entityType: "Registration",
+        entityId: "reg1",
+        action: "EDIT_LINK_ISSUED",
+        performedBy: "admin1",
+        ipAddress: "1.2.3.4",
+      });
+      // The credential never lands in the audit trail.
+      expect(JSON.stringify(entry)).not.toContain("tok-64");
+    });
+
+    it("404 when the registration has no edit token (admin-created); nothing audited", async () => {
+      db.getRegistrationEditLinkSource.mockResolvedValue({
+        id: "reg1",
+        editToken: null,
+        linkBaseUrl: null,
+        eventSlug: "summit",
+      });
+      await expect(service.issueSelfEditLink("reg1", "admin1")).rejects.toMatchObject({
+        statusCode: 404,
+      });
+      expect(db.insertAuditLog).not.toHaveBeenCalled();
+    });
+
+    it("404 when the registration is gone", async () => {
+      db.getRegistrationEditLinkSource.mockResolvedValue(null);
+      await expect(service.issueSelfEditLink("nope", "admin1")).rejects.toMatchObject({
+        statusCode: 404,
+        code: ErrorCodes.REGISTRATION_NOT_FOUND,
+      });
+      expect(db.insertAuditLog).not.toHaveBeenCalled();
     });
   });
 });

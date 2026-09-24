@@ -201,7 +201,55 @@ export function buildRegistrationWhere(
   return and(...clauses);
 }
 
-export interface RegistrationListRow extends RegistrationRow {
+/**
+ * Registration columns an admin response may carry: every column except the
+ * self-edit credential (`editToken`) and the public-create `idempotencyKey`,
+ * which replays the create response including that credential. A new schema
+ * column fails typecheck here until it is listed or deliberately omitted.
+ */
+export type AdminRegistrationRow = Omit<RegistrationRow, "editToken" | "idempotencyKey">;
+
+const ADMIN_REGISTRATION_COLUMNS = {
+  id: registrations.id,
+  formId: registrations.formId,
+  eventId: registrations.eventId,
+  formData: registrations.formData,
+  networkingOptIn: registrations.networkingOptIn,
+  submittedAt: registrations.submittedAt,
+  formSchemaVersion: registrations.formSchemaVersion,
+  email: registrations.email,
+  firstName: registrations.firstName,
+  lastName: registrations.lastName,
+  phone: registrations.phone,
+  referenceNumber: registrations.referenceNumber,
+  paymentStatus: registrations.paymentStatus,
+  totalAmount: registrations.totalAmount,
+  paidAmount: registrations.paidAmount,
+  currency: registrations.currency,
+  paymentMethod: registrations.paymentMethod,
+  paymentReference: registrations.paymentReference,
+  paymentProofUrl: registrations.paymentProofUrl,
+  priceBreakdown: registrations.priceBreakdown,
+  baseAmount: registrations.baseAmount,
+  discountAmount: registrations.discountAmount,
+  accessAmount: registrations.accessAmount,
+  sponsorshipCode: registrations.sponsorshipCode,
+  sponsorshipAmount: registrations.sponsorshipAmount,
+  labName: registrations.labName,
+  paidAt: registrations.paidAt,
+  createdAt: registrations.createdAt,
+  updatedAt: registrations.updatedAt,
+  lastEditedAt: registrations.lastEditedAt,
+  linkBaseUrl: registrations.linkBaseUrl,
+  note: registrations.note,
+  role: registrations.role,
+  accessTypeIds: registrations.accessTypeIds,
+  droppedAccessIds: registrations.droppedAccessIds,
+  checkedInAt: registrations.checkedInAt,
+  checkedInBy: registrations.checkedInBy,
+} satisfies Record<keyof AdminRegistrationRow, unknown>;
+
+export interface RegistrationListRow extends AdminRegistrationRow {
   form: RegistrationFormMeta;
   event: RegistrationEventMeta;
 }
@@ -234,7 +282,7 @@ export async function listRegistrationRows(
   const [rows, totalRows, statsRaw] = await Promise.all([
     db
       .select({
-        reg: registrations,
+        reg: ADMIN_REGISTRATION_COLUMNS,
         formId: forms.id,
         formName: forms.name,
         ...EVENT_META,
@@ -773,6 +821,32 @@ export async function listRegistrationEmailLogRows(
     db.select({ value: count() }).from(emailLogs).where(where),
   ]);
   return { rows, total: Number(totalRows[0]?.value ?? 0) };
+}
+
+export interface RegistrationEditLinkSource {
+  id: string;
+  editToken: string | null;
+  linkBaseUrl: string | null;
+  eventSlug: string;
+}
+
+/** Inputs of the registrant self-edit link (admin edit-link endpoint). */
+export async function getRegistrationEditLinkSource(
+  id: string,
+  db: DbExecutor = getDb(),
+): Promise<RegistrationEditLinkSource | null> {
+  const [row] = await db
+    .select({
+      id: registrations.id,
+      editToken: registrations.editToken,
+      linkBaseUrl: registrations.linkBaseUrl,
+      eventSlug: events.slug,
+    })
+    .from(registrations)
+    .innerJoin(events, eq(registrations.eventId, events.id))
+    .where(eq(registrations.id, id))
+    .limit(1);
+  return row ?? null;
 }
 
 export async function getRegistrationEditToken(

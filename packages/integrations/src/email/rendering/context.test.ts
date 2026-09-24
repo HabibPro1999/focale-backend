@@ -18,6 +18,7 @@ import {
   sanitizeForHtml,
   getSampleEmailContext,
   buildBatchEmailContext,
+  buildRegistrationSelfLinks,
 } from "./context";
 
 function reg(overrides: Record<string, unknown> = {}) {
@@ -266,5 +267,35 @@ describe("buildBatchEmailContext", () => {
     expect(ctx.firstName).toBe("Jean");
     expect(ctx.lastName).toBe("Dupont");
     expect(ctx.beneficiaryList).toContain("Dr A");
+  });
+});
+
+describe("buildRegistrationSelfLinks", () => {
+  it("builds the self-edit and payment links from the stored base URL", () => {
+    expect(
+      buildRegistrationSelfLinks({
+        registrationId: "reg-1",
+        eventSlug: "summit",
+        editToken: "tok",
+        linkBaseUrl: "https://forms.example.org",
+      }),
+    ).toEqual({
+      registrationLink: "https://forms.example.org/summit/registration/reg-1/tok",
+      editRegistrationLink: "https://forms.example.org/summit/registration/reg-1/tok",
+      paymentLink: "https://forms.example.org/summit/payment/reg-1/tok",
+    });
+  });
+
+  it("is what the registration email context uses", () => {
+    const ctx = buildEmailContext(reg() as never);
+    const links = buildRegistrationSelfLinks({
+      registrationId: "reg-abcdef12-3456",
+      eventSlug: (reg() as { event: { slug: string } }).event.slug,
+      editToken: "tok",
+      linkBaseUrl: null,
+    });
+    expect(ctx.editRegistrationLink).toBe(links.editRegistrationLink);
+    expect(ctx.registrationLink).toBe(links.registrationLink);
+    expect(ctx.paymentLink).toBe(links.paymentLink);
   });
 });
