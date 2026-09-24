@@ -127,6 +127,24 @@ export function networkingStore(db: DbExecutor = getDb()) {
           gte(r.startsAt, startsAt), lt(r.startsAt, endsAt),
           resourceKey === undefined ? undefined : eq(r.resourceKey, resourceKey)));
     },
+    /**
+     * Failed OTP verification attempts for one (event, normalized email), summed
+     * across challenges created since `dailySince`; `recent` counts only those
+     * created since `recentSince`. The successful attempt (verified_at) is excluded.
+     * Served by networking_challenges_email_created_idx (event_id, email, created_at).
+     */
+    async failedOtpAttempts(eventId: string, email: string, recentSince: Date, dailySince: Date) {
+      const c = n.networkingChallenges;
+      const failed = sql`(${c.attempts} - CASE WHEN ${c.verifiedAt} IS NULL THEN 0 ELSE 1 END)`;
+      const [row] = await db
+        .select({
+          recent: sql<string | number>`COALESCE(SUM(CASE WHEN ${gte(c.createdAt, recentSince)} THEN ${failed} ELSE 0 END), 0)`,
+          daily: sql<string | number>`COALESCE(SUM(${failed}), 0)`,
+        })
+        .from(c)
+        .where(and(eq(c.eventId, eventId), eq(c.email, email), gte(c.createdAt, dailySince)));
+      return { recent: Number(row?.recent ?? 0), daily: Number(row?.daily ?? 0) };
+    },
     async allocationTableUsage(eventId: string) {
       const m = n.networkingMeetings;
       return db.select({ tableId: m.tableId, count: count() }).from(m)

@@ -86,6 +86,8 @@ export const networkingChallenges = pgTable(
     expiresAt: instant().notNull(),
     attempts: integer().notNull().default(0),
     consumedAt: instant(),
+    // Set with consumedAt when the code matched; that attempt is not a failure.
+    verifiedAt: instant(),
     createdAt: instant().notNull().defaultNow(),
   },
   (t) => [

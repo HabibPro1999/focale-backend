@@ -1,6 +1,8 @@
 import {
   BadRequestException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
   Injectable,
   NotFoundException,
   UnauthorizedException,
@@ -25,6 +27,12 @@ import {
 } from "@app/db";
 import { ErrorCodes, NetworkingConfigSchema, networkingProfileComplete, networkingProfileOverrides, type ModuleId, type NetworkingConfig, type NetworkingPersonalAnalytics, type NetworkingRegistrationInfo } from "@app/contracts";
 import { isModuleEnabledForClient } from "../clients/module-gates";
+import {
+  networkingBearerLockout,
+  networkingBearerToken,
+  networkingIdentityCache,
+  networkingVenueKey,
+} from "../../core/networking-identity-cache";
 import { deleteNetworkingPhoto } from "./networking.uploads.service";
 import { networkingHash, sealNetworkingCode, readNetworkingBadge } from "./networking.security";
 import {
@@ -48,6 +56,10 @@ const unavailable = () => new ForbiddenException({ code: ErrorCodes.NETWORKING_F
 const consentRequired = () =>
   new ForbiddenException({ code: ErrorCodes.NETWORKING_CONSENT_REQUIRED, message: "Networking consent is required" });
 const bearer = (authorization?: string) => authorization?.match(/^Bearer ([A-Za-z0-9_-]{40,128})$/)?.[1];
+/** Failed OTP verifications per (event, normalized email), summed across challenges. */
+const OTP_FAILED_ATTEMPT_LIMITS = { recent: { windowMs: 15 * 60_000, max: 10 }, daily: { windowMs: 86_400_000, max: 30 } } as const;
+const otpRateLimited = () =>
+  new HttpException({ code: ErrorCodes.NETWORKING_RATE_LIMITED, message: "Too many verification attempts" }, HttpStatus.TOO_MANY_REQUESTS);
 export type NetworkingDiscoveryQuery = {
   q?: string;
   sector?: string;
@@ -215,21 +227,28 @@ export class NetworkingService {
       profile, optIn: registration.networkingOptIn, formSchema: form?.schema, formData: registration.formData, config,
     }) ? "CONSENT_PENDING" : null;
   }
+  /**
+   * `ip` is the client address the throttler keys venues by; with it, a rejected
+   * bearer counts toward that venue's invalid-bearer lockout.
+   */
   async participant(
     slug: string,
     authorization?: string,
-    options: { allowPendingSecondFactor?: boolean; allowConsentPending?: boolean } = {},
+    options: { allowPendingSecondFactor?: boolean; allowConsentPending?: boolean; ip?: string } = {},
   ): Promise<NetworkingContext> {
     const { event, config } = await this.publicContext(slug);
     const token = bearer(authorization);
-    if (!token) throw expired("Participant session required");
+    if (!token) throw this.rejectBearer(slug, authorization, options.ip, "Participant session required");
     const store = networkingStore();
     const session = await store.one("sessions", {
       eventId: event.id,
       tokenHash: networkingHash(token),
       revokedAt: null,
     });
-    if (!session || session.expiresAt.getTime() <= Date.now()) throw expired();
+    if (!session || session.expiresAt.getTime() <= Date.now())
+      throw this.rejectBearer(slug, authorization, options.ip);
+    // A live session: throttle this bearer as that session from now on.
+    networkingIdentityCache.remember(token, session);
     const profile = await store.one("profiles", {
       id: session.profileId,
       eventId: event.id,
@@ -256,10 +275,20 @@ export class NetworkingService {
       await touchNetworkingProfileActivity(event.id, profile.id);
     return { event, config, profile, session, consentPending: access === "CONSENT_PENDING" };
   }
+  /** Forget a bearer the session lookup refused and count it toward the venue lockout. */
+  private rejectBearer(slug: string, authorization: string | undefined, ip: string | undefined, message?: string) {
+    const raw = networkingBearerToken(authorization);
+    if (raw) {
+      networkingIdentityCache.forgetToken(raw);
+      if (ip !== undefined) networkingBearerLockout.recordRejected(networkingVenueKey(ip, slug), raw);
+    }
+    return expired(message);
+  }
   /** Token-only: logging out never depends on eligibility, consent, MFA or the event window. */
   async logout(slug: string, authorization?: string) {
     const token = bearer(authorization);
     if (!token) throw expired("Participant session required");
+    networkingIdentityCache.forgetToken(token);
     const store = networkingStore();
     const event = await store.one("events", { slug });
     if (event)
@@ -299,7 +328,10 @@ export class NetworkingService {
       profileId: ctx.profile.id,
       revokedAt: null,
     });
-    if (!session || session.expiresAt.getTime() <= Date.now()) throw expired();
+    if (!session || session.expiresAt.getTime() <= Date.now()) {
+      networkingIdentityCache.forgetSession(ctx.session.id);
+      throw expired();
+    }
     const profile = await store.one("profiles", {
       id: ctx.profile.id,
       eventId: event.id,
@@ -396,6 +428,20 @@ export class NetworkingService {
         challenge.attempts >= 5
       )
         return null;
+      // Checked before the code is compared, so a limited address learns nothing about it.
+      // The event lock taken by networkingTransaction serializes concurrent attempts.
+      const now = Date.now();
+      const failed = await store.failedOtpAttempts(
+        event.id,
+        challenge.email,
+        new Date(now - OTP_FAILED_ATTEMPT_LIMITS.recent.windowMs),
+        new Date(now - OTP_FAILED_ATTEMPT_LIMITS.daily.windowMs),
+      );
+      if (
+        failed.recent >= OTP_FAILED_ATTEMPT_LIMITS.recent.max ||
+        failed.daily >= OTP_FAILED_ATTEMPT_LIMITS.daily.max
+      )
+        return "rate-limited" as const;
       const valid =
         challenge.codeHash ===
         networkingHash(`otp:${event.id}:${challenge.email}:${code}`);
@@ -404,7 +450,7 @@ export class NetworkingService {
         { id: challenge.id, eventId: event.id },
         {
           attempts: challenge.attempts + 1,
-          ...(valid ? { consumedAt: new Date() } : {}),
+          ...(valid ? { consumedAt: new Date(), verifiedAt: new Date() } : {}),
         },
       );
       if (!valid) return null;
@@ -421,7 +467,7 @@ export class NetworkingService {
         if (!(await this.access(profile, config, store))) continue;
         const token = randomBytes(48).toString("base64url");
         const expiresAt = new Date(Date.now() + 30 * 86_400_000);
-        await store.insert("sessions", {
+        const session = await store.insert("sessions", {
           eventId: event.id,
           profileId: profile.id,
           tokenHash: networkingHash(token),
@@ -431,6 +477,7 @@ export class NetworkingService {
           profileId: profile.id,
         });
         return {
+          session,
           token,
           expiresAt,
           profile,
@@ -442,10 +489,14 @@ export class NetworkingService {
       }
       return null;
     });
+    if (result === "rate-limited") throw otpRateLimited();
     // Stays 401 (no session issued); NETWORKING_VALIDATION is reserved for HTTP 400.
     if (!result)
       throw new UnauthorizedException({ code: ErrorCodes.UNAUTHORIZED, message: "Invalid or expired verification code" });
-    return result;
+    const { session, ...issued } = result;
+    // Committed and verified: the new bearer is throttled as its session from the first request.
+    networkingIdentityCache.remember(issued.token, session);
+    return issued;
   }
   async target(
     ctx: NetworkingContext,
@@ -607,6 +658,10 @@ export class NetworkingService {
       }
       return { row, previousPhotoUrl };
     });
+    // Declining consent revoked the sessions; a registration re-sync may have revoked them too.
+    const { consent, resetFields } = input;
+    if (consent === false || (Array.isArray(resetFields) && resetFields.length))
+      networkingIdentityCache.forgetProfile(ctx.profile.id);
     // Replaced, removed or reset photos are deleted after commit, and only from the participant's own prefix.
     if (row.photoUrl !== previousPhotoUrl) await deleteNetworkingPhoto(previousPhotoUrl, ctx.event.id, ctx.profile.id);
     return row;
