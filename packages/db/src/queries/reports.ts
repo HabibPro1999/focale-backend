@@ -18,10 +18,8 @@ import {
   desc,
   eq,
   gte,
-  ilike,
   inArray,
   lte,
-  or,
   sql,
   sum,
   type SQL,
@@ -40,6 +38,8 @@ import {
 } from "../schema/sponsorships";
 // Reports filters sponsorships exactly the way the sponsorships module does.
 import { buildSponsorshipWhere } from "./sponsorships";
+// ...and searches registrants the way the registrations list does.
+import { registrationSearchClause } from "./registrations";
 
 type RegistrationRow = typeof registrations.$inferSelect;
 
@@ -70,9 +70,10 @@ function eventDateWhere(eventId: string, dateRange: DateRange, extra?: SQL): SQL
 }
 
 /**
- * Port of the legacy `buildRegistrationWhere` (registrations module). Case-
- * insensitive search OR across email/firstName/lastName/phone/referenceNumber.
- * `role` filter param exists in legacy but reports never passes it — omitted.
+ * Port of the legacy `buildRegistrationWhere` (registrations module). Search
+ * uses the list's `registrationSearchClause`, so an export returns the rows
+ * the list showed. `role` filter param exists in legacy but reports never
+ * passes it — omitted.
  */
 export interface RegistrationExportFilters {
   paymentStatus?: string;
@@ -101,16 +102,7 @@ function buildRegistrationWhere(
     );
   }
   if (filters.search) {
-    const term = `%${filters.search}%`;
-    clauses.push(
-      or(
-        ilike(registrations.email, term),
-        ilike(registrations.firstName, term),
-        ilike(registrations.lastName, term),
-        ilike(registrations.phone, term),
-        ilike(registrations.referenceNumber, term),
-      ),
-    );
+    clauses.push(registrationSearchClause(filters.search));
   }
   // Date range merged with the same only-set-what-was-given semantics.
   if (filters.startDate) clauses.push(gte(registrations.submittedAt, new Date(filters.startDate)));
