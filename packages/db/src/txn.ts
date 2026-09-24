@@ -3,18 +3,15 @@ import { getDb, type Db } from "./client";
 
 type TxnFn<T> = (tx: Parameters<Parameters<Db["transaction"]>[0]>[0]) => Promise<T>;
 
+type PgErrorShape = { code?: unknown; constraint?: unknown; table?: unknown };
+
 /**
  * Walk an error's `cause` chain until a pg error carrying `code` is found.
  * drizzle-orm wraps every driver error in DrizzleQueryError, which exposes the
  * pg error only on `.cause` (no `code` on the wrapper itself).
  */
-function unwrapPgError(
-  err: unknown,
-): { code?: unknown; constraint?: unknown } | null {
-  let current = err as
-    | { code?: unknown; constraint?: unknown; cause?: unknown }
-    | null
-    | undefined;
+function unwrapPgError(err: unknown): PgErrorShape | null {
+  let current = err as (PgErrorShape & { cause?: unknown }) | null | undefined;
   for (let depth = 0; current && depth < 10; depth++) {
     if (typeof current.code === "string") return current;
     current = current.cause as typeof current;
@@ -53,6 +50,25 @@ export function pgUniqueViolation(
   const e = unwrapPgError(err);
   if (e?.code !== "23505") return null;
   return { constraint: typeof e.constraint === "string" ? e.constraint : "" };
+}
+
+/**
+ * Value-free identification of a pg error for logs: SQLSTATE, constraint and
+ * table only. Never the message/detail/query/params, which can embed row
+ * values (e.g. `Key (email)=(…) already exists`). Null when `err` carries no
+ * SQLSTATE in its cause chain.
+ */
+export function pgErrorLogFields(
+  err: unknown,
+): { code: string; constraint: string | null; table: string | null } | null {
+  const code = pgErrorCode(err);
+  if (code === null) return null;
+  const e = unwrapPgError(err);
+  return {
+    code,
+    constraint: typeof e?.constraint === "string" ? e.constraint : null,
+    table: typeof e?.table === "string" ? e.table : null,
+  };
 }
 
 /**

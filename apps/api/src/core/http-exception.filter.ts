@@ -7,7 +7,8 @@ import {
 } from "@nestjs/common";
 import { ThrottlerException } from "@nestjs/throttler";
 import { ErrorCodes, statusToCode, type ApiError } from "@app/contracts";
-import { pgErrorCode, pgUniqueViolation } from "@app/db";
+import { sanitizeErrorForLog } from "@app/shared";
+import { pgErrorCode, pgErrorLogFields, pgUniqueViolation } from "@app/db";
 import type { FastifyReply } from "fastify";
 import { getRequestId } from "./request-context";
 import { logger } from "./logger.service";
@@ -101,19 +102,23 @@ export class HttpExceptionFilter implements ExceptionFilter {
         error = { code: statusToCode(status), message };
       }
     } else if (dbError !== null) {
-      logger.warn({ err: exception }, "Database constraint error");
+      // Value-free: a Drizzle error message embeds the SQL + params and the pg
+      // `detail` echoes row values (`Key (email)=(…)`).
+      logger.warn({ ...pgErrorLogFields(exception) }, "Database constraint error");
       status = dbError.status;
       error = dbError.error;
     } else {
-      logger.error({ err: exception }, "Unhandled exception");
+      // `err` goes through the shared sanitizing serializer (no SQL/params/detail).
+      const dbFields = pgErrorLogFields(exception);
+      logger.error({ ...dbFields, err: exception }, "Unhandled exception");
       const isProd = process.env.NODE_ENV === "production";
       error = {
         code: ErrorCodes.INTERNAL_ERROR,
-        message: isProd
-          ? "Internal server error"
-          : exception instanceof Error
-            ? exception.message
-            : "Internal server error",
+        // Non-production keeps the message for debugging, minus SQL/params.
+        message:
+          isProd || !(exception instanceof Error)
+            ? "Internal server error"
+            : (sanitizeErrorForLog(exception) as Error).message,
       };
     }
 

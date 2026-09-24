@@ -2,7 +2,12 @@
 // (fix #4 consolidation): 5 attempts total, retry ONLY on SQLSTATE 40001/40P01,
 // rethrow the ORIGINAL error. No DB needed — withTxnRetry just wraps a fn.
 import { describe, expect, it, vi } from "vitest";
-import { isSerializationFailure, pgUniqueViolation, withTxnRetry } from "./txn";
+import {
+  isSerializationFailure,
+  pgErrorLogFields,
+  pgUniqueViolation,
+  withTxnRetry,
+} from "./txn";
 
 const err = (code?: string) => Object.assign(new Error("boom"), { code });
 // drizzle-orm wraps every driver error in DrizzleQueryError: the pg error
@@ -53,6 +58,32 @@ describe("pgUniqueViolation", () => {
     });
     const noConstraint = Object.assign(new Error("dup"), { code: "23505" });
     expect(pgUniqueViolation(wrapped(noConstraint))).toEqual({ constraint: "" });
+  });
+});
+
+describe("pgErrorLogFields", () => {
+  it("returns only code, constraint and table from the wrapped pg error", () => {
+    const pg = Object.assign(new Error("dup"), {
+      code: "23505",
+      constraint: "registrations_email_form_id_key",
+      table: "registrations",
+      detail: "Key (email)=(alice@example.com) already exists.",
+    });
+    expect(pgErrorLogFields(wrapped(pg))).toEqual({
+      code: "23505",
+      constraint: "registrations_email_form_id_key",
+      table: "registrations",
+    });
+  });
+
+  it("nulls missing fields and ignores non-SQLSTATE errors", () => {
+    expect(pgErrorLogFields(err("57014"))).toEqual({
+      code: "57014",
+      constraint: null,
+      table: null,
+    });
+    expect(pgErrorLogFields(err("ENOENT"))).toBeNull();
+    expect(pgErrorLogFields(new Error("plain"))).toBeNull();
   });
 });
 
