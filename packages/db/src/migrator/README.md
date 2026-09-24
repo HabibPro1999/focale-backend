@@ -26,8 +26,8 @@ the runner checks lease ownership between statements and fences each commit by
 updating the conditional lease row. If another runner takes an expired lease,
 the current transaction rolls back and the runner stops before the next SQL
 statement. On CockroachDB, a heartbeat renewal that commits while a fenced
-transaction is open fails that fence with a serialization error (40001); the
-transaction is rolled back and run again, up to five times. A retry only
+transaction is open can fail that fence with a serialization error (40001);
+the transaction is rolled back and run again, up to five times. A retry only
 repeats work that was rolled back: a `transaction none` statement commits on
 its own, so only its ledger write is retried. A transactional unit that stays
 open longer than the 30 s heartbeat interval can hit a renewal on every

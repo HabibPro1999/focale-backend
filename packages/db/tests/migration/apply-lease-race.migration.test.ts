@@ -40,17 +40,20 @@ function synthetic(id: string, name: string, source: string): MigrationDefinitio
   };
 }
 
-// Synthetic files skip the directory lint. 9002/9003 insert one row each, so
-// the row counts show which executions of their bodies were committed.
+// Synthetic files skip the directory lint. Their bodies are DML on a table the
+// suite creates first, and each inserted row names the statement, so row
+// counts show which executions were committed. (On CockroachDB, only fenced
+// transactions that had run DDL were not rejected in these runs; a data
+// migration such as 0011 is.)
 const PER_FILE = synthetic("9001", "lease_race_per_file", [
   "-- migrate: transaction per-file",
-  "CREATE TABLE lease_race_runs (mode text NOT NULL);",
+  "INSERT INTO lease_race_runs (mode) VALUES ('per-file');",
 ].join("\n"));
 const PER_STATEMENT = synthetic("9002", "lease_race_per_statement", [
   "-- migrate: transaction per-statement",
-  "INSERT INTO lease_race_runs (mode) VALUES ('per-statement');",
+  "INSERT INTO lease_race_runs (mode) VALUES ('per-statement-0');",
   "--> statement-breakpoint",
-  "CREATE INDEX lease_race_runs_mode_idx ON lease_race_runs (mode);",
+  "INSERT INTO lease_race_runs (mode) VALUES ('per-statement-1');",
 ].join("\n"));
 const NO_TRANSACTION = synthetic("9003", "lease_race_none", [
   "-- migrate: transaction none",
@@ -60,7 +63,7 @@ const DEFERRED = synthetic("9004", "lease_race_deferred", [
   "-- migrate: transaction per-file",
   "-- migrate: deferrable",
   '-- migrate: defer-unless "SELECT false"',
-  "CREATE TABLE lease_race_deferred (id integer);",
+  "INSERT INTO lease_race_runs (mode) VALUES ('deferred');",
 ].join("\n"));
 
 const LEDGER_WRITE = /^\s*INSERT INTO public\.schema_migration(?:s|_steps)\b/;
@@ -128,6 +131,7 @@ describe.runIf(dbTestsEnabled()).each([
     await other.connect();
     const baseline = await loadMigrations(defaultMigrationsDirectory(), database.engine, { through: "0000" });
     migrations = [...baseline, PER_FILE, PER_STATEMENT, NO_TRANSACTION, DEFERRED];
+    await database.client.query("CREATE TABLE lease_race_runs (mode text NOT NULL)");
     if (serializable) await database.client.query("SET default_transaction_isolation = 'serializable'");
     // Under SERIALIZABLE (CockroachDB's default for the migration client) the
     // fence cannot update a lease row that changed after its transaction's
@@ -172,7 +176,8 @@ describe.runIf(dbTestsEnabled()).each([
     expect(racing.ledgerWrites()).toBe(2 * attempts);
     expect(await status(PER_FILE.id)).toBe("applied");
     expect(await listMigrationStepRecords(database.client, PER_FILE.id, "shared")).toHaveLength(1);
-    expect(await runs("per-file")).toBe(0);
+    // The rejected attempt was rolled back with its fence; one insert stuck.
+    expect(await runs("per-file")).toBe(1);
   });
 
   it("runs each per-statement step and the final record again after its fence fails", async () => {
@@ -183,8 +188,8 @@ describe.runIf(dbTestsEnabled()).each([
     expect(racing.ledgerWrites()).toBe(3 * attempts);
     expect(await status(PER_STATEMENT.id)).toBe("applied");
     expect(await listMigrationStepRecords(database.client, PER_STATEMENT.id, "shared")).toHaveLength(2);
-    // The rejected attempt was rolled back with its fence; one insert stuck.
-    expect(await runs("per-statement")).toBe(1);
+    expect(await runs("per-statement-0")).toBe(1);
+    expect(await runs("per-statement-1")).toBe(1);
   });
 
   it("retries only the ledger write after a non-transactional statement, never the committed statement", async () => {
@@ -205,5 +210,6 @@ describe.runIf(dbTestsEnabled()).each([
     expect(racing.executions(DEFERRED.statements[0]!)).toBe(0);
     expect(racing.ledgerWrites()).toBe(attempts);
     expect(await status(DEFERRED.id)).toBe("deferred");
+    expect(await runs("deferred")).toBe(0);
   });
 });
