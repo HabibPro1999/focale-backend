@@ -114,7 +114,8 @@ const HISTORICAL_MULTI_STATEMENT_OBJECTS: Record<
   ],
 };
 
-function catalogObjectKey(probe: CatalogObjectProbe): string {
+/** Identity of a catalog object across migrations (indexes are schema-wide). */
+export function catalogObjectKey(probe: CatalogObjectProbe): string {
   if (probe.kind === "index") return `${probe.kind}:${probe.name}`;
   return `${probe.kind}:${probe.table ?? ""}:${probe.name}`;
 }

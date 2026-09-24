@@ -29,7 +29,7 @@ A missing embedding credential leaves the participant directory usable with an e
 
 ## Database migration
 
-Existing databases must already have the platform baseline through 0011 applied. The unified runner refuses to run against an existing database without its ledger; item 1.4 must adopt the existing history first.
+Existing databases must already have the platform baseline through 0011 applied. The unified runner refuses to run against an existing database without its ledger; adopt the existing history first with `node packages/db/dist/migrator/cli.js adopt` (dry run) and then `adopt --apply` (see `packages/db/src/migrator/README.md`).
 
 PostgreSQL requires the pgvector extension package installed on the server and the `vector` extension installed in the database before migration 0013. The runner checks for it and never installs extensions. CockroachDB uses native `VECTOR`; the runner detects CockroachDB and does not check for a PostgreSQL extension. Verify the deployed CockroachDB version has native vector support before migration.
 
@@ -46,7 +46,7 @@ pnpm --filter @app/db exec node scripts/migrate-networking.mjs
 pnpm --filter @app/db exec node scripts/migrate-networking.mjs --apply
 ```
 
-The shim delegates to the unified runner, which records migration checksums and skips previously applied files; changed applied migrations cause an error. Future changes belong in a new numbered migration. Existing databases without the unified ledger require adoption before `apply` will proceed. Adoption is explicitly deferred to plan item 1.4 in this branch, so do not apply migrations to an existing database until that step is available.
+The shim delegates to the unified runner, which records migration checksums and skips previously applied files; changed applied migrations cause an error. Future changes belong in a new numbered migration. Existing databases without the unified ledger require adoption (`adopt`, then `adopt --apply`) before `apply` will proceed; `adopt` maps the old `networking_migrations` rows, including the CockroachDB 0018 steps, onto the unified ledger.
 
 Vector lookup currently uses exact cosine distance within eligible event profiles. This keeps relevance and tenant filtering explicit. Evaluate both recall and latency before adding engine-specific approximate indexes; an approximate index is not automatically used by a weighted multi-vector ranking query.
 

@@ -1,6 +1,6 @@
 import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
-import { closeDb, configureDb } from "@app/db";
+import { assertSchemaCurrent, closeDb, configureDb } from "@app/db";
 import { createLogger } from "@app/shared";
 import { setEmailStatusChangeListener, emitEmailLogRealtimeEvent } from "@app/integrations";
 import { WorkerModule } from "./worker.module";
@@ -27,6 +27,9 @@ async function bootstrap() {
     log.info("RUN_WORKERS=false; in-process workers disabled");
     return;
   }
+
+  // MIGRATIONS_CHECK: enforce refuses to start on a stale schema; warn logs.
+  await assertSchemaCurrent({ mode: config.MIGRATIONS_CHECK, logger: log });
 
   const ctx = await NestFactory.createApplicationContext(WorkerModule, {
     bufferLogs: true,

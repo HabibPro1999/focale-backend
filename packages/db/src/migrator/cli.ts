@@ -6,6 +6,7 @@ import { Client } from "pg";
 import { lintMigrationDirectory, loadMigrations } from "./migration";
 import { redactCredentials } from "./security";
 import {
+  adoptOptions,
   applyDeferredOption,
   parseArguments,
   requireKnownOptions,
@@ -17,11 +18,13 @@ import {
   applyMigrations,
   databaseEngine,
   listMigrationRecords,
+  migrationAdoptionSupport,
   migrationLedgerExists,
   normalizeAppliedBy,
   setUtcSession,
   verifyMigrations,
 } from "./runner";
+import { formatAdoptionReport, migrationAdoptionWorkflow } from "./adopt";
 
 const MIGRATIONS_DIRECTORY = resolve(__dirname, "../../migrations");
 
@@ -141,6 +144,29 @@ async function apply(args: Arguments, dryRun: boolean): Promise<void> {
   });
 }
 
+async function adopt(writeLedger: boolean): Promise<void> {
+  await withDatabase(async (client, connectionString) => {
+    await setUtcSession(client);
+    const engine = await databaseEngine(client);
+    const migrations = await loadMigrations(MIGRATIONS_DIRECTORY, engine);
+    const appliedBy = normalizeAppliedBy(
+      `adopt:${normalizeAppliedBy(process.env.MIGRATIONS_APPLIED_BY ?? process.env.RENDER_SERVICE_NAME)}`,
+    );
+    const report = await migrationAdoptionWorkflow.run(
+      client,
+      engine,
+      migrations,
+      { writeLedger, appliedBy, leaseConnectionString: connectionString },
+      migrationAdoptionSupport,
+    );
+    for (const line of formatAdoptionReport(report, writeLedger)) {
+      if (line.startsWith("error:")) console.error(line);
+      else console.log(line);
+    }
+    if (report.aborted) process.exitCode = 1;
+  });
+}
+
 async function verify(args: Arguments): Promise<void> {
   const through = throughOption(args);
   await withDatabase(async (client) => {
@@ -198,9 +224,8 @@ async function run(): Promise<void> {
       await apply(args, args.flags.has("--dry-run"));
       return;
     case "adopt":
-      requireNoPositionals(args, "adopt");
-      requireKnownOptions(args, [], []);
-      throw new Error("migrate adopt is intentionally deferred to plan item 1.4; no ledger rows were written");
+      await adopt(adoptOptions(args).writeLedger);
+      return;
     case "verify":
       requireNoPositionals(args, "verify");
       requireKnownOptions(args, ["--schema"], ["--through"]);
