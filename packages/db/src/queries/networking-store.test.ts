@@ -17,6 +17,23 @@ function reader() {
 }
 const compiled = (predicate: any) => new PgDialect({ casing: "snake_case" }).sqlToQuery(predicate);
 
+function mutator() {
+  const updatePredicates: any[] = [];
+  const deletePredicates: any[] = [];
+  const returning = vi.fn().mockResolvedValue([]);
+  const updateWhere = vi.fn((predicate) => {
+    updatePredicates.push(predicate);
+    return { returning };
+  });
+  const deleteWhere = vi.fn(async (predicate) => {
+    deletePredicates.push(predicate);
+  });
+  const update = vi.fn(() => ({ set: vi.fn(() => ({ where: updateWhere })) }));
+  const remove = vi.fn(() => ({ where: deleteWhere }));
+  const store = networkingStore({ update, delete: remove } as unknown as DbExecutor);
+  return { store, update, remove, updatePredicates, deletePredicates };
+}
+
 it("inserts availability in chunks of 500 without returning rows", async () => {
   const values = vi.fn().mockResolvedValue(undefined);
   const insert = vi.fn(() => ({ values }));
@@ -27,6 +44,59 @@ it("inserts availability in chunks of 500 without returning rows", async () => {
   expect(values.mock.calls.flatMap(([rows]) => rows)).toEqual(slots);
   await store.insertAvailability([]);
   expect(insert).toHaveBeenCalledTimes(3);
+});
+
+it("rejects empty networking mutation predicates before touching the database", async () => {
+  const { store, update, remove } = mutator();
+
+  await expect(store.update("profiles", {}, { visible: false } as never)).rejects.toThrow(
+    "Scoped update required",
+  );
+  await expect(store.remove("profiles", {})).rejects.toThrow(
+    "Scoped delete required",
+  );
+  expect(update).not.toHaveBeenCalled();
+  expect(remove).not.toHaveBeenCalled();
+});
+
+it("rejects all-undefined and mixed undefined mutation predicates", async () => {
+  const { store, update, remove } = mutator();
+  const cases = [
+    { id: undefined },
+    { id: "profile-1", eventId: undefined },
+  ];
+
+  for (const where of cases) {
+    await expect(
+      store.update("profiles", where as never, { visible: false } as never),
+    ).rejects.toThrow("undefined predicates");
+    await expect(store.remove("profiles", where as never)).rejects.toThrow(
+      "undefined predicates",
+    );
+  }
+
+  expect(update).not.toHaveBeenCalled();
+  expect(remove).not.toHaveBeenCalled();
+});
+
+it("keeps defined mutation predicates scoped", async () => {
+  const { store, updatePredicates, deletePredicates } = mutator();
+
+  await store.update(
+    "profiles",
+    { id: "profile-1", eventId: "event-1" },
+    { visible: false },
+  );
+  await store.remove("profiles", { id: "profile-1", eventId: "event-1" });
+
+  expect(compiled(updatePredicates[0]).params).toEqual([
+    "profile-1",
+    "event-1",
+  ]);
+  expect(compiled(deletePredicates[0]).params).toEqual([
+    "profile-1",
+    "event-1",
+  ]);
 });
 
 it("scopes analytics by client and normalized email, then aggregates own-profile counts in SQL", async () => {
