@@ -20,6 +20,7 @@ import {
 import type { ListSponsorshipsQuery, SponsorshipStats } from "@app/contracts";
 import { enqueueOutboxEvent } from "../outbox";
 import { getDb, type DbExecutor } from "../client";
+import { ilikeContains } from "../like";
 import {
   sponsorships,
   sponsorshipBatches,
@@ -1318,13 +1319,13 @@ export async function searchRegistrantsForSponsorship(
   query: { query: string; unpaidOnly: boolean; limit: number },
   db: DbExecutor = getDb(),
 ): Promise<RegistrantSearchResult[]> {
-  const term = `%${query.query}%`;
+  // The term is user input (anonymous on the sponsor form): match literally.
   const clauses: (SQL | undefined)[] = [
     eq(registrations.eventId, eventId),
     or(
-      ilike(registrations.email, term),
-      ilike(registrations.firstName, term),
-      ilike(registrations.lastName, term),
+      ilikeContains(registrations.email, query.query),
+      ilikeContains(registrations.firstName, query.query),
+      ilikeContains(registrations.lastName, query.query),
     ),
   ];
   if (query.unpaidOnly) {

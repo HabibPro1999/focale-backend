@@ -2,6 +2,7 @@ import { Body, Controller, Get, HttpCode, Param, Post, Query } from "@nestjs/com
 import { Throttle } from "@nestjs/throttler";
 import { ErrorCodes } from "@app/contracts";
 import { getEventWithPricing, getEventWithPricingBySlug } from "@app/db";
+import { maskEmail } from "@app/shared";
 import { assertClientModuleEnabled } from "../clients/module-gates";
 import { assertEventAcceptsPublicActions } from "../events";
 import { AppException } from "../../core/app-exception";
@@ -100,8 +101,11 @@ export class SponsorshipsPublicController {
       limit: 10,
     });
 
-    // Strip phone + formData from every result.
-    return results.map(({ phone: _phone, formData: _formData, ...safe }) => safe);
+    // Anonymous caller: strip phone + formData and mask the email.
+    return results.map(({ phone: _phone, formData: _formData, ...safe }) => ({
+      ...safe,
+      email: maskEmail(safe.email),
+    }));
   }
 
   // POST /api/public/events/slug/:slug/sponsorships
