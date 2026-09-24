@@ -56,9 +56,11 @@ describe.runIf(dbTestsEnabled())("networking vector index status and runbook", (
 
   it("builds a deferred 0017 through the migration ledger on CockroachDB", async ({ skip }) => {
     if ((await networkingVectorIndexStatus()).engine !== "cockroach") skip();
-    // Recreate the production state: 0017 recorded as deferred, index absent.
+    // Recreate the production state: 0017 recorded as deferred (a deferred
+    // record has no step history), index absent.
     await client.query("DROP INDEX networking_embeddings@networking_embeddings_cosine_idx");
     await client.query("UPDATE schema_migrations SET status = 'deferred' WHERE id = '0017'");
+    await client.query("DELETE FROM schema_migration_steps WHERE migration_id = '0017'");
     clearNetworkingVectorIndexCache();
     const deferred = await networkingVectorIndexReport(client);
     expect(deferred).toMatchObject({ present: false, migration: "deferred" });
