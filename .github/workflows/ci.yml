@@ -124,3 +124,11 @@ jobs:
         run: docker build -f Dockerfile -t focale-backend:ci .
       - name: Check migration plan in image
         run: docker run --rm --entrypoint node focale-backend:ci packages/db/dist/migrator/cli.js plan
+      - name: Check runtime settings in image
+        run: |
+          docker run --rm --entrypoint node focale-backend:ci -e "
+            const fs = require('node:fs');
+            if (process.env.TZ !== 'UTC' || new Date().getTimezoneOffset() !== 0) throw new Error('TZ is not UTC');
+            for (const f of ['start-runtime.mjs', 'healthcheck.mjs']) if (!fs.existsSync(f)) throw new Error(f + ' missing');
+          "
+          docker image inspect --format '{{json .Config.Healthcheck.Test}}' focale-backend:ci | grep -q healthcheck.mjs

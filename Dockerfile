@@ -1,11 +1,11 @@
-# Multi-stage build for the pnpm workspace (branch: nest-rebuild).
-# One image runs api (default), worker, or both with APP=all.
+# Multi-stage build for the pnpm workspace.
+# One image runs api (default), worker, or both with APP=all (start-runtime.mjs).
 #
-#   docker build -f Dockerfile.new -t focale-api .
-#   docker build -f Dockerfile.new --build-arg APP=worker -t focale-worker .
+#   docker build -t focale-api .
+#   docker build --build-arg APP=worker -t focale-worker .
 #
 # Or one image, pick at run time:
-#   docker run focale node apps/worker/dist/main.js
+#   docker run -e APP=worker focale
 
 FROM node:24-alpine AS base
 WORKDIR /app
@@ -32,6 +32,8 @@ RUN pnpm install --frozen-lockfile --prod --ignore-scripts
 # --- Release: lean runtime image ---
 FROM base AS release
 ENV NODE_ENV=production
+# Process-local time is UTC; timestamps never depend on the host zone (plan 6.10).
+ENV TZ=UTC
 ARG APP=api
 ENV APP=${APP}
 # Copy the pruned workspace (dist/, prod node_modules, workspace symlinks).
@@ -40,10 +42,13 @@ COPY --from=build /app ./
 USER node
 EXPOSE 3000
 
-# api parity with the legacy image. Worker images have no HTTP surface — run
-# them with `docker run --health-cmd=none ...` or override at the platform.
-HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-  CMD node -e "fetch('http://localhost:'+(process.env.PORT||3000)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+# APP=api/all: GET /health/live (liveness, no DB). APP=worker: the worker
+# heartbeat file (touched every 15 s, also while RUN_WORKERS=false) is < 60 s old.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD ["node", "healthcheck.mjs"]
 
+# SIGTERM → start-runtime.mjs forwards it; children drain within
+# SHUTDOWN_GRACE_MS (default 25 s) and are SIGKILLed 3 s later.
+STOPSIGNAL SIGTERM
 # Default: api. Build with --build-arg APP=worker for a worker image.
 CMD ["node", "start-runtime.mjs"]

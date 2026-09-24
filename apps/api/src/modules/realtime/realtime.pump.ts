@@ -1,8 +1,8 @@
 import {
   Inject,
   Injectable,
+  type BeforeApplicationShutdown,
   type OnApplicationBootstrap,
-  type OnApplicationShutdown,
 } from "@nestjs/common";
 import { makeWorkerId, startPoller, type Poller } from "@app/shared";
 import {
@@ -25,7 +25,7 @@ import { eventBus } from "./bus";
  */
 @Injectable()
 export class RealtimePumpService
-  implements OnApplicationBootstrap, OnApplicationShutdown
+  implements OnApplicationBootstrap, BeforeApplicationShutdown
 {
   private poller: Poller | null = null;
   readonly workerId = makeWorkerId("realtime");
@@ -66,7 +66,10 @@ export class RealtimePumpService
     });
   }
 
-  async onApplicationShutdown(): Promise<void> {
+  // Before Fastify closes (not onApplicationShutdown, which Nest runs only
+  // after the server has closed): no new events are fanned out to streams
+  // that are being drained.
+  async beforeApplicationShutdown(): Promise<void> {
     await this.poller?.stop();
     this.poller = null;
   }

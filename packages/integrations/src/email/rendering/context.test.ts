@@ -198,6 +198,63 @@ describe("resolveVariables", () => {
   it("passes through templates with no placeholders", () => {
     expect(resolveVariables("plain text", ctx)).toBe("plain text");
   });
+
+  it("escapes certificateList like any other value (not trusted HTML)", () => {
+    const out = resolveVariables("{{certificateList}}", {
+      certificateList: "Q&A <b>Session</b>, Attendance",
+    } as never);
+    expect(out).toBe("Q&amp;A &lt;b&gt;Session&lt;/b&gt;, Attendance");
+  });
+});
+
+describe("resolveVariables — text mode (subjects and plain-text bodies)", () => {
+  const text = { mode: "text" as const };
+  const values = {
+    fullName: "Zoë O'Brien & Fils",
+    eventName: 'Congrès "Cardio" <2026>',
+    certificateList: "Q&A Session, Attendance",
+  } as never;
+
+  it("does not HTML-escape values", () => {
+    expect(resolveVariables("Welcome {{fullName}} to {{eventName}}", values, text)).toBe(
+      'Welcome Zoë O\'Brien & Fils to Congrès "Cardio" <2026>',
+    );
+    expect(resolveVariables("Your certificates: {{certificateList}}", values, text)).toBe(
+      "Your certificates: Q&A Session, Attendance",
+    );
+  });
+
+  it("the default (html) mode still escapes the same values", () => {
+    expect(resolveVariables("{{fullName}}", values)).toBe("Zoë O&#039;Brien &amp; Fils");
+  });
+
+  it("strips CR/LF from values so a subject stays one header line", () => {
+    const out = resolveVariables(
+      "Re: {{form_note}}",
+      { form_note: "line one\r\nBcc: victim@example.com\nline three" } as never,
+      text,
+    );
+    expect(out).toBe("Re: line one Bcc: victim@example.com line three");
+    expect(out).not.toMatch(/[\r\n]/);
+  });
+
+  it("turns server-built HTML values into text", () => {
+    const sponsoredItems =
+      '<div style="padding: 4px 0;">• <b>Inscription de base :</b> 100 TND</div>' +
+      '<div style="padding: 4px 0;">• <b>Atelier &amp; D&#233;jeuner :</b> 50 TND</div>';
+    expect(resolveVariables("Covered: {{sponsoredItems}}", { sponsoredItems } as never, text)).toBe(
+      "Covered: • Inscription de base : 100 TND • Atelier & Déjeuner : 50 TND",
+    );
+    expect(resolveVariables("{{sponsoredItems}}", { sponsoredItems } as never)).toBe(
+      sponsoredItems,
+    );
+  });
+
+  it("keeps the template's own text and newlines, and blanks missing values", () => {
+    expect(
+      resolveVariables("Hello {{firstName}},\n\nSee you.{{missing}}", { firstName: "Ana" } as never, text),
+    ).toBe("Hello Ana,\n\nSee you.");
+  });
 });
 
 describe("sanitizeForHtml", () => {

@@ -272,8 +272,15 @@ export function networkingStore(db: DbExecutor = getDb(), options: NetworkingSto
         .returning();
       return row;
     },
-    /** The pair's connection, created if absent; `created` is true only for the inserting call. */
-    async ensureConnection(eventId: string, profileAId: string, profileBId: string) {
+    /**
+     * The pair's connection, created if absent; `created` is true only for the
+     * inserting call. The pair may come in either order: it is stored smaller
+     * id first, as networking_connections_ordered_pair requires (the same
+     * comparison as networkingPair).
+     */
+    async ensureConnection(eventId: string, firstId: string, secondId: string) {
+      if (firstId === secondId) throw new Error("A connection needs two different profiles");
+      const [profileAId, profileBId] = firstId < secondId ? [firstId, secondId] : [secondId, firstId];
       const c = n.networkingConnections;
       const [created] = await db.insert(c).values({ eventId, profileAId, profileBId })
         .onConflictDoNothing({ target: [c.eventId, c.profileAId, c.profileBId] })

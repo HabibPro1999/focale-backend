@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { validateFormData, sanitizeFormData } from "./form-data-validator";
+import {
+  validateFormData,
+  sanitizeFormData,
+  visibleFormAnswers,
+} from "./form-data-validator";
 
 describe("validateFormData — field.required", () => {
   const schema = {
@@ -506,5 +510,70 @@ describe("validateFormData — enforceRequired: false (admin create/edit)", () =
     expect(validateFormData(schema, { track: "clinical", lab: "stale" }, admin).data).toEqual({
       track: "clinical",
     });
+  });
+});
+
+describe("visibleFormAnswers (public access lookups)", () => {
+  const schema = {
+    steps: [
+      {
+        id: "s1",
+        title: "Step",
+        fields: [
+          { id: "intro", type: "heading" as const },
+          {
+            id: "profession",
+            type: "radio" as const,
+            required: true,
+            options: [{ id: "doctor" }, { id: "nurse" }],
+          },
+          {
+            id: "specialty",
+            type: "text" as const,
+            required: true,
+            conditions: [{ id: "c1", fieldId: "profession", operator: "equals", value: "DOCTOR" }],
+          },
+          { id: "years", type: "number" as const },
+          { id: "topics", type: "checkbox" as const, options: [{ id: "a" }, { id: "b" }] },
+          {
+            id: "broken",
+            type: "text" as const,
+            conditions: [{ id: "c2", fieldId: "profession", operator: "equals", value: 1 }],
+          },
+        ],
+      },
+    ],
+  };
+
+  it("drops hidden answers and unknown keys, and coerces like create", () => {
+    const data = { profession: "nurse", specialty: "cardio", years: "12", topics: "a", injected: 1 };
+    const answers = visibleFormAnswers(schema, data);
+    expect(answers).toEqual({ profession: "nurse", years: 12, topics: ["a"] });
+    // Same data create stores (minus the field create rejects).
+    const stored = validateFormData(schema, { ...data, broken: undefined });
+    expect(stored.errors.map((e) => e.fieldId)).toEqual(["broken"]);
+  });
+
+  it("matches what create stores for any submission create accepts", () => {
+    const data = { profession: "doctor", specialty: " cardio ", topics: [] };
+    const stored = validateFormData(
+      { steps: [{ ...schema.steps[0], fields: schema.steps[0].fields.slice(0, 5) }] },
+      data,
+    );
+    expect(stored.valid).toBe(true);
+    expect(
+      visibleFormAnswers({ steps: [{ ...schema.steps[0], fields: schema.steps[0].fields.slice(0, 5) }] }, data),
+    ).toEqual(stored.data);
+  });
+
+  it("never rejects: missing required or invalid answers are kept as sent", () => {
+    expect(visibleFormAnswers(schema, { profession: "doctor", years: "abc" })).toEqual({
+      profession: "doctor",
+      specialty: undefined,
+      years: "abc",
+      topics: [],
+    });
+    expect(visibleFormAnswers(schema, { profession: "surgeon" })).toMatchObject({ profession: "surgeon" });
+    expect(visibleFormAnswers(null, { profession: "doctor" })).toEqual({});
   });
 });

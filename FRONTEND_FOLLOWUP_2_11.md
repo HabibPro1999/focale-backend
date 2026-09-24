@@ -23,6 +23,14 @@ No new endpoints. One new field-error code.
   and uncoerced answers, so it could differ from the stored price. The quote
   still returns 400 `FORM_VALIDATION_ERROR` when a required visible answer is
   missing.
+- **Access options follow the visible answers.** `POST
+  /api/public/events/:eventId/access/grouped` and `.../access/validate` now
+  evaluate access conditions on the answers the form shows (coerced as create
+  stores them), not on every answer the form app sends. An access conditioned
+  on a hidden field's lingering answer is no longer offered (and create rejects
+  it, as before), and an access matched only after coercion (e.g. a trimmed
+  answer) is now offered. Response shapes are unchanged; required answers are
+  not enforced, so these calls still work mid-form.
 - **New field-error code `invalid_condition`.** When a field's condition has a
   non-string value that the form app's evaluator calls `.toLowerCase()` on (see
   the evaluator bugs below), the form app throws while rendering; the server

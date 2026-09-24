@@ -701,6 +701,48 @@ export function validateFormData(
 }
 
 /**
+ * The answers the public form app shows, for lookups made while the form is
+ * still being filled in (public access grouping/validation). Never rejects:
+ * - hidden fields (field-visibility.ts) and unknown keys are dropped, as are
+ *   fields whose condition the form app cannot evaluate;
+ * - each visible answer is coerced exactly as create/edit store it
+ *   (`validateFormData`), so for any submission create accepts, conditions see
+ *   the same data at lookup and at submit;
+ * - an answer that is blank-but-required or invalid is kept as sent.
+ */
+export function visibleFormAnswers(
+  formSchema: unknown,
+  formData: Record<string, unknown>,
+): Record<string, unknown> {
+  const steps = extractSchemaSteps(formSchema);
+  if (!steps) return {};
+
+  const answers: Record<string, unknown> = {};
+  for (const field of steps.flatMap((step) =>
+    Array.isArray(step.fields) ? step.fields : [],
+  )) {
+    if (field.type === "heading" || field.type === "paragraph") continue;
+    let visible: boolean;
+    try {
+      visible = isFieldVisible(field, formData);
+    } catch {
+      continue; // create rejects this form data (invalid_condition)
+    }
+    if (!visible) continue;
+
+    const value = formData[field.id];
+    const asStored = buildFieldSchema(field, true)?.safeParse(value);
+    if (asStored?.success) {
+      answers[field.id] = asStored.data;
+      continue;
+    }
+    const optional = buildFieldSchema(field, false)?.safeParse(value);
+    answers[field.id] = optional?.success ? optional.data : value;
+  }
+  return answers;
+}
+
+/**
  * Filter formData to only keep keys that are known field IDs in the form schema.
  * Preserves hidden/conditional field values (unlike validationResult.data which strips them).
  * Removes any injected/unknown keys.

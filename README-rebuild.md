@@ -121,27 +121,51 @@ The rebuild splits into **two deployables from one image**:
 - **api** — `node apps/api/dist/main.js`. Serves HTTP and, unless
   `REALTIME_DISABLED=true`, runs the realtime outbox pump.
 - **worker** — `node apps/worker/dist/main.js`. Runs the background job
-  pollers (outbox / email queue / abstract-book).
+  pollers (outbox / email queue / abstract-book / networking).
 
-Build both from `Dockerfile.new` (node:24-alpine, multi-stage, non-root):
+The image CMD is `node start-runtime.mjs`, which supervises the process(es)
+chosen by `APP` (`api` default, `worker`, or `all` for both in one container).
+Build from `Dockerfile` (node:24-alpine, multi-stage, non-root, `TZ=UTC`):
 
 ```bash
-docker build -f Dockerfile.new -t focale-api .                       # default CMD → api
-docker build -f Dockerfile.new --build-arg APP=worker -t focale-worker .
+docker build -t focale-api .                          # APP=api
+docker build --build-arg APP=worker -t focale-worker .
 # or one image, choose at run time:
-docker run focale node apps/worker/dist/main.js
+docker run -e APP=worker focale-api
 ```
 
-The image `HEALTHCHECK` hits `/health` (api parity with the legacy image).
-Worker containers have no HTTP surface — disable the healthcheck there
-(`--health-cmd=none` / platform setting).
+The image `HEALTHCHECK` runs `node healthcheck.mjs`: for `APP=api`/`all` it
+calls `GET /health/live` (liveness, no DB); for `APP=worker` it requires the
+worker heartbeat file (`WORKER_HEARTBEAT_FILE`, touched every 15 s) to be
+younger than 60 s.
+
+### Shutdown (`SHUTDOWN_GRACE_MS`, default 25 s)
+
+`start-runtime.mjs` forwards SIGTERM/SIGINT to its children, logs every child
+exit, and SIGKILLs any child still running `SHUTDOWN_GRACE_MS` + 3 s later.
+
+- **API:** readiness (`/health/ready`) turns 503 `draining` and new SSE
+  connections get 503 `SRV_5003` + `Retry-After`. Before Fastify closes, the
+  realtime pump stops and every open stream (`/api/stream`, the networking
+  participant stream) gets `event: shutdown` with a jittered 1-5 s reconnect
+  (`retry:` and `data.reconnectInMs`) and is closed. Fastify then closes;
+  sockets still open at grace − 5 s are destroyed; the pool closes; the
+  process hard-exits at grace.
+- **Worker:** stops scheduling and gives running jobs until grace − 5 s (jobs
+  cannot be aborted yet; see plan 3.3), closes the Nest context and the pool,
+  hard-exits at grace.
+
+Keep grace + 3 s below the platform's own SIGKILL delay. On Render set
+**`maxShutdownDelaySeconds` = 30** explicitly on the API and worker services
+(the default grace of 25 s escalates at 28 s).
 
 ### `RUN_WORKERS` semantics
 
-Legacy behavior preserved: workers run **unless** `RUN_WORKERS` is the literal
-string `"false"`. In the split topology, set `RUN_WORKERS=false` on the **api**
-process (it should not also poll jobs) and leave it unset/true on the **worker**
-process. The api worker `bootstrap()` early-returns when `runWorkers` is false.
+Workers run **unless** `RUN_WORKERS` is the literal string `"false"`. With
+`"false"`, the worker process does not exit (which would stop or restart its
+container): it idles, keeps writing its heartbeat file marked
+`"disabled": true`, and shuts down cleanly on SIGTERM. With `APP=all` and
+`RUN_WORKERS=false`, `start-runtime.mjs` starts only the API.
 
 ### `REALTIME_DISABLED` caveat
 

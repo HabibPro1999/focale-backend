@@ -32,6 +32,7 @@ import {
   calculateApplicableAmount,
   calculateSettlement,
   getSkip,
+  isFullySettled,
   paginate,
   type PaginatedResult,
 } from "@app/shared";
@@ -116,7 +117,6 @@ import {
 /** Admin-facing registration: no editToken / idempotencyKey (see mappers). */
 export type AdminRegistration = AdminView<RegistrationWithRelations>;
 
-const FULLY_SETTLED_STATUSES = ["PAID", "SPONSORED", "WAIVED"];
 const EDIT_TOKEN_BYTES = 32; // 64 hex characters
 
 function generateEditToken(): string {
@@ -247,8 +247,8 @@ export class RegistrationsService {
     const statusChanged = newStatus !== undefined && newStatus !== oldStatus;
     const becameSettled =
       statusChanged &&
-      FULLY_SETTLED_STATUSES.includes(newStatus as string) &&
-      !FULLY_SETTLED_STATUSES.includes(oldStatus);
+      isFullySettled(newStatus) &&
+      !isFullySettled(oldStatus);
     const events: AppEvent[] = [
       {
         type: becameSettled
@@ -972,7 +972,7 @@ export class RegistrationsService {
                   sponsorshipAmount: 0,
                 }).netAmount
               : 0,
-          paidAt: FULLY_SETTLED_STATUSES.includes(resolvedPaymentStatus)
+          paidAt: isFullySettled(resolvedPaymentStatus)
             ? new Date()
             : null,
           paymentMethod: paymentMethod ?? null,
@@ -1001,7 +1001,7 @@ export class RegistrationsService {
         );
       }
 
-      if (FULLY_SETTLED_STATUSES.includes(resolvedPaymentStatus)) {
+      if (isFullySettled(resolvedPaymentStatus)) {
         await this.syncPaidCount(
           tx,
           { id, eventId, priceBreakdown },
@@ -1070,7 +1070,7 @@ export class RegistrationsService {
         validatePaymentTransition(registration.paymentStatus, input.paymentStatus);
         patch.paymentStatus = input.paymentStatus;
         if (
-          FULLY_SETTLED_STATUSES.includes(input.paymentStatus) &&
+          isFullySettled(input.paymentStatus) &&
           !registration.paidAt
         ) {
           patch.paidAt = new Date();
@@ -1273,7 +1273,7 @@ export class RegistrationsService {
           new: input.paymentStatus,
         };
         if (
-          FULLY_SETTLED_STATUSES.includes(input.paymentStatus) &&
+          isFullySettled(input.paymentStatus) &&
           !registration.paidAt
         ) {
           patch.paidAt = new Date();
@@ -2157,7 +2157,7 @@ export class RegistrationsService {
         paymentReference: input.paymentReference ?? old.paymentReference,
         paymentProofUrl: input.paymentProofUrl ?? old.paymentProofUrl,
       };
-      if (FULLY_SETTLED_STATUSES.includes(newStatus)) {
+      if (isFullySettled(newStatus)) {
         patch.paidAt = new Date();
       }
       await updateRegistrationRow(id, patch, tx);
@@ -2185,8 +2185,8 @@ export class RegistrationsService {
         input.paymentStatus,
       );
 
-      const wasSettled = FULLY_SETTLED_STATUSES.includes(old.paymentStatus);
-      const isSettled = FULLY_SETTLED_STATUSES.includes(input.paymentStatus);
+      const wasSettled = isFullySettled(old.paymentStatus);
+      const isSettled = isFullySettled(input.paymentStatus);
       const clientId = old.event.clientId;
       const pending: AppEvent[] = [
         {

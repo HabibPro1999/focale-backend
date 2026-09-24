@@ -40,7 +40,7 @@ describe("RealtimePumpService", () => {
         expect.objectContaining({ workerId: pump.workerId, scope: "realtime" }),
       );
 
-      await pump.onApplicationShutdown();
+      await pump.beforeApplicationShutdown();
     } finally {
       vi.useRealTimers();
     }
@@ -54,7 +54,7 @@ describe("RealtimePumpService", () => {
       await vi.advanceTimersByTimeAsync(10_000);
 
       expect(mocks.processOutboxEvents).not.toHaveBeenCalled();
-      await pump.onApplicationShutdown();
+      await pump.beforeApplicationShutdown();
     } finally {
       vi.useRealTimers();
     }

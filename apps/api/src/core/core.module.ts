@@ -7,6 +7,7 @@ import { ZodValidationPipe } from "./zod";
 import { EnvelopeInterceptor } from "./envelope.interceptor";
 import { HttpExceptionFilter } from "./http-exception.filter";
 import { NetworkingThrottlerGuard, networkingThrottlers } from "./networking-throttler.guard";
+import { ShutdownCoordinator } from "./shutdown";
 
 @Global()
 @Module({
@@ -25,13 +26,14 @@ import { NetworkingThrottlerGuard, networkingThrottlers } from "./networking-thr
   ],
   providers: [
     LoggerService,
+    ShutdownCoordinator,
     Reflector,
     { provide: APP_PIPE, useClass: ZodValidationPipe },
     { provide: APP_INTERCEPTOR, useClass: EnvelopeInterceptor },
     { provide: APP_FILTER, useClass: HttpExceptionFilter },
     { provide: APP_GUARD, useClass: NetworkingThrottlerGuard },
   ],
-  exports: [LoggerService],
+  exports: [LoggerService, ShutdownCoordinator],
 })
 export class CoreModule {
   /** The config parsed once at boot (getConfig) becomes the CONFIG provider. */

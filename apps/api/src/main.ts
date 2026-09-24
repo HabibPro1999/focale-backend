@@ -8,7 +8,7 @@ import {
 import { buildApp } from "./app.factory";
 import { loadConfig } from "./core/config";
 import { logger } from "./core/logger.service";
-import { createShutdownHandler } from "./core/shutdown";
+import { ShutdownCoordinator, createShutdownHandler } from "./core/shutdown";
 
 process.on("unhandledRejection", (reason) => {
   logger.error({ err: reason }, "Unhandled promise rejection");
@@ -36,9 +36,14 @@ async function bootstrap() {
   const app = await buildApp(config);
 
   // main.ts owns SIGTERM/SIGINT (buildApp does not enable Nest shutdown hooks,
-  // which would close the app a second time): close the app, then the pool.
+  // which would close the app a second time): drain, close the app, then the
+  // pool, all within SHUTDOWN_GRACE_MS (see core/shutdown.ts).
+  const coordinator = app.get(ShutdownCoordinator);
   const shutdown = createShutdownHandler({
+    graceMs: config.lifecycle.shutdownGraceMs,
+    startDraining: () => coordinator.startDraining(),
     closeApp: () => app.close(),
+    forceCloseConnections: () => app.getHttpServer().closeAllConnections(),
     closeDb,
     exit: (code) => process.exit(code),
     logger,

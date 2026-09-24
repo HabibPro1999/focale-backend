@@ -1,5 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { ErrorCodes, buildFieldOptionIndex, findInvalidOptionConditions } from "@app/contracts";
+import { isFullySettled } from "@app/shared";
 import type {
   CreateEventAccessInput,
   UpdateEventAccessInput,
@@ -49,9 +50,6 @@ import {
 import { AppException } from "../../core/app-exception";
 import { groupAccess } from "./access-grouping";
 import { validateSelections } from "./access-validation";
-
-// Statuses that fully occupy paid capacity.
-const FULLY_SETTLED_STATUSES = ["PAID", "SPONSORED", "WAIVED"];
 
 // Structural view of the registration priceBreakdown JSON (recomputed by hand on
 // access drops — see the port spec; we do NOT delegate to the pricing module).
@@ -140,13 +138,13 @@ function paidAccessQuantities(
   coveredAccessIds = new Set<string>(),
 ): Map<string, number> {
   const quantities = new Map<string, number>();
-  const isFullySettled = FULLY_SETTLED_STATUSES.includes(status);
-  if (!isFullySettled && status !== "PARTIAL") {
+  const fullySettled = isFullySettled(status);
+  if (!fullySettled && status !== "PARTIAL") {
     return quantities;
   }
   const breakdown = priceBreakdown as RegistrationBreakdown;
   for (const item of breakdown.accessItems ?? []) {
-    if (isFullySettled || coveredAccessIds.has(item.accessId)) {
+    if (fullySettled || coveredAccessIds.has(item.accessId)) {
       quantities.set(
         item.accessId,
         (quantities.get(item.accessId) ?? 0) + item.quantity,
