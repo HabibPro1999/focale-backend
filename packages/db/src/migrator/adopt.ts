@@ -11,8 +11,8 @@ import type { DatabaseEngine, MigrationDefinition } from "./migration";
 import {
   acquireMigrationLease,
   assertLeaseAlive,
-  commitWithLeaseFence,
   releaseMigrationLease,
+  runLeaseFencedTransaction,
   schemaHasApplicationObjects,
   setUtcSession,
   startLeaseHeartbeat,
@@ -464,6 +464,11 @@ function rowsToWrite(assessments: AdoptionAssessment[]): { migrations: number; s
   };
 }
 
+/**
+ * Write every adoption row in one lease-fenced transaction. A heartbeat renewal
+ * that commits while it is open fails the fence with 40001 on CockroachDB; the
+ * transaction is rolled back and written again (runLeaseFencedTransaction).
+ */
 async function writeAdoptionLedger(
   client: Client,
   assessments: AdoptionAssessment[],
@@ -472,8 +477,7 @@ async function writeAdoptionLedger(
   owner: string,
   heartbeat: LeaseHeartbeat | undefined,
 ): Promise<void> {
-  await client.query("BEGIN");
-  try {
+  await runLeaseFencedTransaction(client, owner, heartbeat, async () => {
     await assertLeaseAlive(client, owner, heartbeat);
     for (const assessment of assessments) {
       for (const stepIndex of assessment.carriedSteps) {
@@ -489,43 +493,7 @@ async function writeAdoptionLedger(
         );
       }
     }
-    await commitWithLeaseFence(client, owner, heartbeat);
-  } catch (error) {
-    await client.query("ROLLBACK").catch(() => undefined);
-    throw error;
-  }
-}
-
-/** Attempts of the ledger-write transaction on a serialization failure (40001). */
-export const ADOPTION_LEDGER_WRITE_ATTEMPTS = 5;
-
-function isSerializationFailure(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "code" in error && error.code === "40001";
-}
-
-/**
- * On CockroachDB, a lease renewal the heartbeat commits while the ledger
- * transaction is open makes the pre-commit fence fail with 40001 (it updates
- * the lease row after another transaction changed it). The transaction was
- * rolled back and the lease is still ours, so write it again.
- */
-async function writeAdoptionLedgerWithRetry(
-  client: Client,
-  assessments: AdoptionAssessment[],
-  options: MigrationAdoptionOptions,
-  support: MigrationAdoptionSupport,
-  owner: string,
-  heartbeat: LeaseHeartbeat | undefined,
-): Promise<void> {
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      await writeAdoptionLedger(client, assessments, options, support, owner, heartbeat);
-      return;
-    } catch (error) {
-      if (!isSerializationFailure(error) || attempt >= ADOPTION_LEDGER_WRITE_ATTEMPTS) throw error;
-      await new Promise((resolve) => setTimeout(resolve, attempt * 100));
-    }
-  }
+  });
 }
 
 export const migrationAdoptionWorkflow: MigrationAdoptionWorkflow = {
@@ -554,7 +522,7 @@ export const migrationAdoptionWorkflow: MigrationAdoptionWorkflow = {
       // Evidence may have changed before the lease was held; decide again.
       const confirmed = await assessAdoption(client, migrations, support, engine);
       if (confirmed.errors.length) return report(confirmed);
-      await writeAdoptionLedgerWithRetry(client, confirmed.assessments, options, support, owner, heartbeat);
+      await writeAdoptionLedger(client, confirmed.assessments, options, support, owner, heartbeat);
       return report(confirmed, rowsToWrite(confirmed.assessments));
     } finally {
       await heartbeat?.close().catch(() => undefined);
