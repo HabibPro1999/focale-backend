@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import { fileTypeFromBuffer } from "file-type";
-import { getStorageProvider, compressFile, extractStorageKeyFromUrl } from "@app/integrations";
+import { getStorageProvider, compressFile, ownedStorageKey } from "@app/integrations";
 import { deleteNetworkingPhoto } from "../networking/networking.uploads.service";
 import {
   ErrorCodes,
@@ -90,6 +90,7 @@ import {
   type ClientModuleState,
 } from "../clients/module-gates";
 import { AppException } from "../../core/app-exception";
+import { logger } from "../../core/logger.service";
 import { validatePaymentTransition } from "./payment-transitions";
 import { getRegistrationTableColumns } from "./table-columns";
 import {
@@ -2240,20 +2241,19 @@ export class RegistrationsService {
 
     // 5. Compress (images → WebP, PDFs passthrough) using the DETECTED type.
     const compressed = await compressFile(file.buffer, detectedType.mime);
-    const key = `${registration.eventId}/${registrationId}/proof.${compressed.ext}`;
+    const ownedPrefix = `${registration.eventId}/${registrationId}`;
+    // A fresh key per upload, so the proof the row points at is never overwritten.
+    const key = `${ownedPrefix}/proof-${randomUUID()}.${compressed.ext}`;
     const storage = getStorageProvider();
-
-    // 6. Best-effort delete of any old proof.
-    if (registration.paymentProofUrl) {
+    const deleteBestEffort = async (objectKey: string, message: string) => {
       try {
-        const oldKey = extractStorageKeyFromUrl(registration.paymentProofUrl);
-        if (oldKey) await storage.delete(oldKey);
-      } catch {
-        // ponytail: legacy logger.warn on old-proof delete failure dropped (non-blocking).
+        await storage.delete(objectKey);
+      } catch (err) {
+        logger.warn({ err, key: objectKey, registrationId }, message);
       }
-    }
+    };
 
-    // 7. Private upload (signed-URL access only).
+    // 6. Private upload (signed-URL access only).
     let fileUrl: string;
     try {
       fileUrl = await storage.uploadPrivate(
@@ -2270,8 +2270,10 @@ export class RegistrationsService {
       );
     }
 
-    // 8. Second txn — re-validate post-upload state, then persist.
-    await withTxn(async (tx) => {
+    // 7. Second txn — re-validate post-upload state, then persist. Resolves with
+    //    the proof URL it replaced. On failure the row keeps the old proof and
+    //    the new object is removed.
+    const replacedUrl = await withTxn(async (tx) => {
       const currentReg = await findRegistrationWithFormEvent(registrationId, tx);
       if (!currentReg) {
         throw new AppException(ErrorCodes.NOT_FOUND, "Registration not found", 404);
@@ -2297,8 +2299,8 @@ export class RegistrationsService {
         entityId: registrationId,
         action: "PAYMENT_PROOF_UPLOADED",
         changes: {
-          paymentStatus: { old: registration.paymentStatus, new: "VERIFYING" },
-          paymentProofUrl: { old: registration.paymentProofUrl, new: fileUrl },
+          paymentStatus: { old: currentReg.paymentStatus, new: "VERIFYING" },
+          paymentProofUrl: { old: currentReg.paymentProofUrl, new: fileUrl },
         },
         performedBy: "PUBLIC",
       });
@@ -2317,7 +2319,18 @@ export class RegistrationsService {
         },
         `email:triggered:PAYMENT_PROOF_SUBMITTED:${registrationId}`,
       );
+      return currentReg.paymentProofUrl ?? null;
+    }).catch(async (err: unknown): Promise<never> => {
+      await deleteBestEffort(key, "Failed to delete unreferenced payment proof");
+      throw err;
     });
+
+    // 8. Best-effort delete of the proof this upload replaced — only when it is
+    //    this registration's object (admin edits can store an arbitrary URL).
+    if (replacedUrl && replacedUrl !== fileUrl) {
+      const oldKey = ownedStorageKey(replacedUrl, ownedPrefix);
+      if (oldKey) await deleteBestEffort(oldKey, "Failed to delete old payment proof");
+    }
 
     return {
       id: randomUUID(),

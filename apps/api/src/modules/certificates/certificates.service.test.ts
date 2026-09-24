@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { ErrorCodes } from "@app/contracts";
 import { AppException } from "../../core/app-exception";
 
@@ -478,22 +478,104 @@ describe("CertificatesService", () => {
       });
     });
 
-    it("deletes the old image before uploading a new one", async () => {
-      mockFileType.mockResolvedValue({ ext: "png", mime: "image/png" } as never);
-      vi.mocked(getCertificateTemplateForUpload).mockResolvedValue({
-        id: templateId,
-        eventId,
-        templateUrl:
-          "https://storage.googleapis.com/bucket/ev1/certificates/old.png",
+    // ---- write ordering: upload new key → update row → delete old ----------
+    describe("write ordering", () => {
+      const oldUrl = `https://storage.googleapis.com/bucket/${eventId}/certificates/${templateId}.png`;
+      const oldKey = `${eventId}/certificates/${templateId}.png`;
+      const uploadedKey = () => mockStorageUpload.mock.calls[0][1] as string;
+
+      beforeEach(() => {
+        mockFileType.mockResolvedValue({ ext: "png", mime: "image/png" } as never);
+        mockStorageUpload.mockImplementation(
+          async (_buffer: Buffer, key: string) => `https://cdn.example.com/${key}`,
+        );
+        vi.mocked(getCertificateTemplateForUpload).mockResolvedValue({
+          id: templateId,
+          eventId,
+          templateUrl: oldUrl,
+        });
+        vi.mocked(updateCertificateTemplateImage).mockResolvedValue(
+          baseMockTemplate() as never,
+        );
       });
-      vi.mocked(updateCertificateTemplateImage).mockResolvedValue(
-        baseMockTemplate() as never,
-      );
 
-      await service.uploadTemplateImage(templateId, file);
+      afterEach(() => {
+        mockStorageUpload.mockReset();
+        mockStorageUpload.mockResolvedValue(
+          "https://storage.example.com/ev1/certificates/tpl1.png",
+        );
+      });
 
-      expect(mockStorageDelete).toHaveBeenCalled();
-      expect(mockStorageUpload).toHaveBeenCalled();
+      it("uploads under a fresh key and deletes the old image only after the row update", async () => {
+        await service.uploadTemplateImage(templateId, file);
+
+        expect(uploadedKey()).toMatch(
+          new RegExp(`^${eventId}/certificates/${templateId}-[0-9a-f-]{36}\\.png$`),
+        );
+        expect(updateCertificateTemplateImage).toHaveBeenCalledWith(templateId, {
+          templateUrl: `https://cdn.example.com/${uploadedKey()}`,
+          templateWidth: 1920,
+          templateHeight: 1080,
+        });
+        expect(mockStorageDelete).toHaveBeenCalledTimes(1);
+        expect(mockStorageDelete).toHaveBeenCalledWith(oldKey);
+        const [uploadOrder] = mockStorageUpload.mock.invocationCallOrder;
+        const [updateOrder] = vi.mocked(updateCertificateTemplateImage).mock
+          .invocationCallOrder;
+        const [deleteOrder] = mockStorageDelete.mock.invocationCallOrder;
+        expect(uploadOrder).toBeLessThan(updateOrder);
+        expect(updateOrder).toBeLessThan(deleteOrder);
+      });
+
+      it("never reuses a key across uploads", async () => {
+        await service.uploadTemplateImage(templateId, file);
+        await service.uploadTemplateImage(templateId, file);
+        const [first, second] = mockStorageUpload.mock.calls.map((c) => c[1]);
+        expect(first).not.toBe(second);
+      });
+
+      it("row update failure keeps the old image, deletes the new object and rethrows", async () => {
+        const dbDown = new Error("db down");
+        vi.mocked(updateCertificateTemplateImage).mockRejectedValueOnce(dbDown);
+
+        await expect(service.uploadTemplateImage(templateId, file)).rejects.toBe(dbDown);
+
+        expect(mockStorageDelete).toHaveBeenCalledTimes(1);
+        expect(mockStorageDelete).toHaveBeenCalledWith(uploadedKey());
+        expect(mockStorageDelete).not.toHaveBeenCalledWith(oldKey);
+      });
+
+      it("template deleted during the upload → 404 and the new object is removed", async () => {
+        vi.mocked(updateCertificateTemplateImage).mockResolvedValueOnce(null as never);
+
+        await expect(service.uploadTemplateImage(templateId, file)).rejects.toMatchObject({
+          statusCode: 404,
+          code: ErrorCodes.NOT_FOUND,
+        });
+
+        expect(mockStorageDelete).toHaveBeenCalledTimes(1);
+        expect(mockStorageDelete).toHaveBeenCalledWith(uploadedKey());
+      });
+
+      it("an old-image delete failure does not fail the request", async () => {
+        mockStorageDelete.mockRejectedValueOnce(new Error("storage down"));
+
+        await expect(service.uploadTemplateImage(templateId, file)).resolves.toBeDefined();
+        expect(mockStorageDelete).toHaveBeenCalledWith(oldKey);
+      });
+
+      it("never deletes a stored image outside this event's certificates prefix", async () => {
+        vi.mocked(getCertificateTemplateForUpload).mockResolvedValue({
+          id: templateId,
+          eventId,
+          templateUrl: "https://storage.googleapis.com/bucket/evt-999/certificates/x.png",
+        });
+
+        await service.uploadTemplateImage(templateId, file);
+
+        expect(updateCertificateTemplateImage).toHaveBeenCalledTimes(1);
+        expect(mockStorageDelete).not.toHaveBeenCalled();
+      });
     });
   });
 

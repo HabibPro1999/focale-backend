@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import { fileTypeFromBuffer } from "file-type";
 import sharp from "sharp";
@@ -31,6 +32,7 @@ import {
 import {
   extractStorageKeyFromUrl,
   getStorageProvider,
+  ownedStorageKey,
   buildEmailContextWithAccess,
   isEligibleForCertificate,
   isAbstractEligibleForCertificate,
@@ -132,6 +134,14 @@ function ineligibilityReason(
 // URLs and downloadTemplateImage must 400 on anything else (legacy parity).
 function extractKeyFromStorage(url: string): string | null {
   return url.includes("://") ? extractStorageKeyFromUrl(url) : null;
+}
+
+async function deleteCertificateImageBestEffort(key: string): Promise<void> {
+  try {
+    await getStorageProvider().delete(key);
+  } catch (err) {
+    logger.warn({ err, key }, "Failed to delete certificate image");
+  }
 }
 
 @Injectable()
@@ -273,8 +283,9 @@ export class CertificatesService {
 
   /**
    * Upload a template image. Sniffs magic bytes (never trusts Content-Type),
-   * deletes any old image (best-effort), stores at ORIGINAL resolution (sharp is
-   * read-only metadata here — print quality), persists url + dimensions.
+   * stores at ORIGINAL resolution under a fresh key (sharp is read-only metadata
+   * here — print quality), persists url + dimensions, then deletes the old image
+   * (best-effort) once the row points at the new one.
    */
   async uploadTemplateImage(
     id: string,
@@ -298,34 +309,55 @@ export class CertificatesService {
       );
     }
 
-    if (template.templateUrl) {
-      const oldKey = extractKeyFromStorage(template.templateUrl);
-      if (oldKey) {
-        try {
-          await getStorageProvider().delete(oldKey);
-        } catch (err) {
-          logger.warn({ err, oldKey }, "Failed to delete old certificate image");
-        }
-      }
-    }
-
     const metadata = await sharp(file.buffer).metadata();
     const width = metadata.width ?? 0;
     const height = metadata.height ?? 0;
 
     const ext = MIME_TO_EXT[detected.mime] ?? "png";
-    const key = `${template.eventId}/certificates/${template.id}.${ext}`;
+    const ownedPrefix = `${template.eventId}/certificates`;
+    // A fresh key per upload: the image the row points at (served with a
+    // year-long public cache) is never overwritten.
+    const key = `${ownedPrefix}/${template.id}-${randomUUID()}.${ext}`;
     const templateUrl = await getStorageProvider().uploadPublic(
       file.buffer,
       key,
       detected.mime,
     );
 
-    return updateCertificateTemplateImage(id, {
-      templateUrl,
-      templateWidth: width,
-      templateHeight: height,
-    });
+    // Typed non-null, but the reload yields null when the row is gone.
+    let updated: CertificateTemplateWithAccess | null;
+    try {
+      updated = await updateCertificateTemplateImage(id, {
+        templateUrl,
+        templateWidth: width,
+        templateHeight: height,
+      });
+    } catch (err) {
+      await deleteCertificateImageBestEffort(key);
+      throw err;
+    }
+    if (!updated) {
+      // The template was deleted while the image was uploading.
+      await deleteCertificateImageBestEffort(key);
+      throw new AppException(
+        ErrorCodes.NOT_FOUND,
+        "Certificate template not found",
+        404,
+      );
+    }
+
+    if (template.templateUrl && template.templateUrl !== templateUrl) {
+      const oldKey = ownedStorageKey(template.templateUrl, ownedPrefix);
+      if (oldKey) {
+        await deleteCertificateImageBestEffort(oldKey);
+      } else {
+        logger.warn(
+          { templateId: id, url: template.templateUrl },
+          "Old certificate image is outside the event's storage prefix; not deleting",
+        );
+      }
+    }
+    return updated;
   }
 
   // ==========================================================================
