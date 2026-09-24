@@ -14,7 +14,8 @@ import {
 import { getSkip } from "@app/shared";
 import type { ListRegistrationsQuery } from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
-import { registrations } from "../schema/registrations";
+import { escapeLike } from "../like";
+import { registrationReferenceCounters, registrations } from "../schema/registrations";
 import { events, eventAccess, accessCheckIns } from "../schema/events-access";
 import { forms } from "../schema/forms";
 import { clients, users } from "../schema/users-clients";
@@ -661,58 +662,112 @@ export async function deleteRegistrationUsages(
 }
 
 // ============================================================================
-// Reference number — raw two-step lock-then-aggregate.
-// CockroachDB forbids FOR UPDATE combined with aggregate functions, so the rows
-// are locked in the subquery and MAX() is applied on the outer query. Preserve.
+// Reference number: "YY-SLUGCODE-NNN", one counter row per prefix (0021).
 // ============================================================================
 
-export async function generateReferenceNumber(
-  eventId: string,
-  db: DbExecutor,
-): Promise<string> {
-  // Lock the event row to serialize concurrent generation for this event:
-  // FOR UPDATE on the registrations scan alone locks nothing when no rows
-  // match yet, so two concurrent creates would both compute sequence 001.
+/**
+ * "YY-SLUGCODE-": the two-digit year of the event's start in UTC (never the
+ * process time zone) and the first 12 characters of the slug, upper-cased,
+ * with "." and "_" turned into "-". Truncated slugs can collide, so events
+ * may share a prefix and therefore a sequence.
+ */
+export function referenceNumberPrefix(event: { slug: string; startDate: Date }): string {
+  const year = event.startDate.getUTCFullYear().toString().slice(-2);
+  const code = event.slug.replace(/[._]/g, "-").toUpperCase().slice(0, 12);
+  return `${year}-${code}-`;
+}
+
+export function formatReferenceNumber(prefix: string, sequence: number): string {
+  return `${prefix}${String(sequence).padStart(3, "0")}`;
+}
+
+/**
+ * Largest numeric suffix stored under `prefix`, 0 when none. A plain read:
+ * it locks nothing. MAX runs over the number (a text MAX breaks at
+ * '...-999' vs '...-1000'), and the digits-only filter keeps rows whose
+ * prefix merely starts with ours ('26-TSHG-' vs '26-TSHG-CONGRES-') out of
+ * the cast. CockroachDB forbids FOR UPDATE with aggregates; none is taken.
+ */
+async function maxReferenceSuffix(db: DbExecutor, prefix: string): Promise<number> {
+  const res = await db.execute(sql`
+    SELECT MAX(CAST(seq AS INT)) AS max_seq FROM (
+      SELECT SUBSTRING("reference_number", CAST(${prefix.length + 1} AS INT)) AS seq
+      FROM "registrations"
+      WHERE "reference_number" LIKE ${`${escapeLike(prefix)}%`} ESCAPE '\\'
+    ) suffixes
+    WHERE seq ~ '^[0-9]+$'
+  `);
+  const rows = (res as unknown as { rows?: Array<{ max_seq: number | string | null }> }).rows ?? [];
+  const value = Number(rows[0]?.max_seq ?? 0);
+  return Number.isSafeInteger(value) && value > 0 ? value : 0;
+}
+
+/**
+ * Next value of the prefix's counter. The UPDATE (or the INSERT's conflict
+ * path) holds the counter row lock until the caller's transaction ends, so
+ * concurrent allocations for one prefix queue on that row and each gets the
+ * next value. The first allocation for a prefix seeds the row from the
+ * largest suffix already stored.
+ */
+async function nextReferenceSequence(db: DbExecutor, prefix: string): Promise<number> {
+  const counters = registrationReferenceCounters;
+  const [bumped] = await db
+    .update(counters)
+    .set({ lastValue: sql`${counters.lastValue} + 1` })
+    .where(eq(counters.prefix, prefix))
+    .returning({ lastValue: counters.lastValue });
+  if (bumped) return bumped.lastValue;
+  const seed = await maxReferenceSuffix(db, prefix);
+  const [created] = await db
+    .insert(counters)
+    .values({ prefix, lastValue: seed + 1 })
+    .onConflictDoUpdate({ target: counters.prefix, set: { lastValue: sql`${counters.lastValue} + 1` } })
+    .returning({ lastValue: counters.lastValue });
+  return created!.lastValue;
+}
+
+async function referenceNumberTaken(db: DbExecutor, referenceNumber: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: registrations.id })
+    .from(registrations)
+    .where(eq(registrations.referenceNumber, referenceNumber))
+    .limit(1);
+  return row !== undefined;
+}
+
+/**
+ * Allocate the next reference number for a registration of `eventId`, inside
+ * the caller's transaction. It takes no event lock and scans nothing FOR
+ * UPDATE: the only lock is the prefix's counter row, held until commit, so an
+ * allocation that rolls back leaves no gap and a registration writer that
+ * locks registration rows cannot deadlock with it.
+ *
+ * If the allocated number is already stored (numbered outside this counter,
+ * e.g. by the legacy app during rollout or by a manual insert), the counter
+ * moves past the largest stored suffix instead of failing on the unique
+ * index again and again.
+ */
+export async function allocateReferenceNumber(eventId: string, db: DbExecutor): Promise<string> {
   const [event] = await db
     .select({ slug: events.slug, startDate: events.startDate })
     .from(events)
     .where(eq(events.id, eventId))
-    .limit(1)
-    .for("update");
+    .limit(1);
   if (!event) return `REG-${Date.now().toString(36).toUpperCase()}`;
 
-  const year = event.startDate.getFullYear().toString().slice(-2);
-  const code = event.slug.replace(/[._]/g, "-").toUpperCase().slice(0, 12);
-  const prefix = `${year}-${code}-`;
-
-  // The unique index on reference_number is GLOBAL and truncated slugs can
-  // collide across events, so the scan is scoped by prefix (not event_id):
-  // events sharing a prefix share one sequence instead of colliding at 001.
-  // MAX runs over the numeric suffix (lexicographic MAX on the text column
-  // breaks once sequences reach 4 digits: '...-999' > '...-1000'); the regex
-  // filter keeps rows whose prefix merely subsumes ours (e.g. '26-TSHG-' vs
-  // '26-TSHG-CONGRES-') out of the cast. Placeholder is cast for CockroachDB.
-  const res = await db.execute(sql`
-    SELECT MAX(CAST(seq AS INT)) as max_seq FROM (
-      SELECT SUBSTRING("reference_number", CAST(${prefix.length + 1} AS INT)) AS seq
-      FROM "registrations"
-      WHERE "reference_number" LIKE ${`${prefix}%`}
-      FOR UPDATE
-    ) locked
-    WHERE seq ~ '^[0-9]+$'
-  `);
-  const rows =
-    (res as unknown as { rows?: Array<{ max_seq: number | string | null }> })
-      .rows ?? [];
-  const maxSeq = rows[0]?.max_seq;
-
-  let nextSeq = 1;
-  if (maxSeq != null) {
-    const lastSeq =
-      typeof maxSeq === "number" ? maxSeq : parseInt(maxSeq, 10);
-    if (!Number.isNaN(lastSeq)) nextSeq = lastSeq + 1;
+  const prefix = referenceNumberPrefix(event);
+  const sequence = await nextReferenceSequence(db, prefix);
+  if (!(await referenceNumberTaken(db, formatReferenceNumber(prefix, sequence)))) {
+    return formatReferenceNumber(prefix, sequence);
   }
-  return `${prefix}${String(nextSeq).padStart(3, "0")}`;
+  const counters = registrationReferenceCounters;
+  const stored = await maxReferenceSuffix(db, prefix);
+  const [moved] = await db
+    .update(counters)
+    .set({ lastValue: sql`GREATEST(${counters.lastValue}, CAST(${stored} AS INT)) + 1` })
+    .where(eq(counters.prefix, prefix))
+    .returning({ lastValue: counters.lastValue });
+  return formatReferenceNumber(prefix, moved!.lastValue);
 }
 
 // ============================================================================
