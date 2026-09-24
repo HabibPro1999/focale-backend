@@ -1,5 +1,5 @@
 import "reflect-metadata";
-import { closeDb, configureDb } from "@app/db";
+import { assertSchemaCurrent, closeDb, configureDb } from "@app/db";
 import { setEmailStatusChangeListener, emitEmailLogRealtimeEvent } from "@app/integrations";
 import { buildApp } from "./app.factory";
 import { loadConfig } from "./core/config";
@@ -19,6 +19,9 @@ async function bootstrap() {
   // listener here and in apps/worker/src/main.ts so no email-log status
   // change is silently dropped depending on which process handled it.
   setEmailStatusChangeListener(emitEmailLogRealtimeEvent);
+
+  // MIGRATIONS_CHECK: enforce refuses to start on a stale schema; warn logs.
+  await assertSchemaCurrent({ mode: config.MIGRATIONS_CHECK, logger });
 
   const app = await buildApp(config);
 

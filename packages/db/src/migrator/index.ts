@@ -4,3 +4,4 @@ export * from "./types";
 export * from "./catalog";
 export * from "./runner";
 export * from "./security";
+export * from "./adopt";

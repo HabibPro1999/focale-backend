@@ -13,6 +13,9 @@ const envSchema = z
     DATABASE_URL: z.string().url(),
     // Database pool/session limits (shared with the db client; see db-settings.ts)
     ...dbEnvShape,
+    // Boot-time schema check (packages/db assertSchemaCurrent). `warn` until the
+    // production ledger is adopted; operators then switch to `enforce`.
+    MIGRATIONS_CHECK: z.enum(["enforce", "warn", "off"]).default("warn"),
     CORS_ORIGIN: z.string().default("http://localhost:8080"),
     // Firebase
     FIREBASE_PROJECT_ID: z.string(),

@@ -50,3 +50,10 @@ export function applyDeferredOption(args: Arguments): string | undefined {
   if (!/^\d{4}$/.test(value)) throw new Error("Use --apply-deferred=NNNN");
   return value;
 }
+
+/** `adopt [--apply]`: a dry run unless --apply; nothing else is accepted. */
+export function adoptOptions(args: Arguments): { writeLedger: boolean } {
+  requireNoPositionals(args, "adopt");
+  requireKnownOptions(args, ["--apply"], []);
+  return { writeLedger: args.flags.has("--apply") };
+}

@@ -55,24 +55,33 @@ export type AdoptionClassification = "applied" | "baseline" | "pending" | "defer
 
 export interface AdoptionAssessment {
   migration: MigrationDefinition;
-  classification: AdoptionClassification;
+  /** Undefined when `abort` is set: the evidence does not allow a decision. */
+  classification?: AdoptionClassification;
+  /** Why this migration's evidence forbids adoption; nothing is written. */
+  abort?: string;
   evidence: Record<string, unknown>;
   catalog: MigrationCatalogReport;
+  /** Legacy step indexes recorded as runner steps so `apply` resumes after them. */
+  carriedSteps: number[];
 }
 
-/**
- * Boundary shared with item 1.4. The CLI dispatches to an AdoptionWorkflow;
- * item 1.2 intentionally does not infer or write baselines for existing DBs.
- */
+/** Options for `migrate adopt` (see adopt.ts); a dry run unless writeLedger. */
 export interface MigrationAdoptionOptions {
   writeLedger: boolean;
   appliedBy: string;
+  /** The CLI passes this so a second connection keeps the lease alive. */
+  leaseConnectionString?: string;
 }
 
 export interface MigrationAdoptionReport {
   engine: DatabaseEngine;
   assessments: AdoptionAssessment[];
   warnings: string[];
+  /** Database-level reasons (plus every per-migration abort) that block adoption. */
+  errors: string[];
+  aborted: boolean;
+  /** Ledger rows written; zero for a dry run or an aborted adoption. */
+  written: { migrations: number; steps: number };
 }
 
 export interface MigrationLedgerAccess {
