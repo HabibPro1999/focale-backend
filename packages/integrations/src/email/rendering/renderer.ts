@@ -1,7 +1,7 @@
 // =============================================================================
 // EMAIL RENDERER
 // Converts Tiptap JSON documents to MJML, then compiles to responsive HTML.
-// Pure and synchronous. Ported verbatim from the legacy email-renderer.service.
+// Rendering is deterministic; MJML 5 compilation is asynchronous.
 // =============================================================================
 
 import mjml2html from "mjml";
@@ -94,23 +94,10 @@ export function renderTemplateToMjml(document: TiptapDocument): string {
  * out template-variable placeholder warnings ({{ }}). Any remaining real error
  * throws a plain Error (surfaces as an unhandled 500 at the call site).
  */
-export function compileMjmlToHtml(mjml: string): MjmlCompilationResult {
-  // mjml@4.18 is synchronous, but the installed @types/mjml-core@5.0.0 types it
-  // as async (a version mismatch we can't fix without touching deps). Correct
-  // the signature to the real sync shape at the call site.
-  const compile = mjml2html as unknown as (
-    input: string,
-    opts: {
-      validationLevel: string;
-      minify: boolean;
-      beautify: boolean;
-      ignoreIncludes: boolean;
-    },
-  ) => {
-    html: string;
-    errors: Array<{ message?: string; formattedMessage?: string }>;
-  };
-  const result = compile(mjml, {
+export async function compileMjmlToHtml(
+  mjml: string,
+): Promise<MjmlCompilationResult> {
+  const result = await mjml2html(mjml, {
     validationLevel: "strict",
     minify: false,
     beautify: false,

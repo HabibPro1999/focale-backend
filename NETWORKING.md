@@ -19,7 +19,7 @@ Run the API and worker as separate processes, using the same database and networ
 | `NETWORKING_VAPID_PRIVATE_KEY` | Browser push private key; keep server-side. |
 | `NETWORKING_VAPID_SUBJECT` | Contact URI for the push sender, such as a `mailto:` URI. |
 | `NETWORKING_EMAIL_SENDERS` | Optional server-owned client-to-verified-sender JSON map; see [delivery setup](packages/integrations/src/networking/README.md). |
-| `TRUST_PROXY` | Number of reverse-proxy hops in front of the API whose `X-Forwarded-For` entries are trusted (usually `1`). **Required in production** (startup fails without it); venue rate limits key on the resulting client IP. Unset outside production = socket address. |
+| `TRUST_PROXY` | Comma-separated IP/CIDR addresses of trusted reverse-proxy peers whose forwarded headers may be used. **Required in production** (startup fails without it); set the literal `false` only when clients connect directly without a proxy. Unset outside production = socket address. Replace old numeric hop-count values with actual proxy peer addresses from deployment network configuration; numeric hops, `true`, wildcard trust, hostnames, and `/0` networks are rejected. |
 | `RESEND_DOMAIN_READ_API_KEY` / `SENDGRID_DOMAIN_READ_API_KEY` | Optional server-side domain-read credentials for custom sender verification. |
 | Existing `EMAIL_PROVIDER` and provider credentials | Networking uses the same configured email delivery provider as the platform. |
 
@@ -170,7 +170,7 @@ Identity quotas are separate per handler:
 - Chat sends: **30/minute per bearer session**.
 - Other authenticated networking requests, including mutations: the configured default limit per bearer session (100/minute in production), unless an endpoint has a tighter override (reports: 5/minute).
 
-Trackers hash session tokens and OTP identities; raw tokens/emails are not stored in throttle keys. Other anonymous requests fall back to IP. The client IP comes from `TRUST_PROXY` hops of `X-Forwarded-For`. Throttled participant responses use HTTP 429 and `NETWORKING_RATE_LIMITED` inside the normal error envelope. **All quotas are in memory and therefore per API replica**: with N replicas behind a load balancer the effective ceilings are up to N times higher. The OTP service also retains its existing persistent request/attempt checks.
+Trackers hash session tokens and OTP identities; raw tokens/emails are not stored in throttle keys. Other anonymous requests fall back to IP. The client IP uses `X-Forwarded-For` only when the immediate socket peer matches an explicitly configured `TRUST_PROXY` IP/CIDR; requests from other peers ignore forwarded headers. Throttled participant responses use HTTP 429 and `NETWORKING_RATE_LIMITED` inside the normal error envelope. **All quotas are in memory and therefore per API replica**: with N replicas behind a load balancer the effective ceilings are up to N times higher. The OTP service also retains its existing persistent request/attempt checks.
 
 ## Participant lists
 
