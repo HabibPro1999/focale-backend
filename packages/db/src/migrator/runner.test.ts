@@ -1,6 +1,11 @@
 import type { Client } from "pg";
 import { describe, expect, it } from "vitest";
-import { applyMigrations, listMigrationStepRecords } from "./runner";
+import {
+  LEASE_FENCED_TRANSACTION_ATTEMPTS,
+  applyMigrations,
+  listMigrationStepRecords,
+  runLeaseFencedTransaction,
+} from "./runner";
 import type { MigrationDefinition } from "./migration";
 
 describe("migration step ledger decoding", () => {
@@ -131,5 +136,111 @@ describe("migration dry-run preconditions", () => {
       skipped: ["0013"],
       unknownPreconditions: [],
     });
+  });
+});
+
+describe("lease-fenced transactions", () => {
+  const serializationFailure = () =>
+    Object.assign(new Error("restart transaction: WriteTooOldError"), { code: "40001" });
+
+  /** A client whose lease fence fails with the given errors, in order, then succeeds. */
+  function fencedClient(fenceFailures: Error[]) {
+    const sent: string[] = [];
+    const client = {
+      async query(sql: string) {
+        sent.push(sql.trim().split(/\s+/).slice(0, 2).join(" "));
+        if (sql.includes("UPDATE public.schema_migration_lock")) {
+          const failure = fenceFailures.shift();
+          if (failure) throw failure;
+          return { rowCount: 1, rows: [] };
+        }
+        return { rowCount: 0, rows: [] };
+      },
+    } as unknown as Client;
+    return { client, sent };
+  }
+
+  it("runs the whole transaction again when the fence fails with 40001", async () => {
+    const { client, sent } = fencedClient([serializationFailure()]);
+    let runs = 0;
+    await runLeaseFencedTransaction(client, "owner", undefined, async () => {
+      runs += 1;
+      await client.query("INSERT INTO work");
+    });
+    expect(runs).toBe(2);
+    expect(sent).toEqual([
+      "BEGIN", "INSERT INTO", "UPDATE public.schema_migration_lock", "ROLLBACK",
+      "BEGIN", "INSERT INTO", "UPDATE public.schema_migration_lock", "COMMIT",
+    ]);
+  });
+
+  it("rolls back and rethrows any other failure without running the work again", async () => {
+    const lost = Object.assign(new Error("lease lost"), { code: "57014" });
+    const { client, sent } = fencedClient([lost]);
+    let runs = 0;
+    await expect(runLeaseFencedTransaction(client, "owner", undefined, async () => {
+      runs += 1;
+    })).rejects.toBe(lost);
+    expect(runs).toBe(1);
+    expect(sent).toEqual(["BEGIN", "UPDATE public.schema_migration_lock", "ROLLBACK"]);
+  });
+
+  it("gives up after the bounded number of attempts", async () => {
+    const failures = Array.from({ length: LEASE_FENCED_TRANSACTION_ATTEMPTS }, serializationFailure);
+    const last = failures.at(-1);
+    const { client, sent } = fencedClient(failures);
+    let runs = 0;
+    await expect(runLeaseFencedTransaction(client, "owner", undefined, async () => {
+      runs += 1;
+    })).rejects.toBe(last);
+    expect(runs).toBe(LEASE_FENCED_TRANSACTION_ATTEMPTS);
+    expect(sent.filter((sql) => sql === "COMMIT")).toEqual([]);
+    expect(sent.filter((sql) => sql === "ROLLBACK")).toHaveLength(LEASE_FENCED_TRANSACTION_ATTEMPTS);
+  });
+
+  it("commits a non-transactional statement once and retries only its ledger writes", async () => {
+    const migration: MigrationDefinition = {
+      id: "9003",
+      name: "9003_backfill.sql",
+      variant: "shared",
+      filePath: "9003_backfill.sql",
+      source: "-- migrate: transaction none\nUPDATE things SET flag = true;",
+      checksum: "c".repeat(64),
+      directives: { transaction: "none", requiresExtensions: [], idempotent: true, deferrable: false, verify: [] },
+      statements: ["UPDATE things SET flag = true;"],
+    };
+    const sent: string[] = [];
+    let owner = "";
+    let pendingWrite: string | undefined;
+    const rejected = new Set<string>();
+    const client = {
+      async query(sql: string, values?: unknown[]) {
+        sent.push(sql);
+        if (sql === "SET TIME ZONE 'UTC'") return { rows: [] };
+        if (sql.includes("SELECT version()")) return { rows: [{ version: "PostgreSQL 16.4" }] };
+        if (sql.includes("table_name NOT IN")) return { rows: [{ present: false }] };
+        if (sql.includes("information_schema.tables")) return { rows: [{ present: true }] };
+        if (sql.includes("SET owner = $1")) owner = String(values?.[0]);
+        if (sql.includes("SELECT owner")) return { rows: [{ owner, active: true }] };
+        if (sql.startsWith("SELECT")) return { rows: [] };
+        if (/^\s*INSERT INTO public\.schema_migration(s|_steps)\b/.test(sql)) pendingWrite = sql;
+        if (sql.includes("SET lease_until") && pendingWrite) {
+          // The first fence of each ledger write is rejected, as after a heartbeat renewal on CockroachDB.
+          const write = pendingWrite;
+          pendingWrite = undefined;
+          if (!rejected.has(write)) {
+            rejected.add(write);
+            throw serializationFailure();
+          }
+        }
+        return { rowCount: 1, rows: [] };
+      },
+    } as unknown as Client;
+
+    await expect(applyMigrations(client, [migration])).resolves.toMatchObject({ applied: ["9003"] });
+    expect(sent.filter((sql) => sql === migration.statements[0])).toHaveLength(1);
+    expect(sent.filter((sql) => sql.includes("INSERT INTO public.schema_migration_steps"))).toHaveLength(2);
+    expect(sent.filter((sql) => sql.includes("INSERT INTO public.schema_migrations"))).toHaveLength(2);
+    expect(sent.filter((sql) => sql === "COMMIT")).toHaveLength(2);
   });
 });

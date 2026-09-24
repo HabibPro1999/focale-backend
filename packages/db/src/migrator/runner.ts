@@ -352,6 +352,40 @@ export async function commitWithLeaseFence(
   await client.query("COMMIT");
 }
 
+/** Runs of one lease-fenced transaction when it fails with a serialization failure (40001). */
+export const LEASE_FENCED_TRANSACTION_ATTEMPTS = 5;
+
+/**
+ * Run `work` in a transaction committed through the lease fence.
+ *
+ * On CockroachDB (SERIALIZABLE), a lease renewal that the heartbeat commits
+ * while this transaction is open makes the fence fail with 40001: it updates
+ * a lease row that changed after the transaction started. The transaction is
+ * rolled back and the lease is still ours, so the whole transaction runs
+ * again, up to LEASE_FENCED_TRANSACTION_ATTEMPTS times. `work` must contain
+ * only what this transaction commits: anything already committed outside it
+ * (a non-transactional statement) is never part of a retry.
+ */
+export async function runLeaseFencedTransaction(
+  client: Client,
+  owner: string,
+  heartbeat: LeaseHeartbeat | undefined,
+  work: () => Promise<void>,
+): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    await client.query("BEGIN");
+    try {
+      await work();
+      await commitWithLeaseFence(client, owner, heartbeat);
+      return;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      if (!isSerializationFailure(error) || attempt >= LEASE_FENCED_TRANSACTION_ATTEMPTS) throw error;
+    }
+    await waitForLeaseRetry(attempt * 100);
+  }
+}
+
 async function unmetRequirement(
   client: Client,
   engine: DatabaseEngine,
@@ -452,15 +486,10 @@ async function writeDeferredMigrationRecordWithLeaseFence(
   owner: string,
   heartbeat?: LeaseHeartbeat,
 ): Promise<void> {
-  await client.query("BEGIN");
-  try {
+  await runLeaseFencedTransaction(client, owner, heartbeat, async () => {
     await assertLeaseAlive(client, owner, heartbeat);
     await writeMigrationRecord(client, migration, "deferred", appliedBy, evidence);
-    await commitWithLeaseFence(client, owner, heartbeat);
-  } catch (error) {
-    await client.query("ROLLBACK").catch(() => undefined);
-    throw error;
-  }
+  });
 }
 
 export async function writeMigrationStepRecord(
@@ -517,17 +546,13 @@ async function executeStatement(
   heartbeat?: LeaseHeartbeat,
 ): Promise<void> {
   await refreshLease(client, owner, heartbeat);
-  await client.query("BEGIN");
-  try {
+  // The statement commits with its step record, so a retry re-runs only work that was rolled back.
+  await runLeaseFencedTransaction(client, owner, heartbeat, async () => {
     await assertLeaseAlive(client, owner, heartbeat);
     await client.query(migration.statements[stepIndex]);
     await assertLeaseAlive(client, owner, heartbeat);
     await writeMigrationStepRecord(client, migration, stepIndex, appliedBy);
-    await commitWithLeaseFence(client, owner, heartbeat);
-  } catch (error) {
-    await client.query("ROLLBACK").catch(() => undefined);
-    throw error;
-  }
+  });
 }
 
 async function executeMigration(
@@ -543,8 +568,8 @@ async function executeMigration(
       throw new Error(`Migration ${migration.id} uses per-file transactions but has incomplete step history`);
     }
     await refreshLease(client, owner, heartbeat);
-    await client.query("BEGIN");
-    try {
+    // The whole file commits in one transaction, so a retry re-runs only work that was rolled back.
+    await runLeaseFencedTransaction(client, owner, heartbeat, async () => {
       for (const [stepIndex, statement] of migration.statements.entries()) {
         await assertLeaseAlive(client, owner, heartbeat);
         await client.query(statement);
@@ -552,11 +577,7 @@ async function executeMigration(
         await writeMigrationStepRecord(client, migration, stepIndex, appliedBy);
       }
       await writeMigrationRecord(client, migration, "applied", appliedBy, {});
-      await commitWithLeaseFence(client, owner, heartbeat);
-    } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined);
-      throw error;
-    }
+    });
     return;
   }
 
@@ -568,25 +589,16 @@ async function executeMigration(
       await refreshLease(client, owner, heartbeat);
       await client.query(statement);
       await assertLeaseAlive(client, owner, heartbeat);
-      await client.query("BEGIN");
-      try {
+      // The statement has committed on its own; only its step record is retried.
+      await runLeaseFencedTransaction(client, owner, heartbeat, async () => {
         await writeMigrationStepRecord(client, migration, stepIndex, appliedBy);
-        await commitWithLeaseFence(client, owner, heartbeat);
-      } catch (error) {
-        await client.query("ROLLBACK").catch(() => undefined);
-        throw error;
-      }
+      });
     }
   }
   await refreshLease(client, owner, heartbeat);
-  await client.query("BEGIN");
-  try {
+  await runLeaseFencedTransaction(client, owner, heartbeat, async () => {
     await writeMigrationRecord(client, migration, "applied", appliedBy, {});
-    await commitWithLeaseFence(client, owner, heartbeat);
-  } catch (error) {
-    await client.query("ROLLBACK").catch(() => undefined);
-    throw error;
-  }
+  });
 }
 
 function assertExistingRecord(record: SchemaMigrationRecord, migration: MigrationDefinition): void {
