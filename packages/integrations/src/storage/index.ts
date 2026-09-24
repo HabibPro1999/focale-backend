@@ -62,6 +62,7 @@ export {
   compressImage,
   type CompressedFile,
 } from "./compress";
+export { IMAGE_INPUT_LIMITS } from "./image-limits";
 export type {
   DownloadedFile,
   StorageProvider,
