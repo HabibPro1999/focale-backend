@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   renderTemplateToMjml,
   compileMjmlToHtml,
@@ -57,21 +60,115 @@ describe("renderTemplateToMjml", () => {
     const mjml = renderTemplateToMjml(doc([{ type: "paragraph" }]));
     expect(mjml).toContain("<mj-text>&nbsp;</mj-text>");
   });
+
+  it("drops hostile style attrs before they can inject an MJML include", () => {
+    const mjml = renderTemplateToMjml(
+      doc([
+        {
+          type: "paragraph",
+          attrs: {
+            textAlign: 'left"><mj-include path="/tmp/canary" />',
+            fontSize: '18px"><mj-include path="/tmp/canary" />',
+            lineHeight: '1.5"><mj-include path="/tmp/canary" />',
+          },
+          content: [{ type: "text", text: "Safe paragraph" }],
+        },
+        {
+          type: "heading",
+          attrs: { textAlign: 'center"><mj-include path="/tmp/canary" />' },
+          content: [{ type: "text", text: "Safe heading" }],
+        },
+        {
+          type: "paragraph",
+          attrs: { textAlign: 'right"><mj-include path="/tmp/canary" />' },
+          content: [{ type: "mention", attrs: { id: "paymentLink" } }],
+        },
+      ]),
+    );
+
+    expect(mjml).not.toContain("<mj-include");
+    expect(mjml).toContain('<mj-text align="left">Safe paragraph</mj-text>');
+    expect(mjml).toContain('<mj-button href="{{paymentLink}}" align="left">');
+  });
+
+  it("normalizes bare font sizes while preserving unitless line height", () => {
+    const mjml = renderTemplateToMjml(
+      doc([
+        {
+          type: "paragraph",
+          attrs: { fontSize: 16, lineHeight: 1.6 },
+          content: [{ type: "text", text: "Readable spacing" }],
+        },
+      ]),
+    );
+
+    expect(mjml).toContain(
+      '<mj-text align="left" font-size="16px" line-height="1.6">Readable spacing</mj-text>',
+    );
+  });
+
+  it("normalizes image widths and falls back when a width is not an MJML pixel value", async () => {
+    const mjml = renderTemplateToMjml(
+      doc([
+        {
+          type: "image",
+          attrs: { src: "https://assets.example/image.png", width: 320 },
+        },
+        {
+          type: "image",
+          attrs: {
+            src: "https://assets.example/injected.png",
+            width: '600"><mj-include path="/tmp/canary" />',
+          },
+        },
+      ]),
+    );
+
+    expect(mjml).toContain('width="320px"');
+    expect(mjml).toContain('width="600px"');
+    expect(mjml).not.toContain("<mj-include");
+    await expect(Promise.resolve(compileMjmlToHtml(mjml))).resolves.toMatchObject({
+      html: expect.stringContaining("<html"),
+    });
+  });
 });
 
 describe("compileMjmlToHtml", () => {
-  it("compiles valid MJML (with unresolved {{vars}}) to HTML without throwing", () => {
+  it("compiles valid MJML (with unresolved {{vars}}) to HTML without throwing", async () => {
     const mjml = renderTemplateToMjml(
       doc([{ type: "paragraph", content: [{ type: "text", text: "Hi" }] }]),
     );
-    const { html } = compileMjmlToHtml(mjml);
+    const { html } = await compileMjmlToHtml(mjml);
     expect(html).toContain("<html");
     expect(html).toContain("Hi");
   });
 
-  it("throws on genuinely invalid MJML (surfaces as an unhandled 500)", () => {
+  it("throws on genuinely invalid MJML (surfaces as an unhandled 500)", async () => {
     // Strict-mode mjml2html throws a ValidationError for unregistered elements.
-    expect(() => compileMjmlToHtml("<mjml><mj-not-real /></mjml>")).toThrow();
+    await expect(
+      Promise.resolve().then(() =>
+        compileMjmlToHtml("<mjml><mj-not-real /></mjml>"),
+      ),
+    ).rejects.toThrow();
+  });
+
+  it("does not read or include a temporary canary file", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "mjml-include-canary-"));
+    const canary = join(directory, "canary.mjml");
+    const marker = "MJML_INCLUDE_CANARY_SHOULD_NOT_APPEAR";
+    writeFileSync(
+      canary,
+      `<mjml><mj-body><mj-section><mj-column><mj-text>${marker}</mj-text></mj-column></mj-section></mj-body></mjml>`,
+    );
+
+    try {
+      const { html } = await compileMjmlToHtml(
+        `<mjml><mj-body><mj-include path="${canary}" /></mj-body></mjml>`,
+      );
+      expect(html).not.toContain(marker);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
 
