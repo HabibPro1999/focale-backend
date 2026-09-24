@@ -59,10 +59,13 @@ describe.runIf(dbTestsEnabled())("networking unique-index writes", () => {
       await store.upsertInterest(eventId, id(0), id(1), "PASS");
       const liked = await store.upsertInterest(eventId, id(0), id(1), "LIKE");
       expect(liked.action).toBe("LIKE");
-      const created = await store.ensureConnection(eventId, id(0), id(1));
-      const again = await store.ensureConnection(eventId, id(0), id(1));
+      // Fixture ids are ordered by name, not by id: pass the pair in both orders.
+      const [low, high] = [id(0), id(1)].sort();
+      const created = await store.ensureConnection(eventId, high, low);
+      const again = await store.ensureConnection(eventId, low, high);
       expect([created.created, again.created]).toEqual([true, false]);
       expect(again.connection.id).toBe(created.connection.id);
+      expect(created.connection).toMatchObject({ profileAId: low, profileBId: high });
       const clientMessageId = randomUUID();
       const message = { eventId, connectionId: created.connection.id, senderId: id(0), body: "Hi", clientMessageId };
       expect(await store.insertMessageOnce(message)).toMatchObject({ clientMessageId });

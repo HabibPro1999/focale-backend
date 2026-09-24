@@ -139,3 +139,23 @@ it("keeps early-completed and no-show meetings holding inventory; only released 
   expect(compiled(predicates[2]).params).toEqual(["event", "PENDING", "CONFIRMED", "PENDING_ALLOCATION", "COMPLETED"]);
   expect(chain.groupBy).toHaveBeenCalledOnce();
 });
+
+it("stores a connection pair smaller id first whatever order it is given, and refuses a self pair", async () => {
+  const inserted: unknown[] = [];
+  const insert = vi.fn(() => ({
+    values: (value: { profileAId: string; profileBId: string }) => {
+      inserted.push(value);
+      return { onConflictDoNothing: () => ({ returning: async () => [{ id: "c", ...value }] }) };
+    },
+  }));
+  const store = networkingStore({ insert } as unknown as DbExecutor);
+  const forward = await store.ensureConnection("e", "p-1", "p-2");
+  const reversed = await store.ensureConnection("e", "p-2", "p-1");
+  expect(inserted).toEqual([
+    { eventId: "e", profileAId: "p-1", profileBId: "p-2" },
+    { eventId: "e", profileAId: "p-1", profileBId: "p-2" },
+  ]);
+  expect(reversed).toEqual(forward);
+  await expect(store.ensureConnection("e", "p-1", "p-1")).rejects.toThrow("two different profiles");
+  expect(insert).toHaveBeenCalledTimes(2);
+});
