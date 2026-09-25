@@ -171,10 +171,11 @@ export {
   type NetworkingVectorIndexStatus,
 } from "./networking-vector-search";
 
+/** Withdrawn profiles are left out: their embeddings and job are deleted at withdrawal. */
 export async function getNetworkingEmbeddingHealth(eventId: string) {
   return rowsOf<{ status: string; count: number }>(
     await getDb().execute(
-      sql`SELECT coalesce(j.status,'PENDING') AS status,count(*)::int AS count FROM networking_profiles p LEFT JOIN networking_embedding_jobs j ON j.profile_id=p.id WHERE p.event_id=${eventId} GROUP BY coalesce(j.status,'PENDING')`,
+      sql`SELECT coalesce(j.status,'PENDING') AS status,count(*)::int AS count FROM networking_profiles p LEFT JOIN networking_embedding_jobs j ON j.profile_id=p.id WHERE p.event_id=${eventId} AND p.withdrawn_at IS NULL GROUP BY coalesce(j.status,'PENDING')`,
     ),
   );
 }

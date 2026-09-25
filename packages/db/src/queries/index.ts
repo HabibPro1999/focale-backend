@@ -28,6 +28,7 @@ export * from "./networking-search";
 export * from "./networking-projection";
 export * from "./networking-keyring";
 export * from "./networking-retention";
+export * from "./networking-erasure";
 export * from "./networking-audit";
 export * from "./storage-delete";
 

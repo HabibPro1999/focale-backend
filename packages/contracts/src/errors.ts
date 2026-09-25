@@ -26,6 +26,8 @@ export const ErrorCodes = {
   NETWORKING_BUSY: "NETWORKING_BUSY",
   /** 409: enabling networking after the event's retention period ended or its purge started. */
   NETWORKING_RETENTION_ENDED: "NETWORKING_RETENTION_ENDED",
+  /** 409: an organizer edit of a participant who withdrew from networking (withdrawal is final). */
+  NETWORKING_PROFILE_WITHDRAWN: "NETWORKING_PROFILE_WITHDRAWN",
 
   // Auth (1xxx)
   UNAUTHORIZED: "AUTH_1001",

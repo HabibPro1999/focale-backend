@@ -82,6 +82,9 @@ export async function syncNetworkingRegistration(
     .select()
     .from(networkingProfiles)
     .where(eq(networkingProfiles.registrationId, registration.id));
+  // Withdrawal is final: a withdrawn profile (or its erased tombstone) is never
+  // re-projected from the registration, and its row keeps a new one from being created.
+  if (existing?.withdrawnAt) return { created: 0, updated: 0 };
   if (!config.enabled && !existing) return { created: 0, updated: 0 };
   const formData = (
     registration.formData && typeof registration.formData === "object"

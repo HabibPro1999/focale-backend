@@ -130,7 +130,8 @@ export class NetworkingExportsService {
         "Choose participants, matches, meetings or sectors and csv, xlsx or pdf",
       );
     const store = networkingStore();
-    const profiles = await store.all("profiles", { eventId: event.id });
+    // Erased profiles are tombstones with nothing to export.
+    const profiles = (await store.all("profiles", { eventId: event.id })).filter((profile) => !profile.erasedAt);
     const byId = new Map(profiles.map((profile) => [profile.id, profile]));
     const name = (id: string) => {
       const p = byId.get(id);

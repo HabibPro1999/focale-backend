@@ -235,7 +235,8 @@ export class NetworkingAdminService {
     },
   ) {
     const store = networkingStore();
-    let rows = await store.all("profiles", { eventId });
+    // Erased profiles are tombstones with nothing to show.
+    let rows = (await store.all("profiles", { eventId })).filter((p) => !p.erasedAt);
     const connections = await store.all("connections", { eventId });
     const meetings = await store.all("meetings", { eventId });
     rows = rows.filter(
@@ -285,6 +286,12 @@ export class NetworkingAdminService {
     const { row, previousPhotoUrl } = await networkingTransaction(eventId, async (store, db) => {
       const profile = await store.one("profiles", { eventId, id });
       if (!profile) throw new NotFoundException("Participant not found");
+      // Withdrawal is final: its scrubbed content (and later the erased tombstone) is never rewritten.
+      if (profile.withdrawnAt)
+        throw new ConflictException({
+          code: "NETWORKING_PROFILE_WITHDRAWN",
+          message: "This participant has withdrawn from networking; the profile cannot be edited",
+        });
       const previousPhotoUrl = profile.photoUrl;
       if (input.standTableId !== undefined) {
         await this.inventory.assertRepresentativeMove(store, eventId, profile, input.standTableId);

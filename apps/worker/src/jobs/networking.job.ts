@@ -6,6 +6,7 @@ import {
 } from "@app/integrations";
 import { createLogger } from "@app/shared";
 import type { Job } from "../job";
+import { loadConfig } from "../core/config";
 const log = createLogger({ name: "worker:networking" });
 @Injectable()
 export class NetworkingDeliveryJob implements Job {
@@ -29,9 +30,12 @@ export class NetworkingMaintenanceJob implements Job {
   readonly intervalMs = 60_000;
   readonly timeoutMs = 5 * 60_000;
   async run() {
-    // Retention purges run in batches within a time budget and resume on the
-    // next run; purged photos are deleted durably by the outbox storage.delete handler.
-    await maintainNetworkingLifecycle();
+    // Retention purges and withdrawal erasures run in batches within a time
+    // budget and resume on the next run; photos are deleted durably by the
+    // outbox storage.delete handler.
+    await maintainNetworkingLifecycle(undefined, {
+      withdrawalEraseDays: loadConfig().NETWORKING_WITHDRAWAL_ERASE_DAYS,
+    });
   }
 }
 @Injectable()

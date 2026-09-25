@@ -14,6 +14,7 @@ import {
   listCertificateTemplates,
 } from "./certificates";
 import type { DbExecutor } from "../client";
+import { emailStatus } from "../schema/enums";
 
 // Fake drizzle handle: every chain step returns itself; the awaited terminal
 // steps (orderBy for list, limit for getOne) resolve the canned rows. No live
@@ -136,13 +137,21 @@ describe("certificate send planning (2.12)", () => {
     return planned;
   }
 
-  it("counts OPENED and CLICKED certificate emails as already sent", () => {
+  it("counts OPENED, CLICKED and UNCERTAIN certificate emails as already sent", () => {
     expect(CERTIFICATE_EMAIL_SENT_STATUSES).toEqual(
-      expect.arrayContaining(["QUEUED", "SENDING", "SENT", "DELIVERED", "OPENED", "CLICKED"]),
+      expect.arrayContaining(["QUEUED", "SENDING", "SENT", "DELIVERED", "OPENED", "CLICKED", "UNCERTAIN"]),
     );
     for (const retryable of ["BOUNCED", "DROPPED", "FAILED", "SKIPPED"]) {
       expect(CERTIFICATE_EMAIL_SENT_STATUSES).not.toContain(retryable);
     }
+  });
+
+  it("classifies every email status as sent or resendable", () => {
+    // A status added to the enum later must be placed on one side on purpose.
+    const resendable = ["BOUNCED", "DROPPED", "FAILED", "SKIPPED"];
+    expect([...CERTIFICATE_EMAIL_SENT_STATUSES, ...resendable].sort()).toEqual(
+      [...emailStatus.enumValues].sort(),
+    );
   });
 
   it("queues only the certificates a registration does not have yet", () => {

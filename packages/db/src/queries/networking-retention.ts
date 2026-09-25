@@ -168,12 +168,61 @@ export async function purgeNetworkingEvent(
  * or purged but holding profiles again. In-progress purges resume first.
  */
 export async function networkingEventsToPurge(eventId?: string): Promise<string[]> {
-  return rowsOf<{ event_id: string }>(await getDb().execute(sql`
-    SELECT c.event_id FROM networking_configs c JOIN events e ON e.id=c.event_id
+  return (await networkingPurgeCandidates(eventId)).map((row) => row.eventId);
+}
+
+export interface NetworkingPurgeCandidate {
+  eventId: string;
+  endDate: Date;
+  retentionDays: number;
+  purgeStartedAt: Date | null;
+  purgedAt: Date | null;
+  profiles: number;
+}
+/** `networkingEventsToPurge` with what an operator needs to review before a manual purge. */
+export async function networkingPurgeCandidates(eventId?: string): Promise<NetworkingPurgeCandidate[]> {
+  const date = (value: Date | string | null) => (value === null ? null : new Date(value));
+  return rowsOf<{
+    event_id: string; end_date: Date | string; retention_days: number;
+    purge_started_at: Date | string | null; purged_at: Date | string | null; profiles: number;
+  }>(await getDb().execute(sql`
+    SELECT c.event_id, e.end_date, COALESCE((c.config->>'retentionDays')::int,90) AS retention_days,
+      c.purge_started_at, c.purged_at,
+      (SELECT count(*)::int4 FROM networking_profiles p WHERE p.event_id=c.event_id) AS profiles
+    FROM networking_configs c JOIN events e ON e.id=c.event_id
     WHERE e.end_date+COALESCE((c.config->>'retentionDays')::int,90)*interval '1 day'<now()
       AND (c.purged_at IS NULL OR EXISTS (SELECT 1 FROM networking_profiles p WHERE p.event_id=c.event_id))
       ${eventId ? sql`AND c.event_id=${eventId}` : sql``}
-    ORDER BY c.purge_started_at IS NULL, c.purge_started_at, c.event_id`)).map((row) => row.event_id);
+    ORDER BY c.purge_started_at IS NULL, c.purge_started_at, c.event_id`)).map((row) => ({
+    eventId: row.event_id,
+    endDate: new Date(row.end_date),
+    retentionDays: Number(row.retention_days),
+    purgeStartedAt: date(row.purge_started_at),
+    purgedAt: date(row.purged_at),
+    profiles: Number(row.profiles),
+  }));
+}
+
+/** Networking email logs whose event no longer exists (event deletion does not cascade to them). */
+const orphanEmailLogs = sql`(${logs.contextSnapshot} ->> 'dispatchOwner') = 'networking'
+  AND NOT EXISTS (SELECT 1 FROM events e WHERE e.id = (${logs.contextSnapshot} ->> 'eventId'))`;
+export async function countOrphanNetworkingEmailLogs(): Promise<number> {
+  return Number(rowsOf<{ n: number }>(await getDb().execute(sql`SELECT count(*)::int4 AS n FROM ${logs} WHERE ${orphanEmailLogs}`))[0]?.n ?? 0);
+}
+/** Operator script (purge-leftovers): deletes them in batches, reporting each batch. */
+export async function purgeOrphanNetworkingEmailLogs(options: {
+  batchSize?: number;
+  onBatch?: (deleted: number) => void;
+} = {}): Promise<number> {
+  const batchSize = options.batchSize ?? NETWORKING_PURGE_BATCH_SIZE;
+  let total = 0;
+  for (;;) {
+    const count = rowCountOf(await getDb().execute(sql`
+      DELETE FROM ${logs} WHERE ${logs.id} IN (SELECT ${logs.id} FROM ${logs} WHERE ${orphanEmailLogs} LIMIT ${batchSize})`));
+    total += count;
+    options.onBatch?.(count);
+    if (count < batchSize) return total;
+  }
 }
 
 /** Maintenance: purge expired events within a time budget; the next run resumes. */

@@ -1,5 +1,7 @@
-import type { DbExecutor } from "../client";
+import { inArray } from "drizzle-orm";
+import { getDb, type DbExecutor } from "../client";
 import { enqueueOutboxEvent } from "../outbox/outbox";
+import { networkingProfiles } from "../schema/networking";
 
 /**
  * Durable storage deletion: an outbox row written in the same transaction as
@@ -64,4 +66,21 @@ export function enqueueNetworkingPhotoDeletes(
         }]
       : []),
   );
+}
+
+/**
+ * The photo URLs these profiles still reference (the column and the
+ * participant's override), for the orphan-photos operator script. A profile
+ * missing from the result no longer exists.
+ */
+export async function networkingProfilePhotoRefs(profileIds: readonly string[], db: DbExecutor = getDb()) {
+  if (!profileIds.length) return [];
+  const rows = await db
+    .select({ id: networkingProfiles.id, eventId: networkingProfiles.eventId, photoUrl: networkingProfiles.photoUrl, overrides: networkingProfiles.overrides })
+    .from(networkingProfiles)
+    .where(inArray(networkingProfiles.id, [...profileIds]));
+  return rows.map(({ overrides, ...row }) => ({
+    ...row,
+    overridePhotoUrl: typeof overrides?.photoUrl === "string" ? overrides.photoUrl : null,
+  }));
 }

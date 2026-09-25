@@ -36,3 +36,39 @@ analytics for that event become empty. The post-event report stays available.
 
 No contract change. After `DELETE /me` the profile photo is now deleted by a background job with
 retries (seconds later) instead of during the request.
+
+# Frontend follow-up: withdrawal erasure (4.4b)
+
+Withdrawal is final. `DELETE /api/networking/:slug/me` keeps its response (`{ withdrawn: true }`),
+but the participant's networking data now goes in two stages: their profile content (company, job
+title, sector, bio, city, country, website, photo, interests, offers, seeks) is cleared at once,
+and after `NETWORKING_WITHDRAWAL_ERASE_DAYS` (default 30 days) everything else is erased.
+
+## Admin networking pages
+
+### New 409 when editing a withdrawn participant
+
+`PATCH /api/events/:eventId/networking/profiles/:id` answers **409 `NETWORKING_PROFILE_WITHDRAWN`**
+when the participant has withdrawn (`withdrawnAt` is set). Nothing is saved (no status change, no
+field edit, no audit entry). Disable the edit and status actions for withdrawn participants and
+show "This participant withdrew from networking."
+
+### Withdrawn participants in lists and exports
+
+- `GET /api/events/:eventId/networking/profiles` and the participants export still list a withdrawn
+  participant during the erasure window, but with empty professional fields, `photoUrl: null`,
+  `interests: []`, `visible: false`, `consent: false`, `meetingsEnabled: false` and
+  `emailPreference: "OFF"`. Name, email and status stay until the erasure.
+- After the erasure the participant no longer appears in the list, its `total`, or the exports.
+  Their meetings, reports, conversations and audit entries are gone too, so meeting, report and
+  analytics counts for the event can drop.
+- `GET /api/events/:eventId/networking/recommendations/status`: `jobs` no longer counts withdrawn
+  participants (their embeddings are deleted at withdrawal).
+
+## Participant PWA
+
+- After the erasure, other participants lose everything shared with the erased participant:
+  the connection and its whole conversation, past and cancelled meetings with them, and the
+  notifications about that connection or those meetings. Lists simply no longer contain them;
+  handle a 404 on a stale connection or meeting link as "no longer available".
+- A withdrawn participant cannot sign in again with the same registration (unchanged).

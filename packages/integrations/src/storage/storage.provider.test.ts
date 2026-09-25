@@ -23,6 +23,9 @@ const awsMocks = vi.hoisted(() => ({
   deleteObjectCommand: vi.fn(function DeleteObjectCommand(input: unknown) {
     return { input };
   }),
+  listObjectsV2Command: vi.fn(function ListObjectsV2Command(input: unknown) {
+    return { input };
+  }),
 }));
 
 vi.mock("@aws-sdk/client-s3", () => ({
@@ -32,6 +35,7 @@ vi.mock("@aws-sdk/client-s3", () => ({
   PutObjectCommand: awsMocks.putObjectCommand,
   GetObjectCommand: awsMocks.getObjectCommand,
   DeleteObjectCommand: awsMocks.deleteObjectCommand,
+  ListObjectsV2Command: awsMocks.listObjectsV2Command,
 }));
 
 vi.mock("@aws-sdk/s3-request-presigner", () => ({
@@ -200,5 +204,72 @@ describe("download of a missing object", () => {
     const boom = Object.assign(new Error("AccessDenied"), { name: "AccessDenied", $metadata: { httpStatusCode: 403 } });
     awsMocks.send.mockRejectedValueOnce(boom);
     await expect(new R2StorageProvider().download("a/b.pdf")).rejects.toBe(boom);
+  });
+});
+
+describe("list (orphan-photos operator script)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.R2_ACCOUNT_ID = "account-id";
+    process.env.R2_ACCESS_KEY_ID = "access-key";
+    process.env.R2_SECRET_ACCESS_KEY = "secret-key";
+    process.env.R2_BUCKET = "bucket";
+    process.env.R2_PUBLIC_URL = "https://cdn.example.com/";
+  });
+
+  it("R2 lists one page under the prefix and hands back the continuation token", async () => {
+    const modified = new Date("2026-09-01T10:00:00Z");
+    awsMocks.send.mockResolvedValueOnce({
+      Contents: [{ Key: "networking/e/profiles/p/a.webp", LastModified: modified, Size: 12 }, { Key: undefined }, { Key: "networking/e/profiles/p/b.webp" }],
+      IsTruncated: true,
+      NextContinuationToken: "token-2",
+    });
+    const page = await new R2StorageProvider().list("networking/", { cursor: "token-1", limit: 5000 });
+    expect(awsMocks.listObjectsV2Command).toHaveBeenCalledWith({
+      Bucket: "bucket", Prefix: "networking/", MaxKeys: 1000, ContinuationToken: "token-1",
+    });
+    expect(page).toEqual({
+      items: [
+        { key: "networking/e/profiles/p/a.webp", updatedAt: modified, size: 12 },
+        { key: "networking/e/profiles/p/b.webp", updatedAt: null, size: null },
+      ],
+      nextCursor: "token-2",
+    });
+  });
+
+  it("R2 ends the listing when the response is not truncated", async () => {
+    awsMocks.send.mockResolvedValueOnce({ IsTruncated: false, NextContinuationToken: "ignored" });
+    expect(await new R2StorageProvider().list("networking/e/", { limit: 0 })).toEqual({ items: [], nextCursor: null });
+    expect(awsMocks.listObjectsV2Command).toHaveBeenCalledWith({ Bucket: "bucket", Prefix: "networking/e/", MaxKeys: 1 });
+  });
+
+  it("Firebase lists one page (no auto-pagination) and returns the next page token", async () => {
+    const getFiles = vi.fn().mockResolvedValue([
+      [
+        { name: "networking/e/profiles/p/a.webp", metadata: { updated: "2026-09-01T10:00:00.000Z", size: "34" } },
+        { name: "networking/e/profiles/p/b.webp", metadata: { updated: "not a date" } },
+        { name: "networking/e/profiles/p/c.webp" },
+      ],
+      { pageToken: "page-2", prefix: "networking/" },
+      {},
+    ]);
+    firebaseStorageMock.bucket.mockReturnValue({ getFiles });
+    const page = await new FirebaseStorageProvider().list("networking/", { cursor: "page-1", limit: 50 });
+    expect(getFiles).toHaveBeenCalledWith({ prefix: "networking/", autoPaginate: false, maxResults: 50, pageToken: "page-1" });
+    expect(page).toEqual({
+      items: [
+        { key: "networking/e/profiles/p/a.webp", updatedAt: new Date("2026-09-01T10:00:00.000Z"), size: 34 },
+        { key: "networking/e/profiles/p/b.webp", updatedAt: null, size: null },
+        { key: "networking/e/profiles/p/c.webp", updatedAt: null, size: null },
+      ],
+      nextCursor: "page-2",
+    });
+  });
+
+  it("Firebase ends the listing without a next query", async () => {
+    const getFiles = vi.fn().mockResolvedValue([[], null, {}]);
+    firebaseStorageMock.bucket.mockReturnValue({ getFiles });
+    expect(await new FirebaseStorageProvider().list("networking/")).toEqual({ items: [], nextCursor: null });
+    expect(getFiles).toHaveBeenCalledWith({ prefix: "networking/", autoPaginate: false, maxResults: 1000 });
   });
 });

@@ -1356,6 +1356,12 @@ export async function deactivateCommitteeMembershipTxn(
     // The affected abstracts are locked in ascending id order (ADR 0001) and
     // their status is read after the lock, so a review, assignment or
     // finalize on one of them runs wholly before or after this recompute.
+    //
+    // The membership UPDATE above holds the membership row, which
+    // assignReviewersTxn locks before its abstract (membership → abstracts).
+    // An assignment of this member therefore either committed before that
+    // UPDATE, and its review is found below, or waits and sees the
+    // membership inactive.
     const candidateReviews = await tx
       .select({ abstractId: abstractReviews.abstractId })
       .from(abstractReviews)
@@ -1573,14 +1579,56 @@ export async function findActiveMembershipUserIds(
   return rows.map((r) => r.userId);
 }
 
+/**
+ * Lock the event's committee membership rows of these users, in ascending user
+ * id order, then return the ids whose membership is active, read after the
+ * lock. A bare `SELECT id … FOR UPDATE` (not FOR SHARE: CockroachDB ignores
+ * shared locks under SERIALIZABLE by default).
+ *
+ * Lock order is memberships → abstracts, the order
+ * deactivateCommitteeMembershipTxn takes them in (its membership UPDATE, then
+ * the abstracts it recomputes). So an assignment and a deactivation of the
+ * same member queue: either the deactivation commits first and the
+ * assignment sees the membership inactive, or the assignment commits first
+ * and the deactivation's later read finds the new review and deactivates it.
+ */
+async function lockActiveCommitteeMemberIds(
+  tx: DbExecutor,
+  eventId: string,
+  userIds: readonly string[],
+): Promise<Set<string>> {
+  const ordered = [...new Set(userIds)].sort();
+  if (ordered.length === 0) return new Set();
+  const scope = and(
+    eq(abstractCommitteeMemberships.eventId, eventId),
+    inArray(abstractCommitteeMemberships.userId, ordered),
+  );
+  await tx
+    .select({ id: abstractCommitteeMemberships.id })
+    .from(abstractCommitteeMemberships)
+    .where(scope)
+    .orderBy(asc(abstractCommitteeMemberships.userId))
+    .for("update");
+  const active = await tx
+    .select({ userId: abstractCommitteeMemberships.userId })
+    .from(abstractCommitteeMemberships)
+    .where(and(scope, eq(abstractCommitteeMemberships.active, true)));
+  return new Set(active.map((row) => row.userId));
+}
+
 export type AssignReviewersResult =
   | { ok: true; id: string; status: AbstractRow["status"] }
-  | { ok: false; reason: "not_found" | "finalized" };
+  | { ok: false; reason: "not_found" | "finalized" }
+  | { ok: false; reason: "inactive_member"; reviewerIds: string[] };
 
 /**
- * Replace an abstract's reviewer set and recompute its aggregate. Locks the
- * abstract first and decides from its status read after the lock: a finalized
- * abstract's reviewers are part of the decision record, so nothing changes.
+ * Replace an abstract's reviewer set and recompute its aggregate.
+ *
+ * Locks the chosen reviewers' memberships first, then the abstract, and
+ * decides from what it reads after the locks: a finalized abstract's
+ * reviewers are part of the decision record, so nothing changes; a reviewer
+ * whose membership is no longer active is refused, so a member removed at the
+ * same moment never ends up holding an active review.
  */
 export async function assignReviewersTxn(params: {
   eventId: string;
@@ -1589,6 +1637,7 @@ export async function assignReviewersTxn(params: {
 }): Promise<AssignReviewersResult> {
   const { eventId, abstractId, reviewerIds } = params;
   return withLockingTxn(async (tx): Promise<AssignReviewersResult> => {
+    const activeMemberIds = await lockActiveCommitteeMemberIds(tx, eventId, reviewerIds);
     if (!(await lockAbstractForUpdate(tx, abstractId))) {
       return { ok: false, reason: "not_found" };
     }
@@ -1602,6 +1651,10 @@ export async function assignReviewersTxn(params: {
     }
     if (FINAL_STATUSES.includes(current.status)) {
       return { ok: false, reason: "finalized" };
+    }
+    const inactive = [...new Set(reviewerIds)].filter((id) => !activeMemberIds.has(id));
+    if (inactive.length > 0) {
+      return { ok: false, reason: "inactive_member", reviewerIds: inactive };
     }
 
     const inactiveDesired = reviewerIds.length

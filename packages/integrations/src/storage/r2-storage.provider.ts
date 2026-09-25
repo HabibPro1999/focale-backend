@@ -3,12 +3,15 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   DeleteObjectCommand,
+  ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { integrationsConfig } from "../config";
 import {
   StorageObjectNotFoundError,
+  storageListLimit,
   type DownloadedFile,
+  type StorageListPage,
   type StorageProvider,
   type UploadOptions,
 } from "./storage.provider";
@@ -140,6 +143,23 @@ export class R2StorageProvider implements StorageProvider {
     });
 
     await this.client.send(command);
+  }
+
+  async list(prefix: string, options: { cursor?: string; limit?: number } = {}): Promise<StorageListPage> {
+    const response = await this.client.send(
+      new ListObjectsV2Command({
+        Bucket: this.bucket,
+        Prefix: prefix,
+        MaxKeys: storageListLimit(options.limit),
+        ...(options.cursor ? { ContinuationToken: options.cursor } : {}),
+      }),
+    );
+    return {
+      items: (response.Contents ?? []).flatMap((object) => object.Key
+        ? [{ key: object.Key, updatedAt: object.LastModified ?? null, size: object.Size ?? null }]
+        : []),
+      nextCursor: response.IsTruncated && response.NextContinuationToken ? response.NextContinuationToken : null,
+    };
   }
 
   private async putObject(
