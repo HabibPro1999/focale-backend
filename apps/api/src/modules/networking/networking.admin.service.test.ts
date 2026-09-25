@@ -9,7 +9,7 @@ const state = vi.hoisted(() => ({
   deliveries: [] as any[],
   forms: [] as any[],
   profile: null as Record<string, unknown> | null,
-  profiles: [] as any[],
+  profiles: [] as Record<string, unknown>[],
   meeting: null as Record<string, unknown> | null,
   event: null as Record<string, unknown> | null,
   tx: { executor: "transaction" },
