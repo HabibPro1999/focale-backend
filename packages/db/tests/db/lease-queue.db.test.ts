@@ -3,6 +3,8 @@ import { sql, type SQL } from "drizzle-orm";
 import { JobTimeoutError } from "@app/shared";
 import {
   DB_NOW,
+  abstractBookJobs,
+  abstractBookQueue,
   getDb,
   outboxEvents,
   outboxQueue,
@@ -10,6 +12,7 @@ import {
   type LeaseQueue,
 } from "@app/db";
 import { dbTestsEnabled } from "../helpers/test-env";
+import { seedClient, seedEvent } from "../helpers/factories";
 
 // 3.4: one contract for every lease queue, run against each queue's spec on a
 // migrated database (both engines in CI). A queue joins by adding a fixture.
@@ -32,6 +35,8 @@ interface QueueFixture {
   /** Status of an expired lease requeued by recovery, and of an exhausted one. */
   requeuedStatus: string;
   deadStatus: string;
+  /** Recovery requeues with the retry backoff (next_attempt_at ahead) instead of due now. */
+  requeueBackoff: boolean;
   reset(): Promise<void>;
 }
 
@@ -68,12 +73,70 @@ const outboxFixture: QueueFixture = {
   releasedStatus: "PENDING",
   requeuedStatus: "FAILED",
   deadStatus: "DEAD_LETTERED",
+  requeueBackoff: false,
   async reset() {
     await getDb().delete(outboxEvents);
   },
 };
 
-const FIXTURES: QueueFixture[] = [outboxFixture];
+// One active (PENDING/RUNNING) book job per event: every seeded job gets its
+// own event. Events outlive reset(); the file has its own database.
+let bookClientId: string | undefined;
+async function newEventId(): Promise<string> {
+  bookClientId ??= (await seedClient()).id;
+  return (await seedEvent({ clientId: bookClientId })).id;
+}
+
+const abstractBookFixture: QueueFixture = {
+  name: "abstract-book",
+  queue: abstractBookQueue,
+  table: "abstract_book_jobs",
+  async seed(n, options = {}) {
+    const base = Date.now() - 60_000;
+    const rows = [];
+    for (let i = 0; i < n; i++) {
+      rows.push({
+        eventId: await newEventId(),
+        requestedBy: "admin",
+        status: "PENDING" as const,
+        maxAttempts: MAX_ATTEMPTS,
+        attemptCount: options.attemptsLeft === undefined ? 0 : MAX_ATTEMPTS - options.attemptsLeft,
+        createdAt: new Date(base + i * 10),
+      });
+    }
+    const inserted = await getDb()
+      .insert(abstractBookJobs)
+      .values(rows)
+      .returning({ id: abstractBookJobs.id, createdAt: abstractBookJobs.createdAt });
+    return inserted.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime()).map((row) => row.id);
+  },
+  async seedNotDue() {
+    const [row] = await getDb()
+      .insert(abstractBookJobs)
+      .values({
+        eventId: await newEventId(),
+        requestedBy: "admin",
+        status: "PENDING",
+        attemptCount: 1,
+        nextAttemptAt: new Date(Date.now() + 3_600_000),
+      })
+      .returning({ id: abstractBookJobs.id });
+    return row!.id;
+  },
+  completeSet: sql`"status" = 'COMPLETED', "completed_at" = ${DB_NOW}`,
+  completedStatus: "COMPLETED",
+  failSet: sql`"status" = 'PENDING', "error_message" = 'boom', "next_attempt_at" = ${DB_NOW} + interval '1 minute'`,
+  failedStatus: "PENDING",
+  releasedStatus: "PENDING",
+  requeuedStatus: "PENDING",
+  deadStatus: "FAILED",
+  requeueBackoff: true,
+  async reset() {
+    await getDb().delete(abstractBookJobs);
+  },
+};
+
+const FIXTURES: QueueFixture[] = [outboxFixture, abstractBookFixture];
 
 interface LeaseRow {
   status: string;
@@ -96,6 +159,24 @@ async function readRow(table: string, id: string): Promise<LeaseRow> {
     owner: row.owner,
     leaseLeftMs: row.lease_left === null ? null : Number(row.lease_left),
   };
+}
+
+/** ms until the row is due again (null when due now: no next_attempt_at). */
+async function dueInMs(table: string, id: string): Promise<number | null> {
+  const res = (await getDb().execute(sql`
+    SELECT (EXTRACT(EPOCH FROM ("next_attempt_at" - ${DB_NOW})) * 1000)::float8 AS due_in
+    FROM ${sql.identifier(table)} WHERE "id" = ${id}
+  `)) as unknown as { rows: Array<{ due_in: number | string | null }> };
+  const due = res.rows[0]!.due_in;
+  return due === null ? null : Number(due);
+}
+
+/** Make rows due now (skip a retry backoff). */
+async function makeDue(table: string, ids: string[]): Promise<void> {
+  await getDb().execute(sql`
+    UPDATE ${sql.identifier(table)} SET "next_attempt_at" = NULL
+    WHERE "id" IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+  `);
 }
 
 /** Move the lease end to `ms` from now (negative: already expired). */
@@ -231,10 +312,27 @@ for (const fx of FIXTURES) {
       // The stalled worker lost the row: its writes miss.
       expect(await queue.confirm("w1", expired!)).toBe(false);
       expect(await queue.complete("w1", expired!, fx.completeSet)).toBe(false);
-      // Requeued: another worker claims it, second attempt.
+      // Requeued: due now, or after the queue's retry backoff (skipped here).
+      if (fx.requeueBackoff) {
+        expect(await dueInMs(table, expired!)).toBeGreaterThan(30_000);
+        await makeDue(table, [expired!]);
+      } else {
+        expect(await dueInMs(table, expired!)).toBeNull();
+      }
+      // Another worker claims it, second attempt.
       expect(await claimExactly(queue, "w2", 1)).toEqual([expired]);
       expect((await readRow(table, expired!)).attempts).toBe(2);
       expect(await queue.recoverStale()).toEqual({ requeued: 0, deadLettered: 0 });
+    });
+
+    it("recovers only the expired leases a scope selects", async () => {
+      const [a, b] = await fx.seed(2);
+      await claimExactly(queue, "w1", 2);
+      await expire([a!, b!]);
+
+      expect(await queue.recoverStale(sql`"id" = ${a!}`)).toEqual({ requeued: 1, deadLettered: 0 });
+      expect(await readRow(table, a!)).toMatchObject({ status: fx.requeuedStatus, owner: null });
+      expect(await readRow(table, b!)).toMatchObject({ status: leased, owner: "w1" });
     });
 
     it("reports claimable rows, leases and expired leases", async () => {
@@ -305,6 +403,7 @@ for (const fx of FIXTURES) {
           // w1 stalls past its lease; recovery requeues the row and w2 claims it.
           await expire(ids);
           await queue.recoverStale();
+          if (fx.requeueBackoff) await makeDue(table, ids);
           expect(await claimExactly(queue, "w2", 1)).toEqual(ids);
           return ids.map((id) => ({ id }));
         },

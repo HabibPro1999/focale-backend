@@ -49,10 +49,12 @@ export function rowCountOf(res: unknown): number {
 
 /**
  * Shared queue retry backoff (email + abstract-book): 1min, 5min, then 15min,
- * keyed on the post-increment failed attempt count.
+ * keyed on the post-increment failed attempt count. The steps also feed
+ * backoffInterval (the same backoff in SQL).
  */
+export const STANDARD_RETRY_DELAYS_MS = [60 * 1000, 5 * 60 * 1000, 15 * 60 * 1000] as const;
+
 export function standardRetryDelayMs(failedAttemptCount: number): number {
-  if (failedAttemptCount <= 1) return 60 * 1000;
-  if (failedAttemptCount === 2) return 5 * 60 * 1000;
-  return 15 * 60 * 1000;
+  const step = Math.min(Math.max(failedAttemptCount, 1), STANDARD_RETRY_DELAYS_MS.length);
+  return STANDARD_RETRY_DELAYS_MS[step - 1]!;
 }

@@ -1,10 +1,10 @@
 import { Injectable } from "@nestjs/common";
-import { outboxQueue, type LeaseQueue } from "@app/db";
+import { abstractBookQueue, outboxQueue, type LeaseQueue } from "@app/db";
 import type { Job, JobContext } from "../job";
 
 /** The lease queues whose expired leases this worker recovers. */
 export function recoverableQueues(): LeaseQueue[] {
-  return [outboxQueue];
+  return [outboxQueue, abstractBookQueue];
 }
 
 /**

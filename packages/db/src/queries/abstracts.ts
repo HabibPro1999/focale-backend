@@ -27,7 +27,8 @@ import {
 } from "@app/contracts";
 import { createLogger } from "@app/shared";
 import { getDb, type DbExecutor } from "../client";
-import { rowsOf, rowCountOf, standardRetryDelayMs } from "../helpers";
+import { STANDARD_RETRY_DELAYS_MS, standardRetryDelayMs } from "../helpers";
+import { DB_NOW, backoffInterval, createLeaseQueue, intervalMs } from "../lease-queue";
 import { withTxn, withSerializableTxn, pgUniqueViolation } from "../txn";
 import {
   abstractConfig,
@@ -2433,30 +2434,53 @@ export async function markAbstractPresentedTxn(params: {
 }
 
 // ============================================================================
-// Abstract Book jobs — hand-rolled Postgres SKIP LOCKED lease queue.
+// Abstract Book jobs — a lease queue (packages/db/src/lease-queue).
 //
-// The worker wave owns PDF generation + the 30s poller loop; these are the DB
-// primitives it reuses. Lease-based (NOT withTxnRetry/serializable): the claim
-// uses FOR UPDATE SKIP LOCKED, records lockedBy/lockedUntil, and every terminal
-// write re-checks ownership (status=RUNNING AND locked_by=workerId) so a worker
-// that lost its lease can't clobber another's result. Raw single-statement
-// sweeps bump updated_at explicitly (no $onUpdate on raw SQL); all values are
-// bound params or hardcoded literals.
+// The worker owns PDF generation and runs each job through runLeased: the
+// claim uses FOR UPDATE SKIP LOCKED, a heartbeat renews the lease while the
+// render runs (a lost lease aborts it), and every terminal write re-checks
+// ownership (status=RUNNING AND locked_by=workerId) so a worker that lost its
+// lease can't clobber another's result. Lease times come from the database
+// clock; the worker's LeaseRecoveryJob recovers expired leases.
 // ============================================================================
 
 const bookLogger = createLogger({ name: "db:abstract-book" });
 
 export type AbstractBookJobRow = InferSelectModel<typeof abstractBookJobs>;
 
-/** Default worker lease (1 hour). Matches legacy ABSTRACT_BOOK_LEASE_MS. */
-export const ABSTRACT_BOOK_LEASE_MS = 60 * 60 * 1000;
+/**
+ * Worker lease (5 min). The heartbeat renews it every third of that while a
+ * render runs, so a dead worker's job is recovered within minutes instead of
+ * an hour.
+ */
+export const ABSTRACT_BOOK_LEASE_MS = 5 * 60 * 1000;
 
-export function nextAbstractBookAttemptAt(
-  failedAttemptCount: number,
-  from = new Date(),
-): Date {
-  return new Date(from.getTime() + standardRetryDelayMs(failedAttemptCount));
-}
+/**
+ * abstract_book_jobs as a lease queue. Due PENDING jobs under max_attempts are
+ * claimable (FIFO); RUNNING is the lease. A released job goes back to PENDING,
+ * due now. An expired lease is requeued PENDING with the retry backoff, or
+ * dead-lettered to FAILED once its attempts are used up.
+ */
+export const abstractBookQueue = createLeaseQueue({
+  name: "abstract-book",
+  table: "abstract_book_jobs",
+  leasedStatus: "RUNNING",
+  leaseMs: ABSTRACT_BOOK_LEASE_MS,
+  claimable: sql`"status" = 'PENDING'
+    AND ("next_attempt_at" IS NULL OR "next_attempt_at" <= ${DB_NOW})
+    AND "attempt_count" < "max_attempts"`,
+  order: sql`"created_at" ASC`,
+  claimSet: sql`"started_at" = COALESCE("started_at", ${DB_NOW}), "error_message" = NULL`,
+  releaseSet: sql`"status" = 'PENDING', "next_attempt_at" = NULL`,
+  recovery: {
+    exhausted: sql`"attempt_count" >= "max_attempts"`,
+    retrySet: sql`"status" = 'PENDING',
+      "next_attempt_at" = ${DB_NOW} + ${backoffInterval(sql`"attempt_count"`, STANDARD_RETRY_DELAYS_MS)},
+      "error_message" = COALESCE("error_message", 'Abstract Book job lease expired; requeued for retry')`,
+    deadSet: sql`"status" = 'FAILED', "completed_at" = ${DB_NOW}, "next_attempt_at" = NULL,
+      "error_message" = COALESCE("error_message", 'Abstract Book job lease expired and retry limit was exhausted')`,
+  },
+});
 
 export type EnqueueBookJobResult =
   | { ok: false; reason: "no_config" }
@@ -2492,7 +2516,8 @@ async function findActiveAbstractBookJob(
 /**
  * Enqueue a PENDING book job. Gated: the AbstractConfig must exist, and there
  * must be zero abstracts still outside FINAL_STATUSES. Create + audit ride one
- * READ COMMITTED transaction.
+ * READ COMMITTED transaction. An expired RUNNING job of the event is
+ * recovered first (3.4), so a dead worker never blocks a new request.
  *
  * L1: idempotent against duplicates — if a PENDING/RUNNING job already covers
  * this event, that job is returned as-is (ok:true, no new insert) instead of
@@ -2525,6 +2550,14 @@ export async function enqueueAbstractBookJob(params: {
   const unfinishedCount = unfinishedRows[0]?.n ?? 0;
   if (unfinishedCount > 0) {
     return { ok: false, reason: "unfinished", unfinishedCount };
+  }
+
+  // A RUNNING job whose worker died would otherwise block this event until
+  // the worker's lease recovery runs: recover it now (requeued, or FAILED
+  // once its attempts are used up, which lets a new job start).
+  const recovered = await abstractBookQueue.recoverStale(sql`"event_id" = ${eventId}`);
+  if (recovered.requeued > 0 || recovered.deadLettered > 0) {
+    bookLogger.warn({ eventId, ...recovered }, "Recovered an expired Abstract Book job lease on enqueue");
   }
 
   try {
@@ -2584,42 +2617,13 @@ export async function getAbstractBookJob(
 }
 
 /**
- * Atomically claim up to `limit` due PENDING jobs: sets RUNNING, records the
- * lease, bumps attempt_count, clears error. FIFO by created_at; SKIP LOCKED so
- * workers never grab the same row. Returns the claimed rows (re-fetched under
- * the lease for correct Date typing). NOT wrapped in a transaction on purpose.
+ * The claimed jobs still leased to `workerId`, oldest first (claim ids come
+ * unordered; a row taken over since the claim is left out).
  */
-export async function claimAbstractBookJobs(
-  limit: number,
+export async function loadClaimedAbstractBookJobs(
+  ids: string[],
   workerId: string,
-  leaseMs: number = ABSTRACT_BOOK_LEASE_MS,
-  now: Date = new Date(),
 ): Promise<AbstractBookJobRow[]> {
-  const lockedUntil = new Date(now.getTime() + leaseMs);
-  const res = await getDb().execute(sql`
-    UPDATE "abstract_book_jobs"
-    SET
-      "status" = 'RUNNING',
-      "updated_at" = ${now},
-      "started_at" = COALESCE("started_at", ${now}),
-      "locked_at" = ${now},
-      "locked_until" = ${lockedUntil},
-      "locked_by" = ${workerId},
-      "last_attempt_at" = ${now},
-      "attempt_count" = "attempt_count" + 1,
-      "error_message" = NULL
-    WHERE "id" IN (
-      SELECT "id" FROM "abstract_book_jobs"
-       WHERE "status" = 'PENDING'
-         AND ("next_attempt_at" IS NULL OR "next_attempt_at" <= ${now})
-         AND "attempt_count" < "max_attempts"
-       ORDER BY "created_at" ASC
-       LIMIT ${limit}
-       FOR UPDATE SKIP LOCKED
-    )
-    RETURNING "id"
-  `);
-  const ids = rowsOf<{ id: string }>(res).map((r) => r.id);
   if (ids.length === 0) return [];
   return getDb()
     .select()
@@ -2634,66 +2638,26 @@ export async function claimAbstractBookJobs(
     .orderBy(asc(abstractBookJobs.createdAt));
 }
 
-/**
- * Heartbeat: extend the lease while processing. Guarded by ownership; returns
- * the number of rows updated (0 = lease already lost).
- */
-export async function stampAbstractBookJobLease(params: {
-  jobId: string;
-  workerId: string;
-  leaseMs?: number;
-  now?: Date;
-}): Promise<number> {
-  const now = params.now ?? new Date();
-  const leaseMs = params.leaseMs ?? ABSTRACT_BOOK_LEASE_MS;
-  const updated = await getDb()
-    .update(abstractBookJobs)
-    .set({ lockedUntil: new Date(now.getTime() + leaseMs) })
-    .where(
-      and(
-        eq(abstractBookJobs.id, params.jobId),
-        eq(abstractBookJobs.status, "RUNNING"),
-        eq(abstractBookJobs.lockedBy, params.workerId),
-      ),
-    )
-    .returning({ id: abstractBookJobs.id });
-  return updated.length;
-}
-
-/** Mark COMPLETED + clear the lease. Guarded by ownership; returns rows updated. */
+/** Mark COMPLETED and clear the lease, while `workerId` owns the job. False when the lease was lost. */
 export async function completeAbstractBookJob(params: {
   jobId: string;
   workerId: string;
   storageKey: string;
   includedCount: number;
-}): Promise<number> {
-  const updated = await getDb()
-    .update(abstractBookJobs)
-    .set({
-      status: "COMPLETED",
-      storageKey: params.storageKey,
-      includedCount: params.includedCount,
-      completedAt: new Date(),
-      errorMessage: null,
-      nextAttemptAt: null,
-      lockedAt: null,
-      lockedUntil: null,
-      lockedBy: null,
-    })
-    .where(
-      and(
-        eq(abstractBookJobs.id, params.jobId),
-        eq(abstractBookJobs.status, "RUNNING"),
-        eq(abstractBookJobs.lockedBy, params.workerId),
-      ),
-    )
-    .returning({ id: abstractBookJobs.id });
-  return updated.length;
+}): Promise<boolean> {
+  return abstractBookQueue.complete(
+    params.workerId,
+    params.jobId,
+    sql`"status" = 'COMPLETED', "storage_key" = ${params.storageKey},
+      "included_count" = ${params.includedCount}, "completed_at" = ${DB_NOW},
+      "error_message" = NULL, "next_attempt_at" = NULL`,
+  );
 }
 
 /**
- * Fail a job: requeue to PENDING with backoff while attempts remain, else
- * dead-letter to FAILED. Guarded by ownership; returns rows updated.
+ * Fail a job: back to PENDING with backoff while attempts remain, else
+ * dead-letter to FAILED. Only while `workerId` owns it; false when the lease
+ * was lost. `attemptCount` includes the failed attempt.
  */
 export async function failAbstractBookJob(params: {
   jobId: string;
@@ -2701,90 +2665,14 @@ export async function failAbstractBookJob(params: {
   attemptCount: number;
   maxAttempts: number;
   message: string;
-  now?: Date;
-}): Promise<number> {
-  const now = params.now ?? new Date();
-  const shouldRetry = params.attemptCount < params.maxAttempts;
-  const updated = await getDb()
-    .update(abstractBookJobs)
-    .set({
-      status: shouldRetry ? "PENDING" : "FAILED",
-      errorMessage: params.message,
-      completedAt: shouldRetry ? null : now,
-      nextAttemptAt: shouldRetry
-        ? nextAbstractBookAttemptAt(params.attemptCount, now)
-        : null,
-      lockedAt: null,
-      lockedUntil: null,
-      lockedBy: null,
-    })
-    .where(
-      and(
-        eq(abstractBookJobs.id, params.jobId),
-        eq(abstractBookJobs.status, "RUNNING"),
-        eq(abstractBookJobs.lockedBy, params.workerId),
-      ),
-    )
-    .returning({ id: abstractBookJobs.id });
-  return updated.length;
-}
-
-/**
- * Sweep RUNNING jobs whose lease expired: requeue (with backoff) while attempts
- * remain, else dead-letter. Run once at the start of every processing tick.
- * error_message only set when none already present (COALESCE).
- */
-export async function recoverStaleAbstractBookJobs(
-  now: Date = new Date(),
-): Promise<{ requeued: number; deadLettered: number }> {
-  const retry1At = nextAbstractBookAttemptAt(1, now);
-  const retry2At = nextAbstractBookAttemptAt(2, now);
-  const retryLaterAt = nextAbstractBookAttemptAt(3, now);
-
-  const requeuedRes = await getDb().execute(sql`
-    UPDATE "abstract_book_jobs"
-    SET
-      "status" = 'PENDING',
-      "updated_at" = ${now},
-      "locked_at" = NULL,
-      "locked_until" = NULL,
-      "locked_by" = NULL,
-      "next_attempt_at" = CASE
-        WHEN "attempt_count" <= 1 THEN ${retry1At}::timestamp
-        WHEN "attempt_count" = 2 THEN ${retry2At}::timestamp
-        ELSE ${retryLaterAt}::timestamp
-      END,
-      "error_message" = COALESCE("error_message", 'Abstract Book job lease expired; requeued for retry')
-    WHERE "status" = 'RUNNING'
-      AND ("locked_until" IS NULL OR "locked_until" < ${now})
-      AND "attempt_count" < "max_attempts"
-  `);
-
-  const deadLetteredRes = await getDb().execute(sql`
-    UPDATE "abstract_book_jobs"
-    SET
-      "status" = 'FAILED',
-      "updated_at" = ${now},
-      "completed_at" = ${now},
-      "locked_at" = NULL,
-      "locked_until" = NULL,
-      "locked_by" = NULL,
-      "next_attempt_at" = NULL,
-      "error_message" = COALESCE("error_message", 'Abstract Book job lease expired and retry limit was exhausted')
-    WHERE "status" = 'RUNNING'
-      AND ("locked_until" IS NULL OR "locked_until" < ${now})
-      AND "attempt_count" >= "max_attempts"
-  `);
-
-  const requeued = rowCountOf(requeuedRes);
-  const deadLettered = rowCountOf(deadLetteredRes);
-  if (requeued > 0 || deadLettered > 0) {
-    bookLogger.warn(
-      { requeued, deadLettered },
-      "Recovered stale Abstract Book job leases",
-    );
-  }
-  return { requeued, deadLettered };
+}): Promise<boolean> {
+  const set =
+    params.attemptCount < params.maxAttempts
+      ? sql`"status" = 'PENDING', "error_message" = ${params.message}, "completed_at" = NULL,
+          "next_attempt_at" = ${DB_NOW} + ${intervalMs(standardRetryDelayMs(params.attemptCount))}`
+      : sql`"status" = 'FAILED', "error_message" = ${params.message}, "completed_at" = ${DB_NOW},
+          "next_attempt_at" = NULL`;
+  return abstractBookQueue.fail(params.workerId, params.jobId, set);
 }
 
 // ----------------------------------------------------------------------------
