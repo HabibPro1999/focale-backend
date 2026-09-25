@@ -69,8 +69,11 @@ export {
 } from "./compress";
 export { IMAGE_INPUT_LIMITS } from "./image-limits";
 export {
+  STORAGE_LIST_MAX_LIMIT,
   StorageObjectNotFoundError,
   type DownloadedFile,
+  type StorageListPage,
   type StorageProvider,
+  type StoredObject,
   type UploadOptions,
 } from "./storage.provider";

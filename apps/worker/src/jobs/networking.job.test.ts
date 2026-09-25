@@ -2,13 +2,14 @@ import { beforeEach, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({ maintain: vi.fn(), delete: vi.fn() }));
 vi.mock("@app/db", () => ({ maintainNetworkingLifecycle: mocks.maintain }));
 vi.mock("@app/integrations", () => ({ getStorageProvider: () => ({ delete: mocks.delete }) }));
+vi.mock("../core/config", () => ({ loadConfig: () => ({ NETWORKING_WITHDRAWAL_ERASE_DAYS: 12 }) }));
 import { NetworkingMaintenanceJob } from "./networking.job";
 beforeEach(() => vi.resetAllMocks());
 
-it("runs the lifecycle maintenance for every event and never deletes storage itself", async () => {
+it("runs the lifecycle maintenance for every event with the configured erase window, and never deletes storage itself", async () => {
   // Purged photos are queued as storage.delete outbox rows in the purge transaction (plan 4.4).
   await expect(new NetworkingMaintenanceJob().run()).resolves.toBeUndefined();
-  expect(mocks.maintain).toHaveBeenCalledWith();
+  expect(mocks.maintain).toHaveBeenCalledWith(undefined, { withdrawalEraseDays: 12 });
   expect(mocks.delete).not.toHaveBeenCalled();
 });
 

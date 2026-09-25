@@ -388,6 +388,13 @@ const envShape = {
     example: "2",
     active: true,
   }, "NETWORKING_EMBEDDING_CONCURRENCY"),
+  NETWORKING_WITHDRAWAL_ERASE_DAYS: envInt(0, 365, 30, {
+    section: "networking",
+    description:
+      "Days after a participant withdraws from networking before the worker erases the rest of their\nnetworking data (their profile content is scrubbed at once). See NETWORKING.md.",
+    example: "30",
+    active: true,
+  }, "NETWORKING_WITHDRAWAL_ERASE_DAYS"),
   NETWORKING_VAPID_PUBLIC_KEY: envKey(z.string().optional(), {
     section: "networking",
     description:

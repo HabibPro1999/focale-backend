@@ -2,9 +2,16 @@ import { sql } from "drizzle-orm";
 import { getDb } from "../client";
 import { expireNetworkingProposals, sweepReleasedNetworkingReservations } from "./networking-meetings";
 import { purgeExpiredNetworkingEvents } from "./networking-retention";
+import { eraseWithdrawnNetworkingProfiles } from "./networking-erasure";
+
+/** The NETWORKING_WITHDRAWAL_ERASE_DAYS default (app config). */
+export const NETWORKING_WITHDRAWAL_ERASE_DAYS_DEFAULT = 30;
 
 /** Each reminder and its in-app record are committed by one statement, with delivery dedupe winning races. */
-export async function maintainNetworkingLifecycle(eventId?: string) {
+export async function maintainNetworkingLifecycle(
+  eventId?: string,
+  options: { withdrawalEraseDays?: number } = {},
+) {
   const db = getDb();
   const scope = eventId ? sql`AND event_id=${eventId}` : sql``;
   await expireNetworkingProposals(eventId, db);
@@ -101,4 +108,9 @@ export async function maintainNetworkingLifecycle(eventId?: string) {
   // Events past retention are purged in batches within a time budget; an
   // unfinished purge resumes on the next run. Photos go through the outbox.
   await purgeExpiredNetworkingEvents({ eventId });
+  // Withdrawn profiles past the window are erased to tombstones, the same way.
+  await eraseWithdrawnNetworkingProfiles({
+    eraseDays: options.withdrawalEraseDays ?? NETWORKING_WITHDRAWAL_ERASE_DAYS_DEFAULT,
+    eventId,
+  });
 }
