@@ -217,6 +217,25 @@ queues a new log with a new idempotency key and keeps the `UNCERTAIN` one).
 `GET /health/email-queue` reports `uncertainCount`. SendGrid's Event Webhook
 must include the **Processed** event for the reconciliation to happen.
 
+A resent `UNCERTAIN` email can stay `UNCERTAIN` for good: when the original
+did go out after all, its late `processed`/`delivered` webhook would make two
+active logs for the same trigger, which the per-trigger unique index refuses
+while the copy is queued, sent or delivered. The webhook then leaves the
+original as it is and logs a warning (`emailLogId`, `constraint`); the copy
+carries the delivery state. This is accepted: the recipient got the email
+(twice), and the admin chose to resend it.
+
+Send-now emails (the admin's one-off email to a registrant, committee
+invitations and committee password links) go through `sendEmailNow()`
+instead of the queue, with the same classification. Their `email_logs` row is
+written before the call, already leased (2 min) with the provider-attempt
+marker set and `max_retries` 0: accepted → `SENT`, rejected → `FAILED` (never
+requeued), ambiguous → `UNCERTAIN` for both providers (nothing can render the
+email again, so there is no same-key retry), and a process that dies mid-send
+leaves a row that lease recovery parks as `UNCERTAIN`. These rows cannot be
+resent from their log (`409 RES_3002`). The hardcoded committee emails use the
+shared email layout (header with the event name, Focale footer).
+
 Outbox retention: the `retention` job (hourly, and once at boot; 5 min
 budget) works in 1,000-row statements. It deletes `realtime.emit` rows older
 than 24 h (any status except leased: a day-old UI event is worthless), deletes
@@ -224,6 +243,25 @@ finished (`PROCESSED`/`SKIPPED`) rows without a dedupe key older than 30 d, and
 compacts finished keyed rows older than 30 d to `payload = '{}'`. Keyed rows
 are never deleted, so their `dedupe_key` keeps rejecting duplicates; dead
 letters are kept for `requeue-dead-letters`.
+
+Email log retention (same job): the `context_snapshot` of emails that are
+finished (`SENT`, `DELIVERED`, `OPENED`, `CLICKED`, `BOUNCED`, `DROPPED`,
+`FAILED`, `SKIPPED`) and were queued more than 90 days ago is cleared, in
+1,000-row statements. A certificate email keeps only
+`{"_certificateTemplateIds": [...]}` (the certificate send reads it to skip
+certificates already sent). Queued, sending and `UNCERTAIN` rows keep their
+snapshot (they may still be sent or resent from it), and networking rows are
+left to networking retention. The first complete pass after the worker starts
+covers the whole table (through `(status, queued_at)`); later passes only look
+at rows queued 90 to 97 days ago, so an email that becomes finished more than
+a week past the limit waits for the next restart.
+
+Event email-log list (`GET /api/events/:eventId/email-logs`): the event's
+emails are those of its registrations plus those of its templates. The list
+reads two index-backed branches (by registration id; by template id through
+`(template_id, queued_at)`, minus the event's registrations) joined with
+`UNION ALL`, each cut to the requested page's end, and counts at most 10,000
+rows (`meta.totalCapped` past that).
 
 Dead letters: `pnpm --filter @app/worker requeue-dead-letters` (in the image:
 `node apps/worker/dist/scripts/requeue-dead-letters.js`) lists dead-lettered
