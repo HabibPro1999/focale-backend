@@ -196,6 +196,27 @@ provider is never interrupted. An expired lease is requeued with the retry
 backoff (1, 5, then 15 min), or `FAILED` once `retry_count` reaches
 `max_retries`; rows dispatched by networking are left to its own worker.
 
+Email delivery safety: the worker stamps `email_logs.provider_attempted_at`
+(and `provider`) in the lease-guarded write right before the provider call; a
+claim clears it. Each call is classified:
+
+| Outcome | Examples | Result |
+|---|---|---|
+| accepted | 2xx | `SENT`, never requeued. The write is retried 3 times; if it still fails the row stays leased with its marker and recovery parks it as `UNCERTAIN`. |
+| rejected | an HTTP error response (4xx, SendGrid 500/503), no connection at all, an error before the request | the normal retry path (backoff, then `FAILED`) |
+| ambiguous | timeout, connection reset, SendGrid 502/504, Resend 5xx, an unknown error | SendGrid: `UNCERTAIN`. Resend: retried under the same idempotency key (the log id) while retries are left, then `UNCERTAIN`. |
+
+An expired lease whose marker is set may already have been sent: recovery
+parks it as `UNCERTAIN` (SendGrid; Resend once its retries are used up)
+instead of requeueing it, and release never puts a marked row back.
+`UNCERTAIN` is never resent automatically and counts as sent for the
+automatic-send dedupe checks. The provider's webhook moves it forward
+(`processed` / Resend `email.sent` → `SENT`, then delivered, opened, bounced…);
+an admin can resend it explicitly (`POST /api/events/:eventId/email-logs/:emailLogId/resend`
+queues a new log with a new idempotency key and keeps the `UNCERTAIN` one).
+`GET /health/email-queue` reports `uncertainCount`. SendGrid's Event Webhook
+must include the **Processed** event for the reconciliation to happen.
+
 Outbox retention: the `retention` job (hourly, and once at boot; 5 min
 budget) works in 1,000-row statements. It deletes `realtime.emit` rows older
 than 24 h (any status except leased: a day-old UI event is worthless), deletes

@@ -29,7 +29,8 @@ import { createLogger } from "@app/shared";
 import { getDb, type DbExecutor } from "../client";
 import { STANDARD_RETRY_DELAYS_MS, standardRetryDelayMs } from "../helpers";
 import { DB_NOW, backoffInterval, createLeaseQueue, intervalMs } from "../lease-queue";
-import { withTxn, withSerializableTxn, pgUniqueViolation } from "../txn";
+import { withTxn, withLockingTxn, withSerializableTxn, pgUniqueViolation } from "../txn";
+import { lockAbstractForUpdate, lockAbstractsForUpdate } from "../locks";
 import {
   abstractConfig,
   abstractRevisions,
@@ -857,14 +858,18 @@ export interface EditAbstractTxnParams {
   ip?: string;
 }
 
+export type EditAbstractResult =
+  | { ok: true }
+  | { ok: false; reason: "duplicate_email" | "not_editable" };
+
 export async function editAbstractTxn(
   params: EditAbstractTxnParams,
-): Promise<{ ok: true } | { ok: false; reason: "duplicate_email" }> {
+): Promise<EditAbstractResult> {
   try {
     // Serializable + retry: revisionNo is read-max-then-insert, which races
     // under plain READ COMMITTED on abstract_revisions_abstract_id_revision_no_key
     // for concurrent edits of the same abstract (M3).
-    return await withSerializableTxn(async (tx) => {
+    return await withSerializableTxn(async (tx): Promise<EditAbstractResult> => {
       const [last] = await tx
         .select({ revisionNo: abstractRevisions.revisionNo })
         .from(abstractRevisions)
@@ -873,7 +878,10 @@ export async function editAbstractTxn(
         .limit(1);
       const nextRevisionNo = (last?.revisionNo ?? 0) + 1;
 
-      await tx
+      // Final-status guard (ADR 0001 rule 5): the caller's status check ran
+      // before this transaction, so a decision committed since then must stop
+      // the edit here. Nothing is written when no row matches.
+      const [edited] = await tx
         .update(abstracts)
         .set({
           authorFirstName: params.authorFirstName,
@@ -890,7 +898,16 @@ export async function editAbstractTxn(
           lastEditedAt: params.lastEditedAt,
           contentVersion: sql`${abstracts.contentVersion} + 1`,
         })
-        .where(eq(abstracts.id, params.id));
+        .where(
+          and(
+            eq(abstracts.id, params.id),
+            notInArray(abstracts.status, FINAL_STATUSES),
+          ),
+        )
+        .returning({ id: abstracts.id });
+      if (!edited) {
+        return { ok: false, reason: "not_editable" };
+      }
 
       await tx.insert(abstractRevisions).values({
         abstractId: params.id,
@@ -932,7 +949,7 @@ export async function editAbstractTxn(
         `email:abstract:ABSTRACT_EDIT_ACK:${params.id}:${nextRevisionNo}`,
       );
 
-      return { ok: true as const };
+      return { ok: true };
     });
   } catch (error) {
     if (isDuplicateAuthorEmailViolation(error)) {
@@ -1307,7 +1324,7 @@ export async function deactivateCommitteeMembershipTxn(
   eventId: string,
   userId: string,
 ): Promise<void> {
-  await withTxn(async (tx) => {
+  await withLockingTxn(async (tx) => {
     await tx
       .update(abstractCommitteeMemberships)
       .set({ active: false })
@@ -1335,10 +1352,13 @@ export async function deactivateCommitteeMembershipTxn(
     // Finalized abstracts are deliberately untouched: their review rows and
     // stored aggregates are the historical inputs to an already-made decision,
     // and offboarding a member must not rewrite that record.
+    //
+    // The affected abstracts are locked in ascending id order (ADR 0001) and
+    // their status is read after the lock, so a review, assignment or
+    // finalize on one of them runs wholly before or after this recompute.
     const candidateReviews = await tx
-      .select({ abstractId: abstractReviews.abstractId, status: abstracts.status })
+      .select({ abstractId: abstractReviews.abstractId })
       .from(abstractReviews)
-      .innerJoin(abstracts, eq(abstracts.id, abstractReviews.abstractId))
       .where(
         and(
           eq(abstractReviews.eventId, eventId),
@@ -1346,27 +1366,37 @@ export async function deactivateCommitteeMembershipTxn(
           eq(abstractReviews.active, true),
         ),
       );
-    const affected = candidateReviews.filter(
-      (r) => !FINAL_STATUSES.includes(r.status),
+    const lockedIds = await lockAbstractsForUpdate(
+      tx,
+      candidateReviews.map((r) => r.abstractId),
     );
-    if (affected.length > 0) {
-      await tx
-        .update(abstractReviews)
-        .set({ active: false })
-        .where(
-          and(
-            eq(abstractReviews.eventId, eventId),
-            eq(abstractReviews.reviewerId, userId),
-            eq(abstractReviews.active, true),
-            inArray(
-              abstractReviews.abstractId,
-              affected.map((r) => r.abstractId),
-            ),
-          ),
-        );
-      for (const { abstractId, status } of affected) {
-        await applyReviewAggregate(tx, abstractId, status, false);
-      }
+    if (lockedIds.length === 0) return;
+    const openAbstracts = await tx
+      .select({ id: abstracts.id })
+      .from(abstracts)
+      .where(
+        and(
+          inArray(abstracts.id, lockedIds),
+          notInArray(abstracts.status, FINAL_STATUSES),
+        ),
+      )
+      .orderBy(asc(abstracts.id));
+    const affectedIds = openAbstracts.map((r) => r.id);
+    if (affectedIds.length === 0) return;
+
+    await tx
+      .update(abstractReviews)
+      .set({ active: false })
+      .where(
+        and(
+          eq(abstractReviews.eventId, eventId),
+          eq(abstractReviews.reviewerId, userId),
+          eq(abstractReviews.active, true),
+          inArray(abstractReviews.abstractId, affectedIds),
+        ),
+      );
+    for (const abstractId of affectedIds) {
+      await applyReviewAggregate(tx, abstractId, false);
     }
   });
 }
@@ -1543,14 +1573,37 @@ export async function findActiveMembershipUserIds(
   return rows.map((r) => r.userId);
 }
 
+export type AssignReviewersResult =
+  | { ok: true; id: string; status: AbstractRow["status"] }
+  | { ok: false; reason: "not_found" | "finalized" };
+
+/**
+ * Replace an abstract's reviewer set and recompute its aggregate. Locks the
+ * abstract first and decides from its status read after the lock: a finalized
+ * abstract's reviewers are part of the decision record, so nothing changes.
+ */
 export async function assignReviewersTxn(params: {
   eventId: string;
   abstractId: string;
   reviewerIds: string[];
-  currentStatus: AbstractRow["status"];
-}): Promise<{ id: string; status: AbstractRow["status"] }> {
-  const { eventId, abstractId, reviewerIds, currentStatus } = params;
-  return withTxn(async (tx) => {
+}): Promise<AssignReviewersResult> {
+  const { eventId, abstractId, reviewerIds } = params;
+  return withLockingTxn(async (tx): Promise<AssignReviewersResult> => {
+    if (!(await lockAbstractForUpdate(tx, abstractId))) {
+      return { ok: false, reason: "not_found" };
+    }
+    const [current] = await tx
+      .select({ eventId: abstracts.eventId, status: abstracts.status })
+      .from(abstracts)
+      .where(eq(abstracts.id, abstractId))
+      .limit(1);
+    if (!current || current.eventId !== eventId) {
+      return { ok: false, reason: "not_found" };
+    }
+    if (FINAL_STATUSES.includes(current.status)) {
+      return { ok: false, reason: "finalized" };
+    }
+
     const inactiveDesired = reviewerIds.length
       ? await tx
           .select({ reviewerId: abstractReviews.reviewerId })
@@ -1605,7 +1658,8 @@ export async function assignReviewersTxn(params: {
     // active reviews instead of carrying the old status through untouched —
     // removed reviewers' scores must stop counting, and a stale
     // REVIEW_COMPLETE must not survive a newly added unscored reviewer.
-    return applyReviewAggregate(tx, abstractId, currentStatus, reviewerIds.length > 0);
+    const updated = await applyReviewAggregate(tx, abstractId, reviewerIds.length > 0);
+    return { ok: true, ...updated };
   });
 }
 
@@ -1857,7 +1911,8 @@ function deriveReviewStatus(
 }
 
 /**
- * Recompute + write averageScore/reviewCount/status for one abstract.
+ * Recompute + write averageScore/reviewCount/status for one abstract. The
+ * caller holds the abstract's row lock; the status is read here, after it.
  * No-op on finalized abstracts: the stored aggregate is part of the decision
  * record and must never be rewritten after the fact (deriveReviewStatus
  * already refuses to move a terminal status; this extends the same rule to
@@ -1866,24 +1921,53 @@ function deriveReviewStatus(
 async function applyReviewAggregate(
   tx: DbExecutor,
   abstractId: string,
-  currentStatus: AbstractRow["status"],
   hasReviewers: boolean,
 ): Promise<{ id: string; status: AbstractRow["status"] }> {
-  if (FINAL_STATUSES.includes(currentStatus)) {
-    return { id: abstractId, status: currentStatus };
+  const [current] = await tx
+    .select({ status: abstracts.status })
+    .from(abstracts)
+    .where(eq(abstracts.id, abstractId))
+    .limit(1);
+  if (!current) throw lockedAbstractChanged(abstractId);
+  if (FINAL_STATUSES.includes(current.status)) {
+    return { id: abstractId, status: current.status };
   }
   const { averageScore, reviewCount, allScored } = await computeReviewAggregate(
     tx,
     abstractId,
   );
-  const status = deriveReviewStatus(currentStatus, hasReviewers, allScored);
+  const status = deriveReviewStatus(current.status, hasReviewers, allScored);
   const [updated] = await tx
     .update(abstracts)
     .set({ averageScore, reviewCount, status })
-    .where(eq(abstracts.id, abstractId))
+    .where(
+      and(
+        eq(abstracts.id, abstractId),
+        notInArray(abstracts.status, FINAL_STATUSES),
+      ),
+    )
     .returning({ id: abstracts.id, status: abstracts.status });
+  if (!updated) throw lockedAbstractChanged(abstractId);
   return updated;
 }
+
+/**
+ * A row the caller locked changed under the lock. Unreachable while callers
+ * lock first; thrown (not returned) so the transaction rolls back.
+ */
+function lockedAbstractChanged(abstractId: string): Error {
+  return new Error(`Abstract ${abstractId} changed while its row lock was held`);
+}
+
+export type ReviewAbstractResult =
+  | {
+      ok: true;
+      id: string;
+      status: AbstractRow["status"];
+      averageScore: number | null;
+      reviewCount: number;
+    }
+  | { ok: false; reason: "not_found" | "finalized" | "not_assigned" };
 
 export async function reviewAbstractTxn(params: {
   abstractId: string;
@@ -1894,12 +1978,7 @@ export async function reviewAbstractTxn(params: {
   comment: string | null | undefined;
   commentsEnabled: boolean;
   divergenceThreshold: number;
-}): Promise<{
-  id: string;
-  status: AbstractRow["status"];
-  averageScore: number | null;
-  reviewCount: number;
-}> {
+}): Promise<ReviewAbstractResult> {
   const {
     abstractId,
     eventId,
@@ -1911,45 +1990,58 @@ export async function reviewAbstractTxn(params: {
   } = params;
   const commentValue = commentsEnabled === false ? null : (params.comment ?? null);
 
-  return withTxn(async (tx) => {
-    await tx
-      .insert(abstractReviews)
-      .values({
-        abstractId,
-        eventId,
-        reviewerId,
-        active: true,
-        score,
-        comment: commentValue,
-        scoredAt: new Date(),
-      })
-      .onConflictDoUpdate({
-        target: [abstractReviews.abstractId, abstractReviews.reviewerId],
-        set: {
-          eventId,
-          active: true,
-          score,
-          comment: commentValue,
-          scoredAt: new Date(),
-        },
-      });
+  // Lock first, then re-read (ADR 0001): parallel reviews of one abstract
+  // queue on its row, so each recompute sees every committed score, and a
+  // decision committed before the lock is seen here.
+  return withLockingTxn(async (tx): Promise<ReviewAbstractResult> => {
+    if (!(await lockAbstractForUpdate(tx, abstractId))) {
+      return { ok: false, reason: "not_found" };
+    }
+    const [current] = await tx
+      .select({ status: abstracts.status })
+      .from(abstracts)
+      .where(eq(abstracts.id, abstractId))
+      .limit(1);
+    if (!current) return { ok: false, reason: "not_found" };
+    if (FINAL_STATUSES.includes(current.status)) {
+      return { ok: false, reason: "finalized" };
+    }
+
+    // Only an active assignment can be scored: a reviewer removed since the
+    // caller's check matches no row, and nothing is written.
+    const [review] = await tx
+      .update(abstractReviews)
+      .set({ score, comment: commentValue, scoredAt: new Date() })
+      .where(
+        and(
+          eq(abstractReviews.abstractId, abstractId),
+          eq(abstractReviews.reviewerId, reviewerId),
+          eq(abstractReviews.active, true),
+        ),
+      )
+      .returning({ id: abstractReviews.id });
+    if (!review) return { ok: false, reason: "not_assigned" };
 
     const { averageScore, reviewCount, allScored, scores } =
       await computeReviewAggregate(tx, abstractId);
-    const status = allScored
-      ? ("REVIEW_COMPLETE" as const)
-      : ("UNDER_REVIEW" as const);
+    const status = deriveReviewStatus(current.status, true, allScored);
 
     const [updated] = await tx
       .update(abstracts)
       .set({ averageScore, reviewCount, status })
-      .where(eq(abstracts.id, abstractId))
+      .where(
+        and(
+          eq(abstracts.id, abstractId),
+          notInArray(abstracts.status, FINAL_STATUSES),
+        ),
+      )
       .returning({
         id: abstracts.id,
         status: abstracts.status,
         averageScore: abstracts.averageScore,
         reviewCount: abstracts.reviewCount,
       });
+    if (!updated) throw lockedAbstractChanged(abstractId);
 
     await insertAuditLog(
       {
@@ -1988,7 +2080,7 @@ export async function reviewAbstractTxn(params: {
       threshold: divergenceThreshold,
     });
 
-    return updated;
+    return { ok: true, ...updated };
   });
 }
 
@@ -2080,7 +2172,13 @@ export async function finalizeAbstractTxn(params: {
 }): Promise<FinalizeResult> {
   const { eventId, abstractId, decision, finalType, performedBy } = params;
   try {
-    return await withTxn(async (tx): Promise<FinalizeResult> => {
+    // Lock first, then re-read (ADR 0001): a review or assignment in flight
+    // commits before this reads the reviews and decides, and any that start
+    // later see the final status after their own lock.
+    return await withLockingTxn(async (tx): Promise<FinalizeResult> => {
+      if (!(await lockAbstractForUpdate(tx, abstractId))) {
+        return { ok: false, reason: "not_found" };
+      }
       const [existing] = await tx
         .select()
         .from(abstracts)
@@ -2162,7 +2260,8 @@ export async function finalizeAbstractTxn(params: {
         nextData.codeNumber = null;
       }
 
-      // Optimistic guard: another finalize racing to a terminal status ⇒ 0 rows.
+      // Final-status guard (ADR 0001 rule 5); the row lock already rules out
+      // another finalize in between, so 0 rows means it was final before.
       const [updated] = await tx
         .update(abstracts)
         .set(nextData)
@@ -2272,7 +2371,10 @@ export async function reopenAbstractTxn(params: {
   performedBy: string;
 }): Promise<ReopenResult> {
   const { eventId, abstractId, performedBy } = params;
-  return withTxn(async (tx): Promise<ReopenResult> => {
+  return withLockingTxn(async (tx): Promise<ReopenResult> => {
+    if (!(await lockAbstractForUpdate(tx, abstractId))) {
+      return { ok: false, reason: "not_found" };
+    }
     const [existing] = await tx
       .select()
       .from(abstracts)

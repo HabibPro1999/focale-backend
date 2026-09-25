@@ -11,8 +11,10 @@ export function recoverableQueues(): LeaseQueue[] {
  * Stale-lease recovery for every lease queue, in one place instead of at the
  * top of each queue's processing run. A row whose lease expired (its worker
  * died or hung past the lease) goes back to the queue with the attempt
- * charged, or is dead-lettered once its attempts are used up. Rows a live
- * worker holds are never expired: runLeased renews them.
+ * charged, or is dead-lettered once its attempts are used up. An email whose
+ * provider call may already have gone out is parked as UNCERTAIN instead of
+ * resent (emailQueue's `recovery.uncertain`). Rows a live worker holds are
+ * never expired: runLeased renews them.
  */
 @Injectable()
 export class LeaseRecoveryJob implements Job {
@@ -27,9 +29,9 @@ export class LeaseRecoveryJob implements Job {
     for (const queue of this.queues) {
       if (signal.aborted) return;
       try {
-        const { requeued, deadLettered } = await queue.recoverStale();
-        if (requeued > 0 || deadLettered > 0) {
-          log.warn({ queue: queue.spec.name, requeued, deadLettered }, "recovered expired leases");
+        const { requeued, deadLettered, uncertain = 0 } = await queue.recoverStale();
+        if (requeued > 0 || deadLettered > 0 || uncertain > 0) {
+          log.warn({ queue: queue.spec.name, requeued, deadLettered, uncertain }, "recovered expired leases");
         }
       } catch (err) {
         // One queue's failure does not stop the others.

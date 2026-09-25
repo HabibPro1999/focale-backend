@@ -806,6 +806,13 @@ const NETWORKING_OWNED = sql`"context_snapshot"->>'dispatchOwner' IS NOT DISTINC
  * failures and expired leases, and decides dead-lettering on recovery. A
  * released row goes back to QUEUED, due now. An expired lease is requeued with
  * the retry backoff, or FAILED once retry_count reaches max_retries.
+ *
+ * 3.6: a claim clears the provider-attempt marker, and beginProviderAttempt
+ * sets it right before the provider call. A marked row may already have been
+ * sent, so release leaves it leased, and recovery parks an expired one as
+ * UNCERTAIN, unless its provider deduplicates on the log id (Resend): that one
+ * is requeued like any expired lease, and parked only once its retries are
+ * used up.
  * Networking-dispatched rows are never claimed or recovered here.
  */
 export const emailQueue = createLeaseQueue({
@@ -818,9 +825,17 @@ export const emailQueue = createLeaseQueue({
     AND ("next_attempt_at" IS NULL OR "next_attempt_at" <= ${DB_NOW})
     AND "attempt_count" <= "max_retries"`,
   order: sql`"queued_at" ASC`,
-  claimSet: sql`"error_message" = NULL`,
+  claimSet: sql`"error_message" = NULL, "provider_attempted_at" = NULL, "provider" = NULL`,
   releaseSet: sql`"status" = 'QUEUED', "next_attempt_at" = NULL`,
+  releasable: sql`"provider_attempted_at" IS NULL`,
   recovery: {
+    uncertain: {
+      // Resend is the provider keyed on the log id (its idempotency key).
+      where: sql`"provider_attempted_at" IS NOT NULL
+        AND ("provider" IS DISTINCT FROM 'resend' OR "retry_count" >= "max_retries")`,
+      set: sql`"status" = 'UNCERTAIN', "next_attempt_at" = NULL,
+        "error_message" = 'The email provider was called but its answer was never recorded (lease expired); not resent automatically'`,
+    },
     exhausted: sql`"retry_count" >= "max_retries"`,
     retrySet: sql`"status" = 'QUEUED', "retry_count" = "retry_count" + 1,
       "next_attempt_at" = ${DB_NOW} + ${backoffInterval(sql`("retry_count" + 1)`, STANDARD_RETRY_DELAYS_MS)},
@@ -832,12 +847,17 @@ export const emailQueue = createLeaseQueue({
   },
 });
 
-/** Statuses that count as "an email already in flight" for dedupe purposes. */
+/**
+ * Statuses that count as "an email already in flight" for the dedupe
+ * pre-checks. UNCERTAIN counts (it may have been sent; only an admin resends
+ * it), although the partial unique indexes behind them do not list it.
+ */
 const ACTIVE_EMAIL_STATUSES = [
   "QUEUED",
   "SENDING",
   "SENT",
   "DELIVERED",
+  "UNCERTAIN",
 ] as const satisfies readonly EmailStatus[];
 
 // ----------------------------------------------------------------------------
@@ -1024,6 +1044,46 @@ export async function writeResolvedSubjectIfLeaseHeld(
   return rowCountOf(res) > 0;
 }
 
+/**
+ * The provider-attempt marker (3.6): in the lease-guarded UPDATE right before
+ * the provider call, stamp provider_attempted_at and the provider, and extend
+ * the lease (it doubles as the ownership confirm). False when the row is no
+ * longer owned: the provider must not be called. From here on the row is
+ * never released or requeued blind; see emailQueue.
+ */
+export async function beginProviderAttempt(
+  id: string,
+  workerId: string,
+  provider: string,
+  leaseMs: number = EMAIL_LEASE_MS,
+): Promise<boolean> {
+  const res = await getDb().execute(sql`
+    UPDATE "email_logs"
+    SET "provider_attempted_at" = ${DB_NOW}, "provider" = ${provider},
+        "locked_until" = ${DB_NOW} + ${intervalMs(leaseMs)}, "updated_at" = ${DB_NOW}
+    WHERE "id" = ${id} AND "status" = 'SENDING' AND "locked_by" = ${workerId}
+    RETURNING "id"
+  `);
+  return rowCountOf(res) > 0;
+}
+
+/**
+ * The provider may have taken the email but never confirmed it (an ambiguous
+ * outcome that must not be retried): park it as UNCERTAIN. A webhook moves it
+ * forward; an admin can resend it.
+ */
+export async function markEmailUncertain(
+  id: string,
+  workerId: string,
+  errorMessage: string,
+): Promise<boolean> {
+  return emailQueue.complete(
+    workerId,
+    id,
+    sql`"status" = 'UNCERTAIN', "error_message" = ${errorMessage}, "next_attempt_at" = NULL`,
+  );
+}
+
 export async function markEmailSent(
   id: string,
   workerId: string,
@@ -1117,6 +1177,8 @@ export interface EmailQueueHealth {
   staleSendingCount: number;
   failedCount: number;
   deadLetterCount: number;
+  /** Emails parked as UNCERTAIN (may have been sent; an admin decides). */
+  uncertainCount: number;
   oldestQueuedAgeMs: number;
   oldestInFlightAgeMs: number;
   recentFailures24h: number;
@@ -1140,6 +1202,7 @@ export async function getEmailQueueHealth(): Promise<EmailQueueHealth> {
     sendingCount,
     staleSendingCount,
     failedCount,
+    uncertainCount,
     recentFailures,
     oldestQueued,
     oldestInFlight,
@@ -1159,6 +1222,7 @@ export async function getEmailQueueHealth(): Promise<EmailQueueHealth> {
       )!,
     ),
     countWhere(eq(emailLogs.status, "FAILED")),
+    countWhere(eq(emailLogs.status, "UNCERTAIN")),
     countWhere(
       and(
         eq(emailLogs.status, "FAILED"),
@@ -1197,6 +1261,7 @@ export async function getEmailQueueHealth(): Promise<EmailQueueHealth> {
     staleSendingCount,
     failedCount,
     deadLetterCount: failedCount,
+    uncertainCount,
     oldestQueuedAgeMs,
     oldestInFlightAgeMs,
     recentFailures24h: recentFailures,

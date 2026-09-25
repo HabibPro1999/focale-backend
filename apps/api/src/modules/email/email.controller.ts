@@ -35,6 +35,7 @@ import {
   EmailTemplateIdParamDto,
   BulkSendParamDto,
   SendCustomEmailParamDto,
+  ResendEmailLogParamDto,
 } from "./dto";
 
 // Every route requires a valid Bearer token (any role); per-handler
@@ -230,6 +231,23 @@ export class EmailController {
     this.assertAccess(user, event.clientId);
     await assertClientModuleEnabled(event.clientId, "emails");
     return this.templates.listLogs(params.eventId, query);
+  }
+
+  /**
+   * 3.6: explicitly resend an UNCERTAIN email (the provider may have sent it,
+   * so it is never resent automatically). Queues a new email log.
+   */
+  @Post(":eventId/email-logs/:emailLogId/resend")
+  @HttpCode(201)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  async resendLog(
+    @Param() params: ResendEmailLogParamDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    const event = await this.resolveEvent(params.eventId);
+    this.assertAccess(user, event.clientId);
+    await this.assertEmailFeatureWritable(event);
+    return this.send.resendUncertain(params.eventId, params.emailLogId);
   }
 
   // ==========================================================================

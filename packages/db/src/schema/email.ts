@@ -99,6 +99,11 @@ export const emailLogs = pgTable(
     // can't express partial indexes) — a redelivered outbox event conflicts
     // instead of inserting a duplicate row.
     dedupeKey: text(),
+    // 3.6 (0029): set in the lease-guarded UPDATE right before the provider
+    // call (cleared on claim); lease recovery turns an expired, marked row
+    // into UNCERTAIN (or an idempotent retry) instead of a blind resend.
+    providerAttemptedAt: timestamp({ precision: 3 }),
+    provider: text(),
     queuedAt: timestamp({ precision: 3 }).defaultNow().notNull(),
     // App-managed (Prisma @updatedAt): no DB default, matches live column.
     updatedAt: timestamp({ precision: 3 })
@@ -132,6 +137,8 @@ export const emailLogs = pgTable(
     index("email_logs_recipient_email_idx").on(t.recipientEmail),
     index("email_logs_sendgrid_message_id_idx").on(t.providerMessageId),
     index("email_logs_trigger_queued_at_idx").on(t.trigger, t.queuedAt),
+    // 0029: the template branch of the event email-log list.
+    index("email_logs_template_id_queued_at_idx").on(t.templateId, t.queuedAt),
     // Certificate emails are deduped per certificate template, under the
     // event lock, not by these two indexes (0024).
     uniqueIndex("email_logs_registration_trigger_active_key")

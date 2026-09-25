@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ResendProvider,
+  classifyResendError,
   buildResendPayload,
   normalizeResendEvents,
   sanitizeTagValue,
@@ -198,10 +199,16 @@ describe("normalizeResendEvents", () => {
     ).toBe("spam_report");
   });
 
-  it("treats sent/scheduled/delivery_delayed as log-only", () => {
+  it("maps sent to processed (Resend took the email)", () => {
     const out = normalizeResendEvents({ type: "email.sent", created_at: "", data: data() } as never);
+    expect(out.events).toEqual([{ emailLogId: "log-1", type: "processed" }]);
+    expect(out.logOnly).toEqual([]);
+  });
+
+  it("treats scheduled/delivery_delayed as log-only", () => {
+    const out = normalizeResendEvents({ type: "email.delivery_delayed", created_at: "", data: data() } as never);
     expect(out.events).toEqual([]);
-    expect(out.logOnly).toEqual([{ type: "email.sent", emailLogId: "log-1" }]);
+    expect(out.logOnly).toEqual([{ type: "email.delivery_delayed", emailLogId: "log-1" }]);
   });
 
   it("drops status events that carry no email_log_id tag", () => {
@@ -238,22 +245,28 @@ describe("ResendProvider", () => {
     const provider = configured();
     const result = await provider.sendEmail(baseInput({ trackingId: "log-9" }));
 
-    expect(result).toEqual({ success: true, messageId: "mock-resend-id" });
+    expect(result).toEqual({ outcome: "accepted", success: true, messageId: "mock-resend-id" });
     expect(resendMock.send).toHaveBeenCalledTimes(1);
     const [, opts] = resendMock.send.mock.calls[0];
     expect(opts).toEqual({ idempotencyKey: "log-9", signal: expect.any(AbortSignal) });
   });
 
-  it("surfaces a returned Resend error as a failed result", async () => {
-    mockResendFailure({ name: "validation_error", message: "bad from" });
+  it("surfaces a returned Resend HTTP error as a rejected result", async () => {
+    resendMock.send.mockResolvedValue({ data: null, error: { name: "validation_error", message: "bad from", statusCode: 422 } });
     const result = await configured().sendEmail(baseInput());
-    expect(result).toEqual({ success: false, error: "bad from" });
+    expect(result).toEqual({ outcome: "rejected", success: false, error: "bad from", statusCode: 422 });
+  });
+
+  it("reports a request without a response as ambiguous, retryable under the same idempotency key", async () => {
+    mockResendFailure({ name: "application_error", message: "Unable to fetch data. The request could not be resolved." });
+    const result = await configured().sendEmail(baseInput({ trackingId: "log-7" }));
+    expect(result).toMatchObject({ outcome: "ambiguous", success: false, idempotentRetry: true });
   });
 
   it("reports not-configured without calling the API", async () => {
     const provider = new ResendProvider({ ...FROM });
     const result = await provider.sendEmail(baseInput());
-    expect(result.success).toBe(false);
+    expect(result).toMatchObject({ outcome: "rejected", success: false });
     expect(resendMock.send).not.toHaveBeenCalled();
   });
 
@@ -303,5 +316,49 @@ describe("ResendProvider", () => {
       events: [{ emailLogId: "log-7", type: "delivered" }],
       logOnly: [],
     });
+  });
+});
+
+describe("classifyResendError", () => {
+  it("no response (network error or our timeout abort) is ambiguous, retryable under the key", () => {
+    expect(classifyResendError({ name: "application_error", message: "Unable to fetch data.", statusCode: null }, true)).toEqual({
+      outcome: "ambiguous",
+      success: false,
+      error: "Unable to fetch data.",
+      idempotentRetry: true,
+    });
+    // Without an idempotency key a retry could send twice.
+    expect(classifyResendError({ name: "application_error", message: "x" }, false)).toMatchObject({
+      outcome: "ambiguous",
+      idempotentRetry: false,
+    });
+  });
+
+  it("a 5xx or a concurrent request with the same key is ambiguous, retryable", () => {
+    expect(classifyResendError({ name: "internal_server_error", message: "x", statusCode: 500 }, true)).toMatchObject({
+      outcome: "ambiguous",
+      statusCode: 500,
+      idempotentRetry: true,
+    });
+    expect(classifyResendError({ name: "concurrent_idempotent_requests", message: "x", statusCode: 409 }, true)).toMatchObject({
+      outcome: "ambiguous",
+      idempotentRetry: true,
+    });
+  });
+
+  it("a key already used with another payload is ambiguous and not retryable (an earlier request reached Resend)", () => {
+    expect(classifyResendError({ name: "invalid_idempotent_request", message: "x", statusCode: 409 }, true)).toMatchObject({
+      outcome: "ambiguous",
+      idempotentRetry: false,
+    });
+  });
+
+  it.each([
+    ["validation_error", 422],
+    ["invalid_api_key", 403],
+    ["rate_limit_exceeded", 429],
+    ["daily_quota_exceeded", 429],
+  ])("%s (%i) is rejected", (name, statusCode) => {
+    expect(classifyResendError({ name, message: "x", statusCode }, true)).toMatchObject({ outcome: "rejected", statusCode });
   });
 });

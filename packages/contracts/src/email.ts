@@ -40,6 +40,9 @@ export const EmailStatusSchema = z.enum([
   "DROPPED",
   "FAILED",
   "SKIPPED",
+  // 3.6: the provider call may have gone through but was never confirmed. Not
+  // resent automatically; a webhook moves it forward, or an admin resends it.
+  "UNCERTAIN",
 ]);
 
 // ============================================================================
@@ -288,6 +291,12 @@ export const BulkSendParamSchema = z.strictObject({
 export const SendCustomEmailParamSchema = z.strictObject({
   eventId: z.string().uuid(),
   registrationId: z.string().uuid(),
+});
+
+/** POST /api/events/:eventId/email-logs/:emailLogId/resend (3.6: UNCERTAIN emails only). */
+export const ResendEmailLogParamSchema = z.strictObject({
+  eventId: z.string().uuid(),
+  emailLogId: z.string().uuid(),
 });
 
 // ============================================================================

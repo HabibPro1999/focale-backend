@@ -5,8 +5,11 @@ import {
   DB_NOW,
   abstractBookJobs,
   abstractBookQueue,
+  beginProviderAttempt,
   emailLogs,
   emailQueue,
+  markEmailFailed,
+  markEmailUncertain,
   getDb,
   outboxEvents,
   outboxQueue,
@@ -246,6 +249,12 @@ async function setLeaseLeft(table: string, ids: string[], ms: number): Promise<v
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** recoverStale with the parked count spelled out (0 for a queue without that branch). */
+async function recover(queue: LeaseQueue, where?: SQL) {
+  const { requeued, deadLettered, uncertain = 0 } = await queue.recoverStale(where);
+  return { requeued, deadLettered, uncertain };
+}
+
 // CockroachDB's SKIP LOCKED can skip rows whose committed intents are not
 // resolved yet (cockroachdb/cockroach#167582): a claim right after a write may
 // transiently miss rows. Production just picks them up next tick; the tests
@@ -360,7 +369,7 @@ for (const fx of FIXTURES) {
       await claimExactly(queue, "w1", 3);
       await expire([expired!, exhausted!]);
 
-      expect(await queue.recoverStale()).toEqual({ requeued: 1, deadLettered: 1 });
+      expect(await recover(queue)).toEqual({ requeued: 1, deadLettered: 1, uncertain: 0 });
       expect(await readRow(table, expired!)).toMatchObject({ status: fx.requeuedStatus, attempts: 1, owner: null });
       expect(await readRow(table, exhausted!)).toMatchObject({ status: fx.deadStatus, attempts: MAX_ATTEMPTS, owner: null });
       expect(await readRow(table, live!)).toMatchObject({ status: leased, owner: "w1" });
@@ -377,7 +386,7 @@ for (const fx of FIXTURES) {
       // Another worker claims it, second attempt.
       expect(await claimExactly(queue, "w2", 1)).toEqual([expired]);
       expect((await readRow(table, expired!)).attempts).toBe(2);
-      expect(await queue.recoverStale()).toEqual({ requeued: 0, deadLettered: 0 });
+      expect(await recover(queue)).toEqual({ requeued: 0, deadLettered: 0, uncertain: 0 });
     });
 
     it("recovers only the expired leases a scope selects", async () => {
@@ -385,7 +394,7 @@ for (const fx of FIXTURES) {
       await claimExactly(queue, "w1", 2);
       await expire([a!, b!]);
 
-      expect(await queue.recoverStale(sql`"id" = ${a!}`)).toEqual({ requeued: 1, deadLettered: 0 });
+      expect(await recover(queue, sql`"id" = ${a!}`)).toEqual({ requeued: 1, deadLettered: 0, uncertain: 0 });
       expect(await readRow(table, a!)).toMatchObject({ status: fx.requeuedStatus, owner: null });
       expect(await readRow(table, b!)).toMatchObject({ status: leased, owner: "w1" });
     });
@@ -500,7 +509,7 @@ describe.runIf(dbTestsEnabled())("db tier: email lease queue ownership", () => {
 
     expect(await claimExactly(emailQueue, "w1", 1)).toEqual([ordinary]);
     expect(await emailQueue.claim("w1", 10)).toEqual([]);
-    expect(await emailQueue.recoverStale()).toEqual({ requeued: 0, deadLettered: 0 });
+    expect(await emailQueue.recoverStale()).toEqual({ requeued: 0, deadLettered: 0, uncertain: 0 });
     expect(await readRow("email_logs", queued!.id)).toMatchObject({ status: "QUEUED", owner: null });
     expect(await readRow("email_logs", sending!.id)).toMatchObject({ status: "SENDING", owner: "networking-worker" });
   });
@@ -517,7 +526,94 @@ describe.runIf(dbTestsEnabled())("db tier: email lease queue ownership", () => {
     await claimExactly(emailQueue, "w2", 1);
     await setLeaseLeft("email_logs", [id!.id], -1_000);
 
-    expect(await emailQueue.recoverStale()).toEqual({ requeued: 0, deadLettered: 1 });
+    expect(await emailQueue.recoverStale()).toEqual({ requeued: 0, deadLettered: 1, uncertain: 0 });
     expect(await readRow("email_logs", id!.id)).toMatchObject({ status: "FAILED", attempts: 2, owner: null });
+  });
+
+  // 3.6: the provider-attempt marker.
+  async function marker(id: string): Promise<{ status: string; attempted: boolean; provider: string | null; error: string | null }> {
+    const [row] = await getDb()
+      .select({
+        status: emailLogs.status,
+        attemptedAt: emailLogs.providerAttemptedAt,
+        provider: emailLogs.provider,
+        error: emailLogs.errorMessage,
+      })
+      .from(emailLogs)
+      .where(sql`${emailLogs.id} = ${id}`);
+    return { status: row!.status, attempted: row!.attemptedAt !== null, provider: row!.provider, error: row!.error };
+  }
+
+  it("beginProviderAttempt marks only the owner's row, extends its lease, and a claim clears the marker", async () => {
+    const [id] = await emailFixture.seed(1);
+    await claimExactly(emailQueue, "w1", 1);
+    await setLeaseLeft("email_logs", [id!], 5_000);
+
+    expect(await beginProviderAttempt(id!, "w2", "sendgrid")).toBe(false);
+    expect(await marker(id!)).toMatchObject({ attempted: false, provider: null });
+    expect(await beginProviderAttempt(id!, "w1", "sendgrid", 60_000)).toBe(true);
+    expect(await marker(id!)).toMatchObject({ status: "SENDING", attempted: true, provider: "sendgrid" });
+    expect((await readRow("email_logs", id!)).leaseLeftMs).toBeGreaterThan(30_000);
+
+    // A definitive rejection requeues it; the next claim starts without a marker.
+    expect(await markEmailFailed(id!, "w1", "rejected", 1, 4)).toBe(true);
+    await makeDue("email_logs", [id!]);
+    await claimExactly(emailQueue, "w2", 1);
+    expect(await marker(id!)).toMatchObject({ status: "SENDING", attempted: false, provider: null });
+  });
+
+  it("release leaves a row whose provider call started leased (never requeued for free)", async () => {
+    const [started, idle] = await emailFixture.seed(2);
+    await claimExactly(emailQueue, "w1", 2);
+    expect(await beginProviderAttempt(started!, "w1", "sendgrid")).toBe(true);
+
+    expect(await emailQueue.release("w1", [started!, idle!])).toBe(1);
+    expect(await readRow("email_logs", idle!)).toMatchObject({ status: "QUEUED", owner: null });
+    expect(await readRow("email_logs", started!)).toMatchObject({ status: "SENDING", owner: "w1" });
+  });
+
+  it("recovery parks an expired SendGrid attempt as UNCERTAIN and never resends it", async () => {
+    const [attempted, unattempted] = await emailFixture.seed(2);
+    await claimExactly(emailQueue, "w1", 2);
+    expect(await beginProviderAttempt(attempted!, "w1", "sendgrid")).toBe(true);
+    await setLeaseLeft("email_logs", [attempted!, unattempted!], -1_000);
+
+    expect(await emailQueue.recoverStale()).toEqual({ requeued: 1, deadLettered: 0, uncertain: 1 });
+    expect(await marker(attempted!)).toMatchObject({
+      status: "UNCERTAIN",
+      attempted: true,
+      provider: "sendgrid",
+      error: expect.stringContaining("never recorded"),
+    });
+    expect(await readRow("email_logs", attempted!)).toMatchObject({ owner: null, leaseLeftMs: null });
+    // The unmarked one never reached the provider: an ordinary requeue.
+    expect(await marker(unattempted!)).toMatchObject({ status: "QUEUED", attempted: false });
+    await makeDue("email_logs", [unattempted!]);
+    expect(await claimExactly(emailQueue, "w2", 1)).toEqual([unattempted]);
+    expect(await emailQueue.claim("w2", 10)).toEqual([]);
+  });
+
+  it("recovery retries an expired Resend attempt (same log id, its idempotency key) until its retries run out", async () => {
+    const [retryable] = await emailFixture.seed(1);
+    const [exhausted] = await emailFixture.seed(1, { attemptsLeft: 1 });
+    await claimExactly(emailQueue, "w1", 2);
+    for (const id of [retryable!, exhausted!]) expect(await beginProviderAttempt(id, "w1", "resend")).toBe(true);
+    await setLeaseLeft("email_logs", [retryable!, exhausted!], -1_000);
+
+    expect(await emailQueue.recoverStale()).toEqual({ requeued: 1, deadLettered: 0, uncertain: 1 });
+    expect(await marker(retryable!)).toMatchObject({ status: "QUEUED", attempted: true, provider: "resend" });
+    expect(await marker(exhausted!)).toMatchObject({ status: "UNCERTAIN", provider: "resend" });
+    await makeDue("email_logs", [retryable!]);
+    expect(await claimExactly(emailQueue, "w2", 1)).toEqual([retryable]);
+  });
+
+  it("markEmailUncertain parks an owned row", async () => {
+    const [id] = await emailFixture.seed(1);
+    await claimExactly(emailQueue, "w1", 1);
+    expect(await markEmailUncertain(id!, "w2", "timeout")).toBe(false);
+    expect(await markEmailUncertain(id!, "w1", "timeout")).toBe(true);
+    expect(await marker(id!)).toMatchObject({ status: "UNCERTAIN", error: "timeout" });
+    expect(await readRow("email_logs", id!)).toMatchObject({ owner: null, leaseLeftMs: null });
+    expect(await emailQueue.claim("w1", 10)).toEqual([]);
   });
 });

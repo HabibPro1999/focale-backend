@@ -83,6 +83,8 @@ export const emailStatus = pgEnum("EmailStatus", [
   "DROPPED",
   "FAILED",
   "SKIPPED",
+  // 3.6 (0028): the provider may have sent it; never resent automatically.
+  "UNCERTAIN",
 ]);
 
 export const abstractSubmissionMode = pgEnum("AbstractSubmissionMode", [

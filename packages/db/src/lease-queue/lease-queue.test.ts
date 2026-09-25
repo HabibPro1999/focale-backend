@@ -93,6 +93,30 @@ describe("createLeaseQueue SQL", () => {
     expect(dead).toContain(`AND ("attempt_count" >= "max_attempts")`);
   });
 
+  it("parks the uncertain rows first and keeps them out of requeue and dead-letter", async () => {
+    dbMock.execute
+      .mockResolvedValueOnce({ rowCount: 3, rows: [] })
+      .mockResolvedValueOnce({ rowCount: 2, rows: [] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] });
+    const queue = createLeaseQueue({
+      ...spec,
+      recovery: { ...spec.recovery, uncertain: { where: sql`"sent_at" IS NOT NULL`, set: sql`"status" = 'UNKNOWN'` } },
+    });
+    await expect(queue.recoverStale()).resolves.toEqual({ requeued: 2, deadLettered: 1, uncertain: 3 });
+    const parked = flat(queryOf(0).sql);
+    expect(parked).toContain(`SET "status" = 'UNKNOWN', "locked_at" = NULL`);
+    expect(parked).toContain(`NOT ("owner" = 'other') AND COALESCE(("sent_at" IS NOT NULL), FALSE)`);
+    for (const i of [1, 2]) {
+      expect(flat(queryOf(i).sql)).toContain(`AND NOT COALESCE(("sent_at" IS NOT NULL), FALSE) AND`);
+    }
+  });
+
+  it("releases only the rows the spec lets go", async () => {
+    const queue = createLeaseQueue({ ...spec, releasable: sql`"sent_at" IS NULL` });
+    await queue.release("w1", ["a"]);
+    expect(flat(queryOf(0).sql)).toMatch(/AND "locked_by" = \$\d+ AND \("sent_at" IS NULL\) RETURNING "id"/);
+  });
+
   it("narrows recovery to the given rows", async () => {
     dbMock.execute.mockResolvedValue({ rowCount: 0, rows: [] });
     await createLeaseQueue(spec).recoverStale(sql`"event_id" = ${"event-1"}`);

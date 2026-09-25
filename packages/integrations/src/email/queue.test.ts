@@ -19,9 +19,12 @@ vi.mock("@app/db", async () => ({
   hasActiveSponsorshipEmailLog: vi.fn(),
   getClaimedEmailLogsForProcessing: vi.fn(),
   writeResolvedSubjectIfLeaseHeld: vi.fn(),
+  beginProviderAttempt: vi.fn(),
   markEmailSent: vi.fn(),
   markEmailFailed: vi.fn(),
   markEmailSkipped: vi.fn(),
+  markEmailUncertain: vi.fn(),
+  resendUncertainEmailLog: vi.fn(),
   readEmailLogStatus: vi.fn(),
   updateEmailLogStatusGuarded: vi.fn(),
   getEmailLogRealtimeTarget: vi.fn(),
@@ -30,8 +33,9 @@ vi.mock("@app/db", async () => ({
 }));
 
 const sendEmailMock = vi.fn();
+let providerName: "sendgrid" | "resend" = "sendgrid";
 vi.mock("./providers/index", () => ({
-  getEmailProvider: () => ({ sendEmail: sendEmailMock }),
+  getEmailProvider: () => ({ name: providerName, sendEmail: sendEmailMock }),
 }));
 
 vi.mock("./rendering/index", () => ({
@@ -47,9 +51,12 @@ import {
   hasActiveSponsorshipEmailLog,
   getClaimedEmailLogsForProcessing,
   writeResolvedSubjectIfLeaseHeld,
+  beginProviderAttempt,
   markEmailSent,
   markEmailFailed,
   markEmailSkipped,
+  markEmailUncertain,
+  resendUncertainEmailLog,
   readEmailLogStatus,
   updateEmailLogStatusGuarded,
   getEmailLogRealtimeTarget,
@@ -65,6 +72,7 @@ import {
   updateEmailStatusFromWebhook,
   setEmailStatusChangeListener,
   emitEmailLogRealtimeEvent,
+  resendUncertainEmail,
 } from "./queue";
 
 const mocked = <T>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
@@ -77,10 +85,13 @@ beforeEach(() => {
   queue.confirm.mockResolvedValue(true);
   queue.release.mockImplementation(async (_worker: string, ids: string[]) => ids.length);
   mocked(writeResolvedSubjectIfLeaseHeld).mockResolvedValue(true);
+  mocked(beginProviderAttempt).mockResolvedValue(true);
   mocked(markEmailSent).mockResolvedValue(true);
   mocked(markEmailFailed).mockResolvedValue(true);
   mocked(markEmailSkipped).mockResolvedValue(true);
-  sendEmailMock.mockResolvedValue({ success: true, messageId: "m1" });
+  mocked(markEmailUncertain).mockResolvedValue(true);
+  providerName = "sendgrid";
+  sendEmailMock.mockResolvedValue({ outcome: "accepted", success: true, messageId: "m1" });
 });
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -282,8 +293,10 @@ describe("processEmailQueue", () => {
     const res = await runOne(claimed());
     expect(queue.claim).toHaveBeenCalledWith("w1", 50, 600_000);
     expect(getClaimedEmailLogsForProcessing).toHaveBeenCalledWith("w1", ["log-1"]);
-    // Ownership confirmed before the row starts and again right before the send.
-    expect(queue.confirm).toHaveBeenCalledTimes(2);
+    // Ownership confirmed before the row starts, then re-checked right before
+    // the send by the provider-attempt marker write.
+    expect(queue.confirm).toHaveBeenCalledTimes(1);
+    expect(beginProviderAttempt).toHaveBeenCalledWith("log-1", "w1", "sendgrid", undefined);
     expect(queue.release).not.toHaveBeenCalled();
     expect(sendEmailMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -298,7 +311,7 @@ describe("processEmailQueue", () => {
       }),
     );
     expect(markEmailSent).toHaveBeenCalledWith("log-1", "w1", "m1");
-    expect(res).toEqual({ processed: 1, sent: 1, failed: 0, skipped: 0 });
+    expect(res).toEqual({ processed: 1, sent: 1, failed: 0, skipped: 0, uncertain: 0 });
     // Subject and plain text are resolved as text (no HTML entities), the
     // HTML body with escaping (6.1).
     const calls = vi.mocked(resolveVariables).mock.calls;
@@ -321,7 +334,7 @@ describe("processEmailQueue", () => {
     mocked(getClaimedEmailLogsForProcessing).mockResolvedValue(logs);
     sendEmailMock.mockImplementation(async () => {
       controller.abort(new WorkerShutdownError());
-      return { success: true, messageId: "m" };
+      return { outcome: "accepted", success: true, messageId: "m" };
     });
 
     const res = await processEmailQueue(50, { workerId: "w1", signal: controller.signal });
@@ -351,7 +364,7 @@ describe("processEmailQueue", () => {
     expect(sendEmailMock).not.toHaveBeenCalled();
     expect(markEmailFailed).not.toHaveBeenCalled();
     expect(queue.release).toHaveBeenCalledWith("w1", ["log-1"]);
-    expect(res).toEqual({ processed: 1, sent: 0, failed: 0, skipped: 0 });
+    expect(res).toEqual({ processed: 1, sent: 0, failed: 0, skipped: 0, uncertain: 0 });
   });
 
   it("a job timeout before the send fails the row (attempt charged)", async () => {
@@ -374,7 +387,7 @@ describe("processEmailQueue", () => {
       3,
     );
     expect(queue.release).not.toHaveBeenCalled();
-    expect(res).toEqual({ processed: 1, sent: 0, failed: 1, skipped: 0 });
+    expect(res).toEqual({ processed: 1, sent: 0, failed: 1, skipped: 0, uncertain: 0 });
   });
 
   it("drains batch after batch until one comes back short", async () => {
@@ -390,7 +403,7 @@ describe("processEmailQueue", () => {
 
     expect(queue.claim).toHaveBeenCalledTimes(2);
     expect(sendEmailMock).toHaveBeenCalledTimes(3);
-    expect(res).toEqual({ processed: 3, sent: 3, failed: 0, skipped: 0 });
+    expect(res).toEqual({ processed: 3, sent: 3, failed: 0, skipped: 0, uncertain: 0 });
   });
 
   it("claims one batch only without a drain window", async () => {
@@ -405,7 +418,7 @@ describe("processEmailQueue", () => {
 
   it("returns a zero result when nothing is due", async () => {
     const res = await processEmailQueue(50, { workerId: "w1" });
-    expect(res).toEqual({ processed: 0, sent: 0, failed: 0, skipped: 0 });
+    expect(res).toEqual({ processed: 0, sent: 0, failed: 0, skipped: 0, uncertain: 0 });
     expect(getClaimedEmailLogsForProcessing).not.toHaveBeenCalled();
     expect(sendEmailMock).not.toHaveBeenCalled();
   });
@@ -452,7 +465,7 @@ describe("processEmailQueue", () => {
         }),
       );
       expect(markEmailSent).toHaveBeenCalledWith("log-1", "w1", "m1");
-      expect(res).toEqual({ processed: 1, sent: 1, failed: 0, skipped: 0 });
+      expect(res).toEqual({ processed: 1, sent: 1, failed: 0, skipped: 0, uncertain: 0 });
     });
 
     it("still skips when neither a template nor fallback markers are present", async () => {
@@ -535,8 +548,8 @@ describe("processEmailQueue", () => {
     expect(res.skipped).toBe(1);
   });
 
-  it("marks failed via the db layer when the provider send fails", async () => {
-    sendEmailMock.mockResolvedValue({ success: false, error: "smtp down" });
+  it("marks failed via the db layer when the provider rejects the send", async () => {
+    sendEmailMock.mockResolvedValue({ outcome: "rejected", success: false, error: "smtp down", statusCode: 400 });
     const res = await runOne(claimed({ attemptCount: 4, maxRetries: 3 }));
     expect(markEmailFailed).toHaveBeenCalledWith(
       "log-1",
@@ -549,25 +562,152 @@ describe("processEmailQueue", () => {
   });
 
   it("does NOT call the provider when the lease is lost before the send", async () => {
-    // The row's start confirm passes; the pre-send ownership check fails.
-    queue.confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    // The row's start confirm passes; the pre-send marker write finds it gone.
+    mocked(beginProviderAttempt).mockResolvedValue(false);
     const res = await runOne(claimed());
     expect(sendEmailMock).not.toHaveBeenCalled();
-    expect(res).toEqual({ processed: 1, sent: 0, failed: 0, skipped: 0 });
+    expect(res).toEqual({ processed: 1, sent: 0, failed: 0, skipped: 0, uncertain: 0 });
   });
 
   it("does not count a send when the lease is lost before the final update", async () => {
     mocked(markEmailSent).mockResolvedValue(false);
     const res = await runOne(claimed());
     expect(sendEmailMock).toHaveBeenCalled();
-    expect(res).toEqual({ processed: 1, sent: 0, failed: 0, skipped: 0 });
+    expect(res).toEqual({ processed: 1, sent: 0, failed: 0, skipped: 0, uncertain: 0 });
   });
 
   it("does not write the subject / send when the lease is lost early", async () => {
     mocked(writeResolvedSubjectIfLeaseHeld).mockResolvedValue(false);
     const res = await runOne(claimed());
     expect(sendEmailMock).not.toHaveBeenCalled();
-    expect(res).toEqual({ processed: 1, sent: 0, failed: 0, skipped: 0 });
+    expect(res).toEqual({ processed: 1, sent: 0, failed: 0, skipped: 0, uncertain: 0 });
+  });
+
+  // 3.6: every provider call is classified; only a definitive rejection (or an
+  // error before the call) goes back to the retry path.
+  describe("provider outcomes (3.6)", () => {
+    const ambiguous = (overrides: Record<string, unknown> = {}) => ({
+      outcome: "ambiguous",
+      success: false,
+      error: "timeout of 15000ms exceeded",
+      idempotentRetry: false,
+      ...overrides,
+    });
+
+    it("provider accepts, then the call times out (SendGrid): UNCERTAIN, no resend", async () => {
+      const listener = vi.fn();
+      setEmailStatusChangeListener(listener);
+      sendEmailMock.mockResolvedValue(ambiguous());
+
+      const res = await runOne(claimed());
+
+      expect(sendEmailMock).toHaveBeenCalledTimes(1);
+      expect(markEmailUncertain).toHaveBeenCalledWith(
+        "log-1",
+        "w1",
+        "Email provider outcome unknown; not resent automatically: timeout of 15000ms exceeded",
+      );
+      expect(markEmailFailed).not.toHaveBeenCalled();
+      expect(markEmailSent).not.toHaveBeenCalled();
+      expect(queue.release).not.toHaveBeenCalled();
+      expect(listener).toHaveBeenCalledExactlyOnceWith("log-1", "UNCERTAIN");
+      expect(res).toEqual({ processed: 1, sent: 0, failed: 0, skipped: 0, uncertain: 1 });
+      setEmailStatusChangeListener(undefined);
+    });
+
+    it("an unexpected throw from the provider is ambiguous too: UNCERTAIN, never requeued", async () => {
+      sendEmailMock.mockRejectedValue(new Error("socket hang up"));
+      const res = await runOne(claimed());
+      expect(markEmailUncertain).toHaveBeenCalledWith("log-1", "w1", expect.stringContaining("socket hang up"));
+      expect(markEmailFailed).not.toHaveBeenCalled();
+      expect(res.uncertain).toBe(1);
+    });
+
+    it("provider success, then markEmailSent throws: retried, never requeued, left for recovery", async () => {
+      mocked(markEmailSent).mockRejectedValue(new Error("connection terminated"));
+
+      const res = await runOne(claimed());
+
+      expect(sendEmailMock).toHaveBeenCalledTimes(1);
+      expect(markEmailSent).toHaveBeenCalledTimes(3);
+      expect(markEmailFailed).not.toHaveBeenCalled();
+      expect(markEmailUncertain).not.toHaveBeenCalled();
+      // Not released either: the marked row stays leased for lease recovery.
+      expect(queue.release).not.toHaveBeenCalled();
+      expect(res).toEqual({ processed: 1, sent: 0, failed: 0, skipped: 0, uncertain: 0 });
+    });
+
+    it("provider success, then one failed markEmailSent: the retry records SENT", async () => {
+      mocked(markEmailSent).mockRejectedValueOnce(new Error("connection terminated")).mockResolvedValue(true);
+      const res = await runOne(claimed());
+      expect(markEmailSent).toHaveBeenCalledTimes(2);
+      expect(res.sent).toBe(1);
+      expect(markEmailFailed).not.toHaveBeenCalled();
+    });
+
+    it("a definitive 4xx goes through the normal retry path", async () => {
+      const listener = vi.fn();
+      setEmailStatusChangeListener(listener);
+      sendEmailMock.mockResolvedValue({ outcome: "rejected", success: false, error: "Invalid from address", statusCode: 400 });
+
+      const res = await runOne(claimed({ attemptCount: 1, maxRetries: 3 }));
+
+      expect(markEmailFailed).toHaveBeenCalledWith("log-1", "w1", "Invalid from address", 1, 3);
+      expect(markEmailUncertain).not.toHaveBeenCalled();
+      expect(listener).toHaveBeenCalledExactlyOnceWith("log-1", "QUEUED");
+      expect(res.failed).toBe(1);
+      setEmailStatusChangeListener(undefined);
+    });
+
+    it("Resend ambiguous: retried under the same idempotency key (the log id)", async () => {
+      providerName = "resend";
+      sendEmailMock
+        .mockResolvedValueOnce(ambiguous({ error: "Unable to fetch data.", idempotentRetry: true }))
+        .mockResolvedValueOnce({ outcome: "accepted", success: true, messageId: "re-1" });
+
+      const first = await runOne(claimed({ attemptCount: 1, maxRetries: 3 }));
+      expect(markEmailFailed).toHaveBeenCalledWith(
+        "log-1",
+        "w1",
+        "Email provider outcome unknown; retrying under the same idempotency key: Unable to fetch data.",
+        1,
+        3,
+      );
+      expect(markEmailUncertain).not.toHaveBeenCalled();
+      expect(first.failed).toBe(1);
+
+      // The retry (next claim) sends with the same trackingId: Resend's idempotency key.
+      const second = await runOne(claimed({ attemptCount: 2, maxRetries: 3 }));
+      expect(second.sent).toBe(1);
+      expect(sendEmailMock.mock.calls.map(([input]) => input.trackingId)).toEqual(["log-1", "log-1"]);
+      expect(beginProviderAttempt).toHaveBeenCalledWith("log-1", "w1", "resend", undefined);
+      expect(markEmailSent).toHaveBeenCalledWith("log-1", "w1", "re-1");
+    });
+
+    it("Resend ambiguous with no retries left: UNCERTAIN, never FAILED", async () => {
+      providerName = "resend";
+      sendEmailMock.mockResolvedValue(ambiguous({ idempotentRetry: true }));
+      const res = await runOne(claimed({ attemptCount: 4, maxRetries: 3 }));
+      expect(markEmailUncertain).toHaveBeenCalledOnce();
+      expect(markEmailFailed).not.toHaveBeenCalled();
+      expect(res.uncertain).toBe(1);
+    });
+
+    it("a job timeout while the provider call runs does not fail the row", async () => {
+      const controller = new AbortController();
+      sendEmailMock.mockImplementation(async () => {
+        controller.abort(new JobTimeoutError("email-queue", 120_000));
+        return { outcome: "accepted", success: true, messageId: "m2" };
+      });
+      queue.claim.mockResolvedValue(["log-1"]);
+      mocked(getClaimedEmailLogsForProcessing).mockResolvedValue([claimed()]);
+
+      const res = await processEmailQueue(50, { workerId: "w1", signal: controller.signal });
+
+      expect(markEmailSent).toHaveBeenCalledWith("log-1", "w1", "m2");
+      expect(markEmailFailed).not.toHaveBeenCalled();
+      expect(res.sent).toBe(1);
+    });
   });
 
   describe("certificate attachments", () => {
@@ -803,6 +943,41 @@ describe("updateEmailStatusFromWebhook", () => {
     expect(updateEmailLogStatusGuarded).not.toHaveBeenCalled();
   });
 
+  it("processed moves an UNCERTAIN email to SENT", async () => {
+    mocked(readEmailLogStatus).mockResolvedValue("UNCERTAIN");
+    await updateEmailStatusFromWebhook("log-1", "processed");
+    expect(updateEmailLogStatusGuarded).toHaveBeenCalledWith(
+      "log-1",
+      "UNCERTAIN",
+      expect.objectContaining({ status: "SENT", sentAt: expect.any(Date) }),
+    );
+  });
+
+  it.each(["QUEUED", "SENDING", "SENT", "DELIVERED"] as const)(
+    "processed leaves a %s email alone (only UNCERTAIN is reconciled by it)",
+    async (status) => {
+      mocked(readEmailLogStatus).mockResolvedValue(status);
+      await updateEmailStatusFromWebhook("log-1", "processed");
+      expect(updateEmailLogStatusGuarded).not.toHaveBeenCalled();
+    },
+  );
+
+  it("delivered and bounce move an UNCERTAIN email forward", async () => {
+    mocked(readEmailLogStatus).mockResolvedValue("UNCERTAIN");
+    await updateEmailStatusFromWebhook("log-1", "delivered");
+    expect(updateEmailLogStatusGuarded).toHaveBeenLastCalledWith(
+      "log-1",
+      "UNCERTAIN",
+      expect.objectContaining({ status: "DELIVERED" }),
+    );
+    await updateEmailStatusFromWebhook("log-1", "bounce");
+    expect(updateEmailLogStatusGuarded).toHaveBeenLastCalledWith(
+      "log-1",
+      "UNCERTAIN",
+      expect.objectContaining({ status: "BOUNCED" }),
+    );
+  });
+
   it("swallows a concurrent status change (guarded update returns false)", async () => {
     mocked(readEmailLogStatus).mockResolvedValue("SENT");
     mocked(updateEmailLogStatusGuarded).mockResolvedValue(false);
@@ -915,5 +1090,26 @@ describe("setEmailStatusChangeListener wiring", () => {
     await expect(
       queueEmail({ templateId: "t1", recipientEmail: "a@x.com" }),
     ).resolves.toEqual({ ok: true, log: { id: "log-1" } });
+  });
+});
+
+describe("resendUncertainEmail (3.6)", () => {
+  afterEach(() => setEmailStatusChangeListener(undefined));
+
+  it("queues the new log and announces it as QUEUED", async () => {
+    const listener = vi.fn();
+    setEmailStatusChangeListener(listener);
+    mocked(resendUncertainEmailLog).mockResolvedValue({ ok: true, log: { id: "log-2" } });
+    await expect(resendUncertainEmail("evt-1", "log-1")).resolves.toEqual({ ok: true, log: { id: "log-2" } });
+    expect(resendUncertainEmailLog).toHaveBeenCalledWith("evt-1", "log-1");
+    expect(listener).toHaveBeenCalledExactlyOnceWith("log-2", "QUEUED");
+  });
+
+  it("announces nothing when the resend is refused", async () => {
+    const listener = vi.fn();
+    setEmailStatusChangeListener(listener);
+    mocked(resendUncertainEmailLog).mockResolvedValue({ ok: false, reason: "not_uncertain" });
+    await expect(resendUncertainEmail("evt-1", "log-1")).resolves.toEqual({ ok: false, reason: "not_uncertain" });
+    expect(listener).not.toHaveBeenCalled();
   });
 });
