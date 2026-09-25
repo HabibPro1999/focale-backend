@@ -159,7 +159,11 @@ describe("JobRunner.stop({ deadline })", () => {
       const stopping = runner.stop({ deadline: Date.now() + 3_000 });
       await vi.advanceTimersByTimeAsync(3_000);
       await expect(stopping).resolves.toEqual({ unfinished: ["stuck"] });
-      expect(vi.getTimerCount()).toBe(0);
+      // Nothing is scheduled after stop. (No global timer count: the real
+      // poller logger can hold its own timers, which made that check flaky.)
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(job.run).toHaveBeenCalledTimes(1);
+      expect(done.run).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
