@@ -5,7 +5,7 @@ import { sql, type SQL } from "drizzle-orm";
 const dbMock = vi.hoisted(() => ({ execute: vi.fn() }));
 vi.mock("../client", () => ({ getDb: () => dbMock }));
 
-import { DB_NOW, createLeaseQueue, type LeaseQueueSpec } from "./lease-queue";
+import { DB_NOW, backoffInterval, createLeaseQueue, type LeaseQueueSpec } from "./lease-queue";
 
 const dialect = new PgDialect();
 const queryOf = (i: number) => dialect.sqlToQuery(dbMock.execute.mock.calls[i]![0] as SQL);
@@ -91,6 +91,26 @@ describe("createLeaseQueue SQL", () => {
     expect(retry).toContain(`AND NOT ("attempt_count" >= "max_attempts")`);
     expect(dead).toContain(`SET "status" = 'FAILED'`);
     expect(dead).toContain(`AND ("attempt_count" >= "max_attempts")`);
+  });
+
+  it("narrows recovery to the given rows", async () => {
+    dbMock.execute.mockResolvedValue({ rowCount: 0, rows: [] });
+    await createLeaseQueue(spec).recoverStale(sql`"event_id" = ${"event-1"}`);
+    for (const i of [0, 1]) {
+      const { sql: text, params } = queryOf(i);
+      expect(flat(text)).toMatch(/NOT \("owner" = 'other'\) AND \("event_id" = \$\d+\)/);
+      expect(params).toContain("event-1");
+    }
+  });
+
+  it("builds a stepped backoff interval keyed on the attempt number", () => {
+    const { sql: text, params } = dialect.sqlToQuery(backoffInterval(sql`"attempt_count"`, [60_000, 300_000, 900_000]));
+    expect(flat(text)).toBe(
+      `(CASE WHEN "attempt_count" <= 1 THEN $1::interval WHEN "attempt_count" <= 2 THEN $2::interval ELSE $3::interval END)`,
+    );
+    expect(params).toEqual(["60 seconds", "300 seconds", "900 seconds"]);
+    expect(dialect.sqlToQuery(backoffInterval(sql`"n"`, [5_000])).params).toEqual(["5 seconds"]);
+    expect(() => backoffInterval(sql`"n"`, [])).toThrow();
   });
 
   it("reports health counts and the oldest lease age", async () => {

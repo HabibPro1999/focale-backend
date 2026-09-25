@@ -1,5 +1,6 @@
 export {
   DB_NOW,
+  backoffInterval,
   createLeaseQueue,
   intervalMs,
   type LeaseQueue,
