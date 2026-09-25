@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { getDb, emailLogs, getEmailLogRealtimeTarget } from "@app/db";
+import { getDb, emailLogs, getEmailLogRealtimeTarget, getEmailLogRealtimeTargets } from "@app/db";
 import { dbTestsEnabled } from "../helpers/test-env";
 import { cleanupDatabase } from "../helpers/cleanup";
 import { seedEvent, seedRegistration, seedAbstract } from "../helpers/factories";
@@ -82,5 +82,34 @@ describe.runIf(dbTestsEnabled())("db tier: getEmailLogRealtimeTarget (N3)", () =
     const target = await getEmailLogRealtimeTarget(log.id);
     expect(target?.eventId).toBe(regEvent.id);
     expect(target?.registrationId).toBe(registration.id);
+  });
+
+  it("resolves many logs in one query with the same rules (3.5 coalesced events)", async () => {
+    const regEvent = await seedEvent();
+    const registration = await seedRegistration({ eventId: regEvent.id });
+    const absEvent = await seedEvent();
+    const abstract = await seedAbstract({ eventId: absEvent.id });
+    const insert = async (values: { registrationId?: string; abstractId?: string }) => {
+      const [log] = await getDb()
+        .insert(emailLogs)
+        .values({ ...values, recipientEmail: "a@x.com", subject: "s" })
+        .returning();
+      return log.id;
+    };
+    const viaRegistration = await insert({ registrationId: registration.id });
+    const viaAbstract = await insert({ abstractId: abstract.id });
+    const both = await insert({ registrationId: registration.id, abstractId: abstract.id });
+    const neither = await insert({});
+
+    const targets = await getEmailLogRealtimeTargets([viaRegistration, viaAbstract, both, neither, "nope"]);
+    expect(Object.fromEntries(targets)).toEqual({
+      [viaRegistration]: { clientId: regEvent.clientId, eventId: regEvent.id, registrationId: registration.id },
+      [viaAbstract]: { clientId: absEvent.clientId, eventId: absEvent.id, registrationId: null },
+      [both]: { clientId: regEvent.clientId, eventId: regEvent.id, registrationId: registration.id },
+    });
+    for (const id of [viaRegistration, viaAbstract, both, neither]) {
+      expect(targets.get(id) ?? null).toEqual(await getEmailLogRealtimeTarget(id));
+    }
+    await expect(getEmailLogRealtimeTargets([])).resolves.toEqual(new Map());
   });
 });

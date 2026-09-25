@@ -78,9 +78,21 @@ export type EventAccessEvent = BaseEvent<
   { id: string; accessIds: string[] }
 >;
 
+/**
+ * Email status changes are coalesced per 250 ms. One email log in the window:
+ * `id`, `status`, `registrationId`. Several logs of the same event that
+ * reached the same `status`: one event whose `ids` lists all of them (`id` is
+ * the first) and no `registrationId`.
+ */
 export type EmailLogEvent = BaseEvent<
   EmailLogEventType,
-  { id: string; status: string; registrationId?: string; [k: string]: unknown }
+  {
+    id: string;
+    status: string;
+    registrationId?: string;
+    ids?: string[];
+    [k: string]: unknown;
+  }
 >;
 
 export type AbstractEvent = BaseEvent<

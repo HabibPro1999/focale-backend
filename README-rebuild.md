@@ -112,7 +112,7 @@ with the status code probes rely on (503 when unhealthy, body unchanged).
 | `GET /health/worker` | Worker heartbeats (`worker_heartbeats`, written every 15 s): unhealthy when no enabled worker beat in the last 60 s, when only `RUN_WORKERS=false` workers are beating, or when a job has run past twice its timeout. Public body: `isHealthy`, `reasons` and `counts` (`live`, `disabled`, `overdueJobs`) only; per-worker and per-job detail stays in the table. |
 | `GET /health/email-queue` | Email queue depth / staleness (unhealthy: stale sending, >1000 queued, or oldest queued >30 min). |
 | `GET /health/abstract-book-jobs` | Book-job queue (unhealthy: stale running, >100 pending, or oldest pending >1 h). |
-| `GET /health/outbox` | Outbox backlog (unhealthy: any dead-lettered, pending+failed ≥1000, oldest pending >10 min, or oldest processing >2× lease). |
+| `GET /health/outbox` | Outbox backlog (unhealthy: a row dead-lettered in the last 24 h, pending+failed ≥1000, oldest pending >10 min, or oldest processing >2× lease). `counts.deadLettered` is every dead letter still stored, `counts.deadLetteredLast24h` the ones that flag it; requeue them with `requeue-dead-letters` (below). |
 | `GET /health/networking-vector-index` | Networking ANN index: unhealthy while an event above the exact-ranking limit ranks recommendations with the deterministic fallback (see `NETWORKING.md`). |
 
 ## Deployment
@@ -121,7 +121,8 @@ The old app was **one** process (HTTP + in-process workers + realtime pump).
 The rebuild splits into **two deployables from one image**:
 
 - **api** — `node apps/api/dist/main.js`. Serves HTTP and, unless
-  `REALTIME_DISABLED=true`, runs the realtime outbox pump.
+  `REALTIME_DISABLED=true`, runs the realtime outbox pump. One instance only
+  (see "Realtime" below).
 - **worker** — `node apps/worker/dist/main.js`. Runs the background job
   pollers (outbox / email queue / abstract-book / networking).
 
@@ -195,6 +196,20 @@ provider is never interrupted. An expired lease is requeued with the retry
 backoff (1, 5, then 15 min), or `FAILED` once `retry_count` reaches
 `max_retries`; rows dispatched by networking are left to its own worker.
 
+Outbox retention: the `retention` job (hourly, and once at boot; 5 min
+budget) works in 1,000-row statements. It deletes `realtime.emit` rows older
+than 24 h (any status except leased: a day-old UI event is worthless), deletes
+finished (`PROCESSED`/`SKIPPED`) rows without a dedupe key older than 30 d, and
+compacts finished keyed rows older than 30 d to `payload = '{}'`. Keyed rows
+are never deleted, so their `dedupe_key` keeps rejecting duplicates; dead
+letters are kept for `requeue-dead-letters`.
+
+Dead letters: `pnpm --filter @app/worker requeue-dead-letters` (in the image:
+`node apps/worker/dist/scripts/requeue-dead-letters.js`) lists dead-lettered
+outbox rows, oldest first (`--type`, `--id`, `--since`, `--limit`, default
+100). It is a dry run unless `--apply`, which puts the listed rows back as new
+(`PENDING`, attempts reset, due now). `realtime.emit` rows are never requeued.
+
 One heartbeat timer (15 s) writes both the liveness file
 (`WORKER_HEARTBEAT_FILE`, read by the image HEALTHCHECK) and the process's
 `worker_heartbeats` row (service name from `RENDER_SERVICE_NAME`), which
@@ -208,13 +223,34 @@ container): it idles, keeps beating (file and `worker_heartbeats` row)
 marked `disabled`, and shuts down cleanly on SIGTERM. With `APP=all` and
 `RUN_WORKERS=false`, `start-runtime.mjs` starts only the API.
 
-### `REALTIME_DISABLED` caveat
+### Realtime (single API instance)
+
+Run **exactly one API instance**. Realtime fan-out is process-local: the
+realtime pump claims `realtime.emit` outbox rows every second (batches of 100,
+draining until a batch comes back short, at most 5 s per tick) and emits them
+on an in-memory bus, and `/api/stream` serves only that process's bus. The SSE
+event ids (`Last-Event-ID`) come from a per-process counter and the replay
+history lives in memory: one ring of the last 500 events per tenant
+(`clientId`), so one tenant's burst never evicts another tenant's history. A
+second instance would claim half of the events for its own clients only, and
+its ids would mean nothing to the other; a restart loses the history (clients
+get `event: replay-gap` on reconnect and refetch). The in-memory rate limiter
+has the same constraint. Scaling out needs a shared bus first.
+
+Email status events (`emailLog.statusChanged`) are coalesced per 250 ms in the
+process that changes the status: each email log's latest status in the window
+counts once, and the window becomes one event per (event, status). A single
+log keeps the old payload (`id`, `status`, `registrationId`); several logs are
+listed in `payload.ids` (`id` is the first). See `FRONTEND_FOLLOWUP_3_5.md`.
+
+### `REALTIME_DISABLED`
 
 The realtime SSE outbox pump runs **in the api process** (not the worker). With
-`REALTIME_DISABLED=true` the pump never starts, so `realtime.emit` outbox rows
-are enqueued but never drained — **they pile up unboundedly**. Only disable
-realtime in environments where nothing produces those rows, or run at least one
-api instance with realtime enabled to drain them.
+`REALTIME_DISABLED=true` the pump never starts, `/api/stream` answers 503, and
+`enqueueRealtimeOutboxEvent` writes nothing. Realtime events are produced by
+both processes, so set it on **both** the api and the worker service; a
+process without it keeps writing `realtime.emit` rows that nothing drains
+until the retention job deletes them after 24 h.
 
 ## Database migrations
 

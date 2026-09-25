@@ -50,6 +50,10 @@ export const outboxEvents = pgTable(
     ),
     index("outbox_events_client_id_event_id_idx").on(t.clientId, t.eventId),
     uniqueIndex("outbox_events_dedupe_key_key").on(t.dedupeKey).where(sql`${t.dedupeKey} IS NOT NULL`),
+    // 0027: retention scans of unkeyed rows by type and age.
+    index("outbox_events_unkeyed_type_created_at_idx")
+      .on(t.type, t.createdAt)
+      .where(sql`${t.dedupeKey} IS NULL`),
   ],
 );
 

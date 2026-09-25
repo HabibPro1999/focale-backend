@@ -4,13 +4,15 @@ import {
   assertSchemaCurrent,
   closeDb,
   configureDb,
+  configureOutbox,
   pruneWorkerHeartbeats,
   recordWorkerHeartbeat,
 } from "@app/db";
 import { createLogger, makeWorkerId } from "@app/shared";
 import {
+  coalesceEmailStatusChanges,
   configureIntegrations,
-  emitEmailLogRealtimeEvent,
+  emitEmailLogRealtimeEvents,
   setEmailStatusChangeListener,
 } from "@app/integrations";
 import { WorkerModule } from "./worker.module";
@@ -34,11 +36,21 @@ async function bootstrap() {
     settings: config.database,
   });
   configureIntegrations(config.integrations);
+  // REALTIME_DISABLED: realtime.emit rows are not written (the api pump that
+  // drains them is off). Set it on both services.
+  configureOutbox({ realtimeDisabled: config.realtime.disabled });
 
   // N3: emails can be queued/updated from either process — wire the same
   // listener here and in apps/api/src/main.ts so no email-log status change
-  // is silently dropped depending on which process handled it.
-  setEmailStatusChangeListener(emitEmailLogRealtimeEvent);
+  // is silently dropped depending on which process handled it. Coalesced per
+  // 250 ms (one event per event and status, listing the email logs); flushed
+  // before the pool closes. Not installed when realtime is disabled.
+  const emailStatus = coalesceEmailStatusChanges(emitEmailLogRealtimeEvents);
+  if (!config.realtime.disabled) setEmailStatusChangeListener(emailStatus.listener);
+  const flushThenCloseDb = async () => {
+    await emailStatus.flush();
+    await closeDb();
+  };
 
   // One heartbeat, two outputs: the liveness file (image HEALTHCHECK) and this
   // process's worker_heartbeats row (/health/worker).
@@ -62,7 +74,7 @@ async function bootstrap() {
     onSignals(
       createWorkerShutdown({
         graceMs: config.lifecycle.shutdownGraceMs,
-        closeDb,
+        closeDb: flushThenCloseDb,
         heartbeat,
         exit: (code) => process.exit(code),
         logger: log,
@@ -90,7 +102,7 @@ async function bootstrap() {
       graceMs: config.lifecycle.shutdownGraceMs,
       stopRunner: (deadline) => runner.stop({ deadline }),
       closeContext: () => ctx.close(),
-      closeDb,
+      closeDb: flushThenCloseDb,
       heartbeat,
       exit: (code) => process.exit(code),
       logger: log,

@@ -21,7 +21,7 @@ describe("RealtimePumpService", () => {
     mocks.processOutboxEvents.mockReset();
   });
 
-  it("claims realtime-scoped outbox events every 5s", async () => {
+  it("claims realtime-scoped outbox events every second in drained batches of 100", async () => {
     vi.useFakeTimers();
     try {
       mocks.processOutboxEvents.mockResolvedValue({
@@ -29,18 +29,30 @@ describe("RealtimePumpService", () => {
         skipped: 0,
         failed: 0,
         leaseLost: 0,
+        released: 0,
       });
 
       const pump = new RealtimePumpService(makeConfig(false));
       pump.onApplicationBootstrap();
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(mocks.processOutboxEvents).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
 
-      expect(mocks.processOutboxEvents).toHaveBeenCalledWith(
-        50,
-        expect.objectContaining({ workerId: pump.workerId, scope: "realtime" }),
-      );
+      expect(mocks.processOutboxEvents).toHaveBeenCalledTimes(1);
+      const [batch, options] = mocks.processOutboxEvents.mock.calls[0]!;
+      expect(batch).toBe(100);
+      expect(options).toMatchObject({ workerId: pump.workerId, scope: "realtime" });
+      expect(options.drainUntil).toBe(Date.now() + 5_000);
+      expect(options.signal.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(mocks.processOutboxEvents).toHaveBeenCalledTimes(2);
 
       await pump.beforeApplicationShutdown();
+      // Shutdown aborts the drain (its rows go back without an attempt charged).
+      expect(options.signal.aborted).toBe(true);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(mocks.processOutboxEvents).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }
