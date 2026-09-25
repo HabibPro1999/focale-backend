@@ -1,9 +1,7 @@
 import ExcelJS from "exceljs";
 import { findAbstractsForExport } from "@app/db";
-import { escapeExcelRow } from "../reports/excel-safety";
-import { formatDateTime } from "../reports/excel-generator";
 import { getTitle, reviewScoreSpread } from "./abstracts.admin.service";
-import { getAuthorLine } from "@app/shared";
+import { formatDateTime, formatFileDate, getAuthorLine } from "@app/shared";
 import {
   ABSTRACT_STATUS_LABELS_FR,
   ABSTRACT_TYPE_LABELS_FR,
@@ -84,7 +82,7 @@ export async function exportAbstractsWorkbook(
 
   const columns = [...baseColumns, ...reviewColumns, ...trailingColumns];
 
-  const headerRow = sheet.addRow(escapeExcelRow(columns));
+  const headerRow = sheet.addRow(columns);
   headerRow.eachCell((cell) => {
     cell.fill = headerFill;
     cell.font = headerFont;
@@ -135,7 +133,7 @@ export async function exportAbstractsWorkbook(
       abstract.lastEditedAt ? formatDateTime(abstract.lastEditedAt) : "",
     );
 
-    const row = sheet.addRow(escapeExcelRow(rowValues));
+    const row = sheet.addRow(rowValues);
     row.eachCell((cell) => {
       cell.border = border;
     });
@@ -178,7 +176,7 @@ export async function exportAbstractsWorkbook(
   sheet.views = [{ state: "frozen", ySplit: 1 }];
 
   const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
-  const timestamp = new Date().toISOString().split("T")[0];
+  const timestamp = formatFileDate();
 
   return {
     filename: `${eventSlug}-resumes-${timestamp}.xlsx`,

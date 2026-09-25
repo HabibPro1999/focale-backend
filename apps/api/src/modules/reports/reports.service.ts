@@ -19,7 +19,7 @@ import {
   type ExportRegistrationRow,
 } from "@app/db";
 import { ErrorCodes } from "@app/contracts";
-import { isFullySettled } from "@app/shared";
+import { formatFileDate, isFullySettled, toCsv } from "@app/shared";
 import type {
   ReportQuery,
   FinancialReportResponse,
@@ -31,7 +31,6 @@ import type {
   ExportRegistrationsBody,
 } from "@app/contracts";
 import { AppException } from "../../core/app-exception";
-import { escapeExcelRow } from "./excel-safety";
 import {
   generateEventSummary,
   generateAccessRegistrantsReport,
@@ -218,7 +217,7 @@ export class ReportsService {
       throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
     }
 
-    const timestamp = new Date().toISOString().split("T")[0];
+    const timestamp = formatFileDate();
     const filename = `${event.slug}-registrations-${timestamp}`;
 
     if (query.format === "json") {
@@ -242,7 +241,7 @@ export class ReportsService {
     const csv = generateCSV(registrations);
     return {
       filename: `${filename}.csv`,
-      contentType: "text/csv",
+      contentType: "text/csv; charset=utf-8",
       data: csv,
     };
   }
@@ -366,13 +365,13 @@ function generateCSV(registrations: ExportRegistrationRow[]): string {
       r.phone ?? "",
       r.paymentStatus,
       r.paymentMethod ?? "",
-      r.totalAmount.toString(),
-      r.paidAmount.toString(),
-      r.baseAmount.toString(),
-      r.accessAmount.toString(),
-      r.discountAmount.toString(),
+      r.totalAmount,
+      r.paidAmount,
+      r.baseAmount,
+      r.accessAmount,
+      r.discountAmount,
       r.sponsorshipCode ?? "",
-      r.sponsorshipAmount.toString(),
+      r.sponsorshipAmount,
       r.submittedAt.toISOString(),
       r.paidAt?.toISOString() ?? "",
     ];
@@ -391,26 +390,8 @@ function generateCSV(registrations: ExportRegistrationRow[]): string {
     return [...standardValues, ...formDataValues];
   });
 
-  // Escape CSV values (formula-injection guard differs from the XLSX escaper).
-  const escapeCSV = (value: string): string => {
-    if (
-      value.length > 0 &&
-      ["\t", "\r", "\n", "=", "+", "-", "@"].includes(value[0])
-    ) {
-      return `"'${value.replace(/"/g, '""')}"`;
-    }
-    if (value.includes(",") || value.includes('"') || value.includes("\n")) {
-      return `"${value.replace(/"/g, '""')}"`;
-    }
-    return value;
-  };
-
-  const csvLines = [
-    headers.join(","),
-    ...rows.map((row) => row.map(escapeCSV).join(",")),
-  ];
-
-  return csvLines.join("\n");
+  // Shared CSV policy: quoted cells, formula guard, CRLF, UTF-8 BOM.
+  return toCsv([headers, ...rows]);
 }
 
 async function generateRegistrationsWorkbook(
@@ -461,7 +442,7 @@ async function generateRegistrationsWorkbook(
     right: { style: "thin" },
   };
 
-  const headerRow = sheet.addRow(escapeExcelRow(headers));
+  const headerRow = sheet.addRow(headers);
   headerRow.eachCell((cell) => {
     cell.fill = headerFill;
     cell.font = headerFont;
@@ -477,7 +458,7 @@ async function generateRegistrationsWorkbook(
         : {};
 
     const row = sheet.addRow(
-      escapeExcelRow([
+      [
         registration.id,
         registration.email,
         registration.firstName ?? "",
@@ -500,7 +481,7 @@ async function generateRegistrationsWorkbook(
           if (typeof value === "object") return JSON.stringify(value);
           return String(value);
         }),
-      ]),
+      ],
     );
 
     row.eachCell((cell) => {
