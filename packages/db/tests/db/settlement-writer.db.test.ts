@@ -338,6 +338,30 @@ describe.runIf(dbTestsEnabled())("db tier: settlement writer", () => {
       expect(await paidCount(gala.id)).toBe(1);
     });
 
+    it("derives the status when decide leaves it out, and falls back to the options when it returns nothing", async () => {
+      const pb = breakdown({ base: 100 });
+      const { registration } = await seedRegistrationWith({ totalAmount: 100, priceBreakdown: pb });
+
+      // A paid amount without a status: derived with that amount.
+      const partial = await withLockingTxn((tx) =>
+        settleRegistrationTxn(tx, registration.id, { decide: () => ({ paidAmount: 40 }), now: NOW }),
+      );
+      expect(partial?.after).toMatchObject({ paymentStatus: "PARTIAL", paidAmount: 40, paidAt: null });
+      expect(await readRegistration(registration.id)).toMatchObject({ paymentStatus: "PARTIAL", paidAmount: 40 });
+
+      // Nothing decided: the explicit options apply.
+      const waived = await withLockingTxn((tx) =>
+        settleRegistrationTxn(tx, registration.id, {
+          decide: () => undefined,
+          paymentStatus: "WAIVED",
+          paidAt: NOW,
+          now: NOW,
+        }),
+      );
+      expect(waived?.after).toMatchObject({ paymentStatus: "WAIVED", paidAmount: 40, paidAt: NOW });
+      expect(await readRegistration(registration.id)).toMatchObject({ paymentStatus: "WAIVED", paidAmount: 40 });
+    });
+
     it("returns null for a missing registration", async () => {
       expect(await withLockingTxn((tx) => settleRegistrationTxn(tx, "missing"))).toBeNull();
     });

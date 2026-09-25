@@ -89,6 +89,11 @@ export const ErrorCodes = {
   REGISTRATION_WAIVED_ACCESS_BLOCKED: "REG_8012",
   // A PAID confirmation for less than the amount due (plan 2.6): confirm PARTIAL.
   PAID_AMOUNT_BELOW_DUE: "REG_8013",
+  // A self-edit would change what a PAID registration costs (plan 2.6).
+  REGISTRATION_PRICE_LOCKED: "REG_8014",
+  // An admin edit changes a PAID registration's price without saying how the
+  // payment follows (a paidAmount or a paymentStatus) (plan 2.6).
+  PAYMENT_ADJUSTMENT_REQUIRED: "REG_8015",
 
   // Form Validation (9xxx)
   FORM_VALIDATION_ERROR: "FRM_9001",
