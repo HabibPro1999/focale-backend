@@ -166,6 +166,33 @@ describe.runIf(dbTestsEnabled())("db: certificate sends", () => {
     expect((await send())?.abstracts.map((o) => o.status)).toEqual(["already_sent"]);
   });
 
+  // 3.6a's UNCERTAIN: the provider may already have sent the email, so a
+  // repeated send queues nothing; an admin resends it explicitly instead.
+  it("counts an UNCERTAIN certificate email as sent for registrations and abstracts", async () => {
+    const { event, form, emailTemplateId } = await setup();
+    const registration = await seedRegistration({ eventId: event.id, formId: form.id });
+    const abstract = await seedAbstract({ eventId: event.id });
+    const send = () =>
+      queueCertificateEmailLogsTxn({
+        eventId: event.id,
+        emailTemplateId,
+        registrations: [candidate(registration.id, registration.email)],
+        abstracts: [candidate(abstract.id, abstract.authorEmail, [certB])],
+      });
+    const first = await send();
+    expect(first?.registrations.map((o) => o.status)).toEqual(["queued"]);
+    expect(first?.abstracts.map((o) => o.status)).toEqual(["queued"]);
+    await getDb()
+      .update(emailLogs)
+      .set({ status: "UNCERTAIN" })
+      .where(eq(emailLogs.trigger, "CERTIFICATE_SENT"));
+
+    const again = await send();
+    expect(again?.registrations.map((o) => o.status)).toEqual(["already_sent"]);
+    expect(again?.abstracts.map((o) => o.status)).toEqual(["already_sent"]);
+    expect((await certificateLogs()).map((l) => l.status)).toEqual(["UNCERTAIN", "UNCERTAIN"]);
+  });
+
   it("commits both batches or neither", async () => {
     const { event, form, emailTemplateId } = await setup();
     const registration = await seedRegistration({ eventId: event.id, formId: form.id });

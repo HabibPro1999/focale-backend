@@ -39,3 +39,13 @@ For the admin app (`SendCertificatesDialog`, `AbstractsSubmissionsPage`,
   certificate once.
 - **404 `RES_3001` (NOT_FOUND) "Event not found"** if the event is deleted
   while the send runs (rare).
+
+## Follow-up: `UNCERTAIN` certificate emails count as sent
+
+- A registrant or abstract whose certificate email is `UNCERTAIN` (3.6: the
+  provider may already have sent it) is now reported as already sent (in
+  `skipped` / `already_sent`) instead of getting a second email when the send
+  runs again. To send it again, the admin uses the email-log resend action on
+  that `UNCERTAIN` row (`POST /api/events/:eventId/email-logs/:emailLogId/resend`,
+  see `FRONTEND_FOLLOWUP_3_6.md`). The dialog's "already sent" wording can
+  mention that some of these may still need a manual resend.
