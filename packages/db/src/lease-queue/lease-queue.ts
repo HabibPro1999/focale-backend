@@ -62,6 +62,12 @@ export interface LeaseQueueSpec {
    * includes the claim being refunded.
    */
   releaseSet: SQL;
+  /**
+   * Owned rows that release may put back (default all). A row outside it
+   * stays leased until stale-lease recovery handles it: e.g. an email whose
+   * provider call may already have gone out must not be requeued for free.
+   */
+  releasable?: SQL;
   /** Stale-lease recovery of rows whose lease expired (their worker died or hung). */
   recovery: {
     /** Rows that used up their attempts: dead-lettered instead of requeued. */
@@ -70,6 +76,11 @@ export interface LeaseQueueSpec {
     retrySet: SQL;
     /** Assignments for an expired row without attempts left. */
     deadSet: SQL;
+    /**
+     * Expired rows whose work may already have taken effect and must not run
+     * again (`where`), parked with `set` instead of requeued or dead-lettered.
+     */
+    uncertain?: { where: SQL; set: SQL };
     /** Leased rows this queue does not own (e.g. email rows dispatched by networking). */
     exclude?: SQL;
   };
@@ -89,6 +100,8 @@ export interface LeaseQueueHealth {
 export interface RecoverStaleResult {
   requeued: number;
   deadLettered: number;
+  /** Rows parked by `recovery.uncertain` (only for a queue that has it). */
+  uncertain?: number;
 }
 
 export interface LeaseQueue {
@@ -110,11 +123,12 @@ export interface LeaseQueue {
   complete(workerId: string, id: string, set: SQL): Promise<boolean>;
   /** Failure write (`set`: retry or dead letter) while owned; clears the lease. False when not owned. */
   fail(workerId: string, id: string, set: SQL): Promise<boolean>;
-  /** Put owned, unprocessed rows back without charging the attempt. Returns how many. */
+  /** Put owned, unprocessed (and releasable) rows back without charging the attempt. Returns how many. */
   release(workerId: string, ids: string[]): Promise<number>;
   /**
    * Requeue, or dead-letter once attempts are exhausted, leased rows whose
-   * lease expired; `where` narrows it to some rows (e.g. one event's job).
+   * lease expired (or park them, per `recovery.uncertain`); `where` narrows
+   * it to some rows (e.g. one event's job).
    */
   recoverStale(where?: SQL): Promise<RecoverStaleResult>;
   health(): Promise<LeaseQueueHealth>;
@@ -211,13 +225,26 @@ export function createLeaseQueue(spec: LeaseQueueSpec): LeaseQueue {
             ${CLEAR_LEASE},
             "updated_at" = ${DB_NOW}
         WHERE "id" IN (${idList(ids)}) AND ${owned(workerId)}
+          ${spec.releasable ? sql`AND (${spec.releasable})` : sql``}
         RETURNING "id"
       `);
       return rowCountOf(res);
     },
 
     async recoverStale(where) {
-      const rows = where ? sql`${recoverable} AND (${where})` : recoverable;
+      const scoped = where ? sql`${recoverable} AND (${where})` : recoverable;
+      const parked = spec.recovery.uncertain;
+      let uncertain: number | undefined;
+      if (parked) {
+        uncertain = rowCountOf(
+          await getDb().execute(sql`
+            UPDATE ${table}
+            SET ${parked.set}, ${CLEAR_LEASE}, "updated_at" = ${DB_NOW}
+            WHERE ${scoped} AND COALESCE((${parked.where}), FALSE)
+          `),
+        );
+      }
+      const rows = parked ? sql`${scoped} AND NOT COALESCE((${parked.where}), FALSE)` : scoped;
       const requeued = rowCountOf(
         await getDb().execute(sql`
           UPDATE ${table}
@@ -232,7 +259,7 @@ export function createLeaseQueue(spec: LeaseQueueSpec): LeaseQueue {
           WHERE ${rows} AND (${spec.recovery.exhausted})
         `),
       );
-      return { requeued, deadLettered };
+      return uncertain === undefined ? { requeued, deadLettered } : { requeued, deadLettered, uncertain };
     },
 
     async health() {
