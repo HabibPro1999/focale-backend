@@ -23,6 +23,8 @@ export {
   recomputeRegistrationSponsorship,
   settleRegistrationTxn,
   type SettleRegistrationOptions,
+  type SettlementDecision,
+  type SettlementDecisionInput,
   type SettleRegistrationResult,
   type SettlementSnapshot,
 } from "./settle";

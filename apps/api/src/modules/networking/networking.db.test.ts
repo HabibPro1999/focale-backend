@@ -295,17 +295,18 @@ describe.runIf(enabled)(
         capacity: 2,
       });
       await pair(0, 2);
-      const a = await meetings.create(participants[0], {
-        profileId: participants[1].profile.id,
+      // Two requesters, one recipient (a requester holds one pending request per slot).
+      const a = await meetings.create(participants[1], {
+        profileId: participants[0].profile.id,
         startsAt: slot("10:00"),
       });
-      const b = await meetings.create(participants[0], {
-        profileId: participants[2].profile.id,
+      const b = await meetings.create(participants[2], {
+        profileId: participants[0].profile.id,
         startsAt: slot("10:00"),
       });
       const results = await Promise.allSettled([
-        meetings.respond(participants[1], a.id, { action: "ACCEPT" }),
-        meetings.respond(participants[2], b.id, { action: "ACCEPT" }),
+        meetings.respond(participants[0], a.id, { action: "ACCEPT" }),
+        meetings.respond(participants[0], b.id, { action: "ACCEPT" }),
       ]);
       expect(results.filter((v) => v.status === "fulfilled")).toHaveLength(1);
     });

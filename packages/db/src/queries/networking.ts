@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { withSerializableTxn } from "../txn";
-import { and, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, eq, gt, isNull, or } from "drizzle-orm";
 import { NetworkingConfigSchema, networkingProfileOverrides, type NetworkingConfig } from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
 import {
@@ -10,11 +10,11 @@ import {
   networkingDeliveries,
   networkingSessions,
   networkingMeetings,
-  networkingReservations,
 } from "../schema/networking";
 import { events } from "../schema/events-access";
 import { forms } from "../schema/forms";
 import { projectNetworkingFields, resolveNetworkingConsent } from "./networking-projection";
+import { networkingMeetingNotice, transitionNetworkingMeetings } from "./networking-meetings";
 import { registrations } from "../schema/registrations";
 
 export async function getNetworkingConfig(
@@ -231,9 +231,10 @@ export async function revokeNetworkingSessions(
 
 /**
  * Release future resources when registration approval/consent/eligibility is
- * revoked, the participant withdraws, or (with `counterpartId`) blocks someone:
- * one UPDATE … RETURNING over the participant's active meetings, never a scan
- * of the event's meeting history. Notifications never name the other side.
+ * revoked, the participant withdraws, is moderated, or (with `counterpartId`)
+ * blocks someone: one CANCEL transition over the participant's open meetings
+ * that have not ended, never a scan of the event's meeting history. Its notices
+ * are confidential: they never name the other side or the cause (K5).
  * `slug` avoids re-reading the event row inside a networking transaction.
  */
 export async function cancelNetworkingParticipantMeetings(
@@ -243,59 +244,34 @@ export async function cancelNetworkingParticipantMeetings(
   options: { counterpartId?: string; slug?: string } = {},
 ) {
   const m = networkingMeetings;
-  const rows = await db
-    .update(m)
-    .set({
-      status: "CANCELLED",
-      revision: sql`${m.revision}+1`,
-      proposedStartsAt: null,
-      proposalBy: null,
-    })
-    .where(
-      and(
-        eq(m.eventId, eventId),
-        options.counterpartId === undefined
-          ? or(eq(m.requesterId, profileId), eq(m.recipientId, profileId))
-          : or(
-              and(eq(m.requesterId, profileId), eq(m.recipientId, options.counterpartId)),
-              and(eq(m.requesterId, options.counterpartId), eq(m.recipientId, profileId)),
-            ),
-        inArray(m.status, ["PENDING", "PENDING_ALLOCATION", "CONFIRMED"]),
-        gt(m.endsAt, new Date()),
-      ),
-    )
-    .returning();
+  const rows = await transitionNetworkingMeetings(
+    db,
+    "CANCEL",
+    eventId,
+    and(
+      options.counterpartId === undefined
+        ? or(eq(m.requesterId, profileId), eq(m.recipientId, profileId))
+        : or(
+            and(eq(m.requesterId, profileId), eq(m.recipientId, options.counterpartId)),
+            and(eq(m.requesterId, options.counterpartId), eq(m.recipientId, profileId)),
+          ),
+      gt(m.endsAt, new Date()),
+    )!,
+    { proposedStartsAt: null, proposalBy: null },
+  );
   if (!rows.length) return [];
-  await db
-    .delete(networkingReservations)
-    .where(
-      and(
-        eq(networkingReservations.eventId, eventId),
-        inArray(networkingReservations.meetingId, rows.map((row) => row.id)),
-      ),
-    );
   const slug = options.slug ?? (
     await db.select({ slug: events.slug }).from(events).where(eq(events.id, eventId))
-  )[0]?.slug;
+  )[0]?.slug ?? "";
   for (const row of rows)
     for (const recipient of [row.requesterId, row.recipientId])
       await createNetworkingNotification(
-        {
-          eventId,
-          profileId: recipient,
+        networkingMeetingNotice(row, recipient, {
           type: "MEETING_CANCELLED",
-          title: "Meeting cancelled",
-          body: "This meeting is no longer available.",
-          href: `/e/${slug}/agenda`,
-          data: {
-            meetingId: row.id,
-            revision: row.revision,
-            action: "CANCEL",
-            status: "CANCELLED",
-            startsAt: row.startsAt.toISOString(),
-            endsAt: row.endsAt.toISOString(),
-          },
-        },
+          slug,
+          reason: "UNAVAILABLE",
+          confidential: true,
+        }),
         db,
       );
   return rows;

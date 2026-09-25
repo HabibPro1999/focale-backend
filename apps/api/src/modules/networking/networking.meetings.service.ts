@@ -16,9 +16,14 @@ import {
   networkingAllocationTransaction,
   NetworkingAllocationLockError,
   NetworkingBusyError,
+  networkingMeetingIs,
+  networkingMeetingNotice,
+  networkingPendingHoldKey,
   networkingStore,
   networkingTransaction,
+  transitionNetworkingMeetings,
   type NetworkingInterval,
+  type NetworkingMeetingCancelReason,
   type NetworkingRow,
   type NetworkingStore,
   type DbExecutor,
@@ -43,11 +48,6 @@ function slotInterval(start: Date | string | null | undefined, config: Pick<Netw
   if (!startsAt || !Number.isFinite(startsAt.getTime())) return [];
   return [{ startsAt, endsAt: new Date(startsAt.getTime() + config.slotDurationMinutes * 60_000) }];
 }
-const actions: Record<string, string> = {
-  MEETING_REQUEST: "REQUEST", MEETING_REQUEST_SENT: "REQUEST", MEETING_ACCEPT: "ACCEPT", MEETING_DECLINE: "DECLINE",
-  MEETING_CANCEL: "CANCEL", MEETING_CANCELLED: "CANCEL", MEETING_RESCHEDULE: "RESCHEDULE", MEETING_ASSIGN: "ASSIGN",
-  MEETING_COMPLETED: "COMPLETED", MEETING_NO_SHOW: "NO_SHOW",
-};
 @Injectable()
 export class NetworkingMeetingsService {
   constructor(private readonly networking: NetworkingService) {}
@@ -334,7 +334,7 @@ export class NetworkingMeetingsService {
           await store.allocationMeetings(ctx.event.id, dates.startsAt, dates.endsAt)
         ).find(
           (m) =>
-            ["PENDING", "CONFIRMED", "PENDING_ALLOCATION"].includes(m.status) &&
+            networkingMeetingIs(m.status, "open") &&
             m.startsAt.getTime() === dates.startsAt.getTime() &&
             [m.requesterId, m.recipientId].includes(ctx.profile.id) &&
             [m.requesterId, m.recipientId].includes(input.profileId),
@@ -401,14 +401,9 @@ export class NetworkingMeetingsService {
     const quanta = resourceQuanta(startsAt, endsAt);
     const meetings = await store.allocationMeetings(ctx.event.id, quanta[0], endsAt);
     // Expired proposals must not keep inventory locked until the next maintenance tick.
-    for (const meeting of meetings) {
-      if (meeting.status === "PENDING" && meeting.expiresAt <= new Date()) {
-        await store.remove("reservations", { eventId: ctx.event.id, meetingId: meeting.id });
-        await store.update("meetings", { eventId: ctx.event.id, id: meeting.id }, {
-          status: "EXPIRED", revision: meeting.revision + 1,
-        });
-      }
-    }
+    const now = new Date();
+    await transitionNetworkingMeetings(store.executor, "EXPIRE", ctx.event.id,
+      meetings.filter((meeting) => meeting.status === "PENDING" && meeting.expiresAt <= now).map((meeting) => meeting.id));
     const reservations = (
       await store.allocationReservations(ctx.event.id, quanta[0], endsAt)
     ).filter((v) => v.meetingId !== row.id);
@@ -418,11 +413,16 @@ export class NetworkingMeetingsService {
       `profile:${row.requesterId}`,
       `profile:${row.recipientId}`,
     ];
+    // A pending request holds its requester's slot, not the participants: one pending request per requester per slot.
+    const holdKey = networkingPendingHoldKey(row.requesterId);
     const participantBusy = () =>
       new ConflictException({ code: "NETWORKING_SLOT_CONFLICT", message: "One of the participants already has a meeting in this slot" });
+    const holdBusy = () =>
+      new ConflictException({ code: ErrorCodes.NETWORKING_SLOT_CONFLICT, message: "The requester already has a pending meeting request in this slot" });
     const noTable = () =>
       new ConflictException({ code: ErrorCodes.NETWORKING_SLOT_CONFLICT, message: "No table or exhibitor representative is available for this slot; choose another time" });
     if (participantKeys.some(taken)) throw participantBusy();
+    if (pending && taken(holdKey)) throw holdBusy();
     const [requester, recipient, spaces] = await Promise.all([
       store.one("profiles", { eventId: ctx.event.id, id: row.requesterId }),
       store.one("profiles", { eventId: ctx.event.id, id: row.recipientId }),
@@ -459,7 +459,9 @@ export class NetworkingMeetingsService {
     });
     // The unique resource/slot index decides; each claim is all-or-nothing and never aborts the transaction.
     const claim = (resourceKey: string) => store.claimResource(ctx.event.id, row.id, resourceKey, quanta);
-    if (!pending)
+    if (pending) {
+      if (!(await claim(holdKey))) throw holdBusy();
+    } else
       for (const key of participantKeys)
         if (!(await claim(key))) throw participantBusy();
     let tableId: string | null = null;
@@ -502,7 +504,7 @@ export class NetworkingMeetingsService {
       const row = await this.meeting(ctx, id, store);
       if (["RESCHEDULE", "ACCEPT"].includes(input.action) && (row.requesterCheckedInAt || row.recipientCheckedInAt))
         throw new ConflictException({ code: "NETWORKING_MEETING_CHECKED_IN", message: "A checked-in meeting cannot be rescheduled" });
-      if (!["PENDING", "CONFIRMED", "PENDING_ALLOCATION"].includes(row.status))
+      if (!networkingMeetingIs(row.status, "open"))
         throw new ConflictException({ code: "NETWORKING_MEETING_LOCKED", message: "This meeting can no longer be changed" });
       await this.networking.target(
         ctx,
@@ -522,18 +524,15 @@ export class NetworkingMeetingsService {
       let update: Partial<NetworkingRow<"meetings">> = {
         revision: row.revision + 1,
       };
+      // CANCEL and a pending request's DECLINE are status transitions that release every reservation.
+      let transition: "CANCEL" | "DECLINE" | undefined;
       if (input.action === "CANCEL") {
+        transition = "CANCEL";
         update = {
-          ...update,
-          status: "CANCELLED",
           cancellationNote: input.message?.trim() ?? "",
           proposedStartsAt: null,
           proposalBy: null,
         };
-        await store.remove("reservations", {
-          eventId: ctx.event.id,
-          meetingId: id,
-        });
       } else if (input.action === "RESCHEDULE") {
         const dates = this.slot(ctx, input.startsAt!);
         await this.availableAt(ctx, row.requesterId, dates.startsAt, store);
@@ -564,13 +563,10 @@ export class NetworkingMeetingsService {
         if (row.expiresAt <= new Date())
           throw new ConflictException({ code: "NETWORKING_MEETING_LOCKED", message: "This proposal has expired" });
         if (input.action === "DECLINE") {
-          if (row.status === "PENDING")
-            await store.remove("reservations", { eventId: ctx.event.id, meetingId: id });
+          // Declining a counter-proposal on an accepted meeting keeps the original booking.
+          if (row.status === "PENDING") transition = "DECLINE";
           update = {
-            ...update,
-            ...(row.status === "PENDING"
-              ? { status: "DECLINED" as const }
-              : {}),
+            ...(transition ? {} : update),
             proposedStartsAt: null,
             proposalBy: null,
           };
@@ -595,64 +591,53 @@ export class NetworkingMeetingsService {
           };
         }
       }
-      const [saved] = await store.update(
-        "meetings",
-        { eventId: ctx.event.id, id },
-        update,
-      );
+      const [saved] = transition
+        ? await transitionNetworkingMeetings(db, transition, ctx.event.id, [id], update)
+        : await store.update("meetings", { eventId: ctx.event.id, id }, update);
+      if (!saved)
+        throw new ConflictException({ code: "NETWORKING_MEETING_LOCKED", message: "This meeting can no longer be changed" });
       await this.notify(
         ctx,
         saved,
         `MEETING_${input.action}`,
         [row.requesterId, row.recipientId],
         db,
+        { reason: "PARTICIPANT" },
       );
       return this.hydrate(saved, store, false, ctx);
     });
   }
-  /** `counterpart: false` for block/withdrawal/moderation cancellations, which never name the other side (K5). */
+  /**
+   * One notice per participant, built by the lifecycle module. `reason` goes on
+   * cancellation notices; `confidential` notices (block, withdrawal, moderation)
+   * name neither the other side nor the place (K5).
+   */
   async notify(
     ctx: Pick<NetworkingContext, "event">,
     row: NetworkingRow<"meetings">,
     type: string,
     profileIds: string[],
     db: DbExecutor,
-    options: { counterpart?: boolean } = {},
+    options: { reason?: NetworkingMeetingCancelReason; confidential?: boolean } = {},
   ) {
     const store = networkingStore(db);
-    const proposedEndsAt = row.proposedStartsAt
-      ? new Date(row.proposedStartsAt.getTime() + row.endsAt.getTime() - row.startsAt.getTime())
-      : null;
-    const table = row.tableId ? await store.one("tables", { eventId: row.eventId, id: row.tableId }) : null;
+    const table = !options.confidential && row.tableId ? await store.one("tables", { eventId: row.eventId, id: row.tableId }) : null;
     const space = table?.spaceId ? await store.one("spaces", { eventId: row.eventId, id: table.spaceId }) : null;
     for (const profileId of profileIds) {
-      const counterpart = options.counterpart === false ? null : await store.one("profiles", {
+      const counterpart = options.confidential ? null : await store.one("profiles", {
         eventId: row.eventId,
         id: profileId === row.requesterId ? row.recipientId : row.requesterId,
       });
       await createNetworkingNotification(
-        {
-          eventId: row.eventId,
-          profileId,
+        networkingMeetingNotice(row, profileId, {
           type,
-          title: "Meeting update",
-          body: `Meeting ${row.status.toLowerCase().replaceAll("_", " ")} for ${row.startsAt.toISOString()}.`,
-          href: `/e/${ctx.event.slug}/agenda`,
-          data: {
-            meetingId: row.id,
-            revision: row.revision,
-            ...(actions[type] ? { action: actions[type] } : {}),
-            startsAt: row.startsAt.toISOString(),
-            endsAt: row.endsAt.toISOString(),
-            ...(row.proposedStartsAt && proposedEndsAt
-              ? { proposedStartsAt: row.proposedStartsAt.toISOString(), proposedEndsAt: proposedEndsAt.toISOString() }
-              : {}),
-            ...(counterpart ? { counterpartName: `${counterpart.firstName} ${counterpart.lastName}`.trim() } : {}),
-            ...(table ? { tableName: table.name } : {}),
-            ...(space ? { spaceName: space.name } : {}),
-            status: row.status,
-          },
-        },
+          slug: ctx.event.slug,
+          reason: options.confidential ? "UNAVAILABLE" : options.reason,
+          confidential: options.confidential,
+          ...(counterpart ? { counterpartName: `${counterpart.firstName} ${counterpart.lastName}`.trim() } : {}),
+          ...(table ? { tableName: table.name } : {}),
+          ...(space ? { spaceName: space.name } : {}),
+        }),
         db,
       );
     }

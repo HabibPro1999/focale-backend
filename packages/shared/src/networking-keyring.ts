@@ -48,6 +48,8 @@ export class NetworkingKeyringError extends Error {
 
 const V1 = /^v1:([a-z0-9][a-z0-9_-]{0,15}):(.+)$/s;
 const SUBKEY_SALT = "focale-networking-keyring";
+/** Seals always carry a full 128-bit GCM tag; Node would otherwise accept a truncated one. */
+const GCM_TAG_BYTES = 16;
 
 function hmacHex(key: string | Buffer, value: string): string {
   return createHmac("sha256", key).update(value).digest("hex");
@@ -179,9 +181,10 @@ export class NetworkingKeyring {
     const parts = (match?.[2] ?? sealed).split(".");
     if (parts.length !== 3) throw new NetworkingKeyringError("Invalid sealed value");
     const [iv, tag, ciphertext] = parts.map((part) => Buffer.from(part, "base64url"));
+    if (tag!.length !== GCM_TAG_BYTES) throw new NetworkingKeyringError("Invalid sealed value");
     const key = match ? this.subkey(kid, "seal") : createHash("sha256").update(secret).digest();
     try {
-      const decipher = createDecipheriv("aes-256-gcm", key, iv!);
+      const decipher = createDecipheriv("aes-256-gcm", key, iv!, { authTagLength: GCM_TAG_BYTES });
       decipher.setAuthTag(tag!);
       return Buffer.concat([decipher.update(ciphertext!), decipher.final()]).toString("utf8");
     } catch {

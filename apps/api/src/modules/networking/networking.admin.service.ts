@@ -28,10 +28,12 @@ import {
   createNetworkingNotification,
   getNetworkingConfig,
   networkingFormField,
+  networkingMeetingIs,
   networkingStore,
   networkingTransaction,
   revokeNetworkingSessions,
   syncNetworkingEvent,
+  transitionNetworkingMeetings,
   type NetworkingRow,
 } from "@app/db";
 import { getStorageProvider } from "@app/integrations";
@@ -149,7 +151,7 @@ export class NetworkingAdminService {
       if (
         meetings.some(
           (v) =>
-            ["CONFIRMED", "PENDING_ALLOCATION"].includes(v.status) &&
+            networkingMeetingIs(v.status, "accepted") &&
             v.endsAt > new Date() &&
             (!valid.has(v.startsAt.toISOString()) ||
               v.endsAt.getTime() - v.startsAt.getTime() !==
@@ -241,7 +243,7 @@ export class NetworkingAdminService {
       meetingCount: meetings.filter(
         (m) =>
           (m.requesterId === p.id || m.recipientId === p.id) &&
-          !["CANCELLED", "DECLINED", "EXPIRED"].includes(m.status),
+          !networkingMeetingIs(m.status, "released"),
       ).length,
     }));
     const items = enriched.filter(
@@ -404,11 +406,9 @@ export class NetworkingAdminService {
       });
       if (!event || !profile)
         throw new NotFoundException("Participant not found");
-      let update: Partial<NetworkingRow<"meetings">> = {
-        revision: row.revision + 1,
-      };
+      let saved: NetworkingRow<"meetings"> | undefined;
       if (input.action === "ASSIGN") {
-        if (!["PENDING", "CONFIRMED", "PENDING_ALLOCATION"].includes(row.status))
+        if (!networkingMeetingIs(row.status, "open"))
           throw new ConflictException("Only active meetings can be assigned");
         const allocation = await this.meetings.reserve(
           { event, config, profile } as NetworkingContext,
@@ -419,11 +419,9 @@ export class NetworkingAdminService {
           input.tableId,
           row.status === "PENDING",
         );
-        update = { ...update, ...allocation };
+        [saved] = await store.update("meetings", { eventId, id }, { ...allocation, revision: row.revision + 1 });
       } else {
-        if (
-          !["PENDING", "CONFIRMED", "PENDING_ALLOCATION"].includes(row.status)
-        )
+        if (!networkingMeetingIs(row.status, "open"))
           throw new ConflictException("Meeting is no longer editable");
         if (
           input.action !== "CANCEL" &&
@@ -432,10 +430,11 @@ export class NetworkingAdminService {
           throw new ConflictException(
             "Attendance can only be recorded once a confirmed meeting starts",
           );
-        update.status = input.action === "CANCEL" ? "CANCELLED" : input.action;
-        await store.remove("reservations", { eventId, meetingId: id });
+        // CANCEL releases every reservation; COMPLETED and NO_SHOW keep them (the slot was used).
+        [saved] = await transitionNetworkingMeetings(db, input.action, eventId, [id],
+          input.action === "CANCEL" ? { proposedStartsAt: null, proposalBy: null } : {});
       }
-      const [saved] = await store.update("meetings", { eventId, id }, update);
+      if (!saved) throw new ConflictException("Meeting is no longer editable");
       await store.insert("audit", {
         eventId,
         actorId,
@@ -449,6 +448,7 @@ export class NetworkingAdminService {
         `MEETING_${input.action}`,
         [row.requesterId, row.recipientId],
         db,
+        { reason: "ORGANIZER" },
       );
       return this.meetings.hydrate(saved, store, true);
     });

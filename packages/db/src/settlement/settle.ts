@@ -48,6 +48,13 @@ export interface SettleRegistrationOptions {
   /** paid_at with an explicit status; defaults to the stored value. */
   paidAt?: Date | null;
   /**
+   * Decide the status (and paid amount/date) from the amounts recomputed
+   * under the lock, e.g. to validate a payment against the fresh net. Takes
+   * precedence over paymentStatus/paidAmount/paidAt. Throwing aborts the
+   * settlement; the caller's transaction then rolls back.
+   */
+  decide?: (state: SettlementDecisionInput) => SettlementDecision;
+  /**
    * Access items sponsorships covered before this change, when the caller
    * changed the registration's sponsorship usages first. Defaults to what
    * they cover now.
@@ -58,6 +65,25 @@ export interface SettleRegistrationOptions {
   /** Settle only if updated_at still has this value; otherwise change nothing. */
   expectedUpdatedAt?: Date;
   now?: Date;
+}
+
+/** What `decide` sees: the stored state and the amounts this settlement will write. */
+export interface SettlementDecisionInput {
+  before: SettlementSnapshot;
+  /** total_amount after this settlement. */
+  gross: number;
+  /** Sponsorship recomputed from the linked usages, capped at the subtotal. */
+  sponsorship: number;
+  /** gross − sponsorship, floored at 0: what the registrant owes in total. */
+  net: number;
+}
+
+export interface SettlementDecision {
+  paymentStatus: RegistrationPaymentStatus;
+  /** Written when given; otherwise the stored paid amount is kept. */
+  paidAmount?: number;
+  /** Written when given; otherwise the stored paid_at is kept. */
+  paidAt?: Date | null;
 }
 
 export interface SettleRegistrationResult {
@@ -172,11 +198,21 @@ export async function settleRegistrationTxn(
   const { sponsorship, coveredAccessIds } = await recomputeRegistrationSponsorship(tx, registrationId, grossBreakdown);
   const priceBreakdown = netBreakdown(grossBreakdown, sponsorship);
   const totalAmount = options.totalAmount ?? (repriced ? priceBreakdown.subtotal : before.totalAmount);
-  const paidAmount = options.paidAmount ?? before.paidAmount;
+  const decision = options.decide?.({
+    before,
+    gross: totalAmount,
+    sponsorship,
+    net: Math.max(0, totalAmount - sponsorship),
+  });
+  const explicitPaidAmount = decision ? decision.paidAmount : options.paidAmount;
+  const paidAmount = explicitPaidAmount ?? before.paidAmount;
 
   let paymentStatus: RegistrationPaymentStatus;
   let paidAt: Date | null;
-  if (options.paymentStatus !== undefined) {
+  if (decision) {
+    paymentStatus = decision.paymentStatus;
+    paidAt = decision.paidAt !== undefined ? decision.paidAt : before.paidAt;
+  } else if (options.paymentStatus !== undefined) {
     paymentStatus = options.paymentStatus;
     paidAt = options.paidAt !== undefined ? options.paidAt : before.paidAt;
   } else {
@@ -217,7 +253,7 @@ export async function settleRegistrationTxn(
     if (totalAmount !== before.totalAmount) settlement.totalAmount = totalAmount;
     if (sponsorship !== before.sponsorshipAmount) settlement.sponsorshipAmount = sponsorship;
   }
-  if (options.paidAmount !== undefined) settlement.paidAmount = paidAmount;
+  if (explicitPaidAmount !== undefined) settlement.paidAmount = paidAmount;
   if (paymentStatus !== before.paymentStatus) settlement.paymentStatus = paymentStatus;
   if ((paidAt?.getTime() ?? null) !== (before.paidAt?.getTime() ?? null)) settlement.paidAt = paidAt;
 

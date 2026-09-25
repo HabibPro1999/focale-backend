@@ -10,6 +10,7 @@ import {
   type NetworkingTableInput,
 } from "@app/contracts";
 import {
+  networkingMeetingIs,
   networkingStore,
   networkingTables,
   networkingTransaction,
@@ -18,7 +19,7 @@ import {
 } from "@app/db";
 
 const upcoming = (meeting: NetworkingRow<"meetings">) =>
-  ["PENDING", "CONFIRMED", "PENDING_ALLOCATION"].includes(meeting.status) &&
+  networkingMeetingIs(meeting.status, "open") &&
   meeting.endsAt > new Date();
 const location = (space: NetworkingRow<"spaces">) =>
   [space.name, space.location].filter(Boolean).join(" · ");

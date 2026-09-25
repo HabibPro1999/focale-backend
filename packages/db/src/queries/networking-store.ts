@@ -8,6 +8,7 @@ import { events } from "../schema/events-access";
 import { registrations } from "../schema/registrations";
 import { forms } from "../schema/forms";
 import { networkingSecondFactors } from "../schema/networking-mfa";
+import { NETWORKING_MEETING_GROUPS } from "./networking-meetings";
 const tables = {
   secondFactors: networkingSecondFactors,
   configs: n.networkingConfigs,
@@ -33,7 +34,7 @@ const tables = {
   forms,
 };
 // Early-completed and no-show meetings keep holding their participants, table and exhibitor.
-const RELEASED_MEETING_STATUSES = ["CANCELLED", "DECLINED", "EXPIRED"] as const;
+const RELEASED_MEETING_STATUSES = NETWORKING_MEETING_GROUPS.released;
 export type NetworkingEntity = keyof typeof tables;
 export type NetworkingRow<K extends NetworkingEntity> =
   (typeof tables)[K]["$inferSelect"];
@@ -161,7 +162,7 @@ export function networkingStore(db: DbExecutor = getDb(), options: NetworkingSto
           .where(and(eq(c.eventId, eventId), or(inArray(c.profileAId, profileIds), inArray(c.profileBId, profileIds)), notInArray(p.id, profileIds))),
         db.select({ count: count() }).from(m).where(and(eq(m.eventId, eventId), inArray(m.senderId, profileIds))),
         db.select({
-          planned: counted(sql`count(CASE WHEN ${meetings.status} IN ('CONFIRMED','COMPLETED','NO_SHOW') THEN 1 END)`),
+          planned: counted(sql`count(CASE WHEN ${inArray(meetings.status, [...NETWORKING_MEETING_GROUPS.booked])} THEN 1 END)`),
           completed: counted(sql`count(CASE WHEN ${meetings.status}='COMPLETED' THEN 1 END)`),
         }).from(meetings)
           .where(and(eq(meetings.eventId, eventId), or(inArray(meetings.requesterId, profileIds), inArray(meetings.recipientId, profileIds)))),
@@ -237,7 +238,7 @@ export function networkingStore(db: DbExecutor = getDb(), options: NetworkingSto
     async allocationTableUsage(eventId: string) {
       const m = n.networkingMeetings;
       return db.select({ tableId: m.tableId, count: count() }).from(m)
-        .where(and(eq(m.eventId, eventId), inArray(m.status, ["PENDING", "CONFIRMED", "PENDING_ALLOCATION", "COMPLETED"])))
+        .where(and(eq(m.eventId, eventId), inArray(m.status, [...NETWORKING_MEETING_GROUPS.holding])))
         .groupBy(m.tableId);
     },
     /**

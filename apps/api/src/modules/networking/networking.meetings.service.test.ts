@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   one: vi.fn(), all: vi.fn(), insertAvailability: vi.fn(), allocationMeetings: vi.fn(), allocationReservations: vi.fn(), allocationTableUsage: vi.fn(),
   update: vi.fn(), remove: vi.fn(), insert: vi.fn(), notify: vi.fn(), summaries: vi.fn(), claimResource: vi.fn(),
   upsertInterest: vi.fn(), ensureConnection: vi.fn(), insertMessageOnce: vi.fn(), insertBlockOnce: vi.fn(), cancel: vi.fn(),
-  transaction: vi.fn(), allocationTransaction: vi.fn(), config: vi.fn(),
+  transaction: vi.fn(), allocationTransaction: vi.fn(), config: vi.fn(), transition: vi.fn(),
 }));
 vi.mock("@app/db", async (original) => ({
   ...(await original<typeof import("@app/db")>()),
@@ -18,12 +18,13 @@ vi.mock("@app/db", async (original) => ({
   findClientModuleState: vi.fn(),
   listNetworkingConnectionSummaries: mocks.summaries,
   expireNetworkingProposals: vi.fn(),
+  transitionNetworkingMeetings: mocks.transition,
 }));
 vi.mock("../clients/module-gates", () => ({ isModuleEnabledForClient: () => true }));
 import { NetworkingService, type NetworkingContext } from "./networking.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
 import { NetworkingSocialService } from "./networking.social.service";
-import { NetworkingAllocationLockError, NetworkingBusyError } from "@app/db";
+import { NETWORKING_MEETING_TRANSITIONS, NetworkingAllocationLockError, NetworkingBusyError, type NetworkingMeetingTransition } from "@app/db";
 const start = new Date("2099-01-01T09:00:00Z");
 const ctx = {
   event: { id: "event", slug: "event", startDate: start, endDate: new Date("2099-01-02Z"), timezone: "UTC" },
@@ -43,6 +44,9 @@ beforeEach(() => {
   mocks.allocationTableUsage.mockResolvedValue([]);
   mocks.update.mockImplementation(async (_kind, _where, patch) => [row = { ...row, ...patch }]);
   mocks.claimResource.mockResolvedValue(true);
+  // The lifecycle module's transition, applied to the one row under test.
+  mocks.transition.mockImplementation(async (_db, transition: NetworkingMeetingTransition, _event, ids: string[], set = {}) =>
+    ids.includes(row.id) ? [row = { ...row, ...set, status: NETWORKING_MEETING_TRANSITIONS[transition].to, revision: row.revision + 1 }] : []);
   mocks.transaction.mockImplementation(async (_id: string, run: Run) => run(mocks, {}));
   mocks.allocationTransaction.mockImplementation(async (_id: string, _intervals: unknown, run: Run) => run(mocks, {}));
   service = new NetworkingMeetingsService({ currentParticipant: async () => ctx, target: async () => ({ id: "b" }) } as unknown as NetworkingService);
@@ -61,6 +65,25 @@ describe("NetworkingMeetingsService response integrity", () => {
     await expect(service.respond(ctx, row.id, { action: "ACCEPT" })).rejects.toMatchObject({ status: 409, response: { code: "NETWORKING_MEETING_CHECKED_IN" } });
     expect(reserve).not.toHaveBeenCalled();
     expect(mocks.update).not.toHaveBeenCalled();
+  });
+  it("cancelling and declining a pending request are lifecycle transitions; declining a counter-proposal keeps the booking", async () => {
+    row.startsAt = new Date(Date.now() + 7_200_000); row.endsAt = new Date(+row.startsAt + 1_800_000);
+    const saved = await service.respond(ctx, row.id, { action: "CANCEL", message: "  Running late " });
+    expect(mocks.transition).toHaveBeenCalledWith({}, "CANCEL", "event", ["meeting"], { cancellationNote: "Running late", proposedStartsAt: null, proposalBy: null });
+    expect(saved).toMatchObject({ status: "CANCELLED", revision: 2 });
+    expect(mocks.remove).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.notify.mock.calls.map(([notice]) => notice.data.reason)).toEqual(["PARTICIPANT", "PARTICIPANT"]);
+
+    mocks.transition.mockClear(); mocks.notify.mockClear();
+    row = { ...row, status: "CONFIRMED", proposedStartsAt: new Date(+row.startsAt + 3_600_000), proposalBy: "b", expiresAt: new Date(Date.now() + 3_600_000) };
+    expect(await service.respond(ctx, row.id, { action: "DECLINE" })).toMatchObject({ status: "CONFIRMED", proposedStartsAt: null });
+    expect(mocks.transition).not.toHaveBeenCalled();
+
+    row = { ...row, status: "PENDING", requesterId: "b", recipientId: "a", proposedStartsAt: null, proposalBy: null };
+    expect(await service.respond(ctx, row.id, { action: "DECLINE" })).toMatchObject({ status: "DECLINED" });
+    expect(mocks.transition).toHaveBeenCalledWith({}, "DECLINE", "event", ["meeting"], { proposedStartsAt: null, proposalBy: null });
+    expect(mocks.notify.mock.calls.every(([notice]) => !("reason" in notice.data))).toBe(true);
   });
   it("the first check-in withdraws a pending counter-proposal", async () => {
     row.startsAt = new Date(Date.now() + 10 * 60_000); row.endsAt = new Date(+row.startsAt + 1_800_000);
@@ -96,9 +119,22 @@ describe("NetworkingMeetingsService response integrity", () => {
     expect(data).toMatchObject({ action });
     expect(data).not.toHaveProperty("proposedStartsAt");
   });
-  it("omits the counterpart for withdrawal-style cancellations", async () => {
-    await service.notify(ctx, row, "MEETING_CANCELLED", ["a", "b"], {} as any, { counterpart: false });
-    for (const [notification] of mocks.notify.mock.calls) expect(notification.data).not.toHaveProperty("counterpartName");
+  it("confidential cancellations name neither the counterpart nor the place, and give reason UNAVAILABLE", async () => {
+    row.tableId = "t";
+    await service.notify(ctx, { ...row, status: "CANCELLED" }, "MEETING_CANCELLED", ["a", "b"], {} as never, { confidential: true });
+    expect(mocks.notify).toHaveBeenCalledTimes(2);
+    for (const [notification] of mocks.notify.mock.calls) {
+      expect(notification).toMatchObject({ title: "Meeting cancelled", data: { action: "CANCEL", reason: "UNAVAILABLE", status: "CANCELLED" } });
+      expect(notification.data).not.toHaveProperty("counterpartName");
+      expect(notification.data).not.toHaveProperty("tableName");
+    }
+    expect(mocks.one).not.toHaveBeenCalledWith("tables", expect.anything());
+  });
+  it("gives cancellation notices their reason, and no other notice one", async () => {
+    await service.notify(ctx, row, "MEETING_CANCEL", ["a"], {} as never, { reason: "PARTICIPANT" });
+    await service.notify(ctx, row, "MEETING_ACCEPT", ["a"], {} as never, { reason: "PARTICIPANT" });
+    expect(mocks.notify.mock.calls[0]![0].data).toMatchObject({ action: "CANCEL", reason: "PARTICIPANT", counterpartName: "Bob B" });
+    expect(mocks.notify.mock.calls[1]![0].data).not.toHaveProperty("reason");
   });
 });
 describe("participant error codes", () => {
@@ -134,12 +170,36 @@ describe("participant error codes", () => {
     mocks.claimResource.mockRejectedValue(new Error("connection reset"));
     await expect(service.reserve(manual, row, start, row.endsAt, mocks as unknown as NetworkingStore)).rejects.toThrow("connection reset");
   });
-  it("a pending hold claims only its table, never the participants", async () => {
+  it("a pending hold claims its table and the requester's pending slot, never the participants", async () => {
     vi.spyOn(service, "availableAt").mockResolvedValue(undefined);
     mocks.all.mockImplementation(async (kind) => kind === "tables" ? [{ id: "t", name: "A", kind: "TABLE" }] : []);
     const hold = await service.reserve(ctx, { ...row, status: "PENDING", expiresAt: new Date(Date.now() + 60_000) }, start, row.endsAt, mocks as unknown as NetworkingStore, undefined, true);
     expect(hold).toEqual({ tableId: "t", status: "PENDING" });
-    expect(mocks.claimResource.mock.calls.map(([, , key]) => key)).toEqual(["table:t"]);
+    expect(mocks.claimResource.mock.calls.map(([, , key]) => key)).toEqual(["hold:profile:a", "table:t"]);
+  });
+  it("answers a second pending request by the same requester in the slot with 409, seen or lost to a race", async () => {
+    vi.spyOn(service, "availableAt").mockResolvedValue(undefined);
+    mocks.all.mockImplementation(async (kind) => kind === "tables" ? [{ id: "t", name: "A", kind: "TABLE" }] : []);
+    const pending = { ...row, status: "PENDING" as const, expiresAt: new Date(Date.now() + 60_000) };
+    const conflict = { status: 409, response: { code: "NETWORKING_SLOT_CONFLICT", message: "The requester already has a pending meeting request in this slot" } };
+    mocks.allocationReservations.mockResolvedValue([{ meetingId: "other", resourceKey: "hold:profile:a", startsAt: start }]);
+    await expect(service.reserve(ctx, pending, start, row.endsAt, mocks as unknown as NetworkingStore, undefined, true)).rejects.toMatchObject(conflict);
+    expect(mocks.claimResource).not.toHaveBeenCalled();
+    // An accepted meeting does not hold the requester's pending slot.
+    await expect(service.reserve(ctx, row, start, row.endsAt, mocks as unknown as NetworkingStore)).resolves.toMatchObject({ tableId: "t" });
+    mocks.allocationReservations.mockResolvedValue([]);
+    mocks.claimResource.mockClear().mockImplementation(async (_event, _meeting, key: string) => key !== "hold:profile:a");
+    await expect(service.reserve(ctx, pending, start, row.endsAt, mocks as unknown as NetworkingStore, undefined, true)).rejects.toMatchObject(conflict);
+    expect(mocks.claimResource.mock.calls.map(([, , key]) => key)).toEqual(["hold:profile:a"]);
+  });
+  it("expires overdue pending meetings in the allocation window through the lifecycle transition", async () => {
+    vi.spyOn(service, "availableAt").mockResolvedValue(undefined);
+    const overdue = { ...row, id: "overdue", status: "PENDING" as const, expiresAt: new Date(Date.now() - 1000) };
+    const live = { ...row, id: "live", status: "PENDING" as const, expiresAt: new Date(Date.now() + 60_000) };
+    mocks.allocationMeetings.mockResolvedValue([overdue, live, { ...row, id: "confirmed" }]);
+    await service.reserve({ ...ctx, config: { ...ctx.config, autoAssignTables: false } }, row, start, row.endsAt, mocks as unknown as NetworkingStore);
+    expect(mocks.transition).toHaveBeenCalledWith(undefined, "EXPIRE", "event", ["overdue"]);
+    expect(mocks.update).not.toHaveBeenCalled();
   });
   it("codes locked meetings", async () => {
     row.status = "COMPLETED";

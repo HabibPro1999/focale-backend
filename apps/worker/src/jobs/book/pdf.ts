@@ -406,9 +406,21 @@ class PdfWriter {
   }
 }
 
+/** Abstracts laid out between two yields to the event loop. */
+const ABSTRACTS_PER_YIELD = 20;
+
+const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+/**
+ * Render the book. The layout yields to the event loop every few abstracts, so
+ * the job's lease heartbeat keeps running during a long render, and stops
+ * there once `signal` aborts (lost lease, timeout or shutdown).
+ */
 export async function generateAbstractBookPdf(
   data: AbstractBookData,
+  options: { signal?: AbortSignal } = {},
 ): Promise<{ buffer: Buffer; includedCount: number }> {
+  const { signal } = options;
   const { config } = data;
   const abstracts = sortAbstracts(data.abstracts, config.bookOrder);
 
@@ -455,7 +467,11 @@ export async function generateAbstractBookPdf(
   }
 
   let currentGroup = "";
-  abstracts.forEach((abstract, index) => {
+  for (const [index, abstract] of abstracts.entries()) {
+    if (index % ABSTRACTS_PER_YIELD === 0) {
+      await yieldToEventLoop();
+      signal?.throwIfAborted();
+    }
     if (index > 0) writer.move(8);
     const group = `${themeLabel(abstract) || "No theme"} · ${typeLabel(abstract.finalType)}`;
     if (config.bookOrder === "BY_THEME" && group !== currentGroup) {
@@ -499,8 +515,11 @@ export async function generateAbstractBookPdf(
       writer.text(field.label, { bold: true, gapAfter: 2 });
       writer.text(field.text, { gapAfter: 8 });
     }
-  });
+  }
 
+  await yieldToEventLoop();
+  signal?.throwIfAborted();
+  // save() yields between object batches on its own.
   const bytes = await pdfDoc.save();
   return { buffer: Buffer.from(bytes), includedCount: abstracts.length };
 }

@@ -17,6 +17,21 @@ export function intervalMs(ms: number): SQL {
 }
 
 /**
+ * A retry delay keyed on an attempt number (a SQL expression): the n-th
+ * delay for attempt n, the last one for every later attempt. An interval, for
+ * `DB_NOW + backoffInterval(…)`.
+ */
+export function backoffInterval(attempt: SQL, delaysMs: readonly number[]): SQL {
+  const last = delaysMs.length - 1;
+  if (last < 0) throw new Error("backoffInterval needs at least one delay");
+  if (last === 0) return intervalMs(delaysMs[0]!);
+  const steps = delaysMs
+    .slice(0, last)
+    .map((ms, i) => sql`WHEN ${attempt} <= ${sql.raw(String(i + 1))} THEN ${intervalMs(ms)}`);
+  return sql`(CASE ${sql.join(steps, sql` `)} ELSE ${intervalMs(delaysMs[last]!)} END)`;
+}
+
+/**
  * A table leased row by row. Every queue table has the lease columns `id`,
  * `status`, `attempt_count`, `locked_at`, `locked_until`, `locked_by`,
  * `last_attempt_at` and `updated_at`; the spec supplies the queue's own
@@ -97,8 +112,11 @@ export interface LeaseQueue {
   fail(workerId: string, id: string, set: SQL): Promise<boolean>;
   /** Put owned, unprocessed rows back without charging the attempt. Returns how many. */
   release(workerId: string, ids: string[]): Promise<number>;
-  /** Requeue, or dead-letter once attempts are exhausted, leased rows whose lease expired. */
-  recoverStale(): Promise<RecoverStaleResult>;
+  /**
+   * Requeue, or dead-letter once attempts are exhausted, leased rows whose
+   * lease expired; `where` narrows it to some rows (e.g. one event's job).
+   */
+  recoverStale(where?: SQL): Promise<RecoverStaleResult>;
   health(): Promise<LeaseQueueHealth>;
 }
 
@@ -198,19 +216,20 @@ export function createLeaseQueue(spec: LeaseQueueSpec): LeaseQueue {
       return rowCountOf(res);
     },
 
-    async recoverStale() {
+    async recoverStale(where) {
+      const rows = where ? sql`${recoverable} AND (${where})` : recoverable;
       const requeued = rowCountOf(
         await getDb().execute(sql`
           UPDATE ${table}
           SET ${spec.recovery.retrySet}, ${CLEAR_LEASE}, "updated_at" = ${DB_NOW}
-          WHERE ${recoverable} AND NOT (${spec.recovery.exhausted})
+          WHERE ${rows} AND NOT (${spec.recovery.exhausted})
         `),
       );
       const deadLettered = rowCountOf(
         await getDb().execute(sql`
           UPDATE ${table}
           SET ${spec.recovery.deadSet}, ${CLEAR_LEASE}, "updated_at" = ${DB_NOW}
-          WHERE ${recoverable} AND (${spec.recovery.exhausted})
+          WHERE ${rows} AND (${spec.recovery.exhausted})
         `),
       );
       return { requeued, deadLettered };

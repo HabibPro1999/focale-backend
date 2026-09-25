@@ -18,9 +18,10 @@ import {
   type InferSelectModel,
   type SQL,
 } from "drizzle-orm";
-import { createLogger, newId } from "@app/shared";
+import { newId } from "@app/shared";
 import { getDb, type DbExecutor } from "../client";
-import { rowsOf, rowCountOf, standardRetryDelayMs } from "../helpers";
+import { rowCountOf, STANDARD_RETRY_DELAYS_MS, standardRetryDelayMs } from "../helpers";
+import { DB_NOW, backoffInterval, createLeaseQueue, intervalMs } from "../lease-queue";
 import { pgUniqueViolation, withTxn } from "../txn";
 import { emailLogs, emailTemplates } from "../schema/email";
 import { events, eventAccess } from "../schema/events-access";
@@ -779,23 +780,57 @@ export async function getRegistrationFormSchema(
 }
 
 // ============================================================================
-// EMAIL QUEUE — lease-based worker claim + processing (SKIP LOCKED)
+// EMAIL QUEUE — a lease queue (packages/db/src/lease-queue).
 //
 // Concurrency safety here is lease-based, NOT transaction-based: the claim uses
 // FOR UPDATE SKIP LOCKED, records lockedBy/lockedUntil, and EVERY subsequent
-// write re-checks that ownership. Deliberately NOT withTxnRetry/serializable —
-// the legacy semantics are lease expiry + ownership, not conflict retry.
-// Raw single-statement UPDATEs bump updated_at explicitly (no $onUpdate on raw
-// SQL). All values are bound params or hardcoded literals.
+// write re-checks that ownership (status=SENDING AND locked_by=workerId).
+// Deliberately NOT withTxnRetry/serializable — the semantics are lease expiry +
+// ownership, not conflict retry. Lease times come from the database clock;
+// the worker's LeaseRecoveryJob recovers expired leases.
 // ============================================================================
 
-const logger = createLogger({ name: "db:email-queue" });
-
 const MAX_EMAIL_RETRIES = 3;
-/** Default worker lease (10 min). Overridable per call. */
+/** Worker lease (10 min); runLeased's heartbeat renews it while a batch runs. */
 export const EMAIL_LEASE_MS = 10 * 60 * 1000;
 const EMAIL_QUEUE_UNHEALTHY_AGE_MS = 30 * 60 * 1000;
 const EMAIL_QUEUE_UNHEALTHY_SIZE = 1000;
+
+// Rows the networking dispatcher owns (it claims and recovers them itself).
+const NETWORKING_OWNED = sql`"context_snapshot"->>'dispatchOwner' IS NOT DISTINCT FROM 'networking'`;
+
+/**
+ * email_logs as a lease queue. Due QUEUED rows are claimable (FIFO by
+ * queued_at) while attempt_count <= max_retries (max_retries + 1 sends in
+ * all); SENDING is the lease. attempt_count counts claims; retry_count counts
+ * failures and expired leases, and decides dead-lettering on recovery. A
+ * released row goes back to QUEUED, due now. An expired lease is requeued with
+ * the retry backoff, or FAILED once retry_count reaches max_retries.
+ * Networking-dispatched rows are never claimed or recovered here.
+ */
+export const emailQueue = createLeaseQueue({
+  name: "email",
+  table: "email_logs",
+  leasedStatus: "SENDING",
+  leaseMs: EMAIL_LEASE_MS,
+  claimable: sql`"status" = 'QUEUED'
+    AND "context_snapshot"->>'dispatchOwner' IS DISTINCT FROM 'networking'
+    AND ("next_attempt_at" IS NULL OR "next_attempt_at" <= ${DB_NOW})
+    AND "attempt_count" <= "max_retries"`,
+  order: sql`"queued_at" ASC`,
+  claimSet: sql`"error_message" = NULL`,
+  releaseSet: sql`"status" = 'QUEUED', "next_attempt_at" = NULL`,
+  recovery: {
+    exhausted: sql`"retry_count" >= "max_retries"`,
+    retrySet: sql`"status" = 'QUEUED', "retry_count" = "retry_count" + 1,
+      "next_attempt_at" = ${DB_NOW} + ${backoffInterval(sql`("retry_count" + 1)`, STANDARD_RETRY_DELAYS_MS)},
+      "error_message" = COALESCE("error_message", 'Email send lease expired; requeued for retry')`,
+    deadSet: sql`"status" = 'FAILED', "failed_at" = ${DB_NOW}, "next_attempt_at" = NULL,
+      "retry_count" = "retry_count" + 1,
+      "error_message" = COALESCE("error_message", 'Email send lease expired and retry limit was exhausted')`,
+    exclude: NETWORKING_OWNED,
+  },
+});
 
 /** Statuses that count as "an email already in flight" for dedupe purposes. */
 const ACTIVE_EMAIL_STATUSES = [
@@ -804,10 +839,6 @@ const ACTIVE_EMAIL_STATUSES = [
   "SENT",
   "DELIVERED",
 ] as const satisfies readonly EmailStatus[];
-
-function nextEmailAttemptAt(failedAttemptCount: number, from = new Date()): Date {
-  return new Date(from.getTime() + standardRetryDelayMs(failedAttemptCount));
-}
 
 // ----------------------------------------------------------------------------
 // Dedupe pre-checks (SELECT-then-INSERT; the partial unique indexes in
@@ -865,46 +896,8 @@ export async function hasActiveSponsorshipEmailLog(
 }
 
 // ----------------------------------------------------------------------------
-// Claim (FOR UPDATE SKIP LOCKED) + relation re-fetch
+// Claimed rows + relation re-fetch (the claim is emailQueue.claim)
 // ----------------------------------------------------------------------------
-
-/**
- * Atomically claim up to `batchSize` due QUEUED rows: sets SENDING, records the
- * lease (lockedBy/lockedUntil), bumps attempt_count, clears error. FIFO by
- * queued_at; SKIP LOCKED so instances never grab the same rows. Returns claimed
- * ids. NOT wrapped in a transaction on purpose (lease-based, not txn-based).
- */
-export async function claimQueuedEmailLogs(
-  workerId: string,
-  batchSize: number,
-  now: Date,
-  lockedUntil: Date,
-): Promise<string[]> {
-  const res = await getDb().execute(sql`
-    UPDATE "email_logs"
-    SET
-      "status" = 'SENDING',
-      "updated_at" = ${now},
-      "locked_at" = ${now},
-      "locked_until" = ${lockedUntil},
-      "locked_by" = ${workerId},
-      "last_attempt_at" = ${now},
-      "attempt_count" = "attempt_count" + 1,
-      "error_message" = NULL
-    WHERE "id" IN (
-      SELECT "id" FROM "email_logs"
-       WHERE "status" = 'QUEUED'
-         AND "context_snapshot"->>'dispatchOwner' IS DISTINCT FROM 'networking'
-         AND ("next_attempt_at" IS NULL OR "next_attempt_at" <= ${now})
-         AND "attempt_count" <= "max_retries"
-       ORDER BY "queued_at" ASC
-       LIMIT ${batchSize}
-       FOR UPDATE SKIP LOCKED
-    )
-    RETURNING "id"
-  `);
-  return rowsOf<{ id: string }>(res).map((r) => r.id);
-}
 
 /** A claimed EmailLog joined with the relations the send pipeline needs. */
 export interface ClaimedEmailLog {
@@ -1012,39 +1005,21 @@ export async function getClaimedEmailLogsForProcessing(
 }
 
 // ----------------------------------------------------------------------------
-// Lease-guarded writes — each returns false (not throw) when 0 rows matched the
-// ownership guard, which callers map to a non-counted "lease-lost" outcome.
+// Lease-guarded writes — each returns false (not throw) when the row is no
+// longer owned by `workerId`, which callers map to a non-counted "lease-lost"
+// outcome. Terminal writes go through emailQueue (they clear the lease).
 // ----------------------------------------------------------------------------
 
-/** Write the resolved subject only while this worker still holds an unexpired lease. */
+/** Write the resolved subject only while this worker still owns the row. */
 export async function writeResolvedSubjectIfLeaseHeld(
   id: string,
   workerId: string,
   subject: string,
-  now = new Date(),
 ): Promise<boolean> {
   const res = await getDb().execute(sql`
     UPDATE "email_logs"
-    SET "subject" = ${subject}, "updated_at" = ${now}
-    WHERE "id" = ${id} AND "status" = 'SENDING'
-      AND "locked_by" = ${workerId} AND "locked_until" > ${now}
-  `);
-  return rowCountOf(res) > 0;
-}
-
-/** Extend the lease immediately before the provider call. */
-export async function refreshEmailLease(
-  id: string,
-  workerId: string,
-  now: Date,
-  leaseMs: number,
-): Promise<boolean> {
-  const until = new Date(now.getTime() + leaseMs);
-  const res = await getDb().execute(sql`
-    UPDATE "email_logs"
-    SET "locked_at" = ${now}, "locked_until" = ${until}, "updated_at" = ${now}
-    WHERE "id" = ${id} AND "status" = 'SENDING'
-      AND "locked_by" = ${workerId} AND "locked_until" > ${now}
+    SET "subject" = ${subject}, "updated_at" = ${DB_NOW}
+    WHERE "id" = ${id} AND "status" = 'SENDING' AND "locked_by" = ${workerId}
   `);
   return rowCountOf(res) > 0;
 }
@@ -1053,23 +1028,19 @@ export async function markEmailSent(
   id: string,
   workerId: string,
   messageId: string | undefined,
-  now = new Date(),
 ): Promise<boolean> {
-  const res = await getDb().execute(sql`
-    UPDATE "email_logs"
-    SET "status" = 'SENT', "sendgrid_message_id" = ${messageId ?? null},
-        "sent_at" = ${now}, "error_message" = NULL, "next_attempt_at" = NULL,
-        "locked_at" = NULL, "locked_until" = NULL, "locked_by" = NULL,
-        "updated_at" = ${now}
-    WHERE "id" = ${id} AND "status" = 'SENDING' AND "locked_by" = ${workerId}
-  `);
-  return rowCountOf(res) > 0;
+  return emailQueue.complete(
+    workerId,
+    id,
+    sql`"status" = 'SENT', "sendgrid_message_id" = ${messageId ?? null},
+      "sent_at" = ${DB_NOW}, "error_message" = NULL, "next_attempt_at" = NULL`,
+  );
 }
 
 /**
- * shouldRetry uses the PRE-failure attemptCount (already incremented at claim
- * time), i.e. "has this claim-attempt not yet exceeded max". Retry → QUEUED
- * with backoff nextAttemptAt; else → FAILED. Lease cleared either way.
+ * shouldRetry uses the attemptCount of this claim (already incremented), i.e.
+ * "has this claim-attempt not yet exceeded max". Retry → QUEUED with backoff
+ * nextAttemptAt; else → FAILED. Lease cleared either way.
  */
 export async function markEmailFailed(
   id: string,
@@ -1077,123 +1048,28 @@ export async function markEmailFailed(
   errorMessage: string,
   attemptCount: number,
   maxRetries: number,
-  now = new Date(),
 ): Promise<boolean> {
   const retryLimit = maxRetries ?? MAX_EMAIL_RETRIES;
-  const shouldRetry = attemptCount <= retryLimit;
-  const retryCountAfterFailure = Math.max(1, attemptCount);
-  const nextAttemptAt = shouldRetry
-    ? nextEmailAttemptAt(retryCountAfterFailure, now)
-    : null;
-  const res = await getDb().execute(sql`
-    UPDATE "email_logs"
-    SET "status" = ${shouldRetry ? "QUEUED" : "FAILED"},
-        "error_message" = ${errorMessage},
-        "retry_count" = "retry_count" + 1,
-        "failed_at" = ${shouldRetry ? null : now},
-        "next_attempt_at" = ${nextAttemptAt},
-        "locked_at" = NULL, "locked_until" = NULL, "locked_by" = NULL,
-        "updated_at" = ${now}
-    WHERE "id" = ${id} AND "status" = 'SENDING' AND "locked_by" = ${workerId}
-  `);
-  return rowCountOf(res) > 0;
+  const set =
+    attemptCount <= retryLimit
+      ? sql`"status" = 'QUEUED', "error_message" = ${errorMessage},
+          "retry_count" = "retry_count" + 1, "failed_at" = NULL,
+          "next_attempt_at" = ${DB_NOW} + ${intervalMs(standardRetryDelayMs(Math.max(1, attemptCount)))}`
+      : sql`"status" = 'FAILED', "error_message" = ${errorMessage},
+          "retry_count" = "retry_count" + 1, "failed_at" = ${DB_NOW}, "next_attempt_at" = NULL`;
+  return emailQueue.fail(workerId, id, set);
 }
 
 export async function markEmailSkipped(
   id: string,
   workerId: string,
   reason: string,
-  now = new Date(),
 ): Promise<boolean> {
-  const res = await getDb().execute(sql`
-    UPDATE "email_logs"
-    SET "status" = 'SKIPPED', "error_message" = ${reason},
-        "next_attempt_at" = NULL,
-        "locked_at" = NULL, "locked_until" = NULL, "locked_by" = NULL,
-        "updated_at" = ${now}
-    WHERE "id" = ${id} AND "status" = 'SENDING' AND "locked_by" = ${workerId}
-  `);
-  return rowCountOf(res) > 0;
-}
-
-// ----------------------------------------------------------------------------
-// Stale lease recovery — runs at the top of every processEmailQueue call.
-// ----------------------------------------------------------------------------
-
-/**
- * Requeue (retry remains) or dead-letter (limit exhausted) SENDING rows whose
- * lease expired. Staleness: locked_until < now OR (locked_until IS NULL AND
- * COALESCE(locked_at,last_attempt_at,updated_at) < now-leaseMs). error_message
- * is COALESCE'd (only filled when currently NULL), unlike markEmailFailed.
- */
-export async function recoverStaleEmailLeases(
-  now = new Date(),
-  leaseMs = EMAIL_LEASE_MS,
-): Promise<{ requeued: number; deadLettered: number }> {
-  const staleCutoff = new Date(now.getTime() - leaseMs);
-  const retry1At = nextEmailAttemptAt(1, now);
-  const retry2At = nextEmailAttemptAt(2, now);
-  const retryLaterAt = nextEmailAttemptAt(3, now);
-
-  const requeued = rowCountOf(
-    await getDb().execute(sql`
-      UPDATE "email_logs"
-      SET
-        "status" = 'QUEUED',
-        "updated_at" = ${now},
-        "locked_at" = NULL,
-        "locked_until" = NULL,
-        "locked_by" = NULL,
-        "retry_count" = "retry_count" + 1,
-        "next_attempt_at" = CASE
-          WHEN "retry_count" + 1 <= 1 THEN ${retry1At}::timestamp
-          WHEN "retry_count" + 1 = 2 THEN ${retry2At}::timestamp
-          ELSE ${retryLaterAt}::timestamp
-        END,
-        "error_message" = COALESCE("error_message", 'Email send lease expired; requeued for retry')
-      WHERE "status" = 'SENDING'
-        AND "context_snapshot"->>'dispatchOwner' IS DISTINCT FROM 'networking'
-        AND (
-          "locked_until" < ${now}
-          OR (
-            "locked_until" IS NULL
-            AND COALESCE("locked_at", "last_attempt_at", "updated_at") < ${staleCutoff}
-          )
-        )
-        AND "retry_count" < "max_retries"
-    `),
+  return emailQueue.complete(
+    workerId,
+    id,
+    sql`"status" = 'SKIPPED', "error_message" = ${reason}, "next_attempt_at" = NULL`,
   );
-
-  const deadLettered = rowCountOf(
-    await getDb().execute(sql`
-      UPDATE "email_logs"
-      SET
-        "status" = 'FAILED',
-        "updated_at" = ${now},
-        "failed_at" = ${now},
-        "locked_at" = NULL,
-        "locked_until" = NULL,
-        "locked_by" = NULL,
-        "next_attempt_at" = NULL,
-        "retry_count" = "retry_count" + 1,
-        "error_message" = COALESCE("error_message", 'Email send lease expired and retry limit was exhausted')
-      WHERE "status" = 'SENDING'
-        AND "context_snapshot"->>'dispatchOwner' IS DISTINCT FROM 'networking'
-        AND (
-          "locked_until" < ${now}
-          OR (
-            "locked_until" IS NULL
-            AND COALESCE("locked_at", "last_attempt_at", "updated_at") < ${staleCutoff}
-          )
-        )
-        AND "retry_count" >= "max_retries"
-    `),
-  );
-
-  if (requeued > 0 || deadLettered > 0) {
-    logger.warn({ requeued, deadLettered }, "Recovered stale email queue leases");
-  }
-  return { requeued, deadLettered };
 }
 
 // ----------------------------------------------------------------------------

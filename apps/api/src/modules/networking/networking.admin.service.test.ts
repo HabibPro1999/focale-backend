@@ -11,11 +11,13 @@ const state = vi.hoisted(() => ({
   profile: null as Record<string, unknown> | null,
   meeting: null as Record<string, unknown> | null,
   tx: { executor: "transaction" },
+  transition: vi.fn(),
   delete: vi.fn(),
   sync: vi.fn(),
   tail: Promise.resolve() as Promise<unknown>,
 }));
-vi.mock("@app/db", () => {
+vi.mock("@app/db", async (original) => {
+  const { networkingMeetingIs } = await original<typeof import("@app/db")>();
   const store = {
     one: async (kind: string) => {
       if (kind === "profiles" && state.profile) return state.profile;
@@ -39,6 +41,8 @@ vi.mock("@app/db", () => {
     },
   };
   return {
+    networkingMeetingIs,
+    transitionNetworkingMeetings: state.transition,
     syncNetworkingEvent: state.sync,
     networkingFormField: (schema: { fields?: { id: string }[] }, id: string) => schema.fields?.find((field) => field.id === id),
     networkingStore: () => store,
@@ -249,6 +253,10 @@ describe("NetworkingAdminService meeting assignment", () => {
     };
     return { plans, meetings, admin: new NetworkingAdminService({} as NetworkingService, meetings as unknown as NetworkingMeetingsService) };
   }
+  beforeEach(() => {
+    state.transition.mockReset().mockImplementation(async (_db, transition: string, _event, ids: string[], set = {}) =>
+      ids.map((id) => ({ ...state.meeting, ...set, id, status: ({ CANCEL: "CANCELLED", COMPLETED: "COMPLETED", NO_SHOW: "NO_SHOW" } as Record<string, string>)[transition] })));
+  });
   it("locks the meeting's own slot to assign a table and nothing to cancel it", async () => {
     state.meeting = { id: "m", eventId: "event", requesterId: "a", recipientId: "b", status: "CONFIRMED", startsAt, endsAt, revision: 1 };
     const { plans, meetings, admin } = harness();
@@ -256,5 +264,18 @@ describe("NetworkingAdminService meeting assignment", () => {
     expect(meetings.reserve).toHaveBeenCalledWith(expect.anything(), state.meeting, startsAt, endsAt, expect.anything(), "t", false);
     await admin.updateMeeting("event", "m", { action: "CANCEL" }, "admin");
     expect(plans).toEqual([[{ startsAt, endsAt }], []]);
+    // Cancelling is the lifecycle's CANCEL transition, which releases the reservations; the notice says why.
+    expect(state.transition).toHaveBeenCalledWith(state.tx, "CANCEL", "event", ["m"], { proposedStartsAt: null, proposalBy: null });
+    expect(meetings.notify).toHaveBeenLastCalledWith({ event: expect.anything() }, expect.objectContaining({ status: "CANCELLED" }),
+      "MEETING_CANCEL", ["a", "b"], state.tx, { reason: "ORGANIZER" });
+  });
+  it.each(["COMPLETED", "NO_SHOW"] as const)("records %s once a confirmed meeting started, through a transition that keeps its reservations", async (action) => {
+    state.meeting = { id: "m", eventId: "event", requesterId: "a", recipientId: "b", status: "CONFIRMED", startsAt: new Date(Date.now() + 60_000), endsAt, revision: 1 };
+    const { admin } = harness();
+    await expect(admin.updateMeeting("event", "m", { action }, "admin")).rejects.toThrow("once a confirmed meeting starts");
+    expect(state.transition).not.toHaveBeenCalled();
+    state.meeting = { ...state.meeting, startsAt: new Date(Date.now() - 60_000) };
+    expect(await admin.updateMeeting("event", "m", { action }, "admin")).toMatchObject({ status: action });
+    expect(state.transition).toHaveBeenCalledWith(state.tx, action, "event", ["m"], {});
   });
 });

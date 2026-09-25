@@ -12,7 +12,7 @@
 
 `networking_spaces` is the parent inventory. Existing `networking_tables` rows remain the table/exhibitor records and reference `space_id`. `networking_profiles.stand_table_id` identifies all representatives of an exhibitor. The legacy single `owner_profile_id` is retained for compatibility; the organizer editor now submits `representativeIds`.
 
-Bookings reserve both participants and either `table:<id>` or `stand:<id>:profile:<representativeId>` in five-minute intervals. All allocation and inventory changes share the event transaction lock. No whole-space reservation is created. Failed rescheduling leaves the old booking intact; cancelling one representative's meeting does not release another representative's reservation.
+Bookings reserve both participants and either `table:<id>` or `stand:<id>:profile:<representativeId>` in five-minute intervals. Allocations serialize on hourly allocation locks and inventory changes are SERIALIZABLE transactions (see "Write concurrency" in NETWORKING.md). No whole-space reservation is created. Failed rescheduling leaves the old booking intact; cancelling one representative's meeting does not release another representative's reservation.
 
 Table creation uses a batch insert. Allocation precomputes resource occupancy and table usage instead of repeatedly scanning all reservations/meetings for each candidate. Public representative lists reuse the SQL discovery filters for event, consent, payment, visibility, duplicate email and symmetric blocking.
 

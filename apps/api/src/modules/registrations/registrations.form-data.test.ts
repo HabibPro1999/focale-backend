@@ -15,6 +15,8 @@ const db = vi.hoisted(() => ({
   findPendingSponsorships: vi.fn(),
   // registrations
   withTxn: vi.fn(),
+  withLockingTxn: vi.fn(),
+  lockRegistrationForUpdate: vi.fn(),
   applyRegistrationSettlement: vi.fn(),
   emitSettlementEvents: vi.fn(),
   findClientModuleState: vi.fn(),
@@ -165,6 +167,8 @@ let access: Record<string, ReturnType<typeof vi.fn>>;
 beforeEach(() => {
   vi.clearAllMocks();
   db.withTxn.mockImplementation((fn: (tx: unknown) => unknown) => fn({}));
+  db.withLockingTxn.mockImplementation((fn: (tx: unknown) => unknown) => db.withTxn(fn));
+  db.lockRegistrationForUpdate.mockResolvedValue(true);
   db.findClientModuleState.mockResolvedValue(client);
   db.getEventPricingGate.mockResolvedValue({ status: "OPEN", client, currentCurrency: "TND" });
   db.getEventPricing.mockResolvedValue(PRICING);

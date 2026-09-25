@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ExcelJS from "exceljs";
 const data = vi.hoisted(() => ({ rows: {} as Record<string, unknown[]> }));
-vi.mock("@app/db", () => ({ networkingStore: () => ({ all: async (kind: string) => data.rows[kind] ?? [] }) }));
+vi.mock("@app/db", async (original) => ({
+  networkingMeetingIs: (await original<typeof import("@app/db")>()).networkingMeetingIs,
+  networkingStore: () => ({ all: async (kind: string) => data.rows[kind] ?? [] }),
+}));
 import { NetworkingExportsService } from "./networking.exports.service";
 import type { NetworkingAdminService } from "./networking.admin.service";
 import type { NetworkingSocialService } from "./networking.social.service";
