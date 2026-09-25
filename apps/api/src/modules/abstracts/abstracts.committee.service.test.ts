@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { UserRole } from "@app/contracts";
+import { ErrorCodes, UserRole } from "@app/contracts";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -729,6 +729,27 @@ describe("assignReviewers", () => {
       service.assignReviewers(eventId, abstractId, { reviewerIds: ["r1", "r2"] }, performedBy),
       status,
     );
+    expect(insertAuditLog).not.toHaveBeenCalled();
+  });
+
+  // 2.9 follow-up: a member removed between the pre-check and the txn's
+  // membership lock gets the same 400 as the pre-check.
+  it("maps the txn's inactive_member refusal to the pre-check's 400 without an audit row", async () => {
+    mock(findActiveMembershipUserIds).mockResolvedValue(["r1", "r2"]);
+    mock(assignReviewersTxn).mockResolvedValue({
+      ok: false,
+      reason: "inactive_member",
+      reviewerIds: ["r2"],
+    });
+    const err = await service
+      .assignReviewers(eventId, abstractId, { reviewerIds: ["r1", "r2"] }, performedBy)
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(AppException);
+    expect((err as AppException).getStatus()).toBe(400);
+    expect((err as AppException).getResponse()).toMatchObject({
+      code: ErrorCodes.VALIDATION_ERROR,
+      message: "All reviewers must have active membership",
+    });
     expect(insertAuditLog).not.toHaveBeenCalled();
   });
 

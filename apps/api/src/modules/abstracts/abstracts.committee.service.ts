@@ -124,6 +124,14 @@ function finalizedReviewersError(): AppException {
   );
 }
 
+function inactiveReviewersError(): AppException {
+  return new AppException(
+    ErrorCodes.VALIDATION_ERROR,
+    "All reviewers must have active membership",
+    400,
+  );
+}
+
 @Injectable()
 export class AbstractsCommitteeService {
   constructor(
@@ -419,11 +427,7 @@ export class AbstractsCommitteeService {
         await findActiveMembershipUserIds(eventId, reviewerIds),
       );
       if (reviewerIds.some((id) => !activeMemberIds.has(id))) {
-        throw new AppException(
-          ErrorCodes.VALIDATION_ERROR,
-          "All reviewers must have active membership",
-          400,
-        );
+        throw inactiveReviewersError();
       }
 
       // L3: distributeByTheme wires up an until-now-dead config flag — when
@@ -460,6 +464,11 @@ export class AbstractsCommitteeService {
     if (!updated.ok) {
       if (updated.reason === "not_found") {
         throw new AppException(ErrorCodes.NOT_FOUND, "Abstract not found", 404);
+      }
+      if (updated.reason === "inactive_member") {
+        // A member removed after the pre-check above; re-checked under the
+        // membership lock.
+        throw inactiveReviewersError();
       }
       throw finalizedReviewersError();
     }
