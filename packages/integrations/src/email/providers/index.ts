@@ -27,17 +27,20 @@ export function resetEmailProviderCache(): void {
 export * from "./email-provider.types";
 export {
   SendgridProvider,
+  classifySendgridError,
   createSendgridProvider,
   mapSendgridEvents,
   type SendgridProviderOptions,
 } from "./sendgrid.provider";
 export {
   ResendProvider,
+  classifyResendError,
   createResendProvider,
   buildResendPayload,
   normalizeResendEvents,
   sanitizeTagValue,
   type ResendFrom,
+  type ResendSendError,
   type ResendProviderOptions,
 } from "./resend.provider";
 

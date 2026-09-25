@@ -25,6 +25,7 @@ vi.mock("@app/integrations", () => ({
   renderTemplateToMjml: vi.fn(() => "MJML"),
   compileMjmlToHtml: vi.fn(() => ({ html: "HTML", errors: [] })),
   extractPlainText: vi.fn(() => "PLAIN"),
+  resendUncertainEmail: vi.fn(),
 }));
 
 import {
@@ -37,7 +38,7 @@ import {
   insertEmailLogsSkippingConflicts,
   updateEmailLogById,
 } from "@app/db";
-import { resolveVariables } from "@app/integrations";
+import { resendUncertainEmail, resolveVariables } from "@app/integrations";
 import { EmailSendService } from "./email-send.service";
 
 const service = new EmailSendService();
@@ -300,5 +301,30 @@ describe("sendCustom", () => {
       "log-1",
       expect.objectContaining({ status: "FAILED", errorMessage: "boom" }),
     );
+  });
+});
+
+describe("resendUncertain (3.6)", () => {
+  const resend = vi.mocked(resendUncertainEmail);
+
+  it("returns the queued copy", async () => {
+    resend.mockResolvedValue({ ok: true, log: { id: "log-2" } } as never);
+    await expect(service.resendUncertain("event-1", "log-1")).resolves.toEqual({
+      id: "log-2",
+      status: "QUEUED",
+      resentFrom: "log-1",
+    });
+    expect(resend).toHaveBeenCalledWith("event-1", "log-1");
+  });
+
+  it.each([
+    ["not_found", 404, "RES_3001"],
+    ["not_uncertain", 409, "RES_3002"],
+    ["not_resendable", 409, "RES_3002"],
+    ["already_active", 409, "RES_3002"],
+  ] as const)("maps %s to %i %s", async (reason, status, code) => {
+    resend.mockResolvedValue({ ok: false, reason });
+    const error = await service.resendUncertain("event-1", "log-1").catch((err: unknown) => err);
+    expect(error).toMatchObject({ statusCode: status, code });
   });
 });

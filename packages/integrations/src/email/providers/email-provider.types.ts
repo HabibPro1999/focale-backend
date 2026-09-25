@@ -33,10 +33,51 @@ export interface SendEmailInput {
   attachments?: EmailAttachment[];
 }
 
+/**
+ * What one provider call did (3.6):
+ * - `accepted`: the provider took the email.
+ * - `rejected`: a definitive refusal (an HTTP error response, or an error
+ *   raised before the request left). Nothing was sent; retrying is safe.
+ * - `ambiguous`: the request may have reached the provider (timeout,
+ *   connection reset, an unknown error). Sending it again blind could send it
+ *   twice.
+ */
+export type SendEmailOutcome = "accepted" | "rejected" | "ambiguous";
+
 export interface SendEmailResult {
+  outcome: SendEmailOutcome;
+  /** `outcome === "accepted"` (for callers that only need yes or no). */
   success: boolean;
   messageId?: string;
   error?: string;
+  /** HTTP status of the provider's error response, when there was one. */
+  statusCode?: number;
+  /**
+   * Ambiguous only: sending again with the same `trackingId` cannot send it
+   * twice (the provider deduplicates on it as an idempotency key).
+   */
+  idempotentRetry?: boolean;
+}
+
+export function acceptedSend(messageId: string | undefined): SendEmailResult {
+  return { outcome: "accepted", success: true, messageId };
+}
+
+export function rejectedSend(error: string, statusCode?: number): SendEmailResult {
+  return { outcome: "rejected", success: false, error, ...(statusCode ? { statusCode } : {}) };
+}
+
+export function ambiguousSend(
+  error: string,
+  options: { statusCode?: number; idempotentRetry?: boolean } = {},
+): SendEmailResult {
+  return {
+    outcome: "ambiguous",
+    success: false,
+    error,
+    ...(options.statusCode ? { statusCode: options.statusCode } : {}),
+    idempotentRetry: options.idempotentRetry === true,
+  };
 }
 
 // -----------------------------------------------------------------------------
@@ -48,6 +89,8 @@ export interface SendEmailResult {
  * `updateEmailStatusFromWebhook` so the route needs no provider-specific mapping.
  */
 export type NormalizedEventType =
+  /** The provider accepted the email (SendGrid `processed`, Resend `email.sent`). */
+  | "processed"
   | "delivered"
   | "open"
   | "click"
