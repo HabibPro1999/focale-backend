@@ -113,6 +113,7 @@ with the status code probes rely on (503 when unhealthy, body unchanged).
 | `GET /health/email-queue` | Email queue depth / staleness (unhealthy: stale sending, >1000 queued, or oldest queued >30 min). |
 | `GET /health/abstract-book-jobs` | Book-job queue (unhealthy: stale running, >100 pending, or oldest pending >1 h). |
 | `GET /health/outbox` | Outbox backlog (unhealthy: any dead-lettered, pending+failed ≥1000, oldest pending >10 min, or oldest processing >2× lease). |
+| `GET /health/networking-vector-index` | Networking ANN index: unhealthy while an event above the exact-ranking limit ranks recommendations with the deterministic fallback (see `NETWORKING.md`). |
 
 ## Deployment
 

@@ -187,18 +187,32 @@ export function buildRegistrationWhere(
     clauses.push(eq(registrations.role, filters.role as RegistrationRow["role"]));
   }
   if (filters?.search) {
-    const term = `%${filters.search}%`;
-    clauses.push(
-      or(
+    clauses.push(registrationSearchClause(filters.search));
+  }
+  return and(...clauses);
+}
+
+/**
+ * Registrant search shared by the list and the export: every whitespace-
+ * separated word must match email, first/last name, phone or reference
+ * number, so a full name ("Mehdi Trabelsi", either order) finds the
+ * registrant. LIKE metacharacters are escaped so input matches literally.
+ */
+export function registrationSearchClause(search: string): SQL | undefined {
+  const words = search.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return undefined;
+  return and(
+    ...words.map((word) => {
+      const term = `%${word.replace(/[\\%_]/g, "\\$&")}%`;
+      return or(
         ilike(registrations.email, term),
         ilike(registrations.firstName, term),
         ilike(registrations.lastName, term),
         ilike(registrations.phone, term),
         ilike(registrations.referenceNumber, term),
-      ),
-    );
-  }
-  return and(...clauses);
+      );
+    }),
+  );
 }
 
 /**

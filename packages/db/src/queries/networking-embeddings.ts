@@ -160,8 +160,15 @@ export async function failNetworkingEmbeddingJob(
 }
 
 export {
+  clearNetworkingVectorIndexCache,
   findNetworkingVectorCandidates,
+  getNetworkingVectorIndexHealth,
+  NETWORKING_VECTOR_INDEX,
+  networkingVectorIndexPresent,
+  networkingVectorIndexStatus,
   type NetworkingVectorCandidate,
+  type NetworkingVectorIndexHealth,
+  type NetworkingVectorIndexStatus,
 } from "./networking-vector-search";
 
 export async function getNetworkingEmbeddingHealth(eventId: string) {

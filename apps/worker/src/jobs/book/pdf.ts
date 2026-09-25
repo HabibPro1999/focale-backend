@@ -1,20 +1,20 @@
 import { ABSTRACT_TYPE_LABELS_FR, type AbstractFinalType } from "@app/contracts";
 import { getAuthorLine } from "@app/shared";
-// Abstract Book PDF generation — ported verbatim (semantics) from legacy
-// src/modules/abstracts/abstracts.book.service.ts. Two-column A4 layout using
-// pdf-lib StandardFonts (WinAnsi/CP1252). toWinAnsiSafe replaces characters the
-// built-in fonts cannot encode with "?" so a single exotic glyph never aborts
-// the whole book. (fontkit/DejaVu are used by certificates, NOT the book.)
+// Abstract Book PDF generation — ported (semantics) from legacy
+// src/modules/abstracts/abstracts.book.service.ts. Two-column A4 layout.
+// Text is drawn with embedded, subset DejaVu fonts (shared with certificates
+// and the networking PDFs), so Greek, math symbols and Arabic/Hebrew names
+// print as written instead of "?". Right-to-left runs go through pdfTextRuns
+// (bidi reordering; fontkit shapes Arabic).
 
-import {
-  PDFDocument,
-  StandardFonts,
-  rgb,
-  type PDFFont,
-  type PDFPage,
-} from "pdf-lib";
+import { PDFDocument, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 import type { AbstractBookData, AbstractBookConfig } from "@app/db";
 import { abstractHtmlToText } from "@app/shared";
+import {
+  embedDejaVuFont,
+  pdfTextRuns,
+  type DejaVuFace,
+} from "@app/integrations";
 
 type BookAbstract = AbstractBookData["abstracts"][number];
 type BookOrder = AbstractBookConfig["bookOrder"];
@@ -192,78 +192,114 @@ function sortAbstracts(
   return copy.sort((a, b) => (a.codeNumber ?? 0) - (b.codeNumber ?? 0));
 }
 
-function fontForFamily(family: string): {
-  regular: StandardFonts;
-  bold: StandardFonts;
-} {
+// `bookFontFamily` keeps its meaning: Times → serif, Courier → monospace,
+// anything else → sans. DejaVu Sans is also the fallback for text the chosen
+// face lacks (DejaVu Serif has no Arabic or Hebrew glyphs).
+function facesForFamily(family: string): { regular: DejaVuFace; bold: DejaVuFace } {
   const normalized = family.toLocaleLowerCase();
   if (normalized.includes("times")) {
-    return { regular: StandardFonts.TimesRoman, bold: StandardFonts.TimesRomanBold };
+    return { regular: "DejaVuSerif.ttf", bold: "DejaVuSerif-Bold.ttf" };
   }
   if (normalized.includes("courier")) {
-    return { regular: StandardFonts.Courier, bold: StandardFonts.CourierBold };
+    return { regular: "DejaVuSansMono.ttf", bold: "DejaVuSansMono-Bold.ttf" };
   }
-  return { regular: StandardFonts.Helvetica, bold: StandardFonts.HelveticaBold };
+  return { regular: "DejaVuSans.ttf", bold: "DejaVuSans-Bold.ttf" };
 }
 
-// The extra Unicode code points CP1252 maps in its 0x80–0x9F range; everything
-// in Latin-1 (≤ 0xFF) is also directly encodable by the WinAnsi standard fonts.
-const WINANSI_EXTRA = new Set([
-  0x20ac, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030,
-  0x0160, 0x2039, 0x0152, 0x017d, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022,
-  0x2013, 0x2014, 0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x017e, 0x0178,
-]);
+/** A face plus the fallback used for text it has no glyphs for. */
+class BookFont {
+  private readonly glyphs: Set<number>;
 
-function toWinAnsiSafe(text: string): string {
-  let result = "";
-  for (const char of text) {
-    const code = char.codePointAt(0) ?? 0;
-    if (
-      code === 0x09 ||
-      code === 0x0a ||
-      (code >= 0x20 && code <= 0x7e) ||
-      (code >= 0xa0 && code <= 0xff) ||
-      WINANSI_EXTRA.has(code)
-    ) {
-      result += char;
-    } else {
-      result += "?";
-    }
+  constructor(
+    private readonly primary: PDFFont,
+    private readonly fallback: PDFFont,
+  ) {
+    this.glyphs = new Set(primary.getCharacterSet());
   }
-  return result;
+
+  /** The font to draw `text` with: the chosen face if it covers every character. */
+  fontFor(text: string): PDFFont {
+    if (this.primary === this.fallback) return this.primary;
+    for (const char of text) {
+      if (!this.glyphs.has(char.codePointAt(0)!)) return this.fallback;
+    }
+    return this.primary;
+  }
+
+  /** Visual runs of one line, each with the font that draws it. */
+  runs(
+    line: string,
+    size: number,
+    direction: "ltr" | "rtl" | "auto" = "auto",
+  ): Array<{ text: string; font: PDFFont; width: number }> {
+    return pdfTextRuns(line, direction).map((text) => {
+      const font = this.fontFor(text);
+      return { text, font, width: font.widthOfTextAtSize(text, size) };
+    });
+  }
+
+  width(text: string, size: number): number {
+    return this.runs(text, size).reduce((sum, run) => sum + run.width, 0);
+  }
+}
+
+const RTL_CHARACTER = /[\p{Script=Arabic}\p{Script=Hebrew}]/u;
+const LETTER = /\p{L}/u;
+
+/**
+ * Paragraph direction: `auto` follows its first letter (Unicode bidi rule P2),
+ * so an Arabic title or abstract reads right-to-left and is right-aligned.
+ * Lists that mix names from several scripts (the author line) pass `ltr`: the
+ * book's own direction, with each Arabic/Hebrew name still drawn right-to-left.
+ */
+function paragraphDirection(
+  text: string,
+  base: "auto" | "ltr",
+): "ltr" | "rtl" {
+  if (base === "ltr") return "ltr";
+  const first = LETTER.exec(text)?.[0];
+  return first && RTL_CHARACTER.test(first) ? "rtl" : "ltr";
 }
 
 function wrapText(
   text: string,
-  font: PDFFont,
+  font: BookFont,
   size: number,
   maxWidth: number,
-): string[] {
-  const paragraphs = toWinAnsiSafe(text).split(/\r?\n/);
-  const lines: string[] = [];
-  for (const paragraph of paragraphs) {
+  base: "auto" | "ltr",
+): Array<{ text: string; direction: "ltr" | "rtl" }> {
+  const lines: Array<{ text: string; direction: "ltr" | "rtl" }> = [];
+  const spaceWidth = font.width(" ", size);
+  for (const paragraph of text.split(/\r?\n/)) {
+    const direction = paragraphDirection(paragraph, base);
     const words = paragraph.trim().split(/\s+/).filter(Boolean);
     if (words.length === 0) {
-      lines.push("");
+      lines.push({ text: "", direction });
       continue;
     }
     let current = "";
+    let currentWidth = 0;
     for (const word of words) {
-      const candidate = current ? `${current} ${word}` : word;
-      if (font.widthOfTextAtSize(candidate, size) <= maxWidth) {
-        current = candidate;
+      const wordWidth = font.width(word, size);
+      const candidateWidth = current ? currentWidth + spaceWidth + wordWidth : wordWidth;
+      if (candidateWidth <= maxWidth) {
+        current = current ? `${current} ${word}` : word;
+        currentWidth = candidateWidth;
       } else {
-        if (current) lines.push(current);
+        if (current) lines.push({ text: current, direction });
         current = word;
+        currentWidth = wordWidth;
       }
     }
-    if (current) lines.push(current);
+    if (current) lines.push({ text: current, direction });
   }
   return lines;
 }
 
 type TextOptions = {
   bold?: boolean;
+  /** Paragraph direction; `auto` (default) follows the first letter. */
+  direction?: "auto" | "ltr";
   size?: number;
   color?: ReturnType<typeof rgb>;
   gapAfter?: number;
@@ -276,8 +312,8 @@ class PdfWriter {
 
   constructor(
     private readonly pdfDoc: PDFDocument,
-    private readonly regularFont: PDFFont,
-    private readonly boldFont: PDFFont,
+    private readonly regularFont: BookFont,
+    private readonly boldFont: BookFont,
     private readonly fontSize: number,
     private readonly lineHeight: number,
   ) {
@@ -312,22 +348,41 @@ class PdfWriter {
     this.y -= delta;
   }
 
+  /** One wrapped line; right-to-left paragraphs are right-aligned. */
+  private drawLine(
+    line: { text: string; direction: "ltr" | "rtl" },
+    x: number,
+    width: number,
+    size: number,
+    font: BookFont,
+    color: ReturnType<typeof rgb>,
+  ) {
+    const runs = font.runs(line.text, size, line.direction);
+    const lineWidth = runs.reduce((sum, run) => sum + run.width, 0);
+    let runX = line.direction === "rtl" ? x + Math.max(0, width - lineWidth) : x;
+    for (const run of runs) {
+      this.page.drawText(run.text, { x: runX, y: this.y, size, font: run.font, color });
+      runX += run.width;
+    }
+  }
+
   text(text: string, options?: TextOptions) {
     const size = options?.size ?? this.fontSize;
     const font = options?.bold ? this.boldFont : this.regularFont;
     const lineHeight = Math.max(size * 1.25, this.lineHeight);
-    const lines = wrapText(text, font, size, COLUMN_WIDTH);
+    const lines = wrapText(text, font, size, COLUMN_WIDTH, options?.direction ?? "auto");
     this.ensure(Math.max(lineHeight, lines.length * lineHeight));
     for (const line of lines) {
       if (this.y - lineHeight < MARGIN) this.nextColumnOrPage();
-      if (line) {
-        this.page.drawText(line, {
-          x: this.columnX(),
-          y: this.y,
+      if (line.text) {
+        this.drawLine(
+          line,
+          this.columnX(),
+          COLUMN_WIDTH,
           size,
           font,
-          color: options?.color ?? rgb(0.1, 0.1, 0.1),
-        });
+          options?.color ?? rgb(0.1, 0.1, 0.1),
+        );
       }
       this.y -= lineHeight;
     }
@@ -339,18 +394,19 @@ class PdfWriter {
     const size = options?.size ?? this.fontSize;
     const font = options?.bold ? this.boldFont : this.regularFont;
     const lineHeight = Math.max(size * 1.25, this.lineHeight);
-    const lines = wrapText(text, font, size, FULL_WIDTH);
+    const lines = wrapText(text, font, size, FULL_WIDTH, options?.direction ?? "auto");
     this.ensure(Math.max(lineHeight, lines.length * lineHeight));
     for (const line of lines) {
       if (this.y - lineHeight < MARGIN) this.addPage();
-      if (line) {
-        this.page.drawText(line, {
-          x: MARGIN,
-          y: this.y,
+      if (line.text) {
+        this.drawLine(
+          line,
+          MARGIN,
+          FULL_WIDTH,
           size,
           font,
-          color: options?.color ?? rgb(0.1, 0.1, 0.1),
-        });
+          options?.color ?? rgb(0.1, 0.1, 0.1),
+        );
       }
       this.y -= lineHeight;
     }
@@ -365,9 +421,25 @@ export async function generateAbstractBookPdf(
   const abstracts = sortAbstracts(data.abstracts, config.bookOrder);
 
   const pdfDoc = await PDFDocument.create();
-  const fontChoice = fontForFamily(config.bookFontFamily);
-  const regularFont = await pdfDoc.embedFont(fontChoice.regular);
-  const boldFont = await pdfDoc.embedFont(fontChoice.bold);
+  const faces = facesForFamily(config.bookFontFamily);
+  // Each face is embedded once (the sans family is its own fallback).
+  const embedded = new Map<DejaVuFace, Promise<PDFFont>>();
+  const embed = (face: DejaVuFace): Promise<PDFFont> => {
+    let font = embedded.get(face);
+    if (!font) {
+      font = embedDejaVuFont(pdfDoc, face);
+      embedded.set(face, font);
+    }
+    return font;
+  };
+  const regularFont = new BookFont(
+    await embed(faces.regular),
+    await embed("DejaVuSans.ttf"),
+  );
+  const boldFont = new BookFont(
+    await embed(faces.bold),
+    await embed("DejaVuSans-Bold.ttf"),
+  );
   const writer = new PdfWriter(
     pdfDoc,
     regularFont,
@@ -410,9 +482,14 @@ export async function generateAbstractBookPdf(
       gapAfter: 6,
     });
     if (config.bookIncludeAuthorNames) {
-      writer.text(getAuthorLine(abstract), { bold: true, gapAfter: 4 });
+      writer.text(getAuthorLine(abstract), {
+        bold: true,
+        gapAfter: 4,
+        direction: "ltr",
+      });
     }
     writer.text(`Correspondence: ${abstract.authorEmail}`, {
+      direction: "ltr",
       size: Math.max(8, config.bookFontSize - 1),
       color: rgb(0.35, 0.35, 0.35),
       gapAfter: 8,
