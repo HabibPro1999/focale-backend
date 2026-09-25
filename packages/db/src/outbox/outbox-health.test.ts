@@ -1,4 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { PgDialect } from "drizzle-orm/pg-core";
+import type { SQL } from "drizzle-orm";
 
 const dbMock = vi.hoisted(() => ({ execute: vi.fn() }));
 vi.mock("../client", () => ({ getDb: () => dbMock }));
@@ -21,12 +23,15 @@ import { getOutboxHealth } from "./outbox";
 // execute() is called in Promise.all order: counts, oldestPending, oldestProcessing.
 function stub(opts: {
   counts: Partial<Record<string, number>>;
+  /** Dead letters written in the last 24 h (the DEAD_LETTERED row's `recent`). */
+  recentDead?: number;
   pendingT: Date | null;
   processingT: Date | null;
 }) {
   const countRows = Object.entries(opts.counts).map(([status, n]) => ({
     status,
     n,
+    recent: status === "DEAD_LETTERED" ? (opts.recentDead ?? n) : 0,
   }));
   // Ages are now computed in SQL (EXTRACT(EPOCH ...)); the mock returns the
   // pre-computed age in ms that the query would yield for the fixture instant.
@@ -53,12 +58,31 @@ describe("getOutboxHealth thresholds", () => {
       failed: 2,
       processing: 1,
       deadLettered: 0,
+      deadLetteredLast24h: 0,
     });
   });
 
-  it("unhealthy when any dead-lettered", async () => {
-    stub({ counts: { DEAD_LETTERED: 1 }, pendingT: null, processingT: null });
-    expect((await getOutboxHealth()).isHealthy).toBe(false);
+  it("unhealthy when a row was dead-lettered in the last 24 h", async () => {
+    stub({ counts: { DEAD_LETTERED: 3 }, recentDead: 1, pendingT: null, processingT: null });
+    const h = await getOutboxHealth();
+    expect(h.isHealthy).toBe(false);
+    expect(h.counts).toMatchObject({ deadLettered: 3, deadLetteredLast24h: 1 });
+  });
+
+  it("stays healthy with only older dead letters", async () => {
+    stub({ counts: { DEAD_LETTERED: 4 }, recentDead: 0, pendingT: null, processingT: null });
+    const h = await getOutboxHealth();
+    expect(h.isHealthy).toBe(true);
+    expect(h.counts).toMatchObject({ deadLettered: 4, deadLetteredLast24h: 0 });
+  });
+
+  it("counts recent dead letters from updated_at in the last 24 h", async () => {
+    stub({ counts: {}, pendingT: null, processingT: null });
+    await getOutboxHealth();
+    const countsSql = new PgDialect().sqlToQuery(dbMock.execute.mock.calls[0]![0] as SQL);
+    expect(countsSql.sql).toContain(`"status" = 'DEAD_LETTERED'`);
+    expect(countsSql.sql).toContain(`"updated_at" >= (statement_timestamp() AT TIME ZONE 'UTC') - $1::interval`);
+    expect(countsSql.params).toEqual(["86400 seconds"]);
   });
 
   it("unhealthy when pending+failed >= 1000", async () => {

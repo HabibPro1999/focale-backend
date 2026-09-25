@@ -15,19 +15,28 @@ import { CONFIG, type Config } from "../../core/config";
 import { logger } from "../../core/logger.service";
 import { eventBus } from "./bus";
 
+/** Poll period: a UI event reaches its streams within about a second. */
+export const REALTIME_PUMP_INTERVAL_MS = 1_000;
+/** Rows claimed per batch; a full batch claims the next one at once. */
+export const REALTIME_PUMP_BATCH = 100;
+/** One tick drains at most this long, then the next tick carries on. */
+export const REALTIME_PUMP_DRAIN_MS = 5_000;
+
 /**
- * Realtime outbox pump: a 5s poller that claims `scope: "realtime"` outbox rows
- * (type `realtime.emit`) and fans them into the in-process event bus. Runs ONLY
- * in the api process (which holds the bus + SSE connections) and only when
- * realtime is enabled. Started/stopped via Nest lifecycle hooks rather than
- * touching bootstrap. Ported from the legacy `src/core/outbox/realtime-pump.ts`
- * + `src/index.ts` gating.
+ * Realtime outbox pump: every second it claims `scope: "realtime"` outbox
+ * rows (type `realtime.emit`) in batches of 100, draining until a batch comes
+ * back short (at most 5 s per tick), and fans them into the in-process event
+ * bus. Runs ONLY in the api process (which holds the bus + SSE connections)
+ * and only when realtime is enabled. One api instance only: the bus is
+ * process-local (see README "Realtime"). Started/stopped via Nest lifecycle
+ * hooks rather than touching bootstrap.
  */
 @Injectable()
 export class RealtimePumpService
   implements OnApplicationBootstrap, BeforeApplicationShutdown
 {
   private poller: Poller | null = null;
+  private readonly stopping = new AbortController();
   readonly workerId = makeWorkerId("realtime");
 
   // The only handler this process registers: realtime.emit → bus fan-out.
@@ -47,20 +56,20 @@ export class RealtimePumpService
     }
     this.poller = startPoller({
       name: "Realtime outbox pump",
-      intervalMs: 5_000,
+      intervalMs: REALTIME_PUMP_INTERVAL_MS,
+      signal: this.stopping.signal,
       work: async () => {
-        const result = await processOutboxEvents(50, {
+        const result = await processOutboxEvents(REALTIME_PUMP_BATCH, {
           workerId: this.workerId,
           scope: "realtime",
           handlers: this.handlers,
+          signal: this.stopping.signal,
+          drainUntil: Date.now() + REALTIME_PUMP_DRAIN_MS,
         });
-        if (
-          result.processed > 0 ||
-          result.skipped > 0 ||
-          result.failed > 0 ||
-          result.leaseLost > 0
-        ) {
-          logger.info({ result }, "Realtime outbox events processed");
+        if (result.failed > 0 || result.leaseLost > 0) {
+          logger.warn({ result }, "Realtime outbox events failed or lost their lease");
+        } else if (result.processed > 0 || result.skipped > 0) {
+          logger.debug({ result }, "Realtime outbox events processed");
         }
       },
     });
@@ -68,8 +77,10 @@ export class RealtimePumpService
 
   // Before Fastify closes (not onApplicationShutdown, which Nest runs only
   // after the server has closed): no new events are fanned out to streams
-  // that are being drained.
+  // that are being drained. Aborting releases the rows of a batch in flight
+  // without an attempt charged.
   async beforeApplicationShutdown(): Promise<void> {
+    this.stopping.abort();
     await this.poller?.stop();
     this.poller = null;
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { eventBus } from "./bus";
+import { REPLAY_RING_SIZE, eventBus } from "./bus";
 import type { AppEvent } from "@app/contracts";
 
 function makeEvent(overrides: Partial<AppEvent> = {}): AppEvent {
@@ -82,45 +82,61 @@ describe("eventBus", () => {
     eventBus.off(handler);
   });
 
-  it("getSince replays events emitted strictly after the given id", () => {
+  it("getSince replays the tenant's events emitted strictly after the given id", () => {
     const a = eventBus.emit(makeEvent({ payload: { id: "a" } }));
+    eventBus.emit(makeEvent({ clientId: "client-other", payload: { id: "other" } }));
     eventBus.emit(makeEvent({ payload: { id: "b" } }));
     eventBus.emit(makeEvent({ payload: { id: "c" } }));
 
-    const since = eventBus.getSince(a);
+    const since = eventBus.getSince(a, "client-1");
     expect(since.map((x) => x.ev.payload.id)).toEqual(["b", "c"]);
+    expect(eventBus.getSince(a, "client-other").map((x) => x.ev.payload.id)).toEqual(["other"]);
+    expect(eventBus.getSince(a, "client-unknown")).toEqual([]);
   });
 
   it("getSince returns empty for null, empty, or non-numeric ids", () => {
     eventBus.emit(makeEvent());
-    expect(eventBus.getSince(null)).toEqual([]);
-    expect(eventBus.getSince(undefined)).toEqual([]);
-    expect(eventBus.getSince("")).toEqual([]);
-    expect(eventBus.getSince("not-a-number")).toEqual([]);
+    expect(eventBus.getSince(null, "client-1")).toEqual([]);
+    expect(eventBus.getSince(undefined, "client-1")).toEqual([]);
+    expect(eventBus.getSince("", "client-1")).toEqual([]);
+    expect(eventBus.getSince("not-a-number", "client-1")).toEqual([]);
   });
 
   it("getSince returns empty when id is larger than any buffered event", () => {
     eventBus.emit(makeEvent());
-    expect(eventBus.getSince("999999999")).toEqual([]);
+    expect(eventBus.getSince("999999999", "client-1")).toEqual([]);
   });
 
-  it("marks a replay gap when the requested id predates the retained buffer", () => {
-    const firstId = Number(
-      eventBus.emit(makeEvent({ payload: { id: "first" } })),
-    );
-    for (let i = 0; i < 501; i++) {
-      eventBus.emit(makeEvent({ payload: { id: `overflow-${i}` } }));
+  it("marks a replay gap when the tenant's ring evicted events newer than the requested id", () => {
+    const firstId = eventBus.emit(makeEvent({ clientId: "client-gap", payload: { id: "first" } }));
+    for (let i = 0; i < REPLAY_RING_SIZE; i++) {
+      eventBus.emit(makeEvent({ clientId: "client-gap", payload: { id: `overflow-${i}` } }));
     }
+    // Only "first" was evicted: a client that already had it lost nothing.
+    expect(eventBus.hasReplayGap(firstId, "client-gap")).toBe(false);
+    expect(eventBus.hasReplayGap(String(Number(firstId) - 1), "client-gap")).toBe(true);
+    expect(eventBus.hasReplayGap("not-a-number", "client-gap")).toBe(false);
+    expect(eventBus.getSince(String(Number(firstId) - 1), "client-gap")).toHaveLength(REPLAY_RING_SIZE);
+  });
 
-    expect(eventBus.hasReplayGap(String(firstId))).toBe(true);
-    expect(eventBus.hasReplayGap("not-a-number")).toBe(false);
+  it("keeps each tenant's replay history when another tenant floods the bus", () => {
+    const quietId = eventBus.emit(makeEvent({ clientId: "client-quiet", payload: { id: "quiet-1" } }));
+    const before = String(Number(quietId) - 1);
+    for (let i = 0; i < 3 * REPLAY_RING_SIZE; i++) {
+      eventBus.emit(makeEvent({ clientId: "client-flood", payload: { id: `flood-${i}` } }));
+    }
+    expect(eventBus.hasReplayGap(before, "client-quiet")).toBe(false);
+    expect(eventBus.getSince(before, "client-quiet").map((x) => x.ev.payload.id)).toEqual(["quiet-1"]);
+    // The flooding tenant keeps only its own last 500.
+    expect(eventBus.hasReplayGap(before, "client-flood")).toBe(true);
+    expect(eventBus.getSince(before, "client-flood")).toHaveLength(REPLAY_RING_SIZE);
   });
 
   it("marks a replay gap when the requested id exceeds anything this process issued (restart)", () => {
     const latest = eventBus.emit(makeEvent());
-    expect(eventBus.hasReplayGap(latest)).toBe(false);
+    expect(eventBus.hasReplayGap(latest, "client-1")).toBe(false);
     // A restart resets the id counter, so a stored id from the previous
     // process is beyond everything this process has emitted.
-    expect(eventBus.hasReplayGap("999999999")).toBe(true);
+    expect(eventBus.hasReplayGap("999999999", "client-1")).toBe(true);
   });
 });

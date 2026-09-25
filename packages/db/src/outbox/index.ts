@@ -1,4 +1,5 @@
 export {
+  configureOutbox,
   enqueueOutboxEvent,
   enqueueRealtimeOutboxEvent,
   getOutboxHealth,
@@ -8,6 +9,7 @@ export {
 } from "./outbox";
 export type {
   EnqueueOutboxInput,
+  OutboxConfig,
   OutboxHealth,
   ProcessOutboxOptions,
   ProcessOutboxResult,
@@ -22,3 +24,15 @@ export {
   type OutboxProcessingScope,
   type RealtimeOutboxPayload,
 } from "./types";
+export {
+  OUTBOX_RETENTION,
+  runOutboxRetention,
+  type OutboxRetentionOptions,
+  type OutboxRetentionResult,
+} from "./retention";
+export {
+  findDeadLetteredOutboxEvents,
+  requeueDeadLetteredOutboxEvents,
+  type DeadLetterFilter,
+  type DeadLetteredOutboxEvent,
+} from "./dead-letters";

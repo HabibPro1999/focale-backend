@@ -1766,26 +1766,26 @@ async function notifyScoreDivergence(input: {
     );
 
   const dedupeBucket = Math.floor(Date.now() / ONE_HOUR_MS);
-  await Promise.all(
-    admins.map((admin) =>
-      enqueueAbstractEmailOutboxEvent(
-        input.db,
-        {
-          trigger: "ABSTRACT_SCORE_DIVERGENCE",
-          abstractId: input.abstractId,
-          recipientOverride: { email: admin.email, name: admin.name },
-          extraContext: {
-            averageScore: input.averageScore,
-            reviewCount: input.reviewCount,
-            minScore: min,
-            maxScore: max,
-            divergenceThreshold: input.threshold,
-          },
+  // One statement at a time: these ride the caller's transaction, whose single
+  // connection cannot run statements concurrently.
+  for (const admin of admins) {
+    await enqueueAbstractEmailOutboxEvent(
+      input.db,
+      {
+        trigger: "ABSTRACT_SCORE_DIVERGENCE",
+        abstractId: input.abstractId,
+        recipientOverride: { email: admin.email, name: admin.name },
+        extraContext: {
+          averageScore: input.averageScore,
+          reviewCount: input.reviewCount,
+          minScore: min,
+          maxScore: max,
+          divergenceThreshold: input.threshold,
         },
-        `email:abstract:ABSTRACT_SCORE_DIVERGENCE:${input.abstractId}:${admin.email}:${dedupeBucket}`,
-      ),
-    ),
-  );
+      },
+      `email:abstract:ABSTRACT_SCORE_DIVERGENCE:${input.abstractId}:${admin.email}:${dedupeBucket}`,
+    );
+  }
 
   await enqueueRealtimeOutboxEvent(input.db, {
     type: "abstract.scoreDiverged",

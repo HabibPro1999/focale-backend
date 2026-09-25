@@ -3,7 +3,6 @@ import { createLogger, makeWorkerId } from "@app/shared";
 import type { AppEvent } from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
 import { rowsOf } from "../helpers";
-import { isTransactionExecutor, pgUniqueViolation } from "../txn";
 import { auditLogs, outboxEvents } from "../schema";
 import {
   DB_NOW,
@@ -47,6 +46,11 @@ export interface ProcessOutboxOptions {
    * their meta.
    */
   signal?: AbortSignal;
+  /**
+   * Keep claiming batches until one comes back short, the signal aborts, or
+   * this time (epoch ms) passes. Without it, one batch.
+   */
+  drainUntil?: number;
 }
 
 export interface ProcessOutboxResult {
@@ -132,81 +136,46 @@ const scopedQueues: Record<OutboxProcessingScope, LeaseQueue> = {
   background: createLeaseQueue(outboxLeaseSpec("background")),
 };
 
-// outbox_events has exactly one caller-supplied unique index (the partial
-// dedupe_key index `outbox_events_dedupe_key_key`), so any 23505 raised while a
-// dedupe key is present is the idempotency race, whether or not the driver
-// surfaces the constraint name.
-function isOutboxDedupeViolation(error: unknown, dedupeKey?: string): boolean {
-  const v = pgUniqueViolation(error);
-  if (v === null) return false;
-  if (v.constraint.includes("outbox_events_dedupe_key_key")) return true;
-  return dedupeKey != null;
-}
-
 // ---------------------------------------------------------------------------
 // Enqueue — rides the CALLER's transaction (that atomicity is the whole point
 // of the outbox pattern), hence the DbExecutor param instead of owning a txn.
+//
+// Dedupe is one statement: ON CONFLICT on the partial unique index
+// `outbox_events_dedupe_key_key` (0001_raw_indexes.sql). The index predicate is
+// repeated so PostgreSQL can infer that index. A duplicate key inserts nothing
+// and raises nothing, so the caller's transaction stays usable (no savepoint
+// needed; a failed statement would abort the whole transaction, 25P02) and a
+// concurrent duplicate waits for the first writer instead of failing.
 // ---------------------------------------------------------------------------
 export async function enqueueOutboxEvent(
   exec: DbExecutor,
   input: EnqueueOutboxInput,
 ): Promise<boolean> {
-  try {
-    if (input.dedupeKey) {
-      const existing = await exec
-        .select({ id: outboxEvents.id })
-        .from(outboxEvents)
-        .where(sql`${outboxEvents.dedupeKey} = ${input.dedupeKey}`)
-        .limit(1);
-      if (existing[0]) {
-        logger.info(
-          { type: input.type, dedupeKey: input.dedupeKey },
-          "Outbox event already enqueued, skipping duplicate",
-        );
-        return false;
-      }
-    }
-
-    const useSavepoint =
-      input.dedupeKey != null && isTransactionExecutor(exec);
-    if (useSavepoint) {
-      await exec.execute(sql.raw("SAVEPOINT outbox_enqueue_dedupe"));
-    }
-
-    try {
-      await exec.insert(outboxEvents).values({
-        type: input.type,
-        aggregateType: input.aggregateType ?? null,
-        aggregateId: input.aggregateId ?? null,
-        clientId: input.clientId ?? null,
-        eventId: input.eventId ?? null,
-        dedupeKey: input.dedupeKey ?? null,
-        payload: toJsonValue(input.payload),
-        maxAttempts: input.maxAttempts ?? 5,
-      });
-      if (useSavepoint) {
-        await exec.execute(sql.raw("RELEASE SAVEPOINT outbox_enqueue_dedupe"));
-      }
-    } catch (error) {
-      if (useSavepoint) {
-        await exec.execute(
-          sql.raw("ROLLBACK TO SAVEPOINT outbox_enqueue_dedupe"),
-        );
-        await exec.execute(sql.raw("RELEASE SAVEPOINT outbox_enqueue_dedupe"));
-      }
-      throw error;
-    }
-    return true;
-  } catch (error) {
-    if (isOutboxDedupeViolation(error, input.dedupeKey)) {
-      logger.info(
-        { type: input.type, dedupeKey: input.dedupeKey },
-        "Outbox event already enqueued, skipping duplicate",
-      );
-      return false;
-    }
-    throw error;
+  const inserted = await exec
+    .insert(outboxEvents)
+    .values({
+      type: input.type,
+      aggregateType: input.aggregateType ?? null,
+      aggregateId: input.aggregateId ?? null,
+      clientId: input.clientId ?? null,
+      eventId: input.eventId ?? null,
+      dedupeKey: input.dedupeKey ?? null,
+      payload: toJsonValue(input.payload),
+      maxAttempts: input.maxAttempts ?? 5,
+    })
+    .onConflictDoNothing({
+      target: outboxEvents.dedupeKey,
+      where: sql.raw(`"dedupe_key" IS NOT NULL`),
+    })
+    .returning({ id: outboxEvents.id });
+  if (inserted.length === 0) {
+    logger.info(
+      { type: input.type, dedupeKey: input.dedupeKey },
+      "Outbox event already enqueued, skipping duplicate",
+    );
+    return false;
   }
+  return true;
 }
 
 /** Audit-log insert. Rides the caller's transaction via the DbExecutor param. */
@@ -217,12 +186,33 @@ export async function insertAuditLog(
   await exec.insert(auditLogs).values(values);
 }
 
-/** Realtime fan-out enqueue: maxAttempts 10 (a dropped live UI event is costly). */
+let realtimeDisabled = false;
+
+export interface OutboxConfig {
+  /** REALTIME_DISABLED: nothing drains realtime.emit rows, so none are written. */
+  realtimeDisabled: boolean;
+}
+
+/**
+ * Process-wide outbox settings from the app config. Both apps call it at
+ * startup (realtime events are produced in the api and in the worker);
+ * unconfigured tools and tests keep realtime enabled.
+ */
+export function configureOutbox(config: OutboxConfig): void {
+  realtimeDisabled = config.realtimeDisabled;
+}
+
+/**
+ * Realtime fan-out enqueue: maxAttempts 10 (a dropped live UI event is
+ * costly). A no-op returning false when realtime is disabled: no api pump
+ * would ever drain the row.
+ */
 export async function enqueueRealtimeOutboxEvent(
   exec: DbExecutor,
   payload: AppEvent,
   dedupeKey?: string,
 ): Promise<boolean> {
+  if (realtimeDisabled) return false;
   return enqueueOutboxEvent(exec, {
     type: REALTIME_EMIT_TYPE,
     payload,
@@ -275,6 +265,7 @@ export async function processOutboxEvents(
     limit: batchSize,
     signal: options.signal,
     leaseMs: options.leaseMs,
+    drainUntil: options.drainUntil,
     load: async (ids) =>
       rowsOf<ClaimedOutboxRow>(
         await getDb().execute(sql`
@@ -325,6 +316,8 @@ export async function processOutboxEvents(
 
 const OUTBOX_UNHEALTHY_AGE_MS = 10 * 60 * 1000; // 10min
 const OUTBOX_UNHEALTHY_SIZE = 1000;
+/** Only recent dead letters make the outbox unhealthy; older ones were seen already. */
+const OUTBOX_RECENT_DEAD_LETTER_MS = 24 * 60 * 60 * 1000;
 
 export interface OutboxHealth {
   isHealthy: boolean;
@@ -332,7 +325,10 @@ export interface OutboxHealth {
     pending: number;
     failed: number;
     processing: number;
+    /** Every dead-lettered row still in the table. */
     deadLettered: number;
+    /** Rows dead-lettered in the last 24 h (the only ones that flag the outbox). */
+    deadLetteredLast24h: number;
   };
   oldestPendingAgeMs: number;
   oldestProcessingAgeMs: number;
@@ -344,10 +340,15 @@ export async function getOutboxHealth(): Promise<OutboxHealth> {
   // Ages computed in SQL (now() - col) so they never JS-parse a naive timestamp
   // string from db.execute (which node-postgres would misread as process-local
   // on non-UTC hosts). EXTRACT(EPOCH FROM interval) is a pure wall-clock diff,
-  // TZ-independent.
+  // TZ-independent. A dead letter's time is its last write (updated_at): every
+  // lease-queue write that dead-letters a row sets it.
   const [countsRes, oldestPendingRes, lease] = await Promise.all([
     db.execute(sql`
-      SELECT "status", COUNT(*)::int AS n FROM "outbox_events"
+      SELECT "status", COUNT(*)::int AS n,
+        COALESCE(SUM(CASE WHEN "status" = 'DEAD_LETTERED'
+          AND "updated_at" >= ${DB_NOW} - ${intervalMs(OUTBOX_RECENT_DEAD_LETTER_MS)}
+          THEN 1 ELSE 0 END), 0)::int AS recent
+      FROM "outbox_events"
       WHERE "status" IN ('PENDING', 'FAILED', 'PROCESSING', 'DEAD_LETTERED')
       GROUP BY "status"
     `),
@@ -358,13 +359,15 @@ export async function getOutboxHealth(): Promise<OutboxHealth> {
     outboxQueue.health(),
   ]);
 
-  const counts = { pending: 0, failed: 0, processing: 0, deadLettered: 0 };
-  for (const row of rowsOf<{ status: string; n: number }>(countsRes)) {
+  const counts = { pending: 0, failed: 0, processing: 0, deadLettered: 0, deadLetteredLast24h: 0 };
+  for (const row of rowsOf<{ status: string; n: number; recent: number }>(countsRes)) {
     if (row.status === "PENDING") counts.pending = Number(row.n);
     else if (row.status === "FAILED") counts.failed = Number(row.n);
     else if (row.status === "PROCESSING") counts.processing = Number(row.n);
-    else if (row.status === "DEAD_LETTERED")
+    else if (row.status === "DEAD_LETTERED") {
       counts.deadLettered = Number(row.n);
+      counts.deadLetteredLast24h = Number(row.recent ?? 0);
+    }
   }
 
   const ageOf = (res: unknown): number =>
@@ -373,7 +376,7 @@ export async function getOutboxHealth(): Promise<OutboxHealth> {
   const oldestProcessingAgeMs = lease.oldestLeaseAgeMs;
 
   const isHealthy =
-    counts.deadLettered === 0 &&
+    counts.deadLetteredLast24h === 0 &&
     counts.pending + counts.failed < OUTBOX_UNHEALTHY_SIZE &&
     oldestPendingAgeMs < OUTBOX_UNHEALTHY_AGE_MS &&
     oldestProcessingAgeMs < 2 * OUTBOX_LEASE_MS;
