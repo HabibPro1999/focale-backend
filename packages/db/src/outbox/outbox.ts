@@ -96,8 +96,8 @@ function outboxScopeClause(scope: OutboxProcessingScope): SQL {
  * outbox_events as a lease queue. PENDING/FAILED rows that are due and under
  * max_attempts are claimable (FIFO by created_at); PROCESSING is the lease.
  * A released row goes back to FAILED if it had been attempted before, else
- * PENDING. Recovery requeues expired leases as FAILED, due now, or
- * dead-letters them once attempts are exhausted.
+ * PENDING. Recovery requeues expired leases as FAILED, due now
+ * (next_attempt_at NULL), or dead-letters them once attempts are exhausted.
  */
 function outboxLeaseSpec(scope: OutboxProcessingScope = "all"): LeaseQueueSpec {
   return {
@@ -115,7 +115,7 @@ function outboxLeaseSpec(scope: OutboxProcessingScope = "all"): LeaseQueueSpec {
       "next_attempt_at" = NULL`,
     recovery: {
       exhausted: sql`"attempt_count" >= "max_attempts"`,
-      retrySet: sql`"status" = 'FAILED', "next_attempt_at" = ${DB_NOW}`,
+      retrySet: sql`"status" = 'FAILED', "next_attempt_at" = NULL`,
       deadSet: sql`"status" = 'DEAD_LETTERED', "next_attempt_at" = NULL`,
     },
   };

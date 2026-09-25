@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sql, type SQL } from "drizzle-orm";
 import { JobTimeoutError } from "@app/shared";
 import {
@@ -18,7 +18,7 @@ interface QueueFixture {
   name: string;
   queue: LeaseQueue;
   table: string;
-  /** Insert `n` due rows, oldest first; returns their ids in claim order. */
+  /** Insert `n` due rows; returns their ids oldest (first claimed) first. */
   seed(n: number, options?: { attemptsLeft?: number }): Promise<string[]>;
   /** Insert a row that is not due yet. */
   seedNotDue(): Promise<string>;
@@ -110,6 +110,27 @@ async function setLeaseLeft(table: string, ids: string[], ms: number): Promise<v
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// CockroachDB's SKIP LOCKED can skip rows whose committed intents are not
+// resolved yet (cockroachdb/cockroach#167582): a claim right after a write may
+// transiently miss rows. Production just picks them up next tick; the tests
+// claim again until they hold the rows they expect.
+async function claimExactly(queue: LeaseQueue, workerId: string, count: number, leaseMs?: number): Promise<string[]> {
+  const got: string[] = [];
+  await vi.waitFor(
+    async () => {
+      if (got.length < count) got.push(...(await queue.claim(workerId, count - got.length, leaseMs)));
+      expect(got).toHaveLength(count);
+    },
+    { timeout: 5_000, interval: 25 },
+  );
+  return got;
+}
+
+/** The queue with claims that wait out CockroachDB's transient SKIP LOCKED misses (for runLeased). */
+function settledClaims(queue: LeaseQueue, count: number): LeaseQueue {
+  return { ...queue, claim: (workerId, _limit, leaseMs) => claimExactly(queue, workerId, count, leaseMs) };
+}
+
 for (const fx of FIXTURES) {
   const { queue, table } = fx;
   const leaseMs = queue.spec.leaseMs;
@@ -120,18 +141,28 @@ for (const fx of FIXTURES) {
     beforeEach(() => fx.reset());
     afterEach(() => fx.reset());
 
-    it("claims due rows in order up to the limit, charging one attempt and leasing them to the worker", async () => {
-      const ids = await fx.seed(3);
-      const notDue = await fx.seedNotDue();
-
-      expect(await queue.claim("w1", 2)).toEqual(ids.slice(0, 2));
+    it("claims due rows oldest first up to the limit, charging one attempt and leasing them to the worker", async () => {
+      let ids: string[] = [];
+      let notDue = "";
+      // Retried as a whole: a transient CockroachDB SKIP LOCKED miss would
+      // let a younger row through.
+      await vi.waitFor(
+        async () => {
+          await fx.reset();
+          ids = await fx.seed(3);
+          notDue = await fx.seedNotDue();
+          // The oldest rows (the returned ids themselves are unordered).
+          expect((await queue.claim("w1", 2)).sort()).toEqual(ids.slice(0, 2).sort());
+        },
+        { timeout: 10_000, interval: 50 },
+      );
       for (const id of ids.slice(0, 2)) {
         const row = await readRow(table, id);
         expect(row).toMatchObject({ status: leased, attempts: 1, owner: "w1" });
         expect(row.leaseLeftMs).toBeGreaterThan(leaseMs - 10_000);
         expect(row.leaseLeftMs).toBeLessThanOrEqual(leaseMs + 1_000);
       }
-      expect(await queue.claim("w2", 5)).toEqual([ids[2]]);
+      expect(await claimExactly(queue, "w2", 1)).toEqual([ids[2]]);
       expect(await queue.claim("w3", 5)).toEqual([]);
       expect((await readRow(table, notDue)).owner).toBeNull();
     });
@@ -139,7 +170,7 @@ for (const fx of FIXTURES) {
     it("never gives the same row to two workers claiming at once", async () => {
       const ids = await fx.seed(12);
       const [a, b] = await Promise.all([queue.claim("w1", 12), queue.claim("w2", 12)]);
-      const rest = await queue.claim("w3", 12);
+      const rest = await claimExactly(queue, "w3", 12 - a.length - b.length);
       const all = [...a, ...b, ...rest];
       expect(new Set(all).size).toBe(all.length);
       expect([...all].sort()).toEqual([...ids].sort());
@@ -147,7 +178,7 @@ for (const fx of FIXTURES) {
 
     it("renews and confirms only the owner's leases", async () => {
       const [a, b] = await fx.seed(2);
-      await queue.claim("w1", 2);
+      await claimExactly(queue, "w1", 2);
       await setLeaseLeft(table, [a!, b!], 1_000);
 
       expect((await queue.renew("w1", [a!, b!])).sort()).toEqual([a!, b!].sort());
@@ -159,7 +190,7 @@ for (const fx of FIXTURES) {
 
     it("writes terminal states only while owned, and clears the lease", async () => {
       const [a, b] = await fx.seed(2);
-      await queue.claim("w1", 2);
+      await claimExactly(queue, "w1", 2);
 
       expect(await queue.complete("w2", a!, fx.completeSet)).toBe(false);
       expect(await queue.complete("w1", a!, fx.completeSet)).toBe(true);
@@ -172,21 +203,21 @@ for (const fx of FIXTURES) {
 
     it("releases owned rows back to the queue without charging the attempt", async () => {
       const [a, b] = await fx.seed(2);
-      await queue.claim("w1", 2);
+      await claimExactly(queue, "w1", 2);
 
       expect(await queue.release("w2", [a!, b!])).toBe(0);
       expect(await queue.release("w1", [a!, b!])).toBe(2);
       for (const id of [a!, b!]) {
         expect(await readRow(table, id)).toEqual({ status: fx.releasedStatus, attempts: 0, owner: null, leaseLeftMs: null });
       }
-      expect((await queue.claim("w2", 5)).sort()).toEqual([a!, b!].sort());
+      expect((await claimExactly(queue, "w2", 2)).sort()).toEqual([a!, b!].sort());
       expect((await readRow(table, a!)).attempts).toBe(1);
     });
 
     it("recovers expired leases (attempt kept), dead-letters exhausted ones, and leaves live leases alone", async () => {
       const [expired, live] = await fx.seed(2);
       const [exhausted] = await fx.seed(1, { attemptsLeft: 1 });
-      await queue.claim("w1", 3);
+      await claimExactly(queue, "w1", 3);
       await expire([expired!, exhausted!]);
 
       expect(await queue.recoverStale()).toEqual({ requeued: 1, deadLettered: 1 });
@@ -197,16 +228,15 @@ for (const fx of FIXTURES) {
       expect(await queue.confirm("w1", expired!)).toBe(false);
       expect(await queue.complete("w1", expired!, fx.completeSet)).toBe(false);
       // Requeued: another worker claims it, second attempt.
-      expect(await queue.claim("w2", 5)).toEqual([expired]);
+      expect(await claimExactly(queue, "w2", 1)).toEqual([expired]);
       expect((await readRow(table, expired!)).attempts).toBe(2);
       expect(await queue.recoverStale()).toEqual({ requeued: 0, deadLettered: 0 });
     });
 
     it("reports claimable rows, leases and expired leases", async () => {
-      const [a] = await fx.seed(3);
+      await fx.seed(3);
       await fx.seedNotDue();
-      await queue.claim("w1", 1);
-      await expire([a!]);
+      await expire(await claimExactly(queue, "w1", 1));
 
       const health = await queue.health();
       expect(health).toMatchObject({ claimable: 2, leased: 1, expiredLeases: 1 });
@@ -217,7 +247,7 @@ for (const fx of FIXTURES) {
     it("runLeased: the heartbeat keeps a slow row's lease alive past its length", async () => {
       const [slow] = await fx.seed(1);
       let recoveries = 0;
-      const result = await runLeased(queue, {
+      const result = await runLeased(settledClaims(queue, 1), {
         workerId: "w1",
         limit: 1,
         leaseMs: 1_500,
@@ -242,11 +272,12 @@ for (const fx of FIXTURES) {
     it("runLeased: an abort releases the claimed rows not started, without an attempt penalty", async () => {
       const ids = await fx.seed(3);
       const controller = new AbortController();
-      const result = await runLeased(queue, {
+      const result = await runLeased(settledClaims(queue, 3), {
         workerId: "w1",
         limit: 3,
         signal: controller.signal,
-        load: async (claimed) => claimed.map((id) => ({ id })),
+        // Processing order is load's: oldest first.
+        load: async (claimed) => ids.filter((id) => claimed.includes(id)).map((id) => ({ id })),
         handle: async (row) => {
           controller.abort(new JobTimeoutError("test", 60_000));
           return queue.complete("w1", row.id, fx.completeSet);
@@ -263,14 +294,14 @@ for (const fx of FIXTURES) {
     it("runLeased: a row taken over after its lease expired is not handled by the stalled worker", async () => {
       const [row] = await fx.seed(1);
       const handled: string[] = [];
-      const result = await runLeased(queue, {
+      const result = await runLeased(settledClaims(queue, 1), {
         workerId: "w1",
         limit: 1,
         load: async (ids) => {
           // w1 stalls past its lease; recovery requeues the row and w2 claims it.
           await expire(ids);
           await queue.recoverStale();
-          expect(await queue.claim("w2", 1)).toEqual(ids);
+          expect(await claimExactly(queue, "w2", 1)).toEqual(ids);
           return ids.map((id) => ({ id }));
         },
         handle: async (claimed) => {

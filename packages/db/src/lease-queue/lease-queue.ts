@@ -37,7 +37,7 @@ export interface LeaseQueueSpec {
   leaseMs: number;
   /** Rows that may be claimed now (status, due time, attempt cap, scope). Use DB_NOW for time. */
   claimable: SQL;
-  /** Claim and processing order, e.g. sql`"created_at" ASC`. */
+  /** Which claimable rows are claimed first, e.g. sql`"created_at" ASC`. */
   order: SQL;
   /** Extra assignments made on claim, e.g. sql`"error_message" = NULL`. */
   claimSet?: SQL;
@@ -78,7 +78,14 @@ export interface RecoverStaleResult {
 
 export interface LeaseQueue {
   readonly spec: LeaseQueueSpec;
-  /** Lease up to `limit` claimable rows for `workerId` (attempt_count + 1). Returns their ids in order. */
+  /**
+   * Lease up to `limit` claimable rows, first in spec order, for `workerId`
+   * (attempt_count + 1). Returns their ids in no particular order (UPDATE …
+   * RETURNING keeps none); the caller's load orders the rows. On
+   * CockroachDB, SKIP LOCKED can transiently skip rows just written by a
+   * committed transaction (cockroachdb/cockroach#167582); the next claim
+   * gets them.
+   */
   claim(workerId: string, limit: number, leaseMs?: number): Promise<string[]>;
   /** Extend the lease of every id still owned by `workerId`; returns the ids still owned. */
   renew(workerId: string, ids: string[], leaseMs?: number): Promise<string[]>;

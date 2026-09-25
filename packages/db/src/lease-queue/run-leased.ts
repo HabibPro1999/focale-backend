@@ -23,7 +23,7 @@ export interface RunLeasedOptions<Row extends { id: string }> {
    * up dead-lettered.
    */
   signal?: AbortSignal;
-  /** Load the claimed rows still owned by this worker, in processing order. */
+  /** Load the claimed rows still owned by this worker, in processing order (claim ids come unordered). */
   load(ids: string[]): Promise<Row[]>;
   /**
    * Process one row and write its terminal state (queue.complete / fail).
