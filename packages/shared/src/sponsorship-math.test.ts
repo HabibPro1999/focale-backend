@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { calculateApplicableAmount } from "./sponsorship-math";
+import { calculateApplicableAmount, normalizeSponsorshipCode } from "./sponsorship-math";
 
 describe("calculateApplicableAmount", () => {
   it("prefers calculatedBasePrice over baseAmount when covering base", () => {
@@ -77,5 +77,17 @@ describe("calculateApplicableAmount", () => {
         },
       ),
     ).toBe(250);
+  });
+});
+
+describe("normalizeSponsorshipCode", () => {
+  it("trims and upper-cases a code", () => {
+    expect(normalizeSponsorshipCode("  spn-ab12 ")).toBe("SPN-AB12");
+  });
+
+  it("maps a missing or blank code to null", () => {
+    expect(normalizeSponsorshipCode(undefined)).toBeNull();
+    expect(normalizeSponsorshipCode(null)).toBeNull();
+    expect(normalizeSponsorshipCode("   ")).toBeNull();
   });
 });

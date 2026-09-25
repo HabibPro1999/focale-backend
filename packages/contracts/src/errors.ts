@@ -126,6 +126,10 @@ export const ErrorCodes = {
   // Sponsorship (14xxx)
   SPONSORSHIP_NOT_APPLICABLE: "SPO_14001",
   SPONSORSHIP_STATUS_CONFLICT: "SPO_14002",
+  // A signup code that is already linked, reserved for another registration,
+  // or claimed by an earlier signup (plan 2.7). Unknown/cancelled codes are
+  // INVALID_SPONSORSHIP_CODE (400).
+  SPONSORSHIP_CODE_ALREADY_USED: "SPO_14003",
 
   // Email (15xxx)
   MJML_COMPILATION_ERROR: "EML_15001",

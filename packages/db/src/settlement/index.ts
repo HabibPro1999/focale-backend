@@ -28,3 +28,25 @@ export {
   type SettleRegistrationResult,
   type SettlementSnapshot,
 } from "./settle";
+export {
+  claimSponsorshipCodeTxn,
+  countSponsorshipUsages,
+  findSponsorshipCodeClaimants,
+  linkSponsorshipUsageTxn,
+  readLinkableSponsorship,
+  sponsorshipAmountFor,
+  type LinkableSponsorship,
+  type SponsorshipCodeClaim,
+  type SponsorshipCodeUnavailableReason,
+} from "./sponsorship-code";
+export {
+  SPONSORSHIP_CODE_REPAIR_ACTOR,
+  applySponsorshipCodeLink,
+  planSponsorshipCodeRepair,
+  type RepairRegistrationState,
+  type SponsorshipCodeDecision,
+  type SponsorshipCodeDecisionReason,
+  type SponsorshipCodeLink,
+  type SponsorshipCodeLinkResult,
+  type SponsorshipCodeRepairPlan,
+} from "./sponsorship-code-repair";

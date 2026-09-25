@@ -1,4 +1,4 @@
-import { and, count, eq, inArray } from "drizzle-orm";
+import { and, count, eq, inArray, isNull } from "drizzle-orm";
 import type { EmbeddedPricingRule, EventPricingWithRules } from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
 import { eventPricing } from "../schema/pricing";
@@ -118,7 +118,11 @@ export async function findEventAccessByIds(
     );
 }
 
-/** Sponsorship data for validation — only PENDING codes for the event. */
+/**
+ * Sponsorship data for the price quote: the event's PENDING codes that are
+ * open to anyone, i.e. not reserved for one registration by a linked-mode
+ * batch (plan 2.7). Signup decides again under the sponsorship lock.
+ */
 export interface PricingPendingSponsorship {
   code: string;
   totalAmount: number;
@@ -145,6 +149,7 @@ export async function findPendingSponsorships(
         eq(sponsorships.eventId, eventId),
         inArray(sponsorships.code, upperCodes),
         eq(sponsorships.status, "PENDING"),
+        isNull(sponsorships.targetRegistrationId),
       ),
     );
   return rows.map((r) => ({

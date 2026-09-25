@@ -8,6 +8,8 @@ const db = vi.hoisted(() => ({
   withLockingTxn: vi.fn(),
   lockRegistrationForUpdate: vi.fn(),
   settleRegistrationTxn: vi.fn(),
+  claimSponsorshipCodeTxn: vi.fn(),
+  linkSponsorshipUsageTxn: vi.fn(),
   applyRegistrationSettlement: vi.fn(),
   emitSettlementEvents: vi.fn(),
   syncNetworkingRegistration: vi.fn(),
@@ -213,6 +215,7 @@ import {
   netBreakdown,
   paidAccessQuantities,
 } from "@app/shared";
+import { AccessCapacityExceededError } from "@app/db";
 import { validateSelections } from "../access/access-validation";
 import { RegistrationsService } from "./registrations.service";
 import { AppException } from "../../core/app-exception";
@@ -506,13 +509,153 @@ describe("RegistrationsService", () => {
       expect(db.insertRegistrationRow).not.toHaveBeenCalled();
     });
 
-    it("stores gross total so a 40 sponsorship on 100 leaves 60 due", async () => {
+    it("stores the gross price and ignores a sponsorship priced into the breakdown", async () => {
       await service.createRegistration(baseInput as never, {
         ...emptyBreakdown(100), sponsorshipTotal: 40, total: 60,
+        sponsorships: [{ code: "SP-QUOTED", amount: 40, valid: true }],
       });
       const stored = db.insertRegistrationRow.mock.calls[0][0];
-      expect(stored).toMatchObject({ totalAmount: 100, sponsorshipAmount: 40 });
-      expect(calculateSettlement({ ...stored, paidAmount: 0 }).amountDue).toBe(60);
+      expect(stored).toMatchObject({ totalAmount: 100, sponsorshipAmount: 0, sponsorshipCode: null });
+      expect(stored.priceBreakdown).toMatchObject({ sponsorships: [], sponsorshipTotal: 0, total: 100 });
+      expect(calculateSettlement({ ...stored, paidAmount: 0 }).amountDue).toBe(100);
+      expect(db.claimSponsorshipCodeTxn).not.toHaveBeenCalled();
+      expect(db.settleRegistrationTxn).not.toHaveBeenCalled();
+    });
+
+    describe("with a sponsorship code (plan 2.7)", () => {
+      const sponsorship = {
+        id: "sp1",
+        eventId: "ev1",
+        code: "SP-ABCD2345",
+        status: "PENDING",
+        targetRegistrationId: null,
+        totalAmount: 100,
+        coversBasePrice: true,
+        coveredAccessIds: [],
+      };
+      const settledAs = (paymentStatus: string, sponsorshipAmount: number, incremented: string[] = []) => ({
+        written: true,
+        eventId: "ev1",
+        before: { paymentStatus: "PENDING", sponsorshipAmount: 0 },
+        after: { paymentStatus, sponsorshipAmount },
+        coveredAccessIds: [],
+        paidAccess: { incremented, decremented: [] },
+      });
+      const withCode = (code: string) => ({ ...baseInput, sponsorshipCode: code }) as never;
+
+      beforeEach(() => {
+        db.claimSponsorshipCodeTxn.mockResolvedValue({ outcome: "available", sponsorship });
+        db.linkSponsorshipUsageTxn.mockResolvedValue({ id: "use1", sponsorshipId: "sp1", amountApplied: 100 });
+      });
+
+      it("locks the normalized code first, then consumes it: usage + USED, settled SPONSORED", async () => {
+        const order: string[] = [];
+        db.claimSponsorshipCodeTxn.mockImplementation(async () => {
+          order.push("claim");
+          return { outcome: "available", sponsorship };
+        });
+        db.getEventForRegistrationCreate.mockImplementation(async () => {
+          order.push("event");
+          return { clientId: "c1", status: "OPEN", endDate: FUTURE, maxCapacity: null, registeredCount: 0, client: activeClient() };
+        });
+        db.allocateReferenceNumber.mockImplementation(async () => {
+          order.push("reference");
+          return "26-EV-001";
+        });
+
+        db.settleRegistrationTxn.mockResolvedValueOnce(settledAs("SPONSORED", 100, ["acc1"]));
+        await service.createRegistration(withCode("  sp-abcd2345 "), emptyBreakdown(100));
+
+        expect(order).toEqual(["claim", "event", "reference"]);
+        expect(db.withLockingTxn).toHaveBeenCalledTimes(1);
+        expect(db.claimSponsorshipCodeTxn).toHaveBeenCalledWith(expect.anything(), "ev1", "SP-ABCD2345");
+        const stored = db.insertRegistrationRow.mock.calls[0][0];
+        expect(stored).toMatchObject({ sponsorshipCode: "SP-ABCD2345", sponsorshipAmount: 0, totalAmount: 100, paymentStatus: "PENDING" });
+        expect(db.linkSponsorshipUsageTxn).toHaveBeenCalledWith(expect.anything(), {
+          sponsorship,
+          registrationId: "reg1",
+          priceBreakdown: expect.objectContaining({ subtotal: 100, sponsorshipTotal: 0 }),
+          appliedBy: "PUBLIC",
+        });
+        const [, settledId, options] = db.settleRegistrationTxn.mock.calls[0];
+        expect(settledId).toBe("reg1");
+        expect(options).toMatchObject({
+          coveredAccessIdsBefore: [],
+          priceBreakdown: { subtotal: 100, sponsorships: [{ code: "SP-ABCD2345", amount: 100, valid: true }] },
+        });
+        expect(access.handleCapacityReached).toHaveBeenCalledWith("ev1", ["acc1"], expect.anything());
+      });
+
+      it("audits LINK_TO_REGISTRATION and emits sponsorship.linked with the settled status", async () => {
+        db.settleRegistrationTxn.mockResolvedValueOnce(settledAs("SPONSORED", 100));
+        await service.createRegistration(withCode("SP-ABCD2345"), emptyBreakdown(100));
+
+        const audits = db.insertAuditLog.mock.calls.map((c) => c[0]);
+        expect(audits).toContainEqual(expect.objectContaining({
+          entityType: "Sponsorship",
+          entityId: "sp1",
+          action: "LINK_TO_REGISTRATION",
+          performedBy: "PUBLIC",
+          changes: expect.objectContaining({
+            registrationId: { old: null, new: "reg1" },
+            amountApplied: { old: 0, new: 100 },
+            status: { old: "PENDING", new: "USED" },
+          }),
+        }));
+        expect(audits).toContainEqual(expect.objectContaining({
+          entityType: "Registration",
+          action: "CREATE",
+          changes: expect.objectContaining({
+            sponsorshipCode: { old: null, new: "SP-ABCD2345" },
+            paymentStatus: { old: null, new: "SPONSORED" },
+          }),
+        }));
+        const events = db.enqueueRealtimeOutboxEvent.mock.calls.map((c) => c[1]);
+        expect(events.find((e) => e.type === "registration.created")?.payload).toMatchObject({ id: "reg1", paymentStatus: "SPONSORED" });
+        expect(events.find((e) => e.type === "sponsorship.linked")?.payload).toEqual({ id: "sp1", registrationId: "reg1" });
+      });
+
+      it("400 INVALID_SPONSORSHIP_CODE for an unknown or cancelled code; nothing is written", async () => {
+        db.claimSponsorshipCodeTxn.mockResolvedValue({ outcome: "invalid" });
+        await expect(service.createRegistration(withCode("SP-NOPE"), emptyBreakdown(100)))
+          .rejects.toMatchObject({ code: ErrorCodes.INVALID_SPONSORSHIP_CODE, statusCode: 400 });
+        expect(db.insertRegistrationRow).not.toHaveBeenCalled();
+        expect(db.allocateReferenceNumber).not.toHaveBeenCalled();
+        expect(db.casIncrementRegisteredTx).not.toHaveBeenCalled();
+      });
+
+      it.each(["USED", "TARGETED", "LINKED", "CLAIMED"])(
+        "409 SPONSORSHIP_CODE_ALREADY_USED when the code is %s; nothing is written",
+        async (reason) => {
+          db.claimSponsorshipCodeTxn.mockResolvedValue({ outcome: "used", reason, sponsorshipId: "sp1" });
+          await expect(service.createRegistration(withCode("SP-ABCD2345"), emptyBreakdown(100)))
+            .rejects.toMatchObject({ code: ErrorCodes.SPONSORSHIP_CODE_ALREADY_USED, statusCode: 409 });
+          expect(db.insertRegistrationRow).not.toHaveBeenCalled();
+          expect(db.linkSponsorshipUsageTxn).not.toHaveBeenCalled();
+        },
+      );
+
+      it("maps a 23505 on the signup-code index to SPONSORSHIP_CODE_ALREADY_USED", async () => {
+        db.insertRegistrationRow.mockRejectedValue({
+          code: "23505",
+          constraint: "registrations_event_id_sponsorship_code_key",
+        });
+        await expect(service.createRegistration(withCode("SP-ABCD2345"), emptyBreakdown(100)))
+          .rejects.toMatchObject({ code: ErrorCodes.SPONSORSHIP_CODE_ALREADY_USED, statusCode: 409 });
+      });
+
+      it("maps a paid-capacity failure while settling to ACCESS_CAPACITY_EXCEEDED", async () => {
+        db.settleRegistrationTxn.mockRejectedValueOnce(new AccessCapacityExceededError("acc1", "Gala", 0, 1));
+        await expect(service.createRegistration(withCode("SP-ABCD2345"), emptyBreakdown(100)))
+          .rejects.toMatchObject({ code: ErrorCodes.ACCESS_CAPACITY_EXCEEDED, statusCode: 409 });
+        expect(db.enqueueTriggeredEmailOutbox).not.toHaveBeenCalled();
+      });
+
+      it("treats a blank code as no code", async () => {
+        await service.createRegistration(withCode("   "), emptyBreakdown(100));
+        expect(db.claimSponsorshipCodeTxn).not.toHaveBeenCalled();
+        expect(db.insertRegistrationRow.mock.calls[0][0].sponsorshipCode).toBeNull();
+      });
     });
 
     it("creates, reserves nothing when no access, increments event, audits, emits, queues email", async () => {
@@ -609,6 +752,64 @@ describe("RegistrationsService", () => {
 
   // ---- createPublicRegistration idempotency --------------------------------
   describe("createPublicRegistration", () => {
+    it("prices without the code and returns the settled breakdown as stored (plan 2.7)", async () => {
+      const settledBreakdown = {
+        ...emptyBreakdown(100),
+        sponsorships: [{ code: "SP-ABCD2345", amount: 100, valid: true }],
+        sponsorshipTotal: 100,
+        total: 0,
+      };
+      db.getRegistrationByIdempotencyKeyRow.mockResolvedValue(null);
+      db.findActiveRegistrationFormById.mockResolvedValue({
+        id: "form1",
+        eventId: "ev1",
+        schemaVersion: 1,
+        schema: { steps: [{ fields: [] }] },
+        active: true,
+        type: "REGISTRATION",
+        event: { clientId: "c1", status: "OPEN", endDate: FUTURE },
+      });
+      db.findFormById.mockResolvedValue({ id: "form1", eventId: "ev1", schemaVersion: 1 });
+      db.registrationExistsByEmailForm.mockResolvedValue(false);
+      db.getEventForRegistrationCreate.mockResolvedValue({
+        clientId: "c1",
+        status: "OPEN",
+        endDate: FUTURE,
+        maxCapacity: null,
+        registeredCount: 0,
+        client: activeClient(),
+      });
+      db.insertRegistrationRow.mockResolvedValue({ id: "reg1" });
+      db.claimSponsorshipCodeTxn.mockResolvedValue({
+        outcome: "available",
+        sponsorship: { id: "sp1", eventId: "ev1", code: "SP-ABCD2345", status: "PENDING", targetRegistrationId: null, totalAmount: 100, coversBasePrice: true, coveredAccessIds: [] },
+      });
+      db.linkSponsorshipUsageTxn.mockResolvedValue({ id: "use1", sponsorshipId: "sp1", amountApplied: 100 });
+      db.settleRegistrationTxn.mockResolvedValueOnce({
+        written: true,
+        eventId: "ev1",
+        before: { paymentStatus: "PENDING" },
+        after: { paymentStatus: "SPONSORED", sponsorshipAmount: 100 },
+        coveredAccessIds: [],
+        paidAccess: { incremented: [], decremented: [] },
+      });
+      db.getRegistrationByIdRow.mockResolvedValue(
+        makeRegRow({ paymentStatus: "SPONSORED", sponsorshipAmount: 100, priceBreakdown: settledBreakdown }),
+      );
+
+      const res = await service.createPublicRegistration("form1", {
+        formData: {},
+        email: "a@b.com",
+        accessSelections: [],
+        sponsorshipCode: "sp-abcd2345",
+      } as never);
+
+      expect(pricing.calculatePrice).toHaveBeenCalledWith("ev1", expect.objectContaining({ sponsorshipCodes: [] }));
+      expect(res.created).toBe(true);
+      expect(res.priceBreakdown).toEqual(settledBreakdown);
+      expect(res.registration.paymentStatus).toBe("SPONSORED");
+    });
+
     it("short-circuits to created=false when idempotencyKey already exists", async () => {
       db.getRegistrationByIdempotencyKeyRow.mockResolvedValue(makeRegRow());
       const res = await service.createPublicRegistration("form1", {
