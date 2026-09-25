@@ -551,7 +551,10 @@ export async function getAbstractForCertificateGeneration(
 /**
  * Certificate email statuses that count as "already sent": queued, in flight,
  * or sent (a delivered email that was later opened or clicked is still sent).
- * BOUNCED, DROPPED, FAILED and SKIPPED certificates can be sent again.
+ * UNCERTAIN counts too: the provider may already have sent it, so a repeated
+ * send must not queue a second email; an admin resends it explicitly through
+ * the email-log resend route. BOUNCED, DROPPED, FAILED and SKIPPED
+ * certificates can be sent again.
  */
 export const CERTIFICATE_EMAIL_SENT_STATUSES = [
   "QUEUED",
@@ -560,6 +563,7 @@ export const CERTIFICATE_EMAIL_SENT_STATUSES = [
   "DELIVERED",
   "OPENED",
   "CLICKED",
+  "UNCERTAIN",
 ] as const satisfies readonly EmailLogStatus[];
 
 /**
