@@ -624,6 +624,14 @@ export class AbstractsService {
     });
 
     if (!result.ok) {
+      if (result.reason === "not_editable") {
+        // A decision committed after the status check above.
+        throw new AppException(
+          ErrorCodes.ABSTRACT_NOT_EDITABLE,
+          "Abstract cannot be edited after a decision",
+          409,
+        );
+      }
       throw duplicateAuthorEmailError();
     }
 

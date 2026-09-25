@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import {
   abstractReviews,
+  abstractRevisions,
   abstracts,
   assignReviewersTxn,
   deactivateCommitteeMembershipTxn,
+  editAbstractTxn,
   finalizeAbstractTxn,
   getDb,
   reviewAbstractTxn,
@@ -44,7 +46,6 @@ describe.runIf(dbTestsEnabled())("db tier: review aggregate recompute", () => {
       eventId: event.id,
       abstractId: abstract.id,
       reviewerIds: [r1.id, r2.id],
-      currentStatus: "SUBMITTED",
     });
     await reviewAbstractTxn({
       abstractId: abstract.id,
@@ -78,7 +79,6 @@ describe.runIf(dbTestsEnabled())("db tier: review aggregate recompute", () => {
       eventId: event.id,
       abstractId: abstract.id,
       reviewerIds: [r1.id],
-      currentStatus: "REVIEW_COMPLETE",
     });
 
     expect(await readAbstract(abstract.id)).toMatchObject({
@@ -102,7 +102,6 @@ describe.runIf(dbTestsEnabled())("db tier: review aggregate recompute", () => {
       eventId: event.id,
       abstractId: abstract.id,
       reviewerIds: [r1.id, r2.id],
-      currentStatus: "SUBMITTED",
     });
     await reviewAbstractTxn({
       abstractId: abstract.id,
@@ -130,10 +129,9 @@ describe.runIf(dbTestsEnabled())("db tier: review aggregate recompute", () => {
       eventId: event.id,
       abstractId: abstract.id,
       reviewerIds: [r1.id, r2.id, tieBreaker.id],
-      currentStatus: "REVIEW_COMPLETE",
     });
 
-    expect(result.status).toBe("UNDER_REVIEW");
+    expect(result).toMatchObject({ ok: true, status: "UNDER_REVIEW" });
     expect((await readAbstract(abstract.id)).status).toBe("UNDER_REVIEW");
   });
 
@@ -152,7 +150,6 @@ describe.runIf(dbTestsEnabled())("db tier: review aggregate recompute", () => {
       eventId: event.id,
       abstractId: abstract.id,
       reviewerIds: [r1.id, r2.id],
-      currentStatus: "SUBMITTED",
     });
     await reviewAbstractTxn({
       abstractId: abstract.id,
@@ -191,7 +188,6 @@ describe.runIf(dbTestsEnabled())("db tier: review aggregate recompute", () => {
       eventId: event.id,
       abstractId: abstract.id,
       reviewerIds: [r1.id, r2.id],
-      currentStatus: "SUBMITTED",
     });
     for (const [reviewer, score] of [
       [r1, 10],
@@ -232,5 +228,187 @@ describe.runIf(dbTestsEnabled())("db tier: review aggregate recompute", () => {
         ),
       );
     expect(r1Review.active).toBe(true);
+  });
+});
+
+async function readReviews(abstractId: string) {
+  const rows = await getDb()
+    .select({
+      reviewerId: abstractReviews.reviewerId,
+      active: abstractReviews.active,
+      score: abstractReviews.score,
+    })
+    .from(abstractReviews)
+    .where(eq(abstractReviews.abstractId, abstractId));
+  return rows.sort((a, b) => a.reviewerId.localeCompare(b.reviewerId));
+}
+
+function score(abstractId: string, eventId: string, clientId: string, reviewerId: string, value: number) {
+  return reviewAbstractTxn({
+    abstractId,
+    eventId,
+    reviewerId,
+    clientId,
+    score: value,
+    comment: null,
+    commentsEnabled: false,
+    divergenceThreshold: 1000,
+  });
+}
+
+// Plan 2.9: the transactions decide from the status and assignments they read
+// after locking the abstract, not from the caller's earlier read.
+describe.runIf(dbTestsEnabled())("db tier: abstract final-status guards", () => {
+  beforeEach(cleanupDatabase);
+  afterEach(cleanupDatabase);
+
+  async function seedReviewed() {
+    const event = await seedEvent({ status: "OPEN" });
+    const abstract = await seedAbstract({ eventId: event.id, status: "SUBMITTED" });
+    const r1 = await seedUser({ clientId: event.clientId });
+    const r2 = await seedUser({ clientId: event.clientId });
+    const r3 = await seedUser({ clientId: event.clientId });
+    expect(
+      await assignReviewersTxn({ eventId: event.id, abstractId: abstract.id, reviewerIds: [r1.id, r2.id] }),
+    ).toMatchObject({ ok: true, status: "UNDER_REVIEW" });
+    expect(await score(abstract.id, event.id, event.clientId, r1.id, 12)).toMatchObject({ ok: true });
+    return { event, abstract, r1, r2, r3 };
+  }
+
+  it("review of a finalized abstract returns finalized and writes nothing", async () => {
+    const { event, abstract, r2 } = await seedReviewed();
+    expect(
+      await finalizeAbstractTxn({
+        eventId: event.id,
+        abstractId: abstract.id,
+        decision: "REJECTED",
+        finalType: undefined,
+        performedBy: "test-admin",
+      }),
+    ).toEqual({ ok: true });
+    const before = await readReviews(abstract.id);
+
+    expect(await score(abstract.id, event.id, event.clientId, r2.id, 4)).toEqual({
+      ok: false,
+      reason: "finalized",
+    });
+
+    expect(await readReviews(abstract.id)).toEqual(before);
+    expect(await readAbstract(abstract.id)).toEqual({ status: "REJECTED", averageScore: 12, reviewCount: 1 });
+  });
+
+  it("a removed or never-assigned reviewer can't score, and no review row is created", async () => {
+    const { event, abstract, r1, r2, r3 } = await seedReviewed();
+    // Re-assigning without r2 deactivates r2's review.
+    expect(
+      await assignReviewersTxn({ eventId: event.id, abstractId: abstract.id, reviewerIds: [r1.id] }),
+    ).toMatchObject({ ok: true });
+    const before = await readReviews(abstract.id);
+    const aggregate = await readAbstract(abstract.id);
+
+    for (const reviewer of [r2, r3]) {
+      expect(await score(abstract.id, event.id, event.clientId, reviewer.id, 1)).toEqual({
+        ok: false,
+        reason: "not_assigned",
+      });
+    }
+
+    expect(await readReviews(abstract.id)).toEqual(before);
+    expect(await readAbstract(abstract.id)).toEqual(aggregate);
+  });
+
+  it("reviews derive the status: SUBMITTED moves to UNDER_REVIEW, then REVIEW_COMPLETE", async () => {
+    const event = await seedEvent({ status: "OPEN" });
+    const abstract = await seedAbstract({ eventId: event.id, status: "SUBMITTED" });
+    const r1 = await seedUser({ clientId: event.clientId });
+    const r2 = await seedUser({ clientId: event.clientId });
+    // Assignment rows written without the status move (e.g. before the port).
+    await getDb().insert(abstractReviews).values([
+      { abstractId: abstract.id, eventId: event.id, reviewerId: r1.id, active: true },
+      { abstractId: abstract.id, eventId: event.id, reviewerId: r2.id, active: true },
+    ]);
+
+    expect(await score(abstract.id, event.id, event.clientId, r1.id, 10)).toMatchObject({
+      ok: true,
+      status: "UNDER_REVIEW",
+      reviewCount: 1,
+    });
+    expect(await score(abstract.id, event.id, event.clientId, r2.id, 20)).toMatchObject({
+      ok: true,
+      status: "REVIEW_COMPLETE",
+      averageScore: 15,
+      reviewCount: 2,
+    });
+  });
+
+  it("assignment on a finalized abstract returns finalized and leaves its reviewers alone", async () => {
+    const { event, abstract, r1, r3 } = await seedReviewed();
+    expect(
+      await finalizeAbstractTxn({
+        eventId: event.id,
+        abstractId: abstract.id,
+        decision: "PENDING",
+        finalType: undefined,
+        performedBy: "test-admin",
+      }),
+    ).toEqual({ ok: true });
+    const before = await readReviews(abstract.id);
+
+    expect(
+      await assignReviewersTxn({ eventId: event.id, abstractId: abstract.id, reviewerIds: [r1.id, r3.id] }),
+    ).toEqual({ ok: false, reason: "finalized" });
+
+    expect(await readReviews(abstract.id)).toEqual(before);
+    expect((await readAbstract(abstract.id)).status).toBe("PENDING");
+  });
+
+  it("assignment of another event's abstract returns not_found", async () => {
+    const { abstract, r1, r2 } = await seedReviewed();
+    const otherEvent = await seedEvent({ status: "OPEN" });
+    expect(
+      await assignReviewersTxn({ eventId: otherEvent.id, abstractId: abstract.id, reviewerIds: [r1.id, r2.id] }),
+    ).toEqual({ ok: false, reason: "not_found" });
+  });
+
+  it("edit of a finalized abstract returns not_editable and writes no revision", async () => {
+    const { event, abstract } = await seedReviewed();
+    expect(
+      await finalizeAbstractTxn({
+        eventId: event.id,
+        abstractId: abstract.id,
+        decision: "REJECTED",
+        finalType: undefined,
+        performedBy: "test-admin",
+      }),
+    ).toEqual({ ok: true });
+
+    expect(
+      await editAbstractTxn({
+        id: abstract.id,
+        authorFirstName: "Edited",
+        authorLastName: abstract.authorLastName,
+        authorAffiliation: abstract.authorAffiliation ?? "",
+        authorEmail: abstract.authorEmail,
+        authorEmailNormalized: abstract.authorEmail.toLowerCase(),
+        authorPhone: abstract.authorPhone,
+        requestedType: abstract.requestedType,
+        content: { body: "late edit" },
+        coAuthors: [],
+        additionalFieldsData: {},
+        registrationId: null,
+        themeIds: [],
+        revisionSnapshot: { body: "late edit" },
+        lastEditedAt: new Date(),
+      }),
+    ).toEqual({ ok: false, reason: "not_editable" });
+
+    const [row] = await getDb()
+      .select({ authorFirstName: abstracts.authorFirstName, contentVersion: abstracts.contentVersion })
+      .from(abstracts)
+      .where(eq(abstracts.id, abstract.id));
+    expect(row).toEqual({ authorFirstName: abstract.authorFirstName, contentVersion: abstract.contentVersion });
+    expect(
+      await getDb().select().from(abstractRevisions).where(eq(abstractRevisions.abstractId, abstract.id)),
+    ).toHaveLength(0);
   });
 });

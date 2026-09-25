@@ -659,6 +659,18 @@ describe("editAbstract", () => {
     );
   });
 
+  // 2.9: a decision committed after the service's status check; the txn's
+  // guarded UPDATE matches no row and writes nothing.
+  it("decision race during edit → 409 ABS_18008", async () => {
+    const { editToken } = setup();
+    mock(editAbstractTxn).mockResolvedValue({ ok: false, reason: "not_editable" });
+    await expectAppError(
+      service.editAbstract("abs-1", editToken, makeSubmitBody()),
+      409,
+      "ABS_18008",
+    );
+  });
+
   it("rejects when editing is disabled (409 ABS_18006)", async () => {
     const { editToken } = setup({}, { editingEnabled: false });
     await expectAppError(

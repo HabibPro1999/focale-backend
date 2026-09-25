@@ -116,6 +116,13 @@ function generateThrowawayPassword(): string {
   return `${randomUUID()}A!${randomUUID()}`;
 }
 
+function finalizedReviewersError(): AppException {
+  return new AppException(
+    ErrorCodes.INVALID_STATUS_TRANSITION,
+    "Reviewers of a finalized abstract cannot change; reopen it first",
+    409,
+  );
+}
 
 @Injectable()
 export class AbstractsCommitteeService {
@@ -380,6 +387,9 @@ export class AbstractsCommitteeService {
     if (!abstract || abstract.eventId !== eventId) {
       throw new AppException(ErrorCodes.NOT_FOUND, "Abstract not found", 404);
     }
+    if (FINAL_STATUSES.includes(abstract.status)) {
+      throw finalizedReviewersError();
+    }
     const reviewerIds = [...new Set(body.reviewerIds)];
     const config = await getReviewerAssignmentConfig(eventId);
     const requiredReviewers = config?.reviewersPerAbstract ?? 2;
@@ -446,8 +456,13 @@ export class AbstractsCommitteeService {
       eventId,
       abstractId,
       reviewerIds,
-      currentStatus: abstract.status,
     });
+    if (!updated.ok) {
+      if (updated.reason === "not_found") {
+        throw new AppException(ErrorCodes.NOT_FOUND, "Abstract not found", 404);
+      }
+      throw finalizedReviewersError();
+    }
 
     await insertAuditLog({
       entityType: "Abstract",
@@ -555,7 +570,9 @@ export class AbstractsCommitteeService {
       );
     }
 
-    return reviewAbstractTxn({
+    // The checks above ran before the transaction; it re-checks the status and
+    // the active assignment under the abstract's row lock.
+    const result = await reviewAbstractTxn({
       abstractId,
       eventId: abstract.eventId,
       reviewerId,
@@ -565,6 +582,26 @@ export class AbstractsCommitteeService {
       commentsEnabled: abstract.config?.commentsEnabled ?? true,
       divergenceThreshold: abstract.config?.divergenceThreshold ?? 6,
     });
+    if (!result.ok) {
+      switch (result.reason) {
+        case "not_found":
+          throw new AppException(ErrorCodes.NOT_FOUND, "Abstract not found", 404);
+        case "finalized":
+          throw new AppException(
+            ErrorCodes.INVALID_STATUS_TRANSITION,
+            "Abstract is not open for scoring",
+            409,
+          );
+        case "not_assigned":
+          throw new AppException(
+            ErrorCodes.FORBIDDEN,
+            "You are not an active assigned reviewer for this abstract",
+            403,
+          );
+      }
+    }
+    const { id, status, averageScore, reviewCount } = result;
+    return { id, status, averageScore, reviewCount };
   }
 
   // ==========================================================================
