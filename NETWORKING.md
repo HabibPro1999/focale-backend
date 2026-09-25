@@ -11,7 +11,9 @@ Run the API and worker as separate processes, using the same database and networ
 | Environment variable | Purpose |
 | --- | --- |
 | `PUBLIC_NETWORKING_URL` | Public PWA base URL used in registration and notification links. Local development: `http://localhost:8082`. |
-| `NETWORKING_TOKEN_SECRET` | At least32 characters of cryptographically random secret material. Used for participant authentication and encrypted short-lived secrets. Rotate deliberately: existing sessions and encrypted factors depend on it. |
+| `NETWORKING_TOKEN_SECRET` | At least 32 characters of cryptographically random secret material: the keyring's `legacy` key. Used for participant authentication and sealed secrets. Rotate it with `NETWORKING_KEYS` (see [key rotation](#key-rotation)), never by replacing it. |
+| `NETWORKING_KEYS` | Keyring: `kid:key` entries separated by commas, the first one current; `kid:key:recovery` keeps a retired key for existing recovery codes only. In production this or `NETWORKING_TOKEN_SECRET` is required unless `NETWORKING_DISABLED=true`. |
+| `NETWORKING_KEYRING_WRITE_V1` | `true` writes new session hashes, OTP hashes, badges, sealed codes/secrets and recovery codes as `v1:<kid>:…` with the first `NETWORKING_KEYS` key. `false` (default) keeps the legacy format while `NETWORKING_TOKEN_SECRET` is set. |
 | `NETWORKING_EMBEDDING_API_KEY` | Credential for the embedding provider; falls back to `OPENAI_API_KEY`. Server-side only. |
 | `NETWORKING_EMBEDDING_MODEL` | Defaults to `text-embedding-3-small`. The configured model must accept1536-dimensional output. |
 | `NETWORKING_EMBEDDING_BASE_URL` | Defaults to `https://api.openai.com/v1`; an HTTPS OpenAI-compatible endpoint is supported. |
@@ -61,6 +63,26 @@ Vector lookup uses exact cosine distance within eligible event profiles up to 5,
 7. For sensitive events, enable the authenticator second factor. Participants complete enrollment after email verification, and retain their single-use recovery codes.
 
 Network access remains separate from payment state. Suspension, exclusion, withdrawal and changed registration eligibility must revoke effective access and release future meetings according to the domain policy. Hidden/paused profiles are excluded from discovery. Messaging and meeting requests require a mutual connection, and blocking applies in both directions without disclosing the block reason.
+
+## Key rotation
+
+Every networking MAC and sealed value names its key. v1 values are `v1:<kid>:…`, keyed by a per-purpose HKDF subkey (session, OTP, badge, seal, recovery). Unversioned values are the legacy format of `NETWORKING_TOKEN_SECRET` (kid `legacy`) and stay readable. Session lookup tries every key's hash and rehashes the session to the current key on use. Authenticator secrets are resealed on use and by the reseal script. Recovery codes are stored only as keyed hashes, so they cannot be resealed: a key must stay available for the `recovery` purpose while any unused code references it. A successful MFA check returns `recoveryCodesOutdated: true` while the participant's remaining codes use an older key, and `POST /api/networking/:slug/auth/mfa/recovery-codes` (a valid authenticator or recovery code) replaces all ten with current-key codes (MFA action `REGENERATE_RECOVERY`).
+
+The worker image carries the runbook script (dry run and read-only unless stated):
+
+```bash
+node apps/worker/dist/scripts/networking-keyring.js status                       # keys, write format, what uses each key
+node apps/worker/dist/scripts/networking-keyring.js reseal [--apply]             # re-seal authenticator secrets with the current key
+node apps/worker/dist/scripts/networking-keyring.js retire --kid=legacy [--keep-recovery]  # exit 1 while anything still needs the key
+```
+
+Rollout (operator steps, API and worker together, with the same values):
+
+1. Deploy this build with the legacy key only (`NETWORKING_TOKEN_SECRET`, no `NETWORKING_KEYS`). Behavior and formats are unchanged; this build can already read v1 values.
+2. Add `NETWORKING_KEYS=k1:<openssl rand -hex 32>` and `NETWORKING_KEYRING_WRITE_V1=true`. New values use k1; legacy values keep working. Rolling back to a build without the keyring would invalidate k1 values, so do this only after step 1 is stable.
+3. Run `reseal` (dry run), then `reseal --apply`. Check `status`.
+4. After 30 days (the session lifetime), `retire --kid=legacy --keep-recovery` must pass. Then set `NETWORKING_KEYS=k1:<k1>,legacy:<the old NETWORKING_TOKEN_SECRET>:recovery` and unset `NETWORKING_TOKEN_SECRET`: legacy then verifies recovery codes and nothing else.
+5. Once `retire --kid=legacy` passes (participants used or regenerated their legacy recovery codes), remove the legacy entry. The same steps rotate k1 to k2 later: put k2 first and keep k1 until `retire --kid=k1` passes.
 
 ## Recommendations and recovery
 

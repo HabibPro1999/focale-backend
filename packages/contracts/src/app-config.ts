@@ -2,6 +2,7 @@ import { z } from "zod";
 import { dbEnvShape, dbRuntimeSettingsFrom } from "./db-settings";
 import { envFlag, envInt, envKey, envKeyMeta } from "./env-meta";
 import { decodeFirebaseServiceAccount } from "./firebase-service-account";
+import { NETWORKING_LEGACY_KID, parseNetworkingKeys, type NetworkingKeyEntry } from "./networking-keys";
 import {
   SHUTDOWN_ESCALATION_MS,
   SHUTDOWN_FORCE_CLOSE_LEAD_MS,
@@ -318,8 +319,33 @@ const envShape = {
   NETWORKING_TOKEN_SECRET: envKey(z.string().min(32).optional(), {
     section: "networking",
     description:
-      "Signs participant tokens and seals OTP codes (at least 32 characters).\nRequired in production unless NETWORKING_DISABLED=true. Generate with: openssl rand -hex 32",
+      "Signs participant tokens and seals OTP codes (at least 32 characters); the keyring's `legacy` key.\nIn production this or NETWORKING_KEYS is required unless NETWORKING_DISABLED=true. Generate with: openssl rand -hex 32",
     example: "replace-with-openssl-rand-hex-32-output",
+  }),
+  NETWORKING_KEYS: envKey(
+    z
+      .string()
+      .transform((value, ctx): NetworkingKeyEntry[] => {
+        try {
+          return parseNetworkingKeys(value);
+        } catch (error) {
+          ctx.addIssue({ code: "custom", message: (error as Error).message });
+          return z.NEVER;
+        }
+      })
+      .optional(),
+    {
+      section: "networking",
+      description:
+        "Networking keyring: comma-separated kid:key entries (keys at least 32 characters), the first\ncurrent; kid:key:recovery keeps a retired key only for existing recovery codes. See NETWORKING.md.",
+      example: "k1:replace-with-openssl-rand-hex-32-output",
+    },
+  ),
+  NETWORKING_KEYRING_WRITE_V1: envFlag(false, {
+    section: "networking",
+    description:
+      "Write new networking MACs and seals as v1:<kid> with the first NETWORKING_KEYS key. Off keeps\nthe legacy format while NETWORKING_TOKEN_SECRET is set (rollback-safe).",
+    example: "false",
   }),
   NETWORKING_EMBEDDING_API_KEY: envKey(z.string().optional(), {
     section: "networking",
@@ -465,6 +491,8 @@ const integrationsEnvObject = z.object({
   NETWORKING_DISABLED: envShape.NETWORKING_DISABLED,
   PUBLIC_NETWORKING_URL: envShape.PUBLIC_NETWORKING_URL,
   NETWORKING_TOKEN_SECRET: envShape.NETWORKING_TOKEN_SECRET,
+  NETWORKING_KEYS: envShape.NETWORKING_KEYS,
+  NETWORKING_KEYRING_WRITE_V1: envShape.NETWORKING_KEYRING_WRITE_V1,
   NETWORKING_EMBEDDING_API_KEY: envShape.NETWORKING_EMBEDDING_API_KEY,
   OPENAI_API_KEY: envShape.OPENAI_API_KEY,
   NETWORKING_EMBEDDING_MODEL: envShape.NETWORKING_EMBEDDING_MODEL,
@@ -632,6 +660,10 @@ function crossKeyIssues(env: Partial<ParsedEnv>): ConfigIssue[] {
     add("NETWORKING_EMAIL_SENDERS", "NETWORKING_EMAIL_SENDERS must be a JSON object keyed by client id");
   }
 
+  if (env.NETWORKING_TOKEN_SECRET && env.NETWORKING_KEYS?.some((key) => key.kid === NETWORKING_LEGACY_KID)) {
+    add("NETWORKING_KEYS", "The legacy key is NETWORKING_TOKEN_SECRET; list kid legacy in NETWORKING_KEYS only with it unset");
+  }
+
   if (!production) return issues;
 
   const sender = env.EMAIL_FROM_EMAIL ?? env.SENDGRID_FROM_EMAIL;
@@ -666,10 +698,10 @@ function crossKeyIssues(env: Partial<ParsedEnv>): ConfigIssue[] {
   if (!env.PUBLIC_FORMS_URL) {
     add("PUBLIC_FORMS_URL", "PUBLIC_FORMS_URL is required in production");
   }
-  if (!env.NETWORKING_DISABLED && !env.NETWORKING_TOKEN_SECRET) {
+  if (!env.NETWORKING_DISABLED && !env.NETWORKING_TOKEN_SECRET && !env.NETWORKING_KEYS) {
     add(
       "NETWORKING_TOKEN_SECRET",
-      "NETWORKING_TOKEN_SECRET is required in production unless NETWORKING_DISABLED=true",
+      "NETWORKING_TOKEN_SECRET or NETWORKING_KEYS is required in production unless NETWORKING_DISABLED=true",
     );
   }
   return issues;
@@ -729,8 +761,12 @@ export function validateAppEnv(
 export interface NetworkingRuntimeConfig {
   disabled: boolean;
   publicUrl?: string;
-  /** Unset when NETWORKING_DISABLED=true or not configured. */
+  /** Unset when NETWORKING_DISABLED=true or not configured. The keyring's `legacy` key. */
   tokenSecret?: string;
+  /** NETWORKING_KEYS (first entry current); empty when NETWORKING_DISABLED=true or unset. */
+  keys: NetworkingKeyEntry[];
+  /** NETWORKING_KEYRING_WRITE_V1. */
+  keyringWriteV1: boolean;
   embedding: {
     apiKey?: string;
     model: string;
@@ -820,6 +856,8 @@ function integrationsSliceFrom(env: IntegrationsEnv): IntegrationsConfig {
       disabled: env.NETWORKING_DISABLED,
       publicUrl: env.PUBLIC_NETWORKING_URL,
       tokenSecret: env.NETWORKING_DISABLED ? undefined : env.NETWORKING_TOKEN_SECRET,
+      keys: env.NETWORKING_DISABLED ? [] : env.NETWORKING_KEYS ?? [],
+      keyringWriteV1: env.NETWORKING_KEYRING_WRITE_V1,
       embedding: {
         apiKey: env.NETWORKING_EMBEDDING_API_KEY ?? env.OPENAI_API_KEY,
         model: env.NETWORKING_EMBEDDING_MODEL,

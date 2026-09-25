@@ -23,5 +23,6 @@ export * from "./networking-read";
 export * from "./networking-search";
 
 export * from "./networking-projection";
+export * from "./networking-keyring";
 
 export * from "./worker-heartbeats";
