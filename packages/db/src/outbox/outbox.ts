@@ -2,9 +2,17 @@ import { sql, type SQL } from "drizzle-orm";
 import { createLogger, makeWorkerId } from "@app/shared";
 import type { AppEvent } from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
-import { rowsOf, rowCountOf } from "../helpers";
+import { rowsOf } from "../helpers";
 import { isTransactionExecutor, pgUniqueViolation } from "../txn";
 import { auditLogs, outboxEvents } from "../schema";
+import {
+  DB_NOW,
+  createLeaseQueue,
+  intervalMs,
+  runLeased,
+  type LeaseQueue,
+  type LeaseQueueSpec,
+} from "../lease-queue";
 import {
   REALTIME_EMIT_TYPE,
   type OutboxHandlerRegistry,
@@ -15,12 +23,7 @@ import {
 const logger = createLogger({ name: "db:outbox" });
 
 const OUTBOX_LEASE_MS = 5 * 60 * 1000;
-const OUTBOX_RECOVERY_INTERVAL_MS = 60 * 1000;
 const DEFAULT_WORKER_ID = makeWorkerId("outbox");
-
-// Module-level, per-process: recovery runs at most once per minute, piggybacked
-// on whichever processOutboxEvents call ticks first.
-let lastRecoveryAt = 0;
 
 export interface EnqueueOutboxInput {
   type: string;
@@ -39,8 +42,9 @@ export interface ProcessOutboxOptions {
   leaseMs?: number;
   scope?: OutboxProcessingScope;
   /**
-   * Stop before the next claimed row once aborted (job timeout or shutdown).
-   * Rows claimed but not started stay leased until stale-lease recovery.
+   * Job signal (timeout or shutdown): no new row starts, and claimed rows not
+   * finished are released without an attempt penalty. Handlers get it in
+   * their meta.
    */
   signal?: AbortSignal;
 }
@@ -50,6 +54,8 @@ export interface ProcessOutboxResult {
   skipped: number;
   failed: number;
   leaseLost: number;
+  /** Claimed rows put back unprocessed after an abort (no attempt charged). */
+  released: number;
 }
 
 interface ClaimedOutboxRow {
@@ -76,12 +82,8 @@ function outboxRetryDelayMs(attemptCount: number): number {
   return 15 * 60 * 1000;
 }
 
-function nextOutboxAttemptAt(attemptCount: number, from = new Date()): Date {
-  return new Date(from.getTime() + outboxRetryDelayMs(attemptCount));
-}
-
 // The scope clause is built from a fixed constant, never user input, so raw
-// interpolation is safe and matches the legacy claim SQL byte-for-byte.
+// interpolation is safe.
 function outboxScopeClause(scope: OutboxProcessingScope): SQL {
   if (scope === "realtime")
     return sql.raw(`AND "type" = '${REALTIME_EMIT_TYPE}'`);
@@ -89,6 +91,46 @@ function outboxScopeClause(scope: OutboxProcessingScope): SQL {
     return sql.raw(`AND "type" <> '${REALTIME_EMIT_TYPE}'`);
   return sql.raw("");
 }
+
+/**
+ * outbox_events as a lease queue. PENDING/FAILED rows that are due and under
+ * max_attempts are claimable (FIFO by created_at); PROCESSING is the lease.
+ * A released row goes back to FAILED if it had been attempted before, else
+ * PENDING. Recovery requeues expired leases as FAILED, due now
+ * (next_attempt_at NULL), or dead-letters them once attempts are exhausted.
+ */
+function outboxLeaseSpec(scope: OutboxProcessingScope = "all"): LeaseQueueSpec {
+  return {
+    name: `outbox:${scope}`,
+    table: "outbox_events",
+    leasedStatus: "PROCESSING",
+    leaseMs: OUTBOX_LEASE_MS,
+    claimable: sql`"status" IN ('PENDING', 'FAILED')
+      AND ("next_attempt_at" IS NULL OR "next_attempt_at" <= ${DB_NOW})
+      AND "attempt_count" < "max_attempts"
+      ${outboxScopeClause(scope)}`,
+    order: sql`"created_at" ASC`,
+    claimSet: sql`"error_message" = NULL`,
+    releaseSet: sql`"status" = CASE WHEN "attempt_count" > 1 THEN 'FAILED' ELSE 'PENDING' END,
+      "next_attempt_at" = NULL`,
+    recovery: {
+      exhausted: sql`"attempt_count" >= "max_attempts"`,
+      retrySet: sql`"status" = 'FAILED', "next_attempt_at" = NULL`,
+      deadSet: sql`"status" = 'DEAD_LETTERED', "next_attempt_at" = NULL`,
+    },
+  };
+}
+
+/**
+ * The whole outbox as one queue. The worker's LeaseRecoveryJob recovers it,
+ * realtime rows leased by an API pump included.
+ */
+export const outboxQueue = createLeaseQueue(outboxLeaseSpec("all"));
+const scopedQueues: Record<OutboxProcessingScope, LeaseQueue> = {
+  all: outboxQueue,
+  realtime: createLeaseQueue(outboxLeaseSpec("realtime")),
+  background: createLeaseQueue(outboxLeaseSpec("background")),
+};
 
 // outbox_events has exactly one caller-supplied unique index (the partial
 // dedupe_key index `outbox_events_dedupe_key_key`), so any 23505 raised while a
@@ -193,231 +235,88 @@ export async function enqueueRealtimeOutboxEvent(
   });
 }
 
-// ---------------------------------------------------------------------------
-// Stale-lease recovery — reclaims rows whose worker died mid-processing once
-// their lease (`locked_until`) expires.
-// ---------------------------------------------------------------------------
-export async function recoverStaleOutboxLeases(
-  now = new Date(),
-): Promise<{ requeued: number; deadLettered: number }> {
-  const requeued = rowCountOf(
-    await getDb().execute(sql`
-      UPDATE "outbox_events"
-      SET "status" = 'FAILED', "next_attempt_at" = ${now},
-          "locked_at" = NULL, "locked_until" = NULL, "locked_by" = NULL
-      WHERE "status" = 'PROCESSING'
-        AND "locked_until" < ${now}
-        AND "attempt_count" < "max_attempts"
-    `),
-  );
-
-  const deadLettered = rowCountOf(
-    await getDb().execute(sql`
-      UPDATE "outbox_events"
-      SET "status" = 'DEAD_LETTERED', "next_attempt_at" = NULL,
-          "locked_at" = NULL, "locked_until" = NULL, "locked_by" = NULL
-      WHERE "status" = 'PROCESSING'
-        AND "locked_until" < ${now}
-        AND "attempt_count" >= "max_attempts"
-    `),
-  );
-
-  if (requeued > 0 || deadLettered > 0) {
-    logger.warn({ requeued, deadLettered }, "Recovered stale outbox leases");
-  }
-  return { requeued, deadLettered };
+// Terminal writes go through the queue's ownership guard (status PROCESSING
+// and locked_by): if recovery took the row mid-flight the write misses and
+// runLeased records a lost lease instead of clobbering the new owner.
+function outboxDoneSet(status: "PROCESSED" | "SKIPPED"): SQL {
+  return sql`"status" = ${status}, "processed_at" = ${DB_NOW}, "error_message" = NULL,
+    "next_attempt_at" = NULL`;
 }
 
-// Terminal writes are guarded by `status='PROCESSING' AND locked_by=workerId` —
-// if a stale-lease recovery reclaimed the row mid-flight the update misses (0
-// rows) and the caller records a lease-loss instead of clobbering the new owner.
-async function markOutboxProcessed(
-  id: string,
-  status: "PROCESSED" | "SKIPPED",
-  workerId: string,
-): Promise<boolean> {
-  const now = new Date();
-  const res = await getDb().execute(sql`
-    UPDATE "outbox_events"
-    SET "status" = ${status}, "processed_at" = ${now}, "error_message" = NULL,
-        "next_attempt_at" = NULL, "locked_at" = NULL, "locked_until" = NULL,
-        "locked_by" = NULL
-    WHERE "id" = ${id} AND "status" = 'PROCESSING' AND "locked_by" = ${workerId}
-    RETURNING "id"
-  `);
-  return rowCountOf(res) > 0;
-}
-
-async function markOutboxFailed(
-  id: string,
-  workerId: string,
-  attemptCount: number,
-  maxAttempts: number,
-  error: unknown,
-): Promise<boolean> {
-  const now = new Date();
-  const shouldDeadLetter = attemptCount >= maxAttempts;
-  const status = shouldDeadLetter ? "DEAD_LETTERED" : "FAILED";
+// attemptCount already includes this claim (post-increment).
+function outboxFailedSet(row: ClaimedOutboxRow, error: unknown): SQL {
   const message = error instanceof Error ? error.message : String(error);
-  const nextAttemptAt = shouldDeadLetter
-    ? null
-    : nextOutboxAttemptAt(attemptCount, now);
-  const res = await getDb().execute(sql`
-    UPDATE "outbox_events"
-    SET "status" = ${status}, "error_message" = ${message},
-        "last_attempt_at" = ${now}, "next_attempt_at" = ${nextAttemptAt},
-        "locked_at" = NULL, "locked_until" = NULL, "locked_by" = NULL
-    WHERE "id" = ${id} AND "status" = 'PROCESSING' AND "locked_by" = ${workerId}
-    RETURNING "id"
-  `);
-  return rowCountOf(res) > 0;
+  if (row.attemptCount >= row.maxAttempts) {
+    return sql`"status" = 'DEAD_LETTERED', "error_message" = ${message}, "next_attempt_at" = NULL`;
+  }
+  return sql`"status" = 'FAILED', "error_message" = ${message},
+    "next_attempt_at" = ${DB_NOW} + ${intervalMs(outboxRetryDelayMs(row.attemptCount))}`;
 }
 
-// Renew the lease periodically so long-running handlers aren't reclaimed as
-// stale mid-flight. Timer is unref'd (never holds the loop open) and stopped in
-// the caller's finally regardless of outcome.
-function startOutboxLeaseRenewal(
-  id: string,
-  workerId: string,
-  leaseMs: number,
-): () => void {
-  const renewEveryMs = Math.max(1_000, Math.floor(leaseMs / 2));
-  const timer = setInterval(() => {
-    const until = new Date(Date.now() + leaseMs);
-    void getDb()
-      .execute(sql`
-        UPDATE "outbox_events" SET "locked_until" = ${until}
-        WHERE "id" = ${id} AND "status" = 'PROCESSING'
-          AND "locked_by" = ${workerId}
-      `)
-      .catch((err: unknown) => {
-        logger.warn({ err, outboxEventId: id }, "Outbox lease renewal failed");
-      });
-  }, renewEveryMs);
-  if (typeof timer.unref === "function") timer.unref();
-  return () => clearInterval(timer);
-}
-
-function recordLeaseLost(
-  result: ProcessOutboxResult,
-  id: string,
-  workerId: string,
-  status: string,
-): void {
-  result.leaseLost++;
-  logger.warn(
-    { outboxEventId: id, workerId, status },
-    "Outbox event lease was lost before status update",
-  );
-}
-
+/**
+ * Claim up to `batchSize` due rows of `scope` and run each through its
+ * handler via runLeased: one heartbeat renews every unfinished row, each
+ * row's ownership is confirmed right before its handler, and an abort
+ * releases the rows not started without an attempt penalty. Unknown types
+ * fail and retry like any handler error.
+ */
 export async function processOutboxEvents(
   batchSize = 50,
   options: ProcessOutboxOptions,
 ): Promise<ProcessOutboxResult> {
-  const result: ProcessOutboxResult = {
-    processed: 0,
-    skipped: 0,
-    failed: 0,
-    leaseLost: 0,
-  };
+  let processed = 0;
+  let skipped = 0;
   const { handlers } = options;
   const workerId = options.workerId ?? DEFAULT_WORKER_ID;
-  const leaseMs = options.leaseMs ?? OUTBOX_LEASE_MS;
-  const scope = options.scope ?? "all";
-  const now = new Date();
-  const lockedUntil = new Date(now.getTime() + leaseMs);
-  const scopeClause = outboxScopeClause(scope);
+  const queue = scopedQueues[options.scope ?? "all"];
 
-  if (now.getTime() - lastRecoveryAt >= OUTBOX_RECOVERY_INTERVAL_MS) {
-    lastRecoveryAt = now.getTime();
-    await recoverStaleOutboxLeases(now);
-  }
-
-  // Single atomic claim: UPDATE ... WHERE id IN (SELECT ... FOR UPDATE SKIP
-  // LOCKED). FIFO by created_at; only due + under-cap PENDING/FAILED rows.
-  const claimed = await getDb().execute(sql`
-    UPDATE "outbox_events"
-    SET "status" = 'PROCESSING', "updated_at" = ${now}, "locked_at" = ${now},
-        "locked_until" = ${lockedUntil}, "locked_by" = ${workerId},
-        "last_attempt_at" = ${now}, "attempt_count" = "attempt_count" + 1,
-        "error_message" = NULL
-    WHERE "id" IN (
-      SELECT "id" FROM "outbox_events"
-       WHERE "status" IN ('PENDING', 'FAILED')
-         AND ("next_attempt_at" IS NULL OR "next_attempt_at" <= ${now})
-         AND "attempt_count" < "max_attempts"
-         ${scopeClause}
-       ORDER BY "created_at" ASC
-       LIMIT ${batchSize}
-       FOR UPDATE SKIP LOCKED
-    )
-    RETURNING "id"
-  `);
-
-  const ids = rowsOf<{ id: string }>(claimed).map((row) => row.id);
-  if (ids.length === 0) return result;
-
-  const idList = sql.join(
-    ids.map((id) => sql`${id}`),
-    sql`, `,
-  );
-  const events = rowsOf<ClaimedOutboxRow>(
-    await getDb().execute(sql`
-      SELECT "id", "type", "payload",
-             "attempt_count" AS "attemptCount",
-             "max_attempts" AS "maxAttempts"
-      FROM "outbox_events"
-      WHERE "id" IN (${idList}) AND "status" = 'PROCESSING'
-        AND "locked_by" = ${workerId}
-      ORDER BY "created_at" ASC
-    `),
-  );
-
-  for (const event of events) {
-    if (options.signal?.aborted) break;
-    const stopRenewal = startOutboxLeaseRenewal(event.id, workerId, leaseMs);
-    try {
+  const run = await runLeased<ClaimedOutboxRow>(queue, {
+    workerId,
+    limit: batchSize,
+    signal: options.signal,
+    leaseMs: options.leaseMs,
+    load: async (ids) =>
+      rowsOf<ClaimedOutboxRow>(
+        await getDb().execute(sql`
+          SELECT "id", "type", "payload",
+                 "attempt_count" AS "attemptCount",
+                 "max_attempts" AS "maxAttempts"
+          FROM "outbox_events"
+          WHERE "id" IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+            AND "status" = 'PROCESSING' AND "locked_by" = ${workerId}
+          ORDER BY "created_at" ASC
+        `),
+      ),
+    handle: async (event, { signal }) => {
       const handler = handlers[event.type];
       if (!handler) {
         throw new Error(`Unknown outbox event type: ${event.type}`);
       }
       const outcome: OutboxHandlerResult = await handler(event.payload, {
         id: event.id,
+        signal,
       });
-      if (outcome === "skipped") {
-        const marked = await markOutboxProcessed(event.id, "SKIPPED", workerId);
-        if (marked) result.skipped++;
-        else recordLeaseLost(result, event.id, workerId, "SKIPPED");
-      } else {
-        const marked = await markOutboxProcessed(
-          event.id,
-          "PROCESSED",
-          workerId,
-        );
-        if (marked) result.processed++;
-        else recordLeaseLost(result, event.id, workerId, "PROCESSED");
-      }
-    } catch (error) {
+      const status = outcome === "skipped" ? "SKIPPED" : "PROCESSED";
+      const written = await queue.complete(workerId, event.id, outboxDoneSet(status));
+      if (written && status === "SKIPPED") skipped++;
+      else if (written) processed++;
+      return written;
+    },
+    onError: async (event, error) => {
       logger.error(
         { err: error, outboxEventId: event.id, type: event.type },
         "Outbox event processing failed",
       );
-      const marked = await markOutboxFailed(
-        event.id,
-        workerId,
-        event.attemptCount,
-        event.maxAttempts,
-        error,
-      );
-      if (marked) result.failed++;
-      else recordLeaseLost(result, event.id, workerId, "FAILED");
-    } finally {
-      stopRenewal();
-    }
-  }
-
-  return result;
+      return queue.fail(workerId, event.id, outboxFailedSet(event, error));
+    },
+  });
+  return {
+    processed,
+    skipped,
+    failed: run.failed,
+    leaseLost: run.leaseLost,
+    released: run.released,
+  };
 }
 
 // ----------------------------------------------------------------------------
@@ -446,7 +345,7 @@ export async function getOutboxHealth(): Promise<OutboxHealth> {
   // string from db.execute (which node-postgres would misread as process-local
   // on non-UTC hosts). EXTRACT(EPOCH FROM interval) is a pure wall-clock diff,
   // TZ-independent.
-  const [countsRes, oldestPendingRes, oldestProcessingRes] = await Promise.all([
+  const [countsRes, oldestPendingRes, lease] = await Promise.all([
     db.execute(sql`
       SELECT "status", COUNT(*)::int AS n FROM "outbox_events"
       WHERE "status" IN ('PENDING', 'FAILED', 'PROCESSING', 'DEAD_LETTERED')
@@ -456,10 +355,7 @@ export async function getOutboxHealth(): Promise<OutboxHealth> {
       SELECT COALESCE(EXTRACT(EPOCH FROM (now() - MIN("created_at"))) * 1000, 0)::float8 AS age
       FROM "outbox_events" WHERE "status" IN ('PENDING', 'FAILED')
     `),
-    db.execute(sql`
-      SELECT COALESCE(EXTRACT(EPOCH FROM (now() - MIN(COALESCE("locked_at", "updated_at")))) * 1000, 0)::float8 AS age
-      FROM "outbox_events" WHERE "status" = 'PROCESSING'
-    `),
+    outboxQueue.health(),
   ]);
 
   const counts = { pending: 0, failed: 0, processing: 0, deadLettered: 0 };
@@ -474,7 +370,7 @@ export async function getOutboxHealth(): Promise<OutboxHealth> {
   const ageOf = (res: unknown): number =>
     Math.round(Number(rowsOf<{ age: number | string }>(res)[0]?.age ?? 0));
   const oldestPendingAgeMs = ageOf(oldestPendingRes);
-  const oldestProcessingAgeMs = ageOf(oldestProcessingRes);
+  const oldestProcessingAgeMs = lease.oldestLeaseAgeMs;
 
   const isHealthy =
     counts.deadLettered === 0 &&

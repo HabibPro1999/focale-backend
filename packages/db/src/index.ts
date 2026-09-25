@@ -8,3 +8,4 @@ export * from "./locks";
 export * from "./settlement";
 export * from "./queries/index";
 export * from "./outbox";
+export * from "./lease-queue";
