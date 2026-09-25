@@ -129,20 +129,28 @@ describe("api e2e", () => {
     }
   });
 
-  it("GET /health/worker is the worker heartbeat probe: 200 healthy / 503 with reasons, raw body", async () => {
-    getWorkerHealthMock.mockResolvedValue({ isHealthy: true, reasons: [], workers: [] });
+  it("GET /health/worker is the worker heartbeat probe: 200 healthy / 503 with reasons, counts only", async () => {
+    const counts = { live: 1, disabled: 0, overdueJobs: 0 };
+    getWorkerHealthMock.mockResolvedValue({ isHealthy: true, reasons: [], counts });
     const ok = await app.inject({ method: "GET", url: "/health/worker" });
     expect(ok.statusCode).toBe(200);
-    expect(ok.json()).toEqual({ isHealthy: true, reasons: [], workers: [] });
+    expect(ok.json()).toEqual({ isHealthy: true, reasons: [], counts });
 
+    // Anything else the query might carry (ids, services, jobs) never reaches the public body.
     getWorkerHealthMock.mockResolvedValue({
       isHealthy: false,
-      reasons: ["no worker heartbeat in the last 60 s"],
-      workers: [],
+      reasons: ["1 job run(s) past twice their timeout"],
+      counts: { live: 1, disabled: 0, overdueJobs: 1, service: "focale-worker" },
+      workers: [{ workerId: "focale-worker:host:1", service: "focale-worker", jobs: { outbox: {} } }],
     });
     const down = await app.inject({ method: "GET", url: "/health/worker" });
     expect(down.statusCode).toBe(503);
-    expect(down.json()).toMatchObject({ isHealthy: false, reasons: ["no worker heartbeat in the last 60 s"] });
+    expect(down.json()).toEqual({
+      isHealthy: false,
+      reasons: ["1 job run(s) past twice their timeout"],
+      counts: { live: 1, disabled: 0, overdueJobs: 1 },
+    });
+    expect(down.body).not.toContain("focale-worker");
   });
 
   it("echoes an incoming x-request-id header on a health probe", async () => {

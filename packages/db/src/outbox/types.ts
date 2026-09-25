@@ -30,6 +30,8 @@ export type OutboxHandlerResult = "processed" | "skipped";
  */
 export interface OutboxHandlerMeta {
   id: string;
+  /** Aborts on the job signal (timeout or shutdown) or when this row's lease is lost. */
+  signal?: AbortSignal;
 }
 
 /** Per-type handler. Legacy `handleOutboxEvent` switch is now an injected map. */
