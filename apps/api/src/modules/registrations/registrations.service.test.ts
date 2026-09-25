@@ -41,7 +41,7 @@ const db = vi.hoisted(() => ({
   findRegistrationUsagesForRecalc: vi.fn(),
   findRegistrationUsageLinks: vi.fn(),
   deleteRegistrationUsages: vi.fn(),
-  generateReferenceNumber: vi.fn(),
+  allocateReferenceNumber: vi.fn(),
   insertAuditLog: vi.fn(),
   listRegistrationAuditLogRows: vi.fn(),
   findUserNamesByIds: vi.fn(),
@@ -159,7 +159,7 @@ describe("RegistrationsService", () => {
     db.enqueueTriggeredEmailOutbox.mockResolvedValue(true);
     db.casIncrementRegisteredTx.mockResolvedValue(true);
     db.casDecrementRegisteredTx.mockResolvedValue(true);
-    db.generateReferenceNumber.mockResolvedValue("26-EV-001");
+    db.allocateReferenceNumber.mockResolvedValue("26-EV-001");
     db.insertAuditLog.mockResolvedValue(undefined);
     db.updateRegistrationRow.mockResolvedValue(undefined);
     db.findAccessDetailsByIds.mockResolvedValue([]);

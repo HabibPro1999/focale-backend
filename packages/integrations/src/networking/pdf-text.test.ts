@@ -7,6 +7,10 @@ describe("mixed-direction PDF text",()=>{
   expect(runs.join("")).not.toContain("6202");
   expect(runs.some(run=>run.includes("تاريخ"))).toBe(true);
  });
+ it("mirrors brackets inside right-to-left runs (bidi rule L4)",()=>{
+  expect(pdfTextRuns("سارة بن علي (جامعة تونس)","rtl")).toEqual(["سارة بن علي )جامعة تونس("]);
+  expect(pdfTextRuns("Dr (Tunis)","ltr")).toEqual(["Dr (Tunis)"]);
+ });
  it("preserves Latin company names and numeric values in Arabic sections",()=>{
   const runs=pdfTextRuns("Santé: 48 العلاقات","rtl");
   expect(runs.some(run=>run.includes("Santé"))).toBe(true);

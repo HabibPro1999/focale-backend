@@ -30,6 +30,7 @@ import {
 } from "@app/contracts";
 import {
   calculateApplicableAmount,
+  calculateDiscountAmount,
   calculateSettlement,
   getSkip,
   isFullySettled,
@@ -75,7 +76,7 @@ import {
   findRegistrationUsagesForRecalc,
   findRegistrationUsageLinks,
   deleteRegistrationUsages,
-  generateReferenceNumber,
+  allocateReferenceNumber,
   insertAuditLog,
   listRegistrationAuditLogRows,
   findUserNamesByIds,
@@ -102,7 +103,6 @@ import { logger } from "../../core/logger.service";
 import { validatePaymentTransition } from "./payment-transitions";
 import { getRegistrationTableColumns } from "./table-columns";
 import {
-  calculateDiscountAmount,
   enrichWithAccessSelections,
   enrichManyWithAccessSelections,
   type RegistrationWithRelations,
@@ -738,7 +738,7 @@ export class RegistrationsService {
       }
 
       const editToken = generateEditToken();
-      const referenceNumber = await generateReferenceNumber(eventId, tx);
+      const referenceNumber = await allocateReferenceNumber(eventId, tx);
 
       const { id } = await insertRegistrationRow(
         {
@@ -948,7 +948,7 @@ export class RegistrationsService {
       }
 
       const resolvedPaymentStatus = paymentStatus ?? "PENDING";
-      const referenceNumber = await generateReferenceNumber(eventId, tx);
+      const referenceNumber = await allocateReferenceNumber(eventId, tx);
       const accessTypeIds = accessSelections?.map((s) => s.accessId) ?? [];
 
       const { id } = await insertRegistrationRow(
