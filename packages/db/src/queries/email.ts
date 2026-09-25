@@ -18,10 +18,11 @@ import {
   type InferSelectModel,
   type SQL,
 } from "drizzle-orm";
+import { newId } from "@app/shared";
 import { getDb, type DbExecutor } from "../client";
 import { rowCountOf, STANDARD_RETRY_DELAYS_MS, standardRetryDelayMs } from "../helpers";
 import { DB_NOW, backoffInterval, createLeaseQueue, intervalMs } from "../lease-queue";
-import { pgUniqueViolation } from "../txn";
+import { pgUniqueViolation, withTxn } from "../txn";
 import { emailLogs, emailTemplates } from "../schema/email";
 import { events, eventAccess } from "../schema/events-access";
 import { eventPricing } from "../schema/pricing";
@@ -408,15 +409,39 @@ export async function createEmailLog(
   }
 }
 
-/** Bulk-insert QUEUED logs (manual bulk send). No dedup, no per-row validation. */
-export async function createEmailLogsBulk(
+/** Rows per INSERT statement in insertEmailLogsSkippingConflicts. */
+export const EMAIL_LOG_INSERT_CHUNK_SIZE = 500;
+
+/**
+ * Bulk-insert email logs (manual bulk sends, certificate sends). A row that any
+ * unique index refuses is skipped instead of failing the batch: the insert is
+ * `ON CONFLICT DO NOTHING` without a target on purpose, because the row may
+ * collide with any of the active dedupe indexes (per-trigger, template +
+ * recipient, dedupe key). Every row gets its id here, so the caller can tell
+ * inserted rows from skipped ones by the returned ids.
+ *
+ * Without `exec` the chunks run in one transaction, so the batch is
+ * all-or-nothing apart from the skipped rows.
+ */
+export async function insertEmailLogsSkippingConflicts(
   values: EmailLogInsert[],
-): Promise<number> {
-  if (values.length === 0) return 0;
-  const rows = await getDb().insert(emailLogs).values(values).returning({
-    id: emailLogs.id,
-  });
-  return rows.length;
+  exec?: DbExecutor,
+): Promise<Set<string>> {
+  if (values.length === 0) return new Set();
+  const rows = values.map((value) => ({ ...value, id: value.id ?? newId() }));
+  const insert = async (tx: DbExecutor): Promise<Set<string>> => {
+    const inserted = new Set<string>();
+    for (let i = 0; i < rows.length; i += EMAIL_LOG_INSERT_CHUNK_SIZE) {
+      const returned = await tx
+        .insert(emailLogs)
+        .values(rows.slice(i, i + EMAIL_LOG_INSERT_CHUNK_SIZE))
+        .onConflictDoNothing()
+        .returning({ id: emailLogs.id });
+      for (const row of returned) inserted.add(row.id);
+    }
+    return inserted;
+  };
+  return exec ? insert(exec) : withTxn(insert);
 }
 
 export async function updateEmailLogById(

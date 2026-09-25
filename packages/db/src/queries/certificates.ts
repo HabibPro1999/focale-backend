@@ -9,6 +9,7 @@ import {
   type InferSelectModel,
   type SQL,
 } from "drizzle-orm";
+import { newId } from "@app/shared";
 import { getDb, type DbExecutor } from "../client";
 import { certificateTemplates } from "../schema/certificates";
 import {
@@ -20,7 +21,16 @@ import { clients } from "../schema/users-clients";
 import { registrations } from "../schema/registrations";
 import { abstracts } from "../schema/abstracts";
 import { emailLogs } from "../schema/email";
-import type { RegistrationEmailContext } from "./email";
+import { lockEventForUpdate } from "../locks";
+import { withLockingTxn } from "../txn";
+import {
+  insertEmailLogsSkippingConflicts,
+  type EmailLogInsert,
+  type EmailLogRow,
+  type RegistrationEmailContext,
+} from "./email";
+
+type EmailLogStatus = EmailLogRow["status"];
 
 // ---------------------------------------------------------------------------
 // Row types
@@ -539,9 +549,24 @@ export async function getAbstractForCertificateGeneration(
 }
 
 /**
+ * Certificate email statuses that count as "already sent": queued, in flight,
+ * or sent (a delivered email that was later opened or clicked is still sent).
+ * BOUNCED, DROPPED, FAILED and SKIPPED certificates can be sent again.
+ */
+export const CERTIFICATE_EMAIL_SENT_STATUSES = [
+  "QUEUED",
+  "SENDING",
+  "SENT",
+  "DELIVERED",
+  "OPENED",
+  "CLICKED",
+] as const satisfies readonly EmailLogStatus[];
+
+/**
  * Per-registration set of certificate template ids already queued/sent. Reads
- * active CERTIFICATE_SENT EmailLog rows and extracts the durable dedupe key
- * stashed in `contextSnapshot._certificateTemplateIds` (string entries only).
+ * CERTIFICATE_SENT EmailLog rows in CERTIFICATE_EMAIL_SENT_STATUSES and
+ * extracts the durable dedupe key stashed in
+ * `contextSnapshot._certificateTemplateIds` (string entries only).
  */
 export async function getAlreadySentCertTemplateIds(
   registrationIds: string[],
@@ -560,7 +585,7 @@ export async function getAlreadySentCertTemplateIds(
       and(
         inArray(emailLogs.registrationId, registrationIds),
         eq(emailLogs.trigger, "CERTIFICATE_SENT"),
-        inArray(emailLogs.status, ["QUEUED", "SENDING", "SENT", "DELIVERED"]),
+        inArray(emailLogs.status, CERTIFICATE_EMAIL_SENT_STATUSES),
       ),
     );
 
@@ -679,7 +704,7 @@ export async function getAlreadySentAbstractCertTemplateIds(
       and(
         inArray(emailLogs.abstractId, abstractIds),
         eq(emailLogs.trigger, "CERTIFICATE_SENT"),
-        inArray(emailLogs.status, ["QUEUED", "SENDING", "SENT", "DELIVERED"]),
+        inArray(emailLogs.status, CERTIFICATE_EMAIL_SENT_STATUSES),
       ),
     );
 
@@ -698,4 +723,164 @@ export async function getAlreadySentAbstractCertTemplateIds(
   }
 
   return map;
+}
+
+// ---------------------------------------------------------------------------
+// Certificate send write (2.12)
+// ---------------------------------------------------------------------------
+
+/** One recipient of a certificate send: a registration or an abstract. */
+export interface CertificateEmailCandidate {
+  /** Registration id in the registration batch, abstract id in the abstract batch. */
+  targetId: string;
+  recipientEmail: string;
+  recipientName: string | null;
+  /** Certificate templates this recipient is eligible for, in display order. */
+  certificates: ReadonlyArray<{ id: string; name: string }>;
+  /** Email context; the certificate keys are added per queued row. */
+  contextSnapshot: Record<string, unknown>;
+}
+
+export type CertificateEmailOutcome =
+  | {
+      status: "queued";
+      emailLogId: string;
+      /** The certificates this email carries (eligible minus already sent). */
+      certificates: Array<{ id: string; name: string }>;
+    }
+  /** Every eligible certificate was already queued or sent. */
+  | { status: "already_sent" }
+  /** A unique index refused the row; nothing was queued for this recipient. */
+  | { status: "skipped_conflict" };
+
+export interface QueueCertificateEmailLogsInput {
+  eventId: string;
+  /** The event's CERTIFICATE_SENT email template. */
+  emailTemplateId: string;
+  registrations: readonly CertificateEmailCandidate[];
+  abstracts: readonly CertificateEmailCandidate[];
+}
+
+export interface QueueCertificateEmailLogsResult {
+  /** One outcome per input candidate, in input order. */
+  registrations: CertificateEmailOutcome[];
+  abstracts: CertificateEmailOutcome[];
+}
+
+/** A candidate after the already-sent check: nothing to send, or a row to insert. */
+export type PlannedCertificateEmail =
+  | { status: "already_sent" }
+  | {
+      status: "insert";
+      row: EmailLogInsert & { id: string };
+      certificates: Array<{ id: string; name: string }>;
+    };
+
+/**
+ * Pure part of queueCertificateEmailLogsTxn: drop the certificates each
+ * candidate already has and build one QUEUED row per candidate with the rest.
+ * `_certificateTemplateIds` is the durable dedupe key and the list of
+ * templates the worker attaches at send time. Takes the sent maps by value.
+ */
+export function planCertificateEmailLogs(
+  input: QueueCertificateEmailLogsInput,
+  sentByRegistration: ReadonlyMap<string, ReadonlySet<string>>,
+  sentByAbstract: ReadonlyMap<string, ReadonlySet<string>>,
+): { registrations: PlannedCertificateEmail[]; abstracts: PlannedCertificateEmail[] } {
+  const plan = (
+    candidates: readonly CertificateEmailCandidate[],
+    sentByTarget: ReadonlyMap<string, ReadonlySet<string>>,
+    target: "registration" | "abstract",
+  ): PlannedCertificateEmail[] => {
+    // Covered so far, including rows planned earlier in this call, so a
+    // target listed twice gets its certificates once.
+    const covered = new Map<string, Set<string>>();
+    return candidates.map((candidate) => {
+      const done =
+        covered.get(candidate.targetId) ??
+        new Set(sentByTarget.get(candidate.targetId) ?? []);
+      covered.set(candidate.targetId, done);
+      const remaining = candidate.certificates
+        .filter((certificate) => !done.has(certificate.id))
+        .map(({ id, name }) => ({ id, name }));
+      if (remaining.length === 0) return { status: "already_sent" };
+      for (const { id } of remaining) done.add(id);
+      return {
+        status: "insert",
+        certificates: remaining,
+        row: {
+          id: newId(),
+          trigger: "CERTIFICATE_SENT",
+          templateId: input.emailTemplateId,
+          ...(target === "registration"
+            ? { registrationId: candidate.targetId }
+            : { abstractId: candidate.targetId }),
+          recipientEmail: candidate.recipientEmail,
+          recipientName: candidate.recipientName,
+          subject: "",
+          status: "QUEUED",
+          contextSnapshot: {
+            ...candidate.contextSnapshot,
+            certificateCount: String(remaining.length),
+            certificateList: remaining.map((c) => c.name).join(", "),
+            _certificateTemplateIds: remaining.map((c) => c.id),
+          },
+        },
+      };
+    });
+  };
+  return {
+    registrations: plan(input.registrations, sentByRegistration, "registration"),
+    abstracts: plan(input.abstracts, sentByAbstract, "abstract"),
+  };
+}
+
+/**
+ * Queue certificate emails for both batches in one transaction. Locks the
+ * event first (whole-event work, ADR 0001), so concurrent sends for the same
+ * event run one after the other; then re-reads which certificates each
+ * registration and abstract already has and queues one email per recipient
+ * with the remaining ones. The insert skips rows a unique index refuses
+ * (`skipped_conflict`) instead of failing the send. Both batches commit or
+ * roll back together. Returns null when the event no longer exists.
+ */
+export async function queueCertificateEmailLogsTxn(
+  input: QueueCertificateEmailLogsInput,
+): Promise<QueueCertificateEmailLogsResult | null> {
+  if (input.registrations.length === 0 && input.abstracts.length === 0) {
+    return { registrations: [], abstracts: [] };
+  }
+
+  return withLockingTxn(async (tx) => {
+    if (!(await lockEventForUpdate(tx, input.eventId))) return null;
+
+    const plan = planCertificateEmailLogs(
+      input,
+      await getAlreadySentCertTemplateIds(
+        input.registrations.map((c) => c.targetId),
+        tx,
+      ),
+      await getAlreadySentAbstractCertTemplateIds(
+        input.abstracts.map((c) => c.targetId),
+        tx,
+      ),
+    );
+    const inserted = await insertEmailLogsSkippingConflicts(
+      [...plan.registrations, ...plan.abstracts].flatMap((p) =>
+        p.status === "insert" ? [p.row] : [],
+      ),
+      tx,
+    );
+
+    const outcome = (p: PlannedCertificateEmail): CertificateEmailOutcome => {
+      if (p.status === "already_sent") return p;
+      return inserted.has(p.row.id)
+        ? { status: "queued", emailLogId: p.row.id, certificates: p.certificates }
+        : { status: "skipped_conflict" };
+    };
+    return {
+      registrations: plan.registrations.map(outcome),
+      abstracts: plan.abstracts.map(outcome),
+    };
+  });
 }
