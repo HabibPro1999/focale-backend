@@ -5,6 +5,9 @@ import type { ApplyRegistrationSettlementInput, RegistrationPatch } from "@app/d
 // --- @app/db mock -----------------------------------------------------------
 const db = vi.hoisted(() => ({
   withTxn: vi.fn(),
+  withLockingTxn: vi.fn(),
+  lockRegistrationForUpdate: vi.fn(),
+  settleRegistrationTxn: vi.fn(),
   applyRegistrationSettlement: vi.fn(),
   emitSettlementEvents: vi.fn(),
   syncNetworkingRegistration: vi.fn(),
@@ -57,8 +60,59 @@ const db = vi.hoisted(() => ({
 }));
 vi.mock("@app/db", async (importOriginal) => {
   const real = await importOriginal<typeof import("@app/db")>();
-  return { ...db, settlementEventPair: real.settlementEventPair };
+  return {
+    ...db,
+    settlementEventPair: real.settlementEventPair,
+    // The paid-count error classes are the real ones (mapped by class).
+    AccessCapacityExceededError: real.AccessCapacityExceededError,
+    AccessNotFoundError: real.AccessNotFoundError,
+    AccessPaidCountUnderflowError: real.AccessPaidCountUnderflowError,
+  };
 });
+
+/**
+ * settleRegistrationTxn over the mocked rows (the real one is DB-tested in
+ * packages/db): the stored amounts, the caller's decision, one writer call.
+ */
+db.settleRegistrationTxn.mockImplementation(
+  async (
+    tx: unknown,
+    id: string,
+    options: {
+      decide?: (state: Record<string, unknown>) => { paymentStatus: string; paidAmount?: number; paidAt?: Date | null };
+      fields?: Record<string, unknown>;
+    },
+  ) => {
+    const row = await db.findRegistrationForMutation(id, tx);
+    if (!row) return null;
+    const before = {
+      paymentStatus: row.paymentStatus,
+      paidAt: row.paidAt ?? null,
+      paidAmount: row.paidAmount,
+      totalAmount: row.totalAmount,
+      sponsorshipAmount: row.sponsorshipAmount,
+      priceBreakdown: row.priceBreakdown,
+    };
+    const net = Math.max(0, before.totalAmount - before.sponsorshipAmount);
+    const decision = options.decide!({ before, gross: before.totalAmount, sponsorship: before.sponsorshipAmount, net });
+    const after = {
+      ...before,
+      paymentStatus: decision.paymentStatus,
+      paidAmount: decision.paidAmount ?? before.paidAmount,
+      paidAt: decision.paidAt !== undefined ? decision.paidAt : before.paidAt,
+    };
+    await db.applyRegistrationSettlement(tx, {
+      registrationId: id,
+      settlement: {
+        paymentStatus: after.paymentStatus,
+        ...(decision.paidAmount !== undefined ? { paidAmount: decision.paidAmount } : {}),
+        ...(decision.paidAt !== undefined ? { paidAt: decision.paidAt } : {}),
+      },
+      fields: options.fields,
+    });
+    return { written: true, eventId: row.eventId, before, after, coveredAccessIds: [], paidAccess: { incremented: [], decremented: [] } };
+  },
+);
 
 // emitSettlementEvents with @app/db's body, over the mocked primitives.
 db.emitSettlementEvents.mockImplementation(
@@ -183,6 +237,7 @@ describe("RegistrationsService", () => {
     decrementAccessRegisteredCountTx: ReturnType<typeof vi.fn>;
     syncPaidCountDelta: ReturnType<typeof vi.fn>;
     getAlreadyCoveredAccessIds: ReturnType<typeof vi.fn>;
+    handleCapacityReached: ReturnType<typeof vi.fn>;
   };
   let pricing: { calculatePrice: ReturnType<typeof vi.fn> };
   let storage: {
@@ -194,6 +249,8 @@ describe("RegistrationsService", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     db.withTxn.mockImplementation((fn: (tx: unknown) => unknown) => fn({}));
+    db.withLockingTxn.mockImplementation((fn: (tx: unknown) => unknown) => db.withTxn(fn));
+    db.lockRegistrationForUpdate.mockResolvedValue(true);
     db.enqueueRealtimeOutboxEvent.mockResolvedValue(true);
     db.enqueueTriggeredEmailOutbox.mockResolvedValue(true);
     db.casIncrementRegisteredTx.mockResolvedValue(true);
@@ -225,6 +282,7 @@ describe("RegistrationsService", () => {
       incrementAccessRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
       decrementAccessRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
       syncPaidCountDelta: vi.fn().mockResolvedValue(undefined),
+      handleCapacityReached: vi.fn().mockResolvedValue(0),
       getAlreadyCoveredAccessIds: vi.fn().mockResolvedValue(new Set()),
     };
     pricing = { calculatePrice: vi.fn().mockResolvedValue(emptyBreakdown(100)) };
@@ -561,6 +619,14 @@ describe("RegistrationsService", () => {
       db.getRegistrationByIdRow.mockResolvedValue(makeRegRow());
     });
 
+    it("locks the registration before reading it", async () => {
+      await service.updateRegistration("reg1", { note: "hi" } as never, "admin1");
+      expect(db.withLockingTxn).toHaveBeenCalledTimes(1);
+      const [lock] = db.lockRegistrationForUpdate.mock.invocationCallOrder;
+      const [read] = db.findRegistrationForMutation.mock.invocationCallOrder;
+      expect(lock).toBeLessThan(read!);
+    });
+
     it("updates a note and audits", async () => {
       await service.updateRegistration("reg1", { note: "hi" } as never, "admin1");
       expect(db.applyRegistrationSettlement).toHaveBeenCalled();
@@ -632,6 +698,30 @@ describe("RegistrationsService", () => {
       db.getRegistrationByIdRow.mockResolvedValue(adminRow());
       db.findRegistrationUsagesForRecalc.mockResolvedValue([]);
       pricing.calculatePrice.mockResolvedValue(emptyBreakdown(100));
+    });
+
+    it("locks the registration before reading it", async () => {
+      await service.adminEditRegistration("ev1", "reg1", { note: "n" } as never, "admin1");
+      expect(db.withLockingTxn).toHaveBeenCalledTimes(1);
+      const [lock] = db.lockRegistrationForUpdate.mock.invocationCallOrder;
+      const [read] = db.findRegistrationForMutation.mock.invocationCallOrder;
+      expect(lock).toBeLessThan(read!);
+    });
+
+    it("refuses to move a REFUNDED registration to another status (admin override)", async () => {
+      db.findRegistrationForMutation.mockResolvedValue(adminRow({ paymentStatus: "REFUNDED" }));
+      await expect(
+        service.adminEditRegistration("ev1", "reg1", { paymentStatus: "PAID" } as never, "admin1"),
+      ).rejects.toMatchObject({ code: ErrorCodes.INVALID_PAYMENT_TRANSITION, statusCode: 400 });
+      expect(db.applyRegistrationSettlement).not.toHaveBeenCalled();
+    });
+
+    it("still lets an admin override a status the payment paths refuse (PAID → PENDING)", async () => {
+      db.findRegistrationForMutation.mockResolvedValue(
+        adminRow({ paymentStatus: "PAID", paidAmount: 100 }),
+      );
+      await service.adminEditRegistration("ev1", "reg1", { paymentStatus: "PENDING" } as never, "admin1");
+      expect(writtenPatch().paymentStatus).toBe("PENDING");
     });
 
     it("keeps a PAID registration PAID when an admin reprices it", async () => {
@@ -1207,6 +1297,117 @@ describe("RegistrationsService", () => {
         service.confirmPayment("x", { paymentStatus: "PAID" } as never),
       ).rejects.toMatchObject({ code: "REG_8001", statusCode: 404 });
     });
+
+    it("404 without reading when there is no row to lock", async () => {
+      db.lockRegistrationForUpdate.mockResolvedValue(false);
+      await expect(
+        service.confirmPayment("x", { paymentStatus: "PAID" } as never),
+      ).rejects.toMatchObject({ code: "REG_8001", statusCode: 404 });
+      expect(db.findRegistrationForMutation).not.toHaveBeenCalled();
+    });
+
+    it("locks the registration before reading and settling it", async () => {
+      await service.confirmPayment("reg1", { paymentStatus: "PAID" } as never);
+      expect(db.withLockingTxn).toHaveBeenCalledTimes(1);
+      const [lock] = db.lockRegistrationForUpdate.mock.invocationCallOrder;
+      const [read] = db.findRegistrationForMutation.mock.invocationCallOrder;
+      const [settle] = db.settleRegistrationTxn.mock.invocationCallOrder;
+      expect(lock).toBeLessThan(read!);
+      expect(read).toBeLessThan(settle!);
+    });
+
+    it("400 PAID_AMOUNT_BELOW_DUE when a PAID confirmation is for less than the net", async () => {
+      db.findRegistrationForMutation.mockResolvedValue(mutRow({ totalAmount: 100, sponsorshipAmount: 40 }));
+      await expect(
+        service.confirmPayment("reg1", { paymentStatus: "PAID", paidAmount: 50 } as never),
+      ).rejects.toMatchObject({
+        code: ErrorCodes.PAID_AMOUNT_BELOW_DUE,
+        statusCode: 400,
+        details: { amountDue: 60, paidAmount: 50 },
+      });
+      expect(db.applyRegistrationSettlement).not.toHaveBeenCalled();
+      expect(db.insertAuditLog).not.toHaveBeenCalled();
+    });
+
+    it("accepts PAID for exactly the net and a smaller amount as PARTIAL", async () => {
+      db.findRegistrationForMutation.mockResolvedValue(mutRow({ totalAmount: 100, sponsorshipAmount: 40 }));
+      await service.confirmPayment("reg1", { paymentStatus: "PAID", paidAmount: 60 } as never);
+      await service.confirmPayment("reg1", { paymentStatus: "PARTIAL", paidAmount: 50 } as never);
+      expect(writtenPatch(0)).toMatchObject({ paymentStatus: "PAID", paidAmount: 60 });
+      expect(writtenPatch(1)).toMatchObject({ paymentStatus: "PARTIAL", paidAmount: 50 });
+    });
+
+    it("allows VERIFYING → PARTIAL (a proof of a partial payment)", async () => {
+      db.findRegistrationForMutation.mockResolvedValue(
+        mutRow({ paymentStatus: "VERIFYING", totalAmount: 100 }),
+      );
+      await service.confirmPayment("reg1", { paymentStatus: "PARTIAL", paidAmount: 30 } as never);
+      expect(writtenPatch()).toMatchObject({ paymentStatus: "PARTIAL", paidAmount: 30 });
+      expect(writtenPatch().paidAt).toBeUndefined();
+    });
+
+    it("hands the access items it filled to the capacity handling", async () => {
+      db.settleRegistrationTxn.mockImplementationOnce(async (_tx: unknown, id: string) => {
+        const snapshot = {
+          paymentStatus: "PENDING",
+          paidAt: null,
+          paidAmount: 0,
+          totalAmount: 100,
+          sponsorshipAmount: 0,
+          priceBreakdown: emptyBreakdown(100),
+        };
+        return {
+          written: true,
+          eventId: "ev1",
+          before: snapshot,
+          after: { ...snapshot, paymentStatus: "PAID", paidAmount: 100 },
+          coveredAccessIds: [],
+          paidAccess: { incremented: ["acc1"], decremented: [] },
+          id,
+        };
+      });
+      await service.confirmPayment("reg1", { paymentStatus: "PAID" } as never);
+      expect(access.handleCapacityReached).toHaveBeenCalledWith("ev1", ["acc1"], expect.anything());
+    });
+
+    it("emits countsChanged for paid places moved without a settled flip (PARTIAL)", async () => {
+      db.settleRegistrationTxn.mockImplementationOnce(async () => {
+        const snapshot = {
+          paymentStatus: "PENDING",
+          paidAt: null,
+          paidAmount: 0,
+          totalAmount: 100,
+          sponsorshipAmount: 50,
+          priceBreakdown: emptyBreakdown(100),
+        };
+        return {
+          written: true,
+          eventId: "ev1",
+          before: snapshot,
+          after: { ...snapshot, paymentStatus: "PARTIAL", paidAmount: 20 },
+          coveredAccessIds: ["acc2"],
+          paidAccess: { incremented: ["acc2"], decremented: [] },
+        };
+      });
+      await service.confirmPayment("reg1", { paymentStatus: "PARTIAL", paidAmount: 20 } as never);
+      const counts = db.enqueueRealtimeOutboxEvent.mock.calls.find(
+        (c) => c[1].type === "eventAccess.countsChanged",
+      );
+      expect(counts?.[1].payload.accessIds).toContain("acc2");
+    });
+
+    it("maps a full access item to 409 ACCESS_CAPACITY_EXCEEDED", async () => {
+      const { AccessCapacityExceededError } = await import("@app/db");
+      db.settleRegistrationTxn.mockRejectedValueOnce(new AccessCapacityExceededError("acc1", "Gala", 0, 1));
+      await expect(
+        service.confirmPayment("reg1", { paymentStatus: "PAID" } as never),
+      ).rejects.toMatchObject({
+        code: ErrorCodes.ACCESS_CAPACITY_EXCEEDED,
+        statusCode: 409,
+        details: { remaining: 0, requested: 1 },
+      });
+      expect(db.insertAuditLog).not.toHaveBeenCalled();
+    });
   });
 
   // ---- uploadPaymentProof --------------------------------------------------
@@ -1393,6 +1594,11 @@ describe("RegistrationsService", () => {
         expect(db.applyRegistrationSettlement).not.toHaveBeenCalled();
         expect(storage.delete).toHaveBeenCalledTimes(1);
         expect(storage.delete).toHaveBeenCalledWith(uploadedKey());
+        // The re-check ran on the row read after the registration lock.
+        const [, reread] = db.findRegistrationWithFormEvent.mock.invocationCallOrder;
+        const [lock] = db.lockRegistrationForUpdate.mock.invocationCallOrder;
+        expect(lock).toBeLessThan(reread!);
+        expect(db.withLockingTxn).toHaveBeenCalledTimes(1);
       });
 
       it("deletes the proof the transaction replaced, not the one seen before the upload", async () => {
@@ -1500,6 +1706,17 @@ describe("RegistrationsService", () => {
       await expect(
         service.selectPaymentMethod("reg1", { paymentMethod: "CASH" } as never),
       ).rejects.toMatchObject({ code: "REG_8004", statusCode: 400 });
+      // VERIFYING → PENDING is in the transition table; the public path is stricter.
+      expect(db.applyRegistrationSettlement).not.toHaveBeenCalled();
+    });
+
+    it("checks PENDING on the row re-read under the registration lock", async () => {
+      db.findRegistrationWithFormEvent.mockResolvedValue(methodFetch());
+      await service.selectPaymentMethod("reg1", { paymentMethod: "CASH" } as never);
+      expect(db.withLockingTxn).toHaveBeenCalledTimes(1);
+      const [lock] = db.lockRegistrationForUpdate.mock.invocationCallOrder;
+      const [read] = db.findRegistrationWithFormEvent.mock.invocationCallOrder;
+      expect(lock).toBeLessThan(read!);
     });
   });
 

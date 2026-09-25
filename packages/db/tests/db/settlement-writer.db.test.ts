@@ -304,6 +304,40 @@ describe.runIf(dbTestsEnabled())("db tier: settlement writer", () => {
       expect(await paidCount(gala.id)).toBe(1);
     });
 
+    it("lets decide choose from the recomputed net, and rolls back when it throws", async () => {
+      const { gala, registration, usage } = await sponsoredFixture();
+      const seen: number[] = [];
+      // The stored usage (100) is stale: the recompute makes the net 0.
+      const refused = await withLockingTxn((tx) =>
+        settleRegistrationTxn(tx, registration.id, {
+          decide: ({ net, sponsorship, gross }) => {
+            seen.push(net, sponsorship, gross);
+            throw new Error("refused");
+          },
+        }),
+      ).catch((e: unknown) => e);
+      expect(refused).toMatchObject({ message: "refused" });
+      expect(seen).toEqual([0, 500, 500]);
+      const [storedUsage] = await getDb().select().from(sponsorshipUsages).where(eq(sponsorshipUsages.id, usage.id));
+      expect(storedUsage!.amountApplied).toBe(100);
+      expect(await readRegistration(registration.id)).toMatchObject({ paymentStatus: "PENDING", sponsorshipAmount: 0 });
+
+      const result = await withLockingTxn((tx) =>
+        settleRegistrationTxn(tx, registration.id, {
+          decide: ({ net }) => ({ paymentStatus: "WAIVED", paidAmount: net, paidAt: NOW }),
+          fields: { paymentReference: "W-1" },
+        }),
+      );
+      expect(result?.after).toMatchObject({ paymentStatus: "WAIVED", paidAmount: 0, paidAt: NOW, sponsorshipAmount: 500 });
+      expect(await readRegistration(registration.id)).toMatchObject({
+        paymentStatus: "WAIVED",
+        paidAmount: 0,
+        paidAt: NOW,
+        paymentReference: "W-1",
+      });
+      expect(await paidCount(gala.id)).toBe(1);
+    });
+
     it("returns null for a missing registration", async () => {
       expect(await withLockingTxn((tx) => settleRegistrationTxn(tx, "missing"))).toBeNull();
     });

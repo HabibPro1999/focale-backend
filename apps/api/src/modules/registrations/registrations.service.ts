@@ -39,6 +39,9 @@ import {
 } from "@app/shared";
 import {
   withTxn,
+  withLockingTxn,
+  lockRegistrationForUpdate,
+  settleRegistrationTxn,
   syncNetworkingRegistration,
   enqueueTriggeredEmailOutbox,
   applyRegistrationSettlement,
@@ -85,7 +88,7 @@ import {
   type RegistrationPaymentStatus,
   type RegistrationSettlementWrite,
 } from "@app/db";
-import { AccessService } from "../access/access.service";
+import { AccessService, toAccessAppException } from "../access/access.service";
 import { PricingService } from "../pricing/pricing.service";
 import { prepareFormDataForPricing } from "../pricing/form-data-for-pricing";
 import {
@@ -102,7 +105,10 @@ import { AppException } from "../../core/app-exception";
 import { CONFIG, type Config } from "../../core/config";
 import { assertPublicLinkBaseUrlAllowed } from "../../core/public-link-origin";
 import { logger } from "../../core/logger.service";
-import { validatePaymentTransition } from "./payment-transitions";
+import {
+  validateAdminPaymentOverride,
+  validatePaymentTransition,
+} from "./payment-transitions";
 import { getRegistrationTableColumns } from "./table-columns";
 import {
   enrichWithAccessSelections,
@@ -1000,8 +1006,13 @@ export class RegistrationsService {
     input: UpdateRegistrationInput,
     performedBy?: string,
   ): Promise<AdminRegistration> {
-    await withTxn(async (tx) => {
-      const registration = await findRegistrationForMutation(id, tx);
+    // Lock first so a concurrent confirmation or proof upload cannot be
+    // overwritten from a stale read (ADR 0001).
+    await withLockingTxn(async (tx) => {
+      const locked = await lockRegistrationForUpdate(tx, id);
+      const registration = locked
+        ? await findRegistrationForMutation(id, tx)
+        : null;
       if (!registration) {
         throw new AppException(
           ErrorCodes.REGISTRATION_NOT_FOUND,
@@ -1120,7 +1131,7 @@ export class RegistrationsService {
   }
 
   // ==========================================================================
-  // Admin full edit (override — no payment-transition validation)
+  // Admin full edit (override table: any status change but out of REFUNDED)
   // ==========================================================================
 
   async adminEditRegistration(
@@ -1129,8 +1140,13 @@ export class RegistrationsService {
     input: AdminEditRegistrationInput,
     adminUserId: string,
   ): Promise<AdminRegistration> {
-    await withTxn(async (tx) => {
-      const registration = await findRegistrationForMutation(id, tx);
+    // Lock first, then decide from the row re-read under the lock (ADR 0001):
+    // a concurrent confirmation is either seen or waits for this edit.
+    await withLockingTxn(async (tx) => {
+      const locked = await lockRegistrationForUpdate(tx, id);
+      const registration = locked
+        ? await findRegistrationForMutation(id, tx)
+        : null;
       if (!registration) {
         throw new AppException(
           ErrorCodes.REGISTRATION_NOT_FOUND,
@@ -1214,11 +1230,12 @@ export class RegistrationsService {
         changes.note = { old: registration.note, new: input.note };
       }
 
-      // Payment fields — NO transition validation (admin override).
+      // Payment fields — admin-override transitions (nothing leaves REFUNDED).
       if (
         input.paymentStatus !== undefined &&
         input.paymentStatus !== registration.paymentStatus
       ) {
+        validateAdminPaymentOverride(registration.paymentStatus, input.paymentStatus);
         settlement.paymentStatus = input.paymentStatus;
         changes.paymentStatus = {
           old: registration.paymentStatus,
@@ -2069,8 +2086,12 @@ export class RegistrationsService {
     performedBy?: string,
     ipAddress?: string,
   ): Promise<AdminRegistration> {
-    await withTxn(async (tx) => {
-      const old = await findRegistrationForMutation(id, tx);
+    // Lock first, then decide from the row re-read under the lock (ADR 0001):
+    // a concurrent proof upload, method selection or admin edit waits for this
+    // confirmation, or this one waits for it and sees its result.
+    await withLockingTxn(async (tx) => {
+      const locked = await lockRegistrationForUpdate(tx, id);
+      const old = locked ? await findRegistrationForMutation(id, tx) : null;
       if (!old) {
         throw new AppException(
           ErrorCodes.REGISTRATION_NOT_FOUND,
@@ -2086,36 +2107,55 @@ export class RegistrationsService {
 
       validatePaymentTransition(old.paymentStatus, input.paymentStatus);
 
-      const { netAmount } = calculateSettlement(old);
-      const effectivePaidAmount = input.paidAmount ?? netAmount;
-      if (effectivePaidAmount > netAmount) {
-        throw new AppException(
-          ErrorCodes.BAD_REQUEST,
-          "Paid amount cannot exceed registration total",
-          400,
-        );
-      }
-      // ponytail: legacy logger.warn on partial-amount confirm dropped (non-behavioral).
-
       const newStatus = input.paymentStatus;
-      const nextPaidAmount = effectivePaidAmount;
       const nextPaymentMethod = input.paymentMethod ?? old.paymentMethod;
-      const settlement: RegistrationSettlementWrite = {
-        paymentStatus: newStatus,
-        paidAmount: nextPaidAmount,
-      };
-      if (isFullySettled(newStatus)) {
-        settlement.paidAt = new Date();
-      }
-      await applyRegistrationSettlement(tx, {
-        registrationId: id,
-        settlement,
+      // Settle against the fresh breakdown: sponsorship usages recomputed, the
+      // paid amount checked against that net, paid places moved by the delta.
+      const settled = await settleRegistrationTxn(tx, id, {
+        decide: ({ net }) => {
+          const paidAmount = input.paidAmount ?? net;
+          if (paidAmount > net) {
+            throw new AppException(
+              ErrorCodes.BAD_REQUEST,
+              "Paid amount cannot exceed registration total",
+              400,
+            );
+          }
+          if (newStatus === "PAID" && paidAmount < net) {
+            throw new AppException(
+              ErrorCodes.PAID_AMOUNT_BELOW_DUE,
+              "Paid amount is below the amount due; confirm it as PARTIAL",
+              400,
+              { amountDue: net, paidAmount },
+            );
+          }
+          return {
+            paymentStatus: newStatus,
+            paidAmount,
+            ...(isFullySettled(newStatus) ? { paidAt: new Date() } : {}),
+          };
+        },
         fields: {
           paymentMethod: nextPaymentMethod,
           paymentReference: input.paymentReference ?? old.paymentReference,
           paymentProofUrl: input.paymentProofUrl ?? old.paymentProofUrl,
         },
+      }).catch((err: unknown) => {
+        throw toAccessAppException(err);
       });
+      if (!settled) {
+        throw new AppException(
+          ErrorCodes.REGISTRATION_NOT_FOUND,
+          "Registration not found",
+          404,
+        );
+      }
+      const nextPaidAmount = settled.after.paidAmount;
+      await this.access.handleCapacityReached(
+        old.eventId,
+        settled.paidAccess.incremented,
+        tx,
+      );
 
       await insertAuditLog(
         {
@@ -2133,13 +2173,6 @@ export class RegistrationsService {
         tx,
       );
 
-      await this.syncPaidCount(
-        tx,
-        { id, eventId: old.eventId, priceBreakdown: old.priceBreakdown },
-        old.paymentStatus,
-        input.paymentStatus,
-      );
-
       const wasSettled = isFullySettled(old.paymentStatus);
       const isSettled = isFullySettled(input.paymentStatus);
       const clientId = old.event.clientId;
@@ -2155,9 +2188,20 @@ export class RegistrationsService {
           ts: Date.now(),
         },
       ];
-      if (wasSettled !== isSettled) {
+      // Paid places can also move without a settled flip (PARTIAL with
+      // sponsorship-covered items), so the moved items count too.
+      const movedAccessIds = [
+        ...settled.paidAccess.incremented,
+        ...settled.paidAccess.decremented,
+      ];
+      if (wasSettled !== isSettled || movedAccessIds.length > 0) {
         const breakdown = old.priceBreakdown as PriceBreakdown;
-        const accessIds = breakdown.accessItems?.map((a) => a.accessId) ?? [];
+        const accessIds = [
+          ...new Set([
+            ...(breakdown.accessItems?.map((a) => a.accessId) ?? []),
+            ...movedAccessIds,
+          ]),
+        ];
         pending.push({
           type: "eventAccess.countsChanged",
           clientId,
@@ -2323,11 +2367,17 @@ export class RegistrationsService {
       );
     }
 
-    // 7. Second txn — re-validate post-upload state, then persist. Resolves with
-    //    the proof URL it replaced. On failure the row keeps the old proof and
-    //    the new object is removed.
-    const replacedUrl = await withTxn(async (tx) => {
-      const currentReg = await findRegistrationWithFormEvent(registrationId, tx);
+    // 7. Second txn — lock, re-read and re-validate the post-upload state, then
+    //    persist. The lock makes a concurrent confirmation either wait for this
+    //    write or be seen by the re-check (PAID → VERIFYING is refused), so a
+    //    confirmation is never overwritten. Resolves with the proof URL it
+    //    replaced. On failure the row keeps the old proof and the new object is
+    //    removed.
+    const replacedUrl = await withLockingTxn(async (tx) => {
+      const locked = await lockRegistrationForUpdate(tx, registrationId);
+      const currentReg = locked
+        ? await findRegistrationWithFormEvent(registrationId, tx)
+        : null;
       if (!currentReg) {
         throw new AppException(ErrorCodes.NOT_FOUND, "Registration not found", 404);
       }
@@ -2400,8 +2450,14 @@ export class RegistrationsService {
     registrationId: string,
     input: SelectPaymentMethodInput,
   ): Promise<void> {
-    await withTxn(async (tx) => {
-      const registration = await findRegistrationWithFormEvent(registrationId, tx);
+    // Lock, re-read, then re-check PENDING on the fresh row: a registration
+    // confirmed (or under proof review) meanwhile is refused, never reset to
+    // PENDING. The transition table alone would allow VERIFYING → PENDING.
+    await withLockingTxn(async (tx) => {
+      const locked = await lockRegistrationForUpdate(tx, registrationId);
+      const registration = locked
+        ? await findRegistrationWithFormEvent(registrationId, tx)
+        : null;
       if (!registration) {
         throw new AppException(ErrorCodes.NOT_FOUND, "Registration not found", 404);
       }

@@ -87,6 +87,8 @@ export const ErrorCodes = {
   REGISTRATION_VERIFYING_BLOCKED: "REG_8010",
   REGISTRATION_FULLY_SPONSORED_BLOCKED: "REG_8011",
   REGISTRATION_WAIVED_ACCESS_BLOCKED: "REG_8012",
+  // A PAID confirmation for less than the amount due (plan 2.6): confirm PARTIAL.
+  PAID_AMOUNT_BELOW_DUE: "REG_8013",
 
   // Form Validation (9xxx)
   FORM_VALIDATION_ERROR: "FRM_9001",
