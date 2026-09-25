@@ -61,6 +61,12 @@ export interface SettleRegistrationOptions {
    * they cover now.
    */
   coveredAccessIdsBefore?: Iterable<string>;
+  /**
+   * Without linked usages, keep the breakdown's own sponsorshipTotal (a code
+   * priced at signup but never linked). Default true; false when the caller
+   * just removed the last usage, so the sponsorship drops to 0.
+   */
+  keepUnlinkedSponsorship?: boolean;
   /** Other columns written in the same UPDATE. */
   fields?: RegistrationFieldsPatch;
   /** Settle only if updated_at still has this value; otherwise change nothing. */
@@ -126,17 +132,19 @@ async function readSettlementRow(tx: DbExecutor, registrationId: string) {
  * (calculateApplicableAmount), store the amounts that changed, and return
  * the sponsorship to apply and the access items the sponsorships cover.
  * Without usages the breakdown's own sponsorshipTotal (codes priced at
- * signup) is kept. Either way it is capped at the subtotal.
+ * signup) is kept unless `keepUnlinked` is false. Either way it is capped at
+ * the subtotal.
  */
 export async function recomputeRegistrationSponsorship(
   tx: DbExecutor,
   registrationId: string,
   priceBreakdown: PriceBreakdown,
+  keepUnlinked = true,
 ): Promise<{ sponsorship: number; coveredAccessIds: string[] }> {
   const usages = await findRegistrationUsagesForRecalc(registrationId, tx);
   const accessTypeIds = priceBreakdown.accessItems.map((item) => item.accessId);
   const covered = new Set<string>();
-  let sponsorship = usages.length === 0 ? priceBreakdown.sponsorshipTotal : 0;
+  let sponsorship = usages.length === 0 && keepUnlinked ? priceBreakdown.sponsorshipTotal : 0;
   for (const usage of usages) {
     for (const accessId of usage.sponsorship.coveredAccessIds) covered.add(accessId);
     const amountApplied = calculateApplicableAmount(usage.sponsorship, {
@@ -197,7 +205,12 @@ export async function settleRegistrationTxn(
 
   const repriced = options.priceBreakdown !== undefined;
   const grossBreakdown = options.priceBreakdown ?? before.priceBreakdown;
-  const { sponsorship, coveredAccessIds } = await recomputeRegistrationSponsorship(tx, registrationId, grossBreakdown);
+  const { sponsorship, coveredAccessIds } = await recomputeRegistrationSponsorship(
+    tx,
+    registrationId,
+    grossBreakdown,
+    options.keepUnlinkedSponsorship ?? true,
+  );
   const priceBreakdown = netBreakdown(grossBreakdown, sponsorship);
   const totalAmount = options.totalAmount ?? (repriced ? priceBreakdown.subtotal : before.totalAmount);
   const decision = options.decide?.({
