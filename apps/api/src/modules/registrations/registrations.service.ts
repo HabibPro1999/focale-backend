@@ -1395,6 +1395,7 @@ export class RegistrationsService {
         oldStatus: registration.paymentStatus,
         newStatus,
         emitCountsChanged: newStatus !== registration.paymentStatus || movedAccessIds.length > 0,
+        accessIds: [...new Set(movedAccessIds)],
       });
       await emitSettlementEvents(tx, pending);
     });

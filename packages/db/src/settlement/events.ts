@@ -23,7 +23,7 @@ export async function emitSettlementEvents(tx: DbExecutor, events: AppEvent[]): 
  * Event pair for a status-affecting change: registration.paymentConfirmed when
  * the registration newly reached a fully-settled status, else
  * registration.updated; plus eventAccess.countsChanged when access counts may
- * have moved.
+ * have moved (listing `accessIds` when the caller knows which).
  */
 export function settlementEventPair(args: {
   id: string;
@@ -32,8 +32,9 @@ export function settlementEventPair(args: {
   oldStatus: string;
   newStatus: string | undefined;
   emitCountsChanged: boolean;
+  accessIds?: string[];
 }): AppEvent[] {
-  const { id, eventId, clientId, oldStatus, newStatus, emitCountsChanged } = args;
+  const { id, eventId, clientId, oldStatus, newStatus, emitCountsChanged, accessIds = [] } = args;
   const statusChanged = newStatus !== undefined && newStatus !== oldStatus;
   const becameSettled = statusChanged && isFullySettled(newStatus) && !isFullySettled(oldStatus);
   const events: AppEvent[] = [
@@ -50,7 +51,7 @@ export function settlementEventPair(args: {
       type: "eventAccess.countsChanged",
       clientId,
       eventId,
-      payload: { id: eventId, accessIds: [] },
+      payload: { id: eventId, accessIds },
       ts: Date.now(),
     });
   }

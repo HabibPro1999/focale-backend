@@ -926,6 +926,10 @@ describe("RegistrationsService", () => {
       ]);
       expect(access.decrementAccessRegisteredCountTx.mock.calls).toEqual([["acc-b", 1, expect.anything()]]);
       expect(writtenPatch().accessTypeIds).toEqual(["acc-d", "acc-c", "acc-a"]);
+      const counts = db.enqueueRealtimeOutboxEvent.mock.calls
+        .map((call) => call[1])
+        .find((event) => event.type === "eventAccess.countsChanged");
+      expect(counts?.payload.accessIds).toEqual(["acc-a", "acc-b", "acc-d"]);
     });
 
     it("keeps VERIFYING while sponsorship settlement is recalculated", async () => {

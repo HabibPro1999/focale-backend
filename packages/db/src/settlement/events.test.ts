@@ -24,4 +24,15 @@ describe("settlementEventPair", () => {
     expect(events[0]?.payload).toEqual({ id: "reg1", paymentStatus: "PARTIAL" });
     expect(events[1]?.payload).toEqual({ id: "ev1", accessIds: [] });
   });
+
+  it("lists the access items that moved when given", () => {
+    const events = settlementEventPair({
+      ...base,
+      oldStatus: "PENDING",
+      newStatus: "PENDING",
+      emitCountsChanged: true,
+      accessIds: ["a", "b"],
+    });
+    expect(events[1]?.payload).toEqual({ id: "ev1", accessIds: ["a", "b"] });
+  });
 });
