@@ -5,6 +5,7 @@ export * from "./forms";
 export * from "./pricing";
 export * from "./access";
 export * from "./email";
+export * from "./email-realtime";
 export * from "./sponsorships";
 export * from "./registrations";
 export * from "./abstracts";

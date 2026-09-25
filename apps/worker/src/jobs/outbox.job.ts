@@ -35,7 +35,8 @@ interface SponsorshipEmailOutboxPayload {
  * registered — processOutboxEvents throws on them, routing to the normal
  * failure/retry/backoff path. `realtime.emit` is deliberately absent: it is
  * scoped to the api process, and with `scope: "background"` those rows are
- * never claimed here (they pile up if realtime is disabled — legacy parity).
+ * never claimed here (with REALTIME_DISABLED none are written; the retention
+ * job deletes realtime rows older than 24 h).
  */
 export function buildOutboxHandlers(): OutboxHandlerRegistry {
   return {

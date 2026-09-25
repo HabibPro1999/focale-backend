@@ -119,15 +119,15 @@ export class RealtimeController {
       }
     };
 
-    // Replay after Last-Event-ID (set by fetch-event-source on reconnect).
-    // Drained from the buffer snapshot BEFORE subscribing, so no double-delivery
-    // or dropped-event window.
+    // Replay after Last-Event-ID (set by fetch-event-source on reconnect)
+    // from this tenant's replay ring. Drained from the buffer snapshot BEFORE
+    // subscribing, so no double-delivery or dropped-event window.
     const lastEventId = req.headers["last-event-id"];
     if (typeof lastEventId === "string" && lastEventId.length > 0) {
-      if (eventBus.hasReplayGap(lastEventId)) {
+      if (eventBus.hasReplayGap(lastEventId, scopedClientId)) {
         await sse.send({ event: "replay-gap", data: { lastEventId } });
       }
-      const buffered = eventBus.getSince(lastEventId);
+      const buffered = eventBus.getSince(lastEventId, scopedClientId);
       for (const { id, ev } of buffered) {
         if (matches(ev)) sendFrame(id, ev);
       }
