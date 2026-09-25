@@ -6,10 +6,8 @@ import { NetworkingAdminService } from "./networking.admin.service";
 import { NetworkingSocialService } from "./networking.social.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
 import type { NetworkingContext } from "./networking.service";
-import { csvCell } from "./networking.policy";
-const csv = (headers: string[], rows: unknown[][]) =>
-  "\uFEFF" +
-  [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
+import { toCsv } from "@app/shared";
+const csv = (headers: string[], rows: unknown[][]) => toCsv([headers, ...rows]);
 const escapeIcs = (value: string) =>
   value
     .replaceAll("\\", "\\\\")

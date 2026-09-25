@@ -7,7 +7,14 @@ import {
   getCheckInReportData,
   withExportStatementTimeout,
 } from "@app/db";
-import { escapeExcelFormula, escapeExcelRow } from "./excel-safety";
+import {
+  formatDate,
+  formatDateTime,
+  formatFileDate,
+  formatTime,
+  uniqueFileName,
+  uniqueSheetName,
+} from "@app/shared";
 
 /**
  * Build a styled Excel workbook summarising total registrations,
@@ -93,14 +100,14 @@ export async function generateEventSummary(
 
   sheet.mergeCells(`A${row}:C${row}`);
   const titleCell = sheet.getCell(`A${row}`);
-  titleCell.value = escapeExcelFormula(event!.name);
+  titleCell.value = event!.name;
   titleCell.font = { bold: true, size: 16, color: { argb: "FF1F4E79" } };
   titleCell.alignment = { horizontal: "center" };
   row++;
 
   sheet.mergeCells(`A${row}:C${row}`);
   const dateCell = sheet.getCell(`A${row}`);
-  dateCell.value = `Report generated: ${new Date().toLocaleDateString("fr-FR")}`;
+  dateCell.value = `Report generated: ${formatDate(new Date())}`;
   dateCell.font = { italic: true, size: 10, color: { argb: "FF666666" } };
   dateCell.alignment = { horizontal: "center" };
   row += 2;
@@ -108,7 +115,7 @@ export async function generateEventSummary(
   const addSectionHeader = (title: string) => {
     sheet.mergeCells(`A${row}:C${row}`);
     const cell = sheet.getCell(`A${row}`);
-    cell.value = escapeExcelFormula(title);
+    cell.value = title;
     cell.fill = headerFill;
     cell.font = headerFont;
     cell.border = border;
@@ -121,11 +128,11 @@ export async function generateEventSummary(
     opts?: { bold?: boolean; indent?: boolean },
   ) => {
     const labelCell = sheet.getCell(`A${row}`);
-    labelCell.value = escapeExcelFormula(opts?.indent ? `  - ${label}` : label);
+    labelCell.value = opts?.indent ? `  - ${label}` : label;
     if (opts?.bold) labelCell.font = { bold: true, size: 11 };
     labelCell.border = border;
     const valCell = sheet.getCell(`B${row}`);
-    valCell.value = escapeExcelFormula(value);
+    valCell.value = value;
     if (opts?.bold) valCell.font = { bold: true, size: 14 };
     valCell.border = border;
     row++;
@@ -134,7 +141,7 @@ export async function generateEventSummary(
   const addTableHeader = (cols: string[]) => {
     cols.forEach((col, i) => {
       const cell = sheet.getRow(row).getCell(i + 1);
-      cell.value = escapeExcelFormula(col);
+      cell.value = col;
       cell.fill = subHeaderFill;
       cell.font = subHeaderFont;
       cell.border = border;
@@ -143,9 +150,9 @@ export async function generateEventSummary(
   };
 
   const addAccessRow = (name: string, type: string, count: number) => {
-    sheet.getCell(`A${row}`).value = escapeExcelFormula(name);
+    sheet.getCell(`A${row}`).value = name;
     sheet.getCell(`A${row}`).border = border;
-    sheet.getCell(`B${row}`).value = escapeExcelFormula(type);
+    sheet.getCell(`B${row}`).value = type;
     sheet.getCell(`B${row}`).border = border;
     sheet.getCell(`C${row}`).value = count;
     sheet.getCell(`C${row}`).border = border;
@@ -191,7 +198,7 @@ export async function generateEventSummary(
   sheet.getColumn(3).width = 15;
 
   const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
-  const timestamp = new Date().toISOString().split("T")[0];
+  const timestamp = formatFileDate();
 
   return {
     filename: `${event!.slug}-summary-${timestamp}.xlsx`,
@@ -250,14 +257,13 @@ export async function generateAccessRegistrantsReport(
     "Date d'inscription",
   ];
 
-  // ponytail: zero access items -> workbook with zero worksheets (invalid xlsx).
-  // Kept as legacy behaviour (documented trap), not guarded.
+  // One sheet per access item; names are made valid and unique (Excel rejects
+  // duplicates, e.g. two names equal after truncation to 31 characters).
+  const sheetNames = new Set<string>();
   for (const access of accessItems) {
-    // Excel sheet names max 31 chars, no special chars. Collision on truncation
-    // is unhandled — kept as legacy behaviour.
-    const sheetName = access.name.replace(/[\\/*?[\]:]/g, "").slice(0, 31);
-
-    const sheet = workbook.addWorksheet(sheetName);
+    const sheet = workbook.addWorksheet(
+      uniqueSheetName(access.name, sheetNames, "Accès"),
+    );
 
     const headerRow = sheet.addRow(columns);
     headerRow.eachCell((cell) => {
@@ -272,15 +278,15 @@ export async function generateAccessRegistrantsReport(
 
     for (const reg of accessRegs) {
       const dataRow = sheet.addRow(
-        escapeExcelRow([
+        [
           reg.lastName ?? "",
           reg.firstName ?? "",
           reg.email,
           reg.phone ?? "",
           PAYMENT_STATUS_FR[reg.paymentStatus] ?? reg.paymentStatus,
           reg.totalAmount,
-          reg.submittedAt.toLocaleDateString("fr-FR"),
-        ]),
+          formatDate(reg.submittedAt),
+        ],
       );
       dataRow.eachCell((cell) => {
         cell.border = border;
@@ -295,9 +301,13 @@ export async function generateAccessRegistrantsReport(
     sheet.getColumn(6).width = 12;
     sheet.getColumn(7).width = 18;
   }
+  if (accessItems.length === 0) {
+    // A workbook needs at least one sheet to open.
+    workbook.addWorksheet("Accès").addRow(["Aucun accès pour cet événement."]);
+  }
 
   const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
-  const timestamp = new Date().toISOString().split("T")[0];
+  const timestamp = formatFileDate();
 
   return {
     filename: `${event!.slug}-acces-inscrits-${timestamp}.xlsx`,
@@ -308,10 +318,6 @@ export async function generateAccessRegistrantsReport(
 // ============================================================================
 // Sponsorships Report (flat sheet)
 // ============================================================================
-
-export function formatDateTime(date: Date): string {
-  return date.toLocaleString("fr-FR");
-}
 
 function getLabTotalKey(labName: string): string {
   return labName.trim().toLowerCase();
@@ -349,7 +355,7 @@ export async function generateSponsorshipsReport(
 
   const sheet = workbook.addWorksheet("Sponsorships");
 
-  const titleRow = sheet.addRow([escapeExcelFormula(event?.name ?? "Sponsorships")]);
+  const titleRow = sheet.addRow([event?.name ?? "Sponsorships"]);
   sheet.mergeCells(`A${titleRow.number}:R${titleRow.number}`);
   titleRow.getCell(1).font = {
     bold: true,
@@ -359,7 +365,7 @@ export async function generateSponsorshipsReport(
   titleRow.getCell(1).alignment = { horizontal: "center" };
 
   const generatedRow = sheet.addRow([
-    `Report generated: ${new Date().toLocaleDateString("fr-FR")}`,
+    `Report generated: ${formatDate(new Date())}`,
   ]);
   sheet.mergeCells(`A${generatedRow.number}:R${generatedRow.number}`);
   generatedRow.getCell(1).font = {
@@ -451,7 +457,7 @@ export async function generateSponsorshipsReport(
       .join(" | ");
 
     const dataRow = sheet.addRow(
-      escapeExcelRow([
+      [
         sponsorship.code,
         sponsorship.batch.labName,
         sponsorship.batch.contactName,
@@ -471,7 +477,7 @@ export async function generateSponsorshipsReport(
         linkedRegistrations,
         amountApplied,
         appliedDates,
-      ]),
+      ],
     );
 
     dataRow.eachCell((cell) => {
@@ -497,7 +503,7 @@ export async function generateSponsorshipsReport(
   });
 
   const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
-  const timestamp = new Date().toISOString().split("T")[0];
+  const timestamp = formatFileDate();
 
   return {
     filename: `${event?.slug ?? "event"}-sponsorships-${timestamp}.xlsx`,
@@ -540,7 +546,7 @@ function buildCheckInSheet(
     checkedInAt: Date | null;
   }[],
 ): void {
-  const titleRow = sheet.addRow([escapeExcelFormula(title)]);
+  const titleRow = sheet.addRow([title]);
   sheet.mergeCells(`A${titleRow.number}:I${titleRow.number}`);
   titleRow.getCell(1).font = {
     bold: true,
@@ -550,7 +556,7 @@ function buildCheckInSheet(
   titleRow.getCell(1).alignment = { horizontal: "center" };
 
   const generatedRow = sheet.addRow([
-    `Generated: ${new Date().toLocaleDateString("fr-FR")}`,
+    `Generated: ${formatDate(new Date())}`,
   ]);
   sheet.mergeCells(`A${generatedRow.number}:I${generatedRow.number}`);
   generatedRow.getCell(1).font = {
@@ -591,15 +597,12 @@ function buildCheckInSheet(
     let dateStr = "";
     let timeStr = "";
     if (r.checkedInAt) {
-      dateStr = r.checkedInAt.toLocaleDateString("fr-FR");
-      timeStr = r.checkedInAt.toLocaleTimeString("fr-FR", {
-        hour: "2-digit",
-        minute: "2-digit",
-      });
+      dateStr = formatDate(r.checkedInAt);
+      timeStr = formatTime(r.checkedInAt);
     }
 
     const dataRow = sheet.addRow(
-      escapeExcelRow([
+      [
         r.referenceNumber ?? "",
         r.lastName ?? "",
         r.firstName ?? "",
@@ -609,7 +612,7 @@ function buildCheckInSheet(
         r.checkedIn ? "✓" : "✗",
         dateStr,
         timeStr,
-      ]),
+      ],
     );
 
     dataRow.eachCell((cell) => {
@@ -633,14 +636,6 @@ function buildCheckInSheet(
   widths.forEach((w, i) => (sheet.getColumn(i + 1).width = w));
 }
 
-function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/gi, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 50);
-}
-
 export async function generateCheckInReport(
   eventId: string,
 ): Promise<{ filename: string; data: Buffer }> {
@@ -649,7 +644,7 @@ export async function generateCheckInReport(
   );
 
   const zip = new JSZip();
-  const timestamp = new Date().toISOString().split("T")[0];
+  const timestamp = formatFileDate();
   const eventSlug = event?.slug ?? "event";
   const eventName = event?.name ?? "Event";
 
@@ -676,11 +671,13 @@ export async function generateCheckInReport(
   );
 
   const globalBuffer = Buffer.from(await globalWorkbook.xlsx.writeBuffer());
-  zip.file(`${eventSlug}-global-checkin.xlsx`, globalBuffer);
+  const globalEntry = `${eventSlug}-global-checkin.xlsx`;
+  zip.file(globalEntry, globalBuffer);
+  // Entry names are unique: two access names with the same slug, or names
+  // with no ASCII letters (e.g. Arabic), no longer overwrite each other.
+  const entryNames = new Set([globalEntry.toLowerCase()]);
 
   // ── 2. Per-access check-in sheets ─────────────────────────────────────────
-  // ponytail: two access names slugifying to the same string overwrite each
-  // other's zip entry (last write wins) — kept as legacy behaviour.
 
   for (const access of accessItems) {
     const accessRegs = registrations.filter((r) =>
@@ -711,7 +708,7 @@ export async function generateCheckInReport(
     );
 
     const buf = Buffer.from(await wb.xlsx.writeBuffer());
-    zip.file(`${slugify(access.name)}-checkin.xlsx`, buf);
+    zip.file(uniqueFileName(access.name, "-checkin.xlsx", entryNames, "access"), buf);
   }
 
   const zipBuffer = (await zip.generateAsync({ type: "nodebuffer" })) as Buffer;

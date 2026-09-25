@@ -163,8 +163,10 @@ describe("exportAbstractsWorkbook", () => {
       "Modifié le (auteur)",
     ]);
 
-    // Row 2 = abstract A (3 scored reviews) — title starting with "=" must be escaped.
-    expect(sheet.getCell("B2").value).toBe("'=SUM(A1:A2)");
+    // Row 2 = abstract A (3 scored reviews) — a title starting with "=" stays a
+    // plain text cell, never a formula, and shows as written.
+    expect(sheet.getCell("B2").value).toBe("=SUM(A1:A2)");
+    expect(sheet.getCell("B2").type).toBe(ExcelJS.ValueType.String);
     expect(sheet.getCell("N2").value).toBe(3); // Nb évaluateurs
 
     // Row 3 = abstract B (1 of 2 reviews scored).

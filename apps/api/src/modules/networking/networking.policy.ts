@@ -90,10 +90,5 @@ export function networkingPublicProfile<T extends Record<string, unknown>>(
   } = profile;
   return safe;
 }
-export function csvCell(value: unknown) {
-  let text = String(value ?? "");
-  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
-  return `"${text.replace(/"/g, '""')}"`;
-}
 
 export { normalizeNetworkingSearch, networkingSearchMatches } from "@app/db";
