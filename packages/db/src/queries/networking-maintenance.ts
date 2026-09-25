@@ -1,15 +1,10 @@
-import { eq, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { getDb } from "../client";
-import { rowsOf } from "../helpers";
-import { withSerializableTxn } from "../txn";
-import { networkingAllocationLocks, networkingProfiles } from "../schema/networking";
 import { expireNetworkingProposals, sweepReleasedNetworkingReservations } from "./networking-meetings";
+import { purgeExpiredNetworkingEvents } from "./networking-retention";
 
 /** Each reminder and its in-app record are committed by one statement, with delivery dedupe winning races. */
-export async function maintainNetworkingLifecycle(
-  eventId?: string,
-  onAfterPurge?: (profiles: { id: string; eventId: string; photoUrl: string | null }[]) => Promise<void>,
-) {
+export async function maintainNetworkingLifecycle(eventId?: string) {
   const db = getDb();
   const scope = eventId ? sql`AND event_id=${eventId}` : sql``;
   await expireNetworkingProposals(eventId, db);
@@ -103,32 +98,7 @@ export async function maintainNetworkingLifecycle(
   await db.execute(
     sql`DELETE FROM networking_sessions WHERE (expires_at<now()-interval '1 day' OR revoked_at<now()-interval '1 day') ${scope}`,
   );
-  const expired = rowsOf<{ event_id: string }>(
-    await db.execute(
-      sql`SELECT c.event_id FROM networking_configs c JOIN events e ON e.id=c.event_id WHERE EXISTS (SELECT 1 FROM networking_profiles p WHERE p.event_id=c.event_id) AND e.end_date+COALESCE((c.config->>'retentionDays')::int,90)*interval '1 day'<now() ${eventId ? sql`AND c.event_id=${eventId}` : sql``}`,
-    ),
-  );
-  for (const { event_id } of expired) {
-    // SERIALIZABLE with retries, like every networking write: a concurrent
-    // participant write either commits first or retries after the purge.
-    const profiles = await withSerializableTxn(async (tx) => {
-      await tx.execute(
-        sql`UPDATE networking_configs SET config=jsonb_set(config,'{enabled}','false'::jsonb),updated_at=now() WHERE event_id=${event_id}`,
-      );
-      // photoUrl is the profile's only managed asset; preserve it before cascading deletion.
-      const profiles = await tx
-        .select({ id: networkingProfiles.id, eventId: networkingProfiles.eventId, photoUrl: networkingProfiles.photoUrl })
-        .from(networkingProfiles)
-        .where(eq(networkingProfiles.eventId, event_id));
-      await tx
-        .delete(networkingProfiles)
-        .where(eq(networkingProfiles.eventId, event_id));
-      await tx
-        .delete(networkingAllocationLocks)
-        .where(eq(networkingAllocationLocks.eventId, event_id));
-      return profiles;
-    });
-    // Best effort after commit: no durable retries; a crash or cleanup failure can orphan photos.
-    await onAfterPurge?.(profiles);
-  }
+  // Events past retention are purged in batches within a time budget; an
+  // unfinished purge resumes on the next run. Photos go through the outbox.
+  await purgeExpiredNetworkingEvents({ eventId });
 }

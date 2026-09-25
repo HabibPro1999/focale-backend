@@ -29,6 +29,7 @@ import {
   getNetworkingConfig,
   networkingFormField,
   networkingMeetingIs,
+  networkingRetentionEnded,
   networkingStore,
   networkingTransaction,
   revokeNetworkingSessions,
@@ -115,6 +116,17 @@ export class NetworkingAdminService {
         throw invalid("Closing date must follow opening date");
       const event = await store.one("events", { id: eventId });
       if (!event) throw new NotFoundException("Event not found");
+      // Re-enabling after retention would let registration sync copy personal data back
+      // in; once the purge has started, the event can never be enabled again.
+      if (
+        config.enabled &&
+        (current?.purgeStartedAt ||
+          (current?.config?.enabled !== true && networkingRetentionEnded(event.endDate, config.retentionDays)))
+      )
+        throw new ConflictException({
+          code: "NETWORKING_RETENTION_ENDED",
+          message: "The networking retention period of this event has ended; it cannot be enabled again",
+        });
       if (config.openingHours.some((window) => {
         let start: number, end: number;
         try {

@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
   forms: [] as any[],
   profile: null as Record<string, unknown> | null,
   meeting: null as Record<string, unknown> | null,
+  event: null as Record<string, unknown> | null,
   tx: { executor: "transaction" },
   transition: vi.fn(),
   delete: vi.fn(),
@@ -17,11 +18,12 @@ const state = vi.hoisted(() => ({
   tail: Promise.resolve() as Promise<unknown>,
 }));
 vi.mock("@app/db", async (original) => {
-  const { networkingMeetingIs } = await original<typeof import("@app/db")>();
+  const { networkingMeetingIs, networkingRetentionEnded } = await original<typeof import("@app/db")>();
   const store = {
     one: async (kind: string) => {
       if (kind === "profiles" && state.profile) return state.profile;
       if (kind === "meetings") return state.meeting;
+      if (kind === "events" && state.event) return state.event;
       if (kind === "configs") {
         if (state.requireTransaction) expect(state.transaction).toBe(true);
         return state.row;
@@ -42,6 +44,7 @@ vi.mock("@app/db", async (original) => {
   };
   return {
     networkingMeetingIs,
+    networkingRetentionEnded,
     transitionNetworkingMeetings: state.transition,
     syncNetworkingEvent: state.sync,
     networkingFormField: (schema: { fields?: { id: string }[] }, id: string) => schema.fields?.find((field) => field.id === id),
@@ -72,13 +75,15 @@ import type { NetworkingMeetingsService } from "./networking.meetings.service";
 const service = new NetworkingAdminService({} as NetworkingService, {} as NetworkingMeetingsService);
 const revision = "2030-01-01T00:00:00.000Z";
 beforeEach(() => {
-  state.row = { eventId: "event", config: NetworkingConfigSchema.parse({}), createdAt: new Date(revision), updatedAt: new Date(revision) };
+  state.row = { eventId: "event", config: NetworkingConfigSchema.parse({}), createdAt: new Date(revision), updatedAt: new Date(revision), purgeStartedAt: null, purgedAt: null };
   state.transaction = false;
   state.requireTransaction = false;
   state.audits = [];
   state.deliveries = [];
   state.forms = [];
   state.profile = null;
+  state.event = null;
+  vi.mocked(assertClientModuleEnabled).mockClear();
   state.delete.mockReset();
   state.sync.mockReset();
   state.tail = Promise.resolve();
@@ -157,6 +162,56 @@ describe("NetworkingAdminService config", () => {
   ])("rejects invalid instants/windows with a validation code: %j", async (patch) => {
     await expect(service.config("event", patch)).rejects.toMatchObject({ status: 400, response: { code: "NETWORKING_VALIDATION" } });
     expect(state.audits).toEqual([]);
+  });
+});
+
+describe("NetworkingAdminService config after retention (4.4)", () => {
+  const DAY = 86_400_000;
+  const ended = (daysAgo: number) => ({
+    id: "event", clientId: "client",
+    startDate: new Date(Date.now() - (daysAgo + 1) * DAY), endDate: new Date(Date.now() - daysAgo * DAY),
+  });
+  const stored = (config: Record<string, unknown>, extra: Record<string, unknown> = {}) => {
+    state.row = {
+      eventId: "event", config: NetworkingConfigSchema.parse({ meetingsEnabled: false, ...config }),
+      createdAt: new Date(revision), updatedAt: new Date(revision), purgeStartedAt: null, purgedAt: null, ...extra,
+    } as NetworkingRow<"configs">;
+  };
+  const refused = { status: 409, response: { code: "NETWORKING_RETENTION_ENDED" } };
+
+  it("refuses to re-enable once retention has ended, without writing", async () => {
+    state.event = ended(100);
+    stored({ enabled: false, retentionDays: 90 });
+    const before = state.row;
+    await expect(service.config("event", { enabled: true }, "admin")).rejects.toMatchObject(refused);
+    // Raising retentionDays in the same request cannot bring back an event whose new limit has passed too.
+    await expect(service.config("event", { enabled: true, retentionDays: 99 }, "admin")).rejects.toMatchObject(refused);
+    expect(state.row).toBe(before);
+    expect(state.audits).toEqual([]);
+    expect(state.sync).not.toHaveBeenCalled();
+  });
+
+  it("refuses to enable at all once the purge has started, even inside the retention period", async () => {
+    state.event = ended(1);
+    stored({ enabled: false, retentionDays: 90 }, { purgeStartedAt: new Date() });
+    await expect(service.config("event", { enabled: true }, "admin")).rejects.toMatchObject(refused);
+    stored({ enabled: true, retentionDays: 90 }, { purgeStartedAt: new Date(), purgedAt: new Date() });
+    await expect(service.config("event", { logoUrl: "https://example.test/logo.png" }, "admin")).rejects.toMatchObject(refused);
+  });
+
+  it("still saves edits that do not enable networking after retention", async () => {
+    state.event = ended(100);
+    stored({ enabled: false, retentionDays: 90 }, { purgeStartedAt: new Date() });
+    await expect(service.config("event", { logoUrl: "https://example.test/logo.png" }, "admin")).resolves.toMatchObject({ enabled: false });
+    // An already-enabled event (purge not started yet) keeps accepting edits; the purge disables it.
+    stored({ enabled: true, retentionDays: 90 });
+    await expect(service.config("event", { welcomeMessage: "Hello" }, "admin")).resolves.toMatchObject({ enabled: true });
+  });
+
+  it("allows extending retention and enabling before the purge started, while the new limit is ahead", async () => {
+    state.event = ended(100);
+    stored({ enabled: false, retentionDays: 90 });
+    await expect(service.config("event", { enabled: true, retentionDays: 365 }, "admin")).resolves.toMatchObject({ enabled: true, retentionDays: 365 });
   });
 });
 

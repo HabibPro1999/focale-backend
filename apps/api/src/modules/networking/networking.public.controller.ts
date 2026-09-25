@@ -25,6 +25,7 @@ import { ErrorCodes, networkingProfileComplete } from "@app/contracts";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import {
   cancelNetworkingParticipantMeetings,
+  enqueueNetworkingPhotoDeletes,
   networkingDirectoryFacets,
   listNetworkingNotifications,
   recordNetworkingProfileView,
@@ -542,7 +543,7 @@ export class NetworkingPublicController {
     @Req() req: FastifyRequest,
   ) {
     const ctx = await this.context(slug, req, { allowConsentPending: true });
-    const photoUrl = await networkingTransaction(ctx.event.id, async (store, db) => {
+    await networkingTransaction(ctx.event.id, async (store, db) => {
       const current = await store.one("profiles", { eventId: ctx.event.id, id: ctx.profile.id });
       // The in-transaction row is authoritative; a null photo override stops sync restoring a form photo.
       await store.update(
@@ -563,10 +564,15 @@ export class NetworkingPublicController {
       });
       // One UPDATE … RETURNING over this participant's active meetings; notices never name the other side (K5).
       await cancelNetworkingParticipantMeetings(ctx.profile.id, ctx.event.id, db, { slug: ctx.event.slug });
-      return current?.photoUrl;
+      // Durable: the photo's storage.delete commits with the withdrawal and the worker retries it;
+      // the handler deletes only a key under the participant's own upload prefix.
+      await enqueueNetworkingPhotoDeletes(
+        db,
+        [{ id: ctx.profile.id, eventId: ctx.event.id, photoUrl: current?.photoUrl }],
+        "networking.withdrawal",
+      );
     });
     networkingIdentityCache.forgetProfile(ctx.profile.id);
-    await this.uploads.deletePhoto(photoUrl, ctx.event.id, ctx.profile.id);
     return { withdrawn: true };
   }
   @Get("stream") @SkipEnvelope() async stream(
