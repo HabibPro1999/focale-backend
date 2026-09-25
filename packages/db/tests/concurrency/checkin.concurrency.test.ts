@@ -6,6 +6,7 @@ import {
   batchCheckIn,
   checkInRegistration,
   createAccessCheckIn,
+  forms,
   getDb,
   outboxEvents,
   registrations,
@@ -14,7 +15,7 @@ import {
 } from "@app/db";
 import { dbTestsEnabled } from "../helpers/test-env";
 import { cleanupDatabase } from "../helpers/cleanup";
-import { seedEvent, seedEventAccess, seedRegistration } from "../helpers/factories";
+import { seedEvent, seedEventAccess, seedForm, seedRegistration } from "../helpers/factories";
 
 // Check-in writes (2.10). The event-level write is a CAS on registrations
 // (checked_in_at IS NULL AND a fully settled payment status), the access-level
@@ -53,8 +54,21 @@ describe.runIf(dbTestsEnabled())("concurrency: check-in", () => {
       );
   }
 
+  // One registration form per event (forms are unique per event and type).
+  async function registrationIn(
+    eventId: string,
+    overrides: Parameters<typeof seedRegistration>[0] = {},
+  ) {
+    const [form] = await getDb()
+      .select({ id: forms.id })
+      .from(forms)
+      .where(eq(forms.eventId, eventId));
+    const formId = form?.id ?? (await seedForm({ eventId })).id;
+    return seedRegistration({ eventId, formId, ...overrides });
+  }
+
   async function paidRegistration(eventId: string) {
-    return seedRegistration({ eventId, paymentStatus: "PAID" });
+    return registrationIn(eventId, { paymentStatus: "PAID" });
   }
 
   function onlyWinner(results: CheckInWriteResult[]) {
@@ -98,8 +112,7 @@ describe.runIf(dbTestsEnabled())("concurrency: check-in", () => {
   it("parallel access-level check-ins produce one row and one audit row", async () => {
     const event = await seedEvent();
     const access = await seedEventAccess({ eventId: event.id });
-    const registration = await seedRegistration({
-      eventId: event.id,
+    const registration = await registrationIn(event.id, {
       paymentStatus: "PAID",
       accessTypeIds: [access.id],
     });
@@ -130,7 +143,7 @@ describe.runIf(dbTestsEnabled())("concurrency: check-in", () => {
   it("the CAS refuses a registration that is not fully settled or belongs to another event", async () => {
     const event = await seedEvent();
     const other = await seedEvent();
-    const pending = await seedRegistration({ eventId: event.id, paymentStatus: "PENDING" });
+    const pending = await registrationIn(event.id, { paymentStatus: "PENDING" });
     const elsewhere = await paidRegistration(other.id);
     const input = (registrationId: string) => ({
       registrationId,
@@ -158,7 +171,7 @@ describe.runIf(dbTestsEnabled())("concurrency: check-in", () => {
     const regs: Array<{ id: string }> = [];
     for (let i = 0; i < 12; i++) {
       regs.push(
-        await seedRegistration({ eventId: event.id, paymentStatus: "PAID", accessTypeIds: [access.id] }),
+        await registrationIn(event.id, { paymentStatus: "PAID", accessTypeIds: [access.id] }),
       );
     }
     const items = (by: string): BatchCheckInItem[] =>
