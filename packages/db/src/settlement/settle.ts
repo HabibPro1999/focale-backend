@@ -49,11 +49,12 @@ export interface SettleRegistrationOptions {
   paidAt?: Date | null;
   /**
    * Decide the status (and paid amount/date) from the amounts recomputed
-   * under the lock, e.g. to validate a payment against the fresh net. Takes
-   * precedence over paymentStatus/paidAmount/paidAt. Throwing aborts the
-   * settlement; the caller's transaction then rolls back.
+   * under the lock, e.g. to validate a payment or a price change against the
+   * fresh net. A returned decision takes precedence over
+   * paymentStatus/paidAmount/paidAt; returning nothing keeps them. Throwing
+   * aborts the settlement; the caller's transaction then rolls back.
    */
-  decide?: (state: SettlementDecisionInput) => SettlementDecision;
+  decide?: (state: SettlementDecisionInput) => SettlementDecision | undefined;
   /**
    * Access items sponsorships covered before this change, when the caller
    * changed the registration's sponsorship usages first. Defaults to what
@@ -79,7 +80,8 @@ export interface SettlementDecisionInput {
 }
 
 export interface SettlementDecision {
-  paymentStatus: RegistrationPaymentStatus;
+  /** An explicit status; when omitted it is derived from the amounts and the paid amount below. */
+  paymentStatus?: RegistrationPaymentStatus;
   /** Written when given; otherwise the stored paid amount is kept. */
   paidAmount?: number;
   /** Written when given; otherwise the stored paid_at is kept. */
@@ -204,17 +206,19 @@ export async function settleRegistrationTxn(
     sponsorship,
     net: Math.max(0, totalAmount - sponsorship),
   });
-  const explicitPaidAmount = decision ? decision.paidAmount : options.paidAmount;
+  const chosen: SettlementDecision = decision ?? {
+    paymentStatus: options.paymentStatus,
+    paidAmount: options.paidAmount,
+    paidAt: options.paidAt,
+  };
+  const explicitPaidAmount = chosen.paidAmount;
   const paidAmount = explicitPaidAmount ?? before.paidAmount;
 
   let paymentStatus: RegistrationPaymentStatus;
   let paidAt: Date | null;
-  if (decision) {
-    paymentStatus = decision.paymentStatus;
-    paidAt = decision.paidAt !== undefined ? decision.paidAt : before.paidAt;
-  } else if (options.paymentStatus !== undefined) {
-    paymentStatus = options.paymentStatus;
-    paidAt = options.paidAt !== undefined ? options.paidAt : before.paidAt;
+  if (chosen.paymentStatus !== undefined) {
+    paymentStatus = chosen.paymentStatus;
+    paidAt = chosen.paidAt !== undefined ? chosen.paidAt : before.paidAt;
   } else {
     const derived = deriveSettlement({
       gross: totalAmount,

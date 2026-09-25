@@ -18,6 +18,7 @@ const db = vi.hoisted(() => ({
   withLockingTxn: vi.fn(),
   lockRegistrationForUpdate: vi.fn(),
   applyRegistrationSettlement: vi.fn(),
+  settleRegistrationTxn: vi.fn(),
   emitSettlementEvents: vi.fn(),
   findClientModuleState: vi.fn(),
   findActiveRegistrationFormById: vi.fn(),
@@ -45,6 +46,27 @@ vi.mock("@app/db", async (importOriginal) => ({
   ...db,
 }));
 
+// settleRegistrationTxn for a registration without sponsorship usages (the
+// real one is DB-tested): the repriced breakdown and gross, the stored
+// status, one writer call.
+db.settleRegistrationTxn.mockImplementation(
+  async (
+    tx: unknown,
+    registrationId: string,
+    options: { priceBreakdown: { subtotal: number; sponsorshipTotal: number }; totalAmount: number; fields?: unknown },
+  ) => {
+    const sponsorship = Math.min(options.priceBreakdown.sponsorshipTotal, options.priceBreakdown.subtotal);
+    const priceBreakdown = { ...options.priceBreakdown, sponsorshipTotal: sponsorship, total: options.priceBreakdown.subtotal - sponsorship };
+    await db.applyRegistrationSettlement(tx, {
+      registrationId,
+      settlement: { priceBreakdown, totalAmount: options.totalAmount, sponsorshipAmount: sponsorship },
+      fields: options.fields,
+    });
+    const after = { paymentStatus: "PENDING", paidAmount: 0, totalAmount: options.totalAmount, priceBreakdown };
+    return { written: true, eventId: "ev1", before: after, after, coveredAccessIds: [], paidAccess: { incremented: [], decremented: [] } };
+  },
+);
+
 // emitSettlementEvents with @app/db's body, over the mocked primitives.
 db.emitSettlementEvents.mockImplementation(
   async (tx: unknown, events: Array<{ type: string; payload: { id: unknown } }>) => {
@@ -54,7 +76,9 @@ db.emitSettlementEvents.mockImplementation(
         .map((ev) => String(ev.payload.id)),
     );
     for (const id of changed) await db.syncNetworkingRegistration(id, tx);
-    return Promise.all(events.map((ev) => db.enqueueRealtimeOutboxEvent(tx, ev)));
+    const results: unknown[] = [];
+    for (const ev of events) results.push(await db.enqueueRealtimeOutboxEvent(tx, ev));
+    return results;
   },
 );
 
@@ -223,6 +247,7 @@ beforeEach(() => {
     decrementAccessRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
     syncPaidCountDelta: vi.fn().mockResolvedValue(undefined),
     getAlreadyCoveredAccessIds: vi.fn().mockResolvedValue(new Set()),
+    handleCapacityReached: vi.fn().mockResolvedValue(0),
   };
   const pricing = new PricingService();
   quote = new PricingPublicController(pricing);

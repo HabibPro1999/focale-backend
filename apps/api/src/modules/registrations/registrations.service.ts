@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { Inject, Injectable } from "@nestjs/common";
 import { fileTypeFromBuffer } from "file-type";
 import {
@@ -29,7 +30,6 @@ import {
   type SearchRegistrantsQuery,
 } from "@app/contracts";
 import {
-  calculateApplicableAmount,
   calculateDiscountAmount,
   calculateSettlement,
   getSkip,
@@ -50,7 +50,6 @@ import {
   casIncrementRegisteredTx,
   casDecrementRegisteredTx,
   getEventCounterInfoTx,
-  updateUsageAmount,
   countUsagesForSponsorship,
   updateSponsorshipRow,
   findFormById,
@@ -76,7 +75,6 @@ import {
   insertRegistrationRow,
   deleteRegistrationRow,
   getNetworkingProfilePhotoByRegistration,
-  findRegistrationUsagesForRecalc,
   findRegistrationUsageLinks,
   deleteRegistrationUsages,
   allocateReferenceNumber,
@@ -85,8 +83,9 @@ import {
   findUserNamesByIds,
   listRegistrationEmailLogRows,
   type RegistrationFieldsPatch,
-  type RegistrationPaymentStatus,
   type RegistrationSettlementWrite,
+  type SettleRegistrationOptions,
+  type SettleRegistrationResult,
 } from "@app/db";
 import { AccessService, toAccessAppException } from "../access/access.service";
 import { PricingService } from "../pricing/pricing.service";
@@ -98,7 +97,6 @@ import {
 import {
   assertClientModuleEnabled,
   assertModuleEnabledForClient,
-  isModuleEnabledForClient,
   type ClientModuleState,
 } from "../clients/module-gates";
 import { AppException } from "../../core/app-exception";
@@ -110,6 +108,13 @@ import {
   validatePaymentTransition,
 } from "./payment-transitions";
 import { getRegistrationTableColumns } from "./table-columns";
+import { assertSelfEditAllowed, evaluateEditPolicy } from "./edit-policy";
+import {
+  assertPaidAmountWithinNet,
+  assertPaidInFull,
+  assertValidSelections,
+  netOf,
+} from "./registrations.guards";
 import {
   enrichWithAccessSelections,
   enrichManyWithAccessSelections,
@@ -177,19 +182,23 @@ function translateCreateUniqueViolation(err: unknown): never {
   throw new AppException(ErrorCodes.CONFLICT, "Resource already exists", 409);
 }
 
-interface RecalcInput {
-  id: string;
-  paymentStatus: string;
-  paidAt: Date | null;
-  paidAmount: number;
-}
-
-interface SettlementResult {
-  priceBreakdown: PriceBreakdown;
-  sponsorshipAmount: number;
-  paymentStatus?: "PENDING" | "PARTIAL" | "SPONSORED" | "PAID";
-  paidAt?: Date | null;
-  coveredAccessIds: Set<string>;
+/**
+ * Per access item, how the selected quantity changes from `before` to
+ * `after` (items listed twice are summed). Unchanged items are left out; the
+ * rest are in ascending access id order, so concurrent edits take the
+ * access rows in the same order.
+ */
+function accessQuantityDeltas(
+  before: ReadonlyArray<{ accessId: string; quantity: number }>,
+  after: ReadonlyArray<{ accessId: string; quantity: number }>,
+): Array<{ accessId: string; delta: number }> {
+  const deltas = new Map<string, number>();
+  for (const item of before) deltas.set(item.accessId, (deltas.get(item.accessId) ?? 0) - item.quantity);
+  for (const item of after) deltas.set(item.accessId, (deltas.get(item.accessId) ?? 0) + item.quantity);
+  return [...deltas]
+    .filter(([, delta]) => delta !== 0)
+    .map(([accessId, delta]) => ({ accessId, delta }))
+    .sort((a, b) => (a.accessId < b.accessId ? -1 : a.accessId > b.accessId ? 1 : 0));
 }
 
 export type GetRegistrationForEditResult = {
@@ -289,79 +298,93 @@ export class RegistrationsService {
     );
   }
 
-  private async recalculateLinkedSponsorshipSettlement(
-    exec: DbExecutor,
-    registration: RecalcInput,
-    priceBreakdown: PriceBreakdown,
-    totalAmount = priceBreakdown.subtotal,
-  ): Promise<SettlementResult> {
-    const usages = await findRegistrationUsagesForRecalc(registration.id, exec);
-    const accessTypeIds = priceBreakdown.accessItems.map((i) => i.accessId);
-    const coveredAccessIds = new Set<string>();
-    let sponsorshipAmount = 0;
+  /**
+   * Reprice a registration under its lock (plan 2.6), for the admin and the
+   * public edit:
+   * - price the answers and selections without sponsorship codes: the
+   *   sponsorship comes from the linked usages, recomputed by the settlement.
+   *   Without usages, the amount priced at signup (an unlinked code) is kept,
+   *   capped at the new subtotal;
+   * - move the access registered counters by the quantity delta (before the
+   *   settlement, whose paid places they are checked against);
+   * - settle: `decide` sees the new net and may refuse it or set the status
+   *   and paid amount, otherwise the status is derived. Paid places move by
+   *   the old → new delta and the breakdown, amounts and `fields` are
+   *   written in one update;
+   * - drop items that became full from unsettled registrations.
+   */
+  private async repriceRegistration(
+    tx: DbExecutor,
+    current: {
+      id: string;
+      eventId: string;
+      totalAmount: number;
+      sponsorshipAmount: number;
+      priceBreakdown: unknown;
+    },
+    input: {
+      formData: Record<string, unknown>;
+      accessSelections: Array<{ accessId: string; quantity: number }>;
+      /** Keep total_amount at least its stored value (payment received). */
+      keepHigherTotal?: boolean;
+      decide: NonNullable<SettleRegistrationOptions["decide"]>;
+      fields: RegistrationFieldsPatch;
+    },
+  ): Promise<{
+    settled: SettleRegistrationResult;
+    accessDeltas: Array<{ accessId: string; delta: number }>;
+  }> {
+    const stored = current.priceBreakdown as PriceBreakdown | null;
+    const priced = await this.pricing.calculatePrice(
+      current.eventId,
+      {
+        formData: input.formData,
+        selectedAccessItems: input.accessSelections.map((s) => ({
+          accessId: s.accessId,
+          quantity: s.quantity,
+        })),
+        sponsorshipCodes: [],
+      },
+      tx,
+    );
+    const priceBreakdown: PriceBreakdown = {
+      ...priced,
+      sponsorships: stored?.sponsorships ?? [],
+      sponsorshipTotal: current.sponsorshipAmount,
+    };
 
-    if (usages.length === 0) sponsorshipAmount = priceBreakdown.sponsorshipTotal;
-
-    for (const usage of usages) {
-      for (const accessId of usage.sponsorship.coveredAccessIds) {
-        coveredAccessIds.add(accessId);
-      }
-      const amountApplied = calculateApplicableAmount(usage.sponsorship, {
-        totalAmount: priceBreakdown.subtotal,
-        baseAmount: priceBreakdown.calculatedBasePrice,
-        accessTypeIds,
-        priceBreakdown,
-      });
-      sponsorshipAmount += amountApplied;
-      if (amountApplied !== usage.amountApplied) {
-        await updateUsageAmount(exec, usage.id, amountApplied);
+    const accessDeltas = accessQuantityDeltas(stored?.accessItems ?? [], input.accessSelections);
+    for (const { accessId, delta } of accessDeltas) {
+      if (delta > 0) {
+        await this.access.incrementAccessRegisteredCountTx(accessId, delta, tx);
+      } else {
+        await this.access.decrementAccessRegisteredCountTx(accessId, -delta, tx);
       }
     }
 
-    sponsorshipAmount = Math.min(sponsorshipAmount, priceBreakdown.subtotal);
-    const updatedBreakdown: PriceBreakdown = {
-      ...priceBreakdown,
-      sponsorshipTotal: sponsorshipAmount,
-      total: Math.max(0, priceBreakdown.subtotal - sponsorshipAmount),
-    };
-
-    const result: SettlementResult = {
-      priceBreakdown: updatedBreakdown,
-      sponsorshipAmount,
-      coveredAccessIds,
-    };
-
-    if (
-      registration.paymentStatus === "WAIVED" ||
-      registration.paymentStatus === "REFUNDED" ||
-      registration.paymentStatus === "PAID" ||
-      registration.paymentStatus === "VERIFYING"
-    ) {
-      return result;
-    }
-
-    const settlement = calculateSettlement({
-      totalAmount,
-      paidAmount: registration.paidAmount,
-      sponsorshipAmount,
+    const settled = await settleRegistrationTxn(tx, current.id, {
+      priceBreakdown,
+      totalAmount: input.keepHigherTotal
+        ? Math.max(current.totalAmount, priced.subtotal)
+        : priced.subtotal,
+      decide: input.decide,
+      fields: input.fields,
+    }).catch((err: unknown) => {
+      throw toAccessAppException(err);
     });
-    if (sponsorshipAmount >= totalAmount && totalAmount > 0) {
-      result.paymentStatus = "SPONSORED";
-    } else if (
-      settlement.isSettled &&
-      (registration.paidAmount > 0 || registration.paymentStatus === "PAID")
-    ) {
-      result.paymentStatus = "PAID";
-    } else if (registration.paymentStatus !== "VERIFYING") {
-      result.paymentStatus = settlement.isPartiallyPaid ? "PARTIAL" : "PENDING";
+    if (!settled) {
+      throw new AppException(
+        ErrorCodes.REGISTRATION_NOT_FOUND,
+        "Registration not found",
+        404,
+      );
     }
-    if (result.paymentStatus !== undefined) {
-      result.paidAt =
-        result.paymentStatus === "PAID" || result.paymentStatus === "SPONSORED"
-          ? registration.paidAt ?? new Date()
-          : null;
-    }
-    return result;
+    await this.access.handleCapacityReached(
+      current.eventId,
+      settled.paidAccess.incremented,
+      tx,
+    );
+    return { settled, accessDeltas };
   }
 
   /** Atomic event registered-count increment; mirrors legacy incrementRegisteredCountTx. */
@@ -656,19 +679,7 @@ export class RegistrationsService {
 
     // Advisory access-selection validation (outside tx).
     if (accessSelections && accessSelections.length > 0) {
-      const v = await this.access.validateAccessSelections(
-        eventId,
-        accessSelections,
-        formData,
-      );
-      if (!v.valid) {
-        throw new AppException(
-          ErrorCodes.BAD_REQUEST,
-          `Invalid access selections: ${v.errors.join(", ")}`,
-          400,
-          { errors: v.errors },
-        );
-      }
+      await assertValidSelections(this.access, eventId, accessSelections, formData);
     }
 
     await this.access.assertAccessSelectionRequirement(eventId, formData, accessSelections ?? [],
@@ -858,19 +869,7 @@ export class RegistrationsService {
     }
 
     if (accessSelections && accessSelections.length > 0) {
-      const v = await this.access.validateAccessSelections(
-        eventId,
-        accessSelections,
-        formData,
-      );
-      if (!v.valid) {
-        throw new AppException(
-          ErrorCodes.BAD_REQUEST,
-          `Invalid access selections: ${v.errors.join(", ")}`,
-          400,
-          { errors: v.errors },
-        );
-      }
+      await assertValidSelections(this.access, eventId, accessSelections, formData);
     }
 
     const eventGate = await getEventForRegistrationAdmin(eventId);
@@ -1006,6 +1005,20 @@ export class RegistrationsService {
     input: UpdateRegistrationInput,
     performedBy?: string,
   ): Promise<AdminRegistration> {
+    // An empty body changes nothing: return the registration as it is, with
+    // no write, audit row or event.
+    if (Object.values(input).every((value) => value === undefined)) {
+      const current = await this.getRegistrationById(id);
+      if (!current) {
+        throw new AppException(
+          ErrorCodes.REGISTRATION_NOT_FOUND,
+          "Registration not found",
+          404,
+        );
+      }
+      return current;
+    }
+
     // Lock first so a concurrent confirmation or proof upload cannot be
     // overwritten from a stale read (ADR 0001).
     await withLockingTxn(async (tx) => {
@@ -1044,13 +1057,7 @@ export class RegistrationsService {
           ? calculateSettlement(registration).netAmount
           : undefined);
       if (paidAmount !== undefined) {
-        if (paidAmount > calculateSettlement(registration).netAmount) {
-          throw new AppException(
-            ErrorCodes.BAD_REQUEST,
-            "Paid amount cannot exceed registration total",
-            400,
-          );
-        }
+        assertPaidAmountWithinNet(paidAmount, calculateSettlement(registration).netAmount);
         settlement.paidAmount = paidAmount;
       }
       if (input.paymentMethod !== undefined) fields.paymentMethod = input.paymentMethod;
@@ -1167,20 +1174,10 @@ export class RegistrationsService {
         "registrations",
       );
 
-      const settlement: RegistrationSettlementWrite = {};
       const fields: RegistrationFieldsPatch = {};
       const changes: Record<string, { old: unknown; new: unknown }> = {};
       const hasPriceEdits =
         input.accessSelections !== undefined || input.formData !== undefined;
-      const setDefaultPaidAmount = (paidAmount: number) => {
-        settlement.paidAmount = paidAmount;
-        if (paidAmount !== registration.paidAmount) {
-          changes.paidAmount = {
-            old: registration.paidAmount,
-            new: paidAmount,
-          };
-        }
-      };
 
       const inputEmail =
         input.email !== undefined ? normalizeEmail(input.email) : undefined;
@@ -1231,37 +1228,20 @@ export class RegistrationsService {
       }
 
       // Payment fields — admin-override transitions (nothing leaves REFUNDED).
-      if (
+      const statusChange =
         input.paymentStatus !== undefined &&
         input.paymentStatus !== registration.paymentStatus
-      ) {
-        validateAdminPaymentOverride(registration.paymentStatus, input.paymentStatus);
-        settlement.paymentStatus = input.paymentStatus;
-        changes.paymentStatus = {
-          old: registration.paymentStatus,
-          new: input.paymentStatus,
-        };
-        if (
-          isFullySettled(input.paymentStatus) &&
-          !registration.paidAt
-        ) {
-          settlement.paidAt = new Date();
-        }
+          ? input.paymentStatus
+          : undefined;
+      if (statusChange !== undefined) {
+        validateAdminPaymentOverride(registration.paymentStatus, statusChange);
+        changes.paymentStatus = { old: registration.paymentStatus, new: statusChange };
       }
-      if (
-        input.paidAmount !== undefined &&
-        input.paidAmount !== registration.paidAmount
-      ) {
-        if (input.paidAmount > calculateSettlement(registration).netAmount) {
-          throw new AppException(
-            ErrorCodes.BAD_REQUEST,
-            "Paid amount cannot exceed registration total",
-            400,
-          );
-        }
-        settlement.paidAmount = input.paidAmount;
-        changes.paidAmount = { old: registration.paidAmount, new: input.paidAmount };
-      }
+      // A status newly fully settled gets a payment date; others keep theirs.
+      const statusPaidAt =
+        statusChange !== undefined && isFullySettled(statusChange) && !registration.paidAt
+          ? new Date()
+          : undefined;
       if (
         input.paymentMethod !== undefined &&
         input.paymentMethod !== registration.paymentMethod
@@ -1277,9 +1257,12 @@ export class RegistrationsService {
       if (input.paymentProofUrl !== undefined)
         fields.paymentProofUrl = input.paymentProofUrl;
       if (input.labName !== undefined) fields.labName = input.labName;
+      fields.lastEditedAt = new Date();
 
-      // Price-affecting edit branch.
+      let newStatus: string = statusChange ?? registration.paymentStatus;
+      let movedAccessIds: string[] = [];
       if (hasPriceEdits) {
+        // Price-affecting edit: reprice, then settle against the new net.
         assertModuleEnabledForClient(
           registration.event.client as ClientModuleState,
           "pricing",
@@ -1288,186 +1271,112 @@ export class RegistrationsService {
           editedFormData ??
           (registration.formData as Record<string, unknown>) ??
           {};
-        const oldBreakdown = registration.priceBreakdown as PriceBreakdown | null;
-        const oldAccessItems = (oldBreakdown?.accessItems ?? []).map((item) => ({
-          accessId: item.accessId,
-          quantity: item.quantity,
-        }));
-        const effectiveAccessSelections = input.accessSelections ?? oldAccessItems;
-        const selectedAccessItems = effectiveAccessSelections.map((s) => ({
-          accessId: s.accessId,
-          quantity: s.quantity,
-        }));
-        const existingAccessIds = new Set(registration.accessTypeIds ?? []);
-
+        const oldAccessItems = (
+          (registration.priceBreakdown as PriceBreakdown | null)?.accessItems ?? []
+        ).map((item) => ({ accessId: item.accessId, quantity: item.quantity }));
+        const effectiveAccessSelections = (input.accessSelections ?? oldAccessItems).map(
+          (s) => ({ accessId: s.accessId, quantity: s.quantity }),
+        );
         if (
           input.accessSelections !== undefined &&
           effectiveAccessSelections.length > 0
         ) {
-          const v = await this.access.validateAccessSelections(
-            eventId,
-            effectiveAccessSelections,
-            effectiveFormData,
-            existingAccessIds,
-            tx,
-          );
-          if (!v.valid) {
-            throw new AppException(
-              ErrorCodes.BAD_REQUEST,
-              `Invalid access selections: ${v.errors.join(", ")}`,
-              400,
-              { errors: v.errors },
-            );
-          }
+          await assertValidSelections(this.access, eventId, effectiveAccessSelections, effectiveFormData, {
+            existingAccessIds: new Set(registration.accessTypeIds ?? []),
+            exec: tx,
+          });
         }
-
-        const existingSponsorshipCodes = registration.sponsorshipCode
-          ? [registration.sponsorshipCode]
-          : [];
-        let priceBreakdown = await this.pricing.calculatePrice(
-          eventId,
-          {
-            formData: effectiveFormData,
-            selectedAccessItems,
-            sponsorshipCodes: existingSponsorshipCodes,
-          },
-          tx,
-        );
-
-        const oldAccessTypeIds = registration.accessTypeIds ?? [];
-        if (input.accessSelections !== undefined) {
-          await Promise.all(
-            oldAccessItems.map((old) =>
-              this.access.decrementAccessRegisteredCountTx(
-                old.accessId,
-                old.quantity,
-                tx,
-              ),
-            ),
-          );
-          await Promise.all(
-            effectiveAccessSelections
-              .filter((sel) => sel.quantity > 0)
-              .map((sel) =>
-                this.access.incrementAccessRegisteredCountTx(
-                  sel.accessId,
-                  sel.quantity,
-                  tx,
-                ),
-              ),
-          );
-        }
-
-        const recalculated = await this.recalculateLinkedSponsorshipSettlement(
-          tx,
-          { ...registration, paidAmount: input.paidAmount ?? registration.paidAmount },
-          priceBreakdown,
-        );
-        priceBreakdown = recalculated.priceBreakdown;
-
-        const nextPaymentStatus =
-          input.paymentStatus ??
-          recalculated.paymentStatus ??
-          registration.paymentStatus;
-        const shouldDefaultPaidAmount =
-          input.paymentStatus === "PAID" && input.paidAmount === undefined;
-        const defaultPaidAmount = shouldDefaultPaidAmount
-          ? calculateSettlement({
-              totalAmount: priceBreakdown.subtotal,
-              paidAmount: registration.paidAmount,
-              sponsorshipAmount: recalculated.sponsorshipAmount,
-            }).netAmount
-          : undefined;
-        const nextPaidAmount =
-          input.paidAmount ?? defaultPaidAmount ?? registration.paidAmount;
-        if (nextPaidAmount > priceBreakdown.total) {
-          throw new AppException(
-            ErrorCodes.BAD_REQUEST,
-            "Paid amount cannot exceed registration total",
-            400,
-          );
-        }
-
-        // base/access/discount amounts are derived from the breakdown by the writer.
-        settlement.totalAmount = priceBreakdown.subtotal;
-        settlement.sponsorshipAmount = recalculated.sponsorshipAmount;
         fields.accessTypeIds = effectiveAccessSelections.map((s) => s.accessId);
-        settlement.priceBreakdown = priceBreakdown;
-        if (shouldDefaultPaidAmount) {
-          setDefaultPaidAmount(nextPaidAmount);
+
+        const { settled, accessDeltas } = await this.repriceRegistration(tx, registration, {
+          formData: effectiveFormData,
+          accessSelections: effectiveAccessSelections,
+          fields,
+          decide: ({ before, net }) => {
+            const currentNet = netOf(before);
+            const netChanged = net !== currentNet;
+            // A PAID registration whose price moves: the admin says how the
+            // payment follows (an amount, or another status).
+            if (
+              before.paymentStatus === "PAID" &&
+              netChanged &&
+              input.paymentStatus === undefined &&
+              input.paidAmount === undefined
+            ) {
+              throw new AppException(
+                ErrorCodes.PAYMENT_ADJUSTMENT_REQUIRED,
+                "This edit changes the price of a paid registration; set the paid amount or the payment status",
+                409,
+                { currentNet, newNet: net, paidAmount: before.paidAmount },
+              );
+            }
+            // Setting PAID without an amount means paid in full (plan 2.1).
+            const paidAmount =
+              input.paidAmount ?? (input.paymentStatus === "PAID" ? net : undefined);
+            const nextPaid = paidAmount ?? before.paidAmount;
+            assertPaidAmountWithinNet(nextPaid, net);
+            const staysPaid =
+              (input.paymentStatus ?? before.paymentStatus) === "PAID";
+            if (before.paymentStatus === "PAID" && netChanged && staysPaid) {
+              assertPaidInFull(nextPaid, net);
+            }
+            // No status given: derived from the amounts (sticky statuses stay).
+            return { paymentStatus: input.paymentStatus, paidAmount, paidAt: statusPaidAt };
+          },
+        });
+
+        const { before, after } = settled;
+        newStatus = after.paymentStatus;
+        if (after.paymentStatus !== before.paymentStatus && changes.paymentStatus === undefined) {
+          changes.paymentStatus = { old: before.paymentStatus, new: after.paymentStatus };
         }
-        if (
-          input.paymentStatus === undefined &&
-          recalculated.paymentStatus !== undefined &&
-          recalculated.paymentStatus !== registration.paymentStatus
-        ) {
-          settlement.paymentStatus = recalculated.paymentStatus;
-          changes.paymentStatus = {
-            old: registration.paymentStatus,
-            new: recalculated.paymentStatus,
-          };
-        }
-        if (input.paymentStatus === undefined && recalculated.paidAt !== undefined) {
-          settlement.paidAt = recalculated.paidAt;
+        if (after.paidAmount !== before.paidAmount) {
+          changes.paidAmount = { old: before.paidAmount, new: after.paidAmount };
         }
         if (input.accessSelections !== undefined) {
           changes.accessSelections = {
-            old: oldAccessTypeIds,
-            new: effectiveAccessSelections.map((s) => s.accessId),
+            old: registration.accessTypeIds ?? [],
+            new: fields.accessTypeIds,
           };
         }
-        changes.totalAmount = {
-          old: registration.totalAmount,
-          new: priceBreakdown.subtotal,
-        };
-
-        if (
-          input.accessSelections !== undefined ||
-          nextPaymentStatus !== registration.paymentStatus
-        ) {
-          await this.access.syncPaidCountDelta(
-            eventId,
-            {
-              status: registration.paymentStatus,
-              priceBreakdown: registration.priceBreakdown,
-              coveredAccessIds: recalculated.coveredAccessIds,
-            },
-            {
-              status: nextPaymentStatus,
-              priceBreakdown,
-              coveredAccessIds: recalculated.coveredAccessIds,
-            },
+        changes.totalAmount = { old: before.totalAmount, new: after.totalAmount };
+        movedAccessIds = [
+          ...accessDeltas.map((c) => c.accessId),
+          ...settled.paidAccess.incremented,
+          ...settled.paidAccess.decremented,
+        ];
+      } else {
+        // Payment-only edit: the given status and amount, validated against
+        // the stored net.
+        const settlement: RegistrationSettlementWrite = {};
+        if (statusChange !== undefined) settlement.paymentStatus = statusChange;
+        if (statusPaidAt !== undefined) settlement.paidAt = statusPaidAt;
+        const net = calculateSettlement(registration).netAmount;
+        // Setting PAID without an amount means paid in full (plan 2.1).
+        const paidAmount =
+          input.paidAmount !== undefined
+            ? input.paidAmount !== registration.paidAmount
+              ? input.paidAmount
+              : undefined
+            : input.paymentStatus === "PAID"
+              ? net
+              : undefined;
+        if (paidAmount !== undefined) {
+          assertPaidAmountWithinNet(paidAmount, net);
+          settlement.paidAmount = paidAmount;
+          if (paidAmount !== registration.paidAmount) {
+            changes.paidAmount = { old: registration.paidAmount, new: paidAmount };
+          }
+        }
+        await applyRegistrationSettlement(tx, { registrationId: id, settlement, fields });
+        if (statusChange !== undefined) {
+          await this.syncPaidCount(
             tx,
+            { id, eventId, priceBreakdown: registration.priceBreakdown },
+            registration.paymentStatus,
+            statusChange,
           );
         }
-      }
-
-      if (
-        !hasPriceEdits &&
-        input.paymentStatus === "PAID" &&
-        input.paidAmount === undefined
-      ) {
-        setDefaultPaidAmount(calculateSettlement(registration).netAmount);
-      }
-
-      fields.lastEditedAt = new Date();
-      await applyRegistrationSettlement(tx, { registrationId: id, settlement, fields });
-
-      // paidCount sync for the payment-status-only path (no access/formData edit).
-      if (
-        input.paymentStatus !== undefined &&
-        input.paymentStatus !== registration.paymentStatus &&
-        input.accessSelections === undefined &&
-        input.formData === undefined
-      ) {
-        const effectivePriceBreakdown =
-          (settlement.priceBreakdown as unknown) ?? registration.priceBreakdown;
-        await this.syncPaidCount(
-          tx,
-          { id, eventId, priceBreakdown: effectivePriceBreakdown },
-          registration.paymentStatus,
-          input.paymentStatus,
-        );
       }
 
       if (Object.keys(changes).length > 0) {
@@ -1479,20 +1388,14 @@ export class RegistrationsService {
         });
       }
 
-      const statusChanged =
-        input.paymentStatus !== undefined &&
-        input.paymentStatus !== registration.paymentStatus;
       const pending = settlementEventPair({
         id,
         eventId,
         clientId: registration.event.clientId,
         oldStatus: registration.paymentStatus,
-        newStatus:
-          (settlement.paymentStatus as string | undefined) ?? input.paymentStatus,
-        emitCountsChanged: !!(
-          statusChanged ||
-          (input.accessSelections && input.accessSelections.length > 0)
-        ),
+        newStatus,
+        emitCountsChanged: newStatus !== registration.paymentStatus || movedAccessIds.length > 0,
+        accessIds: [...new Set(movedAccessIds)],
       });
       await emitSettlementEvents(tx, pending);
     });
@@ -1658,70 +1561,11 @@ export class RegistrationsService {
         },
     }));
 
-    const restrictions: string[] = [];
-    let canEdit = true;
-    let canEditPersonalInfo = true;
-    let canEditAccess = true;
-    let canAddAccess = true;
-    let canRemoveAccess = true;
-    let isFullySponsored = false;
-
-    const blockAll = (reason: string) => {
-      canEdit = false;
-      canEditPersonalInfo = false;
-      canEditAccess = false;
-      canAddAccess = false;
-      canRemoveAccess = false;
-      restrictions.push(reason);
-    };
-
-    if (registration.paymentStatus === "REFUNDED") {
-      blockAll("Registration has been refunded");
-    }
-    if (
-      registration.event.status !== "OPEN" ||
-      registration.event.endDate < new Date()
-    ) {
-      blockAll("Event is not accepting changes");
-    }
-    if (!isModuleEnabledForClient(registration.event.client, "registrations")) {
-      blockAll("Registrations are disabled for this event");
-    }
-    if (!isModuleEnabledForClient(registration.event.client, "pricing")) {
-      blockAll("Pricing is disabled for this event");
-    }
-    if (registration.paymentStatus === "VERIFYING") {
-      canEditAccess = false;
-      canAddAccess = false;
-      canRemoveAccess = false;
-      restrictions.push("Payment proof is under review");
-    }
-    const isPaid =
-      registration.paymentStatus === "PAID" ||
-      registration.paymentStatus === "SPONSORED" ||
-      registration.paidAmount > 0;
-    if (isPaid) {
-      canRemoveAccess = false;
-      restrictions.push("Cannot remove access items (payment received)");
-    }
-    if (registration.paymentStatus === "WAIVED") {
-      canEditAccess = false;
-      canAddAccess = false;
-      canRemoveAccess = false;
-      restrictions.push("Waived registrations cannot modify access selections");
-    }
-    if (
-      registration.sponsorshipAmount >= registration.totalAmount &&
-      registration.totalAmount > 0
-    ) {
-      isFullySponsored = true;
-      canEditAccess = false;
-      canAddAccess = false;
-      canRemoveAccess = false;
-      restrictions.push(
-        "Fully sponsored registration cannot modify access selections",
-      );
-    }
+    const policy = evaluateEditPolicy({
+      registration,
+      event: registration.event,
+      now: new Date(),
+    });
 
     const { amountDue } = calculateSettlement({
       totalAmount: registration.totalAmount,
@@ -1732,14 +1576,14 @@ export class RegistrationsService {
     return {
       registration: toPublicRegistration({ ...registration, accessSelections }),
       expectedUpdatedAt: registration.updatedAt.toISOString(),
-      canEdit,
-      canEditPersonalInfo,
-      canEditAccess,
-      canAddAccess,
-      canRemoveAccess,
-      isFullySponsored,
+      canEdit: policy.canEdit,
+      canEditPersonalInfo: policy.canEditPersonalInfo,
+      canEditAccess: policy.canEditAccess,
+      canAddAccess: policy.canAddAccess,
+      canRemoveAccess: policy.canRemoveAccess,
+      isFullySponsored: policy.isFullySponsored,
       amountDue,
-      editRestrictions: restrictions,
+      editRestrictions: policy.restrictions,
     };
   }
 
@@ -1762,8 +1606,12 @@ export class RegistrationsService {
 
     let newPriceBreakdown!: PriceBreakdown;
 
-    await withTxn(async (tx) => {
-      const current = await findRegistrationWithFormEvent(registrationId, tx);
+    // Lock first, then decide from the row re-read under the lock (ADR 0001).
+    await withLockingTxn(async (tx) => {
+      const locked = await lockRegistrationForUpdate(tx, registrationId);
+      const current = locked
+        ? await findRegistrationWithFormEvent(registrationId, tx)
+        : null;
       if (!current) {
         throw new AppException(
           ErrorCodes.REGISTRATION_NOT_FOUND,
@@ -1772,240 +1620,62 @@ export class RegistrationsService {
         );
       }
 
-      if (current.paymentStatus === "REFUNDED") {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_REFUNDED,
-          "Refunded registrations cannot be edited",
-          400,
-        );
-      }
-
-      try {
-        assertEventAcceptsPublicActions(current.event);
-      } catch {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_EDIT_FORBIDDEN,
-          "Event is not accepting changes",
-          400,
-        );
-      }
-
-      assertModuleEnabledForClient(
-        current.event.client as ClientModuleState,
-        "registrations",
-      );
-      assertModuleEnabledForClient(
-        current.event.client as ClientModuleState,
-        "pricing",
-      );
-
       const isAccessEdit = input.accessSelections !== undefined;
-
-      if (current.paymentStatus === "VERIFYING" && isAccessEdit) {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_VERIFYING_BLOCKED,
-          "Cannot modify access while payment is under review",
-          400,
-        );
-      }
-      if (current.paymentStatus === "WAIVED" && isAccessEdit) {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_WAIVED_ACCESS_BLOCKED,
-          "Waived registrations cannot modify access selections",
-          400,
-        );
-      }
-      if (
-        current.sponsorshipAmount >= current.totalAmount &&
-        current.totalAmount > 0 &&
-        isAccessEdit
-      ) {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_FULLY_SPONSORED_BLOCKED,
-          "Fully sponsored registrations cannot modify access selections",
-          400,
-        );
-      }
-
-      const currentFormData =
-        (current.formData as Record<string, unknown> | null) ?? {};
-      let newFormData: Record<string, unknown> = input.formData
-        ? { ...currentFormData, ...input.formData }
-        : currentFormData;
-
-      if (input.formData) {
-        newFormData = prepareFormDataForPricing(current.form.schema, newFormData);
-      }
-
       const currentPriceBreakdown =
         (current.priceBreakdown as PriceBreakdown | null) ??
         ({ accessItems: [] } as unknown as PriceBreakdown);
       const currentAccessItems = currentPriceBreakdown.accessItems ?? [];
       const currentAccessIds = new Set(currentAccessItems.map((i) => i.accessId));
-
       const newAccessSelections =
         input.accessSelections ??
         currentAccessItems.map((item) => ({
           accessId: item.accessId,
           quantity: item.quantity,
         }));
+      const accessDeltas = accessQuantityDeltas(currentAccessItems, newAccessSelections);
 
-      const toQuantityMap = (
-        items: Array<{ accessId: string; quantity: number }>,
-      ) => {
-        const q = new Map<string, number>();
-        for (const item of items) {
-          q.set(item.accessId, (q.get(item.accessId) ?? 0) + item.quantity);
-        }
-        return q;
-      };
-
-      const oldQuantities = toQuantityMap(currentAccessItems);
-      const newQuantities = toQuantityMap(newAccessSelections);
-      const accessDeltas = Array.from(
-        new Set([...oldQuantities.keys(), ...newQuantities.keys()]),
-      )
-        .map((accessId) => ({
-          accessId,
-          delta: (newQuantities.get(accessId) ?? 0) - (oldQuantities.get(accessId) ?? 0),
-        }))
-        .filter((c) => c.delta !== 0);
-
-      const currentIsPaid =
-        current.paymentStatus === "PAID" ||
-        current.paymentStatus === "SPONSORED" ||
-        current.paidAmount > 0;
-      const negativeDeltas = accessDeltas.filter((c) => c.delta < 0);
-      if (currentIsPaid && negativeDeltas.length > 0) {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_ACCESS_REMOVAL_BLOCKED,
-          "Cannot remove access items from a paid registration",
-          400,
-          {
-            message: "Paid registrations can only add new access items",
-            attemptedRemovals: negativeDeltas.map((c) => c.accessId),
-          },
-        );
-      }
-
-      if (isAccessEdit || input.formData !== undefined) {
-        const v = await this.access.validateAccessSelections(
-          current.eventId,
-          newAccessSelections,
-          newFormData,
-          currentAccessIds,
-          tx,
-        );
-        if (!v.valid) {
-          throw new AppException(
-            ErrorCodes.BAD_REQUEST,
-            `Invalid access selections: ${v.errors.join(", ")}`,
-            400,
-            { errors: v.errors },
-          );
-        }
-      }
-
-      if (isAccessEdit || input.formData !== undefined) {
-        await this.access.assertAccessSelectionRequirement(current.eventId, newFormData, newAccessSelections,
-          (current.form.schema as { settings?: { accessSelectionRequired?: boolean } } | null)?.settings, tx);
-      }
-
-      newPriceBreakdown = await this.pricing.calculatePrice(
-        current.eventId,
-        {
-          formData: newFormData,
-          selectedAccessItems: newAccessSelections.map((s) => ({
-            accessId: s.accessId,
-            quantity: s.quantity,
-          })),
-          sponsorshipCodes: current.sponsorshipCode ? [current.sponsorshipCode] : [],
-        },
-        tx,
-      );
-
-      const newTotalAmount = currentIsPaid
-        ? Math.max(current.totalAmount, newPriceBreakdown.subtotal)
-        : newPriceBreakdown.subtotal;
-      const recalculated = await this.recalculateLinkedSponsorshipSettlement(
-        tx,
-        current,
-        newPriceBreakdown,
-        newTotalAmount,
-      );
-      newPriceBreakdown = recalculated.priceBreakdown;
-      const nextPaymentStatus = recalculated.paymentStatus ?? current.paymentStatus;
-      const nextPaidAt =
-        recalculated.paymentStatus !== undefined ? recalculated.paidAt ?? null : current.paidAt;
-
-      await Promise.all(
-        accessDeltas
-          .filter((c) => c.delta > 0)
-          .map((c) =>
-            this.access.incrementAccessRegisteredCountTx(c.accessId, c.delta, tx),
-          ),
-      );
-      if (!currentIsPaid) {
-        await Promise.all(
-          accessDeltas
-            .filter((c) => c.delta < 0)
-            .map((c) =>
-              this.access.decrementAccessRegisteredCountTx(
-                c.accessId,
-                Math.abs(c.delta),
-                tx,
-              ),
-            ),
-        );
-      }
-
-      if (
-        (isAccessEdit && accessDeltas.length > 0) ||
-        nextPaymentStatus !== current.paymentStatus
-      ) {
-        const currentCovered =
-          current.paymentStatus === "PARTIAL"
-            ? await this.access.getAlreadyCoveredAccessIds(registrationId, tx)
-            : new Set<string>();
-        await this.access.syncPaidCountDelta(
-          current.eventId,
-          {
-            status: current.paymentStatus,
-            priceBreakdown: currentPriceBreakdown,
-            coveredAccessIds: currentCovered,
-          },
-          {
-            status: nextPaymentStatus,
-            priceBreakdown: newPriceBreakdown,
-            coveredAccessIds: recalculated.coveredAccessIds,
-          },
-          tx,
-        );
-      }
-
-      // Compare-and-swap on updatedAt; base/access/discount amounts are
-      // derived from the breakdown by the writer.
-      const written = await applyRegistrationSettlement(tx, {
-        registrationId,
-        expectedUpdatedAt,
-        settlement: {
-          totalAmount: newTotalAmount,
-          priceBreakdown: newPriceBreakdown,
-          sponsorshipAmount: recalculated.sponsorshipAmount,
-          paymentStatus: nextPaymentStatus as RegistrationPaymentStatus,
-          paidAt: nextPaidAt,
-        },
-        fields: {
-          formData: newFormData,
-          firstName: input.firstName ?? current.firstName,
-          lastName: input.lastName ?? current.lastName,
-          phone: input.phone ?? current.phone,
-          accessTypeIds: newAccessSelections.map((s) => s.accessId),
-          lastEditedAt: new Date(),
-        },
+      // The same policy GET-for-edit shows, enforced on the fresh row.
+      const policy = evaluateEditPolicy({
+        registration: current,
+        event: current.event,
+        now: new Date(),
+      });
+      assertSelfEditAllowed(policy, current.event.client as ClientModuleState, {
+        changesAccess: isAccessEdit,
+        removedAccessIds: accessDeltas.filter((c) => c.delta < 0).map((c) => c.accessId),
       });
 
-      if (!written) {
+      const currentFormData =
+        (current.formData as Record<string, unknown> | null) ?? {};
+      const newFormData = input.formData
+        ? prepareFormDataForPricing(current.form.schema, {
+            ...currentFormData,
+            ...input.formData,
+          })
+        : currentFormData;
+      const formDataChanged =
+        input.formData !== undefined && !isDeepStrictEqual(newFormData, currentFormData);
+      // Reprice only when something priced changed: a name or phone edit
+      // leaves the price (and the payment status) as they are.
+      const reprice = formDataChanged || accessDeltas.length > 0;
+
+      if (reprice) {
+        await assertValidSelections(this.access, current.eventId, newAccessSelections, newFormData, {
+          existingAccessIds: currentAccessIds,
+          exec: tx,
+        });
+        await this.access.assertAccessSelectionRequirement(
+          current.eventId,
+          newFormData,
+          newAccessSelections,
+          (current.form.schema as { settings?: { accessSelectionRequired?: boolean } } | null)
+            ?.settings,
+          tx,
+        );
+      }
+
+      // Optimistic precondition from GET-for-edit, on the locked row.
+      if (current.updatedAt.getTime() !== expectedUpdatedAt.getTime()) {
         throw new AppException(
           ErrorCodes.CONCURRENT_MODIFICATION,
           "Registration changed. Refresh and try again.",
@@ -2013,8 +1683,51 @@ export class RegistrationsService {
         );
       }
 
+      const fields: RegistrationFieldsPatch = {
+        formData: newFormData,
+        firstName: input.firstName ?? current.firstName,
+        lastName: input.lastName ?? current.lastName,
+        phone: input.phone ?? current.phone,
+        accessTypeIds: newAccessSelections.map((s) => s.accessId),
+        lastEditedAt: new Date(),
+      };
+      let nextPaymentStatus = current.paymentStatus;
+      const countsChangedIds = new Set(accessDeltas.map((c) => c.accessId));
+      if (reprice) {
+        const { settled } = await this.repriceRegistration(tx, current, {
+          formData: newFormData,
+          accessSelections: newAccessSelections,
+          keepHigherTotal: policy.paymentReceived,
+          fields,
+          decide: ({ before, net }) => {
+            // PAID means paid in full: a self-edit may not change the price.
+            const currentNet = netOf(before);
+            if (before.paymentStatus === "PAID" && net !== currentNet) {
+              throw new AppException(
+                ErrorCodes.REGISTRATION_PRICE_LOCKED,
+                "This change would alter the price of a paid registration",
+                409,
+                { currentNet, newNet: net },
+              );
+            }
+            return undefined;
+          },
+        });
+        nextPaymentStatus = settled.after.paymentStatus;
+        newPriceBreakdown = settled.after.priceBreakdown;
+        for (const accessId of [
+          ...settled.paidAccess.incremented,
+          ...settled.paidAccess.decremented,
+        ]) {
+          countsChangedIds.add(accessId);
+        }
+      } else {
+        await applyRegistrationSettlement(tx, { registrationId, settlement: {}, fields });
+        newPriceBreakdown = currentPriceBreakdown;
+      }
+
       const auditChanges: Record<string, { old: unknown; new: unknown }> = {};
-      if (input.formData) {
+      if (formDataChanged) {
         auditChanges.formData = { old: currentFormData, new: newFormData };
       }
       if (input.firstName !== undefined && input.firstName !== current.firstName) {
@@ -2026,7 +1739,7 @@ export class RegistrationsService {
       if (input.phone !== undefined && input.phone !== current.phone) {
         auditChanges.phone = { old: current.phone, new: input.phone };
       }
-      if (isAccessEdit && accessDeltas.length > 0) {
+      if (accessDeltas.length > 0) {
         auditChanges.accessSelections = {
           old: currentAccessItems.map((i) => ({
             accessId: i.accessId,
@@ -2057,15 +1770,12 @@ export class RegistrationsService {
           ts: Date.now(),
         },
       ];
-      if (isAccessEdit && accessDeltas.length > 0) {
+      if (countsChangedIds.size > 0) {
         pending.push({
           type: "eventAccess.countsChanged",
           clientId,
           eventId: current.eventId,
-          payload: {
-            id: current.eventId,
-            accessIds: accessDeltas.map((c) => c.accessId),
-          },
+          payload: { id: current.eventId, accessIds: [...countsChangedIds] },
           ts: Date.now(),
         });
       }
@@ -2114,21 +1824,8 @@ export class RegistrationsService {
       const settled = await settleRegistrationTxn(tx, id, {
         decide: ({ net }) => {
           const paidAmount = input.paidAmount ?? net;
-          if (paidAmount > net) {
-            throw new AppException(
-              ErrorCodes.BAD_REQUEST,
-              "Paid amount cannot exceed registration total",
-              400,
-            );
-          }
-          if (newStatus === "PAID" && paidAmount < net) {
-            throw new AppException(
-              ErrorCodes.PAID_AMOUNT_BELOW_DUE,
-              "Paid amount is below the amount due; confirm it as PARTIAL",
-              400,
-              { amountDue: net, paidAmount },
-            );
-          }
+          assertPaidAmountWithinNet(paidAmount, net);
+          if (newStatus === "PAID") assertPaidInFull(paidAmount, net);
           return {
             paymentStatus: newStatus,
             paidAmount,

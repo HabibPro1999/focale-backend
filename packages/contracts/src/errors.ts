@@ -24,6 +24,8 @@ export const ErrorCodes = {
   NETWORKING_CONSENT_REQUIRED: "NETWORKING_CONSENT_REQUIRED",
   /** 503 with Retry-After: a networking write ran out of serialization retries; nothing was saved. */
   NETWORKING_BUSY: "NETWORKING_BUSY",
+  /** 409: enabling networking after the event's retention period ended or its purge started. */
+  NETWORKING_RETENTION_ENDED: "NETWORKING_RETENTION_ENDED",
 
   // Auth (1xxx)
   UNAUTHORIZED: "AUTH_1001",
@@ -89,6 +91,11 @@ export const ErrorCodes = {
   REGISTRATION_WAIVED_ACCESS_BLOCKED: "REG_8012",
   // A PAID confirmation for less than the amount due (plan 2.6): confirm PARTIAL.
   PAID_AMOUNT_BELOW_DUE: "REG_8013",
+  // A self-edit would change what a PAID registration costs (plan 2.6).
+  REGISTRATION_PRICE_LOCKED: "REG_8014",
+  // An admin edit changes a PAID registration's price without saying how the
+  // payment follows (a paidAmount or a paymentStatus) (plan 2.6).
+  PAYMENT_ADJUSTMENT_REQUIRED: "REG_8015",
 
   // Form Validation (9xxx)
   FORM_VALIDATION_ERROR: "FRM_9001",

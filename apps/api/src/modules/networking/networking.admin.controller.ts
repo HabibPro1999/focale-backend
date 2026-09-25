@@ -18,7 +18,7 @@ import {
   type NetworkingMultipartRequest,
 } from "./networking.uploads.service";
 import type { FastifyReply } from "fastify";
-import { syncNetworkingEvent, networkingStore } from "@app/db";
+import { listNetworkingAdminAudit, syncNetworkingEvent } from "@app/db";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
 import type { AuthUser } from "../../core/auth/user-cache";
@@ -194,16 +194,8 @@ export class NetworkingAdminController {
     @Query() query: dto.NetworkingListDto,
   ) {
     await this.access(user, eventId);
-    const items = (await networkingStore().all("audit", { eventId })).sort(
-      (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
-    );
-    return {
-      items: items.slice(
-        (query.page - 1) * query.limit,
-        query.page * query.limit,
-      ),
-      total: items.length,
-    };
+    // One page in SQL, organizer actions only: participant activity is never listed.
+    return listNetworkingAdminAudit(eventId, query);
   }
   @Post("badges/verify")
   async verifyBadge(

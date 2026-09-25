@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   one: vi.fn(), update: vi.fn(), remove: vi.fn(), all: vi.fn(),
   notifications: vi.fn(), since: vi.fn(), transaction: vi.fn(), revoke: vi.fn(), delete: vi.fn(),
-  store: vi.fn(), cancel: vi.fn(), upsertPush: vi.fn(),
+  store: vi.fn(), cancel: vi.fn(), upsertPush: vi.fn(), enqueuePhotos: vi.fn(),
 }));
 vi.mock("@app/db", async (original) => ({
   ...(await original<typeof import("@app/db")>()),
@@ -12,6 +12,7 @@ vi.mock("@app/db", async (original) => ({
   networkingNotificationsSince: mocks.since,
   revokeNetworkingSessions: mocks.revoke,
   cancelNetworkingParticipantMeetings: mocks.cancel,
+  enqueueNetworkingPhotoDeletes: mocks.enqueuePhotos,
 }));
 vi.mock("@app/integrations", async (original) => ({
   ...(await original<typeof import("@app/integrations")>()),
@@ -291,24 +292,28 @@ describe("withdrawal", () => {
   beforeEach(() => participant.mockResolvedValue({
     event: { id: "e", slug: "event" }, profile: { id: "p", photoUrl: "stale.webp", overrides: { company: "Stale Co" } },
   }));
-  it.each([false, true])("uses the in-transaction row, clears and deletes the owned photo even when storage fails: %s", async (fails) => {
-    if (fails) mocks.delete.mockRejectedValue(new Error("storage unavailable"));
+  it("uses the in-transaction row, clears the photo and queues its deletion in the withdrawal transaction", async () => {
+    const tx = { transaction: true };
+    mocks.transaction.mockImplementation(async (_event, run) => run(mocks, tx));
+    mocks.enqueuePhotos.mockImplementation(async () => {
+      // Queued inside the transaction, after the profile row was cleared.
+      expect(mocks.update).toHaveBeenCalled();
+    });
     expect(await controller({ participant }).withdraw("event", { headers: {} } as FastifyRequest)).toEqual({ withdrawn: true });
     expect(participant).toHaveBeenCalledWith("event", undefined, { allowConsentPending: true });
     expect(mocks.update).toHaveBeenCalledWith("profiles", { eventId: "e", id: "p" }, expect.objectContaining({
       photoUrl: null, consent: false, visible: false,
       overrides: { company: "Current Co", photoUrl: null, consent: false },
     }));
-    expect(mocks.delete).toHaveBeenCalledWith("networking/e/profiles/p/current.webp");
-    expect(mocks.revoke).toHaveBeenCalledWith("p", {});
+    // The in-transaction photo (not the stale context one); the outbox handler checks ownership.
+    expect(mocks.enqueuePhotos).toHaveBeenCalledWith(tx, [{ id: "p", eventId: "e", photoUrl: own }], "networking.withdrawal");
+    expect(mocks.revoke).toHaveBeenCalledWith("p", tx);
+    // Nothing is deleted from storage in the request: the worker's storage.delete handler does it, with retries.
+    expect(mocks.delete).not.toHaveBeenCalled();
   });
-  it.each([
-    "https://storage.test/forms/uploads/registrant.webp",
-    "https://storage.test/networking/e/profiles/someone-else/photo.webp",
-    "https://storage.test/networking/e/profiles/p/../../../../abstracts/final.pdf",
-  ])("never deletes a form-supplied or foreign photo URL: %s", async (photoUrl) => {
-    mocks.one.mockResolvedValue({ photoUrl, overrides: {} });
-    await controller({ participant }).withdraw("event", { headers: {} } as FastifyRequest);
+  it("a failing enqueue fails the withdrawal as a whole (the transaction rolls back)", async () => {
+    mocks.enqueuePhotos.mockRejectedValue(new Error("outbox unavailable"));
+    await expect(controller({ participant }).withdraw("event", { headers: {} } as FastifyRequest)).rejects.toThrow("outbox unavailable");
     expect(mocks.delete).not.toHaveBeenCalled();
   });
   it("cancels the participant's active meetings in the same transaction without loading the event's meetings", async () => {

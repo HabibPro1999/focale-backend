@@ -153,5 +153,9 @@ export const emailLogs = pgTable(
     uniqueIndex("email_logs_dedupe_key_active_key")
       .on(t.dedupeKey)
       .where(sql`${t.dedupeKey} IS NOT NULL AND ${t.status} IN ('QUEUED', 'SENDING', 'SENT', 'DELIVERED')`),
+    // Networking rows by event (0026): retention purge, post-event report and email metrics.
+    index("email_logs_networking_event_idx")
+      .on(sql`(${t.contextSnapshot} ->> 'eventId')`)
+      .where(sql`(${t.contextSnapshot} ->> 'dispatchOwner') = 'networking'`),
   ],
 );
