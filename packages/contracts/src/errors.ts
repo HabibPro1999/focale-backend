@@ -24,6 +24,8 @@ export const ErrorCodes = {
   NETWORKING_CONSENT_REQUIRED: "NETWORKING_CONSENT_REQUIRED",
   /** 503 with Retry-After: a networking write ran out of serialization retries; nothing was saved. */
   NETWORKING_BUSY: "NETWORKING_BUSY",
+  /** 409: enabling networking after the event's retention period ended or its purge started. */
+  NETWORKING_RETENTION_ENDED: "NETWORKING_RETENTION_ENDED",
 
   // Auth (1xxx)
   UNAUTHORIZED: "AUTH_1001",

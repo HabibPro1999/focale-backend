@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   queueTriggeredEmail: vi.fn(),
   queueSponsorshipEmail: vi.fn(),
   queueAbstractEmail: vi.fn(),
+  handleStorageDeleteOutbox: vi.fn(),
 }));
 
 vi.mock("@app/shared", () => ({
@@ -14,6 +15,7 @@ vi.mock("@app/integrations", () => ({
   queueTriggeredEmail: mocks.queueTriggeredEmail,
   queueSponsorshipEmail: mocks.queueSponsorshipEmail,
   queueAbstractEmail: mocks.queueAbstractEmail,
+  handleStorageDeleteOutbox: mocks.handleStorageDeleteOutbox,
 }));
 
 // @app/db only supplies types + processOutboxEvents (unused here); stub it so
@@ -25,14 +27,23 @@ import { buildOutboxHandlers } from "./outbox.job";
 describe("outbox handler registry", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("registers exactly the three background email handlers (no realtime.emit)", () => {
+  it("registers exactly the background handlers: three email types and storage.delete (no realtime.emit)", () => {
     const handlers = buildOutboxHandlers();
     expect(Object.keys(handlers).sort()).toEqual([
       "email.abstract",
       "email.sponsorship",
       "email.triggered",
+      "storage.delete",
     ]);
     expect(handlers["realtime.emit"]).toBeUndefined();
+  });
+
+  it("storage.delete → handleStorageDeleteOutbox(payload), passing its verdict through", async () => {
+    const handlers = buildOutboxHandlers();
+    const payload = { url: "https://cdn.test/networking/e/profiles/p/a.webp", ownerPrefix: "networking/e/profiles/p", reason: "test" };
+    mocks.handleStorageDeleteOutbox.mockResolvedValueOnce("skipped");
+    await expect(handlers["storage.delete"](payload, { id: "o1" })).resolves.toBe("skipped");
+    expect(mocks.handleStorageDeleteOutbox).toHaveBeenCalledWith(payload);
   });
 
   it("email.triggered → queueTriggeredEmail(trigger, eventId, registration)", async () => {

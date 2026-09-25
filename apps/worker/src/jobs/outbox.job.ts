@@ -11,6 +11,7 @@ import {
   queueTriggeredEmail,
   queueSponsorshipEmail,
   queueAbstractEmail,
+  handleStorageDeleteOutbox,
   type QueueSponsorshipEmailInput,
 } from "@app/integrations";
 import type { AutomaticEmailTrigger } from "@app/contracts";
@@ -65,6 +66,7 @@ export function buildOutboxHandlers(): OutboxHandlerRegistry {
       );
       return queued ? "processed" : "skipped";
     },
+    "storage.delete": (payload) => handleStorageDeleteOutbox(payload),
   };
 }
 

@@ -23,6 +23,10 @@ const instant = () => timestamp({ precision: 3, withTimezone: true });
 export const networkingConfigs = pgTable("networking_configs", {
   eventId: eventId().primaryKey(),
   config: jsonb().$type<NetworkingConfig>().notNull(),
+  // Retention purge (0025): set when the batched purge begins (it also disables
+  // the config) and when it has removed every networking row of the event.
+  purgeStartedAt: instant(),
+  purgedAt: instant(),
   ...timestamps,
 });
 export const networkingProfiles = pgTable(
@@ -63,6 +67,8 @@ export const networkingProfiles = pgTable(
     consentAt: instant(),
     lastActiveAt: instant(),
     withdrawnAt: instant(),
+    // Withdrawn profile reduced to a tombstone (0025); sync never recreates it.
+    erasedAt: instant(),
     featured: boolean().notNull().default(false),
     standTableId: text(),
     overrides: jsonb().$type<Record<string, unknown>>().notNull().default({}),
@@ -75,6 +81,7 @@ export const networkingProfiles = pgTable(
     index("networking_profiles_stand_idx").on(t.eventId, t.standTableId),
     index("networking_profiles_embedding_scan_idx").on(t.updatedAt, t.id)
       .where(sql`${t.status}='ACTIVE' AND ${t.visible} AND ${t.consent} AND ${t.withdrawnAt} IS NULL`),
+    index("networking_profiles_withdrawn_idx").on(t.withdrawnAt).where(sql`${t.withdrawnAt} IS NOT NULL`),
   ],
 );
 export const networkingChallenges = pgTable(
