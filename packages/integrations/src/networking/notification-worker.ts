@@ -306,9 +306,13 @@ async function processOne(
       ? current.profile!.emailPreference === "DAILY"
       : current.profile!.emailPreference === "IMMEDIATE");
   if (wantsEmail(context) && !progress.emailSent && !progress.emailUncertain) {
-    // The email channel's one revalidation.
+    // The email channel's one revalidation (the push channel re-reads its
+    // subscriptions itself; the claim's list still decides whether it runs).
     if (!(await refreshNetworkingDeliveryLease(row))) return "lease_lost";
-    context = await networkingDeliveryContext(row, { subscriptions: false });
+    context = {
+      ...(await networkingDeliveryContext(row, { subscriptions: false })),
+      subscriptions: context.subscriptions,
+    };
     const changed = networkingDeliverySkipReason(row, context);
     if (changed) return skip(changed);
     const contacts = row.type === "POST_EVENT_CONTACTS" || row.payload.includeContacts === true ? await networkingParticipantExportContacts(row.eventId, row.profileId!) : undefined;

@@ -163,6 +163,36 @@ describe("ambiguous provider outcomes (3.6 classification)", () => {
   });
 });
 
+describe("channels", () => {
+  it("sends the email and then every push endpoint in one claim, revalidating once per channel", async () => {
+    const push = vi.fn().mockResolvedValue({ statusCode: 201 });
+    vi.stubEnv("NETWORKING_VAPID_PUBLIC_KEY", "test-public");
+    vi.stubEnv("NETWORKING_VAPID_PRIVATE_KEY", "test-private");
+    vi.stubEnv("NETWORKING_VAPID_SUBJECT", "mailto:test@example.invalid");
+    try {
+      claimOnce(row(freshLease, { type: "MATCH" }));
+      const withSubscriptions = {
+        event: { clientId: "client", name: "Event" }, profile: { email: "test@example.test", firstName: "Test", emailPreference: "IMMEDIATE" },
+        registration: { id: "registration" }, config: {},
+        subscriptions: [
+          { id: "a", endpoint: "https://fcm.googleapis.com/fcm/send/a", keys: { p256dh: "k", auth: "a" } },
+          { id: "b", endpoint: "https://web.push.apple.com/b", keys: { p256dh: "k", auth: "a" } },
+        ],
+      };
+      db.networkingDeliveryContext.mockImplementation(async (_row, options?: { subscriptions?: boolean }) =>
+        options?.subscriptions === false ? { ...withSubscriptions, subscriptions: [] } : withSubscriptions);
+      expect(await run({ push })).toEqual(counts({ sent: 1 }));
+      expect(email.sendEmail).toHaveBeenCalledOnce();
+      expect(push).toHaveBeenCalledTimes(2);
+      // Claim, email revalidation, push revalidation.
+      expect(db.networkingDeliveryContext).toHaveBeenCalledTimes(3);
+      expect(db.networkingDeliveryContext.mock.calls.map(([, options]) => options?.subscriptions)).toEqual([true, false, undefined]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
 describe("provider rate limit", () => {
   it("a 429 pauses the bucket and defers the delivery without counting an attempt", async () => {
     claimOnce(row(freshLease, { attempts: 3 }));
