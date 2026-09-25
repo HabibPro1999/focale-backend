@@ -4,6 +4,7 @@ import {
   assertSchemaCurrent,
   closeDb,
   configureDb,
+  configureOutbox,
   pruneWorkerHeartbeats,
   recordWorkerHeartbeat,
 } from "@app/db";
@@ -34,6 +35,9 @@ async function bootstrap() {
     settings: config.database,
   });
   configureIntegrations(config.integrations);
+  // REALTIME_DISABLED: realtime.emit rows are not written (the api pump that
+  // drains them is off). Set it on both services.
+  configureOutbox({ realtimeDisabled: config.realtime.disabled });
 
   // N3: emails can be queued/updated from either process — wire the same
   // listener here and in apps/api/src/main.ts so no email-log status change

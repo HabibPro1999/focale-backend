@@ -26,7 +26,9 @@ vi.mock("@app/shared", async (importOriginal) => {
 });
 
 import {
+  configureOutbox,
   enqueueOutboxEvent,
+  enqueueRealtimeOutboxEvent,
   processOutboxEvents,
   type ProcessOutboxOptions,
 } from "./outbox";
@@ -153,6 +155,21 @@ describe("enqueueOutboxEvent", () => {
         payload: {},
       }),
     ).rejects.toMatchObject({ code: "23503" });
+  });
+});
+
+describe("enqueueRealtimeOutboxEvent with REALTIME_DISABLED", () => {
+  it("writes nothing and returns false when realtime is disabled", async () => {
+    const { exec, insert } = makeExec();
+    configureOutbox({ realtimeDisabled: true });
+    try {
+      await expect(enqueueRealtimeOutboxEvent(exec, REALTIME_PAYLOAD)).resolves.toBe(false);
+      expect(insert).not.toHaveBeenCalled();
+    } finally {
+      configureOutbox({ realtimeDisabled: false });
+    }
+    await expect(enqueueRealtimeOutboxEvent(exec, REALTIME_PAYLOAD)).resolves.toBe(true);
+    expect(insert).toHaveBeenCalledOnce();
   });
 });
 

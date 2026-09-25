@@ -1,5 +1,5 @@
 import "reflect-metadata";
-import { assertSchemaCurrent, closeDb, configureDb } from "@app/db";
+import { assertSchemaCurrent, closeDb, configureDb, configureOutbox } from "@app/db";
 import {
   configureIntegrations,
   emitEmailLogRealtimeEvent,
@@ -25,6 +25,8 @@ async function bootstrap() {
     settings: config.database,
   });
   configureIntegrations(config.integrations);
+  // REALTIME_DISABLED: realtime.emit rows are not written (nothing drains them).
+  configureOutbox({ realtimeDisabled: config.realtime.disabled });
 
   // N3: emails can be queued/updated from either process — wire the same
   // listener here and in apps/worker/src/main.ts so no email-log status

@@ -181,12 +181,33 @@ export async function insertAuditLog(
   await exec.insert(auditLogs).values(values);
 }
 
-/** Realtime fan-out enqueue: maxAttempts 10 (a dropped live UI event is costly). */
+let realtimeDisabled = false;
+
+export interface OutboxConfig {
+  /** REALTIME_DISABLED: nothing drains realtime.emit rows, so none are written. */
+  realtimeDisabled: boolean;
+}
+
+/**
+ * Process-wide outbox settings from the app config. Both apps call it at
+ * startup (realtime events are produced in the api and in the worker);
+ * unconfigured tools and tests keep realtime enabled.
+ */
+export function configureOutbox(config: OutboxConfig): void {
+  realtimeDisabled = config.realtimeDisabled;
+}
+
+/**
+ * Realtime fan-out enqueue: maxAttempts 10 (a dropped live UI event is
+ * costly). A no-op returning false when realtime is disabled: no api pump
+ * would ever drain the row.
+ */
 export async function enqueueRealtimeOutboxEvent(
   exec: DbExecutor,
   payload: AppEvent,
   dedupeKey?: string,
 ): Promise<boolean> {
+  if (realtimeDisabled) return false;
   return enqueueOutboxEvent(exec, {
     type: REALTIME_EMIT_TYPE,
     payload,
@@ -289,6 +310,8 @@ export async function processOutboxEvents(
 
 const OUTBOX_UNHEALTHY_AGE_MS = 10 * 60 * 1000; // 10min
 const OUTBOX_UNHEALTHY_SIZE = 1000;
+/** Only recent dead letters make the outbox unhealthy; older ones were seen already. */
+const OUTBOX_RECENT_DEAD_LETTER_MS = 24 * 60 * 60 * 1000;
 
 export interface OutboxHealth {
   isHealthy: boolean;
@@ -296,7 +319,10 @@ export interface OutboxHealth {
     pending: number;
     failed: number;
     processing: number;
+    /** Every dead-lettered row still in the table. */
     deadLettered: number;
+    /** Rows dead-lettered in the last 24 h (the only ones that flag the outbox). */
+    deadLetteredLast24h: number;
   };
   oldestPendingAgeMs: number;
   oldestProcessingAgeMs: number;
@@ -308,10 +334,15 @@ export async function getOutboxHealth(): Promise<OutboxHealth> {
   // Ages computed in SQL (now() - col) so they never JS-parse a naive timestamp
   // string from db.execute (which node-postgres would misread as process-local
   // on non-UTC hosts). EXTRACT(EPOCH FROM interval) is a pure wall-clock diff,
-  // TZ-independent.
+  // TZ-independent. A dead letter's time is its last write (updated_at): every
+  // lease-queue write that dead-letters a row sets it.
   const [countsRes, oldestPendingRes, lease] = await Promise.all([
     db.execute(sql`
-      SELECT "status", COUNT(*)::int AS n FROM "outbox_events"
+      SELECT "status", COUNT(*)::int AS n,
+        COALESCE(SUM(CASE WHEN "status" = 'DEAD_LETTERED'
+          AND "updated_at" >= ${DB_NOW} - ${intervalMs(OUTBOX_RECENT_DEAD_LETTER_MS)}
+          THEN 1 ELSE 0 END), 0)::int AS recent
+      FROM "outbox_events"
       WHERE "status" IN ('PENDING', 'FAILED', 'PROCESSING', 'DEAD_LETTERED')
       GROUP BY "status"
     `),
@@ -322,13 +353,15 @@ export async function getOutboxHealth(): Promise<OutboxHealth> {
     outboxQueue.health(),
   ]);
 
-  const counts = { pending: 0, failed: 0, processing: 0, deadLettered: 0 };
-  for (const row of rowsOf<{ status: string; n: number }>(countsRes)) {
+  const counts = { pending: 0, failed: 0, processing: 0, deadLettered: 0, deadLetteredLast24h: 0 };
+  for (const row of rowsOf<{ status: string; n: number; recent: number }>(countsRes)) {
     if (row.status === "PENDING") counts.pending = Number(row.n);
     else if (row.status === "FAILED") counts.failed = Number(row.n);
     else if (row.status === "PROCESSING") counts.processing = Number(row.n);
-    else if (row.status === "DEAD_LETTERED")
+    else if (row.status === "DEAD_LETTERED") {
       counts.deadLettered = Number(row.n);
+      counts.deadLetteredLast24h = Number(row.recent ?? 0);
+    }
   }
 
   const ageOf = (res: unknown): number =>
@@ -337,7 +370,7 @@ export async function getOutboxHealth(): Promise<OutboxHealth> {
   const oldestProcessingAgeMs = lease.oldestLeaseAgeMs;
 
   const isHealthy =
-    counts.deadLettered === 0 &&
+    counts.deadLetteredLast24h === 0 &&
     counts.pending + counts.failed < OUTBOX_UNHEALTHY_SIZE &&
     oldestPendingAgeMs < OUTBOX_UNHEALTHY_AGE_MS &&
     oldestProcessingAgeMs < 2 * OUTBOX_LEASE_MS;
