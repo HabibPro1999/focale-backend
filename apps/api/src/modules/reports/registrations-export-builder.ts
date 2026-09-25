@@ -17,14 +17,12 @@ import type {
   PaymentField,
   SponsorshipField,
 } from "@app/contracts";
+import { formatDateTime, formatFileDate } from "@app/shared";
 
 // ============================================================================
-// NOTE: unlike generateRegistrationsWorkbook / excel-generator.ts, this builder
-// does NOT run cell values through escapeExcelFormula / escapeExcelRow. That is
-// a pre-existing CSV/XLSX formula-injection gap for user-controlled strings
-// (firstName, note, form free-text) exported via this endpoint. The gap is kept
-// verbatim to preserve legacy output byte-for-byte; do NOT add escaping here
-// without a coordinated parity decision across clients that diff these files.
+// Cell values are written as plain strings: exceljs stores them as text cells,
+// which spreadsheet apps never evaluate as formulas, so XLSX needs no escaping
+// (the shared export policy in @app/shared export-format; CSV is escaped).
 // ============================================================================
 
 // ============================================================================
@@ -216,16 +214,9 @@ const CHECKIN_SUFFIX: Record<Lang, string> = {
 // Helpers — value formatting
 // ============================================================================
 
+/** Event-local date and time (shared export format). */
 function fmtDateTime(d: Date | null | undefined, lang: Lang): string {
-  if (!d) return "";
-  const locale = lang === "fr" ? "fr-FR" : lang === "ar" ? "ar-TN" : "en-US";
-  return d.toLocaleString(locale, {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return d ? formatDateTime(d, lang) : "";
 }
 
 function yesNo(b: boolean, lang: Lang): string {
@@ -895,7 +886,7 @@ export async function buildRegistrationsWorkbook(
   };
 
   const slug = event?.slug ?? "event";
-  const timestamp = new Date().toISOString().split("T")[0];
+  const timestamp = formatFileDate();
   const filename = `${slug}-registrations-${timestamp}.xlsx`;
 
   const data = Buffer.from(await workbook.xlsx.writeBuffer());

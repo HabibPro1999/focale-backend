@@ -1,4 +1,8 @@
-import { evaluateRuleConditions, type Condition } from "@app/shared";
+import {
+  DEFAULT_EVENT_TIME_ZONE,
+  evaluateRuleConditions,
+  type Condition,
+} from "@app/shared";
 import type { EventAccessWithPrereqIds } from "@app/db";
 import type { DateGroup, GroupedAccessResponse, TimeSlot } from "@app/contracts";
 
@@ -37,12 +41,11 @@ function byOrder(
 // not the UTC day — otherwise a session starting within the UTC offset after
 // local midnight (e.g. 00:30 in Tunisia, stored as 23:30Z the previous day)
 // would be listed under the previous day's header. Events carry no timezone
-// column yet; all events are Tunisia-based today.
-const EVENT_TIME_ZONE = "Africa/Tunis";
+// column yet; all events are Tunisia-based today (DEFAULT_EVENT_TIME_ZONE).
 
 // en-CA formats as YYYY-MM-DD, matching the dateKey contract.
 const localDayFormat = new Intl.DateTimeFormat("en-CA", {
-  timeZone: EVENT_TIME_ZONE,
+  timeZone: DEFAULT_EVENT_TIME_ZONE,
   year: "numeric",
   month: "2-digit",
   day: "2-digit",

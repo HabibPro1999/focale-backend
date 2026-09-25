@@ -7,11 +7,13 @@ import { resolveVerifiedNetworkingSender } from "./networking-sender";
 import {
   Resend,
   type CreateEmailOptions,
+  type CreateEmailRequestOptions,
   type WebhookEventPayload,
 } from "resend";
 import { logger } from "../../logger";
 import { integrationsConfig } from "../../config";
 import {
+  EMAIL_PROVIDER_TIMEOUT_MS,
   getHeader,
   resolveEmailSender,
   stripHtml,
@@ -219,10 +221,16 @@ export class ResendProvider implements EmailProvider {
 
     try {
       const approvedFrom = await resolveVerifiedNetworkingSender(input, this.name, this.apiKey);
+      // The SDK has no timeout option but spreads request options into its
+      // fetch call, so the abort signal bounds the request. The emailLog id is
+      // a natural idempotency key for queued sends (a timed-out send retries safely).
+      const requestOptions = {
+        ...(input.trackingId ? { idempotencyKey: input.trackingId } : {}),
+        signal: AbortSignal.timeout(EMAIL_PROVIDER_TIMEOUT_MS),
+      } as CreateEmailRequestOptions;
       const { data, error } = await this.client.emails.send(
         buildResendPayload(input, approvedFrom ? { ...this.from, fromEmail: approvedFrom } : this.from),
-        // emailLog id is a natural idempotency key for queued sends.
-        input.trackingId ? { idempotencyKey: input.trackingId } : undefined,
+        requestOptions,
       );
 
       if (error) {

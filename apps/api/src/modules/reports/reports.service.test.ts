@@ -412,15 +412,33 @@ describe("exportRegistrations", () => {
     const result = await service.exportRegistrations(eventId, { format: "csv" });
 
     expect(result.filename).toMatch(/^test-event-registrations-.*\.csv$/);
-    expect(result.contentType).toBe("text/csv");
+    expect(result.contentType).toBe("text/csv; charset=utf-8");
 
-    const lines = String(result.data).split("\n");
+    const lines = String(result.data).split("\r\n");
+    expect(lines[0]!.startsWith('\uFEFF"ID"')).toBe(true);
     expect(lines[0]).toContain("ID");
     expect(lines[0]).toContain("Email");
     expect(lines[0]).toContain("company");
     expect(lines[1]).toContain("reg-1");
     expect(lines[1]).toContain("test@example.com");
     expect(lines[1]).toContain("Acme");
+    // Amounts stay numbers; the submission time is the ISO instant.
+    expect(lines[1]).toContain('"500","500","400","100","0"');
+    expect(lines[1]).toContain('"2025-06-01T10:00:00.000Z"');
+  });
+
+  it("guards CSV cells against formulas, including after leading spaces", async () => {
+    m.getEventSlug.mockResolvedValue({ slug: "evt" });
+    m.getRegistrationsForExport.mockResolvedValue([
+      baseRow({ id: "r-1", firstName: " =cmd|' /C calc'!A0", lastName: "-5+1", formData: { note: "@x" } }),
+    ]);
+
+    const result = await service.exportRegistrations(eventId, { format: "csv" });
+    const row = String(result.data).split("\r\n")[1]!;
+
+    expect(row).toContain(`"' =cmd|' /C calc'!A0"`);
+    expect(row).toContain(`"'-5+1"`);
+    expect(row).toContain(`"'@x"`);
   });
 
   it("collects the alphabetical union of dynamic formData keys across rows", async () => {
@@ -463,7 +481,7 @@ describe("exportRegistrations", () => {
     );
   });
 
-  it("escapes formula-injection strings in XLSX cells", async () => {
+  it("writes formula-like text to XLSX as plain text cells (no apostrophe prefix)", async () => {
     m.getEventSlug.mockResolvedValue({ slug: "evt" });
     m.getRegistrationsForExport.mockResolvedValue([
       baseRow({
@@ -486,10 +504,13 @@ describe("exportRegistrations", () => {
     await workbook.xlsx.load(workbookData);
     const sheet = workbook.getWorksheet("Registrations")!;
 
-    expect(sheet.getCell("C2").value).toBe('\'=HYPERLINK("https://evil.test")');
-    expect(sheet.getCell("D2").value).toBe("'+Injected");
+    // A string cell is never evaluated, so the text is kept exactly as entered.
+    expect(sheet.getCell("C2").value).toBe('=HYPERLINK("https://evil.test")');
+    expect(sheet.getCell("C2").type).toBe(ExcelJS.ValueType.String);
+    expect(sheet.getCell("D2").value).toBe("+Injected");
     // 16 standard columns + 1st dynamic formData key ("note") => column Q.
-    expect(sheet.getCell("Q2").value).toBe("'@cmd");
+    expect(sheet.getCell("Q2").value).toBe("@cmd");
+    expect(sheet.getCell("Q2").type).toBe(ExcelJS.ValueType.String);
   });
 });
 

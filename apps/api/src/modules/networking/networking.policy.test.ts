@@ -14,8 +14,8 @@ import {
   networkingPublicProfile,
   resourceQuanta,
   zonedInstant,
-  csvCell,
 } from "./networking.policy";
+import { csvCell } from "@app/shared";
 import {
   networkingTotp,
   issueNetworkingBadge,
