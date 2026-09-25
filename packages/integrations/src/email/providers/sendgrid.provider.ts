@@ -9,6 +9,7 @@ import { EventWebhook, EventWebhookHeader } from "@sendgrid/eventwebhook";
 import { logger } from "../../logger";
 import { integrationsConfig } from "../../config";
 import {
+  EMAIL_PROVIDER_TIMEOUT_MS,
   getHeader,
   resolveEmailSender,
   stripHtml,
@@ -115,6 +116,8 @@ export class SendgridProvider implements EmailProvider {
   private ensureApiKey(): void {
     if (this.apiKey && !this.keySet) {
       sgMail.setApiKey(this.apiKey);
+      // Without it a stalled request would hold the email job until its timeout.
+      sgMail.setTimeout(EMAIL_PROVIDER_TIMEOUT_MS);
       this.keySet = true;
     }
   }

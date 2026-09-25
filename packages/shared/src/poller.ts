@@ -6,6 +6,8 @@ export interface PollerOptions {
   name: string;
   intervalMs: number;
   work: () => Promise<void>;
+  /** Aborting it stops scheduling, exactly like stop() (an in-flight run is not awaited). */
+  signal?: AbortSignal;
 }
 
 export interface Poller {
@@ -17,9 +19,11 @@ export interface Poller {
  * `work()` is still in flight. Errors are caught+logged (never crash the loop).
  * First run happens after the first `intervalMs`, not immediately. `stop()` is
  * idempotent, clears the interval, and awaits any in-flight run before returning.
- * Ported from the legacy `src/shared/utils/poller.ts`.
+ * An aborted `signal` stops scheduling the same way (callers that also need to
+ * wait for the in-flight run call stop()). Ported from the legacy
+ * `src/shared/utils/poller.ts`.
  */
-export function startPoller({ name, intervalMs, work }: PollerOptions): Poller {
+export function startPoller({ name, intervalMs, work, signal }: PollerOptions): Poller {
   let inFlight: Promise<void> | null = null;
   let stopping = false;
 
@@ -34,21 +38,26 @@ export function startPoller({ name, intervalMs, work }: PollerOptions): Poller {
       });
   }, intervalMs);
 
+  const halt = (): boolean => {
+    if (stopping) return false;
+    stopping = true;
+    clearInterval(timer);
+    signal?.removeEventListener("abort", halt);
+    return true;
+  };
+  if (signal?.aborted) halt();
+  else signal?.addEventListener("abort", halt, { once: true });
+
   logger.info({ name }, `${name} started (${intervalMs}ms interval)`);
 
   return {
     stop: async () => {
-      if (stopping) return;
-      stopping = true;
-      clearInterval(timer);
+      const first = halt();
       if (inFlight) {
-        logger.info(
-          { name },
-          `Waiting for in-flight ${name} batch to drain...`,
-        );
+        if (first) logger.info({ name }, `Waiting for in-flight ${name} batch to drain...`);
         await inFlight;
       }
-      logger.info({ name }, `${name} stopped`);
+      if (first) logger.info({ name }, `${name} stopped`);
     },
   };
 }

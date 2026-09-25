@@ -241,7 +241,7 @@ describe("ResendProvider", () => {
     expect(result).toEqual({ success: true, messageId: "mock-resend-id" });
     expect(resendMock.send).toHaveBeenCalledTimes(1);
     const [, opts] = resendMock.send.mock.calls[0];
-    expect(opts).toEqual({ idempotencyKey: "log-9" });
+    expect(opts).toEqual({ idempotencyKey: "log-9", signal: expect.any(AbortSignal) });
   });
 
   it("surfaces a returned Resend error as a failed result", async () => {

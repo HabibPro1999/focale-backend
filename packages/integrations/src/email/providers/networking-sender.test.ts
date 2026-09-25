@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({ sendgrid: vi.fn(async (_input: unknown) => [{ headers: { "x-message-id": "test-sg" } }, {}]), resend: vi.fn(async (_input: unknown) => ({ data: { id: "test-re" }, error: null })) }));
-vi.mock("@sendgrid/mail", () => ({ default: { setApiKey: vi.fn(), send: mocks.sendgrid } }));
+vi.mock("@sendgrid/mail", () => ({ default: { setApiKey: vi.fn(), setTimeout: vi.fn(), send: mocks.sendgrid } }));
 vi.mock("resend", () => ({ Resend: class { emails = { send: mocks.resend }; webhooks = { verify: vi.fn() }; } }));
 import { SendgridProvider } from "./sendgrid.provider";
 import { ResendProvider } from "./resend.provider";
