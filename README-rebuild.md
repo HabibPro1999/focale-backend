@@ -101,17 +101,18 @@ fails the rules would otherwise refuse to boot, listing the same keys.
 
 ## Health endpoints (API)
 
-All `@SkipThrottle`, no auth, enveloped (`{ ok, data, requestId }`). Ops
-endpoints return **503** (with the body unchanged) when `data.isHealthy` is
-false:
+All `@SkipThrottle`, no auth, and **not** enveloped: each returns its raw body
+with the status code probes rely on (503 when unhealthy, body unchanged).
 
 | Path | Purpose |
 |---|---|
-| `GET /health` | liveness + uptime |
-| `GET /ready` | DB ping |
-| `GET /health/email-queue` | email queue depth / staleness (unhealthy: stale sending, >1000 queued, or oldest queued >30min) |
-| `GET /health/abstract-book-jobs` | book-job queue (unhealthy: stale running, >100 pending, or oldest pending >1h) |
-| `GET /health/outbox` | outbox backlog (unhealthy: any dead-lettered, pending+failed ≥1000, oldest pending >10min, or oldest processing >2× lease) |
+| `GET /health/live` | Liveness: `{ "status": "ok" }`, no I/O, never fails. Use it as the platform health check (Render, image HEALTHCHECK). |
+| `GET /health/ready` | Readiness: 200 `{ "status": "ready" }` when not draining, the database answers (ping cached 5 s) and the boot `MIGRATIONS_CHECK` found the schema current (or did not run). Otherwise 503 `{ "status": "not ready", "reasons": [...] }`, or 503 `{ "status": "draining" }` during shutdown. |
+| `GET /health` | Legacy overall health: 200 `{ status: "healthy", timestamp, checks.database }`, 503 `unhealthy` when the DB ping fails (uncached). |
+| `GET /health/worker` | Worker heartbeats (`worker_heartbeats`, written every 15 s): unhealthy when no enabled worker beat in the last 60 s, when only `RUN_WORKERS=false` workers are beating, or when a job has run past twice its timeout. Lists recent workers with their per-job state. |
+| `GET /health/email-queue` | Email queue depth / staleness (unhealthy: stale sending, >1000 queued, or oldest queued >30 min). |
+| `GET /health/abstract-book-jobs` | Book-job queue (unhealthy: stale running, >100 pending, or oldest pending >1 h). |
+| `GET /health/outbox` | Outbox backlog (unhealthy: any dead-lettered, pending+failed ≥1000, oldest pending >10 min, or oldest processing >2× lease). |
 
 ## Deployment
 
@@ -151,20 +152,33 @@ exit, and SIGKILLs any child still running `SHUTDOWN_GRACE_MS` + 3 s later.
   (`retry:` and `data.reconnectInMs`) and is closed. Fastify then closes;
   sockets still open at grace − 5 s are destroyed; the pool closes; the
   process hard-exits at grace.
-- **Worker:** stops scheduling and gives running jobs until grace − 5 s (jobs
-  cannot be aborted yet; see plan 3.3), closes the Nest context and the pool,
-  hard-exits at grace.
+- **Worker:** stops scheduling and gives running jobs until grace − 5 s, then
+  aborts them through their `AbortSignal` and gives them 3 s to settle; closes
+  the Nest context and the pool; hard-exits at grace.
 
 Keep grace + 3 s below the platform's own SIGKILL delay. On Render set
 **`maxShutdownDelaySeconds` = 30** explicitly on the API and worker services
 (the default grace of 25 s escalates at 28 s).
 
+### Worker jobs and heartbeat
+
+Every job declares a `timeoutMs` (outbox 60 s, email queue 120 s, Abstract
+Book 30 min, networking delivery 30 s, networking maintenance and embeddings
+5 min). Each run receives `{ signal, deadline, log }`; the signal aborts at the
+timeout or at the shutdown deadline, and a job's next run never starts before
+the previous one settles. Email provider requests are bounded at 15 s.
+
+One heartbeat timer (15 s) writes both the liveness file
+(`WORKER_HEARTBEAT_FILE`, read by the image HEALTHCHECK) and the process's
+`worker_heartbeats` row (service name from `RENDER_SERVICE_NAME`), which
+`GET /health/worker` reads.
+
 ### `RUN_WORKERS` semantics
 
 Workers run **unless** `RUN_WORKERS` is the literal string `"false"`. With
 `"false"`, the worker process does not exit (which would stop or restart its
-container): it idles, keeps writing its heartbeat file marked
-`"disabled": true`, and shuts down cleanly on SIGTERM. With `APP=all` and
+container): it idles, keeps beating (file and `worker_heartbeats` row)
+marked `disabled`, and shuts down cleanly on SIGTERM. With `APP=all` and
 `RUN_WORKERS=false`, `start-runtime.mjs` starts only the API.
 
 ### `REALTIME_DISABLED` caveat

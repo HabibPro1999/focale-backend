@@ -5,6 +5,7 @@ import { SendgridProvider, mapSendgridEvents } from "./sendgrid.provider";
 const { sendGridMock } = vi.hoisted(() => ({
   sendGridMock: {
     setApiKey: vi.fn(),
+    setTimeout: vi.fn(),
     send: vi.fn().mockResolvedValue([
       {
         statusCode: 202,
@@ -19,6 +20,7 @@ const { sendGridMock } = vi.hoisted(() => ({
 vi.mock("@sendgrid/mail", () => ({
   default: sendGridMock,
   setApiKey: sendGridMock.setApiKey,
+  setTimeout: sendGridMock.setTimeout,
   send: sendGridMock.send,
 }));
 
@@ -87,6 +89,8 @@ describe("SendgridProvider", () => {
     });
     expect(result).toEqual({ success: true, messageId: "mock-message-id-123" });
     expect(sendGridMock.send).toHaveBeenCalledTimes(1);
+    // A stalled request cannot hold the email job past 15 s.
+    expect(sendGridMock.setTimeout).toHaveBeenCalledWith(15_000);
   });
 
   it("reports not-configured without calling the API", async () => {

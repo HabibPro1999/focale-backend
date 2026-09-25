@@ -14,7 +14,7 @@ import {
   type QueueSponsorshipEmailInput,
 } from "@app/integrations";
 import type { AutomaticEmailTrigger } from "@app/contracts";
-import type { Job } from "../job";
+import type { Job, JobContext } from "../job";
 
 const log = createLogger({ name: "worker:outbox" });
 
@@ -69,15 +69,17 @@ export function buildOutboxHandlers(): OutboxHandlerRegistry {
 export class OutboxJob implements Job {
   readonly name = "outbox";
   readonly intervalMs = 5_000;
+  readonly timeoutMs = 60_000;
 
   private readonly workerId = makeWorkerId("outbox");
   private readonly handlers = buildOutboxHandlers();
 
-  async run(): Promise<void> {
+  async run({ signal }: JobContext): Promise<void> {
     const result = await processOutboxEvents(50, {
       workerId: this.workerId,
       scope: "background",
       handlers: this.handlers,
+      signal,
     });
     if (
       result.processed > 0 ||

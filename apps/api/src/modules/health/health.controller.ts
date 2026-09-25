@@ -4,11 +4,12 @@ import {
   getAbstractBookQueueHealth,
   getEmailQueueHealth,
   getOutboxHealth,
+  getWorkerHealth,
   pingDb,
 } from "@app/db";
 import type { FastifyReply } from "fastify";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
-import { ShutdownCoordinator } from "../../core/shutdown";
+import { ReadinessService } from "./readiness.service";
 
 // Health probes are machine-consumed (load balancers, k8s, Render). They return
 // the RAW legacy bodies with legacy status codes and are @SkipEnvelope: the
@@ -17,7 +18,7 @@ import { ShutdownCoordinator } from "../../core/shutdown";
 @Controller()
 @SkipThrottle()
 export class HealthController {
-  constructor(private readonly lifecycle: ShutdownCoordinator) {}
+  constructor(private readonly readiness: ReadinessService) {}
 
   // Overall health — DB-gated (SELECT 1 via pingDb). Minimal public surface to
   // avoid information disclosure: no DB error detail leaks. 503 when unhealthy.
@@ -40,18 +41,17 @@ export class HealthController {
     return { status: "ok" };
   }
 
-  // Readiness — same DB check as /health, terser body. 503 when not ready,
-  // and 503 "draining" from the moment shutdown starts.
+  // Readiness — not draining + cached DB ping + boot schema check. 503 with
+  // the reasons when not ready, and 503 "draining" once shutdown starts.
   @Get("health/ready")
   @SkipEnvelope()
   async ready(@Res({ passthrough: true }) reply: FastifyReply) {
-    if (this.lifecycle.draining) {
-      reply.status(503);
-      return { status: "draining" };
-    }
-    if (await pingDb()) return { status: "ready" };
+    const readiness = await this.readiness.check();
+    if (readiness.ready) return { status: "ready" };
     reply.status(503);
-    return { status: "not ready" };
+    return readiness.status === "draining"
+      ? { status: "draining" }
+      : { status: readiness.status, reasons: readiness.reasons };
   }
 
   // Operational queue probes: 200 when isHealthy, else 503; raw body either way.
@@ -80,5 +80,13 @@ export class HealthController {
   @SkipEnvelope()
   outbox(@Res({ passthrough: true }) reply: FastifyReply) {
     return this.probe(reply, getOutboxHealth);
+  }
+
+  // Worker heartbeats: an enabled worker beat < 60 s ago and no job running
+  // past twice its timeout (worker_heartbeats, written every 15 s).
+  @Get("health/worker")
+  @SkipEnvelope()
+  worker(@Res({ passthrough: true }) reply: FastifyReply) {
+    return this.probe(reply, getWorkerHealth);
   }
 }

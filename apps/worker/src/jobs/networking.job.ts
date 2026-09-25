@@ -13,6 +13,9 @@ const log = createLogger({ name: "worker:networking" });
 export class NetworkingDeliveryJob implements Job {
   readonly name = "networking-delivery";
   readonly intervalMs = 2_000;
+  // The delivery/maintenance/embedding pipelines do not take an abort signal
+  // yet: on timeout the runner logs, and waits for the run to settle.
+  readonly timeoutMs = 30_000;
   async run() {
     const result = await processNetworkingDeliveries();
     if (result.failed)
@@ -26,6 +29,7 @@ export class NetworkingDeliveryJob implements Job {
 export class NetworkingMaintenanceJob implements Job {
   readonly name = "networking-maintenance";
   readonly intervalMs = 60_000;
+  readonly timeoutMs = 5 * 60_000;
   async run() {
     await maintainNetworkingLifecycle(undefined, async (profiles) => {
       // Purge has committed. Cleanup has no durable retry; failures may leave orphaned objects.
@@ -62,6 +66,7 @@ export class NetworkingMaintenanceJob implements Job {
 export class NetworkingEmbeddingJob implements Job {
   readonly name = "networking-embeddings";
   readonly intervalMs = 15_000;
+  readonly timeoutMs = 5 * 60_000;
   async run() {
     const result = await processNetworkingEmbeddings();
     if (result.failed)

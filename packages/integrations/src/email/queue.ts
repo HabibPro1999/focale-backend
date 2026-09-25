@@ -387,6 +387,11 @@ export interface ProcessEmailQueueOptions {
   leaseMs?: number;
   /** Injected by the worker (wave 3). Required to process CERTIFICATE_SENT rows. */
   generateCertificateAttachments?: CertificateAttachmentGenerator;
+  /**
+   * Stop before the next chunk once aborted (job timeout or shutdown). Rows
+   * claimed but not started stay leased until stale-lease recovery.
+   */
+  signal?: AbortSignal;
 }
 
 type EmailOutcome = "sent" | "failed" | "skipped" | "lease-lost";
@@ -579,6 +584,7 @@ export async function processEmailQueue(
   }
 
   for (let i = 0; i < batch.length; i += CONCURRENCY_LIMIT) {
+    if (options.signal?.aborted) break;
     const chunk = batch.slice(i, i + CONCURRENCY_LIMIT);
     const outcomes = await Promise.all(chunk.map(processEmail));
     for (const outcome of outcomes) {

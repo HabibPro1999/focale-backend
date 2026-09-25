@@ -9,6 +9,7 @@ import { buildApp } from "./app.factory";
 import { loadConfig } from "./core/config";
 import { logger } from "./core/logger.service";
 import { ShutdownCoordinator, createShutdownHandler } from "./core/shutdown";
+import { ReadinessService } from "./modules/health/readiness.service";
 
 process.on("unhandledRejection", (reason) => {
   logger.error({ err: reason }, "Unhandled promise rejection");
@@ -30,10 +31,12 @@ async function bootstrap() {
   // change is silently dropped depending on which process handled it.
   setEmailStatusChangeListener(emitEmailLogRealtimeEvent);
 
-  // MIGRATIONS_CHECK: enforce refuses to start on a stale schema; warn logs.
-  await assertSchemaCurrent({ mode: config.MIGRATIONS_CHECK, logger });
+  // MIGRATIONS_CHECK: enforce refuses to start on a stale schema; warn logs
+  // (and /health/ready reports it).
+  const schemaCheck = await assertSchemaCurrent({ mode: config.MIGRATIONS_CHECK, logger });
 
   const app = await buildApp(config);
+  app.get(ReadinessService).recordSchemaCheck(schemaCheck);
 
   // main.ts owns SIGTERM/SIGINT (buildApp does not enable Nest shutdown hooks,
   // which would close the app a second time): drain, close the app, then the
