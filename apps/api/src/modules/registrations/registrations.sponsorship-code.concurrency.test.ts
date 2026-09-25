@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { ErrorCodes } from "@app/contracts";
@@ -37,10 +38,11 @@ const service = new RegistrationsService(
 
 async function setup() {
   const event = await seedEvent({ status: "OPEN", endDate: new Date("2099-01-01T00:00:00.000Z") });
-  const form = await seedForm({ eventId: event.id });
+  const form = await seedForm({ eventId: event.id, schema: { steps: [{ fields: [] }] } });
   const gala = await seedEventAccess({ eventId: event.id, name: "Gala", price: 150, type: "ADDON" });
   const batch = await seedSponsorshipBatch({ eventId: event.id, formId: form.id });
   const sponsorship = await seedSponsorship({
+    code: `SP-${randomUUID().slice(0, 8).toUpperCase()}`,
     batchId: batch.id,
     eventId: event.id,
     totalAmount: 500,

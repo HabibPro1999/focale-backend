@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import {
@@ -60,6 +61,8 @@ async function setup(options: { maxCapacity?: number } = {}) {
   });
   const batch = await seedSponsorshipBatch({ eventId: event.id, formId: form.id });
   const sponsorship = await seedSponsorship({
+    // Codes are generated upper-case (SP-XXXXXXXX).
+    code: `SP-${randomUUID().slice(0, 8).toUpperCase()}`,
     batchId: batch.id,
     eventId: event.id,
     totalAmount: 500,

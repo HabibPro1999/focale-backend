@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { ErrorCodes } from "@app/contracts";
 import {
@@ -42,7 +43,7 @@ const service = new RegistrationsService(
 /** An open event with an active registration form and two ADDON items (no base price). */
 async function setup() {
   const event = await seedEvent({ status: "OPEN", endDate: new Date("2099-01-01T00:00:00.000Z") });
-  const form = await seedForm({ eventId: event.id });
+  const form = await seedForm({ eventId: event.id, schema: { steps: [{ fields: [] }] } });
   const gala = await seedEventAccess({ eventId: event.id, name: "Gala", price: 120, type: "ADDON" });
   const tour = await seedEventAccess({ eventId: event.id, name: "Tour", price: 80, type: "ADDON" });
   const batch = await seedSponsorshipBatch({ eventId: event.id, formId: form.id });
@@ -50,6 +51,11 @@ async function setup() {
 }
 
 type Setup = Awaited<ReturnType<typeof setup>>;
+
+/** Codes are generated upper-case (SP-XXXXXXXX); signup and the quote match them upper-cased. */
+function newCode(): string {
+  return `SP-${randomUUID().slice(0, 8).toUpperCase()}`;
+}
 
 function signup(s: Setup, code: string | undefined, email = `reg-${Math.random().toString(36).slice(2)}@example.test`) {
   return service.createPublicRegistration(s.form.id, {
@@ -83,16 +89,17 @@ async function registrationCount(eventId: string) {
 describe.runIf(dbTestsEnabled())("sponsorship code consumed at signup (2.7)", () => {
   it("a fully covering code makes the signup SPONSORED, uses the code and takes paid places", async () => {
     const s = await setup();
+    const code = newCode();
     const sponsorship = await seedSponsorship({
       batchId: s.batch.id,
       eventId: s.event.id,
-      code: "SP-FULLCOV2",
+      code,
       totalAmount: 500,
       coversBasePrice: true,
       coveredAccessIds: [s.gala.id, s.tour.id],
     });
 
-    const result = await signup(s, "  sp-fullcov2 ");
+    const result = await signup(s, `  ${code.toLowerCase()} `);
 
     expect(result.created).toBe(true);
     const registrationId = result.registration.id;
@@ -102,14 +109,14 @@ describe.runIf(dbTestsEnabled())("sponsorship code consumed at signup (2.7)", ()
       totalAmount: 200,
       sponsorshipAmount: 200,
       paidAmount: 0,
-      sponsorshipCode: "SP-FULLCOV2",
+      sponsorshipCode: code,
     });
     expect(row.paidAt).toBeInstanceOf(Date);
     expect(row.priceBreakdown).toMatchObject({
       subtotal: 200,
       sponsorshipTotal: 200,
       total: 0,
-      sponsorships: [{ code: "SP-FULLCOV2", amount: 200, valid: true }],
+      sponsorships: [{ code, amount: 200, valid: true }],
     });
     expect(result.priceBreakdown).toMatchObject({ sponsorshipTotal: 200, total: 0 });
 
@@ -130,6 +137,7 @@ describe.runIf(dbTestsEnabled())("sponsorship code consumed at signup (2.7)", ()
   it("a partially covering code makes the signup PARTIAL with paid places for the covered item only", async () => {
     const s = await setup();
     const sponsorship = await seedSponsorship({
+      code: newCode(),
       batchId: s.batch.id,
       eventId: s.event.id,
       totalAmount: 500,
@@ -159,13 +167,13 @@ describe.runIf(dbTestsEnabled())("sponsorship code consumed at signup (2.7)", ()
     [
       "cancelled",
       async (s: Setup) =>
-        seedSponsorship({ batchId: s.batch.id, eventId: s.event.id, status: "CANCELLED", totalAmount: 500 }),
+        seedSponsorship({ code: newCode(), batchId: s.batch.id, eventId: s.event.id, status: "CANCELLED", totalAmount: 500 }),
     ],
     [
       "of another event",
       async () => {
         const other = await setup();
-        return seedSponsorship({ batchId: other.batch.id, eventId: other.event.id, totalAmount: 500 });
+        return seedSponsorship({ code: newCode(), batchId: other.batch.id, eventId: other.event.id, totalAmount: 500 });
       },
     ],
   ] as Array<[string, (s: Setup) => Promise<{ code: string }>]>)(
@@ -187,13 +195,14 @@ describe.runIf(dbTestsEnabled())("sponsorship code consumed at signup (2.7)", ()
     [
       "used",
       async (s: Setup) =>
-        seedSponsorship({ batchId: s.batch.id, eventId: s.event.id, status: "USED", totalAmount: 500 }),
+        seedSponsorship({ code: newCode(), batchId: s.batch.id, eventId: s.event.id, status: "USED", totalAmount: 500 }),
     ],
     [
       "reserved for a registration by a linked batch",
       async (s: Setup) => {
         const target = await seedRegistration({ eventId: s.event.id, formId: s.form.id });
         return seedSponsorship({
+          code: newCode(),
           batchId: s.batch.id,
           eventId: s.event.id,
           totalAmount: 500,
@@ -205,7 +214,7 @@ describe.runIf(dbTestsEnabled())("sponsorship code consumed at signup (2.7)", ()
       "linked while still PENDING",
       async (s: Setup) => {
         const other = await seedRegistration({ eventId: s.event.id, formId: s.form.id });
-        const sponsorship = await seedSponsorship({ batchId: s.batch.id, eventId: s.event.id, totalAmount: 500 });
+        const sponsorship = await seedSponsorship({ code: newCode(), batchId: s.batch.id, eventId: s.event.id, totalAmount: 500 });
         await seedSponsorshipUsage({
           sponsorshipId: sponsorship.id,
           registrationId: other.id,
@@ -218,7 +227,7 @@ describe.runIf(dbTestsEnabled())("sponsorship code consumed at signup (2.7)", ()
     [
       "claimed by an earlier signup (stored untrimmed, lower-case)",
       async (s: Setup) => {
-        const sponsorship = await seedSponsorship({ batchId: s.batch.id, eventId: s.event.id, totalAmount: 500 });
+        const sponsorship = await seedSponsorship({ code: newCode(), batchId: s.batch.id, eventId: s.event.id, totalAmount: 500 });
         await seedRegistration({
           eventId: s.event.id,
           formId: s.form.id,
@@ -245,6 +254,7 @@ describe.runIf(dbTestsEnabled())("sponsorship code consumed at signup (2.7)", ()
   it("a second signup with a consumed code gets 409", async () => {
     const s = await setup();
     const sponsorship = await seedSponsorship({
+      code: newCode(),
       batchId: s.batch.id,
       eventId: s.event.id,
       totalAmount: 500,
@@ -264,6 +274,7 @@ describe.runIf(dbTestsEnabled())("sponsorship code consumed at signup (2.7)", ()
     const s = await setup();
     const target = await seedRegistration({ eventId: s.event.id, formId: s.form.id });
     const reserved = await seedSponsorship({
+      code: newCode(),
       batchId: s.batch.id,
       eventId: s.event.id,
       totalAmount: 500,
@@ -271,6 +282,7 @@ describe.runIf(dbTestsEnabled())("sponsorship code consumed at signup (2.7)", ()
       targetRegistrationId: target.id,
     });
     const open = await seedSponsorship({
+      code: newCode(),
       batchId: s.batch.id,
       eventId: s.event.id,
       totalAmount: 500,
