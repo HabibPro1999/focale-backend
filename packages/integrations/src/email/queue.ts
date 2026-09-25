@@ -41,6 +41,7 @@ import {
   getEmailLogRealtimeTarget,
   enqueueRealtimeOutboxEvent,
   getDb,
+  pgUniqueViolation,
   resendUncertainEmailLog,
   type ClaimedEmailLog,
   type ResendEmailLogResult,
@@ -61,8 +62,8 @@ const logger = createLogger({ name: "email:queue" });
 
 const MAX_RETRIES = 3;
 const DEFAULT_WORKER_ID = makeWorkerId("email");
-/** Tries of the SENT write after the provider accepted an email (never a resend). */
-const MARK_SENT_RETRY_DELAYS_MS = [0, 250, 1_000] as const;
+/** Tries of an outcome write after the provider call (never a resend). */
+const OUTCOME_WRITE_RETRY_DELAYS_MS = [0, 250, 1_000] as const;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -88,9 +89,13 @@ export function setEmailStatusChangeListener(
   statusChangeListener = fn;
 }
 
-// Fire-and-forget: never blocks the caller, never throws. Handles both a
-// synchronous throw and an async rejection from the listener.
-function notifyStatusChange(emailLogId: string, status: string): void {
+/**
+ * Tell the installed listener that an email log changed status (the queue,
+ * sendEmailNow, webhooks). Fire-and-forget: never blocks the caller, never
+ * throws. Handles both a synchronous throw and an async rejection from the
+ * listener.
+ */
+export function notifyStatusChange(emailLogId: string, status: string): void {
   if (!statusChangeListener) return;
   try {
     void Promise.resolve(statusChangeListener(emailLogId, status)).catch(
@@ -572,7 +577,7 @@ export async function processEmailQueue(
       }
       providerCalled.add(emailLog.id);
 
-      const sendResult = await callProvider(provider, {
+      const sendResult = await callEmailProvider(provider, {
         to: emailLog.recipientEmail,
         toName: emailLog.recipientName || undefined,
         fromName:
@@ -651,22 +656,16 @@ export async function processEmailQueue(
     emailLogId: string,
     messageId: string | undefined,
   ): Promise<EmailOutcome> {
-    let lastError: unknown;
-    for (const delayMs of MARK_SENT_RETRY_DELAYS_MS) {
-      if (delayMs > 0) await sleep(delayMs);
-      try {
-        const ok = await markEmailSent(emailLogId, workerId, messageId);
-        if (ok) notifyStatusChange(emailLogId, "SENT");
-        return ok ? "sent" : "lease-lost";
-      } catch (err) {
-        lastError = err;
-      }
+    const written = await retryOutcomeWrite(() => markEmailSent(emailLogId, workerId, messageId));
+    if (!written.ok) {
+      logger.error(
+        { err: written.error, emailLogId, messageId },
+        "Email accepted by the provider but not recorded as SENT; left for lease recovery",
+      );
+      return "unsettled";
     }
-    logger.error(
-      { err: lastError, emailLogId, messageId },
-      "Email accepted by the provider but not recorded as SENT; left for lease recovery",
-    );
-    return "unsettled";
+    if (written.owned) notifyStatusChange(emailLogId, "SENT");
+    return written.owned ? "sent" : "lease-lost";
   }
 
   // Counts the outcome; true when its write landed (the row was still ours).
@@ -712,7 +711,7 @@ export async function processEmailQueue(
 }
 
 /** A provider call that never throws: an unexpected throw is an ambiguous outcome. */
-async function callProvider(
+export async function callEmailProvider(
   provider: EmailProvider,
   input: SendEmailInput,
 ): Promise<SendEmailResult> {
@@ -721,6 +720,28 @@ async function callProvider(
   } catch (error: unknown) {
     return ambiguousSend(error instanceof Error ? error.message : String(error));
   }
+}
+
+/**
+ * An outcome write after the provider call, tried OUTCOME_WRITE_RETRY_DELAYS_MS
+ * times: once the provider was called, a failed write must never turn into a
+ * requeue. `owned` is the lease-guarded write's answer (false: the row is no
+ * longer this worker's); `ok: false` when every try threw, which leaves the
+ * row leased with its provider-attempt marker for lease recovery to settle.
+ */
+export async function retryOutcomeWrite(
+  write: () => Promise<boolean>,
+): Promise<{ ok: true; owned: boolean } | { ok: false; error: unknown }> {
+  let lastError: unknown;
+  for (const delayMs of OUTCOME_WRITE_RETRY_DELAYS_MS) {
+    if (delayMs > 0) await sleep(delayMs);
+    try {
+      return { ok: true, owned: await write() };
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  return { ok: false, error: lastError };
 }
 
 async function failEmail(
@@ -902,6 +923,17 @@ export async function updateEmailStatusFromWebhook(
     }
     if (updates.status) notifyStatusChange(emailLogId, updates.status);
   } catch (error) {
+    const conflict = pgUniqueViolation(error);
+    if (conflict) {
+      // An UNCERTAIN email an admin resent: the copy now holds the
+      // one-active-email index, so this late confirmation of the original
+      // cannot be written. The original stays UNCERTAIN (accepted, 3.6b).
+      logger.warn(
+        { emailLogId, event, constraint: conflict.constraint },
+        "Webhook skipped — another active email for the same trigger holds the unique index",
+      );
+      return;
+    }
     logger.error(
       { emailLogId, event, error },
       "Failed to update email status from webhook",

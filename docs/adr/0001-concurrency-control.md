@@ -67,19 +67,25 @@ rules.
    client rows, which serializes unrelated work and breaks the lock order.
 
 3. **Other registrations go through the outbox.** A transaction that settles
-   or locks one registration never changes another registration. Examples are
-   a capacity drop that re-settles every registration holding an access item,
-   and a sponsorship change that fans out. It enqueues an outbox event
-   instead. The worker then handles each affected registration in its own
-   locking transaction. This keeps the lock order and keeps each transaction
-   small.
+   or locks one registration never changes another registration. An example
+   is a capacity drop that re-settles every registration holding an access
+   item. It enqueues an outbox event instead. The worker then handles each
+   affected registration in its own locking transaction. This keeps the lock
+   order and keeps each transaction small.
+
+   The exception is a change to one sponsorship (link, unlink, cancel, delete,
+   coverage edit; `packages/db/src/settlement/sponsorship-link.ts`): it locks
+   that sponsorship first, then every registration it is linked to in
+   ascending id order, and settles each in the same transaction, so a refusal
+   on one of them rolls the whole change back. That set is bounded by the
+   sponsorship's own usages and follows the lock order.
 
 4. **Only the settlement writer writes money columns.** `total_amount`,
    `paid_amount`, `sponsorship_amount`, `payment_status`, `paid_at` and the
    `price_breakdown` JSON are written by the one settlement writer
    (`applyRegistrationSettlement` / `settleRegistrationTxn` in
    `packages/db/src/settlement/`, plan item 2.6), under the registration lock.
-   Until that lands, new code must not add another writer of these columns.
+   New code must not add another writer of these columns.
 
 5. **Final abstract statuses are guarded in SQL.** Every UPDATE that changes
    an abstract's status also carries

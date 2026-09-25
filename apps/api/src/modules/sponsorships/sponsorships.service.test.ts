@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mock the entire db layer; the service owns orchestration + math, db fns are
-// thin primitives (mocked here). withTxn runs the callback with a sentinel tx.
-vi.mock("@app/db", () => {
+// Mock the db layer. The service orchestrates: it locks and re-reads for the
+// gates, delegates the money change to the shared settlement primitives
+// (mocked here; their behaviour is covered by the DB tier), maps their
+// refusals to AppExceptions and writes the side effects. withLockingTxn runs
+// the callback with a sentinel tx.
+const TX = vi.hoisted(() => ({ __tx: true }));
+const db = vi.hoisted(() => {
   const fns = [
     "getDb",
     "listSponsorships",
@@ -27,41 +31,47 @@ vi.mock("@app/db", () => {
     "findRegistrationsForBatch",
     "sponsorshipCodeExists",
     "insertSponsorship",
-    "insertUsage",
-    "updateRegistrationSettlement",
     "findSponsorshipForLink",
     "findRegistrationForLink",
-    "findUsage",
-    "casSetSponsorshipUsed",
-    "findUsageAmountsByRegistration",
     "getSponsorshipByCode",
-    "findRegistrationSettlementState",
-    "findSponsorshipUnlinkState",
-    "deleteUsage",
-    "countUsagesForSponsorship",
-    "findSponsorshipForRecalc",
-    "updateUsageAmount",
     "enqueueSponsorshipEmailOutbox",
     "enqueueTriggeredEmailOutbox",
+    "insertAuditLog",
+    "emitSettlementEvents",
+    "lockSponsorshipForUpdate",
+    "lockRegistrationsForUpdate",
+    "readSponsorshipTarget",
+    "sponsorshipLinkRefusal",
+    "linkSponsorshipToRegistrationTxn",
+    "unlinkSponsorshipFromRegistrationTxn",
+    "releaseSponsorshipTxn",
+    "changeSponsorshipCoverageTxn",
   ];
-  const mod: Record<string, unknown> = {};
+  const mod: Record<string, ReturnType<typeof vi.fn>> = {};
   for (const f of fns) mod[f] = vi.fn();
-  const TX = { __tx: true };
-  mod.withTxn = vi.fn((fn: (tx: unknown) => unknown) => fn(TX));
+  mod.withLockingTxn = vi.fn((fn: (tx: unknown) => unknown) => fn(TX));
   return mod;
 });
+vi.mock("@app/db", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@app/db")>();
+  return {
+    ...db,
+    settlementEventPair: real.settlementEventPair,
+    SponsorshipSettlementError: real.SponsorshipSettlementError,
+    AccessCapacityExceededError: real.AccessCapacityExceededError,
+    AccessNotFoundError: real.AccessNotFoundError,
+    AccessPaidCountUnderflowError: real.AccessPaidCountUnderflowError,
+  };
+});
 
-import * as db from "@app/db";
+import { AccessCapacityExceededError, SponsorshipSettlementError, type SettleRegistrationResult } from "@app/db";
 import { SponsorshipsService } from "./sponsorships.service";
 import type { AccessService } from "../access/access.service";
 
-const m = db as unknown as Record<string, ReturnType<typeof vi.fn>>;
+const m = db;
 
-// AccessService is injected; the service only calls these two methods on it.
-const access = {
-  getAlreadyCoveredAccessIds: vi.fn(),
-  syncPaidCountDelta: vi.fn(),
-};
+// AccessService is injected; the service only drops items that became full.
+const access = { handleCapacityReached: vi.fn() };
 
 function service() {
   return new SponsorshipsService(access as unknown as AccessService);
@@ -76,16 +86,52 @@ const OK_EVENT = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  m.withTxn.mockImplementation((fn: (tx: unknown) => unknown) => fn({}));
-  // Neutral defaults so unrelated calls don't throw.
-  access.getAlreadyCoveredAccessIds.mockResolvedValue(new Set());
-  access.syncPaidCountDelta.mockResolvedValue(undefined);
-  m.updateRegistrationSettlement.mockResolvedValue(undefined);
+  m.withLockingTxn.mockImplementation((fn: (tx: unknown) => unknown) => fn(TX));
+  access.handleCapacityReached.mockResolvedValue(0);
+  m.lockSponsorshipForUpdate.mockResolvedValue(true);
+  m.lockRegistrationsForUpdate.mockResolvedValue([]);
   m.updateSponsorshipRow.mockResolvedValue(undefined);
-  m.updateUsageAmount.mockResolvedValue(undefined);
-  m.deleteUsage.mockResolvedValue(undefined);
   m.deleteSponsorshipRow.mockResolvedValue(undefined);
+  m.insertAuditLog.mockResolvedValue(undefined);
+  m.emitSettlementEvents.mockResolvedValue([]);
+  m.enqueueSponsorshipEmailOutbox.mockResolvedValue(true);
+  m.enqueueTriggeredEmailOutbox.mockResolvedValue(true);
+  m.sponsorshipLinkRefusal.mockResolvedValue(null);
 });
+
+/** A settleRegistrationTxn result with the given money state change. */
+function settled(
+  before: { status?: string; sponsorship?: number; total?: number; paid?: number } = {},
+  after: { status?: string; sponsorship?: number; total?: number; paid?: number } = {},
+  paidAccess: { incremented?: string[]; decremented?: string[] } = {},
+): SettleRegistrationResult {
+  const snapshot = (s: typeof before) => ({
+    paymentStatus: (s.status ?? "PENDING") as never,
+    paidAt: null,
+    paidAmount: s.paid ?? 0,
+    totalAmount: s.total ?? 500,
+    sponsorshipAmount: s.sponsorship ?? 0,
+    priceBreakdown: {} as never,
+  });
+  return {
+    written: true,
+    eventId: "e1",
+    before: snapshot(before),
+    after: snapshot({ ...before, ...after }),
+    coveredAccessIds: [],
+    paidAccess: { incremented: paidAccess.incremented ?? [], decremented: paidAccess.decremented ?? [] },
+  };
+}
+
+function auditCalls(action: string) {
+  return m.insertAuditLog.mock.calls
+    .map(([entry]) => entry as { action: string; entityId: string; changes: Record<string, unknown>; performedBy: string | null })
+    .filter((entry) => entry.action === action);
+}
+
+function emittedTypes(): string[] {
+  return m.emitSettlementEvents.mock.calls.flatMap(([, events]) => (events as Array<{ type: string }>).map((e) => e.type));
+}
 
 // ============================================================================
 // Passthrough reads
@@ -108,259 +154,245 @@ describe("passthrough reads", () => {
 // updateSponsorship
 // ============================================================================
 
+function mutationRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "s1",
+    eventId: "e1",
+    code: "SP-AAAA",
+    status: "PENDING",
+    beneficiaryName: "Ben",
+    beneficiaryEmail: "b@x.com",
+    beneficiaryPhone: null,
+    beneficiaryAddress: null,
+    coversBasePrice: true,
+    coveredAccessIds: [],
+    totalAmount: 100,
+    usages: [],
+    event: OK_EVENT,
+    ...overrides,
+  };
+}
+
 describe("updateSponsorship", () => {
-  it("404 when not found", async () => {
-    m.findSponsorshipForMutation.mockResolvedValue(null);
+  it("404 when the sponsorship does not exist", async () => {
+    m.lockSponsorshipForUpdate.mockResolvedValue(false);
     await expect(
       service().updateSponsorship("s1", { beneficiaryName: "X" }),
     ).rejects.toMatchObject({ code: "RES_3001", statusCode: 404 });
+    expect(m.findSponsorshipForMutation).not.toHaveBeenCalled();
   });
 
-  it("simple beneficiary update writes only that field, returns re-fetched row", async () => {
-    m.findSponsorshipForMutation.mockResolvedValue({
-      id: "s1",
-      eventId: "e1",
-      coversBasePrice: true,
-      coveredAccessIds: [],
-      totalAmount: 100,
-      usages: [],
-      event: OK_EVENT,
-    });
+  it("locks, then re-reads before deciding", async () => {
+    m.findSponsorshipForMutation.mockResolvedValue(mutationRow());
+    m.getSponsorshipById.mockResolvedValue({ id: "s1" });
+
+    await service().updateSponsorship("s1", { beneficiaryName: "X" });
+
+    expect(m.lockSponsorshipForUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+      m.findSponsorshipForMutation.mock.invocationCallOrder[0],
+    );
+    expect(m.lockSponsorshipForUpdate).toHaveBeenCalledWith(TX, "s1");
+  });
+
+  it("beneficiary update writes that field, audits it and emits sponsorship.updated", async () => {
+    m.findSponsorshipForMutation.mockResolvedValue(mutationRow());
     const fresh = { id: "s1", beneficiaryName: "X" };
     m.getSponsorshipById.mockResolvedValue(fresh);
 
-    const result = await service().updateSponsorship("s1", { beneficiaryName: "X" });
+    const result = await service().updateSponsorship("s1", { beneficiaryName: "X" }, "admin-1");
 
-    expect(m.updateSponsorshipRow).toHaveBeenCalledWith({}, "s1", {
-      beneficiaryName: "X",
-    });
+    expect(m.updateSponsorshipRow).toHaveBeenCalledWith(TX, "s1", { beneficiaryName: "X" });
+    expect(m.changeSponsorshipCoverageTxn).not.toHaveBeenCalled();
+    expect(auditCalls("UPDATE")).toEqual([
+      expect.objectContaining({
+        entityId: "s1",
+        changes: { beneficiaryName: { old: "Ben", new: "X" } },
+        performedBy: "admin-1",
+      }),
+    ]);
+    expect(emittedTypes()).toEqual(["sponsorship.updated"]);
     expect(result).toBe(fresh);
   });
 
-  it("coverage change recomputes totalAmount", async () => {
-    m.findSponsorshipForMutation.mockResolvedValue({
-      id: "s1",
-      eventId: "e1",
-      coversBasePrice: false,
-      coveredAccessIds: [],
-      totalAmount: 0,
-      usages: [],
-      event: OK_EVENT,
-    });
+  it("coverage change recomputes totalAmount and settles every linked registration", async () => {
+    m.findSponsorshipForMutation.mockResolvedValue(
+      mutationRow({ coversBasePrice: false, coveredAccessIds: [], totalAmount: 0 }),
+    );
     m.findActiveEventAccess.mockResolvedValue([
       { id: "a1", name: "A", type: "MEAL", groupLabel: null, startsAt: null, endsAt: null, price: 200 },
     ]);
     m.getEventBasePrice.mockResolvedValue(100);
     m.getSponsorshipById.mockResolvedValue({ id: "s1" });
+    m.changeSponsorshipCoverageTxn.mockResolvedValue({
+      sponsorship: {},
+      settled: [
+        {
+          ...settled({ status: "PARTIAL", sponsorship: 100 }, { status: "SPONSORED", sponsorship: 500 }, { incremented: ["a1"] }),
+          registrationId: "r1",
+        },
+      ],
+    });
 
     await service().updateSponsorship("s1", {
       coversBasePrice: true,
       coveredAccessIds: ["a1"],
+      beneficiaryName: "Y",
     });
 
-    expect(m.updateSponsorshipRow).toHaveBeenCalledWith(
-      {},
+    expect(m.changeSponsorshipCoverageTxn).toHaveBeenCalledWith(
+      TX,
       "s1",
-      expect.objectContaining({
-        coversBasePrice: true,
-        coveredAccessIds: ["a1"],
-        totalAmount: 300,
-      }),
+      { coversBasePrice: true, coveredAccessIds: ["a1"], totalAmount: 300 },
+      { beneficiaryName: "Y" },
     );
+    expect(m.updateSponsorshipRow).not.toHaveBeenCalled();
+    expect(access.handleCapacityReached).toHaveBeenCalledWith("e1", ["a1"], TX);
+    expect(auditCalls("UPDATE")[0].changes).toMatchObject({
+      coversBasePrice: { old: false, new: true },
+      coveredAccessIds: { old: [], new: ["a1"] },
+      totalAmount: { old: 0, new: 300 },
+    });
+    expect(emittedTypes()).toEqual([
+      "registration.paymentConfirmed",
+      "eventAccess.countsChanged",
+      "sponsorship.updated",
+    ]);
   });
 
-  it("coverage change with usages runs recalculateUsageAmounts", async () => {
-    m.findSponsorshipForMutation.mockResolvedValue({
-      id: "s1",
-      eventId: "e1",
-      coversBasePrice: true,
-      coveredAccessIds: ["a1"],
-      totalAmount: 300,
-      usages: [{ id: "u1", registrationId: "r1" }],
-      event: OK_EVENT,
-    });
-    m.findActiveEventAccess.mockResolvedValue([
-      { id: "a1", name: "A", type: "MEAL", groupLabel: null, startsAt: null, endsAt: null, price: 200 },
-    ]);
+  it("409 SPONSORSHIP_TARGET_SETTLED when a PAID registration's amount would change", async () => {
+    m.findSponsorshipForMutation.mockResolvedValue(mutationRow());
     m.getEventBasePrice.mockResolvedValue(100);
-    m.findSponsorshipForRecalc.mockResolvedValue({
-      coversBasePrice: true,
-      coveredAccessIds: ["a1"],
-      totalAmount: 300,
-      usages: [
-        {
-          id: "u1",
-          registration: {
-            id: "r1",
-            eventId: "e1",
-            totalAmount: 300,
-            paidAmount: 0,
-            baseAmount: 100,
-            paymentStatus: "PENDING",
-            paidAt: null,
-            accessTypeIds: ["a1"],
-            priceBreakdown: {
-              calculatedBasePrice: 100,
-              subtotal: 300,
-              accessItems: [{ accessId: "a1", subtotal: 200 }],
-            },
-          },
-        },
-      ],
-    });
-    m.findUsageAmountsByRegistration.mockResolvedValue([{ amountApplied: 300 }]);
-    m.getSponsorshipById.mockResolvedValue({ id: "s1" });
+    m.changeSponsorshipCoverageTxn.mockRejectedValue(
+      new SponsorshipSettlementError("TARGET_SETTLED", { registrationId: "r1", paymentStatus: "PAID" }),
+    );
 
-    await service().updateSponsorship("s1", { coveredAccessIds: ["a1"] });
-
-    const call = m.updateRegistrationSettlement.mock.calls[0][2] as Record<string, unknown>;
-    expect(call).toMatchObject({
-      sponsorshipAmount: 300,
-      paymentStatus: "SPONSORED",
+    await expect(service().updateSponsorship("s1", { coversBasePrice: false })).rejects.toMatchObject({
+      code: "SPO_14004",
+      statusCode: 409,
+      details: { registrationId: "r1", paymentStatus: "PAID" },
     });
-    expect((call.priceBreakdown as Record<string, unknown>).sponsorshipTotal).toBe(300);
-    expect((call.priceBreakdown as Record<string, unknown>).total).toBe(0);
+    expect(m.insertAuditLog).not.toHaveBeenCalled();
   });
 
   it('status:"CANCELLED" delegates to cancel', async () => {
-    m.findSponsorshipForMutation.mockResolvedValue({
-      id: "s1",
-      eventId: "e1",
-      status: "PENDING",
-      usages: [],
-      event: OK_EVENT,
-    });
+    m.findSponsorshipForMutation.mockResolvedValue(mutationRow());
+    m.releaseSponsorshipTxn.mockResolvedValue({ sponsorship: {}, unlinked: [] });
     m.getSponsorshipById.mockResolvedValue({ id: "s1", status: "CANCELLED" });
 
     const result = await service().updateSponsorship("s1", { status: "CANCELLED" });
 
-    expect(m.updateSponsorshipRow).toHaveBeenCalledWith({}, "s1", {
-      status: "CANCELLED",
-    });
+    expect(m.updateSponsorshipRow).toHaveBeenCalledWith(TX, "s1", { status: "CANCELLED" });
     expect((result as { status: string }).status).toBe("CANCELLED");
   });
 });
 
 // ============================================================================
-// cancelSponsorship
+// cancelSponsorship / deleteSponsorship
 // ============================================================================
 
+function unlinkResult(overrides: Record<string, unknown> = {}) {
+  return {
+    registrationId: "r1",
+    usage: { id: "u1", sponsorshipId: "s1", registrationId: "r1", amountApplied: 100 },
+    settled: settled({ status: "SPONSORED", sponsorship: 100, total: 100 }, { status: "PENDING", sponsorship: 0 }, {
+      decremented: ["a1"],
+    }),
+    clearedSponsorshipCode: null,
+    clearedPaymentMethod: "LAB_SPONSORSHIP",
+    ...overrides,
+  };
+}
+
 describe("cancelSponsorship", () => {
-  it("no usages → status set CANCELLED, no unlink", async () => {
-    m.findSponsorshipForMutation.mockResolvedValue({
-      id: "s1",
-      eventId: "e1",
-      status: "PENDING",
-      usages: [],
-      event: OK_EVENT,
-    });
+  it("no usages → status set CANCELLED, audited, sponsorship.cancelled only", async () => {
+    m.findSponsorshipForMutation.mockResolvedValue(mutationRow());
+    m.releaseSponsorshipTxn.mockResolvedValue({ sponsorship: {}, unlinked: [] });
     m.getSponsorshipById.mockResolvedValue({ id: "s1", status: "CANCELLED" });
 
-    await service().cancelSponsorship("s1");
+    await service().cancelSponsorship("s1", "admin-1");
 
-    expect(m.findUsage).not.toHaveBeenCalled();
-    expect(m.updateSponsorshipRow).toHaveBeenCalledWith({}, "s1", {
-      status: "CANCELLED",
-    });
+    expect(m.releaseSponsorshipTxn).toHaveBeenCalledWith(TX, "s1");
+    expect(m.updateSponsorshipRow).toHaveBeenCalledWith(TX, "s1", { status: "CANCELLED" });
+    expect(auditCalls("CANCEL")).toEqual([
+      expect.objectContaining({ changes: { status: { old: "PENDING", new: "CANCELLED" } }, performedBy: "admin-1" }),
+    ]);
+    expect(emittedTypes()).toEqual(["sponsorship.cancelled"]);
   });
 
-  it("with usages → unlinks (deleteUsage) then cancels", async () => {
-    m.findSponsorshipForMutation.mockResolvedValue({
-      id: "s1",
-      eventId: "e1",
-      status: "USED",
-      usages: [{ id: "u1", registrationId: "r1" }],
-      event: OK_EVENT,
-    });
-    m.findUsage.mockResolvedValue({ id: "u1", amountApplied: 100 });
-    m.findRegistrationSettlementState.mockResolvedValue({
-      sponsorshipAmount: 100,
-      paidAmount: 0,
-      paymentMethod: "LAB_SPONSORSHIP",
-      paymentStatus: "PENDING",
-      eventId: "e1",
-      totalAmount: 500,
-      priceBreakdown: {},
-    });
-    m.findSponsorshipUnlinkState.mockResolvedValue({
-      status: "USED",
-      coveredAccessIds: [],
-      event: { status: "OPEN", client: { active: true, enabledModules: ["sponsorships"] } },
-    });
-    m.findUsageAmountsByRegistration.mockResolvedValue([]);
-    m.countUsagesForSponsorship.mockResolvedValue(0);
+  it("with usages → each registration is unlinked, audited and re-emitted", async () => {
+    m.findSponsorshipForMutation.mockResolvedValue(mutationRow({ status: "USED" }));
+    m.releaseSponsorshipTxn.mockResolvedValue({ sponsorship: {}, unlinked: [unlinkResult()] });
+    m.getSponsorshipById.mockResolvedValue({ id: "s1", status: "CANCELLED" });
+
+    await service().cancelSponsorship("s1", "admin-1");
+
+    expect(auditCalls("UNLINK_FROM_REGISTRATION")).toEqual([
+      expect.objectContaining({
+        entityId: "s1",
+        changes: {
+          registrationId: { old: "r1", new: null },
+          amountApplied: { old: 100, new: 0 },
+          sponsorshipAmount: { old: 100, new: 0 },
+          paymentStatus: { old: "SPONSORED", new: "PENDING" },
+          paymentMethod: { old: "LAB_SPONSORSHIP", new: null },
+        },
+      }),
+    ]);
+    expect(emittedTypes()).toEqual(["registration.updated", "sponsorship.cancelled", "eventAccess.countsChanged"]);
+  });
+
+  it("an already CANCELLED sponsorship still releases lingering usages, without a second CANCEL", async () => {
+    m.findSponsorshipForMutation.mockResolvedValue(mutationRow({ status: "CANCELLED" }));
+    m.releaseSponsorshipTxn.mockResolvedValue({ sponsorship: {}, unlinked: [unlinkResult()] });
     m.getSponsorshipById.mockResolvedValue({ id: "s1", status: "CANCELLED" });
 
     await service().cancelSponsorship("s1");
 
-    expect(m.deleteUsage).toHaveBeenCalledWith({}, "u1");
-    expect(m.updateSponsorshipRow).toHaveBeenCalledWith({}, "s1", {
-      status: "CANCELLED",
-    });
+    expect(m.updateSponsorshipRow).not.toHaveBeenCalled();
+    expect(auditCalls("CANCEL")).toEqual([]);
+    expect(auditCalls("UNLINK_FROM_REGISTRATION")).toHaveLength(1);
+  });
+
+  it("409 when a linked registration is PAID", async () => {
+    m.findSponsorshipForMutation.mockResolvedValue(mutationRow({ status: "USED" }));
+    m.releaseSponsorshipTxn.mockRejectedValue(
+      new SponsorshipSettlementError("TARGET_SETTLED", { registrationId: "r1", paymentStatus: "PAID" }),
+    );
+
+    await expect(service().cancelSponsorship("s1")).rejects.toMatchObject({ code: "SPO_14004", statusCode: 409 });
+    expect(m.updateSponsorshipRow).not.toHaveBeenCalled();
   });
 
   it("404 when not found", async () => {
-    m.findSponsorshipForMutation.mockResolvedValue(null);
-    await expect(service().cancelSponsorship("s1")).rejects.toMatchObject({
-      statusCode: 404,
-    });
+    m.lockSponsorshipForUpdate.mockResolvedValue(false);
+    await expect(service().cancelSponsorship("s1")).rejects.toMatchObject({ statusCode: 404 });
   });
 });
 
-// ============================================================================
-// deleteSponsorship
-// ============================================================================
-
 describe("deleteSponsorship", () => {
-  it("no usages → deletes row", async () => {
-    m.findSponsorshipForMutation.mockResolvedValue({
-      id: "s1",
-      eventId: "e1",
-      status: "PENDING",
-      usages: [],
-      event: OK_EVENT,
-    });
-    await expect(service().deleteSponsorship("s1")).resolves.toBeUndefined();
-    expect(m.deleteSponsorshipRow).toHaveBeenCalledWith({}, "s1");
-  });
+  it("unlinks, audits DELETE with the row's fields, then deletes", async () => {
+    m.findSponsorshipForMutation.mockResolvedValue(mutationRow({ status: "USED" }));
+    m.releaseSponsorshipTxn.mockResolvedValue({ sponsorship: {}, unlinked: [unlinkResult()] });
 
-  it("with usages → unlink then delete", async () => {
-    m.findSponsorshipForMutation.mockResolvedValue({
-      id: "s1",
-      eventId: "e1",
-      status: "USED",
-      usages: [{ id: "u1", registrationId: "r1" }],
-      event: OK_EVENT,
-    });
-    m.findUsage.mockResolvedValue({ id: "u1", amountApplied: 100 });
-    m.findRegistrationSettlementState.mockResolvedValue({
-      sponsorshipAmount: 100,
-      paidAmount: 0,
-      paymentMethod: null,
-      paymentStatus: "PENDING",
-      eventId: "e1",
-      totalAmount: 500,
-      priceBreakdown: {},
-    });
-    m.findSponsorshipUnlinkState.mockResolvedValue({
-      status: "USED",
-      coveredAccessIds: [],
-      event: { status: "OPEN", client: { active: true, enabledModules: ["sponsorships"] } },
-    });
-    m.findUsageAmountsByRegistration.mockResolvedValue([]);
-    m.countUsagesForSponsorship.mockResolvedValue(0);
+    await service().deleteSponsorship("s1", "admin-1");
 
-    await service().deleteSponsorship("s1");
-
-    expect(m.deleteUsage).toHaveBeenCalled();
-    expect(m.deleteSponsorshipRow).toHaveBeenCalledWith({}, "s1");
+    expect(auditCalls("DELETE")[0].changes).toEqual({
+      code: { old: "SP-AAAA", new: null },
+      status: { old: "USED", new: null },
+      beneficiaryName: { old: "Ben", new: null },
+      beneficiaryEmail: { old: "b@x.com", new: null },
+      totalAmount: { old: 100, new: null },
+    });
+    expect(m.releaseSponsorshipTxn.mock.invocationCallOrder[0]).toBeLessThan(
+      m.deleteSponsorshipRow.mock.invocationCallOrder[0],
+    );
+    expect(m.deleteSponsorshipRow).toHaveBeenCalledWith(TX, "s1");
+    expect(emittedTypes()).toEqual(["registration.updated", "sponsorship.deleted", "eventAccess.countsChanged"]);
   });
 
   it("404 when not found", async () => {
-    m.findSponsorshipForMutation.mockResolvedValue(null);
-    await expect(service().deleteSponsorship("s1")).rejects.toMatchObject({
-      statusCode: 404,
-    });
+    m.lockSponsorshipForUpdate.mockResolvedValue(false);
+    await expect(service().deleteSponsorship("s1")).rejects.toMatchObject({ statusCode: 404 });
   });
 });
 
@@ -372,6 +404,7 @@ function linkSponsorship(overrides: Record<string, unknown> = {}) {
   return {
     id: "s1",
     eventId: "e1",
+    code: "SP-AAAA",
     status: "PENDING",
     coversBasePrice: true,
     coveredAccessIds: [],
@@ -406,28 +439,45 @@ function linkRegistration(overrides: Record<string, unknown> = {}) {
     editToken: null,
     accessTypeIds: [],
     priceBreakdown: { calculatedBasePrice: 200, accessItems: [] },
-    paymentStatus: "PENDING",
-    sponsorshipAmount: 0,
-    existingUsages: [],
+    paymentStatus: "PARTIAL",
+    sponsorshipAmount: 200,
+    existingUsages: [
+      { sponsorshipId: "s1", sponsorship: { code: "SP-AAAA", coversBasePrice: true, coveredAccessIds: [] } },
+    ],
+    ...overrides,
+  };
+}
+
+function linkResult(overrides: Record<string, unknown> = {}) {
+  return {
+    sponsorship: {},
+    usage: { id: "u1", sponsorshipId: "s1", registrationId: "r1", amountApplied: 200 },
+    settled: settled({ status: "PENDING", sponsorship: 0 }, { status: "PARTIAL", sponsorship: 200 }),
     ...overrides,
   };
 }
 
 describe("linkSponsorshipToRegistration", () => {
-  it("happy path (partial) — exact registration settlement args + result", async () => {
+  beforeEach(() => {
     m.findSponsorshipForLink.mockResolvedValue(linkSponsorship());
     m.findRegistrationForLink.mockResolvedValue(linkRegistration());
-    m.findUsage.mockResolvedValue(null);
-    m.insertUsage.mockResolvedValue({ id: "u1", sponsorshipId: "s1", amountApplied: 200 });
-    m.casSetSponsorshipUsed.mockResolvedValue(1);
-    m.findUsageAmountsByRegistration.mockResolvedValue([{ amountApplied: 200 }]);
+    m.getEventPricingForBatch.mockResolvedValue({ basePrice: 200, currency: "TND" });
+    m.findActiveEventAccess.mockResolvedValue([]);
+  });
 
-    const result = await service().linkSponsorshipToRegistration("s1", "r1", "admin");
+  it("locks the sponsorship, links through the shared settlement and returns the settled amounts", async () => {
+    m.linkSponsorshipToRegistrationTxn.mockResolvedValue(linkResult());
 
-    expect(m.updateRegistrationSettlement.mock.calls[0][2]).toEqual({
-      sponsorshipAmount: 200,
-      paymentMethod: "LAB_SPONSORSHIP",
-      paymentStatus: "PARTIAL",
+    const result = await service().linkSponsorshipToRegistration("s1", "r1", "admin-1");
+
+    expect(m.lockSponsorshipForUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+      m.findSponsorshipForLink.mock.invocationCallOrder[0],
+    );
+    expect(m.linkSponsorshipToRegistrationTxn).toHaveBeenCalledWith(TX, {
+      sponsorshipId: "s1",
+      registrationId: "r1",
+      appliedBy: "admin-1",
+      fields: { paymentMethod: "LAB_SPONSORSHIP" },
     });
     expect(result).toEqual({
       usage: { id: "u1", sponsorshipId: "s1", amountApplied: 200 },
@@ -436,135 +486,137 @@ describe("linkSponsorshipToRegistration", () => {
     });
   });
 
-  it("full coverage → SPONSORED with paidAt", async () => {
-    m.findSponsorshipForLink.mockResolvedValue(linkSponsorship());
-    m.findRegistrationForLink.mockResolvedValue(linkRegistration({ totalAmount: 200 }));
-    m.findUsage.mockResolvedValue(null);
-    m.insertUsage.mockResolvedValue({ id: "u1", sponsorshipId: "s1", amountApplied: 200 });
-    m.casSetSponsorshipUsed.mockResolvedValue(1);
-    m.findUsageAmountsByRegistration.mockResolvedValue([{ amountApplied: 200 }]);
-
-    await service().linkSponsorshipToRegistration("s1", "r1", "admin");
-
-    const call = m.updateRegistrationSettlement.mock.calls[0][2] as Record<string, unknown>;
-    expect(call.paymentStatus).toBe("SPONSORED");
-    expect(call.paidAt).toBeInstanceOf(Date);
-  });
-
-  it("404 sponsorship not found", async () => {
-    m.findSponsorshipForLink.mockResolvedValue(null);
-    await expect(
-      service().linkSponsorshipToRegistration("s1", "r1", "admin"),
-    ).rejects.toMatchObject({ code: "RES_3001", statusCode: 404 });
-  });
-
-  it("400 cancelled sponsorship", async () => {
-    m.findSponsorshipForLink.mockResolvedValue(linkSponsorship({ status: "CANCELLED" }));
-    await expect(
-      service().linkSponsorshipToRegistration("s1", "r1", "admin"),
-    ).rejects.toMatchObject({ code: "RES_3003", statusCode: 400 });
-  });
-
-  it("404 registration not found", async () => {
-    m.findSponsorshipForLink.mockResolvedValue(linkSponsorship());
-    m.findRegistrationForLink.mockResolvedValue(null);
-    await expect(
-      service().linkSponsorshipToRegistration("s1", "r1", "admin"),
-    ).rejects.toMatchObject({ code: "REG_8001", statusCode: 404 });
-  });
-
-  it("400 different events", async () => {
-    m.findSponsorshipForLink.mockResolvedValue(linkSponsorship());
-    m.findRegistrationForLink.mockResolvedValue(linkRegistration({ eventId: "e2" }));
-    await expect(
-      service().linkSponsorshipToRegistration("s1", "r1", "admin"),
-    ).rejects.toMatchObject({ code: "RES_3003", statusCode: 400 });
-  });
-
-  it("409 already linked", async () => {
-    m.findSponsorshipForLink.mockResolvedValue(linkSponsorship());
-    m.findRegistrationForLink.mockResolvedValue(linkRegistration());
-    m.findUsage.mockResolvedValue({ id: "u0" });
-    await expect(
-      service().linkSponsorshipToRegistration("s1", "r1", "admin"),
-    ).rejects.toMatchObject({ code: "RES_3002", statusCode: 409 });
-  });
-
-  it("400 coverage does not apply (applicable 0, totalAmount > 0)", async () => {
-    m.findSponsorshipForLink.mockResolvedValue(
-      linkSponsorship({ coversBasePrice: false, coveredAccessIds: ["x"], totalAmount: 100 }),
+  it("restores the side effects: audit, sponsorship.linked, registration events, email", async () => {
+    m.linkSponsorshipToRegistrationTxn.mockResolvedValue(
+      linkResult({
+        settled: settled({ status: "PENDING" }, { status: "SPONSORED", sponsorship: 500 }, { incremented: ["a1"] }),
+      }),
     );
-    m.findRegistrationForLink.mockResolvedValue(linkRegistration());
-    m.findUsage.mockResolvedValue(null);
-    await expect(
-      service().linkSponsorshipToRegistration("s1", "r1", "admin"),
-    ).rejects.toMatchObject({ code: "SPO_14001", statusCode: 400 });
+
+    await service().linkSponsorshipToRegistration("s1", "r1", "admin-1");
+
+    expect(access.handleCapacityReached).toHaveBeenCalledWith("e1", ["a1"], TX);
+    expect(auditCalls("LINK_TO_REGISTRATION")).toEqual([
+      expect.objectContaining({
+        entityId: "s1",
+        performedBy: "admin-1",
+        changes: {
+          registrationId: { old: null, new: "r1" },
+          amountApplied: { old: 0, new: 200 },
+          sponsorshipAmount: { old: 0, new: 500 },
+          status: { old: "PENDING", new: "USED" },
+          paymentStatus: { old: "PENDING", new: "SPONSORED" },
+        },
+      }),
+    ]);
+    expect(emittedTypes()).toEqual([
+      "sponsorship.linked",
+      "registration.paymentConfirmed",
+      "eventAccess.countsChanged",
+    ]);
+    const countsEvent = m.emitSettlementEvents.mock.calls[0][1][2];
+    expect(countsEvent.payload).toEqual({ id: "e1", accessIds: ["a1"] });
+    expect(m.enqueueSponsorshipEmailOutbox).toHaveBeenCalledWith(
+      TX,
+      expect.objectContaining({ trigger: "SPONSORSHIP_APPLIED" }),
+      "email:sponsorship:SPONSORSHIP_APPLIED:r1:s1",
+    );
   });
 
-  it("409 status conflict when CAS returns 0", async () => {
-    m.findSponsorshipForLink.mockResolvedValue(linkSponsorship());
-    m.findRegistrationForLink.mockResolvedValue(linkRegistration());
-    m.findUsage.mockResolvedValue(null);
-    m.insertUsage.mockResolvedValue({ id: "u1", sponsorshipId: "s1", amountApplied: 200 });
-    m.casSetSponsorshipUsed.mockResolvedValue(0);
-    await expect(
-      service().linkSponsorshipToRegistration("s1", "r1", "admin"),
-    ).rejects.toMatchObject({ code: "SPO_14002", statusCode: 409 });
-  });
-
-  it("overlap warning is advisory — link still succeeds", async () => {
-    m.findSponsorshipForLink.mockResolvedValue(linkSponsorship());
+  it("warns about overlap with the registration's other sponsorships only", async () => {
+    m.linkSponsorshipToRegistrationTxn.mockResolvedValue(linkResult());
     m.findRegistrationForLink.mockResolvedValue(
       linkRegistration({
         existingUsages: [
-          { sponsorshipId: "sX", sponsorship: { code: "SP-X", coversBasePrice: true, coveredAccessIds: [] } },
+          { sponsorshipId: "s1", sponsorship: { code: "SP-AAAA", coversBasePrice: true, coveredAccessIds: [] } },
+          { sponsorshipId: "s2", sponsorship: { code: "SP-BBBB", coversBasePrice: true, coveredAccessIds: [] } },
         ],
       }),
     );
-    m.findUsage.mockResolvedValue(null);
-    m.insertUsage.mockResolvedValue({ id: "u1", sponsorshipId: "s1", amountApplied: 200 });
-    m.casSetSponsorshipUsed.mockResolvedValue(1);
-    m.findUsageAmountsByRegistration.mockResolvedValue([{ amountApplied: 200 }]);
 
-    const result = await service().linkSponsorshipToRegistration("s1", "r1", "admin");
+    const result = await service().linkSponsorshipToRegistration("s1", "r1", "admin-1");
     expect(result.warnings).toHaveLength(1);
-    expect(result.warnings[0]).toContain("Base price is already covered");
+    expect(result.warnings[0]).toContain("SP-BBBB");
+  });
+
+  it("404 when the sponsorship does not exist", async () => {
+    m.lockSponsorshipForUpdate.mockResolvedValue(false);
+    await expect(service().linkSponsorshipToRegistration("s1", "r1", "a")).rejects.toMatchObject({
+      code: "RES_3001",
+      statusCode: 404,
+    });
+    expect(m.linkSponsorshipToRegistrationTxn).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the event is archived, before linking", async () => {
+    m.findSponsorshipForLink.mockResolvedValue(
+      linkSponsorship({ event: { ...linkSponsorship().event, status: "ARCHIVED" } }),
+    );
+    await expect(service().linkSponsorshipToRegistration("s1", "r1", "a")).rejects.toMatchObject({ statusCode: 400 });
+    expect(m.linkSponsorshipToRegistrationTxn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["SPONSORSHIP_NOT_FOUND", { code: "RES_3001", statusCode: 404 }],
+    ["SPONSORSHIP_CANCELLED", { code: "RES_3003", statusCode: 400, details: { code: "SPONSORSHIP_CANCELLED" } }],
+    ["REGISTRATION_NOT_FOUND", { code: "REG_8001", statusCode: 404 }],
+    ["EVENT_MISMATCH", { code: "RES_3003", statusCode: 400 }],
+    ["ALREADY_LINKED", { code: "RES_3002", statusCode: 409, details: { code: "SPONSORSHIP_ALREADY_LINKED" } }],
+    ["NOT_APPLICABLE", { code: "SPO_14001", statusCode: 400 }],
+    ["TARGET_SETTLED", { code: "SPO_14004", statusCode: 409 }],
+    ["EXCEEDS_AMOUNT_DUE", { code: "SPO_14005", statusCode: 409 }],
+  ] as const)("maps %s", async (reason, expected) => {
+    m.linkSponsorshipToRegistrationTxn.mockRejectedValue(new SponsorshipSettlementError(reason, {}));
+    await expect(service().linkSponsorshipToRegistration("s1", "r1", "a")).rejects.toMatchObject(expected);
+    expect(m.insertAuditLog).not.toHaveBeenCalled();
+  });
+
+  it("EXCEEDS_AMOUNT_DUE carries the paid amount and the new amount due", async () => {
+    m.linkSponsorshipToRegistrationTxn.mockRejectedValue(
+      new SponsorshipSettlementError("EXCEEDS_AMOUNT_DUE", { registrationId: "r1", paidAmount: 400, amountDue: 300 }),
+    );
+    await expect(service().linkSponsorshipToRegistration("s1", "r1", "a")).rejects.toMatchObject({
+      details: { registrationId: "r1", paidAmount: 400, amountDue: 300 },
+    });
+  });
+
+  it("a full access item is the usual 409 ACCESS_CAPACITY_EXCEEDED", async () => {
+    m.linkSponsorshipToRegistrationTxn.mockRejectedValue(new AccessCapacityExceededError("a1", "Workshop", 0, 1));
+    await expect(service().linkSponsorshipToRegistration("s1", "r1", "a")).rejects.toMatchObject({
+      code: "ACC_7002",
+      statusCode: 409,
+    });
   });
 });
 
-// ============================================================================
-// linkSponsorshipByCode
-// ============================================================================
-
 describe("linkSponsorshipByCode", () => {
-  it("happy path resolves by code then links", async () => {
-    m.getRegistrationForSponsorship.mockResolvedValue({ id: "r1", event: { id: "e1", clientId: "c1" } });
+  it("normalizes the code, resolves it for the registration's event, then links", async () => {
+    m.getRegistrationForSponsorship.mockResolvedValue({ event: { id: "e1" } });
     m.getSponsorshipByCode.mockResolvedValue({ id: "s1" });
     m.findSponsorshipForLink.mockResolvedValue(linkSponsorship());
     m.findRegistrationForLink.mockResolvedValue(linkRegistration());
-    m.findUsage.mockResolvedValue(null);
-    m.insertUsage.mockResolvedValue({ id: "u1", sponsorshipId: "s1", amountApplied: 200 });
-    m.casSetSponsorshipUsed.mockResolvedValue(1);
-    m.findUsageAmountsByRegistration.mockResolvedValue([{ amountApplied: 200 }]);
+    m.getEventPricingForBatch.mockResolvedValue(null);
+    m.findActiveEventAccess.mockResolvedValue([]);
+    m.linkSponsorshipToRegistrationTxn.mockResolvedValue(linkResult());
 
-    const result = await service().linkSponsorshipByCode("r1", "SP-ABCD", "admin");
-    expect(m.getSponsorshipByCode).toHaveBeenCalledWith("e1", "SP-ABCD");
+    const result = await service().linkSponsorshipByCode("r1", "  sp-aaaa ", "admin-1");
+
+    expect(m.getSponsorshipByCode).toHaveBeenCalledWith("e1", "SP-AAAA");
     expect(result.usage.id).toBe("u1");
   });
 
   it("404 registration not found", async () => {
     m.getRegistrationForSponsorship.mockResolvedValue(null);
-    await expect(
-      service().linkSponsorshipByCode("r1", "SP-ABCD", "admin"),
-    ).rejects.toMatchObject({ code: "REG_8001", statusCode: 404 });
+    await expect(service().linkSponsorshipByCode("r1", "X", "a")).rejects.toMatchObject({ statusCode: 404 });
   });
 
   it("404 code not found for event", async () => {
-    m.getRegistrationForSponsorship.mockResolvedValue({ id: "r1", event: { id: "e1", clientId: "c1" } });
+    m.getRegistrationForSponsorship.mockResolvedValue({ event: { id: "e1" } });
     m.getSponsorshipByCode.mockResolvedValue(null);
-    await expect(
-      service().linkSponsorshipByCode("r1", "SP-ABCD", "admin"),
-    ).rejects.toMatchObject({ code: "RES_3001", statusCode: 404, details: { code: "SPONSORSHIP_NOT_FOUND" } });
+    await expect(service().linkSponsorshipByCode("r1", "NOPE", "a")).rejects.toMatchObject({
+      statusCode: 404,
+      details: { code: "SPONSORSHIP_NOT_FOUND" },
+    });
   });
 });
 
@@ -573,65 +625,58 @@ describe("linkSponsorshipByCode", () => {
 // ============================================================================
 
 describe("unlinkSponsorshipFromRegistration", () => {
-  it("no remaining → settlement exactly {sponsorshipAmount:0, paymentMethod:null}, sponsorship→PENDING", async () => {
-    m.findUsage.mockResolvedValue({ id: "u1", amountApplied: 100 });
-    m.findRegistrationSettlementState.mockResolvedValue({
-      sponsorshipAmount: 100,
-      paidAmount: 0,
-      paymentMethod: "LAB_SPONSORSHIP",
-      paymentStatus: "PENDING",
-      eventId: "e1",
-      totalAmount: 500,
-      priceBreakdown: {},
+  it("unlinks through the shared settlement, audits and emits", async () => {
+    m.findSponsorshipForMutation.mockResolvedValue(mutationRow({ status: "USED" }));
+    m.unlinkSponsorshipFromRegistrationTxn.mockResolvedValue({
+      ...unlinkResult({ clearedSponsorshipCode: "sp-aaaa" }),
+      sponsorship: {},
+      status: { before: "USED", after: "PENDING" },
     });
-    m.findSponsorshipUnlinkState.mockResolvedValue({
-      status: "USED",
-      coveredAccessIds: [],
-      event: { status: "OPEN", client: { active: true, enabledModules: ["sponsorships"] } },
-    });
-    m.findUsageAmountsByRegistration.mockResolvedValue([]);
-    m.countUsagesForSponsorship.mockResolvedValue(0);
 
-    await service().unlinkSponsorshipFromRegistration("s1", "r1");
+    await service().unlinkSponsorshipFromRegistration("s1", "r1", "admin-1");
 
-    expect(m.updateRegistrationSettlement.mock.calls[0][2]).toEqual({
-      sponsorshipAmount: 0,
-      paymentMethod: null,
-    });
-    expect(m.updateSponsorshipRow).toHaveBeenCalledWith({}, "s1", { status: "PENDING" });
+    expect(m.unlinkSponsorshipFromRegistrationTxn).toHaveBeenCalledWith(TX, { sponsorshipId: "s1", registrationId: "r1" });
+    expect(auditCalls("UNLINK_FROM_REGISTRATION")).toEqual([
+      expect.objectContaining({
+        performedBy: "admin-1",
+        changes: {
+          registrationId: { old: "r1", new: null },
+          amountApplied: { old: 100, new: 0 },
+          sponsorshipAmount: { old: 100, new: 0 },
+          paymentStatus: { old: "SPONSORED", new: "PENDING" },
+          paymentMethod: { old: "LAB_SPONSORSHIP", new: null },
+          sponsorshipCode: { old: "sp-aaaa", new: null },
+          status: { old: "USED", new: "PENDING" },
+        },
+      }),
+    ]);
+    expect(emittedTypes()).toEqual(["sponsorship.unlinked", "registration.updated", "eventAccess.countsChanged"]);
   });
 
-  it("others remaining → settlement exactly {sponsorshipAmount:150}", async () => {
-    m.findUsage.mockResolvedValue({ id: "u1", amountApplied: 100 });
-    m.findRegistrationSettlementState.mockResolvedValue({
-      sponsorshipAmount: 250,
-      paidAmount: 0,
-      paymentMethod: "LAB_SPONSORSHIP",
-      paymentStatus: "PENDING",
-      eventId: "e1",
-      totalAmount: 500,
-      priceBreakdown: {},
-    });
-    m.findSponsorshipUnlinkState.mockResolvedValue({
-      status: "USED",
-      coveredAccessIds: [],
-      event: { status: "OPEN", client: { active: true, enabledModules: ["sponsorships"] } },
-    });
-    m.findUsageAmountsByRegistration.mockResolvedValue([{ amountApplied: 150 }]);
-    m.countUsagesForSponsorship.mockResolvedValue(1);
+  it("404 when the sponsorship does not exist", async () => {
+    m.lockSponsorshipForUpdate.mockResolvedValue(false);
+    await expect(service().unlinkSponsorshipFromRegistration("s1", "r1")).rejects.toMatchObject({ statusCode: 404 });
+  });
 
-    await service().unlinkSponsorshipFromRegistration("s1", "r1");
-
-    expect(m.updateRegistrationSettlement.mock.calls[0][2]).toEqual({
-      sponsorshipAmount: 150,
+  it("404 when the link does not exist", async () => {
+    m.findSponsorshipForMutation.mockResolvedValue(mutationRow());
+    m.unlinkSponsorshipFromRegistrationTxn.mockRejectedValue(new SponsorshipSettlementError("NOT_LINKED", {}));
+    await expect(service().unlinkSponsorshipFromRegistration("s1", "r1")).rejects.toMatchObject({
+      code: "RES_3001",
+      statusCode: 404,
     });
   });
 
-  it("404 when link not found", async () => {
-    m.findUsage.mockResolvedValue(null);
-    await expect(
-      service().unlinkSponsorshipFromRegistration("s1", "r1"),
-    ).rejects.toMatchObject({ code: "RES_3001", statusCode: 404 });
+  it("409 when the registration is PAID", async () => {
+    m.findSponsorshipForMutation.mockResolvedValue(mutationRow({ status: "USED" }));
+    m.unlinkSponsorshipFromRegistrationTxn.mockRejectedValue(
+      new SponsorshipSettlementError("TARGET_SETTLED", { registrationId: "r1", paymentStatus: "PAID" }),
+    );
+    await expect(service().unlinkSponsorshipFromRegistration("s1", "r1")).rejects.toMatchObject({
+      code: "SPO_14004",
+      statusCode: 409,
+    });
+    expect(m.insertAuditLog).not.toHaveBeenCalled();
   });
 });
 
@@ -719,6 +764,7 @@ function createdSponsorship(overrides: Record<string, unknown> = {}) {
   return {
     id: "s1",
     code: "SP-1",
+    status: "PENDING",
     beneficiaryName: "Ben",
     beneficiaryEmail: "b@x.com",
     coversBasePrice: true,
@@ -728,8 +774,47 @@ function createdSponsorship(overrides: Record<string, unknown> = {}) {
   };
 }
 
+const BATCH_REGISTRATION = {
+  id: "r1",
+  email: "r@x.com",
+  firstName: "R",
+  lastName: null,
+  phone: null,
+  totalAmount: 100,
+  sponsorshipAmount: 0,
+  baseAmount: 100,
+  accessTypeIds: [],
+  priceBreakdown: { calculatedBasePrice: 100, accessItems: [] },
+  paymentStatus: "PENDING",
+  linkBaseUrl: null,
+  editToken: null,
+};
+
+function linkedBatchSetup(autoApprove: boolean) {
+  m.findEventForBatch.mockResolvedValue(batchEvent());
+  m.findSponsorFormById.mockResolvedValue({ id: "f1", schema: { sponsorshipSettings: { sponsorshipMode: "LINKED_ACCOUNT" } } });
+  m.getEventPricingForBatch.mockResolvedValue({ basePrice: 100, currency: "TND" });
+  m.findRegistrationsForBatch.mockResolvedValue([{ ...BATCH_REGISTRATION }]);
+  m.insertSponsorshipBatch.mockResolvedValue({ id: "b1" });
+  m.getFormSchema.mockResolvedValue({ sponsorshipSettings: { autoApproveSponsorship: autoApprove } });
+  m.sponsorshipCodeExists.mockResolvedValue(false);
+  m.insertSponsorship.mockResolvedValue(createdSponsorship());
+  m.readSponsorshipTarget.mockResolvedValue({
+    id: "r1",
+    eventId: "e1",
+    paymentStatus: "PENDING",
+    paymentMethod: null,
+    paidAmount: 0,
+    totalAmount: 100,
+    baseAmount: 100,
+    sponsorshipAmount: 0,
+    sponsorshipCode: null,
+    priceBreakdown: { calculatedBasePrice: 100, subtotal: 100, accessItems: [] },
+  });
+}
+
 describe("createSponsorshipBatch", () => {
-  it("CODE mode happy path → batchId + count", async () => {
+  it("CODE mode happy path → batchId + count, batchCreated emitted", async () => {
     m.findEventForBatch.mockResolvedValue(batchEvent());
     m.findSponsorFormById.mockResolvedValue({ id: "f1", schema: { sponsorshipSettings: { sponsorshipMode: "CODE" } } });
     m.getEventPricingForBatch.mockResolvedValue({ basePrice: 100, currency: "TND" });
@@ -745,6 +830,8 @@ describe("createSponsorshipBatch", () => {
 
     expect(result).toEqual({ batchId: "b1", count: 1 });
     expect(m.insertSponsorship).toHaveBeenCalledTimes(1);
+    expect(emittedTypes()).toEqual(["sponsorship.batchCreated"]);
+    expect(m.emitSettlementEvents.mock.calls[0][1][0].payload).toEqual({ id: "b1", batchId: "b1", count: 1 });
   });
 
   it("CODE mode counts every beneficiary (loop, not just first)", async () => {
@@ -801,17 +888,8 @@ describe("createSponsorshipBatch", () => {
     ).rejects.toMatchObject({ code: "RES_3003", statusCode: 400 });
   });
 
-  it("linked mode, no auto-approve → PENDING sponsorship, no usage/registration mutation", async () => {
-    m.findEventForBatch.mockResolvedValue(batchEvent());
-    m.findSponsorFormById.mockResolvedValue({ id: "f1", schema: { sponsorshipSettings: { sponsorshipMode: "LINKED_ACCOUNT" } } });
-    m.getEventPricingForBatch.mockResolvedValue({ basePrice: 100, currency: "TND" });
-    m.findRegistrationsForBatch.mockResolvedValue([
-      { id: "r1", email: "r@x.com", firstName: "R", lastName: null, phone: null, totalAmount: 500, sponsorshipAmount: 0, baseAmount: 100, accessTypeIds: [], priceBreakdown: {}, paymentStatus: "PENDING", linkBaseUrl: null, editToken: null },
-    ]);
-    m.insertSponsorshipBatch.mockResolvedValue({ id: "b1" });
-    m.getFormSchema.mockResolvedValue({ sponsorshipSettings: { autoApproveSponsorship: false } });
-    m.sponsorshipCodeExists.mockResolvedValue(false);
-    m.insertSponsorship.mockResolvedValue(createdSponsorship());
+  it("linked mode, no auto-approve → PENDING targeted sponsorship, no lock and no link", async () => {
+    linkedBatchSetup(false);
 
     const result = await service().createSponsorshipBatch("e1", "f1", {
       sponsor: SPONSOR,
@@ -822,22 +900,20 @@ describe("createSponsorshipBatch", () => {
     expect(m.insertSponsorship.mock.calls[0][1]).toMatchObject({
       status: "PENDING",
       targetRegistrationId: "r1",
+      totalAmount: 100,
     });
-    expect(m.insertUsage).not.toHaveBeenCalled();
-    expect(m.updateRegistrationSettlement).not.toHaveBeenCalled();
+    expect(m.lockRegistrationsForUpdate).not.toHaveBeenCalled();
+    expect(m.linkSponsorshipToRegistrationTxn).not.toHaveBeenCalled();
   });
 
-  it("linked mode, auto-approve → USED sponsorship + usage + registration update", async () => {
-    m.findEventForBatch.mockResolvedValue(batchEvent());
-    m.findSponsorFormById.mockResolvedValue({ id: "f1", schema: { sponsorshipSettings: { sponsorshipMode: "LINKED_ACCOUNT" } } });
-    m.getEventPricingForBatch.mockResolvedValue({ basePrice: 100, currency: "TND" });
-    m.findRegistrationsForBatch.mockResolvedValue([
-      { id: "r1", email: "r@x.com", firstName: "R", lastName: null, phone: null, totalAmount: 100, sponsorshipAmount: 0, baseAmount: 100, accessTypeIds: [], priceBreakdown: { calculatedBasePrice: 100, accessItems: [] }, paymentStatus: "PENDING", linkBaseUrl: null, editToken: null },
-    ]);
-    m.insertSponsorshipBatch.mockResolvedValue({ id: "b1" });
-    m.getFormSchema.mockResolvedValue({ sponsorshipSettings: { autoApproveSponsorship: true } });
-    m.sponsorshipCodeExists.mockResolvedValue(false);
-    m.insertSponsorship.mockResolvedValue(createdSponsorship());
+  it("linked mode, auto-approve → registrations locked first, each sponsorship linked and settled", async () => {
+    linkedBatchSetup(true);
+    m.linkSponsorshipToRegistrationTxn.mockResolvedValue(
+      linkResult({
+        usage: { id: "u1", sponsorshipId: "s1", registrationId: "r1", amountApplied: 100 },
+        settled: settled({ status: "PENDING", total: 100 }, { status: "SPONSORED", sponsorship: 100 }),
+      }),
+    );
 
     const result = await service().createSponsorshipBatch("e1", "f1", {
       sponsor: SPONSOR,
@@ -845,9 +921,48 @@ describe("createSponsorshipBatch", () => {
     });
 
     expect(result.count).toBe(1);
-    expect(m.insertSponsorship.mock.calls[0][1]).toMatchObject({ status: "USED" });
-    expect(m.insertUsage).toHaveBeenCalled();
-    expect(m.updateRegistrationSettlement).toHaveBeenCalled();
+    expect(m.lockRegistrationsForUpdate).toHaveBeenCalledWith(TX, ["r1"]);
+    expect(m.lockRegistrationsForUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+      m.insertSponsorship.mock.invocationCallOrder[0],
+    );
+    const inserted = m.insertSponsorship.mock.calls[0][1];
+    expect(inserted).toMatchObject({ status: "PENDING", totalAmount: 100 });
+    expect(inserted).not.toHaveProperty("targetRegistrationId");
+    expect(m.linkSponsorshipToRegistrationTxn).toHaveBeenCalledWith(TX, {
+      sponsorshipId: "s1",
+      registrationId: "r1",
+      appliedBy: "SYSTEM",
+      fields: { paymentMethod: "LAB_SPONSORSHIP" },
+    });
+    expect(auditCalls("LINK_TO_REGISTRATION")).toHaveLength(1);
+    expect(emittedTypes()).toEqual([
+      "sponsorship.batchCreated",
+      "sponsorship.linked",
+      "registration.paymentConfirmed",
+      "eventAccess.countsChanged",
+    ]);
+    const emailTriggers = [
+      ...m.enqueueSponsorshipEmailOutbox.mock.calls.map(([, payload]) => payload.trigger),
+      ...m.enqueueTriggeredEmailOutbox.mock.calls.map(([, payload]) => payload.trigger),
+    ];
+    expect(emailTriggers).toEqual(["SPONSORSHIP_BATCH_SUBMITTED", "SPONSORSHIP_LINKED", "PAYMENT_CONFIRMED"]);
+  });
+
+  it("linked mode, auto-approve on a settled registration → PENDING targeted, not linked", async () => {
+    linkedBatchSetup(true);
+    m.sponsorshipLinkRefusal.mockResolvedValue(
+      new SponsorshipSettlementError("TARGET_SETTLED", { registrationId: "r1", paymentStatus: "REFUNDED" }),
+    );
+
+    const result = await service().createSponsorshipBatch("e1", "f1", {
+      sponsor: SPONSOR,
+      linkedBeneficiaries: [{ registrationId: "r1", coversBasePrice: true, coveredAccessIds: [] }],
+    });
+
+    expect(result.count).toBe(1);
+    expect(m.insertSponsorship.mock.calls[0][1]).toMatchObject({ status: "PENDING", targetRegistrationId: "r1" });
+    expect(m.linkSponsorshipToRegistrationTxn).not.toHaveBeenCalled();
+    expect(emittedTypes()).toEqual(["sponsorship.batchCreated"]);
   });
 
   it("linked mode, registration missing → 404", async () => {

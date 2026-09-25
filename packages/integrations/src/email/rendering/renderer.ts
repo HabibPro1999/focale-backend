@@ -21,7 +21,7 @@ import type { MjmlCompilationResult } from "./types";
 // =============================================================================
 
 /**
- * Converts a Tiptap JSON document to MJML markup, wrapped in the full skeleton
+ * Converts a Tiptap JSON document to MJML markup, wrapped in the shared layout
  * (purple header showing {{organizerName}}, white content, gray footer).
  */
 export function renderTemplateToMjml(document: TiptapDocument): string {
@@ -29,6 +29,20 @@ export function renderTemplateToMjml(document: TiptapDocument): string {
     .map((node) => renderNode(node))
     .join("\n");
 
+  return renderEmailLayout(bodyContent);
+}
+
+/**
+ * The shared email layout every Focale email uses: header, white content
+ * section (`bodyContent`: MJML column children) and footer. `header` is MJML
+ * text the caller has escaped; templates keep the `{{organizerName}}`
+ * placeholder, resolved at send time.
+ */
+export function renderEmailLayout(
+  bodyContent: string,
+  options: { header?: string } = {},
+): string {
+  const header = options.header ?? "{{organizerName}}";
   return `
 <mjml>
   <mj-head>
@@ -64,7 +78,7 @@ export function renderTemplateToMjml(document: TiptapDocument): string {
     <mj-section background-color="#4F46E5" padding="20px">
       <mj-column>
         <mj-text align="center" color="#ffffff" font-size="24px" font-weight="bold">
-          {{organizerName}}
+          ${header}
         </mj-text>
       </mj-column>
     </mj-section>

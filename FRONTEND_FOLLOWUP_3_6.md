@@ -45,3 +45,46 @@ the email twice if the first one did go out.
 ## Health (monitoring only)
 
 `GET /health/email-queue` gains `uncertainCount`. No client change.
+
+# 3.6b — send-now emails and the email-log list
+
+## Custom email to a registrant
+
+`POST /api/events/:eventId/registrations/:registrationId/send-custom-email`:
+the `200` body gains `status`.
+
+- `{ "success": true, "emailLogId": "…", "status": "SENT", "messageId": "…" }`:
+  the provider accepted the email (as before, plus `status`).
+- `{ "success": true, "emailLogId": "…", "status": "UNCERTAIN" }` (new): the
+  provider did not answer (timeout, dropped connection). The email may have
+  gone out; its log shows `UNCERTAIN` and moves on when the provider's webhook
+  confirms it. Say "Sent, not confirmed yet: check the email log before
+  sending it again" instead of "Sent". This email cannot be resent from its
+  log (`409 RES_3002`); send it again from the registration only if the
+  recipient did not get it.
+- `502` when the provider refused it: unchanged (nothing was sent; the log is
+  `FAILED`).
+
+## Committee invitations and password links
+
+- `inviteEmailSent` (add member, `POST …/abstracts/committee/:userId/reset-password`)
+  is now `false` also when the provider did not confirm the email (it may
+  still arrive). Same shape; the existing "email not sent, resend" wording
+  still fits.
+- The built-in invitation and password-link emails (used when no
+  `ABSTRACT_COMMITTEE_INVITE` template is configured) now use the shared email
+  layout: the event name in the header and the Focale footer.
+- Password-link emails now get an email log too (not shown in the event's
+  email-log list, like invitations).
+
+## Event email-log list
+
+`GET /api/events/:eventId/email-logs`:
+
+- `meta.total` stops at 10,000. `meta.totalCapped: true` (new, always
+  present) means there are more: show "10,000+" and don't rely on
+  `totalPages`. Past the cap, `meta.hasNext` stays `true` while pages come
+  back full.
+- Rows with the same `queuedAt` are now ordered by id (newest first), so pages
+  are stable.
+- Rows and filters are unchanged.
