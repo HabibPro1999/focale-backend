@@ -239,7 +239,9 @@ has the same constraint. Scaling out needs a shared bus first.
 
 Email status events (`emailLog.statusChanged`) are coalesced per 250 ms in the
 process that changes the status: each email log's latest status in the window
-is emitted once.
+counts once, and the window becomes one event per (event, status). A single
+log keeps the old payload (`id`, `status`, `registrationId`); several logs are
+listed in `payload.ids` (`id` is the first). See `FRONTEND_FOLLOWUP_3_5.md`.
 
 ### `REALTIME_DISABLED`
 
