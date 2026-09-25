@@ -144,17 +144,21 @@ for (const fx of FIXTURES) {
     it("claims due rows oldest first up to the limit, charging one attempt and leasing them to the worker", async () => {
       let ids: string[] = [];
       let notDue = "";
-      // Retried as a whole: a transient CockroachDB SKIP LOCKED miss would
-      // let a younger row through.
+      let attempt = 0;
+      // Retried as a whole: on CockroachDB a claim right after the insert can
+      // skip rows (or let a younger one through) until the insert's intents
+      // are resolved, so later attempts give them time before claiming.
       await vi.waitFor(
         async () => {
+          attempt++;
           await fx.reset();
           ids = await fx.seed(3);
           notDue = await fx.seedNotDue();
+          if (attempt > 1) await sleep(Math.min(2_000, 250 * (attempt - 1)));
           // The oldest rows (the returned ids themselves are unordered).
           expect((await queue.claim("w1", 2)).sort()).toEqual(ids.slice(0, 2).sort());
         },
-        { timeout: 10_000, interval: 50 },
+        { timeout: 20_000, interval: 50 },
       );
       for (const id of ids.slice(0, 2)) {
         const row = await readRow(table, id);
