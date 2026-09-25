@@ -1,6 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { ErrorCodes, buildFieldOptionIndex, findInvalidOptionConditions } from "@app/contracts";
-import { isFullySettled } from "@app/shared";
+import { paidAccessQuantities } from "@app/shared";
 import type {
   CreateEventAccessInput,
   UpdateEventAccessInput,
@@ -126,32 +126,6 @@ function validateAccessDatesAgainstEvent(
   }
 
   return { valid: errors.length === 0, errors };
-}
-
-// ---------------------------------------------------------------------------
-// paidAccessQuantities (pure) — ported verbatim.
-// ---------------------------------------------------------------------------
-
-function paidAccessQuantities(
-  status: string,
-  priceBreakdown: unknown,
-  coveredAccessIds = new Set<string>(),
-): Map<string, number> {
-  const quantities = new Map<string, number>();
-  const fullySettled = isFullySettled(status);
-  if (!fullySettled && status !== "PARTIAL") {
-    return quantities;
-  }
-  const breakdown = priceBreakdown as RegistrationBreakdown;
-  for (const item of breakdown.accessItems ?? []) {
-    if (fullySettled || coveredAccessIds.has(item.accessId)) {
-      quantities.set(
-        item.accessId,
-        (quantities.get(item.accessId) ?? 0) + item.quantity,
-      );
-    }
-  }
-  return quantities;
 }
 
 @Injectable()

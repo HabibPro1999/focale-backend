@@ -30,6 +30,7 @@ import {
 } from "@app/contracts";
 import {
   calculateApplicableAmount,
+  calculateDiscountAmount,
   calculateSettlement,
   getSkip,
   isFullySettled,
@@ -102,7 +103,6 @@ import { logger } from "../../core/logger.service";
 import { validatePaymentTransition } from "./payment-transitions";
 import { getRegistrationTableColumns } from "./table-columns";
 import {
-  calculateDiscountAmount,
   enrichWithAccessSelections,
   enrichManyWithAccessSelections,
   type RegistrationWithRelations,
