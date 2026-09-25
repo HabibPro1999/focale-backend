@@ -15,6 +15,7 @@ import { getSkip } from "@app/shared";
 import type { ListRegistrationsQuery } from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
 import { escapeLike } from "../like";
+import { SETTLEMENT_COLUMNS, type RegistrationFieldsPatch } from "../settlement/writer";
 import { registrationReferenceCounters, registrations } from "../schema/registrations";
 import { events, eventAccess, accessCheckIns } from "../schema/events-access";
 import { forms } from "../schema/forms";
@@ -575,11 +576,19 @@ export async function insertRegistrationRow(
   return row;
 }
 
+/**
+ * Update a registration's non-money columns. Money columns (payment status,
+ * amounts, breakdown) are written only by applyRegistrationSettlement.
+ */
 export async function updateRegistrationRow(
   id: string,
-  patch: RegistrationPatch,
+  patch: RegistrationFieldsPatch,
   db: DbExecutor,
 ): Promise<void> {
+  const smuggled = SETTLEMENT_COLUMNS.filter((column) => column in patch);
+  if (smuggled.length) {
+    throw new Error(`Money columns are written only through the settlement: ${smuggled.join(", ")}`);
+  }
   await db.update(registrations).set(patch).where(eq(registrations.id, id));
 }
 
@@ -588,29 +597,6 @@ export async function deleteRegistrationRow(
   db: DbExecutor,
 ): Promise<void> {
   await db.delete(registrations).where(eq(registrations.id, id));
-}
-
-/**
- * Optimistic-concurrency compare-and-swap on `updatedAt`. Returns rows affected
- * (0 => precondition failed => the caller raises CONCURRENT_MODIFICATION).
- */
-export async function casUpdateRegistrationByUpdatedAt(
-  id: string,
-  expectedUpdatedAt: Date,
-  patch: RegistrationPatch,
-  db: DbExecutor,
-): Promise<number> {
-  const rows = await db
-    .update(registrations)
-    .set(patch)
-    .where(
-      and(
-        eq(registrations.id, id),
-        eq(registrations.updatedAt, expectedUpdatedAt),
-      ),
-    )
-    .returning({ id: registrations.id });
-  return rows.length;
 }
 
 // ============================================================================
