@@ -2,12 +2,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "@app/contracts";
 
 // Mock the db query layer (the seam the service talks to). Each write fn owns
-// its own transaction internally, so there is no withTxn to stub here.
+// its own transaction internally, so there is no withTxn to stub here. The
+// write fns return an outcome: CHECKED_IN / ALREADY_CHECKED_IN (a concurrent
+// scan won) / NOT_ELIGIBLE (event level: no longer fully settled).
 vi.mock("@app/db", () => ({
-  CHECKIN_ELIGIBLE_STATUSES: ["PAID", "SPONSORED", "WAIVED"],
+  CHECK_IN_BATCH_TX_SIZE: 100,
   getRegistrationForCheckIn: vi.fn(),
+  getRegistrationsForCheckIn: vi.fn(),
   isNetworkingAccessAllowed: vi.fn(),
-  getAccessCheckIn: vi.fn(),
+  getNetworkingAdmittedRegistrationIds: vi.fn(),
   getActiveEventAccessId: vi.fn(),
   getEligibleRegistrationIds: vi.fn(),
   countEventRegistrations: vi.fn(),
@@ -17,12 +20,7 @@ vi.mock("@app/db", () => ({
   getEligibleRegistrationAccessTypeIds: vi.fn(),
   checkInRegistration: vi.fn(),
   createAccessCheckIn: vi.fn(),
-  pgUniqueViolation: (err: unknown) => {
-    const e = err as { code?: unknown; constraint?: unknown } | null;
-    return e?.code === "23505"
-      ? { constraint: typeof e.constraint === "string" ? e.constraint : "" }
-      : null;
-  },
+  batchCheckIn: vi.fn(),
 }));
 
 import * as db from "@app/db";
@@ -38,13 +36,14 @@ const userId = "user-001";
 const blockedPaymentStatuses = ["PENDING", "VERIFYING", "PARTIAL", "REFUNDED"];
 const nonPaidAllowedPaymentStatuses = ["SPONSORED", "WAIVED"];
 
-// Simulates a pg unique-constraint violation (23505) on the composite key.
-function uniqueViolation() {
-  return {
-    code: "23505",
-    constraint: "access_check_ins_registration_id_access_id_key",
-  };
-}
+const checkedIn = (checkedInAt = new Date("2026-04-03T11:00:00Z")) => ({
+  outcome: "CHECKED_IN" as const,
+  checkedInAt,
+});
+const alreadyIn = (checkedInAt: Date) => ({
+  outcome: "ALREADY_CHECKED_IN" as const,
+  checkedInAt,
+});
 
 const baseRegistration = {
   id: registrationId,
@@ -73,12 +72,13 @@ describe("CheckinService", () => {
       await expect(service.checkIn(eventId, registrationId, accessId, userId)).rejects.toMatchObject({
         code: ErrorCodes.CHECKIN_NETWORKING_MEETING_REQUIRED,
       });
-      expect(m.getAccessCheckIn).not.toHaveBeenCalled();
       expect(m.createAccessCheckIn).not.toHaveBeenCalled();
     });
     it("should perform event-level check-in", async () => {
       m.getRegistrationForCheckIn.mockResolvedValue(baseRegistration);
-      m.checkInRegistration.mockResolvedValue(undefined);
+      m.checkInRegistration.mockImplementation(async (input: { checkedInAt: Date }) =>
+        checkedIn(input.checkedInAt),
+      );
 
       const result = await service.checkIn(
         eventId,
@@ -123,17 +123,29 @@ describe("CheckinService", () => {
       expect(m.checkInRegistration).not.toHaveBeenCalled();
     });
 
+    it("returns alreadyCheckedIn with the winner's time when a concurrent event-level scan wins the CAS", async () => {
+      const winnerAt = new Date("2026-04-03T09:59:59Z");
+      m.getRegistrationForCheckIn.mockResolvedValue(baseRegistration);
+      m.checkInRegistration.mockResolvedValue(alreadyIn(winnerAt));
+
+      const result = await service.checkIn(eventId, registrationId, undefined, userId);
+
+      expect(result).toMatchObject({ success: true, alreadyCheckedIn: true, checkedInAt: winnerAt });
+    });
+
+    it("rejects with PAYMENT_REQUIRED when the registration stops being settled before the CAS", async () => {
+      m.getRegistrationForCheckIn.mockResolvedValue(baseRegistration);
+      m.checkInRegistration.mockResolvedValue({ outcome: "NOT_ELIGIBLE" });
+
+      await expect(
+        service.checkIn(eventId, registrationId, undefined, userId),
+      ).rejects.toMatchObject({ statusCode: 400, code: ErrorCodes.CHECKIN_PAYMENT_REQUIRED });
+    });
+
     it("should perform access-level check-in", async () => {
       m.getRegistrationForCheckIn.mockResolvedValue(baseRegistration);
-      m.getAccessCheckIn.mockResolvedValue(null);
       const createdAt = new Date("2026-04-03T11:00:00Z");
-      m.createAccessCheckIn.mockResolvedValue({
-        id: "aci-001",
-        registrationId,
-        accessId,
-        checkedInBy: userId,
-        checkedInAt: createdAt,
-      });
+      m.createAccessCheckIn.mockResolvedValue(checkedIn(createdAt));
 
       const result = await service.checkIn(
         eventId,
@@ -159,16 +171,7 @@ describe("CheckinService", () => {
 
     it("returns alreadyCheckedIn when a concurrent access check-in wins the insert race", async () => {
       m.getRegistrationForCheckIn.mockResolvedValue(baseRegistration);
-      m.getAccessCheckIn
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({
-          id: "aci-001",
-          registrationId,
-          accessId,
-          checkedInAt: new Date("2026-04-03T09:00:00Z"),
-          checkedInBy: "other-user",
-        });
-      m.createAccessCheckIn.mockRejectedValue(uniqueViolation());
+      m.createAccessCheckIn.mockResolvedValue(alreadyIn(new Date("2026-04-03T09:00:00Z")));
 
       const result = await service.checkIn(
         eventId,
@@ -182,48 +185,13 @@ describe("CheckinService", () => {
       expect(result.checkedInAt).toEqual(new Date("2026-04-03T09:00:00Z"));
     });
 
-    it("rethrows when the insert fails with a non-unique-violation error", async () => {
+    it("rethrows when the access check-in write fails", async () => {
       m.getRegistrationForCheckIn.mockResolvedValue(baseRegistration);
-      m.getAccessCheckIn.mockResolvedValue(null);
       m.createAccessCheckIn.mockRejectedValue(new Error("boom"));
 
       await expect(
         service.checkIn(eventId, registrationId, accessId, userId),
       ).rejects.toThrow("boom");
-    });
-
-    it("rethrows the unique violation when the re-query finds nothing", async () => {
-      m.getRegistrationForCheckIn.mockResolvedValue(baseRegistration);
-      m.getAccessCheckIn.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
-      m.createAccessCheckIn.mockRejectedValue(uniqueViolation());
-
-      await expect(
-        service.checkIn(eventId, registrationId, accessId, userId),
-      ).rejects.toMatchObject({ code: "23505" });
-    });
-
-    it("should return alreadyCheckedIn for access-level re-check-in", async () => {
-      m.getRegistrationForCheckIn.mockResolvedValue(baseRegistration);
-      const existingAt = new Date("2026-04-03T09:00:00Z");
-      m.getAccessCheckIn.mockResolvedValue({
-        id: "aci-001",
-        registrationId,
-        accessId,
-        checkedInAt: existingAt,
-        checkedInBy: userId,
-      });
-
-      const result = await service.checkIn(
-        eventId,
-        registrationId,
-        accessId,
-        userId,
-      );
-
-      expect(result.success).toBe(true);
-      expect(result.alreadyCheckedIn).toBe(true);
-      expect(result.checkedInAt).toEqual(existingAt);
-      expect(m.createAccessCheckIn).not.toHaveBeenCalled();
     });
 
     it.each(nonPaidAllowedPaymentStatuses)(
@@ -233,7 +201,7 @@ describe("CheckinService", () => {
           ...baseRegistration,
           paymentStatus,
         });
-        m.checkInRegistration.mockResolvedValue(undefined);
+        m.checkInRegistration.mockResolvedValue(checkedIn());
 
         const result = await service.checkIn(
           eventId,
@@ -257,14 +225,7 @@ describe("CheckinService", () => {
           ...baseRegistration,
           paymentStatus,
         });
-        m.getAccessCheckIn.mockResolvedValue(null);
-        m.createAccessCheckIn.mockResolvedValue({
-          id: "aci-001",
-          registrationId,
-          accessId,
-          checkedInBy: userId,
-          checkedInAt: new Date("2026-04-03T11:00:00Z"),
-        });
+        m.createAccessCheckIn.mockResolvedValue(checkedIn());
 
         const result = await service.checkIn(
           eventId,
@@ -321,7 +282,7 @@ describe("CheckinService", () => {
           code: ErrorCodes.CHECKIN_PAYMENT_REQUIRED,
         });
 
-        expect(m.getAccessCheckIn).not.toHaveBeenCalled();
+        expect(m.isNetworkingAccessAllowed).not.toHaveBeenCalled();
         expect(m.createAccessCheckIn).not.toHaveBeenCalled();
         expect(m.checkInRegistration).not.toHaveBeenCalled();
       },
@@ -418,56 +379,172 @@ describe("CheckinService", () => {
   });
 
   describe("batchSync", () => {
+    const regs = (...rows: Array<typeof baseRegistration>) =>
+      new Map(rows.map((row) => [row.id, row]));
+    const item = (id: string, extra: { accessId?: string; scannedAt?: string } = {}) => ({
+      registrationId: id,
+      scannedAt: extra.scannedAt ?? "2026-04-03T10:00:00Z",
+      ...(extra.accessId ? { accessId: extra.accessId } : {}),
+    });
+    // batchCheckIn stub: per-item outcome from `pick`, in input order.
+    const writeWith = (pick: (input: { registrationId: string; checkedInAt: Date }) => unknown) =>
+      m.batchCheckIn.mockImplementation(async (items: Array<{ registrationId: string; checkedInAt: Date }>) =>
+        items.map(pick),
+      );
+
     it("should count synced, already checked in, and errors", async () => {
-      m.getRegistrationForCheckIn
-        .mockResolvedValueOnce(baseRegistration)
-        .mockResolvedValueOnce({
-          ...baseRegistration,
-          id: "reg-002",
-          checkedInAt: new Date(),
-        })
-        .mockResolvedValueOnce(null);
-      m.checkInRegistration.mockResolvedValue(undefined);
+      m.getRegistrationsForCheckIn.mockResolvedValue(
+        regs(baseRegistration, { ...baseRegistration, id: "reg-002" }),
+      );
+      writeWith((input) =>
+        input.registrationId === "reg-002"
+          ? alreadyIn(new Date("2026-04-03T09:00:00Z"))
+          : checkedIn(input.checkedInAt),
+      );
 
       const result = await service.batchSync(
         eventId,
         [
-          { registrationId: "reg-001", scannedAt: "2026-04-03T10:00:00Z" },
-          { registrationId: "reg-002", scannedAt: "2026-04-03T10:01:00Z" },
-          { registrationId: "reg-003", scannedAt: "2026-04-03T10:02:00Z" },
+          item("reg-001", { scannedAt: "2026-04-03T10:00:00Z" }),
+          item("reg-002", { scannedAt: "2026-04-03T10:01:00Z" }),
+          item("reg-003", { scannedAt: "2026-04-03T10:02:00Z" }),
+        ],
+        userId,
+      );
+
+      expect(result).toEqual({
+        synced: 1,
+        alreadyCheckedIn: 1,
+        errors: [{ registrationId: "reg-003", error: "Registration not found" }],
+      });
+      // scannedAt string is parsed into a Date and passed through as checkedInAt;
+      // the unknown registration never reaches the write.
+      expect(m.batchCheckIn).toHaveBeenCalledTimes(1);
+      expect(m.batchCheckIn.mock.calls[0]![0]).toEqual([
+        expect.objectContaining({
+          registrationId: "reg-001",
+          eventId,
+          clientId: "client-001",
+          checkedInBy: userId,
+          checkedInAt: new Date("2026-04-03T10:00:00Z"),
+        }),
+        expect.objectContaining({ registrationId: "reg-002" }),
+      ]);
+    });
+
+    it("applies the single check-in rules and keeps errors in input order", async () => {
+      m.getRegistrationsForCheckIn.mockResolvedValue(
+        regs(
+          { ...baseRegistration, id: "unpaid", paymentStatus: "PENDING" },
+          { ...baseRegistration, id: "elsewhere", eventId: "other-event" },
+          { ...baseRegistration, id: "no-access", accessTypeIds: [] },
+          { ...baseRegistration, id: "no-meeting" },
+          { ...baseRegistration, id: "ok" },
+          { ...baseRegistration, id: "refunded-meanwhile" },
+        ),
+      );
+      m.getNetworkingAdmittedRegistrationIds.mockResolvedValue(new Set(["ok"]));
+      writeWith((input) =>
+        input.registrationId === "refunded-meanwhile"
+          ? { outcome: "NOT_ELIGIBLE" }
+          : checkedIn(input.checkedInAt),
+      );
+
+      const result = await service.batchSync(
+        eventId,
+        [
+          item("unpaid"),
+          item("elsewhere"),
+          item("no-access", { accessId }),
+          item("no-meeting", { accessId }),
+          item("ok", { accessId }),
+          item("refunded-meanwhile"),
         ],
         userId,
       );
 
       expect(result.synced).toBe(1);
-      expect(result.alreadyCheckedIn).toBe(1);
-      expect(result.errors).toHaveLength(1);
-      expect(result.errors[0].registrationId).toBe("reg-003");
-      // scannedAt string is parsed into a Date and passed through as checkedInAt.
-      expect(m.checkInRegistration).toHaveBeenCalledWith(
-        expect.objectContaining({
-          checkedInAt: new Date("2026-04-03T10:00:00Z"),
-        }),
-      );
+      expect(result.errors).toEqual([
+        { registrationId: "unpaid", error: "Registration payment is not settled" },
+        { registrationId: "elsewhere", error: "Registration does not belong to this event" },
+        { registrationId: "no-access", error: "Registration does not include this access item" },
+        {
+          registrationId: "no-meeting",
+          error: "An eligible networking profile and a confirmed meeting are required for this area",
+        },
+        { registrationId: "refunded-meanwhile", error: "Registration payment is not settled" },
+      ]);
+      // One networking query for the access item, over the items still eligible.
+      expect(m.getNetworkingAdmittedRegistrationIds).toHaveBeenCalledTimes(1);
+      expect(m.getNetworkingAdmittedRegistrationIds).toHaveBeenCalledWith(eventId, accessId, [
+        "no-meeting",
+        "ok",
+      ]);
+      expect(m.batchCheckIn.mock.calls[0]![0].map((w: { registrationId: string }) => w.registrationId)).toEqual([
+        "ok",
+        "refunded-meanwhile",
+      ]);
     });
 
-    it("uses 'Unknown error' for a non-AppException failure", async () => {
-      m.getRegistrationForCheckIn.mockRejectedValue(new Error("db down"));
+    it("writes at most 100 items per transaction", async () => {
+      const ids = Array.from({ length: 250 }, (_, i) => `reg-${String(i).padStart(3, "0")}`);
+      m.getRegistrationsForCheckIn.mockImplementation(async (requested: string[]) =>
+        regs(...requested.map((id) => ({ ...baseRegistration, id }))),
+      );
+      writeWith((input) => checkedIn(input.checkedInAt));
+
+      const result = await service.batchSync(eventId, ids.map((id) => item(id)), userId);
+
+      expect(result).toEqual({ synced: 250, alreadyCheckedIn: 0, errors: [] });
+      expect(m.batchCheckIn.mock.calls.map((call) => call[0].length)).toEqual([100, 100, 50]);
+      expect(m.getRegistrationsForCheckIn.mock.calls.map((call) => call[0].length)).toEqual([
+        100, 100, 50,
+      ]);
+    });
+
+    it("reports a failed item as 'Unknown error' without failing the others", async () => {
+      m.getRegistrationsForCheckIn.mockResolvedValue(
+        regs(baseRegistration, { ...baseRegistration, id: "reg-002" }),
+      );
+      writeWith((input) =>
+        input.registrationId === "reg-002"
+          ? { outcome: "FAILED", error: new Error("fk violation") }
+          : checkedIn(input.checkedInAt),
+      );
 
       const result = await service.batchSync(
         eventId,
-        [{ registrationId: "reg-001", scannedAt: "2026-04-03T10:00:00Z" }],
+        [item("reg-001"), item("reg-002")],
+        userId,
+      );
+
+      expect(result).toEqual({
+        synced: 1,
+        alreadyCheckedIn: 0,
+        errors: [{ registrationId: "reg-002", error: "Unknown error" }],
+      });
+    });
+
+    it("uses 'Unknown error' for every item of a chunk whose reads fail", async () => {
+      m.getRegistrationsForCheckIn.mockRejectedValue(new Error("db down"));
+
+      const result = await service.batchSync(
+        eventId,
+        [item("reg-001"), item("reg-002")],
         userId,
       );
 
       expect(result.errors).toEqual([
         { registrationId: "reg-001", error: "Unknown error" },
+        { registrationId: "reg-002", error: "Unknown error" },
       ]);
+      expect(m.batchCheckIn).not.toHaveBeenCalled();
     });
 
     it("returns zeroed counts for an empty batch", async () => {
       const result = await service.batchSync(eventId, [], userId);
       expect(result).toEqual({ synced: 0, alreadyCheckedIn: 0, errors: [] });
+      expect(m.batchCheckIn).not.toHaveBeenCalled();
     });
   });
 
