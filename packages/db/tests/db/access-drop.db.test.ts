@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { and, eq } from "drizzle-orm";
 import {
   ACCESS_CAPACITY_REACHED_OUTBOX_TYPE,
@@ -123,13 +123,30 @@ async function auditActions(registrationId: string) {
   return rows;
 }
 
-/** Run the worker's outbox pass for the drop events only. */
-function runWorkerDrops() {
-  return processOutboxEvents(20, {
-    workerId: "access-drop-test",
-    scope: "background",
-    handlers: { [ACCESS_CAPACITY_REACHED_OUTBOX_TYPE]: handleAccessCapacityReachedOutbox },
-  });
+/**
+ * Run the worker's outbox passes for the drop events until none is pending.
+ * On CockroachDB, the claim's SKIP LOCKED can transiently miss rows just
+ * written by a committed transaction (cockroachdb/cockroach#167582); a later
+ * pass gets them, as the next worker tick would in production.
+ */
+async function runWorkerDrops() {
+  const totals = { processed: 0, failed: 0 };
+  await vi.waitFor(
+    async () => {
+      const result = await processOutboxEvents(20, {
+        workerId: "access-drop-test",
+        scope: "background",
+        handlers: { [ACCESS_CAPACITY_REACHED_OUTBOX_TYPE]: handleAccessCapacityReachedOutbox },
+      });
+      totals.processed += result.processed;
+      totals.failed += result.failed;
+      if (totals.failed > 0) return;
+      const pending = (await outboxOfType(ACCESS_CAPACITY_REACHED_OUTBOX_TYPE)).filter((row) => row.status === "PENDING");
+      expect(pending).toEqual([]);
+    },
+    { timeout: 10_000, interval: 50 },
+  );
+  return totals;
 }
 
 describe.runIf(dbTestsEnabled())("db tier: access capacity drop (worker outbox job)", () => {
