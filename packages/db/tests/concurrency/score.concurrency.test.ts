@@ -3,6 +3,7 @@ import { and, eq, sql } from "drizzle-orm";
 import {
   abstractReviews,
   abstracts,
+  assignReviewersTxn,
   getDb,
   reviewAbstractTxn,
   withTxn,
@@ -10,7 +11,6 @@ import {
 } from "@app/db";
 import { dbTestsEnabled } from "../helpers/test-env";
 import { cleanupDatabase } from "../helpers/cleanup";
-import { makeBarrier } from "../helpers/barrier";
 import { seedAbstract, seedEvent, seedUser } from "../helpers/factories";
 
 // Score aggregation. Submitting a review recomputes abstracts.review_count and
@@ -26,7 +26,7 @@ async function scoreReview(
   eventId: string,
   reviewerId: string,
   score: number,
-  opts: { lock: boolean; barrier?: () => Promise<void> },
+  opts: { lock: boolean },
 ): Promise<void> {
   await withTxn(async (tx: DbExecutor) => {
     if (opts.lock) {
@@ -50,7 +50,6 @@ async function scoreReview(
     const averageScore = scores.length
       ? scores.reduce((a, b) => a + b, 0) / scores.length
       : null;
-    if (opts.barrier) await opts.barrier();
     await tx.update(abstracts).set({ averageScore, reviewCount }).where(eq(abstracts.id, abstractId));
   });
 }
@@ -61,12 +60,20 @@ async function seedAbstractWithReviewers(count: number) {
   const reviewers = await Promise.all(
     Array.from({ length: count }, () => seedUser({ clientId: event.clientId })),
   );
-  return { event, abstract, reviewerIds: reviewers.map((r) => r.id) };
+  const reviewerIds = reviewers.map((r) => r.id);
+  // reviewAbstractTxn scores active assignments only.
+  expect(await assignReviewersTxn({ eventId: event.id, abstractId: abstract.id, reviewerIds }))
+    .toMatchObject({ ok: true });
+  return { event, abstract, reviewerIds };
 }
 
 async function readAggregate(abstractId: string) {
   const [row] = await getDb()
-    .select({ reviewCount: abstracts.reviewCount, averageScore: abstracts.averageScore })
+    .select({
+      reviewCount: abstracts.reviewCount,
+      averageScore: abstracts.averageScore,
+      status: abstracts.status,
+    })
     .from(abstracts)
     .where(eq(abstracts.id, abstractId));
   return row;
@@ -91,54 +98,33 @@ describe.runIf(dbTestsEnabled())("concurrency: score aggregation drift", () => {
     expect(agg.averageScore).toBe(3);
   });
 
-  // Documents the CURRENT gap using the exact recompute body, with a barrier to
-  // make the READ COMMITTED lost-update deterministic. Flip to a normal
-  // no-drift assertion (remove `.fails`) when the ADR-0001 lock lands.
-  it.fails(
-    "unlocked score recompute drifts under READ COMMITTED (ADR-0001 lock not ported)",
-    async () => {
-      const scores = [4, 8];
-      const { event, abstract, reviewerIds } = await seedAbstractWithReviewers(scores.length);
-      const barrier = makeBarrier(scores.length);
+  // The live fn locks the abstract first (plan 2.9), so parallel reviewers
+  // queue on its row and each recompute sees every committed score. Before
+  // the lock this lost updates every run at this fan-out (probed 15/15 at 6).
+  it("live reviewAbstractTxn keeps the aggregate exact under parallel scoring", async () => {
+    const fanout = 8;
+    const { event, abstract, reviewerIds } = await seedAbstractWithReviewers(fanout);
 
-      await Promise.all(
-        reviewerIds.map((rid, i) =>
-          scoreReview(abstract.id, event.id, rid, scores[i], { lock: false, barrier }),
-        ),
-      );
+    const results = await Promise.all(
+      reviewerIds.map((rid, i) =>
+        reviewAbstractTxn({
+          abstractId: abstract.id,
+          eventId: event.id,
+          reviewerId: rid,
+          clientId: event.clientId,
+          score: i + 1,
+          comment: null,
+          commentsEnabled: false,
+          divergenceThreshold: 1000,
+        }),
+      ),
+    );
 
-      // Each txn saw only its own review → last writer wins with reviewCount 1.
-      expect((await readAggregate(abstract.id)).reviewCount).toBe(scores.length);
-    },
-  );
-
-  // Same drift against the LIVE @app/db fn (no barrier — genuine parallel workers).
-  // reviewAbstractTxn runs withTxn (READ COMMITTED) and takes no abstract lock, so
-  // the aggregate lost-updates. Reproduces every run at this fan-out (probed 15/15
-  // at 6 reviewers). `.fails` → green now; goes red (remove `.fails`) once the
-  // real fn takes the ADR-0001 lock.
-  it.fails(
-    "live reviewAbstractTxn lost-updates the aggregate under parallel scoring (ADR-0001 lock not ported)",
-    async () => {
-      const fanout = 8;
-      const { event, abstract, reviewerIds } = await seedAbstractWithReviewers(fanout);
-
-      await Promise.all(
-        reviewerIds.map((rid, i) =>
-          reviewAbstractTxn({
-            abstractId: abstract.id,
-            eventId: event.id,
-            reviewerId: rid,
-            clientId: event.clientId,
-            score: i + 1,
-            comment: null,
-            commentsEnabled: false,
-            divergenceThreshold: 1000,
-          }),
-        ),
-      );
-
-      expect((await readAggregate(abstract.id)).reviewCount).toBe(fanout);
-    },
-  );
+    expect(results.every((r) => r.ok)).toBe(true);
+    expect(await readAggregate(abstract.id)).toEqual({
+      reviewCount: fanout,
+      averageScore: (fanout + 1) / 2,
+      status: "REVIEW_COMPLETE",
+    });
+  });
 });

@@ -683,6 +683,7 @@ describe("assignReviewers", () => {
   it("assigns the exact required count and returns the thin DTO", async () => {
     mock(findActiveMembershipUserIds).mockResolvedValue(["r1", "r2"]);
     mock(assignReviewersTxn).mockResolvedValue({
+      ok: true,
       id: abstractId,
       status: "UNDER_REVIEW",
     });
@@ -699,7 +700,6 @@ describe("assignReviewers", () => {
         eventId,
         abstractId,
         reviewerIds: ["r1", "r2"],
-        currentStatus: "SUBMITTED",
       }),
     );
     expect(result).toEqual({
@@ -707,6 +707,29 @@ describe("assignReviewers", () => {
       status: "UNDER_REVIEW",
       reviewerIds: ["r1", "r2"],
     });
+  });
+
+  it("409s on a finalized abstract before validating reviewers (no txn)", async () => {
+    mock(findAbstractBasic).mockResolvedValue({ id: abstractId, eventId, status: "ACCEPTED" });
+    await expectStatus(
+      service.assignReviewers(eventId, abstractId, { reviewerIds: ["r1"] }, performedBy),
+      409,
+    );
+    expect(assignReviewersTxn).not.toHaveBeenCalled();
+  });
+
+  // 2.9: a decision committed between the read above and the txn's lock.
+  it.each([
+    ["finalized", 409],
+    ["not_found", 404],
+  ] as const)("maps the txn's %s refusal to %i without an audit row", async (reason, status) => {
+    mock(findActiveMembershipUserIds).mockResolvedValue(["r1", "r2"]);
+    mock(assignReviewersTxn).mockResolvedValue({ ok: false, reason });
+    await expectStatus(
+      service.assignReviewers(eventId, abstractId, { reviewerIds: ["r1", "r2"] }, performedBy),
+      status,
+    );
+    expect(insertAuditLog).not.toHaveBeenCalled();
   });
 
   it("400s when fewer than the required reviewers are given (no txn)", async () => {
@@ -767,6 +790,7 @@ describe("assignReviewers", () => {
       });
       mock(findActiveMembershipUserIds).mockResolvedValue(["r1", "r2"]);
       mock(assignReviewersTxn).mockResolvedValue({
+        ok: true,
         id: abstractId,
         status: "UNDER_REVIEW",
       });
@@ -821,6 +845,7 @@ describe("assignReviewers", () => {
       mock(findAbstractThemeIds).mockResolvedValue(["theme-1"]);
       mock(listActiveReviewerThemeIds).mockResolvedValue(["theme-1"]);
       mock(assignReviewersTxn).mockResolvedValue({
+        ok: true,
         id: abstractId,
         status: "UNDER_REVIEW",
       });
@@ -932,6 +957,7 @@ describe("reviewAssignedAbstract", () => {
     mock(findAbstractForReview).mockResolvedValue(forReview());
     mock(listActiveReviewerThemeIds).mockResolvedValue([]);
     mock(reviewAbstractTxn).mockResolvedValue({
+      ok: true,
       id: abstractId,
       status: "REVIEW_COMPLETE",
       averageScore: 7.5,
@@ -1010,6 +1036,7 @@ describe("reviewAssignedAbstract", () => {
       }),
     );
     mock(reviewAbstractTxn).mockResolvedValue({
+      ok: true,
       id: abstractId,
       status: "REVIEW_COMPLETE",
       averageScore: 9,
@@ -1052,12 +1079,30 @@ describe("reviewAssignedAbstract", () => {
     expect(reviewAbstractTxn).not.toHaveBeenCalled();
   });
 
+  // 2.9: the txn re-checks status and assignment under the abstract's row
+  // lock; a decision or removal committed after the checks above maps to the
+  // same answers as those checks.
+  it.each([
+    ["finalized", 409],
+    ["not_assigned", 403],
+    ["not_found", 404],
+  ] as const)("maps the txn's %s refusal to %i", async (reason, status) => {
+    grantActiveMembership();
+    mock(findAbstractForReview).mockResolvedValue(forReview());
+    mock(reviewAbstractTxn).mockResolvedValue({ ok: false, reason });
+    await expectStatus(
+      service.reviewAssignedAbstract(abstractId, reviewerId, { score: 9 }),
+      status,
+    );
+  });
+
   it("succeeds for an actively assigned reviewer", async () => {
     grantActiveMembership();
     mock(findAbstractForReview).mockResolvedValue(
       forReview({ reviews: [{ reviewerId, active: true }] }),
     );
     mock(reviewAbstractTxn).mockResolvedValue({
+      ok: true,
       id: abstractId,
       status: "REVIEW_COMPLETE",
       averageScore: 9,
