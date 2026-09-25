@@ -176,6 +176,37 @@ describe("provider rate limit", () => {
   });
 });
 
+describe("stopping", () => {
+  it("an email still waiting for a token is deferred without spending an attempt", async () => {
+    claimOnce(row(freshLease, { attempts: 2 }));
+    const controller = new AbortController();
+    const limiter = new NetworkingEmailRateLimiter(1);
+    await limiter.take("other"); // the bucket is empty: the next email waits a second
+    const running = processNetworkingDeliveries({ email, emailLimiter: limiter, signal: controller.signal, options: { concurrency: 1, otpLanes: 1 } });
+    await vi.waitFor(() => expect(limiter.pending).toBe(1));
+    controller.abort(new Error("shutdown"));
+    expect(await running).toEqual(counts({ deferred: 1 }));
+    expect(email.sendEmail).not.toHaveBeenCalled();
+    expect(db.markNetworkingEmailAttempt).not.toHaveBeenCalled();
+    expect(db.finishNetworkingEmailLog).toHaveBeenCalledWith(expect.anything(), "deferred", expect.stringContaining("interrupted"));
+    expect(db.updateNetworkingDelivery).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ status: "FAILED", attempts: 1 }));
+  });
+  it("hands back claimed rows a lane has not started once stopping", async () => {
+    const controller = new AbortController();
+    const first = row(freshLease, { id: "first", type: "MESSAGE", attempts: 1 });
+    const second = row(freshLease, { id: "second", type: "MESSAGE", attempts: 3 });
+    db.claimNetworkingDeliveries.mockImplementation(async (_limit: number, _eventId: string, lane: string) =>
+      lane === "other" && !controller.signal.aborted ? [first, second] : []);
+    email.sendEmail.mockImplementation(async () => {
+      controller.abort();
+      return { outcome: "accepted", success: true, messageId: "m" };
+    });
+    expect(await run({ signal: controller.signal })).toEqual(counts({ sent: 1 }));
+    expect(email.sendEmail).toHaveBeenCalledOnce();
+    expect(db.updateNetworkingDelivery).toHaveBeenCalledWith(second, { status: "PENDING", lockedUntil: null, attempts: 2 });
+  });
+});
+
 describe("delivery lanes", () => {
   it("claims sign-in codes on dedicated lanes, one at a time, and everything else in batches", async () => {
     await processNetworkingDeliveries({ email, emailLimiter, eventId: "event", options: { concurrency: 2, otpLanes: 1, batchSize: 7 } });

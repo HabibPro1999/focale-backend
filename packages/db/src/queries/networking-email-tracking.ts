@@ -156,8 +156,9 @@ export async function markNetworkingEmailAttempt(
  * - `sent`: the provider took it (recorded even after the lease was lost).
  * - `failed`: nothing was sent (a rejection, or an error before the call), or
  *   an ambiguous Resend call that is retried under the same idempotency key.
- * - `deferred`: the provider refused it for its rate limit (429); retried
- *   later without counting as a failure.
+ * - `deferred`: the provider refused it for its rate limit (429), or the
+ *   worker stopped before sending it; retried later without counting as a
+ *   failure.
  * - `skipped`: no longer eligible. A log whose marker is still set (an earlier
  *   attempt called the provider) becomes UNCERTAIN instead.
  * - `uncertain`: the provider may have sent it; never sent again automatically.
@@ -207,9 +208,9 @@ export async function finishNetworkingEmailLog(
         .update(emailLogs)
         .set({
           status: exhausted ? "FAILED" : "SENDING",
-          errorMessage: failed
-            ? detail ?? "Networking email delivery failed"
-            : "Networking email deferred by the provider rate limit",
+          errorMessage: detail ?? (failed
+            ? "Networking email delivery failed"
+            : "Networking email deferred by the provider rate limit"),
           retryCount: sql`${emailLogs.retryCount}+${failed ? 1 : 0}`,
           failedAt: exhausted ? new Date() : null,
           providerAttemptedAt: null,

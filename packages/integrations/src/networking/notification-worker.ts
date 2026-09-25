@@ -173,11 +173,18 @@ async function sendEmailChannel(
     if (!provider.isConfigured())
       throw new Error("Email provider is not configured");
     sender = getNetworkingEmailSender(context.event!.clientId, provider.name);
-    await limiter.take(row.type === "OTP" ? "otp" : "other", dependencies.signal);
   } catch {
     // Nothing reached the provider in this claim.
     await finishNetworkingEmailLog(row, "failed");
     return { status: "failed" };
+  }
+  try {
+    await limiter.take(row.type === "OTP" ? "otp" : "other", dependencies.signal);
+  } catch {
+    // Stopping (shutdown or job timeout) while waiting for a token: nothing
+    // was sent, and the next run picks it up without a spent attempt.
+    await finishNetworkingEmailLog(row, "deferred", "Networking email interrupted before sending; retried");
+    return { status: "deferred", until: new Date() };
   }
   // The marker (and a lease renewal) right before the call: past this point
   // the email is never sent again blind.
@@ -390,7 +397,7 @@ async function processOne(
       lockedUntil: null,
       attempts: Math.max(0, row.attempts - 1),
       payload,
-      lastError: "Email deferred by the provider rate limit",
+      lastError: "Email deferred (provider rate limit or worker stopping); retried without spending an attempt",
       availableAt: deferUntil,
     });
     return "deferred";
@@ -437,8 +444,9 @@ export interface NetworkingDeliveryResult {
  * general lanes claim `batchSize` rows at a time (every type but OTP), and
  * `otpLanes` dedicated lanes claim sign-in codes one at a time, polling while
  * the general lanes work, so a code never waits behind digests. Lanes stop
- * claiming at `until` (or on `signal`) and finish what they claimed. Every
- * email goes through the worker's token bucket.
+ * claiming at `until` and finish what they claimed; on `signal` they also
+ * hand back the rows they have not started. Every email goes through the
+ * worker's token bucket.
  */
 export async function processNetworkingDeliveries(
   dependencies: NetworkingDeliveryDependencies = {},
@@ -448,7 +456,17 @@ export async function processNetworkingDeliveries(
   const limiter = dependencies.emailLimiter ?? networkingEmailRateLimiter(options.emailRatePerSecond);
   const result: NetworkingDeliveryResult = { sent: 0, skipped: 0, failed: 0, uncertain: 0, deferred: 0 };
   const processRows = async (rows: NetworkingDeliveryRow[]) => {
-    for (const row of rows) {
+    for (const [index, row] of rows.entries()) {
+      if (dependencies.signal?.aborted) {
+        // Stopping: hand back what this lane claimed but did not start.
+        for (const unstarted of rows.slice(index))
+          await updateNetworkingDelivery(unstarted, {
+            status: "PENDING",
+            lockedUntil: null,
+            attempts: Math.max(0, unstarted.attempts - 1),
+          }).catch(() => false);
+        return;
+      }
       try {
         const outcome = await processOne(row, dependencies, limiter);
         if (outcome !== "lease_lost") result[outcome]++;
