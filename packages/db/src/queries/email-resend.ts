@@ -9,10 +9,10 @@ import type { EmailLogRow } from "./email";
 /**
  * Keys of a plain-text fallback template stashed in context_snapshot when an
  * abstract email has no admin template (the email queue renders it like a
- * template).
+ * template; same keys as FALLBACK_*_KEY in @app/integrations email/queue.ts).
  */
-export const EMAIL_FALLBACK_SUBJECT_KEY = "_fallbackSubject";
-export const EMAIL_FALLBACK_BODY_KEY = "_fallbackPlainBody";
+const EMAIL_FALLBACK_SUBJECT_KEY = "_fallbackSubject";
+const EMAIL_FALLBACK_BODY_KEY = "_fallbackPlainBody";
 
 export type ResendEmailLogResult =
   | { ok: true; log: EmailLogRow }

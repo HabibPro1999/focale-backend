@@ -10,6 +10,7 @@ import {
   EmailTemplateIdParamSchema,
   BulkSendParamSchema,
   SendCustomEmailParamSchema,
+  ResendEmailLogParamSchema,
 } from "@app/contracts";
 import { createZodDto } from "../../core/zod";
 
@@ -38,4 +39,7 @@ export class EmailTemplateIdParamDto extends createZodDto(
 export class BulkSendParamDto extends createZodDto(BulkSendParamSchema) {}
 export class SendCustomEmailParamDto extends createZodDto(
   SendCustomEmailParamSchema,
+) {}
+export class ResendEmailLogParamDto extends createZodDto(
+  ResendEmailLogParamSchema,
 ) {}

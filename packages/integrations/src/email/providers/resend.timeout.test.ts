@@ -21,13 +21,13 @@ describe("ResendProvider send timeout", () => {
 
     const result = await provider.sendEmail({ to: "a@example.com", subject: "Hi", html: "<p>Hi</p>", trackingId: "log-1" });
 
-    expect(result).toEqual({ success: true, messageId: "resend-id" });
+    expect(result).toEqual({ outcome: "accepted", success: true, messageId: "resend-id" });
     const init = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1];
     expect(init.signal).toBeInstanceOf(AbortSignal);
     expect(new Headers(init.headers).get("Idempotency-Key")).toBe("log-1");
   });
 
-  it("turns a stalled request into a failed send once the signal aborts", async () => {
+  it("turns a stalled request into an ambiguous send once the signal aborts (retryable under its key)", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     vi.stubGlobal(
       "fetch",
@@ -48,6 +48,26 @@ describe("ResendProvider send timeout", () => {
     await vi.advanceTimersByTimeAsync(15_000);
 
     expect(timeout).toHaveBeenCalledWith(15_000);
-    await expect(pending).resolves.toMatchObject({ success: false });
+    await expect(pending).resolves.toMatchObject({ outcome: "ambiguous", success: false, idempotentRetry: true });
+  });
+
+  it("an ambiguous send retried with the same trackingId reuses the idempotency key (Resend sends once)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("fetch failed: ECONNRESET"))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: "resend-id" }), { status: 200, headers: { "content-type": "application/json" } }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new ResendProvider({ apiKey: "re_test", fromEmail: "noreply@focale.test", fromName: "Focale" });
+    const input = { to: "a@example.com", subject: "Hi", html: "<p>Hi</p>", trackingId: "log-3" };
+
+    await expect(provider.sendEmail(input)).resolves.toMatchObject({ outcome: "ambiguous", idempotentRetry: true });
+    await expect(provider.sendEmail(input)).resolves.toMatchObject({ outcome: "accepted", messageId: "resend-id" });
+
+    const keys = fetchMock.mock.calls.map((call) => new Headers((call[1] as RequestInit).headers).get("Idempotency-Key"));
+    expect(keys).toEqual(["log-3", "log-3"]);
+    const bodies = fetchMock.mock.calls.map((call) => (call[1] as RequestInit).body);
+    expect(bodies[1]).toBe(bodies[0]);
   });
 });
