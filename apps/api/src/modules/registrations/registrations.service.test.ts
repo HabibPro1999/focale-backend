@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // --- @app/db mock -----------------------------------------------------------
 const db = vi.hoisted(() => ({
   withTxn: vi.fn(),
+  applyRegistrationSettlement: vi.fn(),
+  emitSettlementEvents: vi.fn(),
   syncNetworkingRegistration: vi.fn(),
   enqueueRealtimeOutboxEvent: vi.fn(),
   enqueueTriggeredEmailOutbox: vi.fn(),
@@ -34,10 +36,8 @@ const db = vi.hoisted(() => ({
   findRegistrationForMutation: vi.fn(),
   findRegistrationWithFormEvent: vi.fn(),
   insertRegistrationRow: vi.fn(),
-  updateRegistrationRow: vi.fn(),
   deleteRegistrationRow: vi.fn(),
   getNetworkingProfilePhotoByRegistration: vi.fn(),
-  casUpdateRegistrationByUpdatedAt: vi.fn(),
   findRegistrationUsagesForRecalc: vi.fn(),
   findRegistrationUsageLinks: vi.fn(),
   deleteRegistrationUsages: vi.fn(),
@@ -54,7 +54,47 @@ const db = vi.hoisted(() => ({
       : null;
   },
 }));
-vi.mock("@app/db", () => db);
+vi.mock("@app/db", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@app/db")>();
+  return { ...db, settlementEventPair: real.settlementEventPair };
+});
+
+// emitSettlementEvents with @app/db's body, over the mocked primitives.
+db.emitSettlementEvents.mockImplementation(
+  async (tx: unknown, events: Array<{ type: string; payload: { id: unknown } }>) => {
+    const changed = new Set(
+      events
+        .filter((ev) => ev.type === "registration.updated" || ev.type === "registration.paymentConfirmed")
+        .map((ev) => String(ev.payload.id)),
+    );
+    for (const id of changed) await db.syncNetworkingRegistration(id, tx);
+    return Promise.all(events.map((ev) => db.enqueueRealtimeOutboxEvent(tx, ev)));
+  },
+);
+
+/**
+ * The columns the settlement writer was asked to set by its call `n`: the
+ * other fields, the settlement, and the amounts the writer derives from a
+ * written breakdown.
+ */
+function writtenPatch(n = 0): Record<string, any> {
+  const input = db.applyRegistrationSettlement.mock.calls[n]?.[1] as
+    | { settlement: Record<string, any>; fields?: Record<string, any> }
+    | undefined;
+  if (!input) throw new Error(`applyRegistrationSettlement call ${n} not made`);
+  const pb = input.settlement.priceBreakdown;
+  return {
+    ...input.fields,
+    ...input.settlement,
+    ...(pb
+      ? {
+          baseAmount: pb.calculatedBasePrice,
+          accessAmount: pb.accessTotal,
+          discountAmount: calculateDiscountAmount(pb.appliedRules),
+        }
+      : {}),
+  };
+}
 
 // --- @app/integrations + file-type mocks (payment-proof upload path) --------
 const integ = vi.hoisted(() => ({
@@ -70,7 +110,7 @@ vi.mock("@app/integrations", async (importOriginal) => ({
 const ft = vi.hoisted(() => ({ fileTypeFromBuffer: vi.fn() }));
 vi.mock("file-type", () => ft);
 
-import { calculateSettlement } from "@app/shared";
+import { calculateDiscountAmount, calculateSettlement } from "@app/shared";
 import { validateSelections } from "../access/access-validation";
 import { CheckinService } from "../checkin/checkin.service";
 import { RegistrationsService } from "./registrations.service";
@@ -161,7 +201,7 @@ describe("RegistrationsService", () => {
     db.casDecrementRegisteredTx.mockResolvedValue(true);
     db.allocateReferenceNumber.mockResolvedValue("26-EV-001");
     db.insertAuditLog.mockResolvedValue(undefined);
-    db.updateRegistrationRow.mockResolvedValue(undefined);
+    db.applyRegistrationSettlement.mockResolvedValue(true);
     db.findAccessDetailsByIds.mockResolvedValue([]);
     db.findClientModuleState.mockResolvedValue(activeClient());
     db.findRegistrationUsagesForRecalc.mockResolvedValue([]);
@@ -524,7 +564,7 @@ describe("RegistrationsService", () => {
 
     it("updates a note and audits", async () => {
       await service.updateRegistration("reg1", { note: "hi" } as never, "admin1");
-      expect(db.updateRegistrationRow).toHaveBeenCalled();
+      expect(db.applyRegistrationSettlement).toHaveBeenCalled();
       expect(db.insertAuditLog).toHaveBeenCalled();
     });
 
@@ -568,7 +608,7 @@ describe("RegistrationsService", () => {
 
       await service.updateRegistration("reg1", { paymentStatus: "PAID" } as never);
 
-      expect(db.updateRegistrationRow.mock.calls[0]?.[1]).toMatchObject({
+      expect(writtenPatch()).toMatchObject({
         paymentStatus: "PAID",
         paidAmount: 60,
       });
@@ -612,7 +652,7 @@ describe("RegistrationsService", () => {
         "admin1",
       );
 
-      const patch = db.updateRegistrationRow.mock.calls[0]?.[1];
+      const patch = writtenPatch();
       expect(patch).toMatchObject({ totalAmount: 150 });
       expect(patch.paymentStatus).toBeUndefined();
       expect(patch.paidAmount).toBeUndefined();
@@ -636,7 +676,7 @@ describe("RegistrationsService", () => {
         "admin1",
       );
 
-      expect(db.updateRegistrationRow.mock.calls[0]?.[1].paymentStatus).toBeUndefined();
+      expect(writtenPatch().paymentStatus).toBeUndefined();
       const event = db.enqueueRealtimeOutboxEvent.mock.calls
         .map((call) => call[1])
         .find((candidate) => candidate.type === "registration.updated");
@@ -680,7 +720,7 @@ describe("RegistrationsService", () => {
         "admin1",
       );
 
-      expect(db.updateRegistrationRow.mock.calls[0]?.[1]).toMatchObject({
+      expect(writtenPatch()).toMatchObject({
         paymentStatus: "PAID",
         paidAmount: 60,
       });
@@ -720,7 +760,7 @@ describe("RegistrationsService", () => {
       );
 
       expect(db.updateUsageAmount).toHaveBeenCalledWith(expect.anything(), "usage1", 60);
-      expect(db.updateRegistrationRow.mock.calls[0]?.[1]).toMatchObject({
+      expect(writtenPatch()).toMatchObject({
         paymentStatus: "PAID",
         totalAmount: 150,
         sponsorshipAmount: 60,
@@ -744,7 +784,7 @@ describe("RegistrationsService", () => {
         "admin1",
       );
 
-      expect(db.updateRegistrationRow.mock.calls[0]?.[1].paidAmount).toBe(55);
+      expect(writtenPatch().paidAmount).toBe(55);
     });
   });
 
@@ -887,7 +927,7 @@ describe("RegistrationsService", () => {
 
     beforeEach(() => {
       db.getRegistrationByIdRow.mockResolvedValue(makeRegRow());
-      db.casUpdateRegistrationByUpdatedAt.mockResolvedValue(1);
+      db.applyRegistrationSettlement.mockResolvedValue(true);
       pricing.calculatePrice.mockResolvedValue(emptyBreakdown(100));
     });
 
@@ -903,7 +943,7 @@ describe("RegistrationsService", () => {
       await expect(service.editRegistrationPublic("reg1", { expectedUpdatedAt: expected, accessSelections: [] } as never))
         .rejects.toMatchObject({ code: ErrorCodes.ACCESS_SELECTION_REQUIRED });
       expect(access.assertAccessSelectionRequirement).toHaveBeenCalledWith("ev1", expect.anything(), [], { accessSelectionRequired: true }, expect.anything());
-      expect(db.casUpdateRegistrationByUpdatedAt).not.toHaveBeenCalled();
+      expect(db.applyRegistrationSettlement).not.toHaveBeenCalled();
     });
 
     it("keeps PAID after a price increase, leaves an amount due, and allows check-in", async () => {
@@ -921,7 +961,7 @@ describe("RegistrationsService", () => {
       await service.editRegistrationPublic("reg1", { expectedUpdatedAt: expected,
         accessSelections: [{ accessId: "old", quantity: 1 }, { accessId: "new", quantity: 1 }],
       } as never);
-      const patch = db.casUpdateRegistrationByUpdatedAt.mock.calls[0][2];
+      const patch = writtenPatch();
       expect(patch).toMatchObject({ totalAmount: 150, paymentStatus: "PAID", paidAt });
       expect(patch.sponsorshipAmount).toBe(0);
       expect(calculateSettlement({ ...patch, paidAmount: 100 }).amountDue).toBe(50);
@@ -962,7 +1002,7 @@ describe("RegistrationsService", () => {
       pricing.calculatePrice.mockResolvedValue({ ...emptyBreakdown(100), sponsorshipTotal: sponsorshipAmount,
         total: 100 - sponsorshipAmount });
       await service.editRegistrationPublic("reg1", { expectedUpdatedAt: expected, formData: {} } as never);
-      const patch = db.casUpdateRegistrationByUpdatedAt.mock.calls[0][2];
+      const patch = writtenPatch();
       expect(patch.totalAmount).toBe(100);
       expect(calculateSettlement({ ...patch, paidAmount: 0 }).amountDue).toBe(100 - sponsorshipAmount);
     });
@@ -980,7 +1020,7 @@ describe("RegistrationsService", () => {
       await expect(service.editRegistrationPublic("reg1", { expectedUpdatedAt: expected,
         accessSelections: [{ accessId: "workshop", quantity: 1 }],
       } as never)).rejects.toMatchObject({ code: ErrorCodes.BAD_REQUEST });
-      expect(db.casUpdateRegistrationByUpdatedAt).not.toHaveBeenCalled();
+      expect(db.applyRegistrationSettlement).not.toHaveBeenCalled();
     });
 
     it("validates retained access eligibility after a form-only edit", async () => {
@@ -1000,7 +1040,7 @@ describe("RegistrationsService", () => {
       await expect(service.editRegistrationPublic("reg1", { expectedUpdatedAt: expected,
         formData: { profession: "nurse" },
       } as never)).rejects.toMatchObject({ code: ErrorCodes.BAD_REQUEST });
-      expect(db.casUpdateRegistrationByUpdatedAt).not.toHaveBeenCalled();
+      expect(db.applyRegistrationSettlement).not.toHaveBeenCalled();
     });
 
     it("400 for a REFUNDED registration", async () => {
@@ -1017,7 +1057,7 @@ describe("RegistrationsService", () => {
 
     it("409 CONCURRENT_MODIFICATION when the CAS matches no rows", async () => {
       db.findRegistrationWithFormEvent.mockResolvedValue(editFetch());
-      db.casUpdateRegistrationByUpdatedAt.mockResolvedValue(0);
+      db.applyRegistrationSettlement.mockResolvedValue(false);
       await expect(
         service.editRegistrationPublic("reg1", {
           expectedUpdatedAt: expected,
@@ -1112,8 +1152,10 @@ describe("RegistrationsService", () => {
     it("defaults payment confirmation to the net amount after sponsorship", async () => {
       db.findRegistrationForMutation.mockResolvedValue(mutRow({ sponsorshipAmount: 40, totalAmount: 100 }));
       await service.confirmPayment("reg1", { paymentStatus: "PAID" } as never);
-      expect(db.updateRegistrationRow).toHaveBeenCalledWith("reg1",
-        expect.objectContaining({ paidAmount: 60 }), expect.anything());
+      expect(db.applyRegistrationSettlement.mock.calls[0]?.[1]).toMatchObject({
+        registrationId: "reg1",
+        settlement: { paidAmount: 60 },
+      });
     });
 
     it("PENDING→PAID strips editToken, audits with IP, queues PAYMENT_CONFIRMED", async () => {
@@ -1202,7 +1244,7 @@ describe("RegistrationsService", () => {
         "application/pdf",
         { contentDisposition: "attachment" },
       );
-      const patch = db.updateRegistrationRow.mock.calls[0][1];
+      const patch = writtenPatch();
       expect(patch.paymentStatus).toBe("VERIFYING");
       expect(patch.paymentMethod).toBe("BANK_TRANSFER");
       expect(db.enqueueTriggeredEmailOutbox.mock.calls[0][2]).toBe(
@@ -1304,13 +1346,13 @@ describe("RegistrationsService", () => {
 
         expect(uploadedKey()).not.toBe(oldProof);
         expect(result.fileUrl).toBe(uploadedKey());
-        expect(db.updateRegistrationRow.mock.calls[0][1].paymentProofUrl).toBe(
+        expect(writtenPatch().paymentProofUrl).toBe(
           uploadedKey(),
         );
         expect(storage.delete).toHaveBeenCalledTimes(1);
         expect(storage.delete).toHaveBeenCalledWith(oldProof);
         const [uploadOrder] = storage.uploadPrivate.mock.invocationCallOrder;
-        const [updateOrder] = db.updateRegistrationRow.mock.invocationCallOrder;
+        const [updateOrder] = db.applyRegistrationSettlement.mock.invocationCallOrder;
         const [deleteOrder] = storage.delete.mock.invocationCallOrder;
         expect(uploadOrder).toBeLessThan(updateOrder);
         expect(updateOrder).toBeLessThan(deleteOrder);
@@ -1325,7 +1367,7 @@ describe("RegistrationsService", () => {
 
       it("row update failure keeps the old proof, deletes the new object and rethrows", async () => {
         const dbDown = new Error("db down");
-        db.updateRegistrationRow.mockRejectedValueOnce(dbDown);
+        db.applyRegistrationSettlement.mockRejectedValueOnce(dbDown);
 
         await expect(service.uploadPaymentProof("reg1", pdf())).rejects.toBe(dbDown);
 
@@ -1348,7 +1390,7 @@ describe("RegistrationsService", () => {
           statusCode: 400,
         });
 
-        expect(db.updateRegistrationRow).not.toHaveBeenCalled();
+        expect(db.applyRegistrationSettlement).not.toHaveBeenCalled();
         expect(storage.delete).toHaveBeenCalledTimes(1);
         expect(storage.delete).toHaveBeenCalledWith(uploadedKey());
       });
@@ -1389,7 +1431,7 @@ describe("RegistrationsService", () => {
 
         await service.uploadPaymentProof("reg1", pdf());
 
-        expect(db.updateRegistrationRow).toHaveBeenCalledTimes(1);
+        expect(db.applyRegistrationSettlement).toHaveBeenCalledTimes(1);
         expect(storage.delete).not.toHaveBeenCalled();
       });
     });
@@ -1417,7 +1459,7 @@ describe("RegistrationsService", () => {
     it("CASH stays PENDING and audits", async () => {
       db.findRegistrationWithFormEvent.mockResolvedValue(methodFetch());
       await service.selectPaymentMethod("reg1", { paymentMethod: "CASH" } as never);
-      const patch = db.updateRegistrationRow.mock.calls[0][1];
+      const patch = writtenPatch();
       expect(patch.paymentStatus).toBe("PENDING");
       expect(patch.paymentMethod).toBe("CASH");
       expect(patch.labName).toBeNull();
@@ -1703,7 +1745,7 @@ describe("RegistrationsService", () => {
           },
         }),
       );
-      db.casUpdateRegistrationByUpdatedAt.mockResolvedValue(1);
+      db.applyRegistrationSettlement.mockResolvedValue(true);
       db.getRegistrationByIdRow.mockResolvedValue(internalRow({ paymentProofUrl: null }));
       const res = await service.editRegistrationPublic("reg1", {
         expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
