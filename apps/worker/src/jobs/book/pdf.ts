@@ -1,5 +1,5 @@
 import { ABSTRACT_TYPE_LABELS_FR, type AbstractFinalType } from "@app/contracts";
-import { getAuthorLine } from "@app/shared";
+import { getAbstractTitle, getAuthorLine } from "@app/shared";
 // Abstract Book PDF generation — ported (semantics) from legacy
 // src/modules/abstracts/abstracts.book.service.ts. Two-column A4 layout.
 // Text is drawn with embedded, subset DejaVu fonts (shared with certificates
@@ -30,14 +30,6 @@ const FINAL_TYPE_SORT_ORDER: Record<string, number> = {
   ORAL_COMMUNICATION: 1,
   POSTER: 2,
 };
-
-function getContentTitle(content: unknown): string {
-  if (content && typeof content === "object" && !Array.isArray(content)) {
-    const title = (content as Record<string, unknown>).title;
-    if (typeof title === "string" && title.trim()) return title.trim();
-  }
-  return "Untitled abstract";
-}
 
 function getContentSections(
   content: unknown,
@@ -476,7 +468,7 @@ export async function generateAbstractBookPdf(
       });
     }
     writer.ensure(120);
-    writer.text(`${abstract.code ?? "No code"} ${getContentTitle(abstract.content)}`, {
+    writer.text(`${abstract.code ?? "No code"} ${getAbstractTitle(abstract.content)}`, {
       bold: true,
       size: config.bookFontSize + 2,
       gapAfter: 6,

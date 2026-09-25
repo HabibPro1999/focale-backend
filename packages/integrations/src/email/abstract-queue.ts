@@ -20,7 +20,7 @@ import { ABSTRACT_STATUS_LABELS_FR, ABSTRACT_TYPE_LABELS_FR } from "@app/contrac
 // dead-lettered) rather than a silent "skipped".
 // =============================================================================
 
-import { createLogger } from "@app/shared";
+import { createLogger, getAbstractTitle } from "@app/shared";
 import type { AbstractEmailTrigger } from "@app/contracts";
 import {
   getAbstractForEmailContext,
@@ -150,14 +150,6 @@ const FALLBACK_BODIES: Partial<Record<AbstractEmailTrigger, string>> = {
   ].join("\n"),
 };
 
-function contentTitle(content: unknown): string {
-  if (content && typeof content === "object" && !Array.isArray(content)) {
-    const title = (content as Record<string, unknown>).title;
-    if (typeof title === "string") return title;
-  }
-  return "";
-}
-
 /** Port of legacy buildAbstractEmailContext — the French templating variables. */
 function buildAbstractEmailContext(
   abstract: AbstractForEmailContext,
@@ -176,7 +168,8 @@ function buildAbstractEmailContext(
 
   return {
     authorName,
-    submissionTitle: contentTitle(abstract.content),
+    // Emails keep an empty title rather than an English placeholder.
+    submissionTitle: getAbstractTitle(abstract.content, ""),
     submissionStatus: STATUS_LABELS[abstract.status] || abstract.status,
     presentationType,
     submissionCode: abstract.code || "",

@@ -1,6 +1,20 @@
+import { ErrorCodes } from "@app/contracts";
+import { IntegrationError } from "../errors";
+
 export interface UploadOptions {
   contentDisposition?: string;
   cacheControl?: string;
+}
+
+/**
+ * The object does not exist, whichever provider stores it (Firebase 404 or R2
+ * NoSuchKey). An IntegrationError, so one that escapes a caller still maps to
+ * 404 NOT_FOUND instead of a 500. The key stays on the error for logs only.
+ */
+export class StorageObjectNotFoundError extends IntegrationError {
+  constructor(public readonly key: string) {
+    super("Stored file not found", 404, ErrorCodes.NOT_FOUND);
+  }
 }
 
 export interface DownloadedFile {
@@ -33,7 +47,8 @@ export interface StorageProvider {
   getSignedUrl(key: string, expiresInSeconds?: number): Promise<string>;
 
   /**
-   * Download a file using its storage key.
+   * Download a file using its storage key. Throws StorageObjectNotFoundError
+   * when no object has that key.
    */
   download(key: string): Promise<DownloadedFile>;
 

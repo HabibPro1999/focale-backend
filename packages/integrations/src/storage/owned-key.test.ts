@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ownedStorageKey } from "./index";
+import { extractStorageKeyFromUrl, ownedStorageKey } from "./index";
 
 const prefix = "networking/event-1/profiles/profile-1";
 
@@ -31,5 +31,15 @@ describe("ownedStorageKey", () => {
 
   it("never treats an empty prefix as ownership of the whole bucket", () => {
     expect(ownedStorageKey("https://assets.example/anything.webp", "")).toBeNull();
+  });
+});
+
+describe("extractStorageKeyFromUrl", () => {
+  it("parses Firebase and R2 URLs, and bare keys unless they are refused", () => {
+    expect(extractStorageKeyFromUrl("https://storage.googleapis.com/bucket/a/b%20c.png")).toBe("a/b c.png");
+    expect(extractStorageKeyFromUrl("https://cdn.example.com/a/b.png")).toBe("a/b.png");
+    expect(extractStorageKeyFromUrl("a/b.png")).toBe("a/b.png");
+    expect(extractStorageKeyFromUrl("a/b.png", { allowBareKey: false })).toBeNull();
+    expect(extractStorageKeyFromUrl("https://cdn.example.com/a/b.png", { allowBareKey: false })).toBe("a/b.png");
   });
 });

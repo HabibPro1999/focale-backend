@@ -9,12 +9,13 @@
 import { PDFDocument, type PDFFont, rgb } from "pdf-lib";
 import type { CertificateZone } from "@app/contracts";
 import { ABSTRACT_FINAL_TYPE_LABELS } from "@app/contracts";
+import { getAbstractTitle } from "@app/shared";
 import {
   getRegistrationForCertificateGeneration,
   getAbstractForCertificateGeneration,
   getActiveImageReadyCertificateTemplatesByIds,
 } from "@app/db";
-import { getStorageProvider } from "./storage/index";
+import { extractStorageKeyFromUrl, getStorageProvider } from "./storage/index";
 import { dejaVuFontPath, embedFontFile } from "./pdf-fonts";
 import { logger } from "./logger";
 import { integrationsConfig } from "./config";
@@ -88,17 +89,6 @@ function formatDate(date: Date): string {
     month: "long",
     day: "numeric",
   });
-}
-
-/** Mirrors the local `getTitle`/`getAbstractTitle` helper duplicated across the
- * abstracts + certificates API modules — title lives in the free-form `content`
- * jsonb, not a dedicated column. */
-function getAbstractTitle(content: unknown): string {
-  if (content && typeof content === "object" && !Array.isArray(content)) {
-    const title = (content as { title?: unknown }).title;
-    if (typeof title === "string" && title.trim()) return title.trim();
-  }
-  return "Untitled abstract";
 }
 
 /** finalType, labeled, falling back to requestedType when not yet finalized
@@ -354,22 +344,9 @@ function fitTextToZone(
 // STORAGE (template background image)
 // =============================================================================
 
-/** Extract storage key from a full URL. Handles Firebase + R2 formats. */
-function extractKeyFromStorage(url: string): string | null {
-  try {
-    const parsed = new URL(url);
-    if (parsed.hostname === "storage.googleapis.com") {
-      const parts = parsed.pathname.split("/").filter(Boolean);
-      return decodeURIComponent(parts.slice(1).join("/"));
-    }
-    return decodeURIComponent(parsed.pathname.slice(1));
-  } catch {
-    return null;
-  }
-}
-
 async function downloadTemplateImage(templateUrl: string): Promise<Buffer> {
-  const key = extractKeyFromStorage(templateUrl);
+  // Template images are always full URLs; a bare key is not accepted.
+  const key = extractStorageKeyFromUrl(templateUrl, { allowBareKey: false });
   if (!key) {
     throw new Error(
       "Certificate template image is not stored in a supported location",
