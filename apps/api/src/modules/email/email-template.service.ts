@@ -310,17 +310,27 @@ export class EmailTemplateService {
     return paginate(data, total, { page, limit });
   }
 
+  /**
+   * `meta.total` stops at EMAIL_LOG_LIST_COUNT_CAP and `meta.totalCapped`
+   * says there are more (3.6b); past the cap, a full page has a next one.
+   */
   async listLogs(
     eventId: string,
     query: ListEventEmailLogsQuery,
-  ): Promise<PaginatedResult<EventEmailLog>> {
+  ): Promise<
+    PaginatedResult<EventEmailLog> & {
+      meta: PaginatedResult<EventEmailLog>["meta"] & { totalCapped: boolean };
+    }
+  > {
     const { page, limit, status, trigger } = query;
-    const { data, total } = await dbListEventLogs(eventId, {
+    const { data, total, totalCapped } = await dbListEventLogs(eventId, {
       status,
       trigger,
       skip: getSkip({ page, limit }),
       limit,
     });
-    return paginate(data, total, { page, limit });
+    const result = paginate(data, total, { page, limit });
+    const hasNext = result.meta.hasNext || (totalCapped && data.length === limit);
+    return { ...result, meta: { ...result.meta, hasNext, totalCapped } };
   }
 }
