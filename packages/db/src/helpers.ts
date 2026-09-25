@@ -33,7 +33,7 @@ export const timestamps = {
 
 // ---------------------------------------------------------------------------
 // Raw-result accessors — pg (node-postgres) returns { rowCount, rows }.
-// Guard for other drivers. Shared by outbox/email/abstract-book/reports.
+// Guard for other drivers. The one copy for every raw-SQL query module.
 // ---------------------------------------------------------------------------
 
 export function rowsOf<T = Record<string, unknown>>(res: unknown): T[] {

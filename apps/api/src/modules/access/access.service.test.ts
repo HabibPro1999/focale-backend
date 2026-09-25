@@ -3,7 +3,16 @@ import { ErrorCodes, CreateEventAccessSchema } from "@app/contracts";
 
 // Mock the db query layer (the seam the service talks to). withTxn is a
 // passthrough invoking the callback with a dummy tx (all query fns are mocked).
-vi.mock("@app/db", () => ({
+vi.mock("@app/db", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@app/db")>();
+  return {
+  // The paid-count error classes are the real ones (the service maps them by class).
+  AccessCapacityExceededError: real.AccessCapacityExceededError,
+  AccessNotFoundError: real.AccessNotFoundError,
+  AccessPaidCountUnderflowError: real.AccessPaidCountUnderflowError,
+  applyPaidAccessDelta: vi.fn(),
+  takePaidAccess: vi.fn(),
+  releasePaidAccess: vi.fn(),
   findRegistrationFormSchema: vi.fn(),
   getDb: vi.fn(() => ({})),
   withTxn: vi.fn(),
@@ -28,18 +37,16 @@ vi.mock("@app/db", () => ({
   deleteEventAccessById: vi.fn(),
   casIncrementAccessRegisteredCount: vi.fn(),
   casDecrementAccessRegisteredCount: vi.fn(),
-  casIncrementAccessPaidCount: vi.fn(),
-  casDecrementAccessPaidCount: vi.fn(),
   getAccessCapacityInfo: vi.fn(),
   getAccessRegisteredCount: vi.fn(),
-  getAccessPaidCount: vi.fn(),
   getAccessCapacityRowsByIds: vi.fn(),
   getUnsettledRegistrationsWithAccess: vi.fn(),
   getRegistrationCoveredAccessIds: vi.fn(),
   updateRegistrationForAccessDrop: vi.fn(),
   insertAuditLog: vi.fn(),
   enqueueTriggeredEmailOutbox: vi.fn(),
-}));
+  };
+});
 
 import * as db from "@app/db";
 import { AccessService } from "./access.service";
@@ -463,125 +470,78 @@ describe("decrementAccessRegisteredCountTx", () => {
   });
 });
 
-describe("incrementPaidCount", () => {
-  it("succeeds within capacity", async () => {
-    m.casIncrementAccessPaidCount.mockResolvedValue(true);
-    await expect(service.incrementPaidCount("access-1", 1)).resolves.toBeUndefined();
-    expect(m.getAccessCapacityInfo).not.toHaveBeenCalled();
+describe("incrementPaidCount / decrementPaidCount", () => {
+  it("take and release paid places through @app/db", async () => {
+    m.takePaidAccess.mockResolvedValue(undefined);
+    m.releasePaidAccess.mockResolvedValue(undefined);
+    await expect(service.incrementPaidCount("access-1", 2)).resolves.toBeUndefined();
+    await expect(service.decrementPaidCount("access-1", 1)).resolves.toBeUndefined();
+    expect(m.takePaidAccess).toHaveBeenCalledWith(expect.anything(), "access-1", 2);
+    expect(m.releasePaidAccess).toHaveBeenCalledWith(expect.anything(), "access-1", 1);
   });
 
-  it("throws NOT_FOUND when missing", async () => {
-    m.casIncrementAccessPaidCount.mockResolvedValue(false);
-    m.getAccessCapacityInfo.mockResolvedValue(null);
+  it("maps a missing access item to ACCESS_NOT_FOUND", async () => {
+    m.takePaidAccess.mockRejectedValue(new db.AccessNotFoundError("x"));
     await expect(service.incrementPaidCount("x", 1)).rejects.toMatchObject({
       code: ErrorCodes.ACCESS_NOT_FOUND,
+      statusCode: 404,
+      message: "Access not found",
     });
   });
 
-  it("fails atomically when quantity exceeds remaining capacity", async () => {
-    m.casIncrementAccessPaidCount.mockResolvedValue(false);
-    m.getAccessCapacityInfo.mockResolvedValue({
-      name: "Workshop",
-      maxCapacity: 10,
-      paidCount: 8,
-    });
+  it("maps a full access item to ACCESS_CAPACITY_EXCEEDED with the remaining places", async () => {
+    m.takePaidAccess.mockRejectedValue(new db.AccessCapacityExceededError("access-1", "Workshop", 2, 3));
     await expect(service.incrementPaidCount("access-1", 3)).rejects.toMatchObject({
       code: ErrorCodes.ACCESS_CAPACITY_EXCEEDED,
+      statusCode: 409,
+      message: "Workshop has insufficient capacity (2 spots remaining, requested 3)",
       details: { remaining: 2, requested: 3 },
     });
   });
-});
 
-describe("decrementPaidCount", () => {
-  it("succeeds within the floor", async () => {
-    m.casDecrementAccessPaidCount.mockResolvedValue(true);
-    await expect(service.decrementPaidCount("access-1", 1)).resolves.toBeUndefined();
-  });
-
-  it("throws on underflow", async () => {
-    m.casDecrementAccessPaidCount.mockResolvedValue(false);
-    m.getAccessPaidCount.mockResolvedValue({ paidCount: 1 });
+  it("maps an underflow to VALIDATION_ERROR", async () => {
+    m.releasePaidAccess.mockRejectedValue(new db.AccessPaidCountUnderflowError("access-1", 1, 2));
     await expect(service.decrementPaidCount("access-1", 2)).rejects.toMatchObject({
       code: ErrorCodes.VALIDATION_ERROR,
+      statusCode: 409,
+      message: "Paid access count cannot be decremented below zero",
       details: { paidCount: 1, requested: 2 },
     });
   });
 });
 
 // ===========================================================================
-// syncPaidCountDelta
+// syncPaidCountDelta: thin wrapper over @app/db applyPaidAccessDelta
 // ===========================================================================
 describe("syncPaidCountDelta", () => {
-  it("increments only newly-paid access quantities", async () => {
-    m.casIncrementAccessPaidCount.mockResolvedValue(true);
+  const oldState = {
+    status: "PARTIAL",
+    priceBreakdown: { accessItems: [{ accessId: "access-2", quantity: 1 }] },
+    coveredAccessIds: new Set<string>(),
+  };
+  const newState = { ...oldState, coveredAccessIds: new Set(["access-2"]) };
+
+  it("moves the paid counts, then checks capacity for the items that went up", async () => {
+    m.applyPaidAccessDelta.mockResolvedValue({ incremented: ["access-2"], decremented: [] });
     m.getAccessCapacityRowsByIds.mockResolvedValue([]);
-
-    await service.syncPaidCountDelta(
-      eventId,
-      {
-        status: "PARTIAL",
-        priceBreakdown: {
-          accessItems: [
-            { accessId: "access-1", quantity: 1 },
-            { accessId: "access-2", quantity: 1 },
-          ],
-        },
-        coveredAccessIds: new Set(["access-1"]),
-      },
-      {
-        status: "PARTIAL",
-        priceBreakdown: {
-          accessItems: [
-            { accessId: "access-1", quantity: 1 },
-            { accessId: "access-2", quantity: 1 },
-          ],
-        },
-        coveredAccessIds: new Set(["access-1", "access-2"]),
-      },
-    );
-
-    expect(m.casIncrementAccessPaidCount).toHaveBeenCalledTimes(1);
-    expect(m.casIncrementAccessPaidCount).toHaveBeenCalledWith(
-      "access-2",
-      1,
-      expect.anything(),
-    );
-    expect(m.getAccessCapacityRowsByIds).toHaveBeenCalledWith(
-      ["access-2"],
-      expect.anything(),
-    );
+    await service.syncPaidCountDelta(eventId, oldState, newState);
+    expect(m.applyPaidAccessDelta).toHaveBeenCalledWith(expect.anything(), oldState, newState);
+    expect(m.getAccessCapacityRowsByIds).toHaveBeenCalledWith(["access-2"], expect.anything());
   });
 
-  it("decrements partial coverage on refund", async () => {
-    m.casDecrementAccessPaidCount.mockResolvedValue(true);
-    await service.syncPaidCountDelta(
-      eventId,
-      {
-        status: "PARTIAL",
-        priceBreakdown: { accessItems: [{ accessId: "access-1", quantity: 2 }] },
-        coveredAccessIds: new Set(["access-1"]),
-      },
-      {
-        status: "REFUNDED",
-        priceBreakdown: { accessItems: [{ accessId: "access-1", quantity: 2 }] },
-      },
-    );
-    expect(m.casDecrementAccessPaidCount).toHaveBeenCalledWith(
-      "access-1",
-      2,
-      expect.anything(),
-    );
-    expect(m.casIncrementAccessPaidCount).not.toHaveBeenCalled();
+  it("skips the capacity check when nothing went up", async () => {
+    m.applyPaidAccessDelta.mockResolvedValue({ incremented: [], decremented: ["access-2"] });
+    await service.syncPaidCountDelta(eventId, newState, { ...newState, status: "REFUNDED" });
+    expect(m.getAccessCapacityRowsByIds).not.toHaveBeenCalled();
   });
 
-  it("does nothing when a fully settled registration stays settled", async () => {
-    await service.syncPaidCountDelta(
-      eventId,
-      { status: "SPONSORED", priceBreakdown: { accessItems: [{ accessId: "access-1", quantity: 1 }] } },
-      { status: "SPONSORED", priceBreakdown: { accessItems: [{ accessId: "access-1", quantity: 1 }] } },
-    );
-    expect(m.casIncrementAccessPaidCount).not.toHaveBeenCalled();
-    expect(m.casDecrementAccessPaidCount).not.toHaveBeenCalled();
+  it("maps a capacity failure to the API error", async () => {
+    m.applyPaidAccessDelta.mockRejectedValue(new db.AccessCapacityExceededError("access-2", "Gala", 0, 1));
+    await expect(service.syncPaidCountDelta(eventId, oldState, newState)).rejects.toMatchObject({
+      code: ErrorCodes.ACCESS_CAPACITY_EXCEEDED,
+      details: { remaining: 0, requested: 1 },
+    });
+    expect(m.getAccessCapacityRowsByIds).not.toHaveBeenCalled();
   });
 });
 

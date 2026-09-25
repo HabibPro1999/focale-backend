@@ -6,10 +6,11 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { integrationsConfig } from "../config";
-import type {
-  DownloadedFile,
-  StorageProvider,
-  UploadOptions,
+import {
+  StorageObjectNotFoundError,
+  type DownloadedFile,
+  type StorageProvider,
+  type UploadOptions,
 } from "./storage.provider";
 
 async function readBodyAsBuffer(body: unknown): Promise<Buffer> {
@@ -110,12 +111,21 @@ export class R2StorageProvider implements StorageProvider {
   }
 
   async download(key: string): Promise<DownloadedFile> {
-    const response = await this.client.send(
-      new GetObjectCommand({
-        Bucket: this.bucket,
-        Key: key,
-      }),
-    );
+    let response;
+    try {
+      response = await this.client.send(
+        new GetObjectCommand({
+          Bucket: this.bucket,
+          Key: key,
+        }),
+      );
+    } catch (err) {
+      const error = err as { name?: unknown; $metadata?: { httpStatusCode?: unknown } };
+      if (error.name === "NoSuchKey" || error.$metadata?.httpStatusCode === 404) {
+        throw new StorageObjectNotFoundError(key);
+      }
+      throw err;
+    }
 
     return {
       buffer: await readBodyAsBuffer(response.Body),

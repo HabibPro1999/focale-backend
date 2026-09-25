@@ -22,11 +22,15 @@ export function getStorageProvider(): StorageProvider {
 /**
  * Extract a storage key from a stored file URL. Handles bare keys (no "://"),
  * Firebase (storage.googleapis.com → strip the bucket segment), and
- * R2/custom-domain URLs (strip the leading "/"). Returns null on parse failure.
+ * R2/custom-domain URLs (strip the leading "/"). Returns null on parse failure,
+ * and for a bare key when `allowBareKey` is false (values that must be URLs).
  */
-export function extractStorageKeyFromUrl(url: string): string | null {
+export function extractStorageKeyFromUrl(
+  url: string,
+  options: { allowBareKey?: boolean } = {},
+): string | null {
   if (!url.includes("://")) {
-    return url || null;
+    return options.allowBareKey === false ? null : url || null;
   }
   try {
     const parsed = new URL(url);
@@ -64,8 +68,9 @@ export {
   type CompressedFile,
 } from "./compress";
 export { IMAGE_INPUT_LIMITS } from "./image-limits";
-export type {
-  DownloadedFile,
-  StorageProvider,
-  UploadOptions,
+export {
+  StorageObjectNotFoundError,
+  type DownloadedFile,
+  type StorageProvider,
+  type UploadOptions,
 } from "./storage.provider";

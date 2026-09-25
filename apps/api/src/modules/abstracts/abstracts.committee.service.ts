@@ -2,6 +2,7 @@ import { CommitteeInviteService } from "./abstracts.committee-invite.service";
 import { CommitteeEmailsService } from "./abstracts.committee-emails";
 import { randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
+import { getAbstractTitle } from "@app/shared";
 import {
   ErrorCodes,
   UserRole,
@@ -53,14 +54,6 @@ import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
 
 type UserRow = NonNullable<Awaited<ReturnType<typeof getUserById>>>;
 
-function getTitle(content: unknown): string {
-  if (content && typeof content === "object" && !Array.isArray(content)) {
-    const title = (content as { title?: unknown }).title;
-    if (typeof title === "string") return title;
-  }
-  return "Untitled abstract";
-}
-
 function ownReviewOf(reviews: AbstractReviewRow[], reviewerId: string) {
   const own = reviews.find((r) => r.reviewerId === reviewerId);
   return own
@@ -76,7 +69,7 @@ function anonymizeAbstractListItem(
   return {
     id: abstract.id,
     status: abstract.status,
-    title: getTitle(abstract.content),
+    title: getAbstractTitle(abstract.content),
     requestedType: abstract.requestedType,
     finalType: abstract.finalType,
     themeLabels: abstract.themes.map((t) => t.label),

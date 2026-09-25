@@ -1,6 +1,7 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { getDb, type DbExecutor } from "../client";
 import { enqueueOutboxEvent } from "../outbox";
+import { rowCountOf } from "../helpers";
 import {
   accessPrerequisites,
   eventAccess,
@@ -373,12 +374,6 @@ export async function deleteEventAccessById(
 // Return whether a row was affected; callers diagnose misses via the reads below.
 // ---------------------------------------------------------------------------
 
-function rowCount(res: unknown): number {
-  const r = res as { rowCount?: number | null; rows?: unknown[] };
-  if (typeof r?.rowCount === "number") return r.rowCount;
-  return Array.isArray(r?.rows) ? r.rows.length : 0;
-}
-
 /** registered_count += qty, but only while paid_count + qty stays within capacity. */
 export async function casIncrementAccessRegisteredCount(
   accessId: string,
@@ -392,7 +387,7 @@ export async function casIncrementAccessRegisteredCount(
     AND (max_capacity IS NULL OR paid_count + ${quantity} <= max_capacity)
     RETURNING id
   `);
-  return rowCount(res) > 0;
+  return rowCountOf(res) > 0;
 }
 
 /** registered_count -= qty, guarded at floor (registered_count >= qty). */
@@ -408,7 +403,7 @@ export async function casDecrementAccessRegisteredCount(
     AND registered_count >= ${quantity}
     RETURNING id
   `);
-  return rowCount(res) > 0;
+  return rowCountOf(res) > 0;
 }
 
 /** paid_count += qty within capacity — authoritative occupancy gate. */
@@ -424,7 +419,7 @@ export async function casIncrementAccessPaidCount(
     AND (max_capacity IS NULL OR paid_count + ${quantity} <= max_capacity)
     RETURNING id
   `);
-  return rowCount(res) > 0;
+  return rowCountOf(res) > 0;
 }
 
 /** paid_count -= qty, guarded at floor (paid_count >= qty). */
@@ -440,7 +435,7 @@ export async function casDecrementAccessPaidCount(
     AND paid_count >= ${quantity}
     RETURNING id
   `);
-  return rowCount(res) > 0;
+  return rowCountOf(res) > 0;
 }
 
 export async function getAccessCapacityInfo(

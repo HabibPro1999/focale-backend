@@ -1,6 +1,6 @@
 import type { networkingDeliveryContext } from "@app/db";
 import type { EmailAttachment } from "../email/providers";
-import { networkingKeyring } from "@app/shared";
+import { escapeHtml, networkingKeyring } from "@app/shared";
 import { networkingConfig } from "../config";
 export type NetworkingNotificationContext = Awaited<
   ReturnType<typeof networkingDeliveryContext>
@@ -199,15 +199,6 @@ export function openNetworkingCode(value: string): string {
   const code = networkingKeyring({ legacySecret: tokenSecret, keys, writeV1: keyringWriteV1 }).open(value);
   if (!/^\d{6}$/.test(code)) throw new Error("Invalid encrypted code");
   return code;
-}
-export function escapeNetworkingHtml(value: string) {
-  return value.replace(
-    /[&<>"']/g,
-    (char) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
-        char
-      ]!,
-  );
 }
 function icsEscape(value: string) {
   return value
@@ -419,7 +410,7 @@ export function renderNetworkingNotification(
     ? substitute(template.subject)
     : `${ctx.event?.name ?? "Focale"} · ${title}`;
   if (template && type !== "OTP") body = substitute(template.body);
-  const safe = escapeNetworkingHtml;
+  const safe = escapeHtml;
   const actionLabels = {
     en: ["Review and accept", "Decline", "Suggest another time"],
     fr: ["Consulter et accepter", "Refuser", "Proposer un autre créneau"],

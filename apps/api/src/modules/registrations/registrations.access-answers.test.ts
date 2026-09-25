@@ -9,6 +9,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const db = vi.hoisted(() => ({
   getDb: vi.fn(() => ({})),
   withTxn: vi.fn(),
+  applyRegistrationSettlement: vi.fn(),
+  emitSettlementEvents: vi.fn(),
   getEventWithPricing: vi.fn(),
   findClientModuleState: vi.fn(),
   getRegistrationFormSchemaForEvent: vi.fn(),
@@ -35,6 +37,19 @@ vi.mock("@app/db", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   ...db,
 }));
+
+// emitSettlementEvents with @app/db's body, over the mocked primitives.
+db.emitSettlementEvents.mockImplementation(
+  async (tx: unknown, events: Array<{ type: string; payload: { id: unknown } }>) => {
+    const changed = new Set(
+      events
+        .filter((ev) => ev.type === "registration.updated" || ev.type === "registration.paymentConfirmed")
+        .map((ev) => String(ev.payload.id)),
+    );
+    for (const id of changed) await db.syncNetworkingRegistration(id, tx);
+    return Promise.all(events.map((ev) => db.enqueueRealtimeOutboxEvent(tx, ev)));
+  },
+);
 
 import type { Config } from "../../core/config";
 import { AccessPublicController } from "../access/access.public.controller";
