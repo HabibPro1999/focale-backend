@@ -1,5 +1,6 @@
 import { ErrorCodes, type EventPricingWithRules } from "@app/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ApplyRegistrationSettlementInput, RegistrationPatch } from "@app/db";
 
 // One pricing input (2.11): the public quote, public create/self-edit and
 // admin create/edit all store and price the answers to the fields the form
@@ -60,10 +61,8 @@ db.emitSettlementEvents.mockImplementation(
  * other fields, the settlement, and the amounts the writer derives from a
  * written breakdown.
  */
-function writtenPatch(n = 0): Record<string, any> {
-  const input = db.applyRegistrationSettlement.mock.calls[n]?.[1] as
-    | { settlement: Record<string, any>; fields?: Record<string, any> }
-    | undefined;
+function writtenPatch(n = 0): RegistrationPatch {
+  const input = db.applyRegistrationSettlement.mock.calls[n]?.[1] as ApplyRegistrationSettlementInput | undefined;
   if (!input) throw new Error(`applyRegistrationSettlement call ${n} not made`);
   const pb = input.settlement.priceBreakdown;
   return {

@@ -1,5 +1,6 @@
 import { ErrorCodes } from "@app/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ApplyRegistrationSettlementInput, RegistrationPatch } from "@app/db";
 
 // --- @app/db mock -----------------------------------------------------------
 const db = vi.hoisted(() => ({
@@ -77,10 +78,8 @@ db.emitSettlementEvents.mockImplementation(
  * other fields, the settlement, and the amounts the writer derives from a
  * written breakdown.
  */
-function writtenPatch(n = 0): Record<string, any> {
-  const input = db.applyRegistrationSettlement.mock.calls[n]?.[1] as
-    | { settlement: Record<string, any>; fields?: Record<string, any> }
-    | undefined;
+function writtenPatch(n = 0): RegistrationPatch {
+  const input = db.applyRegistrationSettlement.mock.calls[n]?.[1] as ApplyRegistrationSettlementInput | undefined;
   if (!input) throw new Error(`applyRegistrationSettlement call ${n} not made`);
   const pb = input.settlement.priceBreakdown;
   return {
@@ -964,7 +963,7 @@ describe("RegistrationsService", () => {
       const patch = writtenPatch();
       expect(patch).toMatchObject({ totalAmount: 150, paymentStatus: "PAID", paidAt });
       expect(patch.sponsorshipAmount).toBe(0);
-      expect(calculateSettlement({ ...patch, paidAmount: 100 }).amountDue).toBe(50);
+      expect(calculateSettlement({ totalAmount: patch.totalAmount!, sponsorshipAmount: patch.sponsorshipAmount!, paidAmount: 100 }).amountDue).toBe(50);
       expect(access.syncPaidCountDelta).toHaveBeenCalledWith("ev1",
         expect.objectContaining({ status: "PAID" }),
         expect.objectContaining({
@@ -1004,7 +1003,8 @@ describe("RegistrationsService", () => {
       await service.editRegistrationPublic("reg1", { expectedUpdatedAt: expected, formData: {} } as never);
       const patch = writtenPatch();
       expect(patch.totalAmount).toBe(100);
-      expect(calculateSettlement({ ...patch, paidAmount: 0 }).amountDue).toBe(100 - sponsorshipAmount);
+      expect(calculateSettlement({ totalAmount: patch.totalAmount!, sponsorshipAmount: patch.sponsorshipAmount!, paidAmount: 0 }).amountDue)
+        .toBe(100 - sponsorshipAmount);
     });
 
     it("validates retained dependencies when a prerequisite is removed", async () => {
