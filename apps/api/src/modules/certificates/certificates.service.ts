@@ -21,14 +21,13 @@ import {
   deleteCertificateTemplateById,
   listActiveImageReadyCertificateTemplates,
   getRegistrationsForCertificateSend,
-  getAlreadySentCertTemplateIds,
   getTemplateByTrigger,
-  createEmailLogsBulk,
   getAbstractsForCertificateSend,
-  getAlreadySentAbstractCertTemplateIds,
+  queueCertificateEmailLogsTxn,
   type CertificateTemplateWithAccess,
   type CertificateTemplateWithEvent,
-  type EmailLogInsert,
+  type CertificateEmailCandidate,
+  type CertificateEmailOutcome,
   type AbstractForCertificateSend,
 } from "@app/db";
 import {
@@ -64,22 +63,16 @@ interface SendEventContext {
 export interface SendCertificatesResult {
   success: true;
   queued: number;
+  /** Registrations not queued: already sent, or refused by a unique index. */
   skipped: number;
+  /** The part of `skipped` that a unique index refused (2.12). */
+  skippedConflict: number;
   total: number;
   breakdown: Record<string, number>;
   // H2: only present when the request included abstractIds (undefined = no
   // abstract certificates were requested, distinct from "requested but none
   // eligible").
   abstracts?: AbstractCertificateSendSummary;
-}
-
-interface BulkCertificateInput {
-  registrationId: string;
-  recipientEmail: string;
-  recipientName?: string;
-  certificateTemplateIds: string[];
-  certificateNames: string[];
-  contextSnapshot: Record<string, unknown>;
 }
 
 // ============================================================================
@@ -92,6 +85,8 @@ interface BulkCertificateInput {
 export type AbstractCertificateSendStatus =
   | "queued"
   | "already_sent"
+  // 2.12: a unique index refused the email row; nothing was queued.
+  | "skipped_conflict"
   | "ineligible";
 
 export interface AbstractCertificateSendResult {
@@ -481,8 +476,7 @@ export class CertificatesService {
       .filter(({ eligible }) => eligible.length > 0);
 
     // 5. Build email contexts in batches of CONTEXT_CONCURRENCY.
-    const inputs: BulkCertificateInput[] = [];
-    const breakdown: Record<string, number> = {};
+    const registrationCandidates: CertificateEmailCandidate[] = [];
 
     for (let i = 0; i < eligibleRegs.length; i += CONTEXT_CONCURRENCY) {
       const chunk = eligibleRegs.slice(i, i + CONTEXT_CONCURRENCY);
@@ -492,114 +486,79 @@ export class CertificatesService {
 
       for (let j = 0; j < chunk.length; j++) {
         const { reg, eligible } = chunk[j];
-        const context = contexts[j];
-
-        for (const t of eligible) {
-          breakdown[t.name] = (breakdown[t.name] || 0) + 1;
-        }
-
-        inputs.push({
-          registrationId: reg.id,
+        registrationCandidates.push({
+          targetId: reg.id,
           recipientEmail: reg.email,
           recipientName:
-            [reg.firstName, reg.lastName].filter(Boolean).join(" ") || undefined,
-          certificateTemplateIds: eligible.map((t) => t.id),
-          certificateNames: eligible.map((t) => t.name),
-          contextSnapshot: context as unknown as Record<string, unknown>,
+            [reg.firstName, reg.lastName].filter(Boolean).join(" ") || null,
+          certificates: eligible.map((t) => ({ id: t.id, name: t.name })),
+          contextSnapshot: contexts[j] as unknown as Record<string, unknown>,
         });
       }
     }
 
-    // 6. Queue all emails (per-template dedup against already-queued/sent).
-    const { queued, skipped } = await this.queueBulkCertificateEmails(
-      emailTemplate.id,
-      inputs,
-    );
+    // 6. Abstract presenter certificates (H2) — only when requested.
+    const abstractPlan =
+      abstractIds !== undefined
+        ? await this.planAbstractCertificates(event, templateData, abstractIds)
+        : undefined;
 
-    logger.info(
-      { eventId: event.id, queued, skipped, total: registrations.length, breakdown },
-      "Certificate emails queued",
-    );
+    // 7. Queue both batches in one transaction, under the event lock, deduped
+    // per certificate template against what is already queued or sent.
+    const outcomes = await queueCertificateEmailLogsTxn({
+      eventId: event.id,
+      emailTemplateId: emailTemplate.id,
+      registrations: registrationCandidates,
+      abstracts: abstractPlan?.candidates ?? [],
+    });
+    if (!outcomes) {
+      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+    }
+
+    let queued = 0;
+    let alreadySent = 0;
+    let skippedConflict = 0;
+    const breakdown: Record<string, number> = {};
+    for (const outcome of outcomes.registrations) {
+      if (outcome.status === "queued") {
+        queued++;
+        for (const certificate of outcome.certificates) {
+          breakdown[certificate.name] = (breakdown[certificate.name] || 0) + 1;
+        }
+      } else if (outcome.status === "already_sent") {
+        alreadySent++;
+      } else {
+        skippedConflict++;
+      }
+    }
 
     const result: SendCertificatesResult = {
       success: true,
       queued,
-      skipped,
+      skipped: alreadySent + skippedConflict,
+      skippedConflict,
       total: registrations.length,
       breakdown,
     };
+    logger.info(
+      { eventId: event.id, queued, alreadySent, skippedConflict, total: registrations.length, breakdown },
+      "Certificate emails queued",
+    );
 
-    // 7. Abstract presenter certificates (H2) — only when requested.
-    if (abstractIds !== undefined) {
-      result.abstracts = await this.processAbstractCertificates(
-        event,
-        emailTemplate.id,
-        templateData,
-        abstractIds,
-      );
+    if (abstractPlan) {
+      result.abstracts = abstractPlan.summarize(outcomes.abstracts);
       logger.info(
-        { eventId: event.id, ...result.abstracts },
+        {
+          eventId: event.id,
+          queued: result.abstracts.queued,
+          skipped: result.abstracts.skipped,
+          total: result.abstracts.total,
+        },
         "Abstract certificate emails queued",
       );
     }
 
     return result;
-  }
-
-  /**
-   * Insert one QUEUED EmailLog per registrant, deduping template ids against
-   * already-queued/sent certs. A registrant is skipped only when ALL their
-   * eligible templates were already covered. `_certificateTemplateIds` is the
-   * durable dedup key + the templates the worker attaches at send time.
-   */
-  private async queueBulkCertificateEmails(
-    emailTemplateId: string,
-    inputs: BulkCertificateInput[],
-  ): Promise<{ queued: number; skipped: number }> {
-    if (inputs.length === 0) return { queued: 0, skipped: 0 };
-
-    const sentMap = await getAlreadySentCertTemplateIds(
-      inputs.map((i) => i.registrationId),
-    );
-
-    let skipped = 0;
-    const values: EmailLogInsert[] = [];
-
-    for (const input of inputs) {
-      const alreadySent = sentMap.get(input.registrationId) ?? new Set<string>();
-      const remainingIds: string[] = [];
-      const remainingNames: string[] = [];
-      input.certificateTemplateIds.forEach((templateId, index) => {
-        if (!alreadySent.has(templateId)) {
-          remainingIds.push(templateId);
-          remainingNames.push(input.certificateNames[index]);
-        }
-      });
-
-      if (remainingIds.length === 0) {
-        skipped++;
-        continue;
-      }
-
-      values.push({
-        trigger: "CERTIFICATE_SENT",
-        templateId: emailTemplateId,
-        registrationId: input.registrationId,
-        recipientEmail: input.recipientEmail,
-        recipientName: input.recipientName ?? null,
-        subject: "",
-        status: "QUEUED",
-        contextSnapshot: {
-          ...input.contextSnapshot,
-          certificateCount: String(remainingIds.length),
-          certificateList: remainingNames.join(", "),
-          _certificateTemplateIds: remainingIds,
-        },
-      });
-    }
-
-    const queued = await createEmailLogsBulk(values);
-    return { queued, skipped };
   }
 
   /**
@@ -609,38 +568,36 @@ export class CertificatesService {
    * allowedAbstractFinalTypes (if any) includes the abstract's finalType
    * (isAbstractEligibleForCertificate). Per-id eligibility: must belong to
    * the event, be ACCEPTED, have presentedAt != null (set by
-   * markAbstractPresented), and have ≥1 applicable template. Ineligible /
-   * already-sent ids are reported individually rather than failing the
-   * whole request. Recipient is the abstract's author (first/corresponding
-   * author — abstracts have exactly one author on file).
+   * markAbstractPresented), and have ≥1 applicable template. Ineligible ids
+   * are reported individually rather than failing the whole request; the
+   * already-sent check happens in the queueing transaction. Recipient is the
+   * abstract's author (first/corresponding author — abstracts have exactly
+   * one author on file).
    */
-  private async processAbstractCertificates(
+  private async planAbstractCertificates(
     event: SendEventContext,
-    emailTemplateId: string,
     certTemplates: CertificateTemplateData[],
     abstractIds: string[],
-  ): Promise<AbstractCertificateSendSummary> {
+  ): Promise<{
+    candidates: CertificateEmailCandidate[];
+    summarize: (outcomes: CertificateEmailOutcome[]) => AbstractCertificateSendSummary;
+  }> {
     const uniqueIds = Array.from(new Set(abstractIds));
-    if (uniqueIds.length === 0) {
-      return { queued: 0, skipped: 0, total: 0, results: [] };
-    }
-
-    const found = await getAbstractsForCertificateSend(event.id, uniqueIds);
+    const found =
+      uniqueIds.length > 0
+        ? await getAbstractsForCertificateSend(event.id, uniqueIds)
+        : [];
     const byId = new Map(found.map((a) => [a.id, a]));
 
-    const eligibleIds = uniqueIds.filter(
-      (id) => ineligibilityReason(byId.get(id), event.id) === null,
-    );
-    const alreadySent = await getAlreadySentAbstractCertTemplateIds(eligibleIds);
-
-    const results: AbstractCertificateSendResult[] = [];
-    const values: EmailLogInsert[] = [];
+    // Per input id: a final (ineligible) result, or the index of its candidate.
+    const slots: Array<AbstractCertificateSendResult | number> = [];
+    const candidates: CertificateEmailCandidate[] = [];
 
     for (const id of uniqueIds) {
       const maybeAbstract = byId.get(id);
       const reason = ineligibilityReason(maybeAbstract, event.id);
       if (reason) {
-        results.push({ abstractId: id, status: "ineligible", reason });
+        slots.push({ abstractId: id, status: "ineligible", reason });
         continue;
       }
       // reason === null guarantees ineligibilityReason found a defined,
@@ -648,23 +605,16 @@ export class CertificatesService {
       const abstract = maybeAbstract as AbstractForCertificateSend;
 
       // H2: scope + allowedAbstractFinalTypes gate — narrow to templates that
-      // actually apply to this abstract before the dedupe check below.
+      // actually apply to this abstract before the dedupe check.
       const applicableTemplates = certTemplates.filter((t) =>
         isAbstractEligibleForCertificate(abstract.finalType, t),
       );
       if (applicableTemplates.length === 0) {
-        results.push({
+        slots.push({
           abstractId: id,
           status: "ineligible",
           reason: "No certificate templates apply to this abstract",
         });
-        continue;
-      }
-
-      const sentIds = alreadySent.get(id) ?? new Set<string>();
-      const remaining = applicableTemplates.filter((t) => !sentIds.has(t.id));
-      if (remaining.length === 0) {
-        results.push({ abstractId: id, status: "already_sent" });
         continue;
       }
 
@@ -674,18 +624,13 @@ export class CertificatesService {
         .trim();
       const abstractType = abstract.finalType ?? abstract.requestedType;
 
-      values.push({
-        trigger: "CERTIFICATE_SENT",
-        templateId: emailTemplateId,
-        abstractId: id,
+      slots.push(candidates.length);
+      candidates.push({
+        targetId: id,
         recipientEmail: abstract.authorEmail,
         recipientName: authorName || null,
-        subject: "",
-        status: "QUEUED",
+        certificates: applicableTemplates.map((t) => ({ id: t.id, name: t.name })),
         contextSnapshot: {
-          certificateCount: String(remaining.length),
-          certificateList: remaining.map((t) => t.name).join(", "),
-          _certificateTemplateIds: remaining.map((t) => t.id),
           fullName: authorName || "—",
           abstractTitle: getAbstractTitle(abstract.content),
           abstractCode: abstract.code ?? "—",
@@ -699,12 +644,25 @@ export class CertificatesService {
           issuanceDate: new Date().toISOString(),
         },
       });
-      results.push({ abstractId: id, status: "queued" });
     }
 
-    const queued = await createEmailLogsBulk(values);
-    const skipped = results.filter((r) => r.status !== "queued").length;
+    const summarize = (
+      outcomes: CertificateEmailOutcome[],
+    ): AbstractCertificateSendSummary => {
+      const results = slots.map((slot, index): AbstractCertificateSendResult =>
+        typeof slot === "number"
+          ? { abstractId: uniqueIds[index], status: outcomes[slot].status }
+          : slot,
+      );
+      const queued = results.filter((r) => r.status === "queued").length;
+      return {
+        queued,
+        skipped: results.length - queued,
+        total: uniqueIds.length,
+        results,
+      };
+    };
 
-    return { queued, skipped, total: uniqueIds.length, results };
+    return { candidates, summarize };
   }
 }
