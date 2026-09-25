@@ -34,7 +34,11 @@ describe("lifecycle config", () => {
     expect(config.lifecycle).toEqual({
       shutdownGraceMs: 25_000,
       workerHeartbeatFile: defaultWorkerHeartbeatFile(),
+      serviceName: "focale-worker",
     });
+    expect(parseAppConfig(env({ RENDER_SERVICE_NAME: "focale-worker-prod" })).lifecycle.serviceName).toBe(
+      "focale-worker-prod",
+    );
     expect(defaultWorkerHeartbeatFile()).toMatch(/focale-worker\.heartbeat$/);
   });
 

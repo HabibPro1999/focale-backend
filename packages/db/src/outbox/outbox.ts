@@ -38,6 +38,11 @@ export interface ProcessOutboxOptions {
   workerId?: string;
   leaseMs?: number;
   scope?: OutboxProcessingScope;
+  /**
+   * Stop before the next claimed row once aborted (job timeout or shutdown).
+   * Rows claimed but not started stay leased until stale-lease recovery.
+   */
+  signal?: AbortSignal;
 }
 
 export interface ProcessOutboxResult {
@@ -370,6 +375,7 @@ export async function processOutboxEvents(
   );
 
   for (const event of events) {
+    if (options.signal?.aborted) break;
     const stopRenewal = startOutboxLeaseRenewal(event.id, workerId, leaseMs);
     try {
       const handler = handlers[event.type];

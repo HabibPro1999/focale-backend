@@ -12,9 +12,11 @@ import { newId } from "@app/shared";
 // Health probes call pingDb (SELECT 1). Override just that one export so the
 // suite is DB-independent; everything else in @app/db stays real (lazy client).
 const pingDbMock = vi.hoisted(() => vi.fn());
+const getWorkerHealthMock = vi.hoisted(() => vi.fn());
 vi.mock("@app/db", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   pingDb: pingDbMock,
+  getWorkerHealth: getWorkerHealthMock,
 }));
 
 import { buildApp } from "./app.factory";
@@ -104,16 +106,43 @@ describe("api e2e", () => {
     expect(res.json()).toEqual({ status: "ok" });
   });
 
-  it("GET /health/ready reflects DB readiness (200 ready / 503 not ready), raw body", async () => {
-    pingDbMock.mockResolvedValue(true);
-    const ok = await app.inject({ method: "GET", url: "/health/ready" });
-    expect(ok.statusCode).toBe(200);
-    expect(ok.json()).toEqual({ status: "ready" });
+  it("GET /health/ready reflects DB readiness (200 ready / 503 not ready), raw body, pinging at most every 5 s", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      pingDbMock.mockClear();
+      pingDbMock.mockResolvedValue(true);
+      const ok = await app.inject({ method: "GET", url: "/health/ready" });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json()).toEqual({ status: "ready" });
 
-    pingDbMock.mockResolvedValue(false);
-    const down = await app.inject({ method: "GET", url: "/health/ready" });
+      pingDbMock.mockResolvedValue(false);
+      const cached = await app.inject({ method: "GET", url: "/health/ready" });
+      expect(cached.statusCode).toBe(200); // within the 5 s ping cache
+      expect(pingDbMock).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(5_000);
+      const down = await app.inject({ method: "GET", url: "/health/ready" });
+      expect(down.statusCode).toBe(503);
+      expect(down.json()).toEqual({ status: "not ready", reasons: ["database unreachable"] });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("GET /health/worker is the worker heartbeat probe: 200 healthy / 503 with reasons, raw body", async () => {
+    getWorkerHealthMock.mockResolvedValue({ isHealthy: true, reasons: [], workers: [] });
+    const ok = await app.inject({ method: "GET", url: "/health/worker" });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json()).toEqual({ isHealthy: true, reasons: [], workers: [] });
+
+    getWorkerHealthMock.mockResolvedValue({
+      isHealthy: false,
+      reasons: ["no worker heartbeat in the last 60 s"],
+      workers: [],
+    });
+    const down = await app.inject({ method: "GET", url: "/health/worker" });
     expect(down.statusCode).toBe(503);
-    expect(down.json()).toEqual({ status: "not ready" });
+    expect(down.json()).toMatchObject({ isHealthy: false, reasons: ["no worker heartbeat in the last 60 s"] });
   });
 
   it("echoes an incoming x-request-id header on a health probe", async () => {

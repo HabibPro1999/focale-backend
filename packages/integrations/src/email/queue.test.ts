@@ -307,6 +307,23 @@ describe("processEmailQueue", () => {
     ]);
   });
 
+  it("stops before the next chunk of 10 once its signal aborts", async () => {
+    const controller = new AbortController();
+    const logs = Array.from({ length: 12 }, (_, index) => claimed({ id: `log-${index}` }));
+    mocked(claimQueuedEmailLogs).mockResolvedValue(logs.map((log) => log.id));
+    mocked(getClaimedEmailLogsForProcessing).mockResolvedValue(logs);
+    sendEmailMock.mockImplementation(async () => {
+      controller.abort();
+      return { success: true, messageId: "m" };
+    });
+
+    const res = await processEmailQueue(50, { workerId: "w1", signal: controller.signal });
+
+    // The first chunk (10 concurrent sends) finishes; the remaining 2 are not started.
+    expect(sendEmailMock).toHaveBeenCalledTimes(10);
+    expect(res).toEqual({ processed: 12, sent: 10, failed: 0, skipped: 0 });
+  });
+
   it("returns a zero result when nothing is due", async () => {
     mocked(claimQueuedEmailLogs).mockResolvedValue([]);
     mocked(getClaimedEmailLogsForProcessing).mockResolvedValue([]);

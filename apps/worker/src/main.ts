@@ -1,7 +1,13 @@
 import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
-import { assertSchemaCurrent, closeDb, configureDb } from "@app/db";
-import { createLogger } from "@app/shared";
+import {
+  assertSchemaCurrent,
+  closeDb,
+  configureDb,
+  pruneWorkerHeartbeats,
+  recordWorkerHeartbeat,
+} from "@app/db";
+import { createLogger, makeWorkerId } from "@app/shared";
 import {
   configureIntegrations,
   emitEmailLogRealtimeEvent,
@@ -34,7 +40,16 @@ async function bootstrap() {
   // is silently dropped depending on which process handled it.
   setEmailStatusChangeListener(emitEmailLogRealtimeEvent);
 
-  const heartbeat = new WorkerHeartbeat(config.lifecycle.workerHeartbeatFile, log);
+  // One heartbeat, two outputs: the liveness file (image HEALTHCHECK) and this
+  // process's worker_heartbeats row (/health/worker).
+  const workerId = makeWorkerId("worker");
+  const service = config.lifecycle.serviceName;
+  const heartbeat = new WorkerHeartbeat({
+    file: config.lifecycle.workerHeartbeatFile,
+    logger: log,
+    record: (state) => recordWorkerHeartbeat({ workerId, service, ...state }),
+    prune: () => pruneWorkerHeartbeats(),
+  });
   const onSignals = (shutdown: (signal: string) => Promise<void>) => {
     process.on("SIGINT", () => void shutdown("SIGINT"));
     process.on("SIGTERM", () => void shutdown("SIGTERM"));
@@ -64,11 +79,12 @@ async function bootstrap() {
   });
   const runner = ctx.get(JobRunner);
   runner.start();
-  heartbeat.start({ disabled: false });
-  log.info("worker started");
+  heartbeat.start({ disabled: false, jobs: () => runner.snapshot() });
+  log.info({ workerId, service }, "worker started");
 
-  // SIGTERM: stop scheduling, give running jobs until grace − 5 s, close the
-  // context and the pool, hard-exit at SHUTDOWN_GRACE_MS.
+  // SIGTERM: stop scheduling, give running jobs until grace − 5 s, then abort
+  // them through their signal; close the context and the pool; hard-exit at
+  // SHUTDOWN_GRACE_MS.
   onSignals(
     createWorkerShutdown({
       graceMs: config.lifecycle.shutdownGraceMs,

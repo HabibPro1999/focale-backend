@@ -430,10 +430,16 @@ const envShape = {
       `Graceful shutdown budget per process after SIGTERM (${SHUTDOWN_GRACE_MIN_MS}-${SHUTDOWN_GRACE_MAX_MS} ms). The API drains SSE\nstreams, closes HTTP, force-closes sockets ${SHUTDOWN_FORCE_CLOSE_LEAD_MS / 1000} s before the end, then closes the pool; each\nprocess hard-exits at the limit and start-runtime.mjs SIGKILLs ${SHUTDOWN_ESCALATION_MS / 1000} s later. Keep it\n${SHUTDOWN_ESCALATION_MS / 1000}+ s below the platform's SIGKILL delay (Render maxShutdownDelaySeconds, 30 s).`,
     example: String(SHUTDOWN_GRACE_DEFAULT_MS),
   }, "SHUTDOWN_GRACE_MS"),
+  RENDER_SERVICE_NAME: envKey(z.string().optional(), {
+    section: "processes",
+    description:
+      "Set by Render. Names this service in worker_heartbeats (/health/worker) and in migration\nledger entries; defaults to focale-worker for the worker heartbeat.",
+    example: "focale-worker",
+  }),
   WORKER_HEARTBEAT_FILE: envKey(z.string().default(defaultWorkerHeartbeatFile()), {
     section: "processes",
     description:
-      `Worker heartbeat file, touched every ${WORKER_HEARTBEAT_INTERVAL_MS / 1000} s (the image HEALTHCHECK fails a worker whose\nfile is older than ${WORKER_HEARTBEAT_MAX_AGE_MS / 1000} s). Default: <os tmpdir>/${WORKER_HEARTBEAT_FILE_NAME}.`,
+      `Worker heartbeat file, touched every ${WORKER_HEARTBEAT_INTERVAL_MS / 1000} s together with the worker_heartbeats row (the\nimage HEALTHCHECK fails a worker whose file is older than ${WORKER_HEARTBEAT_MAX_AGE_MS / 1000} s). Default: <os tmpdir>/${WORKER_HEARTBEAT_FILE_NAME}.`,
     example: `/tmp/${WORKER_HEARTBEAT_FILE_NAME}`,
   }),
   LOG_LEVEL: envKey(
@@ -904,6 +910,7 @@ export function parseAppConfig(source: NodeJS.ProcessEnv) {
     lifecycle: {
       shutdownGraceMs: env.SHUTDOWN_GRACE_MS,
       workerHeartbeatFile: env.WORKER_HEARTBEAT_FILE,
+      serviceName: env.RENDER_SERVICE_NAME ?? "focale-worker",
     },
     // Same values the db client derives at pool construction.
     database: dbRuntimeSettingsFrom(env, env.NODE_ENV),

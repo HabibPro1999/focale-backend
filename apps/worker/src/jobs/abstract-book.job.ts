@@ -11,7 +11,7 @@ import {
   type AbstractBookJobRow,
 } from "@app/db";
 import { getStorageProvider } from "@app/integrations";
-import type { Job } from "../job";
+import { abortedForShutdown, type Job, type JobContext } from "../job";
 import { generateAbstractBookPdf } from "./book/pdf";
 
 const log = createLogger({ name: "worker:abstract-book" });
@@ -22,26 +22,31 @@ const HEARTBEAT_MS = 60_000; // extend the lease while a (potentially slow) rend
 export class AbstractBookJob implements Job {
   readonly name = "abstract-book";
   readonly intervalMs = 30_000;
+  readonly timeoutMs = 30 * 60_000;
 
   private readonly workerId = makeWorkerId("abstract-book");
 
-  async run(): Promise<void> {
+  async run({ signal }: JobContext): Promise<void> {
     await recoverStaleAbstractBookJobs();
+    if (signal.aborted) return;
     const jobs = await claimAbstractBookJobs(1, this.workerId, ABSTRACT_BOOK_LEASE_MS);
     for (const job of jobs) {
-      await this.processOne(job);
+      await this.processOne(job, signal);
     }
   }
 
-  private async processOne(job: AbstractBookJobRow): Promise<void> {
+  private async processOne(job: AbstractBookJobRow, signal: AbortSignal): Promise<void> {
     const heartbeat = this.startHeartbeat(job.id);
     try {
       const data = await getAbstractBookData(job.eventId);
       if (!data) {
         throw new Error("Abstract configuration not found");
       }
+      signal.throwIfAborted();
 
       const { buffer, includedCount } = await generateAbstractBookPdf(data);
+      // The render itself cannot be interrupted; stop before uploading.
+      signal.throwIfAborted();
       const key = `${job.eventId}/abstracts/book/${job.id}.pdf`;
       const storageKey = await getStorageProvider().uploadPrivate(
         buffer,
@@ -65,6 +70,15 @@ export class AbstractBookJob implements Job {
         );
       }
     } catch (err) {
+      if (abortedForShutdown(signal)) {
+        // Not the job's fault: no attempt is charged. The row stays leased and
+        // stale-lease recovery re-queues it after the lease expires.
+        log.warn(
+          { jobId: job.id, eventId: job.eventId },
+          "Abstract Book generation interrupted by worker shutdown; left for lease recovery",
+        );
+        return;
+      }
       log.error(
         { err, jobId: job.id, eventId: job.eventId },
         "Abstract Book generation failed",
