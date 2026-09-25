@@ -4,6 +4,7 @@ import { rowsOf } from "../helpers";
 import { withSerializableTxn } from "../txn";
 import { networkingAudit, networkingDeliveries } from "../schema/networking";
 import type { NetworkingDeliveryRow } from "./networking-delivery";
+import { networkingMeetingStatusSql } from "./networking-meetings";
 
 /** Aggregate-only durable report data contains no participant names, messages or contact details. */
 export async function networkingPostEventReportData(
@@ -21,8 +22,8 @@ export async function networkingPostEventReportData(
       (SELECT count(*)::int4 FROM networking_connections WHERE event_id=${eventId}) AS connections,
       (SELECT count(*)::int4 FROM networking_messages WHERE event_id=${eventId}) AS messages,
       (SELECT count(*)::int4 FROM networking_meetings WHERE event_id=${eventId}) AS meeting_requests,
-      (SELECT count(*)::int4 FROM networking_meetings WHERE event_id=${eventId} AND status IN ('CONFIRMED','COMPLETED','NO_SHOW')) AS meetings,
-      (SELECT count(*)::int4 FROM networking_meetings WHERE event_id=${eventId} AND status IN ('PENDING','PENDING_ALLOCATION')) AS pending_meetings,
+      (SELECT count(*)::int4 FROM networking_meetings WHERE event_id=${eventId} AND status IN (${networkingMeetingStatusSql("booked")})) AS meetings,
+      (SELECT count(*)::int4 FROM networking_meetings WHERE event_id=${eventId} AND status IN (${networkingMeetingStatusSql("awaiting")})) AS pending_meetings,
       (SELECT count(*)::int4 FROM (SELECT connection_id FROM networking_messages WHERE event_id=${eventId} GROUP BY connection_id HAVING count(DISTINCT sender_id)=2) replies) AS responsive_conversations,
       (SELECT count(DISTINCT connection_id)::int4 FROM networking_messages WHERE event_id=${eventId}) AS conversations,
       (SELECT count(*)::int4 FROM networking_meetings WHERE event_id=${eventId} AND status='COMPLETED') AS completed_meetings,
@@ -42,7 +43,7 @@ export async function networkingPostEventReportData(
     await db.execute(sql`
     SELECT p.sector,count(DISTINCT p.id)::int4 AS participants,count(DISTINCT c.id)::int4 AS connections,count(DISTINCT m.id)::int4 AS meetings
     FROM networking_profiles p LEFT JOIN networking_connections c ON c.event_id=p.event_id AND (c.profile_a_id=p.id OR c.profile_b_id=p.id)
-      LEFT JOIN networking_meetings m ON m.event_id=p.event_id AND (m.requester_id=p.id OR m.recipient_id=p.id) AND m.status IN ('CONFIRMED','COMPLETED','NO_SHOW')
+      LEFT JOIN networking_meetings m ON m.event_id=p.event_id AND (m.requester_id=p.id OR m.recipient_id=p.id) AND m.status IN (${networkingMeetingStatusSql("booked")})
     WHERE p.event_id=${eventId} GROUP BY p.sector ORDER BY participants DESC,p.sector
   `),
   );
@@ -58,7 +59,7 @@ export async function networkingPostEventReportData(
     FROM (
       SELECT created_at AS stamp,1 AS connections,0 AS messages,0 AS meetings FROM networking_connections WHERE event_id=${eventId}
       UNION ALL SELECT created_at,0,1,0 FROM networking_messages WHERE event_id=${eventId}
-      UNION ALL SELECT starts_at,0,0,1 FROM networking_meetings WHERE event_id=${eventId} AND status IN ('CONFIRMED','COMPLETED','NO_SHOW')
+      UNION ALL SELECT starts_at,0,0,1 FROM networking_meetings WHERE event_id=${eventId} AND status IN (${networkingMeetingStatusSql("booked")})
     ) activity GROUP BY 1 ORDER BY 1
   `),
   );

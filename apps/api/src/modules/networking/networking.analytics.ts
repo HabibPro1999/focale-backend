@@ -1,5 +1,6 @@
 import { networkingInventoryResource } from "./networking.inventory-policy";
 import {
+  networkingMeetingIs,
   getNetworkingConfig,
   networkingEmailMetrics,
   networkingStore,
@@ -51,9 +52,7 @@ export function calculateNetworkingAnalytics(
     minute: "2-digit",
     hourCycle: "h23",
   });
-  const planned = meetings.filter((meeting) =>
-    ["CONFIRMED", "COMPLETED", "NO_SHOW"].includes(meeting.status),
-  );
+  const planned = meetings.filter((meeting) => networkingMeetingIs(meeting.status, "booked"));
   const gestures = audit.filter(entry => entry.action === "SWIPE_LIKE" || entry.action === "SWIPE_PASS")
     .map(entry => ({ profileId: entry.actorId, targetId: entry.targetId, action: entry.action === "SWIPE_LIKE" ? "LIKE" : "PASS" }));
   const recordedPairs = new Set(gestures.map(entry => `${entry.profileId}:${entry.targetId}`));
@@ -295,9 +294,7 @@ export function calculateNetworkingAnalytics(
     ).length,
     noShowMeetings: meetings.filter((meeting) => meeting.status === "NO_SHOW")
       .length,
-    pendingMeetings: meetings.filter((meeting) =>
-      ["PENDING", "PENDING_ALLOCATION"].includes(meeting.status),
-    ).length,
+    pendingMeetings: meetings.filter((meeting) => networkingMeetingIs(meeting.status, "awaiting")).length,
     tableOccupancyRate: availableMinutes
       ? occupiedMinutes / availableMinutes
       : 0,

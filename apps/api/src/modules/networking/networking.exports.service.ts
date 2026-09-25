@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import ExcelJS from "exceljs";
-import { networkingStore, type NetworkingRow } from "@app/db";
+import { networkingMeetingIs, networkingStore, type NetworkingRow } from "@app/db";
 import { generateNetworkingReportPdf } from "@app/integrations";
 import { NetworkingAdminService } from "./networking.admin.service";
 import { NetworkingSocialService } from "./networking.social.service";
@@ -191,7 +191,7 @@ export class NetworkingExportsService {
         if (count) count.messages++;
       }
       for (const value of meetings)
-        if (["CONFIRMED", "COMPLETED", "NO_SHOW"].includes(value.status))
+        if (networkingMeetingIs(value.status, "booked"))
           for (const id of [value.requesterId, value.recipientId]) {
             const count = counts.get(id);
             if (count) count.meetings++;
