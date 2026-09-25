@@ -24,15 +24,13 @@ import { SkipThrottle, Throttle } from "@nestjs/throttler";
 import { ErrorCodes, networkingProfileComplete } from "@app/contracts";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import {
-  cancelNetworkingParticipantMeetings,
-  enqueueNetworkingPhotoDeletes,
   networkingDirectoryFacets,
   listNetworkingNotifications,
   recordNetworkingProfileView,
   networkingNotificationsSince,
   networkingStore,
   networkingTransaction,
-  revokeNetworkingSessions,
+  withdrawNetworkingProfile,
   type NetworkingRow,
   type NetworkingStore,
 } from "@app/db";
@@ -543,35 +541,11 @@ export class NetworkingPublicController {
     @Req() req: FastifyRequest,
   ) {
     const ctx = await this.context(slug, req, { allowConsentPending: true });
-    await networkingTransaction(ctx.event.id, async (store, db) => {
-      const current = await store.one("profiles", { eventId: ctx.event.id, id: ctx.profile.id });
-      // The in-transaction row is authoritative; a null photo override stops sync restoring a form photo.
-      await store.update(
-        "profiles",
-        { eventId: ctx.event.id, id: ctx.profile.id },
-        {
-          photoUrl: null,
-          consent: false,
-          visible: false,
-          withdrawnAt: new Date(),
-          overrides: { ...(current?.overrides ?? ctx.profile.overrides), photoUrl: null, consent: false },
-        },
-      );
-      await revokeNetworkingSessions(ctx.profile.id, db);
-      await store.remove("pushSubscriptions", {
-        eventId: ctx.event.id,
-        profileId: ctx.profile.id,
-      });
-      // One UPDATE … RETURNING over this participant's active meetings; notices never name the other side (K5).
-      await cancelNetworkingParticipantMeetings(ctx.profile.id, ctx.event.id, db, { slug: ctx.event.slug });
-      // Durable: the photo's storage.delete commits with the withdrawal and the worker retries it;
-      // the handler deletes only a key under the participant's own upload prefix.
-      await enqueueNetworkingPhotoDeletes(
-        db,
-        [{ id: ctx.profile.id, eventId: ctx.event.id, photoUrl: current?.photoUrl }],
-        "networking.withdrawal",
-      );
-    });
+    // Content, push subscriptions, availability, embeddings and unsent deliveries
+    // go now, with the photo queued for durable deletion; the rest is erased after
+    // NETWORKING_WITHDRAWAL_ERASE_DAYS by the worker (the profile row stays as a tombstone).
+    await networkingTransaction(ctx.event.id, (_store, db) =>
+      withdrawNetworkingProfile(db, { eventId: ctx.event.id, profileId: ctx.profile.id, slug: ctx.event.slug }));
     networkingIdentityCache.forgetProfile(ctx.profile.id);
     return { withdrawn: true };
   }

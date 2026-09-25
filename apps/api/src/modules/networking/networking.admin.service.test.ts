@@ -9,6 +9,7 @@ const state = vi.hoisted(() => ({
   deliveries: [] as any[],
   forms: [] as any[],
   profile: null as Record<string, unknown> | null,
+  profiles: [] as Record<string, unknown>[],
   meeting: null as Record<string, unknown> | null,
   event: null as Record<string, unknown> | null,
   tx: { executor: "transaction" },
@@ -30,7 +31,7 @@ vi.mock("@app/db", async (original) => {
       }
       return { id: "event", clientId: "client", startDate: new Date("2030-01-01Z"), endDate: new Date("2031-01-01Z") };
     },
-    all: async (kind: string) => kind === "deliveries" ? state.deliveries : kind === "forms" ? state.forms : [],
+    all: async (kind: string) => kind === "deliveries" ? state.deliveries : kind === "forms" ? state.forms : kind === "profiles" ? state.profiles : [],
     update: async (_kind: string, _where: unknown, values: object) => {
       state.row = { ...state.row!, ...values };
       return [state.row];
@@ -82,6 +83,7 @@ beforeEach(() => {
   state.deliveries = [];
   state.forms = [];
   state.profile = null;
+  state.profiles = [];
   state.event = null;
   vi.mocked(assertClientModuleEnabled).mockClear();
   state.delete.mockReset();
@@ -250,6 +252,28 @@ describe("NetworkingAdminService profile photo removal", () => {
     expect(row).toMatchObject({ photoUrl: null, overrides: { photoUrl: null } });
     if (key) expect(state.delete).toHaveBeenCalledWith(key);
     else expect(state.delete).not.toHaveBeenCalled();
+  });
+});
+
+describe("NetworkingAdminService withdrawn participants", () => {
+  it("refuses to edit a withdrawn profile (409), writing nothing", async () => {
+    state.profile = { id: "p", eventId: "event", photoUrl: null, overrides: {}, withdrawnAt: new Date("2030-06-01Z") };
+    await expect(service.updateProfile("event", "p", { bio: "restored", status: "ACTIVE" }, "admin")).rejects.toMatchObject({
+      status: 409, response: { code: "NETWORKING_PROFILE_WITHDRAWN" },
+    });
+    expect(state.row).not.toHaveProperty("bio");
+    expect(state.audits).toEqual([]);
+    expect(state.delete).not.toHaveBeenCalled();
+  });
+  it("leaves erased tombstones out of the participant list", async () => {
+    const profile = (id: string, erasedAt: Date | null) => ({
+      id, eventId: "event", firstName: id, lastName: "", company: "", jobTitle: "", email: "", sector: "", status: "ACTIVE",
+      lastActiveAt: null, withdrawnAt: erasedAt, erasedAt,
+    });
+    state.profiles = [profile("kept", null), profile("tombstone", new Date("2030-07-01Z"))];
+    const result = await service.profiles("event", { page: 1, limit: 20 });
+    expect(result.total).toBe(1);
+    expect(result.items.map((item) => item.id)).toEqual(["kept"]);
   });
 });
 

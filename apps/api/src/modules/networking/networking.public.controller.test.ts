@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   one: vi.fn(), update: vi.fn(), remove: vi.fn(), all: vi.fn(),
-  notifications: vi.fn(), since: vi.fn(), transaction: vi.fn(), revoke: vi.fn(), delete: vi.fn(),
-  store: vi.fn(), cancel: vi.fn(), upsertPush: vi.fn(), enqueuePhotos: vi.fn(),
+  notifications: vi.fn(), since: vi.fn(), transaction: vi.fn(), delete: vi.fn(),
+  store: vi.fn(), upsertPush: vi.fn(), withdraw: vi.fn(),
 }));
 vi.mock("@app/db", async (original) => ({
   ...(await original<typeof import("@app/db")>()),
@@ -10,9 +10,7 @@ vi.mock("@app/db", async (original) => ({
   networkingTransaction: mocks.transaction,
   listNetworkingNotifications: mocks.notifications,
   networkingNotificationsSince: mocks.since,
-  revokeNetworkingSessions: mocks.revoke,
-  cancelNetworkingParticipantMeetings: mocks.cancel,
-  enqueueNetworkingPhotoDeletes: mocks.enqueuePhotos,
+  withdrawNetworkingProfile: mocks.withdraw,
 }));
 vi.mock("@app/integrations", async (original) => ({
   ...(await original<typeof import("@app/integrations")>()),
@@ -292,36 +290,20 @@ describe("withdrawal", () => {
   beforeEach(() => participant.mockResolvedValue({
     event: { id: "e", slug: "event" }, profile: { id: "p", photoUrl: "stale.webp", overrides: { company: "Stale Co" } },
   }));
-  it("uses the in-transaction row, clears the photo and queues its deletion in the withdrawal transaction", async () => {
+  it("withdraws inside one networking transaction (scrub, deletions and the photo's durable delete live in @app/db)", async () => {
     const tx = { transaction: true };
     mocks.transaction.mockImplementation(async (_event, run) => run(mocks, tx));
-    mocks.enqueuePhotos.mockImplementation(async () => {
-      // Queued inside the transaction, after the profile row was cleared.
-      expect(mocks.update).toHaveBeenCalled();
-    });
     expect(await controller({ participant }).withdraw("event", { headers: {} } as FastifyRequest)).toEqual({ withdrawn: true });
     expect(participant).toHaveBeenCalledWith("event", undefined, { allowConsentPending: true });
-    expect(mocks.update).toHaveBeenCalledWith("profiles", { eventId: "e", id: "p" }, expect.objectContaining({
-      photoUrl: null, consent: false, visible: false,
-      overrides: { company: "Current Co", photoUrl: null, consent: false },
-    }));
-    // The in-transaction photo (not the stale context one); the outbox handler checks ownership.
-    expect(mocks.enqueuePhotos).toHaveBeenCalledWith(tx, [{ id: "p", eventId: "e", photoUrl: own }], "networking.withdrawal");
-    expect(mocks.revoke).toHaveBeenCalledWith("p", tx);
+    expect(mocks.transaction).toHaveBeenCalledWith("e", expect.any(Function));
+    expect(mocks.withdraw).toHaveBeenCalledWith(tx, { eventId: "e", profileId: "p", slug: "event" });
     // Nothing is deleted from storage in the request: the worker's storage.delete handler does it, with retries.
     expect(mocks.delete).not.toHaveBeenCalled();
   });
-  it("a failing enqueue fails the withdrawal as a whole (the transaction rolls back)", async () => {
-    mocks.enqueuePhotos.mockRejectedValue(new Error("outbox unavailable"));
+  it("a failing withdrawal fails the request as a whole (the transaction rolls back)", async () => {
+    mocks.withdraw.mockRejectedValue(new Error("outbox unavailable"));
     await expect(controller({ participant }).withdraw("event", { headers: {} } as FastifyRequest)).rejects.toThrow("outbox unavailable");
     expect(mocks.delete).not.toHaveBeenCalled();
-  });
-  it("cancels the participant's active meetings in the same transaction without loading the event's meetings", async () => {
-    const tx = { transaction: true };
-    mocks.transaction.mockImplementation(async (_event, run) => run(mocks, tx));
-    await controller({ participant }).withdraw("event", { headers: {} } as FastifyRequest);
-    expect(mocks.cancel).toHaveBeenCalledWith("p", "e", tx, { slug: "event" });
-    expect(mocks.all).not.toHaveBeenCalledWith("meetings", expect.anything());
   });
 });
 

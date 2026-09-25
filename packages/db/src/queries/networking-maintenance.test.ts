@@ -1,7 +1,8 @@
 import { expect, it, vi } from "vitest";
-const mocks = vi.hoisted(() => ({ execute: vi.fn(), transaction: vi.fn(), purge: vi.fn() }));
+const mocks = vi.hoisted(() => ({ execute: vi.fn(), transaction: vi.fn(), purge: vi.fn(), erase: vi.fn() }));
 vi.mock("../client", () => ({ getDb: () => mocks }));
 vi.mock("./networking-retention", () => ({ purgeExpiredNetworkingEvents: mocks.purge }));
+vi.mock("./networking-erasure", () => ({ eraseWithdrawnNetworkingProfiles: mocks.erase }));
 import { maintainNetworkingLifecycle } from "./networking-maintenance";
 it("purges events past retention through the batched, resumable purge, scoped like the rest of maintenance", async () => {
   mocks.execute.mockReset().mockResolvedValue({ rows: [] });
@@ -12,6 +13,19 @@ it("purges events past retention through the batched, resumable purge, scoped li
   mocks.purge.mockClear();
   await maintainNetworkingLifecycle();
   expect(mocks.purge).toHaveBeenCalledWith({ eventId: undefined });
+});
+
+it("erases withdrawn profiles past the configured window (default 30 days), after the purges", async () => {
+  mocks.execute.mockReset().mockResolvedValue({ rows: [] });
+  const order: string[] = [];
+  mocks.purge.mockReset().mockImplementation(async () => { order.push("purge"); });
+  mocks.erase.mockReset().mockImplementation(async () => { order.push("erase"); });
+  await maintainNetworkingLifecycle("event", { withdrawalEraseDays: 7 });
+  expect(mocks.erase).toHaveBeenCalledWith({ eraseDays: 7, eventId: "event" });
+  expect(order).toEqual(["purge", "erase"]);
+  mocks.erase.mockClear();
+  await maintainNetworkingLifecycle();
+  expect(mocks.erase).toHaveBeenCalledWith({ eraseDays: 30, eventId: undefined });
 });
 
 it("queues automatic reports and contacts only at end +24 hours, retaining dedupe", async () => {
