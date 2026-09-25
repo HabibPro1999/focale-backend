@@ -173,8 +173,10 @@ export async function applyRegistrationSettlement(
     set.accessAmount = pb.accessTotal;
     set.discountAmount = calculateDiscountAmount(pb.appliedRules ?? []);
   }
-  // An empty write still runs: it only moves updated_at ($onUpdate), as an
-  // admin PATCH with no fields always has.
+  // drizzle refuses an empty SET ("No values to set"); fail the same way, earlier.
+  if (Object.keys(set).length === 0) {
+    throw new Error(`Nothing to write for registration ${registrationId}`);
+  }
   const written = new Set(SETTLEMENT_COLUMNS.filter((column) => set[column] !== undefined));
   const badAmounts = AMOUNT_COLUMNS.filter((column) => written.has(column) && !isAmount(set[column]));
   if (badAmounts.length) {

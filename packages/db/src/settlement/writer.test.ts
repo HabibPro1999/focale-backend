@@ -97,4 +97,10 @@ describe("applyRegistrationSettlement outside the database", () => {
     ]);
     expect((tx as unknown as { update: ReturnType<typeof vi.fn> }).update).not.toHaveBeenCalled();
   });
+
+  it("refuses an empty write, as drizzle's empty SET did before the writer", async () => {
+    await expect(applyRegistrationSettlement(tx, { registrationId: "r", settlement: {}, fields: {} })).rejects.toThrow(
+      /Nothing to write/,
+    );
+  });
 });

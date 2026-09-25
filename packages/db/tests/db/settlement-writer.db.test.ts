@@ -171,16 +171,6 @@ describe.runIf(dbTestsEnabled())("db tier: settlement writer", () => {
       expect((await readRegistration(registration.id)).paymentStatus).toBe("VERIFYING");
     });
 
-    it("accepts an empty write, which only moves updatedAt (an admin PATCH with no fields)", async () => {
-      const { registration } = await seedRegistrationWith({ totalAmount: 100, paidAmount: 40, paymentStatus: "PARTIAL" });
-      expect(
-        await withTxn((tx) => applyRegistrationSettlement(tx, { registrationId: registration.id, settlement: {}, fields: {} })),
-      ).toBe(true);
-      const row = await readRegistration(registration.id);
-      expect(row).toMatchObject({ totalAmount: 100, paidAmount: 40, paymentStatus: "PARTIAL" });
-      expect(row.updatedAt.getTime()).toBeGreaterThan(registration.updatedAt.getTime());
-    });
-
     it("leaves the money columns it is not given unchanged", async () => {
       const paidAt = new Date("2027-04-01T00:00:00.000Z");
       const pb = breakdown({ base: 500, sponsorship: 100 });
