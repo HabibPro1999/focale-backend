@@ -1,7 +1,6 @@
-import { createDecipheriv, createHash } from "node:crypto";
 import type { networkingDeliveryContext } from "@app/db";
-import { escapeHtml } from "@app/shared";
 import type { EmailAttachment } from "../email/providers";
+import { escapeHtml, networkingKeyring } from "@app/shared";
 import { networkingConfig } from "../config";
 export type NetworkingNotificationContext = Awaited<
   ReturnType<typeof networkingDeliveryContext>
@@ -194,24 +193,10 @@ function normalizedType(type: string) {
     )[type] ?? type
   );
 }
-export function decryptNetworkingCode(value: string, secret: string): string {
-  if (secret.length < 32)
-    throw new Error("Networking secret is not configured");
-  const parts = value.split(".");
-  if (parts.length !== 3) throw new Error("Invalid encrypted code");
-  const [iv, tag, encrypted] = parts.map((part) =>
-    Buffer.from(part, "base64url"),
-  );
-  const decipher = createDecipheriv(
-    "aes-256-gcm",
-    createHash("sha256").update(secret).digest(),
-    iv!,
-  );
-  decipher.setAuthTag(tag!);
-  const code = Buffer.concat([
-    decipher.update(encrypted!),
-    decipher.final(),
-  ]).toString("utf8");
+/** Opens a sealed OTP code with the networking keyring (v1 or legacy seal). */
+export function openNetworkingCode(value: string): string {
+  const { tokenSecret, keys, keyringWriteV1 } = networkingConfig();
+  const code = networkingKeyring({ legacySecret: tokenSecret, keys, writeV1: keyringWriteV1 }).open(value);
   if (!/^\d{6}$/.test(code)) throw new Error("Invalid encrypted code");
   return code;
 }
@@ -416,7 +401,7 @@ export function renderNetworkingNotification(
       ...([ctx.config.supportPhone, ctx.config.supportEmail].filter(Boolean)),
     ].join("\n");
   if (type === "OTP")
-    body = `${words.code}: ${decryptNetworkingCode(String(payload.encryptedCode), networkingConfig().tokenSecret ?? "")}\n${words.expires} ${format(ctx.challenge!.expiresAt)}\n${words.secret}`;
+    body = `${words.code}: ${openNetworkingCode(String(payload.encryptedCode))}\n${words.expires} ${format(ctx.challenge!.expiresAt)}\n${words.secret}`;
   const template = ctx.config.emailTemplates?.[normalized] ??
     (normalized === eventType ? ctx.config.emailTemplates?.[type] : undefined);
   const substitute = (text: string) =>

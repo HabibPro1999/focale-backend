@@ -261,6 +261,31 @@ export function networkingStore(db: DbExecutor = getDb(), options: NetworkingSto
         await db.delete(r).where(and(eq(r.eventId, eventId), inArray(r.id, inserted.map((row) => row.id))));
       return false;
     },
+    /**
+     * The unrevoked session whose token hash is any of `hashes`: the keyring's
+     * candidates for one bearer token (current format first, then older keys).
+     */
+    async sessionByTokenHashes(eventId: string, hashes: readonly string[]) {
+      if (!hashes.length) return null;
+      const t = n.networkingSessions;
+      const [row] = await db.select().from(t)
+        .where(and(eq(t.eventId, eventId), isNull(t.revokedAt), inArray(t.tokenHash, [...hashes])))
+        .limit(1);
+      return row ?? null;
+    },
+    /** Moves a session found under an older key to the current hash; a no-op if another request already did. */
+    async rehashSession(eventId: string, id: string, from: string, to: string) {
+      const t = n.networkingSessions;
+      await db.update(t).set({ tokenHash: to })
+        .where(and(eq(t.eventId, eventId), eq(t.id, id), eq(t.tokenHash, from)));
+    },
+    /** Revokes the live session a bearer token names, under any of its candidate hashes. */
+    async revokeSessionByTokenHashes(eventId: string, hashes: readonly string[]) {
+      if (!hashes.length) return;
+      const t = n.networkingSessions;
+      await db.update(t).set({ revokedAt: new Date() })
+        .where(and(eq(t.eventId, eventId), isNull(t.revokedAt), inArray(t.tokenHash, [...hashes])));
+    },
     /** Swipe upsert on the (event, profile, target) pair; returns the stored row. */
     async upsertInterest(eventId: string, profileId: string, targetId: string, action: "LIKE" | "PASS") {
       const i = n.networkingInterests;

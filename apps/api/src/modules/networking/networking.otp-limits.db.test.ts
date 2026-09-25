@@ -11,7 +11,7 @@ import {
 import { NetworkingConfigSchema } from "@app/contracts";
 import { dbTestsEnabled } from "@app/db/testing";
 import { NetworkingService } from "./networking.service";
-import { networkingHash } from "./networking.security";
+import { networkingOtpHash } from "./networking.security";
 
 const enabled = dbTestsEnabled();
 const service = new NetworkingService();
@@ -36,7 +36,7 @@ async function challenge(values: {
     id: randomUUID(),
     eventId,
     email: address,
-    codeHash: networkingHash(`otp:${eventId}:${address}:${values.code ?? code}`),
+    codeHash: networkingOtpHash(eventId, address, values.code ?? code),
     expiresAt: new Date(createdAt.getTime() + 10 * 60_000),
     attempts: values.attempts ?? 0,
     consumedAt: values.consumed || values.verified ? createdAt : null,
