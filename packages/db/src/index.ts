@@ -5,6 +5,7 @@ export * from "./like";
 export * from "./schema";
 export * from "./txn";
 export * from "./locks";
+export * from "./settlement";
 export * from "./queries/index";
 export * from "./outbox";
 export * from "./lease-queue";

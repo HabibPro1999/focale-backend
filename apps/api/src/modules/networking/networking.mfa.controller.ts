@@ -63,6 +63,19 @@ export class NetworkingMfaController {
   ) {
     return this.mfa.verify(await this.context(slug, ip, authorization), body.code);
   }
+  /** Replaces every recovery code after a valid authenticator or recovery code (REGENERATE_RECOVERY). */
+  @Post("recovery-codes") async regenerateRecoveryCodes(
+    @Param("slug") slug: string,
+    @Body() body: NetworkingMfaCodeDto,
+    @Ip() ip: string,
+    @Headers("authorization") authorization?: string,
+  ) {
+    return this.mfa.verify(
+      await this.context(slug, ip, authorization),
+      body.code,
+      "REGENERATE_RECOVERY",
+    );
+  }
   @Delete() async disable(
     @Param("slug") slug: string,
     @Body() body: NetworkingMfaCodeDto,

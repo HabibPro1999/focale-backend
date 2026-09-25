@@ -1,5 +1,6 @@
 import { ErrorCodes, type EventPricingWithRules } from "@app/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ApplyRegistrationSettlementInput, RegistrationPatch } from "@app/db";
 
 // One pricing input (2.11): the public quote, public create/self-edit and
 // admin create/edit all store and price the answers to the fields the form
@@ -14,6 +15,8 @@ const db = vi.hoisted(() => ({
   findPendingSponsorships: vi.fn(),
   // registrations
   withTxn: vi.fn(),
+  applyRegistrationSettlement: vi.fn(),
+  emitSettlementEvents: vi.fn(),
   findClientModuleState: vi.fn(),
   findActiveRegistrationFormById: vi.fn(),
   findFormById: vi.fn(),
@@ -33,8 +36,6 @@ const db = vi.hoisted(() => ({
   findRegistrationForMutation: vi.fn(),
   findRegistrationWithFormEvent: vi.fn(),
   findRegistrationUsagesForRecalc: vi.fn(),
-  updateRegistrationRow: vi.fn(),
-  casUpdateRegistrationByUpdatedAt: vi.fn(),
   syncNetworkingRegistration: vi.fn(),
 }));
 vi.mock("@app/db", async (importOriginal) => ({
@@ -42,6 +43,42 @@ vi.mock("@app/db", async (importOriginal) => ({
   ...db,
 }));
 
+// emitSettlementEvents with @app/db's body, over the mocked primitives.
+db.emitSettlementEvents.mockImplementation(
+  async (tx: unknown, events: Array<{ type: string; payload: { id: unknown } }>) => {
+    const changed = new Set(
+      events
+        .filter((ev) => ev.type === "registration.updated" || ev.type === "registration.paymentConfirmed")
+        .map((ev) => String(ev.payload.id)),
+    );
+    for (const id of changed) await db.syncNetworkingRegistration(id, tx);
+    return Promise.all(events.map((ev) => db.enqueueRealtimeOutboxEvent(tx, ev)));
+  },
+);
+
+/**
+ * The columns the settlement writer was asked to set by its call `n`: the
+ * other fields, the settlement, and the amounts the writer derives from a
+ * written breakdown.
+ */
+function writtenPatch(n = 0): RegistrationPatch {
+  const input = db.applyRegistrationSettlement.mock.calls[n]?.[1] as ApplyRegistrationSettlementInput | undefined;
+  if (!input) throw new Error(`applyRegistrationSettlement call ${n} not made`);
+  const pb = input.settlement.priceBreakdown;
+  return {
+    ...input.fields,
+    ...input.settlement,
+    ...(pb
+      ? {
+          baseAmount: pb.calculatedBasePrice,
+          accessAmount: pb.accessTotal,
+          discountAmount: calculateDiscountAmount(pb.appliedRules),
+        }
+      : {}),
+  };
+}
+
+import { calculateDiscountAmount } from "@app/shared";
 import type { Config } from "../../core/config";
 import type { AccessService } from "../access/access.service";
 import { PricingPublicController } from "../pricing/pricing.public.controller";
@@ -160,7 +197,7 @@ beforeEach(() => {
   db.enqueueRealtimeOutboxEvent.mockResolvedValue(true);
   db.enqueueTriggeredEmailOutbox.mockResolvedValue(true);
   db.findRegistrationUsagesForRecalc.mockResolvedValue([]);
-  db.casUpdateRegistrationByUpdatedAt.mockResolvedValue(1);
+  db.applyRegistrationSettlement.mockResolvedValue(true);
   db.getRegistrationByIdRow.mockResolvedValue({
     id: "reg1",
     formId: "form1",
@@ -281,7 +318,7 @@ describe("public self-edit stores and prices the visible answers", () => {
       formData: { member: "no", promo: "EARLY" },
     } as never);
 
-    const patch = db.casUpdateRegistrationByUpdatedAt.mock.calls[0]?.[2] as {
+    const patch = writtenPatch() as {
       formData: Record<string, unknown>;
       totalAmount: number;
     };
@@ -351,7 +388,7 @@ describe("admin create/edit validate without enforcing required answers", () => 
       "admin1",
     );
 
-    const patch = db.updateRegistrationRow.mock.calls[0]?.[1] as {
+    const patch = writtenPatch() as {
       formData: Record<string, unknown>;
       totalAmount: number;
     };
@@ -365,7 +402,7 @@ describe("admin create/edit validate without enforcing required answers", () => 
     await service.adminEditRegistration("ev1", "reg1", { accessSelections: [] } as never, "admin1");
 
     expect(db.getRegistrationFormSchemaForEvent).not.toHaveBeenCalled();
-    const patch = db.updateRegistrationRow.mock.calls[0]?.[1] as {
+    const patch = writtenPatch() as {
       formData?: unknown;
       totalAmount: number;
     };

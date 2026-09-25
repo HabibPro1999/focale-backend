@@ -1,7 +1,12 @@
 import ExcelJS from "exceljs";
 import { findAbstractsForExport } from "@app/db";
-import { getTitle, reviewScoreSpread } from "./abstracts.admin.service";
-import { formatDateTime, formatFileDate, getAuthorLine } from "@app/shared";
+import { reviewScoreSpread } from "./abstracts.admin.service";
+import {
+  formatDateTime,
+  formatFileDate,
+  getAbstractTitle,
+  getAuthorLine,
+} from "@app/shared";
 import {
   ABSTRACT_STATUS_LABELS_FR,
   ABSTRACT_TYPE_LABELS_FR,
@@ -98,7 +103,7 @@ export async function exportAbstractsWorkbook(
 
     const rowValues: ExcelJS.CellValue[] = [
       abstract.code ?? "",
-      getTitle(abstract.content),
+      getAbstractTitle(abstract.content),
       ABSTRACT_TYPE_LABELS_FR[abstract.requestedType],
       abstract.finalType ? ABSTRACT_TYPE_LABELS_FR[abstract.finalType] : "—",
       ABSTRACT_STATUS_LABELS_FR[abstract.status],

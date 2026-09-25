@@ -43,17 +43,30 @@ export const CODE_SUFFIX: Record<AbstractFinalType, string> = {
 };
 
 /**
- * Presenter-facing display label per final type (H2). Lifted from a private
- * `ABSTRACT_FINAL_TYPE_LABELS` copy in apps/api's certificates service so both
- * the certificate PDF zone variables and the CERTIFICATE_SENT email context
- * resolve `{{abstractFinalType}}` (and, on the abstract path, `{{role}}`) to
- * this same label instead of the raw enum value.
+ * Presentation label per final type and language — the single source for
+ * every place that shows a final type (certificates, emails, exports, the
+ * Abstract Book).
  */
-export const ABSTRACT_FINAL_TYPE_LABELS: Record<AbstractFinalType, string> = {
-  CONFERENCE: "Conference",
-  ORAL_COMMUNICATION: "Oral Communication",
-  POSTER: "Poster",
-};
+export const ABSTRACT_FINAL_TYPE_LABELS_BY_LANGUAGE = {
+  en: {
+    CONFERENCE: "Conference",
+    ORAL_COMMUNICATION: "Oral Communication",
+    POSTER: "Poster",
+  },
+  fr: {
+    CONFERENCE: "Conférence",
+    ORAL_COMMUNICATION: "Communication orale",
+    POSTER: "Communication affichée",
+  },
+} as const satisfies Record<"en" | "fr", Record<AbstractFinalType, string>>;
+
+/**
+ * English labels (H2): the certificate PDF zone variables and the
+ * CERTIFICATE_SENT email context resolve `{{abstractFinalType}}` (and, on the
+ * abstract path, `{{role}}`) to these instead of the raw enum value.
+ */
+export const ABSTRACT_FINAL_TYPE_LABELS: Record<AbstractFinalType, string> =
+  ABSTRACT_FINAL_TYPE_LABELS_BY_LANGUAGE.en;
 
 // ============================================================================
 // Param Schemas
@@ -378,11 +391,9 @@ export const CommitteeInviteResendSchema = z.strictObject({
 
 export type ExportAbstractsQuery = z.infer<typeof ExportAbstractsQuerySchema>;
 
-export const ABSTRACT_TYPE_LABELS_FR: Record<AbstractFinalType, string> = {
-  CONFERENCE: "Conférence",
-  ORAL_COMMUNICATION: "Communication orale",
-  POSTER: "Communication affichée",
-};
+/** French labels: exports, the Abstract Book and abstract emails. */
+export const ABSTRACT_TYPE_LABELS_FR: Record<AbstractFinalType, string> =
+  ABSTRACT_FINAL_TYPE_LABELS_BY_LANGUAGE.fr;
 
 export const ABSTRACT_STATUS_LABELS_FR: Record<AbstractStatus, string> = {
   SUBMITTED: "Soumis",

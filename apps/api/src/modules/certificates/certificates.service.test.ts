@@ -81,6 +81,7 @@ import {
   getAbstractsForCertificateSend,
   getAlreadySentAbstractCertTemplateIds,
 } from "@app/db";
+import { StorageObjectNotFoundError } from "@app/integrations";
 import { CertificatesService } from "./certificates.service";
 
 const mockFileType = vi.mocked(fileTypeFromBuffer);
@@ -651,7 +652,9 @@ describe("CertificatesService", () => {
     });
 
     it("throws 404 when the storage file is missing", async () => {
-      mockStorageDownload.mockRejectedValueOnce({ code: 404 });
+      mockStorageDownload.mockRejectedValueOnce(
+        new StorageObjectNotFoundError("missing.png"),
+      );
 
       await expect(
         service.downloadTemplateImage(

@@ -1,5 +1,6 @@
 import { Inject, Injectable } from "@nestjs/common";
 import {
+  ABSTRACT_TYPE_LABELS_FR,
   ErrorCodes,
   FINAL_STATUSES,
   type SubmitAbstractInput,
@@ -321,8 +322,11 @@ export class AbstractsService {
       },
       themes: data.themes,
       requestedTypes: [
-        { value: "ORAL_COMMUNICATION", label: "Communication orale" },
-        { value: "POSTER", label: "Communication affichée" },
+        {
+          value: "ORAL_COMMUNICATION",
+          label: ABSTRACT_TYPE_LABELS_FR.ORAL_COMMUNICATION,
+        },
+        { value: "POSTER", label: ABSTRACT_TYPE_LABELS_FR.POSTER },
       ],
       additionalFields: {
         fields: Array.isArray(config.additionalFieldsSchema)

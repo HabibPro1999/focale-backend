@@ -40,8 +40,10 @@ import {
 import {
   withTxn,
   syncNetworkingRegistration,
-  enqueueRealtimeOutboxEvent,
   enqueueTriggeredEmailOutbox,
+  applyRegistrationSettlement,
+  emitSettlementEvents,
+  settlementEventPair,
   casIncrementRegisteredTx,
   casDecrementRegisteredTx,
   getEventCounterInfoTx,
@@ -69,10 +71,8 @@ import {
   findRegistrationForMutation,
   findRegistrationWithFormEvent,
   insertRegistrationRow,
-  updateRegistrationRow,
   deleteRegistrationRow,
   getNetworkingProfilePhotoByRegistration,
-  casUpdateRegistrationByUpdatedAt,
   findRegistrationUsagesForRecalc,
   findRegistrationUsageLinks,
   deleteRegistrationUsages,
@@ -81,7 +81,9 @@ import {
   listRegistrationAuditLogRows,
   findUserNamesByIds,
   listRegistrationEmailLogRows,
-  type RegistrationPatch,
+  type RegistrationFieldsPatch,
+  type RegistrationPaymentStatus,
+  type RegistrationSettlementWrite,
 } from "@app/db";
 import { AccessService } from "../access/access.service";
 import { PricingService } from "../pricing/pricing.service";
@@ -219,58 +221,6 @@ export class RegistrationsService {
   // ==========================================================================
   // Shared side-effect + settlement helpers
   // ==========================================================================
-
-  private async emitEvents(exec: DbExecutor, events: AppEvent[]): Promise<unknown> {
-    const changedIds = new Set(events.filter(ev =>
-      ev.type === "registration.updated" || ev.type === "registration.paymentConfirmed"
-    ).map(ev => String(ev.payload.id)));
-    for (const id of changedIds) await syncNetworkingRegistration(id, exec);
-    return Promise.all(events.map((ev) => enqueueRealtimeOutboxEvent(exec, ev)));
-  }
-
-  /**
-   * Event pair for a status-affecting edit: registration.paymentConfirmed when
-   * the registration newly reached a fully-settled status, else
-   * registration.updated; plus eventAccess.countsChanged when access counts may
-   * have moved.
-   */
-  private settlementEventPair(args: {
-    id: string;
-    eventId: string;
-    clientId: string;
-    oldStatus: string;
-    newStatus: string | undefined;
-    emitCountsChanged: boolean;
-  }): AppEvent[] {
-    const { id, eventId, clientId, oldStatus, newStatus, emitCountsChanged } =
-      args;
-    const statusChanged = newStatus !== undefined && newStatus !== oldStatus;
-    const becameSettled =
-      statusChanged &&
-      isFullySettled(newStatus) &&
-      !isFullySettled(oldStatus);
-    const events: AppEvent[] = [
-      {
-        type: becameSettled
-          ? "registration.paymentConfirmed"
-          : "registration.updated",
-        clientId,
-        eventId,
-        payload: { id, paymentStatus: newStatus ?? oldStatus },
-        ts: Date.now(),
-      },
-    ];
-    if (emitCountsChanged) {
-      events.push({
-        type: "eventAccess.countsChanged",
-        clientId,
-        eventId,
-        payload: { id: eventId, accessIds: [] },
-        ts: Date.now(),
-      });
-    }
-    return events;
-  }
 
   private async queueRegistrationCreatedEmail(
     exec: DbExecutor,
@@ -813,7 +763,7 @@ export class RegistrationsService {
           ts: Date.now(),
         });
       }
-      await this.emitEvents(tx, pending);
+      await emitSettlementEvents(tx, pending);
       await this.queueRegistrationCreatedEmail(tx, eventId, {
         id,
         email,
@@ -1065,15 +1015,16 @@ export class RegistrationsService {
         "registrations",
       );
 
-      const patch: RegistrationPatch = {};
+      const settlement: RegistrationSettlementWrite = {};
+      const fields: RegistrationFieldsPatch = {};
       if (input.paymentStatus !== undefined) {
         validatePaymentTransition(registration.paymentStatus, input.paymentStatus);
-        patch.paymentStatus = input.paymentStatus;
+        settlement.paymentStatus = input.paymentStatus;
         if (
           isFullySettled(input.paymentStatus) &&
           !registration.paidAt
         ) {
-          patch.paidAt = new Date();
+          settlement.paidAt = new Date();
         }
       }
       const paidAmount =
@@ -1089,15 +1040,15 @@ export class RegistrationsService {
             400,
           );
         }
-        patch.paidAmount = paidAmount;
+        settlement.paidAmount = paidAmount;
       }
-      if (input.paymentMethod !== undefined) patch.paymentMethod = input.paymentMethod;
+      if (input.paymentMethod !== undefined) fields.paymentMethod = input.paymentMethod;
       if (input.paymentReference !== undefined)
-        patch.paymentReference = input.paymentReference;
+        fields.paymentReference = input.paymentReference;
       if (input.paymentProofUrl !== undefined)
-        patch.paymentProofUrl = input.paymentProofUrl;
-      if (input.note !== undefined) patch.note = input.note;
-      if (input.role !== undefined) patch.role = input.role;
+        fields.paymentProofUrl = input.paymentProofUrl;
+      if (input.note !== undefined) fields.note = input.note;
+      if (input.role !== undefined) fields.role = input.role;
 
       const changes: Record<string, { old: unknown; new: unknown }> = {};
       if (input.note !== undefined && input.note !== registration.note) {
@@ -1113,12 +1064,12 @@ export class RegistrationsService {
         };
       }
       if (
-        patch.paidAmount !== undefined &&
-        patch.paidAmount !== registration.paidAmount
+        settlement.paidAmount !== undefined &&
+        settlement.paidAmount !== registration.paidAmount
       ) {
         changes.paidAmount = {
           old: registration.paidAmount,
-          new: patch.paidAmount,
+          new: settlement.paidAmount,
         };
       }
       if (
@@ -1134,7 +1085,7 @@ export class RegistrationsService {
         changes.role = { old: registration.role, new: input.role };
       }
 
-      await updateRegistrationRow(id, patch, tx);
+      await applyRegistrationSettlement(tx, { registrationId: id, settlement, fields });
 
       if (statusChanged) {
         await this.syncPaidCount(
@@ -1154,7 +1105,7 @@ export class RegistrationsService {
         });
       }
 
-      const pending = this.settlementEventPair({
+      const pending = settlementEventPair({
         id,
         eventId: registration.eventId,
         clientId: registration.event.clientId,
@@ -1162,7 +1113,7 @@ export class RegistrationsService {
         newStatus: input.paymentStatus as string | undefined,
         emitCountsChanged: statusChanged,
       });
-      await this.emitEvents(tx, pending);
+      await emitSettlementEvents(tx, pending);
     });
 
     return this.getStrippedById(id);
@@ -1200,12 +1151,13 @@ export class RegistrationsService {
         "registrations",
       );
 
-      const patch: RegistrationPatch = {};
+      const settlement: RegistrationSettlementWrite = {};
+      const fields: RegistrationFieldsPatch = {};
       const changes: Record<string, { old: unknown; new: unknown }> = {};
       const hasPriceEdits =
         input.accessSelections !== undefined || input.formData !== undefined;
       const setDefaultPaidAmount = (paidAmount: number) => {
-        patch.paidAmount = paidAmount;
+        settlement.paidAmount = paidAmount;
         if (paidAmount !== registration.paidAmount) {
           changes.paidAmount = {
             old: registration.paidAmount,
@@ -1224,19 +1176,19 @@ export class RegistrationsService {
             409,
           );
         }
-        patch.email = inputEmail;
+        fields.email = inputEmail;
         changes.email = { old: registration.email, new: inputEmail };
       }
       if (input.firstName !== undefined && input.firstName !== registration.firstName) {
-        patch.firstName = input.firstName;
+        fields.firstName = input.firstName;
         changes.firstName = { old: registration.firstName, new: input.firstName };
       }
       if (input.lastName !== undefined && input.lastName !== registration.lastName) {
-        patch.lastName = input.lastName;
+        fields.lastName = input.lastName;
         changes.lastName = { old: registration.lastName, new: input.lastName };
       }
       if (input.phone !== undefined && input.phone !== registration.phone) {
-        patch.phone = input.phone;
+        fields.phone = input.phone;
         changes.phone = { old: registration.phone, new: input.phone };
       }
       // Admin answers: visible fields only, type-checked, required not
@@ -1250,15 +1202,15 @@ export class RegistrationsService {
             )
           : undefined;
       if (editedFormData !== undefined) {
-        patch.formData = editedFormData;
+        fields.formData = editedFormData;
         changes.formData = { old: "(previous)", new: "(updated)" };
       }
       if (input.role !== undefined && input.role !== registration.role) {
-        patch.role = input.role;
+        fields.role = input.role;
         changes.role = { old: registration.role, new: input.role };
       }
       if (input.note !== undefined && input.note !== registration.note) {
-        patch.note = input.note;
+        fields.note = input.note;
         changes.note = { old: registration.note, new: input.note };
       }
 
@@ -1267,7 +1219,7 @@ export class RegistrationsService {
         input.paymentStatus !== undefined &&
         input.paymentStatus !== registration.paymentStatus
       ) {
-        patch.paymentStatus = input.paymentStatus;
+        settlement.paymentStatus = input.paymentStatus;
         changes.paymentStatus = {
           old: registration.paymentStatus,
           new: input.paymentStatus,
@@ -1276,7 +1228,7 @@ export class RegistrationsService {
           isFullySettled(input.paymentStatus) &&
           !registration.paidAt
         ) {
-          patch.paidAt = new Date();
+          settlement.paidAt = new Date();
         }
       }
       if (
@@ -1290,24 +1242,24 @@ export class RegistrationsService {
             400,
           );
         }
-        patch.paidAmount = input.paidAmount;
+        settlement.paidAmount = input.paidAmount;
         changes.paidAmount = { old: registration.paidAmount, new: input.paidAmount };
       }
       if (
         input.paymentMethod !== undefined &&
         input.paymentMethod !== registration.paymentMethod
       ) {
-        patch.paymentMethod = input.paymentMethod;
+        fields.paymentMethod = input.paymentMethod;
         changes.paymentMethod = {
           old: registration.paymentMethod,
           new: input.paymentMethod,
         };
       }
       if (input.paymentReference !== undefined)
-        patch.paymentReference = input.paymentReference;
+        fields.paymentReference = input.paymentReference;
       if (input.paymentProofUrl !== undefined)
-        patch.paymentProofUrl = input.paymentProofUrl;
-      if (input.labName !== undefined) patch.labName = input.labName;
+        fields.paymentProofUrl = input.paymentProofUrl;
+      if (input.labName !== undefined) fields.labName = input.labName;
 
       // Price-affecting edit branch.
       if (hasPriceEdits) {
@@ -1389,16 +1341,16 @@ export class RegistrationsService {
           );
         }
 
-        const settlement = await this.recalculateLinkedSponsorshipSettlement(
+        const recalculated = await this.recalculateLinkedSponsorshipSettlement(
           tx,
           { ...registration, paidAmount: input.paidAmount ?? registration.paidAmount },
           priceBreakdown,
         );
-        priceBreakdown = settlement.priceBreakdown;
+        priceBreakdown = recalculated.priceBreakdown;
 
         const nextPaymentStatus =
           input.paymentStatus ??
-          settlement.paymentStatus ??
+          recalculated.paymentStatus ??
           registration.paymentStatus;
         const shouldDefaultPaidAmount =
           input.paymentStatus === "PAID" && input.paidAmount === undefined;
@@ -1406,7 +1358,7 @@ export class RegistrationsService {
           ? calculateSettlement({
               totalAmount: priceBreakdown.subtotal,
               paidAmount: registration.paidAmount,
-              sponsorshipAmount: settlement.sponsorshipAmount,
+              sponsorshipAmount: recalculated.sponsorshipAmount,
             }).netAmount
           : undefined;
         const nextPaidAmount =
@@ -1419,29 +1371,27 @@ export class RegistrationsService {
           );
         }
 
-        patch.totalAmount = priceBreakdown.subtotal;
-        patch.baseAmount = priceBreakdown.calculatedBasePrice;
-        patch.accessAmount = priceBreakdown.accessTotal;
-        patch.discountAmount = calculateDiscountAmount(priceBreakdown.appliedRules);
-        patch.sponsorshipAmount = settlement.sponsorshipAmount;
-        patch.accessTypeIds = effectiveAccessSelections.map((s) => s.accessId);
-        patch.priceBreakdown = priceBreakdown;
+        // base/access/discount amounts are derived from the breakdown by the writer.
+        settlement.totalAmount = priceBreakdown.subtotal;
+        settlement.sponsorshipAmount = recalculated.sponsorshipAmount;
+        fields.accessTypeIds = effectiveAccessSelections.map((s) => s.accessId);
+        settlement.priceBreakdown = priceBreakdown;
         if (shouldDefaultPaidAmount) {
           setDefaultPaidAmount(nextPaidAmount);
         }
         if (
           input.paymentStatus === undefined &&
-          settlement.paymentStatus !== undefined &&
-          settlement.paymentStatus !== registration.paymentStatus
+          recalculated.paymentStatus !== undefined &&
+          recalculated.paymentStatus !== registration.paymentStatus
         ) {
-          patch.paymentStatus = settlement.paymentStatus;
+          settlement.paymentStatus = recalculated.paymentStatus;
           changes.paymentStatus = {
             old: registration.paymentStatus,
-            new: settlement.paymentStatus,
+            new: recalculated.paymentStatus,
           };
         }
-        if (input.paymentStatus === undefined && settlement.paidAt !== undefined) {
-          patch.paidAt = settlement.paidAt;
+        if (input.paymentStatus === undefined && recalculated.paidAt !== undefined) {
+          settlement.paidAt = recalculated.paidAt;
         }
         if (input.accessSelections !== undefined) {
           changes.accessSelections = {
@@ -1463,12 +1413,12 @@ export class RegistrationsService {
             {
               status: registration.paymentStatus,
               priceBreakdown: registration.priceBreakdown,
-              coveredAccessIds: settlement.coveredAccessIds,
+              coveredAccessIds: recalculated.coveredAccessIds,
             },
             {
               status: nextPaymentStatus,
               priceBreakdown,
-              coveredAccessIds: settlement.coveredAccessIds,
+              coveredAccessIds: recalculated.coveredAccessIds,
             },
             tx,
           );
@@ -1483,8 +1433,8 @@ export class RegistrationsService {
         setDefaultPaidAmount(calculateSettlement(registration).netAmount);
       }
 
-      patch.lastEditedAt = new Date();
-      await updateRegistrationRow(id, patch, tx);
+      fields.lastEditedAt = new Date();
+      await applyRegistrationSettlement(tx, { registrationId: id, settlement, fields });
 
       // paidCount sync for the payment-status-only path (no access/formData edit).
       if (
@@ -1494,7 +1444,7 @@ export class RegistrationsService {
         input.formData === undefined
       ) {
         const effectivePriceBreakdown =
-          (patch.priceBreakdown as unknown) ?? registration.priceBreakdown;
+          (settlement.priceBreakdown as unknown) ?? registration.priceBreakdown;
         await this.syncPaidCount(
           tx,
           { id, eventId, priceBreakdown: effectivePriceBreakdown },
@@ -1515,19 +1465,19 @@ export class RegistrationsService {
       const statusChanged =
         input.paymentStatus !== undefined &&
         input.paymentStatus !== registration.paymentStatus;
-      const pending = this.settlementEventPair({
+      const pending = settlementEventPair({
         id,
         eventId,
         clientId: registration.event.clientId,
         oldStatus: registration.paymentStatus,
         newStatus:
-          (patch.paymentStatus as string | undefined) ?? input.paymentStatus,
+          (settlement.paymentStatus as string | undefined) ?? input.paymentStatus,
         emitCountsChanged: !!(
           statusChanged ||
           (input.accessSelections && input.accessSelections.length > 0)
         ),
       });
-      await this.emitEvents(tx, pending);
+      await emitSettlementEvents(tx, pending);
     });
 
     return this.getStrippedById(id);
@@ -1647,7 +1597,7 @@ export class RegistrationsService {
           ts: Date.now(),
         },
       ];
-      await this.emitEvents(tx, pending);
+      await emitSettlementEvents(tx, pending);
       return photo;
     });
     if (networkingPhoto)
@@ -1960,16 +1910,16 @@ export class RegistrationsService {
       const newTotalAmount = currentIsPaid
         ? Math.max(current.totalAmount, newPriceBreakdown.subtotal)
         : newPriceBreakdown.subtotal;
-      const settlement = await this.recalculateLinkedSponsorshipSettlement(
+      const recalculated = await this.recalculateLinkedSponsorshipSettlement(
         tx,
         current,
         newPriceBreakdown,
         newTotalAmount,
       );
-      newPriceBreakdown = settlement.priceBreakdown;
-      const nextPaymentStatus = settlement.paymentStatus ?? current.paymentStatus;
+      newPriceBreakdown = recalculated.priceBreakdown;
+      const nextPaymentStatus = recalculated.paymentStatus ?? current.paymentStatus;
       const nextPaidAt =
-        settlement.paymentStatus !== undefined ? settlement.paidAt ?? null : current.paidAt;
+        recalculated.paymentStatus !== undefined ? recalculated.paidAt ?? null : current.paidAt;
 
       await Promise.all(
         accessDeltas
@@ -2010,35 +1960,35 @@ export class RegistrationsService {
           {
             status: nextPaymentStatus,
             priceBreakdown: newPriceBreakdown,
-            coveredAccessIds: settlement.coveredAccessIds,
+            coveredAccessIds: recalculated.coveredAccessIds,
           },
           tx,
         );
       }
 
-      const affected = await casUpdateRegistrationByUpdatedAt(
+      // Compare-and-swap on updatedAt; base/access/discount amounts are
+      // derived from the breakdown by the writer.
+      const written = await applyRegistrationSettlement(tx, {
         registrationId,
         expectedUpdatedAt,
-        {
+        settlement: {
+          totalAmount: newTotalAmount,
+          priceBreakdown: newPriceBreakdown,
+          sponsorshipAmount: recalculated.sponsorshipAmount,
+          paymentStatus: nextPaymentStatus as RegistrationPaymentStatus,
+          paidAt: nextPaidAt,
+        },
+        fields: {
           formData: newFormData,
           firstName: input.firstName ?? current.firstName,
           lastName: input.lastName ?? current.lastName,
           phone: input.phone ?? current.phone,
-          totalAmount: newTotalAmount,
-          priceBreakdown: newPriceBreakdown,
-          baseAmount: newPriceBreakdown.calculatedBasePrice,
-          accessAmount: newPriceBreakdown.accessTotal,
-          discountAmount: calculateDiscountAmount(newPriceBreakdown.appliedRules),
-          sponsorshipAmount: settlement.sponsorshipAmount,
-          paymentStatus: nextPaymentStatus as never,
-          paidAt: nextPaidAt,
           accessTypeIds: newAccessSelections.map((s) => s.accessId),
           lastEditedAt: new Date(),
         },
-        tx,
-      );
+      });
 
-      if (affected === 0) {
+      if (!written) {
         throw new AppException(
           ErrorCodes.CONCURRENT_MODIFICATION,
           "Registration changed. Refresh and try again.",
@@ -2102,7 +2052,7 @@ export class RegistrationsService {
           ts: Date.now(),
         });
       }
-      await this.emitEvents(tx, pending);
+      await emitSettlementEvents(tx, pending);
     });
 
     const registration = toPublicRegistration(await this.getEnrichedRow(registrationId));
@@ -2150,17 +2100,22 @@ export class RegistrationsService {
       const newStatus = input.paymentStatus;
       const nextPaidAmount = effectivePaidAmount;
       const nextPaymentMethod = input.paymentMethod ?? old.paymentMethod;
-      const patch: RegistrationPatch = {
+      const settlement: RegistrationSettlementWrite = {
         paymentStatus: newStatus,
         paidAmount: nextPaidAmount,
-        paymentMethod: nextPaymentMethod,
-        paymentReference: input.paymentReference ?? old.paymentReference,
-        paymentProofUrl: input.paymentProofUrl ?? old.paymentProofUrl,
       };
       if (isFullySettled(newStatus)) {
-        patch.paidAt = new Date();
+        settlement.paidAt = new Date();
       }
-      await updateRegistrationRow(id, patch, tx);
+      await applyRegistrationSettlement(tx, {
+        registrationId: id,
+        settlement,
+        fields: {
+          paymentMethod: nextPaymentMethod,
+          paymentReference: input.paymentReference ?? old.paymentReference,
+          paymentProofUrl: input.paymentProofUrl ?? old.paymentProofUrl,
+        },
+      });
 
       await insertAuditLog(
         {
@@ -2211,7 +2166,7 @@ export class RegistrationsService {
           ts: Date.now(),
         });
       }
-      await this.emitEvents(tx, pending);
+      await emitSettlementEvents(tx, pending);
 
       if (input.paymentStatus === "PAID" && old.paymentStatus !== "PAID") {
         await enqueueTriggeredEmailOutbox(
@@ -2383,15 +2338,11 @@ export class RegistrationsService {
       );
       validatePaymentTransition(currentReg.paymentStatus, "VERIFYING");
 
-      await updateRegistrationRow(
+      await applyRegistrationSettlement(tx, {
         registrationId,
-        {
-          paymentProofUrl: fileUrl,
-          paymentStatus: "VERIFYING",
-          paymentMethod: "BANK_TRANSFER",
-        },
-        tx,
-      );
+        settlement: { paymentStatus: "VERIFYING" },
+        fields: { paymentProofUrl: fileUrl, paymentMethod: "BANK_TRANSFER" },
+      });
 
       await this.audit(tx, {
         entityId: registrationId,
@@ -2488,15 +2439,11 @@ export class RegistrationsService {
         changes.labName = { old: registration.labName, new: nextLabName };
       }
 
-      await updateRegistrationRow(
+      await applyRegistrationSettlement(tx, {
         registrationId,
-        {
-          paymentMethod: input.paymentMethod,
-          paymentStatus: "PENDING",
-          labName: nextLabName,
-        },
-        tx,
-      );
+        settlement: { paymentStatus: "PENDING" },
+        fields: { paymentMethod: input.paymentMethod, labName: nextLabName },
+      });
 
       await this.audit(tx, {
         entityId: registrationId,

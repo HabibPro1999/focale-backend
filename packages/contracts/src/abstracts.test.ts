@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
+  ABSTRACT_FINAL_TYPE_LABELS,
+  ABSTRACT_FINAL_TYPE_LABELS_BY_LANGUAGE,
+  ABSTRACT_FINAL_TYPES,
+  ABSTRACT_TYPE_LABELS_FR,
   FinalizeAbstractSchema,
   ReviewAbstractSchema,
   AdditionalFieldsSchema,
@@ -102,5 +106,15 @@ describe("AdditionalFieldsSchema force flag", () => {
       AdditionalFieldsSchema.safeParse({ fields: [field], force: "yes" })
         .success,
     ).toBe(false);
+  });
+});
+
+describe("abstract final type labels", () => {
+  it("come from one source per language", () => {
+    expect(ABSTRACT_FINAL_TYPE_LABELS).toBe(ABSTRACT_FINAL_TYPE_LABELS_BY_LANGUAGE.en);
+    expect(ABSTRACT_TYPE_LABELS_FR).toBe(ABSTRACT_FINAL_TYPE_LABELS_BY_LANGUAGE.fr);
+    for (const labels of Object.values(ABSTRACT_FINAL_TYPE_LABELS_BY_LANGUAGE)) {
+      expect(Object.keys(labels).sort()).toEqual([...ABSTRACT_FINAL_TYPES].sort());
+    }
   });
 });

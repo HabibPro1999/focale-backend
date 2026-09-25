@@ -13,4 +13,6 @@ export * from "./poller";
 export * from "./job-abort";
 export * from "./worker-id";
 export * from "./abstract-authors";
+export * from "./networking-keyring";
 export * from "./export-format";
+export * from "./abstract-title";

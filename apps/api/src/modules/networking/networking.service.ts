@@ -36,7 +36,14 @@ import {
   networkingVenueKey,
 } from "../../core/networking-identity-cache";
 import { deleteNetworkingPhoto } from "./networking.uploads.service";
-import { networkingHash, sealNetworkingCode, readNetworkingBadge } from "./networking.security";
+import {
+  networkingHash,
+  networkingOtpHash,
+  networkingSessionHashes,
+  readNetworkingBadge,
+  sealNetworkingCode,
+  verifyNetworkingOtp,
+} from "./networking.security";
 import {
   networkingSearchMatches,
   networkingPair,
@@ -247,13 +254,16 @@ export class NetworkingService {
     const token = bearer(authorization);
     if (!token) throw this.rejectBearer(slug, authorization, options.ip, "Participant session required");
     const store = networkingStore();
-    const session = await store.one("sessions", {
-      eventId: event.id,
-      tokenHash: networkingHash(token),
-      revokedAt: null,
-    });
+    // Any key in the keyring may have hashed this token; the first candidate is the current format.
+    const [currentHash, ...olderHashes] = networkingSessionHashes(token);
+    const session = await store.sessionByTokenHashes(event.id, [currentHash!, ...olderHashes]);
     if (!session || session.expiresAt.getTime() <= Date.now())
       throw this.rejectBearer(slug, authorization, options.ip);
+    if (session.tokenHash !== currentHash) {
+      // Rehash on use, so retired keys stop being needed within one session lifetime.
+      await store.rehashSession(event.id, session.id, session.tokenHash, currentHash!).catch(() => undefined);
+      session.tokenHash = currentHash!;
+    }
     // A live session: throttle this bearer as that session from now on.
     networkingIdentityCache.remember(token, session);
     const profile = await store.one("profiles", {
@@ -298,12 +308,7 @@ export class NetworkingService {
     networkingIdentityCache.forgetToken(token);
     const store = networkingStore();
     const event = await store.one("events", { slug });
-    if (event)
-      await store.update(
-        "sessions",
-        { eventId: event.id, tokenHash: networkingHash(token), revokedAt: null },
-        { revokedAt: new Date() },
-      );
+    if (event) await store.revokeSessionByTokenHashes(event.id, networkingSessionHashes(token));
     return { loggedOut: true };
   }
   /**
@@ -362,7 +367,7 @@ export class NetworkingService {
     email = email.trim().toLowerCase();
     const { event, config } = await this.publicContext(slug);
     const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
-    const codeHash = networkingHash(`otp:${event.id}:${email}:${code}`);
+    const codeHash = networkingOtpHash(event.id, email, code);
     // The event/config gate ran just above; the transaction only touches rows keyed by this email.
     return networkingTransaction(event.id, async (store, db) => {
       const recent = (
@@ -449,9 +454,7 @@ export class NetworkingService {
         failed.daily >= OTP_FAILED_ATTEMPT_LIMITS.daily.max
       )
         return "rate-limited" as const;
-      const valid =
-        challenge.codeHash ===
-        networkingHash(`otp:${event.id}:${challenge.email}:${code}`);
+      const valid = verifyNetworkingOtp(event.id, challenge.email, code, challenge.codeHash);
       await store.update(
         "challenges",
         { id: challenge.id, eventId: event.id },

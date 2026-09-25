@@ -5,7 +5,10 @@ import type { CertificateZone } from "@app/contracts";
 // provider and (for the worker seam) re-fetches via @app/db. Mock both.
 const mockDownload = vi.fn();
 
-vi.mock("./storage/index", () => ({
+vi.mock("./storage/index", async (importOriginal) => ({
+  extractStorageKeyFromUrl: (
+    await importOriginal<typeof import("./storage/index")>()
+  ).extractStorageKeyFromUrl,
   getStorageProvider: vi.fn(() => ({ download: mockDownload })),
 }));
 

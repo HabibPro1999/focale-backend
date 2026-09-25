@@ -1,5 +1,6 @@
 import { and, desc, eq, ilike, isNotNull, or, sql } from "drizzle-orm";
 import { getDb, type DbExecutor } from "../client";
+import { rowCountOf } from "../helpers";
 import {
   abstractBookJobs,
   abstracts,
@@ -327,7 +328,7 @@ export async function casIncrementRegisteredTx(
     AND (max_capacity IS NULL OR registered_count < max_capacity)
     RETURNING id
   `);
-  return rowCount(res) > 0;
+  return rowCountOf(res) > 0;
 }
 
 /** Atomic decrement guarded on registered_count > 0. */
@@ -342,7 +343,7 @@ export async function casDecrementRegisteredTx(
     AND registered_count > 0
     RETURNING id
   `);
-  return rowCount(res) > 0;
+  return rowCountOf(res) > 0;
 }
 
 export type EventCounterInfo = {
@@ -366,13 +367,6 @@ export async function getEventCounterInfoTx(
     .where(eq(events.id, id))
     .limit(1);
   return rows[0] ?? null;
-}
-
-// pg (node-postgres) returns { rowCount, rows }. Guard defensively for other drivers.
-function rowCount(res: unknown): number {
-  const r = res as { rowCount?: number | null; rows?: unknown[] };
-  if (typeof r?.rowCount === "number") return r.rowCount;
-  return Array.isArray(r?.rows) ? r.rows.length : 0;
 }
 
 // ---------------------------------------------------------------------------
