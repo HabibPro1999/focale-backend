@@ -20,7 +20,7 @@ const db = vi.hoisted(() => ({
   findFormById: vi.fn(),
   registrationExistsByEmailForm: vi.fn(),
   getEventForRegistrationCreate: vi.fn(),
-  generateReferenceNumber: vi.fn(),
+  allocateReferenceNumber: vi.fn(),
   insertRegistrationRow: vi.fn(),
   casIncrementRegisteredTx: vi.fn(),
   getEventCounterInfoTx: vi.fn(),
@@ -137,7 +137,7 @@ beforeEach(() => {
   db.findFormById.mockResolvedValue({ id: "form1", eventId: EVENT_ID, schemaVersion: 1, schema: SCHEMA });
   db.registrationExistsByEmailForm.mockResolvedValue(false);
   db.getEventForRegistrationCreate.mockResolvedValue({ ...openEvent, client, maxCapacity: null, registeredCount: 0 });
-  db.generateReferenceNumber.mockResolvedValue("26-EV-001");
+  db.allocateReferenceNumber.mockResolvedValue("26-EV-001");
   db.insertRegistrationRow.mockResolvedValue({ id: "reg1" });
   db.casIncrementRegisteredTx.mockResolvedValue(true);
   db.enqueueRealtimeOutboxEvent.mockResolvedValue(true);
