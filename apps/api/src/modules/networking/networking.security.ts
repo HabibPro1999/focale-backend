@@ -1,43 +1,65 @@
-import {
-  createCipheriv,
-  createDecipheriv,
-  createHash,
-  createHmac,
-  randomBytes,
-  timingSafeEqual,
-} from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   BadRequestException,
   ServiceUnavailableException,
 } from "@nestjs/common";
+import { networkingKeyring, type NetworkingKeyring } from "@app/shared";
 import { getConfig } from "../../core/config";
-export function networkingSecret() {
-  // Unset when NETWORKING_DISABLED=true or not configured (outside production).
-  const value = getConfig().networking.tokenSecret;
-  if (!value || value.length < 32)
+/**
+ * The networking keyring (NETWORKING_KEYS + legacy NETWORKING_TOKEN_SECRET).
+ * 503 NETWORKING_AUTH_UNAVAILABLE when no key is configured (NETWORKING_DISABLED).
+ */
+export function networkingKeys(): NetworkingKeyring {
+  const { tokenSecret, keys, keyringWriteV1 } = getConfig().networking;
+  const keyring = networkingKeyring({ legacySecret: tokenSecret, keys, writeV1: keyringWriteV1 });
+  if (!keyring.configured)
     throw new ServiceUnavailableException({
       code: "NETWORKING_AUTH_UNAVAILABLE",
       message: "Networking authentication is not configured",
     });
-  return value;
+  return keyring;
 }
-export function networkingHash(value: string) {
-  return createHmac("sha256", networkingSecret()).update(value).digest("hex");
+/** Stored hash of a participant session token, in the current write format. */
+export function networkingHash(token: string) {
+  return networkingKeys().mac("session", token);
+}
+/** Every stored form a session token's hash can have (lookup, then rehash to the current one). */
+export function networkingSessionHashes(token: string) {
+  return networkingKeys().macCandidates("session", token);
+}
+const otpValue = (eventId: string, email: string, code: string) => `otp:${eventId}:${email}:${code}`;
+export function networkingOtpHash(eventId: string, email: string, code: string) {
+  return networkingKeys().mac("otp", otpValue(eventId, email, code));
+}
+export function verifyNetworkingOtp(eventId: string, email: string, code: string, stored: string) {
+  return networkingKeys().verifyMac("otp", otpValue(eventId, email, code), stored);
+}
+/** Recovery codes are case- and dash-insensitive. */
+const recoveryValue = (profileId: string, code: string) =>
+  `recovery:${profileId}:${code.replaceAll("-", "").toUpperCase()}`;
+export function networkingRecoveryHash(profileId: string, code: string) {
+  return networkingKeys().mac("recovery", recoveryValue(profileId, code));
+}
+/**
+ * Index of the stored recovery hash `code` matches, each checked with the key
+ * it names (unversioned hashes with the legacy key), or -1.
+ */
+export function matchNetworkingRecoveryCode(profileId: string, code: string, hashes: readonly string[]) {
+  const keyring = networkingKeys();
+  const value = recoveryValue(profileId, code);
+  return hashes.findIndex((stored) => keyring.verifyMac("recovery", value, stored));
+}
+/** True when any stored recovery hash uses a key other than the current write key. */
+export function networkingRecoveryCodesOutdated(hashes: readonly string[]) {
+  const keyring = networkingKeys();
+  return hashes.some((stored) => !keyring.isCurrent(stored));
 }
 export function sealNetworkingCode(code: string) {
-  const iv = randomBytes(12);
-  const cipher = createCipheriv(
-    "aes-256-gcm",
-    createHash("sha256").update(networkingSecret()).digest(),
-    iv,
-  );
-  const encrypted = Buffer.concat([
-    cipher.update(code, "utf8"),
-    cipher.final(),
-  ]);
-  return [iv, cipher.getAuthTag(), encrypted]
-    .map((v) => v.toString("base64url"))
-    .join(".");
+  return networkingKeys().seal(code);
+}
+/** Opens a v1 or legacy seal; throws NetworkingKeyringError when its key is gone or the value is invalid. */
+export function openNetworkingSecret(value: string) {
+  return networkingKeys().open(value);
 }
 export function issueNetworkingBadge(profileId: string, eventId: string) {
   const expiresAt = new Date(Date.now() + 10 * 60_000);
@@ -45,7 +67,7 @@ export function issueNetworkingBadge(profileId: string, eventId: string) {
     JSON.stringify({ profileId, eventId, expiresAt: expiresAt.toISOString() }),
   ).toString("base64url");
   return {
-    token: `${payload}.${networkingHash(`badge:${payload}`)}`,
+    token: `${payload}.${networkingKeys().mac("badge", `badge:${payload}`)}`,
     expiresAt: expiresAt.toISOString(),
     profileId,
     accessAllowed: true,
@@ -64,12 +86,7 @@ export function readNetworkingBadge(token: string, eventId: string) {
     }
     if (token.split(".").length !== 2) throw new Error();
     const [payload, signature] = token.split(".");
-    const expected = networkingHash(`badge:${payload}`);
-    if (
-      !signature ||
-      signature.length !== expected.length ||
-      !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
-    )
+    if (!payload || !signature || !networkingKeys().verifyMac("badge", `badge:${payload}`, signature))
       throw new Error();
     const parsed = JSON.parse(
       Buffer.from(payload!, "base64url").toString(),
@@ -90,21 +107,6 @@ export function readNetworkingBadge(token: string, eventId: string) {
   }
 }
 
-export function openNetworkingSecret(value: string) {
-  const [iv, tag, ciphertext] = value
-    .split(".")
-    .map((v) => Buffer.from(v, "base64url"));
-  const decipher = createDecipheriv(
-    "aes-256-gcm",
-    createHash("sha256").update(networkingSecret()).digest(),
-    iv,
-  );
-  decipher.setAuthTag(tag);
-  return Buffer.concat([
-    decipher.update(ciphertext),
-    decipher.final(),
-  ]).toString("utf8");
-}
 const base32Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 export function newNetworkingTotpSecret() {
   const bytes = randomBytes(20);
