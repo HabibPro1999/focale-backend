@@ -18,6 +18,9 @@ import type { Job, JobContext } from "../job";
 
 const log = createLogger({ name: "worker:outbox" });
 
+/** Rows claimed per run: small enough that one run fits its 60 s budget. */
+export const OUTBOX_BATCH_SIZE = 20;
+
 interface SponsorshipEmailOutboxPayload {
   trigger: string;
   eventId: string;
@@ -75,7 +78,7 @@ export class OutboxJob implements Job {
   private readonly handlers = buildOutboxHandlers();
 
   async run({ signal }: JobContext): Promise<void> {
-    const result = await processOutboxEvents(50, {
+    const result = await processOutboxEvents(OUTBOX_BATCH_SIZE, {
       workerId: this.workerId,
       scope: "background",
       handlers: this.handlers,
@@ -85,7 +88,8 @@ export class OutboxJob implements Job {
       result.processed > 0 ||
       result.skipped > 0 ||
       result.failed > 0 ||
-      result.leaseLost > 0
+      result.leaseLost > 0 ||
+      result.released > 0
     ) {
       log.info({ result }, "Outbox events processed");
     }

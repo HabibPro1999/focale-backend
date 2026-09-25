@@ -10,14 +10,19 @@ export const CheckInBodySchema = z.strictObject({
   accessId: z.string().uuid().optional(),
 });
 
+/** Most offline check-ins one sync request may carry (more → 400). */
+export const MAX_CHECK_IN_SYNC_ITEMS = 500;
+
 export const BatchSyncBodySchema = z.strictObject({
-  checkIns: z.array(
-    z.strictObject({
-      registrationId: z.string().uuid(),
-      accessId: z.string().uuid().optional(),
-      scannedAt: z.string().datetime(),
-    }),
-  ),
+  checkIns: z
+    .array(
+      z.strictObject({
+        registrationId: z.string().uuid(),
+        accessId: z.string().uuid().optional(),
+        scannedAt: z.string().datetime(),
+      }),
+    )
+    .max(MAX_CHECK_IN_SYNC_ITEMS),
 });
 
 // Param schema. Named distinct from other modules' event-id param schemas to

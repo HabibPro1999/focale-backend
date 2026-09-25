@@ -109,7 +109,7 @@ with the status code probes rely on (503 when unhealthy, body unchanged).
 | `GET /health/live` | Liveness: `{ "status": "ok" }`, no I/O, never fails. Use it as the platform health check (Render, image HEALTHCHECK). |
 | `GET /health/ready` | Readiness: 200 `{ "status": "ready" }` when not draining, the database answers (ping cached 5 s) and the boot `MIGRATIONS_CHECK` found the schema current (or did not run). Otherwise 503 `{ "status": "not ready", "reasons": [...] }`, or 503 `{ "status": "draining" }` during shutdown. |
 | `GET /health` | Legacy overall health: 200 `{ status: "healthy", timestamp, checks.database }`, 503 `unhealthy` when the DB ping fails (uncached). |
-| `GET /health/worker` | Worker heartbeats (`worker_heartbeats`, written every 15 s): unhealthy when no enabled worker beat in the last 60 s, when only `RUN_WORKERS=false` workers are beating, or when a job has run past twice its timeout. Lists recent workers with their per-job state. |
+| `GET /health/worker` | Worker heartbeats (`worker_heartbeats`, written every 15 s): unhealthy when no enabled worker beat in the last 60 s, when only `RUN_WORKERS=false` workers are beating, or when a job has run past twice its timeout. Public body: `isHealthy`, `reasons` and `counts` (`live`, `disabled`, `overdueJobs`) only; per-worker and per-job detail stays in the table. |
 | `GET /health/email-queue` | Email queue depth / staleness (unhealthy: stale sending, >1000 queued, or oldest queued >30 min). |
 | `GET /health/abstract-book-jobs` | Book-job queue (unhealthy: stale running, >100 pending, or oldest pending >1 h). |
 | `GET /health/outbox` | Outbox backlog (unhealthy: any dead-lettered, pending+failed ≥1000, oldest pending >10 min, or oldest processing >2× lease). |
@@ -168,6 +168,17 @@ Book 30 min, networking delivery 30 s, networking maintenance and embeddings
 5 min). Each run receives `{ signal, deadline, log }`; the signal aborts at the
 timeout or at the shutdown deadline, and a job's next run never starts before
 the previous one settles. Email provider requests are bounded at 15 s.
+
+Queue tables are processed through the lease queue (`packages/db/src/lease-queue`;
+the outbox today). A run claims a batch (`status` → leased, `attempt_count` + 1,
+`locked_by`/`locked_until`), one heartbeat renews the lease of every row not
+finished, and each row's ownership is confirmed right before its handler; every
+terminal write is fenced by that ownership. On shutdown, and on a timeout for
+rows not started yet, the claimed rows go back to the queue without an attempt
+charged; a row whose handler a timeout interrupts is charged, so it still
+dead-letters eventually. The `lease-recovery` job (every 30 s) requeues rows
+whose lease expired (their worker died), attempt charged, or dead-letters them
+once their attempts are used up.
 
 One heartbeat timer (15 s) writes both the liveness file
 (`WORKER_HEARTBEAT_FILE`, read by the image HEALTHCHECK) and the process's

@@ -1076,7 +1076,7 @@ describe("RegistrationsService", () => {
         ...patch,
         clientId: "c1",
       });
-      db.checkInRegistration.mockResolvedValue(undefined);
+      db.checkInRegistration.mockResolvedValue({ outcome: "CHECKED_IN", checkedInAt: new Date() });
       await expect(
         new CheckinService().checkIn("ev1", "reg1", undefined, "admin"),
       ).resolves.toMatchObject({

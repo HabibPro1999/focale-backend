@@ -21,8 +21,6 @@ vi.mock("@app/integrations", () => ({
   verifyToken: vi.fn(async () => ({ uid: "u1" })),
 }));
 vi.mock("@app/db", () => ({
-  // The service module (imported by the controller) reads this at load time.
-  CHECKIN_ELIGIBLE_STATUSES: ["PAID", "SPONSORED", "WAIVED"],
   getUserWithClientById: vi.fn(),
   getUserIdsByClient: vi.fn(async () => []),
   getEventWithPricing: vi.fn(),
@@ -223,5 +221,28 @@ describe("CheckinController (guards)", () => {
 
     expect(res.statusCode).toBe(200);
     expect(service.batchSync).toHaveBeenCalledWith(eventId, [], "u1");
+  });
+
+  it("batch sync accepts 500 check-ins and rejects 501 (400, no service call)", async () => {
+    service.batchSync.mockResolvedValue({ synced: 0, alreadyCheckedIn: 0, errors: [] });
+    const checkIns = (count: number) =>
+      Array.from({ length: count }, () => ({
+        registrationId,
+        scannedAt: "2026-04-03T10:00:00.000Z",
+      }));
+    const sync = (count: number) =>
+      app.inject({
+        method: "POST",
+        url: `/api/events/${eventId}/checkin/sync`,
+        headers: AUTH,
+        payload: { checkIns: checkIns(count) },
+      });
+
+    expect((await sync(500)).statusCode).toBe(200);
+    expect(service.batchSync).toHaveBeenCalledTimes(1);
+
+    const res = await sync(501);
+    expect(res.statusCode).toBe(400);
+    expect(service.batchSync).toHaveBeenCalledTimes(1);
   });
 });
