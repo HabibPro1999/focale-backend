@@ -91,7 +91,12 @@ records the refund of the excess (lower `paidAmount`), then retries.
   (`ACCESS_CAPACITY_REACHED` / `ACCESS_DEACTIVATED`, by `SYSTEM`) may list
   `paymentStatus` too.
 - A registration that already paid more than it would owe without the item
-  keeps the item (no automatic overpayment); an admin handles it.
+  keeps the item (no automatic overpayment); an admin handles it. Its
+  history gets an `ACCESS_DROP_SKIPPED_OVERPAID` entry (by `SYSTEM`) with
+  `accessKept` (item name → drop reason), `accessId`, `paidAmount`,
+  `amountDue` and `amountDueWithoutAccess` (each in `new`); give it a label
+  (e.g. "Access kept: already paid more than the amount due without it").
+  An identical entry is not repeated when the drop is retried.
 - **Registration delete:** a cancelled sponsorship linked to the deleted
   registration stays `CANCELLED` (before, it came back as `PENDING`).
 - **Operators:** `repair-sponsorship-code-usages` no longer takes

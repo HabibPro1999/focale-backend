@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { and, asc, eq, sql } from "drizzle-orm";
 import type { PriceBreakdown } from "@app/contracts";
 import { createLogger, dropAccessItem, isFullySettled } from "@app/shared";
@@ -12,6 +13,7 @@ import {
 } from "../queries/access";
 import { findRegistrationUsagesForRecalc } from "../queries/registrations";
 import { eventAccess, events } from "../schema/events-access";
+import { auditLogs } from "../schema/outbox-audit";
 import { registrations } from "../schema/registrations";
 import { withLockingTxn } from "../txn";
 import { emitSettlementEvents, settlementEventPair } from "./events";
@@ -64,6 +66,21 @@ const DROP_AUDIT_ACTION: Record<AccessDropReason, string> = {
   capacity_reached: "ACCESS_CAPACITY_REACHED",
   deactivated: "ACCESS_DEACTIVATED",
 };
+
+/** Registration history action for a drop skipped because the registration is overpaid. */
+export const ACCESS_DROP_SKIPPED_OVERPAID_AUDIT_ACTION = "ACCESS_DROP_SKIPPED_OVERPAID";
+
+/** A drop skipped because the registration paid more than it would owe without the item. */
+export interface OverpaidDropSkip {
+  accessId: string;
+  accessName: string;
+  reason: AccessDropReason;
+  paidAmount: number;
+  /** Amount due with the item (gross minus sponsorship, now). */
+  amountDue: number;
+  /** Amount due the drop would have left, below `paidAmount`. */
+  amountDueWithoutAccess: number;
+}
 
 /**
  * Enqueue the drop of these access items, in the caller's transaction. For
@@ -134,7 +151,10 @@ async function candidateRegistrationIds(db: DbExecutor, eventId: string, accessI
 }
 
 class SkipDrop extends Error {
-  constructor(readonly reason: AccessDropSkipReason) {
+  constructor(
+    readonly reason: AccessDropSkipReason,
+    readonly overpaid?: OverpaidDropSkip,
+  ) {
     super(reason);
     this.name = "SkipDrop";
   }
@@ -190,8 +210,17 @@ export async function dropAccessFromRegistration(
       const settled = await settleRegistrationTxn(tx, registrationId, {
         priceBreakdown: result.breakdown as PriceBreakdown,
         totalAmount: result.gross,
-        decide: ({ net }) => {
-          if (reg.paidAmount > net) throw new SkipDrop("OVERPAID");
+        decide: ({ before, net }) => {
+          if (before.paidAmount > net) {
+            throw new SkipDrop("OVERPAID", {
+              accessId: drop.accessId,
+              accessName: access.name,
+              reason: drop.reason,
+              paidAmount: before.paidAmount,
+              amountDue: Math.max(0, before.totalAmount - before.sponsorshipAmount),
+              amountDueWithoutAccess: net,
+            });
+          }
           return undefined;
         },
         fields: {
@@ -256,10 +285,61 @@ export async function dropAccessFromRegistration(
     });
     return "dropped";
   } catch (err) {
-    if (err instanceof SkipDrop) return err.reason;
+    if (err instanceof SkipDrop) {
+      if (err.overpaid) await recordOverpaidDropSkip(registrationId, err.overpaid);
+      return err.reason;
+    }
     if (err instanceof AccessCapacityExceededError) return "CAPACITY_FULL";
     throw err;
   }
+}
+
+function overpaidSkipChanges(skip: OverpaidDropSkip): Record<string, { old: unknown; new: unknown }> {
+  return {
+    accessKept: { old: skip.accessName, new: skip.reason },
+    accessId: { old: null, new: skip.accessId },
+    paidAmount: { old: null, new: skip.paidAmount },
+    amountDue: { old: null, new: skip.amountDue },
+    amountDueWithoutAccess: { old: null, new: skip.amountDueWithoutAccess },
+  };
+}
+
+/**
+ * An overpaid registration keeps the item (no automatic overpayment); an
+ * admin handles it. Every skip is logged at warn, and recorded on the
+ * registration's history (`ACCESS_DROP_SKIPPED_OVERPAID`, by SYSTEM) in its
+ * own transaction, since the drop's transaction rolled back. An entry
+ * identical to one already recorded (a redelivered event, the same access
+ * filling again) is not repeated. Returns whether an entry was written.
+ */
+export async function recordOverpaidDropSkip(registrationId: string, skip: OverpaidDropSkip): Promise<boolean> {
+  logger.warn({ registrationId, ...skip }, "access drop skipped: the registration paid more than it would owe without the item");
+  const changes = overpaidSkipChanges(skip);
+  return withLockingTxn(async (tx) => {
+    if (!(await lockRegistrationForUpdate(tx, registrationId))) return false;
+    const recorded = await tx
+      .select({ changes: auditLogs.changes })
+      .from(auditLogs)
+      .where(
+        and(
+          eq(auditLogs.entityType, "Registration"),
+          eq(auditLogs.entityId, registrationId),
+          eq(auditLogs.action, ACCESS_DROP_SKIPPED_OVERPAID_AUDIT_ACTION),
+        ),
+      );
+    if (recorded.some((row) => isDeepStrictEqual(row.changes, changes))) return false;
+    await insertAuditLog(
+      {
+        entityType: "Registration",
+        entityId: registrationId,
+        action: ACCESS_DROP_SKIPPED_OVERPAID_AUDIT_ACTION,
+        changes,
+        performedBy: "SYSTEM",
+      },
+      tx,
+    );
+    return true;
+  });
 }
 
 /**

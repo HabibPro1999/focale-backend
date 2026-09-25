@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import {
   ACCESS_CAPACITY_REACHED_OUTBOX_TYPE,
   auditLogs,
+  dropAccessFromUnsettledRegistrations,
   enqueueAccessDrops,
   eventAccess,
   getDb,
@@ -236,7 +237,7 @@ describe.runIf(dbTestsEnabled())("db tier: access capacity drop (worker outbox j
     ]);
   });
 
-  it("keeps the item for a covered item, an overpaid registration, or an item no longer full", async () => {
+  it("keeps the item for a covered item, an overpaid registration (recorded once), or an item no longer full", async () => {
     const s = await scenario();
     const gala = { id: s.gala.id, price: 200 };
     const covered = await registrationHolding(s, [gala], { status: "PARTIAL", sponsorship: 200 });
@@ -256,7 +257,39 @@ describe.runIf(dbTestsEnabled())("db tier: access capacity drop (worker outbox j
     await handleAccessCapacityReachedOutbox({ eventId: s.event.id, accessId: s.gala.id, reason: "capacity_reached" });
 
     expect(await readRegistration(covered.id)).toMatchObject({ accessTypeIds: [s.gala.id], totalAmount: 500 });
-    expect(await readRegistration(overpaid.id)).toMatchObject({ accessTypeIds: [s.gala.id], totalAmount: 500 });
+    expect(await readRegistration(overpaid.id)).toMatchObject({
+      paymentStatus: "PARTIAL",
+      accessTypeIds: [s.gala.id],
+      totalAmount: 500,
+      paidAmount: 450,
+    });
+    expect(await auditActions(covered.id)).toEqual([]);
+    // The overpaid skip is recorded on the registration for an admin to handle.
+    const overpaidSkip = {
+      action: "ACCESS_DROP_SKIPPED_OVERPAID",
+      performedBy: "SYSTEM",
+      changes: {
+        accessKept: { old: "Gala", new: "capacity_reached" },
+        accessId: { old: null, new: s.gala.id },
+        paidAmount: { old: null, new: 450 },
+        amountDue: { old: null, new: 500 },
+        amountDueWithoutAccess: { old: null, new: 300 },
+      },
+    };
+    expect(await auditActions(overpaid.id)).toEqual([overpaidSkip]);
+    // A redelivered event skips it again without repeating the entry.
+    const again = await dropAccessFromUnsettledRegistrations({
+      eventId: s.event.id,
+      accessId: s.gala.id,
+      reason: "capacity_reached",
+    });
+    expect(again.skipped).toEqual(
+      expect.arrayContaining([
+        { registrationId: covered.id, reason: "COVERED" },
+        { registrationId: overpaid.id, reason: "OVERPAID" },
+      ]),
+    );
+    expect(await auditActions(overpaid.id)).toEqual([overpaidSkip]);
 
     // A place freed since: nothing is dropped.
     const later = await registrationHolding(s, [gala]);

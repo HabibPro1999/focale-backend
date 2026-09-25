@@ -75,12 +75,15 @@ export {
 } from "./sponsorship-link";
 export {
   ACCESS_CAPACITY_REACHED_OUTBOX_TYPE,
+  ACCESS_DROP_SKIPPED_OVERPAID_AUDIT_ACTION,
   dropAccessFromRegistration,
   dropAccessFromUnsettledRegistrations,
   enqueueAccessDrops,
   handleAccessCapacityReachedOutbox,
+  recordOverpaidDropSkip,
   type AccessCapacityReachedPayload,
   type AccessDropReason,
   type AccessDropSkipReason,
   type AccessDropSummary,
+  type OverpaidDropSkip,
 } from "./access-drop";
