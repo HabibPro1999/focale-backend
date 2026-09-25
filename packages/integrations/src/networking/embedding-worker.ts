@@ -11,6 +11,7 @@ import {
 } from "./embeddings";
 import { integrationsConfigFromEnv } from "@app/contracts";
 import { networkingConfig } from "../config";
+import { runClaimLanes } from "./lanes";
 
 export interface EmbeddingWorkerOptions {
   batchSize: number;
@@ -38,26 +39,20 @@ export async function processNetworkingEmbeddings(
     client.model,
     options.batchSize * options.batchesPerTick,
   );
-  let nextBatch = 0;
-  let drained = false;
   const totals = { configured: true, processed: 0, failed: 0 };
-  const lanes = await Promise.allSettled(
-    Array.from({ length: options.concurrency }, async () => {
-      while (!drained && nextBatch++ < options.batchesPerTick) {
-        // Claim only when a lane is ready, so leases do not expire waiting for a slot.
-        const claimed = await claimNetworkingEmbeddingJobs(options.batchSize);
-        if (!claimed.length) {
-          drained = true;
-          break;
-        }
+  // Claim only when a lane is ready, so leases do not expire waiting for a slot.
+  await runClaimLanes([
+    {
+      lanes: options.concurrency,
+      maxBatches: options.batchesPerTick,
+      claim: () => claimNetworkingEmbeddingJobs(options.batchSize),
+      process: async (claimed: Awaited<ReturnType<typeof claimNetworkingEmbeddingJobs>>) => {
         const result = await processBatch(client, claimed);
         totals.processed += result.processed;
         totals.failed += result.failed;
-      }
-    }),
-  );
-  const error = lanes.find((result) => result.status === "rejected");
-  if (error?.status === "rejected") throw error.reason;
+      },
+    },
+  ]);
   return totals;
 }
 

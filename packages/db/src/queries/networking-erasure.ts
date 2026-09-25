@@ -320,7 +320,7 @@ export async function eraseNetworkingProfile(
   return result(true, true);
 }
 
-/** Withdrawn more than `eraseDays` ago and not yet erased, oldest first (index networking_profiles_withdrawn_idx). */
+/** Withdrawn more than `eraseDays` ago and not yet erased, oldest first (index networking_profiles_erasure_due_idx). */
 export async function networkingProfilesToErase(options: {
   eraseDays: number;
   eventId?: string;

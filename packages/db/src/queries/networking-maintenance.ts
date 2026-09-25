@@ -3,6 +3,7 @@ import { getDb } from "../client";
 import { expireNetworkingProposals, sweepReleasedNetworkingReservations } from "./networking-meetings";
 import { purgeExpiredNetworkingEvents } from "./networking-retention";
 import { eraseWithdrawnNetworkingProfiles } from "./networking-erasure";
+import { settleOrphanedNetworkingEmailLogs } from "./networking-email-tracking";
 
 /** The NETWORKING_WITHDRAWAL_ERASE_DAYS default (app config). */
 export const NETWORKING_WITHDRAWAL_ERASE_DAYS_DEFAULT = 30;
@@ -99,6 +100,8 @@ export async function maintainNetworkingLifecycle(
   await db.execute(
     sql`UPDATE networking_deliveries SET status='FAILED',locked_until=NULL,last_error='Delivery retry limit exhausted',updated_at=now() WHERE status='PROCESSING' AND locked_until<now() AND attempts>=5 ${scope}`,
   );
+  // Email logs of deliveries that ended mid-send never stay SENDING (4.2).
+  await settleOrphanedNetworkingEmailLogs(eventId, db);
   await db.execute(
     sql`DELETE FROM networking_challenges WHERE expires_at<now()-interval '1 day' ${scope}`,
   );
