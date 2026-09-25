@@ -39,20 +39,6 @@ export type WithAccessSelections<T> = T & {
 
 export type RegistrationWithRelations = WithAccessSelections<RegistrationWithMeta>;
 
-// ============================================================================
-// Discount total from applied pricing rules (abs of the negative effects).
-// ============================================================================
-
-export function calculateDiscountAmount(
-  appliedRules: PriceBreakdown["appliedRules"],
-): number {
-  return Math.abs(
-    appliedRules
-      .filter((rule) => rule.effect < 0)
-      .reduce((sum, rule) => sum + rule.effect, 0),
-  );
-}
-
 function fallbackAccess(item: { accessId: string; name: unknown }) {
   return {
     id: item.accessId,
