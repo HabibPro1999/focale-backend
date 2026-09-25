@@ -9,6 +9,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const db = vi.hoisted(() => ({
   getDb: vi.fn(() => ({})),
   withTxn: vi.fn(),
+  withLockingTxn: vi.fn(),
+  lockRegistrationForUpdate: vi.fn(),
   applyRegistrationSettlement: vi.fn(),
   emitSettlementEvents: vi.fn(),
   getEventWithPricing: vi.fn(),
@@ -133,6 +135,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   db.getDb.mockReturnValue({});
   db.withTxn.mockImplementation((fn: (tx: unknown) => unknown) => fn({}));
+  db.withLockingTxn.mockImplementation((fn: (tx: unknown) => unknown) => db.withTxn(fn));
+  db.lockRegistrationForUpdate.mockResolvedValue(true);
   db.getEventWithPricing.mockResolvedValue({ id: EVENT_ID, ...openEvent });
   db.findClientModuleState.mockResolvedValue(client);
   db.getRegistrationFormSchemaForEvent.mockResolvedValue({ schema: SCHEMA });
