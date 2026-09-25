@@ -90,7 +90,8 @@ describe.runIf(dbTestsEnabled())("db tier: registration reference-number counter
   it("seeds a new prefix from the largest numeric suffix already stored", async () => {
     const { event, form } = await seedEventWithForm("seeded");
     const other = await seedEventWithForm("seeded-x");
-    for (const referenceNumber of ["27-SEEDED-007", "27-SEEDED-012", "27-SEEDED-ABC"]) {
+    // Zero-padded suffixes are decimal: CockroachDB's INT cast would read '012' as octal 10 and reject '009'.
+    for (const referenceNumber of ["27-SEEDED-007", "27-SEEDED-009", "27-SEEDED-012", "27-SEEDED-ABC"]) {
       await seedRegistration({ eventId: event.id, formId: form.id, referenceNumber });
     }
     // Another event's prefix that merely starts with ours is not counted.

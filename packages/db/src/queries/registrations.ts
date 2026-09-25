@@ -686,11 +686,12 @@ export function formatReferenceNumber(prefix: string, sequence: number): string 
  * it locks nothing. MAX runs over the number (a text MAX breaks at
  * '...-999' vs '...-1000'), and the digits-only filter keeps rows whose
  * prefix merely starts with ours ('26-TSHG-' vs '26-TSHG-CONGRES-') out of
- * the cast. CockroachDB forbids FOR UPDATE with aggregates; none is taken.
+ * the cast. The cast is to DECIMAL: CockroachDB parses a string with a
+ * leading zero as octal when casting to INT ('012' → 10, '008' → error).
  */
 async function maxReferenceSuffix(db: DbExecutor, prefix: string): Promise<number> {
   const res = await db.execute(sql`
-    SELECT MAX(CAST(seq AS INT)) AS max_seq FROM (
+    SELECT MAX(CAST(seq AS DECIMAL)) AS max_seq FROM (
       SELECT SUBSTRING("reference_number", CAST(${prefix.length + 1} AS INT)) AS seq
       FROM "registrations"
       WHERE "reference_number" LIKE ${`${escapeLike(prefix)}%`} ESCAPE '\\'
