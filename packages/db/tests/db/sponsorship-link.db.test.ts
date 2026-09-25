@@ -6,7 +6,10 @@ import {
   eventAccess,
   getDb,
   linkSponsorshipToRegistrationTxn,
+  lockRegistrationForUpdate,
+  lockRegistrationSponsorships,
   registrations,
+  releaseRegistrationUsagesTxn,
   releaseSponsorshipTxn,
   settleSponsorshipStatusTxn,
   sponsorshipUsages,
@@ -388,6 +391,33 @@ describe.runIf(dbTestsEnabled())("db tier: sponsorship link / unlink / release /
       expect(err.details.registrationId).toBe(b.id);
       expect(await usagesOf(a.id)).toHaveLength(1);
       expect(await readRegistration(a.id)).toMatchObject({ sponsorshipAmount: 200, paymentStatus: "PARTIAL" });
+    });
+  });
+
+  describe("registration delete: releaseRegistrationUsagesTxn", () => {
+    it("removes the usages; a CANCELLED sponsorship stays CANCELLED, others go back to PENDING or stay USED", async () => {
+      const s = await scenario();
+      const cancelled = await sponsorshipOf(s, { coveredAccessIds: [s.workshop.id], totalAmount: 200, coversBasePrice: false });
+      const lastUse = await sponsorshipOf(s, { totalAmount: 100 });
+      const shared = await sponsorshipOf(s, { totalAmount: 50 });
+      const reg = await registrationOf(s, { items: [{ accessId: s.workshop.id, subtotal: 200 }] });
+      const other = await registrationOf(s);
+      for (const sponsorship of [cancelled, lastUse, shared]) await link(sponsorship.id, reg.id);
+      await link(shared.id, other.id);
+      await getDb().update(sponsorships).set({ status: "CANCELLED" }).where(eq(sponsorships.id, cancelled.id));
+
+      const released = await withLockingTxn(async (tx) => {
+        const locked = await lockRegistrationSponsorships(tx, reg.id);
+        await lockRegistrationForUpdate(tx, reg.id);
+        return { locked, released: await releaseRegistrationUsagesTxn(tx, reg.id) };
+      });
+
+      expect(released.locked).toEqual([cancelled.id, lastUse.id, shared.id].sort());
+      expect(released.released.coveredAccessIds).toEqual([s.workshop.id]);
+      expect(await usagesOf(reg.id)).toEqual([]);
+      expect((await readSponsorship(cancelled.id)).status).toBe("CANCELLED");
+      expect((await readSponsorship(lastUse.id)).status).toBe("PENDING");
+      expect((await readSponsorship(shared.id)).status).toBe("USED");
     });
   });
 

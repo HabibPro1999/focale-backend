@@ -1,6 +1,8 @@
 import { Injectable } from "@nestjs/common";
 import { createLogger, makeWorkerId } from "@app/shared";
 import {
+  ACCESS_CAPACITY_REACHED_OUTBOX_TYPE,
+  handleAccessCapacityReachedOutbox,
   processOutboxEvents,
   type OutboxHandlerRegistry,
   type OutboxHandlerResult,
@@ -68,6 +70,7 @@ export function buildOutboxHandlers(): OutboxHandlerRegistry {
       return queued ? "processed" : "skipped";
     },
     "storage.delete": (payload) => handleStorageDeleteOutbox(payload),
+    [ACCESS_CAPACITY_REACHED_OUTBOX_TYPE]: (payload, meta) => handleAccessCapacityReachedOutbox(payload, meta),
   };
 }
 

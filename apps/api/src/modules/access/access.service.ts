@@ -43,36 +43,12 @@ import {
   AccessNotFoundError,
   AccessPaidCountUnderflowError,
   type PaidAccessState,
-  getAccessCapacityRowsByIds,
-  getUnsettledRegistrationsWithAccess,
   getRegistrationCoveredAccessIds,
-  updateRegistrationForAccessDrop,
-  insertAuditLog,
-  enqueueTriggeredEmailOutbox,
+  enqueueAccessDrops,
 } from "@app/db";
 import { AppException } from "../../core/app-exception";
 import { groupAccess } from "./access-grouping";
 import { validateSelections } from "./access-validation";
-
-// Structural view of the registration priceBreakdown JSON (recomputed by hand on
-// access drops — see the port spec; we do NOT delegate to the pricing module).
-interface BreakdownAccessItem {
-  accessId: string;
-  name?: unknown;
-  unitPrice?: number;
-  quantity: number;
-  subtotal: number;
-}
-interface RegistrationBreakdown {
-  calculatedBasePrice: number;
-  accessItems: BreakdownAccessItem[];
-  accessTotal?: number;
-  subtotal?: number;
-  sponsorshipTotal?: number;
-  total?: number;
-  droppedAccessItems?: (BreakdownAccessItem & { reason: string })[];
-  [key: string]: unknown;
-}
 
 // ---------------------------------------------------------------------------
 // Date-boundary validation (pure) — ported verbatim.
@@ -424,12 +400,7 @@ export class AccessService {
           await setAccessPrerequisites(id, requiredAccessIds, tx);
         }
         if (isBeingDeactivated) {
-          await this.dropAccessFromUnsettledRegistrations(
-            access.eventId,
-            id,
-            access.name,
-            tx,
-          );
+          await enqueueAccessDrops(tx, access.eventId, [id], "deactivated");
         } else if (
           data.maxCapacity !== null &&
           access.paidCount === data.maxCapacity
@@ -649,176 +620,24 @@ export class AccessService {
     return new Set(ids);
   }
 
-  /** When paid count hits capacity, drop the access from unprotected unsettled regs. */
+  /**
+   * After paid counts went up: enqueue the drop of every item now at capacity
+   * from the unsettled registrations holding it (`access.capacityReached`,
+   * handled by the worker one registration per locking transaction, plan
+   * 2.8). Runs in the caller's transaction and changes no other registration.
+   * Returns how many items were enqueued.
+   */
   async handleCapacityReached(
     eventId: string,
     accessIds: string[],
     exec: DbExecutor = getDb(),
   ): Promise<number> {
-    if (accessIds.length === 0) return 0;
-
-    const allAccesses = await getAccessCapacityRowsByIds(accessIds, exec);
-    const atCapacity = allAccesses.filter(
-      (a) => a.maxCapacity !== null && a.paidCount >= a.maxCapacity,
-    );
-
-    let totalAffected = 0;
-    for (const access of atCapacity) {
-      totalAffected += await this.dropAccessFromRegistrations(
-        eventId,
-        access.id,
-        access.name,
-        "capacity_reached",
-        "ACCESS_CAPACITY_REACHED",
-        exec,
-      );
-    }
-    return totalAffected;
+    return (await enqueueAccessDrops(exec, eventId, accessIds, "capacity_reached")).length;
   }
 
   // =========================================================================
   // Private helpers
   // =========================================================================
-
-  /**
-   * Strip an access item from all unsettled, unprotected registrations. Used when
-   * an access is deactivated (reason "deactivated", audit action "ACCESS_DEACTIVATED").
-   * Same recompute as capacity-reached, without the capacity gate.
-   */
-  private dropAccessFromUnsettledRegistrations(
-    eventId: string,
-    accessId: string,
-    accessName: string,
-    exec: DbExecutor,
-  ): Promise<number> {
-    return this.dropAccessFromRegistrations(
-      eventId,
-      accessId,
-      accessName,
-      "deactivated",
-      "ACCESS_DEACTIVATED",
-      exec,
-    );
-  }
-
-  /**
-   * Shared drop loop for capacity-reached and deactivation. Recomputes the
-   * registration priceBreakdown JSON field-by-field (NOT via the pricing module),
-   * decrements the reporting counter, writes a SYSTEM audit log, and enqueues a
-   * PAYMENT_CONFIRMED email when the drop leaves the registration fully covered.
-   */
-  private async dropAccessFromRegistrations(
-    eventId: string,
-    accessId: string,
-    accessName: string,
-    reason: "capacity_reached" | "deactivated",
-    auditAction: "ACCESS_CAPACITY_REACHED" | "ACCESS_DEACTIVATED",
-    exec: DbExecutor,
-  ): Promise<number> {
-    const registrations = await getUnsettledRegistrationsWithAccess(
-      eventId,
-      accessId,
-      exec,
-    );
-
-    let affected = 0;
-    for (const reg of registrations) {
-      const coveredIds = await getRegistrationCoveredAccessIds(reg.id, exec);
-      if (coveredIds.includes(accessId)) continue;
-
-      const breakdown = reg.priceBreakdown as RegistrationBreakdown;
-      const droppedItem = breakdown.accessItems.find(
-        (a) => a.accessId === accessId,
-      );
-      if (!droppedItem) continue;
-
-      const newAccessItems = breakdown.accessItems.filter(
-        (a) => a.accessId !== accessId,
-      );
-      const newAccessTotal = newAccessItems.reduce(
-        (sum, a) => sum + a.subtotal,
-        0,
-      );
-      const newSubtotal = breakdown.calculatedBasePrice + newAccessTotal;
-      const newSponsorshipTotal = Math.min(reg.sponsorshipAmount, newSubtotal);
-      const newTotal = Math.max(0, newSubtotal - newSponsorshipTotal);
-      const isNowFullyCovered =
-        newSponsorshipTotal >= newSubtotal && newSubtotal > 0;
-
-      const updatedBreakdown: RegistrationBreakdown = {
-        ...breakdown,
-        accessItems: newAccessItems,
-        accessTotal: newAccessTotal,
-        subtotal: newSubtotal,
-        sponsorshipTotal: newSponsorshipTotal,
-        total: newTotal,
-        droppedAccessItems: [
-          ...(breakdown.droppedAccessItems ?? []),
-          { ...droppedItem, reason },
-        ],
-      };
-
-      await updateRegistrationForAccessDrop(
-        reg.id,
-        {
-          accessTypeIds: (reg.accessTypeIds ?? []).filter(
-            (x) => x !== accessId,
-          ),
-          droppedAccessIds: [...(reg.droppedAccessIds ?? []), accessId],
-          priceBreakdown: updatedBreakdown as unknown as Record<string, unknown>,
-          totalAmount: newSubtotal,
-          accessAmount: newAccessTotal,
-          sponsorshipAmount: newSponsorshipTotal,
-          ...(isNowFullyCovered
-            ? { paymentStatus: "SPONSORED" as const, paidAt: new Date() }
-            : {}),
-        },
-        exec,
-      );
-
-      await this.decrementAccessRegisteredCountTx(
-        accessId,
-        droppedItem.quantity,
-        exec,
-      );
-
-      await insertAuditLog(
-        {
-          entityType: "Registration",
-          entityId: reg.id,
-          action: auditAction,
-          changes: {
-            accessDropped: { old: accessName, new: reason },
-            totalAmount: { old: reg.totalAmount, new: newSubtotal },
-            priceDeducted: { old: 0, new: droppedItem.subtotal },
-          },
-          performedBy: "SYSTEM",
-        },
-        exec,
-      );
-
-      if (isNowFullyCovered) {
-        await enqueueTriggeredEmailOutbox(
-          exec,
-          {
-            trigger: "PAYMENT_CONFIRMED",
-            eventId,
-            registration: {
-              id: reg.id,
-              email: reg.email,
-              firstName: reg.firstName,
-              lastName: reg.lastName,
-            },
-          },
-          `email:triggered:PAYMENT_CONFIRMED:${reg.id}`,
-        );
-      }
-
-      affected++;
-    }
-
-    return affected;
-  }
 
   /**
    * DFS cycle detection over the whole event's prerequisite graph, substituting

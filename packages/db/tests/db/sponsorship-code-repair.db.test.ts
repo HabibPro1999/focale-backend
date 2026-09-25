@@ -2,10 +2,14 @@ import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import {
+  ACCESS_CAPACITY_REACHED_OUTBOX_TYPE,
   SPONSORSHIP_CODE_REPAIR_ACTOR,
   applySponsorshipCodeLink,
+  clearRegistrationSponsorshipCode,
+  dropAccessFromUnsettledRegistrations,
   eventAccess,
   getDb,
+  outboxEvents,
   planSponsorshipCodeRepair,
   registrations,
   sponsorships,
@@ -30,7 +34,8 @@ import {
 
 // Plan 2.7: repair of signup codes stored before codes were consumed. The plan
 // is read-only; a single-claimant code is linked like a signup; everything
-// else goes to the business-decision list.
+// else goes to the business-decision list, resolved per registration with
+// the clear-code action (plan 2.8).
 
 function breakdown(gala: { id: string; price: number }, sponsorship: number, code: string | null) {
   const subtotal = gala.price;
@@ -231,14 +236,112 @@ describe.runIf(dbTestsEnabled())("db tier: sponsorship code repair (2.7)", () =>
     expect(await readRegistration(claimant.id)).toMatchObject({ paymentStatus: "PENDING" });
   });
 
-  it("skips a link that would fill an access item until the 2.8 capacity drop exists", async () => {
+  it("links a code that fills an access item and enqueues the drop of that item from other registrations", async () => {
     const s = await setup({ maxCapacity: 1 });
-    await seedLegacyClaimant(s);
+    const claimant = await seedLegacyClaimant(s);
+    const other = await seedRegistration({
+      eventId: s.event.id,
+      formId: s.form.id,
+      totalAmount: 150,
+      accessAmount: 150,
+      accessTypeIds: [s.gala.id],
+      priceBreakdown: breakdown(s.gala, 0, null),
+    });
     const [link] = (await planSponsorshipCodeRepair()).links;
     expect(link.fillsCapacity).toEqual([s.gala.id]);
 
-    expect(await applySponsorshipCodeLink(link)).toMatchObject({ outcome: "skipped", reason: "FILLS_CAPACITY" });
-    expect(await sponsorshipUsagesOf(s.sponsorship.id)).toEqual([]);
-    expect(await paidCount(s.gala.id)).toBe(0);
+    expect(await applySponsorshipCodeLink(link)).toMatchObject({ outcome: "linked", paymentStatus: "SPONSORED" });
+    expect(await paidCount(s.gala.id)).toBe(1);
+    const drops = await getDb()
+      .select({ payload: outboxEvents.payload })
+      .from(outboxEvents)
+      .where(eq(outboxEvents.type, ACCESS_CAPACITY_REACHED_OUTBOX_TYPE));
+    expect(drops.map((row) => row.payload)).toEqual([
+      { eventId: s.event.id, accessId: s.gala.id, reason: "capacity_reached" },
+    ]);
+
+    // The worker's drop: the other, unsettled registration loses the full item.
+    const summary = await dropAccessFromUnsettledRegistrations({
+      eventId: s.event.id,
+      accessId: s.gala.id,
+      reason: "capacity_reached",
+    });
+    expect(summary.dropped).toEqual([other.id]);
+    expect(await readRegistration(other.id)).toMatchObject({ accessTypeIds: [], droppedAccessIds: [s.gala.id], totalAmount: 0 });
+    expect(await readRegistration(claimant.id)).toMatchObject({ paymentStatus: "SPONSORED", accessTypeIds: [s.gala.id] });
+  });
+
+  describe("clear code", () => {
+    it("dry run computes the clear and changes nothing", async () => {
+      const s = await setup();
+      const claimant = await seedLegacyClaimant(s, { code: "sp-nosuchcode" });
+
+      const result = await clearRegistrationSponsorshipCode(claimant.id, { apply: false });
+
+      expect(result).toEqual({
+        outcome: "would_clear",
+        registrationId: claimant.id,
+        code: "sp-nosuchcode",
+        before: { paymentStatus: "PENDING", sponsorshipAmount: 150 },
+        after: { paymentStatus: "PENDING", sponsorshipAmount: 0, amountDue: 150 },
+      });
+      expect(await readRegistration(claimant.id)).toMatchObject({ sponsorshipCode: "sp-nosuchcode", sponsorshipAmount: 150 });
+      expect(await auditRowsOf("Registration", claimant.id)).toEqual([]);
+    });
+
+    it("clears an unknown code, its breakdown line and the amount priced from it, audited", async () => {
+      const s = await setup();
+      const claimant = await seedLegacyClaimant(s, { code: "sp-nosuchcode" });
+
+      expect(await clearRegistrationSponsorshipCode(claimant.id, { apply: true })).toMatchObject({ outcome: "cleared" });
+
+      const row = await readRegistration(claimant.id);
+      expect(row).toMatchObject({ sponsorshipCode: null, sponsorshipAmount: 0, paymentStatus: "PENDING", totalAmount: 150 });
+      expect(row.priceBreakdown).toMatchObject({ sponsorships: [], sponsorshipTotal: 0, total: 150 });
+      const [audit] = await auditRowsOf("Registration", claimant.id);
+      expect(audit).toMatchObject({
+        action: "DATA_REPAIR_CLEAR_SPONSORSHIP_CODE",
+        performedBy: SPONSORSHIP_CODE_REPAIR_ACTOR,
+        changes: {
+          sponsorshipCode: { old: "sp-nosuchcode", new: null },
+          sponsorshipAmount: { old: 150, new: 0 },
+        },
+      });
+      // Nothing left to repair for it.
+      expect((await planSponsorshipCodeRepair()).decisions).toEqual([]);
+    });
+
+    it("clearing a losing claimant leaves the shared code to the other one", async () => {
+      const s = await setup();
+      const winner = await seedLegacyClaimant(s);
+      // Another spelling of the same code (the raw values differ, as in legacy rows).
+      const loser = await seedLegacyClaimant(s, { code: s.sponsorship.code });
+      expect((await planSponsorshipCodeRepair()).decisions.map((d) => d.reason)).toEqual(["SEVERAL_CLAIMANTS"]);
+
+      await clearRegistrationSponsorshipCode(loser.id, { apply: true });
+
+      const plan = await planSponsorshipCodeRepair();
+      expect(plan.decisions).toEqual([]);
+      expect(plan.links.map((link) => link.registrationId)).toEqual([winner.id]);
+      expect(await readRegistration(loser.id)).toMatchObject({ sponsorshipCode: null, sponsorshipAmount: 0 });
+    });
+
+    it("refuses a linked code (unlink it instead) and a PAID amount change", async () => {
+      const s = await setup();
+      const linked = await seedLegacyClaimant(s);
+      const [link] = (await planSponsorshipCodeRepair()).links;
+      await applySponsorshipCodeLink(link);
+      const paid = await seedLegacyClaimant(s, { code: "sp-other", paymentStatus: "PAID", sponsorship: 50, paidAmount: 100 });
+
+      expect(await clearRegistrationSponsorshipCode(linked.id, { apply: true })).toMatchObject({
+        outcome: "skipped",
+        reason: "LINKED",
+      });
+      expect(await clearRegistrationSponsorshipCode(paid.id, { apply: true })).toMatchObject({
+        outcome: "skipped",
+        reason: "SETTLED",
+      });
+      expect(await readRegistration(paid.id)).toMatchObject({ sponsorshipCode: "sp-other", sponsorshipAmount: 50 });
+    });
   });
 });

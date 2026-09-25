@@ -7,6 +7,8 @@ const db = vi.hoisted(() => ({
   withTxn: vi.fn(),
   withLockingTxn: vi.fn(),
   lockRegistrationForUpdate: vi.fn(),
+  lockRegistrationSponsorships: vi.fn(),
+  releaseRegistrationUsagesTxn: vi.fn(),
   settleRegistrationTxn: vi.fn(),
   claimSponsorshipCodeTxn: vi.fn(),
   linkSponsorshipUsageTxn: vi.fn(),
@@ -1280,8 +1282,43 @@ describe("RegistrationsService", () => {
           event: { clientId: "c1", status: "OPEN", client: activeClient() },
         }),
       );
-      db.findRegistrationUsageLinks.mockResolvedValue([]);
+      db.lockRegistrationSponsorships.mockResolvedValue([]);
+      db.releaseRegistrationUsagesTxn.mockResolvedValue({ coveredAccessIds: [], sponsorships: [] });
       db.getNetworkingProfilePhotoByRegistration.mockResolvedValue(null);
+    });
+
+    it("locks the linked sponsorships, then the registration, then releases its usages", async () => {
+      await service.deleteRegistration("reg1", "admin1");
+      const [sponsorships] = db.lockRegistrationSponsorships.mock.invocationCallOrder;
+      const [registration] = db.lockRegistrationForUpdate.mock.invocationCallOrder;
+      const [release] = db.releaseRegistrationUsagesTxn.mock.invocationCallOrder;
+      expect(sponsorships).toBeLessThan(registration!);
+      expect(registration).toBeLessThan(release!);
+      expect(db.withLockingTxn).toHaveBeenCalled();
+    });
+
+    it("releases the paid places the covered items held (PARTIAL)", async () => {
+      db.findRegistrationForMutation.mockResolvedValue(
+        makeRegRow({
+          paymentStatus: "PARTIAL",
+          priceBreakdown: {
+            ...emptyBreakdown(100),
+            accessItems: [{ accessId: "acc1", name: "A", unitPrice: 10, quantity: 1, subtotal: 10 }],
+          },
+          event: { clientId: "c1", status: "OPEN", client: activeClient() },
+        }),
+      );
+      db.releaseRegistrationUsagesTxn.mockResolvedValue({
+        coveredAccessIds: ["acc1"],
+        sponsorships: [{ id: "s1", before: "CANCELLED", after: "CANCELLED" }],
+      });
+      await service.deleteRegistration("reg1", "admin1");
+      expect(access.syncPaidCountDelta).toHaveBeenCalledWith(
+        "ev1",
+        expect.objectContaining({ status: "PARTIAL", coveredAccessIds: new Set(["acc1"]) }),
+        expect.objectContaining({ status: "PENDING" }),
+        expect.anything(),
+      );
     });
 
     it("deletes an unpaid registration and emits REAL accessIds", async () => {

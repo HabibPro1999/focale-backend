@@ -42,8 +42,10 @@ export {
 export {
   SPONSORSHIP_CODE_REPAIR_ACTOR,
   applySponsorshipCodeLink,
+  clearRegistrationSponsorshipCode,
   planSponsorshipCodeRepair,
   type RepairRegistrationState,
+  type SponsorshipCodeClearResult,
   type SponsorshipCodeDecision,
   type SponsorshipCodeDecisionReason,
   type SponsorshipCodeLink,
@@ -56,7 +58,9 @@ export {
   changeSponsorshipCoverageTxn,
   linkSponsorshipToRegistrationTxn,
   linkedRegistrationIds,
+  lockRegistrationSponsorships,
   readSponsorshipTarget,
+  releaseRegistrationUsagesTxn,
   releaseSponsorshipTxn,
   settleSponsorshipStatusTxn,
   sponsorshipLinkRefusal,
@@ -69,3 +73,14 @@ export {
   type SponsorshipTarget,
   type SponsorshipUnlinkResult,
 } from "./sponsorship-link";
+export {
+  ACCESS_CAPACITY_REACHED_OUTBOX_TYPE,
+  dropAccessFromRegistration,
+  dropAccessFromUnsettledRegistrations,
+  enqueueAccessDrops,
+  handleAccessCapacityReachedOutbox,
+  type AccessCapacityReachedPayload,
+  type AccessDropReason,
+  type AccessDropSkipReason,
+  type AccessDropSummary,
+} from "./access-drop";

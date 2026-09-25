@@ -25,19 +25,6 @@ export type EventAccessWithPrereqIds = EventAccessRow & {
   requiredAccess: { id: string }[];
 };
 
-// Registration projection used by the capacity/deactivation drop paths.
-export type RegistrationForAccessDrop = {
-  id: string;
-  email: string;
-  firstName: string | null;
-  lastName: string | null;
-  accessTypeIds: string[] | null;
-  droppedAccessIds: string[] | null;
-  totalAmount: number;
-  accessAmount: number;
-  sponsorshipAmount: number;
-  priceBreakdown: unknown;
-};
 
 // ---------------------------------------------------------------------------
 // Prerequisite (_AccessPrerequisites) direction.
@@ -498,36 +485,6 @@ export async function getAccessCapacityRowsByIds(
     .where(inArray(eventAccess.id, ids));
 }
 
-/** Unsettled (not PAID/SPONSORED/WAIVED/REFUNDED) registrations holding `accessId`. */
-export async function getUnsettledRegistrationsWithAccess(
-  eventId: string,
-  accessId: string,
-  exec: DbExecutor = getDb(),
-): Promise<RegistrationForAccessDrop[]> {
-  const rows = await exec
-    .select({
-      id: registrations.id,
-      email: registrations.email,
-      firstName: registrations.firstName,
-      lastName: registrations.lastName,
-      accessTypeIds: registrations.accessTypeIds,
-      droppedAccessIds: registrations.droppedAccessIds,
-      totalAmount: registrations.totalAmount,
-      accessAmount: registrations.accessAmount,
-      sponsorshipAmount: registrations.sponsorshipAmount,
-      priceBreakdown: registrations.priceBreakdown,
-    })
-    .from(registrations)
-    .where(
-      and(
-        eq(registrations.eventId, eventId),
-        sql`${registrations.paymentStatus} NOT IN ('PAID', 'SPONSORED', 'WAIVED', 'REFUNDED')`,
-        sql`${accessId}::text = ANY(${registrations.accessTypeIds})`,
-      ),
-    );
-  return rows;
-}
-
 /** All accessIds covered by sponsorships linked to a registration (optionally excluding one). */
 export async function getRegistrationCoveredAccessIds(
   registrationId: string,
@@ -544,14 +501,6 @@ export async function getRegistrationCoveredAccessIds(
     .innerJoin(sponsorships, eq(sponsorships.id, sponsorshipUsages.sponsorshipId))
     .where(and(...conds));
   return rows.flatMap((r) => r.coveredAccessIds ?? []);
-}
-
-export async function updateRegistrationForAccessDrop(
-  registrationId: string,
-  data: Partial<typeof registrations.$inferInsert>,
-  exec: DbExecutor = getDb(),
-): Promise<void> {
-  await exec.update(registrations).set(data).where(eq(registrations.id, registrationId));
 }
 
 // ---------------------------------------------------------------------------

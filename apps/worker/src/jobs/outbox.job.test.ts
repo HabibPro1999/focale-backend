@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   queueSponsorshipEmail: vi.fn(),
   queueAbstractEmail: vi.fn(),
   handleStorageDeleteOutbox: vi.fn(),
+  handleAccessCapacityReachedOutbox: vi.fn(),
 }));
 
 vi.mock("@app/shared", () => ({
@@ -20,16 +21,21 @@ vi.mock("@app/integrations", () => ({
 
 // @app/db only supplies types + processOutboxEvents (unused here); stub it so
 // importing the job module never touches a real database client.
-vi.mock("@app/db", () => ({ processOutboxEvents: vi.fn() }));
+vi.mock("@app/db", () => ({
+  processOutboxEvents: vi.fn(),
+  ACCESS_CAPACITY_REACHED_OUTBOX_TYPE: "access.capacityReached",
+  handleAccessCapacityReachedOutbox: mocks.handleAccessCapacityReachedOutbox,
+}));
 
 import { buildOutboxHandlers } from "./outbox.job";
 
 describe("outbox handler registry", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("registers exactly the background handlers: three email types and storage.delete (no realtime.emit)", () => {
+  it("registers exactly the background handlers: three email types, storage.delete and access.capacityReached (no realtime.emit)", () => {
     const handlers = buildOutboxHandlers();
     expect(Object.keys(handlers).sort()).toEqual([
+      "access.capacityReached",
       "email.abstract",
       "email.sponsorship",
       "email.triggered",
@@ -44,6 +50,15 @@ describe("outbox handler registry", () => {
     mocks.handleStorageDeleteOutbox.mockResolvedValueOnce("skipped");
     await expect(handlers["storage.delete"](payload, { id: "o1" })).resolves.toBe("skipped");
     expect(mocks.handleStorageDeleteOutbox).toHaveBeenCalledWith(payload);
+  });
+
+  it("access.capacityReached → handleAccessCapacityReachedOutbox(payload, meta)", async () => {
+    const handlers = buildOutboxHandlers();
+    const payload = { eventId: "e1", accessId: "a1", reason: "capacity_reached" };
+    const meta = { id: "o1" };
+    mocks.handleAccessCapacityReachedOutbox.mockResolvedValueOnce("processed");
+    await expect(handlers["access.capacityReached"](payload, meta)).resolves.toBe("processed");
+    expect(mocks.handleAccessCapacityReachedOutbox).toHaveBeenCalledWith(payload, meta);
   });
 
   it("email.triggered → queueTriggeredEmail(trigger, eventId, registration)", async () => {
