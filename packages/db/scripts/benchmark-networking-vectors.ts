@@ -122,9 +122,11 @@ async function main() {
       const exact = await rankNetworkingVectorCandidates(...args, 30);
       const exactMs = performance.now() - start;
       const annStart = performance.now();
+      // Measures the ANN path itself, with or without an index (production falls back without one).
       const matches = (await findNetworkingVectorCandidates(
         ...args,
         60,
+        { requireVectorIndex: false },
       ))!.slice(0, 30);
       const annMs = performance.now() - annStart;
       const eligible = await getNetworkingRecommendationProfiles(

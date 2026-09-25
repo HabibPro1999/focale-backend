@@ -1,8 +1,121 @@
 import { sql } from "drizzle-orm";
-import { getDb } from "../client";
+import { getDb, type DbExecutor } from "../client";
 import { rowsOf } from "../helpers";
 
 export const NETWORKING_EXACT_PROFILE_LIMIT = 5000;
+/** The CockroachDB ANN index from migration 0017 (deferred while embeddings exist). */
+export const NETWORKING_VECTOR_INDEX = "networking_embeddings_cosine_idx";
+
+type StatusExecutor = Pick<DbExecutor, "execute">;
+
+/**
+ * True when networking_embeddings has an ANN index the bounded candidate
+ * search can use: 0017's CockroachDB vector index, or a pgvector HNSW/IVFFlat
+ * index on PostgreSQL (which has no ANN migration). An index still being
+ * built is not public yet, so it does not count.
+ */
+export async function networkingVectorIndexPresent(db: StatusExecutor = getDb()): Promise<boolean> {
+  const [row] = rowsOf<{ present: boolean }>(
+    await db.execute(sql`
+    SELECT EXISTS (
+      SELECT 1 FROM pg_catalog.pg_indexes
+      WHERE schemaname = current_schema() AND tablename = 'networking_embeddings'
+        AND (indexname = ${NETWORKING_VECTOR_INDEX} OR indexdef ~* 'using (hnsw|ivfflat)')
+    ) AS present
+  `),
+  );
+  return row?.present === true || String(row?.present) === "true";
+}
+
+export interface NetworkingVectorIndexStatus {
+  engine: "postgres" | "cockroach";
+  present: boolean;
+  /** Event/model pairs whose PROFILE embeddings exceed the exact-ranking limit. */
+  eventsAboveThreshold: number;
+  threshold: number;
+  /** Recommendations for those events use deterministic profile rules instead of vectors. */
+  fallbackActive: boolean;
+}
+
+/**
+ * Read-only ANN index status for health and the runbook script. `model`
+ * restricts the event count to the embedding model in use.
+ */
+export async function networkingVectorIndexStatus(
+  options: { db?: StatusExecutor; model?: string } = {},
+): Promise<NetworkingVectorIndexStatus> {
+  const db = options.db ?? getDb();
+  const [version] = rowsOf<{ version: string }>(await db.execute(sql`SELECT version() AS version`));
+  const present = await networkingVectorIndexPresent(db);
+  const [large] = rowsOf<{ count: number }>(
+    await db.execute(sql`
+    SELECT count(*)::int AS count FROM (
+      SELECT event_id, model FROM networking_embeddings
+      WHERE kind = 'PROFILE' ${options.model === undefined ? sql`` : sql`AND model = ${options.model}`}
+      GROUP BY event_id, model HAVING count(*) > ${NETWORKING_EXACT_PROFILE_LIMIT}
+    ) large
+  `),
+  );
+  const eventsAboveThreshold = Number(large?.count ?? 0);
+  return {
+    engine: /CockroachDB/i.test(version?.version ?? "") ? "cockroach" : "postgres",
+    present,
+    eventsAboveThreshold,
+    threshold: NETWORKING_EXACT_PROFILE_LIMIT,
+    fallbackActive: !present && eventsAboveThreshold > 0,
+  };
+}
+
+export interface NetworkingVectorIndexHealth {
+  /** False while at least one large event ranks without vectors. */
+  isHealthy: boolean;
+  index: "present" | "missing";
+  recommendations: "vector" | "deterministic-fallback";
+  eventsAboveThreshold: number;
+  threshold: number;
+}
+const HEALTH_TTL_MS = 60_000;
+let healthCheck: { key: string; expiresAt: number; health: Promise<NetworkingVectorIndexHealth> } | undefined;
+/**
+ * Public health probe body: no engine or index names, cached for a minute so
+ * an unauthenticated probe cannot drive repeated aggregate scans.
+ */
+export function getNetworkingVectorIndexHealth(model?: string): Promise<NetworkingVectorIndexHealth> {
+  const now = Date.now(), key = model ?? "";
+  if (healthCheck && healthCheck.key === key && healthCheck.expiresAt > now) return healthCheck.health;
+  const health = networkingVectorIndexStatus({ model }).then((status) => ({
+    isHealthy: !status.fallbackActive,
+    index: status.present ? ("present" as const) : ("missing" as const),
+    recommendations: status.fallbackActive ? ("deterministic-fallback" as const) : ("vector" as const),
+    eventsAboveThreshold: status.eventsAboveThreshold,
+    threshold: status.threshold,
+  }));
+  healthCheck = { key, expiresAt: now + HEALTH_TTL_MS, health };
+  health.catch(() => {
+    if (healthCheck?.health === health) healthCheck = undefined;
+  });
+  return health;
+}
+const INDEX_CHECK_TTL_MS = 60_000;
+let indexCheck: { expiresAt: number; present: Promise<boolean> } | undefined;
+/** Per-process view of the index for the recommendation hot path, refreshed every minute. */
+function cachedVectorIndexPresent(): Promise<boolean> {
+  const now = Date.now();
+  if (!indexCheck || indexCheck.expiresAt <= now) {
+    const present = networkingVectorIndexPresent();
+    indexCheck = { expiresAt: now + INDEX_CHECK_TTL_MS, present };
+    // A failed check is not cached.
+    present.catch(() => {
+      if (indexCheck?.present === present) indexCheck = undefined;
+    });
+  }
+  return indexCheck.present;
+}
+/** Forget the cached index checks (tests, or right after the runbook built the index). */
+export function clearNetworkingVectorIndexCache(): void {
+  indexCheck = undefined;
+  healthCheck = undefined;
+}
 
 export interface NetworkingVectorCandidate {
   profileId: string;
@@ -12,13 +125,20 @@ export interface NetworkingVectorCandidate {
   profileScore: number;
 }
 
-/** Exact weighted ranking for small events; bounded ANN candidate retrieval for large ones. */
+/**
+ * Exact weighted ranking for small events; bounded ANN candidate retrieval for
+ * large ones. Null means "no vector ranking": the caller falls back to the
+ * deterministic profile rules. That includes an event above the exact limit
+ * while the ANN index is missing, where every search would scan and sort the
+ * event's embeddings (`requireVectorIndex: false` is for the benchmark only).
+ */
 export async function findNetworkingVectorCandidates(
   eventId: string,
   profileId: string,
   model: string,
   paymentStatuses: readonly string[],
   limit = 60,
+  options: { requireVectorIndex?: boolean } = {},
 ): Promise<NetworkingVectorCandidate[] | null> {
   if (!paymentStatuses.length) return [];
   const db = getDb();
@@ -53,6 +173,7 @@ export async function findNetworkingVectorCandidates(
       paymentStatuses,
       requested,
     );
+  if (options.requireVectorIndex !== false && !(await cachedVectorIndexPresent())) return null;
 
   // Search each complementary signal separately, then rerank the union exactly.
   // Keep ORDER BY as a bare distance against a constant so the vector index is usable.

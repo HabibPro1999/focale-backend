@@ -144,8 +144,9 @@ the way operators already do; nothing here is automated by the repository.
    would rewrite those live totals from net to gross, so get sign-off on that
    row list first (the same bar as the plan's per-row money-repair manifest).
 5. Off-peak, run `apply --dry-run`, then `apply --yes` for the pending
-   migrations (on CockroachDB 0017 stays deferred while embeddings exist; apply
-   it later with `apply --apply-deferred=0017 --yes` in a maintenance window).
+   migrations (on CockroachDB 0017 stays deferred while embeddings exist; build
+   it later in a maintenance window with the runbook in NETWORKING.md, "Vector
+   index health and runbook", which wraps `apply --apply-deferred=0017`).
 6. Run `verify --schema`; it must report no errors.
 7. Set `MIGRATIONS_CHECK=enforce` on every service and add the Render
    Pre-Deploy Command `node packages/db/dist/migrator/cli.js apply --yes` to
