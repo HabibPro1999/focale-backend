@@ -5,6 +5,7 @@ import { JOBS } from "./job";
 import { OutboxJob } from "./jobs/outbox.job";
 import { EmailQueueJob } from "./jobs/email-queue.job";
 import { AbstractBookJob } from "./jobs/abstract-book.job";
+import { LeaseRecoveryJob } from "./jobs/lease-recovery.job";
 
 // JOBS is the registry token JobRunner injects. A factory returns the array of
 // job instances; add future jobs to both `inject` and the returned array.
@@ -16,6 +17,7 @@ import { AbstractBookJob } from "./jobs/abstract-book.job";
     OutboxJob,
     EmailQueueJob,
     AbstractBookJob,
+    LeaseRecoveryJob,
     NetworkingDeliveryJob,
     NetworkingMaintenanceJob,
     NetworkingEmbeddingJob,
@@ -25,11 +27,12 @@ import { AbstractBookJob } from "./jobs/abstract-book.job";
         outbox: OutboxJob,
         email: EmailQueueJob,
         book: AbstractBookJob,
+        leaseRecovery: LeaseRecoveryJob,
         networkingDelivery: NetworkingDeliveryJob,
         networkingMaintenance: NetworkingMaintenanceJob,
         networkingEmbedding: NetworkingEmbeddingJob,
-      ) => [outbox, email, book, networkingDelivery, networkingMaintenance, networkingEmbedding],
-      inject: [OutboxJob, EmailQueueJob, AbstractBookJob, NetworkingDeliveryJob, NetworkingMaintenanceJob, NetworkingEmbeddingJob],
+      ) => [outbox, email, book, leaseRecovery, networkingDelivery, networkingMaintenance, networkingEmbedding],
+      inject: [OutboxJob, EmailQueueJob, AbstractBookJob, LeaseRecoveryJob, NetworkingDeliveryJob, NetworkingMaintenanceJob, NetworkingEmbeddingJob],
     },
   ],
 })

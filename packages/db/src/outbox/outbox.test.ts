@@ -216,12 +216,36 @@ describe("processOutboxEvents", () => {
       handlers: handlers(),
     });
 
-    expect(result).toEqual({ processed: 1, skipped: 1, failed: 1, leaseLost: 0 });
+    expect(result).toEqual({ processed: 1, skipped: 1, failed: 1, leaseLost: 0, released: 0 });
 
-    const marks = dbMock.execute.mock.calls.map((c) => paramsOf(c[0] as SQL));
-    expect(marks.some((p) => p.includes("processed") && p.includes("PROCESSED"))).toBe(true);
-    expect(marks.some((p) => p.includes("skipped") && p.includes("SKIPPED"))).toBe(true);
-    expect(marks.some((p) => p.includes("failed") && p.includes("FAILED"))).toBe(true);
+    const marks = dbMock.execute.mock.calls.map((c) => ({
+      text: render(c[0] as SQL),
+      params: paramsOf(c[0] as SQL),
+    }));
+    expect(marks.some((m) => m.params.includes("processed") && m.params.includes("PROCESSED"))).toBe(true);
+    expect(marks.some((m) => m.params.includes("skipped") && m.params.includes("SKIPPED"))).toBe(true);
+    const failure = marks.find((m) => m.params.includes("failed") && m.params.includes("boom"));
+    expect(failure?.text).toContain(`"status" = 'FAILED'`);
+    // Every terminal write is fenced by ownership.
+    expect(failure?.text).toContain(`"status" = $`);
+    expect(failure?.params).toEqual(expect.arrayContaining(["PROCESSING", "worker-1"]));
+  });
+
+  it("dead-letters a failing row on its last attempt", async () => {
+    dbMock.execute.mockImplementation(
+      routeExecute(
+        [{ id: "last" }],
+        [{ id: "last", type: "email.abstract", payload: {}, attemptCount: 5, maxAttempts: 5 }],
+      ),
+    );
+
+    const result = await processOutboxEvents(1, { workerId: "worker-1", handlers: handlers() });
+
+    expect(result).toMatchObject({ failed: 1 });
+    const failure = dbMock.execute.mock.calls
+      .map((c) => ({ text: render(c[0] as SQL), params: paramsOf(c[0] as SQL) }))
+      .find((m) => m.params.includes("boom"));
+    expect(failure?.text).toContain(`"status" = 'DEAD_LETTERED'`);
   });
 
   it("stops before the next claimed row once its signal aborts", async () => {
@@ -249,7 +273,12 @@ describe("processOutboxEvents", () => {
 
     expect(first).toHaveBeenCalledTimes(1);
     expect(second).not.toHaveBeenCalled();
-    expect(result).toEqual({ processed: 1, skipped: 0, failed: 0, leaseLost: 0 });
+    // The unstarted row goes back to the queue without an attempt penalty.
+    expect(result).toEqual({ processed: 1, skipped: 0, failed: 0, leaseLost: 0, released: 1 });
+    const release = dbMock.execute.mock.calls
+      .map((c) => render(c[0] as SQL))
+      .find((s) => s.includes("GREATEST"));
+    expect(release).toContain(`"attempt_count" = GREATEST("attempt_count" - 1, 0)`);
   });
 
   it("claims only realtime rows for the realtime scope", async () => {
@@ -296,7 +325,29 @@ describe("processOutboxEvents", () => {
       handlers: handlers(),
     });
 
-    expect(result).toEqual({ processed: 0, skipped: 0, failed: 0, leaseLost: 1 });
+    // The ownership check before the handler already fails: the handler never runs.
+    expect(result).toEqual({ processed: 0, skipped: 0, failed: 0, leaseLost: 1, released: 0 });
+  });
+
+  it("counts a lease lost between the confirm and the terminal write once", async () => {
+    const route = routeExecute(
+      [{ id: "processed" }],
+      [{ id: "processed", type: REALTIME_EMIT_TYPE, payload: {}, attemptCount: 1, maxAttempts: 5 }],
+    );
+    dbMock.execute.mockImplementation(async (q: SQL) => {
+      // The confirm (lease extension) still owns the row; the completion misses.
+      if (render(q).includes(`"processed_at"`)) return { rowCount: 0, rows: [] };
+      return route(q);
+    });
+    const handler = vi.fn().mockResolvedValue("processed");
+
+    const result = await processOutboxEvents(1, {
+      workerId: "worker-1",
+      handlers: { [REALTIME_EMIT_TYPE]: handler },
+    });
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(result).toEqual({ processed: 0, skipped: 0, failed: 0, leaseLost: 1, released: 0 });
   });
 
   it("renews the lease while a handler is in flight", async () => {
@@ -327,14 +378,16 @@ describe("processOutboxEvents", () => {
       });
       await vi.advanceTimersByTimeAsync(1_000);
 
-      const renewed = dbMock.execute.mock.calls.some((c) => {
+      // One lease extension is the ownership confirm before the handler; the
+      // heartbeat adds another while the handler is still running.
+      const renewals = dbMock.execute.mock.calls.filter((c) => {
         const q = c[0] as SQL;
         return (
           render(q).includes(`SET "locked_until"`) &&
           paramsOf(q).includes("slow")
         );
       });
-      expect(renewed).toBe(true);
+      expect(renewals.length).toBeGreaterThanOrEqual(2);
 
       resolveHandler("processed");
       await processing;

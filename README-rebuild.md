@@ -169,6 +169,17 @@ Book 30 min, networking delivery 30 s, networking maintenance and embeddings
 timeout or at the shutdown deadline, and a job's next run never starts before
 the previous one settles. Email provider requests are bounded at 15 s.
 
+Queue tables are processed through the lease queue (`packages/db/src/lease-queue`;
+the outbox today). A run claims a batch (`status` → leased, `attempt_count` + 1,
+`locked_by`/`locked_until`), one heartbeat renews the lease of every row not
+finished, and each row's ownership is confirmed right before its handler; every
+terminal write is fenced by that ownership. On shutdown, and on a timeout for
+rows not started yet, the claimed rows go back to the queue without an attempt
+charged; a row whose handler a timeout interrupts is charged, so it still
+dead-letters eventually. The `lease-recovery` job (every 30 s) requeues rows
+whose lease expired (their worker died), attempt charged, or dead-letters them
+once their attempts are used up.
+
 One heartbeat timer (15 s) writes both the liveness file
 (`WORKER_HEARTBEAT_FILE`, read by the image HEALTHCHECK) and the process's
 `worker_heartbeats` row (service name from `RENDER_SERVICE_NAME`), which

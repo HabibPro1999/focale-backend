@@ -3,8 +3,8 @@ export {
   enqueueRealtimeOutboxEvent,
   getOutboxHealth,
   insertAuditLog,
+  outboxQueue,
   processOutboxEvents,
-  recoverStaleOutboxLeases,
 } from "./outbox";
 export type {
   EnqueueOutboxInput,
