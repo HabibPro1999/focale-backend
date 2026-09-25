@@ -28,3 +28,14 @@ export {
   type SettleRegistrationResult,
   type SettlementSnapshot,
 } from "./settle";
+export {
+  claimSponsorshipCodeTxn,
+  countSponsorshipUsages,
+  findSponsorshipCodeClaimants,
+  linkSponsorshipUsageTxn,
+  readLinkableSponsorship,
+  sponsorshipAmountFor,
+  type LinkableSponsorship,
+  type SponsorshipCodeClaim,
+  type SponsorshipCodeUnavailableReason,
+} from "./sponsorship-code";
