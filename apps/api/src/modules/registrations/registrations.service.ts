@@ -34,6 +34,7 @@ import {
   calculateSettlement,
   getSkip,
   isFullySettled,
+  normalizeSponsorshipCode,
   paginate,
   type PaginatedResult,
 } from "@app/shared";
@@ -42,6 +43,8 @@ import {
   withLockingTxn,
   lockRegistrationForUpdate,
   settleRegistrationTxn,
+  claimSponsorshipCodeTxn,
+  linkSponsorshipUsageTxn,
   syncNetworkingRegistration,
   enqueueTriggeredEmailOutbox,
   applyRegistrationSettlement,
@@ -86,6 +89,7 @@ import {
   type RegistrationSettlementWrite,
   type SettleRegistrationOptions,
   type SettleRegistrationResult,
+  type LinkableSponsorship,
 } from "@app/db";
 import { AccessService, toAccessAppException } from "../access/access.service";
 import { PricingService } from "../pricing/pricing.service";
@@ -165,8 +169,10 @@ function pgUnique(err: unknown): { isUnique: boolean; constraint: string } {
 
 /**
  * Reproduce the legacy global P2002 mapping (the target core filter does not yet
- * carry it): email+form unique violation → REGISTRATION_ALREADY_EXISTS, any other
- * unique violation → RES_3002. Idempotency-key violations are RE-THROWN untouched
+ * carry it): email+form unique violation → REGISTRATION_ALREADY_EXISTS, a
+ * signup code already stored on another registration (the partial unique index
+ * that follows plan 2.7) → SPONSORSHIP_CODE_ALREADY_USED, any other unique
+ * violation → RES_3002. Idempotency-key violations are RE-THROWN untouched
  * so the public-create idempotency-race recovery can still catch them.
  */
 function translateCreateUniqueViolation(err: unknown): never {
@@ -176,6 +182,13 @@ function translateCreateUniqueViolation(err: unknown): never {
     throw new AppException(
       ErrorCodes.REGISTRATION_ALREADY_EXISTS,
       "A registration with this email already exists for this form",
+      409,
+    );
+  }
+  if (/sponsorship_code/i.test(constraint)) {
+    throw new AppException(
+      ErrorCodes.SPONSORSHIP_CODE_ALREADY_USED,
+      "This sponsorship code has already been used",
       409,
     );
   }
@@ -585,16 +598,15 @@ export class RegistrationsService {
       formData: sanitizedFormData,
     };
 
-    // 5. Price calculation.
+    // 5. Price calculation, without the sponsorship code: the code is
+    //    consumed and priced under its lock in createRegistration (plan 2.7).
     const calculated = await this.pricing.calculatePrice(form.eventId, {
       formData: sanitizedFormData,
       selectedAccessItems: (normalizedInput.accessSelections ?? []).map((s) => ({
         accessId: s.accessId,
         quantity: s.quantity,
       })),
-      sponsorshipCodes: normalizedInput.sponsorshipCode
-        ? [normalizedInput.sponsorshipCode]
-        : [],
+      sponsorshipCodes: [],
     });
     const priceBreakdown: PriceBreakdown = {
       ...calculated,
@@ -611,7 +623,7 @@ export class RegistrationsService {
       return {
         created: true,
         registration: toPublicRegistration(created, { token: created.editToken }),
-        priceBreakdown,
+        priceBreakdown: created.priceBreakdown as PriceBreakdown,
       };
     } catch (err) {
       const { isUnique, constraint } = pgUnique(err);
@@ -635,6 +647,16 @@ export class RegistrationsService {
     }
   }
 
+  /**
+   * Create a public registration from its gross price (any sponsorship in
+   * `priceBreakdown` is ignored). A sponsorship code is consumed in the same
+   * transaction, in lock order sponsorship → registration → counters (plan
+   * 2.7): the code's sponsorship is locked first; an unknown or cancelled
+   * code → 400 INVALID_SPONSORSHIP_CODE, a used, reserved or already claimed
+   * one → 409 SPONSORSHIP_CODE_ALREADY_USED. Otherwise the registration is
+   * inserted, the sponsorship linked (usage + USED) and the registration
+   * settled: fully covered → SPONSORED, holding paid places.
+   */
   async createRegistration(
     input: CreateRegistrationInput,
     priceBreakdown: PriceBreakdown,
@@ -647,13 +669,19 @@ export class RegistrationsService {
       lastName,
       phone,
       accessSelections,
-      sponsorshipCode,
       paymentMethod,
       labName,
       idempotencyKey,
       linkBaseUrl,
     } = input;
     const email = normalizeEmail(rawEmail);
+    const sponsorshipCode = normalizeSponsorshipCode(input.sponsorshipCode);
+    const grossBreakdown: PriceBreakdown = {
+      ...priceBreakdown,
+      sponsorships: [],
+      sponsorshipTotal: 0,
+      total: priceBreakdown.subtotal,
+    };
 
     if (linkBaseUrl) {
       assertPublicLinkBaseUrlAllowed(
@@ -687,7 +715,12 @@ export class RegistrationsService {
 
     let createdId!: string;
     try {
-      await withTxn(async (tx) => {
+      await withLockingTxn(async (tx) => {
+      // The sponsorship lock comes first (lock order), before any counter.
+      const sponsorship = sponsorshipCode
+        ? await this.claimSponsorshipCode(tx, eventId, sponsorshipCode)
+        : null;
+
       const event = await getEventForRegistrationCreate(eventId, tx);
       if (!event) {
         throw new AppException(
@@ -722,14 +755,14 @@ export class RegistrationsService {
           paymentStatus: "PENDING",
           paymentMethod: paymentMethod ?? null,
           labName: paymentMethod === "LAB_SPONSORSHIP" ? (labName ?? null) : null,
-          totalAmount: priceBreakdown.subtotal,
-          currency: priceBreakdown.currency,
-          priceBreakdown,
-          baseAmount: priceBreakdown.calculatedBasePrice,
-          discountAmount: calculateDiscountAmount(priceBreakdown.appliedRules),
-          accessAmount: priceBreakdown.accessTotal,
-          sponsorshipCode: sponsorshipCode ?? null,
-          sponsorshipAmount: priceBreakdown.sponsorshipTotal,
+          totalAmount: grossBreakdown.subtotal,
+          currency: grossBreakdown.currency,
+          priceBreakdown: grossBreakdown,
+          baseAmount: grossBreakdown.calculatedBasePrice,
+          discountAmount: calculateDiscountAmount(grossBreakdown.appliedRules),
+          accessAmount: grossBreakdown.accessTotal,
+          sponsorshipCode,
+          sponsorshipAmount: 0,
           accessTypeIds: accessSelections?.map((s) => s.accessId) ?? [],
           editToken,
           linkBaseUrl: linkBaseUrl ?? null,
@@ -749,6 +782,11 @@ export class RegistrationsService {
 
       await this.incrementEventRegistered(tx, eventId);
 
+      const linked = sponsorship
+        ? await this.consumeSponsorshipAtSignup(tx, { sponsorship, registrationId: id, eventId, grossBreakdown })
+        : null;
+      const paymentStatus = linked?.settled.after.paymentStatus ?? "PENDING";
+
       await this.audit(tx, {
         entityId: id,
         action: "CREATE",
@@ -756,10 +794,34 @@ export class RegistrationsService {
           email: { old: null, new: email },
           firstName: { old: null, new: firstName ?? null },
           lastName: { old: null, new: lastName ?? null },
-          totalAmount: { old: null, new: priceBreakdown.subtotal },
+          totalAmount: { old: null, new: grossBreakdown.subtotal },
+          ...(linked
+            ? {
+                sponsorshipCode: { old: null, new: sponsorshipCode },
+                sponsorshipAmount: { old: null, new: linked.settled.after.sponsorshipAmount },
+                paymentStatus: { old: null, new: paymentStatus },
+              }
+            : {}),
         },
         performedBy: "PUBLIC",
       });
+      if (linked) {
+        await insertAuditLog(
+          {
+            entityType: "Sponsorship",
+            entityId: linked.sponsorshipId,
+            action: "LINK_TO_REGISTRATION",
+            changes: {
+              registrationId: { old: null, new: id },
+              amountApplied: { old: 0, new: linked.amountApplied },
+              sponsorshipAmount: { old: 0, new: linked.settled.after.sponsorshipAmount },
+              status: { old: "PENDING", new: "USED" },
+            },
+            performedBy: "PUBLIC",
+          },
+          tx,
+        );
+      }
 
       const clientId = event.clientId;
       const pending: AppEvent[] = [
@@ -767,10 +829,19 @@ export class RegistrationsService {
           type: "registration.created",
           clientId,
           eventId,
-          payload: { id, email, paymentStatus: "PENDING" },
+          payload: { id, email, paymentStatus },
           ts: Date.now(),
         },
       ];
+      if (linked) {
+        pending.push({
+          type: "sponsorship.linked",
+          clientId,
+          eventId,
+          payload: { id: linked.sponsorshipId, registrationId: id },
+          ts: Date.now(),
+        });
+      }
       if (accessSelections && accessSelections.length > 0) {
         pending.push({
           type: "eventAccess.countsChanged",
@@ -794,6 +865,78 @@ export class RegistrationsService {
 
     const enriched = await this.getEnrichedRow(createdId);
     return enriched;
+  }
+
+  /**
+   * Lock the sponsorship of a signup code and check it can be consumed; the
+   * first step of the create transaction.
+   */
+  private async claimSponsorshipCode(
+    tx: DbExecutor,
+    eventId: string,
+    code: string,
+  ): Promise<LinkableSponsorship> {
+    const claim = await claimSponsorshipCodeTxn(tx, eventId, code);
+    if (claim.outcome === "invalid") {
+      throw new AppException(
+        ErrorCodes.INVALID_SPONSORSHIP_CODE,
+        "This sponsorship code is not valid for this event",
+        400,
+        { sponsorshipCode: code },
+      );
+    }
+    if (claim.outcome === "used") {
+      throw new AppException(
+        ErrorCodes.SPONSORSHIP_CODE_ALREADY_USED,
+        "This sponsorship code has already been used",
+        409,
+        { sponsorshipCode: code },
+      );
+    }
+    return claim.sponsorship;
+  }
+
+  /**
+   * Link the claimed sponsorship to the new registration and settle it
+   * (usage recomputed, status derived: fully covered → SPONSORED), taking the
+   * paid places that status holds.
+   */
+  private async consumeSponsorshipAtSignup(
+    tx: DbExecutor,
+    args: {
+      sponsorship: LinkableSponsorship;
+      registrationId: string;
+      eventId: string;
+      grossBreakdown: PriceBreakdown;
+    },
+  ): Promise<{ sponsorshipId: string; amountApplied: number; settled: SettleRegistrationResult }> {
+    const { sponsorship, registrationId, eventId, grossBreakdown } = args;
+    const usage = await linkSponsorshipUsageTxn(tx, {
+      sponsorship,
+      registrationId,
+      priceBreakdown: grossBreakdown,
+      appliedBy: "PUBLIC",
+    });
+    const settled = await settleRegistrationTxn(tx, registrationId, {
+      priceBreakdown: {
+        ...grossBreakdown,
+        sponsorships: [
+          {
+            code: sponsorship.code,
+            amount: Math.min(usage.amountApplied, grossBreakdown.subtotal),
+            valid: true,
+          },
+        ],
+      },
+      coveredAccessIdsBefore: [],
+    }).catch((err: unknown) => {
+      throw toAccessAppException(err);
+    });
+    if (!settled) {
+      throw new Error(`Registration ${registrationId} vanished inside its create transaction`);
+    }
+    await this.access.handleCapacityReached(eventId, settled.paidAccess.incremented, tx);
+    return { sponsorshipId: sponsorship.id, amountApplied: usage.amountApplied, settled };
   }
 
   private async getEnrichedRow(id: string): Promise<RegistrationWithRelations> {
