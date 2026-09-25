@@ -1,17 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // --- Mock the @app/db fn layer (the raw-SQL/lease primitives are DB-tier) -----
-vi.mock("@app/db", () => ({
-  EMAIL_LEASE_MS: 10 * 60 * 1000,
+// The email lease queue is a fake driven by the real runLeased (its SQL is
+// covered by the DB contract suite).
+const queue = vi.hoisted(() => ({
+  spec: { name: "email", leaseMs: 600_000 },
+  claim: vi.fn(),
+  renew: vi.fn(),
+  confirm: vi.fn(),
+  release: vi.fn(),
+}));
+vi.mock("@app/db", async () => ({
+  emailQueue: queue,
+  runLeased: (await vi.importActual<typeof import("@app/db")>("@app/db")).runLeased,
   getTemplateByTrigger: vi.fn(),
   createEmailLog: vi.fn(),
   hasActiveEmailLogForRegistrationTrigger: vi.fn(),
   hasActiveSponsorshipEmailLog: vi.fn(),
-  claimQueuedEmailLogs: vi.fn(),
   getClaimedEmailLogsForProcessing: vi.fn(),
-  recoverStaleEmailLeases: vi.fn(),
   writeResolvedSubjectIfLeaseHeld: vi.fn(),
-  refreshEmailLease: vi.fn(),
   markEmailSent: vi.fn(),
   markEmailFailed: vi.fn(),
   markEmailSkipped: vi.fn(),
@@ -38,11 +45,8 @@ import {
   createEmailLog,
   hasActiveEmailLogForRegistrationTrigger,
   hasActiveSponsorshipEmailLog,
-  claimQueuedEmailLogs,
   getClaimedEmailLogsForProcessing,
-  recoverStaleEmailLeases,
   writeResolvedSubjectIfLeaseHeld,
-  refreshEmailLease,
   markEmailSent,
   markEmailFailed,
   markEmailSkipped,
@@ -51,6 +55,7 @@ import {
   getEmailLogRealtimeTarget,
   enqueueRealtimeOutboxEvent,
 } from "@app/db";
+import { JobTimeoutError, WorkerShutdownError } from "@app/shared";
 import { buildEmailContextWithAccess, resolveVariables } from "./rendering/index";
 import {
   queueEmail,
@@ -67,12 +72,11 @@ const mocked = <T>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
 beforeEach(() => {
   vi.clearAllMocks();
   // Sensible defaults: lease always held, sends succeed.
-  mocked(recoverStaleEmailLeases).mockResolvedValue({
-    requeued: 0,
-    deadLettered: 0,
-  });
+  queue.claim.mockResolvedValue([]);
+  queue.renew.mockImplementation(async (_worker: string, ids: string[]) => ids);
+  queue.confirm.mockResolvedValue(true);
+  queue.release.mockImplementation(async (_worker: string, ids: string[]) => ids.length);
   mocked(writeResolvedSubjectIfLeaseHeld).mockResolvedValue(true);
-  mocked(refreshEmailLease).mockResolvedValue(true);
   mocked(markEmailSent).mockResolvedValue(true);
   mocked(markEmailFailed).mockResolvedValue(true);
   mocked(markEmailSkipped).mockResolvedValue(true);
@@ -105,7 +109,7 @@ function claimed(overrides: Record<string, unknown> = {}): any {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function runOne(log: any) {
-  mocked(claimQueuedEmailLogs).mockResolvedValue([log.id]);
+  queue.claim.mockResolvedValue([log.id]);
   mocked(getClaimedEmailLogsForProcessing).mockResolvedValue([log]);
   return processEmailQueue(50, { workerId: "w1" });
 }
@@ -274,15 +278,13 @@ describe("queueSponsorshipEmail", () => {
 });
 
 describe("processEmailQueue", () => {
-  it("recovers stale leases, claims a batch and sends the happy path", async () => {
+  it("claims a batch through the lease queue and sends the happy path", async () => {
     const res = await runOne(claimed());
-    expect(recoverStaleEmailLeases).toHaveBeenCalled();
-    expect(claimQueuedEmailLogs).toHaveBeenCalledWith(
-      "w1",
-      50,
-      expect.any(Date),
-      expect.any(Date),
-    );
+    expect(queue.claim).toHaveBeenCalledWith("w1", 50, 600_000);
+    expect(getClaimedEmailLogsForProcessing).toHaveBeenCalledWith("w1", ["log-1"]);
+    // Ownership confirmed before the row starts and again right before the send.
+    expect(queue.confirm).toHaveBeenCalledTimes(2);
+    expect(queue.release).not.toHaveBeenCalled();
     expect(sendEmailMock).toHaveBeenCalledWith(
       expect.objectContaining({
         to: "to@x.com",
@@ -307,41 +309,110 @@ describe("processEmailQueue", () => {
     ]);
   });
 
-  it("stops before the next chunk of 10 once its signal aborts", async () => {
+  it("claims 20 by default", async () => {
+    await processEmailQueue(undefined, { workerId: "w1" });
+    expect(queue.claim).toHaveBeenCalledWith("w1", 20, 600_000);
+  });
+
+  it("on shutdown starts no new row and releases the unstarted ones without an attempt charged", async () => {
     const controller = new AbortController();
     const logs = Array.from({ length: 12 }, (_, index) => claimed({ id: `log-${index}` }));
-    mocked(claimQueuedEmailLogs).mockResolvedValue(logs.map((log) => log.id));
+    queue.claim.mockResolvedValue(logs.map((log) => log.id));
     mocked(getClaimedEmailLogsForProcessing).mockResolvedValue(logs);
     sendEmailMock.mockImplementation(async () => {
-      controller.abort();
+      controller.abort(new WorkerShutdownError());
       return { success: true, messageId: "m" };
     });
 
     const res = await processEmailQueue(50, { workerId: "w1", signal: controller.signal });
 
-    // The first chunk (10 concurrent sends) finishes; the remaining 2 are not started.
-    expect(sendEmailMock).toHaveBeenCalledTimes(10);
-    expect(res).toEqual({ processed: 12, sent: 10, failed: 0, skipped: 0 });
+    // At most the 10 rows already in flight (10 lanes) are sent; sends are never interrupted.
+    const sends = sendEmailMock.mock.calls.length;
+    expect(sends).toBeGreaterThanOrEqual(1);
+    expect(sends).toBeLessThanOrEqual(10);
+    expect(res.sent).toBe(sends);
+    expect(markEmailFailed).not.toHaveBeenCalled();
+    const released = queue.release.mock.calls.flatMap(([, ids]) => ids as string[]);
+    expect(released).toEqual(expect.arrayContaining(["log-10", "log-11"]));
+    expect(released).toHaveLength(12 - sends);
+  });
+
+  it("a shutdown before the send releases the row, unsent and uncharged", async () => {
+    const controller = new AbortController();
+    mocked(writeResolvedSubjectIfLeaseHeld).mockImplementation(async () => {
+      controller.abort(new WorkerShutdownError());
+      return true;
+    });
+    queue.claim.mockResolvedValue(["log-1"]);
+    mocked(getClaimedEmailLogsForProcessing).mockResolvedValue([claimed()]);
+
+    const res = await processEmailQueue(50, { workerId: "w1", signal: controller.signal });
+
+    expect(sendEmailMock).not.toHaveBeenCalled();
+    expect(markEmailFailed).not.toHaveBeenCalled();
+    expect(queue.release).toHaveBeenCalledWith("w1", ["log-1"]);
+    expect(res).toEqual({ processed: 1, sent: 0, failed: 0, skipped: 0 });
+  });
+
+  it("a job timeout before the send fails the row (attempt charged)", async () => {
+    const controller = new AbortController();
+    mocked(writeResolvedSubjectIfLeaseHeld).mockImplementation(async () => {
+      controller.abort(new JobTimeoutError("email-queue", 120_000));
+      return true;
+    });
+    queue.claim.mockResolvedValue(["log-1"]);
+    mocked(getClaimedEmailLogsForProcessing).mockResolvedValue([claimed()]);
+
+    const res = await processEmailQueue(50, { workerId: "w1", signal: controller.signal });
+
+    expect(sendEmailMock).not.toHaveBeenCalled();
+    expect(markEmailFailed).toHaveBeenCalledWith(
+      "log-1",
+      "w1",
+      "Job email-queue exceeded its 120000 ms timeout",
+      1,
+      3,
+    );
+    expect(queue.release).not.toHaveBeenCalled();
+    expect(res).toEqual({ processed: 1, sent: 0, failed: 1, skipped: 0 });
+  });
+
+  it("drains batch after batch until one comes back short", async () => {
+    const logs = ["a", "b", "c"].map((id) => claimed({ id }));
+    queue.claim
+      .mockResolvedValueOnce(["a", "b"])
+      .mockResolvedValueOnce(["c"]);
+    mocked(getClaimedEmailLogsForProcessing).mockImplementation(async (_worker: string, ids: string[]) =>
+      logs.filter((log) => ids.includes(log.id)),
+    );
+
+    const res = await processEmailQueue(2, { workerId: "w1", drainUntil: Date.now() + 60_000 });
+
+    expect(queue.claim).toHaveBeenCalledTimes(2);
+    expect(sendEmailMock).toHaveBeenCalledTimes(3);
+    expect(res).toEqual({ processed: 3, sent: 3, failed: 0, skipped: 0 });
+  });
+
+  it("claims one batch only without a drain window", async () => {
+    queue.claim.mockResolvedValue(["log-1", "log-2"]);
+    mocked(getClaimedEmailLogsForProcessing).mockResolvedValue([
+      claimed({ id: "log-1" }),
+      claimed({ id: "log-2" }),
+    ]);
+    await processEmailQueue(2, { workerId: "w1" });
+    expect(queue.claim).toHaveBeenCalledTimes(1);
   });
 
   it("returns a zero result when nothing is due", async () => {
-    mocked(claimQueuedEmailLogs).mockResolvedValue([]);
-    mocked(getClaimedEmailLogsForProcessing).mockResolvedValue([]);
     const res = await processEmailQueue(50, { workerId: "w1" });
     expect(res).toEqual({ processed: 0, sent: 0, failed: 0, skipped: 0 });
+    expect(getClaimedEmailLogsForProcessing).not.toHaveBeenCalled();
     expect(sendEmailMock).not.toHaveBeenCalled();
   });
 
   it("respects the batchSize argument", async () => {
-    mocked(claimQueuedEmailLogs).mockResolvedValue([]);
-    mocked(getClaimedEmailLogsForProcessing).mockResolvedValue([]);
     await processEmailQueue(7, { workerId: "w1" });
-    expect(claimQueuedEmailLogs).toHaveBeenCalledWith(
-      "w1",
-      7,
-      expect.any(Date),
-      expect.any(Date),
-    );
+    expect(queue.claim).toHaveBeenCalledWith("w1", 7, 600_000);
   });
 
   it("skips (not fails) an email with no template relation", async () => {
@@ -478,7 +549,8 @@ describe("processEmailQueue", () => {
   });
 
   it("does NOT call the provider when the lease is lost before the send", async () => {
-    mocked(refreshEmailLease).mockResolvedValue(false);
+    // The row's start confirm passes; the pre-send ownership check fails.
+    queue.confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     const res = await runOne(claimed());
     expect(sendEmailMock).not.toHaveBeenCalled();
     expect(res).toEqual({ processed: 1, sent: 0, failed: 0, skipped: 0 });
@@ -517,7 +589,7 @@ describe("processEmailQueue", () => {
 
     it("attaches generated certificates and sends", async () => {
       const gen = vi.fn().mockResolvedValue([attachment, attachment]);
-      mocked(claimQueuedEmailLogs).mockResolvedValue(["log-1"]);
+      queue.claim.mockResolvedValue(["log-1"]);
       mocked(getClaimedEmailLogsForProcessing).mockResolvedValue([certLog()]);
       const res = await processEmailQueue(50, {
         workerId: "w1",
@@ -537,7 +609,7 @@ describe("processEmailQueue", () => {
 
     it("fails when fewer attachments are generated than queued", async () => {
       const gen = vi.fn().mockResolvedValue([attachment]); // 1 < 2
-      mocked(claimQueuedEmailLogs).mockResolvedValue(["log-1"]);
+      queue.claim.mockResolvedValue(["log-1"]);
       mocked(getClaimedEmailLogsForProcessing).mockResolvedValue([certLog()]);
       const res = await processEmailQueue(50, {
         workerId: "w1",
@@ -556,7 +628,7 @@ describe("processEmailQueue", () => {
 
     it("skips when the generator returns zero attachments", async () => {
       const gen = vi.fn().mockResolvedValue([]);
-      mocked(claimQueuedEmailLogs).mockResolvedValue(["log-1"]);
+      queue.claim.mockResolvedValue(["log-1"]);
       mocked(getClaimedEmailLogsForProcessing).mockResolvedValue([certLog()]);
       const res = await processEmailQueue(50, {
         workerId: "w1",
@@ -573,7 +645,7 @@ describe("processEmailQueue", () => {
 
     it("fails when certificate generation throws", async () => {
       const gen = vi.fn().mockRejectedValue(new Error("pdf boom"));
-      mocked(claimQueuedEmailLogs).mockResolvedValue(["log-1"]);
+      queue.claim.mockResolvedValue(["log-1"]);
       mocked(getClaimedEmailLogsForProcessing).mockResolvedValue([certLog()]);
       const res = await processEmailQueue(50, {
         workerId: "w1",
@@ -618,7 +690,7 @@ describe("processEmailQueue", () => {
 
       it("attaches generated certificates for an abstract-linked email and sends", async () => {
         const gen = vi.fn().mockResolvedValue([attachment, attachment]);
-        mocked(claimQueuedEmailLogs).mockResolvedValue(["log-1"]);
+        queue.claim.mockResolvedValue(["log-1"]);
         mocked(getClaimedEmailLogsForProcessing).mockResolvedValue([
           abstractCertLog(),
         ]);

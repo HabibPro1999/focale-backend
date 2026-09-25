@@ -5,6 +5,8 @@ import {
   DB_NOW,
   abstractBookJobs,
   abstractBookQueue,
+  emailLogs,
+  emailQueue,
   getDb,
   outboxEvents,
   outboxQueue,
@@ -136,7 +138,60 @@ const abstractBookFixture: QueueFixture = {
   },
 };
 
-const FIXTURES: QueueFixture[] = [outboxFixture, abstractBookFixture];
+// Email: attempt_count counts claims (claimable while <= max_retries, so
+// max_retries + 1 attempts); retry_count counts failures and expired leases
+// and decides dead-lettering. Both start at the attempts already used.
+const emailFixture: QueueFixture = {
+  name: "email",
+  queue: emailQueue,
+  table: "email_logs",
+  async seed(n, options = {}) {
+    const base = Date.now() - 60_000;
+    const used = options.attemptsLeft === undefined ? 0 : MAX_ATTEMPTS - options.attemptsLeft;
+    const rows = Array.from({ length: n }, (_, i) => ({
+      recipientEmail: `lease-${i}@example.test`,
+      subject: "",
+      status: "QUEUED" as const,
+      maxRetries: MAX_ATTEMPTS - 1,
+      attemptCount: used,
+      retryCount: used,
+      queuedAt: new Date(base + i * 10),
+    }));
+    const inserted = await getDb()
+      .insert(emailLogs)
+      .values(rows)
+      .returning({ id: emailLogs.id, queuedAt: emailLogs.queuedAt });
+    return inserted.sort((a, b) => a.queuedAt.getTime() - b.queuedAt.getTime()).map((row) => row.id);
+  },
+  async seedNotDue() {
+    const [row] = await getDb()
+      .insert(emailLogs)
+      .values({
+        recipientEmail: "later@example.test",
+        subject: "",
+        status: "QUEUED",
+        attemptCount: 1,
+        retryCount: 1,
+        nextAttemptAt: new Date(Date.now() + 3_600_000),
+      })
+      .returning({ id: emailLogs.id });
+    return row!.id;
+  },
+  completeSet: sql`"status" = 'SENT', "sent_at" = ${DB_NOW}`,
+  completedStatus: "SENT",
+  failSet: sql`"status" = 'QUEUED', "error_message" = 'boom', "retry_count" = "retry_count" + 1,
+    "next_attempt_at" = ${DB_NOW} + interval '1 minute'`,
+  failedStatus: "QUEUED",
+  releasedStatus: "QUEUED",
+  requeuedStatus: "QUEUED",
+  deadStatus: "FAILED",
+  requeueBackoff: true,
+  async reset() {
+    await getDb().delete(emailLogs);
+  },
+};
+
+const FIXTURES: QueueFixture[] = [outboxFixture, abstractBookFixture, emailFixture];
 
 interface LeaseRow {
   status: string;
@@ -419,3 +474,50 @@ for (const fx of FIXTURES) {
     });
   });
 }
+
+describe.runIf(dbTestsEnabled())("db tier: email lease queue ownership", () => {
+  beforeEach(() => emailFixture.reset());
+  afterEach(() => emailFixture.reset());
+
+  it("never claims or recovers rows the networking dispatcher owns", async () => {
+    const networking = { dispatchOwner: "networking" };
+    const [queued, sending] = await getDb()
+      .insert(emailLogs)
+      .values([
+        { recipientEmail: "n1@example.test", subject: "", status: "QUEUED", contextSnapshot: networking },
+        {
+          recipientEmail: "n2@example.test",
+          subject: "",
+          status: "SENDING",
+          contextSnapshot: networking,
+          attemptCount: 1,
+          lockedBy: "networking-worker",
+          lockedUntil: new Date(Date.now() - 3_600_000),
+        },
+      ])
+      .returning({ id: emailLogs.id });
+    const [ordinary] = await emailFixture.seed(1);
+
+    expect(await claimExactly(emailQueue, "w1", 1)).toEqual([ordinary]);
+    expect(await emailQueue.claim("w1", 10)).toEqual([]);
+    expect(await emailQueue.recoverStale()).toEqual({ requeued: 0, deadLettered: 0 });
+    expect(await readRow("email_logs", queued!.id)).toMatchObject({ status: "QUEUED", owner: null });
+    expect(await readRow("email_logs", sending!.id)).toMatchObject({ status: "SENDING", owner: "networking-worker" });
+  });
+
+  it("dead-letters on retry_count, and failures and expired leases both count", async () => {
+    // max_retries 1: one failure plus one expired lease use up the retries.
+    const [id] = await getDb()
+      .insert(emailLogs)
+      .values({ recipientEmail: "r@example.test", subject: "", status: "QUEUED", maxRetries: 1 })
+      .returning({ id: emailLogs.id });
+    await claimExactly(emailQueue, "w1", 1);
+    expect(await emailQueue.fail("w1", id!.id, emailFixture.failSet)).toBe(true);
+    await makeDue("email_logs", [id!.id]);
+    await claimExactly(emailQueue, "w2", 1);
+    await setLeaseLeft("email_logs", [id!.id], -1_000);
+
+    expect(await emailQueue.recoverStale()).toEqual({ requeued: 0, deadLettered: 1 });
+    expect(await readRow("email_logs", id!.id)).toMatchObject({ status: "FAILED", attempts: 2, owner: null });
+  });
+});

@@ -169,8 +169,8 @@ Book 30 min, networking delivery 30 s, networking maintenance and embeddings
 timeout or at the shutdown deadline, and a job's next run never starts before
 the previous one settles. Email provider requests are bounded at 15 s.
 
-Queue tables are processed through the lease queue (`packages/db/src/lease-queue`;
-the outbox and the Abstract Book jobs so far). A run claims a batch (`status` → leased, `attempt_count` + 1,
+Queue tables are processed through the lease queue (`packages/db/src/lease-queue`:
+the outbox, the Abstract Book jobs and the email queue). A run claims a batch (`status` → leased, `attempt_count` + 1,
 `locked_by`/`locked_until`), one heartbeat renews the lease of every row not
 finished, and each row's ownership is confirmed right before its handler; every
 terminal write is fenced by that ownership. On shutdown, and on a timeout for
@@ -186,6 +186,14 @@ running). A renewal that finds the job taken over aborts the render before
 anything is uploaded or written. Requesting a book while the event's job is
 `RUNNING` with an expired lease recovers that job first (requeued, or `FAILED`
 once its 3 attempts are used up, which lets a new job start).
+
+Email queue: every 5 s a run claims batches of 20 (10 sends at a time) and
+keeps claiming until the queue is empty or its drain window ends (the 120 s
+budget minus 45 s for the batch in flight). Lease 10 min; ownership is
+re-checked right before each provider call, and a send already handed to the
+provider is never interrupted. An expired lease is requeued with the retry
+backoff (1, 5, then 15 min), or `FAILED` once `retry_count` reaches
+`max_retries`; rows dispatched by networking are left to its own worker.
 
 One heartbeat timer (15 s) writes both the liveness file
 (`WORKER_HEARTBEAT_FILE`, read by the image HEALTHCHECK) and the process's

@@ -3,8 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const db = vi.hoisted(() => ({
   outboxQueue: { spec: { name: "outbox:all" }, recoverStale: vi.fn() },
   abstractBookQueue: { spec: { name: "abstract-book" }, recoverStale: vi.fn() },
+  emailQueue: { spec: { name: "email" }, recoverStale: vi.fn() },
 }));
-const queues = () => [db.outboxQueue, db.abstractBookQueue];
+const queues = () => [db.outboxQueue, db.abstractBookQueue, db.emailQueue];
 vi.mock("@app/db", () => db);
 
 import { LeaseRecoveryJob, recoverableQueues } from "./lease-recovery.job";
@@ -50,6 +51,7 @@ describe("LeaseRecoveryJob", () => {
     await expect(new LeaseRecoveryJob().run(context)).rejects.toThrow("lease recovery failed for 1 queue(s)");
     expect(log.error).toHaveBeenCalled();
     expect(db.abstractBookQueue.recoverStale).toHaveBeenCalledOnce();
+    expect(db.emailQueue.recoverStale).toHaveBeenCalledOnce();
   });
 
   it("does nothing once its signal has aborted", async () => {

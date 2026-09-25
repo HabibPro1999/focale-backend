@@ -15,8 +15,7 @@ import {
   networkingStore,
   maintainNetworkingLifecycle,
   latestNetworkingPostEventReport,
-  claimQueuedEmailLogs,
-  recoverStaleEmailLeases,
+  emailQueue,
   updateEmailLogById,
   type NetworkingRow,
 } from "@app/db";
@@ -649,13 +648,11 @@ describe.runIf(enabled)("networking worker real isolated database", () => {
       );
     const claimed: string[] = [];
     await vi.waitFor(async () => {
-      claimed.push(...await claimQueuedEmailLogs(
-        "ordinary-test-worker", 100, new Date(), new Date(Date.now() + 60000),
-      ));
+      claimed.push(...await emailQueue.claim("ordinary-test-worker", 100, 60000));
       expect(claimed).toContain(ids[1]);
     }, { timeout: 3000, interval: 20 });
     expect(claimed).not.toContain(ids[0]);
-    await recoverStaleEmailLeases();
+    await emailQueue.recoverStale();
     expect((await log(ids[2])).status).toBe("SENDING");
     expect((await log(ids[4])).status).toBe("SENDING");
     expect((await log(ids[3])).status).toBe("QUEUED");
