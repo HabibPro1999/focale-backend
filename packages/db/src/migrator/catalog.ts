@@ -153,6 +153,15 @@ function probesForStatement(
     return probes;
   }
 
+  // An index rebuilt under a temporary name and renamed back (0024): the old
+  // name is gone and the new one exists.
+  match = new RegExp(`^ALTER\\s+INDEX\\s+(?:IF\\s+EXISTS\\s+)?${QUALIFIED_IDENTIFIER}\\s+RENAME\\s+TO\\s+${IDENTIFIER}`, "i").exec(sql);
+  if (match) {
+    probes.push(findProbe(migration, statementIndex, "index", objectName(match, 1), { expectedPresent: false }));
+    probes.push(findProbe(migration, statementIndex, "index", identifierValue(match, 5)));
+    return probes;
+  }
+
   match = new RegExp(`^ALTER\\s+TABLE\\s+${QUALIFIED_IDENTIFIER}\\s+ADD\\s+COLUMN\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?${IDENTIFIER}`, "i").exec(sql);
   if (match) {
     probes.push(findProbe(migration, statementIndex, "column", identifierValue(match, 5), { table: objectName(match, 1) }));

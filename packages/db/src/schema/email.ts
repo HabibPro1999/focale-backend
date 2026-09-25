@@ -132,15 +132,17 @@ export const emailLogs = pgTable(
     index("email_logs_recipient_email_idx").on(t.recipientEmail),
     index("email_logs_sendgrid_message_id_idx").on(t.providerMessageId),
     index("email_logs_trigger_queued_at_idx").on(t.trigger, t.queuedAt),
+    // Certificate emails are deduped per certificate template, under the
+    // event lock, not by these two indexes (0024).
     uniqueIndex("email_logs_registration_trigger_active_key")
       .on(t.registrationId, t.trigger)
-      .where(sql`${t.registrationId} IS NOT NULL AND ${t.trigger} IS NOT NULL AND ${t.status} IN ('QUEUED', 'SENDING', 'SENT', 'DELIVERED') AND ${t.queuedAt} >= TIMESTAMP '2026-05-29 00:03:03'`),
+      .where(sql`${t.registrationId} IS NOT NULL AND ${t.trigger} IS NOT NULL AND ${t.status} IN ('QUEUED', 'SENDING', 'SENT', 'DELIVERED') AND ${t.queuedAt} >= TIMESTAMP '2026-05-29 00:03:03' AND ${t.trigger} <> 'CERTIFICATE_SENT'`),
     uniqueIndex("email_logs_abstract_submission_ack_active_key")
       .on(t.abstractId, t.abstractTrigger, t.recipientEmail)
       .where(sql`${t.abstractId} IS NOT NULL AND ${t.abstractTrigger} = 'ABSTRACT_SUBMISSION_ACK' AND ${t.status} IN ('QUEUED', 'SENDING', 'SENT', 'DELIVERED')`),
     uniqueIndex("email_logs_template_recipient_trigger_active_key")
       .on(t.templateId, t.recipientEmail, t.trigger)
-      .where(sql`${t.templateId} IS NOT NULL AND ${t.trigger} IS NOT NULL AND ${t.status} IN ('QUEUED', 'SENDING', 'SENT', 'DELIVERED') AND ${t.queuedAt} >= TIMESTAMP '2026-05-29 00:03:03'`),
+      .where(sql`${t.templateId} IS NOT NULL AND ${t.trigger} IS NOT NULL AND ${t.status} IN ('QUEUED', 'SENDING', 'SENT', 'DELIVERED') AND ${t.queuedAt} >= TIMESTAMP '2026-05-29 00:03:03' AND ${t.trigger} <> 'CERTIFICATE_SENT'`),
     uniqueIndex("email_logs_dedupe_key_active_key")
       .on(t.dedupeKey)
       .where(sql`${t.dedupeKey} IS NOT NULL AND ${t.status} IN ('QUEUED', 'SENDING', 'SENT', 'DELIVERED')`),

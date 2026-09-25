@@ -7,7 +7,7 @@ vi.mock("@app/db", () => ({
   listSponsorshipBatchesForBulk: vi.fn(),
   getClientById: vi.fn(),
   createEmailLog: vi.fn(),
-  createEmailLogsBulk: vi.fn(),
+  insertEmailLogsSkippingConflicts: vi.fn(),
   updateEmailLogById: vi.fn(),
 }));
 
@@ -34,7 +34,7 @@ import {
   listSponsorshipBatchesForBulk,
   getClientById,
   createEmailLog,
-  createEmailLogsBulk,
+  insertEmailLogsSkippingConflicts,
   updateEmailLogById,
 } from "@app/db";
 import { resolveVariables } from "@app/integrations";
@@ -104,7 +104,7 @@ describe("bulkSend — registrants", () => {
     vi.mocked(getRegistrationsByIds).mockResolvedValue([
       { id: "r1", email: "a@x.com", firstName: "A", lastName: null },
     ]);
-    vi.mocked(createEmailLogsBulk).mockResolvedValue(1);
+    vi.mocked(insertEmailLogsSkippingConflicts).mockResolvedValue(new Set(["log-1"]));
     const res = await service.bulkSend(event, "tmpl-1", {
       audience: "registrants",
       registrationIds: ["r1"],
@@ -114,7 +114,7 @@ describe("bulkSend — registrants", () => {
       queued: 1,
       message: "1 emails queued for sending",
     });
-    const rows = vi.mocked(createEmailLogsBulk).mock.calls[0][0];
+    const rows = vi.mocked(insertEmailLogsSkippingConflicts).mock.calls[0][0];
     expect(rows[0]).toMatchObject({
       templateId: "tmpl-1",
       registrationId: "r1",
@@ -128,7 +128,7 @@ describe("bulkSend — registrants", () => {
     vi.mocked(getRegistrationsByFilters).mockResolvedValue([
       { id: "r2", email: "b@x.com", firstName: null, lastName: null },
     ]);
-    vi.mocked(createEmailLogsBulk).mockResolvedValue(1);
+    vi.mocked(insertEmailLogsSkippingConflicts).mockResolvedValue(new Set(["log-1"]));
     await service.bulkSend(event, "tmpl-1", {
       audience: "registrants",
       filters: { paymentStatus: ["PAID"] },
@@ -138,8 +138,26 @@ describe("bulkSend — registrants", () => {
       accessTypeIds: undefined,
       role: undefined,
     });
-    const rows = vi.mocked(createEmailLogsBulk).mock.calls[0][0];
+    const rows = vi.mocked(insertEmailLogsSkippingConflicts).mock.calls[0][0];
     expect(rows[0].recipientName).toBeNull(); // no name → null
+  });
+
+  it("counts only the rows the insert kept (a row a unique index refused is skipped)", async () => {
+    vi.mocked(getRegistrationsByIds).mockResolvedValue([
+      { id: "r1", email: "a@x.com", firstName: "A", lastName: null },
+      { id: "r2", email: "b@x.com", firstName: "B", lastName: null },
+    ]);
+    vi.mocked(insertEmailLogsSkippingConflicts).mockResolvedValue(new Set(["log-1"]));
+    const res = await service.bulkSend(event, "tmpl-1", {
+      audience: "registrants",
+      registrationIds: ["r1", "r2"],
+    });
+    expect(vi.mocked(insertEmailLogsSkippingConflicts).mock.calls[0][0]).toHaveLength(2);
+    expect(res).toEqual({
+      success: true,
+      queued: 1,
+      message: "1 emails queued for sending",
+    });
   });
 
   it("returns queued:0 with the no-match message when nothing matches", async () => {
@@ -152,7 +170,7 @@ describe("bulkSend — registrants", () => {
       queued: 0,
       message: "No recipients matched the criteria",
     });
-    expect(createEmailLogsBulk).not.toHaveBeenCalled();
+    expect(insertEmailLogsSkippingConflicts).not.toHaveBeenCalled();
   });
 });
 
@@ -179,13 +197,13 @@ describe("bulkSend — sponsors", () => {
         ],
       },
     ]);
-    vi.mocked(createEmailLogsBulk).mockResolvedValue(1);
+    vi.mocked(insertEmailLogsSkippingConflicts).mockResolvedValue(new Set(["log-1"]));
 
     const res = await service.bulkSend(event, "tmpl-1", {
       audience: "sponsors",
     });
     expect(res.queued).toBe(1);
-    const rows = vi.mocked(createEmailLogsBulk).mock.calls[0][0];
+    const rows = vi.mocked(insertEmailLogsSkippingConflicts).mock.calls[0][0];
     expect(rows).toHaveLength(1); // merged into one
     expect(rows[0].recipientEmail).toBe("Lab@X.com"); // newest batch contact info
   });
@@ -201,7 +219,7 @@ describe("bulkSend — sponsors", () => {
       queued: 0,
       message: "No sponsors found for this event",
     });
-    expect(createEmailLogsBulk).not.toHaveBeenCalled();
+    expect(insertEmailLogsSkippingConflicts).not.toHaveBeenCalled();
   });
 });
 

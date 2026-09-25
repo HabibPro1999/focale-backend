@@ -229,8 +229,18 @@ describe("superseded probes", () => {
       const migrations = await loadMigrations(defaultMigrationsDirectory(), engine);
       const superseded = supersededObjectProbes(migrations);
       const nonEmpty = [...superseded].filter(([, keys]) => keys.size > 0);
-      // 0018 drops the per-event table-name index that 0012 creates.
-      expect(nonEmpty).toEqual([["0012", new Map([["index:networking_tables_event_name_key", "0018"]])]]);
+      // 0018 drops the per-event table-name index that 0012 creates; 0024
+      // rebuilds two 0001 email_logs indexes under the same names.
+      expect(nonEmpty).toEqual([
+        ["0012", new Map([["index:networking_tables_event_name_key", "0018"]])],
+        [
+          "0001",
+          new Map([
+            ["index:email_logs_registration_trigger_active_key", "0024"],
+            ["index:email_logs_template_recipient_trigger_active_key", "0024"],
+          ]),
+        ],
+      ]);
     }
   });
 
@@ -256,6 +266,28 @@ describe("superseded probes", () => {
     expect(view.state).toBe("all");
     expect(view.total).toBe(probes.length - 1);
     expect(view.superseded).toEqual(["index networking_tables.networking_tables_event_name_key (declared again by 0018)"]);
+  });
+
+  it("judges 0024 by its verify probe, since 0001 already created the same index names", async () => {
+    const migrations = await loadMigrations(defaultMigrationsDirectory(), "postgres");
+    const rebuild = migrations.find((migration) => migration.id === "0024")!;
+    expect(rebuild.directives.idempotent).toBe(true);
+    const probes = deriveCatalogProbes(rebuild);
+    // Every index probe passes on a database that only ran 0001 (same names,
+    // no *_rebuild left); only the definition check tells the two apart.
+    const state = (definitionsRebuilt: boolean) => {
+      const results = probes.map((probe) => ({ probe, passed: "query" in probe ? definitionsRebuilt : true }));
+      return adoptionCatalogState({
+        migrationId: "0024",
+        variant: "shared",
+        matched: results.filter((result) => result.passed).length,
+        total: results.length,
+        state: "partial",
+        probes: results,
+      }).state;
+    };
+    expect(state(false)).toBe("partial");
+    expect(state(true)).toBe("all");
   });
 });
 

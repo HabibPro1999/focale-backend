@@ -19,11 +19,9 @@ vi.mock("@app/db", () => ({
   deleteCertificateTemplateById: vi.fn(),
   listActiveImageReadyCertificateTemplates: vi.fn(),
   getRegistrationsForCertificateSend: vi.fn(),
-  getAlreadySentCertTemplateIds: vi.fn(),
   getTemplateByTrigger: vi.fn(),
-  createEmailLogsBulk: vi.fn(),
   getAbstractsForCertificateSend: vi.fn(),
-  getAlreadySentAbstractCertTemplateIds: vi.fn(),
+  queueCertificateEmailLogsTxn: vi.fn(),
 }));
 
 const mockStorageUpload = vi
@@ -75,11 +73,11 @@ import {
   deleteCertificateTemplateById,
   listActiveImageReadyCertificateTemplates,
   getRegistrationsForCertificateSend,
-  getAlreadySentCertTemplateIds,
   getTemplateByTrigger,
-  createEmailLogsBulk,
   getAbstractsForCertificateSend,
-  getAlreadySentAbstractCertTemplateIds,
+  queueCertificateEmailLogsTxn,
+  type CertificateEmailCandidate,
+  type CertificateEmailOutcome,
 } from "@app/db";
 import { StorageObjectNotFoundError } from "@app/integrations";
 import { CertificatesService } from "./certificates.service";
@@ -670,6 +668,39 @@ describe("CertificatesService", () => {
   // -------------------------------------------------------------------------
   // sendCertificates (orchestration: eligibility → context → dedup → queue)
   // -------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
+  // sendCertificates — the queueing transaction is faked: it dedupes each
+  // candidate against `sent` (target id → certificate ids) and refuses the
+  // targets in `conflicts`, like queueCertificateEmailLogsTxn.
+  // -------------------------------------------------------------------------
+  function fakeQueue(
+    sent: { registrations?: Record<string, string[]>; abstracts?: Record<string, string[]> } = {},
+    conflicts: string[] = [],
+  ) {
+    const outcomeFor =
+      (sentByTarget: Record<string, string[]> = {}) =>
+      (candidate: CertificateEmailCandidate): CertificateEmailOutcome => {
+        const done = new Set(sentByTarget[candidate.targetId] ?? []);
+        const remaining = candidate.certificates.filter((c) => !done.has(c.id));
+        if (remaining.length === 0) return { status: "already_sent" };
+        if (conflicts.includes(candidate.targetId)) return { status: "skipped_conflict" };
+        return {
+          status: "queued",
+          emailLogId: `log-${candidate.targetId}`,
+          certificates: remaining.map(({ id, name }) => ({ id, name })),
+        };
+      };
+    vi.mocked(queueCertificateEmailLogsTxn).mockImplementation(async (input) => ({
+      registrations: input.registrations.map(outcomeFor(sent.registrations)),
+      abstracts: input.abstracts.map(outcomeFor(sent.abstracts)),
+    }));
+  }
+
+  function queuedInput() {
+    const [[input]] = vi.mocked(queueCertificateEmailLogsTxn).mock.calls;
+    return input;
+  }
+
   describe("sendCertificates", () => {
     const event = { id: eventId, clientId: "c1" };
 
@@ -710,6 +741,8 @@ describe("CertificatesService", () => {
       };
     }
 
+    beforeEach(() => fakeQueue());
+
     it("throws 400 when no CERTIFICATE_SENT template is configured", async () => {
       vi.mocked(getTemplateByTrigger).mockResolvedValue(null);
 
@@ -733,7 +766,7 @@ describe("CertificatesService", () => {
       });
     });
 
-    it("queues one email per eligible registrant with the dedup key", async () => {
+    it("queues one email per eligible registrant through the event-locked transaction", async () => {
       vi.mocked(getTemplateByTrigger).mockResolvedValue({ id: "et1" } as never);
       vi.mocked(listActiveImageReadyCertificateTemplates).mockResolvedValue([
         certTemplate() as never,
@@ -741,8 +774,6 @@ describe("CertificatesService", () => {
       vi.mocked(getRegistrationsForCertificateSend).mockResolvedValue([
         registration() as never,
       ]);
-      vi.mocked(getAlreadySentCertTemplateIds).mockResolvedValue(new Map());
-      vi.mocked(createEmailLogsBulk).mockResolvedValue(1);
 
       const result = await service.sendCertificates(event, undefined);
 
@@ -750,25 +781,25 @@ describe("CertificatesService", () => {
         success: true,
         queued: 1,
         skipped: 0,
+        skippedConflict: 0,
         total: 1,
         breakdown: { "Cert A": 1 },
       });
-      expect(createEmailLogsBulk).toHaveBeenCalledWith([
-        expect.objectContaining({
-          trigger: "CERTIFICATE_SENT",
-          templateId: "et1",
-          registrationId: "reg-1",
-          recipientEmail: "a@b.com",
-          recipientName: "Ada Lovelace",
-          subject: "",
-          status: "QUEUED",
-          contextSnapshot: expect.objectContaining({
-            certificateCount: "1",
-            certificateList: "Cert A",
-            _certificateTemplateIds: ["c1"],
-          }),
-        }),
-      ]);
+      expect(queueCertificateEmailLogsTxn).toHaveBeenCalledTimes(1);
+      expect(queuedInput()).toEqual({
+        eventId,
+        emailTemplateId: "et1",
+        registrations: [
+          {
+            targetId: "reg-1",
+            recipientEmail: "a@b.com",
+            recipientName: "Ada Lovelace",
+            certificates: [{ id: "c1", name: "Cert A" }],
+            contextSnapshot: { eventName: "Event" },
+          },
+        ],
+        abstracts: [],
+      });
     });
 
     it("skips a registrant whose eligible templates were all already sent", async () => {
@@ -779,17 +810,111 @@ describe("CertificatesService", () => {
       vi.mocked(getRegistrationsForCertificateSend).mockResolvedValue([
         registration() as never,
       ]);
-      vi.mocked(getAlreadySentCertTemplateIds).mockResolvedValue(
-        new Map([["reg-1", new Set(["c1"])]]),
-      );
-      vi.mocked(createEmailLogsBulk).mockResolvedValue(0);
+      fakeQueue({ registrations: { "reg-1": ["c1"] } });
 
       const result = await service.sendCertificates(event, undefined);
 
-      expect(result.queued).toBe(0);
-      expect(result.skipped).toBe(1);
-      expect(result.total).toBe(1);
-      expect(createEmailLogsBulk).toHaveBeenCalledWith([]);
+      expect(result).toMatchObject({
+        queued: 0,
+        skipped: 1,
+        skippedConflict: 0,
+        total: 1,
+        breakdown: {},
+      });
+    });
+
+    it("counts only the certificates actually queued in the breakdown", async () => {
+      vi.mocked(getTemplateByTrigger).mockResolvedValue({ id: "et1" } as never);
+      vi.mocked(listActiveImageReadyCertificateTemplates).mockResolvedValue([
+        certTemplate() as never,
+        certTemplate({ id: "c2", name: "Cert B" }) as never,
+      ]);
+      vi.mocked(getRegistrationsForCertificateSend).mockResolvedValue([
+        registration() as never,
+        registration({ id: "reg-2", email: "b@b.com" }) as never,
+      ]);
+      fakeQueue({ registrations: { "reg-1": ["c1"], "reg-2": ["c1", "c2"] } });
+
+      const result = await service.sendCertificates(event, undefined);
+
+      expect(result).toMatchObject({
+        queued: 1,
+        skipped: 1,
+        total: 2,
+        breakdown: { "Cert B": 1 },
+      });
+    });
+
+    it("reports a registrant a unique index refused as skipped (conflict)", async () => {
+      vi.mocked(getTemplateByTrigger).mockResolvedValue({ id: "et1" } as never);
+      vi.mocked(listActiveImageReadyCertificateTemplates).mockResolvedValue([
+        certTemplate() as never,
+      ]);
+      vi.mocked(getRegistrationsForCertificateSend).mockResolvedValue([
+        registration() as never,
+        registration({ id: "reg-2", email: "b@b.com" }) as never,
+      ]);
+      fakeQueue({}, ["reg-2"]);
+
+      const result = await service.sendCertificates(event, undefined);
+
+      expect(result).toMatchObject({
+        queued: 1,
+        skipped: 1,
+        skippedConflict: 1,
+        total: 2,
+        breakdown: { "Cert A": 1 },
+      });
+    });
+
+    it("returns 404 when the event disappears before the lock", async () => {
+      vi.mocked(getTemplateByTrigger).mockResolvedValue({ id: "et1" } as never);
+      vi.mocked(listActiveImageReadyCertificateTemplates).mockResolvedValue([
+        certTemplate() as never,
+      ]);
+      vi.mocked(getRegistrationsForCertificateSend).mockResolvedValue([
+        registration() as never,
+      ]);
+      vi.mocked(queueCertificateEmailLogsTxn).mockResolvedValue(null);
+
+      await expect(service.sendCertificates(event, undefined)).rejects.toMatchObject({
+        statusCode: 404,
+        code: ErrorCodes.NOT_FOUND,
+      });
+    });
+
+    it("queues registrations and abstracts in the same transaction", async () => {
+      vi.mocked(getTemplateByTrigger).mockResolvedValue({ id: "et1" } as never);
+      vi.mocked(listActiveImageReadyCertificateTemplates).mockResolvedValue([
+        certTemplate() as never,
+      ]);
+      vi.mocked(getRegistrationsForCertificateSend).mockResolvedValue([
+        registration() as never,
+      ]);
+      vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([
+        {
+          id: "abs-1",
+          eventId,
+          status: "ACCEPTED",
+          presentedAt: new Date(),
+          finalType: "POSTER",
+          requestedType: "POSTER",
+          code: null,
+          content: {},
+          authorFirstName: "Ada",
+          authorLastName: "Lovelace",
+          authorEmail: "a@b.com",
+          event: { name: "Event", startDate: new Date(), location: null },
+        } as never,
+      ]);
+
+      const result = await service.sendCertificates(event, ["reg-1"], ["abs-1"]);
+
+      expect(queueCertificateEmailLogsTxn).toHaveBeenCalledTimes(1);
+      expect(queuedInput().registrations.map((c) => c.targetId)).toEqual(["reg-1"]);
+      expect(queuedInput().abstracts.map((c) => c.targetId)).toEqual(["abs-1"]);
+      expect(result.queued).toBe(1);
+      expect(result.abstracts?.results).toEqual([{ abstractId: "abs-1", status: "queued" }]);
     });
   });
 
@@ -841,11 +966,10 @@ describe("CertificatesService", () => {
         certTemplate() as never,
       ]);
       vi.mocked(getRegistrationsForCertificateSend).mockResolvedValue([]);
+      fakeQueue();
     });
 
     it("omitting abstractIds leaves the response shape untouched (no abstracts key)", async () => {
-      vi.mocked(createEmailLogsBulk).mockResolvedValue(0);
-
       const result = await service.sendCertificates(event, []);
 
       expect(result.abstracts).toBeUndefined();
@@ -854,8 +978,6 @@ describe("CertificatesService", () => {
 
     it("narrows registrations to none when abstractIds is provided without registrationIds", async () => {
       vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([]);
-      vi.mocked(getAlreadySentAbstractCertTemplateIds).mockResolvedValue(new Map());
-      vi.mocked(createEmailLogsBulk).mockResolvedValue(0);
 
       await service.sendCertificates(event, undefined, ["abs-1"]);
 
@@ -866,8 +988,6 @@ describe("CertificatesService", () => {
       vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([
         abstractRow({ status: "SUBMITTED" }) as never,
       ]);
-      vi.mocked(getAlreadySentAbstractCertTemplateIds).mockResolvedValue(new Map());
-      vi.mocked(createEmailLogsBulk).mockResolvedValue(0);
 
       const result = await service.sendCertificates(event, [], ["abs-1"]);
 
@@ -883,15 +1003,13 @@ describe("CertificatesService", () => {
           },
         ],
       });
-      expect(createEmailLogsBulk).toHaveBeenCalledWith([]);
+      expect(queuedInput().abstracts).toEqual([]);
     });
 
     it("reports an ACCEPTED-but-not-presented abstract as ineligible", async () => {
       vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([
         abstractRow({ presentedAt: null }) as never,
       ]);
-      vi.mocked(getAlreadySentAbstractCertTemplateIds).mockResolvedValue(new Map());
-      vi.mocked(createEmailLogsBulk).mockResolvedValue(0);
 
       const result = await service.sendCertificates(event, [], ["abs-1"]);
 
@@ -908,8 +1026,6 @@ describe("CertificatesService", () => {
       // getAbstractsForCertificateSend is already event-scoped, so a
       // wrong-event/missing id simply never comes back.
       vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([]);
-      vi.mocked(getAlreadySentAbstractCertTemplateIds).mockResolvedValue(new Map());
-      vi.mocked(createEmailLogsBulk).mockResolvedValue(0);
 
       const result = await service.sendCertificates(event, [], ["missing-abs"]);
 
@@ -926,10 +1042,7 @@ describe("CertificatesService", () => {
       vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([
         abstractRow() as never,
       ]);
-      vi.mocked(getAlreadySentAbstractCertTemplateIds).mockResolvedValue(
-        new Map([["abs-1", new Set(["c1"])]]),
-      );
-      vi.mocked(createEmailLogsBulk).mockResolvedValue(0);
+      fakeQueue({ abstracts: { "abs-1": ["c1"] } });
 
       const result = await service.sendCertificates(event, [], ["abs-1"]);
 
@@ -939,15 +1052,65 @@ describe("CertificatesService", () => {
         total: 1,
         results: [{ abstractId: "abs-1", status: "already_sent" }],
       });
-      expect(createEmailLogsBulk).toHaveBeenCalledWith([]);
+    });
+
+    it("reports skipped_conflict per abstract when a unique index refuses its email", async () => {
+      vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([
+        abstractRow() as never,
+        abstractRow({ id: "abs-2" }) as never,
+      ]);
+      fakeQueue({}, ["abs-2"]);
+
+      const result = await service.sendCertificates(event, [], ["abs-1", "abs-2"]);
+
+      expect(result.abstracts).toEqual({
+        queued: 1,
+        skipped: 1,
+        total: 2,
+        results: [
+          { abstractId: "abs-1", status: "queued" },
+          { abstractId: "abs-2", status: "skipped_conflict" },
+        ],
+      });
+    });
+
+    it("keeps the input order across ineligible and queued abstracts", async () => {
+      vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([
+        abstractRow() as never,
+        abstractRow({ id: "abs-3" }) as never,
+      ]);
+
+      const result = await service.sendCertificates(event, [], ["abs-1", "missing", "abs-3", "abs-1"]);
+
+      expect(result.abstracts?.results.map((r) => [r.abstractId, r.status])).toEqual([
+        ["abs-1", "queued"],
+        ["missing", "ineligible"],
+        ["abs-3", "queued"],
+      ]);
+      expect(queuedInput().abstracts.map((c) => c.targetId)).toEqual(["abs-1", "abs-3"]);
+    });
+
+    it("gives an author with two abstracts one email per abstract", async () => {
+      vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([
+        abstractRow() as never,
+        abstractRow({ id: "abs-2", content: { title: "Second" } }) as never,
+      ]);
+
+      const result = await service.sendCertificates(event, [], ["abs-1", "abs-2"]);
+
+      expect(result.abstracts).toMatchObject({ queued: 2, skipped: 0, total: 2 });
+      expect(
+        queuedInput().abstracts.map((c) => [c.targetId, c.recipientEmail, c.contextSnapshot.abstractTitle]),
+      ).toEqual([
+        ["abs-1", "ada@example.com", "A Great Abstract"],
+        ["abs-2", "ada@example.com", "Second"],
+      ]);
     });
 
     it("queues exactly one email with certificate + abstract context for the eligible, first-time case", async () => {
       vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([
         abstractRow() as never,
       ]);
-      vi.mocked(getAlreadySentAbstractCertTemplateIds).mockResolvedValue(new Map());
-      vi.mocked(createEmailLogsBulk).mockResolvedValue(1);
 
       const result = await service.sendCertificates(event, [], ["abs-1"]);
 
@@ -957,24 +1120,18 @@ describe("CertificatesService", () => {
         total: 1,
         results: [{ abstractId: "abs-1", status: "queued" }],
       });
-      expect(createEmailLogsBulk).toHaveBeenCalledWith([
-        expect.objectContaining({
-          trigger: "CERTIFICATE_SENT",
-          templateId: "et1",
-          abstractId: "abs-1",
+      expect(queuedInput().abstracts).toEqual([
+        {
+          targetId: "abs-1",
           recipientEmail: "ada@example.com",
           recipientName: "Ada Lovelace",
-          subject: "",
-          status: "QUEUED",
+          certificates: [{ id: "c1", name: "Presenter Certificate" }],
           contextSnapshot: expect.objectContaining({
-            _certificateTemplateIds: ["c1"],
-            certificateCount: "1",
-            certificateList: "Presenter Certificate",
             fullName: "Ada Lovelace",
             abstractTitle: "A Great Abstract",
             abstractCode: "OC1-01",
           }),
-        }),
+        },
       ]);
     });
 
@@ -983,29 +1140,24 @@ describe("CertificatesService", () => {
       vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([
         abstractRow({ finalType: "ORAL_COMMUNICATION" }) as never,
       ]);
-      vi.mocked(getAlreadySentAbstractCertTemplateIds).mockResolvedValue(new Map());
-      vi.mocked(createEmailLogsBulk).mockResolvedValue(1);
 
       await service.sendCertificates(event, [], ["abs-1"]);
 
-      const [[insert]] = vi.mocked(createEmailLogsBulk).mock.calls;
-      expect(insert[0].contextSnapshot).toMatchObject({
+      const [candidate] = queuedInput().abstracts;
+      expect(candidate.contextSnapshot).toMatchObject({
         abstractFinalType: "Oral Communication",
       });
-      expect(insert[0].contextSnapshot).not.toHaveProperty("abstractFinalTypeLabel");
+      expect(candidate.contextSnapshot).not.toHaveProperty("abstractFinalTypeLabel");
     });
 
     it("labels a not-yet-finalized abstract by its requestedType", async () => {
       vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([
         abstractRow({ finalType: null, requestedType: "POSTER" }) as never,
       ]);
-      vi.mocked(getAlreadySentAbstractCertTemplateIds).mockResolvedValue(new Map());
-      vi.mocked(createEmailLogsBulk).mockResolvedValue(1);
 
       await service.sendCertificates(event, [], ["abs-1"]);
 
-      const [[insert]] = vi.mocked(createEmailLogsBulk).mock.calls;
-      expect(insert[0].contextSnapshot).toMatchObject({
+      expect(queuedInput().abstracts[0].contextSnapshot).toMatchObject({
         abstractFinalType: "Poster",
       });
     });
@@ -1019,8 +1171,6 @@ describe("CertificatesService", () => {
         vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([
           abstractRow() as never,
         ]);
-        vi.mocked(getAlreadySentAbstractCertTemplateIds).mockResolvedValue(new Map());
-        vi.mocked(createEmailLogsBulk).mockResolvedValue(0);
 
         const result = await service.sendCertificates(event, [], ["abs-1"]);
 
@@ -1036,7 +1186,7 @@ describe("CertificatesService", () => {
             },
           ],
         });
-        expect(createEmailLogsBulk).toHaveBeenCalledWith([]);
+        expect(queuedInput().abstracts).toEqual([]);
       });
 
       it("includes an ABSTRACT-scoped template in the abstract send", async () => {
@@ -1046,8 +1196,6 @@ describe("CertificatesService", () => {
         vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([
           abstractRow() as never,
         ]);
-        vi.mocked(getAlreadySentAbstractCertTemplateIds).mockResolvedValue(new Map());
-        vi.mocked(createEmailLogsBulk).mockResolvedValue(1);
 
         const result = await service.sendCertificates(event, [], ["abs-1"]);
 
@@ -1064,8 +1212,6 @@ describe("CertificatesService", () => {
         vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([
           abstractRow({ finalType: "ORAL_COMMUNICATION" }) as never,
         ]);
-        vi.mocked(getAlreadySentAbstractCertTemplateIds).mockResolvedValue(new Map());
-        vi.mocked(createEmailLogsBulk).mockResolvedValue(0);
 
         const result = await service.sendCertificates(event, [], ["abs-1"]);
 
@@ -1082,8 +1228,6 @@ describe("CertificatesService", () => {
         vi.mocked(getAbstractsForCertificateSend).mockResolvedValue([
           abstractRow({ finalType: "ORAL_COMMUNICATION" }) as never,
         ]);
-        vi.mocked(getAlreadySentAbstractCertTemplateIds).mockResolvedValue(new Map());
-        vi.mocked(createEmailLogsBulk).mockResolvedValue(1);
 
         const result = await service.sendCertificates(event, [], ["abs-1"]);
 

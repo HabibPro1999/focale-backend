@@ -11,7 +11,7 @@ import {
   listSponsorshipBatchesForBulk,
   getClientById,
   createEmailLog,
-  createEmailLogsBulk,
+  insertEmailLogsSkippingConflicts,
   updateEmailLogById,
   type EmailTemplateRow,
   type EmailLogInsert,
@@ -135,7 +135,7 @@ export class EmailSendService {
       subject: "",
       status: "QUEUED",
     }));
-    const queued = await createEmailLogsBulk(values);
+    const queued = (await insertEmailLogsSkippingConflicts(values)).size;
 
     return {
       success: true,
@@ -210,7 +210,7 @@ export class EmailSendService {
       status: "QUEUED",
       contextSnapshot: s.contextSnapshot,
     }));
-    const queued = await createEmailLogsBulk(values);
+    const queued = (await insertEmailLogsSkippingConflicts(values)).size;
 
     return {
       success: true,
