@@ -42,7 +42,7 @@ function emailProvider(
     isConfigured: () => true,
     sendEmail: send,
     handleWebhook: () => ({ ok: false, reason: "unconfigured" }),
-  } as EmailProvider;
+  } as unknown as EmailProvider;
 }
 function encryptedCode(code: string) {
   const iv = randomBytes(12);

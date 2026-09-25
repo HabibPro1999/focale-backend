@@ -25,6 +25,7 @@ import {
   renderTemplateToMjml,
   compileMjmlToHtml,
   extractPlainText,
+  resendUncertainEmail,
 } from "@app/integrations";
 import { AppException } from "../../core/app-exception";
 
@@ -217,6 +218,41 @@ export class EmailSendService {
       queued,
       message: `${queued} emails queued for sending`,
     };
+  }
+
+  // ==========================================================================
+  // RESEND AN UNCERTAIN EMAIL (3.6; queues a new EmailLog row)
+  // ==========================================================================
+  async resendUncertain(
+    eventId: string,
+    emailLogId: string,
+  ): Promise<{ id: string; status: "QUEUED"; resentFrom: string }> {
+    const result = await resendUncertainEmail(eventId, emailLogId);
+    if (result.ok) {
+      return { id: result.log.id, status: "QUEUED", resentFrom: emailLogId };
+    }
+    switch (result.reason) {
+      case "not_found":
+        throw new AppException(ErrorCodes.NOT_FOUND, "Email log not found", 404);
+      case "not_uncertain":
+        throw new AppException(
+          ErrorCodes.CONFLICT,
+          "Only an UNCERTAIN email can be resent",
+          409,
+        );
+      case "not_resendable":
+        throw new AppException(
+          ErrorCodes.CONFLICT,
+          "This email cannot be resent from its log; send it again from where it was sent",
+          409,
+        );
+      case "already_active":
+        throw new AppException(
+          ErrorCodes.CONFLICT,
+          "An active email already covers this one",
+          409,
+        );
+    }
   }
 
   // ==========================================================================

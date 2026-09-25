@@ -10,6 +10,9 @@ import { logger } from "../../logger";
 import { integrationsConfig } from "../../config";
 import {
   EMAIL_PROVIDER_TIMEOUT_MS,
+  acceptedSend,
+  ambiguousSend,
+  rejectedSend,
   getHeader,
   resolveEmailSender,
   stripHtml,
@@ -28,6 +31,7 @@ const WEBHOOK_TIMESTAMP_TOLERANCE_MS = 5 * 60 * 1000;
 
 // SendGrid event names already match our normalized vocabulary 1:1.
 const HANDLED_EVENTS: Record<string, NormalizedEventType> = {
+  processed: "processed",
   delivered: "delivered",
   open: "open",
   click: "click",
@@ -86,6 +90,50 @@ export function mapSendgridEvents(parsed: unknown): {
   return { events, logOnly };
 }
 
+// Connection errors raised before the request reached SendGrid: nothing was sent.
+const NOT_SENT_ERROR_CODES = new Set([
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ECONNREFUSED",
+  "ERR_INVALID_URL",
+  "ERR_BAD_OPTION",
+  "ERR_BAD_OPTION_VALUE",
+  "ERR_NOT_SUPPORT",
+]);
+// Gateway errors: SendGrid behind the gateway may still have taken the email.
+const AMBIGUOUS_HTTP_STATUSES = new Set([502, 504]);
+
+/**
+ * Classify a failed `sgMail.send` (3.6). SendGrid has no idempotency key, so
+ * anything that may have reached it is `ambiguous` and must not be resent:
+ * - an HTTP error response (the client's ResponseError: numeric `code` and
+ *   `response`) is `rejected`, except 502/504 from a gateway;
+ * - an HTTP client error without a response is `rejected` only for a failure
+ *   to connect at all (DNS, refused); a timeout, reset or abort is `ambiguous`;
+ * - an error that is neither was raised by the SendGrid library before the
+ *   request (message validation): `rejected`.
+ */
+export function classifySendgridError(error: unknown): SendEmailResult {
+  const err = (error ?? {}) as {
+    message?: string;
+    code?: unknown;
+    isAxiosError?: boolean;
+    response?: { body?: { errors?: Array<{ message?: string }> } };
+  };
+  const message = err.response?.body?.errors?.[0]?.message || err.message || "Unknown error";
+  if (err.response && typeof err.code === "number") {
+    return AMBIGUOUS_HTTP_STATUSES.has(err.code)
+      ? ambiguousSend(message, { statusCode: err.code })
+      : rejectedSend(message, err.code);
+  }
+  if (err.isAxiosError === true) {
+    return typeof err.code === "string" && NOT_SENT_ERROR_CODES.has(err.code)
+      ? rejectedSend(message)
+      : ambiguousSend(message);
+  }
+  return error instanceof Error ? rejectedSend(message) : ambiguousSend(message);
+}
+
 export interface SendgridProviderOptions {
   apiKey?: string;
   webhookPublicKey?: string;
@@ -125,13 +173,14 @@ export class SendgridProvider implements EmailProvider {
   async sendEmail(input: SendEmailInput): Promise<SendEmailResult> {
     if (!this.apiKey) {
       logger.warn("SendGrid API key not configured, skipping email send");
-      return { success: false, error: "SendGrid not configured" };
+      return rejectedSend("SendGrid not configured");
     }
     this.ensureApiKey();
 
+    let msg: sgMail.MailDataRequired;
     try {
       const approvedFrom = await resolveVerifiedNetworkingSender(input, this.name, this.apiKey);
-      const msg: sgMail.MailDataRequired = {
+      msg = {
         to: input.toName ? { email: input.to, name: input.toName } : input.to,
         from: { email: approvedFrom ?? this.fromEmail, name: input.fromName || this.fromName },
         ...(input.replyTo && {
@@ -153,7 +202,14 @@ export class SendgridProvider implements EmailProvider {
         ...(input.categories && { categories: input.categories }),
         ...(input.attachments?.length && { attachments: input.attachments }),
       };
+    } catch (error: unknown) {
+      // Before the request: nothing reached SendGrid.
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error({ to: input.to, error: message, trackingId: input.trackingId }, "Failed to prepare email for SendGrid");
+      return rejectedSend(message);
+    }
 
+    try {
       const [response] = await sgMail.send(msg);
       const messageId = response.headers["x-message-id"] as string | undefined;
 
@@ -162,28 +218,20 @@ export class SendgridProvider implements EmailProvider {
         "Email sent successfully via SendGrid",
       );
 
-      return { success: true, messageId: messageId || undefined };
+      return acceptedSend(messageId || undefined);
     } catch (error: unknown) {
-      const err = error as Error & {
-        response?: { body?: { errors?: Array<{ message: string }> } };
-        code?: number;
-      };
-      const errorMessage =
-        err.response?.body?.errors?.[0]?.message ||
-        err.message ||
-        "Unknown error";
-
+      const result = classifySendgridError(error);
       logger.error(
         {
           to: input.to,
-          error: errorMessage,
+          error: result.error,
+          outcome: result.outcome,
           trackingId: input.trackingId,
-          statusCode: err.code,
+          statusCode: result.statusCode,
         },
         "Failed to send email via SendGrid",
       );
-
-      return { success: false, error: errorMessage };
+      return result;
     }
   }
 

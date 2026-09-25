@@ -14,6 +14,9 @@ import { logger } from "../../logger";
 import { integrationsConfig } from "../../config";
 import {
   EMAIL_PROVIDER_TIMEOUT_MS,
+  acceptedSend,
+  ambiguousSend,
+  rejectedSend,
   getHeader,
   resolveEmailSender,
   stripHtml,
@@ -165,7 +168,11 @@ export function normalizeResendEvents(payload: WebhookEventPayload): {
       }
       break;
     }
-    case "email.sent":
+    case "email.sent": {
+      const emailLogId = payload.data.tags?.email_log_id;
+      if (emailLogId) events.push({ emailLogId, type: "processed" });
+      break;
+    }
     case "email.scheduled":
     case "email.delivery_delayed": {
       logOnly.push({
@@ -180,6 +187,35 @@ export function normalizeResendEvents(payload: WebhookEventPayload): {
   }
 
   return { events, logOnly };
+}
+
+/** The error half of a Resend SDK response (`{ data, error }`). */
+export interface ResendSendError {
+  name?: string;
+  message?: string;
+  statusCode?: number | null;
+}
+
+/**
+ * Classify a Resend send error (3.6). The SDK reports a request that got no
+ * response (network error, our timeout abort) as `statusCode: null`.
+ * - no response, a 5xx, or `concurrent_idempotent_requests` (the first request
+ *   with this key still running): `ambiguous`, retryable under the same
+ *   idempotency key when one was sent;
+ * - `invalid_idempotent_request` (the key was already used with another
+ *   payload, so an earlier request reached Resend): `ambiguous`, not retryable;
+ * - any other HTTP error (validation, auth, rate limit, quota): `rejected`.
+ */
+export function classifyResendError(error: ResendSendError, idempotent: boolean): SendEmailResult {
+  const message = error.message || error.name || "Unknown error";
+  const statusCode = typeof error.statusCode === "number" ? error.statusCode : undefined;
+  if (error.name === "invalid_idempotent_request") {
+    return ambiguousSend(message, { statusCode, idempotentRetry: false });
+  }
+  if (statusCode === undefined || statusCode >= 500 || error.name === "concurrent_idempotent_requests") {
+    return ambiguousSend(message, { statusCode, idempotentRetry: idempotent });
+  }
+  return rejectedSend(message, statusCode);
 }
 
 export interface ResendProviderOptions {
@@ -216,44 +252,59 @@ export class ResendProvider implements EmailProvider {
   async sendEmail(input: SendEmailInput): Promise<SendEmailResult> {
     if (!this.apiKey) {
       logger.warn("Resend API key not configured, skipping email send");
-      return { success: false, error: "Resend not configured" };
+      return rejectedSend("Resend not configured");
     }
 
+    let payload: CreateEmailOptions;
     try {
       const approvedFrom = await resolveVerifiedNetworkingSender(input, this.name, this.apiKey);
-      // The SDK has no timeout option but spreads request options into its
-      // fetch call, so the abort signal bounds the request. The emailLog id is
-      // a natural idempotency key for queued sends (a timed-out send retries safely).
-      const requestOptions = {
-        ...(input.trackingId ? { idempotencyKey: input.trackingId } : {}),
-        signal: AbortSignal.timeout(EMAIL_PROVIDER_TIMEOUT_MS),
-      } as CreateEmailRequestOptions;
-      const { data, error } = await this.client.emails.send(
-        buildResendPayload(input, approvedFrom ? { ...this.from, fromEmail: approvedFrom } : this.from),
-        requestOptions,
-      );
+      payload = buildResendPayload(input, approvedFrom ? { ...this.from, fromEmail: approvedFrom } : this.from);
+    } catch (error: unknown) {
+      // Before the request: nothing reached Resend.
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error({ to: input.to, error: message, trackingId: input.trackingId }, "Failed to prepare email for Resend");
+      return rejectedSend(message);
+    }
 
-      if (error) {
-        logger.error(
-          { to: input.to, error: error.message, trackingId: input.trackingId },
-          "Failed to send email via Resend",
-        );
-        return { success: false, error: error.message || error.name };
-      }
+    // The emailLog id is the idempotency key: Resend sends one email per key
+    // (for 24 h), so a retry after an ambiguous outcome cannot send twice.
+    const idempotent = Boolean(input.trackingId);
+    // The SDK has no timeout option but spreads request options into its
+    // fetch call, so the abort signal bounds the request.
+    const requestOptions = {
+      ...(input.trackingId ? { idempotencyKey: input.trackingId } : {}),
+      signal: AbortSignal.timeout(EMAIL_PROVIDER_TIMEOUT_MS),
+    } as CreateEmailRequestOptions;
 
+    let result: SendEmailResult;
+    try {
+      const { data, error } = await this.client.emails.send(payload, requestOptions);
+      result = error ? classifyResendError(error, idempotent) : acceptedSend(data?.id);
+    } catch (error: unknown) {
+      // The SDK turns fetch failures into `{ error }`; anything thrown here is unexpected.
+      result = ambiguousSend(error instanceof Error ? error.message : "Unknown error", {
+        idempotentRetry: idempotent,
+      });
+    }
+
+    if (result.outcome === "accepted") {
       logger.info(
-        { to: input.to, messageId: data?.id, trackingId: input.trackingId },
+        { to: input.to, messageId: result.messageId, trackingId: input.trackingId },
         "Email sent successfully via Resend",
       );
-      return { success: true, messageId: data?.id };
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "Unknown error";
+    } else {
       logger.error(
-        { to: input.to, error: message, trackingId: input.trackingId },
+        {
+          to: input.to,
+          error: result.error,
+          outcome: result.outcome,
+          statusCode: result.statusCode,
+          trackingId: input.trackingId,
+        },
         "Failed to send email via Resend",
       );
-      return { success: false, error: message };
     }
+    return result;
   }
 
   handleWebhook(rawBody: Buffer, headers: WebhookHeaders): WebhookResult {

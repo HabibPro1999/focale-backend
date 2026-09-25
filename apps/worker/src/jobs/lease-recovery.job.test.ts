@@ -40,7 +40,17 @@ describe("LeaseRecoveryJob", () => {
     const loud = ctx();
     await new LeaseRecoveryJob().run(loud.context);
     expect(loud.log.warn).toHaveBeenCalledWith(
-      { queue: "outbox:all", requeued: 2, deadLettered: 1 },
+      { queue: "outbox:all", requeued: 2, deadLettered: 1, uncertain: 0 },
+      "recovered expired leases",
+    );
+  });
+
+  it("logs emails parked as UNCERTAIN (provider called, outcome never recorded)", async () => {
+    db.emailQueue.recoverStale.mockResolvedValueOnce({ requeued: 0, deadLettered: 0, uncertain: 3 });
+    const { context, log } = ctx();
+    await new LeaseRecoveryJob().run(context);
+    expect(log.warn).toHaveBeenCalledWith(
+      { queue: "email", requeued: 0, deadLettered: 0, uncertain: 3 },
       "recovered expired leases",
     );
   });

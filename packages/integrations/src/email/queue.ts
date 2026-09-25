@@ -12,6 +12,12 @@
 // the lease was lost, which we map to a non-counted "lease-lost" outcome).
 // This is deliberately NOT withTxnRetry/serializable; the semantics are lease
 // expiry + ownership, not conflict retry.
+//
+// Delivery safety (3.6): the provider-attempt marker is written right before
+// the provider call, and every call is classified accepted / rejected /
+// ambiguous. Only a rejection (or an error before the call) is retried; an
+// accepted email is never requeued, and an ambiguous one becomes UNCERTAIN
+// unless the provider deduplicates on the log id (Resend's idempotency key).
 // =============================================================================
 
 import { createLogger, makeWorkerId, escapeHtml } from "@app/shared";
@@ -25,26 +31,40 @@ import {
   getClaimedEmailLogsForProcessing,
   runLeased,
   writeResolvedSubjectIfLeaseHeld,
+  beginProviderAttempt,
   markEmailSent,
   markEmailFailed,
   markEmailSkipped,
+  markEmailUncertain,
   readEmailLogStatus,
   updateEmailLogStatusGuarded,
   getEmailLogRealtimeTarget,
   enqueueRealtimeOutboxEvent,
   getDb,
+  resendUncertainEmailLog,
   type ClaimedEmailLog,
+  type ResendEmailLogResult,
   type EmailLogRow,
   type EmailLogInsert,
 } from "@app/db";
 import { getEmailProvider } from "./providers/index";
-import type { EmailAttachment } from "./providers/email-provider.types";
+import {
+  ambiguousSend,
+  type EmailAttachment,
+  type EmailProvider,
+  type SendEmailInput,
+  type SendEmailResult,
+} from "./providers/email-provider.types";
 import { resolveVariables, buildEmailContextWithAccess } from "./rendering/index";
 
 const logger = createLogger({ name: "email:queue" });
 
 const MAX_RETRIES = 3;
 const DEFAULT_WORKER_ID = makeWorkerId("email");
+/** Tries of the SENT write after the provider accepted an email (never a resend). */
+const MARK_SENT_RETRY_DELAYS_MS = [0, 250, 1_000] as const;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 // -----------------------------------------------------------------------------
 // Realtime seam. In the legacy monolith the queue emitted emailLog.statusChanged
@@ -143,6 +163,7 @@ function getOptionalContextString(
 // exactly like a template — resolved via the same resolveVariables call — and
 // ACTUALLY SENDS, rather than hitting the "no template" skip.
 // -----------------------------------------------------------------------------
+// The admin resend (@app/db email-resend.ts) checks the same keys.
 export const FALLBACK_SUBJECT_KEY = "_fallbackSubject";
 export const FALLBACK_BODY_KEY = "_fallbackPlainBody";
 
@@ -379,6 +400,8 @@ export interface ProcessQueueResult {
   sent: number;
   failed: number;
   skipped: number;
+  /** Parked as UNCERTAIN: the provider may have sent them; not resent automatically. */
+  uncertain: number;
 }
 
 export interface ProcessEmailQueueOptions {
@@ -399,7 +422,12 @@ export interface ProcessEmailQueueOptions {
   drainUntil?: number;
 }
 
-type EmailOutcome = "sent" | "failed" | "skipped" | "lease-lost";
+/**
+ * - `unsettled`: the provider was called but the outcome could not be
+ *   written. The row keeps its provider-attempt marker and lease recovery
+ *   settles it (UNCERTAIN, or a same-key retry for Resend): never a blind resend.
+ */
+type EmailOutcome = "sent" | "failed" | "skipped" | "uncertain" | "lease-lost" | "unsettled";
 
 export async function processEmailQueue(
   batchSize = 20,
@@ -410,6 +438,7 @@ export async function processEmailQueue(
     sent: 0,
     failed: 0,
     skipped: 0,
+    uncertain: 0,
   };
 
   const workerId = options.workerId ?? DEFAULT_WORKER_ID;
@@ -417,6 +446,8 @@ export async function processEmailQueue(
   const CONCURRENCY_LIMIT = 10;
   // Shared across the run so certificate PDFs don't re-download the same image.
   const imageCache = new Map<string, unknown>();
+  /** Rows whose provider call started (this claim): never failed (requeued) by onError. */
+  const providerCalled = new Set<string>();
 
   // N3/M8: SKIPPED is a status transition like SENT/FAILED — the admin's live
   // email-log table must hear about it too, not just the happy paths.
@@ -434,6 +465,8 @@ export async function processEmailQueue(
     emailLog: ClaimedEmailLog,
     signal: AbortSignal,
   ): Promise<EmailOutcome> {
+    // A drain can claim a requeued row again: this claim has not called the provider yet.
+    providerCalled.delete(emailLog.id);
     try {
       let templateSubject: string;
       let templateHtml: string;
@@ -524,19 +557,22 @@ export async function processEmailQueue(
         }
       }
 
-      // Re-check ownership (and extend the lease) immediately before the
-      // network call to avoid a double-send after lease expiry + requeue by
-      // another worker. Past this point the send is never interrupted.
+      // The provider-attempt marker, written with an ownership re-check (and
+      // lease extension) right before the network call: no double send after
+      // a lease expiry + requeue by another worker. Past this point the send
+      // is never interrupted, and the row is never requeued blind.
       signal.throwIfAborted();
-      if (!(await emailQueue.confirm(workerId, emailLog.id, options.leaseMs))) {
+      const provider = getEmailProvider();
+      if (!(await beginProviderAttempt(emailLog.id, workerId, provider.name, options.leaseMs))) {
         logger.warn(
           { emailLogId: emailLog.id, workerId },
           "Email send skipped because lease was lost before provider call",
         );
         return "lease-lost";
       }
+      providerCalled.add(emailLog.id);
 
-      const sendResult = await getEmailProvider().sendEmail({
+      const sendResult = await callProvider(provider, {
         to: emailLog.recipientEmail,
         toName: emailLog.recipientName || undefined,
         fromName:
@@ -550,23 +586,17 @@ export async function processEmailQueue(
         trackingId: emailLog.id,
         attachments,
       });
-
-      if (sendResult.success) {
-        const ok = await markEmailSent(
-          emailLog.id,
-          workerId,
-          sendResult.messageId,
-        );
-        if (ok) notifyStatusChange(emailLog.id, "SENT");
-        return ok ? "sent" : "lease-lost";
-      }
-
-      return failEmail(
-        emailLog,
-        sendResult.error || "Unknown error",
-        workerId,
-      );
+      return await settleProviderCall(emailLog, sendResult);
     } catch (error: unknown) {
+      if (providerCalled.has(emailLog.id)) {
+        // Only a failed outcome write gets here. Requeueing could send the
+        // email twice: the marker stays and lease recovery settles the row.
+        logger.error(
+          { err: error, emailLogId: emailLog.id },
+          "Recording an email send outcome failed; left for lease recovery",
+        );
+        return "unsettled";
+      }
       // An abort (lost lease, timeout, shutdown) is runLeased's to settle.
       if (signal.aborted) throw error;
       const err = error as Error;
@@ -578,13 +608,76 @@ export async function processEmailQueue(
     }
   }
 
+  /**
+   * One provider outcome → the row's state (3.6):
+   * - accepted: SENT, never requeued (the write is retried; if it still
+   *   fails the marker stays, recovery parks the row as UNCERTAIN and the
+   *   provider's webhook reconciles it);
+   * - rejected: the normal retry / dead-letter path;
+   * - ambiguous: retried under the same idempotency key when the provider
+   *   deduplicates on it (Resend) and retries are left, else UNCERTAIN.
+   */
+  async function settleProviderCall(
+    emailLog: ClaimedEmailLog,
+    sendResult: SendEmailResult,
+  ): Promise<EmailOutcome> {
+    const error = sendResult.error || "Unknown error";
+    switch (sendResult.outcome) {
+      case "accepted":
+        return recordSent(emailLog.id, sendResult.messageId);
+      case "rejected":
+        return failEmail(emailLog, error, workerId);
+      case "ambiguous": {
+        const retriesLeft = emailLog.attemptCount <= (emailLog.maxRetries ?? MAX_RETRIES);
+        if (sendResult.idempotentRetry && retriesLeft) {
+          return failEmail(
+            emailLog,
+            `Email provider outcome unknown; retrying under the same idempotency key: ${error}`,
+            workerId,
+          );
+        }
+        const ok = await markEmailUncertain(
+          emailLog.id,
+          workerId,
+          `Email provider outcome unknown; not resent automatically: ${error}`,
+        );
+        if (ok) notifyStatusChange(emailLog.id, "UNCERTAIN");
+        return ok ? "uncertain" : "lease-lost";
+      }
+    }
+  }
+
+  async function recordSent(
+    emailLogId: string,
+    messageId: string | undefined,
+  ): Promise<EmailOutcome> {
+    let lastError: unknown;
+    for (const delayMs of MARK_SENT_RETRY_DELAYS_MS) {
+      if (delayMs > 0) await sleep(delayMs);
+      try {
+        const ok = await markEmailSent(emailLogId, workerId, messageId);
+        if (ok) notifyStatusChange(emailLogId, "SENT");
+        return ok ? "sent" : "lease-lost";
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    logger.error(
+      { err: lastError, emailLogId, messageId },
+      "Email accepted by the provider but not recorded as SENT; left for lease recovery",
+    );
+    return "unsettled";
+  }
+
   // Counts the outcome; true when its write landed (the row was still ours).
   function count(outcome: EmailOutcome): boolean {
     if (outcome === "sent") result.sent++;
     else if (outcome === "failed") result.failed++;
     else if (outcome === "skipped") result.skipped++;
+    else if (outcome === "uncertain") result.uncertain++;
     // "lease-lost" is a race, not a real failure — silently dropped.
-    return outcome !== "lease-lost";
+    // "unsettled" wrote nothing: false keeps runLeased from releasing it.
+    return outcome !== "lease-lost" && outcome !== "unsettled";
   }
 
   // Claim → heartbeat → confirm → handle → release (see runLeased).
@@ -601,18 +694,33 @@ export async function processEmailQueue(
       return count(await processEmail(emailLog, signal));
     },
     // Reached only for a job timeout that interrupted a row before its send:
-    // the attempt is charged like any failure.
+    // the attempt is charged like any failure. A row whose provider call
+    // started is never requeued here (lease recovery settles it).
     onError: async (emailLog, error) =>
-      count(
-        await failEmail(
-          emailLog,
-          error instanceof Error ? error.message : String(error),
-          workerId,
-        ),
-      ),
+      providerCalled.has(emailLog.id)
+        ? false
+        : count(
+            await failEmail(
+              emailLog,
+              error instanceof Error ? error.message : String(error),
+              workerId,
+            ),
+          ),
   });
 
   return result;
+}
+
+/** A provider call that never throws: an unexpected throw is an ambiguous outcome. */
+async function callProvider(
+  provider: EmailProvider,
+  input: SendEmailInput,
+): Promise<SendEmailResult> {
+  try {
+    return await provider.sendEmail(input);
+  } catch (error: unknown) {
+    return ambiguousSend(error instanceof Error ? error.message : String(error));
+  }
 }
 
 async function failEmail(
@@ -635,13 +743,34 @@ async function failEmail(
 }
 
 // =============================================================================
+// ADMIN RESEND (3.6)
+// =============================================================================
+
+/**
+ * An admin's explicit resend of an UNCERTAIN email: a new QUEUED log for the
+ * worker to send (see resendUncertainEmailLog); the UNCERTAIN log is kept.
+ */
+export async function resendUncertainEmail(
+  eventId: string,
+  emailLogId: string,
+): Promise<ResendEmailLogResult> {
+  const result = await resendUncertainEmailLog(eventId, emailLogId);
+  if (result.ok) notifyStatusChange(result.log.id, "QUEUED");
+  return result;
+}
+
+// =============================================================================
 // WEBHOOK STATUS UPDATES
 // =============================================================================
 
-/** Forward-only ordering for non-terminal transitions. */
+/**
+ * Forward-only ordering for non-terminal transitions. UNCERTAIN ranks with
+ * SENDING: any sign from the provider that it took the email moves it on.
+ */
 const STATUS_RANK: Record<string, number> = {
   QUEUED: 0,
   SENDING: 1,
+  UNCERTAIN: 1,
   SENT: 2,
   DELIVERED: 3,
   OPENED: 4,
@@ -652,6 +781,7 @@ const STATUS_RANK: Record<string, number> = {
 const TERMINAL_STATUSES = new Set<EmailStatus>(["BOUNCED", "DROPPED", "FAILED"]);
 
 export type WebhookEventType =
+  | "processed"
   | "delivered"
   | "open"
   | "click"
@@ -675,6 +805,12 @@ export async function updateEmailStatusFromWebhook(
   const updates: Partial<EmailLogInsert> = {};
 
   switch (event) {
+    case "processed":
+      // The provider took the email. Only reconciles an UNCERTAIN log: a
+      // SENDING one is its lease owner's to settle.
+      updates.status = "SENT";
+      updates.sentAt = new Date();
+      break;
     case "delivered":
       updates.status = "DELIVERED";
       updates.deliveredAt = new Date();
@@ -719,6 +855,14 @@ export async function updateEmailStatusFromWebhook(
       logger.warn(
         { emailLogId, event },
         "Webhook received for unknown email log — skipping",
+      );
+      return;
+    }
+
+    if (event === "processed" && currentStatus !== "UNCERTAIN") {
+      logger.debug(
+        { emailLogId, currentStatus },
+        "Webhook processed event skipped — only an UNCERTAIN email is reconciled by it",
       );
       return;
     }
