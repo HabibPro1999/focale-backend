@@ -241,6 +241,30 @@ describe("unified migration format", () => {
     )).toBe(false);
   });
 
+  it("tracks an index rebuilt under a temporary name and renamed back (0024)", async () => {
+    const indexNames = [
+      "email_logs_registration_trigger_active_key",
+      "email_logs_template_recipient_trigger_active_key",
+    ];
+    for (const engine of ["postgres", "cockroach"] as const) {
+      const migrations = await loadMigrations(migrationsDirectory, engine);
+      const rebuild = migrations.find((candidate) => candidate.id === "0024");
+      expect(rebuild?.directives.transaction).toBe("per-statement");
+      const own = deriveCatalogProbes(rebuild!);
+      for (const name of indexNames) {
+        expect(own).toContainEqual(expect.objectContaining({ kind: "index", name, expectedPresent: true }));
+        expect(own).toContainEqual(expect.objectContaining({ kind: "index", name: `${name}_rebuild`, expectedPresent: false }));
+      }
+      expect(own.filter((probe) => "query" in probe)).toHaveLength(1);
+
+      const effective = [...deriveEffectiveCatalogProbes(migrations).values()].flat();
+      for (const name of indexNames) {
+        const finalProbes = effective.filter((probe) => "kind" in probe && probe.name === name);
+        expect(finalProbes).toEqual([expect.objectContaining({ migrationId: "0024", expectedPresent: true })]);
+      }
+    }
+  });
+
   it("requires a declared transaction mode and valid deferral condition", () => {
     expect(() => parseMigrationDirectives("CREATE TABLE t(id int);", "test.sql")).toThrow(/transaction directive/);
     expect(() => parseMigrationDirectives(
