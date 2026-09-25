@@ -1,6 +1,7 @@
 import "reflect-metadata";
 import { assertSchemaCurrent, closeDb, configureDb, configureOutbox } from "@app/db";
 import {
+  coalesceEmailStatusChanges,
   configureIntegrations,
   emitEmailLogRealtimeEvent,
   setEmailStatusChangeListener,
@@ -31,7 +32,10 @@ async function bootstrap() {
   // N3: emails can be queued/updated from either process — wire the same
   // listener here and in apps/worker/src/main.ts so no email-log status
   // change is silently dropped depending on which process handled it.
-  setEmailStatusChangeListener(emitEmailLogRealtimeEvent);
+  // Coalesced per 250 ms (latest status per email log); flushed before the
+  // pool closes. Not installed when realtime is disabled (nothing to emit).
+  const emailStatus = coalesceEmailStatusChanges(emitEmailLogRealtimeEvent);
+  if (!config.realtime.disabled) setEmailStatusChangeListener(emailStatus.listener);
 
   // MIGRATIONS_CHECK: enforce refuses to start on a stale schema; warn logs
   // (and /health/ready reports it).
@@ -49,7 +53,10 @@ async function bootstrap() {
     startDraining: () => coordinator.startDraining(),
     closeApp: () => app.close(),
     forceCloseConnections: () => app.getHttpServer().closeAllConnections(),
-    closeDb,
+    closeDb: async () => {
+      await emailStatus.flush();
+      await closeDb();
+    },
     exit: (code) => process.exit(code),
     logger,
   });

@@ -46,6 +46,11 @@ export interface ProcessOutboxOptions {
    * their meta.
    */
   signal?: AbortSignal;
+  /**
+   * Keep claiming batches until one comes back short, the signal aborts, or
+   * this time (epoch ms) passes. Without it, one batch.
+   */
+  drainUntil?: number;
 }
 
 export interface ProcessOutboxResult {
@@ -260,6 +265,7 @@ export async function processOutboxEvents(
     limit: batchSize,
     signal: options.signal,
     leaseMs: options.leaseMs,
+    drainUntil: options.drainUntil,
     load: async (ids) =>
       rowsOf<ClaimedOutboxRow>(
         await getDb().execute(sql`

@@ -10,6 +10,7 @@ import {
 } from "@app/db";
 import { createLogger, makeWorkerId } from "@app/shared";
 import {
+  coalesceEmailStatusChanges,
   configureIntegrations,
   emitEmailLogRealtimeEvent,
   setEmailStatusChangeListener,
@@ -41,8 +42,15 @@ async function bootstrap() {
 
   // N3: emails can be queued/updated from either process — wire the same
   // listener here and in apps/api/src/main.ts so no email-log status change
-  // is silently dropped depending on which process handled it.
-  setEmailStatusChangeListener(emitEmailLogRealtimeEvent);
+  // is silently dropped depending on which process handled it. Coalesced per
+  // 250 ms (latest status per email log); flushed before the pool closes. Not
+  // installed when realtime is disabled (nothing to emit).
+  const emailStatus = coalesceEmailStatusChanges(emitEmailLogRealtimeEvent);
+  if (!config.realtime.disabled) setEmailStatusChangeListener(emailStatus.listener);
+  const flushThenCloseDb = async () => {
+    await emailStatus.flush();
+    await closeDb();
+  };
 
   // One heartbeat, two outputs: the liveness file (image HEALTHCHECK) and this
   // process's worker_heartbeats row (/health/worker).
@@ -66,7 +74,7 @@ async function bootstrap() {
     onSignals(
       createWorkerShutdown({
         graceMs: config.lifecycle.shutdownGraceMs,
-        closeDb,
+        closeDb: flushThenCloseDb,
         heartbeat,
         exit: (code) => process.exit(code),
         logger: log,
@@ -94,7 +102,7 @@ async function bootstrap() {
       graceMs: config.lifecycle.shutdownGraceMs,
       stopRunner: (deadline) => runner.stop({ deadline }),
       closeContext: () => ctx.close(),
-      closeDb,
+      closeDb: flushThenCloseDb,
       heartbeat,
       exit: (code) => process.exit(code),
       logger: log,

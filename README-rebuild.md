@@ -121,7 +121,8 @@ The old app was **one** process (HTTP + in-process workers + realtime pump).
 The rebuild splits into **two deployables from one image**:
 
 - **api** — `node apps/api/dist/main.js`. Serves HTTP and, unless
-  `REALTIME_DISABLED=true`, runs the realtime outbox pump.
+  `REALTIME_DISABLED=true`, runs the realtime outbox pump. One instance only
+  (see "Realtime" below).
 - **worker** — `node apps/worker/dist/main.js`. Runs the background job
   pollers (outbox / email queue / abstract-book / networking).
 
@@ -221,6 +222,24 @@ Workers run **unless** `RUN_WORKERS` is the literal string `"false"`. With
 container): it idles, keeps beating (file and `worker_heartbeats` row)
 marked `disabled`, and shuts down cleanly on SIGTERM. With `APP=all` and
 `RUN_WORKERS=false`, `start-runtime.mjs` starts only the API.
+
+### Realtime (single API instance)
+
+Run **exactly one API instance**. Realtime fan-out is process-local: the
+realtime pump claims `realtime.emit` outbox rows every second (batches of 100,
+draining until a batch comes back short, at most 5 s per tick) and emits them
+on an in-memory bus, and `/api/stream` serves only that process's bus. The SSE
+event ids (`Last-Event-ID`) come from a per-process counter and the replay
+history lives in memory: one ring of the last 500 events per tenant
+(`clientId`), so one tenant's burst never evicts another tenant's history. A
+second instance would claim half of the events for its own clients only, and
+its ids would mean nothing to the other; a restart loses the history (clients
+get `event: replay-gap` on reconnect and refetch). The in-memory rate limiter
+has the same constraint. Scaling out needs a shared bus first.
+
+Email status events (`emailLog.statusChanged`) are coalesced per 250 ms in the
+process that changes the status: each email log's latest status in the window
+is emitted once.
 
 ### `REALTIME_DISABLED`
 
