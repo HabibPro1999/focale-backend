@@ -622,7 +622,7 @@ export async function generateCertificateAttachments(
  * Abstract presenter certificates (H2). No role/check-in filter — abstracts
  * have no such state — but templates ARE gated by scope/allowedAbstractFinalTypes
  * (isAbstractEligibleForCertificate), mirroring apps/api
- * CertificatesService.processAbstractCertificates's own filtering of the same
+ * CertificatesService.planAbstractCertificates's own filtering of the same
  * template set for the same abstract.
  */
 export async function generateAbstractCertificateAttachments(

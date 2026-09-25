@@ -11,9 +11,12 @@ vi.mock("../client", () => ({
   getDb: () => fakeDb,
 }));
 
+import type { DbExecutor } from "../client";
 import {
   createEmailLog,
+  insertEmailLogsSkippingConflicts,
   insertEmailTemplate,
+  EMAIL_LOG_INSERT_CHUNK_SIZE,
   EMAIL_LOGS_REGISTRATION_TRIGGER_ACTIVE_KEY,
   EMAIL_LOGS_TEMPLATE_RECIPIENT_TRIGGER_ACTIVE_KEY,
   EMAIL_TEMPLATE_REGISTRATION_UNIQ,
@@ -94,5 +97,69 @@ describe("insertEmailTemplate race guard", () => {
     await expect(
       insertEmailTemplate({ name: "n" } as never),
     ).rejects.toMatchObject({ code: "23505" });
+  });
+});
+
+describe("insertEmailLogsSkippingConflicts", () => {
+  // Records each INSERT: its rows and the ON CONFLICT target; `refuse` ids are
+  // left out of RETURNING, as a unique index would.
+  function recordingExec(refuse: (id: string) => boolean = () => false) {
+    const statements: { rows: Array<{ id: string }>; conflictTarget: unknown }[] = [];
+    const exec = {
+      insert: () => ({
+        values: (rows: Array<{ id: string }>) => ({
+          onConflictDoNothing: (config?: unknown) => ({
+            returning: async () => {
+              statements.push({ rows, conflictTarget: config });
+              return rows.filter((row) => !refuse(row.id)).map(({ id }) => ({ id }));
+            },
+          }),
+        }),
+      }),
+    } as unknown as DbExecutor;
+    return { exec, statements };
+  }
+
+  const log = (overrides: Record<string, unknown> = {}) =>
+    ({ recipientEmail: "a@x.com", subject: "", status: "QUEUED", ...overrides }) as never;
+
+  it("inserts with a target-less ON CONFLICT DO NOTHING and returns the kept ids", async () => {
+    const { exec, statements } = recordingExec((id) => id === "log-2");
+    const kept = await insertEmailLogsSkippingConflicts(
+      [log({ id: "log-1" }), log({ id: "log-2" }), log({ id: "log-3" })],
+      exec,
+    );
+    expect(kept).toEqual(new Set(["log-1", "log-3"]));
+    expect(statements).toHaveLength(1);
+    expect(statements[0].conflictTarget).toBeUndefined();
+  });
+
+  it("gives every row an id so skipped rows can be told apart", async () => {
+    const { exec, statements } = recordingExec();
+    const kept = await insertEmailLogsSkippingConflicts([log(), log()], exec);
+    const ids = statements[0].rows.map((row) => row.id);
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
+    expect(kept).toEqual(new Set(ids));
+  });
+
+  it("splits large batches into statements of EMAIL_LOG_INSERT_CHUNK_SIZE rows", async () => {
+    const { exec, statements } = recordingExec();
+    const kept = await insertEmailLogsSkippingConflicts(
+      Array.from({ length: 2 * EMAIL_LOG_INSERT_CHUNK_SIZE + 1 }, () => log()),
+      exec,
+    );
+    expect(statements.map((statement) => statement.rows.length)).toEqual([
+      EMAIL_LOG_INSERT_CHUNK_SIZE,
+      EMAIL_LOG_INSERT_CHUNK_SIZE,
+      1,
+    ]);
+    expect(kept.size).toBe(2 * EMAIL_LOG_INSERT_CHUNK_SIZE + 1);
+  });
+
+  it("does nothing for an empty batch", async () => {
+    const { exec, statements } = recordingExec();
+    await expect(insertEmailLogsSkippingConflicts([], exec)).resolves.toEqual(new Set());
+    expect(statements).toHaveLength(0);
   });
 });
