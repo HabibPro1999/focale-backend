@@ -74,3 +74,13 @@ export function calculateApplicableAmount(
     sponsorship.totalAmount,
   );
 }
+
+/**
+ * A sponsorship code as stored and matched: trimmed and upper-cased (codes are
+ * generated upper-case). Null for a missing or blank code. The signup path,
+ * the pricing quote and the code repair all match codes through this.
+ */
+export function normalizeSponsorshipCode(code: string | null | undefined): string | null {
+  const normalized = code?.trim().toUpperCase() ?? "";
+  return normalized.length > 0 ? normalized : null;
+}

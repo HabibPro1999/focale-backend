@@ -8,6 +8,7 @@
     "requeue-skipped-abstract-emails": "node --conditions=@app/source -r @swc-node/register src/scripts/requeue-skipped-abstract-emails.ts",
     "networking-keyring": "node --conditions=@app/source -r @swc-node/register src/scripts/networking-keyring.ts",
     "requeue-dead-letters": "node --conditions=@app/source -r @swc-node/register src/scripts/requeue-dead-letters.ts",
+    "repair-sponsorship-code-usages": "node --conditions=@app/source -r @swc-node/register src/scripts/repair-sponsorship-code-usages.ts",
     "networking-retention": "node --conditions=@app/source -r @swc-node/register src/scripts/networking-retention.ts",
     "start": "node dist/main.js",
     "build": "tsc -p tsconfig.build.json",
