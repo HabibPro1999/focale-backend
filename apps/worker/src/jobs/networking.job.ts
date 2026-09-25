@@ -1,8 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { maintainNetworkingLifecycle } from "@app/db";
 import {
-  getStorageProvider,
-  ownedStorageKey,
   processNetworkingDeliveries,
   processNetworkingEmbeddings,
 } from "@app/integrations";
@@ -31,35 +29,9 @@ export class NetworkingMaintenanceJob implements Job {
   readonly intervalMs = 60_000;
   readonly timeoutMs = 5 * 60_000;
   async run() {
-    await maintainNetworkingLifecycle(undefined, async (profiles) => {
-      // Purge has committed. Cleanup has no durable retry; failures may leave orphaned objects.
-      let next = 0;
-      const cleanup = async () => {
-        while (next < profiles.length) {
-          const profile = profiles[next++]!;
-          // Form-projected or foreign URLs are never ours to delete.
-          const key = ownedStorageKey(profile.photoUrl, `networking/${profile.eventId}/profiles/${profile.id}`);
-          if (!key) continue;
-          try {
-            await getStorageProvider().delete(key);
-          } catch (error) {
-            const failure = error as {
-              code?: string | number;
-              name?: string;
-              $metadata?: { httpStatusCode?: number };
-            };
-            if (
-              failure?.code === 404 ||
-              failure?.code === "404" ||
-              failure?.name === "NoSuchKey" ||
-              failure?.$metadata?.httpStatusCode === 404
-            ) continue;
-            log.warn({ err: error, profileId: profile.id }, "Failed to delete purged networking photo");
-          }
-        }
-      };
-      await Promise.all(Array.from({ length: Math.min(4, profiles.length) }, cleanup));
-    });
+    // Retention purges run in batches within a time budget and resume on the
+    // next run; purged photos are deleted durably by the outbox storage.delete handler.
+    await maintainNetworkingLifecycle();
   }
 }
 @Injectable()

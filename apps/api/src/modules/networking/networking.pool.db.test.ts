@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyRequest } from "fastify";
-import { getDbSettings, networkingStore } from "@app/db";
+import { getDb, getDbSettings, networkingStore } from "@app/db";
 import { dbTestsEnabled } from "@app/db/testing";
 import { createNetworkingWriteFixture } from "../../../../../packages/db/tests/helpers/networking-write-fixture";
 import { NetworkingService, type NetworkingContext } from "./networking.service";
@@ -91,10 +91,19 @@ describe.runIf(dbTestsEnabled())("networking writes on a pool of one connection"
     await meetings.create(people[3], { profileId: people[4].profile.id, startsAt: slots[3].toISOString() });
     await social.block(people[4], people[3].profile.id);
     await meetings.create(people[0], { profileId: people[1].profile.id, startsAt: slots[3].toISOString() });
+    const photoUrl = `https://cdn.test/networking/${fixture.event.id}/profiles/${people[1].profile.id}/photo.webp`;
+    await networkingStore().update("profiles", { eventId: fixture.event.id, id: people[1].profile.id }, { photoUrl });
     expect(await controller.withdraw(fixture.event.slug, request(1))).toEqual({ withdrawn: true });
     const active = (await networkingStore().all("meetings", { eventId: fixture.event.id }))
       .filter((row) => ["PENDING", "CONFIRMED", "PENDING_ALLOCATION"].includes(row.status));
     expect(active).toEqual([]);
+    // 4.4: the photo's storage.delete outbox row rides the withdrawal transaction's connection.
+    const { rows: queued } = await getDb().$client.query(
+      "SELECT payload FROM outbox_events WHERE type = 'storage.delete' AND event_id = $1", [fixture.event.id],
+    );
+    expect(queued.map((row: { payload: unknown }) => row.payload)).toEqual([{
+      url: photoUrl, ownerPrefix: `networking/${fixture.event.id}/profiles/${people[1].profile.id}`, reason: "networking.withdrawal",
+    }]);
   });
 
   it("runs organizer configuration, moderation and inventory writes", async () => {

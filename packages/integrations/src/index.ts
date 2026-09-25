@@ -2,6 +2,7 @@ export * from "./errors";
 export * from "./config";
 export * from "./firebase";
 export * from "./storage/index";
+export * from "./storage/storage-delete";
 export * from "./email/index";
 export * from "./certificates-pdf";
 export * from "./pdf-fonts";
