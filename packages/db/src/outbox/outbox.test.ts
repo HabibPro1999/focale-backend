@@ -224,6 +224,34 @@ describe("processOutboxEvents", () => {
     expect(marks.some((p) => p.includes("failed") && p.includes("FAILED"))).toBe(true);
   });
 
+  it("stops before the next claimed row once its signal aborts", async () => {
+    const controller = new AbortController();
+    const first = vi.fn(async () => {
+      controller.abort();
+      return "processed" as const;
+    });
+    const second = vi.fn().mockResolvedValue("processed");
+    dbMock.execute.mockImplementation(
+      routeExecute(
+        [{ id: "a" }, { id: "b" }],
+        [
+          { id: "a", type: "first", payload: {}, attemptCount: 1, maxAttempts: 5 },
+          { id: "b", type: "second", payload: {}, attemptCount: 1, maxAttempts: 5 },
+        ],
+      ),
+    );
+
+    const result = await processOutboxEvents(2, {
+      workerId: "worker-1",
+      handlers: { first, second },
+      signal: controller.signal,
+    });
+
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).not.toHaveBeenCalled();
+    expect(result).toEqual({ processed: 1, skipped: 0, failed: 0, leaseLost: 0 });
+  });
+
   it("claims only realtime rows for the realtime scope", async () => {
     dbMock.execute.mockImplementation(routeExecute([], []));
 

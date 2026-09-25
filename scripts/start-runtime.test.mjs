@@ -10,11 +10,13 @@ const entry = fileURLToPath(new URL("../start-runtime.mjs", import.meta.url));
 
 async function runtime(t, worker, { env = {}, expectReady = 2 } = {}) {
   const cwd = await mkdtemp(join(tmpdir(), "focale-runtime-"));
+  // "ready" is printed only after the SIGTERM handler is installed: the tests
+  // signal as soon as they see it, and an earlier "ready" raced the handler.
   const idle = `const fs=require('node:fs'); const app=process.env.APP_NAME;
     fs.writeFileSync('started-'+app,'yes');
-    console.log('ready');
     process.on('SIGTERM',()=>{fs.writeFileSync('stopped-'+app,'yes');process.exit(0)});
-    setInterval(()=>{},1000);`;
+    setInterval(()=>{},1000);
+    console.log('ready');`;
   for (const app of ["api", "worker"]) {
     await mkdir(join(cwd, "apps", app, "dist"), { recursive: true });
     await writeFile(join(cwd, "apps", app, "dist", "main.js"),
@@ -84,7 +86,7 @@ test("APP=all with RUN_WORKERS=false starts only the API", { timeout: 5000 }, as
 });
 
 test("SIGKILLs a child still running SHUTDOWN_GRACE_MS + 3 s after SIGTERM", { timeout: 10000 }, async t => {
-  const stubborn = "console.log('ready'); process.on('SIGTERM',()=>{}); setInterval(()=>{},1000);";
+  const stubborn = "process.on('SIGTERM',()=>{}); setInterval(()=>{},1000); console.log('ready');";
   const run = await runtime(t, stubborn, { env: { SHUTDOWN_GRACE_MS: "200" } });
   await run.ready;
   const startedAt = Date.now();

@@ -107,6 +107,9 @@ export interface EmailProvider {
   ): WebhookResult | Promise<WebhookResult>;
 }
 
+/** Upper bound for one provider send request (SendGrid client timeout, Resend fetch abort). */
+export const EMAIL_PROVIDER_TIMEOUT_MS = 15_000;
+
 // -----------------------------------------------------------------------------
 // SHARED UTILITIES
 // -----------------------------------------------------------------------------

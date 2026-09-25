@@ -8,10 +8,10 @@ vi.mock("@app/db", async (original) => ({
 
 import { HealthController } from "./health.controller";
 import { getConfig } from "../../core/config";
-import type { ShutdownCoordinator } from "../../core/shutdown";
+import type { ReadinessService } from "./readiness.service";
 
-// This probe does not consult the shutdown state.
-const controller = () => new HealthController({} as ShutdownCoordinator);
+// This probe does not consult readiness.
+const controller = () => new HealthController({} as ReadinessService);
 
 const reply = () => ({ status: vi.fn().mockReturnThis() });
 
