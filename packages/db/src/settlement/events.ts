@@ -5,9 +5,11 @@ import { enqueueRealtimeOutboxEvent } from "../outbox";
 import { syncNetworkingRegistration } from "../queries/networking";
 
 /**
- * Enqueue realtime events in the caller's transaction. Registrations whose
- * money state changed (registration.updated / paymentConfirmed) are first
- * re-projected into networking, whose eligibility depends on payment status.
+ * Enqueue realtime events in the caller's transaction, one after the other so
+ * a failed insert stops the rest (the transaction is aborted anyway).
+ * Registrations whose money state changed (registration.updated /
+ * paymentConfirmed) are first re-projected into networking, whose eligibility
+ * depends on payment status. Returns each enqueue's result, in order.
  */
 export async function emitSettlementEvents(tx: DbExecutor, events: AppEvent[]): Promise<unknown> {
   const changedIds = new Set(
@@ -16,7 +18,9 @@ export async function emitSettlementEvents(tx: DbExecutor, events: AppEvent[]): 
       .map((ev) => String(ev.payload.id)),
   );
   for (const id of changedIds) await syncNetworkingRegistration(id, tx);
-  return Promise.all(events.map((ev) => enqueueRealtimeOutboxEvent(tx, ev)));
+  const results: Awaited<ReturnType<typeof enqueueRealtimeOutboxEvent>>[] = [];
+  for (const event of events) results.push(await enqueueRealtimeOutboxEvent(tx, event));
+  return results;
 }
 
 /**

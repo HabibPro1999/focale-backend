@@ -76,7 +76,9 @@ db.emitSettlementEvents.mockImplementation(
         .map((ev) => String(ev.payload.id)),
     );
     for (const id of changed) await db.syncNetworkingRegistration(id, tx);
-    return Promise.all(events.map((ev) => db.enqueueRealtimeOutboxEvent(tx, ev)));
+    const results: unknown[] = [];
+    for (const ev of events) results.push(await db.enqueueRealtimeOutboxEvent(tx, ev));
+    return results;
   },
 );
 
