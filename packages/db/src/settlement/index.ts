@@ -39,3 +39,14 @@ export {
   type SponsorshipCodeClaim,
   type SponsorshipCodeUnavailableReason,
 } from "./sponsorship-code";
+export {
+  SPONSORSHIP_CODE_REPAIR_ACTOR,
+  applySponsorshipCodeLink,
+  planSponsorshipCodeRepair,
+  type RepairRegistrationState,
+  type SponsorshipCodeDecision,
+  type SponsorshipCodeDecisionReason,
+  type SponsorshipCodeLink,
+  type SponsorshipCodeLinkResult,
+  type SponsorshipCodeRepairPlan,
+} from "./sponsorship-code-repair";
