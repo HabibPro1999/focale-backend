@@ -7,3 +7,4 @@ export * from "./txn";
 export * from "./locks";
 export * from "./queries/index";
 export * from "./outbox";
+export * from "./lease-queue";

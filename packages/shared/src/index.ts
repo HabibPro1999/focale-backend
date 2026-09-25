@@ -10,6 +10,7 @@ export * from "./html";
 export * from "./regex-safety";
 export * from "./form-data-validator";
 export * from "./poller";
+export * from "./job-abort";
 export * from "./worker-id";
 export * from "./abstract-authors";
 export * from "./export-format";
