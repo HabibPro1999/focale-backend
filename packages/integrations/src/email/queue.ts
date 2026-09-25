@@ -6,11 +6,12 @@
 // (updateEmailStatusFromWebhook).
 //
 // Concurrency safety is LEASE-based, not transaction-based: rows are claimed
-// with FOR UPDATE SKIP LOCKED and every subsequent write re-checks lockedBy
-// ownership (the @app/db primitives return false — not throw — when the lease
-// was lost, which we map to a non-counted "lease-lost" outcome). This is
-// deliberately NOT withTxnRetry/serializable; the semantics are lease expiry +
-// ownership, not conflict retry.
+// through the email lease queue (runLeased: FOR UPDATE SKIP LOCKED, one
+// heartbeat renewing every claimed row) and every subsequent write re-checks
+// lockedBy ownership (the @app/db primitives return false — not throw — when
+// the lease was lost, which we map to a non-counted "lease-lost" outcome).
+// This is deliberately NOT withTxnRetry/serializable; the semantics are lease
+// expiry + ownership, not conflict retry.
 // =============================================================================
 
 import { createLogger, makeWorkerId, escapeHtml } from "@app/shared";
@@ -20,11 +21,10 @@ import {
   createEmailLog,
   hasActiveEmailLogForRegistrationTrigger,
   hasActiveSponsorshipEmailLog,
-  claimQueuedEmailLogs,
+  emailQueue,
   getClaimedEmailLogsForProcessing,
-  recoverStaleEmailLeases,
+  runLeased,
   writeResolvedSubjectIfLeaseHeld,
-  refreshEmailLease,
   markEmailSent,
   markEmailFailed,
   markEmailSkipped,
@@ -33,7 +33,6 @@ import {
   getEmailLogRealtimeTarget,
   enqueueRealtimeOutboxEvent,
   getDb,
-  EMAIL_LEASE_MS,
   type ClaimedEmailLog,
   type EmailLogRow,
   type EmailLogInsert,
@@ -388,16 +387,22 @@ export interface ProcessEmailQueueOptions {
   /** Injected by the worker (wave 3). Required to process CERTIFICATE_SENT rows. */
   generateCertificateAttachments?: CertificateAttachmentGenerator;
   /**
-   * Stop before the next chunk once aborted (job timeout or shutdown). Rows
-   * claimed but not started stay leased until stale-lease recovery.
+   * Job signal (timeout or shutdown): no new row starts, and claimed rows not
+   * started go back to the queue without an attempt charged. A send already
+   * handed to the provider is never interrupted.
    */
   signal?: AbortSignal;
+  /**
+   * Keep claiming batches until one comes back short, the signal aborts, or
+   * this time (epoch ms) passes. Without it, one batch.
+   */
+  drainUntil?: number;
 }
 
 type EmailOutcome = "sent" | "failed" | "skipped" | "lease-lost";
 
 export async function processEmailQueue(
-  batchSize = 50,
+  batchSize = 20,
   options: ProcessEmailQueueOptions = {},
 ): Promise<ProcessQueueResult> {
   const result: ProcessQueueResult = {
@@ -408,26 +413,9 @@ export async function processEmailQueue(
   };
 
   const workerId = options.workerId ?? DEFAULT_WORKER_ID;
-  const leaseMs = options.leaseMs ?? EMAIL_LEASE_MS;
-  const now = new Date();
-  const lockedUntil = new Date(now.getTime() + leaseMs);
-
-  // Self-heal crashed workers before claiming new work.
-  await recoverStaleEmailLeases(now, leaseMs);
-
-  const claimedIds = await claimQueuedEmailLogs(
-    workerId,
-    batchSize,
-    now,
-    lockedUntil,
-  );
-  const batch = await getClaimedEmailLogsForProcessing(workerId, claimedIds);
-  if (batch.length === 0) return result;
-
-  result.processed = batch.length;
 
   const CONCURRENCY_LIMIT = 10;
-  // Shared across the batch so certificate PDFs don't re-download the same image.
+  // Shared across the run so certificate PDFs don't re-download the same image.
   const imageCache = new Map<string, unknown>();
 
   // N3/M8: SKIPPED is a status transition like SENT/FAILED — the admin's live
@@ -441,7 +429,11 @@ export async function processEmailQueue(
     return ok ? "skipped" : "lease-lost";
   }
 
-  async function processEmail(emailLog: ClaimedEmailLog): Promise<EmailOutcome> {
+  // `signal` aborts on the job signal or when this row's lease is lost.
+  async function processEmail(
+    emailLog: ClaimedEmailLog,
+    signal: AbortSignal,
+  ): Promise<EmailOutcome> {
     try {
       let templateSubject: string;
       let templateHtml: string;
@@ -491,7 +483,6 @@ export async function processEmailQueue(
           emailLog.id,
           workerId,
           resolvedSubject,
-          new Date(),
         ))
       ) {
         logger.warn(
@@ -533,9 +524,11 @@ export async function processEmailQueue(
         }
       }
 
-      // Refresh the lease immediately before the network call to avoid a
-      // double-send after lease expiry + requeue by another worker.
-      if (!(await refreshEmailLease(emailLog.id, workerId, new Date(), leaseMs))) {
+      // Re-check ownership (and extend the lease) immediately before the
+      // network call to avoid a double-send after lease expiry + requeue by
+      // another worker. Past this point the send is never interrupted.
+      signal.throwIfAborted();
+      if (!(await emailQueue.confirm(workerId, emailLog.id, options.leaseMs))) {
         logger.warn(
           { emailLogId: emailLog.id, workerId },
           "Email send skipped because lease was lost before provider call",
@@ -574,6 +567,8 @@ export async function processEmailQueue(
         workerId,
       );
     } catch (error: unknown) {
+      // An abort (lost lease, timeout, shutdown) is runLeased's to settle.
+      if (signal.aborted) throw error;
       const err = error as Error;
       logger.error(
         { emailLogId: emailLog.id, error: err.message },
@@ -583,17 +578,39 @@ export async function processEmailQueue(
     }
   }
 
-  for (let i = 0; i < batch.length; i += CONCURRENCY_LIMIT) {
-    if (options.signal?.aborted) break;
-    const chunk = batch.slice(i, i + CONCURRENCY_LIMIT);
-    const outcomes = await Promise.all(chunk.map(processEmail));
-    for (const outcome of outcomes) {
-      if (outcome === "sent") result.sent++;
-      else if (outcome === "failed") result.failed++;
-      else if (outcome === "skipped") result.skipped++;
-      // "lease-lost" is a race, not a real failure — silently dropped.
-    }
+  // Counts the outcome; true when its write landed (the row was still ours).
+  function count(outcome: EmailOutcome): boolean {
+    if (outcome === "sent") result.sent++;
+    else if (outcome === "failed") result.failed++;
+    else if (outcome === "skipped") result.skipped++;
+    // "lease-lost" is a race, not a real failure — silently dropped.
+    return outcome !== "lease-lost";
   }
+
+  // Claim → heartbeat → confirm → handle → release (see runLeased).
+  await runLeased<ClaimedEmailLog>(emailQueue, {
+    workerId,
+    limit: batchSize,
+    concurrency: CONCURRENCY_LIMIT,
+    signal: options.signal,
+    leaseMs: options.leaseMs,
+    drainUntil: options.drainUntil,
+    load: (ids) => getClaimedEmailLogsForProcessing(workerId, ids),
+    handle: async (emailLog, { signal }) => {
+      result.processed++;
+      return count(await processEmail(emailLog, signal));
+    },
+    // Reached only for a job timeout that interrupted a row before its send:
+    // the attempt is charged like any failure.
+    onError: async (emailLog, error) =>
+      count(
+        await failEmail(
+          emailLog,
+          error instanceof Error ? error.message : String(error),
+          workerId,
+        ),
+      ),
+  });
 
   return result;
 }
