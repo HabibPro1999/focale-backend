@@ -1,10 +1,10 @@
 import { Injectable } from "@nestjs/common";
 import { ErrorCodes } from "@app/contracts";
 import {
-  CHECKIN_ELIGIBLE_STATUSES,
+  batchCheckIn,
+  CHECK_IN_BATCH_TX_SIZE,
   checkInRegistration,
   createAccessCheckIn,
-  getAccessCheckIn,
   getAccessCheckInCounts,
   getActiveAccessItems,
   getActiveEventAccessId,
@@ -12,23 +12,17 @@ import {
   getEligibleRegistrationIds,
   countCheckedInRegistrations,
   countEventRegistrations,
+  getNetworkingAdmittedRegistrationIds,
   getRegistrationForCheckIn,
+  getRegistrationsForCheckIn,
   isNetworkingAccessAllowed,
-  pgUniqueViolation,
+  type BatchCheckInItem,
   type CheckInRegistration,
 } from "@app/db";
+import { createLogger, isFullySettled } from "@app/shared";
 import { AppException } from "../../core/app-exception";
 
-const ELIGIBLE = new Set<string>(CHECKIN_ELIGIBLE_STATUSES);
-
-/**
- * A concurrent access-level check-in that won the composite-unique-key race
- * surfaces as pg 23505. access_check_ins has exactly one unique index
- * (registration_id_access_id) so any 23505 from the insert is that race.
- */
-function isCheckInUniqueViolation(error: unknown): boolean {
-  return pgUniqueViolation(error) !== null;
-}
+const logger = createLogger({ name: "checkin" });
 
 function registrationSummary(reg: CheckInRegistration) {
   return {
@@ -41,13 +35,66 @@ function registrationSummary(reg: CheckInRegistration) {
   };
 }
 
+const paymentRequired = () =>
+  new AppException(
+    ErrorCodes.CHECKIN_PAYMENT_REQUIRED,
+    "Registration payment is not settled",
+    400,
+  );
+
+const networkingMeetingRequired = () =>
+  new AppException(
+    ErrorCodes.CHECKIN_NETWORKING_MEETING_REQUIRED,
+    "An eligible networking profile and a confirmed meeting are required for this area",
+    403,
+  );
+
+/**
+ * Throws the first rule a scan breaks, in the load-bearing order
+ * registration-exists → event-mismatch → payment-status →
+ * access-on-registration. The networking entrance rule comes after, from the
+ * database.
+ */
+function assertCheckInAllowed(
+  registration: CheckInRegistration | null | undefined,
+  eventId: string,
+  accessId: string | undefined,
+): asserts registration is CheckInRegistration {
+  if (!registration) {
+    throw new AppException(
+      ErrorCodes.CHECKIN_REGISTRATION_NOT_FOUND,
+      "Registration not found",
+      404,
+    );
+  }
+  if (registration.eventId !== eventId) {
+    throw new AppException(
+      ErrorCodes.CHECKIN_EVENT_MISMATCH,
+      "Registration does not belong to this event",
+      400,
+    );
+  }
+  if (!isFullySettled(registration.paymentStatus)) throw paymentRequired();
+  if (accessId && !registration.accessTypeIds.includes(accessId)) {
+    throw new AppException(
+      ErrorCodes.CHECKIN_ACCESS_NOT_ON_REGISTRATION,
+      "Registration does not include this access item",
+      400,
+    );
+  }
+}
+
+type SyncOutcome = "SYNCED" | "ALREADY_CHECKED_IN" | { error: string };
+
 @Injectable()
 export class CheckinService {
   /**
    * Check-in a registration (event- or access-level). Check ORDER is
    * load-bearing: registration-exists → event-mismatch → payment-status →
-   * access-on-registration → existing-check-in lookup → write. "Already checked
-   * in" is a 200 success with alreadyCheckedIn:true (never an error).
+   * access-on-registration → networking entrance → write. "Already checked
+   * in" is a 200 success with alreadyCheckedIn:true (never an error). The
+   * write only changes a row that is not checked in yet (and, at event level,
+   * is still fully settled), so parallel scans produce one check-in.
    */
   async checkIn(
     eventId: string,
@@ -57,90 +104,16 @@ export class CheckinService {
     checkedInAt = new Date(),
   ) {
     const registration = await getRegistrationForCheckIn(registrationId);
+    assertCheckInAllowed(registration, eventId, accessId);
 
-    if (!registration) {
-      throw new AppException(
-        ErrorCodes.CHECKIN_REGISTRATION_NOT_FOUND,
-        "Registration not found",
-        404,
-      );
+    if (
+      accessId &&
+      !(await isNetworkingAccessAllowed(eventId, registrationId, accessId))
+    ) {
+      throw networkingMeetingRequired();
     }
 
-    if (registration.eventId !== eventId) {
-      throw new AppException(
-        ErrorCodes.CHECKIN_EVENT_MISMATCH,
-        "Registration does not belong to this event",
-        400,
-      );
-    }
-
-    if (!ELIGIBLE.has(registration.paymentStatus)) {
-      throw new AppException(
-        ErrorCodes.CHECKIN_PAYMENT_REQUIRED,
-        "Registration payment is not settled",
-        400,
-      );
-    }
-
-    // Access-level check-in
-    if (accessId) {
-      if (!registration.accessTypeIds.includes(accessId)) {
-        throw new AppException(
-          ErrorCodes.CHECKIN_ACCESS_NOT_ON_REGISTRATION,
-          "Registration does not include this access item",
-          400,
-        );
-      }
-
-      if (!(await isNetworkingAccessAllowed(eventId, registrationId, accessId))) {
-        throw new AppException(
-          ErrorCodes.CHECKIN_NETWORKING_MEETING_REQUIRED,
-          "An eligible networking profile and a confirmed meeting are required for this area",
-          403,
-        );
-      }
-      const existing = await getAccessCheckIn(registrationId, accessId);
-      if (existing) {
-        return {
-          success: true,
-          alreadyCheckedIn: true,
-          checkedInAt: existing.checkedInAt,
-          registration: registrationSummary(registration),
-        };
-      }
-
-      let checkInRecord;
-      try {
-        checkInRecord = await createAccessCheckIn({
-          registrationId,
-          eventId: registration.eventId,
-          accessId,
-          clientId: registration.clientId,
-          checkedInBy: userId,
-          checkedInAt,
-        });
-      } catch (error) {
-        if (!isCheckInUniqueViolation(error)) throw error;
-        const existingAfterRace = await getAccessCheckIn(registrationId, accessId);
-        if (!existingAfterRace) throw error;
-        return {
-          success: true,
-          alreadyCheckedIn: true,
-          checkedInAt: existingAfterRace.checkedInAt,
-          registration: registrationSummary(registration),
-        };
-      }
-
-      return {
-        success: true,
-        alreadyCheckedIn: false,
-        checkedInAt: checkInRecord.checkedInAt,
-        registration: registrationSummary(registration),
-      };
-    }
-
-    // Event-level check-in
-    if (registration.checkedInAt) {
+    if (!accessId && registration.checkedInAt) {
       return {
         success: true,
         alreadyCheckedIn: true,
@@ -149,18 +122,23 @@ export class CheckinService {
       };
     }
 
-    await checkInRegistration({
+    const input = {
       registrationId,
       eventId: registration.eventId,
       clientId: registration.clientId,
       checkedInBy: userId,
       checkedInAt,
-    });
+    };
+    const result = accessId
+      ? await createAccessCheckIn({ ...input, accessId })
+      : await checkInRegistration(input);
+    // The registration stopped being fully settled after it was read.
+    if (result.outcome === "NOT_ELIGIBLE") throw paymentRequired();
 
     return {
       success: true,
-      alreadyCheckedIn: false,
-      checkedInAt,
+      alreadyCheckedIn: result.outcome === "ALREADY_CHECKED_IN",
+      checkedInAt: result.checkedInAt,
       registration: registrationSummary(registration),
     };
   }
@@ -180,8 +158,11 @@ export class CheckinService {
   }
 
   /**
-   * Batch sync offline check-ins. Sequential (one bad item never fails the
-   * others); non-AppError → "Unknown error". Never throws; endpoint always 200.
+   * Batch sync offline check-ins (at most 500 per request, enforced by the
+   * body schema). Items are validated like `checkIn` and written
+   * CHECK_IN_BATCH_TX_SIZE per transaction. One bad item never fails the
+   * others; a non-AppError becomes "Unknown error". Never throws; the endpoint
+   * always answers 200.
    */
   async batchSync(
     eventId: string,
@@ -192,33 +173,101 @@ export class CheckinService {
     }>,
     userId: string,
   ) {
-    let synced = 0;
-    let alreadyCheckedIn = 0;
-    const errors: Array<{ registrationId: string; error: string }> = [];
-
-    for (const item of checkIns) {
+    const outcomes: SyncOutcome[] = [];
+    for (let start = 0; start < checkIns.length; start += CHECK_IN_BATCH_TX_SIZE) {
+      const chunk = checkIns.slice(start, start + CHECK_IN_BATCH_TX_SIZE);
       try {
-        const result = await this.checkIn(
-          eventId,
-          item.registrationId,
-          item.accessId,
-          userId,
-          new Date(item.scannedAt),
-        );
-        if (result.alreadyCheckedIn) {
-          alreadyCheckedIn++;
-        } else {
-          synced++;
-        }
-      } catch (e) {
-        errors.push({
-          registrationId: item.registrationId,
-          error: e instanceof AppException ? e.message : "Unknown error",
-        });
+        outcomes.push(...(await this.syncChunk(eventId, chunk, userId)));
+      } catch (error) {
+        logger.error({ err: error, eventId }, "Check-in sync chunk failed");
+        outcomes.push(...chunk.map(() => ({ error: "Unknown error" })));
       }
     }
 
+    let synced = 0;
+    let alreadyCheckedIn = 0;
+    const errors: Array<{ registrationId: string; error: string }> = [];
+    outcomes.forEach((outcome, index) => {
+      if (outcome === "SYNCED") synced++;
+      else if (outcome === "ALREADY_CHECKED_IN") alreadyCheckedIn++;
+      else errors.push({ registrationId: checkIns[index]!.registrationId, error: outcome.error });
+    });
     return { synced, alreadyCheckedIn, errors };
+  }
+
+  /** One transaction's worth of sync items → one outcome per item, in order. */
+  private async syncChunk(
+    eventId: string,
+    chunk: Array<{ registrationId: string; accessId?: string; scannedAt: string }>,
+    userId: string,
+  ): Promise<SyncOutcome[]> {
+    const registrations = await getRegistrationsForCheckIn(
+      chunk.map((item) => item.registrationId),
+    );
+    const outcomes: SyncOutcome[] = chunk.map((item) => {
+      try {
+        assertCheckInAllowed(registrations.get(item.registrationId), eventId, item.accessId);
+        return "SYNCED";
+      } catch (error) {
+        return { error: (error as AppException).message };
+      }
+    });
+
+    // Networking entrance rule: one query per access item in the chunk.
+    const byAccess = new Map<string, string[]>();
+    chunk.forEach((item, index) => {
+      if (!item.accessId || outcomes[index] !== "SYNCED") return;
+      byAccess.set(item.accessId, [
+        ...(byAccess.get(item.accessId) ?? []),
+        item.registrationId,
+      ]);
+    });
+    const admitted = new Map<string, Set<string>>();
+    for (const [accessId, ids] of byAccess) {
+      admitted.set(
+        accessId,
+        await getNetworkingAdmittedRegistrationIds(eventId, accessId, ids),
+      );
+    }
+
+    const writes: Array<{ index: number; item: BatchCheckInItem }> = [];
+    chunk.forEach((item, index) => {
+      if (outcomes[index] !== "SYNCED") return;
+      if (item.accessId && !admitted.get(item.accessId)?.has(item.registrationId)) {
+        outcomes[index] = { error: networkingMeetingRequired().message };
+        return;
+      }
+      const registration = registrations.get(item.registrationId)!;
+      writes.push({
+        index,
+        item: {
+          registrationId: item.registrationId,
+          eventId: registration.eventId,
+          clientId: registration.clientId,
+          accessId: item.accessId,
+          checkedInBy: userId,
+          checkedInAt: new Date(item.scannedAt),
+        },
+      });
+    });
+
+    const results = await batchCheckIn(writes.map((write) => write.item));
+    results.forEach((result, position) => {
+      const { index } = writes[position]!;
+      if (result.outcome === "CHECKED_IN") outcomes[index] = "SYNCED";
+      else if (result.outcome === "ALREADY_CHECKED_IN") {
+        outcomes[index] = "ALREADY_CHECKED_IN";
+      } else if (result.outcome === "NOT_ELIGIBLE") {
+        outcomes[index] = { error: paymentRequired().message };
+      } else {
+        logger.error(
+          { err: result.error, eventId, registrationId: chunk[index]!.registrationId },
+          "Check-in sync item failed",
+        );
+        outcomes[index] = { error: "Unknown error" };
+      }
+    });
+    return outcomes;
   }
 
   /** Check-in statistics: totals + per-active-access breakdown. */
