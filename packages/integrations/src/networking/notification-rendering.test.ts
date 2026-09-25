@@ -1,20 +1,36 @@
 import { createCipheriv,createHash,randomBytes } from "node:crypto";
 import { describe,expect,it } from "vitest";
 import { NetworkingConfigSchema } from "@app/contracts";
-import { decryptNetworkingCode,escapeNetworkingHtml,renderNetworkingNotification,type NetworkingNotificationContext } from "./notification-rendering";
+import { NetworkingKeyring } from "@app/shared";
+import { resetIntegrationsConfig } from "../config";
+import { escapeNetworkingHtml,openNetworkingCode,renderNetworkingNotification,type NetworkingNotificationContext } from "./notification-rendering";
 import { allowedNetworkingPushEndpoint } from "./notification-worker";
 
 describe("networking notification boundaries",()=>{
- it("decrypts authenticated OTP payloads and rejects tampering",()=>{
+ it("opens legacy and v1 sealed OTP payloads with the keyring and rejects tampering or a missing key",()=>{
   const secret="test-networking-secret-at-least-32-characters";
   const iv=randomBytes(12);const cipher=createCipheriv("aes-256-gcm",createHash("sha256").update(secret).digest(),iv);
   const encrypted=Buffer.concat([cipher.update("123456"),cipher.final()]);
   const payload=[iv,cipher.getAuthTag(),encrypted].map(value=>value.toString("base64url")).join(".");
-  expect(decryptNetworkingCode(payload,secret)).toBe("123456");
-  expect(()=>decryptNetworkingCode(payload,"another-secret-at-least-32-characters")).toThrow();
+  const k1="k1-networking-key-at-least-32-characters-long";
+  const env={NETWORKING_TOKEN_SECRET:secret,NETWORKING_KEYS:undefined as string|undefined,NETWORKING_KEYRING_WRITE_V1:undefined as string|undefined};
+  const run=<T>(overrides:Partial<typeof env>,body:()=>T)=>{
+   const saved={...process.env};Object.assign(process.env,{...env,...overrides});
+   for(const [key,value] of Object.entries({...env,...overrides})) if(value===undefined) delete process.env[key];
+   resetIntegrationsConfig();
+   try{return body();}finally{process.env=saved;resetIntegrationsConfig();}
+  };
+  // A legacy seal written before the keyring still opens (duplicate decryptNetworkingCode removed).
+  expect(run({},()=>openNetworkingCode(payload))).toBe("123456");
+  const v1=new NetworkingKeyring({keys:[{kid:"k1",secret:k1}],legacySecret:secret,writeV1:true}).seal("654321");
+  expect(v1).toMatch(/^v1:k1:/);
+  expect(run({NETWORKING_KEYS:`k1:${k1}`},()=>openNetworkingCode(v1))).toBe("654321");
+  expect(run({NETWORKING_KEYS:`k1:${k1}`},()=>openNetworkingCode(payload))).toBe("123456");
+  expect(()=>run({},()=>openNetworkingCode(v1))).toThrow("k1");
+  expect(()=>run({NETWORKING_TOKEN_SECRET:"another-secret-at-least-32-characters"},()=>openNetworkingCode(payload))).toThrow();
   encrypted[0]=encrypted[0]!^1;
   const tampered=[iv,cipher.getAuthTag(),encrypted].map(value=>value.toString("base64url")).join(".");
-  expect(()=>decryptNetworkingCode(tampered,secret)).toThrow();
+  expect(()=>run({},()=>openNetworkingCode(tampered))).toThrow();
  });
  it("escapes user-authored names, company names and template bodies",()=>{
   expect(escapeNetworkingHtml('<img src=x onerror="alert(1)">')).toBe('&lt;img src=x onerror=&quot;alert(1)&quot;&gt;');

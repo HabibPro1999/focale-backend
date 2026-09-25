@@ -24,6 +24,17 @@ vi.mock("@app/db", async (original) => {
     },
     insert: async (kind: string, values: Record<string, unknown>) => { db.insert(kind, values); return values; },
     failedOtpAttempts: db.failedOtpAttempts,
+    sessionByTokenHashes: async (eventId: string, hashes: string[]) => {
+      db.reads.push("sessions");
+      return (db.rows.sessions ?? []).find((row) => row.eventId === eventId && row.revokedAt == null && hashes.includes(row.tokenHash as string)) ?? null;
+    },
+    rehashSession: async (eventId: string, id: string, from: string, to: string) => {
+      db.update("sessions", { eventId, id, tokenHash: from }, { tokenHash: to });
+      for (const row of db.rows.sessions ?? []) if (row.id === id && row.tokenHash === from) row.tokenHash = to;
+    },
+    revokeSessionByTokenHashes: async (eventId: string, hashes: string[]) => {
+      db.update("sessions", { eventId, tokenHash: hashes, revokedAt: null }, { revokedAt: new Date() });
+    },
   };
   return {
     ...(await original<typeof import("@app/db")>()),
@@ -45,7 +56,7 @@ vi.mock("@app/integrations", async (original) => ({
   getStorageProvider: () => ({ delete: db.delete }),
 }));
 import { NetworkingService } from "./networking.service";
-import { networkingHash } from "./networking.security";
+import { networkingHash, networkingOtpHash } from "./networking.security";
 import { networkingBearerLockout, networkingIdentityCache, networkingVenueKey } from "../../core/networking-identity-cache";
 
 const token = "t".repeat(48);
@@ -141,7 +152,7 @@ describe("participant session and event errors", () => {
   it("logs out by token alone, even for an ineligible participant after networking closed", async () => {
     seed({ profile: { status: "SUSPENDED" }, config: { enabled: false } });
     expect(await service.logout("demo", bearer)).toEqual({ loggedOut: true });
-    expect(db.update).toHaveBeenCalledWith("sessions", { eventId: "event", tokenHash: networkingHash(token), revokedAt: null }, { revokedAt: expect.any(Date) });
+    expect(db.update).toHaveBeenCalledWith("sessions", { eventId: "event", tokenHash: expect.arrayContaining([networkingHash(token)]), revokedAt: null }, { revokedAt: expect.any(Date) });
     await expect(service.logout("demo", undefined)).rejects.toMatchObject({ status: 401, response: { code: "NETWORKING_SESSION_EXPIRED" } });
   });
 });
@@ -266,7 +277,7 @@ describe("OTP failed-attempt limits (0.9)", () => {
   function seedChallenge(overrides: object = {}) {
     db.rows.challenges = [{
       id: "c1", eventId: "event", email: "ann@example.test", attempts: 0, consumedAt: null, verifiedAt: null,
-      codeHash: networkingHash(`otp:event:ann@example.test:${code}`), expiresAt: new Date(Date.now() + 60_000), ...overrides,
+      codeHash: networkingOtpHash("event", "ann@example.test", code), expiresAt: new Date(Date.now() + 60_000), ...overrides,
     }];
   }
   it.each([
