@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PgDialect } from "drizzle-orm/pg-core";
+import { drizzle } from "drizzle-orm/node-postgres";
 import type { SQL } from "drizzle-orm";
 
 // Mock the drizzle client so processOutboxEvents' internal getDb() calls hit a
@@ -35,26 +36,35 @@ const dialect = new PgDialect();
 const render = (q: SQL) => dialect.sqlToQuery(q).sql;
 const paramsOf = (q: SQL) => dialect.sqlToQuery(q).params;
 
-/** Fake DbExecutor for enqueue tests: stubs the query builder + raw execute. */
-function makeExec(opts: {
-  existing?: boolean;
-  insertError?: unknown;
-  isTx?: boolean;
-} = {}) {
-  const execute = vi.fn().mockResolvedValue({ rowCount: 0, rows: [] });
-  const values = vi.fn(() =>
-    opts.insertError
-      ? Promise.reject(opts.insertError)
-      : Promise.resolve(undefined),
-  );
-  const insert = vi.fn(() => ({ values }));
-  const limit = vi.fn(() =>
-    Promise.resolve(opts.existing ? [{ id: "existing" }] : []),
-  );
-  const select = vi.fn(() => ({ from: () => ({ where: () => ({ limit }) }) }));
-  const exec = { execute, insert, select } as Record<string, unknown>;
-  if (opts.isTx) exec.rollback = () => undefined;
-  return { exec: exec as never, execute, insert, values };
+const mockDb = drizzle.mock({ casing: "snake_case" });
+
+/**
+ * Fake DbExecutor for enqueue tests: builds the real drizzle insert (so the
+ * rendered SQL is checked) and resolves it with `returned` instead of
+ * touching a database.
+ */
+function makeExec(opts: { returned?: unknown[]; error?: unknown } = {}) {
+  const queries: Array<{ sql: string; params: unknown[] }> = [];
+  const values = vi.fn();
+  const insert = vi.fn((table: Parameters<typeof mockDb.insert>[0]) => {
+    const builder = mockDb.insert(table);
+    const realValues = builder.values.bind(builder);
+    builder.values = ((v: never) => {
+      values(v);
+      const query = realValues(v);
+      // The final builder is awaited: record its SQL and resolve without a DB.
+      Object.assign(query, {
+        then: (resolve: (v: unknown) => unknown, reject: (e: unknown) => unknown) => {
+          queries.push(query.toSQL());
+          return (opts.error ? Promise.reject(opts.error) : Promise.resolve(opts.returned ?? [{ id: "new" }]))
+            .then(resolve, reject);
+        },
+      });
+      return query;
+    }) as typeof builder.values;
+    return builder;
+  });
+  return { exec: { insert } as never, insert, values, queries };
 }
 
 const REALTIME_PAYLOAD = {
@@ -95,8 +105,25 @@ describe("enqueueOutboxEvent", () => {
     );
   });
 
-  it("treats a bare 23505 with a dedupe key as a dedupe hit (returns false)", async () => {
-    const { exec, values } = makeExec({ insertError: { code: "23505" } });
+  it("inserts with ON CONFLICT on the partial dedupe index, repeating its predicate", async () => {
+    const { exec, queries } = makeExec();
+    await expect(
+      enqueueOutboxEvent(exec, {
+        type: "email.abstract",
+        dedupeKey: "email:abstract:ACCEPTED:abstract-1",
+        payload: { trigger: "ABSTRACT_ACCEPTED", abstractId: "abstract-1" },
+      }),
+    ).resolves.toBe(true);
+    expect(queries).toHaveLength(1);
+    expect(queries[0]!.sql).toMatch(
+      /on conflict \("dedupe_key"\) where "dedupe_key" IS NOT NULL do nothing returning "id"$/,
+    );
+    // One statement: no pre-check SELECT, no SAVEPOINT.
+    expect(queries[0]!.sql).not.toMatch(/savepoint/i);
+  });
+
+  it("returns false when the dedupe key already exists (nothing inserted)", async () => {
+    const { exec } = makeExec({ returned: [] });
     await expect(
       enqueueOutboxEvent(exec, {
         type: "email.abstract",
@@ -104,61 +131,21 @@ describe("enqueueOutboxEvent", () => {
         payload: { trigger: "ABSTRACT_ACCEPTED", abstractId: "abstract-1" },
       }),
     ).resolves.toBe(false);
-    expect(values).toHaveBeenCalledOnce();
   });
 
-  it("treats a 23505 naming the dedupe constraint as a dedupe hit", async () => {
-    const { exec } = makeExec({
-      insertError: {
-        code: "23505",
-        constraint: "outbox_events_dedupe_key_key",
-      },
-    });
+  it("uses the same statement without a dedupe key (NULL never conflicts)", async () => {
+    const { exec, queries, values } = makeExec();
     await expect(
-      enqueueOutboxEvent(exec, {
-        type: "email.abstract",
-        dedupeKey: "email:abstract:ACCEPTED:abstract-1",
-        payload: { trigger: "ABSTRACT_ACCEPTED", abstractId: "abstract-1" },
-      }),
-    ).resolves.toBe(false);
+      enqueueOutboxEvent(exec, { type: "email.triggered", payload: { a: 1, drop: undefined } }),
+    ).resolves.toBe(true);
+    expect(values).toHaveBeenCalledWith(
+      expect.objectContaining({ dedupeKey: null, payload: { a: 1 }, maxAttempts: 5 }),
+    );
+    expect(queries[0]!.sql).toContain("on conflict");
   });
 
-  it("wraps a transaction-scoped dedupe race in a savepoint and rolls back", async () => {
-    const { exec, execute } = makeExec({
-      insertError: { code: "23505" },
-      isTx: true,
-    });
-
-    await expect(
-      enqueueOutboxEvent(exec, {
-        type: "email.abstract",
-        dedupeKey: "email:abstract:ACCEPTED:abstract-1",
-        payload: { trigger: "ABSTRACT_ACCEPTED", abstractId: "abstract-1" },
-      }),
-    ).resolves.toBe(false);
-
-    const raw = execute.mock.calls.map((c) => render(c[0] as SQL));
-    expect(raw).toEqual([
-      "SAVEPOINT outbox_enqueue_dedupe",
-      "ROLLBACK TO SAVEPOINT outbox_enqueue_dedupe",
-      "RELEASE SAVEPOINT outbox_enqueue_dedupe",
-    ]);
-  });
-
-  it("skips insertion when the dedupe key already exists", async () => {
-    const { exec, insert } = makeExec({ existing: true });
-    await expect(
-      enqueueOutboxEvent(exec, {
-        type: "email.abstract",
-        dedupeKey: "email:abstract:ACCEPTED:abstract-1",
-        payload: { trigger: "ABSTRACT_ACCEPTED", abstractId: "abstract-1" },
-      }),
-    ).resolves.toBe(false);
-    expect(insert).not.toHaveBeenCalled();
-  });
-
-  it("rethrows a non-dedupe error", async () => {
-    const { exec } = makeExec({ insertError: { code: "23503" } });
+  it("rethrows database errors", async () => {
+    const { exec } = makeExec({ error: { code: "23503" } });
     await expect(
       enqueueOutboxEvent(exec, {
         type: "email.abstract",

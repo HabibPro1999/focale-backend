@@ -3,7 +3,6 @@ import { createLogger, makeWorkerId } from "@app/shared";
 import type { AppEvent } from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
 import { rowsOf } from "../helpers";
-import { isTransactionExecutor, pgUniqueViolation } from "../txn";
 import { auditLogs, outboxEvents } from "../schema";
 import {
   DB_NOW,
@@ -132,81 +131,46 @@ const scopedQueues: Record<OutboxProcessingScope, LeaseQueue> = {
   background: createLeaseQueue(outboxLeaseSpec("background")),
 };
 
-// outbox_events has exactly one caller-supplied unique index (the partial
-// dedupe_key index `outbox_events_dedupe_key_key`), so any 23505 raised while a
-// dedupe key is present is the idempotency race, whether or not the driver
-// surfaces the constraint name.
-function isOutboxDedupeViolation(error: unknown, dedupeKey?: string): boolean {
-  const v = pgUniqueViolation(error);
-  if (v === null) return false;
-  if (v.constraint.includes("outbox_events_dedupe_key_key")) return true;
-  return dedupeKey != null;
-}
-
 // ---------------------------------------------------------------------------
 // Enqueue — rides the CALLER's transaction (that atomicity is the whole point
 // of the outbox pattern), hence the DbExecutor param instead of owning a txn.
+//
+// Dedupe is one statement: ON CONFLICT on the partial unique index
+// `outbox_events_dedupe_key_key` (0001_raw_indexes.sql). The index predicate is
+// repeated so PostgreSQL can infer that index. A duplicate key inserts nothing
+// and raises nothing, so the caller's transaction stays usable (no savepoint
+// needed; a failed statement would abort the whole transaction, 25P02) and a
+// concurrent duplicate waits for the first writer instead of failing.
 // ---------------------------------------------------------------------------
 export async function enqueueOutboxEvent(
   exec: DbExecutor,
   input: EnqueueOutboxInput,
 ): Promise<boolean> {
-  try {
-    if (input.dedupeKey) {
-      const existing = await exec
-        .select({ id: outboxEvents.id })
-        .from(outboxEvents)
-        .where(sql`${outboxEvents.dedupeKey} = ${input.dedupeKey}`)
-        .limit(1);
-      if (existing[0]) {
-        logger.info(
-          { type: input.type, dedupeKey: input.dedupeKey },
-          "Outbox event already enqueued, skipping duplicate",
-        );
-        return false;
-      }
-    }
-
-    const useSavepoint =
-      input.dedupeKey != null && isTransactionExecutor(exec);
-    if (useSavepoint) {
-      await exec.execute(sql.raw("SAVEPOINT outbox_enqueue_dedupe"));
-    }
-
-    try {
-      await exec.insert(outboxEvents).values({
-        type: input.type,
-        aggregateType: input.aggregateType ?? null,
-        aggregateId: input.aggregateId ?? null,
-        clientId: input.clientId ?? null,
-        eventId: input.eventId ?? null,
-        dedupeKey: input.dedupeKey ?? null,
-        payload: toJsonValue(input.payload),
-        maxAttempts: input.maxAttempts ?? 5,
-      });
-      if (useSavepoint) {
-        await exec.execute(sql.raw("RELEASE SAVEPOINT outbox_enqueue_dedupe"));
-      }
-    } catch (error) {
-      if (useSavepoint) {
-        await exec.execute(
-          sql.raw("ROLLBACK TO SAVEPOINT outbox_enqueue_dedupe"),
-        );
-        await exec.execute(sql.raw("RELEASE SAVEPOINT outbox_enqueue_dedupe"));
-      }
-      throw error;
-    }
-    return true;
-  } catch (error) {
-    if (isOutboxDedupeViolation(error, input.dedupeKey)) {
-      logger.info(
-        { type: input.type, dedupeKey: input.dedupeKey },
-        "Outbox event already enqueued, skipping duplicate",
-      );
-      return false;
-    }
-    throw error;
+  const inserted = await exec
+    .insert(outboxEvents)
+    .values({
+      type: input.type,
+      aggregateType: input.aggregateType ?? null,
+      aggregateId: input.aggregateId ?? null,
+      clientId: input.clientId ?? null,
+      eventId: input.eventId ?? null,
+      dedupeKey: input.dedupeKey ?? null,
+      payload: toJsonValue(input.payload),
+      maxAttempts: input.maxAttempts ?? 5,
+    })
+    .onConflictDoNothing({
+      target: outboxEvents.dedupeKey,
+      where: sql.raw(`"dedupe_key" IS NOT NULL`),
+    })
+    .returning({ id: outboxEvents.id });
+  if (inserted.length === 0) {
+    logger.info(
+      { type: input.type, dedupeKey: input.dedupeKey },
+      "Outbox event already enqueued, skipping duplicate",
+    );
+    return false;
   }
+  return true;
 }
 
 /** Audit-log insert. Rides the caller's transaction via the DbExecutor param. */
