@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ErrorCodes } from "@app/contracts";
 import { FirebaseStorageProvider } from "./firebase-storage.provider";
 import { R2StorageProvider } from "./r2-storage.provider";
+import { StorageObjectNotFoundError } from "./storage.provider";
 
 const { firebaseStorageMock } = vi.hoisted(() => ({
   firebaseStorageMock: { bucket: vi.fn() },
@@ -157,5 +159,46 @@ describe("R2StorageProvider", () => {
       }),
     );
     expect(result).toBe("private/proof.webp");
+  });
+});
+
+describe("download of a missing object", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.R2_ACCOUNT_ID = "account-id";
+    process.env.R2_ACCESS_KEY_ID = "access-key";
+    process.env.R2_SECRET_ACCESS_KEY = "secret-key";
+    process.env.R2_BUCKET = "bucket";
+    process.env.R2_PUBLIC_URL = "https://cdn.example.com/";
+  });
+
+  it("Firebase 404 becomes StorageObjectNotFoundError", async () => {
+    firebaseStorageMock.bucket.mockReturnValue({
+      file: () => ({
+        download: vi.fn().mockRejectedValue(Object.assign(new Error("No such object"), { code: 404 })),
+        getMetadata: vi.fn(),
+      }),
+    });
+    const err = await new FirebaseStorageProvider().download("a/b.pdf").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StorageObjectNotFoundError);
+    expect(err).toMatchObject({ key: "a/b.pdf", status: 404, code: ErrorCodes.NOT_FOUND, name: "IntegrationError" });
+    expect((err as { details?: unknown }).details).toBeUndefined();
+  });
+
+  it("R2 NoSuchKey becomes StorageObjectNotFoundError", async () => {
+    awsMocks.send.mockRejectedValueOnce(
+      Object.assign(new Error("The specified key does not exist."), {
+        name: "NoSuchKey",
+        $metadata: { httpStatusCode: 404 },
+      }),
+    );
+    const err = await new R2StorageProvider().download("a/b.pdf").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StorageObjectNotFoundError);
+  });
+
+  it("other errors pass through", async () => {
+    const boom = Object.assign(new Error("AccessDenied"), { name: "AccessDenied", $metadata: { httpStatusCode: 403 } });
+    awsMocks.send.mockRejectedValueOnce(boom);
+    await expect(new R2StorageProvider().download("a/b.pdf")).rejects.toBe(boom);
   });
 });

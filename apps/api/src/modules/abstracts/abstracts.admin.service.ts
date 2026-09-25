@@ -14,18 +14,11 @@ import {
   type AdminReviewRow,
 } from "@app/db";
 import { getStorageProvider } from "@app/integrations";
+import { getAbstractTitle } from "@app/shared";
 import { AppException } from "../../core/app-exception";
 
 const ALREADY_FINALIZED_MSG =
   "Abstract is already finalized; reopen before changing the decision";
-
-export function getTitle(content: unknown): string {
-  if (content && typeof content === "object" && !Array.isArray(content)) {
-    const title = (content as { title?: unknown }).title;
-    if (typeof title === "string" && title.trim()) return title.trim();
-  }
-  return "Untitled abstract";
-}
 
 function toReviewDto(review: AdminReviewRow) {
   return {
@@ -61,7 +54,7 @@ function formatAdminAbstract(abstract: AdminAbstractRow) {
     status: abstract.status,
     code: abstract.code,
     codeNumber: abstract.codeNumber,
-    title: getTitle(abstract.content),
+    title: getAbstractTitle(abstract.content),
     requestedType: abstract.requestedType,
     finalType: abstract.finalType,
     presentedAt: abstract.presentedAt?.toISOString() ?? null,

@@ -2,9 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RegistrationsController } from "./registrations.controller";
 import type { RegistrationsService } from "./registrations.service";
 import type { AuthUser } from "../../core/auth/user-cache";
-import { getStorageProvider, extractStorageKeyFromUrl } from "@app/integrations";
+import {
+  getStorageProvider,
+  extractStorageKeyFromUrl,
+  StorageObjectNotFoundError,
+} from "@app/integrations";
 
-vi.mock("@app/integrations", () => ({
+vi.mock("@app/integrations", async (importOriginal) => ({
+  StorageObjectNotFoundError: (
+    await importOriginal<typeof import("@app/integrations")>()
+  ).StorageObjectNotFoundError,
   getStorageProvider: vi.fn(),
   extractStorageKeyFromUrl: vi.fn(),
 }));
@@ -75,11 +82,11 @@ describe("paymentProof — proxies bytes instead of redirecting (CORS)", () => {
     expect(reply.send).not.toHaveBeenCalled();
   });
 
-  it("maps a storage 404 to NOT_FOUND", async () => {
+  it("maps a missing object (any provider) to NOT_FOUND", async () => {
     vi.mocked(extractStorageKeyFromUrl).mockReturnValue("proofs/gone.pdf");
     vi.mocked(getStorageProvider).mockReturnValue({
       download: vi.fn(async () => {
-        throw Object.assign(new Error("missing"), { code: 404 });
+        throw new StorageObjectNotFoundError("proofs/gone.pdf");
       }),
     } as never);
 

@@ -3,6 +3,7 @@ import { Injectable } from "@nestjs/common";
 import { fileTypeFromBuffer } from "file-type";
 import sharp from "sharp";
 import { ErrorCodes, ABSTRACT_FINAL_TYPE_LABELS } from "@app/contracts";
+import { getAbstractTitle } from "@app/shared";
 import type {
   CreateCertificateTemplateInput,
   UpdateCertificateTemplateInput,
@@ -38,6 +39,7 @@ import {
   buildEmailContextWithAccess,
   isEligibleForCertificate,
   isAbstractEligibleForCertificate,
+  StorageObjectNotFoundError,
   type DownloadedFile,
   type CertificateTemplateData,
 } from "@app/integrations";
@@ -105,16 +107,6 @@ export interface AbstractCertificateSendSummary {
   results: AbstractCertificateSendResult[];
 }
 
-/** Mirrors the local `getTitle` helper in abstracts.admin.service.ts — title
- * lives in the free-form `content` jsonb, not a dedicated column. */
-function getAbstractTitle(content: unknown): string {
-  if (content && typeof content === "object" && !Array.isArray(content)) {
-    const title = (content as { title?: unknown }).title;
-    if (typeof title === "string" && title.trim()) return title.trim();
-  }
-  return "Untitled abstract";
-}
-
 /** Null = eligible. Otherwise the reason to report back for this abstractId. */
 function ineligibilityReason(
   abstract: AbstractForCertificateSend | undefined,
@@ -130,12 +122,6 @@ function ineligibilityReason(
     return "Abstract has not been marked as presented";
   }
   return null;
-}
-
-// Bare keys (no "://") are rejected: certificate templateUrls are always full
-// URLs and downloadTemplateImage must 400 on anything else (legacy parity).
-function extractKeyFromStorage(url: string): string | null {
-  return url.includes("://") ? extractStorageKeyFromUrl(url) : null;
 }
 
 async function deleteCertificateImageBestEffort(key: string): Promise<void> {
@@ -171,7 +157,9 @@ export class CertificatesService {
 
   /** Proxy download: resolve storage key, fetch bytes. 400 bad location / 404 missing. */
   async downloadTemplateImage(templateUrl: string): Promise<DownloadedFile> {
-    const key = extractKeyFromStorage(templateUrl);
+    // Bare keys are rejected: certificate templateUrls are always full URLs
+    // and this must 400 on anything else (legacy parity).
+    const key = extractStorageKeyFromUrl(templateUrl, { allowBareKey: false });
     if (!key) {
       throw new AppException(
         ErrorCodes.VALIDATION_ERROR,
@@ -183,8 +171,7 @@ export class CertificatesService {
     try {
       return await getStorageProvider().download(key);
     } catch (err: unknown) {
-      const code = (err as { code?: number }).code;
-      if (code === 404) {
+      if (err instanceof StorageObjectNotFoundError) {
         throw new AppException(
           ErrorCodes.NOT_FOUND,
           "Certificate template image not found in storage",
@@ -300,7 +287,9 @@ export class CertificatesService {
     }
 
     if (template.templateUrl) {
-      const key = extractKeyFromStorage(template.templateUrl);
+      const key = extractStorageKeyFromUrl(template.templateUrl, {
+        allowBareKey: false,
+      });
       if (key) {
         try {
           await getStorageProvider().delete(key);

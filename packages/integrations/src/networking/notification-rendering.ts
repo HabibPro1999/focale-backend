@@ -1,5 +1,6 @@
 import { createDecipheriv, createHash } from "node:crypto";
 import type { networkingDeliveryContext } from "@app/db";
+import { escapeHtml } from "@app/shared";
 import type { EmailAttachment } from "../email/providers";
 import { networkingConfig } from "../config";
 export type NetworkingNotificationContext = Awaited<
@@ -191,15 +192,6 @@ function normalizedType(type: string) {
         WELCOME: "APPROVAL",
       } as Record<string, string>
     )[type] ?? type
-  );
-}
-export function escapeNetworkingHtml(value: string) {
-  return value.replace(
-    /[&<>"']/g,
-    (char) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
-        char
-      ]!,
   );
 }
 export function decryptNetworkingCode(value: string, secret: string): string {
@@ -433,7 +425,7 @@ export function renderNetworkingNotification(
     ? substitute(template.subject)
     : `${ctx.event?.name ?? "Focale"} · ${title}`;
   if (template && type !== "OTP") body = substitute(template.body);
-  const safe = escapeNetworkingHtml;
+  const safe = escapeHtml;
   const actionLabels = {
     en: ["Review and accept", "Decline", "Suggest another time"],
     fr: ["Consulter et accepter", "Refuser", "Proposer un autre créneau"],

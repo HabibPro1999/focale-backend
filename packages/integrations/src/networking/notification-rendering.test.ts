@@ -1,7 +1,7 @@
 import { createCipheriv,createHash,randomBytes } from "node:crypto";
 import { describe,expect,it } from "vitest";
 import { NetworkingConfigSchema } from "@app/contracts";
-import { decryptNetworkingCode,escapeNetworkingHtml,renderNetworkingNotification,type NetworkingNotificationContext } from "./notification-rendering";
+import { decryptNetworkingCode,renderNetworkingNotification,type NetworkingNotificationContext } from "./notification-rendering";
 import { allowedNetworkingPushEndpoint } from "./notification-worker";
 
 describe("networking notification boundaries",()=>{
@@ -17,7 +17,18 @@ describe("networking notification boundaries",()=>{
   expect(()=>decryptNetworkingCode(tampered,secret)).toThrow();
  });
  it("escapes user-authored names, company names and template bodies",()=>{
-  expect(escapeNetworkingHtml('<img src=x onerror="alert(1)">')).toBe('&lt;img src=x onerror=&quot;alert(1)&quot;&gt;');
+  const startsAt=new Date("2099-04-20T08:00:00.000Z");
+  const attack='<img src=x onerror="alert(1)">';
+  const ctx={
+   event:{slug:"demo",name:`O'Brien ${attack}`},profile:{id:"b",language:"en",firstName:"Ann"},
+   config:NetworkingConfigSchema.parse({timezone:"UTC",defaultLanguage:"en",logoUrl:"https://cdn.example/logo.png"}),
+   meeting:{id:"m",status:"PENDING_ALLOCATION",startsAt,endsAt:new Date(startsAt.getTime()+1_800_000),requesterId:"a",recipientId:"b",proposedStartsAt:null,proposalBy:null,message:attack,cancellationNote:"",updatedAt:startsAt,revision:1},
+   table:null,contact:null,blocked:false,subscriptions:[],
+  } as unknown as NetworkingNotificationContext;
+  const {html}=renderNetworkingNotification("MEETING_REQUEST",{},ctx);
+  expect(html).not.toContain("<img src=x");
+  expect(html).toContain("&lt;img src=x onerror=&quot;alert(1)&quot;&gt;");
+  expect(html).toContain('alt="O&#039;Brien &lt;img');
  });
  it("limits outbound push requests to browser push providers",()=>{
   expect(allowedNetworkingPushEndpoint("https://fcm.googleapis.com/fcm/send/test")).toBe(true);

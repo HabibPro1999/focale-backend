@@ -16,7 +16,11 @@ import {
 import type { FastifyReply } from "fastify";
 import { ErrorCodes, UserRole } from "@app/contracts";
 import { getEventForRegistrationAdmin } from "@app/db";
-import { getStorageProvider, extractStorageKeyFromUrl } from "@app/integrations";
+import {
+  getStorageProvider,
+  extractStorageKeyFromUrl,
+  StorageObjectNotFoundError,
+} from "@app/integrations";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
@@ -254,7 +258,7 @@ export class RegistrationsController {
     try {
       file = await getStorageProvider().download(key);
     } catch (err: unknown) {
-      if ((err as { code?: number }).code === 404) {
+      if (err instanceof StorageObjectNotFoundError) {
         throw new AppException(
           ErrorCodes.NOT_FOUND,
           "Payment proof not found in storage",
