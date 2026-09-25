@@ -6,5 +6,6 @@ export {
   assertEventWritable,
   assertEventOpen,
   assertEventAcceptsPublicActions,
+  eventAcceptsPublicActions,
 } from "./events.service";
 export { EventIdParamDto, EventSlugParamDto } from "./events.dto";

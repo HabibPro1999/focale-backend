@@ -93,12 +93,24 @@ export function assertEventOpen(event: { status: string }): void {
   }
 }
 
+/**
+ * Whether an event accepts registrant actions (signup, self-edit, payment):
+ * OPEN and not past its end. An end date at midnight UTC means the whole
+ * last day, so that day counts as open.
+ */
+export function eventAcceptsPublicActions(
+  event: { status: string; endDate: Date },
+  now = new Date(),
+): boolean {
+  return event.status === "OPEN" && effectivePublicEndDate(event.endDate) >= now;
+}
+
 export function assertEventAcceptsPublicActions(
   event: { status: string; endDate: Date },
   now = new Date(),
 ): void {
   assertEventOpen(event);
-  if (effectivePublicEndDate(event.endDate) < now) {
+  if (!eventAcceptsPublicActions(event, now)) {
     throw new AppException(
       ErrorCodes.EVENT_NOT_OPEN,
       "Event is not accepting public actions",

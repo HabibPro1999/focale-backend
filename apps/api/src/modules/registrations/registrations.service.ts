@@ -98,7 +98,6 @@ import {
 import {
   assertClientModuleEnabled,
   assertModuleEnabledForClient,
-  isModuleEnabledForClient,
   type ClientModuleState,
 } from "../clients/module-gates";
 import { AppException } from "../../core/app-exception";
@@ -110,6 +109,12 @@ import {
   validatePaymentTransition,
 } from "./payment-transitions";
 import { getRegistrationTableColumns } from "./table-columns";
+import { assertSelfEditAllowed, evaluateEditPolicy } from "./edit-policy";
+import {
+  assertPaidAmountWithinNet,
+  assertPaidInFull,
+  assertValidSelections,
+} from "./registrations.guards";
 import {
   enrichWithAccessSelections,
   enrichManyWithAccessSelections,
@@ -175,6 +180,25 @@ function translateCreateUniqueViolation(err: unknown): never {
     );
   }
   throw new AppException(ErrorCodes.CONFLICT, "Resource already exists", 409);
+}
+
+/**
+ * Per access item, how the selected quantity changes from `before` to
+ * `after` (items listed twice are summed). Unchanged items are left out; the
+ * rest are in ascending access id order, so concurrent edits take the
+ * access rows in the same order.
+ */
+function accessQuantityDeltas(
+  before: ReadonlyArray<{ accessId: string; quantity: number }>,
+  after: ReadonlyArray<{ accessId: string; quantity: number }>,
+): Array<{ accessId: string; delta: number }> {
+  const deltas = new Map<string, number>();
+  for (const item of before) deltas.set(item.accessId, (deltas.get(item.accessId) ?? 0) - item.quantity);
+  for (const item of after) deltas.set(item.accessId, (deltas.get(item.accessId) ?? 0) + item.quantity);
+  return [...deltas]
+    .filter(([, delta]) => delta !== 0)
+    .map(([accessId, delta]) => ({ accessId, delta }))
+    .sort((a, b) => (a.accessId < b.accessId ? -1 : a.accessId > b.accessId ? 1 : 0));
 }
 
 interface RecalcInput {
@@ -656,19 +680,7 @@ export class RegistrationsService {
 
     // Advisory access-selection validation (outside tx).
     if (accessSelections && accessSelections.length > 0) {
-      const v = await this.access.validateAccessSelections(
-        eventId,
-        accessSelections,
-        formData,
-      );
-      if (!v.valid) {
-        throw new AppException(
-          ErrorCodes.BAD_REQUEST,
-          `Invalid access selections: ${v.errors.join(", ")}`,
-          400,
-          { errors: v.errors },
-        );
-      }
+      await assertValidSelections(this.access, eventId, accessSelections, formData);
     }
 
     await this.access.assertAccessSelectionRequirement(eventId, formData, accessSelections ?? [],
@@ -858,19 +870,7 @@ export class RegistrationsService {
     }
 
     if (accessSelections && accessSelections.length > 0) {
-      const v = await this.access.validateAccessSelections(
-        eventId,
-        accessSelections,
-        formData,
-      );
-      if (!v.valid) {
-        throw new AppException(
-          ErrorCodes.BAD_REQUEST,
-          `Invalid access selections: ${v.errors.join(", ")}`,
-          400,
-          { errors: v.errors },
-        );
-      }
+      await assertValidSelections(this.access, eventId, accessSelections, formData);
     }
 
     const eventGate = await getEventForRegistrationAdmin(eventId);
@@ -1006,6 +1006,20 @@ export class RegistrationsService {
     input: UpdateRegistrationInput,
     performedBy?: string,
   ): Promise<AdminRegistration> {
+    // An empty body changes nothing: return the registration as it is, with
+    // no write, audit row or event.
+    if (Object.values(input).every((value) => value === undefined)) {
+      const current = await this.getRegistrationById(id);
+      if (!current) {
+        throw new AppException(
+          ErrorCodes.REGISTRATION_NOT_FOUND,
+          "Registration not found",
+          404,
+        );
+      }
+      return current;
+    }
+
     // Lock first so a concurrent confirmation or proof upload cannot be
     // overwritten from a stale read (ADR 0001).
     await withLockingTxn(async (tx) => {
@@ -1044,13 +1058,7 @@ export class RegistrationsService {
           ? calculateSettlement(registration).netAmount
           : undefined);
       if (paidAmount !== undefined) {
-        if (paidAmount > calculateSettlement(registration).netAmount) {
-          throw new AppException(
-            ErrorCodes.BAD_REQUEST,
-            "Paid amount cannot exceed registration total",
-            400,
-          );
-        }
+        assertPaidAmountWithinNet(paidAmount, calculateSettlement(registration).netAmount);
         settlement.paidAmount = paidAmount;
       }
       if (input.paymentMethod !== undefined) fields.paymentMethod = input.paymentMethod;
@@ -1252,13 +1260,7 @@ export class RegistrationsService {
         input.paidAmount !== undefined &&
         input.paidAmount !== registration.paidAmount
       ) {
-        if (input.paidAmount > calculateSettlement(registration).netAmount) {
-          throw new AppException(
-            ErrorCodes.BAD_REQUEST,
-            "Paid amount cannot exceed registration total",
-            400,
-          );
-        }
+        assertPaidAmountWithinNet(input.paidAmount, calculateSettlement(registration).netAmount);
         settlement.paidAmount = input.paidAmount;
         changes.paidAmount = { old: registration.paidAmount, new: input.paidAmount };
       }
@@ -1304,21 +1306,10 @@ export class RegistrationsService {
           input.accessSelections !== undefined &&
           effectiveAccessSelections.length > 0
         ) {
-          const v = await this.access.validateAccessSelections(
-            eventId,
-            effectiveAccessSelections,
-            effectiveFormData,
+          await assertValidSelections(this.access, eventId, effectiveAccessSelections, effectiveFormData, {
             existingAccessIds,
-            tx,
-          );
-          if (!v.valid) {
-            throw new AppException(
-              ErrorCodes.BAD_REQUEST,
-              `Invalid access selections: ${v.errors.join(", ")}`,
-              400,
-              { errors: v.errors },
-            );
-          }
+            exec: tx,
+          });
         }
 
         const existingSponsorshipCodes = registration.sponsorshipCode
@@ -1380,13 +1371,7 @@ export class RegistrationsService {
           : undefined;
         const nextPaidAmount =
           input.paidAmount ?? defaultPaidAmount ?? registration.paidAmount;
-        if (nextPaidAmount > priceBreakdown.total) {
-          throw new AppException(
-            ErrorCodes.BAD_REQUEST,
-            "Paid amount cannot exceed registration total",
-            400,
-          );
-        }
+        assertPaidAmountWithinNet(nextPaidAmount, priceBreakdown.total);
 
         // base/access/discount amounts are derived from the breakdown by the writer.
         settlement.totalAmount = priceBreakdown.subtotal;
@@ -1658,70 +1643,11 @@ export class RegistrationsService {
         },
     }));
 
-    const restrictions: string[] = [];
-    let canEdit = true;
-    let canEditPersonalInfo = true;
-    let canEditAccess = true;
-    let canAddAccess = true;
-    let canRemoveAccess = true;
-    let isFullySponsored = false;
-
-    const blockAll = (reason: string) => {
-      canEdit = false;
-      canEditPersonalInfo = false;
-      canEditAccess = false;
-      canAddAccess = false;
-      canRemoveAccess = false;
-      restrictions.push(reason);
-    };
-
-    if (registration.paymentStatus === "REFUNDED") {
-      blockAll("Registration has been refunded");
-    }
-    if (
-      registration.event.status !== "OPEN" ||
-      registration.event.endDate < new Date()
-    ) {
-      blockAll("Event is not accepting changes");
-    }
-    if (!isModuleEnabledForClient(registration.event.client, "registrations")) {
-      blockAll("Registrations are disabled for this event");
-    }
-    if (!isModuleEnabledForClient(registration.event.client, "pricing")) {
-      blockAll("Pricing is disabled for this event");
-    }
-    if (registration.paymentStatus === "VERIFYING") {
-      canEditAccess = false;
-      canAddAccess = false;
-      canRemoveAccess = false;
-      restrictions.push("Payment proof is under review");
-    }
-    const isPaid =
-      registration.paymentStatus === "PAID" ||
-      registration.paymentStatus === "SPONSORED" ||
-      registration.paidAmount > 0;
-    if (isPaid) {
-      canRemoveAccess = false;
-      restrictions.push("Cannot remove access items (payment received)");
-    }
-    if (registration.paymentStatus === "WAIVED") {
-      canEditAccess = false;
-      canAddAccess = false;
-      canRemoveAccess = false;
-      restrictions.push("Waived registrations cannot modify access selections");
-    }
-    if (
-      registration.sponsorshipAmount >= registration.totalAmount &&
-      registration.totalAmount > 0
-    ) {
-      isFullySponsored = true;
-      canEditAccess = false;
-      canAddAccess = false;
-      canRemoveAccess = false;
-      restrictions.push(
-        "Fully sponsored registration cannot modify access selections",
-      );
-    }
+    const policy = evaluateEditPolicy({
+      registration,
+      event: registration.event,
+      now: new Date(),
+    });
 
     const { amountDue } = calculateSettlement({
       totalAmount: registration.totalAmount,
@@ -1732,14 +1658,14 @@ export class RegistrationsService {
     return {
       registration: toPublicRegistration({ ...registration, accessSelections }),
       expectedUpdatedAt: registration.updatedAt.toISOString(),
-      canEdit,
-      canEditPersonalInfo,
-      canEditAccess,
-      canAddAccess,
-      canRemoveAccess,
-      isFullySponsored,
+      canEdit: policy.canEdit,
+      canEditPersonalInfo: policy.canEditPersonalInfo,
+      canEditAccess: policy.canEditAccess,
+      canAddAccess: policy.canAddAccess,
+      canRemoveAccess: policy.canRemoveAccess,
+      isFullySponsored: policy.isFullySponsored,
       amountDue,
-      editRestrictions: restrictions,
+      editRestrictions: policy.restrictions,
     };
   }
 
@@ -1772,60 +1698,29 @@ export class RegistrationsService {
         );
       }
 
-      if (current.paymentStatus === "REFUNDED") {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_REFUNDED,
-          "Refunded registrations cannot be edited",
-          400,
-        );
-      }
-
-      try {
-        assertEventAcceptsPublicActions(current.event);
-      } catch {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_EDIT_FORBIDDEN,
-          "Event is not accepting changes",
-          400,
-        );
-      }
-
-      assertModuleEnabledForClient(
-        current.event.client as ClientModuleState,
-        "registrations",
-      );
-      assertModuleEnabledForClient(
-        current.event.client as ClientModuleState,
-        "pricing",
-      );
-
       const isAccessEdit = input.accessSelections !== undefined;
+      const currentPriceBreakdown =
+        (current.priceBreakdown as PriceBreakdown | null) ??
+        ({ accessItems: [] } as unknown as PriceBreakdown);
+      const currentAccessItems = currentPriceBreakdown.accessItems ?? [];
+      const currentAccessIds = new Set(currentAccessItems.map((i) => i.accessId));
+      const newAccessSelections =
+        input.accessSelections ??
+        currentAccessItems.map((item) => ({
+          accessId: item.accessId,
+          quantity: item.quantity,
+        }));
+      const accessDeltas = accessQuantityDeltas(currentAccessItems, newAccessSelections);
 
-      if (current.paymentStatus === "VERIFYING" && isAccessEdit) {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_VERIFYING_BLOCKED,
-          "Cannot modify access while payment is under review",
-          400,
-        );
-      }
-      if (current.paymentStatus === "WAIVED" && isAccessEdit) {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_WAIVED_ACCESS_BLOCKED,
-          "Waived registrations cannot modify access selections",
-          400,
-        );
-      }
-      if (
-        current.sponsorshipAmount >= current.totalAmount &&
-        current.totalAmount > 0 &&
-        isAccessEdit
-      ) {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_FULLY_SPONSORED_BLOCKED,
-          "Fully sponsored registrations cannot modify access selections",
-          400,
-        );
-      }
+      // The same policy GET-for-edit shows, enforced on the fresh row.
+      assertSelfEditAllowed(
+        evaluateEditPolicy({ registration: current, event: current.event, now: new Date() }),
+        current.event.client as ClientModuleState,
+        {
+          changesAccess: isAccessEdit,
+          removedAccessIds: accessDeltas.filter((c) => c.delta < 0).map((c) => c.accessId),
+        },
+      );
 
       const currentFormData =
         (current.formData as Record<string, unknown> | null) ?? {};
@@ -1837,73 +1732,16 @@ export class RegistrationsService {
         newFormData = prepareFormDataForPricing(current.form.schema, newFormData);
       }
 
-      const currentPriceBreakdown =
-        (current.priceBreakdown as PriceBreakdown | null) ??
-        ({ accessItems: [] } as unknown as PriceBreakdown);
-      const currentAccessItems = currentPriceBreakdown.accessItems ?? [];
-      const currentAccessIds = new Set(currentAccessItems.map((i) => i.accessId));
-
-      const newAccessSelections =
-        input.accessSelections ??
-        currentAccessItems.map((item) => ({
-          accessId: item.accessId,
-          quantity: item.quantity,
-        }));
-
-      const toQuantityMap = (
-        items: Array<{ accessId: string; quantity: number }>,
-      ) => {
-        const q = new Map<string, number>();
-        for (const item of items) {
-          q.set(item.accessId, (q.get(item.accessId) ?? 0) + item.quantity);
-        }
-        return q;
-      };
-
-      const oldQuantities = toQuantityMap(currentAccessItems);
-      const newQuantities = toQuantityMap(newAccessSelections);
-      const accessDeltas = Array.from(
-        new Set([...oldQuantities.keys(), ...newQuantities.keys()]),
-      )
-        .map((accessId) => ({
-          accessId,
-          delta: (newQuantities.get(accessId) ?? 0) - (oldQuantities.get(accessId) ?? 0),
-        }))
-        .filter((c) => c.delta !== 0);
-
       const currentIsPaid =
         current.paymentStatus === "PAID" ||
         current.paymentStatus === "SPONSORED" ||
         current.paidAmount > 0;
-      const negativeDeltas = accessDeltas.filter((c) => c.delta < 0);
-      if (currentIsPaid && negativeDeltas.length > 0) {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_ACCESS_REMOVAL_BLOCKED,
-          "Cannot remove access items from a paid registration",
-          400,
-          {
-            message: "Paid registrations can only add new access items",
-            attemptedRemovals: negativeDeltas.map((c) => c.accessId),
-          },
-        );
-      }
 
       if (isAccessEdit || input.formData !== undefined) {
-        const v = await this.access.validateAccessSelections(
-          current.eventId,
-          newAccessSelections,
-          newFormData,
-          currentAccessIds,
-          tx,
-        );
-        if (!v.valid) {
-          throw new AppException(
-            ErrorCodes.BAD_REQUEST,
-            `Invalid access selections: ${v.errors.join(", ")}`,
-            400,
-            { errors: v.errors },
-          );
-        }
+        await assertValidSelections(this.access, current.eventId, newAccessSelections, newFormData, {
+          existingAccessIds: currentAccessIds,
+          exec: tx,
+        });
       }
 
       if (isAccessEdit || input.formData !== undefined) {
@@ -2114,21 +1952,8 @@ export class RegistrationsService {
       const settled = await settleRegistrationTxn(tx, id, {
         decide: ({ net }) => {
           const paidAmount = input.paidAmount ?? net;
-          if (paidAmount > net) {
-            throw new AppException(
-              ErrorCodes.BAD_REQUEST,
-              "Paid amount cannot exceed registration total",
-              400,
-            );
-          }
-          if (newStatus === "PAID" && paidAmount < net) {
-            throw new AppException(
-              ErrorCodes.PAID_AMOUNT_BELOW_DUE,
-              "Paid amount is below the amount due; confirm it as PARTIAL",
-              400,
-              { amountDue: net, paidAmount },
-            );
-          }
+          assertPaidAmountWithinNet(paidAmount, net);
+          if (newStatus === "PAID") assertPaidInFull(paidAmount, net);
           return {
             paymentStatus: newStatus,
             paidAmount,

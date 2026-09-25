@@ -660,6 +660,27 @@ describe("RegistrationsService", () => {
       expect(countsEvt?.[1].payload.accessIds).toEqual([]);
     });
 
+    // Decision after 2.6a: `PATCH /registrations/:id` with `{}` used to fail
+    // with a 500 (nothing to write); it now changes nothing.
+    it("returns the registration unchanged for an empty body: no write, audit or event", async () => {
+      const result = await service.updateRegistration("reg1", {} as never, "admin1");
+      expect(result).toMatchObject({ id: "reg1", paymentStatus: "PENDING" });
+      expect(result).not.toHaveProperty("editToken");
+      expect(db.withLockingTxn).not.toHaveBeenCalled();
+      expect(db.applyRegistrationSettlement).not.toHaveBeenCalled();
+      expect(db.insertAuditLog).not.toHaveBeenCalled();
+      expect(db.enqueueRealtimeOutboxEvent).not.toHaveBeenCalled();
+      expect(db.syncNetworkingRegistration).not.toHaveBeenCalled();
+    });
+
+    it("404 for an empty body on a missing registration", async () => {
+      db.getRegistrationByIdRow.mockResolvedValue(null);
+      await expect(service.updateRegistration("x", {} as never)).rejects.toMatchObject({
+        code: "REG_8001",
+        statusCode: 404,
+      });
+    });
+
     it("defaults PAID to the net amount after sponsorship", async () => {
       db.findRegistrationForMutation.mockResolvedValue(
         makeRegRow({
@@ -974,6 +995,30 @@ describe("RegistrationsService", () => {
       expect(r.canEdit).toBe(true);
       expect(r.canRemoveAccess).toBe(true);
       expect(r.editRestrictions).toHaveLength(0);
+    });
+
+    // GET used to close on the end date's instant while the edit itself
+    // accepts the whole last day (midnight-UTC end dates).
+    it("keeps the edit open on the event's last day, as the edit does", async () => {
+      const today = new Date();
+      today.setUTCHours(0, 0, 0, 0);
+      db.findRegistrationWithFormEvent.mockResolvedValue(
+        makeRegRow({
+          event: {
+            id: "ev1",
+            name: "Ev",
+            slug: "ev",
+            clientId: "c1",
+            status: "OPEN",
+            endDate: today,
+            client: activeClient(),
+          },
+          form: { id: "form1", name: "Reg", schema: {} },
+        }),
+      );
+      const r = await service.getRegistrationForEdit("reg1");
+      expect(r.canEdit).toBe(true);
+      expect(r.editRestrictions).toEqual([]);
     });
 
     it("blocks everything for a REFUNDED registration", async () => {
