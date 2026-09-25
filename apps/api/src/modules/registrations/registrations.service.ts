@@ -75,7 +75,7 @@ import {
   findRegistrationUsagesForRecalc,
   findRegistrationUsageLinks,
   deleteRegistrationUsages,
-  generateReferenceNumber,
+  allocateReferenceNumber,
   insertAuditLog,
   listRegistrationAuditLogRows,
   findUserNamesByIds,
@@ -738,7 +738,7 @@ export class RegistrationsService {
       }
 
       const editToken = generateEditToken();
-      const referenceNumber = await generateReferenceNumber(eventId, tx);
+      const referenceNumber = await allocateReferenceNumber(eventId, tx);
 
       const { id } = await insertRegistrationRow(
         {
@@ -948,7 +948,7 @@ export class RegistrationsService {
       }
 
       const resolvedPaymentStatus = paymentStatus ?? "PENDING";
-      const referenceNumber = await generateReferenceNumber(eventId, tx);
+      const referenceNumber = await allocateReferenceNumber(eventId, tx);
       const accessTypeIds = accessSelections?.map((s) => s.accessId) ?? [];
 
       const { id } = await insertRegistrationRow(

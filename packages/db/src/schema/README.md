@@ -19,7 +19,13 @@ table = **29 tables**, **19 pg enums**.
 - **FKs**: every FK is `onUpdate: 'cascade'` (Prisma default, reproduced explicitly);
   `onDelete` matches the prisma schema per column (cascade / set null / restrict).
   All FK columns are `text` (matching every PK).
-- **Timestamps**: `timestamp({ precision: 3 })` — naive `TIMESTAMP(3)`, NO timezone,
+- **New columns use `timestamptz`**: a new timestamp column is `TIMESTAMPTZ(3)` in
+  SQL and `timestamp({ precision: 3, withTimezone: true })` in Drizzle, as most
+  networking columns already are (their `instant()` helper). Calendar logic reads
+  UTC (`getUTC*`, e.g. the reference-number year in `allocateReferenceNumber`),
+  never the process time zone. The naive legacy columns below keep their type;
+  do not copy it into new tables or columns.
+- **Timestamps (legacy)**: `timestamp({ precision: 3 })` — naive `TIMESTAMP(3)`, NO timezone,
   matching the live DB. `createdAt`/`updatedAt` via the `timestamps` helper
   (`updatedAt` is app-managed via `$defaultFn` on insert + `$onUpdate`, with NO DB
   default — matching the live `TIMESTAMP(3) NOT NULL` column), except the three

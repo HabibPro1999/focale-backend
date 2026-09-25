@@ -78,6 +78,15 @@ export const registrations = pgTable(
   ],
 );
 
+/**
+ * One reference-number sequence per prefix ("YY-SLUGCODE-", migration 0021),
+ * shared by events whose truncated slugs collide. See allocateReferenceNumber.
+ */
+export const registrationReferenceCounters = pgTable("registration_reference_counters", {
+  prefix: text().primaryKey(),
+  lastValue: integer().notNull(),
+});
+
 export const paymentTransaction = pgTable(
   "payment_transaction",
   {
