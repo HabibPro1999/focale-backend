@@ -136,7 +136,8 @@ it("keeps early-completed and no-show meetings holding inventory; only released 
   expect(compiled(predicates[1]).sql).toContain('"starts_at" >=');
   expect(compiled(predicates[1]).params).toContain("profile:p");
   await store.allocationTableUsage("event");
-  expect(compiled(predicates[2]).params).toEqual(["event", "PENDING", "CONFIRMED", "PENDING_ALLOCATION", "COMPLETED"]);
+  // Table balancing counts every meeting that holds its table, no-shows included (4.7).
+  expect(compiled(predicates[2]).params).toEqual(["event", "PENDING", "PENDING_ALLOCATION", "CONFIRMED", "COMPLETED", "NO_SHOW"]);
   expect(chain.groupBy).toHaveBeenCalledOnce();
 });
 

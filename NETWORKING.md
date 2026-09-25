@@ -84,6 +84,8 @@ Rollout (operator steps, API and worker together, with the same values):
 4. After 30 days (the session lifetime), `retire --kid=legacy --keep-recovery` must pass. Then set `NETWORKING_KEYS=k1:<k1>,legacy:<the old NETWORKING_TOKEN_SECRET>:recovery` and unset `NETWORKING_TOKEN_SECRET`: legacy then verifies recovery codes and nothing else.
 5. Once `retire --kid=legacy` passes (participants used or regenerated their legacy recovery codes), remove the legacy entry. The same steps rotate k1 to k2 later: put k2 first and keep k1 until `retire --kid=k1` passes.
 
+Never remove a key from `NETWORKING_KEYS` (or unset `NETWORKING_TOKEN_SECRET`) without `retire` passing first: the service does not check at startup, and a missing key logs out its sessions, voids its seals and breaks the recovery codes that reference it.
+
 ## Recommendations and recovery
 
 Each profile has separate professional-profile, offer and need vectors. Complementary matching compares one participant’s needs with another’s offers in both directions, plus shared background. Only professional networking fields are embedded; email, phone, payment proof and administrative notes are excluded.
@@ -204,7 +206,23 @@ A wrong or expired OTP on `auth/verify` stays HTTP 401 (`AUTH_1001`); no session
 
 Every networking write is one SERIALIZABLE transaction on one pool connection, retried on serialization failures (40001/40P01) with a bounded, jittered backoff; when the retries run out the API answers 503 `NETWORKING_BUSY` with `Retry-After`. No write locks the event row. Invariants are the unique indexes: interest, connection, block and message pairs, reservation resource+slot, push endpoint and profile registration. Swipes, connections, messages, blocks and push subscriptions are `ON CONFLICT` writes, so a duplicate request is idempotent instead of failing.
 
-Only allocations (a meeting request's table hold, accepting a proposal, rescheduling a pending request and organizer assignment) take a lock: their first statement upserts one `networking_allocation_locks (event_id, bucket_start)` row per UTC hour the meeting overlaps, so allocations for overlapping times serialize while others proceed. Resources are then claimed with multi-row `INSERT … ON CONFLICT DO NOTHING`, trying tables least used first; a conflict answers 409 `NETWORKING_SLOT_CONFLICT`. Blocking and withdrawal cancel only the affected participant's active meetings with one `UPDATE … RETURNING`.
+Only allocations (a meeting request's hold, accepting a proposal, rescheduling a pending request and organizer assignment) take a lock: their first statement upserts one `networking_allocation_locks (event_id, bucket_start)` row per UTC hour the meeting overlaps, so allocations for overlapping times serialize while others proceed. Resources are then claimed with multi-row `INSERT … ON CONFLICT DO NOTHING`, trying tables least used first; a conflict answers 409 `NETWORKING_SLOT_CONFLICT`. Blocking and withdrawal cancel only the affected participant's active meetings with one `UPDATE … RETURNING`.
+
+## Meeting lifecycle
+
+`packages/db/src/queries/networking-meetings.ts` owns the meeting status groups (`open`, `accepted`, `awaiting`, `booked`, `holding`, `released`), the status-only transitions and their reservation effects, and the meeting notices. Reservations are 5-minute quanta, unique per event, resource and quantum:
+
+| Status | Reservations held |
+|---|---|
+| `PENDING` | its table or exhibitor representative (when allocated) and `hold:profile:<requester>`; the participants are not booked yet |
+| `PENDING_ALLOCATION`, `CONFIRMED` | both participants (`profile:<id>`) and, once allocated, the table or representative |
+| `COMPLETED`, `NO_SHOW` | everything it held: the slot was used |
+| `CANCELLED`, `DECLINED`, `EXPIRED` | nothing |
+
+- **One pending request per requester per slot.** The `hold:profile:<requester>` quanta make a second pending request from the same requester for an overlapping slot (a new request, or rescheduling a pending one) answer 409 `NETWORKING_SLOT_CONFLICT`. Requests that existed before this rule have no hold key and are not capped until they are rescheduled, accepted or expire.
+- **Releases happen with the transition.** Cancelling (participant, organizer, block, withdrawal, moderation, lost eligibility), declining a pending request and expiry delete the reservations of exactly the meetings they moved, in the same transaction. Read paths expire overdue requests in one statement (`UPDATE … RETURNING` in a CTE feeding the reservation delete) and never scan the event's history; the maintenance job alone sweeps reservations still attached to a released meeting.
+- **Attendance keeps the table.** Recording `COMPLETED` or `NO_SHOW` keeps the meeting's reservations, like check-in.
+- **Cancellation notices** (`MEETING_CANCEL`, `MEETING_CANCELLED`) carry `data.reason`: `PARTICIPANT`, `ORGANIZER` or `UNAVAILABLE`. `UNAVAILABLE` notices are confidential: they cover blocks, withdrawals, revoked consent or eligibility and moderation alike, and name neither the other participant nor the place.
 
 ## Rate limits
 

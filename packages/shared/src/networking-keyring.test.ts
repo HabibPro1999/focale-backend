@@ -69,6 +69,22 @@ describe("NetworkingKeyring", () => {
     expect(old.verifyMac("session", "token", "v1:k1:short")).toBe(false);
   });
 
+  it("rejects a seal whose GCM tag is truncated, even to a valid prefix", () => {
+    const truncate = (sealed: string, prefix = "") => {
+      const [iv, tag, body] = sealed.slice(prefix.length).split(".");
+      const short = Buffer.from(tag!, "base64url").subarray(0, 4).toString("base64url");
+      return `${prefix}${iv}.${short}.${body}`;
+    };
+    const v1 = new NetworkingKeyring({ keys: [{ kid: "k1", secret: k1 }] });
+    const sealed = v1.seal("123456");
+    expect(v1.open(sealed)).toBe("123456");
+    expect(() => v1.open(truncate(sealed, "v1:k1:"))).toThrow(NetworkingKeyringError);
+    const old = new NetworkingKeyring({ legacySecret: legacy });
+    const legacySealed = legacySeal("654321");
+    expect(old.open(legacySealed)).toBe("654321");
+    expect(() => old.open(truncate(legacySealed))).toThrow(NetworkingKeyringError);
+  });
+
   it("uses a recovery-only key for recovery codes and nothing else", () => {
     const before = new NetworkingKeyring({ legacySecret: legacy });
     const code = before.mac("recovery", "recovery:p:ABCD");

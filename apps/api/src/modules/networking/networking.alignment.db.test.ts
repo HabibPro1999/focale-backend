@@ -385,9 +385,10 @@ describe.runIf(enabled)("PDF alignment audit reproductions", () => {
     expect(proposal.status).toBe("PENDING");
     expect(proposal.tableId).toBeTruthy();
     expect(held.length).toBeGreaterThan(0);
-    expect(
-      held.every((row) => row.resourceKey === `table:${proposal.tableId}`),
-    ).toBe(true);
+    // Its table and the requester's one pending-request slot (4.7), never the participants.
+    expect(new Set(held.map((row) => row.resourceKey))).toEqual(
+      new Set([`table:${proposal.tableId}`, `hold:profile:${people[0].profile.id}`]),
+    );
     await social.interest(people[2], people[1].profile.id, "LIKE");
     await social.interest(people[1], people[2].profile.id, "LIKE");
     await expect(

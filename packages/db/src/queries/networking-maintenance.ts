@@ -1,22 +1,9 @@
 import { eq, sql } from "drizzle-orm";
-import { getDb, type DbExecutor } from "../client";
+import { getDb } from "../client";
 import { rowsOf } from "../helpers";
 import { withSerializableTxn } from "../txn";
 import { networkingAllocationLocks, networkingProfiles } from "../schema/networking";
-
-/** Expire proposals without loading an event's meeting history on every agenda read. */
-export async function expireNetworkingProposals(eventId?: string, db: DbExecutor = getDb()) {
-  const scope = eventId ? sql`AND event_id=${eventId}` : sql``;
-  await db.execute(
-    sql`UPDATE networking_meetings SET status='EXPIRED',revision=revision+1,updated_at=now() WHERE status='PENDING' AND expires_at<=now() ${scope}`,
-  );
-  await db.execute(
-    sql`UPDATE networking_meetings SET proposed_starts_at=NULL,proposal_by=NULL,revision=revision+1,updated_at=now() WHERE proposed_starts_at IS NOT NULL AND expires_at<=now() ${scope}`,
-  );
-  await db.execute(sql`DELETE FROM networking_reservations WHERE meeting_id IN (
-    SELECT id FROM networking_meetings WHERE status IN ('EXPIRED','DECLINED','CANCELLED') ${scope}
-  ) ${scope}`);
-}
+import { expireNetworkingProposals, sweepReleasedNetworkingReservations } from "./networking-meetings";
 
 /** Each reminder and its in-app record are committed by one statement, with delivery dedupe winning races. */
 export async function maintainNetworkingLifecycle(
@@ -26,6 +13,7 @@ export async function maintainNetworkingLifecycle(
   const db = getDb();
   const scope = eventId ? sql`AND event_id=${eventId}` : sql``;
   await expireNetworkingProposals(eventId, db);
+  await sweepReleasedNetworkingReservations(eventId, db);
   for (const [type, hours] of [
     ["MEETING_REMINDER_DAY", 24],
     ["MEETING_REMINDER_HOUR", 1],

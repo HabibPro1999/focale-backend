@@ -16,6 +16,7 @@ export * from "./committee-invites";
 export * from "./networking";
 
 export * from "./networking-store";
+export * from "./networking-meetings";
 export * from "./networking-embeddings";
 export * from "./networking-delivery";
 

@@ -28,8 +28,9 @@ function fakeDb(meetings: Record<string, unknown>[]) {
   return { db: db as unknown as DbExecutor, updates, deletes, selects, notifications };
 }
 
+// As the CANCEL transition's UPDATE … RETURNING returns it.
 const meeting = (id: string) => ({
-  id, requesterId: "a", recipientId: "b", revision: 3,
+  id, requesterId: "a", recipientId: "b", revision: 3, status: "CANCELLED",
   startsAt: new Date("2099-01-01T09:00:00Z"), endsAt: new Date("2099-01-01T09:30:00Z"),
 });
 
@@ -47,8 +48,9 @@ describe("cancelNetworkingParticipantMeetings", () => {
     expect(selects).toEqual([]);
     expect(notifications.map((row) => row.profileId)).toEqual(["a", "b", "a", "b"]);
     for (const row of notifications) {
-      expect(row).toMatchObject({ type: "MEETING_CANCELLED", href: "/e/demo/agenda", data: { revision: 3, action: "CANCEL", status: "CANCELLED" } });
+      expect(row).toMatchObject({ type: "MEETING_CANCELLED", title: "Meeting cancelled", href: "/e/demo/agenda", data: { revision: 3, action: "CANCEL", status: "CANCELLED", reason: "UNAVAILABLE" } });
       expect(row.data).not.toHaveProperty("counterpartName");
+      expect(row.data).not.toHaveProperty("tableName");
     }
   });
   it("covers every counterpart without a pair filter and reads the slug only when needed", async () => {
