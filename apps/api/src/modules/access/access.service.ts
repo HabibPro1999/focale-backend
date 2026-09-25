@@ -1,6 +1,5 @@
 import { Injectable } from "@nestjs/common";
 import { ErrorCodes, buildFieldOptionIndex, findInvalidOptionConditions } from "@app/contracts";
-import { paidAccessQuantities } from "@app/shared";
 import type {
   CreateEventAccessInput,
   UpdateEventAccessInput,
@@ -35,11 +34,15 @@ import {
   deleteEventAccessById,
   casIncrementAccessRegisteredCount,
   casDecrementAccessRegisteredCount,
-  casIncrementAccessPaidCount,
-  casDecrementAccessPaidCount,
   getAccessCapacityInfo,
   getAccessRegisteredCount,
-  getAccessPaidCount,
+  applyPaidAccessDelta,
+  takePaidAccess,
+  releasePaidAccess,
+  AccessCapacityExceededError,
+  AccessNotFoundError,
+  AccessPaidCountUnderflowError,
+  type PaidAccessState,
   getAccessCapacityRowsByIds,
   getUnsettledRegistrationsWithAccess,
   getRegistrationCoveredAccessIds,
@@ -126,6 +129,33 @@ function validateAccessDatesAgainstEvent(
   }
 
   return { valid: errors.length === 0, errors };
+}
+
+/**
+ * The access paid-count errors of @app/db as the API's AppExceptions (same
+ * codes, messages and details as before the counters moved to @app/db).
+ */
+export function toAccessAppException(err: unknown): unknown {
+  if (err instanceof AccessNotFoundError) {
+    return new AppException(ErrorCodes.ACCESS_NOT_FOUND, "Access not found", 404);
+  }
+  if (err instanceof AccessCapacityExceededError) {
+    return new AppException(ErrorCodes.ACCESS_CAPACITY_EXCEEDED, err.message, 409, {
+      remaining: err.remaining,
+      requested: err.requested,
+    });
+  }
+  if (err instanceof AccessPaidCountUnderflowError) {
+    return new AppException(ErrorCodes.VALIDATION_ERROR, err.message, 409, {
+      paidCount: err.paidCount,
+      requested: err.requested,
+    });
+  }
+  return err;
+}
+
+function rethrowAsAccessException(err: unknown): never {
+  throw toAccessAppException(err);
 }
 
 @Injectable()
@@ -574,26 +604,7 @@ export class AccessService {
     quantity = 1,
     exec: DbExecutor = getDb(),
   ): Promise<void> {
-    if (await casIncrementAccessPaidCount(accessId, quantity, exec)) return;
-
-    const access = await getAccessCapacityInfo(accessId, exec);
-    if (!access) {
-      throw new AppException(
-        ErrorCodes.ACCESS_NOT_FOUND,
-        "Access not found",
-        404,
-      );
-    }
-    const remaining =
-      access.maxCapacity === null
-        ? null
-        : Math.max(0, access.maxCapacity - access.paidCount);
-    throw new AppException(
-      ErrorCodes.ACCESS_CAPACITY_EXCEEDED,
-      `${access.name} has insufficient capacity (${remaining ?? "unlimited"} spots remaining, requested ${quantity})`,
-      409,
-      { remaining, requested: quantity },
-    );
+    await takePaidAccess(exec, accessId, quantity).catch(rethrowAsAccessException);
   }
 
   async decrementPaidCount(
@@ -601,62 +612,24 @@ export class AccessService {
     quantity = 1,
     exec: DbExecutor = getDb(),
   ): Promise<void> {
-    if (await casDecrementAccessPaidCount(accessId, quantity, exec)) return;
-
-    const access = await getAccessPaidCount(accessId, exec);
-    if (!access) {
-      throw new AppException(
-        ErrorCodes.ACCESS_NOT_FOUND,
-        "Access not found",
-        404,
-      );
-    }
-    throw new AppException(
-      ErrorCodes.VALIDATION_ERROR,
-      "Paid access count cannot be decremented below zero",
-      409,
-      { paidCount: access.paidCount, requested: quantity },
-    );
+    await releasePaidAccess(exec, accessId, quantity).catch(rethrowAsAccessException);
   }
 
-  /** Single integration point for registrations/sponsorships when payment state changes. */
+  /**
+   * Single integration point for registrations/sponsorships when payment
+   * state changes: moves paid counts by the old → new delta
+   * (applyPaidAccessDelta in @app/db), then drops the access from unsettled
+   * registrations where an item became full.
+   */
   async syncPaidCountDelta(
     eventId: string,
-    oldState: {
-      status: string;
-      priceBreakdown: unknown;
-      coveredAccessIds?: Set<string>;
-    },
-    newState: {
-      status: string;
-      priceBreakdown: unknown;
-      coveredAccessIds?: Set<string>;
-    },
+    oldState: PaidAccessState,
+    newState: PaidAccessState,
     exec: DbExecutor = getDb(),
   ): Promise<void> {
-    const oldPaid = paidAccessQuantities(
-      oldState.status,
-      oldState.priceBreakdown,
-      oldState.coveredAccessIds,
+    const { incremented } = await applyPaidAccessDelta(exec, oldState, newState).catch(
+      rethrowAsAccessException,
     );
-    const newPaid = paidAccessQuantities(
-      newState.status,
-      newState.priceBreakdown,
-      newState.coveredAccessIds,
-    );
-    const accessIds = new Set([...oldPaid.keys(), ...newPaid.keys()]);
-    const incremented: string[] = [];
-
-    for (const accessId of accessIds) {
-      const delta = (newPaid.get(accessId) ?? 0) - (oldPaid.get(accessId) ?? 0);
-      if (delta > 0) {
-        await this.incrementPaidCount(accessId, delta, exec);
-        incremented.push(accessId);
-      } else if (delta < 0) {
-        await this.decrementPaidCount(accessId, Math.abs(delta), exec);
-      }
-    }
-
     if (incremented.length > 0) {
       await this.handleCapacityReached(eventId, incremented, exec);
     }
