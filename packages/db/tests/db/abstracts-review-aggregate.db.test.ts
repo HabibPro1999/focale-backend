@@ -41,6 +41,8 @@ describe.runIf(dbTestsEnabled())("db tier: review aggregate recompute", () => {
     const abstract = await seedAbstract({ eventId: event.id, status: "SUBMITTED" });
     const r1 = await seedUser({ clientId: event.clientId });
     const r2 = await seedUser({ clientId: event.clientId });
+    await upsertCommitteeMembership(event.id, r1.id);
+    await upsertCommitteeMembership(event.id, r2.id);
 
     await assignReviewersTxn({
       eventId: event.id,
@@ -97,6 +99,7 @@ describe.runIf(dbTestsEnabled())("db tier: review aggregate recompute", () => {
     const r1 = await seedUser({ clientId: event.clientId });
     const r2 = await seedUser({ clientId: event.clientId });
     const tieBreaker = await seedUser({ clientId: event.clientId });
+    for (const member of [r1, r2, tieBreaker]) await upsertCommitteeMembership(event.id, member.id);
 
     await assignReviewersTxn({
       eventId: event.id,
@@ -268,6 +271,7 @@ describe.runIf(dbTestsEnabled())("db tier: abstract final-status guards", () => 
     const r1 = await seedUser({ clientId: event.clientId });
     const r2 = await seedUser({ clientId: event.clientId });
     const r3 = await seedUser({ clientId: event.clientId });
+    for (const member of [r1, r2, r3]) await upsertCommitteeMembership(event.id, member.id);
     expect(
       await assignReviewersTxn({ eventId: event.id, abstractId: abstract.id, reviewerIds: [r1.id, r2.id] }),
     ).toMatchObject({ ok: true, status: "UNDER_REVIEW" });
@@ -360,6 +364,26 @@ describe.runIf(dbTestsEnabled())("db tier: abstract final-status guards", () => 
 
     expect(await readReviews(abstract.id)).toEqual(before);
     expect((await readAbstract(abstract.id)).status).toBe("PENDING");
+  });
+
+  // 2.9 follow-up: the membership is re-read under its lock inside the txn.
+  it("assignment of a removed or never-added member returns inactive_member and changes nothing", async () => {
+    const { event, abstract, r1, r2, r3 } = await seedReviewed();
+    const outsider = await seedUser({ clientId: event.clientId });
+    await deactivateCommitteeMembershipTxn(event.id, r3.id);
+    const before = await readReviews(abstract.id);
+    const aggregate = await readAbstract(abstract.id);
+
+    expect(
+      await assignReviewersTxn({
+        eventId: event.id,
+        abstractId: abstract.id,
+        reviewerIds: [r1.id, r2.id, r3.id, outsider.id],
+      }),
+    ).toEqual({ ok: false, reason: "inactive_member", reviewerIds: [r3.id, outsider.id] });
+
+    expect(await readReviews(abstract.id)).toEqual(before);
+    expect(await readAbstract(abstract.id)).toEqual(aggregate);
   });
 
   it("assignment of another event's abstract returns not_found", async () => {

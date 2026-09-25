@@ -47,6 +47,7 @@ async function seedFixture() {
   const r1 = await seedUser({ clientId: event.clientId });
   const r2 = await seedUser({ clientId: event.clientId });
   const r3 = await seedUser({ clientId: event.clientId });
+  for (const member of [r1, r2, r3]) await upsertCommitteeMembership(event.id, member.id);
   expect(
     await assignReviewersTxn({ eventId: event.id, abstractId: abstract.id, reviewerIds: [r1.id, r2.id] }),
   ).toMatchObject({ ok: true });
@@ -255,6 +256,7 @@ describe.runIf(dbTestsEnabled())("concurrency: abstract writers against a finali
     const reviewers = await Promise.all(
       Array.from({ length: fanout }, () => seedUser({ clientId: event.clientId })),
     );
+    for (const member of reviewers) await upsertCommitteeMembership(event.id, member.id);
     expect(
       await assignReviewersTxn({ eventId: event.id, abstractId: abstract.id, reviewerIds: reviewers.map((r) => r.id) }),
     ).toMatchObject({ ok: true });
