@@ -85,11 +85,20 @@ export class HealthController {
   }
 
   // Worker heartbeats: an enabled worker beat < 60 s ago and no job running
-  // past twice its timeout (worker_heartbeats, written every 15 s).
+  // past twice its timeout (worker_heartbeats, written every 15 s). Public:
+  // the body is picked field by field so no worker id, service name or job
+  // detail can reach it.
   @Get("health/worker")
   @SkipEnvelope()
   worker(@Res({ passthrough: true }) reply: FastifyReply) {
-    return this.probe(reply, getWorkerHealth);
+    return this.probe(reply, async () => {
+      const { isHealthy, reasons, counts } = await getWorkerHealth();
+      return {
+        isHealthy,
+        reasons,
+        counts: { live: counts.live, disabled: counts.disabled, overdueJobs: counts.overdueJobs },
+      };
+    });
   }
 
   // Networking ANN index: 503 while an event above the exact-ranking limit

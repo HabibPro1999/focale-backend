@@ -46,9 +46,11 @@ describe.runIf(dbTestsEnabled())("db tier: worker heartbeats", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]!.jobs).toEqual({ outbox: job({ running: true, runningForMs: 1_000 }) });
     expect(rows[0]!.startedAt.getTime()).toBeLessThanOrEqual(rows[0]!.lastBeatAt.getTime());
-    const health = await getWorkerHealth();
-    expect(health.workers[0]!.lastBeatAgeMs).toBeLessThan(5_000);
-    expect(health.workers[0]!.uptimeMs).toBeGreaterThanOrEqual(0);
+    expect(await getWorkerHealth()).toEqual({
+      isHealthy: true,
+      reasons: [],
+      counts: { live: 1, disabled: 0, overdueJobs: 0 },
+    });
   });
 
   it("is healthy with one fresh enabled worker, even beside a stopped one", async () => {
@@ -56,25 +58,26 @@ describe.runIf(dbTestsEnabled())("db tier: worker heartbeats", () => {
     await ageRow("old", 120);
     await recordWorkerHeartbeat({ workerId: "new", service: "focale-worker", disabled: false, jobs: { outbox: job() } });
 
-    const health = await getWorkerHealth();
-    expect(health).toMatchObject({ isHealthy: true, reasons: [] });
-    expect(health.workers.map((worker) => [worker.workerId, worker.fresh])).toEqual([
-      ["new", true],
-      ["old", false],
-    ]);
+    expect(await getWorkerHealth()).toEqual({
+      isHealthy: true,
+      reasons: [],
+      counts: { live: 1, disabled: 0, overdueJobs: 0 },
+    });
   });
 
   it("is unhealthy with no fresh beat, with only disabled workers, or with an overdue job", async () => {
-    expect(await getWorkerHealth()).toMatchObject({
+    expect(await getWorkerHealth()).toEqual({
       isHealthy: false,
       reasons: ["no worker heartbeat in the last 60 s"],
-      workers: [],
+      counts: { live: 0, disabled: 0, overdueJobs: 0 },
     });
 
     await recordWorkerHeartbeat({ workerId: "idle", service: "focale-worker", disabled: true, jobs: {} });
-    expect((await getWorkerHealth()).reasons).toEqual([
-      "only workers with RUN_WORKERS=false are running; no jobs are processed",
-    ]);
+    expect(await getWorkerHealth()).toEqual({
+      isHealthy: false,
+      reasons: ["only workers with RUN_WORKERS=false are running; no jobs are processed"],
+      counts: { live: 0, disabled: 1, overdueJobs: 0 },
+    });
 
     await recordWorkerHeartbeat({
       workerId: "busy",
@@ -83,17 +86,22 @@ describe.runIf(dbTestsEnabled())("db tier: worker heartbeats", () => {
       jobs: { "email-queue": job({ running: true, runningForMs: 250_000, timeoutMs: 120_000, overdue: true }) },
     });
     const health = await getWorkerHealth();
-    expect(health.isHealthy).toBe(false);
-    expect(health.reasons).toEqual(["job email-queue on busy has run for over twice its 120000 ms timeout"]);
+    // Counts only: no worker id, service name or job name in the public body.
+    expect(health).toEqual({
+      isHealthy: false,
+      reasons: ["1 job run(s) past twice their timeout"],
+      counts: { live: 1, disabled: 1, overdueJobs: 1 },
+    });
+    expect(JSON.stringify(health)).not.toMatch(/busy|idle|focale-worker|email-queue/);
   });
 
-  it("stops listing workers silent for 10 minutes and prunes rows older than the retention", async () => {
+  it("ignores workers silent for 60 s and prunes rows older than the retention", async () => {
     await recordWorkerHeartbeat({ workerId: "gone", service: "focale-worker", disabled: false, jobs: {} });
     await recordWorkerHeartbeat({ workerId: "recent", service: "focale-worker", disabled: false, jobs: {} });
     await ageRow("gone", 8 * 24 * 3600);
-    await ageRow("recent", 11 * 60);
+    await ageRow("recent", 61);
 
-    expect((await getWorkerHealth()).workers).toEqual([]);
+    expect((await getWorkerHealth()).counts).toEqual({ live: 0, disabled: 0, overdueJobs: 0 });
     expect(await pruneWorkerHeartbeats()).toBe(1);
     const remaining = await getDb().select({ workerId: workerHeartbeats.workerId }).from(workerHeartbeats);
     expect(remaining).toEqual([{ workerId: "recent" }]);
