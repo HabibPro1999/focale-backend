@@ -32,15 +32,30 @@ vi.mock("@app/db", () => ({
   getUserById: vi.fn(),
   findCommitteeUserClientIds: vi.fn(),
   findAbstractEmailTemplate: vi.fn(),
-  createEmailLog: vi.fn(),
-  updateEmailLogById: vi.fn(),
 }));
 
+// sendEmailMock stands for the provider; sendEmailNow (3.6b) is faked on top
+// of it: accepted → SENT, refused → FAILED, thrown → UNCERTAIN.
 const sendEmailMock = vi.fn();
+const sendEmailNowMock = vi.fn(async (input: { log?: unknown } & Record<string, unknown>) => {
+  try {
+    const result = (await sendEmailMock({ ...input, trackingId: "log-now" })) as {
+      success: boolean;
+      messageId?: string;
+      error?: string;
+    };
+    return result.success
+      ? { status: "SENT", emailLogId: "log-now", messageId: result.messageId }
+      : { status: "FAILED", emailLogId: "log-now", error: result.error ?? "Unknown error" };
+  } catch (err) {
+    return { status: "UNCERTAIN", emailLogId: "log-now", error: String(err) };
+  }
+});
 vi.mock("@app/integrations", () => ({
   updateFirebaseUserPassword: vi.fn(),
   revokeFirebaseRefreshTokens: vi.fn(),
-  getEmailProvider: () => ({ sendEmail: sendEmailMock }),
+  sendEmailNow: (input: never) => sendEmailNowMock(input),
+  renderEmailLayout: (body: string, options?: { header?: string }) => `<layout header="${options?.header}">${body}</layout>`,
   compileMjmlToHtml: () => ({ html: "<html></html>" }),
   // Mirrors the real resolver's modes: html escapes values, text does not.
   resolveVariables: (
@@ -91,8 +106,6 @@ import {
   getUserById,
   findCommitteeUserClientIds,
   findAbstractEmailTemplate,
-  createEmailLog,
-  updateEmailLogById,
 } from "@app/db";
 import {
   updateFirebaseUserPassword,
@@ -261,7 +274,6 @@ describe("addCommitteeMember", () => {
     mock(getUserByEmail).mockResolvedValue(user);
     mock(findEventName).mockResolvedValue("Big Event");
     mock(mintCommitteeInviteToken).mockResolvedValue("a".repeat(64));
-    mock(createEmailLog).mockResolvedValue({ ok: true, log: { id: "log-1" } });
     sendEmailMock.mockResolvedValue({ success: true });
     mock(listCommitteeMembers).mockResolvedValue([memberDto(user)]);
 
@@ -296,7 +308,6 @@ describe("addCommitteeMember", () => {
     usersMock.createUser.mockResolvedValue(user);
     mock(findEventName).mockResolvedValue("Big Event");
     mock(mintCommitteeInviteToken).mockResolvedValue("a".repeat(64));
-    mock(createEmailLog).mockResolvedValue({ ok: true, log: { id: "log-1" } });
     sendEmailMock.mockResolvedValue({ success: true });
     mock(listCommitteeMembers).mockResolvedValue([memberDto(user)]);
 
@@ -332,7 +343,6 @@ describe("addCommitteeMember", () => {
       subject: "Bienvenue {{reviewerName}}",
       htmlContent: "<p>Bonjour {{reviewerName}}</p>",
     });
-    mock(createEmailLog).mockResolvedValue({ ok: true, log: { id: "log-1" } });
     sendEmailMock.mockResolvedValue({ success: true });
     mock(listCommitteeMembers).mockResolvedValue([memberDto(user)]);
 
@@ -357,7 +367,6 @@ describe("addCommitteeMember", () => {
       subject: "Bienvenue {{reviewerName}} - {{eventName}}",
       htmlContent: "<p>Bonjour {{reviewerName}}, connectez-vous : {{loginLink}}</p>",
     });
-    mock(createEmailLog).mockResolvedValue({ ok: true, log: { id: "log-1" } });
     sendEmailMock.mockResolvedValue({ success: true });
     mock(listCommitteeMembers).mockResolvedValue([memberDto(user)]);
 
@@ -389,7 +398,6 @@ describe("addCommitteeMember", () => {
     mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" });
     mock(mintCommitteeInviteToken).mockResolvedValue("a".repeat(64));
     mock(findAbstractEmailTemplate).mockResolvedValue(null);
-    mock(createEmailLog).mockResolvedValue({ ok: true, log: { id: "log-1" } });
     sendEmailMock.mockResolvedValue({ success: true });
     mock(listCommitteeMembers).mockResolvedValue([memberDto(user)]);
 
@@ -411,7 +419,7 @@ describe("addCommitteeMember", () => {
   // M7 completion: both invite send paths must record an email_logs row
   // (ABSTRACT_COMMITTEE_INVITE) so invites show up in the admin's log table.
   // ---------------------------------------------------------------------------
-  it("M7 gap: templated invite records a SENT email_logs row (trigger + recipient + resolved subject, no registration/abstract link)", async () => {
+  it("M7 gap: templated invite goes through sendEmailNow with an ABSTRACT_COMMITTEE_INVITE log (no registration/abstract link)", async () => {
     const user = committeeUser();
     mock(getUserByEmail).mockResolvedValue(user);
     mock(findEventName).mockResolvedValue("Big Event");
@@ -422,7 +430,6 @@ describe("addCommitteeMember", () => {
       subject: "Bienvenue {{reviewerName}} - {{eventName}}",
       htmlContent: "<p>Bonjour {{reviewerName}}, connectez-vous : {{loginLink}}</p>",
     });
-    mock(createEmailLog).mockResolvedValue({ ok: true, log: { id: "log-tmpl" } });
     sendEmailMock.mockResolvedValue({ success: true, messageId: "msg-tmpl" });
     mock(listCommitteeMembers).mockResolvedValue([memberDto(user)]);
 
@@ -433,36 +440,26 @@ describe("addCommitteeMember", () => {
     );
 
     expect(result.inviteEmailSent).toBe(true);
-    expect(createEmailLog).toHaveBeenCalledWith(
+    expect(sendEmailNowMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        trigger: null,
-        abstractTrigger: "ABSTRACT_COMMITTEE_INVITE",
-        registrationId: null,
-        abstractId: null,
-        recipientEmail: user.email,
+        to: user.email,
         subject: `Bienvenue ${user.name} - Big Event`,
-        status: "SENDING",
+        categories: ["committee-invite"],
+        log: { abstractTrigger: "ABSTRACT_COMMITTEE_INVITE" },
       }),
-    );
-    expect(sendEmailMock).toHaveBeenCalledWith(
-      expect.objectContaining({ trackingId: "log-tmpl" }),
-    );
-    expect(updateEmailLogById).toHaveBeenCalledWith(
-      "log-tmpl",
-      expect.objectContaining({ status: "SENT", providerMessageId: "msg-tmpl" }),
     );
   });
 
-  it("M7 gap: the MJML fallback path also records an email_logs row (SENT) when no template is configured", async () => {
+  it("M7 gap: the MJML fallback uses the shared layout and the same invite log", async () => {
     const user = committeeUser();
     mock(getUserByEmail).mockResolvedValue(user);
-    mock(findEventName).mockResolvedValue("Big Event");
+    mock(findEventName).mockResolvedValue("Big & Event");
     mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" });
     mock(mintCommitteeInviteToken).mockResolvedValue("a".repeat(64));
     mock(findAbstractEmailTemplate).mockResolvedValue(null);
-    mock(createEmailLog).mockResolvedValue({ ok: true, log: { id: "log-mjml" } });
     sendEmailMock.mockResolvedValue({ success: true, messageId: "msg-mjml" });
     mock(listCommitteeMembers).mockResolvedValue([memberDto(user)]);
+    const compile = vi.spyOn(await import("@app/integrations"), "compileMjmlToHtml");
 
     const result = await service.addCommitteeMember(
       eventId,
@@ -471,32 +468,27 @@ describe("addCommitteeMember", () => {
     );
 
     expect(result.inviteEmailSent).toBe(true);
-    expect(createEmailLog).toHaveBeenCalledWith(
+    const mjml = compile.mock.calls[0]![0];
+    expect(mjml).toMatch(/^<layout header="Big &amp; Event">/);
+    expect(mjml).toContain(`href="https://admin.example/committee/set-password?token=${"a".repeat(64)}&amp;lang=fr"`);
+    expect(mjml).toContain("valable 7 jour(s)");
+    expect(sendEmailNowMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        trigger: null,
-        abstractTrigger: "ABSTRACT_COMMITTEE_INVITE",
-        registrationId: null,
-        abstractId: null,
-        recipientEmail: user.email,
-        subject: "Invitation au comité scientifique - Big Event",
-        status: "SENDING",
+        to: user.email,
+        subject: "Invitation au comité scientifique - Big & Event",
+        log: { abstractTrigger: "ABSTRACT_COMMITTEE_INVITE" },
       }),
-    );
-    expect(updateEmailLogById).toHaveBeenCalledWith(
-      "log-mjml",
-      expect.objectContaining({ status: "SENT", providerMessageId: "msg-mjml" }),
     );
   });
 
-  it("M7 gap: a thrown provider error records a FAILED email_logs row and still leaves membership + audit intact", async () => {
+  it("M7 gap: an unconfirmed send (UNCERTAIN) reports inviteEmailSent=false and leaves membership + audit intact", async () => {
     const user = committeeUser();
     mock(getUserByEmail).mockResolvedValue(user);
     mock(findEventName).mockResolvedValue("Big Event");
     mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" });
     mock(mintCommitteeInviteToken).mockResolvedValue("a".repeat(64));
     mock(findAbstractEmailTemplate).mockResolvedValue(null);
-    mock(createEmailLog).mockResolvedValue({ ok: true, log: { id: "log-fail" } });
-    sendEmailMock.mockRejectedValue(new Error("SMTP down"));
+    sendEmailMock.mockRejectedValue(new Error("socket hang up"));
     mock(listCommitteeMembers).mockResolvedValue([memberDto(user)]);
 
     const result = await service.addCommitteeMember(
@@ -506,14 +498,26 @@ describe("addCommitteeMember", () => {
     );
 
     expect(result.inviteEmailSent).toBe(false);
+    expect(await sendEmailNowMock.mock.results[0]!.value).toMatchObject({ status: "UNCERTAIN" });
     expect(upsertCommitteeMembership).toHaveBeenCalledWith(eventId, user.id);
     expect(insertAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({ entityType: "AbstractCommitteeMembership" }),
     );
-    expect(updateEmailLogById).toHaveBeenCalledWith(
-      "log-fail",
-      expect.objectContaining({ status: "FAILED", errorMessage: "SMTP down" }),
-    );
+  });
+
+  it("reports inviteEmailSent=false when the email log cannot be written (nothing sent)", async () => {
+    const user = committeeUser();
+    mock(getUserByEmail).mockResolvedValue(user);
+    mock(findEventName).mockResolvedValue("Big Event");
+    mock(mintCommitteeInviteToken).mockResolvedValue("a".repeat(64));
+    sendEmailNowMock.mockRejectedValueOnce(new Error("db down"));
+    mock(listCommitteeMembers).mockResolvedValue([memberDto(user)]);
+
+    const result = await service.addCommitteeMember(eventId, { email: user.email, name: "x" }, performedBy);
+
+    expect(result.inviteEmailSent).toBe(false);
+    expect(sendEmailMock).not.toHaveBeenCalled();
+    expect(upsertCommitteeMembership).toHaveBeenCalledWith(eventId, user.id);
   });
 
   it("M7 gap: the generated temporary password never appears in the email_logs row", async () => {
@@ -524,7 +528,6 @@ describe("addCommitteeMember", () => {
     mock(findEventClientId).mockResolvedValue({ id: eventId, clientId: "client-1" });
     mock(mintCommitteeInviteToken).mockResolvedValue("a".repeat(64));
     mock(findAbstractEmailTemplate).mockResolvedValue(null);
-    mock(createEmailLog).mockResolvedValue({ ok: true, log: { id: "log-pwd" } });
     sendEmailMock.mockResolvedValue({ success: true });
     mock(listCommitteeMembers).mockResolvedValue([memberDto(user)]);
 
@@ -537,9 +540,12 @@ describe("addCommitteeMember", () => {
     const generatedPassword = usersMock.createUser.mock.calls[0][0].password as string;
     expect(generatedPassword).toBeTruthy();
 
-    const logCallArgs = JSON.stringify(mock(createEmailLog).mock.calls[0][0]);
-    expect(logCallArgs).not.toContain(generatedPassword);
-    expect(logCallArgs.toLowerCase()).not.toContain("password");
+    // Nothing the send-now log records (recipient, subject, links) carries it.
+    const [input] = sendEmailNowMock.mock.calls[0]!;
+    const logged = JSON.stringify({ to: input.to, toName: input.toName, subject: input.subject, log: input.log });
+    expect(logged).not.toContain(generatedPassword);
+    expect(logged.toLowerCase()).not.toContain("password");
+    expect(JSON.stringify(input)).not.toContain(generatedPassword);
   });
 
   it("reports inviteEmailSent=false when the invite throws, without rolling back membership", async () => {
@@ -1185,6 +1191,28 @@ describe("resendCommitteeInvite", () => {
         changes: { method: { old: null, new: "invite_token" } },
       }),
     );
+  });
+
+  it("records the password-link email through sendEmailNow on the shared layout, without an invite trigger", async () => {
+    mock(findCommitteeInviteTarget).mockResolvedValue(target);
+    mock(mintCommitteeInviteToken).mockResolvedValue("a".repeat(64));
+    sendEmailMock.mockResolvedValue({ success: true });
+
+    await service.resendCommitteeInvite(eventId, reviewerId, performedBy);
+
+    const [input] = sendEmailNowMock.mock.calls[0]!;
+    expect(input).toMatchObject({ to: "r9@example.com", categories: ["committee-password-reset"] });
+    expect(input.log).toBeUndefined();
+  });
+
+  it("reports false for an unconfirmed (UNCERTAIN) send, still audit-logged", async () => {
+    mock(findCommitteeInviteTarget).mockResolvedValue(target);
+    mock(mintCommitteeInviteToken).mockResolvedValue("a".repeat(64));
+    sendEmailMock.mockRejectedValue(new Error("timeout"));
+
+    const result = await service.resendCommitteeInvite(eventId, reviewerId, performedBy);
+    expect(result).toEqual({ inviteEmailSent: false });
+    expect(insertAuditLog).toHaveBeenCalled();
   });
 
   it("reports false but still audit-logs when SendGrid fails", async () => {

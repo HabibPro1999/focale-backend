@@ -334,7 +334,7 @@ describe("list / listLogs", () => {
   });
 
   it("returns a paginated logs result with limit-50 default plumbed through", async () => {
-    vi.mocked(listEventEmailLogs).mockResolvedValue({ data: [], total: 0 });
+    vi.mocked(listEventEmailLogs).mockResolvedValue({ data: [], total: 0, totalCapped: false });
     const res = await service.listLogs("event-1", {
       page: 1,
       limit: 50,
@@ -342,5 +342,21 @@ describe("list / listLogs", () => {
     expect(res.meta.limit).toBe(50);
     const args = vi.mocked(listEventEmailLogs).mock.calls[0][1];
     expect(args).toMatchObject({ skip: 0, limit: 50 });
+    expect(res.meta.totalCapped).toBe(false);
+  });
+
+  it("flags a capped total and keeps paging past it on full pages (3.6b)", async () => {
+    const rows = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `log-${i}` })) as never[];
+    vi.mocked(listEventEmailLogs).mockResolvedValue({ data: rows(2), total: 4, totalCapped: true });
+    const last = await service.listLogs("event-1", { page: 2, limit: 2 } as never);
+    expect(last.meta).toMatchObject({ total: 4, totalPages: 2, totalCapped: true, hasNext: true });
+
+    vi.mocked(listEventEmailLogs).mockResolvedValue({ data: rows(1), total: 4, totalCapped: true });
+    const short = await service.listLogs("event-1", { page: 3, limit: 2 } as never);
+    expect(short.meta).toMatchObject({ hasNext: false, totalCapped: true });
+
+    vi.mocked(listEventEmailLogs).mockResolvedValue({ data: rows(2), total: 4, totalCapped: false });
+    const exact = await service.listLogs("event-1", { page: 2, limit: 2 } as never);
+    expect(exact.meta).toMatchObject({ hasNext: false, totalCapped: false });
   });
 });

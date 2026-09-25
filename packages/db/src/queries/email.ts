@@ -12,6 +12,7 @@ import {
   lt,
   lte,
   ne,
+  notExists,
   or,
   sql,
   type InferInsertModel,
@@ -20,7 +21,7 @@ import {
 } from "drizzle-orm";
 import { newId } from "@app/shared";
 import { getDb, type DbExecutor } from "../client";
-import { rowCountOf, STANDARD_RETRY_DELAYS_MS, standardRetryDelayMs } from "../helpers";
+import { rowCountOf, rowsOf, STANDARD_RETRY_DELAYS_MS, standardRetryDelayMs } from "../helpers";
 import { DB_NOW, backoffInterval, createLeaseQueue, intervalMs } from "../lease-queue";
 import { pgUniqueViolation, withTxn } from "../txn";
 import { emailLogs, emailTemplates } from "../schema/email";
@@ -308,73 +309,136 @@ export interface ListEventEmailLogsArgs {
   trigger?: AutomaticTrigger;
   skip: number;
   limit: number;
+  /** Defaults to EMAIL_LOG_LIST_COUNT_CAP. */
+  countCap?: number;
 }
 
+/** The event email-log list counts at most this many rows (then `totalCapped`). */
+export const EMAIL_LOG_LIST_COUNT_CAP = 10_000;
+
 /**
- * EmailLog has no direct eventId. Scope via registration.eventId OR
- * template.eventId (legacy `OR: [{registration:{eventId}}, {template:{eventId}}]`).
+ * EmailLog has no direct eventId: an event's emails are those of its
+ * registrations plus those of its templates (legacy `OR: [{registration:
+ * {eventId}}, {template:{eventId}}]`). 3.6b: instead of one OR scan, two
+ * index-backed branches, disjoint so they add up with UNION ALL:
+ * - by registration: the event's registrations → email_logs_registration_id_idx;
+ * - by template, minus rows of the event's registrations → (template_id,
+ *   queued_at) (0029).
+ * Each branch takes its own first `skip + limit` rows (queued_at, id
+ * descending), so the page is exact; the rows are loaded for that page only.
+ * The count stops at the cap (`totalCapped`): each branch counts at most
+ * cap + 1 rows.
  */
 export async function listEventEmailLogs(
   eventId: string,
   args: ListEventEmailLogsArgs,
   exec: DbExecutor = getDb(),
-): Promise<{ data: EventEmailLog[]; total: number }> {
-  const scope = or(
-    inArray(
-      emailLogs.registrationId,
-      exec
-        .select({ id: registrations.id })
-        .from(registrations)
-        .where(eq(registrations.eventId, eventId)),
-    ),
-    inArray(
-      emailLogs.templateId,
-      exec
-        .select({ id: emailTemplates.id })
-        .from(emailTemplates)
-        .where(eq(emailTemplates.eventId, eventId)),
-    ),
-  )!;
-
-  const filters: SQL[] = [scope];
+): Promise<{ data: EventEmailLog[]; total: number; totalCapped: boolean }> {
+  const filters: SQL[] = [];
   if (args.status) filters.push(eq(emailLogs.status, args.status));
   if (args.trigger) filters.push(eq(emailLogs.trigger, args.trigger));
-  const where = and(...filters);
 
-  const [rows, totalRows] = await Promise.all([
+  const eventRegistrationIds = exec
+    .select({ id: registrations.id })
+    .from(registrations)
+    .where(eq(registrations.eventId, eventId));
+  const eventTemplateIds = exec
+    .select({ id: emailTemplates.id })
+    .from(emailTemplates)
+    .where(eq(emailTemplates.eventId, eventId));
+  const byRegistration = and(
+    inArray(emailLogs.registrationId, eventRegistrationIds),
+    ...filters,
+  )!;
+  const byTemplate = and(
+    inArray(emailLogs.templateId, eventTemplateIds),
+    or(
+      isNull(emailLogs.registrationId),
+      notExists(
+        exec
+          .select({ one: sql`1` })
+          .from(registrations)
+          .where(
+            and(
+              eq(registrations.id, emailLogs.registrationId),
+              eq(registrations.eventId, eventId),
+            ),
+          ),
+      ),
+    ),
+    ...filters,
+  )!;
+
+  const countCap = args.countCap ?? EMAIL_LOG_LIST_COUNT_CAP;
+  const window = args.skip + args.limit;
+  const firstRows = (where: SQL) =>
     exec
-      .select({
-        log: emailLogs,
-        templateName: emailTemplates.name,
-      })
+      .select({ id: emailLogs.id, queuedAt: emailLogs.queuedAt })
       .from(emailLogs)
-      .leftJoin(emailTemplates, eq(emailTemplates.id, emailLogs.templateId))
       .where(where)
-      .orderBy(desc(emailLogs.queuedAt))
-      .offset(args.skip)
-      .limit(args.limit),
-    exec.select({ n: count() }).from(emailLogs).where(where),
+      .orderBy(desc(emailLogs.queuedAt), desc(emailLogs.id))
+      .limit(window);
+  const counted = (where: SQL) =>
+    exec
+      .select({ id: emailLogs.id })
+      .from(emailLogs)
+      .where(where)
+      .limit(countCap + 1);
+
+  const [page, countRes] = await Promise.all([
+    firstRows(byRegistration)
+      .unionAll(firstRows(byTemplate))
+      .orderBy(sql.raw(`"queued_at" DESC, "id" DESC`))
+      .limit(args.limit)
+      .offset(args.skip),
+    exec.execute(sql`
+      SELECT count(*) AS "n"
+      FROM ${counted(byRegistration).unionAll(counted(byTemplate))} AS "capped"
+    `),
   ]);
+  const counts = Number(rowsOf<{ n: number | string }>(countRes)[0]?.n ?? 0);
 
-  const data: EventEmailLog[] = rows.map(({ log, templateName }) => ({
-    id: log.id,
-    subject: log.subject,
-    status: log.status,
-    trigger: log.trigger,
-    templateName: templateName ?? null,
-    recipientEmail: log.recipientEmail,
-    recipientName: log.recipientName,
-    errorMessage: log.errorMessage,
-    queuedAt: log.queuedAt.toISOString(),
-    sentAt: log.sentAt?.toISOString() ?? null,
-    deliveredAt: log.deliveredAt?.toISOString() ?? null,
-    openedAt: log.openedAt?.toISOString() ?? null,
-    clickedAt: log.clickedAt?.toISOString() ?? null,
-    bouncedAt: log.bouncedAt?.toISOString() ?? null,
-    failedAt: log.failedAt?.toISOString() ?? null,
-  }));
+  const ids = page.map((row) => row.id);
+  const rows =
+    ids.length === 0
+      ? []
+      : await exec
+          .select({ log: emailLogs, templateName: emailTemplates.name })
+          .from(emailLogs)
+          .leftJoin(emailTemplates, eq(emailTemplates.id, emailLogs.templateId))
+          .where(inArray(emailLogs.id, ids));
+  const byId = new Map(rows.map((row) => [row.log.id, row]));
 
-  return { data, total: totalRows[0]?.n ?? 0 };
+  const data: EventEmailLog[] = [];
+  for (const id of ids) {
+    const row = byId.get(id);
+    // Deleted between the two reads (a retention purge): skip it.
+    if (!row) continue;
+    const { log, templateName } = row;
+    data.push({
+      id: log.id,
+      subject: log.subject,
+      status: log.status,
+      trigger: log.trigger,
+      templateName: templateName ?? null,
+      recipientEmail: log.recipientEmail,
+      recipientName: log.recipientName,
+      errorMessage: log.errorMessage,
+      queuedAt: log.queuedAt.toISOString(),
+      sentAt: log.sentAt?.toISOString() ?? null,
+      deliveredAt: log.deliveredAt?.toISOString() ?? null,
+      openedAt: log.openedAt?.toISOString() ?? null,
+      clickedAt: log.clickedAt?.toISOString() ?? null,
+      bouncedAt: log.bouncedAt?.toISOString() ?? null,
+      failedAt: log.failedAt?.toISOString() ?? null,
+    });
+  }
+
+  return {
+    data,
+    total: Math.min(counts, countCap),
+    totalCapped: counts > countCap,
+  };
 }
 
 // ============================================================================
@@ -1065,6 +1129,54 @@ export async function beginProviderAttempt(
     RETURNING "id"
   `);
   return rowCountOf(res) > 0;
+}
+
+/** Lease of a send-now row: covers the provider call (15 s timeout) and the outcome write. */
+export const SEND_NOW_LEASE_MS = 2 * 60 * 1000;
+
+/** What a send-now email records besides its lease (no automatic trigger, no dedupe key). */
+export type SendNowEmailLogValues = Pick<
+  EmailLogInsert,
+  | "recipientEmail"
+  | "recipientName"
+  | "subject"
+  | "templateId"
+  | "registrationId"
+  | "abstractId"
+  | "abstractTrigger"
+  | "contextSnapshot"
+>;
+
+/**
+ * The email_logs row of an email sent right away (3.6b, sendEmailNow), written
+ * before the provider call. It is born leased by `workerId` (SENDING, lease
+ * `leaseMs`) with the provider-attempt marker set and `max_retries` 0, so the
+ * settle writes below apply to it, and if the process dies mid-send, lease
+ * recovery parks it as UNCERTAIN, for either provider: nothing can render a
+ * send-now email again, so it is never requeued.
+ */
+export async function createSendNowEmailLog(
+  values: SendNowEmailLogValues,
+  workerId: string,
+  provider: string,
+  leaseMs: number = SEND_NOW_LEASE_MS,
+): Promise<EmailLogRow> {
+  const [log] = await getDb()
+    .insert(emailLogs)
+    .values({
+      ...values,
+      status: "SENDING",
+      maxRetries: 0,
+      attemptCount: 1,
+      lastAttemptAt: DB_NOW,
+      lockedAt: DB_NOW,
+      lockedBy: workerId,
+      lockedUntil: sql`${DB_NOW} + ${intervalMs(leaseMs)}`,
+      providerAttemptedAt: DB_NOW,
+      provider,
+    })
+    .returning();
+  return log;
 }
 
 /**

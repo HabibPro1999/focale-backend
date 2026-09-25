@@ -10,9 +10,7 @@ import {
   getRegistrationsByFilters,
   listSponsorshipBatchesForBulk,
   getClientById,
-  createEmailLog,
   insertEmailLogsSkippingConflicts,
-  updateEmailLogById,
   type EmailTemplateRow,
   type EmailLogInsert,
 } from "@app/db";
@@ -26,6 +24,7 @@ import {
   compileMjmlToHtml,
   extractPlainText,
   resendUncertainEmail,
+  sendEmailNow,
 } from "@app/integrations";
 import { AppException } from "../../core/app-exception";
 
@@ -256,14 +255,20 @@ export class EmailSendService {
   }
 
   // ==========================================================================
-  // SEND CUSTOM ONE-OFF EMAIL (synchronous; EmailLog row created BEFORE sending)
+  // SEND CUSTOM ONE-OFF EMAIL (synchronous, through sendEmailNow: the EmailLog
+  // row is written first and records the provider's classified outcome)
   // ==========================================================================
   async sendCustom(
     event: SendEventContext,
     registrationId: string,
     subject: string,
     content: TiptapDocument,
-  ): Promise<{ success: true; emailLogId: string; messageId?: string }> {
+  ): Promise<{
+    success: true;
+    emailLogId: string;
+    status: "SENT" | "UNCERTAIN";
+    messageId?: string;
+  }> {
     const registration = await getRegistrationForEmailContext(registrationId);
     if (!registration || registration.eventId !== event.id) {
       throw new AppException(
@@ -288,28 +293,7 @@ export class EmailSendService {
         .filter(Boolean)
         .join(" ") || undefined;
 
-    // Create the EmailLog row FIRST so its id is the provider trackingId and a
-    // webhook arriving during/after the send has a row to correlate against.
-    const logResult = await createEmailLog({
-      templateId: null,
-      registrationId: registration.id,
-      recipientEmail: registration.email,
-      recipientName: recipientName ?? null,
-      subject: resolvedSubject,
-      status: "SENDING",
-      contextSnapshot: context,
-    });
-    if (!logResult.ok) {
-      // trigger is null here, so no dedupe index applies; treat as conflict.
-      throw new AppException(
-        ErrorCodes.CONFLICT,
-        "Resource already exists",
-        409,
-      );
-    }
-    const emailLog = logResult.log;
-
-    const result = await getEmailProvider().sendEmail({
+    const result = await sendEmailNow({
       to: registration.email,
       toName: recipientName,
       fromName: context.eventName,
@@ -318,33 +302,27 @@ export class EmailSendService {
       subject: resolvedSubject,
       html: resolvedHtml,
       plainText: resolvedPlain,
-      trackingId: emailLog.id,
       categories: ["custom-one-off"],
+      log: { registrationId: registration.id, contextSnapshot: context },
     });
 
-    if (result.success) {
-      await updateEmailLogById(emailLog.id, {
-        status: "SENT",
-        providerMessageId: result.messageId,
-        sentAt: new Date(),
-      });
-      return {
-        success: true,
-        emailLogId: emailLog.id,
-        messageId: result.messageId,
-      };
+    switch (result.status) {
+      case "SENT":
+        return {
+          success: true,
+          emailLogId: result.emailLogId,
+          status: "SENT",
+          messageId: result.messageId,
+        };
+      case "UNCERTAIN":
+        // The provider may have sent it: not an error the admin should retry.
+        return { success: true, emailLogId: result.emailLogId, status: "UNCERTAIN" };
+      case "FAILED":
+        throw new AppException(
+          ErrorCodes.INTERNAL_ERROR,
+          result.error || "Failed to send custom email",
+          502,
+        );
     }
-
-    await updateEmailLogById(emailLog.id, {
-      status: "FAILED",
-      errorMessage: result.error || "Unknown error",
-      failedAt: new Date(),
-    });
-
-    throw new AppException(
-      ErrorCodes.INTERNAL_ERROR,
-      result.error || "Failed to send custom email",
-      502,
-    );
   }
 }

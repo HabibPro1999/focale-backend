@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  renderEmailLayout,
   renderTemplateToMjml,
   compileMjmlToHtml,
   extractPlainText,
@@ -130,6 +131,29 @@ describe("renderTemplateToMjml", () => {
     await expect(Promise.resolve(compileMjmlToHtml(mjml))).resolves.toMatchObject({
       html: expect.stringContaining("<html"),
     });
+  });
+});
+
+describe("renderEmailLayout (3.6b)", () => {
+  it("is the layout renderTemplateToMjml uses", () => {
+    const body = "<mj-text>Hello</mj-text>";
+    expect(renderEmailLayout(body)).toBe(
+      renderTemplateToMjml(doc([{ type: "paragraph", content: [{ type: "text", text: "Hello" }] }])).replace(
+        /<mj-text[^>]*>Hello<\/mj-text>/,
+        body,
+      ),
+    );
+  });
+
+  it("takes a fixed header for emails without template variables", async () => {
+    const mjml = renderEmailLayout('<mj-button href="https://x.test/a?b=1&amp;c=2">Go</mj-button>', {
+      header: "Congr&#232;s &amp; Co",
+    });
+    expect(mjml).not.toContain("{{organizerName}}");
+    const { html } = await compileMjmlToHtml(mjml);
+    expect(html).toContain("Congr&#232;s &amp; Co");
+    expect(html).toContain("Powered by Focale Agency");
+    expect(html).toContain('href="https://x.test/a?b=1&amp;c=2"');
   });
 });
 

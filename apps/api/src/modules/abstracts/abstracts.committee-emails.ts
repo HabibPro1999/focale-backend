@@ -2,19 +2,28 @@ import { Inject, Injectable } from "@nestjs/common";
 import {
   findEventClientId,
   findAbstractEmailTemplate,
-  createEmailLog,
-  updateEmailLogById,
   type EmailTemplateRow,
 } from "@app/db";
 import {
-  getEmailProvider,
   compileMjmlToHtml,
+  renderEmailLayout,
   resolveVariables,
+  sendEmailNow,
+  type SendEmailNowInput,
 } from "@app/integrations";
 import { escapeHtml } from "@app/shared";
 import { CONFIG, type Config } from "../../core/config";
 import { logger } from "../../core/logger.service";
 const EVENT_NAME_TOKEN = "{eventName}";
+
+/**
+ * Committee invitations and password links. Both go through sendEmailNow
+ * (3.6b): each one records an email_logs row, and the hardcoded ones use the
+ * shared email layout. Each method resolves true only when the provider
+ * accepted the email; an UNCERTAIN send (the provider may have taken it)
+ * counts as not sent, so a self-service resend keeps the member's current
+ * link valid.
+ */
 @Injectable()
 export class CommitteeEmailsService {
   constructor(@Inject(CONFIG) private readonly config: Config) {}
@@ -58,7 +67,7 @@ export class CommitteeEmailsService {
       category: "committee-invite",
       footnote:
         "Si vous n'attendiez pas cette invitation, vous pouvez ignorer cet email.",
-      logContext: "Failed to send committee invitation email",
+      what: "committee invitation email",
       logAsInvite: true,
     });
   }
@@ -70,90 +79,35 @@ export class CommitteeEmailsService {
   ): Promise<boolean> {
     const subject = resolveVariables(template.subject, variables, { mode: "text" });
     const html = resolveVariables(template.htmlContent ?? "", variables);
-    return this.sendAndLogInviteEmail({
-      to,
-      toName,
-      subject,
-      html,
-      categories: ["committee-invite"],
-      logContext: "Failed to send templated committee invite email",
-    });
+    return this.deliver(
+      {
+        to,
+        toName,
+        subject,
+        html,
+        categories: ["committee-invite"],
+        log: { abstractTrigger: "ABSTRACT_COMMITTEE_INVITE" },
+      },
+      "templated committee invitation email",
+    );
   }
 
-  private async sendAndLogInviteEmail(input: {
-    to: string;
-    toName?: string | null;
-    subject: string;
-    html: string;
-    categories: string[];
-    logContext: string;
-  }): Promise<boolean> {
-    let emailLogId: string | null = null;
-    try {
-      const logResult = await createEmailLog({
-        trigger: null,
-        abstractTrigger: "ABSTRACT_COMMITTEE_INVITE",
-        templateId: null,
-        registrationId: null,
-        abstractId: null,
-        recipientEmail: input.to,
-        recipientName: input.toName || null,
-        subject: input.subject,
-        status: "SENDING",
-      });
-      if (logResult.ok) emailLogId = logResult.log.id;
-    } catch (err) {
+  /** sendEmailNow → true only when the provider accepted the email. */
+  private async deliver(input: SendEmailNowInput, what: string): Promise<boolean> {
+    const result = await sendEmailNow(input);
+    if (result.status === "SENT") return true;
+    if (result.status === "UNCERTAIN") {
+      logger.warn(
+        { emailLogId: result.emailLogId, error: result.error },
+        `The email provider did not confirm the ${what}; it may have been sent`,
+      );
+    } else {
       logger.error(
-        { err, email: input.to },
-        "Failed to create committee invite email log",
+        { emailLogId: result.emailLogId, error: result.error },
+        `Failed to send the ${what}`,
       );
     }
-
-    let result: { success: boolean; messageId?: string; error?: string };
-    try {
-      result = await getEmailProvider().sendEmail({
-        to: input.to,
-        toName: input.toName ?? undefined,
-        subject: input.subject,
-        html: input.html,
-        categories: input.categories,
-        trackingId: emailLogId ?? undefined,
-      });
-    } catch (err) {
-      result = {
-        success: false,
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
-
-    if (emailLogId) {
-      try {
-        await updateEmailLogById(
-          emailLogId,
-          result.success
-            ? {
-                status: "SENT",
-                providerMessageId: result.messageId,
-                sentAt: new Date(),
-              }
-            : {
-                status: "FAILED",
-                errorMessage: result.error || "Unknown error",
-                failedAt: new Date(),
-              },
-        );
-      } catch (err) {
-        logger.error(
-          { err, emailLogId },
-          "Failed to update committee invite email log",
-        );
-      }
-    }
-
-    if (!result.success) {
-      logger.error({ email: input.to, error: result.error }, input.logContext);
-    }
-    return result.success;
+    return false;
   }
 
   private async sendCommitteeMjmlEmail(input: {
@@ -167,8 +121,8 @@ export class CommitteeEmailsService {
     eventName: string;
     category: string;
     footnote?: string;
-    logContext: string;
-    /** M7: only the ABSTRACT_COMMITTEE_INVITE fallback records an email_logs row. */
+    what: string;
+    /** M7: the invitation's row carries ABSTRACT_COMMITTEE_INVITE. */
     logAsInvite?: boolean;
   }): Promise<boolean> {
     const toName = input.toName?.trim() || input.to;
@@ -186,51 +140,28 @@ export class CommitteeEmailsService {
           input.footnote,
         )}</mj-text>`
       : "";
-    const mjml = `
-<mjml>
-  <mj-head>
-    <mj-attributes>
-      <mj-all font-family="Helvetica, Arial, sans-serif" />
-      <mj-text font-size="15px" line-height="1.6" color="#1f2937" />
-    </mj-attributes>
-  </mj-head>
-  <mj-body background-color="#fafaf9">
-    <mj-section padding="32px 24px">
-      <mj-column>
+    const body = `
         <mj-text font-size="20px" font-weight="600">${safeHeadline}</mj-text>
         <mj-text>Bonjour ${safeName},</mj-text>
         <mj-text>${safeIntro}</mj-text>
-        <mj-button background-color="#0d9488" color="#ffffff" border-radius="6px" href="${safeLink}">${safeCtaText}</mj-button>
+        <mj-button href="${safeLink}">${safeCtaText}</mj-button>
         <mj-text font-size="13px" color="#6b7280">Ce lien est valable ${this.config.security.committeeInvite.tokenTtlDays} jour(s) et ne peut être utilisé qu'une seule fois. Après avoir défini votre mot de passe, vous pourrez vous connecter directement avec votre email.</mj-text>
-        ${footnoteBlock}
-      </mj-column>
-    </mj-section>
-  </mj-body>
-</mjml>`;
-    const { html } = await compileMjmlToHtml(mjml);
+        ${footnoteBlock}`;
+    const { html } = await compileMjmlToHtml(
+      renderEmailLayout(body, { header: safeEventName }),
+    );
 
-    if (input.logAsInvite) {
-      return this.sendAndLogInviteEmail({
+    return this.deliver(
+      {
         to: input.to,
         toName,
         subject: input.subject,
         html,
         categories: [input.category],
-        logContext: input.logContext,
-      });
-    }
-
-    const result = await getEmailProvider().sendEmail({
-      to: input.to,
-      toName,
-      subject: input.subject,
-      html,
-      categories: [input.category],
-    });
-    if (!result.success) {
-      logger.error({ email: input.to, error: result.error }, input.logContext);
-    }
-    return result.success;
+        log: input.logAsInvite ? { abstractTrigger: "ABSTRACT_COMMITTEE_INVITE" } : undefined,
+      },
+      input.what,
+    );
   }
   async sendResetPasswordEmail(
     user: { email: string; name: string },
@@ -253,7 +184,7 @@ export class CommitteeEmailsService {
       category: "committee-password-reset",
       footnote:
         "Si vous n'attendiez pas cet email, contactez l'organisateur de l'événement.",
-      logContext: "Failed to send committee password-reset email",
+      what: "committee password-link email",
     });
   }
 }

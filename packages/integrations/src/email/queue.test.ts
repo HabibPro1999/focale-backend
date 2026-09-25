@@ -10,9 +10,15 @@ const queue = vi.hoisted(() => ({
   confirm: vi.fn(),
   release: vi.fn(),
 }));
+const log = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
+vi.mock("@app/shared", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@app/shared")>()),
+  createLogger: () => log,
+}));
 vi.mock("@app/db", async () => ({
   emailQueue: queue,
   runLeased: (await vi.importActual<typeof import("@app/db")>("@app/db")).runLeased,
+  pgUniqueViolation: (await vi.importActual<typeof import("@app/db")>("@app/db")).pgUniqueViolation,
   getTemplateByTrigger: vi.fn(),
   createEmailLog: vi.fn(),
   hasActiveEmailLogForRegistrationTrigger: vi.fn(),
@@ -991,6 +997,39 @@ describe("updateEmailStatusFromWebhook", () => {
     await expect(
       updateEmailStatusFromWebhook("log-1", "delivered"),
     ).resolves.toBeUndefined();
+    expect(log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ emailLogId: "log-1", event: "delivered" }),
+      "Failed to update email status from webhook",
+    );
+  });
+
+  // 3.6b: an UNCERTAIN email an admin resent. The copy holds the per-trigger
+  // unique index, so the original's late confirmation cannot be written: it
+  // stays UNCERTAIN, logged at warn with its log id.
+  it("leaves a resent UNCERTAIN email whose late webhook hits the copy's unique index, at warn", async () => {
+    mocked(readEmailLogStatus).mockResolvedValue("UNCERTAIN");
+    mocked(updateEmailLogStatusGuarded).mockRejectedValue(
+      Object.assign(new Error("duplicate key value violates unique constraint"), {
+        code: "23505",
+        constraint: "email_logs_registration_trigger_active_key",
+      }),
+    );
+    const listener = vi.fn();
+    setEmailStatusChangeListener(listener);
+
+    await expect(updateEmailStatusFromWebhook("log-1", "delivered")).resolves.toBeUndefined();
+
+    expect(log.warn).toHaveBeenCalledWith(
+      {
+        emailLogId: "log-1",
+        event: "delivered",
+        constraint: "email_logs_registration_trigger_active_key",
+      },
+      "Webhook skipped — another active email for the same trigger holds the unique index",
+    );
+    expect(log.error).not.toHaveBeenCalled();
+    expect(listener).not.toHaveBeenCalled();
+    setEmailStatusChangeListener(undefined);
   });
 });
 

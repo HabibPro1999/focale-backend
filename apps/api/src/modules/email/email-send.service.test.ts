@@ -6,9 +6,7 @@ vi.mock("@app/db", () => ({
   getRegistrationsByFilters: vi.fn(),
   listSponsorshipBatchesForBulk: vi.fn(),
   getClientById: vi.fn(),
-  createEmailLog: vi.fn(),
   insertEmailLogsSkippingConflicts: vi.fn(),
-  updateEmailLogById: vi.fn(),
 }));
 
 const sendEmailMock = vi.fn();
@@ -26,6 +24,7 @@ vi.mock("@app/integrations", () => ({
   compileMjmlToHtml: vi.fn(() => ({ html: "HTML", errors: [] })),
   extractPlainText: vi.fn(() => "PLAIN"),
   resendUncertainEmail: vi.fn(),
+  sendEmailNow: vi.fn(),
 }));
 
 import {
@@ -34,11 +33,9 @@ import {
   getRegistrationsByFilters,
   listSponsorshipBatchesForBulk,
   getClientById,
-  createEmailLog,
   insertEmailLogsSkippingConflicts,
-  updateEmailLogById,
 } from "@app/db";
-import { resendUncertainEmail, resolveVariables } from "@app/integrations";
+import { resendUncertainEmail, resolveVariables, sendEmailNow } from "@app/integrations";
 import { EmailSendService } from "./email-send.service";
 
 const service = new EmailSendService();
@@ -83,7 +80,7 @@ describe("testSend", () => {
         categories: ["test-email"],
       }),
     );
-    expect(createEmailLog).not.toHaveBeenCalled();
+    expect(sendEmailNow).not.toHaveBeenCalled();
     // 6.1: subject and plain text resolve as text; HTML keeps escaping.
     expect(vi.mocked(resolveVariables).mock.calls.map((c) => c[2])).toEqual([
       { mode: "text" },
@@ -249,58 +246,56 @@ describe("sendCustom", () => {
     ).rejects.toMatchObject({ status: 404 });
   });
 
-  it("creates the EmailLog BEFORE sending and marks SENT on success", async () => {
+  it("sends through sendEmailNow with the registration's log links and reports SENT", async () => {
     vi.mocked(getRegistrationForEmailContext).mockResolvedValue(registration as never);
-    vi.mocked(createEmailLog).mockResolvedValue({
-      ok: true,
-      log: { id: "log-1" },
-    } as never);
-    const order: string[] = [];
-    vi.mocked(createEmailLog).mockImplementation(async () => {
-      order.push("create");
-      return { ok: true, log: { id: "log-1" } } as never;
-    });
-    sendEmailMock.mockImplementation(async () => {
-      order.push("send");
-      return { success: true, messageId: "m1" };
-    });
+    vi.mocked(sendEmailNow).mockResolvedValue({ status: "SENT", emailLogId: "log-1", messageId: "m1" });
 
     const res = await service.sendCustom(event, "reg-1", "Subject", content);
-    expect(order).toEqual(["create", "send"]);
     expect(vi.mocked(resolveVariables).mock.calls.map((c) => c[2])).toEqual([
       { mode: "text" },
       undefined,
       { mode: "text" },
     ]);
-    expect(sendEmailMock).toHaveBeenCalledWith(
-      expect.objectContaining({ trackingId: "log-1", subject: "Subject" }),
-    );
-    expect(updateEmailLogById).toHaveBeenCalledWith(
-      "log-1",
-      expect.objectContaining({ status: "SENT", providerMessageId: "m1" }),
-    );
+    expect(sendEmailNow).toHaveBeenCalledWith({
+      to: "reg@x.com",
+      toName: "Reg One",
+      fromName: "Conf",
+      replyTo: "org@x.com",
+      replyToName: "Org",
+      subject: "Subject",
+      html: "HTML",
+      plainText: "PLAIN",
+      categories: ["custom-one-off"],
+      log: {
+        registrationId: "reg-1",
+        contextSnapshot: { eventName: "Conf", organizerEmail: "org@x.com", organizerName: "Org" },
+      },
+    });
     expect(res).toEqual({
       success: true,
       emailLogId: "log-1",
+      status: "SENT",
       messageId: "m1",
     });
   });
 
-  it("marks the log FAILED and throws 502 when the send fails", async () => {
+  it("reports an UNCERTAIN send without an error (the provider may have sent it)", async () => {
     vi.mocked(getRegistrationForEmailContext).mockResolvedValue(registration as never);
-    vi.mocked(createEmailLog).mockResolvedValue({
-      ok: true,
-      log: { id: "log-1" },
-    } as never);
-    sendEmailMock.mockResolvedValue({ success: false, error: "boom" });
+    vi.mocked(sendEmailNow).mockResolvedValue({ status: "UNCERTAIN", emailLogId: "log-1", error: "timeout" });
+    await expect(service.sendCustom(event, "reg-1", "S", content)).resolves.toEqual({
+      success: true,
+      emailLogId: "log-1",
+      status: "UNCERTAIN",
+    });
+  });
+
+  it("throws 502 when the provider refused the email", async () => {
+    vi.mocked(getRegistrationForEmailContext).mockResolvedValue(registration as never);
+    vi.mocked(sendEmailNow).mockResolvedValue({ status: "FAILED", emailLogId: "log-1", error: "boom" });
 
     await expect(
       service.sendCustom(event, "reg-1", "S", content),
-    ).rejects.toMatchObject({ status: 502 });
-    expect(updateEmailLogById).toHaveBeenCalledWith(
-      "log-1",
-      expect.objectContaining({ status: "FAILED", errorMessage: "boom" }),
-    );
+    ).rejects.toMatchObject({ status: 502, message: "boom" });
   });
 });
 
