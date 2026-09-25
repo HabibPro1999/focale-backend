@@ -50,3 +50,22 @@ export {
   type SponsorshipCodeLinkResult,
   type SponsorshipCodeRepairPlan,
 } from "./sponsorship-code-repair";
+export {
+  LINK_REFUSED_STATUSES,
+  SponsorshipSettlementError,
+  changeSponsorshipCoverageTxn,
+  linkSponsorshipToRegistrationTxn,
+  linkedRegistrationIds,
+  readSponsorshipTarget,
+  releaseSponsorshipTxn,
+  settleSponsorshipStatusTxn,
+  sponsorshipLinkRefusal,
+  unlinkSponsorshipFromRegistrationTxn,
+  type SponsorshipCoverage,
+  type SponsorshipLinkResult,
+  type SponsorshipReleaseResult,
+  type SponsorshipSettlementRefusal,
+  type SponsorshipStatusChange,
+  type SponsorshipTarget,
+  type SponsorshipUnlinkResult,
+} from "./sponsorship-link";

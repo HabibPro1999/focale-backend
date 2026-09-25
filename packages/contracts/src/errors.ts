@@ -130,6 +130,12 @@ export const ErrorCodes = {
   // or claimed by an earlier signup (plan 2.7). Unknown/cancelled codes are
   // INVALID_SPONSORSHIP_CODE (400).
   SPONSORSHIP_CODE_ALREADY_USED: "SPO_14003",
+  // A sponsorship change on a registration whose money is settled (plan 2.8):
+  // linking to PAID/WAIVED/REFUNDED, or changing a PAID registration's
+  // sponsorship amount (unlink, cancel, delete, coverage change).
+  SPONSORSHIP_TARGET_SETTLED: "SPO_14004",
+  // A sponsorship would leave the registration paid more than it owes (plan 2.8).
+  SPONSORSHIP_EXCEEDS_AMOUNT_DUE: "SPO_14005",
 
   // Email (15xxx)
   MJML_COMPILATION_ERROR: "EML_15001",

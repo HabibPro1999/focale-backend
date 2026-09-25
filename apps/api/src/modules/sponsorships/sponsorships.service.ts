@@ -1,6 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import {
   ErrorCodes,
+  type AppEvent,
   type AvailableSponsorship,
   type CreateBatchResult,
   type CreateSponsorshipBatchInput,
@@ -11,27 +12,23 @@ import {
 import {
   calculateApplicableAmount,
   calculateSettlement,
+  normalizeSponsorshipCode,
   type RegistrationForCalculation,
 } from "@app/shared";
 import {
-  casSetSponsorshipUsed,
-  countUsagesForSponsorship,
+  SponsorshipSettlementError,
+  changeSponsorshipCoverageTxn,
   deleteSponsorshipRow,
-  deleteUsage,
+  emitSettlementEvents,
   enqueueSponsorshipEmailOutbox,
   enqueueTriggeredEmailOutbox,
   findActiveEventAccess,
   findEventForBatch,
   findRegistrationForLink,
-  findRegistrationSettlementState,
   findRegistrationsForBatch,
   findSponsorFormById,
   findSponsorshipForLink,
   findSponsorshipForMutation,
-  findSponsorshipForRecalc,
-  findSponsorshipUnlinkState,
-  findUsage,
-  findUsageAmountsByRegistration,
   getActiveSponsorForm,
   getDb,
   getEventBasePrice,
@@ -44,20 +41,28 @@ import {
   getSponsorshipById,
   getSponsorshipByCode,
   getSponsorshipClientId,
+  insertAuditLog,
   insertSponsorship,
   insertSponsorshipBatch,
-  insertUsage,
+  linkSponsorshipToRegistrationTxn,
   listSponsorships,
+  lockRegistrationsForUpdate,
+  lockSponsorshipForUpdate,
+  readSponsorshipTarget,
+  releaseSponsorshipTxn,
   searchRegistrantsForSponsorship,
+  settlementEventPair,
   sponsorshipCodeExists,
-  updateRegistrationSettlement,
+  sponsorshipLinkRefusal,
+  unlinkSponsorshipFromRegistrationTxn,
   updateSponsorshipRow,
-  updateUsageAmount,
-  withTxn,
+  withLockingTxn,
   type AccessItemForOverlap,
   type DbExecutor,
   type RegistrationForBatch,
+  type SettleRegistrationResult,
   type SponsorshipRow,
+  type SponsorshipUnlinkResult,
   type SponsorshipWithUsages,
 } from "@app/db";
 import {
@@ -69,12 +74,10 @@ import {
   assertEventWritable,
 } from "../events";
 import { assertModuleEnabledForClient } from "../clients/module-gates";
-import { AccessService } from "../access/access.service";
+import { AccessService, toAccessAppException } from "../access/access.service";
 import { AppException } from "../../core/app-exception";
 import {
-  calculateTotalSponsorshipAmount,
   detectCoverageOverlap,
-  determineSponsorshipStatus,
   generateUniqueCode,
   validateCoveredAccessTimeOverlap,
   type ExistingUsage,
@@ -82,17 +85,8 @@ import {
 
 const MODULE = "sponsorships";
 
-/** Legacy link/batch precedence: PAID/WAIVED sticky, else SPONSORED/PARTIAL/unchanged. */
-function nextStatusOnApply(
-  current: string,
-  isFullySponsored: boolean,
-  amount: number,
-): string {
-  if (current === "PAID" || current === "WAIVED") return current;
-  if (isFullySponsored) return "SPONSORED";
-  if (amount > 0) return "PARTIAL";
-  return current;
-}
+/** Who a linked-mode batch's automatic links are recorded as. */
+const BATCH_LINK_ACTOR = "SYSTEM";
 
 function sumAccessPrices(
   coveredAccessIds: string[],
@@ -102,6 +96,121 @@ function sumAccessPrices(
     (sum, id) => sum + (accessPriceMap.get(id) ?? 0),
     0,
   );
+}
+
+/**
+ * The sponsorship settlement refusals (@app/db) and access paid-count errors
+ * as the API's AppExceptions. Messages and codes of the refusals that
+ * existed before plan 2.8 are unchanged.
+ */
+function toSponsorshipAppException(err: unknown): unknown {
+  if (!(err instanceof SponsorshipSettlementError)) return toAccessAppException(err);
+  const { details } = err;
+  switch (err.reason) {
+    case "SPONSORSHIP_NOT_FOUND":
+      return new AppException(ErrorCodes.NOT_FOUND, "Sponsorship not found", 404);
+    case "SPONSORSHIP_CANCELLED":
+      return new AppException(ErrorCodes.BAD_REQUEST, "Cannot link a cancelled sponsorship", 400, {
+        code: "SPONSORSHIP_CANCELLED",
+      });
+    case "REGISTRATION_NOT_FOUND":
+      return new AppException(ErrorCodes.REGISTRATION_NOT_FOUND, "Registration not found", 404);
+    case "EVENT_MISMATCH":
+      return new AppException(
+        ErrorCodes.BAD_REQUEST,
+        "Sponsorship and registration must be for the same event",
+        400,
+      );
+    case "ALREADY_LINKED":
+      return new AppException(ErrorCodes.CONFLICT, "Sponsorship is already linked to this registration", 409, {
+        code: "SPONSORSHIP_ALREADY_LINKED",
+      });
+    case "NOT_LINKED":
+      return new AppException(ErrorCodes.NOT_FOUND, "Sponsorship is not linked to this registration", 404);
+    case "NOT_APPLICABLE":
+      return new AppException(
+        ErrorCodes.SPONSORSHIP_NOT_APPLICABLE,
+        "Sponsorship coverage does not apply to this registration (no overlap between sponsored items and registration selections)",
+        400,
+      );
+    case "TARGET_SETTLED":
+      return new AppException(
+        ErrorCodes.SPONSORSHIP_TARGET_SETTLED,
+        `The registration is ${details.paymentStatus}: its sponsorship cannot change`,
+        409,
+        { registrationId: details.registrationId, paymentStatus: details.paymentStatus },
+      );
+    case "EXCEEDS_AMOUNT_DUE":
+      return new AppException(
+        ErrorCodes.SPONSORSHIP_EXCEEDS_AMOUNT_DUE,
+        "The registration has already paid more than it would owe with this sponsorship",
+        409,
+        { registrationId: details.registrationId, paidAmount: details.paidAmount, amountDue: details.amountDue },
+      );
+  }
+  return err;
+}
+
+function rethrowSponsorshipException(err: unknown): never {
+  throw toSponsorshipAppException(err);
+}
+
+/** Registration events after a sponsorship change settled it (networking re-sync included). */
+function registrationEvents(
+  clientId: string,
+  registrationId: string,
+  settled: SettleRegistrationResult,
+): AppEvent[] {
+  const moved = [...settled.paidAccess.incremented, ...settled.paidAccess.decremented];
+  return settlementEventPair({
+    id: registrationId,
+    eventId: settled.eventId,
+    clientId,
+    oldStatus: settled.before.paymentStatus,
+    newStatus: settled.after.paymentStatus,
+    emitCountsChanged: false,
+    accessIds: moved,
+  });
+}
+
+function countsChanged(clientId: string, eventId: string, settled: SettleRegistrationResult[]): AppEvent {
+  const accessIds = new Set<string>();
+  for (const result of settled) {
+    for (const id of [...result.paidAccess.incremented, ...result.paidAccess.decremented]) accessIds.add(id);
+  }
+  return {
+    type: "eventAccess.countsChanged",
+    clientId,
+    eventId,
+    payload: { id: eventId, accessIds: [...accessIds].sort() },
+    ts: Date.now(),
+  };
+}
+
+/** The Sponsorship UNLINK_FROM_REGISTRATION audit changes of one unlink. */
+function unlinkChanges(
+  unlinked: SponsorshipUnlinkResult,
+  sponsorshipStatus?: { before: string; after: string },
+): Record<string, { old: unknown; new: unknown }> {
+  const { settled } = unlinked;
+  const changes: Record<string, { old: unknown; new: unknown }> = {
+    registrationId: { old: unlinked.registrationId, new: null },
+    amountApplied: { old: unlinked.usage.amountApplied, new: 0 },
+    sponsorshipAmount: { old: settled.before.sponsorshipAmount, new: settled.after.sponsorshipAmount },
+  };
+  if (settled.before.paymentStatus !== settled.after.paymentStatus) {
+    changes.paymentStatus = { old: settled.before.paymentStatus, new: settled.after.paymentStatus };
+  }
+  if (unlinked.clearedPaymentMethod !== null) {
+    changes.paymentMethod = { old: unlinked.clearedPaymentMethod, new: null };
+  }
+  if (unlinked.clearedSponsorshipCode !== null) {
+    changes.sponsorshipCode = { old: unlinked.clearedSponsorshipCode, new: null };
+  }
+  if (sponsorshipStatus && sponsorshipStatus.before !== sponsorshipStatus.after) {
+    changes.status = { old: sponsorshipStatus.before, new: sponsorshipStatus.after };
+  }
+  return changes;
 }
 
 interface BatchContext {
@@ -223,7 +332,9 @@ export class SponsorshipsService {
   }
 
   // ==========================================================================
-  // Update / cancel / delete (own READ COMMITTED txn — no retry, legacy parity)
+  // Update / cancel / delete (plan 2.8): lock the sponsorship, re-read it,
+  // then its linked registrations in ascending id order, each settled
+  // through settleRegistrationTxn.
   // ==========================================================================
 
   async updateSponsorship(
@@ -234,21 +345,30 @@ export class SponsorshipsService {
     if (input.status === "CANCELLED") {
       return this.cancelSponsorship(id, performedBy);
     }
-    await withTxn((tx) => this.updateSponsorshipCore(tx, id, input));
+    await withLockingTxn((tx) => this.updateSponsorshipCore(tx, id, input, performedBy));
     return (await getSponsorshipById(id)) as SponsorshipWithUsages;
+  }
+
+  /** Lock the sponsorship and re-read it for a mutation (404 and the event/module gates). */
+  private async lockSponsorshipForMutation(tx: DbExecutor, id: string) {
+    const sponsorship = (await lockSponsorshipForUpdate(tx, id))
+      ? await findSponsorshipForMutation(tx, id)
+      : null;
+    if (!sponsorship) {
+      throw new AppException(ErrorCodes.NOT_FOUND, "Sponsorship not found", 404);
+    }
+    assertEventWritable(sponsorship.event);
+    assertModuleEnabledForClient(sponsorship.event.client, MODULE);
+    return sponsorship;
   }
 
   private async updateSponsorshipCore(
     tx: DbExecutor,
     id: string,
     input: UpdateSponsorshipInput,
+    performedBy?: string,
   ): Promise<void> {
-    const sponsorship = await findSponsorshipForMutation(tx, id);
-    if (!sponsorship) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Sponsorship not found", 404);
-    }
-    assertEventWritable(sponsorship.event);
-    assertModuleEnabledForClient(sponsorship.event.client, MODULE);
+    const sponsorship = await this.lockSponsorshipForMutation(tx, id);
 
     const coverageChanged =
       input.coversBasePrice !== undefined ||
@@ -293,89 +413,156 @@ export class SponsorshipsService {
     }
 
     const patch: Parameters<typeof updateSponsorshipRow>[2] = {};
-    if (input.beneficiaryName !== undefined) {
-      patch.beneficiaryName = input.beneficiaryName;
-    }
-    if (input.beneficiaryEmail !== undefined) {
-      patch.beneficiaryEmail = input.beneficiaryEmail;
-    }
-    if (input.beneficiaryPhone !== undefined) {
-      patch.beneficiaryPhone = input.beneficiaryPhone;
-    }
-    if (input.beneficiaryAddress !== undefined) {
-      patch.beneficiaryAddress = input.beneficiaryAddress;
+    const changes: Record<string, { old: unknown; new: unknown }> = {};
+    const beneficiaryFields = [
+      "beneficiaryName",
+      "beneficiaryEmail",
+      "beneficiaryPhone",
+      "beneficiaryAddress",
+    ] as const;
+    for (const field of beneficiaryFields) {
+      const next = input[field];
+      if (next === undefined) continue;
+      (patch as Record<string, unknown>)[field] = next;
+      if (next !== sponsorship[field]) changes[field] = { old: sponsorship[field], new: next };
     }
     if (coverageChanged) {
-      patch.coversBasePrice = nextCoversBasePrice;
-      patch.coveredAccessIds = nextCoveredAccessIds;
-      patch.totalAmount = nextTotalAmount;
+      if (nextCoversBasePrice !== sponsorship.coversBasePrice) {
+        changes.coversBasePrice = { old: sponsorship.coversBasePrice, new: nextCoversBasePrice };
+      }
+      if (JSON.stringify(nextCoveredAccessIds) !== JSON.stringify(sponsorship.coveredAccessIds)) {
+        changes.coveredAccessIds = { old: sponsorship.coveredAccessIds, new: nextCoveredAccessIds };
+      }
+      if (nextTotalAmount !== sponsorship.totalAmount) {
+        changes.totalAmount = { old: sponsorship.totalAmount, new: nextTotalAmount };
+      }
     }
 
-    if (Object.keys(patch).length > 0) {
+    const clientId = sponsorship.event.clientId;
+    const pending: AppEvent[] = [];
+    if (coverageChanged) {
+      // Every linked registration is locked and settled against the new coverage.
+      const changed = await changeSponsorshipCoverageTxn(
+        tx,
+        id,
+        {
+          coversBasePrice: nextCoversBasePrice,
+          coveredAccessIds: nextCoveredAccessIds,
+          totalAmount: nextTotalAmount,
+        },
+        patch,
+      ).catch(rethrowSponsorshipException);
+      const settled = changed?.settled ?? [];
+      for (const result of settled) {
+        await this.access.handleCapacityReached(sponsorship.eventId, result.paidAccess.incremented, tx);
+        pending.push(...registrationEvents(clientId, result.registrationId, result));
+      }
+      if (settled.length > 0) pending.push(countsChanged(clientId, sponsorship.eventId, settled));
+    } else if (Object.keys(patch).length > 0) {
       await updateSponsorshipRow(tx, id, patch);
     }
-    if (coverageChanged && sponsorship.usages.length > 0) {
-      await this.recalculateUsageAmounts(tx, id);
+
+    if (Object.keys(changes).length > 0) {
+      await insertAuditLog(
+        { entityType: "Sponsorship", entityId: id, action: "UPDATE", changes, performedBy: performedBy ?? null },
+        tx,
+      );
     }
-    // ponytail: audit + realtime outbox omitted — deferred across this port wave.
+    pending.push({
+      type: "sponsorship.updated",
+      clientId,
+      eventId: sponsorship.eventId,
+      payload: { id },
+      ts: Date.now(),
+    });
+    await emitSettlementEvents(tx, pending);
   }
 
   async cancelSponsorship(
     id: string,
     performedBy?: string,
   ): Promise<SponsorshipWithUsages> {
-    await withTxn((tx) => this.cancelSponsorshipCore(tx, id, performedBy));
+    await withLockingTxn((tx) => this.releaseSponsorshipCore(tx, id, "cancel", performedBy));
     return (await getSponsorshipById(id)) as SponsorshipWithUsages;
   }
 
-  private async cancelSponsorshipCore(
-    tx: DbExecutor,
-    id: string,
-    performedBy?: string,
-  ): Promise<void> {
-    const sponsorship = await findSponsorshipForMutation(tx, id);
-    if (!sponsorship) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Sponsorship not found", 404);
-    }
-    assertEventWritable(sponsorship.event);
-    assertModuleEnabledForClient(sponsorship.event.client, MODULE);
-
-    // Unconditional: unlinks lingering usages even when already CANCELLED.
-    await this.unlinkSponsorshipFromAllRegistrations(
-      tx,
-      id,
-      sponsorship.usages,
-      performedBy,
-    );
-
-    if (sponsorship.status !== "CANCELLED") {
-      await updateSponsorshipRow(tx, id, { status: "CANCELLED" });
-    }
-  }
-
   async deleteSponsorship(id: string, performedBy?: string): Promise<void> {
-    await withTxn((tx) => this.deleteSponsorshipCore(tx, id, performedBy));
+    await withLockingTxn((tx) => this.releaseSponsorshipCore(tx, id, "delete", performedBy));
   }
 
-  private async deleteSponsorshipCore(
+  /**
+   * Cancel or delete: unlink every linked registration (settled, and never
+   * back out of REFUNDED/WAIVED; a PAID registration whose amount would
+   * change refuses with 409), then set CANCELLED or delete the row.
+   * Cancelling unlinks lingering usages even when already CANCELLED.
+   */
+  private async releaseSponsorshipCore(
     tx: DbExecutor,
     id: string,
+    mode: "cancel" | "delete",
     performedBy?: string,
   ): Promise<void> {
-    const sponsorship = await findSponsorshipForMutation(tx, id);
-    if (!sponsorship) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Sponsorship not found", 404);
-    }
-    assertEventWritable(sponsorship.event);
-    assertModuleEnabledForClient(sponsorship.event.client, MODULE);
+    const sponsorship = await this.lockSponsorshipForMutation(tx, id);
+    const released = await releaseSponsorshipTxn(tx, id).catch(rethrowSponsorshipException);
+    const unlinked = released?.unlinked ?? [];
+    const clientId = sponsorship.event.clientId;
+    const eventId = sponsorship.eventId;
+    const pending: AppEvent[] = [];
 
-    await this.unlinkSponsorshipFromAllRegistrations(
-      tx,
-      id,
-      sponsorship.usages,
-      performedBy,
-    );
-    await deleteSponsorshipRow(tx, id);
+    for (const result of unlinked) {
+      await this.access.handleCapacityReached(eventId, result.settled.paidAccess.incremented, tx);
+      await insertAuditLog(
+        {
+          entityType: "Sponsorship",
+          entityId: id,
+          action: "UNLINK_FROM_REGISTRATION",
+          changes: unlinkChanges(result),
+          performedBy: performedBy ?? null,
+        },
+        tx,
+      );
+      pending.push(...registrationEvents(clientId, result.registrationId, result.settled));
+    }
+
+    if (mode === "cancel") {
+      if (sponsorship.status !== "CANCELLED") {
+        await updateSponsorshipRow(tx, id, { status: "CANCELLED" });
+        await insertAuditLog(
+          {
+            entityType: "Sponsorship",
+            entityId: id,
+            action: "CANCEL",
+            changes: { status: { old: sponsorship.status, new: "CANCELLED" } },
+            performedBy: performedBy ?? null,
+          },
+          tx,
+        );
+      }
+      pending.push({ type: "sponsorship.cancelled", clientId, eventId, payload: { id }, ts: Date.now() });
+    } else {
+      await insertAuditLog(
+        {
+          entityType: "Sponsorship",
+          entityId: id,
+          action: "DELETE",
+          changes: {
+            code: { old: sponsorship.code, new: null },
+            status: { old: sponsorship.status, new: null },
+            beneficiaryName: { old: sponsorship.beneficiaryName, new: null },
+            beneficiaryEmail: { old: sponsorship.beneficiaryEmail, new: null },
+            totalAmount: { old: sponsorship.totalAmount, new: null },
+          },
+          performedBy: performedBy ?? null,
+        },
+        tx,
+      );
+      await deleteSponsorshipRow(tx, id);
+      pending.push({ type: "sponsorship.deleted", clientId, eventId, payload: { id }, ts: Date.now() });
+    }
+    if (unlinked.length > 0) {
+      pending.push(countsChanged(clientId, eventId, unlinked.map((result) => result.settled)));
+    }
+    await emitSettlementEvents(tx, pending);
   }
 
   // ==========================================================================
@@ -391,17 +578,7 @@ export class SponsorshipsService {
     const { sponsor, customFields } = input;
     const context = await this.validateBatchInput(eventId, formId, input);
 
-    return withTxn(async (tx) => {
-      const batch = await insertSponsorshipBatch(tx, {
-        eventId,
-        formId: context.formId,
-        labName: sponsor.labName,
-        contactName: sponsor.contactName,
-        email: sponsor.email,
-        phone: sponsor.phone ?? null,
-        formData: { sponsor, customFields: customFields ?? {} },
-      });
-
+    return withLockingTxn(async (tx) => {
       const formSchema = (await getFormSchema(tx, context.formId)) as
         | Record<string, unknown>
         | null;
@@ -412,8 +589,20 @@ export class SponsorshipsService {
         (sponsorshipSettings?.autoApproveSponsorship as boolean | undefined) ??
         false;
 
+      const batch = await insertSponsorshipBatch(tx, {
+        eventId,
+        formId: context.formId,
+        labName: sponsor.labName,
+        contactName: sponsor.contactName,
+        email: sponsor.email,
+        phone: sponsor.phone ?? null,
+        formData: { sponsor, customFields: customFields ?? {} },
+      });
+
+      const clientId = context.event.clientId;
       let created: SponsorshipRow[];
       let linkedEmailEntries: LinkedEmailEntry[] = [];
+      const pending: AppEvent[] = [];
       if (context.isLinkedMode) {
         const linkedResult = await this.createLinkedModeSponsorships(
           tx,
@@ -426,6 +615,21 @@ export class SponsorshipsService {
         );
         created = linkedResult.created;
         linkedEmailEntries = linkedResult.linkedEmailEntries;
+        for (const { registrationId, sponsorshipId, settled } of linkedResult.links) {
+          pending.push(
+            {
+              type: "sponsorship.linked",
+              clientId,
+              eventId,
+              payload: { id: sponsorshipId, registrationId },
+              ts: Date.now(),
+            },
+            ...registrationEvents(clientId, registrationId, settled),
+          );
+        }
+        if (linkedResult.links.length > 0) {
+          pending.push(countsChanged(clientId, eventId, linkedResult.links.map((link) => link.settled)));
+        }
       } else {
         created = await this.createCodeModeSponsorships(
           tx,
@@ -453,7 +657,14 @@ export class SponsorshipsService {
         linkedEmailEntries,
       );
 
-      // ponytail: realtime outbox omitted — deferred across this port wave.
+      pending.unshift({
+        type: "sponsorship.batchCreated",
+        clientId,
+        eventId,
+        payload: { id: batch.id, batchId: batch.id, count: created.length },
+        ts: Date.now(),
+      });
+      await emitSettlementEvents(tx, pending);
       return { batchId: batch.id, count: created.length };
     });
   }
@@ -637,6 +848,20 @@ export class SponsorshipsService {
     return created;
   }
 
+  /**
+   * Linked-mode beneficiaries: one sponsorship per target registration.
+   * Without auto-approve each is created PENDING and targeted at its
+   * registration. With auto-approve every target registration is locked
+   * first, in ascending id order, and each sponsorship is linked through
+   * linkSponsorshipToRegistrationTxn (usage, USED, settlement), unless the
+   * link is refused on the locked row (the registration is settled, already
+   * paid more than it would owe, or the coverage applies nothing): that
+   * sponsorship stays PENDING and targeted, for an admin to review.
+   *
+   * The new sponsorship rows are created after the registration locks. That
+   * does not break the sponsorship → registration lock order: no other
+   * transaction can see, let alone lock, a row this one has just inserted.
+   */
   private async createLinkedModeSponsorships(
     tx: DbExecutor,
     eventId: string,
@@ -650,14 +875,23 @@ export class SponsorshipsService {
   ): Promise<{
     created: SponsorshipRow[];
     linkedEmailEntries: LinkedEmailEntry[];
+    links: Array<{ registrationId: string; sponsorshipId: string; settled: SettleRegistrationResult }>;
   }> {
     const created: SponsorshipRow[] = [];
     const linkedEmailEntries: LinkedEmailEntry[] = [];
-    // Sequential — auto-approve mutates the in-memory running total that a later
-    // beneficiary targeting the same registration must observe.
+    const links: Array<{ registrationId: string; sponsorshipId: string; settled: SettleRegistrationResult }> = [];
+    if (autoApprove) {
+      await lockRegistrationsForUpdate(
+        tx,
+        linkedBeneficiaries.map((linked) => linked.registrationId),
+      );
+    }
     for (const linked of linkedBeneficiaries) {
       const registration = registrations.get(linked.registrationId);
-      if (!registration) {
+      const target = registration
+        ? await readSponsorshipTarget(tx, linked.registrationId)
+        : null;
+      if (!registration || !target) {
         throw new AppException(
           ErrorCodes.REGISTRATION_NOT_FOUND,
           "Registration not found",
@@ -669,111 +903,60 @@ export class SponsorshipsService {
         [registration.firstName, registration.lastName]
           .filter(Boolean)
           .join(" ") || registration.email;
-      const totalAmount =
-        (linked.coversBasePrice ? registration.baseAmount : 0) +
-        sumAccessPrices(linked.coveredAccessIds, accessPriceMap);
-
-      if (!autoApprove) {
-        const pending = await insertSponsorship(tx, {
-          batchId,
-          eventId,
-          code,
-          status: "PENDING",
-          beneficiaryName,
-          beneficiaryEmail: registration.email,
-          beneficiaryPhone: registration.phone ?? null,
-          beneficiaryAddress: null,
-          coversBasePrice: linked.coversBasePrice,
-          coveredAccessIds: linked.coveredAccessIds,
-          totalAmount,
-          targetRegistrationId: linked.registrationId,
-        });
-        created.push(pending);
-        continue;
-      }
-
+      const coverage = {
+        coversBasePrice: linked.coversBasePrice,
+        coveredAccessIds: linked.coveredAccessIds,
+        totalAmount:
+          (linked.coversBasePrice ? target.baseAmount : 0) +
+          sumAccessPrices(linked.coveredAccessIds, accessPriceMap),
+      };
+      const refusal = autoApprove ? await sponsorshipLinkRefusal(tx, coverage, target) : null;
       const sponsorship = await insertSponsorship(tx, {
         batchId,
         eventId,
         code,
-        status: "USED",
+        status: "PENDING",
         beneficiaryName,
         beneficiaryEmail: registration.email,
         beneficiaryPhone: registration.phone ?? null,
         beneficiaryAddress: null,
-        coversBasePrice: linked.coversBasePrice,
-        coveredAccessIds: linked.coveredAccessIds,
-        totalAmount,
+        ...coverage,
+        ...(autoApprove && !refusal ? {} : { targetRegistrationId: linked.registrationId }),
       });
+      if (!autoApprove || refusal) {
+        created.push(sponsorship);
+        continue;
+      }
 
-      const priceBreakdown =
-        registration.priceBreakdown as RegistrationForCalculation["priceBreakdown"];
-      const oldCovered =
-        registration.paymentStatus === "PARTIAL"
-          ? await this.access.getAlreadyCoveredAccessIds(linked.registrationId, tx)
-          : new Set<string>();
-      const applicableAmount = calculateApplicableAmount(
-        {
-          coversBasePrice: linked.coversBasePrice,
-          coveredAccessIds: linked.coveredAccessIds,
-          totalAmount,
-        },
-        {
-          totalAmount: registration.totalAmount,
-          baseAmount: registration.baseAmount,
-          accessTypeIds: registration.accessTypeIds,
-          priceBreakdown,
-        },
-      );
-
-      await insertUsage(tx, {
+      const link = await linkSponsorshipToRegistrationTxn(tx, {
         sponsorshipId: sponsorship.id,
         registrationId: linked.registrationId,
-        amountApplied: applicableAmount,
-        appliedBy: "SYSTEM",
-      });
-
-      const updatedSponsorshipAmount = Math.min(
-        registration.sponsorshipAmount + applicableAmount,
-        registration.totalAmount,
-      );
-      const isFullySponsored =
-        updatedSponsorshipAmount >= registration.totalAmount;
-      const nextPaymentStatus = nextStatusOnApply(
-        registration.paymentStatus,
-        isFullySponsored,
-        updatedSponsorshipAmount,
-      );
-
-      await updateRegistrationSettlement(tx, linked.registrationId, {
-        sponsorshipAmount: updatedSponsorshipAmount,
-        paymentMethod: "LAB_SPONSORSHIP",
-        paymentStatus: nextPaymentStatus,
-        ...(nextPaymentStatus === "SPONSORED" ? { paidAt: new Date() } : {}),
-      });
-
-      const newCovered = new Set([...oldCovered, ...linked.coveredAccessIds]);
-      await this.access.syncPaidCountDelta(
-        eventId,
+        appliedBy: BATCH_LINK_ACTOR,
+        fields: { paymentMethod: "LAB_SPONSORSHIP" },
+      }).catch(rethrowSponsorshipException);
+      const { settled } = link;
+      await this.access.handleCapacityReached(eventId, settled.paidAccess.incremented, tx);
+      await insertAuditLog(
         {
-          status: registration.paymentStatus,
-          priceBreakdown: registration.priceBreakdown,
-          coveredAccessIds: oldCovered,
-        },
-        {
-          status: nextPaymentStatus,
-          priceBreakdown: registration.priceBreakdown,
-          coveredAccessIds: newCovered,
+          entityType: "Sponsorship",
+          entityId: sponsorship.id,
+          action: "LINK_TO_REGISTRATION",
+          changes: {
+            registrationId: { old: null, new: linked.registrationId },
+            amountApplied: { old: 0, new: link.usage.amountApplied },
+            sponsorshipAmount: { old: settled.before.sponsorshipAmount, new: settled.after.sponsorshipAmount },
+            status: { old: "PENDING", new: "USED" },
+          },
+          performedBy: BATCH_LINK_ACTOR,
         },
         tx,
       );
 
-      // Mutate running total so a later beneficiary on the same reg sees it.
-      registration.sponsorshipAmount = updatedSponsorshipAmount;
-      created.push(sponsorship);
+      created.push({ ...sponsorship, status: "USED" });
+      links.push({ registrationId: linked.registrationId, sponsorshipId: sponsorship.id, settled });
       linkedEmailEntries.push({
-        amountApplied: applicableAmount,
-        isFullySponsored,
+        amountApplied: link.usage.amountApplied,
+        isFullySponsored: settled.after.paymentStatus === "SPONSORED",
         sponsorship: {
           code: sponsorship.code,
           beneficiaryName: sponsorship.beneficiaryName,
@@ -781,10 +964,16 @@ export class SponsorshipsService {
           coveredAccessIds: sponsorship.coveredAccessIds ?? [],
           totalAmount: sponsorship.totalAmount,
         },
-        registration: { ...registration },
+        registration: {
+          ...registration,
+          totalAmount: settled.after.totalAmount,
+          sponsorshipAmount: settled.after.sponsorshipAmount,
+          paymentStatus: settled.after.paymentStatus,
+          priceBreakdown: settled.after.priceBreakdown,
+        },
       });
     }
-    return { created, linkedEmailEntries };
+    return { created, linkedEmailEntries, links };
   }
 
   /**
@@ -916,8 +1105,8 @@ export class SponsorshipsService {
   }
 
   // ==========================================================================
-  // Link / unlink (own txn; *Tx / *Internal variants ride the caller's tx and
-  // are exported for the registrations module).
+  // Link / unlink (plan 2.8): lock the sponsorship, then the registration,
+  // then settle it through settleRegistrationTxn.
   // ==========================================================================
 
   linkSponsorshipToRegistration(
@@ -925,141 +1114,82 @@ export class SponsorshipsService {
     registrationId: string,
     adminUserId: string,
   ): Promise<LinkSponsorshipResult> {
-    return withTxn((tx) =>
-      this.linkSponsorshipToRegistrationTx(
-        tx,
-        sponsorshipId,
-        registrationId,
-        adminUserId,
-      ),
+    return withLockingTxn((tx) =>
+      this.linkSponsorshipToRegistrationCore(tx, sponsorshipId, registrationId, adminUserId),
     );
   }
 
-  async linkSponsorshipToRegistrationTx(
+  private async linkSponsorshipToRegistrationCore(
     tx: DbExecutor,
     sponsorshipId: string,
     registrationId: string,
     adminUserId: string,
   ): Promise<LinkSponsorshipResult> {
-    const sponsorship = await findSponsorshipForLink(tx, sponsorshipId);
+    const sponsorship = (await lockSponsorshipForUpdate(tx, sponsorshipId))
+      ? await findSponsorshipForLink(tx, sponsorshipId)
+      : null;
     if (!sponsorship) {
       throw new AppException(ErrorCodes.NOT_FOUND, "Sponsorship not found", 404);
     }
     assertEventWritable(sponsorship.event);
     assertModuleEnabledForClient(sponsorship.event.client, MODULE);
 
-    if (sponsorship.status === "CANCELLED") {
-      throw new AppException(
-        ErrorCodes.BAD_REQUEST,
-        "Cannot link a cancelled sponsorship",
-        400,
-        { code: "SPONSORSHIP_CANCELLED" },
-      );
-    }
+    const { usage, settled } = await linkSponsorshipToRegistrationTxn(tx, {
+      sponsorshipId,
+      registrationId,
+      appliedBy: adminUserId,
+      fields: { paymentMethod: "LAB_SPONSORSHIP" },
+    }).catch(rethrowSponsorshipException);
+    await this.access.handleCapacityReached(sponsorship.eventId, settled.paidAccess.incremented, tx);
 
     const registration = await findRegistrationForLink(tx, registrationId);
     if (!registration) {
-      throw new AppException(
-        ErrorCodes.REGISTRATION_NOT_FOUND,
-        "Registration not found",
-        404,
-      );
+      throw new AppException(ErrorCodes.REGISTRATION_NOT_FOUND, "Registration not found", 404);
     }
-    if (sponsorship.eventId !== registration.eventId) {
-      throw new AppException(
-        ErrorCodes.BAD_REQUEST,
-        "Sponsorship and registration must be for the same event",
-        400,
-      );
-    }
-
-    const existingLink = await findUsage(tx, sponsorshipId, registrationId);
-    if (existingLink) {
-      throw new AppException(
-        ErrorCodes.CONFLICT,
-        "Sponsorship is already linked to this registration",
-        409,
-        { code: "SPONSORSHIP_ALREADY_LINKED" },
-      );
-    }
-
     const coverage = {
       coversBasePrice: sponsorship.coversBasePrice,
       coveredAccessIds: sponsorship.coveredAccessIds ?? [],
       totalAmount: sponsorship.totalAmount,
     };
-    const warnings = detectCoverageOverlap(registration.existingUsages, coverage);
-
-    const priceBreakdown =
-      registration.priceBreakdown as RegistrationForCalculation["priceBreakdown"];
-    const applicableAmount = calculateApplicableAmount(coverage, {
-      totalAmount: registration.totalAmount,
-      baseAmount: registration.baseAmount,
-      accessTypeIds: registration.accessTypeIds,
-      priceBreakdown,
-    });
-
-    if (applicableAmount === 0 && sponsorship.totalAmount > 0) {
-      throw new AppException(
-        ErrorCodes.SPONSORSHIP_NOT_APPLICABLE,
-        "Sponsorship coverage does not apply to this registration (no overlap between sponsored items and registration selections)",
-        400,
-      );
-    }
-
-    const oldCovered = await this.access.getAlreadyCoveredAccessIds(registrationId, tx);
-
-    const usage = await insertUsage(tx, {
-      sponsorshipId,
-      registrationId,
-      amountApplied: applicableAmount,
-      appliedBy: adminUserId,
-    });
-
-    // Atomic CAS: only flips to USED while not CANCELLED.
-    const casCount = await casSetSponsorshipUsed(tx, sponsorshipId);
-    if (casCount === 0) {
-      throw new AppException(
-        ErrorCodes.SPONSORSHIP_STATUS_CONFLICT,
-        "Sponsorship cannot be linked (may be cancelled or already processing)",
-        409,
-      );
-    }
-
-    const allUsages = await findUsageAmountsByRegistration(tx, registrationId);
-    const newSponsorshipAmount = Math.min(
-      calculateTotalSponsorshipAmount(allUsages),
-      registration.totalAmount,
-    );
-    const isFullySponsored = newSponsorshipAmount >= registration.totalAmount;
-    const nextPaymentStatus = nextStatusOnApply(
-      registration.paymentStatus,
-      isFullySponsored,
-      newSponsorshipAmount,
+    const warnings = detectCoverageOverlap(
+      registration.existingUsages.filter((existing) => existing.sponsorshipId !== sponsorshipId),
+      coverage,
     );
 
-    await updateRegistrationSettlement(tx, registrationId, {
-      sponsorshipAmount: newSponsorshipAmount,
-      paymentMethod: "LAB_SPONSORSHIP",
-      paymentStatus: nextPaymentStatus,
-      ...(nextPaymentStatus === "SPONSORED" ? { paidAt: new Date() } : {}),
-    });
-
-    const newCovered = await this.access.getAlreadyCoveredAccessIds(registrationId, tx);
-    await this.access.syncPaidCountDelta(
-      registration.eventId,
+    const changes: Record<string, { old: unknown; new: unknown }> = {
+      registrationId: { old: null, new: registrationId },
+      amountApplied: { old: 0, new: usage.amountApplied },
+      sponsorshipAmount: { old: settled.before.sponsorshipAmount, new: settled.after.sponsorshipAmount },
+    };
+    if (sponsorship.status !== "USED") {
+      changes.status = { old: sponsorship.status, new: "USED" };
+    }
+    if (settled.before.paymentStatus !== settled.after.paymentStatus) {
+      changes.paymentStatus = { old: settled.before.paymentStatus, new: settled.after.paymentStatus };
+    }
+    await insertAuditLog(
       {
-        status: registration.paymentStatus,
-        priceBreakdown: registration.priceBreakdown,
-        coveredAccessIds: oldCovered,
-      },
-      {
-        status: nextPaymentStatus,
-        priceBreakdown: registration.priceBreakdown,
-        coveredAccessIds: newCovered,
+        entityType: "Sponsorship",
+        entityId: sponsorshipId,
+        action: "LINK_TO_REGISTRATION",
+        changes,
+        performedBy: adminUserId,
       },
       tx,
     );
+
+    const clientId = sponsorship.event.clientId;
+    await emitSettlementEvents(tx, [
+      {
+        type: "sponsorship.linked",
+        clientId,
+        eventId: sponsorship.eventId,
+        payload: { id: sponsorshipId, registrationId },
+        ts: Date.now(),
+      },
+      ...registrationEvents(clientId, registrationId, settled),
+      countsChanged(clientId, sponsorship.eventId, [settled]),
+    ]);
 
     // SPONSORSHIP_APPLIED email — enqueued on the same txn (legacy parity).
     const [pricing, accessItems] = await Promise.all([
@@ -1093,7 +1223,7 @@ export class SponsorshipsService {
         phone: registration.phone,
         totalAmount: registration.totalAmount,
         baseAmount: registration.baseAmount,
-        sponsorshipAmount: newSponsorshipAmount,
+        sponsorshipAmount: registration.sponsorshipAmount,
         linkBaseUrl: registration.linkBaseUrl,
         editToken: registration.editToken,
       },
@@ -1123,8 +1253,6 @@ export class SponsorshipsService {
       `email:sponsorship:SPONSORSHIP_APPLIED:${registration.id}:${sponsorshipId}`,
     );
 
-    // ponytail: audit + realtime outbox omitted — deferred across this port wave.
-
     return {
       usage: {
         id: usage.id,
@@ -1132,12 +1260,12 @@ export class SponsorshipsService {
         amountApplied: usage.amountApplied,
       },
       registration: {
-        totalAmount: registration.totalAmount,
-        sponsorshipAmount: newSponsorshipAmount,
+        totalAmount: settled.after.totalAmount,
+        sponsorshipAmount: settled.after.sponsorshipAmount,
         amountDue: calculateSettlement({
-          totalAmount: registration.totalAmount,
-          paidAmount: registration.paidAmount,
-          sponsorshipAmount: newSponsorshipAmount,
+          totalAmount: settled.after.totalAmount,
+          paidAmount: settled.after.paidAmount,
+          sponsorshipAmount: settled.after.sponsorshipAmount,
         }).amountDue,
       },
       warnings,
@@ -1157,7 +1285,10 @@ export class SponsorshipsService {
         404,
       );
     }
-    const sponsorship = await getSponsorshipByCode(registration.event.id, code);
+    const normalized = normalizeSponsorshipCode(code);
+    const sponsorship = normalized
+      ? await getSponsorshipByCode(registration.event.id, normalized)
+      : null;
     if (!sponsorship) {
       throw new AppException(
         ErrorCodes.NOT_FOUND,
@@ -1173,236 +1304,55 @@ export class SponsorshipsService {
     );
   }
 
+  /**
+   * Unlink a sponsorship from a registration: the registration is settled
+   * without it (status derived; a PAID registration whose amount would
+   * change refuses with 409), its signup code is cleared when it was this
+   * sponsorship's code, and the sponsorship goes back to PENDING when no
+   * usage remains (CANCELLED stays CANCELLED).
+   */
   unlinkSponsorshipFromRegistration(
     sponsorshipId: string,
     registrationId: string,
     performedBy?: string,
   ): Promise<void> {
-    return withTxn((tx) =>
-      this.unlinkSponsorshipFromRegistrationInternal(
-        tx,
+    return withLockingTxn(async (tx) => {
+      const sponsorship = (await lockSponsorshipForUpdate(tx, sponsorshipId))
+        ? await findSponsorshipForMutation(tx, sponsorshipId)
+        : null;
+      if (!sponsorship) {
+        throw new AppException(ErrorCodes.NOT_FOUND, "Sponsorship is not linked to this registration", 404);
+      }
+      assertEventWritable(sponsorship.event);
+      assertModuleEnabledForClient(sponsorship.event.client, MODULE);
+      const unlinked = await unlinkSponsorshipFromRegistrationTxn(tx, {
         sponsorshipId,
         registrationId,
-        performedBy,
-      ),
-    );
-  }
-
-  async unlinkSponsorshipFromRegistrationInternal(
-    tx: DbExecutor,
-    sponsorshipId: string,
-    registrationId: string,
-    _performedBy?: string,
-  ): Promise<void> {
-    const usage = await findUsage(tx, sponsorshipId, registrationId);
-    if (!usage) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Sponsorship is not linked to this registration",
-        404,
-      );
-    }
-
-    const registrationBefore = await findRegistrationSettlementState(
-      tx,
-      registrationId,
-    );
-    const sponsorshipBefore = await findSponsorshipUnlinkState(tx, sponsorshipId);
-    if (sponsorshipBefore) {
-      assertEventWritable(sponsorshipBefore.event);
-      assertModuleEnabledForClient(sponsorshipBefore.event.client, MODULE);
-    }
-
-    const oldCovered = registrationBefore
-      ? await this.access.getAlreadyCoveredAccessIds(registrationId, tx)
-      : new Set<string>();
-
-    await deleteUsage(tx, usage.id);
-
-    const remaining = await findUsageAmountsByRegistration(tx, registrationId);
-    const rawNew = calculateTotalSponsorshipAmount(remaining);
-    const newSponsorshipAmount = registrationBefore
-      ? Math.min(rawNew, registrationBefore.totalAmount)
-      : rawNew;
-
-    const paidAmount = registrationBefore?.paidAmount ?? 0;
-    const totalAmount = registrationBefore?.totalAmount ?? 0;
-    const currentStatus = registrationBefore?.paymentStatus ?? "PENDING";
-
-    let nextStatus: string | undefined;
-    if (currentStatus === "SPONSORED" && newSponsorshipAmount < totalAmount) {
-      nextStatus =
-        paidAmount > 0 || newSponsorshipAmount > 0 ? "PARTIAL" : "PENDING";
-    } else if (currentStatus === "PARTIAL" && newSponsorshipAmount === 0) {
-      nextStatus = paidAmount > 0 ? "PARTIAL" : "PENDING";
-    }
-
-    if (registrationBefore) {
-      const newCovered = await this.access.getAlreadyCoveredAccessIds(registrationId, tx);
-      await this.access.syncPaidCountDelta(
-        registrationBefore.eventId,
+      }).catch(rethrowSponsorshipException);
+      const { settled } = unlinked;
+      await this.access.handleCapacityReached(settled.eventId, settled.paidAccess.incremented, tx);
+      await insertAuditLog(
         {
-          status: currentStatus,
-          priceBreakdown: registrationBefore.priceBreakdown,
-          coveredAccessIds: oldCovered,
-        },
-        {
-          status: nextStatus ?? currentStatus,
-          priceBreakdown: registrationBefore.priceBreakdown,
-          coveredAccessIds: newCovered,
+          entityType: "Sponsorship",
+          entityId: sponsorshipId,
+          action: "UNLINK_FROM_REGISTRATION",
+          changes: unlinkChanges(unlinked, unlinked.status),
+          performedBy: performedBy ?? null,
         },
         tx,
       );
-    }
-
-    await updateRegistrationSettlement(tx, registrationId, {
-      sponsorshipAmount: newSponsorshipAmount,
-      ...(newSponsorshipAmount === 0 ? { paymentMethod: null } : {}),
-      ...(nextStatus !== undefined
-        ? {
-            paymentStatus: nextStatus,
-            ...(paidAmount === 0 ? { paidAt: null } : {}),
-          }
-        : {}),
+      const clientId = sponsorship.event.clientId;
+      await emitSettlementEvents(tx, [
+        {
+          type: "sponsorship.unlinked",
+          clientId,
+          eventId: settled.eventId,
+          payload: { id: sponsorshipId, registrationId },
+          ts: Date.now(),
+        },
+        ...registrationEvents(clientId, registrationId, settled),
+        countsChanged(clientId, settled.eventId, [settled]),
+      ]);
     });
-
-    const usageCount = await countUsagesForSponsorship(tx, sponsorshipId);
-    if (sponsorshipBefore) {
-      const newStatus = determineSponsorshipStatus(
-        { status: sponsorshipBefore.status },
-        usageCount,
-      );
-      if (newStatus !== sponsorshipBefore.status) {
-        await updateSponsorshipRow(tx, sponsorshipId, { status: newStatus });
-      }
-    }
-    // ponytail: audit omitted — deferred across this port wave.
-  }
-
-  async unlinkSponsorshipFromAllRegistrations(
-    tx: DbExecutor,
-    sponsorshipId: string,
-    usages: Array<{ registrationId: string | null }>,
-    performedBy?: string,
-  ): Promise<void> {
-    // Sequential — each unlink recomputes state the next iteration reads.
-    for (const usage of usages) {
-      if (!usage.registrationId) continue;
-      await this.unlinkSponsorshipFromRegistrationInternal(
-        tx,
-        sponsorshipId,
-        usage.registrationId,
-        performedBy,
-      );
-    }
-  }
-
-  // ==========================================================================
-  // Recalculation — rides the caller's tx (exported for registrations wave-3).
-  // ==========================================================================
-
-  async recalculateUsageAmounts(
-    tx: DbExecutor,
-    sponsorshipId: string,
-  ): Promise<void> {
-    const sponsorship = await findSponsorshipForRecalc(tx, sponsorshipId);
-    if (!sponsorship) return;
-
-    // Sequential — each iteration re-reads the running total for its registration.
-    for (const usage of sponsorship.usages) {
-      const registration = usage.registration;
-      if (!registration) continue;
-
-      const priceBreakdown =
-        registration.priceBreakdown as RegistrationForCalculation["priceBreakdown"];
-      const newAmount = calculateApplicableAmount(
-        {
-          coversBasePrice: sponsorship.coversBasePrice,
-          coveredAccessIds: sponsorship.coveredAccessIds,
-          totalAmount: sponsorship.totalAmount,
-        },
-        {
-          totalAmount: registration.totalAmount,
-          baseAmount: registration.baseAmount,
-          accessTypeIds: registration.accessTypeIds,
-          priceBreakdown,
-        },
-      );
-
-      await updateUsageAmount(tx, usage.id, newAmount);
-
-      const allUsages = await findUsageAmountsByRegistration(tx, registration.id);
-      const totalSponsorshipAmount = Math.min(
-        calculateTotalSponsorshipAmount(allUsages),
-        registration.totalAmount,
-      );
-      const oldPaymentStatus = registration.paymentStatus;
-      const settlement = calculateSettlement({
-        totalAmount: registration.totalAmount,
-        paidAmount: registration.paidAmount,
-        sponsorshipAmount: totalSponsorshipAmount,
-      });
-      const nextPaymentStatus =
-        oldPaymentStatus === "PAID" ||
-        oldPaymentStatus === "WAIVED" ||
-        oldPaymentStatus === "REFUNDED"
-          ? oldPaymentStatus
-          : totalSponsorshipAmount >= registration.totalAmount &&
-              registration.totalAmount > 0
-            ? "SPONSORED"
-            : settlement.isPartiallyPaid
-              ? "PARTIAL"
-              : "PENDING";
-      const nextPaidAt =
-        nextPaymentStatus === "SPONSORED"
-          ? (registration.paidAt ?? new Date())
-          : nextPaymentStatus === "PARTIAL" || nextPaymentStatus === "PENDING"
-            ? null
-            : registration.paidAt;
-      const subtotal =
-        (priceBreakdown as { subtotal?: number }).subtotal ??
-        registration.totalAmount;
-      const updatedPriceBreakdown = {
-        ...priceBreakdown,
-        sponsorshipTotal: totalSponsorshipAmount,
-        total: Math.max(0, subtotal - totalSponsorshipAmount),
-      };
-
-      await updateRegistrationSettlement(tx, registration.id, {
-        sponsorshipAmount: totalSponsorshipAmount,
-        paymentStatus: nextPaymentStatus,
-        paidAt: nextPaidAt,
-        priceBreakdown: updatedPriceBreakdown,
-      });
-
-      if (oldPaymentStatus !== nextPaymentStatus) {
-        const oldCovered =
-          oldPaymentStatus === "PARTIAL"
-            ? await this.access.getAlreadyCoveredAccessIds(
-                registration.id,
-                tx,
-                sponsorshipId,
-              )
-            : new Set<string>();
-        const newCovered =
-          nextPaymentStatus === "PARTIAL"
-            ? await this.access.getAlreadyCoveredAccessIds(registration.id, tx)
-            : new Set<string>();
-        await this.access.syncPaidCountDelta(
-          registration.eventId,
-          {
-            status: oldPaymentStatus,
-            priceBreakdown,
-            coveredAccessIds: oldCovered,
-          },
-          {
-            status: nextPaymentStatus,
-            priceBreakdown: updatedPriceBreakdown,
-            coveredAccessIds: newCovered,
-          },
-          tx,
-        );
-      }
-    }
   }
 }
