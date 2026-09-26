@@ -209,7 +209,7 @@ A wrong or expired OTP on `auth/verify` stays HTTP 401 (`AUTH_1001`); no session
 Who may use networking, and who may see whom, is decided in one place (`packages/db/src/policy/`):
 
 - `networking-access.ts` holds the rules as pure functions: the **gate** (config enabled, event not archived, client active with the networking, registrations and emails modules), the **window** (opening, closing, retention), **participant access** (`CONSENTED`, `CONSENT_PENDING` or none: an ACTIVE profile, never withdrawn or erased, whose own registration in the same event did not opt out and has an eligible payment status) and **counterpart visibility** by mode: `peer` (the relationship is given, e.g. a connection list: eligible, not the same person, no block either way), `discover` (also visible with a complete profile, discovery on), `profile` (discoverable or connected) and `blocklist` (like `profile`, ignoring the block itself).
-- `networking-eligibility.ts` holds the same rules as SQL fragments (`eligibleProfile`, `embeddableProfile`, `discoverableCounterpart`, `peerCounterpart`, `distinctIdentity`, `sameIdentity`, `mutuallyUnblocked`, `notInteracted`, `admittedProfile`, `networkingEventGate`, `listedProfile`) that discovery, search, facets, recommendations, vector ranking, connection lists, unread counts, badges, check-in, the embedding jobs, the maintenance producers and the post-event report compose.
+- `networking-eligibility.ts` holds the same rules as SQL fragments (`eligibleProfile`, `embeddableProfile`, `discoverableCounterpart`, `peerCounterpart`, `distinctIdentity`, `sameIdentity`, `mutuallyUnblocked`, `notInteracted`, `admittedProfile`, `networkingEventGate`, `listedProfile`, `activeProfile`) that discovery, search, facets, recommendations, vector ranking, connection lists, unread counts, badges, check-in, the embedding jobs, the maintenance producers, the organizer analytics and the post-event report compose.
 - Services load the facts in one statement (`networking-access-snapshot.ts`: the participant with its registration, form and second factor; a viewer and a target with any block and connection; the delivery context) and ask the pure functions.
 
 Where each surface stands:
@@ -321,3 +321,16 @@ Trackers hash session tokens and OTP identities; raw tokens/emails are not store
 ## Participant lists
 
 `GET connections` and `GET meetings` always paginate (`limit` 1–200, default 50; opaque `cursor`). The first page returns `{ items, nextCursor, total }`; later pages omit `total`. Cursors are scoped to the event, participant and list, and survive organizer configuration edits. `GET connections/:id`, `GET connections/with/:profileId` (`{ connection }`, possibly null) and `GET meetings/:id` return single items in the list shapes. Calendar, CSV and personal-data exports are never truncated.
+
+## Organizer analytics and the post-event report
+
+`GET /api/events/:eventId/networking/analytics` and the post-event report read the same metric definitions (`packages/db/src/queries/networking-metrics.ts`), each an SQL aggregate over the event's rows; no participant rows are loaded into the API except the bounded result rows (sectors, days, hours, peak slots, zones, the top engagement rows and the table-occupancy inputs).
+
+- Participants are the listed profiles; "active" and "visible" follow the eligibility policy; "activated" profiles have used the PWA.
+- Likes and passes are the interests as they stand: a like changed into a pass, or passes a participant reset, count as they are now (the report's "interests" is the same figure). Swipe activity by hour still counts every swipe.
+- Matches are connections; a conversation has messages, a responsive one messages from both sides; a connection converts when its pair has a booked meeting (`CONFIRMED`, `COMPLETED`, `NO_SHOW`).
+- Days, hours and slots use the event timezone.
+- `engagement` lists the 50 most engaged participants (most booked meetings, then matches, messages and swipes); `engagementTotal` counts every listed participant, and the participants export lists them all.
+- Table occupancy is the one figure computed in the API: it applies the inventory policy (a station per table, one per active representative at a stand) to the booked meetings at tables over the configured opening slots.
+
+A DB test holds the SQL figures to the pre-4.9 in-memory calculator on the eligibility matrix fixtures (both engines in CI).
