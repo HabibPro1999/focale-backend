@@ -26,9 +26,11 @@ vi.mock("@app/db", () => ({
   iterateRegistrationsForExport: vi.fn(),
   // Pulled in transitively by the generators/builder (unused in these tests).
   getEventSummaryData: vi.fn(),
-  getAccessRegistrantsReportData: vi.fn(),
+  getReportEventAndAccess: vi.fn(),
+  iterateAccessRegistrantsForReport: vi.fn(),
   getSponsorshipsReportData: vi.fn(),
-  getCheckInReportData: vi.fn(),
+  iterateSponsorshipsForReport: vi.fn(),
+  iterateCheckInReportRows: vi.fn(),
   iterateRegistrationsForModularExport: vi.fn(),
   getRegistrationTableColumns: vi.fn(),
   getEventAccessNames: vi.fn(),
