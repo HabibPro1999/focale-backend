@@ -1,3 +1,5 @@
+import * as responses from "@app/contracts";
+import { ResponseContract } from "../../core/response-contract";
 import {
   BadRequestException,
   Body,
@@ -23,6 +25,7 @@ import { SkipThrottle, Throttle } from "@nestjs/throttler";
 import { ErrorCodes } from "@app/contracts";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import {
+  getDb,
   networkingDirectoryFacets,
   listNetworkingNotifications,
   recordNetworkingProfileView,
@@ -54,14 +57,17 @@ export class NetworkingPublicController {
     return this.service.participant(slug, request.headers.authorization, { ...options, ip: request.ip });
   }
   // Public reads are bounded only by the shared venue bucket.
+  @ResponseContract(responses.NetworkingPublicConfigResponseSchema)
   @SkipThrottle({ default: true })
   @Get("config") config(@Param("slug") slug: string) {
     return this.service.publicConfig(slug);
   }
+  @ResponseContract(responses.NetworkingPublicRegistrationResponseSchema)
   @SkipThrottle({ default: true })
   @Get("registration") registration(@Param("slug") slug: string) {
     return this.service.registrationInfo(slug);
   }
+  @ResponseContract(responses.NetworkingPublicRequestCodeResponseSchema)
   @Post("auth/request")
   @Throttle({ default: { limit: 5, ttl: 600_000 } })
   requestCode(
@@ -70,6 +76,7 @@ export class NetworkingPublicController {
   ) {
     return this.service.requestCode(slug, body.email);
   }
+  @ResponseContract(responses.NetworkingPublicVerifyCodeResponseSchema)
   @Post("auth/verify")
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   verifyCode(
@@ -78,18 +85,22 @@ export class NetworkingPublicController {
   ) {
     return this.service.verifyCode(slug, body.challengeId, body.code);
   }
+  @ResponseContract(responses.NetworkingPublicLogoutResponseSchema)
   @Post("auth/logout") logout(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
   ) {
     return this.service.logout(slug, req.headers.authorization);
   }
+  @ResponseContract(responses.NetworkingPublicMeResponseSchema)
   @Get("me") async me(@Param("slug") slug: string, @Req() req: FastifyRequest) {
     return (await this.context(slug, req, { allowConsentPending: true })).profile;
   }
+  @ResponseContract(responses.NetworkingPublicPersonalAnalyticsResponseSchema)
   @Get("me/analytics") async personalAnalytics(@Param("slug") slug: string, @Req() req: FastifyRequest) {
     return this.service.personalAnalytics(await this.context(slug, req));
   }
+  @ResponseContract(responses.NetworkingPublicUpdateMeResponseSchema)
   @Patch("me") async updateMe(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
@@ -97,6 +108,7 @@ export class NetworkingPublicController {
   ) {
     return this.service.updateMe(await this.context(slug, req, { allowConsentPending: true }), { ...body });
   }
+  @ResponseContract(responses.NetworkingPublicUploadPhotoResponseSchema)
   @Post("me/photo")
   async uploadPhoto(
     @Param("slug") slug: string,
@@ -110,6 +122,7 @@ export class NetworkingPublicController {
       (url) => this.service.updateMe(ctx, { photoUrl: url }),
     );
   }
+  @ResponseContract(responses.NetworkingPublicIncomingInterestsResponseSchema)
   @Get("interests/incoming")
   async incomingInterests(
     @Param("slug") slug: string,
@@ -118,6 +131,7 @@ export class NetworkingPublicController {
   ) {
     return this.social.incoming(await this.context(slug, request), query);
   }
+  @ResponseContract(responses.NetworkingPublicFacetsResponseSchema)
   @Get("facets")
   async facets(@Param("slug") slug: string, @Req() request: FastifyRequest) {
     const ctx = await this.context(slug, request);
@@ -129,6 +143,7 @@ export class NetworkingPublicController {
       ctx.config.eligiblePaymentStatuses,
     );
   }
+  @ResponseContract(responses.NetworkingPublicProfilesResponseSchema)
   @Get("profiles") async profiles(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
@@ -136,11 +151,13 @@ export class NetworkingPublicController {
   ) {
     return this.service.discover(await this.context(slug, req), query);
   }
+  @ResponseContract(responses.NetworkingPublicRepresentativesResponseSchema)
   @Get("profiles/:id/representatives") async representatives(
     @Param("slug") slug: string, @Param("id") id: string, @Req() req: FastifyRequest, @Query() query: dto.NetworkingListDto,
   ) {
     return this.service.representatives(await this.context(slug, req), id, query.page);
   }
+  @ResponseContract(responses.NetworkingPublicProfileResponseSchema)
   @Get("profiles/:id") async profile(
     @Param("slug") slug: string,
     @Param("id") id: string,
@@ -152,6 +169,7 @@ export class NetworkingPublicController {
     await recordNetworkingProfileView(ctx.event.id, ctx.profile.id, id, query.viewId);
     return networkingPublicProfile(profile);
   }
+  @ResponseContract(responses.NetworkingPublicInterestResponseSchema)
   @Post("interests") async interest(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
@@ -163,18 +181,20 @@ export class NetworkingPublicController {
       body.action,
     );
   }
+  @ResponseContract(responses.NetworkingPublicResetInterestsResponseSchema)
   @Delete("interests") async resetInterests(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
   ) {
     const ctx = await this.context(slug, req);
-    await networkingStore().remove("interests", {
+    await networkingStore(getDb()).remove("interests", {
       eventId: ctx.event.id,
       profileId: ctx.profile.id,
       action: "PASS",
     });
     return { reset: true };
   }
+  @ResponseContract(responses.NetworkingPublicConnectionsResponseSchema)
   @Get("connections") async connections(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
@@ -182,6 +202,7 @@ export class NetworkingPublicController {
   ) {
     return this.social.connections(await this.context(slug, req), query);
   }
+  @ResponseContract(responses.NetworkingPublicConnectionWithResponseSchema)
   @Get("connections/with/:profileId") async connectionWith(
     @Param("slug") slug: string,
     @Param("profileId") profileId: string,
@@ -189,6 +210,7 @@ export class NetworkingPublicController {
   ) {
     return { connection: await this.social.connectionWith(await this.context(slug, req), profileId) };
   }
+  @ResponseContract(responses.NetworkingPublicConnectionResponseSchema)
   @Get("connections/:id") async connection(
     @Param("slug") slug: string,
     @Param("id") id: string,
@@ -196,6 +218,7 @@ export class NetworkingPublicController {
   ) {
     return this.social.connectionSummary(await this.context(slug, req), id);
   }
+  @ResponseContract(responses.NetworkingPublicMessagesResponseSchema)
   @Get("connections/:id/messages") async messages(
     @Param("slug") slug: string,
     @Param("id") id: string,
@@ -204,6 +227,7 @@ export class NetworkingPublicController {
   ) {
     return this.social.messages(await this.context(slug, req), id, query);
   }
+  @ResponseContract(responses.NetworkingPublicMessageResponseSchema)
   @Post("connections/:id/messages")
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
   async message(
@@ -219,6 +243,7 @@ export class NetworkingPublicController {
       body.clientMessageId,
     );
   }
+  @ResponseContract(responses.NetworkingPublicReadResponseSchema)
   @Post("connections/:id/read") async read(
     @Param("slug") slug: string,
     @Param("id") id: string,
@@ -226,12 +251,13 @@ export class NetworkingPublicController {
   ) {
     return this.social.markRead(await this.context(slug, req), id);
   }
+  @ResponseContract(responses.NetworkingPublicBlocksResponseSchema)
   @Get("blocks") async blocks(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
   ) {
     const ctx = await this.context(slug, req);
-    const store = networkingStore();
+    const store = networkingStore(getDb());
     const rows = await store.all("blocks", {
       eventId: ctx.event.id,
       profileId: ctx.profile.id,
@@ -248,6 +274,7 @@ export class NetworkingPublicController {
     );
     return { items, total: items.length };
   }
+  @ResponseContract(responses.NetworkingPublicBlockResponseSchema)
   @Post("blocks") async block(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
@@ -255,19 +282,21 @@ export class NetworkingPublicController {
   ) {
     return this.social.block(await this.context(slug, req), body.profileId);
   }
+  @ResponseContract(responses.NetworkingPublicUnblockResponseSchema)
   @Delete("blocks/:id") async unblock(
     @Param("slug") slug: string,
     @Param("id") id: string,
     @Req() req: FastifyRequest,
   ) {
     const ctx = await this.context(slug, req);
-    await networkingStore().remove("blocks", {
+    await networkingStore(getDb()).remove("blocks", {
       eventId: ctx.event.id,
       profileId: ctx.profile.id,
       targetId: id,
     });
     return { unblocked: true };
   }
+  @ResponseContract(responses.NetworkingPublicReportResponseSchema)
   @Post("reports")
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async report(
@@ -277,12 +306,14 @@ export class NetworkingPublicController {
   ) {
     return this.social.report(await this.context(slug, req), body);
   }
+  @ResponseContract(responses.NetworkingPublicAvailabilityResponseSchema)
   @Get("availability") async availability(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
   ) {
     return this.meetings.availability(await this.context(slug, req));
   }
+  @ResponseContract(responses.NetworkingPublicUpdateAvailabilityResponseSchema)
   @Put("availability") async updateAvailability(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
@@ -293,6 +324,7 @@ export class NetworkingPublicController {
       body.slots,
     );
   }
+  @ResponseContract(responses.NetworkingPublicProfileAvailabilityResponseSchema)
   @Get("profiles/:id/availability") async profileAvailability(
     @Param("slug") slug: string,
     @Param("id") id: string,
@@ -305,6 +337,7 @@ export class NetworkingPublicController {
       availableSlots: networkingSlots(ctx.config, ctx.event).filter(slot => Date.parse(slot) > Date.now()),
     };
   }
+  @ResponseContract(responses.NetworkingPublicListMeetingsResponseSchema)
   @Get("meetings") async listMeetings(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
@@ -312,6 +345,7 @@ export class NetworkingPublicController {
   ) {
     return this.meetings.list(await this.context(slug, req), query);
   }
+  @ResponseContract(responses.NetworkingPublicMeetingResponseSchema)
   @Get("meetings/:id") async meeting(
     @Param("slug") slug: string,
     @Param("id") id: string,
@@ -319,6 +353,7 @@ export class NetworkingPublicController {
   ) {
     return this.meetings.get(await this.context(slug, req), id);
   }
+  @ResponseContract(responses.NetworkingPublicCreateMeetingResponseSchema)
   @Post("meetings") async createMeeting(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
@@ -326,6 +361,7 @@ export class NetworkingPublicController {
   ) {
     return this.meetings.create(await this.context(slug, req), body);
   }
+  @ResponseContract(responses.NetworkingPublicRespondResponseSchema)
   @Post("meetings/:id/respond") async respond(
     @Param("slug") slug: string,
     @Param("id") id: string,
@@ -334,6 +370,7 @@ export class NetworkingPublicController {
   ) {
     return this.meetings.respond(await this.context(slug, req), id, body);
   }
+  @ResponseContract(responses.NetworkingPublicCheckinResponseSchema)
   @Post("meetings/:id/checkin") async checkin(
     @Param("slug") slug: string,
     @Param("id") id: string,
@@ -342,6 +379,7 @@ export class NetworkingPublicController {
   ) {
     return this.meetings.checkin(await this.context(slug, req), id, body.token);
   }
+  @ResponseContract(responses.NetworkingPublicBadgeResponseSchema)
   @Get("badge") async badge(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
@@ -352,6 +390,7 @@ export class NetworkingPublicController {
       accessAllowed: await this.service.areaAccess(ctx),
     };
   }
+  @ResponseContract(responses.NetworkingPublicNotificationsResponseSchema)
   @Get("notifications") async notifications(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
@@ -366,6 +405,7 @@ export class NetworkingPublicController {
     );
   }
 
+  @ResponseContract(responses.NetworkingPublicReadNotificationsResponseSchema)
   @Post("notifications/read") async readNotifications(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
@@ -374,19 +414,20 @@ export class NetworkingPublicController {
     const ctx = await this.context(slug, req);
     if (body.ids) {
       for (const id of body.ids)
-        await networkingStore().update(
+        await networkingStore(getDb()).update(
           "notifications",
           { eventId: ctx.event.id, profileId: ctx.profile.id, id },
           { readAt: new Date() },
         );
     } else
-      await networkingStore().update(
+      await networkingStore(getDb()).update(
         "notifications",
         { eventId: ctx.event.id, profileId: ctx.profile.id, readAt: null },
         { readAt: new Date() },
       );
     return { read: true };
   }
+  @ResponseContract(responses.NetworkingPublicSubscribeResponseSchema)
   @Post("push-subscriptions") async subscribe(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
@@ -410,7 +451,7 @@ export class NetworkingPublicController {
     if (!allowed || url.username || url.password || url.port)
       throw unsupported();
     // One upsert on the unique endpoint: a browser re-subscribing moves its endpoint to this participant.
-    return networkingStore().upsertPushSubscription({
+    return networkingStore(getDb()).upsertPushSubscription({
       eventId: ctx.event.id,
       profileId: ctx.profile.id,
       endpoint: body.endpoint,
@@ -418,13 +459,14 @@ export class NetworkingPublicController {
       expirationTime: body.expirationTime ? new Date(body.expirationTime) : null,
     });
   }
+  @ResponseContract(responses.NetworkingPublicUnsubscribeResponseSchema)
   @Delete("push-subscriptions") async unsubscribe(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
     @Body() body: { endpoint?: string },
   ) {
     const ctx = await this.context(slug, req);
-    await networkingStore().remove("pushSubscriptions", {
+    await networkingStore(getDb()).remove("pushSubscriptions", {
       eventId: ctx.event.id,
       profileId: ctx.profile.id,
       ...(body?.endpoint ? { endpoint: body.endpoint } : {}),
@@ -467,6 +509,7 @@ export class NetworkingPublicController {
       )
       .send(await this.exports.personal(ctx));
   }
+  @ResponseContract(responses.NetworkingPublicWithdrawResponseSchema)
   @Delete("me") async withdraw(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,

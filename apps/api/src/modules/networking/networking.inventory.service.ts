@@ -10,6 +10,7 @@ import {
   type NetworkingTableInput,
 } from "@app/contracts";
 import {
+  getDb,
   networkingMeetingIs,
   networkingStore,
   networkingTables,
@@ -31,7 +32,7 @@ const location = (space: NetworkingRow<"spaces">) =>
 @Injectable()
 export class NetworkingInventoryService {
   async spaces(eventId: string) {
-    const store = networkingStore();
+    const store = networkingStore(getDb());
     const [spaces, tables] = await Promise.all([
       store.all("spaces", { eventId }),
       store.all("tables", { eventId }),
@@ -194,7 +195,7 @@ export class NetworkingInventoryService {
   }
 
   async tables(eventId: string) {
-    const store = networkingStore();
+    const store = networkingStore(getDb());
     const [tables, spaces, profiles] = await Promise.all([
       store.all("tables", { eventId }),
       store.all("spaces", { eventId }),

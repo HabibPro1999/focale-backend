@@ -1,3 +1,4 @@
+import { withSerializableTxn } from "@app/db";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
@@ -102,7 +103,7 @@ describe.runIf(dbTestsEnabled())("persisted networking projection", () => {
   });
   it("stores readable option labels while preserving participant overrides and source answers", async () => {
     const db = getDb();
-    await syncNetworkingRegistration(ids.registration);
+    await withSerializableTxn((tx) => syncNetworkingRegistration(ids.registration, tx));
     let [profile] = await db
       .select()
       .from(networkingProfiles)
@@ -116,7 +117,7 @@ describe.runIf(dbTestsEnabled())("persisted networking projection", () => {
         overrides: { sector: "Participant-owned expertise" },
       })
       .where(eq(networkingProfiles.id, profile.id));
-    await syncNetworkingRegistration(ids.registration);
+    await withSerializableTxn((tx) => syncNetworkingRegistration(ids.registration, tx));
     [profile] = await db
       .select()
       .from(networkingProfiles)

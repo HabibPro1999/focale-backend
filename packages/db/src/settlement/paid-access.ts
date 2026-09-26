@@ -1,4 +1,4 @@
-import { paidAccessQuantities } from "@app/shared";
+import { paidAccessQuantities, type PaidAccessBreakdown } from "@app/shared";
 import type { DbExecutor } from "../client";
 import {
   casDecrementAccessPaidCount,
@@ -10,7 +10,7 @@ import {
 /** A registration's paid-capacity state: its status, breakdown and sponsorship-covered items. */
 export interface PaidAccessState {
   status: string;
-  priceBreakdown: unknown;
+  priceBreakdown: PaidAccessBreakdown;
   coveredAccessIds?: ReadonlySet<string>;
 }
 

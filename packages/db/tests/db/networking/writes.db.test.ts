@@ -24,7 +24,7 @@ describe.runIf(dbTestsEnabled())("networking unique-index writes", () => {
 
   it("upserts the hour locks and claims resources all-or-nothing", async () => {
     const eventId = fixture.event.id;
-    const meeting = (requester: number, recipient: number, startsAt: Date) => networkingStore().insert("meetings", {
+    const meeting = (requester: number, recipient: number, startsAt: Date) => networkingStore(getDb()).insert("meetings", {
       eventId, requesterId: id(requester), recipientId: id(recipient), startsAt,
       endsAt: new Date(+startsAt + 1_800_000), expiresAt: startsAt,
     });
@@ -47,7 +47,7 @@ describe.runIf(dbTestsEnabled())("networking unique-index writes", () => {
     expect(await lockRows()).toHaveLength(2);
     await expect(networkingAllocationTransaction(eventId, window, (store) =>
       store.claimResource(eventId, second.id, "table:v", [at("11:00")]))).rejects.toBeInstanceOf(NetworkingAllocationLockError);
-    const held = (await networkingStore().all("reservations", { eventId }))
+    const held = (await networkingStore(getDb()).all("reservations", { eventId }))
       .map((row) => `${row.meetingId === first.id ? "first" : "second"} ${row.resourceKey} ${row.startsAt.toISOString().slice(11, 16)}`)
       .sort();
     expect(held).toEqual(["first table:t 09:50", "first table:t 09:55", "second table:u 09:55", "second table:u 10:00"]);
@@ -78,7 +78,7 @@ describe.runIf(dbTestsEnabled())("networking unique-index writes", () => {
       const moved = await store.upsertPushSubscription({ ...push, eventId, profileId: id(3), keys: { p256dh: "k2", auth: "a2" } });
       expect(moved).toMatchObject({ id: firstOwner.id, profileId: id(3), keys: { p256dh: "k2", auth: "a2" } });
     });
-    const store = networkingStore();
+    const store = networkingStore(getDb());
     expect(await store.all("interests", { eventId, profileId: id(0), targetId: id(1) })).toMatchObject([{ action: "LIKE" }]);
     expect(await store.all("connections", { eventId })).toHaveLength(1);
     expect(await store.all("messages", { eventId })).toMatchObject([{ body: "Hi" }]);

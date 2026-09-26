@@ -14,7 +14,6 @@ import {
   normalizeSponsorshipCode,
 } from "@app/shared";
 import {
-  withTxn,
   withLockingTxn,
   settleRegistrationTxn,
   claimSponsorshipCodeTxn,
@@ -167,7 +166,7 @@ export class RegistrationCreateService {
         return {
           created: false,
           registration: toPublicRegistration(existing, { token: existing.editToken }),
-          priceBreakdown: existing.priceBreakdown as PriceBreakdown,
+          priceBreakdown: existing.priceBreakdown,
         };
       }
     }
@@ -215,7 +214,7 @@ export class RegistrationCreateService {
       return {
         created: true,
         registration: toPublicRegistration(created, { token: created.editToken }),
-        priceBreakdown: created.priceBreakdown as PriceBreakdown,
+        priceBreakdown: created.priceBreakdown,
       };
     } catch (err) {
       const { isUnique, constraint } = pgUnique(err);
@@ -231,7 +230,7 @@ export class RegistrationCreateService {
           return {
             created: false,
             registration: toPublicRegistration(existing, { token: existing.editToken }),
-            priceBreakdown: existing.priceBreakdown as PriceBreakdown,
+            priceBreakdown: existing.priceBreakdown,
           };
         }
       }
@@ -601,7 +600,9 @@ export class RegistrationCreateService {
 
     let createdId!: string;
     try {
-      await withTxn(async (tx) => {
+      // Counter writes can deadlock with an access prerequisite edit. As in
+      // public creation, retry the whole transaction; side effects use outbox.
+      await withLockingTxn(async (tx) => {
       const event = await getEventForRegistrationAdmin(eventId, tx);
       if (!event) {
         throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);

@@ -11,7 +11,6 @@ import {
   calculateApplicableAmount,
   calculateSettlement,
   normalizeSponsorshipCode,
-  type RegistrationForCalculation,
 } from "@app/shared";
 import {
   changeSponsorshipCoverageTxn,
@@ -133,8 +132,7 @@ export class SponsorshipsAdminService {
 
     const pending = await getPendingSponsorships(eventId);
     const existingUsages: ExistingUsage[] = registration.existingUsages;
-    const priceBreakdown =
-      registration.priceBreakdown as RegistrationForCalculation["priceBreakdown"];
+    const { priceBreakdown } = registration;
 
     return pending.map((sponsorship) => {
       const coverage = {

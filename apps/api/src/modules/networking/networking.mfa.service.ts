@@ -5,7 +5,7 @@ import {
   Injectable,
 } from "@nestjs/common";
 import { randomBytes } from "node:crypto";
-import { networkingStore, networkingTransaction } from "@app/db";
+import { getDb, networkingStore, networkingTransaction } from "@app/db";
 import { NetworkingKeyringError } from "@app/shared";
 import type { NetworkingContext } from "./networking.service";
 import { networkingIdentityCache } from "../../core/networking-identity-cache";
@@ -34,7 +34,7 @@ function openOrNull(sealed: string) {
 @Injectable()
 export class NetworkingMfaService {
   async state(ctx: NetworkingContext) {
-    const factor = await networkingStore().one("secondFactors", {
+    const factor = await networkingStore(getDb()).one("secondFactors", {
       profileId: ctx.profile.id,
     });
     return {

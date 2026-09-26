@@ -1,3 +1,5 @@
+import * as responses from "@app/contracts";
+import { ResponseContract } from "../../core/response-contract";
 import {
   Body,
   Controller,
@@ -29,6 +31,7 @@ export class NetworkingMfaController {
       ip,
     });
   }
+  @ResponseContract(responses.NetworkingMfaStateResponseSchema)
   @Get() async state(
     @Param("slug") slug: string,
     @Ip() ip: string,
@@ -36,6 +39,7 @@ export class NetworkingMfaController {
   ) {
     return this.mfa.state(await this.context(slug, ip, authorization));
   }
+  @ResponseContract(responses.NetworkingMfaEnrollResponseSchema)
   @Post("enroll") async enroll(
     @Param("slug") slug: string,
     @Ip() ip: string,
@@ -43,6 +47,7 @@ export class NetworkingMfaController {
   ) {
     return this.mfa.enroll(await this.context(slug, ip, authorization));
   }
+  @ResponseContract(responses.NetworkingMfaConfirmResponseSchema)
   @Post("confirm") async confirm(
     @Param("slug") slug: string,
     @Body() body: NetworkingMfaCodeDto,
@@ -55,6 +60,7 @@ export class NetworkingMfaController {
       "CONFIRM",
     );
   }
+  @ResponseContract(responses.NetworkingMfaVerifyResponseSchema)
   @Post("verify") async verify(
     @Param("slug") slug: string,
     @Body() body: NetworkingMfaCodeDto,
@@ -64,6 +70,7 @@ export class NetworkingMfaController {
     return this.mfa.verify(await this.context(slug, ip, authorization), body.code);
   }
   /** Replaces every recovery code after a valid authenticator or recovery code (REGENERATE_RECOVERY). */
+  @ResponseContract(responses.NetworkingMfaRegenerateRecoveryCodesResponseSchema)
   @Post("recovery-codes") async regenerateRecoveryCodes(
     @Param("slug") slug: string,
     @Body() body: NetworkingMfaCodeDto,
@@ -76,6 +83,7 @@ export class NetworkingMfaController {
       "REGENERATE_RECOVERY",
     );
   }
+  @ResponseContract(responses.NetworkingMfaDisableResponseSchema)
   @Delete() async disable(
     @Param("slug") slug: string,
     @Body() body: NetworkingMfaCodeDto,

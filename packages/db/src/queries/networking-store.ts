@@ -158,7 +158,7 @@ async function networkingSerializable<T>(run: (db: NetworkingTx) => Promise<T>):
 }
 type NetworkingStoreOptions = { allocationBuckets?: readonly Date[] };
 /** Narrow repository shared by networking services; all mutations require explicit scope predicates. */
-export function networkingStore(db: DbExecutor = getDb(), options: NetworkingStoreOptions = {}) {
+export function networkingStore(db: DbExecutor, options: NetworkingStoreOptions = {}) {
   const locked = new Set(options.allocationBuckets?.map((bucket) => bucket.getTime()));
   return {
     /** The connection or transaction this store runs on, for helpers outside the store. */

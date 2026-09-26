@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import { ErrorCodes } from "@app/contracts";
+import { ErrorCodes, type PriceBreakdown } from "@app/contracts";
 import {
   enqueueNetworkingRegistrationCreatedSync,
   enqueueTriggeredEmailOutbox,
@@ -66,7 +66,7 @@ export class RegistrationSideEffects {
 
   async syncPaidCount(
     exec: DbExecutor,
-    registration: { id: string; eventId: string; priceBreakdown: unknown },
+    registration: { id: string; eventId: string; priceBreakdown: PriceBreakdown },
     oldStatus: string,
     newStatus: string,
   ): Promise<void> {

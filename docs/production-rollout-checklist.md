@@ -48,7 +48,9 @@ How the services run: [render-runbook.md](render-runbook.md).
   `node apps/api/dist/scripts/stored-json-report.js` before deployment. It
   covers pricing rules, certificate zones, form schemas, email snapshots and
   `registrations.price_breakdown`, reporting row IDs, paths and codes only.
-  Review and resolve incompatible documents: response projection removes
+  In `enforce`, invalid breakdowns prevent settlement (payment, repricing or
+  sponsorship linking) until fixed. Review and resolve incompatible documents:
+  response projection removes
   undeclared pricing/breakdown fields even in `warn`. Enable `enforce` only
   after the complete audit is clean. See [canonical price breakdown](../FRONTEND_FOLLOWUP_5_2.md).
   #165 (5.2a), #170 (5.2b)

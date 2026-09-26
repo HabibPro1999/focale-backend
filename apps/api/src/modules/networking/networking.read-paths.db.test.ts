@@ -68,7 +68,7 @@ async function statements<T>(run: () => Promise<T>) {
 describe.runIf(dbTestsEnabled())("networking read paths (4.9)", () => {
   beforeAll(async () => {
     const db = getDb();
-    const store = networkingStore();
+    const store = networkingStore(getDb());
     await db.insert(clients).values({ id: ids.client, name: `Read paths ${ids.event}`, enabledModules: ["networking", "registrations", "emails"] });
     event = await store.insert("events", {
       id: ids.event, clientId: ids.client, name: "Read paths", slug: `read-paths-${ids.event}`, status: "OPEN",
@@ -168,7 +168,7 @@ describe.runIf(dbTestsEnabled())("networking read paths (4.9)", () => {
   });
 
   it("agenda: a counterpart the viewer may not see is null, and a viewer who lost eligibility is refused", async () => {
-    const store = networkingStore();
+    const store = networkingStore(getDb());
     const target = others[0]!;
     await store.update("profiles", { eventId: ids.event, id: target.id }, { visible: false });
     try {
@@ -196,7 +196,7 @@ describe.runIf(dbTestsEnabled())("networking read paths (4.9)", () => {
     const expected = [...others]
       .map((profile, index) => ({ id: profile.id, at: index % 5 === 0 ? +likedAt : +likedAt + index * 1000 }))
       .sort((x, y) => y.at - x.at || 0);
-    const rows = await networkingStore().all("interests", { eventId: ids.event, targetId: viewer.id });
+    const rows = await networkingStore(getDb()).all("interests", { eventId: ids.event, targetId: viewer.id });
     const interestOf = new Map(rows.map((row) => [row.profileId, row.id]));
     // created_at DESC, then interest id DESC.
     const order = expected

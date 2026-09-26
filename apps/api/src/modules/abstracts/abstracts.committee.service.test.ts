@@ -14,7 +14,7 @@ vi.mock("@app/db", () => ({
   listActiveReviewerThemeIds: vi.fn(),
   listCommitteeMembers: vi.fn(),
   getCommitteeProfile: vi.fn(),
-  upsertCommitteeMembership: vi.fn(),
+  upsertCommitteeMembershipTxn: vi.fn(),
   deactivateCommitteeMembershipTxn: vi.fn(),
   getActiveThemeIdsForEvent: vi.fn(),
   setReviewerThemesTxn: vi.fn(),
@@ -88,7 +88,7 @@ import {
   findEventName,
   listActiveReviewerThemeIds,
   listCommitteeMembers,
-  upsertCommitteeMembership,
+  upsertCommitteeMembershipTxn,
   deactivateCommitteeMembershipTxn,
   getActiveThemeIdsForEvent,
   setReviewerThemesTxn,
@@ -290,7 +290,7 @@ describe("addCommitteeMember", () => {
       inviteEmailSent: true,
     });
     expect(usersMock.createUser).not.toHaveBeenCalled();
-    expect(upsertCommitteeMembership).toHaveBeenCalledWith(eventId, user.id);
+    expect(upsertCommitteeMembershipTxn).toHaveBeenCalledWith(eventId, user.id, expect.anything());
     expect(mintCommitteeInviteToken).toHaveBeenCalledWith(
       user.id, eventId, performedBy,
     );
@@ -500,11 +500,15 @@ describe("addCommitteeMember", () => {
 
     expect(result.inviteEmailSent).toBe(false);
     expect(await sendEmailNowMock.mock.results[0]!.value).toMatchObject({ status: "UNCERTAIN" });
-    expect(upsertCommitteeMembership).toHaveBeenCalledWith(eventId, user.id);
-    expect(insertAuditLog).toHaveBeenCalledWith(
-      expect.objectContaining({ entityType: "AbstractCommitteeMembership" }),
-      rootDb,
-    );
+    expect(upsertCommitteeMembershipTxn).toHaveBeenCalledWith(eventId, user.id, {
+      entityType: "AbstractCommitteeMembership",
+      entityId: `${eventId}:${user.id}`,
+      action: "upsert",
+      changes: { active: { old: null, new: true } },
+      performedBy,
+    });
+    // The audit row is written inside the upsert's transaction, not after it.
+    expect(insertAuditLog).not.toHaveBeenCalled();
   });
 
   it("reports inviteEmailSent=false when the email log cannot be written (nothing sent)", async () => {
@@ -519,7 +523,7 @@ describe("addCommitteeMember", () => {
 
     expect(result.inviteEmailSent).toBe(false);
     expect(sendEmailMock).not.toHaveBeenCalled();
-    expect(upsertCommitteeMembership).toHaveBeenCalledWith(eventId, user.id);
+    expect(upsertCommitteeMembershipTxn).toHaveBeenCalledWith(eventId, user.id, expect.anything());
   });
 
   it("M7 gap: the generated temporary password never appears in the email_logs row", async () => {
@@ -564,7 +568,7 @@ describe("addCommitteeMember", () => {
     );
 
     expect(result.inviteEmailSent).toBe(false);
-    expect(upsertCommitteeMembership).toHaveBeenCalled();
+    expect(upsertCommitteeMembershipTxn).toHaveBeenCalled();
     expect(sendEmailMock).not.toHaveBeenCalled();
   });
 
@@ -592,7 +596,7 @@ describe("addCommitteeMember", () => {
     expect(err).toBeInstanceOf(AppException);
     expect((err as AppException).getStatus()).toBe(400);
     expect((err as AppException).getResponse()).toMatchObject({ message });
-    expect(upsertCommitteeMembership).not.toHaveBeenCalled();
+    expect(upsertCommitteeMembershipTxn).not.toHaveBeenCalled();
   });
 });
 

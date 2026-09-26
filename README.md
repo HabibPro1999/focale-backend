@@ -227,7 +227,10 @@ shared schema in `@app/contracts`: `event_pricing.rules`
 registration or sponsor form) and `email_logs.context_snapshot`
 (`StoredEmailContextSnapshotSchema`, template variables plus the internal
 `_fallbackSubject`/`_fallbackPlainBody`/`_certificateTemplateIds` keys), plus
-`registrations.price_breakdown` (`PriceBreakdownSchema`).
+`registrations.price_breakdown` (`PriceBreakdownSchema`, the canonical pricing,
+settlement and registration-response type). Public signup lines may carry
+`status: "confirmed"`; dropped lines retain the line keys plus `reason`
+`capacity_reached` or `deactivated`; older rows can omit `droppedAccessItems`.
 `jsonbOf(schema)` (`packages/db/src/jsonb.ts`) types the column for reads and
 writes. A stored value is valid when the schema accepts it and parsing changes
 nothing (`checkStoredJson`: a missing defaulted key counts), so a valid value
@@ -241,6 +244,11 @@ the column, row id and issue paths/codes once per process (never values) and
 returns the value exactly as stored, as before typing; `enforce` throws
 `StoredJsonError`. Rows returned by a write are not re-checked. The networking
 query files read `forms.schema` without the check (typed only).
+`price_breakdown` is checked by registration and sponsorship queries and the
+settlement reads (settle, access drop, sponsorship link). Under `enforce`, an
+invalid breakdown prevents settlement until fixed. Repair tools classify their
+own invalid documents; whole-row reads that never use the breakdown (email and
+certificate contexts, exports, networking) are typed only.
 
 Before deployment, keep `JSONB_VALIDATION=warn` and run the read-only audit
 `node apps/api/dist/scripts/stored-json-report.js` (from source:

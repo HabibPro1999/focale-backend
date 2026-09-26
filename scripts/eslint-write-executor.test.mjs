@@ -1,11 +1,9 @@
 import { after, describe, it, test } from "node:test";
 import assert from "node:assert/strict";
-import { globSync } from "node:fs";
 import path from "node:path";
 import { ESLint, RuleTester } from "eslint";
 import tseslint from "typescript-eslint";
 import { focalePlugin, WORKSPACE_ROOT } from "./eslint-package-boundaries.mjs";
-import { WRITE_EXECUTOR_ALLOW_LIST } from "../eslint.config.mjs";
 
 RuleTester.describe = describe;
 RuleTester.it = it;
@@ -115,7 +113,7 @@ new RuleTester({
   ],
 });
 
-test("the rule is an error on packages/db/src, except the 5.1b allow-list", async () => {
+test("the rule is an error on all packages/db/src, including networking", async () => {
   const eslint = new ESLint({ cwd: WORKSPACE_ROOT });
   const severity = async (file) => {
     const setting = (await eslint.calculateConfigForFile(path.join(WORKSPACE_ROOT, file))).rules["focale/explicit-write-executor"];
@@ -125,13 +123,7 @@ test("the rule is an error on packages/db/src, except the 5.1b allow-list", asyn
     assert.equal(await severity(file), 2, file);
   }
   for (const file of ["packages/db/src/queries/networking.ts", "packages/db/src/queries/networking-store.ts"]) {
-    assert.equal(await severity(file), undefined, file);
+    assert.equal(await severity(file), 2, file);
   }
   assert.equal(await severity("apps/api/src/main.ts"), undefined);
-});
-
-test("every allow-list entry still matches a file", () => {
-  for (const pattern of WRITE_EXECUTOR_ALLOW_LIST) {
-    assert.ok(globSync(pattern, { cwd: WORKSPACE_ROOT }).length > 0, pattern);
-  }
 });

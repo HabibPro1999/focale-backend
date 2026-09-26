@@ -1,6 +1,6 @@
 /* eslint no-console: "off" */
 import { parseArgs } from "node:util";
-import { closeDb, configureDb, networkingKeyRetirementBlockers, networkingKeyUsage, resealNetworkingSecrets } from "@app/db";
+import { getDb, closeDb, configureDb, networkingKeyRetirementBlockers, networkingKeyUsage, resealNetworkingSecrets } from "@app/db";
 import { networkingKeyring } from "@app/shared";
 import { loadConfig } from "../core/config";
 
@@ -44,7 +44,7 @@ async function main(): Promise<number> {
     if (command === "reseal") {
       if (values.kid || values["keep-recovery"]) usageError();
       if (!keyring.writesV1) console.log("Writes use the legacy format; set NETWORKING_KEYRING_WRITE_V1=true before resealing.");
-      const result = await resealNetworkingSecrets(keyring, { apply: !!values.apply });
+      const result = await resealNetworkingSecrets(keyring, getDb(), { apply: !!values.apply });
       console.log(`${values.apply ? "Resealed" : "Would reseal"} ${result.resealed} of ${result.checked} authenticator secrets; ${result.unreadable} unreadable (key missing).`);
       await printUsage();
       if (!values.apply) console.log("Dry run: pass --apply to write.");

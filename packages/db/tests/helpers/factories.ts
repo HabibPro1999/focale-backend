@@ -116,7 +116,7 @@ export async function seedRegistration(
       firstName: "Test",
       lastName: "Registrant",
       totalAmount: 0,
-      priceBreakdown: {},
+      priceBreakdown: {} as never,
       ...overrides,
     })
     .returning();

@@ -89,7 +89,7 @@ export {
   listAssignedAbstracts,
   listCommitteeMembers,
   setReviewerThemesTxn,
-  upsertCommitteeMembership,
+  upsertCommitteeMembershipTxn,
   type CommitteeInviteTarget,
   type CommitteeMemberDto,
   type CommitteeProfileEvent,

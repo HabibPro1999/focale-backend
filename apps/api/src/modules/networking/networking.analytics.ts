@@ -1,5 +1,6 @@
 import { networkingInventoryResource } from "./networking.inventory-policy";
 import {
+  getDb,
   getNetworkingConfig,
   networkingDailyMetrics,
   networkingEmailMetrics,
@@ -78,7 +79,7 @@ export function networkingTableUsage(
  * `NETWORKING_ENGAGEMENT_LIMIT` most engaged of `engagementTotal`.
  */
 export async function networkingAnalytics(eventId: string, now = new Date()) {
-  const event = await networkingStore().one("events", { id: eventId });
+  const event = await networkingStore(getDb()).one("events", { id: eventId });
   if (!event) throw new Error("Networking event not found");
   const config = await getNetworkingConfig(eventId);
   const { timezone } = config;

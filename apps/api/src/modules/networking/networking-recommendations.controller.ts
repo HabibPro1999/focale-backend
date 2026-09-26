@@ -1,10 +1,10 @@
+import * as responses from "@app/contracts";
+import { ResponseContract } from "../../core/response-contract";
+import { EventScoped } from "../tenancy/tenant-scope";
 import { Auth } from "../../core/auth/auth.decorator";
-import { CurrentUser } from "../../core/auth/current-user.decorator";
-import type { AuthUser } from "../../core/auth/user-cache";
-import { assertEventAccess } from "../../core/auth/assert-event-access";
+
 import { getConfig } from "../../core/config";
-import { assertClientModuleEnabled } from "../clients/module-gates";
-import { assertEventWritable } from "../events/events.service";
+
 import {
   Controller,
   ForbiddenException,
@@ -52,6 +52,7 @@ export class NetworkingRecommendationsController {
   private readonly candidates = new NetworkingRecommendationCache();
   constructor(private readonly networking: NetworkingService) {}
 
+  @ResponseContract(responses.NetworkingRecommendationRecommendationsResponseSchema)
   @Get("recommendations")
   async recommendations(
     @Param("slug") slug: string,
@@ -162,17 +163,13 @@ export class NetworkingRecommendationsController {
 @Auth()
 @Controller("api/events/:eventId/networking/recommendations")
 export class NetworkingRecommendationAdminController {
-  private async access(user: AuthUser, eventId: string, write = false) {
-    const event = await assertEventAccess(user, eventId);
-    await assertClientModuleEnabled(event.clientId, "networking");
-    if (write) assertEventWritable(event);
-  }
+
+  @ResponseContract(responses.NetworkingRecommendationAdminStatusResponseSchema)
+  @EventScoped({ module: "networking" })
   @Get("status")
   async status(
-    @CurrentUser() user: AuthUser,
     @Param("eventId") eventId: string,
   ) {
-    await this.access(user, eventId);
     return {
       configured: Boolean(getConfig().networking.embedding.apiKey),
       model: getConfig().networking.embedding.model,
@@ -180,12 +177,12 @@ export class NetworkingRecommendationAdminController {
       jobs: await getNetworkingEmbeddingHealth(eventId),
     };
   }
+  @ResponseContract(responses.NetworkingRecommendationAdminReindexResponseSchema)
+  @EventScoped({ module: "networking", write: true })
   @Post("reindex")
   async reindex(
-    @CurrentUser() user: AuthUser,
     @Param("eventId") eventId: string,
   ) {
-    await this.access(user, eventId, true);
     return { queued: await reindexNetworkingEvent(eventId) };
   }
 }

@@ -10,7 +10,7 @@ import {
   finalizeAbstractTxn,
   getDb,
   reviewAbstractTxn,
-  upsertCommitteeMembership,
+  upsertCommitteeMembershipTxn,
 } from "@app/db";
 import { dbTestsEnabled } from "../helpers/test-env";
 import { cleanupDatabase } from "../helpers/cleanup";
@@ -41,8 +41,8 @@ describe.runIf(dbTestsEnabled())("db tier: review aggregate recompute", () => {
     const abstract = await seedAbstract({ eventId: event.id, status: "SUBMITTED" });
     const r1 = await seedUser({ clientId: event.clientId });
     const r2 = await seedUser({ clientId: event.clientId });
-    await upsertCommitteeMembership(event.id, r1.id);
-    await upsertCommitteeMembership(event.id, r2.id);
+    await upsertCommitteeMembershipTxn(event.id, r1.id, testAudit());
+    await upsertCommitteeMembershipTxn(event.id, r2.id, testAudit());
 
     await assignReviewersTxn({
       eventId: event.id,
@@ -101,7 +101,7 @@ describe.runIf(dbTestsEnabled())("db tier: review aggregate recompute", () => {
     const r1 = await seedUser({ clientId: event.clientId });
     const r2 = await seedUser({ clientId: event.clientId });
     const tieBreaker = await seedUser({ clientId: event.clientId });
-    for (const member of [r1, r2, tieBreaker]) await upsertCommitteeMembership(event.id, member.id);
+    for (const member of [r1, r2, tieBreaker]) await upsertCommitteeMembershipTxn(event.id, member.id, testAudit());
 
     await assignReviewersTxn({
       eventId: event.id,
@@ -150,8 +150,8 @@ describe.runIf(dbTestsEnabled())("db tier: review aggregate recompute", () => {
     const abstract = await seedAbstract({ eventId: event.id, status: "SUBMITTED" });
     const r1 = await seedUser({ clientId: event.clientId });
     const r2 = await seedUser({ clientId: event.clientId });
-    await upsertCommitteeMembership(event.id, r1.id);
-    await upsertCommitteeMembership(event.id, r2.id);
+    await upsertCommitteeMembershipTxn(event.id, r1.id, testAudit());
+    await upsertCommitteeMembershipTxn(event.id, r2.id, testAudit());
 
     await assignReviewersTxn({
       eventId: event.id,
@@ -189,8 +189,8 @@ describe.runIf(dbTestsEnabled())("db tier: review aggregate recompute", () => {
     const abstract = await seedAbstract({ eventId: event.id, status: "SUBMITTED" });
     const r1 = await seedUser({ clientId: event.clientId });
     const r2 = await seedUser({ clientId: event.clientId });
-    await upsertCommitteeMembership(event.id, r1.id);
-    await upsertCommitteeMembership(event.id, r2.id);
+    await upsertCommitteeMembershipTxn(event.id, r1.id, testAudit());
+    await upsertCommitteeMembershipTxn(event.id, r2.id, testAudit());
 
     await assignReviewersTxn({
       eventId: event.id,
@@ -277,7 +277,7 @@ describe.runIf(dbTestsEnabled())("db tier: abstract final-status guards", () => 
     const r1 = await seedUser({ clientId: event.clientId });
     const r2 = await seedUser({ clientId: event.clientId });
     const r3 = await seedUser({ clientId: event.clientId });
-    for (const member of [r1, r2, r3]) await upsertCommitteeMembership(event.id, member.id);
+    for (const member of [r1, r2, r3]) await upsertCommitteeMembershipTxn(event.id, member.id, testAudit());
     expect(
       await assignReviewersTxn({ eventId: event.id, abstractId: abstract.id, reviewerIds: [r1.id, r2.id], audit: testAudit() }),
     ).toMatchObject({ ok: true, status: "UNDER_REVIEW" });

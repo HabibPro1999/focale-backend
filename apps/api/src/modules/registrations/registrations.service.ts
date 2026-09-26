@@ -5,7 +5,6 @@ import { deleteNetworkingPhoto } from "../networking/networking.uploads.service"
 import {
   ErrorCodes,
   type AppEvent,
-  type PriceBreakdown,
   type ListRegistrationsQuery,
   type ListRegistrationAuditLogsQuery,
   type ListRegistrationEmailLogsQuery,
@@ -237,7 +236,7 @@ export class RegistrationsService {
       const released = await releaseRegistrationUsagesTxn(tx, id);
       const coveredAccessIds = new Set(released.coveredAccessIds);
 
-      const priceBreakdown = registration.priceBreakdown as PriceBreakdown;
+      const { priceBreakdown } = registration;
       if (priceBreakdown.accessItems) {
         await Promise.all(
           priceBreakdown.accessItems.map((item) =>
@@ -299,7 +298,7 @@ export class RegistrationsService {
       );
     }
 
-    const priceBreakdown = registration.priceBreakdown as PriceBreakdown;
+    const { priceBreakdown } = registration;
     const accessIds = priceBreakdown.accessItems?.map((i) => i.accessId) ?? [];
     const details =
       accessIds.length > 0 ? await findAccessDetailsByIds(accessIds) : [];

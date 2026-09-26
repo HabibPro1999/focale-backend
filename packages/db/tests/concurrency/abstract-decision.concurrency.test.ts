@@ -12,7 +12,7 @@ import {
   getDb,
   pgErrorCode,
   reviewAbstractTxn,
-  upsertCommitteeMembership,
+  upsertCommitteeMembershipTxn,
   withTxn,
 } from "@app/db";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -48,7 +48,7 @@ async function seedFixture() {
   const r1 = await seedUser({ clientId: event.clientId });
   const r2 = await seedUser({ clientId: event.clientId });
   const r3 = await seedUser({ clientId: event.clientId });
-  for (const member of [r1, r2, r3]) await upsertCommitteeMembership(event.id, member.id);
+  for (const member of [r1, r2, r3]) await upsertCommitteeMembershipTxn(event.id, member.id, testAudit());
   expect(
     await assignReviewersTxn({ eventId: event.id, abstractId: abstract.id, reviewerIds: [r1.id, r2.id], audit: testAudit() }),
   ).toMatchObject({ ok: true });
@@ -258,7 +258,7 @@ describe.runIf(dbTestsEnabled())("concurrency: abstract writers against a finali
     const reviewers = await Promise.all(
       Array.from({ length: fanout }, () => seedUser({ clientId: event.clientId })),
     );
-    for (const member of reviewers) await upsertCommitteeMembership(event.id, member.id);
+    for (const member of reviewers) await upsertCommitteeMembershipTxn(event.id, member.id, testAudit());
     expect(
       await assignReviewersTxn({ eventId: event.id, abstractId: abstract.id, reviewerIds: reviewers.map((r) => r.id), audit: testAudit() }),
     ).toMatchObject({ ok: true });
@@ -291,7 +291,7 @@ describe.runIf(dbTestsEnabled())("concurrency: abstract writers against a finali
     const leaverB = await seedUser({ clientId: event.clientId });
     const stayer = await seedUser({ clientId: event.clientId });
     const members = [leaverA, leaverB, stayer];
-    for (const member of members) await upsertCommitteeMembership(event.id, member.id);
+    for (const member of members) await upsertCommitteeMembershipTxn(event.id, member.id, testAudit());
     const abstractIds: string[] = [];
     for (let i = 0; i < 4; i += 1) {
       const abstract = await seedAbstract({ eventId: event.id, status: "SUBMITTED" });

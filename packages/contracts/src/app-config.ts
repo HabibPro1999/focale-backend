@@ -43,7 +43,7 @@ export type JsonbValidationMode = (typeof JSONB_VALIDATION_MODES)[number];
 const jsonbValidationKey = envKey(z.enum(JSONB_VALIDATION_MODES).default("warn"), {
   section: "database",
   description:
-    "Typed JSON columns read from the database (pricing rules, certificate zones, form schemas,\nemail contexts): warn (log the invalid paths, never values, and use the value as stored) or\nenforce (refuse it). Default warn until the read-only stored-JSON audit\n(apps/api dist/scripts/stored-json-report.js) reports nothing.",
+    "Typed JSON columns read from the database (pricing rules, certificate zones, form schemas,\nemail contexts, registration price breakdowns): warn (log the invalid paths, never values,\nand use the value as stored) or enforce (refuse it). Default warn until the read-only\nstored-JSON audit (apps/api dist/scripts/stored-json-report.js) reports nothing.",
   example: "warn",
 });
 

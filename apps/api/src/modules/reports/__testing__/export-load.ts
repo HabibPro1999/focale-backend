@@ -99,7 +99,7 @@ function registration(n: number): ModularRegistrationRow {
     paymentMethod: "BANK_TRANSFER",
     paymentReference: `VIR-${n}`,
     paymentProofUrl: `https://files.example.test/proofs/${n}.pdf`,
-    priceBreakdown: {},
+    priceBreakdown: {} as never,
     baseAmount: 400_000,
     discountAmount: 0,
     accessAmount: 50_000,

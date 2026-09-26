@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PriceBreakdownSchema } from "./pricing";
 import {
   PaymentMethodSchema,
   PaymentStatusSchema,
@@ -10,9 +11,9 @@ import {
 // Response contracts (plan 5.5): the `data` payload of each registration
 // route. The API projects every response onto its contract, so a field that
 // is not listed here never leaves the server. Dates are `Date` objects on the
-// server and ISO 8601 strings on the wire. `formData`, `priceBreakdown` and
-// the form `schema` are JSON documents the server stores as given; they stay
-// opaque until the JSONB typing work (plan 5.2).
+// server and ISO 8601 strings on the wire. `priceBreakdown` is the stored
+// breakdown document (plan 5.2). `formData` and the form `schema` are JSON
+// documents the server stores as given and stay opaque.
 // ============================================================================
 
 const PaginationMetaSchema = z.object({
@@ -74,7 +75,7 @@ export const PublicRegistrationResponseSchema = z.object({
   accessAmount: z.number(),
   sponsorshipCode: z.string().nullable(),
   sponsorshipAmount: z.number(),
-  priceBreakdown: z.unknown(),
+  priceBreakdown: PriceBreakdownSchema,
   hasPaymentProof: z.boolean(),
   paidAt: z.date().nullable(),
   submittedAt: z.date(),
@@ -104,7 +105,7 @@ export const PublicRegistrationResponseSchema = z.object({
 /** POST /api/public/forms/:formId/register (201 created, 200 idempotent replay). */
 export const PublicRegistrationCreateResponseSchema = z.object({
   registration: PublicRegistrationResponseSchema,
-  priceBreakdown: z.unknown(),
+  priceBreakdown: PriceBreakdownSchema,
 });
 
 /** GET /api/public/registrations/:registrationId (edit token). */
@@ -124,7 +125,7 @@ export const PublicRegistrationForEditResponseSchema = z.object({
 /** PATCH /api/public/registrations/:registrationId (edit token). */
 export const PublicRegistrationEditResponseSchema = z.object({
   registration: PublicRegistrationResponseSchema,
-  priceBreakdown: z.unknown(),
+  priceBreakdown: PriceBreakdownSchema,
 });
 
 /** PATCH /api/public/registrations/:registrationId/payment-method. */
@@ -172,7 +173,7 @@ export const AdminRegistrationResponseSchema = z.object({
   paymentMethod: PaymentMethodSchema.nullable(),
   paymentReference: z.string().nullable(),
   paymentProofUrl: z.string().nullable(),
-  priceBreakdown: z.unknown(),
+  priceBreakdown: PriceBreakdownSchema,
   baseAmount: z.number(),
   discountAmount: z.number(),
   accessAmount: z.number(),
