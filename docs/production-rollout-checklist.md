@@ -100,7 +100,7 @@ blocks writes to the table on PostgreSQL; run `apply` off-peak there.
   and form responses, so keys it reports as `unrecognized_keys` on
   `event_pricing.rules` are no longer returned there. Fix or accept each row
   (user); once the audit reports nothing, set `JSONB_VALIDATION=enforce` on
-  both services. #PR_5_2A (5.2a)
+  both services. #165 (5.2a)
 
 ## Data repairs
 
