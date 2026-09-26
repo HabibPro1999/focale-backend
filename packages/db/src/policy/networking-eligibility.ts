@@ -168,3 +168,11 @@ export function networkingEventGate(sources: {
 export function listedProfile(p: Pick<NetworkingProfileColumns, "erasedAt">): SQL {
   return sql`${p.erasedAt} IS NULL`;
 }
+
+/**
+ * `networkingProfileActive`: counted as an active participant in organizer
+ * analytics (ACTIVE, consented, never withdrawn or erased; no registration check).
+ */
+export function activeProfile(p: Pick<NetworkingProfileColumns, "status" | "consent" | "withdrawnAt" | "erasedAt">): SQL {
+  return sql`(${p.status}='ACTIVE' AND ${p.consent} AND ${p.withdrawnAt} IS NULL AND ${p.erasedAt} IS NULL)`;
+}
