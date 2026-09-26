@@ -5,6 +5,7 @@ import {
   getDb,
   lockAbstractForUpdate,
   lockAbstractsForUpdate,
+  lockEventAccessRowsForUpdate,
   lockEventForUpdate,
   lockRegistrationForUpdate,
   lockRegistrationsForUpdate,
@@ -22,6 +23,7 @@ import { makeBarrier } from "../helpers/barrier";
 import {
   seedAbstract,
   seedEvent,
+  seedEventAccess,
   seedForm,
   seedRegistration,
   seedSponsorship,
@@ -43,7 +45,9 @@ async function seedFixture() {
   const otherSponsorship = await seedSponsorship({ batchId: batch.id, eventId: event.id });
   const abstract = await seedAbstract({ eventId: event.id });
   const otherAbstract = await seedAbstract({ eventId: event.id });
-  return { event, first, second, sponsorship, otherSponsorship, abstract, otherAbstract };
+  const access = await seedEventAccess({ eventId: event.id });
+  const otherAccess = await seedEventAccess({ eventId: event.id });
+  return { event, first, second, sponsorship, otherSponsorship, abstract, otherAbstract, access, otherAccess };
 }
 type Fixture = Awaited<ReturnType<typeof seedFixture>>;
 
@@ -62,6 +66,10 @@ const LOCKS: Array<{ name: string; lock: (tx: DbExecutor, f: Fixture) => Promise
   { name: "lockAbstractForUpdate", lock: (tx, f) => lockAbstractForUpdate(tx, f.abstract.id) },
   { name: "lockAbstractsForUpdate", lock: (tx, f) => lockAbstractsForUpdate(tx, [f.otherAbstract.id, f.abstract.id]) },
   { name: "lockEventForUpdate", lock: (tx, f) => lockEventForUpdate(tx, f.event.id) },
+  {
+    name: "lockEventAccessRowsForUpdate",
+    lock: (tx, f) => lockEventAccessRowsForUpdate(tx, [f.otherAccess.id, f.access.id]),
+  },
 ];
 
 /** Start a transaction that takes `lock` and holds it until `release()`. */
@@ -123,6 +131,8 @@ describe.runIf(dbTestsEnabled())("db tier: row lock helpers", () => {
       expect(await lockSponsorshipByCodeForUpdate(tx, otherEvent.id, f.sponsorship.code)).toBeNull();
       expect(await lockEventForUpdate(tx, f.event.id)).toBe(true);
       expect(await lockAbstractsForUpdate(tx, [f.abstract.id])).toEqual([f.abstract.id]);
+      expect(await lockEventAccessRowsForUpdate(tx, [f.otherAccess.id, "missing", f.access.id]))
+        .toEqual([f.access.id, f.otherAccess.id].sort());
     });
   });
 
