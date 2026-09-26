@@ -26,6 +26,10 @@ Unrelated to concurrency: a `PATCH` whose only field is `requiredAccessIds`
 used to fail with a 500 ("No values to set"). It now saves the prerequisites.
 The admin access form sends every field, so it never hit this.
 
+Admin registration creation now retries database deadlocks/restarts using the
+same bounded policy as public creation. A successful retry returns the usual
+response; failed attempts leave no registration, counter increment or audit.
+
 **Admin**: nothing to change as long as the access form shows the API error
 for these codes. After a 409 on a capacity edit, refetch the item so the
 form shows the current paid count.
