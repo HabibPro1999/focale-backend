@@ -878,7 +878,7 @@ export type EventPricingRowResponse = {
   eventId: string;
   basePrice: number;
   currency: string;
-  rules: unknown;
+  rules: StoredPricingRules;
   onlinePaymentEnabled: boolean;
   onlinePaymentUrl: string | null;
   cashPaymentEnabled: boolean;
@@ -1883,7 +1883,7 @@ export type PublicPaymentConfigResponse = {
   pricing: {
     basePrice: number;
     currency: string;
-    rules: unknown;
+    rules: StoredPricingRules;
     paymentMethods: string[];
     bankDetails: {
       bankName: string;
@@ -2438,6 +2438,19 @@ export type StepTranslationEntry = {
   title?: string;
   description?: string;
 };
+
+export type StoredCertificateZones = CertificateZone[];
+
+export type StoredEmailContextSnapshot = {
+  _fallbackSubject?: string;
+  _fallbackPlainBody?: string;
+  _certificateTemplateIds?: string[];
+  [key: string]: unknown;
+} | null;
+
+export type StoredFormSchemaJson = FormSchemaJson | SponsorFormSchemaJson;
+
+export type StoredPricingRules = EmbeddedPricingRule[];
 
 export type StreamQuery = {
   eventId?: string;

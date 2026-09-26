@@ -18,13 +18,17 @@ vi.mock("@app/db", () => ({
   getRegistrationTenantScope: vi.fn(),
   getSponsorshipTenantScope: vi.fn(),
   getEmailTemplateTenantScope: vi.fn(),
+  getFormTenantScope: vi.fn(),
+  getClientTenantScope: vi.fn(),
   pgErrorCode: () => null,
   pgUniqueViolation: () => null,
 }));
 
 import {
+  getClientTenantScope,
   getEmailTemplateTenantScope,
   getEventTenantScope,
+  getFormTenantScope,
   getRegistrationTenantScope,
   getSponsorshipTenantScope,
   getUserWithClientById,
@@ -35,8 +39,10 @@ import { createZodDto, ZodValidationPipe } from "../../core/zod";
 import { EnvelopeInterceptor } from "../../core/envelope.interceptor";
 import { HttpExceptionFilter } from "../../core/http-exception.filter";
 import {
+  ClientScoped,
   EmailTemplateScoped,
   EventScoped,
+  FormScoped,
   RegistrationScoped,
   ScopedClient,
   ScopedEvent,
@@ -104,6 +110,27 @@ class FixtureController {
   templateWrite(@Param() { templateId }: TplParam) {
     reached("templateWrite", templateId);
     return { templateId };
+  }
+
+  @Get("forms/:id")
+  @FormScoped({ moduleOfFormType: true })
+  form(@Param() { id }: IdParam) {
+    reached("form", id);
+    return { id };
+  }
+
+  @Get("clients/:id")
+  @ClientScoped()
+  client(@Param() { id }: IdParam, @ScopedClient() client: ScopedClientRow) {
+    reached("client", id);
+    return { client };
+  }
+
+  // Misuse: a client scope has no event.
+  @Get("clients/:id/event")
+  @ClientScoped()
+  clientEvent(@Param() _params: IdParam, @ScopedEvent() event: ScopedEventRow) {
+    return { event };
   }
 }
 
@@ -321,5 +348,50 @@ describe("tenant scope guard (5.4)", () => {
     const res = await get(`/t/templates/${TPL}`);
     expect(res.statusCode).toBe(404);
     expect(error(res)).toMatchObject({ code: ErrorCodes.NOT_FOUND, message: "Event not found" });
+  });
+
+  it("form routes gate on the module of the form's type (5.4b)", async () => {
+    const formScope = (type: "SPONSOR" | "REGISTRATION", modules: string[]) => ({
+      form: { id: REG, type },
+      ...eventScope({ modules }),
+    });
+    vi.mocked(getFormTenantScope).mockResolvedValue(formScope("SPONSOR", ["registrations"]));
+    const sponsor = await get(`/t/forms/${REG}`);
+    expect(sponsor.statusCode).toBe(403);
+    expect(error(sponsor)).toEqual({
+      code: ErrorCodes.MODULE_DISABLED,
+      message: "Sponsorships module is disabled for this client",
+    });
+    vi.mocked(getFormTenantScope).mockResolvedValue(formScope("REGISTRATION", ["registrations"]));
+    expect((await get(`/t/forms/${REG}`)).statusCode).toBe(200);
+    vi.mocked(getFormTenantScope).mockResolvedValue(formScope("REGISTRATION", ["sponsorships"]));
+    expect(error(await get(`/t/forms/${REG}`)).code).toBe(ErrorCodes.MODULE_DISABLED);
+    expect(reached).toHaveBeenCalledTimes(1);
+  });
+
+  it("client routes: 404 Client not found, 403 for another client, the client for its admin (5.4b)", async () => {
+    const client = eventScope().client;
+    vi.mocked(getClientTenantScope).mockResolvedValue({ client });
+    const own = await get(`/t/clients/${OWNER}`);
+    expect(own.statusCode).toBe(200);
+    expect(own.json().data.client).toEqual(client);
+    expect(getClientTenantScope).toHaveBeenCalledWith(OWNER);
+
+    signIn(UserRole.CLIENT_ADMIN, OTHER);
+    const other = await get(`/t/clients/${OWNER}`);
+    expect(other.statusCode).toBe(403);
+    expect(error(other)).toEqual({ code: ErrorCodes.FORBIDDEN, message: "Insufficient permissions" });
+
+    vi.mocked(getClientTenantScope).mockResolvedValue(null);
+    const missing = await get(`/t/clients/${OWNER}`);
+    expect(missing.statusCode).toBe(404);
+    expect(error(missing)).toEqual({ code: ErrorCodes.NOT_FOUND, message: "Client not found" });
+    expect(reached).toHaveBeenCalledTimes(1);
+  });
+
+  it("@ScopedEvent() on a client-scoped route is a 500, never a silent null", async () => {
+    signIn(UserRole.SUPER_ADMIN, null);
+    vi.mocked(getClientTenantScope).mockResolvedValue({ client: eventScope().client });
+    expect((await get(`/t/clients/${OWNER}/event`)).statusCode).toBe(500);
   });
 });

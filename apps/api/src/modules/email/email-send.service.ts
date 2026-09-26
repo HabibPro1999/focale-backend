@@ -304,7 +304,7 @@ export class EmailSendService {
       html: resolvedHtml,
       plainText: resolvedPlain,
       categories: ["custom-one-off"],
-      log: { registrationId: registration.id, contextSnapshot: context },
+      log: { registrationId: registration.id, contextSnapshot: { ...context } },
     });
 
     switch (result.status) {

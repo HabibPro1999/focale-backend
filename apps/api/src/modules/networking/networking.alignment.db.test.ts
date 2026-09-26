@@ -99,7 +99,7 @@ describe.runIf(enabled)("PDF alignment audit reproductions", () => {
               fields: [{ id: "company", type: "text", label: "Company" }],
             },
           ],
-        },
+        } as never,
       });
     people = [];
     for (let i = 0; i < 3; i++) {

@@ -52,6 +52,12 @@ export const CertificateZoneSchema = z.strictObject({
   textAlign: z.enum(["left", "center", "right"]).default("center"),
 });
 
+/**
+ * The stored `certificate_templates.zones` document (plan 5.2): zones exactly
+ * as the template update route writes them (parsed, defaults filled in).
+ */
+export const StoredCertificateZonesSchema = z.array(CertificateZoneSchema);
+
 // ============================================================================
 // Create / Update Schemas
 // ============================================================================
@@ -114,6 +120,7 @@ export const SendCertificatesBodySchema = z.strictObject({
 // ============================================================================
 
 export type CertificateZone = z.infer<typeof CertificateZoneSchema>;
+export type StoredCertificateZones = z.infer<typeof StoredCertificateZonesSchema>;
 export type CreateCertificateTemplateInput = z.infer<
   typeof CreateCertificateTemplateSchema
 >;

@@ -11,6 +11,7 @@ import {
   events,
   registrations,
 } from "../schema";
+import { checkPricingRow } from "./stored-json";
 
 // Row types inferred from the drizzle schema (snake_case DB ↔ camelCase fields).
 export type EventRow = typeof events.$inferSelect;
@@ -43,7 +44,7 @@ export async function getEventWithPricing(
     .where(eq(events.id, id))
     .limit(1);
   if (!rows[0]) return null;
-  return { ...rows[0].event, pricing: rows[0].pricing };
+  return { ...rows[0].event, pricing: checkPricingRow(rows[0].pricing) };
 }
 
 /** Event + pricing by slug, or null. */
@@ -58,7 +59,7 @@ export async function getEventWithPricingBySlug(
     .where(eq(events.slug, slug))
     .limit(1);
   if (!rows[0]) return null;
-  return { ...rows[0].event, pricing: rows[0].pricing };
+  return { ...rows[0].event, pricing: checkPricingRow(rows[0].pricing) };
 }
 
 /** True when an event row with this id exists. */
@@ -113,7 +114,11 @@ export async function getEventWithPricingAndClient(
     .where(eq(events.id, id))
     .limit(1);
   if (!rows[0]) return null;
-  return { ...rows[0].event, pricing: rows[0].pricing, client: rows[0].client };
+  return {
+    ...rows[0].event,
+    pricing: checkPricingRow(rows[0].pricing),
+    client: rows[0].client,
+  };
 }
 
 /** Paginated list with clientId/status/search filters. Returns rows + total. */

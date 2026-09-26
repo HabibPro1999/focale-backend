@@ -13,6 +13,8 @@ import { ErrorCodes, UserRole } from "@app/contracts";
 const db = vi.hoisted(() => ({
   getUserWithClientById: vi.fn(),
   getEventWithPricing: vi.fn(),
+  // The banner route's tenant scope guard (5.4b).
+  getEventTenantScope: vi.fn(),
   getRegistrationEditToken: vi.fn(),
   findRegistrationWithFormEvent: vi.fn(),
 }));
@@ -114,6 +116,10 @@ describe("IntegrationError through the global filter (real app)", () => {
       clientId: "client-1",
       status: "OPEN",
       bannerUrl: null,
+    });
+    db.getEventTenantScope.mockResolvedValue({
+      event: { id: eventId, clientId: "client-1", status: "OPEN", slug: "ev" },
+      client: { id: "client-1", active: true, enabledModules: [] },
     });
     db.getRegistrationEditToken.mockResolvedValue({ editToken });
     db.findRegistrationWithFormEvent.mockResolvedValue({

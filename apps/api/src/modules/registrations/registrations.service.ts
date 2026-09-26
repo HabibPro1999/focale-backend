@@ -29,7 +29,6 @@ import {
   findAccessDetailsByIds,
   searchRegistrantsForSponsorship as searchRegistrantsQuery,
   // registrations-owned primitives
-  getRegistrationClientId as getRegistrationClientIdQuery,
   getRegistrationEditToken,
   getRegistrationEditLinkSource,
   listRegistrationRows,
@@ -102,10 +101,6 @@ export class RegistrationsService {
     idempotencyKey: string,
   ): Promise<RegistrationWithRelations | null> {
     return getRegistrationByIdempotencyKey(idempotencyKey);
-  }
-
-  getRegistrationClientId(id: string): Promise<string | null> {
-    return getRegistrationClientIdQuery(id);
   }
 
   getRegistrationTableColumns(eventId: string) {

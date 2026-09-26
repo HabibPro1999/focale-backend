@@ -118,6 +118,19 @@ describe("PaymentProofService", () => {
       });
     });
 
+    it("404 REG_8001 when the registration is gone by the locked re-read, and the new object is removed", async () => {
+      storage.uploadPrivate.mockImplementation(async (_buffer: Buffer, key: string) => key);
+      db.findRegistrationWithFormEvent.mockResolvedValue(proofFetch());
+      db.lockRegistrationForUpdate.mockResolvedValue(false);
+      await expect(service.uploadPaymentProof("reg1", pdf())).rejects.toMatchObject({
+        code: "REG_8001",
+        message: "Registration not found",
+        statusCode: 404,
+      });
+      expect(db.applyRegistrationSettlement).not.toHaveBeenCalled();
+      expect(storage.delete).toHaveBeenCalledWith(storage.uploadPrivate.mock.calls[0]![1]);
+    });
+
     it("rejects upload for a PAID registration (transition blocked)", async () => {
       db.findRegistrationWithFormEvent.mockResolvedValue(
         proofFetch({ paymentStatus: "PAID" }),

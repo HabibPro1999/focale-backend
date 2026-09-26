@@ -1,5 +1,5 @@
 import { and, count, eq, inArray, isNull } from "drizzle-orm";
-import type { EmbeddedPricingRule, EventPricingWithRules } from "@app/contracts";
+import type { EventPricingWithRules } from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
 import { eventPricing } from "../schema/pricing";
 import { events, eventAccess } from "../schema/events-access";
@@ -7,6 +7,7 @@ import { clients } from "../schema/users-clients";
 import { sponsorships } from "../schema/sponsorships";
 import { registrations } from "../schema/registrations";
 import { forms } from "../schema/forms";
+import { readFormSchema, readPricingRules } from "./stored-json";
 
 // Type names are `Pricing*`-prefixed to stay unique across the shared queries barrel.
 type PricingRow = typeof eventPricing.$inferSelect;
@@ -28,10 +29,7 @@ export interface PricingEventGate {
 }
 
 function parseEventPricing(row: PricingRow): EventPricingWithRules {
-  return {
-    ...row,
-    rules: (row.rules as unknown as EmbeddedPricingRule[]) ?? [],
-  };
+  return { ...row, rules: row.rules ?? [] };
 }
 
 /** findUnique EventPricing by eventId, with rules JSON parsed. Null when absent. */
@@ -43,7 +41,9 @@ export async function getEventPricing(
     .select()
     .from(eventPricing)
     .where(eq(eventPricing.eventId, eventId));
-  return row ? parseEventPricing(row) : null;
+  if (!row) return null;
+  readPricingRules(row.rules, row.id);
+  return parseEventPricing(row);
 }
 
 /**
@@ -195,7 +195,7 @@ export async function getFormForPriceQuote(
   if (!row) return null;
   return {
     eventId: row.eventId,
-    schema: row.schema,
+    schema: readFormSchema(row.schema, formId),
     type: row.type,
     active: row.active,
     event: {

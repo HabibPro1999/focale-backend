@@ -1,9 +1,10 @@
 import { z } from "zod";
+import { StoredPricingRulesSchema } from "./pricing";
 
 // ============================================================================
 // Response contracts (plan 5.5) for the public event routes. Dates are `Date`
 // objects on the server and ISO 8601 strings on the wire; pricing `rules` is
-// the stored JSON document (plan 5.2).
+// the stored rules document (plan 5.2, StoredPricingRulesSchema).
 // ============================================================================
 
 /** GET /api/public/events/:id/payment-config. */
@@ -31,7 +32,7 @@ export const PublicPaymentConfigResponseSchema = z.object({
     .object({
       basePrice: z.number(),
       currency: z.string(),
-      rules: z.unknown(),
+      rules: StoredPricingRulesSchema,
       paymentMethods: z.array(z.string()),
       bankDetails: z
         .object({

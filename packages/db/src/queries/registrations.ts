@@ -14,7 +14,7 @@ import {
   type SQL,
 } from "drizzle-orm";
 import { getSkip } from "@app/shared";
-import type { ListRegistrationsQuery } from "@app/contracts";
+import type { ListRegistrationsQuery, StoredFormSchemaJson } from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
 import { escapeLike } from "../like";
 import { SETTLEMENT_COLUMNS, type RegistrationFieldsPatch } from "../settlement/writer";
@@ -25,6 +25,7 @@ import { clients, users } from "../schema/users-clients";
 import { sponsorships, sponsorshipUsages } from "../schema/sponsorships";
 import { auditLogs } from "../schema/outbox-audit";
 import { emailLogs, emailTemplates } from "../schema/email";
+import { readFormSchema } from "./stored-json";
 
 export type RegistrationRow = typeof registrations.$inferSelect;
 export type NewRegistrationValues = typeof registrations.$inferInsert;
@@ -374,19 +375,6 @@ export async function listRegistrationRows(
   };
 }
 
-export async function getRegistrationClientId(
-  id: string,
-  db: DbExecutor = getDb(),
-): Promise<string | null> {
-  const [row] = await db
-    .select({ clientId: events.clientId })
-    .from(registrations)
-    .innerJoin(events, eq(registrations.eventId, events.id))
-    .where(eq(registrations.id, id))
-    .limit(1);
-  return row?.clientId ?? null;
-}
-
 // ============================================================================
 // Event lookups for create/admin gates + capacity
 // ============================================================================
@@ -536,7 +524,7 @@ export async function findRegistrationForMutation(
 }
 
 export interface RegistrationForEditFetch extends RegistrationRow {
-  form: { id: string; name: string; schema: unknown };
+  form: { id: string; name: string; schema: StoredFormSchemaJson };
   event: {
     id: string;
     name: string;
@@ -578,7 +566,7 @@ export async function findRegistrationWithFormEvent(
   if (!row) return null;
   return {
     ...row.reg,
-    form: { id: row.formId, name: row.formName, schema: row.formSchema },
+    form: { id: row.formId, name: row.formName, schema: readFormSchema(row.formSchema, row.formId) },
     event: {
       id: row.eventMetaId,
       name: row.eventName,
@@ -954,11 +942,11 @@ export async function getRegistrationEditToken(
 export async function getRegistrationFormSchemaForEvent(
   eventId: string,
   db: DbExecutor = getDb(),
-): Promise<{ schema: unknown } | null> {
+): Promise<{ schema: StoredFormSchemaJson } | null> {
   const [row] = await db
-    .select({ schema: forms.schema })
+    .select({ id: forms.id, schema: forms.schema })
     .from(forms)
     .where(and(eq(forms.eventId, eventId), eq(forms.type, "REGISTRATION")))
     .limit(1);
-  return row ?? null;
+  return row ? { schema: readFormSchema(row.schema, row.id) } : null;
 }

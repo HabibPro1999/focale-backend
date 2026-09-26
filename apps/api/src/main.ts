@@ -24,6 +24,7 @@ async function bootstrap() {
     applicationName: "focale-api",
     databaseUrl: config.DATABASE_URL,
     settings: config.database,
+    jsonbValidation: config.JSONB_VALIDATION,
   });
   configureIntegrations(config.integrations);
   // REALTIME_DISABLED: realtime.emit rows are not written (nothing drains them).

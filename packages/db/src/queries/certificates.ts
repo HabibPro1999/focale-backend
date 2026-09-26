@@ -11,6 +11,7 @@ import {
   type InferSelectModel,
   type SQL,
 } from "drizzle-orm";
+import type { StoredCertificateZones } from "@app/contracts";
 import { newId } from "@app/shared";
 import { getDb, type DbExecutor } from "../client";
 import { certificateTemplates } from "../schema/certificates";
@@ -31,6 +32,7 @@ import {
   type EmailLogRow,
   type RegistrationEmailContext,
 } from "./email";
+import { checkCertificateTemplateRow, readEmailContextSnapshot } from "./stored-json";
 
 type EmailLogStatus = EmailLogRow["status"];
 
@@ -80,6 +82,11 @@ function withRoles(template: CertificateTemplateRow): CertificateTemplateRow {
   return { ...template, applicableRoles: template.applicableRoles ?? [] };
 }
 
+/** A template handed to a caller by a read: `zones` checked (plan 5.2), roles defaulted. */
+function readTemplate(template: CertificateTemplateRow): CertificateTemplateRow {
+  return withRoles(checkCertificateTemplateRow(template));
+}
+
 const templateAccessJoin = and(
   eq(eventAccess.id, certificateTemplates.accessId),
   eq(eventAccess.eventId, certificateTemplates.eventId),
@@ -126,7 +133,7 @@ export async function listCertificateTemplates(
     .leftJoin(eventAccess, templateAccessJoin)
     .where(eq(certificateTemplates.eventId, eventId))
     .orderBy(desc(certificateTemplates.createdAt));
-  return rows.map((row) => ({ ...withRoles(row.template), access: toAccessRef(row) }));
+  return rows.map((row) => ({ ...readTemplate(row.template), access: toAccessRef(row) }));
 }
 
 /** Single template + access relation + owning event's {clientId,status}, or null. */
@@ -151,7 +158,7 @@ export async function getCertificateTemplateWithEvent(
   const row = rows[0];
   if (!row) return null;
   return {
-    ...withRoles(row.template),
+    ...readTemplate(row.template),
     access: toAccessRef(row),
     event: { clientId: row.clientId, status: row.status },
   };
@@ -280,7 +287,7 @@ export async function updateCertificateTemplate(
   id: string,
   patch: {
     name?: string;
-    zones?: unknown;
+    zones?: StoredCertificateZones;
     applicableRoles?: string[];
     active?: boolean;
     accessId?: string | null;
@@ -463,7 +470,7 @@ export async function listActiveImageReadyCertificateTemplates(
         gt(certificateTemplates.templateHeight, 0),
       ),
     );
-  return rows.map((row) => ({ ...withRoles(row.template), access: toAccessRef(row) }));
+  return rows.map((row) => ({ ...readTemplate(row.template), access: toAccessRef(row) }));
 }
 
 /**
@@ -495,7 +502,7 @@ export async function getActiveImageReadyCertificateTemplatesByIds(
         gt(certificateTemplates.templateHeight, 0),
       ),
     );
-  return rows.map((row) => ({ ...withRoles(row.template), access: toAccessRef(row) }));
+  return rows.map((row) => ({ ...readTemplate(row.template), access: toAccessRef(row) }));
 }
 
 /**
@@ -690,6 +697,7 @@ export async function getAlreadySentCertTemplateIds(
 
   const rows = await exec
     .select({
+      id: emailLogs.id,
       registrationId: emailLogs.registrationId,
       contextSnapshot: emailLogs.contextSnapshot,
     })
@@ -704,10 +712,7 @@ export async function getAlreadySentCertTemplateIds(
 
   for (const row of rows) {
     if (!row.registrationId) continue;
-    const snapshot = row.contextSnapshot as
-      | { _certificateTemplateIds?: unknown }
-      | null;
-    const ids = snapshot?._certificateTemplateIds;
+    const ids = readEmailContextSnapshot(row.contextSnapshot, row.id)?._certificateTemplateIds;
     if (!Array.isArray(ids)) continue;
     const set = map.get(row.registrationId) ?? new Set<string>();
     for (const id of ids) {
@@ -809,6 +814,7 @@ export async function getAlreadySentAbstractCertTemplateIds(
 
   const rows = await exec
     .select({
+      id: emailLogs.id,
       abstractId: emailLogs.abstractId,
       contextSnapshot: emailLogs.contextSnapshot,
     })
@@ -823,10 +829,7 @@ export async function getAlreadySentAbstractCertTemplateIds(
 
   for (const row of rows) {
     if (!row.abstractId) continue;
-    const snapshot = row.contextSnapshot as
-      | { _certificateTemplateIds?: unknown }
-      | null;
-    const ids = snapshot?._certificateTemplateIds;
+    const ids = readEmailContextSnapshot(row.contextSnapshot, row.id)?._certificateTemplateIds;
     if (!Array.isArray(ids)) continue;
     const set = map.get(row.abstractId) ?? new Set<string>();
     for (const id of ids) {
