@@ -20,7 +20,7 @@ import {
   listActiveReviewerThemeIds,
   listCommitteeMembers,
   getCommitteeProfile,
-  upsertCommitteeMembership,
+  upsertCommitteeMembershipTxn,
   deactivateCommitteeMembershipTxn,
   getActiveThemeIdsForEvent,
   setReviewerThemesTxn,
@@ -253,14 +253,13 @@ export class AbstractsCommitteeService {
     }
     this.assertCommitteeUserEligible(user);
 
-    await upsertCommitteeMembership(eventId, user.id);
-    await insertAuditLog({
+    await upsertCommitteeMembershipTxn(eventId, user.id, {
       entityType: "AbstractCommitteeMembership",
       entityId: `${eventId}:${user.id}`,
       action: "upsert",
       changes: { active: { old: null, new: true } },
       performedBy,
-    }, getDb());
+    });
 
     const eventName = (await findEventName(eventId)) ?? "the event";
     // Best-effort: invite delivery failure is reported, never rolls back membership.

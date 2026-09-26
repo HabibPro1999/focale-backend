@@ -113,7 +113,7 @@ describe.runIf(enabled)("PDF alignment audit reproductions", () => {
         paymentStatus: "PAID",
         networkingOptIn: true,
         totalAmount: 0,
-        priceBreakdown: {},
+        priceBreakdown: {} as never,
         formData: { company: "Original company" },
       });
       await withSerializableTxn((tx) => syncNetworkingRegistration(registration.id, tx));

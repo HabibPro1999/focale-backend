@@ -19,6 +19,7 @@ import {
 } from "@app/shared";
 import type {
   ListSponsorshipsQuery,
+  PriceBreakdown,
   SponsorshipStats,
   StoredFormSchemaJson,
 } from "@app/contracts";
@@ -35,7 +36,7 @@ import { eventPricing } from "../schema/pricing";
 import { clients } from "../schema/users-clients";
 import { registrations } from "../schema/registrations";
 import { forms } from "../schema/forms";
-import { checkFormRow, readFormSchema } from "./stored-json";
+import { checkFormRow, checkRegistrationRow, readFormSchema, readPriceBreakdown } from "./stored-json";
 
 // Row types inferred from the drizzle schema.
 export type SponsorshipRow = typeof sponsorships.$inferSelect;
@@ -384,7 +385,7 @@ export interface RegistrationCoverageRow {
   totalAmount: number;
   baseAmount: number;
   accessTypeIds: string[];
-  priceBreakdown: unknown;
+  priceBreakdown: PriceBreakdown;
   existingUsages: ExistingUsageRow[];
 }
 
@@ -447,7 +448,7 @@ export async function getRegistrationCoverage(
     totalAmount: reg.totalAmount,
     baseAmount: reg.baseAmount,
     accessTypeIds: reg.accessTypeIds ?? [],
-    priceBreakdown: reg.priceBreakdown,
+    priceBreakdown: readPriceBreakdown(reg.priceBreakdown, reg.id),
     existingUsages: await loadExistingUsages(db, registrationId),
   };
 }
@@ -765,7 +766,7 @@ export interface RegistrationForBatch {
   sponsorshipAmount: number;
   baseAmount: number;
   accessTypeIds: string[];
-  priceBreakdown: unknown;
+  priceBreakdown: PriceBreakdown;
   paymentStatus: string;
   linkBaseUrl: string | null;
   editToken: string | null;
@@ -797,7 +798,7 @@ export async function findRegistrationsForBatch(
     .where(
       and(inArray(registrations.id, ids), eq(registrations.eventId, eventId)),
     );
-  return rows.map((r) => ({ ...r, accessTypeIds: r.accessTypeIds ?? [] }));
+  return rows.map((r) => ({ ...checkRegistrationRow(r), accessTypeIds: r.accessTypeIds ?? [] }));
 }
 
 export async function insertSponsorshipBatch(
@@ -934,7 +935,7 @@ export interface RegistrationForLink {
   linkBaseUrl: string | null;
   editToken: string | null;
   accessTypeIds: string[];
-  priceBreakdown: unknown;
+  priceBreakdown: PriceBreakdown;
   paymentStatus: string;
   sponsorshipAmount: number;
   existingUsages: ExistingUsageRow[];
@@ -967,7 +968,7 @@ export async function findRegistrationForLink(
     .limit(1);
   if (!reg) return null;
   return {
-    ...reg,
+    ...checkRegistrationRow(reg),
     accessTypeIds: reg.accessTypeIds ?? [],
     existingUsages: await loadExistingUsages(db, registrationId),
   };

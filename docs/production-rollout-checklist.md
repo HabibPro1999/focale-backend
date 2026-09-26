@@ -104,6 +104,17 @@ blocks writes to the table on PostgreSQL; run `apply` off-peak there.
   `event_pricing.rules` are no longer returned there. Fix or accept each row
   (user); once the audit reports nothing, set `JSONB_VALIDATION=enforce` on
   both services. #165 (5.2a)
+- [ ] Typed price breakdowns (5.2b): the same audit now also lists
+  `registrations.price_breakdown` rows that are not a stored `PriceBreakdown`
+  (only hand-edited rows or dev seeds are expected). The registration
+  responses now project `priceBreakdown` onto its schema, so a key it reports
+  as `stripped_key` is no longer returned. Under `enforce` a registration with
+  an invalid breakdown cannot be paid, repriced or linked until the row is
+  fixed. Review the audit before deployment because response projection
+  strips undeclared fields even under `warn`; resolve unexpected shapes
+  before clients adopt the typed responses. Switch to `enforce` only when
+  the audit is clean. See [FRONTEND_FOLLOWUP_5_2.md](../FRONTEND_FOLLOWUP_5_2.md).
+  #170 (5.2b)
 
 ## Data repairs
 
