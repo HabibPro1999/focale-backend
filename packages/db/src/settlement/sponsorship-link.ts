@@ -2,8 +2,17 @@ import { asc, eq } from "drizzle-orm";
 import type { PriceBreakdown } from "@app/contracts";
 import { normalizeSponsorshipCode } from "@app/shared";
 import type { DbExecutor } from "../client";
-import { lockRegistrationForUpdate, lockRegistrationsForUpdate, lockSponsorshipForUpdate } from "../locks";
-import { findRegistrationUsagesForRecalc } from "../queries/registrations";
+import {
+  lockRegistrationForUpdate,
+  lockRegistrationsForUpdate,
+  lockSponsorshipForUpdate,
+  lockSponsorshipsForUpdate,
+} from "../locks";
+import {
+  deleteRegistrationUsages,
+  findRegistrationUsageLinks,
+  findRegistrationUsagesForRecalc,
+} from "../queries/registrations";
 import { deleteUsage, findUsage, updateSponsorshipRow, type SponsorshipUsageRow } from "../queries/sponsorships";
 import { registrations } from "../schema/registrations";
 import { sponsorshipUsages } from "../schema/sponsorships";
@@ -409,4 +418,42 @@ export async function changeSponsorshipCoverageTxn(
     if (result) settled.push({ ...result, registrationId });
   }
   return { sponsorship, settled };
+}
+
+/**
+ * Lock the sponsorships linked to a registration, in ascending id order,
+ * before the registration itself (lock order sponsorship → registration).
+ * Returns their ids. For paths that then lock and remove the registration
+ * (registration delete).
+ */
+export async function lockRegistrationSponsorships(tx: DbExecutor, registrationId: string): Promise<string[]> {
+  assertInTransaction(tx, "lockRegistrationSponsorships");
+  const links = await findRegistrationUsageLinks(registrationId, tx);
+  return lockSponsorshipsForUpdate(tx, links.map((link) => link.sponsorshipId));
+}
+
+/**
+ * Remove a registration's sponsorship usages before it is deleted. The
+ * caller locked the linked sponsorships (lockRegistrationSponsorships), then
+ * the registration. A usage added in between is locked here, out of order; a
+ * resulting deadlock aborts and withLockingTxn retries. Each sponsorship goes
+ * back to PENDING when no usage remains; CANCELLED stays CANCELLED. Returns
+ * the access items the usages covered (for the paid places the registration
+ * held) and each sponsorship's status change.
+ */
+export async function releaseRegistrationUsagesTxn(
+  tx: DbExecutor,
+  registrationId: string,
+): Promise<{ coveredAccessIds: string[]; sponsorships: Array<SponsorshipStatusChange & { id: string }> }> {
+  assertInTransaction(tx, "releaseRegistrationUsagesTxn");
+  const links = await findRegistrationUsageLinks(registrationId, tx);
+  const sponsorshipIds = await lockSponsorshipsForUpdate(tx, links.map((link) => link.sponsorshipId));
+  const coveredAccessIds = await coveredAccessIdsOf(tx, registrationId);
+  if (links.length > 0) await deleteRegistrationUsages(registrationId, tx);
+  const statuses: Array<SponsorshipStatusChange & { id: string }> = [];
+  for (const id of sponsorshipIds) {
+    const sponsorship = await readLinkableSponsorship(tx, id);
+    if (sponsorship) statuses.push({ id, ...(await settleSponsorshipStatusTxn(tx, sponsorship)) });
+  }
+  return { coveredAccessIds, sponsorships: statuses };
 }

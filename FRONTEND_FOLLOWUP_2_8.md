@@ -72,3 +72,37 @@ records the refund of the excess (lower `paidAmount`), then retries.
   `DELETE`, `LINK_TO_REGISTRATION` (admin, or `SYSTEM` for auto-approved
   batches), `UNLINK_FROM_REGISTRATION` (its `changes` may now also list
   `paymentStatus`, `paymentMethod`, `sponsorshipCode`, `status`).
+
+## 2.8b — capacity drops through the worker, registration delete, repair script
+
+- **Capacity drops are asynchronous.** When an access item fills up (its
+  paid count reaches `maxCapacity`) or is deactivated, the request that did it
+  no longer changes other registrations. The worker drops the item from each
+  unsettled registration holding it (`PENDING`, `PARTIAL`, `VERIFYING`; not
+  when a linked sponsorship covers it) a few seconds later. The admin sees
+  `registration.updated` (or `registration.paymentConfirmed` when the drop
+  leaves the registration fully sponsored) and `eventAccess.countsChanged`
+  for each one as it happens, instead of in the same response. Lists and
+  counts shown right after a confirmation or a deactivation may still include
+  the item for a moment: rely on the realtime events to refresh.
+- A drop now settles the registration like any other money change: a
+  registration left fully covered by its sponsorship becomes `SPONSORED` and
+  takes its paid places (before, only the status changed). The history entry
+  (`ACCESS_CAPACITY_REACHED` / `ACCESS_DEACTIVATED`, by `SYSTEM`) may list
+  `paymentStatus` too.
+- A registration that already paid more than it would owe without the item
+  keeps the item (no automatic overpayment); an admin handles it. Its
+  history gets an `ACCESS_DROP_SKIPPED_OVERPAID` entry (by `SYSTEM`) with
+  `accessKept` (item name → drop reason), `accessId`, `paidAmount`,
+  `amountDue` and `amountDueWithoutAccess` (each in `new`); give it a label
+  (e.g. "Access kept: already paid more than the amount due without it").
+  An identical entry is not repeated when the drop is retried.
+- **Registration delete:** a cancelled sponsorship linked to the deleted
+  registration stays `CANCELLED` (before, it came back as `PENDING`).
+- **Operators:** `repair-sponsorship-code-usages` no longer takes
+  `--confirm-2-8-deployed`; links that fill an item are applied (the drop is
+  enqueued). New `--clear-code --registration <id>... [--apply]` clears the
+  stored code of the named registrations (history action
+  `DATA_REPAIR_CLEAR_SPONSORSHIP_CODE`, by
+  `SYSTEM:repair-sponsorship-code-usages`); give it a label in the
+  registration history view.

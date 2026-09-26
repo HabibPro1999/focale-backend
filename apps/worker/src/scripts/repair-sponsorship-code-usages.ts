@@ -2,6 +2,7 @@
 import { parseArgs } from "node:util";
 import {
   applySponsorshipCodeLink,
+  clearRegistrationSponsorshipCode,
   closeDb,
   configureDb,
   planSponsorshipCodeRepair,
@@ -18,23 +19,25 @@ import {
 //
 // --apply links the selected rows (--all, or --registration <id>...), each in
 // its own locking transaction after re-planning its code under the locks;
-// a row that changed since the plan is skipped. Do not apply before plan 2.8
-// is deployed: until then the sponsorship batch-link path writes absolute
-// amounts without these locks and can overwrite a repaired row. Links that
-// would fill an access item are skipped until 2.8 adds the capacity drop.
-// Reads DATABASE_URL from the environment.
-
-const CONFIRM_FLAG = "confirm-2-8-deployed";
+// a row that changed since the plan is skipped. A link that fills an access
+// item enqueues its capacity drop (plan 2.8).
+//
+// --clear-code --registration <id>... resolves decision-list rows one by one
+// (an unknown code, the losing claimants of a shared code): it clears the
+// stored code and, without a linked usage, the signup amount priced from it.
+// It prints what it would do unless --apply is given, and never picks rows
+// itself. Reads DATABASE_URL from the environment.
 
 function usage(): string {
   return [
     "Usage:",
     "  pnpm --filter @app/worker repair-sponsorship-code-usages [--event <id>] [--json]",
-    `  pnpm --filter @app/worker repair-sponsorship-code-usages --apply --${CONFIRM_FLAG} (--all | --registration <id>...) [--event <id>]`,
+    "  pnpm --filter @app/worker repair-sponsorship-code-usages --apply (--all | --registration <id>...) [--event <id>]",
+    "  pnpm --filter @app/worker repair-sponsorship-code-usages --clear-code --registration <id>... [--apply]",
     "  (image: node apps/worker/dist/scripts/repair-sponsorship-code-usages.js ...)",
     "",
-    "Dry run by default. --apply needs plan 2.8 deployed (acknowledged by the flag above)",
-    "and an explicit selection: --all planned links, or the listed registrations only.",
+    "Dry run by default. --apply links an explicit selection: --all planned links, or the listed",
+    "registrations only. --clear-code clears the stored code of the listed registrations only.",
   ].join("\n");
 }
 
@@ -66,12 +69,37 @@ function describeDecision(decision: SponsorshipCodeDecision): string {
   ].join(" ");
 }
 
+async function clearCodes(registrationIds: string[], apply: boolean): Promise<void> {
+  console.log(`${apply ? "Clear" : "Dry run, clear"} code: ${registrationIds.length} registration(s).`);
+  let cleared = 0;
+  for (const registrationId of registrationIds) {
+    const result = await clearRegistrationSponsorshipCode(registrationId, { apply });
+    if (result.outcome === "skipped") {
+      console.log(`skipped registration=${registrationId} reason=${result.reason} detail=${JSON.stringify(result.detail)}`);
+      continue;
+    }
+    if (result.outcome === "cleared") cleared += 1;
+    console.log(
+      [
+        result.outcome === "cleared" ? "cleared" : "would-clear",
+        `registration=${registrationId}`,
+        `code=${JSON.stringify(result.code)}`,
+        `status=${result.before.paymentStatus}->${result.after.paymentStatus}`,
+        `sponsorship=${result.before.sponsorshipAmount}->${result.after.sponsorshipAmount}`,
+        `due=${result.after.amountDue}`,
+      ].join(" "),
+    );
+  }
+  if (apply) console.log(`Cleared ${cleared} of ${registrationIds.length}.`);
+  else console.log("No rows changed. Re-run with --apply to clear.");
+}
+
 async function main(): Promise<void> {
   const { values } = parseArgs({
     options: {
       help: { type: "boolean", short: "h" },
       apply: { type: "boolean" },
-      [CONFIRM_FLAG]: { type: "boolean" },
+      "clear-code": { type: "boolean" },
       all: { type: "boolean" },
       registration: { type: "string", multiple: true },
       event: { type: "string" },
@@ -85,19 +113,24 @@ async function main(): Promise<void> {
   }
   const apply = values.apply === true;
   const selected = new Set(values.registration ?? []);
-  if (apply) {
-    if (values[CONFIRM_FLAG] !== true) {
-      throw new Error(`--apply needs --${CONFIRM_FLAG}: apply only once plan 2.8 is deployed`);
+  if (values["clear-code"]) {
+    if (values.all || values.event || values.json || selected.size === 0) {
+      throw new Error("--clear-code needs --registration <id>... (no --all, --event or --json)");
     }
+  } else if (apply) {
     if ((values.all === true) === selected.size > 0) {
       throw new Error("--apply needs exactly one of --all or --registration <id>...");
     }
   } else if (values.all || selected.size > 0) {
-    throw new Error("--all and --registration only apply with --apply");
+    throw new Error("--all and --registration only apply with --apply or --clear-code");
   }
 
   configureDb({ applicationName: "focale-repair-sponsorship-code-usages" });
   try {
+    if (values["clear-code"]) {
+      await clearCodes([...selected], apply);
+      return;
+    }
     const plan = await planSponsorshipCodeRepair({ eventId: values.event });
     if (!apply && values.json) {
       console.log(JSON.stringify(plan, null, 2));
@@ -111,7 +144,7 @@ async function main(): Promise<void> {
     const links = apply && selected.size > 0 ? plan.links.filter((l) => selected.has(l.registrationId)) : plan.links;
     for (const link of links) console.log(describeLink(link));
     if (!apply) {
-      if (plan.links.length > 0) console.log("No rows changed. Review, then re-run with --apply after plan 2.8 is deployed.");
+      if (plan.links.length > 0) console.log("No rows changed. Review, then re-run with --apply and a selection.");
       return;
     }
     const missing = [...selected].filter((id) => !links.some((link) => link.registrationId === id));

@@ -17,6 +17,7 @@ import { registrations } from "../schema/registrations";
 import { sponsorships, sponsorshipUsages } from "../schema/sponsorships";
 import { withLockingTxn } from "../txn";
 import { emitSettlementEvents, settlementEventPair } from "./events";
+import { enqueueAccessDrops } from "./access-drop";
 import { AccessCapacityExceededError } from "./paid-access";
 import { settleRegistrationTxn } from "./settle";
 import {
@@ -38,11 +39,14 @@ import {
 // re-plans the code under the sponsorship and registration locks and changes
 // nothing unless the fresh plan is the one that was reviewed.
 //
-// --apply must wait for plan 2.8: until then the sponsorship batch-link path
-// writes absolute amounts without these locks and could overwrite a repaired
-// row. Links that would fill an access item are skipped until 2.8 adds the
-// capacity-reached outbox event (the drop of that item from other unsettled
-// registrations).
+// Every other writer of these rows locks first since plan 2.8, so --apply
+// can run while the app is up. A link that fills an access item enqueues
+// the capacity drop (access.capacityReached) like any other settlement.
+//
+// clearRegistrationSponsorshipCode is the per-registration decision tool for
+// the business-decision list (an unknown code, the losing claimants of a
+// shared code): it clears the stored code and, without a linked usage, the
+// signup amount priced from it. Only for registrations an operator names.
 
 export const SPONSORSHIP_CODE_REPAIR_ACTOR = "SYSTEM:repair-sponsorship-code-usages";
 
@@ -96,7 +100,7 @@ export interface SponsorshipCodeLink {
   after: { paymentStatus: string; sponsorshipAmount: number; amountDue: number };
   /** Paid places moved by the link, by access id (positive = taken). */
   paidPlaces: Record<string, number>;
-  /** Access items the link would fill to capacity (skipped on apply until 2.8). */
+  /** Access items the link would fill to capacity (their drop is enqueued on apply). */
   fillsCapacity: string[];
 }
 
@@ -398,7 +402,7 @@ export type SponsorshipCodeLinkResult =
   | {
       outcome: "skipped";
       registrationId: string;
-      reason: "STALE" | "FILLS_CAPACITY" | "CAPACITY_FULL";
+      reason: "STALE" | "CAPACITY_FULL";
       detail: string;
     };
 
@@ -417,20 +421,18 @@ function sameLink(a: SponsorshipCodeLink, b: SponsorshipCodeLink): boolean {
  * Apply one planned link in its own locking transaction: lock the
  * sponsorship, then the registration, re-plan the code from the locked rows
  * and go on only if the fresh plan is exactly `link`. Then usage + USED,
- * settleRegistrationTxn, audit (Sponsorship LINK_TO_REGISTRATION and
- * Registration DATA_REPAIR_SPONSORSHIP_LINK) and realtime events; no email.
- * Running it again changes nothing (the code is then already linked).
+ * settleRegistrationTxn, the capacity drop of any item it filled, audit
+ * (Sponsorship LINK_TO_REGISTRATION and Registration
+ * DATA_REPAIR_SPONSORSHIP_LINK) and realtime events; no email. Running it
+ * again changes nothing (the code is then already linked).
  */
 export async function applySponsorshipCodeLink(link: SponsorshipCodeLink): Promise<SponsorshipCodeLinkResult> {
-  const skipped = (reason: "STALE" | "FILLS_CAPACITY" | "CAPACITY_FULL", detail: string): SponsorshipCodeLinkResult => ({
+  const skipped = (reason: "STALE" | "CAPACITY_FULL", detail: string): SponsorshipCodeLinkResult => ({
     outcome: "skipped",
     registrationId: link.registrationId,
     reason,
     detail,
   });
-  if (link.fillsCapacity.length > 0) {
-    return skipped("FILLS_CAPACITY", `would fill ${link.fillsCapacity.join(", ")}; needs the 2.8 capacity drop`);
-  }
   try {
     return await withLockingTxn(async (tx) => {
       if (!(await lockSponsorshipForUpdate(tx, link.sponsorshipId))) throw new StaleLinkError("sponsorship gone");
@@ -464,6 +466,7 @@ export async function applySponsorshipCodeLink(link: SponsorshipCodeLink): Promi
       ) {
         throw new StaleLinkError("settled differently from the plan");
       }
+      await enqueueAccessDrops(tx, link.eventId, settled.paidAccess.incremented, "capacity_reached");
 
       await insertAuditLog(
         {
@@ -524,6 +527,160 @@ export async function applySponsorshipCodeLink(link: SponsorshipCodeLink): Promi
   } catch (err) {
     if (err instanceof StaleLinkError) return skipped("STALE", err.message);
     if (err instanceof AccessCapacityExceededError) return skipped("CAPACITY_FULL", err.message);
+    throw err;
+  }
+}
+
+export type SponsorshipCodeClearResult =
+  | {
+      /** `would_clear` on a dry run: the change was computed, then rolled back. */
+      outcome: "cleared" | "would_clear";
+      registrationId: string;
+      /** The stored code, as it was. */
+      code: string;
+      before: { paymentStatus: string; sponsorshipAmount: number };
+      after: { paymentStatus: string; sponsorshipAmount: number; amountDue: number };
+    }
+  | {
+      outcome: "skipped";
+      registrationId: string;
+      reason: "NOT_FOUND" | "NO_CODE" | "LINKED" | "SETTLED";
+      detail: string;
+    };
+
+class SkipClear extends Error {
+  constructor(
+    readonly reason: "NOT_FOUND" | "NO_CODE" | "LINKED" | "SETTLED",
+    detail: string,
+  ) {
+    super(detail);
+    this.name = "SkipClear";
+  }
+}
+
+class DryRunRollback extends Error {
+  constructor(readonly result: SponsorshipCodeClearResult) {
+    super("dry run");
+    this.name = "DryRunRollback";
+  }
+}
+
+/**
+ * Clear one registration's stored signup code: for an unknown code, or a
+ * claimant that loses a shared code. In one locking transaction (the code's
+ * sponsorship, if any, then the registration): refuse when the code's
+ * sponsorship is linked to this registration (use the admin unlink), clear
+ * `sponsorship_code` and that code's breakdown line, and settle; without a
+ * linked usage the signup amount priced from the code goes to 0 and the
+ * status is derived again. A PAID registration whose amount would change is
+ * refused. Audited as DATA_REPAIR_CLEAR_SPONSORSHIP_CODE; no email.
+ *
+ * Without `apply` nothing is kept: the same transaction runs and is rolled
+ * back, and the result says what it would do. Never run automatically:
+ * the operator names each registration.
+ */
+export async function clearRegistrationSponsorshipCode(
+  registrationId: string,
+  options: { apply: boolean },
+): Promise<SponsorshipCodeClearResult> {
+  try {
+    return await withLockingTxn(async (tx) => {
+      const [pre] = await tx
+        .select({ eventId: registrations.eventId, sponsorshipCode: registrations.sponsorshipCode })
+        .from(registrations)
+        .where(eq(registrations.id, registrationId))
+        .limit(1);
+      if (!pre) throw new SkipClear("NOT_FOUND", "no such registration");
+      const code = normalizeSponsorshipCode(pre.sponsorshipCode);
+      if (!code) throw new SkipClear("NO_CODE", "no stored sponsorship code");
+      const sponsorshipId = await findSponsorshipIdByCode(tx, pre.eventId, code);
+      if (sponsorshipId) await lockSponsorshipForUpdate(tx, sponsorshipId);
+      if (!(await lockRegistrationForUpdate(tx, registrationId))) throw new SkipClear("NOT_FOUND", "no such registration");
+      const [reg] = await tx
+        .select({
+          clientId: events.clientId,
+          sponsorshipCode: registrations.sponsorshipCode,
+          totalAmount: registrations.totalAmount,
+          priceBreakdown: registrations.priceBreakdown,
+        })
+        .from(registrations)
+        .innerJoin(events, eq(registrations.eventId, events.id))
+        .where(eq(registrations.id, registrationId));
+      if (normalizeSponsorshipCode(reg.sponsorshipCode) !== code) {
+        throw new SkipClear("NO_CODE", "the stored code changed; plan again");
+      }
+      if (sponsorshipId && (await linkedRegistrationIds(tx, sponsorshipId)).includes(registrationId)) {
+        throw new SkipClear("LINKED", "the code's sponsorship is linked to this registration; unlink it instead");
+      }
+
+      const pb = reg.priceBreakdown as PriceBreakdown | null;
+      const lines = pb?.sponsorships ?? [];
+      const keptLines = lines.filter((line) => normalizeSponsorshipCode(line.code) !== code);
+      const settled = await settleRegistrationTxn(tx, registrationId, {
+        ...(pb && keptLines.length !== lines.length
+          ? { priceBreakdown: { ...pb, sponsorships: keptLines }, totalAmount: reg.totalAmount }
+          : {}),
+        keepUnlinkedSponsorship: false,
+        decide: ({ before, sponsorship }) => {
+          if (before.paymentStatus === "PAID" && sponsorship !== before.sponsorshipAmount) {
+            throw new SkipClear("SETTLED", `PAID: sponsorship ${before.sponsorshipAmount} → ${sponsorship}`);
+          }
+          return undefined;
+        },
+        fields: { sponsorshipCode: null },
+      });
+      if (!settled) throw new SkipClear("NOT_FOUND", "no such registration");
+      const { before, after } = settled;
+
+      await insertAuditLog(
+        {
+          entityType: "Registration",
+          entityId: registrationId,
+          action: "DATA_REPAIR_CLEAR_SPONSORSHIP_CODE",
+          changes: {
+            sponsorshipCode: { old: reg.sponsorshipCode, new: null },
+            ...(before.sponsorshipAmount !== after.sponsorshipAmount
+              ? { sponsorshipAmount: { old: before.sponsorshipAmount, new: after.sponsorshipAmount } }
+              : {}),
+            ...(before.paymentStatus !== after.paymentStatus
+              ? { paymentStatus: { old: before.paymentStatus, new: after.paymentStatus } }
+              : {}),
+          },
+          performedBy: SPONSORSHIP_CODE_REPAIR_ACTOR,
+        },
+        tx,
+      );
+      await enqueueAccessDrops(tx, pre.eventId, settled.paidAccess.incremented, "capacity_reached");
+      const moved = [...settled.paidAccess.incremented, ...settled.paidAccess.decremented];
+      await emitSettlementEvents(
+        tx,
+        settlementEventPair({
+          id: registrationId,
+          eventId: pre.eventId,
+          clientId: reg.clientId,
+          oldStatus: before.paymentStatus,
+          newStatus: after.paymentStatus,
+          emitCountsChanged: moved.length > 0,
+          accessIds: ascending(moved),
+        }),
+      );
+      const result: SponsorshipCodeClearResult = {
+        outcome: options.apply ? "cleared" : "would_clear",
+        registrationId,
+        code: reg.sponsorshipCode ?? code,
+        before: { paymentStatus: before.paymentStatus, sponsorshipAmount: before.sponsorshipAmount },
+        after: {
+          paymentStatus: after.paymentStatus,
+          sponsorshipAmount: after.sponsorshipAmount,
+          amountDue: Math.max(0, after.totalAmount - after.sponsorshipAmount - after.paidAmount),
+        },
+      };
+      if (!options.apply) throw new DryRunRollback(result);
+      return result;
+    });
+  } catch (err) {
+    if (err instanceof DryRunRollback) return err.result;
+    if (err instanceof SkipClear) return { outcome: "skipped", registrationId, reason: err.reason, detail: err.message };
     throw err;
   }
 }

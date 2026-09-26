@@ -21,6 +21,8 @@ Run the API and worker as separate processes, using the same database and networ
 | `NETWORKING_VAPID_PRIVATE_KEY` | Browser push private key; keep server-side. |
 | `NETWORKING_VAPID_SUBJECT` | Contact URI for the push sender, such as a `mailto:` URI. |
 | `NETWORKING_EMAIL_SENDERS` | Optional server-owned client-to-verified-sender JSON map; see [delivery setup](packages/integrations/src/networking/README.md). |
+| `NETWORKING_DELIVERY_BATCH_SIZE` / `NETWORKING_DELIVERY_CONCURRENCY` / `NETWORKING_DELIVERY_OTP_LANES` | Worker delivery lanes: rows per claim (default 10), general lanes (default 6), dedicated sign-in code lanes (default 2). See [delivery lanes](packages/integrations/src/networking/README.md). |
+| `NETWORKING_EMAIL_RATE_PER_SECOND` | Networking emails per second per worker process (default 5; token bucket, sign-in codes first, 429 backoff). Keep it under the email provider account's limit, leaving room for the platform's other emails. |
 | `TRUST_PROXY` | Comma-separated IP/CIDR addresses of trusted reverse-proxy peers whose forwarded headers may be used. **Required in production** (startup fails without it); set the literal `false` only when clients connect directly without a proxy. Unset outside production = socket address. Replace old numeric hop-count values with actual proxy peer addresses from deployment network configuration; numeric hops, `true`, wildcard trust, hostnames, and `/0` networks are rejected. |
 | `RESEND_DOMAIN_READ_API_KEY` / `SENDGRID_DOMAIN_READ_API_KEY` | Optional server-side domain-read credentials for custom sender verification. |
 | Existing `EMAIL_PROVIDER` and provider credentials | Networking uses the same configured email delivery provider as the platform. |
