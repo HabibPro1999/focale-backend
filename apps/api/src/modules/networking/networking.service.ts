@@ -11,10 +11,14 @@ import { randomBytes, randomInt } from "node:crypto";
 import {
   findClientModuleState,
   listNetworkingDiscovery,
-  networkingConsentPending,
+  networkingAreaAccess,
+  networkingCounterpartVisible,
+  networkingEventAvailable,
+  networkingParticipantAccess,
+  networkingParticipantEligible,
+  networkingWindow,
   touchNetworkingProfileActivity,
   cancelNetworkingParticipantMeetings,
-  getActiveEventAccessId,
   createNetworkingNotification,
   enqueueNetworkingDelivery,
   getNetworkingConfig,
@@ -22,12 +26,12 @@ import {
   networkingTransaction,
   revokeNetworkingSessions,
   syncNetworkingRegistration,
-  type DbExecutor,
+  type NetworkingAccess,
   type NetworkingRow,
   type NetworkingStore,
+  type NetworkingWindow,
 } from "@app/db";
-import { ErrorCodes, NetworkingConfigSchema, networkingProfileComplete, networkingProfileOverrides, type ModuleId, type NetworkingConfig, type NetworkingPersonalAnalytics, type NetworkingRegistrationInfo } from "@app/contracts";
-import { isModuleEnabledForClient } from "../clients/module-gates";
+import { ErrorCodes, NetworkingConfigSchema, networkingProfileOverrides, type NetworkingConfig, type NetworkingPersonalAnalytics, type NetworkingRegistrationInfo } from "@app/contracts";
 import { getConfig } from "../../core/config";
 import {
   networkingBearerLockout,
@@ -44,11 +48,7 @@ import {
   sealNetworkingCode,
   verifyNetworkingOtp,
 } from "./networking.security";
-import {
-  networkingSearchMatches,
-  networkingPair,
-  networkingPublicProfile,
-} from "./networking.policy";
+import { networkingPublicProfile } from "./networking.policy";
 export type NetworkingContext = {
   event: NetworkingRow<"events">;
   config: NetworkingConfig;
@@ -57,11 +57,19 @@ export type NetworkingContext = {
   /** Signed in without consent yet (K1b): only the consent allow-list may proceed. */
   consentPending?: boolean;
 };
-export type NetworkingAccess = "CONSENTED" | "CONSENT_PENDING";
+export type { NetworkingAccess };
 const expired = (message = "Participant session expired") =>
   new UnauthorizedException({ code: ErrorCodes.NETWORKING_SESSION_EXPIRED, message });
 const notFound = (message: string) => new NotFoundException({ code: ErrorCodes.NETWORKING_NOT_FOUND, message });
 const unavailable = () => new ForbiddenException({ code: ErrorCodes.NETWORKING_FEATURE_DISABLED, message: "Networking is not available for this event" });
+const notEligible = (message = "Networking participation is no longer eligible") =>
+  new ForbiddenException({ code: "NETWORKING_NOT_ELIGIBLE", message });
+const closedMessages: Record<Exclude<NetworkingWindow, "OPEN">, string> = {
+  NOT_YET_OPEN: "Networking is not open yet",
+  CLOSED: "Networking has closed",
+  RETENTION_ENDED: "Networking retention period has ended",
+};
+const closed = (message: string) => new ForbiddenException({ code: "NETWORKING_CLOSED", message });
 const consentRequired = () =>
   new ForbiddenException({ code: ErrorCodes.NETWORKING_CONSENT_REQUIRED, message: "Networking consent is required" });
 const bearer = (authorization?: string) => authorization?.match(/^Bearer ([A-Za-z0-9_-]{40,128})$/)?.[1];
@@ -96,32 +104,17 @@ export class NetworkingService {
     }
     return readNetworkingBadge(token, eventId);
   }
-  /** Inside a networking transaction pass its executor: the check must not take a second pool connection. */
-  async modulesEnabled(
-    clientId: string,
-    modules: ModuleId[] = ["networking", "registrations", "emails"],
-    db?: DbExecutor,
-  ) {
-    const client = await findClientModuleState(clientId, db);
-    return modules.every((module) => isModuleEnabledForClient(client, module));
-  }
+  /** The event gate and window (4.6 policy), for anonymous and participant routes alike. */
   async publicContext(slug: string, store = networkingStore()) {
     const event = await store.one("events", { slug });
     if (!event) throw notFound("Event not found");
-    if (!(await this.modulesEnabled(event.clientId))) throw unavailable();
+    const client = await findClientModuleState(event.clientId);
     const config = NetworkingConfigSchema.parse(
       (await store.one("configs", { eventId: event.id }))?.config ?? {},
     );
-    if (!config.enabled || event.status === "ARCHIVED") throw unavailable();
-    if (config.opensAt && Date.parse(config.opensAt) > Date.now())
-      throw new ForbiddenException({ code: "NETWORKING_CLOSED", message: "Networking is not open yet" });
-    if (config.closesAt && Date.parse(config.closesAt) < Date.now())
-      throw new ForbiddenException({ code: "NETWORKING_CLOSED", message: "Networking has closed" });
-    if (
-      Date.now() >
-      event.endDate.getTime() + config.retentionDays * 86_400_000
-    )
-      throw new ForbiddenException({ code: "NETWORKING_CLOSED", message: "Networking retention period has ended" });
+    if (!networkingEventAvailable({ event, client, config })) throw unavailable();
+    const window = networkingWindow(config, event);
+    if (window !== "OPEN") throw closed(closedMessages[window]);
     return { event, config };
   }
   async publicConfig(slug: string) {
@@ -168,12 +161,12 @@ export class NetworkingService {
     const config = NetworkingConfigSchema.parse(
       (await store.one("configs", { eventId: event.id }))?.config ?? {},
     );
+    // Shown before opensAt, so the form can announce networking early.
+    const window = networkingWindow(config, event);
     if (
-      !config.enabled ||
-      event.status === "ARCHIVED" ||
-      (config.closesAt && Date.parse(config.closesAt) < Date.now()) ||
-      Date.now() > event.endDate.getTime() + config.retentionDays * 86_400_000 ||
-      !(await this.modulesEnabled(event.clientId))
+      !networkingEventAvailable({ event, client: await findClientModuleState(event.clientId), config }) ||
+      window === "CLOSED" ||
+      window === "RETENTION_ENDED"
     )
       return { enabled: false };
     const networkingUrl = this.networkingUrl(event.slug);
@@ -186,60 +179,26 @@ export class NetworkingService {
       ...(networkingUrl ? { networkingUrl } : {}),
     };
   }
+  /** Admitted to the networking area (badge, organizer scan): the check-in admission rule (4.6). */
   async areaAccess(
     ctx: Pick<NetworkingContext, "event" | "config" | "profile">,
     accessId = ctx.config.requiredAccessId,
   ) {
-    if (!(await this.eligible(ctx.profile, ctx.config))) return false;
-    const booked = (
-      await networkingStore().all("meetings", {
-        eventId: ctx.event.id,
-        status: "CONFIRMED",
-      })
-    ).some((meeting) =>
-      [meeting.requesterId, meeting.recipientId].includes(ctx.profile.id),
-    );
-    if (!booked) return false;
-    if (!accessId) return true;
-    if (!(await getActiveEventAccessId(accessId, ctx.event.id))) return false;
-    const registration = await networkingStore().one("registrations", {
-      id: ctx.profile.registrationId,
+    return networkingAreaAccess({
       eventId: ctx.event.id,
+      profileId: ctx.profile.id,
+      statuses: ctx.config.eligiblePaymentStatuses,
+      accessId,
     });
-    return !!registration?.accessTypeIds?.includes(accessId);
   }
-  /** Consented and eligible: required by every capability and every visible counterpart. */
+  /** Consented and eligible (4.6 policy): required by every capability and every visible counterpart. */
   async eligible(
     profile: NetworkingRow<"profiles">,
     config: NetworkingConfig,
     store = networkingStore(),
   ) {
-    return (await this.access(profile, config, store, false)) === "CONSENTED";
-  }
-  /** Who may sign in: consented participants, or undecided registrants choosing in the PWA (K1b). */
-  async access(
-    profile: NetworkingRow<"profiles">,
-    config: NetworkingConfig,
-    store = networkingStore(),
-    allowPending = true,
-  ): Promise<NetworkingAccess | null> {
-    if (profile.status !== "ACTIVE" || profile.withdrawnAt || (!profile.consent && !allowPending))
-      return null;
-    const registration = await store.one("registrations", {
-      id: profile.registrationId,
-      eventId: profile.eventId,
-    });
-    if (
-      !registration ||
-      registration.networkingOptIn === false ||
-      !config.eligiblePaymentStatuses.includes(registration.paymentStatus)
-    )
-      return null;
-    if (profile.consent) return "CONSENTED";
-    const form = await store.one("forms", { id: registration.formId, eventId: profile.eventId });
-    return networkingConsentPending({
-      profile, optIn: registration.networkingOptIn, formSchema: form?.schema, formData: registration.formData, config,
-    }) ? "CONSENT_PENDING" : null;
+    const registration = await store.one("registrations", { id: profile.registrationId });
+    return networkingParticipantEligible({ profile, registration }, config);
   }
   /**
    * `ip` is the client address the throttler keys venues by; with it, a rejected
@@ -266,16 +225,13 @@ export class NetworkingService {
     }
     // A live session: throttle this bearer as that session from now on.
     networkingIdentityCache.remember(token, session);
-    const profile = await store.one("profiles", {
-      id: session.profileId,
-      eventId: event.id,
-    });
-    const access = profile ? await this.access(profile, config, store) : null;
-    if (!profile || !access)
-      throw new ForbiddenException({ code: "NETWORKING_NOT_ELIGIBLE", message: "Networking participation is not approved or eligible" });
-    const factor = await store.one("secondFactors", { profileId: profile.id });
+    // Profile, registration, form (unconsented) and second factor in one read (4.6).
+    const snapshot = await store.participantSnapshot({ eventId: event.id, clientId: event.clientId, profileId: session.profileId });
+    const access = snapshot ? networkingParticipantAccess(snapshot, config) : null;
+    if (!snapshot?.profile || !access) throw notEligible("Networking participation is not approved or eligible");
+    const profile = snapshot.profile;
     if (
-      (config.requireSecondFactor || factor?.enabledAt) &&
+      (config.requireSecondFactor || snapshot.secondFactorEnabled) &&
       !session.secondFactorVerifiedAt &&
       !options.allowPendingSecondFactor
     ) {
@@ -324,37 +280,26 @@ export class NetworkingService {
     options: { allowConsentPending?: boolean } = {},
   ): Promise<NetworkingContext> {
     const event = ctx.event;
-    const config = NetworkingConfigSchema.parse(
-      (await store.one("configs", { eventId: event.id }))?.config ?? {},
-    );
-    if (event.status === "ARCHIVED" || !config.enabled) throw unavailable();
-    if (
-      (config.opensAt && Date.parse(config.opensAt) > Date.now()) ||
-      (config.closesAt && Date.parse(config.closesAt) <= Date.now()) ||
-      event.endDate.getTime() + config.retentionDays * 86400000 < Date.now()
-    )
-      throw new ForbiddenException({ code: "NETWORKING_CLOSED", message: "Networking is not available for this event" });
-    if (!(await this.modulesEnabled(event.clientId, ["networking"], store.executor))) throw unavailable();
-    const session = await store.one("sessions", {
-      id: ctx.session.id,
+    // Config, client modules, session, profile, registration and second factor in one read (4.6).
+    const snapshot = await store.participantSnapshot({
       eventId: event.id,
+      clientId: event.clientId,
       profileId: ctx.profile.id,
-      revokedAt: null,
+      sessionId: ctx.session.id,
     });
+    const config = snapshot?.config ?? NetworkingConfigSchema.parse({});
+    if (!snapshot || !networkingEventAvailable({ event, client: snapshot.client, config })) throw unavailable();
+    if (networkingWindow(config, event) !== "OPEN") throw closed("Networking is not available for this event");
+    const session = snapshot.session;
     if (!session || session.expiresAt.getTime() <= Date.now()) {
       networkingIdentityCache.forgetSession(ctx.session.id);
       throw expired();
     }
-    const profile = await store.one("profiles", {
-      id: ctx.profile.id,
-      eventId: event.id,
-    });
-    const access = profile ? await this.access(profile, config, store, !!options.allowConsentPending) : null;
-    if (!profile || !access)
-      throw new ForbiddenException({ code: "NETWORKING_NOT_ELIGIBLE", message: "Networking participation is no longer eligible" });
-    const factor = await store.one("secondFactors", { profileId: profile.id });
+    const profile = snapshot.profile;
+    const access = networkingParticipantAccess(snapshot, config, { allowConsentPending: !!options.allowConsentPending });
+    if (!profile || !access) throw notEligible();
     if (
-      (config.requireSecondFactor || factor?.enabledAt) &&
+      (config.requireSecondFactor || snapshot.secondFactorEnabled) &&
       !session.secondFactorVerifiedAt
     )
       throw new ForbiddenException({
@@ -389,22 +334,9 @@ export class NetworkingService {
         codeHash,
         expiresAt,
       });
-      const profiles = await store.all("profiles", {
-        eventId: event.id,
-        email,
-      });
-      profiles.sort(
-        (a, b) =>
-          a.createdAt.getTime() - b.createdAt.getTime() ||
-          a.id.localeCompare(b.id),
-      );
-      let profile: NetworkingRow<"profiles"> | undefined;
-      for (const candidate of profiles) {
-        if (await this.access(candidate, config, store)) {
-          profile = candidate;
-          break;
-        }
-      }
+      // The oldest profile of this address with access (consented or consent-pending).
+      const profile = (await store.signInCandidates(event.id, email, config))
+        .find((candidate) => networkingParticipantAccess(candidate, config))?.profile;
       if (profile)
         await enqueueNetworkingDelivery(
           {
@@ -464,17 +396,9 @@ export class NetworkingService {
         },
       );
       if (!valid) return null;
-      const profiles = await store.all("profiles", {
-        eventId: event.id,
-        email: challenge.email,
-      });
-      profiles.sort(
-        (a, b) =>
-          a.createdAt.getTime() - b.createdAt.getTime() ||
-          a.id.localeCompare(b.id),
-      );
-      for (const profile of profiles) {
-        if (!(await this.access(profile, config, store))) continue;
+      for (const candidate of await store.signInCandidates(event.id, challenge.email, config)) {
+        if (!networkingParticipantAccess(candidate, config)) continue;
+        const profile = candidate.profile;
         const token = randomBytes(48).toString("base64url");
         const expiresAt = new Date(Date.now() + 30 * 86_400_000);
         const session = await store.insert("sessions", {
@@ -508,56 +432,39 @@ export class NetworkingService {
     networkingIdentityCache.remember(issued.token, session);
     return issued;
   }
+  /**
+   * The participant `id` as `ctx`'s participant may see it (4.6 counterpart
+   * policy): `profile` mode, or `discover` mode for `visible` (swipes). The
+   * viewer's own eligibility is re-read in the same statement.
+   */
   async target(
     ctx: NetworkingContext,
     id: string,
     store = networkingStore(),
     visible = false,
   ) {
+    const snapshot = await this.counterpart(ctx, id, store);
+    if (!snapshot.target || !networkingCounterpartVisible(snapshot, ctx.config, visible ? "discover" : "profile"))
+      throw notFound("Participant not available");
+    return snapshot.target;
+  }
+  /**
+   * A participant on the viewer's block list: its profile while the policy
+   * still lets the viewer see it (the block edge itself is ignored: it is why
+   * the row is listed, and unblocking removes it), else null.
+   */
+  async blockedTarget(ctx: NetworkingContext, id: string, store = networkingStore()) {
+    const snapshot = await this.counterpart(ctx, id, store);
+    return snapshot.target && networkingCounterpartVisible(snapshot, ctx.config, "blocklist") ? snapshot.target : null;
+  }
+  /** Viewer and target facts in one read; the viewer must still be eligible. */
+  private async counterpart(ctx: NetworkingContext, id: string, store: NetworkingStore) {
     if (id === ctx.profile.id)
       throw new BadRequestException({ code: "NETWORKING_VALIDATION", message: "Choose another participant" });
-    const profile = await store.one("profiles", { id, eventId: ctx.event.id });
-    if (
-      !profile ||
-      profile.email.trim().toLowerCase() ===
-        ctx.profile.email.trim().toLowerCase() ||
-      !(await this.eligible(profile, ctx.config, store)) ||
-      (visible && (!profile.visible || !networkingProfileComplete(profile)))
-    )
-      throw notFound("Participant not available");
-    const current = await store.one("profiles", {
-      id: ctx.profile.id,
-      eventId: ctx.event.id,
-    });
-    if (!current || !(await this.eligible(current, ctx.config, store)))
-      throw new ForbiddenException({ code: "NETWORKING_NOT_ELIGIBLE", message: "Networking participation is no longer eligible" });
-    if (
-      ((!profile.visible || !networkingProfileComplete(profile)) && !visible) ||
-      (!ctx.config.swipeEnabled && !ctx.config.searchEnabled)
-    ) {
-      const [profileAId, profileBId] = networkingPair(ctx.profile.id, id);
-      if (
-        !(await store.one("connections", {
-          eventId: ctx.event.id,
-          profileAId,
-          profileBId,
-        }))
-      )
-        throw notFound("Participant not available");
-    }
-    const blocked =
-      (await store.one("blocks", {
-        eventId: ctx.event.id,
-        profileId: ctx.profile.id,
-        targetId: id,
-      })) ||
-      (await store.one("blocks", {
-        eventId: ctx.event.id,
-        profileId: id,
-        targetId: ctx.profile.id,
-      }));
-    if (blocked) throw notFound("Participant not available");
-    return profile;
+    const snapshot = await store.counterpartSnapshot({ eventId: ctx.event.id, viewerId: ctx.profile.id, targetId: id });
+    if (!snapshot || !networkingParticipantEligible({ profile: snapshot.viewer, registration: snapshot.viewerRegistration }, ctx.config))
+      throw notEligible();
+    return { ...snapshot, viewer: { id: snapshot.viewer.id, email: snapshot.viewer.email } };
   }
   async discover(ctx: NetworkingContext, query: NetworkingDiscoveryQuery = {}) {
     if (!ctx.config.swipeEnabled && !ctx.config.searchEnabled)

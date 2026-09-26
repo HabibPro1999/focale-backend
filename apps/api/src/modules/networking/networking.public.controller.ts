@@ -20,7 +20,7 @@ import {
   type NetworkingMultipartRequest,
 } from "./networking.uploads.service";
 import { SkipThrottle, Throttle } from "@nestjs/throttler";
-import { ErrorCodes, networkingProfileComplete } from "@app/contracts";
+import { ErrorCodes } from "@app/contracts";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import {
   networkingDirectoryFacets,
@@ -29,77 +29,16 @@ import {
   networkingStore,
   networkingTransaction,
   withdrawNetworkingProfile,
-  type NetworkingRow,
-  type NetworkingStore,
 } from "@app/db";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { networkingIdentityCache } from "../../core/networking-identity-cache";
-import { NetworkingService, type NetworkingContext } from "./networking.service";
+import { NetworkingService } from "./networking.service";
 import { NetworkingSocialService } from "./networking.social.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
 import { NetworkingExportsService } from "./networking.exports.service";
 import { issueNetworkingBadge } from "./networking.security";
-import { networkingPair, networkingPublicProfile, networkingSlots } from "./networking.policy";
+import { networkingPublicProfile, networkingSlots } from "./networking.policy";
 import * as dto from "./networking.dto";
-
-/**
- * Preserve the same-event block record while applying profile-target visibility.
- * The stored block edge itself is intentionally not checked: it is why the row
- * appears in this list and remains actionable through the unblock route.
- */
-async function blockedProfileForViewer(
-  service: NetworkingService,
-  ctx: NetworkingContext,
-  targetId: string,
-  store: NetworkingStore,
-): Promise<NetworkingRow<"profiles"> | null> {
-  if (targetId === ctx.profile.id) {
-    throw new BadRequestException({
-      code: "NETWORKING_VALIDATION",
-      message: "Choose another participant",
-    });
-  }
-
-  const profile = await store.one("profiles", {
-    id: targetId,
-    eventId: ctx.event.id,
-  });
-  if (
-    !profile ||
-    profile.email.trim().toLowerCase() ===
-      ctx.profile.email.trim().toLowerCase() ||
-    !(await service.eligible(profile, ctx.config, store))
-  ) {
-    return null;
-  }
-
-  const current = await store.one("profiles", {
-    id: ctx.profile.id,
-    eventId: ctx.event.id,
-  });
-  if (!current || !(await service.eligible(current, ctx.config, store))) {
-    throw new ForbiddenException({
-      code: "NETWORKING_NOT_ELIGIBLE",
-      message: "Networking participation is no longer eligible",
-    });
-  }
-
-  const needsConnection =
-    !profile.visible ||
-    !networkingProfileComplete(profile) ||
-    (!ctx.config.swipeEnabled && !ctx.config.searchEnabled);
-  if (needsConnection) {
-    const [profileAId, profileBId] = networkingPair(ctx.profile.id, targetId);
-    const connection = await store.one("connections", {
-      eventId: ctx.event.id,
-      profileAId,
-      profileBId,
-    });
-    if (!connection) return null;
-  }
-
-  return profile;
-}
 
 @UseInterceptors(NetworkingBusyInterceptor)
 @Controller("api/networking/:slug")
@@ -298,12 +237,8 @@ export class NetworkingPublicController {
     });
     const items = await Promise.all(
       rows.map(async (row) => {
-        const profile = await blockedProfileForViewer(
-          this.service,
-          ctx,
-          row.targetId,
-          store,
-        );
+        // The block row stays listed (and unblockable); the profile only while the policy allows it (4.6).
+        const profile = await this.service.blockedTarget(ctx, row.targetId, store);
         return {
           ...row,
           profile: profile ? networkingPublicProfile(profile) : null,
