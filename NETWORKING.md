@@ -61,7 +61,7 @@ Vector lookup uses exact cosine distance within eligible event profiles up to 5,
 3. Map the registration’s professional fields (company, role, sector, interests, offers and needs). Review the projected values; option IDs must resolve to meaningful labels.
 4. Configure the event timezone, daily opening hours, slot duration and closures. Create spaces with capacity measured in tables or exhibitors. Tables seat two; each exhibitor can have several representatives with independent availability. See [spaces and migration](NETWORKING_SPACES.md). Enable meetings only with a valid schedule.
 5. Configure branding, language choices, participant/table labels, support details and notification templates.
-6. Synchronize existing registrations and approve pending participants where required. Registration changes subsequently update the networking projection.
+6. Synchronize existing registrations (a background run, see [Registration sync](#registration-sync)) and approve pending participants where required. Registration changes subsequently update the networking projection.
 7. For sensitive events, enable the authenticator second factor. Participants complete enrollment after email verification, and retain their single-use recovery codes.
 
 Network access remains separate from payment state. Suspension, exclusion, withdrawal and changed registration eligibility must revoke effective access and release future meetings according to the domain policy. Hidden/paused profiles are excluded from discovery. Messaging and meeting requests require a mutual connection, and blocking applies in both directions without disclosing the block reason.
@@ -229,6 +229,13 @@ Where each surface stands:
 | Personal analytics | the participant's own listed profiles (same trimmed, case-folded address) |
 
 Withdrawn and erased profiles are ineligible everywhere. The declarative matrix `packages/db/src/testing/networking-eligibility-matrix.ts` lists the cases (status, consent, withdrawal, erasure, opt-out, payment, another event's registration, hidden, incomplete, blocks both ways, the same person) with the answer each surface must give; unit tests hold the pure policy, the delivery policy, rendering and analytics to it, and a DB test runs every surface above against it on both engines.
+
+## Registration sync
+
+Networking profiles are a projection of registrations (`syncNetworkingRegistration`: form answers, consent, payment eligibility; withdrawn and erased profiles are never re-projected). The projection never runs inside a registration, sponsorship or access transaction, so a networking failure cannot roll back a payment:
+
+- **One registration.** Creating a registration, and every settlement change (payment, sponsorship link or unlink, access drop, edits that reprice or change status), enqueues a `networking.registration.sync` outbox row (IDs only) in the same transaction, only for events with a networking config. The worker runs the sync in its own serializable transaction, with the outbox's retries (up to 10 attempts, then dead-lettered). It reads the registration as it is when it runs, so the last delivery projects the latest data and a redelivery changes nothing more. The creation's row is keyed per registration; change rows are not keyed, since a keyed outbox row is never deleted.
+- **A whole event.** `POST /api/events/:eventId/networking/sync` (and a config change to enablement, approval mode, eligible payment statuses or field mapping) starts a run and answers 202; `GET …/sync` returns its progress (`status`, `total`, `processed`, `created`, `updated`, `failed`, `lastError`). The run is a chain of `networking.event.sync` outbox rows: each syncs the next 100 registrations in id order, then advances the cursor on `networking_configs` (compare-and-set on run id and cursor) and enqueues the next chunk in one transaction. A new request replaces the run in progress; a redelivered chunk the cursor has passed is skipped; a registration whose sync fails is counted and handed to its own `networking.registration.sync` row. Registrations created during a run are covered by their own creation row.
 
 ## Write concurrency
 

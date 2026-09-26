@@ -444,6 +444,7 @@ export class RegistrationCreateService {
         });
       }
       await emitSettlementEvents(tx, pending);
+      await this.sideEffects.queueNetworkingSync(tx, { id, eventId });
       await this.sideEffects.queueRegistrationCreatedEmail(tx, eventId, {
         id,
         email,
@@ -691,6 +692,7 @@ export class RegistrationCreateService {
         performedBy: adminUserId,
       });
 
+      await this.sideEffects.queueNetworkingSync(tx, { id, eventId });
       if (sendEmail) {
         await this.sideEffects.queueRegistrationCreatedEmail(tx, eventId, {
           id,

@@ -18,6 +18,7 @@ export * from "./committee-invites";
 export * from "./tenant-scope";
 
 export * from "./networking";
+export * from "./networking-sync";
 
 export * from "./networking-store";
 export * from "./networking-notices";

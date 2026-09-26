@@ -36,7 +36,8 @@ export const db = {
   linkSponsorshipUsageTxn: vi.fn(),
   applyRegistrationSettlement: vi.fn(),
   emitSettlementEvents: vi.fn(),
-  syncNetworkingRegistration: vi.fn(),
+  enqueueNetworkingRegistrationSyncs: vi.fn(),
+  enqueueNetworkingRegistrationCreatedSync: vi.fn(),
   enqueueRealtimeOutboxEvent: vi.fn(),
   enqueueTriggeredEmailOutbox: vi.fn(),
   casIncrementRegisteredTx: vi.fn(),
@@ -183,13 +184,15 @@ db.settleRegistrationTxn.mockImplementation(async (tx: unknown, id: string, opti
 
 // emitSettlementEvents with @app/db's body, over the mocked primitives.
 db.emitSettlementEvents.mockImplementation(
-  async (tx: unknown, events: Array<{ type: string; payload: { id: unknown } }>) => {
-    const changed = new Set(
-      events
-        .filter((ev) => ev.type === "registration.updated" || ev.type === "registration.paymentConfirmed")
-        .map((ev) => String(ev.payload.id)),
+  async (tx: unknown, events: Array<{ type: string; eventId?: string; payload: { id: unknown } }>) => {
+    await db.enqueueNetworkingRegistrationSyncs(
+      tx,
+      events.flatMap((ev) =>
+        (ev.type === "registration.updated" || ev.type === "registration.paymentConfirmed") && ev.eventId
+          ? [{ registrationId: String(ev.payload.id), eventId: ev.eventId }]
+          : [],
+      ),
     );
-    for (const id of changed) await db.syncNetworkingRegistration(id, tx);
     const results: unknown[] = [];
     for (const ev of events) results.push(await db.enqueueRealtimeOutboxEvent(tx, ev));
     return results;
@@ -403,6 +406,8 @@ export function installServiceMocks(): {
   db.lockRegistrationForUpdate.mockResolvedValue(true);
   db.enqueueRealtimeOutboxEvent.mockResolvedValue(true);
   db.enqueueTriggeredEmailOutbox.mockResolvedValue(true);
+  db.enqueueNetworkingRegistrationSyncs.mockResolvedValue([]);
+  db.enqueueNetworkingRegistrationCreatedSync.mockResolvedValue(true);
   db.casIncrementRegisteredTx.mockResolvedValue(true);
   db.casDecrementRegisteredTx.mockResolvedValue(true);
   db.allocateReferenceNumber.mockResolvedValue("26-EV-001");

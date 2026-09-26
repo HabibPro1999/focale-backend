@@ -96,7 +96,7 @@ describe("RegistrationPaymentsService", () => {
       expect(db.applyRegistrationSettlement).not.toHaveBeenCalled();
       expect(db.insertAuditLog).not.toHaveBeenCalled();
       expect(db.enqueueRealtimeOutboxEvent).not.toHaveBeenCalled();
-      expect(db.syncNetworkingRegistration).not.toHaveBeenCalled();
+      expect(db.enqueueNetworkingRegistrationSyncs).not.toHaveBeenCalled();
     });
 
     it("404 for an empty body on a missing registration", async () => {
