@@ -48,8 +48,10 @@ describe.runIf(dbTestsEnabled())("admin registration transaction retries", () =>
     const pool = getDb().$client;
     expect((await pool.query('SELECT id FROM registrations WHERE event_id = $1', [event.id])).rows)
       .toEqual([{ id: created.id }]);
-    expect((await pool.query('SELECT registered_count AS count FROM events WHERE id = $1', [event.id])).rows)
-      .toEqual([{ count: 1 }]);
+    // CockroachDB's INT8 is returned as a string by pg; compare the numeric value.
+    const counters = (await pool.query('SELECT registered_count AS count FROM events WHERE id = $1', [event.id])).rows;
+    expect(counters).toHaveLength(1);
+    expect(Number(counters[0].count)).toBe(1);
     expect(await getAccessCapacityInfo(item.id)).toMatchObject({ paidCount: 1 });
     expect(await getAccessRegisteredCount(item.id)).toEqual({ registeredCount: 1 });
     expect((await pool.query('SELECT entity_id AS "entityId" FROM audit_logs WHERE performed_by = $1', [actor])).rows)
