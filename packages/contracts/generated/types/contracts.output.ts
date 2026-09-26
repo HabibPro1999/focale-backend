@@ -45,6 +45,8 @@ export type AccessBreakdownItem = {
   totalAmount: number;
 };
 
+export type AccessDropReason = "capacity_reached" | "deactivated";
+
 export type AccessEventIdParam = {
   eventId: string;
 };
@@ -55,6 +57,7 @@ export type AccessLineItem = {
   unitPrice: number;
   quantity: number;
   subtotal: number;
+  status?: "confirmed";
 };
 
 export type AccessRegistrant = {
@@ -193,7 +196,7 @@ export type AdminRegistrationResponse = {
   paymentMethod: PaymentMethod | null;
   paymentReference: string | null;
   paymentProofUrl: string | null;
-  priceBreakdown: unknown;
+  priceBreakdown: PriceBreakdown;
   baseAmount: number;
   discountAmount: number;
   accessAmount: number;
@@ -689,11 +692,12 @@ export type DeleteRegistrationQuery = {
 
 export type DroppedAccessItem = {
   accessId: string;
-  name: unknown;
+  name: string;
   unitPrice: number;
   quantity: number;
   subtotal: number;
-  reason: "capacity_reached";
+  status?: "confirmed";
+  reason: AccessDropReason;
 };
 
 export type DuplicateEmailTemplate = {
@@ -1709,8 +1713,7 @@ export type PriceBreakdown = {
   sponsorshipTotal: number;
   total: number;
   currency: string;
-  /** @default [] */
-  droppedAccessItems: DroppedAccessItem[];
+  droppedAccessItems?: DroppedAccessItem[];
 };
 
 export type PricingEventIdParam = {
@@ -1908,12 +1911,12 @@ export type PublicRegistrantSearchResponse = RegistrantSearchResult[];
 
 export type PublicRegistrationCreateResponse = {
   registration: PublicRegistrationResponse;
-  priceBreakdown: unknown;
+  priceBreakdown: PriceBreakdown;
 };
 
 export type PublicRegistrationEditResponse = {
   registration: PublicRegistrationResponse;
-  priceBreakdown: unknown;
+  priceBreakdown: PriceBreakdown;
 };
 
 export type PublicRegistrationForEditResponse = {
@@ -1951,7 +1954,7 @@ export type PublicRegistrationResponse = {
   accessAmount: number;
   sponsorshipCode: string | null;
   sponsorshipAmount: number;
-  priceBreakdown: unknown;
+  priceBreakdown: PriceBreakdown;
   hasPaymentProof: boolean;
   /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
   paidAt: string | null;

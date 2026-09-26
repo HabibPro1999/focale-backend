@@ -166,13 +166,14 @@ wrapping it:
 
 The schemas live in `packages/contracts/src/*.responses.ts` (plus the access
 item schemas in `access.ts`), so they are in the generated artifacts: the
-output-side types are the response `data` shapes. Pricing `rules` is typed
-(`StoredPricingRulesSchema`, see Typed JSONB columns below). The form `schema`
+output-side types are the response `data` shapes. Pricing `rules` and the
+registration `priceBreakdown` are typed (`StoredPricingRulesSchema`,
+`PriceBreakdownSchema`, see Typed JSONB columns below). The form `schema`
 stays opaque on purpose: its stored document is open (admin-authored keys
 round-trip untouched) and a contract would drop them. The other stored JSON
-documents (`formData`, `priceBreakdown`, access `conditions`, audit `changes`,
-abstract `content`/`coAuthors`/`additionalFieldsData`) are opaque (`unknown`)
-until they are typed. Covered routes:
+documents (`formData`, access `conditions`, audit `changes`, abstract
+`content`/`coAuthors`/`additionalFieldsData`) are opaque (`unknown`) until
+they are typed. Covered routes:
 
 | Routes | Schema |
 |---|---|
@@ -208,13 +209,19 @@ checks that every enveloped route of the covered controllers has a contract.
 
 ### Typed JSONB columns (plan 5.2)
 
-Four JSONB columns are typed with the document their write path stores, a
-`Stored*Schema` in `@app/contracts`: `event_pricing.rules`
+Five JSONB columns are typed with the document their write path stores, a
+schema in `@app/contracts`: `event_pricing.rules`
 (`StoredPricingRulesSchema`), `certificate_templates.zones`
 (`StoredCertificateZonesSchema`), `forms.schema` (`StoredFormSchemaJsonSchema`,
-registration or sponsor form) and `email_logs.context_snapshot`
+registration or sponsor form), `email_logs.context_snapshot`
 (`StoredEmailContextSnapshotSchema`, template variables plus the internal
-`_fallbackSubject`/`_fallbackPlainBody`/`_certificateTemplateIds` keys).
+`_fallbackSubject`/`_fallbackPlainBody`/`_certificateTemplateIds` keys) and
+`registrations.price_breakdown` (`PriceBreakdownSchema`, plan 5.2b: the one
+`PriceBreakdown` type of the pricing quote, the settlement code and the
+registration responses; it allows every shape a writer has stored: public
+signup lines carry `status: "confirmed"`, dropped lines keep the line's keys
+plus `reason` `capacity_reached` or `deactivated`, and rows created before
+April 2026 have no `droppedAccessItems`).
 `jsonbOf(schema)` (`packages/db/src/jsonb.ts`) types the column for reads and
 writes. A stored value is valid when the schema accepts it and parsing changes
 nothing (`checkStoredJson`: a missing defaulted key counts), so a valid value
@@ -228,11 +235,17 @@ the column, row id and issue paths/codes once per process (never values) and
 returns the value exactly as stored, as before typing; `enforce` throws
 `StoredJsonError`. Rows returned by a write are not re-checked. The networking
 query files read `forms.schema` without the check (typed only).
+`price_breakdown` is checked by the registration and sponsorship queries and
+by the settlement's own reads (settle, access drop, sponsorship link), so under
+`enforce` a registration with an invalid breakdown cannot be settled (paid,
+repriced, linked) until its row is fixed. The repair tools classify a
+breakdown they cannot settle themselves, and whole-row reads that never use
+it (email and certificate contexts, exports, networking) are typed only.
 
 Before switching to `enforce`, run the read-only audit
 `node apps/api/dist/scripts/stored-json-report.js` (from source:
 `node --conditions=@app/source -r @swc-node/register src/scripts/stored-json-report.ts`
-in `apps/api`). It pages through the four columns in READ ONLY transactions,
+in `apps/api`). It pages through the five columns in READ ONLY transactions,
 lists each invalid document by row id, path and code, counts them per column
 and code, and changes nothing.
 

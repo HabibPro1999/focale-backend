@@ -152,6 +152,8 @@ describe("settlement properties", () => {
   it("dropAccessItem removes exactly the dropped item's amount and keeps the net rule", () => {
     const item = fc.record({
       accessId: fc.constantFrom("a", "b", "c", "d"),
+      name: fc.constantFrom("Gala", "Workshop"),
+      unitPrice: amount,
       quantity: fc.integer({ min: 1, max: 5 }),
       subtotal: amount,
     });

@@ -155,6 +155,13 @@
       ],
       "type": "object"
     },
+    "AccessDropReasonSchema": {
+      "enum": [
+        "capacity_reached",
+        "deactivated"
+      ],
+      "type": "string"
+    },
     "AccessEventIdParamSchema": {
       "additionalProperties": false,
       "properties": {
@@ -185,6 +192,10 @@
         },
         "subtotal": {
           "type": "number"
+        },
+        "status": {
+          "const": "confirmed",
+          "type": "string"
         }
       },
       "required": [
@@ -829,7 +840,9 @@
             }
           ]
         },
-        "priceBreakdown": {},
+        "priceBreakdown": {
+          "$ref": "#/$defs/PriceBreakdownSchema"
+        },
         "baseAmount": {
           "type": "number"
         },
@@ -3066,7 +3079,9 @@
         "accessId": {
           "type": "string"
         },
-        "name": {},
+        "name": {
+          "type": "string"
+        },
         "unitPrice": {
           "type": "number"
         },
@@ -3076,9 +3091,12 @@
         "subtotal": {
           "type": "number"
         },
-        "reason": {
-          "const": "capacity_reached",
+        "status": {
+          "const": "confirmed",
           "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/AccessDropReasonSchema"
         }
       },
       "required": [
@@ -7384,7 +7402,6 @@
           "type": "string"
         },
         "droppedAccessItems": {
-          "default": [],
           "items": {
             "$ref": "#/$defs/DroppedAccessItemSchema"
           },
@@ -8473,7 +8490,9 @@
         "registration": {
           "$ref": "#/$defs/PublicRegistrationResponseSchema"
         },
-        "priceBreakdown": {}
+        "priceBreakdown": {
+          "$ref": "#/$defs/PriceBreakdownSchema"
+        }
       },
       "required": [
         "registration",
@@ -8486,7 +8505,9 @@
         "registration": {
           "$ref": "#/$defs/PublicRegistrationResponseSchema"
         },
-        "priceBreakdown": {}
+        "priceBreakdown": {
+          "$ref": "#/$defs/PriceBreakdownSchema"
+        }
       },
       "required": [
         "registration",
@@ -8663,7 +8684,9 @@
         "sponsorshipAmount": {
           "type": "number"
         },
-        "priceBreakdown": {},
+        "priceBreakdown": {
+          "$ref": "#/$defs/PriceBreakdownSchema"
+        },
         "hasPaymentProof": {
           "type": "boolean"
         },

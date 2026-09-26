@@ -43,7 +43,7 @@ export async function insertMatrixParticipant(scope: MatrixScope, input: {
     paymentStatus: input.registration.paymentStatus,
     networkingOptIn: input.registration.networkingOptIn,
     totalAmount: 0,
-    priceBreakdown: {},
+    priceBreakdown: {} as never,
     accessTypeIds: [scope.accessId],
     // No consent answer: an unconsented registrant without an opt-in is undecided (K1b).
     formData: {},

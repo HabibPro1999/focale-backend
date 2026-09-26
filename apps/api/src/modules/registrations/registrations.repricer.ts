@@ -110,7 +110,7 @@ export class RegistrationRepricer {
       eventId: string;
       totalAmount: number;
       sponsorshipAmount: number;
-      priceBreakdown: unknown;
+      priceBreakdown: PriceBreakdown;
     },
     input: {
       formData: Record<string, unknown>;
@@ -124,7 +124,7 @@ export class RegistrationRepricer {
     settled: SettleRegistrationResult;
     accessDeltas: Array<{ accessId: string; delta: number }>;
   }> {
-    const stored = current.priceBreakdown as PriceBreakdown | null;
+    const stored = current.priceBreakdown;
     const priced = await this.pricing.calculatePrice(
       current.eventId,
       {
@@ -312,7 +312,7 @@ export class RegistrationRepricer {
           (registration.formData as Record<string, unknown>) ??
           {};
         const oldAccessItems = (
-          (registration.priceBreakdown as PriceBreakdown | null)?.accessItems ?? []
+          registration.priceBreakdown?.accessItems ?? []
         ).map((item) => ({ accessId: item.accessId, quantity: item.quantity }));
         const effectiveAccessSelections = (input.accessSelections ?? oldAccessItems).map(
           (s) => ({ accessId: s.accessId, quantity: s.quantity }),
@@ -477,10 +477,8 @@ export class RegistrationRepricer {
       }
 
       const isAccessEdit = input.accessSelections !== undefined;
-      const currentPriceBreakdown =
-        (current.priceBreakdown as PriceBreakdown | null) ??
-        ({ accessItems: [] } as unknown as PriceBreakdown);
-      const currentAccessItems = currentPriceBreakdown.accessItems ?? [];
+      const currentPriceBreakdown = current.priceBreakdown;
+      const currentAccessItems = currentPriceBreakdown?.accessItems ?? [];
       const currentAccessIds = new Set(currentAccessItems.map((i) => i.accessId));
       const newAccessSelections =
         input.accessSelections ??

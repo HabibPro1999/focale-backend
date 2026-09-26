@@ -1,3 +1,4 @@
+import type { PriceBreakdown } from "@app/contracts";
 import type {
   AccessSelectionItem,
   DroppedAccessSelectionItem,
@@ -66,7 +67,7 @@ export interface PublicRegistrationSource {
   accessAmount: number;
   sponsorshipCode: string | null;
   sponsorshipAmount: number;
-  priceBreakdown: unknown;
+  priceBreakdown: PriceBreakdown;
   paymentProofUrl: string | null;
   paidAt: Date | null;
   submittedAt: Date;
@@ -107,7 +108,7 @@ export interface PublicRegistration {
   accessAmount: number;
   sponsorshipCode: string | null;
   sponsorshipAmount: number;
-  priceBreakdown: unknown;
+  priceBreakdown: PriceBreakdown;
   hasPaymentProof: boolean;
   paidAt: Date | null;
   submittedAt: Date;

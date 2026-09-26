@@ -455,7 +455,7 @@ export async function applySponsorshipCodeLink(link: SponsorshipCodeLink): Promi
       const usage = await linkSponsorshipUsageTxn(tx, {
         sponsorship,
         registrationId: link.registrationId,
-        priceBreakdown: reg.priceBreakdown as PriceBreakdown,
+        priceBreakdown: reg.priceBreakdown,
         appliedBy: SPONSORSHIP_CODE_REPAIR_ACTOR,
       });
       const settled = await settleRegistrationTxn(tx, link.registrationId, { coveredAccessIdsBefore });
@@ -613,7 +613,7 @@ export async function clearRegistrationSponsorshipCode(
         throw new SkipClear("LINKED", "the code's sponsorship is linked to this registration; unlink it instead");
       }
 
-      const pb = reg.priceBreakdown as PriceBreakdown | null;
+      const pb = reg.priceBreakdown;
       const lines = pb?.sponsorships ?? [];
       const keptLines = lines.filter((line) => normalizeSponsorshipCode(line.code) !== code);
       const settled = await settleRegistrationTxn(tx, registrationId, {

@@ -101,7 +101,7 @@ describe.runIf(enabled)(
           lastName: "Test",
           paymentStatus: "PAID",
           totalAmount: 0,
-          priceBreakdown: {},
+          priceBreakdown: {} as never,
           // Unmapped consent is undecided (K1): fixtures opt in explicitly, as the form checkbox does.
           networkingOptIn: true,
           formData: { company: "Test company", jobTitle: "Director", sector: "Technology" },
@@ -464,7 +464,7 @@ describe.runIf(enabled)(
         paymentStatus: "PENDING",
         totalAmount: 0,
         formData: {},
-        priceBreakdown: {},
+        priceBreakdown: {} as never,
       });
       await networkingStore().insert("profiles", {
         eventId: ids.event,

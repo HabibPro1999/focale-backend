@@ -2,7 +2,6 @@ import { Injectable } from "@nestjs/common";
 import {
   ErrorCodes,
   type AppEvent,
-  type PriceBreakdown,
   type UpdateRegistrationInput,
   type UpdatePaymentInput,
   type SelectPaymentMethodInput,
@@ -303,7 +302,7 @@ export class RegistrationPaymentsService {
         ...settled.paidAccess.decremented,
       ];
       if (wasSettled !== isSettled || movedAccessIds.length > 0) {
-        const breakdown = old.priceBreakdown as PriceBreakdown;
+        const breakdown = old.priceBreakdown;
         const accessIds = [
           ...new Set([
             ...(breakdown.accessItems?.map((a) => a.accessId) ?? []),

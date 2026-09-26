@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { PriceBreakdown } from "@app/contracts";
 import type { DbExecutor } from "../client";
 import {
   SETTLEMENT_COLUMNS,
@@ -6,18 +7,23 @@ import {
   applyRegistrationSettlement,
   settlementInvariantViolations,
   type SettlementColumn,
+  type WrittenSettlementState,
 } from "./writer";
 
-const breakdown = (over: Record<string, unknown> = {}) => ({
+const breakdown = (over: Partial<PriceBreakdown> = {}): PriceBreakdown => ({
+  basePrice: 300,
+  appliedRules: [],
   calculatedBasePrice: 300,
-  accessItems: [{ accessId: "gala", quantity: 1, subtotal: 200 }],
+  accessItems: [{ accessId: "gala", name: "Gala", unitPrice: 200, quantity: 1, subtotal: 200 }],
   accessTotal: 200,
   subtotal: 500,
+  sponsorships: [],
   sponsorshipTotal: 100,
   total: 400,
+  currency: "TND",
   ...over,
 });
-const row = (over: Record<string, unknown> = {}) => ({
+const row = (over: Partial<WrittenSettlementState> = {}): WrittenSettlementState => ({
   paidAmount: 0,
   totalAmount: 500,
   sponsorshipAmount: 100,

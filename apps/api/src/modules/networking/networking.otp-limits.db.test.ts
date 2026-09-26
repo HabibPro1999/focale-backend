@@ -78,7 +78,7 @@ describe.runIf(enabled)("networking OTP failed-attempt limits (real database)", 
       lastName: "Limit",
       paymentStatus: "PAID",
       totalAmount: 0,
-      priceBreakdown: {},
+      priceBreakdown: {} as never,
       networkingOptIn: true,
       formData: {},
     });

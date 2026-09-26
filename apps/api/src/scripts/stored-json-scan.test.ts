@@ -22,6 +22,18 @@ const zone = {
   textAlign: "center",
 };
 const { fontWeight: _fontWeight, ...zoneWithoutWeight } = zone;
+const priceBreakdown = {
+  basePrice: 100,
+  appliedRules: [],
+  calculatedBasePrice: 100,
+  accessItems: [],
+  accessTotal: 0,
+  subtotal: 100,
+  sponsorships: [],
+  sponsorshipTotal: 0,
+  total: 100,
+  currency: "TND",
+};
 
 /** Rows per column name; pages are served by keyset (ids after `afterId`). */
 function serve(rows: Record<string, { id: string; value: unknown }[]>) {
@@ -51,6 +63,11 @@ describe("loadStoredJsonReport", () => {
         { id: "e2", value: { firstName: SECRET } },
         { id: "e3", value: [SECRET] },
       ],
+      "registrations.price_breakdown": [
+        { id: "r1", value: priceBreakdown },
+        { id: "r2", value: { ...priceBreakdown, droppedAccessItems: [] } },
+        { id: "r3", value: { ...priceBreakdown, note: SECRET } },
+      ],
     });
 
     const report = await loadStoredJsonReport({ batchSize: 2 });
@@ -60,6 +77,7 @@ describe("loadStoredJsonReport", () => {
       ["certificate_templates.zones", 3, 2, { missing_default: 1, unrecognized_keys: 1 }],
       ["forms.schema", 1, 1, { invalid_type: 1 }],
       ["email_logs.context_snapshot", 3, 1, { invalid_type: 1 }],
+      ["registrations.price_breakdown", 3, 1, { stripped_key: 1 }],
     ]);
     // Keyset paging: 2 rows per page, the next page starts after the last id.
     expect(
@@ -81,7 +99,7 @@ describe("loadStoredJsonReport", () => {
       "certificate_templates.zones: scanned 3 row(s), 2 invalid (missing_default 1, unrecognized_keys 1)",
     );
     expect(lines.at(-1)).toBe(
-      "5 stored document(s) do not match their schema: JSONB_VALIDATION=enforce would refuse them. Nothing was changed.",
+      "6 stored document(s) do not match their schema: JSONB_VALIDATION=enforce would refuse them. Nothing was changed.",
     );
     expect(lines.join("\n")).not.toContain(SECRET);
   });
@@ -107,6 +125,7 @@ describe("loadStoredJsonReport", () => {
       "certificate_templates.zones: scanned 0 row(s), 0 invalid",
       "forms.schema: scanned 0 row(s), 0 invalid",
       "email_logs.context_snapshot: scanned 0 row(s), 0 invalid",
+      "registrations.price_breakdown: scanned 0 row(s), 0 invalid",
       "Every typed JSON document matches its schema: JSONB_VALIDATION=enforce would refuse nothing. Nothing was changed.",
     ]);
   });

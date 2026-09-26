@@ -8,6 +8,7 @@ import {
   events,
   forms,
   getDb,
+  registrations,
 } from "@app/db";
 import { dbTestsEnabled } from "@app/db/testing";
 import { formatStoredJsonReport, loadStoredJsonReport } from "./stored-json-scan";
@@ -22,6 +23,8 @@ const ids = {
   template: randomUUID(),
   validLog: randomUUID(),
   legacyLog: randomUUID(),
+  validRegistration: randomUUID(),
+  legacyRegistration: randomUUID(),
 };
 const SECRET = "registrant-secret-value";
 
@@ -34,6 +37,7 @@ async function snapshotRows() {
     pricing: ours(await db.select().from(eventPricing)),
     templates: ours(await db.select().from(certificateTemplates)),
     logs: ours(await db.select().from(emailLogs)),
+    registrations: ours(await db.select().from(registrations)),
   };
 }
 
@@ -90,6 +94,38 @@ describe.runIf(enabled)("stored JSON report (real database)", () => {
       { id: ids.validLog, recipientEmail: "a@example.test", subject: "", contextSnapshot: { firstName: SECRET } },
       { id: ids.legacyLog, recipientEmail: "b@example.test", subject: "", contextSnapshot: [SECRET] as never },
     ]);
+    const priceBreakdown = {
+      basePrice: 100,
+      appliedRules: [],
+      calculatedBasePrice: 100,
+      accessItems: [{ accessId: "a1", name: "Workshop", unitPrice: 50, quantity: 1, subtotal: 50, status: "confirmed" as const }],
+      accessTotal: 50,
+      subtotal: 150,
+      sponsorships: [],
+      sponsorshipTotal: 0,
+      total: 150,
+      currency: "TND",
+    };
+    await db.insert(registrations).values([
+      {
+        id: ids.validRegistration,
+        formId: ids.validForm,
+        eventId: ids.event,
+        formData: {},
+        email: "valid@example.test",
+        totalAmount: 150,
+        priceBreakdown,
+      },
+      {
+        id: ids.legacyRegistration,
+        formId: ids.validForm,
+        eventId: ids.event,
+        formData: {},
+        email: "legacy@example.test",
+        totalAmount: 150,
+        priceBreakdown: { ...priceBreakdown, secretNote: SECRET } as never,
+      },
+    ]);
   });
 
   it("lists the invalid documents by id, path and code, reads in pages and writes nothing", async () => {
@@ -117,6 +153,14 @@ describe.runIf(enabled)("stored JSON report (real database)", () => {
     expect(findingsFor("email_logs.context_snapshot", ids.validLog)).toEqual([]);
     expect(findingsFor("email_logs.context_snapshot", ids.legacyLog)).toEqual([
       { column: "email_logs.context_snapshot", id: ids.legacyLog, issues: [{ path: "(root)", code: "invalid_type" }] },
+    ]);
+    expect(findingsFor("registrations.price_breakdown", ids.validRegistration)).toEqual([]);
+    expect(findingsFor("registrations.price_breakdown", ids.legacyRegistration)).toEqual([
+      {
+        column: "registrations.price_breakdown",
+        id: ids.legacyRegistration,
+        issues: [{ path: "secretNote", code: "stripped_key" }],
+      },
     ]);
     for (const column of report.columns) expect(column.scanned).toBeGreaterThan(0);
 

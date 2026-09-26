@@ -122,11 +122,22 @@ const registrationRow: RegistrationRow = {
   paymentMethod: "BANK_TRANSFER",
   paymentReference: "VIR-1",
   paymentProofUrl: "https://storage.example/proofs/r1.webp",
+  // As a public signup stores it (lines marked "confirmed"), after an access
+  // item was deactivated.
   priceBreakdown: {
     basePrice: 200,
+    appliedRules: [],
+    calculatedBasePrice: 200,
     accessItems: [{ accessId: "a1", name: "Workshop", unitPrice: 100, quantity: 1, subtotal: 100, status: "confirmed" }],
-    droppedAccessItems: [],
+    accessTotal: 100,
+    subtotal: 300,
+    sponsorships: [],
+    sponsorshipTotal: 0,
     total: 300,
+    currency: "TND",
+    droppedAccessItems: [
+      { accessId: "a2", name: "Dinner", unitPrice: 80, quantity: 1, subtotal: 80, status: "confirmed", reason: "deactivated" },
+    ],
   },
   baseAmount: 200,
   discountAmount: 0,
@@ -455,6 +466,14 @@ async function todaysPayloads(): Promise<Array<[string, z.ZodType, unknown]>> {
     accessSelections: [],
     droppedAccessSelections: [],
   });
+  // Stored before dropped items were recorded (April 2026): no droppedAccessItems key.
+  const { droppedAccessItems: _dropped, ...breakdownBeforeDrops } = registrationRow.priceBreakdown;
+  const adminBeforeDrops = toAdminRegistration({
+    ...withMeta,
+    priceBreakdown: breakdownBeforeDrops,
+    accessSelections: [accessSelection],
+    droppedAccessSelections: [],
+  });
 
   const formsPublic = new FormsPublicController({
     getFormByEventSlug: vi.fn(async () => publicForm),
@@ -517,6 +536,7 @@ async function todaysPayloads(): Promise<Array<[string, z.ZodType, unknown]>> {
       },
     ],
     ["admin registration", AdminRegistrationResponseSchema, admin],
+    ["admin registration, breakdown without droppedAccessItems", AdminRegistrationResponseSchema, adminBeforeDrops],
     [
       "admin registration list",
       AdminRegistrationListResponseSchema,
@@ -670,6 +690,19 @@ describe("response contracts match today's route payloads", () => {
     const { clientId, ...event } = publicForm.event;
     expect(clientId).toBe("c1");
     expect(JSON.stringify(served)).toBe(JSON.stringify({ ...publicForm, event }));
+  });
+
+  it("a price breakdown key no writer stores is stripped and reported, like any undeclared key", async () => {
+    const payloads = await todaysPayloads();
+    const admin = payloads.find(([route]) => route === "admin registration")?.[2] as {
+      priceBreakdown: PriceBreakdown;
+    };
+    const { value, stripped } = projectOntoContract(AdminRegistrationResponseSchema, {
+      ...admin,
+      priceBreakdown: { ...admin.priceBreakdown, internalNote: "VIP" },
+    });
+    expect(stripped).toEqual(["priceBreakdown.internalNote"]);
+    expect(JSON.stringify(value)).toBe(JSON.stringify(admin));
   });
 
   it("the grouped-access fixture exercises both dated slots and the add-on group", async () => {
