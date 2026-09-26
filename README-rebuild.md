@@ -199,6 +199,35 @@ Not covered yet: the networking routes, the public abstracts routes and the
 other admin modules. `apps/api/src/modules/response-contracts.routes.test.ts`
 checks that every enveloped route of the covered controllers has a contract.
 
+### Tenant scoping (admin routes)
+
+Admin routes on an event-owned resource declare their tenant check instead of
+calling a resolver in the handler (`apps/api/src/modules/tenancy`, plan 5.4):
+
+```ts
+@Post(":eventId/admin/registrations")
+@EventScoped({ module: ["registrations", "pricing"], write: true })
+async adminCreate(@Param() { eventId }: EventIdParamDto, @Body() body: AdminCreateRegistrationDto) { … }
+```
+
+`@EventScoped`, `@RegistrationScoped`, `@SponsorshipScoped` and
+`@EmailTemplateScoped` (options `module`, `write`, `param`) add a guard that
+loads the resource, its event and the client in one query and refuses, in
+order: the route's `@Param()` DTO (400, as the global pipe would), missing
+resource (404), another client (403 `AUTH_1004`), a template with no event on
+a write (400), an archived event on a write (400 `STT_12001`), then per module
+an inactive client (403 `CLT_20001`) or a disabled module (403 `CLT_20002`).
+The controller's `@Auth()` runs first. `@ScopedEvent()` / `@ScopedClient()`
+give the handler what the guard loaded. Because guards run before pipes, the
+tenant check now answers before body and query validation.
+
+Converted: abstracts, email, registrations (admin + edit link), pricing,
+check-in, reports and the sponsorship admin controllers (76 routes).
+`apps/api/src/modules/tenancy/tenant-scope.routes.test.ts` lists each route's
+expected scope and sends a cross-tenant and a missing-resource request to
+every one. Still hand-written: access, certificates, events, forms, clients
+and the networking admin/recommendations `access()` helpers.
+
 ## Environment
 
 One schema, `packages/contracts/src/app-config.ts`, covers every key both
