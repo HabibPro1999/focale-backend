@@ -1,5 +1,5 @@
 import { ErrorCodes } from "@app/contracts";
-import { getRegistrationByIdRow } from "@app/db";
+import { getRegistrationByIdRow, getRegistrationByIdempotencyKeyRow } from "@app/db";
 import { AppException } from "../../core/app-exception";
 import {
   enrichWithAccessSelections,
@@ -8,8 +8,8 @@ import {
 import { toAdminRegistration, type AdminView } from "./registrations.mappers";
 
 // Helpers shared by the registration services (RegistrationsService,
-// RegistrationRepricer): the admin view type, the email normalization and
-// the row loaders used after a write.
+// RegistrationCreateService, RegistrationRepricer, RegistrationPaymentsService):
+// the admin view type, the email normalization and the row loaders.
 
 /** Admin-facing registration: no editToken / idempotencyKey (see mappers). */
 export type AdminRegistration = AdminView<RegistrationWithRelations>;
@@ -46,4 +46,13 @@ export async function getStrippedById(id: string): Promise<AdminRegistration> {
     );
   }
   return enriched;
+}
+
+/** editToken intentionally NOT stripped (renamed to `token` by the create route). */
+export async function getRegistrationByIdempotencyKey(
+  idempotencyKey: string,
+): Promise<RegistrationWithRelations | null> {
+  const row = await getRegistrationByIdempotencyKeyRow(idempotencyKey);
+  if (!row) return null;
+  return enrichWithAccessSelections(row);
 }

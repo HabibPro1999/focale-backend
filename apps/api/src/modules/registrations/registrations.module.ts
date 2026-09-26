@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { AccessModule } from "../access/access.module";
 import { PricingModule } from "../pricing/pricing.module";
 import { RegistrationsService } from "./registrations.service";
+import { RegistrationCreateService } from "./registrations.create.service";
 import { RegistrationSideEffects } from "./registrations.side-effects";
 import { PaymentProofService } from "./registrations.payment-proof.service";
 import { RegistrationRepricer } from "./registrations.repricer";
@@ -25,6 +26,7 @@ import {
   ],
   providers: [
     RegistrationsService,
+    RegistrationCreateService,
     RegistrationSideEffects,
     PaymentProofService,
     RegistrationRepricer,

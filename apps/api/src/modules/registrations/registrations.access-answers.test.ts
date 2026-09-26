@@ -59,7 +59,7 @@ import type { Config } from "../../core/config";
 import { AccessPublicController } from "../access/access.public.controller";
 import { AccessService } from "../access/access.service";
 import type { PricingService } from "../pricing/pricing.service";
-import { RegistrationsService } from "./registrations.service";
+import { RegistrationCreateService } from "./registrations.create.service";
 import { RegistrationSideEffects } from "./registrations.side-effects";
 
 const FUTURE = new Date(Date.now() + 7 * 86_400_000);
@@ -132,7 +132,7 @@ const client = { active: true, enabledModules: ["registrations", "pricing"] };
 const openEvent = { clientId: "c1", status: "OPEN", endDate: FUTURE };
 
 let controller: AccessPublicController;
-let registrations: RegistrationsService;
+let registrations: RegistrationCreateService;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -196,7 +196,7 @@ beforeEach(() => {
       droppedAccessItems: [],
     }),
   };
-  registrations = new RegistrationsService(
+  registrations = new RegistrationCreateService(
     access,
     pricing as unknown as PricingService,
     { publicLinkAllowedOrigins: [] } as unknown as Config,
