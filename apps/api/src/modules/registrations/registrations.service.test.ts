@@ -220,6 +220,7 @@ import {
 import { AccessCapacityExceededError } from "@app/db";
 import { validateSelections } from "../access/access-validation";
 import { RegistrationsService } from "./registrations.service";
+import { RegistrationSideEffects } from "./registrations.side-effects";
 import { AppException } from "../../core/app-exception";
 import type { Config } from "../../core/config";
 import type { AccessService } from "../access/access.service";
@@ -351,6 +352,7 @@ describe("RegistrationsService", () => {
       {
         publicLinkAllowedOrigins: ["https://events.example.com"],
       } as Config,
+      new RegistrationSideEffects(access as unknown as AccessService),
     );
   });
 
