@@ -18,20 +18,43 @@ const LOCALES: Record<ExportLang, string> = {
   ar: "ar-TN",
 };
 
+const DATE_TIME_FIELDS = {
+  datetime: { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" },
+  date: { day: "2-digit", month: "2-digit", year: "numeric" },
+  time: { hour: "2-digit", minute: "2-digit" },
+} as const satisfies Record<string, Intl.DateTimeFormatOptions>;
+
+const formatters = new Map<string, Intl.DateTimeFormat>();
+
+/**
+ * One cached Intl.DateTimeFormat per (fields, language, time zone). Same
+ * output as Date#toLocaleString/-DateString/-TimeString with these explicit
+ * fields, which build a new formatter on every call (~35 µs each: most of a
+ * large export's CPU time). An invalid date still reads "Invalid Date".
+ */
+function formatWith(
+  fields: keyof typeof DATE_TIME_FIELDS,
+  date: Date,
+  lang: ExportLang,
+  timeZone: string,
+): string {
+  if (Number.isNaN(date.getTime())) return "Invalid Date";
+  const key = `${fields}|${lang}|${timeZone}`;
+  let formatter = formatters.get(key);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(LOCALES[lang], { timeZone, ...DATE_TIME_FIELDS[fields] });
+    formatters.set(key, formatter);
+  }
+  return formatter.format(date);
+}
+
 /** `dd/mm/yyyy HH:MM` (per language) in the event's time zone. */
 export function formatDateTime(
   date: Date,
   lang: ExportLang = "fr",
   timeZone: string = DEFAULT_EVENT_TIME_ZONE,
 ): string {
-  return date.toLocaleString(LOCALES[lang], {
-    timeZone,
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return formatWith("datetime", date, lang, timeZone);
 }
 
 /** `dd/mm/yyyy` (per language) in the event's time zone. */
@@ -40,12 +63,7 @@ export function formatDate(
   lang: ExportLang = "fr",
   timeZone: string = DEFAULT_EVENT_TIME_ZONE,
 ): string {
-  return date.toLocaleDateString(LOCALES[lang], {
-    timeZone,
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  });
+  return formatWith("date", date, lang, timeZone);
 }
 
 /** `HH:MM` (per language) in the event's time zone. */
@@ -54,11 +72,7 @@ export function formatTime(
   lang: ExportLang = "fr",
   timeZone: string = DEFAULT_EVENT_TIME_ZONE,
 ): string {
-  return date.toLocaleTimeString(LOCALES[lang], {
-    timeZone,
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return formatWith("time", date, lang, timeZone);
 }
 
 /** `YYYY-MM-DD` in the event's time zone, for export file names. */
@@ -96,9 +110,21 @@ export function csvCell(value: unknown): string {
   return `"${text.replaceAll('"', '""')}"`;
 }
 
-/** RFC 4180 CSV (CRLF) with a UTF-8 BOM, so spreadsheet apps read accents and Arabic. */
+/** UTF-8 BOM that starts every CSV export, so spreadsheet apps read accents and Arabic. */
+export const CSV_BOM = "\uFEFF";
+
+/** One CSV record: quoted cells (csvCell), CRLF-terminated. */
+export function toCsvLine(row: readonly unknown[]): string {
+  return `${row.map(csvCell).join(",")}\r\n`;
+}
+
+/**
+ * RFC 4180 CSV (CRLF) with a UTF-8 BOM. A streamed export writes CSV_BOM,
+ * then toCsvLine per record: the same bytes.
+ */
 export function toCsv(rows: readonly (readonly unknown[])[]): string {
-  return `\uFEFF${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}\r\n`;
+  if (rows.length === 0) return `${CSV_BOM}\r\n`;
+  return `${CSV_BOM}${rows.map(toCsvLine).join("")}`;
 }
 
 // XLSX needs no escaping: a string cell is stored as text and never evaluated,

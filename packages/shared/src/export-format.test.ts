@@ -7,7 +7,9 @@ import {
   formatDateTime,
   formatFileDate,
   formatTime,
+  CSV_BOM,
   toCsv,
+  toCsvLine,
   uniqueFileName,
   uniqueSheetName,
 } from "./export-format";
@@ -28,6 +30,27 @@ describe("dates in the event time zone", () => {
     expect(formatDateTime(lateUtc, "en")).toBe("01/01/2026, 12:30 AM");
     expect(formatDateTime(lateUtc, "fr", "UTC")).toBe("31/12/2025 23:30");
     expect(formatFileDate(lateUtc, "UTC")).toBe("2025-12-31");
+  });
+
+  it("matches Date#toLocale*String with the same fields (cached formatters, 3.7)", () => {
+    const locales = { fr: "fr-FR", en: "en-US", ar: "ar-TN" } as const;
+    const zones = ["Africa/Tunis", "UTC", "Europe/Paris", "America/New_York"];
+    const dates = Array.from({ length: 40 }, (_, i) => new Date(Date.UTC(2020, i % 12, 1 + i, i % 24, (i * 7) % 60)));
+    for (const [lang, locale] of Object.entries(locales) as ["fr" | "en" | "ar", string][]) {
+      for (const timeZone of zones) {
+        for (const date of dates) {
+          const fields = { timeZone, day: "2-digit", month: "2-digit", year: "numeric" } as const;
+          const time = { timeZone, hour: "2-digit", minute: "2-digit" } as const;
+          expect(formatDateTime(date, lang, timeZone)).toBe(date.toLocaleString(locale, { ...fields, ...time }));
+          expect(formatDate(date, lang, timeZone)).toBe(date.toLocaleDateString(locale, fields));
+          expect(formatTime(date, lang, timeZone)).toBe(date.toLocaleTimeString(locale, time));
+        }
+      }
+    }
+    const invalid = new Date("not a date");
+    expect(formatDateTime(invalid)).toBe("Invalid Date");
+    expect(formatDate(invalid)).toBe("Invalid Date");
+    expect(formatTime(invalid)).toBe("Invalid Date");
   });
 });
 
@@ -52,6 +75,12 @@ describe("csvCell / toCsv", () => {
 
   it("writes CRLF rows with a UTF-8 BOM", () => {
     expect(toCsv([["Nom", "Montant"], ["Zoë", 10]])).toBe('\uFEFF"Nom","Montant"\r\n"Zoë","10"\r\n');
+  });
+
+  it("streams the same bytes: CSV_BOM then one toCsvLine per record (3.7)", () => {
+    const rows = [["Nom", "Montant"], ["=1", -3], ["Zoë", null]];
+    expect(CSV_BOM + rows.map(toCsvLine).join("")).toBe(toCsv(rows));
+    expect(toCsv([])).toBe("\uFEFF\r\n");
   });
 });
 

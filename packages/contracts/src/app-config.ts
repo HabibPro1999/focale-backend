@@ -77,6 +77,19 @@ const envShape = {
       "Comma-separated IP/CIDR addresses of trusted reverse-proxy peers. Forwarded client IP\nheaders are ignored unless the connecting peer matches this list. Required in production;\nset TRUST_PROXY=false only when clients connect directly to the API with no proxy.\nReplace any old numeric hop-count setting with the actual proxy peer addresses from your\ndeployment network configuration. Do not use true, *, or a /0 range.\nExample only; never copy these documentation/test addresses into production.",
     example: "10.0.0.0/24,2001:db8:1234::/48",
   }),
+  EXPORT_MAX_CONCURRENCY: envInt(1, 16, 2, {
+    section: "http",
+    description:
+      "File exports (reports, abstracts, networking) generated at once by this API process. Up to\nEXPORT_MAX_QUEUED more wait for a slot; anything beyond gets 503 EXPORT_BUSY + Retry-After.",
+    example: "2",
+    active: true,
+  }, "EXPORT_MAX_CONCURRENCY"),
+  EXPORT_MAX_QUEUED: envInt(0, 64, 4, {
+    section: "http",
+    description: "",
+    example: "4",
+    active: true,
+  }, "EXPORT_MAX_QUEUED"),
 
   // --- Public URLs --------------------------------------------------------
   ADMIN_APP_URL: envKey(z.string().url().default(DEFAULT_LOCAL_ORIGIN), {
@@ -954,6 +967,10 @@ export function parseAppConfig(source: NodeJS.ProcessEnv) {
     publicLinkAllowedOrigins: parseOriginList(env.PUBLIC_LINK_ALLOWED_ORIGINS) ?? [],
     urls: {
       adminAppUrl: env.ADMIN_APP_URL,
+    },
+    exports: {
+      maxConcurrency: env.EXPORT_MAX_CONCURRENCY,
+      maxQueued: env.EXPORT_MAX_QUEUED,
     },
     realtime: {
       disabled: env.REALTIME_DISABLED,
