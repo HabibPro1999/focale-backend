@@ -22,7 +22,7 @@ import { rowsOf } from "../helpers";
 // - count_drift: events.registered_count, event_access.registered_count and
 //   event_access.paid_count against the registrations (paid places as the
 //   writer counts them: every item when PAID/SPONSORED/WAIVED, the
-//   sponsorship-covered items when PARTIAL).
+//   sponsorship-covered items when PARTIAL or VERIFYING).
 // Both engines (PostgreSQL, CockroachDB): JSON values are type-checked
 // before any cast, and set-returning calls only see arrays.
 
@@ -307,7 +307,7 @@ async function countDrift(db: DbExecutor, eventId?: string) {
           SUM(i.quantity) AS registered,
           SUM(CASE
             WHEN i.payment_status IN ('PAID', 'SPONSORED', 'WAIVED') THEN i.quantity
-            WHEN i.payment_status = 'PARTIAL' AND c.access_id IS NOT NULL THEN i.quantity
+            WHEN i.payment_status IN ('PARTIAL', 'VERIFYING') AND c.access_id IS NOT NULL THEN i.quantity
             ELSE 0 END) AS paid
         FROM items i
         LEFT JOIN covered c ON c.registration_id = i.registration_id AND c.access_id = i.access_id

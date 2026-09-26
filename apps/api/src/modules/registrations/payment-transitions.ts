@@ -7,13 +7,13 @@ import { AppException } from "../../core/app-exception";
  * payment confirmation, payment-proof upload). Same-status is a no-op; any
  * transition not listed throws 400 INVALID_PAYMENT_TRANSITION. Public paths
  * add their own stricter preconditions on top (method selection only from
- * PENDING). VERIFYING → PARTIAL: an admin reviewing a proof of a partial
- * payment (plan 2.6).
+ * PENDING/PARTIAL). PARTIAL → VERIFYING submits proof for the remaining balance;
+ * VERIFYING → PARTIAL leaves a balance after an admin reviews a partial payment.
  */
 const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   PENDING: ["VERIFYING", "PARTIAL", "PAID", "SPONSORED", "WAIVED", "REFUNDED"],
   VERIFYING: ["PAID", "PARTIAL", "PENDING", "REFUNDED"],
-  PARTIAL: ["PAID", "SPONSORED", "REFUNDED"],
+  PARTIAL: ["VERIFYING", "PAID", "SPONSORED", "REFUNDED"],
   PAID: ["REFUNDED"],
   SPONSORED: ["PARTIAL", "REFUNDED"],
   WAIVED: ["PENDING", "REFUNDED"],

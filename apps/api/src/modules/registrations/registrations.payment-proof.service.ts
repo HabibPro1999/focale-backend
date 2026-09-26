@@ -156,6 +156,8 @@ export class PaymentProofService {
       );
       validatePaymentTransition(currentReg.paymentStatus, "VERIFYING");
 
+      // Proof changes only the review state. PARTIAL and VERIFYING retain the
+      // same sponsored seats, and no previously confirmed money is rewritten.
       await applyRegistrationSettlement(tx, {
         registrationId,
         settlement: { paymentStatus: "VERIFYING" },

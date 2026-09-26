@@ -67,7 +67,7 @@ type Fixture = Awaited<ReturnType<typeof eventWithAccess>>;
 /** A consistent registration (base 100), then `overrides` break one thing. */
 function registration(
   f: Fixture,
-  values: { items: Item[]; status: "PENDING" | "PARTIAL" | "PAID"; paid: number; sponsorship?: number },
+  values: { items: Item[]; status: "PENDING" | "PARTIAL" | "VERIFYING" | "PAID"; paid: number; sponsorship?: number },
   overrides: Parameters<typeof seedRegistration>[0] = {},
 ) {
   const pb = breakdown(100, values.items, values.sponsorship ?? 0);
@@ -111,11 +111,11 @@ describe.runIf(dbTestsEnabled())("db tier: settlement invariants (2.4)", () => {
   beforeEach(cleanupDatabase);
   afterEach(cleanupDatabase);
 
-  it("a consistent event passes every check", async () => {
-    // Gala: 3 registered, 2 paid (the PAID row and the PARTIAL row's covered gala).
+  it.each(["PARTIAL", "VERIFYING"] as const)("a consistent event with sponsored %s seats passes every check", async (status) => {
+    // Gala: 3 registered, 2 paid (the PAID row and the sponsored row's covered gala).
     const f = await eventWithAccess({ registered: 3, gala: [3, 2], dinner: [1, 0] });
     await registration(f, { items: [f.gala], status: "PAID", paid: 300 });
-    const partial = await registration(f, { items: [f.gala, f.dinner], status: "PARTIAL", paid: 0, sponsorship: 200 });
+    const partial = await registration(f, { items: [f.gala, f.dinner], status, paid: 0, sponsorship: 200 });
     await sponsorGala(f, [partial.id]);
     await registration(f, { items: [f.gala], status: "PENDING", paid: 0 });
 

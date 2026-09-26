@@ -70,10 +70,12 @@ export class RegistrationSideEffects {
     oldStatus: string,
     newStatus: string,
   ): Promise<void> {
-    const coveredAccessIds =
-      oldStatus === "PARTIAL" || newStatus === "PARTIAL"
-        ? await this.access.getAlreadyCoveredAccessIds(registration.id, exec)
-        : new Set<string>();
+    const hasSponsoredSeats = [oldStatus, newStatus].some(
+      (status) => status === "PARTIAL" || status === "VERIFYING",
+    );
+    const coveredAccessIds = hasSponsoredSeats
+      ? await this.access.getAlreadyCoveredAccessIds(registration.id, exec)
+      : new Set<string>();
     await this.access.syncPaidCountDelta(
       registration.eventId,
       { status: oldStatus, priceBreakdown: registration.priceBreakdown, coveredAccessIds },

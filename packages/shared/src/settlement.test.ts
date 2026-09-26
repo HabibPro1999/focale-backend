@@ -215,12 +215,12 @@ describe("paidAccessQuantities", () => {
     expect(paidAccessQuantities(status, breakdown)).toEqual(new Map([["gala", 2], ["workshop", 2]]));
   });
 
-  it("counts only sponsorship-covered items when PARTIAL", () => {
-    expect(paidAccessQuantities("PARTIAL", breakdown, new Set(["workshop"]))).toEqual(new Map([["workshop", 2]]));
-    expect(paidAccessQuantities("PARTIAL", breakdown)).toEqual(new Map());
+  it.each(["PARTIAL", "VERIFYING"])("counts only sponsorship-covered items when %s", (status) => {
+    expect(paidAccessQuantities(status, breakdown, new Set(["workshop"]))).toEqual(new Map([["workshop", 2]]));
+    expect(paidAccessQuantities(status, breakdown)).toEqual(new Map());
   });
 
-  it.each(["PENDING", "VERIFYING", "REFUNDED"])("counts nothing when %s", (status) => {
+  it.each(["PENDING", "REFUNDED"])("counts nothing when %s", (status) => {
     expect(paidAccessQuantities(status, breakdown, new Set(["gala"]))).toEqual(new Map());
   });
 });

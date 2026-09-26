@@ -228,12 +228,13 @@ export interface PaidAccessBreakdown {
 }
 
 // ============================================================================
-// Moved from the API services (unchanged behavior)
+// Access capacity and discounts
 // ============================================================================
 
 /**
  * Access quantities a registration holds in paid capacity: every item when
- * fully settled, only sponsorship-covered items when PARTIAL, none otherwise.
+ * fully settled, only sponsorship-covered items when PARTIAL or VERIFYING,
+ * none otherwise. Reviewing proof for the balance keeps sponsored seats.
  * Paid-count deltas are the difference between two of these.
  */
 export function paidAccessQuantities(
@@ -243,7 +244,7 @@ export function paidAccessQuantities(
 ): Map<string, number> {
   const quantities = new Map<string, number>();
   const fullySettled = isFullySettled(status);
-  if (!fullySettled && status !== "PARTIAL") {
+  if (!fullySettled && status !== "PARTIAL" && status !== "VERIFYING") {
     return quantities;
   }
   // A stored breakdown read under JSONB_VALIDATION=warn may lack its items.

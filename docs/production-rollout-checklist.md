@@ -1,7 +1,8 @@
 # Production rollout checklist
 
-Everything batch 3 of the backend remediation (PRs #94 to #173) left for an
-operator on the production deploy that ships it. Nothing here is automated.
+Everything batch 3 of the backend remediation (PRs #94 to #173), plus the partial
+balance-payment follow-up, left for an operator on the production deploy that
+ships it. Nothing here is automated.
 One line per action, with the PR (and plan item) it comes from. Take a verified
 database backup before the deploy; the data repairs need their own backup.
 
@@ -178,9 +179,14 @@ The breaking API changes of each PR are listed in the `FRONTEND_FOLLOWUP_*.md`
 files at the repository root; ship the matching admin, form and networking
 builds with this deploy.
 
-## Open product decision
+## Partial balance payments
 
-Should a partially sponsored (`PARTIAL`) registrant pay the remaining balance
-on the public form? Behavior is unchanged: selecting a payment method requires
-`PENDING`, and proof upload is not allowed from `PARTIAL`. Resolve this product
-question separately; this rollout does not enable that flow.
+The public payment link stays available for `PARTIAL` registrations to pay the
+remaining balance. Method selection preserves `PARTIAL` and existing amounts;
+proof upload moves it to `VERIFYING` for admin review. Sponsorship-covered seats
+stay reserved during review, and confirmation adds only uncovered seats.
+`VERIFYING` still cannot bypass admin review by selecting another payment method.
+No migration or new configuration is needed. Include sponsored `VERIFYING` rows
+in the existing read-only settlement-invariant audit before rollout; investigate
+any reported counter drift before shipping. Frontend details:
+[partial-payment follow-up](../FRONTEND_FOLLOWUP_PARTIAL_PAYMENTS.md).
