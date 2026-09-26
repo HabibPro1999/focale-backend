@@ -16,6 +16,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { ErrorCodes } from "@app/contracts";
 import { AppException } from "../../core/app-exception";
 import { RegistrationsService } from "./registrations.service";
+import { PaymentProofService } from "./registrations.payment-proof.service";
 import {
   CreateRegistrationBodyDto,
   EditTokenQueryDto,
@@ -63,7 +64,10 @@ export class RegistrationsPublicController {
 // Self-service edit — 64-hex edit token via X-Edit-Token header or ?token=.
 @Controller("api/public/registrations")
 export class RegistrationEditPublicController {
-  constructor(private readonly service: RegistrationsService) {}
+  constructor(
+    private readonly service: RegistrationsService,
+    private readonly proofs: PaymentProofService,
+  ) {}
 
   /** Header preferred over query. 401 if absent/malformed; 403 if it does not match. */
   private async requireToken(
@@ -137,7 +141,7 @@ export class RegistrationEditPublicController {
       throw new AppException(ErrorCodes.VALIDATION_ERROR, "No file uploaded", 400);
     }
     const buffer = await data.toBuffer();
-    return this.service.uploadPaymentProof(registrationId, {
+    return this.proofs.uploadPaymentProof(registrationId, {
       buffer,
       filename: data.filename,
       mimetype: data.mimetype,
