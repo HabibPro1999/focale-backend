@@ -27,7 +27,7 @@ type Fixture = Awaited<ReturnType<typeof createNetworkingWriteFixture>>;
 /** One or more rows in every networking table for the fixture's event. */
 async function seed(fixture: Fixture) {
   const db = getDb();
-  const store = networkingStore();
+  const store = networkingStore(getDb());
   const eventId = fixture.event.id;
   const [a, b, c] = fixture.participants.map((participant) => participant.profile.id);
   const [low, high] = [a, b].sort();
@@ -109,7 +109,7 @@ describe.runIf(dbTestsEnabled())("networking retention purge", () => {
 
     // A run out of budget only disables the event and marks the purge started.
     expect(await purgeNetworkingEvent(expired.event.id, { deadline: Date.now() - 1 })).toMatchObject({ done: false, deleted: {} });
-    const [started] = await networkingStore().all("configs", { eventId: expired.event.id });
+    const [started] = await networkingStore(getDb()).all("configs", { eventId: expired.event.id });
     expect(started.purgeStartedAt).toBeInstanceOf(Date);
     expect(started.purgedAt).toBeNull();
     expect(started.config.enabled).toBe(false);
@@ -121,15 +121,15 @@ describe.runIf(dbTestsEnabled())("networking retention purge", () => {
     const after = await networkingCounts(expired.event.id, ids(expired));
     expect(after).toEqual(Object.fromEntries(Object.keys(before).map((name) => [name,
       name === "networking_configs" ? 1 : name === "networking_audit" ? 1 : 0])));
-    const [kept] = await networkingStore().all("audit", { eventId: expired.event.id });
+    const [kept] = await networkingStore(getDb()).all("audit", { eventId: expired.event.id });
     expect(kept.action).toBe("POST_EVENT_REPORT");
-    const [config] = await networkingStore().all("configs", { eventId: expired.event.id });
+    const [config] = await networkingStore(getDb()).all("configs", { eventId: expired.event.id });
     expect(config.purgedAt).toBeInstanceOf(Date);
     expect(config.purgeStartedAt).toEqual(started.purgeStartedAt);
     // Networking email logs go; the event's other email logs and its registrations stay.
     expect(await networkingEmailLogs(expired.event.id)).toBe(0);
     expect(await eventEmailLogs(expired.event.id)).toBe(1);
-    expect(await networkingStore().all("registrations", { eventId: expired.event.id })).toHaveLength(3);
+    expect(await networkingStore(getDb()).all("registrations", { eventId: expired.event.id })).toHaveLength(3);
     // The photo is queued for durable deletion with its profile.
     const queued = (await getDb().execute(sql`
       SELECT payload FROM outbox_events WHERE type = 'storage.delete' AND event_id = ${expired.event.id}`)).rows as Array<{ payload: Record<string, string> }>;

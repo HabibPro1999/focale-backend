@@ -97,7 +97,7 @@ describe.runIf(dbTestsEnabled())("participant stream through the realtime pump",
     // One notice per participant inserted without a signal (no outbox row):
     // each stream's first catch-up sends it, which shows that catch-up is over,
     // so from then on only a signal can deliver a new row before the resync.
-    const store = networkingStore();
+    const store = networkingStore(getDb());
     const baseline: string[] = [];
     for (const participant of fixture.participants.slice(0, 2)) {
       const notice = await store.insert("notifications", {
@@ -129,7 +129,7 @@ describe.runIf(dbTestsEnabled())("participant stream through the realtime pump",
         body: "Someone sent you a message.",
         href: `/e/${fixture.event.slug}/notifications`,
         data: {},
-      });
+      }, getDb());
       const [signal] = await signalRow(row.id);
       expect(signal!.payload).toEqual({
         eventId: fixture.event.id,

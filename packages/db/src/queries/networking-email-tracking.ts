@@ -234,8 +234,8 @@ export async function finishNetworkingEmailLog(
  * its log.
  */
 export async function settleOrphanedNetworkingEmailLogs(
-  eventId?: string,
-  db: DbExecutor = getDb(),
+  eventId: string | undefined,
+  db: DbExecutor,
 ): Promise<number> {
   const result = rowsOf<{ id: string }>(await db.execute(sql`
     UPDATE email_logs l SET

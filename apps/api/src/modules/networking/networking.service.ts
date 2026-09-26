@@ -9,6 +9,7 @@ import {
 } from "@nestjs/common";
 import { randomBytes, randomInt } from "node:crypto";
 import {
+  getDb,
   findClientModuleState,
   listNetworkingDiscovery,
   networkingAreaAccess,
@@ -92,7 +93,7 @@ export type NetworkingDiscoveryQuery = {
 };
 @Injectable()
 export class NetworkingService {
-  async badgeProfileId(eventId: string, token: string, store = networkingStore()) {
+  async badgeProfileId(eventId: string, token: string, store = networkingStore(getDb())) {
     // Printed registration badges contain a UUID; the PWA also supports its signed, expiring badge.
     if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(token)) {
       const profile = await store.one("profiles", { eventId, registrationId: token });
@@ -105,7 +106,7 @@ export class NetworkingService {
     return readNetworkingBadge(token, eventId);
   }
   /** The event gate and window (4.6 policy), for anonymous and participant routes alike. */
-  async publicContext(slug: string, store = networkingStore()) {
+  async publicContext(slug: string, store = networkingStore(getDb())) {
     const event = await store.one("events", { slug });
     if (!event) throw notFound("Event not found");
     const client = await findClientModuleState(event.clientId);
@@ -155,7 +156,7 @@ export class NetworkingService {
   }
   /** Registration-form view (K2): available before opensAt, never throws for an unavailable event. */
   async registrationInfo(slug: string): Promise<NetworkingRegistrationInfo> {
-    const store = networkingStore();
+    const store = networkingStore(getDb());
     const event = await store.one("events", { slug });
     if (!event) throw notFound("Event not found");
     const config = NetworkingConfigSchema.parse(
@@ -195,7 +196,7 @@ export class NetworkingService {
   async eligible(
     profile: NetworkingRow<"profiles">,
     config: NetworkingConfig,
-    store = networkingStore(),
+    store = networkingStore(getDb()),
   ) {
     const registration = await store.one("registrations", { id: profile.registrationId });
     return networkingParticipantEligible({ profile, registration }, config);
@@ -212,7 +213,7 @@ export class NetworkingService {
     const { event, config } = await this.publicContext(slug);
     const token = bearer(authorization);
     if (!token) throw this.rejectBearer(slug, authorization, options.ip, "Participant session required");
-    const store = networkingStore();
+    const store = networkingStore(getDb());
     // Any key in the keyring may have hashed this token; the first candidate is the current format.
     const [currentHash, ...olderHashes] = networkingSessionHashes(token);
     const session = await store.sessionByTokenHashes(event.id, [currentHash!, ...olderHashes]);
@@ -262,7 +263,7 @@ export class NetworkingService {
     const token = bearer(authorization);
     if (!token) throw expired("Participant session required");
     networkingIdentityCache.forgetToken(token);
-    const store = networkingStore();
+    const store = networkingStore(getDb());
     const event = await store.one("events", { slug });
     if (event) await store.revokeSessionByTokenHashes(event.id, networkingSessionHashes(token));
     return { loggedOut: true };
@@ -440,7 +441,7 @@ export class NetworkingService {
   async target(
     ctx: NetworkingContext,
     id: string,
-    store = networkingStore(),
+    store = networkingStore(getDb()),
     visible = false,
   ) {
     const snapshot = await this.counterpart(ctx, id, store);
@@ -453,7 +454,7 @@ export class NetworkingService {
    * still lets the viewer see it (the block edge itself is ignored: it is why
    * the row is listed, and unblocking removes it), else null.
    */
-  async blockedTarget(ctx: NetworkingContext, id: string, store = networkingStore()) {
+  async blockedTarget(ctx: NetworkingContext, id: string, store = networkingStore(getDb())) {
     const snapshot = await this.counterpart(ctx, id, store);
     return snapshot.target && networkingCounterpartVisible(snapshot, ctx.config, "blocklist") ? snapshot.target : null;
   }
@@ -462,7 +463,7 @@ export class NetworkingService {
    * in `profile` mode, and the viewer's own current row, in one statement. As
    * in target(), the viewer must still be eligible once any counterpart exists.
    */
-  async visibleCounterparts(ctx: NetworkingContext, ids: readonly string[], store = networkingStore()) {
+  async visibleCounterparts(ctx: NetworkingContext, ids: readonly string[], store = networkingStore(getDb())) {
     const found = await store.profileCounterparts({
       eventId: ctx.event.id,
       viewerId: ctx.profile.id,
@@ -514,9 +515,9 @@ export class NetworkingService {
   async representatives(ctx: NetworkingContext, profileId: string, page = 1) {
     if (!ctx.config.swipeEnabled && !ctx.config.searchEnabled) throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Discovery is disabled" });
     const profile = await this.target(ctx, profileId);
-    const stand = profile.standTableId ? await networkingStore().one("tables", { eventId: ctx.event.id, id: profile.standTableId, kind: "STAND" }) : null;
+    const stand = profile.standTableId ? await networkingStore(getDb()).one("tables", { eventId: ctx.event.id, id: profile.standTableId, kind: "STAND" }) : null;
     if (!stand) return { items: [], total: 0, exhibitor: null };
-    const space = stand.spaceId ? await networkingStore().one("spaces", { eventId: ctx.event.id, id: stand.spaceId }) : null;
+    const space = stand.spaceId ? await networkingStore(getDb()).one("spaces", { eventId: ctx.event.id, id: stand.spaceId }) : null;
     if (!stand.active || space?.active === false) return { items: [], total: 0, exhibitor: null };
     const result = await listNetworkingDiscovery(ctx.event.id, ctx.profile.id, ctx.config.eligiblePaymentStatuses,
       { standTableId: stand.id, page, limit: 30 });
@@ -525,7 +526,7 @@ export class NetworkingService {
   }
 
   async personalAnalytics(ctx: NetworkingContext): Promise<NetworkingPersonalAnalytics> {
-    const store = networkingStore();
+    const store = networkingStore(getDb());
     ctx = await this.currentParticipant(ctx, store);
     const profiles = await store.personalAnalyticsProfiles(ctx.event.clientId, networkingIdentityEmail(ctx.profile.email));
     const events = new Map(profiles.map(profile => [profile.eventId, profile]));

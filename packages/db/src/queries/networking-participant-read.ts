@@ -229,7 +229,7 @@ export async function markNetworkingMessageNotificationsRead(
   profileId: string,
   connectionId: string,
   readAt: Date,
-  db: DbExecutor = getDb(),
+  db: DbExecutor,
 ) {
   await db
     .update(notifications)

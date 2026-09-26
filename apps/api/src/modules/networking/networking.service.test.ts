@@ -328,7 +328,7 @@ describe("networking transactions ride one connection", () => {
     const ctx = await service.participant("demo", bearer, { allowConsentPending: true });
     db.reads = [];
     db.modules.mockClear();
-    await service.currentParticipant(ctx, (await import("@app/db")).networkingStore(), { allowConsentPending: true });
+    await service.currentParticipant(ctx, (await import("@app/db")).networkingStore(db.tx as never), { allowConsentPending: true });
     expect(db.reads).not.toContain("events");
     expect(db.modules).toHaveBeenCalledExactlyOnceWith("client", db.tx);
   });

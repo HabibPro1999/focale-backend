@@ -31,7 +31,7 @@ export async function getNetworkingConfig(
 }
 export async function enqueueNetworkingDelivery(
   input: typeof networkingDeliveries.$inferInsert,
-  db: DbExecutor = getDb(),
+  db: DbExecutor,
 ) {
   const [row] = await db
     .insert(networkingDeliveries)
@@ -70,7 +70,7 @@ function notificationDelivery(id: string, input: NetworkingNotificationInsert, d
  */
 export async function createNetworkingNotification(
   input: NetworkingNotificationInsert,
-  db?: DbExecutor,
+  db: DbExecutor,
 ): Promise<NetworkingNotificationRow>;
 export async function createNetworkingNotification(
   input: NetworkingNotificationInsert,
@@ -79,7 +79,7 @@ export async function createNetworkingNotification(
 ): Promise<NetworkingNotificationRow | null>;
 export async function createNetworkingNotification(
   input: NetworkingNotificationInsert,
-  db: DbExecutor = getDb(),
+  db: DbExecutor,
   options: { dedupeKey?: string } = {},
 ): Promise<NetworkingNotificationRow | null> {
   const id = input.id ?? newId();
@@ -98,12 +98,8 @@ export async function createNetworkingNotification(
 }
 export async function syncNetworkingRegistration(
   registrationId: string,
-  db?: DbExecutor,
+  db: DbExecutor,
 ): Promise<{ created: number; updated: number }> {
-  if (!db)
-    return withSerializableTxn((tx) =>
-      syncNetworkingRegistration(registrationId, tx),
-    );
   const [registration] = await db
     .select()
     .from(registrations)
@@ -231,7 +227,7 @@ export async function syncNetworkingEvent(eventId: string) {
   let created = 0,
     updated = 0;
   for (const row of rows) {
-    const result = await syncNetworkingRegistration(row.id);
+    const result = await withSerializableTxn((tx) => syncNetworkingRegistration(row.id, tx));
     created += result.created;
     updated += result.updated;
   }
@@ -250,7 +246,7 @@ export async function getNetworkingProfilePhotoByRegistration(
 }
 export async function revokeNetworkingSessions(
   profileId: string,
-  db: DbExecutor = getDb(),
+  db: DbExecutor,
 ) {
   await db
     .update(networkingSessions)
@@ -274,7 +270,7 @@ export async function revokeNetworkingSessions(
 export async function cancelNetworkingParticipantMeetings(
   profileId: string,
   eventId: string,
-  db: DbExecutor = getDb(),
+  db: DbExecutor,
   options: { counterpartId?: string; slug?: string } = {},
 ) {
   const m = networkingMeetings;

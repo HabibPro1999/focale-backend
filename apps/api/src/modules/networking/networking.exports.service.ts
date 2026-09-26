@@ -2,6 +2,7 @@ import { BadRequestException, Injectable } from "@nestjs/common";
 import type ExcelJS from "exceljs";
 import type { Writable } from "node:stream";
 import {
+  getDb,
   networkingMatchExportPages,
   networkingMeetingExportPages,
   networkingParticipantExportPages,
@@ -99,7 +100,7 @@ export class NetworkingExportsService {
     );
   }
   async personal(ctx: NetworkingContext) {
-    const store = networkingStore();
+    const store = networkingStore(getDb());
     const [interests, messages, reports, blocks, notifications] =
       await Promise.all([
         store.all("interests", {

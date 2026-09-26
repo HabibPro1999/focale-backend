@@ -74,7 +74,7 @@ describe.runIf(enabled)(
         enabledModules: ["networking", "registrations", "emails"],
       });
       for (const id of [ids.event, ids.other]) {
-        const row = await networkingStore().insert("events", {
+        const row = await networkingStore(getDb()).insert("events", {
           id,
           clientId: ids.client,
           name: "Networking fixture",
@@ -84,7 +84,7 @@ describe.runIf(enabled)(
           endDate: new Date("2031-04-06T00:00Z"),
         });
         if (id === ids.event) event = row;
-        await networkingStore().insert("configs", { eventId: id, config });
+        await networkingStore(getDb()).insert("configs", { eventId: id, config });
       }
       await db.insert(forms).values({
         id: ids.form,
@@ -109,17 +109,17 @@ describe.runIf(enabled)(
         });
       await syncNetworkingEvent(ids.event);
       const profiles = (
-        await networkingStore().all("profiles", { eventId: ids.event })
+        await networkingStore(getDb()).all("profiles", { eventId: ids.event })
       ).sort((a, b) => a.firstName.localeCompare(b.firstName));
       for (const profile of profiles) {
         profile.availabilitySet = true;
-        await networkingStore().update(
+        await networkingStore(getDb()).update(
           "profiles",
           { eventId: ids.event, id: profile.id },
           { availabilitySet: true },
         );
         for (let minute = 9 * 60; minute < 17 * 60; minute += 30)
-          await networkingStore().insert("availability", {
+          await networkingStore(getDb()).insert("availability", {
             eventId: ids.event,
             profileId: profile.id,
             startsAt: new Date(
@@ -128,7 +128,7 @@ describe.runIf(enabled)(
           });
         const token =
           randomUUID().replaceAll("-", "") + randomUUID().replaceAll("-", "");
-        const session = await networkingStore().insert("sessions", {
+        const session = await networkingStore(getDb()).insert("sessions", {
           eventId: ids.event,
           profileId: profile.id,
           tokenHash: networkingHash(token),
@@ -136,7 +136,7 @@ describe.runIf(enabled)(
         });
         participants.push({ event, config, profile, session });
       }
-      await networkingStore().insert("tables", {
+      await networkingStore(getDb()).insert("tables", {
         eventId: ids.event,
         name: "Whole table",
         capacity: 2,
@@ -144,7 +144,7 @@ describe.runIf(enabled)(
     }, 30000);
     it("creates one mutual connection under concurrent likes", async () => {
       await pair(0, 1);
-      const matches = await networkingStore().all("connections", {
+      const matches = await networkingStore(getDb()).all("connections", {
         eventId: ids.event,
       });
       expect(matches).toHaveLength(1);
@@ -155,7 +155,7 @@ describe.runIf(enabled)(
         "LIKE",
       );
       expect(
-        await networkingStore().all("audit", {
+        await networkingStore(getDb()).all("audit", {
           eventId: ids.event,
           action: "SWIPE_LIKE",
         }),
@@ -164,7 +164,7 @@ describe.runIf(enabled)(
     it("does not grant sessions across events or to refunded registrants", async () => {
       const p = participants[7];
       const token = randomBytes(48).toString("base64url");
-      await networkingStore().insert("sessions", {
+      await networkingStore(getDb()).insert("sessions", {
         eventId: ids.event,
         profileId: p.profile.id,
         tokenHash: networkingHash(token),
@@ -176,7 +176,7 @@ describe.runIf(enabled)(
       await expect(
         service.participant(ids.other, `Bearer ${token}`),
       ).rejects.toThrow("expired");
-      await networkingStore().update(
+      await networkingStore(getDb()).update(
         "registrations",
         { id: p.profile.registrationId, eventId: ids.event },
         { paymentStatus: "REFUNDED" },
@@ -190,7 +190,7 @@ describe.runIf(enabled)(
         ids.event,
         participants[0].profile.email,
       );
-      const delivery = await networkingStore().one("deliveries", {
+      const delivery = await networkingStore(getDb()).one("deliveries", {
         dedupeKey: `otp:${request.challengeId}`,
       });
       expect(delivery).not.toBeNull();
@@ -217,7 +217,7 @@ describe.runIf(enabled)(
         ),
       ).rejects.toThrow("Invalid");
       expect(
-        (await networkingStore().one("challenges", { id: request.challengeId }))
+        (await networkingStore(getDb()).one("challenges", { id: request.challengeId }))
           ?.attempts,
       ).toBe(1);
       expect(
@@ -230,7 +230,7 @@ describe.runIf(enabled)(
     it("requires authenticator verification, prevents replay and consumes recovery codes once", async () => {
       const profile = participants[6];
       const token = randomBytes(48).toString("base64url");
-      const session = await networkingStore().insert("sessions", {
+      const session = await networkingStore(getDb()).insert("sessions", {
         eventId: ids.event,
         profileId: profile.profile.id,
         tokenHash: networkingHash(token),
@@ -245,7 +245,7 @@ describe.runIf(enabled)(
         "CONFIRM",
       );
       expect(result.recoveryCodes).toHaveLength(10);
-      await networkingStore().update(
+      await networkingStore(getDb()).update(
         "sessions",
         { id: session.id },
         { secondFactorVerifiedAt: null },
@@ -271,7 +271,7 @@ describe.runIf(enabled)(
       ).rejects.toThrow("reused");
       expect(
         (
-          await networkingStore().one("secondFactors", {
+          await networkingStore(getDb()).one("secondFactors", {
             profileId: profile.profile.id,
           })
         )?.recoveryHashes,
@@ -287,10 +287,10 @@ describe.runIf(enabled)(
       const winner = results.find(result => result.status === "fulfilled")! as PromiseFulfilledResult<Awaited<ReturnType<typeof meetings.create>>>;
       const recipient = participants.find(person => person.profile.id === winner.value.recipientId)!;
       await meetings.respond(recipient, winner.value.id, { action: "ACCEPT" });
-      expect(await networkingStore().all("meetings", { eventId: ids.event, status: "CONFIRMED" })).toHaveLength(1);
+      expect(await networkingStore(getDb()).all("meetings", { eventId: ids.event, status: "CONFIRMED" })).toHaveLength(1);
     });
     it("prevents participant double booking even when multiple tables exist", async () => {
-      await networkingStore().insert("tables", {
+      await networkingStore(getDb()).insert("tables", {
         eventId: ids.event,
         name: "Second table",
         capacity: 2,
@@ -335,14 +335,14 @@ describe.runIf(enabled)(
       await expect(
         meetings.respond(participants[4], original.id, { action: "ACCEPT" }),
       ).rejects.toThrow("already has a meeting");
-      const saved = await networkingStore().one("meetings", {
+      const saved = await networkingStore(getDb()).one("meetings", {
         id: original.id,
         eventId: ids.event,
       });
       expect(saved?.startsAt.toISOString()).toBe(slot("11:00"));
       expect(saved?.status).toBe("CONFIRMED");
       expect(
-        await networkingStore().all("reservations", { meetingId: original.id }),
+        await networkingStore(getDb()).all("reservations", { meetingId: original.id }),
       ).toHaveLength(18);
     });
     it("deduplicates messages and confidential blocking revokes chat and shared bookings", async () => {
@@ -376,7 +376,7 @@ describe.runIf(enabled)(
       ).toBe(false);
       expect(
         (
-          await networkingStore().all("meetings", {
+          await networkingStore(getDb()).all("meetings", {
             eventId: ids.event,
             requesterId: participants[0].profile.id,
             recipientId: participants[1].profile.id,
@@ -386,7 +386,7 @@ describe.runIf(enabled)(
     });
     it("requires explicit availability and preserves booked preferences through edits and cancellation", async () => {
       const ctx = participants[5];
-      await networkingStore().update(
+      await networkingStore(getDb()).update(
         "profiles",
         { id: ctx.profile.id, eventId: ids.event },
         { availabilitySet: false },
@@ -402,16 +402,16 @@ describe.runIf(enabled)(
           ctx,
           ctx.profile.id,
           new Date(slot("13:00")),
-          networkingStore(),
+          networkingStore(getDb()),
         ),
       ).rejects.toThrow("unavailable");
-      await networkingStore().update(
+      await networkingStore(getDb()).update(
         "profiles",
         { id: ctx.profile.id, eventId: ids.event },
         { availabilitySet: true },
       );
       const original = (
-        await networkingStore().all("meetings", {
+        await networkingStore(getDb()).all("meetings", {
           eventId: ids.event,
           requesterId: participants[4].profile.id,
           recipientId: ctx.profile.id,
@@ -427,13 +427,13 @@ describe.runIf(enabled)(
       );
     });
     it("routes an exhibitor appointment to the assigned stand even when generic tables are available", async () => {
-      const stand = await networkingStore().insert("tables", {
+      const stand = await networkingStore(getDb()).insert("tables", {
         eventId: ids.event,
         name: "Z exhibition stand",
         kind: "STAND",
         ownerProfileId: participants[5].profile.id,
       });
-      await networkingStore().update(
+      await networkingStore(getDb()).update(
         "profiles",
         { eventId: ids.event, id: participants[5].profile.id },
         { standTableId: stand.id },
@@ -458,7 +458,7 @@ describe.runIf(enabled)(
           name: "Historical alternate form",
           schema: { steps: [] },
         });
-      const registration = await networkingStore().insert("registrations", {
+      const registration = await networkingStore(getDb()).insert("registrations", {
         eventId: ids.event,
         formId,
         email: participants[3].profile.email,
@@ -467,7 +467,7 @@ describe.runIf(enabled)(
         formData: {},
         priceBreakdown: {},
       });
-      await networkingStore().insert("profiles", {
+      await networkingStore(getDb()).insert("profiles", {
         eventId: ids.event,
         registrationId: registration.id,
         email: participants[3].profile.email,
@@ -478,7 +478,7 @@ describe.runIf(enabled)(
         ids.event,
         participants[3].profile.email.toUpperCase(),
       );
-      const delivery = await networkingStore().one("deliveries", {
+      const delivery = await networkingStore(getDb()).one("deliveries", {
         dedupeKey: `otp:${challenge.challengeId}`,
       });
       expect(delivery?.profileId).toBe(participants[3].profile.id);
@@ -493,7 +493,7 @@ describe.runIf(enabled)(
       const connection = (await social.connections(participants[4])).items.find(
         (c) => c.profile.id === participants[5].profile.id,
       )!;
-      await networkingStore().update(
+      await networkingStore(getDb()).update(
         "configs",
         { eventId: ids.event },
         { config: { ...config, chatEnabled: false } },
@@ -506,12 +506,12 @@ describe.runIf(enabled)(
           randomUUID(),
         ),
       ).rejects.toThrow("Chat is disabled");
-      await networkingStore().update(
+      await networkingStore(getDb()).update(
         "configs",
         { eventId: ids.event },
         { config },
       );
-      await networkingStore().update(
+      await networkingStore(getDb()).update(
         "sessions",
         { id: participants[2].session.id, eventId: ids.event },
         { revokedAt: new Date() },
@@ -533,12 +533,12 @@ describe.runIf(enabled)(
         participants[4].profile.id,
         participants[5].profile.id,
       ])
-        await networkingStore().insert("availability", {
+        await networkingStore(getDb()).insert("availability", {
           eventId: ids.event,
           profileId,
           startsAt: offsetStart,
         });
-      const legacy = await networkingStore().insert("meetings", {
+      const legacy = await networkingStore(getDb()).insert("meetings", {
         eventId: ids.event,
         requesterId: participants[4].profile.id,
         recipientId: participants[5].profile.id,
@@ -558,7 +558,7 @@ describe.runIf(enabled)(
         ),
       ).rejects.toThrow("already has a meeting");
       expect(
-        await networkingStore().all("reservations", {
+        await networkingStore(getDb()).all("reservations", {
           eventId: ids.event,
           meetingId: legacy.id,
         }),
@@ -572,7 +572,7 @@ describe.runIf(enabled)(
       const timestamp = new Date("2029-01-01T10:00:00.000Z");
       const expected: string[] = [];
       for (let index = 0; index < 7; index++) {
-        const row = await networkingStore().insert("messages", {
+        const row = await networkingStore(getDb()).insert("messages", {
           eventId: ids.event,
           connectionId: connection.id,
           senderId: participants[4].profile.id,
@@ -597,12 +597,12 @@ describe.runIf(enabled)(
     });
 
     it("exports participant engagement columns and both companies for matches", async () => {
-      await networkingStore().update(
+      await networkingStore(getDb()).update(
         "profiles",
         { id: participants[4].profile.id, eventId: ids.event },
         { company: "Export Company A" },
       );
-      await networkingStore().update(
+      await networkingStore(getDb()).update(
         "profiles",
         { id: participants[5].profile.id, eventId: ids.event },
         { company: "Export Company B" },

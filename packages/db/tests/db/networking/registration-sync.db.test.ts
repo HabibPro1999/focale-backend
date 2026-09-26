@@ -1,3 +1,5 @@
+import { withLockingTxn } from "@app/db";
+import { withSerializableTxn } from "@app/db";
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NetworkingConfigSchema } from "@app/contracts";
@@ -182,7 +184,7 @@ describe.runIf(dbTestsEnabled())("db tier: networking registration sync through 
     const flaky: NetworkingRegistrationSync = async (id) => {
       calls++;
       if (calls === 1) throw new Error("networking projection unavailable");
-      return syncNetworkingRegistration(id);
+      return withSerializableTxn((tx) => syncNetworkingRegistration(id, tx));
     };
 
     expect(await step(registry({ sync: flaky }))).toEqual({ processed: 0, skipped: 0, failed: 1 });
@@ -235,7 +237,7 @@ describe.runIf(dbTestsEnabled())("db tier: networking registration sync through 
   it("never re-projects a withdrawn profile (4.4b)", async () => {
     const s = await scenario();
     const reg = s.registrations[0]!;
-    await syncNetworkingRegistration(reg.id);
+    await withSerializableTxn((tx) => syncNetworkingRegistration(reg.id, tx));
     await getDb()
       .update(networkingProfiles)
       .set({ withdrawnAt: new Date() })
@@ -250,7 +252,7 @@ describe.runIf(dbTestsEnabled())("db tier: networking registration sync through 
     const handlers = registry({ chunkSize: 2 });
     const revision = await configRevision(s.event.id);
 
-    const requested = await requestNetworkingEventSync(s.event.id);
+    const requested = await withLockingTxn((tx) => requestNetworkingEventSync(s.event.id, tx));
     expect(requested).toMatchObject({ status: "RUNNING", total: 5, processed: 0, finishedAt: null });
     const [first] = await outboxOfType(NETWORKING_EVENT_SYNC_OUTBOX_TYPE);
     expect(first!.payload).toEqual({ eventId: s.event.id, runId: requested.runId, after: null });
@@ -282,7 +284,7 @@ describe.runIf(dbTestsEnabled())("db tier: networking registration sync through 
     expect(await configRevision(s.event.id)).toBe(revision);
 
     // A second run updates the same profiles.
-    await requestNetworkingEventSync(s.event.id);
+    await withLockingTxn((tx) => requestNetworkingEventSync(s.event.id, tx));
     await drain(handlers);
     expect(await getNetworkingEventSyncState(s.event.id)).toMatchObject({ status: "COMPLETED", processed: 5, created: 0, updated: 5 });
   });
@@ -295,16 +297,16 @@ describe.runIf(dbTestsEnabled())("db tier: networking registration sync through 
         failedId = id;
         throw new Error("one registration failed");
       }
-      return syncNetworkingRegistration(id);
+      return withSerializableTxn((tx) => syncNetworkingRegistration(id, tx));
     };
 
-    const run1 = await requestNetworkingEventSync(s.event.id);
+    const run1 = await withLockingTxn((tx) => requestNetworkingEventSync(s.event.id, tx));
     expect(await step(registry({ chunkSize: 2, sync: failsOnce }))).toMatchObject({ processed: 1 });
     expect(await getNetworkingEventSyncState(s.event.id)).toMatchObject({ runId: run1.runId, processed: 2, created: 1, failed: 1 });
     const handedOff = await outboxOfType(NETWORKING_REGISTRATION_SYNC_OUTBOX_TYPE);
     expect(handedOff.map((row) => row.payload)).toEqual([{ registrationId: failedId }]);
 
-    const run2 = await requestNetworkingEventSync(s.event.id);
+    const run2 = await withLockingTxn((tx) => requestNetworkingEventSync(s.event.id, tx));
     expect(run2.runId).not.toBe(run1.runId);
     expect(run2).toMatchObject({ status: "RUNNING", total: 3, processed: 0, failed: 0 });
 
@@ -323,7 +325,7 @@ describe.runIf(dbTestsEnabled())("db tier: networking registration sync through 
   it("reports IDLE and enqueues nothing for an event without a networking config", async () => {
     const s = await scenario({ configured: false });
     expect(await getNetworkingEventSyncState(s.event.id)).toMatchObject({ status: "IDLE", runId: null });
-    expect(await requestNetworkingEventSync(s.event.id)).toMatchObject({ status: "IDLE", runId: null, total: 0 });
+    expect(await withLockingTxn((tx) => requestNetworkingEventSync(s.event.id, tx))).toMatchObject({ status: "IDLE", runId: null, total: 0 });
     expect(await outboxOfType(NETWORKING_EVENT_SYNC_OUTBOX_TYPE)).toEqual([]);
     // No config row is created for it.
     expect(await getDb().select().from(networkingConfigs).where(eq(networkingConfigs.eventId, s.event.id))).toEqual([]);
