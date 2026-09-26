@@ -3,13 +3,10 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { GUARDS_METADATA, PATH_METADATA } from "@nestjs/common/constants";
 const mocks = vi.hoisted(() => ({
   config: vi.fn(), calendarMeetings: vi.fn(), calendarRelations: vi.fn(), one: vi.fn(),
-  access: vi.fn(), gate: vi.fn(),
 }));
 vi.mock("@app/db", async original => ({ ...(await original<typeof import("@app/db")>()),
   getNetworkingConfig: mocks.config, networkingStore: () => mocks,
 }));
-vi.mock("../../core/auth/assert-event-access", () => ({ assertEventAccess: mocks.access }));
-vi.mock("../clients/module-gates", () => ({ assertClientModuleEnabled: mocks.gate }));
 import { NetworkingAdminService } from "./networking.admin.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
 import { NetworkingAdminController } from "./networking.admin.controller";
@@ -19,14 +16,13 @@ import { NetworkingCalendarDto } from "./networking.dto";
 import type { NetworkingService } from "./networking.service";
 import type { NetworkingUploadsService } from "./networking.uploads.service";
 import type { NetworkingExportsService } from "./networking.exports.service";
-import type { AuthUser } from "../../core/auth/user-cache";
+import { TENANT_SCOPE, TenantScopeGuard } from "../tenancy/tenant-scope";
 
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.config.mockResolvedValue({ timezone: "Europe/Paris" });
   mocks.calendarMeetings.mockResolvedValue([]);
   mocks.calendarRelations.mockResolvedValue({ profiles: [], tables: [], spaces: [] });
-  mocks.access.mockResolvedValue({ clientId: "client" });
 });
 it.each([
   ["2026-03-29", "Europe/Paris", "2026-03-28T23:00:00.000Z", "2026-03-29T22:00:00.000Z", 23],
@@ -87,19 +83,13 @@ it("rejects invalid input before any database calls and does not accept a search
 it("keeps organizer auth and event/module isolation, with the static route before meeting IDs", async () => {
   const calendar = vi.fn().mockResolvedValue({ date: "2026-01-01", timezone: "UTC", items: [] });
   const controller = new NetworkingAdminController({} as NetworkingUploadsService, { calendar } as unknown as NetworkingAdminService, {} as NetworkingExportsService);
-  const user = { id: "organizer" } as AuthUser;
   const query = { date: "2026-01-01" };
   expect(Reflect.getMetadata(GUARDS_METADATA, NetworkingAdminController)).toContain(AuthGuard);
   expect(Reflect.getMetadata(PATH_METADATA, controller.calendar)).toBe("meetings/calendar");
   const methods = Object.getOwnPropertyNames(NetworkingAdminController.prototype);
   expect(methods.indexOf("calendar")).toBeLessThan(methods.indexOf("updateMeeting"));
-  expect(await controller.calendar(user, "event", query)).toEqual({ date: query.date, timezone: "UTC", items: [] });
-  expect(mocks.access).toHaveBeenCalledWith(user, "event");
-  expect(mocks.gate).toHaveBeenCalledWith("client", "networking");
+  expect(await controller.calendar("event", query)).toEqual({ date: query.date, timezone: "UTC", items: [] });
+  expect(Reflect.getMetadata(GUARDS_METADATA, controller.calendar)).toContain(TenantScopeGuard);
+  expect(Reflect.getMetadata(TENANT_SCOPE, controller.calendar)).toMatchObject({ kind: "event", modules: ["networking"], write: false });
   expect(calendar).toHaveBeenCalledWith("event", query);
-  mocks.access.mockRejectedValueOnce(new Error("event denied"));
-  await expect(controller.calendar(user, "other-event", query)).rejects.toThrow("event denied");
-  mocks.gate.mockRejectedValueOnce(new Error("module disabled"));
-  await expect(controller.calendar(user, "event", query)).rejects.toThrow("module disabled");
-  expect(calendar).toHaveBeenCalledOnce();
 });

@@ -97,6 +97,11 @@ import { FormsController } from "../forms/forms.controller";
 import { FormsService } from "../forms/forms.service";
 import { ClientsController } from "../clients/clients.controller";
 import { ClientsService } from "../clients/clients.service";
+import { NetworkingAdminController } from "../networking/networking.admin.controller";
+import { NetworkingRecommendationAdminController } from "../networking/networking-recommendations.controller";
+import { NetworkingAdminService } from "../networking/networking.admin.service";
+import { NetworkingUploadsService } from "../networking/networking.uploads.service";
+import { NetworkingExportsService } from "../networking/networking.exports.service";
 import { TENANT_SCOPE, TenantScopeGuard, type TenantScopeKind, type TenantScopeRule } from "./tenant-scope";
 
 // ----------------------------------------------------------------------------
@@ -129,6 +134,36 @@ const frm = (write = false, module: ModuleId[] = []): Row => ({
 const ABS = ev(["abstracts"]);
 
 const EXPECTED: Record<string, Row> = {
+  // Networking adopts the shared guard refusal order (5.4/5.5).
+  "NetworkingAdminController.config": ev(["networking"]),
+  "NetworkingAdminController.updateConfig": ev(["networking"], true),
+  "NetworkingAdminController.uploadLogo": ev(["networking"], true),
+  "NetworkingAdminController.sync": ev(["networking"], true),
+  "NetworkingAdminController.syncState": ev(["networking"]),
+  "NetworkingAdminController.profiles": ev(["networking"]),
+  "NetworkingAdminController.updateProfile": ev(["networking"], true),
+  "NetworkingAdminController.spaces": ev(["networking"]),
+  "NetworkingAdminController.createSpace": ev(["networking"], true),
+  "NetworkingAdminController.updateSpace": ev(["networking"], true),
+  "NetworkingAdminController.removeSpace": ev(["networking"], true),
+  "NetworkingAdminController.tables": ev(["networking"]),
+  "NetworkingAdminController.table": ev(["networking"], true),
+  "NetworkingAdminController.updateTable": ev(["networking"], true),
+  "NetworkingAdminController.removeTable": ev(["networking"], true),
+  "NetworkingAdminController.meetings": ev(["networking"]),
+  "NetworkingAdminController.calendar": ev(["networking"]),
+  "NetworkingAdminController.updateMeeting": ev(["networking"], true),
+  "NetworkingAdminController.reports": ev(["networking"]),
+  "NetworkingAdminController.moderate": ev(["networking"], true),
+  "NetworkingAdminController.audit": ev(["networking"]),
+  "NetworkingAdminController.verifyBadge": ev(["networking"]),
+  "NetworkingAdminController.regeneratePostEventReport": ev(["networking"], true),
+  "NetworkingAdminController.postEventReport": ev(["networking"]),
+  "NetworkingAdminController.analytics": ev(["networking"]),
+  "NetworkingAdminController.export": ev(["networking"]),
+  "NetworkingRecommendationAdminController.status": ev(["networking"]),
+  "NetworkingRecommendationAdminController.reindex": ev(["networking"], true),
+
   // abstracts.controller.ts resolveEvent: 404 → 403 → abstracts module; no writable check.
   "AbstractsController.exportAbstracts": ABS,
   "AbstractsController.getConfig": ABS,
@@ -282,6 +317,8 @@ const NOT_FOUND: Record<TenantScopeKind, { code: string; message: string }> = {
 };
 
 const CONTROLLERS: Type[] = [
+  NetworkingAdminController,
+  NetworkingRecommendationAdminController,
   AbstractsController,
   EmailController,
   RegistrationsController,
@@ -316,6 +353,9 @@ function serviceMock(name: string): unknown {
   );
 }
 const SERVICES: Type[] = [
+  NetworkingAdminService,
+  NetworkingUploadsService,
+  NetworkingExportsService,
   AbstractsConfigService,
   AbstractsAdminService,
   AbstractsCommitteeService,
@@ -400,7 +440,7 @@ function routes(): RouteCase[] {
 const ALL_ROUTES = routes();
 const ROUTES = ALL_ROUTES.filter((r) => r.rule !== undefined);
 
-const ALL_MODULES: ModuleId[] = ["abstracts", "emails", "registrations", "pricing", "sponsorships", "certificates"];
+const ALL_MODULES: ModuleId[] = ["networking", "abstracts", "emails", "registrations", "pricing", "sponsorships", "certificates"];
 type FormType = "REGISTRATION" | "SPONSOR";
 const TYPE_MODULE: Record<FormType, ModuleId> = { SPONSOR: "sponsorships", REGISTRATION: "registrations" };
 
@@ -483,7 +523,7 @@ async function runGuard(route: RouteCase, who: AuthUser) {
 describe("tenant scope route matrix (5.4)", () => {
   it("covers every route of the converted controllers: guarded, checked in the handler, or unscoped", () => {
     expect(ROUTES.map((r) => r.name).sort()).toEqual(Object.keys(EXPECTED).sort());
-    expect(ROUTES).toHaveLength(101); // 76 (5.4) + 25 (5.4b)
+    expect(ROUTES).toHaveLength(129); // 76 (5.4) + 25 (5.4b) + 28 networking
     const unguarded = ALL_ROUTES.filter((r) => r.rule === undefined);
     expect(unguarded.map((r) => r.name).sort()).toEqual([...IN_HANDLER, ...UNSCOPED].sort());
     for (const route of unguarded) {

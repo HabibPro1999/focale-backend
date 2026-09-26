@@ -5821,6 +5821,971 @@
       ],
       "type": "object"
     },
+    "NetworkingAdminAnalyticsResponseSchema": {
+      "properties": {
+        "emailSent": {
+          "type": "number"
+        },
+        "emailDelivered": {
+          "type": "number"
+        },
+        "emailOpened": {
+          "type": "number"
+        },
+        "emailClicked": {
+          "type": "number"
+        },
+        "emailFailed": {
+          "type": "number"
+        },
+        "profileViews": {
+          "type": "number"
+        },
+        "activationRate": {
+          "type": "number"
+        },
+        "conversations": {
+          "type": "number"
+        },
+        "responseRate": {
+          "type": "number"
+        },
+        "meetingConversionRate": {
+          "type": "number"
+        },
+        "profiles": {
+          "type": "number"
+        },
+        "activeProfiles": {
+          "type": "number"
+        },
+        "visibleProfiles": {
+          "type": "number"
+        },
+        "likes": {
+          "type": "number"
+        },
+        "passes": {
+          "type": "number"
+        },
+        "matches": {
+          "type": "number"
+        },
+        "matchRate": {
+          "type": "number"
+        },
+        "messages": {
+          "type": "number"
+        },
+        "meetings": {
+          "type": "number"
+        },
+        "confirmedMeetings": {
+          "type": "number"
+        },
+        "completedMeetings": {
+          "type": "number"
+        },
+        "cancelledMeetings": {
+          "type": "number"
+        },
+        "noShowMeetings": {
+          "type": "number"
+        },
+        "pendingMeetings": {
+          "type": "number"
+        },
+        "tableOccupancyRate": {
+          "type": "number"
+        },
+        "reports": {
+          "type": "number"
+        },
+        "hourlyActivity": {
+          "items": {
+            "properties": {
+              "hour": {
+                "type": "string"
+              },
+              "activity": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "hour",
+              "activity"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "timeSeries": {
+          "items": {
+            "properties": {
+              "date": {
+                "type": "string"
+              },
+              "bookingRequests": {
+                "type": "number"
+              },
+              "matches": {
+                "type": "number"
+              },
+              "messages": {
+                "type": "number"
+              },
+              "meetings": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "date",
+              "matches",
+              "messages",
+              "meetings"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "sectors": {
+          "items": {
+            "properties": {
+              "sector": {
+                "type": "string"
+              },
+              "participants": {
+                "type": "number"
+              },
+              "matches": {
+                "type": "number"
+              },
+              "meetings": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "sector",
+              "participants",
+              "matches",
+              "meetings"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "engagement": {
+          "items": {
+            "properties": {
+              "profileId": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "matches": {
+                "type": "number"
+              },
+              "messages": {
+                "type": "number"
+              },
+              "meetings": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "profileId",
+              "name",
+              "matches",
+              "messages",
+              "meetings"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "engagementTotal": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "profileViews",
+        "activationRate",
+        "conversations",
+        "responseRate",
+        "meetingConversionRate",
+        "profiles",
+        "activeProfiles",
+        "visibleProfiles",
+        "likes",
+        "passes",
+        "matches",
+        "matchRate",
+        "messages",
+        "meetings",
+        "confirmedMeetings",
+        "completedMeetings",
+        "cancelledMeetings",
+        "noShowMeetings",
+        "pendingMeetings",
+        "tableOccupancyRate",
+        "reports",
+        "timeSeries",
+        "sectors",
+        "engagement"
+      ],
+      "type": "object"
+    },
+    "NetworkingAdminAuditResponseSchema": {
+      "properties": {
+        "items": {
+          "items": {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "eventId": {
+                "type": "string"
+              },
+              "actorId": {
+                "type": "string"
+              },
+              "action": {
+                "type": "string"
+              },
+              "targetId": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "data": {
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "createdAt": {
+                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                "format": "date-time",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "eventId",
+              "actorId",
+              "action",
+              "targetId",
+              "data",
+              "createdAt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "total": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "items",
+        "total"
+      ],
+      "type": "object"
+    },
+    "NetworkingAdminCalendarResponseSchema": {
+      "properties": {
+        "date": {
+          "type": "string"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "createdAt": {
+                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                "format": "date-time",
+                "type": "string"
+              },
+              "updatedAt": {
+                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                "format": "date-time",
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "PENDING",
+                  "COMPLETED",
+                  "PENDING_ALLOCATION",
+                  "CONFIRMED",
+                  "DECLINED",
+                  "CANCELLED",
+                  "EXPIRED",
+                  "NO_SHOW"
+                ],
+                "type": "string"
+              },
+              "tableId": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "eventId": {
+                "type": "string"
+              },
+              "expiresAt": {
+                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                "format": "date-time",
+                "type": "string"
+              },
+              "startsAt": {
+                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                "format": "date-time",
+                "type": "string"
+              },
+              "requesterId": {
+                "type": "string"
+              },
+              "recipientId": {
+                "type": "string"
+              },
+              "endsAt": {
+                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                "format": "date-time",
+                "type": "string"
+              },
+              "cancellationNote": {
+                "type": "string"
+              },
+              "proposedStartsAt": {
+                "anyOf": [
+                  {
+                    "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "proposalBy": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "revision": {
+                "type": "number"
+              },
+              "requesterCheckedInAt": {
+                "anyOf": [
+                  {
+                    "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "recipientCheckedInAt": {
+                "anyOf": [
+                  {
+                    "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "requester": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/NetworkingAdminUpdateProfileResponseSchema"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "recipient": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/NetworkingAdminUpdateProfileResponseSchema"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "table": {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "active": {
+                        "type": "boolean"
+                      },
+                      "createdAt": {
+                        "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      "updatedAt": {
+                        "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      "location": {
+                        "type": "string"
+                      },
+                      "eventId": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "enum": [
+                          "TABLE",
+                          "STAND"
+                        ],
+                        "type": "string"
+                      },
+                      "capacity": {
+                        "type": "number"
+                      },
+                      "spaceId": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "ownerProfileId": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "space": {
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/NetworkingAdminCreateSpaceResponseSchema"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "representativeIds": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "representatives": {
+                        "items": {
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "firstName": {
+                              "type": "string"
+                            },
+                            "lastName": {
+                              "type": "string"
+                            },
+                            "company": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "firstName",
+                            "lastName",
+                            "company"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "name",
+                      "active",
+                      "createdAt",
+                      "updatedAt",
+                      "location",
+                      "eventId",
+                      "kind",
+                      "capacity",
+                      "spaceId",
+                      "ownerProfileId",
+                      "space",
+                      "representativeIds",
+                      "representatives"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "message",
+              "id",
+              "createdAt",
+              "updatedAt",
+              "status",
+              "tableId",
+              "eventId",
+              "expiresAt",
+              "startsAt",
+              "requesterId",
+              "recipientId",
+              "endsAt",
+              "cancellationNote",
+              "proposedStartsAt",
+              "proposalBy",
+              "revision",
+              "requesterCheckedInAt",
+              "recipientCheckedInAt",
+              "requester",
+              "recipient",
+              "table"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "date",
+        "timezone",
+        "items"
+      ],
+      "type": "object"
+    },
+    "NetworkingAdminConfigResponseSchema": {
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "requireSecondFactor": {
+          "type": "boolean"
+        },
+        "approvalMode": {
+          "enum": [
+            "MANUAL",
+            "AUTOMATIC"
+          ],
+          "type": "string"
+        },
+        "eligiblePaymentStatuses": {
+          "items": {
+            "enum": [
+              "PENDING",
+              "VERIFYING",
+              "PARTIAL",
+              "PAID",
+              "SPONSORED",
+              "WAIVED",
+              "REFUNDED"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "swipeEnabled": {
+          "type": "boolean"
+        },
+        "searchEnabled": {
+          "type": "boolean"
+        },
+        "chatEnabled": {
+          "type": "boolean"
+        },
+        "meetingsEnabled": {
+          "type": "boolean"
+        },
+        "autoAssignTables": {
+          "type": "boolean"
+        },
+        "slotDurationMinutes": {
+          "anyOf": [
+            {
+              "const": 15,
+              "type": "number"
+            },
+            {
+              "const": 30,
+              "type": "number"
+            },
+            {
+              "const": 45,
+              "type": "number"
+            },
+            {
+              "const": 60,
+              "type": "number"
+            }
+          ]
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "retentionDays": {
+          "type": "number"
+        },
+        "requestExpiryHours": {
+          "type": "number"
+        },
+        "languages": {
+          "items": {
+            "enum": [
+              "fr",
+              "en",
+              "ar"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "defaultLanguage": {
+          "enum": [
+            "fr",
+            "en",
+            "ar"
+          ],
+          "type": "string"
+        },
+        "primaryColor": {
+          "type": "string"
+        },
+        "welcomeMessage": {
+          "type": "string"
+        },
+        "participantLabel": {
+          "type": "string"
+        },
+        "tableLabel": {
+          "type": "string"
+        },
+        "helpMessage": {
+          "type": "string"
+        },
+        "uiLabels": {
+          "additionalProperties": {
+            "properties": {
+              "fr": {
+                "type": "string"
+              },
+              "en": {
+                "type": "string"
+              },
+              "ar": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "fr"
+            ],
+            "type": "object"
+          },
+          "propertyNames": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "accessInstructions": {
+          "type": "string"
+        },
+        "emailTemplates": {
+          "additionalProperties": {
+            "properties": {
+              "subject": {
+                "type": "string"
+              },
+              "body": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "subject",
+              "body"
+            ],
+            "type": "object"
+          },
+          "propertyNames": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "fieldMapping": {
+          "properties": {
+            "company": {
+              "type": "string"
+            },
+            "jobTitle": {
+              "type": "string"
+            },
+            "sector": {
+              "type": "string"
+            },
+            "bio": {
+              "type": "string"
+            },
+            "city": {
+              "type": "string"
+            },
+            "country": {
+              "type": "string"
+            },
+            "website": {
+              "type": "string"
+            },
+            "photoUrl": {
+              "type": "string"
+            },
+            "interests": {
+              "type": "string"
+            },
+            "offers": {
+              "type": "string"
+            },
+            "seeks": {
+              "type": "string"
+            },
+            "consent": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "openingHours": {
+          "items": {
+            "properties": {
+              "date": {
+                "type": "string"
+              },
+              "start": {
+                "type": "string"
+              },
+              "end": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "date",
+              "start",
+              "end"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "blackoutSlots": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "requiredAccessId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "opensAt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "closesAt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "logoUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "supportEmail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "supportPhone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "accessPlanUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "enabled",
+        "requireSecondFactor",
+        "approvalMode",
+        "eligiblePaymentStatuses",
+        "swipeEnabled",
+        "searchEnabled",
+        "chatEnabled",
+        "meetingsEnabled",
+        "autoAssignTables",
+        "slotDurationMinutes",
+        "timezone",
+        "retentionDays",
+        "requestExpiryHours",
+        "languages",
+        "defaultLanguage",
+        "primaryColor",
+        "welcomeMessage",
+        "participantLabel",
+        "tableLabel",
+        "helpMessage",
+        "uiLabels",
+        "accessInstructions",
+        "emailTemplates",
+        "fieldMapping",
+        "openingHours",
+        "blackoutSlots",
+        "revision"
+      ],
+      "type": "object"
+    },
+    "NetworkingAdminCreateSpaceResponseSchema": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "updatedAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "location": {
+          "type": "string"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "TABLE",
+            "STAND"
+          ],
+          "type": "string"
+        },
+        "capacity": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "active",
+        "createdAt",
+        "updatedAt",
+        "location",
+        "eventId",
+        "kind",
+        "capacity"
+      ],
+      "type": "object"
+    },
     "NetworkingAdminMeetingUpdateSchema": {
       "additionalProperties": false,
       "properties": {
@@ -5841,6 +6806,144 @@
       },
       "required": [
         "action"
+      ],
+      "type": "object"
+    },
+    "NetworkingAdminMeetingsResponseSchema": {
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/NetworkingAdminUpdateMeetingResponseSchema"
+          },
+          "type": "array"
+        },
+        "total": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "items",
+        "total"
+      ],
+      "type": "object"
+    },
+    "NetworkingAdminModerateResponseSchema": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "createdAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "updatedAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "OPEN",
+            "RESOLVED",
+            "DISMISSED"
+          ],
+          "type": "string"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "profileId": {
+          "type": "string"
+        },
+        "reporterId": {
+          "type": "string"
+        },
+        "messageId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "resolvedBy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resolvedAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "createdAt",
+        "updatedAt",
+        "status",
+        "eventId",
+        "note",
+        "profileId",
+        "reporterId",
+        "messageId",
+        "reason",
+        "resolvedBy",
+        "resolvedAt"
+      ],
+      "type": "object"
+    },
+    "NetworkingAdminPostEventReportResponseSchema": {
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "url": {
+          "type": "string"
+        },
+        "generatedAt": {
+          "type": "string"
+        },
+        "summary": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "propertyNames": {
+            "type": "string"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "available"
       ],
       "type": "object"
     },
@@ -5955,6 +7058,1330 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "NetworkingAdminProfilesResponseSchema": {
+      "properties": {
+        "items": {
+          "items": {
+            "properties": {
+              "meetingsEnabled": {
+                "type": "boolean"
+              },
+              "company": {
+                "type": "string"
+              },
+              "jobTitle": {
+                "type": "string"
+              },
+              "sector": {
+                "type": "string"
+              },
+              "bio": {
+                "type": "string"
+              },
+              "city": {
+                "type": "string"
+              },
+              "country": {
+                "type": "string"
+              },
+              "website": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "photoUrl": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "interests": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "offers": {
+                "type": "string"
+              },
+              "seeks": {
+                "type": "string"
+              },
+              "consent": {
+                "type": "boolean"
+              },
+              "id": {
+                "type": "string"
+              },
+              "createdAt": {
+                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                "format": "date-time",
+                "type": "string"
+              },
+              "updatedAt": {
+                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                "format": "date-time",
+                "type": "string"
+              },
+              "eventId": {
+                "type": "string"
+              },
+              "firstName": {
+                "type": "string"
+              },
+              "lastName": {
+                "type": "string"
+              },
+              "visible": {
+                "type": "boolean"
+              },
+              "lastActiveAt": {
+                "anyOf": [
+                  {
+                    "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "erasedAt": {
+                "anyOf": [
+                  {
+                    "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "featured": {
+                "type": "boolean"
+              },
+              "standTableId": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "email": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "PENDING",
+                  "ACTIVE",
+                  "SUSPENDED",
+                  "EXCLUDED"
+                ],
+                "type": "string"
+              },
+              "registrationId": {
+                "type": "string"
+              },
+              "emailPreference": {
+                "enum": [
+                  "IMMEDIATE",
+                  "DAILY",
+                  "OFF"
+                ],
+                "type": "string"
+              },
+              "language": {
+                "enum": [
+                  "fr",
+                  "en",
+                  "ar"
+                ],
+                "type": "string"
+              },
+              "availabilitySet": {
+                "type": "boolean"
+              },
+              "consentAt": {
+                "anyOf": [
+                  {
+                    "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "withdrawnAt": {
+                "anyOf": [
+                  {
+                    "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "overrides": {
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "matchCount": {
+                "type": "number"
+              },
+              "meetingCount": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "meetingsEnabled",
+              "company",
+              "jobTitle",
+              "sector",
+              "bio",
+              "city",
+              "country",
+              "website",
+              "photoUrl",
+              "interests",
+              "offers",
+              "seeks",
+              "consent",
+              "id",
+              "createdAt",
+              "updatedAt",
+              "eventId",
+              "firstName",
+              "lastName",
+              "visible",
+              "lastActiveAt",
+              "erasedAt",
+              "featured",
+              "standTableId",
+              "email",
+              "status",
+              "registrationId",
+              "emailPreference",
+              "language",
+              "availabilitySet",
+              "consentAt",
+              "withdrawnAt",
+              "overrides",
+              "matchCount",
+              "meetingCount"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "total": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "items",
+        "total"
+      ],
+      "type": "object"
+    },
+    "NetworkingAdminRegeneratePostEventReportResponseSchema": {
+      "properties": {
+        "deliveryId": {
+          "type": "string"
+        },
+        "availableAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "deliveryId",
+        "availableAt",
+        "version"
+      ],
+      "type": "object"
+    },
+    "NetworkingAdminRemoveSpaceResponseSchema": {
+      "properties": {
+        "deleted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "deleted"
+      ],
+      "type": "object"
+    },
+    "NetworkingAdminRemoveTableResponseSchema": {
+      "$ref": "#/$defs/NetworkingAdminRemoveSpaceResponseSchema"
+    },
+    "NetworkingAdminReportsResponseSchema": {
+      "properties": {
+        "items": {
+          "items": {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "createdAt": {
+                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                "format": "date-time",
+                "type": "string"
+              },
+              "updatedAt": {
+                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                "format": "date-time",
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "OPEN",
+                  "RESOLVED",
+                  "DISMISSED"
+                ],
+                "type": "string"
+              },
+              "eventId": {
+                "type": "string"
+              },
+              "note": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "profileId": {
+                "type": "string"
+              },
+              "reporterId": {
+                "type": "string"
+              },
+              "messageId": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "resolvedBy": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "resolvedAt": {
+                "anyOf": [
+                  {
+                    "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "reporter": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/NetworkingAdminUpdateProfileResponseSchema"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "profile": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/NetworkingAdminUpdateProfileResponseSchema"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "message": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/NetworkingPublicMessageResponseSchema"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "createdAt",
+              "updatedAt",
+              "status",
+              "eventId",
+              "note",
+              "profileId",
+              "reporterId",
+              "messageId",
+              "reason",
+              "resolvedBy",
+              "resolvedAt",
+              "reporter",
+              "profile",
+              "message"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "total": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "items",
+        "total"
+      ],
+      "type": "object"
+    },
+    "NetworkingAdminSpacesResponseSchema": {
+      "properties": {
+        "items": {
+          "items": {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "active": {
+                "type": "boolean"
+              },
+              "createdAt": {
+                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                "format": "date-time",
+                "type": "string"
+              },
+              "updatedAt": {
+                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                "format": "date-time",
+                "type": "string"
+              },
+              "location": {
+                "type": "string"
+              },
+              "eventId": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "TABLE",
+                  "STAND"
+                ],
+                "type": "string"
+              },
+              "capacity": {
+                "type": "number"
+              },
+              "allocatedCount": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "active",
+              "createdAt",
+              "updatedAt",
+              "location",
+              "eventId",
+              "kind",
+              "capacity",
+              "allocatedCount"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "total": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "items",
+        "total"
+      ],
+      "type": "object"
+    },
+    "NetworkingAdminSyncResponseSchema": {
+      "properties": {
+        "runId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "enum": [
+            "IDLE",
+            "RUNNING",
+            "COMPLETED"
+          ],
+          "type": "string"
+        },
+        "total": {
+          "type": "number"
+        },
+        "processed": {
+          "type": "number"
+        },
+        "created": {
+          "type": "number"
+        },
+        "updated": {
+          "type": "number"
+        },
+        "failed": {
+          "type": "number"
+        },
+        "requestedAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finishedAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lastError": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "runId",
+        "status",
+        "total",
+        "processed",
+        "created",
+        "updated",
+        "failed",
+        "requestedAt",
+        "finishedAt",
+        "lastError"
+      ],
+      "type": "object"
+    },
+    "NetworkingAdminSyncStateResponseSchema": {
+      "$ref": "#/$defs/NetworkingAdminSyncResponseSchema"
+    },
+    "NetworkingAdminTableResponseSchema": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "updatedAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "location": {
+          "type": "string"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "TABLE",
+            "STAND"
+          ],
+          "type": "string"
+        },
+        "capacity": {
+          "type": "number"
+        },
+        "spaceId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ownerProfileId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "representativeIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "space": {
+          "$ref": "#/$defs/NetworkingAdminCreateSpaceResponseSchema"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "active",
+        "createdAt",
+        "updatedAt",
+        "location",
+        "eventId",
+        "kind",
+        "capacity",
+        "spaceId",
+        "ownerProfileId",
+        "representativeIds",
+        "space"
+      ],
+      "type": "object"
+    },
+    "NetworkingAdminTablesResponseSchema": {
+      "properties": {
+        "items": {
+          "items": {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "active": {
+                "type": "boolean"
+              },
+              "createdAt": {
+                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                "format": "date-time",
+                "type": "string"
+              },
+              "updatedAt": {
+                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                "format": "date-time",
+                "type": "string"
+              },
+              "location": {
+                "type": "string"
+              },
+              "eventId": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "TABLE",
+                  "STAND"
+                ],
+                "type": "string"
+              },
+              "capacity": {
+                "type": "number"
+              },
+              "spaceId": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "ownerProfileId": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "space": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/NetworkingAdminCreateSpaceResponseSchema"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "representativeIds": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "representatives": {
+                "items": {
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "firstName": {
+                      "type": "string"
+                    },
+                    "lastName": {
+                      "type": "string"
+                    },
+                    "company": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "firstName",
+                    "lastName",
+                    "company"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "active",
+              "createdAt",
+              "updatedAt",
+              "location",
+              "eventId",
+              "kind",
+              "capacity",
+              "spaceId",
+              "ownerProfileId",
+              "space",
+              "representativeIds",
+              "representatives"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "total": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "items",
+        "total"
+      ],
+      "type": "object"
+    },
+    "NetworkingAdminUpdateConfigResponseSchema": {
+      "$ref": "#/$defs/NetworkingAdminConfigResponseSchema"
+    },
+    "NetworkingAdminUpdateMeetingResponseSchema": {
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "createdAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "updatedAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "PENDING",
+            "COMPLETED",
+            "PENDING_ALLOCATION",
+            "CONFIRMED",
+            "DECLINED",
+            "CANCELLED",
+            "EXPIRED",
+            "NO_SHOW"
+          ],
+          "type": "string"
+        },
+        "tableId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "startsAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "requesterId": {
+          "type": "string"
+        },
+        "recipientId": {
+          "type": "string"
+        },
+        "endsAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "cancellationNote": {
+          "type": "string"
+        },
+        "proposedStartsAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "proposalBy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "type": "number"
+        },
+        "requesterCheckedInAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recipientCheckedInAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requester": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NetworkingAdminUpdateProfileResponseSchema"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recipient": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NetworkingAdminUpdateProfileResponseSchema"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "table": {
+          "anyOf": [
+            {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "active": {
+                  "type": "boolean"
+                },
+                "createdAt": {
+                  "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "location": {
+                  "type": "string"
+                },
+                "eventId": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "TABLE",
+                    "STAND"
+                  ],
+                  "type": "string"
+                },
+                "capacity": {
+                  "type": "number"
+                },
+                "spaceId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "ownerProfileId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "space": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/NetworkingAdminCreateSpaceResponseSchema"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "active",
+                "createdAt",
+                "updatedAt",
+                "location",
+                "eventId",
+                "kind",
+                "capacity",
+                "spaceId",
+                "ownerProfileId",
+                "space"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "createdAt",
+        "updatedAt",
+        "status",
+        "tableId",
+        "eventId",
+        "expiresAt",
+        "startsAt",
+        "requesterId",
+        "recipientId",
+        "endsAt",
+        "cancellationNote",
+        "proposedStartsAt",
+        "proposalBy",
+        "revision",
+        "requesterCheckedInAt",
+        "recipientCheckedInAt",
+        "requester",
+        "recipient",
+        "table"
+      ],
+      "type": "object"
+    },
+    "NetworkingAdminUpdateProfileResponseSchema": {
+      "properties": {
+        "meetingsEnabled": {
+          "type": "boolean"
+        },
+        "company": {
+          "type": "string"
+        },
+        "jobTitle": {
+          "type": "string"
+        },
+        "sector": {
+          "type": "string"
+        },
+        "bio": {
+          "type": "string"
+        },
+        "city": {
+          "type": "string"
+        },
+        "country": {
+          "type": "string"
+        },
+        "website": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "photoUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "interests": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "offers": {
+          "type": "string"
+        },
+        "seeks": {
+          "type": "string"
+        },
+        "consent": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "createdAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "updatedAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "firstName": {
+          "type": "string"
+        },
+        "lastName": {
+          "type": "string"
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "lastActiveAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "erasedAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "featured": {
+          "type": "boolean"
+        },
+        "standTableId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "email": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "PENDING",
+            "ACTIVE",
+            "SUSPENDED",
+            "EXCLUDED"
+          ],
+          "type": "string"
+        },
+        "registrationId": {
+          "type": "string"
+        },
+        "emailPreference": {
+          "enum": [
+            "IMMEDIATE",
+            "DAILY",
+            "OFF"
+          ],
+          "type": "string"
+        },
+        "language": {
+          "enum": [
+            "fr",
+            "en",
+            "ar"
+          ],
+          "type": "string"
+        },
+        "availabilitySet": {
+          "type": "boolean"
+        },
+        "consentAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "withdrawnAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "overrides": {
+          "additionalProperties": {},
+          "propertyNames": {
+            "type": "string"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "meetingsEnabled",
+        "company",
+        "jobTitle",
+        "sector",
+        "bio",
+        "city",
+        "country",
+        "website",
+        "photoUrl",
+        "interests",
+        "offers",
+        "seeks",
+        "consent",
+        "id",
+        "createdAt",
+        "updatedAt",
+        "eventId",
+        "firstName",
+        "lastName",
+        "visible",
+        "lastActiveAt",
+        "erasedAt",
+        "featured",
+        "standTableId",
+        "email",
+        "status",
+        "registrationId",
+        "emailPreference",
+        "language",
+        "availabilitySet",
+        "consentAt",
+        "withdrawnAt",
+        "overrides"
+      ],
+      "type": "object"
+    },
+    "NetworkingAdminUpdateSpaceResponseSchema": {
+      "$ref": "#/$defs/NetworkingAdminCreateSpaceResponseSchema"
+    },
+    "NetworkingAdminUpdateTableResponseSchema": {
+      "$ref": "#/$defs/NetworkingAdminTableResponseSchema"
+    },
+    "NetworkingAdminUploadLogoResponseSchema": {
+      "properties": {
+        "url": {
+          "type": "string"
+        },
+        "resource": {
+          "$ref": "#/$defs/NetworkingAdminConfigResponseSchema"
+        }
+      },
+      "required": [
+        "url",
+        "resource"
+      ],
+      "type": "object"
+    },
+    "NetworkingAdminVerifyBadgeResponseSchema": {
+      "properties": {
+        "accessAllowed": {
+          "type": "boolean"
+        },
+        "profile": {
+          "$ref": "#/$defs/NetworkingPublicProfileResponseSchema"
+        },
+        "accessId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "accessAllowed",
+        "profile",
+        "accessId"
+      ],
       "type": "object"
     },
     "NetworkingAvailabilitySchema": {
@@ -6594,6 +9021,69 @@
       ],
       "type": "object"
     },
+    "NetworkingMfaConfirmResponseSchema": {
+      "properties": {
+        "recoveryCodesOutdated": {
+          "type": "boolean"
+        },
+        "recoveryCodes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "verified": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "verified"
+      ],
+      "type": "object"
+    },
+    "NetworkingMfaDisableResponseSchema": {
+      "$ref": "#/$defs/NetworkingMfaConfirmResponseSchema"
+    },
+    "NetworkingMfaEnrollResponseSchema": {
+      "properties": {
+        "secret": {
+          "type": "string"
+        },
+        "otpauthUri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "secret",
+        "otpauthUri"
+      ],
+      "type": "object"
+    },
+    "NetworkingMfaRegenerateRecoveryCodesResponseSchema": {
+      "$ref": "#/$defs/NetworkingMfaConfirmResponseSchema"
+    },
+    "NetworkingMfaStateResponseSchema": {
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "verified": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled",
+        "required",
+        "verified"
+      ],
+      "type": "object"
+    },
+    "NetworkingMfaVerifyResponseSchema": {
+      "$ref": "#/$defs/NetworkingMfaConfirmResponseSchema"
+    },
     "NetworkingNotificationReadSchema": {
       "additionalProperties": false,
       "properties": {
@@ -6798,6 +9288,1884 @@
       },
       "type": "object"
     },
+    "NetworkingPublicAvailabilityResponseSchema": {
+      "properties": {
+        "slots": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "freeSlots": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "bookedSlots": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "availableSlots": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "slots",
+        "freeSlots",
+        "bookedSlots",
+        "availableSlots"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicBadgeResponseSchema": {
+      "properties": {
+        "accessAllowed": {
+          "type": "boolean"
+        },
+        "token": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "type": "string"
+        },
+        "profileId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "accessAllowed",
+        "token",
+        "expiresAt",
+        "profileId"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicBlockResponseSchema": {
+      "properties": {
+        "blocked": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "blocked"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicBlocksResponseSchema": {
+      "properties": {
+        "items": {
+          "items": {
+            "properties": {
+              "profile": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/NetworkingPublicProfileResponseSchema"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "createdAt": {
+                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                "format": "date-time",
+                "type": "string"
+              },
+              "eventId": {
+                "type": "string"
+              },
+              "profileId": {
+                "type": "string"
+              },
+              "targetId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "profile",
+              "id",
+              "createdAt",
+              "eventId",
+              "profileId",
+              "targetId"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "total": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "items",
+        "total"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicCheckinResponseSchema": {
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "createdAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "updatedAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "PENDING",
+            "COMPLETED",
+            "PENDING_ALLOCATION",
+            "CONFIRMED",
+            "DECLINED",
+            "CANCELLED",
+            "EXPIRED",
+            "NO_SHOW"
+          ],
+          "type": "string"
+        },
+        "tableId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "startsAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "requesterId": {
+          "type": "string"
+        },
+        "recipientId": {
+          "type": "string"
+        },
+        "endsAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "cancellationNote": {
+          "type": "string"
+        },
+        "proposedStartsAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "proposalBy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "type": "number"
+        },
+        "requesterCheckedInAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recipientCheckedInAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requester": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NetworkingPublicProfileResponseSchema"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recipient": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NetworkingPublicProfileResponseSchema"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "table": {
+          "anyOf": [
+            {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "active": {
+                  "type": "boolean"
+                },
+                "createdAt": {
+                  "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "location": {
+                  "type": "string"
+                },
+                "eventId": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "TABLE",
+                    "STAND"
+                  ],
+                  "type": "string"
+                },
+                "capacity": {
+                  "type": "number"
+                },
+                "spaceId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "ownerProfileId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "space": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/NetworkingAdminCreateSpaceResponseSchema"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "active",
+                "createdAt",
+                "updatedAt",
+                "location",
+                "eventId",
+                "kind",
+                "capacity",
+                "spaceId",
+                "ownerProfileId",
+                "space"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "message",
+        "id",
+        "createdAt",
+        "updatedAt",
+        "status",
+        "tableId",
+        "eventId",
+        "expiresAt",
+        "startsAt",
+        "requesterId",
+        "recipientId",
+        "endsAt",
+        "cancellationNote",
+        "proposedStartsAt",
+        "proposalBy",
+        "revision",
+        "requesterCheckedInAt",
+        "recipientCheckedInAt",
+        "requester",
+        "recipient",
+        "table"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicConfigResponseSchema": {
+      "properties": {
+        "event": {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "slug": {
+              "type": "string"
+            },
+            "startsAt": {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            "endsAt": {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "bannerUrl": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "slug",
+            "startsAt",
+            "endsAt",
+            "location",
+            "bannerUrl"
+          ],
+          "type": "object"
+        },
+        "config": {
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "requireSecondFactor": {
+              "type": "boolean"
+            },
+            "approvalMode": {
+              "enum": [
+                "MANUAL",
+                "AUTOMATIC"
+              ],
+              "type": "string"
+            },
+            "swipeEnabled": {
+              "type": "boolean"
+            },
+            "searchEnabled": {
+              "type": "boolean"
+            },
+            "chatEnabled": {
+              "type": "boolean"
+            },
+            "meetingsEnabled": {
+              "type": "boolean"
+            },
+            "autoAssignTables": {
+              "type": "boolean"
+            },
+            "slotDurationMinutes": {
+              "anyOf": [
+                {
+                  "const": 15,
+                  "type": "number"
+                },
+                {
+                  "const": 30,
+                  "type": "number"
+                },
+                {
+                  "const": 45,
+                  "type": "number"
+                },
+                {
+                  "const": 60,
+                  "type": "number"
+                }
+              ]
+            },
+            "timezone": {
+              "type": "string"
+            },
+            "requestExpiryHours": {
+              "type": "number"
+            },
+            "languages": {
+              "items": {
+                "enum": [
+                  "fr",
+                  "en",
+                  "ar"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "defaultLanguage": {
+              "enum": [
+                "fr",
+                "en",
+                "ar"
+              ],
+              "type": "string"
+            },
+            "primaryColor": {
+              "type": "string"
+            },
+            "welcomeMessage": {
+              "type": "string"
+            },
+            "participantLabel": {
+              "type": "string"
+            },
+            "tableLabel": {
+              "type": "string"
+            },
+            "helpMessage": {
+              "type": "string"
+            },
+            "uiLabels": {
+              "additionalProperties": {
+                "properties": {
+                  "fr": {
+                    "type": "string"
+                  },
+                  "en": {
+                    "type": "string"
+                  },
+                  "ar": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "fr"
+                ],
+                "type": "object"
+              },
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "accessInstructions": {
+              "type": "string"
+            },
+            "fieldMapping": {
+              "properties": {
+                "company": {
+                  "type": "string"
+                },
+                "jobTitle": {
+                  "type": "string"
+                },
+                "sector": {
+                  "type": "string"
+                },
+                "bio": {
+                  "type": "string"
+                },
+                "city": {
+                  "type": "string"
+                },
+                "country": {
+                  "type": "string"
+                },
+                "website": {
+                  "type": "string"
+                },
+                "photoUrl": {
+                  "type": "string"
+                },
+                "interests": {
+                  "type": "string"
+                },
+                "offers": {
+                  "type": "string"
+                },
+                "seeks": {
+                  "type": "string"
+                },
+                "consent": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "openingHours": {
+              "items": {
+                "properties": {
+                  "date": {
+                    "type": "string"
+                  },
+                  "start": {
+                    "type": "string"
+                  },
+                  "end": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "date",
+                  "start",
+                  "end"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "blackoutSlots": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "requiredAccessId": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "opensAt": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "closesAt": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "logoUrl": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "supportEmail": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "supportPhone": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "accessPlanUrl": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "enabled",
+            "requireSecondFactor",
+            "approvalMode",
+            "swipeEnabled",
+            "searchEnabled",
+            "chatEnabled",
+            "meetingsEnabled",
+            "autoAssignTables",
+            "slotDurationMinutes",
+            "timezone",
+            "requestExpiryHours",
+            "languages",
+            "defaultLanguage",
+            "primaryColor",
+            "welcomeMessage",
+            "participantLabel",
+            "tableLabel",
+            "helpMessage",
+            "uiLabels",
+            "accessInstructions",
+            "fieldMapping",
+            "openingHours",
+            "blackoutSlots"
+          ],
+          "type": "object"
+        },
+        "pushPublicKey": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "networkingUrl": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "config",
+        "pushPublicKey"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicConnectionResponseSchema": {
+      "properties": {
+        "profile": {
+          "$ref": "#/$defs/NetworkingPublicProfileResponseSchema"
+        },
+        "id": {
+          "type": "string"
+        },
+        "createdAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "lastMessage": {
+          "anyOf": [
+            {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "connectionId": {
+                  "type": "string"
+                },
+                "senderId": {
+                  "type": "string"
+                },
+                "body": {
+                  "type": "string"
+                },
+                "createdAt": {
+                  "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                  "format": "date-time",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "connectionId",
+                "senderId",
+                "body",
+                "createdAt"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unreadCount": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "profile",
+        "id",
+        "createdAt",
+        "lastMessage",
+        "unreadCount"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicConnectionWithResponseSchema": {
+      "properties": {
+        "connection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NetworkingPublicConnectionResponseSchema"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "connection"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicConnectionsResponseSchema": {
+      "properties": {
+        "total": {
+          "type": "number"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/NetworkingPublicConnectionResponseSchema"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "nextCursor"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicCreateMeetingResponseSchema": {
+      "$ref": "#/$defs/NetworkingPublicCheckinResponseSchema"
+    },
+    "NetworkingPublicFacetsResponseSchema": {
+      "properties": {
+        "sectors": {
+          "items": {
+            "properties": {
+              "value": {
+                "type": "string"
+              },
+              "count": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "value",
+              "count"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "companies": {
+          "items": {
+            "properties": {
+              "value": {
+                "type": "string"
+              },
+              "count": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "value",
+              "count"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "cities": {
+          "items": {
+            "properties": {
+              "value": {
+                "type": "string"
+              },
+              "count": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "value",
+              "count"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "countries": {
+          "items": {
+            "properties": {
+              "value": {
+                "type": "string"
+              },
+              "count": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "value",
+              "count"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "sectors",
+        "companies",
+        "cities",
+        "countries"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicIncomingInterestsResponseSchema": {
+      "properties": {
+        "total": {
+          "type": "number"
+        },
+        "items": {
+          "items": {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "profile": {
+                "$ref": "#/$defs/NetworkingPublicProfileResponseSchema"
+              },
+              "createdAt": {
+                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                "format": "date-time",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "profile",
+              "createdAt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "nextCursor"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicInterestResponseSchema": {
+      "properties": {
+        "matched": {
+          "type": "boolean"
+        },
+        "connectionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "matched"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicListMeetingsResponseSchema": {
+      "properties": {
+        "total": {
+          "type": "number"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/NetworkingPublicCheckinResponseSchema"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "nextCursor"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicLogoutResponseSchema": {
+      "properties": {
+        "loggedOut": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "loggedOut"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicMeResponseSchema": {
+      "$ref": "#/$defs/NetworkingAdminUpdateProfileResponseSchema"
+    },
+    "NetworkingPublicMeetingResponseSchema": {
+      "$ref": "#/$defs/NetworkingPublicCheckinResponseSchema"
+    },
+    "NetworkingPublicMessageResponseSchema": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "connectionId": {
+          "type": "string"
+        },
+        "senderId": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "clientMessageId": {
+          "type": "string"
+        },
+        "createdAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "eventId",
+        "connectionId",
+        "senderId",
+        "body",
+        "clientMessageId",
+        "createdAt"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicMessagesResponseSchema": {
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/NetworkingPublicMessageResponseSchema"
+          },
+          "type": "array"
+        },
+        "total": {
+          "type": "number"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "properties": {
+                "before": {
+                  "type": "string"
+                },
+                "beforeId": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "before",
+                "beforeId"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "total",
+        "nextCursor"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicNotificationsResponseSchema": {
+      "properties": {
+        "items": {
+          "items": {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "eventId": {
+                "type": "string"
+              },
+              "profileId": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "body": {
+                "type": "string"
+              },
+              "href": {
+                "type": "string"
+              },
+              "data": {
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "readAt": {
+                "anyOf": [
+                  {
+                    "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "createdAt": {
+                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                "format": "date-time",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "eventId",
+              "profileId",
+              "type",
+              "title",
+              "body",
+              "href",
+              "data",
+              "readAt",
+              "createdAt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "total": {
+          "type": "number"
+        },
+        "unreadCount": {
+          "type": "number"
+        },
+        "unreadMessageCount": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "items",
+        "total",
+        "unreadCount",
+        "unreadMessageCount"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicPersonalAnalyticsResponseSchema": {
+      "properties": {
+        "currentEventId": {
+          "type": "string"
+        },
+        "events": {
+          "items": {
+            "properties": {
+              "eventId": {
+                "type": "string"
+              },
+              "eventName": {
+                "type": "string"
+              },
+              "startsAt": {
+                "type": "string"
+              },
+              "endsAt": {
+                "type": "string"
+              },
+              "profileViews": {
+                "type": "number"
+              },
+              "matches": {
+                "type": "number"
+              },
+              "sentMessages": {
+                "type": "number"
+              },
+              "plannedMeetings": {
+                "type": "number"
+              },
+              "completedMeetings": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "eventId",
+              "eventName",
+              "startsAt",
+              "endsAt",
+              "profileViews",
+              "matches",
+              "sentMessages",
+              "plannedMeetings",
+              "completedMeetings"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "currentEventId",
+        "events"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicProfileAvailabilityResponseSchema": {
+      "properties": {
+        "slots": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "availableSlots": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "slots",
+        "availableSlots"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicProfileResponseSchema": {
+      "properties": {
+        "meetingsEnabled": {
+          "type": "boolean"
+        },
+        "company": {
+          "type": "string"
+        },
+        "jobTitle": {
+          "type": "string"
+        },
+        "sector": {
+          "type": "string"
+        },
+        "bio": {
+          "type": "string"
+        },
+        "city": {
+          "type": "string"
+        },
+        "country": {
+          "type": "string"
+        },
+        "website": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "photoUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "interests": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "offers": {
+          "type": "string"
+        },
+        "seeks": {
+          "type": "string"
+        },
+        "consent": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "createdAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "updatedAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "firstName": {
+          "type": "string"
+        },
+        "lastName": {
+          "type": "string"
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "lastActiveAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "erasedAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "featured": {
+          "type": "boolean"
+        },
+        "standTableId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "meetingsEnabled",
+        "company",
+        "jobTitle",
+        "sector",
+        "bio",
+        "city",
+        "country",
+        "website",
+        "photoUrl",
+        "interests",
+        "offers",
+        "seeks",
+        "consent",
+        "id",
+        "createdAt",
+        "updatedAt",
+        "eventId",
+        "firstName",
+        "lastName",
+        "visible",
+        "lastActiveAt",
+        "erasedAt",
+        "featured",
+        "standTableId"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicProfilesResponseSchema": {
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/NetworkingPublicProfileResponseSchema"
+          },
+          "type": "array"
+        },
+        "total": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "items",
+        "total"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicReadNotificationsResponseSchema": {
+      "properties": {
+        "read": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "read"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicReadResponseSchema": {
+      "$ref": "#/$defs/NetworkingPublicReadNotificationsResponseSchema"
+    },
+    "NetworkingPublicRegistrationResponseSchema": {
+      "anyOf": [
+        {
+          "properties": {
+            "enabled": {
+              "const": false,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "enabled"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "enabled": {
+              "const": true,
+              "type": "boolean"
+            },
+            "opensAt": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "closesAt": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "approvalMode": {
+              "enum": [
+                "MANUAL",
+                "AUTOMATIC"
+              ],
+              "type": "string"
+            },
+            "fieldMapping": {
+              "properties": {
+                "company": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "jobTitle": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "sector": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "bio": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "city": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "country": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "website": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "photoUrl": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "interests": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "offers": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "seeks": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "consent": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "type": "object"
+            },
+            "networkingUrl": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "enabled",
+            "opensAt",
+            "closesAt",
+            "approvalMode",
+            "fieldMapping"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "NetworkingPublicReportResponseSchema": {
+      "$ref": "#/$defs/NetworkingAdminModerateResponseSchema"
+    },
+    "NetworkingPublicRepresentativesResponseSchema": {
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/NetworkingPublicProfileResponseSchema"
+          },
+          "type": "array"
+        },
+        "total": {
+          "type": "number"
+        },
+        "exhibitor": {
+          "anyOf": [
+            {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "spaceName": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "spaceName"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "total",
+        "exhibitor"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicRequestCodeResponseSchema": {
+      "properties": {
+        "challengeId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "challengeId"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicResetInterestsResponseSchema": {
+      "properties": {
+        "reset": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "reset"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicRespondResponseSchema": {
+      "$ref": "#/$defs/NetworkingPublicCheckinResponseSchema"
+    },
+    "NetworkingPublicSubscribeResponseSchema": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "createdAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "profileId": {
+          "type": "string"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "keys": {
+          "properties": {
+            "p256dh": {
+              "type": "string"
+            },
+            "auth": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "p256dh",
+            "auth"
+          ],
+          "type": "object"
+        },
+        "expirationTime": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "createdAt",
+        "eventId",
+        "profileId",
+        "endpoint",
+        "keys",
+        "expirationTime"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicUnblockResponseSchema": {
+      "properties": {
+        "unblocked": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "unblocked"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicUnsubscribeResponseSchema": {
+      "properties": {
+        "unsubscribed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "unsubscribed"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicUpdateAvailabilityResponseSchema": {
+      "properties": {
+        "slots": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "slots"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicUpdateMeResponseSchema": {
+      "$ref": "#/$defs/NetworkingAdminUpdateProfileResponseSchema"
+    },
+    "NetworkingPublicUploadPhotoResponseSchema": {
+      "properties": {
+        "url": {
+          "type": "string"
+        },
+        "resource": {
+          "$ref": "#/$defs/NetworkingAdminUpdateProfileResponseSchema"
+        }
+      },
+      "required": [
+        "url",
+        "resource"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicVerifyCodeResponseSchema": {
+      "properties": {
+        "token": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "profile": {
+          "$ref": "#/$defs/NetworkingAdminUpdateProfileResponseSchema"
+        },
+        "requiresSecondFactor": {
+          "type": "boolean"
+        },
+        "mfaEnrollmentRequired": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "token",
+        "expiresAt",
+        "profile",
+        "requiresSecondFactor",
+        "mfaEnrollmentRequired"
+      ],
+      "type": "object"
+    },
+    "NetworkingPublicWithdrawResponseSchema": {
+      "properties": {
+        "withdrawn": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "withdrawn"
+      ],
+      "type": "object"
+    },
     "NetworkingPushSchema": {
       "properties": {
         "endpoint": {
@@ -6838,6 +11206,237 @@
       "required": [
         "endpoint",
         "keys"
+      ],
+      "type": "object"
+    },
+    "NetworkingRecommendationAdminReindexResponseSchema": {
+      "properties": {
+        "queued": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "queued"
+      ],
+      "type": "object"
+    },
+    "NetworkingRecommendationAdminStatusResponseSchema": {
+      "properties": {
+        "configured": {
+          "type": "boolean"
+        },
+        "model": {
+          "type": "string"
+        },
+        "dimensions": {
+          "type": "number"
+        },
+        "jobs": {
+          "items": {
+            "properties": {
+              "status": {
+                "type": "string"
+              },
+              "count": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "status",
+              "count"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "configured",
+        "model",
+        "dimensions",
+        "jobs"
+      ],
+      "type": "object"
+    },
+    "NetworkingRecommendationRecommendationsResponseSchema": {
+      "properties": {
+        "items": {
+          "items": {
+            "properties": {
+              "meetingsEnabled": {
+                "type": "boolean"
+              },
+              "company": {
+                "type": "string"
+              },
+              "jobTitle": {
+                "type": "string"
+              },
+              "sector": {
+                "type": "string"
+              },
+              "bio": {
+                "type": "string"
+              },
+              "city": {
+                "type": "string"
+              },
+              "country": {
+                "type": "string"
+              },
+              "website": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "photoUrl": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "interests": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "offers": {
+                "type": "string"
+              },
+              "seeks": {
+                "type": "string"
+              },
+              "consent": {
+                "type": "boolean"
+              },
+              "id": {
+                "type": "string"
+              },
+              "createdAt": {
+                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                "format": "date-time",
+                "type": "string"
+              },
+              "updatedAt": {
+                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                "format": "date-time",
+                "type": "string"
+              },
+              "eventId": {
+                "type": "string"
+              },
+              "firstName": {
+                "type": "string"
+              },
+              "lastName": {
+                "type": "string"
+              },
+              "visible": {
+                "type": "boolean"
+              },
+              "lastActiveAt": {
+                "anyOf": [
+                  {
+                    "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "erasedAt": {
+                "anyOf": [
+                  {
+                    "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "featured": {
+                "type": "boolean"
+              },
+              "standTableId": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "score": {
+                "type": "number"
+              },
+              "reasons": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "meetingsEnabled",
+              "company",
+              "jobTitle",
+              "sector",
+              "bio",
+              "city",
+              "country",
+              "website",
+              "photoUrl",
+              "interests",
+              "offers",
+              "seeks",
+              "consent",
+              "id",
+              "createdAt",
+              "updatedAt",
+              "eventId",
+              "firstName",
+              "lastName",
+              "visible",
+              "lastActiveAt",
+              "erasedAt",
+              "featured",
+              "standTableId",
+              "score",
+              "reasons"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "total": {
+          "type": "number"
+        },
+        "strategy": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "items",
+        "total",
+        "strategy"
       ],
       "type": "object"
     },

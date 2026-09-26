@@ -38,10 +38,10 @@ export class NetworkingUploadsService {
   deletePhoto(photoUrl: string | null | undefined, eventId: string, profileId: string) {
     return deleteNetworkingPhoto(photoUrl, eventId, profileId);
   }
-  async image(
+  async image<T>(
     req: NetworkingMultipartRequest,
     prefix: string,
-    save: (url: string) => Promise<unknown>,
+    save: (url: string) => Promise<T>,
     previousUrl?: string | null,
   ) {
     const part = await req.file({
@@ -71,7 +71,7 @@ export class NetworkingUploadsService {
     const url = await storage.uploadPublic(bytes, key, "image/webp", {
       cacheControl: "public, max-age=86400",
     });
-    let saved: unknown;
+    let saved: T;
     try {
       saved = await save(url);
     } catch (error) {
