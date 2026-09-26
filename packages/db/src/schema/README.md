@@ -1,8 +1,15 @@
 # Schema (Prisma → Drizzle port)
 
 One file per domain cluster; all tables/enums re-exported from `index.ts` and the
-package barrel (`src/index.ts`). 28 legacy models + the `_AccessPrerequisites` join
-table = **29 tables**, **19 pg enums**.
+package barrel (`src/index.ts`): the tables ported from the legacy Prisma models
+(with the `_AccessPrerequisites` join table), then the networking, outbox, reference
+counter and worker heartbeat tables added since, and **19 pg enums**. The
+fresh-migration drift test (`tests/migration/schema.migration.test.ts`) requires a
+migrated database to have exactly these tables, columns, indexes, CHECKs and FKs.
+
+There are no Drizzle `relations()`: the client is built without a schema, so the
+relational query API (`db.query.*`, `with:`) is not available; queries join
+explicitly.
 
 ## Conventions
 
@@ -12,13 +19,22 @@ table = **29 tables**, **19 pg enums**.
   - `emailLogs.providerMessageId` → `sendgrid_message_id` (kept for back-compat).
   - `registrations.role` → `registration_role`.
   - `_AccessPrerequisites.a` / `.b` → columns `"A"` / `"B"`.
-- **IDs**: every PK/FK is `text` — the live CockroachDB columns are `STRING`, and
+- **IDs**: every id column (PK or FK) is `text` — the live CockroachDB columns are `STRING`, and
   Prisma's `@default(uuid())` is an app-side default, not a DB-native uuid type.
-  Every PK uses `idPk()` (`text` + app-side UUIDv7 via `newId`) EXCEPT:
-  - `users.id` — `text().primaryKey()`, no default (Firebase UID, app-supplied).
-- **FKs**: every FK is `onUpdate: 'cascade'` (Prisma default, reproduced explicitly);
-  `onDelete` matches the prisma schema per column (cascade / set null / restrict).
-  All FK columns are `text` (matching every PK).
+  PKs use `idPk()` (`text` + app-side UUIDv7 via `newId`) EXCEPT natural keys
+  with no default, supplied by the app:
+  - `users.id` — Firebase UID.
+  - One row per parent: `networking_configs.event_id`,
+    `networking_second_factors.profile_id`, `networking_embedding_jobs.profile_id`.
+  - `registration_reference_counters.prefix`, `worker_heartbeats.worker_id`.
+  - `networking_allocation_locks` — composite `(event_id, bucket_start)`, the
+    second a `timestamptz`.
+  - `_AccessPrerequisites` has no PK, only the unique `(A, B)` index.
+- **FKs**: on the tables ported from Prisma every FK is `onUpdate: 'cascade'`
+  (Prisma default, reproduced explicitly) and `onDelete` matches the prisma schema
+  per column (cascade / set null / restrict). The networking tables (0012 on)
+  declare only `onDelete`, so their FKs are `ON UPDATE NO ACTION` as in their SQL.
+  All FK columns are `text`, like the id PKs they reference.
 - **New columns use `timestamptz`**: a new timestamp column is `TIMESTAMPTZ(3)` in
   SQL and `timestamp({ precision: 3, withTimezone: true })` in Drizzle, as most
   networking columns already are (their `instant()` helper). Calendar logic reads
@@ -31,10 +47,10 @@ table = **29 tables**, **19 pg enums**.
   default — matching the live `TIMESTAMP(3) NOT NULL` column), except the three
   networking tables created by 0013/0018 whose historical SQL defines `DEFAULT now()`;
   those table declarations preserve both the SQL default and app-side hooks. Tables without `updatedAt`
-  (payment_transaction, sponsorship_batches, sponsorship_usages, abstract_revisions,
+  (for example payment_transaction, sponsorship_batches, sponsorship_usages, abstract_revisions,
   access_check_ins, audit_logs) declare only the columns they have.
-- **Types matching the live dump**: `event_access.companion_price` is `integer`
-  (INT4, matching `_schema_full.sql` and its sibling `price`). `book_line_spacing`,
+- **Types matching the migrations**: `event_access.companion_price` is `bigint`
+  (INT8, as `0000` creates it) while its sibling `price` is `integer`. `book_line_spacing`,
   `average_score`, `score` are `double precision` (FLOAT8). Text arrays
   (`enabled_modules`, `access_type_ids`, `dropped_access_ids`, `covered_access_ids`)
   are nullable `text[]` with a default (Prisma scalar-list quirk on CockroachDB — no
@@ -42,12 +58,12 @@ table = **29 tables**, **19 pg enums**.
 
 ## Indexes and constraints from raw migrations
 
-The runner still applies the historical SQL in `migrations/0001_raw_indexes.sql`,
-`0003`–`0006`, and `0019` to preserve migration history. Their final catalog shape
-is also declared in this Drizzle schema so drift checks can compare a fresh
-migration against the application model. The index names remain byte-for-byte
-identical to the legacy CockroachDB migrations (application error mapping and
-dedupe guards depend on them):
+The migrations after `0000` are hand-written SQL (the runner applies them in
+order to preserve migration history). Every index, column and constraint they
+leave in the final catalog is also declared in this Drizzle schema, so the drift
+test can compare a fresh migration against the application model. The partial
+and engine-specific indexes from the legacy CockroachDB migrations keep their
+names byte-for-byte (application error mapping and dedupe guards depend on them):
 
 | Index | Table | Kind |
 |---|---|---|
@@ -68,7 +84,9 @@ dedupe guards depend on them):
 | `networking_meetings_recipient_start_idx` | networking_meetings | composite index from 0019 |
 
 `abstracts_event_id_code_number_key` was intentionally removed in migration 0002
-and is not part of the final schema. The old `networking_tables_event_name_key`
+and is not part of the final schema. The legacy `abstract_code_sequences` table
+(a global per-final-type counter nothing used; codes come from
+`abstract_code_counters`) is dropped by 0033. The old `networking_tables_event_name_key`
 is dropped by 0018 and replaced with the space-scoped uniqueness rule.
 
 **CRDB vs Postgres divergence**: the last one is a CockroachDB `INVERTED INDEX` in prod.

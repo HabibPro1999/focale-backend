@@ -259,18 +259,6 @@ export async function updateAbstractConfig(
   return row;
 }
 
-/** Raw information_schema probe: does the abstracts table exist yet (Phase I)? */
-export async function abstractsTableExists(): Promise<boolean> {
-  const res = await getDb().execute(sql`
-    SELECT EXISTS (
-      SELECT 1 FROM information_schema.tables
-      WHERE table_name = 'abstracts'
-    ) AS "exists"
-  `);
-  const rows = (res as { rows?: { exists?: boolean }[] }).rows ?? [];
-  return rows[0]?.exists === true;
-}
-
 export async function countAbstractsByEvent(eventId: string): Promise<number> {
   const [row] = await getDb()
     .select({ n: count() })
