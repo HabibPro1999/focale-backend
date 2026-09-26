@@ -342,6 +342,16 @@ describe("RegistrationPaymentsService", () => {
       );
     });
 
+    it.each(["CASH", "LAB_SPONSORSHIP"] as const)("%s preserves PARTIAL and its existing money", async (paymentMethod) => {
+      db.findRegistrationWithFormEvent.mockResolvedValue(methodFetch({
+        paymentStatus: "PARTIAL", paidAmount: 10, sponsorshipAmount: 60,
+      }));
+      await service.selectPaymentMethod("reg1", { paymentMethod, labName: "Lab" });
+      expect(writtenPatch()).toMatchObject({ paymentStatus: "PARTIAL", paymentMethod });
+      expect(db.applyRegistrationSettlement.mock.calls[0]![1].settlement).toEqual({ paymentStatus: "PARTIAL" });
+      expect(db.insertAuditLog.mock.calls[0]![0].action).toBe("PAYMENT_METHOD_SELECTED");
+    });
+
     it("rejects LAB_SPONSORSHIP when the sponsorships module is enabled", async () => {
       db.findRegistrationWithFormEvent.mockResolvedValue(
         methodFetch({
@@ -375,9 +385,9 @@ describe("RegistrationPaymentsService", () => {
       expect(db.applyRegistrationSettlement).not.toHaveBeenCalled();
     });
 
-    it("rejects when the registration is not PENDING", async () => {
+    it.each(["VERIFYING", "PAID", "SPONSORED", "WAIVED", "REFUNDED"])("rejects payment-method selection from %s", async (paymentStatus) => {
       db.findRegistrationWithFormEvent.mockResolvedValue(
-        methodFetch({ paymentStatus: "VERIFYING" }),
+        methodFetch({ paymentStatus }),
       );
       await expect(
         service.selectPaymentMethod("reg1", { paymentMethod: "CASH" } as never),

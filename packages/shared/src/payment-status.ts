@@ -16,8 +16,8 @@ export type SettlementStatus = (typeof PAYMENT_STATUSES)[number];
 
 /**
  * Payment statuses that settle a registration in full: nothing is owed and
- * every selected item occupies paid capacity. PARTIAL settles only the items a
- * sponsorship covers; PENDING and VERIFYING still owe money; REFUNDED is
+ * every selected item occupies paid capacity. PARTIAL and VERIFYING retain
+ * only sponsorship-covered items; PENDING still owes money; REFUNDED is
  * neither owed nor settled.
  */
 export const FULLY_SETTLED_STATUSES = ["PAID", "SPONSORED", "WAIVED"] as const;

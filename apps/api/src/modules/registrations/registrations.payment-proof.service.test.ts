@@ -79,6 +79,16 @@ describe("PaymentProofService", () => {
       expect(result.fileName).toBe("proof.pdf");
     });
 
+    it("accepts a PARTIAL balance proof without rewriting existing money", async () => {
+      db.findRegistrationWithFormEvent.mockResolvedValue(proofFetch({
+        paymentStatus: "PARTIAL", paidAmount: 10, sponsorshipAmount: 60,
+      }));
+      await service.uploadPaymentProof("reg1", pdf());
+      expect(writtenPatch()).toMatchObject({ paymentStatus: "VERIFYING", paymentMethod: "BANK_TRANSFER" });
+      expect(db.applyRegistrationSettlement.mock.calls[0]![1].settlement).toEqual({ paymentStatus: "VERIFYING" });
+      expect(db.insertAuditLog.mock.calls[0]![0].changes.paymentStatus).toEqual({ old: "PARTIAL", new: "VERIFYING" });
+    });
+
     it("rejects a disallowed header mimetype without sniffing", async () => {
       await expect(
         service.uploadPaymentProof("reg1", { ...pdf(), mimetype: "text/plain" }),
@@ -215,10 +225,10 @@ describe("PaymentProofService", () => {
         expect(storage.delete).not.toHaveBeenCalledWith(oldProof);
       });
 
-      it("post-upload re-validation failure (now PAID) removes the new object and keeps the old", async () => {
+      it.each(["VERIFYING", "PARTIAL"])("post-upload re-validation from %s rejects a concurrent confirmation and removes the new object", async (paymentStatus) => {
         db.findRegistrationWithFormEvent
           .mockResolvedValueOnce(
-            proofFetch({ paymentProofUrl: oldProof, paymentStatus: "VERIFYING" }),
+            proofFetch({ paymentProofUrl: oldProof, paymentStatus }),
           )
           .mockResolvedValueOnce(
             proofFetch({ paymentProofUrl: oldProof, paymentStatus: "PAID" }),

@@ -10,6 +10,10 @@ import {
 const pairs = PAYMENT_STATUSES.flatMap((from) => PAYMENT_STATUSES.map((to) => [from, to] as const));
 
 describe("validatePaymentTransition", () => {
+  it("allows a remaining-balance proof to move PARTIAL into review", () => {
+    expect(() => validatePaymentTransition("PARTIAL", "VERIFYING")).not.toThrow();
+  });
+
   it("allows VERIFYING → PARTIAL (plan 2.6) and still refuses leaving PAID except to REFUNDED", () => {
     expect(() => validatePaymentTransition("VERIFYING", "PARTIAL")).not.toThrow();
     expect(() => validatePaymentTransition("PAID", "REFUNDED")).not.toThrow();

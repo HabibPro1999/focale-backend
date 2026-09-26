@@ -341,16 +341,16 @@ export class RegistrationPaymentsService {
   }
 
   // ==========================================================================
-  // Select payment method (public) — CASH / LAB_SPONSORSHIP; stays PENDING
+  // Select payment method (public) — CASH / LAB_SPONSORSHIP; keeps PENDING/PARTIAL
   // ==========================================================================
 
   async selectPaymentMethod(
     registrationId: string,
     input: SelectPaymentMethodInput,
   ): Promise<void> {
-    // Lock, re-read, then re-check PENDING on the fresh row: a registration
-    // confirmed (or under proof review) meanwhile is refused, never reset to
-    // PENDING. The transition table alone would allow VERIFYING → PENDING.
+    // Lock and re-read before allowing PENDING/PARTIAL to choose a method.
+    // Keep the status and amounts: choosing a method does not pay the balance.
+    // A confirmed registration or one under proof review is still refused.
     await withLockingTxn(async (tx) => {
       const locked = await lockRegistrationForUpdate(tx, registrationId);
       const registration = locked
@@ -376,10 +376,10 @@ export class RegistrationPaymentsService {
         );
       }
 
-      if (registration.paymentStatus !== "PENDING") {
+      if (registration.paymentStatus !== "PENDING" && registration.paymentStatus !== "PARTIAL") {
         throw new AppException(
           ErrorCodes.REGISTRATION_INVALID_STATUS,
-          "Payment method can only be selected for pending registrations",
+          "Payment method can only be selected for pending or partially paid registrations",
           400,
         );
       }
@@ -395,7 +395,7 @@ export class RegistrationPaymentsService {
 
       await applyRegistrationSettlement(tx, {
         registrationId,
-        settlement: { paymentStatus: "PENDING" },
+        settlement: { paymentStatus: registration.paymentStatus },
         fields: { paymentMethod: input.paymentMethod, labName: nextLabName },
       });
 

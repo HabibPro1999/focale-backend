@@ -86,7 +86,7 @@ async function eventWithForm() {
 async function seedPending(
   eventId: string,
   formId: string,
-  options: { items?: AccessRow[]; base?: number; status?: "PENDING" | "VERIFYING" } = {},
+  options: { items?: AccessRow[]; base?: number; status?: "PENDING" | "VERIFYING" | "PARTIAL" } = {},
 ) {
   const items = options.items ?? [];
   const pb = breakdown(items, options.base ?? 0);
@@ -94,6 +94,7 @@ async function seedPending(
     eventId,
     formId,
     paymentStatus: options.status ?? "PENDING",
+    paidAmount: options.status === "PARTIAL" ? 10 : 0,
     totalAmount: pb.subtotal,
     baseAmount: pb.calculatedBasePrice,
     accessAmount: pb.accessTotal,
@@ -181,9 +182,9 @@ describe.runIf(dbTestsEnabled())("registration payment writers under concurrency
     expect(await counts(y.id)).toEqual({ paid: 1, registered: 1 });
   });
 
-  it("keeps a confirmation when a payment-proof upload queued behind it", async () => {
+  it.each(["PENDING", "PARTIAL"] as const)("keeps a confirmation when a %s payment-proof upload queued behind it", async (status) => {
     const { event, form } = await eventWithForm();
-    const registration = await seedPending(event.id, form.id, { base: 100 });
+    const registration = await seedPending(event.id, form.id, { base: 100, status });
 
     const [confirm, proof] = await queueBehindLock(
       registration.id,
@@ -209,10 +210,10 @@ describe.runIf(dbTestsEnabled())("registration payment writers under concurrency
     }
   });
 
-  it("keeps a confirmation when a payment-method selection queued behind it", async () => {
+  it.each(["PENDING", "PARTIAL"] as const)("keeps a confirmation when a %s payment-method selection queued behind it", async (status) => {
     const { event, form } = await eventWithForm();
     const x = await seedEventAccess({ eventId: event.id, name: "Workshop X", price: 100, registeredCount: 1 });
-    const registration = await seedPending(event.id, form.id, { items: [x] });
+    const registration = await seedPending(event.id, form.id, { items: [x], status });
 
     const [confirm, method] = await queueBehindLock(
       registration.id,
