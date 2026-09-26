@@ -76,7 +76,7 @@ describe.runIf(dbTestsEnabled())("networking read paths (4.9)", () => {
     });
     await store.insert("configs", { eventId: ids.event, config });
     const formId = randomUUID();
-    await db.insert(forms).values({ id: formId, eventId: ids.event, name: "Registration", schema: { fields: [] } });
+    await db.insert(forms).values({ id: formId, eventId: ids.event, name: "Registration", schema: { steps: [] } });
     const scope = { clientId: ids.client, otherEventId: ids.other, accessId: ids.access };
     let created = Date.parse("2031-01-01T00:00:00Z");
     const participant = async (firstName: string, profile: Partial<NetworkingRow<"profiles">> = {}) => {
