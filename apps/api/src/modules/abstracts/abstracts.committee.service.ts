@@ -2,7 +2,7 @@ import { CommitteeInviteService } from "./abstracts.committee-invite.service";
 import { CommitteeEmailsService } from "./abstracts.committee-emails";
 import { randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
-import { getAbstractTitle } from "@app/shared";
+import { getAbstractTitle, scoreDivergence } from "@app/shared";
 import {
   ErrorCodes,
   UserRole,
@@ -411,11 +411,10 @@ export class AbstractsCommitteeService {
         );
       }
       if (reviewerIds.length > requiredReviewers) {
+        // Extras need diverging scores, by the rule the divergence alert uses
+        // (@app/shared): never on fewer than two scores or a zero spread.
         const scores = await findScoredReviewScores(abstractId);
-        const min = scores.length >= 2 ? Math.min(...scores) : null;
-        const max = scores.length >= 2 ? Math.max(...scores) : null;
-        const spread = min !== null && max !== null ? max - min : 0;
-        if (spread < (config?.divergenceThreshold ?? 6)) {
+        if (!scoreDivergence(scores, config?.divergenceThreshold ?? 6)) {
           throw new AppException(
             ErrorCodes.VALIDATION_ERROR,
             "Extra reviewers can only be assigned after a score divergence alert",
