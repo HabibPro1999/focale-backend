@@ -285,6 +285,9 @@ importers:
 
   packages/shared:
     dependencies:
+      '@app/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       pino:
         specifier: ^9.5.0
         version: 9.14.0

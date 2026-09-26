@@ -1,5 +1,6 @@
 import { asc, gt } from "drizzle-orm";
 import {
+  PriceBreakdownSchema,
   StoredCertificateZonesSchema,
   StoredEmailContextSnapshotSchema,
   StoredFormSchemaJsonSchema,
@@ -7,6 +8,7 @@ import {
   type StoredCertificateZones,
   type StoredEmailContextSnapshot,
   type StoredFormSchemaJson,
+  type PriceBreakdown,
   type StoredPricingRules,
 } from "@app/contracts";
 import { getDb } from "../client";
@@ -15,12 +17,22 @@ import { certificateTemplates } from "../schema/certificates";
 import { emailLogs } from "../schema/email";
 import { forms } from "../schema/forms";
 import { eventPricing } from "../schema/pricing";
+import { registrations } from "../schema/registrations";
 
 // The typed JSONB columns (plan 5.2) and their read-boundary checks. Every
 // query that hands one of these columns to a caller runs it through the
 // matching reader (JSONB_VALIDATION decides what an invalid document does).
 // Rows returned by a write (`RETURNING`) are not re-checked: the write path
 // validated what it stored.
+//
+// `registrations.price_breakdown` is checked where it is used: the
+// registration reads of the admin, public and sponsorship routes and the
+// settlement reads (settle, access drop, sponsorship link). Two kinds of read
+// are left out on purpose: the repair tools (paid-repair,
+// sponsorship-code-repair) classify a breakdown they cannot settle themselves
+// instead of being refused, and whole-row reads that never use the breakdown
+// (email and certificate contexts, exports, networking) are typed by the
+// column only.
 
 /** Every typed JSONB column, for the read-only stored-JSON audit. */
 export const STORED_JSONB_COLUMNS = [
@@ -51,6 +63,13 @@ export const STORED_JSONB_COLUMNS = [
     id: emailLogs.id,
     column: emailLogs.contextSnapshot,
     schema: StoredEmailContextSnapshotSchema,
+  },
+  {
+    name: "registrations.price_breakdown",
+    table: registrations,
+    id: registrations.id,
+    column: registrations.priceBreakdown,
+    schema: PriceBreakdownSchema,
   },
 ] as const;
 
@@ -102,6 +121,10 @@ export function readEmailContextSnapshot(
   });
 }
 
+export function readPriceBreakdown(value: unknown, id?: string | null): PriceBreakdown {
+  return parseJsonb(PriceBreakdownSchema, value, { column: "registrations.price_breakdown", id });
+}
+
 /** Check a pricing row's `rules` (null passes: a left join without pricing). Returns the row. */
 export function checkPricingRow<T extends { id: string; rules: unknown } | null>(row: T): T {
   if (row) readPricingRules(row.rules, row.id);
@@ -119,5 +142,13 @@ export function checkFormRow<T extends { id: string; schema: unknown } | null | 
 /** Check a certificate template row's `zones`. Returns the row. */
 export function checkCertificateTemplateRow<T extends { id: string; zones: unknown }>(row: T): T {
   readCertificateZones(row.zones, row.id);
+  return row;
+}
+
+/** Check a registration row's `priceBreakdown`. Returns the row. */
+export function checkRegistrationRow<
+  T extends { id: string; priceBreakdown: unknown } | null | undefined,
+>(row: T): T {
+  if (row) readPriceBreakdown(row.priceBreakdown, row.id);
   return row;
 }

@@ -14,6 +14,7 @@ import {
   findRegistrationUsagesForRecalc,
 } from "../queries/registrations";
 import { deleteUsage, findUsage, updateSponsorshipRow, type SponsorshipUsageRow } from "../queries/sponsorships";
+import { checkRegistrationRow } from "../queries/stored-json";
 import { registrations } from "../schema/registrations";
 import { sponsorshipUsages } from "../schema/sponsorships";
 import { isTransactionExecutor } from "../txn";
@@ -145,7 +146,7 @@ export async function readSponsorshipTarget(tx: DbExecutor, registrationId: stri
     .from(registrations)
     .where(eq(registrations.id, registrationId))
     .limit(1);
-  return row ? { ...row, priceBreakdown: row.priceBreakdown as PriceBreakdown } : null;
+  return checkRegistrationRow(row) ?? null;
 }
 
 /** The ids of the registrations a sponsorship is linked to, ascending. */

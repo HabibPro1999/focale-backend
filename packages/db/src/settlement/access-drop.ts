@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { and, asc, eq, sql } from "drizzle-orm";
-import type { PriceBreakdown } from "@app/contracts";
+import type { AccessDropReason } from "@app/contracts";
 import { createLogger, dropAccessItem, isFullySettled } from "@app/shared";
 import { getDb, type DbExecutor } from "../client";
 import { lockRegistrationForUpdate } from "../locks";
@@ -12,6 +12,7 @@ import {
   getAccessCapacityRowsByIds,
 } from "../queries/access";
 import { findRegistrationUsagesForRecalc } from "../queries/registrations";
+import { readPriceBreakdown } from "../queries/stored-json";
 import { eventAccess, events } from "../schema/events-access";
 import { auditLogs } from "../schema/outbox-audit";
 import { registrations } from "../schema/registrations";
@@ -32,7 +33,7 @@ const logger = createLogger({ name: "db:access-drop" });
 
 export const ACCESS_CAPACITY_REACHED_OUTBOX_TYPE = "access.capacityReached";
 
-export type AccessDropReason = "capacity_reached" | "deactivated";
+export type { AccessDropReason };
 
 export interface AccessCapacityReachedPayload {
   eventId: string;
@@ -197,7 +198,7 @@ export async function dropAccessFromRegistration(
         .limit(1);
       if (!reg || reg.eventId !== drop.eventId) throw new SkipDrop("NOT_HELD");
       if (reg.paymentStatus === "REFUNDED" || isFullySettled(reg.paymentStatus)) throw new SkipDrop("SETTLED");
-      const breakdown = reg.priceBreakdown as PriceBreakdown;
+      const breakdown = readPriceBreakdown(reg.priceBreakdown, registrationId);
       const covered = (await findRegistrationUsagesForRecalc(registrationId, tx)).some((usage) =>
         usage.sponsorship.coveredAccessIds.includes(drop.accessId),
       );
@@ -208,7 +209,7 @@ export async function dropAccessFromRegistration(
       if (!access?.applies) throw new SkipDrop("NO_LONGER_APPLIES");
 
       const settled = await settleRegistrationTxn(tx, registrationId, {
-        priceBreakdown: result.breakdown as PriceBreakdown,
+        priceBreakdown: result.breakdown,
         totalAmount: result.gross,
         decide: ({ before, net }) => {
           if (before.paidAmount > net) {

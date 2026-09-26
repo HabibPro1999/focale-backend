@@ -25,7 +25,7 @@ import { clients, users } from "../schema/users-clients";
 import { sponsorships, sponsorshipUsages } from "../schema/sponsorships";
 import { auditLogs } from "../schema/outbox-audit";
 import { emailLogs, emailTemplates } from "../schema/email";
-import { readFormSchema } from "./stored-json";
+import { checkRegistrationRow, readFormSchema } from "./stored-json";
 
 export type RegistrationRow = typeof registrations.$inferSelect;
 export type NewRegistrationValues = typeof registrations.$inferInsert;
@@ -121,7 +121,7 @@ export async function getRegistrationByIdRow(
     .where(eq(accessCheckIns.registrationId, id));
 
   return {
-    ...row.reg,
+    ...checkRegistrationRow(row.reg),
     form: { id: row.formId, name: row.formName },
     event: {
       id: row.eventMetaId,
@@ -151,7 +151,7 @@ export async function getRegistrationByIdempotencyKeyRow(
     .limit(1);
   if (!row) return null;
   return {
-    ...row.reg,
+    ...checkRegistrationRow(row.reg),
     form: { id: row.formId, name: row.formName },
     event: {
       id: row.eventMetaId,
@@ -355,7 +355,7 @@ export async function listRegistrationRows(
 
   return {
     rows: rows.map((r) => ({
-      ...r.reg,
+      ...checkRegistrationRow(r.reg),
       form: { id: r.formId, name: r.formName },
       event: {
         id: r.eventMetaId,
@@ -514,7 +514,7 @@ export async function findRegistrationForMutation(
     .limit(1);
   if (!row) return null;
   return {
-    ...row.reg,
+    ...checkRegistrationRow(row.reg),
     event: {
       clientId: row.clientId,
       status: row.status,
@@ -565,7 +565,7 @@ export async function findRegistrationWithFormEvent(
     .limit(1);
   if (!row) return null;
   return {
-    ...row.reg,
+    ...checkRegistrationRow(row.reg),
     form: { id: row.formId, name: row.formName, schema: readFormSchema(row.formSchema, row.formId) },
     event: {
       id: row.eventMetaId,

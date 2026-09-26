@@ -112,7 +112,7 @@ describe.runIf(enabled)(
           paymentStatus: "PAID",
           networkingOptIn: true,
           totalAmount: 0,
-          priceBreakdown: {},
+          priceBreakdown: {} as never,
           formData: {},
         });
         const profile = await store.insert("profiles", {

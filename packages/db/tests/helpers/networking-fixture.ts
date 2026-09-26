@@ -83,7 +83,7 @@ export async function createNetworkingScaleFixture(
               : ("PAID" as const),
           networkingOptIn: p.index === 0 || p.index % 17 !== 0,
           totalAmount: 0,
-          priceBreakdown: {},
+          priceBreakdown: {} as never,
           formData: {
             company: `Company ${p.index % 100}`,
             role: "Business development",
