@@ -55,7 +55,7 @@ beforeEach(() => {
   mocks.transaction.mockImplementation(async (_id: string, run: Run) => run(mocks, {}));
   mocks.allocationTransaction.mockImplementation(async (_id: string, _intervals: unknown, run: Run) => run(mocks, {}));
   service = new NetworkingMeetingsService({ currentParticipant: async () => ctx, target: async () => ({ id: "b" }) } as unknown as NetworkingService);
-  vi.spyOn(service, "hydrate").mockImplementation(async (saved) => saved as any);
+  vi.spyOn(service, "hydrateOne").mockImplementation(async (_ctx, saved) => saved as any);
 });
 describe("NetworkingMeetingsService response integrity", () => {
   it.each(["requesterCheckedInAt", "recipientCheckedInAt"] as const)("refuses reschedule after %s", async (key) => {
@@ -94,7 +94,7 @@ describe("NetworkingMeetingsService response integrity", () => {
     row.startsAt = new Date(Date.now() + 10 * 60_000); row.endsAt = new Date(+row.startsAt + 1_800_000);
     row.proposedStartsAt = new Date(+row.startsAt + 3_600_000); row.proposalBy = "b";
     const checkin = new NetworkingMeetingsService({ currentParticipant: async () => ctx, target: async () => ({ id: "b" }), badgeProfileId: async () => "b" } as unknown as NetworkingService);
-    vi.spyOn(checkin, "hydrate").mockImplementation(async (saved) => saved as any);
+    vi.spyOn(checkin, "hydrateOne").mockImplementation(async (_ctx, saved) => saved as any);
     const saved = await checkin.checkin(ctx, row.id, "badge");
     expect(saved).toMatchObject({ requesterCheckedInAt: expect.any(Date), proposedStartsAt: null, proposalBy: null, status: "CONFIRMED" });
   });
@@ -160,9 +160,9 @@ describe("participant error codes", () => {
     row.requesterId = "x"; row.recipientId = "y";
     await expect(service.get(ctx, row.id)).rejects.toMatchObject({ status: 404, response: { code: "NETWORKING_NOT_FOUND" } });
     row.requesterId = "a";
-    const hydrate = vi.mocked(service.hydrate);
+    const hydrate = vi.mocked(service.hydrateOne);
     await service.get(ctx, row.id);
-    expect(hydrate).toHaveBeenCalledWith(row, mocks, false, ctx);
+    expect(hydrate).toHaveBeenCalledWith(ctx, row, mocks);
   });
   it("maps a participant claim lost to a concurrent booking to a slot conflict", async () => {
     vi.spyOn(service, "availableAt").mockResolvedValue(undefined);

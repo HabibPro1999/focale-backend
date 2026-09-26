@@ -114,8 +114,9 @@ export class NetworkingPublicController {
   async incomingInterests(
     @Param("slug") slug: string,
     @Req() request: FastifyRequest,
+    @Query() query: dto.NetworkingParticipantListDto,
   ) {
-    return this.social.incoming(await this.context(slug, request));
+    return this.social.incoming(await this.context(slug, request), query);
   }
   @Get("facets")
   async facets(@Param("slug") slug: string, @Req() request: FastifyRequest) {

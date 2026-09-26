@@ -1,14 +1,21 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import type ExcelJS from "exceljs";
 import type { Writable } from "node:stream";
-import { networkingMeetingIs, networkingProfileListed, networkingStore, type NetworkingRow } from "@app/db";
+import {
+  networkingMatchExportPages,
+  networkingMeetingExportPages,
+  networkingParticipantExportPages,
+  networkingSectorMetrics,
+  networkingStore,
+  type NetworkingExportPerson,
+  type NetworkingRow,
+} from "@app/db";
 import { generateNetworkingReportPdf } from "@app/integrations";
-import { NetworkingAdminService } from "./networking.admin.service";
 import { NetworkingSocialService } from "./networking.social.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
 import type { NetworkingContext } from "./networking.service";
-import { toCsv } from "@app/shared";
-import { downloadBody } from "../../core/exports/stream-io";
+import { CSV_BOM, toCsv, toCsvLine } from "@app/shared";
+import { downloadBody, writeChunk } from "../../core/exports/stream-io";
 import {
   ColumnStyles,
   RowPacer,
@@ -43,7 +50,6 @@ function foldIcs(line: string) {
 @Injectable()
 export class NetworkingExportsService {
   constructor(
-    private readonly adminService: NetworkingAdminService,
     private readonly social: NetworkingSocialService,
     private readonly meetings: NetworkingMeetingsService,
   ) {}
@@ -129,6 +135,13 @@ export class NetworkingExportsService {
       meetings: await this.meetings.allMeetings(ctx),
     };
   }
+  /**
+   * An organizer export (4.9): CSV and XLSX are written into the response
+   * body as it is read, from SQL pages of 500 rows (ids in export order
+   * first); nothing is buffered beyond one page. A PDF is built in memory
+   * (pdf-lib), from the same pages. Erased profiles are tombstones (4.6): the
+   * participant list leaves them out, other rows name them by id.
+   */
   async admin(event: NetworkingRow<"events">, kind: string, format: string) {
     if (
       !["participants", "matches", "meetings", "sectors"].includes(kind) ||
@@ -137,180 +150,83 @@ export class NetworkingExportsService {
       throw new BadRequestException(
         "Choose participants, matches, meetings or sectors and csv, xlsx or pdf",
       );
-    const store = networkingStore();
-    // Erased profiles are tombstones with nothing to export (4.6 policy).
-    const profiles = (await store.all("profiles", { eventId: event.id })).filter(networkingProfileListed);
-    const byId = new Map(profiles.map((profile) => [profile.id, profile]));
-    const name = (id: string) => {
-      const p = byId.get(id);
-      return p ? `${p.firstName} ${p.lastName}` : id;
-    };
-    let headers: string[], rows: unknown[][];
-    if (kind === "participants") {
-      headers = [
-        "Name",
-        "Email",
-        "Company",
-        "Role",
-        "Sector",
-        "Status",
-        "Visible",
-        "Last active",
-        "Swipes",
-        "Matches",
-        "Messages",
-        "Planned meetings",
-      ];
-      const [interests, connections, messages, meetings, audit] =
-        await Promise.all([
-          store.all("interests", { eventId: event.id }),
-          store.all("connections", { eventId: event.id }),
-          store.all("messages", { eventId: event.id }),
-          store.all("meetings", { eventId: event.id }),
-          store.all("audit", { eventId: event.id }),
-        ]);
-      const counts = new Map(
-        profiles.map((p) => [
-          p.id,
-          { swipes: 0, matches: 0, messages: 0, meetings: 0 },
-        ]),
-      );
-      const swipeHistory = audit.filter(
-        (row) => row.action === "SWIPE_LIKE" || row.action === "SWIPE_PASS",
-      );
-      const auditedPairs = new Set(
-        swipeHistory.map((row) => `${row.actorId}:${row.targetId}`),
-      );
-      for (const value of swipeHistory) {
-        const count = counts.get(value.actorId);
-        if (count) count.swipes++;
-      }
-      for (const value of interests)
-        if (!auditedPairs.has(`${value.profileId}:${value.targetId}`)) {
-          const count = counts.get(value.profileId);
-          if (count) count.swipes++;
-        }
-      for (const value of connections)
-        for (const id of [value.profileAId, value.profileBId]) {
-          const count = counts.get(id);
-          if (count) count.matches++;
-        }
-      for (const value of messages) {
-        const count = counts.get(value.senderId);
-        if (count) count.messages++;
-      }
-      for (const value of meetings)
-        if (networkingMeetingIs(value.status, "booked"))
-          for (const id of [value.requesterId, value.recipientId]) {
-            const count = counts.get(id);
-            if (count) count.meetings++;
-          }
-      rows = profiles.map((p) => [
-        name(p.id),
-        p.email,
-        p.company,
-        p.jobTitle,
-        p.sector,
-        p.status,
-        p.visible,
-        p.lastActiveAt?.toISOString(),
-        counts.get(p.id)?.swipes ?? 0,
-        counts.get(p.id)?.matches ?? 0,
-        counts.get(p.id)?.messages ?? 0,
-        counts.get(p.id)?.meetings ?? 0,
-      ]);
-    } else if (kind === "matches") {
-      headers = [
-        "Connection ID",
-        "Participant A",
-        "Company A",
-        "Participant B",
-        "Company B",
-        "Created at",
-      ];
-      rows = (await store.all("connections", { eventId: event.id })).map(
-        (c) => [
-          c.id,
-          name(c.profileAId),
-          byId.get(c.profileAId)?.company ?? "",
-          name(c.profileBId),
-          byId.get(c.profileBId)?.company ?? "",
-          c.createdAt.toISOString(),
-        ],
-      );
-    } else if (kind === "meetings") {
-      headers = [
-        "Meeting ID",
-        "Requester",
-        "Recipient",
-        "Start UTC",
-        "End UTC",
-        "Table",
-        "Status",
-        "Message",
-      ];
-      await this.meetings.expire(event.id);
-      const [meetings, tables] = await Promise.all([
-        store.all("meetings", { eventId: event.id }),
-        store.all("tables", { eventId: event.id }),
-      ]);
-      const tableNames = new Map(tables.map((table) => [table.id, table.name]));
-      rows = meetings
-        .sort(
-          (a, b) =>
-            a.startsAt.getTime() - b.startsAt.getTime() ||
-            a.id.localeCompare(b.id),
-        )
-        .map((m) => [
-          m.id,
-          name(m.requesterId),
-          name(m.recipientId),
-          m.startsAt.toISOString(),
-          m.endsAt.toISOString(),
-          m.tableId ? tableNames.get(m.tableId) : "",
-          m.status,
-          m.message,
-        ]);
-    } else {
-      headers = ["Sector", "Participants", "Matches", "Meetings"];
-      rows = (await this.adminService.analytics(event.id)).sectors.map((s) => [
-        s.sector,
-        s.participants,
-        s.matches,
-        s.meetings,
-      ]);
-    }
-    if (format === "csv")
+    if (kind === "meetings") await this.meetings.expire(event.id);
+    const { headers, pages } = adminTable(event.id, kind as AdminExportKind);
+    if (format === "pdf") {
+      const rows: unknown[][] = [];
+      for await (const page of pages()) rows.push(...page);
       return {
-        body: csv(headers, rows),
-        contentType: "text/csv; charset=utf-8",
-        kind,
-        format,
-      };
-    if (format === "pdf")
-      return {
-        body: await generateNetworkingReportPdf(
-          `${event.name} — ${kind}`,
-          headers,
-          rows,
-        ),
+        body: await generateNetworkingReportPdf(`${event.name} — ${kind}`, headers, rows),
         contentType: "application/pdf",
         kind,
         format,
       };
-    // XLSX is generated into the body as Fastify sends it (streaming writer,
-    // one row committed at a time): no workbook model, no whole-file buffer.
+    }
+    const csvFile = format === "csv";
+    const contentType = csvFile ? "text/csv; charset=utf-8" : XLSX_CONTENT_TYPE;
     return {
       body: downloadBody({
-        filename: `networking-${kind}.xlsx`,
-        contentType: XLSX_CONTENT_TYPE,
-        write: (out, signal) => writeAdminWorkbook(out, signal, kind, headers, rows),
+        filename: `networking-${kind}.${format}`,
+        contentType,
+        write: (out, signal) =>
+          csvFile
+            ? writeAdminCsv(out, signal, headers, pages(signal))
+            : writeAdminWorkbook(out, signal, kind, headers, pages(signal)),
       }),
-      contentType: XLSX_CONTENT_TYPE,
+      contentType,
       kind,
       format,
     };
   }
+}
+
+type AdminExportKind = "participants" | "matches" | "meetings" | "sectors";
+/** A participant as the organizer exports name them: "First Last" when listed, else the id. */
+const exportName = (id: string, person: NetworkingExportPerson) => (person ? `${person.firstName} ${person.lastName}` : id);
+
+/** An export's header row and its rows, page by page. */
+function adminTable(eventId: string, kind: AdminExportKind): { headers: string[]; pages: (signal?: AbortSignal) => AsyncIterable<unknown[][]> } {
+  const mapped = <T>(source: (options: { signal?: AbortSignal }) => AsyncIterable<T[]>, cells: (row: T) => unknown[]) =>
+    async function* (signal?: AbortSignal) {
+      for await (const page of source({ signal })) yield page.map(cells);
+    };
+  if (kind === "participants")
+    return {
+      headers: ["Name", "Email", "Company", "Role", "Sector", "Status", "Visible", "Last active", "Swipes", "Matches", "Messages", "Planned meetings"],
+      pages: mapped((options) => networkingParticipantExportPages(eventId, options), (p) => [
+        `${p.firstName} ${p.lastName}`, p.email, p.company, p.jobTitle, p.sector, p.status, p.visible,
+        p.lastActiveAt?.toISOString(), p.swipes, p.matches, p.messages, p.meetings,
+      ]),
+    };
+  if (kind === "matches")
+    return {
+      headers: ["Connection ID", "Participant A", "Company A", "Participant B", "Company B", "Created at"],
+      pages: mapped((options) => networkingMatchExportPages(eventId, options), (c) => [
+        c.id, exportName(c.profileAId, c.a), c.a?.company ?? "", exportName(c.profileBId, c.b), c.b?.company ?? "", c.createdAt.toISOString(),
+      ]),
+    };
+  if (kind === "meetings")
+    return {
+      headers: ["Meeting ID", "Requester", "Recipient", "Start UTC", "End UTC", "Table", "Status", "Message"],
+      pages: mapped((options) => networkingMeetingExportPages(eventId, options), (m) => [
+        m.id, exportName(m.requesterId, m.requester), exportName(m.recipientId, m.recipient),
+        m.startsAt.toISOString(), m.endsAt.toISOString(), m.tableId ? m.tableName ?? undefined : "", m.status, m.message,
+      ]),
+    };
+  return {
+    headers: ["Sector", "Participants", "Matches", "Meetings"],
+    // A handful of rows: the same aggregates as the organizer analytics.
+    pages: async function* () {
+      yield (await networkingSectorMetrics(eventId, { unspecified: "Unspecified" })).map((s) => [s.sector, s.participants, s.connections, s.meetings]);
+    },
+  };
+}
+
+async function writeAdminCsv(out: Writable, signal: AbortSignal, headers: string[], pages: AsyncIterable<unknown[][]>) {
+  await writeChunk(out, CSV_BOM + toCsvLine(headers), signal);
+  for await (const page of pages) await writeChunk(out, page.map(toCsvLine).join(""), signal);
+  signal.throwIfAborted();
+  out.end();
 }
 
 /** Rows between two waits on the zip and the client. */
@@ -321,7 +237,7 @@ async function writeAdminWorkbook(
   signal: AbortSignal,
   kind: string,
   headers: string[],
-  rows: unknown[][],
+  pages: AsyncIterable<unknown[][]>,
 ): Promise<void> {
   const workbook = createXlsxWriter(out, signal);
   workbook.creator = "Focale";
@@ -341,22 +257,26 @@ async function writeAdminWorkbook(
     fgColor: { argb: "FF1E3A5F" },
   };
   header.commit();
-  sheet.autoFilter = {
-    from: { row: 1, column: 1 },
-    to: { row: rows.length + 1, column: headers.length },
-  };
 
   const cellStyles = new ColumnStyles(() => ({ alignment }));
   const pacer = new RowPacer(out, signal, sheet);
-  for (let index = 0; index < rows.length; index++) {
-    const row = sheet.addRow(rows[index]!.map((value) => value ?? ""));
-    row.eachCell((cell, column) => {
-      cell.style = cellStyles.for(column, cell.type);
-    });
-    row.commit();
-    await pacer.row();
-    if ((index + 1) % WORKBOOK_PAGE_ROWS === 0) await pacer.pageDone();
+  let count = 0;
+  for await (const page of pages) {
+    for (const values of page) {
+      const row = sheet.addRow(values.map((value) => value ?? ""));
+      row.eachCell((cell, column) => {
+        cell.style = cellStyles.for(column, cell.type);
+      });
+      row.commit();
+      await pacer.row();
+      if (++count % WORKBOOK_PAGE_ROWS === 0) await pacer.pageDone();
+    }
   }
+  // Written with the sheet's closing part, so it can follow the rows.
+  sheet.autoFilter = {
+    from: { row: 1, column: 1 },
+    to: { row: count + 1, column: headers.length },
+  };
 
   signal.throwIfAborted();
   sheet.commit();

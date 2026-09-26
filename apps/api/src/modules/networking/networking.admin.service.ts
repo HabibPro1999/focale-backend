@@ -15,7 +15,6 @@ import {
   NETWORKING_CONFIG_UNCONFIGURED_REVISION,
   type NetworkingConfigWithRevision,
   networkingProfileOverrides,
-  networkingActivity,
   type NetworkingConfig,
   type NetworkingAnalytics,
 } from "@app/contracts";
@@ -26,9 +25,11 @@ import {
   getActiveEventAccessId,
   createNetworkingNotification,
   getNetworkingConfig,
+  listNetworkingAdminMeetings,
+  listNetworkingAdminProfiles,
+  listNetworkingAdminReports,
   networkingFormField,
   networkingMeetingIs,
-  networkingProfileListed,
   networkingRetentionEnded,
   networkingStore,
   networkingTransaction,
@@ -224,6 +225,7 @@ export class NetworkingAdminService {
       accessId: accessId ?? config.requiredAccessId ?? null,
     };
   }
+  /** One SQL page of listed participants with the total (4.9). */
   async profiles(
     eventId: string,
     query: {
@@ -235,48 +237,7 @@ export class NetworkingAdminService {
       limit: number;
     },
   ) {
-    const store = networkingStore();
-    // Erased profiles are tombstones with nothing to show (4.6 policy).
-    let rows = (await store.all("profiles", { eventId })).filter(networkingProfileListed);
-    const connections = await store.all("connections", { eventId });
-    const meetings = await store.all("meetings", { eventId });
-    rows = rows.filter(
-      (p) =>
-        (!query.q ||
-          `${p.firstName} ${p.lastName} ${p.company} ${p.jobTitle} ${p.email}`
-            .toLowerCase()
-            .includes(query.q.toLowerCase())) &&
-        (!query.sector || p.sector === query.sector) &&
-        (!query.status || p.status === query.status),
-    );
-    const enriched = rows.map((p) => ({
-      ...p,
-      matchCount: connections.filter(
-        (c) => c.profileAId === p.id || c.profileBId === p.id,
-      ).length,
-      meetingCount: meetings.filter(
-        (m) =>
-          (m.requesterId === p.id || m.recipientId === p.id) &&
-          !networkingMeetingIs(m.status, "released"),
-      ).length,
-    }));
-    const items = enriched.filter(
-      (p) =>
-        !query.activity ||
-        query.activity === "ALL" ||
-        (query.activity === "MATCHED"
-          ? p.matchCount > 0
-          : query.activity === "MEETINGS"
-            ? p.meetingCount > 0
-            : networkingActivity(p.lastActiveAt) === query.activity),
-    );
-    return {
-      items: items.slice(
-        (query.page - 1) * query.limit,
-        query.page * query.limit,
-      ),
-      total: items.length,
-    };
+    return listNetworkingAdminProfiles(eventId, query);
   }
   async updateProfile(
     eventId: string,
@@ -357,6 +318,7 @@ export class NetworkingAdminService {
     });
     return { date: query.date, timezone, items: await this.meetings.hydrateCalendar(eventId, rows) };
   }
+  /** One SQL page of meetings with the total, hydrated in bulk (4.9). */
   async listMeetings(
     eventId: string,
     query: {
@@ -369,36 +331,18 @@ export class NetworkingAdminService {
     },
   ) {
     await this.meetings.expire(eventId);
-    const config = await getNetworkingConfig(eventId);
-    const formatter = new Intl.DateTimeFormat("sv-SE", {
-      timeZone: config.timezone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
+    // The date is the meeting's start day in the event timezone (as the calendar).
+    const day = query.date ? networkingCalendarDay(query.date, (await getNetworkingConfig(eventId)).timezone) : undefined;
+    const { rows, total } = await listNetworkingAdminMeetings(eventId, {
+      q: query.q,
+      status: query.status,
+      tableId: query.tableId,
+      startsFrom: day?.start,
+      startsBefore: day?.end,
+      page: query.page,
+      limit: query.limit,
     });
-    const normalize = (value: string) => value.normalize("NFD").replace(/\p{M}/gu, "").toLocaleLowerCase().trim();
-    const search = normalize(query.q ?? "");
-    const matchingProfiles = search
-      ? new Set((await networkingStore().all("profiles", { eventId }))
-          .filter(profile => normalize(`${profile.firstName} ${profile.lastName} ${profile.company}`).includes(search))
-          .map(profile => profile.id))
-      : null;
-    const rows = (await networkingStore().all("meetings", { eventId }))
-      .filter(
-        (v) =>
-          (!matchingProfiles || matchingProfiles.has(v.requesterId) || matchingProfiles.has(v.recipientId)) &&
-          (!query.status || v.status === query.status) &&
-          (!query.tableId || v.tableId === query.tableId) &&
-          (!query.date || formatter.format(v.startsAt) === query.date),
-      )
-      .sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime());
-    return {
-      items: await Promise.all(
-        (query.limit ? rows.slice(((query.page??1)-1)*query.limit,(query.page??1)*query.limit) : rows)
-          .map((v) => this.meetings.hydrate(v, undefined, true)),
-      ),
-      total: rows.length,
-    };
+    return { items: await this.meetings.hydrateAdmin(eventId, rows), total };
   }
   async updateMeeting(
     eventId: string,
@@ -470,36 +414,16 @@ export class NetworkingAdminService {
         db,
         { reason: "ORGANIZER" },
       );
-      return this.meetings.hydrate(saved, store, true);
+      const [item] = await this.meetings.hydrateAdmin(eventId, [saved], store);
+      return item!;
     });
   }
+  /** One SQL page of reports, newest first, with the total and each report's people and message (4.9). */
   async reports(
     eventId: string,
     query: { status?: string; page?: number; limit?: number } = {},
   ) {
-    const store = networkingStore();
-    const rows = (await store.all("reports", { eventId })).filter(
-      (v) => !query.status || v.status === query.status,
-    );
-    const items = await Promise.all(
-      rows
-        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-        .map(async (r) => ({
-          ...r,
-          reporter: await store.one("profiles", { id: r.reporterId, eventId }),
-          profile: await store.one("profiles", { id: r.profileId, eventId }),
-          message: r.messageId
-            ? await store.one("messages", { id: r.messageId, eventId })
-            : null,
-        })),
-    );
-    return {
-      items: items.slice(
-        ((query.page ?? 1) - 1) * (query.limit ?? 10000),
-        (query.page ?? 1) * (query.limit ?? 10000),
-      ),
-      total: items.length,
-    };
+    return listNetworkingAdminReports(eventId, query);
   }
   async moderate(
     eventId: string,

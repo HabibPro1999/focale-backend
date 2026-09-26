@@ -40,6 +40,7 @@ import {
   resourceQuanta,
 } from "./networking.policy";
 import { networkingInventoryResource } from "./networking.inventory-policy";
+type MeetingRow = NetworkingRow<"meetings">;
 /** Re-plans after the meeting moved between the lock plan's read and the lock. */
 const ALLOCATION_PLAN_ATTEMPTS = 3;
 /** The slot a meeting would occupy from `start`, or none when `start` is not a valid instant. */
@@ -151,51 +152,55 @@ export class NetworkingMeetingsService {
       return { slots: normalized };
     });
   }
-  async hydrate(
-    row: NetworkingRow<"meetings">,
-    store = networkingStore(),
-    admin = false,
-    viewer?: NetworkingContext,
-    relations?: {
-      requester: NetworkingRow<"profiles"> | null;
-      recipient: NetworkingRow<"profiles"> | null;
-      table: (NetworkingRow<"tables"> & { representativeIds?: string[]; representatives?: Pick<NetworkingRow<"profiles">, "id" | "firstName" | "lastName" | "company">[] }) | null;
-      space: NetworkingRow<"spaces"> | null;
-    },
-  ) {
-    const [requester, recipient, table] = relations
-      ? [relations.requester, relations.recipient, relations.table]
-      : await Promise.all([
-      store.one("profiles", { eventId: row.eventId, id: row.requesterId }),
-      store.one("profiles", { eventId: row.eventId, id: row.recipientId }),
-      row.tableId
-        ? store.one("tables", { eventId: row.eventId, id: row.tableId })
-        : null,
-    ]);
-    const space = relations ? relations.space : table?.spaceId ? await store.one("spaces", { eventId: row.eventId, id: table.spaceId }) : null;
-    const publicProfile = async (profile: typeof requester) => {
-      if (!profile || admin) return profile;
-      if (!viewer) return null;
-      if (profile.id !== viewer.profile.id) {
-        try { await this.networking.target(viewer, profile.id, store); }
-        catch (error) {
-          if (error instanceof NotFoundException) return null;
-          throw error;
-        }
-      }
-      return networkingPublicProfile(profile);
-    };
-    const [visibleRequester, visibleRecipient] = await Promise.all([
-      publicProfile(requester), publicProfile(recipient),
-    ]);
-    return {
-      ...row,
-      requester: visibleRequester,
-      recipient: visibleRecipient,
-      table: table ? { ...table, space } : null,
-    };
+  /** The meetings' tables, each with its space, by table id (one statement). */
+  private async places(eventId: string, rows: MeetingRow[], store: NetworkingStore) {
+    const places = await store.meetingPlaces(eventId, rows);
+    return new Map(places.map(({ table, space }) => [table.id, { ...table, space: space ?? null }]));
   }
-  async hydrateCalendar(eventId: string, rows: NetworkingRow<"meetings">[]) {
+  /**
+   * The participant's view of their meetings (4.9 `hydrateForViewer`): each
+   * participant as a public profile when the viewer may see them (`profile`
+   * mode, one statement for the whole list), else null, and the table with
+   * its space (one more). The viewer must still be eligible, as for target().
+   */
+  async hydrateForViewer(ctx: NetworkingContext, rows: MeetingRow[], store = networkingStore()) {
+    if (!rows.length) return [];
+    const [people, tables] = await Promise.all([
+      this.networking.visibleCounterparts(ctx, rows.flatMap((row) => [row.requesterId, row.recipientId]), store),
+      this.places(ctx.event.id, rows, store),
+    ]);
+    const view = (id: string) => {
+      const profile = id === ctx.profile.id ? people.viewer : people.visible.get(id);
+      return profile ? networkingPublicProfile(profile) : null;
+    };
+    return rows.map((row) => ({
+      ...row,
+      requester: view(row.requesterId),
+      recipient: view(row.recipientId),
+      table: row.tableId ? tables.get(row.tableId) ?? null : null,
+    }));
+  }
+  /** One of the participant's meetings, hydrated like a list item (K2). */
+  async hydrateOne(ctx: NetworkingContext, row: MeetingRow, store = networkingStore()) {
+    const [item] = await this.hydrateForViewer(ctx, [row], store);
+    return item!;
+  }
+  /** The organizer's view of meetings: both participants' rows and the table with its space (two statements). */
+  async hydrateAdmin(eventId: string, rows: MeetingRow[], store = networkingStore()) {
+    if (!rows.length) return [];
+    const [profiles, tables] = await Promise.all([
+      store.profilesByIds(eventId, rows.flatMap((row) => [row.requesterId, row.recipientId])),
+      this.places(eventId, rows, store),
+    ]);
+    const byId = new Map(profiles.map((profile) => [profile.id, profile]));
+    return rows.map((row) => ({
+      ...row,
+      requester: byId.get(row.requesterId) ?? null,
+      recipient: byId.get(row.recipientId) ?? null,
+      table: row.tableId ? tables.get(row.tableId) ?? null : null,
+    }));
+  }
+  async hydrateCalendar(eventId: string, rows: MeetingRow[]) {
     if (!rows.length) return [];
     const store = networkingStore();
     const relations = await store.calendarRelations(eventId, rows);
@@ -215,14 +220,15 @@ export class NetworkingMeetingsService {
       return [table.id, { ...table, representativeIds: members.map(profile => profile.id),
         representatives: members.map(({ id, firstName, lastName, company }) => ({ id, firstName, lastName, company })) }];
     }));
-    return Promise.all(rows.map(row => {
+    return rows.map(row => {
       const table = row.tableId ? tables.get(row.tableId) ?? null : null;
-      return this.hydrate(row, store, true, undefined, {
+      return {
+        ...row,
         requester: profiles.get(row.requesterId) ?? null,
         recipient: profiles.get(row.recipientId) ?? null,
-        table, space: table?.spaceId ? spaces.get(table.spaceId) ?? null : null,
-      });
-    }));
+        table: table ? { ...table, space: table.spaceId ? spaces.get(table.spaceId) ?? null : null } : null,
+      };
+    });
   }
   /** Idempotent single statements: read paths need no transaction. */
   async expire(eventId: string) {
@@ -235,7 +241,7 @@ export class NetworkingMeetingsService {
     const visibleRows = rows.slice(0, page.limit);
     const last = visibleRows.at(-1);
     return {
-      items: await Promise.all(visibleRows.map((v) => this.hydrate(v, undefined, false, ctx))),
+      items: await this.hydrateForViewer(ctx, visibleRows),
       nextCursor: rows.length > page.limit && last ? page.cursor(last.startsAt, last.id) : null,
       ...(page.after ? {} : { total: await countNetworkingParticipantMeetings(ctx.event.id, ctx.profile.id) }),
     };
@@ -243,14 +249,13 @@ export class NetworkingMeetingsService {
   /** Internal, unpaginated: exports must never be truncated. Not exposed over HTTP. */
   async allMeetings(ctx: NetworkingContext) {
     await this.expire(ctx.event.id);
-    const rows = await listNetworkingParticipantMeetings(ctx.event.id, ctx.profile.id);
-    return Promise.all(rows.map((v) => this.hydrate(v, undefined, false, ctx)));
+    return this.hydrateForViewer(ctx, await listNetworkingParticipantMeetings(ctx.event.id, ctx.profile.id));
   }
   /** One own meeting, same hydrated shape as a GET meetings item (K2). */
   async get(ctx: NetworkingContext, id: string) {
     await this.expire(ctx.event.id);
     const store = networkingStore();
-    return this.hydrate(await this.meeting(ctx, id, store), store, false, ctx);
+    return this.hydrateOne(ctx, await this.meeting(ctx, id, store), store);
   }
   async meeting(ctx: NetworkingContext, id: string, store = networkingStore()) {
     const row = await store.one("meetings", { eventId: ctx.event.id, id });
@@ -358,7 +363,7 @@ export class NetworkingMeetingsService {
         [row] = await store.update("meetings", { eventId: ctx.event.id, id: row.id }, hold);
         await this.notify(ctx, row, "MEETING_REQUEST", [input.profileId], db);
         await this.notify(ctx, row, "MEETING_REQUEST_SENT", [ctx.profile.id], db);
-        return this.hydrate(row, store, false, ctx);
+        return this.hydrateOne(ctx, row, store);
       },
     );
   }
@@ -604,7 +609,7 @@ export class NetworkingMeetingsService {
         db,
         { reason: "PARTICIPANT" },
       );
-      return this.hydrate(saved, store, false, ctx);
+      return this.hydrateOne(ctx, saved, store);
     });
   }
   /**
@@ -688,7 +693,7 @@ export class NetworkingMeetingsService {
           revision: row.revision + 1,
         },
       );
-      return this.hydrate(saved, store, false, ctx);
+      return this.hydrateOne(ctx, saved, store);
     });
   }
 }

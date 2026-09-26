@@ -209,7 +209,7 @@ A wrong or expired OTP on `auth/verify` stays HTTP 401 (`AUTH_1001`); no session
 Who may use networking, and who may see whom, is decided in one place (`packages/db/src/policy/`):
 
 - `networking-access.ts` holds the rules as pure functions: the **gate** (config enabled, event not archived, client active with the networking, registrations and emails modules), the **window** (opening, closing, retention), **participant access** (`CONSENTED`, `CONSENT_PENDING` or none: an ACTIVE profile, never withdrawn or erased, whose own registration in the same event did not opt out and has an eligible payment status) and **counterpart visibility** by mode: `peer` (the relationship is given, e.g. a connection list: eligible, not the same person, no block either way), `discover` (also visible with a complete profile, discovery on), `profile` (discoverable or connected) and `blocklist` (like `profile`, ignoring the block itself).
-- `networking-eligibility.ts` holds the same rules as SQL fragments (`eligibleProfile`, `embeddableProfile`, `discoverableCounterpart`, `peerCounterpart`, `distinctIdentity`, `sameIdentity`, `mutuallyUnblocked`, `notInteracted`, `admittedProfile`, `networkingEventGate`, `listedProfile`, `activeProfile`) that discovery, search, facets, recommendations, vector ranking, connection lists, unread counts, badges, check-in, the embedding jobs, the maintenance producers, the organizer analytics and the post-event report compose.
+- `networking-eligibility.ts` holds the same rules as SQL fragments (`eligibleProfile`, `embeddableProfile`, `discoverableCounterpart`, `peerCounterpart`, `profileCounterpart`, `connectedPair`, `distinctIdentity`, `sameIdentity`, `mutuallyUnblocked`, `notInteracted`, `admittedProfile`, `networkingEventGate`, `listedProfile`, `activeProfile`) that discovery, search, facets, recommendations, vector ranking, connection lists, incoming interests, the agenda's counterparts, unread counts, badges, check-in, the embedding jobs, the maintenance producers, the organizer lists, exports and analytics and the post-event report compose.
 - Services load the facts in one statement (`networking-access-snapshot.ts`: the participant with its registration, form and second factor; a viewer and a target with any block and connection; the delivery context) and ask the pure functions.
 
 Where each surface stands:
@@ -219,6 +219,7 @@ Where each surface stands:
 | Sign-in, the participant's own routes, activation notices | participant access (`CONSENT_PENDING` only for sign-in codes and recording consent) |
 | Discovery, search, facets, recommendations, swipes | counterpart `discover` (recommendations: also not swiped or connected) |
 | A profile opened directly / the block list | counterpart `profile` / `blocklist` |
+| Incoming interests, the counterparts in the participant's meetings (agenda, meeting details, calendar file) | counterpart `profile`, decided in SQL for the whole list |
 | Connections, unread counts, the contacts CSV | counterpart `peer` over the viewer's connections |
 | Badge and check-in scan | eligible with a confirmed meeting |
 | Embedding jobs (enqueue, claim, reindex) and the embedding status | gate + eligible and visible (`embeddableProfile`); the status counts only these profiles |
@@ -327,7 +328,13 @@ Trackers hash session tokens and OTP identities; raw tokens/emails are not store
 
 ## Participant lists
 
-`GET connections` and `GET meetings` always paginate (`limit` 1–200, default 50; opaque `cursor`). The first page returns `{ items, nextCursor, total }`; later pages omit `total`. Cursors are scoped to the event, participant and list, and survive organizer configuration edits. `GET connections/:id`, `GET connections/with/:profileId` (`{ connection }`, possibly null) and `GET meetings/:id` return single items in the list shapes. Calendar, CSV and personal-data exports are never truncated.
+`GET connections`, `GET meetings` and `GET interests/incoming` always paginate (`limit` 1–200, default 50; opaque `cursor`). The first page returns `{ items, nextCursor, total }`; later pages omit `total`. Cursors are scoped to the event, participant and list, and survive organizer configuration edits. `GET connections/:id`, `GET connections/with/:profileId` (`{ connection }`, possibly null) and `GET meetings/:id` return single items in the list shapes. Calendar, CSV and personal-data exports are never truncated.
+
+Read cost is fixed per page, not per row (plan 4.9):
+
+- Meetings (the agenda, a single meeting, the calendar file) are hydrated for the viewer in two statements for the whole list: the participants with their visibility (`profile` mode, one statement, the viewer's own row included; the viewer must still be eligible) and the tables with their spaces. A first agenda page takes six statements (two for proposal expiry, the page, the total, the hydration), a later page three.
+- Incoming interests (exhibitors' "who liked me") page newest first by keyset on `(created_at, id)`. A statement reads a batch of candidate likes off the partial index `networking_interests_incoming_idx` (0034), backwards, in a LIMITed subquery planned on its own (so the plan never depends on the planner's estimate for the sender filters), and decides each sender with the `profile` fragment. One statement per page, one more batch when hidden or blocked senders leave a page short, and the total on the first page.
+- The badge's area check is one `SELECT EXISTS`.
 
 ## Organizer analytics and the post-event report
 
@@ -341,3 +348,8 @@ Trackers hash session tokens and OTP identities; raw tokens/emails are not store
 - Table occupancy is the one figure computed in the API: it applies the inventory policy (a station per table, one per active representative at a stand) to the booked meetings at tables over the configured opening slots.
 
 A DB test holds the SQL figures to the pre-4.9 in-memory calculator on the eligibility matrix fixtures (both engines in CI).
+
+## Organizer lists and exports
+
+- `GET profiles`, `GET meetings` and `GET reports` are SQL pages (`page` from 1, `limit` 1–100, default 30) returning `{ items, total }`; the filters run in SQL before paging. Participants: listed profiles oldest first, with `matchCount` (connections) and `meetingCount` (meetings not cancelled, declined or expired); `q` is a case-insensitive substring of "first last company role email". Meetings: by start time; `q` matches either participant's "first last company" with accents and case folded; `date` is the start day in the event timezone. Reports: newest first, each with its reporter, the reported participant and the reported message. Each list is its page, its total and its relations in bulk (participants 3 statements, meetings 6 including proposal expiry, reports 2).
+- `GET export` (participants, matches, meetings, sectors) streams CSV and XLSX into the response from SQL pages of 500 rows (ids in export order first, then each page in its own short transaction under the export statement timeout): participants oldest first with the engagement definitions of the analytics (swipes are interests, meetings are booked ones), matches oldest first, meetings by start time, sectors as in the analytics. A PDF is built in memory from the same pages. An erased participant is left out of the participant export and named by id in the others.

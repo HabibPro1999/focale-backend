@@ -5,7 +5,7 @@ import type { NetworkingContext } from "./networking.service";
 const invalid = () => new BadRequestException({ code: "NETWORKING_VALIDATION", message: "Invalid pagination query or cursor" });
 
 /** HTTP lists always paginate (K3): 50 items by default, at most 200. */
-export function participantPagination(kind: "connections" | "meetings", ctx: NetworkingContext, input: NetworkingParticipantListQuery = {}) {
+export function participantPagination(kind: "connections" | "meetings" | "incoming", ctx: NetworkingContext, input: NetworkingParticipantListQuery = {}) {
   const parsed = NetworkingParticipantListQuerySchema.safeParse(input);
   if (!parsed.success) throw invalid();
   const query = parsed.data;

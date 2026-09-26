@@ -161,6 +161,10 @@ export const networkingInterests = pgTable(
       t.profileId,
       t.targetId,
     ),
+    // Incoming likes, newest first by keyset (0034); the query repeats the predicate.
+    index("networking_interests_incoming_idx")
+      .on(t.eventId, t.targetId, t.createdAt, t.id)
+      .where(sql`${t.action} = 'LIKE'`),
   ],
 );
 export const networkingConnections = pgTable(
