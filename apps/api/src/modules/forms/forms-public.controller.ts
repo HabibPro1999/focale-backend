@@ -49,7 +49,7 @@ export class FormsPublicController {
 
   @Get(":slug")
   @ResponseContract(PublicFormResponseSchema)
-  async getBySlug(@Param() params: EventSlugParamDto): Promise<FormWithRelations> {
+  async getBySlug(@Param() params: EventSlugParamDto) {
     const form = await this.forms.getFormByEventSlug(params.slug);
     if (!form) {
       throw new NotFoundException({
@@ -57,6 +57,13 @@ export class FormsPublicController {
         message: "Form not found or not published",
       });
     }
-    return form;
+    return toPublicForm(form);
   }
+}
+
+/** The form row as the form app reads it: the event's `clientId` stays internal. */
+function toPublicForm(form: FormWithRelations) {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- omitted on purpose
+  const { clientId, ...event } = form.event;
+  return { ...form, event };
 }

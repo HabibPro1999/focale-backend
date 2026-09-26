@@ -30,6 +30,28 @@ const form = {
   },
 };
 
+describe("FormsPublicController.getBySlug", () => {
+  it("returns the form without the event's clientId", async () => {
+    const row = { id: "form-1", event: { ...form.event, clientId: "client-1" } };
+    const controller = new FormsPublicController({
+      getFormByEventSlug: vi.fn().mockResolvedValue(row),
+    } as unknown as FormsService);
+
+    const res = await controller.getBySlug({ slug: "event" });
+
+    expect(res.event).not.toHaveProperty("clientId");
+    expect(res.event.client).toEqual(form.event.client);
+    expect(res).toEqual({ id: "form-1", event: form.event });
+  });
+
+  it("404s when no published form matches", async () => {
+    const controller = new FormsPublicController({
+      getFormByEventSlug: vi.fn().mockResolvedValue(null),
+    } as unknown as FormsService);
+    await expect(controller.getBySlug({ slug: "nope" })).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
 describe("FormsPublicController.getSponsorBySlug", () => {
   it("exposes id/eventId/schemaVersion and the event bannerUrl (formId kept for back-compat)", async () => {
     const res = await makeController(form).getSponsorBySlug({ slug: "event" });

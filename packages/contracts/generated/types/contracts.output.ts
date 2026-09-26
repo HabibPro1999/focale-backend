@@ -1740,7 +1740,6 @@ export type PublicFormResponse = {
   updatedAt: string;
   event: {
     id: string;
-    clientId: string;
     name: string;
     slug: string;
     description: string | null;
