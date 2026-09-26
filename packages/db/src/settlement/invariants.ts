@@ -109,6 +109,7 @@ function registrationFilter(eventId: string | undefined, column: SQL = sql`r.eve
 }
 
 async function breakdownVsColumns(db: DbExecutor, eventId?: string) {
+  // A missing key makes jsonb_typeof NULL, hence the IS NOT TRUE below (NOT NULL is not true).
   const complete = sql`(
     jsonb_typeof(${PB}->'subtotal') = 'number'
     AND jsonb_typeof(${PB}->'calculatedBasePrice') = 'number'
@@ -135,7 +136,7 @@ async function breakdownVsColumns(db: DbExecutor, eventId?: string) {
         SELECT r.id, r.event_id AS "eventId", r.total_amount AS "totalAmount",
           r.sponsorship_amount AS "sponsorshipAmount",
           CASE
-            WHEN NOT ${complete} THEN 'BREAKDOWN_INCOMPLETE'
+            WHEN ${complete} IS NOT TRUE THEN 'BREAKDOWN_INCOMPLETE'
             WHEN COALESCE(i.bad_items, 0) > 0 THEN 'ACCESS_ITEM_WITHOUT_SUBTOTAL'
             WHEN ${sponsorshipTotal} <> r.sponsorship_amount THEN 'SPONSORSHIP_TOTAL_MISMATCH'
             WHEN ${sponsorshipTotal} > ${subtotal} THEN 'SPONSORSHIP_EXCEEDS_SUBTOTAL'
