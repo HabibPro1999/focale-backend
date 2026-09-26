@@ -43,6 +43,7 @@ import { EnvelopeInterceptor } from "../../core/envelope.interceptor";
 import { HttpExceptionFilter } from "../../core/http-exception.filter";
 import { RegistrationsController } from "./registrations.controller";
 import { RegistrationsService } from "./registrations.service";
+import { RegistrationCreateService } from "./registrations.create.service";
 import { RegistrationRepricer } from "./registrations.repricer";
 import { RegistrationPaymentsService } from "./registrations.payments.service";
 
@@ -62,6 +63,7 @@ const repricer = {
   controllers: [RegistrationsController],
   providers: [
     { provide: RegistrationsService, useValue: service },
+    { provide: RegistrationCreateService, useValue: {} },
     { provide: RegistrationRepricer, useValue: repricer },
     { provide: RegistrationPaymentsService, useValue: {} },
     Reflector,
