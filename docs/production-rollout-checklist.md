@@ -107,7 +107,7 @@ blocks writes to the table on PostgreSQL; run `apply` off-peak there.
   responses now project `priceBreakdown` onto its schema, so a key it reports
   as `stripped_key` is no longer returned. Under `enforce` a registration with
   an invalid breakdown cannot be paid, repriced or linked until the row is
-  fixed, so fix or accept every such row before switching.
+  fixed, so fix or accept every such row before switching. #170 (5.2b)
 
 ## Data repairs
 
