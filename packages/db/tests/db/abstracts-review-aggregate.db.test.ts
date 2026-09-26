@@ -14,7 +14,7 @@ import {
 } from "@app/db";
 import { dbTestsEnabled } from "../helpers/test-env";
 import { cleanupDatabase } from "../helpers/cleanup";
-import { seedAbstract, seedEvent, seedUser } from "../helpers/factories";
+import { seedAbstract, seedEvent, seedUser, testAudit } from "../helpers/factories";
 
 async function readAbstract(abstractId: string) {
   const [row] = await getDb()
@@ -48,6 +48,7 @@ describe.runIf(dbTestsEnabled())("db tier: review aggregate recompute", () => {
       eventId: event.id,
       abstractId: abstract.id,
       reviewerIds: [r1.id, r2.id],
+      audit: testAudit(),
     });
     await reviewAbstractTxn({
       abstractId: abstract.id,
@@ -81,6 +82,7 @@ describe.runIf(dbTestsEnabled())("db tier: review aggregate recompute", () => {
       eventId: event.id,
       abstractId: abstract.id,
       reviewerIds: [r1.id],
+      audit: testAudit(),
     });
 
     expect(await readAbstract(abstract.id)).toMatchObject({
@@ -105,6 +107,7 @@ describe.runIf(dbTestsEnabled())("db tier: review aggregate recompute", () => {
       eventId: event.id,
       abstractId: abstract.id,
       reviewerIds: [r1.id, r2.id],
+      audit: testAudit(),
     });
     await reviewAbstractTxn({
       abstractId: abstract.id,
@@ -132,6 +135,7 @@ describe.runIf(dbTestsEnabled())("db tier: review aggregate recompute", () => {
       eventId: event.id,
       abstractId: abstract.id,
       reviewerIds: [r1.id, r2.id, tieBreaker.id],
+      audit: testAudit(),
     });
 
     expect(result).toMatchObject({ ok: true, status: "UNDER_REVIEW" });
@@ -153,6 +157,7 @@ describe.runIf(dbTestsEnabled())("db tier: review aggregate recompute", () => {
       eventId: event.id,
       abstractId: abstract.id,
       reviewerIds: [r1.id, r2.id],
+      audit: testAudit(),
     });
     await reviewAbstractTxn({
       abstractId: abstract.id,
@@ -167,7 +172,7 @@ describe.runIf(dbTestsEnabled())("db tier: review aggregate recompute", () => {
     // r2 is assigned but has NOT scored yet: blocks REVIEW_COMPLETE.
     expect((await readAbstract(abstract.id)).status).toBe("UNDER_REVIEW");
 
-    await deactivateCommitteeMembershipTxn(event.id, r2.id);
+    await deactivateCommitteeMembershipTxn(event.id, r2.id, testAudit());
 
     const after = await readAbstract(abstract.id);
     expect(after.reviewCount).toBe(1);
@@ -191,6 +196,7 @@ describe.runIf(dbTestsEnabled())("db tier: review aggregate recompute", () => {
       eventId: event.id,
       abstractId: abstract.id,
       reviewerIds: [r1.id, r2.id],
+      audit: testAudit(),
     });
     for (const [reviewer, score] of [
       [r1, 10],
@@ -215,7 +221,7 @@ describe.runIf(dbTestsEnabled())("db tier: review aggregate recompute", () => {
     });
     expect(result.ok).toBe(true);
 
-    await deactivateCommitteeMembershipTxn(event.id, r1.id);
+    await deactivateCommitteeMembershipTxn(event.id, r1.id, testAudit());
 
     const after = await readAbstract(abstract.id);
     expect(after.status).toBe("REJECTED");
@@ -273,7 +279,7 @@ describe.runIf(dbTestsEnabled())("db tier: abstract final-status guards", () => 
     const r3 = await seedUser({ clientId: event.clientId });
     for (const member of [r1, r2, r3]) await upsertCommitteeMembership(event.id, member.id);
     expect(
-      await assignReviewersTxn({ eventId: event.id, abstractId: abstract.id, reviewerIds: [r1.id, r2.id] }),
+      await assignReviewersTxn({ eventId: event.id, abstractId: abstract.id, reviewerIds: [r1.id, r2.id], audit: testAudit() }),
     ).toMatchObject({ ok: true, status: "UNDER_REVIEW" });
     expect(await score(abstract.id, event.id, event.clientId, r1.id, 12)).toMatchObject({ ok: true });
     return { event, abstract, r1, r2, r3 };
@@ -305,7 +311,7 @@ describe.runIf(dbTestsEnabled())("db tier: abstract final-status guards", () => 
     const { event, abstract, r1, r2, r3 } = await seedReviewed();
     // Re-assigning without r2 deactivates r2's review.
     expect(
-      await assignReviewersTxn({ eventId: event.id, abstractId: abstract.id, reviewerIds: [r1.id] }),
+      await assignReviewersTxn({ eventId: event.id, abstractId: abstract.id, reviewerIds: [r1.id], audit: testAudit() }),
     ).toMatchObject({ ok: true });
     const before = await readReviews(abstract.id);
     const aggregate = await readAbstract(abstract.id);
@@ -359,7 +365,7 @@ describe.runIf(dbTestsEnabled())("db tier: abstract final-status guards", () => 
     const before = await readReviews(abstract.id);
 
     expect(
-      await assignReviewersTxn({ eventId: event.id, abstractId: abstract.id, reviewerIds: [r1.id, r3.id] }),
+      await assignReviewersTxn({ eventId: event.id, abstractId: abstract.id, reviewerIds: [r1.id, r3.id], audit: testAudit() }),
     ).toEqual({ ok: false, reason: "finalized" });
 
     expect(await readReviews(abstract.id)).toEqual(before);
@@ -370,7 +376,7 @@ describe.runIf(dbTestsEnabled())("db tier: abstract final-status guards", () => 
   it("assignment of a removed or never-added member returns inactive_member and changes nothing", async () => {
     const { event, abstract, r1, r2, r3 } = await seedReviewed();
     const outsider = await seedUser({ clientId: event.clientId });
-    await deactivateCommitteeMembershipTxn(event.id, r3.id);
+    await deactivateCommitteeMembershipTxn(event.id, r3.id, testAudit());
     const before = await readReviews(abstract.id);
     const aggregate = await readAbstract(abstract.id);
 
@@ -379,6 +385,7 @@ describe.runIf(dbTestsEnabled())("db tier: abstract final-status guards", () => 
         eventId: event.id,
         abstractId: abstract.id,
         reviewerIds: [r1.id, r2.id, r3.id, outsider.id],
+        audit: testAudit(),
       }),
     ).toEqual({ ok: false, reason: "inactive_member", reviewerIds: [r3.id, outsider.id] });
 
@@ -390,7 +397,7 @@ describe.runIf(dbTestsEnabled())("db tier: abstract final-status guards", () => 
     const { abstract, r1, r2 } = await seedReviewed();
     const otherEvent = await seedEvent({ status: "OPEN" });
     expect(
-      await assignReviewersTxn({ eventId: otherEvent.id, abstractId: abstract.id, reviewerIds: [r1.id, r2.id] }),
+      await assignReviewersTxn({ eventId: otherEvent.id, abstractId: abstract.id, reviewerIds: [r1.id, r2.id], audit: testAudit() }),
     ).toEqual({ ok: false, reason: "not_found" });
   });
 

@@ -7,6 +7,7 @@ import {
   abstractThemeLinks,
   abstractThemes,
   abstracts,
+  auditLogs,
   clients,
   eventAccess,
   events,
@@ -211,4 +212,11 @@ export async function seedAbstract(
     })
     .returning();
   return row;
+}
+
+/** Audit values for query functions that write their audit row in the change's transaction. */
+export function testAudit(
+  overrides: Partial<typeof auditLogs.$inferInsert> = {},
+): typeof auditLogs.$inferInsert {
+  return { entityType: "Test", entityId: "test", action: "test", performedBy: "test", ...overrides };
 }

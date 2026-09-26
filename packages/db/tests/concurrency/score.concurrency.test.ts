@@ -12,7 +12,7 @@ import {
 } from "@app/db";
 import { dbTestsEnabled } from "../helpers/test-env";
 import { cleanupDatabase } from "../helpers/cleanup";
-import { seedAbstract, seedEvent, seedUser } from "../helpers/factories";
+import { seedAbstract, seedEvent, seedUser, testAudit } from "../helpers/factories";
 
 // Score aggregation. Submitting a review recomputes abstracts.review_count and
 // average_score from ALL active reviews (recompute-from-children) — the exact
@@ -64,7 +64,7 @@ async function seedAbstractWithReviewers(count: number) {
   const reviewerIds = reviewers.map((r) => r.id);
   for (const reviewerId of reviewerIds) await upsertCommitteeMembership(event.id, reviewerId);
   // reviewAbstractTxn scores active assignments only.
-  expect(await assignReviewersTxn({ eventId: event.id, abstractId: abstract.id, reviewerIds }))
+  expect(await assignReviewersTxn({ eventId: event.id, abstractId: abstract.id, reviewerIds, audit: testAudit() }))
     .toMatchObject({ ok: true });
   return { event, abstract, reviewerIds };
 }

@@ -14,7 +14,7 @@ import {
 import { setTimeout as sleep } from "node:timers/promises";
 import { dbTestsEnabled } from "../helpers/test-env";
 import { cleanupDatabase } from "../helpers/cleanup";
-import { seedAbstract, seedEvent, seedUser } from "../helpers/factories";
+import { seedAbstract, seedEvent, seedUser, testAudit } from "../helpers/factories";
 
 // Plan 2.9 follow-up: assigning a member while the same member is removed.
 // assignReviewersTxn locks the chosen reviewers' memberships before the
@@ -141,6 +141,7 @@ describe.runIf(dbTestsEnabled())("concurrency: reviewer assignment against a mem
         eventId: event.id,
         abstractId: reviewed.id,
         reviewerIds: [leaver.id, stayerA.id],
+        audit: testAudit(),
       }),
     ).toMatchObject({ ok: true });
 
@@ -149,7 +150,7 @@ describe.runIf(dbTestsEnabled())("concurrency: reviewer assignment against a mem
     let removal: Promise<void> | undefined;
     let late: ReturnType<typeof assignReviewersTxn> | undefined;
     try {
-      removal = deactivateCommitteeMembershipTxn(event.id, leaver.id);
+      removal = deactivateCommitteeMembershipTxn(event.id, leaver.id, testAudit());
       await waitForMembershipLock(event.id, leaver.id);
       expect(await settlesWithin(removal, 200)).toBe(false);
 
@@ -157,6 +158,7 @@ describe.runIf(dbTestsEnabled())("concurrency: reviewer assignment against a mem
         eventId: event.id,
         abstractId: target.id,
         reviewerIds: [leaver.id, stayerB.id],
+        audit: testAudit(),
       });
       expect(await settlesWithin(late, 300)).toBe(false);
     } finally {
@@ -186,11 +188,12 @@ describe.runIf(dbTestsEnabled())("concurrency: reviewer assignment against a mem
         eventId: event.id,
         abstractId: target.id,
         reviewerIds: [stayer.id, leaver.id],
+        audit: testAudit(),
       });
       await waitForMembershipLock(event.id, leaver.id);
       expect(await settlesWithin(assignment, 200)).toBe(false);
 
-      removal = deactivateCommitteeMembershipTxn(event.id, leaver.id);
+      removal = deactivateCommitteeMembershipTxn(event.id, leaver.id, testAudit());
       expect(await settlesWithin(removal, 300)).toBe(false);
     } finally {
       await holder.release();
@@ -223,11 +226,12 @@ describe.runIf(dbTestsEnabled())("concurrency: reviewer assignment against a mem
         eventId: event.id,
         abstractId: target.id,
         reviewerIds: i % 2 === 0 ? [leaver.id, stayerA.id] : [stayerB.id, leaver.id],
+        audit: testAudit(),
       }),
     );
     const [results] = await Promise.all([
       Promise.all(assignments),
-      deactivateCommitteeMembershipTxn(event.id, leaver.id),
+      deactivateCommitteeMembershipTxn(event.id, leaver.id, testAudit()),
     ]);
 
     for (const result of results) {
