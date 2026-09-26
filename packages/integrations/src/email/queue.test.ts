@@ -19,6 +19,7 @@ vi.mock("@app/db", async () => ({
   emailQueue: queue,
   runLeased: (await vi.importActual<typeof import("@app/db")>("@app/db")).runLeased,
   pgUniqueViolation: (await vi.importActual<typeof import("@app/db")>("@app/db")).pgUniqueViolation,
+  readEmailContextSnapshot: (await vi.importActual<typeof import("@app/db")>("@app/db")).readEmailContextSnapshot,
   getTemplateByTrigger: vi.fn(),
   createEmailLog: vi.fn(),
   hasActiveEmailLogForRegistrationTrigger: vi.fn(),
@@ -444,6 +445,45 @@ describe("processEmailQueue", () => {
   // C1/N4: a no-template abstract email carries a plain-text fallback in its
   // contextSnapshot (queueAbstractEmail) — it must be ACTUALLY SENT, not
   // silently marked skipped like the legacy fallback-then-skip bug.
+  describe("stored context snapshot (plan 5.2, JSONB_VALIDATION)", () => {
+    // `_certificateTemplateIds` must be a list of ids: this snapshot is not a
+    // valid stored document.
+    const invalidSnapshot = { eventName: "Conf", _certificateTemplateIds: "cert-a" };
+
+    afterEach(async () => {
+      (await vi.importActual<typeof import("@app/db")>("@app/db")).configureJsonbValidation(undefined);
+    });
+
+    it("warn: sends an email whose snapshot is invalid exactly as before", async () => {
+      (await vi.importActual<typeof import("@app/db")>("@app/db")).configureJsonbValidation("warn");
+      const res = await runOne(claimed({ contextSnapshot: invalidSnapshot }));
+      expect(markEmailFailed).not.toHaveBeenCalled();
+      expect(markEmailSent).toHaveBeenCalledWith("log-1", "w1", "m1");
+      expect(res).toEqual({ processed: 1, sent: 1, failed: 0, skipped: 0, uncertain: 0 });
+    });
+
+    it("enforce: fails only that email (attempt charged, paths not values); the batch goes on", async () => {
+      (await vi.importActual<typeof import("@app/db")>("@app/db")).configureJsonbValidation("enforce");
+      const bad = claimed({ contextSnapshot: invalidSnapshot });
+      const good = claimed({ id: "log-2" });
+      queue.claim.mockResolvedValue([bad.id, good.id]);
+      mocked(getClaimedEmailLogsForProcessing).mockResolvedValue([bad, good]);
+
+      const res = await processEmailQueue(50, { workerId: "w1" });
+
+      expect(markEmailFailed).toHaveBeenCalledWith(
+        "log-1",
+        "w1",
+        "Stored JSON email_logs.context_snapshot (id log-1) does not match its schema: _certificateTemplateIds (invalid_type)",
+        1,
+        3,
+      );
+      expect(sendEmailMock).toHaveBeenCalledTimes(1);
+      expect(markEmailSent).toHaveBeenCalledWith("log-2", "w1", "m1");
+      expect(res).toEqual({ processed: 2, sent: 1, failed: 1, skipped: 0, uncertain: 0 });
+    });
+  });
+
   describe("no-template fallback (C1/N4)", () => {
     it("sends using the fallback subject/body instead of skipping", async () => {
       // resolveVariables is mocked to identity in this file (see top-of-file

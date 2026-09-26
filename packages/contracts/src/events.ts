@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { StoredPricingRules } from "./pricing";
 
 // ============================================================================
 // Request Schemas — ported ~verbatim from the legacy events.schema.ts
@@ -140,7 +141,7 @@ export interface PublicPaymentConfigResponse {
   pricing: {
     basePrice: number;
     currency: string;
-    rules: unknown;
+    rules: StoredPricingRules;
     paymentMethods: string[];
     bankDetails: {
       bankName: string;

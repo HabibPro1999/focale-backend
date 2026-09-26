@@ -676,7 +676,7 @@ it("rejects option labels while grandfathering untouched rules in a bulk update"
   pricingRead.mockResolvedValue(mockPricing({ rules: [legacy] }));
   vi.mocked(findRegistrationFormSchema).mockResolvedValue({ schema: { steps: [{ fields: [
     { id: "country", type: "country", label: "Country", options: [{ id: "TN", label: "Tunisie" }] },
-  ] }] } });
+  ] }] } as never });
   await service.updateEventPricing(eventId, { rules: [{ ...legacy, name: "Renamed" }] });
   expect(findRegistrationFormSchema).not.toHaveBeenCalled();
   await expect(service.updateEventPricing(eventId, { rules: [{ ...legacy, id: "new" }] }))

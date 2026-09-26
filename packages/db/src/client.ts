@@ -1,12 +1,17 @@
 import { Pool, type PoolClient } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { resolveDbRuntimeSettings, type DbRuntimeSettings } from "@app/contracts";
+import {
+  resolveDbRuntimeSettings,
+  type DbRuntimeSettings,
+  type JsonbValidationMode,
+} from "@app/contracts";
 import { createLogger } from "@app/shared";
 import {
   DEFAULT_DB_APPLICATION_NAME,
   assertApplicationName,
   buildPoolConfig,
 } from "./connection-config";
+import { configureJsonbValidation } from "./jsonb";
 
 // Pin the session to UTC. Our timestamp columns are `without time zone`
 // holding naive-UTC wall time (helpers.ts): drizzle writes via toISOString
@@ -36,6 +41,8 @@ export interface DbConfig {
   /** The app's parsed DATABASE_URL and DB_* settings (config.DATABASE_URL, config.database). */
   databaseUrl?: string;
   settings?: DbRuntimeSettings;
+  /** The app's parsed JSONB_VALIDATION (config.JSONB_VALIDATION); otherwise read from the environment. */
+  jsonbValidation?: JsonbValidationMode;
 }
 
 /**
@@ -56,6 +63,7 @@ export function configureDb(options: DbConfig): void {
     if (pool) throw new Error("configureDb must run before the database pool is first used");
     configured = { databaseUrl: options.databaseUrl, settings: options.settings };
   }
+  if (options.jsonbValidation !== undefined) configureJsonbValidation(options.jsonbValidation);
   applicationName = name;
 }
 

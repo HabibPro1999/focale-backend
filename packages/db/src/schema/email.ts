@@ -9,7 +9,9 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import { StoredEmailContextSnapshotSchema } from "@app/contracts";
 import { idPk, timestamps } from "../helpers";
+import { jsonbOf } from "../jsonb";
 import {
   abstractEmailTrigger,
   automaticEmailTrigger,
@@ -92,7 +94,7 @@ export const emailLogs = pgTable(
     lockedAt: timestamp({ precision: 3 }),
     lockedUntil: timestamp({ precision: 3 }),
     lockedBy: text(),
-    contextSnapshot: jsonb(),
+    contextSnapshot: jsonbOf(StoredEmailContextSnapshotSchema),
     // Per-outbox-delivery idempotency key (H6): the outbox event id that
     // produced this row, or a requeue-script-derived key. Partial unique index
     // over active statuses lives in migrations/0003_email_fixes.sql (drizzle

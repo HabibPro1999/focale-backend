@@ -1,13 +1,16 @@
 import { z } from "zod";
 import { EventAccessRowResponseSchema } from "./access";
+import { StoredPricingRulesSchema } from "./pricing";
 
 // ============================================================================
 // Response contracts (plan 5.5) for the public form routes. These routes used
 // to return whole database rows (form, event, pricing, access items), so any
 // new column became public; now only the columns listed here are returned.
 // Dates are `Date` objects on the server and ISO 8601 strings on the wire.
-// The form `schema`, `successTranslations`, pricing `rules` and access
-// `conditions` are stored JSON documents and stay opaque (plan 5.2).
+// Pricing `rules` is the stored rules document (plan 5.2). The form `schema`
+// stays opaque: its stored document is open by design (admin-authored keys
+// round-trip untouched), and a contract must not drop them.
+// `successTranslations` and access `conditions` are not typed yet.
 // ============================================================================
 
 const EventStatusSchema = z.enum(["CLOSED", "OPEN", "ARCHIVED"]);
@@ -27,7 +30,7 @@ export const EventPricingRowResponseSchema = z.object({
   eventId: z.string(),
   basePrice: z.number(),
   currency: z.string(),
-  rules: z.unknown(),
+  rules: StoredPricingRulesSchema,
   onlinePaymentEnabled: z.boolean(),
   onlinePaymentUrl: z.string().nullable(),
   cashPaymentEnabled: z.boolean(),

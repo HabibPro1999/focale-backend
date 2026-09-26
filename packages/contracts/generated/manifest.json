@@ -974,6 +974,22 @@
       "module": "packages/contracts/src/forms.ts",
       "type": "StepTranslationEntry"
     },
+    "StoredCertificateZonesSchema": {
+      "module": "packages/contracts/src/certificates.ts",
+      "type": "StoredCertificateZones"
+    },
+    "StoredEmailContextSnapshotSchema": {
+      "module": "packages/contracts/src/email.ts",
+      "type": "StoredEmailContextSnapshot"
+    },
+    "StoredFormSchemaJsonSchema": {
+      "module": "packages/contracts/src/forms.ts",
+      "type": "StoredFormSchemaJson"
+    },
+    "StoredPricingRulesSchema": {
+      "module": "packages/contracts/src/pricing.ts",
+      "type": "StoredPricingRules"
+    },
     "StreamQuerySchema": {
       "module": "packages/contracts/src/realtime.ts",
       "type": "StreamQuery"

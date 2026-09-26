@@ -170,7 +170,7 @@ async function buildMatrix(input: {
         type: "radio",
         options: [{ id: "o-yes", label: "J’accepte de participer au networking" }, { id: "o-no", label: "Je ne souhaite pas participer" }],
       }],
-    },
+    } as never,
   });
   const viewerId = randomUUID();
   const { profile: viewer } = await insertParticipant({

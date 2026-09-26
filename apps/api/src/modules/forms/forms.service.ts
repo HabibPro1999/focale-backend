@@ -340,13 +340,11 @@ export class FormsService {
       return result.form;
     }
 
-    const schema = (form.schema ?? {}) as Record<string, unknown>;
-    const merged = {
+    // A SPONSOR form (checked above) stores a sponsor form schema.
+    const schema = form.schema as SponsorFormSchemaJson;
+    const merged: SponsorFormSchemaJson = {
       ...schema,
-      sponsorshipSettings: {
-        ...((schema.sponsorshipSettings as Record<string, unknown>) ?? {}),
-        ...settings,
-      },
+      sponsorshipSettings: { ...schema.sponsorshipSettings, ...settings },
     };
     return dbUpdateForm(formId, { schema: merged });
   }

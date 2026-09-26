@@ -87,7 +87,7 @@ export async function seedForm(
   const eventId = overrides.eventId ?? (await seedEvent()).id;
   const [row] = await getDb()
     .insert(forms)
-    .values({ eventId, name: "Test Form", schema: { fields: [] }, ...overrides })
+    .values({ eventId, name: "Test Form", schema: { fields: [] } as never, ...overrides })
     .returning();
   return row;
 }

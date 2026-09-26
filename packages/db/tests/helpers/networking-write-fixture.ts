@@ -61,7 +61,7 @@ export async function createNetworkingWriteFixture(options: {
     id: formId,
     eventId,
     name: "Registration",
-    schema: { steps: [{ id: "professional", fields: ["company", "jobTitle", "sector"].map((id) => ({ id, type: "text" })) }] },
+    schema: { steps: [{ id: "professional", fields: ["company", "jobTitle", "sector"].map((id) => ({ id, type: "text" })) }] } as never,
   });
   await db.insert(registrations).values(Array.from({ length: options.size }, (_, index) => ({
     id: randomUUID(),

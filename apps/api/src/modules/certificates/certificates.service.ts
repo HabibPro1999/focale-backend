@@ -6,6 +6,7 @@ import { ErrorCodes, ABSTRACT_FINAL_TYPE_LABELS } from "@app/contracts";
 import { getAbstractTitle } from "@app/shared";
 import type {
   CreateCertificateTemplateInput,
+  StoredCertificateZones,
   UpdateCertificateTemplateInput,
 } from "@app/contracts";
 import {
@@ -257,7 +258,7 @@ export class CertificatesService {
 
     const patch: {
       name?: string;
-      zones?: unknown;
+      zones?: StoredCertificateZones;
       applicableRoles?: string[];
       active?: boolean;
       accessId?: string | null;
@@ -491,7 +492,7 @@ export class CertificatesService {
       templateWidth: t.templateWidth,
       templateHeight: t.templateHeight,
       renderImageKey: t.renderImageKey,
-      zones: (t.zones as CertificateTemplateData["zones"]) ?? [],
+      zones: t.zones ?? [],
       applicableRoles: (t.applicableRoles as string[] | null) ?? [],
       accessId: t.accessId,
       access: t.access ? { id: t.access.id, name: t.access.name } : null,

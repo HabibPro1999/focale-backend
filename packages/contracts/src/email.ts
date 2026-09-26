@@ -311,9 +311,32 @@ export const ResendEmailLogParamSchema = z.strictObject({
 });
 
 // ============================================================================
+// Stored email-log context (plan 5.2)
+// ============================================================================
+
+/**
+ * The stored `email_logs.context_snapshot` document: the template variables
+ * captured when the email was queued (any keys; the send path resolves
+ * `{{name}}` from them), plus the internal `_`-prefixed keys the send and
+ * certificate paths read back. Null when nothing was captured (the send path
+ * then rebuilds the context from the registration).
+ */
+export const StoredEmailContextSnapshotSchema = z
+  .looseObject({
+    /** Fallback-only abstract emails (no admin template): the unresolved subject. */
+    _fallbackSubject: z.string().optional(),
+    /** Fallback-only abstract emails: the unresolved plain-text body. */
+    _fallbackPlainBody: z.string().optional(),
+    /** Certificate emails: the templates this email carries (the per-registration dedupe key). */
+    _certificateTemplateIds: z.array(z.string()).optional(),
+  })
+  .nullable();
+
+// ============================================================================
 // Types
 // ============================================================================
 
+export type StoredEmailContextSnapshot = z.infer<typeof StoredEmailContextSnapshotSchema>;
 export type EmailTemplateCategory = z.infer<typeof EmailTemplateCategorySchema>;
 export type AutomaticEmailTrigger = z.infer<typeof AutomaticEmailTriggerSchema>;
 export type AbstractEmailTrigger = z.infer<typeof AbstractEmailTriggerSchema>;

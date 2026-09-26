@@ -3966,7 +3966,9 @@
         "currency": {
           "type": "string"
         },
-        "rules": {},
+        "rules": {
+          "$ref": "#/$defs/StoredPricingRulesSchema"
+        },
         "onlinePaymentEnabled": {
           "type": "boolean"
         },
@@ -8387,7 +8389,9 @@
                 "currency": {
                   "type": "string"
                 },
-                "rules": {},
+                "rules": {
+                  "$ref": "#/$defs/StoredPricingRulesSchema"
+                },
                 "paymentMethods": {
                   "items": {
                     "type": "string"
@@ -10908,6 +10912,53 @@
         }
       },
       "type": "object"
+    },
+    "StoredCertificateZonesSchema": {
+      "items": {
+        "$ref": "#/$defs/CertificateZoneSchema"
+      },
+      "type": "array"
+    },
+    "StoredEmailContextSnapshotSchema": {
+      "anyOf": [
+        {
+          "additionalProperties": {},
+          "properties": {
+            "_fallbackSubject": {
+              "type": "string"
+            },
+            "_fallbackPlainBody": {
+              "type": "string"
+            },
+            "_certificateTemplateIds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "StoredFormSchemaJsonSchema": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FormSchemaJsonSchema"
+        },
+        {
+          "$ref": "#/$defs/SponsorFormSchemaJsonSchema"
+        }
+      ]
+    },
+    "StoredPricingRulesSchema": {
+      "items": {
+        "$ref": "#/$defs/EmbeddedPricingRuleSchema"
+      },
+      "type": "array"
     },
     "StreamQuerySchema": {
       "properties": {

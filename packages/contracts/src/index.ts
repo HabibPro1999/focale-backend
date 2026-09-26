@@ -34,5 +34,6 @@ export * from "./reports";
 export * from "./i18n.schema";
 export * from "./condition-satisfiability";
 export * from "./condition-option-validation";
+export * from "./stored-json";
 
 export * from "./networking";

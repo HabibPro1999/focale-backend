@@ -22,6 +22,12 @@ export const EmbeddedPricingRuleSchema = z.strictObject({
   active: z.boolean().default(true),
 });
 
+/**
+ * The stored `event_pricing.rules` document (plan 5.2): the rules exactly as
+ * the pricing routes write them (parsed, defaults filled in).
+ */
+export const StoredPricingRulesSchema = z.array(EmbeddedPricingRuleSchema);
+
 // For creating rules (id is optional, will be generated)
 // A POST is a new rule by definition, so it can never be "legacy" — always
 // validate it against the contradiction guard. Do NOT add this refine to
@@ -162,6 +168,7 @@ export const PriceBreakdownSchema = z.object({
 // ============================================================================
 
 export type EmbeddedPricingRule = z.infer<typeof EmbeddedPricingRuleSchema>;
+export type StoredPricingRules = z.infer<typeof StoredPricingRulesSchema>;
 export type CreateEmbeddedRuleInput = z.infer<typeof CreateEmbeddedRuleSchema>;
 export type UpdateEmbeddedRuleInput = z.infer<typeof UpdateEmbeddedRuleSchema>;
 
