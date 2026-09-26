@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   queueAbstractEmail: vi.fn(),
   handleStorageDeleteOutbox: vi.fn(),
   handleAccessCapacityReachedOutbox: vi.fn(),
+  handleNetworkingRegistrationSyncOutbox: vi.fn(),
+  handleNetworkingEventSyncOutbox: vi.fn(),
 }));
 
 vi.mock("@app/shared", () => ({
@@ -25,6 +27,10 @@ vi.mock("@app/db", () => ({
   processOutboxEvents: vi.fn(),
   ACCESS_CAPACITY_REACHED_OUTBOX_TYPE: "access.capacityReached",
   handleAccessCapacityReachedOutbox: mocks.handleAccessCapacityReachedOutbox,
+  NETWORKING_REGISTRATION_SYNC_OUTBOX_TYPE: "networking.registration.sync",
+  NETWORKING_EVENT_SYNC_OUTBOX_TYPE: "networking.event.sync",
+  handleNetworkingRegistrationSyncOutbox: mocks.handleNetworkingRegistrationSyncOutbox,
+  handleNetworkingEventSyncOutbox: mocks.handleNetworkingEventSyncOutbox,
 }));
 
 import { buildOutboxHandlers } from "./outbox.job";
@@ -32,13 +38,15 @@ import { buildOutboxHandlers } from "./outbox.job";
 describe("outbox handler registry", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("registers exactly the background handlers: three email types, storage.delete and access.capacityReached (no realtime.emit)", () => {
+  it("registers exactly the background handlers: three email types, storage.delete, access.capacityReached and the networking syncs (no realtime.emit)", () => {
     const handlers = buildOutboxHandlers();
     expect(Object.keys(handlers).sort()).toEqual([
       "access.capacityReached",
       "email.abstract",
       "email.sponsorship",
       "email.triggered",
+      "networking.event.sync",
+      "networking.registration.sync",
       "storage.delete",
     ]);
     expect(handlers["realtime.emit"]).toBeUndefined();
@@ -60,6 +68,17 @@ describe("outbox handler registry", () => {
     mocks.handleAccessCapacityReachedOutbox.mockResolvedValueOnce("processed");
     await expect(handlers["access.capacityReached"](payload, meta)).resolves.toBe("processed");
     expect(mocks.handleAccessCapacityReachedOutbox).toHaveBeenCalledWith(payload, meta);
+  });
+
+  it.each([
+    ["networking.registration.sync", "handleNetworkingRegistrationSyncOutbox", { registrationId: "r1" }],
+    ["networking.event.sync", "handleNetworkingEventSyncOutbox", { eventId: "e1", runId: "run1", after: null }],
+  ] as const)("%s → %s(payload, meta)", async (type, handler, payload) => {
+    const handlers = buildOutboxHandlers();
+    const meta = { id: "o1" };
+    mocks[handler].mockResolvedValueOnce("processed");
+    await expect(handlers[type](payload, meta)).resolves.toBe("processed");
+    expect(mocks[handler]).toHaveBeenCalledWith(payload, meta);
   });
 
   it("email.triggered → queueTriggeredEmail(trigger, eventId, registration)", async () => {

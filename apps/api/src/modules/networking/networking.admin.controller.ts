@@ -18,7 +18,7 @@ import {
   type NetworkingMultipartRequest,
 } from "./networking.uploads.service";
 import type { FastifyReply } from "fastify";
-import { listNetworkingAdminAudit, syncNetworkingEvent } from "@app/db";
+import { getNetworkingEventSyncState, listNetworkingAdminAudit, requestNetworkingEventSync } from "@app/db";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
 import type { AuthUser } from "../../core/auth/user-cache";
@@ -74,12 +74,25 @@ export class NetworkingAdminController {
       config.logoUrl,
     );
   }
-  @Post("sync") async sync(
+  /**
+   * Starts a full re-projection of the event's registrations in the worker
+   * (plan 4.8): 202 with the new run's state; GET follows its progress.
+   */
+  @Post("sync")
+  @HttpCode(202)
+  async sync(
     @CurrentUser() user: AuthUser,
     @Param("eventId") eventId: string,
   ) {
     await this.access(user, eventId, true);
-    return syncNetworkingEvent(eventId);
+    return requestNetworkingEventSync(eventId);
+  }
+  @Get("sync") async syncState(
+    @CurrentUser() user: AuthUser,
+    @Param("eventId") eventId: string,
+  ) {
+    await this.access(user, eventId);
+    return getNetworkingEventSyncState(eventId);
   }
   @Get("profiles") async profiles(
     @CurrentUser() user: AuthUser,

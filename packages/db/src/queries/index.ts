@@ -17,6 +17,7 @@ export * from "./reports";
 export * from "./committee-invites";
 
 export * from "./networking";
+export * from "./networking-sync";
 
 export * from "./networking-store";
 export * from "./networking-notices";

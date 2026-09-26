@@ -2,22 +2,28 @@ import type { AppEvent } from "@app/contracts";
 import { isFullySettled } from "@app/shared";
 import type { DbExecutor } from "../client";
 import { enqueueRealtimeOutboxEvent } from "../outbox";
-import { syncNetworkingRegistration } from "../queries/networking";
+import { enqueueNetworkingRegistrationSyncs } from "../queries/networking-sync";
 
 /**
  * Enqueue realtime events in the caller's transaction, one after the other so
  * a failed insert stops the rest (the transaction is aborted anyway).
  * Registrations whose money state changed (registration.updated /
- * paymentConfirmed) are first re-projected into networking, whose eligibility
- * depends on payment status. Returns each enqueue's result, in order.
+ * paymentConfirmed) first get a `networking.registration.sync` outbox row:
+ * networking eligibility depends on payment status, and the worker
+ * re-projects them after this transaction commits (plan 4.8), so a failing
+ * projection never rolls back the settlement. Returns each realtime enqueue's
+ * result, in order.
  */
 export async function emitSettlementEvents(tx: DbExecutor, events: AppEvent[]): Promise<unknown> {
-  const changedIds = new Set(
-    events
-      .filter((ev) => ev.type === "registration.updated" || ev.type === "registration.paymentConfirmed")
-      .map((ev) => String(ev.payload.id)),
+  // Settlement events always name their event (settlementEventPair).
+  await enqueueNetworkingRegistrationSyncs(
+    tx,
+    events.flatMap((ev) =>
+      (ev.type === "registration.updated" || ev.type === "registration.paymentConfirmed") && ev.eventId
+        ? [{ registrationId: String(ev.payload.id), eventId: ev.eventId }]
+        : [],
+    ),
   );
-  for (const id of changedIds) await syncNetworkingRegistration(id, tx);
   const results: Awaited<ReturnType<typeof enqueueRealtimeOutboxEvent>>[] = [];
   for (const event of events) results.push(await enqueueRealtimeOutboxEvent(tx, event));
   return results;

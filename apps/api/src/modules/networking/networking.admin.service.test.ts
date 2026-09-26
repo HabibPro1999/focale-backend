@@ -48,7 +48,7 @@ vi.mock("@app/db", async (original) => {
     networkingProfileListed,
     networkingRetentionEnded,
     transitionNetworkingMeetings: state.transition,
-    syncNetworkingEvent: state.sync,
+    requestNetworkingEventSync: state.sync,
     networkingFormField: (schema: { fields?: { id: string }[] }, id: string) => schema.fields?.find((field) => field.id === id),
     networkingStore: () => store,
     getNetworkingConfig: async () => NetworkingConfigSchema.parse({}),
@@ -77,7 +77,7 @@ import type { NetworkingMeetingsService } from "./networking.meetings.service";
 const service = new NetworkingAdminService({} as NetworkingService, {} as NetworkingMeetingsService);
 const revision = "2030-01-01T00:00:00.000Z";
 beforeEach(() => {
-  state.row = { eventId: "event", config: NetworkingConfigSchema.parse({}), createdAt: new Date(revision), updatedAt: new Date(revision), purgeStartedAt: null, purgedAt: null };
+  state.row = { eventId: "event", config: NetworkingConfigSchema.parse({}), createdAt: new Date(revision), updatedAt: new Date(revision), purgeStartedAt: null, purgedAt: null } as NetworkingRow<"configs">;
   state.transaction = false;
   state.requireTransaction = false;
   state.audits = [];
@@ -229,8 +229,8 @@ describe("NetworkingAdminService config consent mapping and sync", () => {
     await expect(service.config("event", { fieldMapping: { consent: "consent_field" } })).rejects.toMatchObject({ status: 400, response: { code: "NETWORKING_VALIDATION" } });
     expect(state.audits).toEqual([]);
   });
-  it("returns the committed config and revision even when the registration re-sync fails", async () => {
-    state.sync.mockRejectedValue(new Error("sync crashed"));
+  it("requests the registration re-sync after commit, and returns the committed config and revision even when that request fails", async () => {
+    state.sync.mockRejectedValue(new Error("sync request failed"));
     const result = await service.config("event", { enabled: true, meetingsEnabled: false }, "admin");
     // Module gates ride the config transaction's connection.
     expect(vi.mocked(assertClientModuleEnabled).mock.calls).toEqual([

@@ -27,6 +27,19 @@ export const networkingConfigs = pgTable("networking_configs", {
   // the config) and when it has removed every networking row of the event.
   purgeStartedAt: instant(),
   purgedAt: instant(),
+  // Full-event registration sync (0035, plan 4.8): the current run and its
+  // progress; a chain of `networking.event.sync` outbox rows advances it.
+  syncRunId: text(),
+  syncStatus: text().$type<"RUNNING" | "COMPLETED">(),
+  syncCursor: text(),
+  syncTotal: integer().notNull().default(0),
+  syncProcessed: integer().notNull().default(0),
+  syncCreated: integer().notNull().default(0),
+  syncUpdated: integer().notNull().default(0),
+  syncFailed: integer().notNull().default(0),
+  syncRequestedAt: instant(),
+  syncFinishedAt: instant(),
+  syncError: text(),
   ...timestamps,
 });
 export const networkingProfiles = pgTable(
