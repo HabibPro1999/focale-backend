@@ -1,4 +1,4 @@
-import type { Writable } from "node:stream";
+import { PassThrough, type Readable, type Writable } from "node:stream";
 
 // =============================================================================
 // EXPORT STREAM I/O
@@ -78,4 +78,61 @@ export async function writeChunk(
 ): Promise<void> {
   signal.throwIfAborted();
   if (!out.write(chunk)) await whenWritable(out, signal);
+}
+
+/**
+ * Settles like `work`, or rejects with the signal's reason as soon as
+ * `signal` aborts (`work` is then left to settle on its own, its outcome
+ * ignored). For steps that may never settle once aborted, such as a
+ * workbook commit whose zip was abandoned.
+ */
+export function raceAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    work.catch(() => undefined);
+    return Promise.reject(signal.reason);
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+/** Bytes a download body buffers ahead of its reader (as in ExportDownloads). */
+const DOWNLOAD_BODY_HIGH_WATER_MARK = 1024 * 1024;
+
+/**
+ * The file as a stream, for a route that sends the body itself
+ * (`reply.send(body)`) instead of handing its reply to ExportDownloads. The
+ * file is generated as the body is read; destroying the body (Fastify does
+ * when the client goes away) aborts generation, and a generation failure
+ * destroys the body, so the client sees a broken download. No admission
+ * control and no shutdown tracking: prefer ExportDownloads.stream().
+ */
+export function downloadBody(download: ExportDownload): Readable {
+  const body = new PassThrough({ highWaterMark: DOWNLOAD_BODY_HIGH_WATER_MARK });
+  const controller = new AbortController();
+  let settled = false;
+  body.once("close", () => {
+    if (!settled) controller.abort(new ExportAbortedError("client-closed"));
+  });
+  raceAbort(download.write(body, controller.signal), controller.signal).then(
+    () => {
+      settled = true;
+    },
+    (err: unknown) => {
+      settled = true;
+      if (!body.destroyed) body.destroy(err instanceof Error ? err : new Error(String(err)));
+    },
+  );
+  return body;
 }

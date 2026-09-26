@@ -110,6 +110,7 @@ import type { AccessService } from "../access/access.service";
 import { PricingPublicController } from "../pricing/pricing.public.controller";
 import { PricingService } from "../pricing/pricing.service";
 import { RegistrationsService } from "./registrations.service";
+import { RegistrationRepricer } from "./registrations.repricer";
 import { RegistrationSideEffects } from "./registrations.side-effects";
 
 const FUTURE = new Date(Date.now() + 7 * 86_400_000);
@@ -186,6 +187,7 @@ const client = { active: true, enabledModules: ["registrations", "pricing"] };
 const openEvent = { clientId: "c1", status: "OPEN", endDate: FUTURE, client };
 
 let service: RegistrationsService;
+let repricer: RegistrationRepricer;
 let quote: PricingPublicController;
 let access: Record<string, ReturnType<typeof vi.fn>>;
 
@@ -256,6 +258,11 @@ beforeEach(() => {
     access as unknown as AccessService,
     pricing,
     { publicLinkAllowedOrigins: [] } as unknown as Config,
+    new RegistrationSideEffects(access as unknown as AccessService),
+  );
+  repricer = new RegistrationRepricer(
+    access as unknown as AccessService,
+    pricing,
     new RegistrationSideEffects(access as unknown as AccessService),
   );
 });
@@ -344,7 +351,7 @@ describe("public self-edit stores and prices the visible answers", () => {
       event: { id: "ev1", name: "Ev", slug: "ev", ...openEvent },
     });
 
-    await service.editRegistrationPublic("reg1", {
+    await repricer.editRegistrationPublic("reg1", {
       expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
       formData: { member: "no", promo: "EARLY" },
     } as never);
@@ -412,7 +419,7 @@ describe("admin create/edit validate without enforcing required answers", () => 
   it("edit stores and prices the cleaned answers", async () => {
     db.findRegistrationForMutation.mockResolvedValue(current);
 
-    await service.adminEditRegistration(
+    await repricer.adminEditRegistration(
       "ev1",
       "reg1",
       { formData: { member: "no", memberId: "M-1", promo: " EARLY " } } as never,
@@ -430,7 +437,7 @@ describe("admin create/edit validate without enforcing required answers", () => 
   it("an access-only edit prices the stored answers", async () => {
     db.findRegistrationForMutation.mockResolvedValue(current);
 
-    await service.adminEditRegistration("ev1", "reg1", { accessSelections: [] } as never, "admin1");
+    await repricer.adminEditRegistration("ev1", "reg1", { accessSelections: [] } as never, "admin1");
 
     expect(db.getRegistrationFormSchemaForEvent).not.toHaveBeenCalled();
     const patch = writtenPatch() as {

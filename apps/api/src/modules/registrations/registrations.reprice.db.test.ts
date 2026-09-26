@@ -17,10 +17,9 @@ import {
   seedSponsorshipBatch,
   seedSponsorshipUsage,
 } from "../../../../../packages/db/tests/helpers/factories";
-import type { Config } from "../../core/config";
 import { AccessService } from "../access/access.service";
 import { PricingService } from "../pricing/pricing.service";
-import { RegistrationsService } from "./registrations.service";
+import { RegistrationRepricer } from "./registrations.repricer";
 import { RegistrationSideEffects } from "./registrations.side-effects";
 
 // Plan 2.6c: the admin edit and the public self-edit reprice through
@@ -29,10 +28,9 @@ import { RegistrationSideEffects } from "./registrations.side-effects";
 // registration is refused unless an admin says how the payment follows.
 
 const access = new AccessService();
-const service = new RegistrationsService(
+const repricer = new RegistrationRepricer(
   access,
   new PricingService(),
-  { publicLinkAllowedOrigins: ["https://events.example.com"] } as Config,
   new RegistrationSideEffects(access),
 );
 
@@ -113,7 +111,7 @@ describe.runIf(dbTestsEnabled())("registration repricing (2.6c)", () => {
     const c = await seedAddon(event.id, "C", 30);
     const registration = await seedWithItems(event.id, form.id, [a, b]);
 
-    await service.adminEditRegistration(
+    await repricer.adminEditRegistration(
       event.id,
       registration.id,
       { accessSelections: [{ accessId: b.id, quantity: 1 }, { accessId: c.id, quantity: 1 }] } as never,
@@ -139,7 +137,7 @@ describe.runIf(dbTestsEnabled())("registration repricing (2.6c)", () => {
       paidAt: PAID_AT,
     });
 
-    await service.adminEditRegistration(
+    await repricer.adminEditRegistration(
       event.id,
       registration.id,
       { accessSelections: [{ accessId: x.id, quantity: 1 }, { accessId: free.id, quantity: 1 }] } as never,
@@ -169,7 +167,7 @@ describe.runIf(dbTestsEnabled())("registration repricing (2.6c)", () => {
     });
 
     await expect(
-      service.editRegistrationPublic(registration.id, {
+      repricer.editRegistrationPublic(registration.id, {
         expectedUpdatedAt: registration.updatedAt.toISOString(),
         accessSelections: [{ accessId: x.id, quantity: 1 }, { accessId: y.id, quantity: 1 }],
       }),
@@ -196,7 +194,7 @@ describe.runIf(dbTestsEnabled())("registration repricing (2.6c)", () => {
     const addY = { accessSelections: [{ accessId: x.id, quantity: 1 }, { accessId: y.id, quantity: 1 }] };
 
     await expect(
-      service.adminEditRegistration(event.id, first.id, addY as never, "admin-1"),
+      repricer.adminEditRegistration(event.id, first.id, addY as never, "admin-1"),
     ).rejects.toMatchObject({
       code: ErrorCodes.PAYMENT_ADJUSTMENT_REQUIRED,
       statusCode: 409,
@@ -206,7 +204,7 @@ describe.runIf(dbTestsEnabled())("registration repricing (2.6c)", () => {
     expect(await counts(y.id)).toEqual({ paid: 0, registered: 0 });
 
     // Collected the difference: stays PAID for the new net.
-    await service.adminEditRegistration(event.id, first.id, { ...addY, paidAmount: 150 } as never, "admin-1");
+    await repricer.adminEditRegistration(event.id, first.id, { ...addY, paidAmount: 150 } as never, "admin-1");
     expect(await readRegistration(first.id)).toMatchObject({
       paymentStatus: "PAID",
       paidAmount: 150,
@@ -217,7 +215,7 @@ describe.runIf(dbTestsEnabled())("registration repricing (2.6c)", () => {
     expect(await counts(y.id)).toEqual({ paid: 1, registered: 1 });
 
     // Owed the difference: PARTIAL, which holds no paid place without a sponsorship.
-    await service.adminEditRegistration(event.id, second.id, { ...addY, paymentStatus: "PARTIAL" } as never, "admin-1");
+    await repricer.adminEditRegistration(event.id, second.id, { ...addY, paymentStatus: "PARTIAL" } as never, "admin-1");
     expect(await readRegistration(second.id)).toMatchObject({
       paymentStatus: "PARTIAL",
       paidAmount: 100,
@@ -238,7 +236,7 @@ describe.runIf(dbTestsEnabled())("registration repricing (2.6c)", () => {
       paidAt: PAID_AT,
     });
 
-    const result = await service.editRegistrationPublic(registration.id, {
+    const result = await repricer.editRegistrationPublic(registration.id, {
       expectedUpdatedAt: registration.updatedAt.toISOString(),
       firstName: "Renamed",
       accessSelections: [{ accessId: x.id, quantity: 1 }],
@@ -271,7 +269,7 @@ describe.runIf(dbTestsEnabled())("registration repricing (2.6c)", () => {
     });
     const registration = await seedWithItems(event.id, form.id, [a], { sponsorshipCode: code.code });
 
-    await service.adminEditRegistration(
+    await repricer.adminEditRegistration(
       event.id,
       registration.id,
       { accessSelections: [{ accessId: a.id, quantity: 1 }, { accessId: b.id, quantity: 1 }] } as never,
@@ -308,7 +306,7 @@ describe.runIf(dbTestsEnabled())("registration repricing (2.6c)", () => {
       appliedBy: "test",
     });
 
-    await service.adminEditRegistration(
+    await repricer.adminEditRegistration(
       event.id,
       registration.id,
       { accessSelections: [{ accessId: a.id, quantity: 1 }, { accessId: b.id, quantity: 1 }] } as never,

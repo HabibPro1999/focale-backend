@@ -8,7 +8,9 @@ import { ErrorCodes, UserRole } from "@app/contracts";
 // ExportDownloads, the reports route): the registrations export streams with
 // no Content-Length, admission is bounded (2 running + 4 queued, then 503
 // EXPORT_BUSY), a client that leaves stops generation, a failure after the
-// headers breaks the download, and shutdown drains or aborts exports.
+// headers breaks the download, and shutdown drains or aborts exports; the
+// check-in ZIP (3.7b) streams from temp files that never outlive the export,
+// and the abstracts export (3.7b) shares the same slots.
 // Token verification, the user/event lookups and the export rows are faked.
 
 const EVENT_ID = "event-1";
@@ -42,6 +44,15 @@ vi.mock("@app/db", async (importOriginal) => ({
   getEventSlug: vi.fn(async () => ({ slug: "congres" })),
   getRegistrationFormDataKeys: vi.fn(async () => ["city"]),
   iterateRegistrationsForExport: vi.fn(),
+  getReportEventAndAccess: vi.fn(async () => ({
+    event: { name: "Congrès", slug: "congres" },
+    accessItems: [{ id: "a1", name: "Déjeuner", type: "MEAL" }],
+  })),
+  iterateCheckInReportRows: vi.fn(),
+  findEventClientId: vi.fn(async (id: string) => ({ id, clientId: "client-A" })),
+  findClientModuleState: vi.fn(async () => ({ active: true, enabledModules: ["abstracts"] })),
+  getAbstractsExportPlan: vi.fn(async () => ({ ids: [], maxReviews: 0 })),
+  iterateAbstractsForExport: vi.fn(async function* () {}),
 }));
 vi.mock("@app/integrations", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -49,12 +60,18 @@ vi.mock("@app/integrations", async (importOriginal) => ({
 }));
 
 import * as db from "@app/db";
+import ExcelJS from "exceljs";
+import JSZip from "jszip";
 import { buildApp } from "../../app.factory";
+import { useIsolatedTmpdir } from "../../core/exports/__testing__/export-output";
 import { clearUserCache } from "../../core/auth/user-cache";
 import { ShutdownCoordinator } from "../../core/shutdown";
 import { ExportDownloads } from "../../core/exports/stream-download";
 
 const m = db as unknown as Record<string, ReturnType<typeof vi.fn>>;
+
+/** Check-in ZIP temp directories on disk (this file's private tmpdir). */
+const exportTempDirs = useIsolatedTmpdir();
 
 function row(n: number) {
   return {
@@ -314,5 +331,117 @@ describe("registrations export streaming (real app, 3.7)", () => {
     await expect(response.text()).rejects.toThrow();
     await until(() => signals[0]?.aborted === true && limiter().running === 0);
     expect(signals[0]!.reason).toMatchObject({ reason: "shutdown" });
+  });
+  // ------------------------------------------------------------------
+  // Check-in ZIP (3.7b): workbooks written to temp files, then the ZIP
+  // streamed from them; the temp directory never outlives the export.
+  // ------------------------------------------------------------------
+  const checkinUrl = () => `${base}/api/events/${EVENT_ID}/reports/checkin-export`;
+
+  function checkInRow(n: number) {
+    return {
+      id: `r-${n}`,
+      referenceNumber: `26-EV-${n}`,
+      firstName: "Prénom",
+      lastName: null,
+      email: `p${n}@example.test`,
+      phone: null,
+      paymentStatus: "PAID",
+      submittedAt: new Date(Date.UTC(2026, 0, 1) + n * 1000),
+      checkedInAt: n % 2 ? new Date(Date.UTC(2026, 0, 2)) : null,
+    };
+  }
+
+  it("streams the check-in ZIP with the legacy headers, then removes its temp files", async () => {
+    m.iterateCheckInReportRows.mockImplementation(
+      (_eventId: string, scope: { checkedIn: boolean }, options: { signal: AbortSignal }) => {
+        signals.push(options.signal);
+        return (async function* () {
+          yield [1, 3, 5].map(checkInRow).filter((row) => (row.checkedInAt !== null) === scope.checkedIn);
+          yield [2, 4].map(checkInRow).filter((row) => (row.checkedInAt !== null) === scope.checkedIn);
+        })();
+      },
+    );
+
+    const response = await fetch(checkinUrl(), { headers: { Authorization: "Bearer token" } });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("application/zip");
+    expect(response.headers.get("content-disposition")).toMatch(
+      /^attachment; filename="congres-checkin-\d{4}-\d{2}-\d{2}\.zip"$/,
+    );
+    expect(response.headers.get("content-length")).toBeNull();
+    const zip = await JSZip.loadAsync(Buffer.from(await response.arrayBuffer()), { checkCRC32: true });
+    expect(Object.keys(zip.files)).toEqual(["congres-global-checkin.xlsx", "dejeuner-checkin.xlsx"]);
+    await until(() => limiter().running === 0);
+    expect(exportTempDirs()).toEqual([]);
+  });
+
+  it("stops writing the check-in workbooks when the client leaves, and removes its temp files", async () => {
+    m.iterateCheckInReportRows.mockImplementation(
+      (_eventId: string, _scope: unknown, options: { signal: AbortSignal }) => {
+        signals.push(options.signal);
+        return (async function* () {
+          for (let p = 0; ; p++) {
+            options.signal.throwIfAborted();
+            pagesServed += 1;
+            yield Array.from({ length: 500 }, (_, i) => checkInRow(p * 500 + i));
+            await new Promise((resolve) => setImmediate(resolve));
+          }
+        })();
+      },
+    );
+
+    const request = http.get(checkinUrl(), { headers: { Authorization: "Bearer token" } });
+    request.on("error", () => undefined);
+    // Nothing reaches the client before the ZIP starts: leave mid-workbook.
+    await until(() => pagesServed > 2 && exportTempDirs().length === 1);
+    request.destroy();
+
+    await until(() => signals[0]?.aborted === true && limiter().running === 0);
+    await until(() => exportTempDirs().length === 0);
+    const served = pagesServed;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(pagesServed).toBe(served);
+  });
+  // ------------------------------------------------------------------
+  // Abstracts export (3.7b): the same export slots and streaming.
+  // ------------------------------------------------------------------
+  const ABSTRACTS_EVENT = "8f2c1d7e-3b4a-4c5d-9e6f-0a1b2c3d4e5f";
+  const getAbstracts = () =>
+    fetch(`${base}/api/events/${ABSTRACTS_EVENT}/abstracts/export?status=ACCEPTED`, {
+      headers: { Authorization: "Bearer token" },
+    });
+
+  it("streams the abstracts workbook through the export slots", async () => {
+    const response = await getAbstracts();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe(
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+    expect(response.headers.get("content-disposition")).toMatch(/^attachment; filename=".*-resumes-\d{4}-\d{2}-\d{2}\.xlsx"$/);
+    expect(response.headers.get("content-length")).toBeNull();
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(await response.arrayBuffer());
+    expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual(["Résumés"]);
+    expect(m.getAbstractsExportPlan).toHaveBeenCalledWith(ABSTRACTS_EVENT, { status: "ACCEPTED" }, { tx: true });
+    await until(() => limiter().running === 0);
+  });
+
+  it("answers the abstracts export 503 EXPORT_BUSY when every slot and queue place is taken", async () => {
+    const gate = deferred();
+    serveGated(gate.promise);
+    const pending = Array.from({ length: 6 }, () => get());
+    await until(() => limiter().running === 2 && limiter().queued === 4);
+
+    const refused = await getAbstracts();
+
+    expect(refused.status).toBe(503);
+    expect(refused.headers.get("retry-after")).toBe("10");
+    expect(await refused.json()).toMatchObject({ ok: false, error: { code: ErrorCodes.EXPORT_BUSY } });
+    expect(m.getAbstractsExportPlan).not.toHaveBeenCalled();
+    gate.resolve();
+    await Promise.all((await Promise.all(pending)).map((response) => response.text()));
   });
 });

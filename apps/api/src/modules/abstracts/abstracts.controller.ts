@@ -14,7 +14,7 @@ import {
   Res,
 } from "@nestjs/common";
 import type { FastifyReply } from "fastify";
-import { exportAbstractsWorkbook } from "./abstracts.export.service";
+import { prepareAbstractsExport } from "./abstracts.export.service";
 import { Throttle } from "@nestjs/throttler";
 import {
   ErrorCodes,
@@ -27,6 +27,7 @@ import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
 import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
+import { ExportDownloads } from "../../core/exports/stream-download";
 import { assertClientModuleEnabled } from "../clients/module-gates";
 import { AbstractsConfigService } from "./abstracts.config.service";
 import { AbstractsAdminService } from "./abstracts.admin.service";
@@ -64,6 +65,7 @@ export class AbstractsController {
     private readonly admin: AbstractsAdminService,
     private readonly committee: AbstractsCommitteeService,
     private readonly book: AbstractsBookService,
+    private readonly downloads: ExportDownloads,
   ) {}
 
   /** Resolve event → canAccessClient → module gate (runs on every admin route). */
@@ -87,6 +89,9 @@ export class AbstractsController {
   // ===========================================================================
   // Config
   // ===========================================================================
+  // Streamed through ExportDownloads like the report files: an export slot
+  // (503 EXPORT_BUSY when none frees up), then the workbook straight into the
+  // response (no Content-Length).
   @Get(":eventId/abstracts/export")
   @SkipEnvelope()
   async exportAbstracts(
@@ -94,17 +99,10 @@ export class AbstractsController {
     @Query() query: ExportAbstractsQueryDto,
     @CurrentUser() user: AuthUser,
     @Res() reply: FastifyReply,
-  ) {
+  ): Promise<void> {
     await this.resolveEvent(eventId, user);
     const event = await getEventWithPricing(eventId);
-    const result = await exportAbstractsWorkbook(eventId, query, event!.slug);
-    return reply
-      .type("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-      .header(
-        "Content-Disposition",
-        `attachment; filename="${result.filename.replace(/[^a-zA-Z0-9._-]/g, "_")}"`,
-      )
-      .send(result.data);
+    await this.downloads.stream(reply, () => prepareAbstractsExport(eventId, query, event!.slug));
   }
 
   @Get(":eventId/abstracts/config")

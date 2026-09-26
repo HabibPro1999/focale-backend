@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
-import ExcelJS from "exceljs";
+import type ExcelJS from "exceljs";
+import type { Writable } from "node:stream";
 import { networkingMeetingIs, networkingStore, type NetworkingRow } from "@app/db";
 import { generateNetworkingReportPdf } from "@app/integrations";
 import { NetworkingAdminService } from "./networking.admin.service";
@@ -7,6 +8,13 @@ import { NetworkingSocialService } from "./networking.social.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
 import type { NetworkingContext } from "./networking.service";
 import { toCsv } from "@app/shared";
+import { downloadBody } from "../../core/exports/stream-io";
+import {
+  ColumnStyles,
+  RowPacer,
+  XLSX_CONTENT_TYPE,
+  createXlsxWriter,
+} from "../../core/exports/xlsx-stream";
 const csv = (headers: string[], rows: unknown[][]) => toCsv([headers, ...rows]);
 const escapeIcs = (value: string) =>
   value
@@ -290,32 +298,67 @@ export class NetworkingExportsService {
         kind,
         format,
       };
-    const workbook = new ExcelJS.Workbook();
-    workbook.creator = "Focale";
-    const sheet = workbook.addWorksheet(kind);
-    sheet.addRow(headers);
-    for (const row of rows) sheet.addRow(row.map((value) => value ?? ""));
-    sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
-    sheet.getRow(1).fill = {
-      type: "pattern",
-      pattern: "solid",
-      fgColor: { argb: "FF1E3A5F" },
-    };
-    sheet.views = [{ state: "frozen", ySplit: 1 }];
-    sheet.autoFilter = {
-      from: { row: 1, column: 1 },
-      to: { row: rows.length + 1, column: headers.length },
-    };
-    sheet.columns.forEach((column) => {
-      column.width = 24;
-      column.alignment = { wrapText: true, vertical: "top" };
-    });
+    // XLSX is generated into the body as Fastify sends it (streaming writer,
+    // one row committed at a time): no workbook model, no whole-file buffer.
     return {
-      body: Buffer.from(await workbook.xlsx.writeBuffer()),
-      contentType:
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      body: downloadBody({
+        filename: `networking-${kind}.xlsx`,
+        contentType: XLSX_CONTENT_TYPE,
+        write: (out, signal) => writeAdminWorkbook(out, signal, kind, headers, rows),
+      }),
+      contentType: XLSX_CONTENT_TYPE,
       kind,
       format,
     };
   }
+}
+
+/** Rows between two waits on the zip and the client. */
+const WORKBOOK_PAGE_ROWS = 500;
+
+async function writeAdminWorkbook(
+  out: Writable,
+  signal: AbortSignal,
+  kind: string,
+  headers: string[],
+  rows: unknown[][],
+): Promise<void> {
+  const workbook = createXlsxWriter(out, signal);
+  workbook.creator = "Focale";
+  const sheet = workbook.addWorksheet(kind, { views: [{ state: "frozen", ySplit: 1 }] });
+  // Column settings first: a streamed sheet writes them with its first row,
+  // and new cells take the column's alignment.
+  const alignment: Partial<ExcelJS.Alignment> = { wrapText: true, vertical: "top" };
+  for (let column = 1; column <= headers.length; column++) {
+    sheet.getColumn(column).width = 24;
+    sheet.getColumn(column).alignment = alignment;
+  }
+  const header = sheet.addRow(headers);
+  header.font = { bold: true, color: { argb: "FFFFFFFF" } };
+  header.fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FF1E3A5F" },
+  };
+  header.commit();
+  sheet.autoFilter = {
+    from: { row: 1, column: 1 },
+    to: { row: rows.length + 1, column: headers.length },
+  };
+
+  const cellStyles = new ColumnStyles(() => ({ alignment }));
+  const pacer = new RowPacer(out, signal, sheet);
+  for (let index = 0; index < rows.length; index++) {
+    const row = sheet.addRow(rows[index]!.map((value) => value ?? ""));
+    row.eachCell((cell, column) => {
+      cell.style = cellStyles.for(column, cell.type);
+    });
+    row.commit();
+    await pacer.row();
+    if ((index + 1) % WORKBOOK_PAGE_ROWS === 0) await pacer.pageDone();
+  }
+
+  signal.throwIfAborted();
+  sheet.commit();
+  await workbook.commit();
 }

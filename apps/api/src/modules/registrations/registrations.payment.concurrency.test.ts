@@ -37,6 +37,7 @@ import { PricingService } from "../pricing/pricing.service";
 import { RegistrationsService } from "./registrations.service";
 import { RegistrationSideEffects } from "./registrations.side-effects";
 import { PaymentProofService } from "./registrations.payment-proof.service";
+import { RegistrationRepricer } from "./registrations.repricer";
 
 // Plan 2.6b: the payment status writers (confirmPayment, payment-proof upload,
 // payment-method selection, admin edits) lock the registration first and decide
@@ -52,6 +53,7 @@ const service = new RegistrationsService(
   sideEffects,
 );
 const proofs = new PaymentProofService(sideEffects);
+const repricer = new RegistrationRepricer(access, new PricingService(), sideEffects);
 const PDF = Buffer.from("%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n");
 
 type AccessRow = { id: string; price: number };
@@ -169,7 +171,7 @@ describe.runIf(dbTestsEnabled())("registration payment writers under concurrency
       registration.id,
       () => service.confirmPayment(registration.id, { paymentStatus: "PAID" }, "admin-1"),
       () =>
-        service.adminEditRegistration(
+        repricer.adminEditRegistration(
           event.id,
           registration.id,
           { accessSelections: [{ accessId: y.id, quantity: 1 }] } as never,

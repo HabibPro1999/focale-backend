@@ -16,6 +16,13 @@ import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { ExportDownloads } from "../../core/exports/stream-download";
 import { ReportsService } from "./reports.service";
 import {
+  prepareAccessRegistrantsReport,
+  prepareCheckInReport,
+  prepareEventSummary,
+  prepareSponsorshipsReport,
+} from "./excel-generator";
+import { prepareRegistrationsWorkbook } from "./registrations-export-builder";
+import {
   ReportQueryDto,
   ExportRegistrationsQueryDto,
   ExportRegistrationsBodyDto,
@@ -105,9 +112,7 @@ export class ReportsController {
     @Res() reply: FastifyReply,
   ): Promise<void> {
     await this.authorizeEvent(user, eventId);
-    await this.downloads.stream(reply, () =>
-      this.reports.buildRegistrationsWorkbook(eventId, body),
-    );
+    await this.downloads.stream(reply, () => prepareRegistrationsWorkbook(eventId, body));
   }
 
   // ----------------------------------------------------------------
@@ -121,9 +126,7 @@ export class ReportsController {
     @Res() reply: FastifyReply,
   ): Promise<void> {
     await this.authorizeEvent(user, eventId);
-    await this.downloads.stream(reply, () =>
-      this.reports.generateAccessRegistrantsReport(eventId),
-    );
+    await this.downloads.stream(reply, () => prepareAccessRegistrantsReport(eventId));
   }
 
   // ----------------------------------------------------------------
@@ -138,9 +141,7 @@ export class ReportsController {
     @Res() reply: FastifyReply,
   ): Promise<void> {
     await this.authorizeEvent(user, eventId);
-    await this.downloads.stream(reply, () =>
-      this.reports.generateSponsorshipsReport(eventId, query),
-    );
+    await this.downloads.stream(reply, () => prepareSponsorshipsReport(eventId, query));
   }
 
   // ----------------------------------------------------------------
@@ -154,7 +155,7 @@ export class ReportsController {
     @Res() reply: FastifyReply,
   ): Promise<void> {
     await this.authorizeEvent(user, eventId);
-    await this.downloads.stream(reply, () => this.reports.generateCheckInReport(eventId));
+    await this.downloads.stream(reply, () => prepareCheckInReport(eventId));
   }
 
   // ----------------------------------------------------------------
@@ -168,6 +169,6 @@ export class ReportsController {
     @Res() reply: FastifyReply,
   ): Promise<void> {
     await this.authorizeEvent(user, eventId);
-    await this.downloads.stream(reply, () => this.reports.generateEventSummary(eventId));
+    await this.downloads.stream(reply, () => prepareEventSummary(eventId));
   }
 }

@@ -52,5 +52,7 @@ describe("searchRegistrantsForSponsorship SQL", () => {
     expect(text).not.toMatch(/ilike \$\d+(?! ESCAPE)/i);
     const pattern = "%100\\%\\_\\\\%";
     expect(values.filter((v) => v === pattern)).toHaveLength(3);
+    // Anonymous caller: the query never reads contact details or form answers.
+    expect(text).not.toMatch(/"phone"|"form_data"/);
   });
 });
