@@ -138,9 +138,6 @@ const registrations: FixtureRegistration[] = [
   reg(9, { paymentStatus: "PENDING", accessTypeIds: [LUNCH, WORKSHOP] }),
 ].sort((a, b) => a.submittedAt.getTime() - b.submittedAt.getTime() || a.id.localeCompare(b.id));
 
-/** Export order (newest first). */
-const newestFirst = [...registrations].reverse();
-
 function sponsorship(
   n: number,
   labName: string,

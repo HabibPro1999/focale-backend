@@ -63,12 +63,6 @@ export type RegistrationForCertificateSend = RegistrationEmailContext & {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const accessCols = {
-  id: eventAccess.id,
-  name: eventAccess.name,
-  type: eventAccess.type,
-} as const;
-
 function toAccessRef(
   row: { accessRefId: string | null; accessRefName: string | null; accessRefType: string | null },
 ): CertificateAccessRef | null {

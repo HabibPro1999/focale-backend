@@ -27,7 +27,6 @@ export * from "./networking-participant-read";
 import {
   normalizeNetworkingSearch,
   networkingSearchScore,
-  networkingSearchMatches,
 } from "./networking-search";
 export interface NetworkingDiscoveryFilters {
   standTableId?: string;
