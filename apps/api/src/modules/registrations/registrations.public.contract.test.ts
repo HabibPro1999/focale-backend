@@ -13,6 +13,7 @@ import { logger } from "../../core/logger.service";
 import { ZodValidationPipe } from "../../core/zod";
 import { toPublicRegistration } from "./registrations.mappers";
 import { PaymentProofService } from "./registrations.payment-proof.service";
+import { RegistrationPaymentsService } from "./registrations.payments.service";
 import {
   RegistrationEditPublicController,
   RegistrationsPublicController,
@@ -106,6 +107,7 @@ const service = {
     { provide: RegistrationsService, useValue: service },
     { provide: PaymentProofService, useValue: {} },
     { provide: RegistrationRepricer, useValue: {} },
+    { provide: RegistrationPaymentsService, useValue: {} },
   ],
 })
 class PublicRegistrationsTestModule {}

@@ -26,6 +26,7 @@ import { ResponseContract } from "../../core/response-contract";
 import { RegistrationsService } from "./registrations.service";
 import { PaymentProofService } from "./registrations.payment-proof.service";
 import { RegistrationRepricer } from "./registrations.repricer";
+import { RegistrationPaymentsService } from "./registrations.payments.service";
 import {
   CreateRegistrationBodyDto,
   EditTokenQueryDto,
@@ -78,6 +79,7 @@ export class RegistrationEditPublicController {
     private readonly service: RegistrationsService,
     private readonly proofs: PaymentProofService,
     private readonly repricer: RegistrationRepricer,
+    private readonly payments: RegistrationPaymentsService,
   ) {}
 
   /** Header preferred over query. 401 if absent/malformed; 403 if it does not match. */
@@ -135,7 +137,7 @@ export class RegistrationEditPublicController {
     @Headers("x-edit-token") headerToken?: string,
   ) {
     await this.requireToken(registrationId, headerToken, token);
-    await this.service.selectPaymentMethod(registrationId, body);
+    await this.payments.selectPaymentMethod(registrationId, body);
     return { success: true };
   }
 

@@ -41,6 +41,7 @@ import { assertClientModuleEnabled } from "../clients/module-gates";
 import { AppException, forbidden } from "../../core/app-exception";
 import { RegistrationsService } from "./registrations.service";
 import { RegistrationRepricer } from "./registrations.repricer";
+import { RegistrationPaymentsService } from "./registrations.payments.service";
 import {
   AdminCreateRegistrationDto,
   AdminEditRegistrationDto,
@@ -62,6 +63,7 @@ export class RegistrationsController {
   constructor(
     private readonly service: RegistrationsService,
     private readonly repricer: RegistrationRepricer,
+    private readonly payments: RegistrationPaymentsService,
   ) {}
 
   private async loadEvent(eventId: string, user: AuthUser) {
@@ -179,7 +181,7 @@ export class RegistrationsController {
     }
     if (!canAccessClient(user, clientId)) forbidden();
     await assertClientModuleEnabled(clientId, "registrations");
-    return this.service.updateRegistration(id, body, user.id);
+    return this.payments.updateRegistration(id, body, user.id);
   }
 
   // DELETE /api/events/registrations/:id
@@ -220,7 +222,7 @@ export class RegistrationsController {
     }
     if (!canAccessClient(user, clientId)) forbidden();
     await assertClientModuleEnabled(clientId, "registrations");
-    return this.service.confirmPayment(id, body, user.id, ip);
+    return this.payments.confirmPayment(id, body, user.id, ip);
   }
 
   // GET /api/events/registrations/:id/audit-logs

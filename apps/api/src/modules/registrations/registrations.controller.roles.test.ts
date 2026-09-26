@@ -44,6 +44,7 @@ import { HttpExceptionFilter } from "../../core/http-exception.filter";
 import { RegistrationsController } from "./registrations.controller";
 import { RegistrationsService } from "./registrations.service";
 import { RegistrationRepricer } from "./registrations.repricer";
+import { RegistrationPaymentsService } from "./registrations.payments.service";
 
 const eventId = "11111111-1111-4111-8111-111111111111";
 const registrationId = "22222222-2222-4222-8222-222222222222";
@@ -62,6 +63,7 @@ const repricer = {
   providers: [
     { provide: RegistrationsService, useValue: service },
     { provide: RegistrationRepricer, useValue: repricer },
+    { provide: RegistrationPaymentsService, useValue: {} },
     Reflector,
     { provide: APP_PIPE, useClass: ZodValidationPipe },
     { provide: APP_INTERCEPTOR, useClass: EnvelopeInterceptor },

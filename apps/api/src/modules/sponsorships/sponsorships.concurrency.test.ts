@@ -14,10 +14,8 @@ import {
   readSponsorshipRow,
   sponsorshipUsagesOf,
 } from "../../../../../packages/db/tests/helpers/sponsorship-inspect";
-import type { Config } from "../../core/config";
 import { AccessService } from "../access/access.service";
-import { PricingService } from "../pricing/pricing.service";
-import { RegistrationsService } from "../registrations/registrations.service";
+import { RegistrationPaymentsService } from "../registrations/registrations.payments.service";
 import { RegistrationSideEffects } from "../registrations/registrations.side-effects";
 import { SponsorshipsAdminService } from "./sponsorships.admin.service";
 
@@ -27,10 +25,8 @@ import { SponsorshipsAdminService } from "./sponsorships.admin.service";
 // PAID for an amount other than what it owes, and a lost race is a 4xx.
 
 const access = new AccessService();
-const registrationsService = new RegistrationsService(
+const registrationPayments = new RegistrationPaymentsService(
   access,
-  new PricingService(),
-  { publicLinkAllowedOrigins: ["https://events.example.com"] } as Config,
   new RegistrationSideEffects(access),
 );
 const sponsorshipsService = new SponsorshipsAdminService(access);
@@ -135,7 +131,7 @@ async function queueBehindLock<A, B>(registrationId: string, first: () => Promis
 }
 
 const confirm = (registrationId: string) =>
-  registrationsService.confirmPayment(registrationId, { paymentStatus: "PAID" }, "admin-1");
+  registrationPayments.confirmPayment(registrationId, { paymentStatus: "PAID" }, "admin-1");
 
 describe.runIf(dbTestsEnabled())("sponsorship link/unlink vs payment confirmation", () => {
   it("link, then confirm: the confirmation is for the sponsored net", async () => {
