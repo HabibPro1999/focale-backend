@@ -13,5 +13,6 @@ export * from "./networking/embeddings";
 export * from "./networking/embedding-worker";
 export * from "./networking/notification-worker";
 export * from "./networking/notification-rendering";
+export { networkingDeliverySkipReason } from "./networking/delivery-policy";
 
 export * from "./networking-report-pdf";

@@ -45,3 +45,28 @@ it("queues automatic reports and contacts only at end +24 hours, retaining dedup
     expect(end + delay <= end + 24 * 3600000).toBe(true);
   }
 });
+
+it("queues reminders, digests and contacts notices only through the eligibility policy (4.6)", async () => {
+  const { PgDialect } = await import("drizzle-orm/pg-core");
+  mocks.execute.mockReset().mockResolvedValue({ rows: [] });
+  await maintainNetworkingLifecycle("event");
+  const queries = mocks.execute.mock.calls.map(([query]) => new PgDialect({ casing: "snake_case" }).sqlToQuery(query));
+  const producers = queries.filter((query) =>
+    ["MEETING_REMINDER", "DAILY_DIGEST", "POST_EVENT_CONTACTS"].some((type) => query.sql.includes(type) || query.params.some((param) => String(param).includes(type))),
+  );
+  // Day and hour reminders, the digest and the contacts notice.
+  expect(producers).toHaveLength(4);
+  for (const query of producers) {
+    // The gate: config, event, client and its modules.
+    expect(query.sql).toContain(`"c"."config"->>'enabled'='true' AND "e"."status"<>'ARCHIVED'`);
+    expect(query.params).toEqual(expect.arrayContaining(["networking", "registrations", "emails"]));
+    // The recipient is eligible, never withdrawn or erased.
+    for (const clause of [`"p"."status"='ACTIVE'`, `"p"."withdrawn_at" IS NULL`, `"p"."erased_at" IS NULL`, `"r"."event_id"="p"."event_id"`])
+      expect(query.sql).toContain(clause);
+  }
+  // Reminders name the counterpart: it must be a peer (eligible, another person, unblocked).
+  for (const reminder of producers.filter((query) => query.params.some((param) => String(param).startsWith("MEETING_REMINDER")))) {
+    for (const clause of [`"peer"."erased_at" IS NULL`, `lower(btrim("peer"."email"))<>lower(btrim("p"."email"))`, "networking_blocks elig_b"])
+      expect(reminder.sql).toContain(clause);
+  }
+});

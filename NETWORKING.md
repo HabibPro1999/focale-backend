@@ -209,10 +209,26 @@ A wrong or expired OTP on `auth/verify` stays HTTP 401 (`AUTH_1001`); no session
 Who may use networking, and who may see whom, is decided in one place (`packages/db/src/policy/`):
 
 - `networking-access.ts` holds the rules as pure functions: the **gate** (config enabled, event not archived, client active with the networking, registrations and emails modules), the **window** (opening, closing, retention), **participant access** (`CONSENTED`, `CONSENT_PENDING` or none: an ACTIVE profile, never withdrawn or erased, whose own registration in the same event did not opt out and has an eligible payment status) and **counterpart visibility** by mode: `peer` (the relationship is given, e.g. a connection list: eligible, not the same person, no block either way), `discover` (also visible with a complete profile, discovery on), `profile` (discoverable or connected) and `blocklist` (like `profile`, ignoring the block itself).
-- `networking-eligibility.ts` holds the same rules as SQL fragments (`eligibleProfile`, `discoverableCounterpart`, `peerCounterpart`, `distinctIdentity`, `mutuallyUnblocked`, `notInteracted`, `admittedProfile`, …) that discovery, search, facets, recommendations, vector ranking, connection lists, unread counts, badges and check-in compose.
-- Services load the facts in one statement (`networking-access-snapshot.ts`: the participant with its registration, form and second factor; a viewer and a target with any block and connection) and ask the pure functions.
+- `networking-eligibility.ts` holds the same rules as SQL fragments (`eligibleProfile`, `embeddableProfile`, `discoverableCounterpart`, `peerCounterpart`, `distinctIdentity`, `sameIdentity`, `mutuallyUnblocked`, `notInteracted`, `admittedProfile`, `networkingEventGate`, `listedProfile`) that discovery, search, facets, recommendations, vector ranking, connection lists, unread counts, badges, check-in, the embedding jobs, the maintenance producers and the post-event report compose.
+- Services load the facts in one statement (`networking-access-snapshot.ts`: the participant with its registration, form and second factor; a viewer and a target with any block and connection; the delivery context) and ask the pure functions.
 
-Withdrawn and erased profiles are ineligible everywhere. The declarative matrix `packages/db/src/testing/networking-eligibility-matrix.ts` lists the cases (status, consent, withdrawal, erasure, opt-out, payment, another event's registration, hidden, incomplete, blocks both ways, the same person) with the answer each surface must give; unit tests hold the pure policy to it and a DB test runs every surface against it on both engines.
+Where each surface stands:
+
+| Surface | Rule |
+|---|---|
+| Sign-in, the participant's own routes, activation notices | participant access (`CONSENT_PENDING` only for sign-in codes and recording consent) |
+| Discovery, search, facets, recommendations, swipes | counterpart `discover` (recommendations: also not swiped or connected) |
+| A profile opened directly / the block list | counterpart `profile` / `blocklist` |
+| Connections, unread counts, the contacts CSV | counterpart `peer` over the viewer's connections |
+| Badge and check-in scan | eligible with a confirmed meeting |
+| Embedding jobs (enqueue, claim, reindex) and the embedding status | gate + eligible and visible (`embeddableProfile`); the status counts only these profiles |
+| Maintenance producers | gate + eligible recipient; meeting reminders also need the counterpart in `peer` mode (both ways) |
+| Deliveries (checked again when sent) | gate, window (closed: only digests and contacts notices; after retention: nothing), the recipient's access, the counterpart in `peer` mode for meeting and connection notices (a cancellation still reaches the other side unless blocked) |
+| Rendered notices and calendar files | the counterpart is named only in `peer` mode |
+| Organizer list, exports, analytics, post-event report | listed (erased tombstones left out); "active" = ACTIVE, consented, not withdrawn or erased; a stand counts a station per active representative |
+| Personal analytics | the participant's own listed profiles (same trimmed, case-folded address) |
+
+Withdrawn and erased profiles are ineligible everywhere. The declarative matrix `packages/db/src/testing/networking-eligibility-matrix.ts` lists the cases (status, consent, withdrawal, erasure, opt-out, payment, another event's registration, hidden, incomplete, blocks both ways, the same person) with the answer each surface must give; unit tests hold the pure policy, the delivery policy, rendering and analytics to it, and a DB test runs every surface above against it on both engines.
 
 ## Write concurrency
 

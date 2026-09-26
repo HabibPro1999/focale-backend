@@ -19,7 +19,7 @@ const state = vi.hoisted(() => ({
   tail: Promise.resolve() as Promise<unknown>,
 }));
 vi.mock("@app/db", async (original) => {
-  const { networkingMeetingIs, networkingRetentionEnded } = await original<typeof import("@app/db")>();
+  const { networkingMeetingIs, networkingProfileListed, networkingRetentionEnded } = await original<typeof import("@app/db")>();
   const store = {
     one: async (kind: string) => {
       if (kind === "profiles" && state.profile) return state.profile;
@@ -45,6 +45,7 @@ vi.mock("@app/db", async (original) => {
   };
   return {
     networkingMeetingIs,
+    networkingProfileListed,
     networkingRetentionEnded,
     transitionNetworkingMeetings: state.transition,
     syncNetworkingEvent: state.sync,

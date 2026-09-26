@@ -1,25 +1,37 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { NotFoundException } from "@nestjs/common";
-import { NetworkingConfigSchema } from "@app/contracts";
+import { NetworkingConfigSchema, type NetworkingConfig } from "@app/contracts";
 import {
+  claimNetworkingEmbeddingJobs,
   clients,
   countNetworkingConnectionSummaries,
+  enqueueChangedNetworkingEmbeddings,
   eventAccess,
   forms,
   getDb,
+  getNetworkingEmbeddingHealth,
   getNetworkingRecommendationProfiles,
   isNetworkingAccessAllowed,
   listNetworkingConnectionSummaries,
   listNetworkingDiscovery,
+  networkingDeliveryContext,
   networkingDirectoryFacets,
+  networkingEmbeddingJobs,
   networkingEmbeddings,
+  networkingIdentityEmail,
   networkingParticipantAccess,
   networkingParticipantExportContacts,
+  networkingPostEventReportData,
   networkingStore,
   networkingUnreadMessageCount,
+  queueNetworkingDailyDigests,
+  queueNetworkingMeetingReminders,
+  queueNetworkingPostEventDeliveries,
   rankNetworkingVectorCandidates,
   registrations,
+  reindexNetworkingEvent,
+  type NetworkingDeliveryRow,
   type NetworkingRow,
 } from "@app/db";
 import {
@@ -28,17 +40,31 @@ import {
   networkingEligibilityRowFacts,
   type NetworkingEligibilityRow,
 } from "@app/db/testing";
+import {
+  networkingDeliverySkipReason,
+  networkingMeetingAttachment,
+  renderNetworkingNotification,
+} from "@app/integrations";
+import { networkingAnalytics } from "./networking.analytics";
+import { NetworkingAdminService } from "./networking.admin.service";
+import { NetworkingExportsService } from "./networking.exports.service";
+import type { NetworkingMeetingsService } from "./networking.meetings.service";
+import type { NetworkingSocialService } from "./networking.social.service";
 import { NetworkingService, type NetworkingContext } from "./networking.service";
 
 /**
- * Plan 4.6: the declarative eligibility matrix, run against every read
- * surface that filters participants, in a real database (both engines in CI).
- * One eligible viewer; one target per matrix row. Each surface must agree with
- * the row's declared answer, which the pure policy is held to in unit tests.
+ * Plan 4.6: the declarative eligibility matrix, run against every surface that
+ * filters participants, in a real database (both engines in CI). One eligible
+ * viewer; one target per matrix row. Each surface must agree with the row's
+ * declared answer, which the pure policy is held to in unit tests.
+ *
+ * Two copies of the matrix: an upcoming event (reads, deliveries, analytics,
+ * embeddings) and one that ended two days ago with meetings starting within
+ * the hour (the maintenance producers: reminders, digests, post-event notices).
  */
 const service = new NetworkingService();
 const model = "eligibility-matrix-model";
-const ids = { client: randomUUID(), event: randomUUID(), other: randomUUID(), form: randomUUID(), access: randomUUID() };
+const ids = { client: randomUUID(), event: randomUUID(), ended: randomUUID(), other: randomUUID(), access: randomUUID() };
 const config = NetworkingConfigSchema.parse({
   enabled: true,
   approvalMode: "AUTOMATIC",
@@ -49,13 +75,31 @@ const config = NetworkingConfigSchema.parse({
 });
 const statuses = config.eligiblePaymentStatuses;
 const unit = (dimension: number) => Array.from({ length: 1536 }, (_, i) => (i === dimension ? 1 : 0));
-type Target = { row: NetworkingEligibilityRow; profile: NetworkingRow<"profiles">; registrationId: string; connected: boolean };
+type Target = {
+  row: NetworkingEligibilityRow;
+  profile: NetworkingRow<"profiles">;
+  registrationId: string;
+  connected: boolean;
+  connectionId?: string;
+  meeting?: NetworkingRow<"meetings">;
+};
+type Matrix = { event: NetworkingRow<"events">; viewer: NetworkingRow<"profiles">; targets: Target[] };
+let upcoming: Matrix;
+let ended: Matrix;
 let event: NetworkingRow<"events">;
 let viewer: NetworkingRow<"profiles">;
 let ctx: NetworkingContext;
-const targets: Target[] = [];
+let targets: Target[];
+
+/** A zone where it is about noon now, so the 08:00 digest window is open whatever time CI runs. */
+function middayZone(now = new Date()) {
+  const offset = 12 - now.getUTCHours();
+  return offset === 0 ? "UTC" : offset > 0 ? `Etc/GMT-${offset}` : `Etc/GMT+${-offset}`;
+}
 
 async function insertParticipant(input: {
+  eventId: string;
+  formId: string;
   id: string;
   email: string;
   registration: { eventId: string; paymentStatus: "PAID" | "PENDING"; networkingOptIn: boolean | null };
@@ -65,7 +109,7 @@ async function insertParticipant(input: {
   await getDb().insert(registrations).values({
     id: registrationId,
     eventId: input.registration.eventId,
-    formId: ids.form,
+    formId: input.formId,
     email: input.email,
     firstName: String(input.profile.firstName ?? "Participant"),
     lastName: String(input.profile.lastName ?? "Test"),
@@ -87,107 +131,166 @@ async function insertParticipant(input: {
     seeks: "Partners",
     ...input.profile,
     id: input.id,
-    eventId: ids.event,
+    eventId: input.eventId,
     registrationId,
     email: input.email,
   });
   return { profile, registrationId };
 }
 
+/** One eligible viewer and one target per matrix row, in `eventId`. */
+async function buildMatrix(input: {
+  eventId: string;
+  config: NetworkingConfig;
+  startDate: Date;
+  endDate: Date;
+  meetingAt: (index: number) => { startsAt: Date; createdAt?: Date };
+  profile?: Partial<NetworkingRow<"profiles">>;
+}): Promise<Matrix> {
+  const db = getDb();
+  const store = networkingStore();
+  const formId = randomUUID();
+  const event = await store.insert("events", {
+    id: input.eventId,
+    clientId: ids.client,
+    name: "Eligibility matrix",
+    slug: `eligibility-${input.eventId}`,
+    status: "OPEN",
+    startDate: input.startDate,
+    endDate: input.endDate,
+  });
+  await store.insert("configs", { eventId: input.eventId, config: input.config });
+  await db.insert(forms).values({
+    id: formId,
+    eventId: input.eventId,
+    name: "Registration",
+    schema: {
+      fields: [{
+        id: "consent",
+        type: "radio",
+        options: [{ id: "o-yes", label: "J’accepte de participer au networking" }, { id: "o-no", label: "Je ne souhaite pas participer" }],
+      }],
+    },
+  });
+  const viewerId = randomUUID();
+  const { profile: viewer } = await insertParticipant({
+    eventId: input.eventId,
+    formId,
+    id: viewerId,
+    email: `viewer-${viewerId}@example.invalid`,
+    registration: { eventId: input.eventId, paymentStatus: "PAID", networkingOptIn: true },
+    profile: { ...input.profile, status: "ACTIVE", consent: true, visible: true, firstName: "Viewer" },
+  });
+  const targets: Target[] = [];
+  for (const [index, row] of NETWORKING_ELIGIBILITY_MATRIX.entries()) {
+    const targetId = randomUUID();
+    const facts = networkingEligibilityRowFacts(row, {
+      eventId: input.eventId,
+      otherEventId: ids.other,
+      targetId,
+      viewer: { id: viewer.id, email: viewer.email },
+    });
+    const { overrides, ...profile } = facts.profile;
+    const created = await insertParticipant({
+      eventId: input.eventId,
+      formId,
+      id: targetId,
+      email: facts.profile.email,
+      registration: facts.registration as { eventId: string; paymentStatus: "PAID" | "PENDING"; networkingOptIn: boolean | null },
+      profile: { ...input.profile, ...profile, status: facts.profile.status as NetworkingRow<"profiles">["status"], overrides },
+    });
+    const target: Target = { row, profile: created.profile, registrationId: created.registrationId, connected: facts.connected };
+    targets.push(target);
+    const [profileAId, profileBId] = viewer.id < targetId ? [viewer.id, targetId] : [targetId, viewer.id];
+    if (facts.connected) {
+      const connection = await store.insert("connections", { eventId: input.eventId, profileAId, profileBId });
+      target.connectionId = connection.id;
+      await store.insert("messages", { eventId: input.eventId, connectionId: connection.id, senderId: targetId, body: "Hello", clientMessageId: randomUUID() });
+    }
+    if (facts.liked) await store.insert("interests", { eventId: input.eventId, profileId: viewer.id, targetId, action: "LIKE" });
+    if (row.relation?.viewerBlocked) await store.insert("blocks", { eventId: input.eventId, profileId: viewer.id, targetId });
+    if (row.relation?.blockedViewer) await store.insert("blocks", { eventId: input.eventId, profileId: targetId, targetId: viewer.id });
+    if (facts.confirmedMeeting) {
+      const { startsAt, createdAt } = input.meetingAt(index);
+      target.meeting = await store.insert("meetings", {
+        eventId: input.eventId,
+        requesterId: viewer.id,
+        recipientId: targetId,
+        status: "CONFIRMED",
+        startsAt,
+        endsAt: new Date(+startsAt + 1_800_000),
+        expiresAt: startsAt,
+        ...(createdAt ? { createdAt } : {}),
+      });
+    }
+  }
+  return { event, viewer, targets };
+}
+
 describe.runIf(dbTestsEnabled())("networking eligibility matrix on every surface (4.6)", () => {
   beforeAll(async () => {
     const db = getDb();
-    const store = networkingStore();
     await db.insert(clients).values({ id: ids.client, name: `Eligibility ${ids.event}`, enabledModules: ["networking", "registrations", "emails"] });
-    for (const id of [ids.event, ids.other]) {
-      const row = await store.insert("events", {
-        id,
-        clientId: ids.client,
-        name: "Eligibility matrix",
-        slug: `eligibility-${id}`,
-        status: "OPEN",
-        startDate: new Date("2031-05-05T00:00:00Z"),
-        endDate: new Date("2031-05-06T00:00:00Z"),
-      });
-      if (id === ids.event) event = row;
-    }
-    await store.insert("configs", { eventId: ids.event, config });
-    await db.insert(eventAccess).values({ id: ids.access, eventId: ids.event, name: "Networking area" });
-    await db.insert(forms).values({
-      id: ids.form,
-      eventId: ids.event,
-      name: "Registration",
-      schema: {
-        fields: [{
-          id: "consent",
-          type: "radio",
-          options: [{ id: "o-yes", label: "J’accepte de participer au networking" }, { id: "o-no", label: "Je ne souhaite pas participer" }],
-        }],
-      },
+    await networkingStore().insert("events", {
+      id: ids.other,
+      clientId: ids.client,
+      name: "Eligibility matrix (other event)",
+      slug: `eligibility-${ids.other}`,
+      status: "OPEN",
+      startDate: new Date("2031-05-05T00:00:00Z"),
+      endDate: new Date("2031-05-06T00:00:00Z"),
     });
-    const viewerId = randomUUID();
-    ({ profile: viewer } = await insertParticipant({
-      id: viewerId,
-      email: `viewer-${viewerId}@example.invalid`,
-      registration: { eventId: ids.event, paymentStatus: "PAID", networkingOptIn: true },
-      profile: { status: "ACTIVE", consent: true, visible: true, firstName: "Viewer" },
-    }));
+    upcoming = await buildMatrix({
+      eventId: ids.event,
+      config,
+      startDate: new Date("2031-05-05T00:00:00Z"),
+      endDate: new Date("2031-05-06T00:00:00Z"),
+      meetingAt: (index) => ({ startsAt: new Date(Date.parse("2031-05-05T09:00:00Z") + index * 1_800_000) }),
+    });
+    ({ event, viewer, targets } = upcoming);
+    await db.insert(eventAccess).values({ id: ids.access, eventId: ids.event, name: "Networking area" });
     ctx = { event, config, profile: viewer, session: {} as NetworkingRow<"sessions"> };
+    const now = Date.now();
+    ended = await buildMatrix({
+      eventId: ids.ended,
+      config: { ...config, timezone: middayZone() },
+      startDate: new Date(now - 3 * 86_400_000),
+      endDate: new Date(now - 2 * 86_400_000),
+      // Within the next hour, booked well before the one-hour reminder.
+      meetingAt: (index) => ({ startsAt: new Date(now + 1_800_000 + index * 10_000), createdAt: new Date(now - 3 * 3_600_000) }),
+      profile: { emailPreference: "DAILY" },
+    });
+    // Yesterday's unread update for everyone in the ended event: digest material.
+    for (const profile of [ended.viewer, ...ended.targets.map((target) => target.profile)])
+      await networkingStore().insert("notifications", {
+        eventId: ids.ended,
+        profileId: profile.id,
+        type: "MATCH",
+        title: "Update",
+        body: "Update",
+        createdAt: new Date(now - 86_400_000),
+      });
     const embeddings: (typeof networkingEmbeddings.$inferInsert)[] = [];
     const embed = (profileId: string, dimension: number) => {
       for (const kind of ["PROFILE", "OFFER", "NEED"] as const)
         embeddings.push({ profileId, eventId: ids.event, kind, model, sourceHash: "matrix", embedding: unit(dimension) });
     };
     embed(viewer.id, 0);
-    for (const [index, row] of NETWORKING_ELIGIBILITY_MATRIX.entries()) {
-      const targetId = randomUUID();
-      const facts = networkingEligibilityRowFacts(row, {
-        eventId: ids.event,
-        otherEventId: ids.other,
-        targetId,
-        viewer: { id: viewer.id, email: viewer.email },
-      });
-      const { overrides, ...profile } = facts.profile;
-      const created = await insertParticipant({
-        id: targetId,
-        email: facts.profile.email,
-        registration: facts.registration as { eventId: string; paymentStatus: "PAID" | "PENDING"; networkingOptIn: boolean | null },
-        profile: { ...profile, status: facts.profile.status as NetworkingRow<"profiles">["status"], overrides },
-      });
-      targets.push({ row, profile: created.profile, registrationId: created.registrationId, connected: facts.connected });
-      embed(targetId, index + 1);
-      const [profileAId, profileBId] = viewer.id < targetId ? [viewer.id, targetId] : [targetId, viewer.id];
-      if (facts.connected) {
-        const connection = await store.insert("connections", { eventId: ids.event, profileAId, profileBId });
-        await store.insert("messages", { eventId: ids.event, connectionId: connection.id, senderId: targetId, body: "Hello", clientMessageId: randomUUID() });
-      }
-      if (facts.liked) await store.insert("interests", { eventId: ids.event, profileId: viewer.id, targetId, action: "LIKE" });
-      if (row.relation?.viewerBlocked) await store.insert("blocks", { eventId: ids.event, profileId: viewer.id, targetId });
-      if (row.relation?.blockedViewer) await store.insert("blocks", { eventId: ids.event, profileId: targetId, targetId: viewer.id });
-      if (facts.confirmedMeeting) {
-        const startsAt = new Date(Date.parse("2031-05-05T09:00:00Z") + index * 1_800_000);
-        await store.insert("meetings", {
-          eventId: ids.event,
-          requesterId: viewer.id,
-          recipientId: targetId,
-          status: "CONFIRMED",
-          startsAt,
-          endsAt: new Date(+startsAt + 1_800_000),
-          expiresAt: startsAt,
-        });
-      }
-    }
+    for (const [index, target] of targets.entries()) embed(target.profile.id, index + 1);
     await db.insert(networkingEmbeddings).values(embeddings);
   });
 
-  const expected = (surface: keyof NetworkingEligibilityRow["expect"], filter: (target: Target) => boolean = () => true) =>
-    Object.fromEntries(targets.map((target) => [target.row.name, filter(target) && target.row.expect[surface] === true]));
-  const actual = (present: (target: Target) => boolean) =>
-    Object.fromEntries(targets.map((target) => [target.row.name, present(target)]));
+  const expected = (surface: keyof NetworkingEligibilityRow["expect"], filter: (target: Target) => boolean = () => true, of: Target[] = targets) =>
+    Object.fromEntries(of.map((target) => [target.row.name, filter(target) && target.row.expect[surface] === true]));
+  const actual = (present: (target: Target) => boolean, of: Target[] = targets) =>
+    Object.fromEntries(of.map((target) => [target.row.name, present(target)]));
   const idsOf = (rows: { id: string }[]) => new Set(rows.map((row) => row.id));
+  const count = (surface: keyof NetworkingEligibilityRow["expect"], filter: (target: Target) => boolean = () => true) =>
+    targets.filter((target) => filter(target) && target.row.expect[surface] === true).length;
 
   it("builds one target per matrix row", () => {
-    expect(targets.map((target) => target.row.name)).toEqual(NETWORKING_ELIGIBILITY_MATRIX.map((row) => row.name));
+    for (const matrix of [upcoming, ended])
+      expect(matrix.targets.map((target) => target.row.name)).toEqual(NETWORKING_ELIGIBILITY_MATRIX.map((row) => row.name));
   });
 
   it("participant access: each target's own sign-in (snapshot + policy)", async () => {
@@ -264,6 +367,135 @@ describe.runIf(dbTestsEnabled())("networking eligibility matrix on every surface
     }
     expect(badge).toEqual(expected("admitted"));
     expect(scan).toEqual(expected("admitted"));
+  });
+
+  it("embeddings: reindex, the embedding status, the scheduled enqueue and the worker's claim", async () => {
+    const db = getDb();
+    const jobs = async () => new Set((await db.select({ id: networkingEmbeddingJobs.profileId }).from(networkingEmbeddingJobs)).map((row) => row.id));
+    const clear = () => db.delete(networkingEmbeddingJobs);
+    await clear();
+    try {
+      // Explicit reindex of the event.
+      expect(await reindexNetworkingEvent(ids.event)).toBe(1 + count("embedded"));
+      let queued = await jobs();
+      expect(actual((target) => queued.has(target.profile.id))).toEqual(expected("embedded"));
+      // The status counts exactly the embeddable profiles (all PENDING so far).
+      const health = (await getNetworkingEmbeddingHealth(ids.event)).map((row) => ({ ...row, count: Number(row.count) }));
+      expect(health).toEqual([{ status: "PENDING", count: 1 + count("embedded") }]);
+      // The scheduled enqueue (all events: this file's database holds only the matrix).
+      await clear();
+      await enqueueChangedNetworkingEmbeddings(model, 1000);
+      queued = await jobs();
+      expect(actual((target) => queued.has(target.profile.id))).toEqual(expected("embedded"));
+      // A job left for every target: the worker claims only embeddable ones.
+      const due = { status: "PENDING" as const, availableAt: new Date(Date.now() - 60_000), attempts: 0 };
+      await db
+        .insert(networkingEmbeddingJobs)
+        .values(targets.map((target) => ({ profileId: target.profile.id, ...due })))
+        .onConflictDoUpdate({ target: networkingEmbeddingJobs.profileId, set: due });
+      const claimed = new Set((await claimNetworkingEmbeddingJobs(1000)).map((job) => job.profile.id));
+      expect(actual((target) => claimed.has(target.profile.id))).toEqual(expected("embedded"));
+    } finally {
+      await clear();
+    }
+  });
+
+  it("deliveries: addressed to each target by its access, naming it to the viewer in peer mode (policy + rendering)", async () => {
+    const store = networkingStore();
+    const delivery = (type: string, profileId: string, payload: Record<string, unknown> = {}) =>
+      ({ id: randomUUID(), eventId: ids.event, profileId, type, payload, status: "PROCESSING", attempts: 1 }) as unknown as NetworkingDeliveryRow;
+    const sends = async (row: NetworkingDeliveryRow) => networkingDeliverySkipReason(row, await networkingDeliveryContext(row, { subscriptions: false })) === undefined;
+    const approval: Record<string, boolean> = {}, otp: Record<string, boolean> = {};
+    for (const target of targets) {
+      approval[target.row.name] = await sends(delivery("APPROVAL", target.profile.id));
+      const challenge = await store.insert("challenges", {
+        eventId: ids.event,
+        email: target.profile.email,
+        codeHash: "matrix",
+        expiresAt: new Date(Date.now() + 600_000),
+      });
+      otp[target.row.name] = await sends(delivery("OTP", target.profile.id, { challengeId: challenge.id }));
+    }
+    expect(approval).toEqual(Object.fromEntries(targets.map((target) => [target.row.name, target.row.expect.access === "CONSENTED"])));
+    expect(otp).toEqual(Object.fromEntries(targets.map((target) => [target.row.name, target.row.expect.access !== null])));
+
+    const match: Record<string, boolean> = {}, matchNamed: Record<string, boolean> = {};
+    const reminder: Record<string, boolean> = {}, calendarNamed: Record<string, boolean> = {};
+    for (const target of targets) {
+      if (target.connectionId) {
+        const row = delivery("MATCH", viewer.id, { connectionId: target.connectionId });
+        const context = await networkingDeliveryContext(row, { subscriptions: false });
+        match[target.row.name] = networkingDeliverySkipReason(row, context) === undefined;
+        matchNamed[target.row.name] = renderNetworkingNotification("MATCH", {}, context).plainText.includes(`Target ${target.row.name}`);
+      }
+      if (target.meeting) {
+        const row = delivery("MEETING_REMINDER_HOUR", viewer.id, { meetingId: target.meeting.id, revision: target.meeting.revision });
+        const context = await networkingDeliveryContext(row, { subscriptions: false });
+        reminder[target.row.name] = networkingDeliverySkipReason(row, context) === undefined;
+        const [ics] = networkingMeetingAttachment(context);
+        calendarNamed[target.row.name] = Buffer.from(ics!.content, "base64").toString().replace(/\r\n /g, "").includes("Target");
+      }
+    }
+    const withConnection = targets.filter((target) => target.connectionId);
+    const withMeeting = targets.filter((target) => target.meeting);
+    expect(match).toEqual(expected("peer", () => true, withConnection));
+    expect(matchNamed).toEqual(expected("peer", () => true, withConnection));
+    expect(reminder).toEqual(expected("peer", () => true, withMeeting));
+    expect(calendarNamed).toEqual(expected("peer", () => true, withMeeting));
+  });
+
+  it("organizer analytics, the post-event report, the admin list and the admin export: listed profiles", async () => {
+    const analytics = await networkingAnalytics(ids.event);
+    expect(analytics.profiles).toBe(1 + count("listed"));
+    expect(analytics.activeProfiles).toBe(1 + count("active"));
+    expect(analytics.visibleProfiles).toBe(1 + count("active", (target) => target.profile.visible));
+    const sectorsOf = (rows: { sector: string }[]) => new Set(rows.map((row) => row.sector));
+    let sectors = sectorsOf(analytics.sectors);
+    expect(actual((target) => sectors.has(target.profile.sector))).toEqual(expected("listed"));
+
+    const report = await networkingPostEventReportData(ids.event);
+    expect(Number(report.summary.participants)).toBe(1 + count("listed"));
+    sectors = sectorsOf(report.sectors);
+    expect(actual((target) => sectors.has(target.profile.sector))).toEqual(expected("listed"));
+
+    const admin = new NetworkingAdminService(service, {} as NetworkingMeetingsService);
+    const listed = idsOf((await admin.profiles(ids.event, { page: 1, limit: 100 })).items);
+    expect(listed.has(viewer.id)).toBe(true);
+    expect(actual((target) => listed.has(target.profile.id))).toEqual(expected("listed"));
+
+    const exports = new NetworkingExportsService(admin, {} as NetworkingSocialService, {} as NetworkingMeetingsService);
+    const csv = String((await exports.admin(event, "participants", "csv")).body);
+    // Target addresses are unique (the same-person row is the viewer's in upper case).
+    expect(actual((target) => csv.includes(target.profile.email))).toEqual(expected("listed"));
+  });
+
+  it("personal analytics: the participant's own listed profiles", async () => {
+    const own = (await networkingStore().personalAnalyticsProfiles(ids.client, networkingIdentityEmail(viewer.email)))
+      .filter((profile) => profile.eventId === ids.event);
+    const found = new Set(own.map((profile) => profile.id));
+    expect(found.has(viewer.id)).toBe(true);
+    expect(actual((target) => found.has(target.profile.id))).toEqual(expected("listed", (target) => !!target.row.profile?.sameEmailAsViewer));
+  });
+
+  it("maintenance producers: reminders in peer mode both ways, digests and post-event notices by access", async () => {
+    const db = getDb();
+    await queueNetworkingMeetingReminders(db, ids.ended);
+    await queueNetworkingDailyDigests(db, ids.ended);
+    await queueNetworkingPostEventDeliveries(db, ids.ended);
+    const rows = await networkingStore().all("deliveries", { eventId: ids.ended });
+    const queued = (type: string, profileId: string, meetingId?: string) =>
+      rows.some((row) => row.type === type && row.profileId === profileId && (meetingId === undefined || row.payload.meetingId === meetingId));
+    const of = ended.targets;
+    const withMeeting = of.filter((target) => target.meeting);
+    const peer = expected("peer", () => true, withMeeting);
+    // The hour reminder of each confirmed meeting, to the target and to the viewer.
+    expect(actual((target) => queued("MEETING_REMINDER_HOUR", target.profile.id, target.meeting!.id), withMeeting)).toEqual(peer);
+    expect(actual((target) => queued("MEETING_REMINDER_HOUR", ended.viewer.id, target.meeting!.id), withMeeting)).toEqual(peer);
+    const consented = Object.fromEntries(of.map((target) => [target.row.name, target.row.expect.access === "CONSENTED"]));
+    expect(actual((target) => queued("DAILY_DIGEST", target.profile.id), of)).toEqual(consented);
+    expect(actual((target) => queued("POST_EVENT_CONTACTS", target.profile.id), of)).toEqual(consented);
+    for (const type of ["DAILY_DIGEST", "POST_EVENT_CONTACTS"]) expect(queued(type, ended.viewer.id)).toBe(true);
+    expect(rows.filter((row) => row.type === "POST_EVENT_REPORT")).toHaveLength(1);
   });
 
   it("refuses every counterpart to a viewer who lost eligibility", async () => {

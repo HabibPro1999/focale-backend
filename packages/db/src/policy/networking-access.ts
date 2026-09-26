@@ -54,6 +54,14 @@ export function networkingWindow(
 
 export type NetworkingAccess = "CONSENTED" | "CONSENT_PENDING";
 
+/** The registration's payment status is one the event admits to networking. */
+export function networkingPaymentEligible(
+  registration: { paymentStatus: string },
+  config: Pick<NetworkingConfig, "eligiblePaymentStatuses">,
+): boolean {
+  return (config.eligiblePaymentStatuses as readonly string[]).includes(registration.paymentStatus);
+}
+
 /** The profile columns participant eligibility reads. */
 export type NetworkingAccessProfile = {
   eventId: string;
@@ -94,7 +102,7 @@ export function networkingParticipantAccess(
   if (!profile || !registration) return null;
   if (profile.status !== "ACTIVE" || profile.withdrawnAt || profile.erasedAt) return null;
   if (registration.eventId !== profile.eventId || registration.networkingOptIn === false) return null;
-  if (!(config.eligiblePaymentStatuses as readonly string[]).includes(registration.paymentStatus)) return null;
+  if (!networkingPaymentEligible(registration, config)) return null;
   if (profile.consent) return "CONSENTED";
   return options.allowConsentPending !== false && facts.consentPending === true ? "CONSENT_PENDING" : null;
 }
@@ -145,9 +153,14 @@ export function networkingProfileDiscoverable(profile: Pick<NetworkingCounterpar
   return profile.visible && networkingProfileComplete(profile);
 }
 
+/** A participant's identity: the address, trimmed and case-folded (SQL: `lower(btrim(email))`). */
+export function networkingIdentityEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
 /** Two profiles of one person (same address, case-insensitive) never see each other. */
 export function networkingDistinctIdentity(viewer: { id: string; email: string }, target: { id: string; email: string }): boolean {
-  return viewer.id !== target.id && viewer.email.trim().toLowerCase() !== target.email.trim().toLowerCase();
+  return viewer.id !== target.id && networkingIdentityEmail(viewer.email) !== networkingIdentityEmail(target.email);
 }
 
 /** The discovery features are on (swipe or search). */
@@ -168,6 +181,17 @@ export function networkingCounterpartVisible(
   if (mode === "peer") return true;
   const discoverable = networkingProfileDiscoverable(target) && networkingDiscoveryEnabled(config);
   return mode === "discover" ? discoverable : discoverable || facts.connected;
+}
+
+/**
+ * Embedded for recommendations: consented, eligible and visible. Only these
+ * profiles get embedding jobs; the admin embedding status counts them.
+ */
+export function networkingProfileEmbeddable(
+  facts: Omit<NetworkingParticipantFacts, "consentPending"> & { profile: (NetworkingAccessProfile & { visible: boolean }) | null | undefined },
+  config: Pick<NetworkingConfig, "eligiblePaymentStatuses">,
+): boolean {
+  return !!facts.profile?.visible && networkingParticipantEligible(facts, config);
 }
 
 /** Organizer lists, exports and counts: an erased profile is a tombstone with nothing to show. */
