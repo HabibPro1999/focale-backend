@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The script runs main() on import and calls process.exit(): tests spy on
 // process.exit and re-import it for each argv. Manifest parsing/building is
@@ -82,7 +82,13 @@ async function runScript() {
   await new Promise((r) => setTimeout(r, 20));
 }
 
-describe("repair-paid-settlement", () => {
+// Each test re-imports the script, and with it the real @app/db (for the
+// manifest code): slow on a loaded machine, hence the longer timeouts.
+describe("repair-paid-settlement", { timeout: 30_000 }, () => {
+  beforeAll(async () => {
+    await vi.importActual("@app/db");
+  }, 60_000);
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let exitSpy: any;
   let logs: string[];
