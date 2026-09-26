@@ -14,6 +14,7 @@ import { bufferNetworkingNotices, publishNetworkingNotices, type NetworkingNotic
 import {
   loadNetworkingCounterpartSnapshot,
   loadNetworkingParticipantSnapshot,
+  loadNetworkingProfileCounterparts,
   loadNetworkingSignInCandidates,
 } from "./networking-access-snapshot";
 import type { NetworkingConfig } from "@app/contracts";
@@ -221,6 +222,25 @@ export function networkingStore(db: DbExecutor = getDb(), options: NetworkingSto
           .where(and(eq(n.networkingSpaces.eventId, eventId), inArray(n.networkingSpaces.id, spaceIds))) : [],
       ]);
       return { profiles, tables: tableRows, spaces };
+    },
+    /** The meetings' tables, each with its space, in one statement (list hydration, 4.9). */
+    async meetingPlaces(eventId: string, meetings: Pick<NetworkingRow<"meetings">, "tableId">[]) {
+      const tableIds = [...new Set(meetings.flatMap(row => row.tableId ? [row.tableId] : []))];
+      if (!tableIds.length) return [];
+      const t = n.networkingTables, s = n.networkingSpaces;
+      return db.select({ table: t, space: s }).from(t)
+        .leftJoin(s, and(eq(s.id, t.spaceId), eq(s.eventId, t.eventId)))
+        .where(and(eq(t.eventId, eventId), inArray(t.id, tableIds)));
+    },
+    /** The event's profiles with these ids, in one statement. */
+    async profilesByIds(eventId: string, ids: readonly string[]) {
+      if (!ids.length) return [];
+      return db.select().from(n.networkingProfiles)
+        .where(and(eq(n.networkingProfiles.eventId, eventId), inArray(n.networkingProfiles.id, [...new Set(ids)])));
+    },
+    /** The viewer and the targets it may see in `profile` mode, in one statement (4.9). */
+    profileCounterparts(input: Parameters<typeof loadNetworkingProfileCounterparts>[0]) {
+      return loadNetworkingProfileCounterparts(input, db);
     },
     async allocationMeetings(eventId: string, startsAt: Date, endsAt: Date) {
       const m = n.networkingMeetings;

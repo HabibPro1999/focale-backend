@@ -10,9 +10,10 @@ import {
   networkingAudit as audit,
   networkingNotifications as notifications,
   networkingConfigs,
+  networkingInterests as interests,
 } from "../schema/networking";
 import { registrations } from "../schema/registrations";
-import { peerCounterpart } from "../policy/networking-eligibility";
+import { peerCounterpart, profileCounterpart, type NetworkingPaymentStatuses } from "../policy/networking-eligibility";
 
 export interface NetworkingParticipantPage {
   limit: number;
@@ -133,6 +134,94 @@ export async function listNetworkingParticipantMeetings(
     .orderBy(meetings.startsAt, meetings.id)
     .$dynamic();
   return page ? query.limit(page.limit + 1) : query;
+}
+
+type IncomingScope = { eventId: string; profileId: string; statuses: NetworkingPaymentStatuses; discoveryEnabled: boolean };
+
+/**
+ * A batch of candidate likes for the incoming list, newest first after the
+ * keyset position, each with its sender and whether the participant may see
+ * the sender in `profile` mode (4.6). The candidates are a LIMITed subquery
+ * on the likes alone, planned on its own: it reads
+ * networking_interests_incoming_idx (0034) backwards and stops after
+ * `batch` rows, whatever the planner estimates for the sender filters.
+ */
+export function networkingIncomingCandidatesQuery(
+  input: IncomingScope,
+  after: { at: Date; id: string } | undefined,
+  batch: number,
+  db: DbExecutor = getDb(),
+) {
+  const candidates = db
+    .select({ id: interests.id, profileId: interests.profileId, createdAt: interests.createdAt })
+    .from(interests)
+    .where(and(
+      eq(interests.eventId, input.eventId),
+      eq(interests.targetId, input.profileId),
+      // The index predicate as a literal, so the planner can match it.
+      sql`${interests.action}='LIKE'`,
+      // created_at is a naive UTC timestamp (the shared `timestamps` columns).
+      after
+        ? sql`(${interests.createdAt}, ${interests.id}) < (CAST(${after.at.toISOString()} AS timestamptz) AT TIME ZONE 'UTC', ${after.id})`
+        : undefined,
+    ))
+    .orderBy(desc(interests.createdAt), desc(interests.id))
+    .limit(batch)
+    .as("incoming_candidates");
+  const visible = profileCounterpart(profiles, registrations, input.statuses, { eventId: input.eventId, profileId: input.profileId }, input.discoveryEnabled);
+  return db
+    .select({
+      id: candidates.id,
+      createdAt: candidates.createdAt,
+      profile: getTableColumns(profiles),
+      visible: sql<boolean>`EXISTS (SELECT 1 FROM ${registrations} WHERE ${registrations.id}=${profiles.registrationId} AND ${visible})`.mapWith(Boolean),
+    })
+    .from(candidates)
+    .innerJoin(profiles, and(eq(profiles.id, candidates.profileId), eq(profiles.eventId, input.eventId)))
+    .orderBy(desc(candidates.createdAt), desc(candidates.id));
+}
+
+/**
+ * Who liked the participant (an exhibitor's incoming interests), newest first
+ * by keyset on (created_at, id): up to `limit + 1` likes whose sender the
+ * participant may see (the extra one says whether more follow). One statement
+ * per page unless senders are filtered out, then one more per further batch.
+ */
+export async function listNetworkingIncomingInterests(input: IncomingScope, page: NetworkingParticipantPage) {
+  const want = page.limit + 1;
+  const items: { id: string; createdAt: Date; profile: typeof profiles.$inferSelect }[] = [];
+  let after = page.after;
+  for (;;) {
+    const batch = await networkingIncomingCandidatesQuery(input, after, want);
+    for (const row of batch) {
+      if (!row.visible) continue;
+      items.push({ id: row.id, createdAt: row.createdAt, profile: row.profile });
+      if (items.length === want) return items;
+    }
+    const last = batch.at(-1);
+    if (batch.length < want || !last) return items;
+    after = { at: last.createdAt, id: last.id };
+  }
+}
+
+function incomingScope(input: IncomingScope) {
+  return and(
+    eq(interests.eventId, input.eventId),
+    eq(interests.targetId, input.profileId),
+    sql`${interests.action}='LIKE'`,
+    eq(profiles.eventId, input.eventId),
+    profileCounterpart(profiles, registrations, input.statuses, { eventId: input.eventId, profileId: input.profileId }, input.discoveryEnabled),
+  );
+}
+
+/** Every like whose sender the participant may see (the first page's total). */
+export async function countNetworkingIncomingInterests(input: IncomingScope) {
+  const [row] = await getDb().select({ total: sql<number>`count(*)::int`.mapWith(Number) })
+    .from(interests)
+    .innerJoin(profiles, eq(profiles.id, interests.profileId))
+    .innerJoin(registrations, eq(registrations.id, profiles.registrationId))
+    .where(incomingScope(input));
+  return row?.total ?? 0;
 }
 
 export async function markNetworkingMessageNotificationsRead(

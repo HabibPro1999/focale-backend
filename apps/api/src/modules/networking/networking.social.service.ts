@@ -10,6 +10,9 @@ import {
   listNetworkingMessages,
   listNetworkingConnectionSummaries,
   countNetworkingConnectionSummaries,
+  listNetworkingIncomingInterests,
+  countNetworkingIncomingInterests,
+  networkingDiscoveryEnabled,
   markNetworkingMessageNotificationsRead,
   cancelNetworkingParticipantMeetings,
   createNetworkingNotification,
@@ -27,28 +30,29 @@ const summary = (row: ConnectionSummaryRow) => ({ ...row, profile: networkingPub
 @Injectable()
 export class NetworkingSocialService {
   constructor(private readonly networking: NetworkingService) {}
-  async incoming(ctx: NetworkingContext) {
+  /**
+   * Who liked the exhibitor, newest first, one keyset page (4.9): senders the
+   * exhibitor may see in `profile` mode, filtered in SQL. First page only:
+   * the total.
+   */
+  async incoming(ctx: NetworkingContext, query: NetworkingParticipantListQuery = {}) {
     if (!ctx.profile.featured && !ctx.profile.standTableId)
       throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Incoming interests are available to exhibitors" });
-    const interests = await networkingStore().all("interests", {
+    const page = participantPagination("incoming", ctx, query);
+    const scope = {
       eventId: ctx.event.id,
-      targetId: ctx.profile.id,
-      action: "LIKE",
-    });
-    const items = [];
-    for (const interest of interests) {
-      try {
-        const profile = await this.networking.target(ctx, interest.profileId);
-        items.push({
-          id: interest.id,
-          profile: networkingPublicProfile(profile),
-          createdAt: interest.createdAt,
-        });
-      } catch (error) {
-        if (!(error instanceof NotFoundException)) throw error;
-      }
-    }
-    return { items, total: items.length };
+      profileId: ctx.profile.id,
+      statuses: ctx.config.eligiblePaymentStatuses,
+      discoveryEnabled: networkingDiscoveryEnabled(ctx.config),
+    };
+    const rows = await listNetworkingIncomingInterests(scope, page);
+    const visibleRows = rows.slice(0, page.limit);
+    const last = visibleRows.at(-1);
+    return {
+      items: visibleRows.map((row) => ({ id: row.id, profile: networkingPublicProfile(row.profile), createdAt: row.createdAt })),
+      nextCursor: rows.length > page.limit && last ? page.cursor(last.createdAt, last.id) : null,
+      ...(page.after ? {} : { total: await countNetworkingIncomingInterests(scope) }),
+    };
   }
   async connection(
     ctx: NetworkingContext,

@@ -6,6 +6,7 @@ import { registrations } from "../schema/registrations";
 import {
   activeProfile,
   admittedProfile,
+  connectedPair,
   discoverableCounterpart,
   distinctIdentity,
   eligibleProfile,
@@ -15,6 +16,7 @@ import {
   networkingEventGate,
   notInteracted,
   peerCounterpart,
+  profileCounterpart,
   sameIdentity,
 } from "./networking-eligibility";
 
@@ -52,6 +54,7 @@ describe("networking eligibility SQL fragments (4.6)", () => {
     for (const fragment of [
       mutuallyUnblocked(hostile, hostile, p.id),
       notInteracted(hostile, hostile, p.id),
+      connectedPair(hostile, hostile, p.id),
       distinctIdentity(p, { eventId: hostile, profileId: hostile }),
       sameIdentity(p, hostile),
     ]) {
@@ -87,6 +90,20 @@ describe("networking eligibility SQL fragments (4.6)", () => {
     expect(embeddable).toContain('"p"."withdrawn_at" IS NULL');
     expect(embeddable).toContain('AND "p"."visible")');
     expect(embeddable).not.toContain("btrim");
+  });
+  it("profile mode: a peer, discoverable while discovery is on, or connected (4.9)", () => {
+    const viewer = { eventId: "e", profileId: "viewer" };
+    const open = render(profileCounterpart(p, r, ["PAID"], viewer, true)).sql;
+    const peer = render(peerCounterpart(p, r, ["PAID"], viewer)).sql;
+    expect(open.startsWith(`(${peer}`)).toBe(true);
+    expect(open).toContain(`"p"."visible" AND (btrim("p"."first_name")<>''`);
+    expect(open).toContain(
+      '((elig_pc.profile_a_id=$9 AND elig_pc.profile_b_id="p"."id") OR (elig_pc.profile_a_id="p"."id" AND elig_pc.profile_b_id=$10))',
+    );
+    // Discovery off: only a connection shows the profile.
+    const closed = render(profileCounterpart(p, r, ["PAID"], viewer, false)).sql;
+    expect(closed).toContain("AND (false OR EXISTS (SELECT 1 FROM networking_connections elig_pc");
+    expect(closed).not.toContain('"p"."visible"');
   });
   it("matches the participant's own profiles by trimmed, case-folded address", () => {
     const query = render(sameIdentity(p, " Ann@Example.test "));

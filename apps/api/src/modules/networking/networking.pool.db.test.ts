@@ -30,7 +30,7 @@ const meetings = new NetworkingMeetingsService(service);
 const admin = new NetworkingAdminService(service, meetings);
 const mfa = new NetworkingMfaService();
 const controller = new NetworkingPublicController(
-  new NetworkingUploadsService(), service, social, meetings, new NetworkingExportsService(admin, social, meetings),
+  new NetworkingUploadsService(), service, social, meetings, new NetworkingExportsService(social, meetings),
 );
 const slots = ["09:00", "09:30", "10:00", "10:30"].map((time) => new Date(`2031-06-10T${time}:00.000Z`));
 let fixture: Awaited<ReturnType<typeof createNetworkingWriteFixture>>;
