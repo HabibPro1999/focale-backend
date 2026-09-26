@@ -166,6 +166,18 @@ export async function findExistingAccessIdsInEvent(
   return rows.map((r) => r.id);
 }
 
+/** Ids of every access item of an event (the rows a prerequisite edit locks). */
+export async function listEventAccessIds(
+  eventId: string,
+  exec: DbExecutor = getDb(),
+): Promise<string[]> {
+  const rows = await exec
+    .select({ id: eventAccess.id })
+    .from(eventAccess)
+    .where(eq(eventAccess.eventId, eventId));
+  return rows.map((r) => r.id);
+}
+
 /** All prerequisite edges for an event's accesses: {owner, required} pairs. */
 export async function getEventPrereqEdges(
   eventId: string,

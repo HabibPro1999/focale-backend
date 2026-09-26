@@ -46,8 +46,8 @@ rules.
      `lockRegistrationForUpdate` / `lockRegistrationsForUpdate`,
      `lockSponsorshipForUpdate` / `lockSponsorshipsForUpdate` /
      `lockSponsorshipByCodeForUpdate`,
-     `lockAbstractForUpdate` / `lockAbstractsForUpdate`, and
-     `lockEventForUpdate`;
+     `lockAbstractForUpdate` / `lockAbstractsForUpdate`,
+     `lockEventAccessRowsForUpdate`, and `lockEventForUpdate`;
    - then re-reads the locked rows and decides only from what it read after
      the lock. A value read before the lock, or passed in by the caller, is
      stale.
@@ -60,6 +60,14 @@ rules.
    networking. Take it before anything else, and only in transactions that
    lock no sponsorship, registration or abstract rows afterwards: registration
    writers reach the event row last, through its counter CAS.
+
+   Access rows carry the paid and registered counters, so
+   `lockEventAccessRowsForUpdate` sits in the counter position: a transaction
+   that takes it locks nothing else afterwards. An access edit locks its row
+   before it checks a lower capacity against `paid_count`, so a payment's CAS
+   waits for the edit and then meets the new capacity. An edit that sets
+   prerequisites locks every access row of the event, because a cycle can
+   close through items that neither of two concurrent edits names.
 
    Each helper is a bare `SELECT id … FOR UPDATE` on one table. It throws
    outside a transaction, where the lock would be released at once. Never put
@@ -119,4 +127,6 @@ Shared status sets have one definition each:
   - `withLockingTxn` re-runs the victim of a real deadlock.
 - The concurrency tier (`packages/db/tests/concurrency/**`) exercises
   oversell, settlement drift and score aggregation with real parallel
-  transactions.
+  transactions. `apps/api/src/modules/access/access.concurrency.test.ts`
+  races a capacity edit against a payment, and two prerequisite edits that
+  together would form a cycle.

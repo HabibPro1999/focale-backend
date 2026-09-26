@@ -15,6 +15,9 @@ vi.mock("@app/db", async (importOriginal) => {
   findRegistrationFormSchema: vi.fn(),
   getDb: vi.fn(() => ({})),
   withTxn: vi.fn(),
+  withLockingTxn: vi.fn(),
+  lockEventAccessRowsForUpdate: vi.fn(),
+  listEventAccessIds: vi.fn(),
   getEventDatesForAccess: vi.fn(),
   getEventAccessById: vi.fn(),
   getEventAccessForUpdate: vi.fn(),
@@ -94,6 +97,11 @@ beforeEach(() => {
   vi.resetAllMocks();
   m.getDb.mockReturnValue(rootDb);
   m.withTxn.mockImplementation((fn: (tx: unknown) => unknown) => fn(txDb));
+  m.withLockingTxn.mockImplementation((fn: (tx: unknown) => unknown) => fn(txDb));
+  m.lockEventAccessRowsForUpdate.mockImplementation(async (_tx: unknown, ids: string[]) =>
+    [...new Set(ids)].sort(),
+  );
+  m.listEventAccessIds.mockResolvedValue([]);
 });
 
 /** The executor argument (at `argIndex`) of each call of `fn`, in call order. */
@@ -333,7 +341,8 @@ describe("updateEventAccess", () => {
     m.getEventAccessWithPrereqs.mockResolvedValue(accessRow({ id: "access-main" }));
 
     await service.updateEventAccess("access-main", { name: "Renamed", requiredAccessIds: ["prereq"] });
-    expect(m.withTxn).toHaveBeenCalledTimes(1);
+    expect(m.withLockingTxn).toHaveBeenCalledTimes(1);
+    expect(m.withTxn).not.toHaveBeenCalled();
     expect(m.updateEventAccessRow).toHaveBeenCalledWith("access-main", { name: "Renamed" }, txDb);
     expect(executorsOf(m.setAccessPrerequisites, 2)).toEqual([txDb]);
     // The response is read in the same transaction, after its writes.
@@ -355,6 +364,96 @@ describe("updateEventAccess", () => {
     ).rejects.toBe(failure);
     expect(executorsOf(m.updateEventAccessRow, 2)).toEqual([txDb]);
     expect(m.getEventAccessWithPrereqs).not.toHaveBeenCalled();
+  });
+
+  it("decides the capacity check from the row re-read under its lock", async () => {
+    // First read: 0 paid. Under the lock a payment has landed: 3 paid.
+    m.getEventAccessForUpdate
+      .mockResolvedValueOnce({ ...accessRow({ maxCapacity: 10, paidCount: 0 }), event: { startDate, endDate } })
+      .mockResolvedValueOnce({ ...accessRow({ maxCapacity: 10, paidCount: 3 }), event: { startDate, endDate } });
+
+    await expect(service.updateEventAccess("access-1", { maxCapacity: 2 })).rejects.toMatchObject({
+      code: ErrorCodes.ACCESS_CAPACITY_EXCEEDED,
+      details: { paidCount: 3, requestedMaxCapacity: 2 },
+    });
+    // Only the item's row is locked, then re-read in the transaction.
+    expect(m.lockEventAccessRowsForUpdate).toHaveBeenCalledWith(txDb, ["access-1"]);
+    expect(m.listEventAccessIds).not.toHaveBeenCalled();
+    expect(executorsOf(m.getEventAccessForUpdate, 1)).toEqual([undefined, txDb]);
+    expect(m.updateEventAccessRow).not.toHaveBeenCalled();
+  });
+
+  it("enqueues the capacity drop from the re-read paid count, not the first read", async () => {
+    m.getEventAccessForUpdate
+      .mockResolvedValueOnce({ ...accessRow({ maxCapacity: 10, paidCount: 2 }), event: { startDate, endDate } })
+      .mockResolvedValueOnce({ ...accessRow({ maxCapacity: 10, paidCount: 3 }), event: { startDate, endDate } });
+    m.getEventAccessWithPrereqs.mockResolvedValue(accessRow({ maxCapacity: 3, paidCount: 3 }));
+    m.enqueueAccessDrops.mockResolvedValue(["access-1"]);
+
+    await service.updateEventAccess("access-1", { maxCapacity: 3 });
+    expect(m.enqueueAccessDrops).toHaveBeenCalledWith(txDb, eventId, ["access-1"], "capacity_reached");
+  });
+
+  it("enqueues a deactivation drop only when the re-read row is still active", async () => {
+    m.getEventAccessForUpdate
+      .mockResolvedValueOnce({ ...accessRow({ active: true }), event: { startDate, endDate } })
+      .mockResolvedValueOnce({ ...accessRow({ active: false }), event: { startDate, endDate } });
+    m.getEventAccessWithPrereqs.mockResolvedValue(accessRow({ active: false }));
+
+    await service.updateEventAccess("access-1", { active: false });
+    expect(executorsOf(m.updateEventAccessRow, 2)).toEqual([txDb]);
+    expect(m.enqueueAccessDrops).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when the item was deleted before its lock was taken", async () => {
+    m.getEventAccessForUpdate.mockResolvedValue({ ...accessRow(), event: { startDate, endDate } });
+    m.lockEventAccessRowsForUpdate.mockResolvedValue([]);
+
+    await expect(service.updateEventAccess("access-1", { maxCapacity: 5 })).rejects.toMatchObject({
+      code: ErrorCodes.ACCESS_NOT_FOUND,
+    });
+    expect(m.updateEventAccessRow).not.toHaveBeenCalled();
+  });
+
+  it("locks every access row of the event before checking prerequisites in the transaction", async () => {
+    m.getEventAccessForUpdate.mockResolvedValue({
+      ...accessRow({ id: "access-c" }),
+      event: { startDate, endDate },
+    });
+    m.listEventAccessIds.mockResolvedValue(["access-c", "access-a", "access-b", "access-d"]);
+    m.findExistingAccessIdsInEvent.mockResolvedValue(["access-a"]);
+    // A concurrent edit committed B→C before this one took the locks.
+    m.getEventPrereqEdges.mockResolvedValue([
+      { owner: "access-a", required: "access-b" },
+      { owner: "access-b", required: "access-c" },
+    ]);
+
+    await expect(
+      service.updateEventAccess("access-c", { requiredAccessIds: ["access-a"] }),
+    ).rejects.toMatchObject({ code: ErrorCodes.ACCESS_CIRCULAR_DEPENDENCY });
+    expect(m.listEventAccessIds).toHaveBeenCalledWith(eventId, txDb);
+    expect(m.lockEventAccessRowsForUpdate).toHaveBeenCalledWith(
+      txDb,
+      expect.arrayContaining(["access-a", "access-b", "access-c", "access-d"]),
+    );
+    expect(m.findExistingAccessIdsInEvent).toHaveBeenCalledWith(["access-a"], eventId, txDb);
+    expect(m.getEventPrereqEdges).toHaveBeenCalledWith(eventId, txDb);
+    // Locks come first: nothing is checked on rows that are not locked yet.
+    const lockOrder = m.lockEventAccessRowsForUpdate.mock.invocationCallOrder[0]!;
+    expect(m.getEventPrereqEdges.mock.invocationCallOrder[0]!).toBeGreaterThan(lockOrder);
+    expect(m.findExistingAccessIdsInEvent.mock.invocationCallOrder[0]!).toBeGreaterThan(lockOrder);
+    expect(m.setAccessPrerequisites).not.toHaveBeenCalled();
+  });
+
+  it("clearing prerequisites locks only the item (no cycle can form)", async () => {
+    m.getEventAccessForUpdate.mockResolvedValue({ ...accessRow(), event: { startDate, endDate } });
+    m.getEventAccessWithPrereqs.mockResolvedValue(accessRow());
+
+    await service.updateEventAccess("access-1", { requiredAccessIds: [] });
+    expect(m.lockEventAccessRowsForUpdate).toHaveBeenCalledWith(txDb, ["access-1"]);
+    expect(m.listEventAccessIds).not.toHaveBeenCalled();
+    expect(m.getEventPrereqEdges).not.toHaveBeenCalled();
+    expect(m.setAccessPrerequisites).toHaveBeenCalledWith("access-1", [], txDb);
   });
 
   it("does not enqueue a capacity drop when maxCapacity is sent unchanged", async () => {

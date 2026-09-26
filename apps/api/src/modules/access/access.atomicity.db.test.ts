@@ -110,6 +110,8 @@ describe.runIf(dbTestsEnabled())("access writes are atomic", () => {
     expect(pgErrorCode(err)).toBe("23503");
     expect((await getEventAccessById(item.id))?.name).toBe("Before");
     expect(await prerequisiteIdsOf(item.id)).toEqual([kept.id]);
+    // The delete ran in the update's transaction, so its rollback restored the row.
+    expect(await accessIdsOfEvent(event.id)).toContain(gone.id);
   });
 
   it("update: the row and its prerequisites commit together", async () => {
