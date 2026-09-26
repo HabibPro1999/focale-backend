@@ -13,3 +13,14 @@ export const ROLE_KEY = "authRole";
 export function Auth(role?: UserRoleValue) {
   return applyDecorators(SetMetadata(ROLE_KEY, role), UseGuards(AuthGuard));
 }
+
+/**
+ * Role requirement only (metadata, no guard) for a route whose controller
+ * already has `@Auth()`: the class-level guard reads the handler's role before
+ * the class's, so the token is verified once. Same "that role or better" rule
+ * as `@Auth(role)`. Without an `@Auth()` on the class or method nothing
+ * enforces it, so use `@Auth(role)` there instead.
+ */
+export function RequireRole(role: UserRoleValue) {
+  return SetMetadata(ROLE_KEY, role);
+}
