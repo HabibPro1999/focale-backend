@@ -36,8 +36,14 @@ vi.mock("@app/db", async (original) => {
       db.update("sessions", { eventId, tokenHash: hashes, revokedAt: null }, { revokedAt: new Date() });
     },
   };
+  const real = await original<typeof import("@app/db")>();
+  const { networkingSnapshotMocks } = await import("./__testing__/snapshot-mocks.js");
+  Object.assign(store, networkingSnapshotMocks(store, {
+    clientState: (clientId: string) => db.modules(clientId, db.tx),
+    consentPending: real.networkingConsentPending,
+  }));
   return {
-    ...(await original<typeof import("@app/db")>()),
+    ...real,
     networkingStore: () => store,
     networkingTransaction: async (_event: string, run: (s: typeof store, tx: object) => unknown) => {
       db.transactions++;
@@ -330,12 +336,12 @@ describe("networking transactions ride one connection", () => {
     seed({ profile: { consent: true } });
     await service.requestCode("demo", "ann@example.test");
     expect(db.transactions).toBe(1);
-    expect(db.modules).toHaveBeenCalledExactlyOnceWith("client", undefined);
+    expect(db.modules).toHaveBeenCalledExactlyOnceWith("client");
     expect(db.reads.filter((kind) => kind === "events")).toHaveLength(1);
     db.modules.mockClear();
     db.reads = [];
     await service.verifyCode("demo", "missing", "123456").catch(() => undefined);
-    expect(db.modules).toHaveBeenCalledExactlyOnceWith("client", undefined);
+    expect(db.modules).toHaveBeenCalledExactlyOnceWith("client");
     expect(db.reads.filter((kind) => kind === "events")).toHaveLength(1);
   });
 });

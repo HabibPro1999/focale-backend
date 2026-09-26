@@ -16,8 +16,9 @@ vi.mock("@app/integrations", async (original) => ({
   getStorageProvider: () => ({ delete: mocks.delete }),
 }));
 import { NetworkingPublicController } from "./networking.public.controller";
+import { NetworkingService } from "./networking.service";
+import { networkingSnapshotMocks } from "./__testing__/snapshot-mocks";
 import { NetworkingUploadsService } from "./networking.uploads.service";
-import type { NetworkingService } from "./networking.service";
 import type { NetworkingSocialService } from "./networking.social.service";
 import type { NetworkingMeetingsService } from "./networking.meetings.service";
 import type { NetworkingExportsService } from "./networking.exports.service";
@@ -36,6 +37,7 @@ beforeEach(() => {
     one: mocks.one,
     remove: mocks.remove,
     upsertPushSubscription: mocks.upsertPush,
+    ...networkingSnapshotMocks({ one: mocks.one, all: mocks.all }, { consentPending: () => false }),
   });
   mocks.transaction.mockImplementation(async (_event, run) => run(mocks, {}));
   mocks.one.mockResolvedValue({ photoUrl: own, overrides: { company: "Current Co" } });
@@ -47,10 +49,12 @@ describe("blocks", () => {
   const viewer = {
     id: "viewer-1",
     eventId: "event-1",
+    registrationId: "viewer-registration",
     email: "viewer@example.test",
     status: "ACTIVE",
     consent: true,
     withdrawnAt: null,
+    erasedAt: null,
   };
 
   function makeProfile(overrides: Record<string, unknown> = {}) {
@@ -72,9 +76,10 @@ describe("blocks", () => {
     };
   }
 
+  // The real service (4.6 policy) over the mock store's rows; only sign-in is stubbed.
   function setup(
     profile: ReturnType<typeof makeProfile> | null,
-    options: { connected?: boolean; swipeEnabled?: boolean; searchEnabled?: boolean } = {},
+    options: { connected?: boolean; swipeEnabled?: boolean; searchEnabled?: boolean; currentViewer?: Record<string, unknown> } = {},
   ) {
     const ctx = {
       event: { id: "event-1" },
@@ -82,6 +87,7 @@ describe("blocks", () => {
       config: {
         swipeEnabled: options.swipeEnabled ?? true,
         searchEnabled: options.searchEnabled ?? true,
+        eligiblePaymentStatuses: ["PAID"],
       },
     };
     const row = {
@@ -92,23 +98,19 @@ describe("blocks", () => {
     };
     mocks.all.mockResolvedValue([row]);
     mocks.one.mockImplementation(async (name, where) => {
-      if (name === "profiles" && where.id === viewer.id) return viewer;
+      if (name === "profiles" && where.id === viewer.id) return options.currentViewer ?? viewer;
       if (name === "profiles" && where.id === profile?.id) return profile;
+      if (name === "registrations") return { id: where.id, eventId: "event-1", paymentStatus: "PAID", networkingOptIn: true };
       if (name === "connections") {
         return options.connected ? { id: "connection-1" } : null;
       }
       return null;
     });
+    const service = new NetworkingService();
     const participant = vi.fn().mockResolvedValue(ctx);
-    const eligible = vi.fn(
-      async (candidate: { status: string; withdrawnAt: Date | null; consent: boolean }) =>
-        candidate.status === "ACTIVE" && !candidate.withdrawnAt && candidate.consent,
-    );
-    const instance = controller({
-      participant,
-      eligible,
-    } as unknown as NetworkingService);
-    return { ctx, row, instance, participant, eligible };
+    service.participant = participant;
+    const instance = controller(service);
+    return { ctx, row, instance, participant };
   }
 
   it("returns the public profile for an eligible, visible target", async () => {
@@ -198,7 +200,6 @@ describe("blocks", () => {
     );
 
     expect(result.items).toEqual([{ ...row, profile: null }]);
-    expect(mocks.one).not.toHaveBeenCalledWith("connections", expect.anything());
   });
 
   it("requires a connection while discovery is disabled", async () => {
@@ -226,18 +227,13 @@ describe("blocks", () => {
   });
 
   it("rejects the viewer's own profile as a block target", async () => {
+    const { instance } = setup(null);
     mocks.all.mockResolvedValue([{
       id: "block-row-self",
       eventId: "event-1",
       profileId: viewer.id,
       targetId: viewer.id,
     }]);
-    const participant = vi.fn().mockResolvedValue({
-      event: { id: "event-1" },
-      profile: viewer,
-      config: { swipeEnabled: true, searchEnabled: true },
-    });
-    const instance = controller({ participant });
 
     await expect(
       instance.blocks("event", { headers: {} } as FastifyRequest),
@@ -247,21 +243,11 @@ describe("blocks", () => {
   });
 
   it("denies the block list when the current profile is no longer eligible", async () => {
-    const target = makeProfile();
-    const { instance } = setup(target);
-    const participant = vi.fn().mockResolvedValue({
-      event: { id: "event-1" },
-      profile: viewer,
-      config: { swipeEnabled: true, searchEnabled: true },
-    });
-    const eligible = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
-    const instanceWithEligibility = controller({
-      participant,
-      eligible,
-    } as unknown as NetworkingService);
+    // Suspended since sign-in: the viewer's row is re-read with the target.
+    const { instance } = setup(makeProfile(), { currentViewer: { ...viewer, status: "SUSPENDED" } });
 
     await expect(
-      instanceWithEligibility.blocks("event", { headers: {} } as FastifyRequest),
+      instance.blocks("event", { headers: {} } as FastifyRequest),
     ).rejects.toMatchObject({
       response: { code: "NETWORKING_NOT_ELIGIBLE" },
     });

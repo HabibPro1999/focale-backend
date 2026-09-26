@@ -312,6 +312,25 @@
       ],
       "type": "object"
     },
+    "AccessSelectionValidationResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "valid": {
+          "type": "boolean"
+        },
+        "errors": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "valid",
+        "errors"
+      ],
+      "type": "object"
+    },
     "AccessTypeSchema": {
       "enum": [
         "WORKSHOP",
@@ -557,6 +576,505 @@
       },
       "type": "object"
     },
+    "AdminRegistrantSearchResponseSchema": {
+      "items": {
+        "$ref": "#/$defs/RegistrantSearchResultSchema"
+      },
+      "type": "array"
+    },
+    "AdminRegistrationListResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/$defs/AdminRegistrationResponseSchema"
+          },
+          "type": "array"
+        },
+        "meta": {
+          "additionalProperties": false,
+          "properties": {
+            "page": {
+              "type": "number"
+            },
+            "limit": {
+              "type": "number"
+            },
+            "total": {
+              "type": "number"
+            },
+            "totalPages": {
+              "type": "number"
+            },
+            "hasNext": {
+              "type": "boolean"
+            },
+            "hasPrev": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "page",
+            "limit",
+            "total",
+            "totalPages",
+            "hasNext",
+            "hasPrev"
+          ],
+          "type": "object"
+        },
+        "stats": {
+          "additionalProperties": false,
+          "properties": {
+            "total": {
+              "type": "number"
+            },
+            "totalAmount": {
+              "type": "number"
+            },
+            "collected": {
+              "type": "number"
+            },
+            "paid": {
+              "additionalProperties": false,
+              "properties": {
+                "count": {
+                  "type": "number"
+                },
+                "amount": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "count",
+                "amount"
+              ],
+              "type": "object"
+            },
+            "pending": {
+              "additionalProperties": false,
+              "properties": {
+                "count": {
+                  "type": "number"
+                },
+                "amount": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "count",
+                "amount"
+              ],
+              "type": "object"
+            },
+            "sponsored": {
+              "additionalProperties": false,
+              "properties": {
+                "count": {
+                  "type": "number"
+                },
+                "amount": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "count",
+                "amount"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "total",
+            "totalAmount",
+            "collected",
+            "paid",
+            "pending",
+            "sponsored"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "data",
+        "meta",
+        "stats"
+      ],
+      "type": "object"
+    },
+    "AdminRegistrationResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "formId": {
+          "type": "string"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "formData": {},
+        "networkingOptIn": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "submittedAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "formSchemaVersion": {
+          "type": "number"
+        },
+        "email": {
+          "type": "string"
+        },
+        "firstName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lastName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "referenceNumber": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "paymentStatus": {
+          "$ref": "#/$defs/PaymentStatusSchema"
+        },
+        "totalAmount": {
+          "type": "number"
+        },
+        "paidAmount": {
+          "type": "number"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "paymentMethod": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PaymentMethodSchema"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "paymentReference": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "paymentProofUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "priceBreakdown": {},
+        "baseAmount": {
+          "type": "number"
+        },
+        "discountAmount": {
+          "type": "number"
+        },
+        "accessAmount": {
+          "type": "number"
+        },
+        "sponsorshipCode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sponsorshipAmount": {
+          "type": "number"
+        },
+        "labName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "paidAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "createdAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "updatedAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "lastEditedAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "linkBaseUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "role": {
+          "$ref": "#/$defs/RegistrationRoleSchema"
+        },
+        "accessTypeIds": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "droppedAccessIds": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "checkedInAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "checkedInBy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "form": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name"
+          ],
+          "type": "object"
+        },
+        "event": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "slug": {
+              "type": "string"
+            },
+            "clientId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "slug",
+            "clientId"
+          ],
+          "type": "object"
+        },
+        "accessCheckIns": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "accessId": {
+                "type": "string"
+              },
+              "checkedInAt": {
+                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                "format": "date-time",
+                "type": "string"
+              }
+            },
+            "required": [
+              "accessId",
+              "checkedInAt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "accessSelections": {
+          "items": {
+            "$ref": "#/$defs/RegistrationAccessSelectionResponseSchema"
+          },
+          "type": "array"
+        },
+        "droppedAccessSelections": {
+          "items": {
+            "$ref": "#/$defs/RegistrationDroppedAccessSelectionResponseSchema"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "formId",
+        "eventId",
+        "formData",
+        "networkingOptIn",
+        "submittedAt",
+        "formSchemaVersion",
+        "email",
+        "firstName",
+        "lastName",
+        "phone",
+        "referenceNumber",
+        "paymentStatus",
+        "totalAmount",
+        "paidAmount",
+        "currency",
+        "paymentMethod",
+        "paymentReference",
+        "paymentProofUrl",
+        "priceBreakdown",
+        "baseAmount",
+        "discountAmount",
+        "accessAmount",
+        "sponsorshipCode",
+        "sponsorshipAmount",
+        "labName",
+        "paidAt",
+        "createdAt",
+        "updatedAt",
+        "lastEditedAt",
+        "linkBaseUrl",
+        "note",
+        "role",
+        "accessTypeIds",
+        "droppedAccessIds",
+        "checkedInAt",
+        "checkedInBy",
+        "form",
+        "event",
+        "accessSelections",
+        "droppedAccessSelections"
+      ],
+      "type": "object"
+    },
     "AnalyticsAccessItemSchema": {
       "additionalProperties": false,
       "properties": {
@@ -683,6 +1201,81 @@
         "CERTIFICATE_SENT"
       ],
       "type": "string"
+    },
+    "AvailableSponsorshipsResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "sponsorships": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "code": {
+                "type": "string"
+              },
+              "beneficiaryName": {
+                "type": "string"
+              },
+              "beneficiaryEmail": {
+                "type": "string"
+              },
+              "totalAmount": {
+                "type": "number"
+              },
+              "coversBasePrice": {
+                "type": "boolean"
+              },
+              "coveredAccessIds": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "batch": {
+                "additionalProperties": false,
+                "properties": {
+                  "labName": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "labName"
+                ],
+                "type": "object"
+              },
+              "applicableAmount": {
+                "type": "number"
+              },
+              "conflicts": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "code",
+              "beneficiaryName",
+              "beneficiaryEmail",
+              "totalAmount",
+              "coversBasePrice",
+              "coveredAccessIds",
+              "batch",
+              "applicableAmount",
+              "conflicts"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "sponsorships"
+      ],
+      "type": "object"
     },
     "BatchSyncBodySchema": {
       "additionalProperties": false,
@@ -2827,6 +3420,374 @@
       ],
       "type": "object"
     },
+    "EventAccessItemResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/AccessTypeSchema"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "location": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "startsAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "endsAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "price": {
+          "type": "number"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "maxCapacity": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "registeredCount": {
+          "type": "number"
+        },
+        "paidCount": {
+          "type": "number"
+        },
+        "availableFrom": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "availableTo": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "conditions": {},
+        "conditionLogic": {
+          "type": "string"
+        },
+        "sortOrder": {
+          "type": "number"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "groupLabel": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "allowCompanion": {
+          "type": "boolean"
+        },
+        "includedInBase": {
+          "type": "boolean"
+        },
+        "companionPrice": {
+          "type": "number"
+        },
+        "createdAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "updatedAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "requiredAccess": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "eventId",
+        "type",
+        "name",
+        "description",
+        "location",
+        "startsAt",
+        "endsAt",
+        "price",
+        "currency",
+        "maxCapacity",
+        "registeredCount",
+        "paidCount",
+        "availableFrom",
+        "availableTo",
+        "conditions",
+        "conditionLogic",
+        "sortOrder",
+        "active",
+        "groupLabel",
+        "allowCompanion",
+        "includedInBase",
+        "companionPrice",
+        "createdAt",
+        "updatedAt",
+        "requiredAccess"
+      ],
+      "type": "object"
+    },
+    "EventAccessRowResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/AccessTypeSchema"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "location": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "startsAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "endsAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "price": {
+          "type": "number"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "maxCapacity": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "registeredCount": {
+          "type": "number"
+        },
+        "paidCount": {
+          "type": "number"
+        },
+        "availableFrom": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "availableTo": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "conditions": {},
+        "conditionLogic": {
+          "type": "string"
+        },
+        "sortOrder": {
+          "type": "number"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "groupLabel": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "allowCompanion": {
+          "type": "boolean"
+        },
+        "includedInBase": {
+          "type": "boolean"
+        },
+        "companionPrice": {
+          "type": "number"
+        },
+        "createdAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "updatedAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "eventId",
+        "type",
+        "name",
+        "description",
+        "location",
+        "startsAt",
+        "endsAt",
+        "price",
+        "currency",
+        "maxCapacity",
+        "registeredCount",
+        "paidCount",
+        "availableFrom",
+        "availableTo",
+        "conditions",
+        "conditionLogic",
+        "sortOrder",
+        "active",
+        "groupLabel",
+        "allowCompanion",
+        "includedInBase",
+        "companionPrice",
+        "createdAt",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
     "EventAnalyticsResponseSchema": {
       "additionalProperties": false,
       "properties": {
@@ -2964,6 +3925,96 @@
       },
       "required": [
         "id"
+      ],
+      "type": "object"
+    },
+    "EventPricingRowResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "basePrice": {
+          "type": "number"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "rules": {},
+        "onlinePaymentEnabled": {
+          "type": "boolean"
+        },
+        "onlinePaymentUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cashPaymentEnabled": {
+          "type": "boolean"
+        },
+        "bankName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bankAccountName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bankAccountNumber": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "createdAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "updatedAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "eventId",
+        "basePrice",
+        "currency",
+        "rules",
+        "onlinePaymentEnabled",
+        "onlinePaymentUrl",
+        "cashPaymentEnabled",
+        "bankName",
+        "bankAccountName",
+        "bankAccountNumber",
+        "createdAt",
+        "updatedAt"
       ],
       "type": "object"
     },
@@ -3979,6 +5030,211 @@
       ],
       "type": "object"
     },
+    "GroupedAccessItemSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/AccessTypeSchema"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "location": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "startsAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "endsAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "price": {
+          "type": "number"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "maxCapacity": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "registeredCount": {
+          "type": "number"
+        },
+        "paidCount": {
+          "type": "number"
+        },
+        "availableFrom": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "availableTo": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "conditions": {},
+        "conditionLogic": {
+          "type": "string"
+        },
+        "sortOrder": {
+          "type": "number"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "groupLabel": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "allowCompanion": {
+          "type": "boolean"
+        },
+        "includedInBase": {
+          "type": "boolean"
+        },
+        "companionPrice": {
+          "type": "number"
+        },
+        "createdAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "updatedAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "requiredAccess": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "spotsRemaining": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "isFull": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "eventId",
+        "type",
+        "name",
+        "description",
+        "location",
+        "startsAt",
+        "endsAt",
+        "price",
+        "currency",
+        "maxCapacity",
+        "registeredCount",
+        "paidCount",
+        "availableFrom",
+        "availableTo",
+        "conditions",
+        "conditionLogic",
+        "sortOrder",
+        "active",
+        "groupLabel",
+        "allowCompanion",
+        "includedInBase",
+        "companionPrice",
+        "createdAt",
+        "updatedAt",
+        "requiredAccess",
+        "spotsRemaining",
+        "isFull"
+      ],
+      "type": "object"
+    },
     "GroupedAccessResponseSchema": {
       "additionalProperties": false,
       "properties": {
@@ -4108,6 +5364,100 @@
         "coveredAccessIds"
       ],
       "type": "object"
+    },
+    "LinkedSponsorshipsResponseSchema": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "beneficiaryName": {
+            "type": "string"
+          },
+          "beneficiaryEmail": {
+            "type": "string"
+          },
+          "coversBasePrice": {
+            "type": "boolean"
+          },
+          "coveredAccessIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "totalAmount": {
+            "type": "number"
+          },
+          "batch": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "labName": {
+                "type": "string"
+              },
+              "contactName": {
+                "type": "string"
+              },
+              "email": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "labName",
+              "contactName",
+              "email"
+            ],
+            "type": "object"
+          },
+          "usage": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "amountApplied": {
+                "type": "number"
+              },
+              "appliedAt": {
+                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                "format": "date-time",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "amountApplied",
+              "appliedAt"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "status",
+          "beneficiaryName",
+          "beneficiaryEmail",
+          "coversBasePrice",
+          "coveredAccessIds",
+          "totalAmount",
+          "batch",
+          "usage"
+        ],
+        "type": "object"
+      },
+      "type": "array"
     },
     "ListAbstractsQuerySchema": {
       "additionalProperties": false,
@@ -6001,6 +7351,54 @@
       ],
       "type": "string"
     },
+    "PaymentMethodSelectedResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
+    },
+    "PaymentProofUploadResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "registrationId": {
+          "type": "string"
+        },
+        "fileUrl": {
+          "type": "string"
+        },
+        "fileName": {
+          "type": "string"
+        },
+        "fileSize": {
+          "type": "number"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "uploadedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "registrationId",
+        "fileUrl",
+        "fileName",
+        "fileSize",
+        "mimeType",
+        "uploadedAt"
+      ],
+      "type": "object"
+    },
     "PaymentStatusBreakdownItemSchema": {
       "additionalProperties": false,
       "properties": {
@@ -6166,6 +7564,55 @@
       ],
       "type": "object"
     },
+    "PublicClientResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "logo": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "primaryColor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "logo",
+        "primaryColor",
+        "phone"
+      ],
+      "type": "object"
+    },
     "PublicEditRegistrationSchema": {
       "additionalProperties": false,
       "properties": {
@@ -6205,6 +7652,895 @@
       ],
       "type": "object"
     },
+    "PublicEventAccessListResponseSchema": {
+      "items": {
+        "$ref": "#/$defs/EventAccessItemResponseSchema"
+      },
+      "type": "array"
+    },
+    "PublicFormResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "REGISTRATION",
+            "SPONSOR"
+          ],
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "schema": {},
+        "schemaVersion": {
+          "type": "number"
+        },
+        "successTitle": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "successMessage": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "successTranslations": {},
+        "active": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "updatedAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "event": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "clientId": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "slug": {
+              "type": "string"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "maxCapacity": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "registeredCount": {
+              "type": "number"
+            },
+            "startDate": {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            "endDate": {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "status": {
+              "enum": [
+                "CLOSED",
+                "OPEN",
+                "ARCHIVED"
+              ],
+              "type": "string"
+            },
+            "bannerUrl": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "createdAt": {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            "updatedAt": {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            "client": {
+              "$ref": "#/$defs/PublicClientResponseSchema"
+            },
+            "pricing": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/EventPricingRowResponseSchema"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "access": {
+              "items": {
+                "$ref": "#/$defs/EventAccessRowResponseSchema"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "id",
+            "clientId",
+            "name",
+            "slug",
+            "description",
+            "maxCapacity",
+            "registeredCount",
+            "startDate",
+            "endDate",
+            "location",
+            "status",
+            "bannerUrl",
+            "createdAt",
+            "updatedAt",
+            "client",
+            "pricing",
+            "access"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "eventId",
+        "type",
+        "name",
+        "schema",
+        "schemaVersion",
+        "successTitle",
+        "successMessage",
+        "successTranslations",
+        "active",
+        "createdAt",
+        "updatedAt",
+        "event"
+      ],
+      "type": "object"
+    },
+    "PublicPaymentConfigResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "event": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "slug": {
+              "type": "string"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "startDate": {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            "endDate": {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "bannerUrl": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "client": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "logo": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "primaryColor": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "phone": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "logo",
+                "primaryColor",
+                "phone"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "slug",
+            "description",
+            "status",
+            "startDate",
+            "endDate",
+            "location",
+            "bannerUrl",
+            "client"
+          ],
+          "type": "object"
+        },
+        "sponsorshipsEnabled": {
+          "type": "boolean"
+        },
+        "pricing": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "basePrice": {
+                  "type": "number"
+                },
+                "currency": {
+                  "type": "string"
+                },
+                "rules": {},
+                "paymentMethods": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "bankDetails": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "bankName": {
+                          "type": "string"
+                        },
+                        "accountName": {
+                          "type": "string"
+                        },
+                        "iban": {
+                          "type": "string"
+                        },
+                        "bic": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "bankName",
+                        "accountName",
+                        "iban",
+                        "bic"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "onlinePaymentUrl": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "basePrice",
+                "currency",
+                "rules",
+                "paymentMethods",
+                "bankDetails",
+                "onlinePaymentUrl"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "sponsorshipsEnabled",
+        "pricing"
+      ],
+      "type": "object"
+    },
+    "PublicRegistrantSearchResponseSchema": {
+      "items": {
+        "$ref": "#/$defs/RegistrantSearchResultSchema"
+      },
+      "type": "array"
+    },
+    "PublicRegistrationCreateResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "registration": {
+          "$ref": "#/$defs/PublicRegistrationResponseSchema"
+        },
+        "priceBreakdown": {}
+      },
+      "required": [
+        "registration",
+        "priceBreakdown"
+      ],
+      "type": "object"
+    },
+    "PublicRegistrationEditResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "registration": {
+          "$ref": "#/$defs/PublicRegistrationResponseSchema"
+        },
+        "priceBreakdown": {}
+      },
+      "required": [
+        "registration",
+        "priceBreakdown"
+      ],
+      "type": "object"
+    },
+    "PublicRegistrationForEditResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "registration": {
+          "$ref": "#/$defs/PublicRegistrationResponseSchema"
+        },
+        "expectedUpdatedAt": {
+          "type": "string"
+        },
+        "canEdit": {
+          "type": "boolean"
+        },
+        "canEditPersonalInfo": {
+          "type": "boolean"
+        },
+        "canEditAccess": {
+          "type": "boolean"
+        },
+        "canAddAccess": {
+          "type": "boolean"
+        },
+        "canRemoveAccess": {
+          "type": "boolean"
+        },
+        "isFullySponsored": {
+          "type": "boolean"
+        },
+        "amountDue": {
+          "type": "number"
+        },
+        "editRestrictions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "registration",
+        "expectedUpdatedAt",
+        "canEdit",
+        "canEditPersonalInfo",
+        "canEditAccess",
+        "canAddAccess",
+        "canRemoveAccess",
+        "isFullySponsored",
+        "amountDue",
+        "editRestrictions"
+      ],
+      "type": "object"
+    },
+    "PublicRegistrationResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "formId": {
+          "type": "string"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "referenceNumber": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "email": {
+          "type": "string"
+        },
+        "firstName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lastName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "formData": {},
+        "networkingOptIn": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "paymentStatus": {
+          "type": "string"
+        },
+        "paymentMethod": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "labName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "currency": {
+          "type": "string"
+        },
+        "totalAmount": {
+          "type": "number"
+        },
+        "paidAmount": {
+          "type": "number"
+        },
+        "baseAmount": {
+          "type": "number"
+        },
+        "discountAmount": {
+          "type": "number"
+        },
+        "accessAmount": {
+          "type": "number"
+        },
+        "sponsorshipCode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sponsorshipAmount": {
+          "type": "number"
+        },
+        "priceBreakdown": {},
+        "hasPaymentProof": {
+          "type": "boolean"
+        },
+        "paidAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "submittedAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "lastEditedAt": {
+          "anyOf": [
+            {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "createdAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "updatedAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "accessSelections": {
+          "items": {
+            "$ref": "#/$defs/RegistrationAccessSelectionResponseSchema"
+          },
+          "type": "array"
+        },
+        "droppedAccessSelections": {
+          "items": {
+            "$ref": "#/$defs/RegistrationDroppedAccessSelectionResponseSchema"
+          },
+          "type": "array"
+        },
+        "form": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "schema": {}
+          },
+          "required": [
+            "id",
+            "name"
+          ],
+          "type": "object"
+        },
+        "event": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "slug": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "endDate": {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "slug"
+          ],
+          "type": "object"
+        },
+        "token": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "formId",
+        "eventId",
+        "referenceNumber",
+        "email",
+        "firstName",
+        "lastName",
+        "phone",
+        "formData",
+        "networkingOptIn",
+        "paymentStatus",
+        "paymentMethod",
+        "labName",
+        "currency",
+        "totalAmount",
+        "paidAmount",
+        "baseAmount",
+        "discountAmount",
+        "accessAmount",
+        "sponsorshipCode",
+        "sponsorshipAmount",
+        "priceBreakdown",
+        "hasPaymentProof",
+        "paidAt",
+        "submittedAt",
+        "lastEditedAt",
+        "createdAt",
+        "updatedAt",
+        "accessSelections",
+        "form",
+        "event"
+      ],
+      "type": "object"
+    },
+    "PublicSponsorFormResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "formId": {
+          "type": "string"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "schemaVersion": {
+          "type": "number"
+        },
+        "schema": {},
+        "event": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "slug": {
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "CLOSED",
+                "OPEN",
+                "ARCHIVED"
+              ],
+              "type": "string"
+            },
+            "startsAt": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "endsAt": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "bannerUrl": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "client": {
+              "$ref": "#/$defs/PublicClientResponseSchema"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "slug",
+            "status",
+            "startsAt",
+            "endsAt",
+            "location",
+            "bannerUrl",
+            "client"
+          ],
+          "type": "object"
+        },
+        "pricing": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventPricingRowResponseSchema"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "accessItems": {
+          "items": {
+            "$ref": "#/$defs/EventAccessRowResponseSchema"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "formId",
+        "eventId",
+        "schemaVersion",
+        "schema",
+        "event",
+        "pricing",
+        "accessItems"
+      ],
+      "type": "object"
+    },
     "RegistrantSearchQuerySchema": {
       "additionalProperties": false,
       "properties": {
@@ -6226,8 +8562,6 @@
       "additionalProperties": false,
       "properties": {
         "id": {
-          "format": "uuid",
-          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
           "type": "string"
         },
         "email": {
@@ -6254,12 +8588,15 @@
           ]
         },
         "paymentStatus": {
-          "$ref": "#/$defs/PaymentStatusSchema"
+          "type": "string"
         },
         "totalAmount": {
           "type": "number"
         },
         "baseAmount": {
+          "type": "number"
+        },
+        "accessAmount": {
           "type": "number"
         },
         "sponsorshipAmount": {
@@ -6279,30 +8616,6 @@
         },
         "isBasePriceCovered": {
           "type": "boolean"
-        },
-        "phone": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "formData": {
-          "anyOf": [
-            {
-              "additionalProperties": {},
-              "propertyNames": {
-                "type": "string"
-              },
-              "type": "object"
-            },
-            {
-              "type": "null"
-            }
-          ]
         }
       },
       "required": [
@@ -6313,12 +8626,11 @@
         "paymentStatus",
         "totalAmount",
         "baseAmount",
+        "accessAmount",
         "sponsorshipAmount",
         "accessTypeIds",
         "coveredAccessIds",
-        "isBasePriceCovered",
-        "phone",
-        "formData"
+        "isBasePriceCovered"
       ],
       "type": "object"
     },
@@ -6328,6 +8640,181 @@
         "UNPAID_ONLY"
       ],
       "type": "string"
+    },
+    "RegistrationAccessSelectionResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "accessId": {
+          "type": "string"
+        },
+        "unitPrice": {
+          "type": "number"
+        },
+        "quantity": {
+          "type": "number"
+        },
+        "subtotal": {
+          "type": "number"
+        },
+        "access": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "startsAt": {
+              "anyOf": [
+                {
+                  "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "endsAt": {
+              "anyOf": [
+                {
+                  "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "type",
+            "startsAt",
+            "endsAt"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "accessId",
+        "unitPrice",
+        "quantity",
+        "subtotal",
+        "access"
+      ],
+      "type": "object"
+    },
+    "RegistrationAuditLogListResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "action": {
+                "type": "string"
+              },
+              "changes": {},
+              "performedBy": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "performedByName": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "performedAt": {
+                "type": "string"
+              },
+              "ipAddress": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "action",
+              "changes",
+              "performedBy",
+              "performedByName",
+              "performedAt",
+              "ipAddress"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "meta": {
+          "additionalProperties": false,
+          "properties": {
+            "page": {
+              "type": "number"
+            },
+            "limit": {
+              "type": "number"
+            },
+            "total": {
+              "type": "number"
+            },
+            "totalPages": {
+              "type": "number"
+            },
+            "hasNext": {
+              "type": "boolean"
+            },
+            "hasPrev": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "page",
+            "limit",
+            "total",
+            "totalPages",
+            "hasNext",
+            "hasPrev"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "data",
+        "meta"
+      ],
+      "type": "object"
     },
     "RegistrationAuditLogSchema": {
       "additionalProperties": false,
@@ -6441,6 +8928,265 @@
       "required": [
         "formColumns",
         "fixedColumns"
+      ],
+      "type": "object"
+    },
+    "RegistrationDroppedAccessSelectionResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "accessId": {
+          "type": "string"
+        },
+        "unitPrice": {
+          "type": "number"
+        },
+        "quantity": {
+          "type": "number"
+        },
+        "subtotal": {
+          "type": "number"
+        },
+        "access": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "startsAt": {
+              "anyOf": [
+                {
+                  "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "endsAt": {
+              "anyOf": [
+                {
+                  "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "type",
+            "startsAt",
+            "endsAt"
+          ],
+          "type": "object"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "accessId",
+        "unitPrice",
+        "quantity",
+        "subtotal",
+        "access",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "RegistrationEditLinkResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
+    "RegistrationEmailLogListResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "subject": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "trigger": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "templateName": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "errorMessage": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "queuedAt": {
+                "type": "string"
+              },
+              "sentAt": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "deliveredAt": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "openedAt": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "clickedAt": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "bouncedAt": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "failedAt": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "subject",
+              "status",
+              "trigger",
+              "templateName",
+              "errorMessage",
+              "queuedAt",
+              "sentAt",
+              "deliveredAt",
+              "openedAt",
+              "clickedAt",
+              "bouncedAt",
+              "failedAt"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "meta": {
+          "additionalProperties": false,
+          "properties": {
+            "page": {
+              "type": "number"
+            },
+            "limit": {
+              "type": "number"
+            },
+            "total": {
+              "type": "number"
+            },
+            "totalPages": {
+              "type": "number"
+            },
+            "hasNext": {
+              "type": "boolean"
+            },
+            "hasPrev": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "page",
+            "limit",
+            "total",
+            "totalPages",
+            "hasNext",
+            "hasPrev"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "data",
+        "meta"
       ],
       "type": "object"
     },
@@ -6627,6 +9373,116 @@
       "required": [
         "registrationId",
         "sponsorshipId"
+      ],
+      "type": "object"
+    },
+    "RegistrationTableColumnsResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "formColumns": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "options": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "label"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "mergeWith": {
+                "additionalProperties": false,
+                "properties": {
+                  "fieldId": {
+                    "type": "string"
+                  },
+                  "triggerValue": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "fieldId",
+                  "triggerValue"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "type"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "fixedColumns": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "options": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "label"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "type"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "formColumns",
+        "fixedColumns"
       ],
       "type": "object"
     },
@@ -6956,6 +9812,313 @@
       },
       "type": "object"
     },
+    "SponsorshipBatchCreatedResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "success": {
+          "type": "boolean"
+        },
+        "message": {
+          "type": "string"
+        },
+        "batchId": {
+          "type": "string"
+        },
+        "count": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "success",
+        "message",
+        "batchId",
+        "count"
+      ],
+      "type": "object"
+    },
+    "SponsorshipDetailResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "batchId": {
+          "type": "string"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/SponsorshipStatusSchema"
+        },
+        "beneficiaryName": {
+          "type": "string"
+        },
+        "beneficiaryEmail": {
+          "type": "string"
+        },
+        "beneficiaryPhone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "beneficiaryAddress": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "coversBasePrice": {
+          "type": "boolean"
+        },
+        "coveredAccessIds": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "totalAmount": {
+          "type": "number"
+        },
+        "targetRegistrationId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "createdAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "updatedAt": {
+          "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+          "format": "date-time",
+          "type": "string"
+        },
+        "event": {
+          "additionalProperties": false,
+          "properties": {
+            "clientId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "clientId"
+          ],
+          "type": "object"
+        },
+        "batch": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "eventId": {
+              "type": "string"
+            },
+            "formId": {
+              "type": "string"
+            },
+            "labName": {
+              "type": "string"
+            },
+            "contactName": {
+              "type": "string"
+            },
+            "email": {
+              "type": "string"
+            },
+            "phone": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "formData": {},
+            "createdAt": {
+              "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "eventId",
+            "formId",
+            "labName",
+            "contactName",
+            "email",
+            "phone",
+            "formData",
+            "createdAt"
+          ],
+          "type": "object"
+        },
+        "usages": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "sponsorshipId": {
+                "type": "string"
+              },
+              "registrationId": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "amountApplied": {
+                "type": "number"
+              },
+              "appliedAt": {
+                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                "format": "date-time",
+                "type": "string"
+              },
+              "appliedBy": {
+                "type": "string"
+              },
+              "registration": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "email": {
+                        "type": "string"
+                      },
+                      "firstName": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "lastName": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "email",
+                      "firstName",
+                      "lastName"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "sponsorshipId",
+              "registrationId",
+              "amountApplied",
+              "appliedAt",
+              "appliedBy",
+              "registration"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "coveredAccessItems": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "price": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "price"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "batchId",
+        "eventId",
+        "code",
+        "status",
+        "beneficiaryName",
+        "beneficiaryEmail",
+        "beneficiaryPhone",
+        "beneficiaryAddress",
+        "coversBasePrice",
+        "coveredAccessIds",
+        "totalAmount",
+        "targetRegistrationId",
+        "createdAt",
+        "updatedAt",
+        "event",
+        "batch",
+        "usages",
+        "coveredAccessItems"
+      ],
+      "type": "object"
+    },
     "SponsorshipEventIdParamSchema": {
       "additionalProperties": false,
       "properties": {
@@ -7029,6 +10192,335 @@
       ],
       "type": "object"
     },
+    "SponsorshipLinkedResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "success": {
+          "type": "boolean"
+        },
+        "usage": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "sponsorshipId": {
+              "type": "string"
+            },
+            "amountApplied": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "id",
+            "sponsorshipId",
+            "amountApplied"
+          ],
+          "type": "object"
+        },
+        "registration": {
+          "additionalProperties": false,
+          "properties": {
+            "totalAmount": {
+              "type": "number"
+            },
+            "sponsorshipAmount": {
+              "type": "number"
+            },
+            "amountDue": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "totalAmount",
+            "sponsorshipAmount",
+            "amountDue"
+          ],
+          "type": "object"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "success",
+        "usage",
+        "registration",
+        "warnings"
+      ],
+      "type": "object"
+    },
+    "SponsorshipListResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "batchId": {
+                "type": "string"
+              },
+              "eventId": {
+                "type": "string"
+              },
+              "code": {
+                "type": "string"
+              },
+              "status": {
+                "$ref": "#/$defs/SponsorshipStatusSchema"
+              },
+              "beneficiaryName": {
+                "type": "string"
+              },
+              "beneficiaryEmail": {
+                "type": "string"
+              },
+              "beneficiaryPhone": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "beneficiaryAddress": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "coversBasePrice": {
+                "type": "boolean"
+              },
+              "coveredAccessIds": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "totalAmount": {
+                "type": "number"
+              },
+              "targetRegistrationId": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "createdAt": {
+                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                "format": "date-time",
+                "type": "string"
+              },
+              "updatedAt": {
+                "$comment": "unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts).",
+                "format": "date-time",
+                "type": "string"
+              },
+              "batch": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "labName": {
+                    "type": "string"
+                  },
+                  "contactName": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "labName",
+                  "contactName",
+                  "email"
+                ],
+                "type": "object"
+              },
+              "usages": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "registrationId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "amountApplied": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "registrationId",
+                    "amountApplied"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "batchId",
+              "eventId",
+              "code",
+              "status",
+              "beneficiaryName",
+              "beneficiaryEmail",
+              "beneficiaryPhone",
+              "beneficiaryAddress",
+              "coversBasePrice",
+              "coveredAccessIds",
+              "totalAmount",
+              "targetRegistrationId",
+              "createdAt",
+              "updatedAt",
+              "batch",
+              "usages"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "meta": {
+          "additionalProperties": false,
+          "properties": {
+            "page": {
+              "type": "number"
+            },
+            "limit": {
+              "type": "number"
+            },
+            "total": {
+              "type": "number"
+            },
+            "totalPages": {
+              "type": "number"
+            },
+            "hasNext": {
+              "type": "boolean"
+            },
+            "hasPrev": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "page",
+            "limit",
+            "total",
+            "totalPages",
+            "hasNext",
+            "hasPrev"
+          ],
+          "type": "object"
+        },
+        "stats": {
+          "additionalProperties": false,
+          "properties": {
+            "total": {
+              "type": "number"
+            },
+            "totalAmount": {
+              "type": "number"
+            },
+            "pending": {
+              "additionalProperties": false,
+              "properties": {
+                "count": {
+                  "type": "number"
+                },
+                "amount": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "count",
+                "amount"
+              ],
+              "type": "object"
+            },
+            "used": {
+              "additionalProperties": false,
+              "properties": {
+                "count": {
+                  "type": "number"
+                },
+                "amount": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "count",
+                "amount"
+              ],
+              "type": "object"
+            },
+            "cancelled": {
+              "additionalProperties": false,
+              "properties": {
+                "count": {
+                  "type": "number"
+                },
+                "amount": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "count",
+                "amount"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "total",
+            "totalAmount",
+            "pending",
+            "used",
+            "cancelled"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "data",
+        "meta",
+        "stats"
+      ],
+      "type": "object"
+    },
     "SponsorshipModeSchema": {
       "enum": [
         "LINKED_ACCOUNT",
@@ -7062,6 +10554,18 @@
         "CANCELLED"
       ],
       "type": "string"
+    },
+    "SponsorshipSuccessResponseSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "type": "object"
     },
     "StepTranslationEntrySchema": {
       "additionalProperties": false,
@@ -7527,7 +11031,9 @@
           "type": "string"
         },
         "items": {
-          "items": {},
+          "items": {
+            "$ref": "#/$defs/GroupedAccessItemSchema"
+          },
           "type": "array"
         }
       },

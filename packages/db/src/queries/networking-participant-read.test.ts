@@ -25,8 +25,9 @@ it("picks the connection page by keyset + limit+1 in a subquery before the lates
   expect(count.sql).not.toContain("limit");
   expect(count.params).not.toContain("boundary");
   for (const query of [{ sql: subquery!, params: page.params }, count]) {
-    expect(query.params).toEqual(expect.arrayContaining(["event", "self", "PAID", "ACTIVE", true]));
-    for (const filter of ['"networking_connections"."event_id" =', '"networking_profiles"."event_id" =', '"registrations"."event_id" =', '"networking_profiles"."consent" =', '"networking_profiles"."withdrawn_at" IS NULL', '"registrations"."networking_opt_in" IS DISTINCT FROM false', 'lower("networking_profiles"."email")<>', 'NOT EXISTS (SELECT 1 FROM networking_blocks']) expect(query.sql).toContain(filter);
+    expect(query.params).toEqual(expect.arrayContaining(["event", "self", "PAID"]));
+    // The policy's peer-mode fragment (4.6): eligibility, distinct identity, no block either way.
+    for (const filter of ['"networking_connections"."event_id" =', '"networking_profiles"."event_id" =', '"registrations"."event_id"="networking_profiles"."event_id"', `"networking_profiles"."status"='ACTIVE'`, '"networking_profiles"."consent" AND', '"networking_profiles"."withdrawn_at" IS NULL', '"networking_profiles"."erased_at" IS NULL', '"registrations"."networking_opt_in" IS DISTINCT FROM false', '"registrations"."payment_status"::text IN (', 'lower(btrim("networking_profiles"."email"))<>', 'NOT EXISTS (SELECT 1 FROM networking_blocks']) expect(query.sql).toContain(filter);
   }
   // The complete authorization predicate is shared, not a weaker count filter.
   const countWhere = count.sql.slice(count.sql.indexOf(" where "));
@@ -37,9 +38,9 @@ it("picks the connection page by keyset + limit+1 in a subquery before the lates
 it("looks one connection up by id under the same visibility predicate (K2)", async () => {
   await listNetworkingConnectionSummaries("event", "self", ["PAID"], undefined, { connectionId: "connection-1" });
   const [lookup] = issued();
-  expect(lookup.params).toEqual(expect.arrayContaining(["connection-1", "event", "self", "PAID", "ACTIVE", true]));
+  expect(lookup.params).toEqual(expect.arrayContaining(["connection-1", "event", "self", "PAID"]));
   expect(lookup.sql).toContain('"networking_connections"."id" = $');
-  for (const filter of ['"networking_profiles"."consent" =', 'NOT EXISTS (SELECT 1 FROM networking_blocks', '"registrations"."networking_opt_in" IS DISTINCT FROM false']) expect(lookup.sql).toContain(filter);
+  for (const filter of ['"networking_profiles"."consent" AND', 'NOT EXISTS (SELECT 1 FROM networking_blocks', '"registrations"."networking_opt_in" IS DISTINCT FROM false']) expect(lookup.sql).toContain(filter);
 });
 
 it("bounds meeting SQL by participant/event and ascending composite key with a pre-cursor count", async () => {

@@ -22,7 +22,9 @@ import * as clients from "../clients";
 import * as conditionSchema from "../condition.schema";
 import * as email from "../email";
 import * as events from "../events";
+import * as eventsResponses from "../events.responses";
 import * as forms from "../forms";
+import * as formsResponses from "../forms.responses";
 import * as health from "../health";
 import * as i18n from "../i18n.schema";
 import * as identity from "../identity";
@@ -30,8 +32,10 @@ import * as networking from "../networking";
 import * as pricing from "../pricing";
 import * as realtime from "../realtime";
 import * as registrations from "../registrations";
+import * as registrationsResponses from "../registrations.responses";
 import * as reports from "../reports";
 import * as sponsorships from "../sponsorships";
+import * as sponsorshipsResponses from "../sponsorships.responses";
 
 /**
  * The API contract modules, by file name. Server-only modules (env config,
@@ -47,7 +51,9 @@ export const CONTRACT_MODULES: Readonly<Record<string, Record<string, unknown>>>
   "condition.schema": conditionSchema,
   email,
   events,
+  "events.responses": eventsResponses,
   forms,
+  "forms.responses": formsResponses,
   health,
   "i18n.schema": i18n,
   identity,
@@ -55,8 +61,10 @@ export const CONTRACT_MODULES: Readonly<Record<string, Record<string, unknown>>>
   pricing,
   realtime,
   registrations,
+  "registrations.responses": registrationsResponses,
   reports,
   sponsorships,
+  "sponsorships.responses": sponsorshipsResponses,
 };
 
 export type SchemaDirection = "input" | "output";

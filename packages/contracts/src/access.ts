@@ -155,6 +155,67 @@ export const PublicAccessItemParamSchema = z.strictObject({
 });
 
 // ============================================================================
+// Access item responses (plan 5.5 response contracts)
+// ============================================================================
+
+/** Every event_access column, as the public and admin routes return it. */
+const EventAccessRowShape = {
+  id: z.string(),
+  eventId: z.string(),
+  type: AccessTypeSchema,
+  name: z.string(),
+  description: z.string().nullable(),
+  location: z.string().nullable(),
+  startsAt: z.date().nullable(),
+  endsAt: z.date().nullable(),
+  price: z.number(),
+  currency: z.string(),
+  maxCapacity: z.number().nullable(),
+  registeredCount: z.number(),
+  paidCount: z.number(),
+  availableFrom: z.date().nullable(),
+  availableTo: z.date().nullable(),
+  conditions: z.unknown(),
+  conditionLogic: z.string(),
+  sortOrder: z.number(),
+  active: z.boolean(),
+  groupLabel: z.string().nullable(),
+  allowCompanion: z.boolean(),
+  includedInBase: z.boolean(),
+  companionPrice: z.number(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+};
+
+/** An access item row (every column). */
+export const EventAccessRowResponseSchema = z.object(EventAccessRowShape);
+
+/** An access item with its prerequisites (id and name). */
+export const EventAccessItemResponseSchema = z.object({
+  ...EventAccessRowShape,
+  requiredAccess: z.array(z.object({ id: z.string(), name: z.string() })),
+});
+
+/** GET /api/public/events/:eventId/access. */
+export const PublicEventAccessListResponseSchema = z.array(
+  EventAccessItemResponseSchema,
+);
+
+/** POST /api/public/events/:eventId/access/validate. */
+export const AccessSelectionValidationResponseSchema = z.object({
+  valid: z.boolean(),
+  errors: z.array(z.string()),
+});
+
+/** An item in a grouped time slot: prerequisites by id, plus live capacity. */
+export const GroupedAccessItemSchema = z.object({
+  ...EventAccessRowShape,
+  requiredAccess: z.array(z.object({ id: z.string() })),
+  spotsRemaining: z.number().nullable(),
+  isFull: z.boolean(),
+});
+
+// ============================================================================
 // Grouped Access Response (Hierarchical: Date → Time Slots)
 // ============================================================================
 
@@ -162,7 +223,7 @@ export const TimeSlotSchema = z.object({
   startsAt: z.date().nullable(),
   endsAt: z.date().nullable(),
   selectionType: z.enum(["single", "multiple"]),
-  items: z.array(z.unknown()),
+  items: z.array(GroupedAccessItemSchema),
 });
 
 export const DateGroupSchema = z.object({

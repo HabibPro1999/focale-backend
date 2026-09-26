@@ -13,8 +13,16 @@ import {
 } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { ErrorCodes } from "@app/contracts";
+import {
+  ErrorCodes,
+  PaymentMethodSelectedResponseSchema,
+  PaymentProofUploadResponseSchema,
+  PublicRegistrationCreateResponseSchema,
+  PublicRegistrationEditResponseSchema,
+  PublicRegistrationForEditResponseSchema,
+} from "@app/contracts";
 import { AppException } from "../../core/app-exception";
+import { ResponseContract } from "../../core/response-contract";
 import { RegistrationsService } from "./registrations.service";
 import { PaymentProofService } from "./registrations.payment-proof.service";
 import { RegistrationRepricer } from "./registrations.repricer";
@@ -49,6 +57,7 @@ export class RegistrationsPublicController {
 
   @Post(":formId/register")
   @Throttle(REGISTRATION_THROTTLE)
+  @ResponseContract(PublicRegistrationCreateResponseSchema)
   async register(
     @Param() { formId }: FormIdParamDto,
     @Body() body: CreateRegistrationBodyDto,
@@ -92,6 +101,7 @@ export class RegistrationEditPublicController {
 
   @Get(":registrationId")
   @Throttle(EDIT_TOKEN_THROTTLE)
+  @ResponseContract(PublicRegistrationForEditResponseSchema)
   async getForEdit(
     @Param() { registrationId }: RegistrationIdPublicParamDto,
     @Query() { token }: EditTokenQueryDto,
@@ -103,6 +113,7 @@ export class RegistrationEditPublicController {
 
   @Patch(":registrationId")
   @Throttle(EDIT_TOKEN_THROTTLE)
+  @ResponseContract(PublicRegistrationEditResponseSchema)
   async edit(
     @Param() { registrationId }: RegistrationIdPublicParamDto,
     @Query() { token }: EditTokenQueryDto,
@@ -116,6 +127,7 @@ export class RegistrationEditPublicController {
   // PATCH /api/public/registrations/:registrationId/payment-method → { success: true }
   @Patch(":registrationId/payment-method")
   @Throttle(EDIT_TOKEN_THROTTLE)
+  @ResponseContract(PaymentMethodSelectedResponseSchema)
   async selectPaymentMethod(
     @Param() { registrationId }: RegistrationIdPublicParamDto,
     @Query() { token }: EditTokenQueryDto,
@@ -131,6 +143,7 @@ export class RegistrationEditPublicController {
   @Post(":registrationId/payment-proof")
   @HttpCode(201)
   @Throttle(PAYMENT_PROOF_THROTTLE)
+  @ResponseContract(PaymentProofUploadResponseSchema)
   async uploadPaymentProof(
     @Param() { registrationId }: RegistrationIdPublicParamDto,
     @Query() { token }: EditTokenQueryDto,

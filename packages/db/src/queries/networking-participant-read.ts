@@ -1,4 +1,5 @@
 import { and, asc, desc, eq, getTableColumns, gt, gte, inArray, or, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { getDb, type DbExecutor } from "../client";
 import { rowsOf } from "../helpers";
 import {
@@ -8,34 +9,27 @@ import {
   networkingMeetings as meetings,
   networkingAudit as audit,
   networkingNotifications as notifications,
+  networkingConfigs,
 } from "../schema/networking";
 import { registrations } from "../schema/registrations";
+import { peerCounterpart } from "../policy/networking-eligibility";
 
 export interface NetworkingParticipantPage {
   limit: number;
   after?: { at: Date; id: string };
 }
 
+/** The participant's connections whose counterpart they may still see (4.6: counterpart `peer` mode). */
 function connectionVisibility(eventId: string, profileId: string, paymentStatuses: readonly string[]) {
   return and(
-        eq(connections.eventId, eventId),
-        eq(profiles.eventId, eventId),
-        eq(registrations.eventId, eventId),
-        or(
-          eq(connections.profileAId, profileId),
-          eq(connections.profileBId, profileId),
-        ),
-        eq(profiles.status, "ACTIVE"),
-        eq(profiles.consent, true),
-        sql`${profiles.withdrawnAt} IS NULL`,
-        sql`${registrations.networkingOptIn} IS DISTINCT FROM false`,
-        inArray(registrations.paymentStatus, [
-          ...paymentStatuses,
-        ] as (typeof registrations.$inferSelect.paymentStatus)[]),
-        sql`lower(${profiles.email})<>(SELECT lower(email) FROM networking_profiles WHERE id=${profileId} AND event_id=${eventId})`,
-        sql`NOT EXISTS (SELECT 1 FROM networking_blocks b WHERE b.event_id=${eventId} AND
-        ((b.profile_id=${profileId} AND b.target_id=${profiles.id}) OR (b.target_id=${profileId} AND b.profile_id=${profiles.id})))`,
-      );
+    eq(connections.eventId, eventId),
+    eq(profiles.eventId, eventId),
+    or(
+      eq(connections.profileAId, profileId),
+      eq(connections.profileBId, profileId),
+    ),
+    peerCounterpart(profiles, registrations, paymentStatuses, { eventId, profileId }),
+  );
 }
 
 export async function countNetworkingConnectionSummaries(eventId: string, profileId: string, paymentStatuses: readonly string[]) {
@@ -163,6 +157,9 @@ export async function markNetworkingMessageNotificationsRead(
     );
 }
 
+const unreadPeer = alias(profiles, "p");
+const unreadRegistration = alias(registrations, "r");
+const unreadConfig = alias(networkingConfigs, "cfg");
 export async function networkingUnreadMessageCount(
   eventId: string,
   profileId: string,
@@ -173,16 +170,12 @@ export async function networkingUnreadMessageCount(
     SELECT count(*)::int AS count FROM networking_connections c
     JOIN networking_messages m ON m.connection_id=c.id AND m.event_id=c.event_id
     JOIN networking_profiles p ON p.id=CASE WHEN c.profile_a_id=${profileId} THEN c.profile_b_id ELSE c.profile_a_id END AND p.event_id=c.event_id
-    JOIN registrations r ON r.id=p.registration_id AND r.event_id=c.event_id
+    JOIN registrations r ON r.id=p.registration_id
     JOIN networking_configs cfg ON cfg.event_id=c.event_id
     WHERE c.event_id=${eventId} AND (c.profile_a_id=${profileId} OR c.profile_b_id=${profileId})
       AND m.sender_id<>${profileId} AND (CASE WHEN c.profile_a_id=${profileId} THEN c.read_a_at ELSE c.read_b_at END IS NULL
         OR m.created_at>CASE WHEN c.profile_a_id=${profileId} THEN c.read_a_at ELSE c.read_b_at END)
-      AND p.status='ACTIVE' AND p.consent AND p.withdrawn_at IS NULL AND r.networking_opt_in IS DISTINCT FROM false
-      AND lower(p.email)<>(SELECT lower(email) FROM networking_profiles WHERE id=${profileId} AND event_id=${eventId})
-      AND cfg.config->'eligiblePaymentStatuses' ? r.payment_status::text
-      AND NOT EXISTS (SELECT 1 FROM networking_blocks b WHERE b.event_id=c.event_id
-        AND ((b.profile_id=${profileId} AND b.target_id=p.id) OR (b.profile_id=p.id AND b.target_id=${profileId})))
+      AND ${peerCounterpart(unreadPeer, unreadRegistration, { config: unreadConfig.config }, { eventId, profileId })}
   `),
   );
   return Number(row?.count ?? 0);
