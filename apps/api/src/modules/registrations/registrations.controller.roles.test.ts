@@ -43,21 +43,25 @@ import { EnvelopeInterceptor } from "../../core/envelope.interceptor";
 import { HttpExceptionFilter } from "../../core/http-exception.filter";
 import { RegistrationsController } from "./registrations.controller";
 import { RegistrationsService } from "./registrations.service";
+import { RegistrationRepricer } from "./registrations.repricer";
 
 const eventId = "11111111-1111-4111-8111-111111111111";
 const registrationId = "22222222-2222-4222-8222-222222222222";
 const AUTH = { authorization: "Bearer test" };
 
 const service = {
-  adminEditRegistration: vi.fn(async () => ({ id: registrationId })),
   deleteRegistration: vi.fn(async () => undefined),
   getRegistrationClientId: vi.fn(async () => "c1"),
+};
+const repricer = {
+  adminEditRegistration: vi.fn(async () => ({ id: registrationId })),
 };
 
 @Module({
   controllers: [RegistrationsController],
   providers: [
     { provide: RegistrationsService, useValue: service },
+    { provide: RegistrationRepricer, useValue: repricer },
     Reflector,
     { provide: APP_PIPE, useClass: ZodValidationPipe },
     { provide: APP_INTERCEPTOR, useClass: EnvelopeInterceptor },
@@ -125,7 +129,7 @@ describe("RegistrationsController role checks", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(verifyToken).toHaveBeenCalledTimes(1);
-    expect(service.adminEditRegistration).toHaveBeenCalledWith(
+    expect(repricer.adminEditRegistration).toHaveBeenCalledWith(
       eventId,
       registrationId,
       { firstName: "Ada" },
@@ -145,7 +149,7 @@ describe("RegistrationsController role checks", () => {
     expect(res.json().error).toMatchObject({ code: ErrorCodes.FORBIDDEN, message: "Insufficient permissions" });
     expect(verifyToken).toHaveBeenCalledTimes(1);
     expect(getEventForRegistrationAdmin).not.toHaveBeenCalled();
-    expect(service.adminEditRegistration).not.toHaveBeenCalled();
+    expect(repricer.adminEditRegistration).not.toHaveBeenCalled();
   });
 
   it("force delete: a non-admin role is refused by the tenant check before the service", async () => {
