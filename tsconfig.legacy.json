@@ -1,0 +1,46 @@
+// Legacy Bun app (src/) only, kept for reference: the runnable legacy app
+// lives on `main`. Nothing on this branch builds, checks or tests with it.
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ESNext"],
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@config/*": ["./src/config/*"],
+      "@core/*": ["./src/core/*"],
+      "@shared/*": ["./src/shared/*"],
+      "@modules/*": ["./src/modules/*"],
+      "@identity": ["./src/modules/identity/index.ts"],
+      "@clients": ["./src/modules/clients/index.ts"],
+      "@events": ["./src/modules/events/index.ts"],
+      "@forms": ["./src/modules/forms/index.ts"],
+      "@pricing": ["./src/modules/pricing/index.ts"],
+      "@access": ["./src/modules/access/index.ts"],
+      "@registrations": ["./src/modules/registrations/index.ts"],
+      "@sponsorships": ["./src/modules/sponsorships/index.ts"],
+      "@reports": ["./src/modules/reports/index.ts"],
+      "@email": ["./src/modules/email/index.ts"],
+      "@certificates": ["./src/modules/certificates/index.ts"],
+      "@checkin": ["./src/modules/checkin/index.ts"],
+      "@realtime": ["./src/modules/realtime/index.ts"],
+      "@abstracts": ["./src/modules/abstracts/index.ts"],
+      "@abstracts/*": ["./src/modules/abstracts/*"]
+    }
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules"]
+}

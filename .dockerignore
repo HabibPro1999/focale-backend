@@ -16,6 +16,7 @@ tests
 firebase/*.json
 src
 prisma
+tsconfig.legacy.json
 backups
 docs
 .progress
@@ -24,6 +25,3 @@ artifacts
 .memory
 .claude
 _schema_full.sql
-bun.lock
-package-lock.json
-bunfig.toml
