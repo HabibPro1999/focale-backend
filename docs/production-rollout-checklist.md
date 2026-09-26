@@ -1,6 +1,6 @@
 # Production rollout checklist
 
-Everything batch 3 of the backend remediation (PRs #94 to #172, plus the final documentation pass) left for an
+Everything batch 3 of the backend remediation (PRs #94 to #173) left for an
 operator on the production deploy that ships it. Nothing here is automated.
 One line per action, with the PR (and plan item) it comes from. Take a verified
 database backup before the deploy; the data repairs need their own backup.
