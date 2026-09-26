@@ -8,11 +8,13 @@ import {
   discoverableCounterpart,
   distinctIdentity,
   eligibleProfile,
+  embeddableProfile,
   listedProfile,
   mutuallyUnblocked,
   networkingEventGate,
   notInteracted,
   peerCounterpart,
+  sameIdentity,
 } from "./networking-eligibility";
 
 const dialect = new PgDialect({ casing: "snake_case" });
@@ -50,6 +52,7 @@ describe("networking eligibility SQL fragments (4.6)", () => {
       mutuallyUnblocked(hostile, hostile, p.id),
       notInteracted(hostile, hostile, p.id),
       distinctIdentity(p, { eventId: hostile, profileId: hostile }),
+      sameIdentity(p, hostile),
     ]) {
       const query = render(fragment);
       expect(query.sql).not.toContain(hostile);
@@ -76,6 +79,15 @@ describe("networking eligibility SQL fragments (4.6)", () => {
       `elig_m.event_id="p"."event_id" AND elig_m.status='CONFIRMED'`,
     );
     expect(render(listedProfile(p)).sql).toBe('"p"."erased_at" IS NULL');
+    const embeddable = render(embeddableProfile(p, r, ["PAID"])).sql;
+    expect(embeddable).toContain('"p"."withdrawn_at" IS NULL');
+    expect(embeddable).toContain('AND "p"."visible")');
+    expect(embeddable).not.toContain("btrim");
+  });
+  it("matches the participant's own profiles by trimmed, case-folded address", () => {
+    const query = render(sameIdentity(p, " Ann@Example.test "));
+    expect(query.sql).toBe('lower(btrim("p"."email"))=lower(btrim($1))');
+    expect(query.params).toEqual([" Ann@Example.test "]);
   });
   it("gates on the config, the event and every client module", () => {
     const query = render(networkingEventGate({

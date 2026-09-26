@@ -1,4 +1,4 @@
-import type { networkingDeliveryContext } from "@app/db";
+import { networkingCounterpartVisible, type networkingDeliveryContext } from "@app/db";
 import type { EmailAttachment } from "../email/providers";
 import { escapeHtml, networkingKeyring } from "@app/shared";
 import { networkingConfig } from "../config";
@@ -226,11 +226,14 @@ function foldIcs(value: string) {
   }
   return output + part;
 }
+/** The counterpart named in the message: only a visible peer of the recipient (4.6 policy, `peer` mode). */
 function notificationContact(ctx: NetworkingNotificationContext) {
-  const contact = ctx.contact;
-  return contact && !ctx.blocked && contact.status === "ACTIVE" && contact.consent && !contact.withdrawnAt &&
-    ctx.contactRegistration?.networkingOptIn !== false && ctx.contactRegistration &&
-    ctx.config.eligiblePaymentStatuses.includes(ctx.contactRegistration.paymentStatus) ? contact : null;
+  const { profile, contact } = ctx;
+  return profile && contact && networkingCounterpartVisible(
+    { viewer: profile, target: contact, targetRegistration: ctx.contactRegistration, blocked: ctx.blocked, connected: !!ctx.connection },
+    ctx.config,
+    "peer",
+  ) ? contact : null;
 }
 export function networkingMeetingAttachment(
   ctx: NetworkingNotificationContext,

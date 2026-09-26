@@ -28,6 +28,7 @@ import {
   getNetworkingConfig,
   networkingFormField,
   networkingMeetingIs,
+  networkingProfileListed,
   networkingRetentionEnded,
   networkingStore,
   networkingTransaction,
@@ -234,8 +235,8 @@ export class NetworkingAdminService {
     },
   ) {
     const store = networkingStore();
-    // Erased profiles are tombstones with nothing to show.
-    let rows = (await store.all("profiles", { eventId })).filter((p) => !p.erasedAt);
+    // Erased profiles are tombstones with nothing to show (4.6 policy).
+    let rows = (await store.all("profiles", { eventId })).filter(networkingProfileListed);
     const connections = await store.all("connections", { eventId });
     const meetings = await store.all("meetings", { eventId });
     rows = rows.filter(

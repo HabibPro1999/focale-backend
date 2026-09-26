@@ -41,6 +41,7 @@ import { AppException } from "../../core/app-exception";
 import { EventScoped, RegistrationScoped, ScopedClient } from "../tenancy";
 import { RegistrationsService } from "./registrations.service";
 import { RegistrationRepricer } from "./registrations.repricer";
+import { RegistrationPaymentsService } from "./registrations.payments.service";
 import {
   AdminCreateRegistrationDto,
   AdminEditRegistrationDto,
@@ -62,6 +63,7 @@ export class RegistrationsController {
   constructor(
     private readonly service: RegistrationsService,
     private readonly repricer: RegistrationRepricer,
+    private readonly payments: RegistrationPaymentsService,
   ) {}
 
   // GET /api/events/:eventId/registrations/columns
@@ -143,7 +145,7 @@ export class RegistrationsController {
     @Body() body: UpdateRegistrationDto,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.service.updateRegistration(id, body, user.id);
+    return this.payments.updateRegistration(id, body, user.id);
   }
 
   // DELETE /api/events/registrations/:id
@@ -170,7 +172,7 @@ export class RegistrationsController {
     @CurrentUser() user: AuthUser,
     @Ip() ip: string,
   ) {
-    return this.service.confirmPayment(id, body, user.id, ip);
+    return this.payments.confirmPayment(id, body, user.id, ip);
   }
 
   // GET /api/events/registrations/:id/audit-logs

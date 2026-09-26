@@ -60,6 +60,15 @@ export function eligibleProfile(
     AND ${paymentStatusEligible(r, statuses)})`;
 }
 
+/** Consented, eligible and visible (`networkingProfileEmbeddable`): embedded for recommendations. */
+export function embeddableProfile(
+  p: NetworkingProfileColumns,
+  r: NetworkingRegistrationColumns,
+  statuses: NetworkingPaymentStatuses,
+): SQL {
+  return sql`(${eligibleProfile(p, r, statuses)} AND ${p.visible})`;
+}
+
 /** Every professional field discovery shows is filled (`networkingProfileComplete`). */
 export function profileComplete(p: NetworkingProfileColumns): SQL {
   return sql`(btrim(${p.firstName})<>'' AND btrim(${p.lastName})<>'' AND btrim(${p.company})<>''
@@ -84,6 +93,11 @@ export function distinctIdentity(
     ? sql`lower(btrim(${viewer.email}))`
     : sql`(SELECT lower(btrim(elig_v.email)) FROM networking_profiles elig_v WHERE elig_v.id=${viewer.profileId} AND elig_v.event_id=${viewer.eventId})`;
   return sql`(${p.id}<>${viewer.profileId} AND lower(btrim(${p.email}))<>${viewerEmail})`;
+}
+
+/** One of the participant's own profiles: the same address (`networkingIdentityEmail`). */
+export function sameIdentity(p: Pick<NetworkingProfileColumns, "email">, email: string): SQL {
+  return sql`lower(btrim(${p.email}))=lower(btrim(${email}))`;
 }
 
 /** No block in either direction between `a` and `b`. */

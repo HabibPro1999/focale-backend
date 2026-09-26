@@ -5,6 +5,7 @@ const data = vi.hoisted(() => ({ rows: {} as Record<string, unknown[]> }));
 const pdf = vi.hoisted(() => ({ calls: [] as Array<{ headers: string[]; rows: unknown[][] }> }));
 vi.mock("@app/db", async (original) => ({
   networkingMeetingIs: (await original<typeof import("@app/db")>()).networkingMeetingIs,
+  networkingProfileListed: (await original<typeof import("@app/db")>()).networkingProfileListed,
   networkingStore: () => ({ all: async (kind: string) => data.rows[kind] ?? [] }),
 }));
 // The PDF generator is where the service hands over its table: the parity

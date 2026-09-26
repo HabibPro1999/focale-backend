@@ -3,6 +3,8 @@ import {
   networkingMeetingIs,
   getNetworkingConfig,
   networkingEmailMetrics,
+  networkingProfileActive,
+  networkingProfileListed,
   networkingStore,
   type NetworkingRow,
 } from "@app/db";
@@ -23,13 +25,17 @@ type AnalyticsInput = {
   config: NetworkingConfig;
 };
 
-/** Definitions are shared by the overview, exports and report charts. Rates are fractions. */
+/**
+ * Definitions are shared by the overview, exports and report charts. Rates are
+ * fractions. Participants are the listed profiles (erased tombstones are left
+ * out); "active" is `networkingProfileActive` (4.6 policy).
+ */
 export function calculateNetworkingAnalytics(
   input: AnalyticsInput,
   now = new Date(),
 ) {
+  const profiles = input.profiles.filter(networkingProfileListed);
   const {
-    profiles,
     interests,
     connections,
     messages,
@@ -176,7 +182,7 @@ export function calculateNetworkingAnalytics(
   const bySpace = new Map((input.spaces ?? []).map(space => [space.id, space]));
   const tableUsage = tables.map((table) => {
     const representatives = profiles.filter(profile => (profile.standTableId === table.id || profile.id === table.ownerProfileId)
-      && profile.status === "ACTIVE" && profile.consent && !profile.withdrawnAt && profile.meetingsEnabled);
+      && networkingProfileActive(profile) && profile.meetingsEnabled);
     const stations = table.kind === "TABLE" ? 1 : representatives.length;
     const active = table.active && (!table.spaceId || bySpace.get(table.spaceId)?.active === true);
     const assigned = planned.filter(meeting => meeting.tableId === table.id);
@@ -248,16 +254,9 @@ export function calculateNetworkingAnalytics(
   );
   return {
     profiles: profiles.length,
-    activeProfiles: profiles.filter(
-      (profile) =>
-        profile.status === "ACTIVE" && !profile.withdrawnAt && profile.consent,
-    ).length,
+    activeProfiles: profiles.filter(networkingProfileActive).length,
     visibleProfiles: profiles.filter(
-      (profile) =>
-        profile.visible &&
-        profile.status === "ACTIVE" &&
-        !profile.withdrawnAt &&
-        profile.consent,
+      (profile) => profile.visible && networkingProfileActive(profile),
     ).length,
     profileViews: audit.filter((entry) => entry.action === "PROFILE_VIEW")
       .length,

@@ -5,6 +5,7 @@ import { RegistrationsService } from "./registrations.service";
 import { RegistrationSideEffects } from "./registrations.side-effects";
 import { PaymentProofService } from "./registrations.payment-proof.service";
 import { RegistrationRepricer } from "./registrations.repricer";
+import { RegistrationPaymentsService } from "./registrations.payments.service";
 import {
   RegistrationEditLinkController,
   RegistrationsController,
@@ -27,6 +28,7 @@ import {
     RegistrationSideEffects,
     PaymentProofService,
     RegistrationRepricer,
+    RegistrationPaymentsService,
   ],
   // Exported so certificates/reports/sponsorships can consume registration reads.
   exports: [RegistrationsService],

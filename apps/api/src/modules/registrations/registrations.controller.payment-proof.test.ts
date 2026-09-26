@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RegistrationsController } from "./registrations.controller";
 import type { RegistrationsService } from "./registrations.service";
 import type { RegistrationRepricer } from "./registrations.repricer";
+import type { RegistrationPaymentsService } from "./registrations.payments.service";
 import {
   getStorageProvider,
   extractStorageKeyFromUrl,
@@ -36,7 +37,11 @@ function makeController(registration: unknown) {
   const service = {
     getRegistrationById: vi.fn(async () => registration),
   } as unknown as RegistrationsService;
-  return new RegistrationsController(service, {} as RegistrationRepricer);
+  return new RegistrationsController(
+    service,
+    {} as RegistrationRepricer,
+    {} as RegistrationPaymentsService,
+  );
 }
 
 describe("paymentProof — proxies bytes instead of redirecting (CORS)", () => {

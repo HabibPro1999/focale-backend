@@ -1,6 +1,22 @@
-import type { NetworkingDeliveryRow } from "@app/db";
+import {
+  networkingCounterpartVisible,
+  networkingEventAvailable,
+  networkingIdentityEmail,
+  networkingParticipantAccess,
+  networkingWindow,
+  type NetworkingDeliveryRow,
+} from "@app/db";
 import type { NetworkingNotificationContext } from "./notification-rendering";
 
+/** Contacts notices and digests still go out once networking closes (until retention ends). */
+const SENT_AFTER_CLOSE = new Set(["POST_EVENT_CONTACTS", "DAILY_DIGEST"]);
+
+/**
+ * Why a delivery must not go out now, or undefined to send it. Eligibility is
+ * the 4.6 policy: the event gate and window, the recipient's own access (a
+ * sign-in code also reaches a consent-pending registrant, K1b) and, for a
+ * meeting or connection, the counterpart in `peer` mode.
+ */
 export function networkingDeliverySkipReason(
   row: NetworkingDeliveryRow,
   ctx: NetworkingNotificationContext,
@@ -19,29 +35,13 @@ export function networkingDeliverySkipReason(
     contact,
     contactRegistration,
   } = ctx;
-  if (
-    !event ||
-    !client?.active ||
-    !config.enabled ||
-    event.status === "ARCHIVED" ||
-    !["networking", "registrations", "emails"].every((module) =>
-      client.enabledModules?.includes(module),
-    )
-  )
+  if (!event || !networkingEventAvailable({ event, client, config }))
     return "event_unavailable";
-  if (row.type !== "POST_EVENT_CONTACTS" && row.type !== "DAILY_DIGEST" && config.closesAt && new Date(config.closesAt) <= now)
+  const window = networkingWindow(config, event, now.getTime());
+  if (window === "RETENTION_ENDED" || (window === "CLOSED" && !SENT_AFTER_CLOSE.has(row.type)))
     return "networking_closed";
-  const eligible = (person: typeof profile, registrant: typeof registration, consentPending = false) =>
-    !!person &&
-    person.status === "ACTIVE" &&
-    (person.consent || consentPending) &&
-    !person.withdrawnAt &&
-    !!registrant &&
-    registrant.eventId === row.eventId &&
-    registrant.networkingOptIn !== false &&
-    config.eligiblePaymentStatuses.includes(registrant.paymentStatus);
-  // Undecided registrants may still receive a sign-in code to give consent in the PWA.
-  if (!eligible(profile, registration, row.type === "OTP" && ctx.consentPending))
+  const otp = row.type === "OTP";
+  if (!profile || !networkingParticipantAccess({ profile, registration, consentPending: otp && ctx.consentPending }, config, { allowConsentPending: otp }))
     return "participant_ineligible";
   if (
     row.type === "OTP" &&
@@ -49,13 +49,13 @@ export function networkingDeliverySkipReason(
       challenge.consumedAt ||
       challenge.attempts >= 5 ||
       challenge.expiresAt <= now ||
-      challenge.email.toLowerCase() !== profile!.email.toLowerCase())
+      networkingIdentityEmail(challenge.email) !== networkingIdentityEmail(profile.email))
   )
     return "code_expired";
   if (row.type === "MATCH" || row.type === "MESSAGE") {
     if (
       !connection ||
-      ![connection.profileAId, connection.profileBId].includes(profile!.id)
+      ![connection.profileAId, connection.profileBId].includes(profile.id)
     )
       return "connection_unavailable";
     if (
@@ -65,7 +65,7 @@ export function networkingDeliverySkipReason(
       return "message_unavailable";
     if (row.type === "MESSAGE" && message) {
       const readAt =
-        connection.profileAId === profile!.id
+        connection.profileAId === profile.id
           ? connection.readAAt
           : connection.readBAt;
       if (readAt && readAt >= message.createdAt) return "message_already_read";
@@ -74,7 +74,7 @@ export function networkingDeliverySkipReason(
   if (row.type.startsWith("MEETING_")) {
     if (
       !meeting ||
-      ![meeting.requesterId, meeting.recipientId].includes(profile!.id) ||
+      ![meeting.requesterId, meeting.recipientId].includes(profile.id) ||
       meeting.revision !== Number(row.payload.revision)
     )
       return "meeting_changed";
@@ -97,9 +97,17 @@ export function networkingDeliverySkipReason(
     if (ctx.blocked) return "participants_blocked";
     const cancellation = meeting?.status === "CANCELLED" &&
       ["MEETING_CANCEL", "MEETING_CANCELLED"].includes(row.type);
-    if (!cancellation && !eligible(contact, contactRegistration)) return "contact_ineligible";
+    if (
+      !cancellation &&
+      !networkingCounterpartVisible(
+        { viewer: profile, target: contact, targetRegistration: contactRegistration, blocked: ctx.blocked, connected: !!connection },
+        config,
+        "peer",
+      )
+    )
+      return "contact_ineligible";
   }
-  if (row.type === "DAILY_DIGEST" && profile!.emailPreference !== "DAILY")
+  if (row.type === "DAILY_DIGEST" && profile.emailPreference !== "DAILY")
     return "digest_preference_changed";
   return undefined;
 }

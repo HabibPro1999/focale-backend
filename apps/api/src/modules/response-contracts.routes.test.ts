@@ -445,9 +445,12 @@ async function todaysPayloads(): Promise<Array<[string, z.ZodType, unknown]>> {
     droppedAccessSelections: [],
   });
 
-  const sponsorForm = await new FormsPublicController({
+  const formsPublic = new FormsPublicController({
+    getFormByEventSlug: vi.fn(async () => publicForm),
     getSponsorFormByEventSlug: vi.fn(async () => ({ ...publicForm, type: "SPONSOR" })),
-  } as unknown as FormsService).getSponsorBySlug({ slug: "summit" });
+  } as unknown as FormsService);
+  const registrationForm = await formsPublic.getBySlug({ slug: "summit" });
+  const sponsorForm = await formsPublic.getSponsorBySlug({ slug: "summit" });
 
   db.searchRegistrantsForSponsorship.mockResolvedValue([registrantSearchResult]);
   const publicService = new SponsorshipsPublicService({} as AccessService);
@@ -618,7 +621,7 @@ async function todaysPayloads(): Promise<Array<[string, z.ZodType, unknown]>> {
         warnings: [],
       },
     ],
-    ["public registration form", PublicFormResponseSchema, publicForm],
+    ["public registration form", PublicFormResponseSchema, registrationForm],
     ["public sponsor form", PublicSponsorFormResponseSchema, sponsorForm],
     ["payment config", PublicPaymentConfigResponseSchema, paymentConfig],
     ["price quote", PriceBreakdownSchema, priceBreakdown],
@@ -643,6 +646,19 @@ describe("response contracts match today's route payloads", () => {
       const parsed = schema.safeParse(value);
       expect({ route, issues: parsed.error?.issues ?? [] }).toEqual({ route, issues: [] });
     }
+  });
+
+  it("the public registration form differs from the stored row by exactly event.clientId", async () => {
+    // The route returned the whole row before; the contract now keeps the
+    // event's clientId internal (the form app does not read it).
+    expect(projectOntoContract(PublicFormResponseSchema, publicForm).stripped).toEqual([
+      "event.clientId",
+    ]);
+    const payloads = await todaysPayloads();
+    const served = payloads.find(([route]) => route === "public registration form")?.[2];
+    const { clientId, ...event } = publicForm.event;
+    expect(clientId).toBe("c1");
+    expect(JSON.stringify(served)).toBe(JSON.stringify({ ...publicForm, event }));
   });
 
   it("the grouped-access fixture exercises both dated slots and the add-on group", async () => {

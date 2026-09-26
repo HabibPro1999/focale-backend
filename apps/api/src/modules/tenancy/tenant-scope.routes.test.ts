@@ -67,6 +67,7 @@ import {
 } from "../registrations/registrations.controller";
 import { RegistrationsService } from "../registrations/registrations.service";
 import { RegistrationRepricer } from "../registrations/registrations.repricer";
+import { RegistrationPaymentsService } from "../registrations/registrations.payments.service";
 import { PricingController } from "../pricing/pricing.controller";
 import { PricingService } from "../pricing/pricing.service";
 import { CheckinController } from "../checkin/checkin.controller";
@@ -230,6 +231,7 @@ const SERVICES: Type[] = [
   EmailSendService,
   RegistrationsService,
   RegistrationRepricer,
+  RegistrationPaymentsService,
   PricingService,
   CheckinService,
   ReportsService,

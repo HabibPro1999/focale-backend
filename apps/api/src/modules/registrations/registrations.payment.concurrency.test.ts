@@ -31,13 +31,12 @@ import {
   seedForm,
   seedRegistration,
 } from "../../../../../packages/db/tests/helpers/factories";
-import type { Config } from "../../core/config";
 import { AccessService } from "../access/access.service";
 import { PricingService } from "../pricing/pricing.service";
-import { RegistrationsService } from "./registrations.service";
 import { RegistrationSideEffects } from "./registrations.side-effects";
 import { PaymentProofService } from "./registrations.payment-proof.service";
 import { RegistrationRepricer } from "./registrations.repricer";
+import { RegistrationPaymentsService } from "./registrations.payments.service";
 
 // Plan 2.6b: the payment status writers (confirmPayment, payment-proof upload,
 // payment-method selection, admin edits) lock the registration first and decide
@@ -46,12 +45,7 @@ import { RegistrationRepricer } from "./registrations.repricer";
 
 const access = new AccessService();
 const sideEffects = new RegistrationSideEffects(access);
-const service = new RegistrationsService(
-  access,
-  new PricingService(),
-  { publicLinkAllowedOrigins: ["https://events.example.com"] } as Config,
-  sideEffects,
-);
+const payments = new RegistrationPaymentsService(access, sideEffects);
 const proofs = new PaymentProofService(sideEffects);
 const repricer = new RegistrationRepricer(access, new PricingService(), sideEffects);
 const PDF = Buffer.from("%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n");
@@ -169,7 +163,7 @@ describe.runIf(dbTestsEnabled())("registration payment writers under concurrency
 
     const results = await queueBehindLock(
       registration.id,
-      () => service.confirmPayment(registration.id, { paymentStatus: "PAID" }, "admin-1"),
+      () => payments.confirmPayment(registration.id, { paymentStatus: "PAID" }, "admin-1"),
       () =>
         repricer.adminEditRegistration(
           event.id,
@@ -193,7 +187,7 @@ describe.runIf(dbTestsEnabled())("registration payment writers under concurrency
 
     const [confirm, proof] = await queueBehindLock(
       registration.id,
-      () => service.confirmPayment(registration.id, { paymentStatus: "PAID" }, "admin-1"),
+      () => payments.confirmPayment(registration.id, { paymentStatus: "PAID" }, "admin-1"),
       () =>
         proofs.uploadPaymentProof(registration.id, {
           buffer: PDF,
@@ -222,8 +216,8 @@ describe.runIf(dbTestsEnabled())("registration payment writers under concurrency
 
     const [confirm, method] = await queueBehindLock(
       registration.id,
-      () => service.confirmPayment(registration.id, { paymentStatus: "PAID" }, "admin-1"),
-      () => service.selectPaymentMethod(registration.id, { paymentMethod: "CASH" } as never),
+      () => payments.confirmPayment(registration.id, { paymentStatus: "PAID" }, "admin-1"),
+      () => payments.selectPaymentMethod(registration.id, { paymentMethod: "CASH" } as never),
     );
 
     expect(confirm.status).toBe("fulfilled");
@@ -239,7 +233,7 @@ describe.runIf(dbTestsEnabled())("registration payment writers under concurrency
     const registration = await seedPending(event.id, form.id, { base: 100, status: "VERIFYING" });
 
     await expect(
-      service.selectPaymentMethod(registration.id, { paymentMethod: "CASH" } as never),
+      payments.selectPaymentMethod(registration.id, { paymentMethod: "CASH" } as never),
     ).rejects.toMatchObject({ code: ErrorCodes.REGISTRATION_INVALID_STATUS });
     expect(await readRegistration(registration.id)).toMatchObject({ paymentStatus: "VERIFYING", paymentMethod: null });
   });
@@ -257,8 +251,8 @@ describe.runIf(dbTestsEnabled())("registration payment writers under concurrency
     const second = await seedPending(event.id, form.id, { items: [x] });
 
     const results = await Promise.allSettled([
-      service.confirmPayment(first.id, { paymentStatus: "PAID" }, "admin-1"),
-      service.confirmPayment(second.id, { paymentStatus: "PAID" }, "admin-2"),
+      payments.confirmPayment(first.id, { paymentStatus: "PAID" }, "admin-1"),
+      payments.confirmPayment(second.id, { paymentStatus: "PAID" }, "admin-2"),
     ]);
 
     // A lost race is a 409 (or the item was dropped first), never a 5xx.

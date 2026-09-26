@@ -1,5 +1,6 @@
 import { describe,expect,it } from "vitest";
 import { NetworkingConfigSchema } from "@app/contracts";
+import { NETWORKING_ELIGIBILITY_MATRIX, networkingEligibilityRowFacts } from "@app/db/testing";
 import { calculateNetworkingAnalytics } from "./networking.analytics";
 
 type Input=Parameters<typeof calculateNetworkingAnalytics>[0];
@@ -68,5 +69,37 @@ describe("networking report definitions",()=>{
     expect(result.meetingConversionRate).toBe(1);
     expect(result.engagementTenSwipesRate).toBe(0.5);
     expect(result.punctuality).toEqual({checkins:2,onTime:1,onTimeRate:0.5,averageDelayMinutes:5});
+  });
+});
+
+describe("organizer analytics on the eligibility matrix (4.6)", () => {
+  const viewer = { id: "viewer", email: "viewer@example.invalid" };
+  const targets = NETWORKING_ELIGIBILITY_MATRIX.map((row, index) => ({
+    row,
+    profile: networkingEligibilityRowFacts(row, { eventId: "event", otherEventId: "other", targetId: `target-${index}`, viewer }).profile,
+  }));
+  const input = (): Input => ({
+    ...fixture(),
+    profiles: targets.map(({ profile }) => ({ ...profile, meetingsEnabled: true, standTableId: `stand-${profile.id}`, lastActiveAt: null })),
+    // One exhibitor stand per target: it offers a meeting station only while its representative is active.
+    tables: targets.map(({ profile }) => ({ id: `stand-${profile.id}`, name: profile.lastName, kind: "STAND", location: null, active: true, ownerProfileId: profile.id })),
+    interests: [], connections: [], messages: [], meetings: [],
+  }) as unknown as Input;
+  const count = (column: "listed" | "active") => targets.filter(({ row }) => row.expect[column]).length;
+  it("counts listed participants, active and visible ones as the policy defines them", () => {
+    const result = calculateNetworkingAnalytics(input());
+    expect(result.profiles).toBe(count("listed"));
+    expect(result.activeProfiles).toBe(count("active"));
+    expect(result.visibleProfiles).toBe(targets.filter(({ row, profile }) => row.expect.active && profile.visible).length);
+    // Sectors come from listed profiles only (each target has its own sector).
+    expect(new Set(result.sectors.map((sector) => sector.sector))).toEqual(
+      new Set(targets.filter(({ row }) => row.expect.listed).map(({ profile }) => profile.sector)),
+    );
+  });
+  it("gives a stand a meeting station only for an active representative", () => {
+    const usage = new Map(calculateNetworkingAnalytics(input()).tableUsage.map((table) => [table.tableId, table.availableMinutes > 0]));
+    expect(Object.fromEntries(targets.map(({ row, profile }) => [row.name, usage.get(`stand-${profile.id}`)]))).toEqual(
+      Object.fromEntries(targets.map(({ row }) => [row.name, row.expect.active])),
+    );
   });
 });

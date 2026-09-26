@@ -11,6 +11,12 @@ import type { NetworkingAccess } from "../policy/networking-access";
  * Baseline target: ACTIVE, consented, visible, complete profile; a PAID
  * registration in the same event that opted in; not connected, not blocked,
  * not swiped; a confirmed meeting with the viewer.
+ *
+ * Surfaces without a column of their own answer from these: producers and
+ * deliveries addressed to the target follow `access` (a sign-in code also
+ * reaches CONSENT_PENDING, everything else needs CONSENTED); anything that
+ * names the target to the viewer (reminders, meeting and connection
+ * notices, the contact in a rendered message) follows `peer`.
  */
 export type NetworkingEligibilityRow = {
   name: string;
@@ -61,11 +67,13 @@ export type NetworkingEligibilityRow = {
     listed: boolean;
     /** Counted active in organizer analytics (`networkingProfileActive`). */
     active: boolean;
+    /** Embedded for recommendations (`networkingProfileEmbeddable`): eligible and visible. */
+    embedded: boolean;
   };
 };
 
-const none = { access: null, profile: false, discover: false, fresh: false, peer: false, blocklist: false, admitted: false } as const;
-const eligible = { access: "CONSENTED", profile: true, discover: true, fresh: true, peer: true, blocklist: true, admitted: true, listed: true, active: true } as const;
+const none = { access: null, profile: false, discover: false, fresh: false, peer: false, blocklist: false, admitted: false, embedded: false } as const;
+const eligible = { access: "CONSENTED", profile: true, discover: true, fresh: true, peer: true, blocklist: true, admitted: true, listed: true, active: true, embedded: true } as const;
 
 export const NETWORKING_ELIGIBILITY_MATRIX: readonly NetworkingEligibilityRow[] = [
   { name: "eligible", expect: eligible },
@@ -137,13 +145,13 @@ export const NETWORKING_ELIGIBILITY_MATRIX: readonly NetworkingEligibilityRow[] 
   {
     name: "hidden",
     profile: { visible: false },
-    expect: { ...eligible, profile: false, discover: false, fresh: false, blocklist: false },
+    expect: { ...eligible, profile: false, discover: false, fresh: false, blocklist: false, embedded: false },
   },
   {
     name: "hidden, connected",
     profile: { visible: false },
     relation: { connected: true },
-    expect: { ...eligible, discover: false, fresh: false },
+    expect: { ...eligible, discover: false, fresh: false, embedded: false },
   },
   {
     name: "incomplete profile",

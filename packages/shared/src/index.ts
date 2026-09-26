@@ -16,3 +16,4 @@ export * from "./abstract-authors";
 export * from "./networking-keyring";
 export * from "./export-format";
 export * from "./abstract-title";
+export * from "./abstracts";
