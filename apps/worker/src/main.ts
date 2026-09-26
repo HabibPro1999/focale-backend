@@ -5,6 +5,7 @@ import {
   closeDb,
   configureDb,
   configureOutbox,
+  getDb,
   pruneWorkerHeartbeats,
   recordWorkerHeartbeat,
 } from "@app/db";
@@ -59,8 +60,8 @@ async function bootstrap() {
   const heartbeat = new WorkerHeartbeat({
     file: config.lifecycle.workerHeartbeatFile,
     logger: log,
-    record: (state) => recordWorkerHeartbeat({ workerId, service, ...state }),
-    prune: () => pruneWorkerHeartbeats(),
+    record: (state) => recordWorkerHeartbeat({ workerId, service, ...state }, getDb()),
+    prune: () => pruneWorkerHeartbeats(getDb()),
   });
   const onSignals = (shutdown: (signal: string) => Promise<void>) => {
     process.on("SIGINT", () => void shutdown("SIGINT"));

@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const { tx } = vi.hoisted(() => ({ tx: { executor: "tx" } }));
 vi.mock("@app/db", () => ({
+  withTxn: (fn: (exec: unknown) => unknown) => fn(tx),
   getRegistrationForEmailContext: vi.fn(),
   getRegistrationsByIds: vi.fn(),
   getRegistrationsByFilters: vi.fn(),
@@ -112,7 +114,8 @@ describe("bulkSend — registrants", () => {
       queued: 1,
       message: "1 emails queued for sending",
     });
-    const rows = vi.mocked(insertEmailLogsSkippingConflicts).mock.calls[0][0];
+    const [rows, exec] = vi.mocked(insertEmailLogsSkippingConflicts).mock.calls[0];
+    expect(exec).toBe(tx); // one transaction: all-or-nothing batch
     expect(rows[0]).toMatchObject({
       templateId: "tmpl-1",
       registrationId: "r1",

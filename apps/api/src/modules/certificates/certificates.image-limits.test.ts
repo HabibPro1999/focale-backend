@@ -5,7 +5,9 @@ import { ErrorCodes } from "@app/contracts";
 
 // Template-image decode limits with the REAL sharp and file-type (the main
 // certificates suite mocks both). Only the DB and storage are stubbed.
+const { rootDb } = vi.hoisted(() => ({ rootDb: { executor: "root" } }));
 vi.mock("@app/db", () => ({
+  getDb: () => rootDb,
   getCertificateTemplateForUpload: vi.fn(),
   updateCertificateTemplateImage: vi.fn(),
 }));
@@ -98,6 +100,7 @@ describe("certificate template image decode limits", () => {
         renderImageWidth: 30,
         renderImageHeight: 20,
       }),
+      rootDb,
     );
     // 3.8: the render image is a JPEG of the same size (small images are
     // never scaled up), stored beside the original.

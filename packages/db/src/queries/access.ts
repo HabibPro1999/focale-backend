@@ -255,7 +255,7 @@ export async function getIncludedInBaseAccess(
 export async function insertEventAccess(
   values: NewEventAccessValues,
   requiredAccessIds: string[],
-  exec: DbExecutor = getDb(),
+  exec: DbExecutor,
 ): Promise<EventAccessWithPrereqs> {
   const [row] = await exec.insert(eventAccess).values(values).returning();
   if (requiredAccessIds.length > 0) {
@@ -271,7 +271,7 @@ export async function insertEventAccess(
 export async function updateEventAccessRow(
   id: string,
   data: Partial<NewEventAccessValues>,
-  exec: DbExecutor = getDb(),
+  exec: DbExecutor,
 ): Promise<EventAccessRow> {
   const [row] = await exec.update(eventAccess).set(data).where(eq(eventAccess.id, id)).returning();
   return row;
@@ -281,7 +281,7 @@ export async function updateEventAccessRow(
 export async function setAccessPrerequisites(
   ownerId: string,
   requiredIds: string[],
-  exec: DbExecutor = getDb(),
+  exec: DbExecutor,
 ): Promise<void> {
   await exec.delete(accessPrerequisites).where(eq(accessPrerequisites.b, ownerId));
   if (requiredIds.length > 0) {
@@ -342,7 +342,7 @@ export async function getAccessDependentIds(
 export async function removePrerequisiteEdge(
   ownerId: string,
   requiredId: string,
-  exec: DbExecutor = getDb(),
+  exec: DbExecutor,
 ): Promise<void> {
   await exec
     .delete(accessPrerequisites)
@@ -351,7 +351,7 @@ export async function removePrerequisiteEdge(
 
 export async function deleteEventAccessById(
   id: string,
-  exec: DbExecutor = getDb(),
+  exec: DbExecutor,
 ): Promise<void> {
   await exec.delete(eventAccess).where(eq(eventAccess.id, id));
 }
@@ -365,7 +365,7 @@ export async function deleteEventAccessById(
 export async function casIncrementAccessRegisteredCount(
   accessId: string,
   quantity: number,
-  exec: DbExecutor = getDb(),
+  exec: DbExecutor,
 ): Promise<boolean> {
   const res = await exec.execute(sql`
     UPDATE event_access
@@ -381,7 +381,7 @@ export async function casIncrementAccessRegisteredCount(
 export async function casDecrementAccessRegisteredCount(
   accessId: string,
   quantity: number,
-  exec: DbExecutor = getDb(),
+  exec: DbExecutor,
 ): Promise<boolean> {
   const res = await exec.execute(sql`
     UPDATE event_access
@@ -397,7 +397,7 @@ export async function casDecrementAccessRegisteredCount(
 export async function casIncrementAccessPaidCount(
   accessId: string,
   quantity: number,
-  exec: DbExecutor = getDb(),
+  exec: DbExecutor,
 ): Promise<boolean> {
   const res = await exec.execute(sql`
     UPDATE event_access
@@ -413,7 +413,7 @@ export async function casIncrementAccessPaidCount(
 export async function casDecrementAccessPaidCount(
   accessId: string,
   quantity: number,
-  exec: DbExecutor = getDb(),
+  exec: DbExecutor,
 ): Promise<boolean> {
   const res = await exec.execute(sql`
     UPDATE event_access

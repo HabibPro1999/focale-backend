@@ -426,7 +426,7 @@ export class EventsService {
     );
 
     try {
-      await updateEventBannerUrl(id, bannerUrl);
+      await updateEventBannerUrl(id, bannerUrl, getDb());
     } catch (err) {
       await deleteStoredObjectBestEffort(bannerUrl, { eventId: id });
       throw err;

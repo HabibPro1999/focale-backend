@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { parseArgs } from "node:util";
 import {
+  getDb,
   listCertificateTemplatesMissingRenderImage,
   setCertificateTemplateRenderImage,
   type CertificateTemplateMissingRender,
@@ -130,7 +131,7 @@ async function backfillOne(
     renderImageKey: key,
     renderImageWidth: render.width,
     renderImageHeight: render.height,
-  });
+  }, getDb());
   if (!recorded) {
     // Our key is fresh and unreferenced: safe to remove.
     await storage.delete(key).catch(() => undefined);

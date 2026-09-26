@@ -23,7 +23,7 @@ import { newId } from "@app/shared";
 import { getDb, type DbExecutor } from "../client";
 import { rowCountOf, rowsOf, STANDARD_RETRY_DELAYS_MS, standardRetryDelayMs } from "../helpers";
 import { DB_NOW, backoffInterval, createLeaseQueue, intervalMs } from "../lease-queue";
-import { pgUniqueViolation, withTxn } from "../txn";
+import { pgUniqueViolation } from "../txn";
 import { emailLogs, emailTemplates } from "../schema/email";
 import { events, eventAccess } from "../schema/events-access";
 import { eventPricing } from "../schema/pricing";
@@ -484,28 +484,25 @@ export const EMAIL_LOG_INSERT_CHUNK_SIZE = 500;
  * recipient, dedupe key). Every row gets its id here, so the caller can tell
  * inserted rows from skipped ones by the returned ids.
  *
- * Without `exec` the chunks run in one transaction, so the batch is
- * all-or-nothing apart from the skipped rows.
+ * Run it inside a transaction (`withTxn`) for an all-or-nothing batch apart
+ * from the skipped rows: the chunks are separate statements.
  */
 export async function insertEmailLogsSkippingConflicts(
   values: EmailLogInsert[],
-  exec?: DbExecutor,
+  exec: DbExecutor,
 ): Promise<Set<string>> {
   if (values.length === 0) return new Set();
   const rows = values.map((value) => ({ ...value, id: value.id ?? newId() }));
-  const insert = async (tx: DbExecutor): Promise<Set<string>> => {
-    const inserted = new Set<string>();
-    for (let i = 0; i < rows.length; i += EMAIL_LOG_INSERT_CHUNK_SIZE) {
-      const returned = await tx
-        .insert(emailLogs)
-        .values(rows.slice(i, i + EMAIL_LOG_INSERT_CHUNK_SIZE))
-        .onConflictDoNothing()
-        .returning({ id: emailLogs.id });
-      for (const row of returned) inserted.add(row.id);
-    }
-    return inserted;
-  };
-  return exec ? insert(exec) : withTxn(insert);
+  const inserted = new Set<string>();
+  for (let i = 0; i < rows.length; i += EMAIL_LOG_INSERT_CHUNK_SIZE) {
+    const returned = await exec
+      .insert(emailLogs)
+      .values(rows.slice(i, i + EMAIL_LOG_INSERT_CHUNK_SIZE))
+      .onConflictDoNothing()
+      .returning({ id: emailLogs.id });
+    for (const row of returned) inserted.add(row.id);
+  }
+  return inserted;
 }
 
 export async function updateEmailLogById(

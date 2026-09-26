@@ -4,7 +4,9 @@ import { ErrorCodes, UserRole } from "@app/contracts";
 // ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
+const { rootDb } = vi.hoisted(() => ({ rootDb: { executor: "root" } }));
 vi.mock("@app/db", () => ({
+  getDb: () => rootDb,
   findAbstractMembership: vi.fn(),
   deleteUnusedCommitteeInvites: vi.fn(),
   findEventClientId: vi.fn(),
@@ -501,6 +503,7 @@ describe("addCommitteeMember", () => {
     expect(upsertCommitteeMembership).toHaveBeenCalledWith(eventId, user.id);
     expect(insertAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({ entityType: "AbstractCommitteeMembership" }),
+      rootDb,
     );
   });
 
@@ -606,6 +609,7 @@ describe("removeCommitteeMember", () => {
     );
     expect(insertAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({ action: "deactivate" }),
+      rootDb,
     );
   });
 
@@ -642,6 +646,7 @@ describe("setReviewerThemes", () => {
     ]);
     expect(insertAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({ action: "replace" }),
+      rootDb,
     );
   });
 
@@ -1189,6 +1194,7 @@ describe("resendCommitteeInvite", () => {
         action: "admin_reset_password",
         changes: { method: { old: null, new: "invite_token" } },
       }),
+      rootDb,
     );
   });
 

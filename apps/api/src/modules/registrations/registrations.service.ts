@@ -60,6 +60,7 @@ import {
   allocateReferenceNumber,
   insertAuditLog,
   listRegistrationAuditLogRows,
+  getDb,
   findUserNamesByIds,
   listRegistrationEmailLogRows,
   type SettleRegistrationResult,
@@ -1053,7 +1054,7 @@ export class RegistrationsService {
       action: "EDIT_LINK_ISSUED",
       performedBy,
       ipAddress: ipAddress ?? null,
-    });
+    }, getDb());
     const { editRegistrationLink } = buildRegistrationSelfLinks({
       registrationId: source.id,
       eventSlug: source.eventSlug,

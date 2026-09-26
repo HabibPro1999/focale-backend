@@ -19,6 +19,7 @@ import {
   installServiceMocks,
   internalRow,
   makeRegRow,
+  rootDb,
   withoutSentinels,
   type AccessMock,
   type PricingMock,
@@ -976,7 +977,8 @@ describe("RegistrationsService", () => {
       const res = await service.issueSelfEditLink("reg1", "admin1", "1.2.3.4");
       expect(res).toEqual({ url: "https://forms.example.org/summit/registration/reg1/tok-64" });
       expect(db.insertAuditLog).toHaveBeenCalledTimes(1);
-      const [entry] = db.insertAuditLog.mock.calls[0];
+      const [entry, exec] = db.insertAuditLog.mock.calls[0];
+      expect(exec).toBe(rootDb);
       expect(entry).toMatchObject({
         entityType: "Registration",
         entityId: "reg1",
