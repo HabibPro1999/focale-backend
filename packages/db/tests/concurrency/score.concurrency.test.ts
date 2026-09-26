@@ -6,7 +6,7 @@ import {
   assignReviewersTxn,
   getDb,
   reviewAbstractTxn,
-  upsertCommitteeMembership,
+  upsertCommitteeMembershipTxn,
   withTxn,
   type DbExecutor,
 } from "@app/db";
@@ -62,7 +62,7 @@ async function seedAbstractWithReviewers(count: number) {
     Array.from({ length: count }, () => seedUser({ clientId: event.clientId })),
   );
   const reviewerIds = reviewers.map((r) => r.id);
-  for (const reviewerId of reviewerIds) await upsertCommitteeMembership(event.id, reviewerId);
+  for (const reviewerId of reviewerIds) await upsertCommitteeMembershipTxn(event.id, reviewerId, testAudit());
   // reviewAbstractTxn scores active assignments only.
   expect(await assignReviewersTxn({ eventId: event.id, abstractId: abstract.id, reviewerIds, audit: testAudit() }))
     .toMatchObject({ ok: true });
