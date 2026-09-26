@@ -15,6 +15,7 @@ import {
   networkingDirectoryFacets,
   networkingEmbeddings,
   networkingParticipantAccess,
+  networkingParticipantExportContacts,
   networkingStore,
   networkingUnreadMessageCount,
   rankNetworkingVectorCandidates,
@@ -241,7 +242,7 @@ describe.runIf(dbTestsEnabled())("networking eligibility matrix on every surface
     expect(actual((target) => profiles.has(target.profile.id))).toEqual(expected("fresh"));
   });
 
-  it("connections, their count and unread messages: peer mode over the viewer's connections", async () => {
+  it("connections, their count, unread messages and the contacts CSV: peer mode over the viewer's connections", async () => {
     const connected = (target: Target) => target.connected;
     const summaries = await listNetworkingConnectionSummaries(ids.event, viewer.id, statuses);
     const listed = new Set(summaries.map((summary) => summary.profile.id));
@@ -250,6 +251,9 @@ describe.runIf(dbTestsEnabled())("networking eligibility matrix on every surface
     const visible = targets.filter((target) => target.connected && target.row.expect.peer).length;
     expect(await countNetworkingConnectionSummaries(ids.event, viewer.id, statuses)).toBe(visible);
     expect(await networkingUnreadMessageCount(ids.event, viewer.id)).toBe(visible);
+    // The post-event contacts CSV (each target's last name is its row name).
+    const contacts = new Set((await networkingParticipantExportContacts(ids.event, viewer.id)).map((row) => row.lastName));
+    expect(actual((target) => contacts.has(target.row.name))).toEqual(expected("peer", connected));
   });
 
   it("area admission: the badge and the check-in scan", async () => {
