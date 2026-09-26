@@ -1,14 +1,13 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { NotFoundException } from "@nestjs/common";
-import { NetworkingConfigSchema, type NetworkingConfig } from "@app/contracts";
+import { NetworkingConfigSchema } from "@app/contracts";
 import {
   claimNetworkingEmbeddingJobs,
   clients,
   countNetworkingConnectionSummaries,
   enqueueChangedNetworkingEmbeddings,
   eventAccess,
-  forms,
   getDb,
   getNetworkingEmbeddingHealth,
   getNetworkingRecommendationProfiles,
@@ -29,7 +28,6 @@ import {
   queueNetworkingMeetingReminders,
   queueNetworkingPostEventDeliveries,
   rankNetworkingVectorCandidates,
-  registrations,
   reindexNetworkingEvent,
   type NetworkingDeliveryRow,
   type NetworkingRow,
@@ -37,7 +35,6 @@ import {
 import {
   dbTestsEnabled,
   NETWORKING_ELIGIBILITY_MATRIX,
-  networkingEligibilityRowFacts,
   type NetworkingEligibilityRow,
 } from "@app/db/testing";
 import {
@@ -46,6 +43,7 @@ import {
   renderNetworkingNotification,
 } from "@app/integrations";
 import { networkingAnalytics } from "./networking.analytics";
+import { buildEligibilityMatrix, type Matrix, type MatrixScope, type MatrixTarget } from "./__testing__/eligibility-matrix-db";
 import { NetworkingAdminService } from "./networking.admin.service";
 import { NetworkingExportsService } from "./networking.exports.service";
 import type { NetworkingMeetingsService } from "./networking.meetings.service";
@@ -75,15 +73,7 @@ const config = NetworkingConfigSchema.parse({
 });
 const statuses = config.eligiblePaymentStatuses;
 const unit = (dimension: number) => Array.from({ length: 1536 }, (_, i) => (i === dimension ? 1 : 0));
-type Target = {
-  row: NetworkingEligibilityRow;
-  profile: NetworkingRow<"profiles">;
-  registrationId: string;
-  connected: boolean;
-  connectionId?: string;
-  meeting?: NetworkingRow<"meetings">;
-};
-type Matrix = { event: NetworkingRow<"events">; viewer: NetworkingRow<"profiles">; targets: Target[] };
+type Target = MatrixTarget;
 let upcoming: Matrix;
 let ended: Matrix;
 let event: NetworkingRow<"events">;
@@ -97,135 +87,8 @@ function middayZone(now = new Date()) {
   return offset === 0 ? "UTC" : offset > 0 ? `Etc/GMT-${offset}` : `Etc/GMT+${-offset}`;
 }
 
-async function insertParticipant(input: {
-  eventId: string;
-  formId: string;
-  id: string;
-  email: string;
-  registration: { eventId: string; paymentStatus: "PAID" | "PENDING"; networkingOptIn: boolean | null };
-  profile: Partial<NetworkingRow<"profiles">>;
-}) {
-  const registrationId = randomUUID();
-  await getDb().insert(registrations).values({
-    id: registrationId,
-    eventId: input.registration.eventId,
-    formId: input.formId,
-    email: input.email,
-    firstName: String(input.profile.firstName ?? "Participant"),
-    lastName: String(input.profile.lastName ?? "Test"),
-    paymentStatus: input.registration.paymentStatus,
-    networkingOptIn: input.registration.networkingOptIn,
-    totalAmount: 0,
-    priceBreakdown: {},
-    accessTypeIds: [ids.access],
-    // No consent answer: an unconsented registrant without an opt-in is undecided (K1b).
-    formData: {},
-  });
-  const profile = await networkingStore().insert("profiles", {
-    firstName: "Participant",
-    lastName: "Test",
-    company: "Company",
-    jobTitle: "Director",
-    sector: "Technology",
-    offers: "Advice",
-    seeks: "Partners",
-    ...input.profile,
-    id: input.id,
-    eventId: input.eventId,
-    registrationId,
-    email: input.email,
-  });
-  return { profile, registrationId };
-}
-
-/** One eligible viewer and one target per matrix row, in `eventId`. */
-async function buildMatrix(input: {
-  eventId: string;
-  config: NetworkingConfig;
-  startDate: Date;
-  endDate: Date;
-  meetingAt: (index: number) => { startsAt: Date; createdAt?: Date };
-  profile?: Partial<NetworkingRow<"profiles">>;
-}): Promise<Matrix> {
-  const db = getDb();
-  const store = networkingStore();
-  const formId = randomUUID();
-  const event = await store.insert("events", {
-    id: input.eventId,
-    clientId: ids.client,
-    name: "Eligibility matrix",
-    slug: `eligibility-${input.eventId}`,
-    status: "OPEN",
-    startDate: input.startDate,
-    endDate: input.endDate,
-  });
-  await store.insert("configs", { eventId: input.eventId, config: input.config });
-  await db.insert(forms).values({
-    id: formId,
-    eventId: input.eventId,
-    name: "Registration",
-    schema: {
-      fields: [{
-        id: "consent",
-        type: "radio",
-        options: [{ id: "o-yes", label: "J’accepte de participer au networking" }, { id: "o-no", label: "Je ne souhaite pas participer" }],
-      }],
-    } as never,
-  });
-  const viewerId = randomUUID();
-  const { profile: viewer } = await insertParticipant({
-    eventId: input.eventId,
-    formId,
-    id: viewerId,
-    email: `viewer-${viewerId}@example.invalid`,
-    registration: { eventId: input.eventId, paymentStatus: "PAID", networkingOptIn: true },
-    profile: { ...input.profile, status: "ACTIVE", consent: true, visible: true, firstName: "Viewer" },
-  });
-  const targets: Target[] = [];
-  for (const [index, row] of NETWORKING_ELIGIBILITY_MATRIX.entries()) {
-    const targetId = randomUUID();
-    const facts = networkingEligibilityRowFacts(row, {
-      eventId: input.eventId,
-      otherEventId: ids.other,
-      targetId,
-      viewer: { id: viewer.id, email: viewer.email },
-    });
-    const { overrides, ...profile } = facts.profile;
-    const created = await insertParticipant({
-      eventId: input.eventId,
-      formId,
-      id: targetId,
-      email: facts.profile.email,
-      registration: facts.registration as { eventId: string; paymentStatus: "PAID" | "PENDING"; networkingOptIn: boolean | null },
-      profile: { ...input.profile, ...profile, status: facts.profile.status as NetworkingRow<"profiles">["status"], overrides },
-    });
-    const target: Target = { row, profile: created.profile, registrationId: created.registrationId, connected: facts.connected };
-    targets.push(target);
-    const [profileAId, profileBId] = viewer.id < targetId ? [viewer.id, targetId] : [targetId, viewer.id];
-    if (facts.connected) {
-      const connection = await store.insert("connections", { eventId: input.eventId, profileAId, profileBId });
-      target.connectionId = connection.id;
-      await store.insert("messages", { eventId: input.eventId, connectionId: connection.id, senderId: targetId, body: "Hello", clientMessageId: randomUUID() });
-    }
-    if (facts.liked) await store.insert("interests", { eventId: input.eventId, profileId: viewer.id, targetId, action: "LIKE" });
-    if (row.relation?.viewerBlocked) await store.insert("blocks", { eventId: input.eventId, profileId: viewer.id, targetId });
-    if (row.relation?.blockedViewer) await store.insert("blocks", { eventId: input.eventId, profileId: targetId, targetId: viewer.id });
-    if (facts.confirmedMeeting) {
-      const { startsAt, createdAt } = input.meetingAt(index);
-      target.meeting = await store.insert("meetings", {
-        eventId: input.eventId,
-        requesterId: viewer.id,
-        recipientId: targetId,
-        status: "CONFIRMED",
-        startsAt,
-        endsAt: new Date(+startsAt + 1_800_000),
-        expiresAt: startsAt,
-        ...(createdAt ? { createdAt } : {}),
-      });
-    }
-  }
-  return { event, viewer, targets };
-}
+const scope: MatrixScope = { clientId: ids.client, otherEventId: ids.other, accessId: ids.access };
+const buildMatrix = (input: Parameters<typeof buildEligibilityMatrix>[1]) => buildEligibilityMatrix(scope, input);
 
 describe.runIf(dbTestsEnabled())("networking eligibility matrix on every surface (4.6)", () => {
   beforeAll(async () => {

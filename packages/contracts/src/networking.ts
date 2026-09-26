@@ -534,6 +534,7 @@ export interface NetworkingAnalytics {
     matches: number;
     meetings: number;
   }>;
+  /** The most engaged participants (at most 50); the participants export lists everyone. */
   engagement: Array<{
     profileId: string;
     name: string;
@@ -541,6 +542,8 @@ export interface NetworkingAnalytics {
     messages: number;
     meetings: number;
   }>;
+  /** Every listed participant, of whom `engagement` shows the top ones. */
+  engagementTotal?: number;
 }
 export interface NetworkingList<T> {
   items: T[];
