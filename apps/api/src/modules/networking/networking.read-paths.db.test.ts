@@ -48,13 +48,18 @@ let ctx: NetworkingContext;
 let table: NetworkingRow<"tables">;
 let space: NetworkingRow<"spaces">;
 
-/** Every SQL statement sent while `run` runs, transactions included (pg Client.query). */
+/**
+ * Every SQL statement sent while `run` runs, transactions included (pg
+ * Client.query), except the session setup the CockroachDB test harness runs
+ * on each new pool connection (packages/db/tests/setup.db.ts).
+ */
 async function statements<T>(run: () => Promise<T>) {
   const Client = (getDb().$client as unknown as { Client: { prototype: { query: (...args: unknown[]) => unknown } } }).Client;
   const spy = vi.spyOn(Client.prototype, "query");
+  const harness = (text: unknown) => typeof text === "string" && text.startsWith("SET default_transaction_isolation");
   try {
     const result = await run();
-    return { result, count: spy.mock.calls.length };
+    return { result, count: spy.mock.calls.filter(([text]) => !harness(text)).length };
   } finally {
     spy.mockRestore();
   }
