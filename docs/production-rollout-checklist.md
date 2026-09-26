@@ -132,8 +132,8 @@ blocks writes to the table on PostgreSQL; run `apply` off-peak there.
   CSV/XLSX exports and participant privacy. #167 (4.9b)
 - [ ] Smoke-test capacity edits against current paid counts and prerequisite
   changes. Concurrent writes now re-read locked rows; a losing invalid
-  change is refused. Committee removal plus audit and admin registration
-  retries commit atomically. No migration/config change for this fix. #169
+  change is refused. Committee insertion/reactivation and its audit commit
+  together; admin registration creation retries without duplicate effects. No migration/config change for this fix. #169
 - [ ] Check organizer tenant/module refusals and networking OTP/MFA,
   recommendations, chat and meetings. All 74 JSON contracts preserve valid
   fields; the 28 organizer guards use the shared refusal order. #172
