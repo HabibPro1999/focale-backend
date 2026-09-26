@@ -193,7 +193,10 @@ export class AccessService {
   // CRUD
   // =========================================================================
 
-  /** Create an access item. No transaction (single insert + prereq connect). */
+  /**
+   * Create an access item. The row and its prerequisite edges are written in
+   * one transaction, so a failed edge insert leaves no access row behind.
+   */
   async createEventAccess(
     input: CreateEventAccessInput,
   ): Promise<EventAccessWithPrereqs> {
@@ -258,12 +261,13 @@ export class AccessService {
       companionPrice: data.companionPrice ?? 0,
     };
 
-    return insertEventAccess(values, requiredIds, getDb());
+    return withTxn((tx) => insertEventAccess(values, requiredIds, tx));
   }
 
   /**
-   * Update an access item. Opens a plain (read-committed) transaction ONLY when
-   * maxCapacity changes or the item flips active true→false; otherwise no txn.
+   * Update an access item. The row update, the prerequisite replacement and
+   * the capacity/deactivation drop enqueue run in one read-committed
+   * transaction, so a failure leaves the item and its prerequisites unchanged.
    */
   async updateEventAccess(
     id: string,
@@ -391,35 +395,28 @@ export class AccessService {
       data.maxCapacity !== undefined && data.maxCapacity !== access.maxCapacity;
     const isBeingDeactivated = data.active === false && access.active === true;
 
-    if (isCapacityChanging || isBeingDeactivated) {
-      return withTxn(async (tx) => {
-        await updateEventAccessRow(id, updateData, tx);
-        if (requiredAccessIds !== undefined) {
-          await setAccessPrerequisites(id, requiredAccessIds, tx);
-        }
-        if (isBeingDeactivated) {
-          await enqueueAccessDrops(tx, access.eventId, [id], "deactivated");
-        } else if (
-          data.maxCapacity !== null &&
-          access.paidCount === data.maxCapacity
-        ) {
-          await this.handleCapacityReached(access.eventId, [id], tx);
-        }
-        return (await getEventAccessWithPrereqs(
-          id,
-          tx,
-        )) as EventAccessWithPrereqs;
-      });
-    }
-
-    await updateEventAccessRow(id, updateData, getDb());
-    if (requiredAccessIds !== undefined) {
-      await setAccessPrerequisites(id, requiredAccessIds, getDb());
-    }
-    return (await getEventAccessWithPrereqs(id)) as EventAccessWithPrereqs;
+    return withTxn(async (tx) => {
+      await updateEventAccessRow(id, updateData, tx);
+      if (requiredAccessIds !== undefined) {
+        await setAccessPrerequisites(id, requiredAccessIds, tx);
+      }
+      if (isBeingDeactivated) {
+        await enqueueAccessDrops(tx, access.eventId, [id], "deactivated");
+      } else if (
+        isCapacityChanging &&
+        data.maxCapacity !== null &&
+        access.paidCount === data.maxCapacity
+      ) {
+        await this.handleCapacityReached(access.eventId, [id], tx);
+      }
+      return (await getEventAccessWithPrereqs(id, tx)) as EventAccessWithPrereqs;
+    });
   }
 
-  /** Delete an access item. NOT transactional (matches legacy non-atomic cleanup). */
+  /**
+   * Delete an access item. The dependents' prerequisite edges and the row are
+   * removed in one transaction.
+   */
   async deleteEventAccess(id: string): Promise<void> {
     const access = await getEventAccessByIdQuery(id);
     if (!access) {
@@ -449,11 +446,12 @@ export class AccessService {
     }
 
     const dependents = await getAccessDependentIds(id);
-    for (const dependentId of dependents) {
-      await removePrerequisiteEdge(dependentId, id, getDb());
-    }
-
-    await deleteEventAccessById(id, getDb());
+    await withTxn(async (tx) => {
+      for (const dependentId of dependents) {
+        await removePrerequisiteEdge(dependentId, id, tx);
+      }
+      await deleteEventAccessById(id, tx);
+    });
   }
 
   listEventAccess(
@@ -577,7 +575,7 @@ export class AccessService {
     eventId: string,
     oldState: PaidAccessState,
     newState: PaidAccessState,
-    exec: DbExecutor = getDb(),
+    exec: DbExecutor,
   ): Promise<void> {
     const { incremented } = await applyPaidAccessDelta(exec, oldState, newState).catch(
       rethrowAsAccessException,
@@ -611,7 +609,7 @@ export class AccessService {
   async handleCapacityReached(
     eventId: string,
     accessIds: string[],
-    exec: DbExecutor = getDb(),
+    exec: DbExecutor,
   ): Promise<number> {
     return (await enqueueAccessDrops(exec, eventId, accessIds, "capacity_reached")).length;
   }

@@ -2,6 +2,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { getDb, type DbExecutor } from "../client";
 import { enqueueOutboxEvent } from "../outbox";
 import { rowCountOf } from "../helpers";
+import { isTransactionExecutor } from "../txn";
 import {
   accessPrerequisites,
   eventAccess,
@@ -251,12 +252,26 @@ export async function getIncludedInBaseAccess(
 // Writes
 // ---------------------------------------------------------------------------
 
-/** Insert an access row + connect its prerequisites; return it with {id,name} prereqs. */
+/**
+ * The multi-statement writes below take a transaction, so a failure in a later
+ * statement rolls back the earlier ones instead of leaving a partial change.
+ */
+function assertInTransaction(exec: DbExecutor, name: string): void {
+  if (!isTransactionExecutor(exec)) {
+    throw new Error(`${name} must run inside a transaction`);
+  }
+}
+
+/**
+ * Insert an access row + connect its prerequisites; return it with {id,name}
+ * prereqs. Runs in the caller's transaction.
+ */
 export async function insertEventAccess(
   values: NewEventAccessValues,
   requiredAccessIds: string[],
   exec: DbExecutor,
 ): Promise<EventAccessWithPrereqs> {
+  assertInTransaction(exec, "insertEventAccess");
   const [row] = await exec.insert(eventAccess).values(values).returning();
   if (requiredAccessIds.length > 0) {
     await exec
@@ -277,12 +292,16 @@ export async function updateEventAccessRow(
   return row;
 }
 
-/** Full-replace an access item's prerequisites (Prisma `set` semantics). */
+/**
+ * Full-replace an access item's prerequisites (Prisma `set` semantics): delete
+ * then insert, in the caller's transaction.
+ */
 export async function setAccessPrerequisites(
   ownerId: string,
   requiredIds: string[],
   exec: DbExecutor,
 ): Promise<void> {
+  assertInTransaction(exec, "setAccessPrerequisites");
   await exec.delete(accessPrerequisites).where(eq(accessPrerequisites.b, ownerId));
   if (requiredIds.length > 0) {
     await exec

@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes, CreateEventAccessSchema } from "@app/contracts";
 
 // Mock the db query layer (the seam the service talks to). withTxn is a
-// passthrough invoking the callback with a dummy tx (all query fns are mocked).
+// passthrough invoking the callback with the `txDb` sentinel (all query fns are
+// mocked), so a test can tell writes in the transaction from root-pool writes.
 vi.mock("@app/db", async (importOriginal) => {
   const real = await importOriginal<typeof import("@app/db")>();
   return {
@@ -87,12 +88,18 @@ function accessRow(o: Record<string, unknown> = {}) {
 }
 
 const rootDb = { executor: "root" };
+const txDb = { executor: "tx" };
 
 beforeEach(() => {
   vi.resetAllMocks();
   m.getDb.mockReturnValue(rootDb);
-  m.withTxn.mockImplementation((fn: (tx: unknown) => unknown) => fn({}));
+  m.withTxn.mockImplementation((fn: (tx: unknown) => unknown) => fn(txDb));
 });
+
+/** The executor argument (at `argIndex`) of each call of `fn`, in call order. */
+function executorsOf(fn: ReturnType<typeof vi.fn>, argIndex: number): unknown[] {
+  return fn.mock.calls.map((call) => call[argIndex]);
+}
 
 // ===========================================================================
 // createEventAccess
@@ -159,7 +166,20 @@ describe("createEventAccess", () => {
       requiredAccessIds: ["p1", "p2"],
     } as CreateEventAccessInput);
     expect(result.requiredAccess).toHaveLength(2);
-    expect(m.insertEventAccess).toHaveBeenCalledWith(expect.anything(), ["p1", "p2"], rootDb);
+    expect(m.insertEventAccess).toHaveBeenCalledWith(expect.anything(), ["p1", "p2"], txDb);
+  });
+
+  it("writes the row and its prerequisites in one transaction", async () => {
+    m.getEventDatesForAccess.mockResolvedValue(eventDates);
+    m.findExistingAccessIdsInEvent.mockResolvedValue(["p1"]);
+    m.insertEventAccess.mockResolvedValue(accessRow());
+    await service.createEventAccess({
+      eventId,
+      name: "Adv",
+      requiredAccessIds: ["p1"],
+    } as CreateEventAccessInput);
+    expect(m.withTxn).toHaveBeenCalledTimes(1);
+    expect(executorsOf(m.insertEventAccess, 2)).toEqual([txDb]);
   });
 
   it("applies service defaults for omitted fields", async () => {
@@ -177,7 +197,7 @@ describe("createEventAccess", () => {
         allowCompanion: false,
       }),
       [],
-      rootDb,
+      txDb,
     );
   });
 });
@@ -300,7 +320,53 @@ describe("updateEventAccess", () => {
       requiredAccessIds: ["prereq"],
     });
     expect(result.requiredAccess).toHaveLength(1);
-    expect(m.setAccessPrerequisites).toHaveBeenCalledWith("access-main", ["prereq"], rootDb);
+    expect(m.setAccessPrerequisites).toHaveBeenCalledWith("access-main", ["prereq"], txDb);
+  });
+
+  it("updates the row and replaces its prerequisites in one transaction", async () => {
+    m.getEventAccessForUpdate.mockResolvedValue({
+      ...accessRow({ id: "access-main" }),
+      event: { startDate, endDate },
+    });
+    m.findExistingAccessIdsInEvent.mockResolvedValue(["prereq"]);
+    m.getEventPrereqEdges.mockResolvedValue([]);
+    m.getEventAccessWithPrereqs.mockResolvedValue(accessRow({ id: "access-main" }));
+
+    await service.updateEventAccess("access-main", { name: "Renamed", requiredAccessIds: ["prereq"] });
+    expect(m.withTxn).toHaveBeenCalledTimes(1);
+    expect(m.updateEventAccessRow).toHaveBeenCalledWith("access-main", { name: "Renamed" }, txDb);
+    expect(executorsOf(m.setAccessPrerequisites, 2)).toEqual([txDb]);
+    // The response is read in the same transaction, after its writes.
+    expect(executorsOf(m.getEventAccessWithPrereqs, 1)).toEqual([txDb]);
+  });
+
+  it("propagates a failed prerequisite write (the transaction rolls back the row update)", async () => {
+    m.getEventAccessForUpdate.mockResolvedValue({
+      ...accessRow({ id: "access-main" }),
+      event: { startDate, endDate },
+    });
+    m.findExistingAccessIdsInEvent.mockResolvedValue(["prereq"]);
+    m.getEventPrereqEdges.mockResolvedValue([]);
+    const failure = new Error("prerequisite insert failed");
+    m.setAccessPrerequisites.mockRejectedValue(failure);
+
+    await expect(
+      service.updateEventAccess("access-main", { name: "Renamed", requiredAccessIds: ["prereq"] }),
+    ).rejects.toBe(failure);
+    expect(executorsOf(m.updateEventAccessRow, 2)).toEqual([txDb]);
+    expect(m.getEventAccessWithPrereqs).not.toHaveBeenCalled();
+  });
+
+  it("does not enqueue a capacity drop when maxCapacity is sent unchanged", async () => {
+    m.getEventAccessForUpdate.mockResolvedValue({
+      ...accessRow({ maxCapacity: 5, paidCount: 5 }),
+      event: { startDate, endDate },
+    });
+    m.getEventAccessWithPrereqs.mockResolvedValue(accessRow({ maxCapacity: 5, paidCount: 5 }));
+
+    await service.updateEventAccess("access-1", { maxCapacity: 5, name: "Same cap" });
+    expect(executorsOf(m.updateEventAccessRow, 2)).toEqual([txDb]);
+    expect(m.enqueueAccessDrops).not.toHaveBeenCalled();
   });
 });
 
@@ -316,7 +382,7 @@ describe("deleteEventAccess", () => {
     m.deleteEventAccessById.mockResolvedValue(undefined);
 
     await service.deleteEventAccess("access-1");
-    expect(m.deleteEventAccessById).toHaveBeenCalledWith("access-1", rootDb);
+    expect(m.deleteEventAccessById).toHaveBeenCalledWith("access-1", txDb);
   });
 
   it("throws when access not found", async () => {
@@ -351,9 +417,11 @@ describe("deleteEventAccess", () => {
     m.deleteEventAccessById.mockResolvedValue(undefined);
 
     await service.deleteEventAccess("access-1");
-    expect(m.removePrerequisiteEdge).toHaveBeenCalledWith("dep-1", "access-1", rootDb);
-    expect(m.removePrerequisiteEdge).toHaveBeenCalledWith("dep-2", "access-1", rootDb);
-    expect(m.deleteEventAccessById).toHaveBeenCalledWith("access-1", rootDb);
+    expect(m.removePrerequisiteEdge).toHaveBeenCalledWith("dep-1", "access-1", txDb);
+    expect(m.removePrerequisiteEdge).toHaveBeenCalledWith("dep-2", "access-1", txDb);
+    expect(m.deleteEventAccessById).toHaveBeenCalledWith("access-1", txDb);
+    // Edge removals and the row delete share one transaction.
+    expect(m.withTxn).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -488,20 +556,20 @@ describe("syncPaidCountDelta", () => {
   it("moves the paid counts, then enqueues the drop check for the items that went up", async () => {
     m.applyPaidAccessDelta.mockResolvedValue({ incremented: ["access-2"], decremented: [] });
     m.enqueueAccessDrops.mockResolvedValue([]);
-    await service.syncPaidCountDelta(eventId, oldState, newState);
-    expect(m.applyPaidAccessDelta).toHaveBeenCalledWith(expect.anything(), oldState, newState);
-    expect(m.enqueueAccessDrops).toHaveBeenCalledWith(expect.anything(), eventId, ["access-2"], "capacity_reached");
+    await service.syncPaidCountDelta(eventId, oldState, newState, txDb as never);
+    expect(m.applyPaidAccessDelta).toHaveBeenCalledWith(txDb, oldState, newState);
+    expect(m.enqueueAccessDrops).toHaveBeenCalledWith(txDb, eventId, ["access-2"], "capacity_reached");
   });
 
   it("skips the capacity check when nothing went up", async () => {
     m.applyPaidAccessDelta.mockResolvedValue({ incremented: [], decremented: ["access-2"] });
-    await service.syncPaidCountDelta(eventId, newState, { ...newState, status: "REFUNDED" });
+    await service.syncPaidCountDelta(eventId, newState, { ...newState, status: "REFUNDED" }, txDb as never);
     expect(m.enqueueAccessDrops).not.toHaveBeenCalled();
   });
 
   it("maps a capacity failure to the API error", async () => {
     m.applyPaidAccessDelta.mockRejectedValue(new db.AccessCapacityExceededError("access-2", "Gala", 0, 1));
-    await expect(service.syncPaidCountDelta(eventId, oldState, newState)).rejects.toMatchObject({
+    await expect(service.syncPaidCountDelta(eventId, oldState, newState, txDb as never)).rejects.toMatchObject({
       code: ErrorCodes.ACCESS_CAPACITY_EXCEEDED,
       statusCode: 409,
       message: "Gala has insufficient capacity (0 spots remaining, requested 1)",
@@ -512,7 +580,7 @@ describe("syncPaidCountDelta", () => {
 
   it("maps a missing access item to ACCESS_NOT_FOUND", async () => {
     m.applyPaidAccessDelta.mockRejectedValue(new db.AccessNotFoundError("access-2"));
-    await expect(service.syncPaidCountDelta(eventId, oldState, newState)).rejects.toMatchObject({
+    await expect(service.syncPaidCountDelta(eventId, oldState, newState, txDb as never)).rejects.toMatchObject({
       code: ErrorCodes.ACCESS_NOT_FOUND,
       statusCode: 404,
       message: "Access not found",
@@ -521,7 +589,7 @@ describe("syncPaidCountDelta", () => {
 
   it("maps a paid-count underflow to VALIDATION_ERROR", async () => {
     m.applyPaidAccessDelta.mockRejectedValue(new db.AccessPaidCountUnderflowError("access-2", 1, 2));
-    await expect(service.syncPaidCountDelta(eventId, newState, oldState)).rejects.toMatchObject({
+    await expect(service.syncPaidCountDelta(eventId, newState, oldState, txDb as never)).rejects.toMatchObject({
       code: ErrorCodes.VALIDATION_ERROR,
       statusCode: 409,
       message: "Paid access count cannot be decremented below zero",
