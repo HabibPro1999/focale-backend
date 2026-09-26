@@ -5,6 +5,8 @@
  * lenient evaluator exactly (`./field-visibility`). The form app's pricing
  * preview (`form/src/lib/pricing-conditions.ts`) is a copy of this file, so
  * changing a rule here silently re-prices every quote and registration.
+ * Shared parity cases: `./rule-conditions.parity-cases.json`, exported to the
+ * frontends as `packages/contracts/generated/fixtures/rule-conditions.json`.
  *
  * Design decisions:
  * - `equals`/`not_equals` coerce both sides to string before comparing, so

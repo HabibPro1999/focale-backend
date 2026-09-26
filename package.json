@@ -14,6 +14,7 @@
     "test:runtime": "node --test scripts/start-runtime.test.mjs scripts/healthcheck.test.mjs",
     "env:example": "pnpm --filter @app/contracts build && node packages/contracts/dist/cli/env-example.js",
     "config:check": "node packages/contracts/dist/cli/check-config.js",
+    "contracts:generate": "pnpm --filter @app/contracts build && node packages/contracts/dist/cli/contract-artifacts.js",
     "test:db": "pnpm -r --workspace-concurrency=1 --if-present test:db",
     "test:concurrency": "pnpm -r --workspace-concurrency=1 --if-present test:concurrency",
     "test:migration": "pnpm --filter @app/db test:migration",
