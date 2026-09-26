@@ -380,7 +380,7 @@ const envShape = {
     {
       section: "networking",
       description:
-        "Networking keyring: comma-separated kid:key entries (keys at least 32 characters), the first\ncurrent; kid:key:recovery keeps a retired key only for existing recovery codes. See NETWORKING.md.",
+        "Networking keyring: comma-separated kid:key entries (keys at least 32 characters), the first\ncurrent; kid:key:recovery keeps a retired key only for existing recovery codes. See docs/networking/README.md.",
       example: "k1:replace-with-openssl-rand-hex-32-output",
     },
   ),
@@ -434,7 +434,7 @@ const envShape = {
   NETWORKING_DELIVERY_BATCH_SIZE: envInt(1, 50, 10, {
     section: "networking",
     description:
-      "Networking delivery worker: rows each general lane claims at a time, general lanes, and lanes that\nclaim only sign-in codes (OTP), so a code never waits behind digests. See NETWORKING.md.",
+      "Networking delivery worker: rows each general lane claims at a time, general lanes, and lanes that\nclaim only sign-in codes (OTP), so a code never waits behind digests. See docs/networking/README.md.",
     example: "10",
     active: true,
   }, "NETWORKING_DELIVERY_BATCH_SIZE"),
@@ -460,7 +460,7 @@ const envShape = {
   NETWORKING_WITHDRAWAL_ERASE_DAYS: envInt(0, 365, 30, {
     section: "networking",
     description:
-      "Days after a participant withdraws from networking before the worker erases the rest of their\nnetworking data (their profile content is scrubbed at once). See NETWORKING.md.",
+      "Days after a participant withdraws from networking before the worker erases the rest of their\nnetworking data (their profile content is scrubbed at once). See docs/networking/README.md.",
     example: "30",
     active: true,
   }, "NETWORKING_WITHDRAWAL_ERASE_DAYS"),

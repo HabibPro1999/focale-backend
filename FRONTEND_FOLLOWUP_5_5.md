@@ -1,7 +1,7 @@
 # Frontend follow-up: 5.5 response contracts
 
 One response field was removed (see "Removed field" below); none was renamed
-or retyped. The covered routes (list in README-rebuild.md, "Response
+or retyped. The covered routes (list in README.md, "Response
 contracts") now return only the fields their contract declares. Apart from
 that one field, each contract lists every field those routes returned before
 this change, so the other payloads are unchanged byte for byte. What changes

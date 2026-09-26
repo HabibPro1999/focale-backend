@@ -1,6 +1,6 @@
 # Production rollout checklist
 
-Everything batch 3 of the backend remediation (PRs #94 to #151) left for an
+Everything batch 3 of the backend remediation (PRs #94 to #172, plus the final documentation pass) left for an
 operator on the production deploy that ships it. Nothing here is automated.
 One line per action, with the PR (and plan item) it comes from. Take a verified
 database backup before the deploy; the data repairs need their own backup.
@@ -34,14 +34,38 @@ How the services run: [render-runbook.md](render-runbook.md).
   (`os.tmpdir()`, about 0.2 MB per 10,000 registrations per workbook; `/tmp` in
   the image is writable by `node`). #144 (3.7b)
 
-## Migrations 0021 to 0034
+- [ ] Ship a worker that handles `networking.registration.sync` and
+  `networking.event.sync` together with or before the API. An older worker
+  retries unknown registration-sync jobs for about 1¾ hours before they
+  dead-letter. `POST …/networking/sync` now returns 202; the admin must poll
+  `GET …/networking/sync` and allow projection to finish. #161 (4.8)
+- [ ] Add `CLT_20001` and `CLT_20002` to the admin app's
+  `src/i18n/locales/{fr,en}/errors.json` before shipping. Review the other
+  code/guard-order changes in [5.4](../FRONTEND_FOLLOWUP_5_4.md) and
+  [networking 5.4/5.5](../FRONTEND_FOLLOWUP_5_4_NETWORKING.md).
+  #153, #163, #172
+- [ ] Keep `JSONB_VALIDATION=warn` and run the new release's read-only audit
+  `node apps/api/dist/scripts/stored-json-report.js` before deployment. It
+  covers pricing rules, certificate zones, form schemas, email snapshots and
+  `registrations.price_breakdown`, reporting row IDs, paths and codes only.
+  Review and resolve incompatible documents: response projection removes
+  undeclared pricing/breakdown fields even in `warn`. Enable `enforce` only
+  after the complete audit is clean. See [canonical price breakdown](../FRONTEND_FOLLOWUP_5_2.md).
+  #165 (5.2a), #170 (5.2b)
+- [ ] Adopt required frontend changes in the root `FRONTEND_FOLLOWUP_*.md`
+  files, including incoming-interest pagination/default page size and stable
+  ordering (#167), optional `droppedAccessItems` / confirmation status (#170),
+  and the existing public-form/abstract response exclusions (#152, #160).
+  The networking response contracts preserve current valid fields (#172).
+
+## Migrations 0021 to 0035
 
 If the production database has no migration ledger yet, do the one-time
 adoption first
 ([migrator README, Production rollout](../packages/db/src/migrator/README.md#production-rollout-operator-steps)).
 Then `apply --dry-run` and `apply --yes`, as the Pre-Deploy Command or by hand
 before the new code starts. Several of these must exist before the code that
-uses them (0023, 0028, 0029, 0031), which the Pre-Deploy Command guarantees.
+uses them (0023, 0028, 0029, 0031, 0035), which the Pre-Deploy Command guarantees.
 
 - [ ] 0021 `registration_reference_counters` table (empty; each prefix is
   seeded on first use). #106 (2.3)
@@ -67,7 +91,10 @@ uses them (0023, 0028, 0029, 0031), which the Pre-Deploy Command guarantees.
   still has the legacy table, and its rows go with it. #140 (6.5)
 - [ ] 0034 `networking_interests` partial index for exhibitors' incoming likes
   (per statement, idempotent). The code works without it (slower), so it may
-  follow the deploy. (4.9b)
+  follow the deploy. #167 (4.9b)
+- [ ] 0035 adds full-event networking sync state to `networking_configs`.
+  Apply before either new service starts; deploy the worker together with or
+  before the API. #161 (4.8)
 - [ ] `verify --schema` reports no errors (deferred 0030, and 0017 on
   CockroachDB, are warnings).
 - [ ] Once adopted: `MIGRATIONS_CHECK=enforce` on both services and the
@@ -93,17 +120,26 @@ blocks writes to the table on PostgreSQL; run `apply` off-peak there.
   of real certificates from those templates (user). #138 (3.8)
 - [ ] On CockroachDB, if 0017 is deferred: build the vector index in a
   maintenance window
-  ([runbook](../NETWORKING.md#vector-index-health-and-runbook-cockroachdb)).
+  ([runbook](networking/README.md#vector-index-health-and-runbook-cockroachdb)).
   #103 (4.10)
-- [ ] Typed JSON columns (5.2a): keep `JSONB_VALIDATION=warn` (the default).
-  Run the read-only audit `node apps/api/dist/scripts/stored-json-report.js`:
-  it lists every stored pricing rule list, certificate zone list, form schema
-  and email context that is not what its type says (row ids, paths and issue
-  codes, never values). Pricing rules are typed in the public payment-config
-  and form responses, so keys it reports as `unrecognized_keys` on
-  `event_pricing.rules` are no longer returned there. Fix or accept each row
-  (user); once the audit reports nothing, set `JSONB_VALIDATION=enforce` on
-  both services. #165 (5.2a)
+- [ ] Check a registration/payment update reaches its networking profile,
+  full-event sync progresses to completion, and no sync dead letters remain.
+  Recover affected jobs through the existing reviewed requeue workflow if an
+  old worker handled them. #161 (4.8), #164
+- [ ] Smoke-test incoming-interest pagination, organizer lists/calendar,
+  CSV/XLSX exports and participant privacy. #167 (4.9b)
+- [ ] Smoke-test capacity edits against current paid counts and prerequisite
+  changes. Concurrent writes now re-read locked rows; a losing invalid
+  change is refused. Committee removal plus audit and admin registration
+  retries commit atomically. No migration/config change for this fix. #169
+- [ ] Check organizer tenant/module refusals and networking OTP/MFA,
+  recommendations, chat and meetings. All 74 JSON contracts preserve valid
+  fields; the 28 organizer guards use the shared refusal order. #172
+
+The executor cleanup (#171, 5.1b) and legacy tooling/docs cleanup (#168 and
+this docs pass) introduce no additional production migration or configuration.
+Networking writes now receive their executor explicitly; worker sync retains
+its serializable retry boundary.
 
 ## Data repairs
 
@@ -123,19 +159,26 @@ backup. In the image the scripts are
   date, ISO>` dry run writes `repair-manifest.json`; the user sets each row's
   action in `approved.json`; `--apply --manifest approved.json`; then
   `repair-paid-settlement invariants` shows no rows
-  ([PAID data repair](../README-rebuild.md#paid-data-repair-repair-paid-settlement-plan-24)).
+  ([PAID data repair](../README.md#paid-data-repair-repair-paid-settlement-plan-24)).
   #136 (2.4)
 
 ## When needed
 
 - Networking key rotation (`NETWORKING_KEYS`, `NETWORKING_KEYRING_WRITE_V1`,
   the `networking-keyring` script):
-  [NETWORKING.md, Key rotation](../NETWORKING.md#key-rotation). #111 (4.5)
+  [docs/networking/README.md, Key rotation](networking/README.md#key-rotation). #111 (4.5)
 - Networking retention leftovers (`networking-retention purge-leftovers |
   erase-withdrawn | orphan-photos`, `--apply` needs `--backup-verified`):
-  [NETWORKING.md, Retention operator scripts](../NETWORKING.md#retention-operator-scripts).
+  [docs/networking/README.md, Retention operator scripts](networking/README.md#retention-operator-scripts).
   #128 (4.4b)
 
 The breaking API changes of each PR are listed in the `FRONTEND_FOLLOWUP_*.md`
 files at the repository root; ship the matching admin, form and networking
 builds with this deploy.
+
+## Open product decision
+
+Should a partially sponsored (`PARTIAL`) registrant pay the remaining balance
+on the public form? Behavior is unchanged: selecting a payment method requires
+`PENDING`, and proof upload is not allowed from `PARTIAL`. Resolve this product
+question separately; this rollout does not enable that flow.

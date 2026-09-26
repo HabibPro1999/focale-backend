@@ -54,6 +54,8 @@ docs/*
 !docs/migration-authoring.md
 !docs/single-instance.md
 !docs/production-rollout-checklist.md
+!docs/networking/
+!docs/history/
 load-env.fish
 
 # Database backups

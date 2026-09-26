@@ -18,7 +18,7 @@ import {
 // PAID data repair (plan 2.4). Never run it by hand against production
 // without the sign-off below; it reads DATABASE_URL from the environment.
 //
-// Operator steps (also in README-rebuild.md, "Ops scripts"):
+// Operator steps (also in README.md, "Ops scripts"):
 // 1. Dry run (read-only):
 //      repair-paid-settlement --since <Nest deploy, ISO> [--event <id>] [--out repair-manifest.json]
 //    prints the report — A: PAID with paid < net; B1: admin-edit demotions;

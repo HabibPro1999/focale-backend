@@ -145,7 +145,7 @@ the way operators already do; nothing here is automated by the repository.
    row list first (the same bar as the plan's per-row money-repair manifest).
 5. Off-peak, run `apply --dry-run`, then `apply --yes` for the pending
    migrations (on CockroachDB 0017 stays deferred while embeddings exist; build
-   it later in a maintenance window with the runbook in NETWORKING.md, "Vector
+   it later in a maintenance window with the runbook in docs/networking/README.md, "Vector
    index health and runbook", which wraps `apply --apply-deferred=0017`).
 6. Run `verify --schema`; it must report no errors.
 7. Set `MIGRATIONS_CHECK=enforce` on every service and add the Render

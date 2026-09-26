@@ -4,7 +4,7 @@ import { closeDb, configureDb, networkingKeyRetirementBlockers, networkingKeyUsa
 import { networkingKeyring } from "@app/shared";
 import { loadConfig } from "../core/config";
 
-// Networking keyring runbook (plan 4.5; steps in NETWORKING.md). Read-only
+// Networking keyring runbook (plan 4.5; steps in docs/networking/README.md). Read-only
 // unless `reseal --apply`:
 //   status                     keys, write format and what still uses each key
 //   reseal [--apply]           re-seal authenticator secrets with the current key (dry run by default)

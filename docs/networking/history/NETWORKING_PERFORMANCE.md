@@ -1,6 +1,8 @@
 # Local networking discovery performance
 
-Recorded at 2026-09-08 01:55:54 UTC by `apps/api/src/modules/networking/networking.performance.test.ts`. The raw result is retained in [networking-performance.json](networking-performance.json).
+> Historical notes. For current behavior and rollout steps, use the [networking design](../README.md) and [production checklist](../../production-rollout-checklist.md).
+
+Recorded at 2026-09-08 01:55:54 UTC by `apps/api/src/modules/networking/networking.performance.test.ts`. The raw result is retained in [packages/db/scripts/benchmarks/networking-performance.json](../../../packages/db/scripts/benchmarks/networking-performance.json).
 
 These are local sequential warm-cache measurements against isolated PostgreSQL, using synthetic event profiles. Nest/Fastify injection executes routing, participant authentication, guards, DTO validation, response envelope and JSON serialization. It excludes TCP, TLS, browser rendering, semantic embedding providers and concurrent traffic. Each variant has three warmups and 15 measured requests; the reported nearest-rank p95 is also the maximum of these 15 samples. This small sample is useful regression evidence, not a production latency guarantee.
 

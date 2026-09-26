@@ -14,4 +14,4 @@ kept on `develop` only as a reference while its behavior is ported.
   The legacy dependencies are not installed here, so it does not type-check.
 
 Don't edit this directory. The backend that runs from `develop` is the pnpm
-workspace in `apps/` and `packages/` (see `README-rebuild.md`).
+workspace in `apps/` and `packages/` (see `README.md`).

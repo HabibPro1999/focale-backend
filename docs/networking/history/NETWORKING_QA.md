@@ -1,5 +1,7 @@
 # Networking implementation handoff
 
+> Historical notes. For current behavior and rollout steps, use the [networking design](../README.md) and [production checklist](../../production-rollout-checklist.md).
+
 Date: 2026-09-08. The requested backend, admin, registration-form integration and dedicated participant PWA are implemented and verified locally. Production deployment and real-provider/device acceptance were not performed.
 
 ## Branches and preservation
@@ -15,7 +17,7 @@ Date: 2026-09-08. The requested backend, admin, registration-form integration an
 | Area | Result and evidence |
 | --- | --- |
 | Full backend | `pnpm typecheck`, `pnpm test`, `pnpm build` pass across all six packages. 1,310 tests pass; 41 environment-gated tests skip in the ordinary run. Logs: `/tmp/focale-networking-final-typecheck.log`, `/tmp/focale-networking-final-tests.log`, `/tmp/focale-networking-final-build.log`. |
-| Native domain database tests | Separate isolated runs cover OTP/MFA, session and client isolation, dependency revocation, duplicate-email ownership, matching, pagination, explicit availability, stand allocation, global overlap buckets, booking contention, rescheduling, exports and private own-event comparisons. See test files in `apps/api/src/modules/networking/` and `NETWORKING_PERFORMANCE.md`. |
+| Native domain database tests | Separate isolated runs cover OTP/MFA, session and client isolation, dependency revocation, duplicate-email ownership, matching, pagination, explicit availability, stand allocation, global overlap buckets, booking contention, rescheduling, exports and private own-event comparisons. See test files in `apps/api/src/modules/networking/` and `docs/networking/history/NETWORKING_PERFORMANCE.md`. |
 | Native vector tests | Six isolated database regressions cover complementary ranking, model separation, event/payment/consent/visibility/block/shared-email filtering, revoked dependencies, leases and hydration. Provider adapter tests cover1536-dimensional batch validation, ordering, normalization and excluded contact data. |
 | Worker integrations | All18 real-DB worker regressions pass in the separate worker test database, with injected providers. This includes current report SQL/rendering, dedupe, preferences, reminders, OTP expiry, tracking/recovery ownership, retention, contacts CSV and stale revisions. Log: `/tmp/focale-networking-final-worker-db.log`. |
 | Admin |151 tests, repository-wide lint and production build pass. Full TypeScript output was compared against a clean detached develop worktree: both have exactly the same29 pre-existing errors; no new errors. Logs: `/tmp/focale-admin-baseline-ts.log`, `/tmp/focale-admin-current-ts.log`. Temporary baseline worktree removed. |
@@ -44,7 +46,7 @@ Offers and needs remain optional, matching the PDF; professional company/title/s
 
 ## Production configuration and verification boundaries
 
-Read [NETWORKING.md](NETWORKING.md) before release. Apply the additive migrations using the checked migration runner, configure API/PWA origins, networking token secret, embedding provider, email sender/provider, storage and VAPID keys, then enable the client/event modules. A separately hosted PWA needs its backend HTTPS `VITE_API_URL`; Vercel SPA fallback and service-worker revalidation are provided.
+Read [docs/networking/README.md](../README.md) before release. Apply the additive migrations using the checked migration runner, configure API/PWA origins, networking token secret, embedding provider, email sender/provider, storage and VAPID keys, then enable the client/event modules. A separately hosted PWA needs its backend HTTPS `VITE_API_URL`; Vercel SPA fallback and service-worker revalidation are provided.
 
 Embedding and VAPID credentials were absent from this session. Semantic provider behavior is implemented and tested using injected responses/native vectors; the local preview truthfully uses profile-rule recommendations. No claim is made about measured real-participant recommendation quality, real email deliverability/push delivery, physical camera use, actual iOS installation, production CockroachDB version or universal sub200ms latency. The documented10k-profile benchmark is local sequential Nest/Fastify injection evidence, not a production load guarantee. These are deployment/environment acceptance boundaries, not hidden placeholder implementations.
 

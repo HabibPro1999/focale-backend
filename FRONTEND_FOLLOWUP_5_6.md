@@ -2,7 +2,7 @@
 
 No API, payload or error-code change. The backend now publishes generated
 contract artifacts in `packages/contracts/generated/`: JSON Schema, TypeScript
-types, and condition parity fixtures. README-rebuild.md, section "Frontend
+types, and condition parity fixtures. README.md, section "Frontend
 contract artifacts", explains the files and how to consume them. The tasks below
 are for the frontend repos, whenever they adopt the artifacts.
 
