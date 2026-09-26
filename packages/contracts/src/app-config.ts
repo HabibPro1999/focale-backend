@@ -388,6 +388,32 @@ const envShape = {
     example: "2",
     active: true,
   }, "NETWORKING_EMBEDDING_CONCURRENCY"),
+  NETWORKING_DELIVERY_BATCH_SIZE: envInt(1, 50, 10, {
+    section: "networking",
+    description:
+      "Networking delivery worker: rows each general lane claims at a time, general lanes, and lanes that\nclaim only sign-in codes (OTP), so a code never waits behind digests. See NETWORKING.md.",
+    example: "10",
+    active: true,
+  }, "NETWORKING_DELIVERY_BATCH_SIZE"),
+  NETWORKING_DELIVERY_CONCURRENCY: envInt(1, 16, 6, {
+    section: "networking",
+    description: "",
+    example: "6",
+    active: true,
+  }, "NETWORKING_DELIVERY_CONCURRENCY"),
+  NETWORKING_DELIVERY_OTP_LANES: envInt(1, 4, 2, {
+    section: "networking",
+    description: "",
+    example: "2",
+    active: true,
+  }, "NETWORKING_DELIVERY_OTP_LANES"),
+  NETWORKING_EMAIL_RATE_PER_SECOND: envInt(1, 100, 5, {
+    section: "networking",
+    description:
+      "Networking emails per second per worker process (token bucket; sign-in codes go first). Keep it under\nthe provider account's limit, leaving room for the other platform emails; a 429 pauses sending.",
+    example: "5",
+    active: true,
+  }, "NETWORKING_EMAIL_RATE_PER_SECOND"),
   NETWORKING_WITHDRAWAL_ERASE_DAYS: envInt(0, 365, 30, {
     section: "networking",
     description:
@@ -507,6 +533,10 @@ const integrationsEnvObject = z.object({
   NETWORKING_EMBEDDING_BATCH_SIZE: envShape.NETWORKING_EMBEDDING_BATCH_SIZE,
   NETWORKING_EMBEDDING_BATCHES_PER_TICK: envShape.NETWORKING_EMBEDDING_BATCHES_PER_TICK,
   NETWORKING_EMBEDDING_CONCURRENCY: envShape.NETWORKING_EMBEDDING_CONCURRENCY,
+  NETWORKING_DELIVERY_BATCH_SIZE: envShape.NETWORKING_DELIVERY_BATCH_SIZE,
+  NETWORKING_DELIVERY_CONCURRENCY: envShape.NETWORKING_DELIVERY_CONCURRENCY,
+  NETWORKING_DELIVERY_OTP_LANES: envShape.NETWORKING_DELIVERY_OTP_LANES,
+  NETWORKING_EMAIL_RATE_PER_SECOND: envShape.NETWORKING_EMAIL_RATE_PER_SECOND,
   NETWORKING_VAPID_PUBLIC_KEY: envShape.NETWORKING_VAPID_PUBLIC_KEY,
   NETWORKING_VAPID_PRIVATE_KEY: envShape.NETWORKING_VAPID_PRIVATE_KEY,
   NETWORKING_VAPID_SUBJECT: envShape.NETWORKING_VAPID_SUBJECT,
@@ -782,6 +812,13 @@ export interface NetworkingRuntimeConfig {
     batchesPerTick: number;
     concurrency: number;
   };
+  /** Delivery worker lanes and the email token bucket (NETWORKING_DELIVERY_*, NETWORKING_EMAIL_RATE_PER_SECOND). */
+  delivery: {
+    batchSize: number;
+    concurrency: number;
+    otpLanes: number;
+    emailRatePerSecond: number;
+  };
   vapid: { publicKey?: string; privateKey?: string; subject?: string };
   /** Raw JSON sender map; per-client entries are validated where they are used. */
   emailSenders?: string;
@@ -872,6 +909,12 @@ function integrationsSliceFrom(env: IntegrationsEnv): IntegrationsConfig {
         batchSize: env.NETWORKING_EMBEDDING_BATCH_SIZE,
         batchesPerTick: env.NETWORKING_EMBEDDING_BATCHES_PER_TICK,
         concurrency: env.NETWORKING_EMBEDDING_CONCURRENCY,
+      },
+      delivery: {
+        batchSize: env.NETWORKING_DELIVERY_BATCH_SIZE,
+        concurrency: env.NETWORKING_DELIVERY_CONCURRENCY,
+        otpLanes: env.NETWORKING_DELIVERY_OTP_LANES,
+        emailRatePerSecond: env.NETWORKING_EMAIL_RATE_PER_SECOND,
       },
       vapid: {
         publicKey: env.NETWORKING_VAPID_PUBLIC_KEY,

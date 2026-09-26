@@ -17,6 +17,7 @@ import {
   latestNetworkingPostEventReport,
   emailQueue,
   updateEmailLogById,
+  networkingDeliveries,
   type NetworkingRow,
 } from "@app/db";
 import {
@@ -24,7 +25,8 @@ import {
   type NetworkingDeliveryDependencies,
 } from "./notification-worker";
 import { updateEmailStatusFromWebhook } from "../email/queue";
-import type { EmailProvider, SendEmailInput } from "../email/providers";
+import type { EmailProvider, SendEmailInput, SendEmailResult } from "../email/providers";
+import { NetworkingEmailRateLimiter } from "./email-rate-limiter";
 import type { StorageProvider } from "../storage";
 import { dbTestsEnabled } from "@app/db/testing";
 
@@ -32,13 +34,14 @@ const enabled = dbTestsEnabled();
 const secret = "test-only-networking-worker-secret-more-than-32-characters";
 const store = () => networkingStore();
 function emailProvider(
-  send = vi.fn(async (_input: SendEmailInput) => ({
+  send: (input: SendEmailInput) => Promise<Partial<SendEmailResult>> = vi.fn(async (_input: SendEmailInput) => ({
     success: true,
     messageId: randomUUID(),
   })),
+  name: "resend" | "sendgrid" = "resend",
 ) {
   return {
-    name: "resend",
+    name,
     isConfigured: () => true,
     sendEmail: send,
     handleWebhook: () => ({ ok: false, reason: "unconfigured" }),
@@ -862,5 +865,197 @@ describe.runIf(enabled)("networking worker real isolated database", () => {
     });
     expect(upload).toHaveBeenCalledOnce();
     expect(send).not.toHaveBeenCalled();
+  });
+  // ---- 4.2 delivery lanes ------------------------------------------------
+  const lanes = { concurrency: 6, otpLanes: 2, batchSize: 10 };
+  const accepted = (input: SendEmailInput): SendEmailResult => ({
+    outcome: "accepted", success: true, messageId: `${input.trackingId}-accepted`,
+  });
+  /** Runs `workers` concurrent delivery workers until nothing is due (SKIP LOCKED can miss rows on CockroachDB). */
+  async function drain(eventId: string, deps: () => NetworkingDeliveryDependencies, workers = 1) {
+    for (let round = 0; round < 50; round++) {
+      await Promise.all(Array.from({ length: workers }, () =>
+        processDeliveryBatch({ eventId, until: Date.now() + 90_000, ...deps() })));
+      const now = new Date();
+      const due = (await store().all("deliveries", { eventId })).filter((row) =>
+        row.attempts < 5 && row.availableAt <= now &&
+        (row.status === "PENDING" || row.status === "FAILED" ||
+         (row.status === "PROCESSING" && row.lockedUntil && row.lockedUntil <= now)));
+      if (!due.length) return;
+    }
+    throw new Error("deliveries still due after 50 worker rounds");
+  }
+  async function otpDelivery(f: Awaited<ReturnType<typeof fixture>>, profileIndex = 1) {
+    const challenge = await store().insert("challenges", {
+      eventId: f.eventId,
+      email: f.people[profileIndex].email,
+      codeHash: "test-only-hash",
+      expiresAt: new Date(Date.now() + 600000),
+    });
+    return delivery(f, "OTP", { challengeId: challenge.id, encryptedCode: encryptedCode("246810") }, profileIndex);
+  }
+
+  it("sends a sign-in code that arrives while every lane is busy with 200 digests (not starved)", async () => {
+    const f = await fixture();
+    await store().update("profiles", { id: f.people[0].id }, { emailPreference: "DAILY" });
+    const notification = await store().insert("notifications", {
+      eventId: f.eventId, profileId: f.people[0].id, type: "MATCH",
+      title: "Match", body: "", data: { connectionId: f.connection.id },
+    });
+    await getDb().insert(networkingDeliveries).values(Array.from({ length: 200 }, (_, index) => ({
+      id: randomUUID(),
+      eventId: f.eventId,
+      profileId: f.people[0].id,
+      type: "DAILY_DIGEST",
+      payload: { notificationIds: [notification.id] },
+      dedupeKey: randomUUID(),
+      availableAt: new Date(Date.now() - 60_000 + index),
+    })));
+    let releaseDigests!: () => void;
+    const digestsHeld = new Promise<void>((resolve) => (releaseDigests = resolve));
+    let held = 0;
+    let otp: NetworkingRow<"deliveries"> | undefined;
+    const order: string[] = [];
+    const send = vi.fn(async (input: SendEmailInput) => {
+      if (input.to === f.people[1].email) {
+        order.push("otp");
+        releaseDigests();
+      } else {
+        // The code is requested while the first digest is in flight; every
+        // digest send then stays in flight until the code is out (or 20 s
+        // pass, which fails the ordering below).
+        if (++held === 1) otp = await otpDelivery(f);
+        await Promise.race([digestsHeld, new Promise((resolve) => setTimeout(resolve, 20_000))]);
+        order.push(input.trackingId!);
+      }
+      return accepted(input);
+    });
+    const limiter = new NetworkingEmailRateLimiter(1_000);
+    await drain(f.eventId, () => ({ email: emailProvider(send), emailLimiter: limiter, options: lanes }));
+    expect(otp).toBeDefined();
+    expect(order[0]).toBe("otp");
+    expect(order).toHaveLength(201);
+    expect(new Set(order).size).toBe(201);
+    const rows = await store().all("deliveries", { eventId: f.eventId });
+    expect(rows.filter((row) => row.status !== "SENT")).toEqual([]);
+    expect((await store().one("deliveries", { id: otp!.id }))?.payload).toEqual({
+      challengeId: otp!.payload.challengeId, outcome: "sent",
+    });
+  }, 180_000);
+
+  it("two workers with six lanes each send every delivery exactly once", async () => {
+    const f = await fixture();
+    const ids: string[] = [];
+    for (let index = 0; index < 60; index++) ids.push((await delivery(f)).id);
+    for (let index = 0; index < 10; index++) ids.push((await otpDelivery(f)).id);
+    const sent: string[] = [];
+    const send = vi.fn(async (input: SendEmailInput) => {
+      await new Promise((resolve) => setTimeout(resolve, Math.floor(Math.random() * 5)));
+      sent.push(input.trackingId!);
+      return accepted(input);
+    });
+    // Two worker processes: two buckets.
+    const limiters = [new NetworkingEmailRateLimiter(1_000), new NetworkingEmailRateLimiter(1_000)];
+    let worker = 0;
+    await drain(f.eventId, () => ({
+      email: emailProvider(send), emailLimiter: limiters[worker++ % 2], options: lanes,
+    }), 2);
+    expect([...sent].sort()).toEqual([...ids].sort());
+    const rows = await store().all("deliveries", { eventId: f.eventId });
+    expect(rows).toHaveLength(70);
+    expect(rows.filter((row) => row.status !== "SENT")).toEqual([]);
+    for (const id of ids) expect((await log(id)).status).toBe("SENT");
+  }, 180_000);
+
+  it("never retries an ambiguous send: the email log is UNCERTAIN until the provider's webhook confirms it", async () => {
+    const f = await fixture();
+    const row = await delivery(f);
+    const send = vi.fn(async (): Promise<SendEmailResult> => ({
+      outcome: "ambiguous", success: false, error: "socket hang up", idempotentRetry: false,
+    }));
+    const deps = { eventId: f.eventId, email: emailProvider(send, "sendgrid") };
+    expect(await processNetworkingDeliveries(deps)).toEqual({ sent: 0, skipped: 0, failed: 0 });
+    expect(await store().one("deliveries", { id: row.id })).toMatchObject({
+      status: "SENT",
+      lastError: expect.stringContaining("not resent"),
+      payload: expect.objectContaining({ _deliveryProgress: { emailUncertain: true } }),
+    });
+    expect(await log(row.id)).toMatchObject({ status: "UNCERTAIN", provider: "sendgrid" });
+    expect((await log(row.id)).providerAttemptedAt).not.toBeNull();
+    // Even if the delivery were claimed again, the email is not sent twice.
+    await store().update("deliveries", { id: row.id }, { status: "FAILED", availableAt: new Date(Date.now() - 1000) });
+    await processNetworkingDeliveries(deps);
+    expect(send).toHaveBeenCalledOnce();
+    expect((await log(row.id)).status).toBe("UNCERTAIN");
+    await updateEmailStatusFromWebhook(row.id, "processed");
+    expect((await log(row.id)).status).toBe("SENT");
+  });
+
+  it("a Resend ambiguity is retried under the same idempotency key", async () => {
+    const f = await fixture();
+    const row = await delivery(f);
+    const send = vi.fn(async (input: SendEmailInput): Promise<SendEmailResult> =>
+      send.mock.calls.length === 1
+        ? { outcome: "ambiguous", success: false, error: "timeout", idempotentRetry: true }
+        : accepted(input));
+    const deps = { eventId: f.eventId, email: emailProvider(send, "resend") };
+    expect((await processNetworkingDeliveries(deps)).failed).toBe(1);
+    expect(await log(row.id)).toMatchObject({ status: "SENDING", providerAttemptedAt: null });
+    await forceDue(row.id);
+    expect((await processNetworkingDeliveries(deps)).sent).toBe(1);
+    expect(send.mock.calls.map(([input]) => input.trackingId)).toEqual([row.id, row.id]);
+    expect((await log(row.id)).status).toBe("SENT");
+  });
+
+  it.each([
+    ["sendgrid", 0, "UNCERTAIN"],
+    ["resend", 1, "SENT"],
+  ] as const)("after a crash past the %s call, a new claim sends %i more times", async (provider, sends, status) => {
+    const f = await fixture();
+    const row = await delivery(f);
+    const past = new Date(Date.now() - 60_000);
+    // The crashed claim: delivery lease expired, email log SENDING with the provider-attempt marker.
+    await store().update("deliveries", { id: row.id }, { status: "PROCESSING", attempts: 1, lockedUntil: past });
+    await getDb().insert(emailLogs).values({
+      id: row.id, recipientEmail: f.people[0].email, subject: "Crashed send", status: "SENDING",
+      providerAttemptedAt: past, provider, lockedUntil: past, lockedAt: past, lockedBy: `networking:${row.id}`,
+      dedupeKey: `networking:${row.id}`,
+      contextSnapshot: { dispatchOwner: "networking", eventId: f.eventId, deliveryId: row.id },
+    });
+    const send = vi.fn(async (input: SendEmailInput) => accepted(input));
+    await processNetworkingDeliveries({ eventId: f.eventId, email: emailProvider(send, provider) });
+    expect(send).toHaveBeenCalledTimes(sends);
+    expect((await log(row.id)).status).toBe(status);
+    expect((await store().one("deliveries", { id: row.id }))?.status).toBe("SENT");
+  });
+
+  it("defers a rate-limited (429) email without spending an attempt", async () => {
+    const f = await fixture();
+    const row = await delivery(f);
+    const send = vi.fn(async (): Promise<SendEmailResult> => ({
+      outcome: "rejected", success: false, error: "Too many requests", statusCode: 429,
+    }));
+    await processNetworkingDeliveries({ eventId: f.eventId, email: emailProvider(send), emailLimiter: new NetworkingEmailRateLimiter(1_000) });
+    const saved = await store().one("deliveries", { id: row.id });
+    expect(saved).toMatchObject({ status: "FAILED", attempts: 0, lastError: expect.stringContaining("rate limit") });
+    expect(saved!.availableAt.getTime()).toBeGreaterThan(Date.now());
+    expect(await log(row.id)).toMatchObject({ status: "SENDING", retryCount: 0, providerAttemptedAt: null });
+  });
+
+  it("maintenance settles the email log of a delivery that ended mid-send", async () => {
+    const f = await fixture();
+    const [marked, unmarked] = [await delivery(f), await delivery(f)];
+    const past = new Date(Date.now() - 60_000);
+    for (const [row, attempted] of [[marked, past], [unmarked, null]] as const) {
+      await store().update("deliveries", { id: row.id }, { status: "FAILED", attempts: 5 });
+      await getDb().insert(emailLogs).values({
+        id: row.id, recipientEmail: f.people[0].email, subject: "Ended mid-send", status: "SENDING",
+        providerAttemptedAt: attempted, provider: attempted ? "sendgrid" : null, lockedUntil: past,
+        contextSnapshot: { dispatchOwner: "networking", eventId: f.eventId, deliveryId: row.id },
+      });
+    }
+    await maintainNetworkingLifecycle(f.eventId);
+    expect((await log(marked.id)).status).toBe("UNCERTAIN");
+    expect(await log(unmarked.id)).toMatchObject({ status: "FAILED", lockedUntil: null });
   });
 });

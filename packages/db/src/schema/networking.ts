@@ -81,7 +81,10 @@ export const networkingProfiles = pgTable(
     index("networking_profiles_stand_idx").on(t.eventId, t.standTableId),
     index("networking_profiles_embedding_scan_idx").on(t.updatedAt, t.id)
       .where(sql`${t.status}='ACTIVE' AND ${t.visible} AND ${t.consent} AND ${t.withdrawnAt} IS NULL`),
-    index("networking_profiles_withdrawn_idx").on(t.withdrawnAt).where(sql`${t.withdrawnAt} IS NOT NULL`),
+    // Withdrawn profiles not yet erased, by withdrawal time: the erasure scan (0031).
+    index("networking_profiles_erasure_due_idx")
+      .on(t.withdrawnAt)
+      .where(sql`${t.withdrawnAt} IS NOT NULL AND ${t.erasedAt} IS NULL`),
   ],
 );
 export const networkingChallenges = pgTable(
@@ -425,6 +428,16 @@ export const networkingDeliveries = pgTable(
   (t) => [
     uniqueIndex("networking_deliveries_dedupe_key").on(t.dedupeKey),
     index("networking_deliveries_pending_idx").on(t.status, t.availableAt),
+    // Delivery lanes (0031): sign-in codes and everything else are claimed
+    // from separate partial indexes, oldest due first; the claim repeats the
+    // predicate. The event index serves the retention purge and erasure.
+    index("networking_deliveries_claim_idx")
+      .on(t.availableAt)
+      .where(sql`${t.type} <> 'OTP' AND ${t.status} IN ('PENDING', 'PROCESSING', 'FAILED') AND ${t.attempts} < 5`),
+    index("networking_deliveries_otp_claim_idx")
+      .on(t.availableAt)
+      .where(sql`${t.type} = 'OTP' AND ${t.status} IN ('PENDING', 'PROCESSING', 'FAILED') AND ${t.attempts} < 5`),
+    index("networking_deliveries_event_idx").on(t.eventId),
   ],
 );
 export const networkingPushSubscriptions = pgTable(

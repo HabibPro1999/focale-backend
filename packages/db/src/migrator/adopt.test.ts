@@ -230,8 +230,10 @@ describe("superseded probes", () => {
       const superseded = supersededObjectProbes(migrations);
       const nonEmpty = [...superseded].filter(([, keys]) => keys.size > 0);
       // 0018 drops the per-event table-name index that 0012 creates; 0024
-      // rebuilds two 0001 email_logs indexes under the same names.
+      // rebuilds two 0001 email_logs indexes under the same names; 0031
+      // replaces 0025's withdrawn-profile index with the erasure-due one.
       expect(nonEmpty).toEqual([
+        ["0025", new Map([["index:networking_profiles_withdrawn_idx", "0031"]])],
         ["0012", new Map([["index:networking_tables_event_name_key", "0018"]])],
         [
           "0001",
