@@ -25,7 +25,9 @@ import { networkingMeetingStatusSql } from "./networking-meetings";
  *   its pair has a booked meeting.
  * - meetings: every request; booked (`CONFIRMED`, `COMPLETED`, `NO_SHOW`) and
  *   awaiting (`PENDING`, `PENDING_ALLOCATION`) follow the meeting groups.
- * - days, hours and slots are the event timezone's wall clock.
+ * - days, hours and slots are the event timezone's wall clock. Meeting
+ *   `created_at` is a naive UTC timestamp (the shared `timestamps` columns);
+ *   the other stamps are timestamptz.
  */
 
 const p = alias(networkingProfiles, "p");
@@ -79,7 +81,11 @@ export async function networkingEventTotals(
     await db.execute(sql`
     SELECT prof.*, ints.*, conn.*, msg.*, meet.*, arrivals.*,
       (SELECT count(*)::int4 FROM networking_audit WHERE event_id=${eventId} AND action='PROFILE_VIEW') AS profile_views,
-      (SELECT count(*)::int4 FROM networking_reports WHERE event_id=${eventId} AND status='OPEN') AS open_reports
+      (SELECT count(*)::int4 FROM networking_reports WHERE event_id=${eventId} AND status='OPEN') AS open_reports,
+      (SELECT count(*)::int4 FROM networking_connections c WHERE c.event_id=${eventId}
+        AND EXISTS (SELECT 1 FROM networking_meetings m WHERE m.event_id=c.event_id AND m.status IN (${booked})
+          AND ((m.requester_id=c.profile_a_id AND m.recipient_id=c.profile_b_id)
+            OR (m.requester_id=c.profile_b_id AND m.recipient_id=c.profile_a_id)))) AS converted_connections
     FROM
       (SELECT count(*)::int4 AS participants,
         count(*) FILTER (WHERE ${active})::int4 AS active_participants,
@@ -97,13 +103,7 @@ export async function networkingEventTotals(
       WHERE p.event_id=${eventId} AND ${listed}) prof,
       (SELECT count(*) FILTER (WHERE action='LIKE')::int4 AS likes, count(*) FILTER (WHERE action='PASS')::int4 AS passes
       FROM networking_interests WHERE event_id=${eventId}) ints,
-      (SELECT count(*)::int4 AS connections,
-        count(*) FILTER (WHERE converted.meeting_id IS NOT NULL)::int4 AS converted_connections
-      FROM networking_connections c
-      LEFT JOIN LATERAL (SELECT m.id AS meeting_id FROM networking_meetings m WHERE m.event_id=c.event_id AND m.status IN (${booked})
-        AND ((m.requester_id=c.profile_a_id AND m.recipient_id=c.profile_b_id) OR (m.requester_id=c.profile_b_id AND m.recipient_id=c.profile_a_id))
-        LIMIT 1) converted ON true
-      WHERE c.event_id=${eventId}) conn,
+      (SELECT count(*)::int4 AS connections FROM networking_connections WHERE event_id=${eventId}) conn,
       (SELECT coalesce(sum(sent),0)::int4 AS messages, count(*)::int4 AS conversations,
         count(*) FILTER (WHERE senders=2)::int4 AS responsive_conversations
       FROM (SELECT connection_id, count(*) AS sent, count(DISTINCT sender_id) AS senders FROM networking_messages
@@ -212,7 +212,7 @@ export async function networkingDailyMetrics(
         FROM networking_connections WHERE event_id=${eventId}
       UNION ALL SELECT created_at,0,1,0,0 FROM networking_messages WHERE event_id=${eventId}
       UNION ALL SELECT starts_at,0,0,1,0 FROM networking_meetings WHERE event_id=${eventId} AND status IN (${booked})
-      UNION ALL SELECT created_at,0,0,0,1 FROM networking_meetings WHERE event_id=${eventId}
+      UNION ALL SELECT created_at AT TIME ZONE 'UTC',0,0,0,1 FROM networking_meetings WHERE event_id=${eventId}
     ) activity GROUP BY 1 ORDER BY 1
   `),
   );
@@ -235,7 +235,7 @@ export async function networkingHourlyActivity(
         WHERE event_id=${eventId} AND action IN ('SWIPE_LIKE','SWIPE_PASS','PROFILE_VIEW')
       UNION ALL SELECT created_at FROM networking_messages WHERE event_id=${eventId}
       UNION ALL SELECT created_at FROM networking_connections WHERE event_id=${eventId}
-      UNION ALL SELECT created_at FROM networking_meetings WHERE event_id=${eventId}
+      UNION ALL SELECT created_at AT TIME ZONE 'UTC' FROM networking_meetings WHERE event_id=${eventId}
     ) activity GROUP BY 1
   `),
   );
