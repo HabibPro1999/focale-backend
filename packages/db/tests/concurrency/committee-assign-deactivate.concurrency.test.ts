@@ -8,7 +8,7 @@ import {
   deactivateCommitteeMembershipTxn,
   getDb,
   pgErrorCode,
-  upsertCommitteeMembership,
+  upsertCommitteeMembershipTxn,
   withTxn,
 } from "@app/db";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -30,7 +30,7 @@ type Seeded = Awaited<ReturnType<typeof seedEvent>>;
 
 async function seedMember(event: Seeded) {
   const user = await seedUser({ clientId: event.clientId });
-  await upsertCommitteeMembership(event.id, user.id);
+  await upsertCommitteeMembershipTxn(event.id, user.id, testAudit());
   return user;
 }
 

@@ -166,6 +166,18 @@ export async function findExistingAccessIdsInEvent(
   return rows.map((r) => r.id);
 }
 
+/** Ids of every access item of an event (the rows a prerequisite edit locks). */
+export async function listEventAccessIds(
+  eventId: string,
+  exec: DbExecutor = getDb(),
+): Promise<string[]> {
+  const rows = await exec
+    .select({ id: eventAccess.id })
+    .from(eventAccess)
+    .where(eq(eventAccess.eventId, eventId));
+  return rows.map((r) => r.id);
+}
+
 /** All prerequisite edges for an event's accesses: {owner, required} pairs. */
 export async function getEventPrereqEdges(
   eventId: string,
@@ -282,13 +294,20 @@ export async function insertEventAccess(
   return { ...row, requiredAccess: required };
 }
 
-/** Update access columns; return the updated row (no prereq changes). */
+/**
+ * Update access columns; return the updated row (no prereq changes). With no
+ * column to change (an edit of the prerequisites only) it still bumps
+ * updated_at: Drizzle refuses an empty SET before it applies `$onUpdate`.
+ */
 export async function updateEventAccessRow(
   id: string,
   data: Partial<NewEventAccessValues>,
   exec: DbExecutor,
 ): Promise<EventAccessRow> {
-  const [row] = await exec.update(eventAccess).set(data).where(eq(eventAccess.id, id)).returning();
+  const changes = Object.values(data).some((value) => value !== undefined)
+    ? data
+    : { updatedAt: new Date() };
+  const [row] = await exec.update(eventAccess).set(changes).where(eq(eventAccess.id, id)).returning();
   return row;
 }
 
