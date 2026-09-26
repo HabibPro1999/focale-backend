@@ -25,15 +25,18 @@ import type { Config } from "../../core/config";
 import { AccessService } from "../access/access.service";
 import { PricingService } from "../pricing/pricing.service";
 import { RegistrationsService } from "./registrations.service";
+import { RegistrationSideEffects } from "./registrations.side-effects";
 
 // Plan 2.7: two signups racing for one sponsorship code. The create
 // transaction locks the code's sponsorship first, so the second signup waits
 // for the first and then sees the code used: exactly one 201, one 409.
 
+const access = new AccessService();
 const service = new RegistrationsService(
-  new AccessService(),
+  access,
   new PricingService(),
   { publicLinkAllowedOrigins: ["https://events.example.com"] } as Config,
+  new RegistrationSideEffects(access),
 );
 
 async function setup() {

@@ -35,16 +35,19 @@ import type { Config } from "../../core/config";
 import { AccessService } from "../access/access.service";
 import { PricingService } from "../pricing/pricing.service";
 import { RegistrationsService } from "./registrations.service";
+import { RegistrationSideEffects } from "./registrations.side-effects";
 
 // Plan 2.6b: the payment status writers (confirmPayment, payment-proof upload,
 // payment-method selection, admin edits) lock the registration first and decide
 // from the row re-read under the lock, so a concurrent confirmation can no
 // longer be overwritten and paid capacity always matches the stored state.
 
+const access = new AccessService();
 const service = new RegistrationsService(
-  new AccessService(),
+  access,
   new PricingService(),
   { publicLinkAllowedOrigins: ["https://events.example.com"] } as Config,
+  new RegistrationSideEffects(access),
 );
 const PDF = Buffer.from("%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n");
 
