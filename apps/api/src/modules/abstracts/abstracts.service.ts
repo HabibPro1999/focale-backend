@@ -29,7 +29,6 @@ import {
 import { assertClientModuleEnabled } from "../clients/module-gates";
 import { AppException } from "../../core/app-exception";
 import { CONFIG, type Config } from "../../core/config";
-import { logger } from "../../core/logger.service";
 import { assertPublicLinkBaseUrlAllowed } from "../../core/public-link-origin";
 import { generateAbstractToken, verifyAbstractToken } from "./abstracts.token";
 import {

@@ -15,9 +15,7 @@ import {
   touchNetworkingProfileActivity,
   cancelNetworkingParticipantMeetings,
   getActiveEventAccessId,
-  createNetworkingNotification,
   enqueueNetworkingDelivery,
-  getNetworkingConfig,
   networkingStore,
   networkingTransaction,
   revokeNetworkingSessions,
@@ -45,7 +43,6 @@ import {
   verifyNetworkingOtp,
 } from "./networking.security";
 import {
-  networkingSearchMatches,
   networkingPair,
   networkingPublicProfile,
 } from "./networking.policy";

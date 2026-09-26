@@ -103,7 +103,6 @@ import {
   reviewAbstractTxn,
   insertAuditLog,
   getUserByEmail,
-  getUserById,
   findCommitteeUserClientIds,
   findAbstractEmailTemplate,
 } from "@app/db";

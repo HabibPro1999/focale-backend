@@ -61,7 +61,7 @@ describe("api e2e", () => {
       { logger: false },
     );
     const fastify = echoApp.getHttpAdapter().getInstance();
-    fastify.addHook("onRequest", (req, reply, done) => {
+    fastify.addHook("onRequest", (_req, _reply, done) => {
       requestContext.enterWith({ requestId: newId() });
       done();
     });
