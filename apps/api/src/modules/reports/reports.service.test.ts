@@ -22,13 +22,14 @@ vi.mock("@app/db", () => ({
   getAccessRegistrantsData: vi.fn(),
   // CSV/JSON/XLSX export
   getEventSlug: vi.fn(),
-  getRegistrationsForExport: vi.fn(),
+  getRegistrationFormDataKeys: vi.fn(),
+  iterateRegistrationsForExport: vi.fn(),
   // Pulled in transitively by the generators/builder (unused in these tests).
   getEventSummaryData: vi.fn(),
   getAccessRegistrantsReportData: vi.fn(),
   getSponsorshipsReportData: vi.fn(),
   getCheckInReportData: vi.fn(),
-  getRegistrationsForModularExport: vi.fn(),
+  iterateRegistrationsForModularExport: vi.fn(),
   getRegistrationTableColumns: vi.fn(),
   getEventAccessNames: vi.fn(),
   getEventSlugAndName: vi.fn(),
@@ -36,7 +37,9 @@ vi.mock("@app/db", () => ({
 }));
 
 import * as db from "@app/db";
+import { PassThrough } from "node:stream";
 import { ReportsService } from "./reports.service";
+import type { ExportDownload } from "../../core/exports/stream-io";
 
 const m = db as unknown as Record<string, ReturnType<typeof vi.fn>>;
 const service = new ReportsService();
@@ -363,6 +366,37 @@ describe("getEventAnalytics", () => {
 // exportRegistrations
 // ============================================================================
 
+/** Runs a prepared download into memory. */
+async function collect(download: ExportDownload): Promise<Buffer> {
+  const out = new PassThrough();
+  const chunks: Buffer[] = [];
+  out.on("data", (chunk: Buffer) => chunks.push(chunk));
+  const ended = new Promise((resolve) => out.on("end", resolve));
+  await download.write(out, new AbortController().signal);
+  await ended;
+  return Buffer.concat(chunks);
+}
+
+const text = async (download: ExportDownload) => (await collect(download)).toString("utf8");
+
+/**
+ * Serves `rows` like the db would: pages of `pageSize` from the keyset
+ * iterator, and the sorted union of their form_data keys.
+ */
+function mockExportRows(rows: Record<string, unknown>[], pageSize = 2) {
+  m.iterateRegistrationsForExport.mockImplementation(async function* () {
+    for (let i = 0; i < rows.length; i += pageSize) yield rows.slice(i, i + pageSize);
+  });
+  const keys = new Set<string>();
+  for (const row of rows) {
+    const fd = row.formData;
+    if (fd && typeof fd === "object" && !Array.isArray(fd)) {
+      for (const key of Object.keys(fd)) keys.add(key);
+    }
+  }
+  m.getRegistrationFormDataKeys.mockResolvedValue([...keys].sort());
+}
+
 describe("exportRegistrations", () => {
   const eventId = "evt-003";
 
@@ -376,18 +410,34 @@ describe("exportRegistrations", () => {
 
   it("exports as JSON when format is json", async () => {
     m.getEventSlug.mockResolvedValue({ slug: "my-event" });
-    m.getRegistrationsForExport.mockResolvedValue([]);
+    mockExportRows([]);
 
     const result = await service.exportRegistrations(eventId, { format: "json" });
 
     expect(result.filename).toMatch(/^my-event-registrations-.*\.json$/);
     expect(result.contentType).toBe("application/json");
-    expect(JSON.parse(String(result.data))).toEqual([]);
+    expect(await text(result)).toBe("[]");
+    // JSON has no header: the key union is not read.
+    expect(m.getRegistrationFormDataKeys).not.toHaveBeenCalled();
+  });
+
+  it("streams JSON across pages byte-for-byte like JSON.stringify(rows, null, 2)", async () => {
+    m.getEventSlug.mockResolvedValue({ slug: "my-event" });
+    const rows = [
+      baseRow({ id: "r-1", submittedAt: new Date("2025-06-03T00:00:00Z"), formData: { a: { b: [1, "x\ny"] } } }),
+      baseRow({ id: "r-2", submittedAt: new Date("2025-06-02T00:00:00Z"), paidAt: new Date("2025-06-02T01:00:00Z") }),
+      baseRow({ id: "r-3", submittedAt: new Date("2025-06-01T00:00:00Z"), formData: [] }),
+    ];
+    mockExportRows(rows);
+
+    const result = await service.exportRegistrations(eventId, { format: "json" });
+
+    expect(await text(result)).toBe(JSON.stringify(rows, null, 2));
   });
 
   it("exports CSV with correct headers and data (incl. dynamic formData key)", async () => {
     m.getEventSlug.mockResolvedValue({ slug: "test-event" });
-    m.getRegistrationsForExport.mockResolvedValue([
+    mockExportRows([
       {
         id: "reg-1",
         email: "test@example.com",
@@ -414,7 +464,7 @@ describe("exportRegistrations", () => {
     expect(result.filename).toMatch(/^test-event-registrations-.*\.csv$/);
     expect(result.contentType).toBe("text/csv; charset=utf-8");
 
-    const lines = String(result.data).split("\r\n");
+    const lines = (await text(result)).split("\r\n");
     expect(lines[0]!.startsWith('\uFEFF"ID"')).toBe(true);
     expect(lines[0]).toContain("ID");
     expect(lines[0]).toContain("Email");
@@ -429,12 +479,12 @@ describe("exportRegistrations", () => {
 
   it("guards CSV cells against formulas, including after leading spaces", async () => {
     m.getEventSlug.mockResolvedValue({ slug: "evt" });
-    m.getRegistrationsForExport.mockResolvedValue([
+    mockExportRows([
       baseRow({ id: "r-1", firstName: " =cmd|' /C calc'!A0", lastName: "-5+1", formData: { note: "@x" } }),
     ]);
 
     const result = await service.exportRegistrations(eventId, { format: "csv" });
-    const row = String(result.data).split("\r\n")[1]!;
+    const row = (await text(result)).split("\r\n")[1]!;
 
     expect(row).toContain(`"' =cmd|' /C calc'!A0"`);
     expect(row).toContain(`"'-5+1"`);
@@ -443,7 +493,7 @@ describe("exportRegistrations", () => {
 
   it("collects the alphabetical union of dynamic formData keys across rows", async () => {
     m.getEventSlug.mockResolvedValue({ slug: "evt" });
-    m.getRegistrationsForExport.mockResolvedValue([
+    mockExportRows([
       baseRow({ id: "r-1", email: "a@b.com", formData: { city: "Tunis" } }),
       baseRow({
         id: "r-2",
@@ -454,36 +504,44 @@ describe("exportRegistrations", () => {
     ]);
 
     const result = await service.exportRegistrations(eventId, { format: "csv" });
-    const header = String(result.data).split("\n")[0];
+    const [header, first, second] = (await text(result)).split("\r\n");
 
-    expect(header).toContain("city");
-    expect(header).toContain("specialty");
+    expect(header).toContain('"city","specialty"');
+    expect(first).toMatch(/"Tunis",""$/);
+    expect(second).toMatch(/"","Cardiology"$/);
   });
 
-  it("propagates date range filters to the registration fetch", async () => {
+  it("propagates the filters to the key union and the keyset pages", async () => {
     m.getEventSlug.mockResolvedValue({ slug: "evt" });
-    m.getRegistrationsForExport.mockResolvedValue([]);
+    mockExportRows([]);
 
-    await service.exportRegistrations(eventId, {
+    const result = await service.exportRegistrations(eventId, {
       format: "csv",
+      search: "Mehdi",
+      startDate: "2025-01-01T00:00:00.000Z",
+      endDate: "2025-01-31T23:59:59.000Z",
+    });
+    const filters = expect.objectContaining({
+      search: "Mehdi",
       startDate: "2025-01-01T00:00:00.000Z",
       endDate: "2025-01-31T23:59:59.000Z",
     });
 
     expect(m.getEventSlug).toHaveBeenCalledWith(eventId, EXPORT_TX);
-    expect(m.getRegistrationsForExport).toHaveBeenCalledWith(
+    expect(m.getRegistrationFormDataKeys).toHaveBeenCalledWith(eventId, filters, EXPORT_TX);
+    // Rows are read only once the download is written, page by page.
+    expect(m.iterateRegistrationsForExport).not.toHaveBeenCalled();
+    await collect(result);
+    expect(m.iterateRegistrationsForExport).toHaveBeenCalledWith(
       eventId,
-      expect.objectContaining({
-        startDate: "2025-01-01T00:00:00.000Z",
-        endDate: "2025-01-31T23:59:59.000Z",
-      }),
-      EXPORT_TX,
+      filters,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
 
   it("writes formula-like text to XLSX as plain text cells (no apostrophe prefix)", async () => {
     m.getEventSlug.mockResolvedValue({ slug: "evt" });
-    m.getRegistrationsForExport.mockResolvedValue([
+    mockExportRows([
       baseRow({
         id: "r-1",
         email: "a@b.com",
@@ -496,7 +554,7 @@ describe("exportRegistrations", () => {
 
     const result = await service.exportRegistrations(eventId, { format: "xlsx" });
     const workbook = new ExcelJS.Workbook();
-    const buffer = result.data as Buffer;
+    const buffer = await collect(result);
     const workbookData = buffer.buffer.slice(
       buffer.byteOffset,
       buffer.byteOffset + buffer.byteLength,
