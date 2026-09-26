@@ -415,20 +415,23 @@ export const SearchRegistrantsQuerySchema = z.strictObject({
   limit: z.coerce.number().int().min(1).max(50).default(10),
 });
 
+/**
+ * One registrant search hit (admin and anonymous sponsor-form search): no
+ * contact details or form answers; the anonymous route masks the email.
+ */
 export const RegistrantSearchResultSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string(),
   email: z.string(),
   firstName: z.string().nullable(),
   lastName: z.string().nullable(),
-  paymentStatus: PaymentStatusSchema,
+  paymentStatus: z.string(),
   totalAmount: z.number(),
   baseAmount: z.number(),
+  accessAmount: z.number(),
   sponsorshipAmount: z.number(),
   accessTypeIds: z.array(z.string()),
   coveredAccessIds: z.array(z.string()),
   isBasePriceCovered: z.boolean(),
-  phone: z.string().nullable(),
-  formData: z.record(z.string(), z.unknown()).nullable(),
 });
 
 export type SearchRegistrantsQuery = z.infer<typeof SearchRegistrantsQuerySchema>;

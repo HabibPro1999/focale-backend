@@ -133,22 +133,7 @@ export type AdminEditRegistration = {
   labName?: string | null;
 };
 
-export type AdminRegistrantSearchResponse = Array<{
-  id: string;
-  email: string;
-  firstName: string | null;
-  lastName: string | null;
-  paymentStatus: string;
-  totalAmount: number;
-  baseAmount: number;
-  accessAmount: number;
-  sponsorshipAmount: number;
-  accessTypeIds: string[];
-  coveredAccessIds: string[];
-  isBasePriceCovered: boolean;
-  phone: string | null;
-  formData: unknown;
-}>;
+export type AdminRegistrantSearchResponse = RegistrantSearchResult[];
 
 export type AdminRegistrationListResponse = {
   data: AdminRegistrationResponse[];
@@ -1815,20 +1800,7 @@ export type PublicPaymentConfigResponse = {
   } | null;
 };
 
-export type PublicRegistrantSearchResponse = Array<{
-  id: string;
-  email: string;
-  firstName: string | null;
-  lastName: string | null;
-  paymentStatus: string;
-  totalAmount: number;
-  baseAmount: number;
-  accessAmount: number;
-  sponsorshipAmount: number;
-  accessTypeIds: string[];
-  coveredAccessIds: string[];
-  isBasePriceCovered: boolean;
-}>;
+export type PublicRegistrantSearchResponse = RegistrantSearchResult[];
 
 export type PublicRegistrationCreateResponse = {
   registration: PublicRegistrationResponse;
@@ -1936,15 +1908,14 @@ export type RegistrantSearchResult = {
   email: string;
   firstName: string | null;
   lastName: string | null;
-  paymentStatus: PaymentStatus;
+  paymentStatus: string;
   totalAmount: number;
   baseAmount: number;
+  accessAmount: number;
   sponsorshipAmount: number;
   accessTypeIds: string[];
   coveredAccessIds: string[];
   isBasePriceCovered: boolean;
-  phone: string | null;
-  formData: Record<string, unknown> | null;
 };
 
 export type RegistrantSearchScope = "ALL" | "UNPAID_ONLY";

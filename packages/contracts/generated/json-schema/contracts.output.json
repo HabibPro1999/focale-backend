@@ -578,93 +578,7 @@
     },
     "AdminRegistrantSearchResponseSchema": {
       "items": {
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "email": {
-            "type": "string"
-          },
-          "firstName": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "lastName": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "paymentStatus": {
-            "type": "string"
-          },
-          "totalAmount": {
-            "type": "number"
-          },
-          "baseAmount": {
-            "type": "number"
-          },
-          "accessAmount": {
-            "type": "number"
-          },
-          "sponsorshipAmount": {
-            "type": "number"
-          },
-          "accessTypeIds": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "coveredAccessIds": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "isBasePriceCovered": {
-            "type": "boolean"
-          },
-          "phone": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "formData": {}
-        },
-        "required": [
-          "id",
-          "email",
-          "firstName",
-          "lastName",
-          "paymentStatus",
-          "totalAmount",
-          "baseAmount",
-          "accessAmount",
-          "sponsorshipAmount",
-          "accessTypeIds",
-          "coveredAccessIds",
-          "isBasePriceCovered",
-          "phone",
-          "formData"
-        ],
-        "type": "object"
+        "$ref": "#/$defs/RegistrantSearchResultSchema"
       },
       "type": "array"
     },
@@ -8156,80 +8070,7 @@
     },
     "PublicRegistrantSearchResponseSchema": {
       "items": {
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "email": {
-            "type": "string"
-          },
-          "firstName": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "lastName": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "paymentStatus": {
-            "type": "string"
-          },
-          "totalAmount": {
-            "type": "number"
-          },
-          "baseAmount": {
-            "type": "number"
-          },
-          "accessAmount": {
-            "type": "number"
-          },
-          "sponsorshipAmount": {
-            "type": "number"
-          },
-          "accessTypeIds": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "coveredAccessIds": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "isBasePriceCovered": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "id",
-          "email",
-          "firstName",
-          "lastName",
-          "paymentStatus",
-          "totalAmount",
-          "baseAmount",
-          "accessAmount",
-          "sponsorshipAmount",
-          "accessTypeIds",
-          "coveredAccessIds",
-          "isBasePriceCovered"
-        ],
-        "type": "object"
+        "$ref": "#/$defs/RegistrantSearchResultSchema"
       },
       "type": "array"
     },
@@ -8721,8 +8562,6 @@
       "additionalProperties": false,
       "properties": {
         "id": {
-          "format": "uuid",
-          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
           "type": "string"
         },
         "email": {
@@ -8749,12 +8588,15 @@
           ]
         },
         "paymentStatus": {
-          "$ref": "#/$defs/PaymentStatusSchema"
+          "type": "string"
         },
         "totalAmount": {
           "type": "number"
         },
         "baseAmount": {
+          "type": "number"
+        },
+        "accessAmount": {
           "type": "number"
         },
         "sponsorshipAmount": {
@@ -8774,30 +8616,6 @@
         },
         "isBasePriceCovered": {
           "type": "boolean"
-        },
-        "phone": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "formData": {
-          "anyOf": [
-            {
-              "additionalProperties": {},
-              "propertyNames": {
-                "type": "string"
-              },
-              "type": "object"
-            },
-            {
-              "type": "null"
-            }
-          ]
         }
       },
       "required": [
@@ -8808,12 +8626,11 @@
         "paymentStatus",
         "totalAmount",
         "baseAmount",
+        "accessAmount",
         "sponsorshipAmount",
         "accessTypeIds",
         "coveredAccessIds",
-        "isBasePriceCovered",
-        "phone",
-        "formData"
+        "isBasePriceCovered"
       ],
       "type": "object"
     },

@@ -1,13 +1,20 @@
-import ExcelJS from "exceljs";
-import JSZip from "jszip";
+import type ExcelJS from "exceljs";
+import { join } from "node:path";
+import type { Writable } from "node:stream";
 import {
   getEventSummaryData,
-  getAccessRegistrantsReportData,
+  getReportEventAndAccess,
   getSponsorshipsReportData,
-  getCheckInReportData,
+  iterateAccessRegistrantsForReport,
+  iterateCheckInReportRows,
+  iterateSponsorshipsForReport,
   withExportStatementTimeout,
+  type CheckInReportRow,
+  type EventSummaryData,
+  type SponsorshipReportRow,
 } from "@app/db";
 import {
+  FULLY_SETTLED_STATUSES,
   formatDate,
   formatDateTime,
   formatFileDate,
@@ -15,86 +22,110 @@ import {
   uniqueFileName,
   uniqueSheetName,
 } from "@app/shared";
+import type { ExportDownload } from "../../core/exports/stream-io";
+import {
+  ColumnStyles,
+  RowPacer,
+  XLSX_CONTENT_TYPE,
+  createXlsxWriter,
+} from "../../core/exports/xlsx-stream";
+import {
+  withExportTempDir,
+  writeExportFile,
+  writeStoredZip,
+  type ZipFileEntry,
+} from "../../core/exports/zip-stream";
+
+// =============================================================================
+// Report workbooks (summary, access registrants, sponsorships, check-in ZIP).
+// Each `prepare*` reads the report's small header data (event, access items,
+// counts or sort keys) and returns an ExportDownload whose `write` streams the
+// workbook: ExcelJS's streaming writer, rows read page by page and committed
+// one at a time, paced by the zip and the client. The check-in ZIP writes each
+// workbook to a temp file, then streams a stored ZIP of them.
+// =============================================================================
+
+const HEADER_FILL: ExcelJS.Fill = {
+  type: "pattern",
+  pattern: "solid",
+  fgColor: { argb: "FF1F4E79" },
+};
+const HEADER_FONT: Partial<ExcelJS.Font> = {
+  bold: true,
+  color: { argb: "FFFFFFFF" },
+  size: 11,
+};
+const THIN_BORDER: Partial<ExcelJS.Borders> = {
+  top: { style: "thin" },
+  left: { style: "thin" },
+  bottom: { style: "thin" },
+  right: { style: "thin" },
+};
+
+/** Styles a header row's cells and writes the row out. */
+function commitHeaderRow(row: ExcelJS.Row): void {
+  row.eachCell((cell) => {
+    cell.fill = HEADER_FILL;
+    cell.font = HEADER_FONT;
+    cell.border = THIN_BORDER;
+  });
+  row.commit();
+}
+
+/** A title row merged across `lastColumn` columns (sponsorships, check-in). */
+function addMergedTitle(
+  sheet: ExcelJS.Worksheet,
+  value: string,
+  lastColumn: string,
+  font: Partial<ExcelJS.Font>,
+): void {
+  const row = sheet.addRow([value]);
+  sheet.mergeCells(`A${row.number}:${lastColumn}${row.number}`);
+  row.getCell(1).font = font;
+  row.getCell(1).alignment = { horizontal: "center" };
+}
+
+// ============================================================================
+// Event summary (counts only, aggregated in SQL)
+// ============================================================================
 
 /**
- * Build a styled Excel workbook summarising total registrations,
- * per-access-type counts, and confirmed-seat breakdowns for an event.
+ * A styled workbook summarising total registrations, per-access-type counts
+ * and confirmed-seat breakdowns for an event.
  */
-export async function generateEventSummary(
-  eventId: string,
-): Promise<{ filename: string; data: Buffer }> {
-  const { event, accessTypes, registrations } = await withExportStatementTimeout((tx) =>
-    getEventSummaryData(eventId, tx),
-  );
+export async function prepareEventSummary(eventId: string): Promise<ExportDownload> {
+  const data = await withExportStatementTimeout((tx) => getEventSummaryData(eventId, tx));
+  return {
+    filename: `${data.event!.slug}-summary-${formatFileDate()}.xlsx`,
+    contentType: XLSX_CONTENT_TYPE,
+    write: (out, signal) => writeEventSummary(out, signal, data),
+  };
+}
 
-  // ── Compute stats ──
+async function writeEventSummary(
+  out: Writable,
+  signal: AbortSignal,
+  data: EventSummaryData,
+): Promise<void> {
+  const { event, accessTypes, byStatus, byAccess, total } = data;
+  const statusCount = new Map(byStatus.map((s) => [s.paymentStatus, s.count]));
+  const countOf = (status: string) => statusCount.get(status) ?? 0;
+  const accessCount = new Map(byAccess.map((a) => [a.accessId, a]));
+  const confirmed = FULLY_SETTLED_STATUSES.reduce((sum, status) => sum + countOf(status), 0);
 
-  const totalRegistrants = registrations.length;
-
-  const accessCounts: Record<string, number> = {};
-  for (const at of accessTypes) accessCounts[at.id] = 0;
-  for (const r of registrations) {
-    for (const atId of r.accessTypeIds) {
-      if (accessCounts[atId] !== undefined) accessCounts[atId]++;
-    }
-  }
-
-  const byStatus = (status: string) =>
-    registrations.filter((r) => r.paymentStatus === status);
-
-  const paid = byStatus("PAID");
-  const sponsored = byStatus("SPONSORED");
-  const waived = byStatus("WAIVED");
-  const partial = byStatus("PARTIAL");
-  const verifying = byStatus("VERIFYING");
-  const pending = byStatus("PENDING");
-  const refunded = byStatus("REFUNDED");
-
-  const confirmed = registrations.filter(
-    (r) =>
-      r.paymentStatus === "PAID" ||
-      r.paymentStatus === "SPONSORED" ||
-      r.paymentStatus === "WAIVED",
-  );
-
-  const confirmedPerAccess: Record<string, number> = {};
-  for (const at of accessTypes) confirmedPerAccess[at.id] = 0;
-  for (const r of confirmed) {
-    for (const atId of r.accessTypeIds) {
-      if (confirmedPerAccess[atId] !== undefined) confirmedPerAccess[atId]++;
-    }
-  }
-
-  // ── Build Excel ──
-
-  const workbook = new ExcelJS.Workbook();
-  workbook.creator = "Focale OS";
-  workbook.created = new Date();
-
+  const workbook = createXlsxWriter(out, signal);
   const sheet = workbook.addWorksheet("Event Report");
+  sheet.getColumn(1).width = 50;
+  sheet.getColumn(2).width = 20;
+  sheet.getColumn(3).width = 15;
 
-  const headerFill: ExcelJS.Fill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: { argb: "FF1F4E79" },
-  };
-  const headerFont: Partial<ExcelJS.Font> = {
-    bold: true,
-    color: { argb: "FFFFFFFF" },
-    size: 12,
-  };
+  const headerFont: Partial<ExcelJS.Font> = { ...HEADER_FONT, size: 12 };
   const subHeaderFill: ExcelJS.Fill = {
     type: "pattern",
     pattern: "solid",
     fgColor: { argb: "FFD6E4F0" },
   };
   const subHeaderFont: Partial<ExcelJS.Font> = { bold: true, size: 11 };
-  const border: Partial<ExcelJS.Borders> = {
-    top: { style: "thin" },
-    left: { style: "thin" },
-    bottom: { style: "thin" },
-    right: { style: "thin" },
-  };
 
   let row = 1;
 
@@ -116,9 +147,9 @@ export async function generateEventSummary(
     sheet.mergeCells(`A${row}:C${row}`);
     const cell = sheet.getCell(`A${row}`);
     cell.value = title;
-    cell.fill = headerFill;
+    cell.fill = HEADER_FILL;
     cell.font = headerFont;
-    cell.border = border;
+    cell.border = THIN_BORDER;
     row++;
   };
 
@@ -130,11 +161,11 @@ export async function generateEventSummary(
     const labelCell = sheet.getCell(`A${row}`);
     labelCell.value = opts?.indent ? `  - ${label}` : label;
     if (opts?.bold) labelCell.font = { bold: true, size: 11 };
-    labelCell.border = border;
+    labelCell.border = THIN_BORDER;
     const valCell = sheet.getCell(`B${row}`);
     valCell.value = value;
     if (opts?.bold) valCell.font = { bold: true, size: 14 };
-    valCell.border = border;
+    valCell.border = THIN_BORDER;
     row++;
   };
 
@@ -144,70 +175,58 @@ export async function generateEventSummary(
       cell.value = col;
       cell.fill = subHeaderFill;
       cell.font = subHeaderFont;
-      cell.border = border;
+      cell.border = THIN_BORDER;
     });
     row++;
   };
 
   const addAccessRow = (name: string, type: string, count: number) => {
     sheet.getCell(`A${row}`).value = name;
-    sheet.getCell(`A${row}`).border = border;
+    sheet.getCell(`A${row}`).border = THIN_BORDER;
     sheet.getCell(`B${row}`).value = type;
-    sheet.getCell(`B${row}`).border = border;
+    sheet.getCell(`B${row}`).border = THIN_BORDER;
     sheet.getCell(`C${row}`).value = count;
-    sheet.getCell(`C${row}`).border = border;
+    sheet.getCell(`C${row}`).border = THIN_BORDER;
     sheet.getCell(`C${row}`).alignment = { horizontal: "center" };
     row++;
   };
 
   addSectionHeader("1. Total Registrants");
-  addKVRow("Total Registrations", totalRegistrants, { bold: true });
+  addKVRow("Total Registrations", total, { bold: true });
   row++;
 
   addSectionHeader("2. Registrations per Access Type");
   addTableHeader(["Access Type", "Category", "Count"]);
   for (const at of accessTypes) {
-    addAccessRow(at.name, at.type, accessCounts[at.id]);
+    addAccessRow(at.name, at.type, accessCount.get(at.id)?.registered ?? 0);
   }
   row++;
 
   addSectionHeader("3. Payment Status Breakdown");
-  addKVRow("Total Confirmed (Paid + Sponsored + Waived)", confirmed.length, {
-    bold: true,
-  });
-  addKVRow("Paid", paid.length, { indent: true });
-  addKVRow("Sponsored", sponsored.length, { indent: true });
-  addKVRow("Waived (speakers / VIPs)", waived.length, { indent: true });
+  addKVRow("Total Confirmed (Paid + Sponsored + Waived)", confirmed, { bold: true });
+  addKVRow("Paid", countOf("PAID"), { indent: true });
+  addKVRow("Sponsored", countOf("SPONSORED"), { indent: true });
+  addKVRow("Waived (speakers / VIPs)", countOf("WAIVED"), { indent: true });
   row++;
-  addKVRow("Verifying", verifying.length);
-  addKVRow("Partial", partial.length);
-  addKVRow("Pending", pending.length);
-  addKVRow("Refunded", refunded.length);
+  addKVRow("Verifying", countOf("VERIFYING"));
+  addKVRow("Partial", countOf("PARTIAL"));
+  addKVRow("Pending", countOf("PENDING"));
+  addKVRow("Refunded", countOf("REFUNDED"));
   row++;
 
-  addSectionHeader(
-    "4. Confirmed Seats per Access Type (Paid, Waived, or Sponsored)",
-  );
+  addSectionHeader("4. Confirmed Seats per Access Type (Paid, Waived, or Sponsored)");
   addTableHeader(["Access Type", "Category", "Confirmed"]);
   for (const at of accessTypes) {
-    addAccessRow(at.name, at.type, confirmedPerAccess[at.id]);
+    addAccessRow(at.name, at.type, accessCount.get(at.id)?.confirmed ?? 0);
   }
 
-  sheet.getColumn(1).width = 50;
-  sheet.getColumn(2).width = 20;
-  sheet.getColumn(3).width = 15;
-
-  const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
-  const timestamp = formatFileDate();
-
-  return {
-    filename: `${event!.slug}-summary-${timestamp}.xlsx`,
-    data: buffer,
-  };
+  signal.throwIfAborted();
+  sheet.commit();
+  await workbook.commit();
 }
 
 // ============================================================================
-// Access Registrants Report (one sheet per access item)
+// Access registrants report (one sheet per access item)
 // ============================================================================
 
 const PAYMENT_STATUS_FR: Record<string, string> = {
@@ -220,103 +239,81 @@ const PAYMENT_STATUS_FR: Record<string, string> = {
   REFUNDED: "Remboursé",
 };
 
-export async function generateAccessRegistrantsReport(
+const ACCESS_REGISTRANT_COLUMNS = [
+  "Nom",
+  "Prénom",
+  "Email",
+  "Téléphone",
+  "Statut de paiement",
+  "Montant",
+  "Date d'inscription",
+];
+const ACCESS_REGISTRANT_WIDTHS = [20, 20, 35, 18, 20, 12, 18];
+
+export async function prepareAccessRegistrantsReport(
   eventId: string,
-): Promise<{ filename: string; data: Buffer }> {
-  const { event, accessItems, registrations } =
-    await withExportStatementTimeout((tx) => getAccessRegistrantsReportData(eventId, tx));
-
-  const workbook = new ExcelJS.Workbook();
-  workbook.creator = "Focale OS";
-  workbook.created = new Date();
-
-  const headerFill: ExcelJS.Fill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: { argb: "FF1F4E79" },
-  };
-  const headerFont: Partial<ExcelJS.Font> = {
-    bold: true,
-    color: { argb: "FFFFFFFF" },
-    size: 11,
-  };
-  const border: Partial<ExcelJS.Borders> = {
-    top: { style: "thin" },
-    left: { style: "thin" },
-    bottom: { style: "thin" },
-    right: { style: "thin" },
-  };
-
-  const columns = [
-    "Nom",
-    "Prénom",
-    "Email",
-    "Téléphone",
-    "Statut de paiement",
-    "Montant",
-    "Date d'inscription",
-  ];
-
-  // One sheet per access item; names are made valid and unique (Excel rejects
-  // duplicates, e.g. two names equal after truncation to 31 characters).
-  const sheetNames = new Set<string>();
-  for (const access of accessItems) {
-    const sheet = workbook.addWorksheet(
-      uniqueSheetName(access.name, sheetNames, "Accès"),
-    );
-
-    const headerRow = sheet.addRow(columns);
-    headerRow.eachCell((cell) => {
-      cell.fill = headerFill;
-      cell.font = headerFont;
-      cell.border = border;
-    });
-
-    const accessRegs = registrations.filter((r) =>
-      r.accessTypeIds.includes(access.id),
-    );
-
-    for (const reg of accessRegs) {
-      const dataRow = sheet.addRow(
-        [
-          reg.lastName ?? "",
-          reg.firstName ?? "",
-          reg.email,
-          reg.phone ?? "",
-          PAYMENT_STATUS_FR[reg.paymentStatus] ?? reg.paymentStatus,
-          reg.totalAmount,
-          formatDate(reg.submittedAt),
-        ],
-      );
-      dataRow.eachCell((cell) => {
-        cell.border = border;
-      });
-    }
-
-    sheet.getColumn(1).width = 20;
-    sheet.getColumn(2).width = 20;
-    sheet.getColumn(3).width = 35;
-    sheet.getColumn(4).width = 18;
-    sheet.getColumn(5).width = 20;
-    sheet.getColumn(6).width = 12;
-    sheet.getColumn(7).width = 18;
-  }
-  if (accessItems.length === 0) {
-    // A workbook needs at least one sheet to open.
-    workbook.addWorksheet("Accès").addRow(["Aucun accès pour cet événement."]);
-  }
-
-  const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
-  const timestamp = formatFileDate();
-
+): Promise<ExportDownload> {
+  const { event, accessItems } = await withExportStatementTimeout((tx) =>
+    getReportEventAndAccess(eventId, tx),
+  );
   return {
-    filename: `${event!.slug}-acces-inscrits-${timestamp}.xlsx`,
-    data: buffer,
+    filename: `${event!.slug}-acces-inscrits-${formatFileDate()}.xlsx`,
+    contentType: XLSX_CONTENT_TYPE,
+    write: async (out, signal) => {
+      const workbook = createXlsxWriter(out, signal);
+      const cellStyles = new ColumnStyles(() => ({ border: THIN_BORDER }));
+
+      // One sheet per access item, each written out before the next starts;
+      // names are made valid and unique (Excel rejects duplicates, e.g. two
+      // names equal after truncation to 31 characters).
+      const sheetNames = new Set<string>();
+      for (const access of accessItems) {
+        signal.throwIfAborted();
+        const sheet = workbook.addWorksheet(uniqueSheetName(access.name, sheetNames, "Accès"));
+        ACCESS_REGISTRANT_WIDTHS.forEach((width, index) => {
+          sheet.getColumn(index + 1).width = width;
+        });
+        commitHeaderRow(sheet.addRow(ACCESS_REGISTRANT_COLUMNS));
+
+        const pacer = new RowPacer(out, signal, sheet);
+        for await (const page of iterateAccessRegistrantsForReport(eventId, access.id, {
+          signal,
+        })) {
+          for (const reg of page) {
+            const dataRow = sheet.addRow([
+              reg.lastName ?? "",
+              reg.firstName ?? "",
+              reg.email,
+              reg.phone ?? "",
+              PAYMENT_STATUS_FR[reg.paymentStatus] ?? reg.paymentStatus,
+              reg.totalAmount,
+              formatDate(reg.submittedAt),
+            ]);
+            dataRow.eachCell((cell, column) => {
+              cell.style = cellStyles.for(column, cell.type);
+            });
+            dataRow.commit();
+            await pacer.row();
+          }
+          await pacer.pageDone();
+        }
+        sheet.commit();
+      }
+      if (accessItems.length === 0) {
+        // A workbook needs at least one sheet to open.
+        const sheet = workbook.addWorksheet("Accès");
+        sheet.addRow(["Aucun accès pour cet événement."]).commit();
+        sheet.commit();
+      }
+
+      signal.throwIfAborted();
+      await workbook.commit();
+    },
   };
 }
 
 // ============================================================================
-// Sponsorships Report (flat sheet)
+// Sponsorships report (flat sheet)
 // ============================================================================
 
 function getLabTotalKey(labName: string): string {
@@ -340,381 +337,299 @@ function formatRegistrationLabel(
   return name ? `${name} <${registration.email}>` : registration.email;
 }
 
-export async function generateSponsorshipsReport(
+const SPONSORSHIP_COLUMNS = [
+  "Code",
+  "Laboratory",
+  "Contact",
+  "Lab Email",
+  "Lab Phone",
+  "Lab Total Amount",
+  "Beneficiary",
+  "Beneficiary Email",
+  "Beneficiary Phone",
+  "Beneficiary Address",
+  "Amount",
+  "Currency",
+  "Status",
+  "Created At",
+  "Coverage",
+  "Linked Registrations",
+  "Amount Applied",
+  "Applied At",
+];
+const SPONSORSHIP_WIDTHS = [16, 28, 24, 28, 18, 18, 28, 28, 18, 30, 14, 12, 14, 22, 40, 40, 16, 24];
+const SPONSORSHIP_MONEY_COLUMNS = [6, 11, 17];
+/** Title, generated-on, blank, then the header. */
+const SPONSORSHIP_HEADER_ROW = 4;
+
+/**
+ * Sponsorships by laboratory (French collation), newest first within a lab,
+ * each row carrying its laboratory's total. The order and the totals come
+ * from every filtered sponsorship's sort key; the rows are then read in that
+ * order, a page of ids at a time.
+ */
+export async function prepareSponsorshipsReport(
   eventId: string,
   filters?: { status?: string; search?: string },
-): Promise<{ filename: string; data: Buffer }> {
-  const { event, currency, accessItems, sponsorships } =
-    await withExportStatementTimeout((tx) => getSponsorshipsReportData(eventId, filters, tx));
+): Promise<ExportDownload> {
+  const { event, currency, accessItems, keys } = await withExportStatementTimeout((tx) =>
+    getSponsorshipsReportData(eventId, filters, tx),
+  );
 
+  // Keys come newest first; the sort is stable, so that order holds within a lab.
+  const orderedIds = [...keys]
+    .sort((a, b) => {
+      const byLab = a.labName.localeCompare(b.labName, "fr", { sensitivity: "base" });
+      if (byLab !== 0) return byLab;
+      return b.createdAt.getTime() - a.createdAt.getTime();
+    })
+    .map((key) => key.id);
+  const labTotals = new Map<string, number>();
+  for (const key of keys) {
+    const lab = getLabTotalKey(key.labName);
+    labTotals.set(lab, (labTotals.get(lab) ?? 0) + key.totalAmount);
+  }
   const accessNameById = new Map(accessItems.map((item) => [item.id, item.name]));
 
-  const workbook = new ExcelJS.Workbook();
-  workbook.creator = "Focale OS";
-  workbook.created = new Date();
-
-  const sheet = workbook.addWorksheet("Sponsorships");
-
-  const titleRow = sheet.addRow([event?.name ?? "Sponsorships"]);
-  sheet.mergeCells(`A${titleRow.number}:R${titleRow.number}`);
-  titleRow.getCell(1).font = {
-    bold: true,
-    size: 16,
-    color: { argb: "FF1F4E79" },
-  };
-  titleRow.getCell(1).alignment = { horizontal: "center" };
-
-  const generatedRow = sheet.addRow([
-    `Report generated: ${formatDate(new Date())}`,
-  ]);
-  sheet.mergeCells(`A${generatedRow.number}:R${generatedRow.number}`);
-  generatedRow.getCell(1).font = {
-    italic: true,
-    size: 10,
-    color: { argb: "FF666666" },
-  };
-  generatedRow.getCell(1).alignment = { horizontal: "center" };
-
-  sheet.addRow([]);
-
-  const headerFill: ExcelJS.Fill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: { argb: "FF1F4E79" },
-  };
-  const headerFont: Partial<ExcelJS.Font> = {
-    bold: true,
-    color: { argb: "FFFFFFFF" },
-    size: 11,
-  };
-  const border: Partial<ExcelJS.Borders> = {
-    top: { style: "thin" },
-    left: { style: "thin" },
-    bottom: { style: "thin" },
-    right: { style: "thin" },
-  };
-
-  const columns = [
-    "Code",
-    "Laboratory",
-    "Contact",
-    "Lab Email",
-    "Lab Phone",
-    "Lab Total Amount",
-    "Beneficiary",
-    "Beneficiary Email",
-    "Beneficiary Phone",
-    "Beneficiary Address",
-    "Amount",
-    "Currency",
-    "Status",
-    "Created At",
-    "Coverage",
-    "Linked Registrations",
-    "Amount Applied",
-    "Applied At",
-  ];
-
-  const headerRow = sheet.addRow(columns);
-  headerRow.eachCell((cell) => {
-    cell.fill = headerFill;
-    cell.font = headerFont;
-    cell.border = border;
-  });
-
-  const sortedSponsorships = [...sponsorships].sort((a, b) => {
-    const byLab = a.batch.labName.localeCompare(b.batch.labName, "fr", {
-      sensitivity: "base",
-    });
-    if (byLab !== 0) return byLab;
-    return b.createdAt.getTime() - a.createdAt.getTime();
-  });
-  const labTotals = sponsorships.reduce((totals, sponsorship) => {
-    const key = getLabTotalKey(sponsorship.batch.labName);
-    totals.set(key, (totals.get(key) ?? 0) + sponsorship.totalAmount);
-    return totals;
-  }, new Map<string, number>());
-
-  for (const sponsorship of sortedSponsorships) {
+  const rowValues = (sponsorship: SponsorshipReportRow): ExcelJS.CellValue[] => {
     const coveredAccessNames = sponsorship.coveredAccessIds
       .map((accessId) => accessNameById.get(accessId))
       .filter((name): name is string => Boolean(name));
-
     const coverageParts = [
       sponsorship.coversBasePrice ? "Base registration" : null,
       ...coveredAccessNames,
     ].filter((value): value is string => Boolean(value));
-
     const linkedRegistrations = sponsorship.usages
       .map((usage) => formatRegistrationLabel(usage.registration))
       .join(" | ");
-    const amountApplied = sponsorship.usages.reduce(
-      (sum, usage) => sum + usage.amountApplied,
-      0,
-    );
+    const amountApplied = sponsorship.usages.reduce((sum, usage) => sum + usage.amountApplied, 0);
     const appliedDates = sponsorship.usages
       .map((usage) => formatDateTime(usage.appliedAt))
       .join(" | ");
 
-    const dataRow = sheet.addRow(
-      [
-        sponsorship.code,
-        sponsorship.batch.labName,
-        sponsorship.batch.contactName,
-        sponsorship.batch.email,
-        sponsorship.batch.phone ?? "",
-        labTotals.get(getLabTotalKey(sponsorship.batch.labName)) ??
-          sponsorship.totalAmount,
-        sponsorship.beneficiaryName,
-        sponsorship.beneficiaryEmail,
-        sponsorship.beneficiaryPhone ?? "",
-        sponsorship.beneficiaryAddress ?? "",
-        sponsorship.totalAmount,
-        currency,
-        sponsorship.status,
-        formatDateTime(sponsorship.createdAt),
-        coverageParts.join("; "),
-        linkedRegistrations,
-        amountApplied,
-        appliedDates,
-      ],
-    );
-
-    dataRow.eachCell((cell) => {
-      cell.border = border;
-      cell.alignment = { vertical: "top", wrapText: true };
-    });
-    dataRow.getCell(6).numFmt = "#,##0";
-    dataRow.getCell(11).numFmt = "#,##0";
-    dataRow.getCell(17).numFmt = "#,##0";
-  }
-
-  sheet.autoFilter = {
-    from: { row: headerRow.number, column: 1 },
-    to: { row: headerRow.number, column: columns.length },
+    return [
+      sponsorship.code,
+      sponsorship.batch.labName,
+      sponsorship.batch.contactName,
+      sponsorship.batch.email,
+      sponsorship.batch.phone ?? "",
+      labTotals.get(getLabTotalKey(sponsorship.batch.labName)) ?? sponsorship.totalAmount,
+      sponsorship.beneficiaryName,
+      sponsorship.beneficiaryEmail,
+      sponsorship.beneficiaryPhone ?? "",
+      sponsorship.beneficiaryAddress ?? "",
+      sponsorship.totalAmount,
+      currency,
+      sponsorship.status,
+      formatDateTime(sponsorship.createdAt),
+      coverageParts.join("; "),
+      linkedRegistrations,
+      amountApplied,
+      appliedDates,
+    ];
   };
-  sheet.views = [{ state: "frozen", ySplit: headerRow.number }];
-
-  const widths = [
-    16, 28, 24, 28, 18, 18, 28, 28, 18, 30, 14, 12, 14, 22, 40, 40, 16, 24,
-  ];
-  widths.forEach((width, index) => {
-    sheet.getColumn(index + 1).width = width;
-  });
-
-  const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
-  const timestamp = formatFileDate();
 
   return {
-    filename: `${event?.slug ?? "event"}-sponsorships-${timestamp}.xlsx`,
-    data: buffer,
+    filename: `${event?.slug ?? "event"}-sponsorships-${formatFileDate()}.xlsx`,
+    contentType: XLSX_CONTENT_TYPE,
+    write: async (out, signal) => {
+      const workbook = createXlsxWriter(out, signal);
+      const sheet = workbook.addWorksheet("Sponsorships", {
+        views: [{ state: "frozen", ySplit: SPONSORSHIP_HEADER_ROW }],
+      });
+      SPONSORSHIP_WIDTHS.forEach((width, index) => {
+        sheet.getColumn(index + 1).width = width;
+      });
+
+      addMergedTitle(sheet, event?.name ?? "Sponsorships", "R", {
+        bold: true,
+        size: 16,
+        color: { argb: "FF1F4E79" },
+      });
+      addMergedTitle(sheet, `Report generated: ${formatDate(new Date())}`, "R", {
+        italic: true,
+        size: 10,
+        color: { argb: "FF666666" },
+      });
+      sheet.addRow([]);
+      commitHeaderRow(sheet.addRow(SPONSORSHIP_COLUMNS));
+      sheet.autoFilter = {
+        from: { row: SPONSORSHIP_HEADER_ROW, column: 1 },
+        to: { row: SPONSORSHIP_HEADER_ROW, column: SPONSORSHIP_COLUMNS.length },
+      };
+
+      const cellStyles = new ColumnStyles((column) => ({
+        border: THIN_BORDER,
+        alignment: { vertical: "top", wrapText: true },
+        ...(SPONSORSHIP_MONEY_COLUMNS.includes(column) ? { numFmt: "#,##0" } : {}),
+      }));
+      const pacer = new RowPacer(out, signal, sheet);
+      for await (const page of iterateSponsorshipsForReport(orderedIds, { signal })) {
+        for (const sponsorship of page) {
+          const dataRow = sheet.addRow(rowValues(sponsorship));
+          dataRow.eachCell((cell, column) => {
+            cell.style = cellStyles.for(column, cell.type);
+          });
+          dataRow.commit();
+          await pacer.row();
+        }
+        await pacer.pageDone();
+      }
+
+      signal.throwIfAborted();
+      sheet.commit();
+      await workbook.commit();
+    },
   };
 }
 
 // ============================================================================
-// Check-In Report (ZIP with one Excel per scope)
+// Check-in report (ZIP with one workbook per scope)
 // ============================================================================
 
-const CHECKIN_HEADER_FILL: ExcelJS.Fill = {
-  type: "pattern",
-  pattern: "solid",
-  fgColor: { argb: "FF1F4E79" },
-};
-const CHECKIN_HEADER_FONT: Partial<ExcelJS.Font> = {
-  bold: true,
-  color: { argb: "FFFFFFFF" },
-  size: 11,
-};
-const CHECKIN_BORDER: Partial<ExcelJS.Borders> = {
-  top: { style: "thin" },
-  left: { style: "thin" },
-  bottom: { style: "thin" },
-  right: { style: "thin" },
-};
+const CHECKIN_COLUMNS = [
+  "Ref #",
+  "Last Name",
+  "First Name",
+  "Email",
+  "Phone",
+  "Payment Status",
+  "Checked In",
+  "Check-in Date",
+  "Check-in Time",
+];
+const CHECKIN_WIDTHS = [14, 20, 20, 34, 18, 20, 12, 16, 12];
+/** Title, generated-on, blank, then the header. */
+const CHECKIN_HEADER_ROW = 4;
+const CHECKED_IN_COLUMN = 7;
 
-function buildCheckInSheet(
-  sheet: ExcelJS.Worksheet,
+/**
+ * One check-in workbook: checked-in registrations first, then the others,
+ * each in submission order (`rows` yields them in that order).
+ */
+async function writeCheckInWorkbook(
+  out: Writable,
+  signal: AbortSignal,
   title: string,
-  rows: {
-    referenceNumber: string | null;
-    firstName: string | null;
-    lastName: string | null;
-    email: string;
-    phone: string | null;
-    paymentStatus: string;
-    checkedIn: boolean;
-    checkedInAt: Date | null;
-  }[],
-): void {
-  const titleRow = sheet.addRow([title]);
-  sheet.mergeCells(`A${titleRow.number}:I${titleRow.number}`);
-  titleRow.getCell(1).font = {
-    bold: true,
-    size: 14,
-    color: { argb: "FF1F4E79" },
-  };
-  titleRow.getCell(1).alignment = { horizontal: "center" };
+  rows: AsyncIterable<CheckInReportRow[]>,
+): Promise<void> {
+  const workbook = createXlsxWriter(out, signal);
+  const sheet = workbook.addWorksheet("Check-in", {
+    views: [{ state: "frozen", ySplit: CHECKIN_HEADER_ROW }],
+  });
+  CHECKIN_WIDTHS.forEach((width, index) => {
+    sheet.getColumn(index + 1).width = width;
+  });
 
-  const generatedRow = sheet.addRow([
-    `Generated: ${formatDate(new Date())}`,
-  ]);
-  sheet.mergeCells(`A${generatedRow.number}:I${generatedRow.number}`);
-  generatedRow.getCell(1).font = {
+  addMergedTitle(sheet, title, "I", { bold: true, size: 14, color: { argb: "FF1F4E79" } });
+  addMergedTitle(sheet, `Generated: ${formatDate(new Date())}`, "I", {
     italic: true,
     size: 10,
     color: { argb: "FF666666" },
-  };
-  generatedRow.getCell(1).alignment = { horizontal: "center" };
-
+  });
   sheet.addRow([]);
+  commitHeaderRow(sheet.addRow(CHECKIN_COLUMNS));
+  sheet.autoFilter = {
+    from: { row: CHECKIN_HEADER_ROW, column: 1 },
+    to: { row: CHECKIN_HEADER_ROW, column: CHECKIN_COLUMNS.length },
+  };
 
-  const columns = [
-    "Ref #",
-    "Last Name",
-    "First Name",
-    "Email",
-    "Phone",
-    "Payment Status",
-    "Checked In",
-    "Check-in Date",
-    "Check-in Time",
-  ];
-  const headerRow = sheet.addRow(columns);
-  headerRow.eachCell((cell) => {
-    cell.fill = CHECKIN_HEADER_FILL;
-    cell.font = CHECKIN_HEADER_FONT;
-    cell.border = CHECKIN_BORDER;
-  });
-
-  // Sort: checked-in first, then by submission order
-  const sorted = [...rows].sort((a, b) => {
-    if (a.checkedIn && !b.checkedIn) return -1;
-    if (!a.checkedIn && b.checkedIn) return 1;
-    return 0;
-  });
-
-  for (const r of sorted) {
-    let dateStr = "";
-    let timeStr = "";
-    if (r.checkedInAt) {
-      dateStr = formatDate(r.checkedInAt);
-      timeStr = formatTime(r.checkedInAt);
-    }
-
-    const dataRow = sheet.addRow(
-      [
+  const cellStyles = new ColumnStyles(() => ({ border: THIN_BORDER }));
+  const checkedStyle = new ColumnStyles(() => ({
+    border: THIN_BORDER,
+    font: { bold: true, color: { argb: "FF22C55E" } },
+  }));
+  const uncheckedStyle = new ColumnStyles(() => ({
+    border: THIN_BORDER,
+    font: { bold: true, color: { argb: "FFEF4444" } },
+  }));
+  const pacer = new RowPacer(out, signal, sheet);
+  for await (const page of rows) {
+    for (const r of page) {
+      const checkedIn = r.checkedInAt !== null;
+      const dataRow = sheet.addRow([
         r.referenceNumber ?? "",
         r.lastName ?? "",
         r.firstName ?? "",
         r.email,
         r.phone ?? "",
         PAYMENT_STATUS_FR[r.paymentStatus] ?? r.paymentStatus,
-        r.checkedIn ? "✓" : "✗",
-        dateStr,
-        timeStr,
-      ],
-    );
-
-    dataRow.eachCell((cell) => {
-      cell.border = CHECKIN_BORDER;
-    });
-
-    const checkedInCell = dataRow.getCell(7);
-    checkedInCell.font = {
-      bold: true,
-      color: { argb: r.checkedIn ? "FF22C55E" : "FFEF4444" },
-    };
+        checkedIn ? "✓" : "✗",
+        r.checkedInAt ? formatDate(r.checkedInAt) : "",
+        r.checkedInAt ? formatTime(r.checkedInAt) : "",
+      ]);
+      dataRow.eachCell((cell, column) => {
+        const styles =
+          column !== CHECKED_IN_COLUMN ? cellStyles : checkedIn ? checkedStyle : uncheckedStyle;
+        cell.style = styles.for(column, cell.type);
+      });
+      dataRow.commit();
+      await pacer.row();
+    }
+    await pacer.pageDone();
   }
 
-  sheet.autoFilter = {
-    from: { row: headerRow.number, column: 1 },
-    to: { row: headerRow.number, column: columns.length },
-  };
-  sheet.views = [{ state: "frozen", ySplit: headerRow.number }];
-
-  const widths = [14, 20, 20, 34, 18, 20, 12, 16, 12];
-  widths.forEach((w, i) => (sheet.getColumn(i + 1).width = w));
+  signal.throwIfAborted();
+  sheet.commit();
+  await workbook.commit();
 }
 
-export async function generateCheckInReport(
+/** A check-in sheet's rows: the checked-in half, then the rest. */
+async function* checkInSheetRows(
   eventId: string,
-): Promise<{ filename: string; data: Buffer }> {
-  const { event, accessItems, registrations } = await withExportStatementTimeout((tx) =>
-    getCheckInReportData(eventId, tx),
-  );
+  accessId: string | undefined,
+  signal: AbortSignal,
+): AsyncGenerator<CheckInReportRow[]> {
+  yield* iterateCheckInReportRows(eventId, { accessId, checkedIn: true }, { signal });
+  yield* iterateCheckInReportRows(eventId, { accessId, checkedIn: false }, { signal });
+}
 
-  const zip = new JSZip();
-  const timestamp = formatFileDate();
+/**
+ * A ZIP of the global check-in workbook plus one per access item. Each
+ * workbook is streamed to a file in a private temp directory, then the ZIP is
+ * streamed from those files; the directory is removed however the export ends.
+ */
+export async function prepareCheckInReport(eventId: string): Promise<ExportDownload> {
+  const { event, accessItems } = await withExportStatementTimeout((tx) =>
+    getReportEventAndAccess(eventId, tx),
+  );
   const eventSlug = event?.slug ?? "event";
   const eventName = event?.name ?? "Event";
 
-  // ── 1. Global check-in sheet ──────────────────────────────────────────────
-
-  const globalWorkbook = new ExcelJS.Workbook();
-  globalWorkbook.creator = "Focale OS";
-  globalWorkbook.created = new Date();
-
-  const globalSheet = globalWorkbook.addWorksheet("Check-in");
-  buildCheckInSheet(
-    globalSheet,
-    `${eventName} — Global Check-in`,
-    registrations.map((r) => ({
-      referenceNumber: r.referenceNumber,
-      firstName: r.firstName,
-      lastName: r.lastName,
-      email: r.email,
-      phone: r.phone,
-      paymentStatus: r.paymentStatus,
-      checkedIn: r.checkedInAt !== null,
-      checkedInAt: r.checkedInAt,
-    })),
-  );
-
-  const globalBuffer = Buffer.from(await globalWorkbook.xlsx.writeBuffer());
-  const globalEntry = `${eventSlug}-global-checkin.xlsx`;
-  zip.file(globalEntry, globalBuffer);
-  // Entry names are unique: two access names with the same slug, or names
-  // with no ASCII letters (e.g. Arabic), no longer overwrite each other.
-  const entryNames = new Set([globalEntry.toLowerCase()]);
-
-  // ── 2. Per-access check-in sheets ─────────────────────────────────────────
-
-  for (const access of accessItems) {
-    const accessRegs = registrations.filter((r) =>
-      r.accessTypeIds.includes(access.id),
-    );
-
-    const wb = new ExcelJS.Workbook();
-    wb.creator = "Focale OS";
-    wb.created = new Date();
-
-    const ws = wb.addWorksheet("Check-in");
-    buildCheckInSheet(
-      ws,
-      `${access.name} — Check-in`,
-      accessRegs.map((r) => {
-        const aci = r.accessCheckIns.find((c) => c.accessId === access.id);
-        return {
-          referenceNumber: r.referenceNumber,
-          firstName: r.firstName,
-          lastName: r.lastName,
-          email: r.email,
-          phone: r.phone,
-          paymentStatus: r.paymentStatus,
-          checkedIn: aci !== undefined,
-          checkedInAt: aci?.checkedInAt ?? null,
-        };
-      }),
-    );
-
-    const buf = Buffer.from(await wb.xlsx.writeBuffer());
-    zip.file(uniqueFileName(access.name, "-checkin.xlsx", entryNames, "access"), buf);
-  }
-
-  const zipBuffer = (await zip.generateAsync({ type: "nodebuffer" })) as Buffer;
-
   return {
-    filename: `${eventSlug}-checkin-${timestamp}.zip`,
-    data: zipBuffer,
+    filename: `${eventSlug}-checkin-${formatFileDate()}.zip`,
+    contentType: "application/zip",
+    write: (out, signal) =>
+      withExportTempDir(signal, async (dir) => {
+        const entries: ZipFileEntry[] = [];
+        const addWorkbook = async (name: string, title: string, accessId?: string) => {
+          const path = join(dir, `${entries.length}.xlsx`);
+          await writeExportFile(path, signal, (file, fileSignal) =>
+            writeCheckInWorkbook(
+              file,
+              fileSignal,
+              title,
+              checkInSheetRows(eventId, accessId, fileSignal),
+            ),
+          );
+          entries.push({ name, path });
+        };
+
+        const globalEntry = `${eventSlug}-global-checkin.xlsx`;
+        await addWorkbook(globalEntry, `${eventName} — Global Check-in`);
+        // Entry names are unique: two access names with the same slug, or
+        // names with no ASCII letters (e.g. Arabic), never overwrite each other.
+        const entryNames = new Set([globalEntry.toLowerCase()]);
+        for (const access of accessItems) {
+          signal.throwIfAborted();
+          await addWorkbook(
+            uniqueFileName(access.name, "-checkin.xlsx", entryNames, "access"),
+            `${access.name} — Check-in`,
+            access.id,
+          );
+        }
+
+        await writeStoredZip(out, entries, signal);
+      }),
   };
 }

@@ -17,6 +17,7 @@ import {
   RegistrationEditPublicController,
   RegistrationsPublicController,
 } from "./registrations.public.controller";
+import { RegistrationRepricer } from "./registrations.repricer";
 import { RegistrationsService } from "./registrations.service";
 
 const FORM_ID = "11111111-1111-4111-8111-111111111111";
@@ -104,6 +105,7 @@ const service = {
   providers: [
     { provide: RegistrationsService, useValue: service },
     { provide: PaymentProofService, useValue: {} },
+    { provide: RegistrationRepricer, useValue: {} },
   ],
 })
 class PublicRegistrationsTestModule {}

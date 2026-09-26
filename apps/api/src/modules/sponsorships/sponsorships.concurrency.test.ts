@@ -19,7 +19,7 @@ import { AccessService } from "../access/access.service";
 import { PricingService } from "../pricing/pricing.service";
 import { RegistrationsService } from "../registrations/registrations.service";
 import { RegistrationSideEffects } from "../registrations/registrations.side-effects";
-import { SponsorshipsService } from "./sponsorships.service";
+import { SponsorshipsAdminService } from "./sponsorships.admin.service";
 
 // Plan 2.8: a sponsorship link or unlink and a payment confirmation on the
 // same registration both lock the registration row first, so whichever runs
@@ -33,7 +33,7 @@ const registrationsService = new RegistrationsService(
   { publicLinkAllowedOrigins: ["https://events.example.com"] } as Config,
   new RegistrationSideEffects(access),
 );
-const sponsorshipsService = new SponsorshipsService(access);
+const sponsorshipsService = new SponsorshipsAdminService(access);
 
 function breakdown(base: number) {
   return {

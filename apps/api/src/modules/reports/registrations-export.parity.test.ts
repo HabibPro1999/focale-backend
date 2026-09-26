@@ -1,6 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import ExcelJS from "exceljs";
-import { PassThrough } from "node:stream";
 import type { ExportRegistrationsBody, ExportLanguage } from "@app/contracts";
 import type {
   ExportRegistrationRow,
@@ -32,74 +30,16 @@ vi.mock("@app/db", async (importOriginal) => ({
 import * as db from "@app/db";
 import { ReportsService } from "./reports.service";
 import { prepareRegistrationsWorkbook } from "./registrations-export-builder";
-import type { ExportDownload } from "../../core/exports/stream-io";
+import { collect, readBack } from "../../core/exports/__testing__/export-output";
 import { legacyBuildRegistrationsWorkbook } from "./__testing__/legacy-registrations-workbook";
 import { legacyCsv, legacyJson, legacyXlsx } from "./__testing__/legacy-registrations-export";
 
 const m = db as unknown as Record<string, ReturnType<typeof vi.fn>>;
 
-async function collect(download: ExportDownload): Promise<Buffer> {
-  const out = new PassThrough();
-  const chunks: Buffer[] = [];
-  out.on("data", (chunk: Buffer) => chunks.push(chunk));
-  const ended = new Promise((resolve) => out.on("end", resolve));
-  await download.write(out, new AbortController().signal);
-  await ended;
-  return Buffer.concat(chunks);
-}
-
 function pagesOf<T>(rows: T[]) {
   return async function* () {
     for (let i = 0; i < rows.length; i += PAGE) yield rows.slice(i, i + PAGE);
   };
-}
-
-/**
- * Everything a reader sees: sheets, views, filters, merges, columns, rows,
- * cells and styles. One normalization: the in-memory writer stores "" as a
- * shared string, the streaming writer (inline strings, `t="str"`) as an empty
- * value that ExcelJS reads back as null; both show as an empty text cell, so
- * an empty string and null compare equal.
- */
-async function readBack(buffer: Buffer) {
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(
-    buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as Parameters<
-      typeof workbook.xlsx.load
-    >[0],
-  );
-  return workbook.worksheets.map((sheet) => {
-    const rows: unknown[] = [];
-    sheet.eachRow({ includeEmpty: true }, (row, number) => {
-      const cells: unknown[] = [];
-      row.eachCell({ includeEmpty: true }, (cell) => {
-        const empty = cell.value === "" || cell.value === null;
-        cells.push({
-          address: cell.address,
-          type: empty ? ExcelJS.ValueType.Null : cell.type,
-          value: empty ? null : cell.value,
-          numFmt: cell.numFmt,
-          font: cell.font,
-          fill: cell.fill,
-          border: cell.border,
-          alignment: cell.alignment,
-        });
-      });
-      rows.push({ number, height: row.height, cells });
-    });
-    return {
-      name: sheet.name,
-      views: sheet.views,
-      autoFilter: sheet.autoFilter,
-      merges: [...(sheet.model.merges ?? [])].sort(),
-      columns: (sheet.columns ?? []).map((column) => ({
-        width: column.width,
-        numFmt: column.numFmt,
-      })),
-      rowCount: sheet.rowCount,
-      rows,
-    };
-  });
 }
 
 // ----------------------------------------------------------------------------

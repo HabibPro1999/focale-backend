@@ -1132,10 +1132,12 @@ export interface RegistrantSearchResult {
   accessTypeIds: string[];
   coveredAccessIds: string[];
   isBasePriceCovered: boolean;
-  phone: string | null;
-  formData: unknown;
 }
 
+/**
+ * Registrants of an event for the anonymous sponsor form (its only caller):
+ * reads no contact details (phone) or form answers.
+ */
 export async function searchRegistrantsForSponsorship(
   eventId: string,
   query: { query: string; unpaidOnly: boolean; limit: number },
@@ -1168,8 +1170,6 @@ export async function searchRegistrantsForSponsorship(
       accessAmount: registrations.accessAmount,
       sponsorshipAmount: registrations.sponsorshipAmount,
       accessTypeIds: registrations.accessTypeIds,
-      phone: registrations.phone,
-      formData: registrations.formData,
     })
     .from(registrations)
     .where(and(...clauses))
@@ -1222,8 +1222,6 @@ export async function searchRegistrantsForSponsorship(
       accessTypeIds: r.accessTypeIds ?? [],
       coveredAccessIds: [...new Set(used.flatMap((s) => s.coveredAccessIds))],
       isBasePriceCovered: used.some((s) => s.coversBasePrice),
-      phone: r.phone,
-      formData: r.formData,
     };
   });
 }

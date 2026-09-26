@@ -468,7 +468,8 @@ drains until the retention job deletes them after 24 h.
 
 ### File exports (streamed, bounded)
 
-Report downloads go through one path (`apps/api/src/core/exports/`):
+Every file export streams (`apps/api/src/core/exports/`); the report and
+abstracts downloads also share one admission path:
 
 - **Admission**: `EXPORT_MAX_CONCURRENCY` (default 2) exports run at once per
   API process and up to `EXPORT_MAX_QUEUED` (default 4) more wait, first come
@@ -481,9 +482,10 @@ Report downloads go through one path (`apps/api/src/core/exports/`):
   `DB_EXPORT_STATEMENT_TIMEOUT_MS`; XLSX uses ExcelJS's streaming writer with
   inline strings, one row committed at a time. Generation waits for the zip and
   the socket to take each page, so a slow client holds it back instead of
-  growing memory. A 10,000 x 60 workbook peaks at about 80 MB above the idle
-  process (the in-memory builder took over 1 GB and blocked the event loop for
-  seconds); `registrations-export.perf.test.ts` (opt-in) measures it.
+  growing memory. A 10,000 x 60 workbook costs the export about 82 MB above
+  the idle process, flat with the row count (the in-memory builder took over
+  1 GB and blocked the event loop for seconds);
+  `registrations-export.perf.test.ts` (opt-in) measures it.
 - **Client gone**: a disconnect aborts the export at the next page and frees the
   slot. A failure after the headers destroys the response, so the client sees
   a broken download, never a silently truncated file.
@@ -491,10 +493,40 @@ Report downloads go through one path (`apps/api/src/core/exports/`):
   already running may finish until 1 s before the shutdown force-closes sockets
   (`SHUTDOWN_GRACE_MS` minus 6 s), then it is aborted.
 
-3.7a streams the registration exports (GET CSV/JSON/XLSX and the POST modular
-workbook); the summary, access-registrants, sponsorships and check-in ZIP
-downloads already go through the limiter but are still built in memory until
-3.7b. Frontend changes: `FRONTEND_FOLLOWUP_3_7.md`.
+What each export reads before its first byte, then page by page:
+
+| Export | Up front | Rows |
+| --- | --- | --- |
+| Registrations (GET, POST modular) | form_data keys (DISTINCT) | keyset, newest first |
+| Event summary | counts only, aggregated in SQL | none |
+| Access registrants | event + access items | per access item, keyset newest first |
+| Sponsorships | every filtered row's sort key (lab, amount, date) | by id, 500 per chunk, in lab order (French collation, sorted in JS) |
+| Check-in ZIP | event + access items | per sheet, keyset in submission order (checked-in half, then the rest) |
+| Abstracts | filtered ids in list order + reviewer-column count | by id, 500 per chunk |
+
+- **Check-in ZIP**: each workbook (global, then one per access item) is
+  streamed to a file in a private `os.tmpdir()/focale-export-*` directory,
+  then a stored (not re-deflated) ZIP of them is streamed into the response,
+  with each entry's CRC-32 and size read from its file first. The directory is
+  removed however the export ends (success, failure, client gone, shutdown);
+  it needs a writable temp dir with room for one event's workbooks (roughly
+  0.2 MB per 10,000 registrations per workbook). ZIP64 is not written: an
+  export over 4 GB fails instead of producing a corrupt file.
+- **Abstracts** go through `ExportDownloads` like the reports (503
+  `EXPORT_BUSY` applies). A review assigned after the export started has no
+  reviewer column (the column count is read up front).
+- **Networking organizer XLSX** (`networking.exports.service.ts`) is written by
+  the streaming writer into the response body as it is sent, and stops when
+  the client leaves; its rows are still assembled in memory by the networking
+  module, and it is not counted by the export limiter.
+- **ExcelJS internals**: exceljs is pinned (4.4.0). The exports use two of its
+  internals, the workbook's archiver (abandoned on abort) and each sheet's zip
+  input (to pace rows); `xlsx-stream.test.ts` fails if an upgrade moves either.
+
+Output parity: each streamed file reads back (ExcelJS, cell by cell: values,
+types, styles, merges, filters, views, widths) like the in-memory builder it
+replaced, on the same data (`*.parity.test.ts`, verbatim old builders in
+`__testing__/`). Frontend changes: `FRONTEND_FOLLOWUP_3_7.md`.
 
 ## Database migrations
 

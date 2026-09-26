@@ -6,12 +6,11 @@ import {
   SponsorshipBatchCreatedResponseSchema,
 } from "@app/contracts";
 import { getEventWithPricing, getEventWithPricingBySlug } from "@app/db";
-import { maskEmail } from "@app/shared";
 import { assertClientModuleEnabled } from "../clients/module-gates";
 import { assertEventAcceptsPublicActions } from "../events";
 import { AppException } from "../../core/app-exception";
 import { ResponseContract } from "../../core/response-contract";
-import { SponsorshipsService } from "./sponsorships.service";
+import { SponsorshipsPublicService } from "./sponsorships.public.service";
 import {
   CreateSponsorshipBatchDto,
   RegistrantSearchQueryDto,
@@ -26,7 +25,7 @@ const SEARCH_THROTTLE = { default: { limit: 10, ttl: 60_000 } };
 
 @Controller("api/public/events")
 export class SponsorshipsPublicController {
-  constructor(private readonly service: SponsorshipsService) {}
+  constructor(private readonly service: SponsorshipsPublicService) {}
 
   // POST /api/public/events/:eventId/sponsorships
   @Post(":eventId/sponsorships")
@@ -102,17 +101,13 @@ export class SponsorshipsPublicController {
     const effectiveUnpaidOnly =
       scope === "UNPAID_ONLY" ? true : unpaidOnly === "true";
 
-    const results = await this.service.searchRegistrantsForSponsorship(event.id, {
+    // Anonymous caller: the service masks the email and returns no contact
+    // details or form answers.
+    return this.service.searchRegistrants(event.id, {
       query,
       unpaidOnly: effectiveUnpaidOnly,
       limit: 10,
     });
-
-    // Anonymous caller: strip phone + formData and mask the email.
-    return results.map(({ phone: _phone, formData: _formData, ...safe }) => ({
-      ...safe,
-      email: maskEmail(safe.email),
-    }));
   }
 
   // POST /api/public/events/slug/:slug/sponsorships

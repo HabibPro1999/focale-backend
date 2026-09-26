@@ -25,6 +25,7 @@ import { AppException } from "../../core/app-exception";
 import { ResponseContract } from "../../core/response-contract";
 import { RegistrationsService } from "./registrations.service";
 import { PaymentProofService } from "./registrations.payment-proof.service";
+import { RegistrationRepricer } from "./registrations.repricer";
 import {
   CreateRegistrationBodyDto,
   EditTokenQueryDto,
@@ -76,6 +77,7 @@ export class RegistrationEditPublicController {
   constructor(
     private readonly service: RegistrationsService,
     private readonly proofs: PaymentProofService,
+    private readonly repricer: RegistrationRepricer,
   ) {}
 
   /** Header preferred over query. 401 if absent/malformed; 403 if it does not match. */
@@ -119,7 +121,7 @@ export class RegistrationEditPublicController {
     @Headers("x-edit-token") headerToken?: string,
   ) {
     await this.requireToken(registrationId, headerToken, token);
-    return this.service.editRegistrationPublic(registrationId, body);
+    return this.repricer.editRegistrationPublic(registrationId, body);
   }
 
   // PATCH /api/public/registrations/:registrationId/payment-method → { success: true }

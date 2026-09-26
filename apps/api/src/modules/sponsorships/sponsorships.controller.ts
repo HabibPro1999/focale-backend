@@ -31,7 +31,7 @@ import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
 import { assertEventWritable } from "../events";
 import { AppException, forbidden } from "../../core/app-exception";
 import { ResponseContract } from "../../core/response-contract";
-import { SponsorshipsService } from "./sponsorships.service";
+import { SponsorshipsAdminService } from "./sponsorships.admin.service";
 import {
   ListSponsorshipsQueryDto,
   LinkSponsorshipByCodeDto,
@@ -50,7 +50,7 @@ import {
 @Controller("api/events")
 @Auth()
 export class SponsorshipsListController {
-  constructor(private readonly service: SponsorshipsService) {}
+  constructor(private readonly service: SponsorshipsAdminService) {}
 
   @Get(":eventId/sponsorships")
   @ResponseContract(SponsorshipListResponseSchema)
@@ -75,7 +75,7 @@ export class SponsorshipsListController {
 @Controller("api/sponsorships")
 @Auth()
 export class SponsorshipDetailController {
-  constructor(private readonly service: SponsorshipsService) {}
+  constructor(private readonly service: SponsorshipsAdminService) {}
 
   // GET detail — no module gate.
   @Get(":id")
@@ -133,7 +133,7 @@ export class SponsorshipDetailController {
 @Controller("api/registrations")
 @Auth()
 export class RegistrationSponsorshipsController {
-  constructor(private readonly service: SponsorshipsService) {}
+  constructor(private readonly service: SponsorshipsAdminService) {}
 
   @Get(":registrationId/available-sponsorships")
   @ResponseContract(AvailableSponsorshipsResponseSchema)

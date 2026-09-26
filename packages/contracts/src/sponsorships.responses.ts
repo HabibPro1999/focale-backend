@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { RegistrantSearchResultSchema } from "./registrations";
 import { SponsorshipStatusSchema } from "./sponsorships";
 
 // ============================================================================
@@ -33,24 +34,11 @@ export const SponsorshipBatchCreatedResponseSchema = z.object({
 });
 
 /**
- * GET /api/public/events/slug/:slug/registrants/search (anonymous): no phone,
- * no form answers, masked email (0.5).
+ * GET /api/public/events/slug/:slug/registrants/search (anonymous): masked
+ * email, no contact details or form answers (0.5, 5.7).
  */
 export const PublicRegistrantSearchResponseSchema = z.array(
-  z.object({
-    id: z.string(),
-    email: z.string(),
-    firstName: z.string().nullable(),
-    lastName: z.string().nullable(),
-    paymentStatus: z.string(),
-    totalAmount: z.number(),
-    baseAmount: z.number(),
-    accessAmount: z.number(),
-    sponsorshipAmount: z.number(),
-    accessTypeIds: z.array(z.string()),
-    coveredAccessIds: z.array(z.string()),
-    isBasePriceCovered: z.boolean(),
-  }),
+  RegistrantSearchResultSchema,
 );
 
 // ============================================================================

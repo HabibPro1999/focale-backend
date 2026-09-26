@@ -6,6 +6,7 @@ import type { z } from "zod";
 const db = vi.hoisted(() => ({
   getRegistrationFormSchemaForEvent: vi.fn(),
   getEventWithPricingBySlug: vi.fn(),
+  searchRegistrantsForSponsorship: vi.fn(),
 }));
 vi.mock("@app/db", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -91,7 +92,8 @@ import {
   SponsorshipsListController,
 } from "./sponsorships/sponsorships.controller";
 import { SponsorshipsPublicController } from "./sponsorships/sponsorships.public.controller";
-import type { SponsorshipsService } from "./sponsorships/sponsorships.service";
+import { SponsorshipsPublicService } from "./sponsorships/sponsorships.public.service";
+import type { AccessService } from "./access/access.service";
 
 // ============================================================================
 // Fixtures: full rows, typed against the Drizzle tables, so every column a
@@ -357,8 +359,6 @@ const registrantSearchResult: RegistrantSearchResult = {
   accessTypeIds: ["a1"],
   coveredAccessIds: [],
   isBasePriceCovered: false,
-  phone: "+216 20 000 000",
-  formData: { specialty: "cardio" },
 };
 
 const paymentConfig: PublicPaymentConfigResponse = {
@@ -449,13 +449,15 @@ async function todaysPayloads(): Promise<Array<[string, z.ZodType, unknown]>> {
     getSponsorFormByEventSlug: vi.fn(async () => ({ ...publicForm, type: "SPONSOR" })),
   } as unknown as FormsService).getSponsorBySlug({ slug: "summit" });
 
+  db.searchRegistrantsForSponsorship.mockResolvedValue([registrantSearchResult]);
+  const publicService = new SponsorshipsPublicService({} as AccessService);
   const publicSearch = await new SponsorshipsPublicController({
     getActiveSponsorForm: vi.fn(async () => ({
       id: "f2",
       schema: { sponsorshipSettings: { sponsorshipMode: "LINKED_ACCOUNT" } },
     })),
-    searchRegistrantsForSponsorship: vi.fn(async () => [registrantSearchResult]),
-  } as unknown as SponsorshipsService).searchRegistrants({ slug: "summit" }, { query: "ada" });
+    searchRegistrants: publicService.searchRegistrants.bind(publicService),
+  } as unknown as SponsorshipsPublicService).searchRegistrants({ slug: "summit" }, { query: "ada" });
 
   const grouped = groupAccess(
     [

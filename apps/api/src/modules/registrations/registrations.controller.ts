@@ -40,6 +40,7 @@ import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
 import { assertClientModuleEnabled } from "../clients/module-gates";
 import { AppException, forbidden } from "../../core/app-exception";
 import { RegistrationsService } from "./registrations.service";
+import { RegistrationRepricer } from "./registrations.repricer";
 import {
   AdminCreateRegistrationDto,
   AdminEditRegistrationDto,
@@ -58,7 +59,10 @@ import {
 @Controller("api/events")
 @Auth()
 export class RegistrationsController {
-  constructor(private readonly service: RegistrationsService) {}
+  constructor(
+    private readonly service: RegistrationsService,
+    private readonly repricer: RegistrationRepricer,
+  ) {}
 
   private async loadEvent(eventId: string, user: AuthUser) {
     const event = await getEventForRegistrationAdmin(eventId);
@@ -123,7 +127,7 @@ export class RegistrationsController {
     if (body.accessSelections !== undefined) {
       await assertClientModuleEnabled(event.clientId, "pricing");
     }
-    return this.service.adminEditRegistration(eventId, id, body, user.id);
+    return this.repricer.adminEditRegistration(eventId, id, body, user.id);
   }
 
   // GET /api/events/:eventId/registrations — list

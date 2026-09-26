@@ -9,7 +9,10 @@ Contract changes for the admin app's report downloads:
 - `GET /api/events/:eventId/reports/sponsorships`
 - `GET /api/events/:eventId/reports/checkin-export`
 
-(3.7b adds the abstracts and networking exports to the same rules.)
+- `GET /api/events/:eventId/abstracts/export` (3.7b)
+
+The networking organizer export is streamed too, with fewer changes (see the
+3.7b section below).
 
 ## New 503 `EXPORT_BUSY` (with `Retry-After`)
 
@@ -60,3 +63,38 @@ still answer with the usual JSON error envelope and status.
   (no shared-string table); columns, styles, filters, frozen rows and merged
   headers are unchanged.
 - CSV and JSON bodies are byte-for-byte what they were.
+
+## 3.7b: the remaining exports
+
+The summary, access-registrants, sponsorships and check-in ZIP downloads (which
+3.7a had already put behind `EXPORT_BUSY`) are now generated while they are
+sent, and the abstracts export joins them:
+
+- `GET /api/events/:eventId/abstracts/export` can now answer 503
+  `EXPORT_BUSY` (`Retry-After: 10`), or 503 `SRV_5003` during a deploy, like
+  the report downloads: handle it the same way (retry after `Retry-After`).
+  It is also chunked without `Content-Length`, and a failure after the first
+  bytes breaks the download (do not save a partial file). Headers are
+  unchanged (`Content-Type` XLSX, `Content-Disposition` with the same
+  sanitized filename).
+- The check-in ZIP starts sending only once its workbooks are written (a few
+  seconds for a large event), then streams; cancelling the request stops it.
+  Entry names, their order and each workbook's content are unchanged.
+- Networking organizer export
+  (`GET /api/events/:eventId/networking/export?kind=…&format=xlsx`): the XLSX
+  is now chunked without `Content-Length`; if generation fails after it has
+  started, the download breaks instead of returning an error body. It is not
+  subject to `EXPORT_BUSY`. CSV and PDF are unchanged.
+
+File content, compared with the old builders on the same data (cell by cell):
+
+- Values, types, styles, merged titles, filters, frozen rows and column widths
+  are unchanged in every workbook. As in 3.7a, cells that held an empty
+  string are empty inline strings (they still show as empty) and workbooks
+  are somewhat larger (no shared-string table).
+- Rows with the same sort key now always come in the same order (by id):
+  registrants submitted at the same instant (access registrants, check-in
+  sheets), sponsorships of one lab created at the same instant, and abstracts
+  with the same code and creation time.
+- Abstracts: a reviewer assigned while the export is running may not get a
+  reviewer column in that file (the column count is read when it starts).

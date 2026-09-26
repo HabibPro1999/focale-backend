@@ -11,7 +11,8 @@ import {
   deleteUnusedCommitteeInvites,
   getDb,
   committeeInviteTokens,
-  findAbstractsForExport,
+  getAbstractsExportPlan,
+  iterateAbstractsForExport,
   listAdminAbstracts,
   updateForm,
   findFormById,
@@ -27,6 +28,16 @@ import {
   seedAbstractConfig,
   seedAbstractTheme,
 } from "../helpers/factories";
+
+type ExportFilters = Parameters<typeof getAbstractsExportPlan>[1];
+
+/** Every exported row, through the paged export reads. */
+async function findAbstractsForExport(eventId: string, filters: ExportFilters) {
+  const { ids } = await getAbstractsExportPlan(eventId, filters);
+  const rows = [];
+  for await (const page of iterateAbstractsForExport(ids)) rows.push(...page);
+  return rows;
+}
 
 describe.runIf(dbTestsEnabled())(
   "main catchup: persistence, filters and invite concurrency",

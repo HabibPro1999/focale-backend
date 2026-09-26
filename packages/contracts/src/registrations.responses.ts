@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   PaymentMethodSchema,
   PaymentStatusSchema,
+  RegistrantSearchResultSchema,
   RegistrationRoleSchema,
 } from "./registrations";
 
@@ -253,24 +254,9 @@ export const RegistrationTableColumnsResponseSchema = z.object({
   ),
 });
 
-/** GET /api/events/:eventId/registrants/search (admin: full contact data). */
+/** GET /api/events/:eventId/registrants/search (admin: unmasked email). */
 export const AdminRegistrantSearchResponseSchema = z.array(
-  z.object({
-    id: z.string(),
-    email: z.string(),
-    firstName: z.string().nullable(),
-    lastName: z.string().nullable(),
-    paymentStatus: z.string(),
-    totalAmount: z.number(),
-    baseAmount: z.number(),
-    accessAmount: z.number(),
-    sponsorshipAmount: z.number(),
-    accessTypeIds: z.array(z.string()),
-    coveredAccessIds: z.array(z.string()),
-    isBasePriceCovered: z.boolean(),
-    phone: z.string().nullable(),
-    formData: z.unknown(),
-  }),
+  RegistrantSearchResultSchema,
 );
 
 /**

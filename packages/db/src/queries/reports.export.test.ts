@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { PgDialect } from "drizzle-orm/pg-core";
 import type { SQL } from "drizzle-orm";
 import { buildRegistrationWhere } from "./registrations";
-import { registrationsAfter } from "./reports";
+import { registrationsAfter, registrationsAfterAscending } from "./reports";
 
 const dialect = new PgDialect({ casing: "snake_case" });
 const render = (sql: SQL) => dialect.sqlToQuery(sql);
@@ -17,6 +17,19 @@ describe("registration export keyset (3.7)", () => {
       '("registrations"."submitted_at" <= $1 and ("registrations"."submitted_at" < $2 or "registrations"."id" < $3))',
     );
     // Bound through the column encoder: the UTC instant, whatever the process time zone.
+    expect(params).toEqual(["2026-09-01T08:00:00.123Z", "2026-09-01T08:00:00.123Z", "reg-9"]);
+  });
+});
+
+describe("check-in keyset (3.7b)", () => {
+  it("continues after (submitted_at, id) in ASC order, the mirror of the export keyset", () => {
+    const { sql, params } = render(
+      registrationsAfterAscending({ submittedAt: new Date("2026-09-01T08:00:00.123Z"), id: "reg-9" }),
+    );
+
+    expect(sql).toBe(
+      '("registrations"."submitted_at" >= $1 and ("registrations"."submitted_at" > $2 or "registrations"."id" > $3))',
+    );
     expect(params).toEqual(["2026-09-01T08:00:00.123Z", "2026-09-01T08:00:00.123Z", "reg-9"]);
   });
 });

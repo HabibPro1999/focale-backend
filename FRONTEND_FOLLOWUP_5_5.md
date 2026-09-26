@@ -25,6 +25,11 @@ fields (`maxCapacity`, `registeredCount`, `paidCount`), `companionPrice`,
   `SponsorshipDetailResponse`. Dates are ISO 8601 strings on the wire.
 - `TimeSlot.items` (grouped access) is now typed as `GroupedAccessItem[]`; it
   was `unknown[]`. The data did not change.
+- The generated `RegistrantSearchResult` type now matches what both
+  registrant-search routes return: no `phone` or `formData` (5.7 removed them
+  from the admin route as well; the anonymous sponsor-form route never returned
+  them), `accessAmount` added, `paymentStatus` a string. The admin app has no
+  caller of the admin search route; the form app's sponsor search is unchanged.
 - Fields holding stored JSON stay `unknown` in the types: `formData`,
   `priceBreakdown`, form `schema`, `successTranslations`, pricing `rules`,
   access `conditions`, audit-log `changes`.
