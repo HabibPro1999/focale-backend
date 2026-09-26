@@ -311,6 +311,36 @@ both processes, so set it on **both** the api and the worker service; a
 process without it keeps writing `realtime.emit` rows that nothing drains
 until the retention job deletes them after 24 h.
 
+### File exports (streamed, bounded)
+
+Report downloads go through one path (`apps/api/src/core/exports/`):
+
+- **Admission**: `EXPORT_MAX_CONCURRENCY` (default 2) exports run at once per
+  API process and up to `EXPORT_MAX_QUEUED` (default 4) more wait, first come
+  first served, for at most 30 s. Anything beyond gets 503 `EXPORT_BUSY` with
+  `Retry-After: 10`. The check runs after authorization, so only allowed users
+  take a place.
+- **Streaming**: the file is written straight into the response (chunked, no
+  `Content-Length`). Registration exports read the rows by keyset, 500 per page
+  (`submitted_at DESC, id DESC`), each page in its own short transaction under
+  `DB_EXPORT_STATEMENT_TIMEOUT_MS`; XLSX uses ExcelJS's streaming writer with
+  inline strings, one row committed at a time. Generation waits for the zip and
+  the socket to take each page, so a slow client holds it back instead of
+  growing memory. A 10,000 x 60 workbook peaks at about 80 MB above the idle
+  process (the in-memory builder took over 1 GB and blocked the event loop for
+  seconds); `registrations-export.perf.test.ts` (opt-in) measures it.
+- **Client gone**: a disconnect aborts the export at the next page and frees the
+  slot. A failure after the headers destroys the response, so the client sees
+  a broken download, never a silently truncated file.
+- **Shutdown**: while draining, new exports get 503 `SRV_5003`. An export
+  already running may finish until 1 s before the shutdown force-closes sockets
+  (`SHUTDOWN_GRACE_MS` minus 6 s), then it is aborted.
+
+3.7a streams the registration exports (GET CSV/JSON/XLSX and the POST modular
+workbook); the summary, access-registrants, sponsorships and check-in ZIP
+downloads already go through the limiter but are still built in memory until
+3.7b. Frontend changes: `FRONTEND_FOLLOWUP_3_7.md`.
+
 ## Database migrations
 
 Every SQL migration under `packages/db/migrations/` runs through the unified
