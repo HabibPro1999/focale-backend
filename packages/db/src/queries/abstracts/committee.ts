@@ -17,6 +17,7 @@ import { FINAL_STATUSES } from "@app/contracts";
 import { getDb } from "../../client";
 import { withTxn, withLockingTxn } from "../../txn";
 import { lockAbstractsForUpdate } from "../../locks";
+import { insertAuditLog } from "../../outbox";
 import {
   abstractCommitteeMemberships,
   abstractConfig,
@@ -27,6 +28,7 @@ import {
   abstracts,
 } from "../../schema/abstracts";
 import { events } from "../../schema/events-access";
+import { auditLogs } from "../../schema/outbox-audit";
 import { users } from "../../schema/users-clients";
 import { applyReviewAggregate } from "./review-aggregate";
 import {
@@ -305,10 +307,14 @@ export async function upsertCommitteeMembership(
     });
 }
 
-/** Deactivate a membership + all its reviewer-theme prefs in one transaction. */
+/**
+ * Deactivate a membership + all its reviewer-theme prefs, and write `audit`,
+ * in one transaction.
+ */
 export async function deactivateCommitteeMembershipTxn(
   eventId: string,
   userId: string,
+  audit: typeof auditLogs.$inferInsert,
 ): Promise<void> {
   await withLockingTxn(async (tx) => {
     await tx
@@ -329,6 +335,10 @@ export async function deactivateCommitteeMembershipTxn(
           eq(abstractReviewerThemes.userId, userId),
         ),
       );
+    // Written with the deactivation it records: both commit or neither does.
+    // It locks nothing, so writing it before the review recompute below
+    // keeps the lock order unchanged.
+    await insertAuditLog(audit, tx);
 
     // M15: also deactivate this reviewer's active reviews on the event's
     // abstracts, then recompute averageScore/reviewCount/status for each
@@ -412,11 +422,15 @@ export async function getActiveThemeIdsForEvent(
   return rows.map((r) => r.id);
 }
 
-/** Replace a reviewer's active theme set: deactivate all, then upsert-active each. */
+/**
+ * Replace a reviewer's active theme set (deactivate all, then upsert-active
+ * each) and write `audit`, in one transaction.
+ */
 export async function setReviewerThemesTxn(
   eventId: string,
   userId: string,
   themeIds: string[],
+  audit: typeof auditLogs.$inferInsert,
 ): Promise<void> {
   await withTxn(async (tx) => {
     await tx
@@ -441,6 +455,7 @@ export async function setReviewerThemesTxn(
           set: { active: true },
         });
     }
+    await insertAuditLog(audit, tx);
   });
 }
 

@@ -323,14 +323,13 @@ export class AbstractsCommitteeService {
     performedBy: string,
   ): Promise<void> {
     await this.assertActiveMembership(eventId, userId);
-    await deactivateCommitteeMembershipTxn(eventId, userId);
-    await insertAuditLog({
+    await deactivateCommitteeMembershipTxn(eventId, userId, {
       entityType: "AbstractCommitteeMembership",
       entityId: `${eventId}:${userId}`,
       action: "deactivate",
       changes: { active: { old: true, new: false } },
       performedBy,
-    }, getDb());
+    });
   }
 
   // ==========================================================================
@@ -361,14 +360,13 @@ export class AbstractsCommitteeService {
       );
     }
 
-    await setReviewerThemesTxn(eventId, userId, uniqueThemeIds);
-    await insertAuditLog({
+    await setReviewerThemesTxn(eventId, userId, uniqueThemeIds, {
       entityType: "AbstractReviewerTheme",
       entityId: `${eventId}:${userId}`,
       action: "replace",
       changes: { themeIds: { old: null, new: uniqueThemeIds } },
       performedBy,
-    }, getDb());
+    });
 
     const member = (await listCommitteeMembers(eventId)).find(
       (m) => m.userId === userId,
@@ -460,6 +458,13 @@ export class AbstractsCommitteeService {
       eventId,
       abstractId,
       reviewerIds,
+      audit: {
+        entityType: "Abstract",
+        entityId: abstractId,
+        action: "assign_reviewers",
+        changes: { reviewerIds: { old: null, new: reviewerIds } },
+        performedBy,
+      },
     });
     if (!updated.ok) {
       if (updated.reason === "not_found") {
@@ -472,14 +477,6 @@ export class AbstractsCommitteeService {
       }
       throw finalizedReviewersError();
     }
-
-    await insertAuditLog({
-      entityType: "Abstract",
-      entityId: abstractId,
-      action: "assign_reviewers",
-      changes: { reviewerIds: { old: null, new: reviewerIds } },
-      performedBy,
-    }, getDb());
 
     return { abstractId: updated.id, status: updated.status, reviewerIds };
   }

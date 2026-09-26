@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { AbstractConfigRow, AbstractThemeRow } from "@app/db";
 
-const { rootDb } = vi.hoisted(() => ({ rootDb: { executor: "root" } }));
+const { txDb } = vi.hoisted(() => ({ txDb: { executor: "tx" } }));
 vi.mock("@app/db", () => ({
-  getDb: () => rootDb,
+  withTxn: vi.fn(async (fn: (tx: unknown) => unknown) => fn(txDb)),
   getOrCreateAbstractConfig: vi.fn(),
   updateAbstractConfig: vi.fn(),
   countAbstractsByEvent: vi.fn(),
@@ -17,6 +17,7 @@ vi.mock("@app/db", () => ({
 }));
 
 import {
+  withTxn,
   getOrCreateAbstractConfig,
   updateAbstractConfig,
   countAbstractsByEvent,
@@ -133,7 +134,7 @@ describe("updateConfig", () => {
     expect(result.editingEnabled).toBe(true);
     expect(updateAbstractConfig).toHaveBeenCalledWith(configId, {
       editingEnabled: true,
-    });
+    }, txDb);
     expect(insertAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({
         entityType: "AbstractConfig",
@@ -141,7 +142,7 @@ describe("updateConfig", () => {
         action: "UPDATE",
         performedBy: userId,
       }),
-      rootDb,
+      txDb,
     );
   });
 
@@ -167,16 +168,41 @@ describe("updateConfig", () => {
         action: "mode_force_changed",
         changes: { submissionMode: { old: "FREE_TEXT", new: "STRUCTURED" } },
       }),
-      rootDb,
+      txDb,
     );
     expect(insertAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({ action: "UPDATE" }),
-      rootDb,
+      txDb,
     );
     // `force` is stripped from the persisted data.
     expect(updateAbstractConfig).toHaveBeenCalledWith(configId, {
       submissionMode: "STRUCTURED",
-    });
+    }, txDb);
+    // Forced-mode record first, then the update, then its audit: one txn.
+    expect(withTxn).toHaveBeenCalledTimes(1);
+    expect(mock(insertAuditLog).mock.calls.map(([audit]) => audit.action)).toEqual([
+      "mode_force_changed",
+      "UPDATE",
+    ]);
+  });
+
+  it("writes no audit row when a forced mode change fails the deadline check", async () => {
+    mock(countAbstractsByEvent).mockResolvedValue(3);
+    await expect(
+      service.updateConfig(
+        eventId,
+        {
+          submissionMode: "STRUCTURED",
+          force: true,
+          submissionStartAt: "2026-06-01T00:00:00.000Z",
+          submissionDeadline: "2026-05-01T00:00:00.000Z",
+        },
+        userId,
+      ),
+    ).rejects.toThrow(/deadline windows are inconsistent/);
+    expect(withTxn).not.toHaveBeenCalled();
+    expect(insertAuditLog).not.toHaveBeenCalled();
+    expect(updateAbstractConfig).not.toHaveBeenCalled();
   });
 
   it("accepts past deadlines and converts them to Date", async () => {
@@ -188,7 +214,7 @@ describe("updateConfig", () => {
     expect(result.submissionDeadline).toEqual(new Date(past));
     expect(updateAbstractConfig).toHaveBeenCalledWith(configId, {
       submissionDeadline: new Date(past),
-    });
+    }, txDb);
   });
 
   // M5: cross-field window validation on the EFFECTIVE (merged) config.
@@ -256,7 +282,7 @@ describe("updateConfig", () => {
       ).resolves.toBeTruthy();
       expect(updateAbstractConfig).toHaveBeenCalledWith(configId, {
         submissionDeadline: null,
-      });
+      }, txDb);
     });
   });
 });
@@ -444,14 +470,15 @@ describe("additional fields", () => {
     expect(result).toEqual({ fields });
     expect(updateAbstractConfig).toHaveBeenCalledWith(configId, {
       additionalFieldsSchema: fields,
-    });
+    }, txDb);
+    expect(withTxn).toHaveBeenCalledTimes(1);
     expect(insertAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({
         entityType: "AbstractConfig",
         action: "UPDATE",
         performedBy: userId,
       }),
-      rootDb,
+      txDb,
     );
   });
 
@@ -493,7 +520,7 @@ describe("additional fields", () => {
       expect(result).toEqual({ fields: newFields });
       expect(updateAbstractConfig).toHaveBeenCalledWith(configId, {
         additionalFieldsSchema: newFields,
-      });
+      }, txDb);
     });
 
     it("accepts an add-only change without force even if abstracts exist", async () => {
