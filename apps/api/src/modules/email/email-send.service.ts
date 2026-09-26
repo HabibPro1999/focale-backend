@@ -273,7 +273,7 @@ export class EmailSendService {
     const registration = await getRegistrationForEmailContext(registrationId);
     if (!registration || registration.eventId !== event.id) {
       throw new AppException(
-        ErrorCodes.NOT_FOUND,
+        ErrorCodes.REGISTRATION_NOT_FOUND,
         "Registration not found for this event",
         404,
       );

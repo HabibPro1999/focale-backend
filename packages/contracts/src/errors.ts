@@ -145,9 +145,9 @@ export const ErrorCodes = {
   // Concurrency (16xxx)
   CONCURRENT_MODIFICATION: "CON_16001",
 
-  // Check-in (17xxx)
+  // Check-in (17xxx). CHK_17002 (registration not found) is retired: check-in
+  // answers REG_8001 like every other route (plan 5.4).
   CHECKIN_ALREADY_DONE: "CHK_17001",
-  CHECKIN_REGISTRATION_NOT_FOUND: "CHK_17002",
   CHECKIN_ACCESS_NOT_ON_REGISTRATION: "CHK_17003",
   CHECKIN_EVENT_MISMATCH: "CHK_17004",
   CHECKIN_PAYMENT_REQUIRED: "CHK_17005",
@@ -171,6 +171,12 @@ export const ErrorCodes = {
   COMMITTEE_INVITE_INVALID: "INV_19001",
   COMMITTEE_INVITE_EXPIRED: "INV_19002",
   COMMITTEE_INVITE_USED: "INV_19003",
+
+  // Clients (20xxx). The module gate's two refusals (plan 5.4); both 403.
+  /** The client (tenant) is deactivated. */
+  CLIENT_INACTIVE: "CLT_20001",
+  /** The client has not enabled the module this route belongs to. */
+  MODULE_DISABLED: "CLT_20002",
 } as const;
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];

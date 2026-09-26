@@ -15,15 +15,15 @@ import {
 import { UserRole } from "@app/contracts";
 import type { ClientRow } from "@app/db";
 
-// Real AuthGuard runs; only its two side-effecting deps + getEventWithPricing
-// (the per-route ownership lookup) are mocked.
+// Real AuthGuard and tenant scope guard run; only their side-effecting deps +
+// getEventTenantScope (the scope guard's one lookup) are mocked.
 vi.mock("@app/integrations", () => ({
   verifyToken: vi.fn(async () => ({ uid: "u1" })),
 }));
 vi.mock("@app/db", () => ({
   getUserWithClientById: vi.fn(),
   getUserIdsByClient: vi.fn(async () => []),
-  getEventWithPricing: vi.fn(),
+  getEventTenantScope: vi.fn(),
   // The exception filter calls these on every caught error; the real
   // implementations return null for non-pg errors, which is all these
   // tests throw.
@@ -31,7 +31,7 @@ vi.mock("@app/db", () => ({
   pgUniqueViolation: () => null,
 }));
 
-import { getUserWithClientById, getEventWithPricing } from "@app/db";
+import { getUserWithClientById, getEventTenantScope } from "@app/db";
 import { clearUserCache } from "../../core/auth/user-cache";
 import { ZodValidationPipe } from "../../core/zod";
 import { EnvelopeInterceptor } from "../../core/envelope.interceptor";
@@ -40,7 +40,7 @@ import { CheckinController } from "./checkin.controller";
 import { CheckinService } from "./checkin.service";
 
 const getUser = vi.mocked(getUserWithClientById);
-const getEvent = vi.mocked(getEventWithPricing);
+const getEvent = vi.mocked(getEventTenantScope);
 
 const clientId = "11111111-1111-4111-8111-111111111111";
 const otherClientId = "22222222-2222-4222-8222-222222222222";
@@ -89,7 +89,10 @@ describe("CheckinController (guards)", () => {
     clearUserCache();
     // Default caller: super admin (passes canAccessClient for any event).
     getUser.mockResolvedValue(dbUser(UserRole.SUPER_ADMIN, null, null));
-    getEvent.mockResolvedValue({ id: eventId, clientId } as never);
+    getEvent.mockResolvedValue({
+      event: { id: eventId, clientId, status: "OPEN", slug: "summit" },
+      client: { id: clientId, active: true, enabledModules: [] },
+    });
 
     app = await NestFactory.create<NestFastifyApplication>(
       TestCheckinModule,

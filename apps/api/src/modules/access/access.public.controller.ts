@@ -2,6 +2,7 @@ import { Body, Controller, Get, NotFoundException, Param, Post } from "@nestjs/c
 import { Throttle } from "@nestjs/throttler";
 import {
   AccessSelectionValidationResponseSchema,
+  ErrorCodes,
   EventAccessItemResponseSchema,
   GroupedAccessResponseSchema,
   PublicEventAccessListResponseSchema,
@@ -117,7 +118,10 @@ export class AccessPublicController {
     const now = new Date();
     const item = await this.access.getEventAccessById(params.accessId);
     if (!item || !isPublicVisibleAccess(item, params.eventId, now)) {
-      throw new NotFoundException("Access item not found");
+      throw new NotFoundException({
+        code: ErrorCodes.ACCESS_NOT_FOUND,
+        message: "Access item not found",
+      });
     }
     return item;
   }

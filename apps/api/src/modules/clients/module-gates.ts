@@ -30,7 +30,7 @@ export function assertModuleEnabledForClient(
 ): void {
   if (!client.active) {
     throw new ForbiddenException({
-      code: ErrorCodes.FORBIDDEN,
+      code: ErrorCodes.CLIENT_INACTIVE,
       message: "Client is inactive",
     });
   }
@@ -40,7 +40,7 @@ export function assertModuleEnabledForClient(
     !client.enabledModules.includes(moduleId)
   ) {
     throw new ForbiddenException({
-      code: ErrorCodes.FORBIDDEN,
+      code: ErrorCodes.MODULE_DISABLED,
       message: `${MODULE_NAMES[moduleId]} module is disabled for this client`,
     });
   }

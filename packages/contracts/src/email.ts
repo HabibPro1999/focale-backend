@@ -185,6 +185,17 @@ const hasUpdateField = (data: Record<string, unknown>) =>
     ([key, value]) => key !== "expectedUpdatedAt" && value !== undefined,
   );
 
+/**
+ * POST /api/events/email-templates/:templateId/duplicate. The body is
+ * optional (the admin app sends none; the API reads a missing body as `{}`);
+ * `name` names the copy, default "<name> (Copy)".
+ */
+export const DuplicateEmailTemplateSchema = z.strictObject({
+  name: z.string().min(1).max(255).optional(),
+});
+
+export type DuplicateEmailTemplateInput = z.infer<typeof DuplicateEmailTemplateSchema>;
+
 export const UpdateEmailTemplateSchema = z
   .strictObject({
     name: z.string().min(1).max(255).optional(),

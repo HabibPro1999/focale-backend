@@ -18,18 +18,17 @@ import {
   SponsorshipListResponseSchema,
   SponsorshipSuccessResponseSchema,
 } from "@app/contracts";
-import {
-  assertClientModuleEnabled,
-} from "../clients/module-gates";
-import {
-  getEventWithPricing,
-  getRegistrationForSponsorship,
-} from "@app/db";
+import type { ScopedEventRow } from "@app/db";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
-import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
-import { assertEventWritable } from "../events";
-import { AppException, forbidden } from "../../core/app-exception";
+import { type AuthUser } from "../../core/auth/user-cache";
+import { AppException } from "../../core/app-exception";
+import {
+  EventScoped,
+  RegistrationScoped,
+  ScopedEvent,
+  SponsorshipScoped,
+} from "../tenancy";
 import { ResponseContract } from "../../core/response-contract";
 import { SponsorshipsAdminService } from "./sponsorships.admin.service";
 import {
@@ -53,17 +52,12 @@ export class SponsorshipsListController {
   constructor(private readonly service: SponsorshipsAdminService) {}
 
   @Get(":eventId/sponsorships")
+  @EventScoped()
   @ResponseContract(SponsorshipListResponseSchema)
   async list(
     @Param() { eventId }: SponsorshipEventIdParamDto,
     @Query() query: ListSponsorshipsQueryDto,
-    @CurrentUser() user: AuthUser,
   ) {
-    const event = await getEventWithPricing(eventId);
-    if (!event) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
-    }
-    if (!canAccessClient(user, event.clientId)) forbidden();
     return this.service.listSponsorships(eventId, query);
   }
 }
@@ -79,48 +73,36 @@ export class SponsorshipDetailController {
 
   // GET detail — no module gate.
   @Get(":id")
+  @SponsorshipScoped()
   @ResponseContract(SponsorshipDetailResponseSchema)
-  async detail(
-    @Param() { id }: SponsorshipIdParamDto,
-    @CurrentUser() user: AuthUser,
-  ) {
+  async detail(@Param() { id }: SponsorshipIdParamDto) {
     const sponsorship = await this.service.getSponsorshipById(id);
     if (!sponsorship) {
+      // Deleted between the scope guard and this read.
       throw new AppException(ErrorCodes.NOT_FOUND, "Sponsorship not found", 404);
     }
-    if (!canAccessClient(user, sponsorship.event.clientId)) forbidden();
     return sponsorship;
   }
 
   // PATCH — status:"CANCELLED" detours to cancel (service handles it).
   @Patch(":id")
+  @SponsorshipScoped({ module: "sponsorships" })
   @ResponseContract(SponsorshipDetailResponseSchema)
   async update(
     @Param() { id }: SponsorshipIdParamDto,
     @Body() body: UpdateSponsorshipDto,
     @CurrentUser() user: AuthUser,
   ) {
-    const clientId = await this.service.getSponsorshipClientId(id);
-    if (!clientId) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Sponsorship not found", 404);
-    }
-    if (!canAccessClient(user, clientId)) forbidden();
-    await assertClientModuleEnabled(clientId, "sponsorships");
     return this.service.updateSponsorship(id, body, user.id);
   }
 
   @Delete(":id")
+  @SponsorshipScoped({ module: "sponsorships" })
   @ResponseContract(SponsorshipSuccessResponseSchema)
   async remove(
     @Param() { id }: SponsorshipIdParamDto,
     @CurrentUser() user: AuthUser,
   ) {
-    const clientId = await this.service.getSponsorshipClientId(id);
-    if (!clientId) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Sponsorship not found", 404);
-    }
-    if (!canAccessClient(user, clientId)) forbidden();
-    await assertClientModuleEnabled(clientId, "sponsorships");
     await this.service.deleteSponsorship(id, user.id);
     return { success: true };
   }
@@ -136,30 +118,28 @@ export class RegistrationSponsorshipsController {
   constructor(private readonly service: SponsorshipsAdminService) {}
 
   @Get(":registrationId/available-sponsorships")
+  @RegistrationScoped({ param: "registrationId" })
   @ResponseContract(AvailableSponsorshipsResponseSchema)
   async available(
     @Param() { registrationId }: RegistrationIdParamDto,
-    @CurrentUser() user: AuthUser,
+    @ScopedEvent() event: ScopedEventRow,
   ) {
-    const registration = await this.requireRegistration(registrationId, user);
     const sponsorships = await this.service.getAvailableSponsorships(
-      registration.event.id,
+      event.id,
       registrationId,
     );
     return { sponsorships };
   }
 
   @Get(":registrationId/sponsorships")
+  @RegistrationScoped({ param: "registrationId" })
   @ResponseContract(LinkedSponsorshipsResponseSchema)
-  async linked(
-    @Param() { registrationId }: RegistrationIdParamDto,
-    @CurrentUser() user: AuthUser,
-  ) {
-    await this.requireRegistration(registrationId, user);
+  async linked(@Param() { registrationId }: RegistrationIdParamDto) {
     return this.service.getLinkedSponsorships(registrationId);
   }
 
   @Post(":registrationId/sponsorships")
+  @RegistrationScoped({ param: "registrationId", module: "sponsorships", write: true })
   @HttpCode(201)
   @ResponseContract(SponsorshipLinkedResponseSchema)
   async link(
@@ -167,7 +147,6 @@ export class RegistrationSponsorshipsController {
     @Body() { sponsorshipId }: LinkSponsorshipDto,
     @CurrentUser() user: AuthUser,
   ) {
-    await this.requireWritableRegistration(registrationId, user);
     const result = await this.service.linkSponsorshipToRegistration(
       sponsorshipId,
       registrationId,
@@ -177,6 +156,7 @@ export class RegistrationSponsorshipsController {
   }
 
   @Post(":registrationId/sponsorships/by-code")
+  @RegistrationScoped({ param: "registrationId", module: "sponsorships", write: true })
   @HttpCode(201)
   @ResponseContract(SponsorshipLinkedResponseSchema)
   async linkByCode(
@@ -184,7 +164,6 @@ export class RegistrationSponsorshipsController {
     @Body() { code }: LinkSponsorshipByCodeDto,
     @CurrentUser() user: AuthUser,
   ) {
-    await this.requireWritableRegistration(registrationId, user);
     const result = await this.service.linkSponsorshipByCode(
       registrationId,
       code,
@@ -194,46 +173,17 @@ export class RegistrationSponsorshipsController {
   }
 
   @Delete(":registrationId/sponsorships/:sponsorshipId")
+  @RegistrationScoped({ param: "registrationId", module: "sponsorships", write: true })
   @ResponseContract(SponsorshipSuccessResponseSchema)
   async unlink(
     @Param() { registrationId, sponsorshipId }: RegistrationSponsorshipParamDto,
     @CurrentUser() user: AuthUser,
   ) {
-    await this.requireWritableRegistration(registrationId, user);
     await this.service.unlinkSponsorshipFromRegistration(
       sponsorshipId,
       registrationId,
       user.id,
     );
     return { success: true };
-  }
-
-  /** Route guard: registration exists + tenant access. */
-  private async requireRegistration(registrationId: string, user: AuthUser) {
-    const registration = await getRegistrationForSponsorship(registrationId);
-    if (!registration) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Registration not found",
-        404,
-      );
-    }
-    if (!canAccessClient(user, registration.event.clientId)) forbidden();
-    return registration;
-  }
-
-  /** Mutation guard: + event writable + module gate (mirrors legacy). */
-  private async requireWritableRegistration(
-    registrationId: string,
-    user: AuthUser,
-  ) {
-    const registration = await this.requireRegistration(registrationId, user);
-    const event = await getEventWithPricing(registration.event.id);
-    if (!event) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
-    }
-    assertEventWritable(event);
-    await assertClientModuleEnabled(event.clientId, "sponsorships");
-    return registration;
   }
 }

@@ -160,24 +160,6 @@ export async function findPendingSponsorships(
   }));
 }
 
-/** Minimal event for ownership + writable checks (legacy getEventById usage). */
-export interface PricingEventOwnership {
-  id: string;
-  clientId: string;
-  status: string;
-}
-
-export async function getEventForOwnership(
-  eventId: string,
-  db: DbExecutor = getDb(),
-): Promise<PricingEventOwnership | null> {
-  const [row] = await db
-    .select({ id: events.id, clientId: events.clientId, status: events.status })
-    .from(events)
-    .where(eq(events.id, eventId));
-  return row ?? null;
-}
-
 /** Registration form + event/client gate for the public calculate-price route. */
 export interface PricingFormQuote {
   eventId: string;

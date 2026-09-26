@@ -101,7 +101,7 @@ describe("evaluateEditPolicy", () => {
     expect(policy.restrictions).toEqual(["Pricing is disabled for this event"]);
     expect(
       thrown(() => assertSelfEditAllowed(policy, client, { changesAccess: false, removedAccessIds: [] })),
-    ).toMatchObject({ response: { code: ErrorCodes.FORBIDDEN } });
+    ).toMatchObject({ response: { code: ErrorCodes.MODULE_DISABLED } });
 
     const inactive = { active: false, enabledModules: ["registrations", "pricing"] };
     expect(evaluateEditPolicy(input({}, { client: inactive })).editBlocks).toEqual([

@@ -15,6 +15,7 @@ export * from "./certificates";
 export * from "./checkin";
 export * from "./reports";
 export * from "./committee-invites";
+export * from "./tenant-scope";
 
 export * from "./networking";
 
