@@ -1355,9 +1355,240 @@ export type MarkAbstractPresented = {
   presented: boolean;
 };
 
+export type NetworkingAdminAnalyticsResponse = {
+  emailSent?: number;
+  emailDelivered?: number;
+  emailOpened?: number;
+  emailClicked?: number;
+  emailFailed?: number;
+  profileViews: number;
+  activationRate: number;
+  conversations: number;
+  responseRate: number;
+  meetingConversionRate: number;
+  profiles: number;
+  activeProfiles: number;
+  visibleProfiles: number;
+  likes: number;
+  passes: number;
+  matches: number;
+  matchRate: number;
+  messages: number;
+  meetings: number;
+  confirmedMeetings: number;
+  completedMeetings: number;
+  cancelledMeetings: number;
+  noShowMeetings: number;
+  pendingMeetings: number;
+  tableOccupancyRate: number;
+  reports: number;
+  hourlyActivity?: Array<{
+    hour: string;
+    activity: number;
+  }>;
+  timeSeries: Array<{
+    date: string;
+    bookingRequests?: number;
+    matches: number;
+    messages: number;
+    meetings: number;
+  }>;
+  sectors: Array<{
+    sector: string;
+    participants: number;
+    matches: number;
+    meetings: number;
+  }>;
+  engagement: Array<{
+    profileId: string;
+    name: string;
+    matches: number;
+    messages: number;
+    meetings: number;
+  }>;
+  engagementTotal?: number;
+};
+
+export type NetworkingAdminAuditResponse = {
+  items: Array<{
+    id: string;
+    eventId: string;
+    actorId: string;
+    action: string;
+    targetId: string | null;
+    data: Record<string, unknown>;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    createdAt: string;
+  }>;
+  total: number;
+};
+
+export type NetworkingAdminCalendarResponse = {
+  date: string;
+  timezone: string;
+  items: Array<{
+    message: string;
+    id: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    createdAt: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    updatedAt: string;
+    status: "PENDING" | "COMPLETED" | "PENDING_ALLOCATION" | "CONFIRMED" | "DECLINED" | "CANCELLED" | "EXPIRED" | "NO_SHOW";
+    tableId: string | null;
+    eventId: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    expiresAt: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    startsAt: string;
+    requesterId: string;
+    recipientId: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    endsAt: string;
+    cancellationNote: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    proposedStartsAt: string | null;
+    proposalBy: string | null;
+    revision: number;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    requesterCheckedInAt: string | null;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    recipientCheckedInAt: string | null;
+    requester: NetworkingAdminUpdateProfileResponse | null;
+    recipient: NetworkingAdminUpdateProfileResponse | null;
+    table: {
+      id: string;
+      name: string;
+      active: boolean;
+      /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+      createdAt: string;
+      /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+      updatedAt: string;
+      location: string;
+      eventId: string;
+      kind: "TABLE" | "STAND";
+      capacity: number;
+      spaceId: string | null;
+      ownerProfileId: string | null;
+      space: NetworkingAdminCreateSpaceResponse | null;
+      representativeIds: string[];
+      representatives: Array<{
+        id: string;
+        firstName: string;
+        lastName: string;
+        company: string;
+      }>;
+    } | null;
+  }>;
+};
+
+export type NetworkingAdminConfigResponse = {
+  enabled: boolean;
+  requireSecondFactor: boolean;
+  approvalMode: "MANUAL" | "AUTOMATIC";
+  eligiblePaymentStatuses: Array<"PENDING" | "VERIFYING" | "PARTIAL" | "PAID" | "SPONSORED" | "WAIVED" | "REFUNDED">;
+  swipeEnabled: boolean;
+  searchEnabled: boolean;
+  chatEnabled: boolean;
+  meetingsEnabled: boolean;
+  autoAssignTables: boolean;
+  slotDurationMinutes: 15 | 30 | 45 | 60;
+  timezone: string;
+  retentionDays: number;
+  requestExpiryHours: number;
+  languages: Array<"fr" | "en" | "ar">;
+  defaultLanguage: "fr" | "en" | "ar";
+  primaryColor: string;
+  welcomeMessage: string;
+  participantLabel: string;
+  tableLabel: string;
+  helpMessage: string;
+  uiLabels: Record<string, {
+      fr: string;
+      en?: string;
+      ar?: string;
+    }>;
+  accessInstructions: string;
+  emailTemplates: Record<string, {
+      subject: string;
+      body: string;
+    }>;
+  fieldMapping: {
+    company?: string;
+    jobTitle?: string;
+    sector?: string;
+    bio?: string;
+    city?: string;
+    country?: string;
+    website?: string;
+    photoUrl?: string;
+    interests?: string;
+    offers?: string;
+    seeks?: string;
+    consent?: string;
+  };
+  openingHours: Array<{
+    date: string;
+    start: string;
+    end: string;
+  }>;
+  blackoutSlots: string[];
+  requiredAccessId?: string | null;
+  opensAt?: string | null;
+  closesAt?: string | null;
+  logoUrl?: string | null;
+  supportEmail?: string | null;
+  supportPhone?: string | null;
+  accessPlanUrl?: string | null;
+  revision: string;
+};
+
+export type NetworkingAdminCreateSpaceResponse = {
+  id: string;
+  name: string;
+  active: boolean;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  createdAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  updatedAt: string;
+  location: string;
+  eventId: string;
+  kind: "TABLE" | "STAND";
+  capacity: number;
+};
+
 export type NetworkingAdminMeetingUpdate = {
   action: "ASSIGN" | "CANCEL" | "COMPLETED" | "NO_SHOW";
   tableId?: string;
+};
+
+export type NetworkingAdminMeetingsResponse = {
+  items: NetworkingAdminUpdateMeetingResponse[];
+  total: number;
+};
+
+export type NetworkingAdminModerateResponse = {
+  id: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  createdAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  updatedAt: string;
+  status: "OPEN" | "RESOLVED" | "DISMISSED";
+  eventId: string;
+  note: string | null;
+  profileId: string;
+  reporterId: string;
+  messageId: string | null;
+  reason: string;
+  resolvedBy: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  resolvedAt: string | null;
+};
+
+export type NetworkingAdminPostEventReportResponse = {
+  available: boolean;
+  url?: string;
+  generatedAt?: string;
+  summary?: Record<string, number>;
 };
 
 export type NetworkingAdminProfileUpdate = {
@@ -1380,6 +1611,276 @@ export type NetworkingAdminProfileUpdate = {
   status?: "PENDING" | "ACTIVE" | "SUSPENDED" | "EXCLUDED";
   featured?: boolean;
   standTableId?: string | null;
+};
+
+export type NetworkingAdminProfilesResponse = {
+  items: Array<{
+    meetingsEnabled: boolean;
+    company: string;
+    jobTitle: string;
+    sector: string;
+    bio: string;
+    city: string;
+    country: string;
+    website: string | null;
+    photoUrl: string | null;
+    interests: string[];
+    offers: string;
+    seeks: string;
+    consent: boolean;
+    id: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    createdAt: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    updatedAt: string;
+    eventId: string;
+    firstName: string;
+    lastName: string;
+    visible: boolean;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    lastActiveAt: string | null;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    erasedAt: string | null;
+    featured: boolean;
+    standTableId: string | null;
+    email: string;
+    status: "PENDING" | "ACTIVE" | "SUSPENDED" | "EXCLUDED";
+    registrationId: string;
+    emailPreference: "IMMEDIATE" | "DAILY" | "OFF";
+    language: "fr" | "en" | "ar";
+    availabilitySet: boolean;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    consentAt: string | null;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    withdrawnAt: string | null;
+    overrides: Record<string, unknown>;
+    matchCount: number;
+    meetingCount: number;
+  }>;
+  total: number;
+};
+
+export type NetworkingAdminRegeneratePostEventReportResponse = {
+  deliveryId: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  availableAt: string;
+  version: string;
+};
+
+export type NetworkingAdminRemoveSpaceResponse = {
+  deleted: boolean;
+};
+
+export type NetworkingAdminRemoveTableResponse = NetworkingAdminRemoveSpaceResponse;
+
+export type NetworkingAdminReportsResponse = {
+  items: Array<{
+    id: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    createdAt: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    updatedAt: string;
+    status: "OPEN" | "RESOLVED" | "DISMISSED";
+    eventId: string;
+    note: string | null;
+    profileId: string;
+    reporterId: string;
+    messageId: string | null;
+    reason: string;
+    resolvedBy: string | null;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    resolvedAt: string | null;
+    reporter: NetworkingAdminUpdateProfileResponse | null;
+    profile: NetworkingAdminUpdateProfileResponse | null;
+    message: NetworkingPublicMessageResponse | null;
+  }>;
+  total: number;
+};
+
+export type NetworkingAdminSpacesResponse = {
+  items: Array<{
+    id: string;
+    name: string;
+    active: boolean;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    createdAt: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    updatedAt: string;
+    location: string;
+    eventId: string;
+    kind: "TABLE" | "STAND";
+    capacity: number;
+    allocatedCount: number;
+  }>;
+  total: number;
+};
+
+export type NetworkingAdminSyncResponse = {
+  runId: string | null;
+  status: "IDLE" | "RUNNING" | "COMPLETED";
+  total: number;
+  processed: number;
+  created: number;
+  updated: number;
+  failed: number;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  requestedAt: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  finishedAt: string | null;
+  lastError: string | null;
+};
+
+export type NetworkingAdminSyncStateResponse = NetworkingAdminSyncResponse;
+
+export type NetworkingAdminTableResponse = {
+  id: string;
+  name: string;
+  active: boolean;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  createdAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  updatedAt: string;
+  location: string;
+  eventId: string;
+  kind: "TABLE" | "STAND";
+  capacity: number;
+  spaceId: string | null;
+  ownerProfileId: string | null;
+  representativeIds: string[];
+  space: NetworkingAdminCreateSpaceResponse;
+};
+
+export type NetworkingAdminTablesResponse = {
+  items: Array<{
+    id: string;
+    name: string;
+    active: boolean;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    createdAt: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    updatedAt: string;
+    location: string;
+    eventId: string;
+    kind: "TABLE" | "STAND";
+    capacity: number;
+    spaceId: string | null;
+    ownerProfileId: string | null;
+    space: NetworkingAdminCreateSpaceResponse | null;
+    representativeIds: string[];
+    representatives: Array<{
+      id: string;
+      firstName: string;
+      lastName: string;
+      company: string;
+    }>;
+  }>;
+  total: number;
+};
+
+export type NetworkingAdminUpdateConfigResponse = NetworkingAdminConfigResponse;
+
+export type NetworkingAdminUpdateMeetingResponse = {
+  message: string;
+  id: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  createdAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  updatedAt: string;
+  status: "PENDING" | "COMPLETED" | "PENDING_ALLOCATION" | "CONFIRMED" | "DECLINED" | "CANCELLED" | "EXPIRED" | "NO_SHOW";
+  tableId: string | null;
+  eventId: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  expiresAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  startsAt: string;
+  requesterId: string;
+  recipientId: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  endsAt: string;
+  cancellationNote: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  proposedStartsAt: string | null;
+  proposalBy: string | null;
+  revision: number;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  requesterCheckedInAt: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  recipientCheckedInAt: string | null;
+  requester: NetworkingAdminUpdateProfileResponse | null;
+  recipient: NetworkingAdminUpdateProfileResponse | null;
+  table: {
+    id: string;
+    name: string;
+    active: boolean;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    createdAt: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    updatedAt: string;
+    location: string;
+    eventId: string;
+    kind: "TABLE" | "STAND";
+    capacity: number;
+    spaceId: string | null;
+    ownerProfileId: string | null;
+    space: NetworkingAdminCreateSpaceResponse | null;
+  } | null;
+};
+
+export type NetworkingAdminUpdateProfileResponse = {
+  meetingsEnabled: boolean;
+  company: string;
+  jobTitle: string;
+  sector: string;
+  bio: string;
+  city: string;
+  country: string;
+  website: string | null;
+  photoUrl: string | null;
+  interests: string[];
+  offers: string;
+  seeks: string;
+  consent: boolean;
+  id: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  createdAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  updatedAt: string;
+  eventId: string;
+  firstName: string;
+  lastName: string;
+  visible: boolean;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  lastActiveAt: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  erasedAt: string | null;
+  featured: boolean;
+  standTableId: string | null;
+  email: string;
+  status: "PENDING" | "ACTIVE" | "SUSPENDED" | "EXCLUDED";
+  registrationId: string;
+  emailPreference: "IMMEDIATE" | "DAILY" | "OFF";
+  language: "fr" | "en" | "ar";
+  availabilitySet: boolean;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  consentAt: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  withdrawnAt: string | null;
+  overrides: Record<string, unknown>;
+};
+
+export type NetworkingAdminUpdateSpaceResponse = NetworkingAdminCreateSpaceResponse;
+
+export type NetworkingAdminUpdateTableResponse = NetworkingAdminTableResponse;
+
+export type NetworkingAdminUploadLogoResponse = {
+  url: string;
+  resource: NetworkingAdminConfigResponse;
+};
+
+export type NetworkingAdminVerifyBadgeResponse = {
+  accessAllowed: boolean;
+  profile: NetworkingPublicProfileResponse;
+  accessId: string | null;
 };
 
 export type NetworkingAvailability = {
@@ -1529,6 +2030,29 @@ export type NetworkingMfaCode = {
   code: string;
 };
 
+export type NetworkingMfaConfirmResponse = {
+  recoveryCodesOutdated?: boolean;
+  recoveryCodes?: string[];
+  verified: boolean;
+};
+
+export type NetworkingMfaDisableResponse = NetworkingMfaConfirmResponse;
+
+export type NetworkingMfaEnrollResponse = {
+  secret: string;
+  otpauthUri: string;
+};
+
+export type NetworkingMfaRegenerateRecoveryCodesResponse = NetworkingMfaConfirmResponse;
+
+export type NetworkingMfaStateResponse = {
+  enabled: boolean;
+  required: boolean;
+  verified: boolean;
+};
+
+export type NetworkingMfaVerifyResponse = NetworkingMfaConfirmResponse;
+
 export type NetworkingNotificationRead = {
   ids?: string[];
 };
@@ -1574,6 +2098,425 @@ export type NetworkingProfileUpdate = {
   resetFields?: Array<"company" | "jobTitle" | "sector" | "bio" | "city" | "country" | "website" | "photoUrl" | "interests" | "offers" | "seeks">;
 };
 
+export type NetworkingPublicAvailabilityResponse = {
+  slots: string[];
+  freeSlots: string[];
+  bookedSlots: string[];
+  availableSlots: string[];
+};
+
+export type NetworkingPublicBadgeResponse = {
+  accessAllowed: boolean;
+  token: string;
+  expiresAt: string;
+  profileId: string;
+};
+
+export type NetworkingPublicBlockResponse = {
+  blocked: boolean;
+};
+
+export type NetworkingPublicBlocksResponse = {
+  items: Array<{
+    profile: NetworkingPublicProfileResponse | null;
+    id: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    createdAt: string;
+    eventId: string;
+    profileId: string;
+    targetId: string;
+  }>;
+  total: number;
+};
+
+export type NetworkingPublicCheckinResponse = {
+  message: string;
+  id: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  createdAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  updatedAt: string;
+  status: "PENDING" | "COMPLETED" | "PENDING_ALLOCATION" | "CONFIRMED" | "DECLINED" | "CANCELLED" | "EXPIRED" | "NO_SHOW";
+  tableId: string | null;
+  eventId: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  expiresAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  startsAt: string;
+  requesterId: string;
+  recipientId: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  endsAt: string;
+  cancellationNote: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  proposedStartsAt: string | null;
+  proposalBy: string | null;
+  revision: number;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  requesterCheckedInAt: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  recipientCheckedInAt: string | null;
+  requester: NetworkingPublicProfileResponse | null;
+  recipient: NetworkingPublicProfileResponse | null;
+  table: {
+    id: string;
+    name: string;
+    active: boolean;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    createdAt: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    updatedAt: string;
+    location: string;
+    eventId: string;
+    kind: "TABLE" | "STAND";
+    capacity: number;
+    spaceId: string | null;
+    ownerProfileId: string | null;
+    space: NetworkingAdminCreateSpaceResponse | null;
+  } | null;
+};
+
+export type NetworkingPublicConfigResponse = {
+  event: {
+    id: string;
+    name: string;
+    slug: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    startsAt: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    endsAt: string;
+    location: string | null;
+    bannerUrl: string | null;
+  };
+  config: {
+    enabled: boolean;
+    requireSecondFactor: boolean;
+    approvalMode: "MANUAL" | "AUTOMATIC";
+    swipeEnabled: boolean;
+    searchEnabled: boolean;
+    chatEnabled: boolean;
+    meetingsEnabled: boolean;
+    autoAssignTables: boolean;
+    slotDurationMinutes: 15 | 30 | 45 | 60;
+    timezone: string;
+    requestExpiryHours: number;
+    languages: Array<"fr" | "en" | "ar">;
+    defaultLanguage: "fr" | "en" | "ar";
+    primaryColor: string;
+    welcomeMessage: string;
+    participantLabel: string;
+    tableLabel: string;
+    helpMessage: string;
+    uiLabels: Record<string, {
+        fr: string;
+        en?: string;
+        ar?: string;
+      }>;
+    accessInstructions: string;
+    fieldMapping: {
+      company?: string;
+      jobTitle?: string;
+      sector?: string;
+      bio?: string;
+      city?: string;
+      country?: string;
+      website?: string;
+      photoUrl?: string;
+      interests?: string;
+      offers?: string;
+      seeks?: string;
+      consent?: string;
+    };
+    openingHours: Array<{
+      date: string;
+      start: string;
+      end: string;
+    }>;
+    blackoutSlots: string[];
+    requiredAccessId?: string | null;
+    opensAt?: string | null;
+    closesAt?: string | null;
+    logoUrl?: string | null;
+    supportEmail?: string | null;
+    supportPhone?: string | null;
+    accessPlanUrl?: string | null;
+  };
+  pushPublicKey: string | null;
+  networkingUrl?: string;
+};
+
+export type NetworkingPublicConnectionResponse = {
+  profile: NetworkingPublicProfileResponse;
+  id: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  createdAt: string;
+  lastMessage: {
+    id: string;
+    connectionId: string;
+    senderId: string;
+    body: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    createdAt: string;
+  } | null;
+  unreadCount: number;
+};
+
+export type NetworkingPublicConnectionWithResponse = {
+  connection: NetworkingPublicConnectionResponse | null;
+};
+
+export type NetworkingPublicConnectionsResponse = {
+  total?: number;
+  items: NetworkingPublicConnectionResponse[];
+  nextCursor: string | null;
+};
+
+export type NetworkingPublicCreateMeetingResponse = NetworkingPublicCheckinResponse;
+
+export type NetworkingPublicFacetsResponse = {
+  sectors: Array<{
+    value: string;
+    count: number;
+  }>;
+  companies: Array<{
+    value: string;
+    count: number;
+  }>;
+  cities: Array<{
+    value: string;
+    count: number;
+  }>;
+  countries: Array<{
+    value: string;
+    count: number;
+  }>;
+};
+
+export type NetworkingPublicIncomingInterestsResponse = {
+  total?: number;
+  items: Array<{
+    id: string;
+    profile: NetworkingPublicProfileResponse;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    createdAt: string;
+  }>;
+  nextCursor: string | null;
+};
+
+export type NetworkingPublicInterestResponse = {
+  matched: boolean;
+  connectionId?: string;
+};
+
+export type NetworkingPublicListMeetingsResponse = {
+  total?: number;
+  items: NetworkingPublicCheckinResponse[];
+  nextCursor: string | null;
+};
+
+export type NetworkingPublicLogoutResponse = {
+  loggedOut: boolean;
+};
+
+export type NetworkingPublicMeResponse = NetworkingAdminUpdateProfileResponse;
+
+export type NetworkingPublicMeetingResponse = NetworkingPublicCheckinResponse;
+
+export type NetworkingPublicMessageResponse = {
+  id: string;
+  eventId: string;
+  connectionId: string;
+  senderId: string;
+  body: string;
+  clientMessageId: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  createdAt: string;
+};
+
+export type NetworkingPublicMessagesResponse = {
+  items: NetworkingPublicMessageResponse[];
+  total: number;
+  nextCursor: {
+    before: string;
+    beforeId: string;
+  } | null;
+};
+
+export type NetworkingPublicNotificationsResponse = {
+  items: Array<{
+    id: string;
+    eventId: string;
+    profileId: string;
+    type: string;
+    title: string;
+    body: string;
+    href: string;
+    data: Record<string, unknown>;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    readAt: string | null;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    createdAt: string;
+  }>;
+  total: number;
+  unreadCount: number;
+  unreadMessageCount: number;
+};
+
+export type NetworkingPublicPersonalAnalyticsResponse = {
+  currentEventId: string;
+  events: Array<{
+    eventId: string;
+    eventName: string;
+    startsAt: string;
+    endsAt: string;
+    profileViews: number;
+    matches: number;
+    sentMessages: number;
+    plannedMeetings: number;
+    completedMeetings: number;
+  }>;
+};
+
+export type NetworkingPublicProfileAvailabilityResponse = {
+  slots: string[];
+  availableSlots: string[];
+};
+
+export type NetworkingPublicProfileResponse = {
+  meetingsEnabled: boolean;
+  company: string;
+  jobTitle: string;
+  sector: string;
+  bio: string;
+  city: string;
+  country: string;
+  website: string | null;
+  photoUrl: string | null;
+  interests: string[];
+  offers: string;
+  seeks: string;
+  consent: boolean;
+  id: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  createdAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  updatedAt: string;
+  eventId: string;
+  firstName: string;
+  lastName: string;
+  visible: boolean;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  lastActiveAt: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  erasedAt: string | null;
+  featured: boolean;
+  standTableId: string | null;
+};
+
+export type NetworkingPublicProfilesResponse = {
+  items: NetworkingPublicProfileResponse[];
+  total: number;
+};
+
+export type NetworkingPublicReadNotificationsResponse = {
+  read: boolean;
+};
+
+export type NetworkingPublicReadResponse = NetworkingPublicReadNotificationsResponse;
+
+export type NetworkingPublicRegistrationResponse = {
+  enabled: false;
+} | {
+  enabled: true;
+  opensAt: string | null;
+  closesAt: string | null;
+  approvalMode: "MANUAL" | "AUTOMATIC";
+  fieldMapping: {
+    company?: string | null;
+    jobTitle?: string | null;
+    sector?: string | null;
+    bio?: string | null;
+    city?: string | null;
+    country?: string | null;
+    website?: string | null;
+    photoUrl?: string | null;
+    interests?: string | null;
+    offers?: string | null;
+    seeks?: string | null;
+    consent?: string | null;
+  };
+  networkingUrl?: string;
+};
+
+export type NetworkingPublicReportResponse = NetworkingAdminModerateResponse;
+
+export type NetworkingPublicRepresentativesResponse = {
+  items: NetworkingPublicProfileResponse[];
+  total: number;
+  exhibitor: {
+    id: string;
+    name: string;
+    spaceName: string | null;
+  } | null;
+};
+
+export type NetworkingPublicRequestCodeResponse = {
+  challengeId: string;
+};
+
+export type NetworkingPublicResetInterestsResponse = {
+  reset: boolean;
+};
+
+export type NetworkingPublicRespondResponse = NetworkingPublicCheckinResponse;
+
+export type NetworkingPublicSubscribeResponse = {
+  id: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  createdAt: string;
+  eventId: string;
+  profileId: string;
+  endpoint: string;
+  keys: {
+    p256dh: string;
+    auth: string;
+  };
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  expirationTime: string | null;
+};
+
+export type NetworkingPublicUnblockResponse = {
+  unblocked: boolean;
+};
+
+export type NetworkingPublicUnsubscribeResponse = {
+  unsubscribed: boolean;
+};
+
+export type NetworkingPublicUpdateAvailabilityResponse = {
+  slots: string[];
+};
+
+export type NetworkingPublicUpdateMeResponse = NetworkingAdminUpdateProfileResponse;
+
+export type NetworkingPublicUploadPhotoResponse = {
+  url: string;
+  resource: NetworkingAdminUpdateProfileResponse;
+};
+
+export type NetworkingPublicVerifyCodeResponse = {
+  token: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  expiresAt: string;
+  profile: NetworkingAdminUpdateProfileResponse;
+  requiresSecondFactor: boolean;
+  mfaEnrollmentRequired: boolean;
+};
+
+export type NetworkingPublicWithdrawResponse = {
+  withdrawn: boolean;
+};
+
 export type NetworkingPush = {
   endpoint: string;
   expirationTime?: number | null;
@@ -1581,6 +2524,58 @@ export type NetworkingPush = {
     p256dh: string;
     auth: string;
   };
+};
+
+export type NetworkingRecommendationAdminReindexResponse = {
+  queued: number;
+};
+
+export type NetworkingRecommendationAdminStatusResponse = {
+  configured: boolean;
+  model: string;
+  dimensions: number;
+  jobs: Array<{
+    status: string;
+    count: number;
+  }>;
+};
+
+export type NetworkingRecommendationRecommendationsResponse = {
+  items: Array<{
+    meetingsEnabled: boolean;
+    company: string;
+    jobTitle: string;
+    sector: string;
+    bio: string;
+    city: string;
+    country: string;
+    website: string | null;
+    photoUrl: string | null;
+    interests: string[];
+    offers: string;
+    seeks: string;
+    consent: boolean;
+    id: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    createdAt: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    updatedAt: string;
+    eventId: string;
+    firstName: string;
+    lastName: string;
+    visible: boolean;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    lastActiveAt: string | null;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    erasedAt: string | null;
+    featured: boolean;
+    standTableId: string | null;
+    score: number;
+    reasons: string[];
+  }>;
+  total: number;
+  strategy: string;
+  model?: string;
 };
 
 export type NetworkingReportAction = {

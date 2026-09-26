@@ -30,6 +30,9 @@ import * as health from "../health";
 import * as i18n from "../i18n.schema";
 import * as identity from "../identity";
 import * as networking from "../networking";
+import * as networkingAdminResponses from "../networking.admin.responses";
+import * as networkingPublicResponses from "../networking.public.responses";
+import * as networkingAuthResponses from "../networking.auth-recommendations.responses";
 import * as pricing from "../pricing";
 import * as realtime from "../realtime";
 import * as registrations from "../registrations";
@@ -60,6 +63,9 @@ export const CONTRACT_MODULES: Readonly<Record<string, Record<string, unknown>>>
   "i18n.schema": i18n,
   identity,
   networking,
+  "networking.admin.responses": networkingAdminResponses,
+  "networking.public.responses": networkingPublicResponses,
+  "networking.auth-recommendations.responses": networkingAuthResponses,
   pricing,
   realtime,
   registrations,
