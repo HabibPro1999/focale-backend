@@ -46,8 +46,9 @@ import { networkingAnalytics } from "./networking.analytics";
 import { buildEligibilityMatrix, type Matrix, type MatrixScope, type MatrixTarget } from "./__testing__/eligibility-matrix-db";
 import { NetworkingAdminService } from "./networking.admin.service";
 import { NetworkingExportsService } from "./networking.exports.service";
-import type { NetworkingMeetingsService } from "./networking.meetings.service";
-import type { NetworkingSocialService } from "./networking.social.service";
+import { streamText } from "./__testing__/stream-text";
+import { NetworkingMeetingsService } from "./networking.meetings.service";
+import { NetworkingSocialService } from "./networking.social.service";
 import { NetworkingService, type NetworkingContext } from "./networking.service";
 
 /**
@@ -182,6 +183,32 @@ describe.runIf(dbTestsEnabled())("networking eligibility matrix on every surface
     };
     expect(await seen(false)).toEqual(expected("profile"));
     expect(await seen(true)).toEqual(expected("discover"));
+  });
+
+  it("lists in profile mode (4.9): incoming interests and the agenda's counterparts", async () => {
+    const store = networkingStore();
+    const social = new NetworkingSocialService(service);
+    const meetings = new NetworkingMeetingsService(service);
+    const exhibitor = { ...ctx, profile: { ...viewer, featured: true } };
+    // Every target likes the viewer; the matrix itself only has the viewer's likes.
+    const likes = [];
+    for (const target of targets)
+      likes.push(await store.insert("interests", { eventId: ids.event, profileId: target.profile.id, targetId: viewer.id, action: "LIKE" }));
+    try {
+      const incoming = await social.incoming(exhibitor, { limit: 200 });
+      const senders = new Set(incoming.items.map((item) => item.profile.id));
+      expect(actual((target) => senders.has(target.profile.id))).toEqual(expected("profile"));
+      expect(incoming.total).toBe(count("profile"));
+    } finally {
+      for (const like of likes) await store.remove("interests", { eventId: ids.event, id: like.id });
+    }
+    const withMeeting = targets.filter((target) => target.meeting);
+    const agenda = await meetings.list(ctx, { limit: 200 });
+    const shown = new Set(agenda.items.flatMap((item) => [item.requester?.id, item.recipient?.id]));
+    expect(actual((target) => shown.has(target.profile.id), withMeeting)).toEqual(expected("profile", () => true, withMeeting));
+    expect(agenda.items.every((item) => item.requester?.id === viewer.id)).toBe(true);
+    const all = new Set((await meetings.allMeetings(ctx)).map((item) => item.recipient?.id));
+    expect(actual((target) => all.has(target.profile.id), withMeeting)).toEqual(expected("profile", () => true, withMeeting));
   });
 
   it("service blockedTarget(): the block list", async () => {
@@ -326,8 +353,8 @@ describe.runIf(dbTestsEnabled())("networking eligibility matrix on every surface
     expect(listed.has(viewer.id)).toBe(true);
     expect(actual((target) => listed.has(target.profile.id))).toEqual(expected("listed"));
 
-    const exports = new NetworkingExportsService(admin, {} as NetworkingSocialService, {} as NetworkingMeetingsService);
-    const csv = String((await exports.admin(event, "participants", "csv")).body);
+    const exports = new NetworkingExportsService({} as NetworkingSocialService, {} as NetworkingMeetingsService);
+    const csv = await streamText((await exports.admin(event, "participants", "csv")).body);
     // Target addresses are unique (the same-person row is the viewer's in upper case).
     expect(actual((target) => csv.includes(target.profile.email))).toEqual(expected("listed"));
   });
@@ -371,6 +398,11 @@ describe.runIf(dbTestsEnabled())("networking eligibility matrix on every surface
         response: { code: "NETWORKING_NOT_ELIGIBLE" },
       });
       await expect(service.blockedTarget(ctx, eligibleTarget.profile.id)).rejects.toMatchObject({ status: 403 });
+      // The agenda's batch twin (4.9) refuses the same way.
+      await expect(new NetworkingMeetingsService(service).list(ctx, { limit: 5 })).rejects.toMatchObject({
+        status: 403,
+        response: { code: "NETWORKING_NOT_ELIGIBLE" },
+      });
     } finally {
       await store.update("profiles", { eventId: ids.event, id: viewer.id }, { status: "ACTIVE" });
     }

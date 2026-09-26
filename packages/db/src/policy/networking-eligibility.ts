@@ -139,6 +139,30 @@ export function peerCounterpart(
     AND ${mutuallyUnblocked(viewer.eventId, viewer.profileId, p.id)})`;
 }
 
+/** `a` and `b` are connected (a connection stores its pair in either column order). */
+export function connectedPair(eventId: NetworkingSqlValue, a: NetworkingSqlValue, b: NetworkingSqlValue): SQL {
+  return sql`EXISTS (SELECT 1 FROM networking_connections elig_pc WHERE elig_pc.event_id=${eventId}
+    AND ((elig_pc.profile_a_id=${a} AND elig_pc.profile_b_id=${b}) OR (elig_pc.profile_a_id=${b} AND elig_pc.profile_b_id=${a})))`;
+}
+
+/**
+ * Counterpart in `profile` mode (a profile the viewer opens: incoming
+ * interests, meeting counterparts): a peer that is discoverable while the
+ * event's discovery is on, or connected to the viewer. `discoveryEnabled` is
+ * `networkingDiscoveryEnabled(config)`, decided by the caller.
+ */
+export function profileCounterpart(
+  p: NetworkingProfileColumns,
+  r: NetworkingRegistrationColumns,
+  statuses: NetworkingPaymentStatuses,
+  viewer: { eventId: NetworkingSqlValue; profileId: NetworkingSqlValue; email?: Column },
+  discoveryEnabled: boolean,
+): SQL {
+  const discoverable = discoveryEnabled ? discoverableProfile(p) : sql`false`;
+  return sql`(${peerCounterpart(p, r, statuses, viewer)}
+    AND (${discoverable} OR ${connectedPair(viewer.eventId, viewer.profileId, p.id)}))`;
+}
+
 /**
  * Admitted to the networking area: eligible, with at least one confirmed
  * meeting (check-in scans and the participant's badge).

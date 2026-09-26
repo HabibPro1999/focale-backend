@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { getDb, type DbExecutor } from "../client";
 import { rowsOf } from "../helpers";
@@ -292,6 +292,48 @@ export type NetworkingParticipantEngagement = {
   completedMeetings: number;
 };
 
+/** A participant's engagement counts (see the definitions above). */
+export type NetworkingEngagementCounts = Omit<NetworkingParticipantEngagement, "profileId" | "name">;
+
+/**
+ * Each participant's engagement, joined on the profile alias `p`: swipes and
+ * likes (their interests), matches (connections they are in), messages sent,
+ * booked meetings and completed ones. With `ids`, only those participants'
+ * rows are aggregated (an export page); otherwise the whole event's.
+ */
+function engagementJoins(eventId: string, ids?: readonly string[]): SQL {
+  const only = (column: string) =>
+    ids ? sql` AND ${sql.raw(column)} IN (${sql.join(ids.map((id) => sql`${id}`), sql`,`)})` : sql``;
+  return sql`
+    LEFT JOIN (SELECT profile_id, count(*) AS swipes, count(*) FILTER (WHERE action='LIKE') AS likes
+      FROM networking_interests WHERE event_id=${eventId}${only("profile_id")} GROUP BY profile_id) i ON i.profile_id=p.id
+    LEFT JOIN (SELECT profile_id, count(*) AS matches FROM (
+        SELECT profile_a_id AS profile_id FROM networking_connections WHERE event_id=${eventId}${only("profile_a_id")}
+        UNION ALL SELECT profile_b_id FROM networking_connections WHERE event_id=${eventId}${only("profile_b_id")}) ends
+      GROUP BY profile_id) c ON c.profile_id=p.id
+    LEFT JOIN (SELECT sender_id, count(*) AS messages FROM networking_messages WHERE event_id=${eventId}${only("sender_id")}
+      GROUP BY sender_id) sent ON sent.sender_id=p.id
+    LEFT JOIN (SELECT profile_id, count(*) AS meetings, count(*) FILTER (WHERE status='COMPLETED') AS completed FROM (
+        SELECT requester_id AS profile_id, status FROM networking_meetings WHERE event_id=${eventId} AND status IN (${booked})${only("requester_id")}
+        UNION ALL SELECT recipient_id, status FROM networking_meetings WHERE event_id=${eventId} AND status IN (${booked})${only("recipient_id")}) ends
+      GROUP BY profile_id) mt ON mt.profile_id=p.id`;
+}
+
+const engagementColumns = sql`coalesce(i.swipes,0)::int4 AS swipes, coalesce(i.likes,0)::int4 AS likes,
+      coalesce(c.matches,0)::int4 AS matches, coalesce(sent.messages,0)::int4 AS messages,
+      coalesce(mt.meetings,0)::int4 AS meetings, coalesce(mt.completed,0)::int4 AS "completedMeetings"`;
+
+function engagementCounts(row: NetworkingEngagementCounts): NetworkingEngagementCounts {
+  return {
+    swipes: Number(row.swipes),
+    likes: Number(row.likes),
+    matches: Number(row.matches),
+    messages: Number(row.messages),
+    meetings: Number(row.meetings),
+    completedMeetings: Number(row.completedMeetings),
+  };
+}
+
 /**
  * The most engaged listed participants: most booked meetings, then matches,
  * messages and swipes (profile id breaks ties). Swipes are the participant's
@@ -302,41 +344,37 @@ export async function networkingTopEngagement(
   limit: number,
   db: DbExecutor = getDb(),
 ): Promise<NetworkingParticipantEngagement[]> {
-  const rows = rowsOf<Omit<NetworkingParticipantEngagement, "name"> & { firstName: string; lastName: string }>(
+  const rows = rowsOf<NetworkingEngagementCounts & { profileId: string; firstName: string; lastName: string }>(
     await db.execute(sql`
-    SELECT p.id AS "profileId", p.first_name AS "firstName", p.last_name AS "lastName",
-      coalesce(i.swipes,0)::int4 AS swipes, coalesce(i.likes,0)::int4 AS likes,
-      coalesce(c.matches,0)::int4 AS matches, coalesce(sent.messages,0)::int4 AS messages,
-      coalesce(mt.meetings,0)::int4 AS meetings, coalesce(mt.completed,0)::int4 AS "completedMeetings"
-    FROM networking_profiles p
-    LEFT JOIN (SELECT profile_id, count(*) AS swipes, count(*) FILTER (WHERE action='LIKE') AS likes
-      FROM networking_interests WHERE event_id=${eventId} GROUP BY profile_id) i ON i.profile_id=p.id
-    LEFT JOIN (SELECT profile_id, count(*) AS matches FROM (
-        SELECT profile_a_id AS profile_id FROM networking_connections WHERE event_id=${eventId}
-        UNION ALL SELECT profile_b_id FROM networking_connections WHERE event_id=${eventId}) ends
-      GROUP BY profile_id) c ON c.profile_id=p.id
-    LEFT JOIN (SELECT sender_id, count(*) AS messages FROM networking_messages WHERE event_id=${eventId}
-      GROUP BY sender_id) sent ON sent.sender_id=p.id
-    LEFT JOIN (SELECT profile_id, count(*) AS meetings, count(*) FILTER (WHERE status='COMPLETED') AS completed FROM (
-        SELECT requester_id AS profile_id, status FROM networking_meetings WHERE event_id=${eventId} AND status IN (${booked})
-        UNION ALL SELECT recipient_id, status FROM networking_meetings WHERE event_id=${eventId} AND status IN (${booked})) ends
-      GROUP BY profile_id) mt ON mt.profile_id=p.id
+    SELECT p.id AS "profileId", p.first_name AS "firstName", p.last_name AS "lastName", ${engagementColumns}
+    FROM networking_profiles p ${engagementJoins(eventId)}
     WHERE p.event_id=${eventId} AND ${listed}
     ORDER BY coalesce(mt.meetings,0) DESC, coalesce(c.matches,0) DESC, coalesce(sent.messages,0) DESC,
       coalesce(i.swipes,0) DESC, p.id
     LIMIT ${limit}
   `),
   );
-  return rows.map(({ firstName, lastName, ...row }) => ({
-    profileId: row.profileId,
-    name: `${firstName} ${lastName}`,
-    swipes: Number(row.swipes),
-    likes: Number(row.likes),
-    matches: Number(row.matches),
-    messages: Number(row.messages),
-    meetings: Number(row.meetings),
-    completedMeetings: Number(row.completedMeetings),
-  }));
+  return rows.map((row) => ({ profileId: row.profileId, name: `${row.firstName} ${row.lastName}`, ...engagementCounts(row) }));
+}
+
+/**
+ * The engagement of the given participants (an export page), by profile id,
+ * aggregated over their own rows only. Same definitions as the top engagement.
+ */
+export async function networkingParticipantEngagement(
+  eventId: string,
+  profileIds: readonly string[],
+  db: DbExecutor = getDb(),
+): Promise<Map<string, NetworkingEngagementCounts>> {
+  if (!profileIds.length) return new Map();
+  const rows = rowsOf<NetworkingEngagementCounts & { profileId: string }>(
+    await db.execute(sql`
+    SELECT p.id AS "profileId", ${engagementColumns}
+    FROM networking_profiles p ${engagementJoins(eventId, profileIds)}
+    WHERE p.event_id=${eventId} AND p.id IN (${sql.join(profileIds.map((id) => sql`${id}`), sql`,`)})
+  `),
+  );
+  return new Map(rows.map((row) => [row.profileId, engagementCounts(row)]));
 }
 
 export type NetworkingTableUsageSources = {
