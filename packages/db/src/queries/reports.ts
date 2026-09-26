@@ -50,6 +50,7 @@ import { buildSponsorshipWhere } from "./sponsorships";
 // ...and filters registrants with the registrations list's WHERE.
 import { buildRegistrationWhere, type RegistrationFilters } from "./registrations";
 import { withExportStatementTimeout } from "../txn";
+import { readFormSchema } from "./stored-json";
 import {
   exportPageSize,
   pagesByIds,
@@ -700,7 +701,7 @@ export async function getRegistrationTableColumns(
 ): Promise<RegistrationTableColumns> {
   const form = (
     await db
-      .select({ schema: forms.schema })
+      .select({ id: forms.id, schema: forms.schema })
       .from(forms)
       .where(and(eq(forms.eventId, eventId), eq(forms.type, "REGISTRATION")))
       .limit(1)
@@ -710,7 +711,7 @@ export async function getRegistrationTableColumns(
     return { formColumns: [], fixedColumns: getDefaultFixedColumns() };
   }
 
-  const schema = form.schema as FormSchemaSteps;
+  const schema = readFormSchema(form.schema, form.id) as FormSchemaSteps;
   const allFields = schema.steps.flatMap((s) => s.fields);
   const firstStep = schema.steps[0];
   const firstStepFields = firstStep?.fields ?? [];

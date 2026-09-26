@@ -31,6 +31,35 @@ import {
 
 export const DEFAULT_LOCAL_ORIGIN = "http://localhost:8080";
 
+/**
+ * JSONB_VALIDATION (plan 5.2): what a read does with a typed JSON column
+ * value that is not a valid stored document (stored-json.ts). `warn` logs the
+ * column, row id and issue paths (never values) and uses the value as stored,
+ * exactly as before typing; `enforce` refuses it.
+ */
+export const JSONB_VALIDATION_MODES = ["warn", "enforce"] as const;
+export type JsonbValidationMode = (typeof JSONB_VALIDATION_MODES)[number];
+
+const jsonbValidationKey = envKey(z.enum(JSONB_VALIDATION_MODES).default("warn"), {
+  section: "database",
+  description:
+    "Typed JSON columns read from the database (pricing rules, certificate zones, form schemas,\nemail contexts): warn (log the invalid paths, never values, and use the value as stored) or\nenforce (refuse it). Default warn until the read-only stored-JSON audit\n(apps/api dist/scripts/stored-json-report.js) reports nothing.",
+  example: "warn",
+});
+
+/**
+ * JSONB_VALIDATION from an environment, for processes that never parse the
+ * whole config (tools, tests). Blank means unset (warn); anything else but
+ * the two modes throws, naming the key only.
+ */
+export function resolveJsonbValidationMode(source: NodeJS.ProcessEnv): JsonbValidationMode {
+  const result = jsonbValidationKey.safeParse(source.JSONB_VALIDATION);
+  if (!result.success) {
+    throw new Error(`JSONB_VALIDATION must be one of: ${JSONB_VALIDATION_MODES.join(", ")}`);
+  }
+  return result.data;
+}
+
 const envShape = {
   // --- Core ---------------------------------------------------------------
   NODE_ENV: envKey(z.enum(["development", "production", "test"]).default("development"), {
@@ -62,6 +91,7 @@ const envShape = {
       "Boot-time schema check against the migration ledger: enforce (refuse to start), warn (log), off.\nDefault warn until the production ledger has been adopted (packages/db/src/migrator/README.md).",
     example: "warn",
   }),
+  JSONB_VALIDATION: jsonbValidationKey,
 
   // --- HTTP ---------------------------------------------------------------
   CORS_ORIGIN: envKey(z.string().default(DEFAULT_LOCAL_ORIGIN), {

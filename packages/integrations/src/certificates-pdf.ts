@@ -688,7 +688,7 @@ function toCertificateTemplateData(
     templateWidth: t.templateWidth,
     templateHeight: t.templateHeight,
     renderImageKey: t.renderImageKey,
-    zones: (t.zones as CertificateZone[]) ?? [],
+    zones: t.zones ?? [],
     applicableRoles: (t.applicableRoles as string[] | null) ?? [],
     accessId: t.accessId,
     access: t.access ? { id: t.access.id, name: t.access.name } : null,

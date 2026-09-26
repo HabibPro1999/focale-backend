@@ -166,10 +166,13 @@ wrapping it:
 
 The schemas live in `packages/contracts/src/*.responses.ts` (plus the access
 item schemas in `access.ts`), so they are in the generated artifacts: the
-output-side types are the response `data` shapes. Stored JSON documents
-(`formData`, `priceBreakdown`, form `schema`, pricing `rules`, access
-`conditions`, audit `changes`, abstract `content`/`coAuthors`/
-`additionalFieldsData`) are opaque (`unknown`) until the JSONB typing work. Covered routes:
+output-side types are the response `data` shapes. Pricing `rules` is typed
+(`StoredPricingRulesSchema`, see Typed JSONB columns below). The form `schema`
+stays opaque on purpose: its stored document is open (admin-authored keys
+round-trip untouched) and a contract would drop them. The other stored JSON
+documents (`formData`, `priceBreakdown`, access `conditions`, audit `changes`,
+abstract `content`/`coAuthors`/`additionalFieldsData`) are opaque (`unknown`)
+until they are typed. Covered routes:
 
 | Routes | Schema |
 |---|---|
@@ -202,6 +205,36 @@ output-side types are the response `data` shapes. Stored JSON documents
 Not covered yet: the networking routes and the other admin modules.
 `apps/api/src/modules/response-contracts.routes.test.ts` (with `abstracts/abstracts.response-contracts.routes.test.ts`)
 checks that every enveloped route of the covered controllers has a contract.
+
+### Typed JSONB columns (plan 5.2)
+
+Four JSONB columns are typed with the document their write path stores, a
+`Stored*Schema` in `@app/contracts`: `event_pricing.rules`
+(`StoredPricingRulesSchema`), `certificate_templates.zones`
+(`StoredCertificateZonesSchema`), `forms.schema` (`StoredFormSchemaJsonSchema`,
+registration or sponsor form) and `email_logs.context_snapshot`
+(`StoredEmailContextSnapshotSchema`, template variables plus the internal
+`_fallbackSubject`/`_fallbackPlainBody`/`_certificateTemplateIds` keys).
+`jsonbOf(schema)` (`packages/db/src/jsonb.ts`) types the column for reads and
+writes. A stored value is valid when the schema accepts it and parsing changes
+nothing (`checkStoredJson`: a missing defaulted key counts), so a valid value
+already has the schema's output type.
+
+The queries that hand these columns to callers check them at the read
+boundary (`packages/db/src/queries/stored-json.ts`; the email send path checks
+each claimed email's snapshot, so one bad row fails only that email).
+`JSONB_VALIDATION` decides what an invalid document does: `warn` (default) logs
+the column, row id and issue paths/codes once per process (never values) and
+returns the value exactly as stored, as before typing; `enforce` throws
+`StoredJsonError`. Rows returned by a write are not re-checked. The networking
+query files read `forms.schema` without the check (typed only).
+
+Before switching to `enforce`, run the read-only audit
+`node apps/api/dist/scripts/stored-json-report.js` (from source:
+`node --conditions=@app/source -r @swc-node/register src/scripts/stored-json-report.ts`
+in `apps/api`). It pages through the four columns in READ ONLY transactions,
+lists each invalid document by row id, path and code, counts them per column
+and code, and changes nothing.
 
 ### Tenant scoping (admin routes)
 
