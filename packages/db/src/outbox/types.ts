@@ -11,6 +11,16 @@ export type OutboxEventStatus =
 /** The realtime fan-out outbox type: `handleOutboxEvent` bridges it to the bus. */
 export const REALTIME_EMIT_TYPE = "realtime.emit";
 
+/** A networking participant notice (IDs only): the api pump signals its participant hub. */
+export const NETWORKING_NOTIFY_TYPE = "networking.notify";
+
+/**
+ * Every outbox type the api's realtime pump drains (`scope: "realtime"`); the
+ * worker's background scope and dead-letter requeue skip them, and retention
+ * deletes them after 24 h.
+ */
+export const REALTIME_OUTBOX_TYPES: readonly string[] = [REALTIME_EMIT_TYPE, NETWORKING_NOTIFY_TYPE];
+
 /** Realtime outbox rows carry an AppEvent as their payload. */
 export type RealtimeOutboxPayload = AppEvent;
 

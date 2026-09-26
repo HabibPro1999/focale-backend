@@ -56,7 +56,7 @@ All API routes are under `/api`; success uses existing `{ok:true,data}` envelope
 - GET `/notifications` -> notification list; POST `/notifications/read` `{ids?:string[]}`
 - POST/DELETE `/push-subscriptions` browser PushSubscription JSON
 - GET `/badge`; POST `/meetings/:id/checkin` `{token}`
-- GET `/stream` participant events (authenticated fetch stream; client may poll durable notification state on reconnect)
+- GET `/stream` participant notification stream (authenticated SSE; resumes with `Last-Event-ID`; see NETWORKING.md "Participant notification stream" and `FRONTEND_FOLLOWUP_4_3.md`)
 - GET `/me/export`; DELETE `/me` withdraws networking participation, preserving required historical integrity
 
 ### Shared shapes (backend contracts source is authoritative once published)

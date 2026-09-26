@@ -2,7 +2,7 @@ import { sql, type SQL } from "drizzle-orm";
 import { getDb } from "../client";
 import { rowCountOf } from "../helpers";
 import { DB_NOW, intervalMs } from "../lease-queue";
-import { REALTIME_EMIT_TYPE } from "./types";
+import { REALTIME_OUTBOX_TYPES } from "./types";
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -28,7 +28,7 @@ export interface OutboxRetentionOptions {
 }
 
 export interface OutboxRetentionResult {
-  /** `realtime.emit` rows deleted (older than 24 h, not leased). */
+  /** Realtime-scoped rows (`REALTIME_OUTBOX_TYPES`) deleted (older than 24 h, not leased). */
   realtimeDeleted: number;
   /** Finished unkeyed background rows deleted (older than 30 d). */
   backgroundDeleted: number;
@@ -36,16 +36,18 @@ export interface OutboxRetentionResult {
   compacted: number;
 }
 
-const REALTIME = sql.raw(`'${REALTIME_EMIT_TYPE}'`);
+// Fixed constants, never user input: `'realtime.emit', 'networking.notify'`.
+const REALTIME = sql.raw(REALTIME_OUTBOX_TYPES.map((type) => `'${type}'`).join(", "));
 
 /**
- * Unkeyed realtime rows older than the window, leased rows excepted. Any other
- * status goes: a realtime event still pending after a day (realtime disabled,
- * pump down) would only replay a stale UI refresh. Keyed rows are never
- * deleted (none are realtime today).
+ * Unkeyed realtime rows (admin `realtime.emit` events and IDs-only
+ * `networking.notify` notices) older than the window, leased rows excepted.
+ * Any other status goes: a realtime event still pending after a day (realtime
+ * disabled, pump down) would only replay a stale UI refresh. Keyed rows are
+ * never deleted (none are realtime today).
  */
 function realtimeExpired(maxAgeMs: number): SQL {
-  return sql`"type" = ${REALTIME} AND "dedupe_key" IS NULL
+  return sql`"type" IN (${REALTIME}) AND "dedupe_key" IS NULL
     AND "status" <> 'PROCESSING'
     AND "created_at" < ${DB_NOW} - ${intervalMs(maxAgeMs)}`;
 }
@@ -55,7 +57,7 @@ function realtimeExpired(maxAgeMs: number): SQL {
  * (requeue-dead-letters); pending/failed rows are live work.
  */
 function backgroundExpired(maxAgeMs: number): SQL {
-  return sql`"type" <> ${REALTIME} AND "dedupe_key" IS NULL
+  return sql`"type" NOT IN (${REALTIME}) AND "dedupe_key" IS NULL
     AND "status" IN ('PROCESSED', 'SKIPPED')
     AND "created_at" < ${DB_NOW} - ${intervalMs(maxAgeMs)}`;
 }

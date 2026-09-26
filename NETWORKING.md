@@ -210,6 +210,18 @@ Every networking write is one SERIALIZABLE transaction on one pool connection, r
 
 Only allocations (a meeting request's hold, accepting a proposal, rescheduling a pending request and organizer assignment) take a lock: their first statement upserts one `networking_allocation_locks (event_id, bucket_start)` row per UTC hour the meeting overlaps, so allocations for overlapping times serialize while others proceed. Resources are then claimed with multi-row `INSERT … ON CONFLICT DO NOTHING`, trying tables least used first; a conflict answers 409 `NETWORKING_SLOT_CONFLICT`. Blocking and withdrawal cancel only the affected participant's active meetings with one `UPDATE … RETURNING`.
 
+## Participant notification stream
+
+`GET /api/networking/:slug/stream` (SSE) is the PWA's live notification feed (`apps/api/src/modules/networking/networking.stream.ts`; client contract in `FRONTEND_FOLLOWUP_4_3.md`).
+
+- **Signals.** Every participant notification is written by `createNetworkingNotification`, which also signals the participant's streams. The signal carries IDs only (`eventId`, `profileId`, `notificationId`). Inside an API networking transaction it is published to the in-process `NetworkingNotificationHub` right after commit (never for a rolled-back attempt). Anywhere else (the worker, registration and payment paths, `withSerializableTxn`) it is a `networking.notify` outbox row in the same transaction, which the API's realtime pump relays to the hub within about a second. The hub is separate from the admin realtime bus and keyed by (event, participant), so a notice never wakes another participant's or another event's stream.
+- **Catch-up.** A woken stream runs a keyset query over its own participant's rows created since its watermark minus 10 s (`networkingNotificationsPage`: `(profile_id, created_at)` index, paged by id), and sends what it has not sent yet. Signals during a catch-up coalesce into one more pass. A 60 s resync runs the same query without a signal.
+- **Resume.** Each stream's SSE id is its watermark. On reconnect, `Last-Event-ID` replays everything created since (at least once: rows within the 10 s overlap can repeat; the PWA de-duplicates by id). An id that is not ours or older than 24 h gets `event: replay-gap`.
+- **Limits.** The session, eligibility and event window are re-checked every 5 minutes (a refusal ends the stream with `event: session-ended` and the error code); a stream lasts at most 30 minutes (`event: reconnect`); a session keeps at most 3 open streams, the oldest being replaced (`event: replaced`). Streams are registered with the shutdown coordinator and drained on deploy (`event: shutdown`).
+- **`REALTIME_DISABLED`.** The stream stays available. No `networking.notify` rows are written and the pump does not run, so only notices from API networking transactions arrive at once; the rest arrive at the 60 s resync.
+- **Retention.** `networking.notify` rows are realtime-scoped (`REALTIME_OUTBOX_TYPES`): the worker never claims them, the retention job deletes them after 24 h like `realtime.emit`, and dead-letter requeue skips them.
+- **One API instance.** The hub, like the admin bus, is process-local.
+
 ## Meeting lifecycle
 
 `packages/db/src/queries/networking-meetings.ts` owns the meeting status groups (`open`, `accepted`, `awaiting`, `booked`, `holding`, `released`), the status-only transitions and their reservation effects, and the meeting notices. Reservations are 5-minute quanta, unique per event, resource and quantum:

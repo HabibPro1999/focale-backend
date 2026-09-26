@@ -6,6 +6,8 @@ import {
 } from "@nestjs/common";
 import { makeWorkerId, startPoller, type Poller } from "@app/shared";
 import {
+  isNetworkingNotifyPayload,
+  NETWORKING_NOTIFY_TYPE,
   processOutboxEvents,
   REALTIME_EMIT_TYPE,
   type OutboxHandlerRegistry,
@@ -13,6 +15,7 @@ import {
 } from "@app/db";
 import { CONFIG, type Config } from "../../core/config";
 import { logger } from "../../core/logger.service";
+import { networkingNotificationHub } from "../../core/networking-notification-hub";
 import { eventBus } from "./bus";
 
 /** Poll period: a UI event reaches its streams within about a second. */
@@ -24,9 +27,9 @@ export const REALTIME_PUMP_DRAIN_MS = 5_000;
 
 /**
  * Realtime outbox pump: every second it claims `scope: "realtime"` outbox
- * rows (type `realtime.emit`) in batches of 100, draining until a batch comes
- * back short (at most 5 s per tick), and fans them into the in-process event
- * bus. Runs ONLY in the api process (which holds the bus + SSE connections)
+ * rows (`REALTIME_OUTBOX_TYPES`) in batches of 100, draining until a batch
+ * comes back short (at most 5 s per tick): `realtime.emit` rows fan into the
+ * in-process event bus, `networking.notify` rows into the participant hub. Runs ONLY in the api process (which holds the bus + SSE connections)
  * and only when realtime is enabled. One api instance only: the bus is
  * process-local (see README "Realtime"). Started/stopped via Nest lifecycle
  * hooks rather than touching bootstrap.
@@ -39,10 +42,15 @@ export class RealtimePumpService
   private readonly stopping = new AbortController();
   readonly workerId = makeWorkerId("realtime");
 
-  // The only handler this process registers: realtime.emit → bus fan-out.
+  // One handler per realtime-scoped type (every type the scope claims).
   private readonly handlers: OutboxHandlerRegistry = {
     [REALTIME_EMIT_TYPE]: (payload) => {
       eventBus.emit(payload as RealtimeOutboxPayload);
+      return "processed";
+    },
+    [NETWORKING_NOTIFY_TYPE]: (payload) => {
+      if (!isNetworkingNotifyPayload(payload)) return "skipped";
+      networkingNotificationHub.publish(payload);
       return "processed";
     },
   };

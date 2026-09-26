@@ -5,7 +5,8 @@ import type { Job, JobContext } from "../job";
 /**
  * Hourly retention (and once at boot), in 1,000-row batches. A run cut short
  * by its budget or shutdown resumes on the next one.
- * - Outbox: deletes `realtime.emit` rows older than 24 h and finished unkeyed
+ * - Outbox: deletes realtime rows (`REALTIME_OUTBOX_TYPES`: `realtime.emit`,
+ *   `networking.notify`) older than 24 h and finished unkeyed
  *   background rows older than 30 d, and compacts finished keyed rows older
  *   than 30 d (payload `{}`; the row stays so its dedupe_key keeps rejecting
  *   duplicates).

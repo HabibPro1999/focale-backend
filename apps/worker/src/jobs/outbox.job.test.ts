@@ -42,6 +42,7 @@ describe("outbox handler registry", () => {
       "storage.delete",
     ]);
     expect(handlers["realtime.emit"]).toBeUndefined();
+    expect(handlers["networking.notify"]).toBeUndefined();
   });
 
   it("storage.delete → handleStorageDeleteOutbox(payload), passing its verdict through", async () => {

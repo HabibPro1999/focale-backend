@@ -10,6 +10,8 @@ import { NetworkingMeetingsService } from "./networking.meetings.service";
 import { NetworkingAdminService } from "./networking.admin.service";
 import { NetworkingExportsService } from "./networking.exports.service";
 import { NetworkingPublicController } from "./networking.public.controller";
+import { NetworkingStreamController } from "./networking.stream.controller";
+import { NetworkingStreamService } from "./networking.stream";
 import { NetworkingAdminController } from "./networking.admin.controller";
 import { NetworkingRecommendationsController, NetworkingRecommendationAdminController } from "./networking-recommendations.controller";
 @Module({
@@ -17,6 +19,7 @@ import { NetworkingRecommendationsController, NetworkingRecommendationAdminContr
   controllers: [
     NetworkingMfaController,
     NetworkingPublicController,
+    NetworkingStreamController,
     NetworkingAdminController,
     NetworkingRecommendationsController,
     NetworkingRecommendationAdminController,
@@ -30,6 +33,7 @@ import { NetworkingRecommendationsController, NetworkingRecommendationAdminContr
     NetworkingMeetingsService,
     NetworkingAdminService,
     NetworkingExportsService,
+    NetworkingStreamService,
   ],
   exports: [NetworkingService],
 })

@@ -14,6 +14,7 @@ import {
 } from "../lease-queue";
 import {
   REALTIME_EMIT_TYPE,
+  REALTIME_OUTBOX_TYPES,
   type OutboxHandlerRegistry,
   type OutboxHandlerResult,
   type OutboxProcessingScope,
@@ -86,13 +87,14 @@ function outboxRetryDelayMs(attemptCount: number): number {
   return 15 * 60 * 1000;
 }
 
-// The scope clause is built from a fixed constant, never user input, so raw
+// The scope clause is built from fixed constants, never user input, so raw
 // interpolation is safe.
+const REALTIME_TYPE_LIST = REALTIME_OUTBOX_TYPES.map((type) => `'${type}'`).join(", ");
 function outboxScopeClause(scope: OutboxProcessingScope): SQL {
   if (scope === "realtime")
-    return sql.raw(`AND "type" = '${REALTIME_EMIT_TYPE}'`);
+    return sql.raw(`AND "type" IN (${REALTIME_TYPE_LIST})`);
   if (scope === "background")
-    return sql.raw(`AND "type" <> '${REALTIME_EMIT_TYPE}'`);
+    return sql.raw(`AND "type" NOT IN (${REALTIME_TYPE_LIST})`);
   return sql.raw("");
 }
 
@@ -189,7 +191,7 @@ export async function insertAuditLog(
 let realtimeDisabled = false;
 
 export interface OutboxConfig {
-  /** REALTIME_DISABLED: nothing drains realtime.emit rows, so none are written. */
+  /** REALTIME_DISABLED: nothing drains realtime-scoped rows, so none are written. */
   realtimeDisabled: boolean;
 }
 
@@ -200,6 +202,11 @@ export interface OutboxConfig {
  */
 export function configureOutbox(config: OutboxConfig): void {
   realtimeDisabled = config.realtimeDisabled;
+}
+
+/** True under REALTIME_DISABLED: realtime-scoped rows (REALTIME_OUTBOX_TYPES) are not written. */
+export function realtimeOutboxDisabled(): boolean {
+  return realtimeDisabled;
 }
 
 /**
