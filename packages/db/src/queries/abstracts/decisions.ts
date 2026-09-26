@@ -14,6 +14,7 @@ import {
   CODE_SUFFIX,
   type AbstractFinalType,
 } from "@app/contracts";
+import { selectDecisionEmails } from "@app/shared";
 import { getDb, type DbExecutor } from "../../client";
 import { withTxn, withLockingTxn, pgUniqueViolation } from "../../txn";
 import { lockAbstractForUpdate } from "../../locks";
@@ -41,20 +42,6 @@ function isDuplicateCodeViolation(error: unknown): boolean {
 // ============================================================================
 // Admin decisions — finalize / reopen / presented
 // ============================================================================
-
-function collectCommitteeComments(
-  reviews: { name: string | null; comment: string | null }[],
-): string {
-  return reviews
-    .map((review, index) => {
-      const comment = review.comment?.trim();
-      if (!comment) return null;
-      const label = review.name?.trim() || `Reviewer ${index + 1}`;
-      return `${label}: ${comment}`;
-    })
-    .filter((c): c is string => Boolean(c))
-    .join("\n\n");
-}
 
 async function allocateAbstractCode(
   tx: DbExecutor,
@@ -251,41 +238,15 @@ export async function finalizeAbstractTxn(params: {
         tx,
       );
 
-      const decisionTrigger =
-        updated.status === "ACCEPTED"
-          ? "ABSTRACT_ACCEPTED"
-          : updated.status === "REJECTED"
-            ? "ABSTRACT_REJECTED"
-            : "ABSTRACT_DECISION";
-      const decisionDedupeSuffix = `${abstractId}:${existing.updatedAt.getTime()}`;
-
-      await enqueueAbstractEmailOutboxEvent(
-        tx,
-        { trigger: decisionTrigger, abstractId },
-        `email:abstract:${decisionTrigger}:${decisionDedupeSuffix}`,
-      );
-
-      if (cfg?.commentsEnabled && cfg.commentsSentToAuthor) {
-        const committeeComments = collectCommitteeComments(reviews);
-        if (committeeComments) {
-          await enqueueAbstractEmailOutboxEvent(
-            tx,
-            {
-              trigger: "ABSTRACT_COMMITTEE_COMMENTS",
-              abstractId,
-              extraContext: { committeeComments },
-            },
-            `email:abstract:ABSTRACT_COMMITTEE_COMMENTS:${decisionDedupeSuffix}`,
-          );
-        }
-      }
-
-      if (updated.status === "ACCEPTED" && cfg?.finalFileUploadEnabled) {
-        await enqueueAbstractEmailOutboxEvent(
-          tx,
-          { trigger: "ABSTRACT_FINAL_FILE_REQUEST", abstractId },
-          `email:abstract:ABSTRACT_FINAL_FILE_REQUEST:${decisionDedupeSuffix}`,
-        );
+      const decisionEmails = selectDecisionEmails({
+        abstractId,
+        status: updated.status,
+        decidedFrom: existing.updatedAt,
+        config: cfg,
+        reviews,
+      });
+      for (const email of decisionEmails) {
+        await enqueueAbstractEmailOutboxEvent(tx, email.payload, email.dedupeKey);
       }
 
       await enqueueRealtimeOutboxEvent(tx, {

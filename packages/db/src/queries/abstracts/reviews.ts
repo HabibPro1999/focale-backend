@@ -1,6 +1,7 @@
 /** Committee review submission: the review read, the score write and the divergence alert. */
 import { and, eq, gte, notInArray } from "drizzle-orm";
 import { UserRole, FINAL_STATUSES } from "@app/contracts";
+import { planScoreDivergenceAlert, scoreDivergenceEmailDedupeKey } from "@app/shared";
 import { getDb, type DbExecutor } from "../../client";
 import { withLockingTxn } from "../../txn";
 import { lockAbstractForUpdate } from "../../locks";
@@ -95,8 +96,7 @@ export async function findAbstractForReview(
 // Committee — review submission (score aggregation + divergence)
 // ============================================================================
 
-const ONE_HOUR_MS = 60 * 60 * 1000;
-
+/** Raise the divergence alert when planScoreDivergenceAlert (@app/shared) says to. */
 async function notifyScoreDivergence(input: {
   db: DbExecutor;
   abstractId: string;
@@ -107,12 +107,15 @@ async function notifyScoreDivergence(input: {
   scores: number[];
   threshold: number;
 }): Promise<void> {
-  if (input.scores.length < 2) return;
-  const min = Math.min(...input.scores);
-  const max = Math.max(...input.scores);
-  if (max - min <= 0 || max - min < input.threshold) return;
+  const alert = planScoreDivergenceAlert({
+    scores: input.scores,
+    threshold: input.threshold,
+    averageScore: input.averageScore,
+    reviewCount: input.reviewCount,
+    now: Date.now(),
+  });
+  if (!alert) return;
 
-  const since = new Date(Date.now() - ONE_HOUR_MS);
   const [existing] = await input.db
     .select({ id: emailLogs.id })
     .from(emailLogs)
@@ -120,7 +123,7 @@ async function notifyScoreDivergence(input: {
       and(
         eq(emailLogs.abstractId, input.abstractId),
         eq(emailLogs.abstractTrigger, "ABSTRACT_SCORE_DIVERGENCE"),
-        gte(emailLogs.queuedAt, since),
+        gte(emailLogs.queuedAt, alert.suppressedByAlertSince),
       ),
     )
     .limit(1);
@@ -137,7 +140,6 @@ async function notifyScoreDivergence(input: {
       ),
     );
 
-  const dedupeBucket = Math.floor(Date.now() / ONE_HOUR_MS);
   // One statement at a time: these ride the caller's transaction, whose single
   // connection cannot run statements concurrently.
   for (const admin of admins) {
@@ -147,15 +149,9 @@ async function notifyScoreDivergence(input: {
         trigger: "ABSTRACT_SCORE_DIVERGENCE",
         abstractId: input.abstractId,
         recipientOverride: { email: admin.email, name: admin.name },
-        extraContext: {
-          averageScore: input.averageScore,
-          reviewCount: input.reviewCount,
-          minScore: min,
-          maxScore: max,
-          divergenceThreshold: input.threshold,
-        },
+        extraContext: alert.details,
       },
-      `email:abstract:ABSTRACT_SCORE_DIVERGENCE:${input.abstractId}:${admin.email}:${dedupeBucket}`,
+      scoreDivergenceEmailDedupeKey(input.abstractId, admin.email, alert.hourBucket),
     );
   }
 
@@ -163,14 +159,7 @@ async function notifyScoreDivergence(input: {
     type: "abstract.scoreDiverged",
     clientId: input.clientId,
     eventId: input.eventId,
-    payload: {
-      id: input.abstractId,
-      averageScore: input.averageScore,
-      reviewCount: input.reviewCount,
-      minScore: min,
-      maxScore: max,
-      divergenceThreshold: input.threshold,
-    },
+    payload: { id: input.abstractId, ...alert.details },
     ts: Date.now(),
   });
 }
