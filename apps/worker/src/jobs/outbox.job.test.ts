@@ -8,9 +8,11 @@ const mocks = vi.hoisted(() => ({
   handleAccessCapacityReachedOutbox: vi.fn(),
   handleNetworkingRegistrationSyncOutbox: vi.fn(),
   handleNetworkingEventSyncOutbox: vi.fn(),
+  processOutboxEvents: vi.fn(),
 }));
 
-vi.mock("@app/shared", () => ({
+vi.mock("@app/shared", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@app/shared")>()),
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
@@ -21,10 +23,10 @@ vi.mock("@app/integrations", () => ({
   handleStorageDeleteOutbox: mocks.handleStorageDeleteOutbox,
 }));
 
-// @app/db only supplies types + processOutboxEvents (unused here); stub it so
-// importing the job module never touches a real database client.
+// @app/db only supplies types, the handlers and processOutboxEvents; stub it
+// so importing the job module never touches a real database client.
 vi.mock("@app/db", () => ({
-  processOutboxEvents: vi.fn(),
+  processOutboxEvents: mocks.processOutboxEvents,
   ACCESS_CAPACITY_REACHED_OUTBOX_TYPE: "access.capacityReached",
   handleAccessCapacityReachedOutbox: mocks.handleAccessCapacityReachedOutbox,
   NETWORKING_REGISTRATION_SYNC_OUTBOX_TYPE: "networking.registration.sync",
@@ -33,7 +35,51 @@ vi.mock("@app/db", () => ({
   handleNetworkingEventSyncOutbox: mocks.handleNetworkingEventSyncOutbox,
 }));
 
-import { buildOutboxHandlers } from "./outbox.job";
+import {
+  OUTBOX_BATCH_SIZE,
+  OUTBOX_DRAIN_MARGIN_MS,
+  OutboxJob,
+  buildOutboxHandlers,
+} from "./outbox.job";
+import type { JobContext } from "../job";
+
+describe("OutboxJob", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.processOutboxEvents.mockResolvedValue({
+      processed: 0,
+      skipped: 0,
+      failed: 0,
+      leaseLost: 0,
+      released: 0,
+    });
+  });
+
+  it("runs every 5 s within a 60 s budget", () => {
+    const job = new OutboxJob();
+    expect(job.intervalMs).toBe(5_000);
+    expect(job.timeoutMs).toBe(60_000);
+  });
+
+  it("claims background batches of 20 and drains until the run's deadline minus the margin", async () => {
+    const signal = new AbortController().signal;
+    const deadline = Date.now() + 60_000;
+    await new OutboxJob().run({ signal, deadline, log: {} as JobContext["log"] });
+
+    expect(OUTBOX_BATCH_SIZE).toBe(20);
+    expect(mocks.processOutboxEvents).toHaveBeenCalledOnce();
+    expect(mocks.processOutboxEvents).toHaveBeenCalledWith(20, {
+      workerId: expect.stringContaining("outbox"),
+      scope: "background",
+      handlers: expect.objectContaining({ "email.triggered": expect.any(Function) }),
+      signal,
+      drainUntil: deadline - OUTBOX_DRAIN_MARGIN_MS,
+    });
+    // The drain window is real, and the batch in flight keeps room inside the budget.
+    expect(OUTBOX_DRAIN_MARGIN_MS).toBeGreaterThanOrEqual(20_000);
+    expect(OUTBOX_DRAIN_MARGIN_MS).toBeLessThan(60_000);
+  });
+});
 
 describe("outbox handler registry", () => {
   beforeEach(() => vi.clearAllMocks());
