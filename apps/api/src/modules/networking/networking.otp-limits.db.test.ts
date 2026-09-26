@@ -32,7 +32,7 @@ async function challenge(values: {
   const eventId = values.eventId ?? ids.event;
   const address = values.email ?? email;
   const createdAt = values.createdAt ?? new Date();
-  return networkingStore().insert("challenges", {
+  return networkingStore(getDb()).insert("challenges", {
     id: randomUUID(),
     eventId,
     email: address,
@@ -45,7 +45,7 @@ async function challenge(values: {
   });
 }
 const failed = () =>
-  networkingStore().failedOtpAttempts(ids.event, email, minutesAgo(15), minutesAgo(24 * 60));
+  networkingStore(getDb()).failedOtpAttempts(ids.event, email, minutesAgo(15), minutesAgo(24 * 60));
 
 describe.runIf(enabled)("networking OTP failed-attempt limits (real database)", () => {
   beforeAll(async () => {
@@ -57,7 +57,7 @@ describe.runIf(enabled)("networking OTP failed-attempt limits (real database)", 
     });
     const config = NetworkingConfigSchema.parse({ enabled: true, approvalMode: "AUTOMATIC", timezone: "UTC" });
     for (const id of [ids.event, ids.other]) {
-      await networkingStore().insert("events", {
+      await networkingStore(getDb()).insert("events", {
         id,
         clientId: ids.client,
         name: "Networking OTP fixture",
@@ -66,7 +66,7 @@ describe.runIf(enabled)("networking OTP failed-attempt limits (real database)", 
         startDate: new Date("2031-04-05T00:00Z"),
         endDate: new Date("2031-04-06T00:00Z"),
       });
-      await networkingStore().insert("configs", { eventId: id, config });
+      await networkingStore(getDb()).insert("configs", { eventId: id, config });
     }
     await getDb().insert(forms).values({ id: ids.form, eventId: ids.event, name: "Registration", schema: { steps: [] } });
     await getDb().insert(registrations).values({
@@ -86,7 +86,7 @@ describe.runIf(enabled)("networking OTP failed-attempt limits (real database)", 
   }, 30_000);
 
   beforeEach(async () => {
-    for (const eventId of [ids.event, ids.other]) await networkingStore().remove("challenges", { eventId });
+    for (const eventId of [ids.event, ids.other]) await networkingStore(getDb()).remove("challenges", { eventId });
   });
 
   it("sums failed attempts per event and email across challenges, excluding the verified attempt", async () => {
@@ -107,11 +107,11 @@ describe.runIf(enabled)("networking OTP failed-attempt limits (real database)", 
       status: 429,
       response: { code: "NETWORKING_RATE_LIMITED" },
     });
-    const row = await networkingStore().one("challenges", { id: fresh.id });
+    const row = await networkingStore(getDb()).one("challenges", { id: fresh.id });
     expect(row).toMatchObject({ attempts: 0, consumedAt: null, verifiedAt: null });
-    expect(await networkingStore().all("sessions", { eventId: ids.event })).toHaveLength(0);
+    expect(await networkingStore(getDb()).all("sessions", { eventId: ids.event })).toHaveLength(0);
     // Challenges older than the 15-minute window stop counting toward the short limit.
-    await networkingStore().update("challenges", { eventId: ids.event, attempts: 5 }, { createdAt: minutesAgo(16) });
+    await networkingStore(getDb()).update("challenges", { eventId: ids.event, attempts: 5 }, { createdAt: minutesAgo(16) });
     await expect(service.verifyCode(ids.event, fresh.id, "000000")).rejects.toMatchObject({ status: 401 });
   });
 
@@ -120,7 +120,7 @@ describe.runIf(enabled)("networking OTP failed-attempt limits (real database)", 
       await challenge({ attempts: 5, createdAt: minutesAgo(hours * 60), consumed: true });
     const fresh = await challenge({});
     await expect(service.verifyCode(ids.event, fresh.id, code)).rejects.toMatchObject({ status: 429 });
-    expect(await networkingStore().one("challenges", { id: fresh.id })).toMatchObject({ attempts: 0 });
+    expect(await networkingStore(getDb()).one("challenges", { id: fresh.id })).toMatchObject({ attempts: 0 });
   });
 
   it("marks a successful verification so it never counts as a failure", async () => {
@@ -130,7 +130,7 @@ describe.runIf(enabled)("networking OTP failed-attempt limits (real database)", 
     const issued = await service.verifyCode(ids.event, fresh.id, code);
     expect(issued.token).toEqual(expect.any(String));
     expect(issued).not.toHaveProperty("session");
-    const row = await networkingStore().one("challenges", { id: fresh.id });
+    const row = await networkingStore(getDb()).one("challenges", { id: fresh.id });
     expect(row).toMatchObject({ attempts: 3 });
     expect(row?.verifiedAt).toBeInstanceOf(Date);
     expect(row?.consumedAt).toBeInstanceOf(Date);

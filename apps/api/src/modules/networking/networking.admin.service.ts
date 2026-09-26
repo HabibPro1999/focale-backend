@@ -19,6 +19,8 @@ import {
   type NetworkingAnalytics,
 } from "@app/contracts";
 import {
+  withLockingTxn,
+  getDb,
   queueNetworkingActivation,
   latestNetworkingPostEventReport,
   cancelNetworkingParticipantMeetings,
@@ -87,7 +89,7 @@ export class NetworkingAdminService {
     actorId?: string,
   ): Promise<NetworkingConfigWithRevision> {
     if (!input) {
-      const row = await networkingStore().one("configs", { eventId });
+      const row = await networkingStore(getDb()).one("configs", { eventId });
       return {
         ...NetworkingConfigSchema.parse(row?.config ?? {}),
         revision: row?.updatedAt.toISOString() ?? NETWORKING_CONFIG_UNCONFIGURED_REVISION,
@@ -198,7 +200,7 @@ export class NetworkingAdminService {
     )
       try {
         // The worker re-projects every registration in chunks (plan 4.8).
-        await requestNetworkingEventSync(eventId);
+        await withLockingTxn((tx) => requestNetworkingEventSync(eventId, tx));
       } catch (error) {
         // The config is committed; the organizer can request the sync again, so the saved revision is still returned.
         log.error({ err: error, eventId }, "Networking registration sync request failed after a config update");
@@ -207,7 +209,7 @@ export class NetworkingAdminService {
   }
   async verifyBadge(eventId: string, token: string, accessId?: string) {
     const profileId = await this.networking.badgeProfileId(eventId, token);
-    const store = networkingStore();
+    const store = networkingStore(getDb());
     const profile = await store.one("profiles", { id: profileId, eventId });
     const event = await store.one("events", { id: eventId });
     if (!profile || !event)
@@ -312,7 +314,7 @@ export class NetworkingAdminService {
     const { timezone } = await getNetworkingConfig(eventId);
     const { start, end } = networkingCalendarDay(query.date, timezone);
     await this.meetings.expire(eventId);
-    const rows = await networkingStore().calendarMeetings(eventId, start, end, query);
+    const rows = await networkingStore(getDb()).calendarMeetings(eventId, start, end, query);
     if (rows.length > 5000) throw new BadRequestException({
       code: "NETWORKING_VALIDATION", message: "Calendar exceeds 5000 meetings. Use the paginated list.",
     });
@@ -356,7 +358,7 @@ export class NetworkingAdminService {
     // Assigning claims the meeting's own slot; the other actions only release resources.
     const plan = async () => {
       if (input.action !== "ASSIGN") return [];
-      const row = await networkingStore().one("meetings", { eventId, id });
+      const row = await networkingStore(getDb()).one("meetings", { eventId, id });
       return row ? [{ startsAt: row.startsAt, endsAt: row.endsAt }] : [];
     };
     return this.meetings.allocation(eventId, plan, async (store, db) => {

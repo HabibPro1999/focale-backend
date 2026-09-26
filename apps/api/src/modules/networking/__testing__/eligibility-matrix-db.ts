@@ -48,7 +48,7 @@ export async function insertMatrixParticipant(scope: MatrixScope, input: {
     // No consent answer: an unconsented registrant without an opt-in is undecided (K1b).
     formData: {},
   });
-  const profile = await networkingStore().insert("profiles", {
+  const profile = await networkingStore(getDb()).insert("profiles", {
     firstName: "Participant",
     lastName: "Test",
     company: "Company",
@@ -75,7 +75,7 @@ export async function buildEligibilityMatrix(scope: MatrixScope, input: {
   profile?: Partial<NetworkingRow<"profiles">>;
 }): Promise<Matrix> {
   const db = getDb();
-  const store = networkingStore();
+  const store = networkingStore(getDb());
   const formId = randomUUID();
   const event = await store.insert("events", {
     id: input.eventId,

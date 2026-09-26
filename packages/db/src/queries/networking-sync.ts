@@ -5,7 +5,7 @@ import { enqueueOutboxEvent } from "../outbox";
 import type { OutboxHandlerMeta, OutboxHandlerResult } from "../outbox/types";
 import { networkingConfigs } from "../schema/networking";
 import { registrations } from "../schema/registrations";
-import { withLockingTxn } from "../txn";
+import { withLockingTxn, withSerializableTxn } from "../txn";
 import { syncNetworkingRegistration } from "./networking";
 
 // Registration → networking projection off the registration transactions
@@ -33,6 +33,10 @@ const SYNC_ERROR_MAX_LENGTH = 1_000;
 
 /** The sync of one registration: `syncNetworkingRegistration` in production. */
 export type NetworkingRegistrationSync = (registrationId: string) => Promise<{ created: number; updated: number }>;
+
+/** Worker boundary: every projection owns a serializable transaction. */
+const syncRegistrationInTransaction: NetworkingRegistrationSync = (registrationId) =>
+  withSerializableTxn((tx) => syncNetworkingRegistration(registrationId, tx));
 
 export interface NetworkingRegistrationSyncPayload {
   registrationId: string;
@@ -143,7 +147,7 @@ function parseRegistrationSync(payload: unknown): NetworkingRegistrationSyncPayl
 export async function handleNetworkingRegistrationSyncOutbox(
   payload: unknown,
   _meta?: OutboxHandlerMeta,
-  sync: NetworkingRegistrationSync = syncNetworkingRegistration,
+  sync: NetworkingRegistrationSync = syncRegistrationInTransaction,
 ): Promise<OutboxHandlerResult> {
   const job = parseRegistrationSync(payload);
   if (!job) {
@@ -245,9 +249,8 @@ export async function getNetworkingEventSyncState(
  */
 export async function requestNetworkingEventSync(
   eventId: string,
-  db?: DbExecutor,
+  db: DbExecutor,
 ): Promise<NetworkingEventSyncState> {
-  if (!db) return withLockingTxn((tx) => requestNetworkingEventSync(eventId, tx));
   const [count] = await db
     .select({ total: sql<number | string>`count(*)` })
     .from(registrations)
@@ -340,7 +343,7 @@ export async function handleNetworkingEventSyncOutbox(
     return "skipped";
   }
   const chunkSize = options.chunkSize ?? NETWORKING_EVENT_SYNC_CHUNK_SIZE;
-  const sync = options.sync ?? syncNetworkingRegistration;
+  const sync = options.sync ?? syncRegistrationInTransaction;
   const db = getDb();
   const [current] = await db.select({ eventId: c.eventId }).from(c).where(atChunk(job));
   if (!current) return "skipped";

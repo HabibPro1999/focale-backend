@@ -8,6 +8,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import {
+  getDb,
   createNetworkingNotification,
   expireNetworkingProposals,
   getNetworkingConfig,
@@ -59,7 +60,7 @@ export class NetworkingMeetingsService {
   async participantSlots(
     ctx: NetworkingContext,
     profileId: string,
-    store = networkingStore(),
+    store = networkingStore(getDb()),
   ) {
     const profile =
       profileId === ctx.profile.id
@@ -105,7 +106,7 @@ export class NetworkingMeetingsService {
     );
     const selected = ctx.profile.availabilitySet
       ? (
-          await networkingStore().all("availability", {
+          await networkingStore(getDb()).all("availability", {
             eventId: ctx.event.id,
             profileId: ctx.profile.id,
           })
@@ -163,7 +164,7 @@ export class NetworkingMeetingsService {
    * mode, one statement for the whole list), else null, and the table with
    * its space (one more). The viewer must still be eligible, as for target().
    */
-  async hydrateForViewer(ctx: NetworkingContext, rows: MeetingRow[], store = networkingStore()) {
+  async hydrateForViewer(ctx: NetworkingContext, rows: MeetingRow[], store = networkingStore(getDb())) {
     if (!rows.length) return [];
     const [people, tables] = await Promise.all([
       this.networking.visibleCounterparts(ctx, rows.flatMap((row) => [row.requesterId, row.recipientId]), store),
@@ -181,12 +182,12 @@ export class NetworkingMeetingsService {
     }));
   }
   /** One of the participant's meetings, hydrated like a list item (K2). */
-  async hydrateOne(ctx: NetworkingContext, row: MeetingRow, store = networkingStore()) {
+  async hydrateOne(ctx: NetworkingContext, row: MeetingRow, store = networkingStore(getDb())) {
     const [item] = await this.hydrateForViewer(ctx, [row], store);
     return item!;
   }
   /** The organizer's view of meetings: both participants' rows and the table with its space (two statements). */
-  async hydrateAdmin(eventId: string, rows: MeetingRow[], store = networkingStore()) {
+  async hydrateAdmin(eventId: string, rows: MeetingRow[], store = networkingStore(getDb())) {
     if (!rows.length) return [];
     const [profiles, tables] = await Promise.all([
       store.profilesByIds(eventId, rows.flatMap((row) => [row.requesterId, row.recipientId])),
@@ -202,7 +203,7 @@ export class NetworkingMeetingsService {
   }
   async hydrateCalendar(eventId: string, rows: MeetingRow[]) {
     if (!rows.length) return [];
-    const store = networkingStore();
+    const store = networkingStore(getDb());
     const relations = await store.calendarRelations(eventId, rows);
     const profiles = new Map(relations.profiles.map(profile => [profile.id, profile]));
     const spaces = new Map(relations.spaces.map(space => [space.id, space]));
@@ -232,7 +233,7 @@ export class NetworkingMeetingsService {
   }
   /** Idempotent single statements: read paths need no transaction. */
   async expire(eventId: string) {
-    await expireNetworkingProposals(eventId);
+    await expireNetworkingProposals(eventId, getDb());
   }
   async list(ctx: NetworkingContext, query: NetworkingParticipantListQuery = {}) {
     const page = participantPagination("meetings", ctx, query);
@@ -254,10 +255,10 @@ export class NetworkingMeetingsService {
   /** One own meeting, same hydrated shape as a GET meetings item (K2). */
   async get(ctx: NetworkingContext, id: string) {
     await this.expire(ctx.event.id);
-    const store = networkingStore();
+    const store = networkingStore(getDb());
     return this.hydrateOne(ctx, await this.meeting(ctx, id, store), store);
   }
-  async meeting(ctx: NetworkingContext, id: string, store = networkingStore()) {
+  async meeting(ctx: NetworkingContext, id: string, store = networkingStore(getDb())) {
     const row = await store.one("meetings", { eventId: ctx.event.id, id });
     if (
       !row ||
@@ -497,7 +498,7 @@ export class NetworkingMeetingsService {
     // Accepting claims the proposed slot; rescheduling a pending request moves its table hold.
     const plan = async (fresh: () => Promise<NetworkingConfig | null>) => {
       if (input.action !== "ACCEPT" && input.action !== "RESCHEDULE") return [];
-      const row = await networkingStore().one("meetings", { eventId: ctx.event.id, id });
+      const row = await networkingStore(getDb()).one("meetings", { eventId: ctx.event.id, id });
       if (!row) return [];
       const config = (await fresh()) ?? ctx.config;
       if (input.action === "ACCEPT") return slotInterval(row.proposedStartsAt ?? row.startsAt, config);

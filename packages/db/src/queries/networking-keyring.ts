@@ -91,9 +91,9 @@ export interface NetworkingResealResult {
  */
 export async function resealNetworkingSecrets(
   keyring: NetworkingKeyring,
-  options: { apply?: boolean; batchSize?: number; db?: DbExecutor } = {},
+  db: DbExecutor,
+  options: { apply?: boolean; batchSize?: number } = {},
 ): Promise<NetworkingResealResult> {
-  const db = options.db ?? getDb();
   const f = networkingSecondFactors;
   const batchSize = options.batchSize ?? 200;
   const result: NetworkingResealResult = { checked: 0, resealed: 0, unreadable: 0 };

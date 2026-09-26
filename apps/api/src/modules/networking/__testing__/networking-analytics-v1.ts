@@ -6,6 +6,7 @@
  */
 import { networkingInventoryResource } from "../networking.inventory-policy";
 import {
+  getDb,
   networkingMeetingIs,
   getNetworkingConfig,
   networkingEmailMetrics,
@@ -339,7 +340,7 @@ export async function networkingAnalyticsV1(
 ): Promise<
   NetworkingAnalytics & ReturnType<typeof calculateNetworkingAnalyticsV1>
 > {
-  const store = networkingStore();
+  const store = networkingStore(getDb());
   const [
     profiles,
     interests,

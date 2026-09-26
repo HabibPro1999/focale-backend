@@ -7,6 +7,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import {
+  getDb,
   listNetworkingMessages,
   listNetworkingConnectionSummaries,
   countNetworkingConnectionSummaries,
@@ -57,7 +58,7 @@ export class NetworkingSocialService {
   async connection(
     ctx: NetworkingContext,
     id: string,
-    store = networkingStore(),
+    store = networkingStore(getDb()),
   ) {
     const row = await store.one("connections", { id, eventId: ctx.event.id });
     if (
@@ -156,7 +157,7 @@ export class NetworkingSocialService {
   async connectionWith(ctx: NetworkingContext, profileId: string) {
     if (profileId === ctx.profile.id) return null;
     const [profileAId, profileBId] = networkingPair(ctx.profile.id, profileId);
-    const row = await networkingStore().one("connections", { eventId: ctx.event.id, profileAId, profileBId });
+    const row = await networkingStore(getDb()).one("connections", { eventId: ctx.event.id, profileAId, profileBId });
     if (!row) return null;
     try {
       return await this.connectionSummary(ctx, row.id);
@@ -230,14 +231,14 @@ export class NetworkingSocialService {
   async markRead(ctx: NetworkingContext, id: string) {
     const row = await this.connection(ctx, id);
     const readAt = new Date();
-    await networkingStore().update(
+    await networkingStore(getDb()).update(
       "connections",
       { id, eventId: ctx.event.id },
       row.profileAId === ctx.profile.id
         ? { readAAt: readAt }
         : { readBAt: readAt },
     );
-    await markNetworkingMessageNotificationsRead(ctx.event.id, ctx.profile.id, id, readAt);
+    await markNetworkingMessageNotificationsRead(ctx.event.id, ctx.profile.id, id, readAt, getDb());
     return { read: true };
   }
   async block(ctx: NetworkingContext, targetId: string) {
@@ -263,7 +264,7 @@ export class NetworkingSocialService {
     ctx: NetworkingContext,
     input: { profileId: string; messageId?: string; reason: string },
   ) {
-    const store = networkingStore();
+    const store = networkingStore(getDb());
     if (
       input.profileId === ctx.profile.id ||
       !(await store.one("profiles", {

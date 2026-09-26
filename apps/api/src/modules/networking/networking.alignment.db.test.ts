@@ -3,6 +3,7 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import {
+  withSerializableTxn,
   clients,
   forms,
   getDb,
@@ -32,7 +33,7 @@ const service = new NetworkingService();
 const social = new NetworkingSocialService(service);
 const meetings = new NetworkingMeetingsService(service);
 const admin = new NetworkingAdminService(service, meetings);
-const store = () => networkingStore();
+const store = () => networkingStore(getDb());
 let people: NetworkingContext[];
 let connectionId: string;
 const slot = "2031-04-05T10:00:00.000Z";
@@ -115,7 +116,7 @@ describe.runIf(enabled)("PDF alignment audit reproductions", () => {
         priceBreakdown: {},
         formData: { company: "Original company" },
       });
-      await syncNetworkingRegistration(registration.id);
+      await withSerializableTxn((tx) => syncNetworkingRegistration(registration.id, tx));
       const p = (await store().one("profiles", {
         registrationId: registration.id,
       }))!;
@@ -190,7 +191,7 @@ describe.runIf(enabled)("PDF alignment audit reproductions", () => {
       { id: p.profile.id },
       { overrides: { status: "ACTIVE", visible: true } },
     );
-    await syncNetworkingRegistration(p.profile.registrationId);
+    await withSerializableTxn((tx) => syncNetworkingRegistration(p.profile.registrationId, tx));
     expect((await store().one("profiles", { id: p.profile.id }))?.status).toBe(
       "EXCLUDED",
     );
@@ -310,7 +311,7 @@ describe.runIf(enabled)("PDF alignment audit reproductions", () => {
       { eventId: people[0].event.id },
       { config: { ...people[0].config, fieldMapping: {} } },
     );
-    await syncNetworkingRegistration(people[1].profile.registrationId);
+    await withSerializableTxn((tx) => syncNetworkingRegistration(people[1].profile.registrationId, tx));
     expect(
       (await store().one("profiles", { id: people[1].profile.id }))?.company,
     ).toBe("");
@@ -329,7 +330,7 @@ describe.runIf(enabled)("PDF alignment audit reproductions", () => {
       { id: people[1].profile.registrationId },
       { formData: { company: "Updated registration company" } },
     );
-    await syncNetworkingRegistration(people[1].profile.registrationId);
+    await withSerializableTxn((tx) => syncNetworkingRegistration(people[1].profile.registrationId, tx));
     expect(
       (await store().one("profiles", { id: people[1].profile.id }))?.company,
     ).toBe("Updated registration company");

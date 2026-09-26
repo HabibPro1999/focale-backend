@@ -73,7 +73,7 @@ const recipientEligible = eligibleProfile(p, r, statuses);
  * whose counterpart is a visible peer (eligible, another person, unblocked).
  * Each reminder and its in-app record are committed by one statement.
  */
-export async function queueNetworkingMeetingReminders(db: DbExecutor = getDb(), eventId?: string) {
+export async function queueNetworkingMeetingReminders(db: DbExecutor, eventId?: string) {
   for (const [type, hours] of [
     ["MEETING_REMINDER_DAY", 24],
     ["MEETING_REMINDER_HOUR", 1],
@@ -107,7 +107,7 @@ export async function queueNetworkingMeetingReminders(db: DbExecutor = getDb(), 
 }
 
 /** The previous event-local day's unread updates, after 08:00, once per event-local date, to eligible participants. */
-export async function queueNetworkingDailyDigests(db: DbExecutor = getDb(), eventId?: string) {
+export async function queueNetworkingDailyDigests(db: DbExecutor, eventId?: string) {
   await db.execute(sql`
     INSERT INTO networking_deliveries (id,event_id,profile_id,type,payload,status,available_at,dedupe_key,created_at,updated_at)
     SELECT gen_random_uuid()::text,p.event_id,p.id,'DAILY_DIGEST',jsonb_build_object('notificationIds',jsonb_agg(n.id ORDER BY n.created_at)),
@@ -128,7 +128,7 @@ export async function queueNetworkingDailyDigests(db: DbExecutor = getDb(), even
  * At event end +24 hours: the organizer's report (event-level, while the
  * config is enabled) and each eligible participant's contacts notice.
  */
-export async function queueNetworkingPostEventDeliveries(db: DbExecutor = getDb(), eventId?: string) {
+export async function queueNetworkingPostEventDeliveries(db: DbExecutor, eventId?: string) {
   await db.execute(sql`
     INSERT INTO networking_deliveries (id,event_id,type,payload,status,available_at,dedupe_key,created_at,updated_at)
     SELECT gen_random_uuid()::text,e.id,'POST_EVENT_REPORT','{}'::jsonb,'PENDING',now(),'post-event-report:'||e.id,now(),now()

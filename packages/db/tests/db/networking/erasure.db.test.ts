@@ -1,3 +1,4 @@
+import { withSerializableTxn } from "@app/db";
 import { createHash, randomUUID } from "node:crypto";
 import { beforeAll, describe, expect, it } from "vitest";
 import { and, count, eq, inArray, is, or, sql, type SQL } from "drizzle-orm";
@@ -54,7 +55,7 @@ describe.runIf(dbTestsEnabled())("networking withdrawal and erasure", () => {
     fixture = await createNetworkingWriteFixture({ size: 4, slots: [future], tables: 1, hash });
     eventId = fixture.event.id;
     [a, b, c, d] = fixture.participants.map((participant) => participant.profile.id);
-    const store = networkingStore();
+    const store = networkingStore(getDb());
     const db = getDb();
     const profileA = fixture.participants[0].profile;
     const sorted = (x: string, y: string) => (x < y ? [x, y] : [y, x]);
@@ -152,7 +153,7 @@ describe.runIf(dbTestsEnabled())("networking withdrawal and erasure", () => {
     expect(await countWhere(n.networkingDeliveries, and(eq(n.networkingDeliveries.profileId, a), inArray(n.networkingDeliveries.status, ["PENDING", "PROCESSING", "FAILED"])))).toBe(0);
     expect(await countWhere(n.networkingDeliveries, and(eq(n.networkingDeliveries.profileId, a), eq(n.networkingDeliveries.status, "SENT")))).toBe(1);
     expect(await countWhere(n.networkingSessions, and(eq(n.networkingSessions.profileId, a), sql`${n.networkingSessions.revokedAt} IS NULL`))).toBe(0);
-    const [upcoming] = await networkingStore().all("meetings", { eventId, id: seeded.upcoming });
+    const [upcoming] = await networkingStore(getDb()).all("meetings", { eventId, id: seeded.upcoming });
     expect(upcoming.status).toBe("CANCELLED");
     // Other participants keep theirs.
     expect(await countWhere(n.networkingPushSubscriptions, eq(n.networkingPushSubscriptions.profileId, b))).toBe(1);
@@ -167,7 +168,7 @@ describe.runIf(dbTestsEnabled())("networking withdrawal and erasure", () => {
     }]);
 
     // The registration still maps company/jobTitle/sector: sync must not copy them back.
-    expect(await syncNetworkingRegistration(withdrawn.registrationId)).toEqual({ created: 0, updated: 0 });
+    expect(await withSerializableTxn((tx) => syncNetworkingRegistration(withdrawn.registrationId, tx))).toEqual({ created: 0, updated: 0 });
     await syncNetworkingEvent(eventId);
     expect(await profileRow(a)).toEqual(withdrawn);
     // Inside the window nothing more is erased.
@@ -187,7 +188,7 @@ describe.runIf(dbTestsEnabled())("networking withdrawal and erasure", () => {
     const n = schema;
     // Rows keyed otherwise: audit about them, their codes, their networking email logs, notices naming them.
     expect(await countWhere(n.networkingAudit, eq(n.networkingAudit.eventId, eventId))).toBe(3);
-    expect((await networkingStore().all("audit", { eventId })).map((row) => row.action).sort())
+    expect((await networkingStore(getDb()).all("audit", { eventId })).map((row) => row.action).sort())
       .toEqual(["CONFIG_UPDATED", "POST_EVENT_REPORT", "SWIPE_LIKE"]);
     expect(await countWhere(n.networkingChallenges, eq(n.networkingChallenges.eventId, eventId))).toBe(1);
     const logs = (await getDb().execute(sql`
@@ -208,7 +209,7 @@ describe.runIf(dbTestsEnabled())("networking withdrawal and erasure", () => {
     expect(await countWhere(n.networkingDeliveries, sql`${n.networkingDeliveries.payload}->>'connectionId' = ${seeded.bc}`)).toBe(1);
     expect(await countWhere(networkingEmbeddings, eq(networkingEmbeddings.profileId, b))).toBe(1);
     expect(await countWhere(networkingSecondFactors, eq(networkingSecondFactors.profileId, b))).toBe(1);
-    const [stand] = await networkingStore().all("tables", { eventId, id: fixture.tables[0].id });
+    const [stand] = await networkingStore(getDb()).all("tables", { eventId, id: fixture.tables[0].id });
     expect(stand.ownerProfileId).toBeNull();
 
     // The tombstone: kept columns unchanged, every other column at its erased value.
@@ -221,7 +222,7 @@ describe.runIf(dbTestsEnabled())("networking withdrawal and erasure", () => {
     }
 
     // Sync never recreates or rewrites it; the maintenance does not pick it again.
-    expect(await syncNetworkingRegistration(tombstone.registrationId)).toEqual({ created: 0, updated: 0 });
+    expect(await withSerializableTxn((tx) => syncNetworkingRegistration(tombstone.registrationId, tx))).toEqual({ created: 0, updated: 0 });
     await syncNetworkingEvent(eventId);
     expect(await profileRow(a)).toEqual(tombstone);
     expect(await countWhere(networkingProfiles, eq(networkingProfiles.registrationId, tombstone.registrationId))).toBe(1);
