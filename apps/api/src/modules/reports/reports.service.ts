@@ -3,7 +3,8 @@
 // ============================================================================
 
 import { Injectable } from "@nestjs/common";
-import ExcelJS from "exceljs";
+import type ExcelJS from "exceljs";
+import type { Writable } from "node:stream";
 import {
   getFinancialSummaryAggregates,
   getPaymentStatusBreakdown,
@@ -12,14 +13,15 @@ import {
   getEventAnalyticsData,
   getAccessRegistrantsData,
   getEventSlug,
-  getRegistrationsForExport,
+  getRegistrationFormDataKeys,
+  iterateRegistrationsForExport,
   withExportStatementTimeout,
   type DateRange,
   type FinancialSummaryAggregates,
   type ExportRegistrationRow,
 } from "@app/db";
 import { ErrorCodes } from "@app/contracts";
-import { formatFileDate, isFullySettled, toCsv } from "@app/shared";
+import { CSV_BOM, formatFileDate, isFullySettled, toCsvLine } from "@app/shared";
 import type {
   ReportQuery,
   FinancialReportResponse,
@@ -37,7 +39,14 @@ import {
   generateSponsorshipsReport,
   generateCheckInReport,
 } from "./excel-generator";
-import { buildRegistrationsWorkbook } from "./registrations-export-builder";
+import { prepareRegistrationsWorkbook } from "./registrations-export-builder";
+import { writeChunk, type ExportDownload } from "../../core/exports/stream-io";
+import {
+  XLSX_CONTENT_TYPE,
+  ColumnStyles,
+  RowPacer,
+  createXlsxWriter,
+} from "../../core/exports/xlsx-stream";
 
 function buildDateFilter(query: ReportQuery): DateRange {
   return {
@@ -191,92 +200,107 @@ export class ReportsService {
   // CSV / JSON / XLSX registrations export
   // ==========================================================================
 
+  /**
+   * GET export. The event check and the form_data key union (the header) run
+   * now; `write` streams the rows page by page in the requested format.
+   */
   async exportRegistrations(
     eventId: string,
     query: ExportRegistrationsQuery,
-  ): Promise<{ filename: string; contentType: string; data: string | Buffer }> {
-    // Export fetches run under the export statement timeout. Fail fast —
-    // verify the event exists before querying registrations.
-    const { event, registrations } = await withExportStatementTimeout(async (tx) => {
+  ): Promise<ExportDownload> {
+    const filters = {
+      paymentStatus: query.paymentStatus,
+      paymentMethod: query.paymentMethod,
+      search: query.search,
+      startDate: query.startDate,
+      endDate: query.endDate,
+    };
+    // Fail fast — verify the event exists before reading registrations.
+    const { event, formDataKeys } = await withExportStatementTimeout(async (tx) => {
       const found = await getEventSlug(eventId, tx);
-      if (!found) return { event: null, registrations: [] };
-      const rows = await getRegistrationsForExport(
-        eventId,
-        {
-          paymentStatus: query.paymentStatus,
-          paymentMethod: query.paymentMethod,
-          search: query.search,
-          startDate: query.startDate,
-          endDate: query.endDate,
-        },
-        tx,
-      );
-      return { event: found, registrations: rows };
+      if (!found) return { event: null, formDataKeys: [] };
+      const keys =
+        query.format === "json" ? [] : await getRegistrationFormDataKeys(eventId, filters, tx);
+      return { event: found, formDataKeys: keys };
     });
     if (!event) {
       throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
     }
 
-    const timestamp = formatFileDate();
-    const filename = `${event.slug}-registrations-${timestamp}`;
+    const filename = `${event.slug}-registrations-${formatFileDate()}`;
+    const pages = (signal: AbortSignal) =>
+      iterateRegistrationsForExport(eventId, filters, { signal });
 
     if (query.format === "json") {
       return {
         filename: `${filename}.json`,
         contentType: "application/json",
-        data: JSON.stringify(registrations, null, 2),
+        write: (out, signal) => writeRegistrationsJson(out, signal, pages(signal)),
       };
     }
 
     if (query.format === "xlsx") {
-      const workbook = await generateRegistrationsWorkbook(registrations);
       return {
         filename: `${filename}.xlsx`,
-        contentType:
-          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        data: Buffer.from(await workbook.xlsx.writeBuffer()),
+        contentType: XLSX_CONTENT_TYPE,
+        write: (out, signal) =>
+          writeRegistrationsXlsx(out, signal, formDataKeys, pages(signal)),
       };
     }
 
-    const csv = generateCSV(registrations);
     return {
       filename: `${filename}.csv`,
       contentType: "text/csv; charset=utf-8",
-      data: csv,
+      write: (out, signal) => writeRegistrationsCsv(out, signal, formDataKeys, pages(signal)),
     };
   }
 
   // ==========================================================================
-  // Excel/ZIP file endpoints — thin delegation to the generators.
+  // Excel/ZIP file endpoints — thin delegation to the generators (still built
+  // in memory; they stream from a buffer until 3.7b converts them).
   // ==========================================================================
 
-  generateEventSummary(eventId: string): Promise<{ filename: string; data: Buffer }> {
-    return generateEventSummary(eventId);
+  async generateEventSummary(eventId: string): Promise<ExportDownload> {
+    const { filename, data } = await generateEventSummary(eventId);
+    return bufferedDownload(filename, XLSX_CONTENT_TYPE, data);
   }
 
-  generateAccessRegistrantsReport(
-    eventId: string,
-  ): Promise<{ filename: string; data: Buffer }> {
-    return generateAccessRegistrantsReport(eventId);
+  async generateAccessRegistrantsReport(eventId: string): Promise<ExportDownload> {
+    const { filename, data } = await generateAccessRegistrantsReport(eventId);
+    return bufferedDownload(filename, XLSX_CONTENT_TYPE, data);
   }
 
-  generateSponsorshipsReport(
+  async generateSponsorshipsReport(
     eventId: string,
     filters?: { status?: string; search?: string },
-  ): Promise<{ filename: string; data: Buffer }> {
-    return generateSponsorshipsReport(eventId, filters);
+  ): Promise<ExportDownload> {
+    const { filename, data } = await generateSponsorshipsReport(eventId, filters);
+    return bufferedDownload(filename, XLSX_CONTENT_TYPE, data);
   }
 
-  generateCheckInReport(eventId: string): Promise<{ filename: string; data: Buffer }> {
-    return generateCheckInReport(eventId);
+  async generateCheckInReport(eventId: string): Promise<ExportDownload> {
+    const { filename, data } = await generateCheckInReport(eventId);
+    return bufferedDownload(filename, "application/zip", data);
   }
 
   buildRegistrationsWorkbook(
     eventId: string,
     body: ExportRegistrationsBody,
-  ): Promise<{ filename: string; data: Buffer }> {
-    return buildRegistrationsWorkbook(eventId, body);
+  ): Promise<ExportDownload> {
+    return prepareRegistrationsWorkbook(eventId, body);
   }
+}
+
+/** A file already built in memory, sent through the same download path. */
+function bufferedDownload(filename: string, contentType: string, data: Buffer): ExportDownload {
+  return {
+    filename,
+    contentType,
+    write: async (out, signal) => {
+      await writeChunk(out, data, signal);
+      out.end();
+    },
+  };
 }
 
 // ============================================================================
@@ -330,100 +354,110 @@ function buildFinancialSummary(agg: FinancialSummaryAggregates): FinancialSummar
 }
 
 // ============================================================================
-// CSV Export (standard headers + dynamic formData keys)
+// CSV / JSON / XLSX registrations export (streamed page by page)
 // ============================================================================
 
-function generateCSV(registrations: ExportRegistrationRow[]): string {
-  const standardHeaders = [
-    "ID",
-    "Email",
-    "First Name",
-    "Last Name",
-    "Phone",
-    "Payment Status",
-    "Payment Method",
-    "Total Amount",
-    "Paid Amount",
-    "Base Amount",
-    "Access Amount",
-    "Discount Amount",
-    "Sponsorship Code",
-    "Sponsorship Amount",
-    "Submitted At",
-    "Paid At",
-  ];
+const STANDARD_EXPORT_HEADERS = [
+  "ID",
+  "Email",
+  "First Name",
+  "Last Name",
+  "Phone",
+  "Payment Status",
+  "Payment Method",
+  "Total Amount",
+  "Paid Amount",
+  "Base Amount",
+  "Access Amount",
+  "Discount Amount",
+  "Sponsorship Code",
+  "Sponsorship Amount",
+  "Submitted At",
+  "Paid At",
+];
 
-  const formDataKeys = extractRegistrationFormDataKeys(registrations);
-  const headers = [...standardHeaders, ...formDataKeys];
-
-  const rows = registrations.map((r) => {
-    const standardValues = [
-      r.id,
-      r.email,
-      r.firstName ?? "",
-      r.lastName ?? "",
-      r.phone ?? "",
-      r.paymentStatus,
-      r.paymentMethod ?? "",
-      r.totalAmount,
-      r.paidAmount,
-      r.baseAmount,
-      r.accessAmount,
-      r.discountAmount,
-      r.sponsorshipCode ?? "",
-      r.sponsorshipAmount,
-      r.submittedAt.toISOString(),
-      r.paidAt?.toISOString() ?? "",
-    ];
-
-    const fd =
-      r.formData && typeof r.formData === "object" && !Array.isArray(r.formData)
-        ? (r.formData as Record<string, unknown>)
-        : {};
-    const formDataValues = formDataKeys.map((key) => {
+/** Standard values, then one cell per form_data key (objects as JSON). */
+function exportRowValues(r: ExportRegistrationRow, formDataKeys: string[]): (string | number)[] {
+  const fd =
+    r.formData && typeof r.formData === "object" && !Array.isArray(r.formData)
+      ? (r.formData as Record<string, unknown>)
+      : {};
+  return [
+    r.id,
+    r.email,
+    r.firstName ?? "",
+    r.lastName ?? "",
+    r.phone ?? "",
+    r.paymentStatus,
+    r.paymentMethod ?? "",
+    r.totalAmount,
+    r.paidAmount,
+    r.baseAmount,
+    r.accessAmount,
+    r.discountAmount,
+    r.sponsorshipCode ?? "",
+    r.sponsorshipAmount,
+    r.submittedAt.toISOString(),
+    r.paidAt?.toISOString() ?? "",
+    ...formDataKeys.map((key) => {
       const value = fd[key];
       if (value == null) return "";
       if (typeof value === "object") return JSON.stringify(value);
       return String(value);
-    });
-
-    return [...standardValues, ...formDataValues];
-  });
-
-  // Shared CSV policy: quoted cells, formula guard, CRLF, UTF-8 BOM.
-  return toCsv([headers, ...rows]);
+    }),
+  ];
 }
 
-async function generateRegistrationsWorkbook(
-  registrations: ExportRegistrationRow[],
-): Promise<ExcelJS.Workbook> {
-  const workbook = new ExcelJS.Workbook();
-  workbook.creator = "Focale OS";
-  workbook.created = new Date();
+/** Shared CSV policy (quoted cells, formula guard, CRLF, UTF-8 BOM), one page per write. */
+async function writeRegistrationsCsv(
+  out: Writable,
+  signal: AbortSignal,
+  formDataKeys: string[],
+  pages: AsyncIterable<ExportRegistrationRow[]>,
+): Promise<void> {
+  const pacer = new RowPacer(out, signal);
+  await writeChunk(out, CSV_BOM + toCsvLine([...STANDARD_EXPORT_HEADERS, ...formDataKeys]), signal);
+  for await (const page of pages) {
+    let chunk = "";
+    for (const r of page) chunk += toCsvLine(exportRowValues(r, formDataKeys));
+    await writeChunk(out, chunk, signal);
+    await pacer.pageDone();
+  }
+  out.end();
+}
 
-  const sheet = workbook.addWorksheet("Registrations");
+/** Byte-for-byte `JSON.stringify(rows, null, 2)`, written one page at a time. */
+async function writeRegistrationsJson(
+  out: Writable,
+  signal: AbortSignal,
+  pages: AsyncIterable<ExportRegistrationRow[]>,
+): Promise<void> {
+  const pacer = new RowPacer(out, signal);
+  let first = true;
+  for await (const page of pages) {
+    let chunk = "";
+    for (const r of page) {
+      chunk += `${first ? "[\n" : ",\n"}  ${JSON.stringify(r, null, 2).replace(/\n/g, "\n  ")}`;
+      first = false;
+    }
+    await writeChunk(out, chunk, signal);
+    await pacer.pageDone();
+  }
+  await writeChunk(out, first ? "[]" : "\n]", signal);
+  out.end();
+}
 
-  const standardHeaders = [
-    "ID",
-    "Email",
-    "First Name",
-    "Last Name",
-    "Phone",
-    "Payment Status",
-    "Payment Method",
-    "Total Amount",
-    "Paid Amount",
-    "Base Amount",
-    "Access Amount",
-    "Discount Amount",
-    "Sponsorship Code",
-    "Sponsorship Amount",
-    "Submitted At",
-    "Paid At",
-  ];
-
-  const formDataKeys = extractRegistrationFormDataKeys(registrations);
-  const headers = [...standardHeaders, ...formDataKeys];
+async function writeRegistrationsXlsx(
+  out: Writable,
+  signal: AbortSignal,
+  formDataKeys: string[],
+  pages: AsyncIterable<ExportRegistrationRow[]>,
+): Promise<void> {
+  const workbook = createXlsxWriter(out, signal);
+  const sheet = workbook.addWorksheet("Registrations", {
+    views: [{ state: "frozen", ySplit: 1 }],
+  });
+  const headers = [...STANDARD_EXPORT_HEADERS, ...formDataKeys];
 
   const headerFill: ExcelJS.Fill = {
     type: "pattern",
@@ -442,65 +476,12 @@ async function generateRegistrationsWorkbook(
     right: { style: "thin" },
   };
 
-  const headerRow = sheet.addRow(headers);
-  headerRow.eachCell((cell) => {
-    cell.fill = headerFill;
-    cell.font = headerFont;
-    cell.border = border;
-  });
-
-  for (const registration of registrations) {
-    const fd =
-      registration.formData &&
-      typeof registration.formData === "object" &&
-      !Array.isArray(registration.formData)
-        ? (registration.formData as Record<string, unknown>)
-        : {};
-
-    const row = sheet.addRow(
-      [
-        registration.id,
-        registration.email,
-        registration.firstName ?? "",
-        registration.lastName ?? "",
-        registration.phone ?? "",
-        registration.paymentStatus,
-        registration.paymentMethod ?? "",
-        registration.totalAmount,
-        registration.paidAmount,
-        registration.baseAmount,
-        registration.accessAmount,
-        registration.discountAmount,
-        registration.sponsorshipCode ?? "",
-        registration.sponsorshipAmount,
-        registration.submittedAt.toISOString(),
-        registration.paidAt?.toISOString() ?? "",
-        ...formDataKeys.map((key) => {
-          const value = fd[key];
-          if (value == null) return "";
-          if (typeof value === "object") return JSON.stringify(value);
-          return String(value);
-        }),
-      ],
-    );
-
-    row.eachCell((cell) => {
-      cell.border = border;
-      cell.alignment = { vertical: "top", wrapText: true };
-    });
-  }
-
-  sheet.autoFilter = {
-    from: { row: headerRow.number, column: 1 },
-    to: { row: headerRow.number, column: headers.length },
-  };
-  sheet.views = [{ state: "frozen", ySplit: 1 }];
-
+  // Column widths and money formats go first: a streamed sheet writes its
+  // column definitions with the first row, and new cells inherit the format.
   const moneyColumns = [8, 9, 10, 11, 12, 14];
   moneyColumns.forEach((columnNumber) => {
     sheet.getColumn(columnNumber).numFmt = "#,##0";
   });
-
   headers.forEach((header, index) => {
     const lowerHeader = header.toLowerCase();
     let width = 18;
@@ -520,25 +501,37 @@ async function generateRegistrationsWorkbook(
     sheet.getColumn(index + 1).width = width;
   });
 
-  return workbook;
-}
+  const headerRow = sheet.addRow(headers);
+  headerRow.eachCell((cell) => {
+    cell.fill = headerFill;
+    cell.font = headerFont;
+    cell.border = border;
+  });
+  headerRow.commit();
+  sheet.autoFilter = {
+    from: { row: 1, column: 1 },
+    to: { row: 1, column: headers.length },
+  };
 
-function extractRegistrationFormDataKeys(
-  registrations: ExportRegistrationRow[],
-): string[] {
-  const formDataKeysSet = new Set<string>();
-
-  for (const registration of registrations) {
-    if (
-      registration.formData &&
-      typeof registration.formData === "object" &&
-      !Array.isArray(registration.formData)
-    ) {
-      for (const key of Object.keys(registration.formData as Record<string, unknown>)) {
-        formDataKeysSet.add(key);
-      }
+  const cellStyles = new ColumnStyles((column) => ({
+    ...(moneyColumns.includes(column) ? { numFmt: "#,##0" } : {}),
+    border,
+    alignment: { vertical: "top", wrapText: true },
+  }));
+  const pacer = new RowPacer(out, signal, sheet);
+  for await (const page of pages) {
+    for (const registration of page) {
+      const row = sheet.addRow(exportRowValues(registration, formDataKeys));
+      row.eachCell((cell, colNumber) => {
+        cell.style = cellStyles.for(colNumber, cell.type);
+      });
+      row.commit();
+      await pacer.row();
     }
+    await pacer.pageDone();
   }
 
-  return Array.from(formDataKeysSet).sort();
+  signal.throwIfAborted();
+  sheet.commit();
+  await workbook.commit();
 }

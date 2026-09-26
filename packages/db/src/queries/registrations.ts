@@ -3,8 +3,10 @@ import {
   count,
   desc,
   eq,
+  gte,
   ilike,
   inArray,
+  lte,
   ne,
   or,
   sql,
@@ -159,17 +161,27 @@ export async function getRegistrationByIdempotencyKeyRow(
   };
 }
 
+/**
+ * Filters shared by the registration list, its stats and every registration
+ * export, so an export returns exactly the rows the list showed. Dates bound
+ * `submitted_at` (inclusive); only the bounds that are given apply.
+ */
+export interface RegistrationFilters {
+  paymentStatus?: string;
+  paymentMethod?: string;
+  role?: string;
+  search?: string;
+  startDate?: string | Date;
+  endDate?: string | Date;
+}
+
+/** The one WHERE for an event's registrations (list, stats, exports). */
 export function buildRegistrationWhere(
   eventId: string,
-  filters?: {
-    paymentStatus?: string;
-    paymentMethod?: string;
-    role?: string;
-    search?: string;
-  },
-): SQL | undefined {
+  filters: RegistrationFilters = {},
+): SQL {
   const clauses: (SQL | undefined)[] = [eq(registrations.eventId, eventId)];
-  if (filters?.paymentStatus) {
+  if (filters.paymentStatus) {
     clauses.push(
       eq(
         registrations.paymentStatus,
@@ -177,7 +189,7 @@ export function buildRegistrationWhere(
       ),
     );
   }
-  if (filters?.paymentMethod) {
+  if (filters.paymentMethod) {
     clauses.push(
       eq(
         registrations.paymentMethod,
@@ -185,13 +197,19 @@ export function buildRegistrationWhere(
       ),
     );
   }
-  if (filters?.role) {
+  if (filters.role) {
     clauses.push(eq(registrations.role, filters.role as RegistrationRow["role"]));
   }
-  if (filters?.search) {
+  if (filters.search) {
     clauses.push(registrationSearchClause(filters.search));
   }
-  return and(...clauses);
+  if (filters.startDate) {
+    clauses.push(gte(registrations.submittedAt, new Date(filters.startDate)));
+  }
+  if (filters.endDate) {
+    clauses.push(lte(registrations.submittedAt, new Date(filters.endDate)));
+  }
+  return and(...clauses) as SQL;
 }
 
 /**
