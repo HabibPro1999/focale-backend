@@ -130,7 +130,7 @@ function assertTenantClientActive(authUser: CachedAuthUser): void {
   }
   if (authUser.client?.active !== true) {
     throw new ForbiddenException({
-      code: ErrorCodes.FORBIDDEN,
+      code: ErrorCodes.CLIENT_INACTIVE,
       message: "Client is inactive",
     });
   }

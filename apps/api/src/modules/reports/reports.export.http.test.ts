@@ -39,7 +39,10 @@ vi.mock("@app/db", async (importOriginal) => ({
       updatedAt: new Date("2026-01-01T00:00:00.000Z"),
     },
   })),
-  getEventWithPricing: vi.fn(async (id: string) => ({ id, clientId: "client-A" })),
+  getEventTenantScope: vi.fn(async (id: string) => ({
+    event: { id, clientId: "client-A", status: "OPEN", slug: "congres" },
+    client: { id: "client-A", active: true, enabledModules: ["abstracts"] },
+  })),
   withExportStatementTimeout: vi.fn((fn: (tx: unknown) => unknown) => fn({ tx: true })),
   getEventSlug: vi.fn(async () => ({ slug: "congres" })),
   getRegistrationFormDataKeys: vi.fn(async () => ["city"]),
@@ -49,8 +52,6 @@ vi.mock("@app/db", async (importOriginal) => ({
     accessItems: [{ id: "a1", name: "Déjeuner", type: "MEAL" }],
   })),
   iterateCheckInReportRows: vi.fn(),
-  findEventClientId: vi.fn(async (id: string) => ({ id, clientId: "client-A" })),
-  findClientModuleState: vi.fn(async () => ({ active: true, enabledModules: ["abstracts"] })),
   getAbstractsExportPlan: vi.fn(async () => ({ ids: [], maxReviews: 0 })),
   iterateAbstractsForExport: vi.fn(async function* () {}),
 }));

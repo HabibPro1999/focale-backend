@@ -9,7 +9,7 @@ import {
 } from "@nestjs/common";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
-import { assertEventAccess } from "../../core/auth/assert-event-access";
+import { EventScoped } from "../tenancy";
 import { type AuthUser } from "../../core/auth/user-cache";
 import { CheckinService } from "./checkin.service";
 import {
@@ -21,28 +21,23 @@ import {
 
 /**
  * Check-in routes, mounted at /api/events. Every route requires a valid token
- * (@Auth); per-route ownership is enforced by re-fetching the event and running
- * canAccessClient against its clientId. Route-level 404/403 are plain (code
- * derived by the global filter). POSTs are @HttpCode(200) — legacy Fastify
- * returned 200, not Nest's default 201.
+ * (@Auth); `@EventScoped()` checks the event exists (404) and belongs to the
+ * caller's client (403). POSTs are @HttpCode(200) — legacy Fastify returned
+ * 200, not Nest's default 201.
  */
 @Auth()
 @Controller("api/events")
 export class CheckinController {
   constructor(private readonly checkin: CheckinService) {}
 
-  private async authorizeEvent(user: AuthUser, eventId: string): Promise<void> {
-    await assertEventAccess(user, eventId);
-  }
-
   @Post(":eventId/checkin")
+  @EventScoped()
   @HttpCode(200)
   async checkIn(
     @CurrentUser() user: AuthUser,
     @Param() params: CheckInEventParamDto,
     @Body() body: CheckInBodyDto,
   ) {
-    await this.authorizeEvent(user, params.eventId);
     return this.checkin.checkIn(
       params.eventId,
       body.registrationId,
@@ -52,32 +47,28 @@ export class CheckinController {
   }
 
   @Get(":eventId/checkin/registrations")
+  @EventScoped()
   async registrations(
-    @CurrentUser() user: AuthUser,
     @Param() params: CheckInEventParamDto,
     @Query() query: CheckInRegistrationsQueryDto,
   ) {
-    await this.authorizeEvent(user, params.eventId);
     return this.checkin.getCheckInRegistrations(params.eventId, query.accessId);
   }
 
   @Get(":eventId/checkin/stats")
-  async stats(
-    @CurrentUser() user: AuthUser,
-    @Param() params: CheckInEventParamDto,
-  ) {
-    await this.authorizeEvent(user, params.eventId);
+  @EventScoped()
+  async stats(@Param() params: CheckInEventParamDto) {
     return this.checkin.getCheckInStats(params.eventId);
   }
 
   @Post(":eventId/checkin/sync")
+  @EventScoped()
   @HttpCode(200)
   async sync(
     @CurrentUser() user: AuthUser,
     @Param() params: CheckInEventParamDto,
     @Body() body: BatchSyncBodyDto,
   ) {
-    await this.authorizeEvent(user, params.eventId);
     return this.checkin.batchSync(params.eventId, body.checkIns, user.id);
   }
 }

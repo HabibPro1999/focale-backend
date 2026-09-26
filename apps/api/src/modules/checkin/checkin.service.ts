@@ -62,7 +62,7 @@ function assertCheckInAllowed(
 ): asserts registration is CheckInRegistration {
   if (!registration) {
     throw new AppException(
-      ErrorCodes.CHECKIN_REGISTRATION_NOT_FOUND,
+      ErrorCodes.REGISTRATION_NOT_FOUND,
       "Registration not found",
       404,
     );
@@ -151,7 +151,7 @@ export class CheckinService {
     if (accessId) {
       const access = await getActiveEventAccessId(accessId, eventId);
       if (!access) {
-        throw new AppException(ErrorCodes.NOT_FOUND, "Access item not found", 404);
+        throw new AppException(ErrorCodes.ACCESS_NOT_FOUND, "Access item not found", 404);
       }
     }
     return getEligibleRegistrationIds(eventId, accessId);

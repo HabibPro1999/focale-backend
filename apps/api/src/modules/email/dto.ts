@@ -1,5 +1,6 @@
 import {
   CreateEmailTemplateBodySchema,
+  DuplicateEmailTemplateSchema,
   UpdateEmailTemplateSchema,
   ListEmailTemplatesQuerySchema,
   ListEventEmailLogsQuerySchema,
@@ -12,10 +13,15 @@ import {
   SendCustomEmailParamSchema,
   ResendEmailLogParamSchema,
 } from "@app/contracts";
+import { z } from "zod";
 import { createZodDto } from "../../core/zod";
 
 export class CreateEmailTemplateBodyDto extends createZodDto(
   CreateEmailTemplateBodySchema,
+) {}
+/** A missing body (the admin app sends none) reads as `{}`. */
+export class DuplicateEmailTemplateDto extends createZodDto(
+  z.preprocess((body) => body ?? {}, DuplicateEmailTemplateSchema),
 ) {}
 export class UpdateEmailTemplateDto extends createZodDto(
   UpdateEmailTemplateSchema,
