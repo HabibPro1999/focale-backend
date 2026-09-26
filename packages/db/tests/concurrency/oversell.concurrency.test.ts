@@ -3,7 +3,6 @@ import { eq } from "drizzle-orm";
 import {
   casIncrementAccessPaidCount,
   casIncrementRegisteredTx,
-  eventAccess,
   events,
   getAccessPaidCount,
   getDb,

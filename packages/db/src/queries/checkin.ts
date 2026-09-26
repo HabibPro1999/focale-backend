@@ -1,4 +1,5 @@
 import { and, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { FULLY_SETTLED_STATUSES } from "@app/shared";
 import { getDb, type DbExecutor } from "../client";
 import { withLockingTxn } from "../txn";
@@ -7,8 +8,11 @@ import {
   accessCheckIns,
   eventAccess,
   events,
+  networkingConfigs,
+  networkingProfiles,
   registrations,
 } from "../schema";
+import { admittedProfile } from "../policy/networking-eligibility";
 
 // Check-in is open to fully settled registrations only (PAID, SPONSORED,
 // WAIVED): FULLY_SETTLED_STATUSES from @app/shared, used by every read and
@@ -38,7 +42,11 @@ export type CheckInRegistration = {
 // ---------------------------------------------------------------------------
 
 // Shared by live scans and offline preload. Ordinary event/access scanning is
-// unaffected unless this access item is configured as the networking entrance.
+// unaffected unless this access item is configured as the networking entrance;
+// then the registration's profile must be admitted (4.6: `admittedProfile`,
+// the same rule as the participant's badge).
+const admissionConfig = alias(networkingConfigs, "c");
+const admissionProfile = alias(networkingProfiles, "p");
 function networkingAdmission(accessId: string) {
   return sql`NOT EXISTS (
     SELECT 1 FROM networking_configs c
@@ -47,14 +55,7 @@ function networkingAdmission(accessId: string) {
       AND NOT EXISTS (
         SELECT 1 FROM networking_profiles p
         WHERE p.registration_id=${registrations.id} AND p.event_id=c.event_id
-          AND p.status='ACTIVE' AND p.consent AND p.withdrawn_at IS NULL
-          AND ${registrations.networkingOptIn} IS DISTINCT FROM false
-          AND c.config->'eligiblePaymentStatuses' ? ${registrations.paymentStatus}::text
-          AND EXISTS (
-            SELECT 1 FROM networking_meetings m
-            WHERE m.event_id=p.event_id AND m.status='CONFIRMED'
-              AND (m.requester_id=p.id OR m.recipient_id=p.id)
-          )
+          AND ${admittedProfile(admissionProfile, registrations, { config: admissionConfig.config })}
       )
   )`;
 }

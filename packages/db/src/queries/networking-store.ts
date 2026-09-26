@@ -10,6 +10,12 @@ import { forms } from "../schema/forms";
 import { networkingSecondFactors } from "../schema/networking-mfa";
 import { NETWORKING_MEETING_GROUPS } from "./networking-meetings";
 import { bufferNetworkingNotices, publishNetworkingNotices, type NetworkingNotice } from "./networking-notices";
+import {
+  loadNetworkingCounterpartSnapshot,
+  loadNetworkingParticipantSnapshot,
+  loadNetworkingSignInCandidates,
+} from "./networking-access-snapshot";
+import type { NetworkingConfig } from "@app/contracts";
 const tables = {
   secondFactors: networkingSecondFactors,
   configs: n.networkingConfigs,
@@ -290,6 +296,18 @@ export function networkingStore(db: DbExecutor = getDb(), options: NetworkingSto
       const t = n.networkingSessions;
       await db.update(t).set({ tokenHash: to })
         .where(and(eq(t.eventId, eventId), eq(t.id, id), eq(t.tokenHash, from)));
+    },
+    /** Participant access facts in one statement (4.6); see `loadNetworkingParticipantSnapshot`. */
+    participantSnapshot(input: { eventId: string; clientId: string; profileId: string; sessionId?: string }) {
+      return loadNetworkingParticipantSnapshot(input, db);
+    },
+    /** A sign-in address's profiles with their access facts, oldest first (4.6). */
+    signInCandidates(eventId: string, email: string, config: NetworkingConfig) {
+      return loadNetworkingSignInCandidates(eventId, email, config, db);
+    },
+    /** Viewer, target, registrations, block and connection in one statement (4.6). */
+    counterpartSnapshot(input: { eventId: string; viewerId: string; targetId: string }) {
+      return loadNetworkingCounterpartSnapshot(input, db);
     },
     /** Revokes the live session a bearer token names, under any of its candidate hashes. */
     async revokeSessionByTokenHashes(eventId: string, hashes: readonly string[]) {

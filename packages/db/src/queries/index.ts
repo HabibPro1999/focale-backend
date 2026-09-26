@@ -25,6 +25,7 @@ export * from "./networking-embeddings";
 export * from "./networking-delivery";
 
 export * from "./networking-read";
+export * from "./networking-access-snapshot";
 export * from "./networking-search";
 
 export * from "./networking-projection";
