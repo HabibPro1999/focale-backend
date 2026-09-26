@@ -1,4 +1,6 @@
-import { and, eq, gt, inArray, or, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, sql, type SQL } from "drizzle-orm";
+import { alias, type AnyPgColumn } from "drizzle-orm/pg-core";
+import { NetworkingConfigSchema } from "@app/contracts";
 import { getDb } from "../client";
 import {
   networkingDeliveries,
@@ -11,12 +13,12 @@ import {
   networkingMessages,
   networkingBlocks,
   networkingNotifications,
+  networkingConfigs,
 } from "../schema/networking";
 import { events } from "../schema/events-access";
 import { registrations } from "../schema/registrations";
 import { clients } from "../schema/users-clients";
 import { forms } from "../schema/forms";
-import { getNetworkingConfig } from "./networking";
 import { networkingConsentPending } from "./networking-projection";
 export * from "./networking-maintenance";
 export * from "./networking-contact-export";
@@ -24,9 +26,19 @@ export * from "./networking-email-tracking";
 export * from "./networking-report-data";
 
 export type NetworkingDeliveryRow = typeof networkingDeliveries.$inferSelect;
+
+/**
+ * Which rows a delivery lane claims (4.2): sign-in codes have dedicated
+ * lanes, so a code never waits behind a batch of digests. Each kind has its
+ * own partial claim index (0031), whose predicate the claim repeats.
+ */
+export type NetworkingDeliveryLane = "otp" | "other";
+export const NETWORKING_DELIVERY_MAX_ATTEMPTS = 5;
+
 export async function claimNetworkingDeliveries(
   limit = 20,
   eventId?: string,
+  lane: NetworkingDeliveryLane = "other",
 ): Promise<NetworkingDeliveryRow[]> {
   // RETURNING is decoded by Drizzle, including the exact millisecond lease fence.
   return getDb().update(networkingDeliveries).set({
@@ -36,9 +48,11 @@ export async function claimNetworkingDeliveries(
     updatedAt: sql`now()`,
   }).where(sql`id IN (
       SELECT id FROM networking_deliveries
-      WHERE ((status='PENDING' AND attempts<5) OR (status='PROCESSING' AND locked_until<now() AND attempts<5) OR (status='FAILED' AND attempts<5))
-        AND available_at<=now() ${eventId ? sql`AND event_id=${eventId}` : sql``}
-      ORDER BY CASE WHEN type='OTP' THEN 0 ELSE 1 END,available_at LIMIT ${Math.max(1, Math.min(limit, 100))} FOR UPDATE SKIP LOCKED
+      WHERE ${lane === "otp" ? sql`type = 'OTP'` : sql`type <> 'OTP'`}
+        AND status IN ('PENDING', 'PROCESSING', 'FAILED') AND attempts < ${sql.raw(String(NETWORKING_DELIVERY_MAX_ATTEMPTS))}
+        AND (status <> 'PROCESSING' OR locked_until < now())
+        AND available_at <= now() ${eventId ? sql`AND event_id=${eventId}` : sql``}
+      ORDER BY available_at LIMIT ${Math.max(1, Math.min(limit, 100))} FOR UPDATE SKIP LOCKED
   )`).returning();
 }
 export async function updateNetworkingDelivery(
@@ -68,190 +82,149 @@ export async function refreshNetworkingDeliveryLease(
   row.lockedUntil = lockedUntil;
   return true;
 }
-export async function networkingDeliveryContext(row: NetworkingDeliveryRow) {
+
+const contactProfiles = alias(networkingProfiles, "contact_profile");
+const contactRegistrations = alias(registrations, "contact_registration");
+const idText = (value: unknown) => (typeof value === "string" ? value : undefined);
+const idMatch = (column: AnyPgColumn, value: string | undefined) =>
+  value === undefined ? sql`false` : eq(column, value);
+/** The other participant of the meeting (else the connection) the notice is about. */
+const counterpartId = sql`CASE WHEN ${networkingProfiles.id} IS NULL THEN NULL
+  WHEN ${networkingMeetings.id} IS NOT NULL THEN CASE WHEN ${networkingMeetings.requesterId} = ${networkingProfiles.id} THEN ${networkingMeetings.recipientId} ELSE ${networkingMeetings.requesterId} END
+  WHEN ${networkingConnections.id} IS NOT NULL THEN CASE WHEN ${networkingConnections.profileAId} = ${networkingProfiles.id} THEN ${networkingConnections.profileBId} ELSE ${networkingConnections.profileAId} END
+END`;
+/** A block in either direction between the participant and the counterpart. */
+const blockedBetween = sql<boolean>`EXISTS (SELECT 1 FROM ${networkingBlocks}
+  WHERE ${networkingBlocks.eventId} = ${networkingProfiles.eventId}
+    AND ((${networkingBlocks.profileId} = ${networkingProfiles.id} AND ${networkingBlocks.targetId} = ${contactProfiles.id})
+      OR (${networkingBlocks.profileId} = ${contactProfiles.id} AND ${networkingBlocks.targetId} = ${networkingProfiles.id})))`.mapWith(Boolean);
+const relationColumns = {
+  meeting: networkingMeetings,
+  table: networkingTables,
+  connection: networkingConnections,
+  message: networkingMessages,
+  contact: contactProfiles,
+  contactRegistration: contactRegistrations,
+  blocked: blockedBetween,
+};
+/** The meeting/connection/message named by `ids`, and the counterpart, all in the event `eventId`. */
+function relationJoins(eventId: SQL | AnyPgColumn, ids: { meetingId: SQL | string | undefined; connectionId: SQL | string | undefined; messageId: SQL | string | undefined }) {
+  const match = (column: AnyPgColumn, id: SQL | string | undefined) =>
+    id === undefined ? sql`false` : typeof id === "string" ? eq(column, id) : sql`${column} = ${id}`;
+  return {
+    meeting: and(match(networkingMeetings.id, ids.meetingId), sql`${networkingMeetings.eventId} = ${eventId}`)!,
+    table: and(eq(networkingTables.id, networkingMeetings.tableId), sql`${networkingTables.eventId} = ${eventId}`)!,
+    connection: and(match(networkingConnections.id, ids.connectionId), sql`${networkingConnections.eventId} = ${eventId}`)!,
+    message: and(
+      match(networkingMessages.id, ids.messageId),
+      eq(networkingMessages.connectionId, networkingConnections.id),
+      sql`${networkingMessages.eventId} = ${eventId}`,
+    )!,
+    contact: and(sql`${contactProfiles.eventId} = ${eventId}`, sql`${contactProfiles.id} = ${counterpartId}`)!,
+    contactRegistration: and(eq(contactRegistrations.id, contactProfiles.registrationId), sql`${contactRegistrations.eventId} = ${eventId}`)!,
+  };
+}
+const orUndefined = <T>(value: T | null | undefined) => value ?? undefined;
+
+/**
+ * Everything a delivery is checked and rendered against (4.2): one statement
+ * for the event, client, config, participant, registration, the meeting,
+ * connection or message it names, the counterpart and any block between them
+ * (and the challenge and consent form of a sign-in code), plus one for push
+ * subscriptions when `subscriptions` is true (the default). Two round trips
+ * at most; the worker calls it once per claim and once per channel.
+ */
+export async function networkingDeliveryContext(
+  row: NetworkingDeliveryRow,
+  options: { subscriptions?: boolean } = {},
+) {
   const db = getDb();
-  const [event] = await db
-    .select()
+  const otp = row.type === "OTP";
+  const joins = relationJoins(events.id, {
+    meetingId: idText(row.payload.meetingId),
+    connectionId: idText(row.payload.connectionId),
+    messageId: idText(row.payload.messageId),
+  });
+  const [base] = await db
+    .select({
+      event: events,
+      client: clients,
+      config: networkingConfigs.config,
+      profile: networkingProfiles,
+      registration: registrations,
+      challenge: networkingChallenges,
+      formSchema: forms.schema,
+      ...relationColumns,
+    })
     .from(events)
+    .leftJoin(clients, eq(clients.id, events.clientId))
+    .leftJoin(networkingConfigs, eq(networkingConfigs.eventId, events.id))
+    .leftJoin(networkingProfiles, and(idMatch(networkingProfiles.id, row.profileId ?? undefined), eq(networkingProfiles.eventId, events.id)))
+    .leftJoin(registrations, and(eq(registrations.id, networkingProfiles.registrationId), eq(registrations.eventId, events.id)))
+    .leftJoin(networkingMeetings, joins.meeting)
+    .leftJoin(networkingTables, joins.table)
+    .leftJoin(networkingConnections, joins.connection)
+    .leftJoin(networkingMessages, joins.message)
+    .leftJoin(contactProfiles, joins.contact)
+    .leftJoin(contactRegistrations, joins.contactRegistration)
+    .leftJoin(networkingChallenges, and(
+      idMatch(networkingChallenges.id, otp ? idText(row.payload.challengeId) : undefined),
+      eq(networkingChallenges.eventId, events.id),
+    ))
+    // OTP only: undecided registrants sign in to give consent in the PWA (K1b).
+    .leftJoin(forms, and(
+      otp ? sql`NOT ${networkingProfiles.consent}` : sql`false`,
+      eq(forms.id, registrations.formId),
+      eq(forms.eventId, events.id),
+    ))
     .where(eq(events.id, row.eventId));
-  const [client] = event
-    ? await db.select().from(clients).where(eq(clients.id, event.clientId))
-    : [];
-  const [profile] = row.profileId
-    ? await db
-        .select()
-        .from(networkingProfiles)
-        .where(
-          and(
-            eq(networkingProfiles.id, row.profileId),
-            eq(networkingProfiles.eventId, row.eventId),
-          ),
-        )
-    : [];
-  const [registration] = profile
-    ? await db
-        .select()
-        .from(registrations)
-        .where(
-          and(
-            eq(registrations.id, profile.registrationId),
-            eq(registrations.eventId, row.eventId),
-          ),
-        )
-    : [];
-  const [meeting] =
-    typeof row.payload.meetingId === "string"
-      ? await db
-          .select()
-          .from(networkingMeetings)
-          .where(
-            and(
-              eq(networkingMeetings.id, row.payload.meetingId),
-              eq(networkingMeetings.eventId, row.eventId),
-            ),
-          )
-      : [];
-  const [table] = meeting?.tableId
-    ? await db
-        .select()
-        .from(networkingTables)
-        .where(
-          and(
-            eq(networkingTables.id, meeting.tableId),
-            eq(networkingTables.eventId, row.eventId),
-          ),
-        )
-    : [];
-  const [connection] =
-    typeof row.payload.connectionId === "string"
-      ? await db
-          .select()
-          .from(networkingConnections)
-          .where(
-            and(
-              eq(networkingConnections.id, row.payload.connectionId),
-              eq(networkingConnections.eventId, row.eventId),
-            ),
-          )
-      : [];
-  const [message] =
-    typeof row.payload.messageId === "string" && connection
-      ? await db
-          .select()
-          .from(networkingMessages)
-          .where(
-            and(
-              eq(networkingMessages.id, row.payload.messageId),
-              eq(networkingMessages.connectionId, connection.id),
-              eq(networkingMessages.eventId, row.eventId),
-            ),
-          )
-      : [];
-  const otherId =
-    meeting && profile
-      ? meeting.requesterId === profile.id
-        ? meeting.recipientId
-        : meeting.requesterId
-      : connection && profile
-        ? connection.profileAId === profile.id
-          ? connection.profileBId
-          : connection.profileAId
-        : undefined;
-  const [contact] = otherId
-    ? await db
-        .select()
-        .from(networkingProfiles)
-        .where(
-          and(
-            eq(networkingProfiles.id, otherId),
-            eq(networkingProfiles.eventId, row.eventId),
-          ),
-        )
-    : [];
-  const [contactRegistration] = contact
-    ? await db
-        .select()
-        .from(registrations)
-        .where(
-          and(
-            eq(registrations.id, contact.registrationId),
-            eq(registrations.eventId, row.eventId),
-          ),
-        )
-    : [];
-  const blocks =
-    profile && contact
-      ? await db
-          .select({ id: networkingBlocks.id })
-          .from(networkingBlocks)
-          .where(
-            and(
-              eq(networkingBlocks.eventId, row.eventId),
-              or(
-                and(
-                  eq(networkingBlocks.profileId, profile.id),
-                  eq(networkingBlocks.targetId, contact.id),
-                ),
-                and(
-                  eq(networkingBlocks.profileId, contact.id),
-                  eq(networkingBlocks.targetId, profile.id),
-                ),
-              ),
-            ),
-          )
-      : [];
-  const [challenge] =
-    row.type === "OTP" && typeof row.payload.challengeId === "string"
-      ? await db
-          .select()
-          .from(networkingChallenges)
-          .where(
-            and(
-              eq(networkingChallenges.id, row.payload.challengeId),
-              eq(networkingChallenges.eventId, row.eventId),
-            ),
-          )
-      : [];
-  const subscriptions = profile
+  const subscriptions = options.subscriptions !== false && row.profileId && base?.profile
     ? await db
         .select()
         .from(networkingPushSubscriptions)
         .where(
           and(
-            eq(networkingPushSubscriptions.profileId, profile.id),
+            eq(networkingPushSubscriptions.profileId, row.profileId),
             eq(networkingPushSubscriptions.eventId, row.eventId),
           ),
         )
     : [];
-  const config = await getNetworkingConfig(row.eventId);
-  // OTP only: undecided registrants sign in to give consent in the PWA (K1b).
-  const [form] = row.type === "OTP" && profile && registration && !profile.consent
-    ? await db.select({ schema: forms.schema }).from(forms)
-        .where(and(eq(forms.id, registration.formId), eq(forms.eventId, row.eventId)))
-    : [];
-  const consentPending = !!form && !!profile && !!registration && networkingConsentPending({
-    profile, optIn: registration.networkingOptIn, formSchema: form.schema, formData: registration.formData, config,
+  const config = NetworkingConfigSchema.parse(base?.config ?? {});
+  const profile = orUndefined(base?.profile);
+  const registration = orUndefined(base?.registration);
+  const formSchema = base?.formSchema;
+  const consentPending = formSchema != null && !!profile && !!registration && networkingConsentPending({
+    profile, optIn: registration.networkingOptIn, formSchema, formData: registration.formData, config,
   });
   return {
-    event,
-    client,
+    event: orUndefined(base?.event),
+    client: orUndefined(base?.client),
     profile,
     registration,
-    meeting,
-    table,
-    contact,
-    contactRegistration,
-    connection,
-    message,
-    blocked: blocks.length > 0,
-    challenge,
+    meeting: orUndefined(base?.meeting),
+    table: orUndefined(base?.table),
+    contact: orUndefined(base?.contact),
+    contactRegistration: orUndefined(base?.contactRegistration),
+    connection: orUndefined(base?.connection),
+    message: orUndefined(base?.message),
+    blocked: base?.blocked === true,
+    challenge: orUndefined(base?.challenge),
     subscriptions,
     config,
     consentPending,
   };
 }
-export async function networkingDigestNotifications(
+export type NetworkingDeliveryContext = Awaited<ReturnType<typeof networkingDeliveryContext>>;
+
+/**
+ * A daily digest's unread notifications, each with the relations it names
+ * (meeting, connection, message, counterpart, block), in one statement. The
+ * event, participant, registration and config come from `base`, the
+ * digest's own context.
+ */
+export async function networkingDigestContexts(
   row: NetworkingDeliveryRow,
+  base: NetworkingDeliveryContext,
 ) {
   const ids = Array.isArray(row.payload.notificationIds)
     ? row.payload.notificationIds.filter(
@@ -259,18 +232,46 @@ export async function networkingDigestNotifications(
       )
     : [];
   if (!row.profileId || !ids.length) return [];
-  return getDb()
-    .select()
-    .from(networkingNotifications)
+  const n = networkingNotifications;
+  const joins = relationJoins(n.eventId, {
+    meetingId: sql`(${n.data} ->> 'meetingId')`,
+    connectionId: sql`(${n.data} ->> 'connectionId')`,
+    messageId: sql`(${n.data} ->> 'messageId')`,
+  });
+  const rows = await getDb()
+    .select({ notification: n, ...relationColumns })
+    .from(n)
+    .innerJoin(networkingProfiles, and(eq(networkingProfiles.id, n.profileId), eq(networkingProfiles.eventId, n.eventId)))
+    .leftJoin(networkingMeetings, joins.meeting)
+    .leftJoin(networkingTables, joins.table)
+    .leftJoin(networkingConnections, joins.connection)
+    .leftJoin(networkingMessages, joins.message)
+    .leftJoin(contactProfiles, joins.contact)
+    .leftJoin(contactRegistrations, joins.contactRegistration)
     .where(
       and(
-        eq(networkingNotifications.eventId, row.eventId),
-        eq(networkingNotifications.profileId, row.profileId),
-        inArray(networkingNotifications.id, ids),
-        sql`(${networkingNotifications.readAt} IS NULL OR ${networkingNotifications.type}='POST_EVENT_CONTACTS')`,
+        eq(n.eventId, row.eventId),
+        eq(n.profileId, row.profileId),
+        inArray(n.id, ids),
+        sql`(${n.readAt} IS NULL OR ${n.type}='POST_EVENT_CONTACTS')`,
       ),
     )
-    .orderBy(networkingNotifications.createdAt);
+    .orderBy(n.createdAt, n.id);
+  return rows.map((item) => ({
+    notification: item.notification,
+    context: {
+      ...base,
+      meeting: orUndefined(item.meeting),
+      table: orUndefined(item.table),
+      contact: orUndefined(item.contact),
+      contactRegistration: orUndefined(item.contactRegistration),
+      connection: orUndefined(item.connection),
+      message: orUndefined(item.message),
+      blocked: item.blocked === true,
+      challenge: undefined,
+      consentPending: false,
+    } satisfies NetworkingDeliveryContext,
+  }));
 }
 export async function localizeNetworkingNotification(
   row: NetworkingDeliveryRow,
