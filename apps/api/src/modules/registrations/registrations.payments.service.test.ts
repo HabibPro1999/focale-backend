@@ -11,6 +11,7 @@ import {
   db,
   emptyBreakdown,
   installServiceMocks,
+  internalRow,
   makeRegRow,
   sponsoredBreakdown,
   writtenPatch,
@@ -384,6 +385,19 @@ describe("RegistrationPaymentsService", () => {
       const [lock] = db.lockRegistrationForUpdate.mock.invocationCallOrder;
       const [read] = db.findRegistrationWithFormEvent.mock.invocationCallOrder;
       expect(lock).toBeLessThan(read!);
+    });
+  });
+
+  // ---- 0.5: response shapes (no credentials / internal fields) -------------
+  describe("response shapes", () => {
+    it("admin update responses never carry editToken", async () => {
+      db.getRegistrationByIdRow.mockResolvedValue(internalRow());
+      db.findRegistrationForMutation.mockResolvedValue(
+        internalRow({ event: { clientId: "c1", status: "OPEN", client: activeClient() } }),
+      );
+      const updated = await service.updateRegistration("reg1", { note: "x" } as never, "admin1");
+      expect(updated).not.toHaveProperty("editToken");
+      expect(updated).not.toHaveProperty("idempotencyKey");
     });
   });
 });

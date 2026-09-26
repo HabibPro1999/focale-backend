@@ -27,7 +27,7 @@ import {
 import type { Config } from "../../core/config";
 import { AccessService } from "../access/access.service";
 import { PricingService } from "../pricing/pricing.service";
-import { RegistrationsService } from "./registrations.service";
+import { RegistrationCreateService } from "./registrations.create.service";
 import { RegistrationSideEffects } from "./registrations.side-effects";
 
 // Plan 2.7: a sponsorship code is consumed at signup. The public create locks
@@ -36,7 +36,7 @@ import { RegistrationSideEffects } from "./registrations.side-effects";
 
 const pricing = new PricingService();
 const access = new AccessService();
-const service = new RegistrationsService(
+const service = new RegistrationCreateService(
   access,
   pricing,
   { publicLinkAllowedOrigins: ["https://events.example.com"] } as Config,
