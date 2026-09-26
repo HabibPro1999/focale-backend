@@ -1,6 +1,12 @@
 import { Body, Controller, Get, NotFoundException, Param, Post } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
 import {
+  AccessSelectionValidationResponseSchema,
+  EventAccessItemResponseSchema,
+  GroupedAccessResponseSchema,
+  PublicEventAccessListResponseSchema,
+} from "@app/contracts";
+import {
   getEventWithPricing,
   getRegistrationFormSchemaForEvent,
   type EventAccessWithPrereqs,
@@ -8,6 +14,7 @@ import {
 import { visibleFormAnswers } from "@app/shared";
 import { assertEventAcceptsPublicActions } from "../events/events.service";
 import { assertClientModuleEnabled } from "../clients/module-gates";
+import { ResponseContract } from "../../core/response-contract";
 import { AccessService } from "./access.service";
 import {
   AccessEventIdParamDto,
@@ -63,6 +70,7 @@ export class AccessPublicController {
   constructor(private readonly access: AccessService) {}
 
   @Post(":eventId/access/grouped")
+  @ResponseContract(GroupedAccessResponseSchema)
   async grouped(
     @Param() params: AccessEventIdParamDto,
     @Body() body: GetGroupedAccessBodyDto,
@@ -76,6 +84,7 @@ export class AccessPublicController {
   }
 
   @Post(":eventId/access/validate")
+  @ResponseContract(AccessSelectionValidationResponseSchema)
   async validate(
     @Param() params: AccessEventIdParamDto,
     @Body() body: ValidateAccessSelectionsBodyDto,
@@ -89,6 +98,7 @@ export class AccessPublicController {
   }
 
   @Get(":eventId/access")
+  @ResponseContract(PublicEventAccessListResponseSchema)
   async listActive(@Param() params: AccessEventIdParamDto) {
     await this.assertPublicAccessEnabled(params.eventId);
     const now = new Date();
@@ -101,6 +111,7 @@ export class AccessPublicController {
   }
 
   @Get(":eventId/access/:accessId")
+  @ResponseContract(EventAccessItemResponseSchema)
   async getOne(@Param() params: PublicAccessItemParamDto) {
     await this.assertPublicAccessEnabled(params.eventId);
     const now = new Date();

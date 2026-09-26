@@ -248,7 +248,7 @@ describe("blocks", () => {
 
   it("denies the block list when the current profile is no longer eligible", async () => {
     const target = makeProfile();
-    const { instance } = setup(target);
+    setup(target);
     const participant = vi.fn().mockResolvedValue({
       event: { id: "event-1" },
       profile: viewer,
