@@ -18,6 +18,7 @@ import type { Config } from "../../core/config";
 import { AccessService } from "../access/access.service";
 import { PricingService } from "../pricing/pricing.service";
 import { RegistrationsService } from "../registrations/registrations.service";
+import { RegistrationSideEffects } from "../registrations/registrations.side-effects";
 import { SponsorshipsService } from "./sponsorships.service";
 
 // Plan 2.8: a sponsorship link or unlink and a payment confirmation on the
@@ -26,9 +27,12 @@ import { SponsorshipsService } from "./sponsorships.service";
 // PAID for an amount other than what it owes, and a lost race is a 4xx.
 
 const access = new AccessService();
-const registrationsService = new RegistrationsService(access, new PricingService(), {
-  publicLinkAllowedOrigins: ["https://events.example.com"],
-} as Config);
+const registrationsService = new RegistrationsService(
+  access,
+  new PricingService(),
+  { publicLinkAllowedOrigins: ["https://events.example.com"] } as Config,
+  new RegistrationSideEffects(access),
+);
 const sponsorshipsService = new SponsorshipsService(access);
 
 function breakdown(base: number) {

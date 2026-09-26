@@ -11,8 +11,6 @@ vi.mock("@app/db", async (importOriginal) => {
   AccessNotFoundError: real.AccessNotFoundError,
   AccessPaidCountUnderflowError: real.AccessPaidCountUnderflowError,
   applyPaidAccessDelta: vi.fn(),
-  takePaidAccess: vi.fn(),
-  releasePaidAccess: vi.fn(),
   findRegistrationFormSchema: vi.fn(),
   getDb: vi.fn(() => ({})),
   withTxn: vi.fn(),
@@ -473,46 +471,6 @@ describe("decrementAccessRegisteredCountTx", () => {
   });
 });
 
-describe("incrementPaidCount / decrementPaidCount", () => {
-  it("take and release paid places through @app/db", async () => {
-    m.takePaidAccess.mockResolvedValue(undefined);
-    m.releasePaidAccess.mockResolvedValue(undefined);
-    await expect(service.incrementPaidCount("access-1", 2)).resolves.toBeUndefined();
-    await expect(service.decrementPaidCount("access-1", 1)).resolves.toBeUndefined();
-    expect(m.takePaidAccess).toHaveBeenCalledWith(expect.anything(), "access-1", 2);
-    expect(m.releasePaidAccess).toHaveBeenCalledWith(expect.anything(), "access-1", 1);
-  });
-
-  it("maps a missing access item to ACCESS_NOT_FOUND", async () => {
-    m.takePaidAccess.mockRejectedValue(new db.AccessNotFoundError("x"));
-    await expect(service.incrementPaidCount("x", 1)).rejects.toMatchObject({
-      code: ErrorCodes.ACCESS_NOT_FOUND,
-      statusCode: 404,
-      message: "Access not found",
-    });
-  });
-
-  it("maps a full access item to ACCESS_CAPACITY_EXCEEDED with the remaining places", async () => {
-    m.takePaidAccess.mockRejectedValue(new db.AccessCapacityExceededError("access-1", "Workshop", 2, 3));
-    await expect(service.incrementPaidCount("access-1", 3)).rejects.toMatchObject({
-      code: ErrorCodes.ACCESS_CAPACITY_EXCEEDED,
-      statusCode: 409,
-      message: "Workshop has insufficient capacity (2 spots remaining, requested 3)",
-      details: { remaining: 2, requested: 3 },
-    });
-  });
-
-  it("maps an underflow to VALIDATION_ERROR", async () => {
-    m.releasePaidAccess.mockRejectedValue(new db.AccessPaidCountUnderflowError("access-1", 1, 2));
-    await expect(service.decrementPaidCount("access-1", 2)).rejects.toMatchObject({
-      code: ErrorCodes.VALIDATION_ERROR,
-      statusCode: 409,
-      message: "Paid access count cannot be decremented below zero",
-      details: { paidCount: 1, requested: 2 },
-    });
-  });
-});
-
 // ===========================================================================
 // syncPaidCountDelta: thin wrapper over @app/db applyPaidAccessDelta
 // ===========================================================================
@@ -542,9 +500,30 @@ describe("syncPaidCountDelta", () => {
     m.applyPaidAccessDelta.mockRejectedValue(new db.AccessCapacityExceededError("access-2", "Gala", 0, 1));
     await expect(service.syncPaidCountDelta(eventId, oldState, newState)).rejects.toMatchObject({
       code: ErrorCodes.ACCESS_CAPACITY_EXCEEDED,
+      statusCode: 409,
+      message: "Gala has insufficient capacity (0 spots remaining, requested 1)",
       details: { remaining: 0, requested: 1 },
     });
     expect(m.enqueueAccessDrops).not.toHaveBeenCalled();
+  });
+
+  it("maps a missing access item to ACCESS_NOT_FOUND", async () => {
+    m.applyPaidAccessDelta.mockRejectedValue(new db.AccessNotFoundError("access-2"));
+    await expect(service.syncPaidCountDelta(eventId, oldState, newState)).rejects.toMatchObject({
+      code: ErrorCodes.ACCESS_NOT_FOUND,
+      statusCode: 404,
+      message: "Access not found",
+    });
+  });
+
+  it("maps a paid-count underflow to VALIDATION_ERROR", async () => {
+    m.applyPaidAccessDelta.mockRejectedValue(new db.AccessPaidCountUnderflowError("access-2", 1, 2));
+    await expect(service.syncPaidCountDelta(eventId, newState, oldState)).rejects.toMatchObject({
+      code: ErrorCodes.VALIDATION_ERROR,
+      statusCode: 409,
+      message: "Paid access count cannot be decremented below zero",
+      details: { paidCount: 1, requested: 2 },
+    });
   });
 });
 

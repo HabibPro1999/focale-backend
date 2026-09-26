@@ -57,6 +57,39 @@ pnpm --filter @app/worker backfill-certificate-renders \
 artifact** for a specific event (TSHG themes + deadlines). It is intentionally
 **not ported** — it was run once against that event and has no ongoing role.
 
+#### PAID data repair (`repair-paid-settlement`, plan 2.4)
+
+Repairs registrations hit by the PAID-demotion bugs (PAID set without an amount;
+edits re-deriving PAID down to PENDING/PARTIAL). Run it only after a backup and
+with 2.6/2.8 deployed; the script header has the details.
+
+```bash
+# 1. Dry run (read-only): report A/B1/B2/B3/C + repair-manifest.json (every action null; never overwritten)
+pnpm --filter @app/worker repair-paid-settlement --since <Nest deploy, ISO> [--event <id>] [--out <file>] [--json]
+# 2. Sign-off: copy to approved.json, set each row's action (or delete the row):
+#    A (PAID rows): BACKFILL_PAID | CONVERT_PARTIAL | SKIP;  B1/B2/B3 (PENDING/PARTIAL): REPROMOTE_PAID | SKIP
+#    accept every proposal, then decide the null rows by hand:
+#    jq '.rows |= map(.action = (.action // .proposedAction))' repair-manifest.json > approved.json
+# 3. Apply exactly the approved actions (the whole manifest is refused if a row is unset or not allowed)
+pnpm --filter @app/worker repair-paid-settlement --apply --manifest approved.json
+# 4. Invariant checks (read-only; exit 2 when a check finds rows)
+pnpm --filter @app/worker repair-paid-settlement invariants [--event <id>] [--json] [--limit <n>]
+```
+
+- Sections: A = PAID with `paid_amount < net` (any date); B1 = admin-edit demotions after `--since`
+  (audited); B2 = self-edit demotions (status history rebuilt from the audit log); B3 = admin-created
+  rows re-priced after `--since` (manual review); C = seats each action moves, per access item.
+  Rows without a proposal (`proposedAction: null`, see `info.flags`) need a per-row decision.
+- Apply runs each row in its own locking transaction through the settlement writer. It skips and
+  reports rows that changed since the dry run (`STALE`), left their section, do not fit the action,
+  disagree with their breakdown, or whose re-promotion finds an access item full (`CAPACITY_FULL`).
+  Seats move only by the writer's delta. `CONVERT_PARTIAL` keeps the paid amount, clears `paid_at`
+  and releases the uncovered seats (the row then follows the PARTIAL capacity rules).
+- Each applied row is audited `DATA_REPAIR_SETTLEMENT` (`SYSTEM:repair-paid-settlement`) and enqueues
+  `registration.updated`; no email. Rerunning a manifest changes nothing (`ALREADY_APPLIED`).
+- The invariant checks are `checkSettlementInvariants` in `@app/db`, ready for a staging job or a
+  CI step against a restored snapshot (not scheduled).
+
 ## Frontend contract artifacts
 
 `packages/contracts/generated/` is built from the Zod schemas in

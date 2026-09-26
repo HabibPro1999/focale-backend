@@ -21,16 +21,19 @@ import type { Config } from "../../core/config";
 import { AccessService } from "../access/access.service";
 import { PricingService } from "../pricing/pricing.service";
 import { RegistrationsService } from "./registrations.service";
+import { RegistrationSideEffects } from "./registrations.side-effects";
 
 // Plan 2.6c: the admin edit and the public self-edit reprice through
 // repriceRegistration (codeless pricing, access counters by delta, the
 // settlement under the registration lock), and a price change of a PAID
 // registration is refused unless an admin says how the payment follows.
 
+const access = new AccessService();
 const service = new RegistrationsService(
-  new AccessService(),
+  access,
   new PricingService(),
   { publicLinkAllowedOrigins: ["https://events.example.com"] } as Config,
+  new RegistrationSideEffects(access),
 );
 
 type AccessRow = { id: string; price: number };

@@ -293,7 +293,17 @@ export interface RegistrationStatRow {
   cnt: number;
   totalAmount: number;
   paidAmount: number;
+  /** Sum of each row's amount due (`calculateSettlement(row).amountDue`). */
+  amountDue: number;
 }
+
+/**
+ * A registration's amount due, in SQL: gross − sponsorship − paid, at least 0.
+ * Same value as `calculateSettlement(row).amountDue` in @app/shared (and
+ * `deriveSettlement`'s `due`) for any non-negative amounts; computed per row so
+ * a sum over rows never nets one row's excess against another's balance.
+ */
+const amountDueSql = sql<number>`GREATEST(${registrations.totalAmount} - ${registrations.sponsorshipAmount} - ${registrations.paidAmount}, 0)`;
 
 export async function listRegistrationRows(
   eventId: string,
@@ -335,6 +345,7 @@ export async function listRegistrationRows(
         cnt: count(),
         totalAmount: sum(registrations.totalAmount),
         paidAmount: sum(registrations.paidAmount),
+        amountDue: sum(amountDueSql),
       })
       .from(registrations)
       .where(where)
@@ -358,6 +369,7 @@ export async function listRegistrationRows(
       cnt: Number(s.cnt),
       totalAmount: Number(s.totalAmount ?? 0),
       paidAmount: Number(s.paidAmount ?? 0),
+      amountDue: Number(s.amountDue ?? 0),
     })),
   };
 }

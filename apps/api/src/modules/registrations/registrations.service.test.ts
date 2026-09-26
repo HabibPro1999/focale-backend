@@ -220,6 +220,7 @@ import {
 import { AccessCapacityExceededError } from "@app/db";
 import { validateSelections } from "../access/access-validation";
 import { RegistrationsService } from "./registrations.service";
+import { RegistrationSideEffects } from "./registrations.side-effects";
 import { AppException } from "../../core/app-exception";
 import type { Config } from "../../core/config";
 import type { AccessService } from "../access/access.service";
@@ -351,6 +352,7 @@ describe("RegistrationsService", () => {
       {
         publicLinkAllowedOrigins: ["https://events.example.com"],
       } as Config,
+      new RegistrationSideEffects(access as unknown as AccessService),
     );
   });
 
@@ -405,10 +407,10 @@ describe("RegistrationsService", () => {
         rows: [],
         total: 4,
         stats: [
-          { paymentStatus: "PAID", cnt: 1, totalAmount: 100, paidAmount: 90 },
-          { paymentStatus: "PENDING", cnt: 1, totalAmount: 50, paidAmount: 0 },
-          { paymentStatus: "SPONSORED", cnt: 1, totalAmount: 70, paidAmount: 0 },
-          { paymentStatus: "REFUNDED", cnt: 1, totalAmount: 30, paidAmount: 0 },
+          { paymentStatus: "PAID", cnt: 1, totalAmount: 100, paidAmount: 90, amountDue: 0 },
+          { paymentStatus: "PENDING", cnt: 1, totalAmount: 50, paidAmount: 0, amountDue: 50 },
+          { paymentStatus: "SPONSORED", cnt: 1, totalAmount: 70, paidAmount: 0, amountDue: 0 },
+          { paymentStatus: "REFUNDED", cnt: 1, totalAmount: 30, paidAmount: 0, amountDue: 30 },
         ],
       });
       const res = await service.listRegistrations("ev1", { page: 1, limit: 20 } as never);
@@ -417,6 +419,32 @@ describe("RegistrationsService", () => {
       expect(res.stats.paid).toEqual({ count: 1, amount: 90 });
       expect(res.stats.pending).toEqual({ count: 1, amount: 50 });
       expect(res.stats.sponsored).toEqual({ count: 1, amount: 70 });
+    });
+
+    it("pending.amount is the amount due, and collected sums paid amounts except refunds", async () => {
+      db.listRegistrationRows.mockResolvedValue({
+        rows: [],
+        total: 9,
+        stats: [
+          { paymentStatus: "PAID", cnt: 2, totalAmount: 200, paidAmount: 180, amountDue: 0 },
+          // Two partials: gross 300, sponsorship 40, 100 paid → 160 due.
+          { paymentStatus: "PARTIAL", cnt: 2, totalAmount: 300, paidAmount: 100, amountDue: 160 },
+          { paymentStatus: "PENDING", cnt: 1, totalAmount: 50, paidAmount: 0, amountDue: 50 },
+          { paymentStatus: "VERIFYING", cnt: 1, totalAmount: 80, paidAmount: 20, amountDue: 60 },
+          { paymentStatus: "SPONSORED", cnt: 1, totalAmount: 70, paidAmount: 10, amountDue: 0 },
+          { paymentStatus: "WAIVED", cnt: 1, totalAmount: 40, paidAmount: 0, amountDue: 40 },
+          { paymentStatus: "REFUNDED", cnt: 1, totalAmount: 30, paidAmount: 30, amountDue: 0 },
+        ],
+      });
+      const res = await service.listRegistrations("ev1", { page: 1, limit: 20 } as never);
+      expect(res.stats).toEqual({
+        total: 9,
+        totalAmount: 770,
+        collected: 180 + 100 + 20 + 10,
+        paid: { count: 2, amount: 180 },
+        pending: { count: 4, amount: 160 + 50 + 60 },
+        sponsored: { count: 2, amount: 110 },
+      });
     });
   });
 
@@ -659,6 +687,20 @@ describe("RegistrationsService", () => {
         expect(db.insertRegistrationRow.mock.calls[0][0].sponsorshipCode).toBeNull();
       });
     });
+
+    it.each([
+      ["OPEN", 409, ErrorCodes.EVENT_FULL],
+      ["CLOSED", 400, ErrorCodes.EVENT_NOT_OPEN],
+    ] as const)(
+      "maps a missed event-counter increment on a %s event to %s %s; nothing is announced",
+      async (status, statusCode, code) => {
+        db.casIncrementRegisteredTx.mockResolvedValue(false);
+        db.getEventCounterInfoTx.mockResolvedValue({ status, maxCapacity: 10, registeredCount: 10 });
+        await expect(service.createRegistration(baseInput as never, emptyBreakdown(100)))
+          .rejects.toMatchObject({ code, statusCode });
+        expect(db.enqueueTriggeredEmailOutbox).not.toHaveBeenCalled();
+      },
+    );
 
     it("creates, reserves nothing when no access, increments event, audits, emits, queues email", async () => {
       const result = await service.createRegistration(baseInput as never, emptyBreakdown(100));
@@ -1366,22 +1408,22 @@ describe("RegistrationsService", () => {
       );
     });
 
-    it("403 force-delete by a non-admin (checked before any DB access)", async () => {
-      await expect(
-        service.deleteRegistration("reg1", "u", true, 2 /* SCIENTIFIC_COMMITTEE */),
-      ).rejects.toMatchObject({ code: "AUTH_1004", statusCode: 403 });
-      expect(db.withTxn).not.toHaveBeenCalled();
-    });
-
-    it("force-deletes a PAID registration for a CLIENT_ADMIN", async () => {
+    it("force-deletes a PAID registration and records the force in the audit", async () => {
       db.findRegistrationForMutation.mockResolvedValue(
         makeRegRow({
           paymentStatus: "PAID",
           event: { clientId: "c1", status: "OPEN", client: activeClient() },
         }),
       );
-      await service.deleteRegistration("reg1", "admin1", true, 1 /* CLIENT_ADMIN */);
+      await service.deleteRegistration("reg1", "admin1", true);
       expect(db.deleteRegistrationRow).toHaveBeenCalled();
+      expect(db.insertAuditLog).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "DELETE",
+          changes: expect.objectContaining({ forceDelete: { old: null, new: true } }),
+        }),
+        expect.anything(),
+      );
     });
   });
 

@@ -9,6 +9,7 @@
     "networking-keyring": "node --conditions=@app/source -r @swc-node/register src/scripts/networking-keyring.ts",
     "requeue-dead-letters": "node --conditions=@app/source -r @swc-node/register src/scripts/requeue-dead-letters.ts",
     "repair-sponsorship-code-usages": "node --conditions=@app/source -r @swc-node/register src/scripts/repair-sponsorship-code-usages.ts",
+    "repair-paid-settlement": "node --conditions=@app/source -r @swc-node/register src/scripts/repair-paid-settlement.ts",
     "networking-retention": "node --conditions=@app/source -r @swc-node/register src/scripts/networking-retention.ts",
     "backfill-certificate-renders": "node --conditions=@app/source -r @swc-node/register src/scripts/backfill-certificate-renders.ts",
     "start": "node dist/main.js",

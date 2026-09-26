@@ -301,9 +301,15 @@ export type UpdatePaymentInput = z.infer<typeof UpdatePaymentSchema>;
 
 export interface RegistrationStats {
   total: number;
+  /** Sum of gross totals (before sponsorship), every status. */
   totalAmount: number;
+  /** Sum of paid amounts, every status except REFUNDED. */
+  collected: number;
+  /** PAID: amount = sum of paid amounts. */
   paid: { count: number; amount: number };
+  /** PENDING, VERIFYING, PARTIAL: amount = sum of amounts due (net − paid, at least 0). */
   pending: { count: number; amount: number };
+  /** SPONSORED, WAIVED: amount = sum of gross totals. */
   sponsored: { count: number; amount: number };
 }
 

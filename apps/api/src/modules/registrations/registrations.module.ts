@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { AccessModule } from "../access/access.module";
 import { PricingModule } from "../pricing/pricing.module";
 import { RegistrationsService } from "./registrations.service";
+import { RegistrationSideEffects } from "./registrations.side-effects";
 import {
   RegistrationEditLinkController,
   RegistrationsController,
@@ -19,7 +20,7 @@ import {
     RegistrationsPublicController,
     RegistrationEditPublicController,
   ],
-  providers: [RegistrationsService],
+  providers: [RegistrationsService, RegistrationSideEffects],
   // Exported so certificates/reports/sponsorships can consume registration reads.
   exports: [RegistrationsService],
 })

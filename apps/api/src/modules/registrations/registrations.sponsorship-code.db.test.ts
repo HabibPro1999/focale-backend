@@ -28,16 +28,19 @@ import type { Config } from "../../core/config";
 import { AccessService } from "../access/access.service";
 import { PricingService } from "../pricing/pricing.service";
 import { RegistrationsService } from "./registrations.service";
+import { RegistrationSideEffects } from "./registrations.side-effects";
 
 // Plan 2.7: a sponsorship code is consumed at signup. The public create locks
 // the code's sponsorship first, links it (usage + USED) and settles the new
 // registration; unknown/cancelled codes → 400, used/reserved/claimed → 409.
 
 const pricing = new PricingService();
+const access = new AccessService();
 const service = new RegistrationsService(
-  new AccessService(),
+  access,
   pricing,
   { publicLinkAllowedOrigins: ["https://events.example.com"] } as Config,
+  new RegistrationSideEffects(access),
 );
 
 /** An open event with an active registration form and two ADDON items (no base price). */

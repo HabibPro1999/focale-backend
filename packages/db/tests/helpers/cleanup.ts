@@ -2,7 +2,6 @@ import { getDb } from "@app/db";
 import {
   abstractBookJobs,
   abstractCodeCounters,
-  abstractCodeSequences,
   abstractCommitteeMemberships,
   abstractConfig,
   abstractReviewerThemes,
@@ -33,7 +32,7 @@ import {
 } from "@app/db";
 
 // FK-ordered delete, ported from legacy tests/helpers/test-app.cleanupDatabase
-// and extended to the full 29-table Drizzle schema. Children are deleted before
+// and extended to the Drizzle tables the DB tests write. Children are deleted before
 // parents because several parent FKs use ON DELETE RESTRICT (registrations →
 // forms → events), so a blanket delete in the wrong order would fail. Ordered
 // leaf → root; no TRUNCATE (keeps it usable inside a plain connection/txn).
@@ -51,7 +50,6 @@ const DELETION_ORDER = [
   abstractThemes,
   abstracts,
   abstractConfig,
-  abstractCodeSequences,
   sponsorships,
   sponsorshipBatches,
   accessPrerequisites,
