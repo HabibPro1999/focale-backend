@@ -120,6 +120,20 @@ describe.runIf(dbTestsEnabled())("access writes are atomic", () => {
     expect(await prerequisiteIdsOf(item.id)).toEqual([prereq.id]);
   });
 
+  it("update: an edit of the prerequisites alone saves them and bumps updated_at", async () => {
+    const event = await seedEvent();
+    const prereq = await seedEventAccess({ eventId: event.id, name: "Prerequisite" });
+    const item = await seedEventAccess({ eventId: event.id, name: "Item" });
+
+    // No column changes: Drizzle refuses an empty SET, so the row write sets updated_at.
+    const updated = await service.updateEventAccess(item.id, { requiredAccessIds: [prereq.id] });
+
+    expect(updated.name).toBe("Item");
+    expect(updated.requiredAccess.map((r) => r.id)).toEqual([prereq.id]);
+    expect(await prerequisiteIdsOf(item.id)).toEqual([prereq.id]);
+    expect(updated.updatedAt.getTime()).toBeGreaterThanOrEqual(item.updatedAt.getTime());
+  });
+
   it("delete: a failed row delete restores the dependents' prerequisite edges", async () => {
     const event = await seedEvent();
     const item = await seedEventAccess({ eventId: event.id, name: "Required" });
