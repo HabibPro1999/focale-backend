@@ -39,6 +39,7 @@ import {
   getNetworkingProfilePhotoByRegistration,
   insertAuditLog,
   listRegistrationAuditLogRows,
+  getDb,
   findUserNamesByIds,
   listRegistrationEmailLogRows,
 } from "@app/db";
@@ -386,7 +387,7 @@ export class RegistrationsService {
       action: "EDIT_LINK_ISSUED",
       performedBy,
       ipAddress: ipAddress ?? null,
-    });
+    }, getDb());
     const { editRegistrationLink } = buildRegistrationSelfLinks({
       registrationId: source.id,
       eventSlug: source.eventSlug,

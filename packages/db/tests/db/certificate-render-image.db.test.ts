@@ -88,18 +88,18 @@ describe.runIf(dbTestsEnabled())("db: certificate render images", () => {
     });
     const render = { renderImageKey: "new-key", renderImageWidth: 1200, renderImageHeight: 850 };
 
-    expect(await setCertificateTemplateRenderImage("tpl-1", url("tpl-1"), render)).toBe(true);
+    expect(await setCertificateTemplateRenderImage("tpl-1", url("tpl-1"), render, getDb())).toBe(true);
     expect(await renderOf("tpl-1")).toEqual({ key: "new-key", width: 1200, height: 850 });
 
     // A new upload replaced the original while the backfill was rendering.
-    expect(await setCertificateTemplateRenderImage("tpl-2", url("old"), render)).toBe(false);
+    expect(await setCertificateTemplateRenderImage("tpl-2", url("old"), render, getDb())).toBe(false);
     expect(await renderOf("tpl-2")).toEqual({ key: null, width: null, height: null });
 
     // Already rendered (by an upload or another run): never overwritten.
-    expect(await setCertificateTemplateRenderImage("tpl-3", url("tpl-3"), render)).toBe(false);
+    expect(await setCertificateTemplateRenderImage("tpl-3", url("tpl-3"), render, getDb())).toBe(false);
     expect(await renderOf("tpl-3")).toEqual({ key: "existing", width: 5, height: 5 });
 
-    expect(await setCertificateTemplateRenderImage("gone", url("gone"), render)).toBe(false);
+    expect(await setCertificateTemplateRenderImage("gone", url("gone"), render, getDb())).toBe(false);
   });
 
   it("the upload write stores the original and its render image together", async () => {
@@ -113,7 +113,7 @@ describe.runIf(dbTestsEnabled())("db: certificate render images", () => {
       renderImageKey: `${event.id}/certificates/tpl-1-u-render.jpg`,
       renderImageWidth: 3508,
       renderImageHeight: 2105,
-    });
+    }, getDb());
 
     expect(updated).toMatchObject({
       templateUrl: url("tpl-1-new"),

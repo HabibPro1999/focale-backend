@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  rootDb: { executor: "root" },
   list: vi.fn(),
   setRender: vi.fn(),
   derive: vi.fn(),
 }));
 vi.mock("@app/db", () => ({
+  getDb: () => mocks.rootDb,
   listCertificateTemplatesMissingRenderImage: mocks.list,
   setCertificateTemplateRenderImage: mocks.setRender,
 }));
@@ -157,7 +159,7 @@ describe("--apply", () => {
       renderImageKey: key,
       renderImageWidth: 3508,
       renderImageHeight: 2480,
-    });
+    }, mocks.rootDb);
     expect(storage.delete).not.toHaveBeenCalled();
     expect(lines.at(-1)).toBe("Done: candidates=1 rendered=1 changed=0 failed=0.");
   });

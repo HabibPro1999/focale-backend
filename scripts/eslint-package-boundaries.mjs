@@ -12,6 +12,7 @@
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { explicitWriteExecutor } from "./eslint-write-executor.mjs";
 
 export const WORKSPACE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -99,5 +100,8 @@ const packageBoundaries = {
 /** ESLint plugin registered as `focale` in eslint.config.mjs. */
 export const focalePlugin = {
   meta: { name: "focale-workspace" },
-  rules: { "package-boundaries": packageBoundaries },
+  rules: {
+    "package-boundaries": packageBoundaries,
+    "explicit-write-executor": explicitWriteExecutor,
+  },
 };

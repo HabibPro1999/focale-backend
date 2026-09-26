@@ -19,6 +19,7 @@ import {
   updateCertificateTemplate,
   updateCertificateTemplateImage,
   deleteCertificateTemplateById,
+  getDb,
   listActiveImageReadyCertificateTemplates,
   getRegistrationsForCertificateSend,
   getAlreadySentCertTemplateIds,
@@ -205,7 +206,7 @@ export class CertificatesService {
       accessId: input.accessId ?? null,
       scope: input.scope,
       allowedAbstractFinalTypes: input.allowedAbstractFinalTypes,
-    });
+    }, getDb());
   }
 
   private async assertAccessBelongsToEvent(
@@ -275,7 +276,7 @@ export class CertificatesService {
       patch.allowedAbstractFinalTypes = input.allowedAbstractFinalTypes;
     }
 
-    return updateCertificateTemplate(id, patch);
+    return updateCertificateTemplate(id, patch, getDb());
   }
 
   /** Delete a template + its stored image (image delete is best-effort). */
@@ -311,7 +312,7 @@ export class CertificatesService {
     );
     if (renderKey) await deleteCertificateImageBestEffort(renderKey);
 
-    await deleteCertificateTemplateById(id);
+    await deleteCertificateTemplateById(id, getDb());
   }
 
   /**
@@ -403,7 +404,7 @@ export class CertificatesService {
         renderImageKey: renderKey,
         renderImageWidth: render.width,
         renderImageHeight: render.height,
-      });
+      }, getDb());
     } catch (err) {
       await removeNewImages();
       throw err;

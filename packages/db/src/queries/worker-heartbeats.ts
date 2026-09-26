@@ -18,7 +18,7 @@ export interface WorkerHeartbeatInput {
 /** Upsert this process's row; the database clock stamps last_beat_at. */
 export async function recordWorkerHeartbeat(
   beat: WorkerHeartbeatInput,
-  exec: DbExecutor = getDb(),
+  exec: DbExecutor,
 ): Promise<void> {
   await exec
     .insert(workerHeartbeats)
@@ -36,8 +36,8 @@ export async function recordWorkerHeartbeat(
 
 /** Delete rows of workers silent for longer than `retentionMs`; returns the count. */
 export async function pruneWorkerHeartbeats(
+  exec: DbExecutor,
   retentionMs = WORKER_HEARTBEAT_RETENTION_MS,
-  exec: DbExecutor = getDb(),
 ): Promise<number> {
   const result = await exec.execute(sql`
     DELETE FROM "worker_heartbeats"
