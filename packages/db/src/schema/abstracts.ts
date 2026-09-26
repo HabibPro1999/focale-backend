@@ -113,17 +113,6 @@ export const abstractCodeCounters = pgTable(
   ],
 );
 
-export const abstractCodeSequences = pgTable(
-  "abstract_code_sequences",
-  {
-    id: idPk(),
-    finalType: abstractFinalType().notNull(),
-    lastValue: integer().notNull().default(0),
-    ...timestamps,
-  },
-  (t) => [uniqueIndex("abstract_code_sequences_final_type_key").on(t.finalType)],
-);
-
 export const abstractBookJobs = pgTable(
   "abstract_book_jobs",
   {

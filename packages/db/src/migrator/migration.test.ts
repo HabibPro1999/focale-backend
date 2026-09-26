@@ -265,6 +265,25 @@ describe("unified migration format", () => {
     }
   });
 
+  it("expects a dropped table and its dropped index to be absent (0033)", async () => {
+    for (const engine of ["postgres", "cockroach"] as const) {
+      const migrations = await loadMigrations(migrationsDirectory, engine);
+      const drop = migrations.find((candidate) => candidate.id === "0033");
+      expect(drop?.directives).toMatchObject({ transaction: "per-statement", idempotent: true });
+      expect(deriveCatalogProbes(drop!)).toEqual([
+        expect.objectContaining({ kind: "index", name: "abstract_code_sequences_final_type_key", expectedPresent: false }),
+        expect.objectContaining({ kind: "table", name: "abstract_code_sequences", expectedPresent: false }),
+      ]);
+
+      const effective = [...deriveEffectiveCatalogProbes(migrations).values()].flat();
+      const finalProbes = effective.filter((probe) => "kind" in probe && probe.name.startsWith("abstract_code_sequences"));
+      expect(finalProbes).toHaveLength(2);
+      for (const probe of finalProbes) {
+        expect(probe).toEqual(expect.objectContaining({ migrationId: "0033", expectedPresent: false }));
+      }
+    }
+  });
+
   it("requires a declared transaction mode and valid deferral condition", () => {
     expect(() => parseMigrationDirectives("CREATE TABLE t(id int);", "test.sql")).toThrow(/transaction directive/);
     expect(() => parseMigrationDirectives(

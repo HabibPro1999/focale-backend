@@ -9,7 +9,6 @@ import {
 import {
   getOrCreateAbstractConfig,
   updateAbstractConfig,
-  abstractsTableExists,
   countAbstractsByEvent,
   insertAuditLog,
   listThemesByConfigId,
@@ -63,8 +62,7 @@ export class AbstractsConfigService {
   async getOrCreateConfig(eventId: string): Promise<AbstractConfigRow> {
     const config = await getOrCreateAbstractConfig(eventId);
     if (config.modeLocked) return config;
-    const locked =
-      (await abstractsTableExists()) && (await countAbstractsByEvent(eventId)) > 0;
+    const locked = (await countAbstractsByEvent(eventId)) > 0;
     return locked ? { ...config, modeLocked: true } : config;
   }
 
@@ -140,17 +138,11 @@ export class AbstractsConfigService {
     return updated;
   }
 
-  /**
-   * Whether changing submissionMode is allowed. The abstracts table may not
-   * exist yet (Phase I) — probe first, then count rows for the event.
-   */
+  /** Whether changing submissionMode is allowed: free until the event has abstracts. */
   async assertModeChangeAllowed(
     eventId: string,
     force: boolean,
   ): Promise<{ forced: boolean }> {
-    if (!(await abstractsTableExists())) {
-      return { forced: false };
-    }
     const abstractCount = await countAbstractsByEvent(eventId);
     if (abstractCount === 0) {
       return { forced: false };
@@ -356,9 +348,7 @@ export class AbstractsConfigService {
     const droppedIds = existingIds.filter((id) => !incomingIds.has(id));
 
     if (droppedIds.length > 0 && !body.force) {
-      const abstractCount = (await abstractsTableExists())
-        ? await countAbstractsByEvent(eventId)
-        : 0;
+      const abstractCount = await countAbstractsByEvent(eventId);
       if (abstractCount > 0) {
         throw new AppException(
           ErrorCodes.CONFLICT,
