@@ -6,8 +6,12 @@ import {
   SponsorshipsListController,
 } from "./sponsorships.controller";
 import { SponsorshipsPublicController } from "./sponsorships.public.controller";
-import { SponsorshipsService } from "./sponsorships.service";
+import { SponsorshipsAdminService } from "./sponsorships.admin.service";
+import { SponsorshipsPublicService } from "./sponsorships.public.service";
 
+// Split by trust level (plan 5.7): the authenticated controllers inject
+// SponsorshipsAdminService; the anonymous one injects SponsorshipsPublicService
+// only.
 @Module({
   imports: [AccessModule],
   controllers: [
@@ -16,9 +20,6 @@ import { SponsorshipsService } from "./sponsorships.service";
     RegistrationSponsorshipsController,
     SponsorshipsPublicController,
   ],
-  providers: [SponsorshipsService],
-  // Exported so the registrations module (wave-3) can inject the link/unlink/
-  // recalc helpers and run them inside its own transaction.
-  exports: [SponsorshipsService],
+  providers: [SponsorshipsAdminService, SponsorshipsPublicService],
 })
 export class SponsorshipsModule {}
