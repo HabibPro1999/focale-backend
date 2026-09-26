@@ -30,6 +30,7 @@ pnpm install                 # install workspace deps
 pnpm build                   # pnpm -r build  (tsc → dist/ per package)
 pnpm typecheck               # pnpm -r typecheck
 pnpm test                    # pnpm -r test (workspace-concurrency=1)
+pnpm contracts:generate      # regenerate packages/contracts/generated (frontend artifacts)
 
 pnpm dev                     # API in watch mode (@app/api)
 pnpm dev:worker              # worker in watch mode (@app/worker)
@@ -88,6 +89,59 @@ pnpm --filter @app/worker repair-paid-settlement invariants [--event <id>] [--js
   `registration.updated`; no email. Rerunning a manifest changes nothing (`ALREADY_APPLIED`).
 - The invariant checks are `checkSettlementInvariants` in `@app/db`, ready for a staging job or a
   CI step against a restored snapshot (not scheduled).
+
+## Frontend contract artifacts
+
+`packages/contracts/generated/` is built from the Zod schemas in
+`packages/contracts/src` and the condition parity cases in `packages/shared/src`.
+Don't edit it by hand: run `pnpm contracts:generate` and commit the result. CI
+(`static`) runs `pnpm contracts:generate --check` and fails when the folder is
+stale. The output is deterministic (sorted names, stable key order, no
+timestamps), so the check only fails on a real change.
+
+| File | Content |
+|---|---|
+| `json-schema/contracts.input.json` | JSON Schema draft 2020-12, one `$defs` entry per exported schema (export name); a schema used inside another is a `$ref`. Input side: what a client sends, before parsing. |
+| `json-schema/contracts.output.json` | Same schemas, output side: after parsing (defaults filled, unknown keys stripped). |
+| `types/contracts.input.ts`, `types/contracts.output.ts` | TypeScript types generated from those documents (`CreateRegistrationBodySchema` → `CreateRegistrationBody`). |
+| `fixtures/field-visibility.json`, `fixtures/rule-conditions.json` | Condition parity cases, format `focale.condition-parity/v1` (below). |
+| `manifest.json` | Each schema's source module and type name, and every spot JSON Schema can't express. |
+
+How the admin and form repos use them (there is no shared package, so they
+vendor copies):
+
+1. Copy the files you need from a backend `develop` commit into the frontend
+   repo (for example `src/contracts/generated/`) and name that commit in the
+   commit message. Re-copy when a backend PR changes `generated/`; the change is
+   visible in that PR's diff.
+2. Types: `import type { CreateRegistrationBody } from "./contracts.input"` for
+   what you send; the output file for shapes the server builds from these
+   schemas. Dates are ISO 8601 strings in both.
+3. Runtime validation (optional): load a document into a draft 2020-12
+   validator (Ajv: `Ajv2020` plus `ajv-formats`) and refer to
+   `#/$defs/<ExportName>`.
+4. Parity fixtures: a test loops over `cases` and calls the local copy of the
+   evaluator named in `call` with `(conditions, logic, formData)`, leaving out
+   `logic` when a case has none, and expects `expected` (`"throws"` means it
+   throws). A key missing from `formData` is `undefined`, and so is a condition
+   without `value`. Copies to test: `field-visibility`: form
+   `src/lib/conditions.ts`, admin `src/features/registrations/utils/conditions.ts`;
+   `rule-conditions`: form `src/lib/pricing-conditions.ts`. A failing case means
+   the copy has drifted from the server.
+
+What JSON Schema can't express is marked with a `$comment` at the spot and
+listed under `unrepresentable` in `manifest.json`:
+- `date`: a `Date` is `string` with `format: date-time`.
+- `transform` (output side): the value is computed in code, so its type is `unknown`.
+- `preprocess` (input side): the schema describes the converted value, e.g. a
+  boolean for `?active=true`.
+- `opaque`: `UpdateNetworkingConfigSchema`, `NetworkingSpaceUpdateSchema` and
+  `NetworkingTableUpdateSchema` accept any JSON and validate it in code; their
+  input type is `unknown`.
+
+Query and path parameters travel as strings; `z.coerce` fields show the coerced
+type. The contracts don't yet say which schema belongs to which route or
+response (5.5 adds route output schemas).
 
 ## Environment
 

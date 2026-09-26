@@ -5,21 +5,27 @@
  * can never all be true at once - e.g. three `equals` conditions stacked on
  * one dropdown ("category is phd AND category is resident AND category is
  * postgrad"), which is exactly the class of dead pricing rule this guard
- * exists to catch before it ships. `condition-satisfiability.test.ts` is the
- * shared spec this file (and its twin) must satisfy.
+ * exists to catch before it ships. The spec it must satisfy is
+ * `apps/api/src/modules/pricing/condition-satisfiability.test.ts`, which also
+ * checks every claim against the real evaluator
+ * (`packages/shared/src/conditions.ts`).
  *
- * Admin twin: `admin/src/lib/condition-satisfiability.ts` - byte-identical
- * except this header comment. `Condition` and `toFiniteNumber` are declared
- * LOCALLY below (not imported from `./conditions`) so the two files stay
- * copy-paste identical across repos with no shared package - same trick
- * `form/src/lib/pricing-conditions.ts` already uses to mirror
- * `backend/src/shared/utils/conditions.ts`.
+ * Admin twin: `admin/src/lib/condition-satisfiability.ts`. Everything from
+ * `interface Condition` to the end of this file is byte-identical to the admin
+ * file (checked against admin `develop` 50e99c7, 2026-09-26); only the header
+ * comments differ. To check for drift, diff the two files from that line on.
+ * `Condition` and `toFiniteNumber` are declared LOCALLY below (not imported
+ * from `@app/shared`) so the two files stay copy-paste identical across repos
+ * with no shared package - the same trick the form app's
+ * `src/lib/pricing-conditions.ts` uses to mirror
+ * `packages/shared/src/conditions.ts`.
  *
  * Tier 1 rules (equals/equals, equals/not_equals, is_empty/is_not_empty,
  * is_empty/equals, greater_than/less_than, contains/not_contains, `in []`,
  * equals/in) are type-free and provable with zero form-schema knowledge - run
- * here AND in admin, and also enforced backend-side in
- * `pricing.service.ts`/`pricing.schema.ts`.
+ * here AND in admin, and also enforced backend-side by the pricing rule
+ * schemas (`packages/contracts/src/pricing.ts`) and
+ * `apps/api/src/modules/pricing/pricing.service.ts`.
  *
  * Tier 3 (`in`/`in` with disjoint lists) additionally needs to know whether a
  * field is single- or multi-valued: on a checkbox, `in A` + `in B` is a
@@ -234,10 +240,18 @@ function checkTier1Pair(a: Condition, b: Condition): ConflictReason | null {
   }
 
   // Rule 8: equals X + in L.
-  if (opA === "equals" && opB === "in" && equalsInConflicts(a.value, b.value)) {
+  if (
+    opA === "equals" &&
+    opB === "in" &&
+    equalsInConflicts(a.value, b.value)
+  ) {
     return "equals_in_conflict";
   }
-  if (opB === "equals" && opA === "in" && equalsInConflicts(b.value, a.value)) {
+  if (
+    opB === "equals" &&
+    opA === "in" &&
+    equalsInConflicts(b.value, a.value)
+  ) {
     return "equals_in_conflict";
   }
 

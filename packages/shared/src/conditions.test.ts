@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { evaluateRuleConditions, evaluateRuleCondition } from "./conditions";
+import { evaluateRuleConditions, evaluateRuleCondition, type Condition } from "./conditions";
 
 describe("evaluateRuleCondition", () => {
   it("returns true for not_contains when value is non-string", () => {
@@ -337,5 +339,33 @@ describe("rule conditions — parity with the form app's pricing evaluator", () 
         { a: "1", b: "x" },
       ),
     ).toBe(false);
+  });
+});
+
+interface RuleParityCase {
+  name: string;
+  conditions: Condition[];
+  logic: string;
+  formData: Record<string, unknown>;
+  expected: boolean;
+}
+
+// Exported to the frontends as packages/contracts/generated/fixtures/rule-conditions.json
+// (`pnpm contracts:generate`); the form app's pricing preview copies this evaluator.
+const ruleParity = JSON.parse(
+  readFileSync(join(__dirname, "rule-conditions.parity-cases.json"), "utf8"),
+) as { cases: RuleParityCase[] };
+
+describe("rule conditions — shared parity cases", () => {
+  it("covers every operator and both logics", () => {
+    const operators = new Set(ruleParity.cases.flatMap((c) => c.conditions.map((cond) => cond.operator)));
+    for (const op of ["equals", "not_equals", "in", "contains", "not_contains", "greater_than", "less_than", "is_empty", "is_not_empty"]) {
+      expect(operators.has(op), op).toBe(true);
+    }
+    expect(new Set(ruleParity.cases.map((c) => c.logic.toUpperCase()))).toEqual(new Set(["AND", "OR", "XOR", ""]));
+  });
+
+  it.each(ruleParity.cases.map((c) => [c.name, c] as const))("%s", (_name, c) => {
+    expect(evaluateRuleConditions(c.conditions, c.logic, c.formData)).toBe(c.expected);
   });
 });

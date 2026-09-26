@@ -18,6 +18,7 @@ interface ParityCase {
 
 // Shared with the form app: the same file is the contract for its evaluator
 // (form/src/lib/conditions.ts). The form repo has no tests of its own for it.
+// Exported as packages/contracts/generated/fixtures/field-visibility.json.
 const parity = JSON.parse(
   readFileSync(join(__dirname, "field-visibility.parity-cases.json"), "utf8"),
 ) as { cases: ParityCase[] };
