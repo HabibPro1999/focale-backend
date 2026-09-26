@@ -42,6 +42,8 @@ import {
   withTxn,
   withLockingTxn,
   lockRegistrationForUpdate,
+  lockRegistrationSponsorships,
+  releaseRegistrationUsagesTxn,
   settleRegistrationTxn,
   claimSponsorshipCodeTxn,
   linkSponsorshipUsageTxn,
@@ -53,8 +55,6 @@ import {
   casIncrementRegisteredTx,
   casDecrementRegisteredTx,
   getEventCounterInfoTx,
-  countUsagesForSponsorship,
-  updateSponsorshipRow,
   findFormById,
   findActiveRegistrationFormById,
   findAccessDetailsByIds,
@@ -78,8 +78,6 @@ import {
   insertRegistrationRow,
   deleteRegistrationRow,
   getNetworkingProfilePhotoByRegistration,
-  findRegistrationUsageLinks,
-  deleteRegistrationUsages,
   allocateReferenceNumber,
   insertAuditLog,
   listRegistrationAuditLogRows,
@@ -1568,8 +1566,12 @@ export class RegistrationsService {
       );
     }
 
-    const networkingPhoto = await withTxn(async (tx) => {
-      const registration = await findRegistrationForMutation(id, tx);
+    // Lock order (ADR 0001): the linked sponsorships, then the registration.
+    const networkingPhoto = await withLockingTxn(async (tx) => {
+      await lockRegistrationSponsorships(tx, id);
+      const registration = (await lockRegistrationForUpdate(tx, id))
+        ? await findRegistrationForMutation(id, tx)
+        : null;
       if (!registration) {
         throw new AppException(
           ErrorCodes.REGISTRATION_NOT_FOUND,
@@ -1604,22 +1606,10 @@ export class RegistrationsService {
         performedBy,
       });
 
-      const usages = await findRegistrationUsageLinks(id, tx);
-      const coveredAccessIds =
-        registration.paymentStatus === "PARTIAL"
-          ? await this.access.getAlreadyCoveredAccessIds(id, tx)
-          : new Set<string>();
-
-      if (usages.length > 0) {
-        await deleteRegistrationUsages(id, tx);
-        const sponsorshipIds = [...new Set(usages.map((u) => u.sponsorshipId))];
-        for (const sponsorshipId of sponsorshipIds) {
-          const remaining = await countUsagesForSponsorship(tx, sponsorshipId);
-          await updateSponsorshipRow(tx, sponsorshipId, {
-            status: remaining > 0 ? "USED" : "PENDING",
-          });
-        }
-      }
+      // Usages go first; each sponsorship back to PENDING unless still linked
+      // elsewhere, and a CANCELLED one stays CANCELLED.
+      const released = await releaseRegistrationUsagesTxn(tx, id);
+      const coveredAccessIds = new Set(released.coveredAccessIds);
 
       const priceBreakdown = registration.priceBreakdown as PriceBreakdown;
       if (priceBreakdown.accessItems) {

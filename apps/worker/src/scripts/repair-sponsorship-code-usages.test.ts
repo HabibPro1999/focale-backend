@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   planSponsorshipCodeRepair: vi.fn(),
   applySponsorshipCodeLink: vi.fn(),
+  clearRegistrationSponsorshipCode: vi.fn(),
   configureDb: vi.fn(),
   closeDb: vi.fn(),
 }));
@@ -108,7 +109,7 @@ describe("repair-sponsorship-code-usages", () => {
       reason: "STALE",
       detail: "now SEVERAL_CLAIMANTS",
     });
-    setArgv("--apply", "--confirm-2-8-deployed", "--registration", "reg-2", "--registration", "reg-9");
+    setArgv("--apply", "--registration", "reg-2", "--registration", "reg-9");
     await runScript();
     expect(mocks.applySponsorshipCodeLink).toHaveBeenCalledTimes(1);
     expect(mocks.applySponsorshipCodeLink).toHaveBeenCalledWith(PLAN.links[1]);
@@ -119,18 +120,59 @@ describe("repair-sponsorship-code-usages", () => {
   });
 
   it("--apply --all links every planned row", async () => {
-    setArgv("--apply", "--confirm-2-8-deployed", "--all");
+    setArgv("--apply", "--all");
     await runScript();
     expect(mocks.applySponsorshipCodeLink.mock.calls.map((c) => c[0].registrationId)).toEqual(["reg-1", "reg-2"]);
     expect(logs.at(-1)).toBe("Linked 2 of 2 planned link(s).");
   });
 
+  it("--clear-code dry run computes each listed row and applies nothing", async () => {
+    mocks.clearRegistrationSponsorshipCode
+      .mockResolvedValueOnce({
+        outcome: "would_clear",
+        registrationId: "reg-3",
+        code: "SP-SHARED",
+        before: { paymentStatus: "SPONSORED", sponsorshipAmount: 200 },
+        after: { paymentStatus: "PENDING", sponsorshipAmount: 0, amountDue: 200 },
+      })
+      .mockResolvedValueOnce({ outcome: "skipped", registrationId: "reg-4", reason: "LINKED", detail: "unlink it instead" });
+    setArgv("--clear-code", "--registration", "reg-3", "--registration", "reg-4");
+    await runScript();
+    expect(mocks.clearRegistrationSponsorshipCode.mock.calls).toEqual([
+      ["reg-3", { apply: false }],
+      ["reg-4", { apply: false }],
+    ]);
+    expect(mocks.planSponsorshipCodeRepair).not.toHaveBeenCalled();
+    expect(logs).toContain(
+      'would-clear registration=reg-3 code="SP-SHARED" status=SPONSORED->PENDING sponsorship=200->0 due=200',
+    );
+    expect(logs).toContainEqual(expect.stringContaining("skipped registration=reg-4 reason=LINKED"));
+    expect(logs.at(-1)).toBe("No rows changed. Re-run with --apply to clear.");
+    expect(exitSpy).toHaveBeenCalledWith(0);
+  });
+
+  it("--clear-code --apply clears the listed rows", async () => {
+    mocks.clearRegistrationSponsorshipCode.mockResolvedValue({
+      outcome: "cleared",
+      registrationId: "reg-3",
+      code: "SP-X",
+      before: { paymentStatus: "PENDING", sponsorshipAmount: 0 },
+      after: { paymentStatus: "PENDING", sponsorshipAmount: 0, amountDue: 200 },
+    });
+    setArgv("--clear-code", "--apply", "--registration", "reg-3");
+    await runScript();
+    expect(mocks.clearRegistrationSponsorshipCode).toHaveBeenCalledWith("reg-3", { apply: true });
+    expect(logs.at(-1)).toBe("Cleared 1 of 1.");
+  });
+
   it.each([
-    [["--apply", "--all"]],
-    [["--apply", "--confirm-2-8-deployed"]],
-    [["--apply", "--confirm-2-8-deployed", "--all", "--registration", "reg-1"]],
+    [["--apply"]],
+    [["--apply", "--all", "--registration", "reg-1"]],
     [["--all"]],
     [["--registration", "reg-1"]],
+    [["--clear-code"]],
+    [["--clear-code", "--all"]],
+    [["--clear-code", "--registration", "reg-1", "--event", "ev-1"]],
     [["--bogus"]],
   ])("refuses %j before touching the database", async (args) => {
     setArgv(...args);

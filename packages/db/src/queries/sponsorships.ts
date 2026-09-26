@@ -1037,17 +1037,6 @@ export async function casSetSponsorshipUsed(
   return rows.length;
 }
 
-export async function countUsagesForSponsorship(
-  db: DbExecutor,
-  sponsorshipId: string,
-): Promise<number> {
-  const [row] = await db
-    .select({ value: count() })
-    .from(sponsorshipUsages)
-    .where(eq(sponsorshipUsages.sponsorshipId, sponsorshipId));
-  return Number(row?.value ?? 0);
-}
-
 export async function updateUsageAmount(
   db: DbExecutor,
   usageId: string,

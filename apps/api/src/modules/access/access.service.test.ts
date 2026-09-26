@@ -39,12 +39,8 @@ vi.mock("@app/db", async (importOriginal) => {
   casDecrementAccessRegisteredCount: vi.fn(),
   getAccessCapacityInfo: vi.fn(),
   getAccessRegisteredCount: vi.fn(),
-  getAccessCapacityRowsByIds: vi.fn(),
-  getUnsettledRegistrationsWithAccess: vi.fn(),
   getRegistrationCoveredAccessIds: vi.fn(),
-  updateRegistrationForAccessDrop: vi.fn(),
-  insertAuditLog: vi.fn(),
-  enqueueTriggeredEmailOutbox: vi.fn(),
+  enqueueAccessDrops: vi.fn(),
   };
 });
 
@@ -248,19 +244,26 @@ describe("updateEventAccess", () => {
       event: { startDate, endDate },
     });
     m.updateEventAccessRow.mockResolvedValue(accessRow({ maxCapacity: 5 }));
-    m.getAccessCapacityRowsByIds.mockResolvedValue([
-      { id: "access-1", name: "Access", maxCapacity: 5, paidCount: 5 },
-    ]);
-    m.getUnsettledRegistrationsWithAccess.mockResolvedValue([]);
+    m.enqueueAccessDrops.mockResolvedValue(["access-1"]);
     m.getEventAccessWithPrereqs.mockResolvedValue(accessRow({ maxCapacity: 5 }));
 
     const result = await service.updateEventAccess("access-1", { maxCapacity: 5 });
     expect(result.maxCapacity).toBe(5);
-    expect(m.getUnsettledRegistrationsWithAccess).toHaveBeenCalledWith(
-      eventId,
-      "access-1",
-      expect.anything(),
-    );
+    // The drop of the now-full item from unsettled registrations goes through the outbox.
+    expect(m.enqueueAccessDrops).toHaveBeenCalledWith(expect.anything(), eventId, ["access-1"], "capacity_reached");
+  });
+
+  it("deactivating an item enqueues its drop from unsettled registrations", async () => {
+    m.getEventAccessForUpdate.mockResolvedValue({
+      ...accessRow({ active: true }),
+      event: { startDate, endDate },
+    });
+    m.updateEventAccessRow.mockResolvedValue(accessRow({ active: false }));
+    m.enqueueAccessDrops.mockResolvedValue(["access-1"]);
+    m.getEventAccessWithPrereqs.mockResolvedValue(accessRow({ active: false }));
+
+    await service.updateEventAccess("access-1", { active: false });
+    expect(m.enqueueAccessDrops).toHaveBeenCalledWith(expect.anything(), eventId, ["access-1"], "deactivated");
   });
 
   it("detects circular prerequisites (transitive)", async () => {
@@ -521,18 +524,18 @@ describe("syncPaidCountDelta", () => {
   };
   const newState = { ...oldState, coveredAccessIds: new Set(["access-2"]) };
 
-  it("moves the paid counts, then checks capacity for the items that went up", async () => {
+  it("moves the paid counts, then enqueues the drop check for the items that went up", async () => {
     m.applyPaidAccessDelta.mockResolvedValue({ incremented: ["access-2"], decremented: [] });
-    m.getAccessCapacityRowsByIds.mockResolvedValue([]);
+    m.enqueueAccessDrops.mockResolvedValue([]);
     await service.syncPaidCountDelta(eventId, oldState, newState);
     expect(m.applyPaidAccessDelta).toHaveBeenCalledWith(expect.anything(), oldState, newState);
-    expect(m.getAccessCapacityRowsByIds).toHaveBeenCalledWith(["access-2"], expect.anything());
+    expect(m.enqueueAccessDrops).toHaveBeenCalledWith(expect.anything(), eventId, ["access-2"], "capacity_reached");
   });
 
   it("skips the capacity check when nothing went up", async () => {
     m.applyPaidAccessDelta.mockResolvedValue({ incremented: [], decremented: ["access-2"] });
     await service.syncPaidCountDelta(eventId, newState, { ...newState, status: "REFUNDED" });
-    expect(m.getAccessCapacityRowsByIds).not.toHaveBeenCalled();
+    expect(m.enqueueAccessDrops).not.toHaveBeenCalled();
   });
 
   it("maps a capacity failure to the API error", async () => {
@@ -541,108 +544,20 @@ describe("syncPaidCountDelta", () => {
       code: ErrorCodes.ACCESS_CAPACITY_EXCEEDED,
       details: { remaining: 0, requested: 1 },
     });
-    expect(m.getAccessCapacityRowsByIds).not.toHaveBeenCalled();
+    expect(m.enqueueAccessDrops).not.toHaveBeenCalled();
   });
 });
 
 // ===========================================================================
-// handleCapacityReached — priceBreakdown recompute + outbox dedupe
+// handleCapacityReached — enqueue only (the drop runs in the worker, plan 2.8;
+// its recompute is covered by packages/db/tests/db/access-drop.db.test.ts)
 // ===========================================================================
 describe("handleCapacityReached", () => {
-  const regBase = {
-    id: "reg-1",
-    email: "u@x.com",
-    firstName: "U",
-    lastName: "X",
-    accessTypeIds: ["access-1", "access-2"],
-    droppedAccessIds: [],
-    totalAmount: 180,
-    accessAmount: 80,
-    sponsorshipAmount: 0,
-    priceBreakdown: {
-      calculatedBasePrice: 100,
-      accessItems: [
-        { accessId: "access-1", quantity: 1, subtotal: 50, name: "WS", unitPrice: 50 },
-        { accessId: "access-2", quantity: 1, subtotal: 30, name: "DIN", unitPrice: 30 },
-      ],
-      accessTotal: 80,
-      subtotal: 180,
-      sponsorshipTotal: 0,
-      total: 180,
-      droppedAccessItems: [],
-    },
-  };
-
-  it("drops the at-capacity access and recomputes the breakdown", async () => {
-    m.getAccessCapacityRowsByIds.mockResolvedValue([
-      { id: "access-1", name: "WS", maxCapacity: 10, paidCount: 10 },
-    ]);
-    m.getUnsettledRegistrationsWithAccess.mockResolvedValue([{ ...regBase }]);
-    m.getRegistrationCoveredAccessIds.mockResolvedValue([]);
-    m.casDecrementAccessRegisteredCount.mockResolvedValue(true);
-
-    const affected = await service.handleCapacityReached(eventId, ["access-1"]);
-    expect(affected).toBe(1);
-
-    const [, patch] = m.updateRegistrationForAccessDrop.mock.calls[0];
-    expect(patch.totalAmount).toBe(130);
-    expect(patch.accessAmount).toBe(30);
-    expect(patch.accessTypeIds).toEqual(["access-2"]);
-    expect(patch.droppedAccessIds).toEqual(["access-1"]);
-    expect(patch.priceBreakdown.accessItems).toHaveLength(1);
-    expect(patch.priceBreakdown.subtotal).toBe(130);
-    expect(patch.priceBreakdown.droppedAccessItems[0].reason).toBe("capacity_reached");
-    expect(patch.paymentStatus).toBeUndefined();
-    expect(m.enqueueTriggeredEmailOutbox).not.toHaveBeenCalled();
-
-    const [audit] = m.insertAuditLog.mock.calls[0];
-    expect(audit.action).toBe("ACCESS_CAPACITY_REACHED");
-    expect(audit.performedBy).toBe("SYSTEM");
-  });
-
-  it("marks fully-covered registrations SPONSORED and enqueues the confirmation email", async () => {
-    m.getAccessCapacityRowsByIds.mockResolvedValue([
-      { id: "access-1", name: "WS", maxCapacity: 10, paidCount: 10 },
-    ]);
-    m.getUnsettledRegistrationsWithAccess.mockResolvedValue([
-      { ...regBase, sponsorshipAmount: 200 },
-    ]);
-    m.getRegistrationCoveredAccessIds.mockResolvedValue([]);
-    m.casDecrementAccessRegisteredCount.mockResolvedValue(true);
-
-    await service.handleCapacityReached(eventId, ["access-1"]);
-
-    const [, patch] = m.updateRegistrationForAccessDrop.mock.calls[0];
-    expect(patch.paymentStatus).toBe("SPONSORED");
-    expect(patch.totalAmount).toBe(130);
-    expect(patch.sponsorshipAmount).toBe(130);
-    expect(patch.priceBreakdown.total).toBe(0);
-    expect(m.enqueueTriggeredEmailOutbox).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ trigger: "PAYMENT_CONFIRMED" }),
-      "email:triggered:PAYMENT_CONFIRMED:reg-1",
-    );
-  });
-
-  it("skips a registration whose access is sponsorship-protected", async () => {
-    m.getAccessCapacityRowsByIds.mockResolvedValue([
-      { id: "access-1", name: "WS", maxCapacity: 10, paidCount: 10 },
-    ]);
-    m.getUnsettledRegistrationsWithAccess.mockResolvedValue([{ ...regBase }]);
-    m.getRegistrationCoveredAccessIds.mockResolvedValue(["access-1"]);
-
-    const affected = await service.handleCapacityReached(eventId, ["access-1"]);
-    expect(affected).toBe(0);
-    expect(m.updateRegistrationForAccessDrop).not.toHaveBeenCalled();
-  });
-
-  it("does nothing for access below capacity", async () => {
-    m.getAccessCapacityRowsByIds.mockResolvedValue([
-      { id: "access-1", name: "WS", maxCapacity: 10, paidCount: 5 },
-    ]);
-    const affected = await service.handleCapacityReached(eventId, ["access-1"]);
-    expect(affected).toBe(0);
-    expect(m.getUnsettledRegistrationsWithAccess).not.toHaveBeenCalled();
+  it("enqueues the capacity drop in the caller's transaction and changes no registration", async () => {
+    const tx = { __tx: true };
+    m.enqueueAccessDrops.mockResolvedValue(["access-1"]);
+    expect(await service.handleCapacityReached(eventId, ["access-1", "access-2"], tx as never)).toBe(1);
+    expect(m.enqueueAccessDrops).toHaveBeenCalledWith(tx, eventId, ["access-1", "access-2"], "capacity_reached");
   });
 });
 
