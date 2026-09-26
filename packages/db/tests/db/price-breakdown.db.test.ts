@@ -57,7 +57,7 @@ describe.runIf(dbTestsEnabled())("db: registrations.price_breakdown read boundar
 
   async function seed(priceBreakdown: unknown) {
     const event = await seedEvent();
-    const form = await seedForm({ eventId: event.id });
+    const form = await seedForm({ eventId: event.id, schema: { steps: [] } });
     return seedRegistration({
       eventId: event.id,
       formId: form.id,
