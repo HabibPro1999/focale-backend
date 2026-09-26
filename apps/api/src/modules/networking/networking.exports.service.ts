@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import type ExcelJS from "exceljs";
 import type { Writable } from "node:stream";
-import { networkingMeetingIs, networkingStore, type NetworkingRow } from "@app/db";
+import { networkingMeetingIs, networkingProfileListed, networkingStore, type NetworkingRow } from "@app/db";
 import { generateNetworkingReportPdf } from "@app/integrations";
 import { NetworkingAdminService } from "./networking.admin.service";
 import { NetworkingSocialService } from "./networking.social.service";
@@ -138,8 +138,8 @@ export class NetworkingExportsService {
         "Choose participants, matches, meetings or sectors and csv, xlsx or pdf",
       );
     const store = networkingStore();
-    // Erased profiles are tombstones with nothing to export.
-    const profiles = (await store.all("profiles", { eventId: event.id })).filter((profile) => !profile.erasedAt);
+    // Erased profiles are tombstones with nothing to export (4.6 policy).
+    const profiles = (await store.all("profiles", { eventId: event.id })).filter(networkingProfileListed);
     const byId = new Map(profiles.map((profile) => [profile.id, profile]));
     const name = (id: string) => {
       const p = byId.get(id);

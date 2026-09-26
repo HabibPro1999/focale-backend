@@ -1,15 +1,29 @@
 import { and, eq, getTableColumns, inArray, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { randomUUID } from "node:crypto";
 import { getDb } from "../client";
 import { rowsOf } from "../helpers";
 import { withTxn } from "../txn";
-import { networkingProfiles } from "../schema/networking";
+import { networkingConfigs, networkingProfiles } from "../schema/networking";
 import { registrations } from "../schema/registrations";
-import { discoverableCounterpart, notInteracted } from "../policy/networking-eligibility";
+import { clients } from "../schema/users-clients";
+import { events } from "../schema/events-access";
+import { discoverableCounterpart, embeddableProfile, networkingEventGate, notInteracted } from "../policy/networking-eligibility";
 import {
   networkingEmbeddings,
   networkingEmbeddingJobs,
 } from "../schema/networking-embeddings";
+
+// Embedding eligibility (4.6): the event offers networking and the profile is
+// embeddable. Sources: `networking_profiles p`, `registrations r` (by
+// registration_id), `networking_configs c`, `events ev`, `clients cl`.
+const p = alias(networkingProfiles, "p");
+const r = alias(registrations, "r");
+const c = alias(networkingConfigs, "c");
+const ev = alias(events, "ev");
+const cl = alias(clients, "cl");
+const embeddable = embeddableProfile(p, r, { config: c.config });
+const offered = networkingEventGate({ config: c.config, eventStatus: ev.status, clientActive: cl.active, clientModules: cl.enabledModules });
 
 /** Reconcile a bounded batch. Profile activity changes advance the watermark without re-embedding unchanged text. */
 export async function enqueueChangedNetworkingEmbeddings(
@@ -25,11 +39,7 @@ export async function enqueueChangedNetworkingEmbeddings(
     JOIN events ev ON ev.id=p.event_id
     JOIN clients cl ON cl.id=ev.client_id
     LEFT JOIN networking_embedding_jobs j ON j.profile_id=p.id
-    WHERE p.status='ACTIVE' AND p.visible AND p.consent AND p.withdrawn_at IS NULL
-      AND c.config->>'enabled'='true' AND cl.active AND ev.status<>'ARCHIVED'
-      AND 'networking'=ANY(cl.enabled_modules) AND 'registrations'=ANY(cl.enabled_modules) AND 'emails'=ANY(cl.enabled_modules)
-      AND r.networking_opt_in IS DISTINCT FROM false
-      AND r.payment_status::text IN (SELECT jsonb_array_elements_text(c.config->'eligiblePaymentStatuses'))
+    WHERE ${embeddable} AND ${offered}
       AND (j.profile_id IS NULL OR (j.status='READY' AND (j.indexed_profile_at < p.updated_at OR j.model <> ${model})))
     ORDER BY p.updated_at ASC LIMIT ${limit}
     ON CONFLICT (profile_id) DO UPDATE SET status='PENDING',available_at=now(),attempts=0,updated_at=now()
@@ -56,10 +66,7 @@ export async function claimNetworkingEmbeddingJobs(limit = 10) {
       JOIN events ev ON ev.id=p.event_id
       JOIN clients cl ON cl.id=ev.client_id
       WHERE (j.status='PENDING' OR (j.status='PROCESSING' AND j.locked_until < now()) OR (j.status='FAILED' AND j.attempts < 5))
-        AND j.attempts < 5 AND j.available_at <= now() AND p.status='ACTIVE' AND p.visible AND p.consent AND p.withdrawn_at IS NULL
-        AND c.config->>'enabled'='true' AND cl.active AND ev.status<>'ARCHIVED'
-        AND 'networking'=ANY(cl.enabled_modules) AND 'registrations'=ANY(cl.enabled_modules) AND 'emails'=ANY(cl.enabled_modules) AND r.networking_opt_in IS DISTINCT FROM false
-        AND r.payment_status::text IN (SELECT jsonb_array_elements_text(c.config->'eligiblePaymentStatuses'))
+        AND j.attempts < 5 AND j.available_at <= now() AND ${embeddable} AND ${offered}
       ORDER BY j.available_at LIMIT ${limit} FOR UPDATE OF j SKIP LOCKED
     )
     UPDATE networking_embedding_jobs j
@@ -174,11 +181,19 @@ export {
   type NetworkingVectorIndexStatus,
 } from "./networking-vector-search";
 
-/** Withdrawn profiles are left out: their embeddings and job are deleted at withdrawal. */
+/**
+ * Job status of the event's embeddable profiles (4.6), the ones the worker
+ * embeds; a profile without a job yet is PENDING. Ineligible, hidden,
+ * withdrawn and erased profiles are never embedded, so they are not counted.
+ */
 export async function getNetworkingEmbeddingHealth(eventId: string) {
   return rowsOf<{ status: string; count: number }>(
     await getDb().execute(
-      sql`SELECT coalesce(j.status,'PENDING') AS status,count(*)::int AS count FROM networking_profiles p LEFT JOIN networking_embedding_jobs j ON j.profile_id=p.id WHERE p.event_id=${eventId} AND p.withdrawn_at IS NULL GROUP BY coalesce(j.status,'PENDING')`,
+      sql`SELECT coalesce(j.status,'PENDING') AS status,count(*)::int4 AS count FROM networking_profiles p
+        JOIN registrations r ON r.id=p.registration_id AND r.event_id=p.event_id
+        JOIN networking_configs c ON c.event_id=p.event_id
+        LEFT JOIN networking_embedding_jobs j ON j.profile_id=p.id
+        WHERE p.event_id=${eventId} AND ${embeddable} GROUP BY coalesce(j.status,'PENDING')`,
     ),
   );
 }
@@ -205,7 +220,11 @@ export async function getNetworkingRecommendationProfiles(
     );
 }
 
-/** Explicit administrator retry/reindex; keep live leases owned by their existing worker. */
+/**
+ * Explicit administrator retry/reindex of the profiles the worker would embed
+ * (same eligibility as the scheduled enqueue); keep live leases owned by their
+ * existing worker.
+ */
 export async function reindexNetworkingEvent(eventId: string): Promise<number> {
   const rows = rowsOf(
     await getDb().execute(sql`
@@ -213,9 +232,9 @@ export async function reindexNetworkingEvent(eventId: string): Promise<number> {
     SELECT p.id,'PENDING',now(),now(),now() FROM networking_profiles p
     JOIN registrations r ON r.id=p.registration_id AND r.event_id=p.event_id
     JOIN networking_configs c ON c.event_id=p.event_id
-    WHERE p.event_id=${eventId} AND p.status='ACTIVE' AND p.consent AND p.visible AND p.withdrawn_at IS NULL
-      AND r.networking_opt_in IS DISTINCT FROM false
-      AND r.payment_status::text IN (SELECT jsonb_array_elements_text(c.config->'eligiblePaymentStatuses'))
+    JOIN events ev ON ev.id=p.event_id
+    JOIN clients cl ON cl.id=ev.client_id
+    WHERE p.event_id=${eventId} AND ${embeddable} AND ${offered}
     ON CONFLICT (profile_id) DO UPDATE SET status='PENDING',source_hash=NULL,attempts=0,last_error=NULL,available_at=now(),locked_until=NULL,lock_token=NULL,updated_at=now()
     WHERE networking_embedding_jobs.status<>'PROCESSING' OR networking_embedding_jobs.locked_until<now()
     RETURNING profile_id

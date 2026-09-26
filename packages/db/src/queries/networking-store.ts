@@ -9,6 +9,7 @@ import { registrations } from "../schema/registrations";
 import { forms } from "../schema/forms";
 import { networkingSecondFactors } from "../schema/networking-mfa";
 import { NETWORKING_MEETING_GROUPS } from "./networking-meetings";
+import { listedProfile, sameIdentity } from "../policy/networking-eligibility";
 import { bufferNetworkingNotices, publishNetworkingNotices, type NetworkingNotice } from "./networking-notices";
 import {
   loadNetworkingCounterpartSnapshot,
@@ -161,11 +162,12 @@ export function networkingStore(db: DbExecutor = getDb(), options: NetworkingSto
   return {
     /** The connection or transaction this store runs on, for helpers outside the store. */
     executor: db,
+    /** The participant's own listed profiles (same identity, 4.6) in the client's events. */
     async personalAnalyticsProfiles(clientId: string, email: string) {
       return db.select({ id: n.networkingProfiles.id, eventId: events.id,
         name: events.name, startDate: events.startDate, endDate: events.endDate })
         .from(n.networkingProfiles).innerJoin(events, eq(events.id, n.networkingProfiles.eventId))
-        .where(and(eq(events.clientId, clientId), sql`lower(trim(${n.networkingProfiles.email})) = ${email}`));
+        .where(and(eq(events.clientId, clientId), sameIdentity(n.networkingProfiles, email), listedProfile(n.networkingProfiles)));
     },
     /** Aggregates in SQL; contacts are deduplicated by the same lower(trim(email)) normalization. */
     async personalAnalyticsCounts(eventId: string, profileIds: string[]) {

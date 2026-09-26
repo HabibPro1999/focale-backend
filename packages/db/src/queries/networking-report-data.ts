@@ -1,10 +1,16 @@
 import { and, desc, eq, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { getDb } from "../client";
 import { rowsOf } from "../helpers";
 import { withSerializableTxn } from "../txn";
-import { networkingAudit, networkingDeliveries } from "../schema/networking";
+import { networkingAudit, networkingDeliveries, networkingProfiles } from "../schema/networking";
+import { listedProfile } from "../policy/networking-eligibility";
 import type { NetworkingDeliveryRow } from "./networking-delivery";
 import { networkingMeetingStatusSql } from "./networking-meetings";
+
+const p = alias(networkingProfiles, "p");
+/** Participants are the listed profiles (4.6): erased tombstones are not counted. */
+const listed = listedProfile(p);
 
 /** Aggregate-only durable report data contains no participant names, messages or contact details. */
 export async function networkingPostEventReportData(
@@ -15,8 +21,8 @@ export async function networkingPostEventReportData(
   const [summary] = rowsOf<Record<string, number>>(
     await db.execute(sql`
     SELECT
-      (SELECT count(*)::int4 FROM networking_profiles WHERE event_id=${eventId}) AS participants,
-      (SELECT count(*)::int4 FROM networking_profiles WHERE event_id=${eventId} AND last_active_at IS NOT NULL) AS active_participants,
+      (SELECT count(*)::int4 FROM networking_profiles p WHERE p.event_id=${eventId} AND ${listed}) AS participants,
+      (SELECT count(*)::int4 FROM networking_profiles p WHERE p.event_id=${eventId} AND ${listed} AND p.last_active_at IS NOT NULL) AS active_participants,
       (SELECT count(*)::int4 FROM networking_audit WHERE event_id=${eventId} AND action='PROFILE_VIEW') AS profile_views,
       (SELECT count(*)::int4 FROM networking_interests WHERE event_id=${eventId} AND action='LIKE') AS interests,
       (SELECT count(*)::int4 FROM networking_connections WHERE event_id=${eventId}) AS connections,
@@ -44,7 +50,7 @@ export async function networkingPostEventReportData(
     SELECT p.sector,count(DISTINCT p.id)::int4 AS participants,count(DISTINCT c.id)::int4 AS connections,count(DISTINCT m.id)::int4 AS meetings
     FROM networking_profiles p LEFT JOIN networking_connections c ON c.event_id=p.event_id AND (c.profile_a_id=p.id OR c.profile_b_id=p.id)
       LEFT JOIN networking_meetings m ON m.event_id=p.event_id AND (m.requester_id=p.id OR m.recipient_id=p.id) AND m.status IN (${networkingMeetingStatusSql("booked")})
-    WHERE p.event_id=${eventId} GROUP BY p.sector ORDER BY participants DESC,p.sector
+    WHERE p.event_id=${eventId} AND ${listed} GROUP BY p.sector ORDER BY participants DESC,p.sector
   `),
   );
   const timeSeries = rowsOf<{

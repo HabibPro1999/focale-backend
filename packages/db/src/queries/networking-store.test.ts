@@ -102,7 +102,9 @@ it("keeps defined mutation predicates scoped", async () => {
 it("scopes analytics by client and normalized email, then aggregates own-profile counts in SQL", async () => {
   const { store, predicates, selections, chain } = reader();
   await store.personalAnalyticsProfiles("client", "own@example.test");
-  expect(compiled(predicates[0]).sql).toContain('lower(trim("networking_profiles"."email"))');
+  // Own profiles: same identity (4.6 `sameIdentity`), never an erased tombstone.
+  expect(compiled(predicates[0]).sql).toContain('lower(btrim("networking_profiles"."email"))=lower(btrim($2))');
+  expect(compiled(predicates[0]).sql).toContain('"networking_profiles"."erased_at" IS NULL');
   expect(compiled(predicates[0]).params).toEqual(["client", "own@example.test"]);
   const results = [[{ count: 4 }], [{ count: 2 }], [{ count: 3 }], [{ planned: 5, completed: 1 }]];
   chain.then = (resolve: (value: unknown[]) => unknown) => Promise.resolve(resolve(results.shift()!));

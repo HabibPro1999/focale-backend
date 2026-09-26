@@ -2,10 +2,14 @@ import { describe, expect, it } from "vitest";
 import { NetworkingConfigSchema } from "@app/contracts";
 import {
   networkingCounterpartVisible,
+  networkingDistinctIdentity,
   networkingEventAvailable,
+  networkingIdentityEmail,
   networkingParticipantAccess,
+  networkingPaymentEligible,
   networkingParticipantEligible,
   networkingProfileActive,
+  networkingProfileEmbeddable,
   networkingProfileListed,
   networkingWindow,
   type NetworkingCounterpartMode,
@@ -47,13 +51,14 @@ describe("networking eligibility matrix (pure policy, 4.6)", () => {
       admitted: eligible && facts.confirmedMeeting,
       listed: networkingProfileListed(facts.profile),
       active: networkingProfileActive(facts.profile),
+      embedded: networkingProfileEmbeddable(facts, config),
     }).toEqual(row.expect);
   });
   it("covers withdrawn and erased profiles", () => {
     const flagged = NETWORKING_ELIGIBILITY_MATRIX.filter((row) => row.profile?.withdrawn || row.profile?.erased);
     expect(flagged.map((row) => row.name)).toEqual(["withdrawn", "erased (flag only)", "erased tombstone"]);
     for (const row of flagged) {
-      expect(row.expect).toMatchObject({ access: null, profile: false, discover: false, peer: false, blocklist: false, admitted: false, active: false });
+      expect(row.expect).toMatchObject({ access: null, profile: false, discover: false, peer: false, blocklist: false, admitted: false, active: false, embedded: false });
     }
   });
   it("with discovery off, a counterpart is only seen through a connection", () => {
@@ -70,6 +75,13 @@ describe("networking eligibility matrix (pure policy, 4.6)", () => {
     expect(networkingParticipantAccess(facts, config, { allowConsentPending: false })).toBeNull();
     expect(networkingParticipantEligible(facts, config)).toBe(false);
     expect(networkingParticipantAccess({ ...facts, consentPending: false }, config)).toBeNull();
+  });
+  it("reads payment eligibility and identity the same way everywhere", () => {
+    expect(networkingPaymentEligible({ paymentStatus: "PAID" }, config)).toBe(true);
+    expect(networkingPaymentEligible({ paymentStatus: "PENDING" }, config)).toBe(false);
+    expect(networkingPaymentEligible({ paymentStatus: "PAID" }, { eligiblePaymentStatuses: [] })).toBe(false);
+    expect(networkingIdentityEmail("  Ann@Example.TEST ")).toBe("ann@example.test");
+    expect(networkingDistinctIdentity({ id: "a", email: "ann@example.test" }, { id: "b", email: " ANN@example.test" })).toBe(false);
   });
   it("needs both the profile and its registration", () => {
     const facts = factsOf(NETWORKING_ELIGIBILITY_MATRIX[0], 0);

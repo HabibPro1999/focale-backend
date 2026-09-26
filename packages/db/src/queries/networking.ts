@@ -17,6 +17,7 @@ import { projectNetworkingFields, resolveNetworkingConsent } from "./networking-
 import { networkingMeetingNotice, transitionNetworkingMeetings } from "./networking-meetings";
 import { signalNetworkingNotification } from "./networking-notices";
 import { registrations } from "../schema/registrations";
+import { networkingParticipantEligible, networkingPaymentEligible } from "../policy/networking-access";
 
 export async function getNetworkingConfig(
   eventId: string,
@@ -144,9 +145,7 @@ export async function syncNetworkingRegistration(
     mapped,
     withdrawn: !!existing?.withdrawnAt,
   });
-  const eligible = config.eligiblePaymentStatuses.includes(
-    registration.paymentStatus as NetworkingConfig["eligiblePaymentStatuses"][number],
-  );
+  const eligible = networkingPaymentEligible(registration, config);
   if (existing) {
     const values = {
       ...projection,
@@ -155,17 +154,17 @@ export async function syncNetworkingRegistration(
       firstName: registration.firstName ?? "",
       lastName: registration.lastName ?? "",
     };
+    const status =
+      existing.status === "PENDING" && config.approvalMode === "AUTOMATIC" && eligible
+        ? ("ACTIVE" as const)
+        : existing.status;
     await db
       .update(networkingProfiles)
       .set({
         ...values,
         consent,
         ...(consent && !existing.consent ? { visible: true, consentAt: new Date() } : {}),
-        ...(existing.status === "PENDING" &&
-        config.approvalMode === "AUTOMATIC" &&
-        eligible
-          ? { status: "ACTIVE" as const }
-          : {}),
+        ...(status !== existing.status ? { status } : {}),
         ...(!consent ? { visible: false } : {}),
         updatedAt: new Date(),
       })
@@ -191,16 +190,12 @@ export async function syncNetworkingRegistration(
         registration.eventId,
         db,
       );
-    if (
-      eligible &&
-      consent &&
-      !existing.withdrawnAt &&
-      (existing.status === "ACTIVE" ||
-        (existing.status === "PENDING" && config.approvalMode === "AUTOMATIC"))
-    )
+    // Activation notice when the profile as written is eligible (4.6 policy).
+    if (networkingParticipantEligible({ profile: { ...existing, consent, status }, registration }, config))
       await queueNetworkingActivation(existing.id, registration.eventId, db);
     return { created: 0, updated: 1 };
   }
+  const status = config.approvalMode === "AUTOMATIC" && eligible ? ("ACTIVE" as const) : ("PENDING" as const);
   const inserted = await db
     .insert(networkingProfiles)
     .values({
@@ -214,12 +209,12 @@ export async function syncNetworkingRegistration(
       visible: consent,
       consentAt: consent ? new Date() : null,
       language: config.defaultLanguage,
-      status:
-        config.approvalMode === "AUTOMATIC" && eligible ? "ACTIVE" : "PENDING",
+      status,
     })
     .onConflictDoNothing({ target: networkingProfiles.registrationId })
     .returning({ id: networkingProfiles.id });
-  if (inserted[0] && consent && eligible && config.approvalMode === "AUTOMATIC")
+  const created = { eventId: registration.eventId, status, consent, withdrawnAt: null, erasedAt: null };
+  if (inserted[0] && networkingParticipantEligible({ profile: created, registration }, config))
     await queueNetworkingActivation(inserted[0].id, registration.eventId, db);
   return { created: inserted.length, updated: 0 };
 }

@@ -14,6 +14,7 @@ import {
   networkingAreaAccess,
   networkingCounterpartVisible,
   networkingEventAvailable,
+  networkingIdentityEmail,
   networkingParticipantAccess,
   networkingParticipantEligible,
   networkingWindow,
@@ -505,8 +506,7 @@ export class NetworkingService {
   async personalAnalytics(ctx: NetworkingContext): Promise<NetworkingPersonalAnalytics> {
     const store = networkingStore();
     ctx = await this.currentParticipant(ctx, store);
-    const email = ctx.profile.email.trim().toLowerCase();
-    const profiles = await store.personalAnalyticsProfiles(ctx.event.clientId, email);
+    const profiles = await store.personalAnalyticsProfiles(ctx.event.clientId, networkingIdentityEmail(ctx.profile.email));
     const events = new Map(profiles.map(profile => [profile.eventId, profile]));
     const result: NetworkingPersonalAnalytics["events"] = [];
     for (const event of events.values()) {
