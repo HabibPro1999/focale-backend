@@ -52,7 +52,6 @@ export const db = {
   searchRegistrantsForSponsorship: vi.fn(),
   getRegistrationByIdRow: vi.fn(),
   getRegistrationByIdempotencyKeyRow: vi.fn(),
-  getRegistrationClientId: vi.fn(),
   getRegistrationEditToken: vi.fn(),
   getRegistrationEditLinkSource: vi.fn(),
   listRegistrationRows: vi.fn(),

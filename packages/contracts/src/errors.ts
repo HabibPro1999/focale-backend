@@ -149,6 +149,11 @@ export const ErrorCodes = {
   // answers REG_8001 like every other route (plan 5.4).
   CHECKIN_ALREADY_DONE: "CHK_17001",
   CHECKIN_ACCESS_NOT_ON_REGISTRATION: "CHK_17003",
+  /**
+   * 400: the registration belongs to another event than the route's. One code
+   * for the condition wherever it is checked (check-in, admin edit, available
+   * sponsorships; plan 5.4b), despite the check-in name.
+   */
   CHECKIN_EVENT_MISMATCH: "CHK_17004",
   CHECKIN_PAYMENT_REQUIRED: "CHK_17005",
   CHECKIN_NETWORKING_MEETING_REQUIRED: "CHK_17006",

@@ -367,6 +367,14 @@ describe("RegistrationPaymentsService", () => {
       ).rejects.toMatchObject({ code: "RES_3003", statusCode: 400 });
     });
 
+    it("404 REG_8001 when the registration is gone (no row to lock)", async () => {
+      db.lockRegistrationForUpdate.mockResolvedValue(false);
+      await expect(
+        service.selectPaymentMethod("reg1", { paymentMethod: "CASH" } as never),
+      ).rejects.toMatchObject({ code: "REG_8001", message: "Registration not found", statusCode: 404 });
+      expect(db.applyRegistrationSettlement).not.toHaveBeenCalled();
+    });
+
     it("rejects when the registration is not PENDING", async () => {
       db.findRegistrationWithFormEvent.mockResolvedValue(
         methodFetch({ paymentStatus: "VERIFYING" }),

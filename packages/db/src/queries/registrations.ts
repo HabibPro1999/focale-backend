@@ -374,19 +374,6 @@ export async function listRegistrationRows(
   };
 }
 
-export async function getRegistrationClientId(
-  id: string,
-  db: DbExecutor = getDb(),
-): Promise<string | null> {
-  const [row] = await db
-    .select({ clientId: events.clientId })
-    .from(registrations)
-    .innerJoin(events, eq(registrations.eventId, events.id))
-    .where(eq(registrations.id, id))
-    .limit(1);
-  return row?.clientId ?? null;
-}
-
 // ============================================================================
 // Event lookups for create/admin gates + capacity
 // ============================================================================

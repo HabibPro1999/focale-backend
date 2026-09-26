@@ -17,8 +17,12 @@ import { RouteParamtypes } from "@nestjs/common/enums/route-paramtypes.enum";
 import { Reflector } from "@nestjs/core";
 import { ErrorCodes, type ModuleId } from "@app/contracts";
 import {
+  getAccessItemTenantScope,
+  getCertificateTemplateTenantScope,
+  getClientTenantScope,
   getEmailTemplateTenantScope,
   getEventTenantScope,
+  getFormTenantScope,
   getRegistrationTenantScope,
   getSponsorshipTenantScope,
   type ScopedClientRow,
@@ -32,9 +36,11 @@ import { assertEventWritable } from "../events/events.service";
 // ============================================================================
 // Declarative tenant scoping (plan 5.4).
 //
-// `@EventScoped()`, `@RegistrationScoped()`, `@SponsorshipScoped()` and
-// `@EmailTemplateScoped()` put a guard on a route that loads the resource
-// named by a route param, its event and the event's client in one query, then
+// `@EventScoped()`, `@RegistrationScoped()`, `@SponsorshipScoped()`,
+// `@EmailTemplateScoped()`, `@AccessItemScoped()`,
+// `@CertificateTemplateScoped()`, `@FormScoped()` and `@ClientScoped()` put a
+// guard on a route that loads the resource named by a route param, its event
+// and the event's client in one query (a client route loads the client), then
 // refuses, in this order:
 //   400  the route's `@Param()` DTO rejects the params (the same check the
 //        global pipe makes; guards run before pipes);
@@ -49,19 +55,36 @@ import { assertEventWritable } from "../events/events.service";
 //
 // Class-level `@Auth()` runs first (Nest runs controller guards before route
 // guards); without a user this guard answers 401.
+//
+// A route that names its event or client in the body or the query calls
+// `requireTenantScope()` in the handler instead: the same read, checks, order
+// and codes, after the pipes have validated that id.
 // ============================================================================
 
 export const TENANT_SCOPE = "tenantScope";
 
-export type TenantScopeKind = "event" | "registration" | "sponsorship" | "emailTemplate";
+export type TenantScopeKind =
+  | "event"
+  | "registration"
+  | "sponsorship"
+  | "emailTemplate"
+  | "accessItem"
+  | "certificateTemplate"
+  | "form"
+  | "client";
 
 export interface TenantScopeOptions {
   /** Module(s) the client must have enabled; the client must also be active. */
   module?: ModuleId | readonly ModuleId[];
   /** The route changes the event's data: an archived event refuses it. */
   write?: boolean;
-  /** Route param holding the resource id (defaults: eventId, id, id, templateId). */
+  /** Route param holding the resource id (default `id`; `eventId` for an event, `templateId` for an email template). */
   param?: string;
+}
+
+export interface FormScopeOptions extends TenantScopeOptions {
+  /** Also require the module of the form's type: sponsorships for a SPONSOR form, registrations otherwise. */
+  moduleOfFormType?: boolean;
 }
 
 /** What a scope decorator stores on the handler (read by the guard and the route-matrix test). */
@@ -70,37 +93,51 @@ export interface TenantScopeRule {
   param: string;
   modules: readonly ModuleId[];
   write: boolean;
+  /** (form) The form's type adds its module: sponsorships for SPONSOR, registrations otherwise. */
+  moduleOfFormType: boolean;
 }
 
 /**
- * What the guard attaches to the request: the event and its client, or
- * neither for an email template that belongs to no event.
+ * What the guard attaches to the request: the event and its client; the
+ * client alone on a client route; neither for an email template that belongs
+ * to no event.
  */
-export type TenantScope =
-  | { event: ScopedEventRow; client: ScopedClientRow }
-  | { event: null; client: null };
+export type EventScope = { event: ScopedEventRow; client: ScopedClientRow };
+export type ClientScope = { event: null; client: ScopedClientRow };
+export type TenantScope = EventScope | ClientScope | { event: null; client: null };
 
 const DEFAULT_PARAM: Record<TenantScopeKind, string> = {
   event: "eventId",
   registration: "id",
   sponsorship: "id",
   emailTemplate: "templateId",
+  accessItem: "id",
+  certificateTemplate: "id",
+  form: "id",
+  client: "id",
 };
 
-function scoped(kind: TenantScopeKind, options: TenantScopeOptions) {
+function toRule(kind: TenantScopeKind, options: FormScopeOptions): TenantScopeRule {
   const modules =
     options.module === undefined
       ? []
       : typeof options.module === "string"
         ? [options.module]
         : [...options.module];
-  const rule: TenantScopeRule = {
+  return {
     kind,
     param: options.param ?? DEFAULT_PARAM[kind],
     modules,
     write: options.write ?? false,
+    moduleOfFormType: options.moduleOfFormType ?? false,
   };
-  return applyDecorators(SetMetadata(TENANT_SCOPE, rule), UseGuards(TenantScopeGuard));
+}
+
+function scoped(kind: TenantScopeKind, options: FormScopeOptions) {
+  return applyDecorators(
+    SetMetadata(TENANT_SCOPE, toRule(kind, options)),
+    UseGuards(TenantScopeGuard),
+  );
 }
 
 /** Route on an event (`:eventId` by default). */
@@ -125,6 +162,32 @@ export function SponsorshipScoped(options: TenantScopeOptions = {}) {
  */
 export function EmailTemplateScoped(options: TenantScopeOptions = {}) {
   return scoped("emailTemplate", options);
+}
+
+/** Route on an event access item (`:id` by default); scoped through its event. */
+export function AccessItemScoped(options: TenantScopeOptions = {}) {
+  return scoped("accessItem", options);
+}
+
+/** Route on a certificate template (`:id` by default); scoped through its event. */
+export function CertificateTemplateScoped(options: TenantScopeOptions = {}) {
+  return scoped("certificateTemplate", options);
+}
+
+/**
+ * Route on a form (`:id` by default); scoped through its event. With
+ * `moduleOfFormType`, the form's type adds its module to the gate.
+ */
+export function FormScoped(options: FormScopeOptions = {}) {
+  return scoped("form", options);
+}
+
+/**
+ * Route on a client (`:id` by default): the client must exist (404) and be
+ * the caller's (403). No event, so no archived check; module gates apply.
+ */
+export function ClientScoped(options: Omit<TenantScopeOptions, "write"> = {}) {
+  return scoped("client", options);
 }
 
 type ScopedRequest = {
@@ -186,6 +249,20 @@ function validateRouteParams(ctx: ExecutionContext, params: unknown): void {
 
 function notFound(kind: TenantScopeKind): never {
   switch (kind) {
+    case "accessItem":
+      throw new NotFoundException({
+        code: ErrorCodes.ACCESS_NOT_FOUND,
+        message: "Access item not found",
+      });
+    case "certificateTemplate":
+      throw new NotFoundException({
+        code: ErrorCodes.NOT_FOUND,
+        message: "Certificate template not found",
+      });
+    case "form":
+      throw new NotFoundException({ code: ErrorCodes.NOT_FOUND, message: "Form not found" });
+    case "client":
+      throw new NotFoundException({ code: ErrorCodes.NOT_FOUND, message: "Client not found" });
     case "event":
       throw new NotFoundException({ code: ErrorCodes.NOT_FOUND, message: "Event not found" });
     case "registration":
@@ -210,7 +287,38 @@ function forbidden(): never {
   });
 }
 
-async function loadScope(rule: TenantScopeRule, id: string, user: AuthUser): Promise<TenantScope> {
+/** Resources owned by an event: one read each, resource → event → client. */
+const EVENT_OWNED_READS: Record<
+  Exclude<TenantScopeKind, "client" | "form" | "emailTemplate">,
+  (id: string) => Promise<EventScope | null>
+> = {
+  event: (id) => getEventTenantScope(id),
+  registration: (id) => getRegistrationTenantScope(id),
+  sponsorship: (id) => getSponsorshipTenantScope(id),
+  accessItem: (id) => getAccessItemTenantScope(id),
+  certificateTemplate: (id) => getCertificateTemplateTenantScope(id),
+};
+
+type LoadedScope = { scope: TenantScope; modules: readonly ModuleId[] };
+
+async function loadScope(rule: TenantScopeRule, id: string, user: AuthUser): Promise<LoadedScope> {
+  const modules = rule.modules;
+  if (rule.kind === "client") {
+    const found = await getClientTenantScope(id);
+    if (!found) notFound(rule.kind);
+    if (!canAccessClient(user, found.client.id)) forbidden();
+    return { scope: { event: null, client: found.client }, modules };
+  }
+  if (rule.kind === "form") {
+    const found = await getFormTenantScope(id);
+    if (!found) notFound(rule.kind);
+    if (!canAccessClient(user, found.event.clientId)) forbidden();
+    const typeModule: ModuleId = found.form.type === "SPONSOR" ? "sponsorships" : "registrations";
+    return {
+      scope: { event: found.event, client: found.client },
+      modules: rule.moduleOfFormType && !modules.includes(typeModule) ? [...modules, typeModule] : modules,
+    };
+  }
   if (rule.kind === "emailTemplate") {
     const found = await getEmailTemplateTenantScope(id);
     if (!found) notFound(rule.kind);
@@ -229,19 +337,57 @@ async function loadScope(rule: TenantScopeRule, id: string, user: AuthUser): Pro
     if (found.template.eventId !== null && (found.event === null || found.client === null)) {
       notFound("event");
     }
-    return found.event === null || found.client === null
-      ? { event: null, client: null }
-      : { event: found.event, client: found.client };
+    return {
+      scope:
+        found.event === null || found.client === null
+          ? { event: null, client: null }
+          : { event: found.event, client: found.client },
+      modules,
+    };
   }
-  const found =
-    rule.kind === "event"
-      ? await getEventTenantScope(id)
-      : rule.kind === "registration"
-        ? await getRegistrationTenantScope(id)
-        : await getSponsorshipTenantScope(id);
+  const found = await EVENT_OWNED_READS[rule.kind](id);
   if (!found) notFound(rule.kind);
   if (!canAccessClient(user, found.event.clientId)) forbidden();
-  return { event: found.event, client: found.client };
+  return { scope: { event: found.event, client: found.client }, modules };
+}
+
+/** Load the scope and refuse in the documented order; the guard and `requireTenantScope` share it. */
+async function checkScope(rule: TenantScopeRule, id: string, user: AuthUser): Promise<TenantScope> {
+  const { scope, modules } = await loadScope(rule, id, user);
+  if (rule.write && scope.event !== null) assertEventWritable(scope.event);
+  // A client-level email template has no client here: no module to check.
+  if (scope.client !== null) {
+    for (const moduleId of modules) {
+      assertModuleEnabledForClient(scope.client, moduleId);
+    }
+  }
+  return scope;
+}
+
+/**
+ * The guard's check for an event or client id the route takes from its body
+ * or query (known only after validation): same read, refusal order and codes.
+ * Call it first thing in the handler.
+ */
+export function requireTenantScope(
+  user: AuthUser,
+  kind: "event",
+  id: string,
+  options?: TenantScopeOptions,
+): Promise<EventScope>;
+export function requireTenantScope(
+  user: AuthUser,
+  kind: "client",
+  id: string,
+  options?: Omit<TenantScopeOptions, "write">,
+): Promise<ClientScope>;
+export function requireTenantScope(
+  user: AuthUser,
+  kind: "event" | "client",
+  id: string,
+  options: TenantScopeOptions = {},
+): Promise<TenantScope> {
+  return checkScope(toRule(kind, options), id, user);
 }
 
 @Injectable()
@@ -266,15 +412,7 @@ export class TenantScopeGuard implements CanActivate {
       throw new InternalServerErrorException(`Route has no :${rule.param} param`);
     }
 
-    const scope = await loadScope(rule, id, req.user);
-    // A client-level email template has no event: no event state or module to check.
-    if (scope.event !== null) {
-      if (rule.write) assertEventWritable(scope.event);
-      for (const moduleId of rule.modules) {
-        assertModuleEnabledForClient(scope.client, moduleId);
-      }
-    }
-    req.tenantScope = scope;
+    req.tenantScope = await checkScope(rule, id, req.user);
     return true;
   }
 }

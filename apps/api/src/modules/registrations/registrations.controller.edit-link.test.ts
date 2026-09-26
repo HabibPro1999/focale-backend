@@ -47,6 +47,7 @@ describe("GET /api/registrations/:id/edit-link", () => {
       param: "id",
       modules: [],
       write: false,
+      moduleOfFormType: false,
     });
   });
 

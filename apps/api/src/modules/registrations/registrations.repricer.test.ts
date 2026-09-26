@@ -73,6 +73,18 @@ describe("RegistrationRepricer", () => {
       expect(lock).toBeLessThan(read!);
     });
 
+    it("400 CHK_17004 for a registration of another event (as at check-in), before any write", async () => {
+      db.findRegistrationForMutation.mockResolvedValue(adminRow({ eventId: "ev-other" }));
+      await expect(
+        service.adminEditRegistration("ev1", "reg1", { note: "n" } as never, "admin1"),
+      ).rejects.toMatchObject({
+        code: ErrorCodes.CHECKIN_EVENT_MISMATCH,
+        message: "Registration does not belong to this event",
+        statusCode: 400,
+      });
+      expect(db.applyRegistrationSettlement).not.toHaveBeenCalled();
+    });
+
     it("refuses to move a REFUNDED registration to another status (admin override)", async () => {
       db.findRegistrationForMutation.mockResolvedValue(adminRow({ paymentStatus: "REFUNDED" }));
       await expect(

@@ -147,7 +147,7 @@ export class PaymentProofService {
         ? await findRegistrationWithFormEvent(registrationId, tx)
         : null;
       if (!currentReg) {
-        throw new AppException(ErrorCodes.NOT_FOUND, "Registration not found", 404);
+        throw new AppException(ErrorCodes.REGISTRATION_NOT_FOUND, "Registration not found", 404);
       }
       assertEventAcceptsPublicActions(currentReg.event);
       assertModuleEnabledForClient(
