@@ -2,7 +2,7 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import type { PgColumn, PgTable } from "drizzle-orm/pg-core";
 import type { DbExecutor } from "./client";
 import { abstracts } from "./schema/abstracts";
-import { events } from "./schema/events-access";
+import { eventAccess, events } from "./schema/events-access";
 import { registrations } from "./schema/registrations";
 import { sponsorships } from "./schema/sponsorships";
 import { isTransactionExecutor } from "./txn";
@@ -12,7 +12,9 @@ import { isTransactionExecutor } from "./txn";
 // Take the locks at the start of the transaction (withLockingTxn), then re-read
 // the locked rows and decide from what was read after the lock, never from a
 // read made before it. Lock order across tables: event → sponsorships →
-// registrations → abstracts; counters are CAS updates after that.
+// registrations → abstracts; counters are CAS updates after that. Access rows
+// hold the paid/registered counters, so an explicit access-row lock sits in
+// the counter position: nothing else is locked after it.
 //
 // Each lock is a bare `SELECT id … FOR UPDATE` on one table. Never lock inside
 // a joined read: `FOR UPDATE` on a join also locks the joined event and client
@@ -26,6 +28,7 @@ const REGISTRATION: Lockable = { table: registrations, id: registrations.id };
 const SPONSORSHIP: Lockable = { table: sponsorships, id: sponsorships.id };
 const ABSTRACT: Lockable = { table: abstracts, id: abstracts.id };
 const EVENT: Lockable = { table: events, id: events.id };
+const EVENT_ACCESS: Lockable = { table: eventAccess, id: eventAccess.id };
 
 function assertInTransaction(tx: DbExecutor, lock: string): void {
   if (!isTransactionExecutor(tx)) {
@@ -104,4 +107,13 @@ export async function lockAbstractsForUpdate(tx: DbExecutor, ids: readonly strin
 /** Lock one event row, to serialize whole-event work. False when it does not exist. */
 export async function lockEventForUpdate(tx: DbExecutor, id: string): Promise<boolean> {
   return (await lockRowsForUpdate(tx, EVENT, [id], "lockEventForUpdate")).length === 1;
+}
+
+/**
+ * Lock access item rows in ascending id order. Returns the ids that exist,
+ * ascending. The paid-count CAS waits on these locks, so a transaction that
+ * holds them decides capacity from counts no payment can move until it ends.
+ */
+export async function lockEventAccessRowsForUpdate(tx: DbExecutor, ids: readonly string[]): Promise<string[]> {
+  return lockRowsForUpdate(tx, EVENT_ACCESS, ids, "lockEventAccessRowsForUpdate");
 }

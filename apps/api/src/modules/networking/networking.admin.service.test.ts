@@ -13,6 +13,7 @@ const state = vi.hoisted(() => ({
   meeting: null as Record<string, unknown> | null,
   event: null as Record<string, unknown> | null,
   tx: { executor: "transaction" },
+  root: { executor: "pool" },
   transition: vi.fn(),
   delete: vi.fn(),
   sync: vi.fn(),
@@ -45,6 +46,8 @@ vi.mock("@app/db", async (original) => {
     },
   };
   return {
+    getDb: () => state.root,
+    withLockingTxn: (run: (tx: unknown) => Promise<unknown>) => run(state.tx),
     networkingMeetingIs,
     networkingProfileListed,
     networkingRetentionEnded,
@@ -238,7 +241,7 @@ describe("NetworkingAdminService config consent mapping and sync", () => {
     expect(vi.mocked(assertClientModuleEnabled).mock.calls).toEqual([
       ["client", "registrations", state.tx], ["client", "emails", state.tx],
     ]);
-    expect(state.sync).toHaveBeenCalledWith("event");
+    expect(state.sync).toHaveBeenCalledWith("event", state.tx);
     expect(result).toMatchObject({ enabled: true, revision: expect.any(String) });
     expect(state.row!.config.enabled).toBe(true);
   });

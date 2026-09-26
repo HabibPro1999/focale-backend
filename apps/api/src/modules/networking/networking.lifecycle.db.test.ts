@@ -2,6 +2,7 @@
 // the one-pending-request-per-requester-per-slot hold, on a migrated database.
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
+  getDb,
   expireNetworkingProposals,
   maintainNetworkingLifecycle,
   networkingPendingHoldKey,
@@ -19,7 +20,7 @@ const service = new NetworkingService();
 const social = new NetworkingSocialService(service);
 const meetings = new NetworkingMeetingsService(service);
 const admin = new NetworkingAdminService(service, meetings);
-const store = () => networkingStore();
+const store = () => networkingStore(getDb());
 const [ten, eleven] = ["10:00", "11:00"].map((time) => `2031-06-10T${time}:00.000Z`);
 let fixture: Awaited<ReturnType<typeof createNetworkingWriteFixture>>;
 let people: NetworkingContext[];
@@ -102,7 +103,7 @@ describe.runIf(dbTestsEnabled())("networking meeting lifecycle", () => {
     await store().update("meetings", { eventId: fixture.event.id, id: stray.id }, { status: "CANCELLED" });
     expect(await reservations(stray.id)).not.toHaveLength(0);
 
-    await expireNetworkingProposals(fixture.event.id);
+    await expireNetworkingProposals(fixture.event.id, getDb());
     expect((await store().one("meetings", { eventId: fixture.event.id, id: overdue.id }))?.status).toBe("EXPIRED");
     expect(await reservations(overdue.id)).toHaveLength(0);
     expect(await reservations(stray.id)).not.toHaveLength(0);

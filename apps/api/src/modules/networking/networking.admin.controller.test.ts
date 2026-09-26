@@ -2,11 +2,13 @@ import { HTTP_CODE_METADATA } from "@nestjs/common/constants";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  tx: { executor: "transaction" },
   requestNetworkingEventSync: vi.fn(),
   getNetworkingEventSyncState: vi.fn(),
 }));
 vi.mock("@app/db", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
+  withLockingTxn: (run: (tx: unknown) => Promise<unknown>) => run(mocks.tx),
   requestNetworkingEventSync: mocks.requestNetworkingEventSync,
   getNetworkingEventSyncState: mocks.getNetworkingEventSyncState,
 }));
@@ -28,7 +30,7 @@ describe("NetworkingAdminController sync", () => {
   it("POST /sync answers 202 with the requested run, after the write checks", async () => {
     expect(Reflect.getMetadata(HTTP_CODE_METADATA, NetworkingAdminController.prototype.sync)).toBe(202);
     await expect(controller.sync("ev1")).resolves.toEqual(running);
-    expect(mocks.requestNetworkingEventSync).toHaveBeenCalledWith("ev1");
+    expect(mocks.requestNetworkingEventSync).toHaveBeenCalledWith("ev1", mocks.tx);
     expect(Reflect.getMetadata(TENANT_SCOPE, controller.sync)).toMatchObject({ kind: "event", modules: ["networking"], write: true });
   });
 

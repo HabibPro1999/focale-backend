@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  getDb,
   networkingKeyRetirementBlockers,
   networkingKeyUsage,
   networkingStore,
@@ -55,7 +56,7 @@ describe.runIf(dbTestsEnabled())("networking keyring rotation", () => {
     env({ TOKEN: legacySecret, KEYS: `k1:${k1}`, WRITE: true });
     const signedIn = await service.participant(fixture.event.slug, bearer, { allowPendingSecondFactor: true });
     expect(signedIn.session.tokenHash).toMatch(/^v1:k1:/);
-    expect((await networkingStore().one("sessions", { id: ctx.session.id }))?.tokenHash).toMatch(/^v1:k1:/);
+    expect((await networkingStore(getDb()).one("sessions", { id: ctx.session.id }))?.tokenHash).toMatch(/^v1:k1:/);
     const blocked = (await retirement()).join("\n");
     expect(blocked).toMatch(/authenticator secrets are sealed with legacy/);
     expect(blocked).toMatch(/10 unused recovery codes reference legacy/);
@@ -63,15 +64,15 @@ describe.runIf(dbTestsEnabled())("networking keyring rotation", () => {
 
     // New sign-in codes use k1 end to end.
     const { challengeId } = await service.requestCode(fixture.event.slug, ctx.profile.email);
-    const challenge = await networkingStore().one("challenges", { id: challengeId });
-    const delivery = await networkingStore().one("deliveries", { dedupeKey: `otp:${challengeId}` });
+    const challenge = await networkingStore(getDb()).one("challenges", { id: challengeId });
+    const delivery = await networkingStore(getDb()).one("deliveries", { dedupeKey: `otp:${challengeId}` });
     expect(challenge?.codeHash).toMatch(/^v1:k1:/);
     expect(String(delivery?.payload.encryptedCode)).toMatch(/^v1:k1:/);
     expect((await service.verifyCode(fixture.event.slug, challengeId, openNetworkingSecret(String(delivery!.payload.encryptedCode)))).token).toHaveLength(64);
-    await networkingStore().update("deliveries", { id: delivery!.id }, { status: "SENT" });
+    await networkingStore(getDb()).update("deliveries", { id: delivery!.id }, { status: "SENT" });
 
     // Step 3, reseal: only recovery codes still need legacy.
-    expect(await resealNetworkingSecrets(networkingKeys(), { apply: true })).toMatchObject({ resealed: 1, unreadable: 0 });
+    expect(await resealNetworkingSecrets(networkingKeys(), getDb(), { apply: true })).toMatchObject({ resealed: 1, unreadable: 0 });
     expect(await retirement(true)).toEqual([]);
     expect(await retirement()).toEqual([expect.stringContaining("10 unused recovery codes reference legacy")]);
 

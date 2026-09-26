@@ -45,6 +45,10 @@
       "module": "packages/contracts/src/reports.ts",
       "type": "AccessBreakdownItem"
     },
+    "AccessDropReasonSchema": {
+      "module": "packages/contracts/src/pricing.ts",
+      "type": "AccessDropReason"
+    },
     "AccessEventIdParamSchema": {
       "module": "packages/contracts/src/access.ts",
       "type": "AccessEventIdParam"

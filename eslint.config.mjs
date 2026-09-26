@@ -19,11 +19,6 @@ function downgradeRules(config) {
   };
 }
 
-// Files whose write functions still default their executor, converted in
-// plan 5.1b (networking queries were being rewritten when 5.1a landed).
-// Remove entries as they are converted; don't add new ones.
-export const WRITE_EXECUTOR_ALLOW_LIST = ["packages/db/src/queries/networking*.ts"];
-
 const sourceFiles = [
   "apps/*/src/**/*.{ts,tsx,mts,cts}",
   "packages/*/src/**/*.{ts,tsx,mts,cts}",
@@ -60,7 +55,6 @@ export default tseslint.config(
   {
     // Write functions take their executor explicitly (plan 5.1).
     files: ["packages/db/src/**/*.ts"],
-    ignores: WRITE_EXECUTOR_ALLOW_LIST,
     rules: {
       "focale/explicit-write-executor": "error",
     },

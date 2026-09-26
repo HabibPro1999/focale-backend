@@ -95,7 +95,7 @@ describe.runIf(dbTestsEnabled())("networking eligibility matrix on every surface
   beforeAll(async () => {
     const db = getDb();
     await db.insert(clients).values({ id: ids.client, name: `Eligibility ${ids.event}`, enabledModules: ["networking", "registrations", "emails"] });
-    await networkingStore().insert("events", {
+    await networkingStore(getDb()).insert("events", {
       id: ids.other,
       clientId: ids.client,
       name: "Eligibility matrix (other event)",
@@ -126,7 +126,7 @@ describe.runIf(dbTestsEnabled())("networking eligibility matrix on every surface
     });
     // Yesterday's unread update for everyone in the ended event: digest material.
     for (const profile of [ended.viewer, ...ended.targets.map((target) => target.profile)])
-      await networkingStore().insert("notifications", {
+      await networkingStore(getDb()).insert("notifications", {
         eventId: ids.ended,
         profileId: profile.id,
         type: "MATCH",
@@ -158,7 +158,7 @@ describe.runIf(dbTestsEnabled())("networking eligibility matrix on every surface
   });
 
   it("participant access: each target's own sign-in (snapshot + policy)", async () => {
-    const store = networkingStore();
+    const store = networkingStore(getDb());
     const access: Record<string, unknown> = {};
     for (const target of targets) {
       const snapshot = await store.participantSnapshot({ eventId: ids.event, clientId: ids.client, profileId: target.profile.id });
@@ -172,7 +172,7 @@ describe.runIf(dbTestsEnabled())("networking eligibility matrix on every surface
       const result: Record<string, boolean> = {};
       for (const target of targets) {
         try {
-          await service.target(ctx, target.profile.id, networkingStore(), visible);
+          await service.target(ctx, target.profile.id, networkingStore(getDb()), visible);
           result[target.row.name] = true;
         } catch (error) {
           if (!(error instanceof NotFoundException)) throw error;
@@ -186,7 +186,7 @@ describe.runIf(dbTestsEnabled())("networking eligibility matrix on every surface
   });
 
   it("lists in profile mode (4.9): incoming interests and the agenda's counterparts", async () => {
-    const store = networkingStore();
+    const store = networkingStore(getDb());
     const social = new NetworkingSocialService(service);
     const meetings = new NetworkingMeetingsService(service);
     const exhibitor = { ...ctx, profile: { ...viewer, featured: true } };
@@ -291,7 +291,7 @@ describe.runIf(dbTestsEnabled())("networking eligibility matrix on every surface
   });
 
   it("deliveries: addressed to each target by its access, naming it to the viewer in peer mode (policy + rendering)", async () => {
-    const store = networkingStore();
+    const store = networkingStore(getDb());
     const delivery = (type: string, profileId: string, payload: Record<string, unknown> = {}) =>
       ({ id: randomUUID(), eventId: ids.event, profileId, type, payload, status: "PROCESSING", attempts: 1 }) as unknown as NetworkingDeliveryRow;
     const sends = async (row: NetworkingDeliveryRow) => networkingDeliverySkipReason(row, await networkingDeliveryContext(row, { subscriptions: false })) === undefined;
@@ -360,7 +360,7 @@ describe.runIf(dbTestsEnabled())("networking eligibility matrix on every surface
   });
 
   it("personal analytics: the participant's own listed profiles", async () => {
-    const own = (await networkingStore().personalAnalyticsProfiles(ids.client, networkingIdentityEmail(viewer.email)))
+    const own = (await networkingStore(getDb()).personalAnalyticsProfiles(ids.client, networkingIdentityEmail(viewer.email)))
       .filter((profile) => profile.eventId === ids.event);
     const found = new Set(own.map((profile) => profile.id));
     expect(found.has(viewer.id)).toBe(true);
@@ -372,7 +372,7 @@ describe.runIf(dbTestsEnabled())("networking eligibility matrix on every surface
     await queueNetworkingMeetingReminders(db, ids.ended);
     await queueNetworkingDailyDigests(db, ids.ended);
     await queueNetworkingPostEventDeliveries(db, ids.ended);
-    const rows = await networkingStore().all("deliveries", { eventId: ids.ended });
+    const rows = await networkingStore(getDb()).all("deliveries", { eventId: ids.ended });
     const queued = (type: string, profileId: string, meetingId?: string) =>
       rows.some((row) => row.type === type && row.profileId === profileId && (meetingId === undefined || row.payload.meetingId === meetingId));
     const of = ended.targets;
@@ -389,7 +389,7 @@ describe.runIf(dbTestsEnabled())("networking eligibility matrix on every surface
   });
 
   it("refuses every counterpart to a viewer who lost eligibility", async () => {
-    const store = networkingStore();
+    const store = networkingStore(getDb());
     const eligibleTarget = targets.find((target) => target.row.name === "eligible")!;
     await store.update("profiles", { eventId: ids.event, id: viewer.id }, { status: "SUSPENDED" });
     try {

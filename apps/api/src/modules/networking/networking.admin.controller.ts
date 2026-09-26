@@ -22,7 +22,7 @@ import {
   type NetworkingMultipartRequest,
 } from "./networking.uploads.service";
 import type { FastifyReply } from "fastify";
-import { getEventWithPricing, getNetworkingEventSyncState, listNetworkingAdminAudit, requestNetworkingEventSync } from "@app/db";
+import { withLockingTxn, getEventWithPricing, getNetworkingEventSyncState, listNetworkingAdminAudit, requestNetworkingEventSync } from "@app/db";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
 import type { AuthUser } from "../../core/auth/user-cache";
@@ -84,7 +84,7 @@ export class NetworkingAdminController {
   async sync(
     @Param("eventId") eventId: string,
   ) {
-    return requestNetworkingEventSync(eventId);
+    return withLockingTxn((tx) => requestNetworkingEventSync(eventId, tx));
   }
   @ResponseContract(responses.NetworkingAdminSyncStateResponseSchema)
   @EventScoped({ module: "networking" })

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { NetworkingProfileUpdateSchema } from "@app/contracts";
 const queries = vi.hoisted(() => ({ profiles: vi.fn(), rows: vi.fn(), all: vi.fn() }));
-vi.mock("@app/db", async (original) => ({ networkingIdentityEmail: (await original<typeof import("@app/db")>()).networkingIdentityEmail, networkingStore: () => ({
+vi.mock("@app/db", async (original) => ({ getDb: () => ({}), networkingIdentityEmail: (await original<typeof import("@app/db")>()).networkingIdentityEmail, networkingStore: () => ({
   all: queries.all,
   personalAnalyticsProfiles: queries.profiles,
   personalAnalyticsCounts: queries.rows,

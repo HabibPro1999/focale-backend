@@ -1,3 +1,4 @@
+import { withSerializableTxn } from "../src/txn";
 import { randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import {
@@ -213,7 +214,7 @@ async function main() {
         totalAmount: 0,
         priceBreakdown: {},
       });
-    await syncNetworkingRegistration(registrationId);
+    await withSerializableTxn((tx) => syncNetworkingRegistration(registrationId, tx));
     const [profile] = await db
       .select()
       .from(networkingProfiles)

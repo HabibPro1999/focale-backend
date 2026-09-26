@@ -32,7 +32,7 @@ import { dbTestsEnabled } from "@app/db/testing";
 
 const enabled = dbTestsEnabled();
 const secret = "test-only-networking-worker-secret-more-than-32-characters";
-const store = () => networkingStore();
+const store = () => networkingStore(getDb());
 function emailProvider(
   send: (input: SendEmailInput) => Promise<Partial<SendEmailResult>> = vi.fn(async (_input: SendEmailInput) => ({
     success: true,
@@ -109,7 +109,7 @@ async function fixture(options: { ended?: boolean; timezone?: string } = {}) {
         paymentStatus: "PAID",
         networkingOptIn: true,
         totalAmount: 0,
-        priceBreakdown: {},
+        priceBreakdown: {} as never,
         formData: {},
       });
     people.push(

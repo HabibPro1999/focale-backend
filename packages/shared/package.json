@@ -16,6 +16,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@app/contracts": "workspace:*",
     "pino": "^9.5.0",
     "uuid": "^11.1.0",
     "zod": "^4.0.0"

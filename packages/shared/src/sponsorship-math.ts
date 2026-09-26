@@ -1,3 +1,5 @@
+import type { AccessLineItem, PriceBreakdown } from "@app/contracts";
+
 // ============================================================================
 // Types for sponsorship amount calculation
 // ============================================================================
@@ -18,13 +20,17 @@ export interface RegistrationForCalculation {
   totalAmount: number;
   baseAmount: number;
   accessTypeIds: string[];
-  priceBreakdown: {
-    calculatedBasePrice?: number;
-    accessItems?: Array<{
-      accessId: string;
-      subtotal: number;
-    }>;
-  };
+  /**
+   * The parts of the registration's price breakdown a sponsorship can cover
+   * (the pricing quote passes them before the sponsorship lines exist). Both
+   * are tolerated missing: the base then falls back to `baseAmount` and no
+   * access item is covered.
+   */
+  priceBreakdown: Partial<
+    Pick<PriceBreakdown, "calculatedBasePrice"> & {
+      accessItems: ReadonlyArray<Pick<AccessLineItem, "accessId" | "subtotal">>;
+    }
+  >;
 }
 
 // ============================================================================

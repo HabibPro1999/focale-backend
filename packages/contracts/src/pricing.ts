@@ -132,6 +132,11 @@ export const AccessLineItemSchema = z.object({
   unitPrice: z.number(),
   quantity: z.number(),
   subtotal: z.number(),
+  /**
+   * Set on the lines of a public signup (legacy and current); admin creates,
+   * edits and repricing store the pricing lines without it.
+   */
+  status: z.literal("confirmed").optional(),
 });
 
 export const SponsorshipLineSchema = z.object({
@@ -140,15 +145,21 @@ export const SponsorshipLineSchema = z.object({
   valid: z.boolean(),
 });
 
-export const DroppedAccessItemSchema = z.object({
-  accessId: z.string(),
-  name: z.any(),
-  unitPrice: z.number(),
-  quantity: z.number(),
-  subtotal: z.number(),
-  reason: z.literal("capacity_reached"),
+/** Why an access item left a registration: its paid capacity filled up, or it was deactivated. */
+export const AccessDropReasonSchema = z.enum(["capacity_reached", "deactivated"]);
+
+/** An access line removed from a registration: the line as it was, and why. */
+export const DroppedAccessItemSchema = AccessLineItemSchema.extend({
+  reason: AccessDropReasonSchema,
 });
 
+/**
+ * The price breakdown (plan 5.2): the public price quote, and the stored
+ * `registrations.price_breakdown` document. The one breakdown type every
+ * reader and writer uses. Registrations created before dropped items were
+ * recorded (April 2026) have no `droppedAccessItems` key, so it is optional
+ * and has no default: a stored document is exactly this schema's output.
+ */
 export const PriceBreakdownSchema = z.object({
   basePrice: z.number(),
   appliedRules: z.array(AppliedRuleSchema),
@@ -160,7 +171,7 @@ export const PriceBreakdownSchema = z.object({
   sponsorshipTotal: z.number(),
   total: z.number(),
   currency: z.string(),
-  droppedAccessItems: z.array(DroppedAccessItemSchema).optional().default([]),
+  droppedAccessItems: z.array(DroppedAccessItemSchema).optional(),
 });
 
 // ============================================================================
@@ -175,6 +186,11 @@ export type UpdateEmbeddedRuleInput = z.infer<typeof UpdateEmbeddedRuleSchema>;
 export type UpdateEventPricingInput = z.infer<typeof UpdateEventPricingSchema>;
 export type CalculatePriceRequest = z.infer<typeof CalculatePriceRequestSchema>;
 export type PriceBreakdown = z.infer<typeof PriceBreakdownSchema>;
+export type AppliedRule = z.infer<typeof AppliedRuleSchema>;
+export type AccessLineItem = z.infer<typeof AccessLineItemSchema>;
+export type SponsorshipLine = z.infer<typeof SponsorshipLineSchema>;
+export type AccessDropReason = z.infer<typeof AccessDropReasonSchema>;
+export type DroppedAccessItem = z.infer<typeof DroppedAccessItemSchema>;
 export type SelectedAccessItem = z.infer<typeof SelectedAccessItemSchema>;
 
 /**

@@ -45,12 +45,12 @@ function comparable<T extends { sectors: { sector: string }[]; zones: { zone: st
 }
 
 async function audit(eventId: string, actorId: string, action: string, targetId: string, createdAt: Date) {
-  await networkingStore().insert("audit", { eventId, actorId, action, targetId, data: {}, createdAt });
+  await networkingStore(getDb()).insert("audit", { eventId, actorId, action, targetId, data: {}, createdAt });
 }
 
 /** Activity on top of the matrix: every analytics figure gets non-zero input, around local midnight. */
 async function addActivity(matrix: Matrix) {
-  const store = networkingStore();
+  const store = networkingStore(getDb());
   const eventId = matrix.event.id;
   const { viewer, targets } = matrix;
   const stamp = (index: number) => new Date(Date.parse("2031-05-04T22:30:00Z") + minutes(index * 13));
@@ -135,7 +135,7 @@ async function addActivity(matrix: Matrix) {
 describe.runIf(dbTestsEnabled())("organizer analytics as SQL aggregates (4.9)", () => {
   beforeAll(async () => {
     await getDb().insert(clients).values({ id: ids.client, name: `Analytics ${ids.rich}`, enabledModules: ["networking", "registrations", "emails"] });
-    await networkingStore().insert("events", {
+    await networkingStore(getDb()).insert("events", {
       id: ids.other, clientId: ids.client, name: "Other", slug: `analytics-${ids.other}`, status: "OPEN", ...eventDates,
     });
     rich = await buildEligibilityMatrix(scope, {
@@ -221,7 +221,7 @@ describe.runIf(dbTestsEnabled())("organizer analytics as SQL aggregates (4.9)", 
   });
 
   it("counts likes and passes as the interests stand, where the old calculator counted every gesture", async () => {
-    const store = networkingStore();
+    const store = networkingStore(getDb());
     const event = await store.insert("events", {
       id: ids.gestures, clientId: ids.client, name: "Gestures", slug: `analytics-${ids.gestures}`, status: "OPEN", ...eventDates,
     });
