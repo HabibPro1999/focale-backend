@@ -21,7 +21,7 @@ import {
   extractStorageKeyFromUrl,
   StorageObjectNotFoundError,
 } from "@app/integrations";
-import { Auth } from "../../core/auth/auth.decorator";
+import { Auth, RequireRole } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { assertEventWritable } from "../events";
@@ -96,7 +96,7 @@ export class RegistrationsController {
 
   // PUT /api/events/:eventId/registrations/:id/admin-edit — requires admin role.
   @Put(":eventId/registrations/:id/admin-edit")
-  @Auth(UserRole.CLIENT_ADMIN)
+  @RequireRole(UserRole.CLIENT_ADMIN)
   async adminEdit(
     @Param() { eventId, id }: EventRegistrationIdParamDto,
     @Body() body: AdminEditRegistrationDto,
@@ -179,7 +179,7 @@ export class RegistrationsController {
     }
     if (!canAccessClient(user, clientId)) forbidden();
     await assertClientModuleEnabled(clientId, "registrations");
-    await this.service.deleteRegistration(id, user.id, force, user.role);
+    await this.service.deleteRegistration(id, user.id, force);
   }
 
   // POST /api/events/registrations/:id/confirm — confirm payment

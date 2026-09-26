@@ -115,6 +115,8 @@ export const ErrorCodes = {
   REPORT_GENERATION_FAILED: "RPT_11001",
   EXPORT_FAILED: "RPT_11002",
   EXPORT_TOO_LARGE: "RPT_11003",
+  /** 503 with Retry-After: every export slot and queue place is taken; retry later. */
+  EXPORT_BUSY: "EXPORT_BUSY",
 
   // State Transitions (12xxx)
   INVALID_STATUS_TRANSITION: "STT_12001",

@@ -11,7 +11,6 @@ import {
 import { deleteNetworkingPhoto } from "../networking/networking.uploads.service";
 import {
   ErrorCodes,
-  UserRole,
   type AppEvent,
   type PriceBreakdown,
   type CreateRegistrationInput,
@@ -495,18 +494,22 @@ export class RegistrationsService {
       query,
     );
 
+    // One stat row per payment status. `amountDue` is summed per registration
+    // with the settlement math (net − paid, at least 0); refunded money is
+    // not counted as collected.
     const stats: RegistrationStats = {
       total: 0,
       totalAmount: 0,
+      collected: 0,
       paid: { count: 0, amount: 0 },
       pending: { count: 0, amount: 0 },
       sponsored: { count: 0, amount: 0 },
     };
     for (const row of statsRaw) {
       const count = row.cnt;
-      const amount = row.totalAmount;
       stats.total += count;
-      stats.totalAmount += amount;
+      stats.totalAmount += row.totalAmount;
+      if (row.paymentStatus !== "REFUNDED") stats.collected += row.paidAmount;
       if (row.paymentStatus === "PAID") {
         stats.paid = { count, amount: row.paidAmount };
       } else if (
@@ -515,13 +518,13 @@ export class RegistrationsService {
         row.paymentStatus === "PARTIAL"
       ) {
         stats.pending.count += count;
-        stats.pending.amount += amount;
+        stats.pending.amount += row.amountDue;
       } else if (
         row.paymentStatus === "SPONSORED" ||
         row.paymentStatus === "WAIVED"
       ) {
         stats.sponsored.count += count;
-        stats.sponsored.amount += amount;
+        stats.sponsored.amount += row.totalAmount;
       }
     }
 
@@ -1548,24 +1551,16 @@ export class RegistrationsService {
   // Delete
   // ==========================================================================
 
+  /**
+   * Admin delete. Only admins reach this: the controller's tenant check
+   * (`canAccessClient`) refuses every other role, so `force` needs no extra
+   * role check here.
+   */
   async deleteRegistration(
     id: string,
     performedBy?: string,
     force?: boolean,
-    requestingUserRole?: number,
   ): Promise<void> {
-    if (
-      force &&
-      requestingUserRole !== UserRole.CLIENT_ADMIN &&
-      requestingUserRole !== UserRole.SUPER_ADMIN
-    ) {
-      throw new AppException(
-        ErrorCodes.FORBIDDEN,
-        "Only admins can force-delete registrations",
-        403,
-      );
-    }
-
     // Lock order (ADR 0001): the linked sponsorships, then the registration.
     const networkingPhoto = await withLockingTxn(async (tx) => {
       await lockRegistrationSponsorships(tx, id);

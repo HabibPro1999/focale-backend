@@ -388,8 +388,6 @@ export interface CertificateAttachmentContext {
   abstractId?: string;
   /** From contextSnapshot._certificateTemplateIds — the templates queued. */
   certificateTemplateIds: string[];
-  /** Per-batch image cache, shared across the whole processEmailQueue run. */
-  imageCache: Map<string, unknown>;
 }
 
 export type CertificateAttachmentGenerator = (
@@ -449,8 +447,6 @@ export async function processEmailQueue(
   const workerId = options.workerId ?? DEFAULT_WORKER_ID;
 
   const CONCURRENCY_LIMIT = 10;
-  // Shared across the run so certificate PDFs don't re-download the same image.
-  const imageCache = new Map<string, unknown>();
   /** Rows whose provider call started (this claim): never failed (requeued) by onError. */
   const providerCalled = new Set<string>();
 
@@ -551,7 +547,6 @@ export async function processEmailQueue(
           registrationId: emailLog.registrationId ?? undefined,
           abstractId: emailLog.abstractId ?? undefined,
           certificateTemplateIds: templateIds,
-          imageCache,
         });
 
         if (!attachments || attachments.length === 0) {

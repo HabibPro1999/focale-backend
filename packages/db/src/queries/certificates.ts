@@ -1,8 +1,10 @@
 import {
   and,
+  asc,
   eq,
   gt,
   inArray,
+  isNull,
   ne,
   desc,
   type InferInsertModel,
@@ -182,15 +184,22 @@ export async function getCertificateTemplateImageState(
   return row ?? null;
 }
 
-/** {id, templateUrl} for delete-time storage cleanup, or null. */
+/** The stored images of a template, for delete-time storage cleanup, or null. */
 export async function getCertificateTemplateForDelete(
   id: string,
   exec: DbExecutor = getDb(),
-): Promise<{ id: string; templateUrl: string } | null> {
+): Promise<{
+  id: string;
+  eventId: string;
+  templateUrl: string;
+  renderImageKey: string | null;
+} | null> {
   const [row] = await exec
     .select({
       id: certificateTemplates.id,
+      eventId: certificateTemplates.eventId,
       templateUrl: certificateTemplates.templateUrl,
+      renderImageKey: certificateTemplates.renderImageKey,
     })
     .from(certificateTemplates)
     .where(eq(certificateTemplates.id, id))
@@ -198,16 +207,22 @@ export async function getCertificateTemplateForDelete(
   return row ?? null;
 }
 
-/** {id, eventId, templateUrl} for image-upload (old-image cleanup + key building). */
+/** The template's current images, for image upload (old-image cleanup + key building). */
 export async function getCertificateTemplateForUpload(
   id: string,
   exec: DbExecutor = getDb(),
-): Promise<{ id: string; eventId: string; templateUrl: string } | null> {
+): Promise<{
+  id: string;
+  eventId: string;
+  templateUrl: string;
+  renderImageKey: string | null;
+} | null> {
   const [row] = await exec
     .select({
       id: certificateTemplates.id,
       eventId: certificateTemplates.eventId,
       templateUrl: certificateTemplates.templateUrl,
+      renderImageKey: certificateTemplates.renderImageKey,
     })
     .from(certificateTemplates)
     .where(eq(certificateTemplates.id, id))
@@ -299,10 +314,24 @@ export async function updateCertificateTemplate(
   return (await loadTemplateWithAccess(id, exec)) as CertificateTemplateWithAccess;
 }
 
-/** Persist the uploaded image url + original dimensions; return row + access. */
+/** Render image of a template: storage key and pixel size (3.8). */
+export interface CertificateRenderImageRef {
+  renderImageKey: string;
+  renderImageWidth: number;
+  renderImageHeight: number;
+}
+
+/**
+ * Persist the uploaded image url + original dimensions and its render image
+ * (3.8); return row + access.
+ */
 export async function updateCertificateTemplateImage(
   id: string,
-  data: { templateUrl: string; templateWidth: number; templateHeight: number },
+  data: {
+    templateUrl: string;
+    templateWidth: number;
+    templateHeight: number;
+  } & CertificateRenderImageRef,
   exec: DbExecutor = getDb(),
 ): Promise<CertificateTemplateWithAccess> {
   await exec
@@ -311,9 +340,95 @@ export async function updateCertificateTemplateImage(
       templateUrl: data.templateUrl,
       templateWidth: data.templateWidth,
       templateHeight: data.templateHeight,
+      renderImageKey: data.renderImageKey,
+      renderImageWidth: data.renderImageWidth,
+      renderImageHeight: data.renderImageHeight,
     })
     .where(eq(certificateTemplates.id, id));
   return (await loadTemplateWithAccess(id, exec)) as CertificateTemplateWithAccess;
+}
+
+// ---------------------------------------------------------------------------
+// Render image backfill (3.8)
+// ---------------------------------------------------------------------------
+
+/** A template whose uploaded image has no render image yet. */
+export interface CertificateTemplateMissingRender {
+  id: string;
+  eventId: string;
+  templateUrl: string;
+}
+
+/**
+ * Templates with an uploaded image (url set, both dimensions > 0; active or
+ * not) and no render image, in id order after `afterId`. `eventId` and
+ * `templateIds` narrow the scan.
+ */
+export async function listCertificateTemplatesMissingRenderImage(
+  options: {
+    eventId?: string;
+    templateIds?: readonly string[];
+    afterId?: string;
+    limit: number;
+  },
+  exec: DbExecutor = getDb(),
+): Promise<CertificateTemplateMissingRender[]> {
+  const conds: SQL[] = [
+    ne(certificateTemplates.templateUrl, ""),
+    gt(certificateTemplates.templateWidth, 0),
+    gt(certificateTemplates.templateHeight, 0),
+    isNull(certificateTemplates.renderImageKey),
+  ];
+  if (options.eventId !== undefined) {
+    conds.push(eq(certificateTemplates.eventId, options.eventId));
+  }
+  if (options.templateIds !== undefined) {
+    if (options.templateIds.length === 0) return [];
+    conds.push(inArray(certificateTemplates.id, [...options.templateIds]));
+  }
+  if (options.afterId !== undefined) {
+    conds.push(gt(certificateTemplates.id, options.afterId));
+  }
+  return exec
+    .select({
+      id: certificateTemplates.id,
+      eventId: certificateTemplates.eventId,
+      templateUrl: certificateTemplates.templateUrl,
+    })
+    .from(certificateTemplates)
+    .where(and(...conds))
+    .orderBy(asc(certificateTemplates.id))
+    .limit(options.limit);
+}
+
+/**
+ * Record a backfilled render image, only while the template still shows the
+ * image it was derived from and has no render image (a concurrent upload
+ * wins). False when the row changed or is gone; the caller then deletes the
+ * object it uploaded.
+ */
+export async function setCertificateTemplateRenderImage(
+  id: string,
+  expectedTemplateUrl: string,
+  render: CertificateRenderImageRef,
+  exec: DbExecutor = getDb(),
+): Promise<boolean> {
+  const rows = await exec
+    .update(certificateTemplates)
+    .set({
+      renderImageKey: render.renderImageKey,
+      renderImageWidth: render.renderImageWidth,
+      renderImageHeight: render.renderImageHeight,
+    })
+    .where(
+      and(
+        eq(certificateTemplates.id, id),
+        eq(certificateTemplates.templateUrl, expectedTemplateUrl),
+        isNull(certificateTemplates.renderImageKey),
+      ),
+    )
+    .returning({ id: certificateTemplates.id });
+  return rows.length > 0;
 }
 
 export async function deleteCertificateTemplateById(

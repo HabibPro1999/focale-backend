@@ -1,6 +1,7 @@
-import ExcelJS from "exceljs";
+import type ExcelJS from "exceljs";
+import type { Writable } from "node:stream";
 import {
-  getRegistrationsForModularExport,
+  iterateRegistrationsForModularExport,
   getRegistrationTableColumns,
   getEventAccessNames,
   getEventSlugAndName,
@@ -18,6 +19,13 @@ import type {
   SponsorshipField,
 } from "@app/contracts";
 import { formatDateTime, formatFileDate } from "@app/shared";
+import type { ExportDownload } from "../../core/exports/stream-io";
+import {
+  XLSX_CONTENT_TYPE,
+  ColumnStyles,
+  RowPacer,
+  createXlsxWriter,
+} from "../../core/exports/xlsx-stream";
 
 // ============================================================================
 // Cell values are written as plain strings: exceljs stores them as text cells,
@@ -29,28 +37,30 @@ import { formatDateTime, formatFileDate } from "@app/shared";
 // Styling constants
 // ============================================================================
 
-const GROUP_HEADER_FONT: Partial<ExcelJS.Font> = {
+const MONEY_FORMAT = "#,##0";
+
+export const GROUP_HEADER_FONT: Partial<ExcelJS.Font> = {
   bold: true,
   size: 11,
   color: { argb: "FF1F4E79" },
 };
-const COLUMN_HEADER_FILL: ExcelJS.Fill = {
+export const COLUMN_HEADER_FILL: ExcelJS.Fill = {
   type: "pattern",
   pattern: "solid",
   fgColor: { argb: "FF1F4E79" },
 };
-const COLUMN_HEADER_FONT: Partial<ExcelJS.Font> = {
+export const COLUMN_HEADER_FONT: Partial<ExcelJS.Font> = {
   bold: true,
   color: { argb: "FFFFFFFF" },
   size: 11,
 };
-const BORDER: Partial<ExcelJS.Borders> = {
+export const BORDER: Partial<ExcelJS.Borders> = {
   top: { style: "thin" },
   left: { style: "thin" },
   bottom: { style: "thin" },
   right: { style: "thin" },
 };
-const GROUP_FILLS: ExcelJS.Fill[] = [
+export const GROUP_FILLS: ExcelJS.Fill[] = [
   { type: "pattern", pattern: "solid", fgColor: { argb: "FFD6E4F0" } }, // soft blue
   { type: "pattern", pattern: "solid", fgColor: { argb: "FFEADAF0" } }, // soft violet
   { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9EDD4" } }, // soft green
@@ -65,7 +75,7 @@ const GROUP_FILLS: ExcelJS.Fill[] = [
 
 type Lang = ExportLanguage;
 
-const GROUP_LABELS: Record<string, Record<Lang, string>> = {
+export const GROUP_LABELS: Record<string, Record<Lang, string>> = {
   identity: { fr: "Identité", en: "Identity", ar: "الهوية" },
   submission: { fr: "Soumission", en: "Submission", ar: "الإرسال" },
   payment: { fr: "Paiement", en: "Payment", ar: "الدفع" },
@@ -80,7 +90,7 @@ const GROUP_LABELS: Record<string, Record<Lang, string>> = {
   },
 };
 
-const IDENTITY_HEADERS: Record<IdentityField, Record<Lang, string>> = {
+export const IDENTITY_HEADERS: Record<IdentityField, Record<Lang, string>> = {
   id: { fr: "ID", en: "ID", ar: "المعرف" },
   referenceNumber: { fr: "N° de référence", en: "Reference #", ar: "المرجع" },
   email: { fr: "Email", en: "Email", ar: "البريد" },
@@ -176,7 +186,7 @@ const YES_NO: Record<Lang, { yes: string; no: string }> = {
   ar: { yes: "نعم", no: "لا" },
 };
 
-const SHEET_NAME: Record<Lang, string> = {
+export const SHEET_NAME: Record<Lang, string> = {
   fr: "Inscriptions",
   en: "Registrations",
   ar: "التسجيلات",
@@ -238,7 +248,7 @@ function enumLabel(
 
 type ColumnKind = "text" | "datetime" | "money" | "boolean" | "url" | "longtext"; // wraps, wider
 
-interface ColumnDescriptor {
+export interface ColumnDescriptor {
   group: keyof typeof GROUP_LABELS;
   header: string;
   kind: ColumnKind;
@@ -246,7 +256,7 @@ interface ColumnDescriptor {
   getValue: (ctx: RowContext) => string | number;
 }
 
-interface RowContext {
+export interface RowContext {
   registration: RegistrationWithRelations;
   accessNameById: Map<string, string>;
   sponsorshipByCode: Map<
@@ -729,6 +739,7 @@ function colLetter(col: number): string {
   return s;
 }
 
+/** Group row (1) and column header row (2); rows are committed by the caller. */
 function writeHeaderRows(
   sheet: ExcelJS.Worksheet,
   columns: ColumnDescriptor[],
@@ -762,6 +773,11 @@ function writeHeaderRows(
   headerRow.height = 24;
 }
 
+/**
+ * Widths and the money number format. A streamed sheet writes its column
+ * definitions with the first committed row, so this runs before any commit;
+ * the header cells get the format now, cells created later inherit it.
+ */
 function applyColumnFormatting(
   sheet: ExcelJS.Worksheet,
   columns: ColumnDescriptor[],
@@ -769,73 +785,18 @@ function applyColumnFormatting(
   columns.forEach((col, i) => {
     const excelCol = sheet.getColumn(i + 1);
     excelCol.width = col.width;
-    if (col.kind === "money") excelCol.numFmt = "#,##0";
+    if (col.kind === "money") excelCol.numFmt = MONEY_FORMAT;
   });
 }
 
-// ============================================================================
-// Public entry
-// ============================================================================
-
-export async function buildRegistrationsWorkbook(
-  eventId: string,
+/** The selected columns, or email alone when nothing was selected. */
+export function resolveExportColumns(
   body: ExportRegistrationsBody,
-): Promise<{ filename: string; data: Buffer }> {
+  accessItems: { id: string; name: string }[],
+  formColumns: FormColumn[],
+): ColumnDescriptor[] {
   const lang = body.language;
-  const { columns: cols } = body;
-
-  // Lab details only when sponsorship-deep columns are requested.
-  const needsLabDetails = body.columns.sponsorship.some((f) =>
-    ["labContactName", "labEmail", "labPhone", "beneficiaryAddress"].includes(f),
-  );
-
-  // Event metadata, form columns, access items, registrations (+ lab details),
-  // fetched in one transaction under the export statement timeout.
-  const { event, tableColumns, accessItems, registrations, labDetails } =
-    await withExportStatementTimeout(async (tx) => {
-      const eventRow = await getEventSlugAndName(eventId, tx);
-      const columns = await getRegistrationTableColumns(eventId, tx);
-      const access = await getEventAccessNames(eventId, tx);
-      const rows = await getRegistrationsForModularExport(
-        eventId,
-        {
-          paymentStatus: body.filters.paymentStatus,
-          paymentMethod: body.filters.paymentMethod,
-          search: body.filters.search,
-          startDate: body.filters.startDate,
-          endDate: body.filters.endDate,
-          needCheckIns: cols.checkinAccessIds.length > 0 || cols.includeGlobalCheckin,
-          needTransactions: cols.includeTransactions,
-        },
-        tx,
-      );
-      const details = needsLabDetails
-        ? await getSponsorshipLabDetails(
-            eventId,
-            rows.map((r) => r.sponsorshipCode).filter((c): c is string => Boolean(c)),
-            tx,
-          )
-        : [];
-      return {
-        event: eventRow,
-        tableColumns: columns,
-        accessItems: access,
-        registrations: rows,
-        labDetails: details,
-      };
-    });
-
-  const sponsorshipByCode: RowContext["sponsorshipByCode"] = new Map();
-  if (needsLabDetails) {
-    for (const d of labDetails) {
-      sponsorshipByCode.set(d.code, {
-        beneficiaryAddress: d.beneficiaryAddress,
-        batch: d.batch,
-      });
-    }
-  }
-
-  const columns = buildColumns(body, accessItems, tableColumns.formColumns, lang);
+  const columns = buildColumns(body, accessItems, formColumns, lang);
 
   // Safety fallback — if nothing was selected, expose at least email so the
   // exported file isn't empty / confusing.
@@ -848,47 +809,157 @@ export async function buildRegistrationsWorkbook(
       getValue: (ctx) => ctx.registration.email,
     });
   }
+  return columns;
+}
 
-  const workbook = new ExcelJS.Workbook();
-  workbook.creator = "Focale OS";
-  workbook.created = new Date();
+const LAB_DETAIL_FIELDS: readonly SponsorshipField[] = [
+  "labContactName",
+  "labEmail",
+  "labPhone",
+  "beneficiaryAddress",
+];
 
-  const sheet = workbook.addWorksheet(SHEET_NAME[lang]);
+// ============================================================================
+// Public entry
+// ============================================================================
 
-  writeHeaderRows(sheet, columns, lang);
+/**
+ * Prepares the modular registrations workbook: event metadata, form columns
+ * and access names are read now (one transaction); the rows are streamed by
+ * `write`, one keyset page at a time, each page's rows committed as written.
+ */
+export async function prepareRegistrationsWorkbook(
+  eventId: string,
+  body: ExportRegistrationsBody,
+): Promise<ExportDownload> {
+  const { columns: cols } = body;
 
+  const { event, tableColumns, accessItems } = await withExportStatementTimeout(
+    async (tx) => ({
+      event: await getEventSlugAndName(eventId, tx),
+      tableColumns: await getRegistrationTableColumns(eventId, tx),
+      accessItems: await getEventAccessNames(eventId, tx),
+    }),
+  );
+
+  const columns = resolveExportColumns(body, accessItems, tableColumns.formColumns);
+  const slug = event?.slug ?? "event";
+  const timestamp = formatFileDate();
+
+  return {
+    filename: `${slug}-registrations-${timestamp}.xlsx`,
+    contentType: XLSX_CONTENT_TYPE,
+    write: (out, signal) =>
+      writeRegistrationsWorkbook(out, signal, {
+        eventId,
+        body,
+        columns,
+        accessItems,
+        pages: iterateRegistrationsForModularExport(
+          eventId,
+          {
+            paymentStatus: body.filters.paymentStatus,
+            paymentMethod: body.filters.paymentMethod,
+            search: body.filters.search,
+            startDate: body.filters.startDate,
+            endDate: body.filters.endDate,
+            needCheckIns: cols.checkinAccessIds.length > 0 || cols.includeGlobalCheckin,
+            needTransactions: cols.includeTransactions,
+          },
+          { signal },
+        ),
+      }),
+  };
+}
+
+interface WorkbookInput {
+  eventId: string;
+  body: ExportRegistrationsBody;
+  columns: ColumnDescriptor[];
+  accessItems: { id: string; name: string }[];
+  pages: AsyncIterable<RegistrationWithRelations[]>;
+}
+
+/** Streams the workbook into `out` (ended by the workbook commit). */
+export async function writeRegistrationsWorkbook(
+  out: Writable,
+  signal: AbortSignal,
+  input: WorkbookInput,
+): Promise<void> {
+  const { eventId, body, columns, accessItems } = input;
+  const lang = body.language;
+  // Lab details only when sponsorship-deep columns are requested; looked up
+  // per page for the codes not seen yet.
+  const needsLabDetails = body.columns.sponsorship.some((f) => LAB_DETAIL_FIELDS.includes(f));
+  const sponsorshipByCode: RowContext["sponsorshipByCode"] = new Map();
+  const lookedUpCodes = new Set<string>();
   const accessNameById = new Map(accessItems.map((a) => [a.id, a.name]));
-  for (const registration of registrations) {
-    const ctx: RowContext = {
-      registration,
-      accessNameById,
-      sponsorshipByCode,
-      lang,
-    };
-    const row = sheet.addRow(columns.map((c) => c.getValue(ctx)));
-    row.eachCell((cell, colNumber) => {
-      const col = columns[colNumber - 1];
-      cell.border = BORDER;
-      cell.alignment = {
-        vertical: "top",
-        wrapText: col.kind === "longtext" || col.kind === "text",
-      };
-    });
-  }
 
+  const workbook = createXlsxWriter(out, signal);
+  // Freeze the two header rows.
+  const sheet = workbook.addWorksheet(SHEET_NAME[lang], {
+    views: [{ state: "frozen", ySplit: 2 }],
+  });
+  writeHeaderRows(sheet, columns, lang);
+  // Before the first commit: the column definitions go out with it.
   applyColumnFormatting(sheet, columns);
-
-  // Freeze the two header rows; apply autoFilter on row 2 across all data cols.
-  sheet.views = [{ state: "frozen", ySplit: 2 }];
+  sheet.getRow(2).commit();
+  // autoFilter on row 2 across all data columns (written with the sheet).
   sheet.autoFilter = {
     from: { row: 2, column: 1 },
     to: { row: 2, column: columns.length },
   };
 
-  const slug = event?.slug ?? "event";
-  const timestamp = formatFileDate();
-  const filename = `${slug}-registrations-${timestamp}.xlsx`;
+  const cellStyles = new ColumnStyles((column) => {
+    const col = columns[column - 1]!;
+    return {
+      ...(col.kind === "money" ? { numFmt: MONEY_FORMAT } : {}),
+      border: BORDER,
+      alignment: { vertical: "top", wrapText: col.kind === "longtext" || col.kind === "text" },
+    };
+  });
+  const pacer = new RowPacer(out, signal, sheet);
+  for await (const page of input.pages) {
+    if (needsLabDetails) {
+      const codes = [
+        ...new Set(
+          page
+            .map((r) => r.sponsorshipCode)
+            .filter((c): c is string => Boolean(c) && !lookedUpCodes.has(c!)),
+        ),
+      ];
+      if (codes.length > 0) {
+        const details = await withExportStatementTimeout((tx) =>
+          getSponsorshipLabDetails(eventId, codes, tx),
+        );
+        for (const code of codes) lookedUpCodes.add(code);
+        for (const d of details) {
+          sponsorshipByCode.set(d.code, {
+            beneficiaryAddress: d.beneficiaryAddress,
+            batch: d.batch,
+          });
+        }
+      }
+    }
 
-  const data = Buffer.from(await workbook.xlsx.writeBuffer());
-  return { filename, data };
+    for (const registration of page) {
+      const ctx: RowContext = {
+        registration,
+        accessNameById,
+        sponsorshipByCode,
+        lang,
+      };
+      const row = sheet.addRow(columns.map((c) => c.getValue(ctx)));
+      row.eachCell((cell, colNumber) => {
+        cell.style = cellStyles.for(colNumber, cell.type);
+      });
+      row.commit();
+      await pacer.row();
+    }
+    await pacer.pageDone();
+  }
+
+  signal.throwIfAborted();
+  sheet.commit();
+  await workbook.commit();
 }

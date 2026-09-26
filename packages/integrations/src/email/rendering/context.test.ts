@@ -11,9 +11,12 @@ import {
   getEventAccessByIdsForEmail,
   getSponsorshipByCodeForEmail,
 } from "@app/db";
+import type { EventAccessEmailInfo } from "@app/db";
 import {
   buildEmailContext,
   buildEmailContextWithAccess,
+  loadEmailContextLookups,
+  type EmailContextLookups,
   resolveVariables,
   sanitizeForHtml,
   getSampleEmailContext,
@@ -156,6 +159,119 @@ describe("buildEmailContextWithAccess (async, DB)", () => {
     expect(ctx.labName).toBe("Lab");
     expect(ctx.sponsoredItems).toContain("Inscription de base");
     expect(ctx.remainingAmount).toBe("100 TND"); // 250 - 150 applied
+  });
+});
+
+describe("email context lookups (3.8: one event-level read per send)", () => {
+  const pricing = {
+    bankName: "BT",
+    bankAccountName: "Acc",
+    bankAccountNumber: "TN123",
+    basePrice: 200,
+  };
+  const workshop: EventAccessEmailInfo = { id: "a1", name: "Workshop A", type: "WORKSHOP", price: 50 };
+  const dinner: EventAccessEmailInfo = { id: "a2", name: "Gala", type: "DINNER", price: 80 };
+
+  function lookups(overrides: Partial<EmailContextLookups> = {}): EmailContextLookups {
+    return {
+      eventId: "evt-1",
+      pricing,
+      accessById: new Map([
+        [workshop.id, workshop],
+        [dinner.id, dinner],
+      ]),
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    vi.mocked(getEventPricingForEmail).mockReset().mockResolvedValue(null);
+    vi.mocked(getEventAccessByIdsForEmail).mockReset().mockResolvedValue([]);
+    vi.mocked(getSponsorshipByCodeForEmail).mockReset().mockResolvedValue(null);
+  });
+
+  it("loadEmailContextLookups reads pricing once and the distinct access ids once", async () => {
+    vi.mocked(getEventPricingForEmail).mockResolvedValue(pricing);
+    vi.mocked(getEventAccessByIdsForEmail).mockResolvedValue([workshop, dinner]);
+
+    const loaded = await loadEmailContextLookups("evt-1", ["a1", "a2", "a1"]);
+
+    expect(getEventPricingForEmail).toHaveBeenCalledTimes(1);
+    expect(getEventPricingForEmail).toHaveBeenCalledWith("evt-1");
+    expect(getEventAccessByIdsForEmail).toHaveBeenCalledTimes(1);
+    expect(getEventAccessByIdsForEmail).toHaveBeenCalledWith(["a1", "a2"]);
+    expect(loaded.pricing).toBe(pricing);
+    expect([...loaded.accessById.keys()]).toEqual(["a1", "a2"]);
+  });
+
+  it("with lookups for the registration's event, reads neither pricing nor known access", async () => {
+    const ctx = await buildEmailContextWithAccess(
+      reg({ eventId: "evt-1", accessTypeIds: ["a1", "a2"] }),
+      lookups(),
+    );
+
+    expect(getEventPricingForEmail).not.toHaveBeenCalled();
+    expect(getEventAccessByIdsForEmail).not.toHaveBeenCalled();
+    expect(ctx.bankName).toBe("BT");
+    expect(ctx.selectedAccess).toBe("Workshop A, Gala");
+    expect(ctx.selectedWorkshops).toBe("Workshop A");
+    expect(ctx.selectedDinners).toBe("Gala");
+  });
+
+  it("gives the same context as the per-registration reads", async () => {
+    const registration = reg({ eventId: "evt-1", accessTypeIds: ["a2", "a1"] });
+    vi.mocked(getEventPricingForEmail).mockResolvedValue(pricing);
+    vi.mocked(getEventAccessByIdsForEmail).mockResolvedValue([workshop, dinner]);
+    const direct = await buildEmailContextWithAccess(registration);
+
+    const viaLookups = await buildEmailContextWithAccess(registration, lookups());
+
+    expect(viaLookups).toEqual(direct);
+  });
+
+  it("reads only the access ids the lookups lack", async () => {
+    vi.mocked(getEventAccessByIdsForEmail).mockResolvedValue([
+      { id: "a3", name: "Lunch", type: "DINNER", price: 10 },
+    ]);
+
+    const ctx = await buildEmailContextWithAccess(
+      reg({ eventId: "evt-1", accessTypeIds: ["a1", "a3"] }),
+      lookups(),
+    );
+
+    expect(getEventAccessByIdsForEmail).toHaveBeenCalledTimes(1);
+    expect(getEventAccessByIdsForEmail).toHaveBeenCalledWith(["a3"]);
+    expect(ctx.selectedAccess).toBe("Workshop A, Lunch");
+  });
+
+  it("uses the lookups for a sponsorship's covered access too", async () => {
+    vi.mocked(getSponsorshipByCodeForEmail).mockResolvedValue({
+      code: "SP1",
+      totalAmount: 250,
+      coversBasePrice: true,
+      coveredAccessIds: ["a1"],
+      beneficiaryName: "Dr X",
+      batch: { labName: "Lab", contactName: "Contact", email: "lab@x.com" },
+    });
+
+    const ctx = await buildEmailContextWithAccess(
+      reg({ eventId: "evt-1", sponsorshipCode: "SP1", sponsorshipAmount: 250 }),
+      lookups(),
+    );
+
+    expect(getEventAccessByIdsForEmail).not.toHaveBeenCalled();
+    expect(ctx.sponsoredItems).toContain("Inscription de base");
+    expect(ctx.sponsoredItems).toContain("Workshop A");
+  });
+
+  it("ignores lookups loaded for another event", async () => {
+    await buildEmailContextWithAccess(
+      reg({ eventId: "evt-2", accessTypeIds: ["a1"] }),
+      lookups(),
+    );
+
+    expect(getEventPricingForEmail).toHaveBeenCalledWith("evt-2");
+    expect(getEventAccessByIdsForEmail).toHaveBeenCalledWith(["a1"]);
   });
 });
 

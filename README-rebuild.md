@@ -44,11 +44,50 @@ Per-package: `pnpm --filter @app/api <script>` (`dev`, `start`, `build`,
 # Re-enqueue abstract emails that were SKIPPED. Dry-run by default; --apply enqueues.
 pnpm --filter @app/worker requeue-skipped-abstract-emails \
   [--apply] [--event-id <id>] [--abstract-id <id>] [--trigger <trigger>] [--limit <n>]
+
+# Store the certificate render image (flattened JPEG, <= 3508 px) of templates
+# uploaded before migration 0032; without one the worker embeds the original.
+# Dry-run by default; --apply stores them (fresh keys, guarded row update).
+pnpm --filter @app/worker backfill-certificate-renders \
+  [--apply] [--event <id>] [--template <id>]... [--limit <n>]
 ```
 
 `src/scripts/setup-tshg-abstracts.ts` (legacy) is a **one-time data-seeding
 artifact** for a specific event (TSHG themes + deadlines). It is intentionally
 **not ported** — it was run once against that event and has no ongoing role.
+
+#### PAID data repair (`repair-paid-settlement`, plan 2.4)
+
+Repairs registrations hit by the PAID-demotion bugs (PAID set without an amount;
+edits re-deriving PAID down to PENDING/PARTIAL). Run it only after a backup and
+with 2.6/2.8 deployed; the script header has the details.
+
+```bash
+# 1. Dry run (read-only): report A/B1/B2/B3/C + repair-manifest.json (every action null; never overwritten)
+pnpm --filter @app/worker repair-paid-settlement --since <Nest deploy, ISO> [--event <id>] [--out <file>] [--json]
+# 2. Sign-off: copy to approved.json, set each row's action (or delete the row):
+#    A (PAID rows): BACKFILL_PAID | CONVERT_PARTIAL | SKIP;  B1/B2/B3 (PENDING/PARTIAL): REPROMOTE_PAID | SKIP
+#    accept every proposal, then decide the null rows by hand:
+#    jq '.rows |= map(.action = (.action // .proposedAction))' repair-manifest.json > approved.json
+# 3. Apply exactly the approved actions (the whole manifest is refused if a row is unset or not allowed)
+pnpm --filter @app/worker repair-paid-settlement --apply --manifest approved.json
+# 4. Invariant checks (read-only; exit 2 when a check finds rows)
+pnpm --filter @app/worker repair-paid-settlement invariants [--event <id>] [--json] [--limit <n>]
+```
+
+- Sections: A = PAID with `paid_amount < net` (any date); B1 = admin-edit demotions after `--since`
+  (audited); B2 = self-edit demotions (status history rebuilt from the audit log); B3 = admin-created
+  rows re-priced after `--since` (manual review); C = seats each action moves, per access item.
+  Rows without a proposal (`proposedAction: null`, see `info.flags`) need a per-row decision.
+- Apply runs each row in its own locking transaction through the settlement writer. It skips and
+  reports rows that changed since the dry run (`STALE`), left their section, do not fit the action,
+  disagree with their breakdown, or whose re-promotion finds an access item full (`CAPACITY_FULL`).
+  Seats move only by the writer's delta. `CONVERT_PARTIAL` keeps the paid amount, clears `paid_at`
+  and releases the uncovered seats (the row then follows the PARTIAL capacity rules).
+- Each applied row is audited `DATA_REPAIR_SETTLEMENT` (`SYSTEM:repair-paid-settlement`) and enqueues
+  `registration.updated`; no email. Rerunning a manifest changes nothing (`ALREADY_APPLIED`).
+- The invariant checks are `checkSettlementInvariants` in `@app/db`, ready for a staging job or a
+  CI step against a restored snapshot (not scheduled).
 
 ## Environment
 
@@ -316,6 +355,36 @@ transactions still reach it in-process, the rest at its 60 s resync. Realtime
 events are produced by both processes, so set it on **both** the api and the
 worker service; a process without it keeps writing realtime rows that nothing
 drains until the retention job deletes them after 24 h.
+
+### File exports (streamed, bounded)
+
+Report downloads go through one path (`apps/api/src/core/exports/`):
+
+- **Admission**: `EXPORT_MAX_CONCURRENCY` (default 2) exports run at once per
+  API process and up to `EXPORT_MAX_QUEUED` (default 4) more wait, first come
+  first served, for at most 30 s. Anything beyond gets 503 `EXPORT_BUSY` with
+  `Retry-After: 10`. The check runs after authorization, so only allowed users
+  take a place.
+- **Streaming**: the file is written straight into the response (chunked, no
+  `Content-Length`). Registration exports read the rows by keyset, 500 per page
+  (`submitted_at DESC, id DESC`), each page in its own short transaction under
+  `DB_EXPORT_STATEMENT_TIMEOUT_MS`; XLSX uses ExcelJS's streaming writer with
+  inline strings, one row committed at a time. Generation waits for the zip and
+  the socket to take each page, so a slow client holds it back instead of
+  growing memory. A 10,000 x 60 workbook peaks at about 80 MB above the idle
+  process (the in-memory builder took over 1 GB and blocked the event loop for
+  seconds); `registrations-export.perf.test.ts` (opt-in) measures it.
+- **Client gone**: a disconnect aborts the export at the next page and frees the
+  slot. A failure after the headers destroys the response, so the client sees
+  a broken download, never a silently truncated file.
+- **Shutdown**: while draining, new exports get 503 `SRV_5003`. An export
+  already running may finish until 1 s before the shutdown force-closes sockets
+  (`SHUTDOWN_GRACE_MS` minus 6 s), then it is aborted.
+
+3.7a streams the registration exports (GET CSV/JSON/XLSX and the POST modular
+workbook); the summary, access-registrants, sponsorships and check-in ZIP
+downloads already go through the limiter but are still built in memory until
+3.7b. Frontend changes: `FRONTEND_FOLLOWUP_3_7.md`.
 
 ## Database migrations
 

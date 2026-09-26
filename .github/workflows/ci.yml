@@ -32,11 +32,14 @@ jobs:
       - run: pnpm audit --prod --audit-level=high
 
   db:
-    name: db / ${{ matrix.engine }} / ${{ matrix.command }}
+    name: db / ${{ matrix.engine }} / ${{ matrix.command }}${{ matrix.shard && format(' ({0})', matrix.shard) || '' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
+        # CockroachDB runs one test file at a time (TEST_DB_MAX_WORKERS=1) and
+        # each file pays ~1 min of database setup, so its slow tiers are split
+        # into vitest shards, each on its own runner with its own node.
         include:
           - engine: postgres
             command: test:migration
@@ -48,8 +51,22 @@ jobs:
             command: test:migration
           - engine: cockroach
             command: test:db
+            shard: 1/4
+          - engine: cockroach
+            command: test:db
+            shard: 2/4
+          - engine: cockroach
+            command: test:db
+            shard: 3/4
+          - engine: cockroach
+            command: test:db
+            shard: 4/4
           - engine: cockroach
             command: test:concurrency
+            shard: 1/2
+          - engine: cockroach
+            command: test:concurrency
+            shard: 2/2
     continue-on-error: ${{ matrix.engine == 'cockroach' && matrix.command != 'test:migration' }}
     services:
       postgres:
@@ -112,8 +129,9 @@ jobs:
             --execute='SET CLUSTER SETTING feature.vector_index.enabled = true'
           echo "TEST_DB_ADMIN_URL=postgresql://root@127.0.0.1:26257/focale_ci_admin?sslmode=verify-full&sslrootcert=$certs_dir/ca.crt&sslcert=$certs_dir/client.root.crt&sslkey=$certs_dir/client.root.key" >> "$GITHUB_ENV"
       - run: pnpm install --frozen-lockfile
-      - name: Run ${{ matrix.command }}
-        run: pnpm ${{ matrix.command }}
+      - name: Run ${{ matrix.command }}${{ matrix.shard && format(' (shard {0})', matrix.shard) || '' }}
+        # A shard can hold no file of a small package (--passWithNoTests).
+        run: pnpm ${{ matrix.command }} ${{ matrix.shard && format('--shard={0} --passWithNoTests', matrix.shard) || '' }}
 
   image:
     name: image / migrator plan

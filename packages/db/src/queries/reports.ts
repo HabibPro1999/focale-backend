@@ -4,7 +4,9 @@
 // Every fn here is a pure data fetch (no writes — the legacy reports module was
 // entirely read-only; READ COMMITTED default is fine). Export fetches accept an
 // optional executor so the API can run them inside withExportStatementTimeout
-// (they then query sequentially: one transaction is one connection). The
+// (they then query sequentially: one transaction is one connection); the
+// registration exports page by keyset instead, one short transaction per
+// page (iterateRegistrationsForExport / iterateRegistrationsForModularExport). The
 // api-layer service/generators consume these and do all formatting/aggregation
 // math. Raw-SQL semantics (jsonb_array_elements LATERAL, DATE() grouping,
 // settled-only access breakdown) are preserved byte-for-byte via drizzle `sql`.
@@ -19,7 +21,9 @@ import {
   eq,
   gte,
   inArray,
+  lt,
   lte,
+  or,
   sql,
   sum,
   type SQL,
@@ -38,8 +42,9 @@ import {
 } from "../schema/sponsorships";
 // Reports filters sponsorships exactly the way the sponsorships module does.
 import { buildSponsorshipWhere } from "./sponsorships";
-// ...and searches registrants the way the registrations list does.
-import { registrationSearchClause } from "./registrations";
+// ...and filters registrants with the registrations list's WHERE.
+import { buildRegistrationWhere, type RegistrationFilters } from "./registrations";
+import { withExportStatementTimeout } from "../txn";
 
 type RegistrationRow = typeof registrations.$inferSelect;
 
@@ -66,47 +71,6 @@ function eventDateWhere(eventId: string, dateRange: DateRange, extra?: SQL): SQL
   if (dateRange.startDate) clauses.push(gte(registrations.submittedAt, dateRange.startDate));
   if (dateRange.endDate) clauses.push(lte(registrations.submittedAt, dateRange.endDate));
   if (extra) clauses.push(extra);
-  return and(...clauses) as SQL;
-}
-
-/**
- * Port of the legacy `buildRegistrationWhere` (registrations module). Search
- * uses the list's `registrationSearchClause`, so an export returns the rows
- * the list showed. `role` filter param exists in legacy but reports never
- * passes it — omitted.
- */
-export interface RegistrationExportFilters {
-  paymentStatus?: string;
-  paymentMethod?: string;
-  search?: string;
-  startDate?: string;
-  endDate?: string;
-}
-
-function buildRegistrationWhere(
-  eventId: string,
-  filters: RegistrationExportFilters,
-): SQL {
-  const clauses: (SQL | undefined)[] = [eq(registrations.eventId, eventId)];
-  if (filters.paymentStatus) {
-    clauses.push(
-      eq(registrations.paymentStatus, filters.paymentStatus as RegistrationRow["paymentStatus"]),
-    );
-  }
-  if (filters.paymentMethod) {
-    clauses.push(
-      eq(
-        registrations.paymentMethod,
-        filters.paymentMethod as NonNullable<RegistrationRow["paymentMethod"]>,
-      ),
-    );
-  }
-  if (filters.search) {
-    clauses.push(registrationSearchClause(filters.search));
-  }
-  // Date range merged with the same only-set-what-was-given semantics.
-  if (filters.startDate) clauses.push(gte(registrations.submittedAt, new Date(filters.startDate)));
-  if (filters.endDate) clauses.push(lte(registrations.submittedAt, new Date(filters.endDate)));
   return and(...clauses) as SQL;
 }
 
@@ -529,34 +493,135 @@ export interface ExportRegistrationRow {
   formData: unknown;
 }
 
-export async function getRegistrationsForExport(
+const EXPORT_REGISTRATION_COLUMNS = {
+  id: registrations.id,
+  email: registrations.email,
+  firstName: registrations.firstName,
+  lastName: registrations.lastName,
+  phone: registrations.phone,
+  paymentStatus: registrations.paymentStatus,
+  paymentMethod: registrations.paymentMethod,
+  totalAmount: registrations.totalAmount,
+  paidAmount: registrations.paidAmount,
+  baseAmount: registrations.baseAmount,
+  accessAmount: registrations.accessAmount,
+  discountAmount: registrations.discountAmount,
+  sponsorshipCode: registrations.sponsorshipCode,
+  sponsorshipAmount: registrations.sponsorshipAmount,
+  submittedAt: registrations.submittedAt,
+  paidAt: registrations.paidAt,
+  formData: registrations.formData,
+} satisfies Record<keyof ExportRegistrationRow, unknown>;
+
+// ----------------------------------------------------------------------------
+// Keyset paging for exports
+// ----------------------------------------------------------------------------
+
+/** Rows per export page: one short statement each, never a huge IN list. */
+export const EXPORT_PAGE_SIZE = 500;
+
+/** Position after the last row of a page, in export order. */
+export interface RegistrationExportCursor {
+  submittedAt: Date;
+  id: string;
+}
+
+export interface ExportPageOptions {
+  /** Rows per page (default EXPORT_PAGE_SIZE). */
+  pageSize?: number;
+  /** Checked before each page: an aborted export stops fetching. */
+  signal?: AbortSignal;
+}
+
+/** Export order: newest submission first, id breaking ties. */
+const EXPORT_ORDER = [desc(registrations.submittedAt), desc(registrations.id)];
+
+/**
+ * Rows after `cursor` in EXPORT_ORDER. The `<=` bound on submitted_at keeps
+ * the (event_id, submitted_at) index usable; values bind through the column
+ * encoders, so the comparison does not depend on the process time zone.
+ */
+export function registrationsAfter(cursor: RegistrationExportCursor): SQL {
+  return and(
+    lte(registrations.submittedAt, cursor.submittedAt),
+    or(
+      lt(registrations.submittedAt, cursor.submittedAt),
+      lt(registrations.id, cursor.id),
+    ),
+  ) as SQL;
+}
+
+/**
+ * Pages an event's filtered registrations in EXPORT_ORDER by keyset. Each
+ * page runs in its own short transaction under the export statement timeout
+ * (a slow client never holds a transaction open); `fetchPage` receives the
+ * page's WHERE and may load the page's relations in the same transaction.
+ */
+async function* keysetRegistrationPages<T extends RegistrationExportCursor>(
   eventId: string,
-  filters: RegistrationExportFilters,
+  filters: RegistrationFilters,
+  options: ExportPageOptions,
+  fetchPage: (where: SQL, limit: number, tx: DbExecutor) => Promise<T[]>,
+): AsyncGenerator<T[]> {
+  const pageSize = options.pageSize ?? EXPORT_PAGE_SIZE;
+  if (!Number.isInteger(pageSize) || pageSize < 1) {
+    throw new Error("Export page size must be a positive integer");
+  }
+  const base = buildRegistrationWhere(eventId, filters);
+  let cursor: RegistrationExportCursor | null = null;
+  for (;;) {
+    options.signal?.throwIfAborted();
+    const where: SQL = cursor ? (and(base, registrationsAfter(cursor)) as SQL) : base;
+    const page = await withExportStatementTimeout((tx) => fetchPage(where, pageSize, tx));
+    if (page.length > 0) {
+      const last = page[page.length - 1]!;
+      cursor = { submittedAt: last.submittedAt, id: last.id };
+      yield page;
+    }
+    if (page.length < pageSize) return;
+  }
+}
+
+/** GET export rows, page by page (see keysetRegistrationPages). */
+export function iterateRegistrationsForExport(
+  eventId: string,
+  filters: RegistrationFilters,
+  options: ExportPageOptions = {},
+): AsyncGenerator<ExportRegistrationRow[]> {
+  return keysetRegistrationPages(eventId, filters, options, (where, limit, tx) =>
+    tx
+      .select(EXPORT_REGISTRATION_COLUMNS)
+      .from(registrations)
+      .where(where)
+      .orderBy(...EXPORT_ORDER)
+      .limit(limit),
+  );
+}
+
+/**
+ * Every top-level form_data key of the filtered registrations, sorted (JS
+ * string order), for the CSV/XLSX header written before the first row. Rows
+ * whose form_data is not an object contribute nothing.
+ */
+export async function getRegistrationFormDataKeys(
+  eventId: string,
+  filters: RegistrationFilters,
   db: DbExecutor = getDb(),
-): Promise<ExportRegistrationRow[]> {
-  return db
-    .select({
-      id: registrations.id,
-      email: registrations.email,
-      firstName: registrations.firstName,
-      lastName: registrations.lastName,
-      phone: registrations.phone,
-      paymentStatus: registrations.paymentStatus,
-      paymentMethod: registrations.paymentMethod,
-      totalAmount: registrations.totalAmount,
-      paidAmount: registrations.paidAmount,
-      baseAmount: registrations.baseAmount,
-      accessAmount: registrations.accessAmount,
-      discountAmount: registrations.discountAmount,
-      sponsorshipCode: registrations.sponsorshipCode,
-      sponsorshipAmount: registrations.sponsorshipAmount,
-      submittedAt: registrations.submittedAt,
-      paidAt: registrations.paidAt,
-      formData: registrations.formData,
-    })
-    .from(registrations)
-    .where(buildRegistrationWhere(eventId, filters))
-    .orderBy(desc(registrations.submittedAt));
+): Promise<string[]> {
+  const rows = rowsOf<{ field_key: string }>(
+    await db.execute(sql`
+      SELECT DISTINCT k.field_key
+      FROM ${registrations},
+        jsonb_object_keys(
+          CASE WHEN jsonb_typeof(${registrations.formData}) = 'object'
+            THEN ${registrations.formData}
+            ELSE '{}'::jsonb
+          END
+        ) AS k(field_key)
+      WHERE ${buildRegistrationWhere(eventId, filters)}
+    `),
+  );
+  return rows.map((row) => row.field_key).sort();
 }
 
 // ============================================================================
@@ -761,48 +826,46 @@ export type ModularRegistrationRow = Omit<
   transactions?: ModularTransactionRow[];
 };
 
-export interface ModularExportOptions {
-  paymentStatus?: string;
-  paymentMethod?: string;
-  search?: string;
-  startDate?: string;
-  endDate?: string;
+export interface ModularExportOptions extends RegistrationFilters {
   needCheckIns: boolean;
   needTransactions: boolean;
 }
 
 /**
- * Base registration rows (all scalar columns) + optionally the accessCheckIns
- * and transactions relations. formData is always selected (single jsonb column);
- * the builder only reads it when formFieldIds are requested, so this is output-
- * identical to the legacy conditional select — perf-only divergence.
+ * Modular export rows (all scalar columns, plus the accessCheckIns and
+ * transactions relations when asked), page by page in EXPORT_ORDER. Each
+ * page loads its relations for its own ids (at most one page of them) in the
+ * page's transaction.
  */
-export async function getRegistrationsForModularExport(
+export function iterateRegistrationsForModularExport(
   eventId: string,
   opts: ModularExportOptions,
-  db: DbExecutor = getDb(),
-): Promise<ModularRegistrationRow[]> {
-  const rows = await db
-    .select()
-    .from(registrations)
-    .where(
-      buildRegistrationWhere(eventId, {
-        paymentStatus: opts.paymentStatus,
-        paymentMethod: opts.paymentMethod,
-        search: opts.search,
-        startDate: opts.startDate,
-        endDate: opts.endDate,
-      }),
-    )
-    .orderBy(desc(registrations.submittedAt));
+  options: ExportPageOptions = {},
+): AsyncGenerator<ModularRegistrationRow[]> {
+  const { needCheckIns, needTransactions, ...filters } = opts;
+  return keysetRegistrationPages(eventId, filters, options, async (where, limit, tx) => {
+    const rows = await tx
+      .select()
+      .from(registrations)
+      .where(where)
+      .orderBy(...EXPORT_ORDER)
+      .limit(limit);
+    const result: ModularRegistrationRow[] = rows.map((r) => ({
+      ...r,
+      accessTypeIds: r.accessTypeIds ?? [],
+      droppedAccessIds: r.droppedAccessIds ?? [],
+    }));
+    if (result.length === 0) return result;
+    await loadModularRelations(result, { needCheckIns, needTransactions }, tx);
+    return result;
+  });
+}
 
-  const result: ModularRegistrationRow[] = rows.map((r) => ({
-    ...r,
-    accessTypeIds: r.accessTypeIds ?? [],
-    droppedAccessIds: r.droppedAccessIds ?? [],
-  }));
-  if (result.length === 0) return result;
-
+async function loadModularRelations(
+  result: ModularRegistrationRow[],
+  opts: Pick<ModularExportOptions, "needCheckIns" | "needTransactions">,
+  db: DbExecutor,
+): Promise<void> {
   const ids = result.map((r) => r.id);
 
   if (opts.needCheckIns) {
@@ -854,8 +917,6 @@ export async function getRegistrationsForModularExport(
     }
     for (const r of result) r.transactions = byReg.get(r.id) ?? [];
   }
-
-  return result;
 }
 
 export interface SponsorshipLabDetail {
