@@ -29,8 +29,9 @@ writing a file that is safe on both engines and during a deploy.
 
 ## Header directives
 
-Every file starts with `-- migrate:` lines, before any other line. The runner
-refuses unknown or duplicated directives.
+Every file declares its `-- migrate:` lines before its first SQL statement
+(comments may sit between them; by convention they come first). The runner
+refuses unknown or duplicated directives and requires a `transaction` one.
 
 | Directive | Meaning | Use it for |
 |---|---|---|
@@ -43,7 +44,7 @@ refuses unknown or duplicated directives.
 | `requires-extension <name>` | Checks that a PostgreSQL extension is installed; never installs it. | `vector` (0013). `CREATE EXTENSION` in a file fails the lint. |
 
 The runner splits SQL only at `--> statement-breakpoint` markers, never at
-semicolons. A file may not contain `BEGIN` or other transaction control.
+semicolons. A file may not contain `BEGIN`: the runner owns the transactions.
 
 The catalog probes (used by `verify --schema` and `adopt`) are derived from
 `CREATE TABLE`, `CREATE TYPE`, `CREATE [UNIQUE|VECTOR] INDEX`, `DROP INDEX`,
@@ -148,7 +149,7 @@ reads UTC. See the conventions in
 
 ## PR checklist
 
-1. The number the coordinator assigned; header directives; a comment saying why
+1. The assigned (or next free) number; header directives; a comment saying why
    the migration exists, which plan item it serves, and any operational effect
    (a plain `CREATE INDEX` briefly blocks writes to the table on PostgreSQL).
 2. The Drizzle schema in `packages/db/src/schema/` declares the same final

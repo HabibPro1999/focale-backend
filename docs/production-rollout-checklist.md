@@ -15,7 +15,8 @@ How the services run: [render-runbook.md](render-runbook.md).
   `CORS_ORIGIN`, `TRUST_PROXY` on both services, and `NETWORKING_TOKEN_SECRET`
   or `NETWORKING_KEYS` unless `NETWORKING_DISABLED=true`. #96 (3.1)
 - [ ] Render `maxShutdownDelaySeconds` = 30 on both services;
-  `SHUTDOWN_GRACE_MS` unset (25 s) or at least 3 s below the delay. #102 (3.2)
+  `SHUTDOWN_GRACE_MS` unset (25 s), or set so that it plus 3 s stays below the
+  delay. #102 (3.2)
 - [ ] Render health check path of the API is `/health/live`. #102 (3.2), #109 (3.3)
 - [ ] The API runs one instance, no autoscaling ([single-instance.md](single-instance.md)). #120 (3.5)
 - [ ] `REALTIME_DISABLED` has the same value on the API and the worker. #120 (3.5)
@@ -27,8 +28,8 @@ How the services run: [render-runbook.md](render-runbook.md).
   emails. Resend's default is 2 per second per team, so the default is too
   high there. #130 (4.2)
 - [ ] The SendGrid Event Webhook (`/webhooks/sendgrid`) includes the
-  **Processed** event; without it an `UNCERTAIN` email never becomes `SENT`
-  (Resend: the `email.sent` event). #123 (3.6a)
+  **Processed** event, which moves an `UNCERTAIN` email (outcome unknown after
+  its provider call) to `SENT` (Resend: the `email.sent` event). #123 (3.6a)
 - [ ] The API has a writable temp directory for the check-in ZIP export
   (`os.tmpdir()`, about 0.2 MB per 10,000 registrations per workbook; `/tmp` in
   the image is writable by `node`). #144 (3.7b)
