@@ -12,7 +12,6 @@ const db = vi.hoisted(() => {
     "getDb",
     "listSponsorships",
     "getSponsorshipById",
-    "getSponsorshipClientId",
     "getLinkedSponsorships",
     "getRegistrationForSponsorship",
     "getRegistrationCoverage",
@@ -123,11 +122,6 @@ function emittedTypes(): string[] {
 // ============================================================================
 
 describe("passthrough reads", () => {
-  it("getSponsorshipClientId", async () => {
-    m.getSponsorshipClientId.mockResolvedValue("c1");
-    expect(await service().getSponsorshipClientId("s1")).toBe("c1");
-  });
-
   it("listSponsorships", async () => {
     const page = { data: [], meta: {}, stats: {} };
     m.listSponsorships.mockResolvedValue(page);
@@ -715,10 +709,10 @@ describe("getAvailableSponsorships", () => {
     });
   });
 
-  it("400 registration/event mismatch", async () => {
+  it("400 registration/event mismatch (CHK_17004, as at check-in)", async () => {
     m.getRegistrationCoverage.mockResolvedValue({ ...coverage, eventId: "eOTHER" });
     await expect(service().getAvailableSponsorships("e1", "r1")).rejects.toMatchObject({
-      code: "RES_3003",
+      code: "CHK_17004",
       statusCode: 400,
     });
   });

@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import type { DbExecutor } from "../client";
 import {
+  getAccessItemTenantScope,
+  getCertificateTemplateTenantScope,
+  getClientTenantScope,
   getEmailTemplateTenantScope,
   getEventTenantScope,
+  getFormTenantScope,
   getRegistrationTenantScope,
   getSponsorshipTenantScope,
 } from "./tenant-scope";
@@ -84,12 +88,60 @@ describe("tenant scope reads (5.4)", () => {
     });
   });
 
+  it("access item: one statement through the event to the client (5.4b)", async () => {
+    const { db, statements } = recordingDb([["acc-1", ...eventRow, ...clientRow]]);
+    await expect(getAccessItemTenantScope("acc-1", db)).resolves.toEqual({
+      accessItem: { id: "acc-1" },
+      ...scope,
+    });
+    expect(statements).toHaveLength(1);
+    expect(statements[0]!.sql).toMatch(
+      /from "event_access" inner join "events" on "events"\."id" = "event_access"\."event_id" inner join "clients" on "clients"\."id" = "events"\."client_id" where "event_access"\."id" = \$1/,
+    );
+  });
+
+  it("certificate template: one statement through the event to the client (5.4b)", async () => {
+    const { db, statements } = recordingDb([["cert-1", ...eventRow, ...clientRow]]);
+    await expect(getCertificateTemplateTenantScope("cert-1", db)).resolves.toEqual({
+      certificateTemplate: { id: "cert-1" },
+      ...scope,
+    });
+    expect(statements).toHaveLength(1);
+    expect(statements[0]!.sql).toMatch(
+      /from "certificate_templates" inner join "events" on "events"\."id" = "certificate_templates"\."event_id" inner join "clients" on "clients"\."id" = "events"\."client_id" where "certificate_templates"\."id" = \$1/,
+    );
+  });
+
+  it("form: one statement with the form type, through the event to the client (5.4b)", async () => {
+    const { db, statements } = recordingDb([["form-1", "SPONSOR", ...eventRow, ...clientRow]]);
+    await expect(getFormTenantScope("form-1", db)).resolves.toEqual({
+      form: { id: "form-1", type: "SPONSOR" },
+      ...scope,
+    });
+    expect(statements).toHaveLength(1);
+    expect(statements[0]!.sql).toMatch(
+      /select "forms"\."id", "forms"\."type", .* from "forms" inner join "events" on "events"\."id" = "forms"\."event_id" inner join "clients" on "clients"\."id" = "events"\."client_id" where "forms"\."id" = \$1/,
+    );
+  });
+
+  it("client: the client row alone, keyed by its id (5.4b)", async () => {
+    const { db, statements } = recordingDb([clientRow]);
+    await expect(getClientTenantScope("client-1", db)).resolves.toEqual({ client: scope.client });
+    expect(statements).toHaveLength(1);
+    expect(statements[0]!.sql).toMatch(/from "clients" where "clients"\."id" = \$1 limit \$2/);
+    expect(statements[0]!.params).toEqual(["client-1", 1]);
+  });
+
   it("returns null when the resource does not exist", async () => {
     for (const read of [
       getEventTenantScope,
       getRegistrationTenantScope,
       getSponsorshipTenantScope,
       getEmailTemplateTenantScope,
+      getAccessItemTenantScope,
+      getCertificateTemplateTenantScope,
+      getFormTenantScope,
+      getClientTenantScope,
     ]) {
       const { db, statements } = recordingDb([]);
       await expect(read("missing", db)).resolves.toBeNull();

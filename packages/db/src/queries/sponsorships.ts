@@ -324,19 +324,6 @@ export async function getSponsorshipByCode(
   };
 }
 
-export async function getSponsorshipClientId(
-  id: string,
-  db: DbExecutor = getDb(),
-): Promise<string | null> {
-  const [row] = await db
-    .select({ clientId: events.clientId })
-    .from(sponsorships)
-    .innerJoin(events, eq(sponsorships.eventId, events.id))
-    .where(eq(sponsorships.id, id))
-    .limit(1);
-  return row?.clientId ?? null;
-}
-
 /** PENDING sponsorships for an event (+ batch.labName), newest first. */
 export interface PendingSponsorshipRow {
   id: string;

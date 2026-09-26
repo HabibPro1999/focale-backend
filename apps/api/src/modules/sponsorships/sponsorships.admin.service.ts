@@ -30,7 +30,6 @@ import {
   getRegistrationForSponsorship,
   getSponsorshipById,
   getSponsorshipByCode,
-  getSponsorshipClientId,
   insertAuditLog,
   linkSponsorshipToRegistrationTxn,
   listSponsorships,
@@ -108,10 +107,6 @@ export class SponsorshipsAdminService {
     return getSponsorshipById(id);
   }
 
-  getSponsorshipClientId(id: string): Promise<string | null> {
-    return getSponsorshipClientId(id);
-  }
-
   getLinkedSponsorships(registrationId: string) {
     return getLinkedSponsorships(registrationId);
   }
@@ -130,7 +125,7 @@ export class SponsorshipsAdminService {
     }
     if (registration.eventId !== eventId) {
       throw new AppException(
-        ErrorCodes.BAD_REQUEST,
+        ErrorCodes.CHECKIN_EVENT_MISMATCH,
         "Registration does not belong to this event",
         400,
       );

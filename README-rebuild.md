@@ -214,10 +214,12 @@ calling a resolver in the handler (`apps/api/src/modules/tenancy`, plan 5.4):
 async adminCreate(@Param() { eventId }: EventIdParamDto, @Body() body: AdminCreateRegistrationDto) { … }
 ```
 
-`@EventScoped`, `@RegistrationScoped`, `@SponsorshipScoped` and
-`@EmailTemplateScoped` (options `module`, `write`, `param`) add a guard that
-loads the resource, its event and the client in one query and refuses, in
-order: the route's `@Param()` DTO (400, as the global pipe would), missing
+`@EventScoped`, `@RegistrationScoped`, `@SponsorshipScoped`,
+`@EmailTemplateScoped`, `@AccessItemScoped`, `@CertificateTemplateScoped`,
+`@FormScoped` (plus `moduleOfFormType`: the form's type adds its module) and
+`@ClientScoped` (options `module`, `write`, `param`) add a guard that loads the
+resource, its event and the client in one query (a client route loads the
+client) and refuses, in order: the route's `@Param()` DTO (400, as the global pipe would), missing
 resource (404), another client (403 `AUTH_1004`), a template with no event on
 a write (400), an archived event on a write (400 `STT_12001`), then per module
 an inactive client (403 `CLT_20001`) or a disabled module (403 `CLT_20002`).
@@ -225,12 +227,20 @@ The controller's `@Auth()` runs first. `@ScopedEvent()` / `@ScopedClient()`
 give the handler what the guard loaded. Because guards run before pipes, the
 tenant check now answers before body and query validation.
 
+A route that names its event or client in the body or the query
+(`POST /api/events`, `POST /api/forms`, `GET /api/forms?eventId=`) calls
+`requireTenantScope(user, "event" | "client", id, options)` first thing in the
+handler: the same read, checks, order and codes, after validation.
+
 Converted: abstracts, email, registrations (admin + edit link), pricing,
-check-in, reports and the sponsorship admin controllers (76 routes).
-`apps/api/src/modules/tenancy/tenant-scope.routes.test.ts` lists each route's
-expected scope and sends a cross-tenant and a missing-resource request to
-every one. Still hand-written: access, certificates, events, forms, clients
-and the networking admin/recommendations `access()` helpers.
+check-in, reports and the sponsorship admin controllers (76 routes, 5.4), then
+access, certificates, events, forms and clients (25 guarded routes and 3
+in-handler checks, 5.4b). `apps/api/src/modules/tenancy/tenant-scope.routes.test.ts`
+lists each route's expected scope, sends a cross-tenant and a missing-resource
+request to every one, and requires every other route of those controllers to
+be listed as an in-handler check or as unscoped (with the reason). Still
+hand-written: the networking admin/recommendations `access()` helpers (and
+`core/auth/assert-event-access.ts`, which only they use).
 
 ## Environment
 

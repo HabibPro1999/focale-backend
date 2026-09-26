@@ -203,7 +203,7 @@ export class RegistrationRepricer {
       }
       if (registration.eventId !== eventId) {
         throw new AppException(
-          ErrorCodes.BAD_REQUEST,
+          ErrorCodes.CHECKIN_EVENT_MISMATCH,
           "Registration does not belong to this event",
           400,
         );

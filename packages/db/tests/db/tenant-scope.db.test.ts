@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  certificateTemplates,
   emailTemplates,
+  getAccessItemTenantScope,
+  getCertificateTemplateTenantScope,
+  getClientTenantScope,
   getDb,
   getEmailTemplateTenantScope,
   getEventTenantScope,
+  getFormTenantScope,
   getRegistrationTenantScope,
   getSponsorshipTenantScope,
 } from "@app/db";
@@ -12,6 +17,7 @@ import { cleanupDatabase } from "../helpers/cleanup";
 import {
   seedClient,
   seedEvent,
+  seedEventAccess,
   seedForm,
   seedRegistration,
   seedSponsorship,
@@ -84,5 +90,55 @@ describe.runIf(dbTestsEnabled())("db tier: tenant scope reads (5.4)", () => {
       client: null,
     });
     await expect(getEmailTemplateTenantScope(event.id)).resolves.toBeNull();
+  });
+
+  it("access item: through its event to the client (5.4b)", async () => {
+    const { event, expected } = await setup();
+    const access = await seedEventAccess({ eventId: event.id });
+    await expect(getAccessItemTenantScope(access.id)).resolves.toEqual({
+      accessItem: { id: access.id },
+      ...expected,
+    });
+    await expect(getAccessItemTenantScope(event.id)).resolves.toBeNull();
+  });
+
+  it("certificate template: through its event to the client (5.4b)", async () => {
+    const { event, expected } = await setup();
+    const [template] = await getDb()
+      .insert(certificateTemplates)
+      .values({
+        eventId: event.id,
+        name: "Attendance",
+        templateUrl: "https://cdn.example.com/certificates/attendance.png",
+        templateWidth: 1200,
+        templateHeight: 850,
+      })
+      .returning();
+    await expect(getCertificateTemplateTenantScope(template!.id)).resolves.toEqual({
+      certificateTemplate: { id: template!.id },
+      ...expected,
+    });
+    await expect(getCertificateTemplateTenantScope(event.id)).resolves.toBeNull();
+  });
+
+  it("form: its type, through its event to the client (5.4b)", async () => {
+    const { event, expected } = await setup();
+    const registration = await seedForm({ eventId: event.id });
+    const sponsor = await seedForm({ eventId: event.id, type: "SPONSOR" });
+    await expect(getFormTenantScope(registration.id)).resolves.toEqual({
+      form: { id: registration.id, type: "REGISTRATION" },
+      ...expected,
+    });
+    await expect(getFormTenantScope(sponsor.id)).resolves.toEqual({
+      form: { id: sponsor.id, type: "SPONSOR" },
+      ...expected,
+    });
+    await expect(getFormTenantScope(event.id)).resolves.toBeNull();
+  });
+
+  it("client: its active flag and modules (5.4b)", async () => {
+    const { client, event, expected } = await setup();
+    await expect(getClientTenantScope(client.id)).resolves.toEqual({ client: expected.client });
+    await expect(getClientTenantScope(event.id)).resolves.toBeNull();
   });
 });
