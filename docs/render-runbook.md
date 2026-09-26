@@ -3,7 +3,7 @@
 How the NestJS build (`apps/` + `packages/`) runs on Render: the two services,
 what happens on every deploy, shutdown timing, health paths, why the worker
 must run, and the environment keys batch 3 added. Details that already live in
-[README-rebuild.md](../README-rebuild.md) and the
+[README.md](../README.md) and the
 [migrator README](../packages/db/src/migrator/README.md) are linked, not
 repeated. One-off steps for the deploy that ships batch 3 are in
 [production-rollout-checklist.md](production-rollout-checklist.md).
@@ -12,7 +12,7 @@ repeated. One-off steps for the deploy that ships batch 3 are in
 
 Both services run the same image, built from `Dockerfile` (node:24-alpine,
 `TZ=UTC`, user `node`, CMD `node start-runtime.mjs`), and read the same
-environment ([Environment](../README-rebuild.md#environment); `.env.example` is
+environment ([Environment](../README.md#environment); `.env.example` is
 generated from `packages/contracts/src/app-config.ts` and lists every key).
 
 | | API | Worker |
@@ -39,7 +39,7 @@ supervises them); it is not the Render layout.
 
    The config check validates the service's environment with the production
    rules and prints only failing key names
-   ([Pre-deploy config check](../README-rebuild.md#pre-deploy-config-check-operator-read-only)).
+   ([Pre-deploy config check](../README.md#pre-deploy-config-check-operator-read-only)).
    `apply` takes the migration lease (the two services' pre-deploys run one
    after the other), applies the pending migrations in numeric order, and
    records a `deferrable` migration whose `defer-unless` check is false as
@@ -81,7 +81,7 @@ warn, and `/health/ready` stays 200. The two that can be deferred:
 - **0017** (CockroachDB vector index): deferred while `networking_embeddings`
   has rows or `feature.vector_index.enabled` is off. Build it in a maintenance
   window with
-  [the vector index runbook](../NETWORKING.md#vector-index-health-and-runbook-cockroachdb).
+  [the vector index runbook](networking/README.md#vector-index-health-and-runbook-cockroachdb).
 - **0030** (one registration per event and sponsorship code): deferred while
   two registrations of an event store the same normalized code. Resolve the
   decision list of `repair-sponsorship-code-usages`, then run
@@ -108,13 +108,13 @@ Render sends SIGTERM, waits `maxShutdownDelaySeconds`, then SIGKILLs.
   charged; anything still leased is recovered by `lease-recovery` once its
   lease expires.
 
-Full sequence: [Shutdown](../README-rebuild.md#shutdown-shutdown_grace_ms-default-25-s).
+Full sequence: [Shutdown](../README.md#shutdown-shutdown_grace_ms-default-25-s).
 
 ## Health paths
 
 All on the API, unauthenticated, not throttled and not enveloped: 200 when
 healthy, 503 with the same body shape when not. Full table:
-[Health endpoints](../README-rebuild.md#health-endpoints-api).
+[Health endpoints](../README.md#health-endpoints-api).
 
 | Path | Use it for | Unhealthy when |
 |---|---|---|
@@ -130,6 +130,13 @@ Keep `/health/live` as the only Render health check. The other paths fail on
 database, queue or worker trouble that restarting or replacing the API does not
 fix.
 
+## Worker deployment order
+
+Apply migration 0035 before the new services, and deploy the worker together
+with or before the API. The worker must recognize `networking.registration.sync`
+and `networking.event.sync`; an older worker retries unknown registration jobs
+for about 1¾ hours and then dead-letters them. See the [rollout checklist](production-rollout-checklist.md).
+
 ## The worker is required
 
 The API does not process background work. If the worker service is stopped,
@@ -138,7 +145,7 @@ crash-looping, or runs with `RUN_WORKERS=false` (it then idles and beats as
 
 | Job | Every | Stops working |
 |---|---|---|
-| `outbox` | 5 s | automatic emails are never queued (registration, sponsorship and abstract triggers); networking photo deletions (`storage.delete`); capacity drops (`access.capacityReached`, 2.8b #132) |
+| `outbox` | 5 s | automatic emails are never queued (registration, sponsorship and abstract triggers); networking registration/full-event projections stop; networking photo deletions (`storage.delete`); capacity drops (`access.capacityReached`, 2.8b #132) |
 | `email-queue` | 5 s | no queued email is sent |
 | `lease-recovery` | 30 s | rows leased by a worker that died stay leased; since 3.4a (#114) only the worker recovers them |
 | `retention` | 1 h, and at boot | `realtime.emit` rows, finished outbox rows and old email snapshots are never cleaned up (3.5 #120, 3.6b #129) |
@@ -148,7 +155,7 @@ crash-looping, or runs with `RUN_WORKERS=false` (it then idles and beats as
 | `networking-embeddings` | 15 s | new and changed profiles are not embedded, so vector recommendations miss them |
 
 Timeouts, leases and retention rules:
-[Worker jobs and heartbeat](../README-rebuild.md#worker-jobs-and-heartbeat).
+[Worker jobs and heartbeat](../README.md#worker-jobs-and-heartbeat).
 The heartbeat (every 15 s) writes `WORKER_HEARTBEAT_FILE` and the
 `worker_heartbeats` row named after `RENDER_SERVICE_NAME`.
 
@@ -161,7 +168,7 @@ The heartbeat (every 15 s) writes `WORKER_HEARTBEAT_FILE` and the
 | `SHUTDOWN_GRACE_MS` | both | 25000 | shutdown budget per process (see Shutdown) | #102 (3.2) |
 | `WORKER_HEARTBEAT_FILE` | worker | `<os tmpdir>/focale-worker.heartbeat` | liveness file read by the image HEALTHCHECK | #102 (3.2) |
 | `NETWORKING_DISABLED` | both | `false` | `true` where no event uses networking: no token secret needed, participant auth answers 503 | #96 (3.1) |
-| `NETWORKING_KEYS` | both | unset | networking keyring (`kid:key,...`, first is current); rotation in [NETWORKING.md](../NETWORKING.md#key-rotation) | #111 (4.5) |
+| `NETWORKING_KEYS` | both | unset | networking keyring (`kid:key,...`, first is current); rotation in [docs/networking/README.md](networking/README.md#key-rotation) | #111 (4.5) |
 | `NETWORKING_KEYRING_WRITE_V1` | both | `false` | write new MACs and seals with the first `NETWORKING_KEYS` key | #111 (4.5) |
 | `NETWORKING_WITHDRAWAL_ERASE_DAYS` | worker | 30 | days after a withdrawal before maintenance erases the rest of the participant's data | #121 (4.4) |
 | `NETWORKING_DELIVERY_BATCH_SIZE` | worker | 10 | rows each general delivery lane claims | #130 (4.2) |
@@ -177,7 +184,7 @@ Existing keys whose rules changed in batch 3:
   parses the same config), since #96 (3.1).
 - `REALTIME_DISABLED` must have the same value on both services: realtime rows
   are produced by both, and a process without the flag keeps writing rows
-  nothing drains ([REALTIME_DISABLED](../README-rebuild.md#realtime_disabled),
+  nothing drains ([REALTIME_DISABLED](../README.md#realtime_disabled),
   #120, 3.5).
 - `RENDER_SERVICE_NAME` (set by Render) names the worker's
   `worker_heartbeats` row, since #109 (3.3).
@@ -187,4 +194,4 @@ Existing keys whose rules changed in batch 3:
 The API also needs a writable temp directory: the check-in ZIP export writes
 its workbooks under `os.tmpdir()` (about 0.2 MB per 10,000 registrations per
 workbook; the image's `/tmp` is writable by `node`),
-[File exports](../README-rebuild.md#file-exports-streamed-bounded).
+[File exports](../README.md#file-exports-streamed-bounded).

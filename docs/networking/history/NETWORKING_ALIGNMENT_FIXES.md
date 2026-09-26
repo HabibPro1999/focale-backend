@@ -1,5 +1,7 @@
 # Networking alignment fixes
 
+> Historical notes. For current behavior and rollout steps, use the [networking design](../README.md) and [production checklist](../../production-rollout-checklist.md).
+
 Scope: the 20-point B2B audit follow-up. Two-seat tables and space capacity counting tables/exhibitors are explicitly retained (point 13). Embeddings remain the selected implementation.
 
 | Point | Work | Status |
@@ -71,7 +73,7 @@ Focused checks: 18 alignment database tests, 9 boundary-policy tests, 10 admin a
 
 ## Performance result and remaining external acceptance
 
-The new 10,000-profile CockroachDB run returned all 30 eligible results with 100% top-30 overlap against the exact scorer for all three callers. Cold indexed retrieval took 519, 554 and 525 ms (exact baseline 955–1,046 ms). See [raw measurements](packages/db/scripts/benchmarks/networking-vectors-alignment-10000.json). The test used synthetic vectors, one local node, 512 MiB DB cache and 1 GiB SQL memory. An initial attempt with a 128 MiB SQL budget exhausted memory; it produced no valid latency result.
+The new 10,000-profile CockroachDB run returned all 30 eligible results with 100% top-30 overlap against the exact scorer for all three callers. Cold indexed retrieval took 519, 554 and 525 ms (exact baseline 955–1,046 ms). See [raw measurements](../../../packages/db/scripts/benchmarks/networking-vectors-alignment-10000.json). The test used synthetic vectors, one local node, 512 MiB DB cache and 1 GiB SQL memory. An initial attempt with a 128 MiB SQL budget exhausted memory; it produced no valid latency result.
 
 Changes bound participant meeting reads, replace whole-event conversation loading with a scoped latest-message/unread query, scope incremental notification reads, deduplicate profile-view polling, avoid loading every meeting to expire proposals, and pass reranking candidate IDs as one array parameter. Existing candidate caching still rechecks live eligibility. The universal <200 ms requirement is **not met** by cold recommendation retrieval; these optimizations and local checks do not establish a production SLA.
 

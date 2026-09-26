@@ -9,7 +9,7 @@ import {
   runPurgeLeftovers,
 } from "./networking-retention-ops";
 
-// Networking retention runbook (plan 4.4; operator steps in NETWORKING.md):
+// Networking retention runbook (plan 4.4; operator steps in docs/networking/README.md):
 //   purge-leftovers   events past retention still holding networking data, and
 //                     networking email logs of deleted events
 //   erase-withdrawn   withdrawn profiles past NETWORKING_WITHDRAWAL_ERASE_DAYS

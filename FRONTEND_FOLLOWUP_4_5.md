@@ -36,4 +36,4 @@ opaque strings: never split or validate them client-side beyond passing them bac
 
 Sign-in, session tokens and existing badges keep working through the key rotation. Sessions move to
 the new key on their next request. No participant is logged out by the rollout, except by a rollback
-to a pre-keyring build after new keys were enabled (operator runbook in `NETWORKING.md`).
+to a pre-keyring build after new keys were enabled (operator runbook in `docs/networking/README.md`).

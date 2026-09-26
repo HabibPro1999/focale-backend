@@ -15,7 +15,7 @@ import {
   type StorageProvider,
 } from "@app/integrations";
 
-// Networking retention runbook (plan 4.4; operator steps in NETWORKING.md).
+// Networking retention runbook (plan 4.4; operator steps in docs/networking/README.md).
 // Every command is a dry run unless --apply is given, and --apply is refused
 // without --backup-verified=<reference> naming the verified backup taken first.
 
@@ -75,7 +75,7 @@ export function parseNetworkingRetentionArgs(argv: string[]): NetworkingRetentio
     throw new Error(NETWORKING_RETENTION_USAGE);
   const backupVerified = values["backup-verified"]?.trim() || undefined;
   if (values.apply && !backupVerified)
-    throw new Error("--apply needs --backup-verified=<backup reference>: take and verify a backup first (NETWORKING.md)");
+    throw new Error("--apply needs --backup-verified=<backup reference>: take and verify a backup first (docs/networking/README.md)");
   const photos = command === "orphan-photos";
   return {
     command: command as NetworkingRetentionCommand,

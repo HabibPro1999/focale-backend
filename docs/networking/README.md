@@ -1,8 +1,10 @@
 # B2B Networking
 
-The networking module shares Focale’s NestJS API, Drizzle database, registration records, storage and email providers. Organizers configure it in the existing **admin develop** app. Participants use the separate `../networking` PWA. Registration forms offer a profile preview and networking participation choice.
+The networking module shares Focale’s NestJS API, Drizzle database, registration records, storage and email providers. Organizers configure it in the existing **admin develop** app. Participants use the separate networking PWA repository. Registration forms offer a profile preview and networking participation choice.
 
-Implementation status and requirement verification are tracked in [NETWORKING_IMPLEMENTATION.md](NETWORKING_IMPLEMENTATION.md). An implementation checklist is not proof of production readiness; verification and provider/performance boundaries are summarized in [NETWORKING_QA.md](NETWORKING_QA.md).
+Current behavior and operator procedures are documented below. Earlier implementation,
+audit and verification notes are retained in [history](history/README.md); their
+test counts and deployment statements describe their original dates.
 
 ## Services and configuration
 
@@ -15,13 +17,13 @@ Run the API and worker as separate processes, using the same database and networ
 | `NETWORKING_KEYS` | Keyring: `kid:key` entries separated by commas, the first one current; `kid:key:recovery` keeps a retired key for existing recovery codes only. In production this or `NETWORKING_TOKEN_SECRET` is required unless `NETWORKING_DISABLED=true`. |
 | `NETWORKING_KEYRING_WRITE_V1` | `true` writes new session hashes, OTP hashes, badges, sealed codes/secrets and recovery codes as `v1:<kid>:…` with the first `NETWORKING_KEYS` key. `false` (default) keeps the legacy format while `NETWORKING_TOKEN_SECRET` is set. |
 | `NETWORKING_EMBEDDING_API_KEY` | Credential for the embedding provider; falls back to `OPENAI_API_KEY`. Server-side only. |
-| `NETWORKING_EMBEDDING_MODEL` | Defaults to `text-embedding-3-small`. The configured model must accept1536-dimensional output. |
+| `NETWORKING_EMBEDDING_MODEL` | Defaults to `text-embedding-3-small`. The configured model must accept 1536-dimensional output. |
 | `NETWORKING_EMBEDDING_BASE_URL` | Defaults to `https://api.openai.com/v1`; an HTTPS OpenAI-compatible endpoint is supported. |
 | `NETWORKING_VAPID_PUBLIC_KEY` | Browser push application-server public key. |
 | `NETWORKING_VAPID_PRIVATE_KEY` | Browser push private key; keep server-side. |
 | `NETWORKING_VAPID_SUBJECT` | Contact URI for the push sender, such as a `mailto:` URI. |
-| `NETWORKING_EMAIL_SENDERS` | Optional server-owned client-to-verified-sender JSON map; see [delivery setup](packages/integrations/src/networking/README.md). |
-| `NETWORKING_DELIVERY_BATCH_SIZE` / `NETWORKING_DELIVERY_CONCURRENCY` / `NETWORKING_DELIVERY_OTP_LANES` | Worker delivery lanes: rows per claim (default 10), general lanes (default 6), dedicated sign-in code lanes (default 2). See [delivery lanes](packages/integrations/src/networking/README.md). |
+| `NETWORKING_EMAIL_SENDERS` | Optional server-owned client-to-verified-sender JSON map; see [delivery setup](../../packages/integrations/src/networking/README.md). |
+| `NETWORKING_DELIVERY_BATCH_SIZE` / `NETWORKING_DELIVERY_CONCURRENCY` / `NETWORKING_DELIVERY_OTP_LANES` | Worker delivery lanes: rows per claim (default 10), general lanes (default 6), dedicated sign-in code lanes (default 2). See [delivery lanes](../../packages/integrations/src/networking/README.md). |
 | `NETWORKING_EMAIL_RATE_PER_SECOND` | Networking emails per second per worker process (default 5; token bucket, sign-in codes first, 429 backoff). Keep it under the email provider account's limit, leaving room for the platform's other emails. |
 | `TRUST_PROXY` | Comma-separated IP/CIDR addresses of trusted reverse-proxy peers whose forwarded headers may be used. **Required in production** (startup fails without it); set the literal `false` only when clients connect directly without a proxy. Unset outside production = socket address. Replace old numeric hop-count values with actual proxy peer addresses from deployment network configuration; numeric hops, `true`, wildcard trust, hostnames, and `/0` networks are rejected. |
 | `RESEND_DOMAIN_READ_API_KEY` / `SENDGRID_DOMAIN_READ_API_KEY` | Optional server-side domain-read credentials for custom sender verification. |
@@ -59,7 +61,7 @@ Vector lookup uses exact cosine distance within eligible event profiles up to 5,
 1. Enable `networking`, `registrations` and `emails` for the client.
 2. Open the event’s Networking settings in admin. Select manual or automatic networking approval and the payment states eligible for access.
 3. Map the registration’s professional fields (company, role, sector, interests, offers and needs). Review the projected values; option IDs must resolve to meaningful labels.
-4. Configure the event timezone, daily opening hours, slot duration and closures. Create spaces with capacity measured in tables or exhibitors. Tables seat two; each exhibitor can have several representatives with independent availability. See [spaces and migration](NETWORKING_SPACES.md). Enable meetings only with a valid schedule.
+4. Configure the event timezone, daily opening hours, slot duration and closures. Create spaces with capacity measured in tables or exhibitors. Tables seat two; each exhibitor can have several representatives with independent availability. See [spaces and migration](#spaces-and-exhibitor-representatives). Enable meetings only with a valid schedule.
 5. Configure branding, language choices, participant/table labels, support details and notification templates.
 6. Synchronize existing registrations (a background run, see [Registration sync](#registration-sync)) and approve pending participants where required. Registration changes subsequently update the networking projection.
 7. For sensitive events, enable the authenticator second factor. Participants complete enrollment after email verification, and retain their single-use recovery codes.
@@ -353,3 +355,41 @@ A DB test holds the SQL figures to the pre-4.9 in-memory calculator on the eligi
 
 - `GET profiles`, `GET meetings` and `GET reports` are SQL pages (`page` from 1, `limit` 1–100, default 30) returning `{ items, total }`; the filters run in SQL before paging. Participants: listed profiles oldest first, with `matchCount` (connections) and `meetingCount` (meetings not cancelled, declined or expired); `q` is a case-insensitive substring of "first last company role email". Meetings: by start time; `q` matches either participant's "first last company" with accents and case folded; `date` is the start day in the event timezone. Reports: newest first, each with its reporter, the reported participant and the reported message. Each list is its page, its total and its relations in bulk (participants 3 statements, meetings 6 including proposal expiry, reports 2).
 - `GET export` (participants, matches, meetings, sectors) streams CSV and XLSX into the response from SQL pages of 500 rows (ids in export order first, then each page in its own short transaction under the export statement timeout): participants oldest first with the engagement definitions of the analytics (swipes are interests, meetings are booked ones), matches oldest first, meetings by start time, sectors as in the analytics. A PDF is built in memory from the same pages. An erased participant is left out of the participant export and named by id in the others.
+
+## Spaces and exhibitor representatives
+
+### Inventory model
+
+- A **space** contains either ordinary tables or exhibitors. Its capacity is the maximum number of those items, from 1 to 500.
+- Creating a table space creates the requested number of tables. Increasing capacity adds tables; decreasing capacity removes only tables without meeting history. Each table is always for two people and one simultaneous meeting.
+- Adding an exhibitor consumes **one space slot**, irrespective of its number of representatives. The exhibitor name identifies the organization. Select one or more registered event participants as representatives.
+- Each exhibitor meeting pairs one representative with one visitor. The organization's place is reserved for its representative. Three representatives can therefore receive three visitors simultaneously at one exhibitor, subject to each person's availability.
+- A representative belongs to one exhibitor in the event. Reassignment/removal cannot invalidate an outstanding meeting. Existing mutual-connection, eligibility, consent, blocking and availability rules still apply.
+
+### Inventory behavior
+
+`networking_spaces` is the parent inventory. Existing `networking_tables` rows remain the table/exhibitor records and reference `space_id`. `networking_profiles.stand_table_id` identifies all representatives of an exhibitor. The legacy single `owner_profile_id` is retained for compatibility; the organizer editor now submits `representativeIds`.
+
+Bookings reserve both participants and either `table:<id>` or `stand:<id>:profile:<representativeId>` in five-minute intervals. Allocations serialize on hourly allocation locks and inventory changes are SERIALIZABLE transactions (see "Write concurrency" in docs/networking/README.md). No whole-space reservation is created. Failed rescheduling leaves the old booking intact; cancelling one representative's meeting does not release another representative's reservation.
+
+Table creation uses a batch insert. Allocation precomputes resource occupancy and table usage instead of repeatedly scanning all reservations/meetings for each candidate. Public representative lists reuse the SQL discovery filters for event, consent, payment, visibility, duplicate email and symmetric blocking.
+
+The organizer's Spaces tab manages space capacity and contents. Calendar cells show the remaining unreserved meeting places at an exhibitor; these are not a promise of participant availability. Occupancy counts representative time independently. Participant profiles link to eligible colleagues at the same exhibitor, with each person's own availability and connection actions.
+
+
+Migration 0018 must precede code that uses spaces. Existing databases use the
+unified adoption/ledger workflow described above. Existing inventory and meeting
+IDs are preserved; each legacy inventory row starts in a one-slot space. Old
+seating capacity is not interpreted as the number of tables. Review space names
+and capacities after migration. Legacy whole-stand locks whose representative
+cannot be identified stay conservative until the booking is completed, cancelled
+or reassigned.
+
+## API boundaries
+
+Organizer routes use the shared event/tenant/module guards (129 total guarded
+routes across the API, 28 in networking). All 74 networking JSON routes have
+closed response contracts; current fields and privacy exclusions are preserved.
+Raw exports, calendar ICS, the personal JSON download and SSE keep their explicit
+envelope exemptions. See the backend frontend-follow-up files for guard ordering
+and generated response types.

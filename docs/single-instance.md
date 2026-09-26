@@ -11,7 +11,7 @@ API instance, no autoscaling ([render-runbook.md](render-runbook.md)).
 | State | Code | With two instances |
 |---|---|---|
 | Admin realtime bus and replay rings: one EventEmitter, one ring of the last 500 events per tenant (`REPLAY_RING_SIZE`), SSE ids from a per-process counter | `apps/api/src/modules/realtime/bus.ts` | Each instance's realtime pump claims part of the realtime outbox rows and emits them only to its own `/api/stream` clients, so every client misses the events the other instance claimed. A `Last-Event-ID` from one instance means nothing to the other. |
-| Realtime pump: claims `realtime.emit` and `networking.notify` rows every second | `apps/api/src/modules/realtime/realtime.pump.ts` | Same split as above; see [Realtime](../README-rebuild.md#realtime-single-api-instance). |
+| Realtime pump: claims `realtime.emit` and `networking.notify` rows every second | `apps/api/src/modules/realtime/realtime.pump.ts` | Same split as above; see [Realtime](../README.md#realtime-single-api-instance). |
 | Networking notification hub: participant streams keyed by (event, profile), woken in process after commit | `apps/api/src/core/networking-notification-hub.ts` | A participant connected to the other instance is not woken by this instance's commits; it catches up only at the stream's 60 s resync. |
 | Participant stream limit: at most 3 open streams per session, the oldest replaced | `apps/api/src/modules/networking/networking.stream.ts` | The limit applies per instance. |
 | Throttler storage: every `@nestjs/throttler` limit (global per-IP limit, networking venue buckets, per-session quotas) | `apps/api/src/core/core.module.ts`, `apps/api/src/core/networking-throttler.guard.ts` | Effective limits are up to N times higher, and each instance counts from zero. |
@@ -19,8 +19,8 @@ API instance, no autoscaling ([render-runbook.md](render-runbook.md)).
 | Export limiter: `EXPORT_MAX_CONCURRENCY` running + `EXPORT_MAX_QUEUED` waiting | `ExportLimiter` in `apps/api/src/core/exports/stream-download.ts` | N times as many exports at once (memory and database load, not correctness). |
 | Admin user cache: user and client rows, 60 s TTL | `apps/api/src/core/auth/user-cache.ts` | A role change, deactivation or client deactivation invalidates the cache only on the instance that handled it; the other keeps the old row for up to 60 s. |
 
-Details of the rate limits: [NETWORKING.md, Rate limits](../NETWORKING.md#rate-limits).
-Participant stream: [NETWORKING.md, Participant notification stream](../NETWORKING.md#participant-notification-stream).
+Details of the rate limits: [docs/networking/README.md, Rate limits](networking/README.md#rate-limits).
+Participant stream: [docs/networking/README.md, Participant notification stream](networking/README.md#participant-notification-stream).
 
 ## Per-process caches that are safe to duplicate
 

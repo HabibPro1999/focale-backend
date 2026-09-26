@@ -48,7 +48,7 @@ sponsor-form, abstract submission and price-quote routes.
 - `GET /api/events/:eventId/reports/sponsorships` now needs the sponsorships
   module: 403 `CLT_20002` when it is disabled (`CLT_20001` when the client is
   inactive). It had no module check.
-- On the 76 routes now scoped by a guard (list in README-rebuild.md, "Tenant
+- On the 76 routes now scoped by a guard (list in README.md, "Tenant
   scoping"), the tenant check runs before body and query validation: another
   client's request with an invalid body gets 403, not 400. A malformed id in
   the path is still 400 `VAL_2001`.
