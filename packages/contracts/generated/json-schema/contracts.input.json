@@ -3016,6 +3016,17 @@
       ],
       "type": "object"
     },
+    "DuplicateEmailTemplateSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "EditAbstractSchema": {
       "additionalProperties": false,
       "properties": {

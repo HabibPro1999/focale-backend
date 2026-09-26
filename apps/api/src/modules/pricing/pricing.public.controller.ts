@@ -33,10 +33,13 @@ export class PricingPublicController {
 
     assertEventAcceptsPublicActions(form.event);
 
+    if (!form.event.client.active) {
+      throw new AppException(ErrorCodes.CLIENT_INACTIVE, "Client is inactive", 403);
+    }
     if (!isModuleEnabledForClient(form.event.client, "pricing")) {
       // Distinct public-facing message (NOT the shared gate's "...for this client").
       throw new AppException(
-        ErrorCodes.FORBIDDEN,
+        ErrorCodes.MODULE_DISABLED,
         "Pricing module is disabled",
         403,
       );

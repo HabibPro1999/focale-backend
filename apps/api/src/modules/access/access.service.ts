@@ -258,7 +258,7 @@ export class AccessService {
       companionPrice: data.companionPrice ?? 0,
     };
 
-    return insertEventAccess(values, requiredIds);
+    return insertEventAccess(values, requiredIds, getDb());
   }
 
   /**
@@ -412,9 +412,9 @@ export class AccessService {
       });
     }
 
-    await updateEventAccessRow(id, updateData);
+    await updateEventAccessRow(id, updateData, getDb());
     if (requiredAccessIds !== undefined) {
-      await setAccessPrerequisites(id, requiredAccessIds);
+      await setAccessPrerequisites(id, requiredAccessIds, getDb());
     }
     return (await getEventAccessWithPrereqs(id)) as EventAccessWithPrereqs;
   }
@@ -450,10 +450,10 @@ export class AccessService {
 
     const dependents = await getAccessDependentIds(id);
     for (const dependentId of dependents) {
-      await removePrerequisiteEdge(dependentId, id);
+      await removePrerequisiteEdge(dependentId, id, getDb());
     }
 
-    await deleteEventAccessById(id);
+    await deleteEventAccessById(id, getDb());
   }
 
   listEventAccess(

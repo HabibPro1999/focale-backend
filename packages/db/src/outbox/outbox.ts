@@ -183,7 +183,7 @@ export async function enqueueOutboxEvent(
 /** Audit-log insert. Rides the caller's transaction via the DbExecutor param. */
 export async function insertAuditLog(
   values: typeof auditLogs.$inferInsert,
-  exec: DbExecutor = getDb(),
+  exec: DbExecutor,
 ): Promise<void> {
   await exec.insert(auditLogs).values(values);
 }

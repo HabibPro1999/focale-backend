@@ -9,9 +9,7 @@ import {
 } from "@nestjs/common";
 import type { FastifyReply } from "fastify";
 import { Auth } from "../../core/auth/auth.decorator";
-import { CurrentUser } from "../../core/auth/current-user.decorator";
-import { assertEventAccess } from "../../core/auth/assert-event-access";
-import { type AuthUser } from "../../core/auth/user-cache";
+import { EventScoped } from "../tenancy";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { ExportDownloads } from "../../core/exports/stream-download";
 import { ReportsService } from "./reports.service";
@@ -31,9 +29,9 @@ import {
 
 /**
  * Reports routes, mounted at /api/events. Every route requires a valid token
- * (@Auth); per-route ownership is enforced inline by re-fetching the event and
- * running canAccessClient against its clientId (client-admin/super-admin only —
- * NOT a guard, replicated per handler exactly as legacy). File endpoints run
+ * (@Auth); `@EventScoped()` checks the event exists (404) and belongs to the
+ * caller's client (403, client-admin/super-admin only); the sponsorships
+ * export also needs the sponsorships module (plan 5.4). File endpoints run
  * through ExportDownloads (@SkipEnvelope): after authorization they wait for an
  * export slot (503 EXPORT_BUSY when none frees up), then stream the file with
  * the legacy Content-Type / Content-Disposition headers and no Content-Length.
@@ -46,16 +44,12 @@ export class ReportsController {
     private readonly downloads: ExportDownloads,
   ) {}
 
-  private async authorizeEvent(user: AuthUser, eventId: string): Promise<void> {
-    await assertEventAccess(user, eventId);
-  }
-
   // ----------------------------------------------------------------
   // GET /:eventId/analytics
   // ----------------------------------------------------------------
   @Get(":eventId/analytics")
-  async analytics(@CurrentUser() user: AuthUser, @Param("eventId") eventId: string) {
-    await this.authorizeEvent(user, eventId);
+  @EventScoped()
+  async analytics(@Param("eventId") eventId: string) {
     return this.reports.getEventAnalytics(eventId);
   }
 
@@ -63,12 +57,11 @@ export class ReportsController {
   // GET /:eventId/analytics/access-items/:accessId/registrations
   // ----------------------------------------------------------------
   @Get(":eventId/analytics/access-items/:accessId/registrations")
+  @EventScoped()
   async accessRegistrants(
-    @CurrentUser() user: AuthUser,
     @Param("eventId") eventId: string,
     @Param("accessId") accessId: string,
   ) {
-    await this.authorizeEvent(user, eventId);
     return this.reports.getAccessRegistrants(eventId, accessId);
   }
 
@@ -76,12 +69,11 @@ export class ReportsController {
   // GET /:eventId/reports/financial
   // ----------------------------------------------------------------
   @Get(":eventId/reports/financial")
+  @EventScoped()
   async financial(
-    @CurrentUser() user: AuthUser,
     @Param("eventId") eventId: string,
     @Query() query: ReportQueryDto,
   ) {
-    await this.authorizeEvent(user, eventId);
     return this.reports.getFinancialReport(eventId, query);
   }
 
@@ -89,14 +81,13 @@ export class ReportsController {
   // GET /:eventId/reports/registrations — CSV/JSON/XLSX export
   // ----------------------------------------------------------------
   @Get(":eventId/reports/registrations")
+  @EventScoped()
   @SkipEnvelope()
   async exportRegistrations(
-    @CurrentUser() user: AuthUser,
     @Param("eventId") eventId: string,
     @Query() query: ExportRegistrationsQueryDto,
     @Res() reply: FastifyReply,
   ): Promise<void> {
-    await this.authorizeEvent(user, eventId);
     await this.downloads.stream(reply, () => this.reports.exportRegistrations(eventId, query));
   }
 
@@ -104,14 +95,13 @@ export class ReportsController {
   // POST /:eventId/reports/registrations/export — modular xlsx export
   // ----------------------------------------------------------------
   @Post(":eventId/reports/registrations/export")
+  @EventScoped()
   @SkipEnvelope()
   async modularExport(
-    @CurrentUser() user: AuthUser,
     @Param("eventId") eventId: string,
     @Body() body: ExportRegistrationsBodyDto,
     @Res() reply: FastifyReply,
   ): Promise<void> {
-    await this.authorizeEvent(user, eventId);
     await this.downloads.stream(reply, () => prepareRegistrationsWorkbook(eventId, body));
   }
 
@@ -119,13 +109,12 @@ export class ReportsController {
   // GET /:eventId/reports/access-registrants — one sheet per access item
   // ----------------------------------------------------------------
   @Get(":eventId/reports/access-registrants")
+  @EventScoped()
   @SkipEnvelope()
   async accessRegistrantsReport(
-    @CurrentUser() user: AuthUser,
     @Param("eventId") eventId: string,
     @Res() reply: FastifyReply,
   ): Promise<void> {
-    await this.authorizeEvent(user, eventId);
     await this.downloads.stream(reply, () => prepareAccessRegistrantsReport(eventId));
   }
 
@@ -133,14 +122,13 @@ export class ReportsController {
   // GET /:eventId/reports/sponsorships — flat sponsorship export
   // ----------------------------------------------------------------
   @Get(":eventId/reports/sponsorships")
+  @EventScoped({ module: "sponsorships" })
   @SkipEnvelope()
   async sponsorshipsReport(
-    @CurrentUser() user: AuthUser,
     @Param("eventId") eventId: string,
     @Query() query: ExportSponsorshipsQueryDto,
     @Res() reply: FastifyReply,
   ): Promise<void> {
-    await this.authorizeEvent(user, eventId);
     await this.downloads.stream(reply, () => prepareSponsorshipsReport(eventId, query));
   }
 
@@ -148,13 +136,12 @@ export class ReportsController {
   // GET /:eventId/reports/checkin-export — check-in ZIP
   // ----------------------------------------------------------------
   @Get(":eventId/reports/checkin-export")
+  @EventScoped()
   @SkipEnvelope()
   async checkinExport(
-    @CurrentUser() user: AuthUser,
     @Param("eventId") eventId: string,
     @Res() reply: FastifyReply,
   ): Promise<void> {
-    await this.authorizeEvent(user, eventId);
     await this.downloads.stream(reply, () => prepareCheckInReport(eventId));
   }
 
@@ -162,13 +149,12 @@ export class ReportsController {
   // GET /:eventId/reports/summary — event summary xlsx
   // ----------------------------------------------------------------
   @Get(":eventId/reports/summary")
+  @EventScoped()
   @SkipEnvelope()
   async summary(
-    @CurrentUser() user: AuthUser,
     @Param("eventId") eventId: string,
     @Res() reply: FastifyReply,
   ): Promise<void> {
-    await this.authorizeEvent(user, eventId);
     await this.downloads.stream(reply, () => prepareEventSummary(eventId));
   }
 }

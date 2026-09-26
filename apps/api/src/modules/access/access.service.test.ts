@@ -86,9 +86,11 @@ function accessRow(o: Record<string, unknown> = {}) {
   };
 }
 
+const rootDb = { executor: "root" };
+
 beforeEach(() => {
   vi.resetAllMocks();
-  m.getDb.mockReturnValue({});
+  m.getDb.mockReturnValue(rootDb);
   m.withTxn.mockImplementation((fn: (tx: unknown) => unknown) => fn({}));
 });
 
@@ -157,7 +159,7 @@ describe("createEventAccess", () => {
       requiredAccessIds: ["p1", "p2"],
     } as CreateEventAccessInput);
     expect(result.requiredAccess).toHaveLength(2);
-    expect(m.insertEventAccess).toHaveBeenCalledWith(expect.anything(), ["p1", "p2"]);
+    expect(m.insertEventAccess).toHaveBeenCalledWith(expect.anything(), ["p1", "p2"], rootDb);
   });
 
   it("applies service defaults for omitted fields", async () => {
@@ -175,6 +177,7 @@ describe("createEventAccess", () => {
         allowCompanion: false,
       }),
       [],
+      rootDb,
     );
   });
 });
@@ -297,7 +300,7 @@ describe("updateEventAccess", () => {
       requiredAccessIds: ["prereq"],
     });
     expect(result.requiredAccess).toHaveLength(1);
-    expect(m.setAccessPrerequisites).toHaveBeenCalledWith("access-main", ["prereq"]);
+    expect(m.setAccessPrerequisites).toHaveBeenCalledWith("access-main", ["prereq"], rootDb);
   });
 });
 
@@ -313,7 +316,7 @@ describe("deleteEventAccess", () => {
     m.deleteEventAccessById.mockResolvedValue(undefined);
 
     await service.deleteEventAccess("access-1");
-    expect(m.deleteEventAccessById).toHaveBeenCalledWith("access-1");
+    expect(m.deleteEventAccessById).toHaveBeenCalledWith("access-1", rootDb);
   });
 
   it("throws when access not found", async () => {
@@ -348,9 +351,9 @@ describe("deleteEventAccess", () => {
     m.deleteEventAccessById.mockResolvedValue(undefined);
 
     await service.deleteEventAccess("access-1");
-    expect(m.removePrerequisiteEdge).toHaveBeenCalledWith("dep-1", "access-1");
-    expect(m.removePrerequisiteEdge).toHaveBeenCalledWith("dep-2", "access-1");
-    expect(m.deleteEventAccessById).toHaveBeenCalledWith("access-1");
+    expect(m.removePrerequisiteEdge).toHaveBeenCalledWith("dep-1", "access-1", rootDb);
+    expect(m.removePrerequisiteEdge).toHaveBeenCalledWith("dep-2", "access-1", rootDb);
+    expect(m.deleteEventAccessById).toHaveBeenCalledWith("access-1", rootDb);
   });
 });
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   SCORE_DIVERGENCE_ALERT_WINDOW_MS,
   planScoreDivergenceAlert,
+  scoreDivergence,
   scoreDivergenceEmailDedupeKey,
 } from "./score-divergence";
 
@@ -9,6 +10,24 @@ const HOUR = 60 * 60 * 1000;
 const now = Date.UTC(2030, 0, 1, 10, 25, 30, 500);
 const plan = (scores: number[], threshold: number) =>
   planScoreDivergenceAlert({ scores, threshold, averageScore: 12.5, reviewCount: 3, now });
+
+describe("scoreDivergence", () => {
+  it.each([
+    // [scores, threshold, expected]
+    [[], 0, null],
+    [[7], 0, null],
+    [[7, 7], 0, null],
+    [[7, 7, 7], 1, null],
+    [[7, 8], 0, { minScore: 7, maxScore: 8 }],
+    [[7, 8], 1, { minScore: 7, maxScore: 8 }],
+    [[7, 8], 2, null],
+    [[10, 15], 6, null],
+    [[16, 3, 10], 6, { minScore: 3, maxScore: 16 }],
+    [[10, 16], 6, { minScore: 10, maxScore: 16 }],
+  ] as const)("%j with threshold %i -> %j", (scores, threshold, expected) => {
+    expect(scoreDivergence(scores, threshold)).toEqual(expected);
+  });
+});
 
 describe("planScoreDivergenceAlert", () => {
   it.each([[[]], [[7]], [[20]]])("needs two scores: %j", (scores) => {

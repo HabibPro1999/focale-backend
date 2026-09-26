@@ -4,7 +4,6 @@ import type { RegistrationsService } from "./registrations.service";
 import type { RegistrationCreateService } from "./registrations.create.service";
 import type { RegistrationRepricer } from "./registrations.repricer";
 import type { RegistrationPaymentsService } from "./registrations.payments.service";
-import type { AuthUser } from "../../core/auth/user-cache";
 import {
   getStorageProvider,
   extractStorageKeyFromUrl,
@@ -19,8 +18,8 @@ vi.mock("@app/integrations", async (importOriginal) => ({
   extractStorageKeyFromUrl: vi.fn(),
 }));
 
-const superAdmin = { id: "u1", role: 0, clientId: null } as AuthUser;
-
+// The tenant check is the route's @RegistrationScoped() guard (see
+// tenant-scope.routes.test.ts); these tests call the handler directly.
 function makeReply() {
   const reply: Record<string, unknown> = {};
   reply.header = vi.fn(() => reply);
@@ -67,7 +66,7 @@ describe("paymentProof — proxies bytes instead of redirecting (CORS)", () => {
     });
     const reply = makeReply();
 
-    await controller.paymentProof({ id: "reg-1" } as never, superAdmin, reply as never);
+    await controller.paymentProof({ id: "reg-1" } as never, reply as never);
 
     expect(download).toHaveBeenCalledWith("proofs/reg-1.pdf");
     expect(reply.type).toHaveBeenCalledWith("application/pdf");
@@ -84,7 +83,7 @@ describe("paymentProof — proxies bytes instead of redirecting (CORS)", () => {
     });
     const reply = makeReply();
 
-    await controller.paymentProof({ id: "reg-1" } as never, superAdmin, reply as never);
+    await controller.paymentProof({ id: "reg-1" } as never, reply as never);
 
     expect(reply.redirect).toHaveBeenCalledWith("https://legacy.example/proof.png", 302);
     expect(reply.send).not.toHaveBeenCalled();
@@ -104,7 +103,7 @@ describe("paymentProof — proxies bytes instead of redirecting (CORS)", () => {
     });
 
     await expect(
-      controller.paymentProof({ id: "reg-1" } as never, superAdmin, makeReply() as never),
+      controller.paymentProof({ id: "reg-1" } as never, makeReply() as never),
     ).rejects.toMatchObject({ statusCode: 404 });
   });
 
@@ -115,7 +114,7 @@ describe("paymentProof — proxies bytes instead of redirecting (CORS)", () => {
     });
 
     await expect(
-      controller.paymentProof({ id: "reg-1" } as never, superAdmin, makeReply() as never),
+      controller.paymentProof({ id: "reg-1" } as never, makeReply() as never),
     ).rejects.toMatchObject({ statusCode: 404 });
   });
 });

@@ -8,16 +8,16 @@ import { events } from "../schema/events-access";
 type NewInvite = typeof tokens.$inferInsert;
 export async function insertCommitteeInvite(
   data: NewInvite,
-  db: DbExecutor = getDb(),
+  db: DbExecutor,
 ) {
   const [row] = await db.insert(tokens).values(data).returning();
   return row;
 }
 export async function deleteUnusedCommitteeInvites(
   userId: string,
+  db: DbExecutor,
   eventId?: string,
   exceptId?: string,
-  db: DbExecutor = getDb(),
 ) {
   await db
     .delete(tokens)
@@ -42,19 +42,14 @@ export function supersedeCommitteeInvite(id: string) {
       .from(tokens)
       .where(and(eq(tokens.id, id), isNull(tokens.usedAt)));
     if (!invite) return false;
-    await deleteUnusedCommitteeInvites(invite.userId, invite.eventId, id, tx);
+    await deleteUnusedCommitteeInvites(invite.userId, tx, invite.eventId, id);
     return true;
   });
 }
 
 export function replaceCommitteeInvite(data: NewInvite) {
   return withSerializableTxn(async (tx) => {
-    await deleteUnusedCommitteeInvites(
-      data.userId,
-      data.eventId,
-      undefined,
-      tx,
-    );
+    await deleteUnusedCommitteeInvites(data.userId, tx, data.eventId);
     return insertCommitteeInvite(data, tx);
   });
 }

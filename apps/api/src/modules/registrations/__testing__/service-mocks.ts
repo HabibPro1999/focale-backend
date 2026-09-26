@@ -22,7 +22,10 @@ import {
 } from "@app/shared";
 
 // --- @app/db mock -----------------------------------------------------------
+/** What the mocked getDb() returns: writes outside a transaction pass it explicitly. */
+export const rootDb = { executor: "root" };
 export const db = {
+  getDb: vi.fn(() => rootDb),
   withTxn: vi.fn(),
   withLockingTxn: vi.fn(),
   lockRegistrationForUpdate: vi.fn(),

@@ -231,7 +231,7 @@ describe.runIf(dbTestsEnabled())("db: certificate sends", () => {
       { ...base, trigger: "REGISTRATION_CREATED", registrationId: registration.id, recipientEmail: "r1@example.test" },
       { ...base, trigger: "SPONSORSHIP_LINKED", recipientEmail: "s@example.test" },
       { ...base, recipientEmail: "d@example.test", dedupeKey: "outbox:evt-1" },
-    ]);
+    ], getDb());
 
     const rows = [
       // registration + trigger index
@@ -246,7 +246,7 @@ describe.runIf(dbTestsEnabled())("db: certificate sends", () => {
       { ...base, id: randomUUID(), trigger: "CERTIFICATE_SENT" as const, registrationId: registration.id, recipientEmail: "r1@example.test" },
       { ...base, id: randomUUID(), trigger: "CERTIFICATE_SENT" as const, registrationId: registration.id, recipientEmail: "r1@example.test" },
     ];
-    const kept = await insertEmailLogsSkippingConflicts(rows);
+    const kept = await insertEmailLogsSkippingConflicts(rows, getDb());
     expect(kept).toEqual(new Set(rows.slice(3).map((row) => row.id)));
   });
 });
