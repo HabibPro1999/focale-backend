@@ -1,6 +1,11 @@
 import { Controller, Get, NotFoundException, Param } from "@nestjs/common";
-import { ErrorCodes } from "@app/contracts";
+import {
+  ErrorCodes,
+  PublicFormResponseSchema,
+  PublicSponsorFormResponseSchema,
+} from "@app/contracts";
 import type { FormWithRelations } from "@app/db";
+import { ResponseContract } from "../../core/response-contract";
 import { FormsService } from "./forms.service";
 import { EventSlugParamDto } from "./dto";
 
@@ -9,6 +14,7 @@ export class FormsPublicController {
   constructor(private readonly forms: FormsService) {}
 
   @Get(":slug/sponsor")
+  @ResponseContract(PublicSponsorFormResponseSchema)
   async getSponsorBySlug(@Param() params: EventSlugParamDto) {
     const form = await this.forms.getSponsorFormByEventSlug(params.slug);
     if (!form) {
@@ -42,6 +48,7 @@ export class FormsPublicController {
   }
 
   @Get(":slug")
+  @ResponseContract(PublicFormResponseSchema)
   async getBySlug(@Param() params: EventSlugParamDto): Promise<FormWithRelations> {
     const form = await this.forms.getFormByEventSlug(params.slug);
     if (!form) {

@@ -9,7 +9,15 @@ import {
   Post,
   Query,
 } from "@nestjs/common";
-import { ErrorCodes } from "@app/contracts";
+import {
+  AvailableSponsorshipsResponseSchema,
+  ErrorCodes,
+  LinkedSponsorshipsResponseSchema,
+  SponsorshipDetailResponseSchema,
+  SponsorshipLinkedResponseSchema,
+  SponsorshipListResponseSchema,
+  SponsorshipSuccessResponseSchema,
+} from "@app/contracts";
 import {
   assertClientModuleEnabled,
 } from "../clients/module-gates";
@@ -22,6 +30,7 @@ import { CurrentUser } from "../../core/auth/current-user.decorator";
 import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
 import { assertEventWritable } from "../events";
 import { AppException, forbidden } from "../../core/app-exception";
+import { ResponseContract } from "../../core/response-contract";
 import { SponsorshipsAdminService } from "./sponsorships.admin.service";
 import {
   ListSponsorshipsQueryDto,
@@ -44,6 +53,7 @@ export class SponsorshipsListController {
   constructor(private readonly service: SponsorshipsAdminService) {}
 
   @Get(":eventId/sponsorships")
+  @ResponseContract(SponsorshipListResponseSchema)
   async list(
     @Param() { eventId }: SponsorshipEventIdParamDto,
     @Query() query: ListSponsorshipsQueryDto,
@@ -69,6 +79,7 @@ export class SponsorshipDetailController {
 
   // GET detail — no module gate.
   @Get(":id")
+  @ResponseContract(SponsorshipDetailResponseSchema)
   async detail(
     @Param() { id }: SponsorshipIdParamDto,
     @CurrentUser() user: AuthUser,
@@ -83,6 +94,7 @@ export class SponsorshipDetailController {
 
   // PATCH — status:"CANCELLED" detours to cancel (service handles it).
   @Patch(":id")
+  @ResponseContract(SponsorshipDetailResponseSchema)
   async update(
     @Param() { id }: SponsorshipIdParamDto,
     @Body() body: UpdateSponsorshipDto,
@@ -98,6 +110,7 @@ export class SponsorshipDetailController {
   }
 
   @Delete(":id")
+  @ResponseContract(SponsorshipSuccessResponseSchema)
   async remove(
     @Param() { id }: SponsorshipIdParamDto,
     @CurrentUser() user: AuthUser,
@@ -123,6 +136,7 @@ export class RegistrationSponsorshipsController {
   constructor(private readonly service: SponsorshipsAdminService) {}
 
   @Get(":registrationId/available-sponsorships")
+  @ResponseContract(AvailableSponsorshipsResponseSchema)
   async available(
     @Param() { registrationId }: RegistrationIdParamDto,
     @CurrentUser() user: AuthUser,
@@ -136,6 +150,7 @@ export class RegistrationSponsorshipsController {
   }
 
   @Get(":registrationId/sponsorships")
+  @ResponseContract(LinkedSponsorshipsResponseSchema)
   async linked(
     @Param() { registrationId }: RegistrationIdParamDto,
     @CurrentUser() user: AuthUser,
@@ -146,6 +161,7 @@ export class RegistrationSponsorshipsController {
 
   @Post(":registrationId/sponsorships")
   @HttpCode(201)
+  @ResponseContract(SponsorshipLinkedResponseSchema)
   async link(
     @Param() { registrationId }: RegistrationIdParamDto,
     @Body() { sponsorshipId }: LinkSponsorshipDto,
@@ -162,6 +178,7 @@ export class RegistrationSponsorshipsController {
 
   @Post(":registrationId/sponsorships/by-code")
   @HttpCode(201)
+  @ResponseContract(SponsorshipLinkedResponseSchema)
   async linkByCode(
     @Param() { registrationId }: RegistrationIdParamDto,
     @Body() { code }: LinkSponsorshipByCodeDto,
@@ -177,6 +194,7 @@ export class RegistrationSponsorshipsController {
   }
 
   @Delete(":registrationId/sponsorships/:sponsorshipId")
+  @ResponseContract(SponsorshipSuccessResponseSchema)
   async unlink(
     @Param() { registrationId, sponsorshipId }: RegistrationSponsorshipParamDto,
     @CurrentUser() user: AuthUser,

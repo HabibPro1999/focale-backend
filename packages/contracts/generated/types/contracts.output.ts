@@ -79,6 +79,11 @@ export type AccessSelection = {
   quantity: number;
 };
 
+export type AccessSelectionValidationResponse = {
+  valid: boolean;
+  errors: string[];
+};
+
 export type AccessType = "WORKSHOP" | "DINNER" | "SESSION" | "NETWORKING" | "ACCOMMODATION" | "TRANSPORT" | "OTHER" | "ADDON";
 
 export type AddCommitteeMember = {
@@ -128,6 +133,100 @@ export type AdminEditRegistration = {
   labName?: string | null;
 };
 
+export type AdminRegistrantSearchResponse = RegistrantSearchResult[];
+
+export type AdminRegistrationListResponse = {
+  data: AdminRegistrationResponse[];
+  meta: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+    hasNext: boolean;
+    hasPrev: boolean;
+  };
+  stats: {
+    total: number;
+    totalAmount: number;
+    collected: number;
+    paid: {
+      count: number;
+      amount: number;
+    };
+    pending: {
+      count: number;
+      amount: number;
+    };
+    sponsored: {
+      count: number;
+      amount: number;
+    };
+  };
+};
+
+export type AdminRegistrationResponse = {
+  id: string;
+  formId: string;
+  eventId: string;
+  formData: unknown;
+  networkingOptIn: boolean | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  submittedAt: string;
+  formSchemaVersion: number;
+  email: string;
+  firstName: string | null;
+  lastName: string | null;
+  phone: string | null;
+  referenceNumber: string | null;
+  paymentStatus: PaymentStatus;
+  totalAmount: number;
+  paidAmount: number;
+  currency: string;
+  paymentMethod: PaymentMethod | null;
+  paymentReference: string | null;
+  paymentProofUrl: string | null;
+  priceBreakdown: unknown;
+  baseAmount: number;
+  discountAmount: number;
+  accessAmount: number;
+  sponsorshipCode: string | null;
+  sponsorshipAmount: number;
+  labName: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  paidAt: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  createdAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  updatedAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  lastEditedAt: string | null;
+  linkBaseUrl: string | null;
+  note: string | null;
+  role: RegistrationRole;
+  accessTypeIds: string[] | null;
+  droppedAccessIds: string[] | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  checkedInAt: string | null;
+  checkedInBy: string | null;
+  form: {
+    id: string;
+    name: string;
+  };
+  event: {
+    id: string;
+    name: string;
+    slug: string;
+    clientId: string;
+  };
+  accessCheckIns?: Array<{
+    accessId: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    checkedInAt: string;
+  }>;
+  accessSelections: RegistrationAccessSelectionResponse[];
+  droppedAccessSelections: RegistrationDroppedAccessSelectionResponse[];
+};
+
 export type AnalyticsAccessItem = {
   id: string;
   name: string;
@@ -156,6 +255,23 @@ export type AssignReviewers = {
 export type AuditAction = "CREATE" | "UPDATE" | "DELETE" | "PAYMENT_CONFIRMED" | "PAYMENT_PROOF_UPLOADED" | "PAYMENT_METHOD_SELECTED" | "ACCESS_CAPACITY_REACHED" | "EDIT_LINK_ISSUED";
 
 export type AutomaticEmailTrigger = "REGISTRATION_CREATED" | "PAYMENT_PROOF_SUBMITTED" | "PAYMENT_CONFIRMED" | "SPONSORSHIP_BATCH_SUBMITTED" | "SPONSORSHIP_LINKED" | "SPONSORSHIP_APPLIED" | "SPONSORSHIP_PARTIAL" | "CERTIFICATE_SENT";
+
+export type AvailableSponsorshipsResponse = {
+  sponsorships: Array<{
+    id: string;
+    code: string;
+    beneficiaryName: string;
+    beneficiaryEmail: string;
+    totalAmount: number;
+    coversBasePrice: boolean;
+    coveredAccessIds: string[];
+    batch: {
+      labName: string;
+    };
+    applicableAmount: number;
+    conflicts: string[];
+  }>;
+};
 
 export type BatchSyncBody = {
   checkIns: Array<{
@@ -632,6 +748,78 @@ export type EventAccessIdParam = {
   id: string;
 };
 
+export type EventAccessItemResponse = {
+  id: string;
+  eventId: string;
+  type: AccessType;
+  name: string;
+  description: string | null;
+  location: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  startsAt: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  endsAt: string | null;
+  price: number;
+  currency: string;
+  maxCapacity: number | null;
+  registeredCount: number;
+  paidCount: number;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  availableFrom: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  availableTo: string | null;
+  conditions: unknown;
+  conditionLogic: string;
+  sortOrder: number;
+  active: boolean;
+  groupLabel: string | null;
+  allowCompanion: boolean;
+  includedInBase: boolean;
+  companionPrice: number;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  createdAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  updatedAt: string;
+  requiredAccess: Array<{
+    id: string;
+    name: string;
+  }>;
+};
+
+export type EventAccessRowResponse = {
+  id: string;
+  eventId: string;
+  type: AccessType;
+  name: string;
+  description: string | null;
+  location: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  startsAt: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  endsAt: string | null;
+  price: number;
+  currency: string;
+  maxCapacity: number | null;
+  registeredCount: number;
+  paidCount: number;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  availableFrom: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  availableTo: string | null;
+  conditions: unknown;
+  conditionLogic: string;
+  sortOrder: number;
+  active: boolean;
+  groupLabel: string | null;
+  allowCompanion: boolean;
+  includedInBase: boolean;
+  companionPrice: number;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  createdAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  updatedAt: string;
+};
+
 export type EventAnalyticsResponse = {
   eventId: string;
   generatedAt: string;
@@ -663,6 +851,24 @@ export type EventAnalyticsResponse = {
 
 export type EventIdParam = {
   id: string;
+};
+
+export type EventPricingRowResponse = {
+  id: string;
+  eventId: string;
+  basePrice: number;
+  currency: string;
+  rules: unknown;
+  onlinePaymentEnabled: boolean;
+  onlinePaymentUrl: string | null;
+  cashPaymentEnabled: boolean;
+  bankName: string | null;
+  bankAccountName: string | null;
+  bankAccountNumber: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  createdAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  updatedAt: string;
 };
 
 export type EventRegistrationIdParam = {
@@ -918,6 +1124,45 @@ export type GetGroupedAccessBody = {
   selectedAccessIds: string[];
 };
 
+export type GroupedAccessItem = {
+  id: string;
+  eventId: string;
+  type: AccessType;
+  name: string;
+  description: string | null;
+  location: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  startsAt: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  endsAt: string | null;
+  price: number;
+  currency: string;
+  maxCapacity: number | null;
+  registeredCount: number;
+  paidCount: number;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  availableFrom: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  availableTo: string | null;
+  conditions: unknown;
+  conditionLogic: string;
+  sortOrder: number;
+  active: boolean;
+  groupLabel: string | null;
+  allowCompanion: boolean;
+  includedInBase: boolean;
+  companionPrice: number;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  createdAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  updatedAt: string;
+  requiredAccess: Array<{
+    id: string;
+  }>;
+  spotsRemaining: number | null;
+  isFull: boolean;
+};
+
 export type GroupedAccessResponse = {
   groups: DateGroup[];
   addonGroup: {
@@ -949,6 +1194,29 @@ export type LinkedBeneficiaryInput = {
   /** @default [] */
   coveredAccessIds: string[];
 };
+
+export type LinkedSponsorshipsResponse = Array<{
+  id: string;
+  code: string;
+  status: string;
+  beneficiaryName: string;
+  beneficiaryEmail: string;
+  coversBasePrice: boolean;
+  coveredAccessIds: string[];
+  totalAmount: number;
+  batch: {
+    id: string;
+    labName: string;
+    contactName: string;
+    email: string;
+  };
+  usage: {
+    id: string;
+    amountApplied: number;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    appliedAt: string;
+  };
+}>;
 
 export type ListAbstractsQuery = {
   status?: "SUBMITTED" | "UNDER_REVIEW" | "REVIEW_COMPLETE" | "ACCEPTED" | "REJECTED" | "PENDING";
@@ -1381,6 +1649,20 @@ export type PaymentField = "paymentStatus" | "paymentMethod" | "currency" | "tot
 
 export type PaymentMethod = "BANK_TRANSFER" | "ONLINE" | "CASH" | "LAB_SPONSORSHIP";
 
+export type PaymentMethodSelectedResponse = {
+  success: boolean;
+};
+
+export type PaymentProofUploadResponse = {
+  id: string;
+  registrationId: string;
+  fileUrl: string;
+  fileName: string;
+  fileSize: number;
+  mimeType: string;
+  uploadedAt: string;
+};
+
 export type PaymentStatusBreakdownItem = {
   paymentStatus: string;
   count: number;
@@ -1422,6 +1704,14 @@ export type PublicAccessItemParam = {
   accessId: string;
 };
 
+export type PublicClientResponse = {
+  id: string;
+  name: string;
+  logo: string | null;
+  primaryColor: string | null;
+  phone: string | null;
+};
+
 export type PublicEditRegistration = {
   expectedUpdatedAt: string;
   formData?: Record<string, unknown>;
@@ -1429,6 +1719,183 @@ export type PublicEditRegistration = {
   lastName?: string;
   phone?: string;
   accessSelections?: AccessSelection[];
+};
+
+export type PublicEventAccessListResponse = EventAccessItemResponse[];
+
+export type PublicFormResponse = {
+  id: string;
+  eventId: string;
+  type: "REGISTRATION" | "SPONSOR";
+  name: string;
+  schema: unknown;
+  schemaVersion: number;
+  successTitle: string | null;
+  successMessage: string | null;
+  successTranslations: unknown;
+  active: boolean;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  createdAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  updatedAt: string;
+  event: {
+    id: string;
+    clientId: string;
+    name: string;
+    slug: string;
+    description: string | null;
+    maxCapacity: number | null;
+    registeredCount: number;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    startDate: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    endDate: string;
+    location: string | null;
+    status: "CLOSED" | "OPEN" | "ARCHIVED";
+    bannerUrl: string | null;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    createdAt: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    updatedAt: string;
+    client: PublicClientResponse;
+    pricing: EventPricingRowResponse | null;
+    access: EventAccessRowResponse[];
+  };
+};
+
+export type PublicPaymentConfigResponse = {
+  event: {
+    id: string;
+    name: string;
+    slug: string;
+    description: string | null;
+    status: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    startDate: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    endDate: string;
+    location: string | null;
+    bannerUrl: string | null;
+    client: {
+      id: string;
+      name: string;
+      logo: string | null;
+      primaryColor: string | null;
+      phone: string | null;
+    };
+  };
+  sponsorshipsEnabled: boolean;
+  pricing: {
+    basePrice: number;
+    currency: string;
+    rules: unknown;
+    paymentMethods: string[];
+    bankDetails: {
+      bankName: string;
+      accountName: string;
+      iban: string;
+      bic: string;
+    } | null;
+    onlinePaymentUrl: string | null;
+  } | null;
+};
+
+export type PublicRegistrantSearchResponse = RegistrantSearchResult[];
+
+export type PublicRegistrationCreateResponse = {
+  registration: PublicRegistrationResponse;
+  priceBreakdown: unknown;
+};
+
+export type PublicRegistrationEditResponse = {
+  registration: PublicRegistrationResponse;
+  priceBreakdown: unknown;
+};
+
+export type PublicRegistrationForEditResponse = {
+  registration: PublicRegistrationResponse;
+  expectedUpdatedAt: string;
+  canEdit: boolean;
+  canEditPersonalInfo: boolean;
+  canEditAccess: boolean;
+  canAddAccess: boolean;
+  canRemoveAccess: boolean;
+  isFullySponsored: boolean;
+  amountDue: number;
+  editRestrictions: string[];
+};
+
+export type PublicRegistrationResponse = {
+  id: string;
+  formId: string;
+  eventId: string;
+  referenceNumber: string | null;
+  email: string;
+  firstName: string | null;
+  lastName: string | null;
+  phone: string | null;
+  formData: unknown;
+  networkingOptIn: boolean | null;
+  paymentStatus: string;
+  paymentMethod: string | null;
+  labName: string | null;
+  currency: string;
+  totalAmount: number;
+  paidAmount: number;
+  baseAmount: number;
+  discountAmount: number;
+  accessAmount: number;
+  sponsorshipCode: string | null;
+  sponsorshipAmount: number;
+  priceBreakdown: unknown;
+  hasPaymentProof: boolean;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  paidAt: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  submittedAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  lastEditedAt: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  createdAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  updatedAt: string;
+  accessSelections: RegistrationAccessSelectionResponse[];
+  droppedAccessSelections?: RegistrationDroppedAccessSelectionResponse[];
+  form: {
+    id: string;
+    name: string;
+    schema?: unknown;
+  };
+  event: {
+    id: string;
+    name: string;
+    slug: string;
+    status?: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    endDate?: string;
+  };
+  token?: string | null;
+};
+
+export type PublicSponsorFormResponse = {
+  id: string;
+  formId: string;
+  eventId: string;
+  schemaVersion: number;
+  schema: unknown;
+  event: {
+    id: string;
+    name: string;
+    slug: string;
+    status: "CLOSED" | "OPEN" | "ARCHIVED";
+    startsAt: string | null;
+    endsAt: string | null;
+    location: string | null;
+    bannerUrl: string | null;
+    client: PublicClientResponse;
+  };
+  pricing: EventPricingRowResponse | null;
+  accessItems: EventAccessRowResponse[];
 };
 
 export type RegistrantSearchQuery = {
@@ -1441,18 +1908,54 @@ export type RegistrantSearchResult = {
   email: string;
   firstName: string | null;
   lastName: string | null;
-  paymentStatus: PaymentStatus;
+  paymentStatus: string;
   totalAmount: number;
   baseAmount: number;
+  accessAmount: number;
   sponsorshipAmount: number;
   accessTypeIds: string[];
   coveredAccessIds: string[];
   isBasePriceCovered: boolean;
-  phone: string | null;
-  formData: Record<string, unknown> | null;
 };
 
 export type RegistrantSearchScope = "ALL" | "UNPAID_ONLY";
+
+export type RegistrationAccessSelectionResponse = {
+  id: string;
+  accessId: string;
+  unitPrice: number;
+  quantity: number;
+  subtotal: number;
+  access: {
+    id: string;
+    name: string;
+    type: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    startsAt: string | null;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    endsAt: string | null;
+  };
+};
+
+export type RegistrationAuditLogListResponse = {
+  data: Array<{
+    id: string;
+    action: string;
+    changes: unknown;
+    performedBy: string | null;
+    performedByName: string | null;
+    performedAt: string;
+    ipAddress: string | null;
+  }>;
+  meta: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+    hasNext: boolean;
+    hasPrev: boolean;
+  };
+};
 
 export type RegistrationAuditLog = {
   id: string;
@@ -1470,6 +1973,54 @@ export type RegistrationAuditLog = {
 export type RegistrationColumnsResponse = {
   formColumns: TableColumn[];
   fixedColumns: TableColumn[];
+};
+
+export type RegistrationDroppedAccessSelectionResponse = {
+  id: string;
+  accessId: string;
+  unitPrice: number;
+  quantity: number;
+  subtotal: number;
+  access: {
+    id: string;
+    name: string;
+    type: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    startsAt: string | null;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    endsAt: string | null;
+  };
+  reason: string;
+};
+
+export type RegistrationEditLinkResponse = {
+  url: string;
+};
+
+export type RegistrationEmailLogListResponse = {
+  data: Array<{
+    id: string;
+    subject: string;
+    status: string;
+    trigger: string | null;
+    templateName: string | null;
+    errorMessage: string | null;
+    queuedAt: string;
+    sentAt: string | null;
+    deliveredAt: string | null;
+    openedAt: string | null;
+    clickedAt: string | null;
+    bouncedAt: string | null;
+    failedAt: string | null;
+  }>;
+  meta: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+    hasNext: boolean;
+    hasPrev: boolean;
+  };
 };
 
 export type RegistrationEmailLog = {
@@ -1501,6 +2052,31 @@ export type RegistrationRole = "PARTICIPANT" | "SPEAKER" | "MODERATOR" | "ORGANI
 export type RegistrationSponsorshipParam = {
   registrationId: string;
   sponsorshipId: string;
+};
+
+export type RegistrationTableColumnsResponse = {
+  formColumns: Array<{
+    id: string;
+    label: string;
+    type: string;
+    options?: Array<{
+      id: string;
+      label: string;
+    }>;
+    mergeWith?: {
+      fieldId: string;
+      triggerValue: string;
+    };
+  }>;
+  fixedColumns: Array<{
+    id: string;
+    label: string;
+    type: string;
+    options?: Array<{
+      id: string;
+      label: string;
+    }>;
+  }>;
 };
 
 export type ReportQuery = {
@@ -1595,6 +2171,68 @@ export type SponsorSummaryTranslationEntry = {
   termsText?: string;
 };
 
+export type SponsorshipBatchCreatedResponse = {
+  success: boolean;
+  message: string;
+  batchId: string;
+  count: number;
+};
+
+export type SponsorshipDetailResponse = {
+  id: string;
+  batchId: string;
+  eventId: string;
+  code: string;
+  status: SponsorshipStatus;
+  beneficiaryName: string;
+  beneficiaryEmail: string;
+  beneficiaryPhone: string | null;
+  beneficiaryAddress: string | null;
+  coversBasePrice: boolean;
+  coveredAccessIds: string[] | null;
+  totalAmount: number;
+  targetRegistrationId: string | null;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  createdAt: string;
+  /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+  updatedAt: string;
+  event: {
+    clientId: string;
+  };
+  batch: {
+    id: string;
+    eventId: string;
+    formId: string;
+    labName: string;
+    contactName: string;
+    email: string;
+    phone: string | null;
+    formData: unknown;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    createdAt: string;
+  };
+  usages: Array<{
+    id: string;
+    sponsorshipId: string;
+    registrationId: string | null;
+    amountApplied: number;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    appliedAt: string;
+    appliedBy: string;
+    registration: {
+      id: string;
+      email: string;
+      firstName: string | null;
+      lastName: string | null;
+    } | null;
+  }>;
+  coveredAccessItems: Array<{
+    id: string;
+    name: string;
+    price: number;
+  }>;
+};
+
 export type SponsorshipEventIdParam = {
   eventId: string;
 };
@@ -1615,6 +2253,77 @@ export type SponsorshipLine = {
   valid: boolean;
 };
 
+export type SponsorshipLinkedResponse = {
+  success: boolean;
+  usage: {
+    id: string;
+    sponsorshipId: string;
+    amountApplied: number;
+  };
+  registration: {
+    totalAmount: number;
+    sponsorshipAmount: number;
+    amountDue: number;
+  };
+  warnings: string[];
+};
+
+export type SponsorshipListResponse = {
+  data: Array<{
+    id: string;
+    batchId: string;
+    eventId: string;
+    code: string;
+    status: SponsorshipStatus;
+    beneficiaryName: string;
+    beneficiaryEmail: string;
+    beneficiaryPhone: string | null;
+    beneficiaryAddress: string | null;
+    coversBasePrice: boolean;
+    coveredAccessIds: string[] | null;
+    totalAmount: number;
+    targetRegistrationId: string | null;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    createdAt: string;
+    /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
+    updatedAt: string;
+    batch: {
+      id: string;
+      labName: string;
+      contactName: string;
+      email: string;
+    };
+    usages: Array<{
+      registrationId: string | null;
+      amountApplied: number;
+    }>;
+  }>;
+  meta: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+    hasNext: boolean;
+    hasPrev: boolean;
+  };
+  stats: {
+    total: number;
+    totalAmount: number;
+    pending: {
+      count: number;
+      amount: number;
+    };
+    used: {
+      count: number;
+      amount: number;
+    };
+    cancelled: {
+      count: number;
+      amount: number;
+    };
+  };
+};
+
 export type SponsorshipMode = "LINKED_ACCOUNT" | "CODE";
 
 export type SponsorshipSettings = {
@@ -1625,6 +2334,10 @@ export type SponsorshipSettings = {
 };
 
 export type SponsorshipStatus = "PENDING" | "USED" | "CANCELLED";
+
+export type SponsorshipSuccessResponse = {
+  success: boolean;
+};
 
 export type StepTranslationEntry = {
   title?: string;
@@ -1733,7 +2446,7 @@ export type TimeSlot = {
   /** unrepresentable: date. A Date on the server; on the wire an ISO 8601 string (input: any string the server's Date parser accepts). */
   endsAt: string | null;
   selectionType: "single" | "multiple";
-  items: unknown[];
+  items: GroupedAccessItem[];
 };
 
 export type TiptapDocument = {
