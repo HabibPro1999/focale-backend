@@ -1,12 +1,22 @@
 # Frontend follow-up: 5.5 response contracts
 
-No response field was removed, renamed or retyped. The covered routes (list in
-README-rebuild.md, "Response contracts") now return only the fields their
-contract declares, and each contract lists every field those routes returned
-before this change, so today's payloads are unchanged byte for byte. What
-changes is the default for the future: a column added to a table, or a field
-added to a service result, is no longer returned by these routes until the
-backend adds it to the contract.
+One response field was removed (see "Removed field" below); none was renamed
+or retyped. The covered routes (list in README-rebuild.md, "Response
+contracts") now return only the fields their contract declares. Apart from
+that one field, each contract lists every field those routes returned before
+this change, so the other payloads are unchanged byte for byte. What changes
+is the default for the future: a column added to a table, or a field added to
+a service result, is no longer returned by these routes until the backend adds
+it to the contract.
+
+## Removed field
+
+- `GET /api/forms/public/:slug` no longer returns `event.clientId`. The
+  organizer is still in `event.client` (`id`, `name`, `logo`, `primaryColor`,
+  `phone`). The form app has no `clientId` reference at all (`develop` =
+  `origin/develop` ba6c271 and `main`, read-only check); admin `develop`
+  50e99c7 does not call this route. The generated
+  `PublicFormResponse` type drops the field.
 
 Checked against admin `develop` 50e99c7 and form `develop` ba6c271 (read only):
 the fields they read from these responses are all in the contracts, including
@@ -43,9 +53,9 @@ These are returned today only because the routes used to return whole rows.
 Removing any of them would be a breaking change, so each needs a frontend check
 first:
 
-- `GET /api/forms/public/:slug`: `event.clientId` (the form app does not read
-  it), `event.createdAt`/`updatedAt`, the pricing row's `id`/`eventId`/
-  timestamps, and the access rows' `eventId`/timestamps.
-- `POST /api/public/registrations/:id/payment-proof`: `fileUrl`, the stored
-  proof location (the form app's `src/types/registration.ts` declares it; 0.5
-  left it open).
+- `GET /api/forms/public/:slug`: `event.createdAt`/`updatedAt`, the pricing
+  row's `id`/`eventId`/timestamps, and the access rows' `eventId`/timestamps.
+
+Kept on purpose: `POST /api/public/registrations/:id/payment-proof` still
+returns `fileUrl`, the stored proof location (the form app's
+`src/types/registration.ts` declares it; 0.5 left it open).

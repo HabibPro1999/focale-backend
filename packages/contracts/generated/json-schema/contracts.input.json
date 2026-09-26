@@ -7539,9 +7539,6 @@
             "id": {
               "type": "string"
             },
-            "clientId": {
-              "type": "string"
-            },
             "name": {
               "type": "string"
             },
@@ -7641,7 +7638,6 @@
           },
           "required": [
             "id",
-            "clientId",
             "name",
             "slug",
             "description",

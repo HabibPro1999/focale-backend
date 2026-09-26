@@ -38,7 +38,11 @@ export const EventPricingRowResponseSchema = z.object({
   updatedAt: z.date(),
 });
 
-/** GET /api/forms/public/:slug: the published registration form of an open event. */
+/**
+ * GET /api/forms/public/:slug: the published registration form of an open
+ * event. The event's `clientId` is not public (the form app shows the
+ * organizer through `event.client`).
+ */
 export const PublicFormResponseSchema = z.object({
   id: z.string(),
   eventId: z.string(),
@@ -54,7 +58,6 @@ export const PublicFormResponseSchema = z.object({
   updatedAt: z.date(),
   event: z.object({
     id: z.string(),
-    clientId: z.string(),
     name: z.string(),
     slug: z.string(),
     description: z.string().nullable(),
