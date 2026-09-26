@@ -10,6 +10,7 @@
     "requeue-dead-letters": "node --conditions=@app/source -r @swc-node/register src/scripts/requeue-dead-letters.ts",
     "repair-sponsorship-code-usages": "node --conditions=@app/source -r @swc-node/register src/scripts/repair-sponsorship-code-usages.ts",
     "networking-retention": "node --conditions=@app/source -r @swc-node/register src/scripts/networking-retention.ts",
+    "backfill-certificate-renders": "node --conditions=@app/source -r @swc-node/register src/scripts/backfill-certificate-renders.ts",
     "start": "node dist/main.js",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",

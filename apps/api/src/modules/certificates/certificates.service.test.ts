@@ -19,6 +19,7 @@ vi.mock("@app/db", () => ({
   deleteCertificateTemplateById: vi.fn(),
   listActiveImageReadyCertificateTemplates: vi.fn(),
   getRegistrationsForCertificateSend: vi.fn(),
+  getAlreadySentCertTemplateIds: vi.fn(),
   getTemplateByTrigger: vi.fn(),
   getAbstractsForCertificateSend: vi.fn(),
   queueCertificateEmailLogsTxn: vi.fn(),
@@ -28,6 +29,10 @@ const mockStorageUpload = vi
   .fn()
   .mockResolvedValue("https://storage.example.com/ev1/certificates/tpl1.png");
 const mockStorageDelete = vi.fn().mockResolvedValue(undefined);
+// uploadPrivate returns the storage key it was given.
+const mockStoragePrivateUpload = vi.fn(
+  async (_buffer: Buffer, key: string) => key,
+);
 const mockStorageDownload = vi.fn().mockResolvedValue({
   buffer: Buffer.from("image-bytes"),
   contentType: "image/png",
@@ -38,12 +43,23 @@ vi.mock("@app/integrations", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getStorageProvider: vi.fn(() => ({
     uploadPublic: mockStorageUpload,
-    uploadPrivate: vi.fn().mockResolvedValue("private-key"),
+    uploadPrivate: mockStoragePrivateUpload,
     getSignedUrl: vi.fn(),
     delete: mockStorageDelete,
     download: mockStorageDownload,
   })),
   buildEmailContextWithAccess: vi.fn(async () => ({ eventName: "Event" })),
+  loadEmailContextLookups: vi.fn(async (eventId: string) => ({
+    eventId,
+    pricing: null,
+    accessById: new Map(),
+  })),
+  deriveCertificateRenderImage: vi.fn(async () => ({
+    buffer: Buffer.from("render-jpeg"),
+    width: 1754,
+    height: 987,
+    contentType: "image/jpeg",
+  })),
   isEligibleForCertificate: vi.fn(() => true),
 }));
 
@@ -73,13 +89,19 @@ import {
   deleteCertificateTemplateById,
   listActiveImageReadyCertificateTemplates,
   getRegistrationsForCertificateSend,
+  getAlreadySentCertTemplateIds,
   getTemplateByTrigger,
   getAbstractsForCertificateSend,
   queueCertificateEmailLogsTxn,
   type CertificateEmailCandidate,
   type CertificateEmailOutcome,
 } from "@app/db";
-import { StorageObjectNotFoundError } from "@app/integrations";
+import {
+  StorageObjectNotFoundError,
+  buildEmailContextWithAccess,
+  deriveCertificateRenderImage,
+  loadEmailContextLookups,
+} from "@app/integrations";
 import { CertificatesService } from "./certificates.service";
 
 const mockFileType = vi.mocked(fileTypeFromBuffer);
@@ -113,6 +135,7 @@ describe("CertificatesService", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(findExistingAccessIdsInEvent).mockImplementation(async (ids) => ids);
+    vi.mocked(getAlreadySentCertTemplateIds).mockResolvedValue(new Map());
     mockStorageDownload.mockResolvedValue({
       buffer: Buffer.from("image-bytes"),
       contentType: "image/png",
@@ -407,21 +430,58 @@ describe("CertificatesService", () => {
     it("deletes a template and its stored image", async () => {
       vi.mocked(getCertificateTemplateForDelete).mockResolvedValue({
         id: templateId,
+        eventId: "ev1",
         templateUrl:
           "https://storage.googleapis.com/bucket/ev1/certificates/tpl1.png",
+        renderImageKey: null,
       });
       vi.mocked(deleteCertificateTemplateById).mockResolvedValue();
 
       await service.deleteTemplate(templateId);
 
-      expect(mockStorageDelete).toHaveBeenCalled();
+      expect(mockStorageDelete).toHaveBeenCalledTimes(1);
+      expect(deleteCertificateTemplateById).toHaveBeenCalledWith(templateId);
+    });
+
+    it("also deletes the render image when it lies under the event's prefix (3.8)", async () => {
+      vi.mocked(getCertificateTemplateForDelete).mockResolvedValue({
+        id: templateId,
+        eventId: "ev1",
+        templateUrl:
+          "https://storage.googleapis.com/bucket/ev1/certificates/tpl1-u1.png",
+        renderImageKey: "ev1/certificates/tpl1-u1-render.jpg",
+      });
+      vi.mocked(deleteCertificateTemplateById).mockResolvedValue();
+
+      await service.deleteTemplate(templateId);
+
+      expect(mockStorageDelete.mock.calls.map((c) => c[0])).toEqual([
+        "ev1/certificates/tpl1-u1.png",
+        "ev1/certificates/tpl1-u1-render.jpg",
+      ]);
+    });
+
+    it("never deletes a render image outside the event's prefix", async () => {
+      vi.mocked(getCertificateTemplateForDelete).mockResolvedValue({
+        id: templateId,
+        eventId: "ev1",
+        templateUrl: "",
+        renderImageKey: "evt-999/certificates/x-render.jpg",
+      });
+      vi.mocked(deleteCertificateTemplateById).mockResolvedValue();
+
+      await service.deleteTemplate(templateId);
+
+      expect(mockStorageDelete).not.toHaveBeenCalled();
       expect(deleteCertificateTemplateById).toHaveBeenCalledWith(templateId);
     });
 
     it("deletes a template that has no image (no storage delete)", async () => {
       vi.mocked(getCertificateTemplateForDelete).mockResolvedValue({
         id: templateId,
+        eventId: "ev1",
         templateUrl: "",
+        renderImageKey: null,
       });
       vi.mocked(deleteCertificateTemplateById).mockResolvedValue();
 
@@ -443,8 +503,10 @@ describe("CertificatesService", () => {
     it("swallows storage delete failures and still deletes the row", async () => {
       vi.mocked(getCertificateTemplateForDelete).mockResolvedValue({
         id: templateId,
+        eventId: "ev1",
         templateUrl:
           "https://storage.googleapis.com/bucket/ev1/certificates/tpl1.png",
+        renderImageKey: null,
       });
       mockStorageDelete.mockRejectedValueOnce(new Error("boom"));
       vi.mocked(deleteCertificateTemplateById).mockResolvedValue();
@@ -471,6 +533,7 @@ describe("CertificatesService", () => {
         id: templateId,
         eventId,
         templateUrl: "",
+        renderImageKey: null,
       });
       vi.mocked(updateCertificateTemplateImage).mockResolvedValue(
         baseMockTemplate({
@@ -489,7 +552,33 @@ describe("CertificatesService", () => {
         templateUrl: "https://storage.example.com/ev1/certificates/tpl1.png",
         templateWidth: 1920,
         templateHeight: 1080,
+        renderImageKey: expect.stringMatching(
+          new RegExp(`^${eventId}/certificates/${templateId}-[0-9a-f-]{36}-render\\.jpg$`),
+        ),
+        renderImageWidth: 1754,
+        renderImageHeight: 987,
       });
+    });
+
+    it("refuses an image the render derivation cannot decode; nothing stored (3.8)", async () => {
+      mockFileType.mockResolvedValue({ ext: "png", mime: "image/png" } as never);
+      vi.mocked(getCertificateTemplateForUpload).mockResolvedValue({
+        id: templateId,
+        eventId,
+        templateUrl: "",
+        renderImageKey: null,
+      });
+      vi.mocked(deriveCertificateRenderImage).mockRejectedValueOnce(
+        new Error("VipsJpeg: premature end"),
+      );
+
+      await expect(service.uploadTemplateImage(templateId, file)).rejects.toMatchObject({
+        statusCode: 400,
+        code: ErrorCodes.VALIDATION_ERROR,
+      });
+      expect(mockStorageUpload).not.toHaveBeenCalled();
+      expect(mockStoragePrivateUpload).not.toHaveBeenCalled();
+      expect(updateCertificateTemplateImage).not.toHaveBeenCalled();
     });
 
     it("rejects disallowed MIME types", async () => {
@@ -531,6 +620,7 @@ describe("CertificatesService", () => {
       const oldUrl = `https://storage.googleapis.com/bucket/${eventId}/certificates/${templateId}.png`;
       const oldKey = `${eventId}/certificates/${templateId}.png`;
       const uploadedKey = () => mockStorageUpload.mock.calls[0][1] as string;
+      const renderKey = () => mockStoragePrivateUpload.mock.calls[0][1] as string;
 
       beforeEach(() => {
         mockFileType.mockResolvedValue({ ext: "png", mime: "image/png" } as never);
@@ -541,6 +631,7 @@ describe("CertificatesService", () => {
           id: templateId,
           eventId,
           templateUrl: oldUrl,
+          renderImageKey: null,
         });
         vi.mocked(updateCertificateTemplateImage).mockResolvedValue(
           baseMockTemplate() as never,
@@ -564,6 +655,9 @@ describe("CertificatesService", () => {
           templateUrl: `https://cdn.example.com/${uploadedKey()}`,
           templateWidth: 1920,
           templateHeight: 1080,
+          renderImageKey: renderKey(),
+          renderImageWidth: 1754,
+          renderImageHeight: 987,
         });
         expect(mockStorageDelete).toHaveBeenCalledTimes(1);
         expect(mockStorageDelete).toHaveBeenCalledWith(oldKey);
@@ -582,18 +676,46 @@ describe("CertificatesService", () => {
         expect(first).not.toBe(second);
       });
 
-      it("row update failure keeps the old image, deletes the new object and rethrows", async () => {
+      it("stores the render image beside the original, as a private JPEG (3.8)", async () => {
+        await service.uploadTemplateImage(templateId, file);
+
+        const original = uploadedKey().replace(/\.png$/, "");
+        expect(renderKey()).toBe(`${original}-render.jpg`);
+        expect(mockStoragePrivateUpload).toHaveBeenCalledWith(
+          Buffer.from("render-jpeg"),
+          renderKey(),
+          "image/jpeg",
+        );
+        const [renderUploadOrder] = mockStoragePrivateUpload.mock.invocationCallOrder;
+        const [updateOrder] = vi.mocked(updateCertificateTemplateImage).mock
+          .invocationCallOrder;
+        expect(renderUploadOrder).toBeLessThan(updateOrder);
+      });
+
+      it("a render upload failure removes the new original and stores nothing", async () => {
+        const storageDown = new Error("storage down");
+        mockStoragePrivateUpload.mockRejectedValueOnce(storageDown);
+
+        await expect(service.uploadTemplateImage(templateId, file)).rejects.toBe(storageDown);
+
+        expect(updateCertificateTemplateImage).not.toHaveBeenCalled();
+        expect(mockStorageDelete.mock.calls.map((c) => c[0])).toEqual([uploadedKey()]);
+      });
+
+      it("row update failure keeps the old images, deletes the new objects and rethrows", async () => {
         const dbDown = new Error("db down");
         vi.mocked(updateCertificateTemplateImage).mockRejectedValueOnce(dbDown);
 
         await expect(service.uploadTemplateImage(templateId, file)).rejects.toBe(dbDown);
 
-        expect(mockStorageDelete).toHaveBeenCalledTimes(1);
-        expect(mockStorageDelete).toHaveBeenCalledWith(uploadedKey());
+        expect(mockStorageDelete.mock.calls.map((c) => c[0])).toEqual([
+          uploadedKey(),
+          renderKey(),
+        ]);
         expect(mockStorageDelete).not.toHaveBeenCalledWith(oldKey);
       });
 
-      it("template deleted during the upload → 404 and the new object is removed", async () => {
+      it("template deleted during the upload → 404 and the new objects are removed", async () => {
         vi.mocked(updateCertificateTemplateImage).mockResolvedValueOnce(null as never);
 
         await expect(service.uploadTemplateImage(templateId, file)).rejects.toMatchObject({
@@ -601,8 +723,34 @@ describe("CertificatesService", () => {
           code: ErrorCodes.NOT_FOUND,
         });
 
-        expect(mockStorageDelete).toHaveBeenCalledTimes(1);
-        expect(mockStorageDelete).toHaveBeenCalledWith(uploadedKey());
+        expect(mockStorageDelete.mock.calls.map((c) => c[0])).toEqual([
+          uploadedKey(),
+          renderKey(),
+        ]);
+      });
+
+      it("deletes the old render image after the row update, under the event's prefix only", async () => {
+        const oldRenderKey = `${eventId}/certificates/${templateId}-old-render.jpg`;
+        vi.mocked(getCertificateTemplateForUpload).mockResolvedValue({
+          id: templateId,
+          eventId,
+          templateUrl: oldUrl,
+          renderImageKey: oldRenderKey,
+        });
+
+        await service.uploadTemplateImage(templateId, file);
+
+        expect(mockStorageDelete.mock.calls.map((c) => c[0])).toEqual([oldKey, oldRenderKey]);
+
+        mockStorageDelete.mockClear();
+        vi.mocked(getCertificateTemplateForUpload).mockResolvedValue({
+          id: templateId,
+          eventId,
+          templateUrl: oldUrl,
+          renderImageKey: "evt-999/certificates/x-render.jpg",
+        });
+        await service.uploadTemplateImage(templateId, file);
+        expect(mockStorageDelete.mock.calls.map((c) => c[0])).toEqual([oldKey]);
       });
 
       it("an old-image delete failure does not fail the request", async () => {
@@ -617,6 +765,7 @@ describe("CertificatesService", () => {
           id: templateId,
           eventId,
           templateUrl: "https://storage.googleapis.com/bucket/evt-999/certificates/x.png",
+          renderImageKey: null,
         });
 
         await service.uploadTemplateImage(templateId, file);
@@ -880,6 +1029,76 @@ describe("CertificatesService", () => {
       await expect(service.sendCertificates(event, undefined)).rejects.toMatchObject({
         statusCode: 404,
         code: ErrorCodes.NOT_FOUND,
+      });
+    });
+
+    describe("dedupe read before contexts (3.8)", () => {
+      beforeEach(() => {
+        vi.mocked(getTemplateByTrigger).mockResolvedValue({ id: "et1" } as never);
+        vi.mocked(listActiveImageReadyCertificateTemplates).mockResolvedValue([
+          certTemplate() as never,
+          certTemplate({ id: "c2", name: "Cert B" }) as never,
+        ]);
+        vi.mocked(getRegistrationsForCertificateSend).mockResolvedValue([
+          registration({ id: "reg-1", accessTypeIds: ["a1"] }) as never,
+          registration({ id: "reg-2", email: "b@b.com", accessTypeIds: ["a1", "a2"] }) as never,
+          registration({ id: "reg-3", email: "c@b.com", accessTypeIds: [] }) as never,
+        ]);
+      });
+
+      it("reads what was already sent before building any context, and builds none for fully sent registrations", async () => {
+        vi.mocked(getAlreadySentCertTemplateIds).mockResolvedValue(
+          new Map([
+            ["reg-1", new Set(["c1", "c2"])],
+            ["reg-2", new Set(["c1"])],
+          ]),
+        );
+
+        const result = await service.sendCertificates(event, undefined);
+
+        expect(getAlreadySentCertTemplateIds).toHaveBeenCalledTimes(1);
+        expect(getAlreadySentCertTemplateIds).toHaveBeenCalledWith(["reg-1", "reg-2", "reg-3"]);
+        const [readOrder] = vi.mocked(getAlreadySentCertTemplateIds).mock.invocationCallOrder;
+        const [lookupsOrder] = vi.mocked(loadEmailContextLookups).mock.invocationCallOrder;
+        const contextOrders = vi.mocked(buildEmailContextWithAccess).mock.invocationCallOrder;
+        expect(readOrder).toBeLessThan(lookupsOrder);
+        expect(readOrder).toBeLessThan(Math.min(...contextOrders));
+
+        // reg-1 has every certificate: no context, not a candidate.
+        expect(
+          vi.mocked(buildEmailContextWithAccess).mock.calls.map(([reg]) => reg.id),
+        ).toEqual(["reg-2", "reg-3"]);
+        expect(queuedInput().registrations.map((c) => c.targetId)).toEqual(["reg-2", "reg-3"]);
+        // reg-2 still offers both certificates: the transaction decides under the lock.
+        expect(queuedInput().registrations[0].certificates.map((c) => c.id)).toEqual(["c1", "c2"]);
+        expect(result).toMatchObject({ queued: 2, skipped: 1, skippedConflict: 0, total: 3 });
+      });
+
+      it("loads the event's pricing and access once for the whole send", async () => {
+        await service.sendCertificates(event, undefined);
+
+        expect(loadEmailContextLookups).toHaveBeenCalledTimes(1);
+        const [[lookupEventId, accessIds]] = vi.mocked(loadEmailContextLookups).mock.calls;
+        expect(lookupEventId).toBe(eventId);
+        expect(new Set(accessIds)).toEqual(new Set(["a1", "a2"]));
+        const lookups = await vi.mocked(loadEmailContextLookups).mock.results[0].value;
+        expect(vi.mocked(buildEmailContextWithAccess).mock.calls).toHaveLength(3);
+        for (const call of vi.mocked(buildEmailContextWithAccess).mock.calls) {
+          expect(call[1]).toBe(lookups);
+        }
+      });
+
+      it("builds no context and loads nothing when every registration was already sent", async () => {
+        vi.mocked(getAlreadySentCertTemplateIds).mockResolvedValue(
+          new Map(["reg-1", "reg-2", "reg-3"].map((id) => [id, new Set(["c1", "c2"])])),
+        );
+
+        const result = await service.sendCertificates(event, undefined);
+
+        expect(loadEmailContextLookups).not.toHaveBeenCalled();
+        expect(buildEmailContextWithAccess).not.toHaveBeenCalled();
+        expect(queuedInput().registrations).toEqual([]);
+        expect(result).toMatchObject({ queued: 0, skipped: 3, skippedConflict: 0, total: 3 });
       });
     });
 

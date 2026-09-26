@@ -15,7 +15,9 @@ import {
   getAbstractForCertificateGeneration,
   getActiveImageReadyCertificateTemplatesByIds,
 } from "@app/db";
-import { extractStorageKeyFromUrl, getStorageProvider } from "./storage/index";
+import { extractStorageKeyFromUrl } from "./storage/index";
+import { StorageObjectNotFoundError } from "./storage/storage.provider";
+import { loadCertificateImage } from "./certificate-image-cache";
 import { dejaVuFontPath, embedFontFile } from "./pdf-fonts";
 import { logger } from "./logger";
 import { integrationsConfig } from "./config";
@@ -29,14 +31,14 @@ import type {
 // TYPES
 // =============================================================================
 
-export type ImageCache = Map<string, Buffer>;
-
 export interface CertificateTemplateData {
   id: string;
   name: string;
   templateUrl: string;
   templateWidth: number;
   templateHeight: number;
+  /** Storage key of the render image (3.8); null until uploaded or backfilled. */
+  renderImageKey: string | null;
   zones: CertificateZone[];
   applicableRoles: string[];
   accessId: string | null;
@@ -342,54 +344,66 @@ function fitTextToZone(
 
 // =============================================================================
 // STORAGE (template background image)
+// Bytes come through the process-wide certificate image cache (3.8).
 // =============================================================================
 
-async function downloadTemplateImage(templateUrl: string): Promise<Buffer> {
+/**
+ * The background to embed: the render image (a flattened JPEG, 3.8) when the
+ * template has one, else the original upload. A render image missing from
+ * storage falls back to the original too.
+ */
+async function getTemplateImageBuffer(template: {
+  id?: string;
+  templateUrl: string;
+  renderImageKey: string | null;
+}): Promise<Buffer> {
+  if (template.renderImageKey) {
+    try {
+      return await loadCertificateImage(template.renderImageKey);
+    } catch (error) {
+      if (!(error instanceof StorageObjectNotFoundError)) throw error;
+      logger.warn(
+        { templateId: template.id, key: template.renderImageKey },
+        "Certificate render image missing from storage; using the original image",
+      );
+    }
+  }
+
   // Template images are always full URLs; a bare key is not accepted.
-  const key = extractStorageKeyFromUrl(templateUrl, { allowBareKey: false });
+  const key = extractStorageKeyFromUrl(template.templateUrl, { allowBareKey: false });
   if (!key) {
     throw new Error(
       "Certificate template image is not stored in a supported location",
     );
   }
-  const file = await getStorageProvider().download(key);
-  return file.buffer;
-}
-
-async function getTemplateImageBuffer(
-  templateUrl: string,
-  imageCache: ImageCache,
-): Promise<Buffer> {
-  const cached = imageCache.get(templateUrl);
-  if (cached) return cached;
-
-  const buffer = await downloadTemplateImage(templateUrl);
-  imageCache.set(templateUrl, buffer);
-  return buffer;
+  return loadCertificateImage(key);
 }
 
 // =============================================================================
 // SINGLE PDF GENERATION
 // =============================================================================
 
+/**
+ * One certificate PDF. The page is templateWidth x templateHeight points (the
+ * original image's pixel size) and the background fills it, whichever image
+ * is embedded, so zone positions never depend on the render image's size.
+ */
 export async function generateCertificatePdf(
   template: {
+    id?: string;
     templateUrl: string;
     templateWidth: number;
     templateHeight: number;
+    renderImageKey: string | null;
     zones: CertificateZone[];
   },
   resolvedValues: Record<string, string>,
-  imageCache: ImageCache,
 ): Promise<Buffer> {
-  const imageBuffer = await getTemplateImageBuffer(
-    template.templateUrl,
-    imageCache,
-  );
+  const imageBuffer = await getTemplateImageBuffer(template);
 
   const pdfDoc = await PDFDocument.create();
 
-  // Detect format from magic bytes
+  // Detect format from magic bytes (a render image is always a JPEG).
   const isPng = imageBuffer[0] === 0x89 && imageBuffer[1] === 0x50;
   const isJpg = imageBuffer[0] === 0xff && imageBuffer[1] === 0xd8;
 
@@ -539,7 +553,6 @@ async function renderCertificateAttachments(
   templates: CertificateTemplateData[],
   baseVariableData: CertificateVariableData,
   filenameId: string,
-  imageCache: ImageCache,
   logContext: Record<string, unknown>,
 ): Promise<EmailAttachment[]> {
   const attachments: EmailAttachment[] = [];
@@ -559,11 +572,7 @@ async function renderCertificateAttachments(
     }
 
     try {
-      const pdfBuffer = await generateCertificatePdf(
-        template,
-        resolvedValues,
-        imageCache,
-      );
+      const pdfBuffer = await generateCertificatePdf(template, resolvedValues);
 
       const safeTemplateName = safeFilenameSegment(template.name, "certificate");
       const templateShortId = template.id.slice(0, 8);
@@ -594,7 +603,6 @@ async function renderCertificateAttachments(
 export async function generateCertificateAttachments(
   registration: RegistrationForCertificate,
   templates: CertificateTemplateData[],
-  imageCache: ImageCache,
 ): Promise<EmailAttachment[]> {
   const eligible = templates.filter((t) =>
     isEligibleForCertificate(registration, t),
@@ -613,7 +621,6 @@ export async function generateCertificateAttachments(
     eligible,
     variableData,
     registration.id,
-    imageCache,
     { registrationId: registration.id },
   );
 }
@@ -628,7 +635,6 @@ export async function generateCertificateAttachments(
 export async function generateAbstractCertificateAttachments(
   abstract: AbstractForCertificate,
   templates: CertificateTemplateData[],
-  imageCache: ImageCache,
 ): Promise<EmailAttachment[]> {
   const eligible = templates.filter((t) =>
     isAbstractEligibleForCertificate(abstract.finalType, t),
@@ -655,7 +661,6 @@ export async function generateAbstractCertificateAttachments(
     eligible,
     variableData,
     abstract.id,
-    imageCache,
     { abstractId: abstract.id },
   );
 }
@@ -682,6 +687,7 @@ function toCertificateTemplateData(
     templateUrl: t.templateUrl,
     templateWidth: t.templateWidth,
     templateHeight: t.templateHeight,
+    renderImageKey: t.renderImageKey,
     zones: (t.zones as CertificateZone[]) ?? [],
     applicableRoles: (t.applicableRoles as string[] | null) ?? [],
     accessId: t.accessId,
@@ -694,7 +700,6 @@ function toCertificateTemplateData(
 async function generateRegistrationCertificateEmailAttachments(
   registrationId: string,
   certificateTemplateIds: string[],
-  imageCache: ImageCache,
 ): Promise<EmailAttachment[]> {
   const registration = await getRegistrationForCertificateGeneration(
     registrationId,
@@ -718,7 +723,6 @@ async function generateRegistrationCertificateEmailAttachments(
   return generateCertificateAttachments(
     registration,
     toCertificateTemplateData(templates),
-    imageCache,
   );
 }
 
@@ -727,7 +731,6 @@ async function generateRegistrationCertificateEmailAttachments(
 async function generateAbstractCertificateEmailAttachments(
   abstractId: string,
   certificateTemplateIds: string[],
-  imageCache: ImageCache,
 ): Promise<EmailAttachment[]> {
   const abstract = await getAbstractForCertificateGeneration(abstractId);
   if (!abstract) {
@@ -749,19 +752,15 @@ async function generateAbstractCertificateEmailAttachments(
   return generateAbstractCertificateAttachments(
     abstract,
     toCertificateTemplateData(templates),
-    imageCache,
   );
 }
 
 export const generateCertificateEmailAttachments: CertificateAttachmentGenerator =
   async (ctx: CertificateAttachmentContext): Promise<EmailAttachment[]> => {
-    const imageCache = ctx.imageCache as ImageCache;
-
     if (ctx.abstractId) {
       return generateAbstractCertificateEmailAttachments(
         ctx.abstractId,
         ctx.certificateTemplateIds,
-        imageCache,
       );
     }
     if (!ctx.registrationId) {
@@ -772,6 +771,5 @@ export const generateCertificateEmailAttachments: CertificateAttachmentGenerator
     return generateRegistrationCertificateEmailAttachments(
       ctx.registrationId,
       ctx.certificateTemplateIds,
-      imageCache,
     );
   };

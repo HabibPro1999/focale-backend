@@ -21,6 +21,7 @@ import {
   deleteCertificateTemplateById,
   listActiveImageReadyCertificateTemplates,
   getRegistrationsForCertificateSend,
+  getAlreadySentCertTemplateIds,
   getTemplateByTrigger,
   getAbstractsForCertificateSend,
   queueCertificateEmailLogsTxn,
@@ -36,6 +37,9 @@ import {
   getStorageProvider,
   ownedStorageKey,
   buildEmailContextWithAccess,
+  loadEmailContextLookups,
+  deriveCertificateRenderImage,
+  certificateRenderImageKey,
   isEligibleForCertificate,
   isAbstractEligibleForCertificate,
   StorageObjectNotFoundError,
@@ -52,8 +56,12 @@ const MIME_TO_EXT: Record<string, string> = {
   "image/jpeg": "jpg",
 };
 
-// Build email contexts 10-at-a-time to limit DB pressure (each does its own reads).
+// Build email contexts 10-at-a-time to limit DB pressure (a registrant with a
+// sponsorship code still reads it).
 const CONTEXT_CONCURRENCY = 10;
+
+const INVALID_TEMPLATE_IMAGE_MESSAGE =
+  "Invalid image. Upload a valid PNG or JPEG of at most 20 megapixels.";
 
 interface SendEventContext {
   id: string;
@@ -296,15 +304,23 @@ export class CertificatesService {
         }
       }
     }
+    // 3.8: the render image, only when it lies under this event's prefix.
+    const renderKey = ownedStorageKey(
+      template.renderImageKey,
+      `${template.eventId}/certificates`,
+    );
+    if (renderKey) await deleteCertificateImageBestEffort(renderKey);
 
     await deleteCertificateTemplateById(id);
   }
 
   /**
    * Upload a template image. Sniffs magic bytes (never trusts Content-Type),
-   * stores at ORIGINAL resolution under a fresh key (sharp is read-only metadata
-   * here — print quality), persists url + dimensions, then deletes the old image
-   * (best-effort) once the row points at the new one.
+   * stores the original under a fresh key (its pixel size is the certificate
+   * page size) plus the render image derived from it (3.8: a flattened JPEG,
+   * at most 3508 px, that the worker embeds), persists url + dimensions +
+   * render image, then deletes the old images (best-effort) once the row
+   * points at the new ones.
    */
   async uploadTemplateImage(
     id: string,
@@ -328,30 +344,54 @@ export class CertificatesService {
       );
     }
 
-    // Header-only read, but it enforces the pixel limit before anything is stored
-    // (the image is later decoded at full size to render certificates).
+    // Header-only read, but it enforces the pixel limit before anything is
+    // decoded or stored. The original's pixel size is the certificate page size.
     const metadata = await sharp(file.buffer, IMAGE_INPUT_LIMITS)
       .metadata()
       .catch(() => {
         throw new AppException(
           ErrorCodes.VALIDATION_ERROR,
-          "Invalid image. Upload a valid PNG or JPEG of at most 20 megapixels.",
+          INVALID_TEMPLATE_IMAGE_MESSAGE,
           400,
         );
       });
     const width = metadata.width ?? 0;
     const height = metadata.height ?? 0;
 
+    // 3.8: the one full decode, under the same limits; an image that cannot
+    // be decoded is refused here instead of failing every certificate later.
+    const render = await deriveCertificateRenderImage(file.buffer).catch(() => {
+      throw new AppException(
+        ErrorCodes.VALIDATION_ERROR,
+        INVALID_TEMPLATE_IMAGE_MESSAGE,
+        400,
+      );
+    });
+
     const ext = MIME_TO_EXT[detected.mime] ?? "png";
     const ownedPrefix = `${template.eventId}/certificates`;
     // A fresh key per upload: the image the row points at (served with a
-    // year-long public cache) is never overwritten.
-    const key = `${ownedPrefix}/${template.id}-${randomUUID()}.${ext}`;
-    const templateUrl = await getStorageProvider().uploadPublic(
+    // year-long public cache, and cached by key in the worker) is never
+    // overwritten. The render image sits beside it.
+    const imageId = randomUUID();
+    const key = `${ownedPrefix}/${template.id}-${imageId}.${ext}`;
+    const renderKey = certificateRenderImageKey(template.eventId, template.id, imageId);
+    const storage = getStorageProvider();
+    const templateUrl = await storage.uploadPublic(
       file.buffer,
       key,
       detected.mime,
     );
+    try {
+      await storage.uploadPrivate(render.buffer, renderKey, render.contentType);
+    } catch (err) {
+      await deleteCertificateImageBestEffort(key);
+      throw err;
+    }
+    const removeNewImages = async () => {
+      await deleteCertificateImageBestEffort(key);
+      await deleteCertificateImageBestEffort(renderKey);
+    };
 
     // Typed non-null, but the reload yields null when the row is gone.
     let updated: CertificateTemplateWithAccess | null;
@@ -360,14 +400,17 @@ export class CertificatesService {
         templateUrl,
         templateWidth: width,
         templateHeight: height,
+        renderImageKey: renderKey,
+        renderImageWidth: render.width,
+        renderImageHeight: render.height,
       });
     } catch (err) {
-      await deleteCertificateImageBestEffort(key);
+      await removeNewImages();
       throw err;
     }
     if (!updated) {
       // The template was deleted while the image was uploading.
-      await deleteCertificateImageBestEffort(key);
+      await removeNewImages();
       throw new AppException(
         ErrorCodes.NOT_FOUND,
         "Certificate template not found",
@@ -385,6 +428,10 @@ export class CertificatesService {
           "Old certificate image is outside the event's storage prefix; not deleting",
         );
       }
+    }
+    if (template.renderImageKey && template.renderImageKey !== renderKey) {
+      const oldRenderKey = ownedStorageKey(template.renderImageKey, ownedPrefix);
+      if (oldRenderKey) await deleteCertificateImageBestEffort(oldRenderKey);
     }
     return updated;
   }
@@ -442,6 +489,7 @@ export class CertificatesService {
       templateUrl: t.templateUrl,
       templateWidth: t.templateWidth,
       templateHeight: t.templateHeight,
+      renderImageKey: t.renderImageKey,
       zones: (t.zones as CertificateTemplateData["zones"]) ?? [],
       applicableRoles: (t.applicableRoles as string[] | null) ?? [],
       accessId: t.accessId,
@@ -475,13 +523,34 @@ export class CertificatesService {
       })
       .filter(({ eligible }) => eligible.length > 0);
 
-    // 5. Build email contexts in batches of CONTEXT_CONCURRENCY.
-    const registrationCandidates: CertificateEmailCandidate[] = [];
+    // 5. Dedupe read before any context is built (3.8): a registration whose
+    // eligible certificates were all queued or sent already costs no context.
+    // Not locking; queueCertificateEmailLogsTxn re-reads under the event lock
+    // and stays the authority for what gets queued.
+    const sentBefore = await getAlreadySentCertTemplateIds(
+      eligibleRegs.map(({ reg }) => reg.id),
+    );
+    const regsToQueue = eligibleRegs.filter(({ reg, eligible }) => {
+      const sent = sentBefore.get(reg.id);
+      return !sent || eligible.some((t) => !sent.has(t.id));
+    });
+    const alreadySentBefore = eligibleRegs.length - regsToQueue.length;
 
-    for (let i = 0; i < eligibleRegs.length; i += CONTEXT_CONCURRENCY) {
-      const chunk = eligibleRegs.slice(i, i + CONTEXT_CONCURRENCY);
+    // 6. Build email contexts in batches of CONTEXT_CONCURRENCY; the event's
+    // pricing and the access items are read once for the whole send.
+    const registrationCandidates: CertificateEmailCandidate[] = [];
+    const contextLookups =
+      regsToQueue.length > 0
+        ? await loadEmailContextLookups(
+            event.id,
+            regsToQueue.flatMap(({ reg }) => reg.accessTypeIds ?? []),
+          )
+        : undefined;
+
+    for (let i = 0; i < regsToQueue.length; i += CONTEXT_CONCURRENCY) {
+      const chunk = regsToQueue.slice(i, i + CONTEXT_CONCURRENCY);
       const contexts = await Promise.all(
-        chunk.map(({ reg }) => buildEmailContextWithAccess(reg)),
+        chunk.map(({ reg }) => buildEmailContextWithAccess(reg, contextLookups)),
       );
 
       for (let j = 0; j < chunk.length; j++) {
@@ -497,13 +566,13 @@ export class CertificatesService {
       }
     }
 
-    // 6. Abstract presenter certificates (H2) — only when requested.
+    // 7. Abstract presenter certificates (H2) — only when requested.
     const abstractPlan =
       abstractIds !== undefined
         ? await this.planAbstractCertificates(event, templateData, abstractIds)
         : undefined;
 
-    // 7. Queue both batches in one transaction, under the event lock, deduped
+    // 8. Queue both batches in one transaction, under the event lock, deduped
     // per certificate template against what is already queued or sent.
     const outcomes = await queueCertificateEmailLogsTxn({
       eventId: event.id,
@@ -516,7 +585,7 @@ export class CertificatesService {
     }
 
     let queued = 0;
-    let alreadySent = 0;
+    let alreadySent = alreadySentBefore;
     let skippedConflict = 0;
     const breakdown: Record<string, number> = {};
     for (const outcome of outcomes.registrations) {
