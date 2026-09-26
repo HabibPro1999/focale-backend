@@ -25,7 +25,8 @@ Thumbs.db
 *.swp
 *.swo
 
-# Local agent workflow artifacts
+# Local agent workflow artifacts (root only: packages/contracts/src/artifacts/ is source)
+/artifacts/
 .codex/
 .memory/
 .progress/
@@ -44,9 +45,14 @@ prisma/*.db
 prisma/*.db-journal
 prisma/seed.ts
 src/generated/
-# Local docs stay untracked; architecture decision records are committed.
+# Local docs stay untracked; architecture decision records and the guides
+# below are committed.
 docs/*
 !docs/adr/
+!docs/render-runbook.md
+!docs/migration-authoring.md
+!docs/single-instance.md
+!docs/production-rollout-checklist.md
 load-env.fish
 
 # Database backups

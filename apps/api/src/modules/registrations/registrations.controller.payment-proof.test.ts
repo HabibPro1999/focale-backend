@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RegistrationsController } from "./registrations.controller";
 import type { RegistrationsService } from "./registrations.service";
+import type { RegistrationCreateService } from "./registrations.create.service";
 import type { RegistrationRepricer } from "./registrations.repricer";
 import type { RegistrationPaymentsService } from "./registrations.payments.service";
 import {
@@ -39,6 +40,7 @@ function makeController(registration: unknown) {
   } as unknown as RegistrationsService;
   return new RegistrationsController(
     service,
+    {} as RegistrationCreateService,
     {} as RegistrationRepricer,
     {} as RegistrationPaymentsService,
   );

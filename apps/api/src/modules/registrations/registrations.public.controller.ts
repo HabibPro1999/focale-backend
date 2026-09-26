@@ -24,6 +24,7 @@ import {
 import { AppException } from "../../core/app-exception";
 import { ResponseContract } from "../../core/response-contract";
 import { RegistrationsService } from "./registrations.service";
+import { RegistrationCreateService } from "./registrations.create.service";
 import { PaymentProofService } from "./registrations.payment-proof.service";
 import { RegistrationRepricer } from "./registrations.repricer";
 import { RegistrationPaymentsService } from "./registrations.payments.service";
@@ -54,7 +55,7 @@ const PAYMENT_PROOF_THROTTLE = { default: { limit: 10, ttl: 60_000 } };
 // POST /api/public/forms/:formId/register — submit a public registration.
 @Controller("api/public/forms")
 export class RegistrationsPublicController {
-  constructor(private readonly service: RegistrationsService) {}
+  constructor(private readonly creator: RegistrationCreateService) {}
 
   @Post(":formId/register")
   @Throttle(REGISTRATION_THROTTLE)
@@ -65,7 +66,7 @@ export class RegistrationsPublicController {
     @Res({ passthrough: true }) reply: FastifyReply,
   ) {
     const { created, registration, priceBreakdown } =
-      await this.service.createPublicRegistration(formId, body);
+      await this.creator.createPublicRegistration(formId, body);
     // Idempotency hits return 200; a fresh create returns 201.
     void reply.status(created ? 201 : 200);
     return { registration, priceBreakdown };

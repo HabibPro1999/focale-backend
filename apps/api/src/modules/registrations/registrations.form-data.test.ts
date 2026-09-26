@@ -109,7 +109,7 @@ import type { Config } from "../../core/config";
 import type { AccessService } from "../access/access.service";
 import { PricingPublicController } from "../pricing/pricing.public.controller";
 import { PricingService } from "../pricing/pricing.service";
-import { RegistrationsService } from "./registrations.service";
+import { RegistrationCreateService } from "./registrations.create.service";
 import { RegistrationRepricer } from "./registrations.repricer";
 import { RegistrationSideEffects } from "./registrations.side-effects";
 
@@ -186,7 +186,7 @@ const PRICING: EventPricingWithRules = {
 const client = { active: true, enabledModules: ["registrations", "pricing"] };
 const openEvent = { clientId: "c1", status: "OPEN", endDate: FUTURE, client };
 
-let service: RegistrationsService;
+let service: RegistrationCreateService;
 let repricer: RegistrationRepricer;
 let quote: PricingPublicController;
 let access: Record<string, ReturnType<typeof vi.fn>>;
@@ -254,7 +254,7 @@ beforeEach(() => {
   };
   const pricing = new PricingService();
   quote = new PricingPublicController(pricing);
-  service = new RegistrationsService(
+  service = new RegistrationCreateService(
     access as unknown as AccessService,
     pricing,
     { publicLinkAllowedOrigins: [] } as unknown as Config,

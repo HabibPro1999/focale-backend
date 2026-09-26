@@ -40,6 +40,7 @@ import { assertModuleEnabledForClient } from "../clients/module-gates";
 import { AppException } from "../../core/app-exception";
 import { EventScoped, RegistrationScoped, ScopedClient } from "../tenancy";
 import { RegistrationsService } from "./registrations.service";
+import { RegistrationCreateService } from "./registrations.create.service";
 import { RegistrationRepricer } from "./registrations.repricer";
 import { RegistrationPaymentsService } from "./registrations.payments.service";
 import {
@@ -62,6 +63,7 @@ import {
 export class RegistrationsController {
   constructor(
     private readonly service: RegistrationsService,
+    private readonly creator: RegistrationCreateService,
     private readonly repricer: RegistrationRepricer,
     private readonly payments: RegistrationPaymentsService,
   ) {}
@@ -95,7 +97,7 @@ export class RegistrationsController {
     @Body() body: AdminCreateRegistrationDto,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.service.createAdminRegistration(eventId, body, user.id);
+    return this.creator.createAdminRegistration(eventId, body, user.id);
   }
 
   // PUT /api/events/:eventId/registrations/:id/admin-edit — requires admin role.
