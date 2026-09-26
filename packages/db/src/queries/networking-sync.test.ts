@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { DbExecutor } from "../client";
 
 const mocks = vi.hoisted(() => ({
-  getDb: vi.fn(() => {
+  getDb: vi.fn<() => DbExecutor>(() => {
     throw new Error("no database in unit tests");
   }),
   syncNetworkingRegistration: vi.fn(),
@@ -17,10 +18,14 @@ import { handleNetworkingEventSyncOutbox, handleNetworkingRegistrationSyncOutbox
 describe("networking.registration.sync handler", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("syncs the registration with the production sync by default", async () => {
+  it("syncs the registration in its own serializable transaction by default", async () => {
+    const tx = { executor: "transaction" } as unknown as DbExecutor;
+    const transaction = vi.fn((run: (db: DbExecutor) => Promise<unknown>) => run(tx));
+    mocks.getDb.mockReturnValueOnce({ transaction } as unknown as DbExecutor);
     mocks.syncNetworkingRegistration.mockResolvedValue({ created: 1, updated: 0 });
     await expect(handleNetworkingRegistrationSyncOutbox({ registrationId: "r1" }, { id: "o1" })).resolves.toBe("processed");
-    expect(mocks.syncNetworkingRegistration).toHaveBeenCalledWith("r1");
+    expect(transaction).toHaveBeenCalledWith(expect.any(Function), { isolationLevel: "serializable" });
+    expect(mocks.syncNetworkingRegistration).toHaveBeenCalledWith("r1", tx);
   });
 
   it("is skipped when the sync changed nothing (withdrawn, erased, or networking off without a profile)", async () => {

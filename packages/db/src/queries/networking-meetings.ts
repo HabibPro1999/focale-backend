@@ -1,5 +1,5 @@
 import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
-import { getDb, type DbExecutor } from "../client";
+import type { DbExecutor } from "../client";
 import {
   networkingMeetings,
   networkingNotifications,
@@ -105,7 +105,7 @@ export async function transitionNetworkingMeetings(
  * Read paths call it outside a transaction, so it never sweeps history: the
  * released-reservation sweep belongs to maintenance.
  */
-export async function expireNetworkingProposals(eventId?: string, db: DbExecutor = getDb()) {
+export async function expireNetworkingProposals(eventId: string | undefined, db: DbExecutor) {
   const scope = eventId ? sql`AND event_id=${eventId}` : sql``;
   const { from, to } = NETWORKING_MEETING_TRANSITIONS.EXPIRE;
   await db.execute(sql`
@@ -124,7 +124,7 @@ export async function expireNetworkingProposals(eventId?: string, db: DbExecutor
  * Maintenance safety net: deletes reservations still attached to a released
  * meeting (rows released before per-transition releases, or by hand).
  */
-export async function sweepReleasedNetworkingReservations(eventId?: string, db: DbExecutor = getDb()) {
+export async function sweepReleasedNetworkingReservations(eventId: string | undefined, db: DbExecutor) {
   const scope = eventId ? sql`AND r.event_id=${eventId}` : sql``;
   await db.execute(sql`
     DELETE FROM networking_reservations r

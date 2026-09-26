@@ -35,12 +35,12 @@ describe.runIf(dbTestsEnabled())("networking keyring usage and reseal", () => {
       },
     ]);
     // One session already moved to k1, one revoked legacy session that no longer counts.
-    await networkingStore().update("sessions", { id: fixture.participants[2]!.session.id }, { tokenHash: rotated.mac("session", "moved") });
-    await networkingStore().insert("sessions", {
+    await networkingStore(getDb()).update("sessions", { id: fixture.participants[2]!.session.id }, { tokenHash: rotated.mac("session", "moved") });
+    await networkingStore(getDb()).insert("sessions", {
       eventId: fixture.event.id, profileId: a!.profile.id, tokenHash: legacy.mac("session", "revoked"),
       expiresAt: new Date(Date.now() + 86_400_000), revokedAt: new Date(),
     });
-    await networkingStore().insert("deliveries", {
+    await networkingStore(getDb()).insert("deliveries", {
       eventId: fixture.event.id, profileId: a!.profile.id, type: "OTP", dedupeKey: `otp:${fixture.event.id}`,
       payload: { encryptedCode: legacy.seal("123456"), challengeId: "c" },
     });
@@ -61,10 +61,10 @@ describe.runIf(dbTestsEnabled())("networking keyring usage and reseal", () => {
   });
 
   it("reseals authenticator secrets with the current key only when applied", async () => {
-    expect(await resealNetworkingSecrets(rotated)).toEqual({ checked: 3, resealed: 2, unreadable: 0 });
+    expect(await resealNetworkingSecrets(rotated, getDb())).toEqual({ checked: 3, resealed: 2, unreadable: 0 });
     const before = await getDb().select().from(networkingSecondFactors);
     expect(before.filter((row) => row.encryptedSecret?.startsWith("v1:k1:"))).toHaveLength(1);
-    expect(await resealNetworkingSecrets(rotated, { apply: true, batchSize: 1 })).toEqual({ checked: 3, resealed: 2, unreadable: 0 });
+    expect(await resealNetworkingSecrets(rotated, getDb(), { apply: true, batchSize: 1 })).toEqual({ checked: 3, resealed: 2, unreadable: 0 });
     const after = await getDb().select().from(networkingSecondFactors);
     for (const row of after) {
       for (const sealed of [row.encryptedSecret, row.pendingEncryptedSecret].filter((value): value is string => !!value)) {
@@ -72,9 +72,9 @@ describe.runIf(dbTestsEnabled())("networking keyring usage and reseal", () => {
         expect(["SECRETA", "SECRETB", "PENDINGB"]).toContain(rotated.open(sealed));
       }
     }
-    expect(await resealNetworkingSecrets(rotated, { apply: true })).toEqual({ checked: 3, resealed: 0, unreadable: 0 });
+    expect(await resealNetworkingSecrets(rotated, getDb(), { apply: true })).toEqual({ checked: 3, resealed: 0, unreadable: 0 });
     // A key that is gone leaves its secrets unreadable and untouched.
-    expect(await resealNetworkingSecrets(new NetworkingKeyring({ keys: [{ kid: "k2", secret: `${k1}-k2` }] }))).toEqual({ checked: 3, resealed: 0, unreadable: 3 });
+    expect(await resealNetworkingSecrets(new NetworkingKeyring({ keys: [{ kid: "k2", secret: `${k1}-k2` }] }), getDb())).toEqual({ checked: 3, resealed: 0, unreadable: 3 });
     const usage = await networkingKeyUsage();
     expect(usage.filter((row) => row.use === "seal")).toEqual([{ use: "seal", kid: "k1", count: 3 }]);
     // Recovery codes cannot be resealed: they keep blocking a full retirement.

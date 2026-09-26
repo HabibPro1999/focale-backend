@@ -50,7 +50,7 @@ describe.runIf(dbTestsEnabled())("networking writes on a pool of one connection"
 
   it("signs in with a code", async () => {
     const { challengeId } = await service.requestCode(fixture.event.slug, people[0].profile.email);
-    const delivery = await networkingStore().one("deliveries", { dedupeKey: `otp:${challengeId}` });
+    const delivery = await networkingStore(getDb()).one("deliveries", { dedupeKey: `otp:${challengeId}` });
     const code = openNetworkingSecret(String(delivery!.payload.encryptedCode));
     expect((await service.verifyCode(fixture.event.slug, challengeId, code)).token).toHaveLength(64);
   });
@@ -92,9 +92,9 @@ describe.runIf(dbTestsEnabled())("networking writes on a pool of one connection"
     await social.block(people[4], people[3].profile.id);
     await meetings.create(people[0], { profileId: people[1].profile.id, startsAt: slots[3].toISOString() });
     const photoUrl = `https://cdn.test/networking/${fixture.event.id}/profiles/${people[1].profile.id}/photo.webp`;
-    await networkingStore().update("profiles", { eventId: fixture.event.id, id: people[1].profile.id }, { photoUrl });
+    await networkingStore(getDb()).update("profiles", { eventId: fixture.event.id, id: people[1].profile.id }, { photoUrl });
     expect(await controller.withdraw(fixture.event.slug, request(1))).toEqual({ withdrawn: true });
-    const active = (await networkingStore().all("meetings", { eventId: fixture.event.id }))
+    const active = (await networkingStore(getDb()).all("meetings", { eventId: fixture.event.id }))
       .filter((row) => ["PENDING", "CONFIRMED", "PENDING_ALLOCATION"].includes(row.status));
     expect(active).toEqual([]);
     // 4.4: the photo's storage.delete outbox row rides the withdrawal transaction's connection.
@@ -115,7 +115,7 @@ describe.runIf(dbTestsEnabled())("networking writes on a pool of one connection"
     await admin.moderate(fixture.event.id, report.id, { action: "SUSPEND", note: "Pool" }, "organizer");
     const space = await admin.inventory.saveSpace(fixture.event.id, { name: "Hall", kind: "TABLE", capacity: 2 }, "organizer");
     await admin.inventory.saveSpace(fixture.event.id, { capacity: 1 }, "organizer", space.id);
-    const [table] = await networkingStore().all("tables", { eventId: fixture.event.id, spaceId: space.id });
+    const [table] = await networkingStore(getDb()).all("tables", { eventId: fixture.event.id, spaceId: space.id });
     await admin.inventory.removeTable(fixture.event.id, table.id, "organizer");
     await admin.inventory.removeSpace(fixture.event.id, space.id, "organizer");
   });

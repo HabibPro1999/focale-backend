@@ -27,7 +27,7 @@ export async function createNetworkingWriteFixture(options: {
   config?: Partial<NetworkingConfig>;
 }) {
   const db = getDb();
-  const store = networkingStore();
+  const store = networkingStore(getDb());
   const clientId = randomUUID(), eventId = randomUUID(), formId = randomUUID();
   const days = [...new Set(options.slots.map((slot) => slot.toISOString().slice(0, 10)))];
   const config = NetworkingConfigSchema.parse({

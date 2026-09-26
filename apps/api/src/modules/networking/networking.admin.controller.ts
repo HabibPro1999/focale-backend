@@ -18,7 +18,7 @@ import {
   type NetworkingMultipartRequest,
 } from "./networking.uploads.service";
 import type { FastifyReply } from "fastify";
-import { getNetworkingEventSyncState, listNetworkingAdminAudit, requestNetworkingEventSync } from "@app/db";
+import { withLockingTxn, getNetworkingEventSyncState, listNetworkingAdminAudit, requestNetworkingEventSync } from "@app/db";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
 import type { AuthUser } from "../../core/auth/user-cache";
@@ -85,7 +85,7 @@ export class NetworkingAdminController {
     @Param("eventId") eventId: string,
   ) {
     await this.access(user, eventId, true);
-    return requestNetworkingEventSync(eventId);
+    return withLockingTxn((tx) => requestNetworkingEventSync(eventId, tx));
   }
   @Get("sync") async syncState(
     @CurrentUser() user: AuthUser,

@@ -23,6 +23,7 @@ import { SkipThrottle, Throttle } from "@nestjs/throttler";
 import { ErrorCodes } from "@app/contracts";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import {
+  getDb,
   networkingDirectoryFacets,
   listNetworkingNotifications,
   recordNetworkingProfileView,
@@ -168,7 +169,7 @@ export class NetworkingPublicController {
     @Req() req: FastifyRequest,
   ) {
     const ctx = await this.context(slug, req);
-    await networkingStore().remove("interests", {
+    await networkingStore(getDb()).remove("interests", {
       eventId: ctx.event.id,
       profileId: ctx.profile.id,
       action: "PASS",
@@ -231,7 +232,7 @@ export class NetworkingPublicController {
     @Req() req: FastifyRequest,
   ) {
     const ctx = await this.context(slug, req);
-    const store = networkingStore();
+    const store = networkingStore(getDb());
     const rows = await store.all("blocks", {
       eventId: ctx.event.id,
       profileId: ctx.profile.id,
@@ -261,7 +262,7 @@ export class NetworkingPublicController {
     @Req() req: FastifyRequest,
   ) {
     const ctx = await this.context(slug, req);
-    await networkingStore().remove("blocks", {
+    await networkingStore(getDb()).remove("blocks", {
       eventId: ctx.event.id,
       profileId: ctx.profile.id,
       targetId: id,
@@ -374,13 +375,13 @@ export class NetworkingPublicController {
     const ctx = await this.context(slug, req);
     if (body.ids) {
       for (const id of body.ids)
-        await networkingStore().update(
+        await networkingStore(getDb()).update(
           "notifications",
           { eventId: ctx.event.id, profileId: ctx.profile.id, id },
           { readAt: new Date() },
         );
     } else
-      await networkingStore().update(
+      await networkingStore(getDb()).update(
         "notifications",
         { eventId: ctx.event.id, profileId: ctx.profile.id, readAt: null },
         { readAt: new Date() },
@@ -410,7 +411,7 @@ export class NetworkingPublicController {
     if (!allowed || url.username || url.password || url.port)
       throw unsupported();
     // One upsert on the unique endpoint: a browser re-subscribing moves its endpoint to this participant.
-    return networkingStore().upsertPushSubscription({
+    return networkingStore(getDb()).upsertPushSubscription({
       eventId: ctx.event.id,
       profileId: ctx.profile.id,
       endpoint: body.endpoint,
@@ -424,7 +425,7 @@ export class NetworkingPublicController {
     @Body() body: { endpoint?: string },
   ) {
     const ctx = await this.context(slug, req);
-    await networkingStore().remove("pushSubscriptions", {
+    await networkingStore(getDb()).remove("pushSubscriptions", {
       eventId: ctx.event.id,
       profileId: ctx.profile.id,
       ...(body?.endpoint ? { endpoint: body.endpoint } : {}),

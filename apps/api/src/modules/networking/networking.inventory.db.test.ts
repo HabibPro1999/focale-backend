@@ -74,7 +74,7 @@ describe.runIf(enabled)(
         "spaces-test-secret-at-least-32-characters";
     });
     beforeEach(async () => {
-      const store = networkingStore();
+      const store = networkingStore(getDb());
       const clientId = randomUUID();
       clientIds.push(clientId);
       await getDb()
@@ -145,7 +145,7 @@ describe.runIf(enabled)(
       }
     });
     afterAll(async () => {
-      const store = networkingStore();
+      const store = networkingStore(getDb());
       for (const clientId of clientIds) {
         for (const row of await store.all("events", { clientId })) {
           await store.remove("meetings", { eventId: row.id });
@@ -216,7 +216,7 @@ describe.runIf(enabled)(
       expect(
         await meetings.participantSlots(people[5], people[2].profile.id),
       ).toContain(slot);
-      const reservations = await networkingStore().all("reservations", {
+      const reservations = await networkingStore(getDb()).all("reservations", {
         eventId: event.id,
       });
       expect(
@@ -263,7 +263,7 @@ describe.runIf(enabled)(
       ).rejects.toThrow(/capacity/);
       expect(
         (
-          await networkingStore().one("profiles", {
+          await networkingStore(getDb()).one("profiles", {
             id: people[2].profile.id,
             eventId: event.id,
           })
@@ -385,7 +385,7 @@ describe.runIf(enabled)(
 
     it("filters the public exhibitor roster by consent, visibility and symmetric blocks", async () => {
       await exhibitor([0, 1, 2]);
-      await networkingStore().update(
+      await networkingStore(getDb()).update(
         "profiles",
         { eventId: event.id, id: people[1].profile.id },
         { visible: false },
@@ -412,14 +412,14 @@ describe.runIf(enabled)(
       });
       const other = await request(3, 0, later);
       await meetings.respond(people[0], other.id, { action: "ACCEPT" });
-      const before = await networkingStore().all("reservations", {
+      const before = await networkingStore(getDb()).all("reservations", {
         eventId: event.id,
         meetingId: first.id,
       });
       await expect(
         meetings.respond(people[0], first.id, { action: "ACCEPT" }),
       ).rejects.toThrow(/meeting|unavailable/);
-      const after = await networkingStore().all("reservations", {
+      const after = await networkingStore(getDb()).all("reservations", {
         eventId: event.id,
         meetingId: first.id,
       });
