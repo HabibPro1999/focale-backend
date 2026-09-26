@@ -49,3 +49,22 @@ dependencies are understood and a narrower rule is tested.
 
 Skipping is done at job level. Avoid adding workflow-level `paths-ignore`:
 [GitHub keeps required checks pending when a whole workflow is filtered out](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#onpushpull_requestpull_request_targetpathspaths-ignore).
+
+## Reading a run
+
+The `CI / plan` job writes a **CI selection** summary with the changed-path count
+and a run/skip decision for each tier. The final `CI / required` result confirms
+that all selected jobs succeeded. A failed planner also fails that final gate.
+
+Common totals, including the two control jobs:
+
+| Change | Executed jobs |
+|---|---:|
+| Documentation only | 2 |
+| Workspace unit tests only | 3 |
+| Application or database-query source | 11 |
+| Full validation | 14 |
+
+GitHub may also display skipped jobs. Those do not install dependencies, build
+the application or start databases. Use the selection summary to distinguish
+intentional skips from a missing or failed required result.
