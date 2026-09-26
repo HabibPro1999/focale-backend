@@ -110,6 +110,7 @@ import type { AccessService } from "../access/access.service";
 import { PricingPublicController } from "../pricing/pricing.public.controller";
 import { PricingService } from "../pricing/pricing.service";
 import { RegistrationsService } from "./registrations.service";
+import { RegistrationSideEffects } from "./registrations.side-effects";
 
 const FUTURE = new Date(Date.now() + 7 * 86_400_000);
 
@@ -255,6 +256,7 @@ beforeEach(() => {
     access as unknown as AccessService,
     pricing,
     { publicLinkAllowedOrigins: [] } as unknown as Config,
+    new RegistrationSideEffects(access as unknown as AccessService),
   );
 });
 

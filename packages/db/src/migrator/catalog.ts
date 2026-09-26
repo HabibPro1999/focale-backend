@@ -153,6 +153,14 @@ function probesForStatement(
     return probes;
   }
 
+  // A dropped table (0033). Its indexes go with it, but each one keeps the
+  // probe of the migration that created it unless the file also drops it by name.
+  match = new RegExp(`^DROP\\s+TABLE\\s+(?:IF\\s+EXISTS\\s+)?${QUALIFIED_IDENTIFIER}`, "i").exec(sql);
+  if (match) {
+    probes.push(findProbe(migration, statementIndex, "table", objectName(match, 1), { expectedPresent: false }));
+    return probes;
+  }
+
   // An index rebuilt under a temporary name and renamed back (0024): the old
   // name is gone and the new one exists.
   match = new RegExp(`^ALTER\\s+INDEX\\s+(?:IF\\s+EXISTS\\s+)?${QUALIFIED_IDENTIFIER}\\s+RENAME\\s+TO\\s+${IDENTIFIER}`, "i").exec(sql);

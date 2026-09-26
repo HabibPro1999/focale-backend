@@ -4,7 +4,6 @@ import type { AbstractConfigRow, AbstractThemeRow } from "@app/db";
 vi.mock("@app/db", () => ({
   getOrCreateAbstractConfig: vi.fn(),
   updateAbstractConfig: vi.fn(),
-  abstractsTableExists: vi.fn(),
   countAbstractsByEvent: vi.fn(),
   insertAuditLog: vi.fn(),
   listThemesByConfigId: vi.fn(),
@@ -18,7 +17,6 @@ vi.mock("@app/db", () => ({
 import {
   getOrCreateAbstractConfig,
   updateAbstractConfig,
-  abstractsTableExists,
   countAbstractsByEvent,
   insertAuditLog,
   listThemesByConfigId,
@@ -100,7 +98,6 @@ describe("getOrCreateConfig", () => {
   it("reports modeLocked=false when no abstracts exist for the event", async () => {
     const config = makeConfig();
     mock(getOrCreateAbstractConfig).mockResolvedValue(config);
-    mock(abstractsTableExists).mockResolvedValue(true);
     mock(countAbstractsByEvent).mockResolvedValue(0);
     const result = await service.getOrCreateConfig(eventId);
     expect(result.modeLocked).toBe(false);
@@ -109,19 +106,9 @@ describe("getOrCreateConfig", () => {
   it("reports modeLocked=true once abstracts exist for the event", async () => {
     const config = makeConfig();
     mock(getOrCreateAbstractConfig).mockResolvedValue(config);
-    mock(abstractsTableExists).mockResolvedValue(true);
     mock(countAbstractsByEvent).mockResolvedValue(1);
     const result = await service.getOrCreateConfig(eventId);
     expect(result.modeLocked).toBe(true);
-  });
-
-  it("reports modeLocked=false when the abstracts table doesn't exist yet", async () => {
-    const config = makeConfig();
-    mock(getOrCreateAbstractConfig).mockResolvedValue(config);
-    mock(abstractsTableExists).mockResolvedValue(false);
-    const result = await service.getOrCreateConfig(eventId);
-    expect(result.modeLocked).toBe(false);
-    expect(countAbstractsByEvent).not.toHaveBeenCalled();
   });
 
   it("passes through modeLocked=true without re-querying abstract count", async () => {
@@ -129,7 +116,7 @@ describe("getOrCreateConfig", () => {
     mock(getOrCreateAbstractConfig).mockResolvedValue(config);
     const result = await service.getOrCreateConfig(eventId);
     expect(result.modeLocked).toBe(true);
-    expect(abstractsTableExists).not.toHaveBeenCalled();
+    expect(countAbstractsByEvent).not.toHaveBeenCalled();
   });
 });
 
@@ -156,7 +143,6 @@ describe("updateConfig", () => {
   });
 
   it("rejects a mode change when locked and force=false", async () => {
-    mock(abstractsTableExists).mockResolvedValue(true);
     mock(countAbstractsByEvent).mockResolvedValue(3);
     await expect(
       service.updateConfig(eventId, { submissionMode: "STRUCTURED" }, userId),
@@ -164,7 +150,6 @@ describe("updateConfig", () => {
   });
 
   it("allows a forced mode change and writes the extra mode_force_changed audit", async () => {
-    mock(abstractsTableExists).mockResolvedValue(true);
     mock(countAbstractsByEvent).mockResolvedValue(3);
     mock(updateAbstractConfig).mockResolvedValue(makeConfig({ submissionMode: "STRUCTURED" }));
 
@@ -272,24 +257,17 @@ describe("updateConfig", () => {
 });
 
 describe("assertModeChangeAllowed", () => {
-  it("forced=false when the abstracts table does not exist", async () => {
-    mock(abstractsTableExists).mockResolvedValue(false);
-    expect(await service.assertModeChangeAllowed(eventId, false)).toEqual({ forced: false });
-  });
-  it("forced=false when the table exists but no abstracts", async () => {
-    mock(abstractsTableExists).mockResolvedValue(true);
+  it("forced=false when the event has no abstracts", async () => {
     mock(countAbstractsByEvent).mockResolvedValue(0);
     expect(await service.assertModeChangeAllowed(eventId, false)).toEqual({ forced: false });
   });
   it("throws 409 when abstracts exist and force=false", async () => {
-    mock(abstractsTableExists).mockResolvedValue(true);
     mock(countAbstractsByEvent).mockResolvedValue(5);
     await expect(service.assertModeChangeAllowed(eventId, false)).rejects.toThrow(
       /Cannot change submission mode/,
     );
   });
   it("forced=true when abstracts exist and force=true", async () => {
-    mock(abstractsTableExists).mockResolvedValue(true);
     mock(countAbstractsByEvent).mockResolvedValue(5);
     expect(await service.assertModeChangeAllowed(eventId, true)).toEqual({ forced: true });
   });
@@ -482,7 +460,6 @@ describe("additional fields", () => {
       mock(getOrCreateAbstractConfig).mockResolvedValue(
         makeConfig({ additionalFieldsSchema: existingFields }),
       );
-      mock(abstractsTableExists).mockResolvedValue(true);
       mock(countAbstractsByEvent).mockResolvedValue(1);
       const newFields = [{ id: "f1", type: "text" as const, label: "Kept" }];
 
@@ -498,7 +475,6 @@ describe("additional fields", () => {
       mock(getOrCreateAbstractConfig).mockResolvedValue(
         makeConfig({ additionalFieldsSchema: existingFields }),
       );
-      mock(abstractsTableExists).mockResolvedValue(true);
       mock(countAbstractsByEvent).mockResolvedValue(1);
       mock(updateAbstractConfig).mockResolvedValue(makeConfig());
       const newFields = [{ id: "f1", type: "text" as const, label: "Kept" }];
@@ -518,7 +494,6 @@ describe("additional fields", () => {
       mock(getOrCreateAbstractConfig).mockResolvedValue(
         makeConfig({ additionalFieldsSchema: existingFields }),
       );
-      mock(abstractsTableExists).mockResolvedValue(true);
       mock(countAbstractsByEvent).mockResolvedValue(1);
       mock(updateAbstractConfig).mockResolvedValue(makeConfig());
       const newFields = [
@@ -535,7 +510,6 @@ describe("additional fields", () => {
       mock(getOrCreateAbstractConfig).mockResolvedValue(
         makeConfig({ additionalFieldsSchema: existingFields }),
       );
-      mock(abstractsTableExists).mockResolvedValue(true);
       mock(countAbstractsByEvent).mockResolvedValue(0);
       mock(updateAbstractConfig).mockResolvedValue(makeConfig());
       const newFields = [{ id: "f1", type: "text" as const, label: "Kept" }];

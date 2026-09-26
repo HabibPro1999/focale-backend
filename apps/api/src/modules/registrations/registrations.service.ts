@@ -46,14 +46,10 @@ import {
   settleRegistrationTxn,
   claimSponsorshipCodeTxn,
   linkSponsorshipUsageTxn,
-  syncNetworkingRegistration,
   enqueueTriggeredEmailOutbox,
   applyRegistrationSettlement,
   emitSettlementEvents,
   settlementEventPair,
-  casIncrementRegisteredTx,
-  casDecrementRegisteredTx,
-  getEventCounterInfoTx,
   findFormById,
   findActiveRegistrationFormById,
   findAccessDetailsByIds,
@@ -109,6 +105,7 @@ import {
   validatePaymentTransition,
 } from "./payment-transitions";
 import { getRegistrationTableColumns } from "./table-columns";
+import { RegistrationSideEffects } from "./registrations.side-effects";
 import { assertSelfEditAllowed, evaluateEditPolicy } from "./edit-policy";
 import {
   assertPaidAmountWithinNet,
@@ -241,38 +238,12 @@ export class RegistrationsService {
     private readonly access: AccessService,
     private readonly pricing: PricingService,
     @Inject(CONFIG) private readonly config: Config,
+    private readonly sideEffects: RegistrationSideEffects,
   ) {}
 
   // ==========================================================================
-  // Shared side-effect + settlement helpers
+  // Shared settlement helpers
   // ==========================================================================
-
-  private async queueRegistrationCreatedEmail(
-    exec: DbExecutor,
-    eventId: string,
-    registration: {
-      id: string;
-      email: string;
-      firstName?: string | null;
-      lastName?: string | null;
-    },
-  ): Promise<boolean> {
-    await syncNetworkingRegistration(registration.id, exec);
-    return enqueueTriggeredEmailOutbox(
-      exec,
-      {
-        trigger: "REGISTRATION_CREATED",
-        eventId,
-        registration: {
-          id: registration.id,
-          email: registration.email,
-          firstName: registration.firstName ?? null,
-          lastName: registration.lastName ?? null,
-        },
-      },
-      `email:triggered:REGISTRATION_CREATED:${registration.id}`,
-    );
-  }
 
   private assertLabSponsorshipAllowed(
     client: { enabledModules: string[] | null },
@@ -288,24 +259,6 @@ export class RegistrationsService {
         400,
       );
     }
-  }
-
-  private async syncPaidCount(
-    exec: DbExecutor,
-    registration: { id: string; eventId: string; priceBreakdown: unknown },
-    oldStatus: string,
-    newStatus: string,
-  ): Promise<void> {
-    const coveredAccessIds =
-      oldStatus === "PARTIAL" || newStatus === "PARTIAL"
-        ? await this.access.getAlreadyCoveredAccessIds(registration.id, exec)
-        : new Set<string>();
-    await this.access.syncPaidCountDelta(
-      registration.eventId,
-      { status: oldStatus, priceBreakdown: registration.priceBreakdown, coveredAccessIds },
-      { status: newStatus, priceBreakdown: registration.priceBreakdown, coveredAccessIds },
-      exec,
-    );
   }
 
   /**
@@ -395,63 +348,6 @@ export class RegistrationsService {
       tx,
     );
     return { settled, accessDeltas };
-  }
-
-  /** Atomic event registered-count increment; mirrors legacy incrementRegisteredCountTx. */
-  private async incrementEventRegistered(
-    exec: DbExecutor,
-    eventId: string,
-  ): Promise<void> {
-    if (await casIncrementRegisteredTx(exec, eventId)) return;
-    const info = await getEventCounterInfoTx(exec, eventId);
-    if (!info) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
-    }
-    if (info.status !== "OPEN") {
-      throw new AppException(
-        ErrorCodes.EVENT_NOT_OPEN,
-        "Event is not accepting public actions",
-        400,
-      );
-    }
-    throw new AppException(ErrorCodes.EVENT_FULL, "Event is at capacity", 409);
-  }
-
-  private async decrementEventRegistered(
-    exec: DbExecutor,
-    eventId: string,
-  ): Promise<void> {
-    if (await casDecrementRegisteredTx(exec, eventId)) return;
-    const info = await getEventCounterInfoTx(exec, eventId);
-    if (!info) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
-    }
-    throw new AppException(
-      ErrorCodes.VALIDATION_ERROR,
-      "Event registered count is already zero",
-      400,
-    );
-  }
-
-  private audit(
-    exec: DbExecutor,
-    entry: {
-      entityId: string;
-      action: string;
-      changes: Record<string, { old: unknown; new: unknown }>;
-      performedBy?: string | null;
-    },
-  ): Promise<void> {
-    return insertAuditLog(
-      {
-        entityType: "Registration",
-        entityId: entry.entityId,
-        action: entry.action,
-        changes: entry.changes,
-        performedBy: entry.performedBy ?? null,
-      },
-      exec,
-    );
   }
 
   // ==========================================================================
@@ -781,14 +677,14 @@ export class RegistrationsService {
         );
       }
 
-      await this.incrementEventRegistered(tx, eventId);
+      await this.sideEffects.incrementEventRegistered(tx, eventId);
 
       const linked = sponsorship
         ? await this.consumeSponsorshipAtSignup(tx, { sponsorship, registrationId: id, eventId, grossBreakdown })
         : null;
       const paymentStatus = linked?.settled.after.paymentStatus ?? "PENDING";
 
-      await this.audit(tx, {
+      await this.sideEffects.audit(tx, {
         entityId: id,
         action: "CREATE",
         changes: {
@@ -853,7 +749,7 @@ export class RegistrationsService {
         });
       }
       await emitSettlementEvents(tx, pending);
-      await this.queueRegistrationCreatedEmail(tx, eventId, {
+      await this.sideEffects.queueRegistrationCreatedEmail(tx, eventId, {
         id,
         email,
         firstName,
@@ -1101,7 +997,7 @@ export class RegistrationsService {
       }
 
       if (isFullySettled(resolvedPaymentStatus)) {
-        await this.syncPaidCount(
+        await this.sideEffects.syncPaidCount(
           tx,
           { id, eventId, priceBreakdown },
           "PENDING",
@@ -1109,9 +1005,9 @@ export class RegistrationsService {
         );
       }
 
-      await this.incrementEventRegistered(tx, eventId);
+      await this.sideEffects.incrementEventRegistered(tx, eventId);
 
-      await this.audit(tx, {
+      await this.sideEffects.audit(tx, {
         entityId: id,
         action: "CREATE",
         changes: {
@@ -1125,7 +1021,7 @@ export class RegistrationsService {
       });
 
       if (sendEmail) {
-        await this.queueRegistrationCreatedEmail(tx, eventId, {
+        await this.sideEffects.queueRegistrationCreatedEmail(tx, eventId, {
           id,
           email,
           firstName,
@@ -1250,7 +1146,7 @@ export class RegistrationsService {
       await applyRegistrationSettlement(tx, { registrationId: id, settlement, fields });
 
       if (statusChanged) {
-        await this.syncPaidCount(
+        await this.sideEffects.syncPaidCount(
           tx,
           registration,
           registration.paymentStatus,
@@ -1259,7 +1155,7 @@ export class RegistrationsService {
       }
 
       if (Object.keys(changes).length > 0) {
-        await this.audit(tx, {
+        await this.sideEffects.audit(tx, {
           entityId: id,
           action: "UPDATE",
           changes,
@@ -1514,7 +1410,7 @@ export class RegistrationsService {
         }
         await applyRegistrationSettlement(tx, { registrationId: id, settlement, fields });
         if (statusChange !== undefined) {
-          await this.syncPaidCount(
+          await this.sideEffects.syncPaidCount(
             tx,
             { id, eventId, priceBreakdown: registration.priceBreakdown },
             registration.paymentStatus,
@@ -1524,7 +1420,7 @@ export class RegistrationsService {
       }
 
       if (Object.keys(changes).length > 0) {
-        await this.audit(tx, {
+        await this.sideEffects.audit(tx, {
           entityId: id,
           action: "UPDATE",
           changes,
@@ -1588,7 +1484,7 @@ export class RegistrationsService {
         );
       }
 
-      await this.audit(tx, {
+      await this.sideEffects.audit(tx, {
         entityId: id,
         action: "DELETE",
         changes: {
@@ -1622,7 +1518,7 @@ export class RegistrationsService {
         tx,
       );
 
-      await this.decrementEventRegistered(tx, registration.eventId);
+      await this.sideEffects.decrementEventRegistered(tx, registration.eventId);
       // The networking profile cascades with the row; keep its photo for cleanup after commit.
       const photo = await getNetworkingProfilePhotoByRegistration(id, tx);
       await deleteRegistrationRow(id, tx);
@@ -1880,7 +1776,7 @@ export class RegistrationsService {
         };
       }
       if (Object.keys(auditChanges).length > 0) {
-        await this.audit(tx, {
+        await this.sideEffects.audit(tx, {
           entityId: registrationId,
           action: "UPDATE",
           changes: auditChanges,
@@ -2219,7 +2115,7 @@ export class RegistrationsService {
         fields: { paymentProofUrl: fileUrl, paymentMethod: "BANK_TRANSFER" },
       });
 
-      await this.audit(tx, {
+      await this.sideEffects.audit(tx, {
         entityId: registrationId,
         action: "PAYMENT_PROOF_UPLOADED",
         changes: {
@@ -2326,7 +2222,7 @@ export class RegistrationsService {
         fields: { paymentMethod: input.paymentMethod, labName: nextLabName },
       });
 
-      await this.audit(tx, {
+      await this.sideEffects.audit(tx, {
         entityId: registrationId,
         action: "PAYMENT_METHOD_SELECTED",
         changes,
