@@ -27,6 +27,7 @@ export * from "./sponsorships.responses";
 export * from "./registrations";
 export * from "./registrations.responses";
 export * from "./abstracts";
+export * from "./abstracts.responses";
 export * from "./certificates";
 export * from "./checkin";
 export * from "./reports";

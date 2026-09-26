@@ -44,12 +44,24 @@ const partHead = Buffer.from(
 const partTail = Buffer.from(`\r\n--${boundary}--\r\n`);
 const pdf = Buffer.from("%PDF-1.4\n%\xE2\xE3\xCF\xD3\n1 0 obj\n<<>>\nendobj\n%%EOF");
 
+// A complete row: the route's response contract (5.5) validates the payload
+// outside production, so every field the author view returns is present.
 function acceptedAbstract(overrides: Record<string, unknown> = {}) {
   return {
     id: abstractId,
     eventId: "event-1",
     editToken: token,
     status: "ACCEPTED",
+    code: "PC1-01",
+    authorFirstName: "Ada",
+    authorLastName: "Lovelace",
+    authorAffiliation: "CHU Tunis",
+    authorEmail: "ada@example.com",
+    authorPhone: "+216 20 000 000",
+    coAuthors: [],
+    requestedType: "POSTER",
+    content: { mode: "FREE_TEXT", title: "Poster", body: "<p>Body</p>" },
+    additionalFieldsData: {},
     finalType: "POSTER",
     finalFileKey: null,
     finalFileKind: null,
@@ -59,7 +71,12 @@ function acceptedAbstract(overrides: Record<string, unknown> = {}) {
     createdAt: new Date("2026-09-01T00:00:00.000Z"),
     updatedAt: new Date("2026-09-01T00:00:00.000Z"),
     lastEditedAt: null,
-    config: { finalFileUploadEnabled: true, finalFileDeadline: null },
+    config: {
+      editingEnabled: false,
+      editingDeadline: null,
+      finalFileUploadEnabled: true,
+      finalFileDeadline: null,
+    },
     ...overrides,
   };
 }

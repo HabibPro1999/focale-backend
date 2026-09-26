@@ -23,6 +23,14 @@ export type AbstractSlugParam = {
   slug: string;
 };
 
+export type AbstractSubmittedResponse = {
+  id: string;
+  token: string;
+  status: "SUBMITTED";
+  createdAt: string;
+  statusUrl: string;
+};
+
 export type AbstractTokenQuery = {
   token?: string;
 };
@@ -377,6 +385,15 @@ export type CommitteeAbstractsQuery = {
   eventId: string;
 };
 
+export type CommitteeInvitePasswordSetResponse = {
+  ok: true;
+  email: string;
+};
+
+export type CommitteeInviteResendResponse = {
+  ok: true;
+};
+
 export type CommitteeInviteResend = {
   token: CommitteeInviteTokenValue;
 };
@@ -387,6 +404,12 @@ export type CommitteeInviteSetPassword = {
 };
 
 export type CommitteeInviteTokenValue = string;
+
+export type CommitteeInviteVerifyResponse = {
+  email: string;
+  name: string;
+  eventName: string;
+};
 
 export type CommitteeInviteVerify = {
   token: CommitteeInviteTokenValue;
@@ -1697,6 +1720,84 @@ export type PricingFormIdParam = {
 export type PricingRuleIdParam = {
   eventId: string;
   ruleId: string;
+};
+
+export type PublicAbstractConfigResponse = {
+  enabled: false;
+} | {
+  enabled: true;
+  acceptingSubmissions: boolean;
+  eventId: string;
+  eventName: string;
+  congressName: string;
+  submissionMode: "FREE_TEXT" | "STRUCTURED";
+  globalWordLimit: number | null;
+  maxThemesPerAbstract: number | null;
+  languages: unknown;
+  sectionWordLimits: {
+    introduction: number | null;
+    objective: number | null;
+    methods: number | null;
+    results: number | null;
+    conclusion: number | null;
+  };
+  themes: Array<{
+    id: string;
+    label: string;
+    description: string | null;
+    translations: unknown;
+  }>;
+  requestedTypes: Array<{
+    value: "ORAL_COMMUNICATION" | "POSTER";
+    label: string;
+  }>;
+  additionalFields: {
+    fields: unknown[];
+  };
+  deadlines: {
+    submissionStart: string | null;
+    submission: string | null;
+    editing: string | null;
+    scoringStart: string | null;
+    finalFile: string | null;
+  };
+  editingEnabled: boolean;
+  finalFileUploadEnabled: boolean;
+};
+
+export type PublicAbstractResponse = {
+  id: string;
+  status: "SUBMITTED" | "UNDER_REVIEW" | "REVIEW_COMPLETE" | "ACCEPTED" | "REJECTED" | "PENDING";
+  code: string | null;
+  authorFirstName: string;
+  authorLastName: string;
+  authorAffiliation: string | null;
+  authorEmail: string;
+  authorPhone: string;
+  coAuthors: unknown;
+  requestedType: "ORAL_COMMUNICATION" | "POSTER";
+  finalType: "CONFERENCE" | "ORAL_COMMUNICATION" | "POSTER" | null;
+  themes: Array<{
+    id: string;
+    label: string;
+  }>;
+  content: unknown;
+  additionalFieldsData: unknown;
+  createdAt: string;
+  updatedAt: string;
+  lastEditedAt: string | null;
+  editing: {
+    allowed: boolean;
+    deadline: string | null;
+  };
+  finalFile: {
+    enabled: boolean;
+    deadline: string | null;
+    kind: "PDF" | "PPT" | "PPTX" | null;
+    size: number | null;
+    uploadedAt: string | null;
+    uploaded: boolean;
+  };
 };
 
 export type PublicAccessItemParam = {

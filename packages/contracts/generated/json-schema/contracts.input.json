@@ -83,6 +83,34 @@
       ],
       "type": "object"
     },
+    "AbstractSubmittedResponseSchema": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string"
+        },
+        "status": {
+          "const": "SUBMITTED",
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "statusUrl": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "token",
+        "status",
+        "createdAt",
+        "statusUrl"
+      ],
+      "type": "object"
+    },
     "AbstractTokenQuerySchema": {
       "additionalProperties": false,
       "properties": {
@@ -1674,6 +1702,34 @@
       ],
       "type": "object"
     },
+    "CommitteeInvitePasswordSetResponseSchema": {
+      "properties": {
+        "ok": {
+          "const": true,
+          "type": "boolean"
+        },
+        "email": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ok",
+        "email"
+      ],
+      "type": "object"
+    },
+    "CommitteeInviteResendResponseSchema": {
+      "properties": {
+        "ok": {
+          "const": true,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ok"
+      ],
+      "type": "object"
+    },
     "CommitteeInviteResendSchema": {
       "additionalProperties": false,
       "properties": {
@@ -1705,6 +1761,25 @@
     "CommitteeInviteTokenValueSchema": {
       "pattern": "^[0-9a-f]{64}$",
       "type": "string"
+    },
+    "CommitteeInviteVerifyResponseSchema": {
+      "properties": {
+        "email": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "eventName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "email",
+        "name",
+        "eventName"
+      ],
+      "type": "object"
     },
     "CommitteeInviteVerifySchema": {
       "additionalProperties": false,
@@ -7362,6 +7437,501 @@
       "required": [
         "eventId",
         "ruleId"
+      ],
+      "type": "object"
+    },
+    "PublicAbstractConfigResponseSchema": {
+      "oneOf": [
+        {
+          "properties": {
+            "enabled": {
+              "const": false,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "enabled"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "enabled": {
+              "const": true,
+              "type": "boolean"
+            },
+            "acceptingSubmissions": {
+              "type": "boolean"
+            },
+            "eventId": {
+              "type": "string"
+            },
+            "eventName": {
+              "type": "string"
+            },
+            "congressName": {
+              "type": "string"
+            },
+            "submissionMode": {
+              "enum": [
+                "FREE_TEXT",
+                "STRUCTURED"
+              ],
+              "type": "string"
+            },
+            "globalWordLimit": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "maxThemesPerAbstract": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "languages": {},
+            "sectionWordLimits": {
+              "properties": {
+                "introduction": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "objective": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "methods": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "results": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "conclusion": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "introduction",
+                "objective",
+                "methods",
+                "results",
+                "conclusion"
+              ],
+              "type": "object"
+            },
+            "themes": {
+              "items": {
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "translations": {}
+                },
+                "required": [
+                  "id",
+                  "label",
+                  "description",
+                  "translations"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "requestedTypes": {
+              "items": {
+                "properties": {
+                  "value": {
+                    "enum": [
+                      "ORAL_COMMUNICATION",
+                      "POSTER"
+                    ],
+                    "type": "string"
+                  },
+                  "label": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "value",
+                  "label"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "additionalFields": {
+              "properties": {
+                "fields": {
+                  "items": {},
+                  "type": "array"
+                }
+              },
+              "required": [
+                "fields"
+              ],
+              "type": "object"
+            },
+            "deadlines": {
+              "properties": {
+                "submissionStart": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "submission": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "editing": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "scoringStart": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "finalFile": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "submissionStart",
+                "submission",
+                "editing",
+                "scoringStart",
+                "finalFile"
+              ],
+              "type": "object"
+            },
+            "editingEnabled": {
+              "type": "boolean"
+            },
+            "finalFileUploadEnabled": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "enabled",
+            "acceptingSubmissions",
+            "eventId",
+            "eventName",
+            "congressName",
+            "submissionMode",
+            "globalWordLimit",
+            "maxThemesPerAbstract",
+            "languages",
+            "sectionWordLimits",
+            "themes",
+            "requestedTypes",
+            "additionalFields",
+            "deadlines",
+            "editingEnabled",
+            "finalFileUploadEnabled"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PublicAbstractResponseSchema": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "SUBMITTED",
+            "UNDER_REVIEW",
+            "REVIEW_COMPLETE",
+            "ACCEPTED",
+            "REJECTED",
+            "PENDING"
+          ],
+          "type": "string"
+        },
+        "code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "authorFirstName": {
+          "type": "string"
+        },
+        "authorLastName": {
+          "type": "string"
+        },
+        "authorAffiliation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "authorEmail": {
+          "type": "string"
+        },
+        "authorPhone": {
+          "type": "string"
+        },
+        "coAuthors": {},
+        "requestedType": {
+          "enum": [
+            "ORAL_COMMUNICATION",
+            "POSTER"
+          ],
+          "type": "string"
+        },
+        "finalType": {
+          "anyOf": [
+            {
+              "enum": [
+                "CONFERENCE",
+                "ORAL_COMMUNICATION",
+                "POSTER"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "themes": {
+          "items": {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "label"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "content": {},
+        "additionalFieldsData": {},
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "lastEditedAt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "editing": {
+          "properties": {
+            "allowed": {
+              "type": "boolean"
+            },
+            "deadline": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "allowed",
+            "deadline"
+          ],
+          "type": "object"
+        },
+        "finalFile": {
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "deadline": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "PDF",
+                    "PPT",
+                    "PPTX"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "size": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "uploadedAt": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "uploaded": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "enabled",
+            "deadline",
+            "kind",
+            "size",
+            "uploadedAt",
+            "uploaded"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "code",
+        "authorFirstName",
+        "authorLastName",
+        "authorAffiliation",
+        "authorEmail",
+        "authorPhone",
+        "coAuthors",
+        "requestedType",
+        "finalType",
+        "themes",
+        "content",
+        "additionalFieldsData",
+        "createdAt",
+        "updatedAt",
+        "lastEditedAt",
+        "editing",
+        "finalFile"
       ],
       "type": "object"
     },
