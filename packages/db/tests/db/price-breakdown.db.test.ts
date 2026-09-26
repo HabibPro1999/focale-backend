@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { PriceBreakdown } from "@app/contracts";
+import { FormSchemaJsonSchema, type PriceBreakdown } from "@app/contracts";
 import {
   StoredJsonError,
   configureJsonbValidation,
@@ -57,7 +57,9 @@ describe.runIf(dbTestsEnabled())("db: registrations.price_breakdown read boundar
 
   async function seed(priceBreakdown: unknown) {
     const event = await seedEvent();
-    const form = await seedForm({ eventId: event.id, schema: { steps: [] } });
+    // This query reads both documents under enforce: keep the unrelated form valid.
+    const schema = FormSchemaJsonSchema.parse({ steps: [{ id: "details", title: "Details", fields: [] }] });
+    const form = await seedForm({ eventId: event.id, schema });
     return seedRegistration({
       eventId: event.id,
       formId: form.id,
