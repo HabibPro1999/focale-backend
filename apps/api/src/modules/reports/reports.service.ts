@@ -30,16 +30,8 @@ import type {
   ExportRegistrationsQuery,
   EventAnalyticsResponse,
   AccessRegistrantsResponse,
-  ExportRegistrationsBody,
 } from "@app/contracts";
 import { AppException } from "../../core/app-exception";
-import {
-  generateEventSummary,
-  generateAccessRegistrantsReport,
-  generateSponsorshipsReport,
-  generateCheckInReport,
-} from "./excel-generator";
-import { prepareRegistrationsWorkbook } from "./registrations-export-builder";
 import { writeChunk, type ExportDownload } from "../../core/exports/stream-io";
 import {
   XLSX_CONTENT_TYPE,
@@ -254,53 +246,6 @@ export class ReportsService {
       write: (out, signal) => writeRegistrationsCsv(out, signal, formDataKeys, pages(signal)),
     };
   }
-
-  // ==========================================================================
-  // Excel/ZIP file endpoints — thin delegation to the generators (still built
-  // in memory; they stream from a buffer until 3.7b converts them).
-  // ==========================================================================
-
-  async generateEventSummary(eventId: string): Promise<ExportDownload> {
-    const { filename, data } = await generateEventSummary(eventId);
-    return bufferedDownload(filename, XLSX_CONTENT_TYPE, data);
-  }
-
-  async generateAccessRegistrantsReport(eventId: string): Promise<ExportDownload> {
-    const { filename, data } = await generateAccessRegistrantsReport(eventId);
-    return bufferedDownload(filename, XLSX_CONTENT_TYPE, data);
-  }
-
-  async generateSponsorshipsReport(
-    eventId: string,
-    filters?: { status?: string; search?: string },
-  ): Promise<ExportDownload> {
-    const { filename, data } = await generateSponsorshipsReport(eventId, filters);
-    return bufferedDownload(filename, XLSX_CONTENT_TYPE, data);
-  }
-
-  async generateCheckInReport(eventId: string): Promise<ExportDownload> {
-    const { filename, data } = await generateCheckInReport(eventId);
-    return bufferedDownload(filename, "application/zip", data);
-  }
-
-  buildRegistrationsWorkbook(
-    eventId: string,
-    body: ExportRegistrationsBody,
-  ): Promise<ExportDownload> {
-    return prepareRegistrationsWorkbook(eventId, body);
-  }
-}
-
-/** A file already built in memory, sent through the same download path. */
-function bufferedDownload(filename: string, contentType: string, data: Buffer): ExportDownload {
-  return {
-    filename,
-    contentType,
-    write: async (out, signal) => {
-      await writeChunk(out, data, signal);
-      out.end();
-    },
-  };
 }
 
 // ============================================================================

@@ -1,8 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
 import ExcelJS from "exceljs";
-vi.mock("@app/db", () => ({ findAbstractsForExport: vi.fn() }));
-import { findAbstractsForExport } from "@app/db";
-import { exportAbstractsWorkbook } from "./abstracts.export.service";
+vi.mock("@app/db", () => ({
+  withExportStatementTimeout: vi.fn((fn: (tx: unknown) => unknown) => fn({ tx: true })),
+  getAbstractsExportPlan: vi.fn(),
+  iterateAbstractsForExport: vi.fn(),
+}));
+import { getAbstractsExportPlan, iterateAbstractsForExport } from "@app/db";
+import { collect } from "../../core/exports/__testing__/export-output";
+import { prepareAbstractsExport } from "./abstracts.export.service";
 
 const eventId = "event-1";
 const eventSlug = "my-event";
@@ -50,6 +55,22 @@ function makeAbstract(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** The export reads: the plan (ids, reviewer columns), then the rows by id. */
+function serveAbstracts(rows: Array<ReturnType<typeof makeAbstract>>) {
+  vi.mocked(getAbstractsExportPlan).mockResolvedValue({
+    ids: rows.map((row) => row.id),
+    maxReviews: rows.reduce((max, row) => Math.max(max, row.reviews.length), 0),
+  });
+  vi.mocked(iterateAbstractsForExport).mockImplementation(async function* () {
+    if (rows.length > 0) yield rows as never;
+  });
+}
+
+async function exportAbstractsWorkbook(...args: Parameters<typeof prepareAbstractsExport>) {
+  const download = await prepareAbstractsExport(...args);
+  return { filename: download.filename, data: await collect(download) };
+}
+
 async function loadWorkbook(buffer: Buffer) {
   const workbook = new ExcelJS.Workbook();
   const workbookData = buffer.buffer.slice(
@@ -60,7 +81,7 @@ async function loadWorkbook(buffer: Buffer) {
   return workbook;
 }
 
-describe("exportAbstractsWorkbook", () => {
+describe("prepareAbstractsExport", () => {
   it("builds a workbook with the expected header, dynamic reviewer columns, scored count, and formula escaping", async () => {
     const abstractA = makeAbstract({
       id: "abs-1",
@@ -118,10 +139,7 @@ describe("exportAbstractsWorkbook", () => {
       ],
     });
 
-    vi.mocked(findAbstractsForExport).mockResolvedValue([
-      abstractA,
-      abstractB,
-    ] as never);
+    serveAbstracts([abstractA, abstractB]);
 
     const result = await exportAbstractsWorkbook(eventId, {}, eventSlug);
 
@@ -174,12 +192,13 @@ describe("exportAbstractsWorkbook", () => {
     expect(sheet.getCell("R3").value).toBe("Reviewer Four"); // Évaluateur 1
     expect(sheet.getCell("S3").value).toBe(12); // Note 1
     expect(sheet.getCell("T3").value).toBe("Reviewer Five"); // Évaluateur 2
-    expect(sheet.getCell("U3").value).toBe(""); // Note 2 (unscored)
-    expect(sheet.getCell("V3").value).toBe(""); // Évaluateur 3 (no third review)
+    // Empty text cells (streamed inline strings read back as empty values).
+    expect(sheet.getCell("U3").value ?? "").toBe(""); // Note 2 (unscored)
+    expect(sheet.getCell("V3").value ?? "").toBe(""); // Évaluateur 3 (no third review)
   });
 
   it("falls back to the reviewer email when the reviewer has no name, and reports the author edit date", async () => {
-    vi.mocked(findAbstractsForExport).mockResolvedValue([
+    serveAbstracts([
       makeAbstract({
         lastEditedAt: new Date("2026-01-05T00:00:00.000Z"),
         reviews: [
@@ -190,7 +209,7 @@ describe("exportAbstractsWorkbook", () => {
           }),
         ],
       }),
-    ] as never);
+    ]);
 
     const result = await exportAbstractsWorkbook(eventId, {}, eventSlug);
     const workbook = await loadWorkbook(result.data);
@@ -203,7 +222,7 @@ describe("exportAbstractsWorkbook", () => {
   });
 
   it("returns an empty-body workbook (no dynamic reviewer columns) when no abstracts match", async () => {
-    vi.mocked(findAbstractsForExport).mockResolvedValue([] as never);
+    serveAbstracts([]);
 
     const result = await exportAbstractsWorkbook(eventId, {}, eventSlug);
     const workbook = await loadWorkbook(result.data);

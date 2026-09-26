@@ -2,13 +2,13 @@
 // Reports Module — DB query layer (read-only)
 //
 // Every fn here is a pure data fetch (no writes — the legacy reports module was
-// entirely read-only; READ COMMITTED default is fine). Export fetches accept an
-// optional executor so the API can run them inside withExportStatementTimeout
-// (they then query sequentially: one transaction is one connection); the
-// registration exports page by keyset instead, one short transaction per
-// page (iterateRegistrationsForExport / iterateRegistrationsForModularExport). The
-// api-layer service/generators consume these and do all formatting/aggregation
-// math. Raw-SQL semantics (jsonb_array_elements LATERAL, DATE() grouping,
+// entirely read-only; READ COMMITTED default is fine). File exports read their
+// small header data (event, access items, counts, sort keys) through an
+// optional executor, so the API runs them inside withExportStatementTimeout
+// (sequentially: one transaction is one connection), and their rows page by
+// page, one short transaction per page: keyset pages on registrations, or id
+// chunks (export-pages.ts) when the order is decided in JS. The api-layer
+// service/generators consume these and do all formatting/aggregation math. Raw-SQL semantics (jsonb_array_elements LATERAL, DATE() grouping,
 // settled-only access breakdown) are preserved byte-for-byte via drizzle `sql`.
 // ============================================================================
 
@@ -19,16 +19,21 @@ import {
   count,
   desc,
   eq,
+  gt,
   gte,
   inArray,
+  isNotNull,
+  isNull,
   lt,
   lte,
+  notExists,
   or,
   sql,
   sum,
   type SQL,
 } from "drizzle-orm";
 import type { FormField } from "@app/contracts";
+import { FULLY_SETTLED_STATUSES } from "@app/shared";
 import { getDb, type DbExecutor } from "../client";
 import { rowsOf } from "../helpers";
 import { registrations, paymentTransaction } from "../schema/registrations";
@@ -45,6 +50,11 @@ import { buildSponsorshipWhere } from "./sponsorships";
 // ...and filters registrants with the registrations list's WHERE.
 import { buildRegistrationWhere, type RegistrationFilters } from "./registrations";
 import { withExportStatementTimeout } from "../txn";
+import {
+  exportPageSize,
+  pagesByIds,
+  type ExportPageOptions,
+} from "./export-pages";
 
 type RegistrationRow = typeof registrations.$inferSelect;
 
@@ -517,8 +527,7 @@ const EXPORT_REGISTRATION_COLUMNS = {
 // Keyset paging for exports
 // ----------------------------------------------------------------------------
 
-/** Rows per export page: one short statement each, never a huge IN list. */
-export const EXPORT_PAGE_SIZE = 500;
+export { EXPORT_PAGE_SIZE, type ExportPageOptions } from "./export-pages";
 
 /** Position after the last row of a page, in export order. */
 export interface RegistrationExportCursor {
@@ -526,15 +535,10 @@ export interface RegistrationExportCursor {
   id: string;
 }
 
-export interface ExportPageOptions {
-  /** Rows per page (default EXPORT_PAGE_SIZE). */
-  pageSize?: number;
-  /** Checked before each page: an aborted export stops fetching. */
-  signal?: AbortSignal;
-}
-
 /** Export order: newest submission first, id breaking ties. */
 const EXPORT_ORDER = [desc(registrations.submittedAt), desc(registrations.id)];
+/** Check-in sheets list registrations in submission order. */
+const SUBMISSION_ORDER = [asc(registrations.submittedAt), asc(registrations.id)];
 
 /**
  * Rows after `cursor` in EXPORT_ORDER. The `<=` bound on submitted_at keeps
@@ -551,27 +555,38 @@ export function registrationsAfter(cursor: RegistrationExportCursor): SQL {
   ) as SQL;
 }
 
+/** Rows after `cursor` in SUBMISSION_ORDER (the mirror of registrationsAfter). */
+export function registrationsAfterAscending(cursor: RegistrationExportCursor): SQL {
+  return and(
+    gte(registrations.submittedAt, cursor.submittedAt),
+    or(
+      gt(registrations.submittedAt, cursor.submittedAt),
+      gt(registrations.id, cursor.id),
+    ),
+  ) as SQL;
+}
+
+type KeysetDirection = "newest-first" | "oldest-first";
+
 /**
- * Pages an event's filtered registrations in EXPORT_ORDER by keyset. Each
- * page runs in its own short transaction under the export statement timeout
- * (a slow client never holds a transaction open); `fetchPage` receives the
- * page's WHERE and may load the page's relations in the same transaction.
+ * Pages the registrations matching `base` by keyset on (submitted_at, id),
+ * newest first unless asked otherwise. Each page runs in its own short
+ * transaction under the export statement timeout (a slow client never holds
+ * a transaction open); `fetchPage` receives the page's WHERE, orders by the
+ * same direction, and may load the page's relations in the same transaction.
  */
 async function* keysetRegistrationPages<T extends RegistrationExportCursor>(
-  eventId: string,
-  filters: RegistrationFilters,
+  base: SQL,
   options: ExportPageOptions,
   fetchPage: (where: SQL, limit: number, tx: DbExecutor) => Promise<T[]>,
+  direction: KeysetDirection = "newest-first",
 ): AsyncGenerator<T[]> {
-  const pageSize = options.pageSize ?? EXPORT_PAGE_SIZE;
-  if (!Number.isInteger(pageSize) || pageSize < 1) {
-    throw new Error("Export page size must be a positive integer");
-  }
-  const base = buildRegistrationWhere(eventId, filters);
+  const pageSize = exportPageSize(options);
+  const after = direction === "newest-first" ? registrationsAfter : registrationsAfterAscending;
   let cursor: RegistrationExportCursor | null = null;
   for (;;) {
     options.signal?.throwIfAborted();
-    const where: SQL = cursor ? (and(base, registrationsAfter(cursor)) as SQL) : base;
+    const where: SQL = cursor ? (and(base, after(cursor)) as SQL) : base;
     const page = await withExportStatementTimeout((tx) => fetchPage(where, pageSize, tx));
     if (page.length > 0) {
       const last = page[page.length - 1]!;
@@ -588,7 +603,7 @@ export function iterateRegistrationsForExport(
   filters: RegistrationFilters,
   options: ExportPageOptions = {},
 ): AsyncGenerator<ExportRegistrationRow[]> {
-  return keysetRegistrationPages(eventId, filters, options, (where, limit, tx) =>
+  return keysetRegistrationPages(buildRegistrationWhere(eventId, filters), options, (where, limit, tx) =>
     tx
       .select(EXPORT_REGISTRATION_COLUMNS)
       .from(registrations)
@@ -843,7 +858,8 @@ export function iterateRegistrationsForModularExport(
   options: ExportPageOptions = {},
 ): AsyncGenerator<ModularRegistrationRow[]> {
   const { needCheckIns, needTransactions, ...filters } = opts;
-  return keysetRegistrationPages(eventId, filters, options, async (where, limit, tx) => {
+  const base = buildRegistrationWhere(eventId, filters);
+  return keysetRegistrationPages(base, options, async (where, limit, tx) => {
     const rows = await tx
       .select()
       .from(registrations)
@@ -950,95 +966,138 @@ export async function getSponsorshipLabDetails(
 
 // ============================================================================
 // Excel generators — data fetches
+// Each report reads its small header data (event, access items, counts or
+// sort keys) in one export transaction up front, then its rows page by page:
+// keyset pages on registrations, or id chunks when the row order is decided
+// in JS. Nothing loads a whole event's rows at once.
 // ============================================================================
+
+async function getEventAccessItems(
+  eventId: string,
+  db: DbExecutor,
+): Promise<Array<{ id: string; name: string; type: string }>> {
+  return db
+    .select({ id: eventAccess.id, name: eventAccess.name, type: eventAccess.type })
+    .from(eventAccess)
+    .where(eq(eventAccess.eventId, eventId))
+    .orderBy(asc(eventAccess.sortOrder));
+}
 
 export interface EventSummaryData {
   event: { name: string; slug: string } | null;
   accessTypes: Array<{ id: string; name: string; type: string }>;
-  registrations: Array<{
-    id: string;
-    paymentStatus: string;
-    paymentMethod: string | null;
-    accessTypeIds: string[];
-    sponsorshipAmount: number;
-    totalAmount: number;
-  }>;
+  /** Registrations of the event. */
+  total: number;
+  /** Registrations per payment status (statuses with none are absent). */
+  byStatus: Array<{ paymentStatus: string; count: number }>;
+  /**
+   * Per access id listed on registrations: how many list it, and how many of
+   * those are confirmed (PAID, SPONSORED or WAIVED). A registration listing
+   * an id twice counts twice, as the in-memory count did.
+   */
+  byAccess: Array<{ accessId: string; registered: number; confirmed: number }>;
 }
 
+/** Event summary counts, aggregated in SQL (no registration rows loaded). */
 export async function getEventSummaryData(
   eventId: string,
   db: DbExecutor = getDb(),
 ): Promise<EventSummaryData> {
   const event = await getEventSlugAndName(eventId, db);
-  const accessTypes = await db
-    .select({ id: eventAccess.id, name: eventAccess.name, type: eventAccess.type })
-    .from(eventAccess)
-    .where(eq(eventAccess.eventId, eventId))
-    .orderBy(asc(eventAccess.sortOrder));
-  const regs = await db
-    .select({
-      id: registrations.id,
-      paymentStatus: registrations.paymentStatus,
-      paymentMethod: registrations.paymentMethod,
-      accessTypeIds: registrations.accessTypeIds,
-      sponsorshipAmount: registrations.sponsorshipAmount,
-      totalAmount: registrations.totalAmount,
-    })
+  const accessTypes = await getEventAccessItems(eventId, db);
+  const byStatus = await db
+    .select({ paymentStatus: registrations.paymentStatus, count: count() })
     .from(registrations)
-    .where(eq(registrations.eventId, eventId));
+    .where(eq(registrations.eventId, eventId))
+    .groupBy(registrations.paymentStatus);
+  const byAccess = rowsOf<{
+    access_id: string;
+    registered: number | string;
+    confirmed: number | string;
+  }>(
+    await db.execute(sql`
+      SELECT a.access_id,
+        count(*) AS registered,
+        count(*) FILTER (WHERE r.payment_status IN (${sql.join(
+          FULLY_SETTLED_STATUSES.map((status) => sql`${status}`),
+          sql`, `,
+        )})) AS confirmed
+      FROM ${registrations} r,
+        LATERAL unnest(r.access_type_ids) AS a(access_id)
+      WHERE r.event_id = ${eventId}
+      GROUP BY a.access_id
+    `),
+  );
   return {
     event,
     accessTypes,
-    registrations: regs.map((r) => ({ ...r, accessTypeIds: r.accessTypeIds ?? [] })),
+    total: byStatus.reduce((sum, row) => sum + row.count, 0),
+    byStatus: byStatus.map((row) => ({ paymentStatus: row.paymentStatus, count: row.count })),
+    byAccess: byAccess.map((row) => ({
+      accessId: row.access_id,
+      registered: Number(row.registered),
+      confirmed: Number(row.confirmed),
+    })),
   };
 }
 
-export interface AccessRegistrantsReportData {
+export interface ReportEventAndAccess {
   event: { name: string; slug: string } | null;
   accessItems: Array<{ id: string; name: string; type: string }>;
-  registrations: Array<{
-    firstName: string | null;
-    lastName: string | null;
-    email: string;
-    phone: string | null;
-    paymentStatus: string;
-    totalAmount: number;
-    currency: string;
-    submittedAt: Date;
-    accessTypeIds: string[];
-  }>;
 }
 
-export async function getAccessRegistrantsReportData(
+/** The event and its access items (sort order), for the per-access reports. */
+export async function getReportEventAndAccess(
   eventId: string,
   db: DbExecutor = getDb(),
-): Promise<AccessRegistrantsReportData> {
-  const event = await getEventSlugAndName(eventId, db);
-  const accessItems = await db
-    .select({ id: eventAccess.id, name: eventAccess.name, type: eventAccess.type })
-    .from(eventAccess)
-    .where(eq(eventAccess.eventId, eventId))
-    .orderBy(asc(eventAccess.sortOrder));
-  const regs = await db
-    .select({
-      firstName: registrations.firstName,
-      lastName: registrations.lastName,
-      email: registrations.email,
-      phone: registrations.phone,
-      paymentStatus: registrations.paymentStatus,
-      totalAmount: registrations.totalAmount,
-      currency: registrations.currency,
-      submittedAt: registrations.submittedAt,
-      accessTypeIds: registrations.accessTypeIds,
-    })
-    .from(registrations)
-    .where(eq(registrations.eventId, eventId))
-    .orderBy(desc(registrations.submittedAt));
+): Promise<ReportEventAndAccess> {
   return {
-    event,
-    accessItems,
-    registrations: regs.map((r) => ({ ...r, accessTypeIds: r.accessTypeIds ?? [] })),
+    event: await getEventSlugAndName(eventId, db),
+    accessItems: await getEventAccessItems(eventId, db),
   };
+}
+
+export interface AccessRegistrantReportRow {
+  id: string;
+  firstName: string | null;
+  lastName: string | null;
+  email: string;
+  phone: string | null;
+  paymentStatus: string;
+  totalAmount: number;
+  currency: string;
+  submittedAt: Date;
+}
+
+/** Registrations listing `accessId`, newest first, page by page. */
+export function iterateAccessRegistrantsForReport(
+  eventId: string,
+  accessId: string,
+  options: ExportPageOptions = {},
+): AsyncGenerator<AccessRegistrantReportRow[]> {
+  const base = and(eq(registrations.eventId, eventId), hasAccess(accessId)) as SQL;
+  return keysetRegistrationPages(base, options, (where, limit, tx) =>
+    tx
+      .select({
+        id: registrations.id,
+        firstName: registrations.firstName,
+        lastName: registrations.lastName,
+        email: registrations.email,
+        phone: registrations.phone,
+        paymentStatus: registrations.paymentStatus,
+        totalAmount: registrations.totalAmount,
+        currency: registrations.currency,
+        submittedAt: registrations.submittedAt,
+      })
+      .from(registrations)
+      .where(where)
+      .orderBy(...EXPORT_ORDER)
+      .limit(limit),
+  );
+}
+
+function hasAccess(accessId: string): SQL {
+  return sql`${accessId}::text = ANY(${registrations.accessTypeIds})`;
 }
 
 export interface SponsorshipReportUsage {
@@ -1048,6 +1107,7 @@ export interface SponsorshipReportUsage {
 }
 
 export interface SponsorshipReportRow {
+  id: string;
   code: string;
   status: string;
   beneficiaryName: string;
@@ -1062,20 +1122,32 @@ export interface SponsorshipReportRow {
   usages: SponsorshipReportUsage[];
 }
 
+/** What the sponsorships report sorts and totals by, for every filtered row. */
+export interface SponsorshipReportKey {
+  id: string;
+  labName: string;
+  totalAmount: number;
+  createdAt: Date;
+}
+
 export interface SponsorshipsReportData {
   event: { name: string; slug: string } | null;
   currency: string;
   accessItems: Array<{ id: string; name: string }>;
-  sponsorships: SponsorshipReportRow[];
+  /** Every filtered sponsorship's sort key, newest first. */
+  keys: SponsorshipReportKey[];
 }
 
+/**
+ * The sponsorships report's header data and the sort key of every filtered
+ * sponsorship (four small columns each); the rows themselves are read by
+ * iterateSponsorshipsForReport in the order the caller settles on.
+ */
 export async function getSponsorshipsReportData(
   eventId: string,
   filters?: { status?: string; search?: string },
   db: DbExecutor = getDb(),
 ): Promise<SponsorshipsReportData> {
-  const where = buildSponsorshipWhere(eventId, filters);
-
   const event = await getEventSlugAndName(eventId, db);
   const pricing = await db
     .select({ currency: eventPricing.currency })
@@ -1087,6 +1159,40 @@ export async function getSponsorshipsReportData(
     .from(eventAccess)
     .where(eq(eventAccess.eventId, eventId))
     .orderBy(asc(eventAccess.sortOrder));
+  const keys = await db
+    .select({
+      id: sponsorships.id,
+      labName: sponsorshipBatches.labName,
+      totalAmount: sponsorships.totalAmount,
+      createdAt: sponsorships.createdAt,
+    })
+    .from(sponsorships)
+    .innerJoin(sponsorshipBatches, eq(sponsorships.batchId, sponsorshipBatches.id))
+    .where(buildSponsorshipWhere(eventId, filters))
+    .orderBy(desc(sponsorships.createdAt), desc(sponsorships.id));
+  return {
+    event,
+    currency: pricing[0]?.currency ?? "TND",
+    accessItems,
+    keys,
+  };
+}
+
+/**
+ * Sponsorship rows (with their batch and usages, usages by applied_at) for
+ * `ids` in that order, EXPORT_PAGE_SIZE ids per page.
+ */
+export function iterateSponsorshipsForReport(
+  ids: readonly string[],
+  options: ExportPageOptions = {},
+): AsyncGenerator<SponsorshipReportRow[]> {
+  return pagesByIds(ids, options, loadSponsorshipReportRows, (row) => row.id);
+}
+
+async function loadSponsorshipReportRows(
+  ids: string[],
+  db: DbExecutor,
+): Promise<SponsorshipReportRow[]> {
   const sponsorshipRows = await db
     .select({
       sponsorship: sponsorships,
@@ -1099,138 +1205,164 @@ export async function getSponsorshipsReportData(
     })
     .from(sponsorships)
     .innerJoin(sponsorshipBatches, eq(sponsorships.batchId, sponsorshipBatches.id))
-    .where(where)
-    .orderBy(desc(sponsorships.createdAt));
+    .where(inArray(sponsorships.id, ids));
+  if (sponsorshipRows.length === 0) return [];
 
-  // Usages (+ registration) for the fetched sponsorships, ordered appliedAt asc.
-  const sponsorshipIds = sponsorshipRows.map((s) => s.sponsorship.id);
-  const usagesById = new Map<string, SponsorshipReportUsage[]>();
-  if (sponsorshipIds.length > 0) {
-    const usageRows = await db
-      .select({
-        sponsorshipId: sponsorshipUsages.sponsorshipId,
-        amountApplied: sponsorshipUsages.amountApplied,
-        appliedAt: sponsorshipUsages.appliedAt,
-        regFirstName: registrations.firstName,
-        regLastName: registrations.lastName,
-        regEmail: registrations.email,
-        registrationId: sponsorshipUsages.registrationId,
-      })
-      .from(sponsorshipUsages)
-      .leftJoin(registrations, eq(sponsorshipUsages.registrationId, registrations.id))
-      .where(inArray(sponsorshipUsages.sponsorshipId, sponsorshipIds))
-      .orderBy(asc(sponsorshipUsages.appliedAt));
-    for (const u of usageRows) {
-      const list = usagesById.get(u.sponsorshipId) ?? [];
-      list.push({
-        amountApplied: u.amountApplied,
-        appliedAt: u.appliedAt,
-        registration:
-          u.registrationId && u.regEmail
-            ? { firstName: u.regFirstName, lastName: u.regLastName, email: u.regEmail }
-            : null,
-      });
-      usagesById.set(u.sponsorshipId, list);
-    }
-  }
-
-  return {
-    event,
-    currency: pricing[0]?.currency ?? "TND",
-    accessItems,
-    sponsorships: sponsorshipRows.map((s) => ({
-      code: s.sponsorship.code,
-      status: s.sponsorship.status,
-      beneficiaryName: s.sponsorship.beneficiaryName,
-      beneficiaryEmail: s.sponsorship.beneficiaryEmail,
-      beneficiaryPhone: s.sponsorship.beneficiaryPhone,
-      beneficiaryAddress: s.sponsorship.beneficiaryAddress,
-      coversBasePrice: s.sponsorship.coversBasePrice,
-      coveredAccessIds: s.sponsorship.coveredAccessIds ?? [],
-      totalAmount: s.sponsorship.totalAmount,
-      createdAt: s.sponsorship.createdAt,
-      batch: s.batch,
-      usages: usagesById.get(s.sponsorship.id) ?? [],
-    })),
-  };
-}
-
-export interface CheckInReportData {
-  event: { name: string; slug: string } | null;
-  accessItems: Array<{ id: string; name: string }>;
-  registrations: Array<{
-    id: string;
-    referenceNumber: string | null;
-    firstName: string | null;
-    lastName: string | null;
-    email: string;
-    phone: string | null;
-    paymentStatus: string;
-    submittedAt: Date;
-    checkedInAt: Date | null;
-    accessTypeIds: string[];
-    accessCheckIns: Array<{ accessId: string; checkedInAt: Date }>;
-  }>;
-}
-
-export async function getCheckInReportData(
-  eventId: string,
-  db: DbExecutor = getDb(),
-): Promise<CheckInReportData> {
-  const event = await getEventSlugAndName(eventId, db);
-  const accessItems = await db
-    .select({ id: eventAccess.id, name: eventAccess.name })
-    .from(eventAccess)
-    .where(eq(eventAccess.eventId, eventId))
-    .orderBy(asc(eventAccess.sortOrder));
-
-  const regs = await db
+  const usageRows = await db
     .select({
-      id: registrations.id,
-      referenceNumber: registrations.referenceNumber,
-      firstName: registrations.firstName,
-      lastName: registrations.lastName,
-      email: registrations.email,
-      phone: registrations.phone,
-      paymentStatus: registrations.paymentStatus,
-      submittedAt: registrations.submittedAt,
-      checkedInAt: registrations.checkedInAt,
-      accessTypeIds: registrations.accessTypeIds,
+      sponsorshipId: sponsorshipUsages.sponsorshipId,
+      amountApplied: sponsorshipUsages.amountApplied,
+      appliedAt: sponsorshipUsages.appliedAt,
+      regFirstName: registrations.firstName,
+      regLastName: registrations.lastName,
+      regEmail: registrations.email,
+      registrationId: sponsorshipUsages.registrationId,
     })
-    .from(registrations)
-    .where(eq(registrations.eventId, eventId))
-    .orderBy(asc(registrations.submittedAt));
-
-  const checkInRows =
-    regs.length === 0
-      ? []
-      : await db
-          .select({
-            registrationId: accessCheckIns.registrationId,
-            accessId: accessCheckIns.accessId,
-            checkedInAt: accessCheckIns.checkedInAt,
-          })
-          .from(accessCheckIns)
-          .where(
-            inArray(
-              accessCheckIns.registrationId,
-              regs.map((r) => r.id),
-            ),
-          );
-  const byReg = new Map<string, Array<{ accessId: string; checkedInAt: Date }>>();
-  for (const c of checkInRows) {
-    const list = byReg.get(c.registrationId) ?? [];
-    list.push({ accessId: c.accessId, checkedInAt: c.checkedInAt });
-    byReg.set(c.registrationId, list);
+    .from(sponsorshipUsages)
+    .leftJoin(registrations, eq(sponsorshipUsages.registrationId, registrations.id))
+    .where(inArray(sponsorshipUsages.sponsorshipId, ids))
+    .orderBy(asc(sponsorshipUsages.appliedAt));
+  const usagesById = new Map<string, SponsorshipReportUsage[]>();
+  for (const u of usageRows) {
+    const list = usagesById.get(u.sponsorshipId) ?? [];
+    list.push({
+      amountApplied: u.amountApplied,
+      appliedAt: u.appliedAt,
+      registration:
+        u.registrationId && u.regEmail
+          ? { firstName: u.regFirstName, lastName: u.regLastName, email: u.regEmail }
+          : null,
+    });
+    usagesById.set(u.sponsorshipId, list);
   }
 
-  return {
-    event,
-    accessItems,
-    registrations: regs.map((r) => ({
-      ...r,
-      accessTypeIds: r.accessTypeIds ?? [],
-      accessCheckIns: byReg.get(r.id) ?? [],
-    })),
+  return sponsorshipRows.map((s) => ({
+    id: s.sponsorship.id,
+    code: s.sponsorship.code,
+    status: s.sponsorship.status,
+    beneficiaryName: s.sponsorship.beneficiaryName,
+    beneficiaryEmail: s.sponsorship.beneficiaryEmail,
+    beneficiaryPhone: s.sponsorship.beneficiaryPhone,
+    beneficiaryAddress: s.sponsorship.beneficiaryAddress,
+    coversBasePrice: s.sponsorship.coversBasePrice,
+    coveredAccessIds: s.sponsorship.coveredAccessIds ?? [],
+    totalAmount: s.sponsorship.totalAmount,
+    createdAt: s.sponsorship.createdAt,
+    batch: s.batch,
+    usages: usagesById.get(s.sponsorship.id) ?? [],
+  }));
+}
+
+export interface CheckInReportRow {
+  id: string;
+  referenceNumber: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  email: string;
+  phone: string | null;
+  paymentStatus: string;
+  submittedAt: Date;
+  /** Event check-in, or the access check-in on an access sheet; null when absent. */
+  checkedInAt: Date | null;
+}
+
+export interface CheckInReportScope {
+  /** Omitted: the event check-in; set: that access item's check-in. */
+  accessId?: string;
+  /** Which half of the sheet: the checked-in registrations, or the others. */
+  checkedIn: boolean;
+}
+
+/**
+ * One half of a check-in sheet, oldest submission first, page by page. The
+ * global sheet reads the event's registrations by registrations.checked_in_at;
+ * an access sheet reads the registrations listing that access by their
+ * access_check_ins row (unique per registration and access).
+ */
+export function iterateCheckInReportRows(
+  eventId: string,
+  scope: CheckInReportScope,
+  options: ExportPageOptions = {},
+): AsyncGenerator<CheckInReportRow[]> {
+  const columns = {
+    id: registrations.id,
+    referenceNumber: registrations.referenceNumber,
+    firstName: registrations.firstName,
+    lastName: registrations.lastName,
+    email: registrations.email,
+    phone: registrations.phone,
+    paymentStatus: registrations.paymentStatus,
+    submittedAt: registrations.submittedAt,
   };
+  const { accessId, checkedIn } = scope;
+
+  if (accessId === undefined) {
+    const base = and(
+      eq(registrations.eventId, eventId),
+      checkedIn ? isNotNull(registrations.checkedInAt) : isNull(registrations.checkedInAt),
+    ) as SQL;
+    return keysetRegistrationPages(
+      base,
+      options,
+      (where, limit, tx) =>
+        tx
+          .select({ ...columns, checkedInAt: registrations.checkedInAt })
+          .from(registrations)
+          .where(where)
+          .orderBy(...SUBMISSION_ORDER)
+          .limit(limit),
+      "oldest-first",
+    );
+  }
+
+  const listed = and(eq(registrations.eventId, eventId), hasAccess(accessId)) as SQL;
+  if (checkedIn) {
+    return keysetRegistrationPages(
+      listed,
+      options,
+      (where, limit, tx) =>
+        tx
+          .select({ ...columns, checkedInAt: accessCheckIns.checkedInAt })
+          .from(registrations)
+          .innerJoin(
+            accessCheckIns,
+            and(
+              eq(accessCheckIns.registrationId, registrations.id),
+              eq(accessCheckIns.accessId, accessId),
+            ),
+          )
+          .where(where)
+          .orderBy(...SUBMISSION_ORDER)
+          .limit(limit),
+      "oldest-first",
+    );
+  }
+  const notCheckedIn = and(
+    listed,
+    notExists(
+      getDb()
+        .select({ one: sql`1` })
+        .from(accessCheckIns)
+        .where(
+          and(
+            eq(accessCheckIns.registrationId, registrations.id),
+            eq(accessCheckIns.accessId, accessId),
+          ),
+        ),
+    ),
+  ) as SQL;
+  return keysetRegistrationPages(
+    notCheckedIn,
+    options,
+    async (where, limit, tx) =>
+      (
+        await tx
+          .select(columns)
+          .from(registrations)
+          .where(where)
+          .orderBy(...SUBMISSION_ORDER)
+          .limit(limit)
+      ).map((row) => ({ ...row, checkedInAt: null })),
+    "oldest-first",
+  );
 }
