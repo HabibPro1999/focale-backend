@@ -23,6 +23,8 @@ vi.mock("@app/integrations", () => ({
 vi.mock("@app/db", () => ({
   getUserWithClientById: vi.fn(),
   getUserIdsByClient: vi.fn(async () => []),
+  // The tenant scope guard's read on GET /api/clients/:id.
+  getClientTenantScope: vi.fn(),
   // The exception filter calls these on every caught error; the real
   // implementations return null for non-pg errors, which is all these
   // tests throw.
@@ -30,7 +32,7 @@ vi.mock("@app/db", () => ({
   pgUniqueViolation: () => null,
 }));
 
-import { getUserWithClientById } from "@app/db";
+import { getClientTenantScope, getUserWithClientById } from "@app/db";
 import { clearUserCache } from "../../core/auth/user-cache";
 import { ZodValidationPipe } from "../../core/zod";
 import { EnvelopeInterceptor } from "../../core/envelope.interceptor";
@@ -39,6 +41,7 @@ import { ClientsController } from "./clients.controller";
 import { ClientsService } from "./clients.service";
 
 const getUser = vi.mocked(getUserWithClientById);
+const getScope = vi.mocked(getClientTenantScope);
 
 const clientId = "11111111-1111-4111-8111-111111111111";
 const otherClientId = "22222222-2222-4222-8222-222222222222";
@@ -107,6 +110,9 @@ describe("ClientsController (routes)", () => {
     clearUserCache();
     // Default caller: super admin (no client).
     getUser.mockResolvedValue(dbUser(UserRole.SUPER_ADMIN, null, null));
+    getScope.mockImplementation(async (id: string) => ({
+      client: { id, active: true, enabledModules: ["pricing"] },
+    }));
 
     app = await NestFactory.create<NestFastifyApplication>(
       TestClientsModule,
@@ -153,6 +159,20 @@ describe("ClientsController (routes)", () => {
       expect(res.json().error.message).toBe("Client is inactive");
       expect(service.getById).not.toHaveBeenCalled();
     });
+
+    it("403 for a user without a client (super admin included), the status the list routes use", async () => {
+      for (const role of [UserRole.SUPER_ADMIN, UserRole.CLIENT_ADMIN]) {
+        clearUserCache();
+        getUser.mockResolvedValue(dbUser(role, null, null));
+        const res = await app.inject({ method: "GET", url: "/api/clients/me", headers: AUTH });
+        expect(res.statusCode).toBe(403);
+        expect(res.json().error).toEqual({
+          code: ErrorCodes.FORBIDDEN,
+          message: "User is not associated with any client",
+        });
+      }
+      expect(service.getById).not.toHaveBeenCalled();
+    });
   });
 
   describe("GET /api/clients/:id", () => {
@@ -183,10 +203,48 @@ describe("ClientsController (routes)", () => {
       });
 
       expect(res.statusCode).toBe(403);
+      expect(res.json().error).toEqual({
+        code: ErrorCodes.FORBIDDEN,
+        message: "Insufficient permissions",
+      });
+      expect(getScope).toHaveBeenCalledWith(otherClientId);
       expect(service.getById).not.toHaveBeenCalled();
     });
 
+    it("404 Client not found for a missing client, before the tenant check (the guard's order)", async () => {
+      getUser.mockResolvedValue(
+        dbUser(UserRole.CLIENT_ADMIN, clientId, makeClient()),
+      );
+      getScope.mockResolvedValue(null);
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/clients/${otherClientId}`,
+        headers: AUTH,
+      });
+
+      expect(res.statusCode).toBe(404);
+      expect(res.json().error).toEqual({
+        code: ErrorCodes.NOT_FOUND,
+        message: "Client not found",
+      });
+      expect(service.getById).not.toHaveBeenCalled();
+    });
+
+    it("400 for a malformed id, before any read", async () => {
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/clients/not-a-uuid",
+        headers: AUTH,
+      });
+      expect(res.statusCode).toBe(400);
+      expect(getScope).not.toHaveBeenCalled();
+    });
+
     it("lets a super admin read an inactive client via the service", async () => {
+      getScope.mockResolvedValue({
+        client: { id: clientId, active: false, enabledModules: [] },
+      });
       getUser.mockResolvedValue(dbUser(UserRole.SUPER_ADMIN, null, null));
       service.getById.mockResolvedValue(makeClient({ active: false }));
 

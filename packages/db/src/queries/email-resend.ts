@@ -5,6 +5,7 @@ import { abstracts } from "../schema/abstracts";
 import { emailLogs, emailTemplates } from "../schema/email";
 import { registrations } from "../schema/registrations";
 import type { EmailLogRow } from "./email";
+import { readEmailContextSnapshot } from "./stored-json";
 
 /**
  * Keys of a plain-text fallback template stashed in context_snapshot when an
@@ -69,7 +70,7 @@ export async function resendUncertainEmailLog(eventId: string, sourceId: string)
       if (!row || row.eventId !== eventId) return { ok: false, reason: "not_found" } as const;
       const source = row.log;
       if (source.status !== "UNCERTAIN") return { ok: false, reason: "not_uncertain" } as const;
-      const snapshot = source.contextSnapshot as Record<string, unknown> | null;
+      const snapshot = readEmailContextSnapshot(source.contextSnapshot, source.id);
       if (snapshot?.dispatchOwner === "networking" || !queueCanRender(source)) {
         return { ok: false, reason: "not_resendable" } as const;
       }

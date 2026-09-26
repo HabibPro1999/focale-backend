@@ -16,6 +16,7 @@ export * from "./checkin";
 export * from "./reports";
 export * from "./committee-invites";
 export * from "./tenant-scope";
+export * from "./stored-json";
 
 export * from "./networking";
 export * from "./networking-sync";

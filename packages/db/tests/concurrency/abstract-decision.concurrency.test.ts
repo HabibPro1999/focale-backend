@@ -25,6 +25,7 @@ import {
   seedAbstractTheme,
   seedEvent,
   seedUser,
+  testAudit,
 } from "../helpers/factories";
 
 // Plan 2.9: review, assignment and edit against a finalize in flight. Each
@@ -49,7 +50,7 @@ async function seedFixture() {
   const r3 = await seedUser({ clientId: event.clientId });
   for (const member of [r1, r2, r3]) await upsertCommitteeMembership(event.id, member.id);
   expect(
-    await assignReviewersTxn({ eventId: event.id, abstractId: abstract.id, reviewerIds: [r1.id, r2.id] }),
+    await assignReviewersTxn({ eventId: event.id, abstractId: abstract.id, reviewerIds: [r1.id, r2.id], audit: testAudit() }),
   ).toMatchObject({ ok: true });
   await getDb()
     .insert(abstractCodeCounters)
@@ -203,6 +204,7 @@ describe.runIf(dbTestsEnabled())("concurrency: abstract writers against a finali
       eventId: f.event.id,
       abstractId: f.abstract.id,
       reviewerIds: [f.r1.id, f.r3.id],
+      audit: testAudit(),
     });
     expect(await settlesWithin(late, 300)).toBe(false);
     await parked.release();
@@ -258,7 +260,7 @@ describe.runIf(dbTestsEnabled())("concurrency: abstract writers against a finali
     );
     for (const member of reviewers) await upsertCommitteeMembership(event.id, member.id);
     expect(
-      await assignReviewersTxn({ eventId: event.id, abstractId: abstract.id, reviewerIds: reviewers.map((r) => r.id) }),
+      await assignReviewersTxn({ eventId: event.id, abstractId: abstract.id, reviewerIds: reviewers.map((r) => r.id), audit: testAudit() }),
     ).toMatchObject({ ok: true });
     const target = { abstractId: abstract.id, event };
 
@@ -299,6 +301,7 @@ describe.runIf(dbTestsEnabled())("concurrency: abstract writers against a finali
           eventId: event.id,
           abstractId: abstract.id,
           reviewerIds: members.map((m) => m.id),
+          audit: testAudit(),
         }),
       ).toMatchObject({ ok: true });
       for (const leaver of [leaverA, leaverB]) {
@@ -309,8 +312,8 @@ describe.runIf(dbTestsEnabled())("concurrency: abstract writers against a finali
     // Both leavers lock the same abstracts (ascending id) while the stayer
     // scores them: no deadlock surfaces, and no recompute is lost.
     await Promise.all([
-      deactivateCommitteeMembershipTxn(event.id, leaverA.id),
-      deactivateCommitteeMembershipTxn(event.id, leaverB.id),
+      deactivateCommitteeMembershipTxn(event.id, leaverA.id, testAudit()),
+      deactivateCommitteeMembershipTxn(event.id, leaverB.id, testAudit()),
       ...abstractIds.map((abstractId, i) => review({ abstractId, event }, stayer.id, 2 + i)),
     ]);
 

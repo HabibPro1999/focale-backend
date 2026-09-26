@@ -3,12 +3,13 @@ import {
   check,
   index,
   integer,
-  jsonb,
   pgTable,
   text,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import { StoredCertificateZonesSchema } from "@app/contracts";
 import { idPk, timestamps } from "../helpers";
+import { jsonbOf } from "../jsonb";
 import { registrationRole, abstractFinalType } from "./enums";
 import { eventAccess, events } from "./events-access";
 
@@ -29,7 +30,7 @@ export const certificateTemplates = pgTable(
     renderImageKey: text(),
     renderImageWidth: integer(),
     renderImageHeight: integer(),
-    zones: jsonb().notNull().default([]),
+    zones: jsonbOf(StoredCertificateZonesSchema).notNull().default([]),
     // Live column is nullable RegistrationRole[] with a default (no NOT NULL).
     applicableRoles: registrationRole().array().default([]),
     accessId: text().references(() => eventAccess.id, {

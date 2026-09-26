@@ -11,7 +11,7 @@ import {
   updateAbstractConfig,
   countAbstractsByEvent,
   insertAuditLog,
-  getDb,
+  withTxn,
   listThemesByConfigId,
   insertTheme,
   findThemeWithEventId,
@@ -76,6 +76,7 @@ export class AbstractsConfigService {
     const { force, ...fields } = patch;
 
     // Mode-lock check
+    let modeForced = false;
     if (
       fields.submissionMode !== undefined &&
       fields.submissionMode !== config.submissionMode
@@ -84,20 +85,7 @@ export class AbstractsConfigService {
         eventId,
         force ?? false,
       );
-      if (forced) {
-        await insertAuditLog({
-          entityType: "AbstractConfig",
-          entityId: config.id,
-          action: "mode_force_changed",
-          changes: {
-            submissionMode: {
-              old: config.submissionMode,
-              new: fields.submissionMode,
-            },
-          },
-          performedBy,
-        }, getDb());
-      }
+      modeForced = forced;
     }
 
     // Build update data (only fields present in the patch).
@@ -115,28 +103,47 @@ export class AbstractsConfigService {
 
     this.assertValidDeadlineWindows(config, data);
 
-    const updated = await updateAbstractConfig(config.id, data);
-
-    // Diff of every patched field (old vs new) for the audit log.
-    const changes: Record<string, { old: unknown; new: unknown }> = {};
-    for (const [k, v] of Object.entries(fields)) {
-      if (v !== undefined) {
-        changes[k] = {
-          old: (config as Record<string, unknown>)[k],
-          new: (updated as Record<string, unknown>)[k],
-        };
+    // Past every check: the forced-mode record, the update and its audit
+    // commit together, so a refused or failed update records nothing.
+    return withTxn(async (tx) => {
+      if (modeForced) {
+        await insertAuditLog({
+          entityType: "AbstractConfig",
+          entityId: config.id,
+          action: "mode_force_changed",
+          changes: {
+            submissionMode: {
+              old: config.submissionMode,
+              new: fields.submissionMode,
+            },
+          },
+          performedBy,
+        }, tx);
       }
-    }
 
-    await insertAuditLog({
-      entityType: "AbstractConfig",
-      entityId: config.id,
-      action: "UPDATE",
-      changes,
-      performedBy,
-    }, getDb());
+      const updated = await updateAbstractConfig(config.id, data, tx);
 
-    return updated;
+      // Diff of every patched field (old vs new) for the audit log.
+      const changes: Record<string, { old: unknown; new: unknown }> = {};
+      for (const [k, v] of Object.entries(fields)) {
+        if (v !== undefined) {
+          changes[k] = {
+            old: (config as Record<string, unknown>)[k],
+            new: (updated as Record<string, unknown>)[k],
+          };
+        }
+      }
+
+      await insertAuditLog({
+        entityType: "AbstractConfig",
+        entityId: config.id,
+        action: "UPDATE",
+        changes,
+        performedBy,
+      }, tx);
+
+      return updated;
+    });
   }
 
   /** Whether changing submissionMode is allowed: free until the event has abstracts. */
@@ -360,21 +367,23 @@ export class AbstractsConfigService {
       }
     }
 
-    await updateAbstractConfig(config.id, {
-      additionalFieldsSchema: body.fields,
-    });
-    await insertAuditLog({
-      entityType: "AbstractConfig",
-      entityId: config.id,
-      action: "UPDATE",
-      changes: {
-        additionalFieldsSchema: {
-          old: config.additionalFieldsSchema,
-          new: body.fields,
+    await withTxn(async (tx) => {
+      await updateAbstractConfig(config.id, {
+        additionalFieldsSchema: body.fields,
+      }, tx);
+      await insertAuditLog({
+        entityType: "AbstractConfig",
+        entityId: config.id,
+        action: "UPDATE",
+        changes: {
+          additionalFieldsSchema: {
+            old: config.additionalFieldsSchema,
+            new: body.fields,
+          },
         },
-      },
-      performedBy,
-    }, getDb());
+        performedBy,
+      }, tx);
+    });
     return { fields: body.fields };
   }
 }

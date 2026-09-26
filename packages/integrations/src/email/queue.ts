@@ -43,6 +43,7 @@ import {
   getDb,
   pgUniqueViolation,
   resendUncertainEmailLog,
+  readEmailContextSnapshot,
   type ClaimedEmailLog,
   type ResendEmailLogResult,
   type EmailLogRow,
@@ -469,6 +470,9 @@ export async function processEmailQueue(
     // A drain can claim a requeued row again: this claim has not called the provider yet.
     providerCalled.delete(emailLog.id);
     try {
+      // Stored-JSON check (plan 5.2) here rather than in the batch load: under
+      // JSONB_VALIDATION=enforce an invalid snapshot fails this email only.
+      const contextSnapshot = readEmailContextSnapshot(emailLog.contextSnapshot, emailLog.id);
       let templateSubject: string;
       let templateHtml: string;
       let templatePlain: string;
@@ -485,7 +489,7 @@ export async function processEmailQueue(
         // no admin template exists) rides in contextSnapshot as an unresolved
         // {{var}} template — same resolution path as a real template, so it
         // gets ACTUALLY SENT rather than marked SKIPPED (the bug this restores).
-        const fallback = getFallbackTemplate(emailLog.contextSnapshot);
+        const fallback = getFallbackTemplate(contextSnapshot);
         if (!fallback) {
           return skipEmail(emailLog.id, "No template found");
         }
@@ -495,8 +499,8 @@ export async function processEmailQueue(
       }
 
       let context: QueueEmailContext | null = null;
-      if (isUsableContextSnapshot(emailLog.contextSnapshot)) {
-        context = emailLog.contextSnapshot;
+      if (isUsableContextSnapshot(contextSnapshot)) {
+        context = contextSnapshot;
       } else if (emailLog.registration) {
         context = (await buildEmailContextWithAccess(
           emailLog.registration,

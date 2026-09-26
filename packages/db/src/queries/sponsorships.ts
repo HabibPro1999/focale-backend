@@ -17,7 +17,11 @@ import {
   paginate,
   type PaginatedResult,
 } from "@app/shared";
-import type { ListSponsorshipsQuery, SponsorshipStats } from "@app/contracts";
+import type {
+  ListSponsorshipsQuery,
+  SponsorshipStats,
+  StoredFormSchemaJson,
+} from "@app/contracts";
 import { enqueueOutboxEvent } from "../outbox";
 import { getDb, type DbExecutor } from "../client";
 import { ilikeContains } from "../like";
@@ -31,6 +35,7 @@ import { eventPricing } from "../schema/pricing";
 import { clients } from "../schema/users-clients";
 import { registrations } from "../schema/registrations";
 import { forms } from "../schema/forms";
+import { checkFormRow, readFormSchema } from "./stored-json";
 
 // Row types inferred from the drizzle schema.
 export type SponsorshipRow = typeof sponsorships.$inferSelect;
@@ -322,19 +327,6 @@ export async function getSponsorshipByCode(
       phone: row.phone,
     },
   };
-}
-
-export async function getSponsorshipClientId(
-  id: string,
-  db: DbExecutor = getDb(),
-): Promise<string | null> {
-  const [row] = await db
-    .select({ clientId: events.clientId })
-    .from(sponsorships)
-    .innerJoin(events, eq(sponsorships.eventId, events.id))
-    .where(eq(sponsorships.id, id))
-    .limit(1);
-  return row?.clientId ?? null;
 }
 
 /** PENDING sponsorships for an event (+ batch.labName), newest first. */
@@ -717,7 +709,7 @@ export async function findSponsorFormById(
   db: DbExecutor,
   formId: string,
   eventId: string,
-): Promise<{ id: string; schema: unknown } | null> {
+): Promise<{ id: string; schema: StoredFormSchemaJson } | null> {
   const [row] = await db
     .select({ id: forms.id, schema: forms.schema })
     .from(forms)
@@ -729,14 +721,14 @@ export async function findSponsorFormById(
       ),
     )
     .limit(1);
-  return row ?? null;
+  return checkFormRow(row) ?? null;
 }
 
 /** Active SPONSOR form for an event (route-level lookup, active:true). */
 export async function getActiveSponsorForm(
   eventId: string,
   db: DbExecutor = getDb(),
-): Promise<{ id: string; eventId: string; schema: unknown } | null> {
+): Promise<{ id: string; eventId: string; schema: StoredFormSchemaJson } | null> {
   const [row] = await db
     .select({ id: forms.id, eventId: forms.eventId, schema: forms.schema })
     .from(forms)
@@ -748,19 +740,19 @@ export async function getActiveSponsorForm(
       ),
     )
     .limit(1);
-  return row ?? null;
+  return checkFormRow(row) ?? null;
 }
 
 export async function getFormSchema(
   db: DbExecutor,
   formId: string,
-): Promise<unknown | null> {
+): Promise<StoredFormSchemaJson | null> {
   const [row] = await db
     .select({ schema: forms.schema })
     .from(forms)
     .where(eq(forms.id, formId))
     .limit(1);
-  return row?.schema ?? null;
+  return row ? readFormSchema(row.schema, formId) : null;
 }
 
 export interface RegistrationForBatch {

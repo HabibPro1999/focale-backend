@@ -14,9 +14,10 @@ import {
   or,
 } from "drizzle-orm";
 import { FINAL_STATUSES } from "@app/contracts";
-import { getDb } from "../../client";
+import { getDb, type DbExecutor } from "../../client";
 import { withTxn, withLockingTxn } from "../../txn";
 import { lockAbstractsForUpdate } from "../../locks";
+import { insertAuditLog } from "../../outbox";
 import {
   abstractCommitteeMemberships,
   abstractConfig,
@@ -27,6 +28,7 @@ import {
   abstracts,
 } from "../../schema/abstracts";
 import { events } from "../../schema/events-access";
+import { auditLogs } from "../../schema/outbox-audit";
 import { users } from "../../schema/users-clients";
 import { applyReviewAggregate } from "./review-aggregate";
 import {
@@ -305,10 +307,14 @@ export async function upsertCommitteeMembership(
     });
 }
 
-/** Deactivate a membership + all its reviewer-theme prefs in one transaction. */
+/**
+ * Deactivate a membership + all its reviewer-theme prefs, and write `audit`,
+ * in one transaction.
+ */
 export async function deactivateCommitteeMembershipTxn(
   eventId: string,
   userId: string,
+  audit: typeof auditLogs.$inferInsert,
 ): Promise<void> {
   await withLockingTxn(async (tx) => {
     await tx
@@ -329,68 +335,77 @@ export async function deactivateCommitteeMembershipTxn(
           eq(abstractReviewerThemes.userId, userId),
         ),
       );
-
-    // M15: also deactivate this reviewer's active reviews on the event's
-    // abstracts, then recompute averageScore/reviewCount/status for each
-    // affected abstract — otherwise their score keeps counting and any
-    // unscored assignment blocks REVIEW_COMPLETE forever.
-    //
-    // Finalized abstracts are deliberately untouched: their review rows and
-    // stored aggregates are the historical inputs to an already-made decision,
-    // and offboarding a member must not rewrite that record.
-    //
-    // The affected abstracts are locked in ascending id order (ADR 0001) and
-    // their status is read after the lock, so a review, assignment or
-    // finalize on one of them runs wholly before or after this recompute.
-    //
-    // The membership UPDATE above holds the membership row, which
-    // assignReviewersTxn locks before its abstract (membership → abstracts).
-    // An assignment of this member therefore either committed before that
-    // UPDATE, and its review is found below, or waits and sees the
-    // membership inactive.
-    const candidateReviews = await tx
-      .select({ abstractId: abstractReviews.abstractId })
-      .from(abstractReviews)
-      .where(
-        and(
-          eq(abstractReviews.eventId, eventId),
-          eq(abstractReviews.reviewerId, userId),
-          eq(abstractReviews.active, true),
-        ),
-      );
-    const lockedIds = await lockAbstractsForUpdate(
-      tx,
-      candidateReviews.map((r) => r.abstractId),
-    );
-    if (lockedIds.length === 0) return;
-    const openAbstracts = await tx
-      .select({ id: abstracts.id })
-      .from(abstracts)
-      .where(
-        and(
-          inArray(abstracts.id, lockedIds),
-          notInArray(abstracts.status, FINAL_STATUSES),
-        ),
-      )
-      .orderBy(asc(abstracts.id));
-    const affectedIds = openAbstracts.map((r) => r.id);
-    if (affectedIds.length === 0) return;
-
-    await tx
-      .update(abstractReviews)
-      .set({ active: false })
-      .where(
-        and(
-          eq(abstractReviews.eventId, eventId),
-          eq(abstractReviews.reviewerId, userId),
-          eq(abstractReviews.active, true),
-          inArray(abstractReviews.abstractId, affectedIds),
-        ),
-      );
-    for (const abstractId of affectedIds) {
-      await applyReviewAggregate(tx, abstractId, false);
-    }
+    await deactivateReviewsOnOpenAbstracts(tx, eventId, userId);
+    await insertAuditLog(audit, tx);
   });
+}
+
+/**
+ * M15: also deactivate the leaving reviewer's active reviews on the event's
+ * abstracts, then recompute averageScore/reviewCount/status for each
+ * affected abstract — otherwise their score keeps counting and any unscored
+ * assignment blocks REVIEW_COMPLETE forever.
+ *
+ * Finalized abstracts are deliberately untouched: their review rows and
+ * stored aggregates are the historical inputs to an already-made decision,
+ * and offboarding a member must not rewrite that record.
+ *
+ * The affected abstracts are locked in ascending id order (ADR 0001) and
+ * their status is read after the lock, so a review, assignment or finalize
+ * on one of them runs wholly before or after this recompute.
+ *
+ * The caller's membership UPDATE holds the membership row, which
+ * assignReviewersTxn locks before its abstract (membership → abstracts). An
+ * assignment of this member therefore either committed before that UPDATE,
+ * and its review is found below, or waits and sees the membership inactive.
+ */
+async function deactivateReviewsOnOpenAbstracts(
+  tx: DbExecutor,
+  eventId: string,
+  userId: string,
+): Promise<void> {
+  const candidateReviews = await tx
+    .select({ abstractId: abstractReviews.abstractId })
+    .from(abstractReviews)
+    .where(
+      and(
+        eq(abstractReviews.eventId, eventId),
+        eq(abstractReviews.reviewerId, userId),
+        eq(abstractReviews.active, true),
+      ),
+    );
+  const lockedIds = await lockAbstractsForUpdate(
+    tx,
+    candidateReviews.map((r) => r.abstractId),
+  );
+  if (lockedIds.length === 0) return;
+  const openAbstracts = await tx
+    .select({ id: abstracts.id })
+    .from(abstracts)
+    .where(
+      and(
+        inArray(abstracts.id, lockedIds),
+        notInArray(abstracts.status, FINAL_STATUSES),
+      ),
+    )
+    .orderBy(asc(abstracts.id));
+  const affectedIds = openAbstracts.map((r) => r.id);
+  if (affectedIds.length === 0) return;
+
+  await tx
+    .update(abstractReviews)
+    .set({ active: false })
+    .where(
+      and(
+        eq(abstractReviews.eventId, eventId),
+        eq(abstractReviews.reviewerId, userId),
+        eq(abstractReviews.active, true),
+        inArray(abstractReviews.abstractId, affectedIds),
+      ),
+    );
+  for (const abstractId of affectedIds) {
+    await applyReviewAggregate(tx, abstractId, false);
+  }
 }
 
 /** Active theme ids for an event's config; null when no config row exists. */
@@ -412,11 +427,15 @@ export async function getActiveThemeIdsForEvent(
   return rows.map((r) => r.id);
 }
 
-/** Replace a reviewer's active theme set: deactivate all, then upsert-active each. */
+/**
+ * Replace a reviewer's active theme set (deactivate all, then upsert-active
+ * each) and write `audit`, in one transaction.
+ */
 export async function setReviewerThemesTxn(
   eventId: string,
   userId: string,
   themeIds: string[],
+  audit: typeof auditLogs.$inferInsert,
 ): Promise<void> {
   await withTxn(async (tx) => {
     await tx
@@ -441,6 +460,7 @@ export async function setReviewerThemesTxn(
           set: { active: true },
         });
     }
+    await insertAuditLog(audit, tx);
   });
 }
 

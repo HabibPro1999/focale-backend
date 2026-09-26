@@ -62,7 +62,7 @@ describe("getAvailableVariables", () => {
           ],
         },
       ],
-    });
+    } as never);
     const vars = await getAvailableVariables("evt-1");
     const formVars = vars.filter((v) => v.category === "form");
     expect(formVars).toHaveLength(1);
@@ -74,7 +74,7 @@ describe("getAvailableVariables", () => {
   it("uses the field id as the label when none is provided", async () => {
     vi.mocked(getRegistrationFormSchema).mockResolvedValue({
       steps: [{ fields: [{ id: "foo", type: "number" }] }],
-    });
+    } as never);
     const vars = await getAvailableVariables("evt-1");
     const formVar = vars.find((v) => v.id === "form_foo");
     expect(formVar?.label).toBe("foo");

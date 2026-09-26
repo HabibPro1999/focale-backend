@@ -1,6 +1,6 @@
 /** Abstract config: the per-event row and the submission count. */
 import { count, eq } from "drizzle-orm";
-import { getDb } from "../../client";
+import { getDb, type DbExecutor } from "../../client";
 import { abstractConfig, abstracts } from "../../schema/abstracts";
 import type { AbstractConfigRow } from "./shared";
 
@@ -28,8 +28,9 @@ export async function getOrCreateAbstractConfig(
 export async function updateAbstractConfig(
   id: string,
   data: Record<string, unknown>,
+  exec: DbExecutor,
 ): Promise<AbstractConfigRow> {
-  const [row] = await getDb()
+  const [row] = await exec
     .update(abstractConfig)
     .set(data)
     .where(eq(abstractConfig.id, id))

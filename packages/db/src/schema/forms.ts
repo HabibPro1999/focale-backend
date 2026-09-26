@@ -7,7 +7,9 @@ import {
   text,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { StoredFormSchemaJsonSchema } from "@app/contracts";
 import { idPk, timestamps } from "../helpers";
+import { jsonbOf } from "../jsonb";
 import { formType } from "./enums";
 import { events } from "./events-access";
 
@@ -20,7 +22,7 @@ export const forms = pgTable(
       .references(() => events.id, { onDelete: "cascade", onUpdate: "cascade" }),
     type: formType().notNull().default("REGISTRATION"),
     name: text().notNull(),
-    schema: jsonb().notNull(),
+    schema: jsonbOf(StoredFormSchemaJsonSchema).notNull(),
     schemaVersion: integer().notNull().default(1),
     successTitle: text(),
     successMessage: text(),

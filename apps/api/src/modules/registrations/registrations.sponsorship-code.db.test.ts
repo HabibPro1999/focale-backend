@@ -46,7 +46,7 @@ const service = new RegistrationCreateService(
 /** An open event with an active registration form and two ADDON items (no base price). */
 async function setup() {
   const event = await seedEvent({ status: "OPEN", endDate: new Date("2099-01-01T00:00:00.000Z") });
-  const form = await seedForm({ eventId: event.id, schema: { steps: [{ fields: [] }] } });
+  const form = await seedForm({ eventId: event.id, schema: { steps: [{ fields: [] }] } as never });
   const gala = await seedEventAccess({ eventId: event.id, name: "Gala", price: 120, type: "ADDON" });
   const tour = await seedEventAccess({ eventId: event.id, name: "Tour", price: 80, type: "ADDON" });
   const batch = await seedSponsorshipBatch({ eventId: event.id, formId: form.id });

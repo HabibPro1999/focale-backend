@@ -12,7 +12,13 @@ import {
   type InferSelectModel,
 } from "drizzle-orm";
 import { createLogger } from "@app/shared";
-import { getSponsorshipMode, extractFieldIds } from "@app/contracts";
+import {
+  getSponsorshipMode,
+  extractFieldIds,
+  type SponsorFormSchemaJson,
+  type StoredFormSchemaJson,
+  type UpdateSponsorshipSettingsInput,
+} from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
 import { withSerializableTxn, pgUniqueViolation } from "../txn";
 import { forms } from "../schema/forms";
@@ -21,6 +27,7 @@ import { clients } from "../schema/users-clients";
 import { eventPricing } from "../schema/pricing";
 import { registrations } from "../schema/registrations";
 import { sponsorshipBatches } from "../schema/sponsorships";
+import { checkFormRow, checkPricingRow, readFormSchema } from "./stored-json";
 
 const logger = createLogger({ name: "db:forms" });
 
@@ -56,7 +63,7 @@ export type FormUpdatePatch = {
   successTitle?: string | null;
   successMessage?: string | null;
   successTranslations?: unknown;
-  schema?: unknown;
+  schema?: StoredFormSchemaJson;
   incrementSchemaVersion?: boolean;
 };
 
@@ -81,7 +88,7 @@ async function findFormByIdExec(
     .from(forms)
     .where(eq(forms.id, id))
     .limit(1);
-  return row ?? null;
+  return checkFormRow(row) ?? null;
 }
 
 export async function findFormByIdWithEvent(
@@ -100,7 +107,7 @@ export async function findFormByIdWithEvent(
     .limit(1);
   if (!row) return null;
   return {
-    ...row.form,
+    ...checkFormRow(row.form),
     event: { clientId: row.clientId, status: row.status, endDate: row.endDate },
   };
 }
@@ -129,7 +136,7 @@ export async function findActiveRegistrationFormById(
     .limit(1);
   if (!row) return null;
   return {
-    ...row.form,
+    ...checkFormRow(row.form),
     event: { clientId: row.clientId, status: row.status, endDate: row.endDate },
   };
 }
@@ -181,11 +188,11 @@ async function findPublicFormByEventSlug(
     );
 
   return {
-    ...row.form,
+    ...checkFormRow(row.form),
     event: {
       ...row.event,
       client: row.client,
-      pricing: row.pricing,
+      pricing: checkPricingRow(row.pricing),
       access,
     },
   };
@@ -211,7 +218,7 @@ export async function findSponsorFormByEventId(
     .from(forms)
     .where(and(eq(forms.eventId, eventId), eq(forms.type, "SPONSOR")))
     .limit(1);
-  return row ?? null;
+  return checkFormRow(row) ?? null;
 }
 
 export async function formExistsByEventAndType(
@@ -269,7 +276,7 @@ export async function listForms(
       .limit(take),
     getDb().select({ n: count() }).from(forms).where(where),
   ]);
-  return { data, total: totalRows[0]?.n ?? 0 };
+  return { data: data.map((row) => checkFormRow(row)), total: totalRows[0]?.n ?? 0 };
 }
 
 // ============================================================================
@@ -339,7 +346,7 @@ export async function deleteFormById(id: string): Promise<void> {
 export function updateSponsorFormSchemaModeChange(params: {
   id: string;
   patch: FormUpdatePatch;
-  nextSchema: unknown;
+  nextSchema: StoredFormSchemaJson;
   newMode: string;
 }): Promise<ModeChangeResult<"not_found" | "type_changed" | "locked">> {
   return withSerializableTxn(async (tx) => {
@@ -387,7 +394,7 @@ export function updateSponsorFormSchemaModeChange(params: {
  */
 export function updateSponsorshipSettingsModeChange(
   formId: string,
-  settings: { sponsorshipMode: string } & Record<string, unknown>,
+  settings: UpdateSponsorshipSettingsInput,
 ): Promise<ModeChangeResult<"not_found" | "not_sponsor" | "locked">> {
   return withSerializableTxn(async (tx) => {
     const current = await findFormByIdExec(formId, tx);
@@ -400,13 +407,11 @@ export function updateSponsorshipSettingsModeChange(
       if (batches > 0) return { ok: false, reason: "locked" } as const;
     }
 
-    const schema = (current.schema ?? {}) as Record<string, unknown>;
-    const merged = {
+    // A SPONSOR form (checked above) stores a sponsor form schema.
+    const schema = current.schema as SponsorFormSchemaJson;
+    const merged: SponsorFormSchemaJson = {
       ...schema,
-      sponsorshipSettings: {
-        ...((schema.sponsorshipSettings as Record<string, unknown>) ?? {}),
-        ...settings,
-      },
+      sponsorshipSettings: { ...schema.sponsorshipSettings, ...settings },
     };
     const [form] = await tx
       .update(forms)
@@ -419,7 +424,7 @@ export function updateSponsorshipSettingsModeChange(
 
 /** Registration schema used to validate pricing/access condition option IDs. */
 export async function findRegistrationFormSchema(eventId: string, exec: DbExecutor = getDb()) {
-  const [row] = await exec.select({ schema: forms.schema }).from(forms)
+  const [row] = await exec.select({ id: forms.id, schema: forms.schema }).from(forms)
     .where(and(eq(forms.eventId, eventId), eq(forms.type, "REGISTRATION"))).limit(1);
-  return row ?? null;
+  return row ? { schema: readFormSchema(row.schema, row.id) } : null;
 }

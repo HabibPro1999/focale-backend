@@ -90,7 +90,7 @@ describe.runIf(enabled)(
         id: ids.form,
         eventId: ids.event,
         name: "Registration",
-        schema: { steps: [{ id: "professional", fields: ["company", "jobTitle", "sector"].map(id => ({ id, type: "text" })) }] },
+        schema: { steps: [{ id: "professional", fields: ["company", "jobTitle", "sector"].map(id => ({ id, type: "text" })) }] } as never,
       });
       for (let i = 0; i < 8; i++)
         await db.insert(registrations).values({

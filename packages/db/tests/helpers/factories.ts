@@ -7,6 +7,7 @@ import {
   abstractThemeLinks,
   abstractThemes,
   abstracts,
+  auditLogs,
   clients,
   eventAccess,
   events,
@@ -87,7 +88,7 @@ export async function seedForm(
   const eventId = overrides.eventId ?? (await seedEvent()).id;
   const [row] = await getDb()
     .insert(forms)
-    .values({ eventId, name: "Test Form", schema: { fields: [] }, ...overrides })
+    .values({ eventId, name: "Test Form", schema: { fields: [] } as never, ...overrides })
     .returning();
   return row;
 }
@@ -211,4 +212,11 @@ export async function seedAbstract(
     })
     .returning();
   return row;
+}
+
+/** Audit values for query functions that write their audit row in the change's transaction. */
+export function testAudit(
+  overrides: Partial<typeof auditLogs.$inferInsert> = {},
+): typeof auditLogs.$inferInsert {
+  return { entityType: "Test", entityId: "test", action: "test", performedBy: "test", ...overrides };
 }

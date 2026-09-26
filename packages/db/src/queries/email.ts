@@ -19,6 +19,7 @@ import {
   type InferSelectModel,
   type SQL,
 } from "drizzle-orm";
+import type { StoredEmailContextSnapshot, StoredFormSchemaJson } from "@app/contracts";
 import { newId } from "@app/shared";
 import { getDb, type DbExecutor } from "../client";
 import { rowCountOf, rowsOf, STANDARD_RETRY_DELAYS_MS, standardRetryDelayMs } from "../helpers";
@@ -32,6 +33,7 @@ import { registrations } from "../schema/registrations";
 import { sponsorshipBatches, sponsorships } from "../schema/sponsorships";
 import { forms } from "../schema/forms";
 import { abstracts } from "../schema/abstracts";
+import { readFormSchema } from "./stored-json";
 
 export type EmailTemplateRow = InferSelectModel<typeof emailTemplates>;
 export type EmailTemplateInsert = InferInsertModel<typeof emailTemplates>;
@@ -831,13 +833,13 @@ export async function getSponsorshipByCodeForEmail(
 export async function getRegistrationFormSchema(
   eventId: string,
   exec: DbExecutor = getDb(),
-): Promise<unknown | null> {
+): Promise<StoredFormSchemaJson | null> {
   const [row] = await exec
-    .select({ schema: forms.schema })
+    .select({ id: forms.id, schema: forms.schema })
     .from(forms)
     .where(and(eq(forms.eventId, eventId), eq(forms.type, "REGISTRATION")))
     .limit(1);
-  return row?.schema ?? null;
+  return row ? readFormSchema(row.schema, row.id) : null;
 }
 
 // ============================================================================
@@ -990,7 +992,8 @@ export interface ClaimedEmailLog {
   abstractId: string | null;
   recipientEmail: string;
   recipientName: string | null;
-  contextSnapshot: unknown;
+  /** As stored: the send path checks it (readEmailContextSnapshot) per row. */
+  contextSnapshot: StoredEmailContextSnapshot;
   attemptCount: number;
   maxRetries: number;
   template: EmailTemplateRow | null;

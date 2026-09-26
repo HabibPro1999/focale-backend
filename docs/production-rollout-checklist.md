@@ -95,6 +95,15 @@ blocks writes to the table on PostgreSQL; run `apply` off-peak there.
   maintenance window
   ([runbook](../NETWORKING.md#vector-index-health-and-runbook-cockroachdb)).
   #103 (4.10)
+- [ ] Typed JSON columns (5.2a): keep `JSONB_VALIDATION=warn` (the default).
+  Run the read-only audit `node apps/api/dist/scripts/stored-json-report.js`:
+  it lists every stored pricing rule list, certificate zone list, form schema
+  and email context that is not what its type says (row ids, paths and issue
+  codes, never values). Pricing rules are typed in the public payment-config
+  and form responses, so keys it reports as `unrecognized_keys` on
+  `event_pricing.rules` are no longer returned there. Fix or accept each row
+  (user); once the audit reports nothing, set `JSONB_VALIDATION=enforce` on
+  both services. #165 (5.2a)
 
 ## Data repairs
 

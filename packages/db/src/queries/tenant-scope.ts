@@ -1,10 +1,12 @@
 import { eq } from "drizzle-orm";
 import { getDb, type DbExecutor } from "../client";
 import { clients } from "../schema/users-clients";
-import { events } from "../schema/events-access";
+import { eventAccess, events } from "../schema/events-access";
 import { registrations } from "../schema/registrations";
 import { sponsorships } from "../schema/sponsorships";
 import { emailTemplates } from "../schema/email";
+import { certificateTemplates } from "../schema/certificates";
+import { forms } from "../schema/forms";
 
 // ============================================================================
 // Tenant scope reads for the API's route guards (plan 5.4). Each loads a
@@ -14,6 +16,7 @@ import { emailTemplates } from "../schema/email";
 // ============================================================================
 
 type EventStatus = typeof events.$inferSelect.status;
+type FormType = typeof forms.$inferSelect.type;
 
 /** The event fields a route guard needs. */
 export interface ScopedEventRow {
@@ -41,6 +44,24 @@ export interface RegistrationTenantScope extends EventTenantScope {
 
 export interface SponsorshipTenantScope extends EventTenantScope {
   sponsorship: { id: string };
+}
+
+export interface AccessItemTenantScope extends EventTenantScope {
+  accessItem: { id: string };
+}
+
+export interface CertificateTemplateTenantScope extends EventTenantScope {
+  certificateTemplate: { id: string };
+}
+
+/** The form's type picks its module (sponsorships for SPONSOR, registrations otherwise). */
+export interface FormTenantScope extends EventTenantScope {
+  form: { id: string; type: FormType };
+}
+
+/** A client on its own (a route on the client itself, or naming one in its body). */
+export interface ClientTenantScope {
+  client: ScopedClientRow;
 }
 
 /**
@@ -136,6 +157,66 @@ export async function getSponsorshipTenantScope(
     .where(eq(sponsorships.id, sponsorshipId))
     .limit(1);
   return row ? { sponsorship: { id: row.sponsorshipId }, ...toScope(row) } : null;
+}
+
+/** Event access item → event → client, by access item id. */
+export async function getAccessItemTenantScope(
+  accessId: string,
+  db: DbExecutor = getDb(),
+): Promise<AccessItemTenantScope | null> {
+  const [row] = await db
+    .select({ accessId: eventAccess.id, ...eventColumns, ...clientColumns })
+    .from(eventAccess)
+    .innerJoin(events, eq(events.id, eventAccess.eventId))
+    .innerJoin(clients, eq(clients.id, events.clientId))
+    .where(eq(eventAccess.id, accessId))
+    .limit(1);
+  return row ? { accessItem: { id: row.accessId }, ...toScope(row) } : null;
+}
+
+/** Certificate template → event → client, by template id. */
+export async function getCertificateTemplateTenantScope(
+  templateId: string,
+  db: DbExecutor = getDb(),
+): Promise<CertificateTemplateTenantScope | null> {
+  const [row] = await db
+    .select({ templateId: certificateTemplates.id, ...eventColumns, ...clientColumns })
+    .from(certificateTemplates)
+    .innerJoin(events, eq(events.id, certificateTemplates.eventId))
+    .innerJoin(clients, eq(clients.id, events.clientId))
+    .where(eq(certificateTemplates.id, templateId))
+    .limit(1);
+  return row ? { certificateTemplate: { id: row.templateId }, ...toScope(row) } : null;
+}
+
+/** Form (id and type) → event → client, by form id. */
+export async function getFormTenantScope(
+  formId: string,
+  db: DbExecutor = getDb(),
+): Promise<FormTenantScope | null> {
+  const [row] = await db
+    .select({ formId: forms.id, formType: forms.type, ...eventColumns, ...clientColumns })
+    .from(forms)
+    .innerJoin(events, eq(events.id, forms.eventId))
+    .innerJoin(clients, eq(clients.id, events.clientId))
+    .where(eq(forms.id, formId))
+    .limit(1);
+  return row ? { form: { id: row.formId, type: row.formType }, ...toScope(row) } : null;
+}
+
+/** A client's active flag and modules, by client id. */
+export async function getClientTenantScope(
+  clientId: string,
+  db: DbExecutor = getDb(),
+): Promise<ClientTenantScope | null> {
+  const [row] = await db
+    .select(clientColumns)
+    .from(clients)
+    .where(eq(clients.id, clientId))
+    .limit(1);
+  return row
+    ? { client: { id: row.clientId, active: row.clientActive, enabledModules: row.clientEnabledModules } }
+    : null;
 }
 
 /** Email template → its event (if any) → that event's client, by template id. */

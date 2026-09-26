@@ -358,7 +358,7 @@ export class RegistrationPaymentsService {
         ? await findRegistrationWithFormEvent(registrationId, tx)
         : null;
       if (!registration) {
-        throw new AppException(ErrorCodes.NOT_FOUND, "Registration not found", 404);
+        throw new AppException(ErrorCodes.REGISTRATION_NOT_FOUND, "Registration not found", 404);
       }
       assertEventAcceptsPublicActions(registration.event);
       assertModuleEnabledForClient(

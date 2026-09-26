@@ -41,7 +41,7 @@ const service = new RegistrationCreateService(
 
 async function setup() {
   const event = await seedEvent({ status: "OPEN", endDate: new Date("2099-01-01T00:00:00.000Z") });
-  const form = await seedForm({ eventId: event.id, schema: { steps: [{ fields: [] }] } });
+  const form = await seedForm({ eventId: event.id, schema: { steps: [{ fields: [] }] } as never });
   const gala = await seedEventAccess({ eventId: event.id, name: "Gala", price: 150, type: "ADDON" });
   const batch = await seedSponsorshipBatch({ eventId: event.id, formId: form.id });
   const sponsorship = await seedSponsorship({

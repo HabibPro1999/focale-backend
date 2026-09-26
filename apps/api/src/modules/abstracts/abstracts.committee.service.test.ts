@@ -600,17 +600,22 @@ describe("addCommitteeMember", () => {
 // removeCommitteeMember
 // ===========================================================================
 describe("removeCommitteeMember", () => {
-  it("deactivates the membership + reviewer themes and audit-logs", async () => {
+  it("deactivates the membership + reviewer themes with its audit row in the same txn", async () => {
     grantActiveMembership();
     await service.removeCommitteeMember(eventId, reviewerId, performedBy);
     expect(deactivateCommitteeMembershipTxn).toHaveBeenCalledWith(
       eventId,
       reviewerId,
+      {
+        entityType: "AbstractCommitteeMembership",
+        entityId: `${eventId}:${reviewerId}`,
+        action: "deactivate",
+        changes: { active: { old: true, new: false } },
+        performedBy,
+      },
     );
-    expect(insertAuditLog).toHaveBeenCalledWith(
-      expect.objectContaining({ action: "deactivate" }),
-      rootDb,
-    );
+    // Not written separately after the transaction.
+    expect(insertAuditLog).not.toHaveBeenCalled();
   });
 
   it("403s when the target is not an active member", async () => {
@@ -641,13 +646,20 @@ describe("setReviewerThemes", () => {
       performedBy,
     );
 
-    expect(setReviewerThemesTxn).toHaveBeenCalledWith(eventId, reviewerId, [
-      "theme-1",
-    ]);
-    expect(insertAuditLog).toHaveBeenCalledWith(
-      expect.objectContaining({ action: "replace" }),
-      rootDb,
+    expect(setReviewerThemesTxn).toHaveBeenCalledWith(
+      eventId,
+      reviewerId,
+      ["theme-1"],
+      {
+        entityType: "AbstractReviewerTheme",
+        entityId: `${eventId}:${reviewerId}`,
+        action: "replace",
+        changes: { themeIds: { old: null, new: ["theme-1"] } },
+        performedBy,
+      },
     );
+    // Not written separately after the transaction.
+    expect(insertAuditLog).not.toHaveBeenCalled();
   });
 
   it("400s (ABSTRACT_INVALID_THEMES) when a theme is not active", async () => {
@@ -705,13 +717,20 @@ describe("assignReviewers", () => {
       performedBy,
     );
 
-    expect(assignReviewersTxn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        eventId,
-        abstractId,
-        reviewerIds: ["r1", "r2"],
-      }),
-    );
+    expect(assignReviewersTxn).toHaveBeenCalledWith({
+      eventId,
+      abstractId,
+      reviewerIds: ["r1", "r2"],
+      audit: {
+        entityType: "Abstract",
+        entityId: abstractId,
+        action: "assign_reviewers",
+        changes: { reviewerIds: { old: null, new: ["r1", "r2"] } },
+        performedBy,
+      },
+    });
+    // Written by the transaction, only when it assigns.
+    expect(insertAuditLog).not.toHaveBeenCalled();
     expect(result).toEqual({
       abstractId,
       status: "UNDER_REVIEW",

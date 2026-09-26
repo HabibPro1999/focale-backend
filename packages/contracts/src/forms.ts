@@ -238,6 +238,17 @@ const UpdatableFormSchemaJsonSchema = z.union([
   SponsorFormSchemaJsonSchema,
 ]);
 
+/**
+ * The stored `forms.schema` document (plan 5.2): a registration or a sponsor
+ * form schema exactly as the form routes write it (parsed, defaults filled
+ * in). Both shapes stay open at the top level and in `settings`: admin-authored
+ * keys the server does not know round-trip untouched.
+ */
+export const StoredFormSchemaJsonSchema = z.union([
+  FormSchemaJsonSchema,
+  SponsorFormSchemaJsonSchema,
+]);
+
 // ============================================================================
 // Request Schemas
 // ============================================================================
@@ -316,6 +327,7 @@ export type SuccessTranslations = z.infer<typeof SuccessTranslationsSchema>;
 export type FormSchemaJson = z.infer<typeof FormSchemaJsonSchema>;
 export type SponsorshipSettings = z.infer<typeof SponsorshipSettingsSchema>;
 export type SponsorFormSchemaJson = z.infer<typeof SponsorFormSchemaJsonSchema>;
+export type StoredFormSchemaJson = z.infer<typeof StoredFormSchemaJsonSchema>;
 export type CreateFormInput = z.infer<typeof CreateFormSchema>;
 export type UpdateFormInput = z.infer<typeof UpdateFormSchema>;
 export type ListFormsQuery = z.infer<typeof ListFormsQuerySchema>;

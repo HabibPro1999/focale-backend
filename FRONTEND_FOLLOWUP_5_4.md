@@ -14,10 +14,28 @@ and networking `HEAD` 1d8d454, read only.
 | Registration not found for the event | `POST /api/events/:eventId/registrations/:registrationId/send-custom-email` | 404 `RES_3001` | 404 `REG_8001` |
 | Access item not found | `GET`/`PATCH`/`DELETE /api/events/access/:id`, `GET /api/public/events/:eventId/access/:accessId`, `GET /api/events/:eventId/checkin/registrations?accessId=`, `GET /api/events/:eventId/analytics/access-items/:accessId/registrations` | 404 `RES_3001` | 404 `ACC_7001` (`ACCESS_NOT_FOUND`) |
 | Event pricing not found | `GET /api/events/:eventId/pricing` | 404 `RES_3001` | 404 `PRC_6005` (`PRICING_NOT_FOUND`) |
+| Registration not found (5.4b) | `PATCH /api/public/registrations/:registrationId/payment-method` (any missing registration); `POST /api/public/registrations/:registrationId/payment-proof` when the registration is deleted during the upload | 404 `RES_3001` | 404 `REG_8001` |
+| Registration of another event (5.4b) | `PUT /api/events/:eventId/registrations/:id/admin-edit`; `GET /api/registrations/:registrationId/available-sponsorships` (service check; the route reads the event from the registration) | 400 `RES_3003` | 400 `CHK_17004` (`CHECKIN_EVENT_MISMATCH`), same message "Registration does not belong to this event"; check-in already answered it |
+| User not associated with any client (5.4b) | `GET /api/clients/me` (any user without a client, super admins included) | 404 `RES_3001` | 403 `AUTH_1004`, same message |
+| User not associated with any client (5.4b) | `GET /api/events`, `GET /api/forms` (client admin without a client) | 400 `VAL_2001` | 403 `AUTH_1004`, same message |
 
 Unchanged: event, sponsorship and email template not found stay 404
 `RES_3001`; another client's resource stays 403 `AUTH_1004`; an archived event
-on a write stays 400 `STT_12001`.
+on a write stays 400 `STT_12001`. 5.4b keeps form, certificate template and
+client not found at 404 `RES_3001` and access item not found at 404 `ACC_7001`.
+
+Why `CHK_17004` for "registration of another event": it is the one code
+specific to that condition (`RES_3003` is the generic 400 many unrelated
+refusals share, so a client cannot key on it), and check-in, where it happens
+in practice (a badge from another event), already sends it. The two other
+sites are reachable only with an event id and a registration id that do not
+match.
+
+Why 403 for "user not associated with any client": the request is valid and
+the caller is authenticated but has no tenant, so it may not act on any
+client. Every tenant-scoped route already answers such a user 403
+"Insufficient permissions"; 400 (the request is malformed) and 404 (on a list)
+said something else.
 
 Module-gated routes that now answer `CLT_20001`/`CLT_20002`: the admin
 abstracts, email, pricing, registration writes, sponsorship writes, access,
@@ -34,6 +52,28 @@ sponsor-form, abstract submission and price-quote routes.
   scoping"), the tenant check runs before body and query validation: another
   client's request with an invalid body gets 403, not 400. A malformed id in
   the path is still 400 `VAL_2001`.
+- 5.4b: 25 more routes are scoped by a guard: access items (5), certificates
+  (8), `GET`/`PATCH`/`DELETE /api/events/:id` and `POST /api/events/:id/banner`,
+  forms by id (5) and `GET`/`POST /api/forms/events/:id/sponsor`, and
+  `GET /api/clients/:id`. As above, the tenant check now runs before body and
+  query validation on them. `POST /api/events`, `POST /api/forms` and
+  `GET /api/forms?eventId=` check the client or event named in the body or
+  query with the same rules, after validation (a malformed body is still 400
+  first).
+- 5.4b: the 403 message is now "Insufficient permissions" on those routes (code
+  still `AUTH_1004`). It was route-specific: "Insufficient permissions to
+  access/update/delete this event", "… to create event for this client",
+  "… to create form for this event", "… to access this event" (forms),
+  "… to access/update/delete this form", "… to access this client".
+- 5.4b, refusal order (404 before 403, as everywhere else):
+  `GET /api/clients/:id` for a client that does not exist is 404 "Client not
+  found" for everyone (a client admin got 403); `POST /api/events` with an
+  unknown `clientId` is 404 "Client not found" for a client admin too (was 403;
+  a super admin already got this 404).
+- 5.4b: `GET /api/forms/:id/sponsorship-mode-locked` on a registration form now
+  needs the registrations module, like the other routes on that form (it had
+  no gate; a sponsor form still needs sponsorships). The answer for a
+  registration form is still `{ locked: false }`.
 - Pricing admin routes: the 403 message is now "Insufficient permissions"
   (it was route-specific, e.g. "Insufficient permissions to update this
   event"); the code is still `AUTH_1004`.
@@ -60,9 +100,18 @@ sponsor-form, abstract submission and price-quote routes.
 - `REG_8001`, `ACC_7001` and `PRC_6005` already have entries, so those
   refusals now show their specific message instead of "Élément introuvable."
 - No code reads `CHK_17002`.
+- 5.4b: no screen reads the changed codes or messages. `clients/me` is fetched
+  only for a client admin with a client, and errors are caught. Optional:
+  `CHK_17004` has no entry in `errors.json` (the English message shows, at
+  check-in too); suggested fr: "Cette inscription appartient à un autre
+  événement."
 
 ## Form app
 
+- 5.4b: `PATCH …/payment-method` on a missing registration now sends
+  `REG_8001`, which `WIRE_TO_SEMANTIC_CODE` already maps to
+  `REGISTRATION_NOT_FOUND` ("Inscription introuvable." instead of the generic
+  not-found message). No change needed.
 - `src/api/errorCodes.ts` (`WIRE_TO_SEMANTIC_CODE`): add
   `CLT_20001: "CLIENT_INACTIVE"` and `CLT_20002: "MODULE_DISABLED"`; drop
   `CHK_17002`. No page compares against `FORBIDDEN`, so nothing breaks today;

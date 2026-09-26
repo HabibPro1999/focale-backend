@@ -4,12 +4,14 @@ import { FINAL_STATUSES } from "@app/contracts";
 import { getDb, type DbExecutor } from "../../client";
 import { withLockingTxn } from "../../txn";
 import { lockAbstractForUpdate } from "../../locks";
+import { insertAuditLog } from "../../outbox";
 import {
   abstractCommitteeMemberships,
   abstractConfig,
   abstractReviews,
   abstracts,
 } from "../../schema/abstracts";
+import { auditLogs } from "../../schema/outbox-audit";
 import { applyReviewAggregate } from "./review-aggregate";
 import type { AbstractRow } from "./shared";
 
@@ -126,20 +128,23 @@ export type AssignReviewersResult =
   | { ok: false; reason: "inactive_member"; reviewerIds: string[] };
 
 /**
- * Replace an abstract's reviewer set and recompute its aggregate.
+ * Replace an abstract's reviewer set, recompute its aggregate and write
+ * `audit`, in one transaction.
  *
  * Locks the chosen reviewers' memberships first, then the abstract, and
  * decides from what it reads after the locks: a finalized abstract's
  * reviewers are part of the decision record, so nothing changes; a reviewer
  * whose membership is no longer active is refused, so a member removed at the
- * same moment never ends up holding an active review.
+ * same moment never ends up holding an active review. A refusal writes no
+ * audit row.
  */
 export async function assignReviewersTxn(params: {
   eventId: string;
   abstractId: string;
   reviewerIds: string[];
+  audit: typeof auditLogs.$inferInsert;
 }): Promise<AssignReviewersResult> {
-  const { eventId, abstractId, reviewerIds } = params;
+  const { eventId, abstractId, reviewerIds, audit } = params;
   return withLockingTxn(async (tx): Promise<AssignReviewersResult> => {
     const activeMemberIds = await lockActiveCommitteeMemberIds(tx, eventId, reviewerIds);
     if (!(await lockAbstractForUpdate(tx, abstractId))) {
@@ -216,6 +221,7 @@ export async function assignReviewersTxn(params: {
     // removed reviewers' scores must stop counting, and a stale
     // REVIEW_COMPLETE must not survive a newly added unscored reviewer.
     const updated = await applyReviewAggregate(tx, abstractId, reviewerIds.length > 0);
+    await insertAuditLog(audit, tx);
     return { ok: true, ...updated };
   });
 }

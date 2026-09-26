@@ -166,10 +166,13 @@ wrapping it:
 
 The schemas live in `packages/contracts/src/*.responses.ts` (plus the access
 item schemas in `access.ts`), so they are in the generated artifacts: the
-output-side types are the response `data` shapes. Stored JSON documents
-(`formData`, `priceBreakdown`, form `schema`, pricing `rules`, access
-`conditions`, audit `changes`, abstract `content`/`coAuthors`/
-`additionalFieldsData`) are opaque (`unknown`) until the JSONB typing work. Covered routes:
+output-side types are the response `data` shapes. Pricing `rules` is typed
+(`StoredPricingRulesSchema`, see Typed JSONB columns below). The form `schema`
+stays opaque on purpose: its stored document is open (admin-authored keys
+round-trip untouched) and a contract would drop them. The other stored JSON
+documents (`formData`, `priceBreakdown`, access `conditions`, audit `changes`,
+abstract `content`/`coAuthors`/`additionalFieldsData`) are opaque (`unknown`)
+until they are typed. Covered routes:
 
 | Routes | Schema |
 |---|---|
@@ -203,6 +206,36 @@ Not covered yet: the networking routes and the other admin modules.
 `apps/api/src/modules/response-contracts.routes.test.ts` (with `abstracts/abstracts.response-contracts.routes.test.ts`)
 checks that every enveloped route of the covered controllers has a contract.
 
+### Typed JSONB columns (plan 5.2)
+
+Four JSONB columns are typed with the document their write path stores, a
+`Stored*Schema` in `@app/contracts`: `event_pricing.rules`
+(`StoredPricingRulesSchema`), `certificate_templates.zones`
+(`StoredCertificateZonesSchema`), `forms.schema` (`StoredFormSchemaJsonSchema`,
+registration or sponsor form) and `email_logs.context_snapshot`
+(`StoredEmailContextSnapshotSchema`, template variables plus the internal
+`_fallbackSubject`/`_fallbackPlainBody`/`_certificateTemplateIds` keys).
+`jsonbOf(schema)` (`packages/db/src/jsonb.ts`) types the column for reads and
+writes. A stored value is valid when the schema accepts it and parsing changes
+nothing (`checkStoredJson`: a missing defaulted key counts), so a valid value
+already has the schema's output type.
+
+The queries that hand these columns to callers check them at the read
+boundary (`packages/db/src/queries/stored-json.ts`; the email send path checks
+each claimed email's snapshot, so one bad row fails only that email).
+`JSONB_VALIDATION` decides what an invalid document does: `warn` (default) logs
+the column, row id and issue paths/codes once per process (never values) and
+returns the value exactly as stored, as before typing; `enforce` throws
+`StoredJsonError`. Rows returned by a write are not re-checked. The networking
+query files read `forms.schema` without the check (typed only).
+
+Before switching to `enforce`, run the read-only audit
+`node apps/api/dist/scripts/stored-json-report.js` (from source:
+`node --conditions=@app/source -r @swc-node/register src/scripts/stored-json-report.ts`
+in `apps/api`). It pages through the four columns in READ ONLY transactions,
+lists each invalid document by row id, path and code, counts them per column
+and code, and changes nothing.
+
 ### Tenant scoping (admin routes)
 
 Admin routes on an event-owned resource declare their tenant check instead of
@@ -214,10 +247,12 @@ calling a resolver in the handler (`apps/api/src/modules/tenancy`, plan 5.4):
 async adminCreate(@Param() { eventId }: EventIdParamDto, @Body() body: AdminCreateRegistrationDto) { … }
 ```
 
-`@EventScoped`, `@RegistrationScoped`, `@SponsorshipScoped` and
-`@EmailTemplateScoped` (options `module`, `write`, `param`) add a guard that
-loads the resource, its event and the client in one query and refuses, in
-order: the route's `@Param()` DTO (400, as the global pipe would), missing
+`@EventScoped`, `@RegistrationScoped`, `@SponsorshipScoped`,
+`@EmailTemplateScoped`, `@AccessItemScoped`, `@CertificateTemplateScoped`,
+`@FormScoped` (plus `moduleOfFormType`: the form's type adds its module) and
+`@ClientScoped` (options `module`, `write`, `param`) add a guard that loads the
+resource, its event and the client in one query (a client route loads the
+client) and refuses, in order: the route's `@Param()` DTO (400, as the global pipe would), missing
 resource (404), another client (403 `AUTH_1004`), a template with no event on
 a write (400), an archived event on a write (400 `STT_12001`), then per module
 an inactive client (403 `CLT_20001`) or a disabled module (403 `CLT_20002`).
@@ -225,12 +260,20 @@ The controller's `@Auth()` runs first. `@ScopedEvent()` / `@ScopedClient()`
 give the handler what the guard loaded. Because guards run before pipes, the
 tenant check now answers before body and query validation.
 
+A route that names its event or client in the body or the query
+(`POST /api/events`, `POST /api/forms`, `GET /api/forms?eventId=`) calls
+`requireTenantScope(user, "event" | "client", id, options)` first thing in the
+handler: the same read, checks, order and codes, after validation.
+
 Converted: abstracts, email, registrations (admin + edit link), pricing,
-check-in, reports and the sponsorship admin controllers (76 routes).
-`apps/api/src/modules/tenancy/tenant-scope.routes.test.ts` lists each route's
-expected scope and sends a cross-tenant and a missing-resource request to
-every one. Still hand-written: access, certificates, events, forms, clients
-and the networking admin/recommendations `access()` helpers.
+check-in, reports and the sponsorship admin controllers (76 routes, 5.4), then
+access, certificates, events, forms and clients (25 guarded routes and 3
+in-handler checks, 5.4b). `apps/api/src/modules/tenancy/tenant-scope.routes.test.ts`
+lists each route's expected scope, sends a cross-tenant and a missing-resource
+request to every one, and requires every other route of those controllers to
+be listed as an in-handler check or as unscoped (with the reason). Still
+hand-written: the networking admin/recommendations `access()` helpers (and
+`core/auth/assert-event-access.ts`, which only they use).
 
 ## Environment
 
