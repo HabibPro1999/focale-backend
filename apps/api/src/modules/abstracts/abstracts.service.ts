@@ -303,7 +303,7 @@ export class AbstractsService {
     >;
 
     return {
-      enabled: true,
+      enabled: true as const,
       acceptingSubmissions: submissionOpen,
       eventId: data.eventId,
       eventName: data.eventName,
@@ -322,10 +322,10 @@ export class AbstractsService {
       themes: data.themes,
       requestedTypes: [
         {
-          value: "ORAL_COMMUNICATION",
+          value: "ORAL_COMMUNICATION" as const,
           label: ABSTRACT_TYPE_LABELS_FR.ORAL_COMMUNICATION,
         },
-        { value: "POSTER", label: ABSTRACT_TYPE_LABELS_FR.POSTER },
+        { value: "POSTER" as const, label: ABSTRACT_TYPE_LABELS_FR.POSTER },
       ],
       additionalFields: {
         fields: Array.isArray(config.additionalFieldsSchema)

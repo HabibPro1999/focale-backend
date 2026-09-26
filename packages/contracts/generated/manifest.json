@@ -29,6 +29,10 @@
       "module": "packages/contracts/src/abstracts.ts",
       "type": "AbstractSlugParam"
     },
+    "AbstractSubmittedResponseSchema": {
+      "module": "packages/contracts/src/abstracts.responses.ts",
+      "type": "AbstractSubmittedResponse"
+    },
     "AbstractTokenQuerySchema": {
       "module": "packages/contracts/src/abstracts.ts",
       "type": "AbstractTokenQuery"
@@ -197,6 +201,14 @@
       "module": "packages/contracts/src/abstracts.ts",
       "type": "CommitteeAbstractsQuery"
     },
+    "CommitteeInvitePasswordSetResponseSchema": {
+      "module": "packages/contracts/src/abstracts.responses.ts",
+      "type": "CommitteeInvitePasswordSetResponse"
+    },
+    "CommitteeInviteResendResponseSchema": {
+      "module": "packages/contracts/src/abstracts.responses.ts",
+      "type": "CommitteeInviteResendResponse"
+    },
     "CommitteeInviteResendSchema": {
       "module": "packages/contracts/src/abstracts.ts",
       "type": "CommitteeInviteResend"
@@ -208,6 +220,10 @@
     "CommitteeInviteTokenValueSchema": {
       "module": "packages/contracts/src/abstracts.ts",
       "type": "CommitteeInviteTokenValue"
+    },
+    "CommitteeInviteVerifyResponseSchema": {
+      "module": "packages/contracts/src/abstracts.responses.ts",
+      "type": "CommitteeInviteVerifyResponse"
     },
     "CommitteeInviteVerifySchema": {
       "module": "packages/contracts/src/abstracts.ts",
@@ -721,6 +737,14 @@
     "PricingRuleIdParamSchema": {
       "module": "packages/contracts/src/pricing.ts",
       "type": "PricingRuleIdParam"
+    },
+    "PublicAbstractConfigResponseSchema": {
+      "module": "packages/contracts/src/abstracts.responses.ts",
+      "type": "PublicAbstractConfigResponse"
+    },
+    "PublicAbstractResponseSchema": {
+      "module": "packages/contracts/src/abstracts.responses.ts",
+      "type": "PublicAbstractResponse"
     },
     "PublicAccessItemParamSchema": {
       "module": "packages/contracts/src/access.ts",

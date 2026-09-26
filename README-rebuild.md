@@ -168,8 +168,8 @@ The schemas live in `packages/contracts/src/*.responses.ts` (plus the access
 item schemas in `access.ts`), so they are in the generated artifacts: the
 output-side types are the response `data` shapes. Stored JSON documents
 (`formData`, `priceBreakdown`, form `schema`, pricing `rules`, access
-`conditions`, audit `changes`) are opaque (`unknown`) until the JSONB typing
-work. Covered routes:
+`conditions`, audit `changes`, abstract `content`/`coAuthors`/
+`additionalFieldsData`) are opaque (`unknown`) until the JSONB typing work. Covered routes:
 
 | Routes | Schema |
 |---|---|
@@ -194,9 +194,13 @@ work. Covered routes:
 | `DELETE /api/sponsorships/:id`, `DELETE /api/registrations/:id/sponsorships/:sponsorshipId` | `SponsorshipSuccessResponseSchema` |
 | `GET /api/registrations/:id/available-sponsorships`, `GET …/sponsorships` | `AvailableSponsorshipsResponseSchema`, `LinkedSponsorshipsResponseSchema` |
 | `POST /api/registrations/:id/sponsorships`, `POST …/sponsorships/by-code` | `SponsorshipLinkedResponseSchema` |
+| `GET /api/public/events/:slug/abstracts/config` | `PublicAbstractConfigResponseSchema` |
+| `POST /api/public/events/:slug/abstracts/submit` | `AbstractSubmittedResponseSchema` |
+| `GET` / `PATCH /api/public/abstracts/:id`, `POST …/final-file` | `PublicAbstractResponseSchema` |
+| `POST /api/public/committee/invite/verify`, `…/set-password`, `…/resend` | `CommitteeInviteVerifyResponseSchema`, `CommitteeInvitePasswordSetResponseSchema`, `CommitteeInviteResendResponseSchema` |
 
-Not covered yet: the networking routes, the public abstracts routes and the
-other admin modules. `apps/api/src/modules/response-contracts.routes.test.ts`
+Not covered yet: the networking routes and the other admin modules.
+`apps/api/src/modules/response-contracts.routes.test.ts` (with `abstracts/abstracts.response-contracts.routes.test.ts`)
 checks that every enveloped route of the covered controllers has a contract.
 
 ### Tenant scoping (admin routes)

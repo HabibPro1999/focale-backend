@@ -12,8 +12,14 @@ import {
 } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
 import type { FastifyRequest } from "fastify";
-import { ErrorCodes } from "@app/contracts";
+import {
+  AbstractSubmittedResponseSchema,
+  ErrorCodes,
+  PublicAbstractConfigResponseSchema,
+  PublicAbstractResponseSchema,
+} from "@app/contracts";
 import { getConfig as getAppConfig } from "../../core/config";
+import { ResponseContract } from "../../core/response-contract";
 import { AbstractsService } from "./abstracts.service";
 import {
   AbstractsFinalFileService,
@@ -88,6 +94,7 @@ export class AbstractsPublicController {
 
   @Get("events/:slug/abstracts/config")
   @Throttle(READ_THROTTLE)
+  @ResponseContract(PublicAbstractConfigResponseSchema)
   getConfig(@Param() { slug }: EventSlugParamDto) {
     return this.abstracts.getPublicConfig(slug);
   }
@@ -95,6 +102,7 @@ export class AbstractsPublicController {
   @Post("events/:slug/abstracts/submit")
   @HttpCode(201)
   @Throttle(SUBMIT_THROTTLE)
+  @ResponseContract(AbstractSubmittedResponseSchema)
   submit(
     @Param() { slug }: EventSlugParamDto,
     @Body() body: SubmitAbstractDto,
@@ -105,6 +113,7 @@ export class AbstractsPublicController {
 
   @Get("abstracts/:id")
   @Throttle(READ_THROTTLE)
+  @ResponseContract(PublicAbstractResponseSchema)
   getByToken(
     @Param() { id }: AbstractIdParamDto,
     @Query() _query: AbstractTokenQueryDto,
@@ -116,6 +125,7 @@ export class AbstractsPublicController {
 
   @Patch("abstracts/:id")
   @Throttle(EDIT_THROTTLE)
+  @ResponseContract(PublicAbstractResponseSchema)
   edit(
     @Param() { id }: AbstractIdParamDto,
     @Query() _query: AbstractTokenQueryDto,
@@ -129,6 +139,7 @@ export class AbstractsPublicController {
   @Post("abstracts/:id/final-file")
   @HttpCode(201)
   @Throttle(EDIT_THROTTLE)
+  @ResponseContract(PublicAbstractResponseSchema)
   async uploadFinalFile(
     @Param() { id }: AbstractIdParamDto,
     @Query() _query: AbstractTokenQueryDto,

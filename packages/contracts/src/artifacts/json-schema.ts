@@ -15,6 +15,7 @@
  */
 import { z } from "zod";
 import * as abstracts from "../abstracts";
+import * as abstractsResponses from "../abstracts.responses";
 import * as access from "../access";
 import * as certificates from "../certificates";
 import * as checkin from "../checkin";
@@ -44,6 +45,7 @@ import * as sponsorshipsResponses from "../sponsorships.responses";
  */
 export const CONTRACT_MODULES: Readonly<Record<string, Record<string, unknown>>> = {
   abstracts,
+  "abstracts.responses": abstractsResponses,
   access,
   certificates,
   checkin,
