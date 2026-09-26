@@ -63,7 +63,6 @@ export class FormsPublicController {
 
 /** The form row as the form app reads it: the event's `clientId` stays internal. */
 function toPublicForm(form: FormWithRelations) {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- omitted on purpose
   const { clientId, ...event } = form.event;
   return { ...form, event };
 }
