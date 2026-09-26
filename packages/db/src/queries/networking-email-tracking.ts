@@ -169,11 +169,10 @@ export async function finishNetworkingEmailLog(
   row: NetworkingDeliveryRow,
   outcome: NetworkingEmailOutcome,
   detail?: string,
-) {
+): Promise<void> {
   return withTxnRetry(() => getDb().transaction(async (db) => {
     // A provider-confirmed send is a fact even after the lease was lost; other outcomes stay fenced.
-    if (outcome !== "sent" && !(await ownsDelivery(db, row)))
-      return { alreadySent: false, leaseLost: true };
+    if (outcome !== "sent" && !(await ownsDelivery(db, row))) return;
     const unlocked = { lockedBy: null, lockedAt: null, lockedUntil: null, updatedAt: new Date() };
     if (outcome === "sent") {
       // Fast webhooks can arrive before the provider response: never downgrade their delivery/open/click state.

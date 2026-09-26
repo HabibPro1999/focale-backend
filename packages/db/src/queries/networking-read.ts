@@ -9,7 +9,6 @@ import {
   isNull,
   lt,
   ne,
-  notExists,
   or,
   sql,
   type SQL,
@@ -20,8 +19,6 @@ import { getDb, type DbExecutor } from "../client";
 import {
   networkingProfiles as profiles,
   networkingBlocks as blocks,
-  networkingInterests as interests,
-  networkingConnections as connections,
   networkingMessages as messages,
   networkingNotifications as notifications,
 } from "../schema/networking";
@@ -32,7 +29,6 @@ export * from "./networking-participant-read";
 import {
   normalizeNetworkingSearch,
   networkingSearchScore,
-  networkingSearchMatches,
 } from "./networking-search";
 export interface NetworkingDiscoveryFilters {
   standTableId?: string;

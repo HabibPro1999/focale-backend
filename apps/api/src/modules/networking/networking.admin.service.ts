@@ -21,7 +21,6 @@ import {
 } from "@app/contracts";
 import {
   queueNetworkingActivation,
-  networkingEmailMetrics,
   latestNetworkingPostEventReport,
   cancelNetworkingParticipantMeetings,
   getActiveEventAccessId,

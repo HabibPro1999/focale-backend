@@ -15,7 +15,6 @@ import {
   createNetworkingNotification,
   networkingStore,
   networkingTransaction,
-  type NetworkingStore,
 } from "@app/db";
 import {
   NetworkingService,
