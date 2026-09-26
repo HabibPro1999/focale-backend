@@ -285,9 +285,13 @@ marked `disabled`, and shuts down cleanly on SIGTERM. With `APP=all` and
 ### Realtime (single API instance)
 
 Run **exactly one API instance**. Realtime fan-out is process-local: the
-realtime pump claims `realtime.emit` outbox rows every second (batches of 100,
-draining until a batch comes back short, at most 5 s per tick) and emits them
-on an in-memory bus, and `/api/stream` serves only that process's bus. The SSE
+realtime pump claims the realtime outbox types (`REALTIME_OUTBOX_TYPES`:
+`realtime.emit` and the networking participant notices `networking.notify`)
+every second (batches of 100, draining until a batch comes back short, at most
+5 s per tick) and emits them on in-memory hubs: `/api/stream` serves only that
+process's admin bus, and the participant stream
+(`/api/networking/:slug/stream`, see NETWORKING.md) only that process's
+participant hub. The SSE
 event ids (`Last-Event-ID`) come from a per-process counter and the replay
 history lives in memory: one ring of the last 500 events per tenant
 (`clientId`), so one tenant's burst never evicts another tenant's history. A
@@ -306,10 +310,12 @@ listed in `payload.ids` (`id` is the first). See `FRONTEND_FOLLOWUP_3_5.md`.
 
 The realtime SSE outbox pump runs **in the api process** (not the worker). With
 `REALTIME_DISABLED=true` the pump never starts, `/api/stream` answers 503, and
-`enqueueRealtimeOutboxEvent` writes nothing. Realtime events are produced by
-both processes, so set it on **both** the api and the worker service; a
-process without it keeps writing `realtime.emit` rows that nothing drains
-until the retention job deletes them after 24 h.
+neither `realtime.emit` nor `networking.notify` rows are written. The
+networking participant stream stays available: notices from API networking
+transactions still reach it in-process, the rest at its 60 s resync. Realtime
+events are produced by both processes, so set it on **both** the api and the
+worker service; a process without it keeps writing realtime rows that nothing
+drains until the retention job deletes them after 24 h.
 
 ## Database migrations
 

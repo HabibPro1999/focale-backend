@@ -6,6 +6,7 @@ export {
   insertAuditLog,
   outboxQueue,
   processOutboxEvents,
+  realtimeOutboxDisabled,
 } from "./outbox";
 export type {
   EnqueueOutboxInput,
@@ -15,7 +16,9 @@ export type {
   ProcessOutboxResult,
 } from "./outbox";
 export {
+  NETWORKING_NOTIFY_TYPE,
   REALTIME_EMIT_TYPE,
+  REALTIME_OUTBOX_TYPES,
   type OutboxEventStatus,
   type OutboxHandler,
   type OutboxHandlerMeta,

@@ -39,7 +39,7 @@ vi.mock("@app/integrations", async (importOriginal) => ({
 
 import { buildApp } from "../app.factory";
 import { clearUserCache } from "./auth/user-cache";
-import { NetworkingPublicController } from "../modules/networking/networking.public.controller";
+import { NetworkingStreamService } from "../modules/networking/networking.stream";
 import { ShutdownCoordinator } from "./shutdown";
 
 interface Frame {
@@ -129,8 +129,8 @@ describe("API shutdown with open SSE streams (real app)", () => {
 
   it("injects the same coordinator into the networking participant stream", async () => {
     await start();
-    const controller = app!.get(NetworkingPublicController) as unknown as { lifecycle?: unknown };
-    expect(controller.lifecycle).toBe(app!.get(ShutdownCoordinator));
+    const streams = app!.get(NetworkingStreamService) as unknown as { lifecycle?: unknown };
+    expect(streams.lifecycle).toBe(app!.get(ShutdownCoordinator));
   });
 
   it("while draining: new streams get 503 SRV_5003 + Retry-After and /health/ready reports draining", async () => {

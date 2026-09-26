@@ -9,6 +9,7 @@ import { registrations } from "../schema/registrations";
 import { forms } from "../schema/forms";
 import { networkingSecondFactors } from "../schema/networking-mfa";
 import { NETWORKING_MEETING_GROUPS } from "./networking-meetings";
+import { bufferNetworkingNotices, publishNetworkingNotices, type NetworkingNotice } from "./networking-notices";
 const tables = {
   secondFactors: networkingSecondFactors,
   configs: n.networkingConfigs,
@@ -128,8 +129,18 @@ type NetworkingTx = Parameters<Parameters<Db["transaction"]>[0]>[0];
  */
 async function networkingSerializable<T>(run: (db: NetworkingTx) => Promise<T>): Promise<T> {
   for (let attempt = 1; ; attempt++) {
+    let notices: NetworkingNotice[] = [];
     try {
-      return await getDb().transaction(run, { isolationLevel: "serializable" });
+      const result = await getDb().transaction(
+        (tx) => {
+          notices = bufferNetworkingNotices(tx);
+          return run(tx);
+        },
+        { isolationLevel: "serializable" },
+      );
+      // After commit: participant notices written by this attempt (4.3).
+      publishNetworkingNotices(notices);
+      return result;
     } catch (error) {
       if (!isSerializationFailure(error)) throw error;
       if (attempt >= NETWORKING_TXN_ATTEMPTS) throw new NetworkingBusyError({ cause: error });

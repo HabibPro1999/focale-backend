@@ -35,8 +35,9 @@ interface SponsorshipEmailOutboxPayload {
  * integrations queue fn; those return false when no active template exists,
  * which we surface as "skipped" (terminal, no retry). Unknown types are NOT
  * registered — processOutboxEvents throws on them, routing to the normal
- * failure/retry/backoff path. `realtime.emit` is deliberately absent: it is
- * scoped to the api process, and with `scope: "background"` those rows are
+ * failure/retry/backoff path. The realtime types (`realtime.emit`,
+ * `networking.notify`) are deliberately absent: they are scoped to the api
+ * process, and with `scope: "background"` those rows are
  * never claimed here (with REALTIME_DISABLED none are written; the retention
  * job deletes realtime rows older than 24 h).
  */

@@ -1,4 +1,4 @@
-import { and, desc, eq, getTableColumns, inArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, gt, gte, inArray, or, sql } from "drizzle-orm";
 import { getDb, type DbExecutor } from "../client";
 import { rowsOf } from "../helpers";
 import {
@@ -200,21 +200,32 @@ export async function recordNetworkingProfileView(
     .onConflictDoNothing({ target: audit.id });
 }
 
-export async function networkingNotificationsSince(
+/**
+ * One keyset page of the participant stream's catch-up: this participant's
+ * notifications created at or after `since`, in id order (UUIDv7, so about
+ * creation order), after `afterId`. Paging by the unique id is exact even when
+ * many rows share a timestamp (one transaction writes them all with the same
+ * `now()`); the `(profile_id, created_at)` index bounds the scan.
+ */
+export async function networkingNotificationsPage(
   eventId: string,
   profileId: string,
   since: Date,
+  afterId: string | null,
+  limit: number,
+  db: DbExecutor = getDb(),
 ) {
-  return getDb()
+  return db
     .select()
     .from(notifications)
     .where(
       and(
-        eq(notifications.eventId, eventId),
         eq(notifications.profileId, profileId),
-        sql`${notifications.createdAt}>=${since}`,
+        eq(notifications.eventId, eventId),
+        gte(notifications.createdAt, since),
+        afterId === null ? undefined : gt(notifications.id, afterId),
       ),
     )
-    .orderBy(desc(notifications.createdAt))
-    .limit(100);
+    .orderBy(asc(notifications.id))
+    .limit(limit);
 }

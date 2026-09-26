@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   one: vi.fn(), update: vi.fn(), remove: vi.fn(), all: vi.fn(),
-  notifications: vi.fn(), since: vi.fn(), transaction: vi.fn(), delete: vi.fn(),
+  notifications: vi.fn(), transaction: vi.fn(), delete: vi.fn(),
   store: vi.fn(), upsertPush: vi.fn(), withdraw: vi.fn(),
 }));
 vi.mock("@app/db", async (original) => ({
@@ -9,7 +9,6 @@ vi.mock("@app/db", async (original) => ({
   networkingStore: mocks.store,
   networkingTransaction: mocks.transaction,
   listNetworkingNotifications: mocks.notifications,
-  networkingNotificationsSince: mocks.since,
   withdrawNetworkingProfile: mocks.withdraw,
 }));
 vi.mock("@app/integrations", async (original) => ({
@@ -22,7 +21,7 @@ import type { NetworkingService } from "./networking.service";
 import type { NetworkingSocialService } from "./networking.social.service";
 import type { NetworkingMeetingsService } from "./networking.meetings.service";
 import type { NetworkingExportsService } from "./networking.exports.service";
-import type { FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyRequest } from "fastify";
 const own = "https://storage.test/networking/e/profiles/p/current.webp";
 function controller(service: Partial<NetworkingService>, meetings: Partial<NetworkingMeetingsService> = {}) {
   return new NetworkingPublicController(
@@ -364,33 +363,4 @@ it("rejects a malformed push endpoint with a coded 400 instead of a TypeError", 
   const participant = async () => ({ event: { id: "e" }, profile: { id: "p" } });
   await expect(controller({ participant } as never).subscribe("slug", { headers: {} } as FastifyRequest, { endpoint: "not a url", keys: { p256dh: "k", auth: "a" } } as never))
     .rejects.toMatchObject({ status: 400, response: { code: "NETWORKING_VALIDATION" } });
-});
-
-describe("notification stream", () => {
-  afterEach(() => vi.useRealTimers());
-  it("sends ready, then each row once despite overlapping reads, and re-verifies the session every ~30 s", async () => {
-    vi.useFakeTimers();
-    const participant = vi.fn().mockResolvedValue({ event: { id: "e" }, profile: { id: "p" } });
-    const writes: string[] = [];
-    const listeners: Record<string, () => void> = {};
-    const raw = { setHeader: vi.fn(), writeHead: vi.fn(), write: vi.fn((chunk: string) => writes.push(chunk)), end: vi.fn(), on: vi.fn((event: string, run: () => void) => { listeners[event] = run; }) };
-    const reply = { hijack: vi.fn(), getHeaders: () => ({ "x-request-id": "r" }), raw } as unknown as FastifyReply;
-    const createdAt = new Date("2099-04-19T10:00:00.000Z");
-    const rows = Object.fromEntries(["one", "two"].map((id) => [id, { id, type: "MESSAGE", title: "New message", body: "…", href: "/e/slug/connections/c", readAt: null, createdAt, data: { connectionId: "c" } }]));
-    const row = (id: string) => rows[id]!;
-    mocks.since.mockResolvedValueOnce([row("one")]).mockResolvedValueOnce([row("two"), row("one")]).mockResolvedValue([row("two"), row("one")]);
-    await controller({ participant }).stream("slug", { headers: {} } as FastifyRequest, reply);
-    expect(writes[0]).toBe("event: ready\ndata: {}\n\n");
-    for (let tick = 0; tick < 3; tick++) await vi.advanceTimersByTimeAsync(3000);
-    const frames = writes.slice(1);
-    expect(frames[0]).toBe(`event: notifications\ndata: [{"id":"one","type":"MESSAGE","title":"New message","body":"…","href":"/e/slug/connections/c","readAt":null,"createdAt":"2099-04-19T10:00:00.000Z","data":{"connectionId":"c"}}]\n\n`);
-    expect(JSON.parse(frames[1]!.replace(/^event: notifications\ndata: /, "")).map((value: { id: string }) => value.id)).toEqual(["two"]);
-    expect(frames[2]).toBe(": heartbeat\n\n");
-    const [, , since] = mocks.since.mock.calls[1]!;
-    expect(Date.now() - 3000 - (since as Date).getTime()).toBeGreaterThanOrEqual(10_000);
-    expect(participant).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(participant).toHaveBeenCalledTimes(2);
-    listeners.close?.();
-  });
 });

@@ -90,6 +90,10 @@ describe.runIf(dbTestsEnabled())("db tier: outbox retention", () => {
       { key: "rtOldDead", type: "realtime.emit", status: "DEAD_LETTERED", ageMs: 30 * HOUR },
       { key: "rtOldLeased", type: "realtime.emit", status: "PROCESSING", ageMs: 25 * HOUR },
       { key: "rtRecent", type: "realtime.emit", status: "PROCESSED", ageMs: 23 * HOUR },
+      // 4.3: networking participant notices (IDs only) expire like realtime events.
+      { key: "nnOldDone", type: "networking.notify", status: "PROCESSED", ageMs: 25 * HOUR },
+      { key: "nnOldPending", type: "networking.notify", status: "PENDING", ageMs: 26 * HOUR },
+      { key: "nnRecent", type: "networking.notify", status: "PENDING", ageMs: 1 * HOUR },
       { key: "bgOldDone", status: "PROCESSED", ageMs: 31 * DAY },
       { key: "bgOldSkipped", status: "SKIPPED", ageMs: 31 * DAY },
       { key: "bgOldDone2", type: "email.abstract", status: "PROCESSED", ageMs: 40 * DAY },
@@ -101,7 +105,7 @@ describe.runIf(dbTestsEnabled())("db tier: outbox retention", () => {
       { key: "keyedOldDead", status: "DEAD_LETTERED", ageMs: 31 * DAY, dedupeKey: "keyed-old-dead" },
       { key: "keyedRecent", status: "PROCESSED", ageMs: 1 * DAY, dedupeKey: "keyed-recent" },
     ]);
-    const deleted = ["rtOldDone", "rtOldPending", "rtOldDead", "bgOldDone", "bgOldSkipped", "bgOldDone2"];
+    const deleted = ["rtOldDone", "rtOldPending", "rtOldDead", "nnOldDone", "nnOldPending", "bgOldDone", "bgOldSkipped", "bgOldDone2"];
     const compacted = ["keyedOld", "keyedOldSkipped"];
 
     const expectedIds = Object.entries(ids)
@@ -116,10 +120,10 @@ describe.runIf(dbTestsEnabled())("db tier: outbox retention", () => {
     };
     // Batches of 2 so every step runs more than one batch.
     const totals = await retainUntil(settled, 2);
-    expect(totals).toEqual({ realtimeDeleted: 3, backgroundDeleted: 3, compacted: 2 });
+    expect(totals).toEqual({ realtimeDeleted: 5, backgroundDeleted: 3, compacted: 2 });
 
     const byId = new Map((await remaining()).map((r) => [r.id, r.payload]));
-    for (const key of ["rtOldLeased", "rtRecent", "bgOldDead", "bgOldFailed", "bgRecent", "keyedOldDead", "keyedRecent"]) {
+    for (const key of ["rtOldLeased", "rtRecent", "nnRecent", "bgOldDead", "bgOldFailed", "bgRecent", "keyedOldDead", "keyedRecent"]) {
       expect(byId.get(ids[key]!), key).toEqual({ seed: key });
     }
     for (const key of compacted) expect(byId.get(ids[key]!), key).toEqual({});
@@ -153,6 +157,7 @@ describe.runIf(dbTestsEnabled())("db tier: outbox retention", () => {
       { key: "a", status: "DEAD_LETTERED", ageMs: 3 * DAY, updatedAgeMs: 2 * DAY },
       { key: "b", type: "email.abstract", status: "DEAD_LETTERED", ageMs: 2 * DAY, updatedAgeMs: 1 * HOUR },
       { key: "rt", type: "realtime.emit", status: "DEAD_LETTERED", ageMs: 2 * HOUR },
+      { key: "nn", type: "networking.notify", status: "DEAD_LETTERED", ageMs: 2 * HOUR },
       { key: "done", status: "PROCESSED", ageMs: 2 * HOUR },
     ]);
 
@@ -165,14 +170,15 @@ describe.runIf(dbTestsEnabled())("db tier: outbox retention", () => {
     ).toEqual([ids.b]);
     expect((await findDeadLetteredOutboxEvents({ limit: 1 })).map((r) => r.id)).toEqual([ids.a]);
 
-    await expect(requeueDeadLetteredOutboxEvents([ids.a!, ids.rt!, ids.done!])).resolves.toBe(1);
+    await expect(requeueDeadLetteredOutboxEvents([ids.a!, ids.rt!, ids.nn!, ids.done!])).resolves.toBe(1);
     const rows = await getDb()
       .select({ id: outboxEvents.id, status: outboxEvents.status, attemptCount: outboxEvents.attemptCount, nextAttemptAt: outboxEvents.nextAttemptAt })
       .from(outboxEvents)
-      .where(inArray(outboxEvents.id, [ids.a!, ids.rt!, ids.done!]));
+      .where(inArray(outboxEvents.id, [ids.a!, ids.rt!, ids.nn!, ids.done!]));
     const byId = new Map(rows.map((row) => [row.id, row]));
     expect(byId.get(ids.a!)).toMatchObject({ status: "PENDING", attemptCount: 0, nextAttemptAt: null });
     expect(byId.get(ids.rt!)).toMatchObject({ status: "DEAD_LETTERED" });
+    expect(byId.get(ids.nn!)).toMatchObject({ status: "DEAD_LETTERED" });
     expect(byId.get(ids.done!)).toMatchObject({ status: "PROCESSED" });
 
     // Already requeued: nothing changes the second time.

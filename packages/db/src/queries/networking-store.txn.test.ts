@@ -13,6 +13,7 @@ import {
   networkingAllocationTransaction,
   networkingTransaction,
 } from "./networking-store";
+import { setNetworkingNoticePublisher, signalNetworkingNotification } from "./networking-notices";
 
 const serialization = () => Object.assign(new Error("restart transaction"), { cause: { code: "40001" } });
 const at = (iso: string) => new Date(`2099-01-01T${iso}:00.000Z`);
@@ -81,6 +82,39 @@ describe("networkingTransaction", () => {
     mocks.transaction.mockRejectedValue(unique);
     await expect(networkingTransaction("event", vi.fn())).rejects.toBe(unique);
     expect(mocks.transaction).toHaveBeenCalledOnce();
+  });
+  it("publishes participant notices after commit, only the committed attempt's, one per participant (4.3)", async () => {
+    const publisher = vi.fn();
+    setNetworkingNoticePublisher(publisher);
+    try {
+      // Attempt 1 writes a notice and then fails to commit; attempt 2 commits.
+      mocks.transaction
+        .mockImplementationOnce(async (run) => {
+          await run({});
+          throw serialization();
+        })
+        .mockImplementationOnce(async (run) => run({}));
+      let attempt = 0;
+      await networkingTransaction("event", async (_store, db) => {
+        attempt++;
+        const profileId = attempt === 1 ? "rolled-back" : "committed";
+        await signalNetworkingNotification(db, { eventId: "event", profileId, notificationId: "n1" });
+        await signalNetworkingNotification(db, { eventId: "event", profileId, notificationId: "n2" });
+        // Buffered, not published, while the transaction is open.
+        expect(publisher).not.toHaveBeenCalled();
+      });
+      expect(publisher).toHaveBeenCalledExactlyOnceWith([{ eventId: "event", profileId: "committed" }]);
+
+      // A write that throws publishes nothing.
+      mocks.transaction.mockImplementationOnce(async (run) => run({}));
+      await expect(networkingTransaction("event", async (_store, db) => {
+        await signalNetworkingNotification(db, { eventId: "event", profileId: "failed", notificationId: "n3" });
+        throw new Error("validation");
+      })).rejects.toThrow("validation");
+      expect(publisher).toHaveBeenCalledOnce();
+    } finally {
+      setNetworkingNoticePublisher(null);
+    }
   });
 });
 

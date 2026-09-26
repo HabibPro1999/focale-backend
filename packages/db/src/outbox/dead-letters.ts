@@ -1,9 +1,9 @@
-import { and, asc, eq, gte, inArray, ne, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, notInArray, sql } from "drizzle-orm";
 import { getDb } from "../client";
 import { rowCountOf } from "../helpers";
 import { DB_NOW } from "../lease-queue";
 import { outboxEvents } from "../schema";
-import { REALTIME_EMIT_TYPE } from "./types";
+import { REALTIME_OUTBOX_TYPES } from "./types";
 
 export interface DeadLetterFilter {
   /** Only these rows. */
@@ -28,11 +28,11 @@ export interface DeadLetteredOutboxEvent {
   deadLetteredAt: Date;
 }
 
-// Realtime rows are never requeued: replaying a stale UI event is useless and
-// retention deletes them after 24 h anyway.
+// Realtime rows (REALTIME_OUTBOX_TYPES) are never requeued: replaying a stale
+// UI event is useless and retention deletes them after 24 h anyway.
 const requeueable = and(
   eq(outboxEvents.status, "DEAD_LETTERED"),
-  ne(outboxEvents.type, REALTIME_EMIT_TYPE),
+  notInArray(outboxEvents.type, [...REALTIME_OUTBOX_TYPES]),
 );
 
 /** Dead-lettered outbox rows (realtime excluded), oldest dead letter first. */
@@ -77,7 +77,8 @@ export async function requeueDeadLetteredOutboxEvents(ids: string[]): Promise<nu
     SET "status" = 'PENDING', "attempt_count" = 0, "next_attempt_at" = NULL,
         "updated_at" = ${DB_NOW}
     WHERE "id" IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
-      AND "status" = 'DEAD_LETTERED' AND "type" <> ${REALTIME_EMIT_TYPE}
+      AND "status" = 'DEAD_LETTERED'
+      AND "type" NOT IN (${sql.join(REALTIME_OUTBOX_TYPES.map((type) => sql`${type}`), sql`, `)})
   `);
   return rowCountOf(res);
 }

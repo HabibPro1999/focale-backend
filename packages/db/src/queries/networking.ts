@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { newId } from "@app/shared";
 import { withSerializableTxn } from "../txn";
 import { and, eq, gt, isNull, or } from "drizzle-orm";
 import { NetworkingConfigSchema, networkingProfileOverrides, type NetworkingConfig } from "@app/contracts";
@@ -15,6 +15,7 @@ import { events } from "../schema/events-access";
 import { forms } from "../schema/forms";
 import { projectNetworkingFields, resolveNetworkingConsent } from "./networking-projection";
 import { networkingMeetingNotice, transitionNetworkingMeetings } from "./networking-meetings";
+import { signalNetworkingNotification } from "./networking-notices";
 import { registrations } from "../schema/registrations";
 
 export async function getNetworkingConfig(
@@ -38,30 +39,60 @@ export async function enqueueNetworkingDelivery(
     .returning();
   return row ?? null;
 }
+type NetworkingNotificationInsert = typeof networkingNotifications.$inferInsert;
+type NetworkingNotificationRow = typeof networkingNotifications.$inferSelect;
+
+function notificationDelivery(id: string, input: NetworkingNotificationInsert, dedupeKey: string) {
+  return {
+    eventId: input.eventId,
+    profileId: input.profileId,
+    type: input.type,
+    payload: {
+      notificationId: id,
+      title: input.title,
+      body: input.body,
+      href: input.href ?? "",
+      ...input.data,
+    },
+    dedupeKey,
+  };
+}
+
+/**
+ * The one way to write a participant notification: the in-app row, its
+ * delivery (push/email), and a signal to the participant's live streams
+ * (published after commit in the api, else a `networking.notify` outbox row).
+ *
+ * With `dedupeKey`, at most one notification is ever written for that key:
+ * the delivery's unique dedupe key decides, and a duplicate writes and
+ * signals nothing (returns null).
+ */
 export async function createNetworkingNotification(
-  input: typeof networkingNotifications.$inferInsert,
+  input: NetworkingNotificationInsert,
+  db?: DbExecutor,
+): Promise<NetworkingNotificationRow>;
+export async function createNetworkingNotification(
+  input: NetworkingNotificationInsert,
+  db: DbExecutor,
+  options: { dedupeKey: string },
+): Promise<NetworkingNotificationRow | null>;
+export async function createNetworkingNotification(
+  input: NetworkingNotificationInsert,
   db: DbExecutor = getDb(),
-) {
+  options: { dedupeKey?: string } = {},
+): Promise<NetworkingNotificationRow | null> {
+  const id = input.id ?? newId();
+  if (options.dedupeKey) {
+    const delivery = await enqueueNetworkingDelivery(notificationDelivery(id, input, options.dedupeKey), db);
+    if (!delivery) return null;
+  }
   const [row] = await db
     .insert(networkingNotifications)
-    .values(input)
+    .values({ ...input, id })
     .returning();
-  await enqueueNetworkingDelivery(
-    {
-      eventId: row.eventId,
-      profileId: row.profileId,
-      type: row.type,
-      payload: {
-        notificationId: row.id,
-        title: row.title,
-        body: row.body,
-        href: row.href,
-        ...row.data,
-      },
-      dedupeKey: `notification:${row.id}`,
-    },
-    db,
-  );
+  if (!options.dedupeKey)
+    await enqueueNetworkingDelivery(notificationDelivery(row.id, row, `notification:${row.id}`), db);
+  await signalNetworkingNotification(db, { eventId: row.eventId, profileId: row.profileId, notificationId: row.id });
   return row;
 }
 export async function syncNetworkingRegistration(
@@ -290,31 +321,17 @@ export async function queueNetworkingActivation(
     .select({ slug: events.slug })
     .from(events)
     .where(eq(events.id, eventId));
-  const notificationId = randomUUID();
-  const title = "Networking is ready",
-    body = "Your networking participation is active.",
-    href = `/e/${event.slug}`;
-  const delivery = await enqueueNetworkingDelivery(
+  await createNetworkingNotification(
     {
       eventId,
       profileId,
       type: "APPROVAL",
-      payload: { notificationId, title, body, href, status: "ACTIVE" },
-      dedupeKey: `networking-activation:${profileId}`,
+      title: "Networking is ready",
+      body: "Your networking participation is active.",
+      href: `/e/${event.slug}`,
+      data: { status: "ACTIVE" },
     },
     db,
+    { dedupeKey: `networking-activation:${profileId}` },
   );
-  if (delivery)
-    await db
-      .insert(networkingNotifications)
-      .values({
-        id: notificationId,
-        eventId,
-        profileId,
-        type: "APPROVAL",
-        title,
-        body,
-        href,
-        data: { status: "ACTIVE" },
-      });
 }

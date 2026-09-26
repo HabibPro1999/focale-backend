@@ -297,7 +297,8 @@ describe("processOutboxEvents", () => {
     const claim = dbMock.execute.mock.calls
       .map((c) => render(c[0] as SQL))
       .find((s) => s.includes("FOR UPDATE SKIP LOCKED"));
-    expect(claim).toContain(`AND "type" = '${REALTIME_EMIT_TYPE}'`);
+    // Every type the api pump drains: admin realtime events and networking notices.
+    expect(claim).toContain(`AND "type" IN ('realtime.emit', 'networking.notify')`);
   });
 
   it("excludes realtime rows for the background scope", async () => {
@@ -312,7 +313,7 @@ describe("processOutboxEvents", () => {
     const claim = dbMock.execute.mock.calls
       .map((c) => render(c[0] as SQL))
       .find((s) => s.includes("FOR UPDATE SKIP LOCKED"));
-    expect(claim).toContain(`AND "type" <> '${REALTIME_EMIT_TYPE}'`);
+    expect(claim).toContain(`AND "type" NOT IN ('realtime.emit', 'networking.notify')`);
   });
 
   it("reports a lease loss when the terminal write affects no rows", async () => {

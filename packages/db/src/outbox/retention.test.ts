@@ -45,12 +45,13 @@ describe("runOutboxRetention", () => {
     const [realtime, background, compact] = rendered();
 
     expect(realtime!.sql).toMatch(/^\s*DELETE FROM "outbox_events"/);
-    expect(realtime!.sql).toContain(`"type" = 'realtime.emit' AND "dedupe_key" IS NULL`);
+    // networking.notify notices (4.3) expire like admin realtime events.
+    expect(realtime!.sql).toContain(`"type" IN ('realtime.emit', 'networking.notify') AND "dedupe_key" IS NULL`);
     expect(realtime!.sql).toContain(`"status" <> 'PROCESSING'`);
     expect(realtime!.params).toEqual(["86400 seconds", 1000, "86400 seconds"]);
 
     expect(background!.sql).toMatch(/^\s*DELETE FROM "outbox_events"/);
-    expect(background!.sql).toContain(`"type" <> 'realtime.emit' AND "dedupe_key" IS NULL`);
+    expect(background!.sql).toContain(`"type" NOT IN ('realtime.emit', 'networking.notify') AND "dedupe_key" IS NULL`);
     expect(background!.sql).toContain(`"status" IN ('PROCESSED', 'SKIPPED')`);
     expect(background!.params).toEqual(["2592000 seconds", 1000, "2592000 seconds"]);
 
