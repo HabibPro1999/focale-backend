@@ -31,12 +31,12 @@ export function createXlsxWriter(
   });
   workbook.creator = "Focale OS";
   workbook.created = new Date();
-  const zip = (workbook as unknown as { zip?: { abort?: () => void } }).zip;
+  const zip = workbookZip(workbook);
   signal.addEventListener(
     "abort",
     () => {
       try {
-        zip?.abort?.();
+        zip?.abort();
       } catch {
         // best effort: the output is already gone
       }
@@ -44,6 +44,20 @@ export function createXlsxWriter(
     { once: true },
   );
   return workbook;
+}
+
+// Two ExcelJS 4.4 internals (the version is pinned): the workbook's archiver,
+// abandoned on abort, and the stream a sheet's XML is zipped from, which
+// paces generation. Without them exports still work, but an abort lets the
+// zip run on and rows can pile up ahead of deflate; xlsx-stream.test.ts fails
+// if an ExcelJS upgrade removes either.
+
+/** The streaming workbook's archiver (ExcelJS's internal `zip`). */
+export function workbookZip(
+  workbook: ExcelJS.stream.xlsx.WorkbookWriter,
+): { abort: () => void } | undefined {
+  const zip = (workbook as unknown as { zip?: { abort?: unknown } }).zip;
+  return zip && typeof zip.abort === "function" ? (zip as { abort: () => void }) : undefined;
 }
 
 /**
@@ -76,7 +90,7 @@ export class ColumnStyles {
  * `pipes` and writes to them without honoring backpressure, so rows produced
  * faster than deflate would pile up there, uncompressed.
  */
-function sheetZipInput(sheet: ExcelJS.Worksheet): Writable | undefined {
+export function sheetZipInput(sheet: ExcelJS.Worksheet): Writable | undefined {
   const stream = (sheet as unknown as { stream?: { pipes?: unknown[] } }).stream;
   const target = stream?.pipes?.[0];
   return target && typeof (target as Writable).write === "function"
