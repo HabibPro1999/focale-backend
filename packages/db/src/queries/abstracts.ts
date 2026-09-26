@@ -31,6 +31,7 @@ import { STANDARD_RETRY_DELAYS_MS, standardRetryDelayMs } from "../helpers";
 import { DB_NOW, backoffInterval, createLeaseQueue, intervalMs } from "../lease-queue";
 import { withTxn, withLockingTxn, withSerializableTxn, pgUniqueViolation } from "../txn";
 import { lockAbstractForUpdate, lockAbstractsForUpdate } from "../locks";
+import { pagesByIds, type ExportPageOptions } from "./export-pages";
 import {
   abstractConfig,
   abstractRevisions,
@@ -557,10 +558,11 @@ export async function findAbstractForFinalFile(
 
 async function loadThemesWithSort(
   abstractIds: string[],
+  db: DbExecutor = getDb(),
 ): Promise<Map<string, ThemeWithSort[]>> {
   const map = new Map<string, ThemeWithSort[]>();
   if (abstractIds.length === 0) return map;
-  const rows = await getDb()
+  const rows = await db
     .select({
       abstractId: abstractThemeLinks.abstractId,
       id: abstractThemes.id,
@@ -580,10 +582,11 @@ async function loadThemesWithSort(
 
 async function loadActiveReviews(
   abstractIds: string[],
+  db: DbExecutor = getDb(),
 ): Promise<Map<string, AdminReviewRow[]>> {
   const map = new Map<string, AdminReviewRow[]>();
   if (abstractIds.length === 0) return map;
-  const rows = await getDb()
+  const rows = await db
     .select({
       review: abstractReviews,
       reviewer: { id: users.id, name: users.name, email: users.email },
@@ -3131,24 +3134,73 @@ export async function countCodedAbstractsByTheme(themeId: string): Promise<numbe
   return row?.n ?? 0;
 }
 
-/** Same filters as the admin list, without pagination. */
-export async function findAbstractsForExport(
+/** What the abstracts export needs before its first row. */
+export interface AbstractsExportPlan {
+  /** Filtered abstract ids in export order (code, then newest first). */
+  ids: string[];
+  /** Most active reviews on one of them: the number of reviewer columns. */
+  maxReviews: number;
+}
+
+/**
+ * The admin list's filters, without pagination: the matching ids in export
+ * order and the reviewer-column count. Rows are then read by
+ * iterateAbstractsForExport, EXPORT_PAGE_SIZE at a time. Ids rather than a
+ * keyset: `code` is nullable and PostgreSQL and CockroachDB place NULLs at
+ * opposite ends of an ascending sort, so the engine's own order is kept.
+ */
+export async function getAbstractsExportPlan(
   eventId: string,
   filters: Omit<ListAdminAbstractsFilters, "limit" | "offset">,
-): Promise<AdminAbstractRow[]> {
-  const rows = await getDb()
-    .select()
+  db: DbExecutor = getDb(),
+): Promise<AbstractsExportPlan> {
+  const where = buildAdminAbstractsWhere(eventId, filters);
+  const rows = await db
+    .select({ id: abstracts.id })
     .from(abstracts)
-    .where(buildAdminAbstractsWhere(eventId, filters))
-    .orderBy(asc(abstracts.code), desc(abstracts.createdAt));
-  const ids = rows.map((r) => r.id);
-  const [themes, reviews] = await Promise.all([
-    loadThemesWithSort(ids),
-    loadActiveReviews(ids),
-  ]);
-  return rows.map((row) => ({
-    ...row,
-    themes: themes.get(row.id) ?? [],
-    reviews: reviews.get(row.id) ?? [],
-  }));
+    .where(where)
+    .orderBy(asc(abstracts.code), desc(abstracts.createdAt), asc(abstracts.id));
+  if (rows.length === 0) return { ids: [], maxReviews: 0 };
+  // Counted like loadActiveReviews reads them (active, reviewer joined).
+  const perAbstract = db
+    .select({ n: count().as("n") })
+    .from(abstractReviews)
+    .innerJoin(users, eq(abstractReviews.reviewerId, users.id))
+    .where(
+      and(
+        eq(abstractReviews.active, true),
+        inArray(
+          abstractReviews.abstractId,
+          db.select({ id: abstracts.id }).from(abstracts).where(where),
+        ),
+      ),
+    )
+    .groupBy(abstractReviews.abstractId)
+    .as("per_abstract");
+  const [top] = await db.select({ maxReviews: max(perAbstract.n) }).from(perAbstract);
+  return { ids: rows.map((row) => row.id), maxReviews: Number(top?.maxReviews ?? 0) };
+}
+
+/** Export rows (themes and active reviews included) for `ids`, in that order. */
+export function iterateAbstractsForExport(
+  ids: readonly string[],
+  options: ExportPageOptions = {},
+): AsyncGenerator<AdminAbstractRow[]> {
+  return pagesByIds(
+    ids,
+    options,
+    async (chunk, tx) => {
+      const rows = await tx.select().from(abstracts).where(inArray(abstracts.id, chunk));
+      const [themes, reviews] = [
+        await loadThemesWithSort(chunk, tx),
+        await loadActiveReviews(chunk, tx),
+      ];
+      return rows.map((row) => ({
+        ...row,
+        themes: themes.get(row.id) ?? [],
+        reviews: reviews.get(row.id) ?? [],
+      }));
+    },
+    (row) => row.id,
+  );
 }

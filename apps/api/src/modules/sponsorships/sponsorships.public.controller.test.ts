@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const db = vi.hoisted(() => ({
   getEventWithPricing: vi.fn(),
   getEventWithPricingBySlug: vi.fn(),
+  getActiveSponsorForm: vi.fn(),
+  searchRegistrantsForSponsorship: vi.fn(),
 }));
 vi.mock("@app/db", () => db);
 vi.mock("../clients/module-gates", () => ({
@@ -11,8 +13,9 @@ vi.mock("../clients/module-gates", () => ({
 vi.mock("../events", () => ({ assertEventAcceptsPublicActions: vi.fn() }));
 
 import { RegistrantSearchQuerySchema } from "@app/contracts";
+import type { AccessService } from "../access/access.service";
 import { SponsorshipsPublicController } from "./sponsorships.public.controller";
-import type { SponsorshipsService } from "./sponsorships.service";
+import { SponsorshipsPublicService } from "./sponsorships.public.service";
 
 const result = {
   id: "r1",
@@ -31,18 +34,16 @@ const result = {
   formData: { specialty: "cardio" },
 };
 
+// The real public service over the mocked db: the route's response is what
+// the anonymous caller gets, whichever layer shapes it.
 function makeController() {
-  const service = {
-    getActiveSponsorForm: vi.fn(async () => ({
-      id: "f1",
-      schema: { sponsorshipSettings: { sponsorshipMode: "LINKED_ACCOUNT" } },
-    })),
-    searchRegistrantsForSponsorship: vi.fn(async () => [result]),
-  };
-  return {
-    controller: new SponsorshipsPublicController(service as unknown as SponsorshipsService),
-    service,
-  };
+  db.getActiveSponsorForm.mockResolvedValue({
+    id: "f1",
+    schema: { sponsorshipSettings: { sponsorshipMode: "LINKED_ACCOUNT" } },
+  });
+  db.searchRegistrantsForSponsorship.mockResolvedValue([result]);
+  const service = new SponsorshipsPublicService({} as AccessService);
+  return { controller: new SponsorshipsPublicController(service), service };
 }
 
 describe("anonymous registrant search (sponsor form)", () => {
