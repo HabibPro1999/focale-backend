@@ -11,7 +11,7 @@
 //   vi.mock("file-type", async () => (await import("./__testing__/service-mocks.js")).ft);
 //
 // and calls `installServiceMocks()` in its beforeEach.
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import type { ApplyRegistrationSettlementInput, RegistrationPatch } from "@app/db";
 import {
   calculateApplicableAmount,
@@ -291,6 +291,82 @@ export const ANSWER_SCHEMA = {
 export function activeClient() {
   return { active: true, enabledModules: ["registrations", "pricing"] };
 }
+
+// --- response shapes (0.5): internal columns and the public DTO keys --------
+// Every internal column populated with a recognisable sentinel.
+const SENTINELS = [
+  "tok-64",
+  "idem-key-1",
+  "SECRET-NOTE",
+  "staff-user-1",
+  "https://link-base.example",
+  "proofs/secret-proof.pdf",
+  "BANKREF-1",
+];
+export const internalRow = (overrides: Record<string, unknown> = {}) =>
+  makeRegRow({
+    referenceNumber: "26-EV-001",
+    networkingOptIn: true,
+    paymentMethod: "BANK_TRANSFER",
+    labName: null,
+    currency: "TND",
+    baseAmount: 100,
+    discountAmount: 0,
+    accessAmount: 0,
+    submittedAt: new Date("2026-01-01T00:00:00.000Z"),
+    createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    lastEditedAt: null,
+    formSchemaVersion: 3,
+    droppedAccessIds: [],
+    idempotencyKey: "idem-key-1",
+    note: "SECRET-NOTE",
+    checkedInAt: new Date("2026-01-02T00:00:00.000Z"),
+    checkedInBy: "staff-user-1",
+    linkBaseUrl: "https://link-base.example",
+    paymentProofUrl: "proofs/secret-proof.pdf",
+    paymentReference: "BANKREF-1",
+    ...overrides,
+  });
+export const PUBLIC_KEYS = [
+  "accessAmount",
+  "accessSelections",
+  "baseAmount",
+  "createdAt",
+  "currency",
+  "discountAmount",
+  "droppedAccessSelections",
+  "email",
+  "event",
+  "eventId",
+  "firstName",
+  "form",
+  "formData",
+  "formId",
+  "hasPaymentProof",
+  "id",
+  "labName",
+  "lastEditedAt",
+  "lastName",
+  "networkingOptIn",
+  "paidAmount",
+  "paidAt",
+  "paymentMethod",
+  "paymentStatus",
+  "phone",
+  "priceBreakdown",
+  "referenceNumber",
+  "sponsorshipAmount",
+  "sponsorshipCode",
+  "submittedAt",
+  "totalAmount",
+  "updatedAt",
+];
+export const withoutSentinels = (value: unknown, allow: string[] = []) => {
+  const json = JSON.stringify(value);
+  for (const sentinel of SENTINELS.filter((x) => !allow.includes(x))) {
+    expect(json).not.toContain(sentinel);
+  }
+};
 
 // --- per-test defaults --------------------------------------------------------
 export type AccessMock = {
