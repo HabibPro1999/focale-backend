@@ -5,14 +5,46 @@ on:
     branches: [develop]
   pull_request:
     branches: [develop]
+  workflow_dispatch:
+
+# A new PR commit replaces the old run. Push/manual runs stay independent:
+# cancelling a pending push could otherwise omit changes from the next diff.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
+  plan:
+    name: CI / plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      static: ${{ steps.select.outputs.static }}
+      image: ${{ steps.select.outputs.image }}
+      db: ${{ steps.select.outputs.db }}
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Test CI selection and required gate
+        run: node --test scripts/ci-plan.test.mjs
+      - name: Select checks from the complete change
+        id: select
+        run: node scripts/ci-plan.mjs
+
   static:
     name: static
+    needs: plan
+    if: needs.plan.outputs.static == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -34,44 +66,18 @@ jobs:
 
   db:
     name: db / ${{ matrix.engine }} / ${{ matrix.command }}${{ matrix.shard && format(' ({0})', matrix.shard) || '' }}
+    needs: plan
+    if: needs.plan.outputs.db == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       fail-fast: false
-      matrix:
-        # CockroachDB runs one test file at a time (TEST_DB_MAX_WORKERS=1) and
-        # each file pays ~1 min of database setup, so its slow tiers are split
-        # into vitest shards, each on its own runner with its own node.
-        include:
-          - engine: postgres
-            command: test:migration
-          - engine: postgres
-            command: test:db
-          - engine: postgres
-            command: test:concurrency
-          - engine: cockroach
-            command: test:migration
-          - engine: cockroach
-            command: test:db
-            shard: 1/4
-          - engine: cockroach
-            command: test:db
-            shard: 2/4
-          - engine: cockroach
-            command: test:db
-            shard: 3/4
-          - engine: cockroach
-            command: test:db
-            shard: 4/4
-          - engine: cockroach
-            command: test:concurrency
-            shard: 1/2
-          - engine: cockroach
-            command: test:concurrency
-            shard: 2/2
-    continue-on-error: ${{ matrix.engine == 'cockroach' && matrix.command != 'test:migration' }}
+      # Same engine/shard coverage for each selected tier; isolation is unchanged.
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     services:
       postgres:
-        image: pgvector/pgvector:pg16
+        # Cockroach jobs start their own service below and do not need PostgreSQL.
+        image: ${{ matrix.engine == 'postgres' && 'pgvector/pgvector:pg16' || '' }}
         env:
           POSTGRES_DB: focale_ci_admin
           POSTGRES_USER: postgres
@@ -116,7 +122,7 @@ jobs:
             --certs-dir=/cockroach/certs --listen-addr=0.0.0.0:26257 \
             --advertise-addr=localhost:26257 --http-addr=0.0.0.0:8080 \
             --store=type=mem,size=1GiB
-          for attempt in $(seq 1 60); do
+          for _attempt in $(seq 1 60); do
             if docker exec focale-ci-crdb /cockroach/cockroach sql \
               --certs-dir=/cockroach/certs --host=localhost:26257 --execute='SELECT 1' >/dev/null 2>&1; then
               break
@@ -136,7 +142,10 @@ jobs:
 
   image:
     name: image / migrator plan
+    needs: plan
+    if: needs.plan.outputs.image == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build runtime image
@@ -151,3 +160,25 @@ jobs:
             for (const f of ['start-runtime.mjs', 'healthcheck.mjs']) if (!fs.existsSync(f)) throw new Error(f + ' missing');
           "
           docker image inspect --format '{{json .Config.Healthcheck.Test}}' focale-backend:ci | grep -q healthcheck.mjs
+
+  required:
+    name: CI / required
+    if: always()
+    needs: [plan, static, db, image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Require every selected check to pass
+        env:
+          CI_PLAN_RESULT: ${{ needs.plan.result }}
+          CI_STATIC_REQUIRED: ${{ needs.plan.outputs.static }}
+          CI_STATIC_RESULT: ${{ needs.static.result }}
+          CI_DB_REQUIRED: ${{ needs.plan.outputs.db }}
+          CI_DB_RESULT: ${{ needs.db.result }}
+          CI_IMAGE_REQUIRED: ${{ needs.plan.outputs.image }}
+          CI_IMAGE_RESULT: ${{ needs.image.result }}
+        run: node scripts/ci-plan.mjs check

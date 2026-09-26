@@ -680,7 +680,13 @@ ALLOW_DB_TESTS=1 TEST_DB_ADMIN_URL='postgresql://postgres:...@127.0.0.1:5432/foc
 Use `.env.test.example` only for unit-safe overrides and `.env.test.db.example` for all DB tiers. The tests do not load `.env` or `.env.test.db`; set variables explicitly or source the example in your shell. Keep values local/disposable; never use production or shared development credentials.
 
 
-CI runs static checks, an image/migrator-plan check, and PostgreSQL/CockroachDB
-migration, database and concurrency tiers (12 jobs). CockroachDB database and
-concurrency jobs are non-blocking in workflow configuration; inspect every job
-rather than relying only on the aggregate conclusion.
+CI selects checks from the complete PR diff or push range. Documentation-only
+changes run a lightweight planner and required gate; application/query changes
+run static checks plus database/concurrency suites on both engines. Migrations,
+shared layers, dependencies, CI infrastructure and unknown paths run the full
+12-check suite. A manual Actions run always requests the full suite.
+
+`CI / required` fails if any selected check fails, is cancelled or unexpectedly
+skips, including CockroachDB. New PR commits cancel their superseded runs; push
+runs remain independent. Test-database isolation and safety guards are unchanged.
+See [CI selection and maintenance](docs/ci.md) for the path rules and commands.

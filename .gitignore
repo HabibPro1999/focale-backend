@@ -54,6 +54,7 @@ docs/*
 !docs/migration-authoring.md
 !docs/single-instance.md
 !docs/production-rollout-checklist.md
+!docs/ci.md
 !docs/networking/
 !docs/history/
 load-env.fish
