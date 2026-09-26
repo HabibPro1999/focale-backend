@@ -17,17 +17,14 @@ import {
 import {
   countRegistrations,
   findRegistrationFormSchema,
-  findClientModuleState,
   findEventAccessByIds,
   findPendingSponsorships,
-  getEventForOwnership,
   getEventPricing,
   getEventPricingGate,
   getFormForPriceQuote,
   upsertEventPricing,
   withSerializableTxn,
   type DbExecutor,
-  type PricingEventOwnership,
   type PricingFormQuote,
   type PricingRowInsert,
   type PricingRowUpdate,
@@ -51,23 +48,6 @@ export class PricingService {
   /** GET pricing — findUnique with parsed rules (null when absent). */
   getEventPricing(eventId: string): Promise<EventPricingWithRules | null> {
     return getEventPricing(eventId);
-  }
-
-  /** Event lookup for route-level ownership/writable checks (legacy getEventById). */
-  getEventForOwnership(eventId: string): Promise<PricingEventOwnership | null> {
-    return getEventForOwnership(eventId);
-  }
-
-  /**
-   * Fresh client module-gate lookup (legacy assertClientModuleEnabled): 404 when
-   * the client is missing, else 403 variants for inactive / module-disabled.
-   */
-  async assertClientModuleEnabled(clientId: string): Promise<void> {
-    const client = await findClientModuleState(clientId);
-    if (!client) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Client not found", 404);
-    }
-    assertModuleEnabledForClient(client, "pricing");
   }
 
   /** PATCH pricing (base price / currency / full rules replace / payment). */

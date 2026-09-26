@@ -673,6 +673,10 @@ export type DroppedAccessItem = {
   reason: "capacity_reached";
 };
 
+export type DuplicateEmailTemplate = {
+  name?: string;
+};
+
 export type EditAbstract = {
   authorFirstName: string;
   authorLastName: string;

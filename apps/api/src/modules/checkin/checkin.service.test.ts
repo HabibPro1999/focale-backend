@@ -295,7 +295,7 @@ describe("CheckinService", () => {
         service.checkIn(eventId, registrationId, undefined, userId),
       ).rejects.toMatchObject({
         statusCode: 404,
-        code: ErrorCodes.CHECKIN_REGISTRATION_NOT_FOUND,
+        code: ErrorCodes.REGISTRATION_NOT_FOUND,
       });
     });
 
@@ -363,7 +363,7 @@ describe("CheckinService", () => {
         service.getCheckInRegistrations(eventId, accessId),
       ).rejects.toMatchObject({
         statusCode: 404,
-        code: ErrorCodes.NOT_FOUND,
+        code: ErrorCodes.ACCESS_NOT_FOUND,
       });
 
       expect(m.getEligibleRegistrationIds).not.toHaveBeenCalled();

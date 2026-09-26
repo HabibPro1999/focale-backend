@@ -14,15 +14,15 @@ import {
 } from "@nestjs/platform-fastify";
 import { ErrorCodes, UserRole, type UserRoleValue } from "@app/contracts";
 
-// Real AuthGuard runs; mock only its side-effecting deps and the controller's
-// own event/tenant lookups.
+// Real AuthGuard and tenant scope guard run; mock only their side-effecting
+// deps and the scope lookups.
 vi.mock("@app/integrations", () => ({
   verifyToken: vi.fn(async () => ({ uid: "u1" })),
 }));
 vi.mock("@app/db", () => ({
   getUserWithClientById: vi.fn(),
-  getEventForRegistrationAdmin: vi.fn(),
-  findClientModuleState: vi.fn(),
+  getEventTenantScope: vi.fn(),
+  getRegistrationTenantScope: vi.fn(),
   // The exception filter calls these on every caught error; the real ones
   // return null for non-pg errors, which is all these tests throw.
   pgErrorCode: () => null,
@@ -31,8 +31,8 @@ vi.mock("@app/db", () => ({
 
 import { verifyToken } from "@app/integrations";
 import {
-  findClientModuleState,
-  getEventForRegistrationAdmin,
+  getEventTenantScope,
+  getRegistrationTenantScope,
   getUserWithClientById,
 } from "@app/db";
 import { ROLE_KEY } from "../../core/auth/auth.decorator";
@@ -44,6 +44,7 @@ import { HttpExceptionFilter } from "../../core/http-exception.filter";
 import { RegistrationsController } from "./registrations.controller";
 import { RegistrationsService } from "./registrations.service";
 import { RegistrationRepricer } from "./registrations.repricer";
+import { TenantScopeGuard } from "../tenancy";
 
 const eventId = "11111111-1111-4111-8111-111111111111";
 const registrationId = "22222222-2222-4222-8222-222222222222";
@@ -51,7 +52,6 @@ const AUTH = { authorization: "Bearer test" };
 
 const service = {
   deleteRegistration: vi.fn(async () => undefined),
-  getRegistrationClientId: vi.fn(async () => "c1"),
 };
 const repricer = {
   adminEditRegistration: vi.fn(async () => ({ id: registrationId })),
@@ -90,15 +90,15 @@ describe("RegistrationsController role checks", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     clearUserCache();
-    vi.mocked(getEventForRegistrationAdmin).mockResolvedValue({
-      id: eventId,
-      clientId: "c1",
-      status: "OPEN",
-    } as never);
-    vi.mocked(findClientModuleState).mockResolvedValue({
-      active: true,
-      enabledModules: ["registrations", "pricing"],
-    } as never);
+    const scope = {
+      event: { id: eventId, clientId: "c1", status: "OPEN" as const, slug: "summit" },
+      client: { id: "c1", active: true, enabledModules: ["registrations", "pricing"] },
+    };
+    vi.mocked(getEventTenantScope).mockResolvedValue(scope);
+    vi.mocked(getRegistrationTenantScope).mockResolvedValue({
+      registration: { id: registrationId },
+      ...scope,
+    });
     app = await NestFactory.create<NestFastifyApplication>(
       TestRegistrationsModule,
       new FastifyAdapter(),
@@ -112,10 +112,11 @@ describe("RegistrationsController role checks", () => {
     await app.close();
   });
 
-  it("admin edit carries the role as metadata only: one guard, from the class", () => {
+  it("admin edit carries the role as metadata only: one auth guard, from the class", () => {
     const handler = RegistrationsController.prototype.adminEdit;
     expect(Reflect.getMetadata(ROLE_KEY, handler)).toBe(UserRole.CLIENT_ADMIN);
-    expect(Reflect.getMetadata("__guards__", handler)).toBeUndefined();
+    // The route's own guard is the tenant scope (5.4), not a second AuthGuard.
+    expect(Reflect.getMetadata("__guards__", handler)).toEqual([TenantScopeGuard]);
     expect(Reflect.getMetadata("__guards__", RegistrationsController)).toEqual([AuthGuard]);
   });
 
@@ -148,7 +149,7 @@ describe("RegistrationsController role checks", () => {
     expect(res.statusCode).toBe(403);
     expect(res.json().error).toMatchObject({ code: ErrorCodes.FORBIDDEN, message: "Insufficient permissions" });
     expect(verifyToken).toHaveBeenCalledTimes(1);
-    expect(getEventForRegistrationAdmin).not.toHaveBeenCalled();
+    expect(getEventTenantScope).not.toHaveBeenCalled();
     expect(repricer.adminEditRegistration).not.toHaveBeenCalled();
   });
 

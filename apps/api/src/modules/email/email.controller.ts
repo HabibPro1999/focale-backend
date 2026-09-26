@@ -11,20 +11,22 @@ import {
 } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
 import { ErrorCodes } from "@app/contracts";
-import { getEventWithPricing, type EventWithPricing } from "@app/db";
+import {
+  getEventWithPricing,
+  type EventWithPricing,
+  type ScopedEventRow,
+} from "@app/db";
 import { getAvailableVariables, type VariableDefinition } from "@app/integrations";
 import type { PaginatedResult } from "@app/shared";
 import { Auth } from "../../core/auth/auth.decorator";
-import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
-import { CurrentUser } from "../../core/auth/current-user.decorator";
-import { assertEventWritable } from "../events/events.service";
-import { assertClientModuleEnabled } from "../clients/module-gates";
 import { AppException } from "../../core/app-exception";
+import { EmailTemplateScoped, EventScoped, ScopedEvent } from "../tenancy";
 import { EmailTemplateService } from "./email-template.service";
 import { EmailSendService } from "./email-send.service";
 import {
   CreateEmailTemplateBodyDto,
+  DuplicateEmailTemplateDto,
   UpdateEmailTemplateDto,
   ListEmailTemplatesQueryDto,
   ListEventEmailLogsQueryDto,
@@ -38,9 +40,9 @@ import {
   ResendEmailLogParamDto,
 } from "./dto";
 
-// Every route requires a valid Bearer token (any role); per-handler
-// canAccessClient does the tenant check (legacy `requireAuth` + canAccessClient,
-// no requireAdmin).
+// Every route requires a valid Bearer token (any role); the tenant check is the
+// route's scope guard (`@EventScoped` / `@EmailTemplateScoped`, plan 5.4):
+// 404 → 403 (canAccessClient) → archived (writes) → emails module gate.
 @Controller("api/events")
 @Auth()
 export class EmailController {
@@ -49,10 +51,8 @@ export class EmailController {
     private readonly send: EmailSendService,
   ) {}
 
-  // ==========================================================================
-  // Shared guards
-  // ==========================================================================
-  private async resolveEvent(eventId: string): Promise<EventWithPricing> {
+  /** The event with the fields the send paths need (after the scope guard). */
+  private async eventForSend(eventId: string): Promise<EventWithPricing> {
     const event = await getEventWithPricing(eventId);
     if (!event) {
       throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
@@ -60,25 +60,7 @@ export class EmailController {
     return event;
   }
 
-  private assertAccess(user: AuthUser, clientId: string): void {
-    if (!canAccessClient(user, clientId)) {
-      throw new AppException(
-        ErrorCodes.FORBIDDEN,
-        "Insufficient permissions",
-        403,
-      );
-    }
-  }
-
-  private async assertEmailFeatureWritable(
-    event: EventWithPricing,
-  ): Promise<void> {
-    assertEventWritable(event);
-    await assertClientModuleEnabled(event.clientId, "emails");
-  }
-
-  /** Load a template + its event, mirroring legacy getTemplateWriteContext. */
-  private async getTemplateWriteContext(templateId: string) {
+  private async template(templateId: string) {
     const template = await this.templates.getById(templateId);
     if (!template) {
       throw new AppException(
@@ -87,15 +69,7 @@ export class EmailController {
         404,
       );
     }
-    if (!template.eventId) {
-      throw new AppException(
-        ErrorCodes.VALIDATION_ERROR,
-        "Email template is not event-scoped",
-        400,
-      );
-    }
-    const event = await this.resolveEvent(template.eventId);
-    return { template, event };
+    return template;
   }
 
   // ==========================================================================
@@ -103,38 +77,30 @@ export class EmailController {
   // ==========================================================================
 
   @Get(":eventId/email-templates")
+  @EventScoped({ module: "emails" })
   async list(
     @Param() params: EmailEventIdParamDto,
     @Query() query: ListEmailTemplatesQueryDto,
-    @CurrentUser() user: AuthUser,
   ): Promise<PaginatedResult<unknown>> {
-    const event = await this.resolveEvent(params.eventId);
-    this.assertAccess(user, event.clientId);
-    await assertClientModuleEnabled(event.clientId, "emails");
     return this.templates.list(params.eventId, query);
   }
 
   @Get(":eventId/email-templates/variables")
+  @EventScoped({ module: "emails" })
   async variables(
     @Param() params: EmailEventIdParamDto,
-    @CurrentUser() user: AuthUser,
   ): Promise<VariableDefinition[]> {
-    const event = await this.resolveEvent(params.eventId);
-    this.assertAccess(user, event.clientId);
-    await assertClientModuleEnabled(event.clientId, "emails");
     return getAvailableVariables(params.eventId);
   }
 
   @Post(":eventId/email-templates")
+  @EventScoped({ module: "emails", write: true })
   @HttpCode(201)
   async create(
     @Param() params: EmailEventIdParamDto,
     @Body() body: CreateEmailTemplateBodyDto,
-    @CurrentUser() user: AuthUser,
+    @ScopedEvent() event: ScopedEventRow,
   ) {
-    const event = await this.resolveEvent(params.eventId);
-    this.assertAccess(user, event.clientId);
-    await this.assertEmailFeatureWritable(event);
     return this.templates.create({
       clientId: event.clientId,
       eventId: params.eventId,
@@ -143,77 +109,47 @@ export class EmailController {
   }
 
   @Get("email-templates/:templateId")
-  async getOne(
-    @Param() params: EmailTemplateIdParamDto,
-    @CurrentUser() user: AuthUser,
-  ) {
-    const template = await this.templates.getById(params.templateId);
-    if (!template) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Email template not found",
-        404,
-      );
-    }
-    this.assertAccess(user, template.clientId);
-    if (template.eventId) {
-      const event = await this.resolveEvent(template.eventId);
-      await assertClientModuleEnabled(event.clientId, "emails");
-    }
-    return template;
+  @EmailTemplateScoped({ module: "emails" })
+  async getOne(@Param() params: EmailTemplateIdParamDto) {
+    return this.template(params.templateId);
   }
 
   @Patch("email-templates/:templateId")
+  @EmailTemplateScoped({ module: "emails", write: true })
   async update(
     @Param() params: EmailTemplateIdParamDto,
     @Body() body: UpdateEmailTemplateDto,
-    @CurrentUser() user: AuthUser,
   ) {
-    const { event } = await this.getTemplateWriteContext(params.templateId);
-    this.assertAccess(user, event.clientId);
-    await this.assertEmailFeatureWritable(event);
     return this.templates.update(params.templateId, body);
   }
 
   @Delete("email-templates/:templateId")
+  @EmailTemplateScoped({ module: "emails", write: true })
   @HttpCode(204)
   @SkipEnvelope()
-  async remove(
-    @Param() params: EmailTemplateIdParamDto,
-    @CurrentUser() user: AuthUser,
-  ): Promise<void> {
-    const { event } = await this.getTemplateWriteContext(params.templateId);
-    this.assertAccess(user, event.clientId);
-    await this.assertEmailFeatureWritable(event);
+  async remove(@Param() params: EmailTemplateIdParamDto): Promise<void> {
     await this.templates.delete(params.templateId);
   }
 
   @Post("email-templates/:templateId/duplicate")
+  @EmailTemplateScoped({ module: "emails", write: true })
   @HttpCode(201)
   async duplicate(
     @Param() params: EmailTemplateIdParamDto,
-    @Body() body: { name?: string } | undefined,
-    @CurrentUser() user: AuthUser,
+    @Body() body: DuplicateEmailTemplateDto,
   ) {
-    const { event } = await this.getTemplateWriteContext(params.templateId);
-    this.assertAccess(user, event.clientId);
-    await this.assertEmailFeatureWritable(event);
-    return this.templates.duplicate(params.templateId, body?.name);
+    return this.templates.duplicate(params.templateId, body.name);
   }
 
   @Post("email-templates/:templateId/test-send")
+  @EmailTemplateScoped({ module: "emails", write: true })
   @HttpCode(200)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async testSend(
     @Param() params: EmailTemplateIdParamDto,
     @Body() body: TestSendEmailDto,
-    @CurrentUser() user: AuthUser,
   ) {
-    const { template, event } = await this.getTemplateWriteContext(
-      params.templateId,
-    );
-    this.assertAccess(user, template.clientId);
-    await this.assertEmailFeatureWritable(event);
+    const template = await this.template(params.templateId);
     return this.send.testSend(template, body.recipientEmail, body.recipientName);
   }
 
@@ -222,14 +158,11 @@ export class EmailController {
   // ==========================================================================
 
   @Get(":eventId/email-logs")
+  @EventScoped({ module: "emails" })
   async listLogs(
     @Param() params: EmailEventIdParamDto,
     @Query() query: ListEventEmailLogsQueryDto,
-    @CurrentUser() user: AuthUser,
   ) {
-    const event = await this.resolveEvent(params.eventId);
-    this.assertAccess(user, event.clientId);
-    await assertClientModuleEnabled(event.clientId, "emails");
     return this.templates.listLogs(params.eventId, query);
   }
 
@@ -238,15 +171,10 @@ export class EmailController {
    * so it is never resent automatically). Queues a new email log.
    */
   @Post(":eventId/email-logs/:emailLogId/resend")
+  @EventScoped({ module: "emails", write: true })
   @HttpCode(201)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
-  async resendLog(
-    @Param() params: ResendEmailLogParamDto,
-    @CurrentUser() user: AuthUser,
-  ) {
-    const event = await this.resolveEvent(params.eventId);
-    this.assertAccess(user, event.clientId);
-    await this.assertEmailFeatureWritable(event);
+  async resendLog(@Param() params: ResendEmailLogParamDto) {
     return this.send.resendUncertain(params.eventId, params.emailLogId);
   }
 
@@ -255,25 +183,15 @@ export class EmailController {
   // ==========================================================================
 
   @Post(":eventId/email-templates/:templateId/send")
+  @EventScoped({ module: "emails", write: true })
   @HttpCode(200)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async bulkSend(
     @Param() params: BulkSendParamDto,
     @Body() body: BulkSendEmailDto,
-    @CurrentUser() user: AuthUser,
   ) {
-    const event = await this.resolveEvent(params.eventId);
-    this.assertAccess(user, event.clientId);
-    await this.assertEmailFeatureWritable(event);
-
-    const template = await this.templates.getById(params.templateId);
-    if (!template) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Email template not found",
-        404,
-      );
-    }
+    const event = await this.eventForSend(params.eventId);
+    const template = await this.template(params.templateId);
     if (template.clientId !== event.clientId) {
       throw new AppException(
         ErrorCodes.FORBIDDEN,
@@ -286,16 +204,14 @@ export class EmailController {
   }
 
   @Post(":eventId/registrations/:registrationId/send-custom-email")
+  @EventScoped({ module: "emails", write: true })
   @HttpCode(200)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async sendCustom(
     @Param() params: SendCustomEmailParamDto,
     @Body() body: SendCustomEmailDto,
-    @CurrentUser() user: AuthUser,
   ) {
-    const event = await this.resolveEvent(params.eventId);
-    this.assertAccess(user, event.clientId);
-    await this.assertEmailFeatureWritable(event);
+    const event = await this.eventForSend(params.eventId);
     return this.send.sendCustom(
       event,
       params.registrationId,

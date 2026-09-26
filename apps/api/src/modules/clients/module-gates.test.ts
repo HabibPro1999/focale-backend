@@ -151,7 +151,7 @@ describe("client module gates", () => {
       await expectHttpError(
         assertClientModuleEnabled("client-1", "pricing"),
         403,
-        ErrorCodes.FORBIDDEN,
+        ErrorCodes.CLIENT_INACTIVE,
         "Client is inactive",
       );
     });
@@ -161,7 +161,7 @@ describe("client module gates", () => {
       await expectHttpError(
         assertClientModuleEnabled("client-1", "pricing"),
         403,
-        ErrorCodes.FORBIDDEN,
+        ErrorCodes.MODULE_DISABLED,
       );
     });
   });

@@ -10,7 +10,7 @@ import {
   Post,
   Query,
 } from "@nestjs/common";
-import type { CreateEventAccessInput } from "@app/contracts";
+import { ErrorCodes, type CreateEventAccessInput } from "@app/contracts";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
 import { assertEventAccess } from "../../core/auth/assert-event-access";
@@ -74,7 +74,7 @@ export class AccessController {
     @Param() params: EventAccessIdParamDto,
   ) {
     const access = await this.access.getEventAccessById(params.id);
-    if (!access) throw new NotFoundException("Access item not found");
+    if (!access) accessNotFound();
 
     const event = await assertEventAccess(user, access.eventId);
     await assertClientModuleEnabled(event.clientId, "registrations");
@@ -89,7 +89,7 @@ export class AccessController {
     @Body() body: UpdateEventAccessDto,
   ) {
     const access = await this.access.getEventAccessById(params.id);
-    if (!access) throw new NotFoundException("Access item not found");
+    if (!access) accessNotFound();
 
     const event = await assertEventAccess(user, access.eventId);
     assertEventWritable(event);
@@ -106,7 +106,7 @@ export class AccessController {
     @Param() params: EventAccessIdParamDto,
   ) {
     const access = await this.access.getEventAccessById(params.id);
-    if (!access) throw new NotFoundException("Access item not found");
+    if (!access) accessNotFound();
 
     const event = await assertEventAccess(user, access.eventId);
     assertEventWritable(event);
@@ -114,4 +114,11 @@ export class AccessController {
 
     await this.access.deleteEventAccess(params.id);
   }
+}
+
+function accessNotFound(): never {
+  throw new NotFoundException({
+    code: ErrorCodes.ACCESS_NOT_FOUND,
+    message: "Access item not found",
+  });
 }

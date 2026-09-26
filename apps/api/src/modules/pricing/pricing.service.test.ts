@@ -14,7 +14,6 @@ vi.mock("@app/db", () => ({
   findEventAccessByIds: vi.fn(),
   findPendingSponsorships: vi.fn(),
   getClientModuleState: vi.fn(),
-  getEventForOwnership: vi.fn(),
   getFormForPriceQuote: vi.fn(),
 }));
 
