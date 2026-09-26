@@ -1,7 +1,12 @@
 import { Body, Controller, HttpCode, Param, Post } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
-import { ErrorCodes, type PriceBreakdown } from "@app/contracts";
+import {
+  ErrorCodes,
+  PriceBreakdownSchema,
+  type PriceBreakdown,
+} from "@app/contracts";
 import { AppException } from "../../core/app-exception";
+import { ResponseContract } from "../../core/response-contract";
 import { assertEventAcceptsPublicActions } from "../events";
 import { isModuleEnabledForClient } from "../clients/module-gates";
 import { prepareFormDataForPricing } from "./form-data-for-pricing";
@@ -16,6 +21,7 @@ export class PricingPublicController {
   @Post(":formId/calculate-price")
   @HttpCode(200)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @ResponseContract(PriceBreakdownSchema)
   async calculatePrice(
     @Param() { formId }: FormIdParamDto,
     @Body() input: CalculatePriceRequestDto,

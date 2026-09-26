@@ -1,11 +1,16 @@
 import { Body, Controller, Get, HttpCode, Param, Post, Query } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
-import { ErrorCodes } from "@app/contracts";
+import {
+  ErrorCodes,
+  PublicRegistrantSearchResponseSchema,
+  SponsorshipBatchCreatedResponseSchema,
+} from "@app/contracts";
 import { getEventWithPricing, getEventWithPricingBySlug } from "@app/db";
 import { maskEmail } from "@app/shared";
 import { assertClientModuleEnabled } from "../clients/module-gates";
 import { assertEventAcceptsPublicActions } from "../events";
 import { AppException } from "../../core/app-exception";
+import { ResponseContract } from "../../core/response-contract";
 import { SponsorshipsService } from "./sponsorships.service";
 import {
   CreateSponsorshipBatchDto,
@@ -27,6 +32,7 @@ export class SponsorshipsPublicController {
   @Post(":eventId/sponsorships")
   @HttpCode(201)
   @Throttle(BATCH_THROTTLE)
+  @ResponseContract(SponsorshipBatchCreatedResponseSchema)
   async createByEventId(
     @Param() { eventId }: SponsorshipEventIdParamDto,
     @Body() input: CreateSponsorshipBatchDto,
@@ -62,6 +68,7 @@ export class SponsorshipsPublicController {
   // GET /api/public/events/slug/:slug/registrants/search
   @Get("slug/:slug/registrants/search")
   @Throttle(SEARCH_THROTTLE)
+  @ResponseContract(PublicRegistrantSearchResponseSchema)
   async searchRegistrants(
     @Param() { slug }: SponsorshipEventSlugParamDto,
     @Query() { query, unpaidOnly }: RegistrantSearchQueryDto,
@@ -112,6 +119,7 @@ export class SponsorshipsPublicController {
   @Post("slug/:slug/sponsorships")
   @HttpCode(201)
   @Throttle(BATCH_THROTTLE)
+  @ResponseContract(SponsorshipBatchCreatedResponseSchema)
   async createBySlug(
     @Param() { slug }: SponsorshipEventSlugParamDto,
     @Body() input: CreateSponsorshipBatchDto,

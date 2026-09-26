@@ -61,6 +61,10 @@
       "module": "packages/contracts/src/access.ts",
       "type": "AccessSelection"
     },
+    "AccessSelectionValidationResponseSchema": {
+      "module": "packages/contracts/src/access.ts",
+      "type": "AccessSelectionValidationResponse"
+    },
     "AccessTypeSchema": {
       "module": "packages/contracts/src/access.ts",
       "type": "AccessType"
@@ -80,6 +84,18 @@
     "AdminEditRegistrationSchema": {
       "module": "packages/contracts/src/registrations.ts",
       "type": "AdminEditRegistration"
+    },
+    "AdminRegistrantSearchResponseSchema": {
+      "module": "packages/contracts/src/registrations.responses.ts",
+      "type": "AdminRegistrantSearchResponse"
+    },
+    "AdminRegistrationListResponseSchema": {
+      "module": "packages/contracts/src/registrations.responses.ts",
+      "type": "AdminRegistrationListResponse"
+    },
+    "AdminRegistrationResponseSchema": {
+      "module": "packages/contracts/src/registrations.responses.ts",
+      "type": "AdminRegistrationResponse"
     },
     "AnalyticsAccessItemSchema": {
       "module": "packages/contracts/src/reports.ts",
@@ -104,6 +120,10 @@
     "AutomaticEmailTriggerSchema": {
       "module": "packages/contracts/src/email.ts",
       "type": "AutomaticEmailTrigger"
+    },
+    "AvailableSponsorshipsResponseSchema": {
+      "module": "packages/contracts/src/sponsorships.responses.ts",
+      "type": "AvailableSponsorshipsResponse"
     },
     "BatchSyncBodySchema": {
       "module": "packages/contracts/src/checkin.ts",
@@ -329,6 +349,14 @@
       "module": "packages/contracts/src/access.ts",
       "type": "EventAccessIdParam"
     },
+    "EventAccessItemResponseSchema": {
+      "module": "packages/contracts/src/access.ts",
+      "type": "EventAccessItemResponse"
+    },
+    "EventAccessRowResponseSchema": {
+      "module": "packages/contracts/src/access.ts",
+      "type": "EventAccessRowResponse"
+    },
     "EventAnalyticsResponseSchema": {
       "module": "packages/contracts/src/reports.ts",
       "type": "EventAnalyticsResponse"
@@ -336,6 +364,10 @@
     "EventIdParamSchema": {
       "module": "packages/contracts/src/events.ts",
       "type": "EventIdParam"
+    },
+    "EventPricingRowResponseSchema": {
+      "module": "packages/contracts/src/forms.responses.ts",
+      "type": "EventPricingRowResponse"
     },
     "EventRegistrationIdParamSchema": {
       "module": "packages/contracts/src/registrations.ts",
@@ -438,6 +470,10 @@
       "module": "packages/contracts/src/access.ts",
       "type": "GetGroupedAccessBody"
     },
+    "GroupedAccessItemSchema": {
+      "module": "packages/contracts/src/access.ts",
+      "type": "GroupedAccessItem"
+    },
     "GroupedAccessResponseSchema": {
       "module": "packages/contracts/src/access.ts",
       "type": "GroupedAccessResponse"
@@ -465,6 +501,10 @@
     "LinkedBeneficiaryInputSchema": {
       "module": "packages/contracts/src/sponsorships.ts",
       "type": "LinkedBeneficiaryInput"
+    },
+    "LinkedSponsorshipsResponseSchema": {
+      "module": "packages/contracts/src/sponsorships.responses.ts",
+      "type": "LinkedSponsorshipsResponse"
     },
     "ListAbstractsQuerySchema": {
       "module": "packages/contracts/src/abstracts.ts",
@@ -646,6 +686,14 @@
       "module": "packages/contracts/src/registrations.ts",
       "type": "PaymentMethod"
     },
+    "PaymentMethodSelectedResponseSchema": {
+      "module": "packages/contracts/src/registrations.responses.ts",
+      "type": "PaymentMethodSelectedResponse"
+    },
+    "PaymentProofUploadResponseSchema": {
+      "module": "packages/contracts/src/registrations.responses.ts",
+      "type": "PaymentProofUploadResponse"
+    },
     "PaymentStatusBreakdownItemSchema": {
       "module": "packages/contracts/src/reports.ts",
       "type": "PaymentStatusBreakdownItem"
@@ -674,9 +722,49 @@
       "module": "packages/contracts/src/access.ts",
       "type": "PublicAccessItemParam"
     },
+    "PublicClientResponseSchema": {
+      "module": "packages/contracts/src/forms.responses.ts",
+      "type": "PublicClientResponse"
+    },
     "PublicEditRegistrationSchema": {
       "module": "packages/contracts/src/registrations.ts",
       "type": "PublicEditRegistration"
+    },
+    "PublicEventAccessListResponseSchema": {
+      "module": "packages/contracts/src/access.ts",
+      "type": "PublicEventAccessListResponse"
+    },
+    "PublicFormResponseSchema": {
+      "module": "packages/contracts/src/forms.responses.ts",
+      "type": "PublicFormResponse"
+    },
+    "PublicPaymentConfigResponseSchema": {
+      "module": "packages/contracts/src/events.responses.ts",
+      "type": "PublicPaymentConfigResponse"
+    },
+    "PublicRegistrantSearchResponseSchema": {
+      "module": "packages/contracts/src/sponsorships.responses.ts",
+      "type": "PublicRegistrantSearchResponse"
+    },
+    "PublicRegistrationCreateResponseSchema": {
+      "module": "packages/contracts/src/registrations.responses.ts",
+      "type": "PublicRegistrationCreateResponse"
+    },
+    "PublicRegistrationEditResponseSchema": {
+      "module": "packages/contracts/src/registrations.responses.ts",
+      "type": "PublicRegistrationEditResponse"
+    },
+    "PublicRegistrationForEditResponseSchema": {
+      "module": "packages/contracts/src/registrations.responses.ts",
+      "type": "PublicRegistrationForEditResponse"
+    },
+    "PublicRegistrationResponseSchema": {
+      "module": "packages/contracts/src/registrations.responses.ts",
+      "type": "PublicRegistrationResponse"
+    },
+    "PublicSponsorFormResponseSchema": {
+      "module": "packages/contracts/src/forms.responses.ts",
+      "type": "PublicSponsorFormResponse"
     },
     "RegistrantSearchQuerySchema": {
       "module": "packages/contracts/src/sponsorships.ts",
@@ -690,6 +778,14 @@
       "module": "packages/contracts/src/forms.ts",
       "type": "RegistrantSearchScope"
     },
+    "RegistrationAccessSelectionResponseSchema": {
+      "module": "packages/contracts/src/registrations.responses.ts",
+      "type": "RegistrationAccessSelectionResponse"
+    },
+    "RegistrationAuditLogListResponseSchema": {
+      "module": "packages/contracts/src/registrations.responses.ts",
+      "type": "RegistrationAuditLogListResponse"
+    },
     "RegistrationAuditLogSchema": {
       "module": "packages/contracts/src/registrations.ts",
       "type": "RegistrationAuditLog"
@@ -697,6 +793,18 @@
     "RegistrationColumnsResponseSchema": {
       "module": "packages/contracts/src/registrations.ts",
       "type": "RegistrationColumnsResponse"
+    },
+    "RegistrationDroppedAccessSelectionResponseSchema": {
+      "module": "packages/contracts/src/registrations.responses.ts",
+      "type": "RegistrationDroppedAccessSelectionResponse"
+    },
+    "RegistrationEditLinkResponseSchema": {
+      "module": "packages/contracts/src/registrations.responses.ts",
+      "type": "RegistrationEditLinkResponse"
+    },
+    "RegistrationEmailLogListResponseSchema": {
+      "module": "packages/contracts/src/registrations.responses.ts",
+      "type": "RegistrationEmailLogListResponse"
     },
     "RegistrationEmailLogSchema": {
       "module": "packages/contracts/src/registrations.ts",
@@ -717,6 +825,10 @@
     "RegistrationSponsorshipParamSchema": {
       "module": "packages/contracts/src/sponsorships.ts",
       "type": "RegistrationSponsorshipParam"
+    },
+    "RegistrationTableColumnsResponseSchema": {
+      "module": "packages/contracts/src/registrations.responses.ts",
+      "type": "RegistrationTableColumnsResponse"
     },
     "ReportQuerySchema": {
       "module": "packages/contracts/src/reports.ts",
@@ -778,6 +890,14 @@
       "module": "packages/contracts/src/forms.ts",
       "type": "SponsorSummaryTranslationEntry"
     },
+    "SponsorshipBatchCreatedResponseSchema": {
+      "module": "packages/contracts/src/sponsorships.responses.ts",
+      "type": "SponsorshipBatchCreatedResponse"
+    },
+    "SponsorshipDetailResponseSchema": {
+      "module": "packages/contracts/src/sponsorships.responses.ts",
+      "type": "SponsorshipDetailResponse"
+    },
     "SponsorshipEventIdParamSchema": {
       "module": "packages/contracts/src/sponsorships.ts",
       "type": "SponsorshipEventIdParam"
@@ -798,6 +918,14 @@
       "module": "packages/contracts/src/pricing.ts",
       "type": "SponsorshipLine"
     },
+    "SponsorshipLinkedResponseSchema": {
+      "module": "packages/contracts/src/sponsorships.responses.ts",
+      "type": "SponsorshipLinkedResponse"
+    },
+    "SponsorshipListResponseSchema": {
+      "module": "packages/contracts/src/sponsorships.responses.ts",
+      "type": "SponsorshipListResponse"
+    },
     "SponsorshipModeSchema": {
       "module": "packages/contracts/src/forms.ts",
       "type": "SponsorshipMode"
@@ -809,6 +937,10 @@
     "SponsorshipStatusSchema": {
       "module": "packages/contracts/src/sponsorships.ts",
       "type": "SponsorshipStatus"
+    },
+    "SponsorshipSuccessResponseSchema": {
+      "module": "packages/contracts/src/sponsorships.responses.ts",
+      "type": "SponsorshipSuccessResponse"
     },
     "StepTranslationEntrySchema": {
       "module": "packages/contracts/src/forms.ts",
@@ -954,6 +1086,41 @@
   "unrepresentable": [
     {
       "direction": "input",
+      "pointer": "/$defs/AdminRegistrationResponseSchema/properties/accessCheckIns/items/properties/checkedInAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/AdminRegistrationResponseSchema/properties/checkedInAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/AdminRegistrationResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/AdminRegistrationResponseSchema/properties/lastEditedAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/AdminRegistrationResponseSchema/properties/paidAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/AdminRegistrationResponseSchema/properties/submittedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/AdminRegistrationResponseSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
       "pointer": "/$defs/CreateEventAccessBodySchema/properties/availableFrom/anyOf/0",
       "reason": "date"
     },
@@ -1004,6 +1171,111 @@
     },
     {
       "direction": "input",
+      "pointer": "/$defs/EventAccessItemResponseSchema/properties/availableFrom/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/EventAccessItemResponseSchema/properties/availableTo/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/EventAccessItemResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/EventAccessItemResponseSchema/properties/endsAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/EventAccessItemResponseSchema/properties/startsAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/EventAccessItemResponseSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/EventAccessRowResponseSchema/properties/availableFrom/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/EventAccessRowResponseSchema/properties/availableTo/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/EventAccessRowResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/EventAccessRowResponseSchema/properties/endsAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/EventAccessRowResponseSchema/properties/startsAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/EventAccessRowResponseSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/EventPricingRowResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/EventPricingRowResponseSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/GroupedAccessItemSchema/properties/availableFrom/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/GroupedAccessItemSchema/properties/availableTo/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/GroupedAccessItemSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/GroupedAccessItemSchema/properties/endsAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/GroupedAccessItemSchema/properties/startsAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/GroupedAccessItemSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/LinkedSponsorshipsResponseSchema/items/properties/usage/properties/appliedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
       "pointer": "/$defs/ListEventAccessQuerySchema/properties/active",
       "reason": "preprocess"
     },
@@ -1021,6 +1293,126 @@
       "direction": "input",
       "pointer": "/$defs/NetworkingTableUpdateSchema",
       "reason": "opaque"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/PublicFormResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/PublicFormResponseSchema/properties/event/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/PublicFormResponseSchema/properties/event/properties/endDate",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/PublicFormResponseSchema/properties/event/properties/startDate",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/PublicFormResponseSchema/properties/event/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/PublicFormResponseSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/PublicPaymentConfigResponseSchema/properties/event/properties/endDate",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/PublicPaymentConfigResponseSchema/properties/event/properties/startDate",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/PublicRegistrationResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/PublicRegistrationResponseSchema/properties/event/properties/endDate",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/PublicRegistrationResponseSchema/properties/lastEditedAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/PublicRegistrationResponseSchema/properties/paidAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/PublicRegistrationResponseSchema/properties/submittedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/PublicRegistrationResponseSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/RegistrationAccessSelectionResponseSchema/properties/access/properties/endsAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/RegistrationAccessSelectionResponseSchema/properties/access/properties/startsAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/RegistrationDroppedAccessSelectionResponseSchema/properties/access/properties/endsAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/RegistrationDroppedAccessSelectionResponseSchema/properties/access/properties/startsAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/SponsorshipDetailResponseSchema/properties/batch/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/SponsorshipDetailResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/SponsorshipDetailResponseSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/SponsorshipDetailResponseSchema/properties/usages/items/properties/appliedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/SponsorshipListResponseSchema/properties/data/items/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "input",
+      "pointer": "/$defs/SponsorshipListResponseSchema/properties/data/items/properties/updatedAt",
+      "reason": "date"
     },
     {
       "direction": "input",
@@ -1066,6 +1458,41 @@
       "direction": "input",
       "pointer": "/$defs/UpdateNetworkingConfigSchema",
       "reason": "opaque"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/AdminRegistrationResponseSchema/properties/accessCheckIns/items/properties/checkedInAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/AdminRegistrationResponseSchema/properties/checkedInAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/AdminRegistrationResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/AdminRegistrationResponseSchema/properties/lastEditedAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/AdminRegistrationResponseSchema/properties/paidAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/AdminRegistrationResponseSchema/properties/submittedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/AdminRegistrationResponseSchema/properties/updatedAt",
+      "reason": "date"
     },
     {
       "direction": "output",
@@ -1144,8 +1571,113 @@
     },
     {
       "direction": "output",
+      "pointer": "/$defs/EventAccessItemResponseSchema/properties/availableFrom/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/EventAccessItemResponseSchema/properties/availableTo/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/EventAccessItemResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/EventAccessItemResponseSchema/properties/endsAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/EventAccessItemResponseSchema/properties/startsAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/EventAccessItemResponseSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/EventAccessRowResponseSchema/properties/availableFrom/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/EventAccessRowResponseSchema/properties/availableTo/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/EventAccessRowResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/EventAccessRowResponseSchema/properties/endsAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/EventAccessRowResponseSchema/properties/startsAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/EventAccessRowResponseSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/EventPricingRowResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/EventPricingRowResponseSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/GroupedAccessItemSchema/properties/availableFrom/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/GroupedAccessItemSchema/properties/availableTo/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/GroupedAccessItemSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/GroupedAccessItemSchema/properties/endsAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/GroupedAccessItemSchema/properties/startsAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/GroupedAccessItemSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
       "pointer": "/$defs/LinkSponsorshipByCodeSchema/properties/code",
       "reason": "transform"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/LinkedSponsorshipsResponseSchema/items/properties/usage/properties/appliedAt",
+      "reason": "date"
     },
     {
       "direction": "output",
@@ -1171,6 +1703,126 @@
       "direction": "output",
       "pointer": "/$defs/NetworkingTableUpdateSchema",
       "reason": "transform"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/PublicFormResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/PublicFormResponseSchema/properties/event/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/PublicFormResponseSchema/properties/event/properties/endDate",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/PublicFormResponseSchema/properties/event/properties/startDate",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/PublicFormResponseSchema/properties/event/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/PublicFormResponseSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/PublicPaymentConfigResponseSchema/properties/event/properties/endDate",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/PublicPaymentConfigResponseSchema/properties/event/properties/startDate",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/PublicRegistrationResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/PublicRegistrationResponseSchema/properties/event/properties/endDate",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/PublicRegistrationResponseSchema/properties/lastEditedAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/PublicRegistrationResponseSchema/properties/paidAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/PublicRegistrationResponseSchema/properties/submittedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/PublicRegistrationResponseSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/RegistrationAccessSelectionResponseSchema/properties/access/properties/endsAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/RegistrationAccessSelectionResponseSchema/properties/access/properties/startsAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/RegistrationDroppedAccessSelectionResponseSchema/properties/access/properties/endsAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/RegistrationDroppedAccessSelectionResponseSchema/properties/access/properties/startsAt/anyOf/0",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/SponsorshipDetailResponseSchema/properties/batch/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/SponsorshipDetailResponseSchema/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/SponsorshipDetailResponseSchema/properties/updatedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/SponsorshipDetailResponseSchema/properties/usages/items/properties/appliedAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/SponsorshipListResponseSchema/properties/data/items/properties/createdAt",
+      "reason": "date"
+    },
+    {
+      "direction": "output",
+      "pointer": "/$defs/SponsorshipListResponseSchema/properties/data/items/properties/updatedAt",
+      "reason": "date"
     },
     {
       "direction": "output",

@@ -140,8 +140,64 @@ listed under `unrepresentable` in `manifest.json`:
   input type is `unknown`.
 
 Query and path parameters travel as strings; `z.coerce` fields show the coerced
-type. The contracts don't yet say which schema belongs to which route or
-response (5.5 adds route output schemas).
+type.
+
+### Response contracts
+
+A route can declare the `data` payload it returns with
+`@ResponseContract(Schema)` (`apps/api/src/core/response-contract.ts`). The
+envelope interceptor then projects the handler's result onto the schema before
+wrapping it:
+
+- In every environment, object keys the schema does not declare are dropped at
+  every depth, so a column added to a table (or a field added to a service
+  result) is never returned by default. Declared keys keep their value and
+  order, so a response that already matches is byte-identical.
+- Outside production, the dropped key paths are logged (`warn`, "Response
+  contract stripped undeclared keys", key names only), and the projected payload
+  is validated against the schema: a mismatch fails the request with a 500
+  (`SRV_5001`) naming the paths, so drift shows up in dev and CI.
+- In production the payload is only projected (no log, no validation).
+- At compile time the handler's return type must satisfy the schema and must
+  not carry a key the schema would drop: adding a field to a covered result
+  fails typecheck at the decorator until the schema lists it. The decorator
+  refuses open objects, transforms and other shapes it can't project, at boot.
+- Routes without a contract are unchanged.
+
+The schemas live in `packages/contracts/src/*.responses.ts` (plus the access
+item schemas in `access.ts`), so they are in the generated artifacts: the
+output-side types are the response `data` shapes. Stored JSON documents
+(`formData`, `priceBreakdown`, form `schema`, pricing `rules`, access
+`conditions`, audit `changes`) are opaque (`unknown`) until the JSONB typing
+work. Covered routes:
+
+| Routes | Schema |
+|---|---|
+| `POST /api/public/forms/:formId/register` | `PublicRegistrationCreateResponseSchema` |
+| `GET` / `PATCH /api/public/registrations/:id` | `PublicRegistrationForEditResponseSchema` / `PublicRegistrationEditResponseSchema` |
+| `PATCH /api/public/registrations/:id/payment-method`, `POST …/payment-proof` | `PaymentMethodSelectedResponseSchema`, `PaymentProofUploadResponseSchema` |
+| `POST /api/public/forms/:formId/calculate-price` | `PriceBreakdownSchema` |
+| `GET /api/forms/public/:slug`, `GET /api/forms/public/:slug/sponsor` | `PublicFormResponseSchema`, `PublicSponsorFormResponseSchema` |
+| `GET /api/public/events/:id/payment-config` | `PublicPaymentConfigResponseSchema` |
+| `POST /api/public/events/:eventId/access/grouped`, `…/access/validate` | `GroupedAccessResponseSchema`, `AccessSelectionValidationResponseSchema` |
+| `GET /api/public/events/:eventId/access`, `…/access/:accessId` | `PublicEventAccessListResponseSchema`, `EventAccessItemResponseSchema` |
+| `POST /api/public/events/:eventId/sponsorships`, `POST …/slug/:slug/sponsorships` | `SponsorshipBatchCreatedResponseSchema` |
+| `GET /api/public/events/slug/:slug/registrants/search` | `PublicRegistrantSearchResponseSchema` |
+| Admin registration create, admin edit, detail, update, confirm payment | `AdminRegistrationResponseSchema` |
+| `GET /api/events/:eventId/registrations` | `AdminRegistrationListResponseSchema` |
+| `GET /api/events/:eventId/registrations/columns` | `RegistrationTableColumnsResponseSchema` |
+| `GET /api/events/:eventId/registrants/search` | `AdminRegistrantSearchResponseSchema` |
+| `GET /api/events/registrations/:id/audit-logs`, `…/email-logs` | `RegistrationAuditLogListResponseSchema`, `RegistrationEmailLogListResponseSchema` |
+| `GET /api/registrations/:id/edit-link` | `RegistrationEditLinkResponseSchema` |
+| `GET /api/events/:eventId/sponsorships` | `SponsorshipListResponseSchema` |
+| `GET` / `PATCH /api/sponsorships/:id` | `SponsorshipDetailResponseSchema` |
+| `DELETE /api/sponsorships/:id`, `DELETE /api/registrations/:id/sponsorships/:sponsorshipId` | `SponsorshipSuccessResponseSchema` |
+| `GET /api/registrations/:id/available-sponsorships`, `GET …/sponsorships` | `AvailableSponsorshipsResponseSchema`, `LinkedSponsorshipsResponseSchema` |
+| `POST /api/registrations/:id/sponsorships`, `POST …/sponsorships/by-code` | `SponsorshipLinkedResponseSchema` |
+
+Not covered yet: the networking routes, the public abstracts routes and the
+other admin modules. `apps/api/src/modules/response-contracts.routes.test.ts`
+checks that every enveloped route of the covered controllers has a contract.
 
 ## Environment
 
