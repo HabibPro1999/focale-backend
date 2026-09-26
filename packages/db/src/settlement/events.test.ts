@@ -3,10 +3,12 @@ import type { AppEvent } from "@app/contracts";
 
 const mocks = vi.hoisted(() => ({
   enqueueRealtimeOutboxEvent: vi.fn(),
-  syncNetworkingRegistration: vi.fn(),
+  enqueueNetworkingRegistrationSyncs: vi.fn(),
 }));
 vi.mock("../outbox", () => ({ enqueueRealtimeOutboxEvent: mocks.enqueueRealtimeOutboxEvent }));
-vi.mock("../queries/networking", () => ({ syncNetworkingRegistration: mocks.syncNetworkingRegistration }));
+vi.mock("../queries/networking-sync", () => ({
+  enqueueNetworkingRegistrationSyncs: mocks.enqueueNetworkingRegistrationSyncs,
+}));
 
 import { emitSettlementEvents, settlementEventPair } from "./events";
 
@@ -51,10 +53,10 @@ describe("emitSettlementEvents", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.syncNetworkingRegistration.mockResolvedValue(undefined);
+    mocks.enqueueNetworkingRegistrationSyncs.mockResolvedValue([]);
   });
 
-  it("re-projects the registration, then enqueues one event at a time, in order", async () => {
+  it("enqueues the registration's networking sync, then one event at a time, in order", async () => {
     const started: string[] = [];
     let release!: () => void;
     const firstDone = new Promise<void>((resolve) => (release = resolve));
@@ -71,10 +73,18 @@ describe("emitSettlementEvents", () => {
     release();
 
     expect(await pending).toEqual(["registration.paymentConfirmed", "eventAccess.countsChanged"]);
-    expect(mocks.syncNetworkingRegistration).toHaveBeenCalledWith("reg1", {});
-    expect(mocks.syncNetworkingRegistration.mock.invocationCallOrder[0]).toBeLessThan(
+    // Plan 4.8: the projection is an outbox row in the same transaction, never the sync itself.
+    expect(mocks.enqueueNetworkingRegistrationSyncs).toHaveBeenCalledWith({}, [{ registrationId: "reg1", eventId: "ev1" }]);
+    expect(mocks.enqueueNetworkingRegistrationSyncs.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.enqueueRealtimeOutboxEvent.mock.invocationCallOrder[0]!,
     );
+  });
+
+  it("enqueues no networking sync for events that are not a registration change", async () => {
+    const created: AppEvent = { type: "registration.created", clientId: "c1", eventId: "ev1", payload: { id: "reg1" }, ts: 0 };
+    mocks.enqueueRealtimeOutboxEvent.mockResolvedValue(true);
+    await emitSettlementEvents({} as never, [created, events[1]!]);
+    expect(mocks.enqueueNetworkingRegistrationSyncs).toHaveBeenCalledWith({}, []);
   });
 
   it("stops at the first failed insert", async () => {

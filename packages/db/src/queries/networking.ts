@@ -218,6 +218,11 @@ export async function syncNetworkingRegistration(
     await queueNetworkingActivation(inserted[0].id, registration.eventId, db);
   return { created: inserted.length, updated: 0 };
 }
+/**
+ * Every registration of the event, one after the other in this call (test
+ * fixtures and scripts). The API requests a chunked run in the worker instead:
+ * requestNetworkingEventSync (plan 4.8).
+ */
 export async function syncNetworkingEvent(eventId: string) {
   const rows = await getDb()
     .select({ id: registrations.id })

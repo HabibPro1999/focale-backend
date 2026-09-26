@@ -1,7 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { ErrorCodes } from "@app/contracts";
 import {
-  syncNetworkingRegistration,
+  enqueueNetworkingRegistrationCreatedSync,
   enqueueTriggeredEmailOutbox,
   casIncrementRegisteredTx,
   casDecrementRegisteredTx,
@@ -14,13 +14,29 @@ import { AppException } from "../../core/app-exception";
 
 /**
  * What a registration write does besides its own row, inside the caller's
- * transaction: the registration audit entry, the created email (with the
- * networking sync), the paid places of a status change and the event
- * registered counter.
+ * transaction: the registration audit entry, the created email, the networking
+ * projection of a new registration, the paid places of a status change and the
+ * event registered counter.
  */
 @Injectable()
 export class RegistrationSideEffects {
   constructor(private readonly access: AccessService) {}
+
+  /**
+   * The networking projection of a new registration: a
+   * `networking.registration.sync` outbox row (once per registration) that
+   * the worker runs after commit (plan 4.8). Changes to an existing
+   * registration enqueue theirs through emitSettlementEvents.
+   */
+  async queueNetworkingSync(
+    exec: DbExecutor,
+    registration: { id: string; eventId: string },
+  ): Promise<void> {
+    await enqueueNetworkingRegistrationCreatedSync(exec, {
+      registrationId: registration.id,
+      eventId: registration.eventId,
+    });
+  }
 
   async queueRegistrationCreatedEmail(
     exec: DbExecutor,
@@ -32,7 +48,6 @@ export class RegistrationSideEffects {
       lastName?: string | null;
     },
   ): Promise<boolean> {
-    await syncNetworkingRegistration(registration.id, exec);
     return enqueueTriggeredEmailOutbox(
       exec,
       {

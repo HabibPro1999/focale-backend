@@ -33,7 +33,8 @@ const db = vi.hoisted(() => ({
   enqueueTriggeredEmailOutbox: vi.fn(),
   getRegistrationByIdRow: vi.fn(),
   findAccessDetailsByIds: vi.fn(),
-  syncNetworkingRegistration: vi.fn(),
+  enqueueNetworkingRegistrationSyncs: vi.fn(),
+  enqueueNetworkingRegistrationCreatedSync: vi.fn(),
 }));
 vi.mock("@app/db", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -42,13 +43,15 @@ vi.mock("@app/db", async (importOriginal) => ({
 
 // emitSettlementEvents with @app/db's body, over the mocked primitives.
 db.emitSettlementEvents.mockImplementation(
-  async (tx: unknown, events: Array<{ type: string; payload: { id: unknown } }>) => {
-    const changed = new Set(
-      events
-        .filter((ev) => ev.type === "registration.updated" || ev.type === "registration.paymentConfirmed")
-        .map((ev) => String(ev.payload.id)),
+  async (tx: unknown, events: Array<{ type: string; eventId?: string; payload: { id: unknown } }>) => {
+    await db.enqueueNetworkingRegistrationSyncs(
+      tx,
+      events.flatMap((ev) =>
+        (ev.type === "registration.updated" || ev.type === "registration.paymentConfirmed") && ev.eventId
+          ? [{ registrationId: String(ev.payload.id), eventId: ev.eventId }]
+          : [],
+      ),
     );
-    for (const id of changed) await db.syncNetworkingRegistration(id, tx);
     const results: unknown[] = [];
     for (const ev of events) results.push(await db.enqueueRealtimeOutboxEvent(tx, ev));
     return results;

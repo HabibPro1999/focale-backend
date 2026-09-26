@@ -19,6 +19,7 @@ export * from "./tenant-scope";
 export * from "./stored-json";
 
 export * from "./networking";
+export * from "./networking-sync";
 
 export * from "./networking-store";
 export * from "./networking-notices";

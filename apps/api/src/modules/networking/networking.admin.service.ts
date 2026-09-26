@@ -33,7 +33,7 @@ import {
   networkingStore,
   networkingTransaction,
   revokeNetworkingSessions,
-  syncNetworkingEvent,
+  requestNetworkingEventSync,
   transitionNetworkingMeetings,
   type NetworkingRow,
 } from "@app/db";
@@ -196,10 +196,11 @@ export class NetworkingAdminService {
       ].some((key) => key in changes)
     )
       try {
-        await syncNetworkingEvent(eventId);
+        // The worker re-projects every registration in chunks (plan 4.8).
+        await requestNetworkingEventSync(eventId);
       } catch (error) {
-        // The config is committed; the organizer can rerun sync, so the saved revision is still returned.
-        log.error({ err: error, eventId }, "Networking registration sync failed after a config update");
+        // The config is committed; the organizer can request the sync again, so the saved revision is still returned.
+        log.error({ err: error, eventId }, "Networking registration sync request failed after a config update");
       }
     return config;
   }

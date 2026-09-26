@@ -87,6 +87,21 @@ describe("RegistrationCreateService", () => {
         paidAmount: 100,
       });
     });
+
+    // Plan 4.8: the networking projection no longer rides the created email,
+    // so a registration created without it is projected too.
+    it("enqueues the networking projection even when no created email is sent", async () => {
+      await service.createAdminRegistration(
+        "ev1",
+        { email: "quiet@example.com", firstName: "Q", lastName: "R", formData: {}, accessSelections: [], sendEmail: false } as never,
+        "admin1",
+      );
+      expect(db.enqueueTriggeredEmailOutbox).not.toHaveBeenCalled();
+      expect(db.enqueueNetworkingRegistrationCreatedSync).toHaveBeenCalledWith(expect.anything(), {
+        registrationId: "reg1",
+        eventId: "ev1",
+      });
+    });
   });
 
   // ---- createRegistration --------------------------------------------------
@@ -311,6 +326,12 @@ describe("RegistrationCreateService", () => {
         "registration.created",
       );
       expect(db.enqueueTriggeredEmailOutbox).toHaveBeenCalledTimes(1);
+      // Plan 4.8: an outbox row in the create transaction, never the sync itself.
+      expect(db.enqueueNetworkingRegistrationCreatedSync).toHaveBeenCalledTimes(1);
+      expect(db.enqueueNetworkingRegistrationCreatedSync).toHaveBeenCalledWith(expect.anything(), {
+        registrationId: "reg1",
+        eventId: "ev1",
+      });
     });
 
     it("reserves access + emits countsChanged with REAL accessIds", async () => {

@@ -3,6 +3,10 @@ import { createLogger, makeWorkerId } from "@app/shared";
 import {
   ACCESS_CAPACITY_REACHED_OUTBOX_TYPE,
   handleAccessCapacityReachedOutbox,
+  NETWORKING_EVENT_SYNC_OUTBOX_TYPE,
+  NETWORKING_REGISTRATION_SYNC_OUTBOX_TYPE,
+  handleNetworkingEventSyncOutbox,
+  handleNetworkingRegistrationSyncOutbox,
   processOutboxEvents,
   type OutboxHandlerRegistry,
   type OutboxHandlerResult,
@@ -72,6 +76,8 @@ export function buildOutboxHandlers(): OutboxHandlerRegistry {
     },
     "storage.delete": (payload) => handleStorageDeleteOutbox(payload),
     [ACCESS_CAPACITY_REACHED_OUTBOX_TYPE]: (payload, meta) => handleAccessCapacityReachedOutbox(payload, meta),
+    [NETWORKING_REGISTRATION_SYNC_OUTBOX_TYPE]: (payload, meta) => handleNetworkingRegistrationSyncOutbox(payload, meta),
+    [NETWORKING_EVENT_SYNC_OUTBOX_TYPE]: (payload, meta) => handleNetworkingEventSyncOutbox(payload, meta),
   };
 }
 
