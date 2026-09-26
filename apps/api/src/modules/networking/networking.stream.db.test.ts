@@ -2,7 +2,7 @@ import "reflect-metadata";
 import { EventEmitter } from "node:events";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { createNetworkingNotification, getDb } from "@app/db";
+import { createNetworkingNotification, getDb, networkingStore } from "@app/db";
 import { dbTestsEnabled } from "@app/db/testing";
 import { createNetworkingWriteFixture } from "../../../../../packages/db/tests/helpers/networking-write-fixture";
 import type { Config } from "../../core/config";
@@ -30,6 +30,19 @@ async function signalRow(notificationId: string) {
     [notificationId],
   );
   return rows as Array<{ payload: unknown; status: string }>;
+}
+
+/**
+ * Drops the event's networking.notify rows written so far. The fixture's
+ * automatic approval leaves one activation signal per participant; the pump
+ * would relay those first, and a stream woken by one already reads any newer
+ * row of its participant (correct, but it would no longer prove which signal
+ * delivered what).
+ */
+async function dropSignals(eventId: string) {
+  await getDb().$client.query("DELETE FROM outbox_events WHERE type = 'networking.notify' AND event_id = $1", [
+    eventId,
+  ]);
 }
 
 function fakeReply() {
@@ -79,14 +92,33 @@ describe.runIf(dbTestsEnabled())("participant stream through the realtime pump",
         headers: { authorization: `Bearer ${fixture.participants[index]!.token}` },
         ip: "127.0.0.1",
       }) as unknown as FastifyRequest;
+    // The row written below must be the only signal these streams can get.
+    await dropSignals(fixture.event.id);
+    // One notice per participant inserted without a signal (no outbox row):
+    // each stream's first catch-up sends it, which shows that catch-up is over,
+    // so from then on only a signal can deliver a new row before the resync.
+    const store = networkingStore();
+    const baseline: string[] = [];
+    for (const participant of fixture.participants.slice(0, 2)) {
+      const notice = await store.insert("notifications", {
+        eventId: fixture.event.id,
+        profileId: participant.profile.id,
+        type: "MESSAGE",
+        title: "Earlier message",
+        body: "Sent before the stream opened.",
+      });
+      baseline.push(notice.id);
+    }
     const mine = fakeReply();
     const other = fakeReply();
     await streams.open(fixture.event.slug, request(0), mine.reply);
     await streams.open(fixture.event.slug, request(1), other.reply);
     try {
       expect(mine.writes[0]).toMatch(/^id: \d+\nevent: ready\n/);
-      // Let each stream's first catch-up finish, so only a signal can deliver what follows.
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      await vi.waitFor(() => {
+        expect(mine.sentIds()).toContain(baseline[0]);
+        expect(other.sentIds()).toContain(baseline[1]);
+      }, { timeout: 15_000, interval: 50 });
       const publish = vi.spyOn(networkingNotificationHub, "publish");
 
       const row = await createNetworkingNotification({
@@ -109,11 +141,10 @@ describe.runIf(dbTestsEnabled())("participant stream through the realtime pump",
       pump.onApplicationBootstrap();
       await vi.waitFor(() => expect(mine.sentIds()).toContain(row.id), { timeout: 15_000, interval: 50 });
       expect(Date.now() - startedAt).toBeLessThan(NETWORKING_STREAM.resyncMs);
-      expect(publish).toHaveBeenCalledWith({
-        eventId: fixture.event.id,
-        profileId: fixture.participants[0]!.profile.id,
-        notificationId: row.id,
-      });
+      // The only notice the pump relayed is this row's: it is what woke the stream.
+      expect(publish.mock.calls).toEqual([
+        [{ eventId: fixture.event.id, profileId: fixture.participants[0]!.profile.id, notificationId: row.id }],
+      ]);
       expect(other.sentIds()).not.toContain(row.id);
       await vi.waitFor(async () => {
         const [processed] = await signalRow(row.id);
