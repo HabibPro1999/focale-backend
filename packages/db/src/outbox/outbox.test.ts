@@ -198,9 +198,97 @@ function routeExecute(
   };
 }
 
+/**
+ * Stateful fake outbox for the drain tests: `n` due rows. A claim leases the
+ * next `limit` of them (the claim's last parameter) and records the batch
+ * size; every other statement answers for the row ids it names.
+ */
+function backlog(n: number) {
+  const due = Array.from({ length: n }, (_, i) => `row-${i}`);
+  const claims: number[] = [];
+  const execute = async (q: SQL) => {
+    const s = render(q);
+    const params = paramsOf(q);
+    if (s.includes("FOR UPDATE SKIP LOCKED")) {
+      const ids = due.splice(0, Number(params.at(-1)));
+      claims.push(ids.length);
+      return { rowCount: ids.length, rows: ids.map((id) => ({ id })) };
+    }
+    const named = params.filter((p): p is string => typeof p === "string" && p.startsWith("row-"));
+    if (s.includes("SELECT")) {
+      const rows = named.map((id) => ({ id, type: "email.triggered", payload: {}, attemptCount: 1, maxAttempts: 5 }));
+      return { rowCount: rows.length, rows };
+    }
+    return { rowCount: named.length, rows: named.map((id) => ({ id })) };
+  };
+  return { due, claims, execute };
+}
+
 describe("processOutboxEvents", () => {
   beforeEach(() => {
     dbMock.execute.mockReset();
+  });
+
+  it("claims one batch without drainUntil", async () => {
+    const fake = backlog(50);
+    dbMock.execute.mockImplementation(fake.execute);
+    const handler = vi.fn().mockResolvedValue("processed");
+
+    const result = await processOutboxEvents(20, {
+      workerId: "worker-1",
+      scope: "background",
+      handlers: { "email.triggered": handler },
+    });
+
+    expect(fake.claims).toEqual([20]);
+    expect(result).toEqual({ processed: 20, skipped: 0, failed: 0, leaseLost: 0, released: 0 });
+    expect(fake.due).toHaveLength(30);
+  });
+
+  it("drains a backlog larger than one batch in one call, until a batch comes back short", async () => {
+    const fake = backlog(50);
+    dbMock.execute.mockImplementation(fake.execute);
+    const handler = vi.fn().mockResolvedValue("processed");
+
+    const result = await processOutboxEvents(20, {
+      workerId: "worker-1",
+      scope: "background",
+      handlers: { "email.triggered": handler },
+      drainUntil: Date.now() + 60_000,
+    });
+
+    expect(fake.claims).toEqual([20, 20, 10]);
+    expect(handler).toHaveBeenCalledTimes(50);
+    expect(result).toEqual({ processed: 50, skipped: 0, failed: 0, leaseLost: 0, released: 0 });
+    expect(fake.due).toHaveLength(0);
+  });
+
+  it("stops claiming once drainUntil passes; the batch in flight still finishes", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const fake = backlog(100);
+      dbMock.execute.mockImplementation(fake.execute);
+      const start = Date.now();
+      // Each row takes 1 s of clock: the drain window ends inside the second batch.
+      const handler = vi.fn(async () => {
+        vi.setSystemTime(Date.now() + 1_000);
+        return "processed" as const;
+      });
+
+      const result = await processOutboxEvents(20, {
+        workerId: "worker-1",
+        scope: "background",
+        handlers: { "email.triggered": handler },
+        drainUntil: start + 30_000,
+      });
+
+      expect(fake.claims).toEqual([20, 20]);
+      expect(result).toEqual({ processed: 40, skipped: 0, failed: 0, leaseLost: 0, released: 0 });
+      // The rest was never claimed, so no attempt was charged; the next run takes it.
+      expect(fake.due).toHaveLength(60);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("marks processed, skipped, and failed rows and tallies each", async () => {

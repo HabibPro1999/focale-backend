@@ -25,8 +25,15 @@ import type { Job, JobContext } from "../job";
 
 const log = createLogger({ name: "worker:outbox" });
 
-/** Rows claimed per run: small enough that one run fits its 60 s budget. */
+/** Rows claimed per batch; a run keeps claiming batches (see drainUntil). */
 export const OUTBOX_BATCH_SIZE = 20;
+/**
+ * Budget kept after the drain window for the batch in flight: half the run.
+ * A batch of 20 sequential handlers (email queueing, storage deletes,
+ * networking syncs) normally takes about a second; if one still overruns,
+ * the timeout signal releases its unstarted rows without an attempt penalty.
+ */
+export const OUTBOX_DRAIN_MARGIN_MS = 30_000;
 
 interface SponsorshipEmailOutboxPayload {
   trigger: string;
@@ -90,12 +97,17 @@ export class OutboxJob implements Job {
   private readonly workerId = makeWorkerId("outbox");
   private readonly handlers = buildOutboxHandlers();
 
-  async run({ signal }: JobContext): Promise<void> {
+  async run({ signal, deadline }: JobContext): Promise<void> {
+    // Drain: claim batches of 20 until the queue is empty or the drain window
+    // (the run's budget minus the margin) ends; the next run starts 5 s later.
+    // Only background rows: the api's realtime pump drains the realtime ones
+    // on its own budget.
     const result = await processOutboxEvents(OUTBOX_BATCH_SIZE, {
       workerId: this.workerId,
       scope: "background",
       handlers: this.handlers,
       signal,
+      drainUntil: deadline - OUTBOX_DRAIN_MARGIN_MS,
     });
     if (
       result.processed > 0 ||

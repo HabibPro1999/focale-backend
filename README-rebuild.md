@@ -370,6 +370,11 @@ anything is uploaded or written. Requesting a book while the event's job is
 `RUNNING` with an expired lease recovers that job first (requeued, or `FAILED`
 once its 3 attempts are used up, which lets a new job start).
 
+Outbox (background rows; the API pump drains the realtime ones, see below):
+every 5 s a run claims batches of 20, handled one at a time, and keeps
+claiming until the queue is empty or its drain window ends (the 60 s budget
+minus 30 s for the batch in flight). Lease 5 min.
+
 Email queue: every 5 s a run claims batches of 20 (10 sends at a time) and
 keeps claiming until the queue is empty or its drain window ends (the 120 s
 budget minus 45 s for the batch in flight). Lease 10 min; ownership is
