@@ -44,6 +44,12 @@ Per-package: `pnpm --filter @app/api <script>` (`dev`, `start`, `build`,
 # Re-enqueue abstract emails that were SKIPPED. Dry-run by default; --apply enqueues.
 pnpm --filter @app/worker requeue-skipped-abstract-emails \
   [--apply] [--event-id <id>] [--abstract-id <id>] [--trigger <trigger>] [--limit <n>]
+
+# Store the certificate render image (flattened JPEG, <= 3508 px) of templates
+# uploaded before migration 0032; without one the worker embeds the original.
+# Dry-run by default; --apply stores them (fresh keys, guarded row update).
+pnpm --filter @app/worker backfill-certificate-renders \
+  [--apply] [--event <id>] [--template <id>]... [--limit <n>]
 ```
 
 `src/scripts/setup-tshg-abstracts.ts` (legacy) is a **one-time data-seeding

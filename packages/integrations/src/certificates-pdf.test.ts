@@ -33,6 +33,7 @@ import {
   isAbstractEligibleForCertificate,
   resolveCertificateVariable,
 } from "./certificates-pdf";
+import { certificateImageCache } from "./certificate-image-cache";
 import type {
   AbstractForCertificate,
   CertificateTemplateData,
@@ -80,6 +81,7 @@ const template = (
   templateUrl: "https://storage.example.com/certificate.png",
   templateWidth: 1000,
   templateHeight: 700,
+  renderImageKey: null,
   zones: [zone()],
   applicableRoles: [],
   accessId: null,
@@ -113,6 +115,8 @@ const abstract = (
 describe("certificate PDF generation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The image cache is process-wide (3.8): start each test cold.
+    certificateImageCache.clear();
     mockDownload.mockResolvedValue({
       buffer: pngOneByOne,
       contentType: "image/png",
@@ -124,8 +128,7 @@ describe("certificate PDF generation", () => {
       template({
         zones: [zone({ color: "rgb(32, 64, 96)", fontSize: 42 })],
       }),
-      { fullName: "ليلى Müller" },
-      new Map(),
+      { fullName: "ليلى Müller" }
     );
 
     expect(pdf.subarray(0, 4).toString()).toBe("%PDF");
@@ -152,8 +155,7 @@ describe("certificate PDF generation", () => {
   it("uses stable fallback and unique filename segments", async () => {
     const attachments = await generateCertificateAttachments(
       registration,
-      [template({ name: "!!!" })],
-      new Map(),
+      [template({ name: "!!!" })]
     );
 
     expect(attachments).toHaveLength(1);
@@ -167,7 +169,7 @@ describe("certificate PDF generation", () => {
     });
 
     await expect(
-      generateCertificateAttachments(registration, [template()], new Map()),
+      generateCertificateAttachments(registration, [template()]),
     ).rejects.toThrow("Unsupported image format");
   });
 });
@@ -201,6 +203,8 @@ describe("resolveCertificateVariable (H2 abstract variables)", () => {
 describe("generateAbstractCertificateAttachments (H2)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The image cache is process-wide (3.8): start each test cold.
+    certificateImageCache.clear();
     mockDownload.mockResolvedValue({
       buffer: pngOneByOne,
       contentType: "image/png",
@@ -210,8 +214,7 @@ describe("generateAbstractCertificateAttachments (H2)", () => {
   it("renders presenter certificates from the abstract's own fields", async () => {
     const attachments = await generateAbstractCertificateAttachments(
       abstract(),
-      [template({ zones: [zone({ variable: "abstractTitle" })] })],
-      new Map(),
+      [template({ zones: [zone({ variable: "abstractTitle" })] })]
     );
 
     expect(attachments).toHaveLength(1);
@@ -224,8 +227,7 @@ describe("generateAbstractCertificateAttachments (H2)", () => {
     // such filter, so this must still render.
     const attachments = await generateAbstractCertificateAttachments(
       abstract(),
-      [template({ applicableRoles: ["SPEAKER"], accessId: "acc-1" })],
-      new Map(),
+      [template({ applicableRoles: ["SPEAKER"], accessId: "acc-1" })]
     );
 
     expect(attachments).toHaveLength(1);
@@ -234,8 +236,7 @@ describe("generateAbstractCertificateAttachments (H2)", () => {
   it("uses the abstract's own title/code/finalType untitled fallback when content has no title", async () => {
     const attachments = await generateAbstractCertificateAttachments(
       abstract({ content: {}, code: null, finalType: null }),
-      [template({ zones: [zone({ variable: "abstractTitle" })] })],
-      new Map(),
+      [template({ zones: [zone({ variable: "abstractTitle" })] })]
     );
 
     expect(attachments).toHaveLength(1);
@@ -245,8 +246,7 @@ describe("generateAbstractCertificateAttachments (H2)", () => {
   it("excludes a REGISTRATION-scoped template from an abstract send", async () => {
     const attachments = await generateAbstractCertificateAttachments(
       abstract(),
-      [template({ scope: "REGISTRATION" })],
-      new Map(),
+      [template({ scope: "REGISTRATION" })]
     );
     expect(attachments).toHaveLength(0);
   });
@@ -257,8 +257,7 @@ describe("generateAbstractCertificateAttachments (H2)", () => {
       [
         template({ id: "t-abstract", scope: "ABSTRACT" }),
         template({ id: "t-both", scope: "BOTH" }),
-      ],
-      new Map(),
+      ]
     );
     expect(attachments).toHaveLength(2);
   });
@@ -266,8 +265,7 @@ describe("generateAbstractCertificateAttachments (H2)", () => {
   it("excludes a template whose allowedAbstractFinalTypes does not include the abstract's finalType", async () => {
     const attachments = await generateAbstractCertificateAttachments(
       abstract({ finalType: "POSTER" }),
-      [template({ scope: "ABSTRACT", allowedAbstractFinalTypes: ["ORAL_COMMUNICATION"] })],
-      new Map(),
+      [template({ scope: "ABSTRACT", allowedAbstractFinalTypes: ["ORAL_COMMUNICATION"] })]
     );
     expect(attachments).toHaveLength(0);
   });
@@ -275,8 +273,7 @@ describe("generateAbstractCertificateAttachments (H2)", () => {
   it("includes a template whose allowedAbstractFinalTypes includes the abstract's finalType", async () => {
     const attachments = await generateAbstractCertificateAttachments(
       abstract({ finalType: "POSTER" }),
-      [template({ scope: "ABSTRACT", allowedAbstractFinalTypes: ["POSTER"] })],
-      new Map(),
+      [template({ scope: "ABSTRACT", allowedAbstractFinalTypes: ["POSTER"] })]
     );
     expect(attachments).toHaveLength(1);
   });
@@ -284,8 +281,7 @@ describe("generateAbstractCertificateAttachments (H2)", () => {
   it("empty allowedAbstractFinalTypes = no restriction", async () => {
     const attachments = await generateAbstractCertificateAttachments(
       abstract({ finalType: "POSTER" }),
-      [template({ scope: "ABSTRACT", allowedAbstractFinalTypes: [] })],
-      new Map(),
+      [template({ scope: "ABSTRACT", allowedAbstractFinalTypes: [] })]
     );
     expect(attachments).toHaveLength(1);
   });
@@ -416,6 +412,8 @@ describe("isEligibleForCertificate", () => {
 describe("generateCertificateEmailAttachments (worker seam)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The image cache is process-wide (3.8): start each test cold.
+    certificateImageCache.clear();
     mockDownload.mockResolvedValue({
       buffer: pngOneByOne,
       contentType: "image/png",
@@ -446,7 +444,6 @@ describe("generateCertificateEmailAttachments (worker seam)", () => {
       generateCertificateEmailAttachments({
         registrationId: "registration-123456",
         certificateTemplateIds: ["template-123456", "template-999999"],
-        imageCache: new Map(),
       }),
     ).rejects.toThrow("no longer active");
   });
@@ -473,7 +470,6 @@ describe("generateCertificateEmailAttachments (worker seam)", () => {
     const attachments = await generateCertificateEmailAttachments({
       registrationId: "registration-123456",
       certificateTemplateIds: ["template-123456"],
-      imageCache: new Map(),
     });
 
     expect(attachments).toHaveLength(1);
@@ -487,7 +483,6 @@ describe("generateCertificateEmailAttachments (worker seam)", () => {
       generateCertificateEmailAttachments({
         registrationId: "gone",
         certificateTemplateIds: ["template-123456"],
-        imageCache: new Map(),
       }),
     ).rejects.toThrow("Registration not found");
   });
@@ -496,7 +491,6 @@ describe("generateCertificateEmailAttachments (worker seam)", () => {
     await expect(
       generateCertificateEmailAttachments({
         certificateTemplateIds: ["template-123456"],
-        imageCache: new Map(),
       }),
     ).rejects.toThrow(
       "Certificate attachment context has neither registrationId nor abstractId",
@@ -530,7 +524,6 @@ describe("generateCertificateEmailAttachments (worker seam)", () => {
       const attachments = await generateCertificateEmailAttachments({
         abstractId: "abstract-123456",
         certificateTemplateIds: ["template-123456"],
-        imageCache: new Map(),
       });
 
       expect(attachments).toHaveLength(1);
@@ -549,7 +542,6 @@ describe("generateCertificateEmailAttachments (worker seam)", () => {
         generateCertificateEmailAttachments({
           abstractId: "gone",
           certificateTemplateIds: ["template-123456"],
-          imageCache: new Map(),
         }),
       ).rejects.toThrow("Abstract not found");
     });
@@ -579,7 +571,6 @@ describe("generateCertificateEmailAttachments (worker seam)", () => {
         generateCertificateEmailAttachments({
           abstractId: "abstract-123456",
           certificateTemplateIds: ["template-123456", "template-999999"],
-          imageCache: new Map(),
         }),
       ).rejects.toThrow("no longer active");
     });

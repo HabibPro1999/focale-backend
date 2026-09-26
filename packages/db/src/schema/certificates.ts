@@ -23,6 +23,12 @@ export const certificateTemplates = pgTable(
     templateUrl: text().notNull(),
     templateWidth: integer().notNull(),
     templateHeight: integer().notNull(),
+    // 3.8 (migration 0032): storage key and pixel size of the flattened JPEG
+    // the renderer embeds. NULL until the image is uploaded (or backfilled);
+    // the renderer then falls back to templateUrl.
+    renderImageKey: text(),
+    renderImageWidth: integer(),
+    renderImageHeight: integer(),
     zones: jsonb().notNull().default([]),
     // Live column is nullable RegistrationRole[] with a default (no NOT NULL).
     applicableRoles: registrationRole().array().default([]),

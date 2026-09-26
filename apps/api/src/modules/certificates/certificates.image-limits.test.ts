@@ -9,7 +9,11 @@ vi.mock("@app/db", () => ({
   getCertificateTemplateForUpload: vi.fn(),
   updateCertificateTemplateImage: vi.fn(),
 }));
-const storage = vi.hoisted(() => ({ uploadPublic: vi.fn(), delete: vi.fn() }));
+const storage = vi.hoisted(() => ({
+  uploadPublic: vi.fn(),
+  uploadPrivate: vi.fn(),
+  delete: vi.fn(),
+}));
 vi.mock("@app/integrations", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getStorageProvider: () => storage,
@@ -50,11 +54,13 @@ beforeEach(() => {
     id: "tpl-1",
     eventId: "evt-1",
     templateUrl: "",
+    renderImageKey: null,
   });
   vi.mocked(updateCertificateTemplateImage).mockImplementation(
     async (_id, data) => ({ id: "tpl-1", ...data }) as never,
   );
   storage.uploadPublic.mockResolvedValue("https://cdn.example/evt-1/certificates/tpl-1.png");
+  storage.uploadPrivate.mockImplementation(async (_buffer: Buffer, key: string) => key);
 });
 
 describe("certificate template image decode limits", () => {
@@ -86,7 +92,31 @@ describe("certificate template image decode limits", () => {
     expect(storage.uploadPublic.mock.calls[0][0]).toBe(png);
     expect(updateCertificateTemplateImage).toHaveBeenCalledWith(
       "tpl-1",
-      expect.objectContaining({ templateWidth: 30, templateHeight: 20 }),
+      expect.objectContaining({
+        templateWidth: 30,
+        templateHeight: 20,
+        renderImageWidth: 30,
+        renderImageHeight: 20,
+      }),
     );
+    // 3.8: the render image is a JPEG of the same size (small images are
+    // never scaled up), stored beside the original.
+    const [renderBuffer, renderKey, contentType] = storage.uploadPrivate.mock.calls[0];
+    expect(renderKey).toMatch(/^evt-1\/certificates\/tpl-1-[0-9a-f-]{36}-render\.jpg$/);
+    expect(contentType).toBe("image/jpeg");
+    const meta = await sharp(renderBuffer as Buffer).metadata();
+    expect([meta.format, meta.width, meta.height]).toEqual(["jpeg", 30, 20]);
+  });
+
+  it("refuses a PNG whose header is valid but whose pixels cannot be decoded (3.8), nothing stored", async () => {
+    // The header-only metadata read accepts it; the render derivation decodes
+    // the pixels and fails, so the upload is refused instead of every
+    // certificate failing later.
+    await expect(
+      service.uploadTemplateImage("tpl-1", file(craftedPng(64, 64))),
+    ).rejects.toMatchObject({ statusCode: 400, code: ErrorCodes.VALIDATION_ERROR });
+    expect(storage.uploadPublic).not.toHaveBeenCalled();
+    expect(storage.uploadPrivate).not.toHaveBeenCalled();
+    expect(updateCertificateTemplateImage).not.toHaveBeenCalled();
   });
 });

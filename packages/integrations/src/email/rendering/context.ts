@@ -10,6 +10,8 @@ import {
   getEventPricingForEmail,
   getEventAccessByIdsForEmail,
   getSponsorshipByCodeForEmail,
+  type EventAccessEmailInfo,
+  type EventPricingEmailInfo,
   type RegistrationEmailContext,
 } from "@app/db";
 import type { EmailContext } from "./types";
@@ -126,12 +128,68 @@ export function buildEmailContext(
 // BUILD EMAIL CONTEXT WITH ACCESS (async, DB reads)
 // =============================================================================
 
+/**
+ * Event-level reads of buildEmailContextWithAccess, loaded once for many
+ * registrations of one event (3.8: a certificate send builds one context per
+ * recipient).
+ */
+export interface EmailContextLookups {
+  eventId: string;
+  pricing: EventPricingEmailInfo | null;
+  /** Access items by id. An id missing here is read from the DB. */
+  accessById: ReadonlyMap<string, EventAccessEmailInfo>;
+}
+
+/** Pricing of `eventId` and the access items `accessIds`, in two reads. */
+export async function loadEmailContextLookups(
+  eventId: string,
+  accessIds: Iterable<string>,
+): Promise<EmailContextLookups> {
+  const [pricing, access] = await Promise.all([
+    getEventPricingForEmail(eventId),
+    getEventAccessByIdsForEmail([...new Set(accessIds)]),
+  ]);
+  return { eventId, pricing, accessById: new Map(access.map((a) => [a.id, a])) };
+}
+
+/**
+ * Access rows for `ids`: from `lookups` (in `ids` order, once each; ids it
+ * lacks are read), or one read (DB order) without lookups.
+ */
+async function readAccessForEmail(
+  ids: string[],
+  lookups: EmailContextLookups | undefined,
+): Promise<EventAccessEmailInfo[]> {
+  if (!lookups) return getEventAccessByIdsForEmail(ids);
+  const unique = [...new Set(ids)];
+  const missing = unique.filter((id) => !lookups.accessById.has(id));
+  const read = new Map(
+    (missing.length > 0 ? await getEventAccessByIdsForEmail(missing) : []).map(
+      (a) => [a.id, a],
+    ),
+  );
+  return unique.flatMap((id) => {
+    const access = lookups.accessById.get(id) ?? read.get(id);
+    return access ? [access] : [];
+  });
+}
+
+/**
+ * Full email context: buildEmailContext plus bank details, access names and
+ * sponsorship details. `lookups` (for the registration's event) replaces the
+ * per-call pricing and access reads; lookups for another event are ignored.
+ */
 export async function buildEmailContextWithAccess(
   registration: RegistrationEmailContext,
+  lookups?: EmailContextLookups,
 ): Promise<EmailContext> {
   const context = buildEmailContext(registration);
+  const eventLookups =
+    lookups?.eventId === registration.eventId ? lookups : undefined;
 
-  const pricing = await getEventPricingForEmail(registration.eventId);
+  const pricing = eventLookups
+    ? eventLookups.pricing
+    : await getEventPricingForEmail(registration.eventId);
 
   if (pricing) {
     context.bankName = pricing.bankName || "";
@@ -141,7 +199,7 @@ export async function buildEmailContextWithAccess(
 
   const accessTypeIds = registration.accessTypeIds ?? [];
   if (accessTypeIds.length > 0) {
-    const accessTypes = await getEventAccessByIdsForEmail(accessTypeIds);
+    const accessTypes = await readAccessForEmail(accessTypeIds, eventLookups);
 
     const accessMap = new Map(accessTypes.map((a) => [a.id, a]));
     const selectedNames = accessTypeIds
@@ -187,7 +245,7 @@ export async function buildEmailContextWithAccess(
 
       const coveredIds = sponsorship.coveredAccessIds ?? [];
       if (coveredIds.length > 0) {
-        const coveredAccess = await getEventAccessByIdsForEmail(coveredIds);
+        const coveredAccess = await readAccessForEmail(coveredIds, eventLookups);
         for (const access of coveredAccess) {
           sponsoredItems.push(
             `<b>${sanitizeForHtml(access.name)} :</b> ${sanitizeForHtml(formatCurrency(access.price, registration.currency))}`,
