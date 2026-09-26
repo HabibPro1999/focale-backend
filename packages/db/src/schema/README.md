@@ -41,6 +41,16 @@ explicitly.
   UTC (`getUTC*`, e.g. the reference-number year in `allocateReferenceNumber`),
   never the process time zone. The naive legacy columns below keep their type;
   do not copy it into new tables or columns.
+  Batch 3 of the remediation (migrations 0021–0033) mostly followed this:
+  0022 (`networking_allocation_locks`), 0023 (`worker_heartbeats`) and 0025
+  (`purge_started_at`, `purged_at`, `erased_at`) are `TIMESTAMPTZ(3)`. One
+  exception: 0029 added `email_logs.provider_attempted_at` as naive
+  `timestamp(3)`, like the rest of `email_logs`. It is only tested for
+  `IS NULL` and written from the database clock or `new Date()`, so its type has
+  no effect today; leave it as it is unless the table's timestamps move
+  together. Comparisons between naive and `timestamptz` values go through the
+  session time zone, which the migrator and the application pool pin to UTC (the
+  boot check asserts it).
 - **Timestamps (legacy)**: `timestamp({ precision: 3 })` — naive `TIMESTAMP(3)`, NO timezone,
   matching the live DB. `createdAt`/`updatedAt` via the `timestamps` helper
   (`updatedAt` is app-managed via `$defaultFn` on insert + `$onUpdate`, with NO DB

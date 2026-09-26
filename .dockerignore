@@ -20,6 +20,7 @@ backups
 docs
 .progress
 .codex
+artifacts
 .memory
 .claude
 _schema_full.sql
