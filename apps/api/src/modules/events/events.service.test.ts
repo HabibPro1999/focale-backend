@@ -3,11 +3,11 @@ import { HttpException } from "@nestjs/common";
 import { ErrorCodes } from "@app/contracts";
 
 // --- Mock the db query layer (the seam the service talks to) ----------------
-vi.mock("@app/db", () => ({
+vi.mock("@app/db", async (importOriginal) => ({
+  // Real SQLSTATE reader (pure): walks the error's cause chain.
+  pgErrorCode: (await importOriginal<typeof import("@app/db")>()).pgErrorCode,
   getDb: vi.fn(),
   withSerializableTxn: vi.fn(),
-  casDecrementRegisteredTx: vi.fn(),
-  casIncrementRegisteredTx: vi.fn(),
   clientExistsById: vi.fn(),
   countRegistrationsTx: vi.fn(),
   deleteEmailTemplatesByEventTx: vi.fn(),
@@ -16,7 +16,6 @@ vi.mock("@app/db", () => ({
   getAbstractBookStorageKeysTx: vi.fn(),
   getAbstractFinalFileKeysTx: vi.fn(),
   getCertificateTemplateUrlsTx: vi.fn(),
-  getEventCounterInfoTx: vi.fn(),
   getEventIdBySlugTx: vi.fn(),
   getEventWithPricing: vi.fn(),
   getEventWithPricingBySlug: vi.fn(),
@@ -635,6 +634,36 @@ describe("EventsService", () => {
       );
     });
 
+    it("409 when a registration inserted after the count trips the foreign key (wrapped pg error)", async () => {
+      vi.mocked(db.getEventWithRegistrationCountTx).mockResolvedValue({
+        event: createMockEvent() as never,
+        registrations: 0,
+      });
+      // Drizzle wraps the driver error: the SQLSTATE is on `cause`, not on the error itself.
+      vi.mocked(db.deleteEventTx).mockRejectedValueOnce(
+        Object.assign(new Error("Failed query"), { cause: { code: "23503" } }),
+      );
+      vi.mocked(db.countRegistrationsTx).mockResolvedValue(2);
+      await expectAppError(
+        service.deleteEvent(eventId),
+        409,
+        ErrorCodes.EVENT_HAS_REGISTRATIONS,
+        "Cannot delete event with 2 registration(s). Archive the event instead.",
+      );
+      expect(storageDeleteMock).not.toHaveBeenCalled();
+    });
+
+    it("rethrows other database errors unchanged", async () => {
+      vi.mocked(db.getEventWithRegistrationCountTx).mockResolvedValue({
+        event: createMockEvent() as never,
+        registrations: 0,
+      });
+      const failure = Object.assign(new Error("Failed query"), { cause: { code: "57014" } });
+      vi.mocked(db.deleteEventTx).mockRejectedValueOnce(failure);
+      await expect(service.deleteEvent(eventId)).rejects.toBe(failure);
+      expect(db.countRegistrationsTx).not.toHaveBeenCalled();
+    });
+
     it("409 message keeps literal registration(s) for 1", async () => {
       vi.mocked(db.getEventWithRegistrationCountTx).mockResolvedValue({
         event: createMockEvent() as never,
@@ -645,66 +674,6 @@ describe("EventsService", () => {
         409,
         ErrorCodes.EVENT_HAS_REGISTRATIONS,
         "Cannot delete event with 1 registration(s). Archive the event instead.",
-      );
-    });
-  });
-
-  describe("incrementRegisteredCountTx", () => {
-    const exec = {} as never;
-    it("succeeds silently when the CAS updates a row", async () => {
-      vi.mocked(db.casIncrementRegisteredTx).mockResolvedValue(true);
-      await service.incrementRegisteredCountTx(exec, eventId);
-      expect(db.getEventCounterInfoTx).not.toHaveBeenCalled();
-    });
-    it("404 when event missing", async () => {
-      vi.mocked(db.casIncrementRegisteredTx).mockResolvedValue(false);
-      vi.mocked(db.getEventCounterInfoTx).mockResolvedValue(null);
-      await expectAppError(service.incrementRegisteredCountTx(exec, eventId), 404, ErrorCodes.NOT_FOUND);
-    });
-    it("400 EVENT_NOT_OPEN for non-open events", async () => {
-      vi.mocked(db.casIncrementRegisteredTx).mockResolvedValue(false);
-      vi.mocked(db.getEventCounterInfoTx).mockResolvedValue({
-        status: "CLOSED",
-        maxCapacity: null,
-        registeredCount: 0,
-      });
-      await expectAppError(service.incrementRegisteredCountTx(exec, eventId), 400, ErrorCodes.EVENT_NOT_OPEN);
-    });
-    it("409 EVENT_FULL for open capacity misses", async () => {
-      vi.mocked(db.casIncrementRegisteredTx).mockResolvedValue(false);
-      vi.mocked(db.getEventCounterInfoTx).mockResolvedValue({
-        status: "OPEN",
-        maxCapacity: 10,
-        registeredCount: 10,
-      });
-      await expectAppError(service.incrementRegisteredCountTx(exec, eventId), 409, ErrorCodes.EVENT_FULL);
-    });
-  });
-
-  describe("decrementRegisteredCountTx", () => {
-    const exec = {} as never;
-    it("succeeds silently when the CAS updates a row", async () => {
-      vi.mocked(db.casDecrementRegisteredTx).mockResolvedValue(true);
-      await service.decrementRegisteredCountTx(exec, eventId);
-      expect(db.getEventCounterInfoTx).not.toHaveBeenCalled();
-    });
-    it("404 when event missing", async () => {
-      vi.mocked(db.casDecrementRegisteredTx).mockResolvedValue(false);
-      vi.mocked(db.getEventCounterInfoTx).mockResolvedValue(null);
-      await expectAppError(service.decrementRegisteredCountTx(exec, eventId), 404, ErrorCodes.NOT_FOUND);
-    });
-    it("400 when registered count already zero", async () => {
-      vi.mocked(db.casDecrementRegisteredTx).mockResolvedValue(false);
-      vi.mocked(db.getEventCounterInfoTx).mockResolvedValue({
-        status: "OPEN",
-        maxCapacity: null,
-        registeredCount: 0,
-      });
-      await expectAppError(
-        service.decrementRegisteredCountTx(exec, eventId),
-        400,
-        ErrorCodes.VALIDATION_ERROR,
-        "Event registered count is already zero",
       );
     });
   });

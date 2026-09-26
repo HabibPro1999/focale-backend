@@ -37,8 +37,6 @@ import {
   getAccessCapacityInfo,
   getAccessRegisteredCount,
   applyPaidAccessDelta,
-  takePaidAccess,
-  releasePaidAccess,
   AccessCapacityExceededError,
   AccessNotFoundError,
   AccessPaidCountUnderflowError,
@@ -567,23 +565,6 @@ export class AccessService {
       409,
       { registeredCount: access.registeredCount, requested: quantity },
     );
-  }
-
-  /** Authoritative capacity gate: increment paid count atomically within capacity. */
-  async incrementPaidCount(
-    accessId: string,
-    quantity = 1,
-    exec: DbExecutor = getDb(),
-  ): Promise<void> {
-    await takePaidAccess(exec, accessId, quantity).catch(rethrowAsAccessException);
-  }
-
-  async decrementPaidCount(
-    accessId: string,
-    quantity = 1,
-    exec: DbExecutor = getDb(),
-  ): Promise<void> {
-    await releasePaidAccess(exec, accessId, quantity).catch(rethrowAsAccessException);
   }
 
   /**
