@@ -21,8 +21,8 @@ import { AccessService } from "./access.service";
 //
 // The real query functions run; two are wrapped so a test can inject a failure:
 // findExistingAccessIdsInEvent (to delete a prerequisite right after the
-// service checked it exists, as a concurrent delete would, so the edge insert
-// hits the foreign key) and deleteEventAccessById.
+// service checked it exists, so the edge insert hits the foreign key) and
+// deleteEventAccessById.
 vi.mock("@app/db", async (importOriginal) => {
   const real = await importOriginal<typeof import("@app/db")>();
   return {
@@ -35,12 +35,19 @@ vi.mock("@app/db", async (importOriginal) => {
 const mocked = vi.mocked(db);
 const service = new AccessService();
 
-/** Delete `victimId` right after the service's prerequisite existence check. */
+/**
+ * Delete `victimId` right after the service's prerequisite existence check, on
+ * the executor the check ran on. Create checks on the pool, so this is a
+ * concurrent delete. Update checks inside its transaction, after locking the
+ * event's access rows, where a concurrent delete would wait for it; the delete
+ * runs in that transaction instead, and its rollback restores the victim.
+ */
 function deleteAfterExistenceCheck(victimId: string): void {
-  mocked.findExistingAccessIdsInEvent.mockImplementationOnce(async (ids, eventId) => {
+  mocked.findExistingAccessIdsInEvent.mockImplementationOnce(async (ids, eventId, exec) => {
     const actual = await vi.importActual<typeof import("@app/db")>("@app/db");
-    const found = await actual.findExistingAccessIdsInEvent(ids, eventId, getDb());
-    await actual.deleteEventAccessById(victimId, getDb());
+    const executor = exec ?? getDb();
+    const found = await actual.findExistingAccessIdsInEvent(ids, eventId, executor);
+    await actual.deleteEventAccessById(victimId, executor);
     return found;
   });
 }
