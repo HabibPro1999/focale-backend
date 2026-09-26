@@ -6,9 +6,7 @@ import {
   eq,
   getTableColumns,
   inArray,
-  isNull,
   lt,
-  ne,
   or,
   sql,
   type SQL,
@@ -18,13 +16,13 @@ import type { NetworkingConfig } from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
 import {
   networkingProfiles as profiles,
-  networkingBlocks as blocks,
   networkingMessages as messages,
   networkingNotifications as notifications,
 } from "../schema/networking";
 import { emailLogs } from "../schema/email";
 import { registrations } from "../schema/registrations";
 import { networkingUnreadMessageCount } from "./networking-participant-read";
+import { discoverableCounterpart, notInteracted } from "../policy/networking-eligibility";
 export * from "./networking-participant-read";
 import {
   normalizeNetworkingSearch,
@@ -68,27 +66,9 @@ function networkingDiscoveryWhere(
   return and(
     eq(profiles.eventId, eventId),
     query.standTableId ? eq(profiles.standTableId, query.standTableId) : undefined,
-    ne(profiles.id, profileId),
-    sql`lower(${profiles.email}) <> (SELECT lower(email) FROM networking_profiles WHERE id=${profileId} AND event_id=${eventId})`,
-    eq(profiles.status, "ACTIVE"),
-    sql`btrim(${profiles.firstName}) <> '' AND btrim(${profiles.lastName}) <> '' AND btrim(${profiles.company}) <> '' AND btrim(${profiles.jobTitle}) <> '' AND btrim(${profiles.sector}) <> ''`,
-    eq(profiles.visible, true),
-    eq(profiles.consent, true),
-    isNull(profiles.withdrawnAt),
-    eq(registration.eventId, eventId),
-    inArray(registration.paymentStatus, paymentStatuses),
-    sql`${registration.networkingOptIn} IS DISTINCT FROM false`,
-    sql`${profiles.id} NOT IN (
-    SELECT target_id FROM networking_blocks WHERE event_id=${eventId} AND profile_id=${profileId}
-    UNION ALL SELECT profile_id FROM networking_blocks WHERE event_id=${eventId} AND target_id=${profileId}
-    ${
-      query.excludeInteracted
-        ? sql`UNION ALL SELECT target_id FROM networking_interests WHERE event_id=${eventId} AND profile_id=${profileId}
-    UNION ALL SELECT profile_b_id FROM networking_connections WHERE event_id=${eventId} AND profile_a_id=${profileId}
-    UNION ALL SELECT profile_a_id FROM networking_connections WHERE event_id=${eventId} AND profile_b_id=${profileId}`
-        : sql``
-    }
-  )`,
+    // 4.6: the counterpart policy's discover mode (eligible, discoverable, distinct, unblocked).
+    discoverableCounterpart(profiles, registration, paymentStatuses, { eventId, profileId }),
+    query.excludeInteracted ? notInteracted(eventId, profileId, profiles.id) : undefined,
     query.company ? eq(profiles.company, query.company) : undefined,
     query.sector ? eq(profiles.sector, query.sector) : undefined,
     query.sectors?.length ? inArray(profiles.sector, query.sectors) : undefined,
@@ -198,27 +178,6 @@ export async function listNetworkingDiscovery(
       .where(filtered),
   ]);
   return { items: rows, total: counts[0]?.total ?? 0 };
-}
-export async function networkingPairBlocked(
-  eventId: string,
-  a: string,
-  b: string,
-  db: DbExecutor = getDb(),
-) {
-  const [row] = await db
-    .select({ id: blocks.id })
-    .from(blocks)
-    .where(
-      and(
-        eq(blocks.eventId, eventId),
-        or(
-          and(eq(blocks.profileId, a), eq(blocks.targetId, b)),
-          and(eq(blocks.profileId, b), eq(blocks.targetId, a)),
-        ),
-      ),
-    )
-    .limit(1);
-  return !!row;
 }
 export async function listNetworkingMessages(
   eventId: string,

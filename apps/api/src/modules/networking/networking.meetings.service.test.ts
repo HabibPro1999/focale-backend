@@ -7,19 +7,24 @@ const mocks = vi.hoisted(() => ({
   upsertInterest: vi.fn(), ensureConnection: vi.fn(), insertMessageOnce: vi.fn(), insertBlockOnce: vi.fn(), cancel: vi.fn(),
   transaction: vi.fn(), allocationTransaction: vi.fn(), config: vi.fn(), transition: vi.fn(),
 }));
-vi.mock("@app/db", async (original) => ({
-  ...(await original<typeof import("@app/db")>()),
-  networkingStore: () => mocks,
-  networkingTransaction: mocks.transaction,
-  networkingAllocationTransaction: mocks.allocationTransaction,
-  cancelNetworkingParticipantMeetings: mocks.cancel,
-  getNetworkingConfig: mocks.config,
-  createNetworkingNotification: mocks.notify,
-  findClientModuleState: vi.fn(),
-  listNetworkingConnectionSummaries: mocks.summaries,
-  expireNetworkingProposals: vi.fn(),
-  transitionNetworkingMeetings: mocks.transition,
-}));
+vi.mock("@app/db", async (original) => {
+  const real = await original<typeof import("@app/db")>();
+  const { networkingSnapshotMocks } = await import("./__testing__/snapshot-mocks.js");
+  Object.assign(mocks, networkingSnapshotMocks({ one: mocks.one, all: mocks.all }, { consentPending: real.networkingConsentPending }));
+  return {
+    ...real,
+    networkingStore: () => mocks,
+    networkingTransaction: mocks.transaction,
+    networkingAllocationTransaction: mocks.allocationTransaction,
+    cancelNetworkingParticipantMeetings: mocks.cancel,
+    getNetworkingConfig: mocks.config,
+    createNetworkingNotification: mocks.notify,
+    findClientModuleState: vi.fn(),
+    listNetworkingConnectionSummaries: mocks.summaries,
+    expireNetworkingProposals: vi.fn(),
+    transitionNetworkingMeetings: mocks.transition,
+  };
+});
 vi.mock("../clients/module-gates", () => ({ isModuleEnabledForClient: () => true }));
 import { NetworkingService, type NetworkingContext } from "./networking.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";

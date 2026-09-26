@@ -1,6 +1,9 @@
 import eslint from "@eslint/js";
 import tseslint from "typescript-eslint";
+import { focalePlugin } from "./scripts/eslint-package-boundaries.mjs";
 
+// The recommended sets stay advisory (warnings); the rules below are errors
+// and fail `pnpm lint` in CI (plan 6.7).
 function downgradeRules(config) {
   if (!config.rules) return config;
 
@@ -25,65 +28,28 @@ export default tseslint.config(
   downgradeRules(eslint.configs.recommended),
   ...tseslint.configs.recommended.map(downgradeRules),
   {
+    plugins: { focale: focalePlugin },
     rules: {
       "@typescript-eslint/no-unused-vars": [
-        "warn",
-        { argsIgnorePattern: "^_" },
+        "error",
+        // ignoreRestSiblings: `const { secret, ...safe } = row` is how public
+        // projections strip fields; tsc's noUnusedLocals exempts it too.
+        { argsIgnorePattern: "^_", ignoreRestSiblings: true },
       ],
       "no-console": ["warn", { allow: ["warn", "error"] }],
-      // Module boundary checks remain visible as the workspace is adopted.
-      "no-restricted-imports": [
-        "warn",
-        {
-          patterns: [
-            {
-              group: ["**/modules/identity/**", "!**/modules/identity/index.js"],
-              message: "Import from @identity barrel, not internal files",
-            },
-            {
-              group: ["**/modules/clients/**", "!**/modules/clients/index.js"],
-              message: "Import from @clients barrel, not internal files",
-            },
-            {
-              group: ["**/modules/events/**", "!**/modules/events/index.js"],
-              message: "Import from @events barrel, not internal files",
-            },
-            {
-              group: ["**/modules/forms/**", "!**/modules/forms/index.js"],
-              message: "Import from @forms barrel, not internal files",
-            },
-            {
-              group: ["**/modules/access/**", "!**/modules/access/index.js"],
-              message: "Import from @access barrel, not internal files",
-            },
-            {
-              group: [
-                "**/modules/registrations/**",
-                "!**/modules/registrations/index.js",
-              ],
-              message: "Import from @registrations barrel, not internal files",
-            },
-            {
-              group: ["**/modules/reports/**", "!**/modules/reports/index.js"],
-              message: "Import from @reports barrel, not internal files",
-            },
-            {
-              group: ["**/modules/email/**", "!**/modules/email/index.js"],
-              message: "Import from @email barrel, not internal files",
-            },
-          ],
-        },
-      ],
+      // contracts ← shared ← db ← integrations ← apps; apps never import each other.
+      "focale/package-boundaries": "error",
     },
   },
   {
+    // Type-aware rules need a tsconfig, which covers each package's src only.
     files: sourceFiles,
     languageOptions: {
       parserOptions: { projectService: true },
     },
     rules: {
-      "@typescript-eslint/no-floating-promises": "warn",
-      "@typescript-eslint/no-misused-promises": "warn",
+      "@typescript-eslint/no-floating-promises": "error",
+      "@typescript-eslint/no-misused-promises": "error",
     },
   },
   {

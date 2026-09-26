@@ -1,9 +1,11 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, getTableColumns, inArray, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { getDb } from "../client";
 import { rowsOf } from "../helpers";
 import { withTxn } from "../txn";
 import { networkingProfiles } from "../schema/networking";
+import { registrations } from "../schema/registrations";
+import { discoverableCounterpart, notInteracted } from "../policy/networking-eligibility";
 import {
   networkingEmbeddings,
   networkingEmbeddingJobs,
@@ -166,6 +168,7 @@ export {
   NETWORKING_VECTOR_INDEX,
   networkingVectorIndexPresent,
   networkingVectorIndexStatus,
+  rankNetworkingVectorCandidates,
   type NetworkingVectorCandidate,
   type NetworkingVectorIndexHealth,
   type NetworkingVectorIndexStatus,
@@ -180,6 +183,7 @@ export async function getNetworkingEmbeddingHealth(eventId: string) {
   );
 }
 
+/** The recommended profiles the caller may still discover (4.6: counterpart `discover` mode, not yet swiped or connected). */
 export async function getNetworkingRecommendationProfiles(
   eventId: string,
   ids: string[],
@@ -188,30 +192,15 @@ export async function getNetworkingRecommendationProfiles(
 ) {
   if (!ids.length || !paymentStatuses.length) return [];
   return getDb()
-    .select()
+    .select(getTableColumns(networkingProfiles))
     .from(networkingProfiles)
+    .innerJoin(registrations, eq(registrations.id, networkingProfiles.registrationId))
     .where(
       and(
         eq(networkingProfiles.eventId, eventId),
-        eq(networkingProfiles.status, "ACTIVE"),
-        sql`btrim(${networkingProfiles.firstName})<>'' AND btrim(${networkingProfiles.lastName})<>'' AND btrim(${networkingProfiles.company})<>'' AND btrim(${networkingProfiles.jobTitle})<>'' AND btrim(${networkingProfiles.sector})<>''`,
-        eq(networkingProfiles.visible, true),
-        eq(networkingProfiles.consent, true),
-        sql`${networkingProfiles.withdrawnAt} IS NULL`,
-        sql`${networkingProfiles.id}<>${callerProfileId}`,
-        sql`lower(${networkingProfiles.email})<>(SELECT lower(email) FROM networking_profiles WHERE id=${callerProfileId} AND event_id=${eventId})`,
-        sql`EXISTS (SELECT 1 FROM registrations r WHERE r.id=${networkingProfiles.registrationId} AND r.event_id=${eventId}
-          AND r.networking_opt_in IS DISTINCT FROM false AND r.payment_status::text IN (${sql.join(
-            paymentStatuses.map((status) => sql`${status}`),
-            sql`,`,
-          )}))`,
-        sql`NOT EXISTS (SELECT 1 FROM networking_blocks b WHERE b.event_id=${eventId}
-          AND ((b.profile_id=${callerProfileId} AND b.target_id=${networkingProfiles.id}) OR (b.target_id=${callerProfileId} AND b.profile_id=${networkingProfiles.id})))`,
-        sql`NOT EXISTS (SELECT 1 FROM networking_interests i WHERE i.event_id=${eventId}
-          AND i.profile_id=${callerProfileId} AND i.target_id=${networkingProfiles.id})`,
-        sql`NOT EXISTS (SELECT 1 FROM networking_connections c WHERE c.event_id=${eventId}
-          AND ((c.profile_a_id=${callerProfileId} AND c.profile_b_id=${networkingProfiles.id}) OR (c.profile_b_id=${callerProfileId} AND c.profile_a_id=${networkingProfiles.id})))`,
         inArray(networkingProfiles.id, ids),
+        discoverableCounterpart(networkingProfiles, registrations, paymentStatuses, { eventId, profileId: callerProfileId }),
+        notInteracted(eventId, callerProfileId, networkingProfiles.id),
       ),
     );
 }
