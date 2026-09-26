@@ -9,7 +9,9 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { PriceBreakdownSchema } from "@app/contracts";
 import { idPk, timestamps } from "../helpers";
+import { jsonbOf } from "../jsonb";
 import { paymentMethod, paymentStatus, registrationRole, transactionType } from "./enums";
 import { events } from "./events-access";
 import { forms } from "./forms";
@@ -40,7 +42,7 @@ export const registrations = pgTable(
     paymentMethod: paymentMethod(),
     paymentReference: text(),
     paymentProofUrl: text(),
-    priceBreakdown: jsonb().notNull(),
+    priceBreakdown: jsonbOf(PriceBreakdownSchema).notNull(),
     baseAmount: integer().notNull().default(0),
     discountAmount: integer().notNull().default(0),
     accessAmount: integer().notNull().default(0),

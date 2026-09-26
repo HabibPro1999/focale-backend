@@ -1,3 +1,9 @@
+import type {
+  AccessDropReason,
+  AccessLineItem,
+  DroppedAccessItem,
+  PriceBreakdown,
+} from "@app/contracts";
 import { isFullySettled, type SettlementStatus } from "./payment-status";
 
 // Registration settlement math. All amounts are integer minor units (e.g.
@@ -137,26 +143,18 @@ export function deriveSettlement(input: SettlementInput): DerivedSettlement {
 }
 
 // ============================================================================
-// Price breakdown (the registrations.price_breakdown JSON)
+// Price breakdown (the registrations.price_breakdown JSON, `PriceBreakdown`)
 // ============================================================================
-
-export interface BreakdownAccessItem {
-  accessId: string;
-  quantity: number;
-  subtotal: number;
-  name?: unknown;
-  unitPrice?: number;
-}
 
 /**
  * The breakdown with its net fields set for a sponsorship amount:
  * sponsorshipTotal = min(sponsorship, subtotal), total = subtotal −
  * sponsorshipTotal. Every other field is kept.
  */
-export function netBreakdown<T extends { subtotal: number }>(
+export function netBreakdown<T extends Pick<PriceBreakdown, "subtotal">>(
   breakdown: T,
   sponsorship: number,
-): T & { sponsorshipTotal: number; total: number } {
+): T & Pick<PriceBreakdown, "sponsorshipTotal" | "total"> {
   const sponsorshipTotal = Math.min(sponsorship, breakdown.subtotal);
   return {
     ...breakdown,
@@ -165,22 +163,19 @@ export function netBreakdown<T extends { subtotal: number }>(
   };
 }
 
-export interface DroppableBreakdown {
-  calculatedBasePrice: number;
-  accessItems: BreakdownAccessItem[];
-  droppedAccessItems?: Array<BreakdownAccessItem & { reason: string }>;
-}
+/** The parts of a breakdown dropping an access item reads. */
+export type DroppableBreakdown = Pick<
+  PriceBreakdown,
+  "calculatedBasePrice" | "accessItems" | "droppedAccessItems"
+>;
 
 export interface DroppedAccessItemResult<T extends DroppableBreakdown> {
-  breakdown: T & {
-    accessTotal: number;
-    subtotal: number;
-    sponsorshipTotal: number;
-    total: number;
-    droppedAccessItems: Array<BreakdownAccessItem & { reason: string }>;
-  };
+  breakdown: T &
+    Pick<PriceBreakdown, "accessTotal" | "subtotal" | "sponsorshipTotal" | "total"> & {
+      droppedAccessItems: DroppedAccessItem[];
+    };
   /** The dropped line item (the first with this access id). */
-  dropped: BreakdownAccessItem;
+  dropped: AccessLineItem;
   /** New total_amount: calculatedBasePrice + remaining access items. */
   gross: number;
   /** New access_amount. */
@@ -201,7 +196,7 @@ export function dropAccessItem<T extends DroppableBreakdown>(
   breakdown: T,
   accessId: string,
   sponsorship: number,
-  reason: string,
+  reason: AccessDropReason,
 ): DroppedAccessItemResult<T> | null {
   const dropped = breakdown.accessItems.find((item) => item.accessId === accessId);
   if (!dropped) return null;
@@ -227,6 +222,11 @@ export function dropAccessItem<T extends DroppableBreakdown>(
   };
 }
 
+/** The part of a breakdown paid capacity is counted from. */
+export interface PaidAccessBreakdown {
+  accessItems: ReadonlyArray<Pick<AccessLineItem, "accessId" | "quantity">>;
+}
+
 // ============================================================================
 // Moved from the API services (unchanged behavior)
 // ============================================================================
@@ -238,16 +238,16 @@ export function dropAccessItem<T extends DroppableBreakdown>(
  */
 export function paidAccessQuantities(
   status: string,
-  priceBreakdown: unknown,
-  coveredAccessIds = new Set<string>(),
+  priceBreakdown: PaidAccessBreakdown,
+  coveredAccessIds: ReadonlySet<string> = new Set<string>(),
 ): Map<string, number> {
   const quantities = new Map<string, number>();
   const fullySettled = isFullySettled(status);
   if (!fullySettled && status !== "PARTIAL") {
     return quantities;
   }
-  const breakdown = priceBreakdown as { accessItems?: BreakdownAccessItem[] };
-  for (const item of breakdown.accessItems ?? []) {
+  // A stored breakdown read under JSONB_VALIDATION=warn may lack its items.
+  for (const item of priceBreakdown.accessItems ?? []) {
     if (fullySettled || coveredAccessIds.has(item.accessId)) {
       quantities.set(item.accessId, (quantities.get(item.accessId) ?? 0) + item.quantity);
     }

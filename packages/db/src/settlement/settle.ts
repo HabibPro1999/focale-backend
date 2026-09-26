@@ -10,6 +10,7 @@ import type { DbExecutor } from "../client";
 import { lockRegistrationForUpdate } from "../locks";
 import { findRegistrationUsagesForRecalc } from "../queries/registrations";
 import { updateUsageAmount } from "../queries/sponsorships";
+import { readPriceBreakdown } from "../queries/stored-json";
 import { registrations } from "../schema/registrations";
 import { isTransactionExecutor } from "../txn";
 import { applyPaidAccessDelta } from "./paid-access";
@@ -124,7 +125,7 @@ async function readSettlementRow(tx: DbExecutor, registrationId: string) {
     .from(registrations)
     .where(eq(registrations.id, registrationId))
     .limit(1);
-  return row;
+  return row && { ...row, priceBreakdown: readPriceBreakdown(row.priceBreakdown, registrationId) };
 }
 
 /**
@@ -190,7 +191,7 @@ export async function settleRegistrationTxn(
     paidAmount: row.paidAmount,
     totalAmount: row.totalAmount,
     sponsorshipAmount: row.sponsorshipAmount,
-    priceBreakdown: row.priceBreakdown as PriceBreakdown,
+    priceBreakdown: row.priceBreakdown,
   };
   if (options.expectedUpdatedAt && row.updatedAt.getTime() !== options.expectedUpdatedAt.getTime()) {
     return {

@@ -72,7 +72,7 @@ export async function createNetworkingWriteFixture(options: {
     lastName: "Writes",
     paymentStatus: "PAID" as const,
     totalAmount: 0,
-    priceBreakdown: {},
+    priceBreakdown: {} as never,
     networkingOptIn: true,
     formData: { company: "Company", jobTitle: "Director", sector: "Technology" },
   })));

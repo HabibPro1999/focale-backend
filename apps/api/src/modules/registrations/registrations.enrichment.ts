@@ -30,7 +30,7 @@ export type DroppedAccessSelectionItem = AccessSelectionItem & {
 };
 
 /** Minimal shape the enrichment reads. */
-type EnrichableRegistration = { id: string; priceBreakdown: unknown };
+type EnrichableRegistration = { id: string; priceBreakdown: PriceBreakdown };
 
 export type WithAccessSelections<T> = T & {
   accessSelections: AccessSelectionItem[];
@@ -53,7 +53,7 @@ function buildSelections(
   registration: EnrichableRegistration,
   accessMap: Map<string, AccessDisplayDetail>,
 ): { accessSelections: AccessSelectionItem[]; droppedAccessSelections: DroppedAccessSelectionItem[] } {
-  const priceBreakdown = registration.priceBreakdown as PriceBreakdown;
+  const { priceBreakdown } = registration;
   const accessSelections = (priceBreakdown.accessItems ?? []).map((item) => ({
     id: `${registration.id}-${item.accessId}`,
     accessId: item.accessId,
@@ -69,7 +69,8 @@ function buildSelections(
       unitPrice: item.unitPrice,
       quantity: item.quantity,
       subtotal: item.subtotal,
-      reason: (item as { reason?: string }).reason ?? "capacity_reached",
+      // A stored breakdown read under JSONB_VALIDATION=warn may lack the reason.
+      reason: item.reason ?? "capacity_reached",
       access: accessMap.get(item.accessId) ?? fallbackAccess(item),
     }),
   );
@@ -85,7 +86,7 @@ export async function enrichWithAccessSelections<T extends EnrichableRegistratio
   registration: T,
   db?: DbExecutor,
 ): Promise<WithAccessSelections<T>> {
-  const priceBreakdown = registration.priceBreakdown as PriceBreakdown;
+  const { priceBreakdown } = registration;
   const dropped = priceBreakdown.droppedAccessItems ?? [];
   const hasItems = (priceBreakdown.accessItems?.length ?? 0) > 0;
   if (!hasItems && dropped.length === 0) {
@@ -107,7 +108,7 @@ export async function enrichManyWithAccessSelections<T extends EnrichableRegistr
 ): Promise<WithAccessSelections<T>[]> {
   const ids = new Set<string>();
   for (const reg of registrations) {
-    const pb = reg.priceBreakdown as PriceBreakdown;
+    const pb = reg.priceBreakdown;
     for (const item of pb.accessItems ?? []) ids.add(item.accessId);
     for (const item of pb.droppedAccessItems ?? []) ids.add(item.accessId);
   }

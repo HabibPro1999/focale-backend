@@ -78,11 +78,12 @@ function isAmount(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-interface WrittenState {
+/** The money state as the write stored it (RETURNING). */
+export interface WrittenSettlementState {
   paidAmount: number;
   totalAmount: number;
   sponsorshipAmount: number;
-  priceBreakdown: unknown;
+  priceBreakdown: PriceBreakdown | null;
 }
 
 /**
@@ -95,7 +96,7 @@ interface WrittenState {
  * - a written paid amount is at most the net (total − sponsorship).
  */
 export function settlementInvariantViolations(
-  row: WrittenState,
+  row: WrittenSettlementState,
   written: ReadonlySet<SettlementColumn>,
 ): string[] {
   const violations: string[] = [];
@@ -103,7 +104,7 @@ export function settlementInvariantViolations(
     violations.push(`sponsorship_amount ${row.sponsorshipAmount} exceeds total_amount ${row.totalAmount}`);
   }
   if (written.has("priceBreakdown")) {
-    const pb = row.priceBreakdown as Partial<PriceBreakdown> | null;
+    const pb = row.priceBreakdown;
     const fields = ["calculatedBasePrice", "accessTotal", "subtotal", "sponsorshipTotal", "total"] as const;
     const bad = fields.filter((field) => !isAmount(pb?.[field]));
     if (!pb || bad.length) {
@@ -113,13 +114,13 @@ export function settlementInvariantViolations(
       if (pb.accessTotal !== accessSum) {
         violations.push(`price_breakdown accessTotal ${pb.accessTotal} is not the sum of its items (${accessSum})`);
       }
-      if (pb.subtotal !== pb.calculatedBasePrice! + pb.accessTotal!) {
+      if (pb.subtotal !== pb.calculatedBasePrice + pb.accessTotal) {
         violations.push(`price_breakdown subtotal ${pb.subtotal} is not calculatedBasePrice + accessTotal`);
       }
-      if (pb.sponsorshipTotal! > pb.subtotal!) {
+      if (pb.sponsorshipTotal > pb.subtotal) {
         violations.push(`price_breakdown sponsorshipTotal ${pb.sponsorshipTotal} exceeds subtotal ${pb.subtotal}`);
       }
-      if (pb.total !== pb.subtotal! - pb.sponsorshipTotal!) {
+      if (pb.total !== pb.subtotal - pb.sponsorshipTotal) {
         violations.push(`price_breakdown total ${pb.total} is not subtotal − sponsorshipTotal`);
       }
       if (pb.sponsorshipTotal !== row.sponsorshipAmount) {
@@ -127,7 +128,7 @@ export function settlementInvariantViolations(
           `price_breakdown sponsorshipTotal ${pb.sponsorshipTotal} differs from sponsorship_amount ${row.sponsorshipAmount}`,
         );
       }
-      if (pb.subtotal! > row.totalAmount) {
+      if (pb.subtotal > row.totalAmount) {
         violations.push(`price_breakdown subtotal ${pb.subtotal} exceeds total_amount ${row.totalAmount}`);
       }
     }

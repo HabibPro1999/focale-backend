@@ -118,7 +118,7 @@ function registration(n: number, over: Partial<ModularRegistrationRow> = {}): Mo
     paymentMethod: null,
     paymentReference: null,
     paymentProofUrl: null,
-    priceBreakdown: {},
+    priceBreakdown: {} as never,
     baseAmount: 0,
     discountAmount: 0,
     accessAmount: 0,
