@@ -29,6 +29,7 @@ export * from "./networking-delivery";
 
 export * from "./networking-read";
 export * from "./networking-metrics";
+export * from "./networking-admin-read";
 export * from "./networking-access-snapshot";
 export * from "./networking-search";
 

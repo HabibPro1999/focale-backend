@@ -1,44 +1,15 @@
+// Solution-style root: no files of its own, only references to the workspace
+// packages (each checked by its own tsconfig; `pnpm typecheck` runs them per
+// package, `tsc -b` works too). The legacy Bun app in src/ is not part of it:
+// its old config is tsconfig.legacy.json, kept for reference only.
 {
-  "compilerOptions": {
-    "target": "ESNext",
-    "module": "ESNext",
-    "moduleResolution": "Bundler",
-    "lib": ["ESNext"],
-    "strict": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "noImplicitReturns": true,
-    "noFallthroughCasesInSwitch": true,
-    "noEmit": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true,
-    "allowSyntheticDefaultImports": true,
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["./src/*"],
-      "@config/*": ["./src/config/*"],
-      "@core/*": ["./src/core/*"],
-      "@shared/*": ["./src/shared/*"],
-      "@modules/*": ["./src/modules/*"],
-      "@identity": ["./src/modules/identity/index.ts"],
-      "@clients": ["./src/modules/clients/index.ts"],
-      "@events": ["./src/modules/events/index.ts"],
-      "@forms": ["./src/modules/forms/index.ts"],
-      "@pricing": ["./src/modules/pricing/index.ts"],
-      "@access": ["./src/modules/access/index.ts"],
-      "@registrations": ["./src/modules/registrations/index.ts"],
-      "@sponsorships": ["./src/modules/sponsorships/index.ts"],
-      "@reports": ["./src/modules/reports/index.ts"],
-      "@email": ["./src/modules/email/index.ts"],
-      "@certificates": ["./src/modules/certificates/index.ts"],
-      "@checkin": ["./src/modules/checkin/index.ts"],
-      "@realtime": ["./src/modules/realtime/index.ts"],
-      "@abstracts": ["./src/modules/abstracts/index.ts"],
-      "@abstracts/*": ["./src/modules/abstracts/*"]
-    }
-  },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules"]
+  "files": [],
+  "references": [
+    { "path": "./packages/contracts" },
+    { "path": "./packages/shared" },
+    { "path": "./packages/db" },
+    { "path": "./packages/integrations" },
+    { "path": "./apps/api" },
+    { "path": "./apps/worker" }
+  ]
 }

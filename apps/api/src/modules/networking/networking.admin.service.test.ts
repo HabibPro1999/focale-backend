@@ -16,6 +16,7 @@ const state = vi.hoisted(() => ({
   transition: vi.fn(),
   delete: vi.fn(),
   sync: vi.fn(),
+  listProfiles: vi.fn(),
   tail: Promise.resolve() as Promise<unknown>,
 }));
 vi.mock("@app/db", async (original) => {
@@ -49,6 +50,7 @@ vi.mock("@app/db", async (original) => {
     networkingRetentionEnded,
     transitionNetworkingMeetings: state.transition,
     requestNetworkingEventSync: state.sync,
+    listNetworkingAdminProfiles: state.listProfiles,
     networkingFormField: (schema: { fields?: { id: string }[] }, id: string) => schema.fields?.find((field) => field.id === id),
     networkingStore: () => store,
     getNetworkingConfig: async () => NetworkingConfigSchema.parse({}),
@@ -266,15 +268,12 @@ describe("NetworkingAdminService withdrawn participants", () => {
     expect(state.audits).toEqual([]);
     expect(state.delete).not.toHaveBeenCalled();
   });
-  it("leaves erased tombstones out of the participant list", async () => {
-    const profile = (id: string, erasedAt: Date | null) => ({
-      id, eventId: "event", firstName: id, lastName: "", company: "", jobTitle: "", email: "", sector: "", status: "ACTIVE",
-      lastActiveAt: null, withdrawnAt: erasedAt, erasedAt,
-    });
-    state.profiles = [profile("kept", null), profile("tombstone", new Date("2030-07-01Z"))];
-    const result = await service.profiles("event", { page: 1, limit: 20 });
-    expect(result.total).toBe(1);
-    expect(result.items.map((item) => item.id)).toEqual(["kept"]);
+  it("lists participants as one SQL page (4.9; erased tombstones are left out in SQL, see the eligibility matrix DB test)", async () => {
+    const page = { items: [{ id: "kept", matchCount: 0, meetingCount: 0 }], total: 1 };
+    state.listProfiles.mockResolvedValueOnce(page);
+    const query = { page: 2, limit: 20, q: "ann", activity: "MATCHED" };
+    expect(await service.profiles("event", query)).toBe(page);
+    expect(state.listProfiles).toHaveBeenCalledWith("event", query);
   });
 });
 
@@ -329,7 +328,7 @@ describe("NetworkingAdminService meeting assignment", () => {
       }),
       reserve: vi.fn(async () => ({ tableId: "t", status: "CONFIRMED" })),
       notify: vi.fn(),
-      hydrate: vi.fn(async (row: unknown) => row),
+      hydrateAdmin: vi.fn(async (_eventId: string, rows: unknown[]) => rows),
     };
     return { plans, meetings, admin: new NetworkingAdminService({} as NetworkingService, meetings as unknown as NetworkingMeetingsService) };
   }

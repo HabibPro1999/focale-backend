@@ -34,7 +34,7 @@ How the services run: [render-runbook.md](render-runbook.md).
   (`os.tmpdir()`, about 0.2 MB per 10,000 registrations per workbook; `/tmp` in
   the image is writable by `node`). #144 (3.7b)
 
-## Migrations 0021 to 0033
+## Migrations 0021 to 0034
 
 If the production database has no migration ledger yet, do the one-time
 adoption first
@@ -65,12 +65,15 @@ uses them (0023, 0028, 0029, 0031), which the Pre-Deploy Command guarantees.
 - [ ] 0032 `certificate_templates` render-image columns. #138 (3.8)
 - [ ] 0033 drops `abstract_code_sequences`; the adopted production database
   still has the legacy table, and its rows go with it. #140 (6.5)
+- [ ] 0034 `networking_interests` partial index for exhibitors' incoming likes
+  (per statement, idempotent). The code works without it (slower), so it may
+  follow the deploy. (4.9b)
 - [ ] `verify --schema` reports no errors (deferred 0030, and 0017 on
   CockroachDB, are warnings).
 - [ ] Once adopted: `MIGRATIONS_CHECK=enforce` on both services and the
   Pre-Deploy Command in place (migrator README, step 7).
 
-The index builds in 0024 to 0031 are plain `CREATE INDEX`, which briefly
+The index builds in 0024 to 0031 and 0034 are plain `CREATE INDEX`, which briefly
 blocks writes to the table on PostgreSQL; run `apply` off-peak there.
 
 ## After the deploy

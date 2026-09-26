@@ -10,6 +10,8 @@ import {
   getDb,
   findRegistrationFormSchema,
   withTxn,
+  withLockingTxn,
+  lockEventAccessRowsForUpdate,
   type DbExecutor,
   type EventAccessWithPrereqs,
   type NewEventAccessValues,
@@ -20,6 +22,7 @@ import {
   listEventAccessRows,
   getAccessClientId as getAccessClientIdQuery,
   findExistingAccessIdsInEvent,
+  listEventAccessIds,
   getEventPrereqEdges,
   getActiveAccessForGrouping,
   getAccessByIdsForValidation,
@@ -265,9 +268,20 @@ export class AccessService {
   }
 
   /**
-   * Update an access item. The row update, the prerequisite replacement and
-   * the capacity/deactivation drop enqueue run in one read-committed
-   * transaction, so a failure leaves the item and its prerequisites unchanged.
+   * Update an access item. The field checks run on a first read; the rest
+   * runs in one locking transaction (ADR 0001 rule 2) that locks the item's
+   * row, re-reads it and decides from that read: the capacity check, the
+   * prerequisite checks, the row update, the prerequisite replacement and the
+   * capacity/deactivation drop enqueue. A failure leaves the item and its
+   * prerequisites unchanged.
+   *
+   * - Capacity: the paid-count CAS waits on the row lock, so no payment lands
+   *   between the `maxCapacity >= paidCount` check and the write. A payment
+   *   queued behind the edit then meets the new capacity and is refused.
+   * - Prerequisites: a cycle can close through any item of the event, so an
+   *   edit that sets prerequisites locks every access row of the event, in
+   *   ascending id order, and checks the graph as the previous edit committed
+   *   it. Of two edits that together would form a cycle, the second is refused.
    */
   async updateEventAccess(
     id: string,
@@ -352,62 +366,81 @@ export class AccessService {
     if (data.companionPrice !== undefined)
       updateData.companionPrice = data.companionPrice;
 
-    if (requiredAccessIds !== undefined && requiredAccessIds.length > 0) {
-      const existing = await findExistingAccessIdsInEvent(
-        requiredAccessIds,
-        access.eventId,
-      );
-      if (existing.length !== requiredAccessIds.length) {
+    const eventId = access.eventId;
+    const setsPrerequisites =
+      requiredAccessIds !== undefined && requiredAccessIds.length > 0;
+
+    return withLockingTxn(async (tx) => {
+      // event_id never changes, so the first read's eventId picks the rows.
+      const lockIds = setsPrerequisites ? await listEventAccessIds(eventId, tx) : [];
+      const locked = await lockEventAccessRowsForUpdate(tx, [id, ...lockIds]);
+      // Re-read under the lock: counts and flags from the first read are stale.
+      const current = locked.includes(id) ? await getEventAccessForUpdate(id, tx) : null;
+      if (!current) {
         throw new AppException(
-          ErrorCodes.BAD_REQUEST,
-          "One or more prerequisite access items not found",
-          400,
+          ErrorCodes.ACCESS_NOT_FOUND,
+          "Access item not found",
+          404,
         );
       }
-      const hasCycle = await this.detectCircularPrerequisites(
-        access.eventId,
-        id,
-        requiredAccessIds,
-      );
-      if (hasCycle) {
+
+      if (setsPrerequisites) {
+        const existing = await findExistingAccessIdsInEvent(
+          requiredAccessIds,
+          eventId,
+          tx,
+        );
+        if (existing.length !== requiredAccessIds.length) {
+          throw new AppException(
+            ErrorCodes.BAD_REQUEST,
+            "One or more prerequisite access items not found",
+            400,
+          );
+        }
+        const hasCycle = await this.detectCircularPrerequisites(
+          eventId,
+          id,
+          requiredAccessIds,
+          tx,
+        );
+        if (hasCycle) {
+          throw new AppException(
+            ErrorCodes.ACCESS_CIRCULAR_DEPENDENCY,
+            "Circular prerequisite dependency detected",
+            400,
+          );
+        }
+      }
+
+      if (
+        data.maxCapacity !== undefined &&
+        data.maxCapacity !== null &&
+        data.maxCapacity < current.paidCount
+      ) {
         throw new AppException(
-          ErrorCodes.ACCESS_CIRCULAR_DEPENDENCY,
-          "Circular prerequisite dependency detected",
-          400,
+          ErrorCodes.ACCESS_CAPACITY_EXCEEDED,
+          "Max capacity cannot be lower than settled paid access count",
+          409,
+          { paidCount: current.paidCount, requestedMaxCapacity: data.maxCapacity },
         );
       }
-    }
 
-    if (
-      data.maxCapacity !== undefined &&
-      data.maxCapacity !== null &&
-      data.maxCapacity < access.paidCount
-    ) {
-      throw new AppException(
-        ErrorCodes.ACCESS_CAPACITY_EXCEEDED,
-        "Max capacity cannot be lower than settled paid access count",
-        409,
-        { paidCount: access.paidCount, requestedMaxCapacity: data.maxCapacity },
-      );
-    }
+      const isCapacityChanging =
+        data.maxCapacity !== undefined && data.maxCapacity !== current.maxCapacity;
+      const isBeingDeactivated = data.active === false && current.active === true;
 
-    const isCapacityChanging =
-      data.maxCapacity !== undefined && data.maxCapacity !== access.maxCapacity;
-    const isBeingDeactivated = data.active === false && access.active === true;
-
-    return withTxn(async (tx) => {
       await updateEventAccessRow(id, updateData, tx);
       if (requiredAccessIds !== undefined) {
         await setAccessPrerequisites(id, requiredAccessIds, tx);
       }
       if (isBeingDeactivated) {
-        await enqueueAccessDrops(tx, access.eventId, [id], "deactivated");
+        await enqueueAccessDrops(tx, eventId, [id], "deactivated");
       } else if (
         isCapacityChanging &&
         data.maxCapacity !== null &&
-        access.paidCount === data.maxCapacity
+        current.paidCount === data.maxCapacity
       ) {
-        await this.handleCapacityReached(access.eventId, [id], tx);
+        await this.handleCapacityReached(eventId, [id], tx);
       }
       return (await getEventAccessWithPrereqs(id, tx)) as EventAccessWithPrereqs;
     });
@@ -620,14 +653,16 @@ export class AccessService {
 
   /**
    * DFS cycle detection over the whole event's prerequisite graph, substituting
-   * `newRequiredIds` as the edges for the item being updated.
+   * `newRequiredIds` as the edges for the item being updated. Reads the edges
+   * in the caller's transaction, after it has locked the event's access rows.
    */
   private async detectCircularPrerequisites(
     eventId: string,
     accessId: string,
     newRequiredIds: string[],
+    tx: DbExecutor,
   ): Promise<boolean> {
-    const edges = await getEventPrereqEdges(eventId);
+    const edges = await getEventPrereqEdges(eventId, tx);
     const graph = new Map<string, string[]>();
     for (const { owner, required } of edges) {
       const deps = graph.get(owner) ?? [];

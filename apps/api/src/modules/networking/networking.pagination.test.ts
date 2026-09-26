@@ -1,12 +1,16 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { NetworkingConfigSchema } from "@app/contracts";
-const mocks = vi.hoisted(() => ({ connections: vi.fn(), meetings: vi.fn(), connectionCount: vi.fn(), meetingCount: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  connections: vi.fn(), meetings: vi.fn(), incoming: vi.fn(), connectionCount: vi.fn(), meetingCount: vi.fn(), incomingCount: vi.fn(),
+}));
 vi.mock("@app/db", async (original) => ({
   ...(await original<typeof import("@app/db")>()),
   listNetworkingConnectionSummaries: mocks.connections,
   listNetworkingParticipantMeetings: mocks.meetings,
+  listNetworkingIncomingInterests: mocks.incoming,
   countNetworkingConnectionSummaries: mocks.connectionCount,
   countNetworkingParticipantMeetings: mocks.meetingCount,
+  countNetworkingIncomingInterests: mocks.incomingCount,
 }));
 import { participantPagination } from "./networking.pagination";
 import { NetworkingSocialService } from "./networking.social.service";
@@ -47,22 +51,26 @@ it("rejects cross-event/profile/endpoint cursors and malformed decoded fields, b
   }
 });
 
-it.each(["connections", "meetings"] as const)("%s paginates equal sort keys without duplicates/skips, preserves hydration, and counts only on the first page", async (kind) => {
+it.each(["connections", "meetings", "incoming"] as const)("%s paginates equal sort keys without duplicates/skips, preserves hydration, and counts only on the first page", async (kind) => {
   const rows = Array.from({ length: 5 }, (_, i) => ({ id: id(i + 1), createdAt: at, startsAt: at, profile: { id: id(i + 10), firstName: "Visible", overrides: {} } }));
-  const ordered = kind === "connections" ? [...rows].reverse() : rows;
-  const read = kind === "connections" ? mocks.connections : mocks.meetings;
+  // Connections and incoming interests are newest first, meetings earliest first.
+  const newestFirst = kind !== "meetings";
+  const ordered = newestFirst ? [...rows].reverse() : rows;
+  const read = { connections: mocks.connections, meetings: mocks.meetings, incoming: mocks.incoming }[kind];
+  const pageArg = { connections: 3, meetings: 2, incoming: 1 }[kind];
   read.mockImplementation(async (...args) => {
-    const page = args[kind === "connections" ? 3 : 2];
+    const page = args[pageArg];
     if (!page) return ordered;
-    return ordered.filter(row => !page.after || (kind === "connections" ? row.id < page.after.id : row.id > page.after.id)).slice(0, page.limit + 1);
+    return ordered.filter(row => !page.after || (newestFirst ? row.id < page.after.id : row.id > page.after.id)).slice(0, page.limit + 1);
   });
-  const count = kind === "connections" ? mocks.connectionCount : mocks.meetingCount;
+  const count = { connections: mocks.connectionCount, meetings: mocks.meetingCount, incoming: mocks.incomingCount }[kind];
   count.mockResolvedValue(5);
+  const exhibitor = { ...ctx, profile: { ...ctx.profile, featured: true } } as NetworkingContext;
   const social = new NetworkingSocialService({} as NetworkingService);
   const meetings = new NetworkingMeetingsService({} as NetworkingService);
   const expire = vi.spyOn(meetings, "expire").mockResolvedValue(undefined);
-  const hydrate = vi.spyOn(meetings, "hydrate").mockImplementation(async (row) => ({ ...row, table: { space: { name: "Hall" } } }) as any);
-  const list = (query = {}) => kind === "connections" ? social.connections(ctx, query) : meetings.list(ctx, query);
+  const hydrate = vi.spyOn(meetings, "hydrateForViewer").mockImplementation(async (_ctx, page) => page.map(row => ({ ...row, table: { space: { name: "Hall" } } })) as any);
+  const list = (query = {}) => kind === "connections" ? social.connections(ctx, query) : kind === "incoming" ? social.incoming(exhibitor, query) : meetings.list(ctx, query);
   let cursor: string | undefined;
   const seen: string[] = [];
   const pages: object[] = [];
@@ -81,13 +89,36 @@ it.each(["connections", "meetings"] as const)("%s paginates equal sort keys with
   expect((pages[0] as { total: number }).total).toBe(5);
   expect(count).toHaveBeenCalledOnce();
   if (kind === "meetings") {
-    expect(hydrate).toHaveBeenCalledTimes(5);
+    // One batch per page (4.9 hydrateForViewer), never one per row.
+    expect(hydrate).toHaveBeenCalledTimes(3);
+    expect(hydrate.mock.calls.map(([, page]) => page.length)).toEqual([2, 2, 1]);
     expect(expire).toHaveBeenCalledOnce();
   }
-  const finalCursor = participantPagination(kind, ctx, { limit: 2 }).cursor(at, ordered.at(-1)!.id);
+  const finalCursor = participantPagination(kind, kind === "incoming" ? exhibitor : ctx, { limit: 2 }).cursor(at, ordered.at(-1)!.id);
   expect(await list({ cursor: finalCursor })).toEqual({ items: [], nextCursor: null });
   expect(await list()).toMatchObject({ total: 5, nextCursor: null });
-  expect(read).toHaveBeenLastCalledWith(ctx.event.id, ctx.profile.id, ...(kind === "connections" ? [ctx.config.eligiblePaymentStatuses] : []), expect.objectContaining({ limit: 50 }));
+  if (kind === "incoming")
+    expect(read).toHaveBeenLastCalledWith(
+      { eventId: ctx.event.id, profileId: ctx.profile.id, statuses: ctx.config.eligiblePaymentStatuses, discoveryEnabled: true },
+      expect.objectContaining({ limit: 50 }),
+    );
+  else
+    expect(read).toHaveBeenLastCalledWith(ctx.event.id, ctx.profile.id, ...(kind === "connections" ? [ctx.config.eligiblePaymentStatuses] : []), expect.objectContaining({ limit: 50 }));
+});
+
+it("incoming interests stay exhibitor-only and never reuse another list's cursor", async () => {
+  const social = new NetworkingSocialService({} as NetworkingService);
+  await expect(social.incoming(ctx)).rejects.toMatchObject({ status: 403, response: { code: "NETWORKING_FEATURE_DISABLED" } });
+  expect(mocks.incoming).not.toHaveBeenCalled();
+  const exhibitor = { ...ctx, profile: { ...ctx.profile, standTableId: id(7) } } as NetworkingContext;
+  const cursor = participantPagination("connections", exhibitor, { limit: 1 }).cursor(at, id(1));
+  await expect(social.incoming(exhibitor, { cursor })).rejects.toMatchObject(invalid);
+  // Discovery off: the SQL shows only connected senders.
+  mocks.incoming.mockResolvedValue([]);
+  mocks.incomingCount.mockResolvedValue(0);
+  const closed = { ...exhibitor, config: { ...ctx.config, swipeEnabled: false, searchEnabled: false } } as NetworkingContext;
+  expect(await social.incoming(closed)).toEqual({ items: [], nextCursor: null, total: 0 });
+  expect(mocks.incoming).toHaveBeenCalledWith(expect.objectContaining({ discoveryEnabled: false }), expect.anything());
 });
 
 it.each(["connections", "meetings"] as const)("internal %s export listing is never truncated to a page", async (kind) => {
@@ -96,7 +127,7 @@ it.each(["connections", "meetings"] as const)("internal %s export listing is nev
   const social = new NetworkingSocialService({} as NetworkingService);
   const meetings = new NetworkingMeetingsService({} as NetworkingService);
   vi.spyOn(meetings, "expire").mockResolvedValue(undefined);
-  vi.spyOn(meetings, "hydrate").mockImplementation(async (row) => row as any);
+  vi.spyOn(meetings, "hydrateForViewer").mockImplementation(async (_ctx, page) => page as any);
   const items = kind === "connections" ? await social.allConnections(ctx) : await meetings.allMeetings(ctx);
   expect(items).toHaveLength(137);
   expect(kind === "connections" ? mocks.connections : mocks.meetings).toHaveBeenCalledWith(ctx.event.id, ctx.profile.id, ...(kind === "connections" ? [ctx.config.eligiblePaymentStatuses] : []));

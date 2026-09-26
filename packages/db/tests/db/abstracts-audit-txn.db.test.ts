@@ -10,7 +10,7 @@ import {
   getDb,
   pgErrorCode,
   setReviewerThemesTxn,
-  upsertCommitteeMembership,
+  upsertCommitteeMembershipTxn,
 } from "@app/db";
 import { dbTestsEnabled } from "../helpers/test-env";
 import {
@@ -91,12 +91,49 @@ async function seedCommittee() {
   const abstract = await seedAbstract({ eventId: event.id, status: "SUBMITTED" });
   const r1 = await seedUser({ clientId: event.clientId });
   const r2 = await seedUser({ clientId: event.clientId });
-  await upsertCommitteeMembership(event.id, r1.id);
-  await upsertCommitteeMembership(event.id, r2.id);
+  await upsertCommitteeMembershipTxn(event.id, r1.id, testAudit());
+  await upsertCommitteeMembershipTxn(event.id, r2.id, testAudit());
   return { event, themeA, themeB, abstract, r1, r2 };
 }
 
 describe.runIf(dbTestsEnabled())("db tier: abstracts committee audit rows share the change's transaction", () => {
+  it("upsertCommitteeMembershipTxn: a failing audit insert leaves no membership and no reactivation", async () => {
+    const event = await seedEvent({ status: "OPEN" });
+    const member = await seedUser({ clientId: event.clientId });
+    const entityId = `${event.id}:${member.id}`;
+    const audit = () =>
+      testAudit({ entityType: "AbstractCommitteeMembership", entityId, action: "upsert" });
+
+    const err = await caught(upsertCommitteeMembershipTxn(event.id, member.id, failingAudit()));
+
+    expect(pgErrorCode(err)).toBe("23502");
+    expect(await membershipActive(event.id, member.id)).toBeUndefined();
+    expect(await auditRowsOf("AbstractCommitteeMembership", entityId)).toEqual([]);
+
+    await upsertCommitteeMembershipTxn(event.id, member.id, audit());
+    expect(await membershipActive(event.id, member.id)).toBe(true);
+    await deactivateCommitteeMembershipTxn(event.id, member.id, testAudit());
+    expect(await membershipActive(event.id, member.id)).toBe(false);
+
+    // Reactivating an existing membership rolls back the same way.
+    const reactivateErr = await caught(
+      upsertCommitteeMembershipTxn(event.id, member.id, failingAudit()),
+    );
+
+    expect(pgErrorCode(reactivateErr)).toBe("23502");
+    expect(await membershipActive(event.id, member.id)).toBe(false);
+    expect(await auditRowsOf("AbstractCommitteeMembership", entityId)).toMatchObject([
+      { action: "upsert" },
+    ]);
+
+    await upsertCommitteeMembershipTxn(event.id, member.id, audit());
+    expect(await membershipActive(event.id, member.id)).toBe(true);
+    expect(await auditRowsOf("AbstractCommitteeMembership", entityId)).toMatchObject([
+      { action: "upsert" },
+      { action: "upsert" },
+    ]);
+  });
+
   it("deactivateCommitteeMembershipTxn: a failing audit insert rolls back the deactivation", async () => {
     const { event, themeA, abstract, r1, r2 } = await seedCommittee();
     await setReviewerThemesTxn(event.id, r1.id, [themeA.id], testAudit());

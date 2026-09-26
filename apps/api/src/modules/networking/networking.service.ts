@@ -13,6 +13,7 @@ import {
   listNetworkingDiscovery,
   networkingAreaAccess,
   networkingCounterpartVisible,
+  networkingDiscoveryEnabled,
   networkingEventAvailable,
   networkingIdentityEmail,
   networkingParticipantAccess,
@@ -455,6 +456,26 @@ export class NetworkingService {
   async blockedTarget(ctx: NetworkingContext, id: string, store = networkingStore()) {
     const snapshot = await this.counterpart(ctx, id, store);
     return snapshot.target && networkingCounterpartVisible(snapshot, ctx.config, "blocklist") ? snapshot.target : null;
+  }
+  /**
+   * `target()` for a list (4.9): of `ids`, the counterparts the viewer may see
+   * in `profile` mode, and the viewer's own current row, in one statement. As
+   * in target(), the viewer must still be eligible once any counterpart exists.
+   */
+  async visibleCounterparts(ctx: NetworkingContext, ids: readonly string[], store = networkingStore()) {
+    const found = await store.profileCounterparts({
+      eventId: ctx.event.id,
+      viewerId: ctx.profile.id,
+      targetIds: ids.filter((id) => id !== ctx.profile.id),
+      statuses: ctx.config.eligiblePaymentStatuses,
+      discoveryEnabled: networkingDiscoveryEnabled(ctx.config),
+    });
+    if (found.targets.length && (!found.viewer || !networkingParticipantEligible(found.viewer, ctx.config)))
+      throw notEligible();
+    return {
+      viewer: found.viewer?.profile ?? null,
+      visible: new Map(found.targets.filter((target) => target.visible).map((target) => [target.profile.id, target.profile])),
+    };
   }
   /** Viewer and target facts in one read; the viewer must still be eligible. */
   private async counterpart(ctx: NetworkingContext, id: string, store: NetworkingStore) {

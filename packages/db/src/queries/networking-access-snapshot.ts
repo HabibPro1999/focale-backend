@@ -1,7 +1,8 @@
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { NetworkingConfigSchema, type NetworkingConfig } from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
+import { rowsOf } from "../helpers";
 import { clients } from "../schema/users-clients";
 import { forms } from "../schema/forms";
 import { registrations } from "../schema/registrations";
@@ -13,7 +14,7 @@ import {
 } from "../schema/networking";
 import { networkingSecondFactors } from "../schema/networking-mfa";
 import { networkingConsentPending } from "./networking-projection";
-import { admittedProfile, mutuallyUnblocked } from "../policy/networking-eligibility";
+import { admittedProfile, mutuallyUnblocked, profileCounterpart } from "../policy/networking-eligibility";
 import type { NetworkingPaymentStatuses } from "../policy/networking-eligibility";
 import type { NetworkingAccessRegistration } from "../policy/networking-access";
 
@@ -215,18 +216,64 @@ export async function loadNetworkingCounterpartSnapshot(
   };
 }
 
+export type NetworkingProfileCounterparts = {
+  /** The viewer's current profile and registration (the viewer must still be eligible). */
+  viewer: { profile: ProfileRow; registration: NetworkingAccessRegistration | null } | null;
+  /** Each target that exists, and whether the viewer may see it in `profile` mode. */
+  targets: { profile: ProfileRow; visible: boolean }[];
+};
+
+/**
+ * The batch twin of the counterpart snapshot for lists (plan 4.9): the viewer
+ * and every target in one statement, each target's visibility decided by the
+ * `profile` mode fragment (4.6), as `target()` decides it for one.
+ */
+export async function loadNetworkingProfileCounterparts(
+  input: {
+    eventId: string;
+    viewerId: string;
+    targetIds: readonly string[];
+    statuses: NetworkingPaymentStatuses;
+    /** `networkingDiscoveryEnabled(config)`. */
+    discoveryEnabled: boolean;
+  },
+  db: DbExecutor = getDb(),
+): Promise<NetworkingProfileCounterparts> {
+  const p = networkingProfiles, r = registrations;
+  const visible = profileCounterpart(p, r, input.statuses, { eventId: input.eventId, profileId: input.viewerId }, input.discoveryEnabled);
+  const rows = await db
+    .select({
+      profile: p,
+      registration: { eventId: r.eventId, paymentStatus: r.paymentStatus, networkingOptIn: r.networkingOptIn },
+      visible: sql<boolean>`coalesce(${p.id}<>${input.viewerId} AND ${visible}, false)`.mapWith(Boolean),
+    })
+    .from(p)
+    .leftJoin(r, eq(r.id, p.registrationId))
+    .where(and(eq(p.eventId, input.eventId), inArray(p.id, [...new Set([input.viewerId, ...input.targetIds])])));
+  const viewer = rows.find((row) => row.profile.id === input.viewerId);
+  return {
+    viewer: viewer
+      ? { profile: viewer.profile, registration: viewer.registration?.eventId ? viewer.registration : null }
+      : null,
+    targets: rows
+      .filter((row) => row.profile.id !== input.viewerId)
+      .map((row) => ({ profile: row.profile, visible: row.visible === true })),
+  };
+}
+
 /**
  * Admitted to the networking area (badge, organizer badge scan): eligible
  * with a confirmed meeting and, when an access item is required, holding it
- * while it is active. The same rule as check-in's networking admission.
+ * while it is active. The same rule as check-in's networking admission; one
+ * `SELECT EXISTS`.
  */
 export async function networkingAreaAccess(
   input: { eventId: string; profileId: string; statuses: NetworkingPaymentStatuses; accessId?: string | null },
   db: DbExecutor = getDb(),
 ): Promise<boolean> {
   const p = networkingProfiles, r = registrations;
-  const [row] = await db
-    .select({ id: p.id })
+  const admitted = db
+    .select({ one: sql`1` })
     .from(p)
     .innerJoin(r, eq(r.id, p.registrationId))
     .where(and(
@@ -237,7 +284,7 @@ export async function networkingAreaAccess(
         ? sql`EXISTS (SELECT 1 FROM event_access ea WHERE ea.id=${input.accessId} AND ea.event_id=${input.eventId} AND ea.active)
           AND ${input.accessId}::text=ANY(${r.accessTypeIds})`
         : undefined,
-    ))
-    .limit(1);
-  return !!row;
+    ));
+  const [row] = rowsOf<{ admitted: boolean }>(await db.execute(sql`SELECT EXISTS (${admitted}) AS admitted`));
+  return row?.admitted === true;
 }

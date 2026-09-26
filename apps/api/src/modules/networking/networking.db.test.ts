@@ -25,6 +25,7 @@ import { NetworkingSocialService } from "./networking.social.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
 import { NetworkingAdminService } from "./networking.admin.service";
 import { NetworkingExportsService } from "./networking.exports.service";
+import { streamText } from "./__testing__/stream-text";
 import { NetworkingMfaService } from "./networking.mfa.service";
 import {
   openNetworkingSecret,
@@ -606,20 +607,20 @@ describe.runIf(enabled)(
         { id: participants[5].profile.id, eventId: ids.event },
         { company: "Export Company B" },
       );
-      const exports = new NetworkingExportsService(admin, social, meetings);
+      const exports = new NetworkingExportsService(social, meetings);
       const participantsFile = await exports.admin(
         event,
         "participants",
         "csv",
       );
-      expect(String(participantsFile.body)).toContain(
+      expect(await streamText(participantsFile.body)).toContain(
         '"Swipes","Matches","Messages","Planned meetings"',
       );
-      const matchesFile = await exports.admin(event, "matches", "csv");
-      expect(String(matchesFile.body)).toContain('"Company A"');
-      expect(String(matchesFile.body)).toContain('"Company B"');
-      expect(String(matchesFile.body)).toContain('"Export Company A"');
-      expect(String(matchesFile.body)).toContain('"Export Company B"');
+      const matches = await streamText((await exports.admin(event, "matches", "csv")).body);
+      expect(matches).toContain('"Company A"');
+      expect(matches).toContain('"Company B"');
+      expect(matches).toContain('"Export Company A"');
+      expect(matches).toContain('"Export Company B"');
     });
     it("filters organizer meetings by either participant company before pagination", async () => {
       const all = await admin.listMeetings(ids.event, { q: "export company" });

@@ -291,20 +291,25 @@ export async function getCommitteeProfile(
 // Committee — membership mutations
 // ============================================================================
 
-export async function upsertCommitteeMembership(
+/** Create or reactivate a membership, and write `audit`, in one transaction. */
+export async function upsertCommitteeMembershipTxn(
   eventId: string,
   userId: string,
+  audit: typeof auditLogs.$inferInsert,
 ): Promise<void> {
-  await getDb()
-    .insert(abstractCommitteeMemberships)
-    .values({ userId, eventId, active: true })
-    .onConflictDoUpdate({
-      target: [
-        abstractCommitteeMemberships.userId,
-        abstractCommitteeMemberships.eventId,
-      ],
-      set: { active: true },
-    });
+  await withTxn(async (tx) => {
+    await tx
+      .insert(abstractCommitteeMemberships)
+      .values({ userId, eventId, active: true })
+      .onConflictDoUpdate({
+        target: [
+          abstractCommitteeMemberships.userId,
+          abstractCommitteeMemberships.eventId,
+        ],
+        set: { active: true },
+      });
+    await insertAuditLog(audit, tx);
+  });
 }
 
 /**
