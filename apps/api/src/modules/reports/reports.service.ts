@@ -153,7 +153,7 @@ export class ReportsService {
     const { access, registrations } = await getAccessRegistrantsData(eventId, accessId);
 
     if (!access) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Access item not found", 404);
+      throw new AppException(ErrorCodes.ACCESS_NOT_FOUND, "Access item not found", 404);
     }
 
     const mapRegistrant = (r: (typeof registrations)[number]) => ({

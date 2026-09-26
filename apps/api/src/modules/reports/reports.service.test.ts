@@ -608,7 +608,7 @@ describe("getAccessRegistrants", () => {
 
     await expect(
       service.getAccessRegistrants("event-1", "foreign-access"),
-    ).rejects.toMatchObject({ statusCode: 404, code: ErrorCodes.NOT_FOUND });
+    ).rejects.toMatchObject({ statusCode: 404, code: ErrorCodes.ACCESS_NOT_FOUND });
 
     expect(m.getAccessRegistrantsData).toHaveBeenCalledWith("event-1", "foreign-access");
   });

@@ -302,7 +302,7 @@ export async function deleteEventTx(exec: DbExecutor, id: string): Promise<void>
 export async function updateEventBannerUrl(
   id: string,
   bannerUrl: string,
-  exec: DbExecutor = getDb(),
+  exec: DbExecutor,
 ): Promise<void> {
   await exec.update(events).set({ bannerUrl }).where(eq(events.id, id));
 }

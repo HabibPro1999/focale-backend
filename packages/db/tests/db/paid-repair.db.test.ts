@@ -136,7 +136,7 @@ async function audit(
   performedAt: Date,
   changes: Record<string, unknown> = {},
 ) {
-  await insertAuditLog({ entityType: "Registration", entityId: registrationId, action, performedBy, performedAt, changes });
+  await insertAuditLog({ entityType: "Registration", entityId: registrationId, action, performedBy, performedAt, changes }, getDb());
 }
 
 const status = (from: string, to: string) => ({ paymentStatus: { old: from, new: to } });

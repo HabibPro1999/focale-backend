@@ -20,6 +20,7 @@ import {
 } from "./registrations.public.controller";
 import { RegistrationRepricer } from "./registrations.repricer";
 import { RegistrationsService } from "./registrations.service";
+import { RegistrationCreateService } from "./registrations.create.service";
 
 const FORM_ID = "11111111-1111-4111-8111-111111111111";
 const REGISTRATION_ID = "22222222-2222-4222-8222-222222222222";
@@ -98,6 +99,8 @@ const INTERNAL_KEYS = [
 const service = {
   verifyEditToken: vi.fn(async () => true),
   getRegistrationForEdit: vi.fn(),
+};
+const creator = {
   createPublicRegistration: vi.fn(),
 };
 
@@ -105,6 +108,7 @@ const service = {
   controllers: [RegistrationsPublicController, RegistrationEditPublicController],
   providers: [
     { provide: RegistrationsService, useValue: service },
+    { provide: RegistrationCreateService, useValue: creator },
     { provide: PaymentProofService, useValue: {} },
     { provide: RegistrationRepricer, useValue: {} },
     { provide: RegistrationPaymentsService, useValue: {} },
@@ -210,7 +214,7 @@ describe("public registration responses: a new registration column is never publ
 
     it("register when the service leaks the raw row: 201 with the public registration and token only", async () => {
       const safe = toPublicRegistration({ ...rowWithNewColumn, ...meta }, { token: TOKEN });
-      service.createPublicRegistration.mockResolvedValue({
+      creator.createPublicRegistration.mockResolvedValue({
         created: true,
         registration: { ...rowWithNewColumn, ...safe },
         priceBreakdown: row.priceBreakdown,

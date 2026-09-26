@@ -6,7 +6,9 @@ import { AppException } from "../../core/app-exception";
 // Mocks — the packages/db fn layer + @app/integrations (storage / context).
 // ---------------------------------------------------------------------------
 
+const { rootDb } = vi.hoisted(() => ({ rootDb: { executor: "root" } }));
 vi.mock("@app/db", () => ({
+  getDb: () => rootDb,
   listCertificateTemplates: vi.fn(),
   getCertificateTemplateWithEvent: vi.fn(),
   getCertificateTemplateImageState: vi.fn(),
@@ -221,7 +223,7 @@ describe("CertificatesService", () => {
         accessId: null,
         scope: "BOTH",
         allowedAbstractFinalTypes: [],
-      });
+      }, rootDb);
     });
 
     it("rejects an accessId from another event", async () => {
@@ -262,7 +264,7 @@ describe("CertificatesService", () => {
         accessId: "access-001",
         scope: "BOTH",
         allowedAbstractFinalTypes: [],
-      });
+      }, rootDb);
       expect(findExistingAccessIdsInEvent).toHaveBeenCalledWith(
         ["access-001"],
         eventId,
@@ -289,7 +291,7 @@ describe("CertificatesService", () => {
         accessId: null,
         scope: "ABSTRACT",
         allowedAbstractFinalTypes: ["POSTER"],
-      });
+      }, rootDb);
     });
   });
 
@@ -310,7 +312,7 @@ describe("CertificatesService", () => {
       expect(getCertificateTemplateImageState).not.toHaveBeenCalled();
       expect(updateCertificateTemplate).toHaveBeenCalledWith(templateId, {
         name: "New Name",
-      });
+      }, rootDb);
     });
 
     it("rejects activating a template without an uploaded image", async () => {
@@ -344,7 +346,7 @@ describe("CertificatesService", () => {
       expect(result.active).toBe(true);
       expect(updateCertificateTemplate).toHaveBeenCalledWith(templateId, {
         active: true,
-      });
+      }, rootDb);
     });
 
     it("sets accessId to null (unlink)", async () => {
@@ -356,7 +358,7 @@ describe("CertificatesService", () => {
 
       expect(updateCertificateTemplate).toHaveBeenCalledWith(templateId, {
         accessId: null,
-      });
+      }, rootDb);
     });
 
     it("sets accessId to a new id (link)", async () => {
@@ -373,7 +375,7 @@ describe("CertificatesService", () => {
       );
       expect(updateCertificateTemplate).toHaveBeenCalledWith(templateId, {
         accessId: "new-access",
-      });
+      }, rootDb);
     });
 
     it("rejects linking an accessId from another event", async () => {
@@ -407,7 +409,7 @@ describe("CertificatesService", () => {
       expect(updateCertificateTemplate).toHaveBeenCalledWith(templateId, {
         scope: "ABSTRACT",
         allowedAbstractFinalTypes: ["ORAL_COMMUNICATION"],
-      });
+      }, rootDb);
     });
 
     it("omits scope/allowedAbstractFinalTypes from the patch when not provided", async () => {
@@ -440,7 +442,7 @@ describe("CertificatesService", () => {
       await service.deleteTemplate(templateId);
 
       expect(mockStorageDelete).toHaveBeenCalledTimes(1);
-      expect(deleteCertificateTemplateById).toHaveBeenCalledWith(templateId);
+      expect(deleteCertificateTemplateById).toHaveBeenCalledWith(templateId, rootDb);
     });
 
     it("also deletes the render image when it lies under the event's prefix (3.8)", async () => {
@@ -473,7 +475,7 @@ describe("CertificatesService", () => {
       await service.deleteTemplate(templateId);
 
       expect(mockStorageDelete).not.toHaveBeenCalled();
-      expect(deleteCertificateTemplateById).toHaveBeenCalledWith(templateId);
+      expect(deleteCertificateTemplateById).toHaveBeenCalledWith(templateId, rootDb);
     });
 
     it("deletes a template that has no image (no storage delete)", async () => {
@@ -488,7 +490,7 @@ describe("CertificatesService", () => {
       await service.deleteTemplate(templateId);
 
       expect(mockStorageDelete).not.toHaveBeenCalled();
-      expect(deleteCertificateTemplateById).toHaveBeenCalledWith(templateId);
+      expect(deleteCertificateTemplateById).toHaveBeenCalledWith(templateId, rootDb);
     });
 
     it("throws 404 AppException when template not found", async () => {
@@ -513,7 +515,7 @@ describe("CertificatesService", () => {
 
       await service.deleteTemplate(templateId);
 
-      expect(deleteCertificateTemplateById).toHaveBeenCalledWith(templateId);
+      expect(deleteCertificateTemplateById).toHaveBeenCalledWith(templateId, rootDb);
     });
   });
 
@@ -557,7 +559,7 @@ describe("CertificatesService", () => {
         ),
         renderImageWidth: 1754,
         renderImageHeight: 987,
-      });
+      }, rootDb);
     });
 
     it("refuses an image the render derivation cannot decode; nothing stored (3.8)", async () => {
@@ -658,7 +660,7 @@ describe("CertificatesService", () => {
           renderImageKey: renderKey(),
           renderImageWidth: 1754,
           renderImageHeight: 987,
-        });
+        }, rootDb);
         expect(mockStorageDelete).toHaveBeenCalledTimes(1);
         expect(mockStorageDelete).toHaveBeenCalledWith(oldKey);
         const [uploadOrder] = mockStorageUpload.mock.invocationCallOrder;

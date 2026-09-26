@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { AbstractConfigRow, AbstractThemeRow } from "@app/db";
 
+const { rootDb } = vi.hoisted(() => ({ rootDb: { executor: "root" } }));
 vi.mock("@app/db", () => ({
+  getDb: () => rootDb,
   getOrCreateAbstractConfig: vi.fn(),
   updateAbstractConfig: vi.fn(),
   countAbstractsByEvent: vi.fn(),
@@ -139,6 +141,7 @@ describe("updateConfig", () => {
         action: "UPDATE",
         performedBy: userId,
       }),
+      rootDb,
     );
   });
 
@@ -164,9 +167,11 @@ describe("updateConfig", () => {
         action: "mode_force_changed",
         changes: { submissionMode: { old: "FREE_TEXT", new: "STRUCTURED" } },
       }),
+      rootDb,
     );
     expect(insertAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({ action: "UPDATE" }),
+      rootDb,
     );
     // `force` is stripped from the persisted data.
     expect(updateAbstractConfig).toHaveBeenCalledWith(configId, {
@@ -446,6 +451,7 @@ describe("additional fields", () => {
         action: "UPDATE",
         performedBy: userId,
       }),
+      rootDb,
     );
   });
 

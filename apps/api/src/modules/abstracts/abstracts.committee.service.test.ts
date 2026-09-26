@@ -4,7 +4,9 @@ import { ErrorCodes, UserRole } from "@app/contracts";
 // ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
+const { rootDb } = vi.hoisted(() => ({ rootDb: { executor: "root" } }));
 vi.mock("@app/db", () => ({
+  getDb: () => rootDb,
   findAbstractMembership: vi.fn(),
   deleteUnusedCommitteeInvites: vi.fn(),
   findEventClientId: vi.fn(),
@@ -501,6 +503,7 @@ describe("addCommitteeMember", () => {
     expect(upsertCommitteeMembership).toHaveBeenCalledWith(eventId, user.id);
     expect(insertAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({ entityType: "AbstractCommitteeMembership" }),
+      rootDb,
     );
   });
 
@@ -606,6 +609,7 @@ describe("removeCommitteeMember", () => {
     );
     expect(insertAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({ action: "deactivate" }),
+      rootDb,
     );
   });
 
@@ -642,6 +646,7 @@ describe("setReviewerThemes", () => {
     ]);
     expect(insertAuditLog).toHaveBeenCalledWith(
       expect.objectContaining({ action: "replace" }),
+      rootDb,
     );
   });
 
@@ -793,6 +798,61 @@ describe("assignReviewers", () => {
     expect((err as AppException).getStatus()).toBe(400);
     expect(assignReviewersTxn).not.toHaveBeenCalled();
   });
+
+  // Extras follow the divergence alert's rule (scoreDivergence in
+  // @app/shared). Before, a zero threshold admitted extras on fewer than two
+  // scores or a zero spread, where the alert never fires; those now 400.
+  it.each([
+    // [divergenceThreshold (null: no config, default 6), active scores, allowed]
+    [0, [], false],
+    [0, [12], false],
+    [0, [12, 12], false],
+    [0, [12, 12, 12], false],
+    [0, [12, 13], true],
+    [1, [12, 12], false],
+    [1, [12, 13], true],
+    [6, [10, 15], false],
+    [6, [10, 16], true],
+    [6, [16, 3, 10], true],
+    [null, [10, 15], false],
+    [null, [10, 16], true],
+  ] as const)(
+    "extra reviewers at threshold %s with scores %j: allowed=%s",
+    async (threshold, scores, allowed) => {
+      mock(getReviewerAssignmentConfig).mockResolvedValue(
+        threshold === null
+          ? null
+          : { reviewersPerAbstract: 2, divergenceThreshold: threshold, distributeByTheme: false },
+      );
+      mock(findScoredReviewScores).mockResolvedValue([...scores]);
+      mock(findActiveMembershipUserIds).mockResolvedValue(["r1", "r2", "r3"]);
+      mock(assignReviewersTxn).mockResolvedValue({
+        ok: true,
+        id: abstractId,
+        status: "UNDER_REVIEW",
+      });
+
+      const result = await service
+        .assignReviewers(eventId, abstractId, { reviewerIds: ["r1", "r2", "r3"] }, performedBy)
+        .catch((e: unknown) => e);
+
+      if (allowed) {
+        expect(result).toEqual({
+          abstractId,
+          status: "UNDER_REVIEW",
+          reviewerIds: ["r1", "r2", "r3"],
+        });
+      } else {
+        expect(result).toBeInstanceOf(AppException);
+        expect((result as AppException).getStatus()).toBe(400);
+        expect((result as AppException).getResponse()).toMatchObject({
+          code: ErrorCodes.VALIDATION_ERROR,
+          message: "Extra reviewers can only be assigned after a score divergence alert",
+        });
+        expect(assignReviewersTxn).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("404s when the abstract is not in the event", async () => {
     mock(findAbstractBasic).mockResolvedValue({
@@ -1189,6 +1249,7 @@ describe("resendCommitteeInvite", () => {
         action: "admin_reset_password",
         changes: { method: { old: null, new: "invite_token" } },
       }),
+      rootDb,
     );
   });
 

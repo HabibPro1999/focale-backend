@@ -2,7 +2,7 @@ import { CommitteeInviteService } from "./abstracts.committee-invite.service";
 import { CommitteeEmailsService } from "./abstracts.committee-emails";
 import { randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
-import { getAbstractTitle } from "@app/shared";
+import { getAbstractTitle, scoreDivergence } from "@app/shared";
 import {
   ErrorCodes,
   UserRole,
@@ -36,6 +36,7 @@ import {
   findAbstractForReview,
   reviewAbstractTxn,
   insertAuditLog,
+  getDb,
   getUserByEmail,
   getUserById,
   findCommitteeUserClientIds,
@@ -259,7 +260,7 @@ export class AbstractsCommitteeService {
       action: "upsert",
       changes: { active: { old: null, new: true } },
       performedBy,
-    });
+    }, getDb());
 
     const eventName = (await findEventName(eventId)) ?? "the event";
     // Best-effort: invite delivery failure is reported, never rolls back membership.
@@ -329,7 +330,7 @@ export class AbstractsCommitteeService {
       action: "deactivate",
       changes: { active: { old: true, new: false } },
       performedBy,
-    });
+    }, getDb());
   }
 
   // ==========================================================================
@@ -367,7 +368,7 @@ export class AbstractsCommitteeService {
       action: "replace",
       changes: { themeIds: { old: null, new: uniqueThemeIds } },
       performedBy,
-    });
+    }, getDb());
 
     const member = (await listCommitteeMembers(eventId)).find(
       (m) => m.userId === userId,
@@ -411,11 +412,10 @@ export class AbstractsCommitteeService {
         );
       }
       if (reviewerIds.length > requiredReviewers) {
+        // Extras need diverging scores, by the rule the divergence alert uses
+        // (@app/shared): never on fewer than two scores or a zero spread.
         const scores = await findScoredReviewScores(abstractId);
-        const min = scores.length >= 2 ? Math.min(...scores) : null;
-        const max = scores.length >= 2 ? Math.max(...scores) : null;
-        const spread = min !== null && max !== null ? max - min : 0;
-        if (spread < (config?.divergenceThreshold ?? 6)) {
+        if (!scoreDivergence(scores, config?.divergenceThreshold ?? 6)) {
           throw new AppException(
             ErrorCodes.VALIDATION_ERROR,
             "Extra reviewers can only be assigned after a score divergence alert",
@@ -479,7 +479,7 @@ export class AbstractsCommitteeService {
       action: "assign_reviewers",
       changes: { reviewerIds: { old: null, new: reviewerIds } },
       performedBy,
-    });
+    }, getDb());
 
     return { abstractId: updated.id, status: updated.status, reviewerIds };
   }
@@ -651,7 +651,7 @@ export class AbstractsCommitteeService {
       action: "admin_reset_password",
       changes: { method: { old: null, new: "invite_token" } },
       performedBy,
-    });
+    }, getDb());
 
     return { inviteEmailSent };
   }
@@ -685,7 +685,7 @@ export class AbstractsCommitteeService {
 
     await updateFirebaseUserPassword(userId, newPassword);
     await revokeFirebaseRefreshTokens(userId);
-    try { await deleteUnusedCommitteeInvites(userId); }
+    try { await deleteUnusedCommitteeInvites(userId, getDb()); }
     catch (err) { logger.error({ err, userId, eventId }, "Failed to purge committee invite tokens after an admin password override"); }
     await insertAuditLog({
       entityType: "User",
@@ -694,7 +694,7 @@ export class AbstractsCommitteeService {
       // The plaintext password never enters the audit log.
       changes: { method: { old: null, new: "direct" } },
       performedBy: caller.id,
-    });
+    }, getDb());
     return { ok: true as const };
   }
 

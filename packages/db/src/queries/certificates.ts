@@ -244,7 +244,7 @@ export async function createCertificateTemplate(
     scope?: string;
     allowedAbstractFinalTypes?: string[] | null;
   },
-  exec: DbExecutor = getDb(),
+  exec: DbExecutor,
 ): Promise<CertificateTemplateWithAccess> {
   const [inserted] = await exec
     .insert(certificateTemplates)
@@ -288,7 +288,7 @@ export async function updateCertificateTemplate(
     scope?: string;
     allowedAbstractFinalTypes?: string[] | null;
   },
-  exec: DbExecutor = getDb(),
+  exec: DbExecutor,
 ): Promise<CertificateTemplateWithAccess> {
   const set: Record<string, unknown> = {};
   if (patch.name !== undefined) set.name = patch.name;
@@ -326,7 +326,7 @@ export async function updateCertificateTemplateImage(
     templateWidth: number;
     templateHeight: number;
   } & CertificateRenderImageRef,
-  exec: DbExecutor = getDb(),
+  exec: DbExecutor,
 ): Promise<CertificateTemplateWithAccess> {
   await exec
     .update(certificateTemplates)
@@ -405,7 +405,7 @@ export async function setCertificateTemplateRenderImage(
   id: string,
   expectedTemplateUrl: string,
   render: CertificateRenderImageRef,
-  exec: DbExecutor = getDb(),
+  exec: DbExecutor,
 ): Promise<boolean> {
   const rows = await exec
     .update(certificateTemplates)
@@ -427,7 +427,7 @@ export async function setCertificateTemplateRenderImage(
 
 export async function deleteCertificateTemplateById(
   id: string,
-  exec: DbExecutor = getDb(),
+  exec: DbExecutor,
 ): Promise<void> {
   await exec.delete(certificateTemplates).where(eq(certificateTemplates.id, id));
 }

@@ -80,7 +80,7 @@ const envShape = {
   EXPORT_MAX_CONCURRENCY: envInt(1, 16, 2, {
     section: "http",
     description:
-      "File exports (reports, abstracts, networking) generated at once by this API process. Up to\nEXPORT_MAX_QUEUED more wait for a slot; anything beyond gets 503 EXPORT_BUSY + Retry-After.",
+      "Report and abstracts file exports generated at once by this API process (the networking\norganizer XLSX is not counted). Up to EXPORT_MAX_QUEUED more wait for a slot; anything\nbeyond gets 503 EXPORT_BUSY + Retry-After.",
     example: "2",
     active: true,
   }, "EXPORT_MAX_CONCURRENCY"),

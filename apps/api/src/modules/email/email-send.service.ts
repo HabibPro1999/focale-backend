@@ -11,6 +11,7 @@ import {
   listSponsorshipBatchesForBulk,
   getClientById,
   insertEmailLogsSkippingConflicts,
+  withTxn,
   type EmailTemplateRow,
   type EmailLogInsert,
 } from "@app/db";
@@ -135,7 +136,7 @@ export class EmailSendService {
       subject: "",
       status: "QUEUED",
     }));
-    const queued = (await insertEmailLogsSkippingConflicts(values)).size;
+    const queued = (await withTxn((tx) => insertEmailLogsSkippingConflicts(values, tx))).size;
 
     return {
       success: true,
@@ -210,7 +211,7 @@ export class EmailSendService {
       status: "QUEUED",
       contextSnapshot: s.contextSnapshot,
     }));
-    const queued = (await insertEmailLogsSkippingConflicts(values)).size;
+    const queued = (await withTxn((tx) => insertEmailLogsSkippingConflicts(values, tx))).size;
 
     return {
       success: true,
@@ -272,7 +273,7 @@ export class EmailSendService {
     const registration = await getRegistrationForEmailContext(registrationId);
     if (!registration || registration.eventId !== event.id) {
       throw new AppException(
-        ErrorCodes.NOT_FOUND,
+        ErrorCodes.REGISTRATION_NOT_FOUND,
         "Registration not found for this event",
         404,
       );

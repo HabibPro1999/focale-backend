@@ -11,6 +11,7 @@ import {
   updateAbstractConfig,
   countAbstractsByEvent,
   insertAuditLog,
+  getDb,
   listThemesByConfigId,
   insertTheme,
   findThemeWithEventId,
@@ -95,7 +96,7 @@ export class AbstractsConfigService {
             },
           },
           performedBy,
-        });
+        }, getDb());
       }
     }
 
@@ -133,7 +134,7 @@ export class AbstractsConfigService {
       action: "UPDATE",
       changes,
       performedBy,
-    });
+    }, getDb());
 
     return updated;
   }
@@ -373,7 +374,7 @@ export class AbstractsConfigService {
         },
       },
       performedBy,
-    });
+    }, getDb());
     return { fields: body.fields };
   }
 }

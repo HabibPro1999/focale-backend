@@ -305,6 +305,10 @@
       "module": "packages/contracts/src/pricing.ts",
       "type": "DroppedAccessItem"
     },
+    "DuplicateEmailTemplateSchema": {
+      "module": "packages/contracts/src/email.ts",
+      "type": "DuplicateEmailTemplate"
+    },
     "EditAbstractSchema": {
       "module": "packages/contracts/src/abstracts.ts",
       "type": "EditAbstract"

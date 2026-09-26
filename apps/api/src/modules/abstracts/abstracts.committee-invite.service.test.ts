@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes, UserRole } from "@app/contracts";
+const { rootDb } = vi.hoisted(() => ({ rootDb: { executor: "root" } }));
 vi.mock("@app/db", () => ({
+  getDb: () => rootDb,
   replaceCommitteeInvite: vi.fn(),
   insertCommitteeInvite: vi.fn(),
   supersedeCommitteeInvite: vi.fn(),
@@ -165,7 +167,7 @@ describe("committee invite lifecycle", () => {
       await service.setCommitteeMemberPasswordWithInvite(raw, "Secret1!"),
     ).toEqual({ ok: true, email: "reviewer@example.com" });
     expect(updateFirebaseUserPassword).toHaveBeenCalledWith("user", "Secret1!");
-    expect(db.deleteUnusedCommitteeInvites).toHaveBeenCalledWith("user");
+    expect(db.deleteUnusedCommitteeInvites).toHaveBeenCalledWith("user", rootDb);
     expect(
       JSON.stringify(vi.mocked(db.insertAuditLog).mock.calls),
     ).not.toContain("Secret1!");
@@ -191,6 +193,10 @@ describe("committee invite lifecycle", () => {
     await expect(service.resendCommitteeInviteWithToken(raw)).resolves.toEqual({
       ok: true,
     });
+    expect(db.insertCommitteeInvite).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "user" }),
+      rootDb,
+    );
     expect(db.supersedeCommitteeInvite).toHaveBeenCalledWith("new");
     expect(emails.sendInviteEmail.mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(db.supersedeCommitteeInvite).mock.invocationCallOrder[0],

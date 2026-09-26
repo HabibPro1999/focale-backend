@@ -12,6 +12,7 @@ import {
   discardCommitteeInvite,
   findAbstractMembership,
   insertAuditLog,
+  getDb,
 } from "@app/db";
 import {
   updateFirebaseUserPassword,
@@ -170,7 +171,7 @@ export class CommitteeInviteService {
       );
     }
     try {
-      await deleteUnusedCommitteeInvites(invite.userId);
+      await deleteUnusedCommitteeInvites(invite.userId, getDb());
     } catch (err) {
       logger.error(
         { err, userId: invite.userId },
@@ -184,7 +185,7 @@ export class CommitteeInviteService {
         action: "invite_password_set",
         changes: { method: { old: null, new: "invite_token" } },
         performedBy: invite.userId,
-      });
+      }, getDb());
     } catch (err) {
       logger.error({ err }, "Failed to audit committee invite password set");
     }
@@ -215,6 +216,7 @@ export class CommitteeInviteService {
       const token = generateCommitteeInviteToken();
       const created = await insertCommitteeInvite(
         this.tokenData(token, invite.userId, invite.eventId, null),
+        getDb(),
       );
       createdId = created.id;
       const sent = await this.emails.sendInviteEmail(
@@ -244,7 +246,7 @@ export class CommitteeInviteService {
         action: "invite_resent_self",
         changes: { method: { old: null, new: "invite_token" } },
         performedBy: invite.userId,
-      });
+      }, getDb());
     } catch (err) {
       logger.error({ err }, "Failed to audit committee invite self-resend");
     }

@@ -33,14 +33,14 @@ describe.runIf(dbTestsEnabled())("db tier: worker heartbeats", () => {
   });
 
   it("upserts one row per worker and keeps started_at while last_beat_at moves", async () => {
-    await recordWorkerHeartbeat({ workerId: "w1", service: "focale-worker", disabled: false, jobs: { outbox: job() } });
+    await recordWorkerHeartbeat({ workerId: "w1", service: "focale-worker", disabled: false, jobs: { outbox: job() } }, getDb());
     await ageRow("w1", 30);
     await recordWorkerHeartbeat({
       workerId: "w1",
       service: "focale-worker",
       disabled: false,
       jobs: { outbox: job({ running: true, runningForMs: 1_000 }) },
-    });
+    }, getDb());
 
     const rows = await getDb().select().from(workerHeartbeats);
     expect(rows).toHaveLength(1);
@@ -54,9 +54,9 @@ describe.runIf(dbTestsEnabled())("db tier: worker heartbeats", () => {
   });
 
   it("is healthy with one fresh enabled worker, even beside a stopped one", async () => {
-    await recordWorkerHeartbeat({ workerId: "old", service: "focale-worker", disabled: false, jobs: {} });
+    await recordWorkerHeartbeat({ workerId: "old", service: "focale-worker", disabled: false, jobs: {} }, getDb());
     await ageRow("old", 120);
-    await recordWorkerHeartbeat({ workerId: "new", service: "focale-worker", disabled: false, jobs: { outbox: job() } });
+    await recordWorkerHeartbeat({ workerId: "new", service: "focale-worker", disabled: false, jobs: { outbox: job() } }, getDb());
 
     expect(await getWorkerHealth()).toEqual({
       isHealthy: true,
@@ -72,7 +72,7 @@ describe.runIf(dbTestsEnabled())("db tier: worker heartbeats", () => {
       counts: { live: 0, disabled: 0, overdueJobs: 0 },
     });
 
-    await recordWorkerHeartbeat({ workerId: "idle", service: "focale-worker", disabled: true, jobs: {} });
+    await recordWorkerHeartbeat({ workerId: "idle", service: "focale-worker", disabled: true, jobs: {} }, getDb());
     expect(await getWorkerHealth()).toEqual({
       isHealthy: false,
       reasons: ["only workers with RUN_WORKERS=false are running; no jobs are processed"],
@@ -84,7 +84,7 @@ describe.runIf(dbTestsEnabled())("db tier: worker heartbeats", () => {
       service: "focale-worker",
       disabled: false,
       jobs: { "email-queue": job({ running: true, runningForMs: 250_000, timeoutMs: 120_000, overdue: true }) },
-    });
+    }, getDb());
     const health = await getWorkerHealth();
     // Counts only: no worker id, service name or job name in the public body.
     expect(health).toEqual({
@@ -96,13 +96,13 @@ describe.runIf(dbTestsEnabled())("db tier: worker heartbeats", () => {
   });
 
   it("ignores workers silent for 60 s and prunes rows older than the retention", async () => {
-    await recordWorkerHeartbeat({ workerId: "gone", service: "focale-worker", disabled: false, jobs: {} });
-    await recordWorkerHeartbeat({ workerId: "recent", service: "focale-worker", disabled: false, jobs: {} });
+    await recordWorkerHeartbeat({ workerId: "gone", service: "focale-worker", disabled: false, jobs: {} }, getDb());
+    await recordWorkerHeartbeat({ workerId: "recent", service: "focale-worker", disabled: false, jobs: {} }, getDb());
     await ageRow("gone", 8 * 24 * 3600);
     await ageRow("recent", 61);
 
     expect((await getWorkerHealth()).counts).toEqual({ live: 0, disabled: 0, overdueJobs: 0 });
-    expect(await pruneWorkerHeartbeats()).toBe(1);
+    expect(await pruneWorkerHeartbeats(getDb())).toBe(1);
     const remaining = await getDb().select({ workerId: workerHeartbeats.workerId }).from(workerHeartbeats);
     expect(remaining).toEqual([{ workerId: "recent" }]);
   });

@@ -56,7 +56,7 @@ describe.runIf(dbTestsEnabled())(
     }
     it("only one concurrent token claim wins", async () => {
       const data = await tokenData();
-      const row = await insertCommitteeInvite(data);
+      const row = await insertCommitteeInvite(data, getDb());
       expect((await findCommitteeInviteByHash(data.tokenHash))?.user.id).toBe(
         data.userId,
       );
@@ -72,11 +72,11 @@ describe.runIf(dbTestsEnabled())(
       const row = await insertCommitteeInvite({
         ...(await tokenData()),
         expiresAt: new Date(0),
-      });
+      }, getDb());
       expect(await claimCommitteeInvite(row.id, new Date())).toBe(false);
     });
     it("releases a failed password claim if no replacement exists", async () => {
-      const row = await insertCommitteeInvite(await tokenData());
+      const row = await insertCommitteeInvite(await tokenData(), getDb());
       const now = new Date();
       expect(await claimCommitteeInvite(row.id, now)).toBe(true);
       await releaseCommitteeInvite(row, now);
@@ -84,7 +84,7 @@ describe.runIf(dbTestsEnabled())(
     });
     it("does not resurrect a superseded link when releasing a failed claim", async () => {
       const data = await tokenData();
-      const old = await insertCommitteeInvite(data);
+      const old = await insertCommitteeInvite(data, getDb());
       const now = new Date();
       await claimCommitteeInvite(old.id, now);
       const replacement = await replaceCommitteeInvite({
@@ -97,7 +97,7 @@ describe.runIf(dbTestsEnabled())(
     });
     it("concurrent minting leaves one unused invite and keeps used history", async () => {
       const data = await tokenData();
-      const used = await insertCommitteeInvite(data);
+      const used = await insertCommitteeInvite(data, getDb());
       await claimCommitteeInvite(used.id, new Date());
       await Promise.all(
         Array.from({ length: 3 }, (_, i) =>
@@ -113,15 +113,15 @@ describe.runIf(dbTestsEnabled())(
     });
     it("password cleanup purges unused links across events, keeping used history", async () => {
       const data = await tokenData();
-      const used = await insertCommitteeInvite(data);
+      const used = await insertCommitteeInvite(data, getDb());
       await claimCommitteeInvite(used.id, new Date());
-      await insertCommitteeInvite({ ...data, tokenHash: "unused" });
+      await insertCommitteeInvite({ ...data, tokenHash: "unused" }, getDb());
       await insertCommitteeInvite({
         ...data,
         eventId: (await seedEvent()).id,
         tokenHash: "other-event",
-      });
-      await deleteUnusedCommitteeInvites(data.userId);
+      }, getDb());
+      await deleteUnusedCommitteeInvites(data.userId, getDb());
       expect(await getDb().select().from(committeeInviteTokens)).toHaveLength(
         1,
       );

@@ -33,10 +33,10 @@ describe.runIf(dbTestsEnabled())("concurrency: admin invariant and invite supers
     const user = await seedUser({ role: 2 });
     const event = await seedEvent();
     const data = { userId: user.id, eventId: event.id, expiresAt: new Date(Date.now() + 86400000) };
-    await insertCommitteeInvite({ ...data, tokenHash: "old" });
+    await insertCommitteeInvite({ ...data, tokenHash: "old" }, getDb());
     // Both sends have succeeded before either request starts superseding links.
-    const a = await insertCommitteeInvite({ ...data, tokenHash: "delivered-a" });
-    const b = await insertCommitteeInvite({ ...data, tokenHash: "delivered-b" });
+    const a = await insertCommitteeInvite({ ...data, tokenHash: "delivered-a" }, getDb());
+    const b = await insertCommitteeInvite({ ...data, tokenHash: "delivered-b" }, getDb());
     await Promise.all([supersedeCommitteeInvite(a.id), supersedeCommitteeInvite(b.id)]);
     const live = await getDb().select().from(committeeInviteTokens).where(isNull(committeeInviteTokens.usedAt));
     expect(live).toHaveLength(1);
@@ -53,8 +53,8 @@ describe.runIf(dbTestsEnabled())("concurrency: admin invariant and invite supers
     const event = await seedEvent();
     const otherEvent = await seedEvent();
     const data = { userId: user.id, expiresAt: new Date(Date.now() + 86400000) };
-    const a = await insertCommitteeInvite({ ...data, eventId: event.id, tokenHash: "a" });
-    const b = await insertCommitteeInvite({ ...data, eventId: otherEvent.id, tokenHash: "b" });
+    const a = await insertCommitteeInvite({ ...data, eventId: event.id, tokenHash: "a" }, getDb());
+    const b = await insertCommitteeInvite({ ...data, eventId: otherEvent.id, tokenHash: "b" }, getDb());
     await Promise.all([supersedeCommitteeInvite(a.id), supersedeCommitteeInvite(b.id)]);
     expect(await getDb().select().from(committeeInviteTokens)).toHaveLength(2);
   });
