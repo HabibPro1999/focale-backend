@@ -7,5 +7,7 @@ export * from "./txn";
 export * from "./locks";
 export * from "./settlement";
 export * from "./queries/index";
+export * from "./policy/networking-access";
+export * from "./policy/networking-eligibility";
 export * from "./outbox";
 export * from "./lease-queue";
