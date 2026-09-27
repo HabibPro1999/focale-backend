@@ -9,7 +9,7 @@ import {
   THIN_BORDER,
   toXlsxBuffer,
 } from "../reports/excel-style";
-import { getAbstractTitle as getTitle } from "@app/shared";
+import { getAbstractTitle as getTitle, summarizeScores } from "@app/shared";
 import { reviewScoreSpread } from "./abstracts.admin.service";
 import { getAuthorLine } from "@app/shared";
 import {
@@ -24,8 +24,7 @@ function averageScoreOf(
   const scores = reviews
     .map((review) => review.score)
     .filter((score): score is number => score !== null);
-  if (scores.length === 0) return null;
-  return scores.reduce((sum, score) => sum + score, 0) / scores.length;
+  return summarizeScores(scores).average;
 }
 
 export async function exportAbstractsWorkbook(

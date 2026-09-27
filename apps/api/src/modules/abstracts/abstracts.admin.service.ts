@@ -1,4 +1,4 @@
-import { getAbstractTitle as getTitle } from "@app/shared";
+import { getAbstractTitle as getTitle, summarizeScores } from "@app/shared";
 export { getAbstractTitle as getTitle } from "@app/shared";
 import { Injectable } from "@nestjs/common";
 import {
@@ -42,10 +42,8 @@ export function reviewScoreSpread(reviews: Array<{ score: number | null }>): {
   const scores = reviews
     .map((review) => review.score)
     .filter((score): score is number => score !== null);
-  if (scores.length < 2) return { min: null, max: null, spread: null };
-  const min = Math.min(...scores);
-  const max = Math.max(...scores);
-  return { min, max, spread: max - min };
+  const { min, max, spread } = summarizeScores(scores);
+  return { min, max, spread };
 }
 
 function formatAdminAbstract(abstract: AdminAbstractRow) {

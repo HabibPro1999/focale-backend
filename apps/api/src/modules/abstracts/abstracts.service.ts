@@ -33,7 +33,7 @@ import { AppException, conflict, notFound } from "../../core/app-exception";
 import { CONFIG, type Config } from "../../core/config";
 import { logger } from "../../core/logger.service";
 import { assertPublicLinkBaseUrlAllowed } from "../../core/public-link-origin";
-import { generateAbstractToken, verifyAbstractToken } from "./abstracts.token";
+import { generateAbstractToken, assertAbstractToken } from "./abstracts.token";
 import {
   abstractContentFields,
   abstractHtmlToText,
@@ -81,6 +81,10 @@ async function validateRegistration(
 
 function duplicateAuthorEmailError(): AppException {
   return conflict("An abstract has already been submitted for this first-author email", { code: ErrorCodes.ABSTRACT_DUPLICATE_AUTHOR_EMAIL });
+}
+
+async function assertAuthorEmailFree(...args: Parameters<typeof findDuplicateAuthorEmail>): Promise<void> {
+  if (await findDuplicateAuthorEmail(...args)) throw duplicateAuthorEmailError();
 }
 
 function buildRevisionSnapshot(
@@ -173,6 +177,14 @@ function validateWordLimits(
       { fields: errors },
     );
   }
+}
+
+function validateContent(input: AbstractContent, config: AbstractConfigRow): AbstractContent {
+  const content = sanitizeAbstractContent(input);
+  validateMode(content.mode, config.submissionMode);
+  validateContentPresence(content);
+  validateWordLimits(content, config);
+  return content;
 }
 
 async function validateThemes(
@@ -336,10 +348,7 @@ export class AbstractsService {
       throw conflict("Abstract submissions are closed", { code: ErrorCodes.ABSTRACT_SUBMISSIONS_CLOSED });
     }
 
-    const content = sanitizeAbstractContent(body.content as AbstractContent);
-    validateMode(content.mode, config.submissionMode);
-    validateContentPresence(content);
-    validateWordLimits(content, config);
+    const content = validateContent(body.content as AbstractContent, config);
     await validateThemes(body.themeIds, config.id, config.maxThemesPerAbstract);
     assertPublicLinkBaseUrlAllowed(
       body.linkBaseUrl,
@@ -356,11 +365,7 @@ export class AbstractsService {
     const registrationId = body.registrationId ?? null;
     await validateRegistration(registrationId, found.event.id);
 
-    if (
-      await findDuplicateAuthorEmail(found.event.id, authorEmailNormalized)
-    ) {
-      throw duplicateAuthorEmailError();
-    }
+    await assertAuthorEmailFree(found.event.id, authorEmailNormalized);
 
     const result = await submitAbstractTxn({
       id: abstractId,
@@ -408,12 +413,7 @@ export class AbstractsService {
   // --------------------------------------------------------------------------
   async getAbstractByToken(id: string, token: string) {
     const abstract = await findAbstractForToken(id);
-    if (!abstract) {
-      throw notFound("Abstract not found");
-    }
-    if (!verifyAbstractToken(abstract.editToken, token)) {
-      throw notFound("Invalid abstract token");
-    }
+    assertAbstractToken(abstract, token);
     await assertAbstractModuleEnabled(abstract.eventId);
 
     const config = abstract.config;
@@ -469,12 +469,7 @@ export class AbstractsService {
     ip?: string,
   ) {
     const abstract = await findAbstractForEdit(id);
-    if (!abstract) {
-      throw notFound("Abstract not found");
-    }
-    if (!verifyAbstractToken(abstract.editToken, token)) {
-      throw notFound("Invalid abstract token");
-    }
+    assertAbstractToken(abstract, token);
     await assertAbstractModuleEnabled(abstract.eventId);
 
     const config = abstract.config;
@@ -498,10 +493,7 @@ export class AbstractsService {
       throw conflict(`Abstract cannot be edited in ${abstract.status} status`, { code: ErrorCodes.ABSTRACT_NOT_EDITABLE });
     }
 
-    const content = sanitizeAbstractContent(body.content as AbstractContent);
-    validateMode(content.mode, config.submissionMode);
-    validateContentPresence(content);
-    validateWordLimits(content, config);
+    const content = validateContent(body.content as AbstractContent, config);
     // M14: the abstract's own (possibly now-deactivated) themes stay valid on edit.
     const currentThemeIds = await findAbstractThemeIds(id);
     await validateThemes(
@@ -520,15 +512,7 @@ export class AbstractsService {
     await validateRegistration(nextRegistrationId, abstract.eventId);
     const authorEmailNormalized = normalizeAuthorEmail(body.authorEmail);
 
-    if (
-      await findDuplicateAuthorEmail(
-        abstract.eventId,
-        authorEmailNormalized,
-        id,
-      )
-    ) {
-      throw duplicateAuthorEmailError();
-    }
+    await assertAuthorEmailFree(abstract.eventId, authorEmailNormalized, id);
 
     const result = await editAbstractTxn({
       id,
