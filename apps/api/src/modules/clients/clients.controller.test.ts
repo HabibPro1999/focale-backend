@@ -71,6 +71,23 @@ describe("ClientsController (routes)", () => {
   });
 
   describe("GET /api/clients/me", () => {
+    it("requires a user client ID before trying a fallback lookup", async () => {
+      const res = await app.inject({ method: "GET", url: "/api/clients/me", headers: AUTH });
+      expect(res.statusCode).toBe(404);
+      expect(res.json().error).toEqual({ code: ErrorCodes.NOT_FOUND, message: "User is not associated with any client" });
+      expect(service.getById).not.toHaveBeenCalled();
+    });
+
+    it.each([true, false])("loads a fallback when the attached client is null (exists=%s)", async (exists) => {
+      AUTH = authAs(UserRole.SUPER_ADMIN, clientId, { client: null });
+      service.getById.mockResolvedValue(exists ? makeClient() : null);
+      const res = await app.inject({ method: "GET", url: "/api/clients/me", headers: AUTH });
+      expect(service.getById).toHaveBeenCalledExactlyOnceWith(clientId);
+      expect(res.statusCode).toBe(exists ? 200 : 404);
+      if (exists) expect(res.json().data.id).toBe(clientId);
+      else expect(res.json().error).toEqual({ code: ErrorCodes.NOT_FOUND, message: "Client not found" });
+    });
+
     it("returns the attached client without calling the service", async () => {
       const client = makeClient({ active: true });
       authAs(UserRole.CLIENT_ADMIN, clientId, { client });
@@ -103,6 +120,15 @@ describe("ClientsController (routes)", () => {
   });
 
   describe("GET /api/clients/:id", () => {
+    it("loads the requested client when the attached client is different", async () => {
+      AUTH = authAs(UserRole.SUPER_ADMIN, clientId, { client: makeClient() });
+      service.getById.mockResolvedValue(makeClient({ id: otherClientId }));
+      const res = await app.inject({ method: "GET", url: `/api/clients/${otherClientId}`, headers: AUTH });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data.id).toBe(otherClientId);
+      expect(service.getById).toHaveBeenCalledExactlyOnceWith(otherClientId);
+    });
+
     it("lets a client admin read their own client without a service call", async () => {
       authAs(UserRole.CLIENT_ADMIN, clientId, { client: makeClient() });
 

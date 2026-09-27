@@ -1,9 +1,10 @@
 import { notFound } from "../../core/app-exception";
-import { Body, Controller, Delete, ForbiddenException, Get, HttpCode, Param, Patch, Post, Query, Req } from "@nestjs/common";
-import type { FastifyRequest } from "fastify";
+import { Body, Controller, Delete, ForbiddenException, Get, HttpCode, Param, Patch, Post, Query } from "@nestjs/common";
 import { ErrorCodes, UserRole } from "@app/contracts";
 import type { ClientRow } from "@app/db";
 import { Auth } from "../../core/auth/auth.decorator";
+import { CurrentUser } from "../../core/auth/current-user.decorator";
+import { CurrentClient } from "../../core/auth/current-client.decorator";
 import {
   canAccessClient,
   type AuthUser,
@@ -17,12 +18,6 @@ import {
   ClientIdParamDto,
 } from "./clients.dto";
 
-/** Request after AuthGuard: user (8-field) + client (full row or null) attached. */
-type AuthedRequest = FastifyRequest & {
-  user: AuthUser;
-  client: ClientRow | null;
-};
-
 @Controller("api/clients")
 export class ClientsController {
   constructor(private readonly clients: ClientsService) {}
@@ -30,12 +25,15 @@ export class ClientsController {
   /** Current user's client. Any authenticated user; reuses request.client (no DB hit). */
   @Get("me")
   @Auth()
-  async getMe(@Req() req: AuthedRequest): Promise<ClientRow> {
-    const { clientId } = req.user;
+  async getMe(
+    @CurrentUser() user: AuthUser,
+    @CurrentClient() currentClient: ClientRow | null | undefined,
+  ): Promise<ClientRow> {
+    const { clientId } = user;
     if (!clientId) {
       throw notFound("User is not associated with any client");
     }
-    const client = req.client ?? (await this.clients.getById(clientId));
+    const client = currentClient ?? (await this.clients.getById(clientId));
     if (!client) {
       throw notFound("Client not found");
     }
@@ -60,17 +58,18 @@ export class ClientsController {
   @Auth()
   async getById(
     @Param() params: ClientIdParamDto,
-    @Req() req: AuthedRequest,
+    @CurrentUser() user: AuthUser,
+    @CurrentClient() currentClient: ClientRow | null | undefined,
   ): Promise<ClientRow> {
-    if (!canAccessClient(req.user, params.id)) {
+    if (!canAccessClient(user, params.id)) {
       throw new ForbiddenException({
         code: ErrorCodes.FORBIDDEN,
         message: "Insufficient permissions to access this client",
       });
     }
     const client =
-      req.client?.id === params.id
-        ? req.client
+      currentClient?.id === params.id
+        ? currentClient
         : await this.clients.getById(params.id);
     if (!client) {
       throw notFound("Client not found");

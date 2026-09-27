@@ -1,6 +1,7 @@
-import { badRequest, notFound } from "../../core/app-exception";
+import { notFound } from "../../core/app-exception";
 import { Body, Controller, Delete, ForbiddenException, Get, HttpCode, Param, Patch, Post, Req, Res } from "@nestjs/common";
-import type { FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyReply } from "fastify";
+import { readSingleFile, type MultipartRequest } from "../../core/multipart";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
 import { assertEventAccess } from "../../core/auth/assert-event-access";
@@ -16,18 +17,6 @@ import {
   UpdateCertificateTemplateDto,
   SendCertificatesBodyDto,
 } from "./certificates.dto";
-
-// @fastify/multipart augments the request with .file(); minimal shape used here.
-type MultipartFile = {
-  filename: string;
-  mimetype: string;
-  toBuffer(): Promise<Buffer>;
-};
-type MultipartRequest = FastifyRequest & {
-  file(options?: {
-    limits?: { fileSize?: number };
-  }): Promise<MultipartFile | undefined>;
-};
 
 /**
  * Admin certificate routes, mounted at /api/events. Every route requires a valid
@@ -133,17 +122,8 @@ export class CertificatesController {
     assertEventWritable(existing.event);
     await assertClientModuleEnabled(existing.event.clientId, "certificates");
 
-    const data = await req.file({ limits: { fileSize: 10 * 1024 * 1024 } }); // 10 MB
-    if (!data) {
-      throw badRequest("No file uploaded");
-    }
-
-    const buffer = await data.toBuffer();
-    return this.certificates.uploadTemplateImage(params.id, {
-      buffer,
-      filename: data.filename,
-      mimetype: data.mimetype,
-    });
+    const file = await readSingleFile(req, { fileSize: 10 * 1024 * 1024 }); // 10 MB
+    return this.certificates.uploadTemplateImage(params.id, file);
   }
 
   // GET /api/events/certificates/:id/image — download/proxy template image

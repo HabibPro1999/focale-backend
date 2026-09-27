@@ -13,15 +13,9 @@ import { getUserWithClientById } from "@app/db";
 import { ROLE_KEY } from "./auth.decorator";
 import {
   userCache,
-  type AuthUser,
   type CachedAuthUser,
 } from "./user-cache";
-
-type AuthedRequest = {
-  headers: Record<string, string | string[] | undefined>;
-  user?: AuthUser;
-  client?: CachedAuthUser["client"];
-};
+import type { AuthedRequest } from "./authed-request";
 
 @Injectable()
 export class AuthGuard implements CanActivate {

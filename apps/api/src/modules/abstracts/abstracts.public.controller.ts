@@ -1,4 +1,4 @@
-import { badRequest } from "../../core/app-exception";
+import { readSingleFile, type MultipartRequest } from "../../core/multipart";
 import { Body, Controller, Get, HttpCode, Param, Patch, Post, Query, Req } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
 import type { FastifyRequest } from "fastify";
@@ -10,7 +10,6 @@ import {
   MAX_FINAL_FILE_SIZE,
   assertFinalFileContentLength,
   finalFileTooLarge,
-  type FinalFileInput,
 } from "./abstracts.final-file.service";
 import { extractAbstractToken } from "./abstracts.token";
 import {
@@ -20,37 +19,6 @@ import {
   SubmitAbstractDto,
   EditAbstractDto,
 } from "./abstracts.dto";
-
-// @fastify/multipart augments the request with .file().
-interface MultipartFile {
-  filename: string;
-  mimetype: string;
-  toBuffer(): Promise<Buffer>;
-}
-type MultipartRequest = FastifyRequest & {
-  file(opts?: { limits?: { fileSize?: number } }): Promise<MultipartFile | undefined>;
-};
-
-/** Reads the single final-file part; the multipart fileSize limit bounds a chunked body. */
-async function readFinalFile(req: MultipartRequest): Promise<FinalFileInput> {
-  const data = await req
-    .file({ limits: { fileSize: MAX_FINAL_FILE_SIZE } })
-    .catch(() => null);
-  if (!data) {
-    throw badRequest("No file uploaded");
-  }
-  let buffer: Buffer;
-  try {
-    buffer = await data.toBuffer();
-  } catch (err) {
-    // @fastify/multipart's RequestFileTooLargeError is not an HttpException (it would render as 500).
-    if ((err as { code?: unknown }).code === "FST_REQ_FILE_TOO_LARGE") {
-      throw finalFileTooLarge();
-    }
-    throw err;
-  }
-  return { buffer, filename: data.filename, mimetype: data.mimetype };
-}
 
 // Public rate limits (legacy publicRateLimits.abstracts*), validated by the
 // config schema and resolved per request from the process config.
@@ -124,11 +92,15 @@ export class AbstractsPublicController {
     const token = extractAbstractToken(req);
     assertFinalFileContentLength(req.headers["content-length"]);
     // The service checks the abstract, token, status and window before it
-    // calls readFinalFile, so a rejected caller's body is never buffered.
+    // calls the file reader, so a rejected caller's body is never buffered.
     return this.finalFile.uploadAbstractFinalFile(
       id,
       token,
-      () => readFinalFile(req),
+      () => readSingleFile(req, {
+        fileSize: MAX_FINAL_FILE_SIZE,
+        fileReadErrorsAsMissing: true,
+        onTooLarge: finalFileTooLarge,
+      }),
       req.ip,
     );
   }
