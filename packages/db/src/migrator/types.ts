@@ -119,3 +119,26 @@ export interface MigrationAdoptionSupport {
   ledger: MigrationLedgerAccess;
   catalog: MigrationCatalogAccess;
 }
+
+export interface ApplyMigrationsOptions {
+  through?: string;
+  applyDeferred?: string;
+  appliedBy?: string;
+  dryRun?: boolean;
+  /** The CLI passes this so another service process can refresh the lease. */
+  leaseConnectionString?: string;
+}
+
+export interface ApplyMigrationsResult {
+  engine: DatabaseEngine;
+  applied: string[];
+  deferred: string[];
+  skipped: string[];
+  unknownPreconditions: string[];
+}
+
+export interface VerifyMigrationsResult {
+  engine: DatabaseEngine;
+  errors: string[];
+  warnings: string[];
+}

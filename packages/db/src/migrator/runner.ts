@@ -1,477 +1,86 @@
-import { tableExists } from "./catalog-read";
 import { randomUUID } from "node:crypto";
-import { Client } from "pg";
-import { defaultMigrationsDirectory, loadMigrations } from "./migration";
+import type { Client } from "pg";
+import {
+  defaultMigrationsDirectory,
+  loadMigrations,
+  statementChecksum,
+  type DatabaseEngine,
+  type MigrationDefinition,
+} from "./migration";
 import {
   deriveCatalogProbes,
   deriveEffectiveCatalogProbes,
   inspectCatalogProbes,
-  inspectMigrationCatalog,
 } from "./catalog";
-import type { DatabaseEngine, MigrationDefinition, MigrationVariant } from "./migration";
-import { statementChecksum } from "./migration";
+import {
+  assertAdoptionRequiredIfNonEmpty,
+  createMigrationLedger,
+  listMigrationRecords,
+  listMigrationStepRecords,
+  migrationLedgerExists,
+  writeMigrationRecord,
+  writeMigrationStepRecord,
+} from "./ledger";
+import {
+  acquireMigrationLease,
+  assertLeaseAlive,
+  refreshLease,
+  releaseMigrationLease,
+  runLeaseFencedTransaction,
+  startLeaseHeartbeat,
+  type LeaseHeartbeat,
+} from "./lease";
+import {
+  evaluateSafeCondition,
+  mayDeferRequirement,
+  missingRelationFrom,
+  pendingMigrationCreatingRelation,
+  unmetRequirement,
+} from "./preconditions";
+import { databaseEngine, normalizeAppliedBy, setUtcSession } from "./session";
 import type {
-  MigrationAdoptionSupport,
-  MigrationCatalogAccess,
-  MigrationLedgerAccess,
-  MigrationStatus,
+  ApplyMigrationsOptions,
+  ApplyMigrationsResult,
   SchemaMigrationRecord,
-  SchemaMigrationStepRecord,
+  VerifyMigrationsResult,
 } from "./types";
 
-// Every lease time reads the wall clock (clock_timestamp()), never now(). Inside
-// a transaction, now() is the transaction's start time on PostgreSQL and
-// CockroachDB, so the pre-commit fence of a long migration transaction would
-// write a lease already shortened by the transaction's duration (overwriting
-// the heartbeat's later renewals), and the fence and the in-transaction
-// liveness check would accept a lease that expired while it was open.
-const LEASE_TTL_SECONDS = 90;
-const LEASE_WAIT_MS = 2 * 60 * 1000;
-
-export interface ApplyMigrationsOptions {
-  through?: string;
-  applyDeferred?: string;
-  appliedBy?: string;
-  dryRun?: boolean;
-  /** The CLI passes this so another service process can refresh the lease. */
-  leaseConnectionString?: string;
-}
-
-export interface ApplyMigrationsResult {
-  engine: DatabaseEngine;
-  applied: string[];
-  deferred: string[];
-  skipped: string[];
-  unknownPreconditions: string[];
-}
-
-export interface VerifyMigrationsResult {
-  engine: DatabaseEngine;
-  errors: string[];
-  warnings: string[];
-}
-
-export function detectDatabaseEngine(version: string): DatabaseEngine {
-  return /CockroachDB/i.test(version) ? "cockroach" : "postgres";
-}
-
-export function normalizeAppliedBy(value?: string): string {
-  const candidate = value?.trim();
-  if (candidate && /^[a-zA-Z0-9._:-]{1,128}$/.test(candidate)) return candidate;
-  return "migrator-cli";
-}
-
-export async function databaseEngine(client: Client): Promise<DatabaseEngine> {
-  const result = await client.query<{ version: string }>("SELECT version() AS version");
-  return detectDatabaseEngine(result.rows[0]?.version ?? "");
-}
-
-export async function setUtcSession(client: Client): Promise<void> {
-  await client.query("SET TIME ZONE 'UTC'");
-}
-
-
-export async function schemaHasApplicationObjects(client: Client): Promise<boolean> {
-  const result = await client.query<{ present: boolean }>(
-    `SELECT EXISTS (
-      SELECT 1 FROM information_schema.tables
-      WHERE table_schema = 'public'
-        AND table_name NOT IN ('schema_migrations', 'schema_migration_steps', 'schema_migration_lock')
-    ) AS present`,
-  );
-  return Boolean(result.rows[0]?.present);
-}
-
-export async function migrationLedgerExists(client: Client): Promise<boolean> {
-  return tableExists(client, "schema_migrations");
-}
-
-export async function createMigrationLedger(client: Client): Promise<void> {
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS public.schema_migrations (
-      id text PRIMARY KEY,
-      variant text NOT NULL CHECK (variant IN ('shared', 'cockroach')),
-      checksum text NOT NULL,
-      status text NOT NULL CHECK (status IN ('applied', 'baseline', 'deferred')),
-      applied_at timestamptz NOT NULL DEFAULT now(),
-      applied_by text NOT NULL,
-      evidence jsonb NOT NULL DEFAULT '{}'::jsonb
-    )
-  `);
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS public.schema_migration_steps (
-      migration_id text NOT NULL,
-      variant text NOT NULL CHECK (variant IN ('shared', 'cockroach')),
-      step_index integer NOT NULL,
-      checksum text NOT NULL,
-      applied_at timestamptz NOT NULL DEFAULT now(),
-      applied_by text NOT NULL,
-      PRIMARY KEY (migration_id, variant, step_index)
-    )
-  `);
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS public.schema_migration_lock (
-      id integer PRIMARY KEY,
-      owner text,
-      lease_until timestamptz
-    )
-  `);
-  await client.query(
-    "INSERT INTO public.schema_migration_lock (id, owner, lease_until) VALUES (1, NULL, NULL) ON CONFLICT (id) DO NOTHING",
-  );
-}
-
-export async function assertAdoptionRequiredIfNonEmpty(client: Client): Promise<void> {
-  if (!(await schemaHasApplicationObjects(client))) return;
-  if (!(await tableExists(client, "schema_migrations"))) {
-    throw new Error("Refusing to apply migrations to a non-empty schema without a ledger; run migrate adopt first");
-  }
-  const ledger = await client.query<{ present: boolean }>(
-    "SELECT EXISTS (SELECT 1 FROM public.schema_migrations) AS present",
-  );
-  if (!ledger.rows[0]?.present) {
-    throw new Error("Refusing to apply migrations to a non-empty schema with an empty ledger; run migrate adopt first");
-  }
-}
-
-export async function listMigrationRecords(client: Client): Promise<SchemaMigrationRecord[]> {
-  if (!(await migrationLedgerExists(client))) return [];
-  const result = await client.query<SchemaMigrationRecord>(
-    `SELECT id, variant, checksum, status, applied_at, applied_by, evidence
-     FROM public.schema_migrations ORDER BY id`,
-  );
-  return result.rows;
-}
-
-export async function listMigrationStepRecords(
-  client: Client,
-  migrationId: string,
-  variant: MigrationVariant,
-): Promise<SchemaMigrationStepRecord[]> {
-  // CockroachDB maps SQL INTEGER to INT8 and its PostgreSQL wire driver returns
-  // those values as decimal strings, while PostgreSQL returns JavaScript
-  // numbers. Normalize the ledger boundary so resumption uses the same keys.
-  const result = await client.query<Omit<SchemaMigrationStepRecord, "step_index"> & { step_index: number | string }>(
-    `SELECT migration_id, variant, step_index, checksum, applied_at, applied_by
-     FROM public.schema_migration_steps
-     WHERE migration_id = $1 AND variant = $2
-     ORDER BY step_index`,
-    [migrationId, variant],
-  );
-  return result.rows.map((record) => {
-    const stepIndex = Number(record.step_index);
-    if (!Number.isSafeInteger(stepIndex) || stepIndex < 0) {
-      throw new Error(`Migration ${migrationId} has an invalid recorded step index`);
-    }
-    return { ...record, step_index: stepIndex };
-  });
-}
-
-function isSerializationFailure(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "code" in error && error.code === "40001";
-}
-
-async function waitForLeaseRetry(milliseconds: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-export async function acquireMigrationLease(client: Client, owner: string): Promise<void> {
-  const deadline = Date.now() + LEASE_WAIT_MS;
-  let pauseMs = 200;
-  while (Date.now() < deadline) {
-    try {
-      await client.query(
-        `UPDATE public.schema_migration_lock
-         SET owner = $1, lease_until = clock_timestamp() + interval '${LEASE_TTL_SECONDS} seconds'
-         WHERE id = 1 AND (owner IS NULL OR lease_until < clock_timestamp() OR owner = $1)`,
-        [owner],
-      );
-      const result = await client.query<{ owner: string }>(
-        "SELECT owner FROM public.schema_migration_lock WHERE id = 1",
-      );
-      if (result.rows[0]?.owner === owner) return;
-    } catch (error) {
-      if (!isSerializationFailure(error)) throw error;
-    }
-    await waitForLeaseRetry(pauseMs);
-    pauseMs = Math.min(2000, Math.ceil(pauseMs * 1.5));
-  }
-  throw new Error("Timed out waiting for the migration lease; another migrator may still be running");
-}
-
-async function extendLease(client: Client, owner: string): Promise<boolean> {
-  const result = await client.query(
-    `UPDATE public.schema_migration_lock
-     SET lease_until = clock_timestamp() + interval '${LEASE_TTL_SECONDS} seconds'
-     WHERE id = 1 AND owner = $1 AND lease_until > clock_timestamp()`,
-    [owner],
-  );
-  return result.rowCount === 1;
-}
-
-async function leaseHeldBy(client: Client, owner: string): Promise<boolean> {
-  const result = await client.query<{ owner: string; active: boolean }>(
-    `SELECT owner, lease_until > clock_timestamp() AS active
-     FROM public.schema_migration_lock WHERE id = 1`,
-  );
-  return result.rows[0]?.owner === owner && Boolean(result.rows[0]?.active);
-}
-
-export async function refreshMigrationLease(client: Client, owner: string): Promise<void> {
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    try {
-      if (!(await extendLease(client, owner))) throw new Error("Migration lease was lost or expired; stopping before the next SQL statement");
-      return;
-    } catch (error) {
-      if (!isSerializationFailure(error) || attempt === 3) throw error;
-      await waitForLeaseRetry((attempt + 1) * 50);
-    }
-  }
-}
-
-export async function releaseMigrationLease(client: Client, owner: string): Promise<void> {
-  await client.query(
-    "UPDATE public.schema_migration_lock SET owner = NULL, lease_until = NULL WHERE id = 1 AND owner = $1",
-    [owner],
-  );
-}
-
-export interface LeaseHeartbeat {
-  assertAlive(): void;
-  checkAlive(): Promise<void>;
-  close(): Promise<void>;
-}
-
-export async function startLeaseHeartbeat(connectionString: string, owner: string): Promise<LeaseHeartbeat> {
-  const keeper = new Client({ connectionString, application_name: "focale-migration-lease" });
-  await keeper.connect();
-  const observer = new Client({ connectionString, application_name: "focale-migration-lease-check" });
-  try {
-    await observer.connect();
-  } catch (error) {
-    await keeper.end().catch(() => undefined);
-    throw error;
-  }
-  let stopped = false;
-  let failure: Error | undefined;
-  let timer: NodeJS.Timeout;
-  const intervalMs = Math.floor((LEASE_TTL_SECONDS * 1000) / 3);
-  const beat = async (): Promise<void> => {
-    if (stopped) return;
-    try {
-      await refreshMigrationLease(keeper, owner);
-      failure = undefined;
-    } catch (error) {
-      failure = error instanceof Error ? error : new Error("Migration lease renewal failed");
-    }
-    if (!stopped) {
-      timer = setTimeout(() => void beat(), failure ? 5000 : intervalMs);
-      timer.unref();
-    }
-  };
-  timer = setTimeout(() => void beat(), intervalMs);
-  timer.unref();
-  const assertAlive = (): void => {
-    if (failure) throw new Error(`Migration lease renewal failed: ${failure.message}`);
-  };
-  return {
-    assertAlive,
-    async checkAlive() {
-      assertAlive();
-      if (!(await leaseHeldBy(observer, owner))) {
-        failure = new Error("Migration lease was lost or expired");
-        assertAlive();
-      }
-      assertAlive();
-    },
-    async close() {
-      stopped = true;
-      clearTimeout(timer);
-      await Promise.all([keeper.end(), observer.end()]);
-    },
-  };
-}
-
-async function refreshLease(
-  client: Client,
-  owner: string,
-  heartbeat?: LeaseHeartbeat,
-): Promise<void> {
-  heartbeat?.assertAlive();
-  await refreshMigrationLease(client, owner);
-}
-
-function beginsWithCockroachVectorIndex(statement: string): boolean {
-  const sql = statement
-    .replace(/^(?:\s*--[^\r\n]*(?:\r?\n|$))+/, "")
-    .trimStart();
-  return /^CREATE\s+VECTOR\s+INDEX\b/i.test(sql);
-}
-
-/**
- * Fence a transaction immediately before commit. Updating the conditional lease
- * row holds its write lock until commit, so a competing runner cannot take the
- * lease between this ownership check and the schema/ledger commit.
- */
-async function fenceMigrationLease(
-  client: Client,
-  owner: string,
-  heartbeat?: LeaseHeartbeat,
-): Promise<void> {
-  await heartbeat?.checkAlive();
-  if (!(await extendLease(client, owner))) {
-    throw new Error("Migration lease was lost or expired; refusing to commit migration work");
-  }
-}
-
-export async function assertLeaseAlive(
-  client: Client,
-  owner: string,
-  heartbeat?: LeaseHeartbeat,
-): Promise<void> {
-  if (heartbeat) {
-    await heartbeat.checkAlive();
-    return;
-  }
-  if (!(await leaseHeldBy(client, owner))) {
-    throw new Error("Migration lease was lost or expired; stopping before the next SQL statement");
-  }
-}
-
-export async function commitWithLeaseFence(
-  client: Client,
-  owner: string,
-  heartbeat: LeaseHeartbeat | undefined,
-): Promise<void> {
-  await fenceMigrationLease(client, owner, heartbeat);
-  await client.query("COMMIT");
-}
-
-/** Runs of one lease-fenced transaction when it fails with a serialization failure (40001). */
-export const LEASE_FENCED_TRANSACTION_ATTEMPTS = 5;
-
-/**
- * Run `work` in a transaction committed through the lease fence.
- *
- * On CockroachDB (SERIALIZABLE), a lease renewal that the heartbeat commits
- * while this transaction is open makes the fence fail with 40001: it updates
- * a lease row that changed after the transaction started. The transaction is
- * rolled back and the lease is still ours, so the whole transaction runs
- * again, up to LEASE_FENCED_TRANSACTION_ATTEMPTS times. `work` must contain
- * only what this transaction commits: anything already committed outside it
- * (a non-transactional statement) is never part of a retry.
- */
-export async function runLeaseFencedTransaction(
-  client: Client,
-  owner: string,
-  heartbeat: LeaseHeartbeat | undefined,
-  work: () => Promise<void>,
-): Promise<void> {
-  for (let attempt = 1; ; attempt += 1) {
-    await client.query("BEGIN");
-    try {
-      await work();
-      await commitWithLeaseFence(client, owner, heartbeat);
-      return;
-    } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined);
-      if (!isSerializationFailure(error) || attempt >= LEASE_FENCED_TRANSACTION_ATTEMPTS) throw error;
-    }
-    await waitForLeaseRetry(attempt * 100);
-  }
-}
-
-async function unmetRequirement(
-  client: Client,
-  engine: DatabaseEngine,
-  migration: MigrationDefinition,
-): Promise<string | undefined> {
-  if (engine === "postgres") {
-    for (const extension of migration.directives.requiresExtensions) {
-      const result = await client.query<{ present: boolean }>(
-        "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = $1) AS present",
-        [extension],
-      );
-      if (!result.rows[0]?.present) {
-        return `Migration ${migration.id} requires the PostgreSQL ${extension} extension to be installed before apply`;
-      }
-    }
-  }
-
-  if (engine === "cockroach" && migration.statements.some(beginsWithCockroachVectorIndex)) {
-    const result = await client.query("SHOW CLUSTER SETTING feature.vector_index.enabled");
-    const value = Object.values(result.rows[0] ?? {}).some((entry) => entry === true || entry === "true" || entry === "on");
-    if (!value) return "CockroachDB vector indexes require feature.vector_index.enabled; ask the database administrator to enable it";
-  }
-  return undefined;
-}
-
-function mayDeferRequirement(engine: DatabaseEngine, migration: MigrationDefinition, options: ApplyMigrationsOptions): boolean {
-  return engine === "cockroach" && migration.directives.deferrable && options.applyDeferred !== migration.id;
-}
-
-async function evaluateSafeCondition(client: Client, sql: string): Promise<boolean> {
-  const result = await client.query(sql);
-  if (!result.rows.length) return false;
-  const firstRow = result.rows[0] as Record<string, unknown>;
-  const firstValue = firstRow[Object.keys(firstRow)[0] ?? ""];
-  return firstValue === true || firstValue === "true" || firstValue === 1;
-}
-
-function missingRelationFrom(error: unknown): string | undefined {
-  if (typeof error !== "object" || error === null) return undefined;
-  const candidate = error as { code?: unknown; message?: unknown };
-  if (candidate.code !== "42P01" || typeof candidate.message !== "string") return undefined;
-  const match = candidate.message.match(/relation\s+["']?([a-zA-Z_][a-zA-Z0-9_$.]*)/i);
-  return match?.[1];
-}
-
-function migrationCreatesTable(migration: MigrationDefinition, relationName: string): boolean {
-  const name = relationName.split(".").at(-1)?.replaceAll('"', "");
-  if (!name) return false;
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const sql = migration.source.replace(/--[^\r\n]*/g, " ").replace(/\/\*[\s\S]*?\*\//g, " ");
-  return new RegExp(
-    `CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?(?:(?:public|"public")\\s*\\.\\s*)?(?:"${escaped}"|${escaped})(?![a-zA-Z0-9_$])`,
-    "i",
-  ).test(sql);
-}
-
-function pendingMigrationCreatingRelation(
-  relationName: string,
-  earlierMigrations: MigrationDefinition[],
-  records: Map<string, SchemaMigrationRecord>,
-): MigrationDefinition | undefined {
-  return earlierMigrations.find((migration) => {
-    const record = records.get(migration.id);
-    return record === undefined && migrationCreatesTable(migration, relationName);
-  });
-}
-
-export async function writeMigrationRecord(
-  client: Client,
-  migration: MigrationDefinition,
-  status: MigrationStatus,
-  appliedBy: string,
-  evidence: Record<string, unknown>,
-): Promise<void> {
-  const result = await client.query(
-    `INSERT INTO public.schema_migrations AS ledger (id, variant, checksum, status, applied_at, applied_by, evidence)
-     VALUES ($1, $2, $3, $4, now(), $5, $6::jsonb)
-     ON CONFLICT (id) DO UPDATE SET
-       variant = EXCLUDED.variant,
-       checksum = EXCLUDED.checksum,
-       status = EXCLUDED.status,
-       applied_at = EXCLUDED.applied_at,
-       applied_by = EXCLUDED.applied_by,
-       evidence = EXCLUDED.evidence
-     WHERE ledger.status = 'deferred'`,
-    [migration.id, migration.variant, migration.checksum, status, appliedBy, JSON.stringify(evidence)],
-  );
-  if (result.rowCount !== 1) {
-    throw new Error(`Refusing to replace an existing non-deferred migration record: ${migration.id}`);
-  }
-}
+// Re-exported so existing imports from ./runner keep working.
+export {
+  detectDatabaseEngine,
+  normalizeAppliedBy,
+  databaseEngine,
+  setUtcSession,
+} from "./session";
+export {
+  schemaHasApplicationObjects,
+  migrationLedgerExists,
+  createMigrationLedger,
+  assertAdoptionRequiredIfNonEmpty,
+  listMigrationRecords,
+  listMigrationStepRecords,
+  writeMigrationRecord,
+  writeMigrationStepRecord,
+  migrationLedgerAccess,
+  migrationCatalogAccess,
+  migrationAdoptionSupport,
+} from "./ledger";
+export {
+  acquireMigrationLease,
+  refreshMigrationLease,
+  releaseMigrationLease,
+  type LeaseHeartbeat,
+  startLeaseHeartbeat,
+  assertLeaseAlive,
+  commitWithLeaseFence,
+  LEASE_FENCED_TRANSACTION_ATTEMPTS,
+  runLeaseFencedTransaction,
+} from "./lease";
+export {
+  type ApplyMigrationsOptions,
+  type ApplyMigrationsResult,
+  type VerifyMigrationsResult,
+} from "./types";
 
 async function writeDeferredMigrationRecordWithLeaseFence(
   client: Client,
@@ -486,36 +95,6 @@ async function writeDeferredMigrationRecordWithLeaseFence(
     await writeMigrationRecord(client, migration, "deferred", appliedBy, evidence);
   });
 }
-
-export async function writeMigrationStepRecord(
-  client: Client,
-  migration: MigrationDefinition,
-  stepIndex: number,
-  appliedBy: string,
-): Promise<void> {
-  await client.query(
-    `INSERT INTO public.schema_migration_steps (migration_id, variant, step_index, checksum, applied_at, applied_by)
-     VALUES ($1, $2, $3, $4, now(), $5)`,
-    [migration.id, migration.variant, stepIndex, statementChecksum(migration.statements[stepIndex]), appliedBy],
-  );
-}
-
-export const migrationLedgerAccess: MigrationLedgerAccess = {
-  ensureSchema: createMigrationLedger,
-  listMigrations: listMigrationRecords,
-  listSteps: listMigrationStepRecords,
-  writeMigration: writeMigrationRecord,
-  writeStep: writeMigrationStepRecord,
-};
-
-export const migrationCatalogAccess: MigrationCatalogAccess = {
-  inspect: inspectMigrationCatalog,
-};
-
-export const migrationAdoptionSupport: MigrationAdoptionSupport = {
-  ledger: migrationLedgerAccess,
-  catalog: migrationCatalogAccess,
-};
 
 async function assertStepHistory(client: Client, migration: MigrationDefinition): Promise<Map<number, string>> {
   const records = await listMigrationStepRecords(client, migration.id, migration.variant);
