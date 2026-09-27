@@ -78,10 +78,11 @@ export function pgErrorLogFields(
  * failures. 5 attempts total; delay = 25ms * 2^(attempt-1) + up to 50% jitter;
  * retries only on SQLSTATE 40001/40P01; rethrows the original error otherwise
  * or once attempts are exhausted. Ported from legacy withTxnRetry.
+ * Callers may supply their existing retry budget and backoff policy.
  */
 export async function withTxnRetry<T>(
   fn: () => Promise<T>,
-  opts: { attempts?: number } = {},
+  opts: { attempts?: number; delayMs?: (attempt: number) => number } = {},
 ): Promise<T> {
   const attempts = opts.attempts ?? 5;
   let lastError: unknown;
@@ -92,8 +93,7 @@ export async function withTxnRetry<T>(
       lastError = err;
       if (attempt >= attempts || !isSerializationFailure(err)) throw err;
       const base = 25 * 2 ** (attempt - 1);
-      const delay = base + Math.random() * (base * 0.5);
-      await sleep(delay);
+      await sleep(opts.delayMs ? opts.delayMs(attempt) : base + Math.random() * (base * 0.5));
     }
   }
   throw lastError;

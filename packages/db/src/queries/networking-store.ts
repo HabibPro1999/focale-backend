@@ -1,8 +1,8 @@
-import { setTimeout as sleep } from "node:timers/promises";
+import { NETWORKING_RELEASED_MEETING_STATUSES } from "@app/contracts";
 import { and, eq, getTableColumns, isNull, inArray, notInArray, or, sql, lt, gt, gte, count, type AnyColumn } from "drizzle-orm";
 import type { PgTable } from "drizzle-orm/pg-core";
-import { getDb, type Db, type DbTransaction, type DbExecutor } from "../client";
-import { isSerializationFailure } from "../txn";
+import { getDb, type DbTransaction, type DbExecutor } from "../client";
+import { isSerializationFailure, withTxnRetry } from "../txn";
 import * as n from "../schema/networking";
 import { events } from "../schema/events-access";
 import { registrations } from "../schema/registrations";
@@ -32,8 +32,6 @@ const tables = {
   registrations,
   forms,
 };
-// Early-completed and no-show meetings keep holding their participants, table and exhibitor.
-const RELEASED_MEETING_STATUSES = ["CANCELLED", "DECLINED", "EXPIRED"] as const;
 export type NetworkingEntity = keyof typeof tables;
 export type NetworkingRow<K extends NetworkingEntity> =
   (typeof tables)[K]["$inferSelect"];
@@ -126,14 +124,14 @@ type NetworkingTx = DbTransaction;
  * budget runs out the last serialization failure becomes NetworkingBusyError.
  */
 async function networkingSerializable<T>(run: (db: NetworkingTx) => Promise<T>): Promise<T> {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return await getDb().transaction(run, { isolationLevel: "serializable" });
-    } catch (error) {
-      if (!isSerializationFailure(error)) throw error;
-      if (attempt >= NETWORKING_TXN_ATTEMPTS) throw new NetworkingBusyError({ cause: error });
-      await sleep(networkingRetryDelay(attempt));
-    }
+  try {
+    return await withTxnRetry(
+      () => getDb().transaction(run, { isolationLevel: "serializable" }),
+      { attempts: NETWORKING_TXN_ATTEMPTS, delayMs: networkingRetryDelay },
+    );
+  } catch (error) {
+    if (isSerializationFailure(error)) throw new NetworkingBusyError({ cause: error });
+    throw error;
   }
 }
 type NetworkingStoreOptions = { allocationBuckets?: readonly Date[] };
@@ -150,6 +148,7 @@ export function networkingStore(db: DbExecutor = getDb(), options: NetworkingSto
         .where(and(eq(events.clientId, clientId), sql`lower(trim(${n.networkingProfiles.email})) = ${email}`));
     },
     /** Aggregates in SQL; contacts are deduplicated by the same lower(trim(email)) normalization. */
+    // Raw planned-status SQL mirrors NETWORKING_PLANNED_MEETING_STATUSES; keep its query spelling.
     async personalAnalyticsCounts(eventId: string, profileIds: string[]) {
       const p = n.networkingProfiles, a = n.networkingAudit, c = n.networkingConnections;
       const m = n.networkingMessages, meetings = n.networkingMeetings;
@@ -202,17 +201,18 @@ export function networkingStore(db: DbExecutor = getDb(), options: NetworkingSto
       ]);
       return { profiles, tables: tableRows, spaces };
     },
+    // Early-completed/no-show meetings remain allocated: exclude only the shared released statuses.
     async allocationMeetings(eventId: string, startsAt: Date, endsAt: Date) {
       const m = n.networkingMeetings;
       return db.select().from(m).where(and(eq(m.eventId, eventId),
-        notInArray(m.status, [...RELEASED_MEETING_STATUSES]),
+        notInArray(m.status, [...NETWORKING_RELEASED_MEETING_STATUSES]),
         lt(m.startsAt, endsAt), gt(m.endsAt, startsAt)));
     },
     async allocationReservations(eventId: string, startsAt: Date, endsAt: Date, resourceKey?: string) {
       const r = n.networkingReservations, m = n.networkingMeetings;
       return db.select(getTableColumns(r)).from(r).innerJoin(m, eq(m.id, r.meetingId))
         .where(and(eq(r.eventId, eventId), eq(m.eventId, eventId),
-          notInArray(m.status, [...RELEASED_MEETING_STATUSES]),
+          notInArray(m.status, [...NETWORKING_RELEASED_MEETING_STATUSES]),
           gte(r.startsAt, startsAt), lt(r.startsAt, endsAt),
           resourceKey === undefined ? undefined : eq(r.resourceKey, resourceKey)));
     },

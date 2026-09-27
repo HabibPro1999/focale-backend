@@ -19,9 +19,9 @@ export const NETWORKING_MEETING_STATUSES = [
   "COMPLETED",
   "NO_SHOW",
 ] as const;
-export const NETWORKING_OPEN_MEETING_STATUSES: readonly string[] = ["PENDING", "CONFIRMED", "PENDING_ALLOCATION"];
-export const NETWORKING_PLANNED_MEETING_STATUSES: readonly string[] = ["CONFIRMED", "COMPLETED", "NO_SHOW"];
-export const NETWORKING_RELEASED_MEETING_STATUSES: readonly string[] = ["CANCELLED", "DECLINED", "EXPIRED"];
+export const NETWORKING_OPEN_MEETING_STATUSES: readonly (typeof NETWORKING_MEETING_STATUSES)[number][] = ["PENDING", "CONFIRMED", "PENDING_ALLOCATION"];
+export const NETWORKING_PLANNED_MEETING_STATUSES: readonly (typeof NETWORKING_MEETING_STATUSES)[number][] = ["CONFIRMED", "COMPLETED", "NO_SHOW"];
+export const NETWORKING_RELEASED_MEETING_STATUSES: readonly (typeof NETWORKING_MEETING_STATUSES)[number][] = ["CANCELLED", "DECLINED", "EXPIRED"];
 const id = z.string().uuid();
 const instant = z.string().datetime({ offset: true });
 const url = z

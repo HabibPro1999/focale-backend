@@ -1,3 +1,4 @@
+import { ownedNetworkingDelivery } from "./networking-delivery-fence";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { getDb } from "../client";
 import { rowsOf } from "../helpers";
@@ -5,6 +6,7 @@ import { withSerializableTxn } from "../txn";
 import { networkingAudit, networkingDeliveries } from "../schema/networking";
 import type { NetworkingDeliveryRow } from "./networking-delivery";
 
+// Raw planned-status lists mirror NETWORKING_PLANNED_MEETING_STATUSES without changing SQL text.
 /** Aggregate-only durable report data contains no participant names, messages or contact details. */
 export async function networkingPostEventReportData(
   eventId: string,
@@ -81,14 +83,7 @@ export async function saveNetworkingPostEventReport(
         lastError: null,
         updatedAt: new Date(),
       })
-      .where(
-        and(
-          eq(networkingDeliveries.id, row.id),
-          eq(networkingDeliveries.status, "PROCESSING"),
-          eq(networkingDeliveries.lockedUntil, row.lockedUntil!),
-          sql`${networkingDeliveries.lockedUntil}>now()`,
-        ),
-      )
+      .where(ownedNetworkingDelivery(row, "database"))
       .returning({ id: networkingDeliveries.id });
     if (!claimed.length) return false;
     await tx

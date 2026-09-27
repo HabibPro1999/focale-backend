@@ -1,3 +1,4 @@
+import type { NetworkingConfig } from "@app/contracts";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { getDb } from "../client";
@@ -176,7 +177,7 @@ export async function getNetworkingRecommendationProfiles(
   eventId: string,
   ids: string[],
   callerProfileId: string,
-  paymentStatuses: readonly string[],
+  paymentStatuses: Readonly<NetworkingConfig["eligiblePaymentStatuses"]>,
 ) {
   if (!ids.length || !paymentStatuses.length) return [];
   return getDb()

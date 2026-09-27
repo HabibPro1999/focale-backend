@@ -1,3 +1,5 @@
+import type { NetworkingConfig } from "@app/contracts";
+import { clampNetworkingPageLimit } from "./networking-pagination";
 import { sql } from "drizzle-orm";
 import { getDb } from "../client";
 import { rowsOf } from "../helpers";
@@ -17,12 +19,12 @@ export async function findNetworkingVectorCandidates(
   eventId: string,
   profileId: string,
   model: string,
-  paymentStatuses: readonly string[],
+  paymentStatuses: Readonly<NetworkingConfig["eligiblePaymentStatuses"]>,
   limit = 60,
 ): Promise<NetworkingVectorCandidate[] | null> {
   if (!paymentStatuses.length) return [];
   const db = getDb();
-  const requested = Math.min(100, Math.max(1, Math.floor(limit) || 60));
+  const requested = clampNetworkingPageLimit(Math.floor(limit) || 60);
   const source = rowsOf<Source>(
     await db.execute(sql`
     SELECT pe.embedding::text AS profile, oe.embedding::text AS offer, ne.embedding::text AS need,
@@ -100,7 +102,7 @@ export async function rankNetworkingVectorCandidates(
   eventId: string,
   profileId: string,
   model: string,
-  paymentStatuses: readonly string[],
+  paymentStatuses: Readonly<NetworkingConfig["eligiblePaymentStatuses"]>,
   limit: number,
   candidateIds?: string[],
 ): Promise<NetworkingVectorCandidate[]> {
@@ -146,7 +148,7 @@ export async function rankNetworkingVectorCandidates(
         AND NOT EXISTS (SELECT 1 FROM networking_connections c WHERE c.event_id=p.event_id AND ((c.profile_a_id=${profileId} AND c.profile_b_id=p.id) OR (c.profile_b_id=${profileId} AND c.profile_a_id=p.id)))
     )
     SELECT *, (0.4*needs_score + 0.4*offers_score + 0.2*profile_score) AS score FROM scores
-    ORDER BY score DESC,profile_id LIMIT ${Math.min(100, Math.max(1, limit))}
+    ORDER BY score DESC,profile_id LIMIT ${clampNetworkingPageLimit(limit)}
   `),
   );
   return rows.map((row) => ({

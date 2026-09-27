@@ -1,19 +1,14 @@
-import { and, eq, gt, inArray, or, sql } from "drizzle-orm";
+import { networkingStore } from "./networking-store";
+import { ownedNetworkingDelivery, ownedNetworkingDeliverySql } from "./networking-delivery-fence";
+import { clampNetworkingPageLimit } from "./networking-pagination";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
 import { getDb } from "../client";
 import {
   networkingDeliveries,
-  networkingProfiles,
   networkingPushSubscriptions,
-  networkingMeetings,
-  networkingTables,
-  networkingChallenges,
-  networkingConnections,
-  networkingMessages,
   networkingBlocks,
   networkingNotifications,
 } from "../schema/networking";
-import { events } from "../schema/events-access";
-import { registrations } from "../schema/registrations";
 import { clients } from "../schema/users-clients";
 import { forms } from "../schema/forms";
 import { getNetworkingConfig } from "./networking";
@@ -38,7 +33,7 @@ export async function claimNetworkingDeliveries(
       SELECT id FROM networking_deliveries
       WHERE ((status='PENDING' AND attempts<5) OR (status='PROCESSING' AND locked_until<now() AND attempts<5) OR (status='FAILED' AND attempts<5))
         AND available_at<=now() ${eventId ? sql`AND event_id=${eventId}` : sql``}
-      ORDER BY CASE WHEN type='OTP' THEN 0 ELSE 1 END,available_at LIMIT ${Math.max(1, Math.min(limit, 100))} FOR UPDATE SKIP LOCKED
+      ORDER BY CASE WHEN type='OTP' THEN 0 ELSE 1 END,available_at LIMIT ${clampNetworkingPageLimit(limit)} FOR UPDATE SKIP LOCKED
   )`).returning();
 }
 export async function updateNetworkingDelivery(
@@ -48,14 +43,7 @@ export async function updateNetworkingDelivery(
   const result = await getDb()
     .update(networkingDeliveries)
     .set({ ...values, updatedAt: new Date() })
-    .where(
-      and(
-        eq(networkingDeliveries.id, row.id),
-        eq(networkingDeliveries.status, "PROCESSING"),
-        eq(networkingDeliveries.lockedUntil, row.lockedUntil!),
-        gt(networkingDeliveries.lockedUntil, new Date()),
-      ),
-    )
+    .where(ownedNetworkingDelivery(row, "app"))
     .returning({ id: networkingDeliveries.id });
   return result.length > 0;
 }
@@ -70,83 +58,23 @@ export async function refreshNetworkingDeliveryLease(
 }
 export async function networkingDeliveryContext(row: NetworkingDeliveryRow) {
   const db = getDb();
-  const [event] = await db
-    .select()
-    .from(events)
-    .where(eq(events.id, row.eventId));
+  const store = networkingStore(db);
+  const event = (await store.one("events", { id: row.eventId })) ?? undefined;
   const [client] = event
     ? await db.select().from(clients).where(eq(clients.id, event.clientId))
     : [];
-  const [profile] = row.profileId
-    ? await db
-        .select()
-        .from(networkingProfiles)
-        .where(
-          and(
-            eq(networkingProfiles.id, row.profileId),
-            eq(networkingProfiles.eventId, row.eventId),
-          ),
-        )
-    : [];
-  const [registration] = profile
-    ? await db
-        .select()
-        .from(registrations)
-        .where(
-          and(
-            eq(registrations.id, profile.registrationId),
-            eq(registrations.eventId, row.eventId),
-          ),
-        )
-    : [];
-  const [meeting] =
-    typeof row.payload.meetingId === "string"
-      ? await db
-          .select()
-          .from(networkingMeetings)
-          .where(
-            and(
-              eq(networkingMeetings.id, row.payload.meetingId),
-              eq(networkingMeetings.eventId, row.eventId),
-            ),
-          )
-      : [];
-  const [table] = meeting?.tableId
-    ? await db
-        .select()
-        .from(networkingTables)
-        .where(
-          and(
-            eq(networkingTables.id, meeting.tableId),
-            eq(networkingTables.eventId, row.eventId),
-          ),
-        )
-    : [];
-  const [connection] =
-    typeof row.payload.connectionId === "string"
-      ? await db
-          .select()
-          .from(networkingConnections)
-          .where(
-            and(
-              eq(networkingConnections.id, row.payload.connectionId),
-              eq(networkingConnections.eventId, row.eventId),
-            ),
-          )
-      : [];
-  const [message] =
-    typeof row.payload.messageId === "string" && connection
-      ? await db
-          .select()
-          .from(networkingMessages)
-          .where(
-            and(
-              eq(networkingMessages.id, row.payload.messageId),
-              eq(networkingMessages.connectionId, connection.id),
-              eq(networkingMessages.eventId, row.eventId),
-            ),
-          )
-      : [];
+  const profile = row.profileId
+    ? (await store.one("profiles", { id: row.profileId, eventId: row.eventId })) ?? undefined : undefined;
+  const registration = profile
+    ? (await store.one("registrations", { id: profile.registrationId, eventId: row.eventId })) ?? undefined : undefined;
+  const meeting = typeof row.payload.meetingId === "string"
+    ? (await store.one("meetings", { id: row.payload.meetingId, eventId: row.eventId })) ?? undefined : undefined;
+  const table = meeting?.tableId
+    ? (await store.one("tables", { id: meeting.tableId, eventId: row.eventId })) ?? undefined : undefined;
+  const connection = typeof row.payload.connectionId === "string"
+    ? (await store.one("connections", { id: row.payload.connectionId, eventId: row.eventId })) ?? undefined : undefined;
+  const message = typeof row.payload.messageId === "string" && connection
+    ? (await store.one("messages", { id: row.payload.messageId, connectionId: connection.id, eventId: row.eventId })) ?? undefined : undefined;
   const otherId =
     meeting && profile
       ? meeting.requesterId === profile.id
@@ -157,28 +85,10 @@ export async function networkingDeliveryContext(row: NetworkingDeliveryRow) {
           ? connection.profileBId
           : connection.profileAId
         : undefined;
-  const [contact] = otherId
-    ? await db
-        .select()
-        .from(networkingProfiles)
-        .where(
-          and(
-            eq(networkingProfiles.id, otherId),
-            eq(networkingProfiles.eventId, row.eventId),
-          ),
-        )
-    : [];
-  const [contactRegistration] = contact
-    ? await db
-        .select()
-        .from(registrations)
-        .where(
-          and(
-            eq(registrations.id, contact.registrationId),
-            eq(registrations.eventId, row.eventId),
-          ),
-        )
-    : [];
+  const contact = otherId
+    ? (await store.one("profiles", { id: otherId, eventId: row.eventId })) ?? undefined : undefined;
+  const contactRegistration = contact
+    ? (await store.one("registrations", { id: contact.registrationId, eventId: row.eventId })) ?? undefined : undefined;
   const blocks =
     profile && contact
       ? await db
@@ -200,29 +110,10 @@ export async function networkingDeliveryContext(row: NetworkingDeliveryRow) {
             ),
           )
       : [];
-  const [challenge] =
-    row.type === "OTP" && typeof row.payload.challengeId === "string"
-      ? await db
-          .select()
-          .from(networkingChallenges)
-          .where(
-            and(
-              eq(networkingChallenges.id, row.payload.challengeId),
-              eq(networkingChallenges.eventId, row.eventId),
-            ),
-          )
-      : [];
+  const challenge = row.type === "OTP" && typeof row.payload.challengeId === "string"
+    ? (await store.one("challenges", { id: row.payload.challengeId, eventId: row.eventId })) ?? undefined : undefined;
   const subscriptions = profile
-    ? await db
-        .select()
-        .from(networkingPushSubscriptions)
-        .where(
-          and(
-            eq(networkingPushSubscriptions.profileId, profile.id),
-            eq(networkingPushSubscriptions.eventId, row.eventId),
-          ),
-        )
-    : [];
+    ? await store.all("pushSubscriptions", { profileId: profile.id, eventId: row.eventId }) : [];
   const config = await getNetworkingConfig(row.eventId);
   // OTP only: undecided registrants sign in to give consent in the PWA (K1b).
   const [form] = row.type === "OTP" && profile && registration && !profile.consent
@@ -285,7 +176,7 @@ export async function localizeNetworkingNotification(
     .where(
       and(
         eq(networkingNotifications.id, row.payload.notificationId),
-        sql`EXISTS (SELECT 1 FROM networking_deliveries WHERE id=${row.id} AND status='PROCESSING' AND locked_until=${row.lockedUntil?.toISOString()}::timestamp AND locked_until>now())`,
+        sql`EXISTS (SELECT 1 FROM networking_deliveries WHERE ${ownedNetworkingDeliverySql(row)})`,
         eq(networkingNotifications.eventId, row.eventId),
         eq(networkingNotifications.profileId, row.profileId),
       ),
