@@ -6,12 +6,12 @@ import {
   withExportStatementTimeout,
   type AdminAbstractRow,
 } from "@app/db";
-import { reviewScoreSpread } from "./abstracts.admin.service";
 import {
   formatDateTime,
   formatFileDate,
   getAbstractTitle,
   getAuthorLine,
+  summarizeScores,
 } from "@app/shared";
 import {
   ABSTRACT_STATUS_LABELS_FR,
@@ -25,16 +25,6 @@ import {
   XLSX_CONTENT_TYPE,
   createXlsxWriter,
 } from "../../core/exports/xlsx-stream";
-
-function averageScoreOf(
-  reviews: Array<{ score: number | null }>,
-): number | null {
-  const scores = reviews
-    .map((review) => review.score)
-    .filter((score): score is number => score !== null);
-  if (scores.length === 0) return null;
-  return scores.reduce((sum, score) => sum + score, 0) / scores.length;
-}
 
 const BASE_COLUMNS = [
   "Code",
@@ -106,8 +96,10 @@ export async function prepareAbstractsExport(
 
 function rowValues(abstract: AdminAbstractRow, maxReviews: number): ExcelJS.CellValue[] {
   const scoredCount = abstract.reviews.filter((review) => review.scoredAt !== null).length;
-  const spread = reviewScoreSpread(abstract.reviews);
-  const average = averageScoreOf(abstract.reviews);
+  const scores = abstract.reviews
+    .map((review) => review.score)
+    .filter((score): score is number => score !== null);
+  const { average, ...spread } = summarizeScores(scores);
 
   const values: ExcelJS.CellValue[] = [
     abstract.code ?? "",

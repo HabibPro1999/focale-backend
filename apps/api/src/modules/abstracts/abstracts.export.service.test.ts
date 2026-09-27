@@ -197,6 +197,30 @@ describe("prepareAbstractsExport", () => {
     expect(sheet.getCell("V3").value ?? "").toBe(""); // Évaluateur 3 (no third review)
   });
 
+  it("keeps score statistics separate from scored timestamps and retains numeric zero", async () => {
+    const scoredAt = new Date("2026-01-03T00:00:00.000Z");
+    serveAbstracts([
+      makeAbstract({ reviews: [] }),
+      makeAbstract({ reviews: [makeReview({ score: null, scoredAt })] }),
+      makeAbstract({ reviews: [makeReview({ score: 0, scoredAt: null })] }),
+      makeAbstract({ reviews: [
+        makeReview({ score: 0, scoredAt: null }),
+        makeReview({ score: 14, scoredAt }),
+        makeReview({ score: null, scoredAt }),
+        makeReview({ score: 6, scoredAt: null }),
+      ] }),
+    ]);
+    const result = await exportAbstractsWorkbook(eventId, {}, eventSlug);
+    const sheet = (await loadWorkbook(result.data)).getWorksheet("Résumés")!;
+    const stats = (row: number) => ["M", "N", "O", "P", "Q"].map(
+      (column) => sheet.getCell(`${column}${row}`).value ?? "",
+    );
+    expect(stats(2)).toEqual(["", 0, "", "", ""]);
+    expect(stats(3)).toEqual(["", 1, "", "", ""]);
+    expect(stats(4)).toEqual([0, 0, "", "", ""]);
+    expect(stats(5)).toEqual([20 / 3, 2, 0, 14, 14]);
+  });
+
   it("falls back to the reviewer email when the reviewer has no name, and reports the author edit date", async () => {
     serveAbstracts([
       makeAbstract({
