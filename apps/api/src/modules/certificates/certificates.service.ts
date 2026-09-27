@@ -42,6 +42,7 @@ import {
   loadEmailContextLookups,
   deriveCertificateRenderImage,
   certificateRenderImageKey,
+  formatDate,
   isEligibleForCertificate,
   isAbstractEligibleForCertificate,
   StorageObjectNotFoundError,
@@ -512,6 +513,7 @@ export class CertificatesService {
               role: reg.role,
               checkedInAt: reg.checkedInAt,
               accessCheckIns: reg.accessCheckIns,
+              language: reg.language,
               event: {
                 name: reg.event.name,
                 startDate: reg.event.startDate,
@@ -710,9 +712,9 @@ export class CertificatesService {
               abstractType as keyof typeof ABSTRACT_FINAL_TYPE_LABELS
             ] ?? abstractType,
           eventName: abstract.event.name,
-          eventDate: abstract.event.startDate.toISOString(),
+          eventDate: formatDate(abstract.event.startDate, abstract.language),
           eventLocation: abstract.event.location ?? "—",
-          issuanceDate: new Date().toISOString(),
+          issuanceDate: formatDate(new Date(), abstract.language),
         },
       });
     }

@@ -1,11 +1,13 @@
 import { Injectable } from "@nestjs/common";
 import {
+  DEFAULT_LANGUAGE,
   ErrorCodes,
   type BulkSendEmailInput,
   type TiptapDocument,
 } from "@app/contracts";
 import {
   getRegistrationForEmailContext,
+  getRegistrationFormLanguage,
   getRegistrationsByIds,
   getRegistrationsByFilters,
   listSponsorshipBatchesForBulk,
@@ -49,7 +51,11 @@ export class EmailSendService {
     recipientEmail: string,
     recipientName?: string,
   ): Promise<{ success: true; message: string; messageId?: string }> {
-    const sampleContext = getSampleEmailContext();
+    // Sample dates and labels in the event's registration-form language.
+    const language = template.eventId
+      ? await getRegistrationFormLanguage(template.eventId)
+      : DEFAULT_LANGUAGE;
+    const sampleContext = getSampleEmailContext(language);
 
     const resolvedSubject = resolveVariables(template.subject, sampleContext, {
       mode: "text",

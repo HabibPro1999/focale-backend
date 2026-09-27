@@ -4,6 +4,7 @@
  * handler renders from.
  */
 import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
+import { getPrimaryLanguage, type LanguageCode } from "@app/contracts";
 import { getDb } from "../../client";
 import { abstractConfig, abstracts } from "../../schema/abstracts";
 import { events } from "../../schema/events-access";
@@ -97,7 +98,8 @@ export async function findSkippedAbstractEmails(filter: {
 // Abstract email context (worker email.abstract handler → queueAbstractEmail).
 // Ports the legacy prisma fetch: abstract + its event (name/slug/clientId) +
 // the abstract config deadline fields. Config may be absent (dates default to
-// null / finalFileUploadEnabled false), matching legacy `config?.x ?? …`.
+// null / finalFileUploadEnabled false, language to fr), matching legacy
+// `config?.x ?? …`.
 // ----------------------------------------------------------------------------
 
 export interface AbstractForEmailContext {
@@ -113,6 +115,8 @@ export interface AbstractForEmailContext {
   editToken: string;
   linkBaseUrl: string | null;
   eventId: string;
+  /** Primary language of the event's abstract config (fr when it sets none). */
+  language: LanguageCode;
   event: { name: string; slug: string; clientId: string };
   config: {
     submissionStartAt: Date | null;
@@ -162,6 +166,7 @@ export async function getAbstractForEmailContext(
       scoringDeadline: abstractConfig.scoringDeadline,
       finalFileDeadline: abstractConfig.finalFileDeadline,
       finalFileUploadEnabled: abstractConfig.finalFileUploadEnabled,
+      languages: abstractConfig.languages,
     })
     .from(abstractConfig)
     .where(eq(abstractConfig.eventId, row.eventId))
@@ -180,6 +185,7 @@ export async function getAbstractForEmailContext(
     editToken: row.editToken,
     linkBaseUrl: row.linkBaseUrl,
     eventId: row.eventId,
+    language: getPrimaryLanguage(cfg?.languages),
     event: { name: row.eventName, slug: row.eventSlug, clientId: row.eventClientId },
     config: {
       submissionStartAt: cfg?.submissionStartAt ?? null,

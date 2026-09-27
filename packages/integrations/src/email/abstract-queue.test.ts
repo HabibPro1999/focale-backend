@@ -34,6 +34,7 @@ function abstract(overrides: Record<string, unknown> = {}) {
     editToken: "tok",
     linkBaseUrl: "https://events.example.com",
     eventId: "ev-1",
+    language: "fr",
     event: { name: "Congress", slug: "congress", clientId: "client-1" },
     config: {
       submissionStartAt: null,
@@ -69,6 +70,54 @@ describe("queueAbstractEmail — template path (unchanged)", () => {
     expect(call.templateId).toBe("tmpl-1");
     expect(call.contextSnapshot._fallbackSubject).toBeUndefined();
     expect(call.contextSnapshot._fallbackPlainBody).toBeUndefined();
+  });
+});
+
+describe("queueAbstractEmail — dates in the abstract config's language", () => {
+  // Noon UTC: the same calendar day in any host timezone.
+  const config = {
+    submissionStartAt: new Date("2026-06-01T12:00:00Z"),
+    submissionDeadline: new Date("2026-09-24T12:00:00Z"),
+    editingDeadline: new Date("2026-08-15T12:00:00Z"),
+    scoringStartAt: null,
+    scoringDeadline: null,
+    finalFileDeadline: new Date("2026-10-02T12:00:00Z"),
+    finalFileUploadEnabled: true,
+  };
+
+  async function snapshotFor(language: string) {
+    mocked(getAbstractForEmailContext).mockResolvedValue(
+      abstract({ language, config }),
+    );
+    mocked(findAbstractEmailTemplate).mockResolvedValue({ id: "tmpl-1" });
+    queueEmailMock.mockResolvedValue({ ok: true, log: { id: "log-1" } });
+    await queueAbstractEmail({ trigger: "ABSTRACT_DECISION", abstractId: "ab-1" });
+    return queueEmailMock.mock.calls.at(-1)![0].contextSnapshot;
+  }
+
+  it("formats every deadline in French for a fr config", async () => {
+    expect(await snapshotFor("fr")).toMatchObject({
+      submissionStartAt: "1 juin 2026",
+      submissionDeadline: "24 septembre 2026",
+      editingDeadline: "15 août 2026",
+      deadlineDate: "15 août 2026",
+      scoringStartAt: "",
+      finalFileDeadline: "2 octobre 2026",
+    });
+  });
+
+  it("formats them in English for an en config", async () => {
+    expect(await snapshotFor("en")).toMatchObject({
+      submissionDeadline: "September 24, 2026",
+      editingDeadline: "August 15, 2026",
+    });
+  });
+
+  it("formats them as ar-TN for an ar config", async () => {
+    expect(await snapshotFor("ar")).toMatchObject({
+      submissionDeadline: "24 سبتمبر 2026",
+      editingDeadline: "15 أوت 2026",
+    });
   });
 });
 
