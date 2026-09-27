@@ -1,7 +1,7 @@
 import { assertOwned } from "../../core/tenancy/ownership";
 import { badRequest } from "../../core/app-exception";
 import { Body, Controller, Delete, ForbiddenException, Get, HttpCode, Param, Patch, Post, Query, Req } from "@nestjs/common";
-import type { FastifyRequest } from "fastify";
+import { readSingleFile, type MultipartRequest } from "../../core/multipart";
 import { ErrorCodes, UserRole } from "@app/contracts";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
@@ -15,16 +15,6 @@ import {
   ListEventsQueryDto,
   EventIdParamDto,
 } from "./events.dto";
-
-// @fastify/multipart augments the request with .file(); minimal shape used here.
-type MultipartFile = {
-  filename: string;
-  mimetype: string;
-  toBuffer(): Promise<Buffer>;
-};
-type MultipartRequest = FastifyRequest & {
-  file(): Promise<MultipartFile | undefined>;
-};
 
 function forbidden(message: string): ForbiddenException {
   return new ForbiddenException({ code: ErrorCodes.FORBIDDEN, message });
@@ -111,16 +101,7 @@ export class EventsController {
     const event = await this.requireOwnedEvent(u, params.id, "update");
     assertEventWritable(event);
 
-    const data = await req.file();
-    if (!data) {
-      throw badRequest("No file uploaded");
-    }
-
-    const buffer = await data.toBuffer();
-    return this.events.uploadEventBanner(params.id, {
-      buffer,
-      filename: data.filename,
-      mimetype: data.mimetype,
-    });
+    const file = await readSingleFile(req);
+    return this.events.uploadEventBanner(params.id, file);
   }
 }

@@ -1,15 +1,14 @@
 import { assertOwned } from "../../core/tenancy/ownership";
 import { notFound, badRequest } from "../../core/app-exception";
-import { Body, Controller, Delete, ForbiddenException, Get, HttpCode, Param, Patch, Post, Query, Req } from "@nestjs/common";
-import type { FastifyRequest } from "fastify";
+import { Body, Controller, Delete, ForbiddenException, Get, HttpCode, Param, Patch, Post, Query } from "@nestjs/common";
 import { ErrorCodes, UserRole } from "@app/contracts";
 import {
   getEventWithPricing,
-  type ClientRow,
   type Form,
   type FormWithEvent,
 } from "@app/db";
 import { Auth } from "../../core/auth/auth.decorator";
+import { CurrentUser } from "../../core/auth/current-user.decorator";
 import type { AuthUser } from "../../core/auth/user-cache";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { assertClientModuleEnabled } from "../../core/tenancy/module-gates";
@@ -26,12 +25,6 @@ import {
   EventIdParamDto,
 } from "./dto";
 
-/** Request after AuthGuard: 8-field user + resolved client attached. */
-type AuthedRequest = FastifyRequest & {
-  user: AuthUser;
-  client: ClientRow | null;
-};
-
 // requireAdmin: @Auth(CLIENT_ADMIN) = role <= 1 (super_admin or client_admin).
 @Controller("api/forms")
 @Auth(UserRole.CLIENT_ADMIN)
@@ -42,9 +35,9 @@ export class FormsController {
   @HttpCode(201)
   async create(
     @Body() body: CreateFormDto,
-    @Req() req: AuthedRequest,
+    @CurrentUser() user: AuthUser,
   ): Promise<Form> {
-    const event = await this.requireOwnedEvent(body.eventId, req.user, "Insufficient permissions to create form for this event");
+    const event = await this.requireOwnedEvent(body.eventId, user, "Insufficient permissions to create form for this event");
     assertEventWritable(event);
     await assertClientModuleEnabled(event.clientId, "registrations");
     return this.forms.createForm(body);
@@ -53,16 +46,16 @@ export class FormsController {
   @Get()
   async list(
     @Query() query: ListFormsQueryDto,
-    @Req() req: AuthedRequest,
+    @CurrentUser() user: AuthUser,
   ): Promise<PaginatedResult<Form>> {
-    if (req.user.role === UserRole.CLIENT_ADMIN) {
-      if (!req.user.clientId) {
+    if (user.role === UserRole.CLIENT_ADMIN) {
+      if (!user.clientId) {
         throw badRequest("User is not associated with any client");
       }
       if (!query.eventId) {
         throw badRequest("Event ID is required for client admin users");
       }
-    } else if (req.user.role !== UserRole.SUPER_ADMIN) {
+    } else if (user.role !== UserRole.SUPER_ADMIN) {
       throw new ForbiddenException({
         code: ErrorCodes.FORBIDDEN,
         message: "Insufficient permissions",
@@ -70,7 +63,7 @@ export class FormsController {
     }
 
     if (query.eventId) {
-      const event = await this.requireOwnedEvent(query.eventId, req.user, "Insufficient permissions to access this event");
+      const event = await this.requireOwnedEvent(query.eventId, user, "Insufficient permissions to access this event");
       if (query.type === "SPONSOR") {
         await assertClientModuleEnabled(event.clientId, "sponsorships");
       } else if (query.type === "REGISTRATION") {
@@ -87,9 +80,9 @@ export class FormsController {
   @Get("events/:id/sponsor")
   async getSponsorByEvent(
     @Param() params: EventIdParamDto,
-    @Req() req: AuthedRequest,
+    @CurrentUser() user: AuthUser,
   ): Promise<Form> {
-    const event = await this.requireOwnedEvent(params.id, req.user, "Insufficient permissions to access this event");
+    const event = await this.requireOwnedEvent(params.id, user, "Insufficient permissions to access this event");
     await assertClientModuleEnabled(event.clientId, "sponsorships");
 
     const form = await this.forms.getSponsorFormByEventId(params.id);
@@ -104,9 +97,9 @@ export class FormsController {
   async createSponsorByEvent(
     @Param() params: EventIdParamDto,
     @Body() body: CreateSponsorFormBodyDto,
-    @Req() req: AuthedRequest,
+    @CurrentUser() user: AuthUser,
   ): Promise<Form> {
-    const event = await this.requireOwnedEvent(params.id, req.user, "Insufficient permissions to create form for this event");
+    const event = await this.requireOwnedEvent(params.id, user, "Insufficient permissions to create form for this event");
     assertEventWritable(event);
     await assertClientModuleEnabled(event.clientId, "sponsorships");
     return this.forms.createSponsorForm(params.id, body?.name);
@@ -115,9 +108,9 @@ export class FormsController {
   @Get(":id")
   async getOne(
     @Param() params: FormIdParamDto,
-    @Req() req: AuthedRequest,
+    @CurrentUser() user: AuthUser,
   ): Promise<FormWithEvent> {
-    const form = await this.requireOwnedForm(params.id, req.user, "access");
+    const form = await this.requireOwnedForm(params.id, user, "access");
     await assertClientModuleEnabled(
       form.event.clientId,
       form.type === "SPONSOR" ? "sponsorships" : "registrations",
@@ -128,9 +121,9 @@ export class FormsController {
   @Get(":id/sponsorship-mode-locked")
   async sponsorshipModeLocked(
     @Param() params: FormIdParamDto,
-    @Req() req: AuthedRequest,
+    @CurrentUser() user: AuthUser,
   ): Promise<{ locked: boolean }> {
-    const form = await this.requireOwnedForm(params.id, req.user, "access");
+    const form = await this.requireOwnedForm(params.id, user, "access");
     if (form.type !== "SPONSOR") return { locked: false };
     await assertClientModuleEnabled(form.event.clientId, "sponsorships");
     return { locked: await this.forms.isSponsorshipModeLocked(params.id) };
@@ -140,9 +133,9 @@ export class FormsController {
   async updateSponsorshipSettings(
     @Param() params: FormIdParamDto,
     @Body() body: UpdateSponsorshipSettingsDto,
-    @Req() req: AuthedRequest,
+    @CurrentUser() user: AuthUser,
   ): Promise<Form> {
-    const form = await this.requireOwnedForm(params.id, req.user, "update");
+    const form = await this.requireOwnedForm(params.id, user, "update");
     assertEventWritable(form.event);
     await assertClientModuleEnabled(form.event.clientId, "sponsorships");
     return this.forms.updateSponsorshipSettings(params.id, body);
@@ -152,9 +145,9 @@ export class FormsController {
   async update(
     @Param() params: FormIdParamDto,
     @Body() body: UpdateFormDto,
-    @Req() req: AuthedRequest,
+    @CurrentUser() user: AuthUser,
   ): Promise<Form> {
-    const form = await this.requireOwnedForm(params.id, req.user, "update");
+    const form = await this.requireOwnedForm(params.id, user, "update");
     assertEventWritable(form.event);
     await assertClientModuleEnabled(
       form.event.clientId,
@@ -168,9 +161,9 @@ export class FormsController {
   @SkipEnvelope()
   async remove(
     @Param() params: FormIdParamDto,
-    @Req() req: AuthedRequest,
+    @CurrentUser() user: AuthUser,
   ): Promise<void> {
-    const form = await this.requireOwnedForm(params.id, req.user, "delete");
+    const form = await this.requireOwnedForm(params.id, user, "delete");
     assertEventWritable(form.event);
     await assertClientModuleEnabled(
       form.event.clientId,
