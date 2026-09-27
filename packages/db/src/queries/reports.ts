@@ -39,7 +39,7 @@ import {
 // Reports filters sponsorships exactly the way the sponsorships module does.
 import { buildSponsorshipWhere } from "./sponsorships";
 // ...and searches registrants the way the registrations list does.
-import { registrationSearchClause } from "./registrations";
+import { registrationWhereClauses } from "./registrations";
 
 type RegistrationRow = typeof registrations.$inferSelect;
 
@@ -87,23 +87,11 @@ function buildRegistrationWhere(
   eventId: string,
   filters: RegistrationExportFilters,
 ): SQL {
-  const clauses: (SQL | undefined)[] = [eq(registrations.eventId, eventId)];
-  if (filters.paymentStatus) {
-    clauses.push(
-      eq(registrations.paymentStatus, filters.paymentStatus as RegistrationRow["paymentStatus"]),
-    );
-  }
-  if (filters.paymentMethod) {
-    clauses.push(
-      eq(
-        registrations.paymentMethod,
-        filters.paymentMethod as NonNullable<RegistrationRow["paymentMethod"]>,
-      ),
-    );
-  }
-  if (filters.search) {
-    clauses.push(registrationSearchClause(filters.search));
-  }
+  const clauses = registrationWhereClauses(eventId, {
+    paymentStatus: filters.paymentStatus,
+    paymentMethod: filters.paymentMethod,
+    search: filters.search,
+  });
   // Date range merged with the same only-set-what-was-given semantics.
   if (filters.startDate) clauses.push(gte(registrations.submittedAt, new Date(filters.startDate)));
   if (filters.endDate) clauses.push(lte(registrations.submittedAt, new Date(filters.endDate)));

@@ -1,3 +1,5 @@
+import { rowsOf } from "../helpers";
+import type { ClientModuleGate } from "../client-module-gate";
 import {
   and,
   count,
@@ -27,10 +29,7 @@ export type NewRegistrationValues = typeof registrations.$inferInsert;
 export type RegistrationPatch = Partial<NewRegistrationValues>;
 
 /** Client module-gate slice (legacy CLIENT_MODULE_GATE_SELECT). */
-export interface RegistrationClientGate {
-  active: boolean;
-  enabledModules: string[] | null;
-}
+export type RegistrationClientGate = ClientModuleGate;
 
 export interface RegistrationFormMeta {
   id: string;
@@ -89,6 +88,17 @@ const EVENT_META = {
   eventClientId: events.clientId,
 };
 
+function toRegistrationWithMeta<T extends object>(row: {
+  reg: T; formId: string; formName: string;
+  eventMetaId: string; eventName: string; eventSlug: string; eventClientId: string;
+}) {
+  return {
+    ...row.reg,
+    form: { id: row.formId, name: row.formName },
+    event: { id: row.eventMetaId, name: row.eventName, slug: row.eventSlug, clientId: row.eventClientId },
+  };
+}
+
 export async function getRegistrationByIdRow(
   id: string,
   db: DbExecutor = getDb(),
@@ -116,14 +126,7 @@ export async function getRegistrationByIdRow(
     .where(eq(accessCheckIns.registrationId, id));
 
   return {
-    ...row.reg,
-    form: { id: row.formId, name: row.formName },
-    event: {
-      id: row.eventMetaId,
-      name: row.eventName,
-      slug: row.eventSlug,
-      clientId: row.eventClientId,
-    },
+    ...toRegistrationWithMeta(row),
     accessCheckIns: checkIns,
   };
 }
@@ -145,19 +148,10 @@ export async function getRegistrationByIdempotencyKeyRow(
     .where(eq(registrations.idempotencyKey, idempotencyKey))
     .limit(1);
   if (!row) return null;
-  return {
-    ...row.reg,
-    form: { id: row.formId, name: row.formName },
-    event: {
-      id: row.eventMetaId,
-      name: row.eventName,
-      slug: row.eventSlug,
-      clientId: row.eventClientId,
-    },
-  };
+  return toRegistrationWithMeta(row);
 }
 
-export function buildRegistrationWhere(
+export function registrationWhereClauses(
   eventId: string,
   filters?: {
     paymentStatus?: string;
@@ -165,7 +159,7 @@ export function buildRegistrationWhere(
     role?: string;
     search?: string;
   },
-): SQL | undefined {
+): (SQL | undefined)[] {
   const clauses: (SQL | undefined)[] = [eq(registrations.eventId, eventId)];
   if (filters?.paymentStatus) {
     clauses.push(
@@ -189,7 +183,14 @@ export function buildRegistrationWhere(
   if (filters?.search) {
     clauses.push(registrationSearchClause(filters.search));
   }
-  return and(...clauses);
+  return clauses;
+}
+
+export function buildRegistrationWhere(
+  eventId: string,
+  filters?: Parameters<typeof registrationWhereClauses>[1],
+): SQL | undefined {
+  return and(...registrationWhereClauses(eventId, filters));
 }
 
 /**
@@ -322,16 +323,7 @@ export async function listRegistrationRows(
   ]);
 
   return {
-    rows: rows.map((r) => ({
-      ...r.reg,
-      form: { id: r.formId, name: r.formName },
-      event: {
-        id: r.eventMetaId,
-        name: r.eventName,
-        slug: r.eventSlug,
-        clientId: r.eventClientId,
-      },
-    })),
+    rows: rows.map(toRegistrationWithMeta),
     total: Number(totalRows[0]?.value ?? 0),
     stats: statsRaw.map((s) => ({
       paymentStatus: s.paymentStatus,
@@ -397,39 +389,16 @@ export async function getEventForRegistrationCreate(
   };
 }
 
-export interface EventForRegistrationAdmin {
-  clientId: string;
-  status: string;
-  maxCapacity: number | null;
-  registeredCount: number;
-  client: RegistrationClientGate;
-}
+export type EventForRegistrationAdmin = Omit<EventForRegistrationCreate, "endDate">;
 
 export async function getEventForRegistrationAdmin(
   eventId: string,
   db: DbExecutor = getDb(),
 ): Promise<EventForRegistrationAdmin | null> {
-  const [row] = await db
-    .select({
-      clientId: events.clientId,
-      status: events.status,
-      maxCapacity: events.maxCapacity,
-      registeredCount: events.registeredCount,
-      active: clients.active,
-      enabledModules: clients.enabledModules,
-    })
-    .from(events)
-    .innerJoin(clients, eq(events.clientId, clients.id))
-    .where(eq(events.id, eventId))
-    .limit(1);
-  if (!row) return null;
-  return {
-    clientId: row.clientId,
-    status: row.status,
-    maxCapacity: row.maxCapacity,
-    registeredCount: row.registeredCount,
-    client: { active: row.active, enabledModules: row.enabledModules },
-  };
+  const event = await getEventForRegistrationCreate(eventId, db);
+  if (!event) return null;
+  const { endDate: _endDate, ...adminEvent } = event;
+  return adminEvent;
 }
 
 /** REGISTRATION form for an event (admin create). */
@@ -715,9 +684,7 @@ export async function generateReferenceNumber(
     ) locked
     WHERE seq ~ '^[0-9]+$'
   `);
-  const rows =
-    (res as unknown as { rows?: Array<{ max_seq: number | string | null }> })
-      .rows ?? [];
+  const rows = rowsOf<{ max_seq: number | string | null }>(res);
   const maxSeq = rows[0]?.max_seq;
 
   let nextSeq = 1;
@@ -728,10 +695,6 @@ export async function generateReferenceNumber(
   }
   return `${prefix}${String(nextSeq).padStart(3, "0")}`;
 }
-
-// ============================================================================
-// Audit + edit token
-// ============================================================================
 
 // ============================================================================
 // Audit-log + email-log subroute reads (paginated)

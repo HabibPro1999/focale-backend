@@ -53,6 +53,15 @@ export function calculateDiscountAmount(
   );
 }
 
+export function breakdownColumns(priceBreakdown: PriceBreakdown) {
+  return {
+    priceBreakdown,
+    baseAmount: priceBreakdown.calculatedBasePrice,
+    discountAmount: calculateDiscountAmount(priceBreakdown.appliedRules),
+    accessAmount: priceBreakdown.accessTotal,
+  };
+}
+
 function fallbackAccess(item: { accessId: string; name: unknown }) {
   return {
     id: item.accessId,

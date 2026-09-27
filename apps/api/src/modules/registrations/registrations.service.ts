@@ -34,6 +34,8 @@ import {
   withSponsorshipTotal,
   getSkip,
   isFullySettled,
+  isFullySponsored as hasFullSponsorship,
+  hasReceivedPayment,
   paginate,
   type PaginatedResult,
 } from "@app/shared";
@@ -66,7 +68,6 @@ import {
   findRegistrationFormForEvent,
   findRegistrationFormSchema,
   registrationExistsByEmailForm,
-  findRegistrationForMutation,
   findRegistrationWithFormEvent,
   insertRegistrationRow,
   updateRegistrationRow,
@@ -83,6 +84,8 @@ import {
   listRegistrationEmailLogRows,
   type RegistrationPatch,
 } from "@app/db";
+import { quantitiesByAccess, quantityDeltas } from "../access/access-quantities";
+import { assertRegistrationWritable, requireRegistrationForMutation, requireRegistrationForPublicAction, registrationAlreadyExists } from "./registrations.guards";
 import { AccessService } from "../access/access.service";
 import { PricingService } from "../pricing/pricing.service";
 import { prepareFormDataForPricing } from "../pricing/form-data-for-pricing";
@@ -94,7 +97,6 @@ import {
   assertClientModuleEnabled,
   assertModuleEnabledForClient,
   isModuleEnabledForClient,
-  type ClientModuleState,
 } from "../clients/module-gates";
 import { AppException } from "../../core/app-exception";
 import { CONFIG, type Config } from "../../core/config";
@@ -103,7 +105,7 @@ import { logger } from "../../core/logger.service";
 import { validatePaymentTransition } from "./payment-transitions";
 import { getRegistrationTableColumns } from "./table-columns";
 import {
-  calculateDiscountAmount,
+  breakdownColumns,
   enrichWithAccessSelections,
   enrichManyWithAccessSelections,
   type RegistrationWithRelations,
@@ -161,11 +163,7 @@ function translateCreateUniqueViolation(err: unknown): never {
   const { isUnique, constraint } = pgUnique(err);
   if (!isUnique || /idempotency/i.test(constraint)) throw err;
   if (/email/i.test(constraint) || constraint === "registrations_email_form_id_key") {
-    throw new AppException(
-      ErrorCodes.REGISTRATION_ALREADY_EXISTS,
-      "A registration with this email already exists for this form",
-      409,
-    );
+    throw registrationAlreadyExists();
   }
   throw new AppException(ErrorCodes.CONFLICT, "Resource already exists", 409);
 }
@@ -209,6 +207,10 @@ export type PublicCreateResult = {
   priceBreakdown: PriceBreakdown;
 };
 
+function replayExisting(existing: RegistrationWithRelations): PublicCreateResult {
+  return { created: false, registration: toPublicRegistration(existing, { token: existing.editToken }), priceBreakdown: existing.priceBreakdown as PriceBreakdown };
+}
+
 @Injectable()
 export class RegistrationsService {
   constructor(
@@ -221,7 +223,7 @@ export class RegistrationsService {
   // Shared side-effect + settlement helpers
   // ==========================================================================
 
-  private async emitEvents(exec: DbExecutor, events: AppEvent[]): Promise<unknown> {
+  private async emitRegistrationEventsAndSyncNetworking(exec: DbExecutor, events: AppEvent[]): Promise<unknown> {
     const changedIds = new Set(events.filter(ev =>
       ev.type === "registration.updated" || ev.type === "registration.paymentConfirmed"
     ).map(ev => String(ev.payload.id)));
@@ -273,7 +275,7 @@ export class RegistrationsService {
     return events;
   }
 
-  private async queueRegistrationCreatedEmail(
+  private async syncNetworkingAndQueueRegistrationCreatedEmail(
     exec: DbExecutor,
     eventId: string,
     registration: {
@@ -313,6 +315,12 @@ export class RegistrationsService {
         "Lab sponsorship payment method is only available when sponsorships are disabled",
         400,
       );
+    }
+  }
+
+  private async reserveAccess(selections: CreateRegistrationInput["accessSelections"], exec: DbExecutor): Promise<void> {
+    if (selections && selections.length > 0) {
+      await Promise.all(selections.map((s) => this.access.incrementAccessRegisteredCountTx(s.accessId, s.quantity, exec)));
     }
   }
 
@@ -386,14 +394,14 @@ export class RegistrationsService {
       paidAmount: registration.paidAmount,
       sponsorshipAmount,
     });
-    if (sponsorshipAmount >= totalAmount && totalAmount > 0) {
+    if (hasFullSponsorship({ sponsorshipAmount, totalAmount })) {
       result.paymentStatus = "SPONSORED";
     } else if (
       settlement.isSettled &&
-      (registration.paidAmount > 0 || registration.paymentStatus === "PAID")
+      registration.paidAmount > 0
     ) {
       result.paymentStatus = "PAID";
-    } else if (registration.paymentStatus !== "VERIFYING") {
+    } else {
       result.paymentStatus = settlement.isPartiallyPaid ? "PARTIAL" : "PENDING";
     }
     if (result.paymentStatus !== undefined) {
@@ -577,11 +585,7 @@ export class RegistrationsService {
         input.idempotencyKey,
       );
       if (existing) {
-        return {
-          created: false,
-          registration: toPublicRegistration(existing, { token: existing.editToken }),
-          priceBreakdown: existing.priceBreakdown as PriceBreakdown,
-        };
+        return replayExisting(existing);
       }
     }
 
@@ -642,11 +646,7 @@ export class RegistrationsService {
           normalizedInput.idempotencyKey,
         );
         if (existing) {
-          return {
-            created: false,
-            registration: toPublicRegistration(existing, { token: existing.editToken }),
-            priceBreakdown: existing.priceBreakdown as PriceBreakdown,
-          };
+          return replayExisting(existing);
         }
       }
       throw err;
@@ -688,32 +688,20 @@ export class RegistrationsService {
 
     // Duplicate check (outside tx — advisory fast-fail).
     if (await registrationExistsByEmailForm(email, formId)) {
-      throw new AppException(
-        ErrorCodes.REGISTRATION_ALREADY_EXISTS,
-        "A registration with this email already exists for this form",
-        409,
-      );
+      throw registrationAlreadyExists();
     }
 
     // Advisory access-selection validation (outside tx).
     if (accessSelections && accessSelections.length > 0) {
-      const v = await this.access.validateAccessSelections(
+      await this.access.assertAccessSelectionsValid(
         eventId,
         accessSelections,
         formData,
       );
-      if (!v.valid) {
-        throw new AppException(
-          ErrorCodes.BAD_REQUEST,
-          `Invalid access selections: ${v.errors.join(", ")}`,
-          400,
-          { errors: v.errors },
-        );
-      }
     }
 
     await this.access.assertAccessSelectionRequirement(eventId, formData, accessSelections ?? [],
-      (form.schema as { settings?: { accessSelectionRequired?: boolean } } | null)?.settings);
+      form.schema);
 
     let createdId!: string;
     try {
@@ -727,7 +715,7 @@ export class RegistrationsService {
         );
       }
       assertEventAcceptsPublicActions(event);
-      assertModuleEnabledForClient(event.client as ClientModuleState, "registrations");
+      assertModuleEnabledForClient(event.client, "registrations");
       this.assertLabSponsorshipAllowed(event.client, paymentMethod);
 
       if (event.maxCapacity !== null && event.registeredCount >= event.maxCapacity) {
@@ -754,10 +742,7 @@ export class RegistrationsService {
           labName: paymentMethod === "LAB_SPONSORSHIP" ? (labName ?? null) : null,
           totalAmount: priceBreakdown.subtotal,
           currency: priceBreakdown.currency,
-          priceBreakdown,
-          baseAmount: priceBreakdown.calculatedBasePrice,
-          discountAmount: calculateDiscountAmount(priceBreakdown.appliedRules),
-          accessAmount: priceBreakdown.accessTotal,
+          ...breakdownColumns(priceBreakdown),
           sponsorshipCode: sponsorshipCode ?? null,
           sponsorshipAmount: priceBreakdown.sponsorshipTotal,
           accessTypeIds: accessSelections?.map((s) => s.accessId) ?? [],
@@ -769,13 +754,7 @@ export class RegistrationsService {
       );
       createdId = id;
 
-      if (accessSelections && accessSelections.length > 0) {
-        await Promise.all(
-          accessSelections.map((s) =>
-            this.access.incrementAccessRegisteredCountTx(s.accessId, s.quantity, tx),
-          ),
-        );
-      }
+      await this.reserveAccess(accessSelections, tx);
 
       await this.incrementEventRegistered(tx, eventId);
 
@@ -810,8 +789,8 @@ export class RegistrationsService {
           ts: Date.now(),
         });
       }
-      await this.emitEvents(tx, pending);
-      await this.queueRegistrationCreatedEmail(tx, eventId, {
+      await this.emitRegistrationEventsAndSyncNetworking(tx, pending);
+      await this.syncNetworkingAndQueueRegistrationCreatedEmail(tx, eventId, {
         id,
         email,
         firstName,
@@ -891,34 +870,22 @@ export class RegistrationsService {
     );
 
     if (await registrationExistsByEmailForm(email, form.id)) {
-      throw new AppException(
-        ErrorCodes.REGISTRATION_ALREADY_EXISTS,
-        "A registration with this email already exists for this form",
-        409,
-      );
+      throw registrationAlreadyExists();
     }
 
     if (accessSelections && accessSelections.length > 0) {
-      const v = await this.access.validateAccessSelections(
+      await this.access.assertAccessSelectionsValid(
         eventId,
         accessSelections,
         formData,
       );
-      if (!v.valid) {
-        throw new AppException(
-          ErrorCodes.BAD_REQUEST,
-          `Invalid access selections: ${v.errors.join(", ")}`,
-          400,
-          { errors: v.errors },
-        );
-      }
     }
 
     const eventGate = await getEventForRegistrationAdmin(eventId);
     if (!eventGate) {
       throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
     }
-    assertModuleEnabledForClient(eventGate.client as ClientModuleState, "pricing");
+    assertModuleEnabledForClient(eventGate.client, "pricing");
 
     const priceBreakdown = await this.pricing.calculatePrice(eventId, {
       formData,
@@ -937,7 +904,7 @@ export class RegistrationsService {
         throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
       }
       assertEventWritable(event);
-      assertModuleEnabledForClient(event.client as ClientModuleState, "registrations");
+      assertModuleEnabledForClient(event.client, "registrations");
       this.assertLabSponsorshipAllowed(event.client, paymentMethod);
 
       if (event.maxCapacity !== null && event.registeredCount >= event.maxCapacity) {
@@ -976,10 +943,7 @@ export class RegistrationsService {
           labName: paymentMethod === "LAB_SPONSORSHIP" ? (labName ?? null) : null,
           totalAmount: priceBreakdown.subtotal,
           currency: priceBreakdown.currency,
-          priceBreakdown,
-          baseAmount: priceBreakdown.calculatedBasePrice,
-          discountAmount: calculateDiscountAmount(priceBreakdown.appliedRules),
-          accessAmount: priceBreakdown.accessTotal,
+          ...breakdownColumns(priceBreakdown),
           sponsorshipAmount: 0,
           accessTypeIds,
           editToken: null,
@@ -990,13 +954,7 @@ export class RegistrationsService {
       );
       createdId = id;
 
-      if (accessSelections && accessSelections.length > 0) {
-        await Promise.all(
-          accessSelections.map((s) =>
-            this.access.incrementAccessRegisteredCountTx(s.accessId, s.quantity, tx),
-          ),
-        );
-      }
+      await this.reserveAccess(accessSelections, tx);
 
       if (isFullySettled(resolvedPaymentStatus)) {
         await this.syncPaidCount(
@@ -1023,7 +981,7 @@ export class RegistrationsService {
       });
 
       if (sendEmail) {
-        await this.queueRegistrationCreatedEmail(tx, eventId, {
+        await this.syncNetworkingAndQueueRegistrationCreatedEmail(tx, eventId, {
           id,
           email,
           firstName,
@@ -1048,19 +1006,8 @@ export class RegistrationsService {
     performedBy?: string,
   ): Promise<AdminRegistration> {
     await withTxn(async (tx) => {
-      const registration = await findRegistrationForMutation(id, tx);
-      if (!registration) {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_NOT_FOUND,
-          "Registration not found",
-          404,
-        );
-      }
-      assertEventWritable(registration.event);
-      assertModuleEnabledForClient(
-        registration.event.client as ClientModuleState,
-        "registrations",
-      );
+      const registration = await requireRegistrationForMutation(id, tx);
+      assertRegistrationWritable(registration);
 
       const patch: RegistrationPatch = {};
       if (input.paymentStatus !== undefined) {
@@ -1156,10 +1103,10 @@ export class RegistrationsService {
         eventId: registration.eventId,
         clientId: registration.event.clientId,
         oldStatus: registration.paymentStatus,
-        newStatus: input.paymentStatus as string | undefined,
+        newStatus: input.paymentStatus,
         emitCountsChanged: statusChanged,
       });
-      await this.emitEvents(tx, pending);
+      await this.emitRegistrationEventsAndSyncNetworking(tx, pending);
     });
 
     return this.getStrippedById(id);
@@ -1176,14 +1123,7 @@ export class RegistrationsService {
     adminUserId: string,
   ): Promise<AdminRegistration> {
     await withTxn(async (tx) => {
-      const registration = await findRegistrationForMutation(id, tx);
-      if (!registration) {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_NOT_FOUND,
-          "Registration not found",
-          404,
-        );
-      }
+      const registration = await requireRegistrationForMutation(id, tx);
       if (registration.eventId !== eventId) {
         throw new AppException(
           ErrorCodes.BAD_REQUEST,
@@ -1191,11 +1131,7 @@ export class RegistrationsService {
           400,
         );
       }
-      assertEventWritable(registration.event);
-      assertModuleEnabledForClient(
-        registration.event.client as ClientModuleState,
-        "registrations",
-      );
+      assertRegistrationWritable(registration);
 
       const patch: RegistrationPatch = {};
       const changes: Record<string, { old: unknown; new: unknown }> = {};
@@ -1215,11 +1151,7 @@ export class RegistrationsService {
         input.email !== undefined ? normalizeEmail(input.email) : undefined;
       if (inputEmail !== undefined && inputEmail !== registration.email) {
         if (await registrationExistsByEmailForm(inputEmail, registration.formId, tx, id)) {
-          throw new AppException(
-            ErrorCodes.REGISTRATION_ALREADY_EXISTS,
-            "A registration with this email already exists for this form",
-            409,
-          );
+          throw registrationAlreadyExists();
         }
         patch.email = inputEmail;
         changes.email = { old: registration.email, new: inputEmail };
@@ -1309,7 +1241,7 @@ export class RegistrationsService {
       // Price-affecting edit branch.
       if (hasPriceEdits) {
         assertModuleEnabledForClient(
-          registration.event.client as ClientModuleState,
+          registration.event.client,
           "pricing",
         );
         const effectiveFormData =
@@ -1332,21 +1264,13 @@ export class RegistrationsService {
           input.accessSelections !== undefined &&
           effectiveAccessSelections.length > 0
         ) {
-          const v = await this.access.validateAccessSelections(
+          await this.access.assertAccessSelectionsValid(
             eventId,
             effectiveAccessSelections,
             effectiveFormData,
             existingAccessIds,
             tx,
           );
-          if (!v.valid) {
-            throw new AppException(
-              ErrorCodes.BAD_REQUEST,
-              `Invalid access selections: ${v.errors.join(", ")}`,
-              400,
-              { errors: v.errors },
-            );
-          }
         }
 
         const existingSponsorshipCodes = registration.sponsorshipCode
@@ -1417,12 +1341,9 @@ export class RegistrationsService {
         }
 
         patch.totalAmount = priceBreakdown.subtotal;
-        patch.baseAmount = priceBreakdown.calculatedBasePrice;
-        patch.accessAmount = priceBreakdown.accessTotal;
-        patch.discountAmount = calculateDiscountAmount(priceBreakdown.appliedRules);
+        Object.assign(patch, breakdownColumns(priceBreakdown));
         patch.sponsorshipAmount = settlement.sponsorshipAmount;
         patch.accessTypeIds = effectiveAccessSelections.map((s) => s.accessId);
-        patch.priceBreakdown = priceBreakdown;
         if (shouldDefaultPaidAmount) {
           setDefaultPaidAmount(nextPaidAmount);
         }
@@ -1487,14 +1408,11 @@ export class RegistrationsService {
       if (
         input.paymentStatus !== undefined &&
         input.paymentStatus !== registration.paymentStatus &&
-        input.accessSelections === undefined &&
-        input.formData === undefined
+        !hasPriceEdits
       ) {
-        const effectivePriceBreakdown =
-          (patch.priceBreakdown as unknown) ?? registration.priceBreakdown;
         await this.syncPaidCount(
           tx,
-          { id, eventId, priceBreakdown: effectivePriceBreakdown },
+          { id, eventId, priceBreakdown: registration.priceBreakdown },
           registration.paymentStatus,
           input.paymentStatus,
         );
@@ -1518,13 +1436,13 @@ export class RegistrationsService {
         clientId: registration.event.clientId,
         oldStatus: registration.paymentStatus,
         newStatus:
-          (patch.paymentStatus as string | undefined) ?? input.paymentStatus,
+          patch.paymentStatus ?? input.paymentStatus,
         emitCountsChanged: !!(
           statusChanged ||
           (input.accessSelections && input.accessSelections.length > 0)
         ),
       });
-      await this.emitEvents(tx, pending);
+      await this.emitRegistrationEventsAndSyncNetworking(tx, pending);
     });
 
     return this.getStrippedById(id);
@@ -1553,19 +1471,8 @@ export class RegistrationsService {
     }
 
     const networkingPhoto = await withTxn(async (tx) => {
-      const registration = await findRegistrationForMutation(id, tx);
-      if (!registration) {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_NOT_FOUND,
-          "Registration not found",
-          404,
-        );
-      }
-      assertEventWritable(registration.event);
-      assertModuleEnabledForClient(
-        registration.event.client as ClientModuleState,
-        "registrations",
-      );
+      const registration = await requireRegistrationForMutation(id, tx);
+      assertRegistrationWritable(registration);
 
       if (registration.paymentStatus === "PAID" && !force) {
         throw new AppException(
@@ -1644,7 +1551,7 @@ export class RegistrationsService {
           ts: Date.now(),
         },
       ];
-      await this.emitEvents(tx, pending);
+      await this.emitRegistrationEventsAndSyncNetworking(tx, pending);
       return photo;
     });
     if (networkingPhoto)
@@ -1727,9 +1634,7 @@ export class RegistrationsService {
       restrictions.push("Payment proof is under review");
     }
     const isPaid =
-      registration.paymentStatus === "PAID" ||
-      registration.paymentStatus === "SPONSORED" ||
-      registration.paidAmount > 0;
+      hasReceivedPayment(registration);
     if (isPaid) {
       canRemoveAccess = false;
       restrictions.push("Cannot remove access items (payment received)");
@@ -1741,8 +1646,7 @@ export class RegistrationsService {
       restrictions.push("Waived registrations cannot modify access selections");
     }
     if (
-      registration.sponsorshipAmount >= registration.totalAmount &&
-      registration.totalAmount > 0
+      hasFullSponsorship(registration)
     ) {
       isFullySponsored = true;
       canEditAccess = false;
@@ -1821,11 +1725,11 @@ export class RegistrationsService {
       }
 
       assertModuleEnabledForClient(
-        current.event.client as ClientModuleState,
+        current.event.client,
         "registrations",
       );
       assertModuleEnabledForClient(
-        current.event.client as ClientModuleState,
+        current.event.client,
         "pricing",
       );
 
@@ -1846,8 +1750,7 @@ export class RegistrationsService {
         );
       }
       if (
-        current.sponsorshipAmount >= current.totalAmount &&
-        current.totalAmount > 0 &&
+        hasFullSponsorship(current) &&
         isAccessEdit
       ) {
         throw new AppException(
@@ -1880,31 +1783,13 @@ export class RegistrationsService {
           quantity: item.quantity,
         }));
 
-      const toQuantityMap = (
-        items: Array<{ accessId: string; quantity: number }>,
-      ) => {
-        const q = new Map<string, number>();
-        for (const item of items) {
-          q.set(item.accessId, (q.get(item.accessId) ?? 0) + item.quantity);
-        }
-        return q;
-      };
-
-      const oldQuantities = toQuantityMap(currentAccessItems);
-      const newQuantities = toQuantityMap(newAccessSelections);
-      const accessDeltas = Array.from(
-        new Set([...oldQuantities.keys(), ...newQuantities.keys()]),
-      )
-        .map((accessId) => ({
-          accessId,
-          delta: (newQuantities.get(accessId) ?? 0) - (oldQuantities.get(accessId) ?? 0),
-        }))
-        .filter((c) => c.delta !== 0);
+      const accessDeltas = quantityDeltas(
+        quantitiesByAccess(currentAccessItems),
+        quantitiesByAccess(newAccessSelections),
+      );
 
       const currentIsPaid =
-        current.paymentStatus === "PAID" ||
-        current.paymentStatus === "SPONSORED" ||
-        current.paidAmount > 0;
+        hasReceivedPayment(current);
       const negativeDeltas = accessDeltas.filter((c) => c.delta < 0);
       if (currentIsPaid && negativeDeltas.length > 0) {
         throw new AppException(
@@ -1919,26 +1804,18 @@ export class RegistrationsService {
       }
 
       if (isAccessEdit || input.formData !== undefined) {
-        const v = await this.access.validateAccessSelections(
+        await this.access.assertAccessSelectionsValid(
           current.eventId,
           newAccessSelections,
           newFormData,
           currentAccessIds,
           tx,
         );
-        if (!v.valid) {
-          throw new AppException(
-            ErrorCodes.BAD_REQUEST,
-            `Invalid access selections: ${v.errors.join(", ")}`,
-            400,
-            { errors: v.errors },
-          );
-        }
       }
 
       if (isAccessEdit || input.formData !== undefined) {
         await this.access.assertAccessSelectionRequirement(current.eventId, newFormData, newAccessSelections,
-          (current.form.schema as { settings?: { accessSelectionRequired?: boolean } } | null)?.settings, tx);
+          current.form.schema, tx);
       }
 
       newPriceBreakdown = await this.pricing.calculatePrice(
@@ -2022,12 +1899,9 @@ export class RegistrationsService {
           lastName: input.lastName ?? current.lastName,
           phone: input.phone ?? current.phone,
           totalAmount: newTotalAmount,
-          priceBreakdown: newPriceBreakdown,
-          baseAmount: newPriceBreakdown.calculatedBasePrice,
-          accessAmount: newPriceBreakdown.accessTotal,
-          discountAmount: calculateDiscountAmount(newPriceBreakdown.appliedRules),
+          ...breakdownColumns(newPriceBreakdown),
           sponsorshipAmount: settlement.sponsorshipAmount,
-          paymentStatus: nextPaymentStatus as never,
+          paymentStatus: nextPaymentStatus,
           paidAt: nextPaidAt,
           accessTypeIds: newAccessSelections.map((s) => s.accessId),
           lastEditedAt: new Date(),
@@ -2099,7 +1973,7 @@ export class RegistrationsService {
           ts: Date.now(),
         });
       }
-      await this.emitEvents(tx, pending);
+      await this.emitRegistrationEventsAndSyncNetworking(tx, pending);
     });
 
     const registration = toPublicRegistration(await this.getEnrichedRow(registrationId));
@@ -2117,19 +1991,8 @@ export class RegistrationsService {
     ipAddress?: string,
   ): Promise<AdminRegistration> {
     await withTxn(async (tx) => {
-      const old = await findRegistrationForMutation(id, tx);
-      if (!old) {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_NOT_FOUND,
-          "Registration not found",
-          404,
-        );
-      }
-      assertEventWritable(old.event);
-      assertModuleEnabledForClient(
-        old.event.client as ClientModuleState,
-        "registrations",
-      );
+      const old = await requireRegistrationForMutation(id, tx);
+      assertRegistrationWritable(old);
 
       validatePaymentTransition(old.paymentStatus, input.paymentStatus);
 
@@ -2208,7 +2071,7 @@ export class RegistrationsService {
           ts: Date.now(),
         });
       }
-      await this.emitEvents(tx, pending);
+      await this.emitRegistrationEventsAndSyncNetworking(tx, pending);
 
       if (input.paymentStatus === "PAID" && old.paymentStatus !== "PAID") {
         await enqueueTriggeredEmailOutbox(
@@ -2319,19 +2182,7 @@ export class RegistrationsService {
     }
 
     // 4. Pre-upload state check (outside tx).
-    const registration = await findRegistrationWithFormEvent(registrationId);
-    if (!registration) {
-      throw new AppException(
-        ErrorCodes.REGISTRATION_NOT_FOUND,
-        "Registration not found",
-        404,
-      );
-    }
-    assertEventAcceptsPublicActions(registration.event);
-    assertModuleEnabledForClient(
-      registration.event.client as ClientModuleState,
-      "registrations",
-    );
+    const registration = await requireRegistrationForPublicAction(registrationId, ErrorCodes.REGISTRATION_NOT_FOUND);
     validatePaymentTransition(registration.paymentStatus, "VERIFYING");
 
     // 5. Compress (images → WebP, PDFs passthrough) using the DETECTED type.
@@ -2369,15 +2220,7 @@ export class RegistrationsService {
     //    the proof URL it replaced. On failure the row keeps the old proof and
     //    the new object is removed.
     const replacedUrl = await withTxn(async (tx) => {
-      const currentReg = await findRegistrationWithFormEvent(registrationId, tx);
-      if (!currentReg) {
-        throw new AppException(ErrorCodes.NOT_FOUND, "Registration not found", 404);
-      }
-      assertEventAcceptsPublicActions(currentReg.event);
-      assertModuleEnabledForClient(
-        currentReg.event.client as ClientModuleState,
-        "registrations",
-      );
+      const currentReg = await requireRegistrationForPublicAction(registrationId, ErrorCodes.NOT_FOUND, tx);
       validatePaymentTransition(currentReg.paymentStatus, "VERIFYING");
 
       await updateRegistrationRow(
@@ -2447,26 +2290,9 @@ export class RegistrationsService {
     input: SelectPaymentMethodInput,
   ): Promise<void> {
     await withTxn(async (tx) => {
-      const registration = await findRegistrationWithFormEvent(registrationId, tx);
-      if (!registration) {
-        throw new AppException(ErrorCodes.NOT_FOUND, "Registration not found", 404);
-      }
-      assertEventAcceptsPublicActions(registration.event);
-      assertModuleEnabledForClient(
-        registration.event.client as ClientModuleState,
-        "registrations",
-      );
+      const registration = await requireRegistrationForPublicAction(registrationId, ErrorCodes.NOT_FOUND, tx);
 
-      if (
-        input.paymentMethod === "LAB_SPONSORSHIP" &&
-        (registration.event.client.enabledModules ?? []).includes("sponsorships")
-      ) {
-        throw new AppException(
-          ErrorCodes.BAD_REQUEST,
-          "Lab sponsorship payment method is only available when sponsorships are disabled",
-          400,
-        );
-      }
+      this.assertLabSponsorshipAllowed(registration.event.client, input.paymentMethod);
 
       if (registration.paymentStatus !== "PENDING") {
         throw new AppException(

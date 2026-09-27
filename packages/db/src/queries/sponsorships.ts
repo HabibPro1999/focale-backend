@@ -1,3 +1,4 @@
+import type { ClientModuleGate } from "../client-module-gate";
 import {
   and,
   asc,
@@ -38,10 +39,7 @@ export type SponsorshipUsageRow = typeof sponsorshipUsages.$inferSelect;
 export type SponsorshipBatchRow = typeof sponsorshipBatches.$inferSelect;
 
 // Client module-gate slice used by the service's assertModuleEnabledForClient.
-export interface SponsorshipClientGate {
-  active: boolean;
-  enabledModules: string[] | null;
-}
+export type SponsorshipClientGate = ClientModuleGate;
 
 // ============================================================================
 // Shared where-clause builder — exported (reports module filters the same way)

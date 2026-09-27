@@ -12,6 +12,13 @@ function hasConditions(conditions: unknown): boolean {
   return Array.isArray(conditions) && conditions.length > 0;
 }
 
+export function matchesAccessConditions(
+  access: { conditions: unknown; conditionLogic: string },
+  formData: Record<string, unknown>,
+): boolean {
+  return !hasConditions(access.conditions) || evaluateRuleConditions(access.conditions as Condition[], access.conditionLogic, formData);
+}
+
 export { getExclusivityKey } from "./access-overlap";
 
 /** Display order: admin sort order first, creation order as tie-breaker. */
@@ -58,17 +65,7 @@ export function groupAccess(
     if (access.availableFrom && access.availableFrom > now) return false;
     if (access.availableTo && access.availableTo < now) return false;
 
-    if (hasConditions(access.conditions)) {
-      if (
-        !evaluateRuleConditions(
-          access.conditions as Condition[],
-          access.conditionLogic,
-          formData,
-        )
-      ) {
-        return false;
-      }
-    }
+    if (!matchesAccessConditions(access, formData)) return false;
 
     if (access.requiredAccess && access.requiredAccess.length > 0) {
       const hasAllPrerequisites = access.requiredAccess.every((req) =>

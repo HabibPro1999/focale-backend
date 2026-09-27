@@ -1,3 +1,4 @@
+import type { ClientModuleGate } from "../client-module-gate";
 import { rowCountOf } from "../helpers";
 import { escapeLike } from "../like";
 import { and, desc, eq, ilike, isNotNull, or, sql } from "drizzle-orm";
@@ -75,14 +76,12 @@ export async function eventExists(
   return rows.length > 0;
 }
 
-export type ClientPublicFields = {
+export type ClientPublicFields = ClientModuleGate & {
   id: string;
   name: string;
   logo: string | null;
   primaryColor: string | null;
   phone: string | null;
-  active: boolean;
-  enabledModules: string[] | null;
 };
 
 export type EventWithPricingAndClient = EventWithPricing & {

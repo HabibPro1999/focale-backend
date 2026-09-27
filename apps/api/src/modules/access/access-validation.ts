@@ -1,5 +1,5 @@
 import { getExclusivityKey, timeRangesOverlap } from "./access-overlap";
-import { evaluateRuleConditions, type Condition } from "@app/shared";
+import { matchesAccessConditions } from "./access-grouping";
 import type { EventAccessWithPrereqIds } from "@app/db";
 import type { AccessSelection } from "@app/contracts";
 
@@ -9,10 +9,6 @@ type IncludedAccess = {
   conditions: unknown;
   conditionLogic: string;
 };
-
-function hasConditions(conditions: unknown): boolean {
-  return Array.isArray(conditions) && conditions.length > 0;
-}
 
 /**
  * Pure selection validator. Never throws for business-rule failures — accumulates
@@ -40,16 +36,7 @@ export function validateSelections(
 
   // Mandatory included items (runs even when selections is empty).
   for (const included of includedAccesses) {
-    if (hasConditions(included.conditions)) {
-      if (
-        !evaluateRuleConditions(
-          included.conditions as Condition[],
-          included.conditionLogic,
-          formData,
-        )
-      )
-        continue;
-    }
+    if (!matchesAccessConditions(included, formData)) continue;
     if (!accessIdSet.has(included.id)) {
       errors.push(`"${included.name}" est inclus et doit être sélectionné`);
     }
@@ -132,16 +119,8 @@ export function validateSelections(
       }
     }
 
-    if (hasConditions(access.conditions)) {
-      if (
-        !evaluateRuleConditions(
-          access.conditions as Condition[],
-          access.conditionLogic,
-          formData,
-        )
-      ) {
-        errors.push(`${access.name} is not available based on your form answers`);
-      }
+    if (!matchesAccessConditions(access, formData)) {
+      errors.push(`${access.name} is not available based on your form answers`);
     }
   }
 

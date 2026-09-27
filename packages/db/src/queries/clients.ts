@@ -1,3 +1,4 @@
+import type { ClientModuleGate } from "../client-module-gate";
 import { and, count, desc, eq, ilike, or, type SQL } from "drizzle-orm";
 import { getDb, type DbExecutor } from "../client";
 import { clients, users } from "../schema/users-clients";
@@ -146,7 +147,7 @@ export async function getClientDeletionInfo(
 export async function findClientModuleState(
   id: string,
   executor: DbExecutor = getDb(),
-): Promise<{ active: boolean; enabledModules: string[] | null } | null> {
+): Promise<ClientModuleGate | null> {
   const [row] = await executor
     .select(clientModuleGateColumns)
     .from(clients)

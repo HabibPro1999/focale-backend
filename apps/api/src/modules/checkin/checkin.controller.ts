@@ -31,10 +31,6 @@ import {
 export class CheckinController {
   constructor(private readonly checkin: CheckinService) {}
 
-  private async authorizeEvent(user: AuthUser, eventId: string): Promise<void> {
-    await assertEventAccess(user, eventId);
-  }
-
   @Post(":eventId/checkin")
   @HttpCode(200)
   async checkIn(
@@ -42,7 +38,7 @@ export class CheckinController {
     @Param() params: CheckInEventParamDto,
     @Body() body: CheckInBodyDto,
   ) {
-    await this.authorizeEvent(user, params.eventId);
+    await assertEventAccess(user, params.eventId);
     return this.checkin.checkIn(
       params.eventId,
       body.registrationId,
@@ -57,7 +53,7 @@ export class CheckinController {
     @Param() params: CheckInEventParamDto,
     @Query() query: CheckInRegistrationsQueryDto,
   ) {
-    await this.authorizeEvent(user, params.eventId);
+    await assertEventAccess(user, params.eventId);
     return this.checkin.getCheckInRegistrations(params.eventId, query.accessId);
   }
 
@@ -66,7 +62,7 @@ export class CheckinController {
     @CurrentUser() user: AuthUser,
     @Param() params: CheckInEventParamDto,
   ) {
-    await this.authorizeEvent(user, params.eventId);
+    await assertEventAccess(user, params.eventId);
     return this.checkin.getCheckInStats(params.eventId);
   }
 
@@ -77,7 +73,7 @@ export class CheckinController {
     @Param() params: CheckInEventParamDto,
     @Body() body: BatchSyncBodyDto,
   ) {
-    await this.authorizeEvent(user, params.eventId);
+    await assertEventAccess(user, params.eventId);
     return this.checkin.batchSync(params.eventId, body.checkIns, user.id);
   }
 }

@@ -1,12 +1,9 @@
 import { ForbiddenException, NotFoundException } from "@nestjs/common";
 import { ErrorCodes, type ModuleId } from "@app/contracts";
-import { findClientModuleState, type DbExecutor } from "@app/db";
+import { findClientModuleState, type DbExecutor, type ClientModuleGate } from "@app/db";
 
 /** The client fields a module-gate check needs (legacy CLIENT_MODULE_GATE_SELECT). */
-export type ClientModuleState = {
-  active: boolean;
-  enabledModules: string[] | null;
-};
+export type ClientModuleState = ClientModuleGate;
 
 const MODULE_NAMES: Record<ModuleId, string> = {
   pricing: "Pricing",

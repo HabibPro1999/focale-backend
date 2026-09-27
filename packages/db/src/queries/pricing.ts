@@ -1,3 +1,4 @@
+import type { ClientModuleGate } from "../client-module-gate";
 import { and, count, eq, inArray } from "drizzle-orm";
 import type { EmbeddedPricingRule, EventPricingWithRules } from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
@@ -14,10 +15,7 @@ export type PricingRowInsert = typeof eventPricing.$inferInsert;
 export type PricingRowUpdate = Partial<PricingRowInsert>;
 export type PricingAccessRow = typeof eventAccess.$inferSelect;
 
-interface ClientGate {
-  active: boolean;
-  enabledModules: string[] | null;
-}
+type ClientGate = ClientModuleGate;
 
 /** Event gate row used inside the pricing update transaction. */
 export interface PricingEventGate {

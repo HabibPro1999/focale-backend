@@ -1,3 +1,4 @@
+import { FULLY_SETTLED_STATUSES } from "@app/shared";
 import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { getDb, type DbExecutor } from "../client";
 import { withTxn } from "../txn";
@@ -10,11 +11,7 @@ import {
 } from "../schema";
 
 // The only payment statuses eligible for check-in anywhere in this module.
-export const CHECKIN_ELIGIBLE_STATUSES = [
-  "PAID",
-  "SPONSORED",
-  "WAIVED",
-] as const;
+export const CHECKIN_ELIGIBLE_STATUSES = FULLY_SETTLED_STATUSES;
 
 export type AccessCheckInRow = typeof accessCheckIns.$inferSelect;
 
@@ -30,7 +27,6 @@ export type CheckInRegistration = {
   referenceNumber: string | null;
   paymentStatus: string;
   checkedInAt: Date | null;
-  checkedInBy: string | null;
   accessTypeIds: string[];
   clientId: string | null;
 };
@@ -83,7 +79,6 @@ export async function getRegistrationForCheckIn(
       referenceNumber: registrations.referenceNumber,
       paymentStatus: registrations.paymentStatus,
       checkedInAt: registrations.checkedInAt,
-      checkedInBy: registrations.checkedInBy,
       accessTypeIds: registrations.accessTypeIds,
       clientId: events.clientId,
     })

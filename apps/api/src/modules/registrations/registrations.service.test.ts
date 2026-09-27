@@ -76,7 +76,7 @@ import { CheckinService } from "../checkin/checkin.service";
 import { RegistrationsService } from "./registrations.service";
 import { AppException } from "../../core/app-exception";
 import type { Config } from "../../core/config";
-import type { AccessService } from "../access/access.service";
+import { AccessService } from "../access/access.service";
 import type { PricingService } from "../pricing/pricing.service";
 
 const FUTURE = new Date(Date.now() + 86_400_000);
@@ -140,6 +140,7 @@ describe("RegistrationsService", () => {
   let access: {
     assertAccessSelectionRequirement: ReturnType<typeof vi.fn>;
     validateAccessSelections: ReturnType<typeof vi.fn>;
+    assertAccessSelectionsValid: AccessService["assertAccessSelectionsValid"];
     incrementAccessRegisteredCountTx: ReturnType<typeof vi.fn>;
     decrementAccessRegisteredCountTx: ReturnType<typeof vi.fn>;
     syncPaidCountDelta: ReturnType<typeof vi.fn>;
@@ -182,7 +183,8 @@ describe("RegistrationsService", () => {
 
     access = {
       assertAccessSelectionRequirement: vi.fn().mockResolvedValue(undefined),
-      validateAccessSelections: vi.fn().mockResolvedValue({ valid: true, errors: [] }),
+      assertAccessSelectionsValid: AccessService.prototype.assertAccessSelectionsValid,
+    validateAccessSelections: vi.fn().mockResolvedValue({ valid: true, errors: [] }),
       incrementAccessRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
       decrementAccessRegisteredCountTx: vi.fn().mockResolvedValue(undefined),
       syncPaidCountDelta: vi.fn().mockResolvedValue(undefined),
@@ -338,7 +340,7 @@ describe("RegistrationsService", () => {
       access.assertAccessSelectionRequirement.mockRejectedValue(new AppException(ErrorCodes.ACCESS_SELECTION_REQUIRED, "Choose an option", 400));
       await expect(service.createRegistration(baseInput as never, emptyBreakdown(100)))
         .rejects.toMatchObject({ code: ErrorCodes.ACCESS_SELECTION_REQUIRED });
-      expect(access.assertAccessSelectionRequirement).toHaveBeenCalledWith("ev1", {}, [], { accessSelectionRequired: true });
+      expect(access.assertAccessSelectionRequirement).toHaveBeenCalledWith("ev1", {}, [], expect.objectContaining({ settings: { accessSelectionRequired: true } }));
       expect(db.insertRegistrationRow).not.toHaveBeenCalled();
     });
 
@@ -965,7 +967,7 @@ describe("RegistrationsService", () => {
       access.assertAccessSelectionRequirement.mockRejectedValue(new AppException(ErrorCodes.ACCESS_SELECTION_REQUIRED, "Choose an option", 400));
       await expect(service.editRegistrationPublic("reg1", { expectedUpdatedAt: expected, accessSelections: [] } as never))
         .rejects.toMatchObject({ code: ErrorCodes.ACCESS_SELECTION_REQUIRED });
-      expect(access.assertAccessSelectionRequirement).toHaveBeenCalledWith("ev1", expect.anything(), [], { accessSelectionRequired: true }, expect.anything());
+      expect(access.assertAccessSelectionRequirement).toHaveBeenCalledWith("ev1", expect.anything(), [], expect.objectContaining({ settings: { accessSelectionRequired: true } }), expect.anything());
       expect(db.casUpdateRegistrationByUpdatedAt).not.toHaveBeenCalled();
     });
 
