@@ -1,4 +1,4 @@
-import { isFullySponsored as hasFullSponsorship } from "@app/shared";
+import { calculateSettlement, isFullySponsored as hasFullSponsorship } from "@app/shared";
 
 /** Legacy link/batch precedence: PAID/WAIVED sticky, else SPONSORED/PARTIAL/unchanged. */
 export function nextStatusOnApply(
@@ -50,4 +50,49 @@ export function statusAfterRecalc(
         ? null
         : registration.paidAt;
   return { nextPaymentStatus, nextPaidAt };
+}
+
+type RegistrationSettlementPatch = {
+  paymentStatus?: "PENDING" | "PARTIAL" | "SPONSORED" | "PAID";
+  paidAt?: Date | null;
+};
+
+/** Registration repricing keeps VERIFYING and can promote cash-plus-sponsorship to PAID. */
+export function statusAfterRegistrationRecalc(
+  registration: { paymentStatus: string; paidAt: Date | null; paidAmount: number },
+  sponsorshipAmount: number,
+  totalAmount: number,
+): RegistrationSettlementPatch {
+  const result: RegistrationSettlementPatch = {};
+  if (
+    registration.paymentStatus === "WAIVED" ||
+    registration.paymentStatus === "REFUNDED" ||
+    registration.paymentStatus === "PAID" ||
+    registration.paymentStatus === "VERIFYING"
+  ) {
+    return result;
+  }
+
+  const settlement = calculateSettlement({
+    totalAmount,
+    paidAmount: registration.paidAmount,
+    sponsorshipAmount,
+  });
+  if (hasFullSponsorship({ sponsorshipAmount, totalAmount })) {
+    result.paymentStatus = "SPONSORED";
+  } else if (
+    settlement.isSettled &&
+    registration.paidAmount > 0
+  ) {
+    result.paymentStatus = "PAID";
+  } else {
+    result.paymentStatus = settlement.isPartiallyPaid ? "PARTIAL" : "PENDING";
+  }
+  if (result.paymentStatus !== undefined) {
+    result.paidAt =
+      result.paymentStatus === "PAID" || result.paymentStatus === "SPONSORED"
+        ? registration.paidAt ?? new Date()
+        : null;
+  }
+  return result;
 }
