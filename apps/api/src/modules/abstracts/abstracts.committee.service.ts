@@ -2,7 +2,12 @@ import { CommitteeInviteService } from "./abstracts.committee-invite.service";
 import { CommitteeEmailsService } from "./abstracts.committee-emails";
 import { randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
-import { getAbstractTitle, scoreDivergence } from "@app/shared";
+import {
+  DEFAULT_DIVERGENCE_THRESHOLD,
+  DEFAULT_REVIEWERS_PER_ABSTRACT,
+  getAbstractTitle,
+  scoreDivergence,
+} from "@app/shared";
 import {
   ErrorCodes,
   UserRole,
@@ -108,6 +113,16 @@ function hasReviewerThemeCoverage(
   if (reviewerThemeIds.length === 0) return false;
   const covered = new Set(reviewerThemeIds);
   return themes.some((t) => covered.has(t.id));
+}
+
+/** Read access only; scoring still requires an active explicit assignment. */
+function canReadAssignedAbstract(
+  abstract: { themes: { id: string }[]; reviews: { reviewerId: string; active: boolean }[] },
+  reviewerId: string,
+  reviewerThemeIds: string[],
+): boolean {
+  return abstract.reviews.some((review) => review.reviewerId === reviewerId && review.active)
+    || hasReviewerThemeCoverage(abstract.themes, reviewerThemeIds);
 }
 
 function generateThrowawayPassword(): string {
@@ -371,7 +386,7 @@ export class AbstractsCommitteeService {
     }
     const reviewerIds = [...new Set(body.reviewerIds)];
     const config = await getReviewerAssignmentConfig(eventId);
-    const requiredReviewers = config?.reviewersPerAbstract ?? 2;
+    const requiredReviewers = config?.reviewersPerAbstract ?? DEFAULT_REVIEWERS_PER_ABSTRACT;
 
     if (reviewerIds.length > 0) {
       if (reviewerIds.length < requiredReviewers) {
@@ -383,7 +398,7 @@ export class AbstractsCommitteeService {
         // Extras need diverging scores, by the rule the divergence alert uses
         // (@app/shared): never on fewer than two scores or a zero spread.
         const scores = await findScoredReviewScores(abstractId);
-        if (!scoreDivergence(scores, config?.divergenceThreshold ?? 6)) {
+        if (!scoreDivergence(scores, config?.divergenceThreshold ?? DEFAULT_DIVERGENCE_THRESHOLD)) {
           throw badRequest(
             "Extra reviewers can only be assigned after a score divergence alert",
           );
@@ -472,13 +487,7 @@ export class AbstractsCommitteeService {
       abstract.eventId,
       reviewerId,
     );
-    const hasExplicit = abstract.reviews.some(
-      (r) => r.reviewerId === reviewerId && r.active,
-    );
-    if (
-      !hasExplicit &&
-      !hasReviewerThemeCoverage(abstract.themes, reviewerThemeIds)
-    ) {
+    if (!canReadAssignedAbstract(abstract, reviewerId, reviewerThemeIds)) {
       throw notFound("Abstract assignment not found");
     }
     return anonymizeAbstractDetail(abstract, reviewerId);
@@ -550,7 +559,7 @@ export class AbstractsCommitteeService {
       score: body.score,
       comment: body.comment,
       commentsEnabled: abstract.config?.commentsEnabled ?? true,
-      divergenceThreshold: abstract.config?.divergenceThreshold ?? 6,
+      divergenceThreshold: abstract.config?.divergenceThreshold ?? DEFAULT_DIVERGENCE_THRESHOLD,
     });
     if (!result.ok) {
       switch (result.reason) {

@@ -14,7 +14,7 @@ import {
   type AdminReviewRow,
 } from "@app/db";
 import { getStorageProvider } from "@app/integrations";
-import { getAbstractTitle } from "@app/shared";
+import { getAbstractTitle, summarizeScores } from "@app/shared";
 import {
   AppException,
   badRequest,
@@ -46,10 +46,8 @@ export function reviewScoreSpread(reviews: Array<{ score: number | null }>): {
   const scores = reviews
     .map((review) => review.score)
     .filter((score): score is number => score !== null);
-  if (scores.length < 2) return { min: null, max: null, spread: null };
-  const min = Math.min(...scores);
-  const max = Math.max(...scores);
-  return { min, max, spread: max - min };
+  const { min, max, spread } = summarizeScores(scores);
+  return { min, max, spread };
 }
 
 function formatAdminAbstract(abstract: AdminAbstractRow) {
