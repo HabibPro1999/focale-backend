@@ -21,8 +21,9 @@ vi.mock("@app/db", () => ({ configureDb: boot.configureDb, assertSchemaCurrent: 
 vi.mock("../../../packages/integrations/src/config", () => ({ configureIntegrations: boot.configureIntegrations }));
 vi.mock("../../../packages/integrations/src/email/queue", () => ({ setEmailStatusChangeListener: boot.listener, emitEmailLogRealtimeEvent: boot.emitEmailLogRealtimeEvent }));
 vi.mock("@app/integrations", async () => ({
-  ...await import("../../../packages/integrations/src/config"),
-  ...await import("../../../packages/integrations/src/email/queue"),
+  ...await import("../../../packages/integrations/src/runtime.js"),
+  ...await import("../../../packages/integrations/src/config.js"),
+  ...await import("../../../packages/integrations/src/email/queue.js"),
 }));
 vi.mock("./app.factory", () => ({ buildApp: boot.build }));
 vi.mock("./core/logger.service", () => ({ logger: boot.logger }));
@@ -59,7 +60,7 @@ afterEach(() => vi.restoreAllMocks());
 const successfulOrder = ["on:unhandledRejection", "parse", "db", "integrations", "listener", "schema", "build", "shutdown", "on:SIGTERM", "on:SIGINT", "listen", "info"];
 
 it("pins boot order, API config identity, signal order and logging", async () => {
-  await import("./main");
+  await import("./main.js");
   await vi.waitFor(() => expect(boot.logger.info).toHaveBeenCalled());
   expect(boot.order).toEqual(successfulOrder);
   expect(boot.parse).toHaveBeenCalledWith(process.env);
@@ -70,7 +71,7 @@ it("pins boot order, API config identity, signal order and logging", async () =>
   expect(boot.build).toHaveBeenCalledWith(boot.config);
   expect(boot.listen).toHaveBeenCalledWith({ host: "0.0.0.0", port: 3456 });
   expect(boot.logger.info).toHaveBeenCalledWith({ port: 3456 }, "API listening");
-  const config = await import("./core/config");
+  const config = await import("./core/config.js");
   expect(config.loadConfig()).toBe(boot.config);
   expect(config.getConfig()).toBe(boot.config);
   expect(boot.parse).toHaveBeenCalledOnce();
@@ -85,7 +86,7 @@ it("pins boot order, API config identity, signal order and logging", async () =>
 
 it.each(["parse", "db", "integrations", "listener", "schema"])("stops at a failed %s stage and retains fatal handling", async (stage) => {
   boot.failAt = stage;
-  await import("./main");
+  await import("./main.js");
   await vi.waitFor(() => expect(process.exit).toHaveBeenCalledWith(1));
   expect(boot.order).toEqual([...successfulOrder.slice(0, successfulOrder.indexOf(stage) + 1), "error", "exit:1"]);
   expect(boot.logger.error).toHaveBeenCalledWith({ err: boot.failure }, "Fatal boot error");

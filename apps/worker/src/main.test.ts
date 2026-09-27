@@ -22,8 +22,9 @@ vi.mock("@app/shared", () => ({ createLogger: boot.createLogger }));
 vi.mock("../../../packages/integrations/src/config", () => ({ configureIntegrations: boot.configureIntegrations }));
 vi.mock("../../../packages/integrations/src/email/queue", () => ({ setEmailStatusChangeListener: boot.listener, emitEmailLogRealtimeEvent: boot.emitEmailLogRealtimeEvent }));
 vi.mock("@app/integrations", async () => ({
-  ...await import("../../../packages/integrations/src/config"),
-  ...await import("../../../packages/integrations/src/email/queue"),
+  ...await import("../../../packages/integrations/src/runtime.js"),
+  ...await import("../../../packages/integrations/src/config.js"),
+  ...await import("../../../packages/integrations/src/email/queue.js"),
 }));
 vi.mock("@nestjs/core", () => ({ NestFactory: { createApplicationContext: boot.createContext } }));
 vi.mock("./worker.module", () => ({ WorkerModule: class {} }));
@@ -66,7 +67,7 @@ afterEach(() => vi.restoreAllMocks());
 const successfulOrder = ["logger", "on:unhandledRejection", "parse", "db", "integrations", "listener", "heartbeat", "schema", "context", "runner", "heartbeat:false", "info", "shutdown", "on:SIGINT", "on:SIGTERM"];
 
 it("pins enabled worker boot order, process identity and signal handling", async () => {
-  await import("./main");
+  await import("./main.js");
   await vi.waitFor(() => expect(boot.listeners.has("SIGTERM")).toBe(true));
   expect(boot.order).toEqual(successfulOrder);
   expect(boot.createLogger).toHaveBeenCalledWith({ name: "worker" });
@@ -89,7 +90,7 @@ it("pins enabled worker boot order, process identity and signal handling", async
 
 it("keeps disabled heartbeat and signal wiring while skipping schema and Nest", async () => {
   boot.config.runWorkers = false;
-  await import("./main");
+  await import("./main.js");
   expect(boot.order).toEqual(["logger", "on:unhandledRejection", "parse", "db", "integrations", "listener", "heartbeat", "info", "heartbeat:true", "shutdown", "on:SIGINT", "on:SIGTERM"]);
   expect(boot.heartbeatStart).toHaveBeenCalledWith({ disabled: true });
   expect(boot.logger.info).toHaveBeenCalledWith("RUN_WORKERS=false; jobs disabled, worker idling with a disabled heartbeat");
@@ -103,7 +104,7 @@ it("keeps disabled heartbeat and signal wiring while skipping schema and Nest", 
 
 it.each(["parse", "db", "integrations", "listener", "schema"])("stops at a failed %s stage and retains worker fatal handling", async (stage) => {
   boot.failAt = stage;
-  await import("./main");
+  await import("./main.js");
   await vi.waitFor(() => expect(process.exit).toHaveBeenCalledWith(1));
   expect(boot.order).toEqual([...successfulOrder.slice(0, successfulOrder.indexOf(stage) + 1), "error", "exit:1"]);
   expect(boot.logger.error).toHaveBeenCalledWith({ err: boot.failure }, "worker fatal boot error");

@@ -1,34 +1,17 @@
 import "reflect-metadata";
-import { assertSchemaCurrent, closeDb, configureDb } from "@app/db";
-import {
-  configureIntegrations,
-  emitEmailLogRealtimeEvent,
-  setEmailStatusChangeListener,
-} from "@app/integrations";
+import { assertSchemaCurrent, closeDb } from "@app/db";
+import { configureRuntime, registerUnhandledRejectionLogger } from "@app/integrations";
 import { buildApp } from "./app.factory";
 import { loadConfig } from "./core/config";
 import { logger } from "./core/logger.service";
 import { ShutdownCoordinator, createShutdownHandler } from "./core/shutdown";
 
-process.on("unhandledRejection", (reason) => {
-  logger.error({ err: reason }, "Unhandled promise rejection");
-  // Don't exit - let the application continue
-});
+registerUnhandledRejectionLogger(logger);
 
 async function bootstrap() {
   // Parse the environment once (fail fast) and hand each package its slice.
   const config = loadConfig();
-  configureDb({
-    applicationName: "focale-api",
-    databaseUrl: config.DATABASE_URL,
-    settings: config.database,
-  });
-  configureIntegrations(config.integrations);
-
-  // N3: emails can be queued/updated from either process — wire the same
-  // listener here and in apps/worker/src/main.ts so no email-log status
-  // change is silently dropped depending on which process handled it.
-  setEmailStatusChangeListener(emitEmailLogRealtimeEvent);
+  configureRuntime(config, "focale-api");
 
   // MIGRATIONS_CHECK: enforce refuses to start on a stale schema; warn logs.
   await assertSchemaCurrent({ mode: config.MIGRATIONS_CHECK, logger });

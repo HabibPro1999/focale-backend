@@ -1,38 +1,21 @@
 import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
-import { assertSchemaCurrent, closeDb, configureDb } from "@app/db";
+import { assertSchemaCurrent, closeDb } from "@app/db";
 import { createLogger } from "@app/shared";
-import {
-  configureIntegrations,
-  emitEmailLogRealtimeEvent,
-  setEmailStatusChangeListener,
-} from "@app/integrations";
+import { configureRuntime, registerUnhandledRejectionLogger } from "@app/integrations";
 import { WorkerModule } from "./worker.module";
 import { JobRunner } from "./job-runner";
-import { loadConfig } from "./core/config";
+import { parseAppConfig } from "@app/contracts";
 import { WorkerHeartbeat, createWorkerShutdown } from "./core/lifecycle";
 
 const log = createLogger({ name: "worker" });
 
-process.on("unhandledRejection", (reason) => {
-  log.error({ err: reason }, "Unhandled promise rejection");
-  // Don't exit - let the application continue
-});
+registerUnhandledRejectionLogger(log);
 
 async function bootstrap() {
   // Parse the environment once (fail fast) and hand each package its slice.
-  const config = loadConfig();
-  configureDb({
-    applicationName: "focale-worker",
-    databaseUrl: config.DATABASE_URL,
-    settings: config.database,
-  });
-  configureIntegrations(config.integrations);
-
-  // N3: emails can be queued/updated from either process — wire the same
-  // listener here and in apps/api/src/main.ts so no email-log status change
-  // is silently dropped depending on which process handled it.
-  setEmailStatusChangeListener(emitEmailLogRealtimeEvent);
+  const config = parseAppConfig(process.env);
+  configureRuntime(config, "focale-worker");
 
   const heartbeat = new WorkerHeartbeat(config.lifecycle.workerHeartbeatFile, log);
   const onSignals = (shutdown: (signal: string) => Promise<void>) => {
