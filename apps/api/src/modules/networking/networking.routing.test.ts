@@ -9,6 +9,7 @@ import { NetworkingService } from "./networking.service";
 import { NetworkingSocialService } from "./networking.social.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
 import { NetworkingExportsService } from "./networking.exports.service";
+import { NetworkingNotificationsService } from "./networking.notifications.service";
 
 const ctx = { event: { id: "event" }, profile: { id: "self" } };
 const social = {
@@ -24,6 +25,7 @@ const meetings = {
 @Module({
   controllers: [NetworkingPublicController],
   providers: [
+    { provide: NetworkingNotificationsService, useValue: {} },
     { provide: NetworkingUploadsService, useValue: {} },
     { provide: NetworkingService, useValue: { participant: async () => ctx, registrationInfo: async () => ({ enabled: false }) } },
     { provide: NetworkingSocialService, useValue: social },

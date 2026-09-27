@@ -174,3 +174,6 @@ export function verifyNetworkingTotp(
   }
   return null;
 }
+
+/** Strict persisted-session parser; the lenient lockout parser remains separate. */
+export const parseNetworkingSessionToken = (authorization?: string) => authorization?.match(/^Bearer ([A-Za-z0-9_-]{40,128})$/)?.[1];

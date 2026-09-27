@@ -1,9 +1,7 @@
 import * as responses from "@app/contracts";
 import { ResponseContract } from "../../core/response-contract";
 import {
-  BadRequestException,
   Body,
-  ForbiddenException,
   Controller,
   Delete,
   Get,
@@ -22,25 +20,13 @@ import {
   type NetworkingMultipartRequest,
 } from "./networking.uploads.service";
 import { SkipThrottle, Throttle } from "@nestjs/throttler";
-import { ErrorCodes } from "@app/contracts";
 import type { FastifyReply, FastifyRequest } from "fastify";
-import {
-  getDb,
-  networkingDirectoryFacets,
-  listNetworkingNotifications,
-  recordNetworkingProfileView,
-  networkingStore,
-  networkingTransaction,
-  withdrawNetworkingProfile,
-} from "@app/db";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
-import { networkingIdentityCache } from "../../core/networking-identity-cache";
 import { NetworkingService } from "./networking.service";
 import { NetworkingSocialService } from "./networking.social.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
+import { NetworkingNotificationsService } from "./networking.notifications.service";
 import { NetworkingExportsService } from "./networking.exports.service";
-import { issueNetworkingBadge } from "./networking.security";
-import { networkingPublicProfile, futureNetworkingSlots } from "./networking.policy";
 import * as dto from "./networking.dto";
 
 @UseInterceptors(NetworkingBusyInterceptor)
@@ -52,6 +38,7 @@ export class NetworkingPublicController {
     private readonly social: NetworkingSocialService,
     private readonly meetings: NetworkingMeetingsService,
     private readonly exports: NetworkingExportsService,
+    private readonly notices: NetworkingNotificationsService,
   ) {}
   private context(slug: string, request: FastifyRequest, options: { allowConsentPending?: boolean } = {}) {
     return this.service.participant(slug, request.headers.authorization, { ...options, ip: request.ip });
@@ -134,14 +121,7 @@ export class NetworkingPublicController {
   @ResponseContract(responses.NetworkingPublicFacetsResponseSchema)
   @Get("facets")
   async facets(@Param("slug") slug: string, @Req() request: FastifyRequest) {
-    const ctx = await this.context(slug, request);
-    if (!ctx.config.searchEnabled)
-      throw new ForbiddenException({ code: ErrorCodes.NETWORKING_FEATURE_DISABLED, message: "Search is disabled" });
-    return networkingDirectoryFacets(
-      ctx.event.id,
-      ctx.profile.id,
-      ctx.config.eligiblePaymentStatuses,
-    );
+    return this.service.facets(await this.context(slug, request));
   }
   @ResponseContract(responses.NetworkingPublicProfilesResponseSchema)
   @Get("profiles") async profiles(
@@ -164,10 +144,7 @@ export class NetworkingPublicController {
     @Req() req: FastifyRequest,
     @Query() query: dto.NetworkingListDto,
   ) {
-    const ctx = await this.context(slug, req);
-    const profile = await this.service.target(ctx, id);
-    await recordNetworkingProfileView(ctx.event.id, ctx.profile.id, id, query.viewId);
-    return networkingPublicProfile(profile);
+    return this.service.profile(await this.context(slug, req), id, query.viewId);
   }
   @ResponseContract(responses.NetworkingPublicInterestResponseSchema)
   @Post("interests") async interest(
@@ -186,13 +163,7 @@ export class NetworkingPublicController {
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
   ) {
-    const ctx = await this.context(slug, req);
-    await networkingStore(getDb()).remove("interests", {
-      eventId: ctx.event.id,
-      profileId: ctx.profile.id,
-      action: "PASS",
-    });
-    return { reset: true };
+    return this.social.resetPasses(await this.context(slug, req));
   }
   @ResponseContract(responses.NetworkingPublicConnectionsResponseSchema)
   @Get("connections") async connections(
@@ -256,23 +227,7 @@ export class NetworkingPublicController {
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
   ) {
-    const ctx = await this.context(slug, req);
-    const store = networkingStore(getDb());
-    const rows = await store.all("blocks", {
-      eventId: ctx.event.id,
-      profileId: ctx.profile.id,
-    });
-    const items = await Promise.all(
-      rows.map(async (row) => {
-        // The block row stays listed (and unblockable); the profile only while the policy allows it (4.6).
-        const profile = await this.service.blockedTarget(ctx, row.targetId, store);
-        return {
-          ...row,
-          profile: profile ? networkingPublicProfile(profile) : null,
-        };
-      }),
-    );
-    return { items, total: items.length };
+    return this.social.blocks(await this.context(slug, req));
   }
   @ResponseContract(responses.NetworkingPublicBlockResponseSchema)
   @Post("blocks") async block(
@@ -288,13 +243,7 @@ export class NetworkingPublicController {
     @Param("id") id: string,
     @Req() req: FastifyRequest,
   ) {
-    const ctx = await this.context(slug, req);
-    await networkingStore(getDb()).remove("blocks", {
-      eventId: ctx.event.id,
-      profileId: ctx.profile.id,
-      targetId: id,
-    });
-    return { unblocked: true };
+    return this.social.unblock(await this.context(slug, req), id);
   }
   @ResponseContract(responses.NetworkingPublicReportResponseSchema)
   @Post("reports")
@@ -330,12 +279,7 @@ export class NetworkingPublicController {
     @Param("id") id: string,
     @Req() req: FastifyRequest,
   ) {
-    const ctx = await this.context(slug, req);
-    this.meetings.requireEnabled(ctx);
-    return {
-      slots: await this.meetings.participantSlots(ctx, id),
-      availableSlots: futureNetworkingSlots(ctx.config, ctx.event),
-    };
+    return this.meetings.profileAvailability(await this.context(slug, req), id);
   }
   @ResponseContract(responses.NetworkingPublicListMeetingsResponseSchema)
   @Get("meetings") async listMeetings(
@@ -384,11 +328,7 @@ export class NetworkingPublicController {
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
   ) {
-    const ctx = await this.context(slug, req);
-    return {
-      ...issueNetworkingBadge(ctx.profile.id, ctx.event.id),
-      accessAllowed: await this.service.areaAccess(ctx),
-    };
+    return this.service.badge(await this.context(slug, req));
   }
   @ResponseContract(responses.NetworkingPublicNotificationsResponseSchema)
   @Get("notifications") async notifications(
@@ -396,13 +336,7 @@ export class NetworkingPublicController {
     @Req() req: FastifyRequest,
     @Query() query: dto.NetworkingListDto,
   ) {
-    const ctx = await this.context(slug, req);
-    return listNetworkingNotifications(
-      ctx.event.id,
-      ctx.profile.id,
-      query.page,
-      query.limit,
-    );
+    return this.notices.list(await this.context(slug, req), query);
   }
 
   @ResponseContract(responses.NetworkingPublicReadNotificationsResponseSchema)
@@ -411,21 +345,7 @@ export class NetworkingPublicController {
     @Req() req: FastifyRequest,
     @Body() body: dto.NetworkingNotificationReadDto,
   ) {
-    const ctx = await this.context(slug, req);
-    if (body.ids) {
-      for (const id of body.ids)
-        await networkingStore(getDb()).update(
-          "notifications",
-          { eventId: ctx.event.id, profileId: ctx.profile.id, id },
-          { readAt: new Date() },
-        );
-    } else
-      await networkingStore(getDb()).update(
-        "notifications",
-        { eventId: ctx.event.id, profileId: ctx.profile.id, readAt: null },
-        { readAt: new Date() },
-      );
-    return { read: true };
+    return this.notices.markRead(await this.context(slug, req), body);
   }
   @ResponseContract(responses.NetworkingPublicSubscribeResponseSchema)
   @Post("push-subscriptions") async subscribe(
@@ -433,31 +353,7 @@ export class NetworkingPublicController {
     @Req() req: FastifyRequest,
     @Body() body: dto.NetworkingPushDto,
   ) {
-    const ctx = await this.context(slug, req);
-    const unsupported = () => new BadRequestException({ code: ErrorCodes.NETWORKING_VALIDATION, message: "Unsupported push service endpoint" });
-    let url: URL;
-    try {
-      url = new URL(body.endpoint);
-    } catch {
-      throw unsupported();
-    }
-    const host = url.hostname;
-    const allowed = [
-      "fcm.googleapis.com",
-      "push.services.mozilla.com",
-      "push.apple.com",
-      "notify.windows.com",
-    ].some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
-    if (!allowed || url.username || url.password || url.port)
-      throw unsupported();
-    // One upsert on the unique endpoint: a browser re-subscribing moves its endpoint to this participant.
-    return networkingStore(getDb()).upsertPushSubscription({
-      eventId: ctx.event.id,
-      profileId: ctx.profile.id,
-      endpoint: body.endpoint,
-      keys: body.keys,
-      expirationTime: body.expirationTime ? new Date(body.expirationTime) : null,
-    });
+    return this.notices.subscribe(await this.context(slug, req), body);
   }
   @ResponseContract(responses.NetworkingPublicUnsubscribeResponseSchema)
   @Delete("push-subscriptions") async unsubscribe(
@@ -465,13 +361,7 @@ export class NetworkingPublicController {
     @Req() req: FastifyRequest,
     @Body() body: { endpoint?: string },
   ) {
-    const ctx = await this.context(slug, req);
-    await networkingStore(getDb()).remove("pushSubscriptions", {
-      eventId: ctx.event.id,
-      profileId: ctx.profile.id,
-      ...(body?.endpoint ? { endpoint: body.endpoint } : {}),
-    });
-    return { unsubscribed: true };
+    return this.notices.unsubscribe(await this.context(slug, req), body);
   }
   @Get("calendar.ics") @SkipEnvelope() async calendar(
     @Param("slug") slug: string,
@@ -514,13 +404,6 @@ export class NetworkingPublicController {
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
   ) {
-    const ctx = await this.context(slug, req, { allowConsentPending: true });
-    // Content, push subscriptions, availability, embeddings and unsent deliveries
-    // go now, with the photo queued for durable deletion; the rest is erased after
-    // NETWORKING_WITHDRAWAL_ERASE_DAYS by the worker (the profile row stays as a tombstone).
-    await networkingTransaction(ctx.event.id, (_store, db) =>
-      withdrawNetworkingProfile(db, { eventId: ctx.event.id, profileId: ctx.profile.id, slug: ctx.event.slug }));
-    networkingIdentityCache.forgetProfile(ctx.profile.id);
-    return { withdrawn: true };
+    return this.service.withdraw(await this.context(slug, req, { allowConsentPending: true }));
   }
 }

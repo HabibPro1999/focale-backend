@@ -8,11 +8,9 @@ import { NetworkingService, type NetworkingContext } from "./networking.service"
 import { NetworkingSocialService } from "./networking.social.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
 import { NetworkingAdminService } from "./networking.admin.service";
-import { NetworkingExportsService } from "./networking.exports.service";
 import { NetworkingMfaService } from "./networking.mfa.service";
-import { NetworkingUploadsService } from "./networking.uploads.service";
-import { NetworkingPublicController } from "./networking.public.controller";
 import { networkingHash, networkingTotp, openNetworkingSecret } from "./networking.security";
+import { networkingPublicController } from "./__testing__/public-controller";
 
 // Plan 4.1: one pool connection per networking transaction. With a pool of
 // one, any helper that takes a second connection inside a transaction waits
@@ -31,9 +29,7 @@ const meetings = new NetworkingMeetingsService(service);
 const inventory = new NetworkingInventoryService();
 const admin = new NetworkingAdminService(service, meetings, inventory);
 const mfa = new NetworkingMfaService();
-const controller = new NetworkingPublicController(
-  new NetworkingUploadsService(), service, social, meetings, new NetworkingExportsService(social, meetings),
-);
+const controller = networkingPublicController({ service, social, meetings });
 const slots = ["09:00", "09:30", "10:00", "10:30"].map((time) => new Date(`2031-06-10T${time}:00.000Z`));
 let fixture: Awaited<ReturnType<typeof createNetworkingWriteFixture>>;
 let people: NetworkingContext[];
