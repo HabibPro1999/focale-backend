@@ -1,3 +1,4 @@
+import { requireNetworkingDiscovery } from "./networking.errors";
 import * as responses from "@app/contracts";
 import { ResponseContract } from "../../core/response-contract";
 import { EventScoped } from "../tenancy/tenant-scope";
@@ -7,7 +8,6 @@ import { getConfig } from "../../core/config";
 
 import {
   Controller,
-  ForbiddenException,
   Get,
   Headers,
   Ip,
@@ -60,8 +60,7 @@ export class NetworkingRecommendationsController {
     @Headers("authorization") authorization?: string,
   ) {
     const ctx = await this.networking.participant(slug, authorization, { ip });
-    if (!ctx.config.swipeEnabled && !ctx.config.searchEnabled)
-      throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Participant discovery is disabled" });
+    requireNetworkingDiscovery(ctx.config, "Participant discovery is disabled");
     const model = getConfig().networking.embedding.model;
     const cacheKey = JSON.stringify([
       ctx.event.id,

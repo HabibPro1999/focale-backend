@@ -1,3 +1,4 @@
+import { NetworkingInventoryService } from "./networking.inventory.service";
 import { beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { NotFoundException } from "@nestjs/common";
@@ -348,7 +349,7 @@ describe.runIf(dbTestsEnabled())("networking eligibility matrix on every surface
     sectors = sectorsOf(report.sectors);
     expect(actual((target) => sectors.has(target.profile.sector))).toEqual(expected("listed"));
 
-    const admin = new NetworkingAdminService(service, {} as NetworkingMeetingsService);
+    const admin = new NetworkingAdminService(service, {} as NetworkingMeetingsService, new NetworkingInventoryService());
     const listed = idsOf((await admin.profiles(ids.event, { page: 1, limit: 100 })).items);
     expect(listed.has(viewer.id)).toBe(true);
     expect(actual((target) => listed.has(target.profile.id))).toEqual(expected("listed"));

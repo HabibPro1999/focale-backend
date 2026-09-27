@@ -1,3 +1,4 @@
+import { NetworkingInventoryService } from "./networking.inventory.service";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { NetworkingConfigSchema } from "@app/contracts";
@@ -33,7 +34,7 @@ const config = NetworkingConfigSchema.parse({
 const service = new NetworkingService();
 const meetings = new NetworkingMeetingsService(service);
 const social = new NetworkingSocialService(service);
-const admin = new NetworkingAdminService(service, meetings);
+const admin = new NetworkingAdminService(service, meetings, new NetworkingInventoryService());
 const exportsService = new NetworkingExportsService(social, meetings);
 const firstStart = Date.parse("2031-05-05T02:00:00Z");
 const likedAt = new Date("2031-04-01T10:00:00.000Z");

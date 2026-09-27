@@ -1,3 +1,4 @@
+import { networkingSearchMatches } from "@app/db";
 import { describe, expect, it, vi } from "vitest";
 import { BadRequestException } from "@nestjs/common";
 import {
@@ -9,7 +10,6 @@ import {
   NetworkingBadgeVerifySchema,
 } from "@app/contracts";
 import {
-  networkingSearchMatches,
   networkingSlots,
   networkingPublicProfile,
   resourceQuanta,

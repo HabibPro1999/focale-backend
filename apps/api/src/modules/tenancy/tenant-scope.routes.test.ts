@@ -1,3 +1,4 @@
+import { NetworkingInventoryService } from "../networking/networking.inventory.service";
 import "reflect-metadata";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Module, RequestMethod, type Type } from "@nestjs/common";
@@ -354,6 +355,7 @@ function serviceMock(name: string): unknown {
 }
 const SERVICES: Type[] = [
   NetworkingAdminService,
+  NetworkingInventoryService,
   NetworkingUploadsService,
   NetworkingExportsService,
   AbstractsConfigService,

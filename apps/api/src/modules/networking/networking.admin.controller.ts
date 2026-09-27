@@ -1,3 +1,5 @@
+import { NetworkingInventoryService } from "./networking.inventory.service";
+import { networkingAnalytics } from "./networking.analytics";
 import * as responses from "@app/contracts";
 import { ResponseContract } from "../../core/response-contract";
 import { EventScoped } from "../tenancy/tenant-scope";
@@ -39,6 +41,7 @@ export class NetworkingAdminController {
     private readonly uploads: NetworkingUploadsService,
     private readonly service: NetworkingAdminService,
     private readonly exports: NetworkingExportsService,
+    private readonly inventory: NetworkingInventoryService,
   ) {}
 
   @ResponseContract(responses.NetworkingAdminConfigResponseSchema)
@@ -46,7 +49,7 @@ export class NetworkingAdminController {
   @Get("config") async config(
     @Param("eventId") eventId: string,
   ) {
-    return this.service.config(eventId);
+    return this.service.getConfig(eventId);
   }
   @ResponseContract(responses.NetworkingAdminUpdateConfigResponseSchema)
   @EventScoped({ module: "networking", write: true })
@@ -55,7 +58,7 @@ export class NetworkingAdminController {
     @Param("eventId") eventId: string,
     @Body() body: dto.NetworkingConfigDto,
   ) {
-    return this.service.config(eventId, body, user.id);
+    return this.service.updateConfig(eventId, body, user.id);
   }
   @ResponseContract(responses.NetworkingAdminUploadLogoResponseSchema)
   @EventScoped({ module: "networking", write: true })
@@ -65,11 +68,11 @@ export class NetworkingAdminController {
     @Param("eventId") eventId: string,
     @Req() request: NetworkingMultipartRequest,
   ) {
-    const config = await this.service.config(eventId);
+    const config = await this.service.getConfig(eventId);
     return this.uploads.image(
       request,
       `networking/${eventId}/branding`,
-      (url) => this.service.config(eventId, { logoUrl: url }, user.id),
+      (url) => this.service.updateConfig(eventId, { logoUrl: url }, user.id),
       config.logoUrl,
     );
   }
@@ -114,29 +117,29 @@ export class NetworkingAdminController {
   @ResponseContract(responses.NetworkingAdminSpacesResponseSchema)
   @EventScoped({ module: "networking" })
   @Get("spaces") async spaces(@Param("eventId") eventId: string) {
-    return this.service.inventory.spaces(eventId);
+    return this.inventory.spaces(eventId);
   }
   @ResponseContract(responses.NetworkingAdminCreateSpaceResponseSchema)
   @EventScoped({ module: "networking", write: true })
   @Post("spaces") async createSpace(@CurrentUser() user: AuthUser, @Param("eventId") eventId: string, @Body() body: dto.NetworkingSpaceDto) {
-    return this.service.inventory.saveSpace(eventId, body, user.id);
+    return this.inventory.saveSpace(eventId, body, user.id);
   }
   @ResponseContract(responses.NetworkingAdminUpdateSpaceResponseSchema)
   @EventScoped({ module: "networking", write: true })
   @Patch("spaces/:id") async updateSpace(@CurrentUser() user: AuthUser, @Param("eventId") eventId: string, @Param("id") id: string, @Body() body: dto.NetworkingSpaceUpdateDto) {
-    return this.service.inventory.saveSpace(eventId, body, user.id, id);
+    return this.inventory.saveSpace(eventId, body, user.id, id);
   }
   @ResponseContract(responses.NetworkingAdminRemoveSpaceResponseSchema)
   @EventScoped({ module: "networking", write: true })
   @Delete("spaces/:id") async removeSpace(@CurrentUser() user: AuthUser, @Param("eventId") eventId: string, @Param("id") id: string) {
-    return this.service.inventory.removeSpace(eventId, id, user.id);
+    return this.inventory.removeSpace(eventId, id, user.id);
   }
   @ResponseContract(responses.NetworkingAdminTablesResponseSchema)
   @EventScoped({ module: "networking" })
   @Get("tables") async tables(
     @Param("eventId") eventId: string,
   ) {
-    return this.service.tables(eventId);
+    return this.inventory.tables(eventId);
   }
   @ResponseContract(responses.NetworkingAdminTableResponseSchema)
   @EventScoped({ module: "networking", write: true })
@@ -145,7 +148,7 @@ export class NetworkingAdminController {
     @Param("eventId") eventId: string,
     @Body() body: dto.NetworkingTableDto,
   ) {
-    return this.service.saveTable(eventId, body, user.id);
+    return this.inventory.saveTable(eventId, body, user.id);
   }
   @ResponseContract(responses.NetworkingAdminUpdateTableResponseSchema)
   @EventScoped({ module: "networking", write: true })
@@ -155,7 +158,7 @@ export class NetworkingAdminController {
     @Param("id") id: string,
     @Body() body: dto.NetworkingTableUpdateDto,
   ) {
-    return this.service.saveTable(eventId, body, user.id, id);
+    return this.inventory.saveTable(eventId, body, user.id, id);
   }
   @ResponseContract(responses.NetworkingAdminRemoveTableResponseSchema)
   @EventScoped({ module: "networking", write: true })
@@ -164,7 +167,7 @@ export class NetworkingAdminController {
     @Param("eventId") eventId: string,
     @Param("id") id: string,
   ) {
-    return this.service.removeTable(eventId, id, user.id);
+    return this.inventory.removeTable(eventId, id, user.id);
   }
   @ResponseContract(responses.NetworkingAdminMeetingsResponseSchema)
   @EventScoped({ module: "networking" })
@@ -243,8 +246,8 @@ export class NetworkingAdminController {
   @EventScoped({ module: "networking" })
   @Get("analytics") async analytics(
     @Param("eventId") eventId: string,
-  ) {
-    return this.service.analytics(eventId);
+  ): Promise<responses.NetworkingAnalytics> {
+    return networkingAnalytics(eventId);
   }
   @EventScoped({ module: "networking" })
   @Get("export") @SkipEnvelope() async export(

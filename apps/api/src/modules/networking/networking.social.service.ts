@@ -1,5 +1,6 @@
+import { networkingNotFound, requireNetworkingDiscovery, requireNetworkingChat } from "./networking.errors";
 import { ErrorCodes, type NetworkingParticipantListQuery } from "@app/contracts";
-import { participantPagination } from "./networking.pagination";
+import { participantPagination, toParticipantPage } from "./networking.pagination";
 import {
   BadRequestException,
   ForbiddenException,
@@ -25,7 +26,6 @@ import {
   type NetworkingContext,
 } from "./networking.service";
 import { networkingPair, networkingPublicProfile } from "./networking.policy";
-const notFound = (message: string) => new NotFoundException({ code: ErrorCodes.NETWORKING_NOT_FOUND, message });
 type ConnectionSummaryRow = Awaited<ReturnType<typeof listNetworkingConnectionSummaries>>[number];
 const summary = (row: ConnectionSummaryRow) => ({ ...row, profile: networkingPublicProfile(row.profile) });
 @Injectable()
@@ -38,7 +38,7 @@ export class NetworkingSocialService {
    */
   async incoming(ctx: NetworkingContext, query: NetworkingParticipantListQuery = {}) {
     if (!ctx.profile.featured && !ctx.profile.standTableId)
-      throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Incoming interests are available to exhibitors" });
+      throw new ForbiddenException({ code: ErrorCodes.NETWORKING_FEATURE_DISABLED, message: "Incoming interests are available to exhibitors" });
     const page = participantPagination("incoming", ctx, query);
     const scope = {
       eventId: ctx.event.id,
@@ -47,13 +47,9 @@ export class NetworkingSocialService {
       discoveryEnabled: networkingDiscoveryEnabled(ctx.config),
     };
     const rows = await listNetworkingIncomingInterests(scope, page);
-    const visibleRows = rows.slice(0, page.limit);
-    const last = visibleRows.at(-1);
-    return {
-      items: visibleRows.map((row) => ({ id: row.id, profile: networkingPublicProfile(row.profile), createdAt: row.createdAt })),
-      nextCursor: rows.length > page.limit && last ? page.cursor(last.createdAt, last.id) : null,
-      ...(page.after ? {} : { total: await countNetworkingIncomingInterests(scope) }),
-    };
+    return toParticipantPage(page, rows, (row) => row.createdAt,
+      (items) => items.map((row) => ({ id: row.id, profile: networkingPublicProfile(row.profile), createdAt: row.createdAt })),
+      () => countNetworkingIncomingInterests(scope));
   }
   async connection(
     ctx: NetworkingContext,
@@ -65,7 +61,7 @@ export class NetworkingSocialService {
       !row ||
       (row.profileAId !== ctx.profile.id && row.profileBId !== ctx.profile.id)
     )
-      throw notFound("Connection not found");
+      throw networkingNotFound("Connection not found");
     const profile = await this.networking.target(
       ctx,
       row.profileAId === ctx.profile.id ? row.profileBId : row.profileAId,
@@ -78,12 +74,10 @@ export class NetworkingSocialService {
     targetId: string,
     action: "LIKE" | "PASS",
   ) {
-    if (!ctx.config.swipeEnabled && !ctx.config.searchEnabled)
-      throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Discovery is disabled" });
+    requireNetworkingDiscovery(ctx.config);
     return networkingTransaction(ctx.event.id, async (store, db) => {
       ctx = await this.networking.currentParticipant(ctx, store);
-      if (!ctx.config.swipeEnabled && !ctx.config.searchEnabled)
-        throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Discovery is disabled" });
+      requireNetworkingDiscovery(ctx.config);
       const target = await this.networking.target(ctx, targetId, store, true);
       // Read first for the audit's previous action; the upsert on the pair's unique
       // index keeps a concurrent duplicate swipe from failing on insert.
@@ -134,14 +128,9 @@ export class NetworkingSocialService {
   async connections(ctx: NetworkingContext, query: NetworkingParticipantListQuery = {}) {
     const page = participantPagination("connections", ctx, query);
     const rows = await listNetworkingConnectionSummaries(ctx.event.id, ctx.profile.id, ctx.config.eligiblePaymentStatuses, page);
-    const visibleRows = rows.slice(0, page.limit);
-    const last = visibleRows.at(-1);
-    return {
-      items: visibleRows.map(summary),
-      nextCursor: rows.length > page.limit && last ? page.cursor(last.createdAt, last.id) : null,
-      // Counted once per listing: later pages never repeat the aggregate.
-      ...(page.after ? {} : { total: await countNetworkingConnectionSummaries(ctx.event.id, ctx.profile.id, ctx.config.eligiblePaymentStatuses) }),
-    };
+    return toParticipantPage(page, rows, (row) => row.createdAt,
+      (items) => items.map(summary),
+      () => countNetworkingConnectionSummaries(ctx.event.id, ctx.profile.id, ctx.config.eligiblePaymentStatuses));
   }
   /** Internal, unpaginated: exports must never be truncated. Not exposed over HTTP. */
   async allConnections(ctx: NetworkingContext) {
@@ -151,7 +140,7 @@ export class NetworkingSocialService {
   async connectionSummary(ctx: NetworkingContext, id: string) {
     await this.connection(ctx, id);
     const [row] = await listNetworkingConnectionSummaries(ctx.event.id, ctx.profile.id, ctx.config.eligiblePaymentStatuses, undefined, { connectionId: id });
-    if (!row) throw notFound("Connection not found");
+    if (!row) throw networkingNotFound("Connection not found");
     return summary(row);
   }
   async connectionWith(ctx: NetworkingContext, profileId: string) {
@@ -171,10 +160,9 @@ export class NetworkingSocialService {
     id: string,
     query: { before?: string; beforeId?: string; limit?: number } = {},
   ) {
-    if (!ctx.config.chatEnabled)
-      throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Chat is disabled" });
+    requireNetworkingChat(ctx.config);
     if (query.beforeId && !query.before)
-      throw new BadRequestException({ code: "NETWORKING_VALIDATION", message: "A message timestamp is required with beforeId" });
+      throw new BadRequestException({ code: ErrorCodes.NETWORKING_VALIDATION, message: "A message timestamp is required with beforeId" });
     await this.connection(ctx, id);
     return listNetworkingMessages(ctx.event.id, id, query);
   }
@@ -185,12 +173,10 @@ export class NetworkingSocialService {
     body: string,
     clientMessageId: string,
   ) {
-    if (!ctx.config.chatEnabled)
-      throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Chat is disabled" });
+    requireNetworkingChat(ctx.config);
     return networkingTransaction(ctx.event.id, async (store, db) => {
       ctx = await this.networking.currentParticipant(ctx, store);
-      if (!ctx.config.chatEnabled)
-        throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Chat is disabled" });
+      requireNetworkingChat(ctx.config);
       const connection = await this.connection(ctx, id, store);
       // The (sender, clientMessageId) unique index makes a retried send idempotent.
       const message = await store.insertMessageOnce({
@@ -203,7 +189,7 @@ export class NetworkingSocialService {
       if (!message) {
         const previous = await store.one("messages", { senderId: ctx.profile.id, clientMessageId });
         if (!previous || previous.connectionId !== id || previous.body !== body)
-          throw new BadRequestException({ code: "NETWORKING_VALIDATION", message: "Message key was already used for another message" });
+          throw new BadRequestException({ code: ErrorCodes.NETWORKING_VALIDATION, message: "Message key was already used for another message" });
         return previous;
       }
       await store.update(
@@ -245,12 +231,12 @@ export class NetworkingSocialService {
     return networkingTransaction(ctx.event.id, async (store, db) => {
       ctx = await this.networking.currentParticipant(ctx, store);
       if (targetId === ctx.profile.id)
-        throw new BadRequestException({ code: "NETWORKING_VALIDATION", message: "Cannot block yourself" });
+        throw new BadRequestException({ code: ErrorCodes.NETWORKING_VALIDATION, message: "Cannot block yourself" });
       const target = await store.one("profiles", {
         id: targetId,
         eventId: ctx.event.id,
       });
-      if (!target) throw notFound("Participant not found");
+      if (!target) throw networkingNotFound("Participant not found");
       await store.insertBlockOnce(ctx.event.id, ctx.profile.id, targetId);
       // Only the pair's active meetings; a block never names the other participant (K5).
       await cancelNetworkingParticipantMeetings(ctx.profile.id, ctx.event.id, db, {
@@ -272,7 +258,7 @@ export class NetworkingSocialService {
         eventId: ctx.event.id,
       }))
     )
-      throw notFound("Participant not found");
+      throw networkingNotFound("Participant not found");
     if (input.messageId) {
       const message = await store.one("messages", {
         id: input.messageId,
@@ -290,7 +276,7 @@ export class NetworkingSocialService {
         (connection.profileAId !== ctx.profile.id &&
           connection.profileBId !== ctx.profile.id)
       )
-        throw notFound("Message not found");
+        throw networkingNotFound("Message not found");
     }
     return store.insert("reports", {
       eventId: ctx.event.id,

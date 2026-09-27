@@ -1,3 +1,4 @@
+import { NetworkingInventoryService } from "./networking.inventory.service";
 // Plan 4.7: meeting transitions, their reservation effects and notices, and
 // the one-pending-request-per-requester-per-slot hold, on a migrated database.
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -19,7 +20,7 @@ import { networkingHash } from "./networking.security";
 const service = new NetworkingService();
 const social = new NetworkingSocialService(service);
 const meetings = new NetworkingMeetingsService(service);
-const admin = new NetworkingAdminService(service, meetings);
+const admin = new NetworkingAdminService(service, meetings, new NetworkingInventoryService());
 const store = () => networkingStore(getDb());
 const [ten, eleven] = ["10:00", "11:00"].map((time) => `2031-06-10T${time}:00.000Z`);
 let fixture: Awaited<ReturnType<typeof createNetworkingWriteFixture>>;
