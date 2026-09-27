@@ -1,3 +1,5 @@
+import { NetworkingRecommendationsService } from "./networking-recommendations.service";
+import { NetworkingNotificationsService } from "./networking.notifications.service";
 import { NetworkingInventoryService } from "./networking.inventory.service";
 import { NetworkingMfaService } from "./networking.mfa.service";
 import { NetworkingMfaController } from "./networking.mfa.controller";
@@ -32,6 +34,8 @@ import { NetworkingRecommendationsController, NetworkingRecommendationAdminContr
     NetworkingAdminService,
     NetworkingExportsService,
     NetworkingStreamService,
+    NetworkingNotificationsService,
+    NetworkingRecommendationsService,
   ],
 })
 export class NetworkingModule {}

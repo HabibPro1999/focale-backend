@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ForbiddenException, NotFoundException, UnauthorizedException } from "@nestjs/common";
 import { ErrorCodes, type NetworkingConfig } from "@app/contracts";
 
 // Keep Nest classes: connectionWith catches NotFoundException specifically.
@@ -14,4 +14,25 @@ export function requireNetworkingDiscovery(config: Pick<NetworkingConfig, "swipe
 }
 export function requireNetworkingChat(config: Pick<NetworkingConfig, "chatEnabled">) {
   if (!config.chatEnabled) throw networkingFeatureDisabled("Chat is disabled");
+}
+
+export const networkingSessionExpired = (message = "Participant session expired") =>
+  new UnauthorizedException({ code: ErrorCodes.NETWORKING_SESSION_EXPIRED, message });
+
+export function assertNetworkingSecondFactor(
+  config: Pick<NetworkingConfig, "requireSecondFactor">,
+  secondFactorEnabled: boolean,
+  session: { secondFactorVerifiedAt: Date | null },
+  options: { allowPending?: boolean } = {},
+) {
+  if (
+    (config.requireSecondFactor || secondFactorEnabled) &&
+    !session.secondFactorVerifiedAt &&
+    !options.allowPending
+  ) {
+    throw new ForbiddenException({
+      code: ErrorCodes.NETWORKING_MFA_REQUIRED,
+      message: "Authenticator verification is required",
+    });
+  }
 }

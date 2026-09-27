@@ -10,6 +10,7 @@ import { NetworkingMeetingsService } from "./networking.meetings.service";
 import { NetworkingAdminService } from "./networking.admin.service";
 import { NetworkingExportsService } from "./networking.exports.service";
 import { NetworkingMfaService } from "./networking.mfa.service";
+import { NetworkingNotificationsService } from "./networking.notifications.service";
 import { NetworkingUploadsService } from "./networking.uploads.service";
 import { NetworkingPublicController } from "./networking.public.controller";
 import { networkingHash, networkingTotp, openNetworkingSecret } from "./networking.security";
@@ -33,6 +34,7 @@ const admin = new NetworkingAdminService(service, meetings, inventory);
 const mfa = new NetworkingMfaService();
 const controller = new NetworkingPublicController(
   new NetworkingUploadsService(), service, social, meetings, new NetworkingExportsService(social, meetings),
+  new NetworkingNotificationsService(),
 );
 const slots = ["09:00", "09:30", "10:00", "10:30"].map((time) => new Date(`2031-06-10T${time}:00.000Z`));
 let fixture: Awaited<ReturnType<typeof createNetworkingWriteFixture>>;
