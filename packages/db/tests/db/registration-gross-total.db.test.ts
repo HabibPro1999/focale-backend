@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { sql } from "drizzle-orm";
 import { getDb, registrations } from "@app/db";
@@ -7,7 +8,7 @@ import { dbTestsEnabled } from "../helpers/test-env";
 import { cleanupDatabase } from "../helpers/cleanup";
 import { seedEvent, seedForm, seedRegistration } from "../helpers/factories";
 
-const migration = readFileSync(new URL("../../migrations/0011_registration_gross_total.sql", import.meta.url), "utf8");
+const migration = readFileSync(resolve(__dirname, "../../migrations/0011_registration_gross_total.sql"), "utf8");
 describe.runIf(dbTestsEnabled())("registration gross-total repair", () => {
   beforeEach(cleanupDatabase);
   afterEach(cleanupDatabase);

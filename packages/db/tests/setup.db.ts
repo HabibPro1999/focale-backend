@@ -7,7 +7,7 @@ import { dbTestsEnabled } from "./helpers/test-env";
 // the lazy pool. When ungated we do nothing here — the test files themselves skip
 // via describe.runIf(dbTestsEnabled()), so no connection is ever opened.
 const enabled = dbTestsEnabled();
-const template = enabled ? inject<{ name: string; engine: "postgres" | "cockroach" }>("dbTestTemplate") : undefined;
+const template = enabled ? inject("dbTestTemplate") : undefined;
 let scratch: Awaited<ReturnType<typeof createTestDatabase>> | undefined;
 
 if (enabled) {

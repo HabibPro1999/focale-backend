@@ -15,7 +15,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tests/tsconfig.json",
     "test": "vitest run --passWithNoTests",
     "test:db": "vitest run --config vitest.db.config.ts",
     "test:concurrency": "vitest run --config vitest.concurrency.config.ts",

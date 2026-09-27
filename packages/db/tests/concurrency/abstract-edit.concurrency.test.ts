@@ -22,7 +22,8 @@ describe.runIf(dbTestsEnabled())("concurrency: abstract edit revision numbering"
   it("racing edits of the same abstract all succeed with distinct revisionNo", async () => {
     const fanout = 6;
     const event = await seedEvent({ status: "OPEN" });
-    const abstract = await seedAbstract({ eventId: event.id });
+    const authorAffiliation = "Test University";
+    const abstract = await seedAbstract({ eventId: event.id, authorAffiliation });
 
     const results = await Promise.all(
       Array.from({ length: fanout }, (_, i) =>
@@ -30,7 +31,7 @@ describe.runIf(dbTestsEnabled())("concurrency: abstract edit revision numbering"
           id: abstract.id,
           authorFirstName: abstract.authorFirstName,
           authorLastName: abstract.authorLastName,
-          authorAffiliation: abstract.authorAffiliation,
+          authorAffiliation,
           authorEmail: abstract.authorEmail,
           authorEmailNormalized: abstract.authorEmail.toLowerCase(),
           authorPhone: abstract.authorPhone,

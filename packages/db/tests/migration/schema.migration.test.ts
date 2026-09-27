@@ -400,7 +400,7 @@ async function readPostgresForeignKeyDetails(client: ScratchDatabase["client"]) 
 }
 
 const DRIZZLE_TABLES = Object.values(schema)
-  .filter((value): value is PgTable => value instanceof PgTable)
+  .filter((value) => value instanceof PgTable)
   .map((table) => getTableConfig(table).name)
   .sort();
 
