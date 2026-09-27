@@ -158,3 +158,117 @@ export function crosswalkLegacyNetworking0018Steps(
   }
   return mapped.sort((a, b) => a.stepIndex - b.stepIndex);
 }
+
+export interface LegacyNetworkingRow {
+  name: string;
+  checksum: string;
+}
+
+export type LegacyNetworkingState =
+  | { kind: "untracked" }
+  | { kind: "absent"; name: string }
+  | { kind: "applied"; name: string; checksum: string; steps: number[] }
+  | { kind: "steps"; name: string; steps: number[] }
+  | { kind: "invalid"; name: string; reason: string };
+
+interface LegacyTracking {
+  name: string;
+  checksum: string;
+}
+
+/** Where the old migrate-networking.mjs recorded this migration, if at all. */
+export function legacyTracking(migration: MigrationDefinition): LegacyTracking | undefined {
+  const checksums: Record<string, string> = LEGACY_NETWORKING_FILE_CHECKSUMS;
+  if (migration.variant === "cockroach" && migration.id === LEGACY_NETWORKING_0018_CROSSWALK.id) {
+    // The old runner stepped through the shared file and recorded its name.
+    return {
+      name: LEGACY_NETWORKING_0018_CROSSWALK.legacyName,
+      checksum: LEGACY_NETWORKING_0018_CROSSWALK.legacyFileChecksum,
+    };
+  }
+  const checksum = checksums[`${migration.id}:${migration.variant}`];
+  if (!checksum) return undefined;
+  return {
+    name: migration.variant === "cockroach" ? `cockroach/${migration.name}` : migration.name,
+    checksum,
+  };
+}
+
+const STEP_NAME = /^(?:cockroach\/)?(.+\.sql):step:\d+$/;
+
+/**
+ * Map legacy networking rows onto the loaded migrations. Rows that no known
+ * migration explains are returned so adoption can refuse them.
+ */
+export function mapLegacyNetworkingRows(
+  migrations: MigrationDefinition[],
+  rows: LegacyNetworkingRow[] | null,
+): { states: Map<string, LegacyNetworkingState>; unknown: string[] } {
+  const states = new Map<string, LegacyNetworkingState>();
+  if (rows === null) {
+    for (const migration of migrations) states.set(migration.id, { kind: "untracked" });
+    return { states, unknown: [] };
+  }
+  const consumed = new Set<string>();
+  for (const migration of migrations) {
+    const tracking = legacyTracking(migration);
+    if (!tracking) {
+      states.set(migration.id, { kind: "untracked" });
+      continue;
+    }
+    const fileRow = rows.find((row) => row.name === tracking.name);
+    const stepRows = rows.filter((row) => STEP_NAME.exec(row.name)?.[1] === tracking.name);
+    if (fileRow) consumed.add(fileRow.name);
+    for (const row of stepRows) consumed.add(row.name);
+    states.set(migration.id, legacyStateFor(migration, tracking, fileRow, stepRows));
+  }
+  const unknown = rows.filter((row) => !consumed.has(row.name)).map((row) => row.name);
+  return { states, unknown };
+}
+
+function legacyStateFor(
+  migration: MigrationDefinition,
+  tracking: LegacyTracking,
+  fileRow: LegacyNetworkingRow | undefined,
+  stepRows: LegacyNetworking0018StepRow[],
+): LegacyNetworkingState {
+  const name = tracking.name;
+  if (fileRow && fileRow.checksum !== tracking.checksum) {
+    return { kind: "invalid", name, reason: `networking_migrations checksum for ${name} does not match the known historical file` };
+  }
+  const stepped = migration.variant === "cockroach" && migration.id === LEGACY_NETWORKING_0018_CROSSWALK.id;
+  if (!stepped) {
+    if (stepRows.length) {
+      return { kind: "invalid", name, reason: `networking_migrations has unexpected step rows for ${name}` };
+    }
+    return fileRow ? { kind: "applied", name, checksum: fileRow.checksum, steps: [] } : { kind: "absent", name };
+  }
+  if (!fileRow && stepRows.length === 0) return { kind: "absent", name };
+  let steps: number[];
+  try {
+    steps = crosswalkLegacyNetworking0018Steps(migration, fileRow?.checksum, stepRows).map((step) => step.stepIndex);
+  } catch (error) {
+    return { kind: "invalid", name, reason: error instanceof Error ? error.message : String(error) };
+  }
+  if (!fileRow) return { kind: "steps", name, steps };
+  // The old runner wrote the file row only after every step row.
+  if (steps.length !== LEGACY_NETWORKING_0018_CROSSWALK.steps.length) {
+    return { kind: "invalid", name, reason: `networking_migrations records ${name} as applied without all of its step rows` };
+  }
+  return { kind: "applied", name, checksum: fileRow.checksum, steps };
+}
+
+export function legacyEvidence(state: LegacyNetworkingState): Record<string, unknown> | undefined {
+  switch (state.kind) {
+    case "untracked":
+      return undefined;
+    case "absent":
+      return { name: state.name, recorded: false };
+    case "applied":
+      return { name: state.name, recorded: true, checksum: state.checksum, ...(state.steps.length ? { steps: state.steps } : {}) };
+    case "steps":
+      return { name: state.name, recorded: "steps-only", steps: state.steps };
+    case "invalid":
+      return { name: state.name, invalid: state.reason };
+  }
+}
