@@ -106,6 +106,17 @@ describe("production rules", () => {
     ]);
   });
 
+  it("keeps canonical CORS origins in first-seen order after removing wildcards and blanks", () => {
+    const config = parseAppConfig(productionEnv({
+      NODE_ENV: "development",
+      CORS_ORIGIN: " , https://Admin.Example.com:443/ , *, https://forms.example.com, https://admin.example.com, ,*",
+    }));
+    expect(config.http.cors).toEqual({
+      allowAnyOrigin: true,
+      origins: ["https://admin.example.com", "https://forms.example.com"],
+    });
+  });
+
   it("accepts FIREBASE_SERVICE_ACCOUNT as raw JSON or base64 JSON", () => {
     const raw = JSON.stringify(SERVICE_ACCOUNT);
     expect(failingKeys(productionEnv({ FIREBASE_SERVICE_ACCOUNT: raw }))).toEqual([]);
