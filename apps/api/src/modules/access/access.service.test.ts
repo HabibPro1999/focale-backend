@@ -11,9 +11,7 @@ vi.mock("@app/db", () => ({
   getEventDatesForAccess: vi.fn(),
   getEventAccessById: vi.fn(),
   getEventAccessForUpdate: vi.fn(),
-  getEventAccessWithPrereqs: vi.fn(),
   listEventAccessRows: vi.fn(),
-  getAccessClientId: vi.fn(),
   findExistingAccessIdsInEvent: vi.fn(),
   getEventPrereqEdges: vi.fn(),
   getActiveAccessForGrouping: vi.fn(),
@@ -31,13 +29,11 @@ vi.mock("@app/db", () => ({
   casDecrementAccessRegisteredCount: vi.fn(),
   casIncrementAccessPaidCount: vi.fn(),
   casDecrementAccessPaidCount: vi.fn(),
-  getAccessCapacityInfo: vi.fn(),
-  getAccessRegisteredCount: vi.fn(),
-  getAccessPaidCount: vi.fn(),
+  getAccessCounters: vi.fn(),
   getAccessCapacityRowsByIds: vi.fn(),
   getUnsettledRegistrationsWithAccess: vi.fn(),
   getRegistrationCoveredAccessIds: vi.fn(),
-  updateRegistrationForAccessDrop: vi.fn(),
+  updateRegistrationRow: vi.fn(),
   insertAuditLog: vi.fn(),
   enqueueTriggeredEmailOutbox: vi.fn(),
 }));
@@ -188,7 +184,7 @@ describe("updateEventAccess", () => {
   it("updates fields on an existing item", async () => {
     m.getEventAccessForUpdate.mockResolvedValue(existing());
     m.updateEventAccessRow.mockResolvedValue(accessRow({ name: "New", price: 75 }));
-    m.getEventAccessWithPrereqs.mockResolvedValue(accessRow({ name: "New", price: 75 }));
+    m.getEventAccessById.mockResolvedValue(accessRow({ name: "New", price: 75 }));
 
     const result = await service.updateEventAccess("access-1", { name: "New", price: 75 });
     expect(result.name).toBe("New");
@@ -246,7 +242,7 @@ describe("updateEventAccess", () => {
       { id: "access-1", name: "Access", maxCapacity: 5, paidCount: 5 },
     ]);
     m.getUnsettledRegistrationsWithAccess.mockResolvedValue([]);
-    m.getEventAccessWithPrereqs.mockResolvedValue(accessRow({ maxCapacity: 5 }));
+    m.getEventAccessById.mockResolvedValue(accessRow({ maxCapacity: 5 }));
 
     const result = await service.updateEventAccess("access-1", { maxCapacity: 5 });
     expect(result.maxCapacity).toBe(5);
@@ -282,7 +278,7 @@ describe("updateEventAccess", () => {
     m.getEventPrereqEdges.mockResolvedValue([]);
     m.updateEventAccessRow.mockResolvedValue(accessRow({ id: "access-main" }));
     m.setAccessPrerequisites.mockResolvedValue(undefined);
-    m.getEventAccessWithPrereqs.mockResolvedValue(
+    m.getEventAccessById.mockResolvedValue(
       accessRow({ id: "access-main", requiredAccess: [{ id: "prereq", name: "P" }] }),
     );
 
@@ -290,7 +286,7 @@ describe("updateEventAccess", () => {
       requiredAccessIds: ["prereq"],
     });
     expect(result.requiredAccess).toHaveLength(1);
-    expect(m.setAccessPrerequisites).toHaveBeenCalledWith("access-main", ["prereq"]);
+    expect(m.setAccessPrerequisites).toHaveBeenCalledWith("access-main", ["prereq"], m.getDb.mock.results[0].value);
   });
 });
 
@@ -360,10 +356,7 @@ describe("reads", () => {
     });
   });
 
-  it("getAccessClientId delegates to the query", async () => {
-    m.getAccessClientId.mockResolvedValue("client-1");
-    expect(await service.getAccessClientId("access-1")).toBe("client-1");
-  });
+
 });
 
 // ===========================================================================
@@ -414,7 +407,7 @@ describe("incrementAccessRegisteredCountTx", () => {
 
   it("throws NOT_FOUND when the access is gone", async () => {
     m.casIncrementAccessRegisteredCount.mockResolvedValue(false);
-    m.getAccessCapacityInfo.mockResolvedValue(null);
+    m.getAccessCounters.mockResolvedValue(null);
     await expect(
       service.incrementAccessRegisteredCountTx("x", 1),
     ).rejects.toMatchObject({ code: ErrorCodes.ACCESS_NOT_FOUND });
@@ -422,7 +415,7 @@ describe("incrementAccessRegisteredCountTx", () => {
 
   it("throws only once paid count has filled capacity", async () => {
     m.casIncrementAccessRegisteredCount.mockResolvedValue(false);
-    m.getAccessCapacityInfo.mockResolvedValue({
+    m.getAccessCounters.mockResolvedValue({
       name: "Workshop",
       maxCapacity: 10,
       paidCount: 10,
@@ -446,7 +439,7 @@ describe("decrementAccessRegisteredCountTx", () => {
 
   it("throws NOT_FOUND when missing", async () => {
     m.casDecrementAccessRegisteredCount.mockResolvedValue(false);
-    m.getAccessRegisteredCount.mockResolvedValue(null);
+    m.getAccessCounters.mockResolvedValue(null);
     await expect(
       service.decrementAccessRegisteredCountTx("x", 1),
     ).rejects.toMatchObject({ code: ErrorCodes.ACCESS_NOT_FOUND });
@@ -454,7 +447,7 @@ describe("decrementAccessRegisteredCountTx", () => {
 
   it("throws on underflow", async () => {
     m.casDecrementAccessRegisteredCount.mockResolvedValue(false);
-    m.getAccessRegisteredCount.mockResolvedValue({ registeredCount: 1 });
+    m.getAccessCounters.mockResolvedValue({ registeredCount: 1 });
     await expect(
       service.decrementAccessRegisteredCountTx("access-1", 2),
     ).rejects.toMatchObject({
@@ -468,12 +461,12 @@ describe("incrementPaidCount", () => {
   it("succeeds within capacity", async () => {
     m.casIncrementAccessPaidCount.mockResolvedValue(true);
     await expect(service.incrementPaidCount("access-1", 1)).resolves.toBeUndefined();
-    expect(m.getAccessCapacityInfo).not.toHaveBeenCalled();
+    expect(m.getAccessCounters).not.toHaveBeenCalled();
   });
 
   it("throws NOT_FOUND when missing", async () => {
     m.casIncrementAccessPaidCount.mockResolvedValue(false);
-    m.getAccessCapacityInfo.mockResolvedValue(null);
+    m.getAccessCounters.mockResolvedValue(null);
     await expect(service.incrementPaidCount("x", 1)).rejects.toMatchObject({
       code: ErrorCodes.ACCESS_NOT_FOUND,
     });
@@ -481,7 +474,7 @@ describe("incrementPaidCount", () => {
 
   it("fails atomically when quantity exceeds remaining capacity", async () => {
     m.casIncrementAccessPaidCount.mockResolvedValue(false);
-    m.getAccessCapacityInfo.mockResolvedValue({
+    m.getAccessCounters.mockResolvedValue({
       name: "Workshop",
       maxCapacity: 10,
       paidCount: 8,
@@ -501,7 +494,7 @@ describe("decrementPaidCount", () => {
 
   it("throws on underflow", async () => {
     m.casDecrementAccessPaidCount.mockResolvedValue(false);
-    m.getAccessPaidCount.mockResolvedValue({ paidCount: 1 });
+    m.getAccessCounters.mockResolvedValue({ paidCount: 1 });
     await expect(service.decrementPaidCount("access-1", 2)).rejects.toMatchObject({
       code: ErrorCodes.VALIDATION_ERROR,
       details: { paidCount: 1, requested: 2 },
@@ -513,6 +506,33 @@ describe("decrementPaidCount", () => {
 // syncPaidCountDelta
 // ===========================================================================
 describe("syncPaidCountDelta", () => {
+  it("applies old-key-first deltas before checking newly filled access, including repeated items", async () => {
+    const sequence: string[] = [];
+    m.casIncrementAccessPaidCount.mockImplementation(async (id, quantity) => {
+      sequence.push(`increment:${id}:${quantity}`);
+      return true;
+    });
+    m.casDecrementAccessPaidCount.mockImplementation(async (id, quantity) => {
+      sequence.push(`decrement:${id}:${quantity}`);
+      return true;
+    });
+    m.getAccessCapacityRowsByIds.mockImplementation(async (ids) => {
+      sequence.push(`capacity:${ids.join(",")}`);
+      return [];
+    });
+    await service.syncPaidCountDelta(eventId,
+      { status: "PAID", priceBreakdown: { accessItems: [
+        { accessId: "a", quantity: 2 }, { accessId: "b", quantity: 1 },
+        { accessId: "b", quantity: 2 }, { accessId: "same", quantity: 1 },
+      ] } },
+      { status: "PAID", priceBreakdown: { accessItems: [
+        { accessId: "c", quantity: 4 }, { accessId: "b", quantity: 5 },
+        { accessId: "same", quantity: 1 },
+      ] } },
+    );
+    expect(sequence).toEqual(["decrement:a:2", "increment:b:2", "increment:c:4", "capacity:b,c"]);
+  });
+
   it("increments only newly-paid access quantities", async () => {
     m.casIncrementAccessPaidCount.mockResolvedValue(true);
     m.getAccessCapacityRowsByIds.mockResolvedValue([]);
@@ -625,7 +645,7 @@ describe("handleCapacityReached", () => {
     const affected = await service.handleCapacityReached(eventId, ["access-1"]);
     expect(affected).toBe(1);
 
-    const [, patch] = m.updateRegistrationForAccessDrop.mock.calls[0];
+    const [, patch] = m.updateRegistrationRow.mock.calls[0];
     expect(patch.totalAmount).toBe(130);
     expect(patch.accessAmount).toBe(30);
     expect(patch.accessTypeIds).toEqual(["access-2"]);
@@ -653,7 +673,7 @@ describe("handleCapacityReached", () => {
 
     await service.handleCapacityReached(eventId, ["access-1"]);
 
-    const [, patch] = m.updateRegistrationForAccessDrop.mock.calls[0];
+    const [, patch] = m.updateRegistrationRow.mock.calls[0];
     expect(patch.paymentStatus).toBe("SPONSORED");
     expect(patch.totalAmount).toBe(130);
     expect(patch.sponsorshipAmount).toBe(130);
@@ -674,7 +694,7 @@ describe("handleCapacityReached", () => {
 
     const affected = await service.handleCapacityReached(eventId, ["access-1"]);
     expect(affected).toBe(0);
-    expect(m.updateRegistrationForAccessDrop).not.toHaveBeenCalled();
+    expect(m.updateRegistrationRow).not.toHaveBeenCalled();
   });
 
   it("does nothing for access below capacity", async () => {
@@ -688,7 +708,7 @@ describe("handleCapacityReached", () => {
 });
 
 describe("required access choice", () => {
-  const settings = { accessSelectionRequired: true };
+  const settings = { settings: { accessSelectionRequired: true } };
   it("does no reads when the setting is absent", async () => {
     await service.assertAccessSelectionRequirement(eventId, {}, [], undefined);
     expect(m.getActiveAccessForGrouping).not.toHaveBeenCalled();

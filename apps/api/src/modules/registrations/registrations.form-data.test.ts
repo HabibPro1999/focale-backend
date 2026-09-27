@@ -43,7 +43,7 @@ vi.mock("@app/db", async (importOriginal) => ({
 }));
 
 import type { Config } from "../../core/config";
-import type { AccessService } from "../access/access.service";
+import { AccessService } from "../access/access.service";
 import { PricingPublicController } from "../pricing/pricing.public.controller";
 import { PricingService } from "../pricing/pricing.service";
 import { RegistrationsService } from "./registrations.service";
@@ -176,6 +176,7 @@ beforeEach(() => {
   });
 
   access = {
+    assertAccessSelectionsValid: vi.fn(AccessService.prototype.assertAccessSelectionsValid),
     validateAccessSelections: vi.fn().mockResolvedValue({ valid: true, errors: [] }),
     assertAccessSelectionRequirement: vi.fn().mockResolvedValue(undefined),
     incrementAccessRegisteredCountTx: vi.fn().mockResolvedValue(undefined),

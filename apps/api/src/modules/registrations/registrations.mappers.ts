@@ -85,41 +85,10 @@ export interface PublicRegistrationSource {
  * URL, stored proof location, access-id arrays, tenant id). `token` (the
  * registrant's own edit token) is present only on the create response.
  */
-export interface PublicRegistration {
-  id: string;
-  formId: string;
-  eventId: string;
-  referenceNumber: string | null;
-  email: string;
-  firstName: string | null;
-  lastName: string | null;
-  phone: string | null;
-  formData: unknown;
-  networkingOptIn: boolean | null;
-  paymentStatus: string;
-  paymentMethod: string | null;
-  labName: string | null;
-  currency: string;
-  totalAmount: number;
-  paidAmount: number;
-  baseAmount: number;
-  discountAmount: number;
-  accessAmount: number;
-  sponsorshipCode: string | null;
-  sponsorshipAmount: number;
-  priceBreakdown: unknown;
+export type PublicRegistration = Omit<PublicRegistrationSource, "paymentProofUrl"> & {
   hasPaymentProof: boolean;
-  paidAt: Date | null;
-  submittedAt: Date;
-  lastEditedAt: Date | null;
-  createdAt: Date;
-  updatedAt: Date;
-  accessSelections: AccessSelectionItem[];
-  droppedAccessSelections?: DroppedAccessSelectionItem[];
-  form: PublicRegistrationForm;
-  event: PublicRegistrationEvent;
   token?: string | null;
-}
+};
 
 export function toPublicRegistration(
   registration: PublicRegistrationSource,

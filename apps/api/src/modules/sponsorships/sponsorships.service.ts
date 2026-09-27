@@ -12,6 +12,7 @@ import {
 } from "@app/contracts";
 import {
   calculateSettlement,
+  isFullySponsored as hasFullSponsorship,
   withSponsorshipTotal,
   type RegistrationForCalculation,
 } from "@app/shared";
@@ -1236,8 +1237,7 @@ export class SponsorshipsService {
         oldPaymentStatus === "WAIVED" ||
         oldPaymentStatus === "REFUNDED"
           ? oldPaymentStatus
-          : totalSponsorshipAmount >= registration.totalAmount &&
-              registration.totalAmount > 0
+          : hasFullSponsorship({ sponsorshipAmount: totalSponsorshipAmount, totalAmount: registration.totalAmount })
             ? "SPONSORED"
             : settlement.isPartiallyPaid
               ? "PARTIAL"

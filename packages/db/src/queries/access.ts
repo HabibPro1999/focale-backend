@@ -1,5 +1,6 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { getDb, type DbExecutor } from "../client";
+import { rowCountOf } from "../helpers";
 import { enqueueOutboxEvent } from "../outbox";
 import {
   accessPrerequisites,
@@ -139,7 +140,6 @@ export async function listEventAccessRows(
       sql`${eventAccess.sortOrder} asc`,
       sql`${eventAccess.startsAt} asc nulls last`,
       sql`${eventAccess.createdAt} asc`,
-      sql`${eventAccess.createdAt} asc`,
     );
 
   const byOwner = await loadRequiredAccessByOwners(
@@ -149,19 +149,6 @@ export async function listEventAccessRows(
   return rows.map((r) => ({ ...r, requiredAccess: byOwner.get(r.id) ?? [] }));
 }
 
-/** clientId for an access (via its event), or null if the access is missing. */
-export async function getAccessClientId(
-  id: string,
-  exec: DbExecutor = getDb(),
-): Promise<string | null> {
-  const rows = await exec
-    .select({ clientId: events.clientId })
-    .from(eventAccess)
-    .innerJoin(events, eq(events.id, eventAccess.eventId))
-    .where(eq(eventAccess.id, id))
-    .limit(1);
-  return rows[0]?.clientId ?? null;
-}
 
 /** Of `ids`, which exist as access rows in `eventId` (prerequisite existence check). */
 export async function findExistingAccessIdsInEvent(
@@ -303,14 +290,6 @@ export async function setAccessPrerequisites(
   }
 }
 
-/** Return an access row + {id,name} prereqs (used to shape update responses). */
-export async function getEventAccessWithPrereqs(
-  id: string,
-  exec: DbExecutor = getDb(),
-): Promise<EventAccessWithPrereqs | null> {
-  return getEventAccessById(id, exec);
-}
-
 export async function countRegistrationsWithAccess(
   accessId: string,
   exec: DbExecutor = getDb(),
@@ -373,12 +352,6 @@ export async function deleteEventAccessById(
 // Return whether a row was affected; callers diagnose misses via the reads below.
 // ---------------------------------------------------------------------------
 
-function rowCount(res: unknown): number {
-  const r = res as { rowCount?: number | null; rows?: unknown[] };
-  if (typeof r?.rowCount === "number") return r.rowCount;
-  return Array.isArray(r?.rows) ? r.rows.length : 0;
-}
-
 /** registered_count += qty, but only while paid_count + qty stays within capacity. */
 export async function casIncrementAccessRegisteredCount(
   accessId: string,
@@ -392,7 +365,7 @@ export async function casIncrementAccessRegisteredCount(
     AND (max_capacity IS NULL OR paid_count + ${quantity} <= max_capacity)
     RETURNING id
   `);
-  return rowCount(res) > 0;
+  return rowCountOf(res) > 0;
 }
 
 /** registered_count -= qty, guarded at floor (registered_count >= qty). */
@@ -408,7 +381,7 @@ export async function casDecrementAccessRegisteredCount(
     AND registered_count >= ${quantity}
     RETURNING id
   `);
-  return rowCount(res) > 0;
+  return rowCountOf(res) > 0;
 }
 
 /** paid_count += qty within capacity — authoritative occupancy gate. */
@@ -424,7 +397,7 @@ export async function casIncrementAccessPaidCount(
     AND (max_capacity IS NULL OR paid_count + ${quantity} <= max_capacity)
     RETURNING id
   `);
-  return rowCount(res) > 0;
+  return rowCountOf(res) > 0;
 }
 
 /** paid_count -= qty, guarded at floor (paid_count >= qty). */
@@ -440,46 +413,20 @@ export async function casDecrementAccessPaidCount(
     AND paid_count >= ${quantity}
     RETURNING id
   `);
-  return rowCount(res) > 0;
+  return rowCountOf(res) > 0;
 }
 
-export async function getAccessCapacityInfo(
+/** Current counters used only to diagnose a failed capacity CAS. */
+export async function getAccessCounters(
   accessId: string,
   exec: DbExecutor = getDb(),
-): Promise<{ name: string; maxCapacity: number | null; paidCount: number } | null> {
-  const rows = await exec
-    .select({
-      name: eventAccess.name,
-      maxCapacity: eventAccess.maxCapacity,
-      paidCount: eventAccess.paidCount,
-    })
-    .from(eventAccess)
-    .where(eq(eventAccess.id, accessId))
-    .limit(1);
-  return rows[0] ?? null;
-}
-
-export async function getAccessRegisteredCount(
-  accessId: string,
-  exec: DbExecutor = getDb(),
-): Promise<{ registeredCount: number } | null> {
-  const rows = await exec
-    .select({ registeredCount: eventAccess.registeredCount })
-    .from(eventAccess)
-    .where(eq(eventAccess.id, accessId))
-    .limit(1);
-  return rows[0] ?? null;
-}
-
-export async function getAccessPaidCount(
-  accessId: string,
-  exec: DbExecutor = getDb(),
-): Promise<{ paidCount: number } | null> {
-  const rows = await exec
-    .select({ paidCount: eventAccess.paidCount })
-    .from(eventAccess)
-    .where(eq(eventAccess.id, accessId))
-    .limit(1);
+): Promise<{ name: string; maxCapacity: number | null; registeredCount: number; paidCount: number } | null> {
+  const rows = await exec.select({
+    name: eventAccess.name,
+    maxCapacity: eventAccess.maxCapacity,
+    registeredCount: eventAccess.registeredCount,
+    paidCount: eventAccess.paidCount,
+  }).from(eventAccess).where(eq(eventAccess.id, accessId)).limit(1);
   return rows[0] ?? null;
 }
 
@@ -549,14 +496,6 @@ export async function getRegistrationCoveredAccessIds(
     .innerJoin(sponsorships, eq(sponsorships.id, sponsorshipUsages.sponsorshipId))
     .where(and(...conds));
   return rows.flatMap((r) => r.coveredAccessIds ?? []);
-}
-
-export async function updateRegistrationForAccessDrop(
-  registrationId: string,
-  data: Partial<typeof registrations.$inferInsert>,
-  exec: DbExecutor = getDb(),
-): Promise<void> {
-  await exec.update(registrations).set(data).where(eq(registrations.id, registrationId));
 }
 
 // ---------------------------------------------------------------------------

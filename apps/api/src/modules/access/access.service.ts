@@ -1,6 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { ErrorCodes, buildFieldOptionIndex, findInvalidOptionConditions } from "@app/contracts";
-import { isFullySettled } from "@app/shared";
+import { isFullySettled, isFullySponsored } from "@app/shared";
 import type {
   CreateEventAccessInput,
   UpdateEventAccessInput,
@@ -17,9 +17,7 @@ import {
   getEventDatesForAccess,
   getEventAccessById as getEventAccessByIdQuery,
   getEventAccessForUpdate,
-  getEventAccessWithPrereqs,
   listEventAccessRows,
-  getAccessClientId as getAccessClientIdQuery,
   findExistingAccessIdsInEvent,
   getEventPrereqEdges,
   getActiveAccessForGrouping,
@@ -37,17 +35,16 @@ import {
   casDecrementAccessRegisteredCount,
   casIncrementAccessPaidCount,
   casDecrementAccessPaidCount,
-  getAccessCapacityInfo,
-  getAccessRegisteredCount,
-  getAccessPaidCount,
+  getAccessCounters,
   getAccessCapacityRowsByIds,
   getUnsettledRegistrationsWithAccess,
   getRegistrationCoveredAccessIds,
-  updateRegistrationForAccessDrop,
+  updateRegistrationRow,
   insertAuditLog,
   enqueueTriggeredEmailOutbox,
 } from "@app/db";
 import { AppException } from "../../core/app-exception";
+import { quantitiesByAccess, quantityDeltas } from "./access-quantities";
 import { groupAccess } from "./access-grouping";
 import { validateSelections } from "./access-validation";
 
@@ -98,31 +95,17 @@ function validateAccessDatesAgainstEvent(
     });
   const range = `${formatDate(startDate)} - ${formatDate(endDate)}`;
 
-  if (
-    accessDates.startsAt &&
-    (accessDates.startsAt < startDate || accessDates.startsAt > endDate)
-  ) {
-    errors.push(`L'heure de début doit être dans la plage de l'événement (${range})`);
-  }
-  if (
-    accessDates.endsAt &&
-    (accessDates.endsAt < startDate || accessDates.endsAt > endDate)
-  ) {
-    errors.push(`L'heure de fin doit être dans la plage de l'événement (${range})`);
-  }
-  if (
-    accessDates.availableFrom &&
-    (accessDates.availableFrom < startDate || accessDates.availableFrom > endDate)
-  ) {
-    errors.push(
-      `La date de disponibilité doit être dans la plage de l'événement (${range})`,
-    );
-  }
-  if (
-    accessDates.availableTo &&
-    (accessDates.availableTo < startDate || accessDates.availableTo > endDate)
-  ) {
-    errors.push(`La date limite doit être dans la plage de l'événement (${range})`);
+  const fields = [
+    ["startsAt", "L'heure de début"],
+    ["endsAt", "L'heure de fin"],
+    ["availableFrom", "La date de disponibilité"],
+    ["availableTo", "La date limite"],
+  ] as const;
+  for (const [field, label] of fields) {
+    const date = accessDates[field];
+    if (date && (date < startDate || date > endDate)) {
+      errors.push(`${label} doit être dans la plage de l'événement (${range})`);
+    }
   }
 
   return { valid: errors.length === 0, errors };
@@ -137,21 +120,12 @@ function paidAccessQuantities(
   priceBreakdown: unknown,
   coveredAccessIds = new Set<string>(),
 ): Map<string, number> {
-  const quantities = new Map<string, number>();
   const fullySettled = isFullySettled(status);
-  if (!fullySettled && status !== "PARTIAL") {
-    return quantities;
-  }
+  if (!fullySettled && status !== "PARTIAL") return new Map<string, number>();
   const breakdown = priceBreakdown as RegistrationBreakdown;
-  for (const item of breakdown.accessItems ?? []) {
-    if (fullySettled || coveredAccessIds.has(item.accessId)) {
-      quantities.set(
-        item.accessId,
-        (quantities.get(item.accessId) ?? 0) + item.quantity,
-      );
-    }
-  }
-  return quantities;
+  return quantitiesByAccess((breakdown.accessItems ?? []).filter(
+    (item) => fullySettled || coveredAccessIds.has(item.accessId),
+  ));
 }
 
 @Injectable()
@@ -183,21 +157,17 @@ export class AccessService {
     eventId: string,
     formData: Record<string, unknown>,
     selections: AccessSelection[],
-    settings: { accessSelectionRequired?: boolean } | null | undefined,
+    schema: unknown,
     db?: DbExecutor,
   ): Promise<void> {
+    const settings = (schema as { settings?: { accessSelectionRequired?: boolean } } | null)?.settings;
     if (settings?.accessSelectionRequired !== true) return;
     const ids = selections.filter((s) => s.quantity > 0).map((s) => s.accessId);
     if (ids.length) {
       const items = await getAccessByIdsForValidation(ids, eventId, db);
       if (items.some((item) => !item.includedInBase)) return;
     }
-    const grouped = groupAccess(
-      await getActiveAccessForGrouping(eventId, db),
-      formData,
-      ids,
-      new Date(),
-    );
+    const grouped = await this.getGroupedAccess(eventId, formData, ids, db);
     const items = [
       ...grouped.groups.flatMap((g) => g.slots.flatMap((s) => s.items)),
       ...(grouped.addonGroup?.slots.flatMap((s) => s.items) ?? []),
@@ -342,33 +312,9 @@ export class AccessService {
       id,
     );
 
-    const updateData: Partial<NewEventAccessValues> = {};
-    if (data.type !== undefined) updateData.type = data.type;
-    if (data.name !== undefined) updateData.name = data.name;
-    if (data.description !== undefined) updateData.description = data.description;
-    if (data.location !== undefined) updateData.location = data.location;
-    if (data.startsAt !== undefined) updateData.startsAt = data.startsAt;
-    if (data.endsAt !== undefined) updateData.endsAt = data.endsAt;
-    if (data.price !== undefined) updateData.price = data.price;
-    if (data.currency !== undefined) updateData.currency = data.currency;
-    if (data.maxCapacity !== undefined) updateData.maxCapacity = data.maxCapacity;
-    if (data.availableFrom !== undefined)
-      updateData.availableFrom = data.availableFrom;
-    if (data.availableTo !== undefined) updateData.availableTo = data.availableTo;
-    if (data.conditions !== undefined) {
-      updateData.conditions = data.conditions === null ? null : data.conditions;
-    }
-    if (data.conditionLogic !== undefined)
-      updateData.conditionLogic = data.conditionLogic;
-    if (data.sortOrder !== undefined) updateData.sortOrder = data.sortOrder;
-    if (data.active !== undefined) updateData.active = data.active;
-    if (data.groupLabel !== undefined) updateData.groupLabel = data.groupLabel;
-    if (data.allowCompanion !== undefined)
-      updateData.allowCompanion = data.allowCompanion;
-    if (data.includedInBase !== undefined)
-      updateData.includedInBase = data.includedInBase;
-    if (data.companionPrice !== undefined)
-      updateData.companionPrice = data.companionPrice;
+    const updateData: Partial<NewEventAccessValues> = Object.fromEntries(
+      Object.entries(data).filter(([, value]) => value !== undefined),
+    );
 
     if (requiredAccessIds !== undefined && requiredAccessIds.length > 0) {
       const existing = await findExistingAccessIdsInEvent(
@@ -413,37 +359,20 @@ export class AccessService {
       data.maxCapacity !== undefined && data.maxCapacity !== access.maxCapacity;
     const isBeingDeactivated = data.active === false && access.active === true;
 
-    if (isCapacityChanging || isBeingDeactivated) {
-      return withTxn(async (tx) => {
-        await updateEventAccessRow(id, updateData, tx);
-        if (requiredAccessIds !== undefined) {
-          await setAccessPrerequisites(id, requiredAccessIds, tx);
-        }
-        if (isBeingDeactivated) {
-          await this.dropAccessFromUnsettledRegistrations(
-            access.eventId,
-            id,
-            access.name,
-            tx,
-          );
-        } else if (
-          data.maxCapacity !== null &&
-          access.paidCount === data.maxCapacity
-        ) {
-          await this.handleCapacityReached(access.eventId, [id], tx);
-        }
-        return (await getEventAccessWithPrereqs(
-          id,
-          tx,
-        )) as EventAccessWithPrereqs;
-      });
-    }
-
-    await updateEventAccessRow(id, updateData);
-    if (requiredAccessIds !== undefined) {
-      await setAccessPrerequisites(id, requiredAccessIds);
-    }
-    return (await getEventAccessWithPrereqs(id)) as EventAccessWithPrereqs;
+    const apply = async (exec: DbExecutor): Promise<EventAccessWithPrereqs> => {
+      await updateEventAccessRow(id, updateData, exec);
+      if (requiredAccessIds !== undefined) {
+        await setAccessPrerequisites(id, requiredAccessIds, exec);
+      }
+      if (isBeingDeactivated) {
+        await this.dropAccessFromRegistrations(access.eventId, id, access.name, "deactivated", "ACCESS_DEACTIVATED", exec);
+      } else if (isCapacityChanging && data.maxCapacity !== null && access.paidCount === data.maxCapacity) {
+        await this.handleCapacityReached(access.eventId, [id], exec);
+      }
+      // Keep the existing nullable reload behavior; concurrent deletion is not a new 404.
+      return (await getEventAccessByIdQuery(id, exec)) as EventAccessWithPrereqs;
+    };
+    return isCapacityChanging || isBeingDeactivated ? withTxn(apply) : apply(getDb());
   }
 
   /** Delete an access item. NOT transactional (matches legacy non-atomic cleanup). */
@@ -494,10 +423,6 @@ export class AccessService {
     return getEventAccessByIdQuery(id);
   }
 
-  getAccessClientId(id: string): Promise<string | null> {
-    return getAccessClientIdQuery(id);
-  }
-
   // =========================================================================
   // Grouping & validation
   // =========================================================================
@@ -510,6 +435,13 @@ export class AccessService {
   ): Promise<GroupedAccessResponse> {
     const allAccess = await getActiveAccessForGrouping(eventId, exec);
     return groupAccess(allAccess, formData, selectedAccessIds, new Date());
+  }
+
+  async assertAccessSelectionsValid(...args: Parameters<AccessService["validateAccessSelections"]>): Promise<void> {
+    const result = await this.validateAccessSelections(...args);
+    if (!result.valid) {
+      throw new AppException(ErrorCodes.BAD_REQUEST, `Invalid access selections: ${result.errors.join(", ")}`, 400, { errors: result.errors });
+    }
   }
 
   async validateAccessSelections(
@@ -551,24 +483,7 @@ export class AccessService {
   ): Promise<void> {
     if (await casIncrementAccessRegisteredCount(accessId, quantity, exec)) return;
 
-    const access = await getAccessCapacityInfo(accessId, exec);
-    if (!access) {
-      throw new AppException(
-        ErrorCodes.ACCESS_NOT_FOUND,
-        "Access not found",
-        404,
-      );
-    }
-    const remaining =
-      access.maxCapacity === null
-        ? null
-        : Math.max(0, access.maxCapacity - access.paidCount);
-    throw new AppException(
-      ErrorCodes.ACCESS_CAPACITY_EXCEEDED,
-      `${access.name} has insufficient capacity (${remaining ?? "unlimited"} spots remaining, requested ${quantity})`,
-      409,
-      { remaining, requested: quantity },
-    );
+    await this.throwInsufficientCapacity(accessId, quantity, exec);
   }
 
   async decrementAccessRegisteredCountTx(
@@ -578,20 +493,7 @@ export class AccessService {
   ): Promise<void> {
     if (await casDecrementAccessRegisteredCount(accessId, quantity, exec)) return;
 
-    const access = await getAccessRegisteredCount(accessId, exec);
-    if (!access) {
-      throw new AppException(
-        ErrorCodes.ACCESS_NOT_FOUND,
-        "Access not found",
-        404,
-      );
-    }
-    throw new AppException(
-      ErrorCodes.VALIDATION_ERROR,
-      "Registered access count cannot be decremented below zero",
-      409,
-      { registeredCount: access.registeredCount, requested: quantity },
-    );
+    await this.throwCounterUnderflow(accessId, quantity, "registeredCount", "Registered access count cannot be decremented below zero", exec);
   }
 
   /** Authoritative capacity gate: increment paid count atomically within capacity. */
@@ -602,24 +504,7 @@ export class AccessService {
   ): Promise<void> {
     if (await casIncrementAccessPaidCount(accessId, quantity, exec)) return;
 
-    const access = await getAccessCapacityInfo(accessId, exec);
-    if (!access) {
-      throw new AppException(
-        ErrorCodes.ACCESS_NOT_FOUND,
-        "Access not found",
-        404,
-      );
-    }
-    const remaining =
-      access.maxCapacity === null
-        ? null
-        : Math.max(0, access.maxCapacity - access.paidCount);
-    throw new AppException(
-      ErrorCodes.ACCESS_CAPACITY_EXCEEDED,
-      `${access.name} has insufficient capacity (${remaining ?? "unlimited"} spots remaining, requested ${quantity})`,
-      409,
-      { remaining, requested: quantity },
-    );
+    await this.throwInsufficientCapacity(accessId, quantity, exec);
   }
 
   async decrementPaidCount(
@@ -629,20 +514,7 @@ export class AccessService {
   ): Promise<void> {
     if (await casDecrementAccessPaidCount(accessId, quantity, exec)) return;
 
-    const access = await getAccessPaidCount(accessId, exec);
-    if (!access) {
-      throw new AppException(
-        ErrorCodes.ACCESS_NOT_FOUND,
-        "Access not found",
-        404,
-      );
-    }
-    throw new AppException(
-      ErrorCodes.VALIDATION_ERROR,
-      "Paid access count cannot be decremented below zero",
-      409,
-      { paidCount: access.paidCount, requested: quantity },
-    );
+    await this.throwCounterUnderflow(accessId, quantity, "paidCount", "Paid access count cannot be decremented below zero", exec);
   }
 
   /** Single integration point for registrations/sponsorships when payment state changes. */
@@ -670,11 +542,9 @@ export class AccessService {
       newState.priceBreakdown,
       newState.coveredAccessIds,
     );
-    const accessIds = new Set([...oldPaid.keys(), ...newPaid.keys()]);
     const incremented: string[] = [];
 
-    for (const accessId of accessIds) {
-      const delta = (newPaid.get(accessId) ?? 0) - (oldPaid.get(accessId) ?? 0);
+    for (const { accessId, delta } of quantityDeltas(oldPaid, newPaid)) {
       if (delta > 0) {
         await this.incrementPaidCount(accessId, delta, exec);
         incremented.push(accessId);
@@ -733,25 +603,19 @@ export class AccessService {
   // Private helpers
   // =========================================================================
 
-  /**
-   * Strip an access item from all unsettled, unprotected registrations. Used when
-   * an access is deactivated (reason "deactivated", audit action "ACCESS_DEACTIVATED").
-   * Same recompute as capacity-reached, without the capacity gate.
-   */
-  private dropAccessFromUnsettledRegistrations(
-    eventId: string,
-    accessId: string,
-    accessName: string,
-    exec: DbExecutor,
-  ): Promise<number> {
-    return this.dropAccessFromRegistrations(
-      eventId,
-      accessId,
-      accessName,
-      "deactivated",
-      "ACCESS_DEACTIVATED",
-      exec,
-    );
+  private async throwInsufficientCapacity(accessId: string, quantity: number, exec: DbExecutor): Promise<never> {
+    const access = await getAccessCounters(accessId, exec);
+    if (!access) throw new AppException(ErrorCodes.ACCESS_NOT_FOUND, "Access not found", 404);
+    const remaining = access.maxCapacity === null ? null : Math.max(0, access.maxCapacity - access.paidCount);
+    throw new AppException(ErrorCodes.ACCESS_CAPACITY_EXCEEDED,
+      `${access.name} has insufficient capacity (${remaining ?? "unlimited"} spots remaining, requested ${quantity})`,
+      409, { remaining, requested: quantity });
+  }
+
+  private async throwCounterUnderflow(accessId: string, quantity: number, field: "registeredCount" | "paidCount", message: string, exec: DbExecutor): Promise<never> {
+    const access = await getAccessCounters(accessId, exec);
+    if (!access) throw new AppException(ErrorCodes.ACCESS_NOT_FOUND, "Access not found", 404);
+    throw new AppException(ErrorCodes.VALIDATION_ERROR, message, 409, { [field]: access[field], requested: quantity });
   }
 
   /**
@@ -796,7 +660,7 @@ export class AccessService {
       const newSponsorshipTotal = Math.min(reg.sponsorshipAmount, newSubtotal);
       const newTotal = Math.max(0, newSubtotal - newSponsorshipTotal);
       const isNowFullyCovered =
-        newSponsorshipTotal >= newSubtotal && newSubtotal > 0;
+        isFullySponsored({ sponsorshipAmount: newSponsorshipTotal, totalAmount: newSubtotal });
 
       const updatedBreakdown: RegistrationBreakdown = {
         ...breakdown,
@@ -811,7 +675,7 @@ export class AccessService {
         ],
       };
 
-      await updateRegistrationForAccessDrop(
+      await updateRegistrationRow(
         reg.id,
         {
           accessTypeIds: (reg.accessTypeIds ?? []).filter(

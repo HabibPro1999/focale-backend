@@ -24,3 +24,11 @@ export function calculateSettlement(reg: {
 export function withSponsorshipTotal<T extends object>(breakdown: T, subtotal: number, amount: number) {
   return { ...breakdown, sponsorshipTotal: amount, total: Math.max(0, subtotal - amount) };
 }
+
+export function isFullySponsored(reg: { sponsorshipAmount: number; totalAmount: number }): boolean {
+  return reg.sponsorshipAmount >= reg.totalAmount && reg.totalAmount > 0;
+}
+
+export function hasReceivedPayment(reg: { paymentStatus: string; paidAmount: number }): boolean {
+  return reg.paymentStatus === "PAID" || reg.paymentStatus === "SPONSORED" || reg.paidAmount > 0;
+}

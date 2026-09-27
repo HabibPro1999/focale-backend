@@ -1,4 +1,5 @@
 export * from "./client";
+export type { ClientModuleGate } from "./client-module-gate";
 export * from "./schema-check";
 export * from "./helpers";
 export * from "./like";

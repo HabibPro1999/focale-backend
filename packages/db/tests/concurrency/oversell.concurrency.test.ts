@@ -5,7 +5,7 @@ import {
   casIncrementRegisteredTx,
   eventAccess,
   events,
-  getAccessPaidCount,
+  getAccessCounters,
   getDb,
 } from "@app/db";
 import { dbTestsEnabled } from "../helpers/test-env";
@@ -71,7 +71,7 @@ describe.runIf(dbTestsEnabled())("concurrency: capacity oversell gates", () => {
     );
 
     const wins = results.filter(Boolean).length;
-    const paid = await getAccessPaidCount(access.id);
+    const paid = await getAccessCounters(access.id);
 
     expect(wins).toBe(capacity);
     expect(paid?.paidCount).toBe(capacity);
