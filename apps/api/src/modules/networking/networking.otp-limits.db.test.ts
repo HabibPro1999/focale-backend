@@ -12,6 +12,7 @@ import { NetworkingConfigSchema } from "@app/contracts";
 import { dbTestsEnabled } from "@app/db/testing";
 import { NetworkingService } from "./networking.service";
 import { networkingOtpHash } from "./networking.security";
+import { seedNetworkingEvents } from "./__testing__/event-fixture";
 
 const enabled = dbTestsEnabled();
 const service = new NetworkingService();
@@ -56,18 +57,9 @@ describe.runIf(enabled)("networking OTP failed-attempt limits (real database)", 
       enabledModules: ["networking", "registrations", "emails"],
     });
     const config = NetworkingConfigSchema.parse({ enabled: true, approvalMode: "AUTOMATIC", timezone: "UTC" });
-    for (const id of [ids.event, ids.other]) {
-      await networkingStore(getDb()).insert("events", {
-        id,
-        clientId: ids.client,
-        name: "Networking OTP fixture",
-        slug: id,
-        status: "OPEN",
-        startDate: new Date("2031-04-05T00:00Z"),
-        endDate: new Date("2031-04-06T00:00Z"),
-      });
-      await networkingStore(getDb()).insert("configs", { eventId: id, config });
-    }
+    await seedNetworkingEvents(getDb(), {
+      clientId: ids.client, eventIds: [ids.event, ids.other], name: "Networking OTP fixture", config,
+    });
     await getDb().insert(forms).values({ id: ids.form, eventId: ids.event, name: "Registration", schema: { steps: [] } });
     await getDb().insert(registrations).values({
       id: randomUUID(),

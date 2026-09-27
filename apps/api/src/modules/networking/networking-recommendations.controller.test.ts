@@ -7,6 +7,7 @@ vi.mock("@app/db", async (importOriginal) => ({
 }));
 import { NetworkingRecommendationsController } from "./networking-recommendations.controller";
 import type { NetworkingService } from "./networking.service";
+import { NetworkingRecommendationsService } from "./networking-recommendations.service";
 
 const profile = {
   id: "caller",
@@ -38,9 +39,8 @@ describe("recommendation caching boundary", () => {
         profile,
         config: { swipeEnabled: true, eligiblePaymentStatuses: ["PAID"] },
       });
-    const controller = new NetworkingRecommendationsController({
-      participant,
-    } as unknown as NetworkingService);
+    const service = { participant } as unknown as NetworkingService;
+    const controller = new NetworkingRecommendationsController(service, new NetworkingRecommendationsService(service));
     mocks.find
       .mockResolvedValueOnce([candidate("a")])
       .mockResolvedValueOnce([candidate("b")]);
@@ -49,19 +49,22 @@ describe("recommendation caching boundary", () => {
       .mockResolvedValueOnce([{ id: "a" }])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ id: "b" }]);
-    const first = await controller.recommendations("event", "Bearer token");
+    const first = await controller.recommendations("event", "127.0.0.1", "Bearer token");
     expect(first.items[0]).not.toHaveProperty("email");
-    await controller.recommendations("event", "Bearer token");
+    await controller.recommendations("event", "127.0.0.1", "Bearer token");
     expect(mocks.find).toHaveBeenCalledTimes(1);
     expect(mocks.hydrate).toHaveBeenCalledTimes(2);
-    const refreshed = await controller.recommendations("event", "Bearer token");
+    const refreshed = await controller.recommendations("event", "127.0.0.1", "Bearer token");
     expect(refreshed.items.map((p) => p.id)).toEqual(["b"]);
     expect(participant).toHaveBeenCalledTimes(3);
+    for (const call of participant.mock.calls)
+      expect(call).toEqual(["event", "Bearer token", { ip: "127.0.0.1" }]);
     expect(mocks.find).toHaveBeenCalledTimes(2);
     participant.mockRejectedValueOnce(new Error("session revoked"));
     await expect(
-      controller.recommendations("event", "Bearer token"),
+      controller.recommendations("event", "127.0.0.1", "Bearer token"),
     ).rejects.toThrow("session revoked");
     expect(mocks.hydrate).toHaveBeenCalledTimes(4);
+    expect(participant).toHaveBeenLastCalledWith("event", "Bearer token", { ip: "127.0.0.1" });
   });
 });

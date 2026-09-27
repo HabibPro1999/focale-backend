@@ -55,6 +55,13 @@ function slotInterval(start: Date | string | null | undefined, config: Pick<Netw
 @Injectable()
 export class NetworkingMeetingsService {
   constructor(private readonly networking: NetworkingService) {}
+  async profileAvailability(ctx: NetworkingContext, id: string) {
+    this.requireEnabled(ctx);
+    return {
+      slots: await this.participantSlots(ctx, id),
+      availableSlots: futureNetworkingSlots(ctx.config, ctx.event),
+    };
+  }
   requireEnabled(ctx: NetworkingContext) {
     if (!ctx.config.meetingsEnabled || !ctx.profile.meetingsEnabled)
       throw new ForbiddenException({ code: ErrorCodes.NETWORKING_FEATURE_DISABLED, message: "Meetings are disabled" });

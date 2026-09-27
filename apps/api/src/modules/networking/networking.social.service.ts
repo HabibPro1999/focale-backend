@@ -31,6 +31,40 @@ const summary = (row: ConnectionSummaryRow) => ({ ...row, profile: networkingPub
 @Injectable()
 export class NetworkingSocialService {
   constructor(private readonly networking: NetworkingService) {}
+  async resetPasses(ctx: NetworkingContext) {
+    await networkingStore(getDb()).remove("interests", {
+      eventId: ctx.event.id,
+      profileId: ctx.profile.id,
+      action: "PASS",
+    });
+    return { reset: true };
+  }
+  async blocks(ctx: NetworkingContext) {
+    const store = networkingStore(getDb());
+    const rows = await store.all("blocks", {
+      eventId: ctx.event.id,
+      profileId: ctx.profile.id,
+    });
+    const items = await Promise.all(
+      rows.map(async (row) => {
+        // The block row stays listed (and unblockable); the profile only while the policy allows it (4.6).
+        const profile = await this.networking.blockedTarget(ctx, row.targetId, store);
+        return {
+          ...row,
+          profile: profile ? networkingPublicProfile(profile) : null,
+        };
+      }),
+    );
+    return { items, total: items.length };
+  }
+  async unblock(ctx: NetworkingContext, id: string) {
+    await networkingStore(getDb()).remove("blocks", {
+      eventId: ctx.event.id,
+      profileId: ctx.profile.id,
+      targetId: id,
+    });
+    return { unblocked: true };
+  }
   /**
    * Who liked the exhibitor, newest first, one keyset page (4.9): senders the
    * exhibitor may see in `profile` mode, filtered in SQL. First page only:
