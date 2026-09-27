@@ -1,3 +1,4 @@
+import { PaginationQueryShape, PaginationLimitSchema } from "./zod-helpers";
 import { z } from "zod";
 import { PaymentStatusSchema } from "./registrations";
 
@@ -242,8 +243,8 @@ export const NetworkingListQuerySchema = z.object({
     .enum(["ALL", "VERY_ACTIVE", "ACTIVE", "INACTIVE", "MATCHED", "MEETINGS"])
     .optional(),
   sort: z.enum(["recommended", "name", "company", "recent"]).default("name"),
-  page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(30),
+  page: PaginationQueryShape.page,
+  limit: PaginationLimitSchema.default(30),
   before: instant.optional(),
   beforeId: id.optional(),
   date: z

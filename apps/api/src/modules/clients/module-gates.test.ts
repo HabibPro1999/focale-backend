@@ -1,3 +1,4 @@
+import { expectHttpError } from "../../testing/expect-error";
 import "reflect-metadata";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpException } from "@nestjs/common";
@@ -17,24 +18,7 @@ import {
 
 const findState = vi.mocked(findClientModuleState);
 
-async function expectHttpError(
-  promise: Promise<unknown>,
-  status: number,
-  code: string,
-  message?: string,
-): Promise<void> {
-  try {
-    await promise;
-    throw new Error("expected rejection");
-  } catch (err) {
-    expect(err).toBeInstanceOf(HttpException);
-    const e = err as HttpException;
-    expect(e.getStatus()).toBe(status);
-    const body = e.getResponse() as { code: string; message: string };
-    expect(body.code).toBe(code);
-    if (message) expect(body.message).toBe(message);
-  }
-}
+
 
 describe("client module gates", () => {
   beforeEach(() => vi.clearAllMocks());

@@ -2,11 +2,6 @@ import { ForbiddenException, NotFoundException } from "@nestjs/common";
 import { ErrorCodes, type ModuleId } from "@app/contracts";
 import { findClientModuleState, type DbExecutor } from "@app/db";
 
-// Re-exported so the ~10 consumer modules (forms, access, certificates,
-// abstracts, sponsorships, email, registrations, pricing, events, identity)
-// have a single clients-domain import point, matching the legacy `@clients`.
-export { clientExists } from "@app/db";
-
 /** The client fields a module-gate check needs (legacy CLIENT_MODULE_GATE_SELECT). */
 export type ClientModuleState = {
   active: boolean;

@@ -1,3 +1,4 @@
+import { PaginationQueryShape } from "./zod-helpers";
 import { z } from "zod";
 import { UserRole } from "./roles";
 
@@ -22,36 +23,29 @@ export const StrongPasswordSchema = z
 // Request Schemas
 // ============================================================================
 
+const UserRoleSchema = z.union([
+  z.literal(UserRole.SUPER_ADMIN), z.literal(UserRole.CLIENT_ADMIN), z.literal(UserRole.SCIENTIFIC_COMMITTEE),
+]);
+
 export const CreateUserSchema = z.strictObject({
   email: z.string().email(),
   password: StrongPasswordSchema,
   name: z.string().min(1).max(100),
-  role: z
-    .union([
-      z.literal(UserRole.SUPER_ADMIN),
-      z.literal(UserRole.CLIENT_ADMIN),
-      z.literal(UserRole.SCIENTIFIC_COMMITTEE),
-    ])
+  role: UserRoleSchema
     .default(UserRole.CLIENT_ADMIN),
   clientId: z.string().uuid().optional().nullable(),
 });
 
 export const UpdateUserSchema = z.strictObject({
   name: z.string().min(1).max(100).optional(),
-  role: z
-    .union([
-      z.literal(UserRole.SUPER_ADMIN),
-      z.literal(UserRole.CLIENT_ADMIN),
-      z.literal(UserRole.SCIENTIFIC_COMMITTEE),
-    ])
+  role: UserRoleSchema
     .optional(),
   clientId: z.string().uuid().optional().nullable(),
   active: z.boolean().optional(),
 });
 
 export const ListUsersQuerySchema = z.strictObject({
-  page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(20),
+  ...PaginationQueryShape,
   role: z.coerce.number().int().min(0).max(2).optional(),
   clientId: z.string().uuid().optional(),
   active: z

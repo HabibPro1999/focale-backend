@@ -4,7 +4,7 @@ import type { AuthUser } from "../../core/auth/user-cache";
 import { assertEventAccess } from "../../core/auth/assert-event-access";
 import { getConfig } from "../../core/config";
 import { assertClientModuleEnabled } from "../clients/module-gates";
-import { assertEventWritable } from "../events/events.service";
+import { assertEventWritable } from "../events";
 import {
   Controller,
   ForbiddenException,

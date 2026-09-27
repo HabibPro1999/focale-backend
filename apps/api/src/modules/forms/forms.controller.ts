@@ -25,7 +25,7 @@ import { Auth } from "../../core/auth/auth.decorator";
 import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { assertClientModuleEnabled } from "../clients/module-gates";
-import { assertEventWritable } from "../events/events.service";
+import { assertEventWritable } from "../events";
 import { FormsService } from "./forms.service";
 import type { PaginatedResult } from "@app/shared";
 import {

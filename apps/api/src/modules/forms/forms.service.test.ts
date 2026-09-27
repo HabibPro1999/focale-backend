@@ -1,3 +1,4 @@
+import { expectAppError } from "../../testing/expect-error";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { ErrorCodes } from "@app/contracts";
 import type {
@@ -15,7 +16,7 @@ import {
   FormsService,
   createDefaultSponsorSchema,
 } from "./forms.service";
-import { AppException } from "../../core/app-exception";
+import { logger } from "../../core/logger.service";
 
 // ---------------------------------------------------------------------------
 // Compile-time contract: the @app/contracts zod-derived FormField/FormStep must
@@ -100,21 +101,7 @@ function mockFormWithEvent(overrides: Partial<Form> = {}): FormWithEvent {
   };
 }
 
-async function expectAppError(
-  p: Promise<unknown>,
-  status: number,
-  code: string,
-): Promise<void> {
-  const err = await p.then(
-    () => {
-      throw new Error("expected promise to reject");
-    },
-    (e: unknown) => e,
-  );
-  expect(err).toBeInstanceOf(AppException);
-  expect((err as AppException).getStatus()).toBe(status);
-  expect((err as AppException).getResponse()).toMatchObject({ code });
-}
+
 
 const service = new FormsService();
 
@@ -324,6 +311,28 @@ describe("updateForm", () => {
       successTitle: "New Title",
       successMessage: "New Message",
     });
+  });
+
+  it("warns with removed field IDs in schema order when answers already exist", async () => {
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+    try {
+      vi.mocked(findFormById).mockResolvedValue(mockForm({ schema: {
+        steps: [{ id: "s1", title: "Info", fields: [
+          { id: "gone-b", type: "text" }, { id: "kept", type: "text" }, { id: "gone-a", type: "text" },
+        ] }],
+      } }));
+      vi.mocked(countRegistrationsByFormId).mockResolvedValue(3);
+      vi.mocked(dbUpdateForm).mockResolvedValue(mockForm());
+      await service.updateForm(formId, { schema: {
+        steps: [{ id: "s1", title: "Info", fields: [{ id: "kept", type: "text" }] }],
+      } });
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        { formId, removedFields: ["gone-b", "gone-a"], affectedRegistrations: 3 },
+        "Form fields removed with existing registration data - data may be orphaned",
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("increments schemaVersion when the schema changes", async () => {

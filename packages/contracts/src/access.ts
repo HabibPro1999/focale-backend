@@ -1,11 +1,10 @@
+import { hasUpdateField } from "./zod-helpers";
 import { z } from "zod";
 import { ConditionSchema } from "./condition.schema";
 
 // Access module Zod contracts — ported verbatim from legacy access.schema.ts.
 // ConditionSchema is the single shared source (also used by pricing/forms).
 
-const hasUpdateField = (data: Record<string, unknown>) =>
-  Object.values(data).some((value) => value !== undefined);
 
 const hasUniqueValues = (values: string[]) =>
   new Set(values).size === values.length;

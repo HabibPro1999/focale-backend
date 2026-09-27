@@ -5,7 +5,8 @@ import {
   FormSchemaJsonSchema,
   SponsorFormSchemaJsonSchema,
   getSponsorshipMode,
-  extractFieldIds,
+  removedFieldIds,
+  mergeSponsorshipSettings,
   type CreateFormInput,
   type UpdateFormInput,
   type ListFormsQuery,
@@ -37,6 +38,13 @@ import {
 import { newId, paginate, getSkip, type PaginatedResult } from "@app/shared";
 import { logger } from "../../core/logger.service";
 import { AppException } from "../../core/app-exception";
+
+function throwModeChangeFailure(reason: "not_found" | "type_changed" | "not_sponsor" | "locked", typeMismatch: () => AppException): never {
+  if (reason === "not_found") throw new AppException(ErrorCodes.NOT_FOUND, "Form not found", 404);
+  if (reason === "type_changed" || reason === "not_sponsor") throw typeMismatch();
+  throw new AppException(ErrorCodes.CONFLICT,
+    "Cannot change sponsorship mode after sponsorship batches have been submitted", 409);
+}
 
 // ============================================================================
 // Default schema generators (pure)
@@ -217,12 +225,10 @@ export class FormsService {
       throw new AppException(ErrorCodes.NOT_FOUND, "Form not found", 404);
     }
 
-    const patch: FormUpdatePatch = {};
-    if (input.name !== undefined) patch.name = input.name;
-    if (input.successTitle !== undefined) patch.successTitle = input.successTitle;
-    if (input.successMessage !== undefined)
-      patch.successMessage = input.successMessage;
-    if (input.successTranslations !== undefined) patch.successTranslations = input.successTranslations;
+    const patch: FormUpdatePatch = {
+      name: input.name, successTitle: input.successTitle,
+      successMessage: input.successMessage, successTranslations: input.successTranslations,
+    };
 
     let nextSchema: FormSchemaJson | SponsorFormSchemaJson | undefined;
     if (input.schema !== undefined) {
@@ -253,30 +259,15 @@ export class FormsService {
             newMode,
           });
           if (!result.ok) {
-            if (result.reason === "not_found") {
-              throw new AppException(ErrorCodes.NOT_FOUND, "Form not found", 404);
-            }
-            if (result.reason === "type_changed") {
-              throw new AppException(
-                ErrorCodes.VALIDATION_ERROR,
-                "Invalid sponsor form schema structure",
-                400,
-              );
-            }
-            throw new AppException(
-              ErrorCodes.CONFLICT,
-              "Cannot change sponsorship mode after sponsorship batches have been submitted",
-              409,
-            );
+            throwModeChangeFailure(result.reason, () => new AppException(
+              ErrorCodes.VALIDATION_ERROR, "Invalid sponsor form schema structure", 400,
+            ));
           }
           return result.form;
         }
       }
 
-      const newFieldIds = extractFieldIds(nextSchema);
-      const removedFields = extractFieldIds(form.schema).filter(
-        (fieldId) => !newFieldIds.includes(fieldId),
-      );
+      const removedFields = removedFieldIds(form.schema, nextSchema);
       if (removedFields.length > 0) {
         const regCount = await countRegistrationsByFormId(id);
         if (regCount > 0) {
@@ -321,33 +312,14 @@ export class FormsService {
     if (settings.sponsorshipMode !== currentMode) {
       const result = await updateSponsorshipSettingsModeChange(formId, settings);
       if (!result.ok) {
-        if (result.reason === "not_found") {
-          throw new AppException(ErrorCodes.NOT_FOUND, "Form not found", 404);
-        }
-        if (result.reason === "not_sponsor") {
-          throw new AppException(
-            ErrorCodes.BAD_REQUEST,
-            "Sponsorship settings can only be updated for sponsor forms",
-            400,
-          );
-        }
-        throw new AppException(
-          ErrorCodes.CONFLICT,
-          "Cannot change sponsorship mode after sponsorship batches have been submitted",
-          409,
-        );
+        throwModeChangeFailure(result.reason, () => new AppException(
+          ErrorCodes.BAD_REQUEST, "Sponsorship settings can only be updated for sponsor forms", 400,
+        ));
       }
       return result.form;
     }
 
-    const schema = (form.schema ?? {}) as Record<string, unknown>;
-    const merged = {
-      ...schema,
-      sponsorshipSettings: {
-        ...((schema.sponsorshipSettings as Record<string, unknown>) ?? {}),
-        ...settings,
-      },
-    };
+    const merged = mergeSponsorshipSettings(form.schema, settings);
     return dbUpdateForm(formId, { schema: merged });
   }
 

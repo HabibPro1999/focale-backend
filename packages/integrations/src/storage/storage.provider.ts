@@ -1,3 +1,6 @@
+export const PUBLIC_CACHE_CONTROL = "public, max-age=31536000";
+export const PRIVATE_CACHE_CONTROL = "private, max-age=0";
+
 export interface UploadOptions {
   contentDisposition?: string;
   cacheControl?: string;

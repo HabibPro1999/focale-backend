@@ -6,7 +6,7 @@ import {
   type EventAccessWithPrereqs,
 } from "@app/db";
 import { visibleFormAnswers } from "@app/shared";
-import { assertEventAcceptsPublicActions } from "../events/events.service";
+import { assertEventAcceptsPublicActions } from "../events";
 import { assertClientModuleEnabled } from "../clients/module-gates";
 import { AccessService } from "./access.service";
 import {

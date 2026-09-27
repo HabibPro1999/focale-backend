@@ -1,3 +1,4 @@
+import { PaginationQueryShape, PaginationLimitSchema } from "./zod-helpers";
 import { PaymentStatusSchema, RegistrationRoleSchema } from "./registration-enums";
 import { z } from "zod";
 
@@ -197,8 +198,7 @@ export const UpdateEmailTemplateSchema = z
   });
 
 export const ListEmailTemplatesQuerySchema = z.strictObject({
-  page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(20),
+  ...PaginationQueryShape,
   category: EmailTemplateCategorySchema.optional(),
   trigger: AutomaticEmailTriggerSchema.optional(),
   abstractTrigger: AbstractEmailTriggerSchema.optional(),
@@ -210,8 +210,8 @@ export const ListEmailTemplatesQuerySchema = z.strictObject({
 // ============================================================================
 
 export const ListEventEmailLogsQuerySchema = z.strictObject({
-  page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(50),
+  page: PaginationQueryShape.page,
+  limit: PaginationLimitSchema.default(50),
   status: EmailStatusSchema.optional(),
   trigger: AutomaticEmailTriggerSchema.optional(),
 });

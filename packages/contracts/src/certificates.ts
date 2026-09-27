@@ -1,3 +1,4 @@
+import { hasUpdateField } from "./zod-helpers";
 import { z } from "zod";
 import { ABSTRACT_FINAL_TYPES } from "./abstracts";
 
@@ -6,8 +7,6 @@ import { ABSTRACT_FINAL_TYPES } from "./abstracts";
 // collisions with events.ts's EventIdParamSchema (which is `{ id }`, not
 // `{ eventId }`) under the contracts barrel's `export *`.
 
-const hasUpdateField = (data: Record<string, unknown>) =>
-  Object.values(data).some((value) => value !== undefined);
 
 // Role values for `applicableRoles`. Legacy imported RegistrationRoleSchema from
 // the registrations module; that domain's contracts are still a stub, so the enum

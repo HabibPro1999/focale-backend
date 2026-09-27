@@ -23,7 +23,7 @@ import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
 import type { AuthUser } from "../../core/auth/user-cache";
 import { assertEventAccess } from "../../core/auth/assert-event-access";
-import { assertEventWritable } from "../events/events.service";
+import { assertEventWritable } from "../events";
 import { assertClientModuleEnabled } from "../clients/module-gates";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { NetworkingAdminService } from "./networking.admin.service";

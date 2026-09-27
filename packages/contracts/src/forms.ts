@@ -1,11 +1,10 @@
+import { hasUpdateField, PaginationQueryShape } from "./zod-helpers";
 import { z } from "zod";
 import {
   FormLanguagesSchema,
   translationsMapOf,
 } from "./i18n.schema";
 
-const hasUpdateField = (data: Record<string, unknown>) =>
-  Object.values(data).some((value) => value !== undefined);
 
 // ============================================================================
 // Field Schemas
@@ -271,8 +270,7 @@ export const UpdateFormSchema = z
   });
 
 export const ListFormsQuerySchema = z.strictObject({
-  page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(20),
+  ...PaginationQueryShape,
   eventId: z.string().uuid().optional(),
   search: z.string().optional(),
   type: z.enum(["REGISTRATION", "SPONSOR"]).optional(),
@@ -366,4 +364,22 @@ export function extractFieldIds(schema: unknown): string[] {
     }
   }
   return ids;
+}
+
+/** Registration-step IDs only; preserve the existing stored-schema walker. */
+export function removedFieldIds(previousSchema: unknown, nextSchema: unknown): string[] {
+  const nextIds = extractFieldIds(nextSchema);
+  return extractFieldIds(previousSchema).filter((id) => !nextIds.includes(id));
+}
+
+/** Shallow merge only: unknown schema/settings keys intentionally survive. */
+export function mergeSponsorshipSettings(formSchema: unknown, settings: Record<string, unknown>) {
+  const schema = (formSchema ?? {}) as Record<string, unknown>;
+  return {
+    ...schema,
+    sponsorshipSettings: {
+      ...((schema.sponsorshipSettings as Record<string, unknown>) ?? {}),
+      ...settings,
+    },
+  };
 }
