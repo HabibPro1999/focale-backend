@@ -11,7 +11,7 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import type { NetworkingConfig } from "@app/contracts";
+import type { NetworkingConfig, NETWORKING_PROFILE_STATUSES, NETWORKING_MEETING_STATUSES } from "@app/contracts";
 import { idPk, timestamps } from "../helpers";
 import { events } from "./events-access";
 import { registrations } from "./registrations";
@@ -65,7 +65,7 @@ export const networkingProfiles = pgTable(
     offers: text().notNull().default(""),
     seeks: text().notNull().default(""),
     status: text()
-      .$type<"PENDING" | "ACTIVE" | "SUSPENDED" | "EXCLUDED">()
+      .$type<(typeof NETWORKING_PROFILE_STATUSES)[number]>()
       .notNull()
       .default("PENDING"),
     visible: boolean().notNull().default(true),
@@ -343,16 +343,7 @@ export const networkingMeetings = pgTable(
       onDelete: "restrict",
     }),
     status: text()
-      .$type<
-        | "PENDING"
-        | "PENDING_ALLOCATION"
-        | "CONFIRMED"
-        | "DECLINED"
-        | "CANCELLED"
-        | "EXPIRED"
-        | "COMPLETED"
-        | "NO_SHOW"
-      >()
+      .$type<(typeof NETWORKING_MEETING_STATUSES)[number]>()
       .notNull()
       .default("PENDING"),
     message: text().notNull().default(""),
