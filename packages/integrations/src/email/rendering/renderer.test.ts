@@ -208,3 +208,14 @@ describe("extractPlainText", () => {
     expect(text).toBe("Hi {{firstName}}\n\nBye");
   });
 });
+
+
+describe("list markup characterization", () => {
+  it.each([["bulletList", "ul"], ["orderedList", "ol"]] as const)("preserves %s items, marks and escaping", (type, tag) => {
+    const mjml = renderTemplateToMjml(doc([{ type, content: [
+      { type: "listItem", content: [{ type: "paragraph", content: [{ type: "text", text: "A & B", marks: [{ type: "bold" }] }] }] },
+      { type: "listItem", content: [{ type: "text", text: "<second>" }] },
+    ] }]));
+    expect(mjml).toContain(`<${tag} style="margin: 0; padding-left: 20px;"><li><strong>A &amp; B</strong></li>\n<li>&lt;second&gt;</li></${tag}>`);
+  });
+});

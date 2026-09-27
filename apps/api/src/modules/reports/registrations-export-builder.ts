@@ -8,17 +8,12 @@ import {
   getSponsorshipLabDetails,
   withExportStatementTimeout,
   type ModularRegistrationRow,
-  type RegistrationFormColumn,
 } from "@app/db";
 import type {
   ExportRegistrationsBody,
   ExportLanguage,
-  IdentityField,
-  SubmissionField,
-  PaymentField,
-  SponsorshipField,
 } from "@app/contracts";
-import { formatDateTime, formatFileDate } from "@app/shared";
+import { formatFileDate } from "@app/shared";
 import type { ExportDownload } from "../../core/exports/stream-io";
 import {
   XLSX_CONTENT_TYPE,
@@ -26,6 +21,12 @@ import {
   RowPacer,
   createXlsxWriter,
 } from "../../core/exports/xlsx-stream";
+
+import { HEADER_FILL as COLUMN_HEADER_FILL, HEADER_FONT as COLUMN_HEADER_FONT, THIN_BORDER as BORDER } from "./excel-style";
+import { GROUP_LABELS, SHEET_NAME } from "./registrations-export/labels";
+import { resolveExportColumns, needsSponsorshipLabDetails, type ColumnDescriptor, type RowContext } from "./registrations-export/columns";
+export { GROUP_LABELS, IDENTITY_HEADERS, SHEET_NAME } from "./registrations-export/labels";
+export { resolveExportColumns, type ColumnDescriptor, type RowContext } from "./registrations-export/columns";
 
 // ============================================================================
 // Cell values are written as plain strings: exceljs stores them as text cells,
@@ -44,22 +45,7 @@ export const GROUP_HEADER_FONT: Partial<ExcelJS.Font> = {
   size: 11,
   color: { argb: "FF1F4E79" },
 };
-export const COLUMN_HEADER_FILL: ExcelJS.Fill = {
-  type: "pattern",
-  pattern: "solid",
-  fgColor: { argb: "FF1F4E79" },
-};
-export const COLUMN_HEADER_FONT: Partial<ExcelJS.Font> = {
-  bold: true,
-  color: { argb: "FFFFFFFF" },
-  size: 11,
-};
-export const BORDER: Partial<ExcelJS.Borders> = {
-  top: { style: "thin" },
-  left: { style: "thin" },
-  bottom: { style: "thin" },
-  right: { style: "thin" },
-};
+export { HEADER_FILL as COLUMN_HEADER_FILL, HEADER_FONT as COLUMN_HEADER_FONT, THIN_BORDER as BORDER } from "./excel-style";
 export const GROUP_FILLS: ExcelJS.Fill[] = [
   { type: "pattern", pattern: "solid", fgColor: { argb: "FFD6E4F0" } }, // soft blue
   { type: "pattern", pattern: "solid", fgColor: { argb: "FFEADAF0" } }, // soft violet
@@ -72,621 +58,6 @@ export const GROUP_FILLS: ExcelJS.Fill[] = [
 // ============================================================================
 // Localized labels
 // ============================================================================
-
-type Lang = ExportLanguage;
-
-export const GROUP_LABELS: Record<string, Record<Lang, string>> = {
-  identity: { fr: "Identité", en: "Identity", ar: "الهوية" },
-  submission: { fr: "Soumission", en: "Submission", ar: "الإرسال" },
-  payment: { fr: "Paiement", en: "Payment", ar: "الدفع" },
-  sponsorship: { fr: "Sponsoring", en: "Sponsorship", ar: "الرعاية" },
-  access: { fr: "Accès", en: "Access items", ar: "الوصول" },
-  checkins: { fr: "Pointages", en: "Check-ins", ar: "التسجيلات" },
-  transactions: { fr: "Transactions", en: "Transactions", ar: "المعاملات" },
-  form: {
-    fr: "Questions du formulaire",
-    en: "Form questions",
-    ar: "أسئلة النموذج",
-  },
-};
-
-export const IDENTITY_HEADERS: Record<IdentityField, Record<Lang, string>> = {
-  id: { fr: "ID", en: "ID", ar: "المعرف" },
-  referenceNumber: { fr: "N° de référence", en: "Reference #", ar: "المرجع" },
-  email: { fr: "Email", en: "Email", ar: "البريد" },
-  firstName: { fr: "Prénom", en: "First name", ar: "الاسم" },
-  lastName: { fr: "Nom", en: "Last name", ar: "اللقب" },
-  phone: { fr: "Téléphone", en: "Phone", ar: "الهاتف" },
-  role: { fr: "Rôle", en: "Role", ar: "الدور" },
-  note: { fr: "Note admin", en: "Admin note", ar: "ملاحظة" },
-};
-
-const SUBMISSION_HEADERS: Record<SubmissionField, Record<Lang, string>> = {
-  submittedAt: { fr: "Soumis le", en: "Submitted at", ar: "تاريخ الإرسال" },
-  createdAt: { fr: "Créé le", en: "Created at", ar: "تاريخ الإنشاء" },
-  updatedAt: { fr: "Mis à jour le", en: "Updated at", ar: "آخر تحديث" },
-  lastEditedAt: {
-    fr: "Dernière édition",
-    en: "Last edited",
-    ar: "آخر تعديل",
-  },
-  formSchemaVersion: {
-    fr: "Version du formulaire",
-    en: "Form version",
-    ar: "إصدار النموذج",
-  },
-};
-
-const PAYMENT_HEADERS: Record<PaymentField, Record<Lang, string>> = {
-  paymentStatus: { fr: "Statut de paiement", en: "Payment status", ar: "حالة" },
-  paymentMethod: { fr: "Méthode", en: "Method", ar: "الطريقة" },
-  currency: { fr: "Devise", en: "Currency", ar: "العملة" },
-  totalAmount: { fr: "Total", en: "Total", ar: "المجموع" },
-  paidAmount: { fr: "Payé", en: "Paid", ar: "المدفوع" },
-  baseAmount: { fr: "Base", en: "Base", ar: "الأساس" },
-  accessAmount: { fr: "Accès (mt)", en: "Access amount", ar: "مبلغ الوصول" },
-  discountAmount: { fr: "Remise", en: "Discount", ar: "خصم" },
-  sponsorshipAmount: { fr: "Sponsoring (mt)", en: "Sponsorship", ar: "رعاية" },
-  paymentReference: { fr: "Référence", en: "Reference", ar: "مرجع" },
-  paymentProofUrl: { fr: "Preuve (URL)", en: "Proof URL", ar: "إثبات" },
-  paidAt: { fr: "Payé le", en: "Paid at", ar: "تاريخ الدفع" },
-};
-
-const SPONSORSHIP_HEADERS: Record<SponsorshipField, Record<Lang, string>> = {
-  sponsorshipCode: { fr: "Code", en: "Code", ar: "رمز" },
-  labName: { fr: "Laboratoire", en: "Lab", ar: "مخبر" },
-  labContactName: { fr: "Contact labo", en: "Lab contact", ar: "جهة الاتصال" },
-  labEmail: { fr: "Email labo", en: "Lab email", ar: "بريد" },
-  labPhone: { fr: "Téléphone labo", en: "Lab phone", ar: "هاتف" },
-  beneficiaryAddress: {
-    fr: "Adresse bénéficiaire",
-    en: "Beneficiary address",
-    ar: "عنوان",
-  },
-};
-
-const PAYMENT_STATUS_LABELS: Record<string, Record<Lang, string>> = {
-  PENDING: { fr: "En attente", en: "Pending", ar: "معلق" },
-  VERIFYING: { fr: "En vérification", en: "Verifying", ar: "قيد التحقق" },
-  PARTIAL: { fr: "Partiel", en: "Partial", ar: "جزئي" },
-  PAID: { fr: "Payé", en: "Paid", ar: "مدفوع" },
-  SPONSORED: { fr: "Sponsorisé", en: "Sponsored", ar: "مرعي" },
-  WAIVED: { fr: "Exonéré", en: "Waived", ar: "معفى" },
-  REFUNDED: { fr: "Remboursé", en: "Refunded", ar: "مسترد" },
-};
-
-const PAYMENT_METHOD_LABELS: Record<string, Record<Lang, string>> = {
-  BANK_TRANSFER: { fr: "Virement", en: "Bank transfer", ar: "تحويل" },
-  ONLINE: { fr: "En ligne", en: "Online", ar: "عبر الإنترنت" },
-  CASH: { fr: "Espèces", en: "Cash", ar: "نقدا" },
-  LAB_SPONSORSHIP: {
-    fr: "Sponsoring labo",
-    en: "Lab sponsorship",
-    ar: "رعاية مخبر",
-  },
-};
-
-const ROLE_LABELS: Record<string, Record<Lang, string>> = {
-  PARTICIPANT: { fr: "Participant", en: "Participant", ar: "مشارك" },
-  SPEAKER: { fr: "Intervenant", en: "Speaker", ar: "متحدث" },
-  MODERATOR: { fr: "Modérateur", en: "Moderator", ar: "مشرف" },
-  ORGANIZER: { fr: "Organisateur", en: "Organizer", ar: "منظم" },
-};
-
-const TX_TYPE_LABELS: Record<string, Record<Lang, string>> = {
-  PAYMENT: { fr: "Paiement", en: "Payment", ar: "دفع" },
-  REFUND: { fr: "Remboursement", en: "Refund", ar: "استرداد" },
-  WAIVER: { fr: "Exonération", en: "Waiver", ar: "إعفاء" },
-  ADJUSTMENT: { fr: "Ajustement", en: "Adjustment", ar: "تعديل" },
-};
-
-const YES_NO: Record<Lang, { yes: string; no: string }> = {
-  fr: { yes: "Oui", no: "Non" },
-  en: { yes: "Yes", no: "No" },
-  ar: { yes: "نعم", no: "لا" },
-};
-
-export const SHEET_NAME: Record<Lang, string> = {
-  fr: "Inscriptions",
-  en: "Registrations",
-  ar: "التسجيلات",
-};
-
-const TRANSACTIONS_HEADER: Record<Lang, string> = {
-  fr: "Transactions",
-  en: "Transactions",
-  ar: "المعاملات",
-};
-
-const DROPPED_ACCESS_HEADER: Record<Lang, string> = {
-  fr: "Accès retirés",
-  en: "Dropped access",
-  ar: "الوصول المزال",
-};
-
-const GLOBAL_CHECKIN_AT: Record<Lang, string> = {
-  fr: "Pointage global",
-  en: "Global check-in",
-  ar: "تسجيل عام",
-};
-const GLOBAL_CHECKIN_BY: Record<Lang, string> = {
-  fr: "Pointé par",
-  en: "Checked in by",
-  ar: "تم تسجيله بواسطة",
-};
-const CHECKIN_SUFFIX: Record<Lang, string> = {
-  fr: "— Pointage",
-  en: "— Check-in",
-  ar: "— تسجيل",
-};
-
-// ============================================================================
-// Helpers — value formatting
-// ============================================================================
-
-/** Event-local date and time (shared export format). */
-function fmtDateTime(d: Date | null | undefined, lang: Lang): string {
-  return d ? formatDateTime(d, lang) : "";
-}
-
-function yesNo(b: boolean, lang: Lang): string {
-  return b ? YES_NO[lang].yes : YES_NO[lang].no;
-}
-
-function enumLabel(
-  map: Record<string, Record<Lang, string>>,
-  value: string | null | undefined,
-  lang: Lang,
-): string {
-  if (!value) return "";
-  return map[value]?.[lang] ?? value;
-}
-
-// ============================================================================
-// Column descriptor — internal representation of a single output column
-// ============================================================================
-
-type ColumnKind = "text" | "datetime" | "money" | "boolean" | "url" | "longtext"; // wraps, wider
-
-export interface ColumnDescriptor {
-  group: keyof typeof GROUP_LABELS;
-  header: string;
-  kind: ColumnKind;
-  width: number;
-  getValue: (ctx: RowContext) => string | number;
-}
-
-export interface RowContext {
-  registration: RegistrationWithRelations;
-  accessNameById: Map<string, string>;
-  sponsorshipByCode: Map<
-    string,
-    {
-      batch: {
-        labName: string;
-        contactName: string;
-        email: string;
-        phone: string | null;
-      };
-      beneficiaryAddress: string | null;
-    }
-  >;
-  lang: Lang;
-}
-
-type RegistrationWithRelations = ModularRegistrationRow;
-type FormColumn = RegistrationFormColumn;
-
-// ============================================================================
-// Form field value resolution (honors smart-merge, dropdown/checkbox labels)
-// ============================================================================
-
-function resolveFormFieldValue(
-  column: FormColumn,
-  formData: Record<string, unknown>,
-): string {
-  const raw = formData[column.id];
-
-  // Smart-merge "specify other": if parent selected the trigger value,
-  // render the child's textual answer instead of the option label.
-  if (column.mergeWith && raw === column.mergeWith.triggerValue) {
-    const childValue = formData[column.mergeWith.fieldId];
-    if (childValue == null) return "";
-    return typeof childValue === "object"
-      ? JSON.stringify(childValue)
-      : String(childValue);
-  }
-
-  if (raw == null) return "";
-
-  // Dropdown / radio: map option id → option label when available.
-  if (
-    (column.type === "dropdown" || column.type === "radio") &&
-    column.options &&
-    typeof raw === "string"
-  ) {
-    const opt = column.options.find((o) => o.id === raw);
-    return opt?.label ?? raw;
-  }
-
-  // Checkbox: array of option ids → comma-joined labels.
-  if (column.type === "checkbox" && Array.isArray(raw) && column.options) {
-    return raw
-      .map((id) => {
-        const opt = column.options?.find((o) => o.id === id);
-        return opt?.label ?? String(id);
-      })
-      .join(", ");
-  }
-
-  if (Array.isArray(raw)) return raw.map((v) => String(v)).join(", ");
-  if (typeof raw === "object") return JSON.stringify(raw);
-  return String(raw);
-}
-
-// ============================================================================
-// Column composition — turn a selection into an ordered list of ColumnDescriptors
-// ============================================================================
-
-function buildColumns(
-  body: ExportRegistrationsBody,
-  accessItems: { id: string; name: string }[],
-  formColumns: FormColumn[],
-  lang: Lang,
-): ColumnDescriptor[] {
-  const out: ColumnDescriptor[] = [];
-  const { columns } = body;
-  const accessNameById = new Map(accessItems.map((a) => [a.id, a.name]));
-
-  // ── Identity ──
-  for (const field of columns.identity) {
-    out.push(buildIdentityColumn(field, lang));
-  }
-
-  // ── Submission ──
-  for (const field of columns.submission) {
-    out.push(buildSubmissionColumn(field, lang));
-  }
-
-  // ── Payment ──
-  for (const field of columns.payment) {
-    out.push(buildPaymentColumn(field, lang));
-  }
-
-  // ── Sponsorship ──
-  for (const field of columns.sponsorship) {
-    out.push(buildSponsorshipColumn(field, lang));
-  }
-
-  // ── Access items (Oui/Non per selected access) ──
-  for (const accessId of columns.accessItemIds) {
-    const name = accessNameById.get(accessId) ?? accessId;
-    out.push({
-      group: "access",
-      header: name,
-      kind: "boolean",
-      width: 18,
-      getValue: (ctx) =>
-        yesNo(ctx.registration.accessTypeIds.includes(accessId), ctx.lang),
-    });
-  }
-  if (columns.includeDroppedAccess) {
-    out.push({
-      group: "access",
-      header: DROPPED_ACCESS_HEADER[lang],
-      kind: "longtext",
-      width: 30,
-      getValue: (ctx) =>
-        ctx.registration.droppedAccessIds
-          .map((id) => ctx.accessNameById.get(id) ?? id)
-          .join(", "),
-    });
-  }
-
-  // ── Check-ins ──
-  if (columns.includeGlobalCheckin) {
-    out.push({
-      group: "checkins",
-      header: GLOBAL_CHECKIN_AT[lang],
-      kind: "datetime",
-      width: 22,
-      getValue: (ctx) => fmtDateTime(ctx.registration.checkedInAt, ctx.lang),
-    });
-    out.push({
-      group: "checkins",
-      header: GLOBAL_CHECKIN_BY[lang],
-      kind: "text",
-      width: 22,
-      getValue: (ctx) => ctx.registration.checkedInBy ?? "",
-    });
-  }
-  for (const accessId of columns.checkinAccessIds) {
-    const name = accessNameById.get(accessId) ?? accessId;
-    out.push({
-      group: "checkins",
-      header: `${name} ${CHECKIN_SUFFIX[lang]}`,
-      kind: "datetime",
-      width: 22,
-      getValue: (ctx) => {
-        const aci = ctx.registration.accessCheckIns?.find(
-          (c) => c.accessId === accessId,
-        );
-        return fmtDateTime(aci?.checkedInAt ?? null, ctx.lang);
-      },
-    });
-  }
-
-  // ── Transactions (summary in one cell) ──
-  if (columns.includeTransactions) {
-    out.push({
-      group: "transactions",
-      header: TRANSACTIONS_HEADER[lang],
-      kind: "longtext",
-      width: 50,
-      getValue: (ctx) => {
-        const txs = ctx.registration.transactions ?? [];
-        if (txs.length === 0) return "";
-        return txs
-          .map((t) => {
-            const parts = [
-              fmtDateTime(t.createdAt, ctx.lang),
-              enumLabel(TX_TYPE_LABELS, t.type, ctx.lang),
-              String(t.amount),
-              t.method ? enumLabel(PAYMENT_METHOD_LABELS, t.method, ctx.lang) : "",
-              t.reference ?? "",
-              t.performedBy ?? "",
-            ];
-            return parts.filter((p) => p !== "").join(" | ");
-          })
-          .join("\n");
-      },
-    });
-  }
-
-  // ── Form questions ──
-  const formColumnById = new Map(formColumns.map((c) => [c.id, c]));
-  for (const fieldId of columns.formFieldIds) {
-    const col = formColumnById.get(fieldId);
-    if (!col) continue; // skip unknown/merged-child ids silently
-    out.push({
-      group: "form",
-      header: col.label,
-      kind: col.type === "textarea" ? "longtext" : "text",
-      width: col.type === "textarea" ? 40 : 28,
-      getValue: (ctx) => {
-        const fd =
-          ctx.registration.formData &&
-          typeof ctx.registration.formData === "object" &&
-          !Array.isArray(ctx.registration.formData)
-            ? (ctx.registration.formData as Record<string, unknown>)
-            : {};
-        return resolveFormFieldValue(col, fd);
-      },
-    });
-  }
-
-  return out;
-}
-
-// ── individual column builders ────────────────────────────────────────────
-
-function buildIdentityColumn(field: IdentityField, lang: Lang): ColumnDescriptor {
-  const header = IDENTITY_HEADERS[field][lang];
-  const byField: Record<IdentityField, ColumnDescriptor> = {
-    id: {
-      group: "identity",
-      header,
-      kind: "text",
-      width: 38,
-      getValue: (ctx) => ctx.registration.id,
-    },
-    referenceNumber: {
-      group: "identity",
-      header,
-      kind: "text",
-      width: 16,
-      getValue: (ctx) => ctx.registration.referenceNumber ?? "",
-    },
-    email: {
-      group: "identity",
-      header,
-      kind: "text",
-      width: 32,
-      getValue: (ctx) => ctx.registration.email,
-    },
-    firstName: {
-      group: "identity",
-      header,
-      kind: "text",
-      width: 22,
-      getValue: (ctx) => ctx.registration.firstName ?? "",
-    },
-    lastName: {
-      group: "identity",
-      header,
-      kind: "text",
-      width: 22,
-      getValue: (ctx) => ctx.registration.lastName ?? "",
-    },
-    phone: {
-      group: "identity",
-      header,
-      kind: "text",
-      width: 18,
-      getValue: (ctx) => ctx.registration.phone ?? "",
-    },
-    role: {
-      group: "identity",
-      header,
-      kind: "text",
-      width: 18,
-      getValue: (ctx) => enumLabel(ROLE_LABELS, ctx.registration.role, ctx.lang),
-    },
-    note: {
-      group: "identity",
-      header,
-      kind: "longtext",
-      width: 40,
-      getValue: (ctx) => ctx.registration.note ?? "",
-    },
-  };
-  return byField[field];
-}
-
-function buildSubmissionColumn(field: SubmissionField, lang: Lang): ColumnDescriptor {
-  const header = SUBMISSION_HEADERS[field][lang];
-  if (field === "formSchemaVersion") {
-    return {
-      group: "submission",
-      header,
-      kind: "text",
-      width: 10,
-      getValue: (ctx) => ctx.registration.formSchemaVersion,
-    };
-  }
-  return {
-    group: "submission",
-    header,
-    kind: "datetime",
-    width: 22,
-    getValue: (ctx) => fmtDateTime(ctx.registration[field], ctx.lang),
-  };
-}
-
-function buildPaymentColumn(field: PaymentField, lang: Lang): ColumnDescriptor {
-  const header = PAYMENT_HEADERS[field][lang];
-  switch (field) {
-    case "paymentStatus":
-      return {
-        group: "payment",
-        header,
-        kind: "text",
-        width: 20,
-        getValue: (ctx) =>
-          enumLabel(PAYMENT_STATUS_LABELS, ctx.registration.paymentStatus, ctx.lang),
-      };
-    case "paymentMethod":
-      return {
-        group: "payment",
-        header,
-        kind: "text",
-        width: 20,
-        getValue: (ctx) =>
-          enumLabel(PAYMENT_METHOD_LABELS, ctx.registration.paymentMethod, ctx.lang),
-      };
-    case "currency":
-      return {
-        group: "payment",
-        header,
-        kind: "text",
-        width: 10,
-        getValue: (ctx) => ctx.registration.currency,
-      };
-    case "paidAt":
-      return {
-        group: "payment",
-        header,
-        kind: "datetime",
-        width: 22,
-        getValue: (ctx) => fmtDateTime(ctx.registration.paidAt, ctx.lang),
-      };
-    case "paymentReference":
-      return {
-        group: "payment",
-        header,
-        kind: "text",
-        width: 22,
-        getValue: (ctx) => ctx.registration.paymentReference ?? "",
-      };
-    case "paymentProofUrl":
-      return {
-        group: "payment",
-        header,
-        kind: "url",
-        width: 34,
-        getValue: (ctx) => ctx.registration.paymentProofUrl ?? "",
-      };
-    default:
-      // All remaining fields are money (integers stored in minor units).
-      return {
-        group: "payment",
-        header,
-        kind: "money",
-        width: 14,
-        getValue: (ctx) => ctx.registration[field] as number,
-      };
-  }
-}
-
-function buildSponsorshipColumn(field: SponsorshipField, lang: Lang): ColumnDescriptor {
-  const header = SPONSORSHIP_HEADERS[field][lang];
-  switch (field) {
-    case "sponsorshipCode":
-      return {
-        group: "sponsorship",
-        header,
-        kind: "text",
-        width: 16,
-        getValue: (ctx) => ctx.registration.sponsorshipCode ?? "",
-      };
-    case "labName":
-      return {
-        group: "sponsorship",
-        header,
-        kind: "text",
-        width: 26,
-        getValue: (ctx) => ctx.registration.labName ?? "",
-      };
-    case "labContactName":
-      return {
-        group: "sponsorship",
-        header,
-        kind: "text",
-        width: 24,
-        getValue: (ctx) => {
-          const code = ctx.registration.sponsorshipCode;
-          return code
-            ? ctx.sponsorshipByCode.get(code)?.batch.contactName ?? ""
-            : "";
-        },
-      };
-    case "labEmail":
-      return {
-        group: "sponsorship",
-        header,
-        kind: "text",
-        width: 28,
-        getValue: (ctx) => {
-          const code = ctx.registration.sponsorshipCode;
-          return code ? ctx.sponsorshipByCode.get(code)?.batch.email ?? "" : "";
-        },
-      };
-    case "labPhone":
-      return {
-        group: "sponsorship",
-        header,
-        kind: "text",
-        width: 18,
-        getValue: (ctx) => {
-          const code = ctx.registration.sponsorshipCode;
-          return code ? ctx.sponsorshipByCode.get(code)?.batch.phone ?? "" : "";
-        },
-      };
-    case "beneficiaryAddress":
-      return {
-        group: "sponsorship",
-        header,
-        kind: "longtext",
-        width: 34,
-        getValue: (ctx) => {
-          const code = ctx.registration.sponsorshipCode;
-          return code
-            ? ctx.sponsorshipByCode.get(code)?.beneficiaryAddress ?? ""
-            : "";
-        },
-      };
-  }
-}
 
 // ============================================================================
 // Workbook assembly
@@ -728,31 +99,20 @@ function computeGroupSpans(columns: ColumnDescriptor[]): GroupSpan[] {
   return spans;
 }
 
-function colLetter(col: number): string {
-  let s = "";
-  let n = col;
-  while (n > 0) {
-    const rem = (n - 1) % 26;
-    s = String.fromCharCode(65 + rem) + s;
-    n = Math.floor((n - 1) / 26);
-  }
-  return s;
-}
-
 /** Group row (1) and column header row (2); rows are committed by the caller. */
 function writeHeaderRows(
   sheet: ExcelJS.Worksheet,
   columns: ColumnDescriptor[],
-  lang: Lang,
+  lang: ExportLanguage,
 ): void {
   // Row 1 — group headers (merged per span)
   const groupSpans = computeGroupSpans(columns);
   const groupRow = sheet.getRow(1);
   groupRow.height = 22;
   for (const span of groupSpans) {
-    const range = `${colLetter(span.startCol)}1:${colLetter(span.endCol)}1`;
+    const range = `${sheet.getColumn(span.startCol).letter}1:${sheet.getColumn(span.endCol).letter}1`;
     if (span.startCol !== span.endCol) sheet.mergeCells(range);
-    const cell = sheet.getCell(`${colLetter(span.startCol)}1`);
+    const cell = sheet.getCell(`${sheet.getColumn(span.startCol).letter}1`);
     cell.value = GROUP_LABELS[span.group][lang];
     cell.fill = GROUP_FILLS[span.fillIndex];
     cell.font = GROUP_HEADER_FONT;
@@ -789,36 +149,6 @@ function applyColumnFormatting(
   });
 }
 
-/** The selected columns, or email alone when nothing was selected. */
-export function resolveExportColumns(
-  body: ExportRegistrationsBody,
-  accessItems: { id: string; name: string }[],
-  formColumns: FormColumn[],
-): ColumnDescriptor[] {
-  const lang = body.language;
-  const columns = buildColumns(body, accessItems, formColumns, lang);
-
-  // Safety fallback — if nothing was selected, expose at least email so the
-  // exported file isn't empty / confusing.
-  if (columns.length === 0) {
-    columns.push({
-      group: "identity",
-      header: IDENTITY_HEADERS.email[lang],
-      kind: "text",
-      width: 32,
-      getValue: (ctx) => ctx.registration.email,
-    });
-  }
-  return columns;
-}
-
-const LAB_DETAIL_FIELDS: readonly SponsorshipField[] = [
-  "labContactName",
-  "labEmail",
-  "labPhone",
-  "beneficiaryAddress",
-];
-
 // ============================================================================
 // Public entry
 // ============================================================================
@@ -842,7 +172,8 @@ export async function prepareRegistrationsWorkbook(
     }),
   );
 
-  const columns = resolveExportColumns(body, accessItems, tableColumns.formColumns);
+  const accessNameById = new Map(accessItems.map((a) => [a.id, a.name]));
+  const columns = resolveExportColumns(body, accessItems, tableColumns.formColumns, accessNameById);
   const slug = event?.slug ?? "event";
   const timestamp = formatFileDate();
 
@@ -855,6 +186,7 @@ export async function prepareRegistrationsWorkbook(
         body,
         columns,
         accessItems,
+        accessNameById,
         pages: iterateRegistrationsForModularExport(
           eventId,
           {
@@ -877,7 +209,8 @@ interface WorkbookInput {
   body: ExportRegistrationsBody;
   columns: ColumnDescriptor[];
   accessItems: { id: string; name: string }[];
-  pages: AsyncIterable<RegistrationWithRelations[]>;
+  accessNameById?: Map<string, string>;
+  pages: AsyncIterable<ModularRegistrationRow[]>;
 }
 
 /** Streams the workbook into `out` (ended by the workbook commit). */
@@ -890,10 +223,10 @@ export async function writeRegistrationsWorkbook(
   const lang = body.language;
   // Lab details only when sponsorship-deep columns are requested; looked up
   // per page for the codes not seen yet.
-  const needsLabDetails = body.columns.sponsorship.some((f) => LAB_DETAIL_FIELDS.includes(f));
+  const needsLabDetails = needsSponsorshipLabDetails(body.columns.sponsorship);
   const sponsorshipByCode: RowContext["sponsorshipByCode"] = new Map();
   const lookedUpCodes = new Set<string>();
-  const accessNameById = new Map(accessItems.map((a) => [a.id, a.name]));
+  const accessNameById = input.accessNameById ?? new Map(accessItems.map((a) => [a.id, a.name]));
 
   const workbook = createXlsxWriter(out, signal);
   // Freeze the two header rows.

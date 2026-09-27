@@ -1,3 +1,4 @@
+import { ABSTRACT_STRUCTURED_SECTIONS } from "@app/contracts";
 import { ABSTRACT_TYPE_LABELS_FR, type AbstractFinalType } from "@app/contracts";
 import { getAbstractTitle, getAuthorLine } from "@app/shared";
 // Abstract Book PDF generation — ported (semantics) from legacy
@@ -25,7 +26,7 @@ const COLUMN_GAP = 18;
 const COLUMN_WIDTH = (A4[0] - MARGIN * 2 - COLUMN_GAP) / 2;
 const FULL_WIDTH = A4[0] - MARGIN * 2;
 
-const FINAL_TYPE_SORT_ORDER: Record<string, number> = {
+const FINAL_TYPE_SORT_ORDER: Record<AbstractFinalType, number> = {
   CONFERENCE: 0,
   ORAL_COMMUNICATION: 1,
   POSTER: 2,
@@ -39,15 +40,10 @@ function getContentSections(
   }
   const record = content as Record<string, unknown>;
   if (record.mode === "STRUCTURED") {
-    return (
-      [
-        ["Introduction", record.introduction],
-        ["Objective", record.objective],
-        ["Methods", record.methods],
-        ["Results", record.results],
-        ["Conclusion", record.conclusion],
-      ] as const
-    )
+    const labels: Record<typeof ABSTRACT_STRUCTURED_SECTIONS[number], string> = {
+      introduction: "Introduction", objective: "Objective", methods: "Methods", results: "Results", conclusion: "Conclusion",
+    };
+    return ABSTRACT_STRUCTURED_SECTIONS.map((key) => [labels[key], record[key]] as const)
       .map(([label, value]) => ({
         label: String(label),
         text: typeof value === "string" ? abstractHtmlToText(value) : "",
@@ -359,51 +355,36 @@ class PdfWriter {
   }
 
   text(text: string, options?: TextOptions) {
+    this.drawLines(text, options, COLUMN_WIDTH, () => this.columnX(), () => this.nextColumnOrPage());
+  }
+
+  fullWidthText(text: string, options?: TextOptions) {
+    if (this.column !== 0) this.addPage();
+    this.drawLines(text, options, FULL_WIDTH, () => MARGIN, () => this.addPage());
+  }
+
+  private drawLines(
+    text: string,
+    options: TextOptions | undefined,
+    width: number,
+    x: () => number,
+    onOverflow: () => void,
+  ) {
     const size = options?.size ?? this.fontSize;
     const font = options?.bold ? this.boldFont : this.regularFont;
     const lineHeight = Math.max(size * 1.25, this.lineHeight);
-    const lines = wrapText(text, font, size, COLUMN_WIDTH, options?.direction ?? "auto");
+    const lines = wrapText(text, font, size, width, options?.direction ?? "auto");
     this.ensure(Math.max(lineHeight, lines.length * lineHeight));
     for (const line of lines) {
-      if (this.y - lineHeight < MARGIN) this.nextColumnOrPage();
+      if (this.y - lineHeight < MARGIN) onOverflow();
       if (line.text) {
-        this.drawLine(
-          line,
-          this.columnX(),
-          COLUMN_WIDTH,
-          size,
-          font,
-          options?.color ?? rgb(0.1, 0.1, 0.1),
-        );
+        this.drawLine(line, x(), width, size, font, options?.color ?? rgb(0.1, 0.1, 0.1));
       }
       this.y -= lineHeight;
     }
     this.y -= options?.gapAfter ?? 0;
   }
 
-  fullWidthText(text: string, options?: TextOptions) {
-    if (this.column !== 0) this.addPage();
-    const size = options?.size ?? this.fontSize;
-    const font = options?.bold ? this.boldFont : this.regularFont;
-    const lineHeight = Math.max(size * 1.25, this.lineHeight);
-    const lines = wrapText(text, font, size, FULL_WIDTH, options?.direction ?? "auto");
-    this.ensure(Math.max(lineHeight, lines.length * lineHeight));
-    for (const line of lines) {
-      if (this.y - lineHeight < MARGIN) this.addPage();
-      if (line.text) {
-        this.drawLine(
-          line,
-          MARGIN,
-          FULL_WIDTH,
-          size,
-          font,
-          options?.color ?? rgb(0.1, 0.1, 0.1),
-        );
-      }
-      this.y -= lineHeight;
-    }
-    this.y -= options?.gapAfter ?? 0;
-  }
 }
 
 /** Abstracts laid out between two yields to the event loop. */

@@ -19,21 +19,11 @@ import {
 import { AbstractsBookService } from "./abstracts.book.service";
 import { AppException } from "../../core/app-exception";
 
-const mock = <T>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
+import { mock, expectStatus } from "./__testing__/assertions";
 const eventId = "event-1";
 const jobId = "job-1";
 const service = new AbstractsBookService();
 
-async function expectStatus(p: Promise<unknown>, status: number): Promise<void> {
-  const err = await p.then(
-    () => {
-      throw new Error("expected promise to reject");
-    },
-    (e: unknown) => e,
-  );
-  expect(err).toBeInstanceOf(AppException);
-  expect((err as AppException).getStatus()).toBe(status);
-}
 
 function makeJob(overrides: Record<string, unknown> = {}) {
   return {

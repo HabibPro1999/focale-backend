@@ -74,7 +74,6 @@ export interface EmailContext {
 
 export interface MjmlCompilationResult {
   html: string;
-  errors: Array<{ message: string; line: number }>;
 }
 
 export interface VariableDefinition {

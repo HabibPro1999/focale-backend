@@ -1,3 +1,5 @@
+import { assertAbstractModuleEnabled } from "./abstracts.gates";
+export { assertAbstractModuleEnabled } from "./abstracts.gates";
 import { Inject, Injectable } from "@nestjs/common";
 import {
   ABSTRACT_TYPE_LABELS_FR,
@@ -14,7 +16,6 @@ import {
   findDuplicateAuthorEmail,
   findAbstractForToken,
   findAbstractForEdit,
-  findEventClientId,
   findRegistrationEventId,
   submitAbstractTxn,
   editAbstractTxn,
@@ -59,19 +60,6 @@ function normalizeAuthorEmail(email: string): string {
 // Client module gate (M2: token-based routes must re-check the client's
 // abstracts module the same way submit/getPublicConfig already do — a
 // disabled module must revoke access for existing magic-link holders too).
-// ============================================================================
-
-export async function assertAbstractModuleEnabled(eventId: string): Promise<void> {
-  const event = await findEventClientId(eventId);
-  if (!event) {
-    throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
-  }
-  await assertClientModuleEnabled(event.clientId, "abstracts");
-}
-
-// ============================================================================
-// Public link-origin allow-list (H7: linkBaseUrl is attacker-controlled and
-// later used to build author-facing email links).
 // ============================================================================
 
 // ============================================================================
@@ -312,13 +300,7 @@ export class AbstractsService {
       globalWordLimit: config.globalWordLimit,
       maxThemesPerAbstract: config.maxThemesPerAbstract,
       languages: config.languages ?? null,
-      sectionWordLimits: {
-        introduction: sectionLimits.introduction ?? null,
-        objective: sectionLimits.objective ?? null,
-        methods: sectionLimits.methods ?? null,
-        results: sectionLimits.results ?? null,
-        conclusion: sectionLimits.conclusion ?? null,
-      },
+      sectionWordLimits: Object.fromEntries(STRUCTURED_SECTIONS.map((key) => [key, sectionLimits[key] ?? null])) as Record<typeof STRUCTURED_SECTIONS[number], number | null>,
       themes: data.themes,
       requestedTypes: [
         {

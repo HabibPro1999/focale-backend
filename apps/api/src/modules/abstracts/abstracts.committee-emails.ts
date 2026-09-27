@@ -68,7 +68,7 @@ export class CommitteeEmailsService {
       footnote:
         "Si vous n'attendiez pas cette invitation, vous pouvez ignorer cet email.",
       what: "committee invitation email",
-      logAsInvite: true,
+      abstractTrigger: "ABSTRACT_COMMITTEE_INVITE",
     });
   }
   private async sendTemplatedCommitteeEmail(
@@ -123,7 +123,7 @@ export class CommitteeEmailsService {
     footnote?: string;
     what: string;
     /** M7: the invitation's row carries ABSTRACT_COMMITTEE_INVITE. */
-    logAsInvite?: boolean;
+    abstractTrigger?: "ABSTRACT_COMMITTEE_INVITE";
   }): Promise<boolean> {
     const toName = input.toName?.trim() || input.to;
     const safeName = escapeHtml(toName);
@@ -158,7 +158,7 @@ export class CommitteeEmailsService {
         subject: input.subject,
         html,
         categories: [input.category],
-        log: input.logAsInvite ? { abstractTrigger: "ABSTRACT_COMMITTEE_INVITE" } : undefined,
+        log: input.abstractTrigger ? { abstractTrigger: input.abstractTrigger } : undefined,
       },
       input.what,
     );

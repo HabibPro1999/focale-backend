@@ -228,7 +228,6 @@ function accessRegistrantRow(r: FixtureRegistration): AccessRegistrantReportRow 
     phone: r.phone,
     paymentStatus: r.paymentStatus,
     totalAmount: r.totalAmount,
-    currency: r.currency,
     submittedAt: r.submittedAt,
   };
 }

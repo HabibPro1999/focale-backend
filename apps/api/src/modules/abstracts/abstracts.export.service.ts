@@ -81,12 +81,7 @@ const COLUMN_WIDTHS: Record<string, number> = {
   "Modifié le (auteur)": 20,
 };
 
-const BORDER: Partial<ExcelJS.Borders> = {
-  top: { style: "thin" },
-  left: { style: "thin" },
-  bottom: { style: "thin" },
-  right: { style: "thin" },
-};
+import { THIN_BORDER as BORDER } from "../reports/excel-style";
 
 /**
  * The abstracts workbook (admin list filters): the filtered ids and the

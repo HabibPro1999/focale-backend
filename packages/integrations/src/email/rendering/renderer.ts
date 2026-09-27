@@ -132,7 +132,6 @@ export async function compileMjmlToHtml(
 
   return {
     html: result.html,
-    errors: [],
   };
 }
 
@@ -148,16 +147,16 @@ export function extractPlainText(document: TiptapDocument): string {
 // NODE RENDERING
 // =============================================================================
 
-export function renderNode(node: TiptapNode): string {
+function renderNode(node: TiptapNode): string {
   switch (node.type) {
     case "paragraph":
       return renderParagraph(node);
     case "heading":
       return renderHeading(node);
     case "bulletList":
-      return renderBulletList(node);
+      return renderList(node, "ul");
     case "orderedList":
-      return renderOrderedList(node);
+      return renderList(node, "ol");
     case "listItem":
       return renderListItem(node);
     case "blockquote":
@@ -264,7 +263,7 @@ function renderHeading(node: TiptapNode): string {
   return `<mj-text align="${escapeHtml(align)}" font-size="${escapeHtml(fontSize)}" font-weight="bold" line-height="${escapeHtml(lineHeight)}" padding-bottom="10px">${content}</mj-text>`;
 }
 
-function renderBulletList(node: TiptapNode): string {
+function renderList(node: TiptapNode, tag: "ul" | "ol"): string {
   const items = (node.content || [])
     .map((item) => {
       const itemContent = item.content?.[0]?.content || item.content || [];
@@ -272,18 +271,7 @@ function renderBulletList(node: TiptapNode): string {
     })
     .join("\n");
 
-  return `<mj-text><ul style="margin: 0; padding-left: 20px;">${items}</ul></mj-text>`;
-}
-
-function renderOrderedList(node: TiptapNode): string {
-  const items = (node.content || [])
-    .map((item) => {
-      const itemContent = item.content?.[0]?.content || item.content || [];
-      return `<li>${renderInlineContent(itemContent)}</li>`;
-    })
-    .join("\n");
-
-  return `<mj-text><ol style="margin: 0; padding-left: 20px;">${items}</ol></mj-text>`;
+  return `<mj-text><${tag} style="margin: 0; padding-left: 20px;">${items}</${tag}></mj-text>`;
 }
 
 function renderListItem(node: TiptapNode): string {
@@ -318,11 +306,11 @@ function renderImage(node: TiptapNode): string {
 // INLINE CONTENT RENDERING
 // =============================================================================
 
-export function renderInlineContent(nodes: TiptapNode[]): string {
+function renderInlineContent(nodes: TiptapNode[]): string {
   return nodes.map(renderInlineNode).join("");
 }
 
-export function renderInlineNode(node: TiptapNode): string {
+function renderInlineNode(node: TiptapNode): string {
   if (node.type === "text") {
     let text = escapeHtml(node.text || "");
 
@@ -355,7 +343,7 @@ export function renderInlineNode(node: TiptapNode): string {
   return "";
 }
 
-export function applyMarks(text: string, marks: TiptapMark[]): string {
+function applyMarks(text: string, marks: TiptapMark[]): string {
   let result = text;
 
   for (const mark of marks) {

@@ -100,7 +100,7 @@ describe.runIf(dbTestsEnabled())("db tier: registration export pages (3.7)", () 
     const first = await seedRegistration({ eventId: event.id, formId: form.id, submittedAt: at(10) });
     await getDb().insert(accessCheckIns).values({ registrationId: first.id, accessId: access.id, checkedInAt: at(20), checkedInBy: "door" });
     await getDb().insert(paymentTransaction).values([
-      { registrationId: first.id, type: "PAYMENT", amount: 100, createdAt: at(11) },
+      { registrationId: first.id, type: "PAYMENT", amount: 100, method: "CASH", reference: "PAY-1", note: "Internal payment note", performedBy: "cashier", createdAt: at(11) },
       { registrationId: first.id, type: "REFUND", amount: -40, createdAt: at(12) },
     ]);
 
@@ -124,6 +124,10 @@ describe.runIf(dbTestsEnabled())("db tier: registration export pages (3.7)", () 
         expect.objectContaining({ type: "REFUND", amount: -40 }),
       ],
     });
+    expect(rows[0]!.transactions).toEqual([
+      { type: "PAYMENT", amount: 100, method: "CASH", reference: "PAY-1", performedBy: "cashier", createdAt: at(11) },
+      { type: "REFUND", amount: -40, method: null, reference: null, performedBy: null, createdAt: at(12) },
+    ]);
     expect(rows.slice(1).every((row) => row.accessCheckIns!.length === 0 && row.transactions!.length === 0)).toBe(true);
 
     const bare = (await drain(iterateRegistrationsForModularExport(event.id, { needCheckIns: false, needTransactions: false }))).flat();

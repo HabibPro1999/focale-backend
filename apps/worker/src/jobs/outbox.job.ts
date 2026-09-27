@@ -12,13 +12,13 @@ import {
   type OutboxHandlerResult,
   type TriggeredEmailOutboxPayload,
   type AbstractEmailOutboxPayload,
+  type SponsorshipEmailOutboxPayload,
 } from "@app/db";
 import {
   queueTriggeredEmail,
   queueSponsorshipEmail,
   queueAbstractEmail,
   handleStorageDeleteOutbox,
-  type QueueSponsorshipEmailInput,
 } from "@app/integrations";
 import type { AutomaticEmailTrigger } from "@app/contracts";
 import type { Job, JobContext } from "../job";
@@ -34,12 +34,6 @@ export const OUTBOX_BATCH_SIZE = 20;
  * the timeout signal releases its unstarted rows without an attempt penalty.
  */
 export const OUTBOX_DRAIN_MARGIN_MS = 30_000;
-
-interface SponsorshipEmailOutboxPayload {
-  trigger: string;
-  eventId: string;
-  input: QueueSponsorshipEmailInput;
-}
 
 /**
  * Handler registry for the worker's outbox scope. Each type maps to an

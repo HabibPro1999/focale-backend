@@ -7,6 +7,7 @@ import {
   getAbstractsExportPlan,
   getDb,
   getEventSummaryData,
+  getFinancialSummaryAggregates,
   getReportEventAndAccess,
   getSponsorshipsReportData,
   iterateAbstractsForExport,
@@ -122,6 +123,33 @@ describe.runIf(dbTestsEnabled())("db tier: report and abstract export reads (3.7
     expect(await getEventSummaryData(none.id)).toMatchObject({ total: 0, byStatus: [], byAccess: [], accessTypes: [] });
   });
 
+  it("retains scoped financial values and the independent refund-excluding revenue sum", async () => {
+    const event = await seedEvent();
+    const form = await seedForm({ eventId: event.id });
+    const seed = (values: Partial<typeof registrations.$inferInsert>) =>
+      seedRegistration({ eventId: event.id, formId: form.id, discountAmount: 0, sponsorshipAmount: 0, ...values });
+    await seed({ submittedAt: at(1), currency: "TND", paymentStatus: "PAID", totalAmount: 100, paidAmount: 80, baseAmount: 75, accessAmount: 25, discountAmount: 10, sponsorshipAmount: 5 });
+    await seed({ submittedAt: at(2), currency: "TND", paymentStatus: "REFUNDED", totalAmount: 50, paidAmount: 50, baseAmount: 45, accessAmount: 5 });
+    await seed({ submittedAt: at(3), currency: "EUR", paymentStatus: "PARTIAL", totalAmount: 30, paidAmount: 10, baseAmount: 30, accessAmount: 0 });
+    await seed({ submittedAt: at(4), totalAmount: 999, paidAmount: 999 });
+    const other = await seedEvent();
+    const otherForm = await seedForm({ eventId: other.id });
+    await seedRegistration({ eventId: other.id, formId: otherForm.id, submittedAt: at(2), totalAmount: 999, paidAmount: 999 });
+
+    const result = await getFinancialSummaryAggregates(event.id, { startDate: at(1), endDate: at(3) });
+    expect(result.overall).toEqual({ baseAmount: 150, accessAmount: 30, discountAmount: 10, sponsorshipAmount: 5, avgTotalAmount: 60, count: 3 });
+    expect(result.overallRevenuePaid).toBe(90);
+    expect([...result.revenueByCurrency].sort(byKey((row) => row.currency))).toEqual([
+      { currency: "EUR", paidAmount: 10 }, { currency: "TND", paidAmount: 80 },
+    ]);
+    expect(result.pendingByCurrency).toEqual([{ currency: "EUR", totalAmount: 30, paidAmount: 10 }]);
+    expect(result.refundedByCurrency).toEqual([{ currency: "TND", totalAmount: 50 }]);
+    expect([...result.byCurrency].sort(byKey((row) => row.currency))).toEqual([
+      { currency: "EUR", totalAmount: 30, paidAmount: 10, baseAmount: 30, accessAmount: 0, discountAmount: 0, sponsorshipAmount: 0, count: 1 },
+      { currency: "TND", totalAmount: 150, paidAmount: 130, baseAmount: 120, accessAmount: 30, discountAmount: 10, sponsorshipAmount: 5, count: 2 },
+    ]);
+  });
+
   it("reads the event and its access items in sort order", async () => {
     const { event, lunch, workshop, empty } = await registrationSetup();
 
@@ -143,6 +171,20 @@ describe.runIf(dbTestsEnabled())("db tier: report and abstract export reads (3.7
     for (const pageSize of [1, 2, 500]) {
       const pages = await drain(iterateAccessRegistrantsForReport(event.id, lunch.id, { pageSize }));
       expect(pages.every((page) => page.length > 0 && page.length <= pageSize)).toBe(true);
+      const byId = new Map(Object.values(regs).map((row) => [row.id, row]));
+      for (const row of pages.flat()) {
+        const registration = byId.get(row.id)!;
+        expect(row).toEqual({
+          id: registration.id,
+          firstName: registration.firstName,
+          lastName: registration.lastName,
+          email: registration.email,
+          phone: registration.phone,
+          paymentStatus: registration.paymentStatus,
+          totalAmount: registration.totalAmount,
+          submittedAt: registration.submittedAt,
+        });
+      }
       // Listed twice, read once.
       expect(pages.flat().map((row) => row.id), `pageSize ${pageSize}`).toEqual(
         expected.map((row) => row.id).filter((id) => lunchIds.has(id)),

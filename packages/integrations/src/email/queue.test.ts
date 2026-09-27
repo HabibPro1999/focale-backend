@@ -971,6 +971,38 @@ describe("updateEmailStatusFromWebhook", () => {
     );
   });
 
+  it.each([
+    ["blocked", "DROPPED", "Blocked by SendGrid", false],
+    ["spam_report", "BOUNCED", "Recipient reported email as spam", true],
+    ["unsubscribe", "BOUNCED", "Recipient unsubscribed", true],
+  ] as const)("preserves %s reasons and exact timestamp projection", async (event, status, fallback, stampsBounce) => {
+    mocked(readEmailLogStatus).mockResolvedValue("SENT");
+    for (const reason of [undefined, "", "Provider detail"]) {
+      await updateEmailStatusFromWebhook("log-1", event, { reason });
+      expect(updateEmailLogStatusGuarded).toHaveBeenLastCalledWith("log-1", "SENT", {
+        status,
+        ...(stampsBounce ? { bouncedAt: expect.any(Date) } : {}),
+        errorMessage: reason || fallback,
+      });
+    }
+  });
+
+  it("retains the guarded empty patch for an out-of-vocabulary runtime event", async () => {
+    mocked(readEmailLogStatus).mockResolvedValue("SENT");
+    const listener = vi.fn();
+    setEmailStatusChangeListener(listener);
+    try {
+      await expect(updateEmailStatusFromWebhook(
+        "log-1",
+        "unknown-provider-event" as Parameters<typeof updateEmailStatusFromWebhook>[1],
+      )).resolves.toBeUndefined();
+      expect(updateEmailLogStatusGuarded).toHaveBeenCalledWith("log-1", "SENT", {});
+      expect(listener).not.toHaveBeenCalled();
+    } finally {
+      setEmailStatusChangeListener(undefined);
+    }
+  });
+
   it("no-ops for an unknown email log", async () => {
     mocked(readEmailLogStatus).mockResolvedValue(null);
     await updateEmailStatusFromWebhook("nope", "delivered");
