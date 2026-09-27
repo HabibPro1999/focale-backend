@@ -1,3 +1,4 @@
+import { envInteger, envKey } from "./env-meta";
 import { z } from "zod";
 
 // Database pool/session settings. One definition serves both the app-config
@@ -24,29 +25,9 @@ export const DB_SETTING_DEFAULTS = Object.freeze({
   exportStatementTimeoutMs: 300_000,
 });
 
-// Env values are strings; accept only plain decimal digits so "", "1e3" or
-// "30s" fail instead of coercing to something unintended.
-function envInteger(min: number, max: number, message: string) {
-  return z.preprocess(
-    (value) => {
-      if (value === undefined) return undefined;
-      if (typeof value !== "string") return value;
-      const trimmed = value.trim();
-      if (trimmed === "") return undefined;
-      return /^\d+$/.test(trimmed) ? Number(trimmed) : trimmed;
-    },
-    z
-      .number({ error: message })
-      .int({ error: message })
-      .min(min, { error: message })
-      .max(max, { error: message })
-      .optional(),
-  );
-}
-
 function envTimeoutMs(name: string) {
   const message = `${name} must be 0 (disabled) or an integer from ${DB_TIMEOUT_MIN_MS} to ${DB_TIMEOUT_MAX_MS} milliseconds`;
-  return envInteger(0, DB_TIMEOUT_MAX_MS, message).refine(
+  return envInteger(0, DB_TIMEOUT_MAX_MS, message).optional().refine(
     (value) => value === undefined || value === 0 || value >= DB_TIMEOUT_MIN_MS,
     { error: message },
   );
@@ -54,26 +35,26 @@ function envTimeoutMs(name: string) {
 
 /** Zod shape for the DB_* environment keys (spread into the app-config schema). */
 export const dbEnvShape = {
-  DB_POOL_MAX: envInteger(
+  DB_POOL_MAX: envKey(envInteger(
     1,
     DB_POOL_MAX_LIMIT,
     `DB_POOL_MAX must be an integer from 1 to ${DB_POOL_MAX_LIMIT}`,
-  ).meta({
+  ).optional(), {
     section: "database",
     description: `Pool size per process (1-${DB_POOL_MAX_LIMIT}). Default ${DB_SETTING_DEFAULTS.poolMaxProduction} when NODE_ENV=production, ${DB_SETTING_DEFAULTS.poolMaxOther} otherwise.`,
     example: String(DB_SETTING_DEFAULTS.poolMaxOther),
   }),
-  DB_STATEMENT_TIMEOUT_MS: envTimeoutMs("DB_STATEMENT_TIMEOUT_MS").meta({
+  DB_STATEMENT_TIMEOUT_MS: envKey(envTimeoutMs("DB_STATEMENT_TIMEOUT_MS"), {
     section: "database",
     description: `Server-side statement timeout in ms (0 disables; otherwise ${DB_TIMEOUT_MIN_MS}-${DB_TIMEOUT_MAX_MS}).`,
     example: String(DB_SETTING_DEFAULTS.statementTimeoutMs),
   }),
-  DB_IDLE_IN_TRANSACTION_TIMEOUT_MS: envTimeoutMs("DB_IDLE_IN_TRANSACTION_TIMEOUT_MS").meta({
+  DB_IDLE_IN_TRANSACTION_TIMEOUT_MS: envKey(envTimeoutMs("DB_IDLE_IN_TRANSACTION_TIMEOUT_MS"), {
     section: "database",
     description: "Idle-in-transaction session timeout in ms (0 disables).",
     example: String(DB_SETTING_DEFAULTS.idleInTransactionTimeoutMs),
   }),
-  DB_EXPORT_STATEMENT_TIMEOUT_MS: envTimeoutMs("DB_EXPORT_STATEMENT_TIMEOUT_MS").meta({
+  DB_EXPORT_STATEMENT_TIMEOUT_MS: envKey(envTimeoutMs("DB_EXPORT_STATEMENT_TIMEOUT_MS"), {
     section: "database",
     description: "Statement timeout in ms for report/registration export fetches (0 disables).",
     example: String(DB_SETTING_DEFAULTS.exportStatementTimeoutMs),

@@ -54,21 +54,15 @@ export function envFlag(defaultValue: boolean, meta: EnvKeyMeta) {
 }
 
 /** A decimal integer (digits only, so "1e3" or "30s" fail) within bounds. */
-export function envInt(min: number, max: number, defaultValue: number, meta: EnvKeyMeta, name: string) {
-  const message = `${name} must be an integer from ${min} to ${max}`;
-  return envKey(
-    z.preprocess(
-      (value) =>
-        typeof value === "string" && /^\s*\d+\s*$/.test(value) ? Number(value.trim()) : value,
-      z
-        .number({ error: message })
-        .int({ error: message })
-        .min(min, { error: message })
-        .max(max, { error: message })
-        .default(defaultValue),
-    ),
-    meta,
+export function envInteger(min: number, max: number, message: string) {
+  return z.preprocess(
+    (value) => typeof value === "string" && /^\s*\d+\s*$/.test(value) ? Number(value.trim()) : value,
+    z.number({ error: message }).int({ error: message }).min(min, { error: message }).max(max, { error: message }),
   );
+}
+
+export function envInt(min: number, max: number, defaultValue: number, meta: EnvKeyMeta, name: string) {
+  return envKey(envInteger(min, max, `${name} must be an integer from ${min} to ${max}`).default(defaultValue), meta);
 }
 
 export function envKeyMeta(schema: z.ZodType): EnvKeyMeta | undefined {

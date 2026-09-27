@@ -870,7 +870,8 @@ export function parseAppConfig(source: NodeJS.ProcessEnv) {
       cors: {
         /** `*` entry, accepted outside production only. */
         allowAnyOrigin: corsEntries.includes("*"),
-        origins: parseOriginList(corsEntries.filter((entry) => entry !== "*").join(",")) ?? [],
+        // Cross-key validation already established that each non-wildcard entry is an origin.
+        origins: [...new Set(corsEntries.filter((entry) => entry !== "*").map((entry) => canonicalOrigin(entry)!))],
       },
     },
     security: {

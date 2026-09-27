@@ -1,15 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
+const log = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }));
+
 // Keep the real startPoller (the runner's scheduling now rides it); only
 // silence the loggers.
 vi.mock("@app/shared", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@app/shared")>()),
-  createLogger: () => ({
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  }),
+  createLogger: () => log,
 }));
 
 import { JobRunner } from "./job-runner";
@@ -35,6 +32,27 @@ function deferredJob(name: string, intervalMs = 1_000) {
 }
 
 describe("JobRunner", () => {
+  it("warns for boot overlap but silently skips overlap with an interval run", async () => {
+    vi.useFakeTimers();
+    log.warn.mockClear();
+    try {
+      const { job, resolveLatest } = deferredJob("slow");
+      const runner = new JobRunner([job]);
+      runner.start();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(log.warn).toHaveBeenCalledTimes(1);
+      resolveLatest();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(job.run).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(log.warn).toHaveBeenCalledTimes(1);
+      expect(job.run).toHaveBeenCalledTimes(2);
+      resolveLatest();
+      await runner.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("runs each job once on boot and again on its interval", async () => {
     vi.useFakeTimers();
     try {
