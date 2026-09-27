@@ -119,13 +119,3 @@ export interface MigrationAdoptionSupport {
   ledger: MigrationLedgerAccess;
   catalog: MigrationCatalogAccess;
 }
-
-export interface MigrationAdoptionWorkflow {
-  run(
-    client: Client,
-    engine: DatabaseEngine,
-    migrations: MigrationDefinition[],
-    options: MigrationAdoptionOptions,
-    support: MigrationAdoptionSupport,
-  ): Promise<MigrationAdoptionReport>;
-}

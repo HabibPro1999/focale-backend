@@ -11,7 +11,7 @@ import {
   listMigrationStepRecords,
   loadMigrations,
   migrationAdoptionSupport,
-  migrationAdoptionWorkflow,
+  adoptMigrations,
   migrationLedgerExists,
   refreshMigrationLease,
   verifyMigrations,
@@ -122,7 +122,7 @@ describe.runIf(dbTestsEnabled())("migrate adopt on existing databases", () => {
   }
 
   function adopt(database: ScratchDatabase, writeLedger: boolean): Promise<MigrationAdoptionReport> {
-    return migrationAdoptionWorkflow.run(
+    return adoptMigrations(
       database.client,
       database.engine,
       migrations,
@@ -294,7 +294,7 @@ describe.runIf(dbTestsEnabled())("migrate adopt on existing databases", () => {
         },
       };
       try {
-        const report = await migrationAdoptionWorkflow.run(
+        const report = await adoptMigrations(
           database.client,
           database.engine,
           migrations,

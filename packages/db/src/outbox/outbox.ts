@@ -379,19 +379,12 @@ export async function processOutboxEvents(
       const outcome: OutboxHandlerResult = await handler(event.payload, {
         id: event.id,
       });
-      if (outcome === "skipped") {
-        const marked = await markOutboxProcessed(event.id, "SKIPPED", workerId);
-        if (marked) result.skipped++;
-        else recordLeaseLost(result, event.id, workerId, "SKIPPED");
-      } else {
-        const marked = await markOutboxProcessed(
-          event.id,
-          "PROCESSED",
-          workerId,
-        );
-        if (marked) result.processed++;
-        else recordLeaseLost(result, event.id, workerId, "PROCESSED");
-      }
+      const status = outcome === "skipped" ? "SKIPPED" : "PROCESSED";
+      const marked = await markOutboxProcessed(event.id, status, workerId);
+      if (marked) {
+        if (outcome === "skipped") result.skipped++;
+        else result.processed++;
+      } else recordLeaseLost(result, event.id, workerId, status);
     } catch (error) {
       logger.error(
         { err: error, outboxEventId: event.id, type: event.type },

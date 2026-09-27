@@ -20,8 +20,7 @@
     "test:db": "vitest run --config vitest.db.config.ts",
     "test:concurrency": "vitest run --config vitest.concurrency.config.ts",
     "test:migration": "vitest run --config vitest.migration.config.ts",
-    "migrator": "node dist/migrator/cli.js",
-    "seed": "node --conditions=@app/source -r @swc-node/register src/seed.ts"
+    "migrator": "node dist/migrator/cli.js"
   },
   "dependencies": {
     "@app/contracts": "workspace:*",

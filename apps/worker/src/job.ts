@@ -5,5 +5,5 @@ export interface Job {
   run(): Promise<void>;
 }
 
-/** Multi-provider DI token collecting all registered jobs. */
+/** DI token for the ordered job array assembled by WorkerModule. */
 export const JOBS = Symbol("JOBS");
