@@ -5,6 +5,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@app/db", () => {
   const fns = [
     "getDb",
+    "lockSponsorshipForUpdate",
+    "lockRegistrationForUpdate",
+    "lockRegistrationsForUpdate",
     "listSponsorships",
     "getSponsorshipById",
     "getSponsorshipClientId",
@@ -48,6 +51,7 @@ vi.mock("@app/db", () => {
   for (const f of fns) mod[f] = vi.fn();
   const TX = { __tx: true };
   mod.withTxn = vi.fn((fn: (tx: unknown) => unknown) => fn(TX));
+  mod.withLockingTxn = vi.fn((fn: (tx: unknown) => unknown) => fn(TX));
   return mod;
 });
 
@@ -77,6 +81,7 @@ const OK_EVENT = {
 beforeEach(() => {
   vi.clearAllMocks();
   m.withTxn.mockImplementation((fn: (tx: unknown) => unknown) => fn({}));
+  m.withLockingTxn.mockImplementation((fn: (tx: unknown) => unknown) => fn({}));
   // Neutral defaults so unrelated calls don't throw.
   access.getAlreadyCoveredAccessIds.mockResolvedValue(new Set());
   access.syncPaidCountDelta.mockResolvedValue(undefined);
