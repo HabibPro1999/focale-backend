@@ -35,12 +35,12 @@ For another environment, from the backend directory:
 
 ```sh
 pnpm --filter @app/db build
-node packages/db/scripts/migrate-networking.mjs --through=0017
+pnpm --filter @app/db migrator plan --through=0017
 # DATABASE_URL must already identify the intended database:
-node packages/db/scripts/migrate-networking.mjs --apply --through=0017
+pnpm --filter @app/db migrator apply --yes --through=0017
 ```
 
-The script checks migration checksums, chooses the engine-specific migration, and preserves `sql_safe_updates`. It refuses a CockroachDB vector-index backfill on a populated table; CockroachDB 26.2 blocks writes during that backfill, so an existing populated deployment needs a separate maintenance plan. The feature must already be enabled by its administrator.
+The unified CLI checks the ledger/checksums and engine-specific preconditions. Inspect `plan` before `apply`; deferred migrations require the CLI's explicit `--apply-deferred` confirmation. The compatibility `migrate-networking.mjs` script delegates to that same CLI; its `--bootstrap-test` option only validates a dedicated local URL and does not bootstrap or bypass migration safety checks. The engine feature must already be enabled by its administrator.
 
 The API and worker source changes still require deployment to Render. They do not change the OpenAI model or its per-token price.
 

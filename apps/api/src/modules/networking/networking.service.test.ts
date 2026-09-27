@@ -79,6 +79,23 @@ beforeEach(() => {
 });
 afterEach(() => { delete process.env.PUBLIC_NETWORKING_URL; });
 
+describe("networking closesAt boundary", () => {
+  it("allows public and registration reads exactly at closesAt while transaction revalidation rejects it", async () => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      seed({ profile: { consent: true }, config: { enabled: true, closesAt: new Date(now).toISOString() } });
+      await expect(service.publicContext("demo")).resolves.toHaveProperty("event.id", "event");
+      await expect(service.registrationInfo("demo")).resolves.toHaveProperty("enabled", true);
+      const ctx = await service.participant("demo", bearer);
+      const { networkingStore } = await import("@app/db");
+      await expect(service.currentParticipant(ctx, networkingStore())).rejects.toMatchObject({
+        status: 403, response: { code: "NETWORKING_CLOSED", message: "Networking is not available for this event" },
+      });
+    } finally { clock.mockRestore(); }
+  });
+});
+
 describe("K1b consent-pending sessions", () => {
   it("lets an undecided registrant sign in only for the consent allow-list", async () => {
     await expect(service.participant("demo", bearer)).rejects.toMatchObject({ status: 403, response: { code: "NETWORKING_CONSENT_REQUIRED", message: "Networking consent is required" } });

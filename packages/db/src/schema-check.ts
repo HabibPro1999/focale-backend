@@ -1,3 +1,4 @@
+import type { AppConfig } from "@app/contracts";
 import type { Client, PoolClient } from "pg";
 import { getDb } from "./client";
 import {
@@ -8,7 +9,7 @@ import {
   verifyMigrations,
 } from "./migrator";
 
-export type MigrationsCheckMode = "enforce" | "warn" | "off";
+export type MigrationsCheckMode = AppConfig["MIGRATIONS_CHECK"];
 
 export interface SchemaCheckLogger {
   info(details: object, message: string): void;

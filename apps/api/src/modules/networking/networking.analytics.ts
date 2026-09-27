@@ -1,3 +1,4 @@
+import { NETWORKING_PLANNED_MEETING_STATUSES, type NetworkingAnalytics, type NetworkingConfig } from "@app/contracts";
 import { networkingInventoryResource } from "./networking.inventory-policy";
 import {
   getNetworkingConfig,
@@ -5,7 +6,7 @@ import {
   networkingStore,
   type NetworkingRow,
 } from "@app/db";
-import type { NetworkingAnalytics, NetworkingConfig } from "@app/contracts";
+
 import { networkingSlots, resourceQuanta } from "./networking.policy";
 
 type AnalyticsInput = {
@@ -52,7 +53,7 @@ export function calculateNetworkingAnalytics(
     hourCycle: "h23",
   });
   const planned = meetings.filter((meeting) =>
-    ["CONFIRMED", "COMPLETED", "NO_SHOW"].includes(meeting.status),
+    NETWORKING_PLANNED_MEETING_STATUSES.includes(meeting.status),
   );
   const gestures = audit.filter(entry => entry.action === "SWIPE_LIKE" || entry.action === "SWIPE_PASS")
     .map(entry => ({ profileId: entry.actorId, targetId: entry.targetId, action: entry.action === "SWIPE_LIKE" ? "LIKE" : "PASS" }));

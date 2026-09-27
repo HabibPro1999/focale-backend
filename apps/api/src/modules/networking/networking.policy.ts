@@ -1,5 +1,29 @@
+import { ErrorCodes, type NetworkingConfig } from "@app/contracts";
 import { BadRequestException } from "@nestjs/common";
-import type { NetworkingConfig } from "@app/contracts";
+
+import { networkingFeatureDisabled } from "./networking.errors";
+
+/** Keep a fresh clock read per check, and the transaction's inclusive closing boundary. */
+export function networkingWindow(
+  event: { status: string; endDate: Date },
+  config: NetworkingConfig,
+  now: () => number = Date.now,
+  options: { skipOpening?: boolean; closeAtBoundary?: boolean } = {},
+) {
+  if (!config.enabled || event.status === "ARCHIVED") return "DISABLED";
+  if (!options.skipOpening && config.opensAt && Date.parse(config.opensAt) > now()) return "NOT_OPEN";
+  if (config.closesAt && (options.closeAtBoundary ? Date.parse(config.closesAt) <= now() : Date.parse(config.closesAt) < now())) return "CLOSED";
+  if (now() > event.endDate.getTime() + config.retentionDays * 86_400_000) return "RETENTION_ENDED";
+  return "OPEN";
+}
+
+export function requireDiscovery(ctx: { config: Pick<NetworkingConfig, "swipeEnabled" | "searchEnabled"> }, message = "Discovery is disabled") {
+  if (!ctx.config.swipeEnabled && !ctx.config.searchEnabled) throw networkingFeatureDisabled(message);
+}
+
+export function requireChat(ctx: { config: Pick<NetworkingConfig, "chatEnabled"> }) {
+  if (!ctx.config.chatEnabled) throw networkingFeatureDisabled("Chat is disabled");
+}
 export function networkingPair(a: string, b: string) {
   return a < b ? ([a, b] as const) : ([b, a] as const);
 }
@@ -32,7 +56,7 @@ export function zonedInstant(date: string, time: string, timezone: string) {
     stamp += Date.parse(`${desired}:00Z`) - Date.parse(`${actual}:00Z`);
   }
   throw new BadRequestException({
-    code: "NETWORKING_SLOT_INVALID",
+    code: ErrorCodes.NETWORKING_SLOT_INVALID,
     message: `Nonexistent local time ${desired} in ${timezone}`,
   });
 }
@@ -73,6 +97,18 @@ export function networkingSlots(
   }
   return [...new Set(slots)].sort();
 }
+
+export function futureNetworkingSlots(config: NetworkingConfig, event: { startDate: Date; endDate: Date }) {
+  return networkingSlots(config, event).filter((slot) => Date.parse(slot) > Date.now());
+}
+
+export function networkingSlotEnd(start: Date, config: Pick<NetworkingConfig, "slotDurationMinutes">) {
+  return new Date(start.getTime() + config.slotDurationMinutes * 60_000);
+}
+
+export function networkingProposalExpiry(start: Date, config: Pick<NetworkingConfig, "requestExpiryHours">) {
+  return new Date(Math.min(Date.now() + config.requestExpiryHours * 3_600_000, start.getTime()));
+}
 export function networkingPublicProfile<T extends Record<string, unknown>>(
   profile: T,
 ) {
@@ -95,5 +131,3 @@ export function csvCell(value: unknown) {
   if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
   return `"${text.replace(/"/g, '""')}"`;
 }
-
-export { normalizeNetworkingSearch, networkingSearchMatches } from "@app/db";

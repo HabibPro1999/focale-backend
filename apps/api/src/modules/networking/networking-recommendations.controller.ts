@@ -1,19 +1,11 @@
+import { networkingOrganizerAccess } from "./networking.organizer-access";
+import { requireDiscovery, networkingPublicProfile } from "./networking.policy";
+
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
 import type { AuthUser } from "../../core/auth/user-cache";
-import { assertEventAccess } from "../../core/auth/assert-event-access";
 import { getConfig } from "../../core/config";
-import { assertClientModuleEnabled } from "../clients/module-gates";
-import { assertEventWritable } from "../events";
-import {
-  Controller,
-  ForbiddenException,
-  Get,
-  Headers,
-  Ip,
-  Param,
-  Post,
-} from "@nestjs/common";
+import { Controller, Get, Headers, Ip, Param, Post } from "@nestjs/common";
 import {
   findNetworkingVectorCandidates,
   getNetworkingRecommendationProfiles,
@@ -21,7 +13,6 @@ import {
   reindexNetworkingEvent,
 } from "@app/db";
 import { NetworkingService } from "./networking.service";
-import { networkingPublicProfile } from "./networking.policy";
 
 import { profileEmbeddingInput } from "@app/integrations";
 import { NetworkingRecommendationCache } from "./networking-recommendation-cache";
@@ -59,8 +50,7 @@ export class NetworkingRecommendationsController {
     @Headers("authorization") authorization?: string,
   ) {
     const ctx = await this.networking.participant(slug, authorization, { ip });
-    if (!ctx.config.swipeEnabled && !ctx.config.searchEnabled)
-      throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Participant discovery is disabled" });
+    requireDiscovery(ctx, "Participant discovery is disabled");
     const model = getConfig().networking.embedding.model;
     const cacheKey = JSON.stringify([
       ctx.event.id,
@@ -162,17 +152,13 @@ export class NetworkingRecommendationsController {
 @Auth()
 @Controller("api/events/:eventId/networking/recommendations")
 export class NetworkingRecommendationAdminController {
-  private async access(user: AuthUser, eventId: string, write = false) {
-    const event = await assertEventAccess(user, eventId);
-    await assertClientModuleEnabled(event.clientId, "networking");
-    if (write) assertEventWritable(event);
-  }
+
   @Get("status")
   async status(
     @CurrentUser() user: AuthUser,
     @Param("eventId") eventId: string,
   ) {
-    await this.access(user, eventId);
+    await networkingOrganizerAccess(user, eventId);
     return {
       configured: Boolean(getConfig().networking.embedding.apiKey),
       model: getConfig().networking.embedding.model,
@@ -185,7 +171,7 @@ export class NetworkingRecommendationAdminController {
     @CurrentUser() user: AuthUser,
     @Param("eventId") eventId: string,
   ) {
-    await this.access(user, eventId, true);
+    await networkingOrganizerAccess(user, eventId, true);
     return { queued: await reindexNetworkingEvent(eventId) };
   }
 }

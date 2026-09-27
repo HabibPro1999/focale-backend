@@ -3,10 +3,10 @@ import ExcelJS from "exceljs";
 const data = vi.hoisted(() => ({ rows: {} as Record<string, unknown[]> }));
 vi.mock("@app/db", () => ({ networkingStore: () => ({ all: async (kind: string) => data.rows[kind] ?? [] }) }));
 import { NetworkingExportsService } from "./networking.exports.service";
-import type { NetworkingAdminService } from "./networking.admin.service";
+
 import type { NetworkingSocialService } from "./networking.social.service";
 import type { NetworkingMeetingsService } from "./networking.meetings.service";
-const service = new NetworkingExportsService({} as NetworkingAdminService, {} as NetworkingSocialService, {} as NetworkingMeetingsService);
+const service = new NetworkingExportsService({} as NetworkingSocialService, {} as NetworkingMeetingsService);
 const event = { id: "event", name: "Test" } as Parameters<typeof service.admin>[0];
 describe("networking organizer export contracts", () => {
   beforeEach(() => {
