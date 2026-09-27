@@ -1,5 +1,6 @@
 import type { PgSelect } from "drizzle-orm/pg-core";
 import { and, eq, inArray, sql } from "drizzle-orm";
+import type { AutomaticEmailTrigger } from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
 import { enqueueOutboxEvent } from "../outbox";
 import { rowCountOf } from "../helpers";
@@ -521,7 +522,7 @@ export async function getRegistrationCoveredAccessIds(
 // ---------------------------------------------------------------------------
 
 export type TriggeredEmailOutboxPayload = {
-  trigger: string;
+  trigger: AutomaticEmailTrigger;
   eventId: string;
   registration: {
     id: string;

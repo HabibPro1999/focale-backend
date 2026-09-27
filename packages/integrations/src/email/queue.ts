@@ -22,11 +22,19 @@ import type { NormalizedEventType } from "./providers/email-provider.types";
 // =============================================================================
 
 import { createLogger, makeWorkerId, escapeHtml } from "@app/shared";
-import type { AppEvent, AutomaticEmailTrigger, EmailStatus } from "@app/contracts";
+import {
+  CERTIFICATE_TEMPLATE_IDS_KEY,
+  EMAIL_FALLBACK_BODY_KEY,
+  EMAIL_FALLBACK_SUBJECT_KEY,
+  type AppEvent,
+  type AutomaticEmailTrigger,
+  type EmailStatus,
+} from "@app/contracts";
 import {
   type SponsorshipEmailOutboxPayload,
   getTemplateByTrigger,
   createEmailLog,
+  queuedEmailLogValues,
   hasActiveEmailLogForRegistrationTrigger,
   hasActiveSponsorshipEmailLog,
   emailQueue,
@@ -36,6 +44,7 @@ import {
   beginProviderAttempt,
   markEmailSent,
   markEmailFailed,
+  emailFailureStatus,
   markEmailSkipped,
   markEmailUncertain,
   readEmailLogStatus,
@@ -59,11 +68,14 @@ import {
   type SendEmailInput,
   type SendEmailResult,
 } from "./providers/email-provider.types";
-import { resolveVariables, buildEmailContextWithAccess } from "./rendering/index";
+import {
+  resolveEmailParts,
+  buildEmailContextWithAccess,
+  type EmailParts,
+} from "./rendering/index";
 
 const logger = createLogger({ name: "email:queue" });
 
-const MAX_RETRIES = 3;
 const DEFAULT_WORKER_ID = makeWorkerId("email");
 /** Tries of an outcome write after the provider call (never a resend). */
 const OUTCOME_WRITE_RETRY_DELAYS_MS = [0, 250, 1_000] as const;
@@ -169,12 +181,12 @@ function getOptionalContextString(
 // Fallback template (C1/N4): when queueAbstractEmail found no admin template it
 // stashes an unresolved {{var}} subject/body pair directly in contextSnapshot
 // instead of a real EmailTemplate row. Detected here so the send path treats it
-// exactly like a template — resolved via the same resolveVariables call — and
+// exactly like a template — resolved via the same resolveEmailParts call — and
 // ACTUALLY SENDS, rather than hitting the "no template" skip.
 // -----------------------------------------------------------------------------
-// The admin resend (@app/db email-resend.ts) checks the same keys.
-export const FALLBACK_SUBJECT_KEY = "_fallbackSubject";
-export const FALLBACK_BODY_KEY = "_fallbackPlainBody";
+// The @app/contracts keys (the admin resend in @app/db checks them too).
+export const FALLBACK_SUBJECT_KEY = EMAIL_FALLBACK_SUBJECT_KEY;
+export const FALLBACK_BODY_KEY = EMAIL_FALLBACK_BODY_KEY;
 
 interface FallbackTemplate {
   subject: string;
@@ -223,19 +235,19 @@ export async function queueEmail(
 ): Promise<
   { ok: true; log: EmailLogRow } | { ok: false; conflictIndex: string }
 > {
-  const result = await createEmailLog({
-    trigger: input.trigger ?? null,
-    templateId: input.templateId ?? null,
-    registrationId: input.registrationId ?? null,
-    abstractId: input.abstractId ?? null,
-    abstractTrigger: input.abstractTrigger ?? null,
-    recipientEmail: input.recipientEmail,
-    recipientName: input.recipientName ?? null,
-    subject: "",
-    status: "QUEUED",
-    contextSnapshot: input.contextSnapshot ?? null,
-    dedupeKey: input.dedupeKey ?? null,
-  });
+  const result = await createEmailLog(
+    queuedEmailLogValues({
+      trigger: input.trigger ?? null,
+      templateId: input.templateId ?? null,
+      registrationId: input.registrationId ?? null,
+      abstractId: input.abstractId ?? null,
+      abstractTrigger: input.abstractTrigger ?? null,
+      recipientEmail: input.recipientEmail,
+      recipientName: input.recipientName ?? null,
+      contextSnapshot: input.contextSnapshot ?? null,
+      dedupeKey: input.dedupeKey ?? null,
+    }),
+  );
   if (result.ok) notifyStatusChange(result.log.id, "QUEUED");
   return result;
 }
@@ -440,17 +452,17 @@ export async function processEmailQueue(
       // Stored-JSON check (plan 5.2) here rather than in the batch load: under
       // JSONB_VALIDATION=enforce an invalid snapshot fails this email only.
       const contextSnapshot = readEmailContextSnapshot(emailLog.contextSnapshot, emailLog.id);
-      let templateSubject: string;
-      let templateHtml: string;
-      let templatePlain: string;
+      let template: EmailParts;
 
       if (emailLog.template) {
         if (!emailLog.template.isActive) {
           return skipEmail(emailLog.id, "Template is inactive");
         }
-        templateSubject = emailLog.template.subject;
-        templateHtml = emailLog.template.htmlContent || "";
-        templatePlain = emailLog.template.plainContent || "";
+        template = {
+          subject: emailLog.template.subject,
+          html: emailLog.template.htmlContent || "",
+          plain: emailLog.template.plainContent || "",
+        };
       } else {
         // C1/N4: a plain-text fallback body (built by queueAbstractEmail when
         // no admin template exists) rides in contextSnapshot as an unresolved
@@ -460,9 +472,11 @@ export async function processEmailQueue(
         if (!fallback) {
           return skipEmail(emailLog.id, "No template found");
         }
-        templateSubject = fallback.subject;
-        templatePlain = fallback.body;
-        templateHtml = plainTextToHtml(fallback.body);
+        template = {
+          subject: fallback.subject,
+          html: plainTextToHtml(fallback.body),
+          plain: fallback.body,
+        };
       }
 
       let context: QueueEmailContext | null = null;
@@ -478,16 +492,14 @@ export async function processEmailQueue(
         return skipEmail(emailLog.id, "Could not build email context");
       }
 
-      const resolvedSubject = resolveVariables(templateSubject, context, { mode: "text" });
-      const resolvedHtml = resolveVariables(templateHtml, context);
-      const resolvedPlain = resolveVariables(templatePlain, context, { mode: "text" });
+      const resolved = resolveEmailParts(template, context);
 
       // Persist the resolved subject only if the lease is still held.
       if (
         !(await writeResolvedSubjectIfLeaseHeld(
           emailLog.id,
           workerId,
-          resolvedSubject,
+          resolved.subject,
         ))
       ) {
         logger.warn(
@@ -499,7 +511,7 @@ export async function processEmailQueue(
 
       // Certificate attachments (delegated to the wave-3 generator).
       let attachments: EmailAttachment[] | undefined;
-      const certTemplateIds = context._certificateTemplateIds;
+      const certTemplateIds = context[CERTIFICATE_TEMPLATE_IDS_KEY];
       if (
         emailLog.trigger === "CERTIFICATE_SENT" &&
         Array.isArray(certTemplateIds) &&
@@ -551,9 +563,9 @@ export async function processEmailQueue(
           getOptionalContextString(context, "congressName"),
         replyTo: getOptionalContextString(context, "organizerEmail"),
         replyToName: getOptionalContextString(context, "organizerName"),
-        subject: resolvedSubject,
-        html: resolvedHtml,
-        plainText: resolvedPlain,
+        subject: resolved.subject,
+        html: resolved.html,
+        plainText: resolved.plain,
         trackingId: emailLog.id,
         attachments,
       });
@@ -599,7 +611,10 @@ export async function processEmailQueue(
       case "rejected":
         return failEmail(emailLog, error, workerId);
       case "ambiguous": {
-        const retriesLeft = emailLog.attemptCount <= (emailLog.maxRetries ?? MAX_RETRIES);
+        // Only while the failure path would requeue it.
+        const retriesLeft =
+          emailFailureStatus(emailLog.attemptCount, emailLog.maxRetries) ===
+          "QUEUED";
         if (sendResult.idempotentRetry && retriesLeft) {
           return failEmail(
             emailLog,
@@ -723,8 +738,10 @@ async function failEmail(
     emailLog.maxRetries,
   );
   if (ok) {
-    const willRetry = emailLog.attemptCount <= (emailLog.maxRetries ?? MAX_RETRIES);
-    notifyStatusChange(emailLog.id, willRetry ? "QUEUED" : "FAILED");
+    notifyStatusChange(
+      emailLog.id,
+      emailFailureStatus(emailLog.attemptCount, emailLog.maxRetries),
+    );
   }
   return ok ? "failed" : "lease-lost";
 }

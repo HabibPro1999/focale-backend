@@ -11,7 +11,12 @@ import {
   type InferSelectModel,
   type SQL,
 } from "drizzle-orm";
-import { getPrimaryLanguage, type LanguageCode, type StoredCertificateZones } from "@app/contracts";
+import {
+  CERTIFICATE_TEMPLATE_IDS_KEY,
+  getPrimaryLanguage,
+  type LanguageCode,
+  type StoredCertificateZones,
+} from "@app/contracts";
 import { newId } from "@app/shared";
 import { getDb, type DbExecutor } from "../client";
 import { certificateTemplates } from "../schema/certificates";
@@ -20,7 +25,6 @@ import {
   events,
   accessCheckIns,
 } from "../schema/events-access";
-import { clients } from "../schema/users-clients";
 import { registrations } from "../schema/registrations";
 import { forms } from "../schema/forms";
 import { abstractConfig, abstracts } from "../schema/abstracts";
@@ -29,11 +33,16 @@ import { lockEventForUpdate } from "../locks";
 import { withLockingTxn } from "../txn";
 import {
   formLanguagesSql,
+  selectRegistrationEmailContexts,
+  toRegistrationEmailContext,
+  type RegistrationEmailContext,
+} from "./email-context";
+import {
   insertEmailLogsSkippingConflicts,
+  queuedEmailLogValues,
   type EmailLogInsert,
   type EmailLogRow,
-  type RegistrationEmailContext,
-} from "./email";
+} from "./email-logs";
 import { checkCertificateTemplateRow, readEmailContextSnapshot } from "./stored-json";
 
 type EmailLogStatus = EmailLogRow["status"];
@@ -524,18 +533,7 @@ export async function getRegistrationsForCertificateSend(
     conds.push(inArray(registrations.id, registrationIds));
   }
 
-  const rows = await exec
-    .select({
-      registration: registrations,
-      event: events,
-      client: { name: clients.name, email: clients.email, phone: clients.phone },
-      formLanguages: formLanguagesSql(),
-    })
-    .from(registrations)
-    .innerJoin(events, eq(events.id, registrations.eventId))
-    .innerJoin(clients, eq(clients.id, events.clientId))
-    .leftJoin(forms, eq(forms.id, registrations.formId))
-    .where(and(...conds));
+  const rows = await selectRegistrationEmailContexts(exec).where(and(...conds));
 
   if (rows.length === 0) return [];
 
@@ -556,9 +554,7 @@ export async function getRegistrationsForCertificateSend(
   }
 
   return rows.map((r) => ({
-    ...r.registration,
-    language: getPrimaryLanguage(r.formLanguages),
-    event: { ...r.event, client: r.client },
+    ...toRegistrationEmailContext(r),
     accessCheckIns: checkInsByReg.get(r.registration.id) ?? [],
   }));
 }
@@ -727,7 +723,8 @@ export async function getAlreadySentCertTemplateIds(
 
   for (const row of rows) {
     if (!row.registrationId) continue;
-    const ids = readEmailContextSnapshot(row.contextSnapshot, row.id)?._certificateTemplateIds;
+    const snapshot = readEmailContextSnapshot(row.contextSnapshot, row.id);
+    const ids = snapshot?.[CERTIFICATE_TEMPLATE_IDS_KEY];
     if (!Array.isArray(ids)) continue;
     const set = map.get(row.registrationId) ?? new Set<string>();
     for (const id of ids) {
@@ -849,7 +846,8 @@ export async function getAlreadySentAbstractCertTemplateIds(
 
   for (const row of rows) {
     if (!row.abstractId) continue;
-    const ids = readEmailContextSnapshot(row.contextSnapshot, row.id)?._certificateTemplateIds;
+    const snapshot = readEmailContextSnapshot(row.contextSnapshot, row.id);
+    const ids = snapshot?.[CERTIFICATE_TEMPLATE_IDS_KEY];
     if (!Array.isArray(ids)) continue;
     const set = map.get(row.abstractId) ?? new Set<string>();
     for (const id of ids) {
@@ -944,7 +942,7 @@ export function planCertificateEmailLogs(
       return {
         status: "insert",
         certificates: remaining,
-        row: {
+        row: queuedEmailLogValues({
           id: newId(),
           trigger: "CERTIFICATE_SENT",
           templateId: input.emailTemplateId,
@@ -953,15 +951,13 @@ export function planCertificateEmailLogs(
             : { abstractId: candidate.targetId }),
           recipientEmail: candidate.recipientEmail,
           recipientName: candidate.recipientName,
-          subject: "",
-          status: "QUEUED",
           contextSnapshot: {
             ...candidate.contextSnapshot,
             certificateCount: String(remaining.length),
             certificateList: remaining.map((c) => c.name).join(", "),
-            _certificateTemplateIds: remaining.map((c) => c.id),
+            [CERTIFICATE_TEMPLATE_IDS_KEY]: remaining.map((c) => c.id),
           },
-        },
+        }),
       };
     });
   };

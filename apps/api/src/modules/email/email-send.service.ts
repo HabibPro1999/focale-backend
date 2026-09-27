@@ -13,23 +13,23 @@ import {
   listSponsorshipBatchesForBulk,
   getClientById,
   insertEmailLogsSkippingConflicts,
+  queuedEmailLogValues,
   withTxn,
+  type BulkRegistrationRow,
   type EmailTemplateRow,
   type EmailLogInsert,
 } from "@app/db";
 import {
   getEmailProvider,
   getSampleEmailContext,
-  resolveVariables,
+  resolveEmailParts,
   buildEmailContextWithAccess,
   buildBatchEmailContext,
-  renderTemplateToMjml,
-  compileMjmlToHtml,
-  extractPlainText,
   resendUncertainEmail,
   sendEmailNow,
 } from "@app/integrations";
 import { AppException, conflict, notFound } from "../../core/app-exception";
+import { compileTemplateContent } from "./template-content";
 
 /** Minimal event shape the send paths need (subset of EventWithPricing). */
 export interface SendEventContext {
@@ -57,25 +57,21 @@ export class EmailSendService {
       : DEFAULT_LANGUAGE;
     const sampleContext = getSampleEmailContext(language);
 
-    const resolvedSubject = resolveVariables(template.subject, sampleContext, {
-      mode: "text",
-    });
-    const resolvedHtml = resolveVariables(
-      template.htmlContent || "",
+    const resolved = resolveEmailParts(
+      {
+        subject: template.subject,
+        html: template.htmlContent || "",
+        plain: template.plainContent || "",
+      },
       sampleContext,
-    );
-    const resolvedPlainText = resolveVariables(
-      template.plainContent || "",
-      sampleContext,
-      { mode: "text" },
     );
 
     const result = await getEmailProvider().sendEmail({
       to: recipientEmail,
       toName: recipientName,
-      subject: `[TEST] ${resolvedSubject}`,
-      html: resolvedHtml,
-      plainText: resolvedPlainText,
+      subject: `[TEST] ${resolved.subject}`,
+      html: resolved.html,
+      plainText: resolved.plain,
       categories: ["test-email"],
     });
 
@@ -108,12 +104,7 @@ export class EmailSendService {
       return this.bulkSendSponsors(event, templateId);
     }
 
-    let registrations: {
-      id: string;
-      email: string;
-      firstName: string | null;
-      lastName: string | null;
-    }[];
+    let registrations: BulkRegistrationRow[];
 
     if (registrationIds && registrationIds.length > 0) {
       registrations = await getRegistrationsByIds(event.id, registrationIds);
@@ -133,15 +124,15 @@ export class EmailSendService {
       };
     }
 
-    const values: EmailLogInsert[] = registrations.map((reg) => ({
-      templateId,
-      registrationId: reg.id,
-      recipientEmail: reg.email,
-      recipientName:
-        [reg.firstName, reg.lastName].filter(Boolean).join(" ") || null,
-      subject: "",
-      status: "QUEUED",
-    }));
+    const values: EmailLogInsert[] = registrations.map((reg) =>
+      queuedEmailLogValues({
+        templateId,
+        registrationId: reg.id,
+        recipientEmail: reg.email,
+        recipientName:
+          [reg.firstName, reg.lastName].filter(Boolean).join(" ") || null,
+      }),
+    );
     const queued = (await withTxn((tx) => insertEmailLogsSkippingConflicts(values, tx))).size;
 
     return {
@@ -209,14 +200,14 @@ export class EmailSendService {
     }
 
     const valid = sponsors.filter((s) => s.email.trim().length > 0);
-    const values: EmailLogInsert[] = valid.map((s) => ({
-      templateId,
-      recipientEmail: s.email,
-      recipientName: s.recipientName || null,
-      subject: "",
-      status: "QUEUED",
-      contextSnapshot: s.contextSnapshot,
-    }));
+    const values: EmailLogInsert[] = valid.map((s) =>
+      queuedEmailLogValues({
+        templateId,
+        recipientEmail: s.email,
+        recipientName: s.recipientName || null,
+        contextSnapshot: s.contextSnapshot,
+      }),
+    );
     const queued = (await withTxn((tx) => insertEmailLogsSkippingConflicts(values, tx))).size;
 
     return {
@@ -277,13 +268,11 @@ export class EmailSendService {
 
     const context = await buildEmailContextWithAccess(registration);
 
-    const mjml = renderTemplateToMjml(content);
-    const { html: rawHtml } = await compileMjmlToHtml(mjml);
-    const rawPlain = extractPlainText(content);
-
-    const resolvedSubject = resolveVariables(subject, context, { mode: "text" });
-    const resolvedHtml = resolveVariables(rawHtml, context);
-    const resolvedPlain = resolveVariables(rawPlain, context, { mode: "text" });
+    const { htmlContent, plainContent } = await compileTemplateContent(content);
+    const resolved = resolveEmailParts(
+      { subject, html: htmlContent, plain: plainContent },
+      context,
+    );
 
     const recipientName =
       [registration.firstName, registration.lastName]
@@ -296,9 +285,9 @@ export class EmailSendService {
       fromName: context.eventName,
       replyTo: context.organizerEmail || undefined,
       replyToName: context.organizerName || undefined,
-      subject: resolvedSubject,
-      html: resolvedHtml,
-      plainText: resolvedPlain,
+      subject: resolved.subject,
+      html: resolved.html,
+      plainText: resolved.plain,
       categories: ["custom-one-off"],
       log: { registrationId: registration.id, contextSnapshot: { ...context } },
     });

@@ -5,7 +5,7 @@ import { emailLogs } from "../schema/email";
 import { events } from "../schema/events-access";
 import { registrations } from "../schema/registrations";
 import { abstracts } from "../schema/abstracts";
-import type { EmailLogRealtimeTarget } from "./email";
+import type { EmailLogRealtimeTarget } from "./email-logs";
 
 /**
  * getEmailLogRealtimeTarget for many email logs in one query (the coalesced

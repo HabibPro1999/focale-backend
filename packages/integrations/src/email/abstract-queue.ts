@@ -21,7 +21,11 @@ import { ABSTRACT_STATUS_LABELS_FR, ABSTRACT_TYPE_LABELS_FR } from "@app/contrac
 // =============================================================================
 
 import { createLogger, getAbstractTitle } from "@app/shared";
-import type { AbstractEmailTrigger } from "@app/contracts";
+import {
+  EMAIL_FALLBACK_BODY_KEY,
+  EMAIL_FALLBACK_SUBJECT_KEY,
+  type AbstractEmailTrigger,
+} from "@app/contracts";
 import {
   getAbstractForEmailContext,
   findAbstractEmailTemplate,
@@ -263,8 +267,8 @@ export async function queueAbstractEmail(
     );
     contextSnapshot = {
       ...contextSnapshot,
-      _fallbackSubject: fallbackSubject,
-      _fallbackPlainBody: fallbackBody,
+      [EMAIL_FALLBACK_SUBJECT_KEY]: fallbackSubject,
+      [EMAIL_FALLBACK_BODY_KEY]: fallbackBody,
     };
   }
 

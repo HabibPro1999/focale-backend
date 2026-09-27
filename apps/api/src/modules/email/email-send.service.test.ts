@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { tx } = vi.hoisted(() => ({ tx: { executor: "tx" } }));
-vi.mock("@app/db", () => ({
+vi.mock("@app/db", async (importOriginal) => ({
+  queuedEmailLogValues: (await importOriginal<typeof import("@app/db")>())
+    .queuedEmailLogValues,
   withTxn: (fn: (exec: unknown) => unknown) => fn(tx),
   getRegistrationForEmailContext: vi.fn(),
   getRegistrationFormLanguage: vi.fn(),
@@ -16,7 +18,7 @@ const sendEmailMock = vi.fn();
 vi.mock("@app/integrations", () => ({
   getEmailProvider: () => ({ sendEmail: sendEmailMock }),
   getSampleEmailContext: vi.fn(() => ({})),
-  resolveVariables: vi.fn((tpl: string) => tpl),
+  resolveEmailParts: vi.fn((parts: unknown) => parts),
   buildEmailContextWithAccess: vi.fn(async () => ({
     eventName: "Conf",
     organizerEmail: "org@x.com",
@@ -39,7 +41,7 @@ import {
   getClientById,
   insertEmailLogsSkippingConflicts,
 } from "@app/db";
-import { getSampleEmailContext, resendUncertainEmail, resolveVariables, sendEmailNow } from "@app/integrations";
+import { getSampleEmailContext, resendUncertainEmail, resolveEmailParts, sendEmailNow } from "@app/integrations";
 import { EmailSendService } from "./email-send.service";
 
 const service = new EmailSendService();
@@ -85,12 +87,12 @@ describe("testSend", () => {
       }),
     );
     expect(sendEmailNow).not.toHaveBeenCalled();
-    // 6.1: subject and plain text resolve as text; HTML keeps escaping.
-    expect(vi.mocked(resolveVariables).mock.calls.map((c) => c[2])).toEqual([
-      { mode: "text" },
-      undefined,
-      { mode: "text" },
-    ]);
+    // 6.1: the template's parts are filled from the sample context
+    // (resolveEmailParts owns the text / HTML modes).
+    expect(resolveEmailParts).toHaveBeenCalledExactlyOnceWith(
+      { subject: "Hello", html: "<p>hi</p>", plain: "hi" },
+      {},
+    );
   });
 
   it("throws 502 when the provider fails", async () => {
@@ -144,6 +146,38 @@ describe("bulkSend — registrants", () => {
       recipientName: "A",
       status: "QUEUED",
     });
+  });
+
+  it("writes exactly one QUEUED row per registrant", async () => {
+    vi.mocked(getRegistrationsByIds).mockResolvedValue([
+      { id: "r1", email: "a@x.com", firstName: "A", lastName: "B" },
+      { id: "r2", email: "b@x.com", firstName: null, lastName: null },
+    ]);
+    vi.mocked(insertEmailLogsSkippingConflicts).mockResolvedValue(new Set());
+
+    await service.bulkSend(event, "tmpl-1", {
+      audience: "registrants",
+      registrationIds: ["r1", "r2"],
+    });
+
+    expect(vi.mocked(insertEmailLogsSkippingConflicts).mock.calls[0][0]).toStrictEqual([
+      {
+        templateId: "tmpl-1",
+        registrationId: "r1",
+        recipientEmail: "a@x.com",
+        recipientName: "A B",
+        subject: "",
+        status: "QUEUED",
+      },
+      {
+        templateId: "tmpl-1",
+        registrationId: "r2",
+        recipientEmail: "b@x.com",
+        recipientName: null,
+        subject: "",
+        status: "QUEUED",
+      },
+    ]);
   });
 
   it("queries by filters when no ids given", async () => {
@@ -230,6 +264,40 @@ describe("bulkSend — sponsors", () => {
     expect(rows[0].recipientEmail).toBe("Lab@X.com"); // newest batch contact info
   });
 
+  it("writes exactly one QUEUED row per sponsor with an email", async () => {
+    vi.mocked(getClientById).mockResolvedValue({ name: "Org" } as never);
+    const sponsorships = [
+      { beneficiaryName: "A", beneficiaryEmail: "a@x", totalAmount: 100 },
+    ];
+    vi.mocked(listSponsorshipBatchesForBulk).mockResolvedValue([
+      { labName: "Lab 1", contactName: "Contact", email: "one@x.com", phone: null, sponsorships },
+      { labName: "Lab 2", contactName: "", email: "two@x.com", phone: null, sponsorships },
+      { labName: "Lab 3", contactName: "Blank", email: " ", phone: null, sponsorships },
+    ]);
+    vi.mocked(insertEmailLogsSkippingConflicts).mockResolvedValue(new Set());
+
+    await service.bulkSend(event, "tmpl-1", { audience: "sponsors" });
+
+    expect(vi.mocked(insertEmailLogsSkippingConflicts).mock.calls[0][0]).toStrictEqual([
+      {
+        templateId: "tmpl-1",
+        recipientEmail: "one@x.com",
+        recipientName: "Contact",
+        subject: "",
+        status: "QUEUED",
+        contextSnapshot: { labName: "Lab" },
+      },
+      {
+        templateId: "tmpl-1",
+        recipientEmail: "two@x.com",
+        recipientName: null,
+        subject: "",
+        status: "QUEUED",
+        contextSnapshot: { labName: "Lab" },
+      },
+    ]);
+  });
+
   it("returns queued:0 when there are no sponsors", async () => {
     vi.mocked(getClientById).mockResolvedValue({ name: "Org" } as never);
     vi.mocked(listSponsorshipBatchesForBulk).mockResolvedValue([]);
@@ -275,11 +343,10 @@ describe("sendCustom", () => {
     vi.mocked(sendEmailNow).mockResolvedValue({ status: "SENT", emailLogId: "log-1", messageId: "m1" });
 
     const res = await service.sendCustom(event, "reg-1", "Subject", content);
-    expect(vi.mocked(resolveVariables).mock.calls.map((c) => c[2])).toEqual([
-      { mode: "text" },
-      undefined,
-      { mode: "text" },
-    ]);
+    expect(resolveEmailParts).toHaveBeenCalledExactlyOnceWith(
+      { subject: "Subject", html: "HTML", plain: "PLAIN" },
+      { eventName: "Conf", organizerEmail: "org@x.com", organizerName: "Org" },
+    );
     expect(sendEmailNow).toHaveBeenCalledWith({
       to: "reg@x.com",
       toName: "Reg One",

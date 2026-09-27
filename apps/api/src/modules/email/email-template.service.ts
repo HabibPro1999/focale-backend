@@ -20,11 +20,6 @@ import {
   type EmailTemplateInsert,
   type EventEmailLog,
 } from "@app/db";
-import {
-  renderTemplateToMjml,
-  compileMjmlToHtml,
-  extractPlainText,
-} from "@app/integrations";
 import { paginate, getSkip, type PaginatedResult } from "@app/shared";
 import {
   AppException,
@@ -32,6 +27,7 @@ import {
   conflict,
   notFound,
 } from "../../core/app-exception";
+import { compileTemplateContent } from "./template-content";
 
 interface TemplateTriggerState {
   category: EmailTemplateCategory;
@@ -127,9 +123,8 @@ export class EmailTemplateService {
       abstractTrigger: triggerState.abstractTrigger,
     });
 
-    const mjmlContent = renderTemplateToMjml(input.content);
-    const { html: htmlContent } = await compileMjmlToHtml(mjmlContent);
-    const plainContent = extractPlainText(input.content);
+    const { mjmlContent, htmlContent, plainContent } =
+      await compileTemplateContent(input.content);
 
     const values: EmailTemplateInsert = {
       clientId: input.clientId,
@@ -198,11 +193,7 @@ export class EmailTemplateService {
     if (input.subject !== undefined) patch.subject = input.subject;
     if (input.content) {
       patch.content = input.content;
-      patch.mjmlContent = renderTemplateToMjml(input.content);
-      patch.htmlContent = (
-        await compileMjmlToHtml(patch.mjmlContent)
-      ).html;
-      patch.plainContent = extractPlainText(input.content);
+      Object.assign(patch, await compileTemplateContent(input.content));
     }
     if (input.category !== undefined) patch.category = input.category;
     if (
