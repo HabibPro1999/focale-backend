@@ -15,7 +15,8 @@ import { EventsService } from "../modules/events/events.service";
 import { CertificatesController } from "../modules/certificates/certificates.controller";
 import { CertificatesService } from "../modules/certificates/certificates.service";
 import { RegistrationEditPublicController } from "../modules/registrations/registrations.public.controller";
-import { RegistrationsService } from "../modules/registrations/registrations.service";
+import { RegistrationSelfService } from "../modules/registrations/registration-self.service";
+import { RegistrationPaymentProofService } from "../modules/registrations/registration-payment-proof.service";
 import { AbstractsPublicController } from "../modules/abstracts/abstracts.public.controller";
 import { AbstractsService } from "../modules/abstracts/abstracts.service";
 import { AbstractsFinalFileService, MAX_FINAL_FILE_SIZE } from "../modules/abstracts/abstracts.final-file.service";
@@ -31,7 +32,10 @@ const registrations = { verifyEditToken: vi.fn(), uploadPaymentProof: vi.fn() };
 const finalFile = { uploadAbstractFinalFile: vi.fn() };
 const banner = new EventsController(events as unknown as EventsService);
 const certificate = new CertificatesController(certificates as unknown as CertificatesService);
-const proof = new RegistrationEditPublicController(registrations as unknown as RegistrationsService);
+const proof = new RegistrationEditPublicController(
+  registrations as unknown as RegistrationSelfService,
+  registrations as unknown as RegistrationPaymentProofService,
+);
 const abstract = new AbstractsPublicController({} as AbstractsService, finalFile as unknown as AbstractsFinalFileService);
 const routes = [
   { name: "event banner", read: (req: MultipartRequest) => banner.uploadBanner(user, { id: "id" }, req), fileArgs: [], upload: events.uploadEventBanner, final: false },

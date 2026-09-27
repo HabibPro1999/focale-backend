@@ -46,7 +46,10 @@ import type { Config } from "../../core/config";
 import { AccessService } from "../access/access.service";
 import { PricingPublicController } from "../pricing/pricing.public.controller";
 import { PricingService } from "../pricing/pricing.service";
-import { RegistrationsService } from "./registrations.service";
+import { RegistrationsReadService } from "./registrations.read.service";
+import { RegistrationsCreateService } from "./registrations.create.service";
+import { RegistrationsAdminService } from "./registrations.admin.service";
+import { RegistrationSelfService } from "./registration-self.service";
 
 const FUTURE = new Date(Date.now() + 7 * 86_400_000);
 
@@ -121,7 +124,10 @@ const PRICING: EventPricingWithRules = {
 const client = { active: true, enabledModules: ["registrations", "pricing"] };
 const openEvent = { clientId: "c1", status: "OPEN", endDate: FUTURE, client };
 
-let service: RegistrationsService;
+let read: RegistrationsReadService;
+let create: RegistrationsCreateService;
+let admin: RegistrationsAdminService;
+let self: RegistrationSelfService;
 let quote: PricingPublicController;
 let access: Record<string, ReturnType<typeof vi.fn>>;
 
@@ -186,11 +192,10 @@ beforeEach(() => {
   };
   const pricing = new PricingService();
   quote = new PricingPublicController(pricing);
-  service = new RegistrationsService(
-    access as unknown as AccessService,
-    pricing,
-    { publicLinkAllowedOrigins: [] } as unknown as Config,
-  );
+  read = new RegistrationsReadService();
+  create = new RegistrationsCreateService(access as unknown as AccessService, pricing, { publicLinkAllowedOrigins: [] } as unknown as Config, read);
+  admin = new RegistrationsAdminService(access as unknown as AccessService, pricing, read);
+  self = new RegistrationSelfService(access as unknown as AccessService, pricing, read);
 });
 
 function storedRow() {
@@ -228,7 +233,7 @@ describe("public quote equals the public create charge", () => {
       { formId: "form1" },
       { formData, selectedAccessItems: [], sponsorshipCodes: [] },
     );
-    await service.createPublicRegistration("form1", {
+    await create.createPublicRegistration("form1", {
       formData,
       email: "a@b.com",
       accessSelections: [],
@@ -251,7 +256,7 @@ describe("public quote equals the public create charge", () => {
       quote.calculatePrice({ formId: "form1" }, { formData, selectedAccessItems: [], sponsorshipCodes: [] }),
     ).rejects.toMatchObject({ code: ErrorCodes.FORM_VALIDATION_ERROR });
     await expect(
-      service.createPublicRegistration("form1", { formData, email: "a@b.com", accessSelections: [] } as never),
+      create.createPublicRegistration("form1", { formData, email: "a@b.com", accessSelections: [] } as never),
     ).rejects.toMatchObject({ code: ErrorCodes.FORM_VALIDATION_ERROR });
     expect(db.insertRegistrationRow).not.toHaveBeenCalled();
   });
@@ -277,7 +282,7 @@ describe("public self-edit stores and prices the visible answers", () => {
       event: { id: "ev1", name: "Ev", slug: "ev", ...openEvent },
     });
 
-    await service.editRegistrationPublic("reg1", {
+    await self.editRegistrationPublic("reg1", {
       expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
       formData: { member: "no", promo: "EARLY" },
     } as never);
@@ -305,7 +310,7 @@ describe("admin create/edit validate without enforcing required answers", () => 
 
   it("create stores and prices only the visible answers", async () => {
     // memberId is required and shown, but admins may leave it blank.
-    await service.createAdminRegistration("ev1", adminInput({ member: "yes", promo: "EARLY" }), "admin1");
+    await create.createAdminRegistration("ev1", adminInput({ member: "yes", promo: "EARLY" }), "admin1");
 
     const row = storedRow();
     expect(row.formData).toEqual({ member: "yes" });
@@ -314,7 +319,7 @@ describe("admin create/edit validate without enforcing required answers", () => 
 
   it("create rejects an answer that is not a valid option", async () => {
     await expect(
-      service.createAdminRegistration("ev1", adminInput({ member: "maybe" }), "admin1"),
+      create.createAdminRegistration("ev1", adminInput({ member: "maybe" }), "admin1"),
     ).rejects.toMatchObject({ code: ErrorCodes.FORM_VALIDATION_ERROR, statusCode: 400 });
     expect(db.insertRegistrationRow).not.toHaveBeenCalled();
   });
@@ -345,7 +350,7 @@ describe("admin create/edit validate without enforcing required answers", () => 
   it("edit stores and prices the cleaned answers", async () => {
     db.findRegistrationForMutation.mockResolvedValue(current);
 
-    await service.adminEditRegistration(
+    await admin.adminEditRegistration(
       "ev1",
       "reg1",
       { formData: { member: "no", memberId: "M-1", promo: " EARLY " } } as never,
@@ -363,7 +368,7 @@ describe("admin create/edit validate without enforcing required answers", () => 
   it("an access-only edit prices the stored answers", async () => {
     db.findRegistrationForMutation.mockResolvedValue(current);
 
-    await service.adminEditRegistration("ev1", "reg1", { accessSelections: [] } as never, "admin1");
+    await admin.adminEditRegistration("ev1", "reg1", { accessSelections: [] } as never, "admin1");
 
     expect(db.findRegistrationFormSchema).not.toHaveBeenCalled();
     const patch = db.updateRegistrationRow.mock.calls[0]?.[1] as {

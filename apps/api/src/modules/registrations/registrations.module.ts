@@ -1,7 +1,11 @@
 import { Module } from "@nestjs/common";
 import { AccessModule } from "../access/access.module";
 import { PricingModule } from "../pricing/pricing.module";
-import { RegistrationsService } from "./registrations.service";
+import { RegistrationsReadService } from "./registrations.read.service";
+import { RegistrationsCreateService } from "./registrations.create.service";
+import { RegistrationsAdminService } from "./registrations.admin.service";
+import { RegistrationSelfService } from "./registration-self.service";
+import { RegistrationPaymentProofService } from "./registration-payment-proof.service";
 import {
   RegistrationEditLinkController,
   RegistrationsController,
@@ -19,6 +23,6 @@ import {
     RegistrationsPublicController,
     RegistrationEditPublicController,
   ],
-  providers: [RegistrationsService],
+  providers: [RegistrationsReadService, RegistrationsCreateService, RegistrationsAdminService, RegistrationSelfService, RegistrationPaymentProofService],
 })
 export class RegistrationsModule {}

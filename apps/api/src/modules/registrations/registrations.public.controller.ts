@@ -4,7 +4,9 @@ import type { FastifyReply } from "fastify";
 import { readSingleFile, type MultipartRequest } from "../../core/multipart";
 import { ErrorCodes } from "@app/contracts";
 import { AppException } from "../../core/app-exception";
-import { RegistrationsService } from "./registrations.service";
+import { RegistrationsCreateService } from "./registrations.create.service";
+import { RegistrationSelfService } from "./registration-self.service";
+import { RegistrationPaymentProofService } from "./registration-payment-proof.service";
 import {
   CreateRegistrationBodyDto,
   EditTokenQueryDto,
@@ -22,7 +24,7 @@ const PAYMENT_PROOF_THROTTLE = { default: { limit: 10, ttl: 60_000 } };
 // POST /api/public/forms/:formId/register — submit a public registration.
 @Controller("api/public/forms")
 export class RegistrationsPublicController {
-  constructor(private readonly service: RegistrationsService) {}
+  constructor(private readonly create: RegistrationsCreateService) {}
 
   @Post(":formId/register")
   @Throttle(REGISTRATION_THROTTLE)
@@ -32,7 +34,7 @@ export class RegistrationsPublicController {
     @Res({ passthrough: true }) reply: FastifyReply,
   ) {
     const { created, registration, priceBreakdown } =
-      await this.service.createPublicRegistration(formId, body);
+      await this.create.createPublicRegistration(formId, body);
     // Idempotency hits return 200; a fresh create returns 201.
     void reply.status(created ? 201 : 200);
     return { registration, priceBreakdown };
@@ -42,7 +44,10 @@ export class RegistrationsPublicController {
 // Self-service edit — 64-hex edit token via X-Edit-Token header or ?token=.
 @Controller("api/public/registrations")
 export class RegistrationEditPublicController {
-  constructor(private readonly service: RegistrationsService) {}
+  constructor(
+    private readonly self: RegistrationSelfService,
+    private readonly proof: RegistrationPaymentProofService,
+  ) {}
 
   /** Header preferred over query. 401 if absent/malformed; 403 if it does not match. */
   private async requireToken(
@@ -58,7 +63,7 @@ export class RegistrationEditPublicController {
         401,
       );
     }
-    if (!(await this.service.verifyEditToken(registrationId, token))) {
+    if (!(await this.self.verifyEditToken(registrationId, token))) {
       throw new AppException(ErrorCodes.FORBIDDEN, "Invalid edit token", 403);
     }
   }
@@ -71,7 +76,7 @@ export class RegistrationEditPublicController {
     @Headers("x-edit-token") headerToken?: string,
   ) {
     await this.requireToken(registrationId, headerToken, token);
-    return this.service.getRegistrationForEdit(registrationId);
+    return this.self.getRegistrationForEdit(registrationId);
   }
 
   @Patch(":registrationId")
@@ -83,7 +88,7 @@ export class RegistrationEditPublicController {
     @Headers("x-edit-token") headerToken?: string,
   ) {
     await this.requireToken(registrationId, headerToken, token);
-    return this.service.editRegistrationPublic(registrationId, body);
+    return this.self.editRegistrationPublic(registrationId, body);
   }
 
   // PATCH /api/public/registrations/:registrationId/payment-method → { success: true }
@@ -96,7 +101,7 @@ export class RegistrationEditPublicController {
     @Headers("x-edit-token") headerToken?: string,
   ) {
     await this.requireToken(registrationId, headerToken, token);
-    await this.service.selectPaymentMethod(registrationId, body);
+    await this.self.selectPaymentMethod(registrationId, body);
     return { success: true };
   }
 
@@ -112,6 +117,6 @@ export class RegistrationEditPublicController {
   ) {
     await this.requireToken(registrationId, headerToken, token);
     const file = await readSingleFile(req);
-    return this.service.uploadPaymentProof(registrationId, file);
+    return this.proof.uploadPaymentProof(registrationId, file);
   }
 }
