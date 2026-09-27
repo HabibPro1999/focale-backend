@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import {
   findUsageAmountsByRegistration,
   getDb,
   insertUsage,
+  lockRegistrationForUpdate,
+  lockSponsorshipForUpdate,
   registrations,
   updateRegistrationSettlement,
+  withLockingTxn,
   withTxn,
   type DbExecutor,
 } from "@app/db";
@@ -35,11 +38,11 @@ async function settleLink(
   amount: number,
   opts: { lock: boolean; barrier?: () => Promise<void> },
 ): Promise<void> {
-  await withTxn(async (tx: DbExecutor) => {
+  const transaction = opts.lock ? withLockingTxn : withTxn;
+  await transaction(async (tx: DbExecutor) => {
     if (opts.lock) {
-      await tx.execute(
-        sql`SELECT id FROM registrations WHERE id = ${registrationId} FOR UPDATE`,
-      );
+      await lockSponsorshipForUpdate(tx, sponsorshipId);
+      await lockRegistrationForUpdate(tx, registrationId);
     }
     await insertUsage(tx, {
       sponsorshipId,
@@ -89,7 +92,25 @@ describe.runIf(dbTestsEnabled())("concurrency: settlement drift", () => {
   beforeEach(cleanupDatabase);
   afterEach(cleanupDatabase);
 
-  it("FOR UPDATE lock serializes settlement recompute (ADR-0001 remedy — no drift)", async () => {
+  it("unlocked settlement recompute demonstrates the lost update prevented by locking", async () => {
+    const amounts = [300, 200];
+    const { registration, sponsorships } = await seedRegAndSponsors(amounts);
+    const barrier = makeBarrier(amounts.length);
+
+    await Promise.all(
+      sponsorships.map((s, i) =>
+        settleLink(registration.id, s.id, amounts[i], { lock: false, barrier }),
+      ),
+    );
+
+    // Positive control: the deliberately unlocked body still loses an update.
+    expect(amounts).toContain(await readSettlement(registration.id));
+  });
+
+  // The former expected failure now uses the same lock helpers as the service.
+  // Actual service regression coverage lives in sponsorships.concurrency.test.ts
+  // under apps/api, and exercises link, unlink, recalc, cancel and delete.
+  it("sponsorship and registration locks serialize settlement recompute without drift", async () => {
     const amounts = [300, 200];
     const { registration, sponsorships } = await seedRegAndSponsors(amounts);
 
@@ -101,27 +122,4 @@ describe.runIf(dbTestsEnabled())("concurrency: settlement drift", () => {
 
     expect(await readSettlement(registration.id)).toBe(500);
   });
-
-  // Documents the CURRENT nest-rebuild gap: the sponsorship link/unlink/recalc
-  // transactions in apps/api use withTxn (READ COMMITTED) WITHOUT the ADR-0001
-  // FOR UPDATE lock, so the recompute drifts. When Phase-1 locking lands, this
-  // will start passing → remove `.fails` and flip to a normal no-drift assertion.
-  it.fails(
-    "unlocked settlement recompute drifts under READ COMMITTED (ADR-0001 lock not ported)",
-    async () => {
-      const amounts = [300, 200];
-      const { registration, sponsorships } = await seedRegAndSponsors(amounts);
-      const barrier = makeBarrier(amounts.length);
-
-      await Promise.all(
-        sponsorships.map((s, i) =>
-          settleLink(registration.id, s.id, amounts[i], { lock: false, barrier }),
-        ),
-      );
-
-      // Without the lock the last writer clobbers: final is one partial (300 or
-      // 200), never the 500 sum. This assertion fails → `.fails` marks it green.
-      expect(await readSettlement(registration.id)).toBe(500);
-    },
-  );
 });

@@ -48,11 +48,15 @@ import {
   insertSponsorshipBatch,
   insertUsage,
   listSponsorships,
+  lockRegistrationForUpdate,
+  lockRegistrationsForUpdate,
+  lockSponsorshipForUpdate,
   searchRegistrantsForSponsorship,
   sponsorshipCodeExists,
   updateRegistrationSettlement,
   updateSponsorshipRow,
   updateUsageAmount,
+  withLockingTxn,
   withTxn,
   type AccessItemForOverlap,
   type DbExecutor,
@@ -223,7 +227,7 @@ export class SponsorshipsService {
   }
 
   // ==========================================================================
-  // Update / cancel / delete (own READ COMMITTED txn — no retry, legacy parity)
+  // Update / cancel / delete (own locking READ COMMITTED txn)
   // ==========================================================================
 
   async updateSponsorship(
@@ -234,8 +238,21 @@ export class SponsorshipsService {
     if (input.status === "CANCELLED") {
       return this.cancelSponsorship(id, performedBy);
     }
-    await withTxn((tx) => this.updateSponsorshipCore(tx, id, input));
+    await withLockingTxn((tx) => this.updateSponsorshipCore(tx, id, input));
     return (await getSponsorshipById(id)) as SponsorshipWithUsages;
+  }
+
+  private async findSponsorshipForLockedMutation(tx: DbExecutor, id: string) {
+    await lockSponsorshipForUpdate(tx, id);
+    const before = await findSponsorshipForMutation(tx, id);
+    if (!before) return null;
+    // Discover ids under the sponsorship lock; lock the complete registration
+    // set in id order before any settlement/counter writes, then re-read.
+    await lockRegistrationsForUpdate(
+      tx,
+      before.usages.flatMap((usage) => usage.registrationId ? [usage.registrationId] : []),
+    );
+    return findSponsorshipForMutation(tx, id);
   }
 
   private async updateSponsorshipCore(
@@ -243,7 +260,7 @@ export class SponsorshipsService {
     id: string,
     input: UpdateSponsorshipInput,
   ): Promise<void> {
-    const sponsorship = await findSponsorshipForMutation(tx, id);
+    const sponsorship = await this.findSponsorshipForLockedMutation(tx, id);
     if (!sponsorship) {
       throw new AppException(ErrorCodes.NOT_FOUND, "Sponsorship not found", 404);
     }
@@ -324,7 +341,7 @@ export class SponsorshipsService {
     id: string,
     performedBy?: string,
   ): Promise<SponsorshipWithUsages> {
-    await withTxn((tx) => this.cancelSponsorshipCore(tx, id, performedBy));
+    await withLockingTxn((tx) => this.cancelSponsorshipCore(tx, id, performedBy));
     return (await getSponsorshipById(id)) as SponsorshipWithUsages;
   }
 
@@ -333,7 +350,7 @@ export class SponsorshipsService {
     id: string,
     performedBy?: string,
   ): Promise<void> {
-    const sponsorship = await findSponsorshipForMutation(tx, id);
+    const sponsorship = await this.findSponsorshipForLockedMutation(tx, id);
     if (!sponsorship) {
       throw new AppException(ErrorCodes.NOT_FOUND, "Sponsorship not found", 404);
     }
@@ -354,7 +371,7 @@ export class SponsorshipsService {
   }
 
   async deleteSponsorship(id: string, performedBy?: string): Promise<void> {
-    await withTxn((tx) => this.deleteSponsorshipCore(tx, id, performedBy));
+    await withLockingTxn((tx) => this.deleteSponsorshipCore(tx, id, performedBy));
   }
 
   private async deleteSponsorshipCore(
@@ -362,7 +379,7 @@ export class SponsorshipsService {
     id: string,
     performedBy?: string,
   ): Promise<void> {
-    const sponsorship = await findSponsorshipForMutation(tx, id);
+    const sponsorship = await this.findSponsorshipForLockedMutation(tx, id);
     if (!sponsorship) {
       throw new AppException(ErrorCodes.NOT_FOUND, "Sponsorship not found", 404);
     }
@@ -925,7 +942,7 @@ export class SponsorshipsService {
     registrationId: string,
     adminUserId: string,
   ): Promise<LinkSponsorshipResult> {
-    return withTxn((tx) =>
+    return withLockingTxn((tx) =>
       this.linkSponsorshipToRegistrationTx(
         tx,
         sponsorshipId,
@@ -941,6 +958,8 @@ export class SponsorshipsService {
     registrationId: string,
     adminUserId: string,
   ): Promise<LinkSponsorshipResult> {
+    await lockSponsorshipForUpdate(tx, sponsorshipId);
+    await lockRegistrationForUpdate(tx, registrationId);
     const sponsorship = await findSponsorshipForLink(tx, sponsorshipId);
     if (!sponsorship) {
       throw new AppException(ErrorCodes.NOT_FOUND, "Sponsorship not found", 404);
@@ -1178,7 +1197,7 @@ export class SponsorshipsService {
     registrationId: string,
     performedBy?: string,
   ): Promise<void> {
-    return withTxn((tx) =>
+    return withLockingTxn((tx) =>
       this.unlinkSponsorshipFromRegistrationInternal(
         tx,
         sponsorshipId,
@@ -1194,6 +1213,8 @@ export class SponsorshipsService {
     registrationId: string,
     _performedBy?: string,
   ): Promise<void> {
+    await lockSponsorshipForUpdate(tx, sponsorshipId);
+    await lockRegistrationForUpdate(tx, registrationId);
     const usage = await findUsage(tx, sponsorshipId, registrationId);
     if (!usage) {
       throw new AppException(
@@ -1305,6 +1326,13 @@ export class SponsorshipsService {
     tx: DbExecutor,
     sponsorshipId: string,
   ): Promise<void> {
+    await lockSponsorshipForUpdate(tx, sponsorshipId);
+    const before = await findSponsorshipForRecalc(tx, sponsorshipId);
+    if (!before) return;
+    await lockRegistrationsForUpdate(
+      tx,
+      before.usages.flatMap((usage) => usage.registration ? [usage.registration.id] : []),
+    );
     const sponsorship = await findSponsorshipForRecalc(tx, sponsorshipId);
     if (!sponsorship) return;
 
