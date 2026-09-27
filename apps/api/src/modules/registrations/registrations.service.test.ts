@@ -46,7 +46,7 @@ const db = vi.hoisted(() => ({
   listRegistrationAuditLogRows: vi.fn(),
   findUserNamesByIds: vi.fn(),
   listRegistrationEmailLogRows: vi.fn(),
-  getRegistrationFormSchemaForEvent: vi.fn(),
+  findRegistrationFormSchema: vi.fn(),
   pgUniqueViolation: (err: unknown) => {
     const e = err as { code?: unknown; constraint?: unknown } | null;
     return e?.code === "23505"
@@ -165,7 +165,7 @@ describe("RegistrationsService", () => {
     db.findAccessDetailsByIds.mockResolvedValue([]);
     db.findClientModuleState.mockResolvedValue(activeClient());
     db.findRegistrationUsagesForRecalc.mockResolvedValue([]);
-    db.getRegistrationFormSchemaForEvent.mockResolvedValue({ schema: ANSWER_SCHEMA });
+    db.findRegistrationFormSchema.mockResolvedValue({ schema: ANSWER_SCHEMA });
 
     ft.fileTypeFromBuffer.mockResolvedValue({ mime: "application/pdf", ext: "pdf" });
     integ.compressFile.mockResolvedValue({

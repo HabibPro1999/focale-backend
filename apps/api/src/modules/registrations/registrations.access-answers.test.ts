@@ -11,7 +11,7 @@ const db = vi.hoisted(() => ({
   withTxn: vi.fn(),
   getEventWithPricing: vi.fn(),
   findClientModuleState: vi.fn(),
-  getRegistrationFormSchemaForEvent: vi.fn(),
+  findRegistrationFormSchema: vi.fn(),
   getActiveAccessForGrouping: vi.fn(),
   getAccessByIdsForValidation: vi.fn(),
   getIncludedInBaseAccess: vi.fn(),
@@ -120,7 +120,7 @@ beforeEach(() => {
   db.withTxn.mockImplementation((fn: (tx: unknown) => unknown) => fn({}));
   db.getEventWithPricing.mockResolvedValue({ id: EVENT_ID, ...openEvent });
   db.findClientModuleState.mockResolvedValue(client);
-  db.getRegistrationFormSchemaForEvent.mockResolvedValue({ schema: SCHEMA });
+  db.findRegistrationFormSchema.mockResolvedValue({ schema: SCHEMA });
   db.getActiveAccessForGrouping.mockResolvedValue(ACCESS);
   db.getAccessByIdsForValidation.mockImplementation(async (ids: string[]) =>
     ACCESS.filter((a) => ids.includes(a.id)),

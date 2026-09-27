@@ -417,7 +417,7 @@ export function updateSponsorshipSettingsModeChange(
   });
 }
 
-/** Registration schema used to validate pricing/access condition option IDs. */
+/** Stored REGISTRATION schema for grid/export columns, answers and pricing/access rules. */
 export async function findRegistrationFormSchema(eventId: string, exec: DbExecutor = getDb()) {
   const [row] = await exec.select({ schema: forms.schema }).from(forms)
     .where(and(eq(forms.eventId, eventId), eq(forms.type, "REGISTRATION"))).limit(1);
