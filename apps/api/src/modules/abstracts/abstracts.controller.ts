@@ -1,4 +1,4 @@
-import { notFound } from "../../core/app-exception";
+import { assertOwned } from "../../core/tenancy/ownership";
 import { Body, Controller, Delete, ForbiddenException, Get, HttpCode, Param, Patch, Post, Put, Query, Res } from "@nestjs/common";
 import type { FastifyReply } from "fastify";
 import { exportAbstractsWorkbook } from "./abstracts.export.service";
@@ -12,7 +12,7 @@ import {
 import { findEventClientId, getEventWithPricing } from "@app/db";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
-import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
+import type { AuthUser } from "../../core/auth/user-cache";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { assertClientModuleEnabled } from "../clients/module-gates";
 import { AbstractsConfigService } from "./abstracts.config.service";
@@ -55,16 +55,13 @@ export class AbstractsController {
 
   /** Resolve event → canAccessClient → module gate (runs on every admin route). */
   private async resolveEvent(eventId: string, user: AuthUser): Promise<void> {
-    const event = await findEventClientId(eventId);
-    if (!event) {
-      throw notFound("Event not found");
-    }
-    if (!canAccessClient(user, event.clientId)) {
-      throw new ForbiddenException({
+    const event = await assertOwned(user, () => findEventClientId(eventId), (event) => event.clientId, {
+      notFound: "Event not found",
+      forbidden: () => new ForbiddenException({
         code: ErrorCodes.FORBIDDEN,
         message: "Insufficient permissions",
-      });
-    }
+      }),
+    });
     await assertClientModuleEnabled(event.clientId, "abstracts");
   }
 

@@ -1,14 +1,14 @@
+import { assertOwned } from "../../core/tenancy/ownership";
 import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post } from "@nestjs/common";
 import { ErrorCodes } from "@app/contracts";
 import type { PricingEventOwnership } from "@app/db";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
-import { AppException, notFound, orNotFound } from "../../core/app-exception";
-import { assertEventWritable } from "../events";
-import { canAccessClient } from "../../core/auth/user-cache";
+import { AppException, notFound } from "../../core/app-exception";
+import { assertEventWritable } from "../../core/tenancy/event-status";
 import type { AuthUser } from "../../core/auth/user-cache";
-import { assertClientModuleEnabled } from "../clients/module-gates";
+import { assertClientModuleEnabled } from "../../core/tenancy/module-gates";
 import { PricingService } from "./pricing.service";
 import {
   CreateEmbeddedRuleDto,
@@ -116,11 +116,10 @@ export class PricingController {
     forbiddenMessage: string,
     options: { writable: boolean },
   ): Promise<PricingEventOwnership> {
-    const event = orNotFound(await this.pricing.getEventForOwnership(eventId), "Event not found");
-
-    if (!canAccessClient(user, event.clientId)) {
-      throw new AppException(ErrorCodes.FORBIDDEN, forbiddenMessage, 403);
-    }
+    const event = await assertOwned(user, () => this.pricing.getEventForOwnership(eventId), (event) => event.clientId, {
+      notFound: "Event not found",
+      forbidden: () => new AppException(ErrorCodes.FORBIDDEN, forbiddenMessage, 403),
+    });
     if (options.writable) assertEventWritable(event);
     await assertClientModuleEnabled(event.clientId, "pricing");
     return event;

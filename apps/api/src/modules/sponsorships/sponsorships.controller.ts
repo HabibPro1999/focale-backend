@@ -1,17 +1,17 @@
+import { assertOwned } from "../../core/tenancy/ownership";
 import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query } from "@nestjs/common";
-import { ErrorCodes } from "@app/contracts";
 import {
   assertClientModuleEnabled,
-} from "../clients/module-gates";
+} from "../../core/tenancy/module-gates";
 import {
   getEventWithPricing,
   getRegistrationForSponsorship,
 } from "@app/db";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
-import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
-import { assertEventWritable } from "../events";
-import { forbidden, notFound, orNotFound } from "../../core/app-exception";
+import type { AuthUser } from "../../core/auth/user-cache";
+import { assertEventWritable } from "../../core/tenancy/event-status";
+import { orNotFound } from "../../core/app-exception";
 import { SponsorshipsService } from "./sponsorships.service";
 import {
   ListSponsorshipsQueryDto,
@@ -39,9 +39,9 @@ export class SponsorshipsListController {
     @Query() query: ListSponsorshipsQueryDto,
     @CurrentUser() user: AuthUser,
   ) {
-    const event = orNotFound(await getEventWithPricing(eventId), "Event not found");
-
-    if (!canAccessClient(user, event.clientId)) forbidden();
+    await assertOwned(user, () => getEventWithPricing(eventId), (event) => event.clientId, {
+      notFound: "Event not found",
+    });
     return this.service.listSponsorships(eventId, query);
   }
 }
@@ -61,10 +61,9 @@ export class SponsorshipDetailController {
     @Param() { id }: SponsorshipIdParamDto,
     @CurrentUser() user: AuthUser,
   ) {
-    const sponsorship = orNotFound(await this.service.getSponsorshipById(id), "Sponsorship not found");
-
-    if (!canAccessClient(user, sponsorship.event.clientId)) forbidden();
-    return sponsorship;
+    return assertOwned(user, () => this.service.getSponsorshipById(id), (sponsorship) => sponsorship.event.clientId, {
+      notFound: "Sponsorship not found",
+    });
   }
 
   // PATCH — status:"CANCELLED" detours to cancel (service handles it).
@@ -74,11 +73,12 @@ export class SponsorshipDetailController {
     @Body() body: UpdateSponsorshipDto,
     @CurrentUser() user: AuthUser,
   ) {
-    const clientId = await this.service.getSponsorshipClientId(id);
-    if (!clientId) {
-      throw notFound("Sponsorship not found");
-    }
-    if (!canAccessClient(user, clientId)) forbidden();
+    const clientId = await assertOwned(
+      user,
+      () => this.service.getSponsorshipClientId(id).then((clientId) => clientId || null),
+      (clientId) => clientId,
+      { notFound: "Sponsorship not found" },
+    );
     await assertClientModuleEnabled(clientId, "sponsorships");
     return this.service.updateSponsorship(id, body);
   }
@@ -88,11 +88,12 @@ export class SponsorshipDetailController {
     @Param() { id }: SponsorshipIdParamDto,
     @CurrentUser() user: AuthUser,
   ) {
-    const clientId = await this.service.getSponsorshipClientId(id);
-    if (!clientId) {
-      throw notFound("Sponsorship not found");
-    }
-    if (!canAccessClient(user, clientId)) forbidden();
+    const clientId = await assertOwned(
+      user,
+      () => this.service.getSponsorshipClientId(id).then((clientId) => clientId || null),
+      (clientId) => clientId,
+      { notFound: "Sponsorship not found" },
+    );
     await assertClientModuleEnabled(clientId, "sponsorships");
     await this.service.deleteSponsorship(id);
     return { success: true };
@@ -177,10 +178,9 @@ export class RegistrationSponsorshipsController {
 
   /** Route guard: registration exists + tenant access. */
   private async requireRegistration(registrationId: string, user: AuthUser) {
-    const registration = orNotFound(await getRegistrationForSponsorship(registrationId), "Registration not found");
-
-    if (!canAccessClient(user, registration.event.clientId)) forbidden();
-    return registration;
+    return assertOwned(user, () => getRegistrationForSponsorship(registrationId), (registration) => registration.event.clientId, {
+      notFound: "Registration not found",
+    });
   }
 
   /** Mutation guard: + event writable + module gate (mirrors legacy). */

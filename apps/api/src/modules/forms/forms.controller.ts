@@ -1,4 +1,5 @@
-import { notFound, badRequest, orNotFound } from "../../core/app-exception";
+import { assertOwned } from "../../core/tenancy/ownership";
+import { notFound, badRequest } from "../../core/app-exception";
 import { Body, Controller, Delete, ForbiddenException, Get, HttpCode, Param, Patch, Post, Query, Req } from "@nestjs/common";
 import type { FastifyRequest } from "fastify";
 import { ErrorCodes, UserRole } from "@app/contracts";
@@ -9,10 +10,10 @@ import {
   type FormWithEvent,
 } from "@app/db";
 import { Auth } from "../../core/auth/auth.decorator";
-import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
+import type { AuthUser } from "../../core/auth/user-cache";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
-import { assertClientModuleEnabled } from "../clients/module-gates";
-import { assertEventWritable } from "../events";
+import { assertClientModuleEnabled } from "../../core/tenancy/module-gates";
+import { assertEventWritable } from "../../core/tenancy/event-status";
 import { FormsService } from "./forms.service";
 import type { PaginatedResult } from "@app/shared";
 import {
@@ -43,14 +44,7 @@ export class FormsController {
     @Body() body: CreateFormDto,
     @Req() req: AuthedRequest,
   ): Promise<Form> {
-    const event = orNotFound(await getEventWithPricing(body.eventId), "Event not found");
-
-    if (!canAccessClient(req.user, event.clientId)) {
-      throw new ForbiddenException({
-        code: ErrorCodes.FORBIDDEN,
-        message: "Insufficient permissions to create form for this event",
-      });
-    }
+    const event = await this.requireOwnedEvent(body.eventId, req.user, "Insufficient permissions to create form for this event");
     assertEventWritable(event);
     await assertClientModuleEnabled(event.clientId, "registrations");
     return this.forms.createForm(body);
@@ -76,14 +70,7 @@ export class FormsController {
     }
 
     if (query.eventId) {
-      const event = orNotFound(await getEventWithPricing(query.eventId), "Event not found");
-
-      if (!canAccessClient(req.user, event.clientId)) {
-        throw new ForbiddenException({
-          code: ErrorCodes.FORBIDDEN,
-          message: "Insufficient permissions to access this event",
-        });
-      }
+      const event = await this.requireOwnedEvent(query.eventId, req.user, "Insufficient permissions to access this event");
       if (query.type === "SPONSOR") {
         await assertClientModuleEnabled(event.clientId, "sponsorships");
       } else if (query.type === "REGISTRATION") {
@@ -102,14 +89,7 @@ export class FormsController {
     @Param() params: EventIdParamDto,
     @Req() req: AuthedRequest,
   ): Promise<Form> {
-    const event = orNotFound(await getEventWithPricing(params.id), "Event not found");
-
-    if (!canAccessClient(req.user, event.clientId)) {
-      throw new ForbiddenException({
-        code: ErrorCodes.FORBIDDEN,
-        message: "Insufficient permissions to access this event",
-      });
-    }
+    const event = await this.requireOwnedEvent(params.id, req.user, "Insufficient permissions to access this event");
     await assertClientModuleEnabled(event.clientId, "sponsorships");
 
     const form = await this.forms.getSponsorFormByEventId(params.id);
@@ -126,14 +106,7 @@ export class FormsController {
     @Body() body: CreateSponsorFormBodyDto,
     @Req() req: AuthedRequest,
   ): Promise<Form> {
-    const event = orNotFound(await getEventWithPricing(params.id), "Event not found");
-
-    if (!canAccessClient(req.user, event.clientId)) {
-      throw new ForbiddenException({
-        code: ErrorCodes.FORBIDDEN,
-        message: "Insufficient permissions to create form for this event",
-      });
-    }
+    const event = await this.requireOwnedEvent(params.id, req.user, "Insufficient permissions to create form for this event");
     assertEventWritable(event);
     await assertClientModuleEnabled(event.clientId, "sponsorships");
     return this.forms.createSponsorForm(params.id, body?.name);
@@ -206,22 +179,25 @@ export class FormsController {
     await this.forms.deleteForm(params.id);
   }
 
+  private requireOwnedEvent(eventId: string, user: AuthUser, message: string) {
+    return assertOwned(user, () => getEventWithPricing(eventId), (event) => event.clientId, {
+      notFound: "Event not found",
+      forbidden: () => new ForbiddenException({ code: ErrorCodes.FORBIDDEN, message }),
+    });
+  }
+
   /** Fetch a form + ownership gate (404 then 403), shared by the by-id routes. */
   private async requireOwnedForm(
     id: string,
     user: AuthUser,
     verb: "access" | "update" | "delete",
   ): Promise<FormWithEvent> {
-    const form = await this.forms.getFormById(id);
-    if (!form) {
-      throw notFound("Form not found");
-    }
-    if (!canAccessClient(user, form.event.clientId)) {
-      throw new ForbiddenException({
+    return assertOwned(user, () => this.forms.getFormById(id), (form) => form.event.clientId, {
+      notFound: "Form not found",
+      forbidden: () => new ForbiddenException({
         code: ErrorCodes.FORBIDDEN,
         message: `Insufficient permissions to ${verb} this form`,
-      });
-    }
-    return form;
+      }),
+    });
   }
 }
