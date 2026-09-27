@@ -1,3 +1,4 @@
+import type { ClientModuleGate } from "./clients";
 import { and, count, eq, inArray, isNull } from "drizzle-orm";
 import type { EventPricingWithRules } from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
@@ -15,10 +16,7 @@ export type PricingRowInsert = typeof eventPricing.$inferInsert;
 export type PricingRowUpdate = Partial<PricingRowInsert>;
 export type PricingAccessRow = typeof eventAccess.$inferSelect;
 
-interface ClientGate {
-  active: boolean;
-  enabledModules: string[] | null;
-}
+type ClientGate = ClientModuleGate;
 
 /** Event gate row used inside the pricing update transaction. */
 export interface PricingEventGate {
@@ -130,7 +128,7 @@ export interface PricingPendingSponsorship {
   coveredAccessIds: string[];
 }
 
-export async function findPendingSponsorships(
+export async function findPendingSponsorshipsByCodes(
   eventId: string,
   upperCodes: string[],
   db: DbExecutor = getDb(),

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { drizzle } from "drizzle-orm/node-postgres";
 import type { DbExecutor } from "../client";
-import { findPendingSponsorships } from "../queries/pricing";
+import { findPendingSponsorshipsByCodes } from "../queries/pricing";
 import { claimSponsorshipCodeTxn, linkSponsorshipUsageTxn, type LinkableSponsorship } from "./sponsorship-code";
 
 // Unit level: the real drizzle builders render the SQL; each awaited query
@@ -138,10 +138,10 @@ describe("linkSponsorshipUsageTxn", () => {
   });
 });
 
-describe("findPendingSponsorships", () => {
+describe("findPendingSponsorshipsByCodes", () => {
   it("quotes only PENDING codes open to anyone (no target registration)", async () => {
     const { tx, queries } = fakeTx([[]]);
-    await findPendingSponsorships("ev1", ["SP-ABCD2345"], tx);
+    await findPendingSponsorshipsByCodes("ev1", ["SP-ABCD2345"], tx);
     expect(queries[0].sql).toContain(`"sponsorships"."status" = $`);
     expect(queries[0].sql).toContain(`"sponsorships"."target_registration_id" is null`);
   });

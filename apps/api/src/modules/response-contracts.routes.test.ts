@@ -59,7 +59,7 @@ import type {
   EventRow,
   FormWithRelations,
   LinkedSponsorshipItem,
-  RegistrantSearchResult,
+  RegistrantSearchRow,
   RegistrationRow,
   SponsorshipListItem,
   SponsorshipWithUsages,
@@ -368,7 +368,7 @@ const linkedSponsorship: LinkedSponsorshipItem = {
   usage: { id: "u1", amountApplied: 300, appliedAt: at("2026-05-03T00:00:00.000Z") },
 };
 
-const registrantSearchResult: RegistrantSearchResult = {
+const registrantSearchResult: RegistrantSearchRow = {
   id: "r1",
   email: "ada@example.com",
   firstName: "Ada",

@@ -1,3 +1,4 @@
+import { queueRegistrantSponsorshipEmail, sponsorshipEventForEmail } from "./sponsorships.emails";
 import { Injectable } from "@nestjs/common";
 import {
   ErrorCodes,
@@ -16,12 +17,10 @@ import {
   changeSponsorshipCoverageTxn,
   deleteSponsorshipRow,
   emitSettlementEvents,
-  enqueueSponsorshipEmailOutbox,
   findActiveEventAccess,
   findRegistrationForLink,
   findSponsorshipForLink,
   findSponsorshipForMutation,
-  getEventBasePrice,
   getEventPricingForBatch,
   getLinkedSponsorships,
   getPendingSponsorships,
@@ -212,7 +211,7 @@ export class SponsorshipsAdminService {
     // Fetch active access rows once when we need them (overlap and/or repricing).
     const needAccess =
       nextCoveredAccessIds.length > 0 &&
-      (input.coveredAccessIds !== undefined || coverageChanged);
+      coverageChanged;
     const accessRows = needAccess
       ? await findActiveEventAccess(tx, sponsorship.eventId, nextCoveredAccessIds)
       : [];
@@ -236,7 +235,7 @@ export class SponsorshipsAdminService {
     if (coverageChanged) {
       nextTotalAmount = 0;
       if (nextCoversBasePrice) {
-        nextTotalAmount += (await getEventBasePrice(tx, sponsorship.eventId)) ?? 0;
+        nextTotalAmount += (await getEventPricingForBatch(tx, sponsorship.eventId))?.basePrice ?? 0;
       }
       if (nextCoveredAccessIds.length > 0) {
         nextTotalAmount += accessRows.reduce((sum, item) => sum + item.price, 0);
@@ -519,31 +518,19 @@ export class SponsorshipsAdminService {
         linkBaseUrl: registration.linkBaseUrl,
         editToken: registration.editToken,
       },
-      event: {
-        name: sponsorship.event.name,
-        slug: sponsorship.event.slug,
-        startDate: sponsorship.event.startDate,
-        location: sponsorship.event.location,
-        client: { name: sponsorship.event.client.name },
-      },
+      event: sponsorshipEventForEmail(sponsorship.event),
       pricing: pricing ? { basePrice: pricing.basePrice } : null,
       accessItems,
       currency,
     });
-    await enqueueSponsorshipEmailOutbox(
-      tx,
-      {
-        trigger: "SPONSORSHIP_APPLIED",
-        eventId: sponsorship.eventId,
-        input: {
-          recipientEmail: registration.email,
-          recipientName: registration.firstName || sponsorship.beneficiaryName,
-          context: emailContext as Record<string, unknown>,
-          registrationId: registration.id,
-        },
-      },
-      `email:sponsorship:SPONSORSHIP_APPLIED:${registration.id}:${sponsorshipId}`,
-    );
+    await queueRegistrantSponsorshipEmail(tx, {
+      trigger: "SPONSORSHIP_APPLIED",
+      eventId: sponsorship.eventId,
+      registration,
+      beneficiaryName: sponsorship.beneficiaryName,
+      context: emailContext,
+      dedupeKey: `email:sponsorship:SPONSORSHIP_APPLIED:${registration.id}:${sponsorshipId}`,
+    });
 
     return {
       usage: {

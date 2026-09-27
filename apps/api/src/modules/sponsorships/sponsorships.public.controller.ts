@@ -2,6 +2,7 @@ import { Body, Controller, Get, HttpCode, Param, Post, Query } from "@nestjs/com
 import { Throttle } from "@nestjs/throttler";
 import {
   ErrorCodes,
+  getSponsorshipSettings,
   PublicRegistrantSearchResponseSchema,
   SponsorshipBatchCreatedResponseSchema,
 } from "@app/contracts";
@@ -40,28 +41,7 @@ export class SponsorshipsPublicController {
     if (!event) {
       throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
     }
-    assertEventAcceptsPublicActions(event);
-    await assertClientModuleEnabled(event.clientId, "sponsorships");
-
-    const form = await this.service.getActiveSponsorForm(eventId);
-    if (!form) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Sponsor form not found for this event",
-        404,
-      );
-    }
-    const result = await this.service.createSponsorshipBatch(
-      eventId,
-      form.id,
-      input,
-    );
-    return {
-      success: true,
-      message: `${result.count} sponsoring(s) created successfully`,
-      batchId: result.batchId,
-      count: result.count,
-    };
+    return this.createForEvent(event, eventId, input);
   }
 
   // GET /api/public/events/slug/:slug/registrants/search
@@ -84,10 +64,7 @@ export class SponsorshipsPublicController {
       throw new AppException(ErrorCodes.NOT_FOUND, "Sponsor form not found", 404);
     }
 
-    const schema = form.schema as Record<string, unknown> | null;
-    const settings = schema?.sponsorshipSettings as
-      | Record<string, unknown>
-      | undefined;
+    const settings = getSponsorshipSettings(form.schema);
     if (settings?.sponsorshipMode !== "LINKED_ACCOUNT") {
       throw new AppException(
         ErrorCodes.FORBIDDEN,
@@ -97,7 +74,7 @@ export class SponsorshipsPublicController {
     }
 
     // Server-forced scope: UNPAID_ONLY overrides the client's query param.
-    const scope = (settings?.registrantSearchScope as string | undefined) ?? "ALL";
+    const scope = settings.registrantSearchScope ?? "ALL";
     const effectiveUnpaidOnly =
       scope === "UNPAID_ONLY" ? true : unpaidOnly === "true";
 
@@ -123,10 +100,18 @@ export class SponsorshipsPublicController {
     if (!event) {
       throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
     }
+    return this.createForEvent(event, event.id, input);
+  }
+
+  private async createForEvent(
+    event: NonNullable<Awaited<ReturnType<typeof getEventWithPricing>>>,
+    eventId: string,
+    input: CreateSponsorshipBatchDto,
+  ) {
     assertEventAcceptsPublicActions(event);
     await assertClientModuleEnabled(event.clientId, "sponsorships");
 
-    const form = await this.service.getActiveSponsorForm(event.id);
+    const form = await this.service.getActiveSponsorForm(eventId);
     if (!form) {
       throw new AppException(
         ErrorCodes.NOT_FOUND,
@@ -135,7 +120,7 @@ export class SponsorshipsPublicController {
       );
     }
     const result = await this.service.createSponsorshipBatch(
-      event.id,
+      eventId,
       form.id,
       input,
     );

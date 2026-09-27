@@ -1,3 +1,4 @@
+import type { PgSelect } from "drizzle-orm/pg-core";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { getDb, type DbExecutor } from "../client";
 import { enqueueOutboxEvent } from "../outbox";
@@ -128,7 +129,6 @@ export async function listEventAccessRows(
       sql`${eventAccess.sortOrder} asc`,
       sql`${eventAccess.startsAt} asc nulls last`,
       sql`${eventAccess.createdAt} asc`,
-      sql`${eventAccess.createdAt} asc`,
     );
 
   const byOwner = await loadRequiredAccessByOwners(
@@ -136,20 +136,6 @@ export async function listEventAccessRows(
     exec,
   );
   return rows.map((r) => ({ ...r, requiredAccess: byOwner.get(r.id) ?? [] }));
-}
-
-/** clientId for an access (via its event), or null if the access is missing. */
-export async function getAccessClientId(
-  id: string,
-  exec: DbExecutor = getDb(),
-): Promise<string | null> {
-  const rows = await exec
-    .select({ clientId: events.clientId })
-    .from(eventAccess)
-    .innerJoin(events, eq(events.id, eventAccess.eventId))
-    .where(eq(eventAccess.id, id))
-    .limit(1);
-  return rows[0]?.clientId ?? null;
 }
 
 /** Of `ids`, which exist as access rows in `eventId` (prerequisite existence check). */
@@ -329,14 +315,6 @@ export async function setAccessPrerequisites(
   }
 }
 
-/** Return an access row + {id,name} prereqs (used to shape update responses). */
-export async function getEventAccessWithPrereqs(
-  id: string,
-  exec: DbExecutor = getDb(),
-): Promise<EventAccessWithPrereqs | null> {
-  return getEventAccessById(id, exec);
-}
-
 export async function countRegistrationsWithAccess(
   accessId: string,
   exec: DbExecutor = getDb(),
@@ -463,19 +441,20 @@ export async function casDecrementAccessPaidCount(
   return rowCountOf(res) > 0;
 }
 
+function accessDiagnosticQuery<T extends PgSelect>(query: T, accessId: string): T {
+  query.where(eq(eventAccess.id, accessId)).limit(1);
+  return query;
+}
+
 export async function getAccessCapacityInfo(
   accessId: string,
   exec: DbExecutor = getDb(),
 ): Promise<{ name: string; maxCapacity: number | null; paidCount: number } | null> {
-  const rows = await exec
-    .select({
+  const rows = await accessDiagnosticQuery(exec.select({
       name: eventAccess.name,
       maxCapacity: eventAccess.maxCapacity,
       paidCount: eventAccess.paidCount,
-    })
-    .from(eventAccess)
-    .where(eq(eventAccess.id, accessId))
-    .limit(1);
+    }).from(eventAccess).$dynamic(), accessId);
   return rows[0] ?? null;
 }
 
@@ -483,11 +462,7 @@ export async function getAccessRegisteredCount(
   accessId: string,
   exec: DbExecutor = getDb(),
 ): Promise<{ registeredCount: number } | null> {
-  const rows = await exec
-    .select({ registeredCount: eventAccess.registeredCount })
-    .from(eventAccess)
-    .where(eq(eventAccess.id, accessId))
-    .limit(1);
+  const rows = await accessDiagnosticQuery(exec.select({ registeredCount: eventAccess.registeredCount }).from(eventAccess).$dynamic(), accessId);
   return rows[0] ?? null;
 }
 
@@ -495,11 +470,7 @@ export async function getAccessPaidCount(
   accessId: string,
   exec: DbExecutor = getDb(),
 ): Promise<{ paidCount: number } | null> {
-  const rows = await exec
-    .select({ paidCount: eventAccess.paidCount })
-    .from(eventAccess)
-    .where(eq(eventAccess.id, accessId))
-    .limit(1);
+  const rows = await accessDiagnosticQuery(exec.select({ paidCount: eventAccess.paidCount }).from(eventAccess).$dynamic(), accessId);
   return rows[0] ?? null;
 }
 

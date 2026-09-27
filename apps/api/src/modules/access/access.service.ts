@@ -1,3 +1,4 @@
+import { pickDefined } from "@app/shared";
 import { Injectable } from "@nestjs/common";
 import { ErrorCodes, buildFieldOptionIndex, findInvalidOptionConditions } from "@app/contracts";
 import type {
@@ -18,9 +19,7 @@ import {
   getEventDatesForAccess,
   getEventAccessById as getEventAccessByIdQuery,
   getEventAccessForUpdate,
-  getEventAccessWithPrereqs,
   listEventAccessRows,
-  getAccessClientId as getAccessClientIdQuery,
   findExistingAccessIdsInEvent,
   listEventAccessIds,
   getEventPrereqEdges,
@@ -78,31 +77,17 @@ function validateAccessDatesAgainstEvent(
     });
   const range = `${formatDate(startDate)} - ${formatDate(endDate)}`;
 
-  if (
-    accessDates.startsAt &&
-    (accessDates.startsAt < startDate || accessDates.startsAt > endDate)
-  ) {
-    errors.push(`L'heure de début doit être dans la plage de l'événement (${range})`);
-  }
-  if (
-    accessDates.endsAt &&
-    (accessDates.endsAt < startDate || accessDates.endsAt > endDate)
-  ) {
-    errors.push(`L'heure de fin doit être dans la plage de l'événement (${range})`);
-  }
-  if (
-    accessDates.availableFrom &&
-    (accessDates.availableFrom < startDate || accessDates.availableFrom > endDate)
-  ) {
-    errors.push(
-      `La date de disponibilité doit être dans la plage de l'événement (${range})`,
-    );
-  }
-  if (
-    accessDates.availableTo &&
-    (accessDates.availableTo < startDate || accessDates.availableTo > endDate)
-  ) {
-    errors.push(`La date limite doit être dans la plage de l'événement (${range})`);
+  const boundaries = [
+    ["startsAt", "L'heure de début"],
+    ["endsAt", "L'heure de fin"],
+    ["availableFrom", "La date de disponibilité"],
+    ["availableTo", "La date limite"],
+  ] as const;
+  for (const [field, label] of boundaries) {
+    const date = accessDates[field];
+    if (date && (date < startDate || date > endDate)) {
+      errors.push(`${label} doit être dans la plage de l'événement (${range})`);
+    }
   }
 
   return { valid: errors.length === 0, errors };
@@ -173,12 +158,7 @@ export class AccessService {
       const items = await getAccessByIdsForValidation(ids, eventId, db);
       if (items.some((item) => !item.includedInBase)) return;
     }
-    const grouped = groupAccess(
-      await getActiveAccessForGrouping(eventId, db),
-      formData,
-      ids,
-      new Date(),
-    );
+    const grouped = await this.getGroupedAccess(eventId, formData, ids, db);
     const items = [
       ...grouped.groups.flatMap((g) => g.slots.flatMap((s) => s.items)),
       ...(grouped.addonGroup?.slots.flatMap((s) => s.items) ?? []),
@@ -338,33 +318,27 @@ export class AccessService {
       id,
     );
 
-    const updateData: Partial<NewEventAccessValues> = {};
-    if (data.type !== undefined) updateData.type = data.type;
-    if (data.name !== undefined) updateData.name = data.name;
-    if (data.description !== undefined) updateData.description = data.description;
-    if (data.location !== undefined) updateData.location = data.location;
-    if (data.startsAt !== undefined) updateData.startsAt = data.startsAt;
-    if (data.endsAt !== undefined) updateData.endsAt = data.endsAt;
-    if (data.price !== undefined) updateData.price = data.price;
-    if (data.currency !== undefined) updateData.currency = data.currency;
-    if (data.maxCapacity !== undefined) updateData.maxCapacity = data.maxCapacity;
-    if (data.availableFrom !== undefined)
-      updateData.availableFrom = data.availableFrom;
-    if (data.availableTo !== undefined) updateData.availableTo = data.availableTo;
-    if (data.conditions !== undefined) {
-      updateData.conditions = data.conditions === null ? null : data.conditions;
-    }
-    if (data.conditionLogic !== undefined)
-      updateData.conditionLogic = data.conditionLogic;
-    if (data.sortOrder !== undefined) updateData.sortOrder = data.sortOrder;
-    if (data.active !== undefined) updateData.active = data.active;
-    if (data.groupLabel !== undefined) updateData.groupLabel = data.groupLabel;
-    if (data.allowCompanion !== undefined)
-      updateData.allowCompanion = data.allowCompanion;
-    if (data.includedInBase !== undefined)
-      updateData.includedInBase = data.includedInBase;
-    if (data.companionPrice !== undefined)
-      updateData.companionPrice = data.companionPrice;
+    const updateData: Partial<NewEventAccessValues> = pickDefined(data, [
+      "type",
+      "name",
+      "description",
+      "location",
+      "startsAt",
+      "endsAt",
+      "price",
+      "currency",
+      "maxCapacity",
+      "availableFrom",
+      "availableTo",
+      "conditions",
+      "conditionLogic",
+      "sortOrder",
+      "active",
+      "groupLabel",
+      "allowCompanion",
+      "includedInBase",
+      "companionPrice",
+    ]);
 
     const eventId = access.eventId;
     const setsPrerequisites =
@@ -442,7 +416,7 @@ export class AccessService {
       ) {
         await this.handleCapacityReached(eventId, [id], tx);
       }
-      return (await getEventAccessWithPrereqs(id, tx)) as EventAccessWithPrereqs;
+      return (await getEventAccessByIdQuery(id, tx))!;
     });
   }
 
@@ -498,9 +472,7 @@ export class AccessService {
     return getEventAccessByIdQuery(id);
   }
 
-  getAccessClientId(id: string): Promise<string | null> {
-    return getAccessClientIdQuery(id);
-  }
+
 
   // =========================================================================
   // Grouping & validation

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { txnPassthrough } from "../../testing/txn";
 
 // Mock the db layer, as in sponsorships.admin.service.test.ts. The list is
 // every @app/db function the public service calls: the sponsor form's reads
@@ -30,7 +31,7 @@ const db = vi.hoisted(() => {
   ];
   const mod: Record<string, ReturnType<typeof vi.fn>> = {};
   for (const f of fns) mod[f] = vi.fn();
-  mod.withLockingTxn = vi.fn((fn: (tx: unknown) => unknown) => fn(TX));
+  mod.withLockingTxn = vi.fn();
   return mod;
 });
 vi.mock("@app/db", async (importOriginal) => {
@@ -60,7 +61,7 @@ function service() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  m.withLockingTxn.mockImplementation((fn: (tx: unknown) => unknown) => fn(TX));
+  m.withLockingTxn.mockImplementation(txnPassthrough(TX));
   access.handleCapacityReached.mockResolvedValue(0);
   m.lockRegistrationsForUpdate.mockResolvedValue([]);
   m.insertAuditLog.mockResolvedValue(undefined);

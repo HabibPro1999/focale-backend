@@ -1,3 +1,5 @@
+import type { PgSelect } from "drizzle-orm/pg-core";
+import type { ClientModuleGate } from "./clients";
 import {
   and,
   asc,
@@ -44,10 +46,7 @@ export type SponsorshipUsageRow = typeof sponsorshipUsages.$inferSelect;
 export type SponsorshipBatchRow = typeof sponsorshipBatches.$inferSelect;
 
 // Client module-gate slice used by the service's assertModuleEnabledForClient.
-export interface SponsorshipClientGate {
-  active: boolean;
-  enabledModules: string[] | null;
-}
+export type SponsorshipClientGate = ClientModuleGate;
 
 // ============================================================================
 // Shared where-clause builder — exported (reports module filters the same way)
@@ -77,6 +76,12 @@ export function buildSponsorshipWhere(
   return and(...clauses);
 }
 
+function appendGrouped<T>(groups: Map<string, T[]>, key: string, value: T): void {
+  const list = groups.get(key) ?? [];
+  list.push(value);
+  groups.set(key, list);
+}
+
 // ============================================================================
 // List (Admin) — paginated + status/amount stats over the SAME filtered where
 // ============================================================================
@@ -84,6 +89,12 @@ export function buildSponsorshipWhere(
 export interface SponsorshipListItem extends SponsorshipRow {
   batch: { id: string; labName: string; contactName: string; email: string };
   usages: Array<{ registrationId: string | null; amountApplied: number }>;
+}
+
+function withSponsorshipBatch<T extends PgSelect>(query: T, where: SQL | undefined): T {
+  query.innerJoin(sponsorshipBatches, eq(sponsorships.batchId, sponsorshipBatches.id))
+    .where(where);
+  return query;
 }
 
 export async function listSponsorships(
@@ -103,43 +114,22 @@ export async function listSponsorships(
   const skip = getSkip({ page, limit });
 
   const [rows, totalRows, statsRaw] = await Promise.all([
-    db
-      .select({
+    withSponsorshipBatch(db.select({
         sponsorship: sponsorships,
         batchId: sponsorshipBatches.id,
         labName: sponsorshipBatches.labName,
         contactName: sponsorshipBatches.contactName,
         email: sponsorshipBatches.email,
-      })
-      .from(sponsorships)
-      .innerJoin(
-        sponsorshipBatches,
-        eq(sponsorships.batchId, sponsorshipBatches.id),
-      )
-      .where(where)
+      }).from(sponsorships).$dynamic(), where)
       .orderBy(dir(orderCol))
       .limit(limit)
       .offset(skip),
-    db
-      .select({ value: count() })
-      .from(sponsorships)
-      .innerJoin(
-        sponsorshipBatches,
-        eq(sponsorships.batchId, sponsorshipBatches.id),
-      )
-      .where(where),
-    db
-      .select({
+    withSponsorshipBatch(db.select({ value: count() }).from(sponsorships).$dynamic(), where),
+    withSponsorshipBatch(db.select({
         status: sponsorships.status,
         cnt: count(),
         amount: sum(sponsorships.totalAmount),
-      })
-      .from(sponsorships)
-      .innerJoin(
-        sponsorshipBatches,
-        eq(sponsorships.batchId, sponsorshipBatches.id),
-      )
-      .where(where)
+      }).from(sponsorships).$dynamic(), where)
       .groupBy(sponsorships.status),
   ]);
 
@@ -161,12 +151,10 @@ export async function listSponsorships(
     Array<{ registrationId: string | null; amountApplied: number }>
   >();
   for (const u of usageRows) {
-    const list = usagesBySponsorship.get(u.sponsorshipId) ?? [];
-    list.push({
+    appendGrouped(usagesBySponsorship, u.sponsorshipId, {
       registrationId: u.registrationId,
       amountApplied: u.amountApplied,
     });
-    usagesBySponsorship.set(u.sponsorshipId, list);
   }
 
   const data: SponsorshipListItem[] = rows.map((r) => ({
@@ -596,18 +584,6 @@ export async function findActiveEventAccess(
         eq(eventAccess.active, true),
       ),
     );
-}
-
-export async function getEventBasePrice(
-  db: DbExecutor,
-  eventId: string,
-): Promise<number | null> {
-  const [row] = await db
-    .select({ basePrice: eventPricing.basePrice })
-    .from(eventPricing)
-    .where(eq(eventPricing.eventId, eventId))
-    .limit(1);
-  return row?.basePrice ?? null;
 }
 
 export interface EventPricingForBatch {
@@ -1112,7 +1088,7 @@ export async function getRegistrationForSponsorship(
 // Relocate to queries/registrations.ts when that domain lands.
 // ============================================================================
 
-export interface RegistrantSearchResult {
+export interface RegistrantSearchRow {
   id: string;
   email: string;
   firstName: string | null;
@@ -1135,7 +1111,7 @@ export async function searchRegistrantsForSponsorship(
   eventId: string,
   query: { query: string; unpaidOnly: boolean; limit: number },
   db: DbExecutor = getDb(),
-): Promise<RegistrantSearchResult[]> {
+): Promise<RegistrantSearchRow[]> {
   // The term is user input (anonymous on the sponsor form): match literally.
   const clauses: (SQL | undefined)[] = [
     eq(registrations.eventId, eventId),
@@ -1192,12 +1168,10 @@ export async function searchRegistrantsForSponsorship(
   >();
   for (const u of usageRows) {
     if (u.status !== "USED" || !u.registrationId) continue;
-    const list = usedByReg.get(u.registrationId) ?? [];
-    list.push({
+    appendGrouped(usedByReg, u.registrationId, {
       coversBasePrice: u.coversBasePrice,
       coveredAccessIds: u.coveredAccessIds ?? [],
     });
-    usedByReg.set(u.registrationId, list);
   }
 
   return regRows.map((r) => {

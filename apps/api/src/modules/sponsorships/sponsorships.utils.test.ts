@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import {
-  calculateApplicableAmount,
   calculateTotalSponsorshipAmount,
   detectCoverageOverlap,
   determineSponsorshipStatus,
@@ -151,79 +150,6 @@ describe("generateSponsorshipCode", () => {
       expect(code).toMatch(/^SP-[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{8}$/);
       expect(code).not.toMatch(/[OIL01]/);
     }
-  });
-});
-
-// ============================================================================
-// calculateApplicableAmount (shared math, re-exported)
-// ============================================================================
-
-describe("calculateApplicableAmount", () => {
-  const reg = {
-    totalAmount: 500,
-    baseAmount: 100,
-    accessTypeIds: ["acc1", "acc2"],
-    priceBreakdown: {
-      calculatedBasePrice: 100,
-      accessItems: [
-        { accessId: "acc1", subtotal: 200 },
-        { accessId: "acc2", subtotal: 150 },
-      ],
-    },
-  };
-
-  it("returns 0 with no overlap", () => {
-    expect(
-      calculateApplicableAmount(
-        { coversBasePrice: false, coveredAccessIds: ["other"], totalAmount: 300 },
-        reg,
-      ),
-    ).toBe(0);
-  });
-
-  it("applies base price only", () => {
-    expect(
-      calculateApplicableAmount(
-        { coversBasePrice: true, coveredAccessIds: [], totalAmount: 100 },
-        reg,
-      ),
-    ).toBe(100);
-  });
-
-  it("applies only overlapping access items", () => {
-    expect(
-      calculateApplicableAmount(
-        { coversBasePrice: false, coveredAccessIds: ["acc1", "zzz"], totalAmount: 999 },
-        reg,
-      ),
-    ).toBe(200);
-  });
-
-  it("combines base + access", () => {
-    expect(
-      calculateApplicableAmount(
-        { coversBasePrice: true, coveredAccessIds: ["acc1", "acc2"], totalAmount: 999 },
-        reg,
-      ),
-    ).toBe(450);
-  });
-
-  it("caps at registration total", () => {
-    expect(
-      calculateApplicableAmount(
-        { coversBasePrice: true, coveredAccessIds: ["acc1", "acc2"], totalAmount: 999 },
-        { ...reg, totalAmount: 300 },
-      ),
-    ).toBe(300);
-  });
-
-  it("caps at sponsorship total", () => {
-    expect(
-      calculateApplicableAmount(
-        { coversBasePrice: true, coveredAccessIds: ["acc1", "acc2"], totalAmount: 120 },
-        reg,
-      ),
-    ).toBe(120);
   });
 });
 
