@@ -19,11 +19,6 @@ export function getEmailProvider(): EmailProvider {
   return cached;
 }
 
-/** Clear the memoized provider — used by tests that flip EMAIL_PROVIDER. */
-export function resetEmailProviderCache(): void {
-  cached = null;
-}
-
 export * from "./email-provider.types";
 export {
   SendgridProvider,

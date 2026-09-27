@@ -6,23 +6,17 @@ import {
   type OutboxHandlerResult,
   type TriggeredEmailOutboxPayload,
   type AbstractEmailOutboxPayload,
+  type SponsorshipEmailOutboxPayload,
 } from "@app/db";
 import {
   queueTriggeredEmail,
   queueSponsorshipEmail,
   queueAbstractEmail,
-  type QueueSponsorshipEmailInput,
 } from "@app/integrations";
 import type { AutomaticEmailTrigger } from "@app/contracts";
 import type { Job } from "../job";
 
 const log = createLogger({ name: "worker:outbox" });
-
-interface SponsorshipEmailOutboxPayload {
-  trigger: string;
-  eventId: string;
-  input: QueueSponsorshipEmailInput;
-}
 
 /**
  * Handler registry for the worker's outbox scope. Each type maps to an

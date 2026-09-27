@@ -13,6 +13,16 @@ const doc = (content: unknown[]): TiptapDocument =>
   ({ type: "doc", content }) as TiptapDocument;
 
 describe("renderTemplateToMjml", () => {
+  it.each([["bulletList", "ul"], ["orderedList", "ol"]])(
+    "keeps %s list markup, item fallback and escaping", (type, tag) => {
+      const mjml = renderTemplateToMjml(doc([{ type, content: [
+        { type: "listItem", content: [{ type: "paragraph", content: [{ type: "text", text: "<first>" }] }] },
+        { type: "listItem", content: [{ type: "text", text: "second" }] },
+        { type: "listItem" },
+      ] }]));
+      expect(mjml).toContain(`<mj-text><${tag} style="margin: 0; padding-left: 20px;"><li>&lt;first&gt;</li>\n<li>second</li>\n<li></li></${tag}></mj-text>`);
+    },
+  );
   it("wraps content in the MJML skeleton with the organizer header + footer", () => {
     const mjml = renderTemplateToMjml(
       doc([{ type: "paragraph", content: [{ type: "text", text: "Hello" }] }]),

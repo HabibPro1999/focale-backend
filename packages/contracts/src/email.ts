@@ -1,3 +1,4 @@
+import { PaymentStatusSchema, RegistrationRoleSchema } from "./registration-enums";
 import { z } from "zod";
 
 // ============================================================================
@@ -165,11 +166,6 @@ const emailTemplateBaseShape = {
   isActive: z.boolean().default(true),
 };
 
-/** Full create schema (includes eventId). */
-export const CreateEmailTemplateSchema = z
-  .strictObject({ eventId: z.string().uuid(), ...emailTemplateBaseShape })
-  .refine(triggerXorRefine, triggerXorMessage);
-
 /** Request-body schema for POST (eventId comes from the URL, not the body). */
 export const CreateEmailTemplateBodySchema = z
   .strictObject(emailTemplateBaseShape)
@@ -225,25 +221,9 @@ export const ListEventEmailLogsQuerySchema = z.strictObject({
 // ============================================================================
 
 export const BulkSendFilterSchema = z.strictObject({
-  paymentStatus: z
-    .array(
-      z.enum([
-        "PENDING",
-        "VERIFYING",
-        "PARTIAL",
-        "PAID",
-        "SPONSORED",
-        "WAIVED",
-        "REFUNDED",
-      ]),
-    )
-    .optional(),
+  paymentStatus: z.array(PaymentStatusSchema).optional(),
   accessTypeIds: z.array(z.string().uuid()).optional(),
-  role: z
-    .array(
-      z.enum(["PARTICIPANT", "SPEAKER", "MODERATOR", "ORGANIZER", "INVITED"]),
-    )
-    .optional(),
+  role: z.array(RegistrationRoleSchema).optional(),
 });
 
 export const BulkSendEmailSchema = z.strictObject({
@@ -299,18 +279,13 @@ export type AutomaticEmailTrigger = z.infer<typeof AutomaticEmailTriggerSchema>;
 export type AbstractEmailTrigger = z.infer<typeof AbstractEmailTriggerSchema>;
 export type EmailStatus = z.infer<typeof EmailStatusSchema>;
 
-export type CreateEmailTemplateInput = z.infer<typeof CreateEmailTemplateSchema>;
-export type CreateEmailTemplateBody = z.infer<
-  typeof CreateEmailTemplateBodySchema
->;
-export type UpdateEmailTemplateInput = z.infer<typeof UpdateEmailTemplateSchema>;
+
+
 export type ListEmailTemplatesQuery = z.infer<
   typeof ListEmailTemplatesQuerySchema
 >;
 export type ListEventEmailLogsQuery = z.infer<
   typeof ListEventEmailLogsQuerySchema
 >;
-export type BulkSendFilter = z.infer<typeof BulkSendFilterSchema>;
+
 export type BulkSendEmailInput = z.infer<typeof BulkSendEmailSchema>;
-export type TestSendEmailInput = z.infer<typeof TestSendEmailSchema>;
-export type SendCustomEmailInput = z.infer<typeof SendCustomEmailSchema>;

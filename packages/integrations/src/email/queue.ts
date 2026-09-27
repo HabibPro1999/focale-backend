@@ -37,9 +37,10 @@ import {
   type ClaimedEmailLog,
   type EmailLogRow,
   type EmailLogInsert,
+  type SponsorshipEmailOutboxPayload,
 } from "@app/db";
 import { getEmailProvider } from "./providers/index";
-import type { EmailAttachment } from "./providers/email-provider.types";
+import type { EmailAttachment, NormalizedEventType } from "./providers/email-provider.types";
 import { resolveVariables, buildEmailContextWithAccess } from "./rendering/index";
 
 const logger = createLogger({ name: "email:queue" });
@@ -50,8 +51,8 @@ const DEFAULT_WORKER_ID = makeWorkerId("email");
 // -----------------------------------------------------------------------------
 // Realtime seam. In the legacy monolith the queue emitted emailLog.statusChanged
 // on the in-process EventBus. In the split architecture realtime fan-out goes
-// through the outbox / EventBus in the api process, which this framework-free
-// package cannot reach. The worker/api bootstrap wires a listener here (N3):
+// through the outbox / EventBus in the api process. Emission stays opt-in:
+// the worker/api bootstrap wires a listener here (N3):
 // see `emitEmailLogRealtimeEvent` below, installed via setEmailStatusChangeListener
 // at process startup in both apps/worker/src/main.ts and apps/api/src/main.ts —
 // emails can be queued/updated from either process.
@@ -230,46 +231,47 @@ export async function queueTriggeredEmail(
     lastName?: string | null;
   },
 ): Promise<boolean> {
+  return queueAutomaticEmail(trigger, eventId, {
+    preCheck: () => hasActiveEmailLogForRegistrationTrigger(registration.id, trigger),
+    input: templateId => ({
+      trigger, templateId, registrationId: registration.id,
+      recipientEmail: registration.email,
+      recipientName: [registration.firstName, registration.lastName].filter(Boolean).join(" ") || undefined,
+    }),
+    duplicateContext: () => ({ registrationId: registration.id, trigger }),
+    queuedContext: () => ({ trigger, eventId, registrationId: registration.id }),
+    duplicateMessage: "Triggered email already queued, skipping duplicate",
+    queuedMessage: "Queued triggered email",
+  });
+}
+
+async function queueAutomaticEmail(
+  trigger: AutomaticEmailTrigger,
+  eventId: string,
+  options: {
+    preCheck: (templateId: string) => Promise<boolean>;
+    input: (templateId: string) => QueueEmailInput;
+    duplicateContext: () => Record<string, unknown>;
+    queuedContext: () => Record<string, unknown>;
+    duplicateMessage: string;
+    queuedMessage: string;
+  },
+): Promise<boolean> {
   const template = await getTemplateByTrigger(eventId, trigger);
   if (!template) {
-    logger.warn(
-      { trigger, eventId },
-      "No email template configured for trigger - email not sent",
-    );
+    logger.warn({ trigger, eventId }, "No email template configured for trigger - email not sent");
     return false;
   }
-
-  if (await hasActiveEmailLogForRegistrationTrigger(registration.id, trigger)) {
-    logger.info(
-      { registrationId: registration.id, trigger },
-      "Triggered email already queued, skipping duplicate",
-    );
+  if (await options.preCheck(template.id)) {
+    logger.info(options.duplicateContext(), options.duplicateMessage);
     return false;
   }
-
-  const result = await queueEmail({
-    trigger,
-    templateId: template.id,
-    registrationId: registration.id,
-    recipientEmail: registration.email,
-    recipientName:
-      [registration.firstName, registration.lastName]
-        .filter(Boolean)
-        .join(" ") || undefined,
-  });
-
+  const result = await queueEmail(options.input(template.id));
   if (!result.ok) {
-    logger.info(
-      { registrationId: registration.id, trigger },
-      "Triggered email already queued, skipping duplicate",
-    );
+    logger.info(options.duplicateContext(), options.duplicateMessage);
     return false;
   }
-
-  logger.info(
-    { trigger, eventId, registrationId: registration.id },
-    "Queued triggered email",
-  );
+  logger.info(options.queuedContext(), options.queuedMessage);
   return true;
 }
 
@@ -277,12 +279,7 @@ export async function queueTriggeredEmail(
 // QUEUE SPONSORSHIP EMAIL (automatic sends with a custom context snapshot)
 // =============================================================================
 
-export interface QueueSponsorshipEmailInput {
-  recipientEmail: string;
-  recipientName?: string;
-  context: Record<string, unknown>;
-  registrationId?: string;
-}
+export type QueueSponsorshipEmailInput = SponsorshipEmailOutboxPayload["input"];
 
 /**
  * Queue a sponsorship email (SPONSORSHIP_BATCH_SUBMITTED / _LINKED / _APPLIED).
@@ -294,52 +291,20 @@ export async function queueSponsorshipEmail(
   eventId: string,
   input: QueueSponsorshipEmailInput,
 ): Promise<boolean> {
-  const template = await getTemplateByTrigger(eventId, trigger);
-  if (!template) {
-    logger.warn(
-      { trigger, eventId },
-      "No email template configured for trigger - email not sent",
-    );
-    return false;
-  }
-
-  if (
-    await hasActiveSponsorshipEmailLog({
-      trigger,
-      templateId: template.id,
-      recipientEmail: input.recipientEmail,
-      registrationId: input.registrationId,
-    })
-  ) {
-    logger.info(
-      { trigger, eventId, recipientEmail: input.recipientEmail },
-      "Sponsorship email already queued, skipping duplicate",
-    );
-    return false;
-  }
-
-  const result = await queueEmail({
-    trigger,
-    templateId: template.id,
-    registrationId: input.registrationId,
-    recipientEmail: input.recipientEmail,
-    recipientName: input.recipientName,
-    contextSnapshot: input.context,
+  return queueAutomaticEmail(trigger, eventId, {
+    preCheck: templateId => hasActiveSponsorshipEmailLog({
+      trigger, templateId, recipientEmail: input.recipientEmail, registrationId: input.registrationId,
+    }),
+    input: templateId => ({
+      trigger, templateId, registrationId: input.registrationId,
+      recipientEmail: input.recipientEmail, recipientName: input.recipientName,
+      contextSnapshot: input.context,
+    }),
+    duplicateContext: () => ({ trigger, eventId, recipientEmail: input.recipientEmail }),
+    queuedContext: () => ({ trigger, eventId, recipientEmail: input.recipientEmail }),
+    duplicateMessage: "Sponsorship email already queued, skipping duplicate",
+    queuedMessage: "Queued sponsorship email",
   });
-
-  if (!result.ok) {
-    logger.info(
-      { trigger, eventId, recipientEmail: input.recipientEmail },
-      "Sponsorship email already queued, skipping duplicate",
-    );
-    return false;
-  }
-
-  logger.info(
-    { trigger, eventId, recipientEmail: input.recipientEmail },
-    "Queued sponsorship email",
-  );
-  return true;
 }
 
 // =============================================================================
@@ -628,15 +593,22 @@ const STATUS_RANK: Record<string, number> = {
 /** Terminal statuses that must never be overwritten by a later webhook. */
 const TERMINAL_STATUSES = new Set<EmailStatus>(["BOUNCED", "DROPPED", "FAILED"]);
 
-export type WebhookEventType =
-  | "delivered"
-  | "open"
-  | "click"
-  | "bounce"
-  | "dropped"
-  | "blocked"
-  | "spam_report"
-  | "unsubscribe";
+export type WebhookEventType = NormalizedEventType;
+
+const WEBHOOK_TRANSITIONS: Record<NormalizedEventType, {
+  status: EmailStatus;
+  stamp?: "deliveredAt" | "openedAt" | "clickedAt" | "bouncedAt";
+  reason?: string;
+}> = {
+  delivered: { status: "DELIVERED", stamp: "deliveredAt" },
+  open: { status: "OPENED", stamp: "openedAt" },
+  click: { status: "CLICKED", stamp: "clickedAt" },
+  bounce: { status: "BOUNCED", stamp: "bouncedAt", reason: "Bounced" },
+  dropped: { status: "DROPPED", reason: "Dropped" },
+  blocked: { status: "DROPPED", reason: "Blocked by SendGrid" },
+  spam_report: { status: "BOUNCED", stamp: "bouncedAt", reason: "Recipient reported email as spam" },
+  unsubscribe: { status: "BOUNCED", stamp: "bouncedAt", reason: "Recipient unsubscribed" },
+};
 
 /**
  * Apply a provider webhook event to an EmailLog, correlated by trackingId =
@@ -651,43 +623,12 @@ export async function updateEmailStatusFromWebhook(
 ): Promise<void> {
   const updates: Partial<EmailLogInsert> = {};
 
-  switch (event) {
-    case "delivered":
-      updates.status = "DELIVERED";
-      updates.deliveredAt = new Date();
-      break;
-    case "open":
-      updates.status = "OPENED";
-      updates.openedAt = new Date();
-      break;
-    case "click":
-      updates.status = "CLICKED";
-      updates.clickedAt = new Date();
-      break;
-    case "bounce":
-      updates.status = "BOUNCED";
-      updates.bouncedAt = new Date();
-      updates.errorMessage = metadata?.reason || "Bounced";
-      break;
-    case "dropped":
-      updates.status = "DROPPED";
-      updates.errorMessage = metadata?.reason || "Dropped";
-      break;
-    case "blocked":
-      updates.status = "DROPPED";
-      updates.errorMessage = metadata?.reason || "Blocked by SendGrid";
-      break;
-    case "spam_report":
-      updates.status = "BOUNCED";
-      updates.bouncedAt = new Date();
-      updates.errorMessage =
-        metadata?.reason || "Recipient reported email as spam";
-      break;
-    case "unsubscribe":
-      updates.status = "BOUNCED";
-      updates.bouncedAt = new Date();
-      updates.errorMessage = metadata?.reason || "Recipient unsubscribed";
-      break;
+  // Keep the legacy empty patch for unexpected runtime values, despite the closed type.
+  const transition = Object.hasOwn(WEBHOOK_TRANSITIONS, event) ? WEBHOOK_TRANSITIONS[event] : undefined;
+  if (transition) {
+    updates.status = transition.status;
+    if (transition.stamp) updates[transition.stamp] = new Date();
+    if (transition.reason) updates.errorMessage = metadata?.reason || transition.reason;
   }
 
   try {
