@@ -1,0 +1,583 @@
+import { z } from "zod";
+import { dbEnvShape } from "./db-settings";
+import { envFlag, envInt, envKey, envKeyMeta } from "./env-meta";
+import { DEFAULT_LOCAL_ORIGIN, parseRateLimitWindowMs } from "./env-values";
+import { parseNetworkingKeys, type NetworkingKeyEntry } from "./networking-keys";
+import {
+  SHUTDOWN_ESCALATION_MS,
+  SHUTDOWN_FORCE_CLOSE_LEAD_MS,
+  SHUTDOWN_GRACE_DEFAULT_MS,
+  SHUTDOWN_GRACE_MAX_MS,
+  SHUTDOWN_GRACE_MIN_MS,
+  WORKER_HEARTBEAT_FILE_NAME,
+  WORKER_HEARTBEAT_INTERVAL_MS,
+  WORKER_HEARTBEAT_MAX_AGE_MS,
+  defaultWorkerHeartbeatFile,
+} from "./lifecycle";
+
+// The single environment schema for both apps. Zod-only (plus node builtins)
+// so contracts stays a leaf package. Each app parses it once at boot
+// (core/config.ts getConfig) and hands typed slices to @app/db (configureDb)
+// and @app/integrations (configureIntegrations). Every key carries `.meta()`
+// documentation; `.env.example` is generated from it (pnpm env:example).
+//
+// Validation messages never echo configured values: the boot error and the
+// operator check (cli/check-config.ts) print key names and rule text only.
+
+/**
+ * JSONB_VALIDATION (plan 5.2): what a read does with a typed JSON column
+ * value that is not a valid stored document (stored-json.ts). `warn` logs the
+ * column, row id and issue paths (never values) and uses the value as stored,
+ * exactly as before typing; `enforce` refuses it.
+ */
+export const JSONB_VALIDATION_MODES = ["warn", "enforce"] as const;
+export type JsonbValidationMode = (typeof JSONB_VALIDATION_MODES)[number];
+
+const jsonbValidationKey = envKey(z.enum(JSONB_VALIDATION_MODES).default("warn"), {
+  section: "database",
+  description:
+    "Typed JSON columns read from the database (pricing rules, certificate zones, form schemas,\nemail contexts, registration price breakdowns): warn (log the invalid paths, never values,\nand use the value as stored) or enforce (refuse it). Default warn until the read-only\nstored-JSON audit (apps/api dist/scripts/stored-json-report.js) reports nothing.",
+  example: "warn",
+});
+
+/**
+ * JSONB_VALIDATION from an environment, for processes that never parse the
+ * whole config (tools, tests). Blank means unset (warn); anything else but
+ * the two modes throws, naming the key only.
+ */
+export function resolveJsonbValidationMode(source: NodeJS.ProcessEnv): JsonbValidationMode {
+  const result = jsonbValidationKey.safeParse(source.JSONB_VALIDATION);
+  if (!result.success) {
+    throw new Error(`JSONB_VALIDATION must be one of: ${JSONB_VALIDATION_MODES.join(", ")}`);
+  }
+  return result.data;
+}
+
+export const envShape = {
+  // --- Core ---------------------------------------------------------------
+  NODE_ENV: envKey(z.enum(["development", "production", "test"]).default("development"), {
+    section: "core",
+    description:
+      "development | production | test. The image sets production; production turns on the rules marked below.",
+    example: "development",
+    active: true,
+  }),
+  PORT: envInt(0, 65_535, 3000, {
+    section: "core",
+    description: "API HTTP port.",
+    example: "3000",
+    active: true,
+  }, "PORT"),
+
+  // --- Database -----------------------------------------------------------
+  DATABASE_URL: envKey(z.string().url(), {
+    section: "database",
+    description:
+      "PostgreSQL/CockroachDB connection URL. Required.\nThe pool pins TimeZone=UTC; `options`, `application_name` and timeout query\nparameters in the URL are replaced by the DB_* settings below.",
+    example: "postgresql://dev_user:dev_password@localhost:5432/focale_dev",
+    active: true,
+  }),
+  ...dbEnvShape,
+  MIGRATIONS_CHECK: envKey(z.enum(["enforce", "warn", "off"]).default("warn"), {
+    section: "database",
+    description:
+      "Boot-time schema check against the migration ledger: enforce (refuse to start), warn (log), off.\nDefault warn until the production ledger has been adopted (packages/db/src/migrator/README.md).",
+    example: "warn",
+  }),
+  JSONB_VALIDATION: jsonbValidationKey,
+
+  // --- HTTP ---------------------------------------------------------------
+  CORS_ORIGIN: envKey(z.string().default(DEFAULT_LOCAL_ORIGIN), {
+    section: "http",
+    description:
+      "Comma-separated browser origins allowed to call the API (scheme://host[:port], no path).\n`*` is accepted outside production only; production requires explicit origins.",
+    example: DEFAULT_LOCAL_ORIGIN,
+    active: true,
+  }),
+  TRUST_PROXY: envKey(z.string().optional(), {
+    section: "http",
+    description:
+      "Comma-separated IP/CIDR addresses of trusted reverse-proxy peers. Forwarded client IP\nheaders are ignored unless the connecting peer matches this list. Required in production;\nset TRUST_PROXY=false only when clients connect directly to the API with no proxy.\nReplace any old numeric hop-count setting with the actual proxy peer addresses from your\ndeployment network configuration. Do not use true, *, or a /0 range.\nExample only; never copy these documentation/test addresses into production.",
+    example: "10.0.0.0/24,2001:db8:1234::/48",
+  }),
+  EXPORT_MAX_CONCURRENCY: envInt(1, 16, 2, {
+    section: "http",
+    description:
+      "Report and abstracts file exports generated at once by this API process (the networking\norganizer XLSX is not counted). Up to EXPORT_MAX_QUEUED more wait for a slot; anything\nbeyond gets 503 EXPORT_BUSY + Retry-After.",
+    example: "2",
+    active: true,
+  }, "EXPORT_MAX_CONCURRENCY"),
+  EXPORT_MAX_QUEUED: envInt(0, 64, 4, {
+    section: "http",
+    description: "",
+    example: "4",
+    active: true,
+  }, "EXPORT_MAX_QUEUED"),
+
+  // --- Public URLs --------------------------------------------------------
+  ADMIN_APP_URL: envKey(z.string().url().default(DEFAULT_LOCAL_ORIGIN), {
+    section: "urls",
+    description:
+      "Admin app base URL. Committee invite emails link to ${ADMIN_APP_URL}/committee/set-password.\nThe Firebase Console action URL for password resets points at ${ADMIN_APP_URL}/auth/action.\nProduction must set the deployed admin origin (the localhost default is rejected).",
+    example: DEFAULT_LOCAL_ORIGIN,
+    active: true,
+  }),
+  PUBLIC_FORMS_URL: envKey(z.string().url().optional(), {
+    section: "urls",
+    description:
+      "Public forms base URL for registration and abstract links in emails when a submission\ncarries no link base. Required in production; defaults to http://localhost:8080 elsewhere.",
+    example: "https://forms.example.invalid",
+  }),
+  PUBLIC_LINK_ALLOWED_ORIGINS: envKey(z.string().optional(), {
+    section: "urls",
+    description:
+      "Comma-separated exact HTTP(S) origins allowed as the link base stored with public\nregistrations and abstracts. Required in production.",
+    example: "https://forms.example.invalid",
+  }),
+
+  // --- Firebase -----------------------------------------------------------
+  FIREBASE_PROJECT_ID: envKey(z.string(), {
+    section: "firebase",
+    description: "Firebase project (admin authentication). Required.",
+    example: "replace-with-firebase-project-id",
+    active: true,
+  }),
+  FIREBASE_STORAGE_BUCKET: envKey(z.string().optional(), {
+    section: "firebase",
+    description: "Storage bucket. Required when STORAGE_PROVIDER=firebase.",
+    example: "replace-with-firebase-storage-bucket",
+    active: true,
+  }),
+  FIREBASE_SERVICE_ACCOUNT: envKey(z.string().optional(), {
+    section: "firebase",
+    description:
+      "Service account JSON for deployed runtimes, raw or base64-encoded. When unset, the\nAdmin SDK uses application default credentials (GOOGLE_APPLICATION_CREDENTIALS).",
+    example: '{"type":"service_account","project_id":"replace-with-project-id"}',
+  }),
+  GOOGLE_APPLICATION_CREDENTIALS: envKey(z.string().optional(), {
+    section: "firebase",
+    description: "Path to a service account file (application default credentials).",
+    example: "/path/to/service-account.json",
+  }),
+  FIREBASE_AUTH_LOOKUP_FALLBACK: envFlag(false, {
+    section: "firebase",
+    description:
+      "ID-token verification fallback (off by default). When the Admin SDK cannot fetch Google's\nx509 public keys (e.g. an egress block), admin sign-in fails unless this is enabled: the API\nthen verifies tokens via identitytoolkit accounts:lookup and checks aud/iss/exp/sub/auth_time\nagainst FIREBASE_PROJECT_ID. Requires FIREBASE_WEB_API_KEY (boot fails without it); there is\nno built-in default. Successful lookups are cached for up to 5 minutes, so on this path a\nrevoked token can stay accepted for up to 5 minutes.",
+    example: "false",
+  }),
+  FIREBASE_WEB_API_KEY: envKey(z.string().optional(), {
+    section: "firebase",
+    description: "Web API key of FIREBASE_PROJECT_ID; used only by the lookup fallback.",
+    example: "replace-with-project-web-api-key",
+  }),
+
+  // --- Storage ------------------------------------------------------------
+  STORAGE_PROVIDER: envKey(z.enum(["firebase", "r2"]).default("firebase"), {
+    section: "storage",
+    description: "firebase | r2.",
+    example: "firebase",
+    active: true,
+  }),
+  R2_ACCOUNT_ID: envKey(z.string().optional(), {
+    section: "storage",
+    description: "Cloudflare R2 (every R2_* key is required when STORAGE_PROVIDER=r2).",
+    example: "replace-with-r2-account-id",
+  }),
+  R2_ACCESS_KEY_ID: envKey(z.string().optional(), {
+    section: "storage",
+    description: "",
+    example: "replace-with-r2-access-key-id",
+  }),
+  R2_SECRET_ACCESS_KEY: envKey(z.string().optional(), {
+    section: "storage",
+    description: "",
+    example: "replace-with-r2-secret-access-key",
+  }),
+  R2_BUCKET: envKey(z.string().optional(), {
+    section: "storage",
+    description: "",
+    example: "replace-with-r2-bucket-name",
+  }),
+  R2_PUBLIC_URL: envKey(z.string().url().optional(), {
+    section: "storage",
+    description: "",
+    example: "https://assets.example.invalid",
+  }),
+
+  // --- Email --------------------------------------------------------------
+  EMAIL_PROVIDER: envKey(z.enum(["sendgrid", "resend"]).default("sendgrid"), {
+    section: "email",
+    description:
+      "sendgrid | resend. Production requires the selected provider's API key and a sender.",
+    example: "sendgrid",
+  }),
+  EMAIL_FROM_EMAIL: envKey(z.string().email().optional(), {
+    section: "email",
+    description:
+      "Shared sender identity for whichever provider is active (falls back to SENDGRID_FROM_*).",
+    example: "noreply@example.invalid",
+  }),
+  EMAIL_FROM_NAME: envKey(z.string().optional(), {
+    section: "email",
+    description: "",
+    example: "Focale Events",
+  }),
+  SENDGRID_API_KEY: envKey(z.string().optional(), {
+    section: "email",
+    description: "SendGrid (EMAIL_PROVIDER=sendgrid). The API key is required in production.",
+    example: "replace-with-sendgrid-api-key",
+  }),
+  SENDGRID_WEBHOOK_PUBLIC_KEY: envKey(z.string().optional(), {
+    section: "email",
+    description: "",
+    example: "replace-with-sendgrid-webhook-public-key",
+  }),
+  SENDGRID_FROM_EMAIL: envKey(z.string().email().optional(), {
+    section: "email",
+    description: "",
+    example: "noreply@example.invalid",
+  }),
+  SENDGRID_FROM_NAME: envKey(z.string().optional(), {
+    section: "email",
+    description: "",
+    example: "Focale Events",
+  }),
+  RESEND_API_KEY: envKey(z.string().optional(), {
+    section: "email",
+    description: "Resend (EMAIL_PROVIDER=resend). The API key is required in production.",
+    example: "replace-with-resend-api-key",
+  }),
+  RESEND_WEBHOOK_SECRET: envKey(z.string().optional(), {
+    section: "email",
+    description: "",
+    example: "whsec_replace-with-resend-webhook-signing-secret",
+  }),
+  SENDGRID_DOMAIN_READ_API_KEY: envKey(z.string().optional(), {
+    section: "email",
+    description:
+      "Optional provider credentials with domain-read access, used to verify networking senders\n(default: the provider's API key).",
+    example: "replace-with-sendgrid-domain-read-key",
+  }),
+  RESEND_DOMAIN_READ_API_KEY: envKey(z.string().optional(), {
+    section: "email",
+    description: "",
+    example: "replace-with-resend-domain-read-key",
+  }),
+
+  // --- Realtime -----------------------------------------------------------
+  REALTIME_DISABLED: envFlag(false, {
+    section: "realtime",
+    description:
+      "Disables the SSE outbox pump in the API. realtime.emit rows then accumulate; only disable\nwhere nothing produces them.",
+    example: "false",
+    active: true,
+  }),
+  SSE_HEARTBEAT_MS: envKey(z.coerce.number().int().positive().default(25_000), {
+    section: "realtime",
+    description: "SSE heartbeat interval in ms.",
+    example: "25000",
+    active: true,
+  }),
+  SSE_CLIENT_RETRY_MS: envKey(z.coerce.number().int().positive().default(15_000), {
+    section: "realtime",
+    description: "SSE client reconnect delay in ms.",
+    example: "15000",
+    active: true,
+  }),
+
+  // --- Abstracts ----------------------------------------------------------
+  ABSTRACTS_SUBMIT_RATE_LIMIT_MAX: envKey(z.coerce.number().int().positive().default(60), {
+    section: "abstracts",
+    description:
+      "Public abstracts rate limits per IP and window (tunable for congress NAT/shared Wi-Fi).",
+    example: "60",
+    active: true,
+  }),
+  ABSTRACTS_EDIT_RATE_LIMIT_MAX: envKey(z.coerce.number().int().positive().default(30), {
+    section: "abstracts",
+    description: "",
+    example: "30",
+    active: true,
+  }),
+  ABSTRACTS_READ_RATE_LIMIT_MAX: envKey(z.coerce.number().int().positive().default(120), {
+    section: "abstracts",
+    description: "",
+    example: "120",
+    active: true,
+  }),
+  ABSTRACTS_RATE_LIMIT_WINDOW: envKey(
+    z
+      .string()
+      .default("1 minute")
+      .refine((value) => parseRateLimitWindowMs(value) !== null, {
+        error:
+          'ABSTRACTS_RATE_LIMIT_WINDOW must be milliseconds or "<n> <ms|s|m|min|minute(s)|h|hour(s)>"',
+      }),
+    {
+      section: "abstracts",
+      description: 'Window: milliseconds or "<n> <unit>" (ms, s, m/min/minute(s), h/hour(s)).',
+      example: "1 minute",
+      active: true,
+    },
+  ),
+
+  COMMITTEE_INVITE_TOKEN_TTL_DAYS: envKey(z.coerce.number().int().positive().default(7), {
+    section: "abstracts",
+    description: "Committee invite links: days a single-use invite token stays valid.",
+    example: "7",
+  }),
+
+  // --- Certificates -------------------------------------------------------
+  CERTIFICATE_FONT_PATH: envKey(z.string().optional(), {
+    section: "certificates",
+    description: "Certificate PDF font overrides (bundled fonts when unset).",
+    example: "/path/to/regular.ttf",
+  }),
+  CERTIFICATE_BOLD_FONT_PATH: envKey(z.string().optional(), {
+    section: "certificates",
+    description: "",
+    example: "/path/to/bold.ttf",
+  }),
+
+  // --- Networking ---------------------------------------------------------
+  NETWORKING_DISABLED: envFlag(false, {
+    section: "networking",
+    description:
+      "Set true only where no event uses networking: NETWORKING_TOKEN_SECRET is then not required\nand participant authentication returns 503.",
+    example: "false",
+  }),
+  PUBLIC_NETWORKING_URL: envKey(z.string().url().optional(), {
+    section: "networking",
+    description: "Networking PWA base URL (event links and push notification targets).",
+    example: "http://localhost:8082",
+    active: true,
+  }),
+  NETWORKING_TOKEN_SECRET: envKey(z.string().min(32).optional(), {
+    section: "networking",
+    description:
+      "Signs participant tokens and seals OTP codes (at least 32 characters); the keyring's `legacy` key.\nIn production this or NETWORKING_KEYS is required unless NETWORKING_DISABLED=true. Generate with: openssl rand -hex 32",
+    example: "replace-with-openssl-rand-hex-32-output",
+  }),
+  NETWORKING_KEYS: envKey(
+    z
+      .string()
+      .transform((value, ctx): NetworkingKeyEntry[] => {
+        try {
+          return parseNetworkingKeys(value);
+        } catch (error) {
+          ctx.addIssue({ code: "custom", message: (error as Error).message });
+          return z.NEVER;
+        }
+      })
+      .optional(),
+    {
+      section: "networking",
+      description:
+        "Networking keyring: comma-separated kid:key entries (keys at least 32 characters), the first\ncurrent; kid:key:recovery keeps a retired key only for existing recovery codes. See docs/networking/README.md.",
+      example: "k1:replace-with-openssl-rand-hex-32-output",
+    },
+  ),
+  NETWORKING_KEYRING_WRITE_V1: envFlag(false, {
+    section: "networking",
+    description:
+      "Write new networking MACs and seals as v1:<kid> with the first NETWORKING_KEYS key. Off keeps\nthe legacy format while NETWORKING_TOKEN_SECRET is set (rollback-safe).",
+    example: "false",
+  }),
+  NETWORKING_EMBEDDING_API_KEY: envKey(z.string().optional(), {
+    section: "networking",
+    description:
+      "OpenAI-compatible embeddings endpoint (fixed 1536-dimensional storage). Without a key\n(or OPENAI_API_KEY) recommendations skip embeddings.",
+    example: "replace-with-embeddings-api-key",
+  }),
+  OPENAI_API_KEY: envKey(z.string().optional(), {
+    section: "networking",
+    description: "Fallback for NETWORKING_EMBEDDING_API_KEY.",
+    example: "replace-with-openai-api-key",
+  }),
+  NETWORKING_EMBEDDING_MODEL: envKey(z.string().default("text-embedding-3-small"), {
+    section: "networking",
+    description: "",
+    example: "text-embedding-3-small",
+    active: true,
+  }),
+  NETWORKING_EMBEDDING_BASE_URL: envKey(z.string().url().default("https://api.openai.com/v1"), {
+    section: "networking",
+    description: "",
+    example: "https://api.openai.com/v1",
+    active: true,
+  }),
+  NETWORKING_EMBEDDING_BATCH_SIZE: envInt(1, 32, 16, {
+    section: "networking",
+    description: "Bounded worker throughput; tune to the provider's rate limits and DB capacity.",
+    example: "16",
+    active: true,
+  }, "NETWORKING_EMBEDDING_BATCH_SIZE"),
+  NETWORKING_EMBEDDING_BATCHES_PER_TICK: envInt(1, 32, 8, {
+    section: "networking",
+    description: "",
+    example: "8",
+    active: true,
+  }, "NETWORKING_EMBEDDING_BATCHES_PER_TICK"),
+  NETWORKING_EMBEDDING_CONCURRENCY: envInt(1, 4, 2, {
+    section: "networking",
+    description: "",
+    example: "2",
+    active: true,
+  }, "NETWORKING_EMBEDDING_CONCURRENCY"),
+  NETWORKING_DELIVERY_BATCH_SIZE: envInt(1, 50, 10, {
+    section: "networking",
+    description:
+      "Networking delivery worker: rows each general lane claims at a time, general lanes, and lanes that\nclaim only sign-in codes (OTP), so a code never waits behind digests. See docs/networking/README.md.",
+    example: "10",
+    active: true,
+  }, "NETWORKING_DELIVERY_BATCH_SIZE"),
+  NETWORKING_DELIVERY_CONCURRENCY: envInt(1, 16, 6, {
+    section: "networking",
+    description: "",
+    example: "6",
+    active: true,
+  }, "NETWORKING_DELIVERY_CONCURRENCY"),
+  NETWORKING_DELIVERY_OTP_LANES: envInt(1, 4, 2, {
+    section: "networking",
+    description: "",
+    example: "2",
+    active: true,
+  }, "NETWORKING_DELIVERY_OTP_LANES"),
+  NETWORKING_EMAIL_RATE_PER_SECOND: envInt(1, 100, 5, {
+    section: "networking",
+    description:
+      "Networking emails per second per worker process (token bucket; sign-in codes go first). Keep it under\nthe provider account's limit, leaving room for the other platform emails; a 429 pauses sending.",
+    example: "5",
+    active: true,
+  }, "NETWORKING_EMAIL_RATE_PER_SECOND"),
+  NETWORKING_WITHDRAWAL_ERASE_DAYS: envInt(0, 365, 30, {
+    section: "networking",
+    description:
+      "Days after a participant withdraws from networking before the worker erases the rest of their\nnetworking data (their profile content is scrubbed at once). See docs/networking/README.md.",
+    example: "30",
+    active: true,
+  }, "NETWORKING_WITHDRAWAL_ERASE_DAYS"),
+  NETWORKING_VAPID_PUBLIC_KEY: envKey(z.string().optional(), {
+    section: "networking",
+    description:
+      "Web push. Generate once with web-push generateVAPIDKeys; keep the private key server-side.\nPush is off until all three are set.",
+    example: "replace-with-vapid-public-key",
+  }),
+  NETWORKING_VAPID_PRIVATE_KEY: envKey(z.string().optional(), {
+    section: "networking",
+    description: "",
+    example: "replace-with-vapid-private-key",
+  }),
+  NETWORKING_VAPID_SUBJECT: envKey(z.string().optional(), {
+    section: "networking",
+    description: "",
+    example: "mailto:contact@example.invalid",
+  }),
+  NETWORKING_EMAIL_SENDERS: envKey(z.string().optional(), {
+    section: "networking",
+    description: "Optional server-owned networking sender map (JSON object), keyed by client UUID.",
+    example:
+      '{"client-uuid":{"provider":"resend","email":"networking@events.example.invalid","domainId":"domain-id","name":"Organizer"}}',
+  }),
+
+  // --- Processes ----------------------------------------------------------
+  APP: envKey(z.enum(["api", "worker", "all"]).default("api"), {
+    section: "processes",
+    description:
+      "Which process the image CMD (start-runtime.mjs) supervises: api | worker | all (both in\none container). Also selects the image HEALTHCHECK (API liveness or worker heartbeat).",
+    example: "api",
+  }),
+  RUN_WORKERS: envKey(z.string().optional(), {
+    section: "processes",
+    description:
+      'Worker kill switch: background jobs run unless this is the literal "false". With "false"\nthe worker process idles with a disabled heartbeat, and APP=all starts only the API.',
+    example: "true",
+  }),
+  SHUTDOWN_GRACE_MS: envInt(SHUTDOWN_GRACE_MIN_MS, SHUTDOWN_GRACE_MAX_MS, SHUTDOWN_GRACE_DEFAULT_MS, {
+    section: "processes",
+    description:
+      `Graceful shutdown budget per process after SIGTERM (${SHUTDOWN_GRACE_MIN_MS}-${SHUTDOWN_GRACE_MAX_MS} ms). The API drains SSE\nstreams, closes HTTP, force-closes sockets ${SHUTDOWN_FORCE_CLOSE_LEAD_MS / 1000} s before the end, then closes the pool; each\nprocess hard-exits at the limit and start-runtime.mjs SIGKILLs ${SHUTDOWN_ESCALATION_MS / 1000} s later. Keep it\n${SHUTDOWN_ESCALATION_MS / 1000}+ s below the platform's SIGKILL delay (Render maxShutdownDelaySeconds, 30 s).`,
+    example: String(SHUTDOWN_GRACE_DEFAULT_MS),
+  }, "SHUTDOWN_GRACE_MS"),
+  RENDER_SERVICE_NAME: envKey(z.string().optional(), {
+    section: "processes",
+    description:
+      "Set by Render. Names this service in worker_heartbeats (/health/worker) and in migration\nledger entries; defaults to focale-worker for the worker heartbeat.",
+    example: "focale-worker",
+  }),
+  WORKER_HEARTBEAT_FILE: envKey(z.string().default(defaultWorkerHeartbeatFile()), {
+    section: "processes",
+    description:
+      `Worker heartbeat file, touched every ${WORKER_HEARTBEAT_INTERVAL_MS / 1000} s together with the worker_heartbeats row (the\nimage HEALTHCHECK fails a worker whose file is older than ${WORKER_HEARTBEAT_MAX_AGE_MS / 1000} s). Default: <os tmpdir>/${WORKER_HEARTBEAT_FILE_NAME}.`,
+    example: `/tmp/${WORKER_HEARTBEAT_FILE_NAME}`,
+  }),
+  LOG_LEVEL: envKey(
+    z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).optional(),
+    {
+      section: "processes",
+      description: "fatal | error | warn | info | debug | trace | silent.",
+      example: "info",
+    },
+  ),
+};
+
+/** Every documented environment key, in schema order (drives `.env.example`). */
+export const APP_ENV_SHAPE: Readonly<Record<string, z.ZodType>> = envShape;
+
+export const envObject = z.object(envShape);
+export type ParsedEnv = z.infer<typeof envObject>;
+
+// Keys @app/integrations reads. The same field schemas back the lenient
+// env fallback used when configureIntegrations was never called (unit tests,
+// one-off scripts); FIREBASE_PROJECT_ID is optional there.
+export const integrationsEnvObject = envObject.pick({
+  NODE_ENV: true,
+  FIREBASE_PROJECT_ID: true,
+  FIREBASE_STORAGE_BUCKET: true,
+  FIREBASE_SERVICE_ACCOUNT: true,
+  FIREBASE_AUTH_LOOKUP_FALLBACK: true,
+  FIREBASE_WEB_API_KEY: true,
+  STORAGE_PROVIDER: true,
+  R2_ACCOUNT_ID: true,
+  R2_ACCESS_KEY_ID: true,
+  R2_SECRET_ACCESS_KEY: true,
+  R2_BUCKET: true,
+  R2_PUBLIC_URL: true,
+  EMAIL_PROVIDER: true,
+  EMAIL_FROM_EMAIL: true,
+  EMAIL_FROM_NAME: true,
+  SENDGRID_API_KEY: true,
+  SENDGRID_WEBHOOK_PUBLIC_KEY: true,
+  SENDGRID_FROM_EMAIL: true,
+  SENDGRID_FROM_NAME: true,
+  SENDGRID_DOMAIN_READ_API_KEY: true,
+  RESEND_API_KEY: true,
+  RESEND_WEBHOOK_SECRET: true,
+  RESEND_DOMAIN_READ_API_KEY: true,
+  CERTIFICATE_FONT_PATH: true,
+  CERTIFICATE_BOLD_FONT_PATH: true,
+  PUBLIC_FORMS_URL: true,
+  NETWORKING_DISABLED: true,
+  PUBLIC_NETWORKING_URL: true,
+  NETWORKING_TOKEN_SECRET: true,
+  NETWORKING_KEYS: true,
+  NETWORKING_KEYRING_WRITE_V1: true,
+  NETWORKING_EMBEDDING_API_KEY: true,
+  OPENAI_API_KEY: true,
+  NETWORKING_EMBEDDING_MODEL: true,
+  NETWORKING_EMBEDDING_BASE_URL: true,
+  NETWORKING_EMBEDDING_BATCH_SIZE: true,
+  NETWORKING_EMBEDDING_BATCHES_PER_TICK: true,
+  NETWORKING_EMBEDDING_CONCURRENCY: true,
+  NETWORKING_DELIVERY_BATCH_SIZE: true,
+  NETWORKING_DELIVERY_CONCURRENCY: true,
+  NETWORKING_DELIVERY_OTP_LANES: true,
+  NETWORKING_EMAIL_RATE_PER_SECOND: true,
+  NETWORKING_VAPID_PUBLIC_KEY: true,
+  NETWORKING_VAPID_PRIVATE_KEY: true,
+  NETWORKING_VAPID_SUBJECT: true,
+  NETWORKING_EMAIL_SENDERS: true,
+}).extend({
+  FIREBASE_PROJECT_ID: envKey(z.string().optional(), envKeyMeta(envShape.FIREBASE_PROJECT_ID)!),
+});
+export type IntegrationsEnv = z.infer<typeof integrationsEnvObject>;
