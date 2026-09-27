@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import ExcelJS from "exceljs";
 import type { ExportRegistrationsBody, ExportLanguage } from "@app/contracts";
 import type {
   ExportRegistrationRow,
@@ -40,6 +41,16 @@ function pagesOf<T>(rows: T[]) {
   return async function* () {
     for (let i = 0; i < rows.length; i += PAGE) yield rows.slice(i, i + PAGE);
   };
+}
+
+async function loadWorkbook(data: Buffer): Promise<ExcelJS.Workbook> {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(
+    data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as Parameters<
+      typeof workbook.xlsx.load
+    >[0],
+  );
+  return workbook;
 }
 
 // ----------------------------------------------------------------------------
@@ -317,10 +328,33 @@ describe("modular registrations workbook parity (3.7)", () => {
     },
   );
 
-  it("matches for the email fallback and for an empty result", async () => {
-    const fallback = await both(body("fr"), registrations);
+  it.each([
+    ["fr", "Inscriptions", "Identité", "Email"],
+    ["en", "Registrations", "Identity", "Email"],
+    ["ar", "التسجيلات", "الهوية", "البريد"],
+  ] as const)("uses the localized email fallback for an empty selection (%s)", async (
+    language, sheetName, groupLabel, emailLabel,
+  ) => {
+    const fallback = await both(body(language), registrations);
     expect(await readBack(fallback.streamed)).toEqual(await readBack(fallback.legacy.data));
 
+    const workbook = await loadWorkbook(fallback.streamed);
+    expect(workbook.worksheets.map((sheet) => sheet.name)).toEqual([sheetName]);
+    const sheet = workbook.worksheets[0]!;
+    expect(sheet.columnCount).toBe(1);
+    expect(sheet.getColumn(1).width).toBe(32);
+    expect(sheet.getCell("A1").value).toBe(groupLabel);
+    expect(sheet.getCell("A2").value).toBe(emailLabel);
+    expect(registrations.map((_, index) => sheet.getCell(index + 3, 1).value)).toEqual(
+      registrations.map((row) => row.email),
+    );
+    expect(sheet.getCell("A3").numFmt).toBeUndefined();
+    expect(sheet.autoFilter).toBe("A2:A2");
+    expect(sheet.views[0]).toMatchObject({ state: "frozen", ySplit: 2 });
+    expect(m.getSponsorshipLabDetails).not.toHaveBeenCalled();
+  });
+
+  it("matches for an empty result", async () => {
     const empty = await both(body("en", everyColumn), []);
     expect(await readBack(empty.streamed)).toEqual(await readBack(empty.legacy.data));
   });
@@ -398,5 +432,45 @@ describe("GET registrations export parity (3.7)", () => {
     serve([...rows]);
     const xlsx = await collect(await service.exportRegistrations("event-1", { format: "xlsx" }));
     expect(await readBack(xlsx)).toEqual(await readBack(await legacyXlsx([...rows])));
+  });
+
+  it("applies the width heuristic to dynamic headers without giving form answers money formats", async () => {
+    // Alphabetical export order. Phone wins over amount in a mixed header;
+    // an amount-like form answer is still text, unlike the fixed money cells.
+    const fields = [
+      { header: "Donation amount", value: 250, text: "250", width: 14 },
+      { header: "Family name", value: "Ben Ali", text: "Ben Ali", width: 20 },
+      { header: "Paid at detail", value: "Yesterday", text: "Yesterday", width: 24 },
+      { header: "Payment method", value: "Cash", text: "Cash", width: 18 },
+      { header: "Phone amount", value: "+21612345678", text: "+21612345678", width: 18 },
+      { header: "Registration status", value: "Confirmed", text: "Confirmed", width: 18 },
+      { header: "Submitted detail", value: "Today", text: "Today", width: 24 },
+      { header: "Unclassified", value: "Other", text: "Other", width: 18 },
+      { header: "Work email", value: "work@example.test", text: "work@example.test", width: 28 },
+    ];
+    const rows = [{
+      ...exportRows[0]!,
+      formData: Object.fromEntries([...fields].reverse().map(({ header, value }) => [header, value])),
+    }];
+    serve(rows);
+
+    const xlsx = await collect(await service.exportRegistrations("event-1", { format: "xlsx" }));
+    expect(await readBack(xlsx)).toEqual(await readBack(await legacyXlsx(rows)));
+    const workbook = await loadWorkbook(xlsx);
+    const sheet = workbook.worksheets[0]!;
+    expect(sheet.columnCount).toBe(16 + fields.length);
+    fields.forEach(({ header, text, width }, index) => {
+      const column = index + 17;
+      expect(sheet.getCell(1, column).value).toBe(header);
+      expect(sheet.getColumn(column).width, header).toBe(width);
+      expect(sheet.getCell(2, column).value, header).toBe(text);
+      expect(sheet.getCell(2, column).type, header).toBe(ExcelJS.ValueType.String);
+      expect(sheet.getCell(2, column).numFmt, header).toBeUndefined();
+      expect(sheet.getCell(2, column).formula, header).toBeUndefined();
+    });
+    for (const column of [8, 9, 10, 11, 12, 14]) {
+      expect(sheet.getCell(2, column).type).toBe(ExcelJS.ValueType.Number);
+      expect(sheet.getCell(2, column).numFmt).toBe("#,##0");
+    }
   });
 });
