@@ -1,8 +1,9 @@
+import { NETWORKING_PLANNED_MEETING_STATUSES } from "@app/contracts";
 import { BadRequestException, Injectable } from "@nestjs/common";
 import ExcelJS from "exceljs";
 import { networkingStore, type NetworkingRow } from "@app/db";
 import { generateNetworkingReportPdf } from "@app/integrations";
-import { NetworkingAdminService } from "./networking.admin.service";
+import { networkingAnalytics } from "./networking.analytics";
 import { NetworkingSocialService } from "./networking.social.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
 import type { NetworkingContext } from "./networking.service";
@@ -37,7 +38,6 @@ function foldIcs(line: string) {
 @Injectable()
 export class NetworkingExportsService {
   constructor(
-    private readonly adminService: NetworkingAdminService,
     private readonly social: NetworkingSocialService,
     private readonly meetings: NetworkingMeetingsService,
   ) {}
@@ -193,7 +193,7 @@ export class NetworkingExportsService {
         if (count) count.messages++;
       }
       for (const value of meetings)
-        if (["CONFIRMED", "COMPLETED", "NO_SHOW"].includes(value.status))
+        if (NETWORKING_PLANNED_MEETING_STATUSES.includes(value.status))
           for (const id of [value.requesterId, value.recipientId]) {
             const count = counts.get(id);
             if (count) count.meetings++;
@@ -266,7 +266,7 @@ export class NetworkingExportsService {
         ]);
     } else {
       headers = ["Sector", "Participants", "Matches", "Meetings"];
-      rows = (await this.adminService.analytics(event.id)).sectors.map((s) => [
+      rows = (await networkingAnalytics(event.id)).sectors.map((s) => [
         s.sector,
         s.participants,
         s.matches,

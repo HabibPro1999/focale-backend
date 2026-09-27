@@ -1,3 +1,4 @@
+import { NetworkingInventoryService } from "./networking.inventory.service";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyRequest } from "fastify";
 import { getDbSettings, networkingStore } from "@app/db";
@@ -27,10 +28,11 @@ afterAll(() => {
 const service = new NetworkingService();
 const social = new NetworkingSocialService(service);
 const meetings = new NetworkingMeetingsService(service);
-const admin = new NetworkingAdminService(service, meetings);
+const inventory = new NetworkingInventoryService();
+const admin = new NetworkingAdminService(service, meetings, inventory);
 const mfa = new NetworkingMfaService();
 const controller = new NetworkingPublicController(
-  new NetworkingUploadsService(), service, social, meetings, new NetworkingExportsService(admin, social, meetings),
+  new NetworkingUploadsService(), service, social, meetings, new NetworkingExportsService(social, meetings),
 );
 const slots = ["09:00", "09:30", "10:00", "10:30"].map((time) => new Date(`2031-06-10T${time}:00.000Z`));
 let fixture: Awaited<ReturnType<typeof createNetworkingWriteFixture>>;
@@ -98,16 +100,16 @@ describe.runIf(dbTestsEnabled())("networking writes on a pool of one connection"
   });
 
   it("runs organizer configuration, moderation and inventory writes", async () => {
-    const saved = await admin.config(fixture.event.id, { enabled: true, meetingsEnabled: true }, "organizer");
+    const saved = await admin.updateConfig(fixture.event.id, { enabled: true, meetingsEnabled: true }, "organizer");
     expect(saved.enabled).toBe(true);
     await admin.updateProfile(fixture.event.id, people[5].profile.id, { status: "SUSPENDED" }, "organizer");
     await admin.updateProfile(fixture.event.id, people[5].profile.id, { status: "ACTIVE" }, "organizer");
     const report = await social.report(people[2], { profileId: people[5].profile.id, reason: "Spam" });
     await admin.moderate(fixture.event.id, report.id, { action: "SUSPEND", note: "Pool" }, "organizer");
-    const space = await admin.inventory.saveSpace(fixture.event.id, { name: "Hall", kind: "TABLE", capacity: 2 }, "organizer");
-    await admin.inventory.saveSpace(fixture.event.id, { capacity: 1 }, "organizer", space.id);
+    const space = await inventory.saveSpace(fixture.event.id, { name: "Hall", kind: "TABLE", capacity: 2 }, "organizer");
+    await inventory.saveSpace(fixture.event.id, { capacity: 1 }, "organizer", space.id);
     const [table] = await networkingStore().all("tables", { eventId: fixture.event.id, spaceId: space.id });
-    await admin.inventory.removeTable(fixture.event.id, table.id, "organizer");
-    await admin.inventory.removeSpace(fixture.event.id, space.id, "organizer");
+    await inventory.removeTable(fixture.event.id, table.id, "organizer");
+    await inventory.removeSpace(fixture.event.id, space.id, "organizer");
   });
 });

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { LanguageCodeSchema, type LanguageCode } from "./i18n.schema";
 import { PaymentStatusSchema } from "./registrations";
 
 export const NETWORKING_PROFILE_STATUSES = [
@@ -17,6 +18,9 @@ export const NETWORKING_MEETING_STATUSES = [
   "COMPLETED",
   "NO_SHOW",
 ] as const;
+export const NETWORKING_OPEN_MEETING_STATUSES: readonly string[] = ["PENDING", "CONFIRMED", "PENDING_ALLOCATION"];
+export const NETWORKING_PLANNED_MEETING_STATUSES: readonly string[] = ["CONFIRMED", "COMPLETED", "NO_SHOW"];
+export const NETWORKING_RELEASED_MEETING_STATUSES: readonly string[] = ["CANCELLED", "DECLINED", "EXPIRED"];
 const id = z.string().uuid();
 const instant = z.string().datetime({ offset: true });
 const url = z
@@ -44,20 +48,7 @@ export function networkingProfileOverrides(values: Record<string, unknown>) {
     key === "consent" || (NETWORKING_PROFESSIONAL_FIELDS as readonly string[]).includes(key)));
 }
 export const NetworkingFieldMappingSchema = z.partialRecord(
-  z.enum([
-    "company",
-    "jobTitle",
-    "sector",
-    "bio",
-    "city",
-    "country",
-    "website",
-    "photoUrl",
-    "interests",
-    "offers",
-    "seeks",
-    "consent",
-  ]),
+  z.enum([...NETWORKING_PROFESSIONAL_FIELDS, "consent"]),
   z.string().max(200),
 );
 export const NetworkingConfigSchema = z.object({
@@ -93,10 +84,10 @@ export const NetworkingConfigSchema = z.object({
   retentionDays: z.number().int().min(1).max(730).default(90),
   requestExpiryHours: z.number().int().min(1).max(168).default(48),
   languages: z
-    .array(z.enum(["fr", "en", "ar"]))
+    .array(LanguageCodeSchema)
     .min(1)
     .default(["fr", "en", "ar"]),
-  defaultLanguage: z.enum(["fr", "en", "ar"]).default("fr"),
+  defaultLanguage: LanguageCodeSchema.default("fr"),
   logoUrl: nullableUrl,
   primaryColor: z
     .string()
@@ -150,20 +141,23 @@ export const NetworkingConfigSchema = z.object({
     .default([]),
   blackoutSlots: z.array(instant).max(20000).default([]),
 });
+// Zod 4 applies inner defaults through partial(); PATCH results retain only supplied keys.
+function patchSchema<S extends z.ZodObject>(schema: S) {
+  return z.unknown().transform((input, ctx) => {
+    const parsed = schema.safeParse(input);
+    if (!parsed.success) {
+      for (const issue of parsed.error.issues) ctx.addIssue({ ...issue });
+      return z.NEVER;
+    }
+    const keys = new Set(Object.keys(input as object));
+    return Object.fromEntries(Object.entries(parsed.data).filter(([key]) => keys.has(key))) as z.output<S>;
+  });
+}
 const networkingConfigPatchSchema =
   NetworkingConfigSchema.partial().extend({
     expectedRevision: z.string().optional(),
   }).strict();
-// Zod 4 applies inner defaults even through partial(); a PATCH must retain only supplied keys.
-export const UpdateNetworkingConfigSchema = z.unknown().transform((input, ctx) => {
-  const parsed = networkingConfigPatchSchema.safeParse(input);
-  if (!parsed.success) {
-    for (const issue of parsed.error.issues) ctx.addIssue({ ...issue });
-    return z.NEVER;
-  }
-  const keys = new Set(Object.keys(input as object));
-  return Object.fromEntries(Object.entries(parsed.data).filter(([key]) => keys.has(key))) as z.infer<typeof networkingConfigPatchSchema>;
-});
+export const UpdateNetworkingConfigSchema = patchSchema(networkingConfigPatchSchema);
 export type NetworkingConfig = z.infer<typeof NetworkingConfigSchema>;
 export const NETWORKING_CONFIG_UNCONFIGURED_REVISION = "unconfigured";
 export type NetworkingConfigWithRevision = NetworkingConfig & { revision: string };
@@ -184,7 +178,7 @@ export const NetworkingProfileUpdateSchema = z
     visible: z.boolean().optional(),
     meetingsEnabled: z.boolean().optional(),
     emailPreference: z.enum(["IMMEDIATE", "DAILY", "OFF"]).optional(),
-    language: z.enum(["fr", "en", "ar"]).optional(),
+    language: LanguageCodeSchema.optional(),
     consent: z.boolean().optional(),
     resetFields: z.array(z.enum(NETWORKING_PROFESSIONAL_FIELDS)).max(11).optional(),
   })
@@ -332,16 +326,7 @@ export const NetworkingSpaceSchema = z.object({
   active: z.boolean().default(true),
 }).strict();
 const networkingSpacePatchSchema = NetworkingSpaceSchema.partial().strict();
-// Preserve supplied keys: Zod 4 partial() otherwise injects create defaults.
-export const NetworkingSpaceUpdateSchema = z.unknown().transform((input, ctx) => {
-  const parsed = networkingSpacePatchSchema.safeParse(input);
-  if (!parsed.success) {
-    for (const issue of parsed.error.issues) ctx.addIssue({ ...issue });
-    return z.NEVER;
-  }
-  const keys = new Set(Object.keys(input as object));
-  return Object.fromEntries(Object.entries(parsed.data).filter(([key]) => keys.has(key))) as z.infer<typeof networkingSpacePatchSchema>;
-});
+export const NetworkingSpaceUpdateSchema = patchSchema(networkingSpacePatchSchema);
 export type NetworkingSpaceInput = z.infer<typeof NetworkingSpaceSchema>;
 export interface NetworkingSpace extends NetworkingSpaceInput {
   id: string;
@@ -361,16 +346,7 @@ export const NetworkingTableSchema = z
   })
   .strict();
 const networkingTablePatchSchema = NetworkingTableSchema.partial().strict();
-// Preserve supplied keys: Zod 4 partial() otherwise injects create defaults.
-export const NetworkingTableUpdateSchema = z.unknown().transform((input, ctx) => {
-  const parsed = networkingTablePatchSchema.safeParse(input);
-  if (!parsed.success) {
-    for (const issue of parsed.error.issues) ctx.addIssue({ ...issue });
-    return z.NEVER;
-  }
-  const keys = new Set(Object.keys(input as object));
-  return Object.fromEntries(Object.entries(parsed.data).filter(([key]) => keys.has(key))) as z.infer<typeof networkingTablePatchSchema>;
-});
+export const NetworkingTableUpdateSchema = patchSchema(networkingTablePatchSchema);
 export type NetworkingTableInput = z.infer<typeof NetworkingTableSchema>;
 export const NetworkingNotificationReadSchema = z
   .object({ ids: z.array(id).max(100).optional() })
@@ -412,7 +388,7 @@ export interface NetworkingProfile {
   visible: boolean;
   meetingsEnabled: boolean;
   emailPreference?: "IMMEDIATE" | "DAILY" | "OFF";
-  language?: "fr" | "en" | "ar";
+  language?: LanguageCode;
   lastActiveAt: string | null;
   featured: boolean;
   standTableId?: string | null;

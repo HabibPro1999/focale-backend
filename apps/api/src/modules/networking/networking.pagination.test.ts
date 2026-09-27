@@ -61,7 +61,7 @@ it.each(["connections", "meetings"] as const)("%s paginates equal sort keys with
   const social = new NetworkingSocialService({} as NetworkingService);
   const meetings = new NetworkingMeetingsService({} as NetworkingService);
   const expire = vi.spyOn(meetings, "expire").mockResolvedValue(undefined);
-  const hydrate = vi.spyOn(meetings, "hydrate").mockImplementation(async (row) => ({ ...row, table: { space: { name: "Hall" } } }) as any);
+  const hydrate = vi.spyOn(meetings, "hydrateForViewer").mockImplementation(async (row) => ({ ...row, table: { space: { name: "Hall" } } }) as any);
   const list = (query = {}) => kind === "connections" ? social.connections(ctx, query) : meetings.list(ctx, query);
   let cursor: string | undefined;
   const seen: string[] = [];
@@ -96,7 +96,7 @@ it.each(["connections", "meetings"] as const)("internal %s export listing is nev
   const social = new NetworkingSocialService({} as NetworkingService);
   const meetings = new NetworkingMeetingsService({} as NetworkingService);
   vi.spyOn(meetings, "expire").mockResolvedValue(undefined);
-  vi.spyOn(meetings, "hydrate").mockImplementation(async (row) => row as any);
+  vi.spyOn(meetings, "hydrateForViewer").mockImplementation(async (row) => row as any);
   const items = kind === "connections" ? await social.allConnections(ctx) : await meetings.allMeetings(ctx);
   expect(items).toHaveLength(137);
   expect(kind === "connections" ? mocks.connections : mocks.meetings).toHaveBeenCalledWith(ctx.event.id, ctx.profile.id, ...(kind === "connections" ? [ctx.config.eligiblePaymentStatuses] : []));

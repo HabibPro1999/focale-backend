@@ -1,14 +1,16 @@
 import {
+  NETWORKING_OPEN_MEETING_STATUSES,
+  NetworkingSpaceSchema,
+  type NetworkingSpaceInput,
+  type NetworkingTableInput,
+} from "@app/contracts";
+import {
   BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import {
-  NetworkingSpaceSchema,
-  type NetworkingSpaceInput,
-  type NetworkingTableInput,
-} from "@app/contracts";
+
 import {
   networkingStore,
   networkingTables,
@@ -18,7 +20,7 @@ import {
 } from "@app/db";
 
 const upcoming = (meeting: NetworkingRow<"meetings">) =>
-  ["PENDING", "CONFIRMED", "PENDING_ALLOCATION"].includes(meeting.status) &&
+  NETWORKING_OPEN_MEETING_STATUSES.includes(meeting.status) &&
   meeting.endsAt > new Date();
 const location = (space: NetworkingRow<"spaces">) =>
   [space.name, space.location].filter(Boolean).join(" · ");

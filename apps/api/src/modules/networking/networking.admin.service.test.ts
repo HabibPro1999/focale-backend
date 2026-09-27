@@ -1,3 +1,4 @@
+import { NetworkingInventoryService } from "./networking.inventory.service";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NETWORKING_CONFIG_UNCONFIGURED_REVISION, NetworkingConfigSchema, UpdateNetworkingConfigSchema } from "@app/contracts";
 import type { NetworkingRow, NetworkingStore } from "@app/db";
@@ -65,7 +66,7 @@ import { NetworkingConfigDto } from "./networking.dto";
 import { NetworkingAdminService } from "./networking.admin.service";
 import type { NetworkingService } from "./networking.service";
 import type { NetworkingMeetingsService } from "./networking.meetings.service";
-const service = new NetworkingAdminService({} as NetworkingService, {} as NetworkingMeetingsService);
+const service = new NetworkingAdminService({} as NetworkingService, {} as NetworkingMeetingsService, new NetworkingInventoryService());
 const revision = "2030-01-01T00:00:00.000Z";
 beforeEach(() => {
   state.row = { eventId: "event", config: NetworkingConfigSchema.parse({}), createdAt: new Date(revision), updatedAt: new Date(revision) };
@@ -82,11 +83,11 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 describe("NetworkingAdminService config", () => {
   it("returns the stored updatedAt revision", async () => {
-    expect((await service.config("event")).revision).toBe(revision);
+    expect((await service.getConfig("event")).revision).toBe(revision);
   });
   it("rejects stale revisions inside the transaction without writes", async () => {
     state.requireTransaction = true;
-    await expect(service.config("event", { expectedRevision: "stale", requireSecondFactor: true })).rejects.toMatchObject({
+    await expect(service.updateConfig("event", { expectedRevision: "stale", requireSecondFactor: true }, "admin")).rejects.toMatchObject({
       status: 409, response: { code: "NETWORKING_CONFIG_STALE" },
     });
     expect(state.row!.config.requireSecondFactor).toBe(false);
@@ -97,7 +98,7 @@ describe("NetworkingAdminService config", () => {
   });
   it("accepts matching revisions and strips the transport field from storage and audit", async () => {
     const patch = UpdateNetworkingConfigSchema.parse({ expectedRevision: revision, requireSecondFactor: true });
-    const result = await service.config("event", patch);
+    const result = await service.updateConfig("event", patch, "admin");
     expect(result.requireSecondFactor).toBe(true);
     expect(state.row!.config).not.toHaveProperty("revision");
     expect(state.row!.config).not.toHaveProperty("expectedRevision");
@@ -105,45 +106,45 @@ describe("NetworkingAdminService config", () => {
   });
   it("preserves omitted settings through the controller validation pipe", async () => {
     const openingHours = [{ date: "2030-05-01", start: "09:00", end: "10:00" }];
-    await service.config("event", { requireSecondFactor: true, meetingsEnabled: false, openingHours });
+    await service.updateConfig("event", { requireSecondFactor: true, meetingsEnabled: false, openingHours }, "admin");
     const patch = new ZodValidationPipe().transform({ logoUrl: "https://example.test/logo.png" }, {
       type: "body", metatype: NetworkingConfigDto,
     });
     expect(patch).toEqual({ logoUrl: "https://example.test/logo.png" });
-    expect(await service.config("event", patch as NetworkingConfigDto)).toMatchObject({ requireSecondFactor: true, meetingsEnabled: false, openingHours });
+    expect(await service.updateConfig("event", patch as NetworkingConfigDto, "admin")).toMatchObject({ requireSecondFactor: true, meetingsEnabled: false, openingHours });
   });
   it("preserves sequential partial MFA and logo updates", async () => {
-    await service.config("event", { requireSecondFactor: true });
-    const result = await service.config("event", { logoUrl: "https://example.test/logo.png" });
+    await service.updateConfig("event", { requireSecondFactor: true }, "admin");
+    const result = await service.updateConfig("event", { logoUrl: "https://example.test/logo.png" }, "admin");
     expect(result).toMatchObject({ requireSecondFactor: true, logoUrl: "https://example.test/logo.png" });
   });
   it("merges concurrent partial updates only after acquiring the event transaction", async () => {
     state.requireTransaction = true;
     await Promise.all([
-      service.config("event", { requireSecondFactor: true }),
-      service.config("event", { logoUrl: "https://example.test/logo.png" }),
+      service.updateConfig("event", { requireSecondFactor: true }, "admin"),
+      service.updateConfig("event", { logoUrl: "https://example.test/logo.png" }, "admin"),
     ]);
     expect(state.row!.config).toMatchObject({ requireSecondFactor: true, logoUrl: "https://example.test/logo.png" });
   });
   it("uses the absent-row sentinel and rejects it once a row exists", async () => {
     state.row = null;
-    expect((await service.config("event")).revision).toBe(NETWORKING_CONFIG_UNCONFIGURED_REVISION);
-    await expect(service.config("event", { expectedRevision: revision })).rejects.toMatchObject({ status: 409 });
-    await service.config("event", { expectedRevision: NETWORKING_CONFIG_UNCONFIGURED_REVISION });
-    await expect(service.config("event", { expectedRevision: NETWORKING_CONFIG_UNCONFIGURED_REVISION })).rejects.toMatchObject({
+    expect((await service.getConfig("event")).revision).toBe(NETWORKING_CONFIG_UNCONFIGURED_REVISION);
+    await expect(service.updateConfig("event", { expectedRevision: revision }, "admin")).rejects.toMatchObject({ status: 409 });
+    await service.updateConfig("event", { expectedRevision: NETWORKING_CONFIG_UNCONFIGURED_REVISION }, "admin");
+    await expect(service.updateConfig("event", { expectedRevision: NETWORKING_CONFIG_UNCONFIGURED_REVISION }, "admin")).rejects.toMatchObject({
       status: 409, response: { code: "NETWORKING_CONFIG_STALE" },
     });
   });
   it("advances revisions even when writes occur in the same millisecond", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(revision));
-    const first = await service.config("event", { expectedRevision: revision });
-    const second = await service.config("event", { expectedRevision: first.revision });
+    const first = await service.updateConfig("event", { expectedRevision: revision }, "admin");
+    const second = await service.updateConfig("event", { expectedRevision: first.revision }, "admin");
     expect(Date.parse(first.revision)).toBe(Date.parse(revision) + 1);
     expect(Date.parse(second.revision)).toBe(Date.parse(revision) + 2);
   });
   it("accepts chronologically valid mixed-offset instants", async () => {
-    await expect(service.config("event", { opensAt: "2030-05-01T10:00:00+02:00", closesAt: "2030-05-01T09:00:00Z" })).resolves.toHaveProperty("revision");
+    await expect(service.updateConfig("event", { opensAt: "2030-05-01T10:00:00+02:00", closesAt: "2030-05-01T09:00:00Z" }, "admin")).resolves.toHaveProperty("revision");
   });
   it.each([
     { opensAt: "2030-05-01T09:00:00Z", closesAt: "2030-05-01T10:00:00+02:00" },
@@ -151,7 +152,7 @@ describe("NetworkingAdminService config", () => {
     { opensAt: "not-a-date" },
     { openingHours: [{ date: "2030-99-99", start: "09:00", end: "10:00" }] },
   ])("rejects invalid instants/windows with a validation code: %j", async (patch) => {
-    await expect(service.config("event", patch)).rejects.toMatchObject({ status: 400, response: { code: "NETWORKING_VALIDATION" } });
+    await expect(service.updateConfig("event", patch, "admin")).rejects.toMatchObject({ status: 400, response: { code: "NETWORKING_VALIDATION" } });
     expect(state.audits).toEqual([]);
   });
 });
@@ -160,16 +161,16 @@ describe("NetworkingAdminService config consent mapping and sync", () => {
   const form = (type: string) => ({ schema: { fields: [{ id: "consent_field", type }] } });
   it.each(["checkbox", "radio", "dropdown"])("accepts a consent mapping to a %s field", async (type) => {
     state.forms = [form(type)];
-    await expect(service.config("event", { fieldMapping: { consent: "consent_field" } })).resolves.toHaveProperty("revision");
+    await expect(service.updateConfig("event", { fieldMapping: { consent: "consent_field" } }, "admin")).resolves.toHaveProperty("revision");
   });
   it.each([["a text field", [form("text")]], ["a deleted field", [form("radio")].map(() => ({ schema: { fields: [] } }))], ["no form", []]])("rejects a consent mapping to %s", async (_label, forms) => {
     state.forms = forms;
-    await expect(service.config("event", { fieldMapping: { consent: "consent_field" } })).rejects.toMatchObject({ status: 400, response: { code: "NETWORKING_VALIDATION" } });
+    await expect(service.updateConfig("event", { fieldMapping: { consent: "consent_field" } }, "admin")).rejects.toMatchObject({ status: 400, response: { code: "NETWORKING_VALIDATION" } });
     expect(state.audits).toEqual([]);
   });
   it("returns the committed config and revision even when the registration re-sync fails", async () => {
     state.sync.mockRejectedValue(new Error("sync crashed"));
-    const result = await service.config("event", { enabled: true, meetingsEnabled: false }, "admin");
+    const result = await service.updateConfig("event", { enabled: true, meetingsEnabled: false }, "admin");
     // Module gates ride the config transaction's connection.
     expect(vi.mocked(assertClientModuleEnabled).mock.calls).toEqual([
       ["client", "registrations", state.tx], ["client", "emails", state.tx],
@@ -245,15 +246,15 @@ describe("NetworkingAdminService meeting assignment", () => {
       }),
       reserve: vi.fn(async () => ({ tableId: "t", status: "CONFIRMED" })),
       notify: vi.fn(),
-      hydrate: vi.fn(async (row: unknown) => row),
+      hydrateForAdmin: vi.fn(async (row: unknown) => row),
     };
-    return { plans, meetings, admin: new NetworkingAdminService({} as NetworkingService, meetings as unknown as NetworkingMeetingsService) };
+    return { plans, meetings, admin: new NetworkingAdminService({} as NetworkingService, meetings as unknown as NetworkingMeetingsService, new NetworkingInventoryService()) };
   }
   it("locks the meeting's own slot to assign a table and nothing to cancel it", async () => {
     state.meeting = { id: "m", eventId: "event", requesterId: "a", recipientId: "b", status: "CONFIRMED", startsAt, endsAt, revision: 1 };
     const { plans, meetings, admin } = harness();
     await admin.updateMeeting("event", "m", { action: "ASSIGN", tableId: "t" }, "admin");
-    expect(meetings.reserve).toHaveBeenCalledWith(expect.anything(), state.meeting, startsAt, endsAt, expect.anything(), "t", false);
+    expect(meetings.reserve).toHaveBeenCalledWith(expect.anything(), state.meeting, startsAt, endsAt, expect.anything(), { forcedTableId: "t", hold: false });
     await admin.updateMeeting("event", "m", { action: "CANCEL" }, "admin");
     expect(plans).toEqual([[{ startsAt, endsAt }], []]);
   });

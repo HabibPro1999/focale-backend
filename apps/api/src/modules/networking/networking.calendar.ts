@@ -1,4 +1,5 @@
-import { BadRequestException } from "@nestjs/common";
+import { networkingValidation } from "./networking.errors";
+
 import { NetworkingCalendarQuerySchema } from "@app/contracts";
 
 /** Start-day calendar: [first instant of date, first instant of next local date).
@@ -6,7 +7,7 @@ import { NetworkingCalendarQuerySchema } from "@app/contracts";
  * and some IANA zones skip midnight itself. An entirely skipped date is invalid.
  */
 export function networkingCalendarDay(date: string, timezone: string) {
-  const invalid = () => new BadRequestException({ code: "NETWORKING_VALIDATION", message: "Invalid calendar date or timezone" });
+  const invalid = () => networkingValidation("Invalid calendar date or timezone");
   if (!NetworkingCalendarQuerySchema.safeParse({ date }).success) throw invalid();
   try {
     const formatter = new Intl.DateTimeFormat("sv-SE", {

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NetworkingConfigSchema } from "@app/contracts";
-import type { NetworkingRow, NetworkingStore } from "@app/db";
+import { type NetworkingRow, type NetworkingStore, NetworkingAllocationLockError, NetworkingBusyError } from "@app/db";
 const mocks = vi.hoisted(() => ({
   one: vi.fn(), all: vi.fn(), insertAvailability: vi.fn(), allocationMeetings: vi.fn(), allocationReservations: vi.fn(), allocationTableUsage: vi.fn(),
   update: vi.fn(), remove: vi.fn(), insert: vi.fn(), notify: vi.fn(), summaries: vi.fn(), claimResource: vi.fn(),
@@ -23,7 +23,7 @@ vi.mock("../clients/module-gates", () => ({ isModuleEnabledForClient: () => true
 import { NetworkingService, type NetworkingContext } from "./networking.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
 import { NetworkingSocialService } from "./networking.social.service";
-import { NetworkingAllocationLockError, NetworkingBusyError } from "@app/db";
+
 const start = new Date("2099-01-01T09:00:00Z");
 const ctx = {
   event: { id: "event", slug: "event", startDate: start, endDate: new Date("2099-01-02Z"), timezone: "UTC" },
@@ -46,7 +46,7 @@ beforeEach(() => {
   mocks.transaction.mockImplementation(async (_id: string, run: Run) => run(mocks, {}));
   mocks.allocationTransaction.mockImplementation(async (_id: string, _intervals: unknown, run: Run) => run(mocks, {}));
   service = new NetworkingMeetingsService({ currentParticipant: async () => ctx, target: async () => ({ id: "b" }) } as unknown as NetworkingService);
-  vi.spyOn(service, "hydrate").mockImplementation(async (saved) => saved as any);
+  vi.spyOn(service, "hydrateForViewer").mockImplementation(async (saved) => saved as any);
 });
 describe("NetworkingMeetingsService response integrity", () => {
   it.each(["requesterCheckedInAt", "recipientCheckedInAt"] as const)("refuses reschedule after %s", async (key) => {
@@ -66,7 +66,7 @@ describe("NetworkingMeetingsService response integrity", () => {
     row.startsAt = new Date(Date.now() + 10 * 60_000); row.endsAt = new Date(+row.startsAt + 1_800_000);
     row.proposedStartsAt = new Date(+row.startsAt + 3_600_000); row.proposalBy = "b";
     const checkin = new NetworkingMeetingsService({ currentParticipant: async () => ctx, target: async () => ({ id: "b" }), badgeProfileId: async () => "b" } as unknown as NetworkingService);
-    vi.spyOn(checkin, "hydrate").mockImplementation(async (saved) => saved as any);
+    vi.spyOn(checkin, "hydrateForViewer").mockImplementation(async (saved) => saved as any);
     const saved = await checkin.checkin(ctx, row.id, "badge");
     expect(saved).toMatchObject({ requesterCheckedInAt: expect.any(Date), proposedStartsAt: null, proposalBy: null, status: "CONFIRMED" });
   });
@@ -90,7 +90,7 @@ describe("NetworkingMeetingsService response integrity", () => {
       },
     }, {});
   });
-  it.each([["MEETING_ACCEPT", "ACCEPT"], ["MEETING_REQUEST_SENT", "REQUEST"], ["MEETING_CANCELLED", "CANCEL"], ["MEETING_NO_SHOW", "NO_SHOW"]])("maps %s to action %s without a proposal window when none is pending", async (type, action) => {
+  it.each([["MEETING_ACCEPT", "ACCEPT"], ["MEETING_REQUEST_SENT", "REQUEST"], ["MEETING_CANCELLED", "CANCEL"], ["MEETING_NO_SHOW", "NO_SHOW"]] as const)("maps %s to action %s without a proposal window when none is pending", async (type, action) => {
     await service.notify(ctx, row, type, ["a"], {} as any);
     const { data } = mocks.notify.mock.calls[0]![0];
     expect(data).toMatchObject({ action });
@@ -119,9 +119,9 @@ describe("participant error codes", () => {
     row.requesterId = "x"; row.recipientId = "y";
     await expect(service.get(ctx, row.id)).rejects.toMatchObject({ status: 404, response: { code: "NETWORKING_NOT_FOUND" } });
     row.requesterId = "a";
-    const hydrate = vi.mocked(service.hydrate);
+    const hydrate = vi.mocked(service.hydrateForViewer);
     await service.get(ctx, row.id);
-    expect(hydrate).toHaveBeenCalledWith(row, mocks, false, ctx);
+    expect(hydrate).toHaveBeenCalledWith(row, ctx, mocks);
   });
   it("maps a participant claim lost to a concurrent booking to a slot conflict", async () => {
     vi.spyOn(service, "availableAt").mockResolvedValue(undefined);
@@ -137,7 +137,7 @@ describe("participant error codes", () => {
   it("a pending hold claims only its table, never the participants", async () => {
     vi.spyOn(service, "availableAt").mockResolvedValue(undefined);
     mocks.all.mockImplementation(async (kind) => kind === "tables" ? [{ id: "t", name: "A", kind: "TABLE" }] : []);
-    const hold = await service.reserve(ctx, { ...row, status: "PENDING", expiresAt: new Date(Date.now() + 60_000) }, start, row.endsAt, mocks as unknown as NetworkingStore, undefined, true);
+    const hold = await service.reserve(ctx, { ...row, status: "PENDING", expiresAt: new Date(Date.now() + 60_000) }, start, row.endsAt, mocks as unknown as NetworkingStore, { hold: true });
     expect(hold).toEqual({ tableId: "t", status: "PENDING" });
     expect(mocks.claimResource.mock.calls.map(([, , key]) => key)).toEqual(["table:t"]);
   });
@@ -214,7 +214,6 @@ describe("NetworkingSocialService notification data", () => {
     expect(mocks.all).not.toHaveBeenCalledWith("meetings", expect.anything());
   });
 });
-
 
 describe("bounded allocation and availability", () => {
   it("saves normalized availability in bulk inside the transaction", async () => {

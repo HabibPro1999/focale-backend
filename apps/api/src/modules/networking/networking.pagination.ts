@@ -1,8 +1,14 @@
-import { BadRequestException } from "@nestjs/common";
+import { networkingValidation } from "./networking.errors";
+
 import { NetworkingParticipantCursorSchema, NetworkingParticipantListQuerySchema, type NetworkingParticipantListQuery } from "@app/contracts";
 import type { NetworkingContext } from "./networking.service";
 
-const invalid = () => new BadRequestException({ code: "NETWORKING_VALIDATION", message: "Invalid pagination query or cursor" });
+const invalid = () => networkingValidation("Invalid pagination query or cursor");
+
+/** Callers retain their distinct defaults, including the direct-call zero-limit behavior. */
+export function sliceList<T>(items: T[], page: number, limit: number) {
+  return items.slice((page - 1) * limit, page * limit);
+}
 
 /** HTTP lists always paginate (K3): 50 items by default, at most 200. */
 export function participantPagination(kind: "connections" | "meetings", ctx: NetworkingContext, input: NetworkingParticipantListQuery = {}) {
@@ -29,5 +35,22 @@ export function participantPagination(kind: "connections" | "meetings", ctx: Net
     limit: query.limit ?? 50,
     after,
     cursor: (at: Date, id: string) => Buffer.from(JSON.stringify({ version: 1, scope, at: at.toISOString(), id })).toString("base64url"),
+  };
+}
+
+/** Hydrate items before fetching the first-page count, matching both original callers. */
+export async function toParticipantPage<Row extends { id: string }, Item>(
+  page: ReturnType<typeof participantPagination>,
+  rows: Row[],
+  date: (row: Row) => Date,
+  mapItems: (rows: Row[]) => Item[] | Promise<Item[]>,
+  countFirstPage: () => Promise<number>,
+) {
+  const visibleRows = rows.slice(0, page.limit);
+  const last = visibleRows.at(-1);
+  return {
+    items: await mapItems(visibleRows),
+    nextCursor: rows.length > page.limit && last ? page.cursor(date(last), last.id) : null,
+    ...(page.after ? {} : { total: await countFirstPage() }),
   };
 }
