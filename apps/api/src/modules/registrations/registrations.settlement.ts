@@ -2,11 +2,10 @@ import { type PriceBreakdown } from "@app/contracts";
 import { findRegistrationUsagesForRecalc, updateUsageAmount, type DbExecutor } from "@app/db";
 import {
   calculateApplicableAmount,
-  calculateSettlement,
-  isFullySponsored as hasFullSponsorship,
   withSponsorshipTotal,
 } from "@app/shared";
 import type { AccessService } from "../access/access.service";
+import { statusAfterRegistrationRecalc } from "../sponsorships/sponsorship-settlement";
 
 interface RecalcInput {
   id: string;
@@ -80,35 +79,5 @@ export async function recalculateLinkedSponsorshipSettlement(
     coveredAccessIds,
   };
 
-  if (
-    registration.paymentStatus === "WAIVED" ||
-    registration.paymentStatus === "REFUNDED" ||
-    registration.paymentStatus === "PAID" ||
-    registration.paymentStatus === "VERIFYING"
-  ) {
-    return result;
-  }
-
-  const settlement = calculateSettlement({
-    totalAmount,
-    paidAmount: registration.paidAmount,
-    sponsorshipAmount,
-  });
-  if (hasFullSponsorship({ sponsorshipAmount, totalAmount })) {
-    result.paymentStatus = "SPONSORED";
-  } else if (
-    settlement.isSettled &&
-    registration.paidAmount > 0
-  ) {
-    result.paymentStatus = "PAID";
-  } else {
-    result.paymentStatus = settlement.isPartiallyPaid ? "PARTIAL" : "PENDING";
-  }
-  if (result.paymentStatus !== undefined) {
-    result.paidAt =
-      result.paymentStatus === "PAID" || result.paymentStatus === "SPONSORED"
-        ? registration.paidAt ?? new Date()
-        : null;
-  }
-  return result;
+  return Object.assign(result, statusAfterRegistrationRecalc(registration, sponsorshipAmount, totalAmount));
 }

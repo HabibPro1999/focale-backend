@@ -5,7 +5,17 @@ export * from "./forms";
 export * from "./pricing";
 export * from "./access";
 export * from "./email";
-export * from "./sponsorships";
+export * from "./sponsorships-read";
+export * from "./sponsorships-batch";
+export * from "./sponsorship-usages";
+export * from "./sponsorship-registrants";
+export type {
+  SponsorshipRow,
+  SponsorshipUsageRow,
+  SponsorshipBatchRow,
+  SponsorshipClientGate,
+  ExistingUsageRow,
+} from "./sponsorships-shared";
 export * from "./registrations";
 export * from "./abstracts";
 export * from "./certificates";
