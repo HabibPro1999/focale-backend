@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { createLogger, makeWorkerId } from "@app/shared";
 import {
   processOutboxEvents,
+  hasOutboxActivity,
   type OutboxHandlerRegistry,
   type OutboxHandlerResult,
   type TriggeredEmailOutboxPayload,
@@ -73,12 +74,7 @@ export class OutboxJob implements Job {
       scope: "background",
       handlers: this.handlers,
     });
-    if (
-      result.processed > 0 ||
-      result.skipped > 0 ||
-      result.failed > 0 ||
-      result.leaseLost > 0
-    ) {
+    if (hasOutboxActivity(result)) {
       log.info({ result }, "Outbox events processed");
     }
   }

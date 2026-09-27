@@ -1,3 +1,4 @@
+import { hasUpdateField, PaginationQueryShape, PaginationLimitSchema } from "./zod-helpers";
 import { PaymentStatusSchema, RegistrationRoleSchema } from "./registration-enums";
 export { PaymentStatusSchema, RegistrationRoleSchema } from "./registration-enums";
 import { z } from "zod";
@@ -151,7 +152,7 @@ export const AdminEditRegistrationSchema = z
     note: z.string().max(2000).nullable().optional(),
     labName: z.string().max(200).nullable().optional(),
   })
-  .refine((data) => Object.values(data).some((v) => v !== undefined), {
+  .refine(hasUpdateField, {
     message: "At least one field must be provided for update",
   });
 
@@ -160,8 +161,7 @@ export const AdminEditRegistrationSchema = z
 // ============================================================================
 
 export const ListRegistrationsQuerySchema = z.strictObject({
-  page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(20),
+  ...PaginationQueryShape,
   paymentStatus: PaymentStatusSchema.optional(),
   paymentMethod: PaymentMethodSchema.optional(),
   role: RegistrationRoleSchema.optional(),
@@ -303,8 +303,8 @@ export type RegistrationColumnsResponse = z.infer<
 // ============================================================================
 
 export const ListRegistrationAuditLogsQuerySchema = z.strictObject({
-  page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(50),
+  page: PaginationQueryShape.page,
+  limit: PaginationLimitSchema.default(50),
 });
 
 export const AuditActionSchema = z.enum([
@@ -345,8 +345,8 @@ export type RegistrationAuditLog = z.infer<typeof RegistrationAuditLogSchema>;
 // ============================================================================
 
 export const ListRegistrationEmailLogsQuerySchema = z.strictObject({
-  page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(50),
+  page: PaginationQueryShape.page,
+  limit: PaginationLimitSchema.default(50),
 });
 
 // Registration email logs only ever carry these three triggers (or null).

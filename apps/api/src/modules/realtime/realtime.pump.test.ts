@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ processOutboxEvents: vi.fn() }));
 
-vi.mock("@app/db", () => ({
+vi.mock("@app/db", async (importOriginal) => ({
+  hasOutboxActivity: (await importOriginal<typeof import("@app/db")>()).hasOutboxActivity,
   processOutboxEvents: mocks.processOutboxEvents,
   REALTIME_EMIT_TYPE: "realtime.emit",
 }));

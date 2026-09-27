@@ -22,3 +22,4 @@ export {
   type OutboxProcessingScope,
   type RealtimeOutboxPayload,
 } from "./types";
+export { hasOutboxActivity } from "./activity";

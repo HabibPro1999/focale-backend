@@ -1,9 +1,8 @@
+import { hasUpdateField } from "./zod-helpers";
 import { z } from "zod";
 import { findConditionConflicts } from "./condition-satisfiability";
 import { ConditionSchema } from "./condition.schema";
 
-const hasUpdateField = (data: Record<string, unknown>) =>
-  Object.values(data).some((value) => value !== undefined);
 
 // ============================================================================
 // Embedded Pricing Rule Schema

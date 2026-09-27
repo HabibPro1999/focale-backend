@@ -1,3 +1,4 @@
+import { PUBLIC_CACHE_CONTROL, PRIVATE_CACHE_CONTROL } from "./storage.provider";
 import { getFirebaseStorage } from "../firebase";
 import type {
   DownloadedFile,
@@ -14,7 +15,7 @@ export class FirebaseStorageProvider implements StorageProvider {
   ): Promise<string> {
     const file = await this.save(buffer, key, contentType, {
       ...options,
-      cacheControl: options?.cacheControl ?? "public, max-age=31536000",
+      cacheControl: options?.cacheControl ?? PUBLIC_CACHE_CONTROL,
     });
     await file.makePublic();
     return file.publicUrl();
@@ -28,7 +29,7 @@ export class FirebaseStorageProvider implements StorageProvider {
   ): Promise<string> {
     await this.save(buffer, key, contentType, {
       ...options,
-      cacheControl: options?.cacheControl ?? "private, max-age=0",
+      cacheControl: options?.cacheControl ?? PRIVATE_CACHE_CONTROL,
     });
     return key;
   }

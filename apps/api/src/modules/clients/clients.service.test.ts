@@ -1,3 +1,4 @@
+import { expectHttpError } from "../../testing/expect-error";
 import "reflect-metadata";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpException } from "@nestjs/common";
@@ -56,21 +57,7 @@ function makeClient(overrides: Partial<ClientRow> = {}): ClientRow {
   };
 }
 
-async function expectHttpError(
-  promise: Promise<unknown>,
-  status: number,
-  code: string,
-): Promise<void> {
-  try {
-    await promise;
-    throw new Error("expected the promise to reject");
-  } catch (err) {
-    expect(err).toBeInstanceOf(HttpException);
-    const e = err as HttpException;
-    expect(e.getStatus()).toBe(status);
-    expect((e.getResponse() as { code: string }).code).toBe(code);
-  }
-}
+
 
 describe("ClientsService", () => {
   const service = new ClientsService();

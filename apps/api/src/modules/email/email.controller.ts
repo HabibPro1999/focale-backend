@@ -18,7 +18,7 @@ import { Auth } from "../../core/auth/auth.decorator";
 import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
-import { assertEventWritable } from "../events/events.service";
+import { assertEventWritable } from "../events";
 import { assertClientModuleEnabled } from "../clients/module-gates";
 import { AppException } from "../../core/app-exception";
 import { EmailTemplateService } from "./email-template.service";
