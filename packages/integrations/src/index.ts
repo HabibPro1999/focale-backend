@@ -10,3 +10,6 @@ export * from "./networking/notification-worker";
 export * from "./networking/notification-rendering";
 
 export * from "./networking/report-pdf";
+
+export { icsDocument, icsEscape, icsTime, foldIcs } from "./networking/ics";
+export { deleteOwnedNetworkingPhoto, isStorageNotFound } from "./storage/networking-photo";

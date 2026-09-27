@@ -1,6 +1,7 @@
 import { sendNotification } from "web-push";
 import {
   claimNetworkingDeliveries,
+  NETWORKING_DELIVERY_MAX_ATTEMPTS,
   networkingParticipantExportContacts,
   deleteNetworkingPushSubscription,
   networkingDeliveryContext,
@@ -50,26 +51,38 @@ export interface NetworkingDeliveryDependencies {
   batchSize?: number;
 }
 
-async function processOne(
-  row: NetworkingDeliveryRow,
-  dependencies: NetworkingDeliveryDependencies,
-) {
-  if (!(await refreshNetworkingDeliveryLease(row))) return "lease_lost";
-  let context = await networkingDeliveryContext(row);
-  if (row.type === "POST_EVENT_REPORT")
-    return processNetworkingPostEventReport(row, context, dependencies.storage);
-  const skip = async (reason: string) => {
-    await finishNetworkingEmailLog(row, "skipped");
-    await updateNetworkingDelivery(row, {
-      status: "SKIPPED",
-      lockedUntil: null,
-      payload: { ...(row.type === "OTP" ? {} : row.payload), outcome: reason },
-      lastError: null,
-    });
-    return "skipped" as const;
-  };
-  const reason = networkingDeliverySkipReason(row, context);
-  if (reason) return skip(reason);
+type DeliveryContext = Awaited<ReturnType<typeof networkingDeliveryContext>>;
+type SkipDelivery = (reason: string) => Promise<"skipped">;
+// Push must see the context refreshed by email. Both channels mutate the same
+// progress and persisted-payload objects so accepted sends cannot be replayed.
+interface ChannelState {
+  context: DeliveryContext;
+  progress: DeliveryProgress;
+  payload: Record<string, unknown>;
+  failures: string[];
+}
+
+async function refreshDeliveryContext(row: NetworkingDeliveryRow): Promise<DeliveryContext | null> {
+  if (!(await refreshNetworkingDeliveryLease(row))) return null;
+  return networkingDeliveryContext(row);
+}
+
+function wantsEmail(row: NetworkingDeliveryRow, context: DeliveryContext): boolean {
+  return row.type === "OTP" ||
+    (row.type === "DAILY_DIGEST"
+      ? context.profile!.emailPreference === "DAILY"
+      : context.profile!.emailPreference === "IMMEDIATE");
+}
+
+function retryAt(attempts: number): Date {
+  return new Date(Date.now() + Math.min(15, 2 ** attempts) * 60_000);
+}
+
+function otpTerminalPayload(row: NetworkingDeliveryRow, outcome: "sent" | "retry_exhausted") {
+  return { challengeId: row.payload.challengeId, outcome };
+}
+
+async function prepareDeliveryPayload(row: NetworkingDeliveryRow, skip: SkipDelivery) {
   if (row.type === "POST_EVENT_CONTACTS") row.payload.contactCount = (await networkingParticipantExportContacts(row.eventId, row.profileId!)).length;
   if (row.type === "DAILY_DIGEST") {
     const summaries: string[] = [];
@@ -100,37 +113,22 @@ async function processOne(
     if (!summaries.length) return skip("digest_no_unread_updates");
     row.payload.digestSummaries = summaries;
   }
-  let rendered = renderNetworkingNotification(row.type, row.payload, context);
-  await localizeNetworkingNotification(
-    row,
-    rendered.title,
-    rendered.body,
-    rendered.relativeHref,
-  );
-  const progress: DeliveryProgress = {
-    ...(row.payload._deliveryProgress as DeliveryProgress | undefined),
-  };
-  const payload: Record<string, unknown> = { ...row.payload, _deliveryProgress: progress };
-  const failures: string[] = [];
-  const sendEmail =
-    row.type === "OTP" ||
-    (row.type === "DAILY_DIGEST"
-      ? context.profile!.emailPreference === "DAILY"
-      : context.profile!.emailPreference === "IMMEDIATE");
-  if (sendEmail && !progress.emailSent) {
-    if (!(await refreshNetworkingDeliveryLease(row))) return "lease_lost";
-    context = await networkingDeliveryContext(row);
+}
+
+async function deliverEmail(row: NetworkingDeliveryRow, dependencies: NetworkingDeliveryDependencies, state: ChannelState, skip: SkipDelivery) {
+  let context = state.context;
+  const { progress, payload, failures } = state;
+  if (wantsEmail(row, context) && !progress.emailSent) {
+    const refreshed = await refreshDeliveryContext(row);
+    if (refreshed === null) return "lease_lost";
+    context = refreshed;
+    state.context = context;
     const changed = networkingDeliverySkipReason(row, context);
     if (changed) return skip(changed);
     const contacts = row.type === "POST_EVENT_CONTACTS" || row.payload.includeContacts === true ? await networkingParticipantExportContacts(row.eventId, row.profileId!) : undefined;
     if (contacts) { row.payload.contactCount = contacts.length; payload.contactCount = contacts.length; }
-    rendered = renderNetworkingNotification(row.type, row.payload, context);
-    const stillWantsEmail =
-      row.type === "OTP" ||
-      (row.type === "DAILY_DIGEST"
-        ? context.profile!.emailPreference === "DAILY"
-        : context.profile!.emailPreference === "IMMEDIATE");
-    if (stillWantsEmail) {
+    const rendered = renderNetworkingNotification(row.type, row.payload, context);
+    if (wantsEmail(row, context)) {
       let accepted: { messageId?: string } | undefined;
       try {
         const tracking = await beginNetworkingEmailLog(row, {
@@ -187,6 +185,10 @@ async function processOne(
       }
     }
   }
+}
+
+async function deliverPush(row: NetworkingDeliveryRow, dependencies: NetworkingDeliveryDependencies, state: ChannelState, skip: SkipDelivery) {
+  const { context, progress, payload, failures } = state;
   if (row.type !== "OTP" && row.type !== "DAILY_DIGEST") {
     const delivered = new Set(progress.pushEndpoints ?? []);
     const push = dependencies.push ?? sendNotification;
@@ -200,13 +202,13 @@ async function processOne(
         await deleteNetworkingPushSubscription(subscription.id);
         continue;
       }
-      if (!(await refreshNetworkingDeliveryLease(row))) return "lease_lost";
-      const current = await networkingDeliveryContext(row);
+      const current = await refreshDeliveryContext(row);
+      if (current === null) return "lease_lost";
       const changed = networkingDeliverySkipReason(row, current);
       if (changed) return skip(changed);
       if (!current.subscriptions.some((item) => item.id === subscription.id))
         continue;
-      rendered = renderNetworkingNotification(row.type, row.payload, current);
+      const rendered = renderNetworkingNotification(row.type, row.payload, current);
       try {
         const { publicKey, privateKey, subject } = networkingConfig().vapid;
         if (!publicKey || !privateKey || !subject)
@@ -246,19 +248,58 @@ async function processOne(
         return "lease_lost";
     }
   }
+}
+
+async function processOne(
+  row: NetworkingDeliveryRow,
+  dependencies: NetworkingDeliveryDependencies,
+) {
+  const context = await refreshDeliveryContext(row);
+  if (context === null) return "lease_lost";
+  if (row.type === "POST_EVENT_REPORT")
+    return processNetworkingPostEventReport(row, context, dependencies.storage);
+  const skip = async (reason: string) => {
+    await finishNetworkingEmailLog(row, "skipped");
+    await updateNetworkingDelivery(row, {
+      status: "SKIPPED",
+      lockedUntil: null,
+      payload: { ...(row.type === "OTP" ? {} : row.payload), outcome: reason },
+      lastError: null,
+    });
+    return "skipped" as const;
+  };
+  const reason = networkingDeliverySkipReason(row, context);
+  if (reason) return skip(reason);
+  const prepared = await prepareDeliveryPayload(row, skip);
+  if (prepared) return prepared;
+  const rendered = renderNetworkingNotification(row.type, row.payload, context);
+  await localizeNetworkingNotification(
+    row,
+    rendered.title,
+    rendered.body,
+    rendered.relativeHref,
+  );
+  const progress: DeliveryProgress = {
+    ...(row.payload._deliveryProgress as DeliveryProgress | undefined),
+  };
+  const payload: Record<string, unknown> = { ...row.payload, _deliveryProgress: progress };
+  const failures: string[] = [];
+  const state = { context, progress, payload, failures };
+  const emailOutcome = await deliverEmail(row, dependencies, state, skip);
+  if (emailOutcome) return emailOutcome;
+  const pushOutcome = await deliverPush(row, dependencies, state, skip);
+  if (pushOutcome) return pushOutcome;
   if (failures.length) {
-    const exhausted = row.attempts >= 5;
+    const exhausted = row.attempts >= NETWORKING_DELIVERY_MAX_ATTEMPTS;
     await updateNetworkingDelivery(row, {
       status: "FAILED",
       lockedUntil: null,
       payload:
         row.type === "OTP" && exhausted
-          ? { challengeId: row.payload.challengeId, outcome: "retry_exhausted" }
+          ? otpTerminalPayload(row, "retry_exhausted")
           : payload,
       lastError: `Notification channels failed: ${failures.map((channel) => channel.split(":")[0]).join(", ")}`,
-      availableAt: new Date(
-        Date.now() + Math.min(15, 2 ** row.attempts) * 60_000,
-      ),
+      availableAt: retryAt(row.attempts),
     });
     return "failed";
   }
@@ -268,7 +309,7 @@ async function processOne(
     lastError: null,
     payload:
       row.type === "OTP"
-        ? { challengeId: row.payload.challengeId, outcome: "sent" }
+        ? otpTerminalPayload(row, "sent")
         : payload,
   });
   return "sent";
@@ -291,18 +332,13 @@ export async function processNetworkingDeliveries(
       await updateNetworkingDelivery(row, {
         status: "FAILED",
         lockedUntil: null,
-        ...(row.type === "OTP" && row.attempts >= 5
+        ...(row.type === "OTP" && row.attempts >= NETWORKING_DELIVERY_MAX_ATTEMPTS
           ? {
-              payload: {
-                challengeId: row.payload.challengeId,
-                outcome: "retry_exhausted",
-              },
+              payload: otpTerminalPayload(row, "retry_exhausted"),
             }
           : {}),
         lastError: "Notification delivery failed",
-        availableAt: new Date(
-          Date.now() + Math.min(15, 2 ** row.attempts) * 60_000,
-        ),
+        availableAt: retryAt(row.attempts),
       });
       result.failed++;
     }

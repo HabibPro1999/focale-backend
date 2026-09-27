@@ -49,10 +49,15 @@ vi.mock("@app/db", async (original) => {
     syncNetworkingRegistration: db.sync,
   };
 });
-vi.mock("@app/integrations", async (original) => ({
-  ...(await original<typeof import("@app/integrations")>()),
-  getStorageProvider: () => ({ delete: db.delete }),
-}));
+vi.mock("@app/integrations", async (original) => {
+  const integrations = await original<typeof import("@app/integrations")>();
+  return {
+    ...integrations,
+    getStorageProvider: () => ({ delete: db.delete }),
+    deleteOwnedNetworkingPhoto: (url: string | null | undefined, eventId: string, profileId: string) =>
+      integrations.deleteOwnedNetworkingPhoto(url, eventId, profileId, { delete: db.delete }),
+  };
+});
 
 const token = "t".repeat(48);
 const consentForm = {

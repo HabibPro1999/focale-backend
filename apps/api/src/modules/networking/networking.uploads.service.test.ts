@@ -13,10 +13,15 @@ vi.mock("sharp", async (original) => {
     },
   };
 });
-vi.mock("@app/integrations", async (original) => ({
-  ...(await original<typeof import("@app/integrations")>()),
-  getStorageProvider: () => storage,
-}));
+vi.mock("@app/integrations", async (original) => {
+  const integrations = await original<typeof import("@app/integrations")>();
+  return {
+    ...integrations,
+    getStorageProvider: () => storage,
+    deleteOwnedNetworkingPhoto: (url: string | null | undefined, eventId: string, profileId: string) =>
+      integrations.deleteOwnedNetworkingPhoto(url, eventId, profileId, storage),
+  };
+});
 import { NetworkingUploadsService, deleteNetworkingPhoto, type NetworkingMultipartRequest } from "./networking.uploads.service";
 const request = (buffer: Buffer) =>
   ({

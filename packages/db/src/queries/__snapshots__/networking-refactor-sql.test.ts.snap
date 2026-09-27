@@ -129,6 +129,80 @@ exports[`pins discovery's lateral, spaced predicates and NOT IN union with param
 ]
 `;
 
+exports[`pins durable report email scope alongside its other aggregates 1`] = `
+[
+  {
+    "params": [
+      "event",
+      "event",
+      "event",
+      "event",
+      "event",
+      "event",
+      "event",
+      "event",
+      "event",
+      "event",
+      "event",
+      "event",
+      "event",
+      "event",
+      "event",
+      "event",
+      "event",
+    ],
+    "sql": "
+    SELECT
+      (SELECT count(*)::int4 FROM networking_profiles WHERE event_id=$1) AS participants,
+      (SELECT count(*)::int4 FROM networking_profiles WHERE event_id=$2 AND last_active_at IS NOT NULL) AS active_participants,
+      (SELECT count(*)::int4 FROM networking_audit WHERE event_id=$3 AND action='PROFILE_VIEW') AS profile_views,
+      (SELECT count(*)::int4 FROM networking_interests WHERE event_id=$4 AND action='LIKE') AS interests,
+      (SELECT count(*)::int4 FROM networking_connections WHERE event_id=$5) AS connections,
+      (SELECT count(*)::int4 FROM networking_messages WHERE event_id=$6) AS messages,
+      (SELECT count(*)::int4 FROM networking_meetings WHERE event_id=$7) AS meeting_requests,
+      (SELECT count(*)::int4 FROM networking_meetings WHERE event_id=$8 AND status IN ('CONFIRMED','COMPLETED','NO_SHOW')) AS meetings,
+      (SELECT count(*)::int4 FROM networking_meetings WHERE event_id=$9 AND status IN ('PENDING','PENDING_ALLOCATION')) AS pending_meetings,
+      (SELECT count(*)::int4 FROM (SELECT connection_id FROM networking_messages WHERE event_id=$10 GROUP BY connection_id HAVING count(DISTINCT sender_id)=2) replies) AS responsive_conversations,
+      (SELECT count(DISTINCT connection_id)::int4 FROM networking_messages WHERE event_id=$11) AS conversations,
+      (SELECT count(*)::int4 FROM networking_meetings WHERE event_id=$12 AND status='COMPLETED') AS completed_meetings,
+      (SELECT count(*)::int4 FROM networking_meetings WHERE event_id=$13 AND status='NO_SHOW') AS no_shows,
+      (SELECT count(*)::int4 FROM networking_meetings WHERE event_id=$14 AND status='CANCELLED') AS cancelled_meetings,
+      (SELECT count(*)::int4 FROM email_logs WHERE context_snapshot->>'dispatchOwner'='networking' AND context_snapshot->>'eventId'=$15 AND sent_at IS NOT NULL) AS emails_sent,
+      (SELECT count(*)::int4 FROM email_logs WHERE context_snapshot->>'dispatchOwner'='networking' AND context_snapshot->>'eventId'=$16 AND opened_at IS NOT NULL) AS emails_opened,
+      (SELECT count(*)::int4 FROM email_logs WHERE context_snapshot->>'dispatchOwner'='networking' AND context_snapshot->>'eventId'=$17 AND clicked_at IS NOT NULL) AS emails_clicked
+  ",
+  },
+  {
+    "params": [
+      "event",
+    ],
+    "sql": "
+    SELECT p.sector,count(DISTINCT p.id)::int4 AS participants,count(DISTINCT c.id)::int4 AS connections,count(DISTINCT m.id)::int4 AS meetings
+    FROM networking_profiles p LEFT JOIN networking_connections c ON c.event_id=p.event_id AND (c.profile_a_id=p.id OR c.profile_b_id=p.id)
+      LEFT JOIN networking_meetings m ON m.event_id=p.event_id AND (m.requester_id=p.id OR m.recipient_id=p.id) AND m.status IN ('CONFIRMED','COMPLETED','NO_SHOW')
+    WHERE p.event_id=$1 GROUP BY p.sector ORDER BY participants DESC,p.sector
+  ",
+  },
+  {
+    "params": [
+      "Europe/Paris",
+      "event",
+      "event",
+      "event",
+    ],
+    "sql": "
+    SELECT to_char(stamp AT TIME ZONE $1,'YYYY-MM-DD') AS date,
+      sum(connections)::int4 AS connections,sum(messages)::int4 AS messages,sum(meetings)::int4 AS meetings
+    FROM (
+      SELECT created_at AS stamp,1 AS connections,0 AS messages,0 AS meetings FROM networking_connections WHERE event_id=$2
+      UNION ALL SELECT created_at,0,1,0 FROM networking_messages WHERE event_id=$3
+      UNION ALL SELECT starts_at,0,0,1 FROM networking_meetings WHERE event_id=$4 AND status IN ('CONFIRMED','COMPLETED','NO_SHOW')
+    ) activity GROUP BY 1 ORDER BY 1
+  ",
+  },
+]
+`;
+
 exports[`pins embedding enqueue and claim entitlement clauses including archived 1`] = `
 [
   {

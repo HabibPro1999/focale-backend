@@ -4,7 +4,7 @@ import { Injectable } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
 import { fileTypeFromBuffer } from "file-type";
 import sharp from "sharp";
-import { IMAGE_INPUT_LIMITS, getStorageProvider, ownedStorageKey } from "@app/integrations";
+import { IMAGE_INPUT_LIMITS, getStorageProvider, ownedStorageKey, deleteOwnedNetworkingPhoto } from "@app/integrations";
 import { createLogger } from "@app/shared";
 import type { FastifyRequest } from "fastify";
 const log = createLogger({ name: "networking:uploads" });
@@ -16,23 +16,16 @@ export type NetworkingMultipartRequest = FastifyRequest & {
     limits: { fileSize: number; files: number };
   }): Promise<{ toBuffer(): Promise<Buffer> } | undefined>;
 };
-const missing = (error: unknown) => {
-  const failure = error as { code?: string | number; name?: string; $metadata?: { httpStatusCode?: number } };
-  return failure?.code === 404 || failure?.code === "404" || failure?.name === "NoSuchKey" ||
-    failure?.$metadata?.httpStatusCode === 404;
-};
 /** Best-effort: only objects under the participant's own upload prefix are ever deleted. */
 export async function deleteNetworkingPhoto(
   photoUrl: string | null | undefined,
   eventId: string,
   profileId: string,
 ) {
-  const key = ownedStorageKey(photoUrl, `networking/${eventId}/profiles/${profileId}`);
-  if (!key) return;
   try {
-    await getStorageProvider().delete(key);
+    await deleteOwnedNetworkingPhoto(photoUrl, eventId, profileId);
   } catch (error) {
-    if (!missing(error)) log.warn({ err: error, profileId }, "Failed to delete networking photo");
+    log.warn({ err: error, profileId }, "Failed to delete networking photo");
   }
 }
 @Injectable()

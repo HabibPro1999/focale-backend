@@ -30,13 +30,12 @@ export * from "./networking-store";
 export * from "./networking-embeddings";
 export * from "./networking-delivery";
 
-export * from "./networking-read";
+export * from "./networking-discovery";
 export * from "./networking-search";
 
 export * from "./networking-projection";
 
 export * from "./networking-maintenance";
-export * from "./networking-contact-export";
 export * from "./networking-email-tracking";
 export * from "./networking-report-data";
 export * from "./networking-participant-read";

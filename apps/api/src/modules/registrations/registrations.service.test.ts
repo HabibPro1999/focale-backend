@@ -61,11 +61,15 @@ const integ = vi.hoisted(() => ({
   getStorageProvider: vi.fn(),
   compressFile: vi.fn(),
 }));
-vi.mock("@app/integrations", async (importOriginal) => ({
-  // Keep the real extractStorageKeyFromUrl (pure); stub the storage/IO fns.
-  ...(await importOriginal<Record<string, unknown>>()),
-  ...integ,
-}));
+vi.mock("@app/integrations", async (importOriginal) => {
+  const integrations = await importOriginal<typeof import("@app/integrations")>();
+  return {
+    ...integrations,
+    ...integ,
+    deleteOwnedNetworkingPhoto: (url: string | null | undefined, eventId: string, profileId: string) =>
+      integrations.deleteOwnedNetworkingPhoto(url, eventId, profileId, integ.getStorageProvider()),
+  };
+});
 
 const ft = vi.hoisted(() => ({ fileTypeFromBuffer: vi.fn() }));
 vi.mock("file-type", () => ft);

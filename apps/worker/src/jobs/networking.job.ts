@@ -1,8 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { maintainNetworkingLifecycle } from "@app/db";
 import {
-  getStorageProvider,
-  ownedStorageKey,
+  deleteOwnedNetworkingPhoto,
   processNetworkingDeliveries,
   processNetworkingEmbeddings,
 } from "@app/integrations";
@@ -33,23 +32,9 @@ export class NetworkingMaintenanceJob implements Job {
       const cleanup = async () => {
         while (next < profiles.length) {
           const profile = profiles[next++]!;
-          // Form-projected or foreign URLs are never ours to delete.
-          const key = ownedStorageKey(profile.photoUrl, `networking/${profile.eventId}/profiles/${profile.id}`);
-          if (!key) continue;
           try {
-            await getStorageProvider().delete(key);
+            await deleteOwnedNetworkingPhoto(profile.photoUrl, profile.eventId, profile.id);
           } catch (error) {
-            const failure = error as {
-              code?: string | number;
-              name?: string;
-              $metadata?: { httpStatusCode?: number };
-            };
-            if (
-              failure?.code === 404 ||
-              failure?.code === "404" ||
-              failure?.name === "NoSuchKey" ||
-              failure?.$metadata?.httpStatusCode === 404
-            ) continue;
             log.warn({ err: error, profileId: profile.id }, "Failed to delete purged networking photo");
           }
         }

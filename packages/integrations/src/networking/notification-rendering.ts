@@ -1,3 +1,5 @@
+import { icsDocument, icsEscape, icsTime } from "./ics";
+import { NETWORKING_SCHEDULED_NOTIFICATION_COPY } from "@app/contracts";
 import { createDecipheriv, createHash } from "node:crypto";
 import type { networkingDeliveryContext } from "@app/db";
 import type { EmailAttachment } from "../email/providers";
@@ -13,7 +15,7 @@ const copy = {
     MESSAGE: "You have a new message",
     APPROVAL: "Your networking access is approved",
     DAILY_DIGEST: "Your networking daily summary",
-    POST_EVENT_CONTACTS: "Your post-event connections",
+    POST_EVENT_CONTACTS: NETWORKING_SCHEDULED_NOTIFICATION_COPY.en.POST_EVENT_CONTACTS,
     contactSummary: "Your connection export is ready. Eligible connections included",
     MODERATION_WARNING: "A message from the event organizer",
     MEETING_REQUEST: "You received a meeting request",
@@ -27,8 +29,8 @@ const copy = {
     MEETING_CANCEL: "Your meeting was cancelled",
     MEETING_RESCHEDULE: "A new meeting time was proposed",
     MEETING_RESCHEDULE_DECLINED: "The proposed new time was declined; the original meeting is maintained",
-    MEETING_REMINDER_DAY: "Your meeting is tomorrow",
-    MEETING_REMINDER_HOUR: "Your meeting starts within an hour",
+    MEETING_REMINDER_DAY: NETWORKING_SCHEDULED_NOTIFICATION_COPY.en.MEETING_REMINDER_DAY,
+    MEETING_REMINDER_HOUR: NETWORKING_SCHEDULED_NOTIFICATION_COPY.en.MEETING_REMINDER_HOUR,
     MEETING_COMPLETED: "Your meeting attendance is confirmed",
     MEETING_NO_SHOW: "Meeting attendance was not confirmed",
     open: "Open networking",
@@ -60,7 +62,7 @@ const copy = {
     MESSAGE: "Vous avez un nouveau message",
     APPROVAL: "Votre accès networking est validé",
     DAILY_DIGEST: "Votre résumé networking quotidien",
-    POST_EVENT_CONTACTS: "Vos connexions après l’événement",
+    POST_EVENT_CONTACTS: NETWORKING_SCHEDULED_NOTIFICATION_COPY.fr.POST_EVENT_CONTACTS,
     contactSummary: "Votre export de connexions est prêt. Connexions éligibles incluses",
     MODERATION_WARNING: "Un message de l’organisateur",
     MEETING_REQUEST: "Vous avez reçu une demande de rendez-vous",
@@ -74,8 +76,8 @@ const copy = {
     MEETING_CANCEL: "Votre rendez-vous a été annulé",
     MEETING_RESCHEDULE: "Un nouveau créneau a été proposé",
     MEETING_RESCHEDULE_DECLINED: "Le nouveau créneau a été refusé ; le rendez-vous initial est maintenu",
-    MEETING_REMINDER_DAY: "Votre rendez-vous a lieu demain",
-    MEETING_REMINDER_HOUR: "Votre rendez-vous commence dans une heure",
+    MEETING_REMINDER_DAY: NETWORKING_SCHEDULED_NOTIFICATION_COPY.fr.MEETING_REMINDER_DAY,
+    MEETING_REMINDER_HOUR: NETWORKING_SCHEDULED_NOTIFICATION_COPY.fr.MEETING_REMINDER_HOUR,
     MEETING_COMPLETED: "Votre rencontre a été confirmée",
     MEETING_NO_SHOW: "La présence au rendez-vous n’a pas été confirmée",
     open: "Ouvrir le networking",
@@ -107,7 +109,7 @@ const copy = {
     MESSAGE: "لديك رسالة جديدة",
     APPROVAL: "تمت الموافقة على دخولك",
     DAILY_DIGEST: "ملخص التواصل اليومي",
-    POST_EVENT_CONTACTS: "علاقاتك بعد الحدث",
+    POST_EVENT_CONTACTS: NETWORKING_SCHEDULED_NOTIFICATION_COPY.ar.POST_EVENT_CONTACTS,
     contactSummary: "تصدير علاقاتك جاهز. عدد العلاقات المؤهّلة المضمّنة",
     MODERATION_WARNING: "رسالة من منظّم الفعالية",
     MEETING_REQUEST: "لديك طلب لقاء جديد",
@@ -121,8 +123,8 @@ const copy = {
     MEETING_CANCEL: "تم إلغاء موعدك",
     MEETING_RESCHEDULE: "تم اقتراح وقت جديد للقاء",
     MEETING_RESCHEDULE_DECLINED: "تم رفض الوقت المقترح الجديد؛ يبقى الموعد الأصلي مؤكّدًا",
-    MEETING_REMINDER_DAY: "موعدك غداً",
-    MEETING_REMINDER_HOUR: "يبدأ موعدك خلال ساعة",
+    MEETING_REMINDER_DAY: NETWORKING_SCHEDULED_NOTIFICATION_COPY.ar.MEETING_REMINDER_DAY,
+    MEETING_REMINDER_HOUR: NETWORKING_SCHEDULED_NOTIFICATION_COPY.ar.MEETING_REMINDER_HOUR,
     MEETING_COMPLETED: "تم تأكيد حضور اللقاء",
     MEETING_NO_SHOW: "لم يتم تأكيد حضور اللقاء",
     open: "فتح مساحة التواصل",
@@ -223,32 +225,6 @@ export function decryptNetworkingCode(value: string, secret: string): string {
   if (!/^\d{6}$/.test(code)) throw new Error("Invalid encrypted code");
   return code;
 }
-function icsEscape(value: string) {
-  return value
-    .replace(/\\/g, "\\\\")
-    .replace(/\r/g, "")
-    .replace(/\n/g, "\\n")
-    .replace(/,/g, "\\,")
-    .replace(/;/g, "\\;");
-}
-function icsTime(date: Date) {
-  return date
-    .toISOString()
-    .replace(/[-:]/g, "")
-    .replace(/\.\d{3}Z$/, "Z");
-}
-function foldIcs(value: string) {
-  let output = "",
-    part = "";
-  for (const character of value) {
-    if (Buffer.byteLength(part + character, "utf8") > 73) {
-      output += part + "\r\n ";
-      part = "";
-    }
-    part += character;
-  }
-  return output + part;
-}
 function notificationContact(ctx: NetworkingNotificationContext) {
   const contact = ctx.contact;
   return contact && !ctx.blocked && contact.status === "ACTIVE" && contact.consent && !contact.withdrawnAt &&
@@ -301,7 +277,7 @@ export function networkingMeetingAttachment(
   ];
   return [
     {
-      content: Buffer.from(lines.map(foldIcs).join("\r\n") + "\r\n").toString(
+      content: Buffer.from(icsDocument(lines)).toString(
         "base64",
       ),
       filename: "networking-meeting.ics",

@@ -1,34 +1,37 @@
 import { clampNetworkingPageLimit } from "./networking-pagination";
+
 import {
-  and,
-  asc,
-  count,
-  desc,
-  eq,
-  getTableColumns,
-  inArray,
-  isNull,
-  lt,
-  ne,
-  or,
-  sql,
-  type SQL,
-  type AnyColumn,
+and,
+asc,
+count,
+desc,
+eq,
+getTableColumns,
+inArray,
+isNull,
+ne,
+sql,
+type AnyColumn,
+type SQL
 } from "drizzle-orm";
+
 import type { NetworkingConfig } from "@app/contracts";
+
 import { getDb, type DbExecutor } from "../client";
+
 import {
-  networkingProfiles as profiles,
-  networkingMessages as messages,
-  networkingNotifications as notifications,
+networkingProfiles as profiles
 } from "../schema/networking";
-import { emailLogs } from "../schema/email";
+
+
 import { registrations } from "../schema/registrations";
-import { networkingUnreadMessageCount } from "./networking-participant-read";
+
+
 import {
-  normalizeNetworkingSearch,
-  networkingSearchScore,
+networkingSearchScore,
+normalizeNetworkingSearch,
 } from "./networking-search";
+
 export interface NetworkingDiscoveryFilters {
   standTableId?: string;
   q?: string;
@@ -42,8 +45,10 @@ export interface NetworkingDiscoveryFilters {
   page?: number;
   limit?: number;
 }
+
 const normalizedSql = (column: SQL | AnyColumn) =>
   sql`lower(translate(${column},'àáâäãåāăąèéêëēėęìíîïīįòóôöõøōùúûüūųçćčñńšśžźżýÿ','aaaaaaaaaeeeeeeeiiiiiiooooooouuuuuucccnnsszzzyy'))`;
+
 function registrationLookup(db: DbExecutor) {
   // Bounded primary-key lookup avoids a quadratic tenant/date nested-loop plan for newly imported events with stale statistics.
   return db
@@ -57,6 +62,7 @@ function registrationLookup(db: DbExecutor) {
     .limit(1)
     .as("source_registration");
 }
+
 function networkingDiscoveryWhere({ eventId, profileId, paymentStatuses, query = {}, registration }: {
   eventId: string;
   profileId: string;
@@ -102,6 +108,7 @@ function networkingDiscoveryWhere({ eventId, profileId, paymentStatuses, query =
       : undefined,
   );
 }
+
 /** No registration forms, private contact data or unrelated event rows are loaded for filtering. */
 export async function listNetworkingDiscovery(
   eventId: string,
@@ -192,102 +199,6 @@ export async function listNetworkingDiscovery(
   ]);
   return { items: rows, total: counts[0]?.total ?? 0 };
 }
-export async function listNetworkingMessages(
-  eventId: string,
-  connectionId: string,
-  query: { before?: string; beforeId?: string; limit?: number } = {},
-  db: DbExecutor = getDb(),
-) {
-  const where = and(
-    eq(messages.eventId, eventId),
-    eq(messages.connectionId, connectionId),
-    query.before
-      ? query.beforeId
-        ? or(
-            lt(messages.createdAt, new Date(query.before)),
-            and(
-              eq(messages.createdAt, new Date(query.before)),
-              lt(messages.id, query.beforeId),
-            ),
-          )
-        : lt(messages.createdAt, new Date(query.before))
-      : undefined,
-  );
-  const [items, counts] = await Promise.all([
-    db
-      .select()
-      .from(messages)
-      .where(where)
-      .orderBy(desc(messages.createdAt), desc(messages.id))
-      .limit(clampNetworkingPageLimit(query.limit ?? 50)),
-    db.select({ total: count() }).from(messages).where(where),
-  ]);
-  const oldest = items.at(-1);
-  const total = counts[0]?.total ?? 0;
-  return {
-    items: items.reverse(),
-    total,
-    nextCursor:
-      oldest && total > items.length
-        ? { before: oldest.createdAt.toISOString(), beforeId: oldest.id }
-        : null,
-  };
-}
-export async function listNetworkingNotifications(
-  eventId: string,
-  profileId: string,
-  page = 1,
-  limit = 30,
-  db: DbExecutor = getDb(),
-) {
-  const where = and(
-    eq(notifications.eventId, eventId),
-    eq(notifications.profileId, profileId),
-  );
-  const [items, counts, unreadMessageCount] = await Promise.all([
-    db
-      .select()
-      .from(notifications)
-      .where(where)
-      .orderBy(desc(notifications.createdAt), desc(notifications.id))
-      .limit(clampNetworkingPageLimit(limit))
-      // Preserve the legacy offset based on the unclamped requested limit.
-      .offset((Math.max(1, page) - 1) * limit),
-    db
-      .select({
-        total: count(),
-        unreadCount: sql<number>`count(*) FILTER (WHERE ${notifications.readAt} IS NULL)::integer`,
-      })
-      .from(notifications)
-      .where(where),
-    networkingUnreadMessageCount(eventId, profileId, db),
-  ]);
-  return {
-    items,
-    total: counts[0]?.total ?? 0,
-    unreadCount: counts[0]?.unreadCount ?? 0,
-    unreadMessageCount,
-  };
-}
-
-export async function networkingEmailMetrics(eventId: string) {
-  const [row] = await getDb()
-    .select({
-      emailSent: sql<number>`count(*) FILTER(WHERE ${emailLogs.sentAt} IS NOT NULL)::integer`.mapWith(Number),
-      emailDelivered: sql<number>`count(*) FILTER(WHERE ${emailLogs.deliveredAt} IS NOT NULL)::integer`.mapWith(Number),
-      emailOpened: sql<number>`count(*) FILTER(WHERE ${emailLogs.openedAt} IS NOT NULL)::integer`.mapWith(Number),
-      emailClicked: sql<number>`count(*) FILTER(WHERE ${emailLogs.clickedAt} IS NOT NULL)::integer`.mapWith(Number),
-      emailFailed: sql<number>`count(*) FILTER(WHERE ${emailLogs.status} IN ('FAILED','BOUNCED','DROPPED'))::integer`.mapWith(Number),
-    })
-    .from(emailLogs)
-    .where(
-      and(
-        sql`${emailLogs.contextSnapshot}->>'dispatchOwner'='networking'`,
-        sql`${emailLogs.contextSnapshot}->>'eventId'=${eventId}`,
-      ),
-    );
-  return row;
-}
 
 export async function networkingDirectoryFacets(
   eventId: string,
@@ -345,13 +256,4 @@ export async function explainNetworkingDiscovery(
   return db.execute(
     sql`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${statement.getSQL()}`,
   );
-}
-
-/** Activity must not change the content watermark used by the embedding worker. */
-export async function touchNetworkingProfileActivity(eventId: string, profileId: string): Promise<void> {
-  await getDb().execute(sql`
-    UPDATE networking_profiles SET last_active_at=now()
-    WHERE event_id=${eventId} AND id=${profileId}
-      AND (last_active_at IS NULL OR last_active_at < now() - interval '1 minute')
-  `);
 }

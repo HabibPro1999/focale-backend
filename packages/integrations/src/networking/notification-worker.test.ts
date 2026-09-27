@@ -6,7 +6,7 @@ const db = vi.hoisted(() => ({
   networkingDeliveryContext: vi.fn(), localizeNetworkingNotification: vi.fn(),
   updateNetworkingDelivery: vi.fn(), beginNetworkingEmailLog: vi.fn(), finishNetworkingEmailLog: vi.fn(),
 }));
-vi.mock("@app/db", () => db);
+vi.mock("@app/db", () => ({ ...db, NETWORKING_DELIVERY_MAX_ATTEMPTS: 5 }));
 vi.mock("./delivery-policy", () => ({ networkingDeliverySkipReason: () => undefined }));
 vi.mock("./notification-rendering", () => ({ renderNetworkingNotification: () => ({ title: "Title", body: "Body", subject: "Subject", attachments: [] }) }));
 vi.mock("../email/providers", () => ({ getNetworkingEmailSender: () => undefined }));

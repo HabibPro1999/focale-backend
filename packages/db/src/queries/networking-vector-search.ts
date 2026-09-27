@@ -1,3 +1,4 @@
+import { completeNetworkingProfile, unblockedNetworkingPair } from "./networking-eligibility";
 import type { NetworkingConfig } from "@app/contracts";
 import { clampNetworkingPageLimit } from "./networking-pagination";
 import { sql } from "drizzle-orm";
@@ -138,12 +139,12 @@ export async function rankNetworkingVectorCandidates(
           ? sql`AND p.id = ANY(${sql.param(candidateIds)}::text[])`
           : sql``
       } AND p.id<>${profileId} AND lower(p.email)<>lower(source.email) AND p.status='ACTIVE' AND p.visible AND p.consent AND p.withdrawn_at IS NULL
-        AND btrim(p.first_name)<>'' AND btrim(p.last_name)<>'' AND btrim(p.company)<>'' AND btrim(p.job_title)<>'' AND btrim(p.sector)<>''
+        AND ${completeNetworkingProfile({ firstName: sql.raw("p.first_name"), lastName: sql.raw("p.last_name"), company: sql.raw("p.company"), jobTitle: sql.raw("p.job_title"), sector: sql.raw("p.sector") })}
         AND r.networking_opt_in IS DISTINCT FROM false AND r.payment_status::text IN (${sql.join(
           paymentStatuses.map((status) => sql`${status}`),
           sql`,`,
         )})
-        AND NOT EXISTS (SELECT 1 FROM networking_blocks b WHERE b.event_id=p.event_id AND ((b.profile_id=${profileId} AND b.target_id=p.id) OR (b.profile_id=p.id AND b.target_id=${profileId})))
+        AND ${unblockedNetworkingPair(sql.raw("p.event_id"), profileId, sql.raw("p.id"))}
         AND NOT EXISTS (SELECT 1 FROM networking_interests i WHERE i.event_id=p.event_id AND i.profile_id=${profileId} AND i.target_id=p.id)
         AND NOT EXISTS (SELECT 1 FROM networking_connections c WHERE c.event_id=p.event_id AND ((c.profile_a_id=${profileId} AND c.profile_b_id=p.id) OR (c.profile_b_id=${profileId} AND c.profile_a_id=p.id)))
     )

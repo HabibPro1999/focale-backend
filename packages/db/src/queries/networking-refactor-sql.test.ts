@@ -4,9 +4,10 @@ import type { Pool } from "pg";
 const mock = vi.hoisted(() => ({ query: vi.fn() }));
 vi.mock("../client", () => ({ getDb: () => drizzle({ client: mock as unknown as Pool, casing: "snake_case" }) }));
 vi.mock("node:crypto", async (original) => ({ ...(await original<typeof import("node:crypto")>()), randomUUID: () => "fixed-lock-token" }));
-import { listNetworkingDiscovery, networkingEmailMetrics } from "./networking-read";
+import { listNetworkingDiscovery } from "./networking-discovery";
+import { networkingEmailMetrics, networkingPostEventReportData } from "./networking-report-data";
 import { countNetworkingConnectionSummaries, networkingUnreadMessageCount } from "./networking-participant-read";
-import { networkingParticipantExportContacts } from "./networking-contact-export";
+import { networkingParticipantExportContacts } from "./networking-participant-read";
 import { claimNetworkingEmbeddingJobs, enqueueChangedNetworkingEmbeddings, getNetworkingRecommendationProfiles } from "./networking-embeddings";
 import { rankNetworkingVectorCandidates } from "./networking-vector-search";
 
@@ -35,5 +36,10 @@ it("pins embedding enqueue and claim entitlement clauses including archived", as
 });
 it("pins networking email metrics scope", async () => {
   await networkingEmailMetrics("event");
+  expect(issued()).toMatchSnapshot();
+});
+
+it("pins durable report email scope alongside its other aggregates", async () => {
+  await networkingPostEventReportData("event", "Europe/Paris");
   expect(issued()).toMatchSnapshot();
 });

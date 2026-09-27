@@ -572,3 +572,25 @@ export function networkingActivity(lastActiveAt: Date | string | null, now = Dat
   const age = lastActiveAt ? now - new Date(lastActiveAt).getTime() : Infinity;
   return age <= 86_400_000 ? "VERY_ACTIVE" : age <= 7 * 86_400_000 ? "ACTIVE" : "INACTIVE";
 }
+
+/** Shared scheduled-notification copy; delivery still chooses its existing locale. */
+export const NETWORKING_SCHEDULED_NOTIFICATION_COPY = {
+  "en": {
+    "MEETING_REMINDER_DAY": "Your meeting is tomorrow",
+    "MEETING_REMINDER_HOUR": "Your meeting starts within an hour",
+    "POST_EVENT_CONTACTS": "Your post-event connections",
+    "postEventContactsBody": "Review the people you connected with and export your contacts."
+  },
+  "fr": {
+    "MEETING_REMINDER_DAY": "Votre rendez-vous a lieu demain",
+    "MEETING_REMINDER_HOUR": "Votre rendez-vous commence dans une heure",
+    "POST_EVENT_CONTACTS": "Vos connexions après l’événement",
+    "postEventContactsBody": "Retrouvez les contacts rencontrés pendant l’événement et exportez vos connexions."
+  },
+  "ar": {
+    "MEETING_REMINDER_DAY": "موعدك غداً",
+    "MEETING_REMINDER_HOUR": "يبدأ موعدك خلال ساعة",
+    "POST_EVENT_CONTACTS": "علاقاتك بعد الحدث",
+    "postEventContactsBody": "راجع جهات الاتصال التي تعرّفت عليها خلال الحدث وصدّر علاقاتك."
+  }
+} as const;

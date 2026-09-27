@@ -18,10 +18,15 @@ vi.mock("@app/db", async (original) => ({
   revokeNetworkingSessions: mocks.revoke,
   cancelNetworkingParticipantMeetings: mocks.cancel,
 }));
-vi.mock("@app/integrations", async (original) => ({
-  ...(await original<typeof import("@app/integrations")>()),
-  getStorageProvider: () => ({ delete: mocks.delete }),
-}));
+vi.mock("@app/integrations", async (original) => {
+  const integrations = await original<typeof import("@app/integrations")>();
+  return {
+    ...integrations,
+    getStorageProvider: () => ({ delete: mocks.delete }),
+    deleteOwnedNetworkingPhoto: (url: string | null | undefined, eventId: string, profileId: string) =>
+      integrations.deleteOwnedNetworkingPhoto(url, eventId, profileId, { delete: mocks.delete }),
+  };
+});
 const own = "https://storage.test/networking/e/profiles/p/current.webp";
 function controller(service: Partial<NetworkingService>, meetings: Partial<NetworkingMeetingsService> = {}) {
   return makeNetworkingPublicController({ service, meetings });

@@ -6,7 +6,7 @@ import type { NetworkingSocialService } from "./networking.social.service";
 import type { NetworkingMeetingsService } from "./networking.meetings.service";
 import type { NetworkingContext } from "./networking.service";
 
-it.each(["comma, semi; slash\\ carriage\r\nnext", "مرحبا🙂é".repeat(20)])("pins each calendar's escaped and byte-folded output for %s", async (text) => {
+it.each([{ name: "escaping", text: "comma, semi; slash\\ carriage\r\nnext" }, { name: "multibyte", text: "مرحبا🙂é".repeat(20) }])("pins each calendar's escaped and byte-folded output for $name", async ({ text }) => {
   const meeting = {
     id: "meeting", requesterId: "viewer", recipientId: "target", status: "CONFIRMED", revision: 2,
     updatedAt: new Date("2030-01-01T09:00:00.123Z"), startsAt: new Date("2030-01-02T09:00:00.456Z"), endsAt: new Date("2030-01-02T10:00:00.789Z"),
