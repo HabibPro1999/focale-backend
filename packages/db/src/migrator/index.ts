@@ -1,5 +1,16 @@
 export * from "./migration";
-export * from "./legacy-networking";
+export {
+  type CrosswalkedNetworking0018Step,
+  LEGACY_NETWORKING_0018_CROSSWALK,
+  LEGACY_NETWORKING_FILE_CHECKSUMS,
+  type LegacyNetworking0018StepRow,
+  assertLegacyNetworking0018Crosswalk,
+  crosswalkLegacyNetworking0018Steps,
+  type LegacyNetworkingRow,
+  type LegacyNetworkingState,
+  legacyTracking,
+  mapLegacyNetworkingRows,
+} from "./legacy-networking";
 export * from "./types";
 export * from "./catalog";
 export {
@@ -38,4 +49,19 @@ export {
   setUtcSession,
 } from "./session";
 export * from "./security";
-export * from "./adopt";
+export {
+  type AdoptionCatalogState,
+  describeProbe,
+  supersededObjectProbes,
+  adoptionCatalogState,
+  type AdoptionDecisionInput,
+  type AdoptionDecision,
+  decideAdoption,
+} from "./adopt-rules";
+export { formatAdoptionReport } from "./adopt-report";
+export {
+  type LegacyEvidence,
+  readLegacyEvidence,
+  assessAdoption,
+  adoptMigrations,
+} from "./adopt";

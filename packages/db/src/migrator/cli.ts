@@ -21,7 +21,8 @@ import {
   migrationLedgerExists,
 } from "./ledger";
 import { databaseEngine, normalizeAppliedBy, setUtcSession } from "./session";
-import { formatAdoptionReport, adoptMigrations } from "./adopt";
+import { adoptMigrations } from "./adopt";
+import { formatAdoptionReport } from "./adopt-report";
 
 const MIGRATIONS_DIRECTORY = defaultMigrationsDirectory();
 
