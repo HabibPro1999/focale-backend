@@ -56,10 +56,15 @@ vi.mock("@app/db", () => {
   };
 });
 vi.mock("../clients/module-gates", () => ({ assertClientModuleEnabled: vi.fn() }));
-vi.mock("@app/integrations", async (original) => ({
-  ...(await original<typeof import("@app/integrations")>()),
-  getStorageProvider: () => ({ delete: state.delete }),
-}));
+vi.mock("@app/integrations", async (original) => {
+  const integrations = await original<typeof import("@app/integrations")>();
+  return {
+    ...integrations,
+    getStorageProvider: () => ({ delete: state.delete }),
+    deleteOwnedNetworkingPhoto: (url: string | null | undefined, eventId: string, profileId: string) =>
+      integrations.deleteOwnedNetworkingPhoto(url, eventId, profileId, { delete: state.delete }),
+  };
+});
 import { assertClientModuleEnabled } from "../clients/module-gates";
 import { ZodValidationPipe } from "../../core/zod";
 import { NetworkingConfigDto } from "./networking.dto";

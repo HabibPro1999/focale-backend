@@ -1,10 +1,18 @@
-import { ownedNetworkingDelivery } from "./networking-delivery-fence";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql, type SQL, type AnyColumn } from "drizzle-orm";
 import { getDb } from "../client";
 import { rowsOf } from "../helpers";
-import { withSerializableTxn } from "../txn";
+import { emailLogs } from "../schema/email";
 import { networkingAudit, networkingDeliveries } from "../schema/networking";
+import { withSerializableTxn } from "../txn";
 import type { NetworkingDeliveryRow } from "./networking-delivery";
+import { ownedNetworkingDelivery } from "./networking-delivery-fence";
+
+function networkingEmailLogScope(eventId: string, snapshot: SQL | AnyColumn) {
+  return [
+    sql`${snapshot}->>'dispatchOwner'='networking'`,
+    sql`${snapshot}->>'eventId'=${eventId}`,
+  ];
+}
 
 // Raw planned-status lists mirror NETWORKING_PLANNED_MEETING_STATUSES without changing SQL text.
 /** Aggregate-only durable report data contains no participant names, messages or contact details. */
@@ -30,9 +38,9 @@ export async function networkingPostEventReportData(
       (SELECT count(*)::int4 FROM networking_meetings WHERE event_id=${eventId} AND status='COMPLETED') AS completed_meetings,
       (SELECT count(*)::int4 FROM networking_meetings WHERE event_id=${eventId} AND status='NO_SHOW') AS no_shows,
       (SELECT count(*)::int4 FROM networking_meetings WHERE event_id=${eventId} AND status='CANCELLED') AS cancelled_meetings,
-      (SELECT count(*)::int4 FROM email_logs WHERE context_snapshot->>'dispatchOwner'='networking' AND context_snapshot->>'eventId'=${eventId} AND sent_at IS NOT NULL) AS emails_sent,
-      (SELECT count(*)::int4 FROM email_logs WHERE context_snapshot->>'dispatchOwner'='networking' AND context_snapshot->>'eventId'=${eventId} AND opened_at IS NOT NULL) AS emails_opened,
-      (SELECT count(*)::int4 FROM email_logs WHERE context_snapshot->>'dispatchOwner'='networking' AND context_snapshot->>'eventId'=${eventId} AND clicked_at IS NOT NULL) AS emails_clicked
+      (SELECT count(*)::int4 FROM email_logs WHERE ${sql.join(networkingEmailLogScope(eventId, sql.raw("context_snapshot")), sql` AND `)} AND sent_at IS NOT NULL) AS emails_sent,
+      (SELECT count(*)::int4 FROM email_logs WHERE ${sql.join(networkingEmailLogScope(eventId, sql.raw("context_snapshot")), sql` AND `)} AND opened_at IS NOT NULL) AS emails_opened,
+      (SELECT count(*)::int4 FROM email_logs WHERE ${sql.join(networkingEmailLogScope(eventId, sql.raw("context_snapshot")), sql` AND `)} AND clicked_at IS NOT NULL) AS emails_clicked
   `),
   );
   const sectors = rowsOf<{
@@ -118,4 +126,22 @@ export async function latestNetworkingPostEventReport(eventId: string) {
     generatedAt: String(row.data.generatedAt),
     summary: row.data.summary as Record<string, number>,
   };
+}
+
+export async function networkingEmailMetrics(eventId: string) {
+  const [row] = await getDb()
+    .select({
+      emailSent: sql<number>`count(*) FILTER(WHERE ${emailLogs.sentAt} IS NOT NULL)::integer`.mapWith(Number),
+      emailDelivered: sql<number>`count(*) FILTER(WHERE ${emailLogs.deliveredAt} IS NOT NULL)::integer`.mapWith(Number),
+      emailOpened: sql<number>`count(*) FILTER(WHERE ${emailLogs.openedAt} IS NOT NULL)::integer`.mapWith(Number),
+      emailClicked: sql<number>`count(*) FILTER(WHERE ${emailLogs.clickedAt} IS NOT NULL)::integer`.mapWith(Number),
+      emailFailed: sql<number>`count(*) FILTER(WHERE ${emailLogs.status} IN ('FAILED','BOUNCED','DROPPED'))::integer`.mapWith(Number),
+    })
+    .from(emailLogs)
+    .where(
+      and(
+        ...networkingEmailLogScope(eventId, emailLogs.contextSnapshot),
+      ),
+    );
+  return row;
 }

@@ -1,3 +1,4 @@
+import { icsDocument, icsEscape as escapeIcs, icsTime as dateIcs } from "@app/integrations";
 import { networkingExportDatasets, type NetworkingExportKind } from "./networking.export-data";
 import { csv, renderNetworkingTable } from "./networking.export-render";
 import { BadRequestException, Injectable } from "@nestjs/common";
@@ -5,30 +6,6 @@ import { networkingStore, type NetworkingRow } from "@app/db";
 import { NetworkingSocialService } from "./networking.social.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
 import type { NetworkingContext } from "./networking.service";
-const escapeIcs = (value: string) =>
-  value
-    .replaceAll("\\", "\\\\")
-    .replaceAll("\r", "")
-    .replaceAll("\n", "\\n")
-    .replaceAll(",", "\\,")
-    .replaceAll(";", "\\;");
-const dateIcs = (date: Date) =>
-  date
-    .toISOString()
-    .replace(/[-:]/g, "")
-    .replace(/\.\d{3}Z$/, "Z");
-function foldIcs(line: string) {
-  let output = "",
-    part = "";
-  for (const character of line) {
-    if (Buffer.byteLength(part + character) > 73) {
-      output += part + "\r\n ";
-      part = "";
-    }
-    part += character;
-  }
-  return output + part;
-}
 @Injectable()
 export class NetworkingExportsService {
   constructor(
@@ -64,7 +41,7 @@ export class NetworkingExportsService {
       );
     }
     lines.push("END:VCALENDAR");
-    return lines.map(foldIcs).join("\r\n") + "\r\n";
+    return icsDocument(lines);
   }
   async connections(ctx: NetworkingContext) {
     const items = await this.social.allConnections(ctx);

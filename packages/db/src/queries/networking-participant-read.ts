@@ -1,16 +1,11 @@
+import { activeNetworkingParticipant, notNetworkingSelfEmail, unblockedNetworkingPair } from "./networking-eligibility";
 import type { NetworkingConfig } from "@app/contracts";
-import { and, desc, eq, getTableColumns, inArray, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, getTableColumns, inArray, lt, or, sql } from "drizzle-orm";
 import { getDb, type DbExecutor } from "../client";
 import { rowsOf } from "../helpers";
-import {
-  networkingConnections as connections,
-  networkingProfiles as profiles,
-  networkingMessages as messages,
-  networkingMeetings as meetings,
-  networkingAudit as audit,
-  networkingNotifications as notifications,
-} from "../schema/networking";
+import { networkingAudit as audit, networkingConnections as connections, networkingMeetings as meetings, networkingMessages as messages, networkingNotifications as notifications, networkingProfiles as profiles } from "../schema/networking";
 import { registrations } from "../schema/registrations";
+import { clampNetworkingPageLimit } from "./networking-pagination";
 
 export interface NetworkingParticipantPage {
   limit: number;
@@ -31,7 +26,7 @@ function connectionVisibility(eventId: string, profileId: string, paymentStatuse
         sql`${profiles.withdrawnAt} IS NULL`,
         sql`${registrations.networkingOptIn} IS DISTINCT FROM false`,
         inArray(registrations.paymentStatus, [...paymentStatuses]),
-        sql`lower(${profiles.email})<>(SELECT lower(email) FROM networking_profiles WHERE id=${profileId} AND event_id=${eventId})`,
+        notNetworkingSelfEmail(profiles.email, profileId, eventId),
         sql`NOT EXISTS (SELECT 1 FROM networking_blocks b WHERE b.event_id=${eventId} AND
         ((b.profile_id=${profileId} AND b.target_id=${profiles.id}) OR (b.target_id=${profileId} AND b.profile_id=${profiles.id})))`,
       );
@@ -177,7 +172,7 @@ export async function networkingUnreadMessageCount(
     WHERE c.event_id=${eventId} AND (c.profile_a_id=${profileId} OR c.profile_b_id=${profileId})
       AND m.sender_id<>${profileId} AND (CASE WHEN c.profile_a_id=${profileId} THEN c.read_a_at ELSE c.read_b_at END IS NULL
         OR m.created_at>CASE WHEN c.profile_a_id=${profileId} THEN c.read_a_at ELSE c.read_b_at END)
-      AND p.status='ACTIVE' AND p.consent AND p.withdrawn_at IS NULL AND r.networking_opt_in IS DISTINCT FROM false
+      AND ${activeNetworkingParticipant("p", "r")}
       AND lower(p.email)<>(SELECT lower(email) FROM networking_profiles WHERE id=${profileId} AND event_id=${eventId})
       AND cfg.config->'eligiblePaymentStatuses' ? r.payment_status::text
       AND NOT EXISTS (SELECT 1 FROM networking_blocks b WHERE b.event_id=c.event_id
@@ -216,4 +211,99 @@ export async function networkingNotificationsSince(
     )
     .orderBy(desc(notifications.createdAt))
     .limit(100);
+}
+
+export async function listNetworkingMessages(
+  eventId: string,
+  connectionId: string,
+  query: { before?: string; beforeId?: string; limit?: number } = {},
+  db: DbExecutor = getDb(),
+) {
+  const where = and(
+    eq(messages.eventId, eventId),
+    eq(messages.connectionId, connectionId),
+    query.before
+      ? query.beforeId
+        ? or(
+            lt(messages.createdAt, new Date(query.before)),
+            and(
+              eq(messages.createdAt, new Date(query.before)),
+              lt(messages.id, query.beforeId),
+            ),
+          )
+        : lt(messages.createdAt, new Date(query.before))
+      : undefined,
+  );
+  const [items, counts] = await Promise.all([
+    db
+      .select()
+      .from(messages)
+      .where(where)
+      .orderBy(desc(messages.createdAt), desc(messages.id))
+      .limit(clampNetworkingPageLimit(query.limit ?? 50)),
+    db.select({ total: count() }).from(messages).where(where),
+  ]);
+  const oldest = items.at(-1);
+  const total = counts[0]?.total ?? 0;
+  return {
+    items: items.reverse(),
+    total,
+    nextCursor:
+      oldest && total > items.length
+        ? { before: oldest.createdAt.toISOString(), beforeId: oldest.id }
+        : null,
+  };
+}
+
+export async function listNetworkingNotifications(
+  eventId: string,
+  profileId: string,
+  page = 1,
+  limit = 30,
+  db: DbExecutor = getDb(),
+) {
+  const where = and(
+    eq(notifications.eventId, eventId),
+    eq(notifications.profileId, profileId),
+  );
+  const [items, counts, unreadMessageCount] = await Promise.all([
+    db
+      .select()
+      .from(notifications)
+      .where(where)
+      .orderBy(desc(notifications.createdAt), desc(notifications.id))
+      .limit(clampNetworkingPageLimit(limit))
+      // Preserve the legacy offset based on the unclamped requested limit.
+      .offset((Math.max(1, page) - 1) * limit),
+    db
+      .select({
+        total: count(),
+        unreadCount: sql<number>`count(*) FILTER (WHERE ${notifications.readAt} IS NULL)::integer`,
+      })
+      .from(notifications)
+      .where(where),
+    networkingUnreadMessageCount(eventId, profileId, db),
+  ]);
+  return {
+    items,
+    total: counts[0]?.total ?? 0,
+    unreadCount: counts[0]?.unreadCount ?? 0,
+    unreadMessageCount,
+  };
+}
+
+export interface NetworkingExportContact { firstName: string; lastName: string; company: string; jobTitle: string; sector: string; city: string; country: string; website: string | null; }
+
+/** Private registration email/phone are never part of a participant connection export. */
+export async function networkingParticipantExportContacts(eventId: string, profileId: string): Promise<NetworkingExportContact[]> {
+  return rowsOf<NetworkingExportContact>(await getDb().execute(sql`
+    SELECT p.first_name AS "firstName",p.last_name AS "lastName",p.company,p.job_title AS "jobTitle",p.sector,p.city,p.country,p.website
+    FROM networking_connections c JOIN networking_profiles p ON p.id=CASE WHEN c.profile_a_id=${profileId} THEN c.profile_b_id ELSE c.profile_a_id END
+      JOIN registrations r ON r.id=p.registration_id JOIN networking_configs cfg ON cfg.event_id=c.event_id
+    WHERE c.event_id=${eventId} AND p.event_id=${eventId} AND (c.profile_a_id=${profileId} OR c.profile_b_id=${profileId})
+      AND ${activeNetworkingParticipant("p", "r")}
+      AND cfg.config->'eligiblePaymentStatuses' ? r.payment_status::text
+      AND ${unblockedNetworkingPair(sql.raw("c.event_id"), profileId, sql.raw("p.id"))}
+    ORDER BY p.last_name,p.first_name,p.id
+  `));
 }

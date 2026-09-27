@@ -1,3 +1,4 @@
+import { NETWORKING_DELIVERY_MAX_ATTEMPTS } from "./networking-delivery";
 import { ownedNetworkingDeliverySql } from "./networking-delivery-fence";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { rowsOf } from "../helpers";
@@ -113,7 +114,7 @@ export async function finishNetworkingEmailLog(
         .set({
           status:
             outcome === "failed"
-              ? row.attempts >= 5
+              ? row.attempts >= NETWORKING_DELIVERY_MAX_ATTEMPTS
                 ? "FAILED"
                 : "SENDING"
               : "SKIPPED",
@@ -122,7 +123,7 @@ export async function finishNetworkingEmailLog(
               ? "Networking email delivery failed"
               : "Networking delivery no longer eligible",
           retryCount: sql`${emailLogs.retryCount}+${outcome === "failed" ? 1 : 0}`,
-          failedAt: outcome === "failed" && row.attempts >= 5 ? new Date() : null,
+          failedAt: outcome === "failed" && row.attempts >= NETWORKING_DELIVERY_MAX_ATTEMPTS ? new Date() : null,
           lockedBy: null,
           lockedAt: null,
           lockedUntil: null,

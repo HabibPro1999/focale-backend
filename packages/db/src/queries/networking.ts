@@ -1,21 +1,21 @@
-import { randomUUID } from "node:crypto";
-import { withSerializableTxn } from "../txn";
-import { and, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 import { NetworkingConfigSchema, networkingProfileOverrides, type NetworkingConfig } from "@app/contracts";
+import { and, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
 import { getDb, type DbExecutor } from "../client";
-import {
-  networkingConfigs,
-  networkingProfiles,
-  networkingNotifications,
-  networkingDeliveries,
-  networkingSessions,
-  networkingMeetings,
-  networkingReservations,
-} from "../schema/networking";
 import { events } from "../schema/events-access";
 import { forms } from "../schema/forms";
-import { projectNetworkingFields, resolveNetworkingConsent } from "./networking-projection";
+import {
+networkingConfigs,
+networkingDeliveries,
+networkingMeetings,
+networkingNotifications,
+networkingProfiles,
+networkingReservations,
+networkingSessions,
+} from "../schema/networking";
 import { registrations } from "../schema/registrations";
+import { withSerializableTxn } from "../txn";
+import { projectNetworkingFields, resolveNetworkingConsent } from "./networking-projection";
 
 export async function getNetworkingConfig(
   eventId: string,
@@ -355,4 +355,13 @@ export async function queueNetworkingActivation(
         href,
         data: { status: "ACTIVE" },
       });
+}
+
+/** Activity must not change the content watermark used by the embedding worker. */
+export async function touchNetworkingProfileActivity(eventId: string, profileId: string): Promise<void> {
+  await getDb().execute(sql`
+    UPDATE networking_profiles SET last_active_at=now()
+    WHERE event_id=${eventId} AND id=${profileId}
+      AND (last_active_at IS NULL OR last_active_at < now() - interval '1 minute')
+  `);
 }

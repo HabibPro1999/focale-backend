@@ -1,3 +1,5 @@
+export const NETWORKING_DELIVERY_MAX_ATTEMPTS = 5;
+
 import { networkingStore } from "./networking-store";
 import { ownedNetworkingDelivery, ownedNetworkingDeliverySql } from "./networking-delivery-fence";
 import { clampNetworkingPageLimit } from "./networking-pagination";
@@ -27,7 +29,7 @@ export async function claimNetworkingDeliveries(
     updatedAt: sql`now()`,
   }).where(sql`id IN (
       SELECT id FROM networking_deliveries
-      WHERE ((status='PENDING' AND attempts<5) OR (status='PROCESSING' AND locked_until<now() AND attempts<5) OR (status='FAILED' AND attempts<5))
+      WHERE ((status='PENDING' AND attempts<${sql.raw(String(NETWORKING_DELIVERY_MAX_ATTEMPTS))}) OR (status='PROCESSING' AND locked_until<now() AND attempts<${sql.raw(String(NETWORKING_DELIVERY_MAX_ATTEMPTS))}) OR (status='FAILED' AND attempts<${sql.raw(String(NETWORKING_DELIVERY_MAX_ATTEMPTS))}))
         AND available_at<=now() ${eventId ? sql`AND event_id=${eventId}` : sql``}
       ORDER BY CASE WHEN type='OTP' THEN 0 ELSE 1 END,available_at LIMIT ${clampNetworkingPageLimit(limit)} FOR UPDATE SKIP LOCKED
   )`).returning();

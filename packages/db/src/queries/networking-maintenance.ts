@@ -1,3 +1,6 @@
+import { NETWORKING_DELIVERY_MAX_ATTEMPTS } from "./networking-delivery";
+import { NETWORKING_SCHEDULED_NOTIFICATION_COPY } from "@app/contracts";
+import { activeNetworkingParticipant, unblockedNetworkingPair } from "./networking-eligibility";
 import { eq, sql } from "drizzle-orm";
 import { getDb, type DbExecutor } from "../client";
 import { rowsOf } from "../helpers";
@@ -9,8 +12,8 @@ function eventScope(eventId?: string, column: "event_id" | "m.event_id" | "p.eve
   return eventId ? sql`AND ${sql.raw(column)}=${eventId}` : sql``;
 }
 const REMINDERS = [
-  { type: "MEETING_REMINDER_DAY", hours: 24, minHours: 23, titles: { fr: "Votre rendez-vous a lieu demain", ar: "موعدك غداً", en: "Your meeting is tomorrow" } },
-  { type: "MEETING_REMINDER_HOUR", hours: 1, minHours: 0, titles: { fr: "Votre rendez-vous commence dans une heure", ar: "يبدأ موعدك خلال ساعة", en: "Your meeting starts within an hour" } },
+  { type: "MEETING_REMINDER_DAY", hours: 24, minHours: 23, titles: { fr: NETWORKING_SCHEDULED_NOTIFICATION_COPY.fr.MEETING_REMINDER_DAY, ar: NETWORKING_SCHEDULED_NOTIFICATION_COPY.ar.MEETING_REMINDER_DAY, en: NETWORKING_SCHEDULED_NOTIFICATION_COPY.en.MEETING_REMINDER_DAY } },
+  { type: "MEETING_REMINDER_HOUR", hours: 1, minHours: 0, titles: { fr: NETWORKING_SCHEDULED_NOTIFICATION_COPY.fr.MEETING_REMINDER_HOUR, ar: NETWORKING_SCHEDULED_NOTIFICATION_COPY.ar.MEETING_REMINDER_HOUR, en: NETWORKING_SCHEDULED_NOTIFICATION_COPY.en.MEETING_REMINDER_HOUR } },
 ] as const;
 
 // Raw released-status literals match NETWORKING_RELEASED_MEETING_STATUSES; retain their original ordering.
@@ -51,11 +54,11 @@ export async function maintainNetworkingLifecycle(
         WHERE m.status='CONFIRMED' AND m.starts_at>now()+interval '1 hour'*${minHours}::int AND m.starts_at<=now()+interval '1 hour'*${hours}::int
           AND m.created_at<m.starts_at-interval '1 hour'*${hours}::int
           AND c.config->>'enabled'='true' AND cl.active AND cl.enabled_modules @> ARRAY['networking','registrations','emails']::text[]
-          AND p.status='ACTIVE' AND p.consent AND p.withdrawn_at IS NULL AND r.networking_opt_in IS DISTINCT FROM false
+          AND ${activeNetworkingParticipant("p", "r")}
           AND c.config->'eligiblePaymentStatuses' ? r.payment_status::text
-          AND peer.status='ACTIVE' AND peer.consent AND peer.withdrawn_at IS NULL AND peer_registration.networking_opt_in IS DISTINCT FROM false
+          AND ${activeNetworkingParticipant("peer", "peer_registration")}
           AND c.config->'eligiblePaymentStatuses' ? peer_registration.payment_status::text
-          AND NOT EXISTS (SELECT 1 FROM networking_blocks b WHERE b.event_id=m.event_id AND ((b.profile_id=m.requester_id AND b.target_id=m.recipient_id) OR (b.profile_id=m.recipient_id AND b.target_id=m.requester_id)))
+          AND ${unblockedNetworkingPair(sql.raw("m.event_id"), sql.raw("m.requester_id"), sql.raw("m.recipient_id"))}
           ${eventScope(eventId, "m.event_id")}
       ), inserted AS (
         INSERT INTO networking_deliveries (id,event_id,profile_id,type,payload,status,available_at,dedupe_key,created_at,updated_at)
@@ -92,8 +95,8 @@ export async function maintainNetworkingLifecycle(
   await db.execute(sql`
     WITH candidates AS (
       SELECT gen_random_uuid()::text AS notification_id,p.id AS profile_id,p.event_id,'/e/'||e.slug||'/connections' AS href,
-        CASE p.language WHEN 'fr' THEN 'Vos connexions après l’événement' WHEN 'ar' THEN 'علاقاتك بعد الحدث' ELSE 'Your post-event connections' END AS title,
-        CASE p.language WHEN 'fr' THEN 'Retrouvez les contacts rencontrés pendant l’événement et exportez vos connexions.' WHEN 'ar' THEN 'راجع جهات الاتصال التي تعرّفت عليها خلال الحدث وصدّر علاقاتك.' ELSE 'Review the people you connected with and export your contacts.' END AS body
+        CASE p.language WHEN 'fr' THEN ${NETWORKING_SCHEDULED_NOTIFICATION_COPY.fr.POST_EVENT_CONTACTS}::text WHEN 'ar' THEN ${NETWORKING_SCHEDULED_NOTIFICATION_COPY.ar.POST_EVENT_CONTACTS}::text ELSE ${NETWORKING_SCHEDULED_NOTIFICATION_COPY.en.POST_EVENT_CONTACTS}::text END AS title,
+        CASE p.language WHEN 'fr' THEN ${NETWORKING_SCHEDULED_NOTIFICATION_COPY.fr.postEventContactsBody}::text WHEN 'ar' THEN ${NETWORKING_SCHEDULED_NOTIFICATION_COPY.ar.postEventContactsBody}::text ELSE ${NETWORKING_SCHEDULED_NOTIFICATION_COPY.en.postEventContactsBody}::text END AS body
       FROM networking_profiles p JOIN events e ON e.id=p.event_id JOIN networking_configs c ON c.event_id=p.event_id JOIN registrations r ON r.id=p.registration_id
       WHERE e.end_date+interval '24 hours'<=now() AND c.config->>'enabled'='true' AND p.status='ACTIVE' AND p.consent AND p.withdrawn_at IS NULL
         AND r.networking_opt_in IS DISTINCT FROM false AND c.config->'eligiblePaymentStatuses' ? r.payment_status::text
@@ -111,10 +114,10 @@ export async function maintainNetworkingLifecycle(
   // Expired/exhausted codes are scrubbed even if a provider never became available.
   await db.execute(sql`UPDATE networking_deliveries d SET payload=jsonb_build_object('challengeId',d.payload->>'challengeId','outcome','expired'),status='SKIPPED',locked_until=NULL,last_error=NULL,updated_at=now()
     WHERE d.type='OTP' AND d.status<>'SENT' AND (d.status<>'PROCESSING' OR d.locked_until<now())
-      AND (d.attempts>=5 OR NOT EXISTS (SELECT 1 FROM networking_challenges c WHERE c.id=d.payload->>'challengeId' AND c.event_id=d.event_id AND c.expires_at>now() AND c.consumed_at IS NULL AND c.attempts<5))
+      AND (d.attempts>=${sql.raw(String(NETWORKING_DELIVERY_MAX_ATTEMPTS))} OR NOT EXISTS (SELECT 1 FROM networking_challenges c WHERE c.id=d.payload->>'challengeId' AND c.event_id=d.event_id AND c.expires_at>now() AND c.consumed_at IS NULL AND c.attempts<5))
       ${eventScope(eventId, "d.event_id")}`);
   await db.execute(
-    sql`UPDATE networking_deliveries SET status='FAILED',locked_until=NULL,last_error='Delivery retry limit exhausted',updated_at=now() WHERE status='PROCESSING' AND locked_until<now() AND attempts>=5 ${scope}`,
+    sql`UPDATE networking_deliveries SET status='FAILED',locked_until=NULL,last_error='Delivery retry limit exhausted',updated_at=now() WHERE status='PROCESSING' AND locked_until<now() AND attempts>=${sql.raw(String(NETWORKING_DELIVERY_MAX_ATTEMPTS))} ${scope}`,
   );
   await db.execute(
     sql`DELETE FROM networking_challenges WHERE expires_at<now()-interval '1 day' ${scope}`,

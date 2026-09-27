@@ -1,3 +1,4 @@
+import { completeNetworkingProfile, notNetworkingSelfEmail, networkingEmbeddingEventAvailable, networkingEmbeddingRequiredModules } from "./networking-eligibility";
 import type { NetworkingConfig } from "@app/contracts";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
@@ -25,8 +26,8 @@ export async function enqueueChangedNetworkingEmbeddings(
     JOIN clients cl ON cl.id=ev.client_id
     LEFT JOIN networking_embedding_jobs j ON j.profile_id=p.id
     WHERE p.status='ACTIVE' AND p.visible AND p.consent AND p.withdrawn_at IS NULL
-      AND c.config->>'enabled'='true' AND cl.active AND ev.status<>'ARCHIVED'
-      AND 'networking'=ANY(cl.enabled_modules) AND 'registrations'=ANY(cl.enabled_modules) AND 'emails'=ANY(cl.enabled_modules)
+      AND ${networkingEmbeddingEventAvailable()}
+      AND ${networkingEmbeddingRequiredModules()}
       AND r.networking_opt_in IS DISTINCT FROM false
       AND r.payment_status::text IN (SELECT jsonb_array_elements_text(c.config->'eligiblePaymentStatuses'))
       AND (j.profile_id IS NULL OR (j.status='READY' AND (j.indexed_profile_at < p.updated_at OR j.model <> ${model})))
@@ -56,8 +57,8 @@ export async function claimNetworkingEmbeddingJobs(limit = 10) {
       JOIN clients cl ON cl.id=ev.client_id
       WHERE (j.status='PENDING' OR (j.status='PROCESSING' AND j.locked_until < now()) OR (j.status='FAILED' AND j.attempts < 5))
         AND j.attempts < 5 AND j.available_at <= now() AND p.status='ACTIVE' AND p.visible AND p.consent AND p.withdrawn_at IS NULL
-        AND c.config->>'enabled'='true' AND cl.active AND ev.status<>'ARCHIVED'
-        AND 'networking'=ANY(cl.enabled_modules) AND 'registrations'=ANY(cl.enabled_modules) AND 'emails'=ANY(cl.enabled_modules) AND r.networking_opt_in IS DISTINCT FROM false
+        AND ${networkingEmbeddingEventAvailable()}
+        AND ${networkingEmbeddingRequiredModules()} AND r.networking_opt_in IS DISTINCT FROM false
         AND r.payment_status::text IN (SELECT jsonb_array_elements_text(c.config->'eligiblePaymentStatuses'))
       ORDER BY j.available_at LIMIT ${limit} FOR UPDATE OF j SKIP LOCKED
     )
@@ -183,12 +184,12 @@ export async function getNetworkingRecommendationProfiles(
       and(
         eq(networkingProfiles.eventId, eventId),
         eq(networkingProfiles.status, "ACTIVE"),
-        sql`btrim(${networkingProfiles.firstName})<>'' AND btrim(${networkingProfiles.lastName})<>'' AND btrim(${networkingProfiles.company})<>'' AND btrim(${networkingProfiles.jobTitle})<>'' AND btrim(${networkingProfiles.sector})<>''`,
+        completeNetworkingProfile(networkingProfiles),
         eq(networkingProfiles.visible, true),
         eq(networkingProfiles.consent, true),
         sql`${networkingProfiles.withdrawnAt} IS NULL`,
         sql`${networkingProfiles.id}<>${callerProfileId}`,
-        sql`lower(${networkingProfiles.email})<>(SELECT lower(email) FROM networking_profiles WHERE id=${callerProfileId} AND event_id=${eventId})`,
+        notNetworkingSelfEmail(networkingProfiles.email, callerProfileId, eventId),
         sql`EXISTS (SELECT 1 FROM registrations r WHERE r.id=${networkingProfiles.registrationId} AND r.event_id=${eventId}
           AND r.networking_opt_in IS DISTINCT FROM false AND r.payment_status::text IN (${sql.join(
             paymentStatuses.map((status) => sql`${status}`),

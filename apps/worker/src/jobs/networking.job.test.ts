@@ -1,10 +1,13 @@
 import { beforeEach, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({ maintain: vi.fn(), delete: vi.fn(), warn: vi.fn() }));
 vi.mock("@app/db", () => ({ maintainNetworkingLifecycle: mocks.maintain }));
-vi.mock("@app/integrations", async (original) => ({
-  ownedStorageKey: (await original<typeof import("@app/integrations")>()).ownedStorageKey,
-  getStorageProvider: () => ({ delete: mocks.delete }),
-}));
+vi.mock("@app/integrations", async (original) => {
+  const { deleteOwnedNetworkingPhoto } = await original<typeof import("@app/integrations")>();
+  return {
+    deleteOwnedNetworkingPhoto: (url: string | null | undefined, eventId: string, profileId: string) =>
+      deleteOwnedNetworkingPhoto(url, eventId, profileId, { delete: mocks.delete }),
+  };
+});
 vi.mock("@app/shared", async (original) => ({
   ...(await original<typeof import("@app/shared")>()),
   createLogger: () => ({ warn: mocks.warn }),

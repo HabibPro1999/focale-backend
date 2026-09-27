@@ -2,10 +2,11 @@ import { beforeEach, expect, it, vi } from "vitest";
 import type { NetworkingDeliveryRow } from "@app/db";
 const db = vi.hoisted(() => ({
   claimNetworkingDeliveries: vi.fn(), refreshNetworkingDeliveryLease: vi.fn(),
+  networkingParticipantExportContacts: vi.fn(), networkingDigestNotifications: vi.fn(),
   networkingDeliveryContext: vi.fn(), localizeNetworkingNotification: vi.fn(),
   updateNetworkingDelivery: vi.fn(), beginNetworkingEmailLog: vi.fn(), finishNetworkingEmailLog: vi.fn(),
 }));
-vi.mock("@app/db", () => db);
+vi.mock("@app/db", () => ({ ...db, NETWORKING_DELIVERY_MAX_ATTEMPTS: 5 }));
 vi.mock("./delivery-policy", () => ({ networkingDeliverySkipReason: () => undefined }));
 vi.mock("./notification-rendering", () => ({ renderNetworkingNotification: () => ({ title: "Title", body: "Body", subject: "Subject", attachments: [] }) }));
 vi.mock("../email/providers", () => ({ getNetworkingEmailSender: () => undefined }));
@@ -81,4 +82,33 @@ it("still records a genuine provider rejection as a failed, retried email", asyn
   expect(await processNetworkingDeliveries({ email })).toEqual({ sent: 0, skipped: 0, failed: 1 });
   expect(db.finishNetworkingEmailLog).toHaveBeenCalledWith(expect.anything(), "failed");
   expect(db.updateNetworkingDelivery).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ status: "FAILED" }));
+});
+
+it.each(["POST_EVENT_CONTACTS", "DAILY_DIGEST"])("preserves %s contact rereads and in-place payload preparation before persistence", async (type) => {
+  const claimed = { ...row(freshLease), type, profileId: "profile", payload: {} };
+  const one = { firstName: "One", lastName: "Person", company: "", jobTitle: "", sector: "", city: "", country: "", website: null };
+  const two = { ...one, firstName: "Two" };
+  db.claimNetworkingDeliveries.mockResolvedValue([claimed]);
+  db.refreshNetworkingDeliveryLease.mockResolvedValue(true);
+  db.networkingDeliveryContext.mockResolvedValue({
+    event: { clientId: "client", name: "Event" },
+    profile: { email: "test@example.test", firstName: "Test", language: "en", emailPreference: type === "DAILY_DIGEST" ? "DAILY" : "IMMEDIATE" },
+    registration: { id: "registration" }, config: {}, subscriptions: [],
+  });
+  db.networkingDigestNotifications.mockResolvedValue([{ id: "notification", type: "POST_EVENT_CONTACTS", data: {}, href: "/contacts" }]);
+  db.networkingParticipantExportContacts.mockResolvedValueOnce([one]).mockResolvedValueOnce([one, two]);
+  expect(await processNetworkingDeliveries({ email })).toEqual({ sent: 1, skipped: 0, failed: 0 });
+  expect(db.networkingParticipantExportContacts).toHaveBeenCalledTimes(2);
+  expect(db.refreshNetworkingDeliveryLease).toHaveBeenCalledTimes(3);
+  expect(db.networkingDeliveryContext).toHaveBeenCalledTimes(type === "DAILY_DIGEST" ? 3 : 2);
+  expect(claimed.payload).toEqual(type === "DAILY_DIGEST"
+    ? { includeContacts: true, digestSummaries: ["Body"], contactCount: 2 }
+    : { contactCount: 2 });
+  expect(db.updateNetworkingDelivery.mock.calls[0]![1]).toEqual({ payload: {
+    ...claimed.payload, _deliveryProgress: { emailSent: true },
+  } });
+  const sendOrder = email.sendEmail.mock.invocationCallOrder[0]!;
+  expect(db.refreshNetworkingDeliveryLease.mock.invocationCallOrder.at(-1)).toBeLessThan(sendOrder);
+  expect(db.networkingParticipantExportContacts.mock.invocationCallOrder.at(-1)).toBeLessThan(sendOrder);
+  expect(db.updateNetworkingDelivery.mock.invocationCallOrder[0]).toBeGreaterThan(sendOrder);
 });
