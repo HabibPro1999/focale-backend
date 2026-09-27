@@ -21,9 +21,7 @@ vi.mock("@app/db", async (importOriginal) => {
   getEventDatesForAccess: vi.fn(),
   getEventAccessById: vi.fn(),
   getEventAccessForUpdate: vi.fn(),
-  getEventAccessWithPrereqs: vi.fn(),
   listEventAccessRows: vi.fn(),
-  getAccessClientId: vi.fn(),
   findExistingAccessIdsInEvent: vi.fn(),
   getEventPrereqEdges: vi.fn(),
   getActiveAccessForGrouping: vi.fn(),
@@ -220,7 +218,7 @@ describe("updateEventAccess", () => {
   it("updates fields on an existing item", async () => {
     m.getEventAccessForUpdate.mockResolvedValue(existing());
     m.updateEventAccessRow.mockResolvedValue(accessRow({ name: "New", price: 75 }));
-    m.getEventAccessWithPrereqs.mockResolvedValue(accessRow({ name: "New", price: 75 }));
+    m.getEventAccessById.mockResolvedValue(accessRow({ name: "New", price: 75 }));
 
     const result = await service.updateEventAccess("access-1", { name: "New", price: 75 });
     expect(result.name).toBe("New");
@@ -275,7 +273,7 @@ describe("updateEventAccess", () => {
     });
     m.updateEventAccessRow.mockResolvedValue(accessRow({ maxCapacity: 5 }));
     m.enqueueAccessDrops.mockResolvedValue(["access-1"]);
-    m.getEventAccessWithPrereqs.mockResolvedValue(accessRow({ maxCapacity: 5 }));
+    m.getEventAccessById.mockResolvedValue(accessRow({ maxCapacity: 5 }));
 
     const result = await service.updateEventAccess("access-1", { maxCapacity: 5 });
     expect(result.maxCapacity).toBe(5);
@@ -290,7 +288,7 @@ describe("updateEventAccess", () => {
     });
     m.updateEventAccessRow.mockResolvedValue(accessRow({ active: false }));
     m.enqueueAccessDrops.mockResolvedValue(["access-1"]);
-    m.getEventAccessWithPrereqs.mockResolvedValue(accessRow({ active: false }));
+    m.getEventAccessById.mockResolvedValue(accessRow({ active: false }));
 
     await service.updateEventAccess("access-1", { active: false });
     expect(m.enqueueAccessDrops).toHaveBeenCalledWith(expect.anything(), eventId, ["access-1"], "deactivated");
@@ -321,7 +319,7 @@ describe("updateEventAccess", () => {
     m.getEventPrereqEdges.mockResolvedValue([]);
     m.updateEventAccessRow.mockResolvedValue(accessRow({ id: "access-main" }));
     m.setAccessPrerequisites.mockResolvedValue(undefined);
-    m.getEventAccessWithPrereqs.mockResolvedValue(
+    m.getEventAccessById.mockResolvedValue(
       accessRow({ id: "access-main", requiredAccess: [{ id: "prereq", name: "P" }] }),
     );
 
@@ -339,7 +337,7 @@ describe("updateEventAccess", () => {
     });
     m.findExistingAccessIdsInEvent.mockResolvedValue(["prereq"]);
     m.getEventPrereqEdges.mockResolvedValue([]);
-    m.getEventAccessWithPrereqs.mockResolvedValue(accessRow({ id: "access-main" }));
+    m.getEventAccessById.mockResolvedValue(accessRow({ id: "access-main" }));
 
     await service.updateEventAccess("access-main", { name: "Renamed", requiredAccessIds: ["prereq"] });
     expect(m.withLockingTxn).toHaveBeenCalledTimes(1);
@@ -347,7 +345,7 @@ describe("updateEventAccess", () => {
     expect(m.updateEventAccessRow).toHaveBeenCalledWith("access-main", { name: "Renamed" }, txDb);
     expect(executorsOf(m.setAccessPrerequisites, 2)).toEqual([txDb]);
     // The response is read in the same transaction, after its writes.
-    expect(executorsOf(m.getEventAccessWithPrereqs, 1)).toEqual([txDb]);
+    expect(executorsOf(m.getEventAccessById, 1)).toEqual([txDb]);
   });
 
   it("propagates a failed prerequisite write (the transaction rolls back the row update)", async () => {
@@ -364,7 +362,7 @@ describe("updateEventAccess", () => {
       service.updateEventAccess("access-main", { name: "Renamed", requiredAccessIds: ["prereq"] }),
     ).rejects.toBe(failure);
     expect(executorsOf(m.updateEventAccessRow, 2)).toEqual([txDb]);
-    expect(m.getEventAccessWithPrereqs).not.toHaveBeenCalled();
+    expect(m.getEventAccessById).not.toHaveBeenCalled();
   });
 
   it("decides the capacity check from the row re-read under its lock", async () => {
@@ -388,7 +386,7 @@ describe("updateEventAccess", () => {
     m.getEventAccessForUpdate
       .mockResolvedValueOnce({ ...accessRow({ maxCapacity: 10, paidCount: 2 }), event: { startDate, endDate } })
       .mockResolvedValueOnce({ ...accessRow({ maxCapacity: 10, paidCount: 3 }), event: { startDate, endDate } });
-    m.getEventAccessWithPrereqs.mockResolvedValue(accessRow({ maxCapacity: 3, paidCount: 3 }));
+    m.getEventAccessById.mockResolvedValue(accessRow({ maxCapacity: 3, paidCount: 3 }));
     m.enqueueAccessDrops.mockResolvedValue(["access-1"]);
 
     await service.updateEventAccess("access-1", { maxCapacity: 3 });
@@ -399,7 +397,7 @@ describe("updateEventAccess", () => {
     m.getEventAccessForUpdate
       .mockResolvedValueOnce({ ...accessRow({ active: true }), event: { startDate, endDate } })
       .mockResolvedValueOnce({ ...accessRow({ active: false }), event: { startDate, endDate } });
-    m.getEventAccessWithPrereqs.mockResolvedValue(accessRow({ active: false }));
+    m.getEventAccessById.mockResolvedValue(accessRow({ active: false }));
 
     await service.updateEventAccess("access-1", { active: false });
     expect(executorsOf(m.updateEventAccessRow, 2)).toEqual([txDb]);
@@ -448,7 +446,7 @@ describe("updateEventAccess", () => {
 
   it("clearing prerequisites locks only the item (no cycle can form)", async () => {
     m.getEventAccessForUpdate.mockResolvedValue({ ...accessRow(), event: { startDate, endDate } });
-    m.getEventAccessWithPrereqs.mockResolvedValue(accessRow());
+    m.getEventAccessById.mockResolvedValue(accessRow());
 
     await service.updateEventAccess("access-1", { requiredAccessIds: [] });
     expect(m.lockEventAccessRowsForUpdate).toHaveBeenCalledWith(txDb, ["access-1"]);
@@ -462,7 +460,7 @@ describe("updateEventAccess", () => {
       ...accessRow({ maxCapacity: 5, paidCount: 5 }),
       event: { startDate, endDate },
     });
-    m.getEventAccessWithPrereqs.mockResolvedValue(accessRow({ maxCapacity: 5, paidCount: 5 }));
+    m.getEventAccessById.mockResolvedValue(accessRow({ maxCapacity: 5, paidCount: 5 }));
 
     await service.updateEventAccess("access-1", { maxCapacity: 5, name: "Same cap" });
     expect(executorsOf(m.updateEventAccessRow, 2)).toEqual([txDb]);
@@ -538,10 +536,7 @@ describe("reads", () => {
     });
   });
 
-  it("getAccessClientId delegates to the query", async () => {
-    m.getAccessClientId.mockResolvedValue("client-1");
-    expect(await service.getAccessClientId("access-1")).toBe("client-1");
-  });
+
 });
 
 // ===========================================================================

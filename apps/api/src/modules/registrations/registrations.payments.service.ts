@@ -1,3 +1,5 @@
+import { lockRegistrationForPublicAction } from "./registrations.loaders";
+import { lockRegistrationForMutation } from "./registrations.loaders";
 import { Injectable } from "@nestjs/common";
 import {
   ErrorCodes,
@@ -9,14 +11,11 @@ import {
 import { calculateSettlement, isFullySettled } from "@app/shared";
 import {
   withLockingTxn,
-  lockRegistrationForUpdate,
   settleRegistrationTxn,
   enqueueTriggeredEmailOutbox,
   applyRegistrationSettlement,
   emitSettlementEvents,
   settlementEventPair,
-  findRegistrationForMutation,
-  findRegistrationWithFormEvent,
   insertAuditLog,
   type RegistrationFieldsPatch,
   type RegistrationSettlementWrite,
@@ -28,12 +27,12 @@ import {
 } from "../events";
 import {
   assertModuleEnabledForClient,
-  type ClientModuleState,
 } from "../clients/module-gates";
 import { AppException } from "../../core/app-exception";
 import { validatePaymentTransition } from "./payment-transitions";
 import { RegistrationSideEffects } from "./registrations.side-effects";
 import {
+  assertLabSponsorshipAllowed,
   assertPaidAmountWithinNet,
   assertPaidInFull,
 } from "./registrations.guards";
@@ -81,20 +80,10 @@ export class RegistrationPaymentsService {
     // Lock first so a concurrent confirmation or proof upload cannot be
     // overwritten from a stale read (ADR 0001).
     await withLockingTxn(async (tx) => {
-      const locked = await lockRegistrationForUpdate(tx, id);
-      const registration = locked
-        ? await findRegistrationForMutation(id, tx)
-        : null;
-      if (!registration) {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_NOT_FOUND,
-          "Registration not found",
-          404,
-        );
-      }
+      const registration = await lockRegistrationForMutation(id, tx);
       assertEventWritable(registration.event);
       assertModuleEnabledForClient(
-        registration.event.client as ClientModuleState,
+        registration.event.client,
         "registrations",
       );
 
@@ -210,18 +199,10 @@ export class RegistrationPaymentsService {
     // a concurrent proof upload, method selection or admin edit waits for this
     // confirmation, or this one waits for it and sees its result.
     await withLockingTxn(async (tx) => {
-      const locked = await lockRegistrationForUpdate(tx, id);
-      const old = locked ? await findRegistrationForMutation(id, tx) : null;
-      if (!old) {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_NOT_FOUND,
-          "Registration not found",
-          404,
-        );
-      }
+      const old = await lockRegistrationForMutation(id, tx);
       assertEventWritable(old.event);
       assertModuleEnabledForClient(
-        old.event.client as ClientModuleState,
+        old.event.client,
         "registrations",
       );
 
@@ -352,29 +333,14 @@ export class RegistrationPaymentsService {
     // Keep the status and amounts: choosing a method does not pay the balance.
     // A confirmed registration or one under proof review is still refused.
     await withLockingTxn(async (tx) => {
-      const locked = await lockRegistrationForUpdate(tx, registrationId);
-      const registration = locked
-        ? await findRegistrationWithFormEvent(registrationId, tx)
-        : null;
-      if (!registration) {
-        throw new AppException(ErrorCodes.REGISTRATION_NOT_FOUND, "Registration not found", 404);
-      }
+      const registration = await lockRegistrationForPublicAction(registrationId, tx);
       assertEventAcceptsPublicActions(registration.event);
       assertModuleEnabledForClient(
-        registration.event.client as ClientModuleState,
+        registration.event.client,
         "registrations",
       );
 
-      if (
-        input.paymentMethod === "LAB_SPONSORSHIP" &&
-        (registration.event.client.enabledModules ?? []).includes("sponsorships")
-      ) {
-        throw new AppException(
-          ErrorCodes.BAD_REQUEST,
-          "Lab sponsorship payment method is only available when sponsorships are disabled",
-          400,
-        );
-      }
+      assertLabSponsorshipAllowed(registration.event.client, input.paymentMethod);
 
       if (registration.paymentStatus !== "PENDING" && registration.paymentStatus !== "PARTIAL") {
         throw new AppException(

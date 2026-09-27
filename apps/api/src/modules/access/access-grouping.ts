@@ -1,6 +1,7 @@
 import {
   DEFAULT_EVENT_TIME_ZONE,
   evaluateRuleConditions,
+  getExclusivityKey,
   type Condition,
 } from "@app/shared";
 import type { EventAccessWithPrereqIds } from "@app/db";
@@ -11,21 +12,16 @@ type EnrichedAccess = EventAccessWithPrereqIds & {
   isFull: boolean;
 };
 
-function hasConditions(conditions: unknown): boolean {
-  return Array.isArray(conditions) && conditions.length > 0;
+/** Only non-empty condition arrays participate in access eligibility. */
+export function matchesAccessConditions(
+  access: { conditions: unknown; conditionLogic: string },
+  formData: Record<string, unknown>,
+): boolean {
+  return !Array.isArray(access.conditions) || access.conditions.length === 0 ||
+    evaluateRuleConditions(access.conditions as Condition[], access.conditionLogic, formData);
 }
 
-/**
- * Items sharing an exclusivity key are mutually exclusive when undated:
- * same type, and for OTHER also the same group label.
- */
-export function getExclusivityKey(
-  access: Pick<EventAccessWithPrereqIds, "type" | "groupLabel">,
-): string {
-  return access.type === "OTHER"
-    ? `OTHER:${access.groupLabel ?? ""}`
-    : access.type;
-}
+export { getExclusivityKey } from "@app/shared";
 
 /** Display order: admin sort order first, creation order as tie-breaker. */
 function byOrder(
@@ -70,17 +66,7 @@ export function groupAccess(
     if (access.availableFrom && access.availableFrom > now) return false;
     if (access.availableTo && access.availableTo < now) return false;
 
-    if (hasConditions(access.conditions)) {
-      if (
-        !evaluateRuleConditions(
-          access.conditions as Condition[],
-          access.conditionLogic,
-          formData,
-        )
-      ) {
-        return false;
-      }
-    }
+    if (!matchesAccessConditions(access, formData)) return false;
 
     if (access.requiredAccess && access.requiredAccess.length > 0) {
       const hasAllPrerequisites = access.requiredAccess.every((req) =>

@@ -1,3 +1,4 @@
+import { getExclusivityKey, timeRangesOverlap } from "@app/shared";
 import { randomInt } from "node:crypto";
 import type { SponsorshipForCalculation } from "@app/shared";
 
@@ -107,7 +108,7 @@ export function getAccessTypeKey(
   type: string,
   groupLabel: string | null,
 ): string {
-  return type === "OTHER" ? `OTHER:${groupLabel || ""}` : type;
+  return getExclusivityKey({ type, groupLabel });
 }
 
 /**
@@ -140,11 +141,7 @@ export function validateCoveredAccessTimeOverlap(
         const a = typeItems[i];
         const b = typeItems[j];
         if (a.startsAt && a.endsAt && b.startsAt && b.endsAt) {
-          const aStart = a.startsAt.getTime();
-          const aEnd = a.endsAt.getTime();
-          const bStart = b.startsAt.getTime();
-          const bEnd = b.endsAt.getTime();
-          if (!(aEnd <= bStart || bEnd <= aStart)) {
+          if (timeRangesOverlap(a.startsAt, a.endsAt, b.startsAt, b.endsAt)) {
             errors.push(`Time conflict: "${a.name}" and "${b.name}" overlap`);
           }
         }
@@ -172,10 +169,3 @@ export function determineSponsorshipStatus(
   if (sponsorship.status === "CANCELLED") return "CANCELLED";
   return usageCount > 0 ? "USED" : "PENDING";
 }
-
-// Re-export the pure coverage math (single source in @app/shared).
-export {
-  calculateApplicableAmount,
-  type SponsorshipForCalculation,
-  type RegistrationForCalculation,
-} from "@app/shared";

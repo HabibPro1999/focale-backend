@@ -32,7 +32,6 @@ export type CheckInRegistration = {
   referenceNumber: string | null;
   paymentStatus: string;
   checkedInAt: Date | null;
-  checkedInBy: string | null;
   accessTypeIds: string[];
   clientId: string | null;
 };
@@ -82,7 +81,6 @@ export async function getRegistrationForCheckIn(
       referenceNumber: registrations.referenceNumber,
       paymentStatus: registrations.paymentStatus,
       checkedInAt: registrations.checkedInAt,
-      checkedInBy: registrations.checkedInBy,
       accessTypeIds: registrations.accessTypeIds,
       clientId: events.clientId,
     })
@@ -111,7 +109,6 @@ export async function getRegistrationsForCheckIn(
       referenceNumber: registrations.referenceNumber,
       paymentStatus: registrations.paymentStatus,
       checkedInAt: registrations.checkedInAt,
-      checkedInBy: registrations.checkedInBy,
       accessTypeIds: registrations.accessTypeIds,
       clientId: events.clientId,
     })

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { txnPassthrough } from "../../testing/txn";
 
 // Mock the db layer (the batch intake's tests are in
 // sponsorships.public.service.test.ts). The service orchestrates: it locks
@@ -18,7 +19,6 @@ const db = vi.hoisted(() => {
     "getPendingSponsorships",
     "findSponsorshipForMutation",
     "findActiveEventAccess",
-    "getEventBasePrice",
     "updateSponsorshipRow",
     "deleteSponsorshipRow",
     "getEventPricingForBatch",
@@ -36,7 +36,7 @@ const db = vi.hoisted(() => {
   ];
   const mod: Record<string, ReturnType<typeof vi.fn>> = {};
   for (const f of fns) mod[f] = vi.fn();
-  mod.withLockingTxn = vi.fn((fn: (tx: unknown) => unknown) => fn(TX));
+  mod.withLockingTxn = vi.fn();
   return mod;
 });
 vi.mock("@app/db", async (importOriginal) => {
@@ -73,7 +73,7 @@ const OK_EVENT = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  m.withLockingTxn.mockImplementation((fn: (tx: unknown) => unknown) => fn(TX));
+  m.withLockingTxn.mockImplementation(txnPassthrough(TX));
   access.handleCapacityReached.mockResolvedValue(0);
   m.lockSponsorshipForUpdate.mockResolvedValue(true);
   m.updateSponsorshipRow.mockResolvedValue(undefined);
@@ -218,7 +218,7 @@ describe("updateSponsorship", () => {
     m.findActiveEventAccess.mockResolvedValue([
       { id: "a1", name: "A", type: "MEAL", groupLabel: null, startsAt: null, endsAt: null, price: 200 },
     ]);
-    m.getEventBasePrice.mockResolvedValue(100);
+    m.getEventPricingForBatch.mockResolvedValue({ basePrice: 100, currency: "TND" });
     m.getSponsorshipById.mockResolvedValue({ id: "s1" });
     m.changeSponsorshipCoverageTxn.mockResolvedValue({
       sponsorship: {},
@@ -258,7 +258,7 @@ describe("updateSponsorship", () => {
 
   it("409 SPONSORSHIP_TARGET_SETTLED when a PAID registration's amount would change", async () => {
     m.findSponsorshipForMutation.mockResolvedValue(mutationRow());
-    m.getEventBasePrice.mockResolvedValue(100);
+    m.getEventPricingForBatch.mockResolvedValue({ basePrice: 100, currency: "TND" });
     m.changeSponsorshipCoverageTxn.mockRejectedValue(
       new SponsorshipSettlementError("TARGET_SETTLED", { registrationId: "r1", paymentStatus: "PAID" }),
     );

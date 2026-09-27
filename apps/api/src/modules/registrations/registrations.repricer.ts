@@ -1,3 +1,5 @@
+import { registrationAlreadyExists } from "./registrations.guards";
+import { lockRegistrationForMutation } from "./registrations.loaders";
 import { isDeepStrictEqual } from "node:util";
 import { Injectable } from "@nestjs/common";
 import {
@@ -17,7 +19,6 @@ import {
   settlementEventPair,
   getRegistrationFormSchemaForEvent,
   registrationExistsByEmailForm,
-  findRegistrationForMutation,
   findRegistrationWithFormEvent,
   type DbExecutor,
   type RegistrationFieldsPatch,
@@ -31,7 +32,6 @@ import { prepareFormDataForPricing } from "../pricing/form-data-for-pricing";
 import { assertEventWritable } from "../events";
 import {
   assertModuleEnabledForClient,
-  type ClientModuleState,
 } from "../clients/module-gates";
 import { AppException } from "../../core/app-exception";
 import { validateAdminPaymentOverride } from "./payment-transitions";
@@ -190,17 +190,7 @@ export class RegistrationRepricer {
     // Lock first, then decide from the row re-read under the lock (ADR 0001):
     // a concurrent confirmation is either seen or waits for this edit.
     await withLockingTxn(async (tx) => {
-      const locked = await lockRegistrationForUpdate(tx, id);
-      const registration = locked
-        ? await findRegistrationForMutation(id, tx)
-        : null;
-      if (!registration) {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_NOT_FOUND,
-          "Registration not found",
-          404,
-        );
-      }
+      const registration = await lockRegistrationForMutation(id, tx);
       if (registration.eventId !== eventId) {
         throw new AppException(
           ErrorCodes.CHECKIN_EVENT_MISMATCH,
@@ -210,7 +200,7 @@ export class RegistrationRepricer {
       }
       assertEventWritable(registration.event);
       assertModuleEnabledForClient(
-        registration.event.client as ClientModuleState,
+        registration.event.client,
         "registrations",
       );
 
@@ -223,11 +213,7 @@ export class RegistrationRepricer {
         input.email !== undefined ? normalizeEmail(input.email) : undefined;
       if (inputEmail !== undefined && inputEmail !== registration.email) {
         if (await registrationExistsByEmailForm(inputEmail, registration.formId, tx, id)) {
-          throw new AppException(
-            ErrorCodes.REGISTRATION_ALREADY_EXISTS,
-            "A registration with this email already exists for this form",
-            409,
-          );
+          throw registrationAlreadyExists();
         }
         fields.email = inputEmail;
         changes.email = { old: registration.email, new: inputEmail };
@@ -304,7 +290,7 @@ export class RegistrationRepricer {
       if (hasPriceEdits) {
         // Price-affecting edit: reprice, then settle against the new net.
         assertModuleEnabledForClient(
-          registration.event.client as ClientModuleState,
+          registration.event.client,
           "pricing",
         );
         const effectiveFormData =
@@ -494,7 +480,7 @@ export class RegistrationRepricer {
         event: current.event,
         now: new Date(),
       });
-      assertSelfEditAllowed(policy, current.event.client as ClientModuleState, {
+      assertSelfEditAllowed(policy, current.event.client, {
         changesAccess: isAccessEdit,
         removedAccessIds: accessDeltas.filter((c) => c.delta < 0).map((c) => c.accessId),
       });

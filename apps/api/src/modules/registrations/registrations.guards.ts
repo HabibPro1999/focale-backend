@@ -61,3 +61,24 @@ export async function assertValidSelections(
     );
   }
 }
+
+export function registrationAlreadyExists(): AppException {
+  return new AppException(
+    ErrorCodes.REGISTRATION_ALREADY_EXISTS,
+    "A registration with this email already exists for this form",
+    409,
+  );
+}
+
+export function assertLabSponsorshipAllowed(
+  client: { enabledModules: string[] | null },
+  paymentMethod: string | null | undefined,
+): void {
+  if (paymentMethod === "LAB_SPONSORSHIP" && (client.enabledModules ?? []).includes("sponsorships")) {
+    throw new AppException(
+      ErrorCodes.BAD_REQUEST,
+      "Lab sponsorship payment method is only available when sponsorships are disabled",
+      400,
+    );
+  }
+}

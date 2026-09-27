@@ -1,5 +1,5 @@
-import { getExclusivityKey } from "./access-grouping";
-import { evaluateRuleConditions, type Condition } from "@app/shared";
+import { getExclusivityKey, matchesAccessConditions } from "./access-grouping";
+import { timeRangesOverlap } from "@app/shared";
 import type { EventAccessWithPrereqIds } from "@app/db";
 import type { AccessSelection } from "@app/contracts";
 
@@ -9,10 +9,6 @@ type IncludedAccess = {
   conditions: unknown;
   conditionLogic: string;
 };
-
-function hasConditions(conditions: unknown): boolean {
-  return Array.isArray(conditions) && conditions.length > 0;
-}
 
 /**
  * Pure selection validator. Never throws for business-rule failures — accumulates
@@ -40,16 +36,7 @@ export function validateSelections(
 
   // Mandatory included items (runs even when selections is empty).
   for (const included of includedAccesses) {
-    if (hasConditions(included.conditions)) {
-      if (
-        !evaluateRuleConditions(
-          included.conditions as Condition[],
-          included.conditionLogic,
-          formData,
-        )
-      )
-        continue;
-    }
+    if (!matchesAccessConditions(included, formData)) continue;
     if (!accessIdSet.has(included.id)) {
       errors.push(`"${included.name}" est inclus et doit être sélectionné`);
     }
@@ -93,11 +80,7 @@ export function validateSelections(
         const a = typeItems[i].access;
         const b = typeItems[j].access;
         if (a.startsAt && a.endsAt && b.startsAt && b.endsAt) {
-          const aStart = a.startsAt.getTime();
-          const aEnd = a.endsAt.getTime();
-          const bStart = b.startsAt.getTime();
-          const bEnd = b.endsAt.getTime();
-          if (!(aEnd <= bStart || bEnd <= aStart)) {
+          if (timeRangesOverlap(a.startsAt, a.endsAt, b.startsAt, b.endsAt)) {
             errors.push(`Time conflict: "${a.name}" and "${b.name}" overlap`);
           }
         }
@@ -136,16 +119,8 @@ export function validateSelections(
       }
     }
 
-    if (hasConditions(access.conditions)) {
-      if (
-        !evaluateRuleConditions(
-          access.conditions as Condition[],
-          access.conditionLogic,
-          formData,
-        )
-      ) {
-        errors.push(`${access.name} is not available based on your form answers`);
-      }
+    if (!matchesAccessConditions(access, formData)) {
+      errors.push(`${access.name} is not available based on your form answers`);
     }
   }
 

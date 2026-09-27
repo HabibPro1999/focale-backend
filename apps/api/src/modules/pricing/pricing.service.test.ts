@@ -12,8 +12,7 @@ vi.mock("@app/db", () => ({
   countRegistrations: vi.fn(),
   upsertEventPricing: vi.fn(),
   findEventAccessByIds: vi.fn(),
-  findPendingSponsorships: vi.fn(),
-  getClientModuleState: vi.fn(),
+  findPendingSponsorshipsByCodes: vi.fn(),
   getFormForPriceQuote: vi.fn(),
 }));
 
@@ -21,7 +20,7 @@ import {
   countRegistrations,
   findRegistrationFormSchema,
   findEventAccessByIds,
-  findPendingSponsorships,
+  findPendingSponsorshipsByCodes,
   getEventPricing,
   getEventPricingGate,
   upsertEventPricing,
@@ -84,7 +83,7 @@ const gate = vi.mocked(getEventPricingGate);
 const pricingRead = vi.mocked(getEventPricing);
 const upsert = vi.mocked(upsertEventPricing);
 const access = vi.mocked(findEventAccessByIds);
-const sponsorships = vi.mocked(findPendingSponsorships);
+const sponsorships = vi.mocked(findPendingSponsorshipsByCodes);
 const regCount = vi.mocked(countRegistrations);
 const serTxn = vi.mocked(withSerializableTxn);
 

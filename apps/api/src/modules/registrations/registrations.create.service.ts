@@ -1,3 +1,4 @@
+import { assertLabSponsorshipAllowed, registrationAlreadyExists } from "./registrations.guards";
 import { randomBytes } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
 import {
@@ -44,7 +45,6 @@ import {
 import {
   assertClientModuleEnabled,
   assertModuleEnabledForClient,
-  type ClientModuleState,
 } from "../clients/module-gates";
 import { AppException } from "../../core/app-exception";
 import { CONFIG, type Config } from "../../core/config";
@@ -87,11 +87,7 @@ function translateCreateUniqueViolation(err: unknown): never {
   const { isUnique, constraint } = pgUnique(err);
   if (!isUnique || /idempotency/i.test(constraint)) throw err;
   if (/email/i.test(constraint) || constraint === "registrations_email_form_id_key") {
-    throw new AppException(
-      ErrorCodes.REGISTRATION_ALREADY_EXISTS,
-      "A registration with this email already exists for this form",
-      409,
-    );
+    throw registrationAlreadyExists();
   }
   if (/sponsorship_code/i.test(constraint)) {
     throw new AppException(
@@ -109,6 +105,16 @@ export type PublicCreateResult = {
   priceBreakdown: PriceBreakdown;
 };
 
+function replayResponse(
+  existing: NonNullable<Awaited<ReturnType<typeof getRegistrationByIdempotencyKey>>>,
+): PublicCreateResult {
+  return {
+    created: false,
+    registration: toPublicRegistration(existing, { token: existing.editToken }),
+    priceBreakdown: existing.priceBreakdown,
+  };
+}
+
 /**
  * The registration creates: the public signup (idempotency, form and module
  * gates, pricing, signup sponsorship-code consumption) and the admin create.
@@ -122,25 +128,18 @@ export class RegistrationCreateService {
     private readonly sideEffects: RegistrationSideEffects,
   ) {}
 
+  private async reserveAccessSelections(
+    selections: { accessId: string; quantity: number }[],
+    tx: DbExecutor,
+  ): Promise<void> {
+    await Promise.all(selections.map((selection) =>
+      this.access.incrementAccessRegisteredCountTx(selection.accessId, selection.quantity, tx),
+    ));
+  }
+
   // ==========================================================================
   // Shared settlement helpers
   // ==========================================================================
-
-  private assertLabSponsorshipAllowed(
-    client: { enabledModules: string[] | null },
-    paymentMethod: string | null | undefined,
-  ): void {
-    if (
-      paymentMethod === "LAB_SPONSORSHIP" &&
-      (client.enabledModules ?? []).includes("sponsorships")
-    ) {
-      throw new AppException(
-        ErrorCodes.BAD_REQUEST,
-        "Lab sponsorship payment method is only available when sponsorships are disabled",
-        400,
-      );
-    }
-  }
 
   // ==========================================================================
   // Public create
@@ -163,11 +162,7 @@ export class RegistrationCreateService {
         input.idempotencyKey,
       );
       if (existing) {
-        return {
-          created: false,
-          registration: toPublicRegistration(existing, { token: existing.editToken }),
-          priceBreakdown: existing.priceBreakdown,
-        };
+        return replayResponse(existing);
       }
     }
 
@@ -227,11 +222,7 @@ export class RegistrationCreateService {
           normalizedInput.idempotencyKey,
         );
         if (existing) {
-          return {
-            created: false,
-            registration: toPublicRegistration(existing, { token: existing.editToken }),
-            priceBreakdown: existing.priceBreakdown,
-          };
+          return replayResponse(existing);
         }
       }
       throw err;
@@ -289,11 +280,7 @@ export class RegistrationCreateService {
 
     // Duplicate check (outside tx — advisory fast-fail).
     if (await registrationExistsByEmailForm(email, formId)) {
-      throw new AppException(
-        ErrorCodes.REGISTRATION_ALREADY_EXISTS,
-        "A registration with this email already exists for this form",
-        409,
-      );
+      throw registrationAlreadyExists();
     }
 
     // Advisory access-selection validation (outside tx).
@@ -321,8 +308,8 @@ export class RegistrationCreateService {
         );
       }
       assertEventAcceptsPublicActions(event);
-      assertModuleEnabledForClient(event.client as ClientModuleState, "registrations");
-      this.assertLabSponsorshipAllowed(event.client, paymentMethod);
+      assertModuleEnabledForClient(event.client, "registrations");
+      assertLabSponsorshipAllowed(event.client, paymentMethod);
 
       if (event.maxCapacity !== null && event.registeredCount >= event.maxCapacity) {
         throw new AppException(ErrorCodes.EVENT_FULL, "Event is at capacity", 409);
@@ -364,11 +351,7 @@ export class RegistrationCreateService {
       createdId = id;
 
       if (accessSelections && accessSelections.length > 0) {
-        await Promise.all(
-          accessSelections.map((s) =>
-            this.access.incrementAccessRegisteredCountTx(s.accessId, s.quantity, tx),
-          ),
-        );
+        await this.reserveAccessSelections(accessSelections, tx);
       }
 
       await this.sideEffects.incrementEventRegistered(tx, eventId);
@@ -572,11 +555,7 @@ export class RegistrationCreateService {
     );
 
     if (await registrationExistsByEmailForm(email, form.id)) {
-      throw new AppException(
-        ErrorCodes.REGISTRATION_ALREADY_EXISTS,
-        "A registration with this email already exists for this form",
-        409,
-      );
+      throw registrationAlreadyExists();
     }
 
     if (accessSelections && accessSelections.length > 0) {
@@ -587,7 +566,7 @@ export class RegistrationCreateService {
     if (!eventGate) {
       throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
     }
-    assertModuleEnabledForClient(eventGate.client as ClientModuleState, "pricing");
+    assertModuleEnabledForClient(eventGate.client, "pricing");
 
     const priceBreakdown = await this.pricing.calculatePrice(eventId, {
       formData,
@@ -608,8 +587,8 @@ export class RegistrationCreateService {
         throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
       }
       assertEventWritable(event);
-      assertModuleEnabledForClient(event.client as ClientModuleState, "registrations");
-      this.assertLabSponsorshipAllowed(event.client, paymentMethod);
+      assertModuleEnabledForClient(event.client, "registrations");
+      assertLabSponsorshipAllowed(event.client, paymentMethod);
 
       if (event.maxCapacity !== null && event.registeredCount >= event.maxCapacity) {
         throw new AppException(ErrorCodes.EVENT_FULL, "Event is at capacity", 409);
@@ -662,11 +641,7 @@ export class RegistrationCreateService {
       createdId = id;
 
       if (accessSelections && accessSelections.length > 0) {
-        await Promise.all(
-          accessSelections.map((s) =>
-            this.access.incrementAccessRegisteredCountTx(s.accessId, s.quantity, tx),
-          ),
-        );
+        await this.reserveAccessSelections(accessSelections, tx);
       }
 
       if (isFullySettled(resolvedPaymentStatus)) {

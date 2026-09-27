@@ -1,3 +1,4 @@
+import { lockRegistrationForMutation } from "./registrations.loaders";
 import { timingSafeEqual } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import { buildRegistrationSelfLinks } from "@app/integrations";
@@ -21,7 +22,6 @@ import {
 } from "@app/shared";
 import {
   withLockingTxn,
-  lockRegistrationForUpdate,
   lockRegistrationSponsorships,
   releaseRegistrationUsagesTxn,
   emitSettlementEvents,
@@ -31,7 +31,6 @@ import {
   getRegistrationEditToken,
   getRegistrationEditLinkSource,
   listRegistrationRows,
-  findRegistrationForMutation,
   findRegistrationWithFormEvent,
   deleteRegistrationRow,
   getNetworkingProfilePhotoByRegistration,
@@ -45,7 +44,6 @@ import { AccessService } from "../access/access.service";
 import { assertEventWritable } from "../events";
 import {
   assertModuleEnabledForClient,
-  type ClientModuleState,
 } from "../clients/module-gates";
 import { AppException } from "../../core/app-exception";
 import { getRegistrationTableColumns } from "./table-columns";
@@ -194,19 +192,10 @@ export class RegistrationsService {
     // Lock order (ADR 0001): the linked sponsorships, then the registration.
     const networkingPhoto = await withLockingTxn(async (tx) => {
       await lockRegistrationSponsorships(tx, id);
-      const registration = (await lockRegistrationForUpdate(tx, id))
-        ? await findRegistrationForMutation(id, tx)
-        : null;
-      if (!registration) {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_NOT_FOUND,
-          "Registration not found",
-          404,
-        );
-      }
+      const registration = await lockRegistrationForMutation(id, tx);
       assertEventWritable(registration.event);
       assertModuleEnabledForClient(
-        registration.event.client as ClientModuleState,
+        registration.event.client,
         "registrations",
       );
 

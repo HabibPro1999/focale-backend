@@ -1,6 +1,9 @@
+import { queueRegistrantSponsorshipEmail, sponsorshipEventForEmail } from "./sponsorships.emails";
 import { Injectable } from "@nestjs/common";
 import {
   ErrorCodes,
+  getSponsorshipMode,
+  getSponsorshipSettings,
   type AppEvent,
   type CreateBatchResult,
   type CreateSponsorshipBatchInput,
@@ -30,7 +33,7 @@ import {
   withLockingTxn,
   type AccessItemForOverlap,
   type DbExecutor,
-  type RegistrantSearchResult,
+  type RegistrantSearchRow,
   type RegistrationForBatch,
   type SettleRegistrationResult,
   type SponsorshipRow,
@@ -122,7 +125,7 @@ export class SponsorshipsPublicService {
   async searchRegistrants(
     eventId: string,
     opts: { query: string; unpaidOnly: boolean; limit: number },
-  ): Promise<RegistrantSearchResult[]> {
+  ): Promise<RegistrantSearchRow[]> {
     const results = await searchRegistrantsForSponsorship(eventId, opts);
     return results.map((row) => ({
       id: row.id,
@@ -154,15 +157,8 @@ export class SponsorshipsPublicService {
     const context = await this.validateBatchInput(eventId, formId, input);
 
     return withLockingTxn(async (tx) => {
-      const formSchema = (await getFormSchema(tx, context.formId)) as
-        | Record<string, unknown>
-        | null;
-      const sponsorshipSettings = formSchema?.sponsorshipSettings as
-        | Record<string, unknown>
-        | undefined;
-      const autoApprove =
-        (sponsorshipSettings?.autoApproveSponsorship as boolean | undefined) ??
-        false;
+      const formSchema = await getFormSchema(tx, context.formId);
+      const autoApprove = getSponsorshipSettings(formSchema).autoApproveSponsorship ?? false;
 
       const batch = await insertSponsorshipBatch(tx, {
         eventId,
@@ -181,12 +177,7 @@ export class SponsorshipsPublicService {
       if (context.isLinkedMode) {
         const linkedResult = await this.createLinkedModeSponsorships(
           tx,
-          eventId,
-          batch.id,
-          context.linkedBeneficiaries ?? [],
-          context.registrations,
-          autoApprove,
-          context.accessPriceMap,
+          { eventId, batchId: batch.id, context, autoApprove },
         );
         created = linkedResult.created;
         linkedEmailEntries = linkedResult.linkedEmailEntries;
@@ -218,18 +209,16 @@ export class SponsorshipsPublicService {
 
       await this.queueBatchEmails(
         tx,
-        eventId,
-        batch.id,
-        context,
         {
-          labName: sponsor.labName,
-          contactName: sponsor.contactName,
-          email: sponsor.email,
-          phone: sponsor.phone ?? null,
+          eventId, batchId: batch.id, context,
+          batch: {
+            labName: sponsor.labName,
+            contactName: sponsor.contactName,
+            email: sponsor.email,
+            phone: sponsor.phone ?? null,
+          },
+          autoApprove, sponsorships: created, linkedEmailEntries,
         },
-        autoApprove,
-        created,
-        linkedEmailEntries,
       );
 
       pending.unshift({
@@ -256,7 +245,12 @@ export class SponsorshipsPublicService {
 
     if (!isLinkedMode && beneficiaries.length > 0) {
       const emails = beneficiaries.map((b) => b.email.toLowerCase());
-      const dupes = emails.filter((e, i) => emails.indexOf(e) !== i);
+      const seen = new Set<string>();
+      const dupes = emails.filter((email) => {
+        if (seen.has(email)) return true;
+        seen.add(email);
+        return false;
+      });
       if (dupes.length > 0) {
         throw new AppException(
           ErrorCodes.VALIDATION_ERROR,
@@ -264,11 +258,9 @@ export class SponsorshipsPublicService {
           400,
         );
       }
-    }
-    if (isLinkedMode) {
+    } else if (isLinkedMode) {
       const regIds = linkedBeneficiaries.map((b) => b.registrationId);
-      const dupes = regIds.filter((r, i) => regIds.indexOf(r) !== i);
-      if (dupes.length > 0) {
+      if (new Set(regIds).size !== regIds.length) {
         throw new AppException(
           ErrorCodes.VALIDATION_ERROR,
           "Duplicate registration IDs in linked beneficiaries",
@@ -292,10 +284,7 @@ export class SponsorshipsPublicService {
         404,
       );
     }
-    const sponsorshipMode =
-      ((form.schema as Record<string, unknown> | null)?.sponsorshipSettings as
-        | Record<string, unknown>
-        | undefined)?.sponsorshipMode ?? "CODE";
+    const sponsorshipMode = getSponsorshipMode(form.schema);
 
     if (isLinkedMode && sponsorshipMode !== "LINKED_ACCOUNT") {
       throw new AppException(
@@ -439,19 +428,19 @@ export class SponsorshipsPublicService {
    */
   private async createLinkedModeSponsorships(
     tx: DbExecutor,
-    eventId: string,
-    batchId: string,
-    linkedBeneficiaries: NonNullable<
-      CreateSponsorshipBatchInput["linkedBeneficiaries"]
-    >,
-    registrations: Map<string, RegistrationForBatch>,
-    autoApprove: boolean,
-    accessPriceMap: Map<string, number>,
+    { eventId, batchId, context, autoApprove }: {
+      eventId: string;
+      batchId: string;
+      context: BatchContext;
+      autoApprove: boolean;
+    },
   ): Promise<{
     created: SponsorshipRow[];
     linkedEmailEntries: LinkedEmailEntry[];
     links: Array<{ registrationId: string; sponsorshipId: string; settled: SettleRegistrationResult }>;
   }> {
+    const { registrations, accessPriceMap } = context;
+    const linkedBeneficiaries = context.linkedBeneficiaries ?? [];
     const created: SponsorshipRow[] = [];
     const linkedEmailEntries: LinkedEmailEntry[] = [];
     const links: Array<{ registrationId: string; sponsorshipId: string; settled: SettleRegistrationResult }> = [];
@@ -558,27 +547,18 @@ export class SponsorshipsPublicService {
    */
   private async queueBatchEmails(
     tx: DbExecutor,
-    eventId: string,
-    batchId: string,
-    context: BatchContext,
-    batch: {
-      labName: string;
-      contactName: string;
-      email: string;
-      phone: string | null;
+    { eventId, batchId, context, batch, autoApprove, sponsorships, linkedEmailEntries }: {
+      eventId: string;
+      batchId: string;
+      context: BatchContext;
+      batch: { labName: string; contactName: string; email: string; phone: string | null };
+      autoApprove: boolean;
+      sponsorships: SponsorshipRow[];
+      linkedEmailEntries: LinkedEmailEntry[];
     },
-    autoApprove: boolean,
-    sponsorships: SponsorshipRow[],
-    linkedEmailEntries: LinkedEmailEntry[],
   ): Promise<void> {
     const currency = context.pricing?.currency ?? "TND";
-    const eventForEmail = {
-      name: context.event.name,
-      slug: context.event.slug,
-      startDate: context.event.startDate,
-      location: context.event.location,
-      client: { name: context.event.client.name },
-    };
+    const eventForEmail = sponsorshipEventForEmail(context.event);
 
     const batchContext = buildBatchEmailContext({
       batch,
@@ -627,21 +607,14 @@ export class SponsorshipsPublicService {
         currency,
       });
 
-      await enqueueSponsorshipEmailOutbox(
-        tx,
-        {
-          trigger: "SPONSORSHIP_LINKED",
-          eventId,
-          input: {
-            recipientEmail: entry.registration.email,
-            recipientName:
-              entry.registration.firstName || entry.sponsorship.beneficiaryName,
-            context: linkedContext as Record<string, unknown>,
-            registrationId: entry.registration.id,
-          },
-        },
-        `email:sponsorship:SPONSORSHIP_LINKED:${entry.registration.id}:${entry.sponsorship.code}`,
-      );
+      await queueRegistrantSponsorshipEmail(tx, {
+        trigger: "SPONSORSHIP_LINKED",
+        eventId,
+        registration: entry.registration,
+        beneficiaryName: entry.sponsorship.beneficiaryName,
+        context: linkedContext,
+        dedupeKey: `email:sponsorship:SPONSORSHIP_LINKED:${entry.registration.id}:${entry.sponsorship.code}`,
+      });
 
       if (entry.isFullySponsored) {
         await enqueueTriggeredEmailOutbox(
@@ -659,22 +632,14 @@ export class SponsorshipsPublicService {
           `email:triggered:PAYMENT_CONFIRMED:${entry.registration.id}`,
         );
       } else if (entry.registration.sponsorshipAmount > 0) {
-        await enqueueSponsorshipEmailOutbox(
-          tx,
-          {
-            trigger: "SPONSORSHIP_PARTIAL",
-            eventId,
-            input: {
-              recipientEmail: entry.registration.email,
-              recipientName:
-                entry.registration.firstName ||
-                entry.sponsorship.beneficiaryName,
-              context: linkedContext as Record<string, unknown>,
-              registrationId: entry.registration.id,
-            },
-          },
-          `email:sponsorship:SPONSORSHIP_PARTIAL:${entry.registration.id}:${entry.sponsorship.code}`,
-        );
+        await queueRegistrantSponsorshipEmail(tx, {
+          trigger: "SPONSORSHIP_PARTIAL",
+          eventId,
+          registration: entry.registration,
+          beneficiaryName: entry.sponsorship.beneficiaryName,
+          context: linkedContext,
+          dedupeKey: `email:sponsorship:SPONSORSHIP_PARTIAL:${entry.registration.id}:${entry.sponsorship.code}`,
+        });
       }
     }
   }

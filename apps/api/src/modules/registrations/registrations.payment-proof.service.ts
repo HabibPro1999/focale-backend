@@ -1,3 +1,4 @@
+import { lockRegistrationForPublicAction, loadRegistrationForPublicAction } from "./registrations.loaders";
 import { randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import { fileTypeFromBuffer } from "file-type";
@@ -9,15 +10,12 @@ import {
 import { ErrorCodes } from "@app/contracts";
 import {
   withLockingTxn,
-  lockRegistrationForUpdate,
   enqueueTriggeredEmailOutbox,
   applyRegistrationSettlement,
-  findRegistrationWithFormEvent,
 } from "@app/db";
 import { assertEventAcceptsPublicActions } from "../events";
 import {
   assertModuleEnabledForClient,
-  type ClientModuleState,
 } from "../clients/module-gates";
 import { AppException } from "../../core/app-exception";
 import { logger } from "../../core/logger.service";
@@ -89,17 +87,10 @@ export class PaymentProofService {
     }
 
     // 4. Pre-upload state check (outside tx).
-    const registration = await findRegistrationWithFormEvent(registrationId);
-    if (!registration) {
-      throw new AppException(
-        ErrorCodes.REGISTRATION_NOT_FOUND,
-        "Registration not found",
-        404,
-      );
-    }
+    const registration = await loadRegistrationForPublicAction(registrationId);
     assertEventAcceptsPublicActions(registration.event);
     assertModuleEnabledForClient(
-      registration.event.client as ClientModuleState,
+      registration.event.client,
       "registrations",
     );
     validatePaymentTransition(registration.paymentStatus, "VERIFYING");
@@ -142,16 +133,10 @@ export class PaymentProofService {
     //    replaced. On failure the row keeps the old proof and the new object is
     //    removed.
     const replacedUrl = await withLockingTxn(async (tx) => {
-      const locked = await lockRegistrationForUpdate(tx, registrationId);
-      const currentReg = locked
-        ? await findRegistrationWithFormEvent(registrationId, tx)
-        : null;
-      if (!currentReg) {
-        throw new AppException(ErrorCodes.REGISTRATION_NOT_FOUND, "Registration not found", 404);
-      }
+      const currentReg = await lockRegistrationForPublicAction(registrationId, tx);
       assertEventAcceptsPublicActions(currentReg.event);
       assertModuleEnabledForClient(
-        currentReg.event.client as ClientModuleState,
+        currentReg.event.client,
         "registrations",
       );
       validatePaymentTransition(currentReg.paymentStatus, "VERIFYING");
