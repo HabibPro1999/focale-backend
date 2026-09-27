@@ -1133,6 +1133,47 @@ describe("setEmailStatusChangeListener wiring", () => {
     expect(listener).toHaveBeenCalledWith("log-1", "SENT");
   });
 
+  it("a definitive rejection after the retry budget notifies FAILED exactly once", async () => {
+    const listener = vi.fn();
+    setEmailStatusChangeListener(listener);
+    sendEmailMock.mockResolvedValue({
+      outcome: "rejected",
+      success: false,
+      error: "550 recipient rejected",
+      statusCode: 550,
+    });
+
+    const res = await runOne(claimed({ attemptCount: 4, maxRetries: 3 }));
+
+    expect(sendEmailMock).toHaveBeenCalledOnce();
+    expect(markEmailFailed).toHaveBeenCalledExactlyOnceWith("log-1", "w1", "550 recipient rejected", 4, 3);
+    expect(markEmailSent).not.toHaveBeenCalled();
+    expect(markEmailUncertain).not.toHaveBeenCalled();
+    expect(listener).toHaveBeenCalledExactlyOnceWith("log-1", "FAILED");
+    expect(res).toEqual({ processed: 1, sent: 0, failed: 1, skipped: 0, uncertain: 0 });
+  });
+
+  it("does not notify or count a rejected send whose failure write loses ownership", async () => {
+    const listener = vi.fn();
+    setEmailStatusChangeListener(listener);
+    sendEmailMock.mockResolvedValue({
+      outcome: "rejected",
+      success: false,
+      error: "550 recipient rejected",
+      statusCode: 550,
+    });
+    mocked(markEmailFailed).mockResolvedValue(false);
+
+    const res = await runOne(claimed({ attemptCount: 1, maxRetries: 3 }));
+
+    expect(sendEmailMock).toHaveBeenCalledOnce();
+    expect(markEmailFailed).toHaveBeenCalledExactlyOnceWith("log-1", "w1", "550 recipient rejected", 1, 3);
+    expect(markEmailSent).not.toHaveBeenCalled();
+    expect(markEmailUncertain).not.toHaveBeenCalled();
+    expect(listener).not.toHaveBeenCalled();
+    expect(res).toEqual({ processed: 1, sent: 0, failed: 0, skipped: 0, uncertain: 0 });
+  });
+
   // N3/M8 residual: SKIPPED is a status transition too — the admin's live
   // email-log table must hear about skips, not just QUEUED/SENT/FAILED.
   it("SKIPPED (processEmailQueue skip paths) notifies once", async () => {

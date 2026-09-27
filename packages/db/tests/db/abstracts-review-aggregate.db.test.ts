@@ -217,6 +217,7 @@ describe.runIf(dbTestsEnabled())("db tier: review aggregate recompute", () => {
       eventId: event.id,
       abstractId: abstract.id,
       decision: "REJECTED",
+      finalType: undefined,
       performedBy: "test-admin",
     });
     expect(result.ok).toBe(true);

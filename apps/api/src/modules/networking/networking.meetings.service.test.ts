@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NetworkingConfigSchema } from "@app/contracts";
+import { BadRequestException, ForbiddenException } from "@nestjs/common";
 import type { NetworkingRow, NetworkingStore } from "@app/db";
 const mocks = vi.hoisted(() => ({
   one: vi.fn(), all: vi.fn(), insertAvailability: vi.fn(), allocationMeetings: vi.fn(), allocationReservations: vi.fn(), allocationTableUsage: vi.fn(),
@@ -339,6 +340,76 @@ describe("targeted connection lookups (K2)", () => {
     expect(await lookup(async () => ({ id: "a" })).connectionWith(ctx, "a")).toBeNull();
     const { NotFoundException } = await import("@nestjs/common");
     expect(await lookup(async () => { throw new NotFoundException(); }).connectionWith(ctx, "b")).toBeNull();
+  });
+
+  // Exercise connectionWith through the real target policy and the existing
+  // snapshot mock. A block is a row in either direction, not a pre-made 404.
+  function seedCounterparts(options: { block?: "viewer" | "target"; connection?: boolean } = {}) {
+    const connection = { id: "connection", profileAId: "a", profileBId: "b" };
+    const person = (id: string) => ({
+      id, eventId: "event", registrationId: `registration-${id}`,
+      email: `${id}@example.test`, firstName: id === "a" ? "Alice" : "Bob", lastName: "Person",
+      company: "Company", jobTitle: "Role", sector: "Sector", visible: true,
+      status: "ACTIVE", consent: true, withdrawnAt: null, erasedAt: null, overrides: {},
+    });
+    mocks.one.mockImplementation(async (kind: string, where: Record<string, unknown>) => {
+      if (kind === "connections") return options.connection === false ? null : connection;
+      if (kind === "profiles" && (where.id === "a" || where.id === "b")) return person(where.id);
+      if (kind === "registrations") return { eventId: "event", paymentStatus: "PAID", networkingOptIn: true };
+      if (kind === "blocks" && options.block) {
+        const from = options.block === "viewer" ? "a" : "b";
+        const to = options.block === "viewer" ? "b" : "a";
+        return where.profileId === from && where.targetId === to ? { id: "block" } : null;
+      }
+      return null;
+    });
+    mocks.summaries.mockResolvedValue([summaryRow]);
+    const networking = new NetworkingService();
+    return { networking, social: new NetworkingSocialService(networking) };
+  }
+
+  it.each(["viewer", "target"] as const)(
+    "connectionWith returns null when the %s blocks the other participant",
+    async (block) => {
+      const visible = seedCounterparts();
+      expect(await visible.social.connectionWith(ctx, "b")).toMatchObject({ id: "connection" });
+      mocks.one.mockClear();
+      mocks.summaries.mockClear();
+      const { social } = seedCounterparts({ block });
+      expect(await social.connectionWith(ctx, "b")).toBeNull();
+      expect(mocks.one).toHaveBeenCalledWith("blocks", {
+        eventId: "event", profileId: block === "viewer" ? "a" : "b", targetId: block === "viewer" ? "b" : "a",
+      });
+      expect(mocks.summaries).not.toHaveBeenCalled();
+    },
+  );
+
+  it("connectionWith does not resolve a target when the connection is missing", async () => {
+    const { social, networking } = seedCounterparts({ connection: false });
+    const target = vi.spyOn(networking, "target");
+    expect(await social.connectionWith(ctx, "b")).toBeNull();
+    expect(target).not.toHaveBeenCalled();
+    expect(mocks.summaries).not.toHaveBeenCalled();
+  });
+
+  it("connectionWith returns null when the target passes but the visibility-filtered summary is missing", async () => {
+    const { social, networking } = seedCounterparts();
+    const target = vi.spyOn(networking, "target");
+    mocks.summaries.mockResolvedValue([]);
+    expect(await social.connectionWith(ctx, "b")).toBeNull();
+    expect(target).toHaveBeenCalledOnce();
+    await expect(target.mock.results[0]!.value).resolves.toMatchObject({ id: "b" });
+    expect(mocks.summaries).toHaveBeenCalledWith("event", "a", ctx.config.eligiblePaymentStatuses, undefined, { connectionId: "connection" });
+  });
+
+  it.each([
+    [400, new BadRequestException({ code: "NETWORKING_VALIDATION", message: "Choose another participant" })],
+    [403, new ForbiddenException({ code: "NETWORKING_NOT_ELIGIBLE", message: "Networking participation is no longer eligible" })],
+  ] as const)("connectionWith propagates a non-NotFound %s from target unchanged", async (_status, error) => {
+    const { social, networking } = seedCounterparts();
+    vi.spyOn(networking, "target").mockRejectedValue(error);
+    await expect(social.connectionWith(ctx, "b")).rejects.toBe(error);
+    expect(mocks.summaries).not.toHaveBeenCalled();
   });
 });
 

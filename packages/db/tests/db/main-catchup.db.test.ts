@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { randomBytes } from "node:crypto";
 import { eq } from "drizzle-orm";
+import type { StoredFormSchemaJson } from "@app/contracts";
 import {
   insertCommitteeInvite,
   replaceCommitteeInvite,
@@ -177,7 +178,7 @@ describe.runIf(dbTestsEnabled())(
     });
     it("round-trips multilingual settings/success copy and supports clearing success translations", async () => {
       const form = await seedForm();
-      const schema = {
+      const schema: StoredFormSchemaJson = {
         steps: [],
         settings: {
           languages: ["fr", "en"],

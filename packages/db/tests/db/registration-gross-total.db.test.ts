@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { sql } from "drizzle-orm";
 import { getDb, registrations } from "@app/db";
@@ -7,7 +8,7 @@ import { dbTestsEnabled } from "../helpers/test-env";
 import { cleanupDatabase } from "../helpers/cleanup";
 import { seedEvent, seedForm, seedRegistration } from "../helpers/factories";
 
-const migration = readFileSync(new URL("../../migrations/0011_registration_gross_total.sql", import.meta.url), "utf8");
+const migration = readFileSync(join(__dirname, "../../migrations/0011_registration_gross_total.sql"), "utf8");
 describe.runIf(dbTestsEnabled())("registration gross-total repair", () => {
   beforeEach(cleanupDatabase);
   afterEach(cleanupDatabase);
@@ -21,7 +22,8 @@ describe.runIf(dbTestsEnabled())("registration gross-total repair", () => {
       { totalAmount: 80, sponsorshipAmount: 40 },
       { totalAmount: 60, sponsorshipAmount: 0 },
     ].map((amounts) => seedRegistration({ eventId: event.id, formId: form.id,
-      ...amounts, priceBreakdown: { subtotal: 100, total: 60, sponsorshipTotal: 40 },
+      // Deliberately incomplete legacy JSON for the repair migration.
+      ...amounts, priceBreakdown: { subtotal: 100, total: 60, sponsorshipTotal: 40 } as never,
     })));
     await getDb().execute(sql.raw(migration));
     await getDb().execute(sql.raw(migration));

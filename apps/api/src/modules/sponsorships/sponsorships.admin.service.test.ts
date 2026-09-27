@@ -107,6 +107,24 @@ function settled(
   };
 }
 
+
+/** Full persisted breakdown for the email characterization fixtures. */
+function emailBreakdown(gross: number, sponsorship = 0) {
+  return {
+    basePrice: gross,
+    appliedRules: [],
+    calculatedBasePrice: gross,
+    accessItems: [],
+    accessTotal: 0,
+    subtotal: gross,
+    sponsorships: [],
+    sponsorshipTotal: sponsorship,
+    total: gross - sponsorship,
+    currency: "TND",
+    droppedAccessItems: [],
+  };
+}
+
 function auditCalls(action: string) {
   return m.insertAuditLog.mock.calls
     .map(([entry]) => entry as { action: string; entityId: string; changes: Record<string, unknown>; performedBy: string | null })
@@ -499,6 +517,58 @@ describe("linkSponsorshipToRegistration", () => {
       TX,
       expect.objectContaining({ trigger: "SPONSORSHIP_APPLIED" }),
       "email:sponsorship:SPONSORSHIP_APPLIED:r1:s1",
+    );
+  });
+
+  it.each([
+    { firstName: "Ada", recipientName: "Ada" },
+    { firstName: "", recipientName: "Beneficiary fallback" },
+    { firstName: null, recipientName: "Beneficiary fallback" },
+  ])("APPLIED pins the registrant recipient and ID-based dedupe key for firstName=$firstName", async ({ firstName, recipientName }) => {
+    const settlement = settled(
+      { status: "PENDING", total: 500 },
+      { status: "PARTIAL", sponsorship: 200 },
+    );
+    settlement.before.priceBreakdown = emailBreakdown(500);
+    settlement.after.priceBreakdown = emailBreakdown(500, 200);
+    m.linkSponsorshipToRegistrationTxn.mockResolvedValue(linkResult({ settled: settlement }));
+    m.findSponsorshipForLink.mockResolvedValue(linkSponsorship({
+      beneficiaryName: "Beneficiary fallback",
+      beneficiaryEmail: "beneficiary@example.test",
+      code: "SP-CODE-DIFFERS-FROM-ID",
+    }));
+    m.findRegistrationForLink.mockResolvedValue(linkRegistration({
+      email: "registrant@example.test",
+      firstName,
+      baseAmount: 500,
+      priceBreakdown: emailBreakdown(500, 200),
+    }));
+
+    await service().linkSponsorshipToRegistration("s1", "r1", "admin-email");
+
+    expect(m.enqueueSponsorshipEmailOutbox).toHaveBeenCalledTimes(1);
+    expect(m.enqueueSponsorshipEmailOutbox).toHaveBeenCalledWith(
+      TX,
+      {
+        trigger: "SPONSORSHIP_APPLIED",
+        eventId: "e1",
+        input: {
+          recipientEmail: "registrant@example.test",
+          recipientName,
+          registrationId: "r1",
+          context: expect.objectContaining({
+            email: "registrant@example.test",
+            registrationId: "r1",
+            sponsorshipCode: "SP-CODE-DIFFERS-FROM-ID",
+            beneficiaryName: "Beneficiary fallback",
+            labEmail: "l@x.com",
+          }),
+        },
+      },
+      "email:sponsorship:SPONSORSHIP_APPLIED:r1:s1",
+    );
+    expect(access.handleCapacityReached.mock.invocationCallOrder[0]).toBeLessThan(
+      m.enqueueSponsorshipEmailOutbox.mock.invocationCallOrder[0],
     );
   });
 

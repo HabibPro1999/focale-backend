@@ -94,6 +94,28 @@ function settled(
   };
 }
 
+
+/** Full persisted breakdown for the email characterization fixtures. */
+function emailBreakdown(gross: number, sponsorship = 0) {
+  const base = 100;
+  const accessTotal = gross - base;
+  return {
+    basePrice: base,
+    appliedRules: [],
+    calculatedBasePrice: base,
+    accessItems: accessTotal > 0
+      ? [{ accessId: "uncovered-access", name: "Extra", unitPrice: accessTotal, quantity: 1, subtotal: accessTotal }]
+      : [],
+    accessTotal,
+    subtotal: gross,
+    sponsorships: [],
+    sponsorshipTotal: sponsorship,
+    total: gross - sponsorship,
+    currency: "TND",
+    droppedAccessItems: [],
+  };
+}
+
 function auditCalls(action: string) {
   return m.insertAuditLog.mock.calls
     .map(([entry]) => entry as { action: string; entityId: string; changes: Record<string, unknown>; performedBy: string | null })
@@ -320,6 +342,114 @@ describe("createSponsorshipBatch", () => {
       ...m.enqueueTriggeredEmailOutbox.mock.calls.map(([, payload]) => payload.trigger),
     ];
     expect(emailTriggers).toEqual(["SPONSORSHIP_BATCH_SUBMITTED", "SPONSORSHIP_LINKED", "PAYMENT_CONFIRMED"]);
+  });
+
+  it.each([
+    { firstName: "Ada", recipientName: "Ada", full: false },
+    { firstName: "", recipientName: "Beneficiary fallback", full: false },
+    { firstName: null, recipientName: "Beneficiary fallback", full: false },
+    { firstName: "Ada", recipientName: "Ada", full: true },
+    { firstName: "", recipientName: "Beneficiary fallback", full: true },
+  ])("linked batch email recipient/key and partial-vs-confirmed branch (firstName=$firstName, full=$full)", async ({ firstName, recipientName, full }) => {
+    linkedBatchSetup(true);
+    const gross = full ? 100 : 200;
+    const beneficiaryName = [firstName, "Beneficiary fallback"].filter(Boolean).join(" ");
+    const registration = {
+      ...BATCH_REGISTRATION,
+      firstName,
+      email: "registrant@example.test",
+      lastName: "Beneficiary fallback",
+      totalAmount: gross,
+      baseAmount: 100,
+      accessTypeIds: full ? [] : ["uncovered-access"],
+      priceBreakdown: emailBreakdown(gross),
+    };
+    m.findRegistrationsForBatch.mockResolvedValue([registration]);
+    m.readSponsorshipTarget.mockResolvedValue({
+      ...registration,
+      eventId: "e1",
+      paidAmount: 0,
+      paymentMethod: null,
+      sponsorshipCode: null,
+    });
+    m.insertSponsorship.mockResolvedValue(createdSponsorship({
+      beneficiaryName,
+      beneficiaryEmail: "registrant@example.test",
+      code: "SP-EMAIL-CODE",
+    }));
+    const settlement = settled(
+      { status: "PENDING", total: gross },
+      { status: full ? "SPONSORED" : "PARTIAL", sponsorship: 100 },
+    );
+    settlement.before.priceBreakdown = emailBreakdown(gross);
+    settlement.after.priceBreakdown = emailBreakdown(gross, 100);
+    m.linkSponsorshipToRegistrationTxn.mockResolvedValue(linkResult({
+      usage: { id: "u1", sponsorshipId: "s1", registrationId: "r1", amountApplied: 100 },
+      settled: settlement,
+    }));
+
+    await service().createSponsorshipBatch("e1", "f1", {
+      sponsor: SPONSOR,
+      linkedBeneficiaries: [{ registrationId: "r1", coversBasePrice: true, coveredAccessIds: [] }],
+    });
+
+    expect(m.enqueueSponsorshipEmailOutbox).toHaveBeenNthCalledWith(
+      1, TX,
+      {
+        trigger: "SPONSORSHIP_BATCH_SUBMITTED",
+        eventId: "e1",
+        input: {
+          recipientEmail: SPONSOR.email,
+          recipientName: SPONSOR.contactName,
+          context: expect.objectContaining({ labName: SPONSOR.labName, labEmail: SPONSOR.email }),
+        },
+      },
+      "email:sponsorship:SPONSORSHIP_BATCH_SUBMITTED:b1",
+    );
+    const registrantInput = {
+      recipientEmail: "registrant@example.test",
+      recipientName,
+      registrationId: "r1",
+      context: expect.objectContaining({
+        email: "registrant@example.test",
+        registrationId: "r1",
+        sponsorshipCode: "SP-EMAIL-CODE",
+        beneficiaryName,
+        labEmail: SPONSOR.email,
+        paymentStatus: full ? "Paid" : "Pending",
+      }),
+    };
+    expect(m.enqueueSponsorshipEmailOutbox).toHaveBeenNthCalledWith(
+      2, TX,
+      { trigger: "SPONSORSHIP_LINKED", eventId: "e1", input: registrantInput },
+      "email:sponsorship:SPONSORSHIP_LINKED:r1:SP-EMAIL-CODE",
+    );
+    if (full) {
+      expect(m.enqueueSponsorshipEmailOutbox).toHaveBeenCalledTimes(2);
+      expect(m.enqueueTriggeredEmailOutbox).toHaveBeenCalledTimes(1);
+      expect(m.enqueueTriggeredEmailOutbox).toHaveBeenCalledWith(
+        TX,
+        {
+          trigger: "PAYMENT_CONFIRMED",
+          eventId: "e1",
+          registration: { id: "r1", email: "registrant@example.test", firstName, lastName: "Beneficiary fallback" },
+        },
+        "email:triggered:PAYMENT_CONFIRMED:r1",
+      );
+    } else {
+      expect(m.enqueueSponsorshipEmailOutbox).toHaveBeenCalledTimes(3);
+      expect(m.enqueueSponsorshipEmailOutbox).toHaveBeenNthCalledWith(
+        3, TX,
+        { trigger: "SPONSORSHIP_PARTIAL", eventId: "e1", input: registrantInput },
+        "email:sponsorship:SPONSORSHIP_PARTIAL:r1:SP-EMAIL-CODE",
+      );
+      expect(m.enqueueTriggeredEmailOutbox).not.toHaveBeenCalled();
+      const linkedContext = m.enqueueSponsorshipEmailOutbox.mock.calls[1][1].input.context;
+      expect(m.enqueueSponsorshipEmailOutbox.mock.calls[2][1].input.context).toEqual(linkedContext);
+    }
+    expect(access.handleCapacityReached.mock.invocationCallOrder[0]).toBeLessThan(
+      m.enqueueSponsorshipEmailOutbox.mock.invocationCallOrder[0],
+    );
   });
 
   it("linked mode, auto-approve on a settled registration → PENDING targeted, not linked", async () => {

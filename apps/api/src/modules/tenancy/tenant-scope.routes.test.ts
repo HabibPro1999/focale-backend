@@ -595,6 +595,73 @@ describe("tenant scope route matrix (5.4)", () => {
       },
     );
 
+    // B2: one representative per admin module; keep each route's current
+    // policy rather than assuming every write has both archive and module gates.
+    const OVERLAP_ROUTES = [
+      "FormsController.update",
+      "RegistrationSponsorshipsController.link",
+      "PricingController.updatePricing",
+      "EmailController.update",
+      "AbstractsController.patchConfig",
+      "EventsController.uploadBanner",
+      "CertificatesController.update",
+    ].map((name) => {
+      const route = ROUTES.find((candidate) => candidate.name === name);
+      if (!route) throw new Error(`Missing overlap route ${name}`);
+      return [name, route] as const;
+    });
+
+    it.each(OVERLAP_ROUTES)(
+      "%s: missing resource wins for a foreign admin, before archive/module/body checks",
+      async (_name, route) => {
+        signIn(UserRole.CLIENT_ADMIN, OTHER);
+        ownScopes("ARCHIVED", []);
+        READS[route.rule!.kind].mockResolvedValue(null);
+        const res = await send(route);
+        expect(res.statusCode).toBe(404);
+        expect(res.json().error).toEqual(NOT_FOUND[route.rule!.kind]);
+        expect(READS[route.rule!.kind]).toHaveBeenCalledWith(route.params[route.rule!.param]);
+        expect(serviceCalls).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(OVERLAP_ROUTES)(
+      "%s: foreign ownership wins over archived event and disabled modules",
+      async (_name, route) => {
+        signIn(UserRole.CLIENT_ADMIN, OTHER);
+        ownScopes("ARCHIVED", []);
+        const res = await send(route);
+        expect(res.statusCode).toBe(403);
+        expect(res.json().error).toEqual({ code: ErrorCodes.FORBIDDEN, message: "Insufficient permissions" });
+        expect(serviceCalls).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(OVERLAP_ROUTES)(
+      "%s: archived event plus disabled modules retains the route's refusal order",
+      async (name, route) => {
+        signIn(UserRole.CLIENT_ADMIN, OWNER);
+        ownScopes("ARCHIVED", []);
+        const res = await send(route);
+        if (name === "AbstractsController.patchConfig") {
+          // Abstract administration has no writable-event check, even on PATCH.
+          expect(res.statusCode).toBe(403);
+          expect(res.json().error).toEqual({
+            code: ErrorCodes.MODULE_DISABLED,
+            message: "Abstracts module is disabled for this client",
+          });
+        } else {
+          // Banner upload has no module gate; its archive check still refuses.
+          expect(res.statusCode).toBe(400);
+          expect(res.json().error).toEqual({
+            code: ErrorCodes.INVALID_STATUS_TRANSITION,
+            message: "Archived events cannot be modified",
+          });
+        }
+        expect(serviceCalls).not.toHaveBeenCalled();
+      },
+    );
+
     // ------------------------------------------------------------------------
     // 5.4b: routes that take their event or client from the body or query.
     // requireTenantScope runs in the handler, after validation: same read,
