@@ -1,6 +1,6 @@
 import { newId } from "@app/shared";
 import { withSerializableTxn } from "../txn";
-import { and, eq, gt, isNull, or } from "drizzle-orm";
+import { and, eq, gt, isNull, or, sql } from "drizzle-orm";
 import { NetworkingConfigSchema, networkingProfileOverrides, type NetworkingConfig } from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
 import {
@@ -324,4 +324,13 @@ export async function queueNetworkingActivation(
     db,
     { dedupeKey: `networking-activation:${profileId}` },
   );
+}
+
+/** Activity must not change the content watermark used by the embedding worker. */
+export async function touchNetworkingProfileActivity(eventId: string, profileId: string): Promise<void> {
+  await getDb().execute(sql`
+    UPDATE networking_profiles SET last_active_at=now()
+    WHERE event_id=${eventId} AND id=${profileId}
+      AND (last_active_at IS NULL OR last_active_at < now() - interval '1 minute')
+  `);
 }

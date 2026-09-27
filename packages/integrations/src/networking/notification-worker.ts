@@ -235,6 +235,90 @@ async function sendEmailChannel(
   }
 }
 
+/** Renew before each channel reload; provider-send fences remain in the channel itself. */
+async function readOwnedDeliveryContext(
+  row: NetworkingDeliveryRow,
+  options?: Parameters<typeof networkingDeliveryContext>[1],
+) {
+  if (!(await refreshNetworkingDeliveryLease(row))) return null;
+  return options === undefined ? networkingDeliveryContext(row) : networkingDeliveryContext(row, options);
+}
+
+const retryAt = (attempts: number) => new Date(Date.now() + Math.min(15, 2 ** attempts) * 60_000);
+const otpTerminalPayload = (row: NetworkingDeliveryRow, outcome: string) =>
+  ({ challengeId: row.payload.challengeId, outcome });
+
+/** One push-channel revalidation, with a fresh lease immediately before every provider call. */
+async function deliverPushChannel({ row, context, progress, payload, dependencies, failures, skip }: {
+  row: NetworkingDeliveryRow;
+  context: NetworkingNotificationContext;
+  progress: DeliveryProgress;
+  payload: Record<string, unknown>;
+  dependencies: NetworkingDeliveryDependencies;
+  failures: string[];
+  skip: (reason: string) => Promise<"skipped">;
+}): Promise<"lease_lost" | "skipped" | undefined> {
+  const delivered = new Set(progress.pushEndpoints ?? []);
+  if (context.subscriptions.some((subscription) => !delivered.has(subscription.endpoint))) {
+    // The push channel's one revalidation, for all of its endpoints.
+    const current = await readOwnedDeliveryContext(row);
+    if (!current) return "lease_lost";
+    const changed = networkingDeliverySkipReason(row, current);
+    if (changed) return skip(changed);
+    const rendered = renderNetworkingNotification(row.type, row.payload, current);
+    const push = dependencies.push ?? sendNotification;
+    for (const subscription of current.subscriptions) {
+      if (delivered.has(subscription.endpoint)) continue;
+      if (
+        !allowedNetworkingPushEndpoint(subscription.endpoint) ||
+        (subscription.expirationTime &&
+          subscription.expirationTime <= new Date())
+      ) {
+        await deleteNetworkingPushSubscription(subscription.id);
+        continue;
+      }
+      try {
+        const { publicKey, privateKey, subject } = networkingConfig().vapid;
+        if (!publicKey || !privateKey || !subject)
+          throw new Error("Push provider is not configured");
+        if (!(await refreshNetworkingDeliveryLease(row))) return "lease_lost";
+        await push(
+          { endpoint: subscription.endpoint, keys: subscription.keys },
+          JSON.stringify({
+            title: rendered.title,
+            body: rendered.body.slice(0, 240),
+            href: rendered.href || rendered.relativeHref,
+            tag:
+              row.type === "MESSAGE"
+                ? String(row.payload.connectionId ?? row.id)
+                : row.id,
+            id: row.payload.notificationId ?? row.id,
+          }),
+          {
+            vapidDetails: { publicKey, privateKey, subject },
+            TTL: 3600,
+            timeout: 10_000,
+          },
+        );
+        delivered.add(subscription.endpoint);
+      } catch (error) {
+        if (
+          [404, 410].includes(
+            Number((error as { statusCode?: number }).statusCode),
+          )
+        ) {
+          await deleteNetworkingPushSubscription(subscription.id);
+          delivered.add(subscription.endpoint);
+        } else failures.push(`push:${subscription.id}`);
+      }
+      progress.pushEndpoints = [...delivered];
+      if (!(await updateNetworkingDelivery(row, { payload })))
+        return "lease_lost";
+    }
+  }
+  return undefined;
+}
+
 async function processOne(
   row: NetworkingDeliveryRow,
   dependencies: NetworkingDeliveryDependencies,
@@ -308,11 +392,9 @@ async function processOne(
   if (wantsEmail(context) && !progress.emailSent && !progress.emailUncertain) {
     // The email channel's one revalidation (the push channel re-reads its
     // subscriptions itself; the claim's list still decides whether it runs).
-    if (!(await refreshNetworkingDeliveryLease(row))) return "lease_lost";
-    context = {
-      ...(await networkingDeliveryContext(row, { subscriptions: false })),
-      subscriptions: context.subscriptions,
-    };
+    const current = await readOwnedDeliveryContext(row, { subscriptions: false });
+    if (!current) return "lease_lost";
+    context = { ...current, subscriptions: context.subscriptions };
     const changed = networkingDeliverySkipReason(row, context);
     if (changed) return skip(changed);
     const contacts = row.type === "POST_EVENT_CONTACTS" || row.payload.includeContacts === true ? await networkingParticipantExportContacts(row.eventId, row.profileId!) : undefined;
@@ -335,64 +417,8 @@ async function processOne(
     }
   }
   if (pushable) {
-    const delivered = new Set(progress.pushEndpoints ?? []);
-    if (context.subscriptions.some((subscription) => !delivered.has(subscription.endpoint))) {
-      // The push channel's one revalidation, for all of its endpoints.
-      if (!(await refreshNetworkingDeliveryLease(row))) return "lease_lost";
-      const current = await networkingDeliveryContext(row);
-      const changed = networkingDeliverySkipReason(row, current);
-      if (changed) return skip(changed);
-      rendered = renderNetworkingNotification(row.type, row.payload, current);
-      const push = dependencies.push ?? sendNotification;
-      for (const subscription of current.subscriptions) {
-        if (delivered.has(subscription.endpoint)) continue;
-        if (
-          !allowedNetworkingPushEndpoint(subscription.endpoint) ||
-          (subscription.expirationTime &&
-            subscription.expirationTime <= new Date())
-        ) {
-          await deleteNetworkingPushSubscription(subscription.id);
-          continue;
-        }
-        try {
-          const { publicKey, privateKey, subject } = networkingConfig().vapid;
-          if (!publicKey || !privateKey || !subject)
-            throw new Error("Push provider is not configured");
-          if (!(await refreshNetworkingDeliveryLease(row))) return "lease_lost";
-          await push(
-            { endpoint: subscription.endpoint, keys: subscription.keys },
-            JSON.stringify({
-              title: rendered.title,
-              body: rendered.body.slice(0, 240),
-              href: rendered.href || rendered.relativeHref,
-              tag:
-                row.type === "MESSAGE"
-                  ? String(row.payload.connectionId ?? row.id)
-                  : row.id,
-              id: row.payload.notificationId ?? row.id,
-            }),
-            {
-              vapidDetails: { publicKey, privateKey, subject },
-              TTL: 3600,
-              timeout: 10_000,
-            },
-          );
-          delivered.add(subscription.endpoint);
-        } catch (error) {
-          if (
-            [404, 410].includes(
-              Number((error as { statusCode?: number }).statusCode),
-            )
-          ) {
-            await deleteNetworkingPushSubscription(subscription.id);
-            delivered.add(subscription.endpoint);
-          } else failures.push(`push:${subscription.id}`);
-        }
-        progress.pushEndpoints = [...delivered];
-        if (!(await updateNetworkingDelivery(row, { payload })))
-          return "lease_lost";
-      }
-    }
+    const outcome = await deliverPushChannel({ row, context, progress, payload, dependencies, failures, skip });
+    if (outcome) return outcome;
   }
   if (!failures.length && deferUntil) {
     // Only the provider's rate limit stood in the way: not a failed attempt.
@@ -408,13 +434,13 @@ async function processOne(
   }
   if (failures.length) {
     const exhausted = row.attempts >= NETWORKING_DELIVERY_MAX_ATTEMPTS;
-    const backoff = new Date(Date.now() + Math.min(15, 2 ** row.attempts) * 60_000);
+    const backoff = retryAt(row.attempts);
     await updateNetworkingDelivery(row, {
       status: "FAILED",
       lockedUntil: null,
       payload:
         row.type === "OTP" && exhausted
-          ? { challengeId: row.payload.challengeId, outcome: "retry_exhausted" }
+          ? otpTerminalPayload(row, "retry_exhausted")
           : payload,
       lastError: `Notification channels failed: ${failures.map((channel) => channel.split(":")[0]).join(", ")}`,
       availableAt: deferUntil && deferUntil > backoff ? deferUntil : backoff,
@@ -427,7 +453,7 @@ async function processOne(
     lastError: progress.emailUncertain ? UNCERTAIN_EMAIL_ERROR : null,
     payload:
       row.type === "OTP"
-        ? { challengeId: row.payload.challengeId, outcome: progress.emailUncertain ? "email_uncertain" : "sent" }
+        ? otpTerminalPayload(row, progress.emailUncertain ? "email_uncertain" : "sent")
         : payload,
   });
   return progress.emailUncertain ? "uncertain" : "sent";
@@ -480,16 +506,11 @@ export async function processNetworkingDeliveries(
           lockedUntil: null,
           ...(row.type === "OTP" && row.attempts >= NETWORKING_DELIVERY_MAX_ATTEMPTS
             ? {
-                payload: {
-                  challengeId: row.payload.challengeId,
-                  outcome: "retry_exhausted",
-                },
+                payload: otpTerminalPayload(row, "retry_exhausted"),
               }
             : {}),
           lastError: "Notification delivery failed",
-          availableAt: new Date(
-            Date.now() + Math.min(15, 2 ** row.attempts) * 60_000,
-          ),
+          availableAt: retryAt(row.attempts),
         }).catch(() => false);
         result.failed++;
       }

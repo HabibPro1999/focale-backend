@@ -11,7 +11,12 @@ import {
   type NetworkingExportPerson,
   type NetworkingRow,
 } from "@app/db";
-import { generateNetworkingReportPdf } from "@app/integrations";
+import {
+  dateIcs,
+  escapeIcs,
+  foldIcs,
+  generateNetworkingReportPdf,
+} from "@app/integrations";
 import { NetworkingSocialService } from "./networking.social.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
 import type { NetworkingContext } from "./networking.service";
@@ -24,30 +29,6 @@ import {
   createXlsxWriter,
 } from "../../core/exports/xlsx-stream";
 const csv = (headers: string[], rows: unknown[][]) => toCsv([headers, ...rows]);
-const escapeIcs = (value: string) =>
-  value
-    .replaceAll("\\", "\\\\")
-    .replaceAll("\r", "")
-    .replaceAll("\n", "\\n")
-    .replaceAll(",", "\\,")
-    .replaceAll(";", "\\;");
-const dateIcs = (date: Date) =>
-  date
-    .toISOString()
-    .replace(/[-:]/g, "")
-    .replace(/\.\d{3}Z$/, "Z");
-function foldIcs(line: string) {
-  let output = "",
-    part = "";
-  for (const character of line) {
-    if (Buffer.byteLength(part + character) > 73) {
-      output += part + "\r\n ";
-      part = "";
-    }
-    part += character;
-  }
-  return output + part;
-}
 @Injectable()
 export class NetworkingExportsService {
   constructor(
