@@ -11,12 +11,11 @@ import {
   Patch,
   Post,
   Query,
-  Req,
 } from "@nestjs/common";
-import type { FastifyRequest } from "fastify";
 import { ErrorCodes, UserRole, type ModuleId } from "@app/contracts";
-import type { ClientRow, Form, FormWithEvent } from "@app/db";
+import type { Form, FormWithEvent } from "@app/db";
 import { Auth } from "../../core/auth/auth.decorator";
+import { CurrentUser } from "../../core/auth/current-user.decorator";
 import { type AuthUser } from "../../core/auth/user-cache";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { EventScoped, FormScoped, requireTenantScope } from "../tenancy";
@@ -31,12 +30,6 @@ import {
   CreateSponsorFormBodyDto,
   EventIdParamDto,
 } from "./dto";
-
-/** Request after AuthGuard: 8-field user + resolved client attached. */
-type AuthedRequest = FastifyRequest & {
-  user: AuthUser;
-  client: ClientRow | null;
-};
 
 /** Modules a form list needs, by the form type it asks for (none: both). */
 const LIST_MODULES: Record<"SPONSOR" | "REGISTRATION" | "ANY", ModuleId[]> = {
@@ -57,9 +50,9 @@ export class FormsController {
   @HttpCode(201)
   async create(
     @Body() body: CreateFormDto,
-    @Req() req: AuthedRequest,
+    @CurrentUser() user: AuthUser,
   ): Promise<Form> {
-    await requireTenantScope(req.user, "event", body.eventId, {
+    await requireTenantScope(user, "event", body.eventId, {
       module: "registrations",
       write: true,
     });
@@ -69,10 +62,10 @@ export class FormsController {
   @Get()
   async list(
     @Query() query: ListFormsQueryDto,
-    @Req() req: AuthedRequest,
+    @CurrentUser() user: AuthUser,
   ): Promise<PaginatedResult<Form>> {
-    if (req.user.role === UserRole.CLIENT_ADMIN) {
-      if (!req.user.clientId) {
+    if (user.role === UserRole.CLIENT_ADMIN) {
+      if (!user.clientId) {
         throw new ForbiddenException({
           code: ErrorCodes.FORBIDDEN,
           message: "User is not associated with any client",
@@ -87,7 +80,7 @@ export class FormsController {
     }
 
     if (query.eventId) {
-      await requireTenantScope(req.user, "event", query.eventId, {
+      await requireTenantScope(user, "event", query.eventId, {
         module: LIST_MODULES[query.type ?? "ANY"],
       });
     }

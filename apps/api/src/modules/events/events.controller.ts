@@ -13,11 +13,11 @@ import {
   Query,
   Req,
 } from "@nestjs/common";
-import type { FastifyRequest } from "fastify";
 import { ErrorCodes, UserRole } from "@app/contracts";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
+import { readSingleFile, type MultipartRequest } from "../../core/multipart";
 import { type AuthUser } from "../../core/auth/user-cache";
 import { EventScoped, requireTenantScope } from "../tenancy";
 import { EventsService } from "./events.service";
@@ -27,16 +27,6 @@ import {
   ListEventsQueryDto,
   EventIdParamDto,
 } from "./events.dto";
-
-// @fastify/multipart augments the request with .file(); minimal shape used here.
-type MultipartFile = {
-  filename: string;
-  mimetype: string;
-  toBuffer(): Promise<Buffer>;
-};
-type MultipartRequest = FastifyRequest & {
-  file(): Promise<MultipartFile | undefined>;
-};
 
 /**
  * Admin event CRUD — mounted at /api/events. Every route requires a valid token
@@ -102,19 +92,13 @@ export class EventsController {
     @Param() params: EventIdParamDto,
     @Req() req: MultipartRequest,
   ) {
-    const data = await req.file();
-    if (!data) {
-      throw new BadRequestException({
-        code: ErrorCodes.VALIDATION_ERROR,
-        message: "No file uploaded",
-      });
-    }
-
-    const buffer = await data.toBuffer();
-    return this.events.uploadEventBanner(params.id, {
-      buffer,
-      filename: data.filename,
-      mimetype: data.mimetype,
+    const file = await readSingleFile(req, {
+      missingFile: () =>
+        new BadRequestException({
+          code: ErrorCodes.VALIDATION_ERROR,
+          message: "No file uploaded",
+        }),
     });
+    return this.events.uploadEventBanner(params.id, file);
   }
 }

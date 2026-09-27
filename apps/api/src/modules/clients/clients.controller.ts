@@ -10,12 +10,12 @@ import {
   Patch,
   Post,
   Query,
-  Req,
 } from "@nestjs/common";
-import type { FastifyRequest } from "fastify";
 import { ErrorCodes, UserRole } from "@app/contracts";
 import type { ClientRow } from "@app/db";
 import { Auth, RequireRole } from "../../core/auth/auth.decorator";
+import { CurrentClient } from "../../core/auth/current-client.decorator";
+import { CurrentUser } from "../../core/auth/current-user.decorator";
 import { type AuthUser } from "../../core/auth/user-cache";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { ClientScoped } from "../tenancy";
@@ -26,12 +26,6 @@ import {
   ListClientsQueryDto,
   ClientIdParamDto,
 } from "./clients.dto";
-
-/** Request after AuthGuard: user (8-field) + client (full row or null) attached. */
-type AuthedRequest = FastifyRequest & {
-  user: AuthUser;
-  client: ClientRow | null;
-};
 
 /**
  * Client routes, mounted at /api/clients. Every route requires a valid token
@@ -45,15 +39,18 @@ export class ClientsController {
 
   /** Current user's client. Any authenticated user; reuses request.client (no DB hit). */
   @Get("me")
-  async getMe(@Req() req: AuthedRequest): Promise<ClientRow> {
-    const { clientId } = req.user;
+  async getMe(
+    @CurrentUser() user: AuthUser,
+    @CurrentClient() callerClient: ClientRow | null,
+  ): Promise<ClientRow> {
+    const { clientId } = user;
     if (!clientId) {
       throw new ForbiddenException({
         code: ErrorCodes.FORBIDDEN,
         message: "User is not associated with any client",
       });
     }
-    const client = req.client ?? (await this.clients.getById(clientId));
+    const client = callerClient ?? (await this.clients.getById(clientId));
     if (!client) {
       throw new NotFoundException({
         code: ErrorCodes.NOT_FOUND,
@@ -81,11 +78,11 @@ export class ClientsController {
   @ClientScoped()
   async getById(
     @Param() params: ClientIdParamDto,
-    @Req() req: AuthedRequest,
+    @CurrentClient() callerClient: ClientRow | null,
   ): Promise<ClientRow> {
     const client =
-      req.client?.id === params.id
-        ? req.client
+      callerClient?.id === params.id
+        ? callerClient
         : await this.clients.getById(params.id);
     if (!client) {
       throw new NotFoundException({

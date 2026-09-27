@@ -12,7 +12,7 @@ import {
   Res,
 } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
-import type { FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyReply } from "fastify";
 import {
   ErrorCodes,
   PaymentMethodSelectedResponseSchema,
@@ -22,6 +22,7 @@ import {
   PublicRegistrationForEditResponseSchema,
 } from "@app/contracts";
 import { AppException } from "../../core/app-exception";
+import { readSingleFile, type MultipartRequest } from "../../core/multipart";
 import { ResponseContract } from "../../core/response-contract";
 import { RegistrationsService } from "./registrations.service";
 import { RegistrationCreateService } from "./registrations.create.service";
@@ -36,16 +37,6 @@ import {
   RegistrationIdPublicParamDto,
   SelectPaymentMethodDto,
 } from "./registrations.dto";
-
-// @fastify/multipart augments the request with .file(); minimal shape used here.
-type MultipartFile = {
-  filename: string;
-  mimetype: string;
-  toBuffer(): Promise<Buffer>;
-};
-type MultipartRequest = FastifyRequest & {
-  file(): Promise<MultipartFile | undefined>;
-};
 
 // Legacy publicRateLimits presets.
 const REGISTRATION_THROTTLE = { default: { limit: 5, ttl: 60_000 } };
@@ -154,15 +145,10 @@ export class RegistrationEditPublicController {
     @Headers("x-edit-token") headerToken?: string,
   ) {
     await this.requireToken(registrationId, headerToken, token);
-    const data = await req.file();
-    if (!data) {
-      throw new AppException(ErrorCodes.VALIDATION_ERROR, "No file uploaded", 400);
-    }
-    const buffer = await data.toBuffer();
-    return this.proofs.uploadPaymentProof(registrationId, {
-      buffer,
-      filename: data.filename,
-      mimetype: data.mimetype,
+    const file = await readSingleFile(req, {
+      missingFile: () =>
+        new AppException(ErrorCodes.VALIDATION_ERROR, "No file uploaded", 400),
     });
+    return this.proofs.uploadPaymentProof(registrationId, file);
   }
 }
