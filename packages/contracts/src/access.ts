@@ -1,3 +1,4 @@
+import { EventIdPathParamSchema } from "./path-params";
 import { hasUpdateField } from "./zod-helpers";
 import { z } from "zod";
 import { ConditionSchema } from "./condition.schema";
@@ -143,9 +144,7 @@ export const EventAccessIdParamSchema = z.strictObject({
 
 // Named distinct from events' EventIdParamSchema ({id}) to avoid a barrel clash;
 // access nested routes key on `eventId`.
-export const AccessEventIdParamSchema = z.strictObject({
-  eventId: z.string().uuid(),
-});
+export const AccessEventIdParamSchema = EventIdPathParamSchema;
 
 // Public GET single-item route param (inline in legacy routes file).
 export const PublicAccessItemParamSchema = z.strictObject({

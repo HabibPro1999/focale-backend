@@ -1,3 +1,4 @@
+import { EventIdPathParamSchema } from "./path-params";
 import { hasUpdateField } from "./zod-helpers";
 import { z } from "zod";
 import { findConditionConflicts } from "./condition-satisfiability";
@@ -82,9 +83,7 @@ export const UpdateEventPricingSchema = z
 // Prefixed to stay unique in the shared contracts barrel: events/forms already
 // export EventIdParamSchema/FormIdParamSchema keyed on `id`; pricing routes key
 // on `eventId`/`ruleId`/`formId`.
-export const PricingEventIdParamSchema = z.strictObject({
-  eventId: z.string().uuid(),
-});
+export const PricingEventIdParamSchema = EventIdPathParamSchema;
 
 export const PricingRuleIdParamSchema = z.strictObject({
   eventId: z.string().uuid(),

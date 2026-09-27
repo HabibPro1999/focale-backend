@@ -1,3 +1,4 @@
+import { EventIdPathParamSchema } from "./path-params";
 import { PaginationQueryShape, PaginationLimitSchema } from "./zod-helpers";
 import { PaymentStatusSchema, RegistrationRoleSchema } from "./registration-enums";
 import { z } from "zod";
@@ -252,9 +253,7 @@ export const SendCustomEmailSchema = z.strictObject({
 
 // Named `Email*` to avoid colliding with events/registrations param schemas in
 // the shared contracts barrel (both re-export under `export *`).
-export const EmailEventIdParamSchema = z.strictObject({
-  eventId: z.string().uuid(),
-});
+export const EmailEventIdParamSchema = EventIdPathParamSchema;
 
 export const EmailTemplateIdParamSchema = z.strictObject({
   templateId: z.string().uuid(),

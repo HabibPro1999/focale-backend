@@ -1,3 +1,4 @@
+import { EventIdPathParamSchema } from "./path-params";
 import { z } from "zod";
 import { FormFieldSchema } from "./forms";
 import {
@@ -59,9 +60,7 @@ export const ABSTRACT_FINAL_TYPE_LABELS: Record<AbstractFinalType, string> = {
 // Param Schemas
 // ============================================================================
 
-export const AbstractsEventIdParamSchema = z.strictObject({
-  eventId: z.string().uuid(),
-});
+export const AbstractsEventIdParamSchema = EventIdPathParamSchema;
 
 export const ThemeIdParamSchema = z.strictObject({
   eventId: z.string().uuid(),
