@@ -1,3 +1,4 @@
+import { tableExists } from "./catalog-read";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 import { defaultMigrationsDirectory, loadMigrations } from "./migration";
@@ -69,16 +70,6 @@ export async function setUtcSession(client: Client): Promise<void> {
   await client.query("SET TIME ZONE 'UTC'");
 }
 
-async function tableExists(client: Client, name: string): Promise<boolean> {
-  const result = await client.query<{ present: boolean }>(
-    `SELECT EXISTS (
-      SELECT 1 FROM information_schema.tables
-      WHERE table_schema = 'public' AND table_name = $1
-    ) AS present`,
-    [name],
-  );
-  return Boolean(result.rows[0]?.present);
-}
 
 export async function schemaHasApplicationObjects(client: Client): Promise<boolean> {
   const result = await client.query<{ present: boolean }>(
@@ -208,16 +199,28 @@ export async function acquireMigrationLease(client: Client, owner: string): Prom
   throw new Error("Timed out waiting for the migration lease; another migrator may still be running");
 }
 
+async function extendLease(client: Client, owner: string): Promise<boolean> {
+  const result = await client.query(
+    `UPDATE public.schema_migration_lock
+     SET lease_until = clock_timestamp() + interval '${LEASE_TTL_SECONDS} seconds'
+     WHERE id = 1 AND owner = $1 AND lease_until > clock_timestamp()`,
+    [owner],
+  );
+  return result.rowCount === 1;
+}
+
+async function leaseHeldBy(client: Client, owner: string): Promise<boolean> {
+  const result = await client.query<{ owner: string; active: boolean }>(
+    `SELECT owner, lease_until > clock_timestamp() AS active
+     FROM public.schema_migration_lock WHERE id = 1`,
+  );
+  return result.rows[0]?.owner === owner && Boolean(result.rows[0]?.active);
+}
+
 export async function refreshMigrationLease(client: Client, owner: string): Promise<void> {
   for (let attempt = 0; attempt < 4; attempt += 1) {
     try {
-      const result = await client.query(
-        `UPDATE public.schema_migration_lock
-         SET lease_until = clock_timestamp() + interval '${LEASE_TTL_SECONDS} seconds'
-         WHERE id = 1 AND owner = $1 AND lease_until > clock_timestamp()`,
-        [owner],
-      );
-      if (result.rowCount !== 1) throw new Error("Migration lease was lost or expired; stopping before the next SQL statement");
+      if (!(await extendLease(client, owner))) throw new Error("Migration lease was lost or expired; stopping before the next SQL statement");
       return;
     } catch (error) {
       if (!isSerializationFailure(error) || attempt === 3) throw error;
@@ -275,11 +278,7 @@ export async function startLeaseHeartbeat(connectionString: string, owner: strin
     assertAlive,
     async checkAlive() {
       assertAlive();
-      const result = await observer.query<{ owner: string; active: boolean }>(
-        `SELECT owner, lease_until > clock_timestamp() AS active
-         FROM public.schema_migration_lock WHERE id = 1`,
-      );
-      if (result.rows[0]?.owner !== owner || !result.rows[0]?.active) {
+      if (!(await leaseHeldBy(observer, owner))) {
         failure = new Error("Migration lease was lost or expired");
         assertAlive();
       }
@@ -320,13 +319,7 @@ async function fenceMigrationLease(
   heartbeat?: LeaseHeartbeat,
 ): Promise<void> {
   await heartbeat?.checkAlive();
-  const result = await client.query(
-    `UPDATE public.schema_migration_lock
-     SET lease_until = clock_timestamp() + interval '${LEASE_TTL_SECONDS} seconds'
-     WHERE id = 1 AND owner = $1 AND lease_until > clock_timestamp()`,
-    [owner],
-  );
-  if (result.rowCount !== 1) {
+  if (!(await extendLease(client, owner))) {
     throw new Error("Migration lease was lost or expired; refusing to commit migration work");
   }
 }
@@ -340,11 +333,7 @@ export async function assertLeaseAlive(
     await heartbeat.checkAlive();
     return;
   }
-  const result = await client.query<{ owner: string; active: boolean }>(
-    `SELECT owner, lease_until > clock_timestamp() AS active
-     FROM public.schema_migration_lock WHERE id = 1`,
-  );
-  if (result.rows[0]?.owner !== owner || !result.rows[0]?.active) {
+  if (!(await leaseHeldBy(client, owner))) {
     throw new Error("Migration lease was lost or expired; stopping before the next SQL statement");
   }
 }

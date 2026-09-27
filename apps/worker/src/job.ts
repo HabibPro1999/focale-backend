@@ -26,5 +26,5 @@ export interface Job {
 
 export { JobTimeoutError, WorkerShutdownError, abortedForShutdown } from "@app/shared";
 
-/** Multi-provider DI token collecting all registered jobs. */
+/** DI token for the factory-provided ordered job registry. */
 export const JOBS = Symbol("JOBS");

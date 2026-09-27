@@ -410,7 +410,7 @@ describe.runIf(dbTestsEnabled())("sponsorship service races beyond payment confi
       paymentService.confirmPayment(registration.id, { paymentStatus: "PAID" }, "admin-1"),
     ]);
     let recalculation: ReturnType<typeof sponsorshipsService.updateSponsorship> | undefined;
-    let outcomes: PromiseSettledResult<unknown>[] = [];
+    let outcomes: PromiseSettledResult<unknown>[];
     try {
       await Promise.race([
         atPaymentBarrier,

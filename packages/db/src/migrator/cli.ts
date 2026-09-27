@@ -3,7 +3,7 @@
 import { readdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Client } from "pg";
-import { lintMigrationDirectory, loadMigrations } from "./migration";
+import { defaultMigrationsDirectory, lintMigrationDirectory, loadMigrations } from "./migration";
 import { redactCredentials } from "./security";
 import {
   adoptOptions,
@@ -24,9 +24,9 @@ import {
   setUtcSession,
   verifyMigrations,
 } from "./runner";
-import { formatAdoptionReport, migrationAdoptionWorkflow } from "./adopt";
+import { formatAdoptionReport, adoptMigrations } from "./adopt";
 
-const MIGRATIONS_DIRECTORY = resolve(__dirname, "../../migrations");
+const MIGRATIONS_DIRECTORY = defaultMigrationsDirectory();
 
 import type { Arguments } from "./cli-arguments";
 
@@ -152,7 +152,7 @@ async function adopt(writeLedger: boolean): Promise<void> {
     const appliedBy = normalizeAppliedBy(
       `adopt:${normalizeAppliedBy(process.env.MIGRATIONS_APPLIED_BY ?? process.env.RENDER_SERVICE_NAME)}`,
     );
-    const report = await migrationAdoptionWorkflow.run(
+    const report = await adoptMigrations(
       client,
       engine,
       migrations,
