@@ -1,3 +1,4 @@
+import { escapeLike } from "../like";
 import { and, desc, eq, ilike, isNotNull, or, sql } from "drizzle-orm";
 import { getDb, type DbExecutor } from "../client";
 import { rowCountOf } from "../helpers";
@@ -151,7 +152,7 @@ export function buildListWhere(filter: ListEventsFilter) {
   if (filter.search) {
     // Escape LIKE metacharacters so user input matches literally (legacy
     // Prisma `contains` semantics), not as `_`/`%` wildcards.
-    const term = `%${filter.search.replace(/[\\%_]/g, "\\$&")}%`;
+    const term = `%${escapeLike(filter.search)}%`;
     conds.push(
       or(
         ilike(events.name, term),

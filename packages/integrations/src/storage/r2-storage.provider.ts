@@ -1,3 +1,4 @@
+import { PUBLIC_CACHE_CONTROL, PRIVATE_CACHE_CONTROL } from "./storage.provider";
 import {
   S3Client,
   PutObjectCommand,
@@ -85,7 +86,7 @@ export class R2StorageProvider implements StorageProvider {
   ): Promise<string> {
     await this.putObject(buffer, key, contentType, {
       ...options,
-      cacheControl: options?.cacheControl ?? "public, max-age=31536000",
+      cacheControl: options?.cacheControl ?? PUBLIC_CACHE_CONTROL,
     });
 
     return `${this.publicUrl.replace(/\/$/, "")}/${key}`;
@@ -99,7 +100,7 @@ export class R2StorageProvider implements StorageProvider {
   ): Promise<string> {
     await this.putObject(buffer, key, contentType, {
       ...options,
-      cacheControl: options?.cacheControl ?? "private, max-age=0",
+      cacheControl: options?.cacheControl ?? PRIVATE_CACHE_CONTROL,
     });
     return key;
   }

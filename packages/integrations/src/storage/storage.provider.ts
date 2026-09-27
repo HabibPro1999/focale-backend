@@ -86,3 +86,6 @@ export function storageListLimit(limit: number | undefined): number {
   if (limit === undefined || !Number.isFinite(limit)) return STORAGE_LIST_MAX_LIMIT;
   return Math.min(STORAGE_LIST_MAX_LIMIT, Math.max(1, Math.floor(limit)));
 }
+
+export const PUBLIC_CACHE_CONTROL = "public, max-age=31536000";
+export const PRIVATE_CACHE_CONTROL = "private, max-age=0";

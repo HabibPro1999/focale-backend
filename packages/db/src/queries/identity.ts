@@ -1,3 +1,4 @@
+import { UserRole } from "@app/contracts";
 import { and, count, desc, eq, ilike, or, type SQL } from "drizzle-orm";
 import { getDb, type DbExecutor } from "../client";
 import { withSerializableTxn } from "../txn";
@@ -104,8 +105,8 @@ export async function updateUser(
     const [user] = await db.select().from(users).where(eq(users.id, id));
     if (!user) return { ok: false, reason: "not_found" };
     if (
-      user.role === 0 && user.active &&
-      ((data.role ?? user.role) !== 0 || (data.active ?? user.active) === false)
+      user.role === UserRole.SUPER_ADMIN && user.active &&
+      ((data.role ?? user.role) !== UserRole.SUPER_ADMIN || (data.active ?? user.active) === false)
     ) {
       if (await countActiveSuperAdmins(db) <= 1) {
         return { ok: false, reason: "last_super_admin" };
@@ -162,7 +163,7 @@ export async function countActiveSuperAdmins(
   const [row] = await db
     .select({ value: count() })
     .from(users)
-    .where(and(eq(users.role, 0), eq(users.active, true)));
+    .where(and(eq(users.role, UserRole.SUPER_ADMIN), eq(users.active, true)));
   return Number(row.value);
 }
 
@@ -196,7 +197,7 @@ export async function deleteUser(id: string): Promise<DeleteUserResult> {
 
     // assertNotLastActiveSuperAdmin against { active: false }: only an
     // active super admin can trip the guard (delete => nextActive false).
-    if (user.role === 0 && user.active) {
+    if (user.role === UserRole.SUPER_ADMIN && user.active) {
       const superAdmins = await countActiveSuperAdmins(tx);
       if (superAdmins <= 1) return { ok: false, reason: "last_super_admin" };
     }

@@ -60,8 +60,6 @@ export function ownedStorageKey(
     : key;
 }
 
-export { FirebaseStorageProvider } from "./firebase-storage.provider";
-export { R2StorageProvider } from "./r2-storage.provider";
 export {
   compressFile,
   compressImage,
