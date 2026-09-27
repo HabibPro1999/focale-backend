@@ -986,18 +986,13 @@ export function parseAppConfig(source: NodeJS.ProcessEnv) {
   if (!result.ok) throw new ConfigError(result.issues);
 
   const env = result.env;
-  const isDevelopment = env.NODE_ENV === "development";
   const isProduction = env.NODE_ENV === "production";
   const integrations = integrationsSliceFrom(env);
   const corsEntries = listEntries(env.CORS_ORIGIN);
 
   return {
     ...env,
-    isDevelopment,
     isProduction,
-    isTest: env.NODE_ENV === "test",
-    // LOG_LEVEL is new; keep the legacy NODE_ENV-driven default when unset.
-    logLevel: env.LOG_LEVEL ?? (isDevelopment ? "debug" : "info"),
     // Legacy: workers run unless RUN_WORKERS is the literal string "false".
     runWorkers: env.RUN_WORKERS !== "false",
     lifecycle: {
@@ -1030,13 +1025,7 @@ export function parseAppConfig(source: NodeJS.ProcessEnv) {
       },
     },
     integrations,
-    firebase: integrations.firebase,
-    storage: integrations.storage,
-    r2: integrations.r2,
-    email: integrations.email,
-    certificates: integrations.certificates,
     networking: integrations.networking,
-    publicFormsUrl: integrations.publicFormsUrl,
     publicLinkAllowedOrigins: parseOriginList(env.PUBLIC_LINK_ALLOWED_ORIGINS) ?? [],
     urls: {
       adminAppUrl: env.ADMIN_APP_URL,

@@ -18,10 +18,10 @@ describe("parseAppConfig", () => {
   it("parses the firebase storage configuration", () => {
     const config = parseAppConfig(baseEnv());
 
-    expect(config.storage.provider).toBe("firebase");
-    expect(config.firebase.storageBucket).toBe("demo-bucket");
-    expect(config.email.provider).toBe("sendgrid");
-    expect(config.email.fromEmail).toBe("noreply@example.com");
+    expect(config.integrations.storage.provider).toBe("firebase");
+    expect(config.integrations.firebase.storageBucket).toBe("demo-bucket");
+    expect(config.integrations.email.provider).toBe("sendgrid");
+    expect(config.integrations.email.fromEmail).toBe("noreply@example.com");
   });
 
   it("parses configurable abstract public rate limits", () => {
@@ -96,8 +96,8 @@ describe("parseAppConfig", () => {
       }),
     );
 
-    expect(config.storage.provider).toBe("r2");
-    expect(config.r2.bucket).toBe("bucket");
+    expect(config.integrations.storage.provider).toBe("r2");
+    expect(config.integrations.r2.bucket).toBe("bucket");
   });
 
   it("requires an explicit production sender when SendGrid is enabled", () => {
@@ -175,18 +175,13 @@ describe("parseAppConfig", () => {
       }),
     );
 
-    expect(config.email.provider).toBe("resend");
-    expect(config.email.resend.apiKey).toBe("re_test");
-    expect(config.email.fromEmail).toBe("noreply@example.com");
-    expect(config.email.fromName).toBe("Focale");
+    expect(config.integrations.email.provider).toBe("resend");
+    expect(config.integrations.email.resend.apiKey).toBe("re_test");
+    expect(config.integrations.email.fromEmail).toBe("noreply@example.com");
+    expect(config.integrations.email.fromName).toBe("Focale");
   });
 
-  it("defaults logLevel per NODE_ENV and reads the RUN_WORKERS kill switch", () => {
-    expect(parseAppConfig(baseEnv()).logLevel).toBe("info");
-    expect(parseAppConfig(baseEnv({ NODE_ENV: "development" })).logLevel).toBe(
-      "debug",
-    );
-    expect(parseAppConfig(baseEnv({ LOG_LEVEL: "warn" })).logLevel).toBe("warn");
+  it("reads the RUN_WORKERS kill switch", () => {
     expect(parseAppConfig(baseEnv()).runWorkers).toBe(true);
     expect(parseAppConfig(baseEnv({ RUN_WORKERS: "false" })).runWorkers).toBe(
       false,
@@ -201,10 +196,10 @@ describe("parseAppConfig", () => {
   it("keeps the Firebase lookup fallback off with no built-in web API key", () => {
     const config = parseAppConfig(baseEnv());
 
-    expect(config.firebase.authLookupFallback).toBe(false);
-    expect(config.firebase.webApiKey).toBeUndefined();
+    expect(config.integrations.firebase.authLookupFallback).toBe(false);
+    expect(config.integrations.firebase.webApiKey).toBeUndefined();
     expect(
-      parseAppConfig(baseEnv({ FIREBASE_WEB_API_KEY: "" })).firebase.webApiKey,
+      parseAppConfig(baseEnv({ FIREBASE_WEB_API_KEY: "" })).integrations.firebase.webApiKey,
     ).toBeUndefined();
   });
 
@@ -216,8 +211,8 @@ describe("parseAppConfig", () => {
       }),
     );
 
-    expect(config.firebase.authLookupFallback).toBe(true);
-    expect(config.firebase.webApiKey).toBe("web-key");
+    expect(config.integrations.firebase.authLookupFallback).toBe(true);
+    expect(config.integrations.firebase.webApiKey).toBe("web-key");
   });
 
   it.each([undefined, ""])(

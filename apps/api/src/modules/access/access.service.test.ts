@@ -48,6 +48,7 @@ vi.mock("@app/db", async (importOriginal) => {
 
 import * as db from "@app/db";
 import { AccessService } from "./access.service";
+import { txnPassthrough } from "../../testing/txn";
 import type { CreateEventAccessInput } from "@app/contracts";
 
 const m = db as unknown as Record<string, ReturnType<typeof vi.fn>>;
@@ -96,8 +97,8 @@ const txDb = { executor: "tx" };
 beforeEach(() => {
   vi.resetAllMocks();
   m.getDb.mockReturnValue(rootDb);
-  m.withTxn.mockImplementation((fn: (tx: unknown) => unknown) => fn(txDb));
-  m.withLockingTxn.mockImplementation((fn: (tx: unknown) => unknown) => fn(txDb));
+  m.withTxn.mockImplementation(txnPassthrough(txDb));
+  m.withLockingTxn.mockImplementation(txnPassthrough(txDb));
   m.lockEventAccessRowsForUpdate.mockImplementation(async (_tx: unknown, ids: string[]) =>
     [...new Set(ids)].sort(),
   );

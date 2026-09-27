@@ -26,6 +26,7 @@ import { sponsorships, sponsorshipUsages } from "../schema/sponsorships";
 import { auditLogs } from "../schema/outbox-audit";
 import { emailLogs, emailTemplates } from "../schema/email";
 import { checkRegistrationRow, readFormSchema } from "./stored-json";
+import { findRegistrationFormSchema } from "./forms";
 
 export type RegistrationRow = typeof registrations.$inferSelect;
 export type NewRegistrationValues = typeof registrations.$inferInsert;
@@ -943,10 +944,5 @@ export async function getRegistrationFormSchemaForEvent(
   eventId: string,
   db: DbExecutor = getDb(),
 ): Promise<{ schema: StoredFormSchemaJson } | null> {
-  const [row] = await db
-    .select({ id: forms.id, schema: forms.schema })
-    .from(forms)
-    .where(and(eq(forms.eventId, eventId), eq(forms.type, "REGISTRATION")))
-    .limit(1);
-  return row ? { schema: readFormSchema(row.schema, row.id) } : null;
+  return findRegistrationFormSchema(eventId, db);
 }
