@@ -2,8 +2,6 @@ import {
   assertEventWritable,
   VALID_STATUS_TRANSITIONS,
 } from "./event-status";
-// Compatibility for existing direct imports; policy lives outside the provider.
-export { assertEventWritable, assertEventOpen, assertEventAcceptsPublicActions, eventAcceptsPublicActions } from "./event-status";
 import crypto from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import { ErrorCodes } from "@app/contracts";
@@ -49,8 +47,6 @@ import { fileTypeFromBuffer } from "file-type";
 import { AppException } from "../../core/app-exception";
 import { logger } from "../../core/logger.service";
 import { isModuleEnabledForClient } from "../clients/module-gates";
-
-// --- Pure event-status policy (consumed by other modules) -------------------
 
 function normalizeBasePrice(basePrice: number | null | undefined): number {
   return basePrice ?? 0;

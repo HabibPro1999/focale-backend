@@ -31,7 +31,7 @@ import {
 import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
 import { ZodValidationPipe } from "../../core/zod";
 import { assertModuleEnabledForClient } from "../clients/module-gates";
-import { assertEventWritable } from "../events/events.service";
+import { assertEventWritable } from "../events/event-status";
 
 // ============================================================================
 // Declarative tenant scoping (plan 5.4).
