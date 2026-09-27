@@ -126,7 +126,7 @@ export interface PricingPendingSponsorship {
   coveredAccessIds: string[];
 }
 
-export async function findPendingSponsorships(
+export async function findPendingSponsorshipsByCodes(
   eventId: string,
   upperCodes: string[],
   db: DbExecutor = getDb(),

@@ -16,6 +16,8 @@ import { CurrentUser } from "../../core/auth/current-user.decorator";
 import { AppException } from "../../core/app-exception";
 import { assertEventWritable } from "../events";
 import { canAccessClient } from "../../core/auth/user-cache";
+import type { AuthUser } from "../../core/auth/user-cache";
+import { assertClientModuleEnabled } from "../clients/module-gates";
 import { PricingService } from "./pricing.service";
 import {
   CreateEmbeddedRuleDto,
@@ -25,13 +27,6 @@ import {
   UpdateEventPricingDto,
 } from "./pricing.dto";
 
-// ponytail: NOTE FOR VERIFIER — ownership uses numeric role + clientId
-// (canAccessClient). The core AuthGuard currently attaches the raw Firebase
-// DecodedIdToken; per port-spec the guard should populate request.user with the
-// 8-field app user (id,email,name,role,clientId,active,...). Until that lands,
-// request.user is cast to the numeric-role shape here. Fail-closed on unknown roles.
-type TenantUser = { role: number; clientId: string | null };
-
 @Controller("api/events")
 @Auth()
 export class PricingController {
@@ -39,12 +34,12 @@ export class PricingController {
 
   // GET /api/events/:eventId/pricing
   @Get(":eventId/pricing")
-  async getPricing(@Param() { eventId }: EventIdParamDto, @CurrentUser() user: unknown) {
+  async getPricing(@Param() { eventId }: EventIdParamDto, @CurrentUser() user: AuthUser) {
     await this.ensureAccess(
       eventId,
       user,
       "Insufficient permissions to access this event",
-      false,
+      { writable: false },
     );
     const pricing = await this.pricing.getEventPricing(eventId);
     if (!pricing) {
@@ -58,13 +53,13 @@ export class PricingController {
   async updatePricing(
     @Param() { eventId }: EventIdParamDto,
     @Body() body: UpdateEventPricingDto,
-    @CurrentUser() user: unknown,
+    @CurrentUser() user: AuthUser,
   ) {
     await this.ensureAccess(
       eventId,
       user,
       "Insufficient permissions to update this event",
-      true,
+      { writable: true },
     );
     return this.pricing.updateEventPricing(eventId, body);
   }
@@ -75,13 +70,13 @@ export class PricingController {
   async addRule(
     @Param() { eventId }: EventIdParamDto,
     @Body() body: CreateEmbeddedRuleDto,
-    @CurrentUser() user: unknown,
+    @CurrentUser() user: AuthUser,
   ) {
     await this.ensureAccess(
       eventId,
       user,
       "Insufficient permissions to create pricing rules for this event",
-      true,
+      { writable: true },
     );
     return this.pricing.addPricingRule(eventId, body);
   }
@@ -91,13 +86,13 @@ export class PricingController {
   async updateRule(
     @Param() { eventId, ruleId }: RuleIdParamDto,
     @Body() body: UpdateEmbeddedRuleDto,
-    @CurrentUser() user: unknown,
+    @CurrentUser() user: AuthUser,
   ) {
     await this.ensureAccess(
       eventId,
       user,
       "Insufficient permissions to update this pricing rule",
-      true,
+      { writable: true },
     );
     return this.pricing.updatePricingRule(eventId, ruleId, body);
   }
@@ -108,13 +103,13 @@ export class PricingController {
   @SkipEnvelope()
   async deleteRule(
     @Param() { eventId, ruleId }: RuleIdParamDto,
-    @CurrentUser() user: unknown,
+    @CurrentUser() user: AuthUser,
   ): Promise<void> {
     await this.ensureAccess(
       eventId,
       user,
       "Insufficient permissions to delete this pricing rule",
-      true,
+      { writable: true },
     );
     await this.pricing.deletePricingRule(eventId, ruleId);
   }
@@ -126,19 +121,19 @@ export class PricingController {
    */
   private async ensureAccess(
     eventId: string,
-    user: unknown,
+    user: AuthUser,
     forbiddenMessage: string,
-    checkWritable: boolean,
+    options: { writable: boolean },
   ): Promise<PricingEventOwnership> {
     const event = await this.pricing.getEventForOwnership(eventId);
     if (!event) {
       throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
     }
-    if (!canAccessClient(user as TenantUser, event.clientId)) {
+    if (!canAccessClient(user, event.clientId)) {
       throw new AppException(ErrorCodes.FORBIDDEN, forbiddenMessage, 403);
     }
-    if (checkWritable) assertEventWritable(event);
-    await this.pricing.assertClientModuleEnabled(event.clientId);
+    if (options.writable) assertEventWritable(event);
+    await assertClientModuleEnabled(event.clientId, "pricing");
     return event;
   }
 }

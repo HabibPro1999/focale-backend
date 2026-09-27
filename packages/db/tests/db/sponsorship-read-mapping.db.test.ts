@@ -4,7 +4,7 @@ import {
   findEventForBatch, findSponsorshipForLink, findSponsorshipForMutation,
   findSponsorshipForRecalc, findSponsorshipUnlinkState, getDb,
   getLinkedSponsorships, getSponsorshipByCode, getSponsorshipById,
-  listSponsorships, sponsorships,
+  listSponsorships, searchRegistrantsForSponsorship, sponsorships,
 } from "@app/db";
 import { dbTestsEnabled } from "@app/db/testing";
 import { cleanupDatabase } from "../helpers/cleanup";
@@ -112,6 +112,23 @@ describe.runIf(dbTestsEnabled())("sponsorship read mapping characterization", ()
     expect(page.data[0].usages).toHaveLength(2);
     expect(page.meta).toEqual({ page: 1, limit: 20, total: 1, totalPages: 1, hasNext: false, hasPrev: false });
     expect(page.stats).toEqual({ total: 1, totalAmount: 700, pending: { count: 0, amount: 0 }, used: { count: 1, amount: 700 }, cancelled: { count: 0, amount: 0 } });
+  });
+
+  it("groups only USED coverage for each registrant and normalizes nullable arrays", async () => {
+    const { event, batch, registration: reg } = await fixture();
+    const access = await seedEventAccess({ eventId: event.id });
+    const unused = await seedSponsorship({ eventId: event.id, batchId: batch.id, status: "PENDING", coversBasePrice: false, coveredAccessIds: ["ignored"] });
+    const used = await seedSponsorship({ eventId: event.id, batchId: batch.id, status: "USED", coversBasePrice: false, coveredAccessIds: [access.id, access.id] });
+    await seedSponsorshipUsage({ sponsorshipId: unused.id, registrationId: reg.id, amountApplied: 0, appliedBy: "mapping-test" });
+    await seedSponsorshipUsage({ sponsorshipId: used.id, registrationId: reg.id, amountApplied: 100, appliedBy: "mapping-test" });
+
+    expect(await searchRegistrantsForSponsorship(event.id, { query: "person", unpaidOnly: true, limit: 10 })).toEqual([{
+      id: reg.id, email: reg.email, firstName: null, lastName: reg.lastName,
+      paymentStatus: reg.paymentStatus, totalAmount: reg.totalAmount, baseAmount: reg.baseAmount,
+      accessAmount: reg.accessAmount, sponsorshipAmount: reg.sponsorshipAmount,
+      accessTypeIds: [], coveredAccessIds: [access.id], isBasePriceCovered: true,
+      phone: reg.phone, formData: reg.formData,
+    }]);
   });
 
   it("keeps covered access item values and leaves empty/missing reads distinct", async () => {

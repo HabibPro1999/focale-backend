@@ -80,6 +80,12 @@ export interface SponsorshipListItem extends SponsorshipRow {
   usages: Array<{ registrationId: string | null; amountApplied: number }>;
 }
 
+function appendToGroup<T>(groups: Map<string, T[]>, key: string, value: T): void {
+  const values = groups.get(key) ?? [];
+  values.push(value);
+  groups.set(key, values);
+}
+
 export async function listSponsorships(
   eventId: string,
   query: ListSponsorshipsQuery,
@@ -96,6 +102,8 @@ export async function listSponsorships(
         : sponsorships.createdAt;
   const skip = getSkip({ page, limit });
 
+  const batchJoin = eq(sponsorships.batchId, sponsorshipBatches.id);
+
   const [rows, totalRows, statsRaw] = await Promise.all([
     db
       .select({
@@ -106,10 +114,7 @@ export async function listSponsorships(
         email: sponsorshipBatches.email,
       })
       .from(sponsorships)
-      .innerJoin(
-        sponsorshipBatches,
-        eq(sponsorships.batchId, sponsorshipBatches.id),
-      )
+      .innerJoin(sponsorshipBatches, batchJoin)
       .where(where)
       .orderBy(dir(orderCol))
       .limit(limit)
@@ -117,10 +122,7 @@ export async function listSponsorships(
     db
       .select({ value: count() })
       .from(sponsorships)
-      .innerJoin(
-        sponsorshipBatches,
-        eq(sponsorships.batchId, sponsorshipBatches.id),
-      )
+      .innerJoin(sponsorshipBatches, batchJoin)
       .where(where),
     db
       .select({
@@ -129,10 +131,7 @@ export async function listSponsorships(
         amount: sum(sponsorships.totalAmount),
       })
       .from(sponsorships)
-      .innerJoin(
-        sponsorshipBatches,
-        eq(sponsorships.batchId, sponsorshipBatches.id),
-      )
+      .innerJoin(sponsorshipBatches, batchJoin)
       .where(where)
       .groupBy(sponsorships.status),
   ]);
@@ -155,12 +154,10 @@ export async function listSponsorships(
     Array<{ registrationId: string | null; amountApplied: number }>
   >();
   for (const u of usageRows) {
-    const list = usagesBySponsorship.get(u.sponsorshipId) ?? [];
-    list.push({
+    appendToGroup(usagesBySponsorship, u.sponsorshipId, {
       registrationId: u.registrationId,
       amountApplied: u.amountApplied,
     });
-    usagesBySponsorship.set(u.sponsorshipId, list);
   }
 
   const data: SponsorshipListItem[] = rows.map((r) => ({
@@ -605,27 +602,15 @@ export async function findActiveEventAccess(
     );
 }
 
-export async function getEventBasePrice(
-  db: DbExecutor,
-  eventId: string,
-): Promise<number | null> {
-  const [row] = await db
-    .select({ basePrice: eventPricing.basePrice })
-    .from(eventPricing)
-    .where(eq(eventPricing.eventId, eventId))
-    .limit(1);
-  return row?.basePrice ?? null;
-}
-
-export interface EventPricingForBatch {
+export interface SponsorshipEventPricing {
   basePrice: number;
   currency: string;
 }
 
-export async function getEventPricingForBatch(
+export async function getSponsorshipEventPricing(
   db: DbExecutor,
   eventId: string,
-): Promise<EventPricingForBatch | null> {
+): Promise<SponsorshipEventPricing | null> {
   const [row] = await db
     .select({
       basePrice: eventPricing.basePrice,
@@ -1297,7 +1282,7 @@ export async function getRegistrationForSponsorship(
 // Relocate to queries/registrations.ts when that domain lands.
 // ============================================================================
 
-export interface RegistrantSearchResult {
+export interface RegistrantSearchRow {
   id: string;
   email: string;
   firstName: string | null;
@@ -1318,7 +1303,7 @@ export async function searchRegistrantsForSponsorship(
   eventId: string,
   query: { query: string; unpaidOnly: boolean; limit: number },
   db: DbExecutor = getDb(),
-): Promise<RegistrantSearchResult[]> {
+): Promise<RegistrantSearchRow[]> {
   // The term is user input (anonymous on the sponsor form): match literally.
   const clauses: (SQL | undefined)[] = [
     eq(registrations.eventId, eventId),
@@ -1377,12 +1362,10 @@ export async function searchRegistrantsForSponsorship(
   >();
   for (const u of usageRows) {
     if (u.status !== "USED" || !u.registrationId) continue;
-    const list = usedByReg.get(u.registrationId) ?? [];
-    list.push({
+    appendToGroup(usedByReg, u.registrationId, {
       coversBasePrice: u.coversBasePrice,
       coveredAccessIds: u.coveredAccessIds ?? [],
     });
-    usedByReg.set(u.registrationId, list);
   }
 
   return regRows.map((r) => {

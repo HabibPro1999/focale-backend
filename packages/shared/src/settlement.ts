@@ -19,3 +19,8 @@ export function calculateSettlement(reg: {
     isPartiallyPaid: covered > 0 && amountDue > 0,
   };
 }
+
+/** Keep the caller's gross subtotal policy when updating sponsorship coverage. */
+export function withSponsorshipTotal<T extends object>(breakdown: T, subtotal: number, amount: number) {
+  return { ...breakdown, sponsorshipTotal: amount, total: Math.max(0, subtotal - amount) };
+}

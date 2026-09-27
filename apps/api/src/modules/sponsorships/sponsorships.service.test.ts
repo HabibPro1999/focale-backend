@@ -2,53 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the entire db layer; the service owns orchestration + math, db fns are
 // thin primitives (mocked here). withTxn runs the callback with a sentinel tx.
-vi.mock("@app/db", () => {
-  const fns = [
-    "getDb",
-    "lockSponsorshipForUpdate",
-    "lockRegistrationForUpdate",
-    "lockRegistrationsForUpdate",
-    "listSponsorships",
-    "getSponsorshipById",
-    "getSponsorshipClientId",
-    "getLinkedSponsorships",
-    "getActiveSponsorForm",
-    "getRegistrationForSponsorship",
-    "searchRegistrantsForSponsorship",
-    "getRegistrationCoverage",
-    "getPendingSponsorships",
-    "findSponsorshipForMutation",
-    "findActiveEventAccess",
-    "getEventBasePrice",
-    "updateSponsorshipRow",
-    "deleteSponsorshipRow",
-    "insertSponsorshipBatch",
-    "getFormSchema",
-    "findEventForBatch",
-    "findSponsorFormById",
-    "getEventPricingForBatch",
-    "findRegistrationsForBatch",
-    "sponsorshipCodeExists",
-    "insertSponsorship",
-    "insertUsage",
-    "updateRegistrationSettlement",
-    "findSponsorshipForLink",
-    "findRegistrationForLink",
-    "findUsage",
-    "casSetSponsorshipUsed",
-    "findUsageAmountsByRegistration",
-    "getSponsorshipByCode",
-    "findRegistrationSettlementState",
-    "findSponsorshipUnlinkState",
-    "deleteUsage",
-    "countUsagesForSponsorship",
-    "findSponsorshipForRecalc",
-    "updateUsageAmount",
-    "enqueueSponsorshipEmailOutbox",
-    "enqueueTriggeredEmailOutbox",
-  ];
-  const mod: Record<string, unknown> = {};
-  for (const f of fns) mod[f] = vi.fn();
+vi.mock("@app/db", async (importOriginal) => {
+  // Derive mocks from real exports: query renames need no hand-maintained list,
+  // while a typo still fails instead of creating a nonexistent query via Proxy.
+  const actual = await importOriginal<Record<string, unknown>>();
+  const mod = Object.fromEntries(Object.entries(actual).map(([name, value]) => [
+    name, typeof value === "function" ? vi.fn() : value,
+  ]));
   const TX = { __tx: true };
   mod.withTxn = vi.fn((fn: (tx: unknown) => unknown) => fn(TX));
   mod.withLockingTxn = vi.fn((fn: (tx: unknown) => unknown) => fn(TX));
@@ -155,7 +115,7 @@ describe("updateSponsorship", () => {
     m.findActiveEventAccess.mockResolvedValue([
       { id: "a1", name: "A", type: "MEAL", groupLabel: null, startsAt: null, endsAt: null, price: 200 },
     ]);
-    m.getEventBasePrice.mockResolvedValue(100);
+    m.getSponsorshipEventPricing.mockResolvedValue({ basePrice: 100, currency: "TND" });
     m.getSponsorshipById.mockResolvedValue({ id: "s1" });
 
     await service().updateSponsorship("s1", {
@@ -187,32 +147,14 @@ describe("updateSponsorship", () => {
     m.findActiveEventAccess.mockResolvedValue([
       { id: "a1", name: "A", type: "MEAL", groupLabel: null, startsAt: null, endsAt: null, price: 200 },
     ]);
-    m.getEventBasePrice.mockResolvedValue(100);
-    m.findSponsorshipForRecalc.mockResolvedValue({
-      coversBasePrice: true,
-      coveredAccessIds: ["a1"],
-      totalAmount: 300,
-      usages: [
-        {
-          id: "u1",
-          registration: {
-            id: "r1",
-            eventId: "e1",
-            totalAmount: 300,
-            paidAmount: 0,
-            baseAmount: 100,
-            paymentStatus: "PENDING",
-            paidAt: null,
-            accessTypeIds: ["a1"],
-            priceBreakdown: {
-              calculatedBasePrice: 100,
-              subtotal: 300,
-              accessItems: [{ accessId: "a1", subtotal: 200 }],
-            },
-          },
-        },
-      ],
-    });
+    m.getSponsorshipEventPricing.mockResolvedValue({ basePrice: 100, currency: "TND" });
+    m.findSponsorshipForRecalc.mockResolvedValue(recalcSponsorship({
+      totalAmount: 300, baseAmount: 100, accessTypeIds: ["a1"],
+      priceBreakdown: {
+        calculatedBasePrice: 100, subtotal: 300,
+        accessItems: [{ accessId: "a1", subtotal: 200 }],
+      },
+    }, { coveredAccessIds: ["a1"], totalAmount: 300 }));
     m.findUsageAmountsByRegistration.mockResolvedValue([{ amountApplied: 300 }]);
     m.getSponsorshipById.mockResolvedValue({ id: "s1" });
 
@@ -415,6 +357,17 @@ function linkRegistration(overrides: Record<string, unknown> = {}) {
     sponsorshipAmount: 0,
     existingUsages: [],
     ...overrides,
+  };
+}
+
+function recalcSponsorship(
+  registration: Record<string, unknown>,
+  sponsorship: Record<string, unknown> = {},
+) {
+  return {
+    coversBasePrice: true, coveredAccessIds: [], totalAmount: 100,
+    usages: [{ id: "u1", registration: linkRegistration({ paidAt: null, ...registration }) }],
+    ...sponsorship,
   };
 }
 
@@ -737,7 +690,7 @@ describe("createSponsorshipBatch", () => {
   it("CODE mode happy path → batchId + count", async () => {
     m.findEventForBatch.mockResolvedValue(batchEvent());
     m.findSponsorFormById.mockResolvedValue({ id: "f1", schema: { sponsorshipSettings: { sponsorshipMode: "CODE" } } });
-    m.getEventPricingForBatch.mockResolvedValue({ basePrice: 100, currency: "TND" });
+    m.getSponsorshipEventPricing.mockResolvedValue({ basePrice: 100, currency: "TND" });
     m.insertSponsorshipBatch.mockResolvedValue({ id: "b1" });
     m.getFormSchema.mockResolvedValue({ sponsorshipSettings: { autoApproveSponsorship: false } });
     m.sponsorshipCodeExists.mockResolvedValue(false);
@@ -755,7 +708,7 @@ describe("createSponsorshipBatch", () => {
   it("CODE mode counts every beneficiary (loop, not just first)", async () => {
     m.findEventForBatch.mockResolvedValue(batchEvent());
     m.findSponsorFormById.mockResolvedValue({ id: "f1", schema: {} });
-    m.getEventPricingForBatch.mockResolvedValue({ basePrice: 100, currency: "TND" });
+    m.getSponsorshipEventPricing.mockResolvedValue({ basePrice: 100, currency: "TND" });
     m.insertSponsorshipBatch.mockResolvedValue({ id: "b1" });
     m.getFormSchema.mockResolvedValue({});
     m.sponsorshipCodeExists.mockResolvedValue(false);
@@ -795,7 +748,7 @@ describe("createSponsorshipBatch", () => {
   it("invalid access ids → 400 BAD_REQUEST", async () => {
     m.findEventForBatch.mockResolvedValue(batchEvent());
     m.findSponsorFormById.mockResolvedValue({ id: "f1", schema: {} });
-    m.getEventPricingForBatch.mockResolvedValue({ basePrice: 100, currency: "TND" });
+    m.getSponsorshipEventPricing.mockResolvedValue({ basePrice: 100, currency: "TND" });
     m.findActiveEventAccess.mockResolvedValue([]); // none valid
 
     await expect(
@@ -809,7 +762,7 @@ describe("createSponsorshipBatch", () => {
   it("linked mode, no auto-approve → PENDING sponsorship, no usage/registration mutation", async () => {
     m.findEventForBatch.mockResolvedValue(batchEvent());
     m.findSponsorFormById.mockResolvedValue({ id: "f1", schema: { sponsorshipSettings: { sponsorshipMode: "LINKED_ACCOUNT" } } });
-    m.getEventPricingForBatch.mockResolvedValue({ basePrice: 100, currency: "TND" });
+    m.getSponsorshipEventPricing.mockResolvedValue({ basePrice: 100, currency: "TND" });
     m.findRegistrationsForBatch.mockResolvedValue([
       { id: "r1", email: "r@x.com", firstName: "R", lastName: null, phone: null, totalAmount: 500, sponsorshipAmount: 0, baseAmount: 100, accessTypeIds: [], priceBreakdown: {}, paymentStatus: "PENDING", linkBaseUrl: null, editToken: null },
     ]);
@@ -835,7 +788,7 @@ describe("createSponsorshipBatch", () => {
   it("linked mode, auto-approve → USED sponsorship + usage + registration update", async () => {
     m.findEventForBatch.mockResolvedValue(batchEvent());
     m.findSponsorFormById.mockResolvedValue({ id: "f1", schema: { sponsorshipSettings: { sponsorshipMode: "LINKED_ACCOUNT" } } });
-    m.getEventPricingForBatch.mockResolvedValue({ basePrice: 100, currency: "TND" });
+    m.getSponsorshipEventPricing.mockResolvedValue({ basePrice: 100, currency: "TND" });
     m.findRegistrationsForBatch.mockResolvedValue([
       { id: "r1", email: "r@x.com", firstName: "R", lastName: null, phone: null, totalAmount: 100, sponsorshipAmount: 0, baseAmount: 100, accessTypeIds: [], priceBreakdown: { calculatedBasePrice: 100, accessItems: [] }, paymentStatus: "PENDING", linkBaseUrl: null, editToken: null },
     ]);
@@ -858,7 +811,7 @@ describe("createSponsorshipBatch", () => {
   it("linked mode, registration missing → 404", async () => {
     m.findEventForBatch.mockResolvedValue(batchEvent());
     m.findSponsorFormById.mockResolvedValue({ id: "f1", schema: { sponsorshipSettings: { sponsorshipMode: "LINKED_ACCOUNT" } } });
-    m.getEventPricingForBatch.mockResolvedValue({ basePrice: 100, currency: "TND" });
+    m.getSponsorshipEventPricing.mockResolvedValue({ basePrice: 100, currency: "TND" });
     m.findRegistrationsForBatch.mockResolvedValue([]); // none found
 
     await expect(
@@ -881,7 +834,7 @@ describe("settlement truth tables", () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
     m.findActiveEventAccess.mockResolvedValue([]);
-    m.getEventPricingForBatch.mockResolvedValue({ basePrice: 100, currency: "TND" });
+    m.getSponsorshipEventPricing.mockResolvedValue({ basePrice: 100, currency: "TND" });
   });
   afterEach(() => vi.useRealTimers());
 
@@ -1039,16 +992,13 @@ describe("settlement truth tables", () => {
         id: "s1", eventId: "e1", coversBasePrice: true, coveredAccessIds: [],
         totalAmount: amount, usages: [{ id: "u1", registrationId: "r1" }], event: OK_EVENT,
       });
-      m.getEventBasePrice.mockResolvedValue(amount);
-      m.findSponsorshipForRecalc.mockResolvedValue({
-        coversBasePrice: true, coveredAccessIds: [], totalAmount: amount,
-        usages: [{ id: "u1", registration: {
-          id: "r1", eventId: "e1", totalAmount: total, paidAmount: paid,
-          baseAmount: total, paymentStatus: current, paidAt: oldPaidAt,
-          paymentMethod: "BANK_TRANSFER", accessTypeIds: [],
-          priceBreakdown: { calculatedBasePrice: total, subtotal: total, accessItems: [] },
-        } }],
-      });
+      m.getSponsorshipEventPricing.mockResolvedValue({ basePrice: amount, currency: "TND" });
+      m.findSponsorshipForRecalc.mockResolvedValue(recalcSponsorship({
+        totalAmount: total, paidAmount: paid,
+        baseAmount: total, paymentStatus: current, paidAt: oldPaidAt,
+        paymentMethod: "BANK_TRANSFER",
+        priceBreakdown: { calculatedBasePrice: total, subtotal: total, accessItems: [] },
+      }, { totalAmount: amount }));
       m.findUsageAmountsByRegistration.mockResolvedValue([{ amountApplied: amount }]);
       m.getSponsorshipById.mockResolvedValue({ id: "s1" });
 
@@ -1073,7 +1023,7 @@ describe("sponsorship email enqueue characterization", () => {
     m.withTxn.mockImplementation((fn: (tx: unknown) => unknown) => fn(TX));
     m.withLockingTxn.mockImplementation((fn: (tx: unknown) => unknown) => fn(TX));
     m.findActiveEventAccess.mockResolvedValue([]);
-    m.getEventPricingForBatch.mockResolvedValue({ basePrice: 100, currency: "TND" });
+    m.getSponsorshipEventPricing.mockResolvedValue({ basePrice: 100, currency: "TND" });
   });
 
   function setupLinkedBatch(
