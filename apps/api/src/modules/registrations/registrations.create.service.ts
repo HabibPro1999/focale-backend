@@ -437,7 +437,7 @@ export class RegistrationsCreateService {
       await this.reserveAccess(accessSelections, tx);
 
       if (isFullySettled(resolvedPaymentStatus)) {
-        await syncPaidCount(this.access, 
+        await syncPaidCount(this.access,
           tx,
           { id, eventId, priceBreakdown },
           "PENDING",

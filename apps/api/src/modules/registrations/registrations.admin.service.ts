@@ -136,7 +136,7 @@ export class RegistrationsAdminService {
       await updateRegistrationRow(id, patch, tx);
 
       if (statusChanged) {
-        await syncPaidCount(this.access, 
+        await syncPaidCount(this.access,
           tx,
           registration,
           registration.paymentStatus,
@@ -453,7 +453,7 @@ export class RegistrationsAdminService {
         input.paymentStatus !== registration.paymentStatus &&
         !hasPriceEdits
       ) {
-        await syncPaidCount(this.access, 
+        await syncPaidCount(this.access,
           tx,
           { id, eventId, priceBreakdown: registration.priceBreakdown },
           registration.paymentStatus,
@@ -651,7 +651,7 @@ export class RegistrationsAdminService {
         tx,
       );
 
-      await syncPaidCount(this.access, 
+      await syncPaidCount(this.access,
         tx,
         { id, eventId: old.eventId, priceBreakdown: old.priceBreakdown },
         old.paymentStatus,

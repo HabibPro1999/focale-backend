@@ -144,4 +144,3 @@ export const CHECKIN_SUFFIX: Record<ExportLanguage, string> = {
   en: "— Check-in",
   ar: "— تسجيل",
 };
-

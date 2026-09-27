@@ -10,4 +10,3 @@ export async function tableExists(client: Client, name: string): Promise<boolean
   );
   return Boolean(result.rows[0]?.present);
 }
-
