@@ -39,3 +39,12 @@ export function getAuthorLine(abstract: {
   }
   return names.filter(Boolean).join(", ");
 }
+
+/** Trimmed display title for admin exports and abstract books. */
+export function getAbstractTitle(content: unknown): string {
+  if (content && typeof content === "object" && !Array.isArray(content)) {
+    const title = (content as Record<string, unknown>).title;
+    if (typeof title === "string" && title.trim()) return title.trim();
+  }
+  return "Untitled abstract";
+}

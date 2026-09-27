@@ -1,7 +1,11 @@
+import { assertAbstractModuleEnabled } from "./abstracts.gates";
+export { assertAbstractModuleEnabled } from "./abstracts.gates";
 import { Inject, Injectable } from "@nestjs/common";
 import {
   ErrorCodes,
   FINAL_STATUSES,
+  ABSTRACT_TYPE_LABELS_FR,
+  ABSTRACT_STRUCTURED_SECTIONS,
   type SubmitAbstractInput,
   type EditAbstractInput,
 } from "@app/contracts";
@@ -13,7 +17,6 @@ import {
   findDuplicateAuthorEmail,
   findAbstractForToken,
   findAbstractForEdit,
-  findEventClientId,
   findRegistrationEventId,
   submitAbstractTxn,
   editAbstractTxn,
@@ -54,25 +57,6 @@ export function countWords(s: string): number {
 function normalizeAuthorEmail(email: string): string {
   return email.trim().toLocaleLowerCase();
 }
-
-// ============================================================================
-// Client module gate (M2: token-based routes must re-check the client's
-// abstracts module the same way submit/getPublicConfig already do — a
-// disabled module must revoke access for existing magic-link holders too).
-// ============================================================================
-
-export async function assertAbstractModuleEnabled(eventId: string): Promise<void> {
-  const event = await findEventClientId(eventId);
-  if (!event) {
-    throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
-  }
-  await assertClientModuleEnabled(event.clientId, "abstracts");
-}
-
-// ============================================================================
-// Public link-origin allow-list (H7: linkBaseUrl is attacker-controlled and
-// later used to build author-facing email links).
-// ============================================================================
 
 // ============================================================================
 // registrationId validation (M4: must exist and belong to the same event —
@@ -312,17 +296,13 @@ export class AbstractsService {
       globalWordLimit: config.globalWordLimit,
       maxThemesPerAbstract: config.maxThemesPerAbstract,
       languages: config.languages ?? null,
-      sectionWordLimits: {
-        introduction: sectionLimits.introduction ?? null,
-        objective: sectionLimits.objective ?? null,
-        methods: sectionLimits.methods ?? null,
-        results: sectionLimits.results ?? null,
-        conclusion: sectionLimits.conclusion ?? null,
-      },
+      sectionWordLimits: Object.fromEntries(
+        ABSTRACT_STRUCTURED_SECTIONS.map(section => [section, sectionLimits[section] ?? null]),
+      ),
       themes: data.themes,
       requestedTypes: [
-        { value: "ORAL_COMMUNICATION", label: "Communication orale" },
-        { value: "POSTER", label: "Communication affichée" },
+        { value: "ORAL_COMMUNICATION", label: ABSTRACT_TYPE_LABELS_FR.ORAL_COMMUNICATION },
+        { value: "POSTER", label: ABSTRACT_TYPE_LABELS_FR.POSTER },
       ],
       additionalFields: {
         fields: Array.isArray(config.additionalFieldsSchema)

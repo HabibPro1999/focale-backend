@@ -1,3 +1,4 @@
+import { mock, expectStatus } from "../../testing/abstracts";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const getSignedUrl = vi.fn();
@@ -19,21 +20,10 @@ import {
 import { AbstractsBookService } from "./abstracts.book.service";
 import { AppException } from "../../core/app-exception";
 
-const mock = <T>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
 const eventId = "event-1";
 const jobId = "job-1";
 const service = new AbstractsBookService();
 
-async function expectStatus(p: Promise<unknown>, status: number): Promise<void> {
-  const err = await p.then(
-    () => {
-      throw new Error("expected promise to reject");
-    },
-    (e: unknown) => e,
-  );
-  expect(err).toBeInstanceOf(AppException);
-  expect((err as AppException).getStatus()).toBe(status);
-}
 
 function makeJob(overrides: Record<string, unknown> = {}) {
   return {

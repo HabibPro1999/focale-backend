@@ -14,7 +14,6 @@ import {
 import {
   findAbstractMembership,
   deleteUnusedCommitteeInvites,
-  findEventClientId,
   findEventName,
   listActiveReviewerThemeIds,
   listCommitteeMembers,
@@ -45,7 +44,7 @@ import {
   updateFirebaseUserPassword,
   revokeFirebaseRefreshTokens,
 } from "@app/integrations";
-import { assertClientModuleEnabled } from "../clients/module-gates";
+import { assertAbstractModuleEnabled } from "./abstracts.gates";
 import { UsersService } from "../identity/users.service";
 import { logger } from "../../core/logger.service";
 import { AppException } from "../../core/app-exception";
@@ -147,11 +146,7 @@ export class AbstractsCommitteeService {
         403,
       );
     }
-    const event = await findEventClientId(eventId);
-    if (!event) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
-    }
-    await assertClientModuleEnabled(event.clientId, "abstracts");
+    await assertAbstractModuleEnabled(eventId);
   }
 
   /** Stricter cousin for admin password ops: 404 (not 403) when not an active member. */
@@ -287,20 +282,27 @@ export class AbstractsCommitteeService {
     eventName: string,
     ctx: { userId: string; eventId: string; performedBy: string },
   ): Promise<boolean> {
+    return this.mintAndSend(
+      ctx,
+      link => this.emails.sendInviteEmail({ email, name }, eventName, link, ctx.eventId),
+      ctx,
+      "Committee invite email threw while sending",
+    );
+  }
+
+  private async mintAndSend(
+    ctx: { userId: string; eventId: string; performedBy: string },
+    send: (link: string) => Promise<boolean>,
+    logFields: { userId: string; eventId: string; performedBy?: string },
+    logMessage: string,
+  ): Promise<boolean> {
     try {
       const token = await this.invites.mintCommitteeInviteToken(
-        ctx.userId,
-        ctx.eventId,
-        ctx.performedBy,
+        ctx.userId, ctx.eventId, ctx.performedBy,
       );
-      return await this.emails.sendInviteEmail(
-        { email, name },
-        eventName,
-        this.invites.buildCommitteeInviteLink(token),
-        ctx.eventId,
-      );
+      return await send(this.invites.buildCommitteeInviteLink(token));
     } catch (err) {
-      logger.error({ err, ...ctx }, "Committee invite email threw while sending");
+      logger.error({ err, ...logFields }, logMessage);
       return false;
     }
   }
@@ -591,19 +593,14 @@ export class AbstractsCommitteeService {
       );
     }
 
-    let inviteEmailSent = false;
-    try {
-      const token = await this.invites.mintCommitteeInviteToken(userId, eventId, performedBy);
-      inviteEmailSent = await this.emails.sendResetPasswordEmail(
-        { email: member.userEmail, name: member.userName }, member.eventName,
-        this.invites.buildCommitteeInviteLink(token));
-    } catch (err) {
-      logger.error(
-        { err, userId, eventId },
-        "Committee reset-password email threw while sending",
-      );
-      inviteEmailSent = false;
-    }
+    const inviteEmailSent = await this.mintAndSend(
+      { userId, eventId, performedBy },
+      link => this.emails.sendResetPasswordEmail(
+        { email: member.userEmail, name: member.userName }, member.eventName, link,
+      ),
+      { userId, eventId },
+      "Committee reset-password email threw while sending",
+    );
 
     // Audit the admin's intent regardless of delivery outcome.
     await insertAuditLog({
