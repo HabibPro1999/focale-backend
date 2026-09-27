@@ -1,3 +1,4 @@
+import { ErrorCodes } from "@app/contracts";
 import {
   createCipheriv,
   createDecipheriv,
@@ -16,7 +17,7 @@ export function networkingSecret() {
   const value = getConfig().networking.tokenSecret;
   if (!value || value.length < 32)
     throw new ServiceUnavailableException({
-      code: "NETWORKING_AUTH_UNAVAILABLE",
+      code: ErrorCodes.NETWORKING_AUTH_UNAVAILABLE,
       message: "Networking authentication is not configured",
     });
   return value;
@@ -48,7 +49,6 @@ export function issueNetworkingBadge(profileId: string, eventId: string) {
     token: `${payload}.${networkingHash(`badge:${payload}`)}`,
     expiresAt: expiresAt.toISOString(),
     profileId,
-    accessAllowed: true,
   };
 }
 export function readNetworkingBadge(token: string, eventId: string) {
@@ -84,7 +84,7 @@ export function readNetworkingBadge(token: string, eventId: string) {
     return parsed.profileId;
   } catch {
     throw new BadRequestException({
-      code: "NETWORKING_BADGE_INVALID",
+      code: ErrorCodes.NETWORKING_BADGE_INVALID,
       message: "Invalid or expired badge",
     });
   }

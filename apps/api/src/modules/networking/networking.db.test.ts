@@ -1,3 +1,4 @@
+import { NetworkingInventoryService } from "./networking.inventory.service";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   createDecipheriv,
@@ -37,7 +38,7 @@ const mfa = new NetworkingMfaService();
 const service = new NetworkingService();
 const social = new NetworkingSocialService(service);
 const meetings = new NetworkingMeetingsService(service);
-const admin = new NetworkingAdminService(service, meetings);
+const admin = new NetworkingAdminService(service, meetings, new NetworkingInventoryService());
 const ids = {
   client: randomUUID(),
   event: randomUUID(),
@@ -605,7 +606,7 @@ describe.runIf(enabled)(
         { id: participants[5].profile.id, eventId: ids.event },
         { company: "Export Company B" },
       );
-      const exports = new NetworkingExportsService(admin, social, meetings);
+      const exports = new NetworkingExportsService(social, meetings);
       const participantsFile = await exports.admin(
         event,
         "participants",

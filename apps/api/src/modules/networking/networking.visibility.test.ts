@@ -84,7 +84,7 @@ describe("counterpart visibility with symmetric blocks", () => {
 
     it.each(["requester", "recipient"] as const)("hides the counterpart when the viewer is the meeting %s", async (role) => {
       const row = role === "requester" ? meeting : { ...meeting, requesterId: target.id, recipientId: viewer.id };
-      const result = await meetings.hydrate(row, undefined, false, ctx);
+      const result = await meetings.hydrateForViewer(row, ctx);
 
       expect(result).toMatchObject({ id: meeting.id, status: "CONFIRMED", message: "Meeting note" });
       expect(result[role]).toMatchObject({ id: viewer.id, firstName: "Alice" });
@@ -102,7 +102,7 @@ describe("counterpart visibility with symmetric blocks", () => {
   });
 
   it("hydrates both public profiles when neither participant has blocked the other", async () => {
-    const result = await meetings.hydrate(meeting, undefined, false, ctx);
+    const result = await meetings.hydrateForViewer(meeting, ctx);
     expect(result.requester).toMatchObject({ id: viewer.id, firstName: "Alice" });
     expect(result.recipient).toMatchObject({ id: target.id, firstName: "Bob" });
     expect(result.recipient).not.toHaveProperty("email");
@@ -145,7 +145,7 @@ describe("connectionWith unavailable results beyond target visibility", () => {
 
 describe("non-404 policy errors remain errors", () => {
   it.each([
-    ["meeting hydration", () => meetings.hydrate(meeting, undefined, false, ctx)],
+    ["meeting hydration", () => meetings.hydrateForViewer(meeting, ctx)],
     ["incoming interests", () => social.incoming(ctx)],
     ["connectionWith", () => social.connectionWith(ctx, target.id)],
   ] as const)("%s propagates the re-read viewer's lost eligibility", async (_label, read) => {

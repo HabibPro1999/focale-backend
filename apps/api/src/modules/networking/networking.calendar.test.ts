@@ -1,3 +1,4 @@
+import { NetworkingInventoryService } from "./networking.inventory.service";
 import "reflect-metadata";
 import { beforeEach, expect, it, vi } from "vitest";
 import { GUARDS_METADATA, PATH_METADATA } from "@nestjs/common/constants";
@@ -50,7 +51,7 @@ it("rejects a skipped local date and invalid timezone", () => {
 function service() {
   const meetings = new NetworkingMeetingsService({} as NetworkingService);
   const expire = vi.spyOn(meetings, "expire").mockResolvedValue(undefined);
-  return { admin: new NetworkingAdminService({} as NetworkingService, meetings), meetings, expire };
+  return { admin: new NetworkingAdminService({} as NetworkingService, meetings, new NetworkingInventoryService()), meetings, expire };
 }
 it("returns the exact admin envelope with profiles, space and representative places using batch hydration", async () => {
   const { admin, expire } = service();
@@ -86,7 +87,7 @@ it("rejects invalid input before any database calls and does not accept a search
 });
 it("keeps organizer auth and event/module isolation, with the static route before meeting IDs", async () => {
   const calendar = vi.fn().mockResolvedValue({ date: "2026-01-01", timezone: "UTC", items: [] });
-  const controller = new NetworkingAdminController({} as NetworkingUploadsService, { calendar } as unknown as NetworkingAdminService, {} as NetworkingExportsService);
+  const controller = new NetworkingAdminController({} as NetworkingUploadsService, { calendar } as unknown as NetworkingAdminService, {} as NetworkingExportsService, new NetworkingInventoryService());
   const user = { id: "organizer" } as AuthUser;
   const query = { date: "2026-01-01" };
   expect(Reflect.getMetadata(GUARDS_METADATA, NetworkingAdminController)).toContain(AuthGuard);

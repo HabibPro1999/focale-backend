@@ -1,7 +1,7 @@
+import { networkingValidation, networkingFeatureDisabled, networkingNotEligible } from "./networking.errors";
+import { futureNetworkingSlots, networkingPair, networkingPublicProfile } from "./networking.policy";
 import {
-  BadRequestException,
   Body,
-  ForbiddenException,
   Controller,
   Optional,
   Delete,
@@ -16,12 +16,9 @@ import {
   UseInterceptors,
 } from "@nestjs/common";
 import { NetworkingBusyInterceptor } from "./networking.busy";
-import {
-  NetworkingUploadsService,
-  type NetworkingMultipartRequest,
-} from "./networking.uploads.service";
+import { NetworkingUploadsService, deleteNetworkingPhoto, type NetworkingMultipartRequest } from "./networking.uploads.service";
 import { SkipThrottle, Throttle } from "@nestjs/throttler";
-import { ErrorCodes, networkingProfileComplete } from "@app/contracts";
+import { networkingProfileComplete } from "@app/contracts";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import {
   cancelNetworkingParticipantMeetings,
@@ -43,7 +40,7 @@ import { NetworkingSocialService } from "./networking.social.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
 import { NetworkingExportsService } from "./networking.exports.service";
 import { issueNetworkingBadge } from "./networking.security";
-import { networkingPair, networkingPublicProfile, networkingSlots } from "./networking.policy";
+
 import * as dto from "./networking.dto";
 
 /**
@@ -58,10 +55,7 @@ async function blockedProfileForViewer(
   store: NetworkingStore,
 ): Promise<NetworkingRow<"profiles"> | null> {
   if (targetId === ctx.profile.id) {
-    throw new BadRequestException({
-      code: "NETWORKING_VALIDATION",
-      message: "Choose another participant",
-    });
+    throw networkingValidation("Choose another participant");
   }
 
   const profile = await store.one("profiles", {
@@ -82,10 +76,7 @@ async function blockedProfileForViewer(
     eventId: ctx.event.id,
   });
   if (!current || !(await service.eligible(current, ctx.config, store))) {
-    throw new ForbiddenException({
-      code: "NETWORKING_NOT_ELIGIBLE",
-      message: "Networking participation is no longer eligible",
-    });
+    throw networkingNotEligible("Networking participation is no longer eligible");
   }
 
   const needsConnection =
@@ -188,7 +179,7 @@ export class NetworkingPublicController {
   async facets(@Param("slug") slug: string, @Req() request: FastifyRequest) {
     const ctx = await this.context(slug, request);
     if (!ctx.config.searchEnabled)
-      throw new ForbiddenException({ code: ErrorCodes.NETWORKING_FEATURE_DISABLED, message: "Search is disabled" });
+      throw networkingFeatureDisabled("Search is disabled");
     return networkingDirectoryFacets(
       ctx.event.id,
       ctx.profile.id,
@@ -372,7 +363,7 @@ export class NetworkingPublicController {
     this.meetings.requireEnabled(ctx);
     return {
       slots: await this.meetings.participantSlots(ctx, id),
-      availableSlots: networkingSlots(ctx.config, ctx.event).filter(slot => Date.parse(slot) > Date.now()),
+      availableSlots: futureNetworkingSlots(ctx.config, ctx.event),
     };
   }
   @Get("meetings") async listMeetings(
@@ -463,7 +454,7 @@ export class NetworkingPublicController {
     @Body() body: dto.NetworkingPushDto,
   ) {
     const ctx = await this.context(slug, req);
-    const unsupported = () => new BadRequestException({ code: ErrorCodes.NETWORKING_VALIDATION, message: "Unsupported push service endpoint" });
+    const unsupported = () => networkingValidation("Unsupported push service endpoint");
     let url: URL;
     try {
       url = new URL(body.endpoint);
@@ -566,7 +557,7 @@ export class NetworkingPublicController {
       return current?.photoUrl;
     });
     networkingIdentityCache.forgetProfile(ctx.profile.id);
-    await this.uploads.deletePhoto(photoUrl, ctx.event.id, ctx.profile.id);
+    await deleteNetworkingPhoto(photoUrl, ctx.event.id, ctx.profile.id);
     return { withdrawn: true };
   }
   @Get("stream") @SkipEnvelope() async stream(

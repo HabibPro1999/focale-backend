@@ -1,10 +1,6 @@
-import {
-  BadRequestException,
-  ConflictException,
-  ForbiddenException,
-  Injectable,
-  UnauthorizedException,
-} from "@nestjs/common";
+import { networkingValidation } from "./networking.errors";
+import { ErrorCodes } from "@app/contracts";
+import { ConflictException, ForbiddenException, Injectable } from "@nestjs/common";
 import { randomBytes } from "node:crypto";
 import { networkingStore, networkingTransaction } from "@app/db";
 import type { NetworkingContext } from "./networking.service";
@@ -34,7 +30,7 @@ export class NetworkingMfaService {
         profileId: ctx.profile.id,
       });
       if (factor?.enabledAt)
-        throw new ConflictException({ code: "NETWORKING_ACTION_NOT_ALLOWED", message: "An authenticator is already enrolled" });
+        throw new ConflictException({ code: ErrorCodes.NETWORKING_ACTION_NOT_ALLOWED, message: "An authenticator is already enrolled" });
       const secret = factor?.pendingEncryptedSecret
         ? openNetworkingSecret(factor.pendingEncryptedSecret)
         : newNetworkingTotpSecret();
@@ -64,7 +60,7 @@ export class NetworkingMfaService {
     action: "VERIFY" | "CONFIRM" | "DISABLE" = "VERIFY",
   ) {
     if (action === "DISABLE" && ctx.config.requireSecondFactor)
-      throw new ForbiddenException({ code: "NETWORKING_MFA_ENFORCED", message: "This event requires two-factor authentication" });
+      throw new ForbiddenException({ code: ErrorCodes.NETWORKING_MFA_ENFORCED, message: "This event requires two-factor authentication" });
     const result = await networkingTransaction(ctx.event.id, async (store) => {
       const factor = await store.one("secondFactors", {
         profileId: ctx.profile.id,
@@ -170,7 +166,7 @@ export class NetworkingMfaService {
       return { valid: true, recoveryCodes };
     });
     if (!result.valid)
-      throw new BadRequestException({ code: "NETWORKING_VALIDATION", message: "Invalid, reused or expired authenticator/recovery code" });
+      throw networkingValidation("Invalid, reused or expired authenticator/recovery code");
     // Disabling revoked the participant's other sessions; the current one is re-verified on its next request.
     if (action === "DISABLE") networkingIdentityCache.forgetProfile(ctx.profile.id);
     return {

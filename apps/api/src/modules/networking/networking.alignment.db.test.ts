@@ -1,3 +1,4 @@
+import { NetworkingInventoryService } from "./networking.inventory.service";
 // Regression coverage for the networking document alignment fixes.
 // Uses only the fresh local audit database; no external providers are invoked.
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -31,7 +32,7 @@ import { dbTestsEnabled } from "@app/db/testing";
 const service = new NetworkingService();
 const social = new NetworkingSocialService(service);
 const meetings = new NetworkingMeetingsService(service);
-const admin = new NetworkingAdminService(service, meetings);
+const admin = new NetworkingAdminService(service, meetings, new NetworkingInventoryService());
 const store = () => networkingStore();
 let people: NetworkingContext[];
 let connectionId: string;
@@ -47,10 +48,10 @@ describe.runIf(enabled)("PDF alignment audit reproductions", () => {
   it("rejects meeting windows outside the event without saving them", async () => {
     const { event } = people[0];
     for (const date of ["2031-04-04", "2031-04-06"])
-      await expect(admin.config(event.id, {
+      await expect(admin.updateConfig(event.id, {
         openingHours: [{ date, start: "09:00", end: "10:00" }],
-      })).rejects.toThrow("within the event dates");
-    expect((await admin.config(event.id)).openingHours).toEqual([
+      }, "admin")).rejects.toThrow("within the event dates");
+    expect((await admin.getConfig(event.id)).openingHours).toEqual([
       { date: "2031-04-05", start: "09:00", end: "17:00" },
     ]);
   });
