@@ -14,11 +14,11 @@ import {
   assertLeaseAlive,
   releaseMigrationLease,
   runLeaseFencedTransaction,
-  schemaHasApplicationObjects,
-  setUtcSession,
   startLeaseHeartbeat,
   type LeaseHeartbeat,
-} from "./runner";
+} from "./lease";
+import { schemaHasApplicationObjects } from "./ledger";
+import { setUtcSession } from "./session";
 import { redactCredentials } from "./security";
 import type {
   AdoptionAssessment,
