@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, getTableColumns, gt, gte, inArray, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, getTableColumns, gt, gte, inArray, lt, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { getDb, type DbExecutor } from "../client";
 import { rowsOf } from "../helpers";
@@ -14,6 +14,7 @@ import {
 } from "../schema/networking";
 import { registrations } from "../schema/registrations";
 import { peerCounterpart, profileCounterpart, type NetworkingPaymentStatuses } from "../policy/networking-eligibility";
+import { networkingPageLimit } from "./networking-pagination";
 
 export interface NetworkingParticipantPage {
   limit: number;
@@ -310,4 +311,81 @@ export async function networkingNotificationsPage(
     )
     .orderBy(asc(notifications.id))
     .limit(limit);
+}
+
+export async function listNetworkingMessages(
+  eventId: string,
+  connectionId: string,
+  query: { before?: string; beforeId?: string; limit?: number } = {},
+  db: DbExecutor = getDb(),
+) {
+  const where = and(
+    eq(messages.eventId, eventId),
+    eq(messages.connectionId, connectionId),
+    query.before
+      ? query.beforeId
+        ? or(
+            lt(messages.createdAt, new Date(query.before)),
+            and(
+              eq(messages.createdAt, new Date(query.before)),
+              lt(messages.id, query.beforeId),
+            ),
+          )
+        : lt(messages.createdAt, new Date(query.before))
+      : undefined,
+  );
+  const [items, counts] = await Promise.all([
+    db
+      .select()
+      .from(messages)
+      .where(where)
+      .orderBy(desc(messages.createdAt), desc(messages.id))
+      .limit(networkingPageLimit(query.limit ?? 50)),
+    db.select({ total: count() }).from(messages).where(where),
+  ]);
+  const oldest = items.at(-1);
+  const total = counts[0]?.total ?? 0;
+  return {
+    items: items.reverse(),
+    total,
+    nextCursor:
+      oldest && total > items.length
+        ? { before: oldest.createdAt.toISOString(), beforeId: oldest.id }
+        : null,
+  };
+}
+export async function listNetworkingNotifications(
+  eventId: string,
+  profileId: string,
+  page = 1,
+  limit = 30,
+  db: DbExecutor = getDb(),
+) {
+  const where = and(
+    eq(notifications.eventId, eventId),
+    eq(notifications.profileId, profileId),
+  );
+  const [items, counts, unreadMessageCount] = await Promise.all([
+    db
+      .select()
+      .from(notifications)
+      .where(where)
+      .orderBy(desc(notifications.createdAt), desc(notifications.id))
+      .limit(networkingPageLimit(limit))
+      .offset((Math.max(1, page) - 1) * limit),
+    db
+      .select({
+        total: count(),
+        unreadCount: sql<number>`count(*) FILTER (WHERE ${notifications.readAt} IS NULL)::integer`,
+      })
+      .from(notifications)
+      .where(where),
+    networkingUnreadMessageCount(eventId, profileId, db),
+  ]);
+  return {
+    items,
+    total: counts[0]?.total ?? 0,
+    unreadCount: counts[0]?.unreadCount ?? 0,
+    unreadMessageCount,
+  };
 }

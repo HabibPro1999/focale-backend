@@ -3,7 +3,7 @@ import { describe,expect,it } from "vitest";
 import { NetworkingConfigSchema } from "@app/contracts";
 import { NetworkingKeyring } from "@app/shared";
 import { resetIntegrationsConfig } from "../config";
-import { openNetworkingCode,renderNetworkingNotification,type NetworkingNotificationContext } from "./notification-rendering";
+import { openNetworkingCode,renderNetworkingNotification,networkingMeetingAttachment,type NetworkingNotificationContext } from "./notification-rendering";
 import { allowedNetworkingPushEndpoint } from "./notification-worker";
 
 describe("networking notification boundaries",()=>{
@@ -66,5 +66,24 @@ describe("declined counter-proposals", () => {
     const rendered = renderNetworkingNotification("MEETING_DECLINE", {}, ctx);
     expect(rendered.title).toBe("The proposed new time was declined; the original meeting is maintained");
     expect(rendered.relativeHref).toBe("/e/demo/agenda");
+  });
+});
+
+describe("meeting attachment bytes", () => {
+  it.each(["CONFIRMED", "CANCELLED"])("preserves %s attachment content, escaping, alarms and UTF-8 folding", (status) => {
+    const ctx = {
+      event: { name: "é".repeat(40) + "😀,;\r\n\\Event" },
+      profile: { id: "self", language: "en" }, config: NetworkingConfigSchema.parse({}),
+      meeting: { id: "meeting", status, revision: 7,
+        updatedAt: new Date("2031-04-05T08:00:00.123Z"),
+        startsAt: new Date("2031-04-05T09:00:00.000Z"), endsAt: new Date("2031-04-05T09:30:00.000Z"),
+      },
+      table: { name: "A\\B", location: "Room;1,2\r\nNorth" }, contact: null,
+    } as unknown as NetworkingNotificationContext;
+    const [attachment] = networkingMeetingAttachment(ctx);
+    const calendar = Buffer.from(attachment!.content, "base64").toString("utf8");
+    expect(calendar.endsWith("\r\n")).toBe(true);
+    for (const line of calendar.split("\r\n")) expect(Buffer.byteLength(line)).toBeLessThanOrEqual(74);
+    expect({ ...attachment, content: calendar }).toMatchSnapshot();
   });
 });

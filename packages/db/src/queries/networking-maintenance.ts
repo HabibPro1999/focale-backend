@@ -1,5 +1,6 @@
 import { sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
+import { NETWORKING_REMINDER_TITLES } from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
 import { networkingConfigs, networkingProfiles } from "../schema/networking";
 import { registrations } from "../schema/registrations";
@@ -10,14 +11,15 @@ import { expireNetworkingProposals, sweepReleasedNetworkingReservations } from "
 import { purgeExpiredNetworkingEvents } from "./networking-retention";
 import { eraseWithdrawnNetworkingProfiles } from "./networking-erasure";
 import { settleOrphanedNetworkingEmailLogs } from "./networking-email-tracking";
+import { NETWORKING_DELIVERY_MAX_ATTEMPTS } from "./networking-delivery";
 
+/** Inlined as a literal, not a bind parameter. */
+const maxAttempts = sql.raw(String(NETWORKING_DELIVERY_MAX_ATTEMPTS));
 /** The caller supplies a fixed SQL column, preserving each site's alias/text. */
 const scopeTo = (column: SQL, eventId?: string) => eventId ? sql`AND ${column}=${eventId}` : sql``;
 const REMINDERS = [
-  { type: "MEETING_REMINDER_DAY", hours: 24, minHours: 23,
-    fr: "Votre rendez-vous a lieu demain", ar: "موعدك غداً", en: "Your meeting is tomorrow" },
-  { type: "MEETING_REMINDER_HOUR", hours: 1, minHours: 0,
-    fr: "Votre rendez-vous commence dans une heure", ar: "يبدأ موعدك خلال ساعة", en: "Your meeting starts within an hour" },
+  { type: "MEETING_REMINDER_DAY", hours: 24, minHours: 23 },
+  { type: "MEETING_REMINDER_HOUR", hours: 1, minHours: 0 },
 ] as const;
 
 /** The NETWORKING_WITHDRAWAL_ERASE_DAYS default (app config). */
@@ -38,10 +40,10 @@ export async function maintainNetworkingLifecycle(
   // Expired/exhausted codes are scrubbed even if a provider never became available.
   await db.execute(sql`UPDATE networking_deliveries d SET payload=jsonb_build_object('challengeId',d.payload->>'challengeId','outcome','expired'),status='SKIPPED',locked_until=NULL,last_error=NULL,updated_at=now()
     WHERE d.type='OTP' AND d.status<>'SENT' AND (d.status<>'PROCESSING' OR d.locked_until<now())
-      AND (d.attempts>=5 OR NOT EXISTS (SELECT 1 FROM networking_challenges c WHERE c.id=d.payload->>'challengeId' AND c.event_id=d.event_id AND c.expires_at>now() AND c.consumed_at IS NULL AND c.attempts<5))
+      AND (d.attempts>=${maxAttempts} OR NOT EXISTS (SELECT 1 FROM networking_challenges c WHERE c.id=d.payload->>'challengeId' AND c.event_id=d.event_id AND c.expires_at>now() AND c.consumed_at IS NULL AND c.attempts<5))
       ${scopeTo(sql`d.event_id`, eventId)}`);
   await db.execute(
-    sql`UPDATE networking_deliveries SET status='FAILED',locked_until=NULL,last_error='Delivery retry limit exhausted',updated_at=now() WHERE status='PROCESSING' AND locked_until<now() AND attempts>=5 ${scope}`,
+    sql`UPDATE networking_deliveries SET status='FAILED',locked_until=NULL,last_error='Delivery retry limit exhausted',updated_at=now() WHERE status='PROCESSING' AND locked_until<now() AND attempts>=${maxAttempts} ${scope}`,
   );
   // Email logs of deliveries that ended mid-send never stay SENDING (4.2).
   await settleOrphanedNetworkingEmailLogs(eventId, db);
@@ -83,7 +85,10 @@ const recipientEligible = eligibleProfile(p, r, statuses);
  * Each reminder and its in-app record are committed by one statement.
  */
 export async function queueNetworkingMeetingReminders(db: DbExecutor, eventId?: string) {
-  for (const { type, hours, minHours, fr, ar, en } of REMINDERS) {
+  for (const { type, hours, minHours } of REMINDERS) {
+    const fr = NETWORKING_REMINDER_TITLES.fr[type];
+    const ar = NETWORKING_REMINDER_TITLES.ar[type];
+    const en = NETWORKING_REMINDER_TITLES.en[type];
     await db.execute(sql`
       WITH candidates AS (
         SELECT gen_random_uuid()::text AS notification_id,m.id AS meeting_id,m.event_id,m.revision,p.id AS profile_id,

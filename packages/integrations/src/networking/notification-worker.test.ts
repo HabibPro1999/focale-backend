@@ -9,7 +9,9 @@ const db = vi.hoisted(() => ({
 }));
 vi.mock("@app/db", () => db);
 vi.mock("./delivery-policy", () => ({ networkingDeliverySkipReason: () => undefined }));
-vi.mock("./notification-rendering", () => ({ renderNetworkingNotification: () => ({ title: "Title", body: "Body", subject: "Subject", attachments: [] }) }));
+const rendering = vi.hoisted(() => ({ render: vi.fn(), contacts: vi.fn() }));
+vi.mock("./notification-rendering", () => ({ renderNetworkingNotification: rendering.render }));
+vi.mock("./contact-export", () => ({ networkingContactAttachment: rendering.contacts }));
 vi.mock("../email/providers", async (importOriginal) => ({
   ambiguousSend: (await importOriginal<typeof import("../email/providers")>()).ambiguousSend,
   getNetworkingEmailSender: () => undefined,
@@ -31,6 +33,8 @@ const claimOnce = (...rows: NetworkingDeliveryRow[]) =>
   db.claimNetworkingDeliveries.mockResolvedValueOnce(rows).mockResolvedValue([]);
 beforeEach(() => {
   vi.resetAllMocks();
+  rendering.render.mockReturnValue({ title: "Title", body: "Body", subject: "Subject", attachments: [] });
+  rendering.contacts.mockReturnValue({ filename: "contacts.csv", content: "Y3N2", contentType: "text/csv" });
   emailLimiter = new NetworkingEmailRateLimiter(1_000);
   db.networkingDeliveryContext.mockResolvedValue({
     event: { clientId: "client", name: "Event" }, profile: { email: "test@example.test", firstName: "Test", emailPreference: "IMMEDIATE" },
@@ -312,5 +316,81 @@ describe("networkingDeliveryWorkerOptions", () => {
       ["NETWORKING_EMAIL_RATE_PER_SECOND", "1.5"],
     ])
       expect(() => networkingDeliveryWorkerOptions({ [key]: value })).toThrow(key);
+  });
+});
+
+// Characterization before the B5 helper extraction: leases and payload mutation are observable.
+describe("delivery channel fences and payload snapshots", () => {
+  const subscriptions = ["a", "b"].map((id) => ({ id, endpoint: `https://fcm.googleapis.com/fcm/send/${id}`, keys: { p256dh: "key", auth: "auth" } }));
+  const context = (preference = "OFF") => ({ event: { clientId: "client", name: "Event" }, profile: { email: "test@example.test", firstName: "Test", language: "en", emailPreference: preference }, registration: { id: "registration" }, config: {}, subscriptions });
+  const withVapid = async (run: () => Promise<void>) => {
+    vi.stubEnv("NETWORKING_VAPID_PUBLIC_KEY", "test-public");
+    vi.stubEnv("NETWORKING_VAPID_PRIVATE_KEY", "test-private");
+    vi.stubEnv("NETWORKING_VAPID_SUBJECT", "mailto:test@example.invalid");
+    try { await run(); } finally { vi.unstubAllEnvs(); }
+  };
+  it.each([[2, 0], [3, 0], [4, 1]])("loses lease at refresh %s without sending later endpoints", async (lostAt, sent) => {
+    await withVapid(async () => {
+      const delivery = row(freshLease, { type: "MATCH" });
+      claimOnce(delivery);
+      db.networkingDeliveryContext.mockResolvedValue(context());
+      let refreshes = 0;
+      db.refreshNetworkingDeliveryLease.mockImplementation(async () => ++refreshes !== lostAt);
+      const push = vi.fn().mockResolvedValue({ statusCode: 201 });
+      expect(await run({ push })).toEqual(counts({}));
+      expect(push).toHaveBeenCalledTimes(sent);
+      expect(email.sendEmail).not.toHaveBeenCalled();
+      expect(db.updateNetworkingDelivery).toHaveBeenCalledTimes(sent);
+      expect(db.updateNetworkingDelivery).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ status: "SENT" }));
+      if (sent) expect(db.updateNetworkingDelivery).toHaveBeenCalledWith(delivery, { payload: { _deliveryProgress: { pushEndpoints: [subscriptions[0].endpoint] } } });
+    });
+  });
+  it("keeps the provider marker and each endpoint renewal adjacent to their sends", async () => {
+    await withVapid(async () => {
+      claimOnce(row(freshLease, { type: "MATCH" }));
+      const sequence: string[] = [];
+      db.networkingDeliveryContext.mockImplementation(async () => { sequence.push("context"); return context("IMMEDIATE"); });
+      db.refreshNetworkingDeliveryLease.mockImplementation(async () => { sequence.push("renew"); return true; });
+      db.localizeNetworkingNotification.mockImplementation(async () => { sequence.push("localize"); });
+      db.beginNetworkingEmailLog.mockImplementation(async () => { sequence.push("begin-email"); return { alreadySent: false }; });
+      db.markNetworkingEmailAttempt.mockImplementation(async () => { sequence.push("mark-email"); return true; });
+      db.finishNetworkingEmailLog.mockImplementation(async () => { sequence.push("finish-email"); });
+      db.updateNetworkingDelivery.mockImplementation(async () => { sequence.push("persist"); return true; });
+      email.sendEmail.mockImplementation(async () => { sequence.push("send-email"); return { outcome: "accepted", success: true }; });
+      const push = vi.fn(async () => { sequence.push("send-push"); return { statusCode: 201, body: "", headers: {} }; });
+      expect(await run({ push })).toEqual(counts({ sent: 1 }));
+      expect(sequence).toEqual(["renew", "context", "localize", "renew", "context", "begin-email", "mark-email", "send-email", "finish-email", "persist", "renew", "context", "renew", "send-push", "persist", "renew", "send-push", "persist", "persist"]);
+    });
+  });
+  it("recomputes contacts after revalidation and persists the final count", async () => {
+    const delivery = row(freshLease, { type: "POST_EVENT_CONTACTS", profileId: "person", payload: { notificationId: "notice" } });
+    claimOnce(delivery);
+    db.networkingDeliveryContext.mockResolvedValue({ ...context("IMMEDIATE"), subscriptions: [] });
+    const lateContacts = [{ profileId: "remaining" }];
+    db.networkingParticipantExportContacts.mockResolvedValueOnce([{}, {}]).mockResolvedValueOnce(lateContacts);
+    const renderedCounts: unknown[] = [];
+    rendering.render.mockImplementation((_type, payload) => { renderedCounts.push(payload.contactCount); return { title: "Title", body: `${payload.contactCount} contacts`, html: `${payload.contactCount} contacts`, subject: "Subject", attachments: [] }; });
+    expect(await run()).toEqual(counts({ sent: 1 }));
+    expect(renderedCounts).toEqual([2, 1]);
+    expect(db.networkingParticipantExportContacts).toHaveBeenCalledTimes(2);
+    expect(rendering.contacts).toHaveBeenCalledWith(lateContacts, "en");
+    expect(email.sendEmail).toHaveBeenCalledWith(expect.objectContaining({ html: "1 contacts" }));
+    expect(delivery.payload.contactCount).toBe(1);
+    expect(db.updateNetworkingDelivery).toHaveBeenLastCalledWith(delivery, expect.objectContaining({ payload: { notificationId: "notice", contactCount: 1, _deliveryProgress: { emailSent: true } } }));
+  });
+  it("mutates digest summaries/includeContacts before snapshot while retaining the final attachment recomputation", async () => {
+    const delivery = row(freshLease, { type: "DAILY_DIGEST", profileId: "person", payload: { digestDate: "2030-01-01" } });
+    claimOnce(delivery);
+    const current = { ...context("DAILY"), subscriptions: [] };
+    db.networkingDeliveryContext.mockResolvedValue(current);
+    db.networkingDigestContexts.mockResolvedValue([{ notification: { id: "notice", type: "POST_EVENT_CONTACTS", data: {}, href: "/contacts" }, context: current }]);
+    const lateContacts = [{ profileId: "remaining" }];
+    db.networkingParticipantExportContacts.mockResolvedValueOnce([{}, {}]).mockResolvedValueOnce(lateContacts);
+    rendering.render.mockImplementation((_type, payload) => ({ title: "Title", body: payload.digestSummaries?.join("|") ?? `${payload.contactCount} contacts`, subject: "Subject", attachments: [] }));
+    expect(await run()).toEqual(counts({ sent: 1 }));
+    expect(db.networkingParticipantExportContacts).toHaveBeenCalledTimes(2);
+    expect(rendering.contacts).toHaveBeenCalledWith(lateContacts, "en");
+    expect(delivery.payload).toEqual({ digestDate: "2030-01-01", includeContacts: true, digestSummaries: ["2 contacts"], contactCount: 1 });
+    expect(db.updateNetworkingDelivery).toHaveBeenLastCalledWith(delivery, expect.objectContaining({ payload: { ...delivery.payload, _deliveryProgress: { emailSent: true } } }));
   });
 });
