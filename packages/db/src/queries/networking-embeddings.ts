@@ -168,19 +168,6 @@ export async function failNetworkingEmbeddingJob(
   );
 }
 
-export {
-  clearNetworkingVectorIndexCache,
-  findNetworkingVectorCandidates,
-  getNetworkingVectorIndexHealth,
-  NETWORKING_VECTOR_INDEX,
-  networkingVectorIndexPresent,
-  networkingVectorIndexStatus,
-  rankNetworkingVectorCandidates,
-  type NetworkingVectorCandidate,
-  type NetworkingVectorIndexHealth,
-  type NetworkingVectorIndexStatus,
-} from "./networking-vector-search";
-
 /**
  * Job status of the event's embeddable profiles (4.6), the ones the worker
  * embeds; a profile without a job yet is PENDING. Ineligible, hidden,
