@@ -8,13 +8,15 @@ import {
   gte,
   ilike,
   sql,
+  type SQL,
   type InferInsertModel,
   type InferSelectModel,
 } from "drizzle-orm";
 import { createLogger } from "@app/shared";
 import {
   getSponsorshipMode,
-  extractFieldIds,
+  removedFieldIds,
+  mergeSponsorshipSettings,
   type SponsorFormSchemaJson,
   type StoredFormSchemaJson,
   type UpdateSponsorshipSettingsInput,
@@ -91,8 +93,8 @@ async function findFormByIdExec(
   return checkFormRow(row) ?? null;
 }
 
-export async function findFormByIdWithEvent(
-  id: string,
+async function selectFormWithEvent(
+  where: SQL | undefined,
 ): Promise<FormWithEvent | null> {
   const [row] = await getDb()
     .select({
@@ -103,7 +105,7 @@ export async function findFormByIdWithEvent(
     })
     .from(forms)
     .innerJoin(events, eq(forms.eventId, events.id))
-    .where(eq(forms.id, id))
+    .where(where)
     .limit(1);
   if (!row) return null;
   return {
@@ -112,33 +114,18 @@ export async function findFormByIdWithEvent(
   };
 }
 
-export async function findActiveRegistrationFormById(
-  id: string,
-): Promise<FormWithEvent | null> {
-  const [row] = await getDb()
-    .select({
-      form: forms,
-      clientId: events.clientId,
-      status: events.status,
-      endDate: events.endDate,
-    })
-    .from(forms)
-    .innerJoin(events, eq(forms.eventId, events.id))
-    .where(
-      and(
-        eq(forms.id, id),
-        eq(forms.type, "REGISTRATION"),
-        eq(forms.active, true),
-        eq(events.status, "OPEN"),
-        gte(events.endDate, new Date()),
-      ),
-    )
-    .limit(1);
-  if (!row) return null;
-  return {
-    ...checkFormRow(row.form),
-    event: { clientId: row.clientId, status: row.status, endDate: row.endDate },
-  };
+export function findFormByIdWithEvent(id: string): Promise<FormWithEvent | null> {
+  return selectFormWithEvent(eq(forms.id, id));
+}
+
+export function findActiveRegistrationFormById(id: string): Promise<FormWithEvent | null> {
+  return selectFormWithEvent(and(
+    eq(forms.id, id),
+    eq(forms.type, "REGISTRATION"),
+    eq(forms.active, true),
+    eq(events.status, "OPEN"),
+    gte(events.endDate, new Date()),
+  ));
 }
 
 async function findPublicFormByEventSlug(
@@ -360,10 +347,7 @@ export function updateSponsorFormSchemaModeChange(params: {
       if (batches > 0) return { ok: false, reason: "locked" } as const;
     }
 
-    const newFieldIds = extractFieldIds(params.nextSchema);
-    const removed = extractFieldIds(current.schema).filter(
-      (fieldId) => !newFieldIds.includes(fieldId),
-    );
+    const removed = removedFieldIds(current.schema, params.nextSchema);
     if (removed.length > 0) {
       const regCount = await countRegistrationsByFormId(params.id, tx);
       if (regCount > 0) {
@@ -409,10 +393,7 @@ export function updateSponsorshipSettingsModeChange(
 
     // A SPONSOR form (checked above) stores a sponsor form schema.
     const schema = current.schema as SponsorFormSchemaJson;
-    const merged: SponsorFormSchemaJson = {
-      ...schema,
-      sponsorshipSettings: { ...schema.sponsorshipSettings, ...settings },
-    };
+    const merged = mergeSponsorshipSettings(schema, settings);
     const [form] = await tx
       .update(forms)
       .set({ schema: merged })

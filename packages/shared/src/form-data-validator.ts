@@ -18,7 +18,7 @@ const logger = createLogger({ name: "shared:form-data-validator" });
 // with that zod schema.
 // ============================================================================
 
-export type FieldType =
+type FieldType =
   | "text"
   | "firstName"
   | "lastName"
@@ -36,19 +36,19 @@ export type FieldType =
   | "governorate"
   | "country";
 
-export interface FieldOption {
+interface FieldOption {
   id: string;
   label?: string;
 }
 
-export interface FieldCondition {
+interface FieldCondition {
   id?: string;
   fieldId: string;
   operator: string;
   value?: string | number | boolean;
 }
 
-export interface FieldValidation {
+interface FieldValidation {
   required?: boolean;
   minLength?: number;
   maxLength?: number;
@@ -88,20 +88,20 @@ export interface FormSchema {
   steps: FormStep[];
 }
 
-export interface FormDataValidationResult {
+interface FormDataValidationResult {
   valid: boolean;
   errors: FormDataFieldError[];
   data?: Record<string, unknown>;
 }
 
-export interface FormDataFieldError {
+interface FormDataFieldError {
   fieldId: string;
   fieldName: string;
   message: string;
   code: string;
 }
 
-export interface FormDataValidationOptions {
+interface FormDataValidationOptions {
   /**
    * Reject a blank answer to a required visible field (default `true`, the
    * public form). Admin create/edit pass `false`: a blank answer is accepted
@@ -144,6 +144,15 @@ function extractSchemaSteps(formSchema: unknown): FormStep[] | null {
     return [...sponsorSteps, ...beneficiarySteps];
   }
   return null;
+}
+
+function extractSchemaFields(formSchema: unknown): FormField[] | null {
+  const steps = extractSchemaSteps(formSchema);
+  return steps?.flatMap((step) => Array.isArray(step.fields) ? step.fields : []) ?? null;
+}
+
+function isDisplayOnly(field: FormField): boolean {
+  return field.type === "heading" || field.type === "paragraph";
 }
 
 function invalidSchemaResult(): FormDataValidationResult {
@@ -206,6 +215,27 @@ function isBlankAnswer(value: unknown): boolean {
 // Field Schema Builders
 // ============================================================================
 
+function withSafePattern(schema: z.ZodString, field: FormField, pattern: string | undefined): z.ZodString {
+  if (!pattern) return schema;
+  if (isSafePattern(pattern)) {
+    return schema.regex(new RegExp(pattern), `${getFieldLabel(field)} format is invalid`);
+  }
+  logger.warn(
+    { fieldId: field.id, pattern },
+    "Skipping unsafe or invalid regex pattern (ReDoS protection)",
+  );
+  return schema;
+}
+
+function toArrayOr(blank: "empty" | undefined) {
+  return (value: unknown) => {
+    if (value === undefined || value === "" || value === null) {
+      return blank === "empty" ? [] : undefined;
+    }
+    return Array.isArray(value) ? value : [value];
+  };
+}
+
 function buildTextSchema(
   field: FormField,
   validation?: FieldValidation,
@@ -225,17 +255,7 @@ function buildTextSchema(
       `${label} must be at most ${validation.maxLength} characters`,
     );
   }
-  if (validation?.pattern) {
-    if (isSafePattern(validation.pattern)) {
-      const regex = new RegExp(validation.pattern);
-      schema = schema.regex(regex, `${label} format is invalid`);
-    } else {
-      logger.warn(
-        { fieldId: field.id, pattern: validation.pattern },
-        "Skipping unsafe or invalid regex pattern (ReDoS protection)",
-      );
-    }
-  }
+  schema = withSafePattern(schema, field, validation?.pattern);
 
   if (validation?.required) {
     return schema.min(1, `${label} is required`);
@@ -277,17 +297,7 @@ function buildPhoneSchema(
   if (validation?.maxLength) {
     schema = schema.max(validation.maxLength);
   }
-  if (validation?.pattern) {
-    if (isSafePattern(validation.pattern)) {
-      const regex = new RegExp(validation.pattern);
-      schema = schema.regex(regex, `${label} format is invalid`);
-    } else {
-      logger.warn(
-        { fieldId: field.id, pattern: validation.pattern },
-        "Skipping unsafe or invalid regex pattern (ReDoS protection)",
-      );
-    }
-  }
+  schema = withSafePattern(schema, field, validation?.pattern);
 
   if (validation?.required) {
     return schema;
@@ -314,7 +324,7 @@ function buildNumberSchema(
   const parseNumberInput = (value: unknown) => {
     if (value === null || value === undefined) return undefined;
     if (typeof value === "number") {
-      return Number.isFinite(value) ? value : value;
+      return value;
     }
     if (typeof value !== "string") return value;
 
@@ -397,14 +407,6 @@ function buildDropdownSchema(
   return schema.optional().or(z.literal(""));
 }
 
-function buildRadioSchema(
-  field: FormField,
-  validation?: FieldValidation,
-): ZodTypeAny {
-  // Radio behaves like dropdown - single selection
-  return buildDropdownSchema(field, validation);
-}
-
 function buildCheckboxSchema(
   field: FormField,
   validation?: FieldValidation,
@@ -444,21 +446,11 @@ function buildCheckboxSchema(
 
   return validation?.required || validation?.minSelections !== undefined
     ? z.preprocess(
-        (value) =>
-          value === undefined || value === "" || value === null
-            ? []
-            : Array.isArray(value)
-              ? value
-              : [value],
+        toArrayOr("empty"),
         schema,
       )
     : z.preprocess(
-        (value) =>
-          value === undefined || value === "" || value === null
-            ? undefined
-            : Array.isArray(value)
-              ? value
-              : [value],
+        toArrayOr(undefined),
         schema.optional().default([]),
       );
 }
@@ -579,10 +571,8 @@ function buildFieldSchema(
       return buildDateSchema(field, validation);
 
     case "dropdown":
-      return buildDropdownSchema(field, validation);
-
     case "radio":
-      return buildRadioSchema(field, validation);
+      return buildDropdownSchema(field, validation);
 
     case "checkbox":
       return buildCheckboxSchema(field, validation);
@@ -611,27 +601,22 @@ function buildFieldSchema(
  * The validator respects conditional field visibility: a field the form app
  * hides is neither validated nor required, and is left out of `data`.
  */
-export function buildFormDataValidator(
+function buildFormDataValidator(
   formSchema: unknown,
   options: FormDataValidationOptions = {},
 ): (formData: Record<string, unknown>) => FormDataValidationResult {
   const enforceRequired = options.enforceRequired ?? true;
-  const steps = extractSchemaSteps(formSchema);
-  if (!steps) {
+  const allFields = extractSchemaFields(formSchema);
+  if (!allFields) {
     return () => invalidSchemaResult();
   }
-
-  // Flatten all fields from all steps
-  const allFields: FormField[] = steps.flatMap((step) =>
-    Array.isArray(step.fields) ? step.fields : [],
-  );
   return (formData: Record<string, unknown>): FormDataValidationResult => {
     const errors: FormDataFieldError[] = [];
     const validatedData: Record<string, unknown> = {};
 
     for (const field of allFields) {
       // Skip display-only fields
-      if (field.type === "heading" || field.type === "paragraph") {
+      if (isDisplayOnly(field)) {
         continue;
       }
 
@@ -714,14 +699,12 @@ export function visibleFormAnswers(
   formSchema: unknown,
   formData: Record<string, unknown>,
 ): Record<string, unknown> {
-  const steps = extractSchemaSteps(formSchema);
-  if (!steps) return {};
+  const fields = extractSchemaFields(formSchema);
+  if (!fields) return {};
 
   const answers: Record<string, unknown> = {};
-  for (const field of steps.flatMap((step) =>
-    Array.isArray(step.fields) ? step.fields : [],
-  )) {
-    if (field.type === "heading" || field.type === "paragraph") continue;
+  for (const field of fields) {
+    if (isDisplayOnly(field)) continue;
     let visible: boolean;
     try {
       visible = isFieldVisible(field, formData);
@@ -751,18 +734,10 @@ export function sanitizeFormData(
   formSchema: unknown,
   formData: Record<string, unknown>,
 ): Record<string, unknown> {
-  const steps = extractSchemaSteps(formSchema);
-  if (!steps) {
-    return {};
-  }
+  const fields = extractSchemaFields(formSchema);
+  if (!fields) return {};
 
-  const knownIds = new Set<string>();
-  for (const step of steps) {
-    const fields = Array.isArray(step.fields) ? step.fields : [];
-    for (const field of fields) {
-      knownIds.add(field.id);
-    }
-  }
+  const knownIds = new Set(fields.map((field) => field.id));
   const sanitized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(formData)) {
     if (knownIds.has(key)) {

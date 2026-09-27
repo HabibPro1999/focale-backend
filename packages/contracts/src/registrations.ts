@@ -1,4 +1,7 @@
+import { PaymentStatusSchema, RegistrationRoleSchema } from "./registration-enums";
+export { PaymentStatusSchema, RegistrationRoleSchema } from "./registration-enums";
 import { z } from "zod";
+import { hasUpdateField, paginationQueryShape } from "./zod-helpers";
 import { AccessSelectionSchema } from "./access";
 import { EmailStatusSchema } from "./email";
 
@@ -6,15 +9,7 @@ import { EmailStatusSchema } from "./email";
 // Enums
 // ============================================================================
 
-export const PaymentStatusSchema = z.enum([
-  "PENDING",
-  "VERIFYING",
-  "PARTIAL",
-  "PAID",
-  "SPONSORED",
-  "WAIVED",
-  "REFUNDED",
-]);
+
 
 export const TransactionTypeSchema = z.enum([
   "PAYMENT",
@@ -30,13 +25,7 @@ export const PaymentMethodSchema = z.enum([
   "LAB_SPONSORSHIP",
 ]);
 
-export const RegistrationRoleSchema = z.enum([
-  "PARTICIPANT",
-  "SPEAKER",
-  "MODERATOR",
-  "ORGANIZER",
-  "INVITED",
-]);
+
 
 // ============================================================================
 // Shared Validation
@@ -174,7 +163,7 @@ export const AdminEditRegistrationSchema = z
     note: z.string().max(2000).nullable().optional(),
     labName: z.string().max(200).nullable().optional(),
   })
-  .refine((data) => Object.values(data).some((v) => v !== undefined), {
+  .refine(hasUpdateField, {
     message: "At least one field must be provided for update",
   });
 
@@ -183,8 +172,7 @@ export const AdminEditRegistrationSchema = z
 // ============================================================================
 
 export const ListRegistrationsQuerySchema = z.strictObject({
-  page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(20),
+  ...paginationQueryShape(),
   paymentStatus: PaymentStatusSchema.optional(),
   paymentMethod: PaymentMethodSchema.optional(),
   role: RegistrationRoleSchema.optional(),
@@ -332,8 +320,7 @@ export type RegistrationColumnsResponse = z.infer<
 // ============================================================================
 
 export const ListRegistrationAuditLogsQuerySchema = z.strictObject({
-  page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(50),
+  ...paginationQueryShape(50),
 });
 
 export const AuditActionSchema = z.enum([
@@ -374,8 +361,7 @@ export type RegistrationAuditLog = z.infer<typeof RegistrationAuditLogSchema>;
 // ============================================================================
 
 export const ListRegistrationEmailLogsQuerySchema = z.strictObject({
-  page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(50),
+  ...paginationQueryShape(50),
 });
 
 // Registration email logs only ever carry these three triggers (or null).

@@ -1,3 +1,5 @@
+import { logger } from "../../core/logger.service";
+import { expectAppError } from "../../testing/assertions";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { ErrorCodes } from "@app/contracts";
 import type {
@@ -15,7 +17,6 @@ import {
   FormsService,
   createDefaultSponsorSchema,
 } from "./forms.service";
-import { AppException } from "../../core/app-exception";
 
 // ---------------------------------------------------------------------------
 // Compile-time contract: the @app/contracts zod-derived FormField/FormStep must
@@ -100,21 +101,6 @@ function mockFormWithEvent(overrides: Partial<Form> = {}): FormWithEvent {
   };
 }
 
-async function expectAppError(
-  p: Promise<unknown>,
-  status: number,
-  code: string,
-): Promise<void> {
-  const err = await p.then(
-    () => {
-      throw new Error("expected promise to reject");
-    },
-    (e: unknown) => e,
-  );
-  expect(err).toBeInstanceOf(AppException);
-  expect((err as AppException).getStatus()).toBe(status);
-  expect((err as AppException).getResponse()).toMatchObject({ code });
-}
 
 const service = new FormsService();
 
@@ -365,6 +351,7 @@ describe("updateForm", () => {
   });
 
   it("counts registrations when removing fields", async () => {
+    const warning = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
     vi.mocked(findFormById).mockResolvedValue(
       mockForm({
         schema: {
@@ -397,6 +384,11 @@ describe("updateForm", () => {
     });
 
     expect(countRegistrationsByFormId).toHaveBeenCalledWith(formId);
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      { formId, removedFields: ["field-to-remove"], affectedRegistrations: 5 },
+      "Form fields removed with existing registration data - data may be orphaned",
+    );
+    warning.mockRestore();
   });
 
   it("rejects a stepless registration schema and never writes", async () => {

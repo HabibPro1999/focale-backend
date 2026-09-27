@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { hasUpdateField, paginationQueryShape } from "./zod-helpers";
 import type { StoredPricingRules } from "./pricing";
 
 // ============================================================================
@@ -8,8 +9,6 @@ import type { StoredPricingRules } from "./pricing";
 
 const BasePriceSchema = z.number().int().min(0).nullable();
 
-const hasUpdateField = (data: Record<string, unknown>) =>
-  Object.values(data).some((value) => value !== undefined);
 
 const supportedCurrencies = new Set(
   (
@@ -28,18 +27,20 @@ const CurrencySchema = z
     "Currency must be a supported ISO 4217 code",
   );
 
+const EventSlugSchema = z
+  .string()
+  .min(1)
+  .max(100)
+  .regex(
+    /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/,
+    "Slug must be lowercase alphanumeric with hyphens, dots, or underscores",
+  );
+
 export const CreateEventSchema = z
   .strictObject({
     clientId: z.string().uuid(),
     name: z.string().min(1).max(200),
-    slug: z
-      .string()
-      .min(1)
-      .max(100)
-      .regex(
-        /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/,
-        "Slug must be lowercase alphanumeric with hyphens, dots, or underscores",
-      ),
+    slug: EventSlugSchema,
     description: z.string().optional().nullable(),
     maxCapacity: z.number().int().positive().optional().nullable(),
     startDate: z.coerce.date(),
@@ -58,14 +59,7 @@ export const CreateEventSchema = z
 export const UpdateEventSchema = z
   .strictObject({
     name: z.string().min(1).max(200).optional(),
-    slug: z
-      .string()
-      .min(1)
-      .max(100)
-      .regex(
-        /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/,
-        "Slug must be lowercase alphanumeric with hyphens, dots, or underscores",
-      )
+    slug: EventSlugSchema
       .optional(),
     description: z.string().optional().nullable(),
     maxCapacity: z.number().int().positive().optional().nullable(),
@@ -94,8 +88,7 @@ export const UpdateEventSchema = z
   });
 
 export const ListEventsQuerySchema = z.strictObject({
-  page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(20),
+  ...paginationQueryShape(),
   clientId: z.string().uuid().optional(),
   status: z.enum(["CLOSED", "OPEN", "ARCHIVED"]).optional(),
   search: z.string().optional(),

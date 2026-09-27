@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { hasUpdateField, paginationQueryShape } from "./zod-helpers";
 
 // ============================================================================
 // Module Configuration
@@ -30,14 +31,12 @@ const EnabledModulesSchema = z
   .array(z.enum(MODULE_IDS))
   .transform(normalizeEnabledModules);
 
-const hasUpdateField = (data: Record<string, unknown>) =>
-  Object.values(data).some((value) => value !== undefined);
 
 // ============================================================================
 // Request Schemas
 // ============================================================================
 
-export const CreateClientSchema = z.strictObject({
+const ClientDetailsShape = {
   name: z.string().min(1).max(100),
   logo: z.string().url().optional().nullable(),
   primaryColor: z
@@ -47,20 +46,17 @@ export const CreateClientSchema = z.strictObject({
     .nullable(),
   email: z.string().email().optional().nullable(),
   phone: z.string().min(1).max(20).optional().nullable(),
+};
+
+export const CreateClientSchema = z.strictObject({
+  ...ClientDetailsShape,
   enabledModules: EnabledModulesSchema.optional(),
 });
 
 export const UpdateClientSchema = z
   .strictObject({
-    name: z.string().min(1).max(100).optional(),
-    logo: z.string().url().optional().nullable(),
-    primaryColor: z
-      .string()
-      .regex(/^#[0-9A-Fa-f]{6}$/, "Primary color must be a valid hex color")
-      .optional()
-      .nullable(),
-    email: z.string().email().optional().nullable(),
-    phone: z.string().min(1).max(20).optional().nullable(),
+    ...ClientDetailsShape,
+    name: ClientDetailsShape.name.optional(),
     active: z.boolean().optional(),
     enabledModules: EnabledModulesSchema.optional(),
   })
@@ -69,8 +65,7 @@ export const UpdateClientSchema = z
   });
 
 export const ListClientsQuerySchema = z.strictObject({
-  page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(20),
+  ...paginationQueryShape(),
   active: z
     .enum(["true", "false"])
     .transform((v) => v === "true")

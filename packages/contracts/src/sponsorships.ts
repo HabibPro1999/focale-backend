@@ -1,11 +1,10 @@
 import { z } from "zod";
+import { hasUpdateField } from "./zod-helpers";
 
 // Ported verbatim from legacy src/modules/sponsorships/sponsorships.schema.ts.
 // Every object is z.strictObject (unknown keys -> 400) exactly as the legacy
 // Fastify schema validation behaved.
 
-const hasUpdateField = (data: Record<string, unknown>) =>
-  Object.values(data).some((value) => value !== undefined);
 
 // ============================================================================
 // Enums

@@ -1,11 +1,10 @@
 import { z } from "zod";
+import { hasUpdateField, paginationQueryShape } from "./zod-helpers";
 import {
   FormLanguagesSchema,
   translationsMapOf,
 } from "./i18n.schema";
 
-const hasUpdateField = (data: Record<string, unknown>) =>
-  Object.values(data).some((value) => value !== undefined);
 
 // ============================================================================
 // Field Schemas
@@ -282,8 +281,7 @@ export const UpdateFormSchema = z
   });
 
 export const ListFormsQuerySchema = z.strictObject({
-  page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(20),
+  ...paginationQueryShape(),
   eventId: z.string().uuid().optional(),
   search: z.string().optional(),
   type: z.enum(["REGISTRATION", "SPONSOR"]).optional(),
@@ -348,10 +346,7 @@ export type UpdateSponsorshipSettingsInput = z.infer<
 export function getSponsorshipMode(
   schema: unknown,
 ): SponsorshipSettings["sponsorshipMode"] {
-  const settings = (
-    schema as { sponsorshipSettings?: SponsorshipSettings } | null
-  )?.sponsorshipSettings;
-  return settings?.sponsorshipMode ?? "CODE";
+  return getSponsorshipSettings(schema).sponsorshipMode ?? "CODE";
 }
 
 /**
@@ -377,4 +372,24 @@ export function extractFieldIds(schema: unknown): string[] {
     }
   }
   return ids;
+}
+
+
+/** Reads settings without parsing or changing stored-schema compatibility. */
+export function getSponsorshipSettings(schema: unknown): Partial<SponsorshipSettings> {
+  return (schema as { sponsorshipSettings?: Partial<SponsorshipSettings> } | null)?.sponsorshipSettings ?? {};
+}
+
+/** Keep the steps-only field walker, duplicate ids and previous-field order. */
+export function removedFieldIds(previous: unknown, next: unknown): string[] {
+  const nextIds = extractFieldIds(next);
+  return extractFieldIds(previous).filter((fieldId) => !nextIds.includes(fieldId));
+}
+
+/** Sponsor settings are a shallow patch; schema fields keep their values. */
+export function mergeSponsorshipSettings(
+  schema: SponsorFormSchemaJson,
+  settings: UpdateSponsorshipSettingsInput,
+): SponsorFormSchemaJson {
+  return { ...schema, sponsorshipSettings: { ...schema.sponsorshipSettings, ...settings } };
 }

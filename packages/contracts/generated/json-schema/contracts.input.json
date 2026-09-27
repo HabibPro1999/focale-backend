@@ -1428,16 +1428,7 @@
       "properties": {
         "paymentStatus": {
           "items": {
-            "enum": [
-              "PENDING",
-              "VERIFYING",
-              "PARTIAL",
-              "PAID",
-              "SPONSORED",
-              "WAIVED",
-              "REFUNDED"
-            ],
-            "type": "string"
+            "$ref": "#/$defs/PaymentStatusSchema"
           },
           "type": "array"
         },
@@ -1451,14 +1442,7 @@
         },
         "role": {
           "items": {
-            "enum": [
-              "PARTICIPANT",
-              "SPEAKER",
-              "MODERATOR",
-              "ORGANIZER",
-              "INVITED"
-            ],
-            "type": "string"
+            "$ref": "#/$defs/RegistrationRoleSchema"
           },
           "type": "array"
         }

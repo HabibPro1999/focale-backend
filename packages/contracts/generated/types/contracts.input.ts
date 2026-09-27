@@ -319,9 +319,9 @@ export type BulkSendEmail = {
 };
 
 export type BulkSendFilter = {
-  paymentStatus?: Array<"PENDING" | "VERIFYING" | "PARTIAL" | "PAID" | "SPONSORED" | "WAIVED" | "REFUNDED">;
+  paymentStatus?: PaymentStatus[];
   accessTypeIds?: string[];
-  role?: Array<"PARTICIPANT" | "SPEAKER" | "MODERATOR" | "ORGANIZER" | "INVITED">;
+  role?: RegistrationRole[];
 };
 
 export type BulkSendParam = {

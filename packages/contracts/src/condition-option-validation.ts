@@ -14,9 +14,9 @@
  *
  * Design decisions:
  * - Structurally typed, defensive walk of the form schema (`unknown` in,
- *   `Map` out) — mirrors `modules/forms/form-data-validator.ts`'s
+ *   `Map` out) — mirrors `@app/shared` form-data-validator's
  *   `extractSchemaSteps`. Never imports from `@forms`: this lives in
- *   `shared/` and is called from both the pricing and access modules, so it
+ *   `contracts/` and is called from both the pricing and access modules, so it
  *   must stay free of any single module's types.
  * - Only fields that declare a non-empty `options` array enter the index —
  *   text/number/date/... fields have no option ids to check a condition

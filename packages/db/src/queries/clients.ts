@@ -4,6 +4,7 @@ import { clients, users } from "../schema/users-clients";
 import { events } from "../schema/events-access";
 
 export type ClientRow = typeof clients.$inferSelect;
+export type ClientModuleGate = Pick<ClientRow, "active" | "enabledModules">;
 
 /** Resolved create payload (optional cols already coerced to null / defaulted upstream). */
 export type InsertClientData = {
