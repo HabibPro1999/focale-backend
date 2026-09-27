@@ -1,17 +1,6 @@
 import "reflect-metadata";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Module } from "@nestjs/common";
-import {
-  APP_FILTER,
-  APP_INTERCEPTOR,
-  APP_PIPE,
-  NestFactory,
-  Reflector,
-} from "@nestjs/core";
-import {
-  FastifyAdapter,
-  type NestFastifyApplication,
-} from "@nestjs/platform-fastify";
+import type { NestFastifyApplication } from "@nestjs/platform-fastify";
 import { ErrorCodes, UserRole } from "@app/contracts";
 import type { ClientRow } from "@app/db";
 
@@ -30,19 +19,14 @@ vi.mock("@app/db", () => ({
   pgUniqueViolation: () => null,
 }));
 
-import { getUserWithClientById } from "@app/db";
-import { clearUserCache } from "../../core/auth/user-cache";
-import { ZodValidationPipe } from "../../core/zod";
-import { EnvelopeInterceptor } from "../../core/envelope.interceptor";
-import { HttpExceptionFilter } from "../../core/http-exception.filter";
+import { authAs } from "../../testing/auth";
+import { createTestApp } from "../../testing/create-test-app";
 import { ClientsController } from "./clients.controller";
 import { ClientsService } from "./clients.service";
 
-const getUser = vi.mocked(getUserWithClientById);
-
 const clientId = "11111111-1111-4111-8111-111111111111";
 const otherClientId = "22222222-2222-4222-8222-222222222222";
-const AUTH = { authorization: "Bearer test" };
+let AUTH: ReturnType<typeof authAs>;
 
 function makeClient(overrides: Partial<ClientRow> = {}): ClientRow {
   return {
@@ -60,25 +44,6 @@ function makeClient(overrides: Partial<ClientRow> = {}): ClientRow {
   };
 }
 
-/** A user row (+ joined client) as getUserWithClientById returns it. */
-function dbUser(
-  role: number,
-  userClientId: string | null,
-  client: ClientRow | null,
-) {
-  return {
-    id: "u1",
-    email: "u1@example.com",
-    name: "User One",
-    role,
-    clientId: userClientId,
-    active: true,
-    createdAt: new Date("2024-01-01T00:00:00Z"),
-    updatedAt: new Date("2024-01-01T00:00:00Z"),
-    client,
-  };
-}
-
 const service = {
   create: vi.fn(),
   getById: vi.fn(),
@@ -87,34 +52,18 @@ const service = {
   remove: vi.fn(),
 };
 
-@Module({
-  controllers: [ClientsController],
-  providers: [
-    { provide: ClientsService, useValue: service },
-    Reflector,
-    { provide: APP_PIPE, useClass: ZodValidationPipe },
-    { provide: APP_INTERCEPTOR, useClass: EnvelopeInterceptor },
-    { provide: APP_FILTER, useClass: HttpExceptionFilter },
-  ],
-})
-class TestClientsModule {}
-
 describe("ClientsController (routes)", () => {
   let app: NestFastifyApplication;
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    clearUserCache();
     // Default caller: super admin (no client).
-    getUser.mockResolvedValue(dbUser(UserRole.SUPER_ADMIN, null, null));
+    AUTH = authAs(UserRole.SUPER_ADMIN);
 
-    app = await NestFactory.create<NestFastifyApplication>(
-      TestClientsModule,
-      new FastifyAdapter(),
-      { logger: false },
-    );
-    await app.init();
-    await app.getHttpAdapter().getInstance().ready();
+    app = await createTestApp({
+      controllers: [ClientsController],
+      providers: [{ provide: ClientsService, useValue: service }],
+    });
   });
 
   afterEach(async () => {
@@ -124,7 +73,7 @@ describe("ClientsController (routes)", () => {
   describe("GET /api/clients/me", () => {
     it("returns the attached client without calling the service", async () => {
       const client = makeClient({ active: true });
-      getUser.mockResolvedValue(dbUser(UserRole.CLIENT_ADMIN, clientId, client));
+      authAs(UserRole.CLIENT_ADMIN, clientId, { client });
 
       const res = await app.inject({
         method: "GET",
@@ -139,9 +88,7 @@ describe("ClientsController (routes)", () => {
 
     it("is rejected (403) before the handler when the tenant is inactive", async () => {
       const inactive = makeClient({ active: false });
-      getUser.mockResolvedValue(
-        dbUser(UserRole.CLIENT_ADMIN, clientId, inactive),
-      );
+      authAs(UserRole.CLIENT_ADMIN, clientId, { client: inactive });
 
       const res = await app.inject({
         method: "GET",
@@ -157,9 +104,7 @@ describe("ClientsController (routes)", () => {
 
   describe("GET /api/clients/:id", () => {
     it("lets a client admin read their own client without a service call", async () => {
-      getUser.mockResolvedValue(
-        dbUser(UserRole.CLIENT_ADMIN, clientId, makeClient()),
-      );
+      authAs(UserRole.CLIENT_ADMIN, clientId, { client: makeClient() });
 
       const res = await app.inject({
         method: "GET",
@@ -172,9 +117,7 @@ describe("ClientsController (routes)", () => {
     });
 
     it("rejects a client admin reading another client (403, no service call)", async () => {
-      getUser.mockResolvedValue(
-        dbUser(UserRole.CLIENT_ADMIN, clientId, makeClient()),
-      );
+      authAs(UserRole.CLIENT_ADMIN, clientId, { client: makeClient() });
 
       const res = await app.inject({
         method: "GET",
@@ -187,7 +130,7 @@ describe("ClientsController (routes)", () => {
     });
 
     it("lets a super admin read an inactive client via the service", async () => {
-      getUser.mockResolvedValue(dbUser(UserRole.SUPER_ADMIN, null, null));
+      AUTH = authAs(UserRole.SUPER_ADMIN);
       service.getById.mockResolvedValue(makeClient({ active: false }));
 
       const res = await app.inject({
@@ -290,9 +233,7 @@ describe("ClientsController (routes)", () => {
     });
 
     it("rejects a client admin from a super-admin-only mutation (403)", async () => {
-      getUser.mockResolvedValue(
-        dbUser(UserRole.CLIENT_ADMIN, clientId, makeClient()),
-      );
+      authAs(UserRole.CLIENT_ADMIN, clientId, { client: makeClient() });
 
       const res = await app.inject({
         method: "PATCH",
