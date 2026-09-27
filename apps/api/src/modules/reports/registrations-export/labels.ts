@@ -82,6 +82,10 @@ export const PAYMENT_STATUS_LABELS: Record<string, Record<ExportLanguage, string
   REFUNDED: { fr: "Remboursé", en: "Refunded", ar: "مسترد" },
 };
 
+export const PAYMENT_STATUS_FR: Record<string, string> = Object.fromEntries(
+  Object.entries(PAYMENT_STATUS_LABELS).map(([status, labels]) => [status, labels.fr]),
+);
+
 export const PAYMENT_METHOD_LABELS: Record<string, Record<ExportLanguage, string>> = {
   BANK_TRANSFER: { fr: "Virement", en: "Bank transfer", ar: "تحويل" },
   ONLINE: { fr: "En ligne", en: "Online", ar: "عبر الإنترنت" },

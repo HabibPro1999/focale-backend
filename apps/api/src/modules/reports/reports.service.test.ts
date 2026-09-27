@@ -21,7 +21,6 @@ vi.mock("@app/db", () => ({
   getEventAnalyticsData: vi.fn(),
   getAccessRegistrantsData: vi.fn(),
   // CSV/JSON/XLSX export
-  getEventSlug: vi.fn(),
   getRegistrationsForExport: vi.fn(),
   // Pulled in transitively by the generators/builder (unused in these tests).
   getEventSummaryData: vi.fn(),
@@ -367,7 +366,7 @@ describe("exportRegistrations", () => {
   const eventId = "evt-003";
 
   it("throws 404 when the event does not exist", async () => {
-    m.getEventSlug.mockResolvedValue(null);
+    m.getEventSlugAndName.mockResolvedValue(null);
 
     await expect(
       service.exportRegistrations(eventId, { format: "csv" }),
@@ -375,7 +374,7 @@ describe("exportRegistrations", () => {
   });
 
   it("exports as JSON when format is json", async () => {
-    m.getEventSlug.mockResolvedValue({ slug: "my-event" });
+    m.getEventSlugAndName.mockResolvedValue({ slug: "my-event" });
     m.getRegistrationsForExport.mockResolvedValue([]);
 
     const result = await service.exportRegistrations(eventId, { format: "json" });
@@ -386,7 +385,7 @@ describe("exportRegistrations", () => {
   });
 
   it("exports CSV with correct headers and data (incl. dynamic formData key)", async () => {
-    m.getEventSlug.mockResolvedValue({ slug: "test-event" });
+    m.getEventSlugAndName.mockResolvedValue({ slug: "test-event" });
     m.getRegistrationsForExport.mockResolvedValue([
       {
         id: "reg-1",
@@ -424,7 +423,7 @@ describe("exportRegistrations", () => {
   });
 
   it("collects the alphabetical union of dynamic formData keys across rows", async () => {
-    m.getEventSlug.mockResolvedValue({ slug: "evt" });
+    m.getEventSlugAndName.mockResolvedValue({ slug: "evt" });
     m.getRegistrationsForExport.mockResolvedValue([
       baseRow({ id: "r-1", email: "a@b.com", formData: { city: "Tunis" } }),
       baseRow({
@@ -443,7 +442,7 @@ describe("exportRegistrations", () => {
   });
 
   it("propagates date range filters to the registration fetch", async () => {
-    m.getEventSlug.mockResolvedValue({ slug: "evt" });
+    m.getEventSlugAndName.mockResolvedValue({ slug: "evt" });
     m.getRegistrationsForExport.mockResolvedValue([]);
 
     await service.exportRegistrations(eventId, {
@@ -452,7 +451,7 @@ describe("exportRegistrations", () => {
       endDate: "2025-01-31T23:59:59.000Z",
     });
 
-    expect(m.getEventSlug).toHaveBeenCalledWith(eventId, EXPORT_TX);
+    expect(m.getEventSlugAndName).toHaveBeenCalledWith(eventId, EXPORT_TX);
     expect(m.getRegistrationsForExport).toHaveBeenCalledWith(
       eventId,
       expect.objectContaining({
@@ -464,7 +463,7 @@ describe("exportRegistrations", () => {
   });
 
   it("escapes formula-injection strings in XLSX cells", async () => {
-    m.getEventSlug.mockResolvedValue({ slug: "evt" });
+    m.getEventSlugAndName.mockResolvedValue({ slug: "evt" });
     m.getRegistrationsForExport.mockResolvedValue([
       baseRow({
         id: "r-1",

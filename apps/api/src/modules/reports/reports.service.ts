@@ -10,7 +10,7 @@ import {
   getDailyTrendRows,
   getEventAnalyticsData,
   getAccessRegistrantsData,
-  getEventSlug,
+  getEventSlugAndName,
   getRegistrationsForExport,
   withExportStatementTimeout,
   type DateRange,
@@ -198,7 +198,7 @@ export class ReportsService {
     // Export fetches run under the export statement timeout. Fail fast —
     // verify the event exists before querying registrations.
     const { event, registrations } = await withExportStatementTimeout(async (tx) => {
-      const found = await getEventSlug(eventId, tx);
+      const found = await getEventSlugAndName(eventId, tx);
       if (!found) return { event: null, registrations: [] };
       const rows = await getRegistrationsForExport(
         eventId,
