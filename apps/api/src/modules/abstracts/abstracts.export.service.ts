@@ -1,7 +1,14 @@
-import ExcelJS from "exceljs";
+import type ExcelJS from "exceljs";
 import { findAbstractsForExport } from "@app/db";
 import { escapeExcelRow } from "../reports/excel-safety";
-import { formatDateTime } from "../reports/excel-generator";
+import {
+  dateStamp,
+  formatDateTime,
+  newWorkbook,
+  styleHeaderRow,
+  THIN_BORDER,
+  toXlsxBuffer,
+} from "../reports/excel-style";
 import { getAbstractTitle as getTitle } from "@app/shared";
 import { reviewScoreSpread } from "./abstracts.admin.service";
 import { getAuthorLine } from "@app/shared";
@@ -33,28 +40,9 @@ export async function exportAbstractsWorkbook(
     0,
   );
 
-  const workbook = new ExcelJS.Workbook();
-  workbook.creator = "Focale OS";
-  workbook.created = new Date();
+  const workbook = newWorkbook();
 
   const sheet = workbook.addWorksheet("Résumés");
-
-  const headerFill: ExcelJS.Fill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: { argb: "FF1F4E79" },
-  };
-  const headerFont: Partial<ExcelJS.Font> = {
-    bold: true,
-    color: { argb: "FFFFFFFF" },
-    size: 11,
-  };
-  const border: Partial<ExcelJS.Borders> = {
-    top: { style: "thin" },
-    left: { style: "thin" },
-    bottom: { style: "thin" },
-    right: { style: "thin" },
-  };
 
   const baseColumns = [
     "Code",
@@ -86,11 +74,7 @@ export async function exportAbstractsWorkbook(
   const columns = [...baseColumns, ...reviewColumns, ...trailingColumns];
 
   const headerRow = sheet.addRow(escapeExcelRow(columns));
-  headerRow.eachCell((cell) => {
-    cell.fill = headerFill;
-    cell.font = headerFont;
-    cell.border = border;
-  });
+  styleHeaderRow(headerRow);
 
   for (const abstract of abstracts) {
     const scoredCount = abstract.reviews.filter(
@@ -138,7 +122,7 @@ export async function exportAbstractsWorkbook(
 
     const row = sheet.addRow(escapeExcelRow(rowValues));
     row.eachCell((cell) => {
-      cell.border = border;
+      cell.border = THIN_BORDER;
     });
   }
 
@@ -178,8 +162,8 @@ export async function exportAbstractsWorkbook(
 
   sheet.views = [{ state: "frozen", ySplit: 1 }];
 
-  const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
-  const timestamp = new Date().toISOString().split("T")[0];
+  const buffer = await toXlsxBuffer(workbook);
+  const timestamp = dateStamp();
 
   return {
     filename: `${eventSlug}-resumes-${timestamp}.xlsx`,
