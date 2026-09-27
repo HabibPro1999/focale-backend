@@ -16,12 +16,6 @@ export const ReportQuerySchema = z.strictObject({
   endDate: z.string().datetime().optional(),
 });
 
-export const ExportQuerySchema = z.strictObject({
-  startDate: z.string().datetime().optional(),
-  endDate: z.string().datetime().optional(),
-  format: z.enum(["csv", "json", "xlsx"]).default("csv"),
-});
-
 export const ExportRegistrationsQuerySchema = z.strictObject({
   startDate: z.string().datetime().optional(),
   endDate: z.string().datetime().optional(),
@@ -267,7 +261,6 @@ export const AccessRegistrantsResponseSchema = z.object({
 // ============================================================================
 
 export type ReportQuery = z.infer<typeof ReportQuerySchema>;
-export type ExportQuery = z.infer<typeof ExportQuerySchema>;
 export type ExportRegistrationsQuery = z.infer<typeof ExportRegistrationsQuerySchema>;
 export type ExportSponsorshipsQuery = z.infer<typeof ExportSponsorshipsQuerySchema>;
 export type ExportRegistrationsBody = z.infer<typeof ExportRegistrationsBodySchema>;

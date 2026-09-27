@@ -20,7 +20,5 @@ import {
     RegistrationEditPublicController,
   ],
   providers: [RegistrationsService],
-  // Exported so certificates/reports/sponsorships can consume registration reads.
-  exports: [RegistrationsService],
 })
 export class RegistrationsModule {}

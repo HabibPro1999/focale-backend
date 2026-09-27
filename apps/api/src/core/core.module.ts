@@ -1,8 +1,7 @@
 import { Global, Module, type DynamicModule } from "@nestjs/common";
-import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, APP_PIPE, Reflector } from "@nestjs/core";
+import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, APP_PIPE } from "@nestjs/core";
 import { ThrottlerModule } from "@nestjs/throttler";
 import { CONFIG, type Config } from "./config";
-import { LoggerService } from "./logger.service";
 import { ZodValidationPipe } from "./zod";
 import { EnvelopeInterceptor } from "./envelope.interceptor";
 import { HttpExceptionFilter } from "./http-exception.filter";
@@ -25,15 +24,13 @@ import { ShutdownCoordinator } from "./shutdown";
     }),
   ],
   providers: [
-    LoggerService,
     ShutdownCoordinator,
-    Reflector,
     { provide: APP_PIPE, useClass: ZodValidationPipe },
     { provide: APP_INTERCEPTOR, useClass: EnvelopeInterceptor },
     { provide: APP_FILTER, useClass: HttpExceptionFilter },
     { provide: APP_GUARD, useClass: NetworkingThrottlerGuard },
   ],
-  exports: [LoggerService, ShutdownCoordinator],
+  exports: [ShutdownCoordinator],
 })
 export class CoreModule {
   /** The config parsed once at boot (getConfig) becomes the CONFIG provider. */

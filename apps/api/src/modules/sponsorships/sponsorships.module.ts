@@ -17,8 +17,5 @@ import { SponsorshipsService } from "./sponsorships.service";
     SponsorshipsPublicController,
   ],
   providers: [SponsorshipsService],
-  // Exported so the registrations module (wave-3) can inject the link/unlink/
-  // recalc helpers and run them inside its own transaction.
-  exports: [SponsorshipsService],
 })
 export class SponsorshipsModule {}
