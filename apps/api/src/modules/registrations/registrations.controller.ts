@@ -1,15 +1,16 @@
+import { assertOwned } from "../../core/tenancy/ownership";
 import { Body, Controller, Delete, Get, Header, HttpCode, Ip, Param, Patch, Post, Put, Query, Res } from "@nestjs/common";
 import type { FastifyReply } from "fastify";
-import { ErrorCodes, UserRole } from "@app/contracts";
+import { UserRole } from "@app/contracts";
 import { getEventForRegistrationAdmin } from "@app/db";
 import { getStorageProvider, extractStorageKeyFromUrl } from "@app/integrations";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
-import { assertEventWritable } from "../events";
-import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
-import { assertClientModuleEnabled } from "../clients/module-gates";
-import { forbidden, notFound } from "../../core/app-exception";
+import { assertEventWritable } from "../../core/tenancy/event-status";
+import type { AuthUser } from "../../core/auth/user-cache";
+import { assertClientModuleEnabled } from "../../core/tenancy/module-gates";
+import { notFound } from "../../core/app-exception";
 import { RegistrationsService } from "./registrations.service";
 import {
   AdminCreateRegistrationDto,
@@ -26,18 +27,24 @@ import {
   UpdateRegistrationDto,
 } from "./registrations.dto";
 
+async function requireRegistrationClientId(service: RegistrationsService, id: string, user: AuthUser) {
+  const owner = await assertOwned(user, async () => {
+    const clientId = await service.getRegistrationClientId(id);
+    // Preserve this lookup's exact null check (an empty string is not missing).
+    return clientId === null ? null : { clientId };
+  }, (owner) => owner.clientId, { notFound: "Registration not found" });
+  return owner.clientId;
+}
+
 @Controller("api/events")
 @Auth()
 export class RegistrationsController {
   constructor(private readonly service: RegistrationsService) {}
 
   private async loadEvent(eventId: string, user: AuthUser) {
-    const event = await getEventForRegistrationAdmin(eventId);
-    if (!event) {
-      throw notFound("Event not found");
-    }
-    if (!canAccessClient(user, event.clientId)) forbidden();
-    return event;
+    return assertOwned(user, () => getEventForRegistrationAdmin(eventId), (event) => event.clientId, {
+      notFound: "Event not found",
+    });
   }
 
   // GET /api/events/:eventId/registrations/columns
@@ -110,11 +117,9 @@ export class RegistrationsController {
     @Param() { id }: RegistrationIdParamDto,
     @CurrentUser() user: AuthUser,
   ) {
-    const registration = await this.service.getRegistrationById(id);
-    if (!registration) {
-      throw notFound("Registration not found");
-    }
-    if (!canAccessClient(user, registration.event.clientId)) forbidden();
+    const registration = await assertOwned(user, () => this.service.getRegistrationById(id), (registration) => registration.event.clientId, {
+      notFound: "Registration not found",
+    });
     return registration;
   }
 
@@ -125,11 +130,7 @@ export class RegistrationsController {
     @Body() body: UpdateRegistrationDto,
     @CurrentUser() user: AuthUser,
   ) {
-    const clientId = await this.service.getRegistrationClientId(id);
-    if (clientId === null) {
-      throw notFound("Registration not found");
-    }
-    if (!canAccessClient(user, clientId)) forbidden();
+    const clientId = await requireRegistrationClientId(this.service, id, user);
     await assertClientModuleEnabled(clientId, "registrations");
     return this.service.updateRegistration(id, body, user.id);
   }
@@ -143,11 +144,7 @@ export class RegistrationsController {
     @Query() { force }: DeleteRegistrationQueryDto,
     @CurrentUser() user: AuthUser,
   ) {
-    const clientId = await this.service.getRegistrationClientId(id);
-    if (clientId === null) {
-      throw notFound("Registration not found");
-    }
-    if (!canAccessClient(user, clientId)) forbidden();
+    const clientId = await requireRegistrationClientId(this.service, id, user);
     await assertClientModuleEnabled(clientId, "registrations");
     await this.service.deleteRegistration(id, user.id, force, user.role);
   }
@@ -161,11 +158,7 @@ export class RegistrationsController {
     @CurrentUser() user: AuthUser,
     @Ip() ip: string,
   ) {
-    const clientId = await this.service.getRegistrationClientId(id);
-    if (clientId === null) {
-      throw notFound("Registration not found");
-    }
-    if (!canAccessClient(user, clientId)) forbidden();
+    const clientId = await requireRegistrationClientId(this.service, id, user);
     await assertClientModuleEnabled(clientId, "registrations");
     return this.service.confirmPayment(id, body, user.id, ip);
   }
@@ -177,11 +170,7 @@ export class RegistrationsController {
     @Query() query: ListRegistrationAuditLogsQueryDto,
     @CurrentUser() user: AuthUser,
   ) {
-    const clientId = await this.service.getRegistrationClientId(id);
-    if (clientId === null) {
-      throw notFound("Registration not found");
-    }
-    if (!canAccessClient(user, clientId)) forbidden();
+    const clientId = await requireRegistrationClientId(this.service, id, user);
     return this.service.listRegistrationAuditLogs(id, query);
   }
 
@@ -192,11 +181,7 @@ export class RegistrationsController {
     @Query() query: ListRegistrationEmailLogsQueryDto,
     @CurrentUser() user: AuthUser,
   ) {
-    const clientId = await this.service.getRegistrationClientId(id);
-    if (clientId === null) {
-      throw notFound("Registration not found");
-    }
-    if (!canAccessClient(user, clientId)) forbidden();
+    const clientId = await requireRegistrationClientId(this.service, id, user);
     return this.service.listRegistrationEmailLogs(id, query);
   }
 
@@ -211,11 +196,9 @@ export class RegistrationsController {
     @CurrentUser() user: AuthUser,
     @Res() reply: FastifyReply,
   ) {
-    const registration = await this.service.getRegistrationById(id);
-    if (!registration) {
-      throw notFound("Registration not found");
-    }
-    if (!canAccessClient(user, registration.event.clientId)) forbidden();
+    const registration = await assertOwned(user, () => this.service.getRegistrationById(id), (registration) => registration.event.clientId, {
+      notFound: "Registration not found",
+    });
     if (!registration.paymentProofUrl) {
       throw notFound("No payment proof uploaded");
     }
@@ -259,11 +242,7 @@ export class RegistrationEditLinkController {
     @CurrentUser() user: AuthUser,
     @Ip() ip: string,
   ) {
-    const clientId = await this.service.getRegistrationClientId(id);
-    if (clientId === null) {
-      throw notFound("Registration not found");
-    }
-    if (!canAccessClient(user, clientId)) forbidden();
+    const clientId = await requireRegistrationClientId(this.service, id, user);
     return this.service.issueSelfEditLink(id, user.id, ip);
   }
 }

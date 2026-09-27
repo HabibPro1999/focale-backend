@@ -1,4 +1,5 @@
-import { notFound, badRequest } from "../../core/app-exception";
+import { assertOwned } from "../../core/tenancy/ownership";
+import { badRequest } from "../../core/app-exception";
 import { Body, Controller, Delete, ForbiddenException, Get, HttpCode, Param, Patch, Post, Query, Req } from "@nestjs/common";
 import type { FastifyRequest } from "fastify";
 import { ErrorCodes, UserRole } from "@app/contracts";
@@ -6,7 +7,7 @@ import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { EventsService } from "./events.service";
-import { assertEventWritable } from "./index";
+import { assertEventWritable } from "../../core/tenancy/event-status";
 import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
 import {
   CreateEventDto,
@@ -48,12 +49,10 @@ export class EventsController {
   /** assertAdmin → fetch (404) → ownership (403, per-action message). */
   private async requireOwnedEvent(u: AuthUser, id: string, action: string) {
     assertAdmin(u);
-    const event = await this.events.getEventById(id);
-    if (!event) throw notFound("Event not found");
-    if (!canAccessClient(u, event.clientId)) {
-      throw forbidden(`Insufficient permissions to ${action} this event`);
-    }
-    return event;
+    return assertOwned(u, () => this.events.getEventById(id), (event) => event.clientId, {
+      notFound: "Event not found",
+      forbidden: () => forbidden(`Insufficient permissions to ${action} this event`),
+    });
   }
 
   @Post()
