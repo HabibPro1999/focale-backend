@@ -11,7 +11,9 @@ import { assertEventWritable } from "../../core/tenancy/event-status";
 import type { AuthUser } from "../../core/auth/user-cache";
 import { assertClientModuleEnabled } from "../../core/tenancy/module-gates";
 import { notFound } from "../../core/app-exception";
-import { RegistrationsService } from "./registrations.service";
+import { RegistrationsReadService } from "./registrations.read.service";
+import { RegistrationsCreateService } from "./registrations.create.service";
+import { RegistrationsAdminService } from "./registrations.admin.service";
 import {
   AdminCreateRegistrationDto,
   AdminEditRegistrationDto,
@@ -27,7 +29,7 @@ import {
   UpdateRegistrationDto,
 } from "./registrations.dto";
 
-async function requireRegistrationClientId(service: RegistrationsService, id: string, user: AuthUser) {
+async function requireRegistrationClientId(service: RegistrationsReadService, id: string, user: AuthUser) {
   const owner = await assertOwned(user, async () => {
     const clientId = await service.getRegistrationClientId(id);
     // Preserve this lookup's exact null check (an empty string is not missing).
@@ -39,7 +41,11 @@ async function requireRegistrationClientId(service: RegistrationsService, id: st
 @Controller("api/events")
 @Auth()
 export class RegistrationsController {
-  constructor(private readonly service: RegistrationsService) {}
+  constructor(
+    private readonly read: RegistrationsReadService,
+    private readonly create: RegistrationsCreateService,
+    private readonly admin: RegistrationsAdminService,
+  ) {}
 
   private async loadEvent(eventId: string, user: AuthUser) {
     return assertOwned(user, () => getEventForRegistrationAdmin(eventId), (event) => event.clientId, {
@@ -54,7 +60,7 @@ export class RegistrationsController {
     @CurrentUser() user: AuthUser,
   ) {
     await this.loadEvent(eventId, user);
-    return this.service.getRegistrationTableColumns(eventId);
+    return this.read.getRegistrationTableColumns(eventId);
   }
 
   // GET /api/events/:eventId/registrants/search
@@ -65,7 +71,7 @@ export class RegistrationsController {
     @CurrentUser() user: AuthUser,
   ) {
     await this.loadEvent(eventId, user);
-    return this.service.searchRegistrantsForSponsorship(eventId, query);
+    return this.read.searchRegistrantsForSponsorship(eventId, query);
   }
 
   // POST /api/events/:eventId/admin/registrations
@@ -80,7 +86,7 @@ export class RegistrationsController {
     assertEventWritable(event);
     await assertClientModuleEnabled(event.clientId, "registrations");
     await assertClientModuleEnabled(event.clientId, "pricing");
-    return this.service.createAdminRegistration(eventId, body, user.id);
+    return this.create.createAdminRegistration(eventId, body, user.id);
   }
 
   // PUT /api/events/:eventId/registrations/:id/admin-edit — requires admin role.
@@ -97,7 +103,7 @@ export class RegistrationsController {
     if (body.accessSelections !== undefined) {
       await assertClientModuleEnabled(event.clientId, "pricing");
     }
-    return this.service.adminEditRegistration(eventId, id, body, user.id);
+    return this.admin.adminEditRegistration(eventId, id, body, user.id);
   }
 
   // GET /api/events/:eventId/registrations — list
@@ -108,7 +114,7 @@ export class RegistrationsController {
     @CurrentUser() user: AuthUser,
   ) {
     await this.loadEvent(eventId, user);
-    return this.service.listRegistrations(eventId, query);
+    return this.read.listRegistrations(eventId, query);
   }
 
   // GET /api/events/registrations/:id
@@ -117,7 +123,7 @@ export class RegistrationsController {
     @Param() { id }: RegistrationIdParamDto,
     @CurrentUser() user: AuthUser,
   ) {
-    const registration = await assertOwned(user, () => this.service.getRegistrationById(id), (registration) => registration.event.clientId, {
+    const registration = await assertOwned(user, () => this.read.getRegistrationById(id), (registration) => registration.event.clientId, {
       notFound: "Registration not found",
     });
     return registration;
@@ -130,9 +136,9 @@ export class RegistrationsController {
     @Body() body: UpdateRegistrationDto,
     @CurrentUser() user: AuthUser,
   ) {
-    const clientId = await requireRegistrationClientId(this.service, id, user);
+    const clientId = await requireRegistrationClientId(this.read, id, user);
     await assertClientModuleEnabled(clientId, "registrations");
-    return this.service.updateRegistration(id, body, user.id);
+    return this.admin.updateRegistration(id, body, user.id);
   }
 
   // DELETE /api/events/registrations/:id
@@ -144,9 +150,9 @@ export class RegistrationsController {
     @Query() { force }: DeleteRegistrationQueryDto,
     @CurrentUser() user: AuthUser,
   ) {
-    const clientId = await requireRegistrationClientId(this.service, id, user);
+    const clientId = await requireRegistrationClientId(this.read, id, user);
     await assertClientModuleEnabled(clientId, "registrations");
-    await this.service.deleteRegistration(id, user.id, force, user.role);
+    await this.admin.deleteRegistration(id, user.id, force, user.role);
   }
 
   // POST /api/events/registrations/:id/confirm — confirm payment
@@ -158,9 +164,9 @@ export class RegistrationsController {
     @CurrentUser() user: AuthUser,
     @Ip() ip: string,
   ) {
-    const clientId = await requireRegistrationClientId(this.service, id, user);
+    const clientId = await requireRegistrationClientId(this.read, id, user);
     await assertClientModuleEnabled(clientId, "registrations");
-    return this.service.confirmPayment(id, body, user.id, ip);
+    return this.admin.confirmPayment(id, body, user.id, ip);
   }
 
   // GET /api/events/registrations/:id/audit-logs
@@ -170,8 +176,8 @@ export class RegistrationsController {
     @Query() query: ListRegistrationAuditLogsQueryDto,
     @CurrentUser() user: AuthUser,
   ) {
-    const clientId = await requireRegistrationClientId(this.service, id, user);
-    return this.service.listRegistrationAuditLogs(id, query);
+    const clientId = await requireRegistrationClientId(this.read, id, user);
+    return this.read.listRegistrationAuditLogs(id, query);
   }
 
   // GET /api/events/registrations/:id/email-logs
@@ -181,8 +187,8 @@ export class RegistrationsController {
     @Query() query: ListRegistrationEmailLogsQueryDto,
     @CurrentUser() user: AuthUser,
   ) {
-    const clientId = await requireRegistrationClientId(this.service, id, user);
-    return this.service.listRegistrationEmailLogs(id, query);
+    const clientId = await requireRegistrationClientId(this.read, id, user);
+    return this.read.listRegistrationEmailLogs(id, query);
   }
 
   // GET /api/events/registrations/:id/payment-proof — proxy the file bytes.
@@ -196,7 +202,7 @@ export class RegistrationsController {
     @CurrentUser() user: AuthUser,
     @Res() reply: FastifyReply,
   ) {
-    const registration = await assertOwned(user, () => this.service.getRegistrationById(id), (registration) => registration.event.clientId, {
+    const registration = await assertOwned(user, () => this.read.getRegistrationById(id), (registration) => registration.event.clientId, {
       notFound: "Registration not found",
     });
     if (!registration.paymentProofUrl) {
@@ -230,7 +236,7 @@ export class RegistrationsController {
 @Controller("api/registrations")
 @Auth()
 export class RegistrationEditLinkController {
-  constructor(private readonly service: RegistrationsService) {}
+  constructor(private readonly read: RegistrationsReadService) {}
 
   // GET /api/registrations/:id/edit-link — the registrant's self-edit link.
   // Same auth + tenant scoping as GET /api/events/registrations/:id (404 when
@@ -242,7 +248,7 @@ export class RegistrationEditLinkController {
     @CurrentUser() user: AuthUser,
     @Ip() ip: string,
   ) {
-    const clientId = await requireRegistrationClientId(this.service, id, user);
-    return this.service.issueSelfEditLink(id, user.id, ip);
+    const clientId = await requireRegistrationClientId(this.read, id, user);
+    return this.read.issueSelfEditLink(id, user.id, ip);
   }
 }

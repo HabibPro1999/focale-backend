@@ -73,7 +73,11 @@ vi.mock("file-type", () => ft);
 import { calculateSettlement } from "@app/shared";
 import { validateSelections } from "../access/access-validation";
 import { CheckinService } from "../checkin/checkin.service";
-import { RegistrationsService } from "./registrations.service";
+import { RegistrationsReadService } from "./registrations.read.service";
+import { RegistrationsCreateService } from "./registrations.create.service";
+import { RegistrationsAdminService } from "./registrations.admin.service";
+import { RegistrationSelfService } from "./registration-self.service";
+import { RegistrationPaymentProofService } from "./registration-payment-proof.service";
 import { AppException } from "../../core/app-exception";
 import type { Config } from "../../core/config";
 import { AccessService } from "../access/access.service";
@@ -135,8 +139,12 @@ function activeClient() {
   return { active: true, enabledModules: ["registrations", "pricing"] };
 }
 
-describe("RegistrationsService", () => {
-  let service: RegistrationsService;
+describe("registration services", () => {
+  let read: RegistrationsReadService;
+  let create: RegistrationsCreateService;
+  let admin: RegistrationsAdminService;
+  let self: RegistrationSelfService;
+  let proof: RegistrationPaymentProofService;
   let access: {
     assertAccessSelectionRequirement: ReturnType<typeof vi.fn>;
     validateAccessSelections: ReturnType<typeof vi.fn>;
@@ -192,13 +200,13 @@ describe("RegistrationsService", () => {
     };
     pricing = { calculatePrice: vi.fn().mockResolvedValue(emptyBreakdown(100)) };
 
-    service = new RegistrationsService(
-      access as unknown as AccessService,
-      pricing as unknown as PricingService,
-      {
+    read = new RegistrationsReadService();
+    create = new RegistrationsCreateService(access as unknown as AccessService, pricing as unknown as PricingService, {
         publicLinkAllowedOrigins: ["https://events.example.com"],
-      } as Config,
-    );
+      } as Config, read);
+    admin = new RegistrationsAdminService(access as unknown as AccessService, pricing as unknown as PricingService, read);
+    self = new RegistrationSelfService(access as unknown as AccessService, pricing as unknown as PricingService, read);
+    proof = new RegistrationPaymentProofService();
   });
 
   // ---- verifyEditToken -----------------------------------------------------
@@ -206,19 +214,19 @@ describe("RegistrationsService", () => {
     const token = "a".repeat(64);
     it("true for the matching token", async () => {
       db.getRegistrationEditToken.mockResolvedValue({ editToken: token });
-      expect(await service.verifyEditToken("reg1", token)).toBe(true);
+      expect(await self.verifyEditToken("reg1", token)).toBe(true);
     });
     it("false for a wrong token of equal length", async () => {
       db.getRegistrationEditToken.mockResolvedValue({ editToken: token });
-      expect(await service.verifyEditToken("reg1", "b".repeat(64))).toBe(false);
+      expect(await self.verifyEditToken("reg1", "b".repeat(64))).toBe(false);
     });
     it("false when no token is stored", async () => {
       db.getRegistrationEditToken.mockResolvedValue({ editToken: null });
-      expect(await service.verifyEditToken("reg1", token)).toBe(false);
+      expect(await self.verifyEditToken("reg1", token)).toBe(false);
     });
     it("false on a length mismatch (timingSafeEqual throws → caught)", async () => {
       db.getRegistrationEditToken.mockResolvedValue({ editToken: token });
-      expect(await service.verifyEditToken("reg1", "short")).toBe(false);
+      expect(await self.verifyEditToken("reg1", "short")).toBe(false);
     });
   });
 
@@ -226,21 +234,21 @@ describe("RegistrationsService", () => {
   describe("getRegistrationById", () => {
     it("strips editToken and idempotencyKey", async () => {
       db.getRegistrationByIdRow.mockResolvedValue(makeRegRow({ idempotencyKey: "idem-key-1" }));
-      const result = await service.getRegistrationById("reg1");
+      const result = await read.getRegistrationById("reg1");
       expect(result).not.toBeNull();
       expect("editToken" in (result as object)).toBe(false);
       expect("idempotencyKey" in (result as object)).toBe(false);
     });
     it("returns null when missing", async () => {
       db.getRegistrationByIdRow.mockResolvedValue(null);
-      expect(await service.getRegistrationById("nope")).toBeNull();
+      expect(await read.getRegistrationById("nope")).toBeNull();
     });
   });
 
   describe("getRegistrationByIdempotencyKey", () => {
     it("keeps editToken (for the token rename)", async () => {
       db.getRegistrationByIdempotencyKeyRow.mockResolvedValue(makeRegRow());
-      const result = await service.getRegistrationByIdempotencyKey("k");
+      const result = await read.getRegistrationByIdempotencyKey("k");
       expect(result?.editToken).toBe("tok-64");
     });
   });
@@ -249,7 +257,7 @@ describe("RegistrationsService", () => {
   describe("listRegistrations", () => {
     it("preserves later-page metadata and forwards filters with an offset", async () => {
       db.listRegistrationRows.mockResolvedValue({ rows: [], total: 3, stats: [] });
-      const result = await service.listRegistrations("ev1", { page: 2, limit: 2, search: "name", paymentStatus: "PAID" } as never);
+      const result = await read.listRegistrations("ev1", { page: 2, limit: 2, search: "name", paymentStatus: "PAID" } as never);
       expect(db.listRegistrationRows).toHaveBeenCalledWith("ev1", { offset: 2, limit: 2, search: "name", paymentStatus: "PAID" });
       expect(result.meta).toEqual({ page: 2, limit: 2, total: 3, totalPages: 2, hasNext: false, hasPrev: true });
     });
@@ -265,7 +273,7 @@ describe("RegistrationsService", () => {
           { paymentStatus: "REFUNDED", cnt: 1, totalAmount: 30, paidAmount: 0 },
         ],
       });
-      const res = await service.listRegistrations("ev1", { page: 1, limit: 20 } as never);
+      const res = await read.listRegistrations("ev1", { page: 1, limit: 20 } as never);
       expect(res.stats.total).toBe(4);
       expect(res.stats.totalAmount).toBe(250);
       expect(res.stats.paid).toEqual({ count: 1, amount: 90 });
@@ -297,7 +305,7 @@ describe("RegistrationsService", () => {
     });
 
     it("sets paidAmount to the net price when created as PAID", async () => {
-      await service.createAdminRegistration(
+      await create.createAdminRegistration(
         "ev1",
         {
           email: "paid@example.com",
@@ -345,7 +353,7 @@ describe("RegistrationsService", () => {
     it("enforces a required option before persisting a public registration", async () => {
       db.findFormById.mockResolvedValue({ id: "form1", eventId: "ev1", schemaVersion: 3, schema: { settings: { accessSelectionRequired: true } } });
       access.assertAccessSelectionRequirement.mockRejectedValue(new AppException(ErrorCodes.ACCESS_SELECTION_REQUIRED, "Choose an option", 400));
-      await expect(service.createRegistration(baseInput as never, emptyBreakdown(100)))
+      await expect(create.createRegistration(baseInput as never, emptyBreakdown(100)))
         .rejects.toMatchObject({ code: ErrorCodes.ACCESS_SELECTION_REQUIRED });
       expect(access.assertAccessSelectionRequirement).toHaveBeenCalledWith("ev1", {}, [], expect.objectContaining({ settings: { accessSelectionRequired: true } }));
       expect(db.insertRegistrationRow).not.toHaveBeenCalled();
@@ -353,7 +361,7 @@ describe("RegistrationsService", () => {
 
     it("rejects a public linkBaseUrl outside the configured origins", async () => {
       await expect(
-        service.createRegistration(
+        create.createRegistration(
           { ...baseInput, linkBaseUrl: "https://evil.example" } as never,
           emptyBreakdown(100),
         ),
@@ -366,7 +374,7 @@ describe("RegistrationsService", () => {
     });
 
     it("stores gross total so a 40 sponsorship on 100 leaves 60 due", async () => {
-      await service.createRegistration(baseInput as never, {
+      await create.createRegistration(baseInput as never, {
         ...emptyBreakdown(100), sponsorshipTotal: 40, total: 60,
       });
       const stored = db.insertRegistrationRow.mock.calls[0][0];
@@ -375,7 +383,7 @@ describe("RegistrationsService", () => {
     });
 
     it("creates, reserves nothing when no access, increments event, audits, emits, queues email", async () => {
-      const result = await service.createRegistration(baseInput as never, emptyBreakdown(100));
+      const result = await create.createRegistration(baseInput as never, emptyBreakdown(100));
       expect(result.id).toBe("reg1");
       expect(db.insertRegistrationRow).toHaveBeenCalledTimes(1);
       // email normalized lowercase on insert
@@ -393,7 +401,7 @@ describe("RegistrationsService", () => {
         ...baseInput,
         accessSelections: [{ accessId: "acc1", quantity: 2 }],
       } as never;
-      await service.createRegistration(input, emptyBreakdown(100));
+      await create.createRegistration(input, emptyBreakdown(100));
       expect(access.incrementAccessRegisteredCountTx).toHaveBeenCalledWith(
         "acc1",
         2,
@@ -408,14 +416,14 @@ describe("RegistrationsService", () => {
     it("409 on duplicate email+form", async () => {
       db.registrationExistsByEmailForm.mockResolvedValue(true);
       await expect(
-        service.createRegistration(baseInput as never, emptyBreakdown(100)),
+        create.createRegistration(baseInput as never, emptyBreakdown(100)),
       ).rejects.toMatchObject({ code: "REG_8002", statusCode: 409 });
     });
 
     it("404 when form missing", async () => {
       db.findFormById.mockResolvedValue(null);
       await expect(
-        service.createRegistration(baseInput as never, emptyBreakdown(100)),
+        create.createRegistration(baseInput as never, emptyBreakdown(100)),
       ).rejects.toMatchObject({ statusCode: 404 });
     });
 
@@ -429,7 +437,7 @@ describe("RegistrationsService", () => {
         client: activeClient(),
       });
       await expect(
-        service.createRegistration(baseInput as never, emptyBreakdown(100)),
+        create.createRegistration(baseInput as never, emptyBreakdown(100)),
       ).rejects.toMatchObject({ code: "EVT_8002", statusCode: 409 });
     });
 
@@ -444,14 +452,14 @@ describe("RegistrationsService", () => {
       });
       const input = { ...baseInput, paymentMethod: "LAB_SPONSORSHIP", labName: "X" } as never;
       await expect(
-        service.createRegistration(input, emptyBreakdown(100)),
+        create.createRegistration(input, emptyBreakdown(100)),
       ).rejects.toMatchObject({ code: "RES_3003", statusCode: 400 });
     });
 
     it("propagates outbox enqueue failure (rolls back)", async () => {
       db.enqueueTriggeredEmailOutbox.mockRejectedValue(new Error("boom"));
       await expect(
-        service.createRegistration(baseInput as never, emptyBreakdown(100)),
+        create.createRegistration(baseInput as never, emptyBreakdown(100)),
       ).rejects.toThrow("boom");
     });
 
@@ -461,7 +469,7 @@ describe("RegistrationsService", () => {
         constraint: "registrations_email_form_id_key",
       });
       await expect(
-        service.createRegistration(baseInput as never, emptyBreakdown(100)),
+        create.createRegistration(baseInput as never, emptyBreakdown(100)),
       ).rejects.toMatchObject({ code: "REG_8002", statusCode: 409 });
     });
   });
@@ -470,7 +478,7 @@ describe("RegistrationsService", () => {
   describe("createPublicRegistration", () => {
     it("short-circuits to created=false when idempotencyKey already exists", async () => {
       db.getRegistrationByIdempotencyKeyRow.mockResolvedValue(makeRegRow());
-      const res = await service.createPublicRegistration("form1", {
+      const res = await create.createPublicRegistration("form1", {
         idempotencyKey: "11111111-1111-1111-1111-111111111111",
         formData: {},
         email: "a@b.com",
@@ -509,7 +517,7 @@ describe("RegistrationsService", () => {
         constraint: "registrations_idempotency_key_key",
       });
 
-      const res = await service.createPublicRegistration("form1", {
+      const res = await create.createPublicRegistration("form1", {
         idempotencyKey: "11111111-1111-1111-1111-111111111111",
         formData: {},
         email: "a@b.com",
@@ -532,7 +540,7 @@ describe("RegistrationsService", () => {
     });
 
     it("updates a note and audits", async () => {
-      await service.updateRegistration("reg1", { note: "hi" } as never, "admin1");
+      await admin.updateRegistration("reg1", { note: "hi" } as never, "admin1");
       expect(db.updateRegistrationRow).toHaveBeenCalled();
       expect(db.insertAuditLog).toHaveBeenCalled();
     });
@@ -540,7 +548,7 @@ describe("RegistrationsService", () => {
     it("404 when registration not found", async () => {
       db.findRegistrationForMutation.mockResolvedValue(null);
       await expect(
-        service.updateRegistration("x", { note: "hi" } as never),
+        admin.updateRegistration("x", { note: "hi" } as never),
       ).rejects.toMatchObject({ code: "REG_8001", statusCode: 404 });
     });
 
@@ -552,12 +560,12 @@ describe("RegistrationsService", () => {
         }),
       );
       await expect(
-        service.updateRegistration("reg1", { paymentStatus: "PAID" } as never),
+        admin.updateRegistration("reg1", { paymentStatus: "PAID" } as never),
       ).rejects.toMatchObject({ code: "STT_12002", statusCode: 400 });
     });
 
     it("emits EMPTY accessIds on countsChanged when status changes", async () => {
-      await service.updateRegistration("reg1", { paymentStatus: "PAID" } as never);
+      await admin.updateRegistration("reg1", { paymentStatus: "PAID" } as never);
       const countsEvt = db.enqueueRealtimeOutboxEvent.mock.calls.find(
         (c) => c[1].type === "eventAccess.countsChanged",
       );
@@ -575,7 +583,7 @@ describe("RegistrationsService", () => {
         }),
       );
 
-      await service.updateRegistration("reg1", { paymentStatus: "PAID" } as never);
+      await admin.updateRegistration("reg1", { paymentStatus: "PAID" } as never);
 
       expect(db.updateRegistrationRow.mock.calls[0]?.[1]).toMatchObject({
         paymentStatus: "PAID",
@@ -651,7 +659,7 @@ describe("RegistrationsService", () => {
           }]);
           pricing.calculatePrice.mockResolvedValue(emptyBreakdown(total));
 
-          await service.adminEditRegistration(
+          await admin.adminEditRegistration(
             "ev1", "reg1", { formData: { answer: "repriced" } } as never, "admin1",
           );
 
@@ -677,7 +685,7 @@ describe("RegistrationsService", () => {
       );
       pricing.calculatePrice.mockResolvedValue(emptyBreakdown(150));
 
-      await service.adminEditRegistration(
+      await admin.adminEditRegistration(
         "ev1",
         "reg1",
         { formData: { answer: "repriced" } } as never,
@@ -701,7 +709,7 @@ describe("RegistrationsService", () => {
         total: 0,
       });
 
-      await service.adminEditRegistration(
+      await admin.adminEditRegistration(
         "ev1",
         "reg1",
         { formData: { answer: "sponsored" } } as never,
@@ -722,7 +730,7 @@ describe("RegistrationsService", () => {
         total: 0,
       });
 
-      await service.adminEditRegistration(
+      await admin.adminEditRegistration(
         "ev1",
         "reg1",
         { formData: { answer: "sponsored" } } as never,
@@ -745,7 +753,7 @@ describe("RegistrationsService", () => {
         }),
       );
 
-      await service.adminEditRegistration(
+      await admin.adminEditRegistration(
         "ev1",
         "reg1",
         { paymentStatus: "PAID" } as never,
@@ -784,7 +792,7 @@ describe("RegistrationsService", () => {
         calculatedBasePrice: 120,
       });
 
-      await service.adminEditRegistration(
+      await admin.adminEditRegistration(
         "ev1",
         "reg1",
         { paymentStatus: "PAID", formData: { answer: "repriced" } } as never,
@@ -809,7 +817,7 @@ describe("RegistrationsService", () => {
         }),
       );
 
-      await service.adminEditRegistration(
+      await admin.adminEditRegistration(
         "ev1",
         "reg1",
         { paymentStatus: "PAID", paidAmount: 55 } as never,
@@ -844,7 +852,7 @@ describe("RegistrationsService", () => {
           event: { clientId: "c1", status: "OPEN", client: activeClient() },
         }),
       );
-      await service.deleteRegistration("reg1", "admin1");
+      await admin.deleteRegistration("reg1", "admin1");
       expect(db.deleteRegistrationRow).toHaveBeenCalledWith("reg1", expect.anything());
       const countsEvt = db.enqueueRealtimeOutboxEvent.mock.calls.find(
         (c) => c[1].type === "eventAccess.countsChanged",
@@ -858,7 +866,7 @@ describe("RegistrationsService", () => {
       ["https://assets.example/networking/ev1/profiles/other/photo.webp", null],
     ])("after commit deletes only the profile's own networking photo: %s", async (photoUrl, key) => {
       db.getNetworkingProfilePhotoByRegistration.mockResolvedValue({ id: "np1", eventId: "ev1", photoUrl });
-      await service.deleteRegistration("reg1", "admin1");
+      await admin.deleteRegistration("reg1", "admin1");
       expect(db.getNetworkingProfilePhotoByRegistration.mock.invocationCallOrder[0])
         .toBeLessThan(db.deleteRegistrationRow.mock.invocationCallOrder[0]!);
       if (key) expect(storage.delete).toHaveBeenCalledWith(key);
@@ -872,14 +880,14 @@ describe("RegistrationsService", () => {
           event: { clientId: "c1", status: "OPEN", client: activeClient() },
         }),
       );
-      await expect(service.deleteRegistration("reg1", "admin1", false)).rejects.toMatchObject(
+      await expect(admin.deleteRegistration("reg1", "admin1", false)).rejects.toMatchObject(
         { code: "REG_8009", statusCode: 400 },
       );
     });
 
     it("403 force-delete by a non-admin (checked before any DB access)", async () => {
       await expect(
-        service.deleteRegistration("reg1", "u", true, 2 /* SCIENTIFIC_COMMITTEE */),
+        admin.deleteRegistration("reg1", "u", true, 2 /* SCIENTIFIC_COMMITTEE */),
       ).rejects.toMatchObject({ code: "AUTH_1004", statusCode: 403 });
       expect(db.withTxn).not.toHaveBeenCalled();
     });
@@ -891,7 +899,7 @@ describe("RegistrationsService", () => {
           event: { clientId: "c1", status: "OPEN", client: activeClient() },
         }),
       );
-      await service.deleteRegistration("reg1", "admin1", true, 1 /* CLIENT_ADMIN */);
+      await admin.deleteRegistration("reg1", "admin1", true, 1 /* CLIENT_ADMIN */);
       expect(db.deleteRegistrationRow).toHaveBeenCalled();
     });
   });
@@ -913,7 +921,7 @@ describe("RegistrationsService", () => {
           form: { id: "form1", name: "Reg", schema: {} },
         }),
       );
-      const r = await service.getRegistrationForEdit("reg1");
+      const r = await self.getRegistrationForEdit("reg1");
       expect(r.canEdit).toBe(true);
       expect(r.canRemoveAccess).toBe(true);
       expect(r.editRestrictions).toHaveLength(0);
@@ -935,7 +943,7 @@ describe("RegistrationsService", () => {
           form: { id: "form1", name: "Reg", schema: {} },
         }),
       );
-      const r = await service.getRegistrationForEdit("reg1");
+      const r = await self.getRegistrationForEdit("reg1");
       expect(r.canEdit).toBe(false);
     });
   });
@@ -972,7 +980,7 @@ describe("RegistrationsService", () => {
         form: { id: "form1", name: "Reg", schema: { settings: { accessSelectionRequired: true } } },
       }));
       access.assertAccessSelectionRequirement.mockRejectedValue(new AppException(ErrorCodes.ACCESS_SELECTION_REQUIRED, "Choose an option", 400));
-      await expect(service.editRegistrationPublic("reg1", { expectedUpdatedAt: expected, accessSelections: [] } as never))
+      await expect(self.editRegistrationPublic("reg1", { expectedUpdatedAt: expected, accessSelections: [] } as never))
         .rejects.toMatchObject({ code: ErrorCodes.ACCESS_SELECTION_REQUIRED });
       expect(access.assertAccessSelectionRequirement).toHaveBeenCalledWith("ev1", expect.anything(), [], expect.objectContaining({ settings: { accessSelectionRequired: true } }), expect.anything());
       expect(db.casUpdateRegistrationByUpdatedAt).not.toHaveBeenCalled();
@@ -990,7 +998,7 @@ describe("RegistrationsService", () => {
       pricing.calculatePrice.mockResolvedValue({ ...emptyBreakdown(150), accessItems: [
         ...oldBreakdown.accessItems, { accessId: "new", quantity: 1, subtotal: 50 },
       ] });
-      await service.editRegistrationPublic("reg1", { expectedUpdatedAt: expected,
+      await self.editRegistrationPublic("reg1", { expectedUpdatedAt: expected,
         accessSelections: [{ accessId: "old", quantity: 1 }, { accessId: "new", quantity: 1 }],
       } as never);
       const patch = db.casUpdateRegistrationByUpdatedAt.mock.calls[0][2];
@@ -1033,7 +1041,7 @@ describe("RegistrationsService", () => {
       db.findRegistrationWithFormEvent.mockResolvedValue(editFetch({ sponsorshipAmount }));
       pricing.calculatePrice.mockResolvedValue({ ...emptyBreakdown(100), sponsorshipTotal: sponsorshipAmount,
         total: 100 - sponsorshipAmount });
-      await service.editRegistrationPublic("reg1", { expectedUpdatedAt: expected, formData: {} } as never);
+      await self.editRegistrationPublic("reg1", { expectedUpdatedAt: expected, formData: {} } as never);
       const patch = db.casUpdateRegistrationByUpdatedAt.mock.calls[0][2];
       expect(patch.totalAmount).toBe(100);
       expect(calculateSettlement({ ...patch, paidAmount: 0 }).amountDue).toBe(100 - sponsorshipAmount);
@@ -1049,7 +1057,7 @@ describe("RegistrationsService", () => {
         validateSelections([{ id: "workshop", name: "Workshop", active: true, type: "WORKSHOP",
           startsAt: null, endsAt: null, maxCapacity: null, requiredAccess: [{ id: "prerequisite" }],
         }] as never, [], selections, data, existing, new Date()));
-      await expect(service.editRegistrationPublic("reg1", { expectedUpdatedAt: expected,
+      await expect(self.editRegistrationPublic("reg1", { expectedUpdatedAt: expected,
         accessSelections: [{ accessId: "workshop", quantity: 1 }],
       } as never)).rejects.toMatchObject({ code: ErrorCodes.BAD_REQUEST });
       expect(db.casUpdateRegistrationByUpdatedAt).not.toHaveBeenCalled();
@@ -1069,7 +1077,7 @@ describe("RegistrationsService", () => {
           startsAt: null, endsAt: null, maxCapacity: null, conditionLogic: "AND",
           conditions: [{ fieldId: "profession", operator: "equals", value: "doctor" }],
         }] as never, [], selections, data, existing, new Date()));
-      await expect(service.editRegistrationPublic("reg1", { expectedUpdatedAt: expected,
+      await expect(self.editRegistrationPublic("reg1", { expectedUpdatedAt: expected,
         formData: { profession: "nurse" },
       } as never)).rejects.toMatchObject({ code: ErrorCodes.BAD_REQUEST });
       expect(db.casUpdateRegistrationByUpdatedAt).not.toHaveBeenCalled();
@@ -1080,7 +1088,7 @@ describe("RegistrationsService", () => {
         editFetch({ paymentStatus: "REFUNDED" }),
       );
       await expect(
-        service.editRegistrationPublic("reg1", {
+        self.editRegistrationPublic("reg1", {
           expectedUpdatedAt: expected,
           firstName: "Z",
         } as never),
@@ -1091,7 +1099,7 @@ describe("RegistrationsService", () => {
       db.findRegistrationWithFormEvent.mockResolvedValue(editFetch());
       db.casUpdateRegistrationByUpdatedAt.mockResolvedValue(0);
       await expect(
-        service.editRegistrationPublic("reg1", {
+        self.editRegistrationPublic("reg1", {
           expectedUpdatedAt: expected,
           firstName: "Z",
         } as never),
@@ -1111,7 +1119,7 @@ describe("RegistrationsService", () => {
         }),
       );
       await expect(
-        service.editRegistrationPublic("reg1", {
+        self.editRegistrationPublic("reg1", {
           expectedUpdatedAt: expected,
           accessSelections: [{ accessId: "acc1", quantity: 1 }],
         } as never),
@@ -1130,7 +1138,7 @@ describe("RegistrationsService", () => {
           },
         }),
       );
-      await service.editRegistrationPublic("reg1", {
+      await self.editRegistrationPublic("reg1", {
         expectedUpdatedAt: expected,
         accessSelections: [{ accessId: "acc1", quantity: 3 }],
       } as never);
@@ -1156,7 +1164,7 @@ describe("RegistrationsService", () => {
       );
       const tx = { marker: true };
       db.withTxn.mockImplementation((fn: (t: unknown) => unknown) => fn(tx));
-      await service.editRegistrationPublic("reg1", {
+      await self.editRegistrationPublic("reg1", {
         expectedUpdatedAt: expected,
         accessSelections: [{ accessId: "acc1", quantity: 2 }],
       } as never);
@@ -1183,13 +1191,13 @@ describe("RegistrationsService", () => {
 
     it("defaults payment confirmation to the net amount after sponsorship", async () => {
       db.findRegistrationForMutation.mockResolvedValue(mutRow({ sponsorshipAmount: 40, totalAmount: 100 }));
-      await service.confirmPayment("reg1", { paymentStatus: "PAID" } as never);
+      await admin.confirmPayment("reg1", { paymentStatus: "PAID" } as never);
       expect(db.updateRegistrationRow).toHaveBeenCalledWith("reg1",
         expect.objectContaining({ paidAmount: 60 }), expect.anything());
     });
 
     it("PENDING→PAID strips editToken, audits with IP, queues PAYMENT_CONFIRMED", async () => {
-      const result = await service.confirmPayment(
+      const result = await admin.confirmPayment(
         "reg1",
         { paymentStatus: "PAID" } as never,
         "admin1",
@@ -1209,7 +1217,7 @@ describe("RegistrationsService", () => {
     });
 
     it("does NOT queue a PAYMENT_CONFIRMED email for a non-PAID target", async () => {
-      await service.confirmPayment("reg1", { paymentStatus: "VERIFYING" } as never);
+      await admin.confirmPayment("reg1", { paymentStatus: "VERIFYING" } as never);
       expect(db.enqueueTriggeredEmailOutbox).not.toHaveBeenCalled();
     });
 
@@ -1218,13 +1226,13 @@ describe("RegistrationsService", () => {
         mutRow({ paymentStatus: "REFUNDED" }),
       );
       await expect(
-        service.confirmPayment("reg1", { paymentStatus: "PAID" } as never),
+        admin.confirmPayment("reg1", { paymentStatus: "PAID" } as never),
       ).rejects.toMatchObject({ code: "STT_12002", statusCode: 400 });
     });
 
     it("400 when paidAmount exceeds total", async () => {
       await expect(
-        service.confirmPayment("reg1", {
+        admin.confirmPayment("reg1", {
           paymentStatus: "PAID",
           paidAmount: 999,
         } as never),
@@ -1234,7 +1242,7 @@ describe("RegistrationsService", () => {
     it("404 when registration not found", async () => {
       db.findRegistrationForMutation.mockResolvedValue(null);
       await expect(
-        service.confirmPayment("x", { paymentStatus: "PAID" } as never),
+        admin.confirmPayment("x", { paymentStatus: "PAID" } as never),
       ).rejects.toMatchObject({ code: "REG_8001", statusCode: 404 });
     });
   });
@@ -1267,7 +1275,7 @@ describe("RegistrationsService", () => {
     });
 
     it("uploads a PDF privately, sets VERIFYING + BANK_TRANSFER, queues email", async () => {
-      const result = await service.uploadPaymentProof("reg1", pdf());
+      const result = await proof.uploadPaymentProof("reg1", pdf());
       expect(storage.uploadPrivate).toHaveBeenCalledWith(
         expect.anything(),
         expect.stringMatching(/^ev1\/reg1\/proof-[0-9a-f-]{36}\.pdf$/),
@@ -1285,14 +1293,14 @@ describe("RegistrationsService", () => {
 
     it("rejects a disallowed header mimetype without sniffing", async () => {
       await expect(
-        service.uploadPaymentProof("reg1", { ...pdf(), mimetype: "text/plain" }),
+        proof.uploadPaymentProof("reg1", { ...pdf(), mimetype: "text/plain" }),
       ).rejects.toMatchObject({ code: "FIL_10001", statusCode: 400 });
       expect(ft.fileTypeFromBuffer).not.toHaveBeenCalled();
     });
 
     it("rejects when magic bytes are undetectable", async () => {
       ft.fileTypeFromBuffer.mockResolvedValue(undefined);
-      await expect(service.uploadPaymentProof("reg1", pdf())).rejects.toMatchObject({
+      await expect(proof.uploadPaymentProof("reg1", pdf())).rejects.toMatchObject({
         code: "FIL_10001",
         statusCode: 400,
       });
@@ -1300,7 +1308,7 @@ describe("RegistrationsService", () => {
 
     it("rejects when the detected type is not allowed", async () => {
       ft.fileTypeFromBuffer.mockResolvedValue({ mime: "image/gif", ext: "gif" });
-      await expect(service.uploadPaymentProof("reg1", pdf())).rejects.toMatchObject({
+      await expect(proof.uploadPaymentProof("reg1", pdf())).rejects.toMatchObject({
         code: "FIL_10001",
         statusCode: 400,
       });
@@ -1308,7 +1316,7 @@ describe("RegistrationsService", () => {
 
     it("rejects an oversized file", async () => {
       const big = { ...pdf(), buffer: Buffer.alloc(10 * 1024 * 1024 + 1) };
-      await expect(service.uploadPaymentProof("reg1", big)).rejects.toMatchObject({
+      await expect(proof.uploadPaymentProof("reg1", big)).rejects.toMatchObject({
         code: "FIL_10002",
         statusCode: 400,
       });
@@ -1316,7 +1324,7 @@ describe("RegistrationsService", () => {
 
     it("404 when the registration is missing", async () => {
       db.findRegistrationWithFormEvent.mockResolvedValue(null);
-      await expect(service.uploadPaymentProof("x", pdf())).rejects.toMatchObject({
+      await expect(proof.uploadPaymentProof("x", pdf())).rejects.toMatchObject({
         code: "REG_8001",
         statusCode: 404,
       });
@@ -1326,7 +1334,7 @@ describe("RegistrationsService", () => {
       db.findRegistrationWithFormEvent.mockResolvedValue(
         proofFetch({ paymentStatus: "PAID" }),
       );
-      await expect(service.uploadPaymentProof("reg1", pdf())).rejects.toMatchObject({
+      await expect(proof.uploadPaymentProof("reg1", pdf())).rejects.toMatchObject({
         code: "STT_12002",
         statusCode: 400,
       });
@@ -1336,7 +1344,7 @@ describe("RegistrationsService", () => {
       db.findRegistrationWithFormEvent.mockResolvedValue(
         proofFetch({ paymentStatus: "REFUNDED" }),
       );
-      await expect(service.uploadPaymentProof("reg1", pdf())).rejects.toMatchObject({
+      await expect(proof.uploadPaymentProof("reg1", pdf())).rejects.toMatchObject({
         code: "STT_12002",
         statusCode: 400,
       });
@@ -1349,7 +1357,7 @@ describe("RegistrationsService", () => {
         contentType: "image/webp",
         ext: "webp",
       });
-      const result = await service.uploadPaymentProof("reg1", {
+      const result = await proof.uploadPaymentProof("reg1", {
         ...pdf(),
         mimetype: "image/png",
       });
@@ -1372,7 +1380,7 @@ describe("RegistrationsService", () => {
       });
 
       it("uploads under a fresh key and deletes the old proof only after the row update", async () => {
-        const result = await service.uploadPaymentProof("reg1", pdf());
+        const result = await proof.uploadPaymentProof("reg1", pdf());
 
         expect(uploadedKey()).not.toBe(oldProof);
         expect(result.fileUrl).toBe(uploadedKey());
@@ -1389,8 +1397,8 @@ describe("RegistrationsService", () => {
       });
 
       it("never reuses a key across uploads", async () => {
-        await service.uploadPaymentProof("reg1", pdf());
-        await service.uploadPaymentProof("reg1", pdf());
+        await proof.uploadPaymentProof("reg1", pdf());
+        await proof.uploadPaymentProof("reg1", pdf());
         const [first, second] = storage.uploadPrivate.mock.calls.map((c) => c[1]);
         expect(first).not.toBe(second);
       });
@@ -1399,7 +1407,7 @@ describe("RegistrationsService", () => {
         const dbDown = new Error("db down");
         db.updateRegistrationRow.mockRejectedValueOnce(dbDown);
 
-        await expect(service.uploadPaymentProof("reg1", pdf())).rejects.toBe(dbDown);
+        await expect(proof.uploadPaymentProof("reg1", pdf())).rejects.toBe(dbDown);
 
         expect(storage.delete).toHaveBeenCalledTimes(1);
         expect(storage.delete).toHaveBeenCalledWith(uploadedKey());
@@ -1415,7 +1423,7 @@ describe("RegistrationsService", () => {
             proofFetch({ paymentProofUrl: oldProof, paymentStatus: "PAID" }),
           );
 
-        await expect(service.uploadPaymentProof("reg1", pdf())).rejects.toMatchObject({
+        await expect(proof.uploadPaymentProof("reg1", pdf())).rejects.toMatchObject({
           code: "STT_12002",
           statusCode: 400,
         });
@@ -1435,7 +1443,7 @@ describe("RegistrationsService", () => {
             proofFetch({ paymentProofUrl: raced, paymentStatus: "VERIFYING" }),
           );
 
-        await service.uploadPaymentProof("reg1", pdf());
+        await proof.uploadPaymentProof("reg1", pdf());
 
         expect(storage.delete).toHaveBeenCalledTimes(1);
         expect(storage.delete).toHaveBeenCalledWith(raced);
@@ -1444,7 +1452,7 @@ describe("RegistrationsService", () => {
       it("an old-proof delete failure does not fail the request", async () => {
         storage.delete.mockRejectedValueOnce(new Error("storage down"));
 
-        const result = await service.uploadPaymentProof("reg1", pdf());
+        const result = await proof.uploadPaymentProof("reg1", pdf());
 
         expect(result.fileUrl).toBe(uploadedKey());
         expect(storage.delete).toHaveBeenCalledWith(oldProof);
@@ -1459,7 +1467,7 @@ describe("RegistrationsService", () => {
           proofFetch({ paymentProofUrl: url, paymentStatus: "VERIFYING" }),
         );
 
-        await service.uploadPaymentProof("reg1", pdf());
+        await proof.uploadPaymentProof("reg1", pdf());
 
         expect(db.updateRegistrationRow).toHaveBeenCalledTimes(1);
         expect(storage.delete).not.toHaveBeenCalled();
@@ -1488,7 +1496,7 @@ describe("RegistrationsService", () => {
 
     it("CASH stays PENDING and audits", async () => {
       db.findRegistrationWithFormEvent.mockResolvedValue(methodFetch());
-      await service.selectPaymentMethod("reg1", { paymentMethod: "CASH" } as never);
+      await self.selectPaymentMethod("reg1", { paymentMethod: "CASH" } as never);
       const patch = db.updateRegistrationRow.mock.calls[0][1];
       expect(patch.paymentStatus).toBe("PENDING");
       expect(patch.paymentMethod).toBe("CASH");
@@ -1516,7 +1524,7 @@ describe("RegistrationsService", () => {
         }),
       );
       await expect(
-        service.selectPaymentMethod("reg1", {
+        self.selectPaymentMethod("reg1", {
           paymentMethod: "LAB_SPONSORSHIP",
           labName: "X",
         } as never),
@@ -1528,7 +1536,7 @@ describe("RegistrationsService", () => {
         methodFetch({ paymentStatus: "VERIFYING" }),
       );
       await expect(
-        service.selectPaymentMethod("reg1", { paymentMethod: "CASH" } as never),
+        self.selectPaymentMethod("reg1", { paymentMethod: "CASH" } as never),
       ).rejects.toMatchObject({ code: "REG_8004", statusCode: 400 });
     });
   });
@@ -1538,7 +1546,7 @@ describe("RegistrationsService", () => {
     it("keeps later-page metadata when no audit rows remain", async () => {
       db.listRegistrationAuditLogRows.mockResolvedValue({ rows: [], total: 3 });
       db.findUserNamesByIds.mockResolvedValue([]);
-      const result = await service.listRegistrationAuditLogs("reg1", { page: 3, limit: 2 });
+      const result = await read.listRegistrationAuditLogs("reg1", { page: 3, limit: 2 });
       expect(db.listRegistrationAuditLogRows).toHaveBeenCalledWith("reg1", { offset: 4, limit: 2 });
       expect(result).toEqual({ data: [], meta: { page: 3, limit: 2, total: 3, totalPages: 2, hasNext: false, hasPrev: true } });
     });
@@ -1575,7 +1583,7 @@ describe("RegistrationsService", () => {
       });
       db.findUserNamesByIds.mockResolvedValue([{ id: "u1", name: "Alice" }]);
 
-      const res = await service.listRegistrationAuditLogs("reg1", {
+      const res = await read.listRegistrationAuditLogs("reg1", {
         page: 1,
         limit: 50,
       } as never);
@@ -1592,7 +1600,7 @@ describe("RegistrationsService", () => {
   describe("listRegistrationEmailLogs", () => {
     it("keeps later-page metadata when no email rows remain", async () => {
       db.listRegistrationEmailLogRows.mockResolvedValue({ rows: [], total: 3 });
-      const result = await service.listRegistrationEmailLogs("reg1", { page: 3, limit: 2 });
+      const result = await read.listRegistrationEmailLogs("reg1", { page: 3, limit: 2 });
       expect(db.listRegistrationEmailLogRows).toHaveBeenCalledWith("reg1", { offset: 4, limit: 2 });
       expect(result).toEqual({ data: [], meta: { page: 3, limit: 2, total: 3, totalPages: 2, hasNext: false, hasPrev: true } });
     });
@@ -1618,7 +1626,7 @@ describe("RegistrationsService", () => {
         ],
         total: 1,
       });
-      const res = await service.listRegistrationEmailLogs("reg1", {
+      const res = await read.listRegistrationEmailLogs("reg1", {
         page: 1,
         limit: 50,
       } as never);
@@ -1712,7 +1720,7 @@ describe("RegistrationsService", () => {
         total: 1,
         stats: [],
       });
-      const res = await service.listRegistrations("ev1", { page: 1, limit: 20 } as never);
+      const res = await read.listRegistrations("ev1", { page: 1, limit: 20 } as never);
       expect(res.data[0]).not.toHaveProperty("editToken");
       expect(res.data[0]).not.toHaveProperty("idempotencyKey");
       // Admin-only data stays available to admins.
@@ -1724,7 +1732,7 @@ describe("RegistrationsService", () => {
       db.findRegistrationForMutation.mockResolvedValue(
         internalRow({ event: { clientId: "c1", status: "OPEN", client: activeClient() } }),
       );
-      const updated = await service.updateRegistration("reg1", { note: "x" } as never, "admin1");
+      const updated = await admin.updateRegistration("reg1", { note: "x" } as never, "admin1");
       expect(updated).not.toHaveProperty("editToken");
       expect(updated).not.toHaveProperty("idempotencyKey");
 
@@ -1744,7 +1752,7 @@ describe("RegistrationsService", () => {
         client: activeClient(),
       });
       db.insertRegistrationRow.mockResolvedValue({ id: "reg1" });
-      const created = await service.createAdminRegistration(
+      const created = await create.createAdminRegistration(
         "ev1",
         { email: "x@y.tn", firstName: "X", lastName: "Y", formData: {}, role: "PARTICIPANT", accessSelections: [], sendEmail: false } as never,
         "admin1",
@@ -1755,7 +1763,7 @@ describe("RegistrationsService", () => {
 
     it("public create (idempotent replay) returns the allowlisted DTO plus the registrant's token", async () => {
       db.getRegistrationByIdempotencyKeyRow.mockResolvedValue(internalRow());
-      const res = await service.createPublicRegistration("form1", {
+      const res = await create.createPublicRegistration("form1", {
         idempotencyKey: "11111111-1111-1111-1111-111111111111",
         formData: {},
         email: "a@b.com",
@@ -1792,7 +1800,7 @@ describe("RegistrationsService", () => {
       );
       db.casUpdateRegistrationByUpdatedAt.mockResolvedValue(1);
       db.getRegistrationByIdRow.mockResolvedValue(internalRow({ paymentProofUrl: null }));
-      const res = await service.editRegistrationPublic("reg1", {
+      const res = await self.editRegistrationPublic("reg1", {
         expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
         accessSelections: [{ accessId: "acc1", quantity: 2 }],
       } as never);
@@ -1816,7 +1824,7 @@ describe("RegistrationsService", () => {
           },
         }),
       );
-      const res = await service.getRegistrationForEdit("reg1");
+      const res = await self.getRegistrationForEdit("reg1");
       const keys = PUBLIC_KEYS.filter((k) => k !== "droppedAccessSelections");
       expect(Object.keys(res.registration).sort()).toEqual(keys);
       expect(res.registration.form).toEqual({ id: "form1", name: "Reg", schema: { steps: [] } });
@@ -1841,7 +1849,7 @@ describe("RegistrationsService", () => {
         linkBaseUrl: "https://forms.example.org",
         eventSlug: "summit",
       });
-      const res = await service.issueSelfEditLink("reg1", "admin1", "1.2.3.4");
+      const res = await read.issueSelfEditLink("reg1", "admin1", "1.2.3.4");
       expect(res).toEqual({ url: "https://forms.example.org/summit/registration/reg1/tok-64" });
       expect(db.insertAuditLog).toHaveBeenCalledTimes(1);
       const [entry] = db.insertAuditLog.mock.calls[0];
@@ -1863,7 +1871,7 @@ describe("RegistrationsService", () => {
         linkBaseUrl: null,
         eventSlug: "summit",
       });
-      await expect(service.issueSelfEditLink("reg1", "admin1")).rejects.toMatchObject({
+      await expect(read.issueSelfEditLink("reg1", "admin1")).rejects.toMatchObject({
         statusCode: 404,
       });
       expect(db.insertAuditLog).not.toHaveBeenCalled();
@@ -1871,7 +1879,7 @@ describe("RegistrationsService", () => {
 
     it("404 when the registration is gone", async () => {
       db.getRegistrationEditLinkSource.mockResolvedValue(null);
-      await expect(service.issueSelfEditLink("nope", "admin1")).rejects.toMatchObject({
+      await expect(read.issueSelfEditLink("nope", "admin1")).rejects.toMatchObject({
         statusCode: 404,
         code: ErrorCodes.REGISTRATION_NOT_FOUND,
       });

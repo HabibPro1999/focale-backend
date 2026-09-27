@@ -40,7 +40,8 @@ import type { Config } from "../../core/config";
 import { AccessPublicController } from "../access/access.public.controller";
 import { AccessService } from "../access/access.service";
 import type { PricingService } from "../pricing/pricing.service";
-import { RegistrationsService } from "./registrations.service";
+import { RegistrationsReadService } from "./registrations.read.service";
+import { RegistrationsCreateService } from "./registrations.create.service";
 
 const FUTURE = new Date(Date.now() + 7 * 86_400_000);
 const EVENT_ID = "11111111-1111-4111-8111-111111111111";
@@ -112,7 +113,8 @@ const client = { active: true, enabledModules: ["registrations", "pricing"] };
 const openEvent = { clientId: "c1", status: "OPEN", endDate: FUTURE };
 
 let controller: AccessPublicController;
-let registrations: RegistrationsService;
+let read: RegistrationsReadService;
+let createService: RegistrationsCreateService;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -174,11 +176,8 @@ beforeEach(() => {
       droppedAccessItems: [],
     }),
   };
-  registrations = new RegistrationsService(
-    access,
-    pricing as unknown as PricingService,
-    { publicLinkAllowedOrigins: [] } as unknown as Config,
-  );
+  read = new RegistrationsReadService();
+  createService = new RegistrationsCreateService(access, pricing as unknown as PricingService, { publicLinkAllowedOrigins: [] } as unknown as Config, read);
 });
 
 async function offered(formData: Record<string, unknown>): Promise<string[]> {
@@ -194,7 +193,7 @@ async function offered(formData: Record<string, unknown>): Promise<string[]> {
 }
 
 function create(formData: Record<string, unknown>, accessIds: string[]) {
-  return registrations.createPublicRegistration("form1", {
+  return createService.createPublicRegistration("form1", {
     formData,
     email: "a@b.com",
     accessSelections: accessIds.map((accessId) => ({ accessId, quantity: 1 })),
