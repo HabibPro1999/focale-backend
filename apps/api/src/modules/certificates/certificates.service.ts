@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import { fileTypeFromBuffer } from "file-type";
 import sharp from "sharp";
-import { ErrorCodes, ABSTRACT_FINAL_TYPE_LABELS } from "@app/contracts";
+import { ABSTRACT_FINAL_TYPE_LABELS } from "@app/contracts";
 import { getAbstractTitle } from "@app/shared";
 import type {
   CreateCertificateTemplateInput,
@@ -50,7 +50,7 @@ import {
   type CertificateTemplateData,
 } from "@app/integrations";
 import { logger } from "../../core/logger.service";
-import { AppException } from "../../core/app-exception";
+import { badRequest, notFound } from "../../core/app-exception";
 
 const ALLOWED_MIME_TYPES = new Set(["image/png", "image/jpeg"]);
 
@@ -152,11 +152,7 @@ export class CertificatesService {
   async getTemplate(id: string): Promise<CertificateTemplateWithEvent> {
     const template = await getCertificateTemplateWithEvent(id);
     if (!template) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Certificate template not found",
-        404,
-      );
+      throw notFound("Certificate template not found");
     }
     return template;
   }
@@ -167,10 +163,8 @@ export class CertificatesService {
     // and this must 400 on anything else (legacy parity).
     const key = extractStorageKeyFromUrl(templateUrl, { allowBareKey: false });
     if (!key) {
-      throw new AppException(
-        ErrorCodes.VALIDATION_ERROR,
+      throw badRequest(
         "Certificate template image is not stored in a supported location",
-        400,
       );
     }
 
@@ -178,11 +172,7 @@ export class CertificatesService {
       return await getStorageProvider().download(key);
     } catch (err: unknown) {
       if (err instanceof StorageObjectNotFoundError) {
-        throw new AppException(
-          ErrorCodes.NOT_FOUND,
-          "Certificate template image not found in storage",
-          404,
-        );
+        throw notFound("Certificate template image not found in storage");
       }
       throw err;
     }
@@ -217,10 +207,8 @@ export class CertificatesService {
   ): Promise<void> {
     const matchingIds = await findExistingAccessIdsInEvent([accessId], eventId);
     if (!matchingIds.includes(accessId)) {
-      throw new AppException(
-        ErrorCodes.VALIDATION_ERROR,
+      throw badRequest(
         "Certificate access item must belong to the template's event",
-        400,
       );
     }
   }
@@ -239,20 +227,14 @@ export class CertificatesService {
     }
     if (input.active === true) {
       if (!current?.templateUrl) {
-        throw new AppException(
-          ErrorCodes.VALIDATION_ERROR,
+        throw badRequest(
           "Cannot activate a certificate template without an uploaded image",
-          400,
         );
       }
     }
     if (input.accessId != null) {
       if (!current) {
-        throw new AppException(
-          ErrorCodes.NOT_FOUND,
-          "Certificate template not found",
-          404,
-        );
+        throw notFound("Certificate template not found");
       }
       await this.assertAccessBelongsToEvent(input.accessId, current.eventId);
     }
@@ -285,11 +267,7 @@ export class CertificatesService {
   async deleteTemplate(id: string): Promise<void> {
     const template = await getCertificateTemplateForDelete(id);
     if (!template) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Certificate template not found",
-        404,
-      );
+      throw notFound("Certificate template not found");
     }
 
     if (template.templateUrl) {
@@ -331,20 +309,12 @@ export class CertificatesService {
   ): Promise<CertificateTemplateWithAccess> {
     const detected = await fileTypeFromBuffer(file.buffer);
     if (!detected || !ALLOWED_MIME_TYPES.has(detected.mime)) {
-      throw new AppException(
-        ErrorCodes.VALIDATION_ERROR,
-        "Only PNG and JPEG images are allowed",
-        400,
-      );
+      throw badRequest("Only PNG and JPEG images are allowed");
     }
 
     const template = await getCertificateTemplateForUpload(id);
     if (!template) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Certificate template not found",
-        404,
-      );
+      throw notFound("Certificate template not found");
     }
 
     // Header-only read, but it enforces the pixel limit before anything is
@@ -352,11 +322,7 @@ export class CertificatesService {
     const metadata = await sharp(file.buffer, IMAGE_INPUT_LIMITS)
       .metadata()
       .catch(() => {
-        throw new AppException(
-          ErrorCodes.VALIDATION_ERROR,
-          INVALID_TEMPLATE_IMAGE_MESSAGE,
-          400,
-        );
+        throw badRequest(INVALID_TEMPLATE_IMAGE_MESSAGE);
       });
     const width = metadata.width ?? 0;
     const height = metadata.height ?? 0;
@@ -364,11 +330,7 @@ export class CertificatesService {
     // 3.8: the one full decode, under the same limits; an image that cannot
     // be decoded is refused here instead of failing every certificate later.
     const render = await deriveCertificateRenderImage(file.buffer).catch(() => {
-      throw new AppException(
-        ErrorCodes.VALIDATION_ERROR,
-        INVALID_TEMPLATE_IMAGE_MESSAGE,
-        400,
-      );
+      throw badRequest(INVALID_TEMPLATE_IMAGE_MESSAGE);
     });
 
     const ext = MIME_TO_EXT[detected.mime] ?? "png";
@@ -414,11 +376,7 @@ export class CertificatesService {
     if (!updated) {
       // The template was deleted while the image was uploading.
       await removeNewImages();
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Certificate template not found",
-        404,
-      );
+      throw notFound("Certificate template not found");
     }
 
     if (template.templateUrl && template.templateUrl !== templateUrl) {
@@ -462,21 +420,15 @@ export class CertificatesService {
     // 1. CERTIFICATE_SENT email template must be configured.
     const emailTemplate = await getTemplateByTrigger(event.id, "CERTIFICATE_SENT");
     if (!emailTemplate) {
-      throw new AppException(
-        ErrorCodes.VALIDATION_ERROR,
+      throw badRequest(
         "No CERTIFICATE_SENT email template configured for this event. Create one in the Email Templates section first.",
-        400,
       );
     }
 
     // 2. Active, image-ready certificate templates.
     const certTemplates = await listActiveImageReadyCertificateTemplates(event.id);
     if (certTemplates.length === 0) {
-      throw new AppException(
-        ErrorCodes.VALIDATION_ERROR,
-        "No active certificate templates found for this event.",
-        400,
-      );
+      throw badRequest("No active certificate templates found for this event.");
     }
 
     // 3. Target registrations (undefined = all; empty array = none).
@@ -585,7 +537,7 @@ export class CertificatesService {
       abstracts: abstractPlan?.candidates ?? [],
     });
     if (!outcomes) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
 
     let queued = 0;

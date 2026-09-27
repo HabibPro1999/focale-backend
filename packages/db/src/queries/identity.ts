@@ -1,5 +1,6 @@
 import { UserRole } from "@app/contracts";
 import { and, count, desc, eq, ilike, or, type SQL } from "drizzle-orm";
+import type { OffsetPagination } from "@app/shared";
 import { getDb, type DbExecutor } from "../client";
 import { withSerializableTxn } from "../txn";
 import { clients, users } from "../schema/users-clients";
@@ -134,9 +135,7 @@ export async function updateUser(
 
 /** List users with filters, ordered by createdAt desc, plus a total count. */
 export async function listUsers(
-  filters: ListUsersFilters,
-  skip: number,
-  limit: number,
+  filters: ListUsersFilters & OffsetPagination,
 ): Promise<{ data: UserWithClient[]; total: number }> {
   const db = getDb();
   const where = buildUserWhere(filters);
@@ -148,8 +147,8 @@ export async function listUsers(
       .leftJoin(clients, eq(users.clientId, clients.id))
       .where(where)
       .orderBy(desc(users.createdAt))
-      .offset(skip)
-      .limit(limit),
+      .offset(filters.offset)
+      .limit(filters.limit),
     db.select({ value: count() }).from(users).where(where),
   ]);
 

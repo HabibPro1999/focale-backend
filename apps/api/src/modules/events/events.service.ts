@@ -13,10 +13,11 @@ import type {
   ListEventsQuery,
   PublicPaymentConfigResponse,
 } from "@app/contracts";
-import { paginate, type PaginatedResult } from "@app/shared";
+import { getSkip, paginate, type PaginatedResult } from "@app/shared";
 import {
   getDb,
   withSerializableTxn,
+  withTxn,
   type EventRow,
   type EventWithPricing,
   clientExistsById,
@@ -46,7 +47,12 @@ import {
   ownedStorageKey,
 } from "@app/integrations";
 import { fileTypeFromBuffer } from "file-type";
-import { AppException } from "../../core/app-exception";
+import {
+  AppException,
+  badRequest,
+  conflict,
+  notFound,
+} from "../../core/app-exception";
 import { logger } from "../../core/logger.service";
 import { isModuleEnabledForClient } from "../clients/module-gates";
 
@@ -98,14 +104,14 @@ export class EventsService {
     } = input;
 
     if (!(await clientExistsById(clientId))) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Client not found", 404);
+      throw notFound("Client not found");
     }
 
     if ((await getEventIdBySlugTx(getDb(), slug)) !== null) {
-      throw new AppException(ErrorCodes.CONFLICT, "Event with this slug already exists", 409);
+      throw conflict("Event with this slug already exists");
     }
 
-    return getDb().transaction(
+    return withTxn(
       async (tx) => {
         const event = await insertEventTx(tx, {
           clientId,
@@ -125,7 +131,6 @@ export class EventsService {
         });
         return { ...event, pricing };
       },
-      { isolationLevel: "read committed" },
     );
   }
 
@@ -136,11 +141,7 @@ export class EventsService {
   /** Update event (+pricing). Serializable + retry — currency guard runs inside the txn. */
   async updateEvent(id: string, input: UpdateEventInput): Promise<EventWithPricing> {
     if (Object.values(input).every((value) => value === undefined)) {
-      throw new AppException(
-        ErrorCodes.VALIDATION_ERROR,
-        "At least one field must be provided for update",
-        400,
-      );
+      throw badRequest("At least one field must be provided for update");
     }
 
     const { basePrice, currency, ...eventData } = input;
@@ -150,7 +151,7 @@ export class EventsService {
           async (tx) => {
             const event = await getEventWithPricing(id, tx);
             if (!event) {
-              throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+              throw notFound("Event not found");
             }
 
             if (input.status && input.status !== event.status) {
@@ -168,10 +169,8 @@ export class EventsService {
             const resultingStart = input.startDate ?? event.startDate;
             const resultingEnd = input.endDate ?? event.endDate;
             if (resultingEnd < resultingStart) {
-              throw new AppException(
-                ErrorCodes.VALIDATION_ERROR,
+              throw badRequest(
                 "End date must be greater than or equal to start date",
-                400,
               );
             }
 
@@ -180,21 +179,15 @@ export class EventsService {
               input.maxCapacity !== null &&
               input.maxCapacity < event.registeredCount
             ) {
-              throw new AppException(
-                ErrorCodes.VALIDATION_ERROR,
+              throw badRequest(
                 "Max capacity cannot be below current registered count",
-                400,
               );
             }
 
             if (input.slug && input.slug !== event.slug) {
               const existingId = await getEventIdBySlugTx(tx, input.slug);
               if (existingId) {
-                throw new AppException(
-                  ErrorCodes.CONFLICT,
-                  "Event with this slug already exists",
-                  409,
-                );
+                throw conflict("Event with this slug already exists");
               }
             }
 
@@ -205,10 +198,8 @@ export class EventsService {
               if (normalizedCurrency !== currentCurrency) {
                 const registrationCount = await countRegistrationsTx(tx, id);
                 if (registrationCount > 0) {
-                  throw new AppException(
-                    ErrorCodes.VALIDATION_ERROR,
+                  throw badRequest(
                     "Cannot change currency after registrations exist",
-                    400,
                   );
                 }
               }
@@ -238,7 +229,7 @@ export class EventsService {
   async listEvents(query: ListEventsQuery): Promise<PaginatedResult<EventRow>> {
     const { page, limit, clientId, status, search } = query;
     const { data, total } = await listEventsQuery({
-      page,
+      offset: getSkip({ page, limit }),
       limit,
       clientId,
       status,
@@ -258,11 +249,11 @@ export class EventsService {
     };
 
     try {
-      filesToDelete = await getDb().transaction(
+      filesToDelete = await withTxn(
         async (tx) => {
           const found = await getEventWithRegistrationCountTx(tx, id);
           if (!found) {
-            throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+            throw notFound("Event not found");
           }
           if (found.registrations > 0) {
             throw new AppException(
@@ -292,7 +283,6 @@ export class EventsService {
             networkingLogoKey,
           };
         },
-        { isolationLevel: "read committed" },
       );
     } catch (err) {
       // foreign_key_violation: a registration was inserted after the count.
@@ -331,7 +321,7 @@ export class EventsService {
   ): Promise<{ bannerUrl: string }> {
     const event = await getEventWithPricing(id);
     if (!event) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
     assertEventWritable(event);
 
@@ -368,10 +358,10 @@ export class EventsService {
   async getPaymentConfig(id: string): Promise<PublicPaymentConfigResponse> {
     const event = await getEventWithPricingAndClient(id);
     if (!event) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
     if (event.status !== "OPEN" || event.client.active !== true) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
 
     const pricing = event.pricing;

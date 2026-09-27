@@ -16,7 +16,7 @@ import {
   sum,
   type SQL,
 } from "drizzle-orm";
-import { getSkip } from "@app/shared";
+import type { OffsetPagination } from "@app/shared";
 import type { ListRegistrationsQuery, StoredFormSchemaJson } from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
 import { escapeLike } from "../like";
@@ -316,21 +316,20 @@ const amountDueSql = sql<number>`GREATEST(${registrations.totalAmount} - ${regis
 
 export async function listRegistrationRows(
   eventId: string,
-  query: ListRegistrationsQuery,
+  query: Omit<ListRegistrationsQuery, "page"> & OffsetPagination,
   db: DbExecutor = getDb(),
 ): Promise<{
-  rows: RegistrationListRow[];
+  data: RegistrationListRow[];
   total: number;
   stats: RegistrationStatRow[];
 }> {
-  const { page, limit, paymentStatus, paymentMethod, role, search } = query;
+  const { offset, limit, paymentStatus, paymentMethod, role, search } = query;
   const where = buildRegistrationWhere(eventId, {
     paymentStatus,
     paymentMethod,
     role,
     search,
   });
-  const skip = getSkip({ page, limit });
 
   const [rows, totalRows, statsRaw] = await Promise.all([
     db
@@ -346,7 +345,7 @@ export async function listRegistrationRows(
       .where(where)
       .orderBy(desc(registrations.createdAt))
       .limit(limit)
-      .offset(skip),
+      .offset(offset),
     db.select({ value: count() }).from(registrations).where(where),
     db
       .select({
@@ -362,7 +361,7 @@ export async function listRegistrationRows(
   ]);
 
   return {
-    rows: rows.map((r) => ({
+    data: rows.map((r) => ({
       ...checkRegistrationRow(r.reg),
       ...registrationMeta(r),
     })),
@@ -802,9 +801,9 @@ export interface RegistrationAuditLogRow {
 
 export async function listRegistrationAuditLogRows(
   registrationId: string,
-  page: { skip: number; limit: number },
+  page: OffsetPagination,
   db: DbExecutor = getDb(),
-): Promise<{ rows: RegistrationAuditLogRow[]; total: number }> {
+): Promise<{ data: RegistrationAuditLogRow[]; total: number }> {
   const where = and(
     eq(auditLogs.entityType, "Registration"),
     eq(auditLogs.entityId, registrationId),
@@ -823,10 +822,10 @@ export async function listRegistrationAuditLogRows(
       .where(where)
       .orderBy(desc(auditLogs.performedAt))
       .limit(page.limit)
-      .offset(page.skip),
+      .offset(page.offset),
     db.select({ value: count() }).from(auditLogs).where(where),
   ]);
-  return { rows, total: Number(totalRows[0]?.value ?? 0) };
+  return { data: rows, total: Number(totalRows[0]?.value ?? 0) };
 }
 
 /** Batch user-name resolution for audit-log performer display. */
@@ -859,9 +858,9 @@ export interface RegistrationEmailLogRow {
 
 export async function listRegistrationEmailLogRows(
   registrationId: string,
-  page: { skip: number; limit: number },
+  page: OffsetPagination,
   db: DbExecutor = getDb(),
-): Promise<{ rows: RegistrationEmailLogRow[]; total: number }> {
+): Promise<{ data: RegistrationEmailLogRow[]; total: number }> {
   const where = eq(emailLogs.registrationId, registrationId);
   const [rows, totalRows] = await Promise.all([
     db
@@ -885,10 +884,10 @@ export async function listRegistrationEmailLogRows(
       .where(where)
       .orderBy(desc(emailLogs.queuedAt))
       .limit(page.limit)
-      .offset(page.skip),
+      .offset(page.offset),
     db.select({ value: count() }).from(emailLogs).where(where),
   ]);
-  return { rows, total: Number(totalRows[0]?.value ?? 0) };
+  return { data: rows, total: Number(totalRows[0]?.value ?? 0) };
 }
 
 export interface RegistrationEditLinkSource {

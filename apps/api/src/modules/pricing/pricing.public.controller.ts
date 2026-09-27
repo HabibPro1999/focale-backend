@@ -5,7 +5,7 @@ import {
   PriceBreakdownSchema,
   type PriceBreakdown,
 } from "@app/contracts";
-import { AppException } from "../../core/app-exception";
+import { AppException, notFound } from "../../core/app-exception";
 import { ResponseContract } from "../../core/response-contract";
 import { assertEventAcceptsPublicActions } from "../events";
 import { isModuleEnabledForClient } from "../clients/module-gates";
@@ -28,7 +28,7 @@ export class PricingPublicController {
   ): Promise<PriceBreakdown> {
     const form = await this.pricing.getFormForPriceQuote(formId);
     if (!form || form.type !== "REGISTRATION" || !form.active) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Form not found", 404);
+      throw notFound("Form not found");
     }
 
     assertEventAcceptsPublicActions(form.event);

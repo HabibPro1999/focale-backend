@@ -240,13 +240,16 @@ export class UsersService {
     query: ListUsersQuery,
   ): Promise<PaginatedResult<UserWithClient>> {
     const { page, limit, role, clientId, active, search } = query;
-    const skip = getSkip({ page, limit });
+    const offset = getSkip({ page, limit });
 
-    const { data, total } = await dbListUsers(
-      { role, clientId, active, search },
-      skip,
+    const { data, total } = await dbListUsers({
+      role,
+      clientId,
+      active,
+      search,
+      offset,
       limit,
-    );
+    });
 
     return paginate(data, total, { page, limit });
   }

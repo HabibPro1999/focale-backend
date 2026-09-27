@@ -37,7 +37,7 @@ import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { ResponseContract } from "../../core/response-contract";
 import { type AuthUser } from "../../core/auth/user-cache";
 import { assertModuleEnabledForClient } from "../clients/module-gates";
-import { AppException } from "../../core/app-exception";
+import { AppException, notFound } from "../../core/app-exception";
 import { EventScoped, RegistrationScoped, ScopedClient } from "../tenancy";
 import { RegistrationsService } from "./registrations.service";
 import { RegistrationCreateService } from "./registrations.create.service";
@@ -213,7 +213,7 @@ export class RegistrationsController {
     const registration = await this.service.getRegistrationById(id);
     if (!registration) registrationNotFound();
     if (!registration.paymentProofUrl) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "No payment proof uploaded", 404);
+      throw notFound("No payment proof uploaded");
     }
     const key = extractStorageKeyFromUrl(registration.paymentProofUrl);
     if (!key) {
@@ -225,11 +225,7 @@ export class RegistrationsController {
       file = await getStorageProvider().download(key);
     } catch (err: unknown) {
       if (err instanceof StorageObjectNotFoundError) {
-        throw new AppException(
-          ErrorCodes.NOT_FOUND,
-          "Payment proof not found in storage",
-          404,
-        );
+        throw notFound("Payment proof not found in storage");
       }
       throw err;
     }

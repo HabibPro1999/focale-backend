@@ -10,7 +10,7 @@ import {
 } from "@app/db";
 import { getStorageProvider, ownedStorageKey } from "@app/integrations";
 import { logger } from "../../core/logger.service";
-import { AppException } from "../../core/app-exception";
+import { AppException, notFound } from "../../core/app-exception";
 import { verifyAbstractToken } from "./abstracts.token";
 import { AbstractsService } from "./abstracts.service";
 import { assertAbstractModuleEnabled } from "./abstracts.gates";
@@ -165,14 +165,10 @@ function assertAbstractToken(
   token: string,
 ): asserts abstract is AbstractForFinalFile {
   if (!abstract) {
-    throw new AppException(ErrorCodes.NOT_FOUND, "Abstract not found", 404);
+    throw notFound("Abstract not found");
   }
   if (!verifyAbstractToken(abstract.editToken, token)) {
-    throw new AppException(
-      ErrorCodes.NOT_FOUND,
-      "Invalid abstract token",
-      404,
-    );
+    throw notFound("Invalid abstract token");
   }
 }
 

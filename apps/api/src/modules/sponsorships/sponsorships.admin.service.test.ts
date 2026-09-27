@@ -140,11 +140,44 @@ function emittedTypes(): string[] {
 // ============================================================================
 
 describe("passthrough reads", () => {
-  it("listSponsorships", async () => {
-    const page = { data: [], meta: {}, stats: {} };
-    m.listSponsorships.mockResolvedValue(page);
-    expect(await service().listSponsorships("e1", {} as never)).toBe(page);
-  });
+  it.each([1, 2, 9])(
+    "listSponsorships pages the query rows and keeps the filtered stats (page %s)",
+    async (page) => {
+      const stats = {
+        total: 3,
+        totalAmount: 330,
+        pending: { count: 1, amount: 90 },
+        used: { count: 1, amount: 200 },
+        cancelled: { count: 1, amount: 40 },
+      };
+      const data = [{ id: "s1", coveredAccessIds: null, usages: [] }];
+      m.listSponsorships.mockResolvedValue({ data, total: 3, stats });
+
+      const result = await service().listSponsorships("e1", {
+        page,
+        limit: 2,
+        sortBy: "createdAt",
+        sortOrder: "desc",
+      });
+
+      expect(m.listSponsorships).toHaveBeenCalledWith(
+        "e1",
+        expect.objectContaining({ offset: (page - 1) * 2, limit: 2 }),
+      );
+      expect(result).toEqual({
+        data,
+        meta: {
+          page,
+          limit: 2,
+          total: 3,
+          totalPages: 2,
+          hasNext: page < 2,
+          hasPrev: page > 1,
+        },
+        stats,
+      });
+    },
+  );
 });
 
 // ============================================================================

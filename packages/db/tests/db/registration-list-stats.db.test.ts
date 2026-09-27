@@ -42,7 +42,7 @@ describe.runIf(dbTestsEnabled())("registration list stats", () => {
       totalAmount: 999,
     });
 
-    const { stats, total } = await listRegistrationRows(event.id, { page: 1, limit: 5 } as never);
+    const { stats, total } = await listRegistrationRows(event.id, { offset: 0, limit: 5 } as never);
     expect(total).toBe(ROWS.length);
 
     const expected = new Map<string, { cnt: number; totalAmount: number; paidAmount: number; amountDue: number }>();
@@ -67,7 +67,7 @@ describe.runIf(dbTestsEnabled())("registration list stats", () => {
     const form = await seedForm({ eventId: event.id });
     await Promise.all(ROWS.map((row) => seedRegistration({ eventId: event.id, formId: form.id, ...row })));
 
-    const { stats } = await listRegistrationRows(event.id, { page: 1, limit: 20, paymentStatus: "PARTIAL" } as never);
+    const { stats } = await listRegistrationRows(event.id, { offset: 0, limit: 20, paymentStatus: "PARTIAL" } as never);
     expect(stats).toEqual([{ paymentStatus: "PARTIAL", cnt: 2, totalAmount: 320, paidAmount: 260, amountDue: 90 }]);
   });
 });

@@ -46,7 +46,7 @@ import {
   assertClientModuleEnabled,
   assertModuleEnabledForClient,
 } from "../clients/module-gates";
-import { AppException } from "../../core/app-exception";
+import { AppException, conflict, notFound } from "../../core/app-exception";
 import { CONFIG, type Config } from "../../core/config";
 import { assertPublicLinkBaseUrlAllowed } from "../../core/public-link-origin";
 import { RegistrationSideEffects } from "./registrations.side-effects";
@@ -96,7 +96,7 @@ function translateCreateUniqueViolation(err: unknown): never {
       409,
     );
   }
-  throw new AppException(ErrorCodes.CONFLICT, "Resource already exists", 409);
+  throw conflict("Resource already exists");
 }
 
 export type PublicCreateResult = {
@@ -169,7 +169,7 @@ export class RegistrationCreateService {
     // 2. Active REGISTRATION form gate (null → sponsor/inactive/missing/not-OPEN).
     const form = await findActiveRegistrationFormById(formId);
     if (!form) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Form not found", 404);
+      throw notFound("Form not found");
     }
 
     // 3. Module gates (DB-backed — matches legacy assertClientModuleEnabled).
@@ -274,7 +274,7 @@ export class RegistrationCreateService {
 
     const form = await findFormById(formId);
     if (!form) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Form not found", 404);
+      throw notFound("Form not found");
     }
     const eventId = form.eventId;
 
@@ -540,11 +540,7 @@ export class RegistrationCreateService {
 
     const form = await findRegistrationFormForEvent(eventId);
     if (!form) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "No registration form found for this event",
-        404,
-      );
+      throw notFound("No registration form found for this event");
     }
     // Admin answers: visible fields only, type-checked, required not enforced;
     // stored and priced as returned.
@@ -564,7 +560,7 @@ export class RegistrationCreateService {
 
     const eventGate = await getEventForRegistrationAdmin(eventId);
     if (!eventGate) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
     assertModuleEnabledForClient(eventGate.client, "pricing");
 
@@ -584,7 +580,7 @@ export class RegistrationCreateService {
       await withLockingTxn(async (tx) => {
       const event = await getEventForRegistrationAdmin(eventId, tx);
       if (!event) {
-        throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+        throw notFound("Event not found");
       }
       assertEventWritable(event);
       assertModuleEnabledForClient(event.client, "registrations");

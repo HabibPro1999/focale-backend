@@ -21,7 +21,7 @@ import {
   PublicRegistrationEditResponseSchema,
   PublicRegistrationForEditResponseSchema,
 } from "@app/contracts";
-import { AppException } from "../../core/app-exception";
+import { AppException, badRequest } from "../../core/app-exception";
 import { ResponseContract } from "../../core/response-contract";
 import { RegistrationsService } from "./registrations.service";
 import { RegistrationCreateService } from "./registrations.create.service";
@@ -156,7 +156,7 @@ export class RegistrationEditPublicController {
     await this.requireToken(registrationId, headerToken, token);
     const data = await req.file();
     if (!data) {
-      throw new AppException(ErrorCodes.VALIDATION_ERROR, "No file uploaded", 400);
+      throw badRequest("No file uploaded");
     }
     const buffer = await data.toBuffer();
     return this.proofs.uploadPaymentProof(registrationId, {
