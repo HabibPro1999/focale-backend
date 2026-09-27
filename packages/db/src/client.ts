@@ -127,7 +127,8 @@ export function getDb() {
 
 export type Db = ReturnType<typeof getDb>;
 /** A db handle or an open transaction — helpers ride the caller's txn. */
-export type DbExecutor = Db | Parameters<Parameters<Db["transaction"]>[0]>[0];
+export type DbTransaction = Parameters<Parameters<Db["transaction"]>[0]>[0];
+export type DbExecutor = Db | DbTransaction;
 
 /**
  * End the pool and forget the singletons. Idempotent: concurrent callers share

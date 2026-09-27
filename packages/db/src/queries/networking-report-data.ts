@@ -1,3 +1,4 @@
+import { networkingDeliveryFence } from "./networking-delivery-fence";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { getDb } from "../client";
 import { withSerializableTxn } from "../txn";
@@ -62,12 +63,7 @@ export async function saveNetworkingPostEventReport(
         updatedAt: new Date(),
       })
       .where(
-        and(
-          eq(networkingDeliveries.id, row.id),
-          eq(networkingDeliveries.status, "PROCESSING"),
-          eq(networkingDeliveries.lockedUntil, row.lockedUntil!),
-          sql`${networkingDeliveries.lockedUntil}>now()`,
-        ),
+        networkingDeliveryFence(row, sql`${networkingDeliveries.lockedUntil}>now()`),
       )
       .returning({ id: networkingDeliveries.id });
     if (!claimed.length) return false;

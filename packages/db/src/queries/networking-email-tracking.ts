@@ -1,3 +1,4 @@
+import { networkingDeliveryLeaseIdentity } from "./networking-delivery-fence";
 import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { rowsOf } from "../helpers";
 import { getDb, type DbExecutor } from "../client";
@@ -9,7 +10,7 @@ import type { NetworkingDeliveryRow } from "./networking-delivery";
 // Lock the delivery while checking ownership and writing its email log.
 async function ownsDelivery(db: DbExecutor, row: NetworkingDeliveryRow) {
   return rowsOf(await db.execute(sql`SELECT id FROM networking_deliveries
-      WHERE id=${row.id} AND status='PROCESSING' AND locked_until=${row.lockedUntil?.toISOString()}::timestamp
+      WHERE ${networkingDeliveryLeaseIdentity(row)}
         AND locked_until>now() FOR UPDATE`)).length > 0;
 }
 

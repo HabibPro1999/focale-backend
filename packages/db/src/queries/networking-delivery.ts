@@ -1,3 +1,4 @@
+import { networkingDeliveryFence, networkingDeliveryLeaseIdentity } from "./networking-delivery-fence";
 import { and, eq, gt, inArray, sql, type SQL } from "drizzle-orm";
 import { alias, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { NetworkingConfigSchema } from "@app/contracts";
@@ -63,12 +64,7 @@ export async function updateNetworkingDelivery(
     .update(networkingDeliveries)
     .set({ ...values, updatedAt: new Date() })
     .where(
-      and(
-        eq(networkingDeliveries.id, row.id),
-        eq(networkingDeliveries.status, "PROCESSING"),
-        eq(networkingDeliveries.lockedUntil, row.lockedUntil!),
-        gt(networkingDeliveries.lockedUntil, new Date()),
-      ),
+      networkingDeliveryFence(row, gt(networkingDeliveries.lockedUntil, new Date())),
     )
     .returning({ id: networkingDeliveries.id });
   return result.length > 0;
@@ -286,7 +282,7 @@ export async function localizeNetworkingNotification(
     .where(
       and(
         eq(networkingNotifications.id, row.payload.notificationId),
-        sql`EXISTS (SELECT 1 FROM networking_deliveries WHERE id=${row.id} AND status='PROCESSING' AND locked_until=${row.lockedUntil?.toISOString()}::timestamp AND locked_until>now())`,
+        sql`EXISTS (SELECT 1 FROM networking_deliveries WHERE ${networkingDeliveryLeaseIdentity(row)} AND locked_until>now())`,
         eq(networkingNotifications.eventId, row.eventId),
         eq(networkingNotifications.profileId, row.profileId),
       ),

@@ -1,3 +1,4 @@
+import { networkingPageLimit } from "./networking-pagination";
 import { sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { getDb, type DbExecutor } from "../client";
@@ -266,7 +267,7 @@ export async function rankNetworkingVectorCandidates(
         AND ${notInteracted(eventId, profileId, candidate.id)}
     )
     SELECT *, (0.4*needs_score + 0.4*offers_score + 0.2*profile_score) AS score FROM scores
-    ORDER BY score DESC,profile_id LIMIT ${Math.min(100, Math.max(1, limit))}
+    ORDER BY score DESC,profile_id LIMIT ${networkingPageLimit(limit)}
   `),
   );
   return rows.map((row) => ({

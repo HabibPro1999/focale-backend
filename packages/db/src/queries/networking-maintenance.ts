@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { getDb, type DbExecutor } from "../client";
 import { networkingConfigs, networkingProfiles } from "../schema/networking";
@@ -11,6 +11,15 @@ import { purgeExpiredNetworkingEvents } from "./networking-retention";
 import { eraseWithdrawnNetworkingProfiles } from "./networking-erasure";
 import { settleOrphanedNetworkingEmailLogs } from "./networking-email-tracking";
 
+/** The caller supplies a fixed SQL column, preserving each site's alias/text. */
+const scopeTo = (column: SQL, eventId?: string) => eventId ? sql`AND ${column}=${eventId}` : sql``;
+const REMINDERS = [
+  { type: "MEETING_REMINDER_DAY", hours: 24, minHours: 23,
+    fr: "Votre rendez-vous a lieu demain", ar: "موعدك غداً", en: "Your meeting is tomorrow" },
+  { type: "MEETING_REMINDER_HOUR", hours: 1, minHours: 0,
+    fr: "Votre rendez-vous commence dans une heure", ar: "يبدأ موعدك خلال ساعة", en: "Your meeting starts within an hour" },
+] as const;
+
 /** The NETWORKING_WITHDRAWAL_ERASE_DAYS default (app config). */
 export const NETWORKING_WITHDRAWAL_ERASE_DAYS_DEFAULT = 30;
 
@@ -20,7 +29,7 @@ export async function maintainNetworkingLifecycle(
   options: { withdrawalEraseDays?: number } = {},
 ) {
   const db = getDb();
-  const scope = eventId ? sql`AND event_id=${eventId}` : sql``;
+  const scope = scopeTo(sql`event_id`, eventId);
   await expireNetworkingProposals(eventId, db);
   await sweepReleasedNetworkingReservations(eventId, db);
   await queueNetworkingMeetingReminders(db, eventId);
@@ -30,7 +39,7 @@ export async function maintainNetworkingLifecycle(
   await db.execute(sql`UPDATE networking_deliveries d SET payload=jsonb_build_object('challengeId',d.payload->>'challengeId','outcome','expired'),status='SKIPPED',locked_until=NULL,last_error=NULL,updated_at=now()
     WHERE d.type='OTP' AND d.status<>'SENT' AND (d.status<>'PROCESSING' OR d.locked_until<now())
       AND (d.attempts>=5 OR NOT EXISTS (SELECT 1 FROM networking_challenges c WHERE c.id=d.payload->>'challengeId' AND c.event_id=d.event_id AND c.expires_at>now() AND c.consumed_at IS NULL AND c.attempts<5))
-      ${eventId ? sql`AND d.event_id=${eventId}` : sql``}`);
+      ${scopeTo(sql`d.event_id`, eventId)}`);
   await db.execute(
     sql`UPDATE networking_deliveries SET status='FAILED',locked_until=NULL,last_error='Delivery retry limit exhausted',updated_at=now() WHERE status='PROCESSING' AND locked_until<now() AND attempts>=5 ${scope}`,
   );
@@ -74,26 +83,23 @@ const recipientEligible = eligibleProfile(p, r, statuses);
  * Each reminder and its in-app record are committed by one statement.
  */
 export async function queueNetworkingMeetingReminders(db: DbExecutor, eventId?: string) {
-  for (const [type, hours] of [
-    ["MEETING_REMINDER_DAY", 24],
-    ["MEETING_REMINDER_HOUR", 1],
-  ] as const) {
+  for (const { type, hours, minHours, fr, ar, en } of REMINDERS) {
     await db.execute(sql`
       WITH candidates AS (
         SELECT gen_random_uuid()::text AS notification_id,m.id AS meeting_id,m.event_id,m.revision,p.id AS profile_id,
           '/e/'||e.slug||'/agenda' AS href,
-          CASE p.language WHEN 'fr' THEN ${hours === 24 ? "Votre rendez-vous a lieu demain" : "Votre rendez-vous commence dans une heure"}::text WHEN 'ar' THEN ${hours === 24 ? "موعدك غداً" : "يبدأ موعدك خلال ساعة"}::text ELSE ${hours === 24 ? "Your meeting is tomorrow" : "Your meeting starts within an hour"}::text END AS title,
+          CASE p.language WHEN 'fr' THEN ${fr}::text WHEN 'ar' THEN ${ar}::text ELSE ${en}::text END AS title,
           to_char(m.starts_at AT TIME ZONE COALESCE(c.config->>'timezone','UTC'),'YYYY-MM-DD HH24:MI')||' · '||COALESCE(c.config->>'timezone','UTC') AS body
         FROM networking_meetings m JOIN networking_profiles p ON (p.id=m.requester_id OR p.id=m.recipient_id) AND p.event_id=m.event_id
         JOIN networking_configs c ON c.event_id=m.event_id JOIN events e ON e.id=m.event_id
         JOIN clients cl ON cl.id=e.client_id JOIN registrations r ON r.id=p.registration_id
         JOIN networking_profiles peer ON peer.id=CASE WHEN p.id=m.requester_id THEN m.recipient_id ELSE m.requester_id END AND peer.event_id=m.event_id
         JOIN registrations peer_registration ON peer_registration.id=peer.registration_id
-        WHERE m.status='CONFIRMED' AND m.starts_at>now()+interval '1 hour'*${hours === 24 ? 23 : 0}::int AND m.starts_at<=now()+interval '1 hour'*${hours}::int
+        WHERE m.status='CONFIRMED' AND m.starts_at>now()+interval '1 hour'*${minHours}::int AND m.starts_at<=now()+interval '1 hour'*${hours}::int
           AND m.created_at<m.starts_at-interval '1 hour'*${hours}::int
           AND ${offered} AND ${recipientEligible}
           AND ${peerCounterpart(peer, peerRegistration, statuses, { eventId: sql`m.event_id`, profileId: p.id, email: p.email })}
-          ${eventId ? sql`AND m.event_id=${eventId}` : sql``}
+          ${scopeTo(sql`m.event_id`, eventId)}
       ), inserted AS (
         INSERT INTO networking_deliveries (id,event_id,profile_id,type,payload,status,available_at,dedupe_key,created_at,updated_at)
         SELECT gen_random_uuid()::text,event_id,profile_id,${type},jsonb_build_object('notificationId',notification_id,'meetingId',meeting_id,'revision',revision,'title',title,'body',body,'href',href),
@@ -119,7 +125,7 @@ export async function queueNetworkingDailyDigests(db: DbExecutor, eventId?: stri
     WHERE p.email_preference='DAILY' AND ${offered} AND ${recipientEligible}
       AND (now() AT TIME ZONE COALESCE(c.config->>'timezone','UTC'))::time>=time '08:00'
       AND (n.created_at AT TIME ZONE COALESCE(c.config->>'timezone','UTC'))::date=(now() AT TIME ZONE COALESCE(c.config->>'timezone','UTC'))::date-1
-      ${eventId ? sql`AND p.event_id=${eventId}` : sql``}
+      ${scopeTo(sql`p.event_id`, eventId)}
     GROUP BY p.id,p.event_id,c.config ON CONFLICT (dedupe_key) DO NOTHING
   `);
 }
@@ -133,7 +139,7 @@ export async function queueNetworkingPostEventDeliveries(db: DbExecutor, eventId
     INSERT INTO networking_deliveries (id,event_id,type,payload,status,available_at,dedupe_key,created_at,updated_at)
     SELECT gen_random_uuid()::text,e.id,'POST_EVENT_REPORT','{}'::jsonb,'PENDING',now(),'post-event-report:'||e.id,now(),now()
     FROM events e JOIN networking_configs c ON c.event_id=e.id WHERE c.config->>'enabled'='true' AND e.end_date+interval '24 hours'<=now()
-      ${eventId ? sql`AND e.id=${eventId}` : sql``} ON CONFLICT (dedupe_key) DO NOTHING
+      ${scopeTo(sql`e.id`, eventId)} ON CONFLICT (dedupe_key) DO NOTHING
   `);
   await db.execute(sql`
     WITH candidates AS (
@@ -143,7 +149,7 @@ export async function queueNetworkingPostEventDeliveries(db: DbExecutor, eventId
       FROM networking_profiles p JOIN events e ON e.id=p.event_id JOIN clients cl ON cl.id=e.client_id
         JOIN networking_configs c ON c.event_id=p.event_id JOIN registrations r ON r.id=p.registration_id
       WHERE e.end_date+interval '24 hours'<=now() AND ${offered} AND ${recipientEligible}
-        ${eventId ? sql`AND p.event_id=${eventId}` : sql``}
+        ${scopeTo(sql`p.event_id`, eventId)}
     ), inserted AS (
       INSERT INTO networking_deliveries (id,event_id,profile_id,type,payload,status,available_at,dedupe_key,created_at,updated_at)
       SELECT gen_random_uuid()::text,event_id,profile_id,'POST_EVENT_CONTACTS',jsonb_build_object('notificationId',notification_id,'href',href),
