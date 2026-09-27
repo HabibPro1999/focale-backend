@@ -1,5 +1,5 @@
 import { ErrorCodes } from "@app/contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // --- @app/db mock -----------------------------------------------------------
 const db = vi.hoisted(() => ({
@@ -593,6 +593,69 @@ describe("RegistrationsService", () => {
       db.getRegistrationByIdRow.mockResolvedValue(adminRow());
       db.findRegistrationUsagesForRecalc.mockResolvedValue([]);
       pricing.calculatePrice.mockResolvedValue(emptyBreakdown(100));
+    });
+
+    describe("linked sponsorship settlement truth table", () => {
+      const NOW = new Date("2026-09-27T12:00:00.000Z");
+      const OLD_PAID_AT = new Date("2026-01-01T00:00:00.000Z");
+      beforeEach(() => {
+        vi.useFakeTimers();
+        vi.setSystemTime(NOW);
+      });
+      afterEach(() => vi.useRealTimers());
+
+      // Unlike sponsorship recalc, VERIFYING is sticky and a covered balance
+      // with money paid becomes PAID. Undefined means the write omits that key.
+      // current, gross total, paid, sponsorship, old paidAt, status patch, paidAt patch.
+      it.each([
+        ["PAID", 100, 100, 0, OLD_PAID_AT, undefined, undefined],
+        ["PAID", 100, 0, 100, null, undefined, undefined],
+        ["WAIVED", 100, 0, 100, OLD_PAID_AT, undefined, undefined],
+        ["REFUNDED", 100, 0, 0, OLD_PAID_AT, undefined, undefined],
+        ["REFUNDED", 100, 0, 100, null, undefined, undefined],
+        ["VERIFYING", 100, 0, 0, OLD_PAID_AT, undefined, undefined],
+        ["VERIFYING", 100, 0, 40, OLD_PAID_AT, undefined, undefined],
+        ["VERIFYING", 100, 0, 100, null, undefined, undefined],
+        ["PENDING", 100, 0, 100, null, "SPONSORED", NOW],
+        ["PENDING", 100, 0, 100, OLD_PAID_AT, "SPONSORED", OLD_PAID_AT],
+        ["PENDING", 100, 60, 40, null, "PAID", NOW],
+        ["PARTIAL", 100, 60, 40, OLD_PAID_AT, "PAID", OLD_PAID_AT],
+        ["PARTIAL", 100, 100, 0, null, "PAID", NOW],
+        ["PENDING", 100, 0, 40, OLD_PAID_AT, "PARTIAL", null],
+        ["PENDING", 100, 20, 0, OLD_PAID_AT, "PARTIAL", null],
+        ["SPONSORED", 100, 0, 0, OLD_PAID_AT, "PENDING", null],
+        ["PARTIAL", 100, 0, 0, OLD_PAID_AT, "PENDING", null],
+        ["PENDING", 0, 0, 0, OLD_PAID_AT, undefined, null],
+        ["SPONSORED", 0, 0, 0, OLD_PAID_AT, "PENDING", null],
+        ["REFUNDED", 0, 0, 0, OLD_PAID_AT, undefined, undefined],
+        ["VERIFYING", 0, 0, 0, OLD_PAID_AT, undefined, undefined],
+      ] as const)(
+        "%s, total=%i, paid=%i, sponsored=%i, paidAt=%s → %s (%s)",
+        async (current, total, paid, amount, oldPaidAt, next, nextPaidAt) => {
+          db.findRegistrationForMutation.mockResolvedValue(adminRow({
+            paymentStatus: current, totalAmount: total, paidAmount: paid,
+            paidAt: oldPaidAt, paymentMethod: "BANK_TRANSFER",
+          }));
+          db.findRegistrationUsagesForRecalc.mockResolvedValue([{
+            id: "usage1", amountApplied: amount,
+            sponsorship: { coversBasePrice: true, coveredAccessIds: [], totalAmount: amount },
+          }]);
+          pricing.calculatePrice.mockResolvedValue(emptyBreakdown(total));
+
+          await service.adminEditRegistration(
+            "ev1", "reg1", { formData: { answer: "repriced" } } as never, "admin1",
+          );
+
+          const patch = db.updateRegistrationRow.mock.calls[0]?.[1];
+          expect(patch).toMatchObject({ totalAmount: total, sponsorshipAmount: amount });
+          if (next === undefined) expect(patch).not.toHaveProperty("paymentStatus");
+          else expect(patch.paymentStatus).toBe(next);
+          if (nextPaidAt === undefined) expect(patch).not.toHaveProperty("paidAt");
+          else expect(patch.paidAt).toEqual(nextPaidAt);
+          expect(patch).not.toHaveProperty("paymentMethod");
+          expect(patch).not.toHaveProperty("paidAmount");
+        },
+      );
     });
 
     it("keeps a PAID registration PAID when an admin reprices it", async () => {

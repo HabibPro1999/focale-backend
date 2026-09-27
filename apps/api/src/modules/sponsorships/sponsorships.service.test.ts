@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the entire db layer; the service owns orchestration + math, db fns are
 // thin primitives (mocked here). withTxn runs the callback with a sentinel tx.
@@ -868,4 +868,199 @@ describe("createSponsorshipBatch", () => {
       }),
     ).rejects.toMatchObject({ code: "RES_3001", statusCode: 404 });
   });
+});
+
+// These tables deliberately preserve the different rules at each settlement site.
+// Exercise public workflows so later helper extraction must retain patch omissions,
+// transaction orchestration, and the caller's paidAt/paymentMethod behavior.
+describe("settlement truth tables", () => {
+  const NOW = new Date("2026-09-27T12:00:00.000Z");
+  const OLD_PAID_AT = new Date("2026-01-01T00:00:00.000Z");
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    m.findActiveEventAccess.mockResolvedValue([]);
+    m.getEventPricingForBatch.mockResolvedValue({ basePrice: 100, currency: "TND" });
+  });
+  afterEach(() => vi.useRealTimers());
+
+  // current, gross total, sponsorship amount, next status, paidAt patch.
+  it.each([
+    ["PENDING", 100, 0, "PENDING", "omit"],
+    ["PENDING", 100, 40, "PARTIAL", "omit"],
+    ["PENDING", 100, 100, "SPONSORED", "new"],
+    ["PARTIAL", 100, 0, "PARTIAL", "omit"],
+    ["PARTIAL", 100, 40, "PARTIAL", "omit"],
+    ["PARTIAL", 100, 100, "SPONSORED", "new"],
+    ["SPONSORED", 100, 0, "SPONSORED", "new"],
+    ["SPONSORED", 100, 40, "PARTIAL", "omit"],
+    ["SPONSORED", 100, 100, "SPONSORED", "new"],
+    ["PAID", 100, 0, "PAID", "omit"],
+    ["PAID", 100, 40, "PAID", "omit"],
+    ["PAID", 100, 100, "PAID", "omit"],
+    ["WAIVED", 100, 0, "WAIVED", "omit"],
+    ["WAIVED", 100, 40, "WAIVED", "omit"],
+    ["WAIVED", 100, 100, "WAIVED", "omit"],
+    ["REFUNDED", 100, 0, "REFUNDED", "omit"],
+    ["REFUNDED", 100, 40, "PARTIAL", "omit"],
+    ["REFUNDED", 100, 100, "SPONSORED", "new"],
+    ["VERIFYING", 100, 0, "VERIFYING", "omit"],
+    ["VERIFYING", 100, 40, "PARTIAL", "omit"],
+    ["VERIFYING", 100, 100, "SPONSORED", "new"],
+    ["PENDING", 0, 0, "SPONSORED", "new"],
+    ["REFUNDED", 0, 0, "SPONSORED", "new"],
+    ["VERIFYING", 0, 0, "SPONSORED", "new"],
+    ["PAID", 0, 0, "PAID", "omit"],
+    ["WAIVED", 0, 0, "WAIVED", "omit"],
+  ] as const)(
+    "apply: %s, total=%i, sponsored=%i → %s (paidAt=%s)",
+    async (current, total, amount, next, paidAt) => {
+      m.findSponsorshipForLink.mockResolvedValue(linkSponsorship({ totalAmount: amount }));
+      m.findRegistrationForLink.mockResolvedValue(linkRegistration({
+        paymentStatus: current, totalAmount: total, baseAmount: total,
+        paidAt: OLD_PAID_AT, paymentMethod: "BANK_TRANSFER",
+        priceBreakdown: { calculatedBasePrice: total, accessItems: [] },
+      }));
+      m.findUsage.mockResolvedValue(null);
+      m.insertUsage.mockResolvedValue({ id: "u1", sponsorshipId: "s1", amountApplied: amount });
+      m.casSetSponsorshipUsed.mockResolvedValue(1);
+      m.findUsageAmountsByRegistration.mockResolvedValue([{ amountApplied: amount }]);
+
+      await service().linkSponsorshipToRegistration("s1", "r1", "admin");
+
+      expect(m.updateRegistrationSettlement).toHaveBeenCalledExactlyOnceWith({}, "r1", {
+        sponsorshipAmount: amount,
+        paymentStatus: next,
+        paymentMethod: "LAB_SPONSORSHIP",
+        ...(paidAt === "new" ? { paidAt: NOW } : {}),
+      });
+    },
+  );
+
+  it("batch apply: zero total is fully sponsored, even with a positive sponsorship price", async () => {
+    m.findEventForBatch.mockResolvedValue(batchEvent());
+    m.findSponsorFormById.mockResolvedValue({
+      id: "f1", schema: { sponsorshipSettings: { sponsorshipMode: "LINKED_ACCOUNT" } },
+    });
+    m.findRegistrationsForBatch.mockResolvedValue([linkRegistration({
+      paymentStatus: "VERIFYING", totalAmount: 0, baseAmount: 0,
+      paidAt: OLD_PAID_AT, paymentMethod: "BANK_TRANSFER",
+      priceBreakdown: { calculatedBasePrice: 0, accessItems: [] },
+    })]);
+    m.insertSponsorshipBatch.mockResolvedValue({ id: "b1" });
+    m.getFormSchema.mockResolvedValue({ sponsorshipSettings: { autoApproveSponsorship: true } });
+    m.sponsorshipCodeExists.mockResolvedValue(false);
+    m.insertSponsorship.mockResolvedValue(createdSponsorship());
+
+    await service().createSponsorshipBatch("e1", "f1", {
+      sponsor: SPONSOR,
+      linkedBeneficiaries: [{ registrationId: "r1", coversBasePrice: true, coveredAccessIds: [] }],
+    });
+
+    expect(m.updateRegistrationSettlement).toHaveBeenCalledExactlyOnceWith({}, "r1", {
+      sponsorshipAmount: 0, paymentStatus: "SPONSORED",
+      paymentMethod: "LAB_SPONSORSHIP", paidAt: NOW,
+    });
+  });
+
+  // current, gross total, paid amount, remaining sponsorship, next status patch.
+  // Only SPONSORED/PARTIAL can change. Omission also preserves the old paidAt.
+  it.each([
+    ["PENDING", 100, 0, 0, undefined],
+    ["PENDING", 100, 0, 40, undefined],
+    ["PAID", 100, 100, 0, undefined],
+    ["WAIVED", 100, 0, 0, undefined],
+    ["REFUNDED", 100, 0, 0, undefined],
+    ["REFUNDED", 100, 0, 40, undefined],
+    ["VERIFYING", 100, 0, 0, undefined],
+    ["VERIFYING", 100, 0, 40, undefined],
+    ["SPONSORED", 100, 0, 100, undefined],
+    ["SPONSORED", 100, 0, 40, "PARTIAL"],
+    ["SPONSORED", 100, 0, 0, "PENDING"],
+    ["SPONSORED", 100, 20, 0, "PARTIAL"],
+    ["SPONSORED", 100, 60, 40, "PARTIAL"],
+    ["PARTIAL", 100, 0, 40, undefined],
+    ["PARTIAL", 100, 0, 100, undefined],
+    ["PARTIAL", 100, 0, 0, "PENDING"],
+    ["PARTIAL", 100, 20, 0, "PARTIAL"],
+    ["SPONSORED", 0, 0, 0, undefined],
+    ["PARTIAL", 0, 0, 0, "PENDING"],
+    ["REFUNDED", 0, 0, 0, undefined],
+    ["VERIFYING", 0, 0, 0, undefined],
+  ] as const)(
+    "unlink: %s, total=%i, paid=%i, sponsored=%i → %s",
+    async (current, total, paid, amount, next) => {
+      m.findUsage.mockResolvedValue({ id: "u1" });
+      m.findRegistrationSettlementState.mockResolvedValue({
+        id: "r1", eventId: "e1", paymentStatus: current, totalAmount: total,
+        paidAmount: paid, paidAt: OLD_PAID_AT, paymentMethod: "LAB_SPONSORSHIP",
+        priceBreakdown: {},
+      });
+      m.findSponsorshipUnlinkState.mockResolvedValue({ status: "USED", event: OK_EVENT });
+      m.findUsageAmountsByRegistration.mockResolvedValue([{ amountApplied: amount }]);
+      m.countUsagesForSponsorship.mockResolvedValue(0);
+
+      await service().unlinkSponsorshipFromRegistration("s1", "r1");
+
+      expect(m.updateRegistrationSettlement).toHaveBeenCalledExactlyOnceWith({}, "r1", {
+        sponsorshipAmount: amount,
+        ...(amount === 0 ? { paymentMethod: null } : {}),
+        ...(next !== undefined ? {
+          paymentStatus: next, ...(paid === 0 ? { paidAt: null } : {}),
+        } : {}),
+      });
+    },
+  );
+
+  // current, gross total, paid, sponsorship, old paidAt, next status, next paidAt.
+  it.each([
+    ["PAID", 100, 100, 0, OLD_PAID_AT, "PAID", OLD_PAID_AT],
+    ["PAID", 100, 0, 100, null, "PAID", null],
+    ["WAIVED", 100, 0, 0, OLD_PAID_AT, "WAIVED", OLD_PAID_AT],
+    ["REFUNDED", 100, 0, 0, OLD_PAID_AT, "REFUNDED", OLD_PAID_AT],
+    ["REFUNDED", 100, 0, 100, null, "REFUNDED", null],
+    ["VERIFYING", 100, 0, 0, OLD_PAID_AT, "PENDING", null],
+    ["VERIFYING", 100, 0, 40, OLD_PAID_AT, "PARTIAL", null],
+    ["VERIFYING", 100, 0, 100, null, "SPONSORED", NOW],
+    ["PENDING", 100, 0, 100, null, "SPONSORED", NOW],
+    ["PENDING", 100, 0, 100, OLD_PAID_AT, "SPONSORED", OLD_PAID_AT],
+    ["PENDING", 100, 0, 40, OLD_PAID_AT, "PARTIAL", null],
+    ["PENDING", 100, 60, 40, OLD_PAID_AT, "PENDING", null],
+    ["PARTIAL", 100, 100, 0, OLD_PAID_AT, "PENDING", null],
+    ["SPONSORED", 100, 0, 0, OLD_PAID_AT, "PENDING", null],
+    ["SPONSORED", 0, 0, 0, OLD_PAID_AT, "PENDING", null],
+    ["VERIFYING", 0, 0, 0, OLD_PAID_AT, "PENDING", null],
+    ["REFUNDED", 0, 0, 0, OLD_PAID_AT, "REFUNDED", OLD_PAID_AT],
+  ] as const)(
+    "recalc: %s, total=%i, paid=%i, sponsored=%i, paidAt=%s → %s (%s)",
+    async (current, total, paid, amount, oldPaidAt, next, nextPaidAt) => {
+      m.findSponsorshipForMutation.mockResolvedValue({
+        id: "s1", eventId: "e1", coversBasePrice: true, coveredAccessIds: [],
+        totalAmount: amount, usages: [{ id: "u1", registrationId: "r1" }], event: OK_EVENT,
+      });
+      m.getEventBasePrice.mockResolvedValue(amount);
+      m.findSponsorshipForRecalc.mockResolvedValue({
+        coversBasePrice: true, coveredAccessIds: [], totalAmount: amount,
+        usages: [{ id: "u1", registration: {
+          id: "r1", eventId: "e1", totalAmount: total, paidAmount: paid,
+          baseAmount: total, paymentStatus: current, paidAt: oldPaidAt,
+          paymentMethod: "BANK_TRANSFER", accessTypeIds: [],
+          priceBreakdown: { calculatedBasePrice: total, subtotal: total, accessItems: [] },
+        } }],
+      });
+      m.findUsageAmountsByRegistration.mockResolvedValue([{ amountApplied: amount }]);
+      m.getSponsorshipById.mockResolvedValue({ id: "s1" });
+
+      await service().updateSponsorship("s1", { coversBasePrice: true });
+
+      expect(m.updateRegistrationSettlement).toHaveBeenCalledExactlyOnceWith({}, "r1", {
+        sponsorshipAmount: amount, paymentStatus: next, paidAt: nextPaidAt,
+        priceBreakdown: {
+          calculatedBasePrice: total, subtotal: total, accessItems: [],
+          sponsorshipTotal: amount, total: total - amount,
+        },
+      });
+    },
+  );
 });
