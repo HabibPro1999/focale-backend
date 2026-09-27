@@ -517,11 +517,11 @@ describe("EventsService", () => {
       expect(result.meta.hasNext).toBe(false);
     });
 
-    it("forwards page/limit for skip", async () => {
+    it("converts page/limit to an offset", async () => {
       vi.mocked(db.listEvents).mockResolvedValue({ data: [], total: 0 });
       await service.listEvents({ page: 3, limit: 10 });
       expect(db.listEvents).toHaveBeenCalledWith(
-        expect.objectContaining({ page: 3, limit: 10 }),
+        expect.objectContaining({ offset: 20, limit: 10 }),
       );
     });
   });

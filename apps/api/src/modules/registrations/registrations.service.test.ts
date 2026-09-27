@@ -247,6 +247,13 @@ describe("RegistrationsService", () => {
 
   // ---- listRegistrations stats bucketing -----------------------------------
   describe("listRegistrations", () => {
+    it("preserves later-page metadata and forwards filters with an offset", async () => {
+      db.listRegistrationRows.mockResolvedValue({ rows: [], total: 3, stats: [] });
+      const result = await service.listRegistrations("ev1", { page: 2, limit: 2, search: "name", paymentStatus: "PAID" } as never);
+      expect(db.listRegistrationRows).toHaveBeenCalledWith("ev1", { offset: 2, limit: 2, search: "name", paymentStatus: "PAID" });
+      expect(result.meta).toEqual({ page: 2, limit: 2, total: 3, totalPages: 2, hasNext: false, hasPrev: true });
+    });
+
     it("buckets stats (paid uses paidAmount; refunded counted but unbucketed)", async () => {
       db.listRegistrationRows.mockResolvedValue({
         rows: [],
@@ -1528,6 +1535,14 @@ describe("RegistrationsService", () => {
 
   // ---- listRegistrationAuditLogs ------------------------------------------
   describe("listRegistrationAuditLogs", () => {
+    it("keeps later-page metadata when no audit rows remain", async () => {
+      db.listRegistrationAuditLogRows.mockResolvedValue({ rows: [], total: 3 });
+      db.findUserNamesByIds.mockResolvedValue([]);
+      const result = await service.listRegistrationAuditLogs("reg1", { page: 3, limit: 2 });
+      expect(db.listRegistrationAuditLogRows).toHaveBeenCalledWith("reg1", { offset: 4, limit: 2 });
+      expect(result).toEqual({ data: [], meta: { page: 3, limit: 2, total: 3, totalPages: 2, hasNext: false, hasPrev: true } });
+    });
+
     it("resolves SYSTEM / PUBLIC / user performer names", async () => {
       db.listRegistrationAuditLogRows.mockResolvedValue({
         rows: [
@@ -1575,6 +1590,13 @@ describe("RegistrationsService", () => {
 
   // ---- listRegistrationEmailLogs ------------------------------------------
   describe("listRegistrationEmailLogs", () => {
+    it("keeps later-page metadata when no email rows remain", async () => {
+      db.listRegistrationEmailLogRows.mockResolvedValue({ rows: [], total: 3 });
+      const result = await service.listRegistrationEmailLogs("reg1", { page: 3, limit: 2 });
+      expect(db.listRegistrationEmailLogRows).toHaveBeenCalledWith("reg1", { offset: 4, limit: 2 });
+      expect(result).toEqual({ data: [], meta: { page: 3, limit: 2, total: 3, totalPages: 2, hasNext: false, hasPrev: true } });
+    });
+
     it("maps rows and ISO-serialises timestamps", async () => {
       db.listRegistrationEmailLogRows.mockResolvedValue({
         rows: [

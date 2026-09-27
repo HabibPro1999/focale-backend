@@ -32,7 +32,7 @@ import {
   calculateApplicableAmount,
   calculateSettlement,
   withSponsorshipTotal,
-  getSkip,
+  toOffsetPagination,
   isFullySettled,
   isFullySponsored as hasFullSponsorship,
   hasReceivedPayment,
@@ -493,9 +493,10 @@ export class RegistrationsService {
     eventId: string,
     query: ListRegistrationsQuery,
   ): Promise<PaginatedResult<AdminView<RegistrationWithRelations>> & { stats: RegistrationStats }> {
+    const { page, limit, ...filters } = query;
     const { rows, total, stats: statsRaw } = await listRegistrationRows(
       eventId,
-      query,
+      { ...filters, ...toOffsetPagination({ page, limit }) },
     );
 
     const stats: RegistrationStats = {
@@ -531,7 +532,6 @@ export class RegistrationsService {
     // The query selects admin columns only; the mapper keeps that true for
     // any future change to the row source.
     const enriched = (await enrichManyWithAccessSelections(rows)).map(toAdminRegistration);
-    const { page, limit } = query;
     return { ...paginate(enriched, total, { page, limit }), stats };
   }
 
@@ -2216,11 +2216,10 @@ export class RegistrationsService {
     query: ListRegistrationAuditLogsQuery,
   ): Promise<PaginatedResult<RegistrationAuditLog>> {
     const { page, limit } = query;
-    const skip = getSkip({ page, limit });
-    const { rows, total } = await listRegistrationAuditLogRows(registrationId, {
-      skip,
-      limit,
-    });
+    const { rows, total } = await listRegistrationAuditLogRows(
+      registrationId,
+      toOffsetPagination({ page, limit }),
+    );
 
     const userIds = [
       ...new Set(
@@ -2258,11 +2257,10 @@ export class RegistrationsService {
     query: ListRegistrationEmailLogsQuery,
   ): Promise<PaginatedResult<RegistrationEmailLog>> {
     const { page, limit } = query;
-    const skip = getSkip({ page, limit });
-    const { rows, total } = await listRegistrationEmailLogRows(registrationId, {
-      skip,
-      limit,
-    });
+    const { rows, total } = await listRegistrationEmailLogRows(
+      registrationId,
+      toOffsetPagination({ page, limit }),
+    );
 
     const enriched: RegistrationEmailLog[] = rows.map((log) => ({
       id: log.id,

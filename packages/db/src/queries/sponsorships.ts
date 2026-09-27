@@ -13,11 +13,7 @@ import {
   sum,
   type SQL,
 } from "drizzle-orm";
-import {
-  getSkip,
-  paginate,
-  type PaginatedResult,
-} from "@app/shared";
+import type { OffsetPagination } from "@app/shared";
 import type { ListSponsorshipsQuery, SponsorshipStats } from "@app/contracts";
 import { enqueueOutboxEvent } from "../outbox";
 import { getDb, type DbExecutor } from "../client";
@@ -86,10 +82,10 @@ function appendToGroup<T>(groups: Map<string, T[]>, key: string, value: T): void
 
 export async function listSponsorships(
   eventId: string,
-  query: ListSponsorshipsQuery,
+  query: Omit<ListSponsorshipsQuery, "page" | "limit"> & OffsetPagination,
   db: DbExecutor = getDb(),
-): Promise<PaginatedResult<SponsorshipListItem> & { stats: SponsorshipStats }> {
-  const { page, limit, status, search, sortBy, sortOrder } = query;
+): Promise<{ data: SponsorshipListItem[]; total: number; stats: SponsorshipStats }> {
+  const { offset, limit, status, search, sortBy, sortOrder } = query;
   const where = buildSponsorshipWhere(eventId, { status, search });
   const dir = sortOrder === "asc" ? asc : desc;
   const orderCol =
@@ -98,7 +94,6 @@ export async function listSponsorships(
       : sortBy === "totalAmount"
         ? sponsorships.totalAmount
         : sponsorships.createdAt;
-  const skip = getSkip({ page, limit });
 
   const batchJoin = eq(sponsorships.batchId, sponsorshipBatches.id);
 
@@ -116,7 +111,7 @@ export async function listSponsorships(
       .where(where)
       .orderBy(dir(orderCol))
       .limit(limit)
-      .offset(skip),
+      .offset(offset),
     db
       .select({ value: count() })
       .from(sponsorships)
@@ -186,7 +181,7 @@ export async function listSponsorships(
     else if (row.status === "CANCELLED") stats.cancelled = { count: c, amount };
   }
 
-  return { ...paginate(data, total, { page, limit }), stats };
+  return { data, total, stats };
 }
 
 // ============================================================================

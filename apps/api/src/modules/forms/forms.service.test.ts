@@ -550,9 +550,7 @@ describe("listForms", () => {
     vi.mocked(dbListForms).mockResolvedValue({ data: [], total: 0 });
     await service.listForms({ page: 1, limit: 10, eventId });
     expect(dbListForms).toHaveBeenCalledWith(
-      expect.objectContaining({ eventId }),
-      0,
-      10,
+      expect.objectContaining({ eventId, offset: 0, limit: 10 }),
     );
   });
 
@@ -560,9 +558,7 @@ describe("listForms", () => {
     vi.mocked(dbListForms).mockResolvedValue({ data: [], total: 0 });
     await service.listForms({ page: 1, limit: 10, type: "SPONSOR" });
     expect(dbListForms).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "SPONSOR" }),
-      0,
-      10,
+      expect.objectContaining({ type: "SPONSOR", offset: 0, limit: 10 }),
     );
   });
 
@@ -570,16 +566,14 @@ describe("listForms", () => {
     vi.mocked(dbListForms).mockResolvedValue({ data: [], total: 0 });
     await service.listForms({ page: 1, limit: 10, search: "registration" });
     expect(dbListForms).toHaveBeenCalledWith(
-      expect.objectContaining({ search: "registration" }),
-      0,
-      10,
+      expect.objectContaining({ search: "registration", offset: 0, limit: 10 }),
     );
   });
 
   it("computes pagination offsets and totals", async () => {
     vi.mocked(dbListForms).mockResolvedValue({ data: [mockForm()], total: 25 });
     const result = await service.listForms({ page: 2, limit: 10 });
-    expect(dbListForms).toHaveBeenCalledWith(expect.anything(), 10, 10);
+    expect(dbListForms).toHaveBeenCalledWith(expect.objectContaining({ offset: 10, limit: 10 }));
     expect(result.meta.page).toBe(2);
     expect(result.meta.totalPages).toBe(3);
   });
