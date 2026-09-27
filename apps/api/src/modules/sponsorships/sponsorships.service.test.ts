@@ -1064,3 +1064,138 @@ describe("settlement truth tables", () => {
     },
   );
 });
+
+
+describe("sponsorship email enqueue characterization", () => {
+  const TX = { emailTransaction: true };
+
+  beforeEach(() => {
+    m.withTxn.mockImplementation((fn: (tx: unknown) => unknown) => fn(TX));
+    m.withLockingTxn.mockImplementation((fn: (tx: unknown) => unknown) => fn(TX));
+    m.findActiveEventAccess.mockResolvedValue([]);
+    m.getEventPricingForBatch.mockResolvedValue({ basePrice: 100, currency: "TND" });
+  });
+
+  function setupLinkedBatch(
+    firstName: string | null,
+    beneficiaryName: string,
+    totalAmount: number,
+    baseAmount = 100,
+    autoApproveSponsorship = true,
+  ) {
+    m.findEventForBatch.mockResolvedValue(batchEvent());
+    m.findSponsorFormById.mockResolvedValue({
+      id: "f1", schema: { sponsorshipSettings: { sponsorshipMode: "LINKED_ACCOUNT" } },
+    });
+    m.findRegistrationsForBatch.mockResolvedValue([linkRegistration({
+      firstName, lastName: "Recipient Last", email: "recipient@example.com",
+      totalAmount, baseAmount,
+      priceBreakdown: { calculatedBasePrice: baseAmount, accessItems: [] },
+    })]);
+    m.insertSponsorshipBatch.mockResolvedValue({ id: "batch-email-1" });
+    m.getFormSchema.mockResolvedValue({ sponsorshipSettings: { autoApproveSponsorship } });
+    m.sponsorshipCodeExists.mockResolvedValue(false);
+    m.insertSponsorship.mockResolvedValue(createdSponsorship({
+      code: "SP-ABCDEFGH", beneficiaryName, totalAmount: baseAmount,
+      beneficiaryEmail: "recipient@example.com",
+    }));
+  }
+
+  const BATCH_CONFIRMATION = [
+    TX,
+    {
+      trigger: "SPONSORSHIP_BATCH_SUBMITTED", eventId: "e1",
+      input: {
+        recipientEmail: "l@x.com", recipientName: "Contact",
+        context: expect.any(Object),
+      },
+    },
+    "email:sponsorship:SPONSORSHIP_BATCH_SUBMITTED:batch-email-1",
+  ];
+
+  it.each([
+    ["R", "R Recipient Last", "R", 100, 100, "full"],
+    ["", "Recipient Last", "Recipient Last", 100, 100, "full"],
+    [null, "Recipient Last", "Recipient Last", 100, 100, "full"],
+    ["R", "R Recipient Last", "R", 200, 100, "partial"],
+    ["", "Recipient Last", "Recipient Last", 200, 100, "partial"],
+    [null, "Recipient Last", "Recipient Last", 200, 100, "partial"],
+    ["", "Recipient Last", "Recipient Last", 200, 0, "none"],
+  ] as const)(
+    "linked batch firstName=%s beneficiary=%s recipient=%s total=%i base=%i (%s)",
+    async (firstName, beneficiaryName, recipientName, total, base, coverage) => {
+      setupLinkedBatch(firstName, beneficiaryName, total, base);
+
+      await service().createSponsorshipBatch("e1", "f1", {
+        sponsor: SPONSOR,
+        linkedBeneficiaries: [{ registrationId: "r1", coversBasePrice: true, coveredAccessIds: [] }],
+      });
+
+      const input = {
+        recipientEmail: "recipient@example.com", recipientName, registrationId: "r1",
+        context: expect.objectContaining({ registrationId: "r1", email: "recipient@example.com" }),
+      };
+      expect(m.enqueueSponsorshipEmailOutbox.mock.calls).toEqual([
+        BATCH_CONFIRMATION,
+        [TX, { trigger: "SPONSORSHIP_LINKED", eventId: "e1", input },
+          "email:sponsorship:SPONSORSHIP_LINKED:r1:SP-ABCDEFGH"],
+        ...(coverage === "partial" ? [[
+          TX, { trigger: "SPONSORSHIP_PARTIAL", eventId: "e1", input },
+          "email:sponsorship:SPONSORSHIP_PARTIAL:r1:SP-ABCDEFGH",
+        ]] : []),
+      ]);
+      expect(m.enqueueTriggeredEmailOutbox.mock.calls).toEqual(coverage === "full" ? [[
+        TX,
+        {
+          trigger: "PAYMENT_CONFIRMED", eventId: "e1",
+          registration: { id: "r1", email: "recipient@example.com", firstName, lastName: "Recipient Last" },
+        },
+        "email:triggered:PAYMENT_CONFIRMED:r1",
+      ]] : []);
+    },
+  );
+
+  it("a pending linked batch queues only the sponsor confirmation", async () => {
+    setupLinkedBatch("R", "R Recipient Last", 100, 100, false);
+
+    await service().createSponsorshipBatch("e1", "f1", {
+      sponsor: SPONSOR,
+      linkedBeneficiaries: [{ registrationId: "r1", coversBasePrice: true, coveredAccessIds: [] }],
+    });
+
+    expect(m.enqueueSponsorshipEmailOutbox.mock.calls).toEqual([BATCH_CONFIRMATION]);
+    expect(m.enqueueTriggeredEmailOutbox).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["R", "R"],
+    ["", "Sponsor Beneficiary"],
+    [null, "Sponsor Beneficiary"],
+  ] as const)("applied: firstName=%s uses recipient=%s and the sponsorship ID in its key", async (firstName, recipientName) => {
+    m.findSponsorshipForLink.mockResolvedValue(linkSponsorship({
+      code: "SP-ABCDEFGH", beneficiaryName: "Sponsor Beneficiary",
+    }));
+    m.findRegistrationForLink.mockResolvedValue(linkRegistration({
+      firstName, email: "recipient@example.com",
+    }));
+    m.findUsage.mockResolvedValue(null);
+    m.insertUsage.mockResolvedValue({ id: "u1", sponsorshipId: "s1", amountApplied: 200 });
+    m.casSetSponsorshipUsed.mockResolvedValue(1);
+    m.findUsageAmountsByRegistration.mockResolvedValue([{ amountApplied: 200 }]);
+
+    await service().linkSponsorshipToRegistration("s1", "r1", "admin");
+
+    expect(m.enqueueSponsorshipEmailOutbox).toHaveBeenCalledExactlyOnceWith(
+      TX,
+      {
+        trigger: "SPONSORSHIP_APPLIED", eventId: "e1",
+        input: {
+          recipientEmail: "recipient@example.com", recipientName, registrationId: "r1",
+          context: expect.objectContaining({ registrationId: "r1", email: "recipient@example.com" }),
+        },
+      },
+      "email:sponsorship:SPONSORSHIP_APPLIED:r1:s1",
+    );
+    expect(m.enqueueTriggeredEmailOutbox).not.toHaveBeenCalled();
+  });
+});
