@@ -158,12 +158,17 @@ function contentTitle(content: unknown): string {
   return "";
 }
 
-/** Port of legacy buildAbstractEmailContext — the French templating variables. */
+/**
+ * Port of legacy buildAbstractEmailContext — the French templating variables.
+ * Dates follow the abstract config's primary language; the status/type labels
+ * stay French.
+ */
 function buildAbstractEmailContext(
   abstract: AbstractForEmailContext,
 ): Record<string, string> {
   const baseUrl = abstract.linkBaseUrl || integrationsConfig().publicFormsUrl;
   const slug = abstract.event.slug || "";
+  const { language } = abstract;
 
   const authorName =
     `${abstract.authorFirstName} ${abstract.authorLastName}`.trim();
@@ -172,7 +177,7 @@ function buildAbstractEmailContext(
     TYPE_LABELS[abstract.requestedType] ||
     abstract.requestedType;
   const abstractEditLink = `${baseUrl}/${slug}/abstracts/${abstract.id}/${abstract.editToken}`;
-  const editingDeadline = formatDate(abstract.config.editingDeadline);
+  const editingDeadline = formatDate(abstract.config.editingDeadline, language);
 
   return {
     authorName,
@@ -184,12 +189,12 @@ function buildAbstractEmailContext(
     platformLink: `${baseUrl}/${slug}`,
     abstractEditLink,
     finalFileUploadLink: abstractEditLink,
-    submissionStartAt: formatDate(abstract.config.submissionStartAt),
-    submissionDeadline: formatDate(abstract.config.submissionDeadline),
+    submissionStartAt: formatDate(abstract.config.submissionStartAt, language),
+    submissionDeadline: formatDate(abstract.config.submissionDeadline, language),
     editingDeadline,
-    scoringStartAt: formatDate(abstract.config.scoringStartAt),
-    scoringDeadline: formatDate(abstract.config.scoringDeadline),
-    finalFileDeadline: formatDate(abstract.config.finalFileDeadline),
+    scoringStartAt: formatDate(abstract.config.scoringStartAt, language),
+    scoringDeadline: formatDate(abstract.config.scoringDeadline, language),
+    finalFileDeadline: formatDate(abstract.config.finalFileDeadline, language),
     finalFileUploadEnabled: abstract.config.finalFileUploadEnabled ? "Oui" : "Non",
     // Back-compat alias for templates authored before explicit date variables.
     deadlineDate: editingDeadline,

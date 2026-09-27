@@ -9,6 +9,7 @@ import {
   type InferSelectModel,
   type SQL,
 } from "drizzle-orm";
+import { getPrimaryLanguage, type LanguageCode } from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
 import { certificateTemplates } from "../schema/certificates";
 import {
@@ -18,9 +19,10 @@ import {
 } from "../schema/events-access";
 import { clients } from "../schema/users-clients";
 import { registrations } from "../schema/registrations";
-import { abstracts } from "../schema/abstracts";
+import { forms } from "../schema/forms";
+import { abstractConfig, abstracts } from "../schema/abstracts";
 import { emailLogs } from "../schema/email";
-import type { RegistrationEmailContext } from "./email";
+import { formLanguagesSql, type RegistrationEmailContext } from "./email";
 
 // ---------------------------------------------------------------------------
 // Row types
@@ -401,10 +403,12 @@ export async function getRegistrationsForCertificateSend(
       registration: registrations,
       event: events,
       client: { name: clients.name, email: clients.email, phone: clients.phone },
+      formLanguages: formLanguagesSql(),
     })
     .from(registrations)
     .innerJoin(events, eq(events.id, registrations.eventId))
     .innerJoin(clients, eq(clients.id, events.clientId))
+    .leftJoin(forms, eq(forms.id, registrations.formId))
     .where(and(...conds));
 
   if (rows.length === 0) return [];
@@ -427,6 +431,7 @@ export async function getRegistrationsForCertificateSend(
 
   return rows.map((r) => ({
     ...r.registration,
+    language: getPrimaryLanguage(r.formLanguages),
     event: { ...r.event, client: r.client },
     accessCheckIns: checkInsByReg.get(r.registration.id) ?? [],
   }));
@@ -443,6 +448,8 @@ export async function getRegistrationForCertificateGeneration(
   role: string;
   checkedInAt: Date | null;
   accessCheckIns: { accessId: string }[];
+  /** Primary language of the registration's form (fr when it sets none). */
+  language: LanguageCode;
   event: { id: string; name: string; startDate: Date; location: string | null };
 } | null> {
   const [row] = await exec
@@ -456,9 +463,11 @@ export async function getRegistrationForCertificateGeneration(
       eventName: events.name,
       eventStartDate: events.startDate,
       eventLocation: events.location,
+      formLanguages: formLanguagesSql(),
     })
     .from(registrations)
     .innerJoin(events, eq(events.id, registrations.eventId))
+    .leftJoin(forms, eq(forms.id, registrations.formId))
     .where(eq(registrations.id, registrationId))
     .limit(1);
   if (!row) return null;
@@ -475,6 +484,7 @@ export async function getRegistrationForCertificateGeneration(
     role: row.role,
     checkedInAt: row.checkedInAt,
     accessCheckIns: checkIns,
+    language: getPrimaryLanguage(row.formLanguages),
     event: {
       id: row.eventId,
       name: row.eventName,
@@ -494,6 +504,8 @@ export interface AbstractForCertificateGeneration {
   requestedType: string;
   code: string | null;
   content: unknown;
+  /** Primary language of the event's abstract config (fr when it sets none). */
+  language: LanguageCode;
   event: { id: string; name: string; startDate: Date; location: string | null };
 }
 
@@ -514,9 +526,11 @@ export async function getAbstractForCertificateGeneration(
       eventName: events.name,
       eventStartDate: events.startDate,
       eventLocation: events.location,
+      configLanguages: abstractConfig.languages,
     })
     .from(abstracts)
     .innerJoin(events, eq(events.id, abstracts.eventId))
+    .leftJoin(abstractConfig, eq(abstractConfig.eventId, abstracts.eventId))
     .where(eq(abstracts.id, abstractId))
     .limit(1);
   if (!row) return null;
@@ -529,6 +543,7 @@ export async function getAbstractForCertificateGeneration(
     requestedType: row.requestedType,
     code: row.code,
     content: row.content,
+    language: getPrimaryLanguage(row.configLanguages),
     event: {
       id: row.eventId,
       name: row.eventName,
@@ -598,6 +613,8 @@ export interface AbstractForCertificateSend {
   authorFirstName: string;
   authorLastName: string;
   authorEmail: string;
+  /** Primary language of the event's abstract config (fr when it sets none). */
+  language: LanguageCode;
   event: { name: string; startDate: Date; location: string | null };
 }
 
@@ -630,9 +647,11 @@ export async function getAbstractsForCertificateSend(
       eventName: events.name,
       eventStartDate: events.startDate,
       eventLocation: events.location,
+      configLanguages: abstractConfig.languages,
     })
     .from(abstracts)
     .innerJoin(events, eq(events.id, abstracts.eventId))
+    .leftJoin(abstractConfig, eq(abstractConfig.eventId, abstracts.eventId))
     .where(
       and(eq(abstracts.eventId, eventId), inArray(abstracts.id, abstractIds)),
     );
@@ -649,6 +668,7 @@ export async function getAbstractsForCertificateSend(
     authorFirstName: r.authorFirstName,
     authorLastName: r.authorLastName,
     authorEmail: r.authorEmail,
+    language: getPrimaryLanguage(r.configLanguages),
     event: {
       name: r.eventName,
       startDate: r.eventStartDate,

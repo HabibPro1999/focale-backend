@@ -6,6 +6,7 @@
 // =============================================================================
 
 import { calculateSettlement } from "@app/shared";
+import type { LanguageCode } from "@app/contracts";
 import {
   getEventPricingForEmail,
   getEventAccessByIdsForEmail,
@@ -13,6 +14,7 @@ import {
   type RegistrationEmailContext,
 } from "@app/db";
 import type { EmailContext } from "./types";
+import { formatDate } from "./locale";
 import { decodeEntities, escapeHtml } from "@app/shared";
 import { integrationsConfig } from "../../config";
 
@@ -55,6 +57,7 @@ export function buildRegistrationSelfLinks(input: {
 export function buildEmailContext(
   registration: RegistrationEmailContext,
 ): EmailContext {
+  const { language } = registration;
   const formData =
     (registration.formData as Record<string, unknown>) || {};
 
@@ -71,16 +74,16 @@ export function buildEmailContext(
     fullName:
       [registration.firstName, registration.lastName]
         .filter(Boolean)
-        .join(" ") || "Registrant",
+        .join(" ") || UNNAMED_REGISTRANT[language],
     email: registration.email,
     phone: registration.phone || String(formData.phone || ""),
-    registrationDate: formatDate(registration.submittedAt),
+    registrationDate: formatDate(registration.submittedAt, language),
     registrationId: registration.id,
     registrationNumber: registration.id.slice(0, 8).toUpperCase(),
 
     eventName: registration.event.name,
-    eventDate: formatDate(registration.event.startDate),
-    eventEndDate: formatDate(registration.event.endDate),
+    eventDate: formatDate(registration.event.startDate, language),
+    eventEndDate: formatDate(registration.event.endDate, language),
     eventLocation: registration.event.location || "",
     eventDescription: registration.event.description || "",
 
@@ -97,7 +100,7 @@ export function buildEmailContext(
       }).amountDue,
       registration.currency,
     ),
-    paymentStatus: formatPaymentStatus(registration.paymentStatus),
+    paymentStatus: formatPaymentStatus(registration.paymentStatus, language),
     paymentMethod: registration.paymentMethod || "",
 
     selectedAccess: "",
@@ -116,7 +119,10 @@ export function buildEmailContext(
   };
 
   for (const [key, value] of Object.entries(formData)) {
-    context[`form_${key}` as keyof EmailContext] = formatFieldValue(value);
+    context[`form_${key}` as keyof EmailContext] = formatFieldValue(
+      value,
+      language,
+    );
   }
 
   return context;
@@ -284,40 +290,56 @@ export function sanitizeForHtml(value: unknown): string {
 
 // =============================================================================
 // FORMATTING HELPERS
+// Labels follow the registration form's primary language (dates: ./locale).
+// French and Arabic wording follows the registrant-facing form app.
 // =============================================================================
 
-export function formatDate(date: Date | string | null | undefined): string {
-  if (!date) return "";
-  const d = new Date(date);
-  return d.toLocaleDateString("en-US", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
-}
+const PAYMENT_STATUS_LABELS: Record<string, Record<LanguageCode, string>> = {
+  PENDING: { fr: "En attente", en: "Pending", ar: "في انتظار الدفع" },
+  VERIFYING: {
+    fr: "En cours de vérification",
+    en: "Verifying payment",
+    ar: "جارٍ التحقّق من الدفع",
+  },
+  PARTIAL: { fr: "Partiellement payé", en: "Partially paid", ar: "مدفوع جزئيًا" },
+  PAID: { fr: "Confirmé", en: "Confirmed", ar: "مؤكَّد" },
+  SPONSORED: { fr: "Sponsorisé", en: "Sponsored", ar: "متكفَّل به" },
+  WAIVED: { fr: "Exonéré", en: "Waived", ar: "معفى" },
+  REFUNDED: { fr: "Remboursé", en: "Refunded", ar: "تم استرجاع المبلغ" },
+};
+
+const YES_NO: Record<LanguageCode, { yes: string; no: string }> = {
+  fr: { yes: "Oui", no: "Non" },
+  en: { yes: "Yes", no: "No" },
+  ar: { yes: "نعم", no: "لا" },
+};
+
+// fullName when the registration carries no name at all.
+const UNNAMED_REGISTRANT: Record<LanguageCode, string> = {
+  fr: "Participant",
+  en: "Registrant",
+  ar: "المشارك",
+};
+
+// Sponsorship contexts are built inside the sponsorship transactions, which do
+// not load a form language yet, so their dates stay in English.
+const SPONSORSHIP_EMAIL_LANGUAGE: LanguageCode = "en";
 
 function formatCurrency(amount: number, currency = "TND"): string {
   return `${amount.toLocaleString("fr-TN")} ${currency}`;
 }
 
-function formatPaymentStatus(status: string): string {
-  const statusMap: Record<string, string> = {
-    PENDING: "Pending",
-    VERIFYING: "Verifying payment",
-    PARTIAL: "Partially paid",
-    PAID: "Confirmed",
-    SPONSORED: "Sponsored",
-    WAIVED: "Waived",
-    REFUNDED: "Refunded",
-  };
-  return statusMap[status] || status;
+function formatPaymentStatus(status: string, language: LanguageCode): string {
+  return PAYMENT_STATUS_LABELS[status]?.[language] || status;
 }
 
-function formatFieldValue(value: unknown): string {
+function formatFieldValue(value: unknown, language: LanguageCode): string {
   if (value === null || value === undefined) return "";
-  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "boolean") {
+    return value ? YES_NO[language].yes : YES_NO[language].no;
+  }
   if (Array.isArray(value)) return value.join(", ");
-  if (value instanceof Date) return formatDate(value);
+  if (value instanceof Date) return formatDate(value, language);
   return String(value);
 }
 
@@ -325,27 +347,29 @@ function formatFieldValue(value: unknown): string {
 // SAMPLE DATA FOR PREVIEW / TEST-SEND
 // =============================================================================
 
-export function getSampleEmailContext(): EmailContext {
+/** Sample values, with dates and labels in the event's form language. */
+export function getSampleEmailContext(language: LanguageCode): EmailContext {
+  // Noon UTC keeps the sample's calendar day in any server timezone.
   return {
     firstName: "John",
     lastName: "Doe",
     fullName: "John Doe",
     email: "john.doe@example.com",
     phone: "+216 12 345 678",
-    registrationDate: "March 15, 2025",
+    registrationDate: formatDate("2025-03-15T12:00:00Z", language),
     registrationId: "abc123",
     registrationNumber: "ABC123",
 
     eventName: "Medical Conference 2025",
-    eventDate: "April 20, 2025",
-    eventEndDate: "April 22, 2025",
+    eventDate: formatDate("2025-04-20T12:00:00Z", language),
+    eventEndDate: formatDate("2025-04-22T12:00:00Z", language),
     eventLocation: "Tunis, Tunisia",
     eventDescription: "Annual medical conference",
 
     totalAmount: "250 TND",
     paidAmount: "250 TND",
     amountDue: "0 TND",
-    paymentStatus: "Confirmed",
+    paymentStatus: formatPaymentStatus("PAID", language),
     paymentMethod: "Bank Transfer",
 
     selectedAccess: "Workshop A, Gala Dinner",
@@ -447,7 +471,7 @@ export function buildBatchEmailContext(
 
   return {
     eventName: event.name,
-    eventDate: formatDate(event.startDate),
+    eventDate: formatDate(event.startDate, SPONSORSHIP_EMAIL_LANGUAGE),
     eventLocation: event.location || "",
     organizerName: event.client.name,
 
@@ -470,7 +494,7 @@ export function buildBatchEmailContext(
     fullName: batch.contactName,
     email: batch.email,
     phone: batch.phone || "",
-    registrationDate: formatDate(new Date()),
+    registrationDate: formatDate(new Date(), SPONSORSHIP_EMAIL_LANGUAGE),
     registrationId: "",
     registrationNumber: "",
     eventEndDate: "",
@@ -542,12 +566,12 @@ export function buildLinkedSponsorshipContext(
         .join(" ") || sponsorship.beneficiaryName,
     email: registration.email,
     phone: registration.phone || "",
-    registrationDate: formatDate(new Date()),
+    registrationDate: formatDate(new Date(), SPONSORSHIP_EMAIL_LANGUAGE),
     registrationId: registration.id,
     registrationNumber: registration.id.slice(0, 8).toUpperCase(),
 
     eventName: event.name,
-    eventDate: formatDate(event.startDate),
+    eventDate: formatDate(event.startDate, SPONSORSHIP_EMAIL_LANGUAGE),
     eventEndDate: "",
     eventLocation: event.location || "",
     eventDescription: "",

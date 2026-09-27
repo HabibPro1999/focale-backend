@@ -9,7 +9,7 @@
 import fontkit from "@pdf-lib/fontkit";
 import { PDFDocument, type PDFFont, rgb } from "pdf-lib";
 import { readFile } from "node:fs/promises";
-import type { CertificateZone } from "@app/contracts";
+import type { CertificateZone, LanguageCode } from "@app/contracts";
 import { ABSTRACT_FINAL_TYPE_LABELS } from "@app/contracts";
 import {
   getRegistrationForCertificateGeneration,
@@ -19,6 +19,7 @@ import {
 import { getStorageProvider } from "./storage/index";
 import { logger } from "./logger";
 import { integrationsConfig } from "./config";
+import { formatDate } from "./email/rendering/locale";
 import type { EmailAttachment } from "./email/index";
 import type {
   CertificateAttachmentContext,
@@ -54,6 +55,8 @@ export interface RegistrationForCertificate {
   role: string;
   checkedInAt: Date | null;
   accessCheckIns: Array<{ accessId: string }>;
+  /** Primary language of the registration's form. */
+  language: LanguageCode;
   event: {
     name: string;
     startDate: Date;
@@ -72,6 +75,8 @@ export interface AbstractForCertificate {
   requestedType: string;
   code: string | null;
   content: unknown;
+  /** Primary language of the event's abstract config. */
+  language: LanguageCode;
   event: {
     name: string;
     startDate: Date;
@@ -83,12 +88,12 @@ export interface AbstractForCertificate {
 // VARIABLE RESOLUTION
 // =============================================================================
 
-function formatDate(date: Date): string {
-  return date.toLocaleDateString("en-US", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
+/** Zone text is drawn with pdf-lib's plain drawText, which does no bidi
+ * reordering: an ar-TN date ("24 سبتمبر 2026") would print its numbers
+ * reversed (2026 as 6202). Arabic-primary events therefore get French dates on
+ * certificates; their emails still use ar-TN. */
+function certificateDateLanguage(language: LanguageCode): LanguageCode {
+  return language === "ar" ? "fr" : language;
 }
 
 /** Mirrors the local `getTitle`/`getAbstractTitle` helper duplicated across the
@@ -131,6 +136,7 @@ export interface CertificateVariableData {
   eventDate?: string;
   eventLocation?: string | null;
   accessName?: string;
+  issuanceDate?: string;
   // H2: abstract (presenter) certs only.
   abstractTitle?: string;
   abstractCode?: string | null;
@@ -165,10 +171,48 @@ export function resolveCertificateVariable(
     case "abstractFinalType":
       return data.abstractFinalType || "—";
     case "issuanceDate":
-      return formatDate(new Date());
+      return data.issuanceDate || "—";
     default:
       return "—";
   }
+}
+
+/** A registrant's zone variables (accessName is added per template). */
+function registrationVariableData(
+  registration: RegistrationForCertificate,
+): CertificateVariableData {
+  const language = certificateDateLanguage(registration.language);
+  return {
+    firstName: registration.firstName,
+    lastName: registration.lastName,
+    role: registration.role,
+    eventName: registration.event.name,
+    eventDate: formatDate(registration.event.startDate, language),
+    eventLocation: registration.event.location,
+    issuanceDate: formatDate(new Date(), language),
+  };
+}
+
+/** A presenter's zone variables (H2). */
+function abstractVariableData(
+  abstract: AbstractForCertificate,
+): CertificateVariableData {
+  const language = certificateDateLanguage(abstract.language);
+  return {
+    firstName: abstract.authorFirstName,
+    lastName: abstract.authorLastName,
+    eventName: abstract.event.name,
+    eventDate: formatDate(abstract.event.startDate, language),
+    eventLocation: abstract.event.location,
+    issuanceDate: formatDate(new Date(), language),
+    abstractTitle: getAbstractTitle(abstract.content),
+    abstractCode: abstract.code,
+    abstractFinalType: labelForAbstractType(
+      abstract.finalType,
+      abstract.requestedType,
+    ),
+    role: abstractRoleLabel(abstract.finalType, abstract.requestedType),
+  };
 }
 
 // =============================================================================
@@ -357,6 +401,8 @@ export const __certificatePdfTestHooks = {
   truncateTextToWidth,
   labelForAbstractType,
   abstractRoleLabel,
+  registrationVariableData,
+  abstractVariableData,
 };
 
 function fitTextToZone(
@@ -649,18 +695,9 @@ export async function generateCertificateAttachments(
     isEligibleForCertificate(registration, t),
   );
 
-  const variableData: CertificateVariableData = {
-    firstName: registration.firstName,
-    lastName: registration.lastName,
-    role: registration.role,
-    eventName: registration.event.name,
-    eventDate: formatDate(registration.event.startDate),
-    eventLocation: registration.event.location,
-  };
-
   return renderCertificateAttachments(
     eligible,
-    variableData,
+    registrationVariableData(registration),
     registration.id,
     imageCache,
     { registrationId: registration.id },
@@ -683,26 +720,9 @@ export async function generateAbstractCertificateAttachments(
     isAbstractEligibleForCertificate(abstract.finalType, t),
   );
 
-  const abstractFinalTypeLabel = labelForAbstractType(
-    abstract.finalType,
-    abstract.requestedType,
-  );
-
-  const variableData: CertificateVariableData = {
-    firstName: abstract.authorFirstName,
-    lastName: abstract.authorLastName,
-    eventName: abstract.event.name,
-    eventDate: formatDate(abstract.event.startDate),
-    eventLocation: abstract.event.location,
-    abstractTitle: getAbstractTitle(abstract.content),
-    abstractCode: abstract.code,
-    abstractFinalType: abstractFinalTypeLabel,
-    role: abstractRoleLabel(abstract.finalType, abstract.requestedType),
-  };
-
   return renderCertificateAttachments(
     eligible,
-    variableData,
+    abstractVariableData(abstract),
     abstract.id,
     imageCache,
     { abstractId: abstract.id },
