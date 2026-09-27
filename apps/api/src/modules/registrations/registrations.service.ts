@@ -31,6 +31,7 @@ import {
 import {
   calculateApplicableAmount,
   calculateSettlement,
+  withSponsorshipTotal,
   getSkip,
   isFullySettled,
   paginate,
@@ -363,11 +364,7 @@ export class RegistrationsService {
     }
 
     sponsorshipAmount = Math.min(sponsorshipAmount, priceBreakdown.subtotal);
-    const updatedBreakdown: PriceBreakdown = {
-      ...priceBreakdown,
-      sponsorshipTotal: sponsorshipAmount,
-      total: Math.max(0, priceBreakdown.subtotal - sponsorshipAmount),
-    };
+    const updatedBreakdown = withSponsorshipTotal(priceBreakdown, priceBreakdown.subtotal, sponsorshipAmount);
 
     const result: SettlementResult = {
       priceBreakdown: updatedBreakdown,

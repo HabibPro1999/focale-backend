@@ -11,7 +11,7 @@ const db = vi.hoisted(() => ({
   getEventPricingGate: vi.fn(),
   getEventPricing: vi.fn(),
   findEventAccessByIds: vi.fn(),
-  findPendingSponsorships: vi.fn(),
+  findPendingSponsorshipsByCodes: vi.fn(),
   // registrations
   withTxn: vi.fn(),
   findClientModuleState: vi.fn(),
@@ -132,7 +132,7 @@ beforeEach(() => {
   db.getEventPricingGate.mockResolvedValue({ status: "OPEN", client, currentCurrency: "TND" });
   db.getEventPricing.mockResolvedValue(PRICING);
   db.findEventAccessByIds.mockResolvedValue([]);
-  db.findPendingSponsorships.mockResolvedValue([]);
+  db.findPendingSponsorshipsByCodes.mockResolvedValue([]);
   db.getFormForPriceQuote.mockResolvedValue({
     id: "form1",
     eventId: "ev1",

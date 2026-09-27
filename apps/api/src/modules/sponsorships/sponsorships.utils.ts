@@ -1,5 +1,6 @@
 import { randomInt } from "node:crypto";
-import type { SponsorshipForCalculation } from "@app/shared";
+import { calculateApplicableAmount, type SponsorshipForCalculation, type RegistrationForCalculation } from "@app/shared";
+import { getExclusivityKey, timeRangesOverlap } from "../access/access-overlap";
 
 // Pure helpers ported from legacy sponsorships.utils.ts. No I/O.
 
@@ -107,7 +108,7 @@ export function getAccessTypeKey(
   type: string,
   groupLabel: string | null,
 ): string {
-  return type === "OTHER" ? `OTHER:${groupLabel || ""}` : type;
+  return getExclusivityKey({ type, groupLabel });
 }
 
 /**
@@ -140,11 +141,7 @@ export function validateCoveredAccessTimeOverlap(
         const a = typeItems[i];
         const b = typeItems[j];
         if (a.startsAt && a.endsAt && b.startsAt && b.endsAt) {
-          const aStart = a.startsAt.getTime();
-          const aEnd = a.endsAt.getTime();
-          const bStart = b.startsAt.getTime();
-          const bEnd = b.endsAt.getTime();
-          if (!(aEnd <= bStart || bEnd <= aStart)) {
+          if (timeRangesOverlap(a.startsAt, a.endsAt, b.startsAt, b.endsAt)) {
             errors.push(`Time conflict: "${a.name}" and "${b.name}" overlap`);
           }
         }
@@ -173,9 +170,22 @@ export function determineSponsorshipStatus(
   return usageCount > 0 ? "USED" : "PENDING";
 }
 
-// Re-export the pure coverage math (single source in @app/shared).
-export {
-  calculateApplicableAmount,
-  type SponsorshipForCalculation,
-  type RegistrationForCalculation,
-} from "@app/shared";
+/** Adapt DB registration rows without changing null breakdown behavior. */
+export function applicableAmountFor(
+  sponsorship: { coversBasePrice: boolean; coveredAccessIds: string[] | null; totalAmount: number },
+  registration: { totalAmount: number; baseAmount: number; accessTypeIds: string[]; priceBreakdown: unknown },
+): number {
+  return calculateApplicableAmount(
+    {
+      coversBasePrice: sponsorship.coversBasePrice,
+      coveredAccessIds: sponsorship.coveredAccessIds ?? [],
+      totalAmount: sponsorship.totalAmount,
+    },
+    {
+      totalAmount: registration.totalAmount,
+      baseAmount: registration.baseAmount,
+      accessTypeIds: registration.accessTypeIds,
+      priceBreakdown: registration.priceBreakdown as RegistrationForCalculation["priceBreakdown"],
+    },
+  );
+}

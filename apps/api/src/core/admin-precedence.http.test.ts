@@ -63,8 +63,6 @@ const sponsorships = {
 };
 const pricing = {
   getEventForOwnership: db.getEventWithPricing,
-  // Preserve the real service's module gate, not a canned thrown error.
-  assertClientModuleEnabled: PricingService.prototype.assertClientModuleEnabled,
   updateEventPricing: vi.fn(), deletePricingRule: vi.fn(), getEventPricing: vi.fn(),
 };
 const templates = { getById: vi.fn(), create: vi.fn(), update: vi.fn(), list: vi.fn() };

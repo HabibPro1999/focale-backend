@@ -1,6 +1,8 @@
 import { Injectable } from "@nestjs/common";
 import {
   ErrorCodes,
+  getSponsorshipMode,
+  getSponsorshipSettings,
   type AvailableSponsorship,
   type CreateBatchResult,
   type CreateSponsorshipBatchInput,
@@ -9,8 +11,8 @@ import {
   type UpdateSponsorshipInput,
 } from "@app/contracts";
 import {
-  calculateApplicableAmount,
   calculateSettlement,
+  withSponsorshipTotal,
   type RegistrationForCalculation,
 } from "@app/shared";
 import {
@@ -34,8 +36,7 @@ import {
   findUsageAmountsByRegistration,
   getActiveSponsorForm,
   getDb,
-  getEventBasePrice,
-  getEventPricingForBatch,
+  getSponsorshipEventPricing,
   getFormSchema,
   getLinkedSponsorships,
   getPendingSponsorships,
@@ -76,6 +77,7 @@ import { assertModuleEnabledForClient } from "../clients/module-gates";
 import { AccessService } from "../access/access.service";
 import { AppException } from "../../core/app-exception";
 import {
+  applicableAmountFor,
   calculateTotalSponsorshipAmount,
   detectCoverageOverlap,
   determineSponsorshipStatus,
@@ -85,6 +87,44 @@ import {
 } from "./sponsorships.utils";
 
 const MODULE = "sponsorships";
+
+function toEmailEvent(event: Parameters<typeof buildLinkedSponsorshipContext>[0]["event"]) {
+  return {
+    name: event.name, slug: event.slug, startDate: event.startDate,
+    location: event.location, client: { name: event.client.name },
+  };
+}
+
+function enqueueRegistrantSponsorshipEmail(
+  tx: DbExecutor,
+  options: {
+    trigger: "SPONSORSHIP_LINKED" | "SPONSORSHIP_PARTIAL" | "SPONSORSHIP_APPLIED";
+    eventId: string;
+    registration: { id: string; email: string; firstName: string | null };
+    beneficiaryName: string;
+    context: ReturnType<typeof buildLinkedSponsorshipContext>;
+    dedupeSuffix: string;
+  },
+) {
+  const { trigger, eventId, registration, beneficiaryName, context, dedupeSuffix } = options;
+  return enqueueSponsorshipEmailOutbox(tx, {
+    trigger, eventId,
+    input: {
+      recipientEmail: registration.email,
+      recipientName: registration.firstName || beneficiaryName,
+      context: context as Record<string, unknown>, registrationId: registration.id,
+    },
+  }, `email:sponsorship:${trigger}:${registration.id}:${dedupeSuffix}`);
+}
+
+function duplicates(values: string[]): string[] {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    if (seen.has(value)) return true;
+    seen.add(value);
+    return false;
+  });
+}
 
 /** Legacy link/batch precedence: PAID/WAIVED sticky, else SPONSORED/PARTIAL/unchanged. */
 function nextStatusOnApply(
@@ -112,7 +152,6 @@ interface BatchContext {
   event: Awaited<ReturnType<typeof findEventForBatch>> & object;
   formId: string;
   pricing: { basePrice: number; currency: string } | null;
-  accessPriceMap: Map<string, number>;
   accessItems: AccessItemForOverlap[];
   isLinkedMode: boolean;
   beneficiaries: CreateSponsorshipBatchInput["beneficiaries"];
@@ -162,10 +201,6 @@ export class SponsorshipsService {
     return getActiveSponsorForm(eventId);
   }
 
-  getRegistrationForSponsorship(registrationId: string) {
-    return getRegistrationForSponsorship(registrationId);
-  }
-
   searchRegistrantsForSponsorship(
     eventId: string,
     opts: { query: string; unpaidOnly: boolean; limit: number },
@@ -195,21 +230,13 @@ export class SponsorshipsService {
 
     const pending = await getPendingSponsorships(eventId);
     const existingUsages: ExistingUsage[] = registration.existingUsages;
-    const priceBreakdown =
-      registration.priceBreakdown as RegistrationForCalculation["priceBreakdown"];
-
     return pending.map((sponsorship) => {
       const coverage = {
         coversBasePrice: sponsorship.coversBasePrice,
         coveredAccessIds: sponsorship.coveredAccessIds,
         totalAmount: sponsorship.totalAmount,
       };
-      const applicableAmount = calculateApplicableAmount(coverage, {
-        totalAmount: registration.totalAmount,
-        baseAmount: registration.baseAmount,
-        accessTypeIds: registration.accessTypeIds,
-        priceBreakdown,
-      });
+      const applicableAmount = applicableAmountFor(coverage, registration);
       const conflicts = detectCoverageOverlap(existingUsages, coverage);
       return {
         id: sponsorship.id,
@@ -233,10 +260,9 @@ export class SponsorshipsService {
   async updateSponsorship(
     id: string,
     input: UpdateSponsorshipInput,
-    performedBy?: string,
   ): Promise<SponsorshipWithUsages> {
     if (input.status === "CANCELLED") {
-      return this.cancelSponsorship(id, performedBy);
+      return this.cancelSponsorship(id);
     }
     await withLockingTxn((tx) => this.updateSponsorshipCore(tx, id, input));
     return (await getSponsorshipById(id)) as SponsorshipWithUsages;
@@ -277,8 +303,7 @@ export class SponsorshipsService {
 
     // Fetch active access rows once when we need them (overlap and/or repricing).
     const needAccess =
-      nextCoveredAccessIds.length > 0 &&
-      (input.coveredAccessIds !== undefined || coverageChanged);
+      nextCoveredAccessIds.length > 0 && coverageChanged;
     const accessRows = needAccess
       ? await findActiveEventAccess(tx, sponsorship.eventId, nextCoveredAccessIds)
       : [];
@@ -302,25 +327,14 @@ export class SponsorshipsService {
     if (coverageChanged) {
       nextTotalAmount = 0;
       if (nextCoversBasePrice) {
-        nextTotalAmount += (await getEventBasePrice(tx, sponsorship.eventId)) ?? 0;
+        nextTotalAmount += (await getSponsorshipEventPricing(tx, sponsorship.eventId))?.basePrice ?? 0;
       }
-      if (nextCoveredAccessIds.length > 0) {
-        nextTotalAmount += accessRows.reduce((sum, item) => sum + item.price, 0);
-      }
+      nextTotalAmount += accessRows.reduce((sum, item) => sum + item.price, 0);
     }
 
     const patch: Parameters<typeof updateSponsorshipRow>[2] = {};
-    if (input.beneficiaryName !== undefined) {
-      patch.beneficiaryName = input.beneficiaryName;
-    }
-    if (input.beneficiaryEmail !== undefined) {
-      patch.beneficiaryEmail = input.beneficiaryEmail;
-    }
-    if (input.beneficiaryPhone !== undefined) {
-      patch.beneficiaryPhone = input.beneficiaryPhone;
-    }
-    if (input.beneficiaryAddress !== undefined) {
-      patch.beneficiaryAddress = input.beneficiaryAddress;
+    for (const key of ["beneficiaryName", "beneficiaryEmail", "beneficiaryPhone", "beneficiaryAddress"] as const) {
+      if (input[key] !== undefined) Object.assign(patch, { [key]: input[key] });
     }
     if (coverageChanged) {
       patch.coversBasePrice = nextCoversBasePrice;
@@ -339,16 +353,14 @@ export class SponsorshipsService {
 
   async cancelSponsorship(
     id: string,
-    performedBy?: string,
   ): Promise<SponsorshipWithUsages> {
-    await withLockingTxn((tx) => this.cancelSponsorshipCore(tx, id, performedBy));
+    await withLockingTxn((tx) => this.cancelSponsorshipCore(tx, id));
     return (await getSponsorshipById(id)) as SponsorshipWithUsages;
   }
 
   private async cancelSponsorshipCore(
     tx: DbExecutor,
     id: string,
-    performedBy?: string,
   ): Promise<void> {
     const sponsorship = await this.findSponsorshipForLockedMutation(tx, id);
     if (!sponsorship) {
@@ -362,7 +374,6 @@ export class SponsorshipsService {
       tx,
       id,
       sponsorship.usages,
-      performedBy,
     );
 
     if (sponsorship.status !== "CANCELLED") {
@@ -370,14 +381,13 @@ export class SponsorshipsService {
     }
   }
 
-  async deleteSponsorship(id: string, performedBy?: string): Promise<void> {
-    await withLockingTxn((tx) => this.deleteSponsorshipCore(tx, id, performedBy));
+  async deleteSponsorship(id: string): Promise<void> {
+    await withLockingTxn((tx) => this.deleteSponsorshipCore(tx, id));
   }
 
   private async deleteSponsorshipCore(
     tx: DbExecutor,
     id: string,
-    performedBy?: string,
   ): Promise<void> {
     const sponsorship = await this.findSponsorshipForLockedMutation(tx, id);
     if (!sponsorship) {
@@ -390,7 +400,6 @@ export class SponsorshipsService {
       tx,
       id,
       sponsorship.usages,
-      performedBy,
     );
     await deleteSponsorshipRow(tx, id);
   }
@@ -419,28 +428,16 @@ export class SponsorshipsService {
         formData: { sponsor, customFields: customFields ?? {} },
       });
 
-      const formSchema = (await getFormSchema(tx, context.formId)) as
-        | Record<string, unknown>
-        | null;
-      const sponsorshipSettings = formSchema?.sponsorshipSettings as
-        | Record<string, unknown>
-        | undefined;
-      const autoApprove =
-        (sponsorshipSettings?.autoApproveSponsorship as boolean | undefined) ??
-        false;
+      const autoApprove = getSponsorshipSettings(
+        await getFormSchema(tx, context.formId),
+      ).autoApproveSponsorship ?? false;
 
       let created: SponsorshipRow[];
       let linkedEmailEntries: LinkedEmailEntry[] = [];
       if (context.isLinkedMode) {
-        const linkedResult = await this.createLinkedModeSponsorships(
-          tx,
-          eventId,
-          batch.id,
-          context.linkedBeneficiaries ?? [],
-          context.registrations,
-          autoApprove,
-          context.accessPriceMap,
-        );
+        const linkedResult = await this.createLinkedModeSponsorships(tx, context, {
+          eventId, batchId: batch.id, autoApprove,
+        });
         created = linkedResult.created;
         linkedEmailEntries = linkedResult.linkedEmailEntries;
       } else {
@@ -450,25 +447,15 @@ export class SponsorshipsService {
           batch.id,
           context.beneficiaries ?? [],
           context.pricing?.basePrice ?? 0,
-          context.accessPriceMap,
+          new Map(context.accessItems.map((item) => [item.id, item.price])),
         );
       }
 
-      await this.queueBatchEmails(
-        tx,
-        eventId,
-        batch.id,
-        context,
-        {
-          labName: sponsor.labName,
-          contactName: sponsor.contactName,
-          email: sponsor.email,
-          phone: sponsor.phone ?? null,
-        },
-        autoApprove,
-        created,
-        linkedEmailEntries,
-      );
+      await this.queueBatchEmails(tx, context, {
+        eventId, batchId: batch.id,
+        batch: { ...sponsor, phone: sponsor.phone ?? null },
+        autoApprove, sponsorships: created, linkedEmailEntries,
+      });
 
       // ponytail: realtime outbox omitted — deferred across this port wave.
       return { batchId: batch.id, count: created.length };
@@ -487,7 +474,7 @@ export class SponsorshipsService {
 
     if (!isLinkedMode && beneficiaries.length > 0) {
       const emails = beneficiaries.map((b) => b.email.toLowerCase());
-      const dupes = emails.filter((e, i) => emails.indexOf(e) !== i);
+      const dupes = duplicates(emails);
       if (dupes.length > 0) {
         throw new AppException(
           ErrorCodes.VALIDATION_ERROR,
@@ -495,10 +482,9 @@ export class SponsorshipsService {
           400,
         );
       }
-    }
-    if (isLinkedMode) {
+    } else if (isLinkedMode) {
       const regIds = linkedBeneficiaries.map((b) => b.registrationId);
-      const dupes = regIds.filter((r, i) => regIds.indexOf(r) !== i);
+      const dupes = duplicates(regIds);
       if (dupes.length > 0) {
         throw new AppException(
           ErrorCodes.VALIDATION_ERROR,
@@ -523,10 +509,7 @@ export class SponsorshipsService {
         404,
       );
     }
-    const sponsorshipMode =
-      ((form.schema as Record<string, unknown> | null)?.sponsorshipSettings as
-        | Record<string, unknown>
-        | undefined)?.sponsorshipMode ?? "CODE";
+    const sponsorshipMode = getSponsorshipMode(form.schema);
 
     if (isLinkedMode && sponsorshipMode !== "LINKED_ACCOUNT") {
       throw new AppException(
@@ -543,7 +526,7 @@ export class SponsorshipsService {
       );
     }
 
-    const pricing = await getEventPricingForBatch(db, eventId);
+    const pricing = await getSponsorshipEventPricing(db, eventId);
 
     const beneficiaryList = isLinkedMode ? linkedBeneficiaries : beneficiaries;
     const allAccessIds = new Set<string>();
@@ -551,7 +534,6 @@ export class SponsorshipsService {
       for (const id of b.coveredAccessIds) allAccessIds.add(id);
     }
 
-    let accessPriceMap = new Map<string, number>();
     let batchAccessItems: AccessItemForOverlap[] = [];
     if (allAccessIds.size > 0) {
       const accessItems = await findActiveEventAccess(db, eventId, [
@@ -588,7 +570,6 @@ export class SponsorshipsService {
           { timeConflicts: overlapErrors },
         );
       }
-      accessPriceMap = new Map(accessItems.map((a) => [a.id, a.price]));
     }
 
     const registrations = new Map<string, RegistrationForBatch>();
@@ -612,7 +593,6 @@ export class SponsorshipsService {
       event,
       formId: form.id,
       pricing,
-      accessPriceMap,
       accessItems: batchAccessItems,
       isLinkedMode,
       beneficiaries,
@@ -656,18 +636,16 @@ export class SponsorshipsService {
 
   private async createLinkedModeSponsorships(
     tx: DbExecutor,
-    eventId: string,
-    batchId: string,
-    linkedBeneficiaries: NonNullable<
-      CreateSponsorshipBatchInput["linkedBeneficiaries"]
-    >,
-    registrations: Map<string, RegistrationForBatch>,
-    autoApprove: boolean,
-    accessPriceMap: Map<string, number>,
+    context: BatchContext,
+    run: { eventId: string; batchId: string; autoApprove: boolean },
   ): Promise<{
     created: SponsorshipRow[];
     linkedEmailEntries: LinkedEmailEntry[];
   }> {
+    const { eventId, batchId, autoApprove } = run;
+    const { registrations } = context;
+    const linkedBeneficiaries = context.linkedBeneficiaries ?? [];
+    const accessPriceMap = new Map(context.accessItems.map((item) => [item.id, item.price]));
     const created: SponsorshipRow[] = [];
     const linkedEmailEntries: LinkedEmailEntry[] = [];
     // Sequential — auto-approve mutates the in-memory running total that a later
@@ -690,30 +668,11 @@ export class SponsorshipsService {
         (linked.coversBasePrice ? registration.baseAmount : 0) +
         sumAccessPrices(linked.coveredAccessIds, accessPriceMap);
 
-      if (!autoApprove) {
-        const pending = await insertSponsorship(tx, {
-          batchId,
-          eventId,
-          code,
-          status: "PENDING",
-          beneficiaryName,
-          beneficiaryEmail: registration.email,
-          beneficiaryPhone: registration.phone ?? null,
-          beneficiaryAddress: null,
-          coversBasePrice: linked.coversBasePrice,
-          coveredAccessIds: linked.coveredAccessIds,
-          totalAmount,
-          targetRegistrationId: linked.registrationId,
-        });
-        created.push(pending);
-        continue;
-      }
-
       const sponsorship = await insertSponsorship(tx, {
         batchId,
         eventId,
         code,
-        status: "USED",
+        status: autoApprove ? "USED" : "PENDING",
         beneficiaryName,
         beneficiaryEmail: registration.email,
         beneficiaryPhone: registration.phone ?? null,
@@ -721,7 +680,12 @@ export class SponsorshipsService {
         coversBasePrice: linked.coversBasePrice,
         coveredAccessIds: linked.coveredAccessIds,
         totalAmount,
+        ...(autoApprove ? {} : { targetRegistrationId: linked.registrationId }),
       });
+      if (!autoApprove) {
+        created.push(sponsorship);
+        continue;
+      }
 
       const priceBreakdown =
         registration.priceBreakdown as RegistrationForCalculation["priceBreakdown"];
@@ -729,18 +693,9 @@ export class SponsorshipsService {
         registration.paymentStatus === "PARTIAL"
           ? await this.access.getAlreadyCoveredAccessIds(linked.registrationId, tx)
           : new Set<string>();
-      const applicableAmount = calculateApplicableAmount(
-        {
-          coversBasePrice: linked.coversBasePrice,
-          coveredAccessIds: linked.coveredAccessIds,
-          totalAmount,
-        },
-        {
-          totalAmount: registration.totalAmount,
-          baseAmount: registration.baseAmount,
-          accessTypeIds: registration.accessTypeIds,
-          priceBreakdown,
-        },
+      const applicableAmount = applicableAmountFor(
+        { coversBasePrice: linked.coversBasePrice, coveredAccessIds: linked.coveredAccessIds, totalAmount },
+        registration,
       );
 
       await insertUsage(tx, {
@@ -811,27 +766,19 @@ export class SponsorshipsService {
    */
   private async queueBatchEmails(
     tx: DbExecutor,
-    eventId: string,
-    batchId: string,
     context: BatchContext,
-    batch: {
-      labName: string;
-      contactName: string;
-      email: string;
-      phone: string | null;
+    run: {
+      eventId: string;
+      batchId: string;
+      batch: { labName: string; contactName: string; email: string; phone: string | null };
+      autoApprove: boolean;
+      sponsorships: SponsorshipRow[];
+      linkedEmailEntries: LinkedEmailEntry[];
     },
-    autoApprove: boolean,
-    sponsorships: SponsorshipRow[],
-    linkedEmailEntries: LinkedEmailEntry[],
   ): Promise<void> {
+    const { eventId, batchId, batch, autoApprove, sponsorships, linkedEmailEntries } = run;
     const currency = context.pricing?.currency ?? "TND";
-    const eventForEmail = {
-      name: context.event.name,
-      slug: context.event.slug,
-      startDate: context.event.startDate,
-      location: context.event.location,
-      client: { name: context.event.client.name },
-    };
+    const eventForEmail = toEmailEvent(context.event);
 
     const batchContext = buildBatchEmailContext({
       batch,
@@ -880,21 +827,11 @@ export class SponsorshipsService {
         currency,
       });
 
-      await enqueueSponsorshipEmailOutbox(
-        tx,
-        {
-          trigger: "SPONSORSHIP_LINKED",
-          eventId,
-          input: {
-            recipientEmail: entry.registration.email,
-            recipientName:
-              entry.registration.firstName || entry.sponsorship.beneficiaryName,
-            context: linkedContext as Record<string, unknown>,
-            registrationId: entry.registration.id,
-          },
-        },
-        `email:sponsorship:SPONSORSHIP_LINKED:${entry.registration.id}:${entry.sponsorship.code}`,
-      );
+      await enqueueRegistrantSponsorshipEmail(tx, {
+        trigger: "SPONSORSHIP_LINKED", eventId,
+        registration: entry.registration, beneficiaryName: entry.sponsorship.beneficiaryName,
+        context: linkedContext, dedupeSuffix: entry.sponsorship.code,
+      });
 
       if (entry.isFullySponsored) {
         await enqueueTriggeredEmailOutbox(
@@ -912,29 +849,17 @@ export class SponsorshipsService {
           `email:triggered:PAYMENT_CONFIRMED:${entry.registration.id}`,
         );
       } else if (entry.registration.sponsorshipAmount > 0) {
-        await enqueueSponsorshipEmailOutbox(
-          tx,
-          {
-            trigger: "SPONSORSHIP_PARTIAL",
-            eventId,
-            input: {
-              recipientEmail: entry.registration.email,
-              recipientName:
-                entry.registration.firstName ||
-                entry.sponsorship.beneficiaryName,
-              context: linkedContext as Record<string, unknown>,
-              registrationId: entry.registration.id,
-            },
-          },
-          `email:sponsorship:SPONSORSHIP_PARTIAL:${entry.registration.id}:${entry.sponsorship.code}`,
-        );
+        await enqueueRegistrantSponsorshipEmail(tx, {
+          trigger: "SPONSORSHIP_PARTIAL", eventId,
+          registration: entry.registration, beneficiaryName: entry.sponsorship.beneficiaryName,
+          context: linkedContext, dedupeSuffix: entry.sponsorship.code,
+        });
       }
     }
   }
 
   // ==========================================================================
-  // Link / unlink (own txn; *Tx / *Internal variants ride the caller's tx and
-  // are exported for the registrations module).
+  // Link / unlink (own transaction; private unlink helpers share the caller's transaction).
   // ==========================================================================
 
   linkSponsorshipToRegistration(
@@ -942,225 +867,178 @@ export class SponsorshipsService {
     registrationId: string,
     adminUserId: string,
   ): Promise<LinkSponsorshipResult> {
-    return withLockingTxn((tx) =>
-      this.linkSponsorshipToRegistrationTx(
-        tx,
-        sponsorshipId,
-        registrationId,
-        adminUserId,
-      ),
-    );
-  }
+    return withLockingTxn(async (tx) => {
+      await lockSponsorshipForUpdate(tx, sponsorshipId);
+      await lockRegistrationForUpdate(tx, registrationId);
+      const sponsorship = await findSponsorshipForLink(tx, sponsorshipId);
+      if (!sponsorship) {
+        throw new AppException(ErrorCodes.NOT_FOUND, "Sponsorship not found", 404);
+      }
+      assertEventWritable(sponsorship.event);
+      assertModuleEnabledForClient(sponsorship.event.client, MODULE);
 
-  async linkSponsorshipToRegistrationTx(
-    tx: DbExecutor,
-    sponsorshipId: string,
-    registrationId: string,
-    adminUserId: string,
-  ): Promise<LinkSponsorshipResult> {
-    await lockSponsorshipForUpdate(tx, sponsorshipId);
-    await lockRegistrationForUpdate(tx, registrationId);
-    const sponsorship = await findSponsorshipForLink(tx, sponsorshipId);
-    if (!sponsorship) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Sponsorship not found", 404);
-    }
-    assertEventWritable(sponsorship.event);
-    assertModuleEnabledForClient(sponsorship.event.client, MODULE);
+      if (sponsorship.status === "CANCELLED") {
+        throw new AppException(
+          ErrorCodes.BAD_REQUEST,
+          "Cannot link a cancelled sponsorship",
+          400,
+          { code: "SPONSORSHIP_CANCELLED" },
+        );
+      }
 
-    if (sponsorship.status === "CANCELLED") {
-      throw new AppException(
-        ErrorCodes.BAD_REQUEST,
-        "Cannot link a cancelled sponsorship",
-        400,
-        { code: "SPONSORSHIP_CANCELLED" },
-      );
-    }
+      const registration = await findRegistrationForLink(tx, registrationId);
+      if (!registration) {
+        throw new AppException(
+          ErrorCodes.REGISTRATION_NOT_FOUND,
+          "Registration not found",
+          404,
+        );
+      }
+      if (sponsorship.eventId !== registration.eventId) {
+        throw new AppException(
+          ErrorCodes.BAD_REQUEST,
+          "Sponsorship and registration must be for the same event",
+          400,
+        );
+      }
 
-    const registration = await findRegistrationForLink(tx, registrationId);
-    if (!registration) {
-      throw new AppException(
-        ErrorCodes.REGISTRATION_NOT_FOUND,
-        "Registration not found",
-        404,
-      );
-    }
-    if (sponsorship.eventId !== registration.eventId) {
-      throw new AppException(
-        ErrorCodes.BAD_REQUEST,
-        "Sponsorship and registration must be for the same event",
-        400,
-      );
-    }
+      const existingLink = await findUsage(tx, sponsorshipId, registrationId);
+      if (existingLink) {
+        throw new AppException(
+          ErrorCodes.CONFLICT,
+          "Sponsorship is already linked to this registration",
+          409,
+          { code: "SPONSORSHIP_ALREADY_LINKED" },
+        );
+      }
 
-    const existingLink = await findUsage(tx, sponsorshipId, registrationId);
-    if (existingLink) {
-      throw new AppException(
-        ErrorCodes.CONFLICT,
-        "Sponsorship is already linked to this registration",
-        409,
-        { code: "SPONSORSHIP_ALREADY_LINKED" },
-      );
-    }
-
-    const coverage = {
-      coversBasePrice: sponsorship.coversBasePrice,
-      coveredAccessIds: sponsorship.coveredAccessIds ?? [],
-      totalAmount: sponsorship.totalAmount,
-    };
-    const warnings = detectCoverageOverlap(registration.existingUsages, coverage);
-
-    const priceBreakdown =
-      registration.priceBreakdown as RegistrationForCalculation["priceBreakdown"];
-    const applicableAmount = calculateApplicableAmount(coverage, {
-      totalAmount: registration.totalAmount,
-      baseAmount: registration.baseAmount,
-      accessTypeIds: registration.accessTypeIds,
-      priceBreakdown,
-    });
-
-    if (applicableAmount === 0 && sponsorship.totalAmount > 0) {
-      throw new AppException(
-        ErrorCodes.SPONSORSHIP_NOT_APPLICABLE,
-        "Sponsorship coverage does not apply to this registration (no overlap between sponsored items and registration selections)",
-        400,
-      );
-    }
-
-    const oldCovered = await this.access.getAlreadyCoveredAccessIds(registrationId, tx);
-
-    const usage = await insertUsage(tx, {
-      sponsorshipId,
-      registrationId,
-      amountApplied: applicableAmount,
-      appliedBy: adminUserId,
-    });
-
-    // Atomic CAS: only flips to USED while not CANCELLED.
-    const casCount = await casSetSponsorshipUsed(tx, sponsorshipId);
-    if (casCount === 0) {
-      throw new AppException(
-        ErrorCodes.SPONSORSHIP_STATUS_CONFLICT,
-        "Sponsorship cannot be linked (may be cancelled or already processing)",
-        409,
-      );
-    }
-
-    const allUsages = await findUsageAmountsByRegistration(tx, registrationId);
-    const newSponsorshipAmount = Math.min(
-      calculateTotalSponsorshipAmount(allUsages),
-      registration.totalAmount,
-    );
-    const isFullySponsored = newSponsorshipAmount >= registration.totalAmount;
-    const nextPaymentStatus = nextStatusOnApply(
-      registration.paymentStatus,
-      isFullySponsored,
-      newSponsorshipAmount,
-    );
-
-    await updateRegistrationSettlement(tx, registrationId, {
-      sponsorshipAmount: newSponsorshipAmount,
-      paymentMethod: "LAB_SPONSORSHIP",
-      paymentStatus: nextPaymentStatus,
-      ...(nextPaymentStatus === "SPONSORED" ? { paidAt: new Date() } : {}),
-    });
-
-    const newCovered = await this.access.getAlreadyCoveredAccessIds(registrationId, tx);
-    await this.access.syncPaidCountDelta(
-      registration.eventId,
-      {
-        status: registration.paymentStatus,
-        priceBreakdown: registration.priceBreakdown,
-        coveredAccessIds: oldCovered,
-      },
-      {
-        status: nextPaymentStatus,
-        priceBreakdown: registration.priceBreakdown,
-        coveredAccessIds: newCovered,
-      },
-      tx,
-    );
-
-    // SPONSORSHIP_APPLIED email — enqueued on the same txn (legacy parity).
-    const [pricing, accessItems] = await Promise.all([
-      getEventPricingForBatch(tx, sponsorship.eventId),
-      findActiveEventAccess(
-        tx,
-        sponsorship.eventId,
-        sponsorship.coveredAccessIds ?? [],
-      ),
-    ]);
-    const currency = pricing?.currency ?? "TND";
-    const emailContext = buildLinkedSponsorshipContext({
-      amountApplied: usage.amountApplied,
-      sponsorship: {
-        code: sponsorship.code,
-        beneficiaryName: sponsorship.beneficiaryName,
+      const coverage = {
         coversBasePrice: sponsorship.coversBasePrice,
         coveredAccessIds: sponsorship.coveredAccessIds ?? [],
         totalAmount: sponsorship.totalAmount,
-        batch: {
-          labName: sponsorship.batch.labName,
-          contactName: sponsorship.batch.contactName,
-          email: sponsorship.batch.email,
-        },
-      },
-      registration: {
-        id: registration.id,
-        email: registration.email,
-        firstName: registration.firstName,
-        lastName: registration.lastName,
-        phone: registration.phone,
-        totalAmount: registration.totalAmount,
-        baseAmount: registration.baseAmount,
+      };
+      const warnings = detectCoverageOverlap(registration.existingUsages, coverage);
+
+      const applicableAmount = applicableAmountFor(coverage, registration);
+
+      if (applicableAmount === 0 && sponsorship.totalAmount > 0) {
+        throw new AppException(
+          ErrorCodes.SPONSORSHIP_NOT_APPLICABLE,
+          "Sponsorship coverage does not apply to this registration (no overlap between sponsored items and registration selections)",
+          400,
+        );
+      }
+
+      const oldCovered = await this.access.getAlreadyCoveredAccessIds(registrationId, tx);
+
+      const usage = await insertUsage(tx, {
+        sponsorshipId,
+        registrationId,
+        amountApplied: applicableAmount,
+        appliedBy: adminUserId,
+      });
+
+      // Atomic CAS: only flips to USED while not CANCELLED.
+      const casCount = await casSetSponsorshipUsed(tx, sponsorshipId);
+      if (casCount === 0) {
+        throw new AppException(
+          ErrorCodes.SPONSORSHIP_STATUS_CONFLICT,
+          "Sponsorship cannot be linked (may be cancelled or already processing)",
+          409,
+        );
+      }
+
+      const allUsages = await findUsageAmountsByRegistration(tx, registrationId);
+      const newSponsorshipAmount = Math.min(
+        calculateTotalSponsorshipAmount(allUsages),
+        registration.totalAmount,
+      );
+      const isFullySponsored = newSponsorshipAmount >= registration.totalAmount;
+      const nextPaymentStatus = nextStatusOnApply(
+        registration.paymentStatus,
+        isFullySponsored,
+        newSponsorshipAmount,
+      );
+
+      await updateRegistrationSettlement(tx, registrationId, {
         sponsorshipAmount: newSponsorshipAmount,
-        linkBaseUrl: registration.linkBaseUrl,
-        editToken: registration.editToken,
-      },
-      event: {
-        name: sponsorship.event.name,
-        slug: sponsorship.event.slug,
-        startDate: sponsorship.event.startDate,
-        location: sponsorship.event.location,
-        client: { name: sponsorship.event.client.name },
-      },
-      pricing: pricing ? { basePrice: pricing.basePrice } : null,
-      accessItems,
-      currency,
-    });
-    await enqueueSponsorshipEmailOutbox(
-      tx,
-      {
-        trigger: "SPONSORSHIP_APPLIED",
-        eventId: sponsorship.eventId,
-        input: {
-          recipientEmail: registration.email,
-          recipientName: registration.firstName || sponsorship.beneficiaryName,
-          context: emailContext as Record<string, unknown>,
-          registrationId: registration.id,
+        paymentMethod: "LAB_SPONSORSHIP",
+        paymentStatus: nextPaymentStatus,
+        ...(nextPaymentStatus === "SPONSORED" ? { paidAt: new Date() } : {}),
+      });
+
+      const newCovered = await this.access.getAlreadyCoveredAccessIds(registrationId, tx);
+      await this.access.syncPaidCountDelta(
+        registration.eventId,
+        {
+          status: registration.paymentStatus,
+          priceBreakdown: registration.priceBreakdown,
+          coveredAccessIds: oldCovered,
         },
-      },
-      `email:sponsorship:SPONSORSHIP_APPLIED:${registration.id}:${sponsorshipId}`,
-    );
+        {
+          status: nextPaymentStatus,
+          priceBreakdown: registration.priceBreakdown,
+          coveredAccessIds: newCovered,
+        },
+        tx,
+      );
 
-    // ponytail: audit + realtime outbox omitted — deferred across this port wave.
-
-    return {
-      usage: {
-        id: usage.id,
-        sponsorshipId: usage.sponsorshipId,
+      // SPONSORSHIP_APPLIED email — enqueued on the same txn (legacy parity).
+      const [pricing, accessItems] = await Promise.all([
+        getSponsorshipEventPricing(tx, sponsorship.eventId),
+        findActiveEventAccess(
+          tx,
+          sponsorship.eventId,
+          sponsorship.coveredAccessIds ?? [],
+        ),
+      ]);
+      const currency = pricing?.currency ?? "TND";
+      const emailContext = buildLinkedSponsorshipContext({
         amountApplied: usage.amountApplied,
-      },
-      registration: {
-        totalAmount: registration.totalAmount,
-        sponsorshipAmount: newSponsorshipAmount,
-        amountDue: calculateSettlement({
+        sponsorship: {
+          code: sponsorship.code,
+          beneficiaryName: sponsorship.beneficiaryName,
+          coversBasePrice: sponsorship.coversBasePrice,
+          coveredAccessIds: sponsorship.coveredAccessIds ?? [],
+          totalAmount: sponsorship.totalAmount,
+          batch: {
+            labName: sponsorship.batch.labName,
+            contactName: sponsorship.batch.contactName,
+            email: sponsorship.batch.email,
+          },
+        },
+        registration: { ...registration, sponsorshipAmount: newSponsorshipAmount },
+        event: toEmailEvent(sponsorship.event),
+        pricing: pricing ? { basePrice: pricing.basePrice } : null,
+        accessItems,
+        currency,
+      });
+      await enqueueRegistrantSponsorshipEmail(tx, {
+        trigger: "SPONSORSHIP_APPLIED", eventId: sponsorship.eventId,
+        registration, beneficiaryName: sponsorship.beneficiaryName,
+        context: emailContext, dedupeSuffix: sponsorshipId,
+      });
+
+      // ponytail: audit + realtime outbox omitted — deferred across this port wave.
+
+      return {
+        usage: {
+          id: usage.id,
+          sponsorshipId: usage.sponsorshipId,
+          amountApplied: usage.amountApplied,
+        },
+        registration: {
           totalAmount: registration.totalAmount,
-          paidAmount: registration.paidAmount,
           sponsorshipAmount: newSponsorshipAmount,
-        }).amountDue,
-      },
-      warnings,
-    };
+          amountDue: calculateSettlement({
+            totalAmount: registration.totalAmount,
+            paidAmount: registration.paidAmount,
+            sponsorshipAmount: newSponsorshipAmount,
+          }).amountDue,
+        },
+        warnings,
+      };
+    });
   }
 
   async linkSponsorshipByCode(
@@ -1195,23 +1073,20 @@ export class SponsorshipsService {
   unlinkSponsorshipFromRegistration(
     sponsorshipId: string,
     registrationId: string,
-    performedBy?: string,
   ): Promise<void> {
     return withLockingTxn((tx) =>
       this.unlinkSponsorshipFromRegistrationInternal(
         tx,
         sponsorshipId,
         registrationId,
-        performedBy,
-      ),
+        ),
     );
   }
 
-  async unlinkSponsorshipFromRegistrationInternal(
+  private async unlinkSponsorshipFromRegistrationInternal(
     tx: DbExecutor,
     sponsorshipId: string,
     registrationId: string,
-    _performedBy?: string,
   ): Promise<void> {
     await lockSponsorshipForUpdate(tx, sponsorshipId);
     await lockRegistrationForUpdate(tx, registrationId);
@@ -1300,11 +1175,10 @@ export class SponsorshipsService {
     // ponytail: audit omitted — deferred across this port wave.
   }
 
-  async unlinkSponsorshipFromAllRegistrations(
+  private async unlinkSponsorshipFromAllRegistrations(
     tx: DbExecutor,
     sponsorshipId: string,
     usages: Array<{ registrationId: string | null }>,
-    performedBy?: string,
   ): Promise<void> {
     // Sequential — each unlink recomputes state the next iteration reads.
     for (const usage of usages) {
@@ -1313,16 +1187,15 @@ export class SponsorshipsService {
         tx,
         sponsorshipId,
         usage.registrationId,
-        performedBy,
-      );
+        );
     }
   }
 
   // ==========================================================================
-  // Recalculation — rides the caller's tx (exported for registrations wave-3).
+  // Recalculation — runs inside the caller's locking transaction.
   // ==========================================================================
 
-  async recalculateUsageAmounts(
+  private async recalculateUsageAmounts(
     tx: DbExecutor,
     sponsorshipId: string,
   ): Promise<void> {
@@ -1343,19 +1216,7 @@ export class SponsorshipsService {
 
       const priceBreakdown =
         registration.priceBreakdown as RegistrationForCalculation["priceBreakdown"];
-      const newAmount = calculateApplicableAmount(
-        {
-          coversBasePrice: sponsorship.coversBasePrice,
-          coveredAccessIds: sponsorship.coveredAccessIds,
-          totalAmount: sponsorship.totalAmount,
-        },
-        {
-          totalAmount: registration.totalAmount,
-          baseAmount: registration.baseAmount,
-          accessTypeIds: registration.accessTypeIds,
-          priceBreakdown,
-        },
-      );
+      const newAmount = applicableAmountFor(sponsorship, registration);
 
       await updateUsageAmount(tx, usage.id, newAmount);
 
@@ -1390,11 +1251,7 @@ export class SponsorshipsService {
       const subtotal =
         (priceBreakdown as { subtotal?: number }).subtotal ??
         registration.totalAmount;
-      const updatedPriceBreakdown = {
-        ...priceBreakdown,
-        sponsorshipTotal: totalSponsorshipAmount,
-        total: Math.max(0, subtotal - totalSponsorshipAmount),
-      };
+      const updatedPriceBreakdown = withSponsorshipTotal(priceBreakdown, subtotal, totalSponsorshipAmount);
 
       await updateRegistrationSettlement(tx, registration.id, {
         sponsorshipAmount: totalSponsorshipAmount,

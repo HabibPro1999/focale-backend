@@ -336,10 +336,11 @@ export type UpdateSponsorshipSettingsInput = z.infer<
 export function getSponsorshipMode(
   schema: unknown,
 ): SponsorshipSettings["sponsorshipMode"] {
-  const settings = (
-    schema as { sponsorshipSettings?: SponsorshipSettings } | null
-  )?.sponsorshipSettings;
-  return settings?.sponsorshipMode ?? "CODE";
+  return getSponsorshipSettings(schema).sponsorshipMode ?? "CODE";
+}
+
+export function getSponsorshipSettings(schema: unknown): Partial<SponsorshipSettings> {
+  return (schema as { sponsorshipSettings?: SponsorshipSettings } | null)?.sponsorshipSettings ?? {};
 }
 
 /**

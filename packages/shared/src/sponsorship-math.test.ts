@@ -79,3 +79,37 @@ describe("calculateApplicableAmount", () => {
     ).toBe(250);
   });
 });
+
+describe("coverage combinations", () => {
+  const reg = {
+    totalAmount: 500,
+    baseAmount: 100,
+    accessTypeIds: ["acc1", "acc2"],
+    priceBreakdown: {
+      calculatedBasePrice: 100,
+      accessItems: [
+        { accessId: "acc1", subtotal: 200 },
+        { accessId: "acc2", subtotal: 150 },
+      ],
+    },
+  };
+
+  it("returns 0 with no overlap", () => {
+    expect(
+      calculateApplicableAmount(
+        { coversBasePrice: false, coveredAccessIds: ["other"], totalAmount: 300 },
+        reg,
+      ),
+    ).toBe(0);
+  });
+
+  it("combines base + access", () => {
+    expect(
+      calculateApplicableAmount(
+        { coversBasePrice: true, coveredAccessIds: ["acc1", "acc2"], totalAmount: 999 },
+        reg,
+      ),
+    ).toBe(450);
+  });
+
+});

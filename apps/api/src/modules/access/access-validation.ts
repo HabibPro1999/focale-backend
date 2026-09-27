@@ -1,4 +1,4 @@
-import { getExclusivityKey } from "./access-grouping";
+import { getExclusivityKey, timeRangesOverlap } from "./access-overlap";
 import { evaluateRuleConditions, type Condition } from "@app/shared";
 import type { EventAccessWithPrereqIds } from "@app/db";
 import type { AccessSelection } from "@app/contracts";
@@ -93,11 +93,7 @@ export function validateSelections(
         const a = typeItems[i].access;
         const b = typeItems[j].access;
         if (a.startsAt && a.endsAt && b.startsAt && b.endsAt) {
-          const aStart = a.startsAt.getTime();
-          const aEnd = a.endsAt.getTime();
-          const bStart = b.startsAt.getTime();
-          const bEnd = b.endsAt.getTime();
-          if (!(aEnd <= bStart || bEnd <= aStart)) {
+          if (timeRangesOverlap(a.startsAt, a.endsAt, b.startsAt, b.endsAt)) {
             errors.push(`Time conflict: "${a.name}" and "${b.name}" overlap`);
           }
         }

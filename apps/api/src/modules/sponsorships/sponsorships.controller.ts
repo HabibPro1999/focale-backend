@@ -94,7 +94,7 @@ export class SponsorshipDetailController {
     }
     if (!canAccessClient(user, clientId)) forbidden();
     await assertClientModuleEnabled(clientId, "sponsorships");
-    return this.service.updateSponsorship(id, body, user.id);
+    return this.service.updateSponsorship(id, body);
   }
 
   @Delete(":id")
@@ -108,7 +108,7 @@ export class SponsorshipDetailController {
     }
     if (!canAccessClient(user, clientId)) forbidden();
     await assertClientModuleEnabled(clientId, "sponsorships");
-    await this.service.deleteSponsorship(id, user.id);
+    await this.service.deleteSponsorship(id);
     return { success: true };
   }
 }
@@ -185,7 +185,6 @@ export class RegistrationSponsorshipsController {
     await this.service.unlinkSponsorshipFromRegistration(
       sponsorshipId,
       registrationId,
-      user.id,
     );
     return { success: true };
   }

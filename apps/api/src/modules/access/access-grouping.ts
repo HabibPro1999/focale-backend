@@ -1,3 +1,4 @@
+import { getExclusivityKey } from "./access-overlap";
 import { evaluateRuleConditions, type Condition } from "@app/shared";
 import type { EventAccessWithPrereqIds } from "@app/db";
 import type { DateGroup, GroupedAccessResponse, TimeSlot } from "@app/contracts";
@@ -11,17 +12,7 @@ function hasConditions(conditions: unknown): boolean {
   return Array.isArray(conditions) && conditions.length > 0;
 }
 
-/**
- * Items sharing an exclusivity key are mutually exclusive when undated:
- * same type, and for OTHER also the same group label.
- */
-export function getExclusivityKey(
-  access: Pick<EventAccessWithPrereqIds, "type" | "groupLabel">,
-): string {
-  return access.type === "OTHER"
-    ? `OTHER:${access.groupLabel ?? ""}`
-    : access.type;
-}
+export { getExclusivityKey } from "./access-overlap";
 
 /** Display order: admin sort order first, creation order as tie-breaker. */
 function byOrder(
