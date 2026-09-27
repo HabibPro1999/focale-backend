@@ -1,7 +1,6 @@
+import { embedDejaVuFonts } from "./pdf-fonts";
 import { drawNetworkingText } from "./pdf-text";
 import { PDFDocument, rgb, type PDFPage } from "pdf-lib";
-import fontkit from "@pdf-lib/fontkit";
-import { readFile } from "node:fs/promises";
 
 export interface NetworkingReportSnapshot {
   summary: Record<string, number>;
@@ -154,15 +153,7 @@ export async function generateNetworkingPostEventPdf(
   primaryColor = "#166b60",
 ) {
   const doc = await PDFDocument.create();
-  doc.registerFontkit(fontkit);
-  const [font, bold] = await Promise.all(
-    ["DejaVuSans.ttf", "DejaVuSans-Bold.ttf"].map(async (name) =>
-      doc.embedFont(
-        await readFile(require.resolve(`dejavu-fonts-ttf/ttf/${name}`)),
-        { subset: true },
-      ),
-    ),
-  );
+  const [font, bold] = await embedDejaVuFonts(doc, ["regular", "bold"]);
   const words = text[language],
     rtl = language === "ar";
   const hex = /^#[0-9a-fA-F]{6}$/.test(primaryColor) ? primaryColor : "#166b60";

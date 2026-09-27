@@ -69,6 +69,14 @@ async function processBatch(
     ...job,
     input: profileEmbeddingInput(job.profile),
   }));
+  const saveInput = (job: (typeof jobs)[number]) => ({
+    profileId: job.profile.id,
+    eventId: job.profile.eventId,
+    lockToken: job.lockToken,
+    model: client.model,
+    sourceHash: job.input.hash,
+    indexedProfileAt: job.profile.updatedAt,
+  });
   const changed = jobs.filter(
     (job) =>
       job.previous.source_hash !== job.input.hash ||
@@ -79,12 +87,7 @@ async function processBatch(
   let failed = 0;
   for (const job of unchanged) {
     const saved = await saveNetworkingEmbeddings({
-      profileId: job.profile.id,
-      eventId: job.profile.eventId,
-      lockToken: job.lockToken,
-      model: client.model,
-      sourceHash: job.input.hash,
-      indexedProfileAt: job.profile.updatedAt,
+      ...saveInput(job),
     });
     if (saved) processed++;
   }
@@ -118,12 +121,7 @@ async function processBatch(
     for (const [index, job] of changed.entries()) {
       try {
         const saved = await saveNetworkingEmbeddings({
-          profileId: job.profile.id,
-          eventId: job.profile.eventId,
-          lockToken: job.lockToken,
-          model: client.model,
-          sourceHash: job.input.hash,
-          indexedProfileAt: job.profile.updatedAt,
+          ...saveInput(job),
           embeddings: job.input.documents.map((document, offset) => ({
             kind: document.kind,
             embedding: vectors[index * 3 + offset]!,

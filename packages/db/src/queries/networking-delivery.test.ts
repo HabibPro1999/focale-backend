@@ -2,7 +2,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { PgDialect } from "drizzle-orm/pg-core";
 const mocks = vi.hoisted(() => ({ update: vi.fn(), set: vi.fn(), where: vi.fn(), returning: vi.fn() }));
 vi.mock("../client", () => ({ getDb: () => mocks }));
-import { claimNetworkingDeliveries, refreshNetworkingDeliveryLease, type NetworkingDeliveryRow } from "./networking-delivery";
+import { claimNetworkingDeliveries, refreshNetworkingDeliveryLease, localizeNetworkingNotification, type NetworkingDeliveryRow } from "./networking-delivery";
 const dialect = new PgDialect({ casing: "snake_case" });
 beforeEach(() => {
   vi.resetAllMocks();
@@ -28,5 +28,22 @@ it("failed compare-and-set renewal never adopts another worker's lease", async (
   const query = dialect.sqlToQuery(mocks.where.mock.calls[0][0]);
   expect(query.sql).toContain('"locked_until" =');
   expect(query.sql).toContain('"locked_until" >');
+  expect(query.params).toContain(lockedUntil.toISOString());
+  // This fence uses the application clock, unlike notification localization's DB clock.
+  expect(query.sql).not.toContain("now()");
+  expect(query.params.at(-1)).toEqual(expect.any(String));
+});
+
+it("localizes only under the DB-clock lease fence, retaining the exact ISO timestamp parameter", async () => {
+  const lockedUntil = new Date("2030-01-01T00:05:00Z");
+  const row: NetworkingDeliveryRow = {
+    id: "delivery", eventId: "event", profileId: "profile", lockedUntil, payload: { notificationId: "notification" },
+    type: "MATCH", status: "PROCESSING", email: null, attempts: 1, lastError: null, dedupeKey: "notification:notification",
+    availableAt: lockedUntil, createdAt: lockedUntil, updatedAt: lockedUntil,
+  };
+  await localizeNetworkingNotification(row, "Title", "Body", "/agenda");
+  const query = dialect.sqlToQuery(mocks.where.mock.calls[0][0]);
+  expect(query.sql).toContain("locked_until>now()");
+  expect(query.sql).toContain("::timestamp");
   expect(query.params).toContain(lockedUntil.toISOString());
 });

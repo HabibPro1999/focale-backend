@@ -4,9 +4,19 @@ import { rowsOf } from "../helpers";
 import { withSerializableTxn } from "../txn";
 import { networkingAllocationLocks, networkingProfiles } from "../schema/networking";
 
+// Closed internal column set keeps the existing raw SQL spelling (including e.id).
+function eventScope(eventId?: string, column: "event_id" | "m.event_id" | "p.event_id" | "e.id" | "d.event_id" | "c.event_id" = "event_id") {
+  return eventId ? sql`AND ${sql.raw(column)}=${eventId}` : sql``;
+}
+const REMINDERS = [
+  { type: "MEETING_REMINDER_DAY", hours: 24, minHours: 23, titles: { fr: "Votre rendez-vous a lieu demain", ar: "موعدك غداً", en: "Your meeting is tomorrow" } },
+  { type: "MEETING_REMINDER_HOUR", hours: 1, minHours: 0, titles: { fr: "Votre rendez-vous commence dans une heure", ar: "يبدأ موعدك خلال ساعة", en: "Your meeting starts within an hour" } },
+] as const;
+
+// Raw released-status literals match NETWORKING_RELEASED_MEETING_STATUSES; retain their original ordering.
 /** Expire proposals without loading an event's meeting history on every agenda read. */
 export async function expireNetworkingProposals(eventId?: string, db: DbExecutor = getDb()) {
-  const scope = eventId ? sql`AND event_id=${eventId}` : sql``;
+  const scope = eventScope(eventId);
   await db.execute(
     sql`UPDATE networking_meetings SET status='EXPIRED',revision=revision+1,updated_at=now() WHERE status='PENDING' AND expires_at<=now() ${scope}`,
   );
@@ -24,24 +34,21 @@ export async function maintainNetworkingLifecycle(
   onAfterPurge?: (profiles: { id: string; eventId: string; photoUrl: string | null }[]) => Promise<void>,
 ) {
   const db = getDb();
-  const scope = eventId ? sql`AND event_id=${eventId}` : sql``;
+  const scope = eventScope(eventId);
   await expireNetworkingProposals(eventId, db);
-  for (const [type, hours] of [
-    ["MEETING_REMINDER_DAY", 24],
-    ["MEETING_REMINDER_HOUR", 1],
-  ] as const) {
+  for (const { type, hours, minHours, titles } of REMINDERS) {
     await db.execute(sql`
       WITH candidates AS (
         SELECT gen_random_uuid()::text AS notification_id,m.id AS meeting_id,m.event_id,m.revision,p.id AS profile_id,
           '/e/'||e.slug||'/agenda' AS href,
-          CASE p.language WHEN 'fr' THEN ${hours === 24 ? "Votre rendez-vous a lieu demain" : "Votre rendez-vous commence dans une heure"}::text WHEN 'ar' THEN ${hours === 24 ? "موعدك غداً" : "يبدأ موعدك خلال ساعة"}::text ELSE ${hours === 24 ? "Your meeting is tomorrow" : "Your meeting starts within an hour"}::text END AS title,
+          CASE p.language WHEN 'fr' THEN ${titles.fr}::text WHEN 'ar' THEN ${titles.ar}::text ELSE ${titles.en}::text END AS title,
           to_char(m.starts_at AT TIME ZONE COALESCE(c.config->>'timezone','UTC'),'YYYY-MM-DD HH24:MI')||' · '||COALESCE(c.config->>'timezone','UTC') AS body
         FROM networking_meetings m JOIN networking_profiles p ON p.id=m.requester_id OR p.id=m.recipient_id
         JOIN networking_configs c ON c.event_id=m.event_id JOIN events e ON e.id=m.event_id
         JOIN clients cl ON cl.id=e.client_id JOIN registrations r ON r.id=p.registration_id
         JOIN networking_profiles peer ON peer.id=CASE WHEN p.id=m.requester_id THEN m.recipient_id ELSE m.requester_id END AND peer.event_id=m.event_id
         JOIN registrations peer_registration ON peer_registration.id=peer.registration_id
-        WHERE m.status='CONFIRMED' AND m.starts_at>now()+interval '1 hour'*${hours === 24 ? 23 : 0}::int AND m.starts_at<=now()+interval '1 hour'*${hours}::int
+        WHERE m.status='CONFIRMED' AND m.starts_at>now()+interval '1 hour'*${minHours}::int AND m.starts_at<=now()+interval '1 hour'*${hours}::int
           AND m.created_at<m.starts_at-interval '1 hour'*${hours}::int
           AND c.config->>'enabled'='true' AND cl.active AND cl.enabled_modules @> ARRAY['networking','registrations','emails']::text[]
           AND p.status='ACTIVE' AND p.consent AND p.withdrawn_at IS NULL AND r.networking_opt_in IS DISTINCT FROM false
@@ -49,7 +56,7 @@ export async function maintainNetworkingLifecycle(
           AND peer.status='ACTIVE' AND peer.consent AND peer.withdrawn_at IS NULL AND peer_registration.networking_opt_in IS DISTINCT FROM false
           AND c.config->'eligiblePaymentStatuses' ? peer_registration.payment_status::text
           AND NOT EXISTS (SELECT 1 FROM networking_blocks b WHERE b.event_id=m.event_id AND ((b.profile_id=m.requester_id AND b.target_id=m.recipient_id) OR (b.profile_id=m.recipient_id AND b.target_id=m.requester_id)))
-          ${eventId ? sql`AND m.event_id=${eventId}` : sql``}
+          ${eventScope(eventId, "m.event_id")}
       ), inserted AS (
         INSERT INTO networking_deliveries (id,event_id,profile_id,type,payload,status,available_at,dedupe_key,created_at,updated_at)
         SELECT gen_random_uuid()::text,event_id,profile_id,${type},jsonb_build_object('notificationId',notification_id,'meetingId',meeting_id,'revision',revision,'title',title,'body',body,'href',href),
@@ -73,14 +80,14 @@ export async function maintainNetworkingLifecycle(
       AND c.config->'eligiblePaymentStatuses' ? r.payment_status::text
       AND (now() AT TIME ZONE COALESCE(c.config->>'timezone','UTC'))::time>=time '08:00'
       AND (n.created_at AT TIME ZONE COALESCE(c.config->>'timezone','UTC'))::date=(now() AT TIME ZONE COALESCE(c.config->>'timezone','UTC'))::date-1
-      ${eventId ? sql`AND p.event_id=${eventId}` : sql``}
+      ${eventScope(eventId, "p.event_id")}
     GROUP BY p.id,p.event_id,c.config ON CONFLICT (dedupe_key) DO NOTHING
   `);
   await db.execute(sql`
     INSERT INTO networking_deliveries (id,event_id,type,payload,status,available_at,dedupe_key,created_at,updated_at)
     SELECT gen_random_uuid()::text,e.id,'POST_EVENT_REPORT','{}'::jsonb,'PENDING',now(),'post-event-report:'||e.id,now(),now()
     FROM events e JOIN networking_configs c ON c.event_id=e.id WHERE c.config->>'enabled'='true' AND e.end_date+interval '24 hours'<=now()
-      ${eventId ? sql`AND e.id=${eventId}` : sql``} ON CONFLICT (dedupe_key) DO NOTHING
+      ${eventScope(eventId, "e.id")} ON CONFLICT (dedupe_key) DO NOTHING
   `);
   await db.execute(sql`
     WITH candidates AS (
@@ -90,7 +97,7 @@ export async function maintainNetworkingLifecycle(
       FROM networking_profiles p JOIN events e ON e.id=p.event_id JOIN networking_configs c ON c.event_id=p.event_id JOIN registrations r ON r.id=p.registration_id
       WHERE e.end_date+interval '24 hours'<=now() AND c.config->>'enabled'='true' AND p.status='ACTIVE' AND p.consent AND p.withdrawn_at IS NULL
         AND r.networking_opt_in IS DISTINCT FROM false AND c.config->'eligiblePaymentStatuses' ? r.payment_status::text
-        ${eventId ? sql`AND p.event_id=${eventId}` : sql``}
+        ${eventScope(eventId, "p.event_id")}
     ), inserted AS (
       INSERT INTO networking_deliveries (id,event_id,profile_id,type,payload,status,available_at,dedupe_key,created_at,updated_at)
       SELECT gen_random_uuid()::text,event_id,profile_id,'POST_EVENT_CONTACTS',jsonb_build_object('notificationId',notification_id,'href',href),
@@ -105,7 +112,7 @@ export async function maintainNetworkingLifecycle(
   await db.execute(sql`UPDATE networking_deliveries d SET payload=jsonb_build_object('challengeId',d.payload->>'challengeId','outcome','expired'),status='SKIPPED',locked_until=NULL,last_error=NULL,updated_at=now()
     WHERE d.type='OTP' AND d.status<>'SENT' AND (d.status<>'PROCESSING' OR d.locked_until<now())
       AND (d.attempts>=5 OR NOT EXISTS (SELECT 1 FROM networking_challenges c WHERE c.id=d.payload->>'challengeId' AND c.event_id=d.event_id AND c.expires_at>now() AND c.consumed_at IS NULL AND c.attempts<5))
-      ${eventId ? sql`AND d.event_id=${eventId}` : sql``}`);
+      ${eventScope(eventId, "d.event_id")}`);
   await db.execute(
     sql`UPDATE networking_deliveries SET status='FAILED',locked_until=NULL,last_error='Delivery retry limit exhausted',updated_at=now() WHERE status='PROCESSING' AND locked_until<now() AND attempts>=5 ${scope}`,
   );
@@ -117,7 +124,7 @@ export async function maintainNetworkingLifecycle(
   );
   const expired = rowsOf<{ event_id: string }>(
     await db.execute(
-      sql`SELECT c.event_id FROM networking_configs c JOIN events e ON e.id=c.event_id WHERE EXISTS (SELECT 1 FROM networking_profiles p WHERE p.event_id=c.event_id) AND e.end_date+COALESCE((c.config->>'retentionDays')::int,90)*interval '1 day'<now() ${eventId ? sql`AND c.event_id=${eventId}` : sql``}`,
+      sql`SELECT c.event_id FROM networking_configs c JOIN events e ON e.id=c.event_id WHERE EXISTS (SELECT 1 FROM networking_profiles p WHERE p.event_id=c.event_id) AND e.end_date+COALESCE((c.config->>'retentionDays')::int,90)*interval '1 day'<now() ${eventScope(eventId, "c.event_id")}`,
     ),
   );
   for (const { event_id } of expired) {

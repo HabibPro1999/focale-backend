@@ -113,82 +113,98 @@ export async function syncNetworkingRegistration(
   const eligible = config.eligiblePaymentStatuses.includes(
     registration.paymentStatus as NetworkingConfig["eligiblePaymentStatuses"][number],
   );
-  if (existing) {
-    const values = {
+  const identity = {
+    email: registration.email.trim().toLowerCase(),
+    firstName: registration.firstName ?? "",
+    lastName: registration.lastName ?? "",
+  };
+  const input = {
+    db, registration, config, projection, overrides, consent, undecided, eligible, identity,
+    autoActivate: config.approvalMode === "AUTOMATIC" && eligible,
+  };
+  return existing ? updateExistingNetworkingProfile(existing, input) : insertNetworkingProfile(input);
+}
+
+type NetworkingSyncInput = {
+  db: DbExecutor;
+  registration: typeof registrations.$inferSelect;
+  config: NetworkingConfig;
+  projection: ReturnType<typeof projectNetworkingFields>["projection"];
+  overrides: ReturnType<typeof networkingProfileOverrides>;
+  consent: boolean;
+  undecided: boolean;
+  eligible: boolean;
+  identity: { email: string; firstName: string; lastName: string };
+  autoActivate: boolean;
+};
+
+async function updateExistingNetworkingProfile(
+  existing: typeof networkingProfiles.$inferSelect,
+  { db, registration, projection, overrides, consent, undecided, eligible, identity, autoActivate }: NetworkingSyncInput,
+) {
+  await db
+    .update(networkingProfiles)
+    .set({
       ...projection,
       ...overrides,
-      email: registration.email.trim().toLowerCase(),
-      firstName: registration.firstName ?? "",
-      lastName: registration.lastName ?? "",
-    };
-    await db
-      .update(networkingProfiles)
-      .set({
-        ...values,
-        consent,
-        ...(consent && !existing.consent ? { visible: true, consentAt: new Date() } : {}),
-        ...(existing.status === "PENDING" &&
-        config.approvalMode === "AUTOMATIC" &&
-        eligible
-          ? { status: "ACTIVE" as const }
-          : {}),
-        ...(!consent ? { visible: false } : {}),
-        updatedAt: new Date(),
-      })
-      .where(eq(networkingProfiles.id, existing.id));
-    // Undecided registrants keep their consent-pending sessions to opt in from the PWA.
-    if (
-      !eligible ||
-      (!consent && !undecided) ||
-      existing.email !== registration.email.trim().toLowerCase()
-    )
-      await db
-        .update(networkingSessions)
-        .set({ revokedAt: new Date() })
-        .where(
-          and(
-            eq(networkingSessions.profileId, existing.id),
-            isNull(networkingSessions.revokedAt),
-          ),
-        );
-    if (!eligible || !consent)
-      await cancelNetworkingParticipantMeetings(
-        existing.id,
-        registration.eventId,
-        db,
-      );
-    if (
-      eligible &&
-      consent &&
-      !existing.withdrawnAt &&
-      (existing.status === "ACTIVE" ||
-        (existing.status === "PENDING" && config.approvalMode === "AUTOMATIC"))
-    )
-      await queueNetworkingActivation(existing.id, registration.eventId, db);
-    return { created: 0, updated: 1 };
-  }
+      ...identity,
+      consent,
+      ...(consent && !existing.consent ? { visible: true, consentAt: new Date() } : {}),
+      ...(existing.status === "PENDING" && autoActivate
+        ? { status: "ACTIVE" as const }
+        : {}),
+      ...(!consent ? { visible: false } : {}),
+      updatedAt: new Date(),
+    })
+    .where(eq(networkingProfiles.id, existing.id));
+  // Undecided registrants keep their consent-pending sessions to opt in from the PWA.
+  if (
+    !eligible ||
+    (!consent && !undecided) ||
+    existing.email !== identity.email
+  )
+    await revokeNetworkingSessions(existing.id, db);
+  if (!eligible || !consent)
+    await cancelNetworkingParticipantMeetings(
+      existing.id,
+      registration.eventId,
+      db,
+    );
+  if (
+    eligible &&
+    consent &&
+    !existing.withdrawnAt &&
+    (existing.status === "ACTIVE" ||
+      (existing.status === "PENDING" && autoActivate))
+  )
+    await queueNetworkingActivation(existing.id, registration.eventId, db);
+  return { created: 0, updated: 1 };
+}
+
+async function insertNetworkingProfile(
+  { db, registration, config, projection, consent, identity, autoActivate }: NetworkingSyncInput,
+) {
   const inserted = await db
     .insert(networkingProfiles)
     .values({
       eventId: registration.eventId,
       registrationId: registration.id,
-      email: registration.email.trim().toLowerCase(),
-      firstName: registration.firstName ?? "",
-      lastName: registration.lastName ?? "",
+      ...identity,
       ...projection,
       consent,
       visible: consent,
       consentAt: consent ? new Date() : null,
       language: config.defaultLanguage,
       status:
-        config.approvalMode === "AUTOMATIC" && eligible ? "ACTIVE" : "PENDING",
+        autoActivate ? "ACTIVE" : "PENDING",
     })
     .onConflictDoNothing({ target: networkingProfiles.registrationId })
     .returning({ id: networkingProfiles.id });
-  if (inserted[0] && consent && eligible && config.approvalMode === "AUTOMATIC")
+  if (inserted[0] && consent && autoActivate)
     await queueNetworkingActivation(inserted[0].id, registration.eventId, db);
   return { created: inserted.length, updated: 0 };
 }
+
 export async function syncNetworkingEvent(eventId: string) {
   const rows = await getDb()
     .select({ id: registrations.id })
@@ -260,6 +276,7 @@ export async function cancelNetworkingParticipantMeetings(
               and(eq(m.requesterId, profileId), eq(m.recipientId, options.counterpartId)),
               and(eq(m.requesterId, options.counterpartId), eq(m.recipientId, profileId)),
             ),
+        // Same members as NETWORKING_OPEN_MEETING_STATUSES; keep existing SQL parameter order.
         inArray(m.status, ["PENDING", "PENDING_ALLOCATION", "CONFIRMED"]),
         gt(m.endsAt, new Date()),
       ),

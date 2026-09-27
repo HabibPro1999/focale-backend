@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PDFDocument } from "pdf-lib";
-import { generateNetworkingReportPdf } from "./networking-report-pdf";
+import { generateNetworkingReportPdf } from "./report-pdf";
 describe("networking PDF exports", () => {
   it("embeds multilingual text and paginates complete records", async () => {
     const bytes = await generateNetworkingReportPdf(

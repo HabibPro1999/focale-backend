@@ -9,4 +9,4 @@ export * from "./networking/embedding-worker";
 export * from "./networking/notification-worker";
 export * from "./networking/notification-rendering";
 
-export * from "./networking-report-pdf";
+export * from "./networking/report-pdf";

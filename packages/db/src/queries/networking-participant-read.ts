@@ -1,3 +1,4 @@
+import type { NetworkingConfig } from "@app/contracts";
 import { and, desc, eq, getTableColumns, inArray, or, sql } from "drizzle-orm";
 import { getDb, type DbExecutor } from "../client";
 import { rowsOf } from "../helpers";
@@ -16,7 +17,7 @@ export interface NetworkingParticipantPage {
   after?: { at: Date; id: string };
 }
 
-function connectionVisibility(eventId: string, profileId: string, paymentStatuses: readonly string[]) {
+function connectionVisibility(eventId: string, profileId: string, paymentStatuses: Readonly<NetworkingConfig["eligiblePaymentStatuses"]>) {
   return and(
         eq(connections.eventId, eventId),
         eq(profiles.eventId, eventId),
@@ -29,16 +30,14 @@ function connectionVisibility(eventId: string, profileId: string, paymentStatuse
         eq(profiles.consent, true),
         sql`${profiles.withdrawnAt} IS NULL`,
         sql`${registrations.networkingOptIn} IS DISTINCT FROM false`,
-        inArray(registrations.paymentStatus, [
-          ...paymentStatuses,
-        ] as (typeof registrations.$inferSelect.paymentStatus)[]),
+        inArray(registrations.paymentStatus, [...paymentStatuses]),
         sql`lower(${profiles.email})<>(SELECT lower(email) FROM networking_profiles WHERE id=${profileId} AND event_id=${eventId})`,
         sql`NOT EXISTS (SELECT 1 FROM networking_blocks b WHERE b.event_id=${eventId} AND
         ((b.profile_id=${profileId} AND b.target_id=${profiles.id}) OR (b.target_id=${profileId} AND b.profile_id=${profiles.id})))`,
       );
 }
 
-export async function countNetworkingConnectionSummaries(eventId: string, profileId: string, paymentStatuses: readonly string[]) {
+export async function countNetworkingConnectionSummaries(eventId: string, profileId: string, paymentStatuses: Readonly<NetworkingConfig["eligiblePaymentStatuses"]>) {
   const [row] = await getDb().select({ total: sql<number>`count(*)::int`.mapWith(Number) })
     .from(connections)
     .innerJoin(profiles, eq(profiles.id, sql`CASE WHEN ${connections.profileAId}=${profileId} THEN ${connections.profileBId} ELSE ${connections.profileAId} END`))
@@ -61,7 +60,7 @@ export async function countNetworkingParticipantMeetings(eventId: string, profil
 export async function listNetworkingConnectionSummaries(
   eventId: string,
   profileId: string,
-  paymentStatuses: readonly string[],
+  paymentStatuses: Readonly<NetworkingConfig["eligiblePaymentStatuses"]>,
   page?: NetworkingParticipantPage,
   filter: { connectionId?: string } = {},
 ) {
