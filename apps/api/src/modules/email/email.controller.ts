@@ -1,3 +1,4 @@
+import { assertOwned } from "../../core/tenancy/ownership";
 import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
 import { ErrorCodes } from "@app/contracts";
@@ -5,11 +6,11 @@ import { getEventWithPricing, type EventWithPricing } from "@app/db";
 import { getAvailableVariables, type VariableDefinition } from "@app/integrations";
 import type { PaginatedResult } from "@app/shared";
 import { Auth } from "../../core/auth/auth.decorator";
-import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
+import type { AuthUser } from "../../core/auth/user-cache";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
-import { assertEventWritable } from "../events";
-import { assertClientModuleEnabled } from "../clients/module-gates";
+import { assertEventWritable } from "../../core/tenancy/event-status";
+import { assertClientModuleEnabled } from "../../core/tenancy/module-gates";
 import { AppException, notFound, badRequest, orNotFound } from "../../core/app-exception";
 import { EmailTemplateService } from "./email-template.service";
 import { EmailSendService } from "./email-send.service";
@@ -47,16 +48,6 @@ export class EmailController {
     return event;
   }
 
-  private assertAccess(user: AuthUser, clientId: string): void {
-    if (!canAccessClient(user, clientId)) {
-      throw new AppException(
-        ErrorCodes.FORBIDDEN,
-        "Insufficient permissions",
-        403,
-      );
-    }
-  }
-
   private async assertEmailFeatureWritable(
     event: EventWithPricing,
   ): Promise<void> {
@@ -65,15 +56,17 @@ export class EmailController {
   }
 
   private async readableEvent(eventId: string, user: AuthUser) {
-    const event = await this.resolveEvent(eventId);
-    this.assertAccess(user, event.clientId);
+    const event = await assertOwned(user, () => getEventWithPricing(eventId), (event) => event.clientId, {
+      notFound: "Event not found",
+    });
     await assertClientModuleEnabled(event.clientId, "emails");
     return event;
   }
 
   private async writableEvent(eventId: string, user: AuthUser) {
-    const event = await this.resolveEvent(eventId);
-    this.assertAccess(user, event.clientId);
+    const event = await assertOwned(user, () => getEventWithPricing(eventId), (event) => event.clientId, {
+      notFound: "Event not found",
+    });
     await this.assertEmailFeatureWritable(event);
     return event;
   }
@@ -134,11 +127,9 @@ export class EmailController {
     @Param() params: EmailTemplateIdParamDto,
     @CurrentUser() user: AuthUser,
   ) {
-    const template = await this.templates.getById(params.templateId);
-    if (!template) {
-      throw notFound("Email template not found");
-    }
-    this.assertAccess(user, template.clientId);
+    const template = await assertOwned(user, () => this.templates.getById(params.templateId), (template) => template.clientId, {
+      notFound: "Email template not found",
+    });
     if (template.eventId) {
       const event = await this.resolveEvent(template.eventId);
       await assertClientModuleEnabled(event.clientId, "emails");
@@ -152,8 +143,9 @@ export class EmailController {
     @Body() body: UpdateEmailTemplateDto,
     @CurrentUser() user: AuthUser,
   ) {
-    const { event } = await this.getTemplateWriteContext(params.templateId);
-    this.assertAccess(user, event.clientId);
+    const { event } = await assertOwned(user, () => this.getTemplateWriteContext(params.templateId), ({ event }) => event.clientId, {
+      notFound: "Email template not found",
+    });
     await this.assertEmailFeatureWritable(event);
     return this.templates.update(params.templateId, body);
   }
@@ -165,8 +157,9 @@ export class EmailController {
     @Param() params: EmailTemplateIdParamDto,
     @CurrentUser() user: AuthUser,
   ): Promise<void> {
-    const { event } = await this.getTemplateWriteContext(params.templateId);
-    this.assertAccess(user, event.clientId);
+    const { event } = await assertOwned(user, () => this.getTemplateWriteContext(params.templateId), ({ event }) => event.clientId, {
+      notFound: "Email template not found",
+    });
     await this.assertEmailFeatureWritable(event);
     await this.templates.delete(params.templateId);
   }
@@ -178,8 +171,9 @@ export class EmailController {
     @Body() body: { name?: string } | undefined,
     @CurrentUser() user: AuthUser,
   ) {
-    const { event } = await this.getTemplateWriteContext(params.templateId);
-    this.assertAccess(user, event.clientId);
+    const { event } = await assertOwned(user, () => this.getTemplateWriteContext(params.templateId), ({ event }) => event.clientId, {
+      notFound: "Email template not found",
+    });
     await this.assertEmailFeatureWritable(event);
     return this.templates.duplicate(params.templateId, body?.name);
   }
@@ -192,10 +186,9 @@ export class EmailController {
     @Body() body: TestSendEmailDto,
     @CurrentUser() user: AuthUser,
   ) {
-    const { template, event } = await this.getTemplateWriteContext(
-      params.templateId,
-    );
-    this.assertAccess(user, template.clientId);
+    const { template, event } = await assertOwned(user, () => this.getTemplateWriteContext(params.templateId), ({ template }) => template.clientId, {
+      notFound: "Email template not found",
+    });
     await this.assertEmailFeatureWritable(event);
     return this.send.testSend(template, body.recipientEmail, body.recipientName);
   }
