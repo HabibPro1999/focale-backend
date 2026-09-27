@@ -4,7 +4,7 @@ import { UserRole } from "@app/contracts";
 import { abstractReviews, emailLogs, getDb, outboxEvents, reviewAbstractTxn } from "@app/db";
 import { cleanupDatabase } from "../helpers/cleanup";
 import { seedAbstract, seedEvent, seedUser } from "../helpers/factories";
-import { dbTestsEnabled } from "../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 
 const now = Date.parse("2035-06-01T12:30:00Z");
 const hour = 3_600_000;

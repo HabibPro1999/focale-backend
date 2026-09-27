@@ -1,6 +1,6 @@
 import {
   createNetworkingEventFixture,
-} from "../../../../../packages/db/tests/helpers/networking-write-fixture";
+} from "@app/db/testing/fixtures";
 import { NetworkingProfileService } from "./networking.profile.service";
 import { NetworkingAuthService } from "./networking.auth.service";
 import { NetworkingInventoryService } from "./networking.inventory.service";

@@ -9,7 +9,7 @@ import {
   networkingTransaction,
 } from "../../../src/queries/networking-store";
 import { createNetworkingWriteFixture } from "../../helpers/networking-write-fixture";
-import { dbTestsEnabled } from "../../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 
 // Every ON CONFLICT write of plan 4.1 against a migrated database (both engines in CI).
 const hash = (token: string) => createHash("sha256").update(token).digest("hex");

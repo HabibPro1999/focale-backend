@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { networkingDeliveryContext, type NetworkingDeliveryRow } from "@app/db";
-import { dbTestsEnabled } from "../../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 
 describe.runIf(dbTestsEnabled())("networking delivery context absent rows", () => {
   it.each([null, "missing-profile"])("preserves undefined context fields for profileId %s", async (profileId) => {

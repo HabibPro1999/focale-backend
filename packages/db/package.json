@@ -11,6 +11,9 @@
     },
     "./testing": {
       "@app/source": "./src/testing/index.ts"
+    },
+    "./testing/fixtures": {
+      "@app/source": "./tests/helpers/fixtures.ts"
     }
   },
   "scripts": {

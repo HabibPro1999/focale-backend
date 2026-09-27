@@ -19,7 +19,7 @@ import {
   type MigrationDefinition,
 } from "../../src/migrator";
 import { assertSchemaCurrent, type SchemaCheckLogger } from "../../src/schema-check";
-import { dbTestsEnabled } from "../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 import { dbTestSetupTimeoutMs } from "../../vitest.shared";
 
 // Adoption fixtures. Each database is built by the unified runner, then its

@@ -1,6 +1,6 @@
 import {
   createNetworkingEventFixture,
-} from "../../../../../packages/db/tests/helpers/networking-write-fixture";
+} from "@app/db/testing/fixtures";
 import { NetworkingProfileService } from "./networking.profile.service";
 import { NetworkingInventoryService } from "./networking.inventory.service";
 // Regression coverage for the networking document alignment fixes.

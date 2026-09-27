@@ -12,7 +12,7 @@ import {
   syncNetworkingRegistration,
 } from "../../../src";
 import { NetworkingConfigSchema } from "@app/contracts";
-import { dbTestsEnabled } from "../../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 const ids = {
   client: randomUUID(),
   event: randomUUID(),

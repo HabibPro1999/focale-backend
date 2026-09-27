@@ -39,7 +39,7 @@ import {
   withTxn,
 } from "@app/db";
 import { dbTestsEnabled } from "@app/db/testing";
-import { cleanupDatabase } from "../../../../../packages/db/tests/helpers/cleanup";
+import { cleanupDatabase } from "@app/db/testing/fixtures";
 import {
   seedClient,
   seedEvent,
@@ -48,7 +48,7 @@ import {
   seedSponsorship,
   seedSponsorshipBatch,
   seedSponsorshipUsage,
-} from "../../../../../packages/db/tests/helpers/factories";
+} from "@app/db/testing/fixtures";
 import { AccessService } from "../access/access.service";
 import { SponsorshipsService } from "./sponsorships.service";
 

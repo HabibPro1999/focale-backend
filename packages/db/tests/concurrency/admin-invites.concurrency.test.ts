@@ -4,7 +4,7 @@ import {
   committeeInviteTokens, countActiveSuperAdmins, deleteUser, getDb,
   insertCommitteeInvite, supersedeCommitteeInvite, updateUser,
 } from "@app/db";
-import { dbTestsEnabled } from "../helpers/test-env";
+import { dbTestsEnabled } from "@app/db/testing";
 import { cleanupDatabase } from "../helpers/cleanup";
 import { seedEvent, seedUser } from "../helpers/factories";
 
