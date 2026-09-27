@@ -43,6 +43,7 @@ import {
   type EmailLogInsert,
   type EmailLogRow,
 } from "./email-logs";
+import { groupRows } from "./reports/group-rows";
 import { checkCertificateTemplateRow, readEmailContextSnapshot } from "./stored-json";
 
 type EmailLogStatus = EmailLogRow["status"];
@@ -103,20 +104,42 @@ const templateAccessJoin = and(
   eq(eventAccess.eventId, certificateTemplates.eventId),
 );
 
+/** A template with its access relation's columns (see toAccessRef). */
+const templateWithAccessFields = {
+  template: certificateTemplates,
+  accessRefId: eventAccess.id,
+  accessRefName: eventAccess.name,
+  accessRefType: eventAccess.type,
+};
+
+/** Templates left-joined with their access relation; callers add the WHERE. */
+function selectTemplatesWithAccess(exec: DbExecutor) {
+  return exec
+    .select(templateWithAccessFields)
+    .from(certificateTemplates)
+    .leftJoin(eventAccess, templateAccessJoin);
+}
+
+/** A template as a read hands it out (readTemplate), with its access. */
+function readTemplateWithAccess(
+  row: Parameters<typeof toAccessRef>[0] & { template: CertificateTemplateRow },
+): CertificateTemplateWithAccess {
+  return { ...readTemplate(row.template), access: toAccessRef(row) };
+}
+
+/** The send routes' image-ready templates: an uploaded image of a real size. */
+const imageReady = [
+  ne(certificateTemplates.templateUrl, ""),
+  gt(certificateTemplates.templateWidth, 0),
+  gt(certificateTemplates.templateHeight, 0),
+];
+
 /** Reload a single template joined with its access relation, or null. */
 async function loadTemplateWithAccess(
   id: string,
   exec: DbExecutor,
 ): Promise<CertificateTemplateWithAccess | null> {
-  const rows = await exec
-    .select({
-      template: certificateTemplates,
-      accessRefId: eventAccess.id,
-      accessRefName: eventAccess.name,
-      accessRefType: eventAccess.type,
-    })
-    .from(certificateTemplates)
-    .leftJoin(eventAccess, templateAccessJoin)
+  const rows = await selectTemplatesWithAccess(exec)
     .where(eq(certificateTemplates.id, id))
     .limit(1);
   const row = rows[0];
@@ -133,18 +156,10 @@ export async function listCertificateTemplates(
   eventId: string,
   exec: DbExecutor = getDb(),
 ): Promise<CertificateTemplateWithAccess[]> {
-  const rows = await exec
-    .select({
-      template: certificateTemplates,
-      accessRefId: eventAccess.id,
-      accessRefName: eventAccess.name,
-      accessRefType: eventAccess.type,
-    })
-    .from(certificateTemplates)
-    .leftJoin(eventAccess, templateAccessJoin)
+  const rows = await selectTemplatesWithAccess(exec)
     .where(eq(certificateTemplates.eventId, eventId))
     .orderBy(desc(certificateTemplates.createdAt));
-  return rows.map((row) => ({ ...readTemplate(row.template), access: toAccessRef(row) }));
+  return rows.map(readTemplateWithAccess);
 }
 
 /** Single template + access relation + owning event's {clientId,status}, or null. */
@@ -154,10 +169,7 @@ export async function getCertificateTemplateWithEvent(
 ): Promise<CertificateTemplateWithEvent | null> {
   const rows = await exec
     .select({
-      template: certificateTemplates,
-      accessRefId: eventAccess.id,
-      accessRefName: eventAccess.name,
-      accessRefType: eventAccess.type,
+      ...templateWithAccessFields,
       clientId: events.clientId,
       status: events.status,
     })
@@ -169,8 +181,7 @@ export async function getCertificateTemplateWithEvent(
   const row = rows[0];
   if (!row) return null;
   return {
-    ...readTemplate(row.template),
-    access: toAccessRef(row),
+    ...readTemplateWithAccess(row),
     event: { clientId: row.clientId, status: row.status },
   };
 }
@@ -463,25 +474,14 @@ export async function listActiveImageReadyCertificateTemplates(
   eventId: string,
   exec: DbExecutor = getDb(),
 ): Promise<CertificateTemplateWithAccess[]> {
-  const rows = await exec
-    .select({
-      template: certificateTemplates,
-      accessRefId: eventAccess.id,
-      accessRefName: eventAccess.name,
-      accessRefType: eventAccess.type,
-    })
-    .from(certificateTemplates)
-    .leftJoin(eventAccess, templateAccessJoin)
-    .where(
-      and(
-        eq(certificateTemplates.eventId, eventId),
-        eq(certificateTemplates.active, true),
-        ne(certificateTemplates.templateUrl, ""),
-        gt(certificateTemplates.templateWidth, 0),
-        gt(certificateTemplates.templateHeight, 0),
-      ),
-    );
-  return rows.map((row) => ({ ...readTemplate(row.template), access: toAccessRef(row) }));
+  const rows = await selectTemplatesWithAccess(exec).where(
+    and(
+      eq(certificateTemplates.eventId, eventId),
+      eq(certificateTemplates.active, true),
+      ...imageReady,
+    ),
+  );
+  return rows.map(readTemplateWithAccess);
 }
 
 /**
@@ -494,26 +494,15 @@ export async function getActiveImageReadyCertificateTemplatesByIds(
   exec: DbExecutor = getDb(),
 ): Promise<CertificateTemplateWithAccess[]> {
   if (ids.length === 0) return [];
-  const rows = await exec
-    .select({
-      template: certificateTemplates,
-      accessRefId: eventAccess.id,
-      accessRefName: eventAccess.name,
-      accessRefType: eventAccess.type,
-    })
-    .from(certificateTemplates)
-    .leftJoin(eventAccess, templateAccessJoin)
-    .where(
-      and(
-        inArray(certificateTemplates.id, ids),
-        eq(certificateTemplates.active, true),
-        eq(certificateTemplates.eventId, eventId),
-        ne(certificateTemplates.templateUrl, ""),
-        gt(certificateTemplates.templateWidth, 0),
-        gt(certificateTemplates.templateHeight, 0),
-      ),
-    );
-  return rows.map((row) => ({ ...readTemplate(row.template), access: toAccessRef(row) }));
+  const rows = await selectTemplatesWithAccess(exec).where(
+    and(
+      inArray(certificateTemplates.id, ids),
+      eq(certificateTemplates.active, true),
+      eq(certificateTemplates.eventId, eventId),
+      ...imageReady,
+    ),
+  );
+  return rows.map(readTemplateWithAccess);
 }
 
 /**
@@ -546,12 +535,11 @@ export async function getRegistrationsForCertificateSend(
     .from(accessCheckIns)
     .where(inArray(accessCheckIns.registrationId, regIds));
 
-  const checkInsByReg = new Map<string, { accessId: string }[]>();
-  for (const c of checkIns) {
-    const list = checkInsByReg.get(c.registrationId) ?? [];
-    list.push({ accessId: c.accessId });
-    checkInsByReg.set(c.registrationId, list);
-  }
+  const checkInsByReg = groupRows(
+    checkIns,
+    (c) => c.registrationId,
+    (c) => ({ accessId: c.accessId }),
+  );
 
   return rows.map((r) => ({
     ...toRegistrationEmailContext(r),
@@ -694,46 +682,60 @@ export const CERTIFICATE_EMAIL_SENT_STATUSES = [
 ] as const satisfies readonly EmailLogStatus[];
 
 /**
- * Per-registration set of certificate template ids already queued/sent. Reads
- * CERTIFICATE_SENT EmailLog rows in CERTIFICATE_EMAIL_SENT_STATUSES and
- * extracts the durable dedupe key stashed in
- * `contextSnapshot._certificateTemplateIds` (string entries only).
+ * Per-target set of certificate template ids already queued/sent, the target
+ * being the email log's registration or abstract. Reads CERTIFICATE_SENT
+ * EmailLog rows in CERTIFICATE_EMAIL_SENT_STATUSES and extracts the durable
+ * dedupe key stashed in `contextSnapshot._certificateTemplateIds` (string
+ * entries only).
  */
-export async function getAlreadySentCertTemplateIds(
-  registrationIds: string[],
-  exec: DbExecutor = getDb(),
+async function getAlreadySentTemplateIds(
+  target: typeof emailLogs.registrationId | typeof emailLogs.abstractId,
+  targetIds: string[],
+  exec: DbExecutor,
 ): Promise<Map<string, Set<string>>> {
   const map = new Map<string, Set<string>>();
-  if (registrationIds.length === 0) return map;
+  if (targetIds.length === 0) return map;
 
   const rows = await exec
     .select({
       id: emailLogs.id,
-      registrationId: emailLogs.registrationId,
+      targetId: target,
       contextSnapshot: emailLogs.contextSnapshot,
     })
     .from(emailLogs)
     .where(
       and(
-        inArray(emailLogs.registrationId, registrationIds),
+        inArray(target, targetIds),
         eq(emailLogs.trigger, "CERTIFICATE_SENT"),
         inArray(emailLogs.status, CERTIFICATE_EMAIL_SENT_STATUSES),
       ),
     );
 
   for (const row of rows) {
-    if (!row.registrationId) continue;
+    if (!row.targetId) continue;
     const snapshot = readEmailContextSnapshot(row.contextSnapshot, row.id);
     const ids = snapshot?.[CERTIFICATE_TEMPLATE_IDS_KEY];
     if (!Array.isArray(ids)) continue;
-    const set = map.get(row.registrationId) ?? new Set<string>();
+    const set = map.get(row.targetId) ?? new Set<string>();
     for (const id of ids) {
       if (typeof id === "string") set.add(id);
     }
-    map.set(row.registrationId, set);
+    map.set(row.targetId, set);
   }
 
   return map;
+}
+
+/** Per-registration set of certificate template ids already queued/sent. */
+export async function getAlreadySentCertTemplateIds(
+  registrationIds: string[],
+  exec: DbExecutor = getDb(),
+): Promise<Map<string, Set<string>>> {
+  return getAlreadySentTemplateIds(
+    emailLogs.registrationId,
+    registrationIds,
+    exec,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -818,45 +820,14 @@ export async function getAbstractsForCertificateSend(
 }
 
 /**
- * Per-abstract set of certificate template ids already queued/sent, mirroring
- * getAlreadySentCertTemplateIds but scoped to emailLogs.abstractId instead of
- * registrationId (H2 dedupe).
+ * Per-abstract set of certificate template ids already queued/sent (H2
+ * dedupe): getAlreadySentCertTemplateIds scoped to emailLogs.abstractId.
  */
 export async function getAlreadySentAbstractCertTemplateIds(
   abstractIds: string[],
   exec: DbExecutor = getDb(),
 ): Promise<Map<string, Set<string>>> {
-  const map = new Map<string, Set<string>>();
-  if (abstractIds.length === 0) return map;
-
-  const rows = await exec
-    .select({
-      id: emailLogs.id,
-      abstractId: emailLogs.abstractId,
-      contextSnapshot: emailLogs.contextSnapshot,
-    })
-    .from(emailLogs)
-    .where(
-      and(
-        inArray(emailLogs.abstractId, abstractIds),
-        eq(emailLogs.trigger, "CERTIFICATE_SENT"),
-        inArray(emailLogs.status, CERTIFICATE_EMAIL_SENT_STATUSES),
-      ),
-    );
-
-  for (const row of rows) {
-    if (!row.abstractId) continue;
-    const snapshot = readEmailContextSnapshot(row.contextSnapshot, row.id);
-    const ids = snapshot?.[CERTIFICATE_TEMPLATE_IDS_KEY];
-    if (!Array.isArray(ids)) continue;
-    const set = map.get(row.abstractId) ?? new Set<string>();
-    for (const id of ids) {
-      if (typeof id === "string") set.add(id);
-    }
-    map.set(row.abstractId, set);
-  }
-
-  return map;
+  return getAlreadySentTemplateIds(emailLogs.abstractId, abstractIds, exec);
 }
 
 // ---------------------------------------------------------------------------

@@ -135,7 +135,7 @@ export class CertificatesController {
     @ScopedEvent() event: ScopedEventRow,
   ) {
     return this.certificates.sendCertificates(
-      { id: event.id, clientId: event.clientId },
+      event.id,
       body.registrationIds,
       body.abstractIds,
     );
