@@ -11,7 +11,6 @@ import {
 } from "@nestjs/common";
 import {
   AvailableSponsorshipsResponseSchema,
-  ErrorCodes,
   LinkedSponsorshipsResponseSchema,
   SponsorshipDetailResponseSchema,
   SponsorshipLinkedResponseSchema,
@@ -22,7 +21,7 @@ import type { ScopedEventRow } from "@app/db";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
 import { type AuthUser } from "../../core/auth/user-cache";
-import { AppException } from "../../core/app-exception";
+import { notFound } from "../../core/app-exception";
 import {
   EventScoped,
   RegistrationScoped,
@@ -79,7 +78,7 @@ export class SponsorshipDetailController {
     const sponsorship = await this.service.getSponsorshipById(id);
     if (!sponsorship) {
       // Deleted between the scope guard and this read.
-      throw new AppException(ErrorCodes.NOT_FOUND, "Sponsorship not found", 404);
+      throw notFound("Sponsorship not found");
     }
     return sponsorship;
   }

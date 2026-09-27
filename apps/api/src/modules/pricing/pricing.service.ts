@@ -31,7 +31,7 @@ import {
   newId,
   pickDefined,
 } from "@app/shared";
-import { AppException } from "../../core/app-exception";
+import { AppException, badRequest, notFound } from "../../core/app-exception";
 import { assertEventWritable } from "../events";
 import { assertModuleEnabledForClient } from "../clients/module-gates";
 
@@ -84,11 +84,7 @@ export class PricingService {
     return this.mutatePricingRules(eventId, (rules) => {
       const idx = rules.findIndex((r) => r.id === ruleId);
       if (idx === -1) {
-        throw new AppException(
-          ErrorCodes.NOT_FOUND,
-          "Pricing rule not found",
-          404,
-        );
+        throw notFound("Pricing rule not found");
       }
       const next = [...rules];
       next[idx] = { ...next[idx], ...updates };
@@ -103,11 +99,7 @@ export class PricingService {
   ): Promise<EventPricingWithRules> {
     return this.mutatePricingRules(eventId, (rules) => {
       if (!rules.some((r) => r.id === ruleId)) {
-        throw new AppException(
-          ErrorCodes.NOT_FOUND,
-          "Pricing rule not found",
-          404,
-        );
+        throw notFound("Pricing rule not found");
       }
       return rules.filter((r) => r.id !== ruleId);
     });
@@ -141,7 +133,7 @@ export class PricingService {
   ): Promise<EventPricingWithRules> {
     const gate = await getEventPricingGate(eventId, tx);
     if (!gate) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
     assertEventWritable({ status: gate.status });
     assertModuleEnabledForClient(gate.client, "pricing");
@@ -161,11 +153,7 @@ export class PricingService {
       if (input.currency !== currentCurrency) {
         const registrationCount = await countRegistrations(eventId, tx);
         if (registrationCount > 0) {
-          throw new AppException(
-            ErrorCodes.VALIDATION_ERROR,
-            "Cannot change currency after registrations exist",
-            400,
-          );
+          throw badRequest("Cannot change currency after registrations exist");
         }
       }
       updateData.currency = input.currency;
@@ -214,7 +202,7 @@ export class PricingService {
 
     const gate = await getEventPricingGate(eventId, db);
     if (!gate) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
     assertModuleEnabledForClient(gate.client, "pricing");
 

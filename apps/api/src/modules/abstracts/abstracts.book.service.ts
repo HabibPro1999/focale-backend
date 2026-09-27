@@ -7,7 +7,7 @@ import {
   type AbstractBookJobRow,
 } from "@app/db";
 import { getStorageProvider } from "@app/integrations";
-import { AppException } from "../../core/app-exception";
+import { AppException, notFound } from "../../core/app-exception";
 
 const SIGNED_URL_TTL_SECONDS = 60 * 60;
 
@@ -44,11 +44,7 @@ export class AbstractsBookService {
     const result = await enqueueAbstractBookJob({ eventId, requestedBy });
     if (!result.ok) {
       if (result.reason === "no_config") {
-        throw new AppException(
-          ErrorCodes.NOT_FOUND,
-          "Abstract configuration not found",
-          404,
-        );
+        throw notFound("Abstract configuration not found");
       }
       throw new AppException(
         ErrorCodes.INVALID_STATUS_TRANSITION,
@@ -70,11 +66,7 @@ export class AbstractsBookService {
   async get(eventId: string, jobId: string) {
     const job = await getAbstractBookJob(eventId, jobId);
     if (!job) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Abstract Book job not found",
-        404,
-      );
+      throw notFound("Abstract Book job not found");
     }
     return formatJob(job, await jobDownloadUrl(job));
   }

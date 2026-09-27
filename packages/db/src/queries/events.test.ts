@@ -43,7 +43,7 @@ describe("events query SQL", () => {
   });
 
   it("search filter spans name, slug, description and location", () => {
-    const where = buildListWhere({ page: 1, limit: 10, search: "conf" });
+    const where = buildListWhere({ offset: 0, limit: 10, search: "conf" });
     const sql = render(where as SQL);
     expect(sql).toContain("name");
     expect(sql).toContain("slug");
@@ -53,6 +53,6 @@ describe("events query SQL", () => {
   });
 
   it("no filters yields an undefined predicate", () => {
-    expect(buildListWhere({ page: 1, limit: 10 })).toBeUndefined();
+    expect(buildListWhere({ offset: 0, limit: 10 })).toBeUndefined();
   });
 });

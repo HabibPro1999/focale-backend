@@ -1,5 +1,6 @@
 import { escapeLike } from "../like";
 import { and, desc, eq, ilike, isNotNull, or, sql } from "drizzle-orm";
+import type { OffsetPagination } from "@app/shared";
 import { getDb, type DbExecutor } from "../client";
 import { rowCountOf } from "../helpers";
 import {
@@ -21,9 +22,7 @@ export type EventRow = typeof events.$inferSelect;
 type EventPricingRow = typeof eventPricing.$inferSelect;
 export type EventWithPricing = EventRow & { pricing: EventPricingRow | null };
 
-export interface ListEventsFilter {
-  page: number;
-  limit: number;
+export interface ListEventsFilter extends OffsetPagination {
   clientId?: string;
   status?: "CLOSED" | "OPEN" | "ARCHIVED";
   search?: string;
@@ -128,7 +127,6 @@ export async function listEvents(
   exec: DbExecutor = getDb(),
 ): Promise<{ data: EventRow[]; total: number }> {
   const where = buildListWhere(filter);
-  const skip = (filter.page - 1) * filter.limit;
 
   const [data, totalRows] = await Promise.all([
     exec
@@ -137,7 +135,7 @@ export async function listEvents(
       .where(where)
       .orderBy(desc(events.createdAt))
       .limit(filter.limit)
-      .offset(skip),
+      .offset(filter.offset),
     exec.select({ value: sql<number>`count(*)::int` }).from(events).where(where),
   ]);
 

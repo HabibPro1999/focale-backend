@@ -21,7 +21,7 @@ import {
   type AbstractConfigRow,
   type AbstractThemeRow,
 } from "@app/db";
-import { AppException } from "../../core/app-exception";
+import { AppException, conflict, notFound } from "../../core/app-exception";
 
 const SCALAR_FIELDS = [
   "submissionMode",
@@ -156,10 +156,8 @@ export class AbstractsConfigService {
       return { forced: false };
     }
     if (!force) {
-      throw new AppException(
-        ErrorCodes.CONFLICT,
+      throw conflict(
         "Cannot change submission mode: abstracts already exist. Use force=true to override.",
-        409,
       );
     }
     return { forced: true };
@@ -287,7 +285,7 @@ export class AbstractsConfigService {
   ): Promise<AbstractThemeRow> {
     const found = await findThemeWithEventId(themeId);
     if (!found || found.eventId !== eventId) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Theme not found", 404);
+      throw notFound("Theme not found");
     }
     const data: Record<string, unknown> = {};
     if (body.translations !== undefined) data.translations = body.translations;
@@ -318,7 +316,7 @@ export class AbstractsConfigService {
   async softDeleteTheme(eventId: string, themeId: string): Promise<void> {
     const found = await findThemeWithEventId(themeId);
     if (!found || found.eventId !== eventId) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Theme not found", 404);
+      throw notFound("Theme not found");
     }
     await softDeleteThemeRow(themeId);
   }

@@ -49,3 +49,9 @@ export function paginate<T>(
 export function getSkip(params: PaginationParams): number {
   return (params.page - 1) * params.limit;
 }
+
+/** DB list-query paging: services convert page to offset with getSkip and build the page metadata. */
+export interface OffsetPagination {
+  offset: number;
+  limit: number;
+}

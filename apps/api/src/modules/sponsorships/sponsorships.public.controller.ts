@@ -9,7 +9,7 @@ import {
 import { getEventWithPricing, getEventWithPricingBySlug } from "@app/db";
 import { assertClientModuleEnabled } from "../clients/module-gates";
 import { assertEventAcceptsPublicActions } from "../events";
-import { AppException } from "../../core/app-exception";
+import { AppException, notFound } from "../../core/app-exception";
 import { ResponseContract } from "../../core/response-contract";
 import { SponsorshipsPublicService } from "./sponsorships.public.service";
 import {
@@ -39,7 +39,7 @@ export class SponsorshipsPublicController {
   ) {
     const event = await getEventWithPricing(eventId);
     if (!event) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
     return this.createForEvent(event, eventId, input);
   }
@@ -54,14 +54,14 @@ export class SponsorshipsPublicController {
   ) {
     const event = await getEventWithPricingBySlug(slug);
     if (!event) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
     assertEventAcceptsPublicActions(event);
     await assertClientModuleEnabled(event.clientId, "sponsorships");
 
     const form = await this.service.getActiveSponsorForm(event.id);
     if (!form) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Sponsor form not found", 404);
+      throw notFound("Sponsor form not found");
     }
 
     const settings = getSponsorshipSettings(form.schema);
@@ -98,7 +98,7 @@ export class SponsorshipsPublicController {
   ) {
     const event = await getEventWithPricingBySlug(slug);
     if (!event) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
     return this.createForEvent(event, event.id, input);
   }
@@ -113,11 +113,7 @@ export class SponsorshipsPublicController {
 
     const form = await this.service.getActiveSponsorForm(eventId);
     if (!form) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Sponsor form not found for this event",
-        404,
-      );
+      throw notFound("Sponsor form not found for this event");
     }
     const result = await this.service.createSponsorshipBatch(
       eventId,

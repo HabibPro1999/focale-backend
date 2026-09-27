@@ -341,7 +341,7 @@ describe("list / listLogs", () => {
     } as never);
     expect(res.meta.limit).toBe(50);
     const args = vi.mocked(listEventEmailLogs).mock.calls[0][1];
-    expect(args).toMatchObject({ skip: 0, limit: 50 });
+    expect(args).toMatchObject({ offset: 0, limit: 50 });
     expect(res.meta.totalCapped).toBe(false);
   });
 

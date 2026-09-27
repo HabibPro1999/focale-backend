@@ -45,7 +45,7 @@ import {
 import { assertEventOpen } from "../events";
 import { assertModuleEnabledForClient } from "../clients/module-gates";
 import { AccessService } from "../access/access.service";
-import { AppException } from "../../core/app-exception";
+import { AppException, badRequest, notFound } from "../../core/app-exception";
 import {
   generateUniqueCode,
   validateCoveredAccessTimeOverlap,
@@ -252,52 +252,38 @@ export class SponsorshipsPublicService {
         return false;
       });
       if (dupes.length > 0) {
-        throw new AppException(
-          ErrorCodes.VALIDATION_ERROR,
+        throw badRequest(
           `Duplicate beneficiary emails: ${[...new Set(dupes)].join(", ")}`,
-          400,
         );
       }
     } else if (isLinkedMode) {
       const regIds = linkedBeneficiaries.map((b) => b.registrationId);
       if (new Set(regIds).size !== regIds.length) {
-        throw new AppException(
-          ErrorCodes.VALIDATION_ERROR,
-          "Duplicate registration IDs in linked beneficiaries",
-          400,
-        );
+        throw badRequest("Duplicate registration IDs in linked beneficiaries");
       }
     }
 
     const event = await findEventForBatch(db, eventId);
     if (!event) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
     assertEventOpen(event);
     assertModuleEnabledForClient(event.client, MODULE);
 
     const form = await findSponsorFormById(db, formId, eventId);
     if (!form) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Sponsor form not found for this event",
-        404,
-      );
+      throw notFound("Sponsor form not found for this event");
     }
     const sponsorshipMode = getSponsorshipMode(form.schema);
 
     if (isLinkedMode && sponsorshipMode !== "LINKED_ACCOUNT") {
-      throw new AppException(
-        ErrorCodes.VALIDATION_ERROR,
+      throw badRequest(
         "This sponsor form does not accept linked-account sponsorships",
-        400,
       );
     }
     if (!isLinkedMode && sponsorshipMode === "LINKED_ACCOUNT") {
-      throw new AppException(
-        ErrorCodes.VALIDATION_ERROR,
+      throw badRequest(
         "This sponsor form requires linked-account sponsorships",
-        400,
       );
     }
 

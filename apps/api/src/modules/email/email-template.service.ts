@@ -26,7 +26,12 @@ import {
   extractPlainText,
 } from "@app/integrations";
 import { paginate, getSkip, type PaginatedResult } from "@app/shared";
-import { AppException } from "../../core/app-exception";
+import {
+  AppException,
+  badRequest,
+  conflict,
+  notFound,
+} from "../../core/app-exception";
 
 interface TemplateTriggerState {
   category: EmailTemplateCategory;
@@ -99,10 +104,8 @@ export class EmailTemplateService {
     const duplicate = await findActiveTemplateForTrigger(input);
     if (duplicate) {
       const trigger = input.trigger ?? input.abstractTrigger;
-      throw new AppException(
-        ErrorCodes.CONFLICT,
+      throw conflict(
         `An active template for trigger "${trigger}" already exists for this event`,
-        409,
       );
     }
   }
@@ -147,11 +150,7 @@ export class EmailTemplateService {
     const result = await insertEmailTemplate(values);
     if (!result.ok) {
       // Race backstop: the one-active-template partial unique index fired.
-      throw new AppException(
-        ErrorCodes.CONFLICT,
-        "Resource already exists",
-        409,
-      );
+      throw conflict("Resource already exists");
     }
     return result.template;
   }
@@ -159,11 +158,7 @@ export class EmailTemplateService {
   async update(id: string, input: UpdateTemplateArgs): Promise<EmailTemplateRow> {
     const existing = await getEmailTemplateById(id);
     if (!existing) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Email template not found",
-        404,
-      );
+      throw notFound("Email template not found");
     }
 
     const finalCategory = input.category ?? existing.category;
@@ -224,11 +219,7 @@ export class EmailTemplateService {
     if (input.expectedUpdatedAt !== undefined) {
       expectedUpdatedAt = new Date(input.expectedUpdatedAt);
       if (Number.isNaN(expectedUpdatedAt.getTime())) {
-        throw new AppException(
-          ErrorCodes.VALIDATION_ERROR,
-          "Invalid expectedUpdatedAt precondition",
-          400,
-        );
+        throw badRequest("Invalid expectedUpdatedAt precondition");
       }
     }
 
@@ -248,11 +239,7 @@ export class EmailTemplateService {
   async delete(id: string): Promise<void> {
     const existing = await getEmailTemplateById(id);
     if (!existing) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Email template not found",
-        404,
-      );
+      throw notFound("Email template not found");
     }
     await deleteEmailTemplateById(id);
   }
@@ -260,11 +247,7 @@ export class EmailTemplateService {
   async duplicate(id: string, newName?: string): Promise<EmailTemplateRow> {
     const existing = await getEmailTemplateById(id);
     if (!existing) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Email template not found",
-        404,
-      );
+      throw notFound("Email template not found");
     }
 
     const values: EmailTemplateInsert = {
@@ -285,11 +268,7 @@ export class EmailTemplateService {
 
     const result = await insertEmailTemplate(values);
     if (!result.ok) {
-      throw new AppException(
-        ErrorCodes.CONFLICT,
-        "Resource already exists",
-        409,
-      );
+      throw conflict("Resource already exists");
     }
     return result.template;
   }
@@ -304,7 +283,7 @@ export class EmailTemplateService {
       trigger,
       abstractTrigger,
       search,
-      skip: getSkip({ page, limit }),
+      offset: getSkip({ page, limit }),
       limit,
     });
     return paginate(data, total, { page, limit });
@@ -326,7 +305,7 @@ export class EmailTemplateService {
     const { data, total, totalCapped } = await dbListEventLogs(eventId, {
       status,
       trigger,
-      skip: getSkip({ page, limit }),
+      offset: getSkip({ page, limit }),
       limit,
     });
     const result = paginate(data, total, { page, limit });

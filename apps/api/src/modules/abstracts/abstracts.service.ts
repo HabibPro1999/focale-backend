@@ -28,7 +28,7 @@ import {
   type FormSchema,
 } from "@app/shared";
 import { assertClientModuleEnabled } from "../clients/module-gates";
-import { AppException } from "../../core/app-exception";
+import { AppException, notFound } from "../../core/app-exception";
 import { CONFIG, type Config } from "../../core/config";
 import { assertPublicLinkBaseUrlAllowed } from "../../core/public-link-origin";
 import { generateAbstractToken, verifyAbstractToken } from "./abstracts.token";
@@ -270,7 +270,7 @@ export class AbstractsService {
   async getPublicConfig(slug: string) {
     const data = await findPublicConfigData(slug);
     if (!data) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
 
     await assertClientModuleEnabled(data.clientId, "abstracts");
@@ -332,17 +332,13 @@ export class AbstractsService {
   async submitAbstract(slug: string, body: SubmitAbstractInput, ip?: string) {
     const found = await findEventConfigForSubmit(slug);
     if (!found) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
     await assertClientModuleEnabled(found.event.clientId, "abstracts");
 
     const config = found.config;
     if (!config) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Abstract submissions not configured",
-        404,
-      );
+      throw notFound("Abstract submissions not configured");
     }
 
     const now = new Date();
@@ -434,14 +430,10 @@ export class AbstractsService {
   async getAbstractByToken(id: string, token: string) {
     const abstract = await findAbstractForToken(id);
     if (!abstract) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Abstract not found", 404);
+      throw notFound("Abstract not found");
     }
     if (!verifyAbstractToken(abstract.editToken, token)) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Invalid abstract token",
-        404,
-      );
+      throw notFound("Invalid abstract token");
     }
     await assertAbstractModuleEnabled(abstract.eventId);
 
@@ -499,24 +491,16 @@ export class AbstractsService {
   ) {
     const abstract = await findAbstractForEdit(id);
     if (!abstract) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Abstract not found", 404);
+      throw notFound("Abstract not found");
     }
     if (!verifyAbstractToken(abstract.editToken, token)) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Invalid abstract token",
-        404,
-      );
+      throw notFound("Invalid abstract token");
     }
     await assertAbstractModuleEnabled(abstract.eventId);
 
     const config = abstract.config;
     if (!config) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Abstract config not found",
-        404,
-      );
+      throw notFound("Abstract config not found");
     }
 
     if (!config.editingEnabled) {

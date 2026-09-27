@@ -73,9 +73,9 @@ function logRow(id: string, queuedAt: string) {
 }
 
 describe("listEventEmailLogs (3.6b)", () => {
-  it("unions two index-backed branches, each cut to skip + limit rows, then pages", async () => {
+  it("unions two index-backed branches, each cut to offset + limit rows, then pages", async () => {
     const { exec, selects } = makeExec({ page: [], rows: [], count: 0 });
-    await listEventEmailLogs("event-1", { skip: 40, limit: 20 }, exec);
+    await listEventEmailLogs("event-1", { offset: 40, limit: 20 }, exec);
 
     const page = selects.find((q) => /union all/i.test(q.sql))!;
     const [byRegistration, byTemplate] = page.sql.split(/\) union all \(/i);
@@ -91,7 +91,7 @@ describe("listEventEmailLogs (3.6b)", () => {
     expect(byTemplate).toMatch(
       /"email_logs"\."registration_id" is null or not exists \(select 1 from "registrations" where \("registrations"\."id" = "email_logs"\."registration_id" and "registrations"\."event_id" = \$\d+\)\)/,
     );
-    // Each branch: newest first, cut to skip + limit (60).
+    // Each branch: newest first, cut to offset + limit (60).
     for (const branch of [byRegistration, byTemplate]) {
       expect(branch).toContain(`order by "email_logs"."queued_at" desc, "email_logs"."id" desc limit $`);
     }
@@ -104,7 +104,7 @@ describe("listEventEmailLogs (3.6b)", () => {
 
   it("applies the status and trigger filters in both branches", async () => {
     const { exec, selects, executes } = makeExec({ page: [], rows: [], count: 0 });
-    await listEventEmailLogs("event-1", { skip: 0, limit: 50, status: "UNCERTAIN", trigger: "PAYMENT_CONFIRMED" }, exec);
+    await listEventEmailLogs("event-1", { offset: 0, limit: 50, status: "UNCERTAIN", trigger: "PAYMENT_CONFIRMED" }, exec);
 
     const page = selects.find((q) => /union all/i.test(q.sql))!;
     for (const branch of page.sql.split(/\) union all \(/i)) {
@@ -121,7 +121,7 @@ describe("listEventEmailLogs (3.6b)", () => {
 
   it("counts each branch up to the cap + 1 and reports a capped total", async () => {
     const { exec, executes } = makeExec({ page: [], rows: [], count: "10002" });
-    const result = await listEventEmailLogs("event-1", { skip: 0, limit: 50 }, exec);
+    const result = await listEventEmailLogs("event-1", { offset: 0, limit: 50 }, exec);
 
     const [count] = executes;
     // The derived table is the parenthesized UNION ALL of the two capped branches.
@@ -134,12 +134,12 @@ describe("listEventEmailLogs (3.6b)", () => {
 
   it("returns the exact total under the cap", async () => {
     const { exec } = makeExec({ page: [], rows: [], count: 7 });
-    await expect(listEventEmailLogs("event-1", { skip: 0, limit: 50, countCap: 7 }, exec)).resolves.toMatchObject({
+    await expect(listEventEmailLogs("event-1", { offset: 0, limit: 50, countCap: 7 }, exec)).resolves.toMatchObject({
       total: 7,
       totalCapped: false,
     });
     const capped = makeExec({ page: [], rows: [], count: 8 });
-    await expect(listEventEmailLogs("event-1", { skip: 0, limit: 50, countCap: 7 }, capped.exec)).resolves.toMatchObject({
+    await expect(listEventEmailLogs("event-1", { offset: 0, limit: 50, countCap: 7 }, capped.exec)).resolves.toMatchObject({
       total: 7,
       totalCapped: true,
     });
@@ -155,7 +155,7 @@ describe("listEventEmailLogs (3.6b)", () => {
       rows: [logRow("a", "2026-09-01T00:00:00Z"), logRow("b", "2026-09-02T00:00:00Z")],
       count: 3,
     });
-    const result = await listEventEmailLogs("event-1", { skip: 0, limit: 3 }, exec);
+    const result = await listEventEmailLogs("event-1", { offset: 0, limit: 3 }, exec);
 
     const load = selects.find((q) => !/union all/i.test(q.sql))!;
     expect(load.sql).toContain(`left join "email_templates" on "email_templates"."id" = "email_logs"."template_id"`);
@@ -167,7 +167,7 @@ describe("listEventEmailLogs (3.6b)", () => {
 
   it("skips the row load for an empty page", async () => {
     const { exec, selects } = makeExec({ page: [], rows: [], count: 0 });
-    await expect(listEventEmailLogs("event-1", { skip: 0, limit: 50 }, exec)).resolves.toEqual({
+    await expect(listEventEmailLogs("event-1", { offset: 0, limit: 50 }, exec)).resolves.toEqual({
       data: [],
       total: 0,
       totalCapped: false,

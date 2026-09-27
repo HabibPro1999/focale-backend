@@ -89,7 +89,7 @@ describe("RegistrationsService", () => {
   describe("listRegistrations", () => {
     it("buckets stats (paid uses paidAmount; refunded counted but unbucketed)", async () => {
       db.listRegistrationRows.mockResolvedValue({
-        rows: [],
+        data: [],
         total: 4,
         stats: [
           { paymentStatus: "PAID", cnt: 1, totalAmount: 100, paidAmount: 90, amountDue: 0 },
@@ -108,7 +108,7 @@ describe("RegistrationsService", () => {
 
     it("pending.amount is the amount due, and collected sums paid amounts except refunds", async () => {
       db.listRegistrationRows.mockResolvedValue({
-        rows: [],
+        data: [],
         total: 9,
         stats: [
           { paymentStatus: "PAID", cnt: 2, totalAmount: 200, paidAmount: 180, amountDue: 0 },
@@ -316,7 +316,7 @@ describe("RegistrationsService", () => {
   describe("listRegistrationAuditLogs", () => {
     it("resolves SYSTEM / PUBLIC / user performer names", async () => {
       db.listRegistrationAuditLogRows.mockResolvedValue({
-        rows: [
+        data: [
           {
             id: "a1",
             action: "CREATE",
@@ -363,7 +363,7 @@ describe("RegistrationsService", () => {
   describe("listRegistrationEmailLogs", () => {
     it("maps rows and ISO-serialises timestamps", async () => {
       db.listRegistrationEmailLogRows.mockResolvedValue({
-        rows: [
+        data: [
           {
             id: "e1",
             subject: "Welcome",
@@ -397,7 +397,7 @@ describe("RegistrationsService", () => {
   describe("response shapes", () => {
     it("admin list rows never carry editToken or idempotencyKey", async () => {
       db.listRegistrationRows.mockResolvedValue({
-        rows: [internalRow()],
+        data: [internalRow()],
         total: 1,
         stats: [],
       });

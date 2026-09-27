@@ -20,7 +20,7 @@ import {
   type SQL,
 } from "drizzle-orm";
 import { getPrimaryLanguage, type LanguageCode, type StoredEmailContextSnapshot, type StoredFormSchemaJson } from "@app/contracts";
-import { newId } from "@app/shared";
+import { newId, type OffsetPagination } from "@app/shared";
 import { getDb, type DbExecutor } from "../client";
 import { rowCountOf, rowsOf, STANDARD_RETRY_DELAYS_MS, standardRetryDelayMs } from "../helpers";
 import { DB_NOW, backoffInterval, createLeaseQueue, intervalMs } from "../lease-queue";
@@ -177,13 +177,11 @@ export async function getTemplateByTrigger(
   return row ?? null;
 }
 
-export interface ListEmailTemplatesArgs {
+export interface ListEmailTemplatesArgs extends OffsetPagination {
   category?: EmailTemplateRow["category"];
   trigger?: AutomaticTrigger;
   abstractTrigger?: AbstractTrigger;
   search?: string;
-  skip: number;
-  limit: number;
 }
 
 export async function listEmailTemplates(
@@ -213,7 +211,7 @@ export async function listEmailTemplates(
       .from(emailTemplates)
       .where(where)
       .orderBy(desc(emailTemplates.createdAt))
-      .offset(args.skip)
+      .offset(args.offset)
       .limit(args.limit),
     exec.select({ n: count() }).from(emailTemplates).where(where),
   ]);
@@ -306,11 +304,9 @@ export interface EventEmailLog {
   failedAt: string | null;
 }
 
-export interface ListEventEmailLogsArgs {
+export interface ListEventEmailLogsArgs extends OffsetPagination {
   status?: EmailStatus;
   trigger?: AutomaticTrigger;
-  skip: number;
-  limit: number;
   /** Defaults to EMAIL_LOG_LIST_COUNT_CAP. */
   countCap?: number;
 }
@@ -326,7 +322,7 @@ export const EMAIL_LOG_LIST_COUNT_CAP = 10_000;
  * - by registration: the event's registrations → email_logs_registration_id_idx;
  * - by template, minus rows of the event's registrations → (template_id,
  *   queued_at) (0029).
- * Each branch takes its own first `skip + limit` rows (queued_at, id
+ * Each branch takes its own first `offset + limit` rows (queued_at, id
  * descending), so the page is exact; the rows are loaded for that page only.
  * The count stops at the cap (`totalCapped`): each branch counts at most
  * cap + 1 rows.
@@ -372,7 +368,7 @@ export async function listEventEmailLogs(
   )!;
 
   const countCap = args.countCap ?? EMAIL_LOG_LIST_COUNT_CAP;
-  const window = args.skip + args.limit;
+  const window = args.offset + args.limit;
   const firstRows = (where: SQL) =>
     exec
       .select({ id: emailLogs.id, queuedAt: emailLogs.queuedAt })
@@ -392,7 +388,7 @@ export async function listEventEmailLogs(
       .unionAll(firstRows(byTemplate))
       .orderBy(sql.raw(`"queued_at" DESC, "id" DESC`))
       .limit(args.limit)
-      .offset(args.skip),
+      .offset(args.offset),
     exec.execute(sql`
       SELECT count(*) AS "n"
       FROM ${counted(byRegistration).unionAll(counted(byTemplate))} AS "capped"
