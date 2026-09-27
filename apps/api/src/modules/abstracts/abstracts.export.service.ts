@@ -2,7 +2,8 @@ import ExcelJS from "exceljs";
 import { findAbstractsForExport } from "@app/db";
 import { escapeExcelRow } from "../reports/excel-safety";
 import { formatDateTime } from "../reports/excel-generator";
-import { getTitle, reviewScoreSpread } from "./abstracts.admin.service";
+import { getAbstractTitle as getTitle } from "@app/shared";
+import { reviewScoreSpread } from "./abstracts.admin.service";
 import { getAuthorLine } from "@app/shared";
 import {
   ABSTRACT_STATUS_LABELS_FR,

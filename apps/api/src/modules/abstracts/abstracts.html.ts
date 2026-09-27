@@ -1,3 +1,4 @@
+import { ABSTRACT_STRUCTURED_SECTIONS as STRUCTURED_SECTIONS } from "@app/contracts";
 import { escapeHtml, abstractHtmlToText, decodeEntities } from "@app/shared";
 
 const ALLOWED_TAGS = new Set(["p", "br", "strong", "em", "u", "ul", "ol", "li"]);
@@ -20,13 +21,7 @@ export type AbstractContent =
       conclusion: string;
     };
 
-const STRUCTURED_SECTIONS = [
-  "introduction",
-  "objective",
-  "methods",
-  "results",
-  "conclusion",
-] as const;
+
 
 function normalizeTagName(rawName: string): string {
   const name = rawName.toLowerCase();

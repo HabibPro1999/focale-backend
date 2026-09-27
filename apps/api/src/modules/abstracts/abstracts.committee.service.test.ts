@@ -1,3 +1,4 @@
+import { mock, expectStatus } from "../../testing/abstracts";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { UserRole } from "@app/contracts";
 
@@ -102,7 +103,6 @@ import { CommitteeEmailsService } from "./abstracts.committee-emails";
 import { AbstractsCommitteeService } from "./abstracts.committee.service";
 import { AppException } from "../../core/app-exception";
 
-const mock = <T>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
 
 const eventId = "11111111-1111-1111-1111-111111111111";
 const abstractId = "22222222-2222-2222-2222-222222222222";
@@ -128,16 +128,6 @@ const invites = { mintCommitteeInviteToken,
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const service = new AbstractsCommitteeService(usersMock as any, invites as any, new CommitteeEmailsService(config as any));
 
-async function expectStatus(p: Promise<unknown>, status: number): Promise<void> {
-  const err = await p.then(
-    () => {
-      throw new Error("expected promise to reject");
-    },
-    (e: unknown) => e,
-  );
-  expect(err).toBeInstanceOf(AppException);
-  expect((err as AppException).getStatus()).toBe(status);
-}
 
 function committeeUser(overrides: Record<string, unknown> = {}) {
   return {

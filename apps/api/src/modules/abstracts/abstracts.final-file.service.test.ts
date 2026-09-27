@@ -1,3 +1,4 @@
+import { mock } from "../../testing/abstracts";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import JSZip from "jszip";
 
@@ -36,7 +37,6 @@ import type { AbstractsService } from "./abstracts.service";
 import { AppException } from "../../core/app-exception";
 import { ErrorCodes } from "@app/contracts";
 
-const mock = <T>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
 
 const abstractId = "abstract-1";
 const eventId = "event-1";

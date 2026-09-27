@@ -45,21 +45,25 @@ export class CommitteeEmailsService {
       );
     }
 
-    return await this.sendCommitteeMjmlEmail({
+    const { html, toName } = await this.renderCommitteeMjml({
       to: user.email,
       toName: user.name,
-      subject: `Invitation au comité scientifique - ${eventName}`,
       headline: "Bienvenue au comité scientifique",
       intro:
         "Vous êtes invité(e) à rejoindre le comité scientifique de {eventName} sur Focale. Pour activer votre compte, choisissez un mot de passe avec le lien sécurisé ci-dessous :",
       ctaText: "Définir mon mot de passe",
       link,
       eventName,
-      category: "committee-invite",
       footnote:
         "Si vous n'attendiez pas cette invitation, vous pouvez ignorer cet email.",
+    });
+    return this.sendAndLogInviteEmail({
+      to: user.email,
+      toName,
+      subject: `Invitation au comité scientifique - ${eventName}`,
+      html,
+      categories: ["committee-invite"],
       logContext: "Failed to send committee invitation email",
-      logAsInvite: true,
     });
   }
   private async sendTemplatedCommitteeEmail(
@@ -156,21 +160,16 @@ export class CommitteeEmailsService {
     return result.success;
   }
 
-  private async sendCommitteeMjmlEmail(input: {
+  private async renderCommitteeMjml(input: {
     to: string;
     toName?: string | null;
-    subject: string;
     headline: string;
     intro: string;
     ctaText: string;
     link: string;
     eventName: string;
-    category: string;
     footnote?: string;
-    logContext: string;
-    /** M7: only the ABSTRACT_COMMITTEE_INVITE fallback records an email_logs row. */
-    logAsInvite?: boolean;
-  }): Promise<boolean> {
+  }): Promise<{ html: string; toName: string }> {
     const toName = input.toName?.trim() || input.to;
     const safeName = escapeHtml(toName);
     const safeEventName = escapeHtml(input.eventName);
@@ -209,51 +208,41 @@ export class CommitteeEmailsService {
 </mjml>`;
     const { html } = await compileMjmlToHtml(mjml);
 
-    if (input.logAsInvite) {
-      return this.sendAndLogInviteEmail({
-        to: input.to,
-        toName,
-        subject: input.subject,
-        html,
-        categories: [input.category],
-        logContext: input.logContext,
-      });
-    }
-
-    const result = await getEmailProvider().sendEmail({
-      to: input.to,
-      toName,
-      subject: input.subject,
-      html,
-      categories: [input.category],
-    });
-    if (!result.success) {
-      logger.error({ email: input.to, error: result.error }, input.logContext);
-    }
-    return result.success;
+    return { html, toName };
   }
   async sendResetPasswordEmail(
     user: { email: string; name: string },
     eventName: string,
     link: string,
   ): Promise<boolean> {
-    return this.sendCommitteeMjmlEmail({
+    const { html, toName } = await this.renderCommitteeMjml({
       to: user.email,
       toName: user.name,
       // Copy is invite-framed on purpose: the link lands on the same
       // "set your password" page as the original invitation, so promising a
       // "reset" (or telling the member to ignore the email) would misdescribe it.
-      subject: "Nouveau lien d'accès - comité scientifique",
       headline: "Définir votre mot de passe",
       intro:
         "Un nouveau lien sécurisé a été généré pour votre compte comité scientifique sur {eventName}. Utilisez le bouton ci-dessous pour définir votre mot de passe :",
       ctaText: "Définir mon mot de passe",
       link,
       eventName,
-      category: "committee-password-reset",
       footnote:
         "Si vous n'attendiez pas cet email, contactez l'organisateur de l'événement.",
-      logContext: "Failed to send committee password-reset email",
     });
+    const result = await getEmailProvider().sendEmail({
+      to: user.email,
+      toName,
+      subject: "Nouveau lien d'accès - comité scientifique",
+      html,
+      categories: ["committee-password-reset"],
+    });
+    if (!result.success) {
+      logger.error(
+        { email: user.email, error: result.error },
+        "Failed to send committee password-reset email",
+      );
+    }
+    return result.success;
   }
 }

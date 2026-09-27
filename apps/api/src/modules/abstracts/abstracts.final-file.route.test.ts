@@ -1,3 +1,4 @@
+import { mock } from "../../testing/abstracts";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { ErrorCodes } from "@app/contracts";
 
@@ -38,7 +39,6 @@ import {
 } from "./abstracts.final-file.service";
 import type { AbstractsService } from "./abstracts.service";
 
-const mock = <T>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
 
 const abstractId = "abstract-1";
 const eventId = "event-1";

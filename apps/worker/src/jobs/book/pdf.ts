@@ -1,5 +1,5 @@
-import { ABSTRACT_TYPE_LABELS_FR, type AbstractFinalType } from "@app/contracts";
-import { getAuthorLine } from "@app/shared";
+import { ABSTRACT_STRUCTURED_SECTIONS, ABSTRACT_TYPE_LABELS_FR, type AbstractFinalType } from "@app/contracts";
+import { getAbstractTitle, getAuthorLine } from "@app/shared";
 // Abstract Book PDF generation — ported verbatim (semantics) from legacy
 // src/modules/abstracts/abstracts.book.service.ts. Two-column A4 layout using
 // pdf-lib StandardFonts (WinAnsi/CP1252). toWinAnsiSafe replaces characters the
@@ -25,19 +25,11 @@ const COLUMN_GAP = 18;
 const COLUMN_WIDTH = (A4[0] - MARGIN * 2 - COLUMN_GAP) / 2;
 const FULL_WIDTH = A4[0] - MARGIN * 2;
 
-const FINAL_TYPE_SORT_ORDER: Record<string, number> = {
+const FINAL_TYPE_SORT_ORDER: Record<AbstractFinalType, number> = {
   CONFERENCE: 0,
   ORAL_COMMUNICATION: 1,
   POSTER: 2,
 };
-
-function getContentTitle(content: unknown): string {
-  if (content && typeof content === "object" && !Array.isArray(content)) {
-    const title = (content as Record<string, unknown>).title;
-    if (typeof title === "string" && title.trim()) return title.trim();
-  }
-  return "Untitled abstract";
-}
 
 function getContentSections(
   content: unknown,
@@ -47,15 +39,8 @@ function getContentSections(
   }
   const record = content as Record<string, unknown>;
   if (record.mode === "STRUCTURED") {
-    return (
-      [
-        ["Introduction", record.introduction],
-        ["Objective", record.objective],
-        ["Methods", record.methods],
-        ["Results", record.results],
-        ["Conclusion", record.conclusion],
-      ] as const
-    )
+    return ABSTRACT_STRUCTURED_SECTIONS
+      .map(key => [key[0].toUpperCase() + key.slice(1), record[key]] as const)
       .map(([label, value]) => ({
         label: String(label),
         text: typeof value === "string" ? abstractHtmlToText(value) : "",
@@ -313,16 +298,37 @@ class PdfWriter {
   }
 
   text(text: string, options?: TextOptions) {
+    this.drawLines(text, options, {
+      width: COLUMN_WIDTH,
+      x: () => this.columnX(),
+      onOverflow: () => this.nextColumnOrPage(),
+    });
+  }
+
+  fullWidthText(text: string, options?: TextOptions) {
+    if (this.column !== 0) this.addPage();
+    this.drawLines(text, options, {
+      width: FULL_WIDTH,
+      x: () => MARGIN,
+      onOverflow: () => this.addPage(),
+    });
+  }
+
+  private drawLines(
+    text: string,
+    options: TextOptions | undefined,
+    layout: { width: number; x: () => number; onOverflow: () => void },
+  ) {
     const size = options?.size ?? this.fontSize;
     const font = options?.bold ? this.boldFont : this.regularFont;
     const lineHeight = Math.max(size * 1.25, this.lineHeight);
-    const lines = wrapText(text, font, size, COLUMN_WIDTH);
+    const lines = wrapText(text, font, size, layout.width);
     this.ensure(Math.max(lineHeight, lines.length * lineHeight));
     for (const line of lines) {
-      if (this.y - lineHeight < MARGIN) this.nextColumnOrPage();
+      if (this.y - lineHeight < MARGIN) layout.onOverflow();
       if (line) {
         this.page.drawText(line, {
-          x: this.columnX(),
+          x: layout.x(),
           y: this.y,
           size,
           font,
@@ -334,28 +340,6 @@ class PdfWriter {
     this.y -= options?.gapAfter ?? 0;
   }
 
-  fullWidthText(text: string, options?: TextOptions) {
-    if (this.column !== 0) this.addPage();
-    const size = options?.size ?? this.fontSize;
-    const font = options?.bold ? this.boldFont : this.regularFont;
-    const lineHeight = Math.max(size * 1.25, this.lineHeight);
-    const lines = wrapText(text, font, size, FULL_WIDTH);
-    this.ensure(Math.max(lineHeight, lines.length * lineHeight));
-    for (const line of lines) {
-      if (this.y - lineHeight < MARGIN) this.addPage();
-      if (line) {
-        this.page.drawText(line, {
-          x: MARGIN,
-          y: this.y,
-          size,
-          font,
-          color: options?.color ?? rgb(0.1, 0.1, 0.1),
-        });
-      }
-      this.y -= lineHeight;
-    }
-    this.y -= options?.gapAfter ?? 0;
-  }
 }
 
 export async function generateAbstractBookPdf(
@@ -404,7 +388,7 @@ export async function generateAbstractBookPdf(
       });
     }
     writer.ensure(120);
-    writer.text(`${abstract.code ?? "No code"} ${getContentTitle(abstract.content)}`, {
+    writer.text(`${abstract.code ?? "No code"} ${getAbstractTitle(abstract.content)}`, {
       bold: true,
       size: config.bookFontSize + 2,
       gapAfter: 6,

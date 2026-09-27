@@ -1,3 +1,5 @@
+import { getAbstractTitle as getTitle } from "@app/shared";
+export { getAbstractTitle as getTitle } from "@app/shared";
 import { Injectable } from "@nestjs/common";
 import {
   ErrorCodes,
@@ -18,14 +20,6 @@ import { AppException } from "../../core/app-exception";
 
 const ALREADY_FINALIZED_MSG =
   "Abstract is already finalized; reopen before changing the decision";
-
-export function getTitle(content: unknown): string {
-  if (content && typeof content === "object" && !Array.isArray(content)) {
-    const title = (content as { title?: unknown }).title;
-    if (typeof title === "string" && title.trim()) return title.trim();
-  }
-  return "Untitled abstract";
-}
 
 function toReviewDto(review: AdminReviewRow) {
   return {
