@@ -252,6 +252,32 @@ describe.runIf(dbTestsEnabled())("sponsorship read mapping characterization", ()
     expect(await getRegistrationForSponsorship(f.other.id)).toBeNull();
   });
 
+  it("keeps the existing null detail projection for a joined registration with an empty text ID", async () => {
+    const f = await fixture();
+    const emptyId = await seedRegistration({
+      id: "",
+      eventId: f.event.id,
+      formId: f.form.id,
+      email: "empty-id-mapping@example.test",
+      firstName: "EmptyId",
+      priceBreakdown: breakdown(f.access.id),
+    });
+    const usage = await seedSponsorshipUsage({
+      sponsorshipId: f.used.id,
+      registrationId: emptyId.id,
+      amountApplied: 0,
+      appliedBy: "mapping-test",
+    });
+    // idPk is text; preserve the query's truthiness guard, not just join nullability.
+    const detail = await getSponsorshipById(f.used.id);
+    expect(detail?.usages.find((item) => item.id === usage.id)).toEqual({
+      ...usage, registrationId: "", registration: null,
+    });
+    expect(await getRegistrationForSponsorship("")).toEqual({
+      id: "", event: { id: f.event.id, clientId: f.client.id },
+    });
+  });
+
   it("by-code keeps its batch shape and raw null array while pending projection normalizes coverage", async () => {
     const f = await fixture();
     expect(await getSponsorshipByCode(f.event.id, f.pending.code)).toEqual({
