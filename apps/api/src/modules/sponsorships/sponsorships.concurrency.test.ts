@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "@app/contracts";
 import { findRegistrationForMutation, getDb, lockRegistrationForUpdate, outboxEvents, upsertEventPricing, withTxn } from "@app/db";
 import { dbTestsEnabled } from "@app/db/testing";
@@ -16,6 +16,7 @@ import {
   realtimeRowsOf,
   sponsorshipUsagesOf,
 } from "../../../../../packages/db/tests/helpers/sponsorship-inspect";
+import * as rowLocks from "../../../../../packages/db/src/locks";
 import { AccessService } from "../access/access.service";
 import { RegistrationPaymentsService } from "../registrations/registrations.payments.service";
 import { RegistrationSideEffects } from "../registrations/registrations.side-effects";
@@ -381,14 +382,57 @@ describe.runIf(dbTestsEnabled())("sponsorship service races beyond payment confi
     const originalUsages = await sponsorshipUsagesOf(sponsorship.id);
     const originalAudits = await auditRowsOf("Sponsorship", sponsorship.id);
 
-    // Both start while the registration is PARTIAL and locked. Confirmation
-    // queues first; recalculation must see its committed PAID state, not the
-    // earlier PARTIAL state, and must roll back the coverage/usage update.
-    const [confirmed, recalculated] = await queueBehindLock(
-      registration.id,
-      () => confirm(registration.id),
-      () => sponsorshipsService.updateSponsorship(sponsorship.id, { coversBasePrice: true }, "race-recalc"),
-    );
+    // Pause confirmation after real settlement, while its transaction still
+    // holds the registration lock. Observe recalculation requesting that same
+    // lock before allowing confirmation to commit; elapsed time chooses no winner.
+    let releaseConfirmation!: () => void;
+    const released = new Promise<void>((resolve) => (releaseConfirmation = resolve));
+    let paymentSettled!: () => void;
+    const atPaymentBarrier = new Promise<void>((resolve) => (paymentSettled = resolve));
+    let lockRequested!: () => void;
+    const atRecalcLock = new Promise<void>((resolve) => (lockRequested = resolve));
+    const paymentAccess = new AccessService();
+    const handleCapacityReached = paymentAccess.handleCapacityReached.bind(paymentAccess);
+    const capacityProbe = vi.spyOn(paymentAccess, "handleCapacityReached").mockImplementation(async (...args) => {
+      const result = await handleCapacityReached(...args);
+      paymentSettled();
+      await released;
+      return result;
+    });
+    const lockRegistrations = rowLocks.lockRegistrationsForUpdate;
+    const lockProbe = vi.spyOn(rowLocks, "lockRegistrationsForUpdate").mockImplementation((tx, ids) => {
+      const pendingLock = lockRegistrations(tx, ids);
+      if (ids.includes(registration.id)) lockRequested();
+      return pendingLock;
+    });
+    const paymentService = new RegistrationPaymentsService(paymentAccess, new RegistrationSideEffects(paymentAccess));
+    const confirmation = Promise.allSettled([
+      paymentService.confirmPayment(registration.id, { paymentStatus: "PAID" }, "admin-1"),
+    ]);
+    let recalculation: ReturnType<typeof sponsorshipsService.updateSponsorship> | undefined;
+    let outcomes: PromiseSettledResult<unknown>[] = [];
+    try {
+      await Promise.race([
+        atPaymentBarrier,
+        confirmation.then(() => { throw new Error("Confirmation ended before the settlement barrier"); }),
+      ]);
+      recalculation = sponsorshipsService.updateSponsorship(sponsorship.id, { coversBasePrice: true }, "race-recalc");
+      const recalculationResult = Promise.allSettled([recalculation]);
+      await Promise.race([
+        atRecalcLock,
+        recalculationResult.then(() => { throw new Error("Recalculation ended without requesting the registration lock"); }),
+      ]);
+      expect(await settlesWithin(recalculation, 50)).toBe(false);
+      releaseConfirmation();
+      outcomes = [...await confirmation, ...await recalculationResult];
+    } finally {
+      releaseConfirmation();
+      await confirmation;
+      await recalculation?.catch(() => undefined);
+      lockProbe.mockRestore();
+      capacityProbe.mockRestore();
+    }
+    const [confirmed, recalculated] = outcomes;
 
     expect(confirmed.status).toBe("fulfilled");
     expect(recalculated.status).toBe("rejected");
