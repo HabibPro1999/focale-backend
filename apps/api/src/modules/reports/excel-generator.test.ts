@@ -56,8 +56,8 @@ describe("access registrants XLSX", () => {
     vi.mocked(db.getAccessRegistrantsReportData).mockResolvedValue({
       event, accessItems: [{ ...accessItems[0], name: "Workshop:/[Advanced]*?\\ with a very long title" }, accessItems[1]],
       registrations: [
-        { firstName: "=Amina", lastName: null, email: "amina@example.test", phone: "+216123", paymentStatus: "SPONSORED", totalAmount: 2500, currency: "TND", submittedAt, accessTypeIds: ["access-workshop"] },
-        { firstName: null, lastName: "Ben Ali", email: "b@example.test", phone: null, paymentStatus: "PENDING", totalAmount: 0, currency: "TND", submittedAt: paidAt, accessTypeIds: ["access-workshop", "access-dinner"] },
+        { firstName: "=Amina", lastName: null, email: "amina@example.test", phone: "+216123", paymentStatus: "SPONSORED", totalAmount: 2500, submittedAt, accessTypeIds: ["access-workshop"] },
+        { firstName: null, lastName: "Ben Ali", email: "b@example.test", phone: null, paymentStatus: "PENDING", totalAmount: 0, submittedAt: paidAt, accessTypeIds: ["access-workshop", "access-dinner"] },
       ],
     });
     const result = await generateAccessRegistrantsReport("evt");
@@ -144,7 +144,7 @@ describe("sponsorships XLSX", () => {
 describe("check-in ZIP and its workbooks", () => {
   const registration = (id: string, overrides: Partial<CheckInReportData["registrations"][number]> = {}): CheckInReportData["registrations"][number] => ({
     id, referenceNumber: id, firstName: "Amina", lastName: "Ben Ali", email: `${id}@example.test`,
-    phone: null, paymentStatus: "PAID", submittedAt, checkedInAt: null,
+    phone: null, paymentStatus: "PAID", checkedInAt: null,
     accessTypeIds: ["access-workshop"], accessCheckIns: [], ...overrides,
   });
 

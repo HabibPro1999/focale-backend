@@ -37,8 +37,8 @@ function registration(overrides: Partial<ModularRegistrationRow> = {}): ModularR
     accessTypeIds: ["access-workshop"], droppedAccessIds: ["access-dinner", "removed"],
     accessCheckIns: [{ accessId: "access-workshop", checkedInAt: submittedAt }],
     transactions: [
-      { type: "PAYMENT", amount: 10000, method: "CASH", reference: "RECEIPT", performedBy: "staff@example.test", createdAt: submittedAt, note: "not exported" },
-      { type: "REFUND", amount: -500, method: null, reference: null, performedBy: null, createdAt: paidAt, note: null },
+      { type: "PAYMENT", amount: 10000, method: "CASH", reference: "RECEIPT", performedBy: "staff@example.test", createdAt: submittedAt },
+      { type: "REFUND", amount: -500, method: null, reference: null, performedBy: null, createdAt: paidAt },
     ],
     formData: { specialty: "other", "specialty-other": "Rare diseases", diet: ["veg", "unknown"], choice: "yes", details: { note: "free text" }, tags: ["one", "two"], quantity: 0, consent: false },
     networkingOptIn: null, priceBreakdown: {}, editToken: null, linkBaseUrl: null, idempotencyKey: null,

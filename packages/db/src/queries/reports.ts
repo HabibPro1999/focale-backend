@@ -611,7 +611,6 @@ export interface ModularTransactionRow {
   amount: number;
   method: string | null;
   reference: string | null;
-  note: string | null;
   performedBy: string | null;
   createdAt: Date;
 }
@@ -703,7 +702,6 @@ export async function getRegistrationsForModularExport(
         amount: paymentTransaction.amount,
         method: paymentTransaction.method,
         reference: paymentTransaction.reference,
-        note: paymentTransaction.note,
         performedBy: paymentTransaction.performedBy,
         createdAt: paymentTransaction.createdAt,
       })
@@ -718,7 +716,6 @@ export async function getRegistrationsForModularExport(
         amount: t.amount,
         method: t.method,
         reference: t.reference,
-        note: t.note,
         performedBy: t.performedBy,
         createdAt: t.createdAt,
       });
@@ -767,12 +764,8 @@ export interface EventSummaryData {
   event: { name: string; slug: string } | null;
   accessTypes: Array<{ id: string; name: string; type: string }>;
   registrations: Array<{
-    id: string;
     paymentStatus: string;
-    paymentMethod: string | null;
     accessTypeIds: string[];
-    sponsorshipAmount: number;
-    totalAmount: number;
   }>;
 }
 
@@ -788,12 +781,8 @@ export async function getEventSummaryData(
     .orderBy(asc(eventAccess.sortOrder));
   const regs = await db
     .select({
-      id: registrations.id,
       paymentStatus: registrations.paymentStatus,
-      paymentMethod: registrations.paymentMethod,
       accessTypeIds: registrations.accessTypeIds,
-      sponsorshipAmount: registrations.sponsorshipAmount,
-      totalAmount: registrations.totalAmount,
     })
     .from(registrations)
     .where(eq(registrations.eventId, eventId));
@@ -806,7 +795,7 @@ export async function getEventSummaryData(
 
 export interface AccessRegistrantsReportData {
   event: { name: string; slug: string } | null;
-  accessItems: Array<{ id: string; name: string; type: string }>;
+  accessItems: Array<{ id: string; name: string }>;
   registrations: Array<{
     firstName: string | null;
     lastName: string | null;
@@ -814,7 +803,6 @@ export interface AccessRegistrantsReportData {
     phone: string | null;
     paymentStatus: string;
     totalAmount: number;
-    currency: string;
     submittedAt: Date;
     accessTypeIds: string[];
   }>;
@@ -826,7 +814,7 @@ export async function getAccessRegistrantsReportData(
 ): Promise<AccessRegistrantsReportData> {
   const event = await getEventSlugAndName(eventId, db);
   const accessItems = await db
-    .select({ id: eventAccess.id, name: eventAccess.name, type: eventAccess.type })
+    .select({ id: eventAccess.id, name: eventAccess.name })
     .from(eventAccess)
     .where(eq(eventAccess.eventId, eventId))
     .orderBy(asc(eventAccess.sortOrder));
@@ -838,7 +826,6 @@ export async function getAccessRegistrantsReportData(
       phone: registrations.phone,
       paymentStatus: registrations.paymentStatus,
       totalAmount: registrations.totalAmount,
-      currency: registrations.currency,
       submittedAt: registrations.submittedAt,
       accessTypeIds: registrations.accessTypeIds,
     })
@@ -977,7 +964,6 @@ export interface CheckInReportData {
     email: string;
     phone: string | null;
     paymentStatus: string;
-    submittedAt: Date;
     checkedInAt: Date | null;
     accessTypeIds: string[];
     accessCheckIns: Array<{ accessId: string; checkedInAt: Date }>;
@@ -1004,7 +990,6 @@ export async function getCheckInReportData(
       email: registrations.email,
       phone: registrations.phone,
       paymentStatus: registrations.paymentStatus,
-      submittedAt: registrations.submittedAt,
       checkedInAt: registrations.checkedInAt,
       accessTypeIds: registrations.accessTypeIds,
     })

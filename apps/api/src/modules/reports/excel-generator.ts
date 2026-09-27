@@ -1,4 +1,4 @@
-import ExcelJS from "exceljs";
+import type ExcelJS from "exceljs";
 import JSZip from "jszip";
 import {
   getEventSummaryData,
@@ -8,6 +8,13 @@ import {
   withExportStatementTimeout,
 } from "@app/db";
 import { escapeExcelFormula, escapeExcelRow } from "./excel-safety";
+import {
+  addTitleBlock, dateStamp, formatDateTime, headerFont, HEADER_FILL,
+  newWorkbook, styleHeaderRow, THIN_BORDER, toXlsxBuffer,
+} from "./excel-style";
+
+// Compatibility for the abstracts exporter until its own cleanup adopts the helper.
+export { formatDateTime } from "./excel-style";
 
 /**
  * Build a styled Excel workbook summarising total registrations,
@@ -60,58 +67,28 @@ export async function generateEventSummary(
 
   // ── Build Excel ──
 
-  const workbook = new ExcelJS.Workbook();
-  workbook.creator = "Focale OS";
-  workbook.created = new Date();
+  const workbook = newWorkbook();
 
   const sheet = workbook.addWorksheet("Event Report");
 
-  const headerFill: ExcelJS.Fill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: { argb: "FF1F4E79" },
-  };
-  const headerFont: Partial<ExcelJS.Font> = {
-    bold: true,
-    color: { argb: "FFFFFFFF" },
-    size: 12,
-  };
   const subHeaderFill: ExcelJS.Fill = {
     type: "pattern",
     pattern: "solid",
     fgColor: { argb: "FFD6E4F0" },
   };
   const subHeaderFont: Partial<ExcelJS.Font> = { bold: true, size: 11 };
-  const border: Partial<ExcelJS.Borders> = {
-    top: { style: "thin" },
-    left: { style: "thin" },
-    bottom: { style: "thin" },
-    right: { style: "thin" },
-  };
 
-  let row = 1;
-
-  sheet.mergeCells(`A${row}:C${row}`);
-  const titleCell = sheet.getCell(`A${row}`);
-  titleCell.value = escapeExcelFormula(event!.name);
-  titleCell.font = { bold: true, size: 16, color: { argb: "FF1F4E79" } };
-  titleCell.alignment = { horizontal: "center" };
-  row++;
-
-  sheet.mergeCells(`A${row}:C${row}`);
-  const dateCell = sheet.getCell(`A${row}`);
-  dateCell.value = `Report generated: ${new Date().toLocaleDateString("fr-FR")}`;
-  dateCell.font = { italic: true, size: 10, color: { argb: "FF666666" } };
-  dateCell.alignment = { horizontal: "center" };
-  row += 2;
+  let row = addTitleBlock(sheet, {
+    title: event!.name, lastCol: "C", size: 16, generatedLabel: "Report generated:",
+  });
 
   const addSectionHeader = (title: string) => {
     sheet.mergeCells(`A${row}:C${row}`);
     const cell = sheet.getCell(`A${row}`);
     cell.value = escapeExcelFormula(title);
-    cell.fill = headerFill;
-    cell.font = headerFont;
-    cell.border = border;
+    cell.fill = HEADER_FILL;
+    cell.font = headerFont(12);
+    cell.border = THIN_BORDER;
     row++;
   };
 
@@ -123,11 +100,11 @@ export async function generateEventSummary(
     const labelCell = sheet.getCell(`A${row}`);
     labelCell.value = escapeExcelFormula(opts?.indent ? `  - ${label}` : label);
     if (opts?.bold) labelCell.font = { bold: true, size: 11 };
-    labelCell.border = border;
+    labelCell.border = THIN_BORDER;
     const valCell = sheet.getCell(`B${row}`);
     valCell.value = escapeExcelFormula(value);
     if (opts?.bold) valCell.font = { bold: true, size: 14 };
-    valCell.border = border;
+    valCell.border = THIN_BORDER;
     row++;
   };
 
@@ -137,18 +114,18 @@ export async function generateEventSummary(
       cell.value = escapeExcelFormula(col);
       cell.fill = subHeaderFill;
       cell.font = subHeaderFont;
-      cell.border = border;
+      cell.border = THIN_BORDER;
     });
     row++;
   };
 
   const addAccessRow = (name: string, type: string, count: number) => {
     sheet.getCell(`A${row}`).value = escapeExcelFormula(name);
-    sheet.getCell(`A${row}`).border = border;
+    sheet.getCell(`A${row}`).border = THIN_BORDER;
     sheet.getCell(`B${row}`).value = escapeExcelFormula(type);
-    sheet.getCell(`B${row}`).border = border;
+    sheet.getCell(`B${row}`).border = THIN_BORDER;
     sheet.getCell(`C${row}`).value = count;
-    sheet.getCell(`C${row}`).border = border;
+    sheet.getCell(`C${row}`).border = THIN_BORDER;
     sheet.getCell(`C${row}`).alignment = { horizontal: "center" };
     row++;
   };
@@ -190,8 +167,8 @@ export async function generateEventSummary(
   sheet.getColumn(2).width = 20;
   sheet.getColumn(3).width = 15;
 
-  const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
-  const timestamp = new Date().toISOString().split("T")[0];
+  const buffer = await toXlsxBuffer(workbook);
+  const timestamp = dateStamp();
 
   return {
     filename: `${event!.slug}-summary-${timestamp}.xlsx`,
@@ -219,26 +196,8 @@ export async function generateAccessRegistrantsReport(
   const { event, accessItems, registrations } =
     await withExportStatementTimeout((tx) => getAccessRegistrantsReportData(eventId, tx));
 
-  const workbook = new ExcelJS.Workbook();
-  workbook.creator = "Focale OS";
-  workbook.created = new Date();
+  const workbook = newWorkbook();
 
-  const headerFill: ExcelJS.Fill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: { argb: "FF1F4E79" },
-  };
-  const headerFont: Partial<ExcelJS.Font> = {
-    bold: true,
-    color: { argb: "FFFFFFFF" },
-    size: 11,
-  };
-  const border: Partial<ExcelJS.Borders> = {
-    top: { style: "thin" },
-    left: { style: "thin" },
-    bottom: { style: "thin" },
-    right: { style: "thin" },
-  };
 
   const columns = [
     "Nom",
@@ -260,11 +219,7 @@ export async function generateAccessRegistrantsReport(
     const sheet = workbook.addWorksheet(sheetName);
 
     const headerRow = sheet.addRow(columns);
-    headerRow.eachCell((cell) => {
-      cell.fill = headerFill;
-      cell.font = headerFont;
-      cell.border = border;
-    });
+    styleHeaderRow(headerRow);
 
     const accessRegs = registrations.filter((r) =>
       r.accessTypeIds.includes(access.id),
@@ -283,7 +238,7 @@ export async function generateAccessRegistrantsReport(
         ]),
       );
       dataRow.eachCell((cell) => {
-        cell.border = border;
+        cell.border = THIN_BORDER;
       });
     }
 
@@ -296,8 +251,8 @@ export async function generateAccessRegistrantsReport(
     sheet.getColumn(7).width = 18;
   }
 
-  const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
-  const timestamp = new Date().toISOString().split("T")[0];
+  const buffer = await toXlsxBuffer(workbook);
+  const timestamp = dateStamp();
 
   return {
     filename: `${event!.slug}-acces-inscrits-${timestamp}.xlsx`,
@@ -308,10 +263,6 @@ export async function generateAccessRegistrantsReport(
 // ============================================================================
 // Sponsorships Report (flat sheet)
 // ============================================================================
-
-export function formatDateTime(date: Date): string {
-  return date.toLocaleString("fr-FR");
-}
 
 function getLabTotalKey(labName: string): string {
   return labName.trim().toLowerCase();
@@ -343,50 +294,13 @@ export async function generateSponsorshipsReport(
 
   const accessNameById = new Map(accessItems.map((item) => [item.id, item.name]));
 
-  const workbook = new ExcelJS.Workbook();
-  workbook.creator = "Focale OS";
-  workbook.created = new Date();
+  const workbook = newWorkbook();
 
   const sheet = workbook.addWorksheet("Sponsorships");
 
-  const titleRow = sheet.addRow([escapeExcelFormula(event?.name ?? "Sponsorships")]);
-  sheet.mergeCells(`A${titleRow.number}:R${titleRow.number}`);
-  titleRow.getCell(1).font = {
-    bold: true,
-    size: 16,
-    color: { argb: "FF1F4E79" },
-  };
-  titleRow.getCell(1).alignment = { horizontal: "center" };
-
-  const generatedRow = sheet.addRow([
-    `Report generated: ${new Date().toLocaleDateString("fr-FR")}`,
-  ]);
-  sheet.mergeCells(`A${generatedRow.number}:R${generatedRow.number}`);
-  generatedRow.getCell(1).font = {
-    italic: true,
-    size: 10,
-    color: { argb: "FF666666" },
-  };
-  generatedRow.getCell(1).alignment = { horizontal: "center" };
-
-  sheet.addRow([]);
-
-  const headerFill: ExcelJS.Fill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: { argb: "FF1F4E79" },
-  };
-  const headerFont: Partial<ExcelJS.Font> = {
-    bold: true,
-    color: { argb: "FFFFFFFF" },
-    size: 11,
-  };
-  const border: Partial<ExcelJS.Borders> = {
-    top: { style: "thin" },
-    left: { style: "thin" },
-    bottom: { style: "thin" },
-    right: { style: "thin" },
-  };
+  addTitleBlock(sheet, {
+    title: event?.name ?? "Sponsorships", lastCol: "R", size: 16, generatedLabel: "Report generated:",
+  });
 
   const columns = [
     "Code",
@@ -410,11 +324,7 @@ export async function generateSponsorshipsReport(
   ];
 
   const headerRow = sheet.addRow(columns);
-  headerRow.eachCell((cell) => {
-    cell.fill = headerFill;
-    cell.font = headerFont;
-    cell.border = border;
-  });
+  styleHeaderRow(headerRow);
 
   const sortedSponsorships = [...sponsorships].sort((a, b) => {
     const byLab = a.batch.labName.localeCompare(b.batch.labName, "fr", {
@@ -475,7 +385,7 @@ export async function generateSponsorshipsReport(
     );
 
     dataRow.eachCell((cell) => {
-      cell.border = border;
+      cell.border = THIN_BORDER;
       cell.alignment = { vertical: "top", wrapText: true };
     });
     dataRow.getCell(6).numFmt = "#,##0";
@@ -496,8 +406,8 @@ export async function generateSponsorshipsReport(
     sheet.getColumn(index + 1).width = width;
   });
 
-  const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
-  const timestamp = new Date().toISOString().split("T")[0];
+  const buffer = await toXlsxBuffer(workbook);
+  const timestamp = dateStamp();
 
   return {
     filename: `${event?.slug ?? "event"}-sponsorships-${timestamp}.xlsx`,
@@ -508,23 +418,6 @@ export async function generateSponsorshipsReport(
 // ============================================================================
 // Check-In Report (ZIP with one Excel per scope)
 // ============================================================================
-
-const CHECKIN_HEADER_FILL: ExcelJS.Fill = {
-  type: "pattern",
-  pattern: "solid",
-  fgColor: { argb: "FF1F4E79" },
-};
-const CHECKIN_HEADER_FONT: Partial<ExcelJS.Font> = {
-  bold: true,
-  color: { argb: "FFFFFFFF" },
-  size: 11,
-};
-const CHECKIN_BORDER: Partial<ExcelJS.Borders> = {
-  top: { style: "thin" },
-  left: { style: "thin" },
-  bottom: { style: "thin" },
-  right: { style: "thin" },
-};
 
 function buildCheckInSheet(
   sheet: ExcelJS.Worksheet,
@@ -540,27 +433,9 @@ function buildCheckInSheet(
     checkedInAt: Date | null;
   }[],
 ): void {
-  const titleRow = sheet.addRow([escapeExcelFormula(title)]);
-  sheet.mergeCells(`A${titleRow.number}:I${titleRow.number}`);
-  titleRow.getCell(1).font = {
-    bold: true,
-    size: 14,
-    color: { argb: "FF1F4E79" },
-  };
-  titleRow.getCell(1).alignment = { horizontal: "center" };
-
-  const generatedRow = sheet.addRow([
-    `Generated: ${new Date().toLocaleDateString("fr-FR")}`,
-  ]);
-  sheet.mergeCells(`A${generatedRow.number}:I${generatedRow.number}`);
-  generatedRow.getCell(1).font = {
-    italic: true,
-    size: 10,
-    color: { argb: "FF666666" },
-  };
-  generatedRow.getCell(1).alignment = { horizontal: "center" };
-
-  sheet.addRow([]);
+  addTitleBlock(sheet, {
+    title, lastCol: "I", size: 14, generatedLabel: "Generated:",
+  });
 
   const columns = [
     "Ref #",
@@ -574,11 +449,7 @@ function buildCheckInSheet(
     "Check-in Time",
   ];
   const headerRow = sheet.addRow(columns);
-  headerRow.eachCell((cell) => {
-    cell.fill = CHECKIN_HEADER_FILL;
-    cell.font = CHECKIN_HEADER_FONT;
-    cell.border = CHECKIN_BORDER;
-  });
+  styleHeaderRow(headerRow);
 
   // Sort: checked-in first, then by submission order
   const sorted = [...rows].sort((a, b) => {
@@ -613,7 +484,7 @@ function buildCheckInSheet(
     );
 
     dataRow.eachCell((cell) => {
-      cell.border = CHECKIN_BORDER;
+      cell.border = THIN_BORDER;
     });
 
     const checkedInCell = dataRow.getCell(7);
@@ -649,15 +520,13 @@ export async function generateCheckInReport(
   );
 
   const zip = new JSZip();
-  const timestamp = new Date().toISOString().split("T")[0];
+  const timestamp = dateStamp();
   const eventSlug = event?.slug ?? "event";
   const eventName = event?.name ?? "Event";
 
   // ── 1. Global check-in sheet ──────────────────────────────────────────────
 
-  const globalWorkbook = new ExcelJS.Workbook();
-  globalWorkbook.creator = "Focale OS";
-  globalWorkbook.created = new Date();
+  const globalWorkbook = newWorkbook();
 
   const globalSheet = globalWorkbook.addWorksheet("Check-in");
   buildCheckInSheet(
@@ -675,7 +544,7 @@ export async function generateCheckInReport(
     })),
   );
 
-  const globalBuffer = Buffer.from(await globalWorkbook.xlsx.writeBuffer());
+  const globalBuffer = await toXlsxBuffer(globalWorkbook);
   zip.file(`${eventSlug}-global-checkin.xlsx`, globalBuffer);
 
   // ── 2. Per-access check-in sheets ─────────────────────────────────────────
@@ -687,9 +556,7 @@ export async function generateCheckInReport(
       r.accessTypeIds.includes(access.id),
     );
 
-    const wb = new ExcelJS.Workbook();
-    wb.creator = "Focale OS";
-    wb.created = new Date();
+    const wb = newWorkbook();
 
     const ws = wb.addWorksheet("Check-in");
     buildCheckInSheet(
@@ -710,7 +577,7 @@ export async function generateCheckInReport(
       }),
     );
 
-    const buf = Buffer.from(await wb.xlsx.writeBuffer());
+    const buf = await toXlsxBuffer(wb);
     zip.file(`${slugify(access.name)}-checkin.xlsx`, buf);
   }
 
