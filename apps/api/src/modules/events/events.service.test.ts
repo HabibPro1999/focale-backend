@@ -42,12 +42,12 @@ vi.mock("file-type", () => ({ fileTypeFromBuffer: fileTypeMock }));
 
 import * as db from "@app/db";
 import { fileTypeFromBuffer } from "file-type";
+import { EventsService } from "./events.service";
 import {
-  EventsService,
   assertEventOpen,
   assertEventAcceptsPublicActions,
   assertEventWritable,
-} from "./events.service";
+} from "./event-status";
 
 const service = new EventsService();
 const clientId = "client-123";

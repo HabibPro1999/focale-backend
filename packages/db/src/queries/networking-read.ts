@@ -24,7 +24,6 @@ import { emailLogs } from "../schema/email";
 import { registrations } from "../schema/registrations";
 import { networkingUnreadMessageCount } from "./networking-participant-read";
 import { discoverableCounterpart, notInteracted } from "../policy/networking-eligibility";
-export * from "./networking-participant-read";
 import {
   normalizeNetworkingSearch,
   networkingSearchScore,
