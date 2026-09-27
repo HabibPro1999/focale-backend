@@ -13,7 +13,7 @@ import {
   newWorkbook, styleHeaderRow, THIN_BORDER, toXlsxBuffer,
 } from "./excel-style";
 
-// Compatibility for the abstracts exporter until its own cleanup adopts the helper.
+// Preserve the existing public import path while exporters use excel-style directly.
 export { formatDateTime } from "./excel-style";
 
 /**
