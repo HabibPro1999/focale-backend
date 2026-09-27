@@ -1,3 +1,4 @@
+import { EventIdPathParamSchema } from "./path-params";
 import { hasUpdateField } from "./zod-helpers";
 import { z } from "zod";
 import { ABSTRACT_FINAL_TYPES } from "./abstracts";
@@ -88,9 +89,7 @@ export const UpdateCertificateTemplateSchema = z
 // Param / Query Schemas
 // ============================================================================
 
-export const CertificateEventIdParamSchema = z.strictObject({
-  eventId: z.string().uuid(),
-});
+export const CertificateEventIdParamSchema = EventIdPathParamSchema;
 
 export const CertificateIdParamSchema = z.strictObject({
   id: z.string().uuid(),

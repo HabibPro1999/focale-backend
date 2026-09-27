@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  EventIdPathParamSchema,
   EventRegistrationIdParamSchema,
   RegistrationIdPublicParamSchema,
   EditTokenQuerySchema,
@@ -18,10 +19,9 @@ import {
 } from "@app/contracts";
 import { createZodDto } from "../../core/zod";
 
-// Params — declared inline: the events/forms contracts' *IdParamSchema use `id`,
-// but these registrations routes use `:eventId` / `:formId` path params.
+// Keep the route-specific parameter names, including :eventId and :formId.
 export class EventIdParamDto extends createZodDto(
-  z.strictObject({ eventId: z.string().uuid() }),
+  EventIdPathParamSchema,
 ) {}
 export class FormIdParamDto extends createZodDto(
   z.strictObject({ formId: z.string().uuid() }),

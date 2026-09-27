@@ -1,4 +1,5 @@
 export * from "./envelope";
+export * from "./path-params";
 export * from "./errors";
 export * from "./roles";
 export * from "./condition.schema";

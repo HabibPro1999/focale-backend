@@ -1,3 +1,4 @@
+import { EventIdPathParamSchema } from "./path-params";
 import { hasUpdateField, PositivePaginationQueryShape } from "./zod-helpers";
 import { z } from "zod";
 
@@ -204,9 +205,7 @@ export const SponsorshipIdParamSchema = z.strictObject({
   id: z.string().uuid(),
 });
 
-export const SponsorshipEventIdParamSchema = z.strictObject({
-  eventId: z.string().uuid(),
-});
+export const SponsorshipEventIdParamSchema = EventIdPathParamSchema;
 
 export const RegistrationIdParamSchema = z.strictObject({
   registrationId: z.string().uuid(),

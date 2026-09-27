@@ -1,3 +1,4 @@
+import { EventIdPathParamSchema } from "./path-params";
 import { z } from "zod";
 
 // ============================================================================
@@ -22,9 +23,7 @@ export const BatchSyncBodySchema = z.strictObject({
 
 // Param schema. Named distinct from other modules' event-id param schemas to
 // avoid a barrel clash.
-export const CheckInEventParamSchema = z.strictObject({
-  eventId: z.string().uuid(),
-});
+export const CheckInEventParamSchema = EventIdPathParamSchema;
 
 export const CheckInRegistrationsQuerySchema = z.strictObject({
   accessId: z.string().uuid().optional(),
