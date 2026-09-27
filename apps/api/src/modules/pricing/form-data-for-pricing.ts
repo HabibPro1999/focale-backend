@@ -1,6 +1,6 @@
 import { ErrorCodes } from "@app/contracts";
 import { validateFormData } from "@app/shared";
-import { AppException } from "../../core/app-exception";
+import { badRequest } from "../../core/app-exception";
 
 export interface PrepareFormDataOptions {
   /**
@@ -27,12 +27,7 @@ export function prepareFormDataForPricing(
     enforceRequired: options.enforceRequired ?? true,
   });
   if (!result.valid || !result.data) {
-    throw new AppException(
-      ErrorCodes.FORM_VALIDATION_ERROR,
-      "Form validation failed",
-      400,
-      { fieldErrors: result.errors },
-    );
+    throw badRequest("Form validation failed", { code: ErrorCodes.FORM_VALIDATION_ERROR, details: { fieldErrors: result.errors } });
   }
   return result.data;
 }

@@ -31,3 +31,25 @@ export class AppException extends HttpException {
 export function forbidden(): never {
   throw new AppException(ErrorCodes.FORBIDDEN, "Insufficient permissions", 403);
 }
+
+type ErrorOptions = { code?: string; details?: unknown };
+
+/** Return coded errors; callers keep the throw at the original decision point. */
+export function notFound(message: string, options: ErrorOptions = {}): AppException {
+  return new AppException(options.code ?? ErrorCodes.NOT_FOUND, message, 404, options.details);
+}
+
+/** Generic Nest 400s map to VALIDATION_ERROR; domain/BAD_REQUEST codes stay explicit. */
+export function badRequest(message: string, options: ErrorOptions = {}): AppException {
+  return new AppException(options.code ?? ErrorCodes.VALIDATION_ERROR, message, 400, options.details);
+}
+
+export function conflict(message: string, options: ErrorOptions = {}): AppException {
+  return new AppException(options.code ?? ErrorCodes.CONFLICT, message, 409, options.details);
+}
+
+/** Nullable lookups only: false, zero and empty strings are valid non-null values. */
+export function orNotFound<T>(value: T | null | undefined, message: string, options: ErrorOptions = {}): T {
+  if (value === null || value === undefined) throw notFound(message, options);
+  return value;
+}

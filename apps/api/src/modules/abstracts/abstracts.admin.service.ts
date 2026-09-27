@@ -16,7 +16,7 @@ import {
   type AdminReviewRow,
 } from "@app/db";
 import { getStorageProvider } from "@app/integrations";
-import { AppException } from "../../core/app-exception";
+import { notFound, conflict, badRequest } from "../../core/app-exception";
 
 const ALREADY_FINALIZED_MSG =
   "Abstract is already finalized; reopen before changing the decision";
@@ -102,7 +102,7 @@ export class AbstractsAdminService {
   async getAdminAbstract(eventId: string, abstractId: string) {
     const abstract = await getAdminAbstractDetail(eventId, abstractId);
     if (!abstract) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Abstract not found", 404);
+      throw notFound("Abstract not found");
     }
 
     const finalFileDownloadUrl = abstract.finalFileKey
@@ -155,35 +155,15 @@ export class AbstractsAdminService {
     if (!result.ok) {
       switch (result.reason) {
         case "not_found":
-          throw new AppException(
-            ErrorCodes.NOT_FOUND,
-            "Abstract not found",
-            404,
-          );
+          throw notFound("Abstract not found");
         case "already_finalized":
-          throw new AppException(
-            ErrorCodes.INVALID_STATUS_TRANSITION,
-            ALREADY_FINALIZED_MSG,
-            409,
-          );
+          throw conflict(ALREADY_FINALIZED_MSG, { code: ErrorCodes.INVALID_STATUS_TRANSITION });
         case "missing_final_type":
-          throw new AppException(
-            ErrorCodes.VALIDATION_ERROR,
-            "Final presentation type is required when accepting an abstract",
-            400,
-          );
+          throw badRequest("Final presentation type is required when accepting an abstract");
         case "no_theme":
-          throw new AppException(
-            ErrorCodes.ABSTRACT_INVALID_THEMES,
-            "Accepted abstracts must have a theme before a code can be allocated",
-            400,
-          );
+          throw badRequest("Accepted abstracts must have a theme before a code can be allocated", { code: ErrorCodes.ABSTRACT_INVALID_THEMES });
         case "code_conflict":
-          throw new AppException(
-            ErrorCodes.CONFLICT,
-            "Allocated abstract code collides with an existing one (themes sharing a sort order?) — fix theme sort orders and retry",
-            409,
-          );
+          throw conflict("Allocated abstract code collides with an existing one (themes sharing a sort order?) — fix theme sort orders and retry");
       }
     }
     // Response reflects post-commit state via a fresh read (matches legacy).
@@ -198,13 +178,9 @@ export class AbstractsAdminService {
     const result = await reopenAbstractTxn({ eventId, abstractId, performedBy });
     if (!result.ok) {
       if (result.reason === "not_found") {
-        throw new AppException(ErrorCodes.NOT_FOUND, "Abstract not found", 404);
+        throw notFound("Abstract not found");
       }
-      throw new AppException(
-        ErrorCodes.INVALID_STATUS_TRANSITION,
-        "Only finalized abstracts can be reopened",
-        409,
-      );
+      throw conflict("Only finalized abstracts can be reopened", { code: ErrorCodes.INVALID_STATUS_TRANSITION });
     }
     return this.getAdminAbstract(eventId, abstractId);
   }
@@ -223,13 +199,9 @@ export class AbstractsAdminService {
     });
     if (!result.ok) {
       if (result.reason === "not_found") {
-        throw new AppException(ErrorCodes.NOT_FOUND, "Abstract not found", 404);
+        throw notFound("Abstract not found");
       }
-      throw new AppException(
-        ErrorCodes.INVALID_STATUS_TRANSITION,
-        "Only accepted abstracts can be marked as presented",
-        409,
-      );
+      throw conflict("Only accepted abstracts can be marked as presented", { code: ErrorCodes.INVALID_STATUS_TRANSITION });
     }
     return this.getAdminAbstract(eventId, abstractId);
   }

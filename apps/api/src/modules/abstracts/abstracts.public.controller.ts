@@ -1,15 +1,5 @@
-import {
-  BadRequestException,
-  Body,
-  Controller,
-  Get,
-  HttpCode,
-  Param,
-  Patch,
-  Post,
-  Query,
-  Req,
-} from "@nestjs/common";
+import { badRequest } from "../../core/app-exception";
+import { Body, Controller, Get, HttpCode, Param, Patch, Post, Query, Req } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
 import type { FastifyRequest } from "fastify";
 import { ErrorCodes } from "@app/contracts";
@@ -47,10 +37,7 @@ async function readFinalFile(req: MultipartRequest): Promise<FinalFileInput> {
     .file({ limits: { fileSize: MAX_FINAL_FILE_SIZE } })
     .catch(() => null);
   if (!data) {
-    throw new BadRequestException({
-      code: ErrorCodes.VALIDATION_ERROR,
-      message: "No file uploaded",
-    });
+    throw badRequest("No file uploaded");
   }
   let buffer: Buffer;
   try {

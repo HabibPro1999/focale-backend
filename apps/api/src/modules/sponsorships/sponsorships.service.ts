@@ -76,7 +76,7 @@ import {
 } from "../events";
 import { assertModuleEnabledForClient } from "../clients/module-gates";
 import { AccessService } from "../access/access.service";
-import { AppException } from "../../core/app-exception";
+import { notFound, badRequest, conflict } from "../../core/app-exception";
 import {
   applicableAmountFor,
   calculateTotalSponsorshipAmount,
@@ -215,18 +215,10 @@ export class SponsorshipsService {
   ): Promise<AvailableSponsorship[]> {
     const registration = await getRegistrationCoverage(registrationId);
     if (!registration) {
-      throw new AppException(
-        ErrorCodes.REGISTRATION_NOT_FOUND,
-        "Registration not found",
-        404,
-      );
+      throw notFound("Registration not found", { code: ErrorCodes.REGISTRATION_NOT_FOUND });
     }
     if (registration.eventId !== eventId) {
-      throw new AppException(
-        ErrorCodes.BAD_REQUEST,
-        "Registration does not belong to this event",
-        400,
-      );
+      throw badRequest("Registration does not belong to this event", { code: ErrorCodes.BAD_REQUEST });
     }
 
     const pending = await getPendingSponsorships(eventId);
@@ -289,7 +281,7 @@ export class SponsorshipsService {
   ): Promise<void> {
     const sponsorship = await this.findSponsorshipForLockedMutation(tx, id);
     if (!sponsorship) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Sponsorship not found", 404);
+      throw notFound("Sponsorship not found");
     }
     assertEventWritable(sponsorship.event);
     assertModuleEnabledForClient(sponsorship.event.client, MODULE);
@@ -315,12 +307,7 @@ export class SponsorshipsService {
         accessRows,
       );
       if (timeErrors.length > 0) {
-        throw new AppException(
-          ErrorCodes.BAD_REQUEST,
-          `Time conflicts in covered access items: ${timeErrors.join("; ")}`,
-          400,
-          { timeConflicts: timeErrors },
-        );
+        throw badRequest(`Time conflicts in covered access items: ${timeErrors.join("; ")}`, { code: ErrorCodes.BAD_REQUEST, details: { timeConflicts: timeErrors } });
       }
     }
 
@@ -365,7 +352,7 @@ export class SponsorshipsService {
   ): Promise<void> {
     const sponsorship = await this.findSponsorshipForLockedMutation(tx, id);
     if (!sponsorship) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Sponsorship not found", 404);
+      throw notFound("Sponsorship not found");
     }
     assertEventWritable(sponsorship.event);
     assertModuleEnabledForClient(sponsorship.event.client, MODULE);
@@ -392,7 +379,7 @@ export class SponsorshipsService {
   ): Promise<void> {
     const sponsorship = await this.findSponsorshipForLockedMutation(tx, id);
     if (!sponsorship) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Sponsorship not found", 404);
+      throw notFound("Sponsorship not found");
     }
     assertEventWritable(sponsorship.event);
     assertModuleEnabledForClient(sponsorship.event.client, MODULE);
@@ -477,54 +464,34 @@ export class SponsorshipsService {
       const emails = beneficiaries.map((b) => b.email.toLowerCase());
       const dupes = duplicates(emails);
       if (dupes.length > 0) {
-        throw new AppException(
-          ErrorCodes.VALIDATION_ERROR,
-          `Duplicate beneficiary emails: ${[...new Set(dupes)].join(", ")}`,
-          400,
-        );
+        throw badRequest(`Duplicate beneficiary emails: ${[...new Set(dupes)].join(", ")}`);
       }
     } else if (isLinkedMode) {
       const regIds = linkedBeneficiaries.map((b) => b.registrationId);
       const dupes = duplicates(regIds);
       if (dupes.length > 0) {
-        throw new AppException(
-          ErrorCodes.VALIDATION_ERROR,
-          "Duplicate registration IDs in linked beneficiaries",
-          400,
-        );
+        throw badRequest("Duplicate registration IDs in linked beneficiaries");
       }
     }
 
     const event = await findEventForBatch(db, eventId);
     if (!event) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
     assertEventOpen(event);
     assertModuleEnabledForClient(event.client, MODULE);
 
     const form = await findSponsorFormById(db, formId, eventId);
     if (!form) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Sponsor form not found for this event",
-        404,
-      );
+      throw notFound("Sponsor form not found for this event");
     }
     const sponsorshipMode = getSponsorshipMode(form.schema);
 
     if (isLinkedMode && sponsorshipMode !== "LINKED_ACCOUNT") {
-      throw new AppException(
-        ErrorCodes.VALIDATION_ERROR,
-        "This sponsor form does not accept linked-account sponsorships",
-        400,
-      );
+      throw badRequest("This sponsor form does not accept linked-account sponsorships");
     }
     if (!isLinkedMode && sponsorshipMode === "LINKED_ACCOUNT") {
-      throw new AppException(
-        ErrorCodes.VALIDATION_ERROR,
-        "This sponsor form requires linked-account sponsorships",
-        400,
-      );
+      throw badRequest("This sponsor form requires linked-account sponsorships");
     }
 
     const pricing = await getSponsorshipEventPricing(db, eventId);
@@ -544,12 +511,7 @@ export class SponsorshipsService {
       const valid = new Set(accessItems.map((a) => a.id));
       const invalid = [...allAccessIds].filter((id) => !valid.has(id));
       if (invalid.length > 0) {
-        throw new AppException(
-          ErrorCodes.BAD_REQUEST,
-          `Invalid access items: ${invalid.join(", ")}`,
-          400,
-          { invalidAccessIds: invalid },
-        );
+        throw badRequest(`Invalid access items: ${invalid.join(", ")}`, { code: ErrorCodes.BAD_REQUEST, details: { invalidAccessIds: invalid } });
       }
 
       const overlapErrors: string[] = [];
@@ -564,12 +526,7 @@ export class SponsorshipsService {
         }
       });
       if (overlapErrors.length > 0) {
-        throw new AppException(
-          ErrorCodes.BAD_REQUEST,
-          `Time conflicts in covered access items: ${overlapErrors.join("; ")}`,
-          400,
-          { timeConflicts: overlapErrors },
-        );
+        throw badRequest(`Time conflicts in covered access items: ${overlapErrors.join("; ")}`, { code: ErrorCodes.BAD_REQUEST, details: { timeConflicts: overlapErrors } });
       }
     }
 
@@ -580,12 +537,7 @@ export class SponsorshipsService {
       const foundIds = new Set(found.map((r) => r.id));
       const missing = registrationIds.filter((id) => !foundIds.has(id));
       if (missing.length > 0) {
-        throw new AppException(
-          ErrorCodes.NOT_FOUND,
-          `Registrations not found: ${missing.join(", ")}`,
-          404,
-          { missingRegistrationIds: missing },
-        );
+        throw notFound(`Registrations not found: ${missing.join(", ")}`, { details: { missingRegistrationIds: missing } });
       }
       for (const r of found) registrations.set(r.id, r);
     }
@@ -654,11 +606,7 @@ export class SponsorshipsService {
     for (const linked of linkedBeneficiaries) {
       const registration = registrations.get(linked.registrationId);
       if (!registration) {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_NOT_FOUND,
-          "Registration not found",
-          404,
-        );
+        throw notFound("Registration not found", { code: ErrorCodes.REGISTRATION_NOT_FOUND });
       }
       const code = await generateUniqueCode((c) => sponsorshipCodeExists(tx, c));
       const beneficiaryName =
@@ -873,44 +821,26 @@ export class SponsorshipsService {
       await lockRegistrationForUpdate(tx, registrationId);
       const sponsorship = await findSponsorshipForLink(tx, sponsorshipId);
       if (!sponsorship) {
-        throw new AppException(ErrorCodes.NOT_FOUND, "Sponsorship not found", 404);
+        throw notFound("Sponsorship not found");
       }
       assertEventWritable(sponsorship.event);
       assertModuleEnabledForClient(sponsorship.event.client, MODULE);
 
       if (sponsorship.status === "CANCELLED") {
-        throw new AppException(
-          ErrorCodes.BAD_REQUEST,
-          "Cannot link a cancelled sponsorship",
-          400,
-          { code: "SPONSORSHIP_CANCELLED" },
-        );
+        throw badRequest("Cannot link a cancelled sponsorship", { code: ErrorCodes.BAD_REQUEST, details: { code: "SPONSORSHIP_CANCELLED" } });
       }
 
       const registration = await findRegistrationForLink(tx, registrationId);
       if (!registration) {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_NOT_FOUND,
-          "Registration not found",
-          404,
-        );
+        throw notFound("Registration not found", { code: ErrorCodes.REGISTRATION_NOT_FOUND });
       }
       if (sponsorship.eventId !== registration.eventId) {
-        throw new AppException(
-          ErrorCodes.BAD_REQUEST,
-          "Sponsorship and registration must be for the same event",
-          400,
-        );
+        throw badRequest("Sponsorship and registration must be for the same event", { code: ErrorCodes.BAD_REQUEST });
       }
 
       const existingLink = await findUsage(tx, sponsorshipId, registrationId);
       if (existingLink) {
-        throw new AppException(
-          ErrorCodes.CONFLICT,
-          "Sponsorship is already linked to this registration",
-          409,
-          { code: "SPONSORSHIP_ALREADY_LINKED" },
-        );
+        throw conflict("Sponsorship is already linked to this registration", { details: { code: "SPONSORSHIP_ALREADY_LINKED" } });
       }
 
       const coverage = {
@@ -923,11 +853,7 @@ export class SponsorshipsService {
       const applicableAmount = applicableAmountFor(coverage, registration);
 
       if (applicableAmount === 0 && sponsorship.totalAmount > 0) {
-        throw new AppException(
-          ErrorCodes.SPONSORSHIP_NOT_APPLICABLE,
-          "Sponsorship coverage does not apply to this registration (no overlap between sponsored items and registration selections)",
-          400,
-        );
+        throw badRequest("Sponsorship coverage does not apply to this registration (no overlap between sponsored items and registration selections)", { code: ErrorCodes.SPONSORSHIP_NOT_APPLICABLE });
       }
 
       const oldCovered = await this.access.getAlreadyCoveredAccessIds(registrationId, tx);
@@ -942,11 +868,7 @@ export class SponsorshipsService {
       // Atomic CAS: only flips to USED while not CANCELLED.
       const casCount = await casSetSponsorshipUsed(tx, sponsorshipId);
       if (casCount === 0) {
-        throw new AppException(
-          ErrorCodes.SPONSORSHIP_STATUS_CONFLICT,
-          "Sponsorship cannot be linked (may be cancelled or already processing)",
-          409,
-        );
+        throw conflict("Sponsorship cannot be linked (may be cancelled or already processing)", { code: ErrorCodes.SPONSORSHIP_STATUS_CONFLICT });
       }
 
       const allUsages = await findUsageAmountsByRegistration(tx, registrationId);
@@ -1049,20 +971,11 @@ export class SponsorshipsService {
   ): Promise<LinkSponsorshipResult> {
     const registration = await getRegistrationForSponsorship(registrationId);
     if (!registration) {
-      throw new AppException(
-        ErrorCodes.REGISTRATION_NOT_FOUND,
-        "Registration not found",
-        404,
-      );
+      throw notFound("Registration not found", { code: ErrorCodes.REGISTRATION_NOT_FOUND });
     }
     const sponsorship = await getSponsorshipByCode(registration.event.id, code);
     if (!sponsorship) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        `Code ${code} not found for this event`,
-        404,
-        { code: "SPONSORSHIP_NOT_FOUND" },
-      );
+      throw notFound(`Code ${code} not found for this event`, { details: { code: "SPONSORSHIP_NOT_FOUND" } });
     }
     return this.linkSponsorshipToRegistration(
       sponsorship.id,
@@ -1093,11 +1006,7 @@ export class SponsorshipsService {
     await lockRegistrationForUpdate(tx, registrationId);
     const usage = await findUsage(tx, sponsorshipId, registrationId);
     if (!usage) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Sponsorship is not linked to this registration",
-        404,
-      );
+      throw notFound("Sponsorship is not linked to this registration");
     }
 
     const registrationBefore = await findRegistrationSettlementState(

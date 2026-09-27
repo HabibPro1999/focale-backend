@@ -1,6 +1,6 @@
 import { ErrorCodes } from "@app/contracts";
 import { findRegistrationForMutation, findRegistrationWithFormEvent, type DbExecutor } from "@app/db";
-import { AppException } from "../../core/app-exception";
+import { AppException, notFound, conflict } from "../../core/app-exception";
 import { assertEventAcceptsPublicActions, assertEventWritable } from "../events";
 import { assertModuleEnabledForClient, type ClientModuleState } from "../clients/module-gates";
 
@@ -8,7 +8,7 @@ import { assertModuleEnabledForClient, type ClientModuleState } from "../clients
 export async function requireRegistrationForMutation(id: string, exec: DbExecutor) {
   const registration = await findRegistrationForMutation(id, exec);
   if (!registration) {
-    throw new AppException(ErrorCodes.REGISTRATION_NOT_FOUND, "Registration not found", 404);
+    throw notFound("Registration not found", { code: ErrorCodes.REGISTRATION_NOT_FOUND });
   }
   return registration;
 }
@@ -24,12 +24,12 @@ export async function requireRegistrationForPublicAction(
   exec?: DbExecutor,
 ) {
   const registration = await findRegistrationWithFormEvent(id, exec);
-  if (!registration) throw new AppException(notFoundCode, "Registration not found", 404);
+  if (!registration) throw notFound("Registration not found", { code: notFoundCode });
   assertEventAcceptsPublicActions(registration.event);
   assertModuleEnabledForClient(registration.event.client, "registrations");
   return registration;
 }
 
 export function registrationAlreadyExists(): AppException {
-  return new AppException(ErrorCodes.REGISTRATION_ALREADY_EXISTS, "A registration with this email already exists for this form", 409);
+  return conflict("A registration with this email already exists for this form", { code: ErrorCodes.REGISTRATION_ALREADY_EXISTS });
 }

@@ -1,18 +1,5 @@
-import {
-  BadRequestException,
-  Body,
-  Controller,
-  Delete,
-  ForbiddenException,
-  Get,
-  HttpCode,
-  NotFoundException,
-  Param,
-  Patch,
-  Post,
-  Query,
-  Req,
-} from "@nestjs/common";
+import { notFound, badRequest } from "../../core/app-exception";
+import { Body, Controller, Delete, ForbiddenException, Get, HttpCode, Param, Patch, Post, Query, Req } from "@nestjs/common";
 import type { FastifyRequest } from "fastify";
 import { ErrorCodes, UserRole } from "@app/contracts";
 import { Auth } from "../../core/auth/auth.decorator";
@@ -62,7 +49,7 @@ export class EventsController {
   private async requireOwnedEvent(u: AuthUser, id: string, action: string) {
     assertAdmin(u);
     const event = await this.events.getEventById(id);
-    if (!event) throw new NotFoundException({ code: ErrorCodes.NOT_FOUND, message: "Event not found" });
+    if (!event) throw notFound("Event not found");
     if (!canAccessClient(u, event.clientId)) {
       throw forbidden(`Insufficient permissions to ${action} this event`);
     }
@@ -85,10 +72,7 @@ export class EventsController {
     const q = { ...query };
     if (u.role === UserRole.CLIENT_ADMIN) {
       if (!u.clientId) {
-        throw new BadRequestException({
-          code: ErrorCodes.VALIDATION_ERROR,
-          message: "User is not associated with any client",
-        });
+        throw badRequest("User is not associated with any client");
       }
       q.clientId = u.clientId;
     }
@@ -130,10 +114,7 @@ export class EventsController {
 
     const data = await req.file();
     if (!data) {
-      throw new BadRequestException({
-        code: ErrorCodes.VALIDATION_ERROR,
-        message: "No file uploaded",
-      });
+      throw badRequest("No file uploaded");
     }
 
     const buffer = await data.toBuffer();

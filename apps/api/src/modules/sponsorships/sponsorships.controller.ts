@@ -1,14 +1,4 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  HttpCode,
-  Param,
-  Patch,
-  Post,
-  Query,
-} from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query } from "@nestjs/common";
 import { ErrorCodes } from "@app/contracts";
 import {
   assertClientModuleEnabled,
@@ -21,7 +11,7 @@ import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
 import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
 import { assertEventWritable } from "../events";
-import { AppException, forbidden } from "../../core/app-exception";
+import { forbidden, notFound, orNotFound } from "../../core/app-exception";
 import { SponsorshipsService } from "./sponsorships.service";
 import {
   ListSponsorshipsQueryDto,
@@ -49,10 +39,8 @@ export class SponsorshipsListController {
     @Query() query: ListSponsorshipsQueryDto,
     @CurrentUser() user: AuthUser,
   ) {
-    const event = await getEventWithPricing(eventId);
-    if (!event) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
-    }
+    const event = orNotFound(await getEventWithPricing(eventId), "Event not found");
+
     if (!canAccessClient(user, event.clientId)) forbidden();
     return this.service.listSponsorships(eventId, query);
   }
@@ -73,10 +61,8 @@ export class SponsorshipDetailController {
     @Param() { id }: SponsorshipIdParamDto,
     @CurrentUser() user: AuthUser,
   ) {
-    const sponsorship = await this.service.getSponsorshipById(id);
-    if (!sponsorship) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Sponsorship not found", 404);
-    }
+    const sponsorship = orNotFound(await this.service.getSponsorshipById(id), "Sponsorship not found");
+
     if (!canAccessClient(user, sponsorship.event.clientId)) forbidden();
     return sponsorship;
   }
@@ -90,7 +76,7 @@ export class SponsorshipDetailController {
   ) {
     const clientId = await this.service.getSponsorshipClientId(id);
     if (!clientId) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Sponsorship not found", 404);
+      throw notFound("Sponsorship not found");
     }
     if (!canAccessClient(user, clientId)) forbidden();
     await assertClientModuleEnabled(clientId, "sponsorships");
@@ -104,7 +90,7 @@ export class SponsorshipDetailController {
   ) {
     const clientId = await this.service.getSponsorshipClientId(id);
     if (!clientId) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Sponsorship not found", 404);
+      throw notFound("Sponsorship not found");
     }
     if (!canAccessClient(user, clientId)) forbidden();
     await assertClientModuleEnabled(clientId, "sponsorships");
@@ -191,14 +177,8 @@ export class RegistrationSponsorshipsController {
 
   /** Route guard: registration exists + tenant access. */
   private async requireRegistration(registrationId: string, user: AuthUser) {
-    const registration = await getRegistrationForSponsorship(registrationId);
-    if (!registration) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Registration not found",
-        404,
-      );
-    }
+    const registration = orNotFound(await getRegistrationForSponsorship(registrationId), "Registration not found");
+
     if (!canAccessClient(user, registration.event.clientId)) forbidden();
     return registration;
   }
@@ -209,10 +189,8 @@ export class RegistrationSponsorshipsController {
     user: AuthUser,
   ) {
     const registration = await this.requireRegistration(registrationId, user);
-    const event = await getEventWithPricing(registration.event.id);
-    if (!event) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
-    }
+    const event = orNotFound(await getEventWithPricing(registration.event.id), "Event not found");
+
     assertEventWritable(event);
     await assertClientModuleEnabled(event.clientId, "sponsorships");
     return registration;

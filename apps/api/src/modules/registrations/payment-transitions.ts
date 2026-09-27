@@ -1,5 +1,5 @@
 import { ErrorCodes } from "@app/contracts";
-import { AppException } from "../../core/app-exception";
+import { badRequest } from "../../core/app-exception";
 
 /**
  * Payment status state machine (ported verbatim). Same-status is a no-op; any
@@ -21,10 +21,6 @@ export function validatePaymentTransition(current: string, next: string): void {
   if (current === next) return;
   const allowed = ALLOWED_TRANSITIONS[current] ?? [];
   if (!allowed.includes(next)) {
-    throw new AppException(
-      ErrorCodes.INVALID_PAYMENT_TRANSITION,
-      `Cannot transition payment from ${current} to ${next}`,
-      400,
-    );
+    throw badRequest(`Cannot transition payment from ${current} to ${next}`, { code: ErrorCodes.INVALID_PAYMENT_TRANSITION });
   }
 }

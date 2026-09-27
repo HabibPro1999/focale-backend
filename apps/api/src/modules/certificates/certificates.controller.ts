@@ -1,18 +1,5 @@
-import {
-  BadRequestException,
-  Body,
-  Controller,
-  Delete,
-  ForbiddenException,
-  Get,
-  HttpCode,
-  NotFoundException,
-  Param,
-  Patch,
-  Post,
-  Req,
-  Res,
-} from "@nestjs/common";
+import { badRequest, notFound } from "../../core/app-exception";
+import { Body, Controller, Delete, ForbiddenException, Get, HttpCode, Param, Patch, Post, Req, Res } from "@nestjs/common";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
@@ -148,7 +135,7 @@ export class CertificatesController {
 
     const data = await req.file({ limits: { fileSize: 10 * 1024 * 1024 } }); // 10 MB
     if (!data) {
-      throw new BadRequestException("No file uploaded");
+      throw badRequest("No file uploaded");
     }
 
     const buffer = await data.toBuffer();
@@ -174,7 +161,7 @@ export class CertificatesController {
     await assertClientModuleEnabled(existing.event.clientId, "certificates");
 
     if (!existing.templateUrl) {
-      throw new NotFoundException("Certificate template image not found");
+      throw notFound("Certificate template image not found");
     }
 
     const file = await this.certificates.downloadTemplateImage(

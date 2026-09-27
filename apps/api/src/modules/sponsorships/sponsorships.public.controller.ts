@@ -5,7 +5,7 @@ import { getEventWithPricing, getEventWithPricingBySlug } from "@app/db";
 import { maskEmail } from "@app/shared";
 import { assertClientModuleEnabled } from "../clients/module-gates";
 import { assertEventAcceptsPublicActions } from "../events";
-import { AppException } from "../../core/app-exception";
+import { AppException, notFound, orNotFound } from "../../core/app-exception";
 import { SponsorshipsService } from "./sponsorships.service";
 import {
   CreateSponsorshipBatchDto,
@@ -31,10 +31,8 @@ export class SponsorshipsPublicController {
     @Param() { eventId }: SponsorshipEventIdParamDto,
     @Body() input: CreateSponsorshipBatchDto,
   ) {
-    const event = await getEventWithPricing(eventId);
-    if (!event) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
-    }
+    const event = orNotFound(await getEventWithPricing(eventId), "Event not found");
+
     return this.createBatch(eventId, event, input);
   }
 
@@ -45,16 +43,14 @@ export class SponsorshipsPublicController {
     @Param() { slug }: SponsorshipEventSlugParamDto,
     @Query() { query, unpaidOnly }: RegistrantSearchQueryDto,
   ) {
-    const event = await getEventWithPricingBySlug(slug);
-    if (!event) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
-    }
+    const event = orNotFound(await getEventWithPricingBySlug(slug), "Event not found");
+
     assertEventAcceptsPublicActions(event);
     await assertClientModuleEnabled(event.clientId, "sponsorships");
 
     const form = await this.service.getActiveSponsorForm(event.id);
     if (!form) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Sponsor form not found", 404);
+      throw notFound("Sponsor form not found");
     }
 
     const settings = getSponsorshipSettings(form.schema);
@@ -92,10 +88,8 @@ export class SponsorshipsPublicController {
     @Param() { slug }: SponsorshipEventSlugParamDto,
     @Body() input: CreateSponsorshipBatchDto,
   ) {
-    const event = await getEventWithPricingBySlug(slug);
-    if (!event) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
-    }
+    const event = orNotFound(await getEventWithPricingBySlug(slug), "Event not found");
+
     return this.createBatch(event.id, event, input);
   }
 
@@ -109,11 +103,7 @@ export class SponsorshipsPublicController {
 
     const form = await this.service.getActiveSponsorForm(eventId);
     if (!form) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Sponsor form not found for this event",
-        404,
-      );
+      throw notFound("Sponsor form not found for this event");
     }
     const result = await this.service.createSponsorshipBatch(
       eventId,

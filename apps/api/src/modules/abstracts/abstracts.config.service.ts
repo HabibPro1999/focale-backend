@@ -21,7 +21,7 @@ import {
   type AbstractConfigRow,
   type AbstractThemeRow,
 } from "@app/db";
-import { AppException } from "../../core/app-exception";
+import { AppException, conflict as conflictError, notFound } from "../../core/app-exception";
 
 const SCALAR_FIELDS = [
   "submissionMode",
@@ -156,11 +156,7 @@ export class AbstractsConfigService {
       return { forced: false };
     }
     if (!force) {
-      throw new AppException(
-        ErrorCodes.CONFLICT,
-        "Cannot change submission mode: abstracts already exist. Use force=true to override.",
-        409,
-      );
+      throw conflictError("Cannot change submission mode: abstracts already exist. Use force=true to override.");
     }
     return { forced: true };
   }
@@ -249,12 +245,7 @@ export class AbstractsConfigService {
       (t) => t.active && t.sortOrder === sortOrder && t.id !== excludeThemeId,
     );
     if (conflict) {
-      throw new AppException(
-        ErrorCodes.CONFLICT,
-        `sortOrder ${sortOrder} is already used by another active theme`,
-        409,
-        { sortOrder, conflictingThemeId: conflict.id },
-      );
+      throw conflictError(`sortOrder ${sortOrder} is already used by another active theme`, { details: { sortOrder, conflictingThemeId: conflict.id } });
     }
   }
 
@@ -287,7 +278,7 @@ export class AbstractsConfigService {
   ): Promise<AbstractThemeRow> {
     const found = await findThemeWithEventId(themeId);
     if (!found || found.eventId !== eventId) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Theme not found", 404);
+      throw notFound("Theme not found");
     }
     const data: Record<string, unknown> = {};
     if (body.translations !== undefined) data.translations = body.translations;
@@ -300,12 +291,7 @@ export class AbstractsConfigService {
     ) {
       const codedCount = await countCodedAbstractsByTheme(themeId);
       if (codedCount > 0) {
-        throw new AppException(
-          ErrorCodes.CONFLICT,
-          "Cannot change sortOrder: theme already has coded abstracts",
-          409,
-          { themeId, codedAbstractCount: codedCount },
-        );
+        throw conflictError("Cannot change sortOrder: theme already has coded abstracts", { details: { themeId, codedAbstractCount: codedCount } });
       }
       const themes = await listThemesByConfigId(found.theme.configId);
       this.assertSortOrderAvailable(themes, body.sortOrder, themeId);
@@ -318,7 +304,7 @@ export class AbstractsConfigService {
   async softDeleteTheme(eventId: string, themeId: string): Promise<void> {
     const found = await findThemeWithEventId(themeId);
     if (!found || found.eventId !== eventId) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Theme not found", 404);
+      throw notFound("Theme not found");
     }
     await softDeleteThemeRow(themeId);
   }
@@ -360,12 +346,7 @@ export class AbstractsConfigService {
         ? await countAbstractsByEvent(eventId)
         : 0;
       if (abstractCount > 0) {
-        throw new AppException(
-          ErrorCodes.CONFLICT,
-          "Removing field ids would orphan stored answers for existing abstracts. Use force=true to override.",
-          409,
-          { removedFieldIds: droppedIds },
-        );
+        throw conflictError("Removing field ids would orphan stored answers for existing abstracts. Use force=true to override.", { details: { removedFieldIds: droppedIds } });
       }
     }
 

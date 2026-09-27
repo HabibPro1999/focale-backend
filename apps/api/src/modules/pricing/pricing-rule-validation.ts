@@ -3,7 +3,7 @@ import {
   conditionSetSignature, findConditionConflicts, type EmbeddedPricingRule,
 } from "@app/contracts";
 import { findRegistrationFormSchema, type DbExecutor } from "@app/db";
-import { AppException } from "../../core/app-exception";
+import { badRequest } from "../../core/app-exception";
 
 /** Validate only changed condition signatures, preserving legacy rules and error order. */
 export async function assertChangedRulesValid(
@@ -47,12 +47,7 @@ export async function assertChangedRulesValid(
       rule.conditionLogic,
     );
     if (conflicts.length > 0) {
-      throw new AppException(
-        ErrorCodes.PRICING_RULE_UNSATISFIABLE,
-        `Pricing rule "${rule.name}" has conditions that can never all be true`,
-        400,
-        { ruleId: rule.id, ruleName: rule.name, conflicts },
-      );
+      throw badRequest(`Pricing rule "${rule.name}" has conditions that can never all be true`, { code: ErrorCodes.PRICING_RULE_UNSATISFIABLE, details: { ruleId: rule.id, ruleName: rule.name, conflicts } });
     }
   }
 
@@ -67,11 +62,7 @@ export async function assertChangedRulesValid(
         );
         if (bad.length > 0) {
           const f = bad[0];
-          throw new AppException(
-            ErrorCodes.PRICING_CONDITION_INVALID_OPTION,
-            `Pricing rule "${rule.name}": value "${String(f.value)}" for field "${f.fieldLabel}" is not one of the field's option ids (e.g. ${f.exampleOptionIds.map((id) => `"${id}"`).join(", ")}). Pick the option in the rule editor.`,
-            400,
-            {
+          throw badRequest(`Pricing rule "${rule.name}": value "${String(f.value)}" for field "${f.fieldLabel}" is not one of the field's option ids (e.g. ${f.exampleOptionIds.map((id) => `"${id}"`).join(", ")}). Pick the option in the rule editor.`, { code: ErrorCodes.PRICING_CONDITION_INVALID_OPTION, details: {
               ruleId: rule.id,
               ruleName: rule.name,
               fieldId: f.fieldId,
@@ -79,8 +70,7 @@ export async function assertChangedRulesValid(
               operator: f.operator,
               value: f.value,
               exampleOptionIds: f.exampleOptionIds,
-            },
-          );
+            } });
         }
       }
     }

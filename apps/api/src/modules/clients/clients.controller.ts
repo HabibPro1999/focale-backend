@@ -1,17 +1,5 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  ForbiddenException,
-  Get,
-  HttpCode,
-  NotFoundException,
-  Param,
-  Patch,
-  Post,
-  Query,
-  Req,
-} from "@nestjs/common";
+import { notFound } from "../../core/app-exception";
+import { Body, Controller, Delete, ForbiddenException, Get, HttpCode, Param, Patch, Post, Query, Req } from "@nestjs/common";
 import type { FastifyRequest } from "fastify";
 import { ErrorCodes, UserRole } from "@app/contracts";
 import type { ClientRow } from "@app/db";
@@ -45,17 +33,11 @@ export class ClientsController {
   async getMe(@Req() req: AuthedRequest): Promise<ClientRow> {
     const { clientId } = req.user;
     if (!clientId) {
-      throw new NotFoundException({
-        code: ErrorCodes.NOT_FOUND,
-        message: "User is not associated with any client",
-      });
+      throw notFound("User is not associated with any client");
     }
     const client = req.client ?? (await this.clients.getById(clientId));
     if (!client) {
-      throw new NotFoundException({
-        code: ErrorCodes.NOT_FOUND,
-        message: "Client not found",
-      });
+      throw notFound("Client not found");
     }
     return client;
   }
@@ -91,10 +73,7 @@ export class ClientsController {
         ? req.client
         : await this.clients.getById(params.id);
     if (!client) {
-      throw new NotFoundException({
-        code: ErrorCodes.NOT_FOUND,
-        message: "Client not found",
-      });
+      throw notFound("Client not found");
     }
     return client;
   }

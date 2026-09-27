@@ -1,4 +1,5 @@
-import { ForbiddenException, NotFoundException } from "@nestjs/common";
+import { notFound } from "../../core/app-exception";
+import { ForbiddenException } from "@nestjs/common";
 import { ErrorCodes, type ModuleId } from "@app/contracts";
 import { findClientModuleState, type DbExecutor, type ClientModuleGate } from "@app/db";
 
@@ -61,10 +62,7 @@ export async function assertClientModuleEnabled(
 ): Promise<void> {
   const client = await findClientModuleState(clientId, executor);
   if (!client) {
-    throw new NotFoundException({
-      code: ErrorCodes.NOT_FOUND,
-      message: "Client not found",
-    });
+    throw notFound("Client not found");
   }
   assertModuleEnabledForClient(client, moduleId);
 }

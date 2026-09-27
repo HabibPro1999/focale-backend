@@ -26,7 +26,7 @@ import {
   extractPlainText,
 } from "@app/integrations";
 import { paginate, getSkip, type PaginatedResult } from "@app/shared";
-import { AppException } from "../../core/app-exception";
+import { badRequest, conflict, notFound } from "../../core/app-exception";
 
 interface TemplateTriggerState {
   category: EmailTemplateCategory;
@@ -42,21 +42,13 @@ function validateTemplateTriggerState({
 }: TemplateTriggerState): void {
   if (category === "MANUAL") {
     if (trigger || abstractTrigger) {
-      throw new AppException(
-        ErrorCodes.BAD_REQUEST,
-        "Manual templates should not have triggers",
-        400,
-      );
+      throw badRequest("Manual templates should not have triggers", { code: ErrorCodes.BAD_REQUEST });
     }
     return;
   }
 
   if (Boolean(trigger) === Boolean(abstractTrigger)) {
-    throw new AppException(
-      ErrorCodes.BAD_REQUEST,
-      "Automatic templates require exactly one trigger",
-      400,
-    );
+    throw badRequest("Automatic templates require exactly one trigger", { code: ErrorCodes.BAD_REQUEST });
   }
 }
 
@@ -99,11 +91,7 @@ export class EmailTemplateService {
     const duplicate = await findActiveTemplateForTrigger(input);
     if (duplicate) {
       const trigger = input.trigger ?? input.abstractTrigger;
-      throw new AppException(
-        ErrorCodes.CONFLICT,
-        `An active template for trigger "${trigger}" already exists for this event`,
-        409,
-      );
+      throw conflict(`An active template for trigger "${trigger}" already exists for this event`);
     }
   }
 
@@ -147,11 +135,7 @@ export class EmailTemplateService {
     const result = await insertEmailTemplate(values);
     if (!result.ok) {
       // Race backstop: the one-active-template partial unique index fired.
-      throw new AppException(
-        ErrorCodes.CONFLICT,
-        "Resource already exists",
-        409,
-      );
+      throw conflict("Resource already exists");
     }
     return result.template;
   }
@@ -159,11 +143,7 @@ export class EmailTemplateService {
   async update(id: string, input: UpdateTemplateArgs): Promise<EmailTemplateRow> {
     const existing = await getEmailTemplateById(id);
     if (!existing) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Email template not found",
-        404,
-      );
+      throw notFound("Email template not found");
     }
 
     const finalCategory = input.category ?? existing.category;
@@ -224,11 +204,7 @@ export class EmailTemplateService {
     if (input.expectedUpdatedAt !== undefined) {
       expectedUpdatedAt = new Date(input.expectedUpdatedAt);
       if (Number.isNaN(expectedUpdatedAt.getTime())) {
-        throw new AppException(
-          ErrorCodes.VALIDATION_ERROR,
-          "Invalid expectedUpdatedAt precondition",
-          400,
-        );
+        throw badRequest("Invalid expectedUpdatedAt precondition");
       }
     }
 
@@ -236,11 +212,7 @@ export class EmailTemplateService {
     if (!updated) {
       // `existing` above already proved the row exists, so a miss here means
       // the CAS precondition lost a race against a concurrent edit.
-      throw new AppException(
-        ErrorCodes.CONCURRENT_MODIFICATION,
-        "Email template changed. Refresh and try again.",
-        409,
-      );
+      throw conflict("Email template changed. Refresh and try again.", { code: ErrorCodes.CONCURRENT_MODIFICATION });
     }
     return updated;
   }
@@ -248,11 +220,7 @@ export class EmailTemplateService {
   async delete(id: string): Promise<void> {
     const existing = await getEmailTemplateById(id);
     if (!existing) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Email template not found",
-        404,
-      );
+      throw notFound("Email template not found");
     }
     await deleteEmailTemplateById(id);
   }
@@ -260,11 +228,7 @@ export class EmailTemplateService {
   async duplicate(id: string, newName?: string): Promise<EmailTemplateRow> {
     const existing = await getEmailTemplateById(id);
     if (!existing) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Email template not found",
-        404,
-      );
+      throw notFound("Email template not found");
     }
 
     const values: EmailTemplateInsert = {
@@ -285,11 +249,7 @@ export class EmailTemplateService {
 
     const result = await insertEmailTemplate(values);
     if (!result.ok) {
-      throw new AppException(
-        ErrorCodes.CONFLICT,
-        "Resource already exists",
-        409,
-      );
+      throw conflict("Resource already exists");
     }
     return result.template;
   }

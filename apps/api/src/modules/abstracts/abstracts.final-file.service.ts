@@ -10,7 +10,7 @@ import {
 } from "@app/db";
 import { getStorageProvider, ownedStorageKey } from "@app/integrations";
 import { logger } from "../../core/logger.service";
-import { AppException } from "../../core/app-exception";
+import { AppException, badRequest, conflict, notFound } from "../../core/app-exception";
 import { verifyAbstractToken } from "./abstracts.token";
 import { AbstractsService } from "./abstracts.service";
 import { assertAbstractModuleEnabled } from "./abstracts.gates";
@@ -125,11 +125,7 @@ async function detectFinalFileKind(file: {
     return "PPT";
   }
 
-  throw new AppException(
-    ErrorCodes.INVALID_FILE_TYPE,
-    "Invalid final file type. Upload a valid PDF, PPT, or PPTX file.",
-    400,
-  );
+  throw badRequest("Invalid final file type. Upload a valid PDF, PPT, or PPTX file.", { code: ErrorCodes.INVALID_FILE_TYPE });
 }
 
 // H1: finalType is one of CONFERENCE / ORAL_COMMUNICATION / POSTER once set
@@ -143,18 +139,10 @@ function assertKindAllowed(
   finalType: string | null,
 ): void {
   if (finalType == null) {
-    throw new AppException(
-      ErrorCodes.INVALID_STATUS_TRANSITION,
-      "Final presentation type has not been set for this abstract yet.",
-      409,
-    );
+    throw conflict("Final presentation type has not been set for this abstract yet.", { code: ErrorCodes.INVALID_STATUS_TRANSITION });
   }
   if (finalType === "POSTER" && kind !== "PDF") {
-    throw new AppException(
-      ErrorCodes.INVALID_FILE_TYPE,
-      "Poster final files must be uploaded as PDF.",
-      400,
-    );
+    throw badRequest("Poster final files must be uploaded as PDF.", { code: ErrorCodes.INVALID_FILE_TYPE });
   }
   // ORAL_COMMUNICATION, POSTER (already PDF-checked above), and CONFERENCE
   // all accept any detected kind (PDF/PPT/PPTX).
@@ -165,43 +153,27 @@ function assertAbstractToken(
   token: string,
 ): asserts abstract is AbstractForFinalFile {
   if (!abstract) {
-    throw new AppException(ErrorCodes.NOT_FOUND, "Abstract not found", 404);
+    throw notFound("Abstract not found");
   }
   if (!verifyAbstractToken(abstract.editToken, token)) {
-    throw new AppException(
-      ErrorCodes.NOT_FOUND,
-      "Invalid abstract token",
-      404,
-    );
+    throw notFound("Invalid abstract token");
   }
 }
 
 function assertUploadWindowOpen(abstract: AbstractForFinalFile): void {
   if (abstract.status !== "ACCEPTED") {
-    throw new AppException(
-      ErrorCodes.INVALID_STATUS_TRANSITION,
-      "Final files can only be uploaded after acceptance.",
-      409,
-    );
+    throw conflict("Final files can only be uploaded after acceptance.", { code: ErrorCodes.INVALID_STATUS_TRANSITION });
   }
 
   const config = abstract.config;
   if (!config?.finalFileUploadEnabled) {
-    throw new AppException(
-      ErrorCodes.VALIDATION_ERROR,
-      "Final file upload is not enabled.",
-      409,
-    );
+    throw conflict("Final file upload is not enabled.", { code: ErrorCodes.VALIDATION_ERROR });
   }
   if (
     config.finalFileDeadline &&
     config.finalFileDeadline.getTime() < Date.now()
   ) {
-    throw new AppException(
-      ErrorCodes.VALIDATION_ERROR,
-      "Final file upload deadline has passed.",
-      409,
-    );
+    throw conflict("Final file upload deadline has passed.", { code: ErrorCodes.VALIDATION_ERROR });
   }
 }
 

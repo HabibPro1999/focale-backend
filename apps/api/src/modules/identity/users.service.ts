@@ -1,9 +1,5 @@
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  NotFoundException,
-} from "@nestjs/common";
+import { notFound, badRequest, conflict, orNotFound } from "../../core/app-exception";
+import { Injectable } from "@nestjs/common";
 import {
   ErrorCodes,
   UserRole,
@@ -41,15 +37,9 @@ const ROLE_CLIENT_POLICY = new Map<number, { name: string; requiresClient: boole
 
 function throwUserMutationFailure(reason: "not_found" | "last_super_admin"): never {
   if (reason === "not_found") {
-    throw new NotFoundException({
-      code: ErrorCodes.NOT_FOUND,
-      message: "User not found",
-    });
+    throw notFound("User not found");
   }
-  throw new BadRequestException({
-    code: ErrorCodes.BAD_REQUEST,
-    message: "Cannot remove or deactivate the last super admin",
-  });
+  throw badRequest("Cannot remove or deactivate the last super admin", { code: ErrorCodes.BAD_REQUEST });
 }
 
 @Injectable()
@@ -64,10 +54,7 @@ export class UsersService {
   ): Promise<void> {
     if (clientId) {
       if (!(await clientExists(clientId))) {
-        throw new BadRequestException({
-          code: ErrorCodes.BAD_REQUEST,
-          message: "Invalid client ID",
-        });
+        throw badRequest("Invalid client ID", { code: ErrorCodes.BAD_REQUEST });
       }
     }
   }
@@ -79,24 +66,16 @@ export class UsersService {
   ): void {
     const policy = ROLE_CLIENT_POLICY.get(role);
     if (!policy) {
-      throw new BadRequestException({ code: ErrorCodes.VALIDATION_ERROR, message: "Invalid user role" });
+      throw badRequest("Invalid user role");
     }
     if (Boolean(clientId) !== policy.requiresClient) {
-      throw new BadRequestException({
-        code: ErrorCodes.VALIDATION_ERROR,
-        message: `${policy.name} users ${policy.requiresClient ? "must be" : "cannot be"} assigned to a client`,
-      });
+      throw badRequest(`${policy.name} users ${policy.requiresClient ? "must be" : "cannot be"} assigned to a client`);
     }
   }
 
   private async assertUserExists(id: string): Promise<UserRow> {
-    const user = await getUserById(id);
-    if (!user) {
-      throw new NotFoundException({
-        code: ErrorCodes.NOT_FOUND,
-        message: "User not found",
-      });
-    }
+    const user = orNotFound(await getUserById(id), "User not found");
+
     return user;
   }
 
@@ -120,10 +99,7 @@ export class UsersService {
 
     const existing = await getUserByEmail(normalizedEmail);
     if (existing) {
-      throw new ConflictException({
-        code: ErrorCodes.CONFLICT,
-        message: "User with this email already exists",
-      });
+      throw conflict("User with this email already exists");
     }
 
     this.validateRoleClientConsistency(role, clientId);
@@ -181,11 +157,7 @@ export class UsersService {
         input.clientId !== undefined ||
         input.active !== undefined)
     ) {
-      throw new BadRequestException({
-        code: ErrorCodes.BAD_REQUEST,
-        message:
-          "Cannot change your own role, client assignment, or active status",
-      });
+      throw badRequest("Cannot change your own role, client assignment, or active status", { code: ErrorCodes.BAD_REQUEST });
     }
 
     await this.validateClientId(input.clientId);
@@ -249,10 +221,7 @@ export class UsersService {
   /** Delete a user: transactional DB delete + best-effort Firebase cleanup. */
   async deleteUser(id: string, requestingUserId: string): Promise<void> {
     if (id === requestingUserId) {
-      throw new BadRequestException({
-        code: ErrorCodes.BAD_REQUEST,
-        message: "Cannot delete your own account",
-      });
+      throw badRequest("Cannot delete your own account", { code: ErrorCodes.BAD_REQUEST });
     }
 
     const result = await dbDeleteUser(id);

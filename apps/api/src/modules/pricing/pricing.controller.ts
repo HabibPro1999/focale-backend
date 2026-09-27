@@ -1,19 +1,10 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  HttpCode,
-  Param,
-  Patch,
-  Post,
-} from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post } from "@nestjs/common";
 import { ErrorCodes } from "@app/contracts";
 import type { PricingEventOwnership } from "@app/db";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
-import { AppException } from "../../core/app-exception";
+import { AppException, notFound, orNotFound } from "../../core/app-exception";
 import { assertEventWritable } from "../events";
 import { canAccessClient } from "../../core/auth/user-cache";
 import type { AuthUser } from "../../core/auth/user-cache";
@@ -43,7 +34,7 @@ export class PricingController {
     );
     const pricing = await this.pricing.getEventPricing(eventId);
     if (!pricing) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event pricing not found", 404);
+      throw notFound("Event pricing not found");
     }
     return pricing;
   }
@@ -125,10 +116,8 @@ export class PricingController {
     forbiddenMessage: string,
     options: { writable: boolean },
   ): Promise<PricingEventOwnership> {
-    const event = await this.pricing.getEventForOwnership(eventId);
-    if (!event) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
-    }
+    const event = orNotFound(await this.pricing.getEventForOwnership(eventId), "Event not found");
+
     if (!canAccessClient(user, event.clientId)) {
       throw new AppException(ErrorCodes.FORBIDDEN, forbiddenMessage, 403);
     }
