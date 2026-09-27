@@ -33,6 +33,16 @@ import { paginate, getSkip, type PaginatedResult } from "@app/shared";
 import { invalidateUserCache } from "../../core/auth/user-cache";
 import { logger } from "../../core/logger.service";
 
+function throwUserMutationFailure(reason: "not_found" | "last_super_admin"): never {
+  if (reason === "not_found") {
+    throw new NotFoundException({ code: ErrorCodes.NOT_FOUND, message: "User not found" });
+  }
+  throw new BadRequestException({
+    code: ErrorCodes.BAD_REQUEST,
+    message: "Cannot remove or deactivate the last super admin",
+  });
+}
+
 @Injectable()
 export class UsersService {
   // --------------------------------------------------------------------------
@@ -60,10 +70,11 @@ export class UsersService {
   ): void {
     switch (role) {
       case UserRole.SUPER_ADMIN:
+      case UserRole.SCIENTIFIC_COMMITTEE:
         if (clientId) {
           throw new BadRequestException({
             code: ErrorCodes.VALIDATION_ERROR,
-            message: "SUPER_ADMIN users cannot be assigned to a client",
+            message: `${role === UserRole.SUPER_ADMIN ? "SUPER_ADMIN" : "SCIENTIFIC_COMMITTEE"} users cannot be assigned to a client`,
           });
         }
         return;
@@ -72,14 +83,6 @@ export class UsersService {
           throw new BadRequestException({
             code: ErrorCodes.VALIDATION_ERROR,
             message: "CLIENT_ADMIN users must be assigned to a client",
-          });
-        }
-        return;
-      case UserRole.SCIENTIFIC_COMMITTEE:
-        if (clientId) {
-          throw new BadRequestException({
-            code: ErrorCodes.VALIDATION_ERROR,
-            message: "SCIENTIFIC_COMMITTEE users cannot be assigned to a client",
           });
         }
         return;
@@ -108,16 +111,7 @@ export class UsersService {
   ): Promise<UserWithClient> {
     const result = await dbUpdateUser(id, input);
     if (result.ok) return result.user;
-    if (result.reason === "not_found") {
-      throw new NotFoundException({
-        code: ErrorCodes.NOT_FOUND,
-        message: "User not found",
-      });
-    }
-    throw new BadRequestException({
-      code: ErrorCodes.BAD_REQUEST,
-      message: "Cannot remove or deactivate the last super admin",
-    });
+    throwUserMutationFailure(result.reason);
   }
 
   // --------------------------------------------------------------------------
@@ -267,18 +261,7 @@ export class UsersService {
     }
 
     const result = await dbDeleteUser(id);
-    if (!result.ok) {
-      if (result.reason === "not_found") {
-        throw new NotFoundException({
-          code: ErrorCodes.NOT_FOUND,
-          message: "User not found",
-        });
-      }
-      throw new BadRequestException({
-        code: ErrorCodes.BAD_REQUEST,
-        message: "Cannot remove or deactivate the last super admin",
-      });
-    }
+    if (!result.ok) throwUserMutationFailure(result.reason);
 
     invalidateUserCache(id);
 
