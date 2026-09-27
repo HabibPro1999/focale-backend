@@ -1,0 +1,120 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`pins each calendar's escaped and byte-folded output for comma, semi; slash\\ carriage
+next 1`] = `
+{
+  "api": "BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Focale//B2B Networking//EN
+CALSCALE:GREGORIAN
+METHOD:PUBLISH
+BEGIN:VEVENT
+UID:meeting@networking.focale
+DTSTAMP:20300101T090000Z
+DTSTART:20300102T090000Z
+DTEND:20300102T100000Z
+SEQUENCE:2
+STATUS:CONFIRMED
+SUMMARY:Meeting with comma\\, semi\\; slash\\\\ carriage\\nnext Person
+LOCATION:comma\\, semi\\; slash\\\\ carriage\\nnext Room
+DESCRIPTION:comma\\, semi\\; slash\\\\ carriage\\nnext
+END:VEVENT
+END:VCALENDAR
+",
+  "email": "BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Focale//Networking//EN
+METHOD:PUBLISH
+BEGIN:VEVENT
+UID:meeting@networking.focale
+SEQUENCE:2
+DTSTAMP:20300101T090000Z
+DTSTART:20300102T090000Z
+DTEND:20300102T100000Z
+SUMMARY:comma\\, semi\\; slash\\\\ carriage\\nnext
+LOCATION:comma\\, semi\\; slash\\\\ carriage\\nnext - Room
+STATUS:CONFIRMED
+BEGIN:VALARM
+TRIGGER:-P1D
+ACTION:DISPLAY
+DESCRIPTION:Your meeting is tomorrow
+END:VALARM
+BEGIN:VALARM
+TRIGGER:-PT1H
+ACTION:DISPLAY
+DESCRIPTION:Your meeting starts within an hour
+END:VALARM
+END:VEVENT
+END:VCALENDAR
+",
+}
+`;
+
+exports[`pins each calendar's escaped and byte-folded output for مرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂é 1`] = `
+{
+  "api": "BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Focale//B2B Networking//EN
+CALSCALE:GREGORIAN
+METHOD:PUBLISH
+BEGIN:VEVENT
+UID:meeting@networking.focale
+DTSTAMP:20300101T090000Z
+DTSTART:20300102T090000Z
+DTEND:20300102T100000Z
+SEQUENCE:2
+STATUS:CONFIRMED
+SUMMARY:Meeting with مرحبا🙂éمرحبا🙂éمرحبا🙂éمر
+ حبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا
+ 🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éم
+ رحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا
+ 🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂é Person
+LOCATION:مرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂é
+ مرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحب
+ ا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂é
+ مرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحب
+ ا🙂éمرحبا🙂éمرحبا🙂é Room
+DESCRIPTION:مرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا
+ 🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éم
+ رحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا
+ 🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éم
+ رحبا🙂éمرحبا🙂éمرحبا🙂é
+END:VEVENT
+END:VCALENDAR
+",
+  "email": "BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Focale//Networking//EN
+METHOD:PUBLISH
+BEGIN:VEVENT
+UID:meeting@networking.focale
+SEQUENCE:2
+DTSTAMP:20300101T090000Z
+DTSTART:20300102T090000Z
+DTEND:20300102T100000Z
+SUMMARY:مرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂é
+ مرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحب
+ ا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂é
+ مرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحب
+ ا🙂éمرحبا🙂éمرحبا🙂é
+LOCATION:مرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂é
+ مرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحب
+ ا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂é
+ مرحبا🙂éمرحبا🙂éمرحبا🙂éمرحبا🙂éمرحب
+ ا🙂éمرحبا🙂éمرحبا🙂é - Room
+STATUS:CONFIRMED
+BEGIN:VALARM
+TRIGGER:-P1D
+ACTION:DISPLAY
+DESCRIPTION:Your meeting is tomorrow
+END:VALARM
+BEGIN:VALARM
+TRIGGER:-PT1H
+ACTION:DISPLAY
+DESCRIPTION:Your meeting starts within an hour
+END:VALARM
+END:VEVENT
+END:VCALENDAR
+",
+}
+`;

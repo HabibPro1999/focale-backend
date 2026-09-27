@@ -1,0 +1,303 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`keeps contact-export's distinct visibility and registration join scope 1`] = `
+[
+  {
+    "params": [
+      "viewer",
+      "event",
+      "viewer",
+      "viewer",
+      "viewer",
+      "viewer",
+      "viewer",
+      "viewer",
+      "event",
+      "viewer",
+      "viewer",
+    ],
+    "sql": "
+    SELECT count(*)::int AS count FROM networking_connections c
+    JOIN networking_messages m ON m.connection_id=c.id AND m.event_id=c.event_id
+    JOIN networking_profiles p ON p.id=CASE WHEN c.profile_a_id=$1 THEN c.profile_b_id ELSE c.profile_a_id END AND p.event_id=c.event_id
+    JOIN registrations r ON r.id=p.registration_id AND r.event_id=c.event_id
+    JOIN networking_configs cfg ON cfg.event_id=c.event_id
+    WHERE c.event_id=$2 AND (c.profile_a_id=$3 OR c.profile_b_id=$4)
+      AND m.sender_id<>$5 AND (CASE WHEN c.profile_a_id=$6 THEN c.read_a_at ELSE c.read_b_at END IS NULL
+        OR m.created_at>CASE WHEN c.profile_a_id=$7 THEN c.read_a_at ELSE c.read_b_at END)
+      AND p.status='ACTIVE' AND p.consent AND p.withdrawn_at IS NULL AND r.networking_opt_in IS DISTINCT FROM false
+      AND lower(p.email)<>(SELECT lower(email) FROM networking_profiles WHERE id=$8 AND event_id=$9)
+      AND cfg.config->'eligiblePaymentStatuses' ? r.payment_status::text
+      AND NOT EXISTS (SELECT 1 FROM networking_blocks b WHERE b.event_id=c.event_id
+        AND ((b.profile_id=$10 AND b.target_id=p.id) OR (b.profile_id=p.id AND b.target_id=$11)))
+  ",
+  },
+  {
+    "params": [
+      "viewer",
+      "event",
+      "event",
+      "viewer",
+      "viewer",
+      "viewer",
+      "viewer",
+    ],
+    "sql": "
+    SELECT p.first_name AS "firstName",p.last_name AS "lastName",p.company,p.job_title AS "jobTitle",p.sector,p.city,p.country,p.website
+    FROM networking_connections c JOIN networking_profiles p ON p.id=CASE WHEN c.profile_a_id=$1 THEN c.profile_b_id ELSE c.profile_a_id END
+      JOIN registrations r ON r.id=p.registration_id JOIN networking_configs cfg ON cfg.event_id=c.event_id
+    WHERE c.event_id=$2 AND p.event_id=$3 AND (c.profile_a_id=$4 OR c.profile_b_id=$5)
+      AND p.status='ACTIVE' AND p.consent AND p.withdrawn_at IS NULL AND r.networking_opt_in IS DISTINCT FROM false
+      AND cfg.config->'eligiblePaymentStatuses' ? r.payment_status::text
+      AND NOT EXISTS (SELECT 1 FROM networking_blocks b WHERE b.event_id=c.event_id AND ((b.profile_id=$6 AND b.target_id=p.id) OR (b.profile_id=p.id AND b.target_id=$7)))
+    ORDER BY p.last_name,p.first_name,p.id
+  ",
+  },
+]
+`;
+
+exports[`pins discovery's lateral, spaced predicates and NOT IN union with parameter order 1`] = `
+[
+  {
+    "params": [
+      1,
+      "event",
+      "viewer",
+      "viewer",
+      "event",
+      "ACTIVE",
+      true,
+      true,
+      "event",
+      "PAID",
+      "SPONSORED",
+      "event",
+      "viewer",
+      "event",
+      "viewer",
+      "event",
+      "viewer",
+      "event",
+      "viewer",
+      "event",
+      "viewer",
+      "Health",
+      7,
+      7,
+    ],
+    "sql": "select "networking_profiles"."id", "networking_profiles"."event_id", "networking_profiles"."registration_id", "networking_profiles"."email", "networking_profiles"."first_name", "networking_profiles"."last_name", "networking_profiles"."company", "networking_profiles"."job_title", "networking_profiles"."sector", "networking_profiles"."bio", "networking_profiles"."city", "networking_profiles"."country", "networking_profiles"."website", "networking_profiles"."photo_url", "networking_profiles"."interests", "networking_profiles"."offers", "networking_profiles"."seeks", "networking_profiles"."status", "networking_profiles"."visible", "networking_profiles"."meetings_enabled", "networking_profiles"."email_preference", "networking_profiles"."language", "networking_profiles"."consent", "networking_profiles"."availability_set", "networking_profiles"."consent_at", "networking_profiles"."last_active_at", "networking_profiles"."withdrawn_at", "networking_profiles"."featured", "networking_profiles"."stand_table_id", "networking_profiles"."overrides", "networking_profiles"."created_at", "networking_profiles"."updated_at" from "networking_profiles" inner join lateral (select "event_id", "payment_status", "networking_opt_in" from "registrations" where "registrations"."id" = "networking_profiles"."registration_id" limit $1) "source_registration" on true where ("networking_profiles"."event_id" = $2 and "networking_profiles"."id" <> $3 and lower("networking_profiles"."email") <> (SELECT lower(email) FROM networking_profiles WHERE id=$4 AND event_id=$5) and "networking_profiles"."status" = $6 and btrim("networking_profiles"."first_name") <> '' AND btrim("networking_profiles"."last_name") <> '' AND btrim("networking_profiles"."company") <> '' AND btrim("networking_profiles"."job_title") <> '' AND btrim("networking_profiles"."sector") <> '' and "networking_profiles"."visible" = $7 and "networking_profiles"."consent" = $8 and "networking_profiles"."withdrawn_at" is null and "source_registration"."event_id" = $9 and "source_registration"."payment_status" in ($10, $11) and "source_registration"."networking_opt_in" IS DISTINCT FROM false and "networking_profiles"."id" NOT IN (
+    SELECT target_id FROM networking_blocks WHERE event_id=$12 AND profile_id=$13
+    UNION ALL SELECT profile_id FROM networking_blocks WHERE event_id=$14 AND target_id=$15
+    UNION ALL SELECT target_id FROM networking_interests WHERE event_id=$16 AND profile_id=$17
+    UNION ALL SELECT profile_b_id FROM networking_connections WHERE event_id=$18 AND profile_a_id=$19
+    UNION ALL SELECT profile_a_id FROM networking_connections WHERE event_id=$20 AND profile_b_id=$21
+  ) and "networking_profiles"."sector" in ($22)) order by "networking_profiles"."first_name" asc, "networking_profiles"."last_name" asc, "networking_profiles"."id" asc limit $23 offset $24",
+  },
+  {
+    "params": [
+      1,
+      "event",
+      "viewer",
+      "viewer",
+      "event",
+      "ACTIVE",
+      true,
+      true,
+      "event",
+      "PAID",
+      "SPONSORED",
+      "event",
+      "viewer",
+      "event",
+      "viewer",
+      "event",
+      "viewer",
+      "event",
+      "viewer",
+      "event",
+      "viewer",
+      "Health",
+    ],
+    "sql": "select count(*) from "networking_profiles" inner join lateral (select "event_id", "payment_status", "networking_opt_in" from "registrations" where "registrations"."id" = "networking_profiles"."registration_id" limit $1) "source_registration" on true where ("networking_profiles"."event_id" = $2 and "networking_profiles"."id" <> $3 and lower("networking_profiles"."email") <> (SELECT lower(email) FROM networking_profiles WHERE id=$4 AND event_id=$5) and "networking_profiles"."status" = $6 and btrim("networking_profiles"."first_name") <> '' AND btrim("networking_profiles"."last_name") <> '' AND btrim("networking_profiles"."company") <> '' AND btrim("networking_profiles"."job_title") <> '' AND btrim("networking_profiles"."sector") <> '' and "networking_profiles"."visible" = $7 and "networking_profiles"."consent" = $8 and "networking_profiles"."withdrawn_at" is null and "source_registration"."event_id" = $9 and "source_registration"."payment_status" in ($10, $11) and "source_registration"."networking_opt_in" IS DISTINCT FROM false and "networking_profiles"."id" NOT IN (
+    SELECT target_id FROM networking_blocks WHERE event_id=$12 AND profile_id=$13
+    UNION ALL SELECT profile_id FROM networking_blocks WHERE event_id=$14 AND target_id=$15
+    UNION ALL SELECT target_id FROM networking_interests WHERE event_id=$16 AND profile_id=$17
+    UNION ALL SELECT profile_b_id FROM networking_connections WHERE event_id=$18 AND profile_a_id=$19
+    UNION ALL SELECT profile_a_id FROM networking_connections WHERE event_id=$20 AND profile_b_id=$21
+  ) and "networking_profiles"."sector" in ($22))",
+  },
+]
+`;
+
+exports[`pins embedding enqueue and claim entitlement clauses including archived 1`] = `
+[
+  {
+    "params": [
+      "model",
+      7,
+    ],
+    "sql": "
+    INSERT INTO networking_embedding_jobs (profile_id,status,available_at,created_at,updated_at)
+    SELECT p.id,'PENDING',now(),now(),now()
+    FROM networking_profiles p
+    JOIN networking_configs c ON c.event_id=p.event_id
+    JOIN registrations r ON r.id=p.registration_id AND r.event_id=p.event_id
+    JOIN events ev ON ev.id=p.event_id
+    JOIN clients cl ON cl.id=ev.client_id
+    LEFT JOIN networking_embedding_jobs j ON j.profile_id=p.id
+    WHERE p.status='ACTIVE' AND p.visible AND p.consent AND p.withdrawn_at IS NULL
+      AND c.config->>'enabled'='true' AND cl.active AND ev.status<>'ARCHIVED'
+      AND 'networking'=ANY(cl.enabled_modules) AND 'registrations'=ANY(cl.enabled_modules) AND 'emails'=ANY(cl.enabled_modules)
+      AND r.networking_opt_in IS DISTINCT FROM false
+      AND r.payment_status::text IN (SELECT jsonb_array_elements_text(c.config->'eligiblePaymentStatuses'))
+      AND (j.profile_id IS NULL OR (j.status='READY' AND (j.indexed_profile_at < p.updated_at OR j.model <> $1)))
+    ORDER BY p.updated_at ASC LIMIT $2
+    ON CONFLICT (profile_id) DO UPDATE SET status='PENDING',available_at=now(),attempts=0,updated_at=now()
+    WHERE networking_embedding_jobs.status='READY'
+  ",
+  },
+  {
+    "params": [],
+    "sql": "UPDATE networking_embedding_jobs SET status='FAILED',locked_until=NULL,lock_token=NULL,last_error='Embedding retry limit reached',updated_at=now()
+    WHERE status='PROCESSING' AND locked_until<now() AND attempts>=5",
+  },
+  {
+    "params": [
+      3,
+      "fixed-lock-token",
+    ],
+    "sql": "
+    WITH candidates AS (
+      SELECT j.profile_id FROM networking_embedding_jobs j
+      JOIN networking_profiles p ON p.id=j.profile_id
+      JOIN networking_configs c ON c.event_id=p.event_id
+      JOIN registrations r ON r.id=p.registration_id AND r.event_id=p.event_id
+      JOIN events ev ON ev.id=p.event_id
+      JOIN clients cl ON cl.id=ev.client_id
+      WHERE (j.status='PENDING' OR (j.status='PROCESSING' AND j.locked_until < now()) OR (j.status='FAILED' AND j.attempts < 5))
+        AND j.attempts < 5 AND j.available_at <= now() AND p.status='ACTIVE' AND p.visible AND p.consent AND p.withdrawn_at IS NULL
+        AND c.config->>'enabled'='true' AND cl.active AND ev.status<>'ARCHIVED'
+        AND 'networking'=ANY(cl.enabled_modules) AND 'registrations'=ANY(cl.enabled_modules) AND 'emails'=ANY(cl.enabled_modules) AND r.networking_opt_in IS DISTINCT FROM false
+        AND r.payment_status::text IN (SELECT jsonb_array_elements_text(c.config->'eligiblePaymentStatuses'))
+      ORDER BY j.available_at LIMIT $1 FOR UPDATE OF j SKIP LOCKED
+    )
+    UPDATE networking_embedding_jobs j
+    SET status='PROCESSING',locked_until=now()+interval '2 minutes',lock_token=$2,attempts=attempts+1,updated_at=now()
+    FROM candidates WHERE j.profile_id=candidates.profile_id RETURNING j.profile_id,j.source_hash,j.model
+  ",
+  },
+]
+`;
+
+exports[`pins networking email metrics scope 1`] = `
+[
+  {
+    "params": [
+      "event",
+    ],
+    "sql": "select count(*) FILTER(WHERE "sent_at" IS NOT NULL)::integer, count(*) FILTER(WHERE "delivered_at" IS NOT NULL)::integer, count(*) FILTER(WHERE "opened_at" IS NOT NULL)::integer, count(*) FILTER(WHERE "clicked_at" IS NOT NULL)::integer, count(*) FILTER(WHERE "status" IN ('FAILED','BOUNCED','DROPPED'))::integer from "email_logs" where ("email_logs"."context_snapshot"->>'dispatchOwner'='networking' and "email_logs"."context_snapshot"->>'eventId'=$1)",
+  },
+]
+`;
+
+exports[`pins recommendation and participant predicates without normalizing their SQL dialects 1`] = `
+[
+  {
+    "params": [
+      "event",
+      "ACTIVE",
+      true,
+      true,
+      "viewer",
+      "viewer",
+      "event",
+      "event",
+      "PAID",
+      "event",
+      "viewer",
+      "viewer",
+      "event",
+      "viewer",
+      "event",
+      "viewer",
+      "viewer",
+      "target",
+    ],
+    "sql": "select "id", "event_id", "registration_id", "email", "first_name", "last_name", "company", "job_title", "sector", "bio", "city", "country", "website", "photo_url", "interests", "offers", "seeks", "status", "visible", "meetings_enabled", "email_preference", "language", "consent", "availability_set", "consent_at", "last_active_at", "withdrawn_at", "featured", "stand_table_id", "overrides", "created_at", "updated_at" from "networking_profiles" where ("networking_profiles"."event_id" = $1 and "networking_profiles"."status" = $2 and btrim("networking_profiles"."first_name")<>'' AND btrim("networking_profiles"."last_name")<>'' AND btrim("networking_profiles"."company")<>'' AND btrim("networking_profiles"."job_title")<>'' AND btrim("networking_profiles"."sector")<>'' and "networking_profiles"."visible" = $3 and "networking_profiles"."consent" = $4 and "networking_profiles"."withdrawn_at" IS NULL and "networking_profiles"."id"<>$5 and lower("networking_profiles"."email")<>(SELECT lower(email) FROM networking_profiles WHERE id=$6 AND event_id=$7) and EXISTS (SELECT 1 FROM registrations r WHERE r.id="networking_profiles"."registration_id" AND r.event_id=$8
+          AND r.networking_opt_in IS DISTINCT FROM false AND r.payment_status::text IN ($9)) and NOT EXISTS (SELECT 1 FROM networking_blocks b WHERE b.event_id=$10
+          AND ((b.profile_id=$11 AND b.target_id="networking_profiles"."id") OR (b.target_id=$12 AND b.profile_id="networking_profiles"."id"))) and NOT EXISTS (SELECT 1 FROM networking_interests i WHERE i.event_id=$13
+          AND i.profile_id=$14 AND i.target_id="networking_profiles"."id") and NOT EXISTS (SELECT 1 FROM networking_connections c WHERE c.event_id=$15
+          AND ((c.profile_a_id=$16 AND c.profile_b_id="networking_profiles"."id") OR (c.profile_b_id=$17 AND c.profile_a_id="networking_profiles"."id"))) and "networking_profiles"."id" in ($18))",
+  },
+  {
+    "params": [
+      "viewer",
+      "event",
+      "event",
+      "event",
+      "viewer",
+      "viewer",
+      "ACTIVE",
+      true,
+      "PAID",
+      "viewer",
+      "event",
+      "event",
+      "viewer",
+      "viewer",
+    ],
+    "sql": "select count(*)::int from "networking_connections" inner join "networking_profiles" on "networking_profiles"."id" = CASE WHEN "networking_connections"."profile_a_id"=$1 THEN "networking_connections"."profile_b_id" ELSE "networking_connections"."profile_a_id" END inner join "registrations" on "registrations"."id" = "networking_profiles"."registration_id" where ("networking_connections"."event_id" = $2 and "networking_profiles"."event_id" = $3 and "registrations"."event_id" = $4 and ("networking_connections"."profile_a_id" = $5 or "networking_connections"."profile_b_id" = $6) and "networking_profiles"."status" = $7 and "networking_profiles"."consent" = $8 and "networking_profiles"."withdrawn_at" IS NULL and "registrations"."networking_opt_in" IS DISTINCT FROM false and "registrations"."payment_status" in ($9) and lower("networking_profiles"."email")<>(SELECT lower(email) FROM networking_profiles WHERE id=$10 AND event_id=$11) and NOT EXISTS (SELECT 1 FROM networking_blocks b WHERE b.event_id=$12 AND
+        ((b.profile_id=$13 AND b.target_id="networking_profiles"."id") OR (b.target_id=$14 AND b.profile_id="networking_profiles"."id"))))",
+  },
+  {
+    "params": [
+      "model",
+      "viewer",
+      "event",
+      "event",
+      "model",
+      "event",
+      [
+        "target",
+      ],
+      "viewer",
+      "PAID",
+      "viewer",
+      "viewer",
+      "viewer",
+      "viewer",
+      "viewer",
+      7,
+    ],
+    "sql": "
+    WITH source AS (
+      SELECT p.id,p.email,p.offers,p.seeks,pe.embedding AS profile,oe.embedding AS offer,ne.embedding AS need
+      FROM networking_profiles p
+      JOIN networking_embeddings pe ON pe.profile_id=p.id AND pe.kind='PROFILE' AND pe.model=$1
+      JOIN networking_embeddings oe ON oe.profile_id=p.id AND oe.kind='OFFER' AND oe.model=pe.model AND oe.source_hash=pe.source_hash
+      JOIN networking_embeddings ne ON ne.profile_id=p.id AND ne.kind='NEED' AND ne.model=pe.model AND ne.source_hash=pe.source_hash
+      WHERE p.id=$2 AND p.event_id=$3
+    ), scores AS (
+      SELECT p.id AS profile_id,
+        CASE WHEN length(trim(source.seeks))>0 AND length(trim(p.offers))>0 THEN greatest(0,1-(source.need <=> oe.embedding)) ELSE 0 END AS needs_score,
+        CASE WHEN length(trim(source.offers))>0 AND length(trim(p.seeks))>0 THEN greatest(0,1-(source.offer <=> ne.embedding)) ELSE 0 END AS offers_score,
+        greatest(0,1-(source.profile <=> pe.embedding)) AS profile_score
+      FROM networking_profiles p
+      JOIN registrations r ON r.id=p.registration_id AND r.event_id=p.event_id
+      JOIN networking_embeddings pe ON pe.profile_id=p.id AND pe.kind='PROFILE' AND pe.event_id=$4 AND pe.model=$5
+      JOIN networking_embeddings oe ON oe.profile_id=p.id AND oe.kind='OFFER' AND oe.model=pe.model AND oe.source_hash=pe.source_hash
+      JOIN networking_embeddings ne ON ne.profile_id=p.id AND ne.kind='NEED' AND ne.model=pe.model AND ne.source_hash=pe.source_hash
+      CROSS JOIN source
+      WHERE p.event_id=$6 AND p.id = ANY($7::text[]) AND p.id<>$8 AND lower(p.email)<>lower(source.email) AND p.status='ACTIVE' AND p.visible AND p.consent AND p.withdrawn_at IS NULL
+        AND btrim(p.first_name)<>'' AND btrim(p.last_name)<>'' AND btrim(p.company)<>'' AND btrim(p.job_title)<>'' AND btrim(p.sector)<>''
+        AND r.networking_opt_in IS DISTINCT FROM false AND r.payment_status::text IN ($9)
+        AND NOT EXISTS (SELECT 1 FROM networking_blocks b WHERE b.event_id=p.event_id AND ((b.profile_id=$10 AND b.target_id=p.id) OR (b.profile_id=p.id AND b.target_id=$11)))
+        AND NOT EXISTS (SELECT 1 FROM networking_interests i WHERE i.event_id=p.event_id AND i.profile_id=$12 AND i.target_id=p.id)
+        AND NOT EXISTS (SELECT 1 FROM networking_connections c WHERE c.event_id=p.event_id AND ((c.profile_a_id=$13 AND c.profile_b_id=p.id) OR (c.profile_b_id=$14 AND c.profile_a_id=p.id)))
+    )
+    SELECT *, (0.4*needs_score + 0.4*offers_score + 0.2*profile_score) AS score FROM scores
+    ORDER BY score DESC,profile_id LIMIT $15
+  ",
+  },
+]
+`;
