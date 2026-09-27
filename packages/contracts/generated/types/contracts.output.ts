@@ -1619,7 +1619,7 @@ export type NetworkingAdminProfileUpdate = {
   visible?: boolean;
   meetingsEnabled?: boolean;
   emailPreference?: "IMMEDIATE" | "DAILY" | "OFF";
-  language?: "fr" | "en" | "ar";
+  language?: LanguageCode;
   consent?: boolean;
   status?: "PENDING" | "ACTIVE" | "SUSPENDED" | "EXCLUDED";
   featured?: boolean;
@@ -1950,9 +1950,9 @@ export type NetworkingConfig = {
   /** @default 48 */
   requestExpiryHours: number;
   /** @default ["fr","en","ar"] */
-  languages: Array<"fr" | "en" | "ar">;
+  languages: LanguageCode[];
   /** @default "fr" */
-  defaultLanguage: "fr" | "en" | "ar";
+  defaultLanguage: LanguageCode;
   logoUrl?: string | null;
   /** @default "#2563eb" */
   primaryColor: string;
@@ -2106,7 +2106,7 @@ export type NetworkingProfileUpdate = {
   visible?: boolean;
   meetingsEnabled?: boolean;
   emailPreference?: "IMMEDIATE" | "DAILY" | "OFF";
-  language?: "fr" | "en" | "ar";
+  language?: LanguageCode;
   consent?: boolean;
   resetFields?: Array<"company" | "jobTitle" | "sector" | "bio" | "city" | "country" | "website" | "photoUrl" | "interests" | "offers" | "seeks">;
 };

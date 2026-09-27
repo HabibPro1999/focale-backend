@@ -1,8 +1,10 @@
+import { validateNetworkingConfig } from "./networking.config-validation";
+import { ErrorCodes } from "@app/contracts";
+import { revokeParticipantAccess } from "./networking.revocation";
 import { networkingCalendarDay } from "./networking.calendar";
 import { NetworkingCalendarQuerySchema, type NetworkingCalendarQuery } from "@app/contracts";
 import { randomUUID } from "node:crypto";
 import { NetworkingInventoryService } from "./networking.inventory.service";
-import { networkingAnalytics } from "./networking.analytics";
 import {
   BadRequestException,
   ConflictException,
@@ -16,26 +18,20 @@ import {
   type NetworkingConfigWithRevision,
   networkingProfileOverrides,
   type NetworkingConfig,
-  type NetworkingAnalytics,
 } from "@app/contracts";
 import {
   withLockingTxn,
   getDb,
   queueNetworkingActivation,
   latestNetworkingPostEventReport,
-  cancelNetworkingParticipantMeetings,
-  getActiveEventAccessId,
   createNetworkingNotification,
   getNetworkingConfig,
   listNetworkingAdminMeetings,
   listNetworkingAdminProfiles,
   listNetworkingAdminReports,
-  networkingFormField,
   networkingMeetingIs,
-  networkingRetentionEnded,
   networkingStore,
   networkingTransaction,
-  revokeNetworkingSessions,
   requestNetworkingEventSync,
   transitionNetworkingMeetings,
   type NetworkingRow,
@@ -43,16 +39,13 @@ import {
 import { getStorageProvider } from "@app/integrations";
 import { createLogger } from "@app/shared";
 import { deleteNetworkingPhoto } from "./networking.uploads.service";
-import { assertClientModuleEnabled } from "../clients/module-gates";
 import { networkingIdentityCache } from "../../core/networking-identity-cache";
 import {
   NetworkingService,
-  type NetworkingContext,
 } from "./networking.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
-import { networkingPublicProfile, networkingSlots, zonedInstant } from "./networking.policy";
+import { networkingPublicProfile } from "./networking.policy";
 const log = createLogger({ name: "networking:admin" });
-const CONSENT_FIELD_TYPES = ["checkbox", "radio", "dropdown", "select"];
 const participationCopy = {
   en: {
     title: "Networking participation updated",
@@ -81,101 +74,30 @@ export class NetworkingAdminService {
   constructor(
     private readonly networking: NetworkingService,
     private readonly meetings: NetworkingMeetingsService,
-    readonly inventory: NetworkingInventoryService = new NetworkingInventoryService(),
+    private readonly inventory: NetworkingInventoryService,
   ) {}
-  async config(
+  async getConfig(eventId: string): Promise<NetworkingConfigWithRevision> {
+    const row = await networkingStore(getDb()).one("configs", { eventId });
+    return {
+      ...NetworkingConfigSchema.parse(row?.config ?? {}),
+      revision: row?.updatedAt.toISOString() ?? NETWORKING_CONFIG_UNCONFIGURED_REVISION,
+    };
+  }
+  async updateConfig(
     eventId: string,
-    input?: Partial<NetworkingConfig> & { expectedRevision?: string },
-    actorId?: string,
+    input: Partial<NetworkingConfig> & { expectedRevision?: string },
+    actorId: string,
   ): Promise<NetworkingConfigWithRevision> {
-    if (!input) {
-      const row = await networkingStore(getDb()).one("configs", { eventId });
-      return {
-        ...NetworkingConfigSchema.parse(row?.config ?? {}),
-        revision: row?.updatedAt.toISOString() ?? NETWORKING_CONFIG_UNCONFIGURED_REVISION,
-      };
-    }
     const { expectedRevision, ...changes } = input;
     const config = await networkingTransaction(eventId, async (store, db) => {
       const current = await store.one("configs", { eventId });
       const revision = current?.updatedAt.toISOString() ?? NETWORKING_CONFIG_UNCONFIGURED_REVISION;
       if (expectedRevision !== undefined && expectedRevision !== revision)
         throw new ConflictException({
-          code: "NETWORKING_CONFIG_STALE",
+          code: ErrorCodes.NETWORKING_CONFIG_STALE,
           message: "Networking configuration has changed. Reload before saving.",
         });
-      const invalid = (message: string, details?: unknown) => new BadRequestException({
-        code: "NETWORKING_VALIDATION", message, ...(details ? { details } : {}),
-      });
-      const parsed = NetworkingConfigSchema.safeParse({ ...current?.config, ...changes });
-      if (!parsed.success) throw invalid("Invalid networking configuration", parsed.error.flatten());
-      const config = parsed.data;
-      if (!config.languages.includes(config.defaultLanguage))
-        throw invalid("Default language must be enabled");
-      if ([config.opensAt, config.closesAt, ...config.blackoutSlots].some(
-        (value) => value != null && !Number.isFinite(Date.parse(value)),
-      )) throw invalid("Invalid networking date");
-      if (config.opensAt && config.closesAt && Date.parse(config.opensAt) >= Date.parse(config.closesAt))
-        throw invalid("Closing date must follow opening date");
-      const event = await store.one("events", { id: eventId });
-      if (!event) throw new NotFoundException("Event not found");
-      // Re-enabling after retention would let registration sync copy personal data back
-      // in; once the purge has started, the event can never be enabled again.
-      if (
-        config.enabled &&
-        (current?.purgeStartedAt ||
-          (current?.config?.enabled !== true && networkingRetentionEnded(event.endDate, config.retentionDays)))
-      )
-        throw new ConflictException({
-          code: "NETWORKING_RETENTION_ENDED",
-          message: "The networking retention period of this event has ended; it cannot be enabled again",
-        });
-      if (config.openingHours.some((window) => {
-        let start: number, end: number;
-        try {
-          start = zonedInstant(window.date, window.start, config.timezone).getTime();
-          end = zonedInstant(window.date, window.end, config.timezone).getTime();
-        } catch {
-          throw invalid("Invalid meeting opening hours");
-        }
-        return !Number.isFinite(start) || !Number.isFinite(end) || start >= end ||
-          start < event.startDate.getTime() || end > event.endDate.getTime();
-      }))
-        throw invalid("Meeting opening hours must be within the event dates");
-      if (
-        config.requiredAccessId &&
-        !(await getActiveEventAccessId(config.requiredAccessId, eventId, db))
-      )
-        throw invalid("Networking area access must be active and belong to this event");
-      const consentFieldId = config.fieldMapping.consent;
-      if ("fieldMapping" in changes && consentFieldId) {
-        const field = (await store.all("forms", { eventId }))
-          .map((form) => networkingFormField(form.schema, consentFieldId))
-          .find(Boolean);
-        if (!field || !CONSENT_FIELD_TYPES.includes(String(field.type)))
-          throw invalid("Consent mapping must point to a checkbox, radio or select field of the registration form");
-      }
-      if (config.enabled) {
-        await assertClientModuleEnabled(event.clientId, "registrations", db);
-        await assertClientModuleEnabled(event.clientId, "emails", db);
-        if (config.meetingsEnabled && !config.openingHours.length)
-          throw invalid("Configure meeting opening hours before activating meetings");
-      }
-      const meetings = await store.all("meetings", { eventId });
-      const valid = new Set(networkingSlots(config, event));
-      if (
-        meetings.some(
-          (v) =>
-            networkingMeetingIs(v.status, "accepted") &&
-            v.endsAt > new Date() &&
-            (!valid.has(v.startsAt.toISOString()) ||
-              v.endsAt.getTime() - v.startsAt.getTime() !==
-                config.slotDurationMinutes * 60_000),
-        )
-      )
-        throw new ConflictException(
-          "Existing appointments conflict with the proposed opening hours or duration",
-        );
+      const config = await validateNetworkingConfig({ eventId, current, changes, store, db });
       // Millisecond storage precision must not let consecutive writes share a revision.
       const updatedAt = new Date(Math.max(Date.now(), (current?.updatedAt.getTime() ?? -1) + 1));
       if (current)
@@ -183,7 +105,7 @@ export class NetworkingAdminService {
       else await store.insert("configs", { eventId, config, updatedAt });
       await store.insert("audit", {
         eventId,
-        actorId: actorId!,
+        actorId,
         action: "CONFIG_UPDATED",
         data: { fields: Object.keys(changes) },
       });
@@ -247,13 +169,13 @@ export class NetworkingAdminService {
     input: Partial<NetworkingRow<"profiles">>,
     actorId: string,
   ) {
-    const { row, previousPhotoUrl } = await networkingTransaction(eventId, async (store, db) => {
+    const { row, previousPhotoUrl, revoked } = await networkingTransaction(eventId, async (store, db) => {
       const profile = await store.one("profiles", { eventId, id });
       if (!profile) throw new NotFoundException("Participant not found");
       // Withdrawal is final: its scrubbed content (and later the erased tombstone) is never rewritten.
       if (profile.withdrawnAt)
         throw new ConflictException({
-          code: "NETWORKING_PROFILE_WITHDRAWN",
+          code: ErrorCodes.NETWORKING_PROFILE_WITHDRAWN,
           message: "This participant has withdrawn from networking; the profile cannot be edited",
         });
       const previousPhotoUrl = profile.photoUrl;
@@ -268,13 +190,8 @@ export class NetworkingAdminService {
         { eventId, id },
         { ...input, overrides: networkingProfileOverrides({ ...profile.overrides, ...input }) },
       );
-      if (
-        (input.status && input.status !== "ACTIVE") ||
-        input.consent === false
-      ) {
-        await revokeNetworkingSessions(id, db);
-        await cancelNetworkingParticipantMeetings(id, eventId, db);
-      }
+      const revoked = !!((input.status && input.status !== "ACTIVE") || input.consent === false);
+      if (revoked) await revokeParticipantAccess(id, eventId, db);
       await store.insert("audit", {
         eventId,
         actorId,
@@ -295,28 +212,23 @@ export class NetworkingAdminService {
           },
           db,
         );
-      return { row, previousPhotoUrl };
+      return { row, previousPhotoUrl, revoked };
     });
-    if ((input.status && input.status !== "ACTIVE") || input.consent === false)
+    if (revoked)
       networkingIdentityCache.forgetProfile(id);
     if (row.photoUrl !== previousPhotoUrl) await deleteNetworkingPhoto(previousPhotoUrl, eventId, id);
     return row;
   }
-  tables(eventId: string) { return this.inventory.tables(eventId); }
-  saveTable(eventId: string, input: Parameters<NetworkingInventoryService["saveTable"]>[1], actorId: string, id?: string) {
-    return this.inventory.saveTable(eventId, input, actorId, id);
-  }
-  removeTable(eventId: string, id: string, actorId: string) { return this.inventory.removeTable(eventId, id, actorId); }
   async calendar(eventId: string, input: NetworkingCalendarQuery) {
     const parsed = NetworkingCalendarQuerySchema.safeParse(input);
-    if (!parsed.success) throw new BadRequestException({ code: "NETWORKING_VALIDATION", message: "Invalid calendar query" });
+    if (!parsed.success) throw new BadRequestException({ code: ErrorCodes.NETWORKING_VALIDATION, message: "Invalid calendar query" });
     const query = parsed.data;
     const { timezone } = await getNetworkingConfig(eventId);
     const { start, end } = networkingCalendarDay(query.date, timezone);
     await this.meetings.expire(eventId);
     const rows = await networkingStore(getDb()).calendarMeetings(eventId, start, end, query);
     if (rows.length > 5000) throw new BadRequestException({
-      code: "NETWORKING_VALIDATION", message: "Calendar exceeds 5000 meetings. Use the paginated list.",
+      code: ErrorCodes.NETWORKING_VALIDATION, message: "Calendar exceeds 5000 meetings. Use the paginated list.",
     });
     return { date: query.date, timezone, items: await this.meetings.hydrateCalendar(eventId, rows) };
   }
@@ -377,13 +289,12 @@ export class NetworkingAdminService {
         if (!networkingMeetingIs(row.status, "open"))
           throw new ConflictException("Only active meetings can be assigned");
         const allocation = await this.meetings.reserve(
-          { event, config, profile } as NetworkingContext,
+          { event, config },
           row,
           row.startsAt,
           row.endsAt,
           store,
-          input.tableId,
-          row.status === "PENDING",
+          { forcedTableId: input.tableId, hold: row.status === "PENDING" },
         );
         [saved] = await store.update("meetings", { eventId, id }, { ...allocation, revision: row.revision + 1 });
       } else {
@@ -436,8 +347,8 @@ export class NetworkingAdminService {
     },
     actorId: string,
   ) {
-    let revokedProfileId: string | undefined;
-    const resolved = await networkingTransaction(eventId, async (store, db) => {
+    const { resolved, revokedProfileId } = await networkingTransaction(eventId, async (store, db) => {
+      let revokedProfileId: string | undefined;
       const report = await store.one("reports", { eventId, id });
       if (!report) throw new NotFoundException("Report not found");
       if (input.action === "SUSPEND" || input.action === "EXCLUDE") {
@@ -449,13 +360,8 @@ export class NetworkingAdminService {
             visible: false,
           },
         );
-        await revokeNetworkingSessions(report.profileId, db);
+        await revokeParticipantAccess(report.profileId, eventId, db);
         revokedProfileId = report.profileId;
-        await cancelNetworkingParticipantMeetings(
-          report.profileId,
-          eventId,
-          db,
-        );
       }
       if (input.action === "WARN")
         await createNetworkingNotification(
@@ -487,7 +393,7 @@ export class NetworkingAdminService {
         targetId: id,
         data: { note: input.note },
       });
-      return saved;
+      return { resolved: saved, revokedProfileId };
     });
     if (revokedProfileId) networkingIdentityCache.forgetProfile(revokedProfileId);
     return resolved;
@@ -497,10 +403,10 @@ export class NetworkingAdminService {
       const event = await store.one("events", { id: eventId });
       if (!event) throw new NotFoundException("Event not found");
       if (!NetworkingConfigSchema.parse((await store.one("configs", { eventId }))?.config ?? {}).enabled)
-        throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Networking is not enabled for this event" });
+        throw new ForbiddenException({ code: ErrorCodes.NETWORKING_FEATURE_DISABLED, message: "Networking is not enabled for this event" });
       const now = new Date();
       if (event.endDate > now) throw new ConflictException({
-        code: "NETWORKING_ACTION_NOT_ALLOWED", message: "Report can be generated after the event ends",
+        code: ErrorCodes.NETWORKING_ACTION_NOT_ALLOWED, message: "Report can be generated after the event ends",
       });
       const pending = (await store.all("deliveries", { eventId, type: "POST_EVENT_REPORT" }))
         .find((row) => row.status === "PENDING" || row.status === "PROCESSING" || (row.status === "FAILED" && row.attempts < 5));
@@ -521,8 +427,5 @@ export class NetworkingAdminService {
     if(!report)return {available:false};
     if(!report.storageKey.startsWith(`networking/reports/${eventId}/`) || report.storageKey.includes(".."))throw new BadRequestException("Invalid report storage location");
     return {available:true,url:await getStorageProvider().getSignedUrl(report.storageKey,900),generatedAt:report.generatedAt,summary:report.summary};
-  }
-  async analytics(eventId: string): Promise<NetworkingAnalytics> {
-    return networkingAnalytics(eventId);
   }
 }

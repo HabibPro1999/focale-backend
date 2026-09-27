@@ -1,3 +1,4 @@
+import { NetworkingInventoryService } from "./networking.inventory.service";
 import { HTTP_CODE_METADATA } from "@nestjs/common/constants";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -17,7 +18,7 @@ import { NetworkingAdminController } from "./networking.admin.controller";
 
 // Plan 4.8: POST /sync starts a chunked run in the worker and answers 202 with
 // its state; GET /sync reads the progress.
-const controller = new NetworkingAdminController({} as never, {} as never, {} as never);
+const controller = new NetworkingAdminController({} as never, {} as never, {} as never, new NetworkingInventoryService());
 const running = { runId: "run-1", status: "RUNNING", total: 3, processed: 0 };
 
 beforeEach(() => {

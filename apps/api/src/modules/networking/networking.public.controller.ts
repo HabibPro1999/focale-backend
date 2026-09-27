@@ -40,7 +40,7 @@ import { NetworkingSocialService } from "./networking.social.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
 import { NetworkingExportsService } from "./networking.exports.service";
 import { issueNetworkingBadge } from "./networking.security";
-import { networkingPublicProfile, networkingSlots } from "./networking.policy";
+import { networkingPublicProfile, futureNetworkingSlots } from "./networking.policy";
 import * as dto from "./networking.dto";
 
 @UseInterceptors(NetworkingBusyInterceptor)
@@ -334,7 +334,7 @@ export class NetworkingPublicController {
     this.meetings.requireEnabled(ctx);
     return {
       slots: await this.meetings.participantSlots(ctx, id),
-      availableSlots: networkingSlots(ctx.config, ctx.event).filter(slot => Date.parse(slot) > Date.now()),
+      availableSlots: futureNetworkingSlots(ctx.config, ctx.event),
     };
   }
   @ResponseContract(responses.NetworkingPublicListMeetingsResponseSchema)

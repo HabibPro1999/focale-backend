@@ -19,6 +19,7 @@ vi.mock("@app/integrations", async (original) => ({
 }));
 import {
   NetworkingUploadsService,
+  deleteNetworkingPhoto,
   type NetworkingMultipartRequest,
 } from "./networking.uploads.service";
 const request = (buffer: Buffer) =>
@@ -168,10 +169,10 @@ describe("networking image upload hardening", () => {
 describe("guarded networking photo deletion", () => {
   const own = "https://storage.example/networking/event/profiles/p/photo.webp";
   it("deletes only the participant's own photo and tolerates storage failures", async () => {
-    await service.deletePhoto(own, "event", "p");
+    await deleteNetworkingPhoto(own, "event", "p");
     expect(storage.delete).toHaveBeenCalledWith("networking/event/profiles/p/photo.webp");
     storage.delete.mockRejectedValueOnce(new Error("storage unavailable"));
-    await expect(service.deletePhoto(own, "event", "p")).resolves.toBeUndefined();
+    await expect(deleteNetworkingPhoto(own, "event", "p")).resolves.toBeUndefined();
   });
   it.each([
     "https://storage.example/forms/uploads/registrant-photo.webp",
@@ -183,7 +184,7 @@ describe("guarded networking photo deletion", () => {
     "",
     null,
   ])("never deletes an arbitrary or foreign object: %s", async (url) => {
-    await service.deletePhoto(url, "event", "p");
+    await deleteNetworkingPhoto(url, "event", "p");
     expect(storage.delete).not.toHaveBeenCalled();
   });
 });

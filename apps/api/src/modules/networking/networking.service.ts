@@ -1,3 +1,6 @@
+import { networkingNotFound, requireNetworkingDiscovery } from "./networking.errors";
+import { activeNetworkingStand } from "./networking.stand";
+import { revokeParticipantAccess } from "./networking.revocation";
 import {
   BadRequestException,
   ForbiddenException,
@@ -21,18 +24,17 @@ import {
   networkingParticipantEligible,
   networkingWindow,
   touchNetworkingProfileActivity,
-  cancelNetworkingParticipantMeetings,
   enqueueNetworkingDelivery,
   networkingStore,
   networkingTransaction,
-  revokeNetworkingSessions,
   syncNetworkingRegistration,
   type NetworkingAccess,
+  type NetworkingDiscoveryFilters,
   type NetworkingRow,
   type NetworkingStore,
   type NetworkingWindow,
 } from "@app/db";
-import { ErrorCodes, NetworkingConfigSchema, networkingProfileOverrides, type NetworkingConfig, type NetworkingPersonalAnalytics, type NetworkingRegistrationInfo } from "@app/contracts";
+import { ErrorCodes, NetworkingConfigSchema, networkingProfileOverrides, type NetworkingConfig, type LanguageCode, type NetworkingPersonalAnalytics, type NetworkingRegistrationInfo } from "@app/contracts";
 import { getConfig } from "../../core/config";
 import {
   networkingBearerLockout,
@@ -61,16 +63,15 @@ export type NetworkingContext = {
 export type { NetworkingAccess };
 const expired = (message = "Participant session expired") =>
   new UnauthorizedException({ code: ErrorCodes.NETWORKING_SESSION_EXPIRED, message });
-const notFound = (message: string) => new NotFoundException({ code: ErrorCodes.NETWORKING_NOT_FOUND, message });
 const unavailable = () => new ForbiddenException({ code: ErrorCodes.NETWORKING_FEATURE_DISABLED, message: "Networking is not available for this event" });
 const notEligible = (message = "Networking participation is no longer eligible") =>
-  new ForbiddenException({ code: "NETWORKING_NOT_ELIGIBLE", message });
+  new ForbiddenException({ code: ErrorCodes.NETWORKING_NOT_ELIGIBLE, message });
 const closedMessages: Record<Exclude<NetworkingWindow, "OPEN">, string> = {
   NOT_YET_OPEN: "Networking is not open yet",
   CLOSED: "Networking has closed",
   RETENTION_ENDED: "Networking retention period has ended",
 };
-const closed = (message: string) => new ForbiddenException({ code: "NETWORKING_CLOSED", message });
+const closed = (message: string) => new ForbiddenException({ code: ErrorCodes.NETWORKING_CLOSED, message });
 const consentRequired = () =>
   new ForbiddenException({ code: ErrorCodes.NETWORKING_CONSENT_REQUIRED, message: "Networking consent is required" });
 const bearer = (authorization?: string) => authorization?.match(/^Bearer ([A-Za-z0-9_-]{40,128})$/)?.[1];
@@ -78,19 +79,7 @@ const bearer = (authorization?: string) => authorization?.match(/^Bearer ([A-Za-
 const OTP_FAILED_ATTEMPT_LIMITS = { recent: { windowMs: 15 * 60_000, max: 10 }, daily: { windowMs: 86_400_000, max: 30 } } as const;
 const otpRateLimited = () =>
   new HttpException({ code: ErrorCodes.NETWORKING_RATE_LIMITED, message: "Too many verification attempts" }, HttpStatus.TOO_MANY_REQUESTS);
-export type NetworkingDiscoveryQuery = {
-  q?: string;
-  sector?: string;
-  sectors?: string[];
-  company?: string;
-  excludeInteracted?: boolean;
-  city?: string;
-  country?: string;
-  sort?: string;
-  page?: number;
-  limit?: number;
-  status?: string;
-};
+export type NetworkingDiscoveryQuery = NetworkingDiscoveryFilters;
 @Injectable()
 export class NetworkingService {
   async badgeProfileId(eventId: string, token: string, store = networkingStore(getDb())) {
@@ -106,9 +95,10 @@ export class NetworkingService {
     return readNetworkingBadge(token, eventId);
   }
   /** The event gate and window (4.6 policy), for anonymous and participant routes alike. */
-  async publicContext(slug: string, store = networkingStore(getDb())) {
+  async publicContext(slug: string) {
+    const store = networkingStore(getDb());
     const event = await store.one("events", { slug });
-    if (!event) throw notFound("Event not found");
+    if (!event) throw networkingNotFound("Event not found");
     const client = await findClientModuleState(event.clientId);
     const config = NetworkingConfigSchema.parse(
       (await store.one("configs", { eventId: event.id }))?.config ?? {},
@@ -158,7 +148,7 @@ export class NetworkingService {
   async registrationInfo(slug: string): Promise<NetworkingRegistrationInfo> {
     const store = networkingStore(getDb());
     const event = await store.one("events", { slug });
-    if (!event) throw notFound("Event not found");
+    if (!event) throw networkingNotFound("Event not found");
     const config = NetworkingConfigSchema.parse(
       (await store.one("configs", { eventId: event.id }))?.config ?? {},
     );
@@ -237,7 +227,7 @@ export class NetworkingService {
       !options.allowPendingSecondFactor
     ) {
       throw new ForbiddenException({
-        code: "NETWORKING_MFA_REQUIRED",
+        code: ErrorCodes.NETWORKING_MFA_REQUIRED,
         message: "Authenticator verification is required",
       });
     }
@@ -304,7 +294,7 @@ export class NetworkingService {
       !session.secondFactorVerifiedAt
     )
       throw new ForbiddenException({
-        code: "NETWORKING_MFA_REQUIRED",
+        code: ErrorCodes.NETWORKING_MFA_REQUIRED,
         message: "Authenticator verification is required",
       });
     return { event, config, profile, session, consentPending: access === "CONSENT_PENDING" };
@@ -446,7 +436,7 @@ export class NetworkingService {
   ) {
     const snapshot = await this.counterpart(ctx, id, store);
     if (!snapshot.target || !networkingCounterpartVisible(snapshot, ctx.config, visible ? "discover" : "profile"))
-      throw notFound("Participant not available");
+      throw networkingNotFound("Participant not available");
     return snapshot.target;
   }
   /**
@@ -481,15 +471,14 @@ export class NetworkingService {
   /** Viewer and target facts in one read; the viewer must still be eligible. */
   private async counterpart(ctx: NetworkingContext, id: string, store: NetworkingStore) {
     if (id === ctx.profile.id)
-      throw new BadRequestException({ code: "NETWORKING_VALIDATION", message: "Choose another participant" });
+      throw new BadRequestException({ code: ErrorCodes.NETWORKING_VALIDATION, message: "Choose another participant" });
     const snapshot = await store.counterpartSnapshot({ eventId: ctx.event.id, viewerId: ctx.profile.id, targetId: id });
     if (!snapshot || !networkingParticipantEligible({ profile: snapshot.viewer, registration: snapshot.viewerRegistration }, ctx.config))
       throw notEligible();
     return { ...snapshot, viewer: { id: snapshot.viewer.id, email: snapshot.viewer.email } };
   }
   async discover(ctx: NetworkingContext, query: NetworkingDiscoveryQuery = {}) {
-    if (!ctx.config.swipeEnabled && !ctx.config.searchEnabled)
-      throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Discovery is disabled" });
+    requireNetworkingDiscovery(ctx.config);
     if (
       (query.q ||
         query.sector ||
@@ -499,7 +488,7 @@ export class NetworkingService {
         query.country) &&
       !ctx.config.searchEnabled
     )
-      throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Search is disabled" });
+      throw new ForbiddenException({ code: ErrorCodes.NETWORKING_FEATURE_DISABLED, message: "Search is disabled" });
     const result = await listNetworkingDiscovery(
       ctx.event.id,
       ctx.profile.id,
@@ -513,12 +502,11 @@ export class NetworkingService {
   }
 
   async representatives(ctx: NetworkingContext, profileId: string, page = 1) {
-    if (!ctx.config.swipeEnabled && !ctx.config.searchEnabled) throw new ForbiddenException({ code: "NETWORKING_FEATURE_DISABLED", message: "Discovery is disabled" });
+    requireNetworkingDiscovery(ctx.config);
     const profile = await this.target(ctx, profileId);
-    const stand = profile.standTableId ? await networkingStore(getDb()).one("tables", { eventId: ctx.event.id, id: profile.standTableId, kind: "STAND" }) : null;
-    if (!stand) return { items: [], total: 0, exhibitor: null };
-    const space = stand.spaceId ? await networkingStore(getDb()).one("spaces", { eventId: ctx.event.id, id: stand.spaceId }) : null;
-    if (!stand.active || space?.active === false) return { items: [], total: 0, exhibitor: null };
+    const active = profile.standTableId ? await activeNetworkingStand(networkingStore(getDb()), ctx.event.id, profile.standTableId) : null;
+    if (!active) return { items: [], total: 0, exhibitor: null };
+    const { stand, space } = active;
     const result = await listNetworkingDiscovery(ctx.event.id, ctx.profile.id, ctx.config.eligiblePaymentStatuses,
       { standTableId: stand.id, page, limit: 30 });
     return { items: result.items.map(networkingPublicProfile), total: result.total,
@@ -543,7 +531,7 @@ export class NetworkingService {
     return { currentEventId: ctx.event.id, events: result };
   }
   async updateMe(ctx: NetworkingContext, input: Record<string, unknown>) {
-    const { row, previousPhotoUrl } = await networkingTransaction(ctx.event.id, async (store, db) => {
+    const { row, previousPhotoUrl, revoked, resynced } = await networkingTransaction(ctx.event.id, async (store, db) => {
       ctx = await this.currentParticipant(ctx, store, { allowConsentPending: ctx.consentPending });
       const previousPhotoUrl = ctx.profile.photoUrl;
       // A consent-pending session may only record its consent choice (K1b).
@@ -554,7 +542,7 @@ export class NetworkingService {
       for (const field of ["company", "jobTitle", "sector"]) {
         if (field in fields) {
           if (typeof fields[field] !== "string" || !fields[field].trim())
-            throw new BadRequestException({ code: "NETWORKING_VALIDATION", message: `${field} is required` });
+            throw new BadRequestException({ code: ErrorCodes.NETWORKING_VALIDATION, message: `${field} is required` });
           fields[field] = fields[field].trim();
         }
       }
@@ -566,9 +554,9 @@ export class NetworkingService {
       if (typeof consent === "boolean") overrides.consent = consent;
       if (
         typeof fields.language === "string" &&
-        !ctx.config.languages.includes(fields.language as "fr" | "en" | "ar")
+        !ctx.config.languages.includes(fields.language as LanguageCode)
       )
-        throw new BadRequestException({ code: "NETWORKING_VALIDATION", message: "This language is not enabled for the event" });
+        throw new BadRequestException({ code: ErrorCodes.NETWORKING_VALIDATION, message: "This language is not enabled for the event" });
       const [row] = await store.update(
         "profiles",
         { id: ctx.profile.id, eventId: ctx.event.id },
@@ -581,23 +569,17 @@ export class NetworkingService {
           ...(consent === false ? { visible: false } : consent === true && !ctx.profile.consent ? { visible: true } : {}),
         },
       );
-      if (consent === false) {
-        await revokeNetworkingSessions(ctx.profile.id, db);
-        await cancelNetworkingParticipantMeetings(
-          ctx.profile.id,
-          ctx.event.id,
-          db,
-        );
-      }
-      if (Array.isArray(resetFields) && resetFields.length) {
+      const revoked = consent === false;
+      if (revoked) await revokeParticipantAccess(ctx.profile.id, ctx.event.id, db);
+      const resynced = Array.isArray(resetFields) && resetFields.length > 0;
+      if (resynced) {
         await syncNetworkingRegistration(ctx.profile.registrationId, db);
-        return { row: (await store.one("profiles", { id: row.id, eventId: ctx.event.id }))!, previousPhotoUrl };
+        return { row: (await store.one("profiles", { id: row.id, eventId: ctx.event.id }))!, previousPhotoUrl, revoked, resynced };
       }
-      return { row, previousPhotoUrl };
+      return { row, previousPhotoUrl, revoked, resynced };
     });
     // Declining consent revoked the sessions; a registration re-sync may have revoked them too.
-    const { consent, resetFields } = input;
-    if (consent === false || (Array.isArray(resetFields) && resetFields.length))
+    if (revoked || resynced)
       networkingIdentityCache.forgetProfile(ctx.profile.id);
     // Replaced, removed or reset photos are deleted after commit, and only from the participant's own prefix.
     if (row.photoUrl !== previousPhotoUrl) await deleteNetworkingPhoto(previousPhotoUrl, ctx.event.id, ctx.profile.id);

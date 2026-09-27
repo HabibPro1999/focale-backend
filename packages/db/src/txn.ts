@@ -1,9 +1,9 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { sql } from "drizzle-orm";
 import { DB_TIMEOUT_MAX_MS } from "@app/contracts";
-import { getDb, getDbSettings, type Db, type DbExecutor } from "./client";
+import { getDb, getDbSettings, type DbTransaction, type DbExecutor } from "./client";
 
-type TxnFn<T> = (tx: Parameters<Parameters<Db["transaction"]>[0]>[0]) => Promise<T>;
+type TxnFn<T> = (tx: DbTransaction) => Promise<T>;
 
 type PgErrorShape = { code?: unknown; constraint?: unknown; table?: unknown };
 
@@ -81,7 +81,7 @@ export function pgErrorLogFields(
  */
 export async function withTxnRetry<T>(
   fn: () => Promise<T>,
-  opts: { attempts?: number } = {},
+  opts: { attempts?: number; delayMs?: (attempt: number) => number } = {},
 ): Promise<T> {
   const attempts = opts.attempts ?? 5;
   let lastError: unknown;
@@ -92,7 +92,7 @@ export async function withTxnRetry<T>(
       lastError = err;
       if (attempt >= attempts || !isSerializationFailure(err)) throw err;
       const base = 25 * 2 ** (attempt - 1);
-      const delay = base + Math.random() * (base * 0.5);
+      const delay = opts.delayMs ? opts.delayMs(attempt) : base + Math.random() * (base * 0.5);
       await sleep(delay);
     }
   }

@@ -1,3 +1,4 @@
+import { ErrorCodes } from "@app/contracts";
 import { BadRequestException } from "@nestjs/common";
 import type { NetworkingConfig } from "@app/contracts";
 export function networkingPair(a: string, b: string) {
@@ -32,7 +33,7 @@ export function zonedInstant(date: string, time: string, timezone: string) {
     stamp += Date.parse(`${desired}:00Z`) - Date.parse(`${actual}:00Z`);
   }
   throw new BadRequestException({
-    code: "NETWORKING_SLOT_INVALID",
+    code: ErrorCodes.NETWORKING_SLOT_INVALID,
     message: `Nonexistent local time ${desired} in ${timezone}`,
   });
 }
@@ -91,4 +92,16 @@ export function networkingPublicProfile<T extends Record<string, unknown>>(
   return safe;
 }
 
-export { normalizeNetworkingSearch, networkingSearchMatches } from "@app/db";
+/** Keep the clock evaluation per slot, matching the participant availability paths. */
+export function futureNetworkingSlots(config: NetworkingConfig, event: { startDate: Date; endDate: Date }) {
+  return networkingSlots(config, event).filter((slot) => Date.parse(slot) > Date.now());
+}
+
+export function networkingSlotEnd(start: Date | string, config: Pick<NetworkingConfig, "slotDurationMinutes">) {
+  const timestamp = typeof start === "string" ? Date.parse(start) : start.getTime();
+  return new Date(timestamp + config.slotDurationMinutes * 60_000);
+}
+
+export function networkingProposalExpiry(now: number, expiryHours: number, startsAt: Date) {
+  return new Date(Math.min(now + expiryHours * 3_600_000, startsAt.getTime()));
+}

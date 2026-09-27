@@ -1,3 +1,4 @@
+import { networkingPageLimit } from "./networking-pagination";
 import {
   and,
   asc,
@@ -56,13 +57,13 @@ function registrationLookup(db: DbExecutor) {
     .limit(1)
     .as("source_registration");
 }
-function networkingDiscoveryWhere(
-  eventId: string,
-  profileId: string,
-  paymentStatuses: NetworkingConfig["eligiblePaymentStatuses"],
-  query: NetworkingDiscoveryFilters = {},
-  registration: ReturnType<typeof registrationLookup>,
-) {
+function networkingDiscoveryWhere({ eventId, profileId, paymentStatuses, query = {}, registration }: {
+  eventId: string;
+  profileId: string;
+  paymentStatuses: NetworkingConfig["eligiblePaymentStatuses"];
+  query?: NetworkingDiscoveryFilters;
+  registration: ReturnType<typeof registrationLookup>;
+}) {
   return and(
     eq(profiles.eventId, eventId),
     query.standTableId ? eq(profiles.standTableId, query.standTableId) : undefined,
@@ -92,14 +93,8 @@ export async function listNetworkingDiscovery(
   db: DbExecutor = getDb(),
 ) {
   const registration = registrationLookup(db);
-  const where = networkingDiscoveryWhere(
-    eventId,
-    profileId,
-    paymentStatuses,
-    query,
-    registration,
-  );
-  const limit = Math.min(100, Math.max(1, query.limit ?? 30)),
+  const where = networkingDiscoveryWhere({ eventId, profileId, paymentStatuses, query, registration });
+  const limit = networkingPageLimit(query.limit ?? 30),
     offset = (Math.max(1, query.page ?? 1) - 1) * limit;
   let selectedIds: string[] | undefined;
   if (query.q?.trim()) {
@@ -206,7 +201,7 @@ export async function listNetworkingMessages(
       .from(messages)
       .where(where)
       .orderBy(desc(messages.createdAt), desc(messages.id))
-      .limit(Math.min(100, Math.max(1, query.limit ?? 50))),
+      .limit(networkingPageLimit(query.limit ?? 50)),
     db.select({ total: count() }).from(messages).where(where),
   ]);
   const oldest = items.at(-1);
@@ -237,7 +232,7 @@ export async function listNetworkingNotifications(
       .from(notifications)
       .where(where)
       .orderBy(desc(notifications.createdAt), desc(notifications.id))
-      .limit(Math.min(100, Math.max(1, limit)))
+      .limit(networkingPageLimit(limit))
       .offset((Math.max(1, page) - 1) * limit),
     db
       .select({
@@ -282,13 +277,7 @@ export async function networkingDirectoryFacets(
 ) {
   const db = getDb(),
     registration = registrationLookup(db),
-    where = networkingDiscoveryWhere(
-      eventId,
-      profileId,
-      paymentStatuses,
-      {},
-      registration,
-    );
+    where = networkingDiscoveryWhere({ eventId, profileId, paymentStatuses, registration });
   const rows = await db
     .select({
       sector: profiles.sector,
@@ -326,13 +315,7 @@ export async function explainNetworkingDiscovery(
 ) {
   const db = getDb(),
     registration = registrationLookup(db);
-  const where = networkingDiscoveryWhere(
-    eventId,
-    profileId,
-    paymentStatuses,
-    query,
-    registration,
-  );
+  const where = networkingDiscoveryWhere({ eventId, profileId, paymentStatuses, query, registration });
   const statement = db
     .select(getTableColumns(profiles))
     .from(profiles)

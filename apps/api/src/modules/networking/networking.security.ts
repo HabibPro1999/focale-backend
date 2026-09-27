@@ -1,3 +1,4 @@
+import { ErrorCodes } from "@app/contracts";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   BadRequestException,
@@ -14,7 +15,7 @@ export function networkingKeys(): NetworkingKeyring {
   const keyring = networkingKeyring({ legacySecret: tokenSecret, keys, writeV1: keyringWriteV1 });
   if (!keyring.configured)
     throw new ServiceUnavailableException({
-      code: "NETWORKING_AUTH_UNAVAILABLE",
+      code: ErrorCodes.NETWORKING_AUTH_UNAVAILABLE,
       message: "Networking authentication is not configured",
     });
   return keyring;
@@ -70,7 +71,6 @@ export function issueNetworkingBadge(profileId: string, eventId: string) {
     token: `${payload}.${networkingKeys().mac("badge", `badge:${payload}`)}`,
     expiresAt: expiresAt.toISOString(),
     profileId,
-    accessAllowed: true,
   };
 }
 export function readNetworkingBadge(token: string, eventId: string) {
@@ -101,7 +101,7 @@ export function readNetworkingBadge(token: string, eventId: string) {
     return parsed.profileId;
   } catch {
     throw new BadRequestException({
-      code: "NETWORKING_BADGE_INVALID",
+      code: ErrorCodes.NETWORKING_BADGE_INVALID,
       message: "Invalid or expired badge",
     });
   }

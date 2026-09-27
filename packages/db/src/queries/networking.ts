@@ -142,16 +142,18 @@ export async function syncNetworkingRegistration(
     withdrawn: !!existing?.withdrawnAt,
   });
   const eligible = networkingPaymentEligible(registration, config);
+  const email = registration.email.trim().toLowerCase();
+  const autoActivate = config.approvalMode === "AUTOMATIC" && eligible;
   if (existing) {
     const values = {
       ...projection,
       ...overrides,
-      email: registration.email.trim().toLowerCase(),
+      email,
       firstName: registration.firstName ?? "",
       lastName: registration.lastName ?? "",
     };
     const status =
-      existing.status === "PENDING" && config.approvalMode === "AUTOMATIC" && eligible
+      existing.status === "PENDING" && autoActivate
         ? ("ACTIVE" as const)
         : existing.status;
     await db
@@ -169,17 +171,9 @@ export async function syncNetworkingRegistration(
     if (
       !eligible ||
       (!consent && !undecided) ||
-      existing.email !== registration.email.trim().toLowerCase()
+      existing.email !== email
     )
-      await db
-        .update(networkingSessions)
-        .set({ revokedAt: new Date() })
-        .where(
-          and(
-            eq(networkingSessions.profileId, existing.id),
-            isNull(networkingSessions.revokedAt),
-          ),
-        );
+      await revokeNetworkingSessions(existing.id, db);
     if (!eligible || !consent)
       await cancelNetworkingParticipantMeetings(
         existing.id,
@@ -191,13 +185,13 @@ export async function syncNetworkingRegistration(
       await queueNetworkingActivation(existing.id, registration.eventId, db);
     return { created: 0, updated: 1 };
   }
-  const status = config.approvalMode === "AUTOMATIC" && eligible ? ("ACTIVE" as const) : ("PENDING" as const);
+  const status = autoActivate ? ("ACTIVE" as const) : ("PENDING" as const);
   const inserted = await db
     .insert(networkingProfiles)
     .values({
       eventId: registration.eventId,
       registrationId: registration.id,
-      email: registration.email.trim().toLowerCase(),
+      email,
       firstName: registration.firstName ?? "",
       lastName: registration.lastName ?? "",
       ...projection,

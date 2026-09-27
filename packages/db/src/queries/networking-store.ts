@@ -1,8 +1,7 @@
-import { setTimeout as sleep } from "node:timers/promises";
 import { and, eq, getTableColumns, isNull, inArray, notInArray, or, sql, lt, gt, gte, count, type AnyColumn } from "drizzle-orm";
 import type { PgTable } from "drizzle-orm/pg-core";
-import { getDb, type Db, type DbExecutor } from "../client";
-import { isSerializationFailure } from "../txn";
+import { getDb, type DbTransaction, type DbExecutor } from "../client";
+import { isSerializationFailure, withTxnRetry } from "../txn";
 import * as n from "../schema/networking";
 import { events } from "../schema/events-access";
 import { registrations } from "../schema/registrations";
@@ -129,16 +128,16 @@ function networkingRetryDelay(attempt: number) {
   const ceiling = Math.min(NETWORKING_RETRY_BASE_MS * 2 ** (attempt - 1), NETWORKING_RETRY_CAP_MS);
   return ceiling / 2 + Math.random() * ceiling;
 }
-type NetworkingTx = Parameters<Parameters<Db["transaction"]>[0]>[0];
+type NetworkingTx = DbTransaction;
 /**
  * One SERIALIZABLE transaction on one pool connection, retried on 40001/40P01.
  * Invariants live in unique indexes, so no event row is locked. When the
  * budget runs out the last serialization failure becomes NetworkingBusyError.
  */
 async function networkingSerializable<T>(run: (db: NetworkingTx) => Promise<T>): Promise<T> {
-  for (let attempt = 1; ; attempt++) {
-    let notices: NetworkingNotice[] = [];
-    try {
+  try {
+    return await withTxnRetry(async () => {
+      let notices: NetworkingNotice[] = [];
       const result = await getDb().transaction(
         (tx) => {
           notices = bufferNetworkingNotices(tx);
@@ -146,14 +145,13 @@ async function networkingSerializable<T>(run: (db: NetworkingTx) => Promise<T>):
         },
         { isolationLevel: "serializable" },
       );
-      // After commit: participant notices written by this attempt (4.3).
+      // Keep publication inside the retry attempt, after commit, as before.
       publishNetworkingNotices(notices);
       return result;
-    } catch (error) {
-      if (!isSerializationFailure(error)) throw error;
-      if (attempt >= NETWORKING_TXN_ATTEMPTS) throw new NetworkingBusyError({ cause: error });
-      await sleep(networkingRetryDelay(attempt));
-    }
+    }, { attempts: NETWORKING_TXN_ATTEMPTS, delayMs: networkingRetryDelay });
+  } catch (error) {
+    if (isSerializationFailure(error)) throw new NetworkingBusyError({ cause: error });
+    throw error;
   }
 }
 type NetworkingStoreOptions = { allocationBuckets?: readonly Date[] };

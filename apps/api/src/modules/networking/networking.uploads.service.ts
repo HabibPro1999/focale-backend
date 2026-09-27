@@ -1,3 +1,4 @@
+import { ErrorCodes } from "@app/contracts";
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
 import { fileTypeFromBuffer } from "file-type";
@@ -8,7 +9,7 @@ import type { FastifyRequest } from "fastify";
 const log = createLogger({ name: "networking:uploads" });
 const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 const invalidImage = () =>
-  new BadRequestException({ code: "NETWORKING_VALIDATION", message: "Use a valid PNG, JPEG or WebP image up to 5 MB and 20 megapixels" });
+  new BadRequestException({ code: ErrorCodes.NETWORKING_VALIDATION, message: "Use a valid PNG, JPEG or WebP image up to 5 MB and 20 megapixels" });
 export type NetworkingMultipartRequest = FastifyRequest & {
   file(options?: {
     limits: { fileSize: number; files: number };
@@ -35,9 +36,6 @@ export async function deleteNetworkingPhoto(
 }
 @Injectable()
 export class NetworkingUploadsService {
-  deletePhoto(photoUrl: string | null | undefined, eventId: string, profileId: string) {
-    return deleteNetworkingPhoto(photoUrl, eventId, profileId);
-  }
   async image<T>(
     req: NetworkingMultipartRequest,
     prefix: string,
@@ -47,7 +45,7 @@ export class NetworkingUploadsService {
     const part = await req.file({
       limits: { fileSize: 5 * 1024 * 1024, files: 1 },
     });
-    if (!part) throw new BadRequestException({ code: "NETWORKING_VALIDATION", message: "Choose an image to upload" });
+    if (!part) throw new BadRequestException({ code: ErrorCodes.NETWORKING_VALIDATION, message: "Choose an image to upload" });
     const source = await part.toBuffer();
     // Magic bytes first: only PNG/JPEG/WebP ever reach a decoder (never SVG, GIF, TIFF...).
     const detected = await fileTypeFromBuffer(source);

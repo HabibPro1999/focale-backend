@@ -179,7 +179,7 @@ describe("participant error codes", () => {
   it("a pending hold claims its table and the requester's pending slot, never the participants", async () => {
     vi.spyOn(service, "availableAt").mockResolvedValue(undefined);
     mocks.all.mockImplementation(async (kind) => kind === "tables" ? [{ id: "t", name: "A", kind: "TABLE" }] : []);
-    const hold = await service.reserve(ctx, { ...row, status: "PENDING", expiresAt: new Date(Date.now() + 60_000) }, start, row.endsAt, mocks as unknown as NetworkingStore, undefined, true);
+    const hold = await service.reserve(ctx, { ...row, status: "PENDING", expiresAt: new Date(Date.now() + 60_000) }, start, row.endsAt, mocks as unknown as NetworkingStore, { hold: true });
     expect(hold).toEqual({ tableId: "t", status: "PENDING" });
     expect(mocks.claimResource.mock.calls.map(([, , key]) => key)).toEqual(["hold:profile:a", "table:t"]);
   });
@@ -189,13 +189,13 @@ describe("participant error codes", () => {
     const pending = { ...row, status: "PENDING" as const, expiresAt: new Date(Date.now() + 60_000) };
     const conflict = { status: 409, response: { code: "NETWORKING_SLOT_CONFLICT", message: "The requester already has a pending meeting request in this slot" } };
     mocks.allocationReservations.mockResolvedValue([{ meetingId: "other", resourceKey: "hold:profile:a", startsAt: start }]);
-    await expect(service.reserve(ctx, pending, start, row.endsAt, mocks as unknown as NetworkingStore, undefined, true)).rejects.toMatchObject(conflict);
+    await expect(service.reserve(ctx, pending, start, row.endsAt, mocks as unknown as NetworkingStore, { hold: true })).rejects.toMatchObject(conflict);
     expect(mocks.claimResource).not.toHaveBeenCalled();
     // An accepted meeting does not hold the requester's pending slot.
     await expect(service.reserve(ctx, row, start, row.endsAt, mocks as unknown as NetworkingStore)).resolves.toMatchObject({ tableId: "t" });
     mocks.allocationReservations.mockResolvedValue([]);
     mocks.claimResource.mockClear().mockImplementation(async (_event, _meeting, key: string) => key !== "hold:profile:a");
-    await expect(service.reserve(ctx, pending, start, row.endsAt, mocks as unknown as NetworkingStore, undefined, true)).rejects.toMatchObject(conflict);
+    await expect(service.reserve(ctx, pending, start, row.endsAt, mocks as unknown as NetworkingStore, { hold: true })).rejects.toMatchObject(conflict);
     expect(mocks.claimResource.mock.calls.map(([, , key]) => key)).toEqual(["hold:profile:a"]);
   });
   it("expires overdue pending meetings in the allocation window through the lifecycle transition", async () => {

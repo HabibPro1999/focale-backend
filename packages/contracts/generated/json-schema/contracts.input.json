@@ -7041,12 +7041,7 @@
           "type": "string"
         },
         "language": {
-          "enum": [
-            "fr",
-            "en",
-            "ar"
-          ],
-          "type": "string"
+          "$ref": "#/$defs/LanguageCodeSchema"
         },
         "consent": {
           "type": "boolean"
@@ -8618,24 +8613,14 @@
             "ar"
           ],
           "items": {
-            "enum": [
-              "fr",
-              "en",
-              "ar"
-            ],
-            "type": "string"
+            "$ref": "#/$defs/LanguageCodeSchema"
           },
           "minItems": 1,
           "type": "array"
         },
         "defaultLanguage": {
-          "default": "fr",
-          "enum": [
-            "fr",
-            "en",
-            "ar"
-          ],
-          "type": "string"
+          "$ref": "#/$defs/LanguageCodeSchema",
+          "default": "fr"
         },
         "logoUrl": {
           "anyOf": [
@@ -9273,12 +9258,7 @@
           "type": "string"
         },
         "language": {
-          "enum": [
-            "fr",
-            "en",
-            "ar"
-          ],
-          "type": "string"
+          "$ref": "#/$defs/LanguageCodeSchema"
         },
         "consent": {
           "type": "boolean"
