@@ -28,7 +28,7 @@ import type {
   AccessRegistrantsResponse,
   ExportRegistrationsBody,
 } from "@app/contracts";
-import { AppException } from "../../core/app-exception";
+import { notFound } from "../../core/app-exception";
 import { dateStamp, toXlsxBuffer } from "./excel-style";
 import { generateCSV, generateRegistrationsWorkbook } from "./legacy-registrations-export";
 import {
@@ -152,7 +152,7 @@ export class ReportsService {
     const { access, registrations } = await getAccessRegistrantsData(eventId, accessId);
 
     if (!access) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Access item not found", 404);
+      throw notFound("Access item not found");
     }
 
     const mapRegistrant = (r: (typeof registrations)[number]) => ({
@@ -214,7 +214,7 @@ export class ReportsService {
       return { event: found, registrations: rows };
     });
     if (!event) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
 
     const timestamp = dateStamp();

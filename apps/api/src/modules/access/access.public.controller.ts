@@ -1,4 +1,5 @@
-import { Body, Controller, Get, NotFoundException, Param, Post } from "@nestjs/common";
+import { notFound, orNotFound } from "../../core/app-exception";
+import { Body, Controller, Get, Param, Post } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
 import {
   getEventWithPricing,
@@ -106,15 +107,15 @@ export class AccessPublicController {
     const now = new Date();
     const item = await this.access.getEventAccessById(params.accessId);
     if (!item || !isPublicVisibleAccess(item, params.eventId, now)) {
-      throw new NotFoundException("Access item not found");
+      throw notFound("Access item not found");
     }
     return item;
   }
 
   /** Shared guard: event exists, OPEN + within public window, registrations enabled. */
   private async assertPublicAccessEnabled(eventId: string): Promise<void> {
-    const event = await getEventWithPricing(eventId);
-    if (!event) throw new NotFoundException("Event not found");
+    const event = orNotFound(await getEventWithPricing(eventId), "Event not found");
+
     assertEventAcceptsPublicActions(event);
     await assertClientModuleEnabled(event.clientId, "registrations");
   }

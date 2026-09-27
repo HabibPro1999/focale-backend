@@ -1,18 +1,4 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  Header,
-  HttpCode,
-  Ip,
-  Param,
-  Patch,
-  Post,
-  Put,
-  Query,
-  Res,
-} from "@nestjs/common";
+import { Body, Controller, Delete, Get, Header, HttpCode, Ip, Param, Patch, Post, Put, Query, Res } from "@nestjs/common";
 import type { FastifyReply } from "fastify";
 import { ErrorCodes, UserRole } from "@app/contracts";
 import { getEventForRegistrationAdmin } from "@app/db";
@@ -23,7 +9,7 @@ import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { assertEventWritable } from "../events";
 import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
 import { assertClientModuleEnabled } from "../clients/module-gates";
-import { AppException, forbidden } from "../../core/app-exception";
+import { forbidden, notFound } from "../../core/app-exception";
 import { RegistrationsService } from "./registrations.service";
 import {
   AdminCreateRegistrationDto,
@@ -48,7 +34,7 @@ export class RegistrationsController {
   private async loadEvent(eventId: string, user: AuthUser) {
     const event = await getEventForRegistrationAdmin(eventId);
     if (!event) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
     if (!canAccessClient(user, event.clientId)) forbidden();
     return event;
@@ -126,11 +112,7 @@ export class RegistrationsController {
   ) {
     const registration = await this.service.getRegistrationById(id);
     if (!registration) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Registration not found",
-        404,
-      );
+      throw notFound("Registration not found");
     }
     if (!canAccessClient(user, registration.event.clientId)) forbidden();
     return registration;
@@ -145,11 +127,7 @@ export class RegistrationsController {
   ) {
     const clientId = await this.service.getRegistrationClientId(id);
     if (clientId === null) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Registration not found",
-        404,
-      );
+      throw notFound("Registration not found");
     }
     if (!canAccessClient(user, clientId)) forbidden();
     await assertClientModuleEnabled(clientId, "registrations");
@@ -167,11 +145,7 @@ export class RegistrationsController {
   ) {
     const clientId = await this.service.getRegistrationClientId(id);
     if (clientId === null) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Registration not found",
-        404,
-      );
+      throw notFound("Registration not found");
     }
     if (!canAccessClient(user, clientId)) forbidden();
     await assertClientModuleEnabled(clientId, "registrations");
@@ -189,7 +163,7 @@ export class RegistrationsController {
   ) {
     const clientId = await this.service.getRegistrationClientId(id);
     if (clientId === null) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Registration not found", 404);
+      throw notFound("Registration not found");
     }
     if (!canAccessClient(user, clientId)) forbidden();
     await assertClientModuleEnabled(clientId, "registrations");
@@ -205,7 +179,7 @@ export class RegistrationsController {
   ) {
     const clientId = await this.service.getRegistrationClientId(id);
     if (clientId === null) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Registration not found", 404);
+      throw notFound("Registration not found");
     }
     if (!canAccessClient(user, clientId)) forbidden();
     return this.service.listRegistrationAuditLogs(id, query);
@@ -220,7 +194,7 @@ export class RegistrationsController {
   ) {
     const clientId = await this.service.getRegistrationClientId(id);
     if (clientId === null) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Registration not found", 404);
+      throw notFound("Registration not found");
     }
     if (!canAccessClient(user, clientId)) forbidden();
     return this.service.listRegistrationEmailLogs(id, query);
@@ -239,11 +213,11 @@ export class RegistrationsController {
   ) {
     const registration = await this.service.getRegistrationById(id);
     if (!registration) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Registration not found", 404);
+      throw notFound("Registration not found");
     }
     if (!canAccessClient(user, registration.event.clientId)) forbidden();
     if (!registration.paymentProofUrl) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "No payment proof uploaded", 404);
+      throw notFound("No payment proof uploaded");
     }
     const key = extractStorageKeyFromUrl(registration.paymentProofUrl);
     if (!key) {
@@ -255,11 +229,7 @@ export class RegistrationsController {
       file = await getStorageProvider().download(key);
     } catch (err: unknown) {
       if ((err as { code?: number }).code === 404) {
-        throw new AppException(
-          ErrorCodes.NOT_FOUND,
-          "Payment proof not found in storage",
-          404,
-        );
+        throw notFound("Payment proof not found in storage");
       }
       throw err;
     }
@@ -291,7 +261,7 @@ export class RegistrationEditLinkController {
   ) {
     const clientId = await this.service.getRegistrationClientId(id);
     if (clientId === null) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Registration not found", 404);
+      throw notFound("Registration not found");
     }
     if (!canAccessClient(user, clientId)) forbidden();
     return this.service.issueSelfEditLink(id, user.id, ip);

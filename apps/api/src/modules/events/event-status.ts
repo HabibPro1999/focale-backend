@@ -1,5 +1,5 @@
 import { ErrorCodes } from "@app/contracts";
-import { AppException } from "../../core/app-exception";
+import { badRequest } from "../../core/app-exception";
 
 function effectivePublicEndDate(endDate: Date): Date {
   if (
@@ -17,21 +17,13 @@ function effectivePublicEndDate(endDate: Date): Date {
 
 export function assertEventWritable(event: { status: string }): void {
   if (event.status === "ARCHIVED") {
-    throw new AppException(
-      ErrorCodes.INVALID_STATUS_TRANSITION,
-      "Archived events cannot be modified",
-      400,
-    );
+    throw badRequest("Archived events cannot be modified", { code: ErrorCodes.INVALID_STATUS_TRANSITION });
   }
 }
 
 export function assertEventOpen(event: { status: string }): void {
   if (event.status !== "OPEN") {
-    throw new AppException(
-      ErrorCodes.EVENT_NOT_OPEN,
-      "Event is not accepting public actions",
-      400,
-    );
+    throw badRequest("Event is not accepting public actions", { code: ErrorCodes.EVENT_NOT_OPEN });
   }
 }
 
@@ -41,11 +33,7 @@ export function assertEventAcceptsPublicActions(
 ): void {
   assertEventOpen(event);
   if (effectivePublicEndDate(event.endDate) < now) {
-    throw new AppException(
-      ErrorCodes.EVENT_NOT_OPEN,
-      "Event is not accepting public actions",
-      400,
-    );
+    throw badRequest("Event is not accepting public actions", { code: ErrorCodes.EVENT_NOT_OPEN });
   }
 }
 

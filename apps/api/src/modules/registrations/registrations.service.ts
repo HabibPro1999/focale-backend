@@ -98,7 +98,7 @@ import {
   assertModuleEnabledForClient,
   isModuleEnabledForClient,
 } from "../clients/module-gates";
-import { AppException } from "../../core/app-exception";
+import { AppException, conflict, badRequest, notFound, orNotFound } from "../../core/app-exception";
 import { CONFIG, type Config } from "../../core/config";
 import { assertPublicLinkBaseUrlAllowed } from "../../core/public-link-origin";
 import { logger } from "../../core/logger.service";
@@ -165,7 +165,7 @@ function translateCreateUniqueViolation(err: unknown): never {
   if (/email/i.test(constraint) || constraint === "registrations_email_form_id_key") {
     throw registrationAlreadyExists();
   }
-  throw new AppException(ErrorCodes.CONFLICT, "Resource already exists", 409);
+  throw conflict("Resource already exists");
 }
 
 interface RecalcInput {
@@ -310,11 +310,7 @@ export class RegistrationsService {
       paymentMethod === "LAB_SPONSORSHIP" &&
       (client.enabledModules ?? []).includes("sponsorships")
     ) {
-      throw new AppException(
-        ErrorCodes.BAD_REQUEST,
-        "Lab sponsorship payment method is only available when sponsorships are disabled",
-        400,
-      );
+      throw badRequest("Lab sponsorship payment method is only available when sponsorships are disabled", { code: ErrorCodes.BAD_REQUEST });
     }
   }
 
@@ -421,16 +417,12 @@ export class RegistrationsService {
     if (await casIncrementRegisteredTx(exec, eventId)) return;
     const info = await getEventCounterInfoTx(exec, eventId);
     if (!info) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
     if (info.status !== "OPEN") {
-      throw new AppException(
-        ErrorCodes.EVENT_NOT_OPEN,
-        "Event is not accepting public actions",
-        400,
-      );
+      throw badRequest("Event is not accepting public actions", { code: ErrorCodes.EVENT_NOT_OPEN });
     }
-    throw new AppException(ErrorCodes.EVENT_FULL, "Event is at capacity", 409);
+    throw conflict("Event is at capacity", { code: ErrorCodes.EVENT_FULL });
   }
 
   private async decrementEventRegistered(
@@ -440,13 +432,9 @@ export class RegistrationsService {
     if (await casDecrementRegisteredTx(exec, eventId)) return;
     const info = await getEventCounterInfoTx(exec, eventId);
     if (!info) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
-    throw new AppException(
-      ErrorCodes.VALIDATION_ERROR,
-      "Event registered count is already zero",
-      400,
-    );
+    throw badRequest("Event registered count is already zero");
   }
 
   private audit(
@@ -592,7 +580,7 @@ export class RegistrationsService {
     // 2. Active REGISTRATION form gate (null → sponsor/inactive/missing/not-OPEN).
     const form = await findActiveRegistrationFormById(formId);
     if (!form) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Form not found", 404);
+      throw notFound("Form not found");
     }
 
     // 3. Module gates (DB-backed — matches legacy assertClientModuleEnabled).
@@ -680,10 +668,8 @@ export class RegistrationsService {
       );
     }
 
-    const form = await findFormById(formId);
-    if (!form) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Form not found", 404);
-    }
+    const form = orNotFound(await findFormById(formId), "Form not found");
+
     const eventId = form.eventId;
 
     // Duplicate check (outside tx — advisory fast-fail).
@@ -708,18 +694,14 @@ export class RegistrationsService {
       await withTxn(async (tx) => {
       const event = await getEventForRegistrationCreate(eventId, tx);
       if (!event) {
-        throw new AppException(
-          ErrorCodes.EVENT_NOT_OPEN,
-          "Event is not accepting registrations",
-          400,
-        );
+        throw badRequest("Event is not accepting registrations", { code: ErrorCodes.EVENT_NOT_OPEN });
       }
       assertEventAcceptsPublicActions(event);
       assertModuleEnabledForClient(event.client, "registrations");
       this.assertLabSponsorshipAllowed(event.client, paymentMethod);
 
       if (event.maxCapacity !== null && event.registeredCount >= event.maxCapacity) {
-        throw new AppException(ErrorCodes.EVENT_FULL, "Event is at capacity", 409);
+        throw conflict("Event is at capacity", { code: ErrorCodes.EVENT_FULL });
       }
 
       const editToken = generateEditToken();
@@ -808,11 +790,7 @@ export class RegistrationsService {
   private async getEnrichedRow(id: string): Promise<RegistrationWithRelations> {
     const row = await getRegistrationByIdRow(id);
     if (!row) {
-      throw new AppException(
-        ErrorCodes.REGISTRATION_NOT_FOUND,
-        "Registration not found",
-        404,
-      );
+      throw notFound("Registration not found", { code: ErrorCodes.REGISTRATION_NOT_FOUND });
     }
     return enrichWithAccessSelections(row);
   }
@@ -820,11 +798,7 @@ export class RegistrationsService {
   private async getStrippedById(id: string): Promise<AdminRegistration> {
     const enriched = await this.getRegistrationById(id);
     if (!enriched) {
-      throw new AppException(
-        ErrorCodes.REGISTRATION_NOT_FOUND,
-        "Registration not found after update",
-        404,
-      );
+      throw notFound("Registration not found after update", { code: ErrorCodes.REGISTRATION_NOT_FOUND });
     }
     return enriched;
   }
@@ -855,11 +829,7 @@ export class RegistrationsService {
 
     const form = await findRegistrationFormForEvent(eventId);
     if (!form) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "No registration form found for this event",
-        404,
-      );
+      throw notFound("No registration form found for this event");
     }
     // Admin answers: visible fields only, type-checked, required not enforced;
     // stored and priced as returned.
@@ -883,7 +853,7 @@ export class RegistrationsService {
 
     const eventGate = await getEventForRegistrationAdmin(eventId);
     if (!eventGate) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
     assertModuleEnabledForClient(eventGate.client, "pricing");
 
@@ -901,14 +871,14 @@ export class RegistrationsService {
       await withTxn(async (tx) => {
       const event = await getEventForRegistrationAdmin(eventId, tx);
       if (!event) {
-        throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+        throw notFound("Event not found");
       }
       assertEventWritable(event);
       assertModuleEnabledForClient(event.client, "registrations");
       this.assertLabSponsorshipAllowed(event.client, paymentMethod);
 
       if (event.maxCapacity !== null && event.registeredCount >= event.maxCapacity) {
-        throw new AppException(ErrorCodes.EVENT_FULL, "Event is at capacity", 409);
+        throw conflict("Event is at capacity", { code: ErrorCodes.EVENT_FULL });
       }
 
       const resolvedPaymentStatus = paymentStatus ?? "PENDING";
@@ -1027,11 +997,7 @@ export class RegistrationsService {
           : undefined);
       if (paidAmount !== undefined) {
         if (paidAmount > calculateSettlement(registration).netAmount) {
-          throw new AppException(
-            ErrorCodes.BAD_REQUEST,
-            "Paid amount cannot exceed registration total",
-            400,
-          );
+          throw badRequest("Paid amount cannot exceed registration total", { code: ErrorCodes.BAD_REQUEST });
         }
         patch.paidAmount = paidAmount;
       }
@@ -1125,11 +1091,7 @@ export class RegistrationsService {
     await withTxn(async (tx) => {
       const registration = await requireRegistrationForMutation(id, tx);
       if (registration.eventId !== eventId) {
-        throw new AppException(
-          ErrorCodes.BAD_REQUEST,
-          "Registration does not belong to this event",
-          400,
-        );
+        throw badRequest("Registration does not belong to this event", { code: ErrorCodes.BAD_REQUEST });
       }
       assertRegistrationWritable(registration);
 
@@ -1213,11 +1175,7 @@ export class RegistrationsService {
         input.paidAmount !== registration.paidAmount
       ) {
         if (input.paidAmount > calculateSettlement(registration).netAmount) {
-          throw new AppException(
-            ErrorCodes.BAD_REQUEST,
-            "Paid amount cannot exceed registration total",
-            400,
-          );
+          throw badRequest("Paid amount cannot exceed registration total", { code: ErrorCodes.BAD_REQUEST });
         }
         patch.paidAmount = input.paidAmount;
         changes.paidAmount = { old: registration.paidAmount, new: input.paidAmount };
@@ -1333,11 +1291,7 @@ export class RegistrationsService {
         const nextPaidAmount =
           input.paidAmount ?? defaultPaidAmount ?? registration.paidAmount;
         if (nextPaidAmount > priceBreakdown.total) {
-          throw new AppException(
-            ErrorCodes.BAD_REQUEST,
-            "Paid amount cannot exceed registration total",
-            400,
-          );
+          throw badRequest("Paid amount cannot exceed registration total", { code: ErrorCodes.BAD_REQUEST });
         }
 
         patch.totalAmount = priceBreakdown.subtotal;
@@ -1475,11 +1429,7 @@ export class RegistrationsService {
       assertRegistrationWritable(registration);
 
       if (registration.paymentStatus === "PAID" && !force) {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_DELETE_BLOCKED,
-          "Cannot delete a paid registration. Use refund instead.",
-          400,
-        );
+        throw badRequest("Cannot delete a paid registration. Use refund instead.", { code: ErrorCodes.REGISTRATION_DELETE_BLOCKED });
       }
 
       await this.audit(tx, {
@@ -1567,11 +1517,7 @@ export class RegistrationsService {
   ): Promise<GetRegistrationForEditResult> {
     const registration = await findRegistrationWithFormEvent(registrationId);
     if (!registration) {
-      throw new AppException(
-        ErrorCodes.REGISTRATION_NOT_FOUND,
-        "Registration not found",
-        404,
-      );
+      throw notFound("Registration not found", { code: ErrorCodes.REGISTRATION_NOT_FOUND });
     }
 
     const priceBreakdown = registration.priceBreakdown as PriceBreakdown;
@@ -1687,11 +1633,7 @@ export class RegistrationsService {
   ): Promise<EditRegistrationPublicResult> {
     const expectedUpdatedAt = new Date(input.expectedUpdatedAt);
     if (Number.isNaN(expectedUpdatedAt.getTime())) {
-      throw new AppException(
-        ErrorCodes.VALIDATION_ERROR,
-        "Invalid expectedUpdatedAt precondition",
-        400,
-      );
+      throw badRequest("Invalid expectedUpdatedAt precondition");
     }
 
     let newPriceBreakdown!: PriceBreakdown;
@@ -1699,29 +1641,17 @@ export class RegistrationsService {
     await withTxn(async (tx) => {
       const current = await findRegistrationWithFormEvent(registrationId, tx);
       if (!current) {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_NOT_FOUND,
-          "Registration not found",
-          404,
-        );
+        throw notFound("Registration not found", { code: ErrorCodes.REGISTRATION_NOT_FOUND });
       }
 
       if (current.paymentStatus === "REFUNDED") {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_REFUNDED,
-          "Refunded registrations cannot be edited",
-          400,
-        );
+        throw badRequest("Refunded registrations cannot be edited", { code: ErrorCodes.REGISTRATION_REFUNDED });
       }
 
       try {
         assertEventAcceptsPublicActions(current.event);
       } catch {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_EDIT_FORBIDDEN,
-          "Event is not accepting changes",
-          400,
-        );
+        throw badRequest("Event is not accepting changes", { code: ErrorCodes.REGISTRATION_EDIT_FORBIDDEN });
       }
 
       assertModuleEnabledForClient(
@@ -1736,28 +1666,16 @@ export class RegistrationsService {
       const isAccessEdit = input.accessSelections !== undefined;
 
       if (current.paymentStatus === "VERIFYING" && isAccessEdit) {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_VERIFYING_BLOCKED,
-          "Cannot modify access while payment is under review",
-          400,
-        );
+        throw badRequest("Cannot modify access while payment is under review", { code: ErrorCodes.REGISTRATION_VERIFYING_BLOCKED });
       }
       if (current.paymentStatus === "WAIVED" && isAccessEdit) {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_WAIVED_ACCESS_BLOCKED,
-          "Waived registrations cannot modify access selections",
-          400,
-        );
+        throw badRequest("Waived registrations cannot modify access selections", { code: ErrorCodes.REGISTRATION_WAIVED_ACCESS_BLOCKED });
       }
       if (
         hasFullSponsorship(current) &&
         isAccessEdit
       ) {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_FULLY_SPONSORED_BLOCKED,
-          "Fully sponsored registrations cannot modify access selections",
-          400,
-        );
+        throw badRequest("Fully sponsored registrations cannot modify access selections", { code: ErrorCodes.REGISTRATION_FULLY_SPONSORED_BLOCKED });
       }
 
       const currentFormData =
@@ -1792,15 +1710,10 @@ export class RegistrationsService {
         hasReceivedPayment(current);
       const negativeDeltas = accessDeltas.filter((c) => c.delta < 0);
       if (currentIsPaid && negativeDeltas.length > 0) {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_ACCESS_REMOVAL_BLOCKED,
-          "Cannot remove access items from a paid registration",
-          400,
-          {
+        throw badRequest("Cannot remove access items from a paid registration", { code: ErrorCodes.REGISTRATION_ACCESS_REMOVAL_BLOCKED, details: {
             message: "Paid registrations can only add new access items",
             attemptedRemovals: negativeDeltas.map((c) => c.accessId),
-          },
-        );
+          } });
       }
 
       if (isAccessEdit || input.formData !== undefined) {
@@ -1910,11 +1823,7 @@ export class RegistrationsService {
       );
 
       if (affected === 0) {
-        throw new AppException(
-          ErrorCodes.CONCURRENT_MODIFICATION,
-          "Registration changed. Refresh and try again.",
-          409,
-        );
+        throw conflict("Registration changed. Refresh and try again.", { code: ErrorCodes.CONCURRENT_MODIFICATION });
       }
 
       const auditChanges: Record<string, { old: unknown; new: unknown }> = {};
@@ -1999,11 +1908,7 @@ export class RegistrationsService {
       const { netAmount } = calculateSettlement(old);
       const effectivePaidAmount = input.paidAmount ?? netAmount;
       if (effectivePaidAmount > netAmount) {
-        throw new AppException(
-          ErrorCodes.BAD_REQUEST,
-          "Paid amount cannot exceed registration total",
-          400,
-        );
+        throw badRequest("Paid amount cannot exceed registration total", { code: ErrorCodes.BAD_REQUEST });
       }
       // ponytail: legacy logger.warn on partial-amount confirm dropped (non-behavioral).
 
@@ -2111,18 +2016,10 @@ export class RegistrationsService {
   ): Promise<{ url: string }> {
     const source = await getRegistrationEditLinkSource(id);
     if (!source) {
-      throw new AppException(
-        ErrorCodes.REGISTRATION_NOT_FOUND,
-        "Registration not found",
-        404,
-      );
+      throw notFound("Registration not found", { code: ErrorCodes.REGISTRATION_NOT_FOUND });
     }
     if (!source.editToken) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "This registration has no self-edit link",
-        404,
-      );
+      throw notFound("This registration has no self-edit link");
     }
     await insertAuditLog({
       entityType: "Registration",
@@ -2150,35 +2047,19 @@ export class RegistrationsService {
   ): Promise<PaymentProofResponse> {
     // 1. Header allowlist — fast reject on the client-supplied mimetype.
     if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
-      throw new AppException(
-        ErrorCodes.INVALID_FILE_TYPE,
-        "Invalid file type. Allowed: PNG, JPG, WebP, PDF",
-        400,
-      );
+      throw badRequest("Invalid file type. Allowed: PNG, JPG, WebP, PDF", { code: ErrorCodes.INVALID_FILE_TYPE });
     }
     // 2. Authoritative magic-byte detection.
     const detectedType = await fileTypeFromBuffer(file.buffer);
     if (!detectedType) {
-      throw new AppException(
-        ErrorCodes.INVALID_FILE_TYPE,
-        "Unable to determine file type. Please upload a valid PNG, JPG, or PDF.",
-        400,
-      );
+      throw badRequest("Unable to determine file type. Please upload a valid PNG, JPG, or PDF.", { code: ErrorCodes.INVALID_FILE_TYPE });
     }
     if (!ALLOWED_MIME_TYPES.includes(detectedType.mime)) {
-      throw new AppException(
-        ErrorCodes.INVALID_FILE_TYPE,
-        "File content does not match allowed types. Allowed: PNG, JPG, WebP, PDF",
-        400,
-      );
+      throw badRequest("File content does not match allowed types. Allowed: PNG, JPG, WebP, PDF", { code: ErrorCodes.INVALID_FILE_TYPE });
     }
     // 3. Size.
     if (file.buffer.length > MAX_FILE_SIZE) {
-      throw new AppException(
-        ErrorCodes.FILE_TOO_LARGE,
-        "File too large. Maximum: 10MB",
-        400,
-      );
+      throw badRequest("File too large. Maximum: 10MB", { code: ErrorCodes.FILE_TOO_LARGE });
     }
 
     // 4. Pre-upload state check (outside tx).
@@ -2295,11 +2176,7 @@ export class RegistrationsService {
       this.assertLabSponsorshipAllowed(registration.event.client, input.paymentMethod);
 
       if (registration.paymentStatus !== "PENDING") {
-        throw new AppException(
-          ErrorCodes.REGISTRATION_INVALID_STATUS,
-          "Payment method can only be selected for pending registrations",
-          400,
-        );
+        throw badRequest("Payment method can only be selected for pending registrations", { code: ErrorCodes.REGISTRATION_INVALID_STATUS });
       }
 
       const nextLabName =

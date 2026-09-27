@@ -47,7 +47,7 @@ import {
 import { assertAbstractModuleEnabled } from "./abstracts.gates";
 import { UsersService } from "../identity/users.service";
 import { logger } from "../../core/logger.service";
-import { AppException } from "../../core/app-exception";
+import { AppException, notFound, badRequest, conflict } from "../../core/app-exception";
 import { canAccessClient, type AuthUser } from "../../core/auth/user-cache";
 
 type UserRow = NonNullable<Awaited<ReturnType<typeof getUserById>>>;
@@ -122,7 +122,6 @@ function generateThrowawayPassword(): string {
   return `${randomUUID()}A!${randomUUID()}`;
 }
 
-
 @Injectable()
 export class AbstractsCommitteeService {
   constructor(
@@ -156,11 +155,7 @@ export class AbstractsCommitteeService {
   ): Promise<void> {
     const membership = await findAbstractMembership(eventId, userId);
     if (!membership?.active) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Committee member not found",
-        404,
-      );
+      throw notFound("Committee member not found");
     }
   }
 
@@ -179,32 +174,16 @@ export class AbstractsCommitteeService {
       user.role === UserRole.SUPER_ADMIN ||
       user.role === UserRole.CLIENT_ADMIN
     ) {
-      throw new AppException(
-        ErrorCodes.VALIDATION_ERROR,
-        "This email belongs to an admin account. Admin accounts cannot be added as scientific committee members.",
-        400,
-      );
+      throw badRequest("This email belongs to an admin account. Admin accounts cannot be added as scientific committee members.");
     }
     if (user.role !== UserRole.SCIENTIFIC_COMMITTEE) {
-      throw new AppException(
-        ErrorCodes.VALIDATION_ERROR,
-        "This email does not belong to a scientific committee account.",
-        400,
-      );
+      throw badRequest("This email does not belong to a scientific committee account.");
     }
     if (!user.active) {
-      throw new AppException(
-        ErrorCodes.VALIDATION_ERROR,
-        "This email belongs to an inactive scientific committee account. Reactivate the account before adding it to an event.",
-        400,
-      );
+      throw badRequest("This email belongs to an inactive scientific committee account. Reactivate the account before adding it to an event.");
     }
     if (user.clientId !== null) {
-      throw new AppException(
-        ErrorCodes.VALIDATION_ERROR,
-        "This email belongs to a client-scoped account. Only unscoped scientific committee accounts can be added as committee members.",
-        400,
-      );
+      throw badRequest("This email belongs to a client-scoped account. Only unscoped scientific committee accounts can be added as committee members.");
     }
   }
 
@@ -235,7 +214,7 @@ export class AbstractsCommitteeService {
     }
 
     if (!user) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "User not found", 404);
+      throw notFound("User not found");
     }
     this.assertCommitteeUserEligible(user);
 
@@ -339,19 +318,11 @@ export class AbstractsCommitteeService {
     const uniqueThemeIds = [...new Set(body.themeIds)];
     const activeThemeIds = await getActiveThemeIdsForEvent(eventId);
     if (activeThemeIds === null) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Abstract config not found",
-        404,
-      );
+      throw notFound("Abstract config not found");
     }
     const activeSet = new Set(activeThemeIds);
     if (uniqueThemeIds.some((id) => !activeSet.has(id))) {
-      throw new AppException(
-        ErrorCodes.ABSTRACT_INVALID_THEMES,
-        "Invalid abstract themes",
-        400,
-      );
+      throw badRequest("Invalid abstract themes", { code: ErrorCodes.ABSTRACT_INVALID_THEMES });
     }
 
     await setReviewerThemesTxn(eventId, userId, uniqueThemeIds);
@@ -367,11 +338,7 @@ export class AbstractsCommitteeService {
       (m) => m.userId === userId,
     );
     if (!member) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Committee member not found",
-        404,
-      );
+      throw notFound("Committee member not found");
     }
     return member;
   }
@@ -387,7 +354,7 @@ export class AbstractsCommitteeService {
   ) {
     const abstract = await findAbstractBasic(abstractId);
     if (!abstract || abstract.eventId !== eventId) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Abstract not found", 404);
+      throw notFound("Abstract not found");
     }
     const reviewerIds = [...new Set(body.reviewerIds)];
     const config = await getReviewerAssignmentConfig(eventId);
@@ -395,11 +362,7 @@ export class AbstractsCommitteeService {
 
     if (reviewerIds.length > 0) {
       if (reviewerIds.length < requiredReviewers) {
-        throw new AppException(
-          ErrorCodes.VALIDATION_ERROR,
-          `Exactly ${requiredReviewers} reviewers are required for initial assignment`,
-          400,
-        );
+        throw badRequest(`Exactly ${requiredReviewers} reviewers are required for initial assignment`);
       }
       if (reviewerIds.length > requiredReviewers) {
         const scores = await findScoredReviewScores(abstractId);
@@ -407,22 +370,14 @@ export class AbstractsCommitteeService {
         const max = scores.length >= 2 ? Math.max(...scores) : null;
         const spread = min !== null && max !== null ? max - min : 0;
         if (spread < (config?.divergenceThreshold ?? 6)) {
-          throw new AppException(
-            ErrorCodes.VALIDATION_ERROR,
-            "Extra reviewers can only be assigned after a score divergence alert",
-            400,
-          );
+          throw badRequest("Extra reviewers can only be assigned after a score divergence alert");
         }
       }
       const activeMemberIds = new Set(
         await findActiveMembershipUserIds(eventId, reviewerIds),
       );
       if (reviewerIds.some((id) => !activeMemberIds.has(id))) {
-        throw new AppException(
-          ErrorCodes.VALIDATION_ERROR,
-          "All reviewers must have active membership",
-          400,
-        );
+        throw badRequest("All reviewers must have active membership");
       }
 
       // L3: distributeByTheme wires up an until-now-dead config flag — when
@@ -485,7 +440,7 @@ export class AbstractsCommitteeService {
   async getAssignedAbstractDetail(abstractId: string, reviewerId: string) {
     const abstract = await getAssignedAbstractRow(abstractId);
     if (!abstract) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Abstract not found", 404);
+      throw notFound("Abstract not found");
     }
     await this.assertActiveMembership(abstract.eventId, reviewerId);
     const reviewerThemeIds = await listActiveReviewerThemeIds(
@@ -499,11 +454,7 @@ export class AbstractsCommitteeService {
       !hasExplicit &&
       !hasReviewerThemeCoverage(abstract.themes, reviewerThemeIds)
     ) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Abstract assignment not found",
-        404,
-      );
+      throw notFound("Abstract assignment not found");
     }
     return anonymizeAbstractDetail(abstract, reviewerId);
   }
@@ -515,16 +466,12 @@ export class AbstractsCommitteeService {
   ) {
     const abstract = await findAbstractForReview(abstractId);
     if (!abstract) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Abstract not found", 404);
+      throw notFound("Abstract not found");
     }
     await this.assertActiveMembership(abstract.eventId, reviewerId);
 
     if (FINAL_STATUSES.includes(abstract.status)) {
-      throw new AppException(
-        ErrorCodes.INVALID_STATUS_TRANSITION,
-        "Abstract is not open for scoring",
-        409,
-      );
+      throw conflict("Abstract is not open for scoring", { code: ErrorCodes.INVALID_STATUS_TRANSITION });
     }
     const now = Date.now();
     const startAt = abstract.config?.scoringStartAt;
@@ -586,11 +533,7 @@ export class AbstractsCommitteeService {
   ) {
     const member = await findCommitteeInviteTarget(eventId, userId);
     if (!member?.active) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Committee member not found",
-        404,
-      );
+      throw notFound("Committee member not found");
     }
 
     const inviteEmailSent = await this.mintAndSend(

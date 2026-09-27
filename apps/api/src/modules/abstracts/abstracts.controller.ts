@@ -1,18 +1,5 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  ForbiddenException,
-  Get,
-  HttpCode,
-  NotFoundException,
-  Param,
-  Patch,
-  Post,
-  Put,
-  Query,
-  Res,
-} from "@nestjs/common";
+import { notFound } from "../../core/app-exception";
+import { Body, Controller, Delete, ForbiddenException, Get, HttpCode, Param, Patch, Post, Put, Query, Res } from "@nestjs/common";
 import type { FastifyReply } from "fastify";
 import { exportAbstractsWorkbook } from "./abstracts.export.service";
 import { Throttle } from "@nestjs/throttler";
@@ -70,10 +57,7 @@ export class AbstractsController {
   private async resolveEvent(eventId: string, user: AuthUser): Promise<void> {
     const event = await findEventClientId(eventId);
     if (!event) {
-      throw new NotFoundException({
-        code: ErrorCodes.NOT_FOUND,
-        message: "Event not found",
-      });
+      throw notFound("Event not found");
     }
     if (!canAccessClient(user, event.clientId)) {
       throw new ForbiddenException({

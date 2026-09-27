@@ -1,14 +1,4 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  HttpCode,
-  Param,
-  Patch,
-  Post,
-  Query,
-} from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
 import { ErrorCodes } from "@app/contracts";
 import { getEventWithPricing, type EventWithPricing } from "@app/db";
@@ -20,7 +10,7 @@ import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
 import { assertEventWritable } from "../events";
 import { assertClientModuleEnabled } from "../clients/module-gates";
-import { AppException } from "../../core/app-exception";
+import { AppException, notFound, badRequest, orNotFound } from "../../core/app-exception";
 import { EmailTemplateService } from "./email-template.service";
 import { EmailSendService } from "./email-send.service";
 import {
@@ -52,10 +42,8 @@ export class EmailController {
   // Shared guards
   // ==========================================================================
   private async resolveEvent(eventId: string): Promise<EventWithPricing> {
-    const event = await getEventWithPricing(eventId);
-    if (!event) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
-    }
+    const event = orNotFound(await getEventWithPricing(eventId), "Event not found");
+
     return event;
   }
 
@@ -94,18 +82,10 @@ export class EmailController {
   private async getTemplateWriteContext(templateId: string) {
     const template = await this.templates.getById(templateId);
     if (!template) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Email template not found",
-        404,
-      );
+      throw notFound("Email template not found");
     }
     if (!template.eventId) {
-      throw new AppException(
-        ErrorCodes.VALIDATION_ERROR,
-        "Email template is not event-scoped",
-        400,
-      );
+      throw badRequest("Email template is not event-scoped");
     }
     const event = await this.resolveEvent(template.eventId);
     return { template, event };
@@ -156,11 +136,7 @@ export class EmailController {
   ) {
     const template = await this.templates.getById(params.templateId);
     if (!template) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Email template not found",
-        404,
-      );
+      throw notFound("Email template not found");
     }
     this.assertAccess(user, template.clientId);
     if (template.eventId) {
@@ -254,11 +230,7 @@ export class EmailController {
 
     const template = await this.templates.getById(params.templateId);
     if (!template) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Email template not found",
-        404,
-      );
+      throw notFound("Email template not found");
     }
     if (template.clientId !== event.clientId) {
       throw new AppException(

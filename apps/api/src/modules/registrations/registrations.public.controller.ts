@@ -1,20 +1,8 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Headers,
-  HttpCode,
-  Param,
-  Patch,
-  Post,
-  Query,
-  Req,
-  Res,
-} from "@nestjs/common";
+import { Body, Controller, Get, Headers, HttpCode, Param, Patch, Post, Query, Req, Res } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { ErrorCodes } from "@app/contracts";
-import { AppException } from "../../core/app-exception";
+import { AppException, badRequest } from "../../core/app-exception";
 import { RegistrationsService } from "./registrations.service";
 import {
   CreateRegistrationBodyDto,
@@ -134,7 +122,7 @@ export class RegistrationEditPublicController {
     await this.requireToken(registrationId, headerToken, token);
     const data = await req.file();
     if (!data) {
-      throw new AppException(ErrorCodes.VALIDATION_ERROR, "No file uploaded", 400);
+      throw badRequest("No file uploaded");
     }
     const buffer = await data.toBuffer();
     return this.service.uploadPaymentProof(registrationId, {

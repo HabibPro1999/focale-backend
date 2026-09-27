@@ -1,18 +1,5 @@
-import {
-  BadRequestException,
-  Body,
-  Controller,
-  Delete,
-  ForbiddenException,
-  Get,
-  HttpCode,
-  NotFoundException,
-  Param,
-  Patch,
-  Post,
-  Query,
-  Req,
-} from "@nestjs/common";
+import { notFound, badRequest, orNotFound } from "../../core/app-exception";
+import { Body, Controller, Delete, ForbiddenException, Get, HttpCode, Param, Patch, Post, Query, Req } from "@nestjs/common";
 import type { FastifyRequest } from "fastify";
 import { ErrorCodes, UserRole } from "@app/contracts";
 import {
@@ -56,13 +43,8 @@ export class FormsController {
     @Body() body: CreateFormDto,
     @Req() req: AuthedRequest,
   ): Promise<Form> {
-    const event = await getEventWithPricing(body.eventId);
-    if (!event) {
-      throw new NotFoundException({
-        code: ErrorCodes.NOT_FOUND,
-        message: "Event not found",
-      });
-    }
+    const event = orNotFound(await getEventWithPricing(body.eventId), "Event not found");
+
     if (!canAccessClient(req.user, event.clientId)) {
       throw new ForbiddenException({
         code: ErrorCodes.FORBIDDEN,
@@ -81,16 +63,10 @@ export class FormsController {
   ): Promise<PaginatedResult<Form>> {
     if (req.user.role === UserRole.CLIENT_ADMIN) {
       if (!req.user.clientId) {
-        throw new BadRequestException({
-          code: ErrorCodes.VALIDATION_ERROR,
-          message: "User is not associated with any client",
-        });
+        throw badRequest("User is not associated with any client");
       }
       if (!query.eventId) {
-        throw new BadRequestException({
-          code: ErrorCodes.VALIDATION_ERROR,
-          message: "Event ID is required for client admin users",
-        });
+        throw badRequest("Event ID is required for client admin users");
       }
     } else if (req.user.role !== UserRole.SUPER_ADMIN) {
       throw new ForbiddenException({
@@ -100,13 +76,8 @@ export class FormsController {
     }
 
     if (query.eventId) {
-      const event = await getEventWithPricing(query.eventId);
-      if (!event) {
-        throw new NotFoundException({
-          code: ErrorCodes.NOT_FOUND,
-          message: "Event not found",
-        });
-      }
+      const event = orNotFound(await getEventWithPricing(query.eventId), "Event not found");
+
       if (!canAccessClient(req.user, event.clientId)) {
         throw new ForbiddenException({
           code: ErrorCodes.FORBIDDEN,
@@ -131,13 +102,8 @@ export class FormsController {
     @Param() params: EventIdParamDto,
     @Req() req: AuthedRequest,
   ): Promise<Form> {
-    const event = await getEventWithPricing(params.id);
-    if (!event) {
-      throw new NotFoundException({
-        code: ErrorCodes.NOT_FOUND,
-        message: "Event not found",
-      });
-    }
+    const event = orNotFound(await getEventWithPricing(params.id), "Event not found");
+
     if (!canAccessClient(req.user, event.clientId)) {
       throw new ForbiddenException({
         code: ErrorCodes.FORBIDDEN,
@@ -148,10 +114,7 @@ export class FormsController {
 
     const form = await this.forms.getSponsorFormByEventId(params.id);
     if (!form) {
-      throw new NotFoundException({
-        code: ErrorCodes.NOT_FOUND,
-        message: "Sponsor form not found for this event",
-      });
+      throw notFound("Sponsor form not found for this event");
     }
     return form;
   }
@@ -163,13 +126,8 @@ export class FormsController {
     @Body() body: CreateSponsorFormBodyDto,
     @Req() req: AuthedRequest,
   ): Promise<Form> {
-    const event = await getEventWithPricing(params.id);
-    if (!event) {
-      throw new NotFoundException({
-        code: ErrorCodes.NOT_FOUND,
-        message: "Event not found",
-      });
-    }
+    const event = orNotFound(await getEventWithPricing(params.id), "Event not found");
+
     if (!canAccessClient(req.user, event.clientId)) {
       throw new ForbiddenException({
         code: ErrorCodes.FORBIDDEN,
@@ -256,10 +214,7 @@ export class FormsController {
   ): Promise<FormWithEvent> {
     const form = await this.forms.getFormById(id);
     if (!form) {
-      throw new NotFoundException({
-        code: ErrorCodes.NOT_FOUND,
-        message: "Form not found",
-      });
+      throw notFound("Form not found");
     }
     if (!canAccessClient(user, form.event.clientId)) {
       throw new ForbiddenException({

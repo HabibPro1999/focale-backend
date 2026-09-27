@@ -1,9 +1,5 @@
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  NotFoundException,
-} from "@nestjs/common";
+import { badRequest, notFound, conflict, orNotFound } from "../../core/app-exception";
+import { Injectable } from "@nestjs/common";
 import {
   ErrorCodes,
   DEFAULT_ENABLED_MODULES,
@@ -54,19 +50,10 @@ export class ClientsService {
     // Defense-in-depth: reachable when called outside the HTTP layer (Zod's
     // refine already blocks empty bodies at the route).
     if (Object.values(input).every((value) => value === undefined)) {
-      throw new BadRequestException({
-        code: ErrorCodes.VALIDATION_ERROR,
-        message: "At least one field must be provided for update",
-      });
+      throw badRequest("At least one field must be provided for update");
     }
 
-    const existing = await getClientById(id);
-    if (!existing) {
-      throw new NotFoundException({
-        code: ErrorCodes.NOT_FOUND,
-        message: "Client not found",
-      });
-    }
+    const existing = orNotFound(await getClientById(id), "Client not found");
 
     const { enabledModules, ...restInput } = input;
     const nextEnabledModules =
@@ -103,16 +90,10 @@ export class ClientsService {
   async remove(id: string): Promise<void> {
     const info = await getClientDeletionInfo(id);
     if (!info) {
-      throw new NotFoundException({
-        code: ErrorCodes.NOT_FOUND,
-        message: "Client not found",
-      });
+      throw notFound("Client not found");
     }
     if (info.userCount > 0 || info.eventCount > 0) {
-      throw new ConflictException({
-        code: ErrorCodes.CLIENT_HAS_DEPENDENCIES,
-        message: `Cannot delete client with ${info.userCount} user(s) and ${info.eventCount} event(s). Remove associated data first.`,
-      });
+      throw conflict(`Cannot delete client with ${info.userCount} user(s) and ${info.eventCount} event(s). Remove associated data first.`, { code: ErrorCodes.CLIENT_HAS_DEPENDENCIES });
     }
     await deleteClientRow(id);
   }

@@ -17,7 +17,7 @@ import {
   pgUniqueViolation,
   type CheckInRegistration,
 } from "@app/db";
-import { AppException } from "../../core/app-exception";
+import { AppException, notFound, badRequest } from "../../core/app-exception";
 
 const ELIGIBLE = new Set<string>(CHECKIN_ELIGIBLE_STATUSES);
 
@@ -59,37 +59,21 @@ export class CheckinService {
     const registration = await getRegistrationForCheckIn(registrationId);
 
     if (!registration) {
-      throw new AppException(
-        ErrorCodes.CHECKIN_REGISTRATION_NOT_FOUND,
-        "Registration not found",
-        404,
-      );
+      throw notFound("Registration not found", { code: ErrorCodes.CHECKIN_REGISTRATION_NOT_FOUND });
     }
 
     if (registration.eventId !== eventId) {
-      throw new AppException(
-        ErrorCodes.CHECKIN_EVENT_MISMATCH,
-        "Registration does not belong to this event",
-        400,
-      );
+      throw badRequest("Registration does not belong to this event", { code: ErrorCodes.CHECKIN_EVENT_MISMATCH });
     }
 
     if (!ELIGIBLE.has(registration.paymentStatus)) {
-      throw new AppException(
-        ErrorCodes.CHECKIN_PAYMENT_REQUIRED,
-        "Registration payment is not settled",
-        400,
-      );
+      throw badRequest("Registration payment is not settled", { code: ErrorCodes.CHECKIN_PAYMENT_REQUIRED });
     }
 
     // Access-level check-in
     if (accessId) {
       if (!registration.accessTypeIds.includes(accessId)) {
-        throw new AppException(
-          ErrorCodes.CHECKIN_ACCESS_NOT_ON_REGISTRATION,
-          "Registration does not include this access item",
-          400,
-        );
+        throw badRequest("Registration does not include this access item", { code: ErrorCodes.CHECKIN_ACCESS_NOT_ON_REGISTRATION });
       }
 
       if (!(await isNetworkingAccessAllowed(eventId, registrationId, accessId))) {
@@ -173,7 +157,7 @@ export class CheckinService {
     if (accessId) {
       const access = await getActiveEventAccessId(accessId, eventId);
       if (!access) {
-        throw new AppException(ErrorCodes.NOT_FOUND, "Access item not found", 404);
+        throw notFound("Access item not found");
       }
     }
     return getEligibleRegistrationIds(eventId, accessId);

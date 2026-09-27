@@ -40,7 +40,7 @@ import {
   ownedStorageKey,
 } from "@app/integrations";
 import { fileTypeFromBuffer } from "file-type";
-import { AppException } from "../../core/app-exception";
+import { notFound, conflict, badRequest, orNotFound } from "../../core/app-exception";
 import { logger } from "../../core/logger.service";
 import { isModuleEnabledForClient } from "../clients/module-gates";
 
@@ -95,11 +95,11 @@ export class EventsService {
     } = input;
 
     if (!(await clientExistsById(clientId))) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Client not found", 404);
+      throw notFound("Client not found");
     }
 
     if ((await getEventIdBySlugTx(getDb(), slug)) !== null) {
-      throw new AppException(ErrorCodes.CONFLICT, "Event with this slug already exists", 409);
+      throw conflict("Event with this slug already exists");
     }
 
     return getDb().transaction(
@@ -133,11 +133,7 @@ export class EventsService {
   /** Update event (+pricing). Serializable + retry — currency guard runs inside the txn. */
   async updateEvent(id: string, input: UpdateEventInput): Promise<EventWithPricing> {
     if (Object.values(input).every((value) => value === undefined)) {
-      throw new AppException(
-        ErrorCodes.VALIDATION_ERROR,
-        "At least one field must be provided for update",
-        400,
-      );
+      throw badRequest("At least one field must be provided for update");
     }
 
     const { basePrice, currency, ...eventData } = input;
@@ -145,19 +141,12 @@ export class EventsService {
 
     return withSerializableTxn(
       async (tx) => {
-        const event = await getEventWithPricing(id, tx);
-        if (!event) {
-          throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
-        }
+        const event = orNotFound(await getEventWithPricing(id, tx), "Event not found");
 
         if (input.status && input.status !== event.status) {
           const allowed = VALID_STATUS_TRANSITIONS[event.status] ?? [];
           if (!allowed.includes(input.status)) {
-            throw new AppException(
-              ErrorCodes.INVALID_STATUS_TRANSITION,
-              `Cannot transition event from ${event.status} to ${input.status}`,
-              400,
-            );
+            throw badRequest(`Cannot transition event from ${event.status} to ${input.status}`, { code: ErrorCodes.INVALID_STATUS_TRANSITION });
           }
         }
         assertEventWritable(event);
@@ -165,11 +154,7 @@ export class EventsService {
         const resultingStart = input.startDate ?? event.startDate;
         const resultingEnd = input.endDate ?? event.endDate;
         if (resultingEnd < resultingStart) {
-          throw new AppException(
-            ErrorCodes.VALIDATION_ERROR,
-            "End date must be greater than or equal to start date",
-            400,
-          );
+          throw badRequest("End date must be greater than or equal to start date");
         }
 
         if (
@@ -177,21 +162,13 @@ export class EventsService {
           input.maxCapacity !== null &&
           input.maxCapacity < event.registeredCount
         ) {
-          throw new AppException(
-            ErrorCodes.VALIDATION_ERROR,
-            "Max capacity cannot be below current registered count",
-            400,
-          );
+          throw badRequest("Max capacity cannot be below current registered count");
         }
 
         if (input.slug && input.slug !== event.slug) {
           const existingId = await getEventIdBySlugTx(tx, input.slug);
           if (existingId) {
-            throw new AppException(
-              ErrorCodes.CONFLICT,
-              "Event with this slug already exists",
-              409,
-            );
+            throw conflict("Event with this slug already exists");
           }
         }
 
@@ -202,11 +179,7 @@ export class EventsService {
           if (normalizedCurrency !== currentCurrency) {
             const registrationCount = await countRegistrationsTx(tx, id);
             if (registrationCount > 0) {
-              throw new AppException(
-                ErrorCodes.VALIDATION_ERROR,
-                "Cannot change currency after registrations exist",
-                400,
-              );
+              throw badRequest("Cannot change currency after registrations exist");
             }
           }
         }
@@ -253,14 +226,10 @@ export class EventsService {
         async (tx) => {
           const found = await getEventWithRegistrationCountTx(tx, id);
           if (!found) {
-            throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+            throw notFound("Event not found");
           }
           if (found.registrations > 0) {
-            throw new AppException(
-              ErrorCodes.EVENT_HAS_REGISTRATIONS,
-              eventHasRegistrationsMessage(found.registrations),
-              409,
-            );
+            throw conflict(eventHasRegistrationsMessage(found.registrations), { code: ErrorCodes.EVENT_HAS_REGISTRATIONS });
           }
 
           const certificateTemplateImages = await getCertificateTemplateUrlsTx(tx, id);
@@ -289,11 +258,7 @@ export class EventsService {
       if (isForeignKeyViolation(err)) {
         const registrationCount = await countRegistrationsTx(getDb(), id);
         if (registrationCount > 0) {
-          throw new AppException(
-            ErrorCodes.EVENT_HAS_REGISTRATIONS,
-            eventHasRegistrationsMessage(registrationCount),
-            409,
-          );
+          throw conflict(eventHasRegistrationsMessage(registrationCount), { code: ErrorCodes.EVENT_HAS_REGISTRATIONS });
         }
       }
       throw err;
@@ -319,19 +284,13 @@ export class EventsService {
     id: string,
     file: { buffer: Buffer; filename: string; mimetype: string },
   ): Promise<{ bannerUrl: string }> {
-    const event = await getEventWithPricing(id);
-    if (!event) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
-    }
+    const event = orNotFound(await getEventWithPricing(id), "Event not found");
+
     assertEventWritable(event);
 
     const detectedType = await fileTypeFromBuffer(file.buffer);
     if (!detectedType?.mime.startsWith("image/")) {
-      throw new AppException(
-        ErrorCodes.INVALID_FILE_TYPE,
-        "Invalid file content. Only real images are allowed.",
-        400,
-      );
+      throw badRequest("Invalid file content. Only real images are allowed.", { code: ErrorCodes.INVALID_FILE_TYPE });
     }
 
     const compressed = await compressImage(file.buffer);
@@ -358,10 +317,10 @@ export class EventsService {
   async getPaymentConfig(id: string): Promise<PublicPaymentConfigResponse> {
     const event = await getEventWithPricingAndClient(id);
     if (!event) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
     if (event.status !== "OPEN" || event.client.active !== true) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
 
     const pricing = event.pricing;

@@ -1,15 +1,5 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  HttpCode,
-  NotFoundException,
-  Param,
-  Patch,
-  Post,
-  Query,
-} from "@nestjs/common";
+import { notFound, orNotFound } from "../../core/app-exception";
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query } from "@nestjs/common";
 import { ErrorCodes, UserRole } from "@app/contracts";
 import { Auth } from "../../core/auth/auth.decorator";
 import { CurrentUser } from "../../core/auth/current-user.decorator";
@@ -53,13 +43,8 @@ export class UsersController {
   @Get(":id")
   @Auth(UserRole.SUPER_ADMIN)
   async getOne(@Param() params: UserIdParamDto) {
-    const user = await this.users.getUserById(params.id);
-    if (!user) {
-      throw new NotFoundException({
-        code: ErrorCodes.NOT_FOUND,
-        message: "User not found",
-      });
-    }
+    const user = orNotFound(await this.users.getUserById(params.id), "User not found");
+
     return user;
   }
 

@@ -43,7 +43,7 @@ import {
   insertAuditLog,
   enqueueTriggeredEmailOutbox,
 } from "@app/db";
-import { AppException } from "../../core/app-exception";
+import { badRequest, notFound, conflict } from "../../core/app-exception";
 import { quantitiesByAccess, quantityDeltas } from "./access-quantities";
 import { groupAccess } from "./access-grouping";
 import { validateSelections } from "./access-validation";
@@ -145,12 +145,7 @@ export class AccessService {
     );
     if (!bad.length) return;
     const f = bad[0];
-    throw new AppException(
-      ErrorCodes.ACCESS_CONDITION_INVALID_OPTION,
-      `Access item "${accessName}": value "${String(f.value)}" for field "${f.fieldLabel}" is not one of the field's option ids (e.g. ${f.exampleOptionIds.map((id) => `"${id}"`).join(", ")}). Pick the option in the rule editor.`,
-      400,
-      { accessId, accessName, ...f },
-    );
+    throw badRequest(`Access item "${accessName}": value "${String(f.value)}" for field "${f.fieldLabel}" is not one of the field's option ids (e.g. ${f.exampleOptionIds.map((id) => `"${id}"`).join(", ")}). Pick the option in the rule editor.`, { code: ErrorCodes.ACCESS_CONDITION_INVALID_OPTION, details: { accessId, accessName, ...f } });
   }
 
   async assertAccessSelectionRequirement(
@@ -173,11 +168,7 @@ export class AccessService {
       ...(grouped.addonGroup?.slots.flatMap((s) => s.items) ?? []),
     ] as Array<{ includedInBase: boolean; isFull: boolean }>;
     if (items.some((item) => !item.includedInBase && !item.isFull)) {
-      throw new AppException(
-        ErrorCodes.ACCESS_SELECTION_REQUIRED,
-        "Veuillez sélectionner au moins une option",
-        400,
-      );
+      throw badRequest("Veuillez sélectionner au moins une option", { code: ErrorCodes.ACCESS_SELECTION_REQUIRED });
     }
   }
 
@@ -193,7 +184,7 @@ export class AccessService {
 
     const event = await getEventDatesForAccess(eventId);
     if (!event) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
 
     const dateValidation = validateAccessDatesAgainstEvent(
@@ -206,22 +197,14 @@ export class AccessService {
       { startDate: event.startDate, endDate: event.endDate },
     );
     if (!dateValidation.valid) {
-      throw new AppException(
-        ErrorCodes.ACCESS_DATE_OUT_OF_BOUNDS,
-        dateValidation.errors.join("; "),
-        400,
-      );
+      throw badRequest(dateValidation.errors.join("; "), { code: ErrorCodes.ACCESS_DATE_OUT_OF_BOUNDS });
     }
 
     const requiredIds = requiredAccessIds ?? [];
     if (requiredIds.length > 0) {
       const existing = await findExistingAccessIdsInEvent(requiredIds, eventId);
       if (existing.length !== requiredIds.length) {
-        throw new AppException(
-          ErrorCodes.BAD_REQUEST,
-          "One or more prerequisite access items not found or belong to different event",
-          400,
-        );
+        throw badRequest("One or more prerequisite access items not found or belong to different event", { code: ErrorCodes.BAD_REQUEST });
       }
     }
 
@@ -263,11 +246,7 @@ export class AccessService {
   ): Promise<EventAccessWithPrereqs> {
     const access = await getEventAccessForUpdate(id);
     if (!access) {
-      throw new AppException(
-        ErrorCodes.ACCESS_NOT_FOUND,
-        "Access item not found",
-        404,
-      );
+      throw notFound("Access item not found", { code: ErrorCodes.ACCESS_NOT_FOUND });
     }
 
     const { requiredAccessIds, ...data } = input;
@@ -286,11 +265,7 @@ export class AccessService {
       endDate: access.event.endDate,
     });
     if (!dateValidation.valid) {
-      throw new AppException(
-        ErrorCodes.ACCESS_DATE_OUT_OF_BOUNDS,
-        dateValidation.errors.join("; "),
-        400,
-      );
+      throw badRequest(dateValidation.errors.join("; "), { code: ErrorCodes.ACCESS_DATE_OUT_OF_BOUNDS });
     }
 
     if (
@@ -298,11 +273,7 @@ export class AccessService {
       mergedDates.endsAt &&
       mergedDates.startsAt > mergedDates.endsAt
     ) {
-      throw new AppException(
-        ErrorCodes.VALIDATION_ERROR,
-        "Access start time must be before end time",
-        400,
-      );
+      throw badRequest("Access start time must be before end time");
     }
 
     await this.assertValidOptionConditions(
@@ -322,11 +293,7 @@ export class AccessService {
         access.eventId,
       );
       if (existing.length !== requiredAccessIds.length) {
-        throw new AppException(
-          ErrorCodes.BAD_REQUEST,
-          "One or more prerequisite access items not found",
-          400,
-        );
+        throw badRequest("One or more prerequisite access items not found", { code: ErrorCodes.BAD_REQUEST });
       }
       const hasCycle = await this.detectCircularPrerequisites(
         access.eventId,
@@ -334,11 +301,7 @@ export class AccessService {
         requiredAccessIds,
       );
       if (hasCycle) {
-        throw new AppException(
-          ErrorCodes.ACCESS_CIRCULAR_DEPENDENCY,
-          "Circular prerequisite dependency detected",
-          400,
-        );
+        throw badRequest("Circular prerequisite dependency detected", { code: ErrorCodes.ACCESS_CIRCULAR_DEPENDENCY });
       }
     }
 
@@ -347,12 +310,7 @@ export class AccessService {
       data.maxCapacity !== null &&
       data.maxCapacity < access.paidCount
     ) {
-      throw new AppException(
-        ErrorCodes.ACCESS_CAPACITY_EXCEEDED,
-        "Max capacity cannot be lower than settled paid access count",
-        409,
-        { paidCount: access.paidCount, requestedMaxCapacity: data.maxCapacity },
-      );
+      throw conflict("Max capacity cannot be lower than settled paid access count", { code: ErrorCodes.ACCESS_CAPACITY_EXCEEDED, details: { paidCount: access.paidCount, requestedMaxCapacity: data.maxCapacity } });
     }
 
     const isCapacityChanging =
@@ -379,29 +337,17 @@ export class AccessService {
   async deleteEventAccess(id: string): Promise<void> {
     const access = await getEventAccessByIdQuery(id);
     if (!access) {
-      throw new AppException(
-        ErrorCodes.ACCESS_NOT_FOUND,
-        "Access item not found",
-        404,
-      );
+      throw notFound("Access item not found", { code: ErrorCodes.ACCESS_NOT_FOUND });
     }
 
     const registrationCount = await countRegistrationsWithAccess(id);
     if (registrationCount > 0) {
-      throw new AppException(
-        ErrorCodes.ACCESS_HAS_REGISTRATIONS,
-        "Cannot delete access item with existing registrations",
-        409,
-      );
+      throw conflict("Cannot delete access item with existing registrations", { code: ErrorCodes.ACCESS_HAS_REGISTRATIONS });
     }
 
     const sponsorshipCount = await countActiveSponsorshipsWithAccess(id);
     if (sponsorshipCount > 0) {
-      throw new AppException(
-        ErrorCodes.ACCESS_HAS_SPONSORSHIPS,
-        "Cannot delete access item referenced by active sponsorships",
-        409,
-      );
+      throw conflict("Cannot delete access item referenced by active sponsorships", { code: ErrorCodes.ACCESS_HAS_SPONSORSHIPS });
     }
 
     const dependents = await getAccessDependentIds(id);
@@ -440,7 +386,7 @@ export class AccessService {
   async assertAccessSelectionsValid(...args: Parameters<AccessService["validateAccessSelections"]>): Promise<void> {
     const result = await this.validateAccessSelections(...args);
     if (!result.valid) {
-      throw new AppException(ErrorCodes.BAD_REQUEST, `Invalid access selections: ${result.errors.join(", ")}`, 400, { errors: result.errors });
+      throw badRequest(`Invalid access selections: ${result.errors.join(", ")}`, { code: ErrorCodes.BAD_REQUEST, details: { errors: result.errors } });
     }
   }
 
@@ -605,17 +551,15 @@ export class AccessService {
 
   private async throwInsufficientCapacity(accessId: string, quantity: number, exec: DbExecutor): Promise<never> {
     const access = await getAccessCounters(accessId, exec);
-    if (!access) throw new AppException(ErrorCodes.ACCESS_NOT_FOUND, "Access not found", 404);
+    if (!access) throw notFound("Access not found", { code: ErrorCodes.ACCESS_NOT_FOUND });
     const remaining = access.maxCapacity === null ? null : Math.max(0, access.maxCapacity - access.paidCount);
-    throw new AppException(ErrorCodes.ACCESS_CAPACITY_EXCEEDED,
-      `${access.name} has insufficient capacity (${remaining ?? "unlimited"} spots remaining, requested ${quantity})`,
-      409, { remaining, requested: quantity });
+    throw conflict(`${access.name} has insufficient capacity (${remaining ?? "unlimited"} spots remaining, requested ${quantity})`, { code: ErrorCodes.ACCESS_CAPACITY_EXCEEDED, details: { remaining, requested: quantity } });
   }
 
   private async throwCounterUnderflow(accessId: string, quantity: number, field: "registeredCount" | "paidCount", message: string, exec: DbExecutor): Promise<never> {
     const access = await getAccessCounters(accessId, exec);
-    if (!access) throw new AppException(ErrorCodes.ACCESS_NOT_FOUND, "Access not found", 404);
-    throw new AppException(ErrorCodes.VALIDATION_ERROR, message, 409, { [field]: access[field], requested: quantity });
+    if (!access) throw notFound("Access not found", { code: ErrorCodes.ACCESS_NOT_FOUND });
+    throw conflict(message, { code: ErrorCodes.VALIDATION_ERROR, details: { [field]: access[field], requested: quantity } });
   }
 
   /**

@@ -29,7 +29,7 @@ import {
   type FormSchema,
 } from "@app/shared";
 import { assertClientModuleEnabled } from "../clients/module-gates";
-import { AppException } from "../../core/app-exception";
+import { AppException, conflict, notFound } from "../../core/app-exception";
 import { CONFIG, type Config } from "../../core/config";
 import { logger } from "../../core/logger.service";
 import { assertPublicLinkBaseUrlAllowed } from "../../core/public-link-origin";
@@ -80,11 +80,7 @@ async function validateRegistration(
 }
 
 function duplicateAuthorEmailError(): AppException {
-  return new AppException(
-    ErrorCodes.ABSTRACT_DUPLICATE_AUTHOR_EMAIL,
-    "An abstract has already been submitted for this first-author email",
-    409,
-  );
+  return conflict("An abstract has already been submitted for this first-author email", { code: ErrorCodes.ABSTRACT_DUPLICATE_AUTHOR_EMAIL });
 }
 
 function buildRevisionSnapshot(
@@ -115,11 +111,7 @@ function buildRevisionSnapshot(
 
 function validateMode(contentMode: string, configMode: string): void {
   if (contentMode !== configMode) {
-    throw new AppException(
-      ErrorCodes.ABSTRACT_MODE_MISMATCH,
-      `Submission mode mismatch: expected ${configMode}, got ${contentMode}`,
-      409,
-    );
+    throw conflict(`Submission mode mismatch: expected ${configMode}, got ${contentMode}`, { code: ErrorCodes.ABSTRACT_MODE_MISMATCH });
   }
 }
 
@@ -266,7 +258,7 @@ export class AbstractsService {
   async getPublicConfig(slug: string) {
     const data = await findPublicConfigData(slug);
     if (!data) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
 
     await assertClientModuleEnabled(data.clientId, "abstracts");
@@ -327,33 +319,21 @@ export class AbstractsService {
   async submitAbstract(slug: string, body: SubmitAbstractInput, ip?: string) {
     const found = await findEventConfigForSubmit(slug);
     if (!found) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
     await assertClientModuleEnabled(found.event.clientId, "abstracts");
 
     const config = found.config;
     if (!config) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Abstract submissions not configured",
-        404,
-      );
+      throw notFound("Abstract submissions not configured");
     }
 
     const now = new Date();
     if (config.submissionStartAt && now < config.submissionStartAt) {
-      throw new AppException(
-        ErrorCodes.ABSTRACT_SUBMISSIONS_NOT_OPEN,
-        "Abstract submissions are not open yet",
-        409,
-      );
+      throw conflict("Abstract submissions are not open yet", { code: ErrorCodes.ABSTRACT_SUBMISSIONS_NOT_OPEN });
     }
     if (config.submissionDeadline && now > config.submissionDeadline) {
-      throw new AppException(
-        ErrorCodes.ABSTRACT_SUBMISSIONS_CLOSED,
-        "Abstract submissions are closed",
-        409,
-      );
+      throw conflict("Abstract submissions are closed", { code: ErrorCodes.ABSTRACT_SUBMISSIONS_CLOSED });
     }
 
     const content = sanitizeAbstractContent(body.content as AbstractContent);
@@ -429,14 +409,10 @@ export class AbstractsService {
   async getAbstractByToken(id: string, token: string) {
     const abstract = await findAbstractForToken(id);
     if (!abstract) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Abstract not found", 404);
+      throw notFound("Abstract not found");
     }
     if (!verifyAbstractToken(abstract.editToken, token)) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Invalid abstract token",
-        404,
-      );
+      throw notFound("Invalid abstract token");
     }
     await assertAbstractModuleEnabled(abstract.eventId);
 
@@ -494,52 +470,32 @@ export class AbstractsService {
   ) {
     const abstract = await findAbstractForEdit(id);
     if (!abstract) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Abstract not found", 404);
+      throw notFound("Abstract not found");
     }
     if (!verifyAbstractToken(abstract.editToken, token)) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Invalid abstract token",
-        404,
-      );
+      throw notFound("Invalid abstract token");
     }
     await assertAbstractModuleEnabled(abstract.eventId);
 
     const config = abstract.config;
     if (!config) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Abstract config not found",
-        404,
-      );
+      throw notFound("Abstract config not found");
     }
 
     if (!config.editingEnabled) {
-      throw new AppException(
-        ErrorCodes.ABSTRACT_EDIT_DISABLED,
-        "Abstract editing is disabled",
-        409,
-      );
+      throw conflict("Abstract editing is disabled", { code: ErrorCodes.ABSTRACT_EDIT_DISABLED });
     }
 
     const now = new Date();
     if (config.editingDeadline && now > config.editingDeadline) {
-      throw new AppException(
-        ErrorCodes.ABSTRACT_EDIT_DEADLINE_PASSED,
-        "Editing deadline has passed",
-        409,
-      );
+      throw conflict("Editing deadline has passed", { code: ErrorCodes.ABSTRACT_EDIT_DEADLINE_PASSED });
     }
 
     // M1: gate on FINAL_STATUSES (adds PENDING) — same terminal-decision set
     // the committee side locks scoring on, so a PENDING-finalized abstract
     // can't stay publicly editable while reviewers are locked out of it.
     if (FINAL_STATUSES.includes(abstract.status)) {
-      throw new AppException(
-        ErrorCodes.ABSTRACT_NOT_EDITABLE,
-        `Abstract cannot be edited in ${abstract.status} status`,
-        409,
-      );
+      throw conflict(`Abstract cannot be edited in ${abstract.status} status`, { code: ErrorCodes.ABSTRACT_NOT_EDITABLE });
     }
 
     const content = sanitizeAbstractContent(body.content as AbstractContent);
