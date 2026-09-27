@@ -43,4 +43,3 @@ export const VALID_STATUS_TRANSITIONS: Record<string, string[]> = {
   OPEN: ["CLOSED", "ARCHIVED"],
   ARCHIVED: [],
 };
-

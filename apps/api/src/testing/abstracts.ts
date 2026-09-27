@@ -13,4 +13,3 @@ export async function expectStatus(p: Promise<unknown>, status: number): Promise
   expect(err).toBeInstanceOf(AppException);
   expect((err as AppException).getStatus()).toBe(status);
 }
-

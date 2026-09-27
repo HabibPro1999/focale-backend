@@ -29,4 +29,3 @@ export interface LinkedEmailEntry {
   };
   registration: RegistrationForBatch;
 }
-

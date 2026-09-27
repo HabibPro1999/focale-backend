@@ -17,4 +17,3 @@ export const RegistrationRoleSchema = z.enum([
   "ORGANIZER",
   "INVITED",
 ]);
-

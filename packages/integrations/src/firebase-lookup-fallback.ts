@@ -169,4 +169,3 @@ export async function verifyTokenViaIdentityToolkit(
   cacheLookup(cacheKey, decoded, now);
   return decoded;
 }
-
