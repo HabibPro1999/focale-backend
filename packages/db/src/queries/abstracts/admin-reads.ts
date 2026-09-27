@@ -23,7 +23,7 @@ import {
 
 export interface ListAdminAbstractsFilters {
   presentationType?: AbstractRow["finalType"];
-  status?: string;
+  status?: AbstractRow["status"];
   themeId?: string;
   reviewerId?: string;
   q?: string;
@@ -36,8 +36,7 @@ function buildAdminAbstractsWhere(
   filters: Omit<ListAdminAbstractsFilters, "limit" | "offset">,
 ) {
   const conds = [eq(abstracts.eventId, eventId)];
-  if (filters.status)
-    conds.push(eq(abstracts.status, filters.status as AbstractRow["status"]));
+  if (filters.status) conds.push(eq(abstracts.status, filters.status));
   if (filters.themeId) {
     conds.push(
       inArray(

@@ -354,9 +354,6 @@ describe("submitAbstract", () => {
 
     const call = mock(submitAbstractTxn).mock.calls[0][0];
     expect(call.id).toBe(result.id);
-    expect(call.submissionAckDedupeKey).toBe(
-      `email:abstract:ABSTRACT_SUBMISSION_ACK:${result.id}`,
-    );
     expect(call.themeIds).toEqual([themeId]);
     expect(call.revisionSnapshot).toMatchObject({
       authorEmail: "ahmed@example.com",

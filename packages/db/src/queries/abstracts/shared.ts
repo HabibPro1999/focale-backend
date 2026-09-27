@@ -12,6 +12,7 @@ import {
   type InferInsertModel,
   type InferSelectModel,
 } from "drizzle-orm";
+import type { AbstractEmailTrigger } from "@app/contracts";
 import { getDb, type DbExecutor } from "../../client";
 import { enqueueOutboxEvent } from "../../outbox";
 import {
@@ -27,6 +28,7 @@ import { events } from "../../schema/events-access";
 import { users } from "../../schema/users-clients";
 
 export type AbstractConfigRow = InferSelectModel<typeof abstractConfig>;
+export type AbstractConfigInsert = InferInsertModel<typeof abstractConfig>;
 export type AbstractThemeRow = InferSelectModel<typeof abstractThemes>;
 export type AbstractThemeInsert = InferInsertModel<typeof abstractThemes>;
 export type AbstractRow = InferSelectModel<typeof abstracts>;
@@ -64,7 +66,7 @@ export interface ReviewerAbstractRow extends AbstractRow {
 // ============================================================================
 
 export interface AbstractEmailOutboxPayload {
-  trigger: string;
+  trigger: AbstractEmailTrigger;
   abstractId: string;
   recipientOverride?: { email: string; name?: string };
   extraContext?: Record<string, unknown>;

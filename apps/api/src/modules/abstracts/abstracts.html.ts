@@ -1,4 +1,7 @@
-import { ABSTRACT_STRUCTURED_SECTIONS as STRUCTURED_SECTIONS } from "@app/contracts";
+import {
+  ABSTRACT_STRUCTURED_SECTIONS as STRUCTURED_SECTIONS,
+  type SubmitAbstractInput,
+} from "@app/contracts";
 import { escapeHtml, abstractHtmlToText, decodeEntities } from "@app/shared";
 
 const ALLOWED_TAGS = new Set(["p", "br", "strong", "em", "u", "ul", "ol", "li"]);
@@ -9,19 +12,7 @@ const VOID_TAGS = new Set(["br"]);
 // instead of swallowing it as a bogus tag.
 const TAG_PATTERN = /<\/?[a-zA-Z][^>]*>/g;
 
-export type AbstractContent =
-  | { mode: "FREE_TEXT"; title: string; body: string }
-  | {
-      mode: "STRUCTURED";
-      title: string;
-      introduction: string;
-      objective: string;
-      methods: string;
-      results: string;
-      conclusion: string;
-    };
-
-
+export type AbstractContent = SubmitAbstractInput["content"];
 
 function normalizeTagName(rawName: string): string {
   const name = rawName.toLowerCase();

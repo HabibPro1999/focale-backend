@@ -17,6 +17,7 @@ import {
   seedAbstractTheme,
   seedEvent,
 } from "../helpers/factories";
+import { auditRowsOf } from "../helpers/sponsorship-inspect";
 
 describe.runIf(dbTestsEnabled())("db tier: finalize / reopen", () => {
   beforeEach(cleanupDatabase);
@@ -155,5 +156,135 @@ describe.runIf(dbTestsEnabled())("db tier: finalize / reopen", () => {
       .where(eq(abstracts.id, abstract.id));
     expect(row.presentedAt).toBeNull();
     expect(row.presentedBy).toBeNull();
+  });
+
+  it("accepting an abstract that kept its code number reuses that number", async () => {
+    const event = await seedEvent({ status: "OPEN" });
+    const config = await seedAbstractConfig({ eventId: event.id });
+    const theme = await seedAbstractTheme({ configId: config.id, sortOrder: 3 });
+    const abstract = await seedAbstract({
+      eventId: event.id,
+      status: "UNDER_REVIEW",
+      codeNumber: 7,
+    });
+    await linkAbstractTheme(abstract.id, theme.id);
+
+    expect(
+      await finalizeAbstractTxn({
+        eventId: event.id,
+        abstractId: abstract.id,
+        decision: "ACCEPTED",
+        finalType: "POSTER",
+        performedBy: "test-admin",
+      }),
+    ).toEqual({ ok: true });
+
+    const [row] = await getDb()
+      .select({
+        status: abstracts.status,
+        finalType: abstracts.finalType,
+        code: abstracts.code,
+        codeNumber: abstracts.codeNumber,
+      })
+      .from(abstracts)
+      .where(eq(abstracts.id, abstract.id));
+    expect(row).toEqual({
+      status: "ACCEPTED",
+      finalType: "POSTER",
+      code: "PC3-07",
+      codeNumber: 7,
+    });
+    const counters = await getDb()
+      .select({ id: abstractCodeCounters.id })
+      .from(abstractCodeCounters)
+      .where(eq(abstractCodeCounters.themeId, theme.id));
+    expect(counters).toHaveLength(0);
+    expect(await auditRowsOf("Abstract", abstract.id)).toMatchObject([
+      {
+        action: "finalize",
+        performedBy: "test-admin",
+        changes: {
+          status: { old: "UNDER_REVIEW", new: "ACCEPTED" },
+          finalType: { old: null, new: "POSTER" },
+          code: { old: null, new: "PC3-07" },
+        },
+      },
+    ]);
+  });
+
+  it("rejecting clears type and code but audits the requested type", async () => {
+    const event = await seedEvent({ status: "OPEN" });
+    const config = await seedAbstractConfig({ eventId: event.id });
+    const theme = await seedAbstractTheme({ configId: config.id, sortOrder: 0 });
+    const abstract = await seedAbstract({
+      eventId: event.id,
+      status: "REVIEW_COMPLETE",
+      finalType: "CONFERENCE",
+      codeNumber: 4,
+    });
+    await linkAbstractTheme(abstract.id, theme.id);
+
+    expect(
+      await finalizeAbstractTxn({
+        eventId: event.id,
+        abstractId: abstract.id,
+        decision: "REJECTED",
+        finalType: "POSTER",
+        performedBy: "test-admin",
+      }),
+    ).toEqual({ ok: true });
+
+    const [row] = await getDb()
+      .select({
+        status: abstracts.status,
+        finalType: abstracts.finalType,
+        code: abstracts.code,
+        codeNumber: abstracts.codeNumber,
+      })
+      .from(abstracts)
+      .where(eq(abstracts.id, abstract.id));
+    expect(row).toEqual({
+      status: "REJECTED",
+      finalType: null,
+      code: null,
+      codeNumber: null,
+    });
+    expect(await auditRowsOf("Abstract", abstract.id)).toMatchObject([
+      {
+        action: "finalize",
+        changes: {
+          status: { old: "REVIEW_COMPLETE", new: "REJECTED" },
+          finalType: { old: "CONFERENCE", new: "POSTER" },
+          code: { old: null, new: null },
+        },
+      },
+    ]);
+  });
+
+  it("accepting without a final type or a theme changes nothing", async () => {
+    const event = await seedEvent({ status: "OPEN" });
+    await seedAbstractConfig({ eventId: event.id });
+    const abstract = await seedAbstract({ eventId: event.id, status: "SUBMITTED" });
+    const accept = (finalType: "POSTER" | undefined) =>
+      finalizeAbstractTxn({
+        eventId: event.id,
+        abstractId: abstract.id,
+        decision: "ACCEPTED",
+        finalType,
+        performedBy: "test-admin",
+      });
+
+    expect(await accept(undefined)).toEqual({
+      ok: false,
+      reason: "missing_final_type",
+    });
+    expect(await accept("POSTER")).toEqual({ ok: false, reason: "no_theme" });
+
+    const [row] = await getDb()
+      .select({ status: abstracts.status, code: abstracts.code })
+      .from(abstracts)
+      .where(eq(abstracts.id, abstract.id));
+    expect(row).toEqual({ status: "SUBMITTED", code: null });
+    expect(await auditRowsOf("Abstract", abstract.id)).toEqual([]);
   });
 });

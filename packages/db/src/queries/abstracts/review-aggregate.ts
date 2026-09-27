@@ -5,6 +5,7 @@
  */
 import { and, eq, notInArray } from "drizzle-orm";
 import { FINAL_STATUSES } from "@app/contracts";
+import { summarizeScores } from "@app/shared";
 import type { DbExecutor } from "../../client";
 import { abstractReviews, abstracts } from "../../schema/abstracts";
 import type { AbstractRow } from "./shared";
@@ -34,9 +35,7 @@ export async function computeReviewAggregate(
     .map((r) => r.score)
     .filter((s): s is number => s !== null);
   const reviewCount = assignments.filter((r) => r.scoredAt !== null).length;
-  const averageScore = scores.length
-    ? scores.reduce((sum, s) => sum + s, 0) / scores.length
-    : null;
+  const averageScore = summarizeScores(scores).average;
   const allScored =
     assignments.length > 0 && assignments.every((r) => r.scoredAt !== null);
   return { averageScore, reviewCount, allScored, scores };

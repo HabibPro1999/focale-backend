@@ -298,7 +298,6 @@ export interface SubmitAbstractTxnParams {
   themeIds: string[];
   revisionSnapshot: unknown;
   ip?: string;
-  submissionAckDedupeKey: string;
 }
 
 export async function submitAbstractTxn(
@@ -311,42 +310,15 @@ export async function submitAbstractTxn(
         .values({
           id: params.id,
           eventId: params.eventId,
-          authorFirstName: params.authorFirstName,
-          authorLastName: params.authorLastName,
-          authorAffiliation: params.authorAffiliation,
-          authorEmail: params.authorEmail,
-          authorEmailNormalized: params.authorEmailNormalized,
-          authorPhone: params.authorPhone,
-          requestedType: params.requestedType,
-          content: params.content,
-          coAuthors: params.coAuthors,
-          additionalFieldsData: params.additionalFieldsData,
+          ...formColumns(params),
           status: "SUBMITTED",
           editToken: params.editToken,
           linkBaseUrl: params.linkBaseUrl,
-          registrationId: params.registrationId,
         })
         .returning({ createdAt: abstracts.createdAt });
 
-      await tx.insert(abstractRevisions).values({
-        abstractId: params.id,
-        revisionNo: 1,
-        snapshot: params.revisionSnapshot,
-        editedBy: "PUBLIC",
-        editedIpAddress: params.ip,
-        content: params.content,
-        coAuthors: params.coAuthors,
-        additionalFieldsData: params.additionalFieldsData,
-      });
-
-      if (params.themeIds.length > 0) {
-        await tx.insert(abstractThemeLinks).values(
-          params.themeIds.map((themeId) => ({
-            abstractId: params.id,
-            themeId,
-          })),
-        );
-      }
+      await insertRevision(tx, params, 1);
+      await insertThemeLinks(tx, params.id, params.themeIds);
 
       await insertAuditLog(
         {
@@ -362,7 +334,7 @@ export async function submitAbstractTxn(
       await enqueueAbstractEmailOutboxEvent(
         tx,
         { trigger: "ABSTRACT_SUBMISSION_ACK", abstractId: params.id },
-        params.submissionAckDedupeKey,
+        `email:abstract:ABSTRACT_SUBMISSION_ACK:${params.id}`,
       );
 
       return { ok: true as const, createdAt: created.createdAt };
@@ -398,6 +370,54 @@ export type EditAbstractResult =
   | { ok: true }
   | { ok: false; reason: "duplicate_email" | "not_editable" };
 
+type PublicWriteParams = SubmitAbstractTxnParams | EditAbstractTxnParams;
+
+/** The form-supplied columns submit and edit both write. */
+function formColumns(params: PublicWriteParams) {
+  return {
+    authorFirstName: params.authorFirstName,
+    authorLastName: params.authorLastName,
+    authorAffiliation: params.authorAffiliation,
+    authorEmail: params.authorEmail,
+    authorEmailNormalized: params.authorEmailNormalized,
+    authorPhone: params.authorPhone,
+    requestedType: params.requestedType,
+    content: params.content,
+    coAuthors: params.coAuthors,
+    additionalFieldsData: params.additionalFieldsData,
+    registrationId: params.registrationId,
+  };
+}
+
+/** The revision a public submit or edit records, numbered by the caller. */
+async function insertRevision(
+  tx: DbExecutor,
+  params: PublicWriteParams,
+  revisionNo: number,
+): Promise<void> {
+  await tx.insert(abstractRevisions).values({
+    abstractId: params.id,
+    revisionNo,
+    snapshot: params.revisionSnapshot,
+    editedBy: "PUBLIC",
+    editedIpAddress: params.ip,
+    content: params.content,
+    coAuthors: params.coAuthors,
+    additionalFieldsData: params.additionalFieldsData,
+  });
+}
+
+async function insertThemeLinks(
+  tx: DbExecutor,
+  abstractId: string,
+  themeIds: string[],
+): Promise<void> {
+  if (themeIds.length === 0) return;
+  await tx
+    .insert(abstractThemeLinks)
+    .values(themeIds.map((themeId) => ({ abstractId, themeId })));
+}
+
 export async function editAbstractTxn(
   params: EditAbstractTxnParams,
 ): Promise<EditAbstractResult> {
@@ -420,17 +440,7 @@ export async function editAbstractTxn(
       const [edited] = await tx
         .update(abstracts)
         .set({
-          authorFirstName: params.authorFirstName,
-          authorLastName: params.authorLastName,
-          authorAffiliation: params.authorAffiliation,
-          authorEmail: params.authorEmail,
-          authorEmailNormalized: params.authorEmailNormalized,
-          authorPhone: params.authorPhone,
-          requestedType: params.requestedType,
-          content: params.content,
-          coAuthors: params.coAuthors,
-          additionalFieldsData: params.additionalFieldsData,
-          registrationId: params.registrationId,
+          ...formColumns(params),
           lastEditedAt: params.lastEditedAt,
           contentVersion: sql`${abstracts.contentVersion} + 1`,
         })
@@ -445,28 +455,12 @@ export async function editAbstractTxn(
         return { ok: false, reason: "not_editable" };
       }
 
-      await tx.insert(abstractRevisions).values({
-        abstractId: params.id,
-        revisionNo: nextRevisionNo,
-        snapshot: params.revisionSnapshot,
-        editedBy: "PUBLIC",
-        editedIpAddress: params.ip,
-        content: params.content,
-        coAuthors: params.coAuthors,
-        additionalFieldsData: params.additionalFieldsData,
-      });
+      await insertRevision(tx, params, nextRevisionNo);
 
       await tx
         .delete(abstractThemeLinks)
         .where(eq(abstractThemeLinks.abstractId, params.id));
-      if (params.themeIds.length > 0) {
-        await tx.insert(abstractThemeLinks).values(
-          params.themeIds.map((themeId) => ({
-            abstractId: params.id,
-            themeId,
-          })),
-        );
-      }
+      await insertThemeLinks(tx, params.id, params.themeIds);
 
       await insertAuditLog(
         {

@@ -285,7 +285,7 @@ export class AbstractsService {
       );
     }
 
-    const content = validateAbstractContent(body.content as AbstractContent, config);
+    const content = validateAbstractContent(body.content, config);
     await validateThemes(body.themeIds, config.id, config.maxThemesPerAbstract);
     assertPublicLinkBaseUrlAllowed(
       body.linkBaseUrl,
@@ -329,7 +329,6 @@ export class AbstractsService {
         body.themeIds,
       ),
       ip,
-      submissionAckDedupeKey: `email:abstract:ABSTRACT_SUBMISSION_ACK:${abstractId}`,
     });
 
     if (!result.ok) {
@@ -442,7 +441,7 @@ export class AbstractsService {
       );
     }
 
-    const content = validateAbstractContent(body.content as AbstractContent, config);
+    const content = validateAbstractContent(body.content, config);
     // M14: the abstract's own (possibly now-deactivated) themes stay valid on edit.
     const currentThemeIds = await findAbstractThemeIds(id);
     await validateThemes(

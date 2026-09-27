@@ -10,6 +10,7 @@ export {
   enqueueAbstractEmailOutboxEvent,
   findEventClientId,
   findEventName,
+  type AbstractConfigInsert,
   type AbstractConfigRow,
   type AbstractEmailOutboxPayload,
   type AbstractMembershipRow,

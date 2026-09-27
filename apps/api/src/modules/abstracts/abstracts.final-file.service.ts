@@ -15,7 +15,7 @@ import { assertAbstractToken } from "./abstracts.token";
 import { AbstractsService } from "./abstracts.service";
 import { assertAbstractModuleEnabled } from "./abstracts.gates";
 
-type AbstractFileKind = "PDF" | "PPT" | "PPTX";
+type AbstractFileKind = NonNullable<AbstractForFinalFile["finalFileKind"]>;
 
 export interface FinalFileInput {
   buffer: Buffer;
