@@ -14,11 +14,7 @@ import {
   sum,
   type SQL,
 } from "drizzle-orm";
-import {
-  getSkip,
-  paginate,
-  type PaginatedResult,
-} from "@app/shared";
+import type { OffsetPagination } from "@app/shared";
 import type {
   ListSponsorshipsQuery,
   PriceBreakdown,
@@ -99,10 +95,10 @@ function withSponsorshipBatch<T extends PgSelect>(query: T, where: SQL | undefin
 
 export async function listSponsorships(
   eventId: string,
-  query: ListSponsorshipsQuery,
+  query: Omit<ListSponsorshipsQuery, "page"> & OffsetPagination,
   db: DbExecutor = getDb(),
-): Promise<PaginatedResult<SponsorshipListItem> & { stats: SponsorshipStats }> {
-  const { page, limit, status, search, sortBy, sortOrder } = query;
+): Promise<{ data: SponsorshipListItem[]; total: number; stats: SponsorshipStats }> {
+  const { offset, limit, status, search, sortBy, sortOrder } = query;
   const where = buildSponsorshipWhere(eventId, { status, search });
   const dir = sortOrder === "asc" ? asc : desc;
   const orderCol =
@@ -111,7 +107,6 @@ export async function listSponsorships(
       : sortBy === "totalAmount"
         ? sponsorships.totalAmount
         : sponsorships.createdAt;
-  const skip = getSkip({ page, limit });
 
   const [rows, totalRows, statsRaw] = await Promise.all([
     withSponsorshipBatch(db.select({
@@ -123,7 +118,7 @@ export async function listSponsorships(
       }).from(sponsorships).$dynamic(), where)
       .orderBy(dir(orderCol))
       .limit(limit)
-      .offset(skip),
+      .offset(offset),
     withSponsorshipBatch(db.select({ value: count() }).from(sponsorships).$dynamic(), where),
     withSponsorshipBatch(db.select({
         status: sponsorships.status,
@@ -185,7 +180,7 @@ export async function listSponsorships(
     else if (row.status === "CANCELLED") stats.cancelled = { count: c, amount };
   }
 
-  return { ...paginate(data, total, { page, limit }), stats };
+  return { data, total, stats };
 }
 
 // ============================================================================

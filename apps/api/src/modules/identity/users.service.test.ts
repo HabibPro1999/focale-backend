@@ -487,9 +487,14 @@ describe("listUsers", () => {
       hasPrev: false,
     });
     expect(dbm.listUsers).toHaveBeenCalledWith(
-      { role: undefined, clientId: undefined, active: undefined, search: undefined },
-      0,
-      20,
+      {
+        role: undefined,
+        clientId: undefined,
+        active: undefined,
+        search: undefined,
+        offset: 0,
+        limit: 20,
+      },
     );
   });
 
@@ -509,9 +514,9 @@ describe("listUsers", () => {
         clientId: "client-123",
         active: true,
         search: "test",
+        offset: 0,
+        limit: 20,
       },
-      0,
-      20,
     );
   });
 
@@ -530,7 +535,9 @@ describe("listUsers", () => {
       hasNext: true,
       hasPrev: true,
     });
-    expect(dbm.listUsers).toHaveBeenCalledWith(expect.anything(), 5, 5);
+    expect(dbm.listUsers).toHaveBeenCalledWith(
+      expect.objectContaining({ offset: 5, limit: 5 }),
+    );
   });
 
   it("handles an empty result set (totalPages 0)", async () => {

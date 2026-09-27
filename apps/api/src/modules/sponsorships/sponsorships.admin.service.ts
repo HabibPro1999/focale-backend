@@ -11,7 +11,9 @@ import {
 import {
   calculateApplicableAmount,
   calculateSettlement,
+  getSkip,
   normalizeSponsorshipCode,
+  paginate,
 } from "@app/shared";
 import {
   changeSponsorshipCoverageTxn,
@@ -44,7 +46,7 @@ import { buildLinkedSponsorshipContext } from "@app/integrations";
 import { assertEventWritable } from "../events";
 import { assertModuleEnabledForClient } from "../clients/module-gates";
 import { AccessService } from "../access/access.service";
-import { AppException } from "../../core/app-exception";
+import { AppException, notFound } from "../../core/app-exception";
 import {
   detectCoverageOverlap,
   validateCoveredAccessTimeOverlap,
@@ -97,8 +99,12 @@ export class SponsorshipsAdminService {
   // Reads
   // ==========================================================================
 
-  listSponsorships(eventId: string, query: ListSponsorshipsQuery) {
-    return listSponsorships(eventId, query);
+  async listSponsorships(eventId: string, query: ListSponsorshipsQuery) {
+    const { data, total, stats } = await listSponsorships(eventId, {
+      ...query,
+      offset: getSkip(query),
+    });
+    return { ...paginate(data, total, query), stats };
   }
 
   getSponsorshipById(id: string) {
@@ -185,7 +191,7 @@ export class SponsorshipsAdminService {
       ? await findSponsorshipForMutation(tx, id)
       : null;
     if (!sponsorship) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Sponsorship not found", 404);
+      throw notFound("Sponsorship not found");
     }
     assertEventWritable(sponsorship.event);
     assertModuleEnabledForClient(sponsorship.event.client, MODULE);
@@ -420,7 +426,7 @@ export class SponsorshipsAdminService {
       ? await findSponsorshipForLink(tx, sponsorshipId)
       : null;
     if (!sponsorship) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Sponsorship not found", 404);
+      throw notFound("Sponsorship not found");
     }
     assertEventWritable(sponsorship.event);
     assertModuleEnabledForClient(sponsorship.event.client, MODULE);
@@ -600,7 +606,7 @@ export class SponsorshipsAdminService {
         ? await findSponsorshipForMutation(tx, sponsorshipId)
         : null;
       if (!sponsorship) {
-        throw new AppException(ErrorCodes.NOT_FOUND, "Sponsorship is not linked to this registration", 404);
+        throw notFound("Sponsorship is not linked to this registration");
       }
       assertEventWritable(sponsorship.event);
       assertModuleEnabledForClient(sponsorship.event.client, MODULE);

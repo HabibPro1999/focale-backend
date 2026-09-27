@@ -37,20 +37,23 @@ import {
 } from "@app/db";
 import { newId, paginate, getSkip, pickDefined, type PaginatedResult } from "@app/shared";
 import { logger } from "../../core/logger.service";
-import { AppException } from "../../core/app-exception";
+import {
+  AppException,
+  badRequest,
+  conflict,
+  notFound,
+} from "../../core/app-exception";
 
 function throwModeChangeFailure(
   reason: "not_found" | "type_changed" | "not_sponsor" | "locked",
   typeError: { code: typeof ErrorCodes.VALIDATION_ERROR | typeof ErrorCodes.BAD_REQUEST; message: string },
 ): never {
-  if (reason === "not_found") throw new AppException(ErrorCodes.NOT_FOUND, "Form not found", 404);
+  if (reason === "not_found") throw notFound("Form not found");
   if (reason === "type_changed" || reason === "not_sponsor") {
     throw new AppException(typeError.code, typeError.message, 400);
   }
-  throw new AppException(
-    ErrorCodes.CONFLICT,
+  throw conflict(
     "Cannot change sponsorship mode after sponsorship batches have been submitted",
-    409,
   );
 }
 
@@ -147,11 +150,7 @@ export function createDefaultSponsorSchema(): SponsorFormSchemaJson {
 function assertRegistrationFormSchema(schema: unknown): FormSchemaJson {
   const result = FormSchemaJsonSchema.safeParse(schema);
   if (!result.success) {
-    throw new AppException(
-      ErrorCodes.VALIDATION_ERROR,
-      "Invalid registration form schema structure",
-      400,
-    );
+    throw badRequest("Invalid registration form schema structure");
   }
   return result.data;
 }
@@ -165,14 +164,12 @@ export class FormsService {
     const { eventId, name, schema, successTitle, successMessage, successTranslations } = input;
 
     if (!(await eventExists(eventId))) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
 
     if (await formExistsByEventAndType(eventId, "REGISTRATION")) {
-      throw new AppException(
-        ErrorCodes.CONFLICT,
+      throw conflict(
         "Event already has a form. Update the existing form instead.",
-        409,
       );
     }
 
@@ -190,7 +187,7 @@ export class FormsService {
       successTranslations: successTranslations ?? null,
     });
     if (!result.ok) {
-      throw new AppException(ErrorCodes.CONFLICT, "Resource already exists", 409);
+      throw conflict("Resource already exists");
     }
     return result.form;
   }
@@ -216,11 +213,13 @@ export class FormsService {
 
   async listForms(query: ListFormsQuery): Promise<PaginatedResult<Form>> {
     const { page, limit, eventId, search, type } = query;
-    const { data, total } = await dbListForms(
-      { eventId, type, search },
-      getSkip({ page, limit }),
+    const { data, total } = await dbListForms({
+      eventId,
+      type,
+      search,
+      offset: getSkip({ page, limit }),
       limit,
-    );
+    });
     return paginate(data, total, { page, limit });
   }
 
@@ -230,7 +229,7 @@ export class FormsService {
   async updateForm(id: string, input: UpdateFormInput): Promise<Form> {
     const form = await findFormById(id);
     if (!form) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Form not found", 404);
+      throw notFound("Form not found");
     }
 
     const patch: FormUpdatePatch = pickDefined(input, [
@@ -242,11 +241,7 @@ export class FormsService {
       if (form.type === "SPONSOR") {
         const parsed = SponsorFormSchemaJsonSchema.safeParse(input.schema);
         if (!parsed.success) {
-          throw new AppException(
-            ErrorCodes.VALIDATION_ERROR,
-            "Invalid sponsor form schema structure",
-            400,
-          );
+          throw badRequest("Invalid sponsor form schema structure");
         }
         nextSchema = parsed.data;
       } else {
@@ -306,7 +301,7 @@ export class FormsService {
   ): Promise<Form> {
     const form = await findFormById(formId);
     if (!form) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Form not found", 404);
+      throw notFound("Form not found");
     }
     if (form.type !== "SPONSOR") {
       throw new AppException(
@@ -340,14 +335,12 @@ export class FormsService {
   async deleteForm(id: string): Promise<void> {
     const form = await findFormById(id);
     if (!form) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Form not found", 404);
+      throw notFound("Form not found");
     }
     const registrationCount = await countRegistrationsByFormId(id);
     if (registrationCount > 0) {
-      throw new AppException(
-        ErrorCodes.CONFLICT,
+      throw conflict(
         `Cannot delete form with ${registrationCount} existing registration(s). Delete or move registrations first.`,
-        409,
       );
     }
     await deleteFormById(id);
@@ -358,13 +351,11 @@ export class FormsService {
   // --------------------------------------------------------------------------
   async createSponsorForm(eventId: string, name?: string): Promise<Form> {
     if (!(await eventExists(eventId))) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
     if (await formExistsByEventAndType(eventId, "SPONSOR")) {
-      throw new AppException(
-        ErrorCodes.CONFLICT,
+      throw conflict(
         "Event already has a sponsor form. Update the existing form instead.",
-        409,
       );
     }
 
@@ -377,7 +368,7 @@ export class FormsService {
       active: true,
     });
     if (!result.ok) {
-      throw new AppException(ErrorCodes.CONFLICT, "Resource already exists", 409);
+      throw conflict("Resource already exists");
     }
     return result.form;
   }

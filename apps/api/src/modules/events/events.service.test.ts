@@ -9,6 +9,7 @@ vi.mock("@app/db", async (importOriginal) => ({
   pgErrorCode: (await importOriginal<typeof import("@app/db")>()).pgErrorCode,
   getDb: vi.fn(),
   withSerializableTxn: vi.fn(),
+  withTxn: vi.fn(),
   clientExistsById: vi.fn(),
   countRegistrationsTx: vi.fn(),
   deleteEmailTemplatesByEventTx: vi.fn(),
@@ -98,6 +99,9 @@ function createManyMockEvents(n: number) {
 const transactionMock = vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn({}));
 function useTransaction() {
   vi.mocked(db.getDb).mockReturnValue({ transaction: transactionMock } as never);
+  vi.mocked(db.withTxn).mockImplementation((fn) =>
+    db.getDb().transaction(fn as never, { isolationLevel: "read committed" } as never),
+  );
   // withSerializableTxn is now a db-package helper; mirror its real behaviour
   // (getDb().transaction(fn, { isolationLevel: "serializable" })) so the
   // serializable-isolation assertion on transactionMock still holds.
@@ -526,11 +530,11 @@ describe("EventsService", () => {
       expect(result.meta.hasNext).toBe(false);
     });
 
-    it("forwards page/limit for skip", async () => {
+    it("computes offset while retaining the page response", async () => {
       vi.mocked(db.listEvents).mockResolvedValue({ data: [], total: 0 });
       await service.listEvents({ page: 3, limit: 10 });
       expect(db.listEvents).toHaveBeenCalledWith(
-        expect.objectContaining({ page: 3, limit: 10 }),
+        expect.objectContaining({ offset: 20, limit: 10 }),
       );
     });
   });

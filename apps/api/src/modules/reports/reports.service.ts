@@ -30,7 +30,7 @@ import type {
   EventAnalyticsResponse,
   AccessRegistrantsResponse,
 } from "@app/contracts";
-import { AppException } from "../../core/app-exception";
+import { AppException, notFound } from "../../core/app-exception";
 import { writeChunk, type ExportDownload } from "../../core/exports/stream-io";
 import {
   XLSX_CONTENT_TYPE,
@@ -218,7 +218,7 @@ export class ReportsService {
       return { event: found, formDataKeys: keys };
     });
     if (!event) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
 
     const filename = `${event.slug}-registrations-${formatFileDate()}`;

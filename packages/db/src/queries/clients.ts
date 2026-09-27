@@ -1,4 +1,5 @@
 import { and, count, desc, eq, ilike, or, type SQL } from "drizzle-orm";
+import type { OffsetPagination } from "@app/shared";
 import { getDb, type DbExecutor } from "../client";
 import { clients, users } from "../schema/users-clients";
 import { events } from "../schema/events-access";
@@ -63,9 +64,7 @@ export async function updateClientRow(
   return row;
 }
 
-export type ListClientsArgs = {
-  skip: number;
-  limit: number;
+export type ListClientsArgs = OffsetPagination & {
   active?: boolean;
   search?: string;
 };
@@ -96,7 +95,7 @@ export async function listClientsPage(
       .where(where)
       .orderBy(desc(clients.createdAt))
       .limit(args.limit)
-      .offset(args.skip),
+      .offset(args.offset),
     db.select({ value: count() }).from(clients).where(where),
   ]);
 

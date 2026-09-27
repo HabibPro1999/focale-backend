@@ -33,7 +33,7 @@ import { assertEventWritable } from "../events";
 import {
   assertModuleEnabledForClient,
 } from "../clients/module-gates";
-import { AppException } from "../../core/app-exception";
+import { AppException, badRequest } from "../../core/app-exception";
 import { validateAdminPaymentOverride } from "./payment-transitions";
 import { RegistrationSideEffects } from "./registrations.side-effects";
 import { assertSelfEditAllowed, evaluateEditPolicy } from "./edit-policy";
@@ -439,11 +439,7 @@ export class RegistrationRepricer {
   ): Promise<EditRegistrationPublicResult> {
     const expectedUpdatedAt = new Date(input.expectedUpdatedAt);
     if (Number.isNaN(expectedUpdatedAt.getTime())) {
-      throw new AppException(
-        ErrorCodes.VALIDATION_ERROR,
-        "Invalid expectedUpdatedAt precondition",
-        400,
-      );
+      throw badRequest("Invalid expectedUpdatedAt precondition");
     }
 
     let newPriceBreakdown!: PriceBreakdown;

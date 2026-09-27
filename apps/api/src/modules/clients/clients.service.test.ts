@@ -245,7 +245,7 @@ describe("ClientsService", () => {
       const result = await service.list({ page: 2, limit: 10 });
 
       expect(db.listClientsPage).toHaveBeenCalledWith({
-        skip: 10,
+        offset: 10,
         limit: 10,
         active: undefined,
         search: undefined,
@@ -264,7 +264,7 @@ describe("ClientsService", () => {
       db.listClientsPage.mockResolvedValue({ data: [], total: 5 });
       await service.list({ page: 1000, limit: 10 });
       expect(db.listClientsPage).toHaveBeenCalledWith(
-        expect.objectContaining({ skip: 9990 }),
+        expect.objectContaining({ offset: 9990 }),
       );
     });
 
@@ -272,7 +272,7 @@ describe("ClientsService", () => {
       db.listClientsPage.mockResolvedValue({ data: [], total: 0 });
       await service.list({ page: 1, limit: 10, active: true, search: "acme" });
       expect(db.listClientsPage).toHaveBeenCalledWith({
-        skip: 0,
+        offset: 0,
         limit: 10,
         active: true,
         search: "acme",

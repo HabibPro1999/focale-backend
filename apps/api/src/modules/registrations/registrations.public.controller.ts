@@ -21,7 +21,7 @@ import {
   PublicRegistrationEditResponseSchema,
   PublicRegistrationForEditResponseSchema,
 } from "@app/contracts";
-import { AppException } from "../../core/app-exception";
+import { AppException, badRequest } from "../../core/app-exception";
 import { readSingleFile, type MultipartRequest } from "../../core/multipart";
 import { ResponseContract } from "../../core/response-contract";
 import { RegistrationsService } from "./registrations.service";
@@ -146,8 +146,7 @@ export class RegistrationEditPublicController {
   ) {
     await this.requireToken(registrationId, headerToken, token);
     const file = await readSingleFile(req, {
-      missingFile: () =>
-        new AppException(ErrorCodes.VALIDATION_ERROR, "No file uploaded", 400),
+      missingFile: () => badRequest("No file uploaded"),
     });
     return this.proofs.uploadPaymentProof(registrationId, file);
   }

@@ -5,7 +5,7 @@ import {
   type SettleRegistrationResult,
 } from "@app/db";
 import { toAccessAppException } from "../access/access.service";
-import { AppException } from "../../core/app-exception";
+import { AppException, notFound } from "../../core/app-exception";
 
 // Helpers shared by the public batch intake (sponsorships.public.service.ts)
 // and the admin operations (sponsorships.admin.service.ts). Nothing here
@@ -22,7 +22,7 @@ export function toSponsorshipAppException(err: unknown): unknown {
   const { details } = err;
   switch (err.reason) {
     case "SPONSORSHIP_NOT_FOUND":
-      return new AppException(ErrorCodes.NOT_FOUND, "Sponsorship not found", 404);
+      return notFound("Sponsorship not found");
     case "SPONSORSHIP_CANCELLED":
       return new AppException(ErrorCodes.BAD_REQUEST, "Cannot link a cancelled sponsorship", 400, {
         code: "SPONSORSHIP_CANCELLED",
@@ -40,7 +40,7 @@ export function toSponsorshipAppException(err: unknown): unknown {
         code: "SPONSORSHIP_ALREADY_LINKED",
       });
     case "NOT_LINKED":
-      return new AppException(ErrorCodes.NOT_FOUND, "Sponsorship is not linked to this registration", 404);
+      return notFound("Sponsorship is not linked to this registration");
     case "NOT_APPLICABLE":
       return new AppException(
         ErrorCodes.SPONSORSHIP_NOT_APPLICABLE,

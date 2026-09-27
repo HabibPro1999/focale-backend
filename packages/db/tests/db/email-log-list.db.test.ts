@@ -52,7 +52,7 @@ describe.runIf(dbTestsEnabled())("db tier: listEventEmailLogs (3.6b)", () => {
 
   it("lists the event's emails once each, newest first, with the template name", async () => {
     const { event } = await setup();
-    const result = await listEventEmailLogs(event.id, { skip: 0, limit: 50 });
+    const result = await listEventEmailLogs(event.id, { offset: 0, limit: 50 });
 
     expect(result.data.map((row) => row.subject)).toEqual(["tpl-other-reg", "both", "tpl-only", "reg-only"]);
     expect(result.data.find((row) => row.subject === "both")).toMatchObject({ templateName: "Welcome" });
@@ -63,8 +63,8 @@ describe.runIf(dbTestsEnabled())("db tier: listEventEmailLogs (3.6b)", () => {
   it("pages across both branches", async () => {
     const { event } = await setup();
     const pages = [];
-    for (const skip of [0, 2]) {
-      const page = await listEventEmailLogs(event.id, { skip, limit: 2 });
+    for (const offset of [0, 2]) {
+      const page = await listEventEmailLogs(event.id, { offset, limit: 2 });
       pages.push(page.data.map((row) => row.subject));
       expect(page.total).toBe(4);
     }
@@ -72,7 +72,7 @@ describe.runIf(dbTestsEnabled())("db tier: listEventEmailLogs (3.6b)", () => {
       ["tpl-other-reg", "both"],
       ["tpl-only", "reg-only"],
     ]);
-    await expect(listEventEmailLogs(event.id, { skip: 4, limit: 2 })).resolves.toMatchObject({ data: [], total: 4 });
+    await expect(listEventEmailLogs(event.id, { offset: 4, limit: 2 })).resolves.toMatchObject({ data: [], total: 4 });
   });
 
   it("orders rows with the same queued_at by id", async () => {
@@ -84,29 +84,29 @@ describe.runIf(dbTestsEnabled())("db tier: listEventEmailLogs (3.6b)", () => {
       await seedLog("t1", 1, { templateId: template.id }),
       await seedLog("r2", 1, { registrationId: registration.id }),
     ];
-    const first = await listEventEmailLogs(event.id, { skip: 0, limit: 2 });
-    const second = await listEventEmailLogs(event.id, { skip: 2, limit: 2 });
+    const first = await listEventEmailLogs(event.id, { offset: 0, limit: 2 });
+    const second = await listEventEmailLogs(event.id, { offset: 2, limit: 2 });
     const listed = [...first.data, ...second.data].map((row) => row.id);
     expect(listed).toEqual([...ids].sort().reverse());
   });
 
   it("filters on status and trigger", async () => {
     const { event } = await setup();
-    const uncertain = await listEventEmailLogs(event.id, { skip: 0, limit: 50, status: "UNCERTAIN" });
+    const uncertain = await listEventEmailLogs(event.id, { offset: 0, limit: 50, status: "UNCERTAIN" });
     expect(uncertain.data.map((row) => row.subject)).toEqual(["tpl-only"]);
     expect(uncertain.total).toBe(1);
     await expect(
-      listEventEmailLogs(event.id, { skip: 0, limit: 50, trigger: "PAYMENT_CONFIRMED" }),
+      listEventEmailLogs(event.id, { offset: 0, limit: 50, trigger: "PAYMENT_CONFIRMED" }),
     ).resolves.toMatchObject({ data: [], total: 0 });
   });
 
   it("caps the count", async () => {
     const { event } = await setup();
-    await expect(listEventEmailLogs(event.id, { skip: 0, limit: 50, countCap: 3 })).resolves.toMatchObject({
+    await expect(listEventEmailLogs(event.id, { offset: 0, limit: 50, countCap: 3 })).resolves.toMatchObject({
       total: 3,
       totalCapped: true,
     });
-    await expect(listEventEmailLogs(event.id, { skip: 0, limit: 50, countCap: 4 })).resolves.toMatchObject({
+    await expect(listEventEmailLogs(event.id, { offset: 0, limit: 50, countCap: 4 })).resolves.toMatchObject({
       total: 4,
       totalCapped: false,
     });

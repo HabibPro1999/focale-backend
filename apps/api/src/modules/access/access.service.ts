@@ -46,7 +46,7 @@ import {
   getRegistrationCoveredAccessIds,
   enqueueAccessDrops,
 } from "@app/db";
-import { AppException } from "../../core/app-exception";
+import { AppException, badRequest, notFound } from "../../core/app-exception";
 import { groupAccess } from "./access-grouping";
 import { validateSelections } from "./access-validation";
 
@@ -187,7 +187,7 @@ export class AccessService {
 
     const event = await getEventDatesForAccess(eventId);
     if (!event) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
 
     const dateValidation = validateAccessDatesAgainstEvent(
@@ -304,11 +304,7 @@ export class AccessService {
       mergedDates.endsAt &&
       mergedDates.startsAt > mergedDates.endsAt
     ) {
-      throw new AppException(
-        ErrorCodes.VALIDATION_ERROR,
-        "Access start time must be before end time",
-        400,
-      );
+      throw badRequest("Access start time must be before end time");
     }
 
     await this.assertValidOptionConditions(

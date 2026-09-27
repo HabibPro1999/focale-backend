@@ -10,7 +10,7 @@ import {
   type DbExecutor,
 } from "@app/db";
 import { AccessService } from "../access/access.service";
-import { AppException } from "../../core/app-exception";
+import { AppException, badRequest, notFound } from "../../core/app-exception";
 
 /**
  * What a registration write does besides its own row, inside the caller's
@@ -92,7 +92,7 @@ export class RegistrationSideEffects {
     if (await casIncrementRegisteredTx(exec, eventId)) return;
     const info = await getEventCounterInfoTx(exec, eventId);
     if (!info) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
     if (info.status !== "OPEN") {
       throw new AppException(
@@ -111,13 +111,9 @@ export class RegistrationSideEffects {
     if (await casDecrementRegisteredTx(exec, eventId)) return;
     const info = await getEventCounterInfoTx(exec, eventId);
     if (!info) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
-    throw new AppException(
-      ErrorCodes.VALIDATION_ERROR,
-      "Event registered count is already zero",
-      400,
-    );
+    throw badRequest("Event registered count is already zero");
   }
 
   audit(

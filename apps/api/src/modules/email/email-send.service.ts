@@ -29,7 +29,7 @@ import {
   resendUncertainEmail,
   sendEmailNow,
 } from "@app/integrations";
-import { AppException } from "../../core/app-exception";
+import { AppException, conflict, notFound } from "../../core/app-exception";
 
 /** Minimal event shape the send paths need (subset of EventWithPricing). */
 export interface SendEventContext {
@@ -239,25 +239,15 @@ export class EmailSendService {
     }
     switch (result.reason) {
       case "not_found":
-        throw new AppException(ErrorCodes.NOT_FOUND, "Email log not found", 404);
+        throw notFound("Email log not found");
       case "not_uncertain":
-        throw new AppException(
-          ErrorCodes.CONFLICT,
-          "Only an UNCERTAIN email can be resent",
-          409,
-        );
+        throw conflict("Only an UNCERTAIN email can be resent");
       case "not_resendable":
-        throw new AppException(
-          ErrorCodes.CONFLICT,
+        throw conflict(
           "This email cannot be resent from its log; send it again from where it was sent",
-          409,
         );
       case "already_active":
-        throw new AppException(
-          ErrorCodes.CONFLICT,
-          "An active email already covers this one",
-          409,
-        );
+        throw conflict("An active email already covers this one");
     }
   }
 

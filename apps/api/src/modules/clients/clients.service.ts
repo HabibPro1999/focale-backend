@@ -89,9 +89,9 @@ export class ClientsService {
   /** List clients with pagination + optional active/search filters (createdAt desc). */
   async list(query: ListClientsQuery): Promise<PaginatedResult<ClientRow>> {
     const { page, limit, active, search } = query;
-    const skip = getSkip({ page, limit });
+    const offset = getSkip({ page, limit });
     const { data, total } = await listClientsPage({
-      skip,
+      offset,
       limit,
       active,
       search,

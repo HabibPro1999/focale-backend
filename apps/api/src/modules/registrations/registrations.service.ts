@@ -45,7 +45,7 @@ import { assertEventWritable } from "../events";
 import {
   assertModuleEnabledForClient,
 } from "../clients/module-gates";
-import { AppException } from "../../core/app-exception";
+import { AppException, notFound } from "../../core/app-exception";
 import { getRegistrationTableColumns } from "./table-columns";
 import { RegistrationSideEffects } from "./registrations.side-effects";
 import { evaluateEditPolicy } from "./edit-policy";
@@ -112,9 +112,9 @@ export class RegistrationsService {
     eventId: string,
     query: ListRegistrationsQuery,
   ): Promise<PaginatedResult<AdminView<RegistrationWithRelations>> & { stats: RegistrationStats }> {
-    const { rows, total, stats: statsRaw } = await listRegistrationRows(
+    const { data: rows, total, stats: statsRaw } = await listRegistrationRows(
       eventId,
-      query,
+      { ...query, offset: getSkip(query) },
     );
 
     // One stat row per payment status. `amountDue` is summed per registration
@@ -358,11 +358,7 @@ export class RegistrationsService {
       );
     }
     if (!source.editToken) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "This registration has no self-edit link",
-        404,
-      );
+      throw notFound("This registration has no self-edit link");
     }
     await insertAuditLog({
       entityType: "Registration",
@@ -389,11 +385,10 @@ export class RegistrationsService {
     query: ListRegistrationAuditLogsQuery,
   ): Promise<PaginatedResult<RegistrationAuditLog>> {
     const { page, limit } = query;
-    const skip = getSkip({ page, limit });
-    const { rows, total } = await listRegistrationAuditLogRows(registrationId, {
-      skip,
-      limit,
-    });
+    const { data: rows, total } = await listRegistrationAuditLogRows(
+      registrationId,
+      { offset: getSkip({ page, limit }), limit },
+    );
 
     const userIds = [
       ...new Set(
@@ -431,11 +426,10 @@ export class RegistrationsService {
     query: ListRegistrationEmailLogsQuery,
   ): Promise<PaginatedResult<RegistrationEmailLog>> {
     const { page, limit } = query;
-    const skip = getSkip({ page, limit });
-    const { rows, total } = await listRegistrationEmailLogRows(registrationId, {
-      skip,
-      limit,
-    });
+    const { data: rows, total } = await listRegistrationEmailLogRows(
+      registrationId,
+      { offset: getSkip({ page, limit }), limit },
+    );
 
     const enriched: RegistrationEmailLog[] = rows.map((log) => ({
       id: log.id,

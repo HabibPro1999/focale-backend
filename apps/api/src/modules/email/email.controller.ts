@@ -20,7 +20,7 @@ import { getAvailableVariables, type VariableDefinition } from "@app/integration
 import type { PaginatedResult } from "@app/shared";
 import { Auth } from "../../core/auth/auth.decorator";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
-import { AppException } from "../../core/app-exception";
+import { AppException, notFound } from "../../core/app-exception";
 import { EmailTemplateScoped, EventScoped, ScopedEvent } from "../tenancy";
 import { EmailTemplateService } from "./email-template.service";
 import { EmailSendService } from "./email-send.service";
@@ -55,7 +55,7 @@ export class EmailController {
   private async eventForSend(eventId: string): Promise<EventWithPricing> {
     const event = await getEventWithPricing(eventId);
     if (!event) {
-      throw new AppException(ErrorCodes.NOT_FOUND, "Event not found", 404);
+      throw notFound("Event not found");
     }
     return event;
   }
@@ -63,11 +63,7 @@ export class EmailController {
   private async template(templateId: string) {
     const template = await this.templates.getById(templateId);
     if (!template) {
-      throw new AppException(
-        ErrorCodes.NOT_FOUND,
-        "Email template not found",
-        404,
-      );
+      throw notFound("Email template not found");
     }
     return template;
   }

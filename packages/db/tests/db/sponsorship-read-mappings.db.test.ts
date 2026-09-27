@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { ListSponsorshipsQuerySchema, type PriceBreakdown } from "@app/contracts";
+import { getSkip } from "@app/shared";
 import {
   findEventForBatch,
   findRegistrationForLink,
@@ -178,13 +179,19 @@ function registrationForBatch(f: Fixture) {
   };
 }
 
+/** The service's list arguments: parsed query plus its page offset. */
+function listQuery(input: unknown) {
+  const query = ListSponsorshipsQuerySchema.parse(input);
+  return { ...query, offset: getSkip(query) };
+}
+
 describe.runIf(dbTestsEnabled())("sponsorship read mapping characterization", () => {
   beforeEach(cleanupDatabase);
   afterEach(cleanupDatabase);
 
   it("list rebuilds batch/usage groups, preserves raw null coverage and keeps filtered stats separate from pagination", async () => {
     const f = await fixture();
-    const result = await listSponsorships(f.event.id, ListSponsorshipsQuerySchema.parse({
+    const result = await listSponsorships(f.event.id, listQuery({
       page: 1, limit: 2, sortBy: "beneficiaryName", sortOrder: "asc",
     }));
     expect(result.data).toEqual([
@@ -199,14 +206,14 @@ describe.runIf(dbTestsEnabled())("sponsorship read mapping characterization", ()
       { ...f.pending, coveredAccessIds: null, batch: batchSummary(f), usages: [] },
     ]);
     expect(result.data[0].usages).toHaveLength(2);
-    expect(result.meta).toEqual({ page: 1, limit: 2, total: 3, totalPages: 2, hasNext: true, hasPrev: false });
+    expect(result.total).toBe(3);
     expect(result.stats).toEqual({
       total: 3, totalAmount: 330,
       pending: { count: 1, amount: 90 },
       used: { count: 1, amount: 200 },
       cancelled: { count: 1, amount: 40 },
     });
-    const filtered = await listSponsorships(f.event.id, ListSponsorshipsQuerySchema.parse({ status: "PENDING" }));
+    const filtered = await listSponsorships(f.event.id, listQuery({ status: "PENDING" }));
     expect(filtered.data).toEqual([{ ...f.pending, batch: batchSummary(f), usages: [] }]);
     expect(filtered.stats).toEqual({
       total: 1, totalAmount: 90,
@@ -240,7 +247,7 @@ describe.runIf(dbTestsEnabled())("sponsorship read mapping characterization", ()
     expect(after?.coveredAccessItems).toEqual(before?.coveredAccessItems);
     const mutation = await findSponsorshipForMutation(getDb(), f.used.id);
     expect(mutation?.usages).toContainEqual({ id: f.otherUsage.id, registrationId: null });
-    const listed = await listSponsorships(f.event.id, ListSponsorshipsQuerySchema.parse({ status: "USED" }));
+    const listed = await listSponsorships(f.event.id, listQuery({ status: "USED" }));
     expect(listed.data[0].usages).toContainEqual({ registrationId: null, amountApplied: 200 });
     expect(await getRegistrationForSponsorship(f.other.id)).toBeNull();
   });
@@ -389,9 +396,9 @@ describe.runIf(dbTestsEnabled())("sponsorship read mapping characterization", ()
     expect(await getPendingSponsorships(missing)).toEqual([]);
     expect(await getActiveSponsorForm(missing)).toBeNull();
     expect(await getFormSchema(getDb(), missing)).toBeNull();
-    const empty = await listSponsorships(missing, ListSponsorshipsQuerySchema.parse({}));
+    const empty = await listSponsorships(missing, listQuery({}));
     expect(empty.data).toEqual([]);
-    expect(empty.meta).toEqual({ page: 1, limit: 20, total: 0, totalPages: 0, hasNext: false, hasPrev: false });
+    expect(empty.total).toBe(0);
     expect(empty.stats).toEqual({ total: 0, totalAmount: 0, pending: { count: 0, amount: 0 }, used: { count: 0, amount: 0 }, cancelled: { count: 0, amount: 0 } });
   });
 });

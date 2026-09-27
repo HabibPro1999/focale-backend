@@ -31,3 +31,18 @@ export class AppException extends HttpException {
 export function forbidden(): never {
   throw new AppException(ErrorCodes.FORBIDDEN, "Insufficient permissions", 403);
 }
+
+/** Standard coded 404. */
+export function notFound(message: string): AppException {
+  return new AppException(ErrorCodes.NOT_FOUND, message, 404);
+}
+
+/** Standard coded 400 (VALIDATION_ERROR). */
+export function badRequest(message: string): AppException {
+  return new AppException(ErrorCodes.VALIDATION_ERROR, message, 400);
+}
+
+/** Standard coded 409. */
+export function conflict(message: string): AppException {
+  return new AppException(ErrorCodes.CONFLICT, message, 409);
+}
