@@ -7,7 +7,7 @@ import { dbTestsEnabled } from "@app/db/testing";
 import { cleanupDatabase } from "../helpers/cleanup";
 import { seedClient, seedEvent, seedForm, seedSponsorshipBatch } from "../helpers/factories";
 
-async function fixture(type = "SPONSOR") {
+async function fixture(type: "SPONSOR" | "REGISTRATION" = "SPONSOR") {
   const client = await seedClient();
   const event = await seedEvent({ clientId: client.id, status: "OPEN", endDate: new Date("2099-01-01T00:00:00Z") });
   const form = await seedForm({ eventId: event.id, type, schemaVersion: 3, schema: {
