@@ -40,7 +40,7 @@ node packages/db/scripts/migrate-networking.mjs --through=0017
 node packages/db/scripts/migrate-networking.mjs --apply --through=0017
 ```
 
-The script checks migration checksums, chooses the engine-specific migration, and preserves `sql_safe_updates`. It refuses a CockroachDB vector-index backfill on a populated table; CockroachDB 26.2 blocks writes during that backfill, so an existing populated deployment needs a separate maintenance plan. The feature must already be enabled by its administrator.
+This compatibility script delegates to the built unified migrator: `plan` by default, or `apply --yes` with `--apply`, forwarding `--through` and `--apply-deferred`. The unified runner owns checksum, engine, lease and migration-precondition handling. The shim itself does not manage `sql_safe_updates` or perform vector-backfill checks. Review the selected migration plan and its preconditions before applying it.
 
 The API and worker source changes still require deployment to Render. They do not change the OpenAI model or its per-token price.
 
@@ -73,7 +73,7 @@ NODE_OPTIONS=--conditions=@app/source \
 pnpm --filter @app/db exec tsx scripts/benchmark-networking-vectors.ts
 ```
 
-Initialize the disposable database with the migration script's `--bootstrap-test` first. The benchmark accepts 5,001–100,000 profiles, uses synthetic vectors without OpenAI calls, checks index use on CockroachDB, compares top-30 results, and removes its fixture afterward.
+Initialize the disposable database with the compatibility script's `--apply --bootstrap-test` flags first. `--bootstrap-test` validates a local, dedicated `networking_test_*` database URL before delegating; it does not create the database or bypass the unified migrator's checks. The benchmark accepts 5,001–100,000 profiles, uses synthetic vectors without OpenAI calls, checks index use on CockroachDB, compares top-30 results, and removes its fixture afterward.
 
 ## Documentation used
 
