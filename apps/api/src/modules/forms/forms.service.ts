@@ -35,7 +35,7 @@ import {
   type FormWithRelations,
   type FormUpdatePatch,
 } from "@app/db";
-import { newId, paginate, getSkip, type PaginatedResult } from "@app/shared";
+import { newId, paginate, toOffsetPagination, type PaginatedResult } from "@app/shared";
 import { logger } from "../../core/logger.service";
 import { AppException, notFound, conflict, badRequest, orNotFound } from "../../core/app-exception";
 
@@ -199,11 +199,10 @@ export class FormsService {
 
   async listForms(query: ListFormsQuery): Promise<PaginatedResult<Form>> {
     const { page, limit, eventId, search, type } = query;
-    const { data, total } = await dbListForms(
-      { eventId, type, search },
-      getSkip({ page, limit }),
-      limit,
-    );
+    const { data, total } = await dbListForms({
+      eventId, type, search,
+      ...toOffsetPagination({ page, limit }),
+    });
     return paginate(data, total, { page, limit });
   }
 

@@ -6,6 +6,16 @@ export interface PaginationParams {
   limit: number;
 }
 
+/** Database list boundaries receive an offset, not a page number. */
+export interface OffsetPagination {
+  offset: number;
+  limit: number;
+}
+
+export function toOffsetPagination(params: PaginationParams): OffsetPagination {
+  return { offset: getSkip(params), limit: params.limit };
+}
+
 /**
  * Paginated result wrapper.
  */

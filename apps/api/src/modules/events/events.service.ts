@@ -8,7 +8,7 @@ import type {
   ListEventsQuery,
   PublicPaymentConfigResponse,
 } from "@app/contracts";
-import { paginate, type PaginatedResult } from "@app/shared";
+import { paginate, toOffsetPagination, type PaginatedResult } from "@app/shared";
 import {
   getDb,
   withSerializableTxn,
@@ -202,8 +202,7 @@ export class EventsService {
   async listEvents(query: ListEventsQuery): Promise<PaginatedResult<EventRow>> {
     const { page, limit, clientId, status, search } = query;
     const { data, total } = await listEventsQuery({
-      page,
-      limit,
+      ...toOffsetPagination({ page, limit }),
       clientId,
       status,
       search,

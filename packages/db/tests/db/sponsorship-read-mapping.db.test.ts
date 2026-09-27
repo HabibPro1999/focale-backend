@@ -101,7 +101,7 @@ describe.runIf(dbTestsEnabled())("sponsorship read mapping characterization", ()
       coversBasePrice: true, coveredAccessIds: [], totalAmount: 700,
       batch: batchSummary, usage: { id: linked.id, amountApplied: 500, appliedAt: linked.appliedAt },
     }]);
-    const page = await listSponsorships(event.id, { page: 1, limit: 20, sortBy: "createdAt", sortOrder: "desc" });
+    const page = await listSponsorships(event.id, { offset: 0, limit: 20, sortBy: "createdAt", sortOrder: "desc" });
     expect(page.data).toEqual([{
       ...sponsor, batch: batchSummary,
       usages: expect.arrayContaining([
@@ -110,8 +110,24 @@ describe.runIf(dbTestsEnabled())("sponsorship read mapping characterization", ()
       ]),
     }]);
     expect(page.data[0].usages).toHaveLength(2);
-    expect(page.meta).toEqual({ page: 1, limit: 20, total: 1, totalPages: 1, hasNext: false, hasPrev: false });
+    expect(page.total).toBe(1);
     expect(page.stats).toEqual({ total: 1, totalAmount: 700, pending: { count: 0, amount: 0 }, used: { count: 1, amount: 700 }, cancelled: { count: 0, amount: 0 } });
+  });
+
+  it("keeps full-match totals and statistics on partial and empty later pages", async () => {
+    const { event, batch, sponsor } = await fixture();
+    await getDb().update(sponsorships).set({ beneficiaryName: "A" }).where(eq(sponsorships.id, sponsor.id));
+    const second = await seedSponsorship({ eventId: event.id, batchId: batch.id, beneficiaryName: "B", status: "PENDING", totalAmount: 200 });
+    await seedSponsorship({ eventId: event.id, batchId: batch.id, beneficiaryName: "C", status: "CANCELLED", totalAmount: 100 });
+    const stats = { total: 3, totalAmount: 1000, pending: { count: 1, amount: 200 }, used: { count: 1, amount: 700 }, cancelled: { count: 1, amount: 100 } };
+    const page = await listSponsorships(event.id, { offset: 1, limit: 1, sortBy: "beneficiaryName", sortOrder: "asc" });
+    expect(page.data.map((row) => row.id)).toEqual([second.id]);
+    expect(page.total).toBe(3);
+    expect(page.stats).toEqual(stats);
+    const empty = await listSponsorships(event.id, { offset: 4, limit: 1, sortBy: "beneficiaryName", sortOrder: "asc" });
+    expect(empty.data).toEqual([]);
+    expect(empty.total).toBe(3);
+    expect(empty.stats).toEqual(stats);
   });
 
   it("groups only USED coverage for each registrant and normalizes nullable arrays", async () => {

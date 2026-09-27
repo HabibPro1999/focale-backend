@@ -1,3 +1,4 @@
+import type { OffsetPagination } from "@app/shared";
 import type { ClientModuleGate } from "../client-module-gate";
 import { rowCountOf } from "../helpers";
 import { escapeLike } from "../like";
@@ -21,9 +22,7 @@ export type EventRow = typeof events.$inferSelect;
 type EventPricingRow = typeof eventPricing.$inferSelect;
 export type EventWithPricing = EventRow & { pricing: EventPricingRow | null };
 
-export interface ListEventsFilter {
-  page: number;
-  limit: number;
+export interface ListEventsFilter extends OffsetPagination {
   clientId?: string;
   status?: "CLOSED" | "OPEN" | "ARCHIVED";
   search?: string;
@@ -122,7 +121,6 @@ export async function listEvents(
   exec: DbExecutor = getDb(),
 ): Promise<{ data: EventRow[]; total: number }> {
   const where = buildListWhere(filter);
-  const skip = (filter.page - 1) * filter.limit;
 
   const [data, totalRows] = await Promise.all([
     exec
@@ -131,7 +129,7 @@ export async function listEvents(
       .where(where)
       .orderBy(desc(events.createdAt))
       .limit(filter.limit)
-      .offset(skip),
+      .offset(filter.offset),
     exec.select({ value: sql<number>`count(*)::int` }).from(events).where(where),
   ]);
 

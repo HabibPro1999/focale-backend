@@ -1,3 +1,4 @@
+import type { OffsetPagination } from "@app/shared";
 import {
   and,
   arrayContains,
@@ -237,9 +238,7 @@ export async function countSponsorshipBatchesByFormId(
 }
 
 export async function listForms(
-  filters: { eventId?: string; type?: FormType; search?: string },
-  skip: number,
-  take: number,
+  filters: OffsetPagination & { eventId?: string; type?: FormType; search?: string },
 ): Promise<{ data: Form[]; total: number }> {
   const conds = [];
   if (filters.eventId) conds.push(eq(forms.eventId, filters.eventId));
@@ -253,8 +252,8 @@ export async function listForms(
       .from(forms)
       .where(where)
       .orderBy(desc(forms.createdAt))
-      .offset(skip)
-      .limit(take),
+      .offset(filters.offset)
+      .limit(filters.limit),
     getDb().select({ n: count() }).from(forms).where(where),
   ]);
   return { data, total: totalRows[0]?.n ?? 0 };

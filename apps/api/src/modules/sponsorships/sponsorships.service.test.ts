@@ -62,10 +62,20 @@ describe("passthrough reads", () => {
     expect(await service().getSponsorshipClientId("s1")).toBe("c1");
   });
 
-  it("listSponsorships", async () => {
-    const page = { data: [], meta: {}, stats: {} };
-    m.listSponsorships.mockResolvedValue(page);
-    expect(await service().listSponsorships("e1", {} as never)).toBe(page);
+  it.each([
+    { page: 2, limit: 2, total: 3, data: [{ id: "s3" }], totalPages: 2, hasNext: false, hasPrev: true },
+    { page: 5, limit: 2, total: 3, data: [], totalPages: 2, hasNext: false, hasPrev: true },
+    { page: 1, limit: 2, total: 0, data: [], totalPages: 0, hasNext: false, hasPrev: false },
+  ])("preserves sponsorship pagination for page $page with total $total", async ({ page, limit, total, data, ...flags }) => {
+    const stats = { total, totalAmount: 700, pending: { count: 1, amount: 100 }, used: { count: 1, amount: 600 }, cancelled: { count: 1, amount: 0 } };
+    const meta = { page, limit, total, ...flags };
+    m.listSponsorships.mockResolvedValue({ data, total, stats });
+    const query = { page, limit, search: "Beneficiary", status: "USED" as const, sortBy: "beneficiaryName" as const, sortOrder: "asc" as const };
+
+    expect(await service().listSponsorships("e1", query)).toEqual({ data, meta, stats });
+    expect(m.listSponsorships).toHaveBeenCalledWith("e1", {
+      offset: (page - 1) * limit, limit, search: "Beneficiary", status: "USED", sortBy: "beneficiaryName", sortOrder: "asc",
+    });
   });
 });
 

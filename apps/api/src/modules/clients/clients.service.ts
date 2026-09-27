@@ -18,7 +18,7 @@ import {
   type ClientRow,
   type UpdateClientData,
 } from "@app/db";
-import { getSkip, paginate, type PaginatedResult } from "@app/shared";
+import { toOffsetPagination, paginate, type PaginatedResult } from "@app/shared";
 import { invalidateUserCacheForClient } from "../../core/auth/user-cache";
 
 @Injectable()
@@ -76,10 +76,8 @@ export class ClientsService {
   /** List clients with pagination + optional active/search filters (createdAt desc). */
   async list(query: ListClientsQuery): Promise<PaginatedResult<ClientRow>> {
     const { page, limit, active, search } = query;
-    const skip = getSkip({ page, limit });
     const { data, total } = await listClientsPage({
-      skip,
-      limit,
+      ...toOffsetPagination({ page, limit }),
       active,
       search,
     });

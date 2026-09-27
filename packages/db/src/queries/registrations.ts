@@ -13,7 +13,7 @@ import {
   sum,
   type SQL,
 } from "drizzle-orm";
-import { getSkip } from "@app/shared";
+import type { OffsetPagination } from "@app/shared";
 import type { ListRegistrationsQuery } from "@app/contracts";
 import { getDb, type DbExecutor } from "../client";
 import { registrations } from "../schema/registrations";
@@ -278,21 +278,20 @@ export interface RegistrationStatRow {
 
 export async function listRegistrationRows(
   eventId: string,
-  query: ListRegistrationsQuery,
+  query: Omit<ListRegistrationsQuery, "page" | "limit"> & OffsetPagination,
   db: DbExecutor = getDb(),
 ): Promise<{
   rows: RegistrationListRow[];
   total: number;
   stats: RegistrationStatRow[];
 }> {
-  const { page, limit, paymentStatus, paymentMethod, role, search } = query;
+  const { offset, limit, paymentStatus, paymentMethod, role, search } = query;
   const where = buildRegistrationWhere(eventId, {
     paymentStatus,
     paymentMethod,
     role,
     search,
   });
-  const skip = getSkip({ page, limit });
 
   const [rows, totalRows, statsRaw] = await Promise.all([
     db
@@ -308,7 +307,7 @@ export async function listRegistrationRows(
       .where(where)
       .orderBy(desc(registrations.createdAt))
       .limit(limit)
-      .offset(skip),
+      .offset(offset),
     db.select({ value: count() }).from(registrations).where(where),
     db
       .select({
@@ -711,7 +710,7 @@ export interface RegistrationAuditLogRow {
 
 export async function listRegistrationAuditLogRows(
   registrationId: string,
-  page: { skip: number; limit: number },
+  page: OffsetPagination,
   db: DbExecutor = getDb(),
 ): Promise<{ rows: RegistrationAuditLogRow[]; total: number }> {
   const where = and(
@@ -732,7 +731,7 @@ export async function listRegistrationAuditLogRows(
       .where(where)
       .orderBy(desc(auditLogs.performedAt))
       .limit(page.limit)
-      .offset(page.skip),
+      .offset(page.offset),
     db.select({ value: count() }).from(auditLogs).where(where),
   ]);
   return { rows, total: Number(totalRows[0]?.value ?? 0) };
@@ -768,7 +767,7 @@ export interface RegistrationEmailLogRow {
 
 export async function listRegistrationEmailLogRows(
   registrationId: string,
-  page: { skip: number; limit: number },
+  page: OffsetPagination,
   db: DbExecutor = getDb(),
 ): Promise<{ rows: RegistrationEmailLogRow[]; total: number }> {
   const where = eq(emailLogs.registrationId, registrationId);
@@ -794,7 +793,7 @@ export async function listRegistrationEmailLogRows(
       .where(where)
       .orderBy(desc(emailLogs.queuedAt))
       .limit(page.limit)
-      .offset(page.skip),
+      .offset(page.offset),
     db.select({ value: count() }).from(emailLogs).where(where),
   ]);
   return { rows, total: Number(totalRows[0]?.value ?? 0) };

@@ -12,6 +12,8 @@ import {
 } from "@app/contracts";
 import {
   calculateSettlement,
+  paginate,
+  toOffsetPagination,
   isFullySponsored as hasFullSponsorship,
   withSponsorshipTotal,
   type RegistrationForCalculation,
@@ -182,8 +184,13 @@ export class SponsorshipsService {
   // Reads
   // ==========================================================================
 
-  listSponsorships(eventId: string, query: ListSponsorshipsQuery) {
-    return listSponsorships(eventId, query);
+  async listSponsorships(eventId: string, query: ListSponsorshipsQuery) {
+    const { page, limit, ...filters } = query;
+    const { data, total, stats } = await listSponsorships(eventId, {
+      ...filters,
+      ...toOffsetPagination({ page, limit }),
+    });
+    return { ...paginate(data, total, { page, limit }), stats };
   }
 
   getSponsorshipById(id: string) {

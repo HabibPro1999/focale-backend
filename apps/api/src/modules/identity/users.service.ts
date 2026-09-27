@@ -25,7 +25,7 @@ import {
   revokeFirebaseRefreshTokens,
   setCustomClaims,
 } from "@app/integrations";
-import { paginate, getSkip, type PaginatedResult } from "@app/shared";
+import { paginate, toOffsetPagination, type PaginatedResult } from "@app/shared";
 import { invalidateUserCache } from "../../core/auth/user-cache";
 import { logger } from "../../core/logger.service";
 
@@ -207,13 +207,11 @@ export class UsersService {
     query: ListUsersQuery,
   ): Promise<PaginatedResult<UserWithClient>> {
     const { page, limit, role, clientId, active, search } = query;
-    const skip = getSkip({ page, limit });
 
-    const { data, total } = await dbListUsers(
-      { role, clientId, active, search },
-      skip,
-      limit,
-    );
+    const { data, total } = await dbListUsers({
+      role, clientId, active, search,
+      ...toOffsetPagination({ page, limit }),
+    });
 
     return paginate(data, total, { page, limit });
   }
