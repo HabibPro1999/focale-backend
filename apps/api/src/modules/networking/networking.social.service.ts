@@ -1,4 +1,8 @@
-import { networkingValidation, networkingFeatureDisabled, networkingNotFound as notFound } from "./networking.errors";
+import {
+  networkingValidation,
+  networkingFeatureDisabled,
+  networkingNotFound as notFound,
+} from "./networking.errors";
 
 import { requireDiscovery, requireChat, networkingPair, networkingPublicProfile } from "./networking.policy";
 import { type NetworkingParticipantListQuery } from "@app/contracts";
@@ -14,10 +18,7 @@ import {
   networkingStore,
   networkingTransaction,
 } from "@app/db";
-import {
-  NetworkingService,
-  type NetworkingContext,
-} from "./networking.service";
+import { NetworkingService, type NetworkingContext } from "./networking.service";
 
 type ConnectionSummaryRow = Awaited<ReturnType<typeof listNetworkingConnectionSummaries>>[number];
 const summary = (row: ConnectionSummaryRow) => ({ ...row, profile: networkingPublicProfile(row.profile) });
@@ -34,16 +35,12 @@ export class NetworkingSocialService {
     });
     const items = [];
     for (const interest of interests) {
-      try {
-        const profile = await this.networking.target(ctx, interest.profileId);
-        items.push({
-          id: interest.id,
-          profile: networkingPublicProfile(profile),
-          createdAt: interest.createdAt,
-        });
-      } catch (error) {
-        if (!(error instanceof NotFoundException)) throw error;
-      }
+      const profile = await this.networking.findCounterpart(ctx, interest.profileId);
+      if (profile) items.push({
+        id: interest.id,
+        profile: networkingPublicProfile(profile),
+        createdAt: interest.createdAt,
+      });
     }
     return { items, total: items.length };
   }
@@ -74,7 +71,7 @@ export class NetworkingSocialService {
     return networkingTransaction(ctx.event.id, async (store, db) => {
       ctx = await this.networking.currentParticipant(ctx, store);
       requireDiscovery(ctx);
-      const target = await this.networking.target(ctx, targetId, store, true);
+      const target = await this.networking.target(ctx, targetId, store, { requireDiscoverable: true });
       // Read first for the audit's previous action; the upsert on the pair's unique
       // index keeps a concurrent duplicate swipe from failing on insert.
       const existing = await store.one("interests", {
@@ -279,5 +276,42 @@ export class NetworkingSocialService {
       reporterId: ctx.profile.id,
       ...input,
     });
+  }
+  async blocks(ctx: NetworkingContext) {
+    const store = networkingStore();
+    const rows = await store.all("blocks", {
+      eventId: ctx.event.id,
+      profileId: ctx.profile.id,
+    });
+    const items = await Promise.all(
+      rows.map(async (row) => {
+        const profile = await this.networking.findBlockedCounterpart(
+          ctx,
+          row.targetId,
+          store,
+        );
+        return {
+          ...row,
+          profile: profile ? networkingPublicProfile(profile) : null,
+        };
+      }),
+    );
+    return { items, total: items.length };
+  }
+  async unblock(ctx: NetworkingContext, id: string) {
+    await networkingStore().remove("blocks", {
+      eventId: ctx.event.id,
+      profileId: ctx.profile.id,
+      targetId: id,
+    });
+    return { unblocked: true };
+  }
+  async resetPasses(ctx: NetworkingContext) {
+    await networkingStore().remove("interests", {
+      eventId: ctx.event.id,
+      profileId: ctx.profile.id,
+      action: "PASS",
+    });
+    return { reset: true };
   }
 }

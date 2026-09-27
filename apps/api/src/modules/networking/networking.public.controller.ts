@@ -1,5 +1,7 @@
-import { networkingValidation, networkingFeatureDisabled, networkingNotEligible } from "./networking.errors";
-import { futureNetworkingSlots, networkingPair, networkingPublicProfile } from "./networking.policy";
+import { NetworkingAuthService } from "./networking.auth.service";
+import { NetworkingProfileService } from "./networking.profile.service";
+import { NetworkingNotificationsService } from "./networking.notifications.service";
+import { openNotificationStream } from "./networking.stream";
 import {
   Body,
   Controller,
@@ -16,85 +18,17 @@ import {
   UseInterceptors,
 } from "@nestjs/common";
 import { NetworkingBusyInterceptor } from "./networking.busy";
-import { NetworkingUploadsService, deleteNetworkingPhoto, type NetworkingMultipartRequest } from "./networking.uploads.service";
+import { NetworkingUploadsService, type NetworkingMultipartRequest } from "./networking.uploads.service";
 import { SkipThrottle, Throttle } from "@nestjs/throttler";
-import { networkingProfileComplete } from "@app/contracts";
 import type { FastifyReply, FastifyRequest } from "fastify";
-import {
-  cancelNetworkingParticipantMeetings,
-  networkingDirectoryFacets,
-  listNetworkingNotifications,
-  recordNetworkingProfileView,
-  networkingNotificationsSince,
-  networkingStore,
-  networkingTransaction,
-  revokeNetworkingSessions,
-  type NetworkingRow,
-  type NetworkingStore,
-} from "@app/db";
 import { SkipEnvelope } from "../../core/envelope.interceptor";
 import { ShutdownCoordinator } from "../../core/shutdown";
-import { networkingIdentityCache } from "../../core/networking-identity-cache";
-import { NetworkingService, type NetworkingContext } from "./networking.service";
+import { NetworkingService } from "./networking.service";
 import { NetworkingSocialService } from "./networking.social.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
 import { NetworkingExportsService } from "./networking.exports.service";
-import { issueNetworkingBadge } from "./networking.security";
 
 import * as dto from "./networking.dto";
-
-/**
- * Preserve the same-event block record while applying profile-target visibility.
- * The stored block edge itself is intentionally not checked: it is why the row
- * appears in this list and remains actionable through the unblock route.
- */
-async function blockedProfileForViewer(
-  service: NetworkingService,
-  ctx: NetworkingContext,
-  targetId: string,
-  store: NetworkingStore,
-): Promise<NetworkingRow<"profiles"> | null> {
-  if (targetId === ctx.profile.id) {
-    throw networkingValidation("Choose another participant");
-  }
-
-  const profile = await store.one("profiles", {
-    id: targetId,
-    eventId: ctx.event.id,
-  });
-  if (
-    !profile ||
-    profile.email.trim().toLowerCase() ===
-      ctx.profile.email.trim().toLowerCase() ||
-    !(await service.eligible(profile, ctx.config, store))
-  ) {
-    return null;
-  }
-
-  const current = await store.one("profiles", {
-    id: ctx.profile.id,
-    eventId: ctx.event.id,
-  });
-  if (!current || !(await service.eligible(current, ctx.config, store))) {
-    throw networkingNotEligible("Networking participation is no longer eligible");
-  }
-
-  const needsConnection =
-    !profile.visible ||
-    !networkingProfileComplete(profile) ||
-    (!ctx.config.swipeEnabled && !ctx.config.searchEnabled);
-  if (needsConnection) {
-    const [profileAId, profileBId] = networkingPair(ctx.profile.id, targetId);
-    const connection = await store.one("connections", {
-      eventId: ctx.event.id,
-      profileAId,
-      profileBId,
-    });
-    if (!connection) return null;
-  }
-
-  return profile;
-}
 
 @UseInterceptors(NetworkingBusyInterceptor)
 @Controller("api/networking/:slug")
@@ -105,6 +39,9 @@ export class NetworkingPublicController {
     private readonly social: NetworkingSocialService,
     private readonly meetings: NetworkingMeetingsService,
     private readonly exports: NetworkingExportsService,
+    private readonly auth: NetworkingAuthService,
+    private readonly profileService: NetworkingProfileService,
+    private readonly notificationsService: NetworkingNotificationsService,
     // Global (CoreModule); optional only so unit tests can construct the controller directly.
     @Optional() private readonly lifecycle?: ShutdownCoordinator,
   ) {}
@@ -126,7 +63,7 @@ export class NetworkingPublicController {
     @Param("slug") slug: string,
     @Body() body: dto.NetworkingOtpRequestDto,
   ) {
-    return this.service.requestCode(slug, body.email);
+    return this.auth.requestCode(slug, body.email);
   }
   @Post("auth/verify")
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
@@ -134,26 +71,26 @@ export class NetworkingPublicController {
     @Param("slug") slug: string,
     @Body() body: dto.NetworkingOtpVerifyDto,
   ) {
-    return this.service.verifyCode(slug, body.challengeId, body.code);
+    return this.auth.verifyCode(slug, body.challengeId, body.code);
   }
   @Post("auth/logout") logout(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
   ) {
-    return this.service.logout(slug, req.headers.authorization);
+    return this.auth.logout(slug, req.headers.authorization);
   }
   @Get("me") async me(@Param("slug") slug: string, @Req() req: FastifyRequest) {
     return (await this.context(slug, req, { allowConsentPending: true })).profile;
   }
   @Get("me/analytics") async personalAnalytics(@Param("slug") slug: string, @Req() req: FastifyRequest) {
-    return this.service.personalAnalytics(await this.context(slug, req));
+    return this.profileService.personalAnalytics(await this.context(slug, req));
   }
   @Patch("me") async updateMe(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
     @Body() body: dto.NetworkingProfileDto,
   ) {
-    return this.service.updateMe(await this.context(slug, req, { allowConsentPending: true }), { ...body });
+    return this.profileService.updateMe(await this.context(slug, req, { allowConsentPending: true }), { ...body });
   }
   @Post("me/photo")
   async uploadPhoto(
@@ -165,7 +102,7 @@ export class NetworkingPublicController {
     return this.uploads.image(
       request,
       `networking/${ctx.event.id}/profiles/${ctx.profile.id}`,
-      (url) => this.service.updateMe(ctx, { photoUrl: url }),
+      (url) => this.profileService.updateMe(ctx, { photoUrl: url }),
     );
   }
   @Get("interests/incoming")
@@ -177,14 +114,7 @@ export class NetworkingPublicController {
   }
   @Get("facets")
   async facets(@Param("slug") slug: string, @Req() request: FastifyRequest) {
-    const ctx = await this.context(slug, request);
-    if (!ctx.config.searchEnabled)
-      throw networkingFeatureDisabled("Search is disabled");
-    return networkingDirectoryFacets(
-      ctx.event.id,
-      ctx.profile.id,
-      ctx.config.eligiblePaymentStatuses,
-    );
+    return this.service.facets(await this.context(slug, request));
   }
   @Get("profiles") async profiles(
     @Param("slug") slug: string,
@@ -204,10 +134,7 @@ export class NetworkingPublicController {
     @Req() req: FastifyRequest,
     @Query() query: dto.NetworkingListDto,
   ) {
-    const ctx = await this.context(slug, req);
-    const profile = await this.service.target(ctx, id);
-    await recordNetworkingProfileView(ctx.event.id, ctx.profile.id, id, query.viewId);
-    return networkingPublicProfile(profile);
+    return this.service.viewProfile(await this.context(slug, req), id, query.viewId);
   }
   @Post("interests") async interest(
     @Param("slug") slug: string,
@@ -224,13 +151,7 @@ export class NetworkingPublicController {
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
   ) {
-    const ctx = await this.context(slug, req);
-    await networkingStore().remove("interests", {
-      eventId: ctx.event.id,
-      profileId: ctx.profile.id,
-      action: "PASS",
-    });
-    return { reset: true };
+    return this.social.resetPasses(await this.context(slug, req));
   }
   @Get("connections") async connections(
     @Param("slug") slug: string,
@@ -287,27 +208,7 @@ export class NetworkingPublicController {
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
   ) {
-    const ctx = await this.context(slug, req);
-    const store = networkingStore();
-    const rows = await store.all("blocks", {
-      eventId: ctx.event.id,
-      profileId: ctx.profile.id,
-    });
-    const items = await Promise.all(
-      rows.map(async (row) => {
-        const profile = await blockedProfileForViewer(
-          this.service,
-          ctx,
-          row.targetId,
-          store,
-        );
-        return {
-          ...row,
-          profile: profile ? networkingPublicProfile(profile) : null,
-        };
-      }),
-    );
-    return { items, total: items.length };
+    return this.social.blocks(await this.context(slug, req));
   }
   @Post("blocks") async block(
     @Param("slug") slug: string,
@@ -321,13 +222,7 @@ export class NetworkingPublicController {
     @Param("id") id: string,
     @Req() req: FastifyRequest,
   ) {
-    const ctx = await this.context(slug, req);
-    await networkingStore().remove("blocks", {
-      eventId: ctx.event.id,
-      profileId: ctx.profile.id,
-      targetId: id,
-    });
-    return { unblocked: true };
+    return this.social.unblock(await this.context(slug, req), id);
   }
   @Post("reports")
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
@@ -359,12 +254,7 @@ export class NetworkingPublicController {
     @Param("id") id: string,
     @Req() req: FastifyRequest,
   ) {
-    const ctx = await this.context(slug, req);
-    this.meetings.requireEnabled(ctx);
-    return {
-      slots: await this.meetings.participantSlots(ctx, id),
-      availableSlots: futureNetworkingSlots(ctx.config, ctx.event),
-    };
+    return this.meetings.profileAvailability(await this.context(slug, req), id);
   }
   @Get("meetings") async listMeetings(
     @Param("slug") slug: string,
@@ -407,24 +297,14 @@ export class NetworkingPublicController {
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
   ) {
-    const ctx = await this.context(slug, req);
-    return {
-      ...issueNetworkingBadge(ctx.profile.id, ctx.event.id),
-      accessAllowed: await this.service.areaAccess(ctx),
-    };
+    return this.service.badge(await this.context(slug, req));
   }
   @Get("notifications") async notifications(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
     @Query() query: dto.NetworkingListDto,
   ) {
-    const ctx = await this.context(slug, req);
-    return listNetworkingNotifications(
-      ctx.event.id,
-      ctx.profile.id,
-      query.page,
-      query.limit,
-    );
+    return this.notificationsService.list(await this.context(slug, req), query);
   }
 
   @Post("notifications/read") async readNotifications(
@@ -432,65 +312,21 @@ export class NetworkingPublicController {
     @Req() req: FastifyRequest,
     @Body() body: dto.NetworkingNotificationReadDto,
   ) {
-    const ctx = await this.context(slug, req);
-    if (body.ids) {
-      for (const id of body.ids)
-        await networkingStore().update(
-          "notifications",
-          { eventId: ctx.event.id, profileId: ctx.profile.id, id },
-          { readAt: new Date() },
-        );
-    } else
-      await networkingStore().update(
-        "notifications",
-        { eventId: ctx.event.id, profileId: ctx.profile.id, readAt: null },
-        { readAt: new Date() },
-      );
-    return { read: true };
+    return this.notificationsService.markRead(await this.context(slug, req), body);
   }
   @Post("push-subscriptions") async subscribe(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
     @Body() body: dto.NetworkingPushDto,
   ) {
-    const ctx = await this.context(slug, req);
-    const unsupported = () => networkingValidation("Unsupported push service endpoint");
-    let url: URL;
-    try {
-      url = new URL(body.endpoint);
-    } catch {
-      throw unsupported();
-    }
-    const host = url.hostname;
-    const allowed = [
-      "fcm.googleapis.com",
-      "push.services.mozilla.com",
-      "push.apple.com",
-      "notify.windows.com",
-    ].some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
-    if (!allowed || url.username || url.password || url.port)
-      throw unsupported();
-    // One upsert on the unique endpoint: a browser re-subscribing moves its endpoint to this participant.
-    return networkingStore().upsertPushSubscription({
-      eventId: ctx.event.id,
-      profileId: ctx.profile.id,
-      endpoint: body.endpoint,
-      keys: body.keys,
-      expirationTime: body.expirationTime ? new Date(body.expirationTime) : null,
-    });
+    return this.notificationsService.subscribePush(await this.context(slug, req), body);
   }
   @Delete("push-subscriptions") async unsubscribe(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
     @Body() body: { endpoint?: string },
   ) {
-    const ctx = await this.context(slug, req);
-    await networkingStore().remove("pushSubscriptions", {
-      eventId: ctx.event.id,
-      profileId: ctx.profile.id,
-      ...(body?.endpoint ? { endpoint: body.endpoint } : {}),
-    });
-    return { unsubscribed: true };
+    return this.notificationsService.unsubscribePush(await this.context(slug, req), body);
   }
   @Get("calendar.ics") @SkipEnvelope() async calendar(
     @Param("slug") slug: string,
@@ -532,95 +368,13 @@ export class NetworkingPublicController {
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
   ) {
-    const ctx = await this.context(slug, req, { allowConsentPending: true });
-    const photoUrl = await networkingTransaction(ctx.event.id, async (store, db) => {
-      const current = await store.one("profiles", { eventId: ctx.event.id, id: ctx.profile.id });
-      // The in-transaction row is authoritative; a null photo override stops sync restoring a form photo.
-      await store.update(
-        "profiles",
-        { eventId: ctx.event.id, id: ctx.profile.id },
-        {
-          photoUrl: null,
-          consent: false,
-          visible: false,
-          withdrawnAt: new Date(),
-          overrides: { ...(current?.overrides ?? ctx.profile.overrides), photoUrl: null, consent: false },
-        },
-      );
-      await revokeNetworkingSessions(ctx.profile.id, db);
-      await store.remove("pushSubscriptions", {
-        eventId: ctx.event.id,
-        profileId: ctx.profile.id,
-      });
-      // One UPDATE … RETURNING over this participant's active meetings; notices never name the other side (K5).
-      await cancelNetworkingParticipantMeetings(ctx.profile.id, ctx.event.id, db, { slug: ctx.event.slug });
-      return current?.photoUrl;
-    });
-    networkingIdentityCache.forgetProfile(ctx.profile.id);
-    await deleteNetworkingPhoto(photoUrl, ctx.event.id, ctx.profile.id);
-    return { withdrawn: true };
+    return this.profileService.withdraw(await this.context(slug, req, { allowConsentPending: true }));
   }
   @Get("stream") @SkipEnvelope() async stream(
     @Param("slug") slug: string,
     @Req() req: FastifyRequest,
     @Res() reply: FastifyReply,
   ) {
-    this.lifecycle?.assertAcceptingStreams(reply);
-    let ctx = await this.context(slug, req);
-    reply.hijack();
-    for (const [key, value] of Object.entries(reply.getHeaders()))
-      if (value !== undefined) reply.raw.setHeader(key, value);
-    reply.raw.writeHead(200, {
-      "content-type": "text/event-stream",
-      "cache-control": "no-cache, no-transform",
-      connection: "keep-alive",
-    });
-    reply.raw.write(`event: ready\ndata: {}\n\n`);
-    // Overlapping reads tolerate commit/clock skew; the bounded sent-id set keeps rows from repeating.
-    const sent = new Set<string>();
-    let last = Date.now();
-    let verifiedAt = Date.now();
-    let busy = false;
-    const timer = setInterval(async () => {
-      if (busy) return;
-      busy = true;
-      try {
-        if (Date.now() - verifiedAt >= 30_000) {
-          ctx = await this.context(slug, req);
-          verifiedAt = Date.now();
-        }
-        const checkedAt = Date.now();
-        const rows = (await networkingNotificationsSince(ctx.event.id, ctx.profile.id, new Date(last - 10_000)))
-          .filter((row) => !sent.has(row.id));
-        last = checkedAt;
-        for (const row of rows) sent.add(row.id);
-        for (const id of sent) {
-          if (sent.size <= 1000) break;
-          sent.delete(id);
-        }
-        if (rows.length)
-          reply.raw.write(
-            `event: notifications\ndata: ${JSON.stringify(rows)}\n\n`,
-          );
-        else reply.raw.write(": heartbeat\n\n");
-      } catch {
-        reply.raw.end();
-      } finally {
-        busy = false;
-      }
-    }, 3000);
-    const timeout = setTimeout(() => reply.raw.end(), 60_000);
-    // Shutdown drain: tell the client when to reconnect (jittered), then close.
-    const untrack = this.lifecycle?.trackStream((reconnectInMs) => {
-      reply.raw.write(
-        `event: shutdown\nretry: ${reconnectInMs}\ndata: ${JSON.stringify({ reconnectInMs })}\n\n`,
-      );
-      reply.raw.end();
-    });
-    reply.raw.on("close", () => {
-      clearInterval(timer);
-      clearTimeout(timeout);
-      untrack?.();
-    });
+    return openNotificationStream(reply, { resolveContext: () => this.context(slug, req), lifecycle: this.lifecycle });
   }
 }

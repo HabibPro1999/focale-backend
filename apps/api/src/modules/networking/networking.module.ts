@@ -1,3 +1,7 @@
+import { NetworkingRecommendationsService } from "./networking.recommendations.service";
+import { NetworkingNotificationsService } from "./networking.notifications.service";
+import { NetworkingProfileService } from "./networking.profile.service";
+import { NetworkingAuthService } from "./networking.auth.service";
 import { NetworkingInventoryService } from "./networking.inventory.service";
 import { NetworkingMfaService } from "./networking.mfa.service";
 import { NetworkingMfaController } from "./networking.mfa.controller";
@@ -10,7 +14,10 @@ import { NetworkingAdminService } from "./networking.admin.service";
 import { NetworkingExportsService } from "./networking.exports.service";
 import { NetworkingPublicController } from "./networking.public.controller";
 import { NetworkingAdminController } from "./networking.admin.controller";
-import { NetworkingRecommendationsController, NetworkingRecommendationAdminController } from "./networking-recommendations.controller";
+import {
+  NetworkingRecommendationsController,
+  NetworkingRecommendationAdminController,
+} from "./networking-recommendations.controller";
 @Module({
   controllers: [
     NetworkingMfaController,
@@ -20,6 +27,10 @@ import { NetworkingRecommendationsController, NetworkingRecommendationAdminContr
     NetworkingRecommendationAdminController,
   ],
   providers: [
+    NetworkingRecommendationsService,
+    NetworkingNotificationsService,
+    NetworkingProfileService,
+    NetworkingAuthService,
     NetworkingInventoryService,
     NetworkingMfaService,
     NetworkingUploadsService,

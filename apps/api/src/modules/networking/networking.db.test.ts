@@ -1,11 +1,11 @@
+import {
+  createNetworkingEventFixture,
+} from "../../../../../packages/db/tests/helpers/networking-write-fixture";
+import { NetworkingProfileService } from "./networking.profile.service";
+import { NetworkingAuthService } from "./networking.auth.service";
 import { NetworkingInventoryService } from "./networking.inventory.service";
 import { beforeAll, describe, expect, it } from "vitest";
-import {
-  createDecipheriv,
-  createHash,
-  randomBytes,
-  randomUUID,
-} from "node:crypto";
+import { createDecipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   updateClientRow,
   clients,
@@ -18,20 +18,13 @@ import {
   type NetworkingRow,
 } from "@app/db";
 import { NetworkingConfigSchema } from "@app/contracts";
-import {
-  NetworkingService,
-  type NetworkingContext,
-} from "./networking.service";
+import { NetworkingService, type NetworkingContext } from "./networking.service";
 import { NetworkingSocialService } from "./networking.social.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
 import { NetworkingAdminService } from "./networking.admin.service";
 import { NetworkingExportsService } from "./networking.exports.service";
 import { NetworkingMfaService } from "./networking.mfa.service";
-import {
-  openNetworkingSecret,
-  networkingTotp,
-  networkingHash,
-} from "./networking.security";
+import { openNetworkingSecret, networkingTotp, networkingHash } from "./networking.security";
 import { dbTestsEnabled } from "@app/db/testing";
 const enabled = dbTestsEnabled();
 const mfa = new NetworkingMfaService();
@@ -74,7 +67,7 @@ describe.runIf(enabled)(
         enabledModules: ["networking", "registrations", "emails"],
       });
       for (const id of [ids.event, ids.other]) {
-        const row = await networkingStore().insert("events", {
+        const row = await createNetworkingEventFixture({
           id,
           clientId: ids.client,
           name: "Networking fixture",
@@ -82,9 +75,8 @@ describe.runIf(enabled)(
           status: "OPEN",
           startDate: new Date("2031-04-05T00:00Z"),
           endDate: new Date("2031-04-06T00:00Z"),
-        });
+        }, config);
         if (id === ids.event) event = row;
-        await networkingStore().insert("configs", { eventId: id, config });
       }
       await db.insert(forms).values({
         id: ids.form,
@@ -186,7 +178,7 @@ describe.runIf(enabled)(
       ).rejects.toThrow("eligible");
     });
     it("persists wrong OTP attempts, authenticates once, and rejects replay", async () => {
-      const request = await service.requestCode(
+      const request = await new NetworkingAuthService(service).requestCode(
         ids.event,
         participants[0].profile.email,
       );
@@ -210,7 +202,7 @@ describe.runIf(enabled)(
         decipher.final(),
       ]).toString();
       await expect(
-        service.verifyCode(
+        new NetworkingAuthService(service).verifyCode(
           ids.event,
           request.challengeId,
           code === "000000" ? "111111" : "000000",
@@ -221,10 +213,10 @@ describe.runIf(enabled)(
           ?.attempts,
       ).toBe(1);
       expect(
-        (await service.verifyCode(ids.event, request.challengeId, code)).token,
+        (await new NetworkingAuthService(service).verifyCode(ids.event, request.challengeId, code)).token,
       ).toHaveLength(64);
       await expect(
-        service.verifyCode(ids.event, request.challengeId, code),
+        new NetworkingAuthService(service).verifyCode(ids.event, request.challengeId, code),
       ).rejects.toThrow("Invalid");
     });
     it("requires authenticator verification, prevents replay and consumes recovery codes once", async () => {
@@ -473,7 +465,7 @@ describe.runIf(enabled)(
         status: "ACTIVE",
         createdAt: new Date("2000-01-01T00:00Z"),
       });
-      const challenge = await service.requestCode(
+      const challenge = await new NetworkingAuthService(service).requestCode(
         ids.event,
         participants[3].profile.email.toUpperCase(),
       );
@@ -481,7 +473,7 @@ describe.runIf(enabled)(
         dedupeKey: `otp:${challenge.challengeId}`,
       });
       expect(delivery?.profileId).toBe(participants[3].profile.id);
-      const authenticated = await service.verifyCode(
+      const authenticated = await new NetworkingAuthService(service).verifyCode(
         ids.event,
         challenge.challengeId,
         openNetworkingSecret(String(delivery!.payload.encryptedCode)),
@@ -642,11 +634,11 @@ describe.runIf(enabled)(
     });
     it("keeps ROI ownership tied to the session profile and rejects blank explicit professional updates", async () => {
       const ctx = participants[4];
-      const result = await service.personalAnalytics({ ...ctx, profile: { ...ctx.profile, email: "forged@example.test" } });
+      const result = await new NetworkingProfileService(service).personalAnalytics({ ...ctx, profile: { ...ctx.profile, email: "forged@example.test" } });
       expect(result.events.some(row => row.eventId === ctx.event.id)).toBe(true);
-      await expect(service.personalAnalytics({ ...ctx, profile: participants[5].profile })).rejects.toThrow();
+      await expect(new NetworkingProfileService(service).personalAnalytics({ ...ctx, profile: participants[5].profile })).rejects.toThrow();
       for (const field of ["company", "jobTitle", "sector"]) {
-        await expect(service.updateMe(ctx, { [field]: "   " })).rejects.toThrow(`${field} is required`);
+        await expect(new NetworkingProfileService(service).updateMe(ctx, { [field]: "   " })).rejects.toThrow(`${field} is required`);
       }
     });
   },

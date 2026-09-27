@@ -1,3 +1,4 @@
+import { NetworkingAuthService } from "./networking.auth.service";
 import { beforeAll, describe, expect, it } from "vitest";
 import { ConflictException } from "@nestjs/common";
 import { networkingStore, type NetworkingRow } from "@app/db";
@@ -78,7 +79,7 @@ describe.runIf(dbTestsEnabled())("networking writes under concurrency", () => {
   });
 
   it("finishes 10 concurrent sign-in code requests for distinct participants", async () => {
-    const results = await settle(range(10).map((i) => () => service.requestCode(fixture.event.slug, people[i].profile.email)));
+    const results = await settle(range(10).map((i) => () => new NetworkingAuthService(service).requestCode(fixture.event.slug, people[i].profile.email)));
     expect(failures(results)).toEqual([]);
     const deliveries = await networkingStore().all("deliveries", { eventId: fixture.event.id, type: "OTP" });
     expect(new Set(deliveries.map((row) => row.profileId))).toEqual(new Set(range(10).map((i) => people[i].profile.id)));

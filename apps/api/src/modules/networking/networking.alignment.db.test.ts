@@ -1,3 +1,7 @@
+import {
+  createNetworkingEventFixture,
+} from "../../../../../packages/db/tests/helpers/networking-write-fixture";
+import { NetworkingProfileService } from "./networking.profile.service";
 import { NetworkingInventoryService } from "./networking.inventory.service";
 // Regression coverage for the networking document alignment fixes.
 // Uses only the fresh local audit database; no external providers are invoked.
@@ -18,15 +22,16 @@ import {
   networkingEmailMetrics,
 } from "@app/db";
 import { NetworkingConfigSchema } from "@app/contracts";
-import {
-  NetworkingService,
-  type NetworkingContext,
-} from "./networking.service";
+import { NetworkingService, type NetworkingContext } from "./networking.service";
 import { NetworkingSocialService } from "./networking.social.service";
 import { NetworkingMeetingsService } from "./networking.meetings.service";
 import { NetworkingAdminService } from "./networking.admin.service";
-import { networkingDeliverySkipReason } from "../../../../../packages/integrations/src/networking/delivery-policy";
-import { renderNetworkingNotification } from "../../../../../packages/integrations/src/networking/notification-rendering";
+import {
+  networkingDeliverySkipReason,
+} from "../../../../../packages/integrations/src/networking/delivery-policy";
+import {
+  renderNetworkingNotification,
+} from "../../../../../packages/integrations/src/networking/notification-rendering";
 import { dbTestsEnabled } from "@app/db/testing";
 
 const service = new NetworkingService();
@@ -69,14 +74,6 @@ describe.runIf(enabled)("PDF alignment audit reproductions", () => {
         name: "PDF audit fixture",
         enabledModules: ["networking", "registrations", "emails"],
       });
-    const event = await store().insert("events", {
-      clientId,
-      name: "PDF audit",
-      slug: randomUUID(),
-      status: "OPEN",
-      startDate: new Date("2031-04-05"),
-      endDate: new Date("2031-04-06"),
-    });
     const config = NetworkingConfigSchema.parse({
       enabled: true,
       approvalMode: "AUTOMATIC",
@@ -85,7 +82,14 @@ describe.runIf(enabled)("PDF alignment audit reproductions", () => {
       openingHours: [{ date: "2031-04-05", start: "09:00", end: "17:00" }],
       fieldMapping: { company: "company" },
     });
-    await store().insert("configs", { eventId: event.id, config });
+    const event = await createNetworkingEventFixture({
+      clientId,
+      name: "PDF audit",
+      slug: randomUUID(),
+      status: "OPEN",
+      startDate: new Date("2031-04-05"),
+      endDate: new Date("2031-04-06"),
+    }, config);
     const formId = randomUUID();
     await getDb()
       .insert(forms)
@@ -199,7 +203,7 @@ describe.runIf(enabled)("PDF alignment audit reproductions", () => {
 
   it("A2: the eligible partner receives an automatic cancellation notice after withdrawal", async () => {
     const meeting = await booked();
-    await service.updateMe(people[1], { consent: false });
+    await new NetworkingProfileService(service).updateMe(people[1], { consent: false });
     const delivery = (
       await store().all("deliveries", {
         eventId: people[0].event.id,
@@ -215,7 +219,7 @@ describe.runIf(enabled)("PDF alignment audit reproductions", () => {
   it("A3: blocked users cannot retrieve each other's updated profiles through meeting history", async () => {
     const meeting = await booked();
     await social.block(people[0], people[1].profile.id);
-    await service.updateMe(people[0], {
+    await new NetworkingProfileService(service).updateMe(people[0], {
       bio: "Private update made after blocking",
     });
     await expect(
@@ -319,7 +323,7 @@ describe.runIf(enabled)("PDF alignment audit reproductions", () => {
 
   it("A8: saving an unrelated bio edit does not freeze an unchanged registration company", async () => {
     // ProfileEditor currently submits every professional field, including unchanged ones.
-    await service.updateMe(people[1], {
+    await new NetworkingProfileService(service).updateMe(people[1], {
       company: "Original company",
       jobTitle: "Director",
       sector: "Technology",
@@ -551,13 +555,13 @@ describe.runIf(enabled)("PDF alignment audit reproductions", () => {
 
   it("A4: a participant can discard an override and resume following registration updates", async () => {
     const person = people[0];
-    await service.updateMe(person, { company: "Personal override" });
+    await new NetworkingProfileService(service).updateMe(person, { company: "Personal override" });
     await store().update(
       "registrations",
       { id: person.profile.registrationId },
       { formData: { company: "New source company" } },
     );
-    const reset = await service.updateMe(person, { resetFields: ["company"] });
+    const reset = await new NetworkingProfileService(service).updateMe(person, { resetFields: ["company"] });
     expect(reset.company).toBe("New source company");
     expect(reset.overrides).not.toHaveProperty("company");
   });

@@ -1,12 +1,13 @@
+import { NetworkingProfileService } from "./networking.profile.service";
 import { describe, expect, it, vi } from "vitest";
 import { NetworkingProfileUpdateSchema } from "@app/contracts";
+import { NetworkingService, type NetworkingContext } from "./networking.service";
 const queries = vi.hoisted(() => ({ profiles: vi.fn(), rows: vi.fn(), all: vi.fn() }));
 vi.mock("@app/db", () => ({ networkingStore: () => ({
   all: queries.all,
   personalAnalyticsProfiles: queries.profiles,
   personalAnalyticsCounts: queries.rows,
 }) }));
-import { NetworkingService, type NetworkingContext } from "./networking.service";
 const ctx = { event: { id: "current", clientId: "owner" }, profile: { id: "a", email: "OWN@example.test" } } as NetworkingContext;
 describe("private cross-event ROI", () => {
   it("aggregates only the verified email in the same client, one count query set per event", async () => {
@@ -22,7 +23,7 @@ describe("private cross-event ROI", () => {
       : { profileViews: 0, matches: 0, sentMessages: 0, plannedMeetings: 0, completedMeetings: 0 });
     const service = new NetworkingService();
     const eligibility = vi.spyOn(service, "currentParticipant").mockResolvedValue(ctx);
-    const result = await service.personalAnalytics(ctx);
+    const result = await new NetworkingProfileService(service).personalAnalytics(ctx);
     expect(queries.all).not.toHaveBeenCalled();
     expect(queries.profiles).toHaveBeenCalledWith("owner", "own@example.test");
     expect(queries.rows.mock.calls).toEqual([["current", ["a", "duplicate"]], ["prior", ["old"]]]);
@@ -32,7 +33,7 @@ describe("private cross-event ROI", () => {
       { eventId: "current", eventName: "Current", startsAt: stamp.toISOString(), endsAt: stamp.toISOString(), ...counts },
     ] });
     eligibility.mockRejectedValue(new Error("Session revoked"));
-    await expect(service.personalAnalytics(ctx)).rejects.toThrow("Session revoked");
+    await expect(new NetworkingProfileService(service).personalAnalytics(ctx)).rejects.toThrow("Session revoked");
   });
   it("rejects blank supplied professional fields while allowing incomplete onboarding to change unrelated preferences", () => {
     for (const field of ["company", "jobTitle", "sector"]) {

@@ -5,7 +5,11 @@ import { clients } from "../../src/schema/users-clients";
 import { forms } from "../../src/schema/forms";
 import { registrations } from "../../src/schema/registrations";
 import { syncNetworkingEvent } from "../../src/queries/networking";
-import { networkingStore, type NetworkingRow } from "../../src/queries/networking-store";
+import {
+  networkingStore,
+  type NetworkingRow,
+  type NetworkingInsert,
+} from "../../src/queries/networking-store";
 
 export type NetworkingWriteParticipant = {
   profile: NetworkingRow<"profiles">;
@@ -47,7 +51,7 @@ export async function createNetworkingWriteFixture(options: {
   });
   const first = Math.min(...options.slots.map((slot) => slot.getTime()));
   const last = Math.max(...options.slots.map((slot) => slot.getTime()));
-  const event = await store.insert("events", {
+  const event = await createNetworkingEventFixture({
     id: eventId,
     clientId,
     name: "Networking writes",
@@ -55,8 +59,7 @@ export async function createNetworkingWriteFixture(options: {
     status: "OPEN",
     startDate: new Date(Math.floor(first / 86_400_000) * 86_400_000),
     endDate: new Date(Math.floor(last / 86_400_000) * 86_400_000 + 86_400_000),
-  });
-  await store.insert("configs", { eventId, config });
+  }, config);
   await db.insert(forms).values({
     id: formId,
     eventId,
@@ -123,4 +126,12 @@ export async function networkingDoubleBookings(eventId: string) {
     [eventId],
   );
   return rows;
+}
+
+/** Share event/config bootstrap without imposing participant, form, consent or availability defaults. */
+export async function createNetworkingEventFixture(event: NetworkingInsert<"events">, config: NetworkingConfig) {
+  const store = networkingStore();
+  const row = await store.insert("events", event);
+  await store.insert("configs", { eventId: row.id, config });
+  return row;
 }
